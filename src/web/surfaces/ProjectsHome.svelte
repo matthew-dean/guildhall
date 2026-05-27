@@ -1,7 +1,7 @@
 <script lang="ts">
   import { onEvent } from '../lib/events.js'
   import { nav } from '../lib/nav.svelte.js'
-  import { Activity, AlertTriangle, CheckCircle2, FileClock, FolderPlus, Inbox, PlayCircle, Users } from 'lucide-svelte'
+  import { Activity, AlertTriangle, CheckCircle2, Cpu, FileClock, FolderPlus, Folders, Inbox, PlayCircle } from 'lucide-svelte'
   import ActionBar from '../lib/ActionBar.svelte'
   import Button from '../lib/Button.svelte'
   import Chip from '../lib/Chip.svelte'
@@ -9,6 +9,7 @@
   import ProjectCard from '../lib/ProjectCard.svelte'
   import SideDrawer from '../lib/SideDrawer.svelte'
   import Tooltip from '../lib/Tooltip.svelte'
+  import WorkMixChart from '../lib/WorkMixChart.svelte'
   import { avatarToneForRole } from '../lib/avatar-palette.js'
   import { summarizeProjects, type ProjectCardSummary } from '../lib/project-summary.js'
   import { projectHref } from '../lib/project-routes.js'
@@ -51,7 +52,7 @@
 
   function servicePayloadSignature(payload: ServiceDetail): string {
     return JSON.stringify({
-      selectedProject: payload.selectedProject?.id ?? null,
+      defaultProviderStatus: payload.defaultProviderStatus,
       projects: payload.projects.map(project => ({
         id: project.id,
         path: project.path,
@@ -60,6 +61,9 @@
         taskCounts: project.taskCounts,
         highlights: project.highlights,
         run: project.run,
+        providerStatus: project.providerStatus,
+        gitStory: project.gitStory,
+        projectCheckIn: project.projectCheckIn,
       })),
     })
   }
@@ -111,7 +115,7 @@
   async function openProject(projectId: string): Promise<void> {
     busyId = projectId
     try {
-      nav(projectHref(projectId, '/thread'))
+      nav(projectHref(projectId, '/overview'))
     } finally {
       busyId = null
     }
@@ -170,7 +174,7 @@
       }
       if (payload?.cancelled) return
       await refresh()
-      if (typeof payload?.selectedProject?.id === 'string') nav(projectHref(payload.selectedProject.id, '/thread'))
+      if (typeof payload?.project?.id === 'string') nav(projectHref(payload.project.id, '/overview'))
     } catch (err) {
       error = requestErrorMessage(err)
     } finally {
@@ -228,10 +232,18 @@
     shelved: cards.reduce((sum, card) => sum + card.counts.shelved, 0),
   })
   const readyTaskCount = $derived(Math.max(0, overview.taskTotal - overview.active - overview.blocked - overview.drafts - overview.done - overview.shelved))
-  const needsYouCount = $derived(cards.filter(card => card.counts.blocked > 0 || card.counts.draftReview > 0).length)
-  const firstNeedsYouProject = $derived(cards.find(card => card.counts.blocked > 0 || card.counts.draftReview > 0) ?? null)
+  const needsYouCount = $derived(cards.filter(card => card.counts.blocked > 0 || card.counts.draftReview > 0 || card.projectCheckIn?.needed || card.provider?.tone === 'warn').length)
+  const firstNeedsYouProject = $derived(cards.find(card => card.counts.blocked > 0 || card.counts.draftReview > 0 || card.projectCheckIn?.needed || card.provider?.tone === 'warn') ?? null)
   const selectedProject = $derived(cards.find(card => card.id === selectedProjectId) ?? null)
   const dashboardTotal = $derived(Math.max(1, overview.taskTotal))
+  const defaultProviderStatus = $derived(service?.defaultProviderStatus ?? null)
+  const defaultProviderWarning = $derived(defaultProviderStatus?.warnings?.[0] ?? null)
+  const defaultProviderLabel = $derived(defaultProviderStatus?.preferredProviderLabel ?? defaultProviderStatus?.activeProviderLabel ?? 'Providers')
+  const defaultWorkerModel = $derived(compactModelLabel(defaultProviderStatus?.activeModel ?? defaultProviderStatus?.models?.worker))
+  const defaultProviderTitle = $derived(
+    defaultProviderWarning?.message ??
+      'Open model settings.',
+  )
 
   function countLabel(count: number, singular: string, plural = `${singular}s`): string {
     return `${count} ${count === 1 ? singular : plural}`
@@ -241,13 +253,17 @@
     return `${count} running now`
   }
 
-  function chartFlex(count: number): string {
-    return `flex: ${Math.max(0, count)} 1 0;`
-  }
-
   function projectSparkTitle(project: ProjectCardSummary): string {
     const running = project.canStop || optimisticRuns[project.id]
     return `${project.name}: ${running ? 'running now' : 'not running now'}. ${project.activityLabel}`
+  }
+
+  function compactModelLabel(model: string | null | undefined): string {
+    if (!model) return ''
+    const trimmed = model.trim()
+    if (!trimmed) return ''
+    const slash = trimmed.lastIndexOf('/')
+    return slash >= 0 ? trimmed.slice(slash + 1) : trimmed
   }
 
   const guildMembers = $derived([
@@ -283,6 +299,24 @@
       <p class="lede">Guild members, project queues, and blockers across your local work.</p>
     </div>
     <div class="hero-actions">
+      {#if defaultProviderStatus}
+        <Button
+          variant="secondary"
+          className={`default-model-button ${defaultProviderWarning ? 'default-model-button-warn' : ''}`}
+          title={defaultProviderTitle}
+          ariaLabel="Open model settings"
+          onclick={() => nav('/providers')}
+        >
+          {#if defaultProviderWarning}
+            <AlertTriangle size={15} />
+          {:else}
+            <Cpu size={15} />
+          {/if}
+          <span class="default-model-copy">
+            <span class="default-model-prefix">Models</span>
+          </span>
+        </Button>
+      {/if}
       <Button
         variant={needsYouCount > 0 ? 'human' : 'secondary'}
         disabled={needsYouCount === 0}
@@ -294,7 +328,7 @@
         <Inbox size={15} />
         Needs you
         {#if needsYouCount > 0}
-          <span class="action-count"><span class="count-glyph">{needsYouCount > 99 ? '99+' : needsYouCount}</span></span>
+          <span class="action-count"><span class="count-glyph">{needsYouCount > 99 ? '99+' : `${needsYouCount} project${needsYouCount === 1 ? '' : 's'}`}</span></span>
         {/if}
       </Button>
       <Button variant="secondary" disabled={busyId === '__attach__'} title="Attach another local project to Guildhall" onclick={attachProject}>
@@ -324,7 +358,7 @@
         <p class="floor-kicker">Guild hall</p>
         <Tooltip text={countLabel(overview.total, 'project')}>
           <strong aria-label={countLabel(overview.total, 'project')}>
-            <Users size={18} />
+            <Folders size={18} />
             <span>{overview.total}</span>
           </strong>
         </Tooltip>
@@ -387,39 +421,44 @@
           </div>
           <span class="panel-value">{countLabel(readyTaskCount, 'ready task')}</span>
         </div>
-        <div class="work-chart" aria-label={`Work mix across projects: ${overview.active} active, ${readyTaskCount} ready, ${needsYouCount} projects need attention, ${overview.done} done.`}>
-          {#if overview.active > 0}
-            <Tooltip text={`${countLabel(overview.active, 'active task')}: active or in-progress work.`} style={chartFlex(overview.active)} className="chart-segment-tip">
-              <span class="chart-segment chart-active" aria-label={`${countLabel(overview.active, 'active task')}: active or in-progress work.`}></span>
-            </Tooltip>
-          {/if}
-          {#if readyTaskCount > 0}
-            <Tooltip text={`${countLabel(readyTaskCount, 'ready task')}: work that can be picked up without another brief review.`} style={chartFlex(readyTaskCount)} className="chart-segment-tip">
-              <span class="chart-segment chart-ready" aria-label={`${countLabel(readyTaskCount, 'ready task')}: work that can be picked up without another brief review.`}></span>
-            </Tooltip>
-          {/if}
-          {#if needsYouCount > 0}
-            <Tooltip text={`${countLabel(needsYouCount, 'project needing attention', 'projects needing attention')}: projects with blocked work or draft briefs.`} style={chartFlex(needsYouCount)} className="chart-segment-tip">
-              <span class="chart-segment chart-attention" aria-label={`${countLabel(needsYouCount, 'project needing attention', 'projects needing attention')}: projects with blocked work or draft briefs.`}></span>
-            </Tooltip>
-          {/if}
-          {#if overview.done > 0}
-            <Tooltip text={`${countLabel(overview.done, 'done task', 'done tasks')}: completed work.`} style={chartFlex(overview.done)} className="chart-segment-tip">
-              <span class="chart-segment chart-done" aria-label={`${countLabel(overview.done, 'done task', 'done tasks')}: completed work.`}></span>
-            </Tooltip>
-          {/if}
-          {#if overview.taskTotal === 0}
-            <Tooltip text="No tasks yet" style={chartFlex(dashboardTotal)} className="chart-segment-tip">
-              <span class="chart-segment chart-empty" aria-label="No tasks yet"></span>
-            </Tooltip>
-          {/if}
-        </div>
-        <div class="chart-legend">
-          <span><i class="dot chart-active"></i>{overview.active} active</span>
-          <span><i class="dot chart-ready"></i>{readyTaskCount} ready</span>
-          <span><i class="dot chart-attention"></i>{needsYouCount} projects need you</span>
-          <span><i class="dot chart-done"></i>{overview.done} done</span>
-        </div>
+        <WorkMixChart
+          ariaLabel={`Work mix across projects: ${overview.active} active, ${readyTaskCount} ready, ${needsYouCount} projects need attention, ${overview.done} done.`}
+          segments={[
+            {
+              key: 'active',
+              label: 'active',
+              count: overview.active,
+              tone: 'active',
+              ariaLabel: `${countLabel(overview.active, 'active task')}: active or in-progress work.`,
+              tooltip: `${countLabel(overview.active, 'active task')}: active or in-progress work.`,
+            },
+            {
+              key: 'ready',
+              label: 'ready',
+              count: readyTaskCount,
+              tone: 'ready',
+              ariaLabel: `${countLabel(readyTaskCount, 'ready task')}: work that can be picked up without another brief review.`,
+              tooltip: `${countLabel(readyTaskCount, 'ready task')}: work that can be picked up without another brief review.`,
+            },
+            {
+              key: 'attention',
+              label: 'projects need you',
+              count: needsYouCount,
+              tone: 'attention',
+              ariaLabel: `${countLabel(needsYouCount, 'project needing attention', 'projects needing attention')}: projects with blocked work or draft briefs.`,
+              tooltip: `${countLabel(needsYouCount, 'project needing attention', 'projects needing attention')}: projects with blocked work or draft briefs.`,
+            },
+            {
+              key: 'done',
+              label: 'done',
+              count: overview.done,
+              tone: 'done',
+              ariaLabel: `${countLabel(overview.done, 'done task', 'done tasks')}: completed work.`,
+              tooltip: `${countLabel(overview.done, 'done task', 'done tasks')}: completed work.`,
+            },
+          ]}
+          emptyLabel="No tasks yet"
+        />
       </div>
       <div class="dashboard-panel">
         <div class="panel-head">
@@ -498,6 +537,20 @@
             <p class="drawer-muted">{selectedProject.recentLabel}</p>
           {/if}
         </section>
+        {#if selectedProject.projectCheckIn?.needed || selectedProject.provider?.tone === 'warn' || selectedProject.gitStory}
+          <section class="drawer-section">
+            <h3>Needs attention</h3>
+            {#if selectedProject.projectCheckIn?.needed}
+              <p><strong>{selectedProject.projectCheckIn.title ?? 'Project check-in needed'}:</strong> {selectedProject.projectCheckIn.detail ?? 'Answer the first project questions in Thread.'}</p>
+            {/if}
+            {#if selectedProject.provider?.tone === 'warn'}
+              <p><strong>Provider:</strong> {selectedProject.provider.title}</p>
+            {/if}
+            {#if selectedProject.gitStory}
+              <p><strong>{selectedProject.gitStory.label}:</strong> {selectedProject.gitStory.title}</p>
+            {/if}
+          </section>
+        {/if}
         <section class="drawer-section">
           <h3>Recent and next</h3>
           <div class="drawer-work-grid">
@@ -564,13 +617,42 @@
     min-height: 34px;
     align-items: center;
   }
+  .hero-actions :global(.default-model-button) {
+    gap: var(--s-1);
+    min-width: 0;
+    max-width: min(22rem, 100%);
+    padding-inline: var(--s-2);
+  }
+  .hero-actions :global(.default-model-button-warn) {
+    border-color: color-mix(in srgb, var(--warn) 52%, var(--button-secondary-border));
+    color: color-mix(in srgb, var(--warn) 72%, var(--text));
+    box-shadow:
+      0 0 12px color-mix(in srgb, var(--warn) 14%, transparent),
+      inset 0 1px 0 color-mix(in srgb, white 9%, transparent);
+  }
+  .default-model-copy {
+    min-width: 0;
+    display: inline-flex;
+    align-items: center;
+    gap: var(--s-1);
+    overflow: hidden;
+  }
+  .default-model-prefix {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    color: var(--text);
+    font-weight: 800;
+    font-size: var(--fs-1);
+  }
   .action-count {
     display: inline-flex;
     align-items: center;
     justify-content: center;
     min-width: 1.15rem;
-    height: 1.15rem;
-    padding: 0 0.3rem;
+    min-height: 1.15rem;
+    padding: 0.08rem 0.42rem;
     box-sizing: border-box;
     border-radius: 999px;
     background: color-mix(in srgb, var(--bg-base) 24%, transparent);
@@ -822,76 +904,6 @@
   .panel-copy {
     margin: 0;
   }
-  .work-chart {
-    display: flex;
-    gap: 3px;
-    min-height: 1rem;
-    padding: 3px;
-    border: 1px solid var(--border);
-    border-radius: var(--r-2);
-    background: color-mix(in srgb, var(--bg) 72%, transparent);
-    box-shadow: inset 0 1px 0 color-mix(in srgb, white 8%, transparent);
-    overflow: hidden;
-  }
-  .chart-segment {
-    display: block;
-    width: 100%;
-    height: 100%;
-    min-width: 0.75rem;
-    border-radius: calc(var(--r-2) - 3px);
-    background:
-      linear-gradient(180deg, color-mix(in srgb, white 24%, transparent), transparent 52%),
-      var(--chart-color);
-  }
-  .chart-segment.chart-active {
-    --chart-color: var(--accent-2);
-  }
-  .dot.chart-active {
-    --chart-color: var(--accent-2);
-    background: var(--accent-2);
-  }
-  .chart-segment.chart-ready {
-    --chart-color: var(--accent);
-  }
-  .dot.chart-ready {
-    --chart-color: var(--accent);
-    background: var(--accent);
-  }
-  .chart-segment.chart-attention {
-    --chart-color: var(--signal-warn-strong);
-  }
-  .dot.chart-attention {
-    --chart-color: var(--signal-warn-strong);
-    background: var(--signal-warn-strong);
-  }
-  .chart-segment.chart-done {
-    --chart-color: color-mix(in srgb, var(--accent) 84%, var(--bg));
-  }
-  .dot.chart-done {
-    --chart-color: color-mix(in srgb, var(--accent) 84%, var(--bg));
-    background: color-mix(in srgb, var(--accent) 84%, var(--bg));
-  }
-  .chart-segment.chart-empty {
-    --chart-color: color-mix(in srgb, var(--text-muted) 22%, transparent);
-  }
-  .chart-legend {
-    display: flex;
-    flex-wrap: wrap;
-    gap: var(--s-2);
-    color: var(--text-muted);
-    font-size: var(--fs-0);
-    line-height: 1;
-  }
-  .chart-legend span {
-    display: inline-flex;
-    align-items: center;
-    gap: 0.35rem;
-  }
-  .dot {
-    width: 0.5rem;
-    height: 0.5rem;
-    border-radius: 999px;
-  }
   .project-drawer {
     display: grid;
     gap: var(--s-4);
@@ -1023,10 +1035,6 @@
   .project-sparks .project-spark-live {
     border-color: color-mix(in srgb, var(--accent-2) 42%, var(--border));
     background: color-mix(in srgb, var(--accent-2) 22%, transparent);
-  }
-  :global(.work-chart .chart-segment-tip) {
-    min-width: 0.75rem;
-    height: 1rem;
   }
   :global(.project-sparks .project-spark-tip) {
     display: block;

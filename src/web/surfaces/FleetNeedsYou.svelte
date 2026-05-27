@@ -7,7 +7,7 @@
   import { nav } from '../lib/nav.svelte.js'
   import { projectHref } from '../lib/project-routes.js'
   import { getCachedService, setCachedService } from '../lib/service-cache.js'
-  import type { InboxItem } from '../lib/inbox-item-key.js'
+  import { inboxItemKey, type InboxItem } from '../lib/inbox-item-key.js'
   import type { ServiceDetail, ServiceProjectSummary } from '../lib/types.js'
 
   type ProjectInboxGroup = {
@@ -32,7 +32,10 @@
 
   function itemVerb(item: InboxItem): string {
     switch (item.kind) {
+      case 'required_migration': return 'Migrate'
+      case 'project_understanding': return 'Reconcile'
       case 'workspace_import_pending': return 'Review import'
+      case 'pressure_test_pending': return 'Answer question'
       case 'agent_question_pending': return 'Answer question'
       case 'import_draft_queue': return 'Review draft'
       case 'brief_approval':
@@ -40,7 +43,7 @@
       case 'open_escalation': return 'Resolve'
       case 'bootstrap_missing': return 'Configure'
       case 'lever_questions': return 'Review'
-      case 'spec_fill_pending': return item.taskId === 'task-workspace-import' ? 'Review import' : 'Review checklist'
+      case 'spec_fill_pending': return item.taskId === 'task-workspace-import' ? 'Review import' : 'Open checklist'
       default: return 'Open'
     }
   }
@@ -56,7 +59,7 @@
           severity: 'high',
           title: `${counts.blocked} blocked ${counts.blocked === 1 ? 'task' : 'tasks'}`,
           detail: project.highlights?.blockedTaskTitle ?? 'Open the project inbox to resolve blockers.',
-          actionHref: '/inbox',
+          actionHref: '/overview/inbox',
         } as InboxItem)
       }
       if (counts.draftReview > 0) {
@@ -65,7 +68,25 @@
           severity: 'medium',
           title: `${counts.draftReview} draft ${counts.draftReview === 1 ? 'brief' : 'briefs'}`,
           detail: 'Review drafted task briefs before Guildhall starts implementation.',
-          actionHref: '/inbox',
+          actionHref: '/overview/inbox',
+        } as InboxItem)
+      }
+      if (project.projectCheckIn?.needed) {
+        items.push({
+          kind: 'project_check_in',
+          severity: 'medium',
+          title: project.projectCheckIn.title ?? 'Project questions',
+          detail: project.projectCheckIn.detail ?? 'Answer the project questions before Guildhall starts guessing.',
+          actionHref: project.projectCheckIn.actionHref ?? '/thread',
+        } as InboxItem)
+      }
+      if (project.providerStatus?.warnings?.[0]) {
+        items.push({
+          kind: 'bootstrap_missing',
+          severity: 'high',
+          title: 'Provider warning',
+          detail: project.providerStatus.warnings[0].message,
+          actionHref: '/providers',
         } as InboxItem)
       }
       return items.length > 0 ? [{ project, items, error: null }] : []
@@ -103,7 +124,7 @@
   }
 
   function goToProjectInbox(projectId: string): void {
-    nav(projectHref(projectId, '/inbox'))
+    nav(projectHref(projectId, '/overview/inbox'))
   }
 
   function goToItem(projectId: string, item: InboxItem): void {
@@ -125,9 +146,8 @@
       const service = await fetchJsonWithTimeout<ServiceDetail>('/api/service')
       setCachedService(service)
       const projects = service.projects ?? []
-      const nextGroups: ProjectInboxGroup[] = []
       error = null
-      for (const project of projects) {
+      const nextGroups = await Promise.all(projects.map(async project => {
         try {
           const body = await fetchJsonWithTimeout<{ items?: InboxItem[] }>(
             `/api/project/inbox?projectId=${encodeURIComponent(project.id)}`,
@@ -137,19 +157,16 @@
             items: (body.items ?? []).filter(item => item.severity !== 'low'),
             error: null,
           } satisfies ProjectInboxGroup
-          if (nextGroup.items.length > 0) {
-            nextGroups.push(nextGroup)
-            groups = [...nextGroups]
-          }
+          return nextGroup.items.length > 0 ? nextGroup : null
         } catch (err) {
-          nextGroups.push({
+          return {
             project,
             items: [],
             error: requestErrorMessage(err),
-          } satisfies ProjectInboxGroup)
-          groups = [...nextGroups]
+          } satisfies ProjectInboxGroup
         }
-      }
+      }))
+      groups = nextGroups.filter((group): group is ProjectInboxGroup => group !== null)
     } catch (err) {
       error = requestErrorMessage(err)
       groups = []
@@ -202,7 +219,7 @@
   {:else}
     <section class="summary" aria-label="Needs-you summary">
       <span><Inbox size={16} /> {totalItems} item{totalItems === 1 ? '' : 's'}</span>
-      <span><FolderOpen size={16} /> {projectCount} project{projectCount === 1 ? '' : 's'}</span>
+      <span><FolderOpen size={16} /> {projectCount} project{projectCount === 1 ? '' : 's'} need you</span>
     </section>
 
     <div class="groups">
@@ -213,12 +230,12 @@
               <h2>{group.project.name}</h2>
               <p>{group.project.path}</p>
             </div>
-            <ActionBar>
+            <ActionBar className="group-actions">
               <Button variant="secondary" size="sm" onclick={() => goToProjectInbox(group.project.id)}>
-                Project needs you
+                Queue
               </Button>
               <Button variant="secondary" size="sm" onclick={() => goToProject(group.project.id)}>
-                Open project
+                Project
               </Button>
             </ActionBar>
           </div>
@@ -230,7 +247,7 @@
             </div>
           {:else}
             <ul class="items">
-              {#each group.items as item (`${item.kind}-${item.taskId ?? item.title}-${item.actionHref ?? ''}`)}
+              {#each group.items as item, itemIndex (`${inboxItemKey(item)}:${itemIndex}`)}
                 <li>
                   <button type="button" class="item" onclick={() => goToItem(group.project.id, item)}>
                     <span class="severity severity-{item.severity}" aria-hidden="true"></span>
@@ -338,7 +355,7 @@
   .item {
     width: 100%;
     display: grid;
-    grid-template-columns: 8px minmax(0, 1fr) auto;
+    grid-template-columns: 8px minmax(0, 78ch) auto;
     align-items: center;
     gap: var(--s-3);
     padding: var(--s-3);
@@ -371,6 +388,7 @@
   }
   .item-body {
     min-width: 0;
+    max-width: 78ch;
     display: flex;
     flex-direction: column;
     gap: 2px;
@@ -385,16 +403,28 @@
   .item-body span {
     color: var(--text-muted);
     font-size: var(--fs-1);
-    white-space: nowrap;
+    display: -webkit-box;
+    -webkit-line-clamp: 2;
+    -webkit-box-orient: vertical;
     overflow: hidden;
-    text-overflow: ellipsis;
+    line-height: var(--lh-body);
   }
   .item-verb {
-    color: var(--accent);
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    min-height: 1.9rem;
+    padding: 0 var(--s-2);
+    border: 1px solid color-mix(in srgb, var(--accent) 44%, var(--border));
+    border-radius: var(--r-1);
+    background: color-mix(in srgb, var(--accent) 12%, transparent);
+    color: var(--text);
     font-size: var(--fs-1);
     font-weight: 700;
-    text-transform: uppercase;
     white-space: nowrap;
+  }
+  :global(.group-actions .btn) {
+    opacity: 0.78;
   }
   .group-error {
     display: flex;

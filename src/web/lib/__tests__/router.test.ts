@@ -6,6 +6,8 @@ describe('parseRoute', () => {
   it('routes top-level surfaces', () => {
     expect(parseRoute('/')).toEqual({ kind: 'projects' })
     expect(parseRoute('/projects')).toEqual({ kind: 'projects' })
+    expect(parseRoute('/overview')).toEqual({ kind: 'projects' })
+    expect(parseRoute('/inbox')).toEqual({ kind: 'fleet-inbox' })
     expect(parseRoute('/needs-you')).toEqual({ kind: 'fleet-inbox' })
     expect(parseRoute('/notifications')).toEqual({ kind: 'fleet-inbox' })
     expect(parseRoute('/setup')).toEqual({ kind: 'setup', projectId: null })
@@ -20,14 +22,18 @@ describe('parseRoute', () => {
     expect(parseRoute('/projects/looma-knit')).toMatchObject({
       kind: 'project',
       projectId: 'looma-knit',
-      view: 'thread',
+      view: 'overview',
     })
+    expect(parseRoute('/projects/looma-knit/overview')).toMatchObject({ view: 'overview' })
     expect(parseRoute('/projects/looma-knit/notifications')).toMatchObject({
       kind: 'project',
       projectId: 'looma-knit',
-      view: 'inbox',
+      view: 'overview',
+      sub: 'inbox',
     })
+    expect(parseRoute('/projects/looma-knit/overview/inbox')).toMatchObject({ view: 'overview', sub: 'inbox' })
     expect(parseRoute('/projects/looma-knit/work')).toMatchObject({ view: 'work' })
+    expect(parseRoute('/projects/looma-knit/work/board')).toMatchObject({ view: 'planner' })
     expect(parseRoute('/projects/looma-knit/workspace-import')).toMatchObject({ view: 'workspace-import' })
     expect(parseRoute('/projects/looma-knit/settings/providers')).toMatchObject({
       view: 'settings',
@@ -48,7 +54,7 @@ describe('parseRoute', () => {
     expect(parseRoute('/projects/looma-knit/planner')).toMatchObject({ view: 'planner' })
     expect(parseRoute('/projects/looma-knit/facts')).toMatchObject({ view: 'facts' })
     expect(parseRoute('/projects/looma-knit/timeline')).toMatchObject({ view: 'timeline' })
-    expect(parseRoute('/projects/looma-knit/not-real')).toMatchObject({ view: 'thread' })
+    expect(parseRoute('/projects/looma-knit/not-real')).toMatchObject({ view: 'overview' })
   })
 
   it('preserves the background tab for project-scoped task drawers', () => {
@@ -86,40 +92,14 @@ describe('parseRoute', () => {
     })
   })
 
-  it('keeps legacy single-project URLs working while preserving drawer context', () => {
-    expect(parseRoute('/project')).toMatchObject({
-      kind: 'project',
-      projectId: null,
-      view: 'thread',
-    })
-    expect(parseRoute('/project/inbox')).toMatchObject({ view: 'inbox' })
-    expect(parseRoute('/project/settings/routing')).toMatchObject({
-      view: 'settings',
-      sub: 'routing',
-    })
-    expect(parseRoute('/project/release/notes')).toMatchObject({
-      view: 'release',
-      sub: 'notes',
-    })
-    expect(parseRoute('/project/coordinators')).toMatchObject({
-      view: 'settings',
-      sub: 'coordinators',
-    })
-    expect(parseRoute('/project/planner')).toMatchObject({ view: 'planner' })
-    expect(parseRoute('/project/facts')).toMatchObject({ view: 'facts' })
-    expect(parseRoute('/project/timeline')).toMatchObject({ view: 'timeline' })
-    expect(parseRoute('/project/nope')).toMatchObject({ view: 'thread' })
+  it('routes unscoped legacy project URLs back to project selection', () => {
+    expect(parseRoute('/project')).toEqual({ kind: 'projects' })
+    expect(parseRoute('/project/thread')).toEqual({ kind: 'projects' })
+    expect(parseRoute('/project/settings/routing')).toEqual({ kind: 'projects' })
     expect(
       parseRoute('/task/task-1', {
         backgroundPath: '/project/release',
       }),
-    ).toEqual({
-      kind: 'project',
-      projectId: null,
-      view: 'release',
-      sub: null,
-      drawerTaskId: 'task-1',
-      backgroundPath: '/project/release',
-    })
+    ).toEqual({ kind: 'projects' })
   })
 })

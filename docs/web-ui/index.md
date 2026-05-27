@@ -3,32 +3,32 @@ title: Guildhall app overview
 help_topic: web.overview
 help_summary: |
   The browser UI is the main Guildhall interface. It is served by
-  `guildhall serve`, reads and writes project state, and exposes the
-  setup, task, run, review, and provider workflows through the main
-  product surface.
+  `guildhall serve` and is where you set up projects, add work, review runs,
+  answer questions, and manage providers.
 ---
 
 # Guildhall app
 
 The app has two useful scales: the `/projects` service home for scanning
 registered projects, and the project shell where setup, tasks, live runs,
-reviewer calls, and release readiness actually play out.
+reviewer calls, and current work closure actually play out.
 
 Use it for the everyday loop:
 
 1. Open the service home or jump straight into a project shell.
 2. Pick or configure a provider.
 3. Add tasks.
-4. Start and stop the orchestrator.
+4. Start and stop runs.
 5. Inspect transcripts, reviews, gates, and provenance.
 6. Resolve escalations and tune settings.
 
-The app is still transparent: the shared project contract lands in
-`./guildhall.yaml`, shared Guildhall metadata can live in checked-in
-`./.guildhall/*.yaml` files, project memory lands in `./memory/*`, and
+The app is still transparent: the shared project plan lands in
+`./guildhall.yaml`, shared Guildhall notes can live in checked-in
+`./.guildhall/` files, compact project memory lands in `./.guildhall/`, and
 local/private checkout overrides stay in `./.guildhall/config.yaml`.
 Machine-scoped state such as the project registry, provider credentials, and
-default provider choice live under `~/.guildhall/`.
+default provider choice live under `~/.guildhall/`; transcripts and bulky run
+history live under `~/.guildhall/data/projects/`.
 
 ## Pages
 

@@ -33,6 +33,7 @@ import { join } from 'node:path'
 import { parse as parseYaml } from 'yaml'
 import { readGlobalProviders, type ProviderKind } from '@guildhall/config'
 import { bootstrapNeeded, readBootstrapStatus } from './bootstrap-runner.js'
+import { getProjectLocalHistoryDir, getProjectStateDir } from '@guildhall/sessions'
 
 // ---------------------------------------------------------------------------
 // Facts / snapshot
@@ -66,15 +67,15 @@ export interface ProjectSnapshot {
   bootstrapVerified?: boolean
   /** Whether any non-oauth provider has a stored credential in the global store. */
   hasProvider: boolean
-  /** Whether `memory/project-brief.md` exists and has > 40 chars of substance. */
+  /** Whether `.guildhall/project-brief.md` exists and has > 40 chars of substance. */
   hasDirection: boolean
   /**
-   * Whether `memory/workspace-goals.json` has been written (approve action)
+   * Whether `.guildhall/workspace-goals.json` has been written (approve action)
    * OR a dismiss marker is present — either counts as "reviewed".
    * Also considered done if no repo anchors were detected (nothing to review).
    */
   workspaceImportReviewed: boolean
-  /** Number of non-reserved user/project tasks in memory/TASKS.json. */
+  /** Number of non-reserved user/project tasks in .guildhall/TASKS.json. */
   taskCount: number
   /** Wizard-scoped persisted state (skip markers + completedAt stamps). */
   wizardState: WizardsState
@@ -344,25 +345,25 @@ export function progressForTask(wizard: TaskWizard, snap: TaskSnapshot): WizardP
 const specFillSteps: readonly TaskWizardStep[] = [
   {
     id: 'title',
-    title: 'Give the task a title',
+    title: 'Readable title',
     why:
-      'Every downstream view (planner, inbox, transcripts) uses the title as the primary label. A bare task id is unreadable.',
+      'Give this work a name someone can recognize later.',
     skippable: false,
     status: snap => (snap.title.trim().length > 0 ? 'done' : 'pending'),
   },
   {
     id: 'description',
-    title: 'Describe what the agent is looking at',
+    title: 'Starting point',
     why:
-      'Without a short description the agent has to rediscover the intent every tick. One sentence unblocks this.',
+      'Say what Guildhall should inspect or use as the starting evidence.',
     skippable: false,
     status: snap => (snap.description.trim().length >= 10 ? 'done' : 'pending'),
   },
   {
     id: 'brief',
-    title: 'Explain what success looks like',
+    title: 'Success target',
     why:
-      'User need + Done-when are what review gates check. Without them the reviewer has nothing to compare the work against.',
+      'State what should be true when this work is finished.',
     skippable: true,
     status: snap =>
       snap.brief.userJob.trim().length > 0 &&
@@ -372,9 +373,9 @@ const specFillSteps: readonly TaskWizardStep[] = [
   },
   {
     id: 'acceptance',
-    title: 'Add at least one acceptance criterion',
+    title: 'Acceptance criteria',
     why:
-      'Acceptance criteria are the concrete finish line. Agents merge when criteria pass; without any criteria, the task never completes cleanly.',
+      'Add the concrete checks Guildhall should use before calling the work done.',
     skippable: true,
     status: snap => (snap.acceptanceCriteriaCount > 0 ? 'done' : 'pending'),
   },
@@ -382,7 +383,7 @@ const specFillSteps: readonly TaskWizardStep[] = [
 
 export const specFillWizard: TaskWizard = {
   id: 'spec-fill',
-  title: 'Task checklist',
+  title: 'Task brief checklist',
   lede:
     'Finish the missing pieces so Guildhall can work on this task clearly and review it cleanly.',
   steps: specFillSteps,
@@ -474,7 +475,7 @@ function readYamlSafe(path: string): unknown {
 }
 
 export function readWizardsState(projectPath: string): WizardsState {
-  const path = join(projectPath, 'memory', 'wizards.yaml')
+  const path = join(getProjectStateDir(projectPath), 'wizards.yaml')
   if (!existsSync(path)) return emptyWizardsState()
   const raw = readYamlSafe(path) as Partial<WizardsState> | null
   if (!raw || typeof raw !== 'object') return emptyWizardsState()
@@ -526,7 +527,7 @@ export function buildSnapshot(opts: BuildSnapshotOptions): ProjectSnapshot {
     const successGates = Array.isArray((cfg.bootstrap as { successGates?: unknown }).successGates)
       ? ((cfg.bootstrap as { successGates?: string[] }).successGates ?? [])
       : []
-    const memoryDir = join(projectPath, 'memory')
+    const memoryDir = getProjectStateDir(projectPath)
     const status = readBootstrapStatus(memoryDir)
     if (status?.success && !bootstrapNeeded(memoryDir, projectPath, commands, successGates)) {
       bootstrapVerified = true
@@ -560,7 +561,9 @@ export function buildSnapshot(opts: BuildSnapshotOptions): ProjectSnapshot {
   }
 
   // direction
-  const briefPath = join(projectPath, 'memory', 'project-brief.md')
+  const projectStateDir = getProjectStateDir(projectPath)
+  const localHistoryDir = getProjectLocalHistoryDir(projectPath)
+  const briefPath = join(projectStateDir, 'project-brief.md')
   let hasDirection = false
   if (existsSync(briefPath)) {
     try {
@@ -572,8 +575,8 @@ export function buildSnapshot(opts: BuildSnapshotOptions): ProjectSnapshot {
   }
 
   // workspace import: goals.json written, OR dismiss marker, OR no anchors at all.
-  const goalsPath = join(projectPath, 'memory', 'workspace-goals.json')
-  const dismissPath = join(projectPath, 'memory', 'workspace-import-dismissed')
+  const goalsPath = join(projectStateDir, 'workspace-goals.json')
+  const dismissPath = join(localHistoryDir, 'workspace-import-dismissed')
   let workspaceImportReviewed = existsSync(goalsPath) || existsSync(dismissPath)
   if (!workspaceImportReviewed) {
     const anchors = ['README.md', 'pnpm-workspace.yaml', 'package.json', 'packages', 'skills', 'ROADMAP.md']
@@ -586,7 +589,7 @@ export function buildSnapshot(opts: BuildSnapshotOptions): ProjectSnapshot {
   // contains Guildhall's own housekeeping. Do not exclude by domain alone:
   // starter projects can route the user's first real spec-shaping task through
   // `_meta` until richer project lanes exist.
-  const tasksPath = join(projectPath, 'memory', 'TASKS.json')
+  const tasksPath = join(projectStateDir, 'TASKS.json')
   const tasksRaw = readJsonSafe(tasksPath)
   const tasks = Array.isArray(tasksRaw)
     ? tasksRaw

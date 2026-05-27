@@ -1,6 +1,7 @@
 import { defineTool } from '@guildhall/engine'
 import { z } from 'zod'
 import fs from 'node:fs/promises'
+import path from 'node:path'
 import {
   Escalation,
   EscalationReason,
@@ -9,7 +10,7 @@ import {
   type Task,
 } from '@guildhall/core'
 import { logProgress } from './memory-tools.js'
-import { atomicWriteText } from '@guildhall/sessions'
+import { atomicWriteText, appendTaskEvidence, inferProjectRootFromMemoryDir } from '@guildhall/sessions'
 
 // ---------------------------------------------------------------------------
 // FR-10 Escalation protocol
@@ -40,9 +41,16 @@ const raiseEscalationInputSchema = z.object({
   reason: EscalationReason,
   summary: z.string(),
   details: z.string().optional(),
+  externalChecklist: z.array(z.object({
+    id: z.string(),
+    title: z.string(),
+    detail: z.string().optional(),
+    owner: z.enum(['user', 'guildhall', 'external']).default('user'),
+    status: z.enum(['todo', 'done', 'blocked']).default('todo'),
+  })).optional(),
 })
 
-export type RaiseEscalationInput = z.input<typeof raiseEscalationInputSchema>
+export type RaiseEscalationInput = z.infer<typeof raiseEscalationInputSchema>
 export interface RaiseEscalationResult {
   success: boolean
   escalationId?: string
@@ -51,6 +59,40 @@ export interface RaiseEscalationResult {
 
 function nextEscalationId(task: Task): string {
   return `esc-${task.id}-${task.escalations.length + 1}`
+}
+
+function normalizeEscalationText(value: string | undefined): string {
+  return (value ?? '').replace(/\s+/g, ' ').trim()
+}
+
+function findMatchingOpenEscalation(task: Task, input: RaiseEscalationInput): Escalation | null {
+  return task.escalations.find(escalation =>
+    !escalation.resolvedAt &&
+    escalation.agentId === input.agentId &&
+    escalation.reason === input.reason &&
+    normalizeEscalationText(escalation.summary) === normalizeEscalationText(input.summary),
+  ) ?? null
+}
+
+function looksLikeRoutineVerificationEscalation(input: RaiseEscalationInput): boolean {
+  const text = `${input.reason}\n${input.summary}\n${input.details ?? ''}`
+  return (
+    /\bAC-\d+\b/i.test(text) &&
+    /\b(?:evidence|verification|test result|gate)\b/i.test(text) &&
+    /\b(?:pnpm|npm|yarn|bun|vitest|test|typecheck|build)\b/i.test(text)
+  )
+}
+
+function looksLikeWorkerImplementationRecovery(input: RaiseEscalationInput): boolean {
+  if (input.agentId !== 'worker-agent') return false
+  const text = `${input.reason}\n${input.summary}\n${input.details ?? ''}`
+  const brittleEditFailure =
+    /\b(?:exact string|search string|string (?:was )?not found|template syntax mismatch|whitespace|formatting mismatch|failed to edit|attempts? to edit|replace failed|patch failed)\b/i.test(text)
+  const localImplementationEvidence =
+    /\b(?:component exists|correctly imported|current file|template|props?|composable|import|dashboard\.vue|\.vue|\.svelte|\.tsx?|\.jsx?)\b/i.test(text)
+  const asksForOwnerToResolveImplementation =
+    /\b(?:need clarification|needs clarification|how to properly apply|how to apply|how to edit|how to wire|how to import)\b/i.test(text)
+  return brittleEditFailure && (localImplementationEvidence || asksForOwnerToResolveImplementation)
 }
 
 export async function raiseEscalation(
@@ -62,6 +104,27 @@ export async function raiseEscalation(
     const task = queue.tasks.find((t) => t.id === input.taskId)
     if (!task) return { success: false, error: `Task ${input.taskId} not found` }
 
+    if (looksLikeRoutineVerificationEscalation(input)) {
+      return {
+        success: false,
+        error:
+          'Do not raise a human escalation for routine verification evidence. Run the focused check, save the result in the task proof packet or checkpoint, and continue. Escalate only if an external credential, environment outage, or product decision prevents Guildhall from running the check.',
+      }
+    }
+
+    if (looksLikeWorkerImplementationRecovery(input)) {
+      return {
+        success: false,
+        error:
+          'This is implementation recovery, not an owner decision: do not ask the owner to resolve failed exact-string edits, whitespace mismatches, local template syntax, imports, or component props. Re-read the current file and component API, apply a smaller structural edit, or record a checkpoint and retry with the existing spec.',
+      }
+    }
+
+    const existing = findMatchingOpenEscalation(task, input)
+    if (existing) {
+      return { success: true, escalationId: existing.id }
+    }
+
     const now = new Date().toISOString()
     const escalation: Escalation = {
       id: nextEscalationId(task),
@@ -71,6 +134,7 @@ export async function raiseEscalation(
       summary: input.summary,
       raisedAt: now,
       ...(input.details !== undefined ? { details: input.details } : {}),
+      ...(input.externalChecklist !== undefined ? { externalChecklist: input.externalChecklist } : {}),
     }
     task.escalations.push(escalation)
     task.status = 'blocked'
@@ -79,6 +143,16 @@ export async function raiseEscalation(
     queue.lastUpdated = now
 
     atomicWriteText(input.tasksPath, JSON.stringify(queue, null, 2) + '\n')
+    await appendTaskEvidence(
+      inferProjectRootFromMemoryDir(path.dirname(input.tasksPath)),
+      task.id,
+      {
+        id: escalation.id,
+        kind: 'escalation',
+        recordedAt: now,
+        payload: escalation,
+      },
+    ).catch(() => undefined)
 
     if (input.progressPath) {
       const entry: ProgressEntry = {
@@ -101,7 +175,7 @@ export async function raiseEscalation(
 export const raiseEscalationTool = defineTool({
   name: 'raise-escalation',
   description:
-    "Raise a structured escalation on a task. This halts the task (sets status='blocked') and records a typed event to PROGRESS.md. Use this — not a plain note — whenever the task needs a human decision or cannot proceed autonomously.",
+    "Raise a structured escalation on a task. This halts the task (sets status='blocked') and records a typed event to PROGRESS.md. Use this — not a plain note — only when the task truly needs the owner or an external system. Do not use it for routine verification, missing proof packets, acceptance-criteria evidence, test reruns, or internal gate bookkeeping that Guildhall can do itself.",
   inputSchema: raiseEscalationInputSchema,
   jsonSchema: {
     type: 'object',
@@ -123,16 +197,32 @@ export const raiseEscalationTool = defineTool({
       },
       summary: { type: 'string' },
       details: { type: 'string' },
+      externalChecklist: {
+        type: 'array',
+        description: 'Owner-facing setup steps for blockers that require action outside Guildhall.',
+        items: {
+          type: 'object',
+          properties: {
+            id: { type: 'string' },
+            title: { type: 'string' },
+            detail: { type: 'string' },
+            owner: { type: 'string', enum: ['user', 'guildhall', 'external'] },
+            status: { type: 'string', enum: ['todo', 'done', 'blocked'] },
+          },
+          required: ['id', 'title'],
+        },
+      },
     },
     required: ['taskId', 'agentId', 'reason', 'summary'],
   },
   isReadOnly: () => false,
   execute: async (input) => {
-    const result = await raiseEscalation(input)
+    const parsed = raiseEscalationInputSchema.parse(input)
+    const result = await raiseEscalation(parsed)
     return {
       output: result.success
-        ? `Raised escalation ${result.escalationId} on ${input.taskId}`
-        : `Error raising escalation on ${input.taskId}: ${result.error ?? 'unknown'}`,
+        ? `Raised escalation ${result.escalationId} on ${parsed.taskId}`
+        : `Error raising escalation on ${parsed.taskId}: ${result.error ?? 'unknown'}`,
       is_error: !result.success,
       metadata: result as unknown as Record<string, unknown>,
     }

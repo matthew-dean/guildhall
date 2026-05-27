@@ -5,7 +5,7 @@
     CheckCircle2,
     FolderOpen,
     PauseCircle,
-    Play,
+    Sparkles,
     Square,
   } from 'lucide-svelte'
   import ActionBar from './ActionBar.svelte'
@@ -39,6 +39,13 @@
   const effectiveRunning = $derived(summary.canStop || optimisticRunning)
 
   const displayStatusLabel = $derived(optimisticRunning ? 'Starting' : summary.statusLabel)
+  const statusTitle = $derived(summary.projectCheckIn?.needed
+    ? summary.projectCheckIn.detail ?? 'Answer the first project questions so Guildhall can use current project context.'
+    : `Project status: ${displayStatusLabel}`)
+  const showMaturityChip = $derived(
+    !summary.projectCheckIn?.needed &&
+      summary.maturityLabel.toLowerCase() !== displayStatusLabel.toLowerCase(),
+  )
   const statusTone = $derived(
     effectiveRunning
       ? 'running'
@@ -170,8 +177,24 @@
 >
   {#snippet actions()}
     <div class="top-chips" aria-label="Project status">
-      <Chip label={displayStatusLabel} tone={statusTone} title={`Project status: ${displayStatusLabel}`} />
-      <Chip label={summary.maturityLabel} tone="accent" title={`Development maturity: ${summary.maturityDescription}`} />
+      <Chip label={displayStatusLabel} tone={statusTone} title={statusTitle} />
+      {#if showMaturityChip}
+        <Chip label={summary.maturityLabel} tone="accent" title={`Development maturity: ${summary.maturityDescription}`} />
+      {/if}
+      {#if summary.gitStory}
+        <Chip
+          label={summary.gitStory.label}
+          tone={summary.gitStory.blockerCount > 0 ? 'warn' : 'neutral'}
+          title={summary.gitStory.title}
+        />
+      {/if}
+      {#if summary.provider}
+        <Chip
+          label={summary.provider.label}
+          tone={summary.provider.tone}
+          title={summary.provider.title}
+        />
+      {/if}
     </div>
   {/snippet}
 
@@ -245,6 +268,7 @@
                   aria-label={memberTooltip}
                 >
                   <span class="project-avatar">{member.initial}</span>
+                  <span class="project-guild-label">{member.role}</span>
                 </span>
               </Tooltip>
             {/each}
@@ -303,8 +327,8 @@
         {summary.actionLabel}
       </Button>
       {#if summary.canStart && !effectiveRunning}
-        <Button variant="primary" size="sm" disabled={busy} title={`Start Guildhall on ${summary.name}`} onclick={() => onStart?.(summary.id)}>
-          <Play size={14} />
+        <Button variant="agent" size="sm" disabled={busy} title={`${summary.runActionLabel}: let Guildhall advance ${summary.name}`} onclick={() => onStart?.(summary.id)}>
+          <Sparkles size={14} />
           {summary.runActionLabel}
         </Button>
       {:else if effectiveRunning}
@@ -535,6 +559,8 @@
   .project-guild {
     display: flex;
     gap: 0.2rem;
+    flex-wrap: wrap;
+    justify-content: flex-end;
     min-width: 0;
     overflow: hidden;
   }
@@ -542,7 +568,10 @@
     --avatar-color: var(--avatar-system);
     display: inline-flex;
     align-items: center;
-    padding: 0.12rem;
+    gap: 0.22rem;
+    max-width: 6.8rem;
+    min-width: 0;
+    padding: 0.12rem 0.42rem 0.12rem 0.12rem;
     border: 1px solid color-mix(in srgb, var(--avatar-color) 22%, var(--border));
     border-radius: 999px;
     color: color-mix(in srgb, var(--avatar-color) 76%, var(--text-muted));
@@ -558,6 +587,17 @@
     color: color-mix(in srgb, var(--avatar-color) 88%, white);
     font-size: 0.62rem;
     font-weight: 800;
+    flex: none;
+  }
+  .project-guild-label {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    color: var(--text-muted);
+    font-size: 0.68rem;
+    font-weight: 700;
+    letter-spacing: 0;
   }
   .project-guild-member-active {
     color: var(--avatar-color);

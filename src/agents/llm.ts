@@ -11,7 +11,8 @@
  */
 
 import type { SupportsStreamingMessages } from '@guildhall/engine'
-import type { ModelAssignmentConfig, AgentRole } from '@guildhall/core'
+import { DEFAULT_ROLE_BEHAVIOR } from '@guildhall/core'
+import type { ModelAssignmentConfig, AgentRole, ModelBehaviorProfile } from '@guildhall/core'
 
 export interface AgentLLM {
   apiClient: SupportsStreamingMessages
@@ -28,18 +29,28 @@ export interface ModelSet {
   contextIndexer: AgentLLM
 }
 
-export function temperatureForRole(role: AgentRole): number {
-  switch (role) {
-    case 'worker':
-      return 0.1
-    case 'reviewer':
-    case 'gateChecker':
-    case 'contextIndexer':
+export type ModelBehaviorConfig = Partial<Record<AgentRole, ModelBehaviorProfile>>
+
+export function samplingProfileForRole(
+  role: AgentRole,
+  behavior: ModelBehaviorConfig = {},
+): ModelBehaviorProfile {
+  return behavior[role] ?? DEFAULT_ROLE_BEHAVIOR[role]
+}
+
+export function temperatureForProfile(profile: ModelBehaviorProfile): number {
+  switch (profile) {
+    case 'precise':
       return 0
-    case 'spec':
-    case 'coordinator':
+    case 'balanced':
       return 0.2
+    case 'exploratory':
+      return 0.7
   }
+}
+
+export function temperatureForRole(role: AgentRole, behavior: ModelBehaviorConfig = {}): number {
+  return temperatureForProfile(samplingProfileForRole(role, behavior))
 }
 
 /**
@@ -49,14 +60,15 @@ export function temperatureForRole(role: AgentRole): number {
 export function buildModelSet(
   assignment: ModelAssignmentConfig,
   apiClient: SupportsStreamingMessages,
+  behavior: ModelBehaviorConfig = {},
 ): ModelSet {
   return {
-    spec: { apiClient, modelId: assignment.spec, temperature: temperatureForRole('spec') },
-    coordinator: { apiClient, modelId: assignment.coordinator, temperature: temperatureForRole('coordinator') },
-    worker: { apiClient, modelId: assignment.worker, temperature: temperatureForRole('worker') },
-    reviewer: { apiClient, modelId: assignment.reviewer, temperature: temperatureForRole('reviewer') },
-    gateChecker: { apiClient, modelId: assignment.gateChecker, temperature: temperatureForRole('gateChecker') },
-    contextIndexer: { apiClient, modelId: assignment.contextIndexer, temperature: temperatureForRole('contextIndexer') },
+    spec: { apiClient, modelId: assignment.spec, temperature: temperatureForRole('spec', behavior) },
+    coordinator: { apiClient, modelId: assignment.coordinator, temperature: temperatureForRole('coordinator', behavior) },
+    worker: { apiClient, modelId: assignment.worker, temperature: temperatureForRole('worker', behavior) },
+    reviewer: { apiClient, modelId: assignment.reviewer, temperature: temperatureForRole('reviewer', behavior) },
+    gateChecker: { apiClient, modelId: assignment.gateChecker, temperature: temperatureForRole('gateChecker', behavior) },
+    contextIndexer: { apiClient, modelId: assignment.contextIndexer, temperature: temperatureForRole('contextIndexer', behavior) },
   }
 }
 

@@ -90,7 +90,7 @@ describe('buildCoordinatorsSurface', () => {
 })
 
 describe('buildThreadPhaseGroups', () => {
-  it('labels optional setup and paused inflight groups without component state', () => {
+  it('labels optional setup while keeping task state out of phase labels', () => {
     const groups = buildThreadPhaseGroups([
       { phase: 'setup', kind: 'setup_step', skippable: true },
       { phase: 'inflight', kind: 'inflight', liveAgent: undefined },
@@ -104,7 +104,7 @@ describe('buildThreadPhaseGroups', () => {
       },
       {
         phase: 'inflight',
-        label: 'Paused',
+        label: 'Work',
         turns: [{ phase: 'inflight', kind: 'inflight', liveAgent: undefined }],
       },
     ])

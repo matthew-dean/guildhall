@@ -1,5 +1,5 @@
 /**
- * Seed positions for every lever, used when `memory/agent-settings.yaml` is
+ * Seed positions for every lever, used when `.guildhall/agent-settings.yaml` is
  * first created. These are NOT "hidden defaults" — they are written
  * explicitly to the file with `setBy: 'system-default'` so the provenance
  * trail shows that the Spec Agent has not yet refined them via intake.
@@ -86,6 +86,10 @@ export function makeDefaultSettings(now: Date = new Date()): LeverSettings {
     reviewer_fanout_policy: {
       position: 'strict',
       ...stub('every persona must approve; worker synthesizes dissenting revisions. Coordinator adjudication turns on once conflicts prove recurrent.'),
+    },
+    review_effort: {
+      position: 'balanced',
+      ...stub('start with balanced review depth; raise or lower after calibration data shows the quality and cost tradeoff for this domain'),
     },
     max_revisions: {
       position: 3,

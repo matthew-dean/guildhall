@@ -1,0 +1,42 @@
+id: stale-install-command
+title: Stale install command
+domain: docs
+productType: cli
+surfaceType: docs-page
+userGoal: Install and run the tool from the public quickstart.
+scenario: The quickstart tells readers to run an old package manager command that no longer works with the current package metadata.
+artifacts:
+  - id: quickstart-snippet
+    kind: document_excerpt
+    description: Public quickstart excerpt.
+    content: "Install: npm install -g old-tool-name. Then run old-tool init. Current package.json exposes @company/new-tool and bin new-tool."
+reviewLanes:
+  - docs_truth
+  - copy_clarity
+knownFindings:
+  - id: stale-command
+    lane: docs_truth
+    severity: high
+    summary: The public install command no longer matches the shipped package and binary.
+    impact: New users cannot complete the quickstart and may assume the product is broken.
+    minimumUsefulFix: Update the command to the current package and binary, and verify the quickstart against the current package metadata.
+    matchHints:
+      - stale
+      - package
+      - binary
+      - quickstart
+falsePositiveTraps:
+  - id: not-style-only
+    summary: The issue is factual accuracy, not copy tone.
+source:
+  kind: synthetic
+  citation: Created for cross-domain review calibration.
+labelGovernance:
+  labeledBy: review-calibration
+  labeledAt: 2026-05-25T12:00:00.000Z
+  reviewStatus: seed
+privacyClassification: public
+negativeControl: false
+stalenessPolicy:
+  reviewAfter: 2026-11-25
+  reason: Install commands change with packaging.

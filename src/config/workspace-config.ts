@@ -10,7 +10,7 @@ import type { ZodError } from 'zod'
 // ---------------------------------------------------------------------------
 
 export const FORGE_YAML_FILENAME = 'guildhall.yaml'
-export const MEMORY_DIR_NAME = 'memory'
+export const MEMORY_DIR_NAME = '.guildhall'
 
 // ---------------------------------------------------------------------------
 // Locate guildhall.yaml
@@ -92,7 +92,7 @@ export function writeWorkspaceConfig(workspacePath: string, config: WorkspaceYam
 // ---------------------------------------------------------------------------
 
 /**
- * Create a new workspace directory with a guildhall.yaml and empty memory/ subdir.
+ * Create a new workspace directory with a guildhall.yaml and empty .guildhall/ subdir.
  * Safe to call on an existing directory — only writes missing files.
  */
 export function bootstrapWorkspace(
@@ -105,7 +105,7 @@ export function bootstrapWorkspace(
 ): WorkspaceYamlConfig {
   const absPath = resolve(workspacePath)
   const configPath = join(absPath, FORGE_YAML_FILENAME)
-  const memoryPath = join(absPath, MEMORY_DIR_NAME)
+  const projectStatePath = join(absPath, MEMORY_DIR_NAME)
 
   // Don't overwrite existing config
   if (existsSync(configPath)) {
@@ -114,11 +114,7 @@ export function bootstrapWorkspace(
 
   // Ensure directories exist
   mkdirSync(absPath, { recursive: true })
-  mkdirSync(memoryPath, { recursive: true })
-  // FR-08: memory/exploring/<task-id>.md is where the spec-agent records
-  // the conversational intake transcript. Seed the subdirectory up front so
-  // the append tool doesn't race on first write.
-  mkdirSync(join(memoryPath, 'exploring'), { recursive: true })
+  mkdirSync(projectStatePath, { recursive: true })
 
   // Derive id from name
   const id = slugify(options.name)
@@ -132,16 +128,16 @@ export function bootstrapWorkspace(
 
   writeWorkspaceConfig(absPath, config)
 
-  // Seed empty memory files
-  const memoryFiles = {
+  // Seed empty shared project-state files.
+  const projectStateFiles = {
     'TASKS.json': '[]',
     'MEMORY.md': `# ${options.name} Memory\n\n_Updated by GuildHall agents._\n`,
     'DECISIONS.md': `# ${options.name} Decisions\n\n_Architecture decisions recorded by GuildHall agents._\n`,
     'PROGRESS.md': `# ${options.name} Progress\n\n_Progress log maintained by GuildHall agents._\n`,
   }
 
-  for (const [filename, content] of Object.entries(memoryFiles)) {
-    const filePath = join(memoryPath, filename)
+  for (const [filename, content] of Object.entries(projectStateFiles)) {
+    const filePath = join(projectStatePath, filename)
     if (!existsSync(filePath)) {
       writeFileSync(filePath, content, 'utf8')
     }
@@ -155,15 +151,15 @@ export function bootstrapWorkspace(
 // ---------------------------------------------------------------------------
 
 /**
- * Resolve the memory directory for a workspace.
- * Always returns <workspacePath>/memory (absolute).
+ * Resolve the shared project-state directory for a workspace.
+ * Always returns <workspacePath>/.guildhall (absolute).
  */
 export function resolveMemoryDir(workspacePath: string): string {
   return join(resolve(workspacePath), MEMORY_DIR_NAME)
 }
 
 // ---------------------------------------------------------------------------
-// Agent overrides (memory/agent-overrides.yaml)
+// Agent overrides (.guildhall/agent-overrides.yaml)
 // ---------------------------------------------------------------------------
 
 function agentOverridesPath(workspacePath: string): string {
@@ -171,7 +167,7 @@ function agentOverridesPath(workspacePath: string): string {
 }
 
 /**
- * Read memory/agent-overrides.yaml for a workspace.
+ * Read .guildhall/agent-overrides.yaml for a workspace.
  * Returns an empty AgentSettings if the file does not exist.
  */
 export function readAgentSettings(workspacePath: string): AgentSettings {
@@ -185,7 +181,7 @@ export function readAgentSettings(workspacePath: string): AgentSettings {
   try {
     raw = yamlLoad(readFileSync(filePath, 'utf8'))
   } catch (err) {
-    throw new Error(`Failed to parse memory/agent-overrides.yaml: ${String(err)}`)
+    throw new Error(`Failed to parse .guildhall/agent-overrides.yaml: ${String(err)}`)
   }
 
   try {
@@ -193,13 +189,13 @@ export function readAgentSettings(workspacePath: string): AgentSettings {
   } catch (err) {
     const zodErr = err as ZodError
     const issues = zodErr.issues?.map(i => `  ${i.path.join('.')}: ${i.message}`).join('\n') ?? String(err)
-    throw new Error(`Invalid memory/agent-overrides.yaml:\n${issues}`)
+    throw new Error(`Invalid .guildhall/agent-overrides.yaml:\n${issues}`)
   }
 }
 
 /**
- * Write memory/agent-overrides.yaml for a workspace.
- * Creates the memory/ directory if needed.
+ * Write .guildhall/agent-overrides.yaml for a workspace.
+ * Creates the .guildhall/ directory if needed.
  */
 export function writeAgentSettings(workspacePath: string, settings: AgentSettings): void {
   const memDir = join(resolve(workspacePath), MEMORY_DIR_NAME)

@@ -21,7 +21,7 @@ Tools are what agents do with their turns. Every tool has a Zod schema, a handle
 | `files` | Read, write, append, list, stat, rename, delete. |
 | `search` | Keyword + regex code search across the project. |
 | `task_queue` | Add tasks, move them between statuses, attach spec items. |
-| `memory_tools` | Read/write entries under `./memory/` (notes, transcripts). |
+| `memory_tools` | Write shared memory/progress/decision entries and route heartbeat noise to local history. |
 | `escalation` | Raise an escalation with category + free text. |
 | `proposal` | Propose a design or scope change that a coordinator reviews. |
 | `checkpoint` | Save/restore named checkpoints mid-task. |

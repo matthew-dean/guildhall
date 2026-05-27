@@ -31,11 +31,8 @@ describe('IntakeModal', () => {
     installBrowserFakes()
   })
 
-  async function chooseType(value: 'feature' | 'bug' | 'question') {
-    const select = screen.getByLabelText('Type') as HTMLSelectElement
-    select.value = value
-    await fireEvent.input(select)
-    await fireEvent.change(select)
+  async function openBugForm() {
+    await userEvent.click(screen.getByRole('button', { name: /file a bug instead/i }))
     await tick()
   }
 
@@ -53,11 +50,13 @@ describe('IntakeModal', () => {
     project.detail = null
   })
 
-  it('creates a task from the thread without requiring the details pane', async () => {
+  it('creates a request from the thread without requiring the details pane', async () => {
     const onClose = vi.fn()
+    const created = vi.fn()
+    window.addEventListener('guildhall:request-created', created)
     const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
       const url = String(input)
-      if (url.startsWith('/api/project/intake')) {
+      if (url.startsWith('/api/project/request')) {
         const body = JSON.parse(String(init?.body))
         expect(body).toEqual({
           ask: 'Add inline link controls.',
@@ -66,7 +65,6 @@ describe('IntakeModal', () => {
         })
         return json({ ok: true })
       }
-      if (url.startsWith('/api/project/start')) return json({ ok: true })
       if (url.startsWith('/api/project')) {
         return json({
           id: 'looma-knit',
@@ -79,29 +77,30 @@ describe('IntakeModal', () => {
     vi.stubGlobal('fetch', fetchMock)
 
     render(IntakeModal, { onClose })
-    await userEvent.type(screen.getByPlaceholderText(/Describe the task in plain language/i), 'Add inline link controls.')
+    expect(screen.getByRole('heading', { name: /new request/i })).toBeInTheDocument()
+    expect(screen.queryByLabelText('Type')).not.toBeInTheDocument()
+    await userEvent.type(screen.getByPlaceholderText(/Describe the request in plain language/i), 'Add inline link controls.')
     await userEvent.type(screen.getByPlaceholderText(/Short descriptive title/i), 'Knit link controls')
-    await userEvent.click(screen.getByRole('button', { name: /create task/i }))
+    await userEvent.click(screen.getByRole('button', { name: /create request/i }))
 
     await waitFor(() => expect(onClose).toHaveBeenCalled())
+    expect(created).toHaveBeenCalledTimes(1)
+    window.removeEventListener('guildhall:request-created', created)
     expect(fetchMock).toHaveBeenCalledWith(
-      expect.stringContaining('/api/project/intake?projectId=looma-knit'),
+      expect.stringContaining('/api/project/request?projectId=looma-knit'),
       expect.objectContaining({ method: 'POST' }),
     )
-    expect(fetchMock).toHaveBeenCalledWith(
-      expect.stringContaining('/api/project/start?projectId=looma-knit'),
-      expect.objectContaining({ method: 'POST' }),
-    )
+    expect(fetchMock.mock.calls.some(([input]) => String(input).startsWith('/api/project/start'))).toBe(false)
   })
 
-  it('validates feature intake before creating a task', async () => {
+  it('validates request intake before creating a request', async () => {
     const fetchMock = vi.fn()
     vi.stubGlobal('fetch', fetchMock)
 
     render(IntakeModal, { onClose: vi.fn() })
-    await userEvent.click(screen.getByRole('button', { name: /create task/i }))
+    await userEvent.click(screen.getByRole('button', { name: /create request/i }))
 
-    expect(screen.getByText('Please describe the task.')).toBeInTheDocument()
+    expect(screen.getByText('Please describe the request.')).toBeInTheDocument()
     expect(fetchMock).not.toHaveBeenCalled()
   })
 
@@ -124,7 +123,7 @@ describe('IntakeModal', () => {
     vi.stubGlobal('fetch', fetchMock)
 
     render(IntakeModal, { onClose })
-    await chooseType('bug')
+    await openBugForm()
     await screen.findByPlaceholderText(/What went wrong/i)
     await userEvent.type(screen.getByPlaceholderText(/What went wrong/i), 'Thread card opened the wrong project')
     await userEvent.type(
@@ -147,7 +146,7 @@ describe('IntakeModal', () => {
     vi.stubGlobal('fetch', fetchMock)
 
     render(IntakeModal, { onClose: vi.fn() })
-    await chooseType('bug')
+    await openBugForm()
     await screen.findByRole('button', { name: /file bug/i })
     await userEvent.click(screen.getByRole('button', { name: /file bug/i }))
     expect(screen.getByText('Please add a summary.')).toBeInTheDocument()

@@ -36,7 +36,7 @@ async function createMinimalReleaseFixture(tmp: string): Promise<void> {
   )
   await fs.writeFile(
     path.join(tmp, 'docs/index.md'),
-    'Docs default to Guildhall 0.4.0. [Start](/guildhall/versions/0.4.0/guide/quick-start).\n',
+    'Docs default to Guildhall 0.4.0. [Start](/versions/0.4.0/guide/quick-start).\n',
   )
   await fs.writeFile(
     path.join(tmp, 'docs/releases/index.md'),

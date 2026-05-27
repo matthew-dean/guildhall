@@ -15,6 +15,7 @@ import {
   projectLearningPath,
   readGlobalLearning,
   readProjectLearning,
+  recordStructuredUserPreference,
   recordTaskReflection,
   recordUserCorrection,
   recordWorkspaceImportApproval,
@@ -362,6 +363,39 @@ describe('reflection learning candidates', () => {
     expect(global.suggestedLearnings).toEqual([])
   })
 
+  it('links compact project learnings back to local task evidence', async () => {
+    await persistLearningCandidates({
+      memoryDir: path.join(tmpDir, 'memory'),
+      candidates: [
+        candidate({
+          id: 'project-task-evidence-link',
+          evidence: [
+            {
+              kind: 'task',
+              summary: 'Task completed after the focused invite repair.',
+              ref: 'task-001',
+            },
+          ],
+        }),
+      ],
+    })
+
+    const project = readProjectLearning(path.join(tmpDir, 'memory'))
+    expect(project.suggestedLearnings[0]?.evidence[0]).toMatchObject({
+      kind: 'task',
+      summary: 'Task completed after the focused invite repair.',
+      ref: 'task-001',
+      links: [
+        {
+          kind: 'task',
+          label: 'Open task evidence',
+          href: '/task/task-001',
+          localHistoryRef: path.join('transcripts', 'exploring', 'task-001.md'),
+        },
+      ],
+    })
+  })
+
   it('records task reflection candidates after completed playbook-backed work', async () => {
     await recordTaskReflection({
       memoryDir: path.join(tmpDir, 'memory'),
@@ -416,6 +450,113 @@ describe('reflection learning candidates', () => {
       confidence: 'medium',
     })
     expect(global.suggestedLearnings[0]?.summary).toContain('public docs')
+  })
+
+  it('persists structured global preferences with a dynamic subject taxonomy', async () => {
+    await persistLearningCandidates({
+      memoryDir: path.join(tmpDir, 'memory'),
+      candidates: [
+        candidate({
+          id: 'global-game-engine-preference',
+          source: 'user_correction',
+          proposedScope: 'user_global',
+          proposedDestination: 'user_preference',
+          summary: 'Prefer lightweight game engines and avoid heavyweight editor-first engines.',
+          preference: {
+            kind: 'preference',
+            subject: {
+              domain: 'game-development',
+              area: 'engine',
+              item: 'runtime',
+            },
+            position: {
+              prefer: [
+                { item: 'Godot', strength: 'strong' },
+                { item: 'Bevy', strength: 'medium' },
+              ],
+              avoid: [
+                {
+                  item: 'Unity',
+                  strength: 'strong',
+                  exceptions: ['existing Unity project', 'user explicitly asks for Unity'],
+                },
+                { item: 'Unreal Blueprints', strength: 'medium' },
+              ],
+              ranking: 'ordered',
+            },
+          },
+        }),
+      ],
+    })
+
+    const global = readGlobalLearning()
+    expect(global.suggestedLearnings[0]?.preference).toEqual({
+      kind: 'preference',
+      subject: {
+        domain: 'game-development',
+        area: 'engine',
+        item: 'runtime',
+      },
+      position: {
+        prefer: [
+          { item: 'Godot', strength: 'strong' },
+          { item: 'Bevy', strength: 'medium' },
+        ],
+        avoid: [
+          {
+            item: 'Unity',
+            strength: 'strong',
+            exceptions: ['existing Unity project', 'user explicitly asks for Unity'],
+          },
+          { item: 'Unreal Blueprints', strength: 'medium' },
+        ],
+        ranking: 'ordered',
+      },
+    })
+    expect(global.suggestedLearnings[0]).toMatchObject({
+      destination: 'user_preference',
+      scope: 'user_global',
+      status: 'suggested',
+      requiresApproval: true,
+    })
+  })
+
+  it('records a structured user preference without activating it automatically', async () => {
+    await recordStructuredUserPreference({
+      memoryDir: path.join(tmpDir, 'memory'),
+      id: 'prefer-pnpm-over-npm',
+      summary: 'Prefer pnpm over npm when choosing a JavaScript package manager.',
+      evidenceSummary: 'The user said they prefer PNPM over NPM.',
+      subject: {
+        domain: 'software',
+        area: 'dependency-management',
+        item: 'package-manager',
+      },
+      prefer: [{ item: 'pnpm', strength: 'strong' }],
+      avoid: [{ item: 'npm', strength: 'medium' }],
+      confidence: 'high',
+    })
+
+    const global = readGlobalLearning()
+    expect(global.suggestedLearnings[0]).toMatchObject({
+      id: 'prefer-pnpm-over-npm',
+      status: 'suggested',
+      scope: 'user_global',
+      destination: 'user_preference',
+      requiresApproval: true,
+      preference: {
+        kind: 'preference',
+        subject: {
+          domain: 'software',
+          area: 'dependency-management',
+          item: 'package-manager',
+        },
+        position: {
+          prefer: [{ item: 'pnpm', strength: 'strong' }],
+          avoid: [{ item: 'npm', strength: 'medium' }],
+        },
+      },
+    })
   })
 
   it('keeps product suggestions inert until a human accepts them', async () => {

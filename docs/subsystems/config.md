@@ -3,7 +3,7 @@ title: Config loader
 help_topic: subsystem.config
 help_summary: |
   Resolves configuration from global defaults, ./guildhall.yaml, and
-  ./memory/agent-settings, while consulting project-local config for a smaller
+  ./.guildhall/agent-settings, while consulting project-local config for a smaller
   set of runtime selections such as preferredProvider and landingBranch.
 ---
 
@@ -16,7 +16,7 @@ The main resolved runtime config is built from these layers:
 1. **Global** — `~/.guildhall/config.yaml`. Machine-wide defaults and UI preferences. Overridable with `GUILDHALL_CONFIG_DIR`.
 2. **Workspace** — `./guildhall.yaml` at the workspace root. Coordinators, domains, MCP servers, hooks, models.
 3. **Shared Guildhall metadata** — checked-in `./.guildhall/*.yaml` files. These are project-private in purpose but shared with the repo, such as stable artifact IDs in `./.guildhall/artifacts.yaml`.
-4. **Agent settings** — `./memory/agent-settings.yaml`. Learned overrides such as coordinator addenda, ignore additions, and runtime knobs.
+4. **Agent settings** — `./.guildhall/agent-settings.yaml`. Learned overrides such as coordinator addenda, ignore additions, and runtime knobs.
 
 Project-local config is consulted more narrowly for local runtime overrides such as `landingBranch` and, when needed, a project-specific `preferredProvider`; it is not the main third layer in the resolved orchestrator config.
 
@@ -32,7 +32,10 @@ The project `.gitignore` should preserve that split:
 ```gitignore
 !/.guildhall/
 !/.guildhall/*.yaml
+!/.guildhall/*.md
+!/.guildhall/tasks/
 /.guildhall/config.yaml
+/.guildhall/local/
 /.guildhall/worktrees/
 ```
 
@@ -50,7 +53,7 @@ import {
 const config = resolveConfig({ workspacePath })
 ```
 
-`resolveConfig()` returns a fully validated `ResolvedConfig` that the orchestrator and service accept. It reads the machine-global default first, lets project-local config override specific fields when present, then merges global defaults, `./guildhall.yaml`, and `./memory/agent-settings.yaml`.
+`resolveConfig()` returns a fully validated `ResolvedConfig` that the orchestrator and service accept. It reads the machine-global default first, lets project-local config override specific fields when present, then merges global defaults, `./guildhall.yaml`, and `./.guildhall/agent-settings.yaml`.
 
 ## `WorkspaceYamlConfig` schema
 

@@ -1,7 +1,7 @@
 <!--
   Global app header. Trimmed to the workspace-level brand + the SSE live
   indicator. Project-level controls (name chip, run status, Start/Stop,
-  New Task) live inside ProjectView's top bar now. Providers navigation
+  New request) live inside ProjectView's top bar now. Providers navigation
   moved to the bottom of the left rail.
 -->
 <script lang="ts">
@@ -12,6 +12,7 @@
   import StatusDot from '../lib/StatusDot.svelte'
   import { parseProjectRoute } from '../lib/project-routes.js'
   import { humanizeProjectName } from '../lib/project-name.js'
+  import { project } from '../lib/project.svelte.js'
 
   let sseStatus = $state<SseStatus>('connecting')
   let version = $state<string | null>(null)
@@ -39,11 +40,20 @@
   )
   const parsedRoute = $derived(parseProjectRoute(path.value))
   const showProjectMenu = $derived(path.value.startsWith('/project') || parsedRoute.projectScoped)
+  const showSseStatus = $derived(parsedRoute.projectScoped || path.value.startsWith('/project'))
+  const savedProjectTitle = $derived(
+    parsedRoute.projectScoped && project.detail?.id === parsedRoute.projectId
+      ? (project.detail.name?.trim() || null)
+      : null,
+  )
+  const fallbackProjectTitle = $derived(
+    parsedRoute.projectScoped
+      ? humanizeProjectName(parsedRoute.projectId)
+      : null,
+  )
 
   $effect(() => {
-    projectTitle = parsedRoute.projectScoped
-      ? humanizeProjectName(parsedRoute.projectId)
-      : null
+    projectTitle = savedProjectTitle ?? fallbackProjectTitle
   })
 
   $effect(() => {
@@ -51,7 +61,7 @@
       const custom = event as CustomEvent<{ title?: string | null }>
       projectTitle = typeof custom.detail?.title === 'string' && custom.detail.title.trim().length > 0
         ? custom.detail.title.trim()
-        : (parsedRoute.projectScoped ? humanizeProjectName(parsedRoute.projectId) : null)
+        : (savedProjectTitle ?? fallbackProjectTitle)
     }
     window.addEventListener('guildhall:set-project-title', handle as EventListener)
     return () => window.removeEventListener('guildhall:set-project-title', handle as EventListener)
@@ -97,10 +107,12 @@
     {/if}
   </div>
   <div class="header-right">
-    <span class="sse-status">
-      <StatusDot tone={sseTone} pulse={sseStatus === 'live'} />
-      {sseLabel}
-    </span>
+    {#if showSseStatus}
+      <span class="sse-status">
+        <StatusDot tone={sseTone} pulse={sseStatus === 'live'} />
+        {sseLabel}
+      </span>
+    {/if}
   </div>
 </header>
 
@@ -250,6 +262,27 @@
     .project-title {
       max-width: min(42vw, 24ch);
       font-size: var(--fs-1);
+    }
+  }
+  @media (max-width: 640px) {
+    .app-header {
+      padding-inline: var(--s-2);
+    }
+    .brand-word,
+    .version {
+      display: none;
+    }
+    .header-center {
+      justify-self: start;
+      padding-inline: 0;
+    }
+    .project-title {
+      max-width: 100%;
+    }
+    .sse-status {
+      font-size: 0;
+      letter-spacing: 0;
+      gap: 0;
     }
   }
 </style>

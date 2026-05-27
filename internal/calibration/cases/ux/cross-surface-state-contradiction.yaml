@@ -1,0 +1,42 @@
+id: cross-surface-state-contradiction
+title: Cross-surface state contradiction
+domain: ux
+productType: workflow-tool
+surfaceType: dashboard
+userGoal: Know whether work is waiting on the user or the system.
+scenario: 'The home dashboard says "Needs you: 3" while the task drawer says "Nothing is waiting" for each listed task, and the work board marks them "Queued for automation."'
+artifacts:
+  - id: surface-copy
+    kind: copy_snippet
+    description: Conflicting labels across three surfaces.
+    content: "Home: Needs you: 3. Drawer: Nothing is waiting. Work board: Queued for automation."
+reviewLanes:
+  - ux_comprehension
+  - copy_clarity
+knownFindings:
+  - id: owner-state-contradiction
+    lane: ux_comprehension
+    severity: critical
+    summary: Surfaces disagree on whether the user or automation owns the next step.
+    impact: Users cannot decide whether to act, wait, or start the run.
+    minimumUsefulFix: Use one owner/action projection across home, drawer, and work-board surfaces.
+    matchHints:
+      - owner
+      - next step
+      - surfaces disagree
+      - needs you
+falsePositiveTraps:
+  - id: dont-only-rename
+    summary: Renaming one label is not enough if the underlying projections still disagree.
+source:
+  kind: production_miss
+  citation: Generalized from Guildhall flow-audit state-projection misses.
+labelGovernance:
+  labeledBy: product-review
+  labeledAt: 2026-05-25T12:00:00.000Z
+  reviewStatus: seed
+privacyClassification: internal
+negativeControl: false
+stalenessPolicy:
+  reviewAfter: 2026-08-25
+  reason: Product state language is actively changing.

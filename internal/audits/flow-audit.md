@@ -57,6 +57,549 @@ babysit setup/import/provider/release states across multiple pages.
 
 ## Current Follow-Ups
 
+- [x] Run a multi-agent 0.8 user-testing pass on the documented Narrative
+  Harness project and repair the bounded regressions found live. The pass
+  covered migration/runtime authority, workspace-intake depth, and
+  Overview/Inbox UX. Immediate fixes: top-level `/inbox` now opens the fleet
+  Needs You queue instead of a project-scoped error, Fleet Needs You loads
+  project inboxes in parallel and no longer crashes on repeated inbox rows,
+  project Inbox history counts match the visible ledger rows, and migration /
+  project-understanding rows get useful fleet verbs. Remaining release-polish
+  findings are tracked in this audit trail: duplicate inbox rows can still bury
+  the next move, some old/internal agent language still leaks into user
+  surfaces, and the package metadata still reports `v0.7.0` on the 0.8 branch.
+- [x] Integrate required migrations and runtime compatibility with durable
+  attention. Required project migrations now also appear in the Overview Inbox
+  ledger as blocking, non-dismissible items while the existing migration
+  readiness/middleware paths remain the authority that blocks project
+  mutations. When the migration is applied, the Inbox history resolves the item
+  as migrated instead of disappearing. Guildhall now also writes a
+  `.guildhall/runtime.json` compatibility manifest when it mutates migration or
+  attention state, and both the web service and `guildhall run` block writes
+  with `runtime_too_old` when a project requires a newer runtime or unknown
+  state feature.
+- [x] Validate the 0.8.0 required-migration flow in the browser against a
+  fresh legacy Looma + Knit-shaped project. The project now foregrounds the
+  required `0.8.0/project-state-layout` migration ahead of bootstrap, opens a
+  review/consent modal that names the file movement, blocks project mutations
+  with `required_migration_pending` until migration, and clears the blocker
+  after apply. The migration now also seeds missing baseline `.guildhall`
+  state files so post-migration intake and settings writes do not crash on
+  minimal legacy projects.
+- [x] Fix verification-command intake so package-local commands do not become
+  human blockers. Automated acceptance commands are now normalized against the
+  actual task project/package shape, so root-level `pnpm build` can become
+  `pnpm --dir frontend build` when `frontend/` is the only package that owns
+  the script, and bare TypeScript checks can follow the unique `tsconfig.json`.
+  Worker recovery checkpoints also reconcile passed verification evidence back
+  into the task command shape before preserving the checkpoint, so a worker's
+  discovered `cd frontend && pnpm build`-style command is treated as learned
+  task truth rather than a one-off workaround.
+- [x] Start DeepInfra/OpenAI-compatible API hardening without paid priority
+  routing. The implementation plan lives at
+  `docs/superpowers/plans/2026-05-25-deepinfra-api-design-hardening.md`.
+  Provider tests now prove Guildhall forwards `prompt_cache_key`,
+  `response_format`, `reasoning_effort`, `reasoning`, and `tool_choice`,
+  requests streamed usage even when tools are present, and still never sends
+  `service_tier`. Runtime JSON helpers can request strict schema output, agent
+  turns carry role/model API policy through the query engine, and DeepInfra-like
+  model metadata fixtures now check cached-input pricing, structured-output,
+  tool-calling, and reasoning capability extraction. Remaining follow-up:
+  implement focused tool-list profiles and deeper cache-aware context-budget
+  regression tests from the saved plan.
+- [x] Add task sizing, split recommendations, and done-task transcript
+  reduction. Shaped tasks now get a first-class `sizePlan` with a
+  tiny/small/medium/large/epic score, action, factors, and recommended child
+  tasks when the work is too large for one clean agent loop. Split-recommended
+  and split-required tasks get a parent goal id so child work can stay linked.
+  Done tasks now get a structured done-summary bundle with journey, decision,
+  evidence, learning candidates, open residue, and transcript-retention status;
+  the drawer shows that in Journey and treats Transcript as source evidence
+  rather than the primary completed-work artifact. The first task-sizing
+  calibration corpus and frontier harness live under
+  `internal/calibration/task-sizing/` and `src/runtime/task-sizing-calibration.ts`,
+  with seed cases for small copy work, multi-outcome launch splitting,
+  small-but-high-risk OAuth work, and a do-not-over-split migration. The CLI
+  now exposes `guildhall review-calibration validate-sizing` so task-sizing
+  frontier runs are recorded through the same review-audit persistence path as
+  review-planning calibration.
+- [x] Add the first review-calibration corpus harness. `review-calibration`
+  now validates hidden-answer-key cases, builds reviewer-safe packets without
+  leaking known findings or false-positive traps, grades pass/partial/miss/
+  false-positive-heavy outcomes, summarizes one-variable quality/cost
+  frontiers, loads repo-local YAML/JSON seed cases, and exposes versioned
+  recipe selection for the initial UX comprehension/error-recovery/
+  cross-surface-consistency recipes. Review plans now carry calibration recipe
+  ids for each grouped reviewer recipe, and `guildhall review-calibration
+  validate` records corpus coverage through the review-audit persistence store.
+  `guildhall review-calibration escaped-miss` now records human-found missed
+  review findings as escaped-miss audit events, so misses can feed corpus-case,
+  planner, bakeoff, or deterministic-gate follow-up without hand-editing state.
+  The corpus loader now recurses through nested case folders, and the seed
+  corpus includes non-UX cases for accessibility, tenant security, API
+  compatibility, data idempotency, performance, and docs truth with matching
+  versioned calibration recipes.
+  The initial UX corpus includes ambiguous primary action, missing error
+  recovery, cross-surface state contradiction, and a CLI negative-control case.
+- [x] Surface stored review plans in task details. Real orchestrator runs now
+  pass a file-backed review audit store, the task drawer payload reads the
+  stored review plan through the persistence facade, and the Spec/task-details
+  tab shows a compact Review plan card with effort, depth, budget, lanes,
+  reviewer groups, checks, evidence, and skipped lenses behind a disclosure.
+  The same payload now includes a compact review-audit summary, and the card
+  shows reviewer-run, revision-request, and escaped-miss counts without
+  exposing raw local-history evidence.
+- [x] Feed stored review plans into reviewer fan-out. The orchestrator now
+  returns the existing or newly recorded review plan from the audit hook,
+  passes it to reviewer fan-out, and includes a compact planned-scope block in
+  default persona prompts with lanes, recipes, calibration recipe ids, checks,
+  evidence, and budget. Fan-out now also applies the plan's reviewer-agent
+  budget by selecting lane-relevant reviewer personas before filling remaining
+  capacity, and persists each persona verdict as a reviewer-run audit event
+  through the review-audit store without blocking review if local-history
+  persistence is unavailable.
+- [x] Add the review-effort lever as the first user-modifiable review-budget
+  control. `review_effort` is now a domain lever with `lean`, `balanced`,
+  `thorough`, and `release_critical` positions, defaulting to `balanced`.
+  The coordinator resolves the task domain's lever before recording a review
+  plan; the planner treats the requested effort as a floor, so high-risk task
+  signals can still raise the plan to release-critical. Settings exposes the
+  lever with readable labels, and public lever docs now explain what the user
+  is choosing without describing the calibration harness as a shipped promise.
+- [x] Add the first review-planning calibration harness. Planning cases now
+  grade whether the coordinator selected required risk lanes, evidence
+  artifacts, deterministic checks, strict aggregation, and budget bounds for a
+  task packet. Seed planning cases cover UX/settings, tenant export security,
+  docs command truth, and unbounded-query performance. The frontier runner
+  compares `lean`, `balanced`, and `thorough` review-effort variants and
+  records the result through the review-audit persistence store via
+  `guildhall review-calibration validate-planning`.
+- [x] Add initial reviewer-bundle metadata and broaden the planning corpus.
+  Review-planning calibration now declares bundle metadata for UX/copy/design/
+  accessibility, security/privacy, API/data/migration, quality/performance/
+  release, and docs/plan recipes, including whether each bundle can split and
+  which high-stakes bundles need evidence before bundling. The seed planning
+  corpus now also covers accessibility keyboard focus, API compatibility, data
+  idempotency, and rollout fallback. Frontier validation records
+  `balanced_split_ux_copy` alongside lean/balanced/thorough effort variants so
+  grouped-reviewer tradeoffs can be tested instead of guessed.
+- [x] Expand the planning corpus to the planned 15-case minimum. The harness
+  now includes additional cases for responsive visual design, privacy consent,
+  migration rollback, evidence redaction, model cost control, calibration
+  prompt governance, and implementation-handoff completeness. This gives the
+  review planner frontier enough cross-lane examples to catch regressions when
+  effort or reviewer-bundle settings change.
+- [x] Close the escaped-miss-to-corpus draft loop. Escaped review misses now
+  have a pure calibration-case draft helper that produces a schema-valid
+  production-miss seed with hidden findings, match hints, false-positive
+  guardrails, label governance, and staleness policy. The CLI exposes
+  `guildhall review-calibration draft-case` to print the draft without writing
+  ad hoc corpus files; actual persistence remains in the escaped-miss audit
+  event until a reviewed case is intentionally added to the corpus.
+- [x] Make reviewer fan-out proactively look for missing concerns. Default
+  reviewer prompts now include a completeness pass that asks each reviewer to
+  call out missing risk lanes, evidence, deterministic checks, reviewer
+  recipes, pitfalls, footguns, rollout risks, docs/audit/storage concerns, and
+  non-blocking follow-ups when those concerns matter for the task. This bakes
+  the "what else are we missing?" squeeze into the work-review flow.
+- [x] Harden the review-planning frontier and expand the seed corpus. Frontier
+  runs now report lane-level misses, high-stakes misses, missing required
+  artifacts, missing deterministic checks, and a quality-gate pass/fail so a
+  cheap review setting cannot win on aggregate recall while hiding an important
+  blind spot. The planning corpus now has 20 product-agnostic cases, adding
+  contrast/accessibility, OAuth callback CSRF, support-evidence redaction,
+  provider rate-limit/cost fallback, and feature-flag rollout fallback cases.
+  The expanded corpus immediately exposed planner blind spots around workspace
+  data, analytics evidence, review-planner rollout, OAuth/security wording, and
+  overlapping interactive controls; the planner signal rules now cover those
+  terms and the balanced frontier is required to have no high-stakes lane
+  misses on the seed corpus.
+- [x] Add a task Journey view for done-work readability. The drawer now separates
+  the human-readable task journey from Transcript and History: Journey shows the
+  planned review, worker pass, changed files, reviewer pass, verification, and
+  final outcome; Transcript remains what agents said; History remains the
+  lower-level revisions/gates/escalations log.
+- [x] Tighten the dark-theme text contrast ladder from the Fair Labor License
+  Thread walkthrough. Supporting copy was too dim against near-white headings,
+  so the system text tokens now keep primary/strong text slightly softer and
+  raise muted/soft text closer to the body color. Automation chips now use the
+  same strong-text token instead of local hard white, keeping status labels
+  readable without making them shout over surrounding task context.
+- [x] Wire review planning into the work-review path behind an optional audit
+  store. When a task reaches `review`, the orchestrator now ensures a review
+  plan exists before automated-review shortcut, fan-out, or legacy reviewer
+  dispatch runs. The hook is non-blocking for review execution: persistence
+  write failures are logged as progress instead of changing task status.
+- [x] Add the first coordinator-facing review planner shape. The pure
+  `buildReviewPlan` path now turns task text, changed-file hints, priority,
+  requested effort, and optional budget overrides into selected risk lanes,
+  grouped reviewer recipes, deterministic checks, required artifacts,
+  aggregation policy, skipped-lane reasons, and an explicit review budget.
+  Focused tests cover lean docs work, grouped UX review, release-critical
+  auth/data migration work, and custom review-budget overrides.
+- [x] Add the first review-audit consumer of the persistence boundary.
+  `createReviewAuditStore` now stores compact review plans and escaped-miss
+  audit events in shared project persistence, while raw reviewer/frontier runs
+  stay in local history by default. This is the first runtime shape for review
+  plans, review budgets, reviewer recipes, calibration runs, and post-hoc
+  missed-risk links to go through the centralized persistence facade instead
+  of writing ad hoc files.
+- [x] Start the persistence-boundary implementation slice. The first runtime
+  code pass adds `@guildhall/persistence` with `GuildhallPersistence` types and
+  a file-backed implementation for typed records, append-only events, artifacts,
+  placement policy, hashes, and missing-evidence resolution. Focused persistence
+  tests pass; the broader pre-existing full-suite failures remain tracked as
+  part of the dirty-work checkpoint.
+- [x] Audit whether Guildhall would have caught its recent manual UX fixes
+  while building itself. The detailed audit lives at
+  `internal/audits/2026-05-25-guildhall-self-ux-audit.md`. Conclusion:
+  Guildhall has useful ingredients, but it would not catch these issues
+  reliably until zero-context comprehension, owner/action projection contracts,
+  internal-language leak scanning, and screenshot/browser-backed agent review
+  become first-class gates. Follow-up generalized into
+  `internal/design-notes/ux-review-calibration-and-work-review-integration.md`,
+  which frames this as a product-agnostic failure-corpus and calibrated-review
+  workflow that plugs into Coordinator shaping, reviewer fanout, and gate checks.
+  The review-budget follow-up now lives in
+  `internal/design-notes/review-effort-budget-and-calibration-harness.md`; it
+  adds all-lane review planning, quality/cost frontier testing, and centralized
+  persistence so review plans, results, memory, logs, artifacts, and archives
+  stay inspectable without copy-pasted file writes. The broader persistence
+  boundary is captured in `internal/design-notes/persistence-system-boundary.md`.
+  The same design now treats plan completeness as a calibrated lane so agents
+  are expected to surface missing governance, privacy, cost, drift, rollout,
+  override, and feedback-loop concerns proactively instead of waiting for the
+  user to ask what else is missing.
+- [x] Enforce content integrity across Guildhall storage and model outputs.
+  Guildhall may visually clip compact UI rows, and agents may produce complete
+  short summaries, but neither Guildhall nor an LLM may persist ellipsized
+  prose as semantic data. This was exposed in the Fair Labor License task
+  walkthrough: a compact `title` ended in `...` while the complete request only
+  survived in `description`, and details reused the compact field. Fixed by
+  rendering complete task content in details, stopping intake from writing
+  mechanical title truncation, correcting the Fair Labor License saved task
+  fields, and adding deterministic content-integrity checks so future guild
+  review can flag `slice(...) + '...'`, truncate helpers used on semantic
+  fields, and stored prose ending in ellipses.
+- [x] Repair the Fair Labor License task recovery decision surface. The
+  task-006 walkthrough showed that recovery UI was not answering the user's
+  real question. It repeated `Needs recovery` / `Needs your help`, sent the
+  user from an already-open task to `Review task details`, hid the useful
+  `Spec unclear` signal on a separate tab, and diluted the actual decision
+  behind footer actions. The drawer now treats recovery as a communication job:
+  the active surface is `Action`, the recovery card leads with the specific
+  reason, explains whether Guildhall or the user owns the next move, names the
+  most likely action, keeps blocker detail secondary, and uses `View spec and
+  evidence` only as optional context. The shell banner and footer no longer
+  duplicate recovery copy/actions when the active tab already owns that
+  decision.
+- [x] Stop treating brittle worker edit failures as owner/spec blockers. The
+  Fair Labor License task-006 blocker `Card component exists but template syntax
+  mismatch prevents edit` was not a spec problem; the worker failed exact-string
+  edits in `dashboard.vue` and incorrectly raised `spec_ambiguous`. The
+  escalation tool now rejects worker escalations caused by exact-string misses,
+  whitespace/formatting mismatch, local template syntax, imports, or component
+  props, and tells the worker to re-read the current file/component API and
+  retry structurally. The worker no-progress guard was also raised from 2
+  no-op passes to 5, so "no progress" means repeated failure to mutate, verify,
+  checkpoint, or transition after several focused attempts, not one or two
+  weak turns. The live FLL task was repaired by resolving the bogus open
+  escalation and returning task-006 to `in_progress` for the worker.
+- [x] Add retry coaching instead of merely throwing feedback over the wall.
+  The task-006 review loop showed that Guildhall was forwarding reviewer
+  feedback and occasionally scoped coordinator adjudication, but it was not
+  reliably diagnosing the worker's failure mode. Worker retry context now
+  includes a `Retry Coaching` block when a task has repeated review loops or a
+  resolved implementation-recovery escalation. The coaching tells the worker
+  not to ask the owner about local implementation mechanics, to re-read the
+  current target/component API, avoid stale exact-string replacements, compare
+  the latest review feedback to the current file contents, and verify the
+  specific fixed item before writing a new self-critique.
+- [x] Clarify the task drawer's live-progress shape. The Fair Labor License
+  task drawer was mixing a synthesized state summary with feed-like activity
+  rows under a `Current state` frame, so `Started log progress` and
+  `Finished log progress` looked like competing section items instead of an
+  event log. Live task cards now title themselves `Live progress`, keep the
+  summarized answer under `Current status`, and label raw start/finish/status
+  events as an `Activity log`; feed rows remain visible because they are useful
+  evidence, but they no longer pretend to be the current state itself.
+- [x] Normalize provider-overload activity in task progress. The FLL walkthrough
+  exposed that retry events rendered as running updates while the exhausted
+  `engine_overloaded` response and worker wrapper rendered as red task errors,
+  even though they described the same remote provider-capacity problem.
+  Thread/task activity now rewrites HTTP 429/rate-limit/model-busy events into
+  warning-level, plain-language `Provider busy...` rows, and hides raw provider
+  JSON from the drawer feed.
+- [x] Preserve task state on DeepInfra-style provider capacity errors. DeepInfra
+  rate limits are per-model concurrency, and 429 can also mean a model is busy
+  while autoscaling catches up. Guildhall now treats HTTP 429/rate-limit/model-
+  busy/`engine_overloaded` errors as retryable provider capacity across worker,
+  spec, and gate statuses instead of turning them into hard agent failures. The
+  OpenAI-compatible client now waits longer on capacity retries before giving
+  control back to the orchestrator, so transient DeepInfra overloads have room
+  to clear without corrupting task state.
+- [x] Send optimistic prompt-cache keys to OpenAI-compatible providers. Agent
+  turns now get a deterministic provider/workspace/task/role cache key from the
+  orchestrator, `GuildhallAgent` passes it through the query engine, and the
+  OpenAI-compatible client sends `prompt_cache_key` while preserving DeepInfra
+  cached-token telemetry as `cached_input_tokens`. Strict local providers that
+  reject the extra field get one automatic retry without the key, so the hosted
+  cache path is enabled without breaking unsupported servers.
+- [x] Move the active DeepInfra worker lane onto cached-price candidates and
+  replay the obvious challengers. DeepInfra's model metadata does not advertise
+  cached input pricing for `Qwen/Qwen3-235B-A22B-Instruct-2507`, so the
+  machine-wide worker model is now `Qwen/Qwen3.5-35B-A3B`. A provider-backed
+  FLL first-action replay compared cached-price candidates including
+  DeepSeek V4 Flash, Qwen 3.5 35B, Qwen 3.5 397B, Qwen Coder Turbo,
+  Kimi K2.5/K2.6, Seed 2.0 Code, GLM 4.7 Flash, and Qwen 235B Thinking.
+  All but Qwen 235B Thinking passed 3/3 first-action cases; Qwen 3.5 35B was
+  the fastest successful cached Qwen lane and remains the current practical
+  worker default pending deeper edit/verify bakeoffs.
+- [x] Add a zero-context user-testing script for Thread and task-card flows.
+  The script lives at
+  `internal/plans/2026-05-24-zero-context-flow-user-testing.md` and treats the
+  recent malformed pressure-test question plus the `Guildhall next` incomplete
+  task-brief card as `0/10` regressions. Future flow audits must ask a
+  no-prior-context evaluator what the card means, whether anything is theirs to
+  do, why the card looks greyed out or actionable, what each badge means, what
+  they expect a click to do, and whether the next surface actually explains the
+  decision and completion path.
+- [x] Add an agent bridge installer for existing Guildhall projects. The first
+  target is Codex `AGENTS.md`: install/update a managed Guildhall MCP section
+  without overwriting local project instructions, expose it through the CLI,
+  run it against `/Users/matthew/git/oss/fair-labor-license`, and verify the
+  generated instructions plus MCP server smoke. Implemented
+  `guildhall bridge install [--target codex] [id|path]`, added idempotent
+  managed-block coverage, dev-installed the current CLI, generated
+  `/Users/matthew/git/oss/fair-labor-license/AGENTS.md`, confirmed a second
+  install reports `unchanged`, and smoke-tested MCP resources/tools through the
+  installed `guildhall mcp serve .` command. Follow-up added default Codex MCP
+  registration: interactive installs now prompt with default yes, `--yes`
+  configures `codex mcp add guildhall -- guildhall mcp serve .`
+  non-interactively, `--no-configure-mcp` skips it, existing matching config is
+  left alone, and conflicting `guildhall` MCP config is reported without
+  overwriting user state. Verified with installed CLI and a fresh `codex exec`
+  run that used global Codex MCP config, not per-run `-c` overrides. Claude
+  support now writes `CLAUDE.md` plus project-scoped `.mcp.json`, using
+  `guildhall mcp serve ${CLAUDE_PROJECT_DIR:-.}` per current Claude Code MCP
+  docs. Verified generation and idempotency on Fair Labor License and
+  smoke-tested the same command shape through a raw MCP stdio client because
+  this machine does not have a `claude` binary installed. Public docs now include
+  `docs/guide/external-agents.md`, sidebar/index links, a CLI reference entry,
+  and an updated MCP subsystem page for the outbound Guildhall MCP bridge.
+- [ ] Split task definition from runtime/evidence storage. The boundary audit
+  now lives at `internal/audits/2026-05-24-task-schema-boundary-audit.md` and
+  shows that project-local `TASKS.json` currently stores machine paths,
+  worktree metadata, review verdict history, adjudications, notes, gate output,
+  escalation history, and remediation counters. This needs a 0.8.0
+  schema/migration fix with compatibility projection for old task files. The
+  implementation plan is
+  `internal/plans/2026-05-24-task-schema-runtime-evidence-split.md`. First
+  implementation slice is in place: system-local runtime/workspace/evidence
+  stores, legacy effective-task projection, idempotent dry-run/apply migration,
+  `guildhall migrate task-state`, task evidence/review/history/git-story
+  endpoints, MCP evidence writes, workspace-store-backed Git Story inspection,
+  and high-value evidence mirroring for escalations, agent issues, and gate
+  results. Remaining work is to stop all legacy runtime/evidence writes and
+  rewire drawer/project surfaces to depend on effective projections.
+- [x] Close the cognitive-overhead recovery blocker hole. Routine missing
+  verification/test evidence is now Guildhall-owned recovery, not a user
+  blocker: agents are instructed to run or record the missing check instead of
+  escalating, `raise-escalation` rejects AC/evidence/test-result bookkeeping
+  escalations, Thread and task details classify the owner of the next move, and
+  Guildhall-owned blockers render an inline agent action instead of exposing
+  `AC-#`, verification-gate, or proof-packet language. Focused coverage now
+  checks the label mapper, Thread card, drawer current card, task drawer, and
+  escalation tool path.
+- [x] Continue Fair Labor License Thread dogfooding after the auth task could
+  move again. Live-tested `http://localhost:7781/projects/fair-labor-license/thread`
+  with the global non-Codex model assignments, answered the harmless fee-policy
+  New request intake, and observed three follow-up fixes: Thread no longer
+  auto-scrolls while cards update, multi-question intake renders one live
+  question at a time with the rest held for the next answer, and live activity
+  rewrites internal recovery/verification jargon (including `AC-#` streaming
+  details) into plain next-step copy. Follow-up fix from the next pass:
+  corrections sent from a brief review now persist as task notes and appear
+  inline as `Latest correction` after reload, so a "No, change it" response is
+  no longer just local UI state. Remaining observed product gap: the generated
+  fee-policy task brief did not incorporate the user's two intake answers until
+  corrected manually, and the project scheduler prioritized the older auth
+  review over revising that corrected brief.
+- [x] Run a multi-agent project flow pass across Looma/Knit, Narrative Harness,
+  T-minus-T, Font Something, Commerce, and Fair Labor License. Pushed the one
+  safe non-product-decision action by starting T-minus-T `task-001`; it exposed
+  a bad inferred question where discovery facts were rendered as answer choices,
+  so `post-user-question` now rejects evidence-summary prose such as "I have
+  enough from the glob results..." as a fake choice prompt. FLL was restarted,
+  the auth recovery resumed, and Thread live activity now suppresses successful
+  file-read snippets plus rewrites shell-success instruction text into a plain
+  "Command passed" note. Projects left for user/product decisions: Looma/Knit
+  Emoji scope, Narrative Harness author-voice MVP boundary, Font Something model
+  quality/R&D choices. Looma/Knit's Emoji decision was answered from the live
+  audit thread as `Editor emoji picker + Tiptap insertion wiring`, with the
+  durable sequencing rule that Looma feature work and Looma verification come
+  before Knit integration and proof. Commerce's pressure-test block was traced to versioned
+  request routing hard-coding `Guildhall <version>` and first questions using
+  the stale target title; request routing now preserves named projects such as
+  `Commerce Project 0.9.0`, and pressure-test reads repair old saved state from
+  the raw request before Thread renders it.
+  Follow-up P1 repairs from the next browser pass: project check-in now renders
+  as a real `project_check_in` inbox item and Thread action instead of a
+  zero-count setup oddity; active pressure-test questions now appear in the
+  project inbox, fleet Needs You, Do This Next, Work empty state, Thread, and
+  Release readiness instead of contradicting "no tasks" / first-spec setup
+  copy; fake tool-receipt "questions" are filtered from owner queues; Work
+  board/list status uses the same worker-handoff truth; project overview and
+  recovery copy now prefer owner-friendly summaries over raw runtime reason
+  identifiers; and workspace-container Git Story inspection now checks child
+  project repos when `guildhall.yaml` is a workspace.
+- [x] Address the 2026-05-24 P1 flow-audit findings and rerun the live flow
+  audit on the rebuilt app at `http://localhost:7781`. Verified in browser:
+  `/needs-you` progressively loads 16 items across 6 projects with explicit
+  project ownership; Looma/Knit Thread no longer shows the project check-in as
+  `Open setup` and instead offers `Start project check-in`; Commerce Thread
+  shows active pressure-test questions as the next owner action; T-minus-T no
+  longer exposes the old "I have enough from glob results" fake answer choices;
+  Fair Labor License Work board moves spec-thin `ready` tasks into `Spec` as
+  `Needs brief cleanup` instead of `Working`; and the Looma/Knit recovery drawer
+  exposes `Reframe task...`, `Track upstream build fix...`, `I handled this...`,
+  and `Retry gates` with plain recovery copy. Verification also passed the
+  focused UI/runtime suite, `pnpm typecheck`, `pnpm build`, and
+  `git diff --check`.
+- [x] Add a first-class escape hatch for inscrutable existing tasks. The task
+  drawer now has `More task actions -> Reframe task...`, which opens a
+  cancellable modal with an optional "What to ask the coordinator" note before
+  superseding stale open questions/escalations, clearing old user-facing
+  brief/spec/acceptance fields, reopening the task in `exploring`, and
+  injecting a coordinator/spec contract to rebuild the task from current
+  project memory in plain language. The more-actions popup now closes on
+  outside click/Escape, and the popover is layered above the drawer body so
+  visible actions are actually clickable. A durable plan for the full
+  four-part repair lives at
+  `internal/plans/2026-05-24-task-reframe-and-recovery-repair.md`; this slice
+  also teaches recovery copy to explain upstream workspace build failures
+  without asking for an unnamed "recovery decision."
+- [x] Replace the misleading `Pause task` flow with an explicit hold/resume
+  flow. The drawer now says `Put on hold...`, opens a cancellable reason modal,
+  rejects the mutation while Guildhall is actively running, records the prior
+  task stage in `task.hold`, renders held tasks as `On hold`, and exposes a
+  `Resume task` action that restores the saved stage. `pause` remains only as a
+  deprecated backend alias so old clients do not break.
+- [x] Build the first Guildhall MCP server bridge from
+  `internal/plans/2026-05-24-guildhall-mcp-server-bridge.md`. Keep the public
+  MCP contract host-owned and runtime-agnostic: external agents should read
+  Guildhall context, resolve artifact IDs, append task evidence, and request
+  capabilities without needing to know whether execution is host-native,
+  proxied, or eventually Podman-backed. Verification should include a real
+  stdio MCP client smoke, not only fake-session unit tests. Implemented
+  `guildhall mcp serve [project-path]` over stdio with stable
+  `guildhall://project/...` resources, artifact reads, task-evidence append,
+  and capability request tools. Verification passed:
+  `pnpm vitest run src/mcp/__tests__/mcp.test.ts src/tools/__tests__/mcp-auth.test.ts src/mcp-server/__tests__/project-reader.test.ts src/mcp-server/__tests__/server.test.ts src/mcp-server/__tests__/stdio-smoke.test.ts`
+  (`52` tests), `pnpm docs:check-copy`, `pnpm typecheck`, `pnpm build`, and
+  `git diff --check`. Limitation: this is the host-owned stdio bridge only;
+  Podman, Claude hook generation, AGENTS.md export, browser proxying, and
+  credential/container-engine brokers remain outside this slice.
+- [x] Apply the TencentDB-Agent-Memory takeaways that fit Guildhall. Kept the
+  scope intentionally small: compact memory now has an explicit traceability
+  contract back to fuller local evidence, project learning evidence now stores
+  task links plus relative local-history refs for task-backed memories, public
+  Memory docs explain the summary-to-evidence drill-down model, and the
+  practices spec requires scenario-level source evidence before a repeated loop
+  becomes an approved practice. Diagnostic export is shelved as a future
+  internal support idea in the 0.9.0 finishability plan, not pulled into the
+  current runtime slice.
+- [x] Capture the proposed 0.9.0 Task Shaping and Finishability direction.
+  The plan frames 0.9.0 around shaping work so agents and humans can finish
+  without heroics while Guildhall removes as much cognitive overhead as
+  possible without making the user's product, risk, taste, or release
+  judgments for them. Public guide copy now lightly names the evidence-backed
+  influences behind the product behavior without turning Guildhall into agile
+  ceremony. Follow-up linked the deferred Podman/container runtime spec into
+  the same 0.9.0 plan as the runtime-isolation counterpart to finishability.
+- [x] Fix the 2026-05-24 multi-agent 0.8 user-testing findings before calling
+  the MVP release-ready. Tested the current branch on `http://localhost:7788`
+  while the installed app on `localhost:7777` was still the older packaged
+  0.7 bundle. Projects Home has the right triage skeleton and the machine
+  default provider chip, Thread is the right command surface, and Git Story
+  Closure is visible in project cards, Thread, and Release. The gaps are real:
+  older projects that never ran the newer project-question pass were not
+  prompted to run it or told it was missing; `/api/service` had no project-level
+  readiness summary; Projects Home did not show project-specific provider
+  defaults or provider/model mismatch warnings before opening a project; the
+  Projects Home refresh signature omitted Git Story/provider/project-question
+  fields; the Release view could dump dozens of Git Story blockers as one long
+  wall; Release could label checkout inspection errors as clean; and Thread had
+  stale public copy around pressure-test questions and active agents. Fixed by
+  adding project-level Project Questions / project check-in state, surfacing it
+  in Inbox, Projects Home, and Thread with `Guildhall has a few project
+  questions` copy, adding project provider status to service summaries/cards,
+  including provider/git/project-question fields in the service snapshot
+  signature, capping Git Story blocker lists to five visible items, surfacing
+  checkout inspection errors, and replacing the remaining `agent-active`,
+  `ready for worker`, `spec_review`, and pressure-test phrasing in the touched
+  public surfaces.
+- [x] Audit registered projects for Guildhall memory/git-state hygiene. Checked
+  the registry projects and their child git roots, inferred missing local Git
+  Story policies into ignored `.guildhall/config.yaml` files, removed legacy
+  root-level Guildhall scratch files where they were still untracked, confirmed
+  local-only buckets such as `.guildhall/config.yaml`, worktrees, cache, logs,
+  sessions, transcripts, and old `memory/` roots are not tracked, normalized
+  tracked Guildhall state away from machine-specific project paths, and closed
+  each project according to policy: pushed remote-backed branches or committed
+  locally for the no-remote Commerce project.
+- [x] Add structured Global Preference Review to the learning/intake contract.
+  Guildhall can now persist user-global preference candidates with a generic
+  `subject` taxonomy and array-based `prefer`/`avoid` positions, so preferences
+  can cover software tooling, game-development engines, writing tone, release
+  habits, or other domains without hardcoded web-stack keys. The runtime keeps
+  these records suggested until approval, and the 0.8.0 intake spec now tells
+  coordinators when to zoom out and ask whether repeated evidence should become
+  a project-only or cross-project preference.
+- [x] Ship Git Story Closure as a 0.8.0 MVP blocker. The single release tracker
+  now lives at `internal/plans/2026-05-24-guildhall-0-8-mvp-tracker.md` and
+  keeps Pressure-Test Intake as the top priority while making git closure the
+  end-of-work trust contract: every project/task should expose whether work is
+  dirty, committed-only, missing upstream, pushed, in PR, merged, local-only,
+  deferred, conflicted, or unknown. Release readiness should block unresolved
+  git stories. The 0.8.0 implementation adds the Git Story snapshot model,
+  project summary API, copied-from-system policy endpoint, project/task
+  surfaces on Projects Home, Thread, Provenance, and Release, plus
+  policy-gated commit/push/open-PR/local-only/deferred endpoints. Verification:
+  focused runtime and UI suites passed, `pnpm typecheck` passed, `pnpm build`
+  passed, `git diff --check` passed, and a local browser smoke on
+  `http://localhost:7777` showed registered project cards with `GIT UNKNOWN`
+  and `DIRTY` chips. The implementation plan lives at
+  `internal/plans/2026-05-24-guildhall-0-8-git-story-closure.md`.
+- [x] Restore the machine default provider to DeepInfra/OpenAI-compatible and
+  make provider/model-scope mismatches visible. The live global config had
+  drifted from `preferredProvider: openai-api` to `preferredProvider: codex`
+  while the model overrides still lived under `models.openai-api`, causing
+  Guildhall to resolve Codex defaults like `gpt-5.3-codex`. The global config
+  is back on `openai-api`, and the project provider status now emits a
+  persistent warning when global or project model overrides are scoped to a
+  different provider than the preferred provider. Projects home now also shows
+  the machine-default provider/model chip and routes it to `/providers`, so the
+  default model group is visible before opening a project.
+- [x] Build the 0.8.0 Pressure-Test Intake foundation from
+  `internal/plans/2026-05-23-guildhall-0-8-pressure-test-intake.md`. Keep this
+  as the top-priority 0.8.0 slice: New request routing, persisted domain-loop
+  intake state, Thread cards, one-question-at-a-time answering, and browser
+  proof on the active target project before moving on to broader practices,
+  personas, Podman runtime, or rich-artifact work. Implemented the 0.8.0 MVP
+  surface: `/api/project/request` now routes release/feature-style asks into
+  persisted `memory/pressure-test-intake` state, classifies settings,
+  persona/practice, repair, clarification, and multi-intent asks, records
+  existing-card reuse evidence, closes and advances pressure-test domains,
+  inspects memory/docs evidence before asking, and emits language-map
+  candidates. Thread projects request and pressure-test question cards, the
+  modal posts ordinary asks as freeform New requests without up-front type
+  selection, and the Spec Agent prompt now carries the Pressure-Test Intake
+  operating contract. Added the minimum adjacent 0.8.0 runtime proof for worker
+  modes (`build`, `diagnose`, `tdd`), project `language-map.json` context
+  injection, durable `guildhall-html-v1` artifact storage, `gh-table` and
+  `gh-diagram` protocol primitives, and fake `mount_directory` capability
+  request/grant records. Verified with the combined focused Vitest suite.
 - [x] Replace the homepage hero's old project-dashboard screenshot card with
   the generated 3D guild hall illustration and keep the desktop hero as a
   balanced 50/50 copy-and-visual split. The source homepage now uses
@@ -1419,6 +1962,24 @@ babysit setup/import/provider/release states across multiple pages.
   and `Open project` / `Start run` stay right-aligned across cards instead of
   drifting based on each card's copy length.
 - [x] Keep Projects home controls in plain user language. The overview cards
+- [x] Remove the remaining service-wide selected/foreground project contract.
+  Live FLL testing on `http://localhost:7777/projects/fair-labor-license/workspace-import`
+  showed `/api/project*` could still answer through a daemon-level selected
+  project, which can leak Looma + Knit state into a project-scoped URL. The
+  service API should list projects and project APIs should require explicit
+  project ids instead of maintaining mutable foreground project state. Covered
+  by the current routing-contract pass: `/api/service` no longer emits
+  `selectedProject`/`foregroundProject`, project reads without `projectId`
+  return 400, attach returns an explicit `project`, and old `select-project`
+  calls receive a gone response instead of mutating daemon state.
+- [x] Make recovery blockers explain the user action instead of dumping raw
+  acceptance-criteria gate text. FLL showed a `Needs your help` card with
+  `AC-8` and no explanation of what the owner should do. Recovery cards now
+  translate evidence blockers into concrete copy: Guildhall needs verification
+  evidence, use `Resume task` to let Guildhall collect it, or `Mark resolved`
+  if the user already ran the check. The Now tab also offers a direct
+  `Review acceptance criteria` action, and primary Thread/Now copy no longer
+  leaks raw `AC-8` ids.
   no longer say `Start run` / `Stop run`; they use `Start` / `Stop` because
   this screen is about simple project controls, not internal supervisor terms.
 - [x] Keep Guildhall self-assessment out of project release surfaces. The
@@ -4745,3 +5306,507 @@ local 0.7 release-candidate build at `http://localhost:7777/projects/narrative-h
   work no longer presents as live Guildhall work; `narrative-harness` Work shows
   `Gates waiting` instead of `Paused`; and `looma-knit` splits thin ready tasks
   into `need brief cleanup` with only one Emoji inbox card.
+- [x] 2026-05-24 New request / Thread compatibility pass. Implementation now
+  carries routed New request metadata onto created tasks, projects those
+  requests as Thread request cards, refreshes Thread immediately after the modal
+  succeeds, and replaces the Thread grouping switch with `Current` / `Archive`.
+  Focused verification passed: request routing, serve intake, Thread projection,
+  IntakeModal event refresh, `pnpm typecheck`, and `pnpm build`. Fresh served
+  bundle browser smoke verified: Narrative Harness shows `Current` / `Archive`
+  with the routed project question rendered as `PROJECT QUESTION` plus an
+  `Answer question` action; Commerce Project routes a harmless 0.9.0
+  pressure-test ask into request + pressure-test question cards; and T minus T
+  routes a harmless backlog-note ask into request + task-intake cards. Archive
+  hides current cards and the operational summary while showing completed rows.
+  Follow-up cleanup simplified Thread further into one sticky full-width tab
+  control (`Current work` / `Archive`), removed the in-list jump sections and
+  status-summary row, reduced card chip noise, and made archived cards read
+  more like completed history.
+- [x] 2026-05-24 project-card status cleanup. Project cards no longer show
+  failed-inspection `Git unknown` chips, no longer duplicate identical
+  status/maturity chips such as `Paused`/`Paused`, hide the redundant
+  `Check-in` maturity chip when `Project questions` already carries that
+  state, and suppress per-project provider chips when they only repeat the
+  global provider. Actionable git states such as `No upstream` remain visible.
+  Focused verification passed for project summaries, project home, Thread, and
+  project data (`77` tests), plus `pnpm typecheck` and `pnpm build`. Fresh
+  browser verification on `http://localhost:7781/` showed no `Git unknown`,
+  no repeated default provider chips, and Narrative Harness rendered as
+  `Project questions ... 6 paused ...` with zero visible `Paused` or
+  `Check-in` chips.
+  Follow-up fixed the same leak inside Thread task-card git story callouts:
+  live data can report uppercase `UNKNOWN`, so Thread now normalizes git-story
+  state before visibility, label, and tone checks. Focused Thread verification
+  passed (`56` tests), plus `pnpm typecheck` and `pnpm build`; browser
+  verification on `/projects/fair-labor-license/thread` found no `UNKNOWN`,
+  `spawn git ENOENT`, or manual-inspection callout text.
+- [x] 2026-05-24 multi-agent release-flow audit follow-up. Five read-only
+  agents tested the fresh served bundle (`/api/version` `0.7.0`,
+  `/api/stale-server` `stale:false`) across Fair Labor License, Narrative
+  Harness, Looma + Knit, Font Something, T minus T, Commerce Project, and
+  global Projects/Needs You/Providers surfaces. No P0s were found. The shared
+  release risks are:
+  - [x] P1: Release readiness still leaks raw git inspection failures and
+    duplicates them as blockers. Reproduced on Fair Labor License, Narrative
+    Harness, Font Something, and Looma + Knit. User-facing Release copy shows
+    `spawn git ENOENT` or raw `git status ... fatal: not a git repository`
+    output plus `Inspect git state manually; Guildhall could not read it.`
+    Release should normalize failed inspection to product copy, keep raw stderr
+    behind diagnostics/logs, and collapse duplicate git-story failures.
+  - [x] P1: Duplicate owner questions remain in Looma + Knit Thread. The
+    `Emoji` task asks two near-identical coordinator questions with the same
+    choice set. Deduplicate or merge equivalent open questions per task before
+    rendering.
+  - [x] P1: Timeline duplicates event blocks across projects, making activity
+    look noisier than it is. Reproduced on Fair Labor License, Font Something,
+    Looma + Knit, T minus T, and Commerce Project. Deduplicate projected rows
+    by event id or a stable timestamp/type/task/run tuple; collapse repeated
+    run/event summaries where appropriate.
+  - [x] P1: Narrative Harness and Commerce timelines expose repeated empty-model
+    failures as raw chronology churn. Repeated `Model returned an empty
+    assistant message` events should become one recovery state with provider
+    guidance, retry limit, and clear stop reason.
+  - [x] P1: Needs-you counts are inconsistent across Home, Needs You, Inbox,
+    and do-this-next panels. Home can say `Needs you 5` / `5 projects`,
+    `/needs-you` can say `17 items` / `6 projects`, and project panels can say
+    `5 more in Inbox`. Choose explicit units and align filters/counts.
+  - [x] P1: Commerce empty/ready flow gives conflicting next actions. `/work`
+    says `DO THIS NEXT Shape the first spec` / `Open setup`, while the empty
+    work list says `No tasks yet -- New request to begin.` Use one primary
+    recommended action based on the blocking condition.
+  - [x] P2: Thread operation summaries and status chips still have noisy labels:
+    `0 blockeds`, `3 queueds`, `10 queueds`, `Queued work Blocked`, and
+    repeated `Needs your input`/phase/status combinations. Use product labels
+    like `0 blocked`, `3 queued`, and separate owner action from workflow
+    bucket.
+  - [x] P2: Archive compact rows repeat status labels such as `Task brief ready
+    ... Task brief ready` and `Done Name this project Done`. Render status once
+    in compact rows and keep accessible names clean.
+  - [x] P2: Release criteria leaks internal task-state identifiers such as
+    `exploring`, `import_draft`, and `gate_check`. Map them to owner-facing
+    labels.
+  - [x] P2: Release/work counts can read as contradictory, especially zero-task
+    or import-draft projects. Commerce shows `0/0 done` and `2 release
+    blockers`; Narrative Harness shows `Work list (6)` plus `3 import drafts`
+    while Release says `0/9 done`. Add explicit rollup copy.
+  - [x] P2: Project check-in aggregate copy is too vague. Cards and inbox say
+    `Guildhall has a few project questions`; include count and/or first
+    affected task/question title.
+    Fixed by changing the default project-check-in title to `Project check-in
+    needed` and the detail to make the first project-question pass explicit.
+  - [x] P2: Commerce `No upstream` is useful but underspecified. Keep the chip,
+    but add branch name and why it blocks release comparison/publishing.
+    Fixed by making the git-story no-upstream reason include the branch name and
+    explain that Guildhall cannot compare or publish the branch yet.
+  - [x] P2: Actions-menu tooltip can persist while the menu is open. Suppress
+    hover/focus tooltip while popovers are open.
+    Fixed by removing the project actions-menu trigger tooltip while the menu is
+    open.
+  Ship confidence after fixing the P1s is medium-high. Without the P1 fixes,
+  do not treat the current bundle as release-ready because Release still shows
+  raw diagnostics, owner input can be duplicated, and timeline/recovery views
+  make unattended runs look uncontrolled.
+- [x] 2026-05-24 storage-layout regression check. Fair Labor License exposed a
+  legacy root `memory/agent-settings.yaml` rewrite from the installed
+  Guildhall service. Source audit found the runtime write paths already route
+  through `.guildhall`, but live agent prompts/tool copy still taught agents
+  the old `memory/agent-settings.yaml` and `memory/agent-overrides.yaml`
+  locations. Updated those prompts/comments/docs, moved lever storage tests to
+  `defaultAgentSettingsPath()`, rebuilt and dev-installed the current branch
+  bundle, stopped the stale 7781 dev server, and cleaned FLL's untracked
+  legacy root `memory/` files. Focused storage/settings verification passed
+  (`99` tests), `pnpm typecheck` passed, `pnpm build` passed, and the installed
+  service now reports the rebuilt bundle timestamp instead of the stale
+  2026-05-24T00:42:39 build.
+- [x] 2026-05-24 stale external-work closure path. Fair Labor License had a
+  ready database-bootstrap task whose real-world Supabase migration state was
+  already current, leaving the project visually stuck behind stale prerequisite
+  work. Added an explicit Thread `This is done` action for ready task cards and
+  a `mark-done` task endpoint that records human evidence, marks acceptance
+  criteria met, resolves open escalations, clears stale block reasons, and
+  moves the task to `done`. Verified with focused endpoint/UI tests,
+  `pnpm typecheck`, `pnpm build`, `pnpm dev:install`, service restart
+  (`stale:false`), and browser control on
+  `/projects/fair-labor-license/thread`: clicking `This is done` removed the
+  DB task from Current and persisted `task-db-bootstrap` as `done`.
+- [x] 2026-05-24 project rail IA and live Overview. Added
+  `internal/plans/2026-05-24-project-overview-and-nav-ia.md` as the working
+  implementation plan, made Overview the default project landing surface,
+  removed project-level Needs You from the left rail, kept owner attention in
+  the top bar and new Overview cards, and added Work queue/board subnav. The
+  Overview is a responsive project dashboard with work mix, next action,
+  owner-action, moving-now, health, and recent-change panels. Verified focused
+  router/project-route/ProjectsHome/ProjectView tests (`56` tests),
+  `pnpm typecheck`, and `pnpm build`.
+- [x] 2026-05-24 project Overview browser/mobile pass. Installed the rebuilt
+  branch bundle, restarted the local service, and verified
+  `/projects/fair-labor-license/overview` at desktop and mobile widths. The
+  Overview cards stack without horizontal overflow, the rail exposes Overview,
+  Thread, Work, Timeline, Release, and Settings, and a narrow-header crowding
+  issue was fixed by hiding secondary global chrome text on mobile.
+- [x] 2026-05-24 promote blocker dependencies and run plan into 0.8.0 Overview.
+  The internal IA plan now treats `Blocked / depends on` and `Next run` as MVP
+  widgets instead of future additions. Overview now shows blocked tasks with
+  explicit `dependsOn` links when available, conservative inferred prerequisites
+  otherwise, and `Needs triage` when Guildhall cannot honestly infer the edge.
+  It also shows a likely next-run order from active/review/gate work, ready
+  work, and draft/spec-review items, with readiness/provider blockers surfaced
+  above the list. Verified focused ProjectView tests (`29`), `pnpm typecheck`,
+  `pnpm build`, installed/restarted the service, and browser-checked FLL
+  desktop/mobile with no horizontal overflow.
+- [x] 2026-05-24 git ENOENT runtime display and LaunchAgent PATH. FLL showed
+  raw `spawn git ENOENT` in Overview because old `supervisor_error` events were
+  rendered directly by the ticker/recent-event path, even though other git-story
+  surfaces already had friendlier copy. The macOS LaunchAgent also did not set a
+  PATH, so the background service could genuinely fail to find `git`. Added
+  product-copy sanitization for runtime event messages and packaged a LaunchAgent
+  PATH with Homebrew and system git locations. Verified focused
+  launch-agent/event/project-activity/ProjectView tests, `pnpm typecheck`,
+  `pnpm build`, dev install/restart, installed plist PATH, and browser control
+  on FLL Overview: raw `spawn git ENOENT` was absent, though the follow-up below
+  found the underlying home-relative path bug still needed fixing.
+- [x] 2026-05-24 expand home-relative runtime paths before git/agent use. The
+  better copy above still hid a real bug: FLL's task records had
+  `worktreePath` values like `~/.guildhall/worktrees/...`, and Node does not
+  expand `~` for `cwd`. Git-story inspection was therefore calling `git` from a
+  nonexistent literal `~` path and getting the misleading `spawn git ENOENT`
+  even though FLL and its task worktrees were valid git checkouts. Added a
+  shared runtime path normalizer, expanded home-relative paths before git-story
+  inspection, git-driver cwd/worktree operations, task-gate path resolution,
+  worktree reuse/cleanup, and agent context changed-file summaries. Overview
+  now suppresses old git-unavailable events when current git-story inspection is
+  healthy enough to report real states. Verified focused git-story/git-driver/
+  worktree/project-activity/ProjectView tests (`70`), `pnpm typecheck`,
+  `pnpm build`, dev install/restart, live `/api/service` for FLL showing real
+  dirty/no-upstream worktree states, and browser control confirming FLL Overview
+  no longer shows raw or friendly git-unavailable copy.
+- [x] 2026-05-24 multi-agent flow audit round: owner-input and route clarity.
+  Five read-only agents plus a local browser sweep tested the fresh served
+  bundle (`/api/version` `0.7.0`, `/api/stale-server` `stale:false`) across
+  Fair Labor License, Looma + Knit, Narrative Harness, Font Something,
+  T minus T, Commerce Project, and the global Home/Needs You/Providers
+  surfaces. No P0s were found. Immediate source fixes in this pass:
+  - [x] Remove the stale `Guildhall has a few project questions` fallback from
+    project-check-in creation and card/drawer summaries. The fallback now says
+    `Project check-in needed` and points at the first project-question pass.
+  - [x] Stop recovery copy from referring to an unnamed `recovery action`.
+    Escalation guidance now names the actual choices: resume Guildhall,
+    reframe the task, or mark resolved only after the owner handled the blocker
+    outside Guildhall.
+  - [x] Keep internal technical recovery prose out of default drawer/thread
+    cards unless it is already plain, non-policy detail.
+  - [x] Normalize Inbox/Needs You escalation details for common evidence,
+    workspace-build, no-progress, `spec_ambiguous`, and
+    `human_judgment_required` cases instead of rendering raw reason-code
+    prefixes or checkpoint language.
+  - [x] Route global `/overview` back to the Projects home instead of rendering
+    a project-scoped API error.
+  - [x] Route `/projects/:id/work/board` and `/project/work/board` to Planner
+    so direct board URLs do not render Overview.
+  - [x] Do not open project SSE streams on global pages, and hide the
+    connection badge there. This removes the misleading forever-`CONNECTING`
+    header on Home, Needs You, and Providers.
+  - [x] Let the global Providers page load and save global model defaults
+    without a project id; project model overrides still require an explicit
+    project.
+  Remaining P1s from the audit:
+  - [x] Work list / board / Thread runnable truth still diverges. Fair Labor
+    License list says `0 ready to start` and `3 need brief cleanup`, while the
+    board places those tasks under `Working` with `Ready` chips. Use one
+    projection for runnable, ready, needs-brief-cleanup, and owner-input states.
+    Fixed by sharing `effectiveWorkStatus` / worker-runnable projection between
+    Work, Board, and project start summaries. Browser smoke on the rebuilt
+    bundle shows Fair Labor License Work and Board both presenting the same
+    brief-cleanup state instead of calling incomplete tasks ready to start.
+  - [x] Start readiness is not owner-input aware. T minus T, Commerce, Font
+    Something, and Looma + Knit can show `Start` while the next real move is a
+    project question, pressure-test answer, or no real actionable task. Split
+    `can start a supervisor tick` from `can make unattended progress`.
+    Fixed by checking owner input, import drafts, spec approval, and incomplete
+    worker handoff before treating a project as capable of unattended progress.
+    The global/project labels now say what blocks progress rather than exposing
+    a generic Start path when Guildhall has nothing safe to run.
+  - [x] Existing fake/tool-receipt questions still render as owner questions,
+    especially T minus T fallback prompts like `I have enough from the glob
+    results...`. Filter/repair persisted fallback questions on read, not only
+    at creation.
+    Fixed by expanding the read-time operational-receipt filter and adding a
+    persistence-regression test for glob/search/tool narration that should never
+    become an owner question.
+  - [x] Commerce empty/pressure-test flow remains contradictory: `No tasks
+    yet`, `Shape the first spec`, active pressure-test questions, and release
+    blockers can all show at once. `Pressure test in progress` should suppress
+    generic first-spec/setup/release blocker framing.
+  - [x] Looma + Knit workspace-container git inspection is still wrong.
+    Inspect configured child repos (`looma`, `knit`) rather than treating the
+    container path as a release-blocking non-git repo.
+    Fixed by resolving workspace child projects before running Git-owned state
+    checks. Browser smoke on Looma Release no longer shows `spawn git ENOENT`,
+    `Inspect git state manually`, or `Project checkout inspection failed`.
+  - [x] Project Overview still leaks raw runtime JSON / status identifiers in
+    recent changes and dependency rows (`assistant_complete {...}`,
+    `human_judgment_required:`, `spec_ambiguous:`). Route those rows through the
+    friendly runtime/status mappers and collapse empty-assistant churn.
+    Fixed by routing task transitions, escalations, default runtime events, git
+    health details, and active-blocker details through friendly status/reason
+    mappers. Rebuilt-browser smoke found no raw JSON/status leakage on the
+    sampled overview/thread/release/work routes.
+  - [x] Project check-in can be actionable-looking with `totalCount: 0` /
+    `activeCount: 0`. Either generate the first concrete question or render
+    `Run the first project-question pass`; do not imply visible questions
+    already exist.
+    Fixed by changing empty check-in summaries to `Run project check-in` with
+    copy that says Guildhall has not generated questions yet and will ask one
+    clear question at a time.
+  - [x] Recovery drawers should promote the recommended recovery paths as
+    first-class actions (`Reframe task`, `Track upstream build fix`,
+    `Retry gates`) instead of burying Reframe and showing generic
+    `Mark resolved...`.
+    Verified by the focused TaskDrawer suite and rebuilt Looma overview/release
+    smoke: recovery copy now names the choice and routes to the recovery path
+    instead of only presenting generic resolution language.
+  Remaining P2s:
+  - [x] Release views still expose internal storage paths like
+    `.guildhall/TASKS.json`, `.guildhall/pressure-test-intake/...`, and
+    `memory/agent-settings.yaml`. Summarize the class of cleanup and keep exact
+    paths in diagnostics.
+  - [x] `Put on hold...` and `Put aside` remain too close. Clarify as temporary
+    hold vs intentional `Shelve task`, and hide irrelevant actions when a task
+    has no draft/spec worth reframing.
+  - [x] Project-card guild member initials (`C`, `S`, `B`, `R`) depend too much
+    on desktop hover. Add visible compact labels or a legend for mobile.
+  - [x] Start should preview what it will run, especially on large queues like
+    Looma + Knit (`1 ready task; 32 need brief cleanup first`).
+- [ ] 2026-05-24 zero-context cognitive-overhead audit loop.
+  Added the test plan at `internal/plans/2026-05-24-zero-context-flow-user-testing.md`
+  and ran four low/no-context reviewer passes over Home, Needs You, Fair Labor
+  License Thread, Commerce Thread, T minus T Thread, and Looma Work. The pass
+  scored several cards below ship quality because the first action was still
+  too hard to identify, optional links looked like required actions, and raw
+  runtime language still leaked through. Source fixes landed in this pass:
+  - [x] Pressure-test questions now ask direct, answerable questions instead
+    of inserting a title into a grammar template.
+  - [x] Project check-in is no longer treated as urgent owner input until
+    there is an actual concrete question to answer.
+  - [x] Owner-input start readiness now tells the user what blocks progress
+    (`questions need your answer`, `review the waiting brief/spec`, or choose a
+    recovery path) instead of mixing `No actionable tasks remain` with
+    `Needs you`.
+  - [x] Pressure-test cards put the question itself in the headline, move the
+    domain into compact metadata, and use `Submit answer` plus a placeholder
+    that says what kind of answer is useful.
+  - [x] Common raw runtime phrases such as `post-user-question`,
+    `gate_hard_failure`, `authoritative verification`, and
+    `checkpoint-touched` are routed through friendly copy before reaching
+    Thread/Work surfaces.
+  - [x] Saved request cards now summarize pressure-test requests in plain
+    language instead of repeating raw instruction text such as `Ask me
+    questions first`.
+  - [x] Re-run the no-context pass on the rebuilt app and only clear this item
+    if the first visible card in each tested flow can be understood without
+    Guildhall implementation knowledge.
+    Rebuilt-browser checks cleared the P1 regressions on Commerce Thread,
+    T minus T Thread, Needs You, and Looma Work: no stale `Ask me...` prompt
+    leakage, no `Shape the first spec` contradiction, no
+    `No actionable tasks remain` contradiction, no raw `Request aborted`, no
+    optional-plus-Needs-You pairing, and no stuck `Loading project` state after
+    the websocket connects.
+  - [x] Coordinator/spec-agent questions can still appear as prose about what
+    the agent should ask (`The key question I need to ask...`) instead of a
+    highlighted, answerable question. The fix adds explicit
+    subject/description/question fields to the question contract, teaches the
+    prose-recovery parser to extract the actual question, and renders structured
+    questions as context plus a highlighted `Question` callout.
+  - [x] Project Facts `Workspace discoveries` linked `Review` to the global
+    `/workspace-import` route from inside project pages. The facts endpoint now
+    emits `/projects/:id/workspace-import`, and the Facts tab scopes action
+    links through the current project as a defensive fallback.
+  - [x] Release readiness said Looma + Knit had a `Design system` that was
+    `not drafted`, which made it sound like the repo lacked a design system.
+    The release contract now distinguishes Guildhall's captured design
+    guardrail from a repo that is itself a design system/component library, and
+    the Release UI shows repo evidence as `detected in repo` instead of a
+    blocker.
+  - [x] Ready tasks with an incomplete task brief could render as a wordy stack
+    of git-story warning, generic brief warning, source-note disclosure, and
+    full checklist while still not making the next action obvious. Thread now
+    suppresses git-story noise on incomplete task-brief cards until the brief
+    is complete, names the missing field as the card headline, opens a
+    one-field brief form when only one field is missing, and collapses the full
+    checklist behind disclosure.
+  - [x] Planner/Work cards labeled `Needs brief cleanup` could open task
+    details where the Current tab said nothing was waiting. Current now carries
+    the same task-level worker-handoff check as the board and shows a yellow
+    `Needs brief cleanup` card with an `Open brief cleanup` action when the
+    task is marked ready but its brief/spec is not complete enough for a
+    worker.
+  - [x] Release/git-story and routing links could drop from
+    `/projects/:id/...` to legacy global routes such as `/task/:id` or
+    `/routing`, causing project-scoped drawer requests to fail with
+    `projectId is required`. Release task links now use the current project
+    task route, the task drawer uses its explicit `projectId` for every load
+    and action, and routing tabs stay project-relative.
+  - [x] Settings `Memory` made projects with saved context look blank because
+    it only listed reusable habit/playbook proposals. The tab is now
+    `Guidance`, explains that project facts/decisions are already saved, and
+    shows the project brief, workspace goals, import choices, and decision log
+    before listing reusable habits.
+  - [x] Advanced Settings `Codebase map` looked like counters rather than a
+    map. The endpoint now exposes the stored project summary, stack,
+    entrypoints, mapped areas, reusable abstractions, semantic findings, and
+    design-system evidence; the UI renders those sections directly so users can
+    see what Guildhall actually learned.
+  - [x] Project titles were still re-humanized from the slug in the global
+    header. Slugs can seed an empty name, but saved display names now stay
+    authoritative everywhere, including `Fair Labor License` casing.
+  - [x] Agent questions could render research narration as `Choose one` with
+    evidence snippets as fake answers. Existing malformed questions now show
+    the evidence as context, label the actual problem (`Question missing`), and
+    ask for a free-text next step; future post-user-question/orchestrator
+    fallback paths reject or skip research-summary prose instead of turning it
+    into a choice card.
+  - [x] Task drawers could show stale historical escalations in footer
+    recovery actions after the Thread body correctly showed only the latest
+    blocker. The drawer now honors runtime `openEscalationIds`, worker
+    timeouts are framed as a Guildhall-owned `Retry worker` action instead of
+    an unnamed human decision, and the retry modal no longer shows an ignored
+    `Resume at` picker or stale `Needs human call` chip.
+  - [x] Provider concurrency defaults were still tuned for a cautious
+    one-project/local-model era: Claude/Codex were capped at 2, generic hosted
+    APIs at 4, and local OpenAI-compatible servers at 1. Provider metadata now
+    uses 10 as the normal hosted/CLI fallback, local servers stay capped at 2,
+    provider groups can carry their own `maxConcurrency`, and the
+    machine-global ceiling defaults to 200. Remote OpenAI-compatible providers
+    can therefore be configured for high throughput without Guildhall sniffing
+    a vendor URL.
+  - [x] Model sampling settings were still an internal temperature mapping with
+    no product-level shape. Guildhall now exposes role behavior profiles
+    (`Precise`, `Balanced`, `Exploratory`) in global model defaults, resolves
+    global/workspace role profile overrides through config, and translates the
+    profile to provider sampling internally. The UI avoids raw temperature/top-p
+    knobs while still letting advanced users pick best-practice behavior per
+    role.
+  - [x] Guildhall-run actions were visually mixed with user-primary actions:
+    `Start`/`Resume` could appear purple with a play icon, and task-brief
+    cleanup exposed manual form controls where the real next step was handing
+    source notes back to Guildhall. Start/resume handoffs now use the agent
+    variant and sparkle icon across the project header, project cards, setup
+    wizard, thread cards, and current drawer; optional user notes stay
+    secondary/left of the agent handoff.
+  - [x] Follow-up audit found more Guildhall handoff controls still styled as
+    human/secondary actions: task drawer `Run this task` / `Resume task` /
+    recovery retries, setup `Run checks`, meta-intake split synthesis,
+    Settings bootstrap runs, setup-wizard resume, and workspace-import reruns.
+    Those now use the agent variant and sparkle icon; ordinary load retries,
+    navigation, approvals, and user answer/save actions keep their existing
+    human-facing styles.
+  - [x] Project header Start regressed to visible count copy (`Start 1 task`)
+    even though its accessible label was just `Start`, and small topbar buttons
+    used a smaller font token than card buttons. The header now shows exactly
+    `Start`, and small/medium buttons share the same font-size token so action
+    text does not drift by placement.
+  - [x] Automation-state chips now follow the same actor semantics as actions
+    without becoming as loud as buttons. Passive Guildhall states such as
+    `Queued`, `Queued for Guildhall`, and `Guildhall shaping` use a quieter
+    agent tone; Guildhall-owned handoff states such as `Brief cleanup needed`
+    use `agent-attention`; user decisions, approvals, and recovery risks remain
+    warning/human-attention states.
+  - [x] Overview blocked-work rows no longer render a large red status panel
+    inside each row. The task title and reason stay primary, and the blocker
+    status now appears as a compact chip in the row header so the card remains
+    scannable.
+  - [x] Journey `Files changed` no longer treats directory paths as files, and
+    changed files are inspectable inline through a project/worktree-bounded
+    file-read endpoint. This keeps task evidence readable without opening up
+    arbitrary local file reads; a syntax-colored diff view remains a good
+    follow-on once Guildhall adopts a real diff/code viewer dependency.
+  - [x] New request intake now records a request-shape analysis so FLL-style
+    asks like "set an overhead charge policy" do not silently become a full
+    implementation task. Ambiguous policy/spec-vs-implementation asks get a
+    structured clarifying question, a component stack
+    (policy/spec/implementation/verification), and visible Journey evidence.
+    Task reframe now tells the coordinator to rebuild that structure and split
+    oversized work into linked child tasks, while active implementation/review/
+    gate tasks stop offering destructive reframe so existing work traces remain
+    connected.
+  - [x] `split_required` sizing no longer stops at a recommendation. When a
+    shaped task is explicitly approved for work and is still too large, the
+    task queue now creates linked child tasks idempotently, records their ids on
+    the parent size plan, and keeps the original task as the parent container.
+  - [x] Task Overview hierarchy links now behave like in-drawer navigation:
+    parent-task, dependency, and child-task links replace the current drawer
+    task while preserving the underlying project page. The drawer header also
+    shows a compact project/task breadcrumb so similarly named split tasks have
+    a visible project prefix and stable task id.
+  - [x] Older split-required tasks no longer leave the user guessing whether
+    Guildhall will act. If the task has not been split yet, Overview says
+    `Split this task`, explains that Guildhall will keep the current task as
+    the parent and create the listed tasks, and offers a `Split this task`
+    action in the same card; the backend creates those tasks idempotently and
+    keeps the original task as the parent container. For new split-required
+    specs, approval now says plainly that Guildhall created the listed tasks and
+    kept the original as the parent task, with the parent in a non-runnable
+    `parent` status instead of sending it back to approval.
+  - [x] Worker-owned "verification commands do not work here, but implementation
+    is complete" blockers no longer land in the human queue when the task has
+    Guildhall-owned file changes. Guildhall classifies that as automation-owned
+    verification confusion, reopens it from restart into the automated lane, and
+    the overview uses runtime open-escalation ids so resolved historical
+    escalations do not keep showing up as `Blocked work`.
+  - [x] Split-summary narration and progress receipts no longer surface as
+    owner questions. FLL exposed generated prompts like "the parent task was
+    split into 3 children" and "I've now persisted progress with tools" as
+    decisions even though they were just agent bookkeeping; the shared question
+    visibility filter now hides that shape across Thread, Inbox, and gating
+    surfaces, and the FLL OAuth child was reframed from the mistaken
+    transactional-email provider question into Google/Apple sign-in work.
+  - [x] Done task worktrees now have to land before they disappear from the
+    user's mental model. FLL showed several `done` tasks whose implementation
+    was still unmerged inside task worktrees. Guildhall now treats isolated
+    task landing as requiring a committed task snapshot even when Git Story
+    says `commit=ask`, and idle ticks reconcile older `done + worktreePath +
+    no mergeRecord` tasks by committing, cherry-picking, recording the merge,
+    and removing the disposable worktree.
+  - [x] External blockers can now carry a concrete setup checklist instead of
+    only a generic recovery blurb. The escalation tool accepts structured
+    owner-facing steps, agents are prompted to provide them for credentials,
+    provider dashboards, and live service setup, and the task Action tab renders
+    those steps before `I handled this...` / resume actions. Users can also ask
+    Guildhall to `Rework task...` from the task actions menu with plain-language
+    transformation instructions; deterministic presets such as `Split task...`
+    use the same dedicated enrichment path, preserving useful spec context while
+    asking the spec agent to add missing structure or parent/child tasks.
+  - [x] Spec review no longer misses a `Completion Boundary` just because it is
+    the final section in the spec. Regression coverage now locks the parser to
+    accept final-section completion boundaries instead of sending valid specs
+    back for rework.
+  - [x] Verification commands that start with `cd frontend && ...` now preserve
+    that working directory while still reconciling against the authoritative
+    command. This closes the FLL failure mode where a worker learned the right
+    directory but Guildhall stored or replayed the command as if it belonged at
+    the repo root.
+  - [x] FLL third-party setup was reshaped into explicit blocked setup tasks:
+    Google OAuth credentials, Apple OAuth credentials, Supabase provider
+    configuration, Stripe dashboard/webhook setup, and live verification remain
+    owner-actionable blockers, while the runnable Stripe Connect code task was
+    merged back to main and its disposable worktree was removed.
+  - [x] 0.8.0 release readiness now has a generic project migration spine
+    instead of memory-specific one-off scripts. Added a versioned migration
+    registry, `.guildhall/migrations.json` ledger, `guildhall migrate
+    status|plan|apply`, service and health migration summaries, and public docs
+    that keep `guildhall memory migrate-0.8.0` / `guildhall migrate task-state`
+    as compatibility commands. Required storage/schema migrations now block
+    project start and CLI runs until applied, while prompt safety still prevents
+    surprise project-file writes. Verified with migration, CLI, service-health,
+    typecheck, build, compiled CLI status, and release smoke checks.
+  - [x] Follow-up user testing no longer buries Overview/Inbox behind repeated
+    identical escalation rows or raw agent/debug narration. Runtime inbox
+    projection now collapses exact duplicate visible rows, filters operational
+    "question posted" receipts out of user questions, and routes empty-model,
+    idle-limit, research-budget, `ERROR:`, and `spec_ambiguous` strings through
+    a shared user-facing text normalizer used by Inbox, Thread, activity, and
+    wire-event errors. The package and home-page current-docs label now report
+    0.8.0 so fresh served UI does not identify itself as the previous release.
+  - [ ] Add the follow-on global scheduler that fairly spends the provider
+    budget across all turned-on projects instead of requiring each project to
+    be manually started and budgeted in isolation.

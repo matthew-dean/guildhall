@@ -43,9 +43,9 @@ A typical worker or reviewer prompt can include these blocks:
 | Review rubrics | The inspection criteria selected for this task. |
 | Review packet | Changed files, self-critique, and verification evidence for review/gate stages. |
 | Relevant memory | Matching sections from `MEMORY.md`, capped to stay useful. |
-| Recent progress | Tail of `PROGRESS.md`. |
-| Recent decisions | Matching entries from `DECISIONS.md`. |
-| Exploring transcript | Tail of the active intake conversation during `exploring`. |
+| Recent progress | Tail of `./.guildhall/PROGRESS.md`. |
+| Recent decisions | Matching entries from `./.guildhall/DECISIONS.md`. |
+| Exploring transcript | Tail of the active intake conversation from local history during `exploring`. |
 
 Not every role gets every block. Guildhall keeps empty or irrelevant sections
 out of the final prompt.

@@ -28,6 +28,13 @@ import { appendFailureClassificationNote, classifyAgentFailure } from '../policy
 import { commandEvidence, touchedFiles } from './policy-fixtures.js'
 import { readProjectLearning } from '../learning.js'
 import { loadCodebaseMap } from '@guildhall/corpus-map'
+import {
+  getProjectContextDebugLedgerPath,
+  getProjectLocalHistoryDir,
+  getProjectProgressHeartbeatsPath,
+  getProjectTaskLocalHistoryDir,
+  getProjectTranscriptPath,
+} from '@guildhall/sessions'
 
 // ---------------------------------------------------------------------------
 // Orchestrator feedback-loop tests
@@ -40,13 +47,17 @@ import { loadCodebaseMap } from '@guildhall/corpus-map'
 // ---------------------------------------------------------------------------
 
 let tmpDir: string
+let dataDir: string
 let memoryDir: string
 let tasksPath: string
 let progressPath: string
 
 beforeEach(async () => {
   tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'forge-orch-test-'))
-  memoryDir = path.join(tmpDir, 'memory')
+  dataDir = path.join(os.tmpdir(), `guildhall-data-${path.basename(tmpDir)}`)
+  process.env.GUILDHALL_CONFIG_DIR = path.join(dataDir, 'config')
+  process.env.GUILDHALL_DATA_DIR = dataDir
+  memoryDir = path.join(tmpDir, '.guildhall')
   await fs.mkdir(memoryDir, { recursive: true })
   tasksPath = path.join(memoryDir, 'TASKS.json')
   progressPath = path.join(memoryDir, 'PROGRESS.md')
@@ -82,7 +93,9 @@ beforeEach(async () => {
 
 afterEach(async () => {
   delete process.env.GUILDHALL_CONFIG_DIR
+  delete process.env.GUILDHALL_DATA_DIR
   await fs.rm(tmpDir, { recursive: true, force: true })
+  await fs.rm(dataDir, { recursive: true, force: true })
 })
 
 function baseConfig(overrides: Partial<ResolvedConfig> = {}): ResolvedConfig {
@@ -110,8 +123,30 @@ function baseConfig(overrides: Partial<ResolvedConfig> = {}): ResolvedConfig {
   }
 }
 
+function taskHistoryPath(taskId: string, ...parts: string[]): string {
+  return path.join(getProjectTaskLocalHistoryDir(tmpDir, taskId), ...parts)
+}
+
+const VALID_SPEC = [
+  '## Summary',
+  '',
+  'Implement the requested change.',
+  '',
+  '## Completion Boundary',
+  '- Product outcome: The requested change works for the target user.',
+  '- What Guildhall can complete in code: Update the relevant source and test files.',
+  '- External dependencies: None.',
+  '- Owner-only setup: None.',
+  '- Verification environment: Local test environment.',
+  '- What counts as done: The acceptance criterion is met and the task can be reviewed locally.',
+  '- What must be split or blocked: Nothing.',
+  '',
+  '## Acceptance Criteria',
+  '1. Thing is done.',
+].join('\n')
+
 function mkTask(overrides: Partial<Task> = {}): Task {
-  return {
+  const task: Task = {
     id: 'task-001',
     title: 'Do a thing',
     description: 'Details here',
@@ -135,6 +170,26 @@ function mkTask(overrides: Partial<Task> = {}): Task {
     updatedAt: '2026-04-01T00:00:00Z',
     ...overrides,
   }
+  if (task.status === 'ready' && !Object.hasOwn(overrides, 'spec')) {
+    task.spec = VALID_SPEC
+  }
+  if (task.status !== 'exploring' && task.spec === VALID_SPEC) {
+    if (task.acceptanceCriteria.length === 0) {
+      task.acceptanceCriteria = [{
+        id: 'ac-1',
+        description: 'Thing is done',
+        verifiedBy: 'review',
+        met: false,
+      }]
+    }
+    task.productBrief ??= {
+      userJob: 'I want the requested task completed.',
+      successMetric: 'The acceptance criterion is met.',
+      antiPatterns: [],
+      approvedAt: '2026-05-26T00:00:00.000Z',
+    }
+  }
+  return task
 }
 
 async function writeQueue(tasks: Task[]): Promise<void> {
@@ -239,7 +294,7 @@ describe('context debug records', () => {
     await orch.tick()
     await orch.tick()
 
-    const ledger = await fs.readFile(path.join(memoryDir, 'context-debug.jsonl'), 'utf8')
+    const ledger = await fs.readFile(getProjectContextDebugLedgerPath(tmpDir), 'utf8')
     const records = ledger
       .trim()
       .split('\n')
@@ -279,7 +334,7 @@ describe('context debug records', () => {
     await orch.tick()
 
     const map = await loadCodebaseMap(memoryDir)
-    const history = await fs.readFile(path.join(memoryDir, 'codebase-map.history.jsonl'), 'utf8')
+    const history = await fs.readFile(path.join(getProjectLocalHistoryDir(tmpDir), 'codebase-map.history.jsonl'), 'utf8')
     const events = history.trim().split('\n').map((line) => JSON.parse(line) as Record<string, unknown>)
 
     expect(map?.files['src/feature.ts']?.summary).toContain('feature.ts')
@@ -995,7 +1050,7 @@ describe('Orchestrator.tick — routing', () => {
     expect(task.openQuestions?.[0] && 'prompt' in task.openQuestions[0] ? task.openQuestions[0].prompt : '').toContain('Pick one')
 
     const transcript = await fs.readFile(
-      path.join(memoryDir, 'exploring', 'a.md'),
+      getProjectTranscriptPath(tmpDir, 'exploring', 'a'),
       'utf-8',
     )
     expect(transcript).toContain('Pick one: should this cover only the happy path')
@@ -1085,7 +1140,7 @@ describe('Orchestrator.tick — routing', () => {
       selectionMode: 'single',
     })
 
-    const transcript = await fs.readFile(path.join(memoryDir, 'exploring', 'a.md'), 'utf-8')
+    const transcript = await fs.readFile(getProjectTranscriptPath(tmpDir, 'exploring', 'a'), 'utf-8')
     expect(transcript).toContain('Pick one: happy path only, or error cases too?')
     expect(transcript).not.toContain("I'm blocked on tool-schema details")
   })
@@ -1588,6 +1643,31 @@ describe('Orchestrator.tick — routing', () => {
     expect(task.openQuestions ?? []).toHaveLength(0)
   })
 
+  it('does not promote research-summary narration into fallback choice questions', async () => {
+    await writeQueue([mkTask({ id: 'a', status: 'exploring', title: 'Rust outline preprocessing' })])
+    const spec = stubAgent(
+      'spec-agent',
+      undefined,
+      [
+        "OK, I've hit the research budget for this turn. But I have enough context from what I've read to understand the situation clearly. Let me synthesize:",
+        '',
+        '- The plan doc says Rust gave 10-15% speedup.',
+        '- The current task is blocked on a pixi install failure.',
+      ].join('\n'),
+    )
+    const orch = new Orchestrator({
+      config: baseConfig(),
+      agents: agentSet({ spec }),
+    })
+
+    const out = await orch.tick()
+    expect(out.kind).toBe('processed')
+
+    const queue = await readQueue()
+    const task = queue.tasks[0]!
+    expect(task.openQuestions ?? []).toHaveLength(0)
+  })
+
   it('preserves fallback brief and question state when a spec turn hits the max turn limit after plain-text output', async () => {
     await writeQueue([mkTask({ id: 'a', status: 'exploring', title: 'Collections coverage' })])
     const spec = {
@@ -1750,6 +1830,34 @@ describe('Orchestrator.tick — routing', () => {
     expect(worker.calls).toHaveLength(1)
   })
 
+  it('sets a stable prompt cache key before dispatching an agent turn', async () => {
+    await writeQueue([mkTask({ id: 'task-006', status: 'in_progress' })])
+    const cacheKeys: Array<string | undefined> = []
+    const worker: OrchestratorAgent = {
+      name: 'worker-agent',
+      setPromptCacheKey(key: string | undefined) {
+        cacheKeys.push(key)
+      },
+      async generate() {
+        return { text: 'ok' }
+      },
+    }
+    const gitDriver = new InMemoryGitDriver()
+    gitDriver.setClean(true)
+    const orch = new Orchestrator({
+      config: baseConfig({ workspaceId: 'fair-labor-license' }),
+      agents: agentSet({ worker }),
+      providerName: 'openai-api',
+      gitDriver,
+    })
+
+    await orch.tick()
+
+    expect(cacheKeys).toEqual([
+      'openai-api:fair-labor-license:task-006:worker:fair-labor-license-worker',
+    ])
+  })
+
   it('routes review tasks to the reviewer agent', async () => {
     await writeQueue([mkTask({ id: 'a', status: 'review' })])
     const reviewer = stubAgent('reviewer-agent')
@@ -1834,7 +1942,7 @@ describe('Orchestrator.tick — routing', () => {
   })
 
   it('claims ready tasks deterministically without a coordinator call', async () => {
-    await writeQueue([mkTask({ id: 'a', status: 'ready', domain: 'ghost', spec: 'approved spec' })])
+    await writeQueue([mkTask({ id: 'a', status: 'ready', domain: 'ghost', spec: VALID_SPEC })])
     const coord = stubAgent('ghost-coordinator')
     const worker = stubAgent('worker-agent')
     const orch = new Orchestrator({
@@ -1861,7 +1969,40 @@ describe('Orchestrator.tick — routing', () => {
   })
 
   it('records a blueprint sanity review before claiming ready work', async () => {
-    await writeQueue([mkTask({ id: 'a', status: 'ready', domain: 'ghost', spec: 'approved spec' })])
+    await writeQueue([mkTask({
+      id: 'a',
+      status: 'ready',
+      domain: 'ghost',
+      productBrief: {
+        userJob: 'I want users to complete the invite flow.',
+        successMetric: 'A user can accept an invite and land in the workspace.',
+        antiPatterns: [],
+        approvedAt: '2026-05-26T00:00:00.000Z',
+      },
+      spec: [
+        '## Summary',
+        '',
+        'Implement invite acceptance.',
+        '',
+        '## Completion Boundary',
+        '- Product outcome: A user can accept an invite and land in the workspace.',
+        '- What Guildhall can complete in code: Update the invite route.',
+        '- External dependencies: None.',
+        '- Owner-only setup: None.',
+        '- Verification environment: Local app with seeded invite data.',
+        '- What counts as done: The seeded invite acceptance path succeeds end-to-end.',
+        '- What must be split or blocked: Nothing.',
+        '',
+        '## Acceptance Criteria',
+        '1. Given a valid invite, when the user accepts it, then they land in the workspace.',
+      ].join('\n'),
+      acceptanceCriteria: [{
+        id: 'AC-1',
+        description: 'Given a valid invite, when the user accepts it, then they land in the workspace.',
+        verifiedBy: 'review',
+        met: false,
+      }],
+    })])
     const worker = stubAgent('worker-agent')
     const orch = new Orchestrator({
       config: baseConfig(),
@@ -1880,6 +2021,51 @@ describe('Orchestrator.tick — routing', () => {
     )).toBe(true)
     expect(q.tasks[0]!.notes.at(-1)?.content).toBe('Claimed ready task for worker-agent.')
     expect(worker.calls).toHaveLength(0)
+  })
+
+  it('routes ready tasks with a weak completion boundary back to exploring', async () => {
+    await writeQueue([mkTask({
+      id: 'a',
+      status: 'ready',
+      domain: 'ghost',
+      productBrief: {
+        userJob: 'I want users to sign in with familiar providers.',
+        successMetric: 'Login shows Google and Apple buttons.',
+        antiPatterns: [],
+        approvedAt: '2026-05-26T00:00:00.000Z',
+      },
+      spec: [
+        '## Summary',
+        '',
+        'Add Google and Apple provider buttons.',
+        '',
+        '## Acceptance Criteria',
+        '1. Login and registration pages show Google and Apple buttons.',
+      ].join('\n'),
+      acceptanceCriteria: [{
+        id: 'AC-1',
+        description: 'Login and registration pages show Google and Apple buttons.',
+        verifiedBy: 'review',
+        met: false,
+      }],
+    })])
+    const worker = stubAgent('worker-agent')
+    const orch = new Orchestrator({
+      config: baseConfig(),
+      agents: agentSet({ worker }),
+    })
+
+    const out = await orch.tick()
+
+    expect(out.kind).toBe('processed')
+    if (out.kind === 'processed') {
+      expect(out.agent).toBe('blueprint-sanity-review')
+      expect(out.afterStatus).toBe('exploring')
+    }
+    expect(worker.calls).toHaveLength(0)
+    const q = await readQueue()
+    expect(q.tasks[0]!.status).toBe('exploring')
+    expect(q.tasks[0]!.notes.at(-1)?.content).toMatch(/completion boundary/i)
   })
 
   it('routes ready tasks without a usable blueprint back to exploring', async () => {
@@ -2244,7 +2430,7 @@ describe('Orchestrator.tick — routing', () => {
       expect(fourth.transitioned).toBe(true)
     }
 
-    const checkpointPath = path.join(memoryDir, 'tasks', 'worker-task', 'checkpoint.json')
+    const checkpointPath = taskHistoryPath('worker-task', 'checkpoint.json')
     const checkpoint = JSON.parse(await fs.readFile(checkpointPath, 'utf8')) as {
       intent: string
       nextPlannedAction: string
@@ -2410,7 +2596,7 @@ describe('Orchestrator.tick — routing', () => {
       await orch.tick()
     }
 
-    const checkpointPath = path.join(memoryDir, 'tasks', 'worker-task', 'checkpoint.json')
+    const checkpointPath = taskHistoryPath('worker-task', 'checkpoint.json')
     const checkpoint = JSON.parse(await fs.readFile(checkpointPath, 'utf8')) as {
       nextPlannedAction: string
       resumeContext?: {
@@ -2494,7 +2680,7 @@ describe('Orchestrator.tick — routing', () => {
       expect(third.transitioned).toBe(true)
     }
 
-    const checkpointPath = path.join(memoryDir, 'tasks', 'worker-task', 'checkpoint.json')
+    const checkpointPath = taskHistoryPath('worker-task', 'checkpoint.json')
     const checkpoint = JSON.parse(await fs.readFile(checkpointPath, 'utf8')) as {
       intent: string
       nextPlannedAction: string
@@ -2556,7 +2742,7 @@ describe('Orchestrator.tick — routing', () => {
     const third = await orch.tick()
     expect(third.kind).toBe('processed')
 
-    const checkpointPath = path.join(memoryDir, 'tasks', 'worker-clean-verified', 'checkpoint.json')
+    const checkpointPath = taskHistoryPath('worker-clean-verified', 'checkpoint.json')
     const checkpoint = JSON.parse(await fs.readFile(checkpointPath, 'utf8')) as {
       intent: string
       nextPlannedAction: string
@@ -2857,7 +3043,7 @@ describe('Orchestrator.tick — feedback loop', () => {
     await orch.tick()
     await orch.tick()
 
-    const packet = await fs.readFile(path.join(memoryDir, 'tasks', 'a', 'review-packet.md'), 'utf-8')
+    const packet = await fs.readFile(taskHistoryPath('a', 'review-packet.md'), 'utf-8')
     expect(packet).toContain('## Changed File Excerpts')
     expect(packet).toContain('use-presence.test.ts')
     expect(packet).toContain('## Latest Self-Critique')
@@ -2970,7 +3156,7 @@ describe('Orchestrator.tick — feedback loop', () => {
     await orch.tick()
     await orch.tick()
 
-    const packet = await fs.readFile(path.join(memoryDir, 'tasks', 'a', 'review-packet.md'), 'utf-8')
+    const packet = await fs.readFile(taskHistoryPath('a', 'review-packet.md'), 'utf-8')
     expect(packet).toContain('use-collections.test.ts')
     expect(packet).toContain('added focused use-collections coverage')
     expect(packet).not.toContain('pnpm --filter @knit-app test -- tests')
@@ -3218,7 +3404,7 @@ describe('Orchestrator.tick — revision counting', () => {
 })
 
 describe('Orchestrator.tick — progress logging (FR-09)', () => {
-  it('appends a typed HEARTBEAT entry on a routine forward transition', async () => {
+  it('writes a typed HEARTBEAT entry to local progress on a routine forward transition', async () => {
     await writeQueue([mkTask({ id: 'a', status: 'in_progress' })])
     const worker = stubAgent('worker-agent', async () => {
       await mutateTask('a', { status: 'review' })
@@ -3229,7 +3415,7 @@ describe('Orchestrator.tick — progress logging (FR-09)', () => {
       now: () => '2026-04-20T12:00:00Z',
     })
     await orch.tick()
-    const progress = await fs.readFile(progressPath, 'utf-8')
+    const progress = await fs.readFile(getProjectProgressHeartbeatsPath(tmpDir), 'utf-8')
     expect(progress).toContain('HEARTBEAT')
     expect(progress).toContain('2026-04-20T12:00:00Z')
     expect(progress).toContain('worker-agent')
@@ -3599,7 +3785,7 @@ describe('Orchestrator.tick — progress logging (FR-09)', () => {
     const task = queue.tasks.find((candidate) => candidate.id === 'worker-progress')
     expect(task?.updatedAt).not.toBe('2026-04-01T00:00:00Z')
 
-    const checkpointPath = path.join(memoryDir, 'tasks', 'worker-progress', 'checkpoint.json')
+    const checkpointPath = taskHistoryPath('worker-progress', 'checkpoint.json')
     const checkpoint = JSON.parse(await fs.readFile(checkpointPath, 'utf8')) as {
       intent: string
       nextPlannedAction: string
@@ -3676,7 +3862,7 @@ describe('Orchestrator.tick — progress logging (FR-09)', () => {
     const task = queue.tasks.find((candidate) => candidate.id === 'worker-likely-target-progress')
     expect(task?.updatedAt).not.toBe('2026-04-01T00:00:00Z')
 
-    const checkpointPath = path.join(memoryDir, 'tasks', 'worker-likely-target-progress', 'checkpoint.json')
+    const checkpointPath = taskHistoryPath('worker-likely-target-progress', 'checkpoint.json')
     const checkpoint = JSON.parse(await fs.readFile(checkpointPath, 'utf8')) as {
       intent: string
       nextPlannedAction: string
@@ -3749,7 +3935,7 @@ describe('Orchestrator.tick — progress logging (FR-09)', () => {
     const task = queue.tasks.find((candidate) => candidate.id === 'worker-clean-progress')
     expect(task?.updatedAt).not.toBe('2026-04-01T00:00:00Z')
 
-    const checkpointPath = path.join(memoryDir, 'tasks', 'worker-clean-progress', 'checkpoint.json')
+    const checkpointPath = taskHistoryPath('worker-clean-progress', 'checkpoint.json')
     const checkpoint = JSON.parse(await fs.readFile(checkpointPath, 'utf8')) as {
       intent: string
       nextPlannedAction: string
@@ -3822,7 +4008,7 @@ describe('Orchestrator.tick — progress logging (FR-09)', () => {
     const task = queue.tasks.find((candidate) => candidate.id === 'worker-project-progress')
     expect(task?.updatedAt).not.toBe('2026-04-01T00:00:00Z')
 
-    const checkpointPath = path.join(memoryDir, 'tasks', 'worker-project-progress', 'checkpoint.json')
+    const checkpointPath = taskHistoryPath('worker-project-progress', 'checkpoint.json')
     const checkpoint = JSON.parse(await fs.readFile(checkpointPath, 'utf8')) as {
       intent: string
       nextPlannedAction: string
@@ -3892,7 +4078,7 @@ describe('Orchestrator.tick — progress logging (FR-09)', () => {
 
     await orch.tick()
 
-    const checkpointPath = path.join(memoryDir, 'tasks', 'worker-persona-self-critique', 'checkpoint.json')
+    const checkpointPath = taskHistoryPath('worker-persona-self-critique', 'checkpoint.json')
     const checkpoint = JSON.parse(await fs.readFile(checkpointPath, 'utf8')) as {
       nextPlannedAction: string
     }
@@ -3986,7 +4172,7 @@ it('filters node_modules noise out of recovery checkpoints and falls back to met
     expect((await orch.tick()).kind).toBe('processed')
     expect((await orch.tick()).kind).toBe('processed')
 
-    const checkpointPath = path.join(memoryDir, 'tasks', 'worker-node-modules-noise', 'checkpoint.json')
+    const checkpointPath = taskHistoryPath('worker-node-modules-noise', 'checkpoint.json')
     const checkpoint = JSON.parse(await fs.readFile(checkpointPath, 'utf8')) as {
       filesTouched: string[]
     }
@@ -4058,7 +4244,7 @@ it('filters node_modules noise out of recovery checkpoints and falls back to met
       agents: agentSet({ worker }),
     })
     await orch.tick()
-    const progress = await fs.readFile(progressPath, 'utf-8')
+    const progress = await fs.readFile(getProjectProgressHeartbeatsPath(tmpDir), 'utf-8')
     expect(progress).toContain('knit-web')
   })
 })
@@ -4124,6 +4310,39 @@ describe('Orchestrator.tick — error handling', () => {
     expect(q.tasks[0]!.blockReason).toBeUndefined()
     expect(q.tasks[0]!.escalations[0]!.resolvedAt).toBeTruthy()
     expect(q.tasks[0]!.escalations[0]!.resolvedBy).toBe('system')
+  })
+
+  it('preserves worker progress on retryable provider capacity errors instead of blocking the task', async () => {
+    await writeQueue([
+      mkTask({
+        id: 'a',
+        status: 'in_progress',
+        assignedTo: 'worker-agent',
+        updatedAt: '2026-05-03T19:10:00.000Z',
+      }),
+    ])
+    const worker = {
+      name: 'worker-agent',
+      async generate() {
+        throw new Error(
+          'OpenAI-compatible API HTTP 429: {"error":{"message":"Model busy, retry later","code":"engine_overloaded"}}',
+        )
+      },
+    }
+    const orch = new Orchestrator({
+      config: baseConfig(),
+      agents: agentSet({ worker }),
+    })
+    const out = await orch.tick()
+    expect(out.kind).toBe('provider-backoff')
+    if (out.kind === 'provider-backoff') {
+      expect(out.status).toBe('in_progress')
+      expect(out.agent).toBe('worker-agent')
+    }
+
+    const q = await readQueue()
+    expect(q.tasks[0]!.status).toBe('in_progress')
+    expect(q.tasks[0]!.assignedTo).toBe('worker-agent')
   })
 
   it('logs agent errors to PROGRESS.md', async () => {
@@ -4289,7 +4508,7 @@ describe('Orchestrator.run — full loops', () => {
         id: 'a',
         status: 'ready',
         domain: 'looma',
-        spec: 'approved spec',
+        spec: VALID_SPEC,
         acceptanceCriteria: [
           {
             id: 'ac-1',
@@ -4335,7 +4554,7 @@ describe('Orchestrator.run — full loops', () => {
     const q = await readQueue()
     expect(q.tasks[0]!.status).toBe('done')
     const packet = await fs.readFile(
-      path.join(memoryDir, 'tasks', 'a', 'review-packet.md'),
+      taskHistoryPath('a', 'review-packet.md'),
       'utf-8',
     )
     expect(packet).toContain('# Review packet: Do a thing')
@@ -4353,7 +4572,7 @@ describe('Orchestrator.run — full loops', () => {
         id: 'a',
         status: 'ready',
         domain: 'looma',
-        spec: 'approved spec',
+        spec: VALID_SPEC,
         acceptanceCriteria: [
           {
             id: 'ac-1',
@@ -4397,7 +4616,7 @@ describe('Orchestrator.run — full loops', () => {
         id: 'a',
         status: 'ready',
         domain: 'looma',
-        spec: 'approved spec',
+        spec: VALID_SPEC,
         acceptanceCriteria: [
           {
             id: 'ac-1',
@@ -4469,7 +4688,7 @@ describe('Orchestrator.run — full loops', () => {
         status: 'ready',
         domain: 'knit',
         projectPath: subrepo,
-        spec: 'approved spec',
+        spec: VALID_SPEC,
         acceptanceCriteria: [
           {
             id: 'ac-1',
@@ -4564,7 +4783,7 @@ describe('Orchestrator.run — full loops', () => {
         id: 'blocked-task',
         status: 'ready',
         domain: 'looma',
-        spec: 'approved spec',
+        spec: VALID_SPEC,
       }),
     ])
 
@@ -4620,7 +4839,7 @@ describe('Orchestrator.run — full loops', () => {
         assignedTo: 'worker-agent',
         domain: 'knit',
         projectPath: subrepo,
-        spec: 'approved spec',
+        spec: VALID_SPEC,
       }),
     ])
 
@@ -4678,7 +4897,7 @@ describe('Orchestrator.run — full loops', () => {
         assignedTo: null,
         domain: 'frontend',
         projectPath: subrepo,
-        spec: 'approved spec',
+        spec: VALID_SPEC,
         blockReason:
           `Guildhall could not start work because the target repo is dirty: ` +
           `base repo has uncommitted changes at ${subrepo}. ` +
@@ -4742,7 +4961,7 @@ describe('Orchestrator.run — full loops', () => {
         id: 'a',
         status: 'blocked',
         assignedTo: null,
-        spec: 'approved spec',
+        spec: VALID_SPEC,
         blockReason: 'human_judgment_required: Blocked transitioning task to review — tool loop',
         notes: [
           {
@@ -4808,7 +5027,7 @@ describe('Orchestrator.run — full loops', () => {
         id: 'a',
         status: 'blocked',
         assignedTo: null,
-        spec: 'approved spec',
+        spec: VALID_SPEC,
         blockReason: 'decision_required: Stuck in tool loop transitioning a to review status',
         notes: [
           {
@@ -4874,7 +5093,7 @@ describe('Orchestrator.run — full loops', () => {
         id: 'a',
         status: 'blocked',
         assignedTo: null,
-        spec: 'approved spec',
+        spec: VALID_SPEC,
         blockReason:
           'gate_hard_failure: Tool validation bug prevents transitioning a to review status despite all work being complete.',
         notes: [
@@ -4938,7 +5157,7 @@ describe('Orchestrator.run — full loops', () => {
         id: 'a',
         status: 'blocked',
         assignedTo: null,
-        spec: 'approved spec',
+        spec: VALID_SPEC,
         blockReason:
           'decision_required: Task blocked from transitioning to review despite passing all verification',
         notes: [
@@ -5001,7 +5220,7 @@ describe('Orchestrator.run — full loops', () => {
         id: 'a',
         status: 'blocked',
         assignedTo: null,
-        spec: 'approved spec',
+        spec: VALID_SPEC,
         blockReason:
           'decision_required: Cannot transition to review — system validator rejects passing verification',
         notes: [
@@ -5064,7 +5283,7 @@ describe('Orchestrator.run — full loops', () => {
         id: 'a',
         status: 'blocked',
         assignedTo: null,
-        spec: 'approved spec',
+        spec: VALID_SPEC,
         blockReason:
           'gate_hard_failure: Blocked from transitioning to review — system validator bug persists',
         notes: [
@@ -5127,7 +5346,7 @@ describe('Orchestrator.run — full loops', () => {
         id: 'a',
         status: 'in_progress',
         assignedTo: 'worker-agent',
-        spec: 'approved spec',
+        spec: VALID_SPEC,
         notes: [
           {
             agentId: 'worker-agent',
@@ -5192,7 +5411,7 @@ describe('Orchestrator.run — full loops', () => {
         status: 'in_progress',
         assignedTo: 'worker-agent',
         title: 'Resume handoff',
-        spec: 'approved spec',
+        spec: VALID_SPEC,
         notes: [
           {
             agentId: 'worker-agent',
@@ -5204,7 +5423,7 @@ describe('Orchestrator.run — full loops', () => {
       }),
     ])
 
-    const checkpointDir = path.join(tmpDir, 'memory', 'tasks', 'a')
+    const checkpointDir = getProjectTaskLocalHistoryDir(tmpDir, 'a')
     await fs.mkdir(checkpointDir, { recursive: true })
     await fs.writeFile(
       path.join(checkpointDir, 'checkpoint.json'),
@@ -5267,7 +5486,7 @@ describe('Orchestrator.run — full loops', () => {
         assignedTo: null,
         domain: 'frontend',
         projectPath: subrepo,
-        spec: 'approved spec',
+        spec: VALID_SPEC,
         blockReason:
           'Guildhall could not create a task worktree: ' +
           'fatal: a branch named \'guildhall/task-a\' already exists. ' +
@@ -5322,7 +5541,7 @@ describe('Orchestrator.run — full loops', () => {
         id: 'a',
         status: 'blocked',
         assignedTo: null,
-        spec: 'approved spec',
+        spec: VALID_SPEC,
         blockReason: 'human_judgment_required: Worker stopped after hitting its turn limit.',
         notes: [
           {
@@ -5385,7 +5604,7 @@ describe('Orchestrator.run — full loops', () => {
         id: 'a',
         status: 'blocked',
         assignedTo: null,
-        spec: 'approved spec',
+        spec: VALID_SPEC,
         blockReason: 'decision_required: Tool reads are being intercepted to an unrelated missing file, blocking implementation',
         notes: [
           {
@@ -5449,7 +5668,19 @@ describe('Orchestrator.run — full loops', () => {
         id: 'a',
         status: 'blocked',
         assignedTo: null,
-        spec: 'Implement auth profile management and email confirmation.',
+        spec: VALID_SPEC,
+        acceptanceCriteria: [{
+          id: 'ac-1',
+          description: 'Thing is done',
+          verifiedBy: 'review',
+          met: false,
+        }],
+        productBrief: {
+          userJob: 'I want auth profile management completed.',
+          successMetric: 'The auth profile management acceptance criterion is met.',
+          antiPatterns: [],
+          approvedAt: '2026-05-26T00:00:00.000Z',
+        },
         blockReason: 'human_judgment_required: Cannot author missing useAuth.ts during blueprint phase for a spec task.',
         notes: [
           {
@@ -5590,7 +5821,7 @@ describe('Orchestrator.run — full loops', () => {
         id: 'a',
         status: 'blocked',
         assignedTo: null,
-        spec: 'approved spec',
+        spec: VALID_SPEC,
         blockReason: 'human_judgment_required: Worker timed out after failing to mutate the likely target file.',
         notes: [
           {
@@ -5614,7 +5845,7 @@ describe('Orchestrator.run — full loops', () => {
       }),
     ])
 
-    const taskDir = path.join(memoryDir, 'tasks', 'a')
+    const taskDir = getProjectTaskLocalHistoryDir(tmpDir, 'a')
     await fs.mkdir(taskDir, { recursive: true })
     await fs.writeFile(path.join(taskDir, 'checkpoint.json'), JSON.stringify({
       taskId: 'a',
@@ -5745,9 +5976,9 @@ describe('Orchestrator.run — full loops', () => {
     expect(task?.assignedTo).toBe('worker-agent')
     expect(task?.blockReason ?? null).toBeNull()
     expect(task?.escalations[0]?.resolvedBy).toBe('system')
-    expect(task?.escalations[0]?.resolution).toContain('self-authored verification failure')
-    expect(task?.notes.at(-1)?.content).toContain('repair the failed verification')
-    expect(seenPrompt).toContain('Latest authoritative verification')
+    expect(task?.escalations[0]?.resolution).toContain('worker-owned verification confusion')
+    expect(task?.notes.at(-1)?.content).toContain('rerun the focused verification')
+    expect(seenPrompt).toContain('Authoritative verification commands')
   })
 
   it('reopens an infra-only max-revisions blocker at review when the user explicitly restarts the project', async () => {
@@ -5756,7 +5987,7 @@ describe('Orchestrator.run — full loops', () => {
         id: 'a',
         status: 'blocked',
         assignedTo: null,
-        spec: 'approved spec',
+        spec: VALID_SPEC,
         acceptanceCriteria: [
           { id: 'ac-1', description: 'done', met: true, verifiedBy: 'review' },
         ],
@@ -5849,7 +6080,7 @@ describe('Orchestrator.run — full loops', () => {
         id: 'a',
         status: 'blocked',
         assignedTo: null,
-        spec: 'approved spec',
+        spec: VALID_SPEC,
         acceptanceCriteria: [
           { id: 'ac-1', description: 'done', met: true, verifiedBy: 'review' },
         ],
@@ -5949,7 +6180,7 @@ describe('Orchestrator.run — full loops', () => {
         assignedTo: 'worker-agent',
         domain: 'knit',
         projectPath: subrepo,
-        spec: 'approved spec',
+        spec: VALID_SPEC,
       }),
     ])
 
@@ -6012,6 +6243,8 @@ describe('Orchestrator.run — full loops', () => {
         domain: 'knit',
         projectPath: subrepo,
         worktreePath: worktree,
+        branchName: 'guildhall/task-a',
+        baseBranch: 'main',
         spec: 'Implement the invite flow in `web/app/pages/settings.vue`.',
       }),
     ])
@@ -6046,7 +6279,7 @@ describe('Orchestrator.run — full loops', () => {
     expect(task?.notes.at(-1)?.role).toBe('bootstrap-verification')
 
     const checkpoint = JSON.parse(
-      await fs.readFile(path.join(memoryDir, 'tasks', 'a', 'checkpoint.json'), 'utf8'),
+      await fs.readFile(taskHistoryPath('a', 'checkpoint.json'), 'utf8'),
     ) as {
       nextPlannedAction: string
       filesTouched: string[]
@@ -6163,7 +6396,7 @@ describe('Orchestrator.run — full loops', () => {
         worktreePath,
         branchName: 'guildhall/task-a',
         baseBranch: 'main',
-        spec: 'approved spec',
+        spec: VALID_SPEC,
         blockReason:
           'Guildhall could not start work because task setup failed: ' +
           'worktree bootstrap failed on command `pnpm install` (exit 1). ' +
@@ -6260,7 +6493,7 @@ describe('Orchestrator.run — full loops', () => {
         worktreePath,
         branchName: 'guildhall/task-env-fix',
         baseBranch: 'main',
-        spec: 'approved spec',
+        spec: VALID_SPEC,
         blockReason: 'Test environment setup failed due to unresolved @nuxt/test-utils module',
         notes: [
           {
@@ -6382,7 +6615,7 @@ describe('Orchestrator.run — full loops', () => {
   it('stopAfterOneTask stops after one active task reaches terminal status', async () => {
     await writeQueue([
       mkTask({ id: 'a', status: 'in_progress', domain: 'looma' }),
-      mkTask({ id: 'b', status: 'ready', domain: 'looma', spec: 'approved spec' }),
+      mkTask({ id: 'b', status: 'ready', domain: 'looma', spec: VALID_SPEC }),
     ])
 
     let writeChain = Promise.resolve()
@@ -6409,6 +6642,327 @@ describe('Orchestrator.run — full loops', () => {
     const q = await readQueue()
     expect(q.tasks.find((t) => t.id === 'a')?.status).toBe('done')
     expect(q.tasks.find((t) => t.id === 'b')?.status).toBe('ready')
+  })
+
+  it('auto-commits dirty task worktree changes when Git Story policy says commit auto', async () => {
+    const worktreePath = path.join(tmpDir, '.guildhall', 'worktrees', 'test-ws', 'task-auto')
+    await writeQueue([
+      mkTask({
+        id: 'task-auto',
+        title: 'Implement feature workflow',
+        status: 'gate_check',
+        worktreePath,
+        branchName: 'guildhall/task-auto',
+        baseBranch: 'main',
+      }),
+    ])
+
+    const gitDriver = new InMemoryGitDriver({ clean: true })
+    gitDriver.setStatusSummary(worktreePath, {
+      branch: 'guildhall/task-auto',
+      upstream: undefined,
+      changedCount: 2,
+      untrackedCount: 0,
+      samplePaths: ['src/feature.ts', 'src/feature.test.ts'],
+      clean: false,
+    })
+    const gateChecker = stubAgent('gate-checker-agent', async () => {
+      await mutateTask('task-auto', { status: 'done' })
+    })
+
+    const orch = new Orchestrator({
+      config: baseConfig({
+        gitStory: {
+          completionTarget: 'open_pr',
+          commit: 'auto',
+          push: 'ask',
+          pullRequest: 'ask',
+          merge: 'ask',
+          localOnlyAllowed: true,
+          deferAllowed: true,
+          requireCleanRelease: true,
+          allowForcePush: false,
+          allowSharedBranchRebase: false,
+          discoveredFrom: [],
+        },
+      }),
+      agents: agentSet({ gateChecker }),
+      gitDriver,
+    })
+
+    const out = await orch.tick()
+
+    expect(out.kind).toBe('processed')
+    expect(gitDriver.state.commits).toEqual([
+      expect.objectContaining({
+        repoRoot: worktreePath,
+        message: [
+          'Implement feature workflow',
+          '',
+          'Task: task-auto',
+          'Changes: 2 changed',
+          'Paths:',
+          '- src/feature.ts',
+          '- src/feature.test.ts',
+        ].join('\n'),
+      }),
+    ])
+    const q = await readQueue()
+    expect(q.tasks[0]?.notes.some((note) =>
+      note.role === 'git-story' &&
+      note.content.includes('Auto-committed completed task work'),
+    )).toBe(true)
+  })
+
+  it('auto-commits dirty task worktree changes from matching workspace child Git Story policy', async () => {
+    const loomaPath = path.join(tmpDir, 'looma')
+    const worktreePath = path.join(tmpDir, '.guildhall', 'worktrees', 'test-ws', 'task-child-auto')
+    await writeQueue([
+      mkTask({
+        id: 'task-child-auto',
+        title: 'Implement child feature workflow',
+        status: 'gate_check',
+        domain: 'looma',
+        projectPath: loomaPath,
+        worktreePath,
+        branchName: 'guildhall/task-child-auto',
+        baseBranch: 'main',
+      }),
+    ])
+
+    const gitDriver = new InMemoryGitDriver({ clean: true })
+    gitDriver.setStatusSummary(worktreePath, {
+      branch: 'guildhall/task-child-auto',
+      upstream: undefined,
+      changedCount: 1,
+      untrackedCount: 0,
+      samplePaths: ['src/child-feature.ts'],
+      clean: false,
+    })
+    const gateChecker = stubAgent('gate-checker-agent', async () => {
+      await mutateTask('task-child-auto', { status: 'done' })
+    })
+
+    const orch = new Orchestrator({
+      config: baseConfig({
+        kind: 'workspace',
+        gitStory: {
+          completionTarget: 'open_pr',
+          commit: 'ask',
+          push: 'ask',
+          pullRequest: 'ask',
+          merge: 'ask',
+          localOnlyAllowed: true,
+          deferAllowed: true,
+          requireCleanRelease: true,
+          allowForcePush: false,
+          allowSharedBranchRebase: false,
+          discoveredFrom: [],
+        },
+        projects: [
+          {
+            id: 'looma',
+            path: loomaPath,
+            gitStory: {
+              completionTarget: 'open_pr',
+              commit: 'auto',
+              push: 'ask',
+              pullRequest: 'ask',
+              merge: 'ask',
+              localOnlyAllowed: true,
+              deferAllowed: true,
+              requireCleanRelease: true,
+              allowForcePush: false,
+              allowSharedBranchRebase: false,
+              discoveredFrom: [],
+            },
+          },
+        ],
+      }),
+      agents: agentSet({ gateChecker }),
+      gitDriver,
+    })
+
+    const out = await orch.tick()
+
+    expect(out.kind).toBe('processed')
+    expect(gitDriver.state.commits).toEqual([
+      expect.objectContaining({
+        repoRoot: worktreePath,
+      }),
+    ])
+  })
+
+  it('commits dirty isolated task worktree changes before landing even when Git Story policy is ask', async () => {
+    const worktreePath = path.join(tmpDir, '.guildhall', 'worktrees', 'test-ws', 'task-ask')
+    await writeQueue([
+      mkTask({
+        id: 'task-ask',
+        status: 'gate_check',
+        worktreePath,
+        branchName: 'guildhall/task-ask',
+        baseBranch: 'main',
+      }),
+    ])
+
+    const gitDriver = new InMemoryGitDriver({ clean: true })
+    gitDriver.setStatusSummary(worktreePath, {
+      branch: 'guildhall/task-ask',
+      changedCount: 1,
+      untrackedCount: 0,
+      samplePaths: ['src/feature.ts'],
+      clean: false,
+    })
+    const gateChecker = stubAgent('gate-checker-agent', async () => {
+      await mutateTask('task-ask', { status: 'done' })
+    })
+
+    const orch = new Orchestrator({
+      config: baseConfig({
+        gitStory: {
+          completionTarget: 'open_pr',
+          commit: 'ask',
+          push: 'ask',
+          pullRequest: 'ask',
+          merge: 'ask',
+          localOnlyAllowed: true,
+          deferAllowed: true,
+          requireCleanRelease: true,
+          allowForcePush: false,
+          allowSharedBranchRebase: false,
+          discoveredFrom: [],
+        },
+      }),
+      agents: agentSet({ gateChecker }),
+      gitDriver,
+    })
+
+    await orch.tick()
+
+    expect(gitDriver.state.commits).toEqual([
+      expect.objectContaining({
+        repoRoot: worktreePath,
+      }),
+    ])
+    expect(gitDriver.state.cherryPicks).toEqual([
+      expect.objectContaining({
+        branch: 'guildhall/task-ask',
+        baseBranch: 'main',
+      }),
+    ])
+    expect(gitDriver.state.removedWorktrees).toEqual([worktreePath])
+  })
+
+  it('reconciles already-done isolated worktrees that were marked done before landing', async () => {
+    const worktreePath = path.join(tmpDir, '.guildhall', 'worktrees', 'test-ws', 'task-orphaned-done')
+    await writeQueue([
+      mkTask({
+        id: 'task-orphaned-done',
+        status: 'done',
+        worktreePath,
+        branchName: 'guildhall/task-orphaned-done',
+        baseBranch: 'main',
+      }),
+    ])
+
+    const gitDriver = new InMemoryGitDriver({ clean: true })
+    gitDriver.setStatusSummary(worktreePath, {
+      branch: 'guildhall/task-orphaned-done',
+      changedCount: 2,
+      untrackedCount: 1,
+      samplePaths: ['src/feature.ts', 'src/feature.test.ts', 'src/new.ts'],
+      clean: false,
+    })
+
+    const orch = new Orchestrator({
+      config: baseConfig({
+        gitStory: {
+          completionTarget: 'open_pr',
+          commit: 'ask',
+          push: 'ask',
+          pullRequest: 'ask',
+          merge: 'ask',
+          localOnlyAllowed: true,
+          deferAllowed: true,
+          requireCleanRelease: true,
+          allowForcePush: false,
+          allowSharedBranchRebase: false,
+          discoveredFrom: [],
+        },
+      }),
+      agents: agentSet(),
+      gitDriver,
+    })
+
+    const out = await orch.tick()
+
+    expect(out.kind).toBe('idle')
+    expect(gitDriver.state.commits).toEqual([
+      expect.objectContaining({
+        repoRoot: worktreePath,
+      }),
+    ])
+    expect(gitDriver.state.cherryPicks).toEqual([
+      expect.objectContaining({
+        branch: 'guildhall/task-orphaned-done',
+        baseBranch: 'main',
+      }),
+    ])
+    expect(gitDriver.state.removedWorktrees).toEqual([worktreePath])
+    const q = await readQueue()
+    expect(q.tasks[0]?.mergeRecord).toMatchObject({
+      result: 'merged',
+      fromBranch: 'guildhall/task-orphaned-done',
+      toBranch: 'main',
+    })
+  })
+
+  it('marks pending PR tasks done and removes the worktree once the PR is merged', async () => {
+    const worktreePath = path.join(tmpDir, '.guildhall', 'worktrees', 'test-ws', 'task-pr')
+    await writeQueue([
+      mkTask({
+        id: 'task-pr',
+        status: 'pending_pr',
+        worktreePath,
+        branchName: 'guildhall/task-pr',
+        baseBranch: 'main',
+        mergeRecord: {
+          fromBranch: 'guildhall/task-pr',
+          toBranch: 'main',
+          strategy: 'manual_pr',
+          result: 'pending_pr',
+          prUrl: 'https://github.test/org/repo/pull/12',
+          mergedAt: '2026-05-01T00:00:00.000Z',
+        },
+      }),
+    ])
+
+    const gitDriver = new InMemoryGitDriver({ clean: true })
+    gitDriver.setPullRequest(tmpDir, {
+      ok: true,
+      url: 'https://github.test/org/repo/pull/12',
+      state: 'MERGED',
+      mergeStateStatus: 'UNKNOWN',
+    })
+
+    const orch = new Orchestrator({
+      config: baseConfig(),
+      agents: agentSet(),
+      gitDriver,
+    })
+
+    const out = await orch.tick()
+
+    expect(out.kind).toBe('idle')
+    expect(gitDriver.state.removedWorktrees).toEqual([worktreePath])
+    const q = await readQueue()
+    expect(q.tasks[0]?.status).toBe('done')
+    expect(q.tasks[0]?.mergeRecord).toMatchObject({
+      result: 'merged',
+      fromBranch: 'guildhall/task-pr',
+      toBranch: 'main',
+      prUrl: 'https://github.test/org/repo/pull/12',
+    })
   })
 
   it('stopAfterOneTask stops immediately when exploring work is waiting on the user', async () => {
@@ -6519,7 +7073,7 @@ describe('Orchestrator.run — full loops', () => {
     await writeQueue([mkTask({ id: 'a', status: 'in_progress', domain: 'looma' })])
 
     let ticks = 0
-    const markerPath = path.join(memoryDir, 'stop-requested')
+    const markerPath = path.join(getProjectLocalHistoryDir(tmpDir), 'stop-requested')
     const stopSignal = { stopRequested: false }
 
     const agents: OrchestratorAgentSet = {
@@ -6555,9 +7109,9 @@ describe('Orchestrator.run — full loops', () => {
 
   it('processes three unblocked tasks in one unattended run', async () => {
     await writeQueue([
-      mkTask({ id: 'a', status: 'ready', spec: 'approved spec', domain: 'looma' }),
-      mkTask({ id: 'b', status: 'ready', spec: 'approved spec', domain: 'looma' }),
-      mkTask({ id: 'c', status: 'ready', spec: 'approved spec', domain: 'looma' }),
+      mkTask({ id: 'a', status: 'ready', spec: VALID_SPEC, domain: 'looma' }),
+      mkTask({ id: 'b', status: 'ready', spec: VALID_SPEC, domain: 'looma' }),
+      mkTask({ id: 'c', status: 'ready', spec: VALID_SPEC, domain: 'looma' }),
     ])
 
     const mutateCurrentTask = (next: TaskStatus) => async (prompt: string) => {
@@ -6613,7 +7167,7 @@ describe('Orchestrator.run — full loops', () => {
       stdio: 'ignore',
     })
     await writeQueue([
-      mkTask({ id: 'done-ish', status: 'ready', spec: 'approved spec', domain: 'looma' }),
+      mkTask({ id: 'done-ish', status: 'ready', spec: VALID_SPEC, domain: 'looma' }),
       mkTask({
         id: 'question',
         status: 'exploring',
@@ -6814,6 +7368,89 @@ describe('Orchestrator.tick — FR-10 escalations', () => {
       ],
     })
     expect(task?.notes.at(-1)?.content).toContain('repair the failed verification')
+  })
+
+  it('keeps worker-owned verification environment claims out of the human queue', async () => {
+    const worktreePath = path.join(tmpDir, '.guildhall', 'worktrees', 'listing-form')
+    await fs.mkdir(path.join(worktreePath, 'frontend', 'app', 'pages', 'listings'), { recursive: true })
+    execFileSync('git', ['init', '-b', 'main'], { cwd: worktreePath, stdio: 'ignore' })
+    execFileSync('git', ['config', 'user.name', 'Guildhall Test'], {
+      cwd: worktreePath,
+      stdio: 'ignore',
+    })
+    execFileSync('git', ['config', 'user.email', 'guildhall-tests@example.com'], {
+      cwd: worktreePath,
+      stdio: 'ignore',
+    })
+    await fs.writeFile(path.join(worktreePath, '.gitignore'), 'node_modules/\n', 'utf-8')
+    execFileSync('git', ['add', '.gitignore'], { cwd: worktreePath, stdio: 'ignore' })
+    execFileSync('git', ['commit', '--no-verify', '-m', 'init'], {
+      cwd: worktreePath,
+      stdio: 'ignore',
+    })
+    await fs.writeFile(
+      path.join(worktreePath, 'frontend', 'app', 'pages', 'listings', 'new.vue'),
+      '<template><form>listing</form></template>\n',
+      'utf-8',
+    )
+    await writeQueue([
+      mkTask({
+        id: 'task-listing',
+        title: 'Basic project listing',
+        status: 'blocked',
+        assignedTo: null,
+        blockReason:
+          "spec_ambiguous: Verification commands don't work in this environment but implementation is complete",
+        projectPath: 'frontend/',
+        worktreePath,
+        acceptanceCriteria: [{
+          id: 'ac-1',
+          description: 'build passes',
+          verifiedBy: 'automated',
+          command: 'pnpm build',
+          met: false,
+        } as any],
+        escalations: [
+          {
+            id: 'esc-task-listing-1',
+            taskId: 'task-listing',
+            agentId: 'worker-agent',
+            reason: 'spec_ambiguous',
+            summary:
+              "Verification commands don't work in this environment but implementation is complete",
+            details:
+              'The implementation is complete at frontend/app/pages/listings/new.vue, but the verification commands cannot run because the package setup appears unavailable.',
+            raisedAt: '2026-04-01T00:00:01Z',
+          },
+        ],
+      }),
+    ])
+    const worker = {
+      ...stubAgent('worker-agent'),
+      loadToolMetadata() {
+        return {}
+      },
+    }
+    const orch = new Orchestrator({
+      config: baseConfig(),
+      agents: agentSet({ worker }),
+      gitDriver: new InMemoryGitDriver({ clean: false }),
+    })
+
+    const outcome = await orch.tick()
+
+    expect(outcome.kind).toBe('processed')
+    const queue = await readQueue()
+    const task = queue.tasks.find((candidate) => candidate.id === 'task-listing')
+    expect(task?.status).toBe('in_progress')
+    expect(task?.assignedTo).toBe('worker-agent')
+    expect(task?.blockReason ?? null).toBeNull()
+    expect(task?.escalations[0]?.resolvedBy, JSON.stringify(task, null, 2)).toBe('system')
+    expect(task?.escalations[0]?.resolution).toContain('kept the task in automation')
+    expect(task?.notes.some((note) =>
+      note.role === 'recovery' &&
+      note.content.includes('keep the decision in automation'),
+    )).toBe(true)
   })
 
   it('skips tasks with open escalations even if status is not blocked', async () => {
@@ -7346,7 +7983,7 @@ describe('Orchestrator.tick — FR-21 proposal promotion', () => {
       now: () => '2026-04-20T12:00:00Z',
     })
     await orch.tick()
-    const progress = await fs.readFile(progressPath, 'utf-8')
+    const progress = await fs.readFile(getProjectProgressHeartbeatsPath(tmpDir), 'utf-8')
     expect(progress).toContain('HEARTBEAT')
     expect(progress).toContain('proposal-promoter')
     expect(progress).toContain('auto_promote')
@@ -7619,7 +8256,7 @@ describe('Orchestrator.tick — FR-22 pre-rejection policy', () => {
       now: () => '2026-04-20T12:00:00Z',
     })
     await orch.tick()
-    const progress = await fs.readFile(progressPath, 'utf-8')
+    const progress = await fs.readFile(getProjectProgressHeartbeatsPath(tmpDir), 'utf-8')
     expect(progress).toContain('HEARTBEAT')
     expect(progress).toContain('pre-rejection-policy')
     expect(progress).toContain('requeue_lower_priority')
@@ -8015,7 +8652,7 @@ describe('Orchestrator — FR-33 reclaim detection', () => {
       filesTouched: string[]
     }> = {},
   ): Promise<void> {
-    const dir = path.join(memoryDir, 'tasks', taskId)
+    const dir = getProjectTaskLocalHistoryDir(tmpDir, taskId)
     await fs.mkdir(dir, { recursive: true })
     const cp = {
       taskId,
@@ -8364,7 +9001,7 @@ describe('Orchestrator — FR-32 remediation wiring', () => {
 })
 
 describe('Orchestrator worker no-progress escalation', () => {
-  it('escalates an in-progress worker task after repeated no-op passes with likely target files', async () => {
+  it('gives the worker five no-op passes before escalating likely-target no-progress', async () => {
     const worktreePath = path.join(tmpDir, '.guildhall', 'worktrees', 'task-011')
     await fs.mkdir(path.join(worktreePath, 'web', 'tests', 'unit', 'composables'), { recursive: true })
     await writeQueue([
@@ -8395,19 +9032,21 @@ describe('Orchestrator worker no-progress escalation', () => {
       gitDriver,
     })
 
-    const first = await orch.tick({ dispatchLimit: 1 })
-    expect(first.kind).toBe('processed')
-    if (first.kind === 'processed') expect(first.transitioned).toBe(false)
+    for (let pass = 1; pass < 5; pass += 1) {
+      const outcome = await orch.tick({ dispatchLimit: 1 })
+      expect(outcome.kind).toBe('processed')
+      if (outcome.kind === 'processed') expect(outcome.transitioned).toBe(false)
+    }
 
-    const second = await orch.tick({ dispatchLimit: 1 })
-    expect(second.kind).toBe('escalated')
-    if (second.kind === 'escalated') expect(second.reason).toContain('Worker made no visible progress')
+    const fifth = await orch.tick({ dispatchLimit: 1 })
+    expect(fifth.kind).toBe('escalated')
+    if (fifth.kind === 'escalated') expect(fifth.reason).toContain('Worker made no visible progress')
 
     const queue = await readQueue()
     const task = queue.tasks.find((candidate) => candidate.id === 'task-011')
     expect(task?.status).toBe('blocked')
     expect(task?.escalations.length).toBe(1)
-    expect(task?.escalations[0]?.summary).toContain('Worker made no visible progress')
+    expect(task?.escalations[0]?.summary).toContain('Worker made no visible progress after 5 passes')
     expect(task?.notes.find((note) => note.role === 'policy-classification')?.content)
       .toContain('"class":"model_tool_use_failure"')
   })
@@ -8478,14 +9117,17 @@ describe('Orchestrator worker no-progress escalation', () => {
       agents: agentSet({ worker }),
     })
 
-    const first = await orch.tick({ dispatchLimit: 1 })
-    expect(first.kind).toBe('processed')
+    for (let pass = 1; pass < 5; pass += 1) {
+      const outcome = await orch.tick({ dispatchLimit: 1 })
+      expect(outcome.kind).toBe('processed')
+      if (outcome.kind === 'processed') expect(outcome.agent).toBe('worker-agent')
+    }
 
-    const second = await orch.tick({ dispatchLimit: 1 })
-    expect(second.kind).toBe('processed')
-    if (second.kind === 'processed') {
-      expect(second.agent).toBe('coordinator-remediation')
-      expect(second.afterStatus).toBe('in_progress')
+    const fifth = await orch.tick({ dispatchLimit: 1 })
+    expect(fifth.kind).toBe('processed')
+    if (fifth.kind === 'processed') {
+      expect(fifth.agent).toBe('coordinator-remediation')
+      expect(fifth.afterStatus).toBe('in_progress')
     }
 
     let queue = await readQueue()
@@ -8498,17 +9140,20 @@ describe('Orchestrator worker no-progress escalation', () => {
     const decisions = await fs.readFile(path.join(memoryDir, 'DECISIONS.md'), 'utf-8')
     expect(decisions).toMatch(/Remediation: restart_from_checkpoint/)
 
-    const third = await orch.tick({ dispatchLimit: 1 })
-    expect(third.kind).toBe('processed')
+    for (let pass = 1; pass < 5; pass += 1) {
+      const outcome = await orch.tick({ dispatchLimit: 1 })
+      expect(outcome.kind).toBe('processed')
+      if (outcome.kind === 'processed') expect(outcome.agent).toBe('worker-agent')
+    }
 
-    const fourth = await orch.tick({ dispatchLimit: 1 })
-    expect(fourth.kind).toBe('escalated')
-    if (fourth.kind === 'escalated') expect(fourth.reason).toContain('Worker made no visible progress')
+    const tenth = await orch.tick({ dispatchLimit: 1 })
+    expect(tenth.kind).toBe('escalated')
+    if (tenth.kind === 'escalated') expect(tenth.reason).toContain('Worker made no visible progress')
 
     queue = await readQueue()
     task = queue.tasks.find((candidate) => candidate.id === 'task-blank')
     expect(task?.status).toBe('blocked')
-    expect(task?.escalations[0]?.summary).toContain('Worker made no visible progress')
+    expect(task?.escalations[0]?.summary).toContain('Worker made no visible progress after 5 passes')
     expect(task?.notes.find((note) => note.role === 'policy-classification')?.content)
       .toContain('"class":"model_tool_use_failure"')
   })
@@ -8576,15 +9221,17 @@ describe('Orchestrator worker no-progress escalation', () => {
       gitDriver,
     })
 
-    const first = await orch.tick({ dispatchLimit: 1 })
-    expect(first.kind).toBe('processed')
-    if (first.kind === 'processed') expect(first.agent).toBe('worker-agent')
+    for (let pass = 1; pass < 5; pass += 1) {
+      const outcome = await orch.tick({ dispatchLimit: 1 })
+      expect(outcome.kind).toBe('processed')
+      if (outcome.kind === 'processed') expect(outcome.agent).toBe('worker-agent')
+    }
 
-    const second = await orch.tick({ dispatchLimit: 1 })
-    expect(second.kind).toBe('processed')
-    if (second.kind === 'processed') {
-      expect(second.agent).toBe('coordinator-remediation')
-      expect(second.afterStatus).toBe('in_progress')
+    const fifth = await orch.tick({ dispatchLimit: 1 })
+    expect(fifth.kind).toBe('processed')
+    if (fifth.kind === 'processed') {
+      expect(fifth.agent).toBe('coordinator-remediation')
+      expect(fifth.afterStatus).toBe('in_progress')
     }
 
     const queue = await readQueue()

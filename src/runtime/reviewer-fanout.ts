@@ -1,5 +1,6 @@
 import type { GuildDefinition } from '@guildhall/guilds'
 import type { ReviewVerdict, AdjudicationRecord, Task } from '@guildhall/core'
+import type { ReviewPlanRecord, ReviewRiskLane } from './review-audit-store.js'
 
 /**
  * Reviewer fan-out: at `review`, each applicable persona produces an
@@ -62,6 +63,71 @@ export type ReviewerFanoutPolicy =
   | 'coordinator_adjudicates_on_conflict'
   | 'advisory'
   | 'majority'
+
+const REVIEW_LANE_GUILD_HINTS: Record<ReviewRiskLane, string[]> = {
+  ux_comprehension: ['component-designer', 'visual-designer', 'frontend-engineer'],
+  copy_clarity: ['copywriter'],
+  visual_design: ['visual-designer', 'component-designer', 'color-theorist'],
+  accessibility: ['accessibility-specialist'],
+  security: ['security-engineer'],
+  privacy: ['security-engineer', 'project-manager'],
+  api_contract: ['api-designer', 'backend-engineer'],
+  data_integrity: ['backend-engineer', 'typescript-engineer'],
+  migration_safety: ['backend-engineer', 'test-engineer'],
+  test_adequacy: ['test-engineer'],
+  performance: ['performance-engineer'],
+  docs_truth: ['copywriter', 'project-manager'],
+  release_risk: ['project-manager', 'test-engineer'],
+  plan_completeness: ['project-manager'],
+  evidence_privacy: ['security-engineer', 'project-manager'],
+  calibration_governance: ['project-manager', 'test-engineer'],
+  cost_control: ['project-manager', 'performance-engineer'],
+  rollout_safety: ['project-manager', 'backend-engineer'],
+}
+
+export function selectReviewersForPlan(
+  personas: readonly GuildDefinition[],
+  reviewPlan: ReviewPlanRecord | null | undefined,
+): GuildDefinition[] {
+  const cap = reviewPlan?.budget.maxReviewerAgents
+  if (!cap || cap >= personas.length) return [...personas]
+
+  const selectedLanes = reviewPlan.selectedLanes
+  const selected: GuildDefinition[] = []
+  const selectedSlugs = new Set<string>()
+  for (const lane of selectedLanes) {
+    const laneHints = REVIEW_LANE_GUILD_HINTS[lane] ?? []
+    const persona = laneHints
+      .map((slug) => personas.find((candidate) => candidate.slug === slug))
+      .find((candidate): candidate is GuildDefinition => !!candidate && !selectedSlugs.has(candidate.slug))
+    if (!persona) continue
+    selected.push(persona)
+    selectedSlugs.add(persona.slug)
+    if (selected.length >= cap) return selected
+  }
+
+  const scores = new Map<string, number>()
+  for (const lane of selectedLanes) {
+    for (const slug of REVIEW_LANE_GUILD_HINTS[lane] ?? []) {
+      scores.set(slug, (scores.get(slug) ?? 0) + 1)
+    }
+  }
+
+  return personas
+    .filter((persona) => !selectedSlugs.has(persona.slug))
+    .map((persona, index) => ({
+      persona,
+      index,
+      score: scores.get(persona.slug) ?? 0,
+    }))
+    .sort((a, b) => {
+      if (b.score !== a.score) return b.score - a.score
+      return a.index - b.index
+    })
+    .slice(0, Math.max(1, cap - selected.length))
+    .map((entry) => entry.persona)
+    .reduce((out, persona) => [...out, persona], selected)
+}
 
 /**
  * Parse a single persona's output into a structured verdict. The persona

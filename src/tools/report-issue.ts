@@ -1,6 +1,7 @@
 import { defineTool } from '@guildhall/engine'
 import { z } from 'zod'
 import fs from 'node:fs/promises'
+import path from 'node:path'
 import {
   AgentIssue,
   AgentIssueCode,
@@ -10,7 +11,7 @@ import {
   type Task,
 } from '@guildhall/core'
 import { logProgress } from './memory-tools.js'
-import { atomicWriteText } from '@guildhall/sessions'
+import { atomicWriteText, appendTaskEvidence, inferProjectRootFromMemoryDir } from '@guildhall/sessions'
 
 // ---------------------------------------------------------------------------
 // FR-31 Agent-issue channel
@@ -88,6 +89,16 @@ export async function reportIssue(input: ReportIssueInput): Promise<ReportIssueR
     queue.lastUpdated = now
 
     atomicWriteText(parsed.tasksPath, JSON.stringify(queue, null, 2) + '\n')
+    await appendTaskEvidence(
+      inferProjectRootFromMemoryDir(path.dirname(parsed.tasksPath)),
+      task.id,
+      {
+        id: issue.id,
+        kind: 'agent_issue',
+        recordedAt: now,
+        payload: issue,
+      },
+    ).catch(() => undefined)
 
     if (parsed.progressPath) {
       const entry: ProgressEntry = {

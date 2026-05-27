@@ -99,7 +99,7 @@ describe('CoordinatorsTab', () => {
     expect(screen.queryByText('Imported draft should not count')).toBeNull()
 
     await userEvent.click(screen.getAllByRole('button', { name: /view routing/i })[0]!)
-    expect(path.value).toBe('/routing/frontend')
+    expect(path.value).toBe('/projects/looma-knit/routing/frontend')
   })
 
   it('renders one selected routing slice with policy detail and visible tasks', async () => {

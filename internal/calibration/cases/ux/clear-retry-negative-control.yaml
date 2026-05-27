@@ -1,0 +1,31 @@
+id: clear-retry-negative-control
+title: Clear retry negative control
+domain: ux
+productType: developer-tool
+surfaceType: cli
+userGoal: Retry a failed local command with the right next action.
+scenario: A CLI command fails because no config file exists and prints the exact init command to create one.
+artifacts:
+  - id: cli-error
+    kind: copy_snippet
+    description: Terminal error output.
+    content: "No guildhall.yaml found. Run `guildhall init` in this project, then retry `guildhall serve`."
+reviewLanes:
+  - ux_comprehension
+  - copy_clarity
+knownFindings: []
+falsePositiveTraps:
+  - id: dont-invent-recovery-gap
+    summary: The output already names the missing file, the setup command, and the retry command.
+source:
+  kind: external_example
+  citation: Synthetic CLI negative control based on standard command-line recovery patterns.
+labelGovernance:
+  labeledBy: product-review
+  labeledAt: 2026-05-25T12:00:00.000Z
+  reviewStatus: seed
+privacyClassification: public
+negativeControl: true
+stalenessPolicy:
+  reviewAfter: 2026-11-25
+  reason: CLI recovery conventions may change.

@@ -403,6 +403,18 @@ describe('agent factories', () => {
     expect(prompt).toContain('starting inventory')
   })
 
+  it('createSpecAgent includes the pressure-test intake operating contract', () => {
+    const a = createSpecAgent(llm)
+    const prompt = (a as unknown as { engine: { getSystemPrompt(): string } }).engine.getSystemPrompt()
+    expect(prompt).toContain('Pressure-Test Intake')
+    expect(prompt).toContain('Ask exactly one user-facing question')
+    expect(prompt).toContain('producer self-critique')
+    expect(prompt).toContain('Transcript is evidence, not the planner')
+    expect(prompt).toContain('`body`/`prompt` is only the exact answerable question')
+    expect(prompt).toContain('`subject` is a short topic')
+    expect(prompt).toContain('`description` is the context')
+  })
+
   it('createWorkerAgent registers shell + file tools', async () => {
     const a = createWorkerAgent(llm)
     expect(a.name).toBe('worker-agent')
@@ -822,7 +834,7 @@ describe('GuildhallAgent — FR-20 session persistence', () => {
     expect(reloader.messages).toHaveLength(2)
     expect(reloader.messages[0]?.role).toBe('user')
     expect(reloader.messages[1]?.role).toBe('assistant')
-    expect(reloader.totalUsage).toEqual({ input_tokens: 5, output_tokens: 3 })
+    expect(reloader.totalUsage).toEqual({ input_tokens: 5, output_tokens: 3, cached_input_tokens: 0 })
   })
 
   it('can ignore completed snapshots when only pending continuation should resume', async () => {
@@ -923,7 +935,7 @@ describe('GuildhallAgent — FR-20 session persistence', () => {
 
     await agent.generate('first user prompt')
     expect(agent.messages).toHaveLength(2)
-    expect(agent.totalUsage).toEqual({ input_tokens: 5, output_tokens: 3 })
+    expect(agent.totalUsage).toEqual({ input_tokens: 5, output_tokens: 3, cached_input_tokens: 0 })
 
     agent.resetConversation()
 

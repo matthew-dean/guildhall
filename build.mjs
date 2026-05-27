@@ -4,7 +4,7 @@
 
 import { build, context } from 'esbuild'
 import esbuildSvelte from 'esbuild-svelte'
-import { cpSync, existsSync, mkdirSync, rmSync, chmodSync, readFileSync } from 'node:fs'
+import { cpSync, existsSync, mkdirSync, rmSync, chmodSync, readFileSync, writeFileSync } from 'node:fs'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { spawnSync } from 'node:child_process'
@@ -18,9 +18,8 @@ const WEB_OUT_DIR = join(OUT_DIR, 'web')
 const ICONS_SRC = resolve(ROOT, 'icons')
 const WEB_ICONS_OUT_DIR = join(WEB_OUT_DIR, 'icons')
 
-const EXTERNALS = Object.keys(
-  JSON.parse(readFileSync(resolve(ROOT, 'package.json'), 'utf8')).dependencies ?? {},
-)
+const manifest = JSON.parse(readFileSync(resolve(ROOT, 'package.json'), 'utf8'))
+const EXTERNALS = Object.keys(manifest.dependencies ?? {})
 
 /**
  * After the bundle is emitted, copy static assets that are loaded at runtime
@@ -64,6 +63,38 @@ function cleanDist() {
 function copyWebIcons() {
   if (!existsSync(ICONS_SRC)) return
   cpSync(ICONS_SRC, WEB_ICONS_OUT_DIR, { recursive: true })
+}
+
+function gitOutput(args, fallback = 'unknown') {
+  const result = spawnSync('git', args, {
+    cwd: ROOT,
+    encoding: 'utf8',
+    stdio: ['ignore', 'pipe', 'ignore'],
+  })
+  if (result.status !== 0) return fallback
+  const value = result.stdout.trim()
+  return value.length > 0 ? value : fallback
+}
+
+function writeBuildInfo() {
+  const status = gitOutput(['status', '--porcelain=v1', '--untracked-files=all'], '')
+  const commit = gitOutput(['rev-parse', 'HEAD'])
+  const shortCommit = commit === 'unknown'
+    ? 'unknown'
+    : gitOutput(['rev-parse', '--short=12', 'HEAD'], commit.slice(0, 12))
+  const branch = gitOutput(['branch', '--show-current'])
+  const payload = {
+    version: manifest.version ?? 'unknown',
+    builtAt: new Date().toISOString(),
+    git: {
+      commit,
+      shortCommit,
+      branch,
+      dirty: status.length > 0,
+    },
+    source: 'build',
+  }
+  writeFileSync(join(OUT_DIR, 'build-info.json'), `${JSON.stringify(payload, null, 2)}\n`)
 }
 
 const buildOptions = {
@@ -142,6 +173,7 @@ cleanDist()
 mkdirSync(WEB_OUT_DIR, { recursive: true })
 copyWebIcons()
 extractHelpTopics()
+writeBuildInfo()
 
 if (watch) {
   const ctx = await context(buildOptions)

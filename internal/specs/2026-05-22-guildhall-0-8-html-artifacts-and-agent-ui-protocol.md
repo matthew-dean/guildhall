@@ -6,6 +6,11 @@ title: HTML artifacts and agent UI protocol
 
 **Status:** `0.7.0` guardrail seed, `0.8.0` feature candidate
 
+**Release scope:** use
+`internal/plans/2026-05-24-guildhall-0-8-mvp-tracker.md` as the current 0.8.0
+MVP source of truth. Only the smallest already-tested artifact proof belongs in
+0.8.0; the richer generated UI protocol is deferred to 0.9.0 or later.
+
 This note explores whether Guildhall should move beyond Markdown for agent
 communication and planning artifacts. It is inspired by Claire Vo's ChatPRD
 interview with Thariq Shihipar about using HTML with Claude Code, plus a local

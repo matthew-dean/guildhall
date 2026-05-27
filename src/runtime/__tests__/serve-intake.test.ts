@@ -4,14 +4,18 @@ import path from 'node:path'
 import os from 'node:os'
 import { bootstrapWorkspace } from '@guildhall/config'
 import { TaskQueue } from '@guildhall/core'
+import { getProjectStateDir } from '@guildhall/sessions'
 import { buildServeApp } from '../serve.js'
 
 let tmpDir: string
+let dataDir: string
 let tasksPath: string
 let projectId: string
 
 beforeEach(async () => {
   tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'guildhall-intake-'))
+  dataDir = path.join(os.tmpdir(), `guildhall-data-${path.basename(tmpDir)}`)
+  process.env.GUILDHALL_DATA_DIR = dataDir
   projectId = bootstrapWorkspace(tmpDir, {
     name: 'Intake Test',
     coordinators: [
@@ -37,10 +41,12 @@ beforeEach(async () => {
       },
     ],
   }).id ?? path.basename(tmpDir)
-  tasksPath = path.join(tmpDir, 'memory', 'TASKS.json')
+  tasksPath = path.join(getProjectStateDir(tmpDir), 'TASKS.json')
 })
 
 afterEach(async () => {
+  delete process.env.GUILDHALL_DATA_DIR
+  await fs.rm(dataDir, { recursive: true, force: true })
   await fs.rm(tmpDir, { recursive: true, force: true })
 })
 
@@ -129,6 +135,81 @@ describe('POST /api/project/intake', () => {
     const queue = await readQueue()
     expect(queue.tasks[0]?.domain).toBe('knit')
     expect(queue.tasks[0]?.projectPath).toBe(path.join(tmpDir, 'knit'))
+  })
+})
+
+describe('POST /api/project/request', () => {
+  it('starts pressure-test intake for release ideas', async () => {
+    const { app } = buildServeApp({ projectPath: tmpDir })
+    const res = await app.fetch(new Request(projectUrl('/api/project/request'), {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ ask: 'For 0.8.0, pressure-test intake is my top priority.' }),
+    }))
+
+    expect(res.status).toBe(200)
+    const body = await res.json() as {
+      routedActions?: Array<{ kind?: string; intakeTarget?: { type?: string; pressureTestRequired?: boolean } }>
+      pressureTestIntake?: { status?: string; activeDomainId?: string }
+    }
+    expect(body.routedActions?.[0]).toMatchObject({
+      kind: 'pressure_test_intake',
+      intakeTarget: { type: 'release', pressureTestRequired: true },
+    })
+    expect(body.pressureTestIntake).toMatchObject({
+      status: 'active',
+      activeDomainId: 'product-goals',
+    })
+  })
+
+  it('preserves ordinary task intake behavior', async () => {
+    const { app } = buildServeApp({ projectPath: tmpDir })
+    const res = await app.fetch(new Request(projectUrl('/api/project/request'), {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ ask: 'Add a loading spinner to Providers.' }),
+    }))
+
+    expect(res.status).toBe(200)
+    const body = await res.json() as {
+      routedActions?: Array<{ kind?: string }>
+      taskId?: string
+    }
+    expect(body.routedActions?.[0]?.kind).toBe('task_spec')
+    expect(body.taskId).toMatch(/^task-/)
+    const queue = await readQueue()
+    expect(queue.tasks[0]?.request).toMatchObject({
+      kind: 'task_spec',
+      raw: 'Add a loading spinner to Providers.',
+      routingSummary: 'Routed to Task Intake',
+    })
+  })
+
+  it('keeps project questions visible as routed project-question requests', async () => {
+    const { app } = buildServeApp({ projectPath: tmpDir })
+    const res = await app.fetch(new Request(projectUrl('/api/project/request'), {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ ask: 'What commands should I run before release?' }),
+    }))
+
+    expect(res.status).toBe(200)
+    const body = await res.json() as {
+      routedActions?: Array<{ kind?: string; safety?: string; intakeTarget?: { nextStep?: string } }>
+      taskId?: string
+    }
+    expect(body.routedActions?.[0]).toMatchObject({
+      kind: 'project_question',
+      safety: 'read-only',
+      intakeTarget: { nextStep: 'answer-question' },
+    })
+    expect(body.taskId).toMatch(/^task-/)
+    const queue = await readQueue()
+    expect(queue.tasks[0]?.request).toMatchObject({
+      kind: 'project_question',
+      raw: 'What commands should I run before release?',
+      routingSummary: 'Routed to Project Question',
+    })
   })
 })
 

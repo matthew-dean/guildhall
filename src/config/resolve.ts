@@ -2,7 +2,7 @@ import { resolve, join, isAbsolute } from 'node:path'
 import { readGlobalConfig } from './global-config.js'
 import { readWorkspaceConfig, resolveMemoryDir, readAgentSettings } from './workspace-config.js'
 import { readProjectConfig } from './project-config.js'
-import { ResolvedConfig, defaultModelsForProvider, mergeModels, resolveModelsForProvider, slugify } from './schemas.js'
+import { ResolvedConfig, defaultModelsForProvider, mergeModelBehavior, mergeModels, resolveModelsForProvider, slugify } from './schemas.js'
 import type { WorkspaceYamlConfig, AgentSettings } from './schemas.js'
 
 // ---------------------------------------------------------------------------
@@ -10,7 +10,7 @@ import type { WorkspaceYamlConfig, AgentSettings } from './schemas.js'
 //
 // Priority (highest → lowest):
 //   1. Environment variables (LM_STUDIO_BASE_URL, etc.)
-//   2. memory/agent-overrides.yaml ← agents write learned project behavior here
+//   2. .guildhall/agent-overrides.yaml ← agents write learned project behavior here
 //   3. guildhall.yaml              ← human project intent
 //   4. ~/.guildhall/config.yaml    ← global model/runtime defaults
 //   5. Built-in defaults           ← Zod schema defaults
@@ -90,7 +90,7 @@ export function resolveConfig(opts: ResolveOptions): ResolvedConfig {
   // Layer 2: workspace config (guildhall.yaml)
   const workspaceRaw = readWorkspaceConfig(workspacePath)
 
-  // Layer 3: agent-accumulated overrides (memory/agent-overrides.yaml)
+  // Layer 3: agent-accumulated overrides (.guildhall/agent-overrides.yaml)
   const agentSettings = readAgentSettings(workspacePath)
 
   // Apply agent settings on top of guildhall.yaml
@@ -104,6 +104,7 @@ export function resolveConfig(opts: ResolveOptions): ResolvedConfig {
     resolveModelsForProvider(workspace.models, preferredProvider),
     defaultModelsForProvider(preferredProvider),
   )
+  const modelBehavior = mergeModelBehavior(global.modelBehavior, workspace.modelBehavior)
 
   // Resolve project path
   const projectPath = workspace.projectPath
@@ -113,7 +114,7 @@ export function resolveConfig(opts: ResolveOptions): ResolvedConfig {
   // Workspace id
   const workspaceId = workspace.id ?? slugify(workspace.name)
 
-  // Memory dir is always <workspacePath>/memory
+  // Shared project-state dir is always <workspacePath>/.guildhall.
   const memoryDir = resolveMemoryDir(workspacePath)
 
   // Environment variable overrides (highest priority)
@@ -147,6 +148,7 @@ export function resolveConfig(opts: ResolveOptions): ResolvedConfig {
     landingBranch: project.landingBranch,
     memoryDir,
     models,
+    modelBehavior,
     coordinators,
     maxRevisions: workspace.maxRevisions ?? global.maxRevisions,
     heartbeatInterval: workspace.heartbeatInterval ?? global.heartbeatInterval,
@@ -159,6 +161,7 @@ export function resolveConfig(opts: ResolveOptions): ResolvedConfig {
     ...(workspace.mcp ? { mcp: workspace.mcp } : {}),
     ...(workspace.bootstrap ? { bootstrap: workspace.bootstrap } : {}),
     ...(workspace.worktree ? { worktree: workspace.worktree } : {}),
+    gitStory: project.gitStory ?? workspace.gitStory ?? global.gitStory,
   })
 
   return resolved

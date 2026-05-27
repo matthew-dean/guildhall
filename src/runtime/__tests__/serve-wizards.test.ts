@@ -11,17 +11,23 @@ import { existsSync, readFileSync } from 'node:fs'
 import path from 'node:path'
 import os from 'node:os'
 import { bootstrapWorkspace } from '@guildhall/config'
+import { getProjectStateDir } from '@guildhall/sessions'
 import { buildServeApp } from '../serve.js'
 
 let tmpDir: string
+let dataDir: string
 let projectId: string
 
 beforeEach(async () => {
   tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'guildhall-serve-wizards-'))
+  dataDir = path.join(os.tmpdir(), `guildhall-data-${path.basename(tmpDir)}`)
+  process.env.GUILDHALL_DATA_DIR = dataDir
   projectId = bootstrapWorkspace(tmpDir, { name: 'Wizards Test' }).id ?? path.basename(tmpDir)
 })
 
 afterEach(async () => {
+  delete process.env.GUILDHALL_DATA_DIR
+  await fs.rm(dataDir, { recursive: true, force: true })
   await fs.rm(tmpDir, { recursive: true, force: true })
 })
 
@@ -34,7 +40,7 @@ function projectUrl(route: string): string {
 describe('GET /api/project/wizards', () => {
   it('returns onboard wizard with step statuses derived from on-disk facts', async () => {
     const { app } = buildServeApp({ projectPath: tmpDir })
-    const res = await app.fetch(new Request('http://localhost/api/project/wizards'))
+    const res = await app.fetch(new Request(projectUrl('/api/project/wizards')))
     expect(res.status).toBe(200)
     const body = (await res.json()) as {
       wizards: Array<{
@@ -57,7 +63,7 @@ describe('GET /api/project/wizards', () => {
 })
 
 describe('POST /api/project/wizards/:id/skip', () => {
-  it('marks a skippable step as skipped and writes memory/wizards.yaml', async () => {
+  it('marks a skippable step as skipped and writes .guildhall/wizards.yaml', async () => {
     const { app } = buildServeApp({ projectPath: tmpDir })
     const res = await app.fetch(
       new Request(projectUrl('/api/project/wizards/onboard/skip'), {
@@ -67,10 +73,10 @@ describe('POST /api/project/wizards/:id/skip', () => {
       }),
     )
     expect(res.status).toBe(200)
-    expect(existsSync(path.join(tmpDir, 'memory', 'wizards.yaml'))).toBe(true)
+    expect(existsSync(path.join(getProjectStateDir(tmpDir), 'wizards.yaml'))).toBe(true)
 
     // Next GET reflects the skip.
-    const res2 = await app.fetch(new Request('http://localhost/api/project/wizards'))
+    const res2 = await app.fetch(new Request(projectUrl('/api/project/wizards')))
     const body = (await res2.json()) as {
       wizards: Array<{ steps: Array<{ id: string; status: string }> }>
     }
@@ -107,7 +113,7 @@ describe('POST /api/project/wizards/:id/skip', () => {
       }),
     )
     expect(res.status).toBe(200)
-    const res2 = await app.fetch(new Request('http://localhost/api/project/wizards'))
+    const res2 = await app.fetch(new Request(projectUrl('/api/project/wizards')))
     const body = (await res2.json()) as {
       wizards: Array<{ steps: Array<{ id: string; status: string }> }>
     }
@@ -132,7 +138,7 @@ describe('POST /api/project/coordinators/seed', () => {
     expect(body.added).toBe(2)
 
     // Onboard wizard's routing step should now be done.
-    const res2 = await app.fetch(new Request('http://localhost/api/project/wizards'))
+    const res2 = await app.fetch(new Request(projectUrl('/api/project/wizards')))
     const wb = (await res2.json()) as {
       wizards: Array<{ steps: Array<{ id: string; status: string }> }>
     }
@@ -176,7 +182,7 @@ describe('POST /api/project/coordinators/seed', () => {
 describe('GET /api/project/brief', () => {
   it('returns empty current + empty seeds when no README/ROADMAP', async () => {
     const { app } = buildServeApp({ projectPath: tmpDir })
-    const res = await app.fetch(new Request('http://localhost/api/project/brief'))
+    const res = await app.fetch(new Request(projectUrl('/api/project/brief')))
     expect(res.status).toBe(200)
     const body = (await res.json()) as {
       current: string
@@ -197,7 +203,7 @@ describe('GET /api/project/brief', () => {
       '# Roadmap\n\n## Milestone 1\n\nbody\n\n## Milestone 2\n\nbody\n',
     )
     const { app } = buildServeApp({ projectPath: tmpDir })
-    const res = await app.fetch(new Request('http://localhost/api/project/brief'))
+    const res = await app.fetch(new Request(projectUrl('/api/project/brief')))
     const body = (await res.json()) as {
       seed: { readme: string; roadmap: string[] }
     }
@@ -208,7 +214,7 @@ describe('GET /api/project/brief', () => {
 })
 
 describe('POST /api/project/brief', () => {
-  it('writes memory/project-brief.md when content is substantive', async () => {
+  it('writes .guildhall/project-brief.md when content is substantive', async () => {
     const { app } = buildServeApp({ projectPath: tmpDir })
     const res = await app.fetch(
       new Request(projectUrl('/api/project/brief'), {
@@ -221,12 +227,12 @@ describe('POST /api/project/brief', () => {
       }),
     )
     expect(res.status).toBe(200)
-    const briefPath = path.join(tmpDir, 'memory', 'project-brief.md')
+    const briefPath = path.join(getProjectStateDir(tmpDir), 'project-brief.md')
     expect(existsSync(briefPath)).toBe(true)
     expect(readFileSync(briefPath, 'utf8')).toMatch(/## Users/)
 
     // Onboard direction step flips to done.
-    const res2 = await app.fetch(new Request('http://localhost/api/project/wizards'))
+    const res2 = await app.fetch(new Request(projectUrl('/api/project/wizards')))
     const wb = (await res2.json()) as {
       wizards: Array<{ steps: Array<{ id: string; status: string }> }>
     }

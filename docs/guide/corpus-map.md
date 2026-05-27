@@ -14,15 +14,17 @@ exists somewhere else.
 
 ## What it stores
 
-Guildhall writes the map under `./memory/`:
+Guildhall writes the shared map under `./.guildhall/` and keeps bulky refresh
+history local:
 
 | File | Purpose |
 |---|---|
-| `./memory/codebase-map.yaml` | Current compact map. |
-| `./memory/codebase-map.history.jsonl` | Refresh history and why each refresh ran. |
-| `./memory/codebase-map.stale.json` | Last refresh failure, if the map could not be rebuilt. |
-| `./memory/codebase-map.overrides.yaml` | Human or learned corrections layered over automatic discovery. |
-| `./memory/design-system.yaml` | Optional project design-system source summarized into the map. |
+| `./.guildhall/codebase-map.yaml` | Current compact map. |
+| `~/.guildhall/data/projects/<project-hash>/codebase-map/codebase-map.full.yaml` | Full local map snapshot when the committed map is compacted. |
+| `~/.guildhall/data/projects/<project-hash>/codebase-map.history.jsonl` | Refresh history and why each refresh ran. |
+| `~/.guildhall/data/projects/<project-hash>/codebase-map.stale.json` | Last refresh failure, if the map could not be rebuilt. |
+| `./.guildhall/codebase-map.overrides.yaml` | Human or learned corrections layered over automatic discovery. |
+| `./.guildhall/design-system.yaml` | Optional project design-system source summarized into the map. |
 
 The map contains:
 
@@ -53,7 +55,7 @@ The builder starts with a Git-aware file list:
 6. Extract lightweight symbols and imports.
 7. Group files into areas.
 8. Detect reusable abstractions.
-9. Summarize the project design system when `./memory/design-system.yaml`
+9. Summarize the project design system when `./.guildhall/design-system.yaml`
    exists.
 10. Apply any overrides.
 11. Save the map and append a history event.
@@ -103,7 +105,7 @@ fits together:
 - `.gitignore`
 - `AGENTS.md`
 - `./guildhall.yaml`
-- `./memory/design-system.yaml`
+- `./.guildhall/design-system.yaml`
 - schema/version changes
 - very large touched-file sets
 - missing or corrupt previous maps
@@ -111,9 +113,10 @@ fits together:
 This keeps refreshes cheap during normal work while still avoiding stale
 architecture guidance after project-wide changes.
 
-## How agents use it
+## How Agents Use It
 
-The context builder turns the map into a small prompt block:
+Before a worker edits, Guildhall can give it a small orientation note from the
+map. A UI task, for example, might include this kind of nudge:
 
 ```md
 ## Corpus Map
@@ -137,29 +140,28 @@ Reuse / Extend:
 Read next:
 - ./src/web/lib/Button.svelte: Reuse Command buttons
 
-Corpus fit required: before editing, name the existing primitive, helper,
-package, design token, component, or area you are extending.
+Before editing, name the existing primitive, helper, package, design token,
+component, or area you are extending.
 ```
 
-That block is intentionally small. It points the helper toward the right
+That note is intentionally small. It points the worker toward the right
 starting files and abstractions; it does not ask the model to trust the map
 blindly.
 
 ## Evaluation ladder
 
 Guildhall tests context-indexer models against a ladder rather than a single
-repository. Each rung isolates a different failure mode:
+repository. Each rung checks a different kind of project:
 
-| Rung | Project | Corpus | Why |
-|---|---|---|---|
-| 1 | `narrative-harness` | Documentation and product intent | Proves the indexer can summarize specs, decisions, and future architecture without inventing implementation details. |
-| 2 | `linecraft` | Small-to-medium code | Proves the indexer can map real source structure, canonical modules, and verification entrypoints at practical cost. |
-| 3 | Guildhall UI slice | Design-system reuse | Proves the indexer can identify shared UI primitives and warn when repeated one-off styles should become a small abstraction. |
-| 4 | `jess` | Hard architecture | Proves the indexer still gives bounded, accurate guidance in a deeper compiler/parser codebase. |
+| Rung | Corpus shape | What it checks |
+|---|---|---|
+| 1 | Documentation-heavy planning | Can it summarize specs, decisions, and future architecture without inventing implementation details? |
+| 2 | Small-to-medium codebase | Can it map real source structure, canonical modules, and verification entrypoints at practical cost? |
+| 3 | Design-system reuse slice | Can it steer UI work toward shared primitives instead of another one-off button? |
+| 4 | Hard architecture slice | Can it stay accurate in a deeper compiler/parser-style codebase? |
 
-The first two rungs are deliberately different. `narrative-harness` is mostly
-documentation, so it is a product-intent test. `linecraft` is the first real
-code-corpus test.
+The first two rungs are deliberately different. One is mostly documentation,
+so it is a product-intent test. The next is a real code-corpus test.
 
 ## CLI and Settings
 
@@ -196,7 +198,7 @@ do not.
 ## Design-system guidance
 
 The Corpus Map treats the design system as part of codebase orientation, not as
-a separate aesthetic checklist. When `./memory/design-system.yaml` exists,
+a separate aesthetic checklist. When `./.guildhall/design-system.yaml` exists,
 Guildhall records:
 
 - counts for color, spacing, typography, radius, and shadow tokens

@@ -1,0 +1,41 @@
+id: missing-keyboard-focus
+title: Missing keyboard focus
+domain: accessibility
+productType: commerce
+surfaceType: web-app
+userGoal: Complete checkout using only the keyboard.
+scenario: A custom payment method tile can be clicked with a pointer, but keyboard focus skips it and there is no visible focus state.
+artifacts:
+  - id: checkout-flow-steps
+    kind: flow_steps
+    description: Checkout interaction trace.
+    content: "Tab order: shipping address, delivery speed, pay button. Payment method tiles are clickable but not focusable."
+reviewLanes:
+  - accessibility
+  - ux_comprehension
+knownFindings:
+  - id: keyboard-inaccessible-control
+    lane: accessibility
+    severity: critical
+    summary: The payment method control is not keyboard reachable and has no focus indication.
+    impact: Keyboard and assistive-technology users cannot complete checkout reliably.
+    minimumUsefulFix: Make each payment method a semantic, focusable control with visible focus and keyboard activation.
+    matchHints:
+      - keyboard
+      - focus
+      - tab order
+falsePositiveTraps:
+  - id: not-color-only
+    summary: Do not reduce this case to color contrast; the primary issue is keyboard reachability.
+source:
+  kind: synthetic
+  citation: Created for cross-domain review calibration.
+labelGovernance:
+  labeledBy: review-calibration
+  labeledAt: 2026-05-25T12:00:00.000Z
+  reviewStatus: seed
+privacyClassification: public
+negativeControl: false
+stalenessPolicy:
+  reviewAfter: 2026-11-25
+  reason: Keyboard accessibility expectations are stable, but component patterns may change.

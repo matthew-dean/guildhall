@@ -21,7 +21,7 @@ How the orchestrator aggregates verdicts when multiple persona reviewers (guilds
 | `strict` | All reviewers must pass. Any reject blocks. |
 | `majority` | >50% must pass. Minority opposition is recorded but non-binding. |
 | `coordinator_adjudicates_on_conflict` | Unanimous pass → pass. Unanimous reject → reject. Split → coordinator decides. |
-| `advisory` | Verdicts are attached for humans to see but do not gate advancement. |
+| `advisory` | Verdicts are attached for you to see but do not gate advancement. |
 
 ## Picking per-domain
 

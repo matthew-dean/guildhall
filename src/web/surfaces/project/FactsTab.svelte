@@ -1,6 +1,6 @@
 <!--
   Project Facts — what the agent knows about this project, aggregated from
-  on-disk state (guildhall.yaml, memory/design-system.yaml, workspace-goals.json,
+  on-disk state (guildhall.yaml, .guildhall/design-system.yaml, workspace-goals.json,
   internal routing). Read-only for now; each section links out to the canonical
   place to modify.
 -->
@@ -10,7 +10,7 @@
   import { formatUserPath } from '../../lib/display-path.js'
   import { friendlyStewardName } from '../../lib/display.js'
   import { nav } from '../../lib/nav.svelte.js'
-  import { projectFetch } from '../../lib/project-routes.js'
+  import { projectActionHref, projectFetch } from '../../lib/project-routes.js'
 
   interface GateEntry {
     command?: string
@@ -63,7 +63,7 @@
   function editLink(href: string): (e: MouseEvent) => void {
     return (e: MouseEvent) => {
       e.preventDefault()
-      nav(href)
+      nav(projectActionHref(href))
     }
   }
 
@@ -131,12 +131,12 @@
 
     <Card title="Workspace discoveries">
       {#snippet actions()}
-        <a class="edit-link" href={facts.workspace.reviewHref} onclick={editLink(facts.workspace.reviewHref)}>Review →</a>
+        <a class="edit-link" href={projectActionHref(facts.workspace.reviewHref)} onclick={editLink(facts.workspace.reviewHref)}>Review →</a>
       {/snippet}
       {#if !facts.workspace.goals}
         <p class="muted">No scan run yet.</p>
       {:else if facts.workspace.goals.dismissed}
-        <p class="muted">Scan dismissed. <a href={facts.workspace.reviewHref} onclick={editLink(facts.workspace.reviewHref)}>Re-review</a>.</p>
+        <p class="muted">Scan dismissed. <a href={projectActionHref(facts.workspace.reviewHref)} onclick={editLink(facts.workspace.reviewHref)}>Re-review</a>.</p>
       {:else if facts.workspace.goals.imported}
         <dl class="kv">
           <dt>Goals</dt><dd>{facts.workspace.goals.goalCount}</dd>

@@ -13,9 +13,9 @@
  * into ONE of the four kinds — no free prose. Multiple choice is the
  * preferred kind whenever there's a small finite answer set, because the
  * UI degrades gracefully (Other... textbox) and the answer is structured.
- * The prompt itself must include enough plain-language context for a human
- * who has not read the source file: name the decision, why it matters, and
- * the evidence/source term if you use repo jargon such as a queue name.
+ * The prompt/body is the exact answerable question. Put the short topic in
+ * `subject` and supporting context in `description` so the Thread surface can
+ * highlight the actual ask instead of making the user parse a paragraph.
  */
 
 import { defineTool } from '@guildhall/engine'
@@ -43,6 +43,8 @@ const postUserQuestionInputSchema = z.object({
   body: z.string().optional().describe('Restatement (confirm) or prompt (yesno/choice/text)'),
   prompt: z.string().optional().describe('Alias for body when posting yesno/choice/text questions.'),
   restatement: z.string().optional().describe('Alias for body when posting confirm questions.'),
+  subject: z.string().optional().describe('Short topic label, 2-6 words, e.g. "AlertDialog variants".'),
+  description: z.string().optional().describe('Plain-language context for why the question matters. Do not put the answerable question here.'),
   /** Required when kind=choice. 2..6 distinct options in the user's voice. */
   choices: z
     .array(z.string())
@@ -85,6 +87,8 @@ function questionSignature(question: {
 interface InferredQuestion {
   kind: 'confirm' | 'yesno' | 'choice' | 'text'
   body: string
+  subject?: string
+  description?: string
   choices?: string[]
   selectionMode?: 'single' | 'multiple'
 }
@@ -140,15 +144,87 @@ function isQuestionListPrompt(promptBody: string): boolean {
   )
 }
 
+function isEvidenceSummaryPrompt(promptBody: string): boolean {
+  const normalized = promptBody
+    .replace(/^#{1,6}\s*/, '')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .toLowerCase()
+  return (
+    /^i have enough\b/.test(normalized) ||
+    /^ok,\s*i['’]ve hit the research budget\b/.test(normalized) ||
+    /^i['’]ve hit the research budget\b/.test(normalized) ||
+    /^let me (?:piece|synthesize|summarize|recap)\b/.test(normalized) ||
+    /^here'?s what i (?:found|know|learned|asked)\b/.test(normalized) ||
+    /^what i (?:found|know|learned)\b/.test(normalized)
+  )
+}
+
 function validateQuestionShape(input: {
   kind?: string
   body?: string
   choices?: string[]
 }): string | null {
+  if (input.body && /^what must .+ get right first\b/i.test(input.body.trim())) {
+    return 'question prompt appears to interpolate a title as grammar; write a complete human-readable question instead'
+  }
   if (input.kind === 'choice' && input.body && isQuestionListPrompt(input.body)) {
     return 'choice question choices must be answers to one prompt, not labels for separate questions'
   }
+  if (input.kind === 'choice' && input.body && isEvidenceSummaryPrompt(input.body)) {
+    return 'choice question prompt is research narration, not a user question; ask the decision directly and put notes in description'
+  }
   return null
+}
+
+function normalizeWhitespace(value: string): string {
+  return value.replace(/\s+/g, ' ').trim()
+}
+
+function sentenceCaseQuestion(value: string): string {
+  const trimmed = normalizeWhitespace(value).replace(/\s+\?/g, '?')
+  if (!trimmed) return trimmed
+  return trimmed.charAt(0).toUpperCase() + trimmed.slice(1)
+}
+
+function inferSubjectFromContext(context: string, question: string): string | undefined {
+  const ignored = new Set(['The', 'This', 'That', 'I'])
+  const component = [...context.matchAll(/\b([A-Z][A-Za-z0-9]+)\b/g)]
+    .map((match) => match[1])
+    .find((value): value is string => Boolean(value && !ignored.has(value)))
+  if (!component || ignored.has(component)) return undefined
+  if (/\bvariants?\b/i.test(question)) return `${component} variants`
+  return component
+}
+
+function rewriteQuestionWithSubject(question: string, subject: string | undefined): string {
+  const normalized = sentenceCaseQuestion(question)
+  if (!subject) return normalized
+  const component = subject.replace(/\s+variants?$/i, '').trim()
+  if (!component) return normalized
+  return normalized
+    .replace(/\bthe user\b/i, component)
+    .replace(/\buser\b/i, component)
+}
+
+function extractEmbeddedQuestion(text: string): InferredQuestion | null {
+  const trimmed = text.trim()
+  const match = trimmed.match(
+    /\b(?:the\s+)?(?:key|main|top|only|focused)?\s*question(?:\s+i\s+need\s+to\s+ask|\s+we\s+need\s+to\s+answer|\s+to\s+answer)?(?:\s+before\s+[^:\n]+)?\s*(?:is|:)\s*([\s\S]*?\?)/i,
+  )
+  if (!match || match.index === undefined) return null
+  const rawQuestion = match[1]?.trim() ?? ''
+  if (!rawQuestion) return null
+  const context = normalizeWhitespace(trimmed.slice(0, match.index))
+    .replace(/^i have enough context\.?\s*/i, '')
+  const subject = inferSubjectFromContext(context, rawQuestion)
+  const body = rewriteQuestionWithSubject(rawQuestion, subject)
+  return {
+    kind: 'text',
+    body,
+    ...(subject ? { subject } : {}),
+    ...(context ? { description: context } : {}),
+  }
 }
 
 function resolveQuestionDefaults(
@@ -167,6 +243,9 @@ function resolveQuestionDefaults(
 function inferQuestionsFromAssistantText(text: string): InferredQuestion[] {
   const trimmed = text.trim()
   if (!trimmed) return []
+
+  const embeddedQuestion = extractEmbeddedQuestion(trimmed)
+  if (embeddedQuestion) return [embeddedQuestion]
 
   const simplePickOne = trimmed.match(/^pick one:\s*(.+)$/im)
   if (simplePickOne) {
@@ -194,6 +273,7 @@ function inferQuestionsFromAssistantText(text: string): InferredQuestion[] {
     if (!promptLike) continue
     if (isPlanningPrompt(promptBody)) continue
     if (isQuestionListPrompt(promptBody)) continue
+    if (isEvidenceSummaryPrompt(promptBody)) continue
     const summaryLike =
       /i['’]ll draft the full spec with\b|i will draft the full spec with\b|once you (?:pick|answer).+i['’]ll draft\b/i
         .test(promptBody)
@@ -282,7 +362,7 @@ function inferQuestionsFromAssistantText(text: string): InferredQuestion[] {
 }
 
 function resolveQuestionPayload(
-  input: Pick<PostUserQuestionInput, 'kind' | 'body' | 'prompt' | 'restatement' | 'choices' | 'selectionMode'>,
+  input: Pick<PostUserQuestionInput, 'kind' | 'body' | 'prompt' | 'restatement' | 'subject' | 'description' | 'choices' | 'selectionMode'>,
   metadata: Record<string, unknown>,
 ): InferredQuestion | { error: string } {
   const resolvedBody = input.body
@@ -292,6 +372,8 @@ function resolveQuestionPayload(
     const payload = {
       kind: input.kind,
       body: resolvedBody,
+      ...(input.subject ? { subject: input.subject } : {}),
+      ...(input.description ? { description: input.description } : {}),
       ...(input.choices ? { choices: input.choices } : {}),
       ...(input.selectionMode ? { selectionMode: input.selectionMode } : {}),
     }
@@ -345,9 +427,25 @@ export async function postUserQuestion(
 
     const question =
       input.kind === 'confirm'
-        ? { kind: 'confirm' as const, id, askedBy: input.askedBy, askedAt: now, restatement: input.body }
+        ? {
+            kind: 'confirm' as const,
+            id,
+            askedBy: input.askedBy,
+            askedAt: now,
+            restatement: input.body,
+            ...(input.subject ? { subject: input.subject } : {}),
+            ...(input.description ? { description: input.description } : {}),
+          }
         : input.kind === 'yesno'
-          ? { kind: 'yesno' as const, id, askedBy: input.askedBy, askedAt: now, prompt: input.body }
+          ? {
+              kind: 'yesno' as const,
+              id,
+              askedBy: input.askedBy,
+              askedAt: now,
+              prompt: input.body,
+              ...(input.subject ? { subject: input.subject } : {}),
+              ...(input.description ? { description: input.description } : {}),
+            }
           : input.kind === 'choice'
             ? {
                 kind: 'choice' as const,
@@ -355,10 +453,20 @@ export async function postUserQuestion(
                 askedBy: input.askedBy,
                 askedAt: now,
                 prompt: input.body,
+                ...(input.subject ? { subject: input.subject } : {}),
+                ...(input.description ? { description: input.description } : {}),
                 choices: input.choices!,
                 ...(input.selectionMode ? { selectionMode: input.selectionMode } : {}),
               }
-            : { kind: 'text' as const, id, askedBy: input.askedBy, askedAt: now, prompt: input.body }
+            : {
+                kind: 'text' as const,
+                id,
+                askedBy: input.askedBy,
+                askedAt: now,
+                prompt: input.body,
+                ...(input.subject ? { subject: input.subject } : {}),
+                ...(input.description ? { description: input.description } : {}),
+              }
 
     const existing = task.openQuestions ?? []
     const existingOpenDuplicate = existing.find((item) => {
@@ -390,7 +498,7 @@ export async function postUserQuestion(
 export const postUserQuestionTool = defineTool({
   name: 'post-user-question',
   description:
-    "Post an asynchronous structured question to the user on this task. Use this whenever you need human judgment to proceed — the question lands in the user's Thread feed with a kind-specific affordance, and you should yield (end your turn) so the orchestrator can resume you when an answer arrives. PREFER `kind: 'choice'` whenever the answer space is small and discrete (it always degrades to Other... free-text). For choice questions, set `selectionMode: 'multiple'` when more than one answer may apply; otherwise set `selectionMode: 'single'` or omit it. Use `confirm` to restate intent before committing. Use `yesno` only for genuinely binary calls. Use `text` sparingly — usually a multiple choice with the question phrased as the prompt is better. Every prompt must stand alone: explain the source fact or term you are asking about, why the decision matters, and what happens after the answer. NEVER bury questions in productBrief.userJob — that field is for what you think the user wants, not for asking them.",
+    "Post an asynchronous structured question to the user on this task. Use this whenever you need human judgment to proceed — the question lands in the user's Thread feed with a kind-specific affordance, and you should yield (end your turn) so the orchestrator can resume you when an answer arrives. PREFER `kind: 'choice'` whenever the answer space is small and discrete (it always degrades to Other... free-text). For choice questions, set `selectionMode: 'multiple'` when more than one answer may apply; otherwise set `selectionMode: 'single'` or omit it. Use `confirm` to restate intent before committing. Use `yesno` only for genuinely binary calls. Use `text` sparingly — usually a multiple choice with the question phrased as the prompt is better. `body`/`prompt` must be only the exact answerable question or restatement, not setup prose. Put a short topic in `subject` and the source fact, why it matters, and what happens next in `description`. NEVER write prompts like \"The key question I need to ask is...\". NEVER bury questions in productBrief.userJob — that field is for what you think the user wants, not for asking them.",
   inputSchema: postUserQuestionInputSchema,
   jsonSchema: {
     type: 'object',
@@ -402,6 +510,8 @@ export const postUserQuestionTool = defineTool({
       body: { type: 'string', description: 'Restatement for confirm, or prompt for yesno/choice/text.' },
       prompt: { type: 'string', description: 'Alias for body on yesno/choice/text questions.' },
       restatement: { type: 'string', description: 'Alias for body on confirm questions.' },
+      subject: { type: 'string', description: 'Short topic label for the question, e.g. "AlertDialog variants".' },
+      description: { type: 'string', description: 'Plain-language context; the answerable question belongs in body/prompt.' },
       choices: {
         type: 'array',
         items: { type: 'string' },
@@ -435,6 +545,8 @@ export const postUserQuestionTool = defineTool({
       askedBy: resolved.askedBy,
       kind: payload.kind,
       body: payload.body,
+      ...(payload.subject ? { subject: payload.subject } : {}),
+      ...(payload.description ? { description: payload.description } : {}),
       ...(payload.choices ? { choices: payload.choices } : {}),
       ...(payload.selectionMode ? { selectionMode: payload.selectionMode } : {}),
     })

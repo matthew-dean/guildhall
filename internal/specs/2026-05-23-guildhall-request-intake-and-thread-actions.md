@@ -6,6 +6,11 @@ title: Request intake and thread-routed actions
 
 **Status:** `0.8.0` exploration candidate
 
+**Release scope:** use
+`internal/plans/2026-05-24-guildhall-0-8-mvp-tracker.md` as the current 0.8.0
+MVP source of truth. This spec preserves broader design context; candidate
+slices not named in the tracker are deferred to 0.9.0 or later.
+
 Guildhall should replace the narrow **New task** affordance with **New request**:
 one plain-language entry point where a user can say what they want, and Guildhall
 decides which product flow should handle it.
@@ -75,6 +80,8 @@ Examples:
 - "Create a Copywriter persona" becomes a persona proposal flow.
 - "Make the worker more cautious globally" becomes a settings/lever candidate,
   probably with a confirmation card.
+- "FLL is blocked on unapplied migrations" becomes a guided operational
+  unblocker, not a failed task.
 
 ### Thread Card
 
@@ -308,6 +315,58 @@ Example catalog entries:
   confirmation: true
 ```
 
+## Guided Operational Unblockers
+
+Some routed actions are not ordinary code tasks. They are operational blockers
+where the user, their hosting provider, or an external service must perform a
+step that Guildhall cannot safely complete by itself. The product failure mode
+to avoid is "blocked because migrations are not run" with no practical help.
+
+When Guildhall sees a blocker such as an unapplied migration, missing Supabase
+link, Vercel environment variable, GitHub secret, failed deployment, or required
+CI rerun, it should route to a guided operational unblocker card.
+
+The contract is:
+
+1. Inspect first. Check repo scripts, migration folders, provider config,
+   `.github/workflows`, docs, existing task notes, and project memory before
+   asking the user what to do.
+2. Identify the fastest safe path and any safer alternate paths. For a Supabase
+   migration, for example, Guildhall might choose between local CLI, linked
+   remote CLI, dashboard SQL editor, or an existing GitHub workflow based on
+   what the repo actually supports.
+3. Show one step at a time with the exact command, dashboard path, required
+   environment, expected output, and what could go wrong.
+4. Offer action buttons such as `I've done that`, `Show another way`, `This
+   failed`, and `I don't have access`.
+5. After `I've done that`, verify with available tools when possible. If
+   Guildhall cannot verify directly, ask for the smallest proof needed, such as
+   pasted command output or a deployment URL.
+6. Advance to the next step or mark the blocker cleared only after verification
+   or explicit user confirmation.
+
+The card should sound like useful operator help:
+
+> Good news: this is not a code problem. The app is blocked because the remote
+> database has not received the pending migration. From this repo, the lowest
+> friction path appears to be the Supabase CLI. Do this first...
+
+The generated steps must come from inspected project evidence. Guildhall should
+not hard-code a universal Supabase, Vercel, or GitHub Actions recipe and hope it
+fits.
+
+Operational unblockers should persist as blocker records with:
+
+- the detected blocker;
+- inspected evidence;
+- recommended path and alternates;
+- each user-performed step;
+- verification evidence;
+- final cleared/failed/deferred status.
+
+This lets the next agent resume the operational runbook instead of rediscovering
+why the project is stuck.
+
 ## Thread as the Interaction Spine
 
 The Thread should become less like a Kanban board and more like a chronological
@@ -358,15 +417,68 @@ Dedicated routes should be lenses over these cards:
 Guildhall should draw a hard line between portable project state and local
 history.
 
+The default project-owned state root should be `.guildhall/`. A root-level
+`memory/` folder is too ambiguous: it looks like generic project content, makes
+ownership unclear, and risks surprising teams with large agent-generated diffs.
+Existing root `memory/` projects can stay readable through a compatibility
+bridge, but new writes should prefer `.guildhall/` unless the user explicitly
+configures another location.
+
+Guildhall should treat memory as several different stores, not one pile of
+files:
+
+- **Working context:** short-lived context assembled for the current request or
+  task. It should be regenerated and is not committed.
+- **Semantic project facts:** compact, durable facts, decisions, vocabulary,
+  assumptions, blockers, and accepted preferences that workers/reviewers need.
+  These belong in project-owned `.guildhall` assets.
+- **Procedural memory:** approved practices, personas, levers, and project
+  runbooks. These can be project-owned when they are part of how the team wants
+  the repo worked on.
+- **Episodic history:** chronological thread events, tool traces, card render
+  snapshots, and "what happened last time" records. This belongs in
+  user-system metadata by default, with compact summaries copied into project
+  state only when they matter.
+- **Archival logs:** raw transcripts, provider logs, model traces, screenshots,
+  and bulky audit material. These should be local/exportable, pinned when
+  needed, and not committed by default.
+
+This follows the useful pattern from current agent-memory systems without
+copying their storage shape directly: keep a small working set in context,
+separate semantic facts from episodic history and procedural skills, retrieve
+or compact older material instead of dumping it all into the prompt, and
+consolidate raw history into durable facts only when it has earned that
+promotion.
+
 Project-owned `.guildhall` assets should keep the durable facts needed for the
 project to make sense when moved, cloned, backed up, or opened on another
 machine:
 
 - current tasks/specs and their durable statuses;
+- active staging/planning state, including intake targets, domain coverage,
+  assumptions, deferrals, task splits, and release/feature plans;
 - current settings overrides and approved personas/practices;
 - recent action summaries needed to render a minimum Thread;
 - project decisions, blockers, and evidence that workers/reviewers need;
 - pointers to artifacts that belong with the project.
+
+The clone contract is important: if a teammate checks out the same repo on
+another machine, they should not have the full local transcript, but they should
+not have to intake the project from scratch. Guildhall should be able to
+reconstruct the current project shape, active plans, tasks, specs, decisions,
+language map, personas/practices, settings, and known blockers from committed
+project state unless the team explicitly chose to ignore those files.
+
+Project-owned memory should be boring in PRs. It should prefer structured facts
+and compact summaries over raw transcripts:
+
+- keep accepted facts, decisions, definitions, and runbook steps;
+- keep provenance pointers to the answer, file, task, command, or review that
+  produced the fact;
+- keep current blockers and the latest meaningful status;
+- keep compact task/release/action summaries when they explain project state;
+- avoid committing full conversation scrollback, tool logs, repeated status
+  events, render snapshots, or large generated histories by default.
 
 User-system metadata should keep the rich local audit experience:
 
@@ -383,11 +495,27 @@ The minimum Thread is reconstructed from project-owned action summaries. The
 full Thread is an enriched local projection that Guildhall can rebuild or extend
 from user-system metadata when available.
 
+To prevent PR bloat, Guildhall should add explicit memory-diff guardrails:
+
+- size budgets for committed `.guildhall` memory files;
+- compaction before write when a fact file grows beyond the budget;
+- generated/raw history paths ignored by default;
+- PR summaries that explain meaningful memory changes in plain language;
+- a review warning when a change would commit bulky transcripts, tool traces, or
+  many generated memory files;
+- a "promote to project memory" action for moving a local lesson into the
+  committed project facts after user approval.
+
 ### Detailed History Retention
 
 User-system Thread metadata should be bounded per project. "Full history" means
 "full within the configured retention window plus pinned audit records," not
 "append forever."
+
+Default retention should be generous. Local space is cheaper than lost context,
+and Guildhall should not compact useful history just because it is a little old.
+The goal is not premature cleanup. The goal is to prevent silent unbounded
+growth over a long enough timeline.
 
 Default retention should balance usefulness, privacy, performance, and disk
 growth:
@@ -400,6 +528,19 @@ growth:
 - compact older unpinned events into summaries before deletion;
 - preserve project-owned minimum Thread summaries separately from local detailed
   history retention.
+
+For 0.8.0, these numbers should be treated as product placeholders, not final
+limits. A more realistic default may be much larger, such as hundreds of MB per
+active project or a year of detailed local history, as long as Guildhall has a
+clear ceiling and a visible cleanup path. The important behavior is:
+
+- never let local history grow forever without at least a soft warning;
+- prefer lazy compaction after a project exceeds both age and size thresholds;
+- preserve exact user requests, user answers, approvals, final specs, blocker
+  resolutions, and review/gate outcomes longer than noisy status events;
+- keep raw transcripts locally until they become old, huge, or both;
+- delete raw local data only after compact summaries and indexes exist, unless
+  the user requests immediate cleanup.
 
 Records that should be pin-protected:
 
@@ -425,6 +566,9 @@ Retention should be configurable globally and overridable per project:
 - `detailedHistory.maxEvents`;
 - `detailedHistory.maxAgeDays`;
 - `detailedHistory.maxStorageMb`;
+- `detailedHistory.warnAtStorageMb`;
+- `detailedHistory.rawTranscriptMaxAgeDays`;
+- `detailedHistory.rawTranscriptMaxStorageMb`;
 - `detailedHistory.pinAuditRecords`;
 - `detailedHistory.compactionMode`: `conservative`, `balanced`, or `aggressive`.
 
@@ -432,6 +576,19 @@ If a project exceeds storage limits, Guildhall should explain what will be
 compacted before doing anything destructive. Routine compaction can run quietly
 when it only replaces local detailed events with local summaries and leaves
 project-owned minimum Thread records untouched.
+
+The UI should expose local history health without making it feel like chores:
+
+- total local history size per project;
+- oldest retained raw transcript;
+- pinned audit records;
+- what would be compacted next;
+- actions for `Compact now`, `Keep more history`, `Export archive`, and
+  `Delete local history`.
+
+Deleting local history should never delete committed project state. It should
+degrade the project from full local Thread detail to the minimum shared project
+history.
 
 ## Existing Card Detection
 
@@ -547,6 +704,24 @@ The second invariant: losing local user-system metadata should degrade the Threa
 from "full audit scrollback" to "minimum project action history," not break the
 project or pollute the project with every UI/audit event.
 
+### Human-Owned YAML
+
+Guildhall should write configuration and project memory YAML as files a person
+would not resent editing.
+
+The emitter should use structured YAML serialization, but the output style should
+be idiomatic:
+
+- do not quote keys unless YAML requires it;
+- do not quote simple strings unless the value would be ambiguous;
+- use stable field order so diffs are readable;
+- prefer block strings for multiline prose;
+- keep comments/provenance concise and attached to the relevant field;
+- avoid rewriting the whole file when only one fact changed.
+
+Tests should cover representative `guildhall.yaml`, practice, persona, language
+map, and memory outputs so over-quoting does not silently come back.
+
 ## Safety and Confirmation Rules
 
 The intake agent may route read-only actions immediately. It should ask for
@@ -606,6 +781,15 @@ user explicitly asks for separate tasks."
   rendering the entire history at once.
 - Project data can reconstruct a minimum useful Thread even when full local
   Thread metadata is unavailable.
+- Project memory defaults to `.guildhall/`, separates committed facts from local
+  episodic history, and warns before committing bulky generated history.
+- A clean clone with committed Guildhall project state can resume current
+  staging, planning, tasks, specs, decisions, and settings without repeating
+  project intake from scratch.
+- Operational blockers can become guided unblocker cards with inspected
+  project-specific steps, user confirmation buttons, and verification state.
+- Generated `guildhall.yaml` and related YAML files are minimally quoted,
+  stable, and comfortable to review by hand.
 - Global or durable behavior changes require confirmation.
 - Routing decisions leave enough evidence for review and future learning.
 

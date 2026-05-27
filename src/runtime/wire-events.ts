@@ -2,6 +2,7 @@ import type { BackendEvent } from '@guildhall/backend-host'
 import type { AgentIssue } from '@guildhall/core'
 
 import type { TickOutcome } from './tick-outcome.js'
+import { userFacingText } from './user-facing-text.js'
 
 /**
  * FR-16: map an orchestrator TickOutcome to an OHJSON backend event.
@@ -143,12 +144,9 @@ function humanizeAgentError(agent: string, taskId: string, error: string): strin
     return 'Saved a recovery checkpoint after the model stopped responding clearly.'
   }
   if (/Model returned an empty assistant message/.test(error)) {
-    return (
-      `${agent} got an empty model reply while working on ${taskId}. ` +
-      `Guildhall kept the task state intact; retry the run or switch providers if this keeps happening.`
-    )
+    return userFacingText(error)
   }
-  return `Agent ${agent} failed on ${taskId}: ${error}`
+  return `Agent ${agent} failed on ${taskId}: ${userFacingText(error, error)}`
 }
 
 /**

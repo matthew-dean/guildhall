@@ -1,6 +1,7 @@
 import fs from 'node:fs/promises'
 import { existsSync } from 'node:fs'
 import path from 'node:path'
+import { getProjectLocalHistoryDir, inferProjectRootFromMemoryDir } from '@guildhall/sessions'
 
 // ---------------------------------------------------------------------------
 // FR-28: cooperative-shutdown marker + process registry.
@@ -25,7 +26,7 @@ import path from 'node:path'
 export const STOP_REQUESTED_FILENAME = 'stop-requested'
 
 export function stopRequestedPath(memoryDir: string): string {
-  return path.join(memoryDir, STOP_REQUESTED_FILENAME)
+  return path.join(getProjectLocalHistoryDir(inferProjectRootFromMemoryDir(memoryDir)), STOP_REQUESTED_FILENAME)
 }
 
 /**

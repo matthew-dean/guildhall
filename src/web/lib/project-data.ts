@@ -8,7 +8,7 @@ export const THREAD_PHASE_LABELS: Record<ThreadPhase, string> = {
   intake: 'Intake',
   spec: 'Spec',
   ready: 'Ready',
-  inflight: 'In flight',
+  inflight: 'Work',
   blocked: 'Blocked',
   done: 'Completed updates',
 }
@@ -43,14 +43,6 @@ export function buildThreadPhaseGroups<T extends ThreadPhaseLike>(turns: T[]): A
           : group.phase === 'inflight' &&
               group.turns.some((turn) => isRecoveryTurnLike(turn))
             ? 'Needs recovery'
-          : group.phase === 'inflight' &&
-              group.turns.length > 0 &&
-              !group.turns.some((turn) => turn.liveAgent) &&
-              (
-                group.turns.every((turn) => turn.kind === 'inflight') ||
-                group.turns.some((turn) => turn.kind === 'inflight' && turn.taskStatus === 'in_progress')
-              )
-            ? 'Paused'
             : THREAD_PHASE_LABELS[group.phase],
     }))
     .filter((group) => group.turns.length > 0)

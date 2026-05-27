@@ -1,9 +1,11 @@
 import { z } from 'zod'
+import { TaskSizePlan } from './task-sizing.js'
 
 // ---------------------------------------------------------------------------
 // Task status lifecycle (FR-01)
 //    proposed ─┐
-// import_draft ┼→ exploring → spec_review → ready → in_progress → review → gate_check → done
+// import_draft ┼→ exploring → spec_review ┬→ ready → in_progress → review → gate_check → done
+//                                      └→ parent (split container; child tasks hold the runnable work)
 //              │                                                     ↘ blocked
 //              └─────────────────────────→ shelved (worker pre-rejection, FR-22)
 //
@@ -20,6 +22,7 @@ const TaskStatusValue = z.enum([
   'import_draft',  // Workspace-imported draft that still needs shaping before normal intake begins
   'exploring',     // Conversational intake — Spec Agent is building the spec with the user (FR-12)
   'spec_review',   // Spec drafted; awaiting human or coordinator approval
+  'parent',        // Split container; linked child tasks carry the runnable work
   'ready',         // Spec approved, ready for a worker to pick up
   'in_progress',   // Assigned to a worker agent
   'review',        // Worker done, awaiting reviewer agent
@@ -57,6 +60,14 @@ export type PreRejectionCode = z.infer<typeof PreRejectionCode>
 
 export const TaskPriority = z.enum(['critical', 'high', 'normal', 'low'])
 export type TaskPriority = z.infer<typeof TaskPriority>
+
+export const TaskHold = z.object({
+  previousStatus: TaskStatus,
+  reason: z.string().optional(),
+  heldAt: z.string(),
+  heldBy: z.string(),
+})
+export type TaskHold = z.infer<typeof TaskHold>
 
 // FR-15: per-task permission mode override. Semantic ordering (narrowest →
 // widest) is plan < default < full_auto. A per-task mode may only *narrow*
@@ -185,6 +196,15 @@ export const EscalationReason = z.enum([
 ])
 export type EscalationReason = z.infer<typeof EscalationReason>
 
+export const ExternalBlockerStep = z.object({
+  id: z.string(),
+  title: z.string(),
+  detail: z.string().optional(),
+  owner: z.enum(['user', 'guildhall', 'external']).default('user'),
+  status: z.enum(['todo', 'done', 'blocked']).default('todo'),
+})
+export type ExternalBlockerStep = z.infer<typeof ExternalBlockerStep>
+
 export const Escalation = z.object({
   id: z.string(),                             // stable id, e.g. `esc-<taskId>-<n>`
   taskId: z.string(),
@@ -192,6 +212,7 @@ export const Escalation = z.object({
   reason: EscalationReason,
   summary: z.string(),                        // Human-readable one-liner
   details: z.string().optional(),             // Full context for the human
+  externalChecklist: z.array(ExternalBlockerStep).optional(),
   raisedAt: z.string(),                       // ISO timestamp
   resolvedAt: z.string().optional(),          // Set once resolved
   resolution: z.string().optional(),          // Human's response / decision
@@ -227,6 +248,10 @@ const AgentQuestionBase = {
   /** Which agent asked (spec-agent, coordinator, etc.). */
   askedBy: z.string(),
   askedAt: z.string(),
+  /** Short topic label, e.g. "AlertDialog variants". */
+  subject: z.string().optional(),
+  /** Plain-language context that explains why the question matters. */
+  description: z.string().optional(),
   /** Persisted-but-unsubmitted answer draft shown back to the user on reload. */
   draftAnswer: z.string().optional(),
   /** ISO timestamp when the user answered, or undefined if still open. */
@@ -413,6 +438,63 @@ export const AcceptanceCriteria = z.preprocess(normalizeAcceptanceCriteria, z.ob
 }))
 export type AcceptanceCriteria = z.infer<typeof AcceptanceCriteria>
 
+export const TaskRequestKind = z.enum([
+  'task_spec',
+  'project_question',
+  'settings_proposal',
+  'persona_practice_proposal',
+  'repair_triage',
+  'clarification',
+])
+export type TaskRequestKind = z.infer<typeof TaskRequestKind>
+
+export const TaskRequest = z.object({
+  id: z.string(),
+  raw: z.string(),
+  kind: TaskRequestKind,
+  title: z.string(),
+  routingSummary: z.string(),
+  createdAt: z.string(),
+})
+export type TaskRequest = z.infer<typeof TaskRequest>
+
+export const RequestIntakeComponentKind = z.enum([
+  'policy_decision',
+  'documented_spec',
+  'implementation',
+  'verification',
+  'data_model',
+  'ui_surface',
+  'api_contract',
+  'release_plan',
+])
+export type RequestIntakeComponentKind = z.infer<typeof RequestIntakeComponentKind>
+
+export const RequestIntake = z.object({
+  intent: z.enum([
+    'spec_only',
+    'implementation',
+    'ambiguous_spec_or_implementation',
+    'question_or_research',
+  ]),
+  recommendedNextAction: z.enum([
+    'ask_clarifying_question',
+    'draft_spec',
+    'create_linked_feature_plan',
+    'proceed_to_implementation_spec',
+  ]),
+  ambiguity: z.string().optional(),
+  componentStack: z.array(z.object({
+    kind: RequestIntakeComponentKind,
+    title: z.string(),
+    role: z.string(),
+  })).default([]),
+  clarifyingQuestions: z.array(z.string()).default([]),
+  createdAt: z.string(),
+  createdBy: z.string(),
+})
+export type RequestIntake = z.infer<typeof RequestIntake>
+
 export const Task = z.object({
   id: z.string(),
   title: z.string(),
@@ -423,6 +505,11 @@ export const Task = z.object({
 
   // Which project directory this task operates on (absolute path)
   projectPath: z.string(),
+
+  // The user-facing New request that produced this task, when it came through
+  // request routing instead of direct legacy intake.
+  request: TaskRequest.optional(),
+  requestIntake: RequestIntake.optional(),
 
   status: TaskStatus,
   priority: TaskPriority.default('normal'),
@@ -502,6 +589,7 @@ export const Task = z.object({
     (value) => value == null ? undefined : value,
     z.string().optional(),
   ),
+  hold: TaskHold.optional(),
 
   // FR-15: per-task permission mode override. When set, the orchestrator
   // tells the dispatched agent to clamp its QueryEngine permission checker to
@@ -530,6 +618,41 @@ export const Task = z.object({
   proposedBy: z.string().optional(),          // agent id that proposed the task
   proposalRationale: z.string().optional(),   // why the proposing agent thinks this is worth doing
   parentGoalId: z.string().optional(),        // FR-23 business envelope — tasks carry a goalId
+
+  // Task sizing asks whether this is a good-sized unit of work for one agent
+  // implementation/review loop. Large scores should be split into linked child
+  // tasks rather than quietly expanding the worker's blast radius.
+  sizePlan: TaskSizePlan.optional(),
+
+  doneSummaryBundle: z
+    .object({
+      taskId: z.string(),
+      status: z.string(),
+      completedAt: z.string().optional(),
+      summary: z.object({
+        journey: z.string(),
+        decision: z.string(),
+        evidence: z.string(),
+        learningCandidates: z.array(z.string()).default([]),
+        openResidue: z.string(),
+      }),
+      retention: z.object({
+        transcriptPrimaryArtifact: z.boolean(),
+        compactedFullTranscript: z.boolean(),
+        fullEvidenceAvailable: z.boolean(),
+      }),
+      evidenceRefs: z.array(z.object({
+        scope: z.string(),
+        collection: z.string(),
+        id: z.string(),
+        path: z.string(),
+        hash: z.string().optional(),
+        contentType: z.string().optional(),
+      })).default([]),
+      createdAt: z.string(),
+      createdBy: z.string(),
+    })
+    .optional(),
 
   // FR-22: recorded when a worker pre-rejects the task, or when the
   // orchestrator shelves a task per a policy decision (e.g. FR-21 human_only).
@@ -594,6 +717,15 @@ export const Task = z.object({
       prUrl: z.string().optional(),
       mergedAt: z.string(),
       detail: z.string().optional(),
+    })
+    .optional(),
+
+  gitStory: z
+    .object({
+      override: z.enum(['local_only', 'deferred']).optional(),
+      reason: z.string().optional(),
+      recordedAt: z.string().optional(),
+      recordedBy: z.string().optional(),
     })
     .optional(),
 

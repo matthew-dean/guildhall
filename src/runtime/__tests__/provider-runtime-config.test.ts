@@ -19,6 +19,7 @@ const {
 const {
   buildSelectApiClientOptions,
   getRuntimeProviderConfig,
+  resolveOpenAiCompatibleConcurrency,
   resolveLaneConcurrencyPlan,
   resolveReviewerFanoutPolicy,
 } = await import('../provider-runtime-config.js')
@@ -168,7 +169,7 @@ describe('getRuntimeProviderConfig', () => {
     ).toEqual({
       requestedConcurrency: 3,
       effectiveConcurrency: 1,
-      recommendedConcurrency: 1,
+      recommendedConcurrency: 2,
       clamped: true,
     })
 
@@ -179,8 +180,8 @@ describe('getRuntimeProviderConfig', () => {
       }),
     ).toEqual({
       requestedConcurrency: 3,
-      effectiveConcurrency: 1,
-      recommendedConcurrency: 4,
+      effectiveConcurrency: 2,
+      recommendedConcurrency: 10,
       clamped: true,
     })
   })
@@ -191,10 +192,10 @@ describe('getRuntimeProviderConfig', () => {
         provider: 'llama-cpp',
       }),
     ).toEqual({
-      requestedConcurrency: 1,
+      requestedConcurrency: 2,
       effectiveConcurrency: 1,
-      recommendedConcurrency: 1,
-      clamped: false,
+      recommendedConcurrency: 2,
+      clamped: true,
     })
 
     expect(
@@ -202,9 +203,9 @@ describe('getRuntimeProviderConfig', () => {
         provider: 'openai-api',
       }),
     ).toEqual({
-      requestedConcurrency: 4,
-      effectiveConcurrency: 1,
-      recommendedConcurrency: 4,
+      requestedConcurrency: 10,
+      effectiveConcurrency: 2,
+      recommendedConcurrency: 10,
       clamped: true,
     })
   })
@@ -220,10 +221,62 @@ describe('getRuntimeProviderConfig', () => {
       }).reviewerFanout,
     ).toEqual({
       requestedConcurrency: 2,
-      effectiveConcurrency: 1,
-      recommendedConcurrency: 4,
-      clamped: true,
+      effectiveConcurrency: 2,
+      recommendedConcurrency: 10,
+      clamped: false,
     })
+  })
+
+  it('uses the provider-group max concurrency for OpenAI-compatible pools', () => {
+    setProvider('openai-api', {
+      apiKey: 'sk-test',
+      baseUrl: 'https://example-openai-compatible.test/v1',
+      maxConcurrency: 200,
+    })
+
+    expect(
+      resolveOpenAiCompatibleConcurrency({
+        provider: 'openai-api',
+        baseUrl: 'https://example-openai-compatible.test/v1',
+      }),
+    ).toBe(200)
+  })
+
+  it('falls back to hosted and local provider-group defaults when max concurrency is unset', () => {
+    setProvider('openai-api', {
+      apiKey: 'sk-test',
+      baseUrl: 'https://example-openai-compatible.test/v1',
+    })
+
+    expect(
+      resolveOpenAiCompatibleConcurrency({
+        provider: 'openai-api',
+        baseUrl: 'https://example-openai-compatible.test/v1',
+      }),
+    ).toBe(10)
+
+    expect(
+      resolveOpenAiCompatibleConcurrency({
+        provider: 'llama-cpp',
+        baseUrl: 'http://127.0.0.1:1234/v1',
+      }),
+    ).toBe(2)
+  })
+
+  it('clamps provider-group max concurrency to the global provider ceiling', () => {
+    updateGlobalConfig({ maxProviderConcurrency: 40 })
+    setProvider('openai-api', {
+      apiKey: 'sk-test',
+      baseUrl: 'https://example-openai-compatible.test/v1',
+      maxConcurrency: 200,
+    })
+
+    expect(
+      resolveOpenAiCompatibleConcurrency({
+        provider: 'openai-api',
+        baseUrl: 'https://example-openai-compatible.test/v1',
+      }),
+    ).toBe(40)
   })
 
   it('builds a bounded lane concurrency plan from project config plus dispatch capacity', () => {
@@ -269,7 +322,7 @@ describe('getRuntimeProviderConfig', () => {
       reviewerFanout: {
         requestedConcurrency: 6,
         effectiveConcurrency: 1,
-        recommendedConcurrency: 1,
+        recommendedConcurrency: 2,
         clamped: true,
       },
     })

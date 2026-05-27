@@ -2,6 +2,11 @@ import { defineTool } from '@guildhall/engine'
 import { z } from 'zod'
 import fs from 'node:fs/promises'
 import { DecisionEntry, ProgressEntry } from '@guildhall/core'
+import { dirname } from 'node:path'
+import {
+  getProjectProgressHeartbeatsPath,
+  inferProjectRootFromMemoryDir,
+} from '@guildhall/sessions'
 
 const logDecisionInputSchema = z.object({
   decisionsPath: z.string().describe('Absolute path to DECISIONS.md'),
@@ -68,6 +73,7 @@ export type LogProgressInput = z.input<typeof logProgressInputSchema>
 export interface LogProgressResult {
   success: boolean
   error?: string
+  path?: string
 }
 
 export async function logProgress(input: LogProgressInput): Promise<LogProgressResult> {
@@ -92,8 +98,12 @@ export async function logProgress(input: LogProgressInput): Promise<LogProgressR
       .filter((line) => line !== null)
       .join('\n')
 
-    await fs.appendFile(input.progressPath, block, 'utf-8')
-    return { success: true }
+    const outputPath = entry.type === 'heartbeat'
+      ? getProjectProgressHeartbeatsPath(inferProjectRootFromMemoryDir(dirname(input.progressPath)))
+      : input.progressPath
+    await fs.mkdir(dirname(outputPath), { recursive: true })
+    await fs.appendFile(outputPath, block, 'utf-8')
+    return { success: true, path: outputPath }
   } catch (err) {
     return { success: false, error: String(err) }
   }
@@ -102,7 +112,7 @@ export async function logProgress(input: LogProgressInput): Promise<LogProgressR
 export const logProgressTool = defineTool({
   name: 'log-progress',
   description:
-    "Append a progress update to PROGRESS.md. Call after completing significant work, hitting milestones, or when blocked. This is how the human tracks what's happening.",
+    "Append a progress update. Milestones, blockers, and escalations go to PROGRESS.md; heartbeat updates go to local history so committed progress stays compact.",
   inputSchema: logProgressInputSchema,
   jsonSchema: {
     type: 'object',

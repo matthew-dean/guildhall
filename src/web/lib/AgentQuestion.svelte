@@ -33,6 +33,7 @@
   let mode = $state<'idle' | 'reply' | 'other'>('idle')
   let replyText = $state('')
   let selectedChoices = $state<string[]>([])
+  let promptExpanded = $state(false)
 
   const isProjectMapQuestion = $derived(
     /coordinator domains|project areas|review lanes/i.test(question.prompt ?? ''),
@@ -99,7 +100,7 @@
 
   function choiceParts(value: string): { title: string; detail: string | null } {
     const label = choiceLabel(value)
-    const match = label.match(/^(.+?)\s+(?:[-–—])\s+(.+)$/)
+    const match = label.match(/^(.+?)\s+(?:[-–—])\s+(.+)$/) ?? label.match(/^([^:]{3,80}):\s+(.+)$/)
     if (!match) return { title: label, detail: null }
     return { title: match[1]!.trim(), detail: match[2]!.trim() }
   }
@@ -115,6 +116,19 @@
     return prompt
   }
 
+  function isAnswerableChoicePrompt(value: string | undefined): boolean {
+    const prompt = (value ?? '').replace(/\s+/g, ' ').trim()
+    if (!prompt) return false
+    return (
+      prompt.includes('?') ||
+      /^(?:pick|choose|select|confirm|decide|tell guildhall|tell me|what|which|should|do you|does|is|are|can guildhall)\b/i.test(prompt)
+    )
+  }
+
+  function isLongPrompt(value: string | undefined): boolean {
+    return (value ?? '').replace(/\s+/g, ' ').trim().length > 220
+  }
+
   // User-facing questions should come from the coordinating persona, not a
   // generic system voice or an internal worker label.
   const askedBy = $derived('From the coordinator:')
@@ -128,8 +142,15 @@
         )
       ),
   )
+  const choicePromptNeedsRepair = $derived(
+    question.kind === 'choice' &&
+      !isProjectMapQuestion &&
+      !isAnswerableChoicePrompt(displayPrompt(question.prompt)),
+  )
   const kindLabel = $derived(
-    isProjectMapQuestion
+    choicePromptNeedsRepair
+      ? 'Reply'
+      : isProjectMapQuestion
       ? 'Confirm only if needed'
       : question.kind === 'confirm'
       ? 'Check this'
@@ -141,6 +162,9 @@
   )
 
   const sendLabel = $derived(isProjectMapQuestion ? 'Use this map' : 'Send')
+  const hasStructuredPrompt = $derived(
+    Boolean(question.subject?.trim() || question.description?.trim()),
+  )
 
   $effect(() => {
     if (!isProjectMapQuestion || !isMultiChoice) return
@@ -149,6 +173,76 @@
   })
 </script>
 
+{#snippet promptBlock(value: string | undefined)}
+  {@const prompt = displayPrompt(value)}
+  {#if isLongPrompt(prompt)}
+    <details
+      class="prompt-disclosure"
+      ontoggle={(event) => { promptExpanded = (event.currentTarget as HTMLDetailsElement).open }}
+    >
+      <summary>
+        {#if promptExpanded}
+          <span class="prompt-more">Hide question</span>
+        {:else}
+          <div class="prompt prompt-preview"><Markdown source={prompt} /></div>
+          <span class="prompt-more">Full question</span>
+        {/if}
+      </summary>
+      {#if promptExpanded}
+        <div class="prompt prompt-full"><Markdown source={prompt} /></div>
+      {/if}
+    </details>
+  {:else}
+    <div class="prompt"><Markdown source={prompt} /></div>
+  {/if}
+{/snippet}
+
+{#snippet missingChoiceQuestion()}
+  <div class="question-context">
+    {#if question.subject}
+      <div class="question-subject">{question.subject}</div>
+    {:else}
+      <div class="question-subject">Guildhall needs a clearer question</div>
+    {/if}
+    <div class="question-description">
+      <Markdown source={displayPrompt(question.prompt)} />
+    </div>
+    {#if question.choices.length}
+      <div>
+        <strong>What Guildhall found</strong>
+        <ul class="evidence-list">
+          {#each question.choices as c (c)}
+            <li><Markdown source={choiceLabel(c)} /></li>
+          {/each}
+        </ul>
+      </div>
+    {/if}
+    <div class="question-callout">
+      <span class="question-callout-label">Question missing</span>
+      <div class="question-callout-text">Tell Guildhall what you want it to do next.</div>
+    </div>
+  </div>
+{/snippet}
+
+{#snippet questionPrompt(value: string | undefined)}
+  {#if hasStructuredPrompt}
+    <div class="question-context">
+      {#if question.subject}
+        <div class="question-subject">{question.subject}</div>
+      {/if}
+      {#if question.description}
+        <div class="question-description"><Markdown source={question.description} /></div>
+      {/if}
+      <div class="question-callout">
+        <span class="question-callout-label">Question</span>
+        <div class="question-callout-text"><Markdown source={displayPrompt(value)} /></div>
+      </div>
+    </div>
+  {:else}
+    {@render promptBlock(value)}
+  {/if}
+{/snippet}
+
 <div class="agent-question">
   <div class="question-head">
     <div class="meta">{askedBy}</div>
@@ -156,7 +250,7 @@
   </div>
 
   {#if question.kind === 'confirm'}
-    <div class="prompt"><Markdown source={displayPrompt(question.restatement)} /></div>
+    {@render questionPrompt(question.restatement)}
     {#if mode === 'idle'}
       <Row justify="end" gap="2">
         <Button
@@ -172,7 +266,7 @@
       </Row>
     {/if}
   {:else if question.kind === 'yesno'}
-    <div class="prompt"><Markdown source={displayPrompt(question.prompt)} /></div>
+    {@render questionPrompt(question.prompt)}
     {#if mode === 'idle'}
       <Row justify="end" gap="2">
         <Button variant="ghost" disabled={busy} onclick={() => (mode = 'reply')}>
@@ -187,8 +281,22 @@
       </Row>
     {/if}
   {:else if question.kind === 'choice'}
-    <div class="prompt"><Markdown source={displayPrompt(question.prompt)} /></div>
-    {#if mode === 'idle'}
+    {#if choicePromptNeedsRepair}
+      {@render missingChoiceQuestion()}
+      {#if mode === 'idle'}
+        <Textarea bind:value={replyText} rows={3} placeholder="For example: use Python only, keep the Rust work paused, or ask a clearer follow-up." />
+        <Row justify="end">
+          <Button
+            variant="primary"
+            disabled={busy || replyText.trim().length === 0}
+            onclick={() => send(replyText)}
+          >Send</Button>
+        </Row>
+      {/if}
+    {:else}
+      {@render questionPrompt(question.prompt)}
+    {/if}
+    {#if mode === 'idle' && !choicePromptNeedsRepair}
       {#if isProjectMapQuestion}
         <div class="inferred-list" aria-label="Guildhall inferred repo structure">
           {#each question.choices as c (c)}
@@ -261,7 +369,7 @@
       {/if}
     {/if}
   {:else if question.kind === 'text'}
-    <div class="prompt"><Markdown source={displayPrompt(question.prompt)} /></div>
+    {@render questionPrompt(question.prompt)}
     {#if mode === 'idle'}
       <Textarea bind:value={replyText} rows={3} placeholder="Type your answer..." />
       <Row justify="end">
@@ -295,8 +403,8 @@
   .agent-question {
     min-width: 0;
     display: grid;
-    gap: var(--s-3);
-    padding: var(--s-3);
+    gap: var(--s-2);
+    padding: var(--s-2);
     border: 1px solid var(--glass-inset-border);
     border-radius: var(--r-3);
     background:
@@ -327,14 +435,114 @@
   }
   .prompt {
     margin: 0;
-    font-size: var(--fs-2);
+    font-size: var(--fs-1);
     font-weight: 400;
     line-height: 1.42;
     color: var(--text-readable);
   }
+  .prompt-disclosure {
+    min-width: 0;
+    border: 1px solid var(--glass-inset-border);
+    border-radius: var(--r-2);
+    background: color-mix(in srgb, var(--glass-inset-bg) 72%, transparent);
+  }
+  .prompt-disclosure summary {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    gap: var(--s-2);
+    align-items: start;
+    padding: var(--s-2);
+    cursor: pointer;
+    list-style: none;
+  }
+  .prompt-disclosure summary::-webkit-details-marker {
+    display: none;
+  }
+  .prompt-preview {
+    display: -webkit-box;
+    -webkit-line-clamp: 3;
+    -webkit-box-orient: vertical;
+    overflow: hidden;
+  }
+  .prompt-full {
+    padding: 0 var(--s-2) var(--s-2);
+  }
+  .prompt-more {
+    color: var(--accent);
+    font-size: var(--fs-0);
+    font-weight: 750;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    white-space: nowrap;
+  }
+  .question-context {
+    display: grid;
+    gap: var(--s-2);
+    padding: var(--s-2);
+    border: 1px solid var(--glass-inset-border);
+    border-radius: var(--r-2);
+    background: color-mix(in srgb, var(--glass-inset-bg) 76%, transparent);
+    box-shadow: var(--glass-inset-etch);
+  }
+  .question-subject {
+    color: var(--text-muted);
+    font-size: var(--fs-0);
+    font-weight: 750;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+  }
+  .question-description {
+    color: var(--text-soft);
+    font-size: var(--fs-0);
+    line-height: var(--lh-body);
+  }
+  .question-description :global(.md),
+  .question-callout-text :global(.md) {
+    color: inherit;
+    font-size: inherit;
+    line-height: inherit;
+  }
+  .question-callout {
+    display: grid;
+    gap: var(--s-1);
+    padding: var(--s-2);
+    border: 1px solid color-mix(in srgb, var(--accent) 38%, var(--glass-inset-border));
+    border-radius: var(--r-2);
+    background: color-mix(in srgb, var(--accent) 8%, var(--glass-inset-bg-strong));
+  }
+  .question-callout-label {
+    color: var(--accent);
+    font-size: var(--fs-0);
+    font-weight: 800;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+  }
+  .question-callout-text {
+    color: var(--text-strong);
+    font-size: var(--fs-1);
+    font-weight: 650;
+    line-height: 1.35;
+  }
+  .evidence-list {
+    display: grid;
+    gap: var(--s-2);
+    margin: var(--s-1) 0 0;
+    padding-inline-start: var(--s-4);
+    color: var(--text-readable);
+    font-size: var(--fs-1);
+    line-height: var(--lh-body);
+  }
+  .evidence-list li {
+    overflow-wrap: anywhere;
+  }
+  .evidence-list :global(.md) {
+    color: inherit;
+    font-size: inherit;
+    line-height: inherit;
+  }
   .choices {
     display: grid;
-    grid-template-columns: 1fr;
+    grid-template-columns: repeat(auto-fit, minmax(min(100%, 260px), 1fr));
     gap: var(--s-2);
   }
   .choice {
@@ -344,9 +552,9 @@
     color: var(--text-readable);
     border: 1px solid var(--glass-inset-border);
     border-radius: var(--r-2);
-    padding: var(--s-2) var(--s-3);
+    padding: var(--s-2);
     font: inherit;
-    font-size: var(--fs-2);
+    font-size: var(--fs-1);
     font-weight: 400;
     cursor: pointer;
     display: grid;
@@ -421,6 +629,7 @@
     font-weight: 550;
     line-height: 1.3;
     text-transform: none;
+    overflow-wrap: anywhere;
   }
   .choice-title :global(strong),
   .choice-detail :global(strong),
@@ -436,8 +645,9 @@
   }
   .choice-detail {
     color: var(--text-soft);
-    font-size: var(--fs-1);
+    font-size: var(--fs-0);
     line-height: var(--lh-body);
+    overflow-wrap: anywhere;
   }
   .choice:disabled { opacity: 0.5; cursor: default; }
   .choice-other {

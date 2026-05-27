@@ -17,6 +17,11 @@ import {
   type ProviderCapabilities,
   type ProviderFamily,
 } from './provider-metadata.js'
+import { resolveProviderGroupConcurrency } from './provider-concurrency.js'
+export {
+  resolveOpenAiCompatibleConcurrency,
+  resolveProviderGroupConcurrency,
+} from './provider-concurrency.js'
 
 export interface RuntimeProviderConfig {
   preferredProvider?: PreferredProviderKey
@@ -120,8 +125,7 @@ export function resolveReviewerFanoutPolicy(input: {
   provider: PreferredProviderKey | ProviderName | 'none' | null | undefined
   requestedConcurrency?: number
 }): ReviewerFanoutPolicy {
-  const caps = providerCapabilitiesForAnyKey(input.provider)
-  const recommendedConcurrency = caps?.recommendedConcurrency ?? null
+  const recommendedConcurrency = resolveProviderGroupConcurrency(input.provider)
   const requestedConcurrency = Math.max(
     1,
     Math.floor(input.requestedConcurrency ?? recommendedConcurrency ?? DEFAULT_SINGLE_LANE_CONCURRENCY),

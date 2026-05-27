@@ -6,6 +6,7 @@ import {
   WorkspaceRegistryEntry,
   slugify,
   mergeModels,
+  mergeModelBehavior,
   defaultModelsForProvider,
   resolveModelsForProvider,
   writeModelsForProvider,
@@ -69,6 +70,29 @@ describe('mergeModels', () => {
     const result = mergeModels({}, undefined, defaultModelsForProvider('codex'))
     expect(result.worker).toBe('gpt-5.3-codex')
     expect(result.spec).toBe('gpt-5.3-codex')
+  })
+})
+
+describe('mergeModelBehavior', () => {
+  it('uses plain-language behavior defaults for each role', () => {
+    expect(mergeModelBehavior({}, undefined)).toEqual({
+      spec: 'balanced',
+      coordinator: 'balanced',
+      worker: 'precise',
+      reviewer: 'precise',
+      gateChecker: 'precise',
+      contextIndexer: 'precise',
+    })
+  })
+
+  it('lets workspace behavior override global behavior by role', () => {
+    expect(mergeModelBehavior(
+      { worker: 'balanced', spec: 'exploratory' },
+      { worker: 'precise' },
+    )).toMatchObject({
+      spec: 'exploratory',
+      worker: 'precise',
+    })
   })
 })
 
@@ -207,6 +231,12 @@ describe('WorkspaceYamlConfig', () => {
           worktree: {
             include: ['.env'],
           },
+          gitStory: {
+            completionTarget: 'open_pr',
+            commit: 'ask',
+            push: 'ask',
+            pullRequest: 'ask',
+          },
         },
         {
           id: 'knit',
@@ -237,6 +267,7 @@ describe('WorkspaceYamlConfig', () => {
       'pnpm lint',
     ])
     expect(config.projects[0]?.worktree?.include).toEqual(['.env'])
+    expect(config.projects[0]?.gitStory?.completionTarget).toBe('open_pr')
     expect(config.council?.coordinationRules[0]?.from).toBe('knit')
   })
 
@@ -356,11 +387,18 @@ describe('GlobalConfig', () => {
     expect(config.lmStudioUrl).toBe('http://localhost:1234/v1')
     expect(config.servePort).toBe(7777)
     expect(config.reviewerFanoutConcurrency).toBeUndefined()
+    expect(config.maxProviderConcurrency).toBe(200)
   })
 
   it('validates servePort range', () => {
     expect(() => GlobalConfig.parse({ servePort: 80 })).toThrow()
     expect(GlobalConfig.parse({ servePort: 3000 }).servePort).toBe(3000)
+  })
+
+  it('validates machine-wide provider concurrency ceiling', () => {
+    expect(() => GlobalConfig.parse({ maxProviderConcurrency: 0 })).toThrow()
+    expect(() => GlobalConfig.parse({ maxProviderConcurrency: 201 })).toThrow()
+    expect(GlobalConfig.parse({ maxProviderConcurrency: 40 }).maxProviderConcurrency).toBe(40)
   })
 
   it('validates lmStudioUrl is a URL', () => {

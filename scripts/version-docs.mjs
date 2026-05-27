@@ -9,6 +9,7 @@ import { fileURLToPath } from 'node:url'
 const __dirname = dirname(fileURLToPath(import.meta.url))
 const ROOT = resolve(__dirname, '..')
 const DOCS = join(ROOT, 'docs')
+const DOCS_BASE = normalizeDocsBase(process.env.GUILDHALL_DOCS_BASE ?? '/')
 
 const args = process.argv.slice(2)
 const version = args.find((arg) => !arg.startsWith('--'))
@@ -35,6 +36,17 @@ const VERSIONED_ENTRIES = [
 const VERSIONED_EXCLUDES = [
   /^web-ui\/flow-audit\.md$/,
 ]
+
+function normalizeDocsBase(value) {
+  const trimmed = String(value).trim()
+  if (!trimmed || trimmed === '/') return '/'
+  return `/${trimmed.replace(/^\/+|\/+$/g, '')}/`
+}
+
+function docsHref(prefix, section) {
+  const base = DOCS_BASE === '/' ? '' : DOCS_BASE.slice(0, -1)
+  return `${base}${prefix}/${section}/`
+}
 
 function takeFlagValue(flag) {
   const i = args.indexOf(flag)
@@ -88,13 +100,10 @@ async function walkFiles(dir) {
 
 async function rewriteAbsoluteDocLinks(root, prefix) {
   const files = await walkFiles(root)
-  const absoluteDocLink = /\/guildhall\/(guide|reference|web-ui|cli|levers|releases)\//g
-  const rootRelativeDocLink = /(?<=["'(])\/(guide|reference|web-ui|cli|levers|releases)\//g
+  const rootDocLink = /(?<=["'(])\/(?:guildhall\/)?(guide|reference|web-ui|cli|levers|releases)\//g
   for (const file of files) {
     const raw = await readFile(file, 'utf8')
-    const next = raw
-      .replace(absoluteDocLink, `/guildhall${prefix}/$1/`)
-      .replace(rootRelativeDocLink, `${prefix}/$1/`)
+    const next = raw.replace(rootDocLink, (_match, section) => docsHref(prefix, section))
     if (next !== raw) await writeFile(file, next, 'utf8')
   }
 }

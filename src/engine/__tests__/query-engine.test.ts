@@ -39,7 +39,7 @@ describe('QueryEngine.submitMessage', () => {
     expect(engine.messages).toHaveLength(2)
     expect(engine.messages[0]!.role).toBe('user')
     expect(engine.messages[1]!.role).toBe('assistant')
-    expect(engine.totalUsage).toEqual({ input_tokens: 10, output_tokens: 2 })
+    expect(engine.totalUsage).toEqual({ input_tokens: 10, output_tokens: 2, cached_input_tokens: 0 })
   })
 
   it('accumulates usage across multiple submitMessage calls', async () => {
@@ -63,7 +63,34 @@ describe('QueryEngine.submitMessage', () => {
     })
     for await (const _ of engine.submitMessage('one')) void _
     for await (const _ of engine.submitMessage('two')) void _
-    expect(engine.totalUsage).toEqual({ input_tokens: 7, output_tokens: 3 })
+    expect(engine.totalUsage).toEqual({ input_tokens: 7, output_tokens: 3, cached_input_tokens: 0 })
+  })
+
+  it('passes provider API request options through to model calls', async () => {
+    const client = new ScriptedApiClient([
+      {
+        message: { role: 'assistant', content: [{ type: 'text', text: 'ok' }] },
+      },
+    ])
+    const engine = new QueryEngine({
+      apiClient: client,
+      toolRegistry: new ToolRegistry(),
+      permissionChecker: autoChecker(),
+      cwd: '/tmp',
+      model: 'test',
+      systemPrompt: '',
+      apiRequestOptions: {
+        reasoning_effort: 'medium',
+        reasoning: { effort: 'medium' },
+        tool_choice: 'auto',
+      },
+    })
+
+    for await (const _ of engine.submitMessage('go')) void _
+
+    expect(client.requests[0]?.reasoning_effort).toBe('medium')
+    expect(client.requests[0]?.reasoning).toEqual({ effort: 'medium' })
+    expect(client.requests[0]?.tool_choice).toBe('auto')
   })
 })
 

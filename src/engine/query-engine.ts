@@ -25,7 +25,7 @@ import {
   userMessageFromText,
 } from '@guildhall/protocol'
 
-import type { SupportsStreamingMessages } from './client.js'
+import type { ApiMessageRequest, SupportsStreamingMessages } from './client.js'
 import type { HookExecutor } from './hooks.js'
 import { HookEvent } from './hooks.js'
 import {
@@ -46,6 +46,11 @@ export interface QueryEngineOptions {
   systemPrompt: string
   maxTokens?: number
   temperature?: number
+  promptCacheKey?: string
+  apiRequestOptions?: Pick<
+    ApiMessageRequest,
+    'response_format' | 'reasoning_effort' | 'reasoning' | 'tool_choice'
+  >
   contextWindowTokens?: number | null
   autoCompactThresholdTokens?: number | null
   maxTurns?: number | null
@@ -76,6 +81,11 @@ export class QueryEngine {
   private systemPrompt: string
   private readonly maxTokens: number
   private readonly temperature: number | undefined
+  private promptCacheKey: string | undefined
+  private apiRequestOptions: Pick<
+    ApiMessageRequest,
+    'response_format' | 'reasoning_effort' | 'reasoning' | 'tool_choice'
+  >
   private readonly contextWindowTokens: number | null | undefined
   private readonly autoCompactThresholdTokens: number | null | undefined
   private maxTurns: number | null
@@ -102,6 +112,8 @@ export class QueryEngine {
     this.systemPrompt = options.systemPrompt
     this.maxTokens = options.maxTokens ?? 4096
     this.temperature = options.temperature
+    this.promptCacheKey = options.promptCacheKey
+    this.apiRequestOptions = options.apiRequestOptions ?? {}
     this.contextWindowTokens = options.contextWindowTokens
     this.autoCompactThresholdTokens = options.autoCompactThresholdTokens
     this.maxTurns = options.maxTurns ?? 8
@@ -155,6 +167,14 @@ export class QueryEngine {
 
   setModel(model: string): void {
     this.model = model
+  }
+
+  setPromptCacheKey(key: string | undefined): void {
+    this.promptCacheKey = key
+  }
+
+  setApiRequestOptions(options: QueryEngineOptions['apiRequestOptions']): void {
+    this.apiRequestOptions = options ?? {}
   }
 
   setApiClient(client: SupportsStreamingMessages): void {
@@ -281,6 +301,8 @@ export class QueryEngine {
       systemPrompt: this.systemPrompt,
       maxTokens: this.maxTokens,
       ...(this.temperature !== undefined ? { temperature: this.temperature } : {}),
+      ...(this.promptCacheKey !== undefined ? { promptCacheKey: this.promptCacheKey } : {}),
+      apiRequestOptions: this.apiRequestOptions,
       ...(this.contextWindowTokens !== undefined
         ? { contextWindowTokens: this.contextWindowTokens }
         : {}),
@@ -317,6 +339,8 @@ export class QueryEngine {
     this.totalUsageInternal = {
       input_tokens: this.totalUsageInternal.input_tokens + u.input_tokens,
       output_tokens: this.totalUsageInternal.output_tokens + u.output_tokens,
+      cached_input_tokens:
+        (this.totalUsageInternal.cached_input_tokens ?? 0) + (u.cached_input_tokens ?? 0),
     }
   }
 }

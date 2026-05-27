@@ -8,6 +8,7 @@ import {
   agentsMdSource,
   roadmapSource,
   planningDocsSource,
+  textCorpusSource,
   todoCommentsSource,
   gitLogSource,
   BUILTIN_TASK_SOURCES,
@@ -80,6 +81,57 @@ lead
     expect(bulletSigs).toHaveLength(2)
     expect(bulletSigs[0]!.title).toBe('Support local and hosted LLMs')
     expect(bulletSigs[1]!.title).toBe('Ship without babysitting')
+  })
+
+})
+
+describe('textCorpusSource', () => {
+  let dir = ''
+  beforeEach(() => {
+    dir = makeTmp()
+  })
+  afterEach(() => {
+    rmSync(dir, { recursive: true, force: true })
+  })
+
+  it('maps non-code text files with bounded deterministic excerpts', async () => {
+    mkdirSync(join(dir, '.md'), { recursive: true })
+    mkdirSync(join(dir, 'database'), { recursive: true })
+    mkdirSync(join(dir, 'src'), { recursive: true })
+    writeFileSync(
+      join(dir, '.md/README.md'),
+      [
+        '# Fair Labor License Platform',
+        '',
+        'Migration plan and architecture for moving from WordPress to a modern licensing platform.',
+        '',
+        '## Phase 3: Licensing System',
+        '- [ ] Eligibility checker',
+        '- [ ] Payment integration (Stripe)',
+      ].join('\n'),
+    )
+    writeFileSync(
+      join(dir, 'database/README.md'),
+      '# Database Setup Guide\n\nFrom workspace root, run `supabase db push`.\n',
+    )
+    writeFileSync(join(dir, 'notes.txt'), 'Release notes\n\nDo the small launch things.\n')
+    writeFileSync(join(dir, 'src/app.ts'), '// code files are not part of this text source\n')
+
+    const sigs = await textCorpusSource.detect({ projectPath: dir })
+
+    expect(sigs.map((s) => s.title)).toEqual(
+      expect.arrayContaining([
+        'Text document (.md/README.md): Fair Labor License Platform',
+        'Text document (database/README.md): Database Setup Guide',
+        'Text document (notes.txt): notes.txt',
+        'Eligibility checker',
+        'Payment integration (Stripe)',
+      ]),
+    )
+    expect(sigs.find((s) => s.title.includes('Fair Labor License'))!.evidence).toBe(
+      'Migration plan and architecture for moving from WordPress to a modern licensing platform.',
+    )
+    expect(sigs.some((s) => s.references?.[0]?.endsWith('src/app.ts'))).toBe(false)
   })
 })
 
@@ -626,9 +678,16 @@ describe('detectWorkspaceSignals (composition)', () => {
       projectPath: dir,
       exec: fakeExec(() => ({ stdout: '', code: 1 })),
     })
-    expect(inv.signals.map((s) => s.source)).toEqual(['readme', 'roadmap'])
+    expect(inv.signals.map((s) => s.source)).toEqual([
+      'readme',
+      'roadmap',
+      'text-corpus',
+      'text-corpus',
+      'text-corpus',
+    ])
     expect(inv.bySource['readme']!).toHaveLength(1)
     expect(inv.bySource['roadmap']!).toHaveLength(1)
+    expect(inv.bySource['text-corpus']!).toHaveLength(3)
   })
 
   it('does not abort the batch when one source throws', async () => {

@@ -2,6 +2,11 @@ import fs from 'node:fs/promises'
 import path from 'node:path'
 import type { Task } from '@guildhall/core'
 import type { BuiltContext } from './context-builder.js'
+import {
+  getProjectContextDebugLedgerPath,
+  getProjectContextDebugSnapshotDir,
+  inferProjectRootFromMemoryDir,
+} from '@guildhall/sessions'
 
 export interface ContextSectionStat {
   key: string
@@ -290,7 +295,8 @@ export async function writeContextDebugRecord(input: {
     agentRole,
   })
 
-  const debugDir = path.join(input.memoryDir, 'context-debug', input.task.id)
+  const projectRoot = inferProjectRootFromMemoryDir(input.memoryDir)
+  const debugDir = getProjectContextDebugSnapshotDir(projectRoot, input.task.id)
   await fs.mkdir(debugDir, { recursive: true })
   await pruneSnapshots(debugDir)
   const snapshotPath = path.join(debugDir, `${id}.md`)
@@ -356,7 +362,7 @@ export async function writeContextDebugRecord(input: {
     acceptanceCriteriaCount: input.task.acceptanceCriteria?.length ?? 0,
   }
 
-  const ledgerPath = path.join(input.memoryDir, DEBUG_LOG_NAME)
+  const ledgerPath = getProjectContextDebugLedgerPath(projectRoot)
   await fs.appendFile(ledgerPath, `${JSON.stringify(record)}\n`, 'utf8')
   return record
 }
@@ -385,7 +391,8 @@ export async function readContextDebugForTask(
   taskId: string,
   limit = 6,
 ): Promise<ContextDebugRecord[]> {
-  const ledgerPath = path.join(memoryDir, DEBUG_LOG_NAME)
+  const projectRoot = inferProjectRootFromMemoryDir(memoryDir)
+  const ledgerPath = getProjectContextDebugLedgerPath(projectRoot)
   try {
     const raw = await fs.readFile(ledgerPath, 'utf8')
     const matches: ContextDebugRecord[] = []

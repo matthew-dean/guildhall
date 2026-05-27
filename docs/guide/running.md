@@ -23,9 +23,10 @@ From there, use the **Start** / **Stop** controls in the project shell. This
 is the main operating path: you can inspect Thread, Work, Needs you, task
 drawers, and release state without leaving the UI.
 
-Projects & Workspaces uses the same runtime as the CLI. Progress is appended
-to `./memory/PROGRESS.md`, events are streamed to `./memory/events.ndjson`, and the
-full transcript per task lives under `./memory/transcripts/`.
+Projects & Workspaces uses the same runtime as the CLI. Curated progress is
+written to `./.guildhall/PROGRESS.md`; detailed events, heartbeat updates, full
+transcripts, checkpoints, and bulky evidence live in user-local Guildhall
+history so they do not fill project commits.
 
 Progress also leaves durable evidence: a task blueprint, decision,
 change order, implementation diff, verification result, review finding, or
@@ -80,5 +81,5 @@ Each tick:
 4. For any tasks in `gate_check`: run hard gates.
 5. Persist state; emit events.
 
-The Thread, Work, and Release views show the same state machine without needing
+The Thread, Work, and Closure views show the same state machine without needing
 to read Guildhall's source code.

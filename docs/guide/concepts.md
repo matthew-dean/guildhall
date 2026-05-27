@@ -19,8 +19,10 @@ Guildhall is an agent harness for local software projects.
 In the product, you mostly think in **projects**. In the runtime and config
 layers, the same unit is still often called a **workspace**.
 
-Either way, it means one directory containing a `./guildhall.yaml` and a
-`./memory/` folder. See [Workspaces](./workspaces).
+Either way, it means one directory containing a `./guildhall.yaml` and shared
+Guildhall project state under `./.guildhall/`. Local transcripts and bulky run
+history live under `~/.guildhall/data/projects/`. See
+[Workspaces](./workspaces).
 
 ## Task
 
@@ -29,6 +31,33 @@ acceptance criteria, hard gates, and review verdicts. Tasks move through a
 fixed lifecycle: `proposed → exploring → spec_review → ready → in_progress →
 review → gate_check → done` (terminal: `done`, `shelved`, `blocked`). See
 [Task lifecycle](./task-lifecycle).
+
+Guildhall also sizes tasks. Tiny and small work can usually move as one unit;
+large work gets split recommendations; epic work becomes a parent-sized task
+with linked child tasks.
+
+## Request shape
+
+How Guildhall reads a New Request before it becomes work. The request might be
+a task, a question, a settings change, a repair, a broad intake, or an
+ambiguous "spec or implementation?" ask.
+
+When the shape is ambiguous, Guildhall records the uncertainty and asks a
+focused question instead of guessing.
+
+## Component stack
+
+The linked pieces inside a broader request: policy decision, documented spec,
+implementation surfaces, API or data changes, docs, release work, and
+verification. A component stack helps Guildhall keep related work connected
+without turning it into one oversized task.
+
+## Pressure-Test Intake
+
+The one-question-at-a-time intake path for broad releases, features, and risky
+product asks. Guildhall routes the request, inspects what it can, asks focused
+questions in Thread, persists assumptions and deferrals, and turns the result
+into a buildable spec. See [Pressure-Test Intake](./pressure-test-intake).
 
 ## Blueprint
 
@@ -79,6 +108,13 @@ one task (fan-out).
 An explicit revision to the accepted plan. Use a change order when new evidence
 changes scope, sequencing, assumptions, or task shape. Change orders stay
 visible because silent drift destroys trust.
+
+## Git Story
+
+The closure state for project or task changes: clean, dirty, local commits, no
+upstream, pushed, PR open, merged, local-only, deferred, conflict, or unknown.
+It is the bit that tells you whether "done" also means the repo is in an
+intentional state. See [Git Story Closure](./git-story-closure).
 
 ## Punch list
 

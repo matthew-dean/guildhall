@@ -11,7 +11,7 @@ help_summary: |
 
 **Scope:** project • **Default:** `advisory`
 
-Controls enforcement of the project's business envelope — `./memory/business-envelope.yaml` with `goals:` and `guardrails:`.
+Controls enforcement of the project's business envelope — `./.guildhall/business-envelope.yaml` with `goals:` and `guardrails:`.
 
 ## Positions
 
@@ -24,7 +24,7 @@ Controls enforcement of the project's business envelope — `./memory/business-e
 ## When to pick which
 
 - `strict` in regulated environments (compliance, safety).
-- `advisory` for startup velocity — humans see the warning and can say "yes, proceed."
+- `advisory` for startup velocity — you see the warning and can say "yes, proceed."
 - `off` only for prototypes where you haven't written an envelope yet.
 
 ## See also

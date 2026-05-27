@@ -23,6 +23,11 @@ export interface ApiMessageRequest {
   temperature?: number
   tools: Array<Record<string, unknown>>
   signal?: AbortSignal | undefined
+  prompt_cache_key?: string
+  response_format?: Record<string, unknown>
+  reasoning_effort?: string
+  reasoning?: Record<string, unknown>
+  tool_choice?: string | Record<string, unknown>
 }
 
 export interface ApiTextDeltaEvent {

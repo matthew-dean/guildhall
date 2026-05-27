@@ -2,7 +2,7 @@ import { readFileSync, writeFileSync, mkdirSync, existsSync } from 'node:fs'
 import { join, resolve } from 'node:path'
 import { load as yamlLoad, dump as yamlDump } from 'js-yaml'
 import { z } from 'zod'
-import { ModelConfigInputSchema } from './schemas.js'
+import { GitStoryPolicy, ModelConfigInputSchema } from './schemas.js'
 
 // ---------------------------------------------------------------------------
 // Project-local Guildhall config — <project>/.guildhall/config.yaml
@@ -15,13 +15,76 @@ import { ModelConfigInputSchema } from './schemas.js'
 export const PROJECT_CONFIG_DIRNAME = '.guildhall'
 export const PROJECT_CONFIG_FILENAME = 'config.yaml'
 export const SHARED_PROJECT_METADATA_GITIGNORE_ENTRIES = [
+  '# Shared Guildhall project state is trackable by default.',
   `!${PROJECT_CONFIG_DIRNAME}/`,
-  `!${PROJECT_CONFIG_DIRNAME}/*.yaml`,
+  `!${PROJECT_CONFIG_DIRNAME}/**`,
 ] as const
 export const LOCAL_PROJECT_STATE_GITIGNORE_ENTRIES = [
+  '# Local/private Guildhall state stays out of git.',
   `${PROJECT_CONFIG_DIRNAME}/${PROJECT_CONFIG_FILENAME}`,
   `${PROJECT_CONFIG_DIRNAME}/worktrees/`,
+  `${PROJECT_CONFIG_DIRNAME}/local/`,
+  `${PROJECT_CONFIG_DIRNAME}/cache/`,
+  `${PROJECT_CONFIG_DIRNAME}/tmp/`,
+  `${PROJECT_CONFIG_DIRNAME}/logs/`,
+  `${PROJECT_CONFIG_DIRNAME}/sessions/`,
+  `${PROJECT_CONFIG_DIRNAME}/transcripts/`,
+  `${PROJECT_CONFIG_DIRNAME}/context-debug/`,
+  `${PROJECT_CONFIG_DIRNAME}/events/`,
+  `${PROJECT_CONFIG_DIRNAME}/checkpoints/`,
+  `${PROJECT_CONFIG_DIRNAME}/.session-epoch`,
 ] as const
+export const GUILDHALL_GITIGNORE_BEGIN = '# BEGIN Guildhall managed'
+export const GUILDHALL_GITIGNORE_END = '# END Guildhall managed'
+
+export function guildhallGitignoreManagedBlock(): string {
+  return [
+    GUILDHALL_GITIGNORE_BEGIN,
+    ...SHARED_PROJECT_METADATA_GITIGNORE_ENTRIES,
+    ...LOCAL_PROJECT_STATE_GITIGNORE_ENTRIES,
+    GUILDHALL_GITIGNORE_END,
+  ].join('\n')
+}
+
+function stripGuildhallManagedBlock(content: string): string {
+  const pattern = new RegExp(
+    `\\n?${GUILDHALL_GITIGNORE_BEGIN.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}[\\s\\S]*?${GUILDHALL_GITIGNORE_END.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\n?`,
+    'g',
+  )
+  return content.replace(pattern, '\n')
+}
+
+const LEGACY_GUILDHALL_POLICY_LINES = new Set([
+  `!${PROJECT_CONFIG_DIRNAME}/`,
+  `!${PROJECT_CONFIG_DIRNAME}/*.yaml`,
+  `${PROJECT_CONFIG_DIRNAME}/${PROJECT_CONFIG_FILENAME}`,
+  `${PROJECT_CONFIG_DIRNAME}/worktrees/`,
+  `${PROJECT_CONFIG_DIRNAME}/local/`,
+  `${PROJECT_CONFIG_DIRNAME}/cache/`,
+  `${PROJECT_CONFIG_DIRNAME}/tmp/`,
+  `${PROJECT_CONFIG_DIRNAME}/logs/`,
+  `${PROJECT_CONFIG_DIRNAME}/sessions/`,
+  `${PROJECT_CONFIG_DIRNAME}/transcripts/`,
+  `${PROJECT_CONFIG_DIRNAME}/context-debug/`,
+  `${PROJECT_CONFIG_DIRNAME}/events/`,
+  `${PROJECT_CONFIG_DIRNAME}/checkpoints/`,
+  `${PROJECT_CONFIG_DIRNAME}/.session-epoch`,
+])
+
+export function applyGuildhallGitignorePolicy(content: string): string {
+  const withoutManagedBlock = stripGuildhallManagedBlock(content)
+  const preserved = withoutManagedBlock
+    .split(/\r?\n/)
+    .filter((line) => !LEGACY_GUILDHALL_POLICY_LINES.has(line.trim()))
+    .join('\n')
+    .trimEnd()
+  return [
+    preserved.length > 0 ? preserved : null,
+    preserved.length > 0 ? '' : null,
+    guildhallGitignoreManagedBlock(),
+    '',
+  ].filter((line) => line !== null).join('\n')
+}
 
 export const ProjectGuildhallConfig = z.object({
   /** Default model assignments (merged with per-workspace models) */
@@ -98,6 +161,13 @@ export const ProjectGuildhallConfig = z.object({
    * explicitly opts into more parallel judgment.
    */
   coordinatorLaneConcurrency: z.number().int().positive().max(16).optional(),
+
+  /**
+   * Project-local copy of the machine-wide Git Story default. Project setup
+   * seeds this from ~/.guildhall/config.yaml and then lets this checkout opt in
+   * or out of auto-commit/push/PR behavior without changing the global default.
+   */
+  gitStory: GitStoryPolicy.optional(),
 })
 export type ProjectGuildhallConfig = z.infer<typeof ProjectGuildhallConfig>
 
@@ -124,20 +194,9 @@ export function ensureProjectGuildhallFilePolicy(projectPath: string): void {
 
   const rootGitignore = join(projectRoot, '.gitignore')
   const existing = existsSync(rootGitignore) ? readFileSync(rootGitignore, 'utf8') : ''
-  const wanted = [
-    ...SHARED_PROJECT_METADATA_GITIGNORE_ENTRIES,
-    ...LOCAL_PROJECT_STATE_GITIGNORE_ENTRIES,
-  ]
-  const normalizedLines = existing
-    .split(/\r?\n/)
-    .map((line) => line.replace(/\s+#.*$/, '').trim())
-    .filter(Boolean)
-  const missing = wanted.filter((entry) => !normalizedLines.includes(entry))
-
-  if (missing.length === 0) return
-
-  const prefix = existing.length === 0 ? '' : existing.endsWith('\n') ? existing : `${existing}\n`
-  writeFileSync(rootGitignore, `${prefix}${missing.join('\n')}\n`, 'utf8')
+  const next = applyGuildhallGitignorePolicy(existing)
+  if (next === existing) return
+  writeFileSync(rootGitignore, next, 'utf8')
 }
 
 /**

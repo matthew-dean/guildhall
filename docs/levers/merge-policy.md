@@ -19,17 +19,17 @@ How a completed task's accepted commits land on the configured landing branch.
 |---|---|
 | `cherry_pick_local` | Cherry-pick the task branch's accepted commits onto the local landing branch. No push. Conflicts abort and surface as an escalation. |
 | `cherry_pick_with_push` | Same as above, then `git push` the landing branch to origin. |
-| `manual_pr` | Push the branch, open a PR via `gh pr create`, and stop. Human reviews and merges. |
+| `manual_pr` | Push the branch, open a PR via `gh pr create`, and stop. You review and merge. |
 
 ## Notes
 
 - Guildhall can also read a project-level `landingBranch` override from
   `./.guildhall/config.yaml`. If unset, it lands onto whatever branch the repo
   is currently on when the orchestrator starts.
-- Older files may still use the internal `merge_policy` key. Guildhall maps
+- Older files may still use the previous `merge_policy` key. Guildhall maps
   that forward for compatibility.
 
 ## Related
 
 - `worktree_isolation` — how the branch was produced in the first place.
-- `completion_approval` — whether a human must sign off before landing runs.
+- `completion_approval` — whether you must sign off before landing runs.

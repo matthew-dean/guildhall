@@ -5,6 +5,7 @@ import path from 'node:path'
 import type { Task } from '@guildhall/core'
 import { dispatchMerge, appendFixupTask, shelveSupersededFixupTasks } from '../merge-dispatcher.js'
 import { InMemoryGitDriver } from '../git-driver.js'
+import { localOnlyPath } from '../local-only-mode.js'
 
 let memoryDir: string
 
@@ -116,7 +117,7 @@ describe('dispatchMerge — cherry_pick_with_push', () => {
     expect(r.record.result).toBe('push_failed_degraded')
     expect(r.degradedToLocal).toBe(true)
     // FR-29 side effect: local-only marker should now exist.
-    const marker = path.join(memoryDir, 'local-only.json')
+    const marker = localOnlyPath(memoryDir)
     const stat = await fs.stat(marker)
     expect(stat.isFile()).toBe(true)
   })

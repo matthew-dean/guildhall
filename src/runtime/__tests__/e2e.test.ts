@@ -44,6 +44,12 @@ import { PermissionMode } from '@guildhall/engine'
 import { LivenessTracker } from '../liveness.js'
 import { buildServeApp } from '../serve.js'
 import { InMemoryGitDriver } from '../git-driver.js'
+import {
+  getProjectProgressHeartbeatsPath,
+  getProjectStateDir,
+  getProjectTaskLocalHistoryDir,
+  getProjectTranscriptPath,
+} from '@guildhall/sessions'
 
 // ---------------------------------------------------------------------------
 // End-to-end integration tests
@@ -64,25 +70,55 @@ let tmpDir: string
 let memoryDir: string
 let tasksPath: string
 let progressPath: string
+let heartbeatPath: string
 let originalHome: string | undefined
+let originalDataDir: string | undefined
 let testHomeDir: string
+let testDataDir: string
+
+function buildValidSpec(summary: string, criterion: string): string {
+  return [
+    '## Summary',
+    '',
+    summary,
+    '',
+    '## Completion Boundary',
+    `- Product outcome: ${criterion}`,
+    '- What Guildhall can complete in code: Update the project files needed for this task.',
+    '- External dependencies: None.',
+    '- Owner-only setup: None.',
+    '- Verification environment: Local test environment.',
+    `- What counts as done: ${criterion}`,
+    '- What must be split or blocked: Nothing.',
+    '',
+    '## Acceptance Criteria',
+    `1. ${criterion}`,
+  ].join('\n')
+}
 
 beforeEach(async () => {
   originalHome = process.env.HOME
+  originalDataDir = process.env.GUILDHALL_DATA_DIR
   tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'forge-e2e-'))
   testHomeDir = await fs.mkdtemp(path.join(os.tmpdir(), 'guildhall-home-'))
+  testDataDir = await fs.mkdtemp(path.join(os.tmpdir(), 'guildhall-data-'))
   process.env.HOME = testHomeDir
+  process.env.GUILDHALL_DATA_DIR = testDataDir
   bootstrapWorkspace(tmpDir, { name: 'E2E Workspace' })
-  memoryDir = path.join(tmpDir, 'memory')
+  memoryDir = getProjectStateDir(tmpDir)
   tasksPath = path.join(memoryDir, 'TASKS.json')
   progressPath = path.join(memoryDir, 'PROGRESS.md')
+  heartbeatPath = getProjectProgressHeartbeatsPath(tmpDir)
 })
 
 afterEach(async () => {
   if (originalHome === undefined) delete process.env.HOME
   else process.env.HOME = originalHome
+  if (originalDataDir === undefined) delete process.env.GUILDHALL_DATA_DIR
+  else process.env.GUILDHALL_DATA_DIR = originalDataDir
   await fs.rm(tmpDir, { recursive: true, force: true })
   await fs.rm(testHomeDir, { recursive: true, force: true }).catch(() => {})
+  await fs.rm(testDataDir, { recursive: true, force: true }).catch(() => {})
 })
 
 async function readQueue(): Promise<TaskQueue> {
@@ -113,6 +149,18 @@ async function setTaskSpecForReview(id: string, spec: string): Promise<void> {
   const task = queue.tasks.find((t) => t.id === id)!
   task.spec = spec
   task.status = 'spec_review'
+  task.productBrief = {
+    userJob: 'I want this task completed in the test project.',
+    successMetric: 'The scripted acceptance criterion is met.',
+    antiPatterns: [],
+    approvedAt: '2026-05-26T00:00:00.000Z',
+  }
+  task.acceptanceCriteria = [{
+    id: 'AC-1',
+    description: 'The scripted acceptance criterion is met.',
+    verifiedBy: 'review',
+    met: false,
+  }]
   await fs.writeFile(tasksPath, JSON.stringify(queue, null, 2), 'utf-8')
 }
 
@@ -208,7 +256,7 @@ describe('E2E AC-03: task lifecycle exploring → done', () => {
     // advances it to ready for the deterministic claimer.
     await setTaskSpecForReview(
       intake.taskId,
-      '## Summary\nAdd a ghost button variant.\n## AC\n1. renders.',
+      buildValidSpec('Add a ghost button variant.', 'The ghost button variant renders.'),
     )
     const specApproval = await approveSpec({
       memoryDir,
@@ -288,7 +336,7 @@ describe('E2E AC-03: task lifecycle exploring → done', () => {
 
     // FR-08 exploring transcript persisted across the whole run.
     const transcript = await fs.readFile(
-      path.join(memoryDir, 'exploring', `${intake.taskId}.md`),
+      getProjectTranscriptPath(tmpDir, 'exploring', intake.taskId),
       'utf-8',
     )
     expect(transcript).toContain('Add a ghost button variant')
@@ -356,7 +404,10 @@ coordinators:
 
     // 5. Simulate the Spec Agent drafting a spec on the orchestrator's next
     //    tick, then approve it via FR-12 approveSpec.
-    await setTaskSpecForReview(intake.taskId, '## Summary\nAdd a ghost button variant.\n## AC\n1. renders.')
+    await setTaskSpecForReview(
+      intake.taskId,
+      buildValidSpec('Add a ghost button variant.', 'The ghost button variant renders.'),
+    )
     const specApproval = await approveSpec({
       memoryDir,
       taskId: intake.taskId,
@@ -422,8 +473,10 @@ coordinators:
     ])
 
     // 7. PROGRESS.md captured HEARTBEAT and MILESTONE entries.
+    const heartbeats = await fs.readFile(heartbeatPath, 'utf-8')
+    expect(heartbeats).toContain('HEARTBEAT')
+    expect(heartbeats).toContain('looma')
     const progress = await fs.readFile(progressPath, 'utf-8')
-    expect(progress).toContain('HEARTBEAT')
     expect(progress).toContain('MILESTONE')
     expect(progress).toContain('gate_check → done')
     expect(progress).toContain('looma')
@@ -439,7 +492,7 @@ coordinators:
 
     // 9. The exploring transcript is still on disk with the approval note.
     const transcript = await fs.readFile(
-      path.join(memoryDir, 'exploring', `${intake.taskId}.md`),
+      getProjectTranscriptPath(tmpDir, 'exploring', intake.taskId),
       'utf-8',
     )
     expect(transcript).toContain('Add a ghost button variant')
@@ -465,9 +518,10 @@ describe('E2E 0.5.0: service over projects', () => {
         },
       ],
     })
-    memoryDir = path.join(tmpDir, 'memory')
+    memoryDir = getProjectStateDir(tmpDir)
     tasksPath = path.join(memoryDir, 'TASKS.json')
     progressPath = path.join(memoryDir, 'PROGRESS.md')
+    heartbeatPath = getProjectProgressHeartbeatsPath(tmpDir)
 
     const intake = await createExploringTask({
       memoryDir,
@@ -477,7 +531,7 @@ describe('E2E 0.5.0: service over projects', () => {
     })
     await setTaskSpecForReview(
       intake.taskId,
-      '## Summary\nRemove the stale binding.\n## AC\n1. the binding is removed.\n2. no behavior changes.',
+      buildValidSpec('Remove the stale binding.', 'The stale binding is removed without behavior changes.'),
     )
     await approveSpec({
       memoryDir,
@@ -522,10 +576,8 @@ describe('E2E 0.5.0: service over projects', () => {
       const fleetRes = await app.fetch(new Request('http://localhost/api/service'))
       expect(fleetRes.status).toBe(200)
       const fleetBody = (await fleetRes.json()) as {
-        selectedProject: { id: string } | null
         projects: Array<{ id: string }>
       }
-      expect(fleetBody.selectedProject?.id).toBe('service-proof')
       expect(fleetBody.projects.map(project => project.id)).toContain('service-proof')
 
       const attachRes = await app.fetch(new Request('http://localhost/api/service/attach-project', {
@@ -535,15 +587,17 @@ describe('E2E 0.5.0: service over projects', () => {
       }))
       expect(attachRes.status).toBe(200)
       const attachBody = (await attachRes.json()) as {
-        selectedProject?: { initializationNeeded?: boolean }
+        project?: { id?: string; initializationNeeded?: boolean }
       }
-      expect(attachBody.selectedProject?.initializationNeeded).toBe(true)
+      expect(attachBody.project?.initializationNeeded).toBe(true)
+      const attachedProjectId = attachBody.project?.id
+      expect(attachedProjectId).toBeTruthy()
 
-      const projectRes = await app.fetch(new Request('http://localhost/api/project'))
+      const projectRes = await app.fetch(new Request(`http://localhost/api/project?projectId=${encodeURIComponent(attachedProjectId ?? '')}`))
       const projectBody = (await projectRes.json()) as { initializationNeeded?: boolean }
       expect(projectBody.initializationNeeded).toBe(true)
 
-      const setupRes = await app.fetch(new Request('http://localhost/api/setup/identity', {
+      const setupRes = await app.fetch(new Request(`http://localhost/api/setup/identity?projectId=${encodeURIComponent(attachedProjectId ?? '')}`, {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ name: 'Attached Project', id: 'attached-project', tags: ['extension'] }),
@@ -563,14 +617,8 @@ describe('E2E 0.5.0: service over projects', () => {
       setProvider('anthropic-api', { apiKey: 'sk-ant-test' })
       updateGlobalConfig({ preferredProvider: 'anthropic-api' })
       updateProjectConfig(tmpDir, { allowPaidProviderFallback: true })
-      const selectRes = await app.fetch(new Request('http://localhost/api/service/select-project', {
-        method: 'POST',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ projectId: 'service-proof' }),
-      }))
-      expect(selectRes.status).toBe(200)
 
-      const projectSnapshot = await app.fetch(new Request('http://localhost/api/project'))
+      const projectSnapshot = await app.fetch(new Request('http://localhost/api/project?projectId=service-proof'))
       const snapshotBody = (await projectSnapshot.json()) as {
         initializationNeeded?: boolean
         name?: string
@@ -597,7 +645,7 @@ describe('E2E 0.5.0: service over projects', () => {
       expect(startBody.status).toBe('stopped')
       expect(startBody.code).toBe('all_terminal')
       expect(startBody.stopSummary?.reason).toBe('all_terminal')
-      const activityRes = await app.fetch(new Request('http://localhost/api/project/activity'))
+      const activityRes = await app.fetch(new Request('http://localhost/api/project/activity?projectId=service-proof'))
       const activity = (await activityRes.json()) as { running?: boolean; runStatus?: string }
       expect(activity.running).toBe(false)
       expect(activity.runStatus).toBe('stopped')
@@ -819,7 +867,7 @@ describe('E2E AC-22: report_issue → coordinator remediation inbox', () => {
     expect(taskAfter.agentIssues[0]!.broadcast).toBe(false)
     expect(taskAfter.agentIssues[0]!.detail).toContain('spec says X')
 
-    const progress = await fs.readFile(progressPath, 'utf-8')
+    const progress = await fs.readFile(heartbeatPath, 'utf-8')
     expect(progress).toContain('ISSUE [warn/stuck]')
 
     // Step 2: orchestrator next tick inbox sees the issue as a trigger.
@@ -1009,8 +1057,8 @@ describe('E2E AC-15: proposeTask → orchestrator tick → status per task_origi
       const final = afterTick.tasks.find((t) => t.id === c.id)!
       expect(final.status).toBe(c.expectedStatus)
 
-      // 5. PROGRESS.md records the promotion with the governing lever.
-      const progress = await fs.readFile(progressPath, 'utf-8')
+      // 5. Local progress heartbeats record the promotion with the governing lever.
+      const progress = await fs.readFile(heartbeatPath, 'utf-8')
       expect(progress).toContain(`Proposal ${c.id}: proposed → ${c.expectedStatus}`)
       expect(progress).toContain(`lever=${c.position}`)
     }
@@ -1599,12 +1647,7 @@ describe('E2E AC-23: crash → checkpoint → reclaim → restart_from_checkpoin
     // Manually backdate the checkpoint's writtenAt so the age calculation
     // exceeds 24h. writeCheckpoint stamps `new Date().toISOString()` — we
     // rewrite the file to control the timestamp.
-    const cpPath = path.join(
-      memoryDir,
-      'tasks',
-      'task-old',
-      'checkpoint.json',
-    )
+    const cpPath = path.join(getProjectTaskLocalHistoryDir(tmpDir, 'task-old'), 'checkpoint.json')
     const raw = JSON.parse(await fs.readFile(cpPath, 'utf-8'))
     raw.writtenAt = '2026-04-19T00:00:00Z'
     await fs.writeFile(cpPath, JSON.stringify(raw, null, 2), 'utf-8')

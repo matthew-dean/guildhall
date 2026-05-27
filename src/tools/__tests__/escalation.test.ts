@@ -92,6 +92,39 @@ describe('raiseEscalation', () => {
     expect(queue?.tasks[0]?.escalations[0]?.resolvedAt).toBeUndefined()
   })
 
+  it('stores external setup checklist steps on owner blockers', async () => {
+    const result = await raiseEscalation({
+      tasksPath,
+      taskId: 'task-001',
+      agentId: 'worker-agent',
+      reason: 'human_judgment_required',
+      summary: 'OAuth providers need external setup',
+      details: 'Guildhall can verify the code after the provider dashboards are configured.',
+      externalChecklist: [
+        {
+          id: 'google-oauth',
+          title: 'Create Google OAuth credentials',
+          detail: 'Add the client ID and secret to Supabase.',
+          owner: 'user',
+          status: 'todo',
+        },
+        {
+          id: 'apple-oauth',
+          title: 'Create Apple OAuth credentials',
+          owner: 'user',
+          status: 'todo',
+        },
+      ],
+    })
+
+    expect(result.success).toBe(true)
+    const { queue } = await readTasks({ tasksPath })
+    expect(queue?.tasks[0]?.escalations[0]?.externalChecklist).toMatchObject([
+      { id: 'google-oauth', title: 'Create Google OAuth credentials' },
+      { id: 'apple-oauth', title: 'Create Apple OAuth credentials' },
+    ])
+  })
+
   it('halts the task by setting status to blocked', async () => {
     await raiseEscalation({
       tasksPath,
@@ -124,6 +157,51 @@ describe('raiseEscalation', () => {
     expect(second.escalationId).toBe('esc-task-001-2')
     const { queue } = await readTasks({ tasksPath })
     expect(queue?.tasks[0]?.escalations).toHaveLength(2)
+  })
+
+  it('reuses an existing unresolved escalation for the same blocker', async () => {
+    const first = await raiseEscalation({
+      tasksPath,
+      taskId: 'task-001',
+      agentId: 'worker-agent',
+      reason: 'decision_required',
+      summary: 'Owner must choose between monthly and annual billing',
+      details: 'Both pricing paths are implementable, but the task needs a product decision before the worker can pick one.',
+    })
+    const second = await raiseEscalation({
+      tasksPath,
+      taskId: 'task-001',
+      agentId: 'worker-agent',
+      reason: 'decision_required',
+      summary: 'Owner must choose between monthly and annual billing',
+      details: 'Same blocker with a more detailed explanation.',
+    })
+
+    expect(first.success).toBe(true)
+    expect(second.success).toBe(true)
+    expect(second.escalationId).toBe(first.escalationId)
+
+    const { queue } = await readTasks({ tasksPath })
+    expect(queue?.tasks[0]?.escalations).toHaveLength(1)
+  })
+
+  it('rejects worker escalations caused by brittle edit matching instead of owner decisions', async () => {
+    const result = await raiseEscalation({
+      tasksPath,
+      taskId: 'task-001',
+      agentId: 'worker-agent',
+      reason: 'spec_ambiguous',
+      summary: 'Card component exists but template syntax mismatch prevents edit',
+      details: 'Multiple attempts to edit dashboard.vue failed because the exact string was not found, suggesting a whitespace or formatting mismatch. Need clarification on how to properly apply Card with props in the template.',
+    })
+
+    expect(result.success).toBe(false)
+    expect(result.error).toMatch(/implementation recovery/i)
+    expect(result.error).toMatch(/do not ask the owner/i)
+
+    const { queue } = await readTasks({ tasksPath })
+    expect(queue?.tasks[0]?.status).toBe('in_progress')
+    expect(queue?.tasks[0]?.escalations).toHaveLength(0)
   })
 
   it('writes a typed progress entry when progressPath is provided', async () => {
@@ -465,6 +543,22 @@ describe('engine tool wrappers', () => {
     )
     expect(result.is_error).toBe(false)
     expect(result.metadata?.escalationId).toBe('esc-task-001-1')
+  })
+
+  it('raiseEscalationTool rejects routine verification proof as owner work', async () => {
+    const result = await raiseEscalationTool.execute(
+      {
+        tasksPath,
+        taskId: 'task-001',
+        agentId: 'worker-agent',
+        reason: 'human_judgment_required',
+        summary: 'Cannot satisfy required AC-8 evidence command under current authoritative verification gate.',
+        details: 'Coordinator scoped instructions require an AC-8 evidence block with the exact pnpm --dir frontend test result.',
+      },
+      ctx,
+    )
+    expect(result.is_error).toBe(true)
+    expect(result.output).toMatch(/routine verification evidence/i)
   })
 
   it('raiseEscalationTool marks unknown task as error', async () => {

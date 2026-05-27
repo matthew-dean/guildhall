@@ -87,11 +87,11 @@ export function shouldIndexPath(relativePath: string): boolean {
   if (/\.(png|jpg|jpeg|gif|webp|ico|pdf|zip|tar|gz|map|lockb)$/i.test(relativePath)) return false
   const basename = path.basename(relativePath)
   if (basename.startsWith('.env')) return false
-  if (relativePath.startsWith('memory/exploring/') || relativePath.startsWith('memory/checkpoints/')) return false
+  if (relativePath.startsWith('.guildhall/local/') || relativePath.startsWith('.guildhall/worktrees/')) return false
   if (
-    relativePath.startsWith('memory/') &&
-    !/^memory\/(MEMORY|DECISIONS|PROGRESS)\.md$/.test(relativePath) &&
-    relativePath !== 'memory/design-system.yaml'
+    relativePath.startsWith('.guildhall/') &&
+    !/^\.guildhall\/(MEMORY|DECISIONS|PROGRESS)\.md$/.test(relativePath) &&
+    relativePath !== '.guildhall/design-system.yaml'
   ) return false
   const ext = path.extname(relativePath).toLowerCase()
   return TEXT_EXTENSIONS.has(ext) || isManifest(relativePath) || basename === 'AGENTS.md' || basename.startsWith('README')
@@ -149,7 +149,7 @@ export function requiresFullRefresh(touchedFiles: readonly string[]): boolean {
       isManifest(normalized) ||
       basename === '.gitignore' ||
       basename === 'AGENTS.md' ||
-      normalized === 'memory/design-system.yaml' ||
+      normalized === '.guildhall/design-system.yaml' ||
       /(?:^|\/)(package-lock|pnpm-lock|yarn.lock|bun.lockb)$/.test(normalized) ||
       /(?:^|\/)(vite|svelte|vue|react|tsconfig|eslint|prettier)\.config\./.test(normalized)
     )

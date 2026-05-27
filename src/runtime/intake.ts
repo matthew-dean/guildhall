@@ -1,18 +1,23 @@
 import fs from 'node:fs/promises'
 import path from 'node:path'
-import { TaskQueue, type Task, type TaskStatus } from '@guildhall/core'
+import { TaskQueue, type Task, type TaskRequest, type TaskStatus } from '@guildhall/core'
 import { atomicWriteText } from '@guildhall/sessions'
 import {
   appendExploringTranscript,
+  materializeRequiredSplitChildren,
   resolveEscalation,
 } from '@guildhall/tools'
 import { normalizeImportedDraftTask, promoteImportDraftToExploring } from './import-drafts.js'
+import { createPressureTestIntake, type PressureTestIntake } from './pressure-test-intake.js'
+import { analyzeRequestIntake } from './request-intake.js'
+import { routeRequest, type RouteRequestResult, type RoutedAction } from './request-routing.js'
+import { validateSpecCompletionBoundary } from './spec-quality.js'
 
 // ---------------------------------------------------------------------------
 // FR-12: exploratory task intake.
 //
 // A fuzzy user ask becomes a task in the `exploring` state, with a transcript
-// seed at memory/exploring/<task-id>.md. The Spec Agent picks it up on the next
+// seed in user-local Guildhall history. The Spec Agent picks it up on the next
 // orchestrator tick and drives a conversational intake.
 //
 // Approval transitions: exploring → spec_review. Until approved, the
@@ -59,6 +64,8 @@ export interface IntakeInput {
   taskId?: string
   /** Optional explicit title; defaults to a shortened ask */
   title?: string
+  /** User-facing routed request metadata for Thread projection. */
+  request?: TaskRequest
 }
 
 export interface IntakeResult {
@@ -78,7 +85,12 @@ export async function createExploringTask(input: IntakeInput): Promise<IntakeRes
   }
 
   const now = new Date().toISOString()
-  const title = input.title?.trim() || truncateTitle(input.ask)
+  const title = compactStoredLabel(input.title, input.ask, 'New request')
+  const requestIntake = analyzeRequestIntake({
+    ask: input.ask,
+    title,
+    createdAt: now,
+  })
 
   const task: Task = {
     id,
@@ -100,6 +112,9 @@ export async function createExploringTask(input: IntakeInput): Promise<IntakeRes
     revisionCount: 0,
     remediationAttempts: 0,
     origination: 'human',
+    ...(input.request ? { request: input.request } : {}),
+    requestIntake: requestIntake.requestIntake,
+    ...(requestIntake.openQuestion ? { openQuestions: [requestIntake.openQuestion] } : {}),
     createdAt: now,
     updatedAt: now,
   }
@@ -121,10 +136,104 @@ export async function createExploringTask(input: IntakeInput): Promise<IntakeRes
   return { taskId: id, transcriptPath: appendResult.path }
 }
 
-function truncateTitle(ask: string): string {
-  const firstLine = ask.split(/\n/)[0] ?? ask
-  if (firstLine.length <= 60) return firstLine.trim()
-  return firstLine.slice(0, 57).trim() + '...'
+export interface RoutedRequestResult {
+  routedActions: RoutedAction[]
+  routingDecision: RouteRequestResult['routingDecision']
+  taskId?: string
+  transcriptPath?: string
+  pressureTestIntake?: PressureTestIntake
+}
+
+export async function createRoutedRequest(input: IntakeInput): Promise<RoutedRequestResult> {
+  const routed = routeRequest({
+    raw: input.ask,
+    source: 'api',
+    routeContext: { route: '/api/project/request' },
+  })
+  const action = routed.actions[0]
+  if (action?.kind === 'pressure_test_intake') {
+    const pressureTestIntake = await createPressureTestIntake({
+      memoryDir: input.memoryDir,
+      target: {
+        type: action.intakeTarget.type === 'release' ? 'release' : 'feature',
+        id: slugId(action.intakeTarget.title),
+        title: action.intakeTarget.title,
+      },
+      rawRequest: input.ask,
+    })
+    return {
+      routedActions: routed.actions,
+      routingDecision: routed.routingDecision,
+      pressureTestIntake,
+    }
+  }
+
+  const task = await createExploringTask({
+    ...input,
+    title: input.title?.trim() || action?.label,
+    ...(action ? {
+      request: {
+        id: `request-${Date.now().toString(36)}-${slugId(action.label)}`,
+        raw: input.ask,
+        kind: action.kind,
+        title: action.label,
+        routingSummary: routingSummaryForAction(action),
+        createdAt: new Date().toISOString(),
+      },
+    } : {}),
+  })
+  return {
+    routedActions: routed.actions,
+    routingDecision: routed.routingDecision,
+    taskId: task.taskId,
+    transcriptPath: task.transcriptPath,
+  }
+}
+
+function compactStoredLabel(
+  preferred: string | undefined,
+  fallbackContent: string,
+  fallbackLabel: string,
+  max = 60,
+): string {
+  const preferredLabel = completeShortLabel(preferred, max)
+  if (preferredLabel) return preferredLabel
+  const fallbackCandidate = completeShortLabel(fallbackContent, max)
+  return fallbackCandidate ?? fallbackLabel
+}
+
+function completeShortLabel(value: string | undefined, max = 60): string | null {
+  const firstLine = value?.split(/\n/).find(line => line.trim().length > 0)?.trim()
+  if (!firstLine) return null
+  const singleLine = firstLine.replace(/\s+/g, ' ').trim()
+  if (!singleLine || /\.\.\.$/.test(singleLine)) return null
+  if (singleLine.length <= max) return singleLine
+  const sentence = singleLine.match(/^(.+?[.!?])(?:\s|$)/)?.[1]?.trim()
+  if (sentence && sentence.length <= max && !/\.\.\.$/.test(sentence)) return sentence
+  return null
+}
+
+function slugId(value: string): string {
+  return value.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '') || 'request'
+}
+
+function routingSummaryForAction(action: RoutedAction): string {
+  switch (action.kind) {
+    case 'task_spec':
+      return 'Routed to Task Intake'
+    case 'project_question':
+      return 'Routed to Project Question'
+    case 'settings_proposal':
+      return 'Routed to Settings Proposal'
+    case 'persona_practice_proposal':
+      return 'Routed to Persona/Practice Proposal'
+    case 'repair_triage':
+      return 'Routed to Repair Triage'
+    case 'clarification':
+      return 'Routed to Clarification'
+    case 'pressure_test_intake':
+      return 'Routed to Pressure-Test Intake'
+  }
 }
 
 export interface ApproveSpecInput {
@@ -141,8 +250,8 @@ export interface ApproveSpecResult {
 }
 
 /**
- * Mark a task's spec as approved by the human. Transitions `spec_review` →
- * `ready`, where the domain coordinator can assign a worker.
+ * Mark a task's spec as approved. A one-task spec moves to `ready`; a spec
+ * that names multiple child tasks creates them and keeps this task as `parent`.
  */
 export async function approveSpec(input: ApproveSpecInput): Promise<ApproveSpecResult> {
   const queue = await readQueue(input.memoryDir)
@@ -160,9 +269,20 @@ export async function approveSpec(input: ApproveSpecInput): Promise<ApproveSpecR
       error: `Task ${input.taskId} has no spec yet; cannot approve`,
     }
   }
+  const specQuality = validateSpecCompletionBoundary(task)
+  if (!specQuality.ok) {
+    return {
+      success: false,
+      error: `Spec is not ready for approval: ${specQuality.errors.join(' ')}`,
+    }
+  }
 
   const now = new Date().toISOString()
-  task.status = 'ready'
+  if (task.sizePlan?.action === 'split_required') {
+    materializeRequiredSplitChildren(queue, task, now)
+  } else {
+    task.status = 'ready'
+  }
   task.updatedAt = now
   queue.lastUpdated = now
 
@@ -183,10 +303,12 @@ export async function approveSpec(input: ApproveSpecInput): Promise<ApproveSpecR
     role: 'system',
     content: input.approvalNote
       ? `Spec approved by human. Note: ${input.approvalNote}`
-      : 'Spec approved by human. Task advanced to ready.',
+      : task.sizePlan?.action === 'split_required'
+        ? 'Spec approved. Guildhall created the listed tasks and kept this as the parent task.'
+        : 'Spec approved by human. Task advanced to ready.',
   })
 
-  return { success: true, newStatus: 'ready' }
+  return { success: true, newStatus: task.status }
 }
 
 // ---------------------------------------------------------------------------
@@ -235,7 +357,11 @@ export async function createBugReportTask(input: BugReportInput): Promise<BugRep
   const id = nextTaskId(queue)
   const now = new Date().toISOString()
 
-  const title = `Bug: ${truncateTitle(input.title).replace(/^Bug:\s*/i, '')}`
+  const title = `Bug: ${compactStoredLabel(
+    input.title.replace(/^Bug:\s*/i, ''),
+    input.body,
+    'Bug report',
+  )}`
 
   const description = [
     input.body.trim(),
@@ -323,6 +449,25 @@ export interface ShapeImportDraftResult {
   error?: string
 }
 
+export interface ReframeTaskInput {
+  memoryDir: string
+  taskId: string
+  reason?: string | undefined
+}
+
+export interface ReframeTaskResult {
+  success: boolean
+  newStatus?: TaskStatus
+  error?: string
+}
+
+export interface EnrichTaskInput {
+  memoryDir: string
+  taskId: string
+  mode?: 'split' | 'checklist' | 'general'
+  instruction?: string
+}
+
 /**
  * Resume an exploring-phase conversation: optionally resolve a pending
  * escalation, optionally append a new user message to the transcript, and
@@ -350,13 +495,16 @@ export async function resumeExploring(input: ResumeExploringInput): Promise<{ su
     if (!result.success) return { success: false, error: result.error ?? 'unknown' }
   }
 
-  if (input.message && input.preserveStatus) {
+  if (input.message) {
     task.notes.push({
       agentId: 'human',
       role: 'human',
       content: input.message,
       timestamp: new Date().toISOString(),
     })
+  }
+
+  if (input.message && input.preserveStatus) {
     await appendExploringTranscript({
       memoryDir: input.memoryDir,
       taskId: task.id,
@@ -384,6 +532,189 @@ export async function resumeExploring(input: ResumeExploringInput): Promise<{ su
   }
 
   return { success: true }
+}
+
+export async function reframeTask(input: ReframeTaskInput): Promise<ReframeTaskResult> {
+  const queue = await readQueue(input.memoryDir)
+  const task = queue.tasks.find((t) => t.id === input.taskId)
+  if (!task) return { success: false, error: `Task ${input.taskId} not found` }
+  if (task.status === 'done' || task.status === 'shelved' || task.status === 'pending_pr') {
+    return { success: false, error: `Task ${input.taskId} is ${task.status}` }
+  }
+  if (task.status === 'in_progress' || task.status === 'review' || task.status === 'gate_check') {
+    return {
+      success: false,
+      error: `Task ${input.taskId} already started implementation; pause or finish the current work before reframing so work traces stay connected.`,
+    }
+  }
+
+  const now = new Date().toISOString()
+  const oldStatus = task.status
+  const oldTitle = task.title
+  const reason = input.reason?.trim()
+  const reframeRequest = [
+    'Reframe this existing task from the current project memory and source state.',
+    '',
+    'The current task is too hard for a person to understand or act on. Rebuild the task brief/spec in plain language before any implementation work continues.',
+    '',
+    'Use the current project memory, resolved user answers, source notes, current code state, and the task origin. Do not preserve stale recovery wording, old imported-roadmap fragments, duplicate questions, or internal process terms as the user-facing explanation.',
+    '',
+    'The reframed task must answer these questions in normal language:',
+    '- What are we trying to ship or decide?',
+    '- Why does it matter?',
+    '- What is the next concrete step?',
+    '- If user input is needed, what exact decision is needed, what are the choices, and how should the user answer?',
+    '- What kind of request is this: policy/spec, implementation, question/research, or ambiguous?',
+    '- What components fit together: policy decision, spec, implementation surfaces, data/API/docs, release, and verification?',
+    '- If the request is bigger than one worker/review loop, turn it into a parent feature/epic with linked child tasks instead of one oversized task.',
+    '',
+    'Write new acceptance criteria only after the task is understandable. Keep provenance in notes/history; do not make the user read raw checkpoint or handoff packets to understand the work.',
+    ...(reason ? ['', `User note: ${reason}`] : []),
+  ].join('\n')
+
+  const notes = Array.isArray(task.notes) ? [...task.notes] : []
+  notes.push({
+    agentId: 'human',
+    role: 'human',
+    content: reason
+      ? `Asked Guildhall to reframe this task. Reason: ${reason}`
+      : 'Asked Guildhall to reframe this task from current project memory.',
+    timestamp: now,
+  })
+
+  const questions = Array.isArray(task.openQuestions) ? [...task.openQuestions] : []
+  task.openQuestions = questions.map(question => (
+    question.answeredAt
+      ? question
+      : {
+          ...question,
+          answeredAt: now,
+          answer: 'Superseded by a task reframe request.',
+        }
+  ))
+
+  if (Array.isArray(task.escalations)) {
+    task.escalations = task.escalations.map(escalation => (
+      escalation.resolvedAt
+        ? escalation
+        : {
+            ...escalation,
+            resolvedAt: now,
+            resolvedBy: 'human',
+            resolution: 'Superseded by a task reframe request.',
+          }
+    ))
+  }
+
+  delete task.blockReason
+  task.status = 'exploring'
+  task.assignedTo = 'spec-agent'
+  task.productBrief = undefined
+  task.spec = undefined
+  task.acceptanceCriteria = []
+  task.notes = notes
+  task.updatedAt = now
+  queue.lastUpdated = now
+
+  await appendExploringTranscript({
+    memoryDir: input.memoryDir,
+    taskId: task.id,
+    role: 'user',
+    content: reframeRequest,
+  })
+  await writeQueue(input.memoryDir, queue)
+
+  notes.push({
+    agentId: 'system',
+    role: 'system',
+    content: `Reframe requested for "${oldTitle}" from ${oldStatus}. Guildhall will rebuild the task in plain language before continuing.`,
+    timestamp: now,
+  })
+  await writeQueue(input.memoryDir, queue)
+
+  return { success: true, newStatus: 'exploring' }
+}
+
+export async function enrichTask(input: EnrichTaskInput): Promise<ReframeTaskResult> {
+  const queue = await readQueue(input.memoryDir)
+  const task = queue.tasks.find((t) => t.id === input.taskId)
+  if (!task) return { success: false, error: `Task ${input.taskId} not found` }
+  if (task.status === 'done' || task.status === 'shelved' || task.status === 'pending_pr') {
+    return { success: false, error: `Task ${input.taskId} is ${task.status}` }
+  }
+  if (task.status === 'in_progress' || task.status === 'review' || task.status === 'gate_check') {
+    return {
+      success: false,
+      error: `Task ${input.taskId} already started implementation; pause or finish the current work before enriching so work traces stay connected.`,
+    }
+  }
+
+  const now = new Date().toISOString()
+  const oldStatus = task.status
+  const mode = input.mode ?? 'general'
+  const instruction = input.instruction?.trim()
+  const modeInstruction = mode === 'split'
+    ? 'Enrich this task by deciding whether it should become a parent task with smaller linked child tasks. Preserve useful existing brief/spec context, but split external setup, owner-only work, implementation, and live verification into separate child tasks when they have different owners or verification boundaries.'
+    : mode === 'checklist'
+      ? 'Enrich this task by adding a concrete external blocker checklist and any missing owner setup steps. Preserve useful existing brief/spec context.'
+      : 'Enrich this task with missing context, clearer next steps, and any structured checklist or split recommendations needed before implementation continues. Preserve useful existing brief/spec context.'
+  const enrichmentRequest = [
+    modeInstruction,
+    '',
+    'Do not treat enrichment as proof that the old task was wrong. Keep valid context. Add the missing structure the user needs to make progress.',
+    '',
+    'If the work should be split, keep the current task as the parent and draft linked child tasks with clear owners, dependencies, and verification boundaries.',
+    'If the blocker needs external setup, produce the external checklist as concrete steps the owner can complete before Guildhall resumes verification.',
+    ...(instruction ? ['', `User note: ${instruction}`] : []),
+  ].join('\n')
+
+  const notes = Array.isArray(task.notes) ? [...task.notes] : []
+  notes.push({
+    agentId: 'human',
+    role: 'human',
+    content: instruction
+      ? `Asked Guildhall to enrich this task (${mode}). Note: ${instruction}`
+      : `Asked Guildhall to enrich this task (${mode}).`,
+    timestamp: now,
+  })
+
+  if (Array.isArray(task.escalations)) {
+    task.escalations = task.escalations.map(escalation => (
+      escalation.resolvedAt
+        ? escalation
+        : {
+            ...escalation,
+            resolvedAt: now,
+            resolvedBy: 'human',
+            resolution: 'Superseded by a task enrichment request.',
+          }
+    ))
+  }
+
+  delete task.blockReason
+  task.status = 'exploring'
+  task.assignedTo = 'spec-agent'
+  task.notes = notes
+  task.updatedAt = now
+  queue.lastUpdated = now
+
+  await appendExploringTranscript({
+    memoryDir: input.memoryDir,
+    taskId: task.id,
+    role: 'user',
+    content: enrichmentRequest,
+  })
+  await writeQueue(input.memoryDir, queue)
+
+  notes.push({
+    agentId: 'system',
+    role: 'system',
+    content: `Enrichment requested from ${oldStatus}. Guildhall will add the missing structure before continuing.`,
+    timestamp: now,
+  })
+  await writeQueue(input.memoryDir, queue)
+
+  return { success: true, newStatus: 'exploring' }
 }
 
 export async function shapeImportDraft(

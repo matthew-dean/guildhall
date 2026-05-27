@@ -6,7 +6,7 @@ import fs from 'node:fs/promises'
 
 // ---------------------------------------------------------------------------
 // saveAgentSetting — agents use this to persist learned configuration.
-// Writes structured patch to memory/agent-overrides.yaml and a human-readable
+// Writes structured patch to .guildhall/agent-overrides.yaml and a human-readable
 // entry to DECISIONS.md. This closes the learning loop:
 //   agents run → learn → save settings → next run starts smarter
 // ---------------------------------------------------------------------------
@@ -104,7 +104,7 @@ export async function saveAgentSetting(input: SaveAgentSettingInput): Promise<Sa
       ``,
       `**Rationale:** ${rationale}`,
       ``,
-      `_Written to memory/agent-overrides.yaml — edit or delete that file to revert._`,
+      `_Written to .guildhall/agent-overrides.yaml — edit or delete that file to revert._`,
       ``,
       `---`,
     ].join('\n')

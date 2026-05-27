@@ -11,6 +11,7 @@ import { buildServeApp } from '../serve.js'
 
 let tmpDir: string
 let memoryDir: string
+let projectId: string
 
 async function seedTask(
   id: string,
@@ -88,13 +89,19 @@ async function seedDesignSystem(): Promise<void> {
 
 beforeEach(async () => {
   tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'guildhall-serve-experts-'))
-  bootstrapWorkspace(tmpDir, { name: 'Experts Endpoint Test' })
-  memoryDir = path.join(tmpDir, 'memory')
+  projectId = bootstrapWorkspace(tmpDir, { name: 'Experts Endpoint Test' }).id ?? path.basename(tmpDir)
+  memoryDir = path.join(tmpDir, '.guildhall')
 })
 
 afterEach(async () => {
   await fs.rm(tmpDir, { recursive: true, force: true })
 })
+
+function projectUrl(route: string): string {
+  const url = new URL(`http://localhost${route}`)
+  url.searchParams.set('projectId', projectId)
+  return url.toString()
+}
 
 describe('GET /api/project/task/:id/experts', () => {
   it('returns applicable personas and primary engineer for a UI task', async () => {
@@ -102,7 +109,7 @@ describe('GET /api/project/task/:id/experts', () => {
     await seedTask('task-1')
     const { app } = buildServeApp({ projectPath: tmpDir })
     const res = await app.fetch(
-      new Request('http://localhost/api/project/task/task-1/experts'),
+      new Request(projectUrl('/api/project/task/task-1/experts')),
     )
     expect(res.status).toBe(200)
     const body = (await res.json()) as Record<string, any>
@@ -147,7 +154,7 @@ describe('GET /api/project/task/:id/experts', () => {
     })
     const { app } = buildServeApp({ projectPath: tmpDir })
     const res = await app.fetch(
-      new Request('http://localhost/api/project/task/task-1/experts'),
+      new Request(projectUrl('/api/project/task/task-1/experts')),
     )
     const body = (await res.json()) as Record<string, any>
     expect(body.verdictsBySlug['accessibility-specialist']).toHaveLength(1)
@@ -188,7 +195,7 @@ describe('GET /api/project/task/:id/experts', () => {
     })
     const { app } = buildServeApp({ projectPath: tmpDir })
     const res = await app.fetch(
-      new Request('http://localhost/api/project/task/task-1/experts'),
+      new Request(projectUrl('/api/project/task/task-1/experts')),
     )
     const body = (await res.json()) as Record<string, any>
     expect(body.gateResultsBySlug['accessibility-specialist']).toHaveLength(1)
@@ -202,7 +209,7 @@ describe('GET /api/project/task/:id/experts', () => {
   it('returns 404 for unknown task id', async () => {
     const { app } = buildServeApp({ projectPath: tmpDir })
     const res = await app.fetch(
-      new Request('http://localhost/api/project/task/missing/experts'),
+      new Request(projectUrl('/api/project/task/missing/experts')),
     )
     expect(res.status).toBe(404)
   })

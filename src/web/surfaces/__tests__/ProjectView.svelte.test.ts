@@ -18,6 +18,11 @@ function task(overrides: Record<string, unknown> = {}) {
     status: 'ready',
     domain: 'Editor',
     priority: 'high',
+    productBrief: {
+      userJob: 'Let editors create links without leaving the writing flow.',
+      approvedAt: now,
+    },
+    spec: 'Build the link editor controls inside the existing editor toolbar.',
     acceptanceCriteria: [
       { description: 'URL and display text controls are present.' },
       { description: 'The editor can remove an existing link.' },
@@ -182,6 +187,15 @@ function installFetchFakes(projectPayload: ProjectDetail = detail()) {
     if (url.pathname.includes('/answer-question')) return json({ ok: true })
     if (url.pathname === '/api/project/start') return json({ ok: true })
     if (url.pathname === '/api/project/stop') return json({ ok: true })
+    if (url.pathname === '/api/project/migrations') {
+      return json({
+        projectRoot: '/workspace/looma-knit',
+        pending: [{ id: '0.8.0/codex-agent-bridge', title: 'Install Codex Guildhall MCP bridge instructions', safety: 'prompt', summary: 'Adds AGENTS.md.', affectedPaths: ['AGENTS.md'] }],
+        blocked: [],
+        applied: [],
+      })
+    }
+    if (url.pathname === '/api/project/migrations/apply') return json({ ok: true, result: { applied: [], skipped: [], failed: [] }, status: { pending: [], blocked: [], applied: [] } })
     if (url.pathname === '/api/project/local-config') {
       return json({
         config: {
@@ -262,7 +276,7 @@ async function renderProjectView(
   project.detail = initialDetail
   project.error = null
   render(ProjectView, { initialView: view, initialSub: sub, projectId })
-  await waitFor(() => expect(screen.getByText('Looma + Knit')).toBeInTheDocument())
+  await waitFor(() => expect(screen.getAllByText(initialDetail.name ?? 'Project').length).toBeGreaterThan(0))
 }
 
 function installMobileBrowserFakes() {
@@ -342,11 +356,12 @@ describe('ProjectView', () => {
   })
 
   it.each([
+    ['overview', 'Work mix'],
     ['inbox', 'Choose link editor scope'],
     ['work', 'Knit: add link editor controls'],
     ['planner', 'Knit: add link editor controls'],
     ['timeline', 'Coordinator timeline'],
-    ['release', 'Release'],
+    ['release', 'Closure'],
     ['settings', 'Settings'],
     ['workspace-import', 'Review existing project work'],
     ['facts', 'Project facts'],
@@ -358,13 +373,27 @@ describe('ProjectView', () => {
     expect(screen.getByLabelText(/notifications need you/i)).toBeInTheDocument()
   })
 
-  it('canonicalizes legacy project routes to the explicit project slug', async () => {
-    path.value = '/project/thread'
-    window.history.replaceState({}, '', '/project/thread')
+  it('does not foreground resolved git runtime errors in Overview', async () => {
+    const projectPayload = detail({
+      recentEvents: [
+        {
+          at: now,
+          event: { type: 'supervisor_error', message: 'spawn git ENOENT' },
+        },
+      ],
+      gitStory: {
+        ready: true,
+        state: 'clean',
+        blockers: [],
+        snapshots: [{ state: 'clean', reason: 'No local changes or unpublished branch work detected.' }],
+      },
+    } as Partial<ProjectDetail>)
+    installFetchFakes(projectPayload)
 
-    await renderProjectView('thread', null, null)
+    await renderProjectView('overview', null, 'looma-knit', projectPayload)
 
-    await waitFor(() => expect(path.value).toBe('/projects/looma-knit/thread'))
+    expect(screen.queryByText('Guildhall could not find git while inspecting this project.')).toBeNull()
+    expect(screen.queryByText('spawn git ENOENT')).toBeNull()
   })
 
   it('routes setup blockers with a pending meta-intake task to the setup recovery surface', async () => {
@@ -417,6 +446,92 @@ describe('ProjectView', () => {
     expect(attention).toHaveTextContent(/Review drafts/i)
     await user.click(attention)
     expect(path.value).toBe('/projects/looma-knit/task/task-import-1')
+  })
+
+  it('surfaces required migrations as the primary setup action and can apply them intentionally', async () => {
+    const user = userEvent.setup()
+    const migrationBlocked = detail({
+      startReadiness: {
+        canStart: false,
+        code: 'required_migration_pending',
+        message: 'Run required Guildhall migration 0.8.0/project-state-layout before starting this project.',
+        actionHref: '/migrations',
+      },
+    } as Partial<ProjectDetail>)
+    const fetchMock = installFetchFakes(migrationBlocked)
+    fetchMock.mockImplementation(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = new URL(String(input), 'http://localhost')
+      if (url.pathname === '/api/project') return json(migrationBlocked)
+      if (url.pathname === '/api/project/inbox') return json({
+        blockers: { bootstrap: true, workspaceImport: false },
+        items: [
+          {
+            id: 'bootstrap',
+            kind: 'bootstrap_blocked',
+            severity: 'high',
+            title: 'Bootstrap incomplete',
+            detail: 'No verified install/gate commands in guildhall.yaml.',
+            actionHref: '/settings/ready',
+          },
+        ],
+      })
+      if (url.pathname === '/api/project/thread') return json({ turns: [], activeTurnId: null })
+      if (url.pathname === '/api/project/migrations') {
+        return json({
+          projectRoot: '/workspace/looma-knit',
+          pending: [],
+          blocked: [
+            {
+              id: '0.8.0/project-state-layout',
+              title: 'Move legacy project memory into split project state',
+              safety: 'prompt',
+              requirement: 'required',
+              summary: 'Moves old ./memory project notes into .guildhall and local Guildhall history.',
+              affectedPaths: ['memory/', '.guildhall/'],
+            },
+          ],
+          applied: [],
+        })
+      }
+      if (url.pathname === '/api/project/migrations/apply') {
+        expect(init?.method).toBe('POST')
+        expect(JSON.parse(String(init?.body))).toMatchObject({
+          includePrompt: true,
+          migrationId: '0.8.0/project-state-layout',
+        })
+        return json({
+          ok: true,
+          result: {
+            applied: [{ id: '0.8.0/project-state-layout', title: 'Move legacy project memory into split project state' }],
+            skipped: [],
+            failed: [],
+          },
+          status: { pending: [], blocked: [], applied: [{ id: '0.8.0/project-state-layout' }] },
+        })
+      }
+      return json({})
+    })
+
+    await renderProjectView('overview', null, 'looma-knit', migrationBlocked)
+
+    expect(screen.getAllByRole('button', { name: /migrate project/i }).length).toBeGreaterThan(0)
+    expect(screen.getAllByText('Required migration').length).toBeGreaterThan(0)
+    expect(screen.getAllByText(/Run required Guildhall migration/).length).toBeGreaterThan(0)
+
+    await user.click(screen.getAllByRole('button', { name: /migrate project/i }).at(-1)!)
+    await screen.findByRole('dialog', { name: /migrate project/i })
+    expect(screen.getByText('Move legacy project memory into split project state')).toBeInTheDocument()
+    expect(screen.getByText('memory/')).toBeInTheDocument()
+    expect(screen.getByText('.guildhall/')).toBeInTheDocument()
+
+    await user.click(screen.getByRole('button', { name: /apply required migration/i }))
+
+    await waitFor(() => {
+      expect(fetchMock).toHaveBeenCalledWith(
+        expect.stringContaining('/api/project/migrations/apply?projectId=looma-knit'),
+        expect.objectContaining({ method: 'POST' }),
+      )
+    })
   })
 
   it('does not present stable done-only projects as paused or needing setup attention', async () => {
@@ -517,7 +632,11 @@ describe('ProjectView', () => {
     const fetchMock = installFetchFakes()
 
     await renderProjectView('thread')
-    await user.click(screen.getByRole('button', { name: /^start$/i }))
+    const startButton = screen.getByRole('button', { name: /^start$/i })
+    expect(startButton.classList.contains('v-agent')).toBe(true)
+    expect(startButton).toHaveTextContent(/^Start$/)
+    expect(startButton).not.toHaveTextContent(/task/i)
+    await user.click(startButton)
 
     await waitFor(() => {
       expect(fetchMock).toHaveBeenCalledWith(
@@ -560,12 +679,12 @@ describe('ProjectView', () => {
     await waitFor(() => {
       expect(topbar).not.toHaveTextContent('Projects')
     })
-    expect(topbar).not.toHaveTextContent('New task')
+    expect(topbar).not.toHaveTextContent('New request')
     expect(topbar).not.toHaveTextContent('Start')
     expect(topbar).not.toHaveTextContent('Needs you')
   })
 
-  it('moves New task into the overflow menu at narrow toolbar widths', async () => {
+  it('moves New request into the overflow menu at narrow toolbar widths', async () => {
     const user = userEvent.setup()
     installViewportMatchMedia(600)
 
@@ -574,9 +693,9 @@ describe('ProjectView', () => {
     render(ProjectView, { initialView: 'thread', initialSub: null, projectId: 'looma-knit' })
     await waitFor(() => expect(screen.getByRole('button', { name: 'Open actions menu' })).toBeInTheDocument())
 
-    expect(screen.queryByRole('button', { name: 'New task' })).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'New request' })).not.toBeInTheDocument()
     await user.click(screen.getByRole('button', { name: 'Open actions menu' }))
-    expect(screen.getByRole('button', { name: 'New task' })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'New request' })).toBeInTheDocument()
   })
 
   it('labels a running one-task pass as Stop 1 and stops the scoped project run', async () => {
@@ -768,21 +887,39 @@ describe('ProjectView', () => {
   it('keeps collapsed rail navigation accessible by name', async () => {
     await renderProjectView('work')
 
+    expect(screen.getByRole('button', { name: 'Overview' })).toBeInTheDocument()
     expect(screen.getByRole('button', { name: 'Thread' })).toBeInTheDocument()
-    expect(screen.getByRole('button', { name: 'Needs you' })).toBeInTheDocument()
     expect(screen.getByRole('button', { name: 'Work' })).toBeInTheDocument()
     expect(screen.getByRole('button', { name: 'Timeline' })).toBeInTheDocument()
-    expect(screen.getByRole('button', { name: 'Release' })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Closure' })).toBeInTheDocument()
     expect(screen.getByRole('button', { name: 'Settings' })).toBeInTheDocument()
     expect(screen.queryByRole('button', { name: 'Project provider settings' })).not.toBeInTheDocument()
   })
 
-  it('routes the rail Needs you item to the notifications surface', async () => {
-    await renderProjectView('thread')
+  it('preserves the saved project-name casing in the app header', async () => {
+    const fllDetail = detail({
+      id: 'fair-labor-license',
+      name: 'Fair Labor License',
+      path: '/workspace/fair-labor-license',
+    })
+    installFetchFakes(fllDetail)
+    await renderProjectView(
+      'overview',
+      null,
+      'fair-labor-license',
+      fllDetail,
+    )
 
-    await userEvent.click(screen.getByRole('button', { name: 'Needs you' }))
+    expect(screen.getAllByText('Fair Labor License').length).toBeGreaterThan(0)
+    expect(screen.queryByText('Fair labor license')).not.toBeInTheDocument()
+  })
 
-    expect(path.value).toBe('/projects/looma-knit/notifications')
+  it('routes the top-bar Needs you indicator to the project inbox, even from overview', async () => {
+    await renderProjectView('overview')
+
+    await userEvent.click(screen.getByRole('button', { name: /notifications need you/i }))
+
+    expect(path.value).toBe('/projects/looma-knit/overview/inbox')
   })
 
   it('keeps Settings pinned in the rail utility section instead of expanding settings subsections there', async () => {

@@ -19,6 +19,9 @@ For each provider, the page shows:
 - **Verification**: a `verifiedAt` marker after a successful test.
 - **Credential action**: connect, paste an API key, test, or disconnect.
 - **Provider choice**: which configured provider Guildhall prefers by default, with room for a project override when needed.
+- **Fallback and mismatch warnings**: whether Guildhall had to use a fallback,
+  or whether model settings point at a different provider family than the one
+  you meant to use.
 
 ## Provider paths the service exposes today
 
@@ -38,6 +41,18 @@ For each provider, the page shows:
 - Optional project override: `preferredProvider` in `./.guildhall/config.yaml` only when one project truly needs different behavior.
 
 The page only reveals credentials that are explicitly in config — it will never log or display a hidden system credential.
+
+## Default provider visibility
+
+Projects Home shows the machine-default provider and active worker model group
+so you can spot the lane before starting work. The chip routes here, to global
+Providers, because provider drift usually affects the whole local service.
+
+Fallback is intentionally loud. If the preferred provider is unavailable, or a
+scoped model override points at a provider family that does not match the
+preferred provider, Guildhall shows the warning until you fix the config or
+accept the mismatch. Paid-provider fallback stays disabled unless you opt in,
+so a local-model outage does not quietly become a cloud bill.
 
 ## Related
 

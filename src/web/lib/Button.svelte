@@ -167,7 +167,6 @@
 
   .s-sm {
     padding: var(--control-pad-y) var(--s-3);
-    font-size: var(--fs-1);
     min-height: 28px;
   }
   .s-md {

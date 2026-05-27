@@ -57,6 +57,35 @@ function makeScriptPackage(): string {
   return root
 }
 
+function makeWorkspaceScriptPackage(): string {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'guildhall-shell-workspace-'))
+  const frontend = path.join(root, 'frontend')
+  fs.mkdirSync(frontend, { recursive: true })
+  fs.writeFileSync(
+    path.join(root, 'pnpm-workspace.yaml'),
+    "packages:\n  - 'frontend'\n",
+  )
+  fs.writeFileSync(
+    path.join(root, 'package.json'),
+    JSON.stringify({ private: true, packageManager: 'pnpm@10.19.0' }, null, 2),
+  )
+  fs.writeFileSync(
+    path.join(frontend, 'package.json'),
+    JSON.stringify(
+      {
+        name: 'frontend',
+        private: true,
+        scripts: {
+          test: "node -e \"console.log('frontend-test-ran')\"",
+        },
+      },
+      null,
+      2,
+    ),
+  )
+  return root
+}
+
 describe('runShellSync — success cases', () => {
   it('returns success=true for a command that exits 0', () => {
     const result = runShellSync({ command: 'echo hello', cwd: '/tmp', timeoutMs: 5000 })
@@ -245,6 +274,57 @@ describe('shellTool — engine-tool interface', () => {
     })
   })
 
+  it('shows the executed working directory in shell output after cwd remapping', async () => {
+    const { projectPath, worktreePath } = makeTaskScopedDirs()
+    const result = await shellTool.execute(
+      { command: 'pwd', cwd: projectPath, timeoutMs: 5000 },
+      {
+        cwd: projectPath,
+        metadata: {
+          current_task_project_path: projectPath,
+          current_task_worktree_path: worktreePath,
+        },
+      },
+    )
+
+    expect(result.is_error).toBe(false)
+    expect(result.output).toContain(`Working directory: ${worktreePath}`)
+  })
+
+  it('runs authoritative verification from the stored verification cwd when cwd is omitted', async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'guildhall-shell-verification-cwd-'))
+    const frontend = path.join(root, 'frontend')
+    fs.mkdirSync(frontend, { recursive: true })
+    fs.writeFileSync(
+      path.join(frontend, 'package.json'),
+      JSON.stringify({
+        name: 'frontend',
+        scripts: { build: "node -e \"console.log('scoped-build-ran')\"" },
+      }),
+    )
+
+    const result = await shellTool.execute(
+      { command: 'pnpm build', timeoutMs: 5000 },
+      {
+        cwd: frontend,
+        metadata: {
+          current_task_verification_commands: ['pnpm --dir frontend build'],
+          current_task_verification_cwd: root,
+        },
+      },
+    )
+
+    expect(result.is_error).toBe(false)
+    expect(result.output).toContain(`Working directory: ${root}`)
+    expect(result.output).toContain('scoped-build-ran')
+    expect(result.metadata).toMatchObject({
+      requestedCwd: frontend,
+      executedCwd: root,
+      executedCommand: 'pnpm --dir frontend build',
+      usedAuthoritativeCommand: true,
+    })
+  })
+
   it('remaps omitted workspace cwd into the isolated worktree root for scoped authoritative commands', async () => {
     const { workspacePath, projectPath, worktreePath, worktreeProjectPath } =
       makeNestedTaskScopedDirs()
@@ -329,6 +409,70 @@ describe('shellTool — engine-tool interface', () => {
     expect(result.metadata).toMatchObject({
       requestedCommand: `cd ${cwd} && pnpm test 2>&1`,
       executedCommand: 'npm test',
+      usedAuthoritativeCommand: true,
+    })
+  })
+
+  it('preserves a relative cd working directory when reconciling authoritative verification commands', async () => {
+    const cwd = fs.mkdtempSync(path.join(os.tmpdir(), 'guildhall-shell-cd-'))
+    const frontend = path.join(cwd, 'frontend')
+    fs.mkdirSync(frontend, { recursive: true })
+    fs.writeFileSync(
+      path.join(frontend, 'package.json'),
+      JSON.stringify(
+        {
+          name: 'frontend',
+          private: true,
+          scripts: {
+            build: "node -e \"console.log('frontend-build-ran')\"",
+          },
+        },
+        null,
+        2,
+      ),
+    )
+
+    const result = await shellTool.execute(
+      {
+        command: 'cd frontend && pnpm build',
+        cwd,
+        timeoutMs: 5000,
+      },
+      {
+        cwd,
+        metadata: {
+          current_task_verification_commands: ['pnpm build'],
+        },
+      },
+    )
+
+    expect(result.is_error).toBe(false)
+    expect(result.output).toContain('frontend-build-ran')
+    expect(result.metadata).toMatchObject({
+      requestedCommand: 'cd frontend && pnpm build',
+      executedCommand: 'pnpm build',
+      usedAuthoritativeCommand: true,
+      cdAdjustedCwd: frontend,
+      executedCwd: frontend,
+    })
+  })
+
+  it('normalizes scoped pnpm test commands to the script form pnpm expects', async () => {
+    const cwd = makeWorkspaceScriptPackage()
+    const result = await shellTool.execute(
+      { command: 'pnpm test', cwd, timeoutMs: 5000 },
+      {
+        cwd,
+        metadata: {
+          current_task_verification_commands: ['pnpm --dir frontend test'],
+        },
+      },
+    )
+    expect(result.is_error).toBe(false)
+    expect(result.output).toContain('frontend-test-ran')
+    expect(result.metadata).toMatchObject({
+      requestedCommand: 'pnpm test',
+      executedCommand: 'pnpm --dir frontend run test',
       usedAuthoritativeCommand: true,
     })
   })

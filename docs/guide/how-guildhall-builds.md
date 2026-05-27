@@ -42,6 +42,12 @@ when the choice is routine. When a choice changes what you are building, who it
 serves, what data it touches, or whether you are comfortable shipping it, the
 app brings that choice to you with enough context to answer.
 
+Some asks need one extra beat before they become a task. "Set a policy" might
+mean "write the policy," "build the feature that enforces it," or "make a parent
+plan and split the work." Guildhall looks for that ambiguity, records the
+pieces that fit together, and asks a focused question instead of quietly sending
+a worker into a task that is really a feature in disguise.
+
 For example, you do not need a giant menu of database engines before Guildhall
 knows whether the project needs a database. If a database choice matters, the
 app explains the likely fit and offers realistic alternatives.
@@ -55,7 +61,7 @@ app explains the likely fit and offers realistic alternatives.
 | Foundation | Safe execution setup | Worktree status, dependencies, baseline checks, and any setup blocker. |
 | Framing | Task organization | Work grouped into understandable pieces with dependencies and open questions. |
 | Trade work | Implementation | Source edits, tests, docs, migrations, UI changes, and the evidence behind them. |
-| Inspection | Review and gates | Review findings, command results, browser checks, and release readiness. |
+| Inspection | Review and gates | Review findings, command results, browser checks, and current work closure. |
 | Change order | Plan revision | A clear note explaining what changed and why. |
 | Punch list | Finish and release | Shipping blockers, follow-ups, cleanup, and explicit deferrals. |
 
@@ -108,6 +114,12 @@ to how confident the transcript sounded.
 When Guildhall needs your answer, the question is bounded and useful. A
 good question protects product quality. A bad question makes you do the tool's
 ordinary thinking for it.
+
+When a task looks too large, Guildhall sizes it before it moves. Tiny and small
+tasks can proceed. Medium tasks get a little caution. Large tasks get split
+recommendations, and epic-sized work becomes a parent-sized task with linked
+child tasks. The point is not story-point theater; it is keeping the unit of
+work small enough for a worker and reviewers to understand.
 
 ## Where to go next
 

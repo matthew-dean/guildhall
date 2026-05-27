@@ -19,6 +19,7 @@ Good first tasks:
 - implement one narrow behavior
 - update one doc for a clear audience
 - add one test surface for code that already exists
+- write one policy or spec before asking Guildhall to apply it everywhere
 
 Weak first tasks:
 
@@ -26,6 +27,8 @@ Weak first tasks:
 - "Clean up everything."
 - "Make the UI better."
 - "Review all code."
+- "Set the policy" when you have not said whether you want a spec, a parent
+  feature, or implementation now.
 
 ## Give each task a blueprint
 
@@ -44,6 +47,11 @@ Do not over-specify routine mechanics. If a decision is conventional and the
 repo gives enough evidence, Guildhall can recommend the default and keep
 moving. Save your attention for product intent, audience, flow, content,
 constraints, and the finish line.
+
+If a task contains several pieces that need to fit together, let Guildhall keep
+them linked without making them one task. A policy decision, a written spec,
+the product changes that apply it, and the checks that prove it can be four
+related tasks under one parent goal.
 
 ## Treat drafts as a holding area
 

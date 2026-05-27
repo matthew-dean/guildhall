@@ -4,6 +4,7 @@ import { tmpdir } from 'node:os'
 import path from 'node:path'
 
 import type { ResolvedConfig } from '@guildhall/config'
+import { getProjectRecentEventsPath } from '@guildhall/sessions'
 import { OrchestratorSupervisor } from '../serve-supervisor.js'
 import { clearProviderClientPool, getOrCreateProviderClient, openAiCompatiblePoolKey } from '../provider-client-pool.js'
 import type { ApiMessageRequest, ApiStreamEvent, SupportsStreamingMessages } from '@guildhall/engine'
@@ -213,6 +214,7 @@ describe('OrchestratorSupervisor', () => {
 
   it('trims persisted recent events so reconnect hydration stays bounded', async () => {
     const workspacePath = await mkdtemp(path.join(tmpdir(), 'guildhall-supervisor-'))
+    process.env.GUILDHALL_DATA_DIR = path.join(workspacePath, '.guildhall-data')
     const supervisor = new OrchestratorSupervisor({
       resolveConfig: () => ({ workspaceId: 'w', projectPath: workspacePath } as ResolvedConfig),
       runOrchestrator: async (_config, opts) => {
@@ -231,7 +233,10 @@ describe('OrchestratorSupervisor', () => {
       const run = supervisor.start({ workspaceId: 'w', workspacePath })
       await run.runPromise
 
-      const raw = await readFile(path.join(workspacePath, 'memory', 'recent-events.jsonl'), 'utf8')
+      await expect(
+        readFile(path.join(workspacePath, 'memory', 'recent-events.jsonl'), 'utf8'),
+      ).rejects.toThrow()
+      const raw = await readFile(getProjectRecentEventsPath(workspacePath), 'utf8')
       const lines = raw.trim().split('\n')
       expect(lines.length).toBeLessThanOrEqual(1000)
 
@@ -242,6 +247,7 @@ describe('OrchestratorSupervisor', () => {
       expect(recent).toHaveLength(200)
       expect(recent.some(ev => JSON.stringify(ev.event).includes('event 1204'))).toBe(true)
     } finally {
+      delete process.env.GUILDHALL_DATA_DIR
       await rm(workspacePath, { recursive: true, force: true })
     }
   })

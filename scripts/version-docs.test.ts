@@ -20,9 +20,17 @@ async function createDocsFixture(tmp: string, marker = 'current docs'): Promise<
   await fs.copyFile(path.join(root, 'scripts/version-docs.mjs'), path.join(tmp, 'scripts/version-docs.mjs'))
   await fs.writeFile(
     path.join(tmp, 'docs/index.md'),
-    `# Home\n\n${marker}\n\n[Guide](/guildhall/guide/quick-start)\n`,
+    `# Home\n\n${marker}\n\n[Guide](/guide/quick-start)\n[Old guide](/guildhall/guide/quick-start)\n`,
   )
-  await fs.writeFile(path.join(tmp, 'docs/guide/quick-start.md'), '[Work](/web-ui/project-view)\n')
+  await fs.writeFile(
+    path.join(tmp, 'docs/guide/quick-start.md'),
+    [
+      '[Work](/web-ui/project-view)',
+      '[Old work](/guildhall/web-ui/project-view)',
+      '[Relative work](../web-ui/project-view)',
+      '',
+    ].join('\n'),
+  )
   await fs.writeFile(path.join(tmp, 'docs/web-ui/project-view.md'), '# Project view\n')
   await fs.writeFile(path.join(tmp, 'docs/web-ui/flow-audit.md'), '# Internal checklist\n')
   await fs.writeFile(
@@ -54,8 +62,11 @@ describe('docs versioning script', () => {
       const releaseIndex = await fs.readFile(path.join(versionRoot, 'releases/index.md'), 'utf8')
 
       await expect(fs.stat(path.join(versionRoot, 'web-ui/flow-audit.md'))).rejects.toThrow()
-      expect(home).toContain('/guildhall/versions/1.2.3/guide/quick-start')
+      expect(home).toContain('/versions/1.2.3/guide/quick-start')
+      expect(home).not.toContain('/guildhall/')
       expect(quickStart).toContain('/versions/1.2.3/web-ui/project-view')
+      expect(quickStart).toContain('../web-ui/project-view')
+      expect(quickStart).not.toContain('/guildhall/')
       expect(releaseIndex).toContain('version-pinned docs snapshot for Guildhall 1.2.3')
       expect(releaseIndex).not.toContain('Main-branch docs')
     } finally {

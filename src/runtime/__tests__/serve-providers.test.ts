@@ -13,12 +13,18 @@ vi.mock('node:os', async (importOriginal) => {
   return { ...actual, homedir: () => TMP_HOME }
 })
 
-const { bootstrapWorkspace, setProvider, readGlobalProviders, globalProvidersPath, readWorkspaceConfig, readGlobalConfig, resolveModelsForProvider, updateProjectConfig, registerWorkspace } =
+const { bootstrapWorkspace, setProvider, readGlobalProviders, globalProvidersPath, readWorkspaceConfig, readGlobalConfig, updateGlobalConfig, resolveModelsForProvider, updateProjectConfig, registerWorkspace } =
   await import('@guildhall/config')
 const { buildServeApp } = await import('../serve.js')
 const { clearProviderClientPool } = await import('../provider-client-pool.js')
 
 let tmpProject: string
+const PROJECT_ID = 'provider-test'
+
+function scoped(pathname: string): string {
+  const separator = pathname.includes('?') ? '&' : '?'
+  return `http://localhost${pathname}${separator}projectId=${encodeURIComponent(PROJECT_ID)}`
+}
 
 function sseResponse(frames: string[]): Response {
   const encoder = new TextEncoder()
@@ -83,36 +89,39 @@ async function writeCodexCred(): Promise<void> {
 }
 
 describe('GET /api/setup/providers', () => {
-  it('reports service metadata with a current selected project when the service starts at the fleet level', async () => {
+  it('reports service metadata without a current selected project when the service starts at the fleet level', async () => {
     registerWorkspace({ id: 'provider-test', name: 'Provider Test', path: tmpProject, tags: [] })
     const { app } = buildServeApp({})
     const res = await app.fetch(new Request('http://localhost/api/service'))
     expect(res.status).toBe(200)
     const body = (await res.json()) as {
-      selectedProject: { id: string } | null
-      foregroundProject: { id: string } | null
+      selectedProject?: unknown
+      foregroundProject?: unknown
       projects: Array<{ id: string }>
     }
-    expect(body.selectedProject?.id).toBe('provider-test')
-    expect(body.foregroundProject?.id).toBe('provider-test')
+    expect(body.selectedProject).toBeUndefined()
+    expect(body.foregroundProject).toBeUndefined()
     expect(body.projects.map(project => project.id)).toContain('provider-test')
   })
 
-  it('reports the hinted project as selected when the service is launched with an initial project hint', async () => {
+  it('keeps a project hint out of service-wide selection metadata', async () => {
+    registerWorkspace({ id: 'provider-test', name: 'Provider Test', path: tmpProject, tags: [] })
     const { app } = buildServeApp({ preferredProjectPath: tmpProject })
     const res = await app.fetch(new Request('http://localhost/api/service'))
     expect(res.status).toBe(200)
     const body = (await res.json()) as {
-      selectedProject: { id: string; path: string } | null
-      foregroundProject: { id: string } | null
+      selectedProject?: unknown
+      foregroundProject?: unknown
+      projects: Array<{ id: string; path: string }>
     }
-    expect(body.selectedProject).toMatchObject({ id: 'provider-test', path: tmpProject })
-    expect(body.foregroundProject).toMatchObject({ id: 'provider-test' })
+    expect(body.selectedProject).toBeUndefined()
+    expect(body.foregroundProject).toBeUndefined()
+    expect(body.projects).toContainEqual(expect.objectContaining({ id: 'provider-test', path: tmpProject }))
   })
 
   it('reports no credentials when the global store is empty', async () => {
     const { app } = buildServeApp({ projectPath: tmpProject })
-    const res = await app.fetch(new Request('http://localhost/api/setup/providers'))
+    const res = await app.fetch(new Request(scoped('/api/setup/providers')))
     expect(res.status).toBe(200)
     const body = (await res.json()) as {
       providers: Record<string, { detected: boolean; verifiedAt: string | null }>
@@ -124,19 +133,19 @@ describe('GET /api/setup/providers', () => {
 
   it('uses protocol-first labels for compatible APIs and local servers', async () => {
     const { app } = buildServeApp({ projectPath: tmpProject })
-    const res = await app.fetch(new Request('http://localhost/api/setup/providers'))
+    const res = await app.fetch(new Request(scoped('/api/setup/providers')))
     const body = (await res.json()) as {
       providers: Record<string, { label: string }>
     }
     expect(body.providers['anthropic-api']!.label).toBe('Anthropic-compatible API key')
-    expect(body.providers['openai-api']!.label).toBe('OpenAI-compatible API key')
-    expect(body.providers['llama-cpp']!.label).toBe('OpenAI-compatible local server')
+    expect(body.providers['openai-api']!.label).toBe('Remote OpenAI-compatible API key')
+    expect(body.providers['llama-cpp']!.label).toBe('Local OpenAI-compatible server')
   })
 
   it('reflects a stored Anthropic key from the global store (no project-level secret)', async () => {
     setProvider('anthropic-api', { apiKey: 'sk-ant-global' })
     const { app } = buildServeApp({ projectPath: tmpProject })
-    const res = await app.fetch(new Request('http://localhost/api/setup/providers'))
+    const res = await app.fetch(new Request(scoped('/api/setup/providers')))
     const body = (await res.json()) as {
       providers: Record<string, { detected: boolean; detail: string }>
     }
@@ -150,7 +159,7 @@ describe('GET /api/setup/providers', () => {
       baseUrl: 'https://integrate.api.nvidia.com/v1',
     })
     const { app } = buildServeApp({ projectPath: tmpProject })
-    const res = await app.fetch(new Request('http://localhost/api/setup/providers'))
+    const res = await app.fetch(new Request(scoped('/api/setup/providers')))
     const body = (await res.json()) as {
       providers: Record<string, { detected: boolean; detail: string; baseUrl?: string | null }>
     }
@@ -161,7 +170,7 @@ describe('GET /api/setup/providers', () => {
 })
 
 describe('POST /api/setup/providers/config', () => {
-  it('applies provider setup reads and writes to the selected project, not the startup project', async () => {
+  it('applies provider setup reads and writes to the explicitly scoped project, not the startup project', async () => {
     const secondProject = await fs.mkdtemp(path.join(os.tmpdir(), 'guildhall-serve-providers-proj-'))
     try {
       bootstrapWorkspace(secondProject, { name: 'Second Provider Test' })
@@ -170,22 +179,13 @@ describe('POST /api/setup/providers/config', () => {
       updateProjectConfig(secondProject, { preferredProvider: 'llama-cpp' })
 
       const { app } = buildServeApp({ projectPath: tmpProject })
-      const selectRes = await app.fetch(
-        new Request('http://localhost/api/service/select-project', {
-          method: 'POST',
-          headers: { 'content-type': 'application/json' },
-          body: JSON.stringify({ projectId: 'second-provider-test' }),
-        }),
-      )
-      expect(selectRes.status).toBe(200)
-
-      const before = await app.fetch(new Request('http://localhost/api/setup/providers'))
+      const before = await app.fetch(new Request('http://localhost/api/setup/providers?projectId=second-provider-test'))
       expect(before.status).toBe(200)
       const beforeBody = (await before.json()) as { preferredProvider?: string | null }
       expect(beforeBody.preferredProvider).toBe('llama-cpp')
 
       const configRes = await app.fetch(
-        new Request('http://localhost/api/setup/providers/config', {
+        new Request(scoped('/api/setup/providers/config'), {
           method: 'POST',
           headers: { 'content-type': 'application/json' },
           body: JSON.stringify({ preferredProvider: 'openai-api' }),
@@ -223,9 +223,10 @@ describe('POST /api/setup/providers/config', () => {
   it('does not seed workspace model assignments during identity setup', async () => {
     const freshProject = await fs.mkdtemp(path.join(os.tmpdir(), 'guildhall-serve-identity-proj-'))
     try {
+      registerWorkspace({ id: 'fresh-project', name: 'Fresh Project', path: freshProject, tags: [] })
       const { app } = buildServeApp({ projectPath: freshProject })
       const res = await app.fetch(
-        new Request('http://localhost/api/setup/identity', {
+        new Request('http://localhost/api/setup/identity?projectId=fresh-project', {
           method: 'POST',
           headers: { 'content-type': 'application/json' },
           body: JSON.stringify({ name: 'Fresh Project', id: 'fresh-project' }),
@@ -241,7 +242,7 @@ describe('POST /api/setup/providers/config', () => {
   it('writes a pasted Anthropic key to the GLOBAL store, not the project file', async () => {
     const { app } = buildServeApp({ projectPath: tmpProject })
     const res = await app.fetch(
-      new Request('http://localhost/api/setup/providers/config', {
+      new Request(scoped('/api/setup/providers/config'), {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ anthropicApiKey: 'sk-ant-pasted' }),
@@ -263,7 +264,7 @@ describe('POST /api/setup/providers/config', () => {
     setProvider('anthropic-api', { apiKey: 'sk-ant-global' })
     const { app } = buildServeApp({ projectPath: tmpProject })
     const res = await app.fetch(
-      new Request('http://localhost/api/setup/providers/config', {
+      new Request(scoped('/api/setup/providers/config'), {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ preferredProvider: 'anthropic-api' }),
@@ -284,7 +285,7 @@ describe('POST /api/setup/providers/config', () => {
   it('writes an OpenAI-compatible base URL to the global store and preserves the key', async () => {
     const { app } = buildServeApp({ projectPath: tmpProject })
     const res = await app.fetch(
-      new Request('http://localhost/api/setup/providers/config', {
+      new Request(scoped('/api/setup/providers/config'), {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({
@@ -299,6 +300,54 @@ describe('POST /api/setup/providers/config', () => {
     expect(g.providers['openai-api']?.baseUrl).toBe('https://integrate.api.nvidia.com/v1')
   })
 
+  it('writes provider-group concurrency through provider settings', async () => {
+    const { app } = buildServeApp({ projectPath: tmpProject })
+    const res = await app.fetch(
+      new Request(scoped('/api/setup/providers/config'), {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          provider: 'openai-api',
+          openaiApiKey: 'sk-openai-pasted',
+          openaiBaseUrl: 'https://example-openai-compatible.test/v1',
+          maxConcurrency: 200,
+        }),
+      }),
+    )
+    expect(res.status).toBe(200)
+    expect(readGlobalProviders().providers['openai-api']).toMatchObject({
+      apiKey: 'sk-openai-pasted',
+      baseUrl: 'https://example-openai-compatible.test/v1',
+      maxConcurrency: 200,
+    })
+
+    const setup = await app.fetch(new Request(scoped('/api/setup/providers')))
+    const body = (await setup.json()) as {
+      providers?: {
+        'openai-api'?: { maxConcurrency?: number }
+      }
+    }
+    expect(body.providers?.['openai-api']?.maxConcurrency).toBe(200)
+  })
+
+  it('rejects provider-group concurrency outside the global ceiling', async () => {
+    const { app } = buildServeApp({ projectPath: tmpProject })
+    const res = await app.fetch(
+      new Request(scoped('/api/setup/providers/config'), {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          provider: 'openai-api',
+          openaiApiKey: 'sk-openai-pasted',
+          maxConcurrency: 201,
+        }),
+      }),
+    )
+    expect(res.status).toBe(400)
+    const body = (await res.json()) as { error?: string }
+    expect(body.error).toMatch(/maxConcurrency/)
+  })
+
   it('clears the stored OpenAI-compatible base URL when blank is saved', async () => {
     setProvider('openai-api', {
       apiKey: 'sk-openai-pasted',
@@ -306,7 +355,7 @@ describe('POST /api/setup/providers/config', () => {
     })
     const { app } = buildServeApp({ projectPath: tmpProject })
     const res = await app.fetch(
-      new Request('http://localhost/api/setup/providers/config', {
+      new Request(scoped('/api/setup/providers/config'), {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({
@@ -333,7 +382,7 @@ describe('POST /api/setup/providers/config', () => {
     )
     const { app } = buildServeApp({ projectPath: tmpProject })
     const res = await app.fetch(
-      new Request('http://localhost/api/setup/providers/config', {
+      new Request(scoped('/api/setup/providers/config'), {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({
@@ -364,6 +413,58 @@ describe('POST /api/setup/providers/config', () => {
     expect(res.status).toBe(200)
     expect(resolveModelsForProvider(readGlobalConfig().models).worker).toBe('qwen/qwen3.6-35b-a3b')
     expect(readWorkspaceConfig(tmpProject).models).toBeUndefined()
+  })
+
+  it('exposes role behavior profiles without exposing raw sampling numbers', async () => {
+    const { app } = buildServeApp({ projectPath: tmpProject })
+    const res = await app.fetch(new Request('http://localhost/api/config/models?projectId=provider-test'))
+    expect(res.status).toBe(200)
+    const body = (await res.json()) as {
+      effectiveBehavior?: Record<string, string>
+      behaviorProfiles?: Array<{ id: string; label: string; description: string }>
+      temperature?: unknown
+    }
+    expect(body.effectiveBehavior).toMatchObject({
+      spec: 'balanced',
+      coordinator: 'balanced',
+      worker: 'precise',
+      reviewer: 'precise',
+      gateChecker: 'precise',
+      contextIndexer: 'precise',
+    })
+    expect(body.behaviorProfiles?.map(profile => profile.id)).toEqual(['precise', 'balanced', 'exploratory'])
+    expect(JSON.stringify(body)).not.toMatch(/temperature/i)
+  })
+
+  it('saves global and project role behavior profiles through the model config endpoint', async () => {
+    const { app } = buildServeApp({ projectPath: tmpProject })
+    const globalRes = await app.fetch(
+      new Request('http://localhost/api/config/models?projectId=provider-test', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          scope: 'global',
+          role: 'spec',
+          behaviorProfile: 'exploratory',
+        }),
+      }),
+    )
+    expect(globalRes.status).toBe(200)
+    expect(readGlobalConfig().modelBehavior?.spec).toBe('exploratory')
+
+    const projectRes = await app.fetch(
+      new Request('http://localhost/api/config/models?projectId=provider-test', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          scope: 'project',
+          role: 'worker',
+          behaviorProfile: 'balanced',
+        }),
+      }),
+    )
+    expect(projectRes.status).toBe(200)
+    expect(readWorkspaceConfig(tmpProject).modelBehavior?.worker).toBe('balanced')
   })
 
   it('writes provider-scoped global models when the project prefers openai-api', async () => {
@@ -442,7 +543,7 @@ describe('POST /api/setup/providers/config', () => {
       ),
     )
     const { app } = buildServeApp({ projectPath: tmpProject })
-    const res = await app.fetch(new Request('http://localhost/api/config/models'))
+    const res = await app.fetch(new Request('http://localhost/api/config/models?projectId=provider-test'))
     expect(res.status).toBe(200)
     const body = (await res.json()) as {
       loadedModels?: string[]
@@ -485,7 +586,7 @@ describe('POST /api/setup/providers/config', () => {
   it('rejects unknown preferredProvider values', async () => {
     const { app } = buildServeApp({ projectPath: tmpProject })
     const res = await app.fetch(
-      new Request('http://localhost/api/setup/providers/config', {
+      new Request(scoped('/api/setup/providers/config'), {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ preferredProvider: 'bogus-provider' }),
@@ -501,7 +602,7 @@ describe('POST /api/setup/providers/config', () => {
     writeFileSync(cfgPath, 'anthropicApiKey: sk-ant-legacy\n', 'utf8')
     const { app } = buildServeApp({ projectPath: tmpProject })
     // Hitting GET triggers the migration.
-    await app.fetch(new Request('http://localhost/api/setup/providers'))
+    await app.fetch(new Request(scoped('/api/setup/providers')))
     const g = readGlobalProviders()
     expect(g.providers['anthropic-api']?.apiKey).toBe('sk-ant-legacy')
     // And the project file no longer holds the secret.
@@ -622,23 +723,23 @@ describe('POST /api/project/start preflight', () => {
       expect(body.providerStatus).toMatchObject({
         preferredProvider: 'llama-cpp',
         preferredProviderFamily: 'openai-compatible',
-        preferredProviderLabel: 'OpenAI-compatible local server',
+        preferredProviderLabel: 'Local OpenAI-compatible',
         preferredCapabilities: {
-          recommendedConcurrency: 1,
+          recommendedConcurrency: 2,
           localServer: true,
         },
         activeProvider: 'anthropic-api',
         activeProviderFamily: 'anthropic-compatible',
         activeProviderLabel: 'Anthropic-compatible API',
         activeCapabilities: {
-          recommendedConcurrency: 4,
+          recommendedConcurrency: 10,
           localServer: false,
         },
         fallback: true,
         activeModel: 'claude-sonnet-4-6',
       })
 
-      const projectRes = await app.fetch(new Request('http://localhost/api/project'))
+      const projectRes = await app.fetch(new Request('http://localhost/api/project?projectId=provider-test'))
       const projectBody = (await projectRes.json()) as {
         providerStatus?: {
           preferredProvider?: string
@@ -725,7 +826,7 @@ describe('POST /api/project/start preflight', () => {
       allowPaidProviderFallback: true,
     })
     const { app } = buildServeApp({ projectPath: tmpProject })
-    const res = await app.fetch(new Request('http://localhost/api/project'))
+    const res = await app.fetch(new Request('http://localhost/api/project?projectId=provider-test'))
     expect(res.status).toBe(200)
     const body = (await res.json()) as {
       providerStatus?: {
@@ -738,7 +839,7 @@ describe('POST /api/project/start preflight', () => {
     expect(body.providerStatus).toMatchObject({
       preferredProvider: 'openai-api',
       preferredProviderFamily: 'openai-compatible',
-      preferredProviderLabel: 'OpenAI-compatible API',
+      preferredProviderLabel: 'Remote OpenAI-compatible',
       preferredCapabilities: {
         streaming: true,
         toolCalls: true,
@@ -748,6 +849,108 @@ describe('POST /api/project/start preflight', () => {
     })
   })
 
+  it('includes machine default provider and model status in the service payload', async () => {
+    updateGlobalConfig({
+      ...readGlobalConfig(),
+      preferredProvider: 'openai-api',
+      models: {
+        'openai-api': {
+          worker: 'Qwen/Qwen3.5-35B-A3B',
+        },
+      },
+    })
+    registerWorkspace({ id: 'provider-test', name: 'Provider Test', path: tmpProject, tags: [] })
+    const { app } = buildServeApp({})
+    const res = await app.fetch(new Request('http://localhost/api/service'))
+    expect(res.status).toBe(200)
+    const body = (await res.json()) as {
+      defaultProviderStatus?: {
+        preferredProvider?: string
+        preferredProviderLabel?: string
+        activeModel?: string
+        models?: { worker?: string; reviewer?: string }
+        warnings?: Array<{ code?: string }>
+      } | null
+    }
+    expect(body.defaultProviderStatus).toMatchObject({
+      preferredProvider: 'openai-api',
+      preferredProviderLabel: 'Remote OpenAI-compatible',
+      activeModel: 'Qwen/Qwen3.5-35B-A3B',
+    })
+    expect(body.defaultProviderStatus?.models?.worker).toBe('Qwen/Qwen3.5-35B-A3B')
+    expect(body.defaultProviderStatus?.models?.reviewer).toBe('gpt-4o-mini')
+    expect(body.defaultProviderStatus?.warnings).toBeUndefined()
+  })
+
+  it('includes project provider warnings and project question status in the service payload', async () => {
+    updateGlobalConfig({
+      ...readGlobalConfig(),
+      preferredProvider: 'codex',
+      models: {
+        'openai-api': {
+          worker: 'Qwen/Qwen3.5-35B-A3B',
+        },
+      },
+    })
+    updateProjectConfig(tmpProject, { preferredProvider: 'codex' })
+    registerWorkspace({ id: 'provider-test', name: 'Provider Test', path: tmpProject, tags: [] })
+
+    const { app } = buildServeApp({})
+    const res = await app.fetch(new Request('http://localhost/api/service'))
+    expect(res.status).toBe(200)
+    const body = (await res.json()) as {
+      projects: Array<{
+        id: string
+        providerStatus?: {
+          preferredProvider?: string
+          warnings?: Array<{ code?: string; message?: string }>
+        } | null
+        projectCheckIn?: {
+          needed?: boolean
+          label?: string
+          actionHref?: string
+        }
+      }>
+    }
+
+    const project = body.projects.find(p => p.id === 'provider-test')
+    expect(project?.providerStatus).toMatchObject({
+      preferredProvider: 'codex',
+      warnings: [expect.objectContaining({ code: 'provider_model_scope_mismatch' })],
+    })
+    expect(project?.projectCheckIn).toMatchObject({
+      needed: true,
+      label: 'Project questions',
+      actionHref: '/thread',
+    })
+  })
+
+  it('warns when provider-scoped model overrides do not match the preferred provider', async () => {
+    updateGlobalConfig({
+      ...readGlobalConfig(),
+      preferredProvider: 'codex',
+      models: {
+        'openai-api': {
+          worker: 'Qwen/Qwen3.5-35B-A3B',
+        },
+      },
+    })
+    const { app } = buildServeApp({ projectPath: tmpProject })
+    const res = await app.fetch(new Request('http://localhost/api/project?projectId=provider-test'))
+    expect(res.status).toBe(200)
+    const body = (await res.json()) as {
+      providerStatus?: {
+        warnings?: Array<{ code?: string; severity?: string; message?: string }>
+      } | null
+    }
+    expect(body.providerStatus?.warnings?.[0]).toMatchObject({
+      code: 'provider_model_scope_mismatch',
+      severity: 'warn',
+    })
+    expect(body.providerStatus?.warnings?.[0]?.message).toMatch(/Remote OpenAI-compatible/)
+    expect(body.providerStatus?.warnings?.[0]?.message).toMatch(/Codex/)
+  })
+
   it('reports effective reviewer fanout without surfacing config-clamp chatter in the UI payload', async () => {
     updateProjectConfig(tmpProject, {
       preferredProvider: 'llama-cpp',
@@ -755,7 +958,7 @@ describe('POST /api/project/start preflight', () => {
       reviewerFanoutConcurrency: 3,
     })
     const { app } = buildServeApp({ projectPath: tmpProject })
-    const res = await app.fetch(new Request('http://localhost/api/project'))
+    const res = await app.fetch(new Request('http://localhost/api/project?projectId=provider-test'))
     expect(res.status).toBe(200)
     const body = (await res.json()) as {
       providerStatus?: {
@@ -797,7 +1000,7 @@ describe('POST /api/project/start preflight', () => {
     expect(body.providerStatus?.laneConcurrency?.reviewerFanout).toMatchObject({
       requested: 3,
       effective: 1,
-      recommended: 1,
+      recommended: 2,
       clamped: true,
     })
     expect(body.providerStatus?.laneConcurrency?.spec).toMatchObject({

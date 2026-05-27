@@ -32,7 +32,7 @@ trigger_patterns:
 ## Loading
 
 - **Bundled skills** — shipped in `./src/skills/bundled/` and loaded by `loadBundledSkills()`.
-- **User skills** — placed under `./memory/skills/*.md` (or `<workspace>/skills/*.md`) and loaded by the file-based loader.
+- **User skills** — placed under `./.guildhall/skills/*.md` (or `<workspace>/skills/*.md`) and loaded by the file-based loader.
 
 ## Registry
 

@@ -1,0 +1,23 @@
+id: small-but-high-risk-oauth-callback
+title: Small but high-risk OAuth callback
+task:
+  id: task-oauth-callback
+  title: Tighten OAuth callback validation
+  description: Add CSRF state validation and tenant-bound redirect checks to the OAuth callback route.
+  priority: high
+  changedFiles:
+    - src/api/oauth/callback.ts
+  riskLanes:
+    - security
+    - privacy
+    - api_contract
+expected:
+  minScore: 3
+  action: proceed_with_warning
+  requiredFactors:
+    - several_risk_lanes
+  minRecommendedChildren: 0
+labelGovernance:
+  labeledBy: task-sizing-seed
+  labeledAt: "2026-05-25"
+  reviewStatus: seed

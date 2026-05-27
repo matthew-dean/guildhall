@@ -12,8 +12,9 @@ test('projects home scrolls at mobile size and opens explicit project routes', a
     .filter({ has: page.getByRole('heading', { name: 'Looma + Knit' }) })
     .getByRole('button', { name: 'Open project' })
     .click()
-  await expect(page).toHaveURL(/\/projects\/looma-knit\/thread$/)
-  await expect(page.getByRole('heading', { name: 'Thread' })).toBeVisible()
+  await expect(page).toHaveURL(/\/projects\/looma-knit\/overview$/)
+  await expect(page.getByRole('region', { name: 'Project overview' })).toBeVisible()
+  await expect(page.getByRole('heading', { name: 'Looma + Knit' })).toBeVisible()
 })
 
 test('projects home keeps project cards compact for scanability', async ({ page }) => {
@@ -21,7 +22,9 @@ test('projects home keeps project cards compact for scanability', async ({ page 
   await page.goto('/projects')
 
   await expect(page.getByRole('heading', { name: 'Projects & Workspaces' })).toBeVisible()
-  const panelBoxes = await page.locator('.dashboard-panel').evaluateAll((nodes) =>
+  const dashboard = page.getByRole('region', { name: 'Projects dashboard' })
+  await expect(dashboard).toBeVisible()
+  const panelBoxes = await dashboard.locator(':scope > div').evaluateAll((nodes) =>
     nodes.map((node) => {
       const box = node.getBoundingClientRect()
       return { height: box.height, top: box.top, right: box.right }
@@ -56,13 +59,24 @@ test('projects home keeps project cards compact for scanability', async ({ page 
   }
 })
 
-test('legacy project routes canonicalize to the loaded project slug', async ({ page }) => {
+test('legacy project routes fall back to project selection', async ({ page }) => {
   await page.goto('/project/thread')
-  await expect(page).toHaveURL(/\/projects\/looma-knit\/thread$/)
+  await expect(page.getByRole('heading', { name: 'Projects & Workspaces' })).toBeVisible()
 })
 
-test('thread keeps task questions inside the task card and centers answer controls', async ({ page }) => {
+test('required migration blocks thread work until it is applied', async ({ page }) => {
   await page.goto('/projects/looma-knit/thread')
+
+  await expect(page.getByRole('heading', { name: 'Thread' })).toBeVisible()
+  await expect(page.getByRole('button', { name: /Required migration:/ }).first()).toBeVisible()
+  await expect(page.getByText('Which controls belong in the link editor?')).toHaveCount(0)
+
+  await page.getByRole('button', { name: 'Migrate project' }).first().click()
+  await expect(page.getByRole('dialog', { name: 'Migrate project' })).toBeVisible()
+  await expect(page.getByText('Review the file changes first')).toBeVisible()
+  await page.getByRole('button', { name: 'Apply required migration' }).click()
+  await expect(page.getByText('Migration applied.')).toBeVisible()
+  await page.getByRole('dialog', { name: 'Migrate project' }).getByRole('button', { name: 'Close' }).last().click()
 
   const card = page.locator('section').filter({ hasText: 'Block menu / block side menu' }).first()
   await expect(card).toBeVisible()

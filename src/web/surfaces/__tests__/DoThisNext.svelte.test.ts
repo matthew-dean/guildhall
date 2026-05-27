@@ -131,6 +131,6 @@ describe('DoThisNext', () => {
     expect(more.className).not.toContain('more')
     await userEvent.click(more)
 
-    expect(path.value).toBe('/projects/looma-knit/inbox')
+    expect(path.value).toBe('/projects/looma-knit/overview/inbox')
   })
 })

@@ -3,6 +3,7 @@ import { z } from 'zod'
 import { runGates } from './gate-runner.js'
 import fs from 'node:fs/promises'
 import path from 'node:path'
+import { appendTaskEvidence, inferProjectRootFromMemoryDir } from '@guildhall/sessions'
 import type { HardGate } from '@guildhall/core'
 import {
   parseAuthoritativeCommands,
@@ -123,6 +124,15 @@ async function persistGateResultsForCurrentTask(input: {
     task['updatedAt'] = now
     queue.lastUpdated = now
     await fs.writeFile(tasksPath, JSON.stringify(queue, null, 2), 'utf8')
+    const projectRoot = inferProjectRootFromMemoryDir(path.dirname(tasksPath))
+    await Promise.all(input.results.map((result) =>
+      appendTaskEvidence(projectRoot, taskId, {
+        id: `${taskId}-gate-${result.gateId}-${result.checkedAt.replace(/[^0-9A-Za-z]/g, '')}`,
+        kind: 'gate_result',
+        recordedAt: result.checkedAt,
+        payload: result,
+      }).catch(() => undefined),
+    ))
     return true
   } catch {
     return false

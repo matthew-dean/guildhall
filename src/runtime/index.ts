@@ -1,4 +1,5 @@
 export { runOrchestrator, Orchestrator } from './orchestrator.js'
+export * from './git-story.js'
 export type {
   OrchestratorOptions,
   OrchestratorAgent,
@@ -105,6 +106,81 @@ export type {
   PreRejectionDecision,
   EvaluatePreRejectionInput,
 } from './pre-rejection-policy.js'
+export {
+  createReviewAuditStore,
+  ReviewRiskLane,
+  ReviewEffort,
+  ReviewBudget,
+  ReviewRecipeRef,
+  ReviewPlanRecord,
+  ReviewPlanEvent,
+  ReviewerRunRecord,
+  FrontierRunRecord,
+  EscapedMissRecord,
+} from './review-audit-store.js'
+export type {
+  ReviewAuditStore,
+  ReviewRiskLane as ReviewRiskLaneType,
+  ReviewEffort as ReviewEffortType,
+  ReviewBudget as ReviewBudgetType,
+  ReviewRecipeRef as ReviewRecipeRefType,
+  ReviewPlanRecord as ReviewPlanRecordType,
+  ReviewPlanEvent as ReviewPlanEventType,
+  ReviewerRunRecord as ReviewerRunRecordType,
+  FrontierRunRecord as FrontierRunRecordType,
+  EscapedMissRecord as EscapedMissRecordType,
+} from './review-audit-store.js'
+export { buildReviewPlan, ensureTaskReviewPlanRecorded } from './review-planner.js'
+export type {
+  BuildReviewPlanInput,
+  EnsureTaskReviewPlanRecordedInput,
+  EnsureTaskReviewPlanRecordedResult,
+} from './review-planner.js'
+export {
+  CalibrationArtifact,
+  CalibrationCase,
+  CalibrationFalsePositiveTrap,
+  CalibrationKnownFinding,
+  ReviewCalibrationRecipe,
+  buildCalibrationCaseDraftFromEscapedMiss,
+  buildCalibrationCorpusSummary,
+  buildCalibrationReviewPacket,
+  defaultReviewCalibrationRecipes,
+  gradeCalibrationRun,
+  loadCalibrationCasesFromDirectory,
+  recordCalibrationCorpusValidation,
+  selectCalibrationRecipesForLanes,
+  summarizeCalibrationFrontier,
+} from './review-calibration.js'
+export type {
+  CalibrationCorpusSummary,
+  CalibrationFrontierRun,
+  CalibrationFrontierSummary,
+  CalibrationGrade,
+  CalibrationOutcome,
+  CalibrationReviewerFinding,
+  CalibrationReviewPacket,
+  ReviewCalibrationRecipe as ReviewCalibrationRecipeType,
+} from './review-calibration.js'
+export {
+  ReviewRecipeBundleMetadata,
+  ReviewPlanningCalibrationCase,
+  defaultReviewRecipeBundles,
+  gradeReviewPlanningCase,
+  loadReviewPlanningCasesFromDirectory,
+  recordReviewPlanningFrontier,
+  runReviewPlanningFrontier,
+} from './review-planning-calibration.js'
+export type {
+  ReviewPlanningFrontierRun,
+  ReviewPlanningFrontierSummary,
+  ReviewPlanningFrontierVariant,
+  ReviewPlanningGrade,
+  ReviewPlanningOutcome,
+  ReviewRecipeBundleMetadata as ReviewRecipeBundleMetadataType,
+  ReviewRecipeBundleMode as ReviewRecipeBundleModeType,
+  ReviewPlanningCalibrationCase as ReviewPlanningCalibrationCaseType,
+} from './review-planning-calibration.js'
 export { selectApiClient } from './provider-selection.js'
 export type {
   SelectApiClientOptions,
@@ -113,11 +189,43 @@ export type {
 export { resolveWorkspace, loadWorkspace } from './workspace-loader.js'
 export type { ResolvedWorkspace } from './workspace-loader.js'
 export {
+  configureClaudeProjectMcpBridge,
+  configureCodexMcpBridge,
+  installAgentBridgeInstructions,
+  renderCodexGuildhallMcpSection,
+  renderGuildhallMcpInstructionSection,
+} from './agent-bridge-install.js'
+export type {
+  AgentBridgeInstallAction,
+  AgentBridgeTarget,
+  ClaudeMcpBridgeAction,
+  CodexMcpBridgeAction,
+  CommandResult,
+  ConfigureClaudeProjectMcpBridgeInput,
+  ConfigureClaudeProjectMcpBridgeResult,
+  ConfigureCodexMcpBridgeInput,
+  ConfigureCodexMcpBridgeResult,
+  InstallAgentBridgeInstructionsInput,
+  InstallAgentBridgeInstructionsResult,
+} from './agent-bridge-install.js'
+export {
   detectPackageManager,
   detectGateCommands,
   runBootstrap as runStructuralBootstrap,
   writeBootstrapResult,
 } from './bootstrap.js'
+export * from './request-routing.js'
+export * from './request-intake.js'
+export * from './pressure-test-intake.js'
+export * from './commit-story.js'
+export * from './language-map.js'
+export * from './migrations.js'
+export * from './runtime-compatibility.js'
+export * from './done-task-summary.js'
+export * from './task-sizing-calibration.js'
+export * from './worker-modes.js'
+export * from './artifact-store.js'
+export * from './capability-requests.js'
 export type {
   PackageManager,
   GateName,

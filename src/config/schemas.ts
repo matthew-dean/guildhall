@@ -1,5 +1,7 @@
 import { z } from 'zod'
 import {
+  DEFAULT_ROLE_BEHAVIOR,
+  ModelBehaviorProfile,
   ModelAssignmentConfig,
   DEFAULT_CLOUD_MODEL_ASSIGNMENT,
   DEFAULT_LOCAL_MODEL_ASSIGNMENT,
@@ -19,6 +21,16 @@ type ModelRoleKey = (typeof MODEL_ROLE_KEYS)[number]
 type ModelProviderKey = (typeof MODEL_PROVIDER_KEYS)[number]
 
 const LegacyModelAssignmentPartialSchema = ModelAssignmentConfig.partial().strict()
+
+const ModelBehaviorConfigSchema = z.object({
+  spec: ModelBehaviorProfile.optional(),
+  coordinator: ModelBehaviorProfile.optional(),
+  worker: ModelBehaviorProfile.optional(),
+  reviewer: ModelBehaviorProfile.optional(),
+  gateChecker: ModelBehaviorProfile.optional(),
+  contextIndexer: ModelBehaviorProfile.optional(),
+}).strict()
+export type ModelBehaviorConfig = z.infer<typeof ModelBehaviorConfigSchema>
 
 const ProviderModelShortcutSchema = z.object({
   all: z.string().optional(),
@@ -106,6 +118,34 @@ const WorktreeConfig = z.object({
   include: z.array(z.string()).default([]),
 }).default({})
 
+export const GitStoryAutomationLevel = z.enum(['ask', 'auto', 'never'])
+export type GitStoryAutomationLevel = z.infer<typeof GitStoryAutomationLevel>
+
+export const GitStoryCompletionTarget = z.enum([
+  'leave_dirty',
+  'commit_local',
+  'push_branch',
+  'open_pr',
+  'merge_landing_branch',
+])
+export type GitStoryCompletionTarget = z.infer<typeof GitStoryCompletionTarget>
+
+export const GitStoryPolicy = z.object({
+  completionTarget: GitStoryCompletionTarget.default('open_pr'),
+  commit: GitStoryAutomationLevel.default('ask'),
+  push: GitStoryAutomationLevel.default('ask'),
+  pullRequest: GitStoryAutomationLevel.default('ask'),
+  merge: GitStoryAutomationLevel.default('ask'),
+  localOnlyAllowed: z.boolean().default(true),
+  deferAllowed: z.boolean().default(true),
+  requireCleanRelease: z.boolean().default(true),
+  allowForcePush: z.boolean().default(false),
+  allowSharedBranchRebase: z.boolean().default(false),
+  copiedFromSystemAt: z.string().optional(),
+  discoveredFrom: z.array(z.string()).default([]),
+}).default({})
+export type GitStoryPolicy = z.infer<typeof GitStoryPolicy>
+
 const WorkspaceProjectConfig = z.object({
   id: z.string().regex(/^[a-z0-9-]+$/),
   label: z.string().optional(),
@@ -114,6 +154,7 @@ const WorkspaceProjectConfig = z.object({
   coordinator: z.string().optional(),
   bootstrap: BootstrapConfig.optional(),
   worktree: WorktreeConfig.optional(),
+  gitStory: GitStoryPolicy.optional(),
 })
 
 const CouncilConfig = z.object({
@@ -160,6 +201,10 @@ export const WorkspaceYamlConfig = z.object({
   // Model assignments per agent role.
   // Missing roles fall back to global config, then built-in defaults.
   models: ModelConfigInputSchema.optional(),
+
+  // Plain-language behavior profile per role. Guildhall translates this into
+  // provider-specific sampling internally; users should not need raw knobs.
+  modelBehavior: ModelBehaviorConfigSchema.optional(),
 
   // Which coordinators are active in this workspace.
   // Each coordinator can target a sub-path of projectPath.
@@ -253,6 +298,11 @@ export const WorkspaceYamlConfig = z.object({
   // ignored/untracked runtime config such as `.env` or
   // `appsettings.local.yaml`; never inferred silently.
   worktree: WorktreeConfig.optional(),
+
+  // How Guildhall should close the git story after task work completes.
+  // Workspace config may pin a shared project preference; otherwise project
+  // discovery copies the system/global config into local project config.
+  gitStory: GitStoryPolicy.optional(),
 })
 export type WorkspaceYamlConfig = z.infer<typeof WorkspaceYamlConfig>
 
@@ -265,6 +315,9 @@ export type WorkspaceYamlConfig = z.infer<typeof WorkspaceYamlConfig>
 export const GlobalConfig = z.object({
   // Default model assignments (merged with per-workspace models)
   models: ModelConfigInputSchema.optional(),
+
+  // Machine-wide defaults for how each model role should behave.
+  modelBehavior: ModelBehaviorConfigSchema.optional(),
 
   // Default preferred provider for this machine. Projects may override it
   // in local .guildhall/config.yaml when truly necessary.
@@ -293,11 +346,22 @@ export const GlobalConfig = z.object({
   // can opt in through their local .guildhall/config.yaml.
   allowPaidProviderFallback: z.boolean().default(false),
 
+  // Machine-wide default for how completed Guildhall work should be committed,
+  // pushed, or turned into PRs. New projects copy this into their local project
+  // policy during discovery, then can override per-repo.
+  gitStory: GitStoryPolicy.default({}),
+
   /**
    * Advanced override for reviewer persona fan-out. Omit to let Guildhall pick
    * a sane default from the active provider's advertised capacity.
    */
   reviewerFanoutConcurrency: z.number().int().positive().max(16).optional(),
+
+  /**
+   * Machine-wide hard ceiling for provider request concurrency. Provider
+   * profiles can choose lower defaults, but never exceed this limit.
+   */
+  maxProviderConcurrency: z.number().int().positive().max(200).default(200),
 })
 export type GlobalConfig = z.infer<typeof GlobalConfig>
 
@@ -334,7 +398,7 @@ export const WorkspaceRegistry = z.object({
 export type WorkspaceRegistry = z.infer<typeof WorkspaceRegistry>
 
 // ---------------------------------------------------------------------------
-// memory/agent-overrides.yaml — agent-accumulated configuration
+// .guildhall/agent-overrides.yaml — agent-accumulated configuration
 //
 // Written by agents at runtime via the saveAgentSetting tool.
 // Project-behavior fields are merged on top of guildhall.yaml during config
@@ -442,6 +506,9 @@ export const ResolvedConfig = z.object({
   // Fully resolved model assignments
   models: ModelAssignmentConfig,
 
+  // Fully resolved role behavior profiles.
+  modelBehavior: ModelBehaviorConfigSchema.optional(),
+
   // Coordinator definitions (mirrors WorkspaceYamlConfig.coordinators)
   coordinators: z.array(z.object({
     id: z.string(),
@@ -496,6 +563,7 @@ export const ResolvedConfig = z.object({
   // when the lockfile hash changes; `successGates` verify testability.
   bootstrap: BootstrapConfig.optional(),
   worktree: WorktreeConfig.optional(),
+  gitStory: GitStoryPolicy.optional(),
 })
 export type ResolvedConfig = z.infer<typeof ResolvedConfig>
 
@@ -653,4 +721,15 @@ export function mergeModels(
     if (v !== undefined) cleaned[k] = v
   }
   return ModelAssignmentConfig.parse(cleaned)
+}
+
+export function mergeModelBehavior(
+  base: ModelBehaviorConfig | undefined,
+  override: ModelBehaviorConfig | undefined,
+): Required<ModelBehaviorConfig> {
+  return ModelBehaviorConfigSchema.required().parse({
+    ...DEFAULT_ROLE_BEHAVIOR,
+    ...(base ?? {}),
+    ...(override ?? {}),
+  })
 }

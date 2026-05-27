@@ -19,7 +19,7 @@ Primary design constraints:
 - Run for hours without human input, safely
 - Safe to stop and restart at any time (all state persisted)
 - Auditable: every decision, revision, and gate result recorded
-- **Operational behavior tuned by explicit levers (§2.1), not hidden defaults.** How much human involvement, how much agent autonomy, how strict the spec, how wide the fanout — all lever positions set during meta-intake and visible in `memory/agent-settings.yaml`.
+- **Operational behavior tuned by explicit levers (§2.1), not hidden defaults.** How much human involvement, how much agent autonomy, how strict the spec, how wide the fanout — all lever positions set during meta-intake and visible in `.guildhall/agent-settings.yaml`.
 
 ---
 
@@ -27,7 +27,7 @@ Primary design constraints:
 
 ### 2.1 Lever model
 
-Guildhall's operational behavior is governed by a finite set of **named levers**, each with an enumerated set of positions. The system has no hidden hardcoded defaults — every behavior difference traces back to a lever position persisted in `memory/agent-settings.yaml`.
+Guildhall's operational behavior is governed by a finite set of **named levers**, each with an enumerated set of positions. The system has no hidden hardcoded defaults — every behavior difference traces back to a lever position persisted in `.guildhall/agent-settings.yaml`.
 
 **Goal:** a UX that feels like "magic" (the system follows the user's wishes without being nagged), backed by fully deterministic, auditable behavior. The *magic* comes from the Spec Agent's exploratory conversation (FR-12) inferring lever positions from natural project-guidance questions and from reading the user's expertise / risk tolerance / project maturity via how they describe the work — never by asking direct meta-questions. The *determinism* comes from every lever's position being explicit, persisted, and readable by the orchestrator.
 
@@ -156,7 +156,7 @@ Adding a new lever requires amending this table and referencing it from at least
 - The Spec Agent MUST infer lever positions from natural project-guidance questions — what the project is, what the goals are, what's been tried, what the guardrails are. It reads the user's fluency, vocabulary, confidence, and what they reveal about past practice. All of that is signal.
 - The Spec Agent MUST NOT ask direct meta-questions about the user's expertise, autonomy preferences, or risk tolerance. Those questions feel like a test, produce unreliable answers, and break the "magic" UX.
 - When inference is ambiguous between two lever positions and the choice is load-bearing, the agent asks in **project terms**, not system terms. ("Do you want to see each task before it's picked up, or scan a summary at the end of the day?" — not "what should I set `task_origination` to?")
-- Inferred lever positions are persisted to `memory/agent-settings.yaml` with the inference rationale as a comment so future agents can audit why.
+- Inferred lever positions are persisted to `.guildhall/agent-settings.yaml` with the inference rationale as a comment so future agents can audit why.
 
 **FR-13 Task decomposition during exploration (NEW)**
 - If the Spec Agent determines an ask is really N sub-tasks with dependencies, it proposes a task group
@@ -407,7 +407,7 @@ v0.3 layers the Lever model (§2.1) and the prior-harness absorption FRs (FR-21.
 
 ### v0.3 additions (lever model + prior-harness absorption)
 
-**AC-13** `memory/agent-settings.yaml` stores every lever from §2.1 with position + inference rationale; orchestrator and agents read from this file and behave deterministically per the positions
+**AC-13** `.guildhall/agent-settings.yaml` stores every lever from §2.1 with position + inference rationale; orchestrator and agents read from this file and behave deterministically per the positions
 **AC-14** Spec Agent can set lever positions during meta-intake (FR-14) without asking direct meta-questions, and persists inference rationale on every lever set
 **AC-15** An agent can create a `proposed` task (FR-21); approval path taken matches lever `task_origination` in an end-to-end test
 **AC-16** A worker can emit a pre-rejection (FR-22); task terminal state matches lever `pre_rejection_policy`; `revisionCount` is not incremented

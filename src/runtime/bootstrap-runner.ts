@@ -2,6 +2,7 @@ import { createHash } from 'node:crypto'
 import { existsSync, readFileSync, writeFileSync, mkdirSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { runShellSync } from '@guildhall/tools'
+import { getProjectLocalHistoryDir, inferProjectRootFromMemoryDir } from '@guildhall/sessions'
 
 /**
  * Bootstrap phase: runs `commands` (install, migrations, etc.) then
@@ -82,7 +83,7 @@ function commandHash(commands: readonly string[], gates: readonly string[]): str
 }
 
 function statusPath(memoryDir: string): string {
-  return join(memoryDir, 'bootstrap.json')
+  return join(getProjectLocalHistoryDir(inferProjectRootFromMemoryDir(memoryDir)), 'bootstrap.json')
 }
 
 export function readBootstrapStatus(memoryDir: string): BootstrapStatus | null {

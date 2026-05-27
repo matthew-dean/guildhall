@@ -1,0 +1,23 @@
+id: performance-unbounded-query-plan
+title: Unbounded query review plan
+task:
+  id: task-performance-unbounded-query
+  title: Load all workspace tasks in dashboard
+  description: Replace paginated task loading with a single API request for the dashboard.
+  priority: normal
+  changedFiles:
+    - src/api/tasks.ts
+    - src/web/surfaces/project/WorkTab.svelte
+expected:
+  requiredLanes:
+    - performance
+    - api_contract
+    - ux_comprehension
+    - test_adequacy
+  requiredArtifacts:
+    - contract-or-state-diff
+  maxReviewerAgents: 6
+labelGovernance:
+  labeledBy: review-calibration-seed
+  labeledAt: '2026-05-25'
+  reviewStatus: seed

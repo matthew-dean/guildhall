@@ -6,7 +6,7 @@
  * levers (fanout_N, soft_penalty_after_N, etc.).
  *
  * No hidden hardcoded defaults — defaults live in `defaults.ts` as explicit
- * named constants, and the first write of `memory/agent-settings.yaml` seeds
+ * named constants, and the first write of `.guildhall/agent-settings.yaml` seeds
  * every lever with `setBy: 'system-default'` so the provenance trail is
  * intact.
  */
@@ -137,6 +137,7 @@ export const domainLeversSchema = z.object({
       'majority',
     ]),
   ),
+  review_effort: entry(z.enum(['lean', 'balanced', 'thorough', 'release_critical'])),
   max_revisions: entry(z.number().int().min(0)),
   escalation_on_ambiguity: entry(z.enum(['always', 'coordinator_first', 'never'])),
   crash_recovery_default: entry(
@@ -187,6 +188,7 @@ export const DOMAIN_LEVER_NAMES = [
   'completion_approval',
   'reviewer_mode',
   'reviewer_fanout_policy',
+  'review_effort',
   'max_revisions',
   'escalation_on_ambiguity',
   'crash_recovery_default',

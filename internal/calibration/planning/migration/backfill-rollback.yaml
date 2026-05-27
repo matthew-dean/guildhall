@@ -1,0 +1,25 @@
+id: migration-backfill-rollback-plan
+title: Backfill rollback review plan
+task:
+  id: task-migration-backfill-rollback
+  title: Backfill workspace membership schema
+  description: Add a database migration and backfill with roll forward and rollback compatibility.
+  priority: high
+  changedFiles:
+    - migrations/20260525-membership.sql
+    - src/models/membership.ts
+expected:
+  requiredLanes:
+    - data_integrity
+    - migration_safety
+    - test_adequacy
+  requiredArtifacts:
+    - contract-or-state-diff
+  strictLanes:
+    - data_integrity
+    - migration_safety
+  maxReviewerAgents: 6
+labelGovernance:
+  labeledBy: review-calibration-seed
+  labeledAt: '2026-05-25'
+  reviewStatus: seed

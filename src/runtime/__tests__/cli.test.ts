@@ -1,6 +1,6 @@
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { join, resolve } from 'node:path'
 
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import {
@@ -8,6 +8,7 @@ import {
   semanticRepairCompletionBudget,
   clearServiceRuntimeState,
   clearServiceRuntimeStateIfOwnedByPid,
+  completeOpenAiCompatibleJson,
   discoverServiceRuntimeState,
   isPidAlive,
   launchRouteForProject,
@@ -20,6 +21,11 @@ import {
   serviceStatePath,
   serviceUrlForPort,
   SHIPPED_CLI_COMMANDS,
+  draftEscapedMissCalibrationCase,
+  recordEscapedReviewMiss,
+  validateReviewCalibrationCorpus,
+  validateReviewPlanningCorpus,
+  validateTaskSizingCorpus,
   writeModelBakeoffReport,
 } from '../cli.js'
 
@@ -191,6 +197,54 @@ describe('CLI service lifecycle helpers', () => {
 })
 
 describe('Guildhall CLI surface', () => {
+  it('can request strict JSON-schema output from OpenAI-compatible JSON completions', async () => {
+    let captured: Record<string, unknown> | undefined
+    const encoder = new TextEncoder()
+    vi.stubGlobal('fetch', vi.fn(async (_url: string, init?: RequestInit) => {
+      captured = JSON.parse((init?.body as string) ?? '{}') as Record<string, unknown>
+      return new Response(new ReadableStream<Uint8Array>({
+        start(controller) {
+          controller.enqueue(encoder.encode('data: {"choices":[{"delta":{"content":"{\\"items\\":[]}"},"finish_reason":"stop"}]}\n\n'))
+          controller.enqueue(encoder.encode('data: [DONE]\n\n'))
+          controller.close()
+        },
+      }), { status: 200 })
+    }))
+
+    const responseFormat = {
+      type: 'json_schema',
+      json_schema: {
+        name: 'guildhall_json_response',
+        strict: true,
+        schema: {
+          type: 'object',
+          properties: {
+            items: {
+              type: 'array',
+              items: { type: 'object', additionalProperties: true },
+            },
+          },
+          required: ['items'],
+          additionalProperties: false,
+        },
+      },
+    }
+
+    const text = await completeOpenAiCompatibleJson({
+      baseUrl: 'https://api.deepinfra.com/v1/openai',
+      apiKey: 'test-key',
+      modelId: 'Qwen/Qwen3.5-35B-A3B',
+      systemPrompt: 'Return JSON.',
+      prompt: 'List items.',
+      maxTokens: 64,
+      responseFormat,
+    })
+
+    expect(text).toBe('{"items":[]}')
+    expect(captured?.response_format).toEqual(responseFormat)
+    expect(captured).not.toHaveProperty('service_tier')
+  })
+
   it('derives semantic context-indexer budgets from prompt size instead of fixed magic caps', () => {
     const small = semanticCompletionBudget('short prompt')
     const large = semanticCompletionBudget('x'.repeat(16_000))
@@ -220,7 +274,12 @@ describe('Guildhall CLI surface', () => {
       'open',
       'config',
       'corpus-map',
+      'memory',
+      'migrate',
+      'review-calibration',
       'model-bakeoff',
+      'mcp',
+      'bridge',
     ])
   })
 
@@ -236,6 +295,155 @@ describe('Guildhall CLI surface', () => {
     expect(help).not.toContain('guildhall resume')
     expect(help).not.toContain('guildhall meta-intake')
     expect(help).not.toContain('guildhall approve-meta-intake')
+    expect(help).toContain('guildhall memory migrate-0.8.0')
+    expect(help).toContain('guildhall migrate status')
+    expect(help).toContain('guildhall migrate plan')
+    expect(help).toContain('guildhall migrate apply')
+    expect(help).toContain('guildhall review-calibration escaped-miss')
+    expect(help).toContain('guildhall review-calibration draft-case')
+    expect(help).toContain('guildhall review-calibration validate-planning')
+    expect(help).toContain('guildhall review-calibration validate-sizing')
+  })
+
+  it('validates and records the review calibration corpus through persistence', async () => {
+    const project = tmpHome()
+    const priorDataDir = process.env.GUILDHALL_DATA_DIR
+    const dataDir = join(tmpHome(), 'guildhall-data')
+    process.env.GUILDHALL_DATA_DIR = dataDir
+    try {
+      const result = await validateReviewCalibrationCorpus({
+        projectPath: project,
+        recordedBy: 'calibration:test',
+        now: () => new Date('2026-05-25T12:00:00.000Z'),
+      })
+
+      expect(result.summary.missingCaseIds).toEqual([])
+      expect(result.summary.caseCount).toBeGreaterThanOrEqual(8)
+      expect(result.summary.laneCoverage.security).toBeGreaterThan(0)
+      expect(result.record.ref.path).toContain(join(dataDir, 'projects'))
+      expect(result.record.payload.variantSet).toBe('review-calibration-corpus')
+    } finally {
+      if (priorDataDir === undefined) {
+        delete process.env.GUILDHALL_DATA_DIR
+      } else {
+        process.env.GUILDHALL_DATA_DIR = priorDataDir
+      }
+    }
+  })
+
+  it('records escaped review misses through persistence for calibration follow-up', async () => {
+    const project = tmpHome()
+    const priorDataDir = process.env.GUILDHALL_DATA_DIR
+    const dataDir = join(tmpHome(), 'guildhall-data')
+    process.env.GUILDHALL_DATA_DIR = dataDir
+    try {
+      const result = await recordEscapedReviewMiss({
+        projectPath: project,
+        taskId: 'task-1',
+        missedLane: 'ux_comprehension',
+        humanFinding: 'The reviewer missed that the primary setup action was ambiguous.',
+        nextCalibrationAction: 'create_case',
+        missedByRecipe: 'product-ux-zero-context',
+        recordedBy: 'calibration:test',
+        recordedAt: '2026-05-25T12:05:00.000Z',
+      })
+
+      expect(result.ref.path).toContain(join(project, '.guildhall', 'persistence', 'events', 'escaped-misses'))
+      expect(result.payload).toMatchObject({
+        taskId: 'task-1',
+        missedLane: 'ux_comprehension',
+        missedByRecipe: 'product-ux-zero-context',
+        humanFinding: 'The reviewer missed that the primary setup action was ambiguous.',
+        nextCalibrationAction: 'create_case',
+        recordedAt: '2026-05-25T12:05:00.000Z',
+        recordedBy: 'calibration:test',
+      })
+    } finally {
+      if (priorDataDir === undefined) {
+        delete process.env.GUILDHALL_DATA_DIR
+      } else {
+        process.env.GUILDHALL_DATA_DIR = priorDataDir
+      }
+    }
+  })
+
+  it('drafts a calibration case from an escaped review miss without writing ad hoc files', () => {
+    const draft = draftEscapedMissCalibrationCase({
+      taskId: 'task-1',
+      missedLane: 'ux_comprehension',
+      humanFinding: 'The reviewer missed that the primary setup action was ambiguous.',
+      title: 'Ambiguous setup primary action escaped review',
+      scenario: 'A setup card made the safe next action unclear.',
+      recordedBy: 'calibration:test',
+      recordedAt: '2026-05-25T12:05:00.000Z',
+      labeledBy: 'calibration:test',
+      labeledAt: '2026-05-25T12:10:00.000Z',
+      reviewAfter: '2026-11-25',
+    })
+
+    expect(draft).toMatchObject({
+      id: 'escaped-task-1-ux-comprehension',
+      reviewLanes: ['ux_comprehension'],
+      source: { kind: 'production_miss' },
+      knownFindings: [{
+        summary: 'The reviewer missed that the primary setup action was ambiguous.',
+      }],
+    })
+  })
+
+  it('validates and records the review planning corpus through persistence', async () => {
+    const project = tmpHome()
+    const priorDataDir = process.env.GUILDHALL_DATA_DIR
+    const dataDir = join(tmpHome(), 'guildhall-data')
+    process.env.GUILDHALL_DATA_DIR = dataDir
+    try {
+      const result = await validateReviewPlanningCorpus({
+        projectPath: project,
+        recordedBy: 'planning-calibration:test',
+        now: () => new Date('2026-05-25T12:00:00.000Z'),
+      })
+
+      expect(result.summary.recommendedVariantId).toBeTruthy()
+      expect(result.record.ref.path).toContain(join(dataDir, 'projects'))
+      expect(result.record.payload.variantSet).toBe('review-planning-frontier')
+      expect(result.record.payload.variants).toEqual([
+        'lean',
+        'balanced',
+        'thorough',
+        'balanced_split_ux_copy',
+      ])
+    } finally {
+      if (priorDataDir === undefined) {
+        delete process.env.GUILDHALL_DATA_DIR
+      } else {
+        process.env.GUILDHALL_DATA_DIR = priorDataDir
+      }
+    }
+  })
+
+  it('validates and records the task sizing corpus through persistence', async () => {
+    const project = tmpHome()
+    const priorDataDir = process.env.GUILDHALL_DATA_DIR
+    const dataDir = join(tmpHome(), 'guildhall-data')
+    process.env.GUILDHALL_DATA_DIR = dataDir
+    try {
+      const result = await validateTaskSizingCorpus({
+        projectPath: project,
+        recordedBy: 'task-sizing:test',
+        now: () => new Date('2026-05-25T12:00:00.000Z'),
+      })
+
+      expect(result.summary.recommendedVariantId).toBe('split_sensitive')
+      expect(result.record.ref.path).toContain(join(dataDir, 'projects'))
+      expect(result.record.payload.variantSet).toBe('task-sizing-frontier')
+      expect(result.record.payload.variants).toEqual(['balanced', 'split_sensitive'])
+    } finally {
+      if (priorDataDir === undefined) {
+        delete process.env.GUILDHALL_DATA_DIR
+      } else {
+        process.env.GUILDHALL_DATA_DIR = priorDataDir
+      }
+    }
   })
 
   it('writes a model bakeoff report as json plus markdown', () => {

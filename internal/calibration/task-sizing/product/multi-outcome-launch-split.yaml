@@ -1,0 +1,33 @@
+id: multi-outcome-launch-split
+title: Multi-outcome launch split
+task:
+  id: task-platform-launch
+  title: Launch billing, invite, and analytics changes
+  description: Add billing settings, create an admin API endpoint, migrate subscription data, send invite emails, and document analytics rollout.
+  priority: high
+  changedFiles:
+    - src/web/settings/Billing.svelte
+    - src/api/admin/subscriptions.ts
+    - src/email/invites.ts
+    - migrations/20260525_workspace_subscriptions.sql
+    - docs/reference/analytics.md
+  riskLanes:
+    - ux_comprehension
+    - api_contract
+    - data_integrity
+    - migration_safety
+    - privacy
+    - release_risk
+expected:
+  minScore: 8
+  action: split_required
+  requiredFactors:
+    - multiple_outcomes
+    - many_surfaces
+    - many_risk_lanes
+    - migration_or_release
+  minRecommendedChildren: 3
+labelGovernance:
+  labeledBy: task-sizing-seed
+  labeledAt: "2026-05-25"
+  reviewStatus: seed

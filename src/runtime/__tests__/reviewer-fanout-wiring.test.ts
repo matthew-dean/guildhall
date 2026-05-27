@@ -18,6 +18,11 @@ import type {
   ApiStreamEvent,
   SupportsStreamingMessages,
 } from '@guildhall/engine'
+import {
+  AGENT_SETTINGS_FILENAME,
+  makeDefaultSettings,
+  saveLeverSettings,
+} from '@guildhall/levers'
 import type { ConversationMessage, UsageSnapshot } from '@guildhall/protocol'
 import { z } from 'zod'
 import { InMemoryGitDriver } from '../git-driver.js'
@@ -126,10 +131,12 @@ interface ScriptedTurn {
 
 class ScriptedApiClient implements SupportsStreamingMessages {
   private index = 0
+  readonly requests: ApiMessageRequest[] = []
 
   constructor(private readonly script: ScriptedTurn[]) {}
 
-  async *streamMessage(_request: ApiMessageRequest): AsyncIterable<ApiStreamEvent> {
+  async *streamMessage(request: ApiMessageRequest): AsyncIterable<ApiStreamEvent> {
+    this.requests.push(request)
     const turn = this.script[this.index]
     if (!turn) throw new Error(`ScriptedApiClient exhausted at ${this.index}`)
     this.index += 1
@@ -281,6 +288,78 @@ describe('Orchestrator — reviewer fan-out at review', () => {
     expect(verdicts[0]?.verdict).toBe('approve')
   })
 
+  it('default fanout prompts include the planned review lanes and recipes', async () => {
+    const client = new ScriptedApiClient([
+      {
+        message: assistantMsg(
+          [
+            '**Rubric:**',
+            '- review: yes - checked planned lanes',
+            '',
+            '**Verdict:** approve',
+            '',
+            '**Reasoning:** Planned UX recipe was considered.',
+          ].join('\n'),
+        ),
+      },
+    ])
+    const runner = buildDefaultReviewerFanout(
+      { apiClient: client, modelId: 'm' },
+      { personaTimeoutMs: 1_000 },
+    )
+
+    await runner({
+      task: mkTask(),
+      personas: [
+        {
+          slug: 'project-manager',
+          name: 'The Project Manager',
+          blurb: 'Checks handoff quality.',
+          role: 'overseer',
+          principles: 'Check handoff quality.',
+          rubric: [{ id: 'review', question: 'Is the review packet usable?', weight: 1 }],
+          deterministicChecks: [],
+          applicable: () => true,
+        },
+      ],
+      reviewPlan: {
+        taskId: 'task-001',
+        effort: 'balanced',
+        depth: 'standard',
+        selectedLanes: ['ux_comprehension', 'copy_clarity'],
+        skippedLanes: [{ lane: 'security', reason: 'No security signal.' }],
+        requiredRecipes: [{
+          recipeId: 'product-ux-zero-context',
+          version: 'v1',
+          lanes: ['ux_comprehension', 'copy_clarity'],
+          blocking: 'high',
+          required: true,
+          calibrationRecipeIds: ['ux-zero-context-comprehension'],
+        }],
+        deterministicChecks: ['browser-or-screenshot-evidence'],
+        requiredArtifacts: ['visual-evidence'],
+        budget: { maxReviewerAgents: 4 },
+        aggregation: { ux_comprehension: 'blocking_on_high', copy_clarity: 'blocking_on_high' },
+        reasons: ['User-facing copy changed.'],
+        createdAt: '2026-04-01T00:00:00Z',
+        createdBy: 'coordinator-review-planner',
+      },
+      builtContext: builtContextStub(),
+      context: 'Review the task.',
+      memoryDir,
+      projectPath: tmpDir,
+    })
+
+    const requestText = JSON.stringify(client.requests[0])
+    expect(requestText).toContain('Planned review lanes')
+    expect(requestText).toContain('ux_comprehension')
+    expect(requestText).toContain('product-ux-zero-context')
+    expect(requestText).toContain('ux-zero-context-comprehension')
+    expect(requestText).toContain('Completeness pass')
+    expect(requestText).toContain('missing risk lane')
+    expect(requestText).toContain('pitfall')
+  })
+
   it('times out a hanging persona call instead of stalling review forever', async () => {
     const runner = buildDefaultReviewerFanout(
       { apiClient: new HangingApiClient(), modelId: 'm' },
@@ -355,6 +434,423 @@ describe('Orchestrator — reviewer fan-out at review', () => {
     // One ReviewVerdict per persona was persisted.
     expect(after.reviewVerdicts.length).toBe(calls[0]!.personaSlugs.length)
     expect(after.reviewVerdicts.every((v) => v.verdict === 'approve')).toBe(true)
+  })
+
+  it('passes the persisted review plan into reviewer fan-out', async () => {
+    await writeDesignSystem(minimalDS)
+    const task = mkTask({
+      title: 'Clarify confusing setup flow copy',
+      description: 'The UI flow needs clearer labels.',
+    })
+    await writeQueue([task])
+    const agents = agentSet()
+
+    const reviewPlan = {
+      taskId: task.id,
+      effort: 'balanced',
+      depth: 'standard',
+      selectedLanes: ['ux_comprehension', 'copy_clarity', 'test_adequacy'],
+      skippedLanes: [],
+      requiredRecipes: [{
+        recipeId: 'product-ux-zero-context',
+        version: 'v1',
+        lanes: ['ux_comprehension', 'copy_clarity'],
+        blocking: 'high',
+        required: true,
+        calibrationRecipeIds: ['ux-zero-context-comprehension'],
+      }],
+      deterministicChecks: ['browser-or-screenshot-evidence'],
+      requiredArtifacts: ['visual-evidence'],
+      budget: { maxReviewerAgents: 4 },
+      aggregation: {},
+      reasons: ['Stored plan from coordinator.'],
+      createdAt: '2026-04-01T00:00:00Z',
+      createdBy: 'coordinator-review-planner',
+    } as const
+    const reviewAuditStore = {
+      async readTaskReviewAudit() {
+        return {
+          plan: {
+            payload: reviewPlan,
+          },
+          events: [],
+          reviewerRuns: [],
+          escapedMisses: [],
+        }
+      },
+      async saveReviewPlan() {
+        throw new Error('should not overwrite existing plan')
+      },
+      async appendReviewPlanEvent() {
+        throw new Error('should not append event for existing plan')
+      },
+    }
+
+    const calls: { lanes?: readonly string[]; recipeIds?: readonly string[] }[] = []
+    const runner: ReviewerFanoutRunner = async ({ personas, reviewPlan: plan }) => {
+      calls.push({
+        lanes: plan?.selectedLanes,
+        recipeIds: plan?.requiredRecipes.map((recipe) => recipe.recipeId),
+      })
+      return personas.map(
+        (persona): PersonaVerdict => ({
+          guildSlug: persona.slug,
+          guildName: persona.name,
+          verdict: 'approve',
+          reasoning: `${persona.name} approved.`,
+          revisionItems: [],
+          rawOutput: '**Verdict:** approve',
+        }),
+      )
+    }
+
+    const orch = new Orchestrator({
+      config: baseConfig(),
+      agents,
+      reviewerFanout: runner,
+      reviewAuditStore: reviewAuditStore as never,
+      gitDriver: memoryGitDriver(),
+    })
+    await orch.tick()
+
+    expect(calls).toHaveLength(1)
+    expect(calls[0]).toEqual({
+      lanes: ['ux_comprehension', 'copy_clarity', 'test_adequacy'],
+      recipeIds: ['product-ux-zero-context'],
+    })
+  })
+
+  it('records new review plans with the domain review effort lever', async () => {
+    await writeDesignSystem(minimalDS)
+    const task = mkTask({
+      title: 'Clarify release-note wording',
+      description: 'Update public docs copy for the changelog.',
+      priority: 'low',
+    })
+    await writeQueue([task])
+
+    const settings = makeDefaultSettings(new Date('2026-04-01T00:00:00.000Z'))
+    settings.domains.overrides = {
+      looma: {
+        review_effort: {
+          position: 'thorough',
+          rationale: 'This project wants deeper review while calibrating reviewer coverage.',
+          setAt: '2026-04-01T00:00:00.000Z',
+          setBy: 'user-direct',
+        },
+      },
+    }
+    await saveLeverSettings({
+      path: path.join(memoryDir, AGENT_SETTINGS_FILENAME),
+      settings,
+    })
+
+    const savedPlans: Array<{ effort: string; budget?: { maxReviewerAgents?: number } }> = []
+    const reviewAuditStore = {
+      async readTaskReviewAudit() {
+        return {
+          plan: null,
+          events: [],
+          reviewerRuns: [],
+          escapedMisses: [],
+        }
+      },
+      async saveReviewPlan(plan: { effort: string; budget?: { maxReviewerAgents?: number } }) {
+        savedPlans.push(plan)
+        return { payload: plan }
+      },
+      async appendReviewPlanEvent() {
+        return { payload: {} }
+      },
+      async appendReviewerRun() {
+        return { payload: {} }
+      },
+    }
+
+    const runner: ReviewerFanoutRunner = async ({ personas }) =>
+      personas.map(
+        (persona): PersonaVerdict => ({
+          guildSlug: persona.slug,
+          guildName: persona.name,
+          verdict: 'approve',
+          reasoning: `${persona.name} approved.`,
+          revisionItems: [],
+          rawOutput: '**Verdict:** approve',
+        }),
+      )
+
+    const orch = new Orchestrator({
+      config: baseConfig(),
+      agents: agentSet(),
+      reviewerFanout: runner,
+      reviewAuditStore: reviewAuditStore as never,
+      gitDriver: memoryGitDriver(),
+    })
+    await orch.tick()
+
+    expect(savedPlans).toHaveLength(1)
+    expect(savedPlans[0]).toMatchObject({
+      effort: 'thorough',
+      budget: { maxReviewerAgents: 6 },
+    })
+  })
+
+  it('uses the review plan budget to cap reviewer fan-out personas', async () => {
+    await writeDesignSystem(minimalDS)
+    const task = mkTask({
+      title: 'Clarify confusing setup flow copy',
+      description: 'The UI flow needs clearer labels.',
+    })
+    await writeQueue([task])
+    const agents = agentSet()
+
+    const reviewAuditStore = {
+      async readTaskReviewAudit() {
+        return {
+          plan: {
+            payload: {
+              taskId: task.id,
+              effort: 'lean',
+              depth: 'minimal',
+              selectedLanes: ['ux_comprehension', 'copy_clarity'],
+              skippedLanes: [],
+              requiredRecipes: [],
+              deterministicChecks: [],
+              requiredArtifacts: [],
+              budget: { maxReviewerAgents: 2 },
+              aggregation: {},
+              reasons: [],
+              createdAt: '2026-04-01T00:00:00Z',
+              createdBy: 'coordinator-review-planner',
+            },
+          },
+          events: [],
+          reviewerRuns: [],
+          escapedMisses: [],
+        }
+      },
+      async saveReviewPlan() {
+        throw new Error('should not overwrite existing plan')
+      },
+      async appendReviewPlanEvent() {
+        throw new Error('should not append event for existing plan')
+      },
+    }
+
+    const calls: { personaSlugs: string[] }[] = []
+    const runner: ReviewerFanoutRunner = async ({ personas }) => {
+      calls.push({ personaSlugs: personas.map((persona) => persona.slug) })
+      return personas.map(
+        (persona): PersonaVerdict => ({
+          guildSlug: persona.slug,
+          guildName: persona.name,
+          verdict: 'approve',
+          reasoning: `${persona.name} approved.`,
+          revisionItems: [],
+          rawOutput: '**Verdict:** approve',
+        }),
+      )
+    }
+
+    const orch = new Orchestrator({
+      config: baseConfig(),
+      agents,
+      reviewerFanout: runner,
+      reviewAuditStore: reviewAuditStore as never,
+      gitDriver: memoryGitDriver(),
+    })
+    await orch.tick()
+
+    expect(calls).toHaveLength(1)
+    expect(calls[0]!.personaSlugs.length).toBeLessThanOrEqual(2)
+    expect(calls[0]!.personaSlugs).toEqual(expect.arrayContaining([
+      'component-designer',
+      'copywriter',
+    ]))
+  })
+
+  it('persists persona reviewer runs through the review audit store', async () => {
+    await writeDesignSystem(minimalDS)
+    const task = mkTask({
+      title: 'Clarify confusing setup flow copy',
+      description: 'The UI flow needs clearer labels.',
+    })
+    await writeQueue([task])
+    const agents = agentSet()
+
+    const savedRuns: Array<{
+      taskId: string
+      recipeId: string
+      lanes: readonly string[]
+      verdict: string
+      findings: readonly { summary: string }[]
+      recordedBy: string
+    }> = []
+    const reviewAuditStore = {
+      async readTaskReviewAudit() {
+        return {
+          plan: {
+            payload: {
+              taskId: task.id,
+              effort: 'balanced',
+              depth: 'standard',
+              selectedLanes: ['ux_comprehension', 'copy_clarity'],
+              skippedLanes: [],
+              requiredRecipes: [{
+                recipeId: 'product-ux-zero-context',
+                version: 'v1',
+                lanes: ['ux_comprehension', 'copy_clarity'],
+                blocking: 'high',
+                required: true,
+                calibrationRecipeIds: ['ux-zero-context-comprehension'],
+              }],
+              deterministicChecks: [],
+              requiredArtifacts: [],
+              budget: { maxReviewerAgents: 2 },
+              aggregation: {},
+              reasons: [],
+              createdAt: '2026-04-01T00:00:00Z',
+              createdBy: 'coordinator-review-planner',
+            },
+          },
+          events: [],
+          reviewerRuns: [],
+          escapedMisses: [],
+        }
+      },
+      async saveReviewPlan() {
+        throw new Error('should not overwrite existing plan')
+      },
+      async appendReviewPlanEvent() {
+        throw new Error('should not append event for existing plan')
+      },
+      async saveReviewerRun(run: {
+        taskId: string
+        recipeId: string
+        lanes: readonly string[]
+        verdict: string
+        findings: readonly { summary: string }[]
+        recordedBy: string
+      }) {
+        savedRuns.push(run)
+        return { payload: run } as never
+      },
+    }
+
+    const runner: ReviewerFanoutRunner = async ({ personas }) =>
+      personas.map((persona, index): PersonaVerdict => index === 0
+        ? {
+            guildSlug: persona.slug,
+            guildName: persona.name,
+            verdict: 'revise',
+            reasoning: `${persona.name} found ambiguous next action copy.`,
+            revisionItems: ['Rename the primary action so the next step is clear.'],
+            riskItems: ['Users may choose the wrong setup path.'],
+            rawOutput: '**Verdict:** revise',
+          }
+        : {
+            guildSlug: persona.slug,
+            guildName: persona.name,
+            verdict: 'approve',
+            reasoning: `${persona.name} approved.`,
+            revisionItems: [],
+            rawOutput: '**Verdict:** approve',
+          })
+
+    const orch = new Orchestrator({
+      config: baseConfig(),
+      agents,
+      reviewerFanout: runner,
+      reviewAuditStore: reviewAuditStore as never,
+      gitDriver: memoryGitDriver(),
+    })
+    await orch.tick()
+
+    expect(savedRuns).toHaveLength(2)
+    expect(savedRuns[0]).toMatchObject({
+      taskId: task.id,
+      recipeId: 'product-ux-zero-context',
+      lanes: ['ux_comprehension', 'copy_clarity'],
+      verdict: 'revise',
+      recordedBy: 'reviewer-fanout:component-designer',
+    })
+    expect(savedRuns[0]!.findings[0]?.summary).toContain('Rename the primary action')
+    expect(savedRuns[1]).toMatchObject({
+      verdict: 'approve',
+      findings: [],
+      recordedBy: 'reviewer-fanout:copywriter',
+    })
+  })
+
+  it('continues review when reviewer-run audit persistence fails', async () => {
+    await writeDesignSystem(minimalDS)
+    const task = mkTask({
+      title: 'Clarify confusing setup flow copy',
+      description: 'The UI flow needs clearer labels.',
+    })
+    await writeQueue([task])
+    const agents = agentSet()
+
+    const reviewAuditStore = {
+      async readTaskReviewAudit() {
+        return {
+          plan: {
+            payload: {
+              taskId: task.id,
+              effort: 'lean',
+              depth: 'minimal',
+              selectedLanes: ['ux_comprehension'],
+              skippedLanes: [],
+              requiredRecipes: [],
+              deterministicChecks: [],
+              requiredArtifacts: [],
+              budget: { maxReviewerAgents: 1 },
+              aggregation: {},
+              reasons: [],
+              createdAt: '2026-04-01T00:00:00Z',
+              createdBy: 'coordinator-review-planner',
+            },
+          },
+          events: [],
+          reviewerRuns: [],
+          escapedMisses: [],
+        }
+      },
+      async saveReviewPlan() {
+        throw new Error('should not overwrite existing plan')
+      },
+      async appendReviewPlanEvent() {
+        throw new Error('should not append event for existing plan')
+      },
+      async saveReviewerRun() {
+        throw new Error('local history unavailable')
+      },
+    }
+
+    const runner: ReviewerFanoutRunner = async ({ personas }) =>
+      personas.map(
+        (persona): PersonaVerdict => ({
+          guildSlug: persona.slug,
+          guildName: persona.name,
+          verdict: 'approve',
+          reasoning: `${persona.name} approved.`,
+          revisionItems: [],
+          rawOutput: '**Verdict:** approve',
+        }),
+      )
+
+    const orch = new Orchestrator({
+      config: baseConfig(),
+      agents,
+      reviewerFanout: runner,
+      reviewAuditStore: reviewAuditStore as never,
+      gitDriver: memoryGitDriver(),
+    })
+    await orch.tick()
+
+    const q = await readQueue()
+    expect(q.tasks[0]!.status).toBe('gate_check')
+    expect(q.tasks[0]!.reviewVerdicts).toHaveLength(1)
   })
 
   it('bounces the task to in_progress when any persona revises', async () => {

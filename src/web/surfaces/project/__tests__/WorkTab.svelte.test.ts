@@ -142,10 +142,12 @@ describe('WorkTab', () => {
       },
     })
 
-    expect(await screen.findByText('1 agent-active')).toBeTruthy()
-    expect(screen.getByText('1 shaping')).toBeTruthy()
-    expect(screen.getByText('1 ready for worker')).toBeTruthy()
+    expect(await screen.findByText('1 Guildhall working')).toBeTruthy()
+    expect(screen.getByText('1 being shaped')).toBeTruthy()
+    expect(screen.getByText('1 ready to start')).toBeTruthy()
     expect(screen.getByText('1 import draft')).toBeTruthy()
+    expect(document.body.textContent).not.toContain('agent-active')
+    expect(document.body.textContent).not.toContain('ready for worker')
     expect(document.body.textContent).not.toContain('2 active')
     expect(document.body.textContent).not.toContain('1 imported drafts')
   })
@@ -212,7 +214,7 @@ describe('WorkTab', () => {
       },
     })
 
-    expect(await screen.findByText('1 ready for worker')).toBeTruthy()
+    expect(await screen.findByText('1 ready to start')).toBeTruthy()
     expect(screen.getByText('2 need brief cleanup')).toBeTruthy()
     expect(screen.queryByText('3 ready for worker')).toBeNull()
   })
@@ -253,7 +255,14 @@ describe('WorkTab', () => {
       props: {
         mode: 'board',
         detail: detail([
-          task({ id: 'task-board', title: 'Board task', status: 'ready' }),
+          task({
+            id: 'task-board',
+            title: 'Board task',
+            status: 'ready',
+            productBrief: { approvedAt: '2026-05-19T10:00:00.000Z' },
+            spec: 'Build the board task.',
+            acceptanceCriteria: ['Shows on the board.'],
+          }),
         ]),
       },
     })

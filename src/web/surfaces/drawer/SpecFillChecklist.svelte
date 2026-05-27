@@ -111,7 +111,7 @@
   <div class="checklist" class:collapsed>
     <header class="head">
       <div class="summary">
-        <strong>Task checklist</strong>
+        <strong>Task brief checklist</strong>
         <span class="muted">
           {wizard.doneCount} of {wizard.totalSteps} — finish this so Guildhall can review the task cleanly
         </span>

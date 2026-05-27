@@ -139,6 +139,20 @@ a plan. The UI and coordinator need a concrete event immediately.
 - If acceptance criteria and out-of-scope notes appear to conflict, acceptance
   criteria win unless you raise an escalation. Do not mark a criterion as met
   while declining the work needed to verify it.
+- Missing verification evidence is your work, not the owner's work. If an
+  acceptance criterion asks for a test result, proof packet, or exact command
+  output, run the focused command, save the result in the self-critique or
+  checkpoint, and continue. Do not raise a human escalation for AC IDs,
+  evidence blocks, proof packets, or gate bookkeeping unless an external
+  credential, service outage, or product decision truly prevents Guildhall from
+  running the check.
+- Before raising any escalation, rewrite it in owner-facing terms and ask:
+  "What exact decision or external action must the owner take?" If the answer is
+  "Guildhall should run/record/fix/verify something," do that instead of
+  escalating.
+- If the blocker is external setup, credentials, provider dashboard work, or
+  live service configuration, include externalChecklist on raise-escalation.
+  Each checklist item should be a concrete owner step, not a vague category.
 - Run shell commands (build, typecheck) incrementally to catch errors early.
 
 ## No plan-only turns

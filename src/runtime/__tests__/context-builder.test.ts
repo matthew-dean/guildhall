@@ -9,6 +9,7 @@ import type { Task } from '@guildhall/core'
 import { writeCheckpoint } from '@guildhall/tools'
 import { proposeProjectSkill, activateProjectSkillProposal } from '@guildhall/skills'
 import { loadCodebaseMap, saveCodebaseMap, type CodebaseMap } from '@guildhall/corpus-map'
+import { getProjectTaskLocalHistoryDir } from '@guildhall/sessions'
 
 // ---------------------------------------------------------------------------
 // Context builder tests (AC-04)
@@ -135,6 +136,34 @@ describe('buildContext — task summary', () => {
     const ctx = await buildContext(baseTask, tmpDir)
     expect(ctx.taskSummary).toContain('### Spec Overview')
     expect(ctx.taskSummary).toContain('ghost button variant')
+  })
+
+  it('includes env file key names for credential-shaped tasks without values', async () => {
+    const project = path.join(tmpDir, 'project')
+    const memoryDir = path.join(project, '.guildhall')
+    await fs.mkdir(path.join(project, 'frontend'), { recursive: true })
+    await fs.mkdir(memoryDir, { recursive: true })
+    await fs.writeFile(
+      path.join(project, 'frontend', '.env'),
+      [
+        'PUBLIC_SUPABASE_URL=https://example.supabase.co',
+        'PUBLIC_SUPABASE_ANON_KEY=anon-secret',
+        'SUPABASE_SERVICE_ROLE_KEY=service-secret',
+      ].join('\n'),
+      'utf-8',
+    )
+
+    const ctx = await buildContext({
+      ...baseTask,
+      title: 'Configure Supabase OAuth providers',
+      description: 'Enable Google and Apple providers in Supabase.',
+      projectPath: project,
+    }, memoryDir)
+
+    expect(ctx.taskSummary).toContain('### Environment Files (names only; values redacted)')
+    expect(ctx.taskSummary).toContain('frontend/.env: PUBLIC_SUPABASE_URL, PUBLIC_SUPABASE_ANON_KEY, SUPABASE_SERVICE_ROLE_KEY')
+    expect(ctx.taskSummary).not.toContain('anon-secret')
+    expect(ctx.taskSummary).not.toContain('service-secret')
   })
 
   it('keeps only the summary portion of long spec markdown in the task summary', async () => {
@@ -571,7 +600,7 @@ describe('buildContext — task summary', () => {
 
   it('surfaces the latest checkpoint and uses its touched files as likely targets for resumed tasks', async () => {
     const worktreePath = path.join(tmpDir, 'worktree')
-    const memoryTasksDir = path.join(tmpDir, 'tasks', 'task-001')
+    const memoryTasksDir = getProjectTaskLocalHistoryDir(tmpDir, 'task-001')
     await fs.mkdir(worktreePath, { recursive: true })
     await fs.mkdir(memoryTasksDir, { recursive: true })
     await fs.writeFile(
@@ -619,7 +648,7 @@ describe('buildContext — task summary', () => {
 
   it('ignores stale checkpoints written before the task was updated', async () => {
     const worktreePath = path.join(tmpDir, 'worktree')
-    const memoryTasksDir = path.join(tmpDir, 'tasks', 'task-001')
+    const memoryTasksDir = getProjectTaskLocalHistoryDir(tmpDir, 'task-001')
     await fs.mkdir(worktreePath, { recursive: true })
     await fs.mkdir(memoryTasksDir, { recursive: true })
     await fs.writeFile(
@@ -687,6 +716,51 @@ describe('buildContext — task summary', () => {
     const ctx = await buildContext(taskWithReviewNote, tmpDir)
     expect(ctx.taskSummary).toContain('### Latest Required Revisions')
     expect(ctx.taskSummary).toContain('Add the missing login redirect tests')
+  })
+
+  it('adds concrete retry coaching when review loops repeat and the worker hits brittle edit failures', async () => {
+    const taskWithBrittleRetry: Task = {
+      ...baseTask,
+      title: 'Set FLL overhead charge policy',
+      description: 'Create the public fee policy page and author dashboard fee breakdown.',
+      revisionCount: 6,
+      notes: [
+        {
+          agentId: 'reviewer-agent',
+          role: 'reviewer',
+          content: [
+            '**Required revisions:**',
+            '1. In `frontend/app/pages/dashboard.vue`, define `fetchData` for the Retry button.',
+            '2. Fix `<Card>` usage to match `frontend/app/components/ui/molecules/Card.vue` props.',
+          ].join('\n'),
+          timestamp: '2026-05-25T04:06:41.363Z',
+        },
+      ],
+      escalations: [
+        {
+          id: 'esc-task-006-23',
+          taskId: 'task-001',
+          agentId: 'worker-agent',
+          reason: 'spec_ambiguous',
+          summary: 'Card component exists but template syntax mismatch prevents edit',
+          details:
+            'Multiple attempts to edit dashboard.vue failed because the exact string was not found, suggesting a whitespace or formatting mismatch. Need clarification on how to properly apply Card with props in the template.',
+          raisedAt: '2026-05-25T04:08:27.700Z',
+          resolvedAt: '2026-05-25T18:20:42.819Z',
+          resolvedBy: 'system',
+          resolution:
+            'Resolved as Guildhall-owned implementation recovery: failed exact-string/template edits are not a product/spec decision for the owner.',
+        },
+      ],
+    }
+
+    const ctx = await buildContext(taskWithBrittleRetry, tmpDir)
+
+    expect(ctx.taskSummary).toContain('### Retry Coaching')
+    expect(ctx.taskSummary).toContain('Do not ask the owner about local implementation mechanics')
+    expect(ctx.taskSummary).toContain('Re-read the current target file')
+    expect(ctx.taskSummary).toContain('avoid exact-string replacement')
+    expect(ctx.taskSummary).toContain('frontend/app/pages/dashboard.vue')
   })
 
   it('does not duplicate reviewer feedback inside the generic agent-notes section', async () => {

@@ -1,0 +1,41 @@
+id: non-idempotent-retry
+title: Non-idempotent retry creates duplicate charge
+domain: data
+productType: billing
+surfaceType: worker
+userGoal: Retry a failed billing job without charging twice.
+scenario: A billing worker retries after a network timeout, but it creates a new charge attempt each time without an idempotency key.
+artifacts:
+  - id: worker-steps
+    kind: flow_steps
+    description: Billing job retry behavior.
+    content: "Step 1 create charge. Step 2 timeout waiting for provider response. Step 3 retry job creates charge again with a fresh provider request id."
+reviewLanes:
+  - data_integrity
+  - migration_safety
+knownFindings:
+  - id: missing-idempotency
+    lane: data_integrity
+    severity: critical
+    summary: Retries can create duplicate external charges because no idempotency key is reused.
+    impact: Customers may be charged more than once after transient provider failures.
+    minimumUsefulFix: Persist and reuse a stable idempotency key per billing intent before making the provider request.
+    matchHints:
+      - idempotency
+      - duplicate charge
+      - retry
+falsePositiveTraps:
+  - id: not-just-more-logging
+    summary: More logging helps diagnosis but does not prevent duplicate side effects.
+source:
+  kind: synthetic
+  citation: Created for cross-domain review calibration.
+labelGovernance:
+  labeledBy: review-calibration
+  labeledAt: 2026-05-25T12:00:00.000Z
+  reviewStatus: seed
+privacyClassification: public
+negativeControl: false
+stalenessPolicy:
+  reviewAfter: 2026-11-25
+  reason: Payment-provider retry contracts may change.

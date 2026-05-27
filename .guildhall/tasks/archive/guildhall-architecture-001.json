@@ -1,0 +1,43 @@
+{
+  "id": "guildhall-architecture-001",
+  "title": "Reframe provider UX around authenticated CLIs and protocol families",
+  "description": "Replace product-specific provider framing with a protocol-first model: authenticated CLIs, OpenAI-compatible custom providers, and Anthropic-compatible custom providers. Product names like LM Studio should become examples or saved connection labels, not top-level runtime concepts.",
+  "domain": "runtime",
+  "projectPath": ".",
+  "status": "done",
+  "priority": "high",
+  "dependsOn": [
+    "guildhall-automation-002"
+  ],
+  "outOfScope": [
+    "Deep scheduler changes",
+    "Multi-connection persistence beyond the first safe slice"
+  ],
+  "acceptanceCriteria": [
+    {
+      "id": "ac-1",
+      "description": "User-facing docs and setup/provider surfaces describe provider families without depending on LM Studio as a first-class product type",
+      "verifiedBy": "review",
+      "met": true
+    },
+    {
+      "id": "ac-2",
+      "description": "Guildhall has a committed design note describing the protocol-first provider taxonomy and migration path",
+      "verifiedBy": "review",
+      "met": true
+    }
+  ],
+  "notes": [
+    {
+      "agentId": "worker-agent",
+      "role": "worker",
+      "timestamp": "2026-05-02T16:43:00Z",
+      "content": "Completed the provider taxonomy cleanup slice. Added a protocol-first design note, reframed the setup/providers UI and docs around authenticated CLIs plus OpenAI-compatible / Anthropic-compatible providers, changed the local-provider language from LM Studio-as-concept to OpenAI-compatible local server, and kept existing config keys compatible."
+    }
+  ],
+  "gateResults": [],
+  "revisionCount": 0,
+  "createdAt": "2026-05-02T17:45:00Z",
+  "updatedAt": "2026-05-02T16:43:00Z",
+  "completedAt": "2026-05-02T16:43:00Z"
+}

@@ -55,10 +55,6 @@
 
   let followup = $state('')
   let acceptanceDraft = $state('')
-  // NOTE: the drawer is now a READ-ONLY artifact view. The interactive
-  // approve / reply / answer-question affordances live in the Thread
-  // surface. Past-context here is for inspection only.
-
   const openEscalations = $derived(
     activeEscalations(task),
   )
@@ -80,6 +76,11 @@
   const reviewerSections = $derived(parseReviewerSummarySections(latestReviewerSummary))
   const latestSelfCritique = $derived((task.latestSelfCritique ?? '').trim())
   const latestCheckpoint = $derived(task.latestCheckpoint ?? null)
+  const reviewPlan = $derived(task.reviewPlan ?? null)
+  const reviewAuditSummary = $derived(task.reviewAuditSummary ?? null)
+  const reviewPlanLanes = $derived(reviewPlan?.selectedLanes ?? [])
+  const reviewPlanHiddenLaneCount = $derived(Math.max(0, reviewPlanLanes.length - 4))
+  const reviewPlanRecipeCount = $derived(reviewPlan?.requiredRecipes?.length ?? 0)
   const hasReviewPacket = $derived(
     latestReviewerSummary.length > 0 ||
       latestSelfCritique.length > 0 ||
@@ -139,6 +140,39 @@
           : 'Deferred risk'
     return `${prefix}: ${level}`
   }
+
+  function friendlyReviewToken(value: string | undefined): string {
+    if (!value) return 'Unknown'
+    return value
+      .replace(/[_-]/g, ' ')
+      .replace(/\b\w/g, (char) => char.toUpperCase())
+      .replace(/\bUx\b/g, 'UX')
+      .replace(/\bApi\b/g, 'API')
+  }
+
+  function budgetSummary(): string {
+    const budget = reviewPlan?.budget
+    if (!budget) return 'No budget recorded.'
+    const parts = [
+      budget.maxReviewerAgents ? `${budget.maxReviewerAgents} reviewer${budget.maxReviewerAgents === 1 ? '' : 's'}` : null,
+      budget.maxWallClockMinutes ? `${budget.maxWallClockMinutes} min` : null,
+      budget.maxEstimatedTokens ? `${budget.maxEstimatedTokens.toLocaleString()} tokens` : null,
+    ].filter((part): part is string => Boolean(part))
+    return parts.length > 0 ? parts.join(' · ') : 'No budget recorded.'
+  }
+
+  function reviewAuditSummaryText(): string {
+    if (!reviewAuditSummary) return ''
+    const reviewerRunCount = reviewAuditSummary.reviewerRunCount ?? 0
+    const reviseCount = reviewAuditSummary.reviseCount ?? 0
+    const escapedMissCount = reviewAuditSummary.escapedMissCount ?? 0
+    const parts = [
+      `${reviewerRunCount} reviewer run${reviewerRunCount === 1 ? '' : 's'}`,
+      `${reviseCount} revision request${reviseCount === 1 ? '' : 's'}`,
+      escapedMissCount > 0 ? `${escapedMissCount} escaped miss${escapedMissCount === 1 ? '' : 'es'}` : null,
+    ].filter((part): part is string => Boolean(part))
+    return parts.join(' · ')
+  }
 </script>
 
 <Stack gap="4">
@@ -178,6 +212,78 @@
     </Stack>
   </Card>
   </div>
+
+  {#if reviewPlan}
+    <Card title="Review plan">
+      <Stack gap="3">
+        <div class="review-plan-summary">
+          <div>
+            <strong>{friendlyReviewToken(reviewPlan.effort)} review</strong>
+            <span>{friendlyReviewToken(reviewPlan.depth)} depth · {budgetSummary()}</span>
+          </div>
+          <Chip
+            label={reviewPlanRecipeCount === 1 ? '1 reviewer group' : `${reviewPlanRecipeCount} reviewer groups`}
+            tone="agent"
+          />
+        </div>
+        {#if reviewPlanLanes.length > 0}
+          <div class="review-plan-lanes" aria-label="Review risk lanes">
+            {#each reviewPlanLanes.slice(0, 4) as lane (lane)}
+              <Chip label={friendlyReviewToken(lane)} tone="neutral" />
+            {/each}
+            {#if reviewPlanHiddenLaneCount > 0}
+              <Chip label={`+${reviewPlanHiddenLaneCount} more`} tone="neutral" />
+            {/if}
+          </div>
+        {/if}
+        <p class="explainer">
+          Guildhall planned these review lenses before handing the task to reviewers, so the review budget and skipped areas are auditable.
+        </p>
+        {#if reviewAuditSummary}
+          <p class="checkpoint-line">{reviewAuditSummaryText()}</p>
+        {/if}
+        <details class="review-plan-more">
+          <summary>Show review details</summary>
+          <Stack gap="2">
+            {#if reviewPlan.requiredRecipes?.length}
+              <Field label="Reviewer groups">
+                <ul class="review-plan-list">
+                  {#each reviewPlan.requiredRecipes as recipe (`${recipe.recipeId ?? 'recipe'}:${recipe.version ?? 'v'}`)}
+                    <li>
+                      {friendlyReviewToken(recipe.recipeId)}
+                      {#if recipe.blocking}
+                        <span>{friendlyReviewToken(recipe.blocking)}</span>
+                      {/if}
+                    </li>
+                  {/each}
+                </ul>
+              </Field>
+            {/if}
+            {#if reviewPlan.deterministicChecks?.length}
+              <Field label="Required checks">
+                <p class="checkpoint-line">{reviewPlan.deterministicChecks.join(', ')}</p>
+              </Field>
+            {/if}
+            {#if reviewPlan.requiredArtifacts?.length}
+              <Field label="Evidence expected">
+                <p class="checkpoint-line">{reviewPlan.requiredArtifacts.join(', ')}</p>
+              </Field>
+            {/if}
+            {#if reviewPlan.skippedLanes?.length}
+              <Field label="Skipped lenses">
+                <p class="checkpoint-line">
+                  {reviewPlan.skippedLanes.slice(0, 4).map((item) => friendlyReviewToken(item.lane)).join(', ')}
+                  {#if reviewPlan.skippedLanes.length > 4}
+                    , +{reviewPlan.skippedLanes.length - 4} more
+                  {/if}
+                </p>
+              </Field>
+            {/if}
+          </Stack>
+        </details>
+      </Stack>
+    </Card>
+  {/if}
 
   {#if hasReviewPacket}
     <Card title="Latest handoff packet">
@@ -342,8 +448,11 @@
         <Chip label="Awaiting your approval" tone="warn" />
       {/snippet}
       <Stack gap="2">
-        <h3>Spec approval is waiting in Thread</h3>
-        <p class="lede">Open <strong>Thread</strong> to review the draft and approve it.</p>
+        <h3>Spec draft awaiting approval</h3>
+        <p class="lede">Review the draft on this page, then approve it when it matches what you want.</p>
+        <Row justify="end">
+          <Button variant="primary" disabled={busy} onclick={onApproveSpec}>Approve spec</Button>
+        </Row>
       </Stack>
     </Card>
   {/if}
@@ -358,7 +467,7 @@
           placeholder="Answer a question, add a requirement, correct a misunderstanding..."
         />
         <Row justify="end" gap="2" align="center">
-          <span class="hint">Appends to memory/exploring/{task.id}.md</span>
+          <span class="hint">Appends to local Guildhall transcript history</span>
           <Button variant="primary" disabled={busy || followup.trim().length === 0} onclick={send}>
             Send
           </Button>
@@ -400,6 +509,62 @@
     font-size: var(--fs-1);
     line-height: var(--lh-body);
     margin: 0;
+  }
+  .review-plan-summary {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: var(--s-3);
+  }
+  .review-plan-summary > div {
+    display: grid;
+    gap: 2px;
+    min-width: 0;
+  }
+  .review-plan-summary strong {
+    color: var(--text);
+    font-size: var(--fs-3);
+    line-height: var(--lh-tight);
+  }
+  .review-plan-summary span {
+    color: var(--text-muted);
+    font-size: var(--fs-1);
+    line-height: var(--lh-body);
+  }
+  .review-plan-lanes {
+    display: flex;
+    flex-wrap: wrap;
+    gap: var(--s-2);
+  }
+  .review-plan-more > summary {
+    cursor: pointer;
+    color: var(--text-muted);
+    font-size: var(--fs-1);
+    font-weight: 700;
+    letter-spacing: 0.05em;
+    list-style: none;
+    text-transform: uppercase;
+  }
+  .review-plan-more > summary::-webkit-details-marker {
+    display: none;
+  }
+  .review-plan-more > summary::before {
+    content: '▸ ';
+  }
+  .review-plan-more[open] > summary::before {
+    content: '▾ ';
+  }
+  .review-plan-list {
+    display: grid;
+    gap: var(--s-1);
+    margin: 0;
+    padding-left: var(--s-4);
+    color: var(--text-muted);
+    font-size: var(--fs-1);
+    line-height: var(--lh-body);
+  }
+  .review-plan-list span {
+    color: var(--text-soft);
   }
   .review-score-list {
     display: flex;

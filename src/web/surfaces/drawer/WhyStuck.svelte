@@ -11,6 +11,7 @@
   import Row from '../../lib/Row.svelte'
   import Button from '../../lib/Button.svelte'
   import Chip from '../../lib/Chip.svelte'
+  import Icon from '../../lib/Icon.svelte'
   import Markdown from '../../lib/Markdown.svelte'
   import { activeEscalations } from '../../lib/escalation.js'
   import {
@@ -109,10 +110,11 @@
       {/if}
       {#if firstOpen}
         <Button
-          variant="secondary"
+          variant="agent"
           disabled={busy}
           onclick={() => onResolve(firstOpen, 'retry')}
         >
+          <Icon name="sparkles" size={14} />
           {primaryAction.label}
         </Button>
         <Button

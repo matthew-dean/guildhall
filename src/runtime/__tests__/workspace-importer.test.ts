@@ -14,21 +14,27 @@ import {
   WORKSPACE_IMPORT_TASK_ID,
   WORKSPACE_IMPORT_DOMAIN,
 } from '../workspace-importer.js'
+import { detectWorkspaceSignals } from '../workspace-import/index.js'
 import { formWorkspaceHypothesis } from '../workspace-import/hypothesis.js'
 import type { WorkspaceInventory } from '../workspace-import/detect.js'
 import type { WorkspaceSignal } from '../workspace-import/types.js'
 
 let tmpDir: string
+let dataDir: string
 let memoryDir: string
 
 beforeEach(async () => {
   tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'forge-ws-import-'))
+  dataDir = path.join(os.tmpdir(), `guildhall-data-${path.basename(tmpDir)}`)
+  process.env.GUILDHALL_DATA_DIR = dataDir
   bootstrapWorkspace(tmpDir, { name: 'Import Test' })
-  memoryDir = path.join(tmpDir, 'memory')
+  memoryDir = path.join(tmpDir, '.guildhall')
 })
 
 afterEach(async () => {
+  delete process.env.GUILDHALL_DATA_DIR
   await fs.rm(tmpDir, { recursive: true, force: true })
+  await fs.rm(dataDir, { recursive: true, force: true })
 })
 
 async function readQueue(): Promise<TaskQueue> {
@@ -728,6 +734,44 @@ tasks:
     for (const m of seeded.draft.milestones) {
       expect(progress).toContain(m.title)
     }
+  })
+
+  it('detects schema-surface gaps before importing a mature Supabase project', async () => {
+    await fs.mkdir(path.join(tmpDir, 'supabase/migrations'), { recursive: true })
+    await fs.mkdir(path.join(tmpDir, 'frontend/supabase/migrations'), { recursive: true })
+    await fs.writeFile(
+      path.join(tmpDir, 'supabase/migrations/001_initial.sql'),
+      [
+        'CREATE TABLE software (id uuid primary key);',
+        'CREATE TABLE transactions (id uuid primary key, software_id uuid references software(id));',
+        'CREATE TABLE eligibility_checks (id uuid primary key, software_id uuid references software(id));',
+        'CREATE OR REPLACE FUNCTION check_user_eligibility(p_user_id uuid, p_software_id uuid)',
+        'RETURNS TABLE (is_eligible boolean, reason text) AS $$ BEGIN END; $$ LANGUAGE plpgsql;',
+      ].join('\n'),
+      'utf-8',
+    )
+    await fs.writeFile(
+      path.join(tmpDir, 'frontend/supabase/migrations/001_payments.sql'),
+      [
+        'CREATE TABLE projects (id uuid primary key);',
+        'CREATE TABLE payments (id uuid primary key, project_id uuid references projects(id));',
+        'CREATE TABLE stripe_accounts (id uuid primary key, stripe_account_id text unique);',
+      ].join('\n'),
+      'utf-8',
+    )
+
+    const inventory = await detectWorkspaceSignals({ projectPath: tmpDir })
+    const draft = formWorkspaceHypothesis(inventory)
+
+    expect(inventory.ran).toContain('schema-surface')
+    expect(draft.context.some((c) => c.label.includes('Database schema surface'))).toBe(true)
+    expect(draft.tasks.map((t) => t.title)).toEqual(
+      expect.arrayContaining([
+        'Resolve software/projects schema naming split',
+        'Resolve transactions/payments schema split',
+        'Wire eligibility checks through the application flow',
+      ]),
+    )
   })
 
   it('suffixes conflicting task ids rather than overwriting', async () => {

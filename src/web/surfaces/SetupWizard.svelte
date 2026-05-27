@@ -15,6 +15,7 @@
   import DefinitionList from '../lib/DefinitionList.svelte'
   import StatusLight from '../lib/StatusLight.svelte'
   import Help from '../lib/Help.svelte'
+  import Icon from '../lib/Icon.svelte'
   import { friendlyStewardName } from '../lib/display.js'
   import { nav } from '../lib/nav.svelte.js'
   import { currentProjectHref, projectFetch, projectHref } from '../lib/project-routes.js'
@@ -135,7 +136,7 @@
   }
 
   function dashboardHref(): string {
-    return activeProjectId ? projectHref(activeProjectId, '/thread') : currentProjectHref('/thread')
+    return activeProjectId ? projectHref(activeProjectId, '/overview') : currentProjectHref('/overview')
   }
 
   $effect(() => {
@@ -606,7 +607,10 @@
             </div>
           {/if}
           <Row gap="2">
-            <Button variant="primary" disabled={bootstrapBusy || bootstrapLive} onclick={startBootstrap}>
+            <Button variant="agent" disabled={bootstrapBusy || bootstrapLive} onclick={startBootstrap}>
+              {#if !bootstrapBusy && !bootstrapLive}
+                <Icon name="sparkles" size={14} />
+              {/if}
               {bootstrapBusy ? 'Seeding...' : bootstrapLive ? 'Running' : 'Start meta-intake'}
             </Button>
             <Button variant="secondary" disabled={bootstrapLive} onclick={skipToDashboard}>
@@ -636,7 +640,8 @@
                     Open recovery
                   </Button>
                 {:else}
-                  <Button variant="primary" disabled={bootstrapBusy} onclick={resumeBootstrap}>
+                  <Button variant="agent" disabled={bootstrapBusy} onclick={resumeBootstrap}>
+                    <Icon name="sparkles" size={14} />
                     {bootstrapBusy ? 'Resuming...' : 'Resume'}
                   </Button>
                 {/if}

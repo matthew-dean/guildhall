@@ -1,5 +1,39 @@
 # Guildhall Repo Instructions
 
+## Guildhall MCP when available
+
+- Use Guildhall's MCP bridge as the preferred way to read Guildhall project
+  state only when a Guildhall MCP client/tool surface is actually configured in
+  the current agent environment.
+- This repository currently has committed `.guildhall/` state but may not have
+  a root `guildhall.yaml`. Do not assume it is a fully initialized Guildhall
+  project unless that config exists or the user says they have registered it.
+- For meaningful Guildhall work in an MCP-enabled environment, start by trying
+  the Guildhall MCP resources before reconstructing state from raw files:
+  - `guildhall://project`
+  - `guildhall://project/tasks`
+  - `guildhall://project/artifacts`
+  - `guildhall://project/artifacts/flow-audit`
+  - `guildhall://project/decisions`
+  - `guildhall://project/memory`
+  - `guildhall://project/capability-requests`
+- When the MCP tools are available, use them for intent-shaped operations:
+  - `guildhall.read_artifact` to read registered artifacts by id.
+  - `guildhall.append_task_evidence` after meaningful externally driven work.
+  - `guildhall.create_capability_request` instead of assuming extra host access.
+  - `guildhall.list_capability_requests` before creating a duplicate request.
+- If the current Codex environment has no Guildhall MCP tools configured, or if
+  the repo has `.guildhall/` state without a full project config, say that
+  explicitly and fall back to local files. Do not pretend raw file reads came
+  through MCP.
+- To smoke-test the bridge against this repo's current `.guildhall/` state,
+  build first, then run a real MCP client against:
+
+  ```sh
+  pnpm build
+  node dist/cli.js mcp serve /Users/matthew/git/oss/guildhall
+  ```
+
 ## Task log discipline
 
 - Keep `artifact:flow-audit` as the canonical live checklist for ongoing

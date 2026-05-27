@@ -6,7 +6,14 @@ import { z } from 'zod'
 import type { WorkspaceImportReview } from './workspace-import/review.js'
 import type { WorkspaceImportDraft } from './workspace-import/index.js'
 import type { Task } from '@guildhall/core'
-import type { LearningCandidate } from './policy.js'
+import type {
+  LearningCandidate,
+  PolicyConfidence,
+  PreferenceItem,
+  PreferencePosition,
+  PreferenceSubject,
+  StructuredPreference,
+} from './policy.js'
 
 const TaskSelectionMode = z.enum(['all', 'tight'])
 
@@ -41,6 +48,35 @@ const EvidenceRefSchema = z.object({
   kind: z.enum(['task', 'verification', 'tool_error', 'review', 'checkpoint']),
   summary: z.string(),
   ref: z.string().optional(),
+  links: z.array(z.object({
+    kind: z.enum(['task', 'local_history']),
+    label: z.string(),
+    href: z.string().optional(),
+    localHistoryRef: z.string().optional(),
+  })).default([]),
+})
+
+const PreferenceItemSchema = z.object({
+  item: z.string().min(1),
+  strength: z.enum(['weak', 'medium', 'strong']).optional(),
+  exceptions: z.array(z.string().min(1)).optional(),
+})
+
+const StructuredPreferenceSchema = z.object({
+  kind: z.literal('preference'),
+  subject: z.object({
+    domain: z.string().min(1),
+    area: z.string().min(1).optional(),
+    item: z.string().min(1).optional(),
+  }),
+  position: z.object({
+    prefer: z.array(PreferenceItemSchema).optional(),
+    avoid: z.array(PreferenceItemSchema).optional(),
+    ranking: z.enum(['ordered', 'unordered']).optional(),
+  }).refine(
+    position => (position.prefer?.length ?? 0) > 0 || (position.avoid?.length ?? 0) > 0,
+    'Structured preferences must prefer or avoid at least one item.',
+  ),
 })
 
 const SuggestedLearningSchema = z.object({
@@ -65,6 +101,7 @@ const SuggestedLearningSchema = z.object({
   createdAt: z.string(),
   updatedAt: z.string(),
   dismissedAt: z.string().optional(),
+  preference: StructuredPreferenceSchema.optional(),
 })
 
 const LearningRecordSchema = z.object({
@@ -81,6 +118,7 @@ export type CoordinatorSuggestion = z.infer<typeof CoordinatorSuggestionSchema>
 export type ProductSuggestion = z.infer<typeof ProductSuggestionSchema>
 export type SuggestedLearning = z.infer<typeof SuggestedLearningSchema>
 export type LearningRecord = z.infer<typeof LearningRecordSchema>
+export type { PreferenceItem, PreferencePosition, PreferenceSubject, StructuredPreference }
 
 export interface ReflectionTrigger {
   source:
@@ -138,6 +176,35 @@ function parseLearning(raw: unknown): LearningRecord {
   return LearningRecordSchema.parse(raw ?? {})
 }
 
+function localTaskTranscriptRef(taskId: string): string {
+  return path.join('transcripts', 'exploring', `${taskId}.md`)
+}
+
+function enrichEvidenceRefs(evidence: LearningCandidate['evidence']): LearningCandidate['evidence'] {
+  return evidence.map((item) => {
+    if (item.kind !== 'task' || !item.ref) return item
+    const taskHref = `/task/${encodeURIComponent(item.ref)}`
+    const localHistoryRef = localTaskTranscriptRef(item.ref)
+    const existing = item.links ?? []
+    const hasTaskLink = existing.some(link => link.kind === 'task' && link.href === taskHref)
+    const hasLocalRef = existing.some(link => link.localHistoryRef === localHistoryRef)
+    return {
+      ...item,
+      links: [
+        ...existing,
+        ...(hasTaskLink && hasLocalRef
+          ? []
+          : [{
+              kind: 'task' as const,
+              label: 'Open task evidence',
+              href: taskHref,
+              localHistoryRef,
+            }]),
+      ],
+    }
+  })
+}
+
 function readLearningFile(filePath: string): LearningRecord {
   if (!existsSync(filePath)) return defaultLearningRecord()
   try {
@@ -156,13 +223,14 @@ function upsertSuggestedLearning(
   record: LearningRecord,
   candidate: LearningCandidate,
   now: string,
+  opts: { linkLocalEvidence?: boolean } = {},
 ): LearningRecord {
   if (candidate.proposedDestination === 'task_audit_only') return LearningRecordSchema.parse(record)
   const suggested: SuggestedLearning = SuggestedLearningSchema.parse({
     id: candidate.id,
     source: candidate.source,
     summary: candidate.summary,
-    evidence: candidate.evidence,
+    evidence: opts.linkLocalEvidence ? enrichEvidenceRefs(candidate.evidence) : candidate.evidence,
     scope: candidate.proposedScope,
     destination: candidate.proposedDestination,
     confidence: candidate.confidence,
@@ -171,6 +239,7 @@ function upsertSuggestedLearning(
     status: 'suggested',
     createdAt: now,
     updatedAt: now,
+    preference: candidate.preference,
   })
   const existing = record.suggestedLearnings.find((item) => item.id === candidate.id)
   const next = existing
@@ -210,7 +279,7 @@ export async function persistLearningCandidates(input: {
     if (candidateBelongsInGlobal(candidate)) {
       userRecord = upsertSuggestedLearning(userRecord, candidate, now)
     } else {
-      projectRecord = upsertSuggestedLearning(projectRecord, candidate, now)
+      projectRecord = upsertSuggestedLearning(projectRecord, candidate, now, { linkLocalEvidence: true })
     }
   }
 
@@ -419,9 +488,9 @@ export async function recordUserCorrection(input: {
 
   if (count >= 2) {
     const label = input.category.replaceAll('_', ' ')
-    nextRecord = upsertSuggestedLearning(
-      nextRecord,
-      {
+      nextRecord = upsertSuggestedLearning(
+        nextRecord,
+        {
         id: `user-correction-${input.category}`,
         source: 'user_correction',
         summary: `Repeated user correction about ${label}: ${input.correction}`,
@@ -442,6 +511,51 @@ export async function recordUserCorrection(input: {
   }
 
   await writeLearningFile(globalLearningPath(), nextRecord)
+}
+
+export async function recordStructuredUserPreference(input: {
+  memoryDir: string
+  id: string
+  summary: string
+  evidenceSummary: string
+  subject: PreferenceSubject
+  prefer?: PreferenceItem[]
+  avoid?: PreferenceItem[]
+  ranking?: PreferencePosition['ranking']
+  confidence?: PolicyConfidence
+}): Promise<LearningSnapshot> {
+  const preference = StructuredPreferenceSchema.parse({
+    kind: 'preference',
+    subject: input.subject,
+    position: {
+      prefer: input.prefer,
+      avoid: input.avoid,
+      ranking: input.ranking,
+    },
+  }) satisfies StructuredPreference
+
+  return persistLearningCandidates({
+    memoryDir: input.memoryDir,
+    candidates: [
+      {
+        id: input.id,
+        source: 'user_correction',
+        summary: input.summary,
+        evidence: [
+          {
+            kind: 'task',
+            summary: input.evidenceSummary,
+          },
+        ],
+        proposedScope: 'user_global',
+        proposedDestination: 'user_preference',
+        confidence: input.confidence ?? 'medium',
+        risk: 'low',
+        requiresApproval: true,
+        preference,
+      },
+    ],
+  })
 }
 
 function parseRecoveryPlaybookNote(content: string): Record<string, unknown> | null {

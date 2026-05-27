@@ -1,0 +1,41 @@
+id: error-without-recovery
+title: Error without recovery
+domain: ux
+productType: account-management
+surfaceType: form
+userGoal: Finish updating account details after a validation error.
+scenario: A form submission fails with "Invalid request" and leaves the user on the page without naming the field, preserving input, or offering a next step.
+artifacts:
+  - id: error-copy
+    kind: copy_snippet
+    description: Error banner after submit.
+    content: "Invalid request."
+reviewLanes:
+  - ux_comprehension
+  - copy_clarity
+knownFindings:
+  - id: missing-recovery-path
+    lane: ux_comprehension
+    severity: high
+    summary: The error explains neither the cause nor the recovery path.
+    impact: The user cannot tell what to change and may abandon the flow.
+    minimumUsefulFix: Identify the failing field or condition and preserve input with a clear retry path.
+    matchHints:
+      - recovery path
+      - what to change
+      - invalid request
+falsePositiveTraps:
+  - id: dont-demand-long-copy
+    summary: The fix does not require long explanatory prose; short actionable copy is enough.
+source:
+  kind: external_example
+  citation: Synthesized from common form-error UX failure patterns described in public usability guidance.
+labelGovernance:
+  labeledBy: product-review
+  labeledAt: 2026-05-25T12:00:00.000Z
+  reviewStatus: seed
+privacyClassification: public
+negativeControl: false
+stalenessPolicy:
+  reviewAfter: 2026-11-25
+  reason: Validation and recovery conventions may change.

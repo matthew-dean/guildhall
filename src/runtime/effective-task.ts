@@ -1,0 +1,223 @@
+import type {
+  AgentIssue,
+  AgentNote,
+  AdjudicationRecord,
+  Escalation,
+  GateResult,
+  ReviewVerdict,
+  Task,
+  TaskEvidenceEvent,
+  TaskRuntimeState,
+  TaskWorkspaceState,
+} from '@guildhall/core'
+import {
+  readTaskEvidence,
+  readTaskRuntimeStore,
+  readTaskWorkspaceStore,
+} from './task-state-store.js'
+
+type LegacyTask = Task & Record<string, unknown>
+
+export interface EffectiveTask extends Record<string, unknown> {
+  id: string
+  runtime?: TaskRuntimeState
+  workspace?: TaskWorkspaceState
+  evidence: TaskEvidenceEvent[]
+}
+
+function eventId(taskId: string, kind: string, index: number, fallbackTimestamp?: string): string {
+  const ts = fallbackTimestamp ? fallbackTimestamp.replace(/[^0-9A-Za-z]/g, '') : 'legacy'
+  return `${taskId}-${kind}-${ts}-${index + 1}`
+}
+
+export function legacyRuntimeFromTask(task: LegacyTask): TaskRuntimeState | undefined {
+  const hasRuntime =
+    Object.prototype.hasOwnProperty.call(task, 'assignedTo') ||
+    typeof task.revisionCount === 'number' ||
+    typeof task.remediationAttempts === 'number' ||
+    task.retryWindow !== undefined ||
+    typeof task.handoffStep === 'number' ||
+    (task.escalations ?? []).some((escalation) => !escalation.resolvedAt) ||
+    (task.agentIssues ?? []).some((issue) => !issue.resolvedAt)
+  if (!hasRuntime) return undefined
+  return {
+    taskId: task.id,
+    ...(Object.prototype.hasOwnProperty.call(task, 'assignedTo') ? { assignedTo: task.assignedTo } : {}),
+    ...(typeof task.revisionCount === 'number' ? { revisionCount: task.revisionCount } : {}),
+    ...(task.retryWindow ? { retryWindow: task.retryWindow } : {}),
+    ...(typeof task.remediationAttempts === 'number' ? { remediationAttempts: task.remediationAttempts } : {}),
+    ...(typeof task.handoffStep === 'number' ? { handoffStep: task.handoffStep } : {}),
+    openEscalationIds: (task.escalations ?? [])
+      .filter((escalation) => !escalation.resolvedAt)
+      .map((escalation) => escalation.id),
+    openIssueIds: (task.agentIssues ?? [])
+      .filter((issue) => !issue.resolvedAt)
+      .map((issue) => issue.id),
+    updatedAt: task.updatedAt,
+  }
+}
+
+export function legacyWorkspaceFromTask(task: LegacyTask): TaskWorkspaceState | undefined {
+  if (!task.worktreePath && !task.branchName && !task.baseBranch) return undefined
+  return {
+    taskId: task.id,
+    ...(task.worktreePath ? { worktreePath: task.worktreePath } : {}),
+    ...(task.branchName ? { branchName: task.branchName } : {}),
+    ...(task.baseBranch ? { baseBranch: task.baseBranch } : {}),
+    updatedAt: task.updatedAt,
+  }
+}
+
+export function legacyEvidenceFromTask(task: LegacyTask): TaskEvidenceEvent[] {
+  const events: TaskEvidenceEvent[] = []
+  ;(task.notes ?? []).forEach((note: AgentNote, index: number) => {
+    events.push({
+      id: eventId(task.id, 'note', index, note.timestamp),
+      taskId: task.id,
+      kind: 'note',
+      recordedAt: note.timestamp,
+      payload: note,
+    })
+  })
+  ;(task.gateResults ?? []).forEach((gate: GateResult, index: number) => {
+    events.push({
+      id: eventId(task.id, 'gate', index, gate.checkedAt),
+      taskId: task.id,
+      kind: 'gate_result',
+      recordedAt: gate.checkedAt,
+      payload: gate,
+    })
+  })
+  ;(task.reviewVerdicts ?? []).forEach((verdict: ReviewVerdict, index: number) => {
+    events.push({
+      id: eventId(task.id, 'review', index, verdict.recordedAt),
+      taskId: task.id,
+      kind: 'review_verdict',
+      recordedAt: verdict.recordedAt,
+      payload: verdict,
+    })
+  })
+  ;(task.adjudications ?? []).forEach((adjudication: AdjudicationRecord, index: number) => {
+    events.push({
+      id: eventId(task.id, 'adjudication', index, adjudication.decidedAt),
+      taskId: task.id,
+      kind: 'adjudication',
+      recordedAt: adjudication.decidedAt,
+      payload: adjudication,
+    })
+  })
+  ;(task.escalations ?? []).forEach((escalation: Escalation, index: number) => {
+    events.push({
+      id: escalation.id || eventId(task.id, 'escalation', index, escalation.raisedAt),
+      taskId: task.id,
+      kind: 'escalation',
+      recordedAt: escalation.raisedAt,
+      payload: escalation,
+    })
+  })
+  ;(task.agentIssues ?? []).forEach((issue: AgentIssue, index: number) => {
+    events.push({
+      id: issue.id || eventId(task.id, 'issue', index, issue.raisedAt),
+      taskId: task.id,
+      kind: 'agent_issue',
+      recordedAt: issue.raisedAt,
+      payload: issue,
+    })
+  })
+  if (task.mergeRecord) {
+    const record = task.mergeRecord as { mergedAt?: string }
+    events.push({
+      id: eventId(task.id, 'merge', 0, record.mergedAt ?? task.updatedAt),
+      taskId: task.id,
+      kind: 'merge_record',
+      recordedAt: record.mergedAt ?? task.updatedAt,
+      payload: task.mergeRecord as Record<string, unknown>,
+    })
+  }
+  return events.sort((a, b) => a.recordedAt.localeCompare(b.recordedAt))
+}
+
+export function stripLegacyRuntimeFields<T extends Record<string, unknown>>(task: T): Record<string, unknown> {
+  const {
+    assignedTo: _assignedTo,
+    notes: _notes,
+    gateResults: _gateResults,
+    reviewVerdicts: _reviewVerdicts,
+    adjudications: _adjudications,
+    escalations: _escalations,
+    agentIssues: _agentIssues,
+    revisionCount: _revisionCount,
+    retryWindow: _retryWindow,
+    remediationAttempts: _remediationAttempts,
+    handoffStep: _handoffStep,
+    worktreePath: _worktreePath,
+    branchName: _branchName,
+    baseBranch: _baseBranch,
+    mergeRecord: _mergeRecord,
+    ...definition
+  } = task
+  return definition
+}
+
+export async function buildEffectiveTask(
+  projectRoot: string,
+  task: Task,
+): Promise<EffectiveTask> {
+  const [runtimeStore, workspaceStore, storedEvidence] = await Promise.all([
+    readTaskRuntimeStore(projectRoot),
+    readTaskWorkspaceStore(projectRoot),
+    readTaskEvidence(projectRoot, task.id),
+  ])
+  const runtime = runtimeStore.tasks[task.id] ?? legacyRuntimeFromTask(task)
+  const workspace = workspaceStore.workspaces[task.id] ?? legacyWorkspaceFromTask(task)
+  const evidence = storedEvidence.length > 0 ? storedEvidence : legacyEvidenceFromTask(task)
+  const projected = legacyFieldsFromEvidence(evidence)
+  return {
+    ...task,
+    ...projected,
+    ...(runtime?.assignedTo !== undefined ? { assignedTo: runtime.assignedTo } : {}),
+    ...(runtime?.revisionCount !== undefined ? { revisionCount: runtime.revisionCount } : {}),
+    ...(runtime?.retryWindow !== undefined ? { retryWindow: runtime.retryWindow } : {}),
+    ...(runtime?.remediationAttempts !== undefined ? { remediationAttempts: runtime.remediationAttempts } : {}),
+    ...(runtime?.handoffStep !== undefined ? { handoffStep: runtime.handoffStep } : {}),
+    ...(workspace?.worktreePath !== undefined ? { worktreePath: workspace.worktreePath } : {}),
+    ...(workspace?.branchName !== undefined ? { branchName: workspace.branchName } : {}),
+    ...(workspace?.baseBranch !== undefined ? { baseBranch: workspace.baseBranch } : {}),
+    ...(runtime ? { runtime } : {}),
+    ...(workspace ? { workspace } : {}),
+    evidence,
+  }
+}
+
+function legacyFieldsFromEvidence(evidence: TaskEvidenceEvent[]): Record<string, unknown> {
+  const notes = evidence
+    .filter((event) => event.kind === 'note')
+    .map((event) => event.payload)
+  const gateResults = evidence
+    .filter((event) => event.kind === 'gate_result')
+    .map((event) => event.payload)
+  const reviewVerdicts = evidence
+    .filter((event) => event.kind === 'review_verdict')
+    .map((event) => event.payload)
+  const adjudications = evidence
+    .filter((event) => event.kind === 'adjudication')
+    .map((event) => event.payload)
+  const escalations = evidence
+    .filter((event) => event.kind === 'escalation')
+    .map((event) => event.payload)
+  const agentIssues = evidence
+    .filter((event) => event.kind === 'agent_issue')
+    .map((event) => event.payload)
+  const mergeRecords = evidence
+    .filter((event) => event.kind === 'merge_record')
+    .map((event) => event.payload)
+  return {
+    ...(notes.length > 0 ? { notes } : {}),
+    ...(gateResults.length > 0 ? { gateResults } : {}),
+    ...(reviewVerdicts.length > 0 ? { reviewVerdicts } : {}),
+    ...(adjudications.length > 0 ? { adjudications } : {}),
+    ...(escalations.length > 0 ? { escalations } : {}),
+    ...(agentIssues.length > 0 ? { agentIssues } : {}),
+    ...(mergeRecords.length > 0 ? { mergeRecord: mergeRecords[mergeRecords.length - 1] } : {}),
+  }
+}

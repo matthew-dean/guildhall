@@ -2,16 +2,23 @@
 title: MCP
 help_topic: subsystem.mcp
 help_summary: |
-  Connect Model Context Protocol servers (stdio, HTTP, WebSocket) and expose
-  their tools and resources to agents. Configured under mcp.servers in
-  ./guildhall.yaml.
+  Connect Model Context Protocol servers to Guildhall, and expose Guildhall
+  project context back out to other MCP-aware tools.
 ---
 
 # MCP
 
 **Source:** `./src/mcp/`
 
-Guildhall consumes [Model Context Protocol](https://modelcontextprotocol.io) servers. Any server you configure becomes available to agents as tools (and, for resources, as `list_mcp_resources` / `read_mcp_resource`).
+Guildhall consumes [Model Context Protocol](https://modelcontextprotocol.io)
+servers. Any server you configure becomes available to agents as tools (and,
+for resources, as `list_mcp_resources` / `read_mcp_resource`).
+
+Guildhall can also serve its own project context over MCP. This lets tools such
+as Codex and Claude Code read Guildhall task state, artifact IDs, project
+memory, decisions, and capability requests without scraping raw `.guildhall`
+files. See [External agents and MCP](../guide/external-agents) for the
+user-facing setup flow.
 
 ## Configuration
 
@@ -35,7 +42,9 @@ mcp:
       url: wss://mcp.example.com/live
 ```
 
-All three transports (`stdio`, `http`, `ws`) are supported.
+Guildhall currently consumes stdio and streamable HTTP MCP servers. WebSocket
+entries are parsed for configuration compatibility but are reported as
+unsupported by the current client implementation.
 
 ## `McpClientManager`
 
@@ -60,6 +69,34 @@ Manages connection lifecycle: auto-reconnect on disconnect, status tracking (`co
 ## Status in the UI
 
 The browser UI surfaces `McpConnectionStatus` per server so you can see at a glance whether a configured server is up. Failed servers show the last error.
+
+## Guildhall as an MCP server
+
+```sh
+guildhall mcp serve .
+```
+
+The server exposes resources such as:
+
+- `guildhall://project`
+- `guildhall://project/tasks`
+- `guildhall://project/tasks/<task-id>`
+- `guildhall://project/artifacts`
+- `guildhall://project/decisions`
+- `guildhall://project/memory`
+- `guildhall://project/capability-requests`
+
+It also exposes focused tools for artifact reads, task evidence, and capability
+requests:
+
+- `guildhall.read_artifact`
+- `guildhall.append_task_evidence`
+- `guildhall.create_capability_request`
+- `guildhall.list_capability_requests`
+
+Use `guildhall bridge install --target codex|claude|all .` to write the
+project instructions and MCP configuration expected by supported external
+agents.
 
 ## Security notes
 

@@ -97,6 +97,20 @@
           button: 'Answer question',
           href: item.actionHref ?? '/thread',
         }
+      case 'pressure_test_pending':
+        return {
+          verb: `Continue pressure test${id}`,
+          why: item.detail ?? 'Guildhall is pressure-testing this request before turning it into work.',
+          button: 'Answer question',
+          href: item.actionHref ?? '/thread',
+        }
+      case 'project_check_in':
+        return {
+          verb: item.title,
+          why: item.detail ?? 'Start the project check-in so Guildhall can use current context.',
+          button: 'Start check-in',
+          href: item.actionHref ?? '/thread',
+        }
       case 'import_draft_queue':
         return {
           verb: 'Shape the imported drafts',
@@ -144,7 +158,7 @@
           verb: item.title,
           why: item.detail ?? '',
           button: 'Open',
-          href: item.actionHref ?? '/inbox',
+          href: item.actionHref ?? '/overview/inbox',
         }
     }
   }
@@ -176,7 +190,7 @@
     if (moreItems.every(({ item }) => item.severity === 'low')) {
       return moreItems.length === 1 ? '1 optional cleanup item ›' : `${moreItems.length} optional cleanup items ›`
     }
-    return `${moreItems.length} more in Inbox ›`
+    return moreItems.length === 1 ? '1 more in Inbox ›' : `${moreItems.length} more in Inbox ›`
   })
   const source = $derived<TopSource | null>(
     actionableItems[0]
@@ -189,7 +203,7 @@
               href: projectActionHref(top.prescription.href),
               severity: top.item.severity,
               moreLabel: moreButtonLabel,
-              moreHref: projectActionHref('/inbox'),
+              moreHref: projectActionHref('/overview/inbox'),
             }
           })()
         : null,
@@ -226,7 +240,7 @@
           {source.button} →
         </Button>
         {#if moreCount > 0}
-          <Button variant="secondary" size="sm" onclick={() => go(projectActionHref('/inbox'))}>
+          <Button variant="secondary" size="sm" onclick={() => go(projectActionHref('/overview/inbox'))}>
             {source.moreLabel}
           </Button>
         {/if}

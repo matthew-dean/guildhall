@@ -24,7 +24,7 @@ describe('InboxTab', () => {
     cleanup()
   })
 
-  it('loads its own inbox data, navigates scoped actions, and keeps housekeeping separate', async () => {
+  it('loads its own inbox data, navigates scoped actions, and shows low-priority items in the ledger', async () => {
     vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
       const url = new URL(String(input), 'http://localhost')
       if (url.pathname === '/api/project/inbox') {
@@ -65,7 +65,8 @@ describe('InboxTab', () => {
     render(InboxTab)
 
     await screen.findByText('Choose link editor scope')
-    expect(screen.getByText('Optional cleanup')).toBeInTheDocument()
+    expect(screen.queryByText('Optional cleanup')).not.toBeInTheDocument()
+    expect(screen.getByText('Review imported notes')).toBeInTheDocument()
     expect(screen.getByText(/Safe defaults are active/)).toBeInTheDocument()
     expect(screen.getByText(/Review them only if you want to tune autonomy, recovery, or review strictness/)).toBeInTheDocument()
 
@@ -126,6 +127,82 @@ describe('InboxTab', () => {
 
     await userEvent.click(screen.getByRole('button', { name: /dismiss/i }))
     await waitFor(() => expect(refresh).toHaveBeenCalledTimes(2))
+  })
+
+  it('shows blocking required migrations without offering dismissal', async () => {
+    render(InboxTab, {
+      items: [
+        {
+          id: 'migration:0.8.0/project-state-layout',
+          kind: 'required_migration',
+          severity: 'high',
+          title: 'Required migration: Move legacy project memory into split project state',
+          detail: 'Run this migration before Guildhall can update the project.',
+          actionHref: '/migrations',
+          status: 'open',
+          resolution: undefined,
+          blocking: true,
+          dismissible: false,
+        },
+      ] as any,
+      loaded: true,
+    })
+
+    expect(screen.getByText('Required migration: Move legacy project memory into split project state')).toBeInTheDocument()
+    expect(screen.getByText('Open')).toBeInTheDocument()
+    expect(screen.getByText(/Migrate/)).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: /dismiss/i })).not.toBeInTheDocument()
+  })
+
+  it('counts the visible ledger rows instead of only actionable rows', async () => {
+    render(InboxTab, {
+      items: [
+        {
+          id: 'open-high',
+          kind: 'agent_question_pending',
+          severity: 'high',
+          title: 'Choose scope',
+          detail: 'A decision is needed.',
+          actionHref: '/thread',
+          status: 'open',
+        },
+      ] as any,
+      history: [
+        {
+          id: 'open-high',
+          kind: 'agent_question_pending',
+          severity: 'high',
+          title: 'Choose scope',
+          detail: 'A decision is needed.',
+          actionHref: '/thread',
+          status: 'open',
+        },
+        {
+          id: 'resolved',
+          kind: 'required_migration',
+          severity: 'high',
+          migrationId: '0.8.0/project-state-layout',
+          title: 'Required migration',
+          detail: 'Done.',
+          actionHref: '/migrations',
+          status: 'resolved',
+          resolution: 'migrated',
+        },
+        {
+          id: 'low',
+          kind: 'lever_questions',
+          severity: 'low',
+          title: 'Levers',
+          detail: 'Optional.',
+          actionHref: '/settings/advanced',
+          status: 'open',
+        },
+      ] as any,
+      loaded: true,
+    })
+
+    expect(screen.getByText('(3 items)')).toBeInTheDocument()
+    expect(screen.getByText('Migrated')).toBeInTheDocument()
   })
 
   it('surfaces inbox load and handler failures without hiding the row', async () => {

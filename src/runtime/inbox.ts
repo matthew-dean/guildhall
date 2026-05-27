@@ -3,7 +3,7 @@
  *
  * The inbox is the prioritized queue of things the coordinator needs the
  * human to resolve right now. It sources exclusively from files already on
- * disk — `guildhall.yaml`, `memory/TASKS.json`, `memory/agent-settings.yaml`,
+ * disk — `guildhall.yaml`, `.guildhall/TASKS.json`, `.guildhall/agent-settings.yaml`,
  * and a handful of workspace-signal files — so the endpoint is cheap enough
  * to poll and deterministic enough to snapshot in tests.
  *
@@ -13,11 +13,13 @@
 
 import { existsSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
+import { getProjectLocalHistoryDir, getProjectStateDir } from '@guildhall/sessions'
 import { parse as parseYaml } from 'yaml'
 import type { Task } from '@guildhall/core'
 import { activeEscalations } from '@guildhall/tools'
 import { META_INTAKE_TASK_ID } from './meta-intake.js'
 import { visibleOpenQuestions } from './question-visibility.js'
+import { userFacingText } from './user-facing-text.js'
 import type { BootstrapStatus } from './bootstrap-runner.js'
 import {
   buildSnapshot,
@@ -29,18 +31,23 @@ import {
   progressForTask,
   emptyWizardsState,
 } from './wizards.js'
+import { listPressureTestIntakes, summarizeProjectCheckIn } from './pressure-test-intake.js'
 
 export type InboxSeverity = 'high' | 'medium' | 'low'
 
 export type InboxItem =
+  | { kind: 'required_migration'; severity: 'high'; migrationId: string; title: string; detail: string; actionHref: string; blocking: true; dismissible: false; source: { system: 'migrations'; id: string } }
+  | { kind: 'project_understanding'; severity: 'high' | 'medium'; title: string; detail: string; signals: string[]; actionHref: string; dismissEndpoint: string }
   | { kind: 'bootstrap_missing'; severity: 'high'; title: string; detail: string; actionHref?: string }
   | { kind: 'setup_pending'; severity: 'medium'; stepId: string; title: string; detail: string; actionHref: string }
   | { kind: 'workspace_import_pending'; severity: 'medium'; title: string; detail: string; signals: string[]; actionHref: string; dismissEndpoint: string }
+  | { kind: 'project_check_in'; severity: 'medium' | 'low'; title: string; detail: string; actionHref: string }
+  | { kind: 'pressure_test_pending'; severity: 'medium'; title: string; detail: string; actionHref: string }
   | { kind: 'agent_question_pending'; severity: 'medium'; taskId: string; title: string; detail: string; actionHref: string }
   | { kind: 'import_draft_queue'; severity: 'medium'; taskId: string; title: string; detail: string; actionHref: string }
   | { kind: 'brief_approval'; severity: 'medium'; taskId: string; title: string; detail: string; actionHref: string }
   | { kind: 'spec_approval'; severity: 'medium'; taskId: string; title: string; detail: string; actionHref: string }
-  | { kind: 'open_escalation'; severity: 'high'; taskId: string; escalationId: string; title: string; detail: string; actionHref: string }
+  | { kind: 'open_escalation'; severity: 'high'; taskId: string; escalationId: string; title: string; detail: string; actionHref: string; taskDescription?: string }
   | { kind: 'lever_questions'; severity: 'low'; title: string; detail: string; defaultCount: number; actionHref: string }
   | { kind: 'spec_fill_pending'; severity: 'low'; taskId: string; title: string; detail: string; actionHref: string; missingSteps: string[] }
 
@@ -52,7 +59,7 @@ export interface BuildInboxOptions {
 /**
  * High-severity blockers that gate downstream actions in the UI.
  *
- * When true, the UI disables specific controls (Start, + New Task, etc.) with
+ * When true, the UI disables specific controls (Start, + New request, etc.) with
  * a tooltip pointing the user back at the relevant Inbox item. Kept as a
  * narrow, explicit shape — derived from the Inbox items themselves — rather
  * than letting every consumer re-derive the rules.
@@ -72,16 +79,20 @@ export function buildInboxBlockers(items: readonly InboxItem[]): InboxBlockers {
 }
 
 const KIND_ORDER: Record<InboxItem['kind'], number> = {
-  bootstrap_missing: 0,
-  setup_pending: 1,
-  workspace_import_pending: 2,
-  open_escalation: 3,
-  agent_question_pending: 4,
-  import_draft_queue: 5,
-  brief_approval: 6,
-  spec_approval: 7,
-  lever_questions: 8,
-  spec_fill_pending: 9,
+  required_migration: 0,
+  project_understanding: 1,
+  bootstrap_missing: 2,
+  setup_pending: 3,
+  workspace_import_pending: 4,
+  project_check_in: 5,
+  pressure_test_pending: 6,
+  open_escalation: 7,
+  agent_question_pending: 8,
+  import_draft_queue: 9,
+  brief_approval: 10,
+  spec_approval: 11,
+  lever_questions: 12,
+  spec_fill_pending: 13,
 }
 
 const SEVERITY_ORDER: Record<InboxSeverity, number> = {
@@ -99,6 +110,74 @@ function inboxTitle(taskId: string, title: string): string {
   if (taskId === 'task-meta-intake') return 'Inspect the repo and draft starter tasks'
   if (taskId === 'task-workspace-import') return 'Review existing project work'
   return truncateTitle(title)
+}
+
+function cleanPressureTargetTitle(title: string): string {
+  return title
+    .replace(/\s+project check-in$/i, '')
+    .replace(/^Pressure-test\s+/i, '')
+    .replace(/\.\s*Ask me.*$/i, '')
+    .trim()
+    || title
+}
+
+function pressureQuestionDetail(prompt: string, targetTitle: string): string {
+  const target = cleanPressureTargetTitle(targetTitle)
+  const trimmed = prompt.trim()
+  if (/^What outcome would make this project successful\?$/i.test(trimmed)) {
+    return `What would make ${target} successful?`
+  }
+  const quotedOutcome = trimmed.match(/^For "(.+)", what outcome should this request achieve\?$/i)
+  if (quotedOutcome) {
+    return `What should ${cleanPressureTargetTitle(quotedOutcome[1] ?? target)} accomplish?`
+  }
+  return userFacingText(trimmed, 'Guildhall needs one answer before it can keep going.')
+}
+
+function escalationInboxDetail(summary: string, reason: string): string {
+  const text = userFacingText(summary).trim()
+  if (/\bAC-\d+\b/i.test(text) && /\bevidence\b/i.test(text)) {
+    return 'Guildhall needs to run or save one missing verification check before this task can finish.'
+  }
+  if (/authoritative verification|upstream workspace build failure|checkpoint-touched|task worktree/i.test(text)) {
+    return 'The project build is failing outside this task, so Guildhall needs you to choose whether to reframe the task, fix the wider build first, or retry after the build is healthy.'
+  }
+  if (/no visible progress|made no visible progress|no saved (?:spec|draft)|no durable (?:draft|update)/i.test(text)) {
+    return 'Guildhall found useful context but did not save the next draft. Review the task and decide whether to retry from those notes or reframe it.'
+  }
+  const withoutCodePrefix = text.replace(/^[a-z][a-z0-9_]*:\s*/i, '').trim()
+  if (reason === 'spec_ambiguous') {
+    return withoutCodePrefix || 'The task brief is missing a decision or concrete implementation path.'
+  }
+  if (reason === 'human_judgment_required') {
+    return withoutCodePrefix || 'Guildhall needs a product or recovery decision before it can continue.'
+  }
+  return userFacingText(withoutCodePrefix, 'Open the task to choose the next step.')
+}
+
+function inboxItemDedupeKey(item: InboxItem): string {
+  const taskId = 'taskId' in item ? item.taskId : ''
+  const actionHref = 'actionHref' in item && typeof item.actionHref === 'string' ? item.actionHref : ''
+  const detail = 'detail' in item && typeof item.detail === 'string' ? item.detail : ''
+  return [
+    item.kind,
+    taskId,
+    item.title,
+    detail,
+    actionHref,
+  ].map(value => value.trim().replace(/\s+/g, ' ').toLowerCase()).join('\u0000')
+}
+
+export function dedupeInboxItems(items: readonly InboxItem[]): InboxItem[] {
+  const seen = new Set<string>()
+  const deduped: InboxItem[] = []
+  for (const item of items) {
+    const key = inboxItemDedupeKey(item)
+    if (seen.has(key)) continue
+    seen.add(key)
+    deduped.push(item)
+  }
+  return deduped
 }
 
 function unresolvedVisibleQuestions(task: Task): Array<{ answeredAt?: unknown; prompt?: unknown; restatement?: unknown }> {
@@ -136,7 +215,7 @@ function bootstrapOutputLine(output: string): string | undefined {
 }
 
 function failedBootstrapDetail(projectPath: string): string | null {
-  const status = readJsonSafe(join(projectPath, 'memory', 'bootstrap.json')) as BootstrapStatus | null
+  const status = readJsonSafe(join(getProjectLocalHistoryDir(projectPath), 'bootstrap.json')) as BootstrapStatus | null
   if (!status || status.success !== false) return null
   const failed = status.steps.find(s => s.result === 'fail')
   if (!failed) return 'The last readiness check failed. Open readiness checks to rerun the project checks.'
@@ -254,7 +333,7 @@ export function buildInbox(opts: BuildInboxOptions): InboxItem[] {
     }
   }
 
-  const tasksPath = join(projectPath, 'memory', 'TASKS.json')
+  const tasksPath = join(getProjectStateDir(projectPath), 'TASKS.json')
   const tasks = tasksArray(readJsonSafe(tasksPath))
   const workspaceImportTask = tasks.find(t => t?.id === 'task-workspace-import')
   const workspaceImportTaskStatus =
@@ -265,9 +344,12 @@ export function buildInbox(opts: BuildInboxOptions): InboxItem[] {
     workspaceImportTask != null &&
     !['done', 'cancelled', 'archived'].includes(workspaceImportTaskStatus)
 
+  const activePressureTest = listPressureTestIntakes(getProjectStateDir(projectPath))
+    .find(intake => intake.status === 'active' && intake.pendingQuestion)
+
   const setupProgress = progressFor(onboardWizard, buildSnapshot({ projectPath, ...(snapshotOptions ?? {}) }))
   const activeSetupStep = setupProgress.steps.find(step => step.id === setupProgress.activeStepId)
-  if (activeSetupStep && ['direction', 'firstTask'].includes(activeSetupStep.id)) {
+  if (activeSetupStep && ['direction', 'firstTask'].includes(activeSetupStep.id) && !activePressureTest) {
     items.push({
       kind: 'setup_pending',
       severity: 'medium',
@@ -279,7 +361,7 @@ export function buildInbox(opts: BuildInboxOptions): InboxItem[] {
   }
 
   // --- workspace_import_pending --------------------------------------------
-  const goalsPath = join(projectPath, 'memory', 'workspace-goals.json')
+  const goalsPath = join(getProjectStateDir(projectPath), 'workspace-goals.json')
   const hasGoals = existsSync(goalsPath)
   const anchors = detectRepoAnchors(projectPath)
   const hasReadme = anchors.includes('README.md')
@@ -301,6 +383,27 @@ export function buildInbox(opts: BuildInboxOptions): InboxItem[] {
       signals,
       actionHref: '/workspace-import',
       dismissEndpoint: '/api/project/workspace-import/dismiss',
+    })
+  }
+
+  // --- project_check_in ----------------------------------------------------
+  const projectCheckIn = summarizeProjectCheckIn(getProjectStateDir(projectPath))
+  if (projectCheckIn.needed) {
+    items.push({
+      kind: 'project_check_in',
+      severity: 'low',
+      title: projectCheckIn.title,
+      detail: projectCheckIn.detail,
+      actionHref: projectCheckIn.actionHref,
+    })
+  }
+  if (activePressureTest?.pendingQuestion) {
+    items.push({
+      kind: 'pressure_test_pending',
+      severity: 'medium',
+      title: cleanPressureTargetTitle(activePressureTest.target.title),
+      detail: pressureQuestionDetail(activePressureTest.pendingQuestion.prompt, activePressureTest.target.title),
+      actionHref: '/thread',
     })
   }
 
@@ -344,6 +447,9 @@ export function buildInbox(opts: BuildInboxOptions): InboxItem[] {
   for (const t of tasks) {
     const id = typeof t.id === 'string' ? t.id : ''
     const title = typeof t.title === 'string' ? t.title : id
+    const taskDescription = typeof t.description === 'string' && t.description.trim()
+      ? t.description.trim()
+      : undefined
     if (!id) continue
 
     const brief = t.productBrief as { approvedAt?: unknown } | undefined
@@ -361,7 +467,7 @@ export function buildInbox(opts: BuildInboxOptions): InboxItem[] {
         severity: 'medium',
         taskId: id,
         title: inboxTitle(id, title),
-        detail: truncateTitle(questionDetail, 140),
+        detail: truncateTitle(userFacingText(questionDetail, 'Guildhall needs one answer before it can keep going.'), 140),
         actionHref: '/task/' + encodeURIComponent(id) + '?tab=current',
       })
     }
@@ -476,14 +582,15 @@ export function buildInbox(opts: BuildInboxOptions): InboxItem[] {
         taskId: id,
         escalationId: escId,
         title: truncateTitle(title),
-        detail: summary,
+        detail: escalationInboxDetail(summary, reason),
         actionHref: '/task/' + encodeURIComponent(id),
+        ...(taskDescription ? { taskDescription } : {}),
       })
     }
   }
 
   // --- lever_questions -----------------------------------------------------
-  const settingsPath = join(projectPath, 'memory', 'agent-settings.yaml')
+  const settingsPath = join(getProjectStateDir(projectPath), 'agent-settings.yaml')
   if (existsSync(settingsPath)) {
     const raw = readYamlSafe(settingsPath) as
       | {
@@ -521,5 +628,5 @@ export function buildInbox(opts: BuildInboxOptions): InboxItem[] {
     return KIND_ORDER[a.kind] - KIND_ORDER[b.kind]
   })
 
-  return items
+  return dedupeInboxItems(items)
 }

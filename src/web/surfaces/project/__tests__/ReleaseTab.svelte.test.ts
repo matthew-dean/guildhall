@@ -1,6 +1,7 @@
 // @vitest-environment happy-dom
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { cleanup, render, screen, waitFor } from '@testing-library/svelte'
+import userEvent from '@testing-library/user-event'
 import ReleaseTab from '../ReleaseTab.svelte'
 import { path } from '../../../lib/nav.svelte.js'
 
@@ -28,35 +29,35 @@ describe('ReleaseTab', () => {
     cleanup()
   })
 
-  it('surfaces initialization-needed state before release readiness is available', async () => {
+  it('surfaces initialization-needed state before closure checks are available', async () => {
     vi.stubGlobal('fetch', vi.fn(async () => json({ initializationNeeded: true })))
 
     render(ReleaseTab)
 
     expect(await screen.findByText('Project not initialized yet')).toBeTruthy()
-    expect(screen.getByText('Complete the setup wizard before you can assess release readiness.')).toBeTruthy()
+    expect(screen.getByText('Complete the setup wizard before Guildhall can assess whether the current work is closed.')).toBeTruthy()
     expect(screen.getByRole('link', { name: 'Open setup wizard' }).getAttribute('href')).toBe('/setup')
   })
 
-  it('surfaces release-readiness load failures instead of showing a stale verdict', async () => {
+  it('surfaces closure-check load failures instead of showing a stale verdict', async () => {
     vi.stubGlobal('fetch', vi.fn(async () => json({ error: 'missing project root' })))
 
     render(ReleaseTab)
 
-    expect(await screen.findByText('Could not load release readiness')).toBeTruthy()
+    expect(await screen.findByText('Could not load closure checks')).toBeTruthy()
     expect(screen.getByText('missing project root')).toBeTruthy()
   })
 
-  it('renders a ready-to-ship verdict with the counts that feed it', async () => {
+  it('renders a closed verdict with the counts that feed it', async () => {
     vi.stubGlobal('fetch', vi.fn(async () => json(readyPayload)))
 
     render(ReleaseTab)
 
-    expect(await screen.findByText('Release readiness')).toBeTruthy()
-    expect(screen.getAllByText('Ready to ship')).toHaveLength(2)
-    expect(screen.getByText('4/4 tasks done · no human blockers.')).toBeTruthy()
+    expect(await screen.findByText('Current work closure')).toBeTruthy()
+    expect(screen.getAllByText('Closed')).toHaveLength(2)
+    expect(screen.getByText('4/4 tasks done · no open closure blockers.')).toBeTruthy()
     expect(screen.getByText('Current counts')).toBeTruthy()
-    expect(screen.getByText('Total release blockers')).toBeTruthy()
+    expect(screen.getByText('Total closure blockers')).toBeTruthy()
     expect(screen.getByText('Unfinished tasks')).toBeTruthy()
     expect(screen.getByText('approved · rev 4')).toBeTruthy()
   })
@@ -84,7 +85,7 @@ describe('ReleaseTab', () => {
 
     render(ReleaseTab, { props: { subView: 'criteria' } })
 
-    expect(await screen.findByText('Release criteria')).toBeTruthy()
+    expect(await screen.findByText('Closure checks')).toBeTruthy()
     expect(screen.getByText('Open escalations')).toBeTruthy()
     expect(screen.getAllByText('1 task still open.')).toHaveLength(2)
     expect(screen.getByText('Choose project scope')).toBeTruthy()
@@ -92,7 +93,7 @@ describe('ReleaseTab', () => {
     expect(screen.getByText('Approve editor spec')).toBeTruthy()
     expect(screen.getByText('draft · rev 2')).toBeTruthy()
     expect(screen.getByText('Task-state tally')).toBeTruthy()
-    expect(screen.getByText('blocked')).toBeTruthy()
+    expect(screen.getAllByText('Blocked').length).toBeGreaterThanOrEqual(1)
     expect(screen.getByText('2')).toBeTruthy()
 
     await waitFor(() => {
@@ -100,7 +101,7 @@ describe('ReleaseTab', () => {
     })
   })
 
-  it('uses the current project route when loading release readiness', async () => {
+  it('uses the current project route when loading closure checks', async () => {
     window.history.replaceState({}, '', '/projects/t-minus-t/release')
     path.value = '/projects/t-minus-t/release'
     const fetchMock = vi.fn(async () => json(readyPayload))
@@ -108,7 +109,7 @@ describe('ReleaseTab', () => {
 
     render(ReleaseTab)
 
-    await screen.findByText('Release readiness')
+    await screen.findByText('Current work closure')
     await waitFor(() => {
       expect(fetchMock).toHaveBeenCalledWith('/api/project/release-readiness?projectId=t-minus-t')
     })
@@ -120,7 +121,7 @@ describe('ReleaseTab', () => {
       vi.fn(async () =>
         json({
           ...readyPayload,
-          designSystem: { drafted: false, approved: false },
+          designSystem: { drafted: false, approved: false, source: 'none' },
           totals: { blockingCount: 0, tasks: 3, done: 3 },
         }),
       ),
@@ -128,9 +129,33 @@ describe('ReleaseTab', () => {
 
     render(ReleaseTab)
 
-    expect(await screen.findByText('Release readiness')).toBeTruthy()
+    expect(await screen.findByText('Current work closure')).toBeTruthy()
     expect(screen.getAllByText('Blocked')).toHaveLength(2)
-    expect(screen.getByText('Design system is not drafted yet.')).toBeTruthy()
+    expect(screen.getByText('No design-system guardrail is captured yet.')).toBeTruthy()
+  })
+
+  it('shows repo-detected design systems as satisfied instead of not drafted', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () =>
+        json({
+          ...readyPayload,
+          designSystem: {
+            drafted: true,
+            approved: true,
+            source: 'repo',
+            label: 'detected in repo',
+            revision: 0,
+          },
+        }),
+      ),
+    )
+
+    render(ReleaseTab)
+
+    expect(await screen.findByText('Current work closure')).toBeTruthy()
+    expect(screen.getByText('detected in repo')).toBeTruthy()
+    expect(screen.queryByText('not drafted')).toBeFalsy()
   })
 
   it('prioritizes unfinished work over design-system readiness', async () => {
@@ -148,12 +173,12 @@ describe('ReleaseTab', () => {
 
     render(ReleaseTab)
 
-    expect(await screen.findByText('Release readiness')).toBeTruthy()
+    expect(await screen.findByText('Current work closure')).toBeTruthy()
     expect(screen.getAllByText('Blocked')).toHaveLength(2)
     expect(screen.getByText('38 tasks still need shaping, worker execution, review, or recovery.')).toBeTruthy()
   })
 
-  it('blocks release readiness on Guildhall-owned dirty checkout residue', async () => {
+  it('blocks current work closure on Guildhall-owned dirty checkout residue', async () => {
     vi.stubGlobal(
       'fetch',
       vi.fn(async () =>
@@ -169,10 +194,125 @@ describe('ReleaseTab', () => {
 
     render(ReleaseTab)
 
-    expect(await screen.findByText('Release readiness')).toBeTruthy()
+    expect(await screen.findByText('Current work closure')).toBeTruthy()
     expect(screen.getAllByText('Blocked')).toHaveLength(2)
     expect(screen.getByText('3 Guildhall-owned project files still need cleanup or landing.')).toBeTruthy()
     expect(screen.getByText('3 Guildhall files dirty')).toBeTruthy()
-    expect(screen.getByText(/.gitignore, guildhall.yaml, memory\/TASKS.json/)).toBeTruthy()
+    expect(screen.getByText(/3 project-local Guildhall files need cleanup before the current work can close/)).toBeTruthy()
+    expect(screen.queryByText(/memory\/TASKS.json/)).toBeNull()
+  })
+
+  it('surfaces checkout inspection errors instead of calling the project clean', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () =>
+        json({
+          ...readyPayload,
+          dirtyCheckout: {
+            ownedCount: 0,
+            files: [],
+            error: 'fatal: not a git repository',
+          },
+        }),
+      ),
+    )
+
+    render(ReleaseTab)
+
+    expect(await screen.findByText('Current work closure')).toBeTruthy()
+    expect(screen.getByText('Could not inspect checkout')).toBeTruthy()
+    expect(screen.getByText(/Guildhall could not inspect this checkout with git/)).toBeTruthy()
+    expect(screen.queryByText(/fatal: not a git repository/)).toBeNull()
+    expect(screen.queryByText('Project checkout clean.')).toBeNull()
+  })
+
+  it('caps the visible Git Story blocker list and keeps the full count', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () =>
+        json({
+          ...readyPayload,
+          gitStory: {
+            state: 'dirty_uncommitted',
+            blockers: Array.from({ length: 9 }, (_, index) => ({
+              id: `repo-${index}`,
+              reason: `Repo ${index} needs commit or push.`,
+              projectPath: `/repo/${index}`,
+            })),
+          },
+          totals: { ...readyPayload.totals, gitStoryBlockingCount: 9 },
+        }),
+      ),
+    )
+
+    render(ReleaseTab, { props: { subView: 'criteria' } })
+
+    expect(await screen.findByText('Closure checks')).toBeTruthy()
+    expect(screen.getByText('9 unresolved git stories.')).toBeTruthy()
+    expect(screen.getByText('Showing 5 of 9 git stories.')).toBeTruthy()
+    expect(screen.getByText('Repo 0 needs commit or push.')).toBeTruthy()
+    expect(screen.queryByText('Repo 8 needs commit or push.')).toBeNull()
+  })
+
+  it('frames git story blockers as owner decisions instead of raw branch plumbing', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () =>
+        json({
+          ...readyPayload,
+          gitStory: {
+            state: 'no_upstream',
+            blockers: [
+              {
+                id: 'repo-0',
+                taskId: 'task-branch',
+                label: 'guildhall/task-task-import-123 has no upstream branch',
+                reason: 'guildhall/task-task-import-123 has no upstream branch',
+              },
+            ],
+          },
+          totals: { ...readyPayload.totals, gitStoryBlockingCount: 1 },
+        }),
+      ),
+    )
+
+    render(ReleaseTab, { props: { subView: 'criteria' } })
+
+    expect(await screen.findByText('Closure checks')).toBeTruthy()
+    expect(screen.getByText('A branch needs a sharing decision.')).toBeTruthy()
+    expect(screen.getByText('Push it, open a PR, or mark the work local-only/deferred if it should not be shared.')).toBeTruthy()
+    expect(screen.queryByText(/has no upstream branch/)).toBeNull()
+  })
+
+  it('opens git story task links inside the current project route', async () => {
+    window.history.replaceState({}, '', '/projects/looma-knit/release/criteria')
+    path.value = '/projects/looma-knit/release/criteria'
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () =>
+        json({
+          ...readyPayload,
+          gitStory: {
+            state: 'no_upstream',
+            blockers: [
+              {
+                id: 'repo-0',
+                taskId: 'task-import-1y7kmp6',
+                label: 'guildhall/task-task-import-1y7kmp6 has no upstream branch',
+                reason: 'guildhall/task-task-import-1y7kmp6 has no upstream branch',
+              },
+            ],
+          },
+          totals: { ...readyPayload.totals, gitStoryBlockingCount: 1 },
+        }),
+      ),
+    )
+
+    render(ReleaseTab, { props: { subView: 'criteria' } })
+
+    await screen.findByText('Closure checks')
+    await userEvent.click(screen.getByRole('button', { name: 'A branch needs a sharing decision.' }))
+
+    expect(path.value).toBe('/projects/looma-knit/task/task-import-1y7kmp6')
   })
 })

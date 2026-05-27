@@ -5,7 +5,7 @@ help_summary: |
   Best-practice guidelines (coding, testing, frontend, git, security, deps,
   architecture, documentation, review) auto-injected into every agent's
   system prompt. Override per-project by shadowing files under
-  ./memory/engineering-defaults/.
+  ./.guildhall/engineering-defaults/.
 ---
 
 # Engineering defaults
@@ -47,7 +47,7 @@ The composer keeps the base prompt first and appends a `## Engineering defaults`
 
 ## Overriding per project
 
-Drop a file at `./memory/engineering-defaults/<topic>.md` to shadow the built-in version. Example — to tighten `testing.md` for your project, write a new one at `./memory/engineering-defaults/testing.md` and it'll replace the bundled file.
+Drop a file at `./.guildhall/engineering-defaults/<topic>.md` to shadow the built-in version. Example — to tighten `testing.md` for your project, write a new one at `./.guildhall/engineering-defaults/testing.md` and it'll replace the bundled file.
 
 ## Why this is separate from skills
 

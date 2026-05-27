@@ -32,6 +32,7 @@ tags?: string[]
 skills?: ProjectSkillsConfig
 runtime?: RuntimeSlotConfig
 worktree?: WorktreeConfig
+gitStory?: GitStoryPolicy
 ```
 
 ## Identity
@@ -81,6 +82,11 @@ projects:
     worktree:
       include:
         - .env
+    gitStory:
+      completionTarget: open_pr
+      commit: ask
+      push: ask
+      pullRequest: ask
 
 council:
   mandate: Keep Looma generic while letting Knit needs drive priority.
@@ -94,11 +100,23 @@ council:
 The parent workspace coordinates planning. Tasks still bind to a child project
 for setup, worktree creation, gates, and verification.
 
+Git policy follows the same shape. In a multi-project workspace, Guildhall
+keeps the workspace-level `.guildhall/` state at the parent so planning and
+tasks stay coherent, but local/private ignore rules are written at the actual
+Git-backed child project roots from `projects[].path`. If the workspace folder
+is only a container, its `.gitignore` does not need to pretend it owns those
+repos.
+
 Child-project settings are project settings. If a workspace coordinates
 multiple buildable projects, put local worktree files under the matching
 `projects[]` entry so paths stay relative to that child project. Do not put
 `knit/.env` in the parent workspace include list; a Knit task resolves includes
 from the Knit project root, so the child setting should be `.env`.
+
+The same rule applies to setup and Git closure policy. Put child-specific
+`bootstrap`, `worktree`, and `gitStory` blocks on the matching `projects[]`
+entry. Keep top-level versions only for single-project workspaces or truly
+workspace-wide defaults.
 
 ## `models`
 
@@ -106,7 +124,7 @@ from the Knit project root, so the child setting should be `.env`.
 models:
   spec: deepseek-ai/DeepSeek-V4-Flash
   coordinator: deepseek-ai/DeepSeek-V4-Flash
-  worker: Qwen/Qwen3-235B-A22B-Instruct-2507
+  worker: Qwen/Qwen3.5-35B-A3B
   reviewer: deepseek-ai/DeepSeek-V4-Flash
   gateChecker: deepseek-ai/DeepSeek-V4-Flash
   contextIndexer: zai-org/GLM-4.6
@@ -115,6 +133,12 @@ models:
 Each model role must resolve against the model catalog in `./src/core/models.ts`.
 See [Open model recommendations](../guide/open-models) for the currently tested
 role split and retesting notes.
+
+OpenAI-compatible provider options are derived from the selected role and model.
+Projects do not need to hard-code `prompt_cache_key`, `response_format`, or
+reasoning settings in `guildhall.yaml`; Guildhall applies those at runtime when
+the provider/model path supports them. Paid priority `service_tier` is not sent
+by default.
 
 ## `coordinators`
 
@@ -178,6 +202,40 @@ filenames during setup, but it only copies paths listed here. Parent-directory
 paths are rejected, missing files are skipped, and symlinks are not copied.
 
 You can edit this list in **Settings → Advanced → Task worktree local files**.
+
+## `gitStory`
+
+Git Story policy tells Guildhall how completed work should be closed. It can
+live at the top level for a single-project workspace, or under a `projects[]`
+entry when a parent workspace coordinates several Git-backed child projects.
+
+```yaml
+gitStory:
+  completionTarget: open_pr
+  commit: ask
+  push: ask
+  pullRequest: ask
+  merge: ask
+  localOnlyAllowed: true
+  deferAllowed: true
+  requireCleanRelease: true
+  allowForcePush: false
+  allowSharedBranchRebase: false
+```
+
+`completionTarget` can be `leave_dirty`, `commit_local`, `push_branch`,
+`open_pr`, or `merge_landing_branch`. The action fields use `ask`, `auto`, or
+`never`.
+
+The default posture is ask-first. If `commit` is `auto`, Guildhall can
+auto-commit completed task work with a Commit Story message. Push and PR
+creation still follow their own policy fields. `localOnlyAllowed` and
+`deferAllowed` let you record intentional leftovers with a reason instead of
+leaving them to look like forgotten work.
+
+Dangerous history moves are off by default. Leave `allowForcePush` and
+`allowSharedBranchRebase` false unless a project has a very deliberate reason
+to permit them.
 
 ## `runtime`
 

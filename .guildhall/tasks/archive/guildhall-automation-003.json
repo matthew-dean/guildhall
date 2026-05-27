@@ -1,0 +1,36 @@
+{
+  "id": "guildhall-automation-003",
+  "title": "Get one real task from intake to spec review without manual cleanup",
+  "description": "Prove that a grounded project task can move from fuzzy ask through spec shaping and land in clean spec_review or a clean waiting-on-user state without silent loops or stale task residue.",
+  "domain": "runtime",
+  "projectPath": ".",
+  "status": "done",
+  "priority": "high",
+  "dependsOn": [
+    "guildhall-automation-002"
+  ],
+  "outOfScope": [
+    "Implementation/gate/merge behavior after spec approval"
+  ],
+  "acceptanceCriteria": [
+    {
+      "id": "ac-1",
+      "description": "A real imported task consistently lands in spec_review or a clear user-question state with durable transcript and task state",
+      "verifiedBy": "review",
+      "met": true
+    }
+  ],
+  "notes": [
+    {
+      "agentId": "worker-agent",
+      "role": "worker",
+      "timestamp": "2026-05-03T22:07:40Z",
+      "content": "Grounded Looma/Knit intake now lands cleanly without manual cleanup. The spec lane preserves durable progress after turn-limit churn, answered questions no longer strand tasks in exploring, and task-006 moved from a fresh ask through structured questions into spec_review on the live server."
+    }
+  ],
+  "gateResults": [],
+  "revisionCount": 0,
+  "createdAt": "2026-05-02T16:01:41Z",
+  "completedAt": "2026-05-03T22:07:40Z",
+  "updatedAt": "2026-05-03T22:07:40Z"
+}

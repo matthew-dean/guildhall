@@ -64,6 +64,7 @@
     min-block-size: 0;
     overflow-y: auto;
     overflow-x: hidden;
+    overflow-anchor: auto;
     padding-bottom: var(--s-6);
   }
   .projects-shell.projects-home .projects-shell-body {

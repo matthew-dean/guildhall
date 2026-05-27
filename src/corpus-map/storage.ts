@@ -1,6 +1,7 @@
 import fs from 'node:fs/promises'
 import path from 'node:path'
 import { parse, stringify } from 'yaml'
+import { getProjectLocalHistoryDir, inferProjectRootFromMemoryDir } from '@guildhall/sessions'
 import type {
   CodebaseMap,
   CodebaseMapHistoryEvent,
@@ -19,11 +20,11 @@ export function codebaseMapPath(memoryDir: string): string {
 }
 
 export function codebaseMapHistoryPath(memoryDir: string): string {
-  return path.join(memoryDir, CODEBASE_MAP_HISTORY_FILENAME)
+  return path.join(getProjectLocalHistoryDir(inferProjectRootFromMemoryDir(memoryDir)), CODEBASE_MAP_HISTORY_FILENAME)
 }
 
 export function codebaseMapStalePath(memoryDir: string): string {
-  return path.join(memoryDir, CODEBASE_MAP_STALE_FILENAME)
+  return path.join(getProjectLocalHistoryDir(inferProjectRootFromMemoryDir(memoryDir)), CODEBASE_MAP_STALE_FILENAME)
 }
 
 export function codebaseMapOverridesPath(memoryDir: string): string {
@@ -78,7 +79,7 @@ export async function appendCodebaseMapHistory(
   memoryDir: string,
   event: CodebaseMapHistoryEvent,
 ): Promise<void> {
-  await fs.mkdir(memoryDir, { recursive: true })
+  await fs.mkdir(path.dirname(codebaseMapHistoryPath(memoryDir)), { recursive: true })
   await fs.appendFile(codebaseMapHistoryPath(memoryDir), `${JSON.stringify(event)}\n`, 'utf-8')
 }
 
@@ -95,7 +96,7 @@ export async function saveCodebaseMapStaleState(
   memoryDir: string,
   state: CodebaseMapStaleState,
 ): Promise<void> {
-  await fs.mkdir(memoryDir, { recursive: true })
+  await fs.mkdir(path.dirname(codebaseMapStalePath(memoryDir)), { recursive: true })
   await fs.writeFile(codebaseMapStalePath(memoryDir), JSON.stringify(state, null, 2), 'utf-8')
 }
 

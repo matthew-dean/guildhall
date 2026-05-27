@@ -11,7 +11,16 @@ export interface Escalation {
   summary?: string
   details?: string
   agentId?: string
+  externalChecklist?: ExternalBlockerStep[]
   resolvedAt?: string | null
+}
+
+export interface ExternalBlockerStep {
+  id?: string
+  title?: string
+  detail?: string
+  owner?: 'user' | 'guildhall' | 'external' | string
+  status?: 'todo' | 'done' | 'blocked' | string
 }
 
 export interface ProductBrief {
@@ -31,11 +40,22 @@ export interface ProductBrief {
  * no free-prose questions. The UI renders each kind with a fixed deterministic
  * affordance (see web/lib/AgentQuestion.svelte).
  */
+type AgentQuestionBase = {
+  id: string
+  askedBy: string
+  askedAt: string
+  subject?: string
+  description?: string
+  draftAnswer?: string
+  answeredAt?: string
+  answer?: string
+}
+
 export type AgentQuestion =
-  | { kind: 'confirm'; id: string; askedBy: string; askedAt: string; restatement: string; draftAnswer?: string; answeredAt?: string; answer?: string }
-  | { kind: 'yesno'; id: string; askedBy: string; askedAt: string; prompt: string; draftAnswer?: string; answeredAt?: string; answer?: string }
-  | { kind: 'choice'; id: string; askedBy: string; askedAt: string; prompt: string; choices: string[]; selectionMode?: 'single' | 'multiple' | undefined; draftAnswer?: string; answeredAt?: string; answer?: string }
-  | { kind: 'text'; id: string; askedBy: string; askedAt: string; prompt: string; draftAnswer?: string; answeredAt?: string; answer?: string }
+  | (AgentQuestionBase & { kind: 'confirm'; restatement: string })
+  | (AgentQuestionBase & { kind: 'yesno'; prompt: string })
+  | (AgentQuestionBase & { kind: 'choice'; prompt: string; choices: string[]; selectionMode?: 'single' | 'multiple' | undefined })
+  | (AgentQuestionBase & { kind: 'text'; prompt: string })
 
 export interface AcceptanceCriterion {
   description?: string
@@ -62,6 +82,93 @@ export interface ReviewVerdict {
   llmError?: string
 }
 
+export interface ReviewRecipeRef {
+  recipeId?: string
+  version?: string
+  lanes?: string[]
+  blocking?: 'none' | 'medium' | 'high' | 'strict' | string
+  required?: boolean
+  calibrationRecipeIds?: string[]
+}
+
+export interface ReviewPlan {
+  taskId?: string
+  effort?: 'lean' | 'balanced' | 'thorough' | 'release_critical' | 'custom' | string
+  depth?: 'minimal' | 'standard' | 'targeted' | 'deep' | 'release_critical' | string
+  selectedLanes?: string[]
+  skippedLanes?: Array<{ lane?: string; reason?: string }>
+  requiredRecipes?: ReviewRecipeRef[]
+  deterministicChecks?: string[]
+  requiredArtifacts?: string[]
+  budget?: {
+    maxReviewerAgents?: number
+    maxEstimatedTokens?: number
+    maxWallClockMinutes?: number
+    maxRevisionLoops?: number
+  }
+  aggregation?: Record<string, 'advisory' | 'blocking_on_high' | 'strict' | string>
+  reasons?: string[]
+  createdAt?: string
+  createdBy?: string
+}
+
+export interface ReviewAuditSummary {
+  reviewerRunCount?: number
+  reviseCount?: number
+  escapedMissCount?: number
+  latestReviewerRunAt?: string
+}
+
+export interface TaskSizePlan {
+  taskId?: string
+  score?: 1 | 2 | 3 | 5 | 8 | number
+  band?: 'tiny' | 'small' | 'medium' | 'large' | 'epic' | string
+  action?: 'proceed' | 'proceed_with_warning' | 'split_recommended' | 'split_required' | 'ask_clarifying_question' | string
+  factors?: Array<{ id?: string; label?: string; weight?: number; reason?: string }>
+  recommendedChildren?: Array<{
+    title?: string
+    reason?: string
+    dependsOn?: string[]
+    suggestedDomain?: string
+    createdTaskId?: string
+  }>
+  reviewBudgetHint?: string
+  reasons?: string[]
+  createdAt?: string
+  createdBy?: string
+}
+
+export interface RequestIntake {
+  intent?: 'spec_only' | 'implementation' | 'ambiguous_spec_or_implementation' | 'question_or_research' | string
+  recommendedNextAction?: 'ask_clarifying_question' | 'draft_spec' | 'create_linked_feature_plan' | 'proceed_to_implementation_spec' | string
+  ambiguity?: string
+  componentStack?: Array<{ kind?: string; title?: string; role?: string }>
+  clarifyingQuestions?: string[]
+  createdAt?: string
+  createdBy?: string
+}
+
+export interface DoneTaskSummaryBundle {
+  taskId?: string
+  status?: string
+  completedAt?: string
+  summary?: {
+    journey?: string
+    decision?: string
+    evidence?: string
+    learningCandidates?: string[]
+    openResidue?: string
+  }
+  retention?: {
+    transcriptPrimaryArtifact?: boolean
+    compactedFullTranscript?: boolean
+    fullEvidenceAvailable?: boolean
+  }
+  evidenceRefs?: Array<{ scope?: string; collection?: string; id?: string; path?: string; hash?: string; contentType?: string }>
+  createdAt?: string
+  createdBy?: string
+}
+
 export interface TaskNote {
   role?: string
   agentId?: string
@@ -76,6 +183,58 @@ export interface ShelveReason {
   detail?: string
 }
 
+export type GitStoryClosureState =
+  | 'clean'
+  | 'dirty_uncommitted'
+  | 'committed_local'
+  | 'no_upstream'
+  | 'pushed'
+  | 'pr_open'
+  | 'merged'
+  | 'local_only'
+  | 'deferred'
+  | 'conflict'
+  | 'unknown'
+
+export interface GitStorySnapshot {
+  state?: GitStoryClosureState
+  repoRoot?: string
+  inspectedPath?: string
+  branch?: string
+  upstream?: string
+  ahead?: number
+  behind?: number
+  changedCount?: number
+  untrackedCount?: number
+  samplePaths?: string[]
+  localCommits?: Array<{ sha?: string; subject?: string }>
+  pr?: { url?: string; state?: string; mergeStateStatus?: string }
+  taskId?: string
+  taskTitle?: string
+  worktreePath?: string
+  mergeRecordResult?: string
+  overrideReason?: string
+  reason?: string
+  nextAction?: string
+  inspectedAt?: string
+}
+
+export interface GitStoryBlocker {
+  id?: string
+  label?: string
+  state?: GitStoryClosureState
+  reason?: string
+  nextAction?: string
+  taskId?: string
+}
+
+export interface GitStorySummary {
+  ready?: boolean
+  state?: GitStoryClosureState
+  blockers?: GitStoryBlocker[]
+  snapshots?: GitStorySnapshot[]
+}
+
 export interface Task {
   id: string
   title?: string
@@ -87,6 +246,12 @@ export interface Task {
   revisionCount?: number
   remediationAttempts?: number
   blockReason?: string
+  hold?: {
+    previousStatus?: string
+    reason?: string
+    heldAt?: string
+    heldBy?: string
+  }
   shelveReason?: ShelveReason
   productBrief?: ProductBrief
   openQuestions?: AgentQuestion[]
@@ -94,10 +259,15 @@ export interface Task {
   acceptanceCriteria?: AcceptanceCriterion[]
   gateResults?: GateResult[]
   reviewVerdicts?: ReviewVerdict[]
+  reviewPlan?: ReviewPlan
+  reviewAuditSummary?: ReviewAuditSummary
   escalations?: Escalation[]
   notes?: TaskNote[]
   latestReviewerSummary?: string
   latestSelfCritique?: string
+  sizePlan?: TaskSizePlan
+  requestIntake?: RequestIntake
+  doneSummaryBundle?: DoneTaskSummaryBundle
   latestCheckpoint?: {
     step?: number
     agentId?: string
@@ -136,12 +306,19 @@ export interface Task {
     headline?: string
     detail?: string
   }
+  gitStory?: GitStorySnapshot
   origination?: string
   proposedBy?: string
   proposalRationale?: string
   createdAt?: string
   updatedAt?: string
   completedAt?: string
+  runtime?: {
+    openEscalationIds?: string[]
+    openIssueIds?: string[]
+    assignedTo?: string | null
+    updatedAt?: string
+  }
   parentGoalId?: string
   permissionMode?: string
   dependsOn?: string[]
@@ -199,7 +376,7 @@ export interface DrawerPayload {
   }
 }
 
-export type DrawerTab = 'current' | 'spec' | 'transcript' | 'experts' | 'history' | 'provenance'
+export type DrawerTab = 'overview' | 'current' | 'spec' | 'journey' | 'transcript' | 'experts' | 'history' | 'provenance'
 
 export interface TaskTurnLiveAgent {
   name: string
@@ -285,8 +462,11 @@ export interface TaskThreadReviewFeedbackTurn extends TaskThreadTurnBase {
 export interface TaskThreadEscalationTurn extends TaskThreadTurnBase {
   kind: 'escalation'
   escalationId: string
+  escalationReason?: string
+  escalationAgentId?: string
   summary: string
   details?: string
+  externalChecklist?: ExternalBlockerStep[]
   activity?: TaskTurnLiveActivity[]
 }
 
@@ -462,6 +642,24 @@ export interface StartReadiness {
   actionHref?: string
 }
 
+export interface ProjectMigrationStatusItem {
+  id: string
+  title: string
+  introducedIn?: string
+  scope?: string
+  safety?: string
+  requirement?: string
+  summary?: string
+  affectedPaths?: string[]
+}
+
+export interface ProjectMigrationStatus {
+  projectRoot?: string
+  pending: ProjectMigrationStatusItem[]
+  blocked: ProjectMigrationStatusItem[]
+  applied: ProjectMigrationStatusItem[]
+}
+
 export interface BootstrapStep {
   kind?: 'command' | 'gate' | string
   command?: string
@@ -485,6 +683,7 @@ export interface ProjectInbox {
     kind?: string
     severity?: 'high' | 'medium' | 'low' | string
     taskId?: string
+    migrationId?: string
     title?: string
     detail?: string
     actionHref?: string
@@ -492,6 +691,8 @@ export interface ProjectInbox {
     dismissEndpoint?: string
     signals?: string[]
     missingSteps?: string[]
+    blocking?: boolean
+    dismissible?: boolean
   }>
   blockers?: {
     bootstrap?: boolean
@@ -513,6 +714,7 @@ export interface ProjectDetail {
   inbox?: ProjectInbox
   run?: ProjectRun | null
   providerStatus?: ProviderStatus | null
+  gitStory?: GitStorySummary | null
   startReadiness?: StartReadiness | null
   bootstrapStatus?: BootstrapStatus
   recentEvents?: EventEnvelope[]
@@ -524,7 +726,6 @@ export interface ServiceProjectSummary {
   path: string
   name: string
   initializationNeeded?: boolean
-  selected?: boolean
   tags?: string[]
   summary?: string | null
   taskCounts?: {
@@ -549,12 +750,23 @@ export interface ServiceProjectSummary {
     }>
   }
   run?: ProjectRun | null
+  providerStatus?: ProviderStatus | null
+  gitStory?: GitStorySummary | null
+  projectCheckIn?: {
+    needed?: boolean
+    label?: string
+    title?: string
+    detail?: string
+    actionHref?: string
+    totalCount?: number
+    activeCount?: number
+    completedCount?: number
+  } | null
 }
 
 export interface ServiceDetail {
   pid?: number
-  selectedProject?: Pick<ServiceProjectSummary, 'id' | 'path' | 'name' | 'initializationNeeded'> | null
-  foregroundProject?: Pick<ServiceProjectSummary, 'id' | 'path' | 'name' | 'initializationNeeded'> | null
+  defaultProviderStatus?: ProviderStatus | null
   projects?: ServiceProjectSummary[]
 }
 
@@ -580,6 +792,7 @@ export interface EventEnvelope {
 }
 
 export type ProjectView =
+  | 'overview'
   | 'thread'
   | 'inbox'
   | 'work'

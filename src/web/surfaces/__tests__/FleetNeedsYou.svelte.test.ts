@@ -74,6 +74,8 @@ describe('FleetNeedsYou', () => {
     await screen.findByText('Fair Labor License')
     expect(screen.getByText('Choose migration source')).toBeTruthy()
     expect(screen.getByText('Approve auth spec')).toBeTruthy()
+    expect(screen.getAllByRole('button', { name: /^queue$/i })).toHaveLength(2)
+    expect(screen.queryByRole('button', { name: /project needs you/i })).toBeNull()
 
     await userEvent.click(screen.getByText('Choose migration source'))
 
@@ -82,5 +84,87 @@ describe('FleetNeedsYou', () => {
       expect(fetchMock.mock.calls.some(([input]) => String(input).includes('projectId=looma-knit'))).toBe(true)
       expect(fetchMock.mock.calls.some(([input]) => String(input).includes('projectId=fair-labor-license'))).toBe(true)
     })
+  })
+
+  it('starts project inbox requests in parallel so the fleet inbox does not hang behind one slow project', async () => {
+    const inboxResolvers = new Map<string, (response: Response) => void>()
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const url = new URL(String(input), 'http://localhost')
+      if (url.pathname === '/api/service') {
+        return json({
+          pid: 1234,
+          projects: [
+            { id: 'one', path: '/repo/one', name: 'One' },
+            { id: 'two', path: '/repo/two', name: 'Two' },
+            { id: 'three', path: '/repo/three', name: 'Three' },
+          ],
+        })
+      }
+      if (url.pathname === '/api/project/inbox') {
+        const projectId = url.searchParams.get('projectId') ?? ''
+        return await new Promise<Response>(resolve => {
+          inboxResolvers.set(projectId, resolve)
+        })
+      }
+      return json({ items: [] })
+    })
+    vi.stubGlobal('fetch', fetchMock)
+
+    render(FleetNeedsYou)
+
+    await waitFor(() => {
+      expect(inboxResolvers.size).toBe(3)
+    })
+
+    inboxResolvers.get('one')?.(json({ items: [{
+      kind: 'agent_question_pending',
+      severity: 'high',
+      title: 'First question',
+      detail: 'Answer this.',
+      actionHref: '/thread',
+    }] }))
+    inboxResolvers.get('two')?.(json({ items: [] }))
+    inboxResolvers.get('three')?.(json({ items: [] }))
+
+    await screen.findByText('First question')
+  })
+
+  it('renders repeated inbox rows without crashing the fleet queue', async () => {
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const url = new URL(String(input), 'http://localhost')
+      if (url.pathname === '/api/service') return json({
+        pid: 1234,
+        projects: [{ id: 'looma-knit', path: '/repo/looma-knit', name: 'Looma + Knit' }],
+      })
+      if (url.pathname === '/api/project/inbox') {
+        return json({
+          items: [
+            {
+              kind: 'spec_fill_pending',
+              severity: 'medium',
+              title: 'Block menu',
+              detail: 'Optional cleanup.',
+              taskId: 'task-block-menu',
+              actionHref: '/task/task-block-menu?tab=spec',
+            },
+            {
+              kind: 'spec_fill_pending',
+              severity: 'medium',
+              title: 'Block menu',
+              detail: 'Optional cleanup.',
+              taskId: 'task-block-menu',
+              actionHref: '/task/task-block-menu?tab=spec',
+            },
+          ],
+        })
+      }
+      return json({ items: [] })
+    })
+    vi.stubGlobal('fetch', fetchMock)
+
+    render(FleetNeedsYou)
+
+    await screen.findByText('Looma + Knit')
+    expect(screen.getAllByText('Block menu')).toHaveLength(2)
   })
 })

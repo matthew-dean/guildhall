@@ -14,7 +14,8 @@
   import { nav, path } from '../../lib/nav.svelte.js'
   import { currentProjectHref, currentTaskHref, projectFetch } from '../../lib/project-routes.js'
   import { buildWorkSurface } from '../../lib/project-data.js'
-  import { isCompleteForWorkerHandoff, needsWorkerHandoffSpecCleanup } from '../../lib/task-state.js'
+  import { friendlyRuntimeMessage } from '../../lib/runtime-message.js'
+  import { effectiveWorkStatus, isCompleteForWorkerHandoff, needsWorkerHandoffSpecCleanup } from '../../lib/task-state.js'
   import type { ProjectDetail, Task } from '../../lib/types.js'
   import PlannerTab from './PlannerTab.svelte'
 
@@ -55,6 +56,12 @@
   const importDraftCount = $derived(viewModel.importDraftCount)
   const nextImportDraft = $derived(viewModel.nextImportDraft)
   const needsMeta = $derived(viewModel.needsMeta)
+  const setupInboxItem = $derived(detail.inbox?.items?.find(item => (
+    item.kind === 'setup_pending' ||
+    item.kind === 'project_check_in' ||
+    item.kind === 'pressure_test_pending' ||
+    item.actionHref === '/setup'
+  )) ?? null)
 
   let progress = $state('Loading...')
   let sortKey = $state<SortKey>('updated')
@@ -174,15 +181,7 @@
   }
 
   function effectiveStatus(task: Task): string | undefined {
-    if (task.status === 'ready' && needsWorkerHandoffSpecCleanup(task)) {
-      return 'needs_spec_cleanup'
-    }
-    if (detail.run?.status !== 'running') {
-      if (task.status === 'in_progress') return 'paused'
-      if (task.status === 'review') return 'review_waiting'
-      if (task.status === 'gate_check') return 'gates_waiting'
-    }
-    return task.status
+    return effectiveWorkStatus(task, detail.run?.status === 'running')
   }
 
   function effectiveStatusLabel(task: Task): string {
@@ -195,13 +194,14 @@
     }
   }
 
-  function effectiveStatusTone(task: Task): 'accent' | 'ok' | 'warn' | 'danger' | 'neutral' {
+  function effectiveStatusTone(task: Task): 'accent' | 'ok' | 'warn' | 'danger' | 'neutral' | 'agent' | 'agent-attention' {
     switch (effectiveStatus(task)) {
       case 'paused': return 'neutral'
       case 'review_waiting':
       case 'gates_waiting':
+        return 'agent'
       case 'needs_spec_cleanup':
-        return 'warn'
+        return 'agent-attention'
       default:
         return statusTone(task.status)
     }
@@ -233,7 +233,7 @@
   }
 
   function taskSecondaryText(task: Task): string {
-    if (task.blockReason) return task.blockReason
+    if (task.blockReason) return friendlyRuntimeMessage(task.blockReason)
     if (task.terminalSummary?.headline) return task.terminalSummary.headline
     if (task.latestCheckpoint?.nextPlannedAction) return task.latestCheckpoint.nextPlannedAction
     if (task.description) return task.description
@@ -318,7 +318,7 @@
       <div class="work-summary">
         <Chip label={`${taskCounts.total} tasks`} tone="neutral" />
         {#if taskCounts.agentActive > 0}
-          <Chip label={countLabel(taskCounts.agentActive, 'agent-active', 'agent-active')} tone="accent" />
+          <Chip label={countLabel(taskCounts.agentActive, 'Guildhall working', 'Guildhall working')} tone="agent" />
         {/if}
         {#if taskCounts.paused > 0}
           <Chip label={countLabel(taskCounts.paused, 'paused task')} tone="neutral" />
@@ -329,10 +329,10 @@
         {#if taskCounts.gatesWaiting > 0}
           <Chip label={countLabel(taskCounts.gatesWaiting, 'gates waiting', 'gates waiting')} tone="warn" />
         {/if}
-        <Chip label={countLabel(taskCounts.shaping, 'shaping', 'shaping')} tone="neutral" />
-        <Chip label={countLabel(taskCounts.readyForWorker, 'ready for worker', 'ready for worker')} tone="neutral" />
+        <Chip label={countLabel(taskCounts.shaping, 'being shaped', 'being shaped')} tone="agent" />
+        <Chip label={countLabel(taskCounts.readyForWorker, 'ready to start', 'ready to start')} tone="agent" />
         {#if taskCounts.needsSpecCleanup > 0}
-          <Chip label={countLabel(taskCounts.needsSpecCleanup, 'need brief cleanup', 'need brief cleanup')} tone="warn" />
+          <Chip label={countLabel(taskCounts.needsSpecCleanup, 'need brief cleanup', 'need brief cleanup')} tone="agent-attention" />
         {/if}
         <Chip label={`${taskCounts.awaitingApproval} awaiting approval`} tone="warn" />
         <Chip label={`${taskCounts.done} done`} tone="ok" />
@@ -361,15 +361,19 @@
       {/if}
 
       {#if tasks.length === 0}
-        {#if needsMeta}
+        {#if needsMeta || setupInboxItem}
           <div class="setup-empty">
-            <p class="muted">No tasks yet. Finish project setup first.</p>
-            <Button variant="primary" size="sm" onclick={() => nav(currentProjectHref('/setup'))}>
-              Open setup
+            <p class="muted">{setupInboxItem?.detail ?? 'No tasks yet. Finish project setup first.'}</p>
+            <Button variant="primary" size="sm" onclick={() => nav(currentProjectHref(setupInboxItem?.actionHref ?? '/setup'))}>
+              {setupInboxItem?.kind === 'project_check_in'
+                ? 'Start check-in'
+                : setupInboxItem?.kind === 'pressure_test_pending'
+                  ? 'Answer question'
+                  : 'Open setup'}
             </Button>
           </div>
         {:else}
-          <p class="muted">No tasks yet — <strong>New task</strong> to begin.</p>
+          <p class="muted">No tasks yet — <strong>New request</strong> to begin.</p>
         {/if}
       {:else}
         <div class="task-table-wrap">

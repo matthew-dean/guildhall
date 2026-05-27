@@ -1,0 +1,23 @@
+id: privacy-telemetry-consent-plan
+title: Telemetry consent review plan
+task:
+  id: task-privacy-telemetry-consent
+  title: Add product analytics telemetry
+  description: Record user data analytics events after consent and avoid sending email or personal data.
+  priority: high
+  changedFiles:
+    - src/runtime/analytics.ts
+expected:
+  requiredLanes:
+    - privacy
+    - evidence_privacy
+    - data_integrity
+    - test_adequacy
+  strictLanes:
+    - privacy
+    - data_integrity
+  maxReviewerAgents: 6
+labelGovernance:
+  labeledBy: review-calibration-seed
+  labeledAt: '2026-05-25'
+  reviewStatus: seed

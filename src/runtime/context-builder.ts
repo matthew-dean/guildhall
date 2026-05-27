@@ -23,8 +23,16 @@ import {
   loadProjectGuildRoster,
 } from '@guildhall/guilds'
 import { readProjectSkillProposals, selectRelevantProjectSkills } from '@guildhall/skills'
+import {
+  getProjectTaskLocalHistoryDir,
+  getProjectTranscriptPath,
+  inferProjectRootFromMemoryDir,
+} from '@guildhall/sessions'
 import { loadGoalForTask } from './business-envelope.js'
 import { loadDesignSystem } from './design-system-store.js'
+import { loadLanguageMap, renderLanguageMapContext } from './language-map.js'
+import { renderWorkerMode, selectWorkerMode, type SelectedWorkerMode } from './worker-modes.js'
+import { resolveRuntimePath } from './path-utils.js'
 
 // ---------------------------------------------------------------------------
 // Just-in-time context builder
@@ -54,22 +62,29 @@ const MAX_AGENT_NOTE_CHARS = 1200
 const MAX_AGENT_NOTES = 3
 const MAX_SPEC_OVERVIEW_CHARS = 3200
 const MAX_CORPUS_MAP_CHARS = 3200
+const MAX_ENV_MANIFEST_FILES = 8
+const MAX_ENV_MANIFEST_KEYS_PER_FILE = 40
+const RETRY_COACHING_AFTER_REVISIONS = 3
 const execFileP = promisify(execFile)
 const repoFileCache = new Map<string, string[]>()
 
 const ACTIONABLE_FILE_HINT_RE = /^\s*(?:[-*]\s*|\d+\.\s*)?(edit|update|modify|create|write|verify|check|test|open|remove|delete|rename|trim|clean)\b/i
 const SHELLISH_CANDIDATE_RE = /^(pnpm|npm|yarn|bun|cd|node)\b|--|&&|\|\|/
 const GLOB_CANDIDATE_RE = /[*?{}]/
+const ENV_FILE_RE = /^\.env(?:\.[A-Za-z0-9_-]+)?$/
+const ENV_KEY_RE = /^\s*(?:export\s+)?([A-Za-z_][A-Za-z0-9_]*)\s*=/
+const ENV_CONTEXT_TASK_RE = /\b(env|environment|credential|secret|key|token|oauth|provider|supabase|stripe|vercel|google|apple|webhook)\b/i
 
 async function loadOrCreateCodebaseMap(memoryDir: string, task: Task) {
   const projectRoot = (task.worktreePath?.trim() || task.projectPath?.trim())
+  const resolvedProjectRoot = projectRoot ? resolveRuntimePath(projectRoot) : ''
   const existing = await loadCodebaseMap(memoryDir)
   if (existing) {
-    if (!projectRoot || path.resolve(existing.project.root) === path.resolve(projectRoot)) return existing
+    if (!resolvedProjectRoot || path.resolve(existing.project.root) === resolvedProjectRoot) return existing
   }
-  if (!projectRoot) return null
+  if (!resolvedProjectRoot) return null
   const result = await refreshCodebaseMap({
-    projectRoot,
+    projectRoot: resolvedProjectRoot,
     memoryDir,
     reason: 'setup',
   })
@@ -86,7 +101,8 @@ function isActionableFileCandidate(candidate: string): boolean {
 }
 
 export function resolveLikelyTaskFiles(task: Task, checkpointFilesTouched: readonly string[] = []): string[] {
-  const root = task.worktreePath?.trim() || task.projectPath?.trim() || ''
+  const rawRoot = task.worktreePath?.trim() || task.projectPath?.trim() || ''
+  const root = rawRoot ? resolveRuntimePath(rawRoot) : ''
   const out: string[] = []
   const seen = new Set<string>()
   const importedSourceHints = task.notes
@@ -267,6 +283,60 @@ function renderLikelyTaskFiles(task: Task, checkpointFilesTouched: readonly stri
   return ['**Likely target files:**', ...files.map((file) => `- ${file}`)].join('\n')
 }
 
+function looksLikeBrittleImplementationRecovery(text: string): boolean {
+  return /\b(?:exact string|search string|string (?:was )?not found|template syntax mismatch|whitespace|formatting mismatch|failed to edit|attempts? to edit|replace failed|patch failed)\b/i.test(text) &&
+    /\b(?:component exists|correctly imported|current file|template|props?|composable|import|\.vue|\.svelte|\.tsx?|\.jsx?)\b/i.test(text)
+}
+
+function renderRetryCoaching(input: {
+  task: Task
+  latestRevisionFeedback: string
+  likelyFiles: readonly string[]
+}): string {
+  if (input.task.status !== 'in_progress') return ''
+
+  const latestFeedback = input.latestRevisionFeedback.trim()
+  const resolvedImplementationRecovery = [...input.task.escalations]
+    .reverse()
+    .find((escalation) => {
+      if (!escalation.resolvedAt) return false
+      const text = `${escalation.reason}\n${escalation.summary}\n${escalation.details ?? ''}\n${escalation.resolution ?? ''}`
+      return looksLikeBrittleImplementationRecovery(text) || /implementation recovery/i.test(text)
+    })
+  const repeatedReviewLoop =
+    input.task.revisionCount >= RETRY_COACHING_AFTER_REVISIONS &&
+    latestFeedback.length > 0
+  if (!repeatedReviewLoop && !resolvedImplementationRecovery) return ''
+
+  const targetFiles = input.likelyFiles.slice(0, 4)
+  const lines = [
+    latestFeedback.length > 0
+      ? 'You are in a retry, so do not merely replay the previous attempt. Use the reviewer feedback as a diagnosis and change your approach before editing.'
+      : 'You are in a retry, so do not merely replay the previous attempt. Use the resolved recovery evidence as a diagnosis and change your approach before editing.',
+  ]
+
+  if (resolvedImplementationRecovery) {
+    lines.push(
+      'Do not ask the owner about local implementation mechanics such as component props, imports, template syntax, whitespace, or exact-string edit failures.',
+      'Re-read the current target file and the referenced component/API before editing; avoid exact-string replacement when the file has drifted, and make a smaller structural edit against the current source.',
+    )
+  }
+
+  if (repeatedReviewLoop) {
+    lines.push(
+      'Before changing code, compare the latest reviewer feedback to the current file contents and identify the specific still-failing item you are fixing.',
+      'After the edit, run the narrowest verification that proves that item changed, then update the self-critique with the exact evidence.',
+    )
+  }
+
+  if (targetFiles.length > 0) {
+    lines.push('Start by reading these files in order:')
+    lines.push(...targetFiles.map((file) => `- ${file}`))
+  }
+
+  return lines.join('\n')
+}
+
 function renderActiveRecoveryPlaybook(task: Task): string {
   const note = [...task.notes].reverse().find((candidate) => {
     if (candidate.role !== 'recovery-playbook') return false
@@ -445,6 +515,73 @@ function clipContextBlock(value: string, maxChars: number): string {
   return `${trimmed.slice(0, Math.max(0, maxChars - 19)).trimEnd()}\n...[truncated]`
 }
 
+async function collectEnvManifest(projectRoot: string, task: Task): Promise<string> {
+  const taskText = [
+    task.title,
+    task.description,
+    task.spec ?? '',
+    task.blockReason ?? '',
+    ...task.acceptanceCriteria.map((criterion) => criterion.description),
+  ].join('\n')
+  if (!ENV_CONTEXT_TASK_RE.test(taskText)) return ''
+
+  const found: Array<{ relativePath: string; keys: string[] }> = []
+  const visited = new Set<string>()
+
+  const walk = async (dir: string, depth: number): Promise<void> => {
+    if (found.length >= MAX_ENV_MANIFEST_FILES || depth > 2) return
+    let entries: import('node:fs').Dirent[]
+    try {
+      entries = await fs.readdir(dir, { withFileTypes: true })
+    } catch {
+      return
+    }
+
+    for (const entry of entries) {
+      if (found.length >= MAX_ENV_MANIFEST_FILES) return
+      if (
+        entry.name === '.git' ||
+        entry.name === '.guildhall' ||
+        entry.name === 'node_modules' ||
+        entry.name === 'dist' ||
+        entry.name === '.output' ||
+        entry.name === '.nuxt'
+      ) {
+        continue
+      }
+      const full = path.join(dir, entry.name)
+      if (entry.isDirectory()) {
+        await walk(full, depth + 1)
+        continue
+      }
+      if (!entry.isFile() || !ENV_FILE_RE.test(entry.name)) continue
+      const relativePath = path.relative(projectRoot, full).replace(/\\/g, '/')
+      if (visited.has(relativePath)) continue
+      visited.add(relativePath)
+      let content = ''
+      try {
+        content = await fs.readFile(full, 'utf-8')
+      } catch {
+        continue
+      }
+      const keys = Array.from(new Set(content
+        .split(/\r?\n/)
+        .map((line) => ENV_KEY_RE.exec(line)?.[1])
+        .filter((key): key is string => Boolean(key))))
+        .slice(0, MAX_ENV_MANIFEST_KEYS_PER_FILE)
+      if (keys.length > 0) found.push({ relativePath, keys })
+    }
+  }
+
+  await walk(projectRoot, 0)
+  if (found.length === 0) return ''
+  return [
+    '### Environment Files (names only; values redacted)',
+    'Use this to distinguish credentials that already exist locally from credentials or provider-dashboard access that still must be created or configured. Never print or store secret values.',
+    ...found.map((file) => `- ${file.relativePath}: ${file.keys.join(', ')}`),
+  ].join('\n')
+}
+
 function constructionResponsibility(mode: ConstructionMode): string {
   switch (mode) {
     case 'survey':
@@ -474,9 +611,10 @@ function renderSpecOverview(task: Task): string {
 
 async function summarizeActiveWorktree(task: Task): Promise<string> {
   if (task.status !== 'in_progress' || !task.worktreePath?.trim()) return ''
+  const worktreePath = resolveRuntimePath(task.worktreePath)
   try {
     const { stdout } = await execFileP('git', ['status', '--short', '--untracked-files=all'], {
-      cwd: task.worktreePath,
+      cwd: worktreePath,
       maxBuffer: 1024 * 1024,
     })
     const lines = stdout
@@ -488,13 +626,13 @@ async function summarizeActiveWorktree(task: Task): Promise<string> {
     const shown = lines.slice(0, MAX_WORKTREE_HINT_LINES)
     const extra = lines.length - shown.length
     return [
-      `**Active worktree:** ${task.worktreePath}`,
+      `**Active worktree:** ${worktreePath}`,
       '**Changed files to resume from first:**',
       ...shown.map((line) => `- ${line}`),
       extra > 0 ? `- ...and ${extra} more` : '',
     ].filter(Boolean).join('\n')
   } catch {
-    return task.worktreePath ? `**Active worktree:** ${task.worktreePath}` : ''
+    return task.worktreePath ? `**Active worktree:** ${worktreePath}` : ''
   }
 }
 
@@ -553,7 +691,7 @@ export interface BuiltContext {
   envelope: string
   /**
    * Approved (or draft) design-system summary — tokens, primitives, copy
-   * voice, a11y baseline. Empty when memory/design-system.yaml is absent so
+   * voice, a11y baseline. Empty when .guildhall/design-system.yaml is absent so
    * pure-infra projects pay nothing.
    */
   designSystem: string
@@ -569,6 +707,8 @@ export interface BuiltContext {
    * find existing primitives, helpers, and area conventions before editing.
    */
   corpusMap: string
+  workerMode?: SelectedWorkerMode
+  languageMap?: string
   reviewPacket?: string
   /** Concatenated string ready to prepend to an agent message */
   formatted: string
@@ -686,13 +826,14 @@ export async function buildContext(
     }
   }
 
-  const [memory, progress, decisions, exploring, goal, ds, worktreeResume, checkpoint, codebaseMap] = await Promise.all([
+  const projectRoot = inferProjectRootFromMemoryDir(memoryDir)
+  const [memory, progress, decisions, exploring, goal, ds, worktreeResume, checkpoint, codebaseMap, languageMapData, envManifest] = await Promise.all([
     readSafe('MEMORY.md'),
     readSafe('PROGRESS.md'),
     readSafe('DECISIONS.md'),
     // Only bother with the transcript when we're actually in the exploring phase.
     task.status === 'exploring'
-      ? readSafe(path.join('exploring', `${task.id}.md`))
+      ? fs.readFile(getProjectTranscriptPath(projectRoot, 'exploring', task.id), 'utf-8').catch(() => readSafe(path.join('exploring', `${task.id}.md`)))
       : Promise.resolve(''),
     // FR-23: resolve the task's parent goal. Missing-goal cases become
     // `undefined` — the summary renderer omits the envelope block.
@@ -705,10 +846,13 @@ export async function buildContext(
           .catch(() => null)
       : Promise.resolve(null),
     loadOrCreateCodebaseMap(memoryDir, task).catch(() => null),
+    loadLanguageMap(memoryDir).catch(() => null),
+    collectEnvManifest(projectRoot, task).catch(() => ''),
   ])
   const reviewPacket =
     task.status === 'review' || task.status === 'gate_check'
-      ? await readSafe(path.join('tasks', task.id, 'review-packet.md'))
+      ? await fs.readFile(path.join(getProjectTaskLocalHistoryDir(projectRoot, task.id), 'review-packet.md'), 'utf-8')
+          .catch(() => readSafe(path.join('tasks', task.id, 'review-packet.md')))
       : ''
 
   const projectMemory = extractRelevantMemorySections(memory, task)
@@ -819,7 +963,8 @@ export async function buildContext(
             command: criterion.command,
           })),
           likelyFiles: resolveLikelyTaskFiles(task, checkpoint?.filesTouched ?? []).map((file) => {
-            const root = task.worktreePath?.trim() || task.projectPath?.trim() || codebaseMap.project.root
+            const rawRoot = task.worktreePath?.trim() || task.projectPath?.trim() || codebaseMap.project.root
+            const root = resolveRuntimePath(rawRoot)
             const relative = path.relative(root, file).replace(/\\/g, '/')
             return relative.startsWith('..') ? file : relative
           }),
@@ -845,6 +990,12 @@ export async function buildContext(
   const clippedRevisionFeedback = latestRevisionFeedback
     ? clipContextBlock(latestRevisionFeedback, MAX_REVISION_FEEDBACK_CHARS)
     : ''
+  const likelyTaskFileList = resolveLikelyTaskFiles(task, checkpoint?.filesTouched ?? [])
+  const retryCoaching = renderRetryCoaching({
+    task,
+    latestRevisionFeedback,
+    likelyFiles: likelyTaskFileList,
+  })
   const recentAgentNotes = task.notes
     .filter((note) => note.role !== 'reviewer')
     .slice(-MAX_AGENT_NOTES)
@@ -856,6 +1007,17 @@ export async function buildContext(
     status: task.status,
     blocker: task.blockReason,
   })
+  const workerMode = task.status === 'in_progress' ? selectWorkerMode(task) : undefined
+  const workerModePrompt = workerMode ? renderWorkerMode(workerMode) : ''
+  const languageMap = languageMapData
+    ? renderLanguageMapContext(languageMapData, [
+        task.title,
+        task.description,
+        task.spec ?? '',
+        task.productBrief?.userJob ?? '',
+        task.productBrief?.successMetric ?? '',
+      ].join('\n'))
+    : ''
 
   const taskSummary = [
     `## Current Task: ${task.id}`,
@@ -881,6 +1043,9 @@ export async function buildContext(
     clippedRevisionFeedback
       ? `\n### Latest Required Revisions\n${clippedRevisionFeedback}`
       : '',
+    retryCoaching
+      ? `\n### Retry Coaching\n${retryCoaching}`
+      : '',
     latestCheckpoint
       ? `\n### Latest Checkpoint\n${latestCheckpoint}`
       : '',
@@ -895,6 +1060,9 @@ export async function buildContext(
       : '',
     activeRecoveryPlaybook
       ? `\n### Active Recovery Playbook\n${activeRecoveryPlaybook}`
+      : '',
+    envManifest
+      ? `\n${envManifest}`
       : '',
     projectSkills
       ? `\n### Project Skills\n${projectSkills}`
@@ -911,6 +1079,8 @@ export async function buildContext(
     '',
     personaPrompt,
     '',
+    workerModePrompt,
+    '',
     envelope ? `## Business Envelope (FR-23)\n${envelope}` : '',
     '',
     designSystem ? `## Design System\n${designSystem}` : '',
@@ -920,6 +1090,8 @@ export async function buildContext(
     reviewPacket ? `## Review Packet\n${reviewPacket}` : '',
     '',
     corpusMap,
+    '',
+    languageMap,
     '',
     projectMemory ? `## Relevant Project Memory\n${projectMemory}` : '',
     '',
@@ -948,6 +1120,8 @@ export async function buildContext(
     designSystem,
     reviewRubrics,
     corpusMap,
+    workerMode,
+    languageMap,
     reviewPacket,
     formatted,
   }

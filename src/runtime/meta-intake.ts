@@ -2,7 +2,7 @@ import fs from 'node:fs/promises'
 import path from 'node:path'
 import { dump as yamlDump, load as yamlLoad } from 'js-yaml'
 import { TaskQueue, type Task } from '@guildhall/core'
-import { atomicWriteText } from '@guildhall/sessions'
+import { atomicWriteText, getProjectTranscriptPath, inferProjectRootFromMemoryDir } from '@guildhall/sessions'
 import { readWorkspaceConfig, writeWorkspaceConfig } from '@guildhall/config'
 import { appendExploringTranscript } from '@guildhall/tools'
 import {
@@ -173,7 +173,7 @@ bootstrap:
         stderr: <short excerpt>
 \`\`\`
 
-When the user approves the draft, run the \`guildhall approve-meta-intake\` CLI command — the runtime will parse all three fences, merge the inferred routing slices + bootstrap into \`guildhall.yaml\`, record lever positions in \`memory/agent-settings.yaml\` with \`setBy: 'spec-agent-intake'\`, and mark this task done.`
+When the user approves the draft, run the \`guildhall approve-meta-intake\` CLI command — the runtime will parse all three fences, merge the inferred routing slices + bootstrap into \`guildhall.yaml\`, record lever positions in \`.guildhall/agent-settings.yaml\` with \`setBy: 'spec-agent-intake'\`, and mark this task done.`
 
 export interface CreateMetaIntakeInput {
   memoryDir: string
@@ -195,11 +195,8 @@ async function writeMetaIntakeTranscript(
   memoryDir: string,
   seedMessage?: string,
 ): Promise<string> {
-  const transcriptPath = path.join(
-    memoryDir,
-    'exploring',
-    `${META_INTAKE_TASK_ID}.md`,
-  )
+  const projectRoot = inferProjectRootFromMemoryDir(memoryDir)
+  const transcriptPath = getProjectTranscriptPath(projectRoot, 'exploring', META_INTAKE_TASK_ID)
   await fs.mkdir(path.dirname(transcriptPath), { recursive: true })
   await fs.writeFile(transcriptPath, `${seedMessage ?? META_INTAKE_SEED}\n`, 'utf-8')
   return transcriptPath
@@ -216,10 +213,10 @@ export async function createMetaIntakeTask(
   const queue = await readQueue(input.memoryDir)
   const existing = queue.tasks.find((t) => t.id === META_INTAKE_TASK_ID)
 
-  const transcriptPath = path.join(
-    input.memoryDir,
+  const transcriptPath = getProjectTranscriptPath(
+    input.projectPath,
     'exploring',
-    `${META_INTAKE_TASK_ID}.md`,
+    META_INTAKE_TASK_ID,
   )
 
   if (existing) {
@@ -553,7 +550,7 @@ function coordinatorTemplate(id: string, task: Task): DraftCoordinator {
     },
     'testing-qa': {
       name: 'Testing and Quality',
-      mandate: 'Protect the project gates and test coverage for converter behavior, extension workflow, and release readiness.',
+      mandate: 'Protect the project gates and test coverage for converter behavior, extension workflow, and closure readiness.',
       concerns: [
         {
           id: 'gate-coverage',
@@ -803,7 +800,7 @@ export function parseBootstrapDraft(spec: string): BootstrapDraft | null {
 // ---------------------------------------------------------------------------
 // Lever-inference draft: a second YAML codefence the Spec Agent emits during
 // meta-intake, with positions + rationales inferred from the user's
-// project-guidance answers. Merged into memory/agent-settings.yaml on approval.
+// project-guidance answers. Merged into .guildhall/agent-settings.yaml on approval.
 // ---------------------------------------------------------------------------
 
 export interface LeverInference {
@@ -893,7 +890,7 @@ export interface MergeLeverInferencesResult {
 }
 
 /**
- * Apply a parsed LeverInferences block to `memory/agent-settings.yaml`. Each
+ * Apply a parsed LeverInferences block to `.guildhall/agent-settings.yaml`. Each
  * successful write marks the entry with `setBy: 'spec-agent-intake'` and the
  * Spec Agent's supplied rationale. Positions that don't match the lever
  * schema are skipped (not fatal — they're reported as `rejected` so the CLI

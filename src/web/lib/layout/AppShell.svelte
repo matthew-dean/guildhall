@@ -132,6 +132,7 @@
     margin: 0 auto;
     overflow-y: auto;
     overflow-x: hidden;
+    overflow-anchor: auto;
     display: flex;
     flex-direction: column;
     gap: var(--s-5);

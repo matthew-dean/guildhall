@@ -15,6 +15,7 @@ import { homedir } from 'node:os'
 import type { Task } from '@guildhall/core'
 import type { ProjectLevers } from '@guildhall/levers'
 import type { GitDriver } from './git-driver.js'
+import { resolveRuntimePath } from './path-utils.js'
 
 export type WorktreeMode = ProjectLevers['worktree_isolation']['position']
 
@@ -123,22 +124,23 @@ export async function ensureWorktreeForDispatch(
     task.worktreePath &&
     task.branchName === expectedBranch
   ) {
+    const existingWorktreePath = resolveRuntimePath(task.worktreePath)
     await pruneProjectRuntimeLinks({
       projectPath,
-      worktreePath: task.worktreePath,
+      worktreePath: existingWorktreePath,
     })
     await ensureWorkspaceSiblingLinks({
       workspacePath,
       projectPath,
-      worktreePath: task.worktreePath,
+      worktreePath: existingWorktreePath,
     })
     await copyWorktreeIncludeFiles({
       projectPath,
-      worktreePath: task.worktreePath,
+      worktreePath: existingWorktreePath,
       include: worktreeInclude ?? [],
     })
     return {
-      worktreePath: task.worktreePath,
+      worktreePath: existingWorktreePath,
       branchName: expectedBranch,
       baseBranch: task.baseBranch ?? baseBranch,
       created: false,
@@ -222,7 +224,7 @@ export async function cleanupWorktreeForTerminal(
   if (input.mode === 'none') return
   if (input.preserveForPendingPr) return
   if (!input.task.worktreePath) return
-  await input.gitDriver.removeWorktree(input.projectPath, input.task.worktreePath)
+  await input.gitDriver.removeWorktree(input.projectPath, resolveRuntimePath(input.task.worktreePath))
 }
 
 interface EnsureWorkspaceSiblingLinksInput {

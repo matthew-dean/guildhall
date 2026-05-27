@@ -4,7 +4,7 @@ import path from 'node:path'
 import os from 'node:os'
 import { execFile } from 'node:child_process'
 import { promisify } from 'node:util'
-import { bootstrapWorkspace } from '@guildhall/config'
+import { bootstrapWorkspace, slugify } from '@guildhall/config'
 import type { Task, TaskQueue } from '@guildhall/core'
 import { buildServeApp } from '../serve.js'
 
@@ -12,18 +12,29 @@ import { buildServeApp } from '../serve.js'
 // "what's still waiting on a human?" aggregator.
 
 let tmpDir: string
+let remoteDir: string
 let tasksPath: string
 let projectId: string
 const execFileP = promisify(execFile)
 
 beforeEach(async () => {
   tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'guildhall-release-'))
+  remoteDir = await fs.mkdtemp(path.join(os.tmpdir(), 'guildhall-release-remote-'))
   projectId = bootstrapWorkspace(tmpDir, { name: 'Release Test' }).id ?? path.basename(tmpDir)
-  tasksPath = path.join(tmpDir, 'memory', 'TASKS.json')
+  tasksPath = path.join(tmpDir, '.guildhall', 'TASKS.json')
+  await execFileP('git', ['init', '-b', 'main'], { cwd: tmpDir })
+  await execFileP('git', ['config', 'user.email', 'guildhall@example.test'], { cwd: tmpDir })
+  await execFileP('git', ['config', 'user.name', 'Guildhall Test'], { cwd: tmpDir })
+  await execFileP('git', ['add', '.'], { cwd: tmpDir })
+  await execFileP('git', ['commit', '-m', 'baseline'], { cwd: tmpDir })
+  await execFileP('git', ['init', '--bare'], { cwd: remoteDir })
+  await execFileP('git', ['remote', 'add', 'origin', remoteDir], { cwd: tmpDir })
+  await execFileP('git', ['push', '-u', 'origin', 'main'], { cwd: tmpDir })
 })
 
 afterEach(async () => {
   await fs.rm(tmpDir, { recursive: true, force: true })
+  await fs.rm(remoteDir, { recursive: true, force: true })
 })
 
 function makeTask(overrides: Partial<Task>): Task {
@@ -85,12 +96,21 @@ async function approveDesignSystem(app: ReturnType<typeof buildServeApp>['app'])
   await app.fetch(new Request(projectUrl('/api/project/design-system/approve'), { method: 'POST' }))
 }
 
+async function commitAndPush(message: string): Promise<void> {
+  await execFileP('git', ['add', '-f', '--', 'guildhall.yaml', '.guildhall'], { cwd: tmpDir })
+  await execFileP('git', ['commit', '-m', message], { cwd: tmpDir })
+  await execFileP('git', ['push'], { cwd: tmpDir })
+}
+
 describe('GET /api/project/release-readiness', () => {
   it('reports initializationNeeded for an attached-but-uninitialized project shell', async () => {
     const emptyDir = await fs.mkdtemp(path.join(os.tmpdir(), 'guildhall-release-uninitialized-'))
     try {
       const { app } = buildServeApp({ projectPath: emptyDir })
-      const res = await app.fetch(new Request('http://localhost/api/project/release-readiness'))
+      const fallbackId = slugify(path.basename(emptyDir))
+      const url = new URL('http://localhost/api/project/release-readiness')
+      url.searchParams.set('projectId', fallbackId)
+      const res = await app.fetch(new Request(url))
       expect(res.status).toBe(200)
       const body = await res.json() as { initializationNeeded?: boolean }
       expect(body.initializationNeeded).toBe(true)
@@ -99,11 +119,13 @@ describe('GET /api/project/release-readiness', () => {
     }
   })
 
-  it('reports all-clear on an empty workspace', async () => {
+  it('does not call an empty workspace release-ready', async () => {
     const { app } = buildServeApp({ projectPath: tmpDir })
-    const res = await app.fetch(new Request('http://localhost/api/project/release-readiness'))
+    const res = await app.fetch(new Request(projectUrl('/api/project/release-readiness')))
     expect(res.status).toBe(200)
     const body = await res.json() as any
+    expect(body.ready).toBe(false)
+    expect(body.notReadyReason).toBe('No tasks in this project yet.')
     expect(body.totals.blockingCount).toBe(0)
     expect(body.openEscalations).toEqual([])
     expect(body.unapprovedBriefs).toEqual([])
@@ -129,7 +151,8 @@ describe('GET /api/project/release-readiness', () => {
     ])
     const { app } = buildServeApp({ projectPath: tmpDir })
     await approveDesignSystem(app)
-    const res = await app.fetch(new Request('http://localhost/api/project/release-readiness'))
+    await commitAndPush('settle terminal tasks')
+    const res = await app.fetch(new Request(projectUrl('/api/project/release-readiness')))
     const body = await res.json() as any
     expect(body.unapprovedBriefs.map((b: any) => b.id)).toEqual(['task-1'])
     expect(body.unapprovedSpecs.map((b: any) => b.id)).toEqual(['task-2'])
@@ -172,7 +195,8 @@ describe('GET /api/project/release-readiness', () => {
     ])
     const { app } = buildServeApp({ projectPath: tmpDir })
     await approveDesignSystem(app)
-    const res = await app.fetch(new Request('http://localhost/api/project/release-readiness'))
+    await commitAndPush('settle done task')
+    const res = await app.fetch(new Request(projectUrl('/api/project/release-readiness')))
     const body = await res.json() as any
     expect(body.unapprovedBriefs).toEqual([])
     expect(body.totals.blockingCount).toBe(0)
@@ -189,14 +213,15 @@ describe('GET /api/project/release-readiness', () => {
     ])
     const { app } = buildServeApp({ projectPath: tmpDir })
     await approveDesignSystem(app)
-    const res = await app.fetch(new Request('http://localhost/api/project/release-readiness'))
+    await commitAndPush('settle done task')
+    const res = await app.fetch(new Request(projectUrl('/api/project/release-readiness')))
     const body = await res.json() as any
     expect(body.ready).toBe(true)
     expect(body.totals.done).toBe(1)
     expect(body.totals.blockingCount).toBe(0)
   })
 
-  it('blocks release readiness when Guildhall-owned project files are dirty', async () => {
+  it('blocks current work closure when Guildhall-owned project files are dirty', async () => {
     await seed([
       makeTask({
         id: 'task-1',
@@ -205,21 +230,17 @@ describe('GET /api/project/release-readiness', () => {
         completedAt: '2026-05-09T00:00:00Z',
       }),
     ])
-    await execFileP('git', ['init', '-b', 'main'], { cwd: tmpDir })
-    await execFileP('git', ['config', 'user.email', 'guildhall@example.test'], { cwd: tmpDir })
-    await execFileP('git', ['config', 'user.name', 'Guildhall Test'], { cwd: tmpDir })
     const { app } = buildServeApp({ projectPath: tmpDir })
     await approveDesignSystem(app)
-    await execFileP('git', ['add', '.'], { cwd: tmpDir })
-    await execFileP('git', ['commit', '-m', 'baseline'], { cwd: tmpDir })
-    await fs.writeFile(path.join(tmpDir, 'memory', 'release-note.md'), 'unlanded Guildhall note\n', 'utf8')
+    await commitAndPush('approve design system')
+    await fs.writeFile(path.join(tmpDir, '.guildhall', 'release-note.md'), 'unlanded Guildhall note\n', 'utf8')
 
-    const res = await app.fetch(new Request('http://localhost/api/project/release-readiness'))
+    const res = await app.fetch(new Request(projectUrl('/api/project/release-readiness')))
     const body = await res.json() as any
 
     expect(body.ready).toBe(false)
     expect(body.dirtyCheckout.ownedCount).toBe(1)
-    expect(body.dirtyCheckout.files).toEqual(['memory/release-note.md'])
+    expect(body.dirtyCheckout.files).toEqual(['.guildhall/release-note.md'])
     expect(body.totals.dirtyCheckoutBlockingCount).toBe(1)
   })
 
@@ -258,7 +279,7 @@ describe('GET /api/project/release-readiness', () => {
       }),
     ])
     const { app } = buildServeApp({ projectPath: tmpDir })
-    const res = await app.fetch(new Request('http://localhost/api/project/release-readiness'))
+    const res = await app.fetch(new Request(projectUrl('/api/project/release-readiness')))
     const body = await res.json() as any
     expect(body.openEscalations).toHaveLength(1)
     expect(body.openEscalations[0]).toMatchObject({
@@ -288,15 +309,82 @@ describe('GET /api/project/release-readiness', () => {
         authoredBy: 'human',
       }),
     }))
-    let res = await app.fetch(new Request('http://localhost/api/project/release-readiness'))
+    let res = await app.fetch(new Request(projectUrl('/api/project/release-readiness')))
     let body = await res.json() as any
     expect(body.designSystem.drafted).toBe(true)
     expect(body.designSystem.approved).toBe(false)
     expect(body.designSystem.revision).toBe(1)
 
     await app.fetch(new Request(projectUrl('/api/project/design-system/approve'), { method: 'POST' }))
-    res = await app.fetch(new Request('http://localhost/api/project/release-readiness'))
+    res = await app.fetch(new Request(projectUrl('/api/project/release-readiness')))
     body = await res.json() as any
     expect(body.designSystem.approved).toBe(true)
+  })
+
+  it('treats a component-library repo as having its design system in the repo', async () => {
+    await seed([
+      makeTask({
+        id: 'task-1',
+        title: 'Completed component work',
+        status: 'done',
+        completedAt: '2026-05-09T00:00:00Z',
+      }),
+    ])
+    await fs.writeFile(
+      path.join(tmpDir, '.guildhall', 'codebase-map.yaml'),
+      [
+        'version: 1',
+        `generatedAt: ${new Date().toISOString()}`,
+        'project:',
+        `  root: ${tmpDir}`,
+        '  summary: Component library with design-system components.',
+        '  languages: [typescript]',
+        '  packageManagers: [pnpm]',
+        '  primaryFrameworks: []',
+        'files: {}',
+        'entrypoints: []',
+        'areas: []',
+        'abstractions: []',
+        'designSystem:',
+        '  approved: false',
+        '  tokenCounts: { color: 0, spacing: 0, typography: 0, radius: 0, shadow: 0 }',
+        '  tokenSamples: []',
+        '  primitives: []',
+        '  componentFiles:',
+        '    - packages/core/src/components/ui-button/ui-button.tsx',
+        '    - packages/core/src/components/ui-dialog/ui-dialog.tsx',
+        '    - packages/core/src/components/ui-tooltip/ui-tooltip.tsx',
+        '    - packages/core/src/components/ui-tabs/ui-tabs.tsx',
+        '  maturity: absent',
+        '  recommendations: []',
+        'verification: { commands: [] }',
+        '',
+      ].join('\n'),
+      'utf8',
+    )
+    await fs.writeFile(
+      path.join(tmpDir, 'guildhall.yaml'),
+      [
+        'name: Release Test',
+        'tags:',
+        '  - ui-library',
+        '',
+      ].join('\n'),
+      'utf8',
+    )
+    const { app } = buildServeApp({ projectPath: tmpDir })
+    await commitAndPush('settle component library')
+
+    const res = await app.fetch(new Request(projectUrl('/api/project/release-readiness')))
+    const body = await res.json() as any
+
+    expect(body.ready).toBe(true)
+    expect(body.designSystem).toMatchObject({
+      drafted: true,
+      approved: true,
+      source: 'repo',
+      label: 'detected in repo',
+    })
+    expect(body.totals.designSystemBlockingCount).toBe(0)
   })
 })

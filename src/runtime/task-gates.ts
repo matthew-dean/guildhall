@@ -1,6 +1,7 @@
 import fs from 'node:fs'
 import path from 'node:path'
 import type { Task } from '@guildhall/core'
+import { resolveRuntimePath } from './path-utils.js'
 import type { ResolvedConfig } from '@guildhall/config'
 import { detectGateCommands, detectPackageManager, type PackageManager } from './bootstrap.js'
 import { detectBootstrapHypothesis } from './detect-bootstrap.js'
@@ -601,6 +602,14 @@ function validateOrNormalizePnpmCommand(command: string, projectPath: string): s
   const rootScripts = rootPackage?.scripts ?? new Set<string>()
   const packages = readWorkspacePackages(projectPath)
 
+  const cdCommand = /^cd\s+(\S+)\s*&&\s*(.+)$/i.exec(normalized)
+  if (cdCommand) {
+    const [, relDir, rest] = cdCommand
+    const targetDir = path.resolve(projectPath, relDir!)
+    const rewritten = validateOrNormalizePnpmCommand(rest!, targetDir)
+    return rewritten ? normalizeCommand(`cd ${relDir} && ${rewritten}`) : null
+  }
+
   const dirCommand = /^pnpm\s+--dir\s+(\S+)\s+([a-z0-9:_-]+)(.*)$/i.exec(normalized)
   if (dirCommand) {
     const [, relDir, script, rest = ''] = dirCommand
@@ -652,6 +661,17 @@ function validateOrNormalizePnpmCommand(command: string, projectPath: string): s
       return normalizeCommand(`pnpm --dir ${relDir} ${script!}${rest}`)
     }
     if (script && /^(?:tsc|tsgo|vitest|jest|playwright|eslint|biome)$/i.test(script)) {
+      if (
+        /^(?:tsc|tsgo)$/i.test(script) &&
+        !fs.existsSync(path.join(projectPath, 'tsconfig.json'))
+      ) {
+        const tsconfigOwners = packages.filter((pkg) =>
+          fs.existsSync(path.join(pkg.dir, 'tsconfig.json')),
+        )
+        if (tsconfigOwners.length === 1) {
+          return normalizeCommand(`pnpm --dir ${tsconfigOwners[0]!.relativeDir} exec ${script}${rest}`)
+        }
+      }
       return normalizeCommand(`pnpm exec ${script}${rest}`)
     }
     return null
@@ -684,6 +704,17 @@ function validateOrNormalizePnpmCommand(command: string, projectPath: string): s
       return normalizeCommand(`pnpm --dir ${relDir} ${script!}${rest}`)
     }
     if (script && /^(?:tsc|tsgo|vitest|jest|playwright|eslint|biome)$/i.test(script)) {
+      if (
+        /^(?:tsc|tsgo)$/i.test(script) &&
+        !fs.existsSync(path.join(projectPath, 'tsconfig.json'))
+      ) {
+        const tsconfigOwners = packages.filter((pkg) =>
+          fs.existsSync(path.join(pkg.dir, 'tsconfig.json')),
+        )
+        if (tsconfigOwners.length === 1) {
+          return normalizeCommand(`pnpm --dir ${tsconfigOwners[0]!.relativeDir} exec ${script}${rest}`)
+        }
+      }
       return normalizeCommand(`pnpm exec ${script}${rest}`)
     }
     return null
@@ -735,6 +766,91 @@ function deriveAutomatedAcceptanceCommands(
     buckets.set(kind, preferSpecificCommands(commands))
   }
   return buckets
+}
+
+function commandEvidenceFromRecentVerifiedWork(entry: string): { command: string; passed: boolean } | null {
+  const match = entry.trim().match(/^Ran bash command\s+(.+?)\s+\[(PASS|FAIL)\b[^\]]*\]/i)
+  if (!match) return null
+  return {
+    command: normalizeCommand(match[1] ?? ''),
+    passed: /^pass$/i.test(match[2] ?? ''),
+  }
+}
+
+function normalizeCriterionCommand(
+  command: string | undefined,
+  projectPath: string,
+): string | null {
+  if (typeof command !== 'string' || command.trim().length === 0) return null
+  return validateOrNormalizePnpmCommand(command, projectPath)
+}
+
+export function normalizeAutomatedAcceptanceCriterionCommands(input: {
+  task: Pick<Task, 'projectPath' | 'acceptanceCriteria'>
+  workspaceProjectPath: string
+}): boolean {
+  const taskProjectPath = resolveEffectiveTaskProjectPath(
+    input.task,
+    input.workspaceProjectPath,
+  )
+  let changed = false
+  for (const criterion of input.task.acceptanceCriteria ?? []) {
+    if (criterion.verifiedBy !== 'automated') continue
+    const normalized = normalizeCriterionCommand(criterion.command, taskProjectPath)
+    if (!normalized || normalized === criterion.command) continue
+    criterion.command = normalized
+    changed = true
+  }
+  return changed
+}
+
+export function reconcileAutomatedAcceptanceCommandsFromVerifiedWork(input: {
+  task: Pick<Task, 'projectPath' | 'acceptanceCriteria'>
+  workspaceProjectPath: string
+  recentVerifiedWork: readonly string[] | undefined
+}): boolean {
+  const taskProjectPath = resolveEffectiveTaskProjectPath(
+    input.task,
+    input.workspaceProjectPath,
+  )
+  const passedCommands = (input.recentVerifiedWork ?? [])
+    .map(commandEvidenceFromRecentVerifiedWork)
+    .filter((entry): entry is { command: string; passed: boolean } => Boolean(entry?.command))
+    .filter((entry) => entry.passed)
+    .map((entry) => normalizeCriterionCommand(entry.command, taskProjectPath))
+    .filter((command): command is string => Boolean(command))
+
+  if (passedCommands.length === 0) return false
+
+  let changed = normalizeAutomatedAcceptanceCriterionCommands(input)
+  const criteriaByKind = new Map<GateCommandKind, typeof input.task.acceptanceCriteria>()
+  for (const criterion of input.task.acceptanceCriteria ?? []) {
+    if (criterion.verifiedBy !== 'automated') continue
+    const normalized = normalizeCriterionCommand(criterion.command, taskProjectPath)
+    if (!normalized) continue
+    const kind = classifyGateCommand(normalized)
+    criteriaByKind.set(kind, [...(criteriaByKind.get(kind) ?? []), criterion])
+  }
+
+  const passedByKind = new Map<GateCommandKind, string[]>()
+  for (const command of passedCommands) {
+    const kind = classifyGateCommand(command)
+    const existing = passedByKind.get(kind) ?? []
+    if (!existing.includes(command)) existing.push(command)
+    passedByKind.set(kind, existing)
+  }
+
+  for (const [kind, criteria] of criteriaByKind) {
+    const candidates = passedByKind.get(kind) ?? []
+    if (criteria.length !== 1 || candidates.length !== 1) continue
+    const criterion = criteria[0]!
+    const learned = candidates[0]!
+    if (criterion.command === learned) continue
+    criterion.command = learned
+    changed = true
+  }
+
+  return changed
 }
 
 function mergeAcceptanceAndProjectGates(
@@ -884,9 +1000,12 @@ export function resolveEffectiveTaskProjectPath(
   workspaceProjectPath: string,
 ): string {
   if (typeof task.projectPath === 'string' && task.projectPath.trim().length > 0) {
-    return path.resolve(task.projectPath)
+    const taskProjectPath = task.projectPath.trim()
+    return path.isAbsolute(taskProjectPath)
+      ? resolveRuntimePath(taskProjectPath)
+      : resolveRuntimePath(path.join(workspaceProjectPath, taskProjectPath))
   }
-  return path.resolve(workspaceProjectPath)
+  return resolveRuntimePath(workspaceProjectPath)
 }
 
 export function resolveEffectiveTaskBootstrapBlock(input: {
@@ -1069,12 +1188,16 @@ export function renderTaskScopedGateInstructions(input: {
 
 export function renderTaskScopedVerificationInstructions(input: {
   projectPath: string
+  verificationCwd?: string
   successGates: readonly string[] | undefined
 }): string {
+  const verificationCwd = input.verificationCwd ?? input.projectPath
   const lines = [
     '## Authoritative verification commands',
     '',
-    `When you verify work for this task, run commands against \`${input.projectPath}\`. This task path is authoritative even when the outer workspace root differs.`,
+    `When you verify work for this task, use the command list below from the working directory Guildhall names here. The task project path is \`${input.projectPath}\`, but package-scoped commands may need to run from a parent workspace/worktree root.`,
+    '',
+    `Working directory: \`${verificationCwd}\``,
   ]
 
   if (input.successGates === undefined) {
@@ -1098,7 +1221,7 @@ export function renderTaskScopedVerificationInstructions(input: {
     'Use these commands as the authoritative verification commands for this task:',
     ...input.successGates.map((gate) => `- \`${gate}\``),
     '',
-    'If you call `shell` for verification and your drafted command differs, Guildhall will reconcile it back to this authoritative list.',
+    'If you call `shell` for verification and your drafted command differs, Guildhall will reconcile it back to this authoritative list and working directory.',
   )
   return lines.join('\n')
 }

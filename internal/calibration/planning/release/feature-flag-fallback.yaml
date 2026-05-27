@@ -1,0 +1,20 @@
+id: release-feature-flag-fallback-plan
+title: Feature flag fallback review plan
+task:
+  id: task-release-feature-flag-fallback
+  title: Launch new checkout behind a feature flag
+  description: Roll out a new production checkout flow gradually with a canary flag, fallback path, and rollback instructions.
+  priority: high
+  changedFiles:
+    - src/runtime/checkout-rollout.ts
+expected:
+  requiredLanes:
+    - rollout_safety
+    - release_risk
+    - ux_comprehension
+    - test_adequacy
+  maxReviewerAgents: 6
+labelGovernance:
+  labeledBy: review-calibration-seed
+  labeledAt: '2026-05-25'
+  reviewStatus: seed

@@ -2,7 +2,8 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest'
 import fs from 'node:fs/promises'
 import path from 'node:path'
 import os from 'node:os'
-import { bootstrapWorkspace, readWorkspaceConfig } from '@guildhall/config'
+import { bootstrapWorkspace, readWorkspaceConfig, slugify } from '@guildhall/config'
+import { getProjectStateDir } from '@guildhall/sessions'
 import { buildServeApp } from '../serve.js'
 import { createMetaIntakeTask, META_INTAKE_TASK_ID } from '../meta-intake.js'
 import type { TaskQueue } from '@guildhall/core'
@@ -17,6 +18,7 @@ import type { TaskQueue } from '@guildhall/core'
 // ---------------------------------------------------------------------------
 
 let tmpDir: string
+let dataDir: string
 let memoryDir: string
 let projectId: string
 
@@ -39,11 +41,15 @@ async function writeDraftSpec(spec: string): Promise<void> {
 
 beforeEach(async () => {
   tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'guildhall-serve-meta-'))
+  dataDir = path.join(os.tmpdir(), `guildhall-data-${path.basename(tmpDir)}`)
+  process.env.GUILDHALL_DATA_DIR = dataDir
   projectId = bootstrapWorkspace(tmpDir, { name: 'Meta Serve Test' }).id ?? path.basename(tmpDir)
-  memoryDir = path.join(tmpDir, 'memory')
+  memoryDir = getProjectStateDir(tmpDir)
 })
 
 afterEach(async () => {
+  delete process.env.GUILDHALL_DATA_DIR
+  await fs.rm(dataDir, { recursive: true, force: true })
   await fs.rm(tmpDir, { recursive: true, force: true })
 })
 
@@ -76,12 +82,18 @@ function projectUrl(route: string): string {
   return url.toString()
 }
 
+function uninitializedProjectUrl(route: string, projectPath: string): string {
+  const url = new URL(`http://localhost${route}`)
+  url.searchParams.set('projectId', slugify(path.basename(projectPath)))
+  return url.toString()
+}
+
 describe('GET /api/project/meta-intake/draft', () => {
   it('returns an uninitialized status before setup has created guildhall.yaml', async () => {
     const uninitializedDir = await fs.mkdtemp(path.join(os.tmpdir(), 'guildhall-meta-uninitialized-'))
     try {
       const { app } = buildServeApp({ projectPath: uninitializedDir })
-      const res = await app.fetch(new Request('http://localhost/api/project/meta-intake/draft'))
+      const res = await app.fetch(new Request(uninitializedProjectUrl('/api/project/meta-intake/draft', uninitializedDir)))
       expect(res.status).toBe(200)
       const body = await res.json() as Record<string, any>
       expect(body).toMatchObject({
@@ -97,7 +109,7 @@ describe('GET /api/project/meta-intake/draft', () => {
 
   it('returns no-task before any meta-intake has been seeded', async () => {
     const { app } = buildServeApp({ projectPath: tmpDir })
-    const res = await app.fetch(new Request('http://localhost/api/project/meta-intake/draft'))
+    const res = await app.fetch(new Request(projectUrl('/api/project/meta-intake/draft')))
     expect(res.status).toBe(200)
     const body = await res.json() as Record<string, any>
     expect(body.taskExists).toBe(false)
@@ -108,7 +120,7 @@ describe('GET /api/project/meta-intake/draft', () => {
   it('returns in-progress when the task exists but has no spec yet', async () => {
     await createMetaIntakeTask({ memoryDir, projectPath: tmpDir })
     const { app } = buildServeApp({ projectPath: tmpDir })
-    const res = await app.fetch(new Request('http://localhost/api/project/meta-intake/draft'))
+    const res = await app.fetch(new Request(projectUrl('/api/project/meta-intake/draft')))
     const body = await res.json() as Record<string, any>
     expect(body.taskExists).toBe(true)
     expect(body.specReady).toBe(false)
@@ -120,7 +132,7 @@ describe('GET /api/project/meta-intake/draft', () => {
     await createMetaIntakeTask({ memoryDir, projectPath: tmpDir })
     await writeDraftSpec(SAMPLE_SPEC)
     const { app } = buildServeApp({ projectPath: tmpDir })
-    const res = await app.fetch(new Request('http://localhost/api/project/meta-intake/draft'))
+    const res = await app.fetch(new Request(projectUrl('/api/project/meta-intake/draft')))
     const body = await res.json() as Record<string, any>
     expect(body.status).toBe('draft-ready')
     expect(body.specReady).toBe(true)
@@ -137,7 +149,7 @@ describe('GET /api/project/meta-intake/draft', () => {
     await createMetaIntakeTask({ memoryDir, projectPath: tmpDir })
     await writeDraftSpec('just a narrative, no YAML here')
     const { app } = buildServeApp({ projectPath: tmpDir })
-    const res = await app.fetch(new Request('http://localhost/api/project/meta-intake/draft'))
+    const res = await app.fetch(new Request(projectUrl('/api/project/meta-intake/draft')))
     const body = await res.json() as Record<string, any>
     expect(body.status).toBe('spec-but-no-fence')
     expect(body.specReady).toBe(false)

@@ -8,6 +8,8 @@
 [![node](https://img.shields.io/node/v/guildhall.svg)](https://nodejs.org)
 [![license](https://img.shields.io/badge/license-FLL%20v1.2-blue.svg)](./LICENSE)
 
+[Documentation](https://guildhall.cc/)
+
 </div>
 
 ---
@@ -96,7 +98,7 @@ current GitHub Release and verifies it against the matching `.sha256` asset.
 To install a specific release instead:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/matthew-dean/guildhall/main/scripts/install.sh | GUILDHALL_VERSION=0.7.0 sh
+curl -fsSL https://raw.githubusercontent.com/matthew-dean/guildhall/main/scripts/install.sh | GUILDHALL_VERSION=0.8.0 sh
 ```
 
 Also supported:
@@ -188,6 +190,7 @@ For the full CLI reference, see [docs/cli/reference.md](./docs/cli/reference.md)
 
 ## Learn more
 
+- [Documentation](https://guildhall.cc/)
 - [Quick start](./docs/guide/quick-start.md)
 - [How Guildhall builds](./docs/guide/how-guildhall-builds.md)
 - [Introduction](./docs/guide/introduction.md)

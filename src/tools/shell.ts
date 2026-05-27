@@ -52,6 +52,34 @@ function resolveShellCwd(inputCwd: string | undefined, fallbackCwd: string | und
   return cwd
 }
 
+function stripShellCdQuotes(value: string): string {
+  const trimmed = value.trim()
+  if (
+    (trimmed.startsWith('"') && trimmed.endsWith('"')) ||
+    (trimmed.startsWith("'") && trimmed.endsWith("'"))
+  ) {
+    return trimmed.slice(1, -1)
+  }
+  return trimmed
+}
+
+function cwdFromLeadingCdChain(command: string, baseCwd: string): string | null {
+  let rest = command.trim()
+  let cwd = path.resolve(baseCwd)
+  let moved = false
+  const cdPrefix = /^cd\s+("[^"]+"|'[^']+'|[^&;]+?)\s*&&\s*/i
+  while (true) {
+    const match = cdPrefix.exec(rest)
+    if (!match) break
+    const target = stripShellCdQuotes(match[1] ?? '')
+    if (!target) break
+    cwd = path.resolve(cwd, target)
+    rest = rest.slice(match[0].length).trimStart()
+    moved = true
+  }
+  return moved ? cwd : null
+}
+
 function reconcileShellCwdWithTaskScope(
   requestedCwd: string,
   metadata: Record<string, unknown> | undefined,
@@ -239,6 +267,14 @@ function directFileWriteGuardMessage(metadata: Record<string, unknown> | undefin
   )
 }
 
+function normalizePnpmScopedScriptCommand(command: string): string {
+  return command.replace(
+    /^pnpm\s+(--dir|-C)\s+(\S+)\s+(test)(\s.*)?$/i,
+    (_match, flag: string, dir: string, script: string, rest: string | undefined) =>
+      `pnpm ${flag} ${dir} run ${script}${rest ?? ''}`,
+  )
+}
+
 function normalizeExecErrorOutput(err: {
   stdout?: string | Buffer
   stderr?: string | Buffer
@@ -418,8 +454,16 @@ export const shellTool = defineTool({
   isReadOnly: () => false,
   execute: async (input, ctx) => {
     const authoritativeCommands = parseAuthoritativeCommands(ctx.metadata)
+    const requestedCwd = resolveShellCwd(input.cwd, ctx.cwd)
+    const verificationCwd = String(ctx.metadata?.['current_task_verification_cwd'] ?? '').trim()
+    const authorityPreferredCwd =
+      !input.cwd && verificationCwd && authoritativeCommands && authoritativeCommands.length > 0
+        ? verificationCwd
+        : requestedCwd
+    const cdAdjustedCwd = cwdFromLeadingCdChain(input.command, authorityPreferredCwd) ?? authorityPreferredCwd
     const reconciled = reconcileShellCommandWithAuthority(input.command, authoritativeCommands)
     const requestedKind = classifyGateCommand(input.command)
+    const executableCommand = normalizePnpmScopedScriptCommand(reconciled.command)
     if (
       authoritativeCommands &&
       authoritativeCommands.length > 0 &&
@@ -443,7 +487,7 @@ export const shellTool = defineTool({
         } as unknown as Record<string, unknown>,
       }
     }
-    if (hasTaskScopedFileMutationGuard(ctx.metadata) && looksLikeDirectFileWrite(reconciled.command)) {
+    if (hasTaskScopedFileMutationGuard(ctx.metadata) && looksLikeDirectFileWrite(executableCommand)) {
       return {
         output: directFileWriteGuardMessage(ctx.metadata),
         is_error: true,
@@ -451,17 +495,16 @@ export const shellTool = defineTool({
           success: false,
           exitCode: 2,
           requestedCommand: input.command,
-          executedCommand: reconciled.command,
+          executedCommand: executableCommand,
           usedAuthoritativeCommand: reconciled.usedAuthority,
           blockedDirectFileWrite: true,
         } as unknown as Record<string, unknown>,
       }
     }
-    const requestedCwd = resolveShellCwd(input.cwd, ctx.cwd)
-    const effectiveCwd = reconcileShellCwdWithTaskScope(requestedCwd, ctx.metadata)
+    const effectiveCwd = reconcileShellCwdWithTaskScope(cdAdjustedCwd, ctx.metadata)
     const normalizedInput: ShellInput = {
       ...input,
-      command: reconciled.command,
+      command: executableCommand,
       cwd: effectiveCwd,
       env: {
         ...(input.env ?? {}),
@@ -471,6 +514,7 @@ export const shellTool = defineTool({
       },
     }
     const result = await runShell(normalizedInput)
+    const orientationLine = `Working directory: ${effectiveCwd}`
     const statusLine = result.success
       ? `Shell command succeeded (exit ${result.exitCode}). Treat this command as PASSED; if it was required verification, record it and continue the handoff. Do not edit warning-only output unless the task explicitly requires warning-free output.`
       : result.timedOut
@@ -478,15 +522,16 @@ export const shellTool = defineTool({
         : `Shell command failed (exit ${result.exitCode}).`
     return {
       output: result.output.trim().length > 0
-        ? `${statusLine}\n${result.output}`
-        : statusLine,
+        ? `${statusLine}\n${orientationLine}\n${result.output}`
+        : `${statusLine}\n${orientationLine}`,
       is_error: !result.success,
       metadata: {
         ...result,
         requestedCommand: input.command,
-        executedCommand: reconciled.command,
+        executedCommand: executableCommand,
         usedAuthoritativeCommand: reconciled.usedAuthority,
         requestedCwd,
+        cdAdjustedCwd,
         executedCwd: effectiveCwd,
       } as unknown as Record<string, unknown>,
     }

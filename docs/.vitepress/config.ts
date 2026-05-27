@@ -5,9 +5,11 @@ import { spawnSync } from 'node:child_process'
 const pkg = JSON.parse(readFileSync(new URL('../../package.json', import.meta.url), 'utf8')) as { version: string }
 const currentVersion = pkg.version
 const stableVersion = resolveStableVersion(currentVersion)
+const nextVersion = resolveNextMinorVersion(stableVersion)
 const currentBase = ''
 const stableBase = `/versions/${stableVersion}`
 const nextBase = '/next'
+const docsBase = normalizeDocsBase(process.env.GUILDHALL_DOCS_BASE ?? '/')
 const archiveVersionItems = listVersionDirs()
   .filter((version) => version !== stableVersion)
   .map((version) => ({ text: `v${version}`, link: `/versions/${version}/guide/quick-start` }))
@@ -45,6 +47,9 @@ function resolveStableVersion(version: string): string {
       .filter((name) => /^\d+\.\d+\.\d+(-[\w.]+)?$/.test(name))
       .sort((a, b) => b.localeCompare(a, undefined, { numeric: true }))
       [0]
+    if (latestDir && !version.includes('-') && version.localeCompare(latestDir, undefined, { numeric: true }) >= 0) {
+      return version
+    }
     if (latestDir) return latestDir
   }
   const latest = git(['tag', '--sort=-version:refname'])
@@ -53,12 +58,31 @@ function resolveStableVersion(version: string): string {
   return latest ? latest.slice(1) : version
 }
 
+function resolveNextMinorVersion(version: string): string {
+  const match = version.match(/^(\d+)\.(\d+)\.(\d+)(-[\w.]+)?$/)
+  if (!match) return 'Next'
+  const major = Number(match[1])
+  const minor = Number(match[2])
+  if (!Number.isFinite(major) || !Number.isFinite(minor)) return 'Next'
+  return `${major}.${minor + 1}.0`
+}
+
 function listVersionDirs(): string[] {
   const versionDir = new URL('../versions', import.meta.url)
   if (!existsSync(versionDir)) return []
   return readdirSync(versionDir)
     .filter((name) => /^\d+\.\d+\.\d+(-[\w.]+)?$/.test(name))
     .sort((a, b) => b.localeCompare(a, undefined, { numeric: true }))
+}
+
+function normalizeDocsBase(value: string): string {
+  const trimmed = value.trim()
+  if (!trimmed || trimmed === '/') return '/'
+  return `/${trimmed.replace(/^\/+|\/+$/g, '')}/`
+}
+
+function withDocsBase(path: string): string {
+  return `${docsBase}${path.replace(/^\/+/, '')}`
 }
 
 const guideStartItems = [
@@ -75,9 +99,11 @@ const guideStartItems = [
 const guideWorksItems = [
   { text: 'How Guildhall works', link: '/guide/how-guildhall-works' },
   { text: 'How Guildhall builds', link: '/guide/how-guildhall-builds' },
+  { text: 'Research-backed design', link: '/guide/research-backed-design' },
   { text: 'Agent context', link: '/guide/agent-context' },
   { text: 'Corpus Map', link: '/guide/corpus-map' },
   { text: 'Memory, learning, and recovery', link: '/guide/memory-and-recovery' },
+  { text: 'External agents and MCP', link: '/guide/external-agents' },
 ]
 
 const guideOperateItems = [
@@ -88,7 +114,10 @@ const guideOperateItems = [
 ]
 
 const guideTaskItems = [
+  { text: 'Pressure-Test Intake', link: '/guide/pressure-test-intake' },
   { text: 'Task lifecycle', link: '/guide/task-lifecycle' },
+  { text: 'Cleaner project notes', link: '/guide/task-state-boundary' },
+  { text: 'Git Story Closure', link: '/guide/git-story-closure' },
 ]
 
 const guideSpecItems = [
@@ -308,6 +337,7 @@ const leverSidebarSections = [
       { text: 'completion_approval', link: '/levers/completion-approval' },
       { text: 'reviewer_mode', link: '/levers/reviewer-mode' },
       { text: 'reviewer_fanout_policy', link: '/levers/reviewer-fanout-policy' },
+      { text: 'review_effort', link: '/levers/review-effort' },
       { text: 'max_revisions', link: '/levers/max-revisions' },
       { text: 'escalation_on_ambiguity', link: '/levers/escalation-on-ambiguity' },
       { text: 'crash_recovery_default', link: '/levers/crash-recovery-default' },
@@ -320,6 +350,7 @@ const releaseSidebarSections = [
     text: 'Releases',
     items: [
       { text: 'Overview', link: '/releases/' },
+      { text: '0.8.0', link: '/releases/0.8.0' },
       { text: '0.7.0', link: '/releases/0.7.0' },
       { text: '0.6.0', link: '/releases/0.6.0' },
       { text: '0.5.1', link: '/releases/0.5.1' },
@@ -331,7 +362,7 @@ const releaseSidebarSections = [
 
 const stableReleaseSidebarSections = releaseSidebarSections.map((section) => ({
   ...section,
-  items: section.items.filter((item) => item.link !== '/releases/0.7.0'),
+  items: section.items.filter((item) => item.link !== '/releases/0.8.0' && item.link !== '/releases/0.7.0'),
 }))
 
 function guideSectionsForVersion(prefix: string, options: { includeNextOnlyPages?: boolean } = {}): SidebarSection[] {
@@ -397,7 +428,7 @@ export default defineConfig({
   description: 'Local service for unattended software work with visible state, reviewer guardrails, and inspectable transcripts.',
   cleanUrls: true,
   lastUpdated: true,
-  base: '/guildhall/',
+  base: docsBase,
   ignoreDeadLinks: [
     // VitePress normalizes `/next/guide/` to this internal target during
     // dead-link checks even though `docs/next/guide/index.md` exists.
@@ -424,7 +455,11 @@ export default defineConfig({
   },
   appearance: 'dark',
   head: [
-    ['link', { rel: 'icon', href: '/guildhall/favicon.svg' }],
+    ['link', { rel: 'icon', type: 'image/png', sizes: '32x32', href: withDocsBase('icons/genfavicon-32.png') }],
+    ['link', { rel: 'icon', type: 'image/png', sizes: '16x16', href: withDocsBase('icons/genfavicon-16.png') }],
+    ['link', { rel: 'icon', type: 'image/x-icon', href: withDocsBase('favicon.ico'), sizes: 'any' }],
+    ['link', { rel: 'apple-touch-icon', sizes: '180x180', href: withDocsBase('apple-touch-icon.png') }],
+    ['link', { rel: 'manifest', href: withDocsBase('site.webmanifest') }],
     ['meta', { name: 'theme-color', content: '#141418' }],
   ],
   themeConfig: {
@@ -436,7 +471,7 @@ export default defineConfig({
         text: 'Version',
         items: [
           { text: `Current (v${stableVersion})`, link: '/guide/introduction' },
-          { text: 'Next', link: `${nextBase}/guide/` },
+          { text: `Next (v${nextVersion})`, link: `${nextBase}/guide/` },
           ...archiveVersionItems,
         ],
       },

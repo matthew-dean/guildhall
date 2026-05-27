@@ -28,9 +28,19 @@ export interface LaunchAgentSpec {
   programArguments: string[]
   stdoutPath: string
   stderrPath: string
+  environmentVariables: Record<string, string>
   keepAlive: boolean
   runAtLoad: boolean
 }
+
+export const DEFAULT_LAUNCH_AGENT_PATH = [
+  '/opt/homebrew/bin',
+  '/usr/local/bin',
+  '/usr/bin',
+  '/bin',
+  '/usr/sbin',
+  '/sbin',
+].join(':')
 
 export interface MacosPackageManifest {
   version: string
@@ -83,6 +93,9 @@ export function buildLaunchAgentSpec(
     ],
     stdoutPath: join(paths.logsDir, 'service.stdout.log'),
     stderrPath: join(paths.logsDir, 'service.stderr.log'),
+    environmentVariables: {
+      PATH: DEFAULT_LAUNCH_AGENT_PATH,
+    },
     keepAlive: true,
     runAtLoad: true,
   }
@@ -109,6 +122,13 @@ export function renderLaunchAgentPlist(spec: LaunchAgentSpec): string {
     `  <string>${xmlEscape(spec.stdoutPath)}</string>`,
     '  <key>StandardErrorPath</key>',
     `  <string>${xmlEscape(spec.stderrPath)}</string>`,
+    '  <key>EnvironmentVariables</key>',
+    '  <dict>',
+    ...Object.entries(spec.environmentVariables).flatMap(([key, value]) => [
+      `    <key>${xmlEscape(key)}</key>`,
+      `    <string>${xmlEscape(value)}</string>`,
+    ]),
+    '  </dict>',
     '  <key>KeepAlive</key>',
     spec.keepAlive ? '  <true/>' : '  <false/>',
     '  <key>RunAtLoad</key>',

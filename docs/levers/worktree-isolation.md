@@ -19,12 +19,12 @@ Whether workers run in their own git worktree.
 |---|---|
 | `none` | All workers share the main working tree. Only viable when `concurrent_task_dispatch` is `serial`. |
 | `per_task` | One isolated task workspace per task. Created when work begins and kept until the work has actually landed or been intentionally cleaned up. |
-| `per_attempt` | Fresh worktree per revision attempt — an advanced/internal escape hatch, not the main recommended product mode. |
+| `per_attempt` | Fresh worktree per revision attempt. This is a niche escape hatch, not the main recommended mode. |
 
 ## Worktree paths
 
-New isolated task workspaces should live under Guildhall's user-local runtime
-root instead of inside the repo:
+New isolated task workspaces live under Guildhall's user-local data root
+instead of inside the repo:
 
 ```text
 ~/.guildhall/worktrees/<project-id>/<task-id>
@@ -40,4 +40,4 @@ That keeps runtime sandboxes out of normal repo status and editor trees.
 ## When to change it
 
 `per_task` is the normal recommended mode once you want isolation. `per_attempt`
-is intentionally more niche and should not be the main user-facing story.
+is intentionally more niche.

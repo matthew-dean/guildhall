@@ -67,7 +67,7 @@ The installer downloads the latest macOS package from GitHub Releases and
 checks `guildhall-macos.tar.gz.sha256` before installing. To pin a release:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/matthew-dean/guildhall/main/scripts/install.sh | GUILDHALL_VERSION=0.7.0 sh
+curl -fsSL https://raw.githubusercontent.com/matthew-dean/guildhall/main/scripts/install.sh | GUILDHALL_VERSION=0.8.0 sh
 ```
 
 ## Open one project

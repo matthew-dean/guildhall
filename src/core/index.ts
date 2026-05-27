@@ -1,4 +1,6 @@
 export * from './task.js'
+export * from './task-sizing.js'
+export * from './task-runtime.js'
 export * from './goal.js'
 export * from './gate.js'
 export * from './design-system.js'

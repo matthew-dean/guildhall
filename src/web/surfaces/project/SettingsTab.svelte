@@ -18,6 +18,7 @@
   import Byline from '../../lib/Byline.svelte'
   import LogViewer from '../../lib/LogViewer.svelte'
   import DefinitionList from '../../lib/DefinitionList.svelte'
+  import Icon from '../../lib/Icon.svelte'
   import FactsTab from './FactsTab.svelte'
   import ProjectProvidersSection from './ProjectProvidersSection.svelte'
   import Help from '../../lib/Help.svelte'
@@ -38,7 +39,7 @@
     { id: 'providers', label: 'Providers' },
     { id: 'coordinators', label: 'Coordinators' },
     { id: 'facts', label: 'Facts' },
-    { id: 'learning', label: 'Memory' },
+    { id: 'learning', label: 'Guidance' },
     { id: 'advanced', label: 'Advanced' },
   ]
 
@@ -69,6 +70,12 @@
     kind?: string
     summary?: string
     ref?: string
+    links?: Array<{
+      kind?: string
+      label?: string
+      href?: string
+      localHistoryRef?: string
+    }>
   }
   interface SuggestedLearning {
     id: string
@@ -97,22 +104,63 @@
     triggerKeywords?: string[]
     requiresApproval?: boolean
   }
+  interface WorkspaceImportLearning {
+    approvedRuns?: number
+    dismissedRuns?: number
+    averageTaskAcceptanceRatio?: number | null
+    lastTaskAcceptanceRatio?: number | null
+    updatedAt?: string | null
+  }
+  interface ProjectContextSummary {
+    projectBrief?: { present?: boolean; nonEmptyLines?: number }
+    projectNotes?: { present?: boolean; nonEmptyLines?: number }
+    decisions?: { present?: boolean; nonEmptyLines?: number }
+    workspaceGoals?: { present?: boolean; goalCount?: number }
+  }
   interface LearningSnapshot {
-    project: { suggestedLearnings: SuggestedLearning[] } | null
+    project: { suggestedLearnings: SuggestedLearning[]; workspaceImport?: WorkspaceImportLearning } | null
     user: { suggestedLearnings: SuggestedLearning[] } | null
-    effective: { productSuggestions: ProductSuggestion[] } | null
+    effective: { productSuggestions: ProductSuggestion[]; workspaceImport?: WorkspaceImportLearning } | null
     projectSkillProposals: ProjectSkillProposal[]
+    projectContext?: ProjectContextSummary | null
   }
   interface CodebaseMapStatus {
     configured: boolean
     generatedAt: string | null
     stale: { stale: true; at: string; reason: string; error: string } | null
     counts: { files: number; areas: number; abstractions: number }
+    project?: {
+      summary: string
+      languages: string[]
+      packageManagers: string[]
+      primaryFrameworks: string[]
+    } | null
+    entrypoints?: Array<{ kind: string; path: string; summary: string }>
+    areas?: Array<{
+      id: string
+      title: string
+      summary: string
+      owns: string[]
+      canonicalFiles: Array<{ path: string; symbols: string[]; summary: string }>
+      conventions: string[]
+      tests: string[]
+    }>
+    abstractions?: Array<{
+      id: string
+      title: string
+      kind: string
+      canonicalPath: string
+      useWhen: string[]
+      avoid: string[]
+      related: string[]
+    }>
     designSystem?: {
       maturity: 'absent' | 'thin' | 'emerging' | 'established'
       approved: boolean
       tokenCounts: { color: number; spacing: number; typography: number; radius: number; shadow: number }
       primitives: number
+      tokenSamples?: string[]
+      componentFiles?: string[]
       recommendations: string[]
     } | null
     semantic?: {
@@ -120,6 +168,10 @@
       corpusKind: 'documentation' | 'code' | 'mixed' | 'unknown'
       confidence: number
       projectPurpose: string
+      currentTruth?: string[]
+      architectureAreas?: Array<{ name: string; purpose: string; canonicalFiles: string[] }>
+      canonicalAbstractions?: Array<{ name: string; purpose: string; canonicalFiles: string[]; reuseRule: string }>
+      gapsOrRisks?: string[]
       readNext: Array<{ path: string; reason: string }>
       workerGuidance: string[]
       needsBroaderRead: boolean
@@ -352,6 +404,7 @@
         user: 'user' in j ? j.user ?? null : null,
         effective: 'effective' in j ? j.effective ?? null : null,
         projectSkillProposals: 'projectSkillProposals' in j ? j.projectSkillProposals ?? [] : [],
+        projectContext: 'projectContext' in j ? j.projectContext ?? null : null,
       }
     } catch (err) {
       learningError = err instanceof Error ? err.message : String(err)
@@ -633,6 +686,7 @@
     pre_rejection_policy: 'Pre-rejection handling',
     rejection_dampening: 'Review strictness',
     remediation_autonomy: 'Recovery autonomy',
+    review_effort: 'Review effort',
     reviewer_fanout_policy: 'Reviewer agreement',
     reviewer_mode: 'Review style',
     runtime_isolation: 'Runtime isolation',
@@ -686,6 +740,7 @@
     prefer_resume: 'Prefer resume',
     requeue_lower_priority: 'Requeue lower priority',
     requeue_with_dampening: 'Requeue with dampening',
+    release_critical: 'Release-critical',
     same_as_global: 'Same as global setting',
     serial: 'Serial',
     soft_penalty_after_2: 'Soft penalty after 2',
@@ -710,6 +765,7 @@
     pre_rejection_policy: ['terminal_shelved', 'requeue_lower_priority', 'requeue_with_dampening'],
     rejection_dampening: ['off', 'soft_penalty_after_2', 'soft_penalty_after_3', 'hard_suppress_after_2', 'hard_suppress_after_3'],
     remediation_autonomy: ['auto', 'confirm_destructive', 'confirm_all', 'pause_all_on_issue'],
+    review_effort: ['lean', 'balanced', 'thorough', 'release_critical'],
     reviewer_fanout_policy: ['strict', 'coordinator_adjudicates_on_conflict', 'advisory', 'majority'],
     reviewer_mode: ['llm_only', 'deterministic_only', 'llm_with_deterministic_fallback'],
     runtime_isolation: ['none', 'slot_allocation'],
@@ -784,6 +840,56 @@
   )
   const skillProposals = $derived(learning?.projectSkillProposals ?? [])
   const productSuggestions = $derived(learning?.effective?.productSuggestions ?? [])
+  const projectContextRows = $derived.by(() => {
+    const rows: Array<{ label: string; value: string; detail: string; href?: string }> = []
+    const context = learning?.projectContext
+    if (context?.projectBrief?.present) {
+      const lines = context.projectBrief.nonEmptyLines ?? 0
+      rows.push({
+        label: 'Project brief',
+        value: lines > 0 ? 'saved' : 'empty',
+        detail: lines > 0
+          ? 'The product direction is saved and available to agents.'
+          : 'A brief file exists, but it does not have useful content yet.',
+        href: '/settings/facts',
+      })
+    }
+    const goalCount = context?.workspaceGoals?.goalCount ?? 0
+    if (context?.workspaceGoals?.present || goalCount > 0) {
+      rows.push({
+        label: 'Workspace goals',
+        value: goalCount > 0 ? `${goalCount} goal${goalCount === 1 ? '' : 's'}` : 'saved',
+        detail: 'Approved intake/workspace goals are available as project context.',
+        href: '/workspace-import',
+      })
+    }
+    const approvedRuns = learning?.project?.workspaceImport?.approvedRuns ?? learning?.effective?.workspaceImport?.approvedRuns ?? 0
+    if (approvedRuns > 0) {
+      rows.push({
+        label: 'Import choices',
+        value: `${approvedRuns} approved`,
+        detail: 'Guildhall remembers that you accepted prior workspace-import shaping choices.',
+        href: '/workspace-import',
+      })
+    }
+    const decisionLines = context?.decisions?.nonEmptyLines ?? 0
+    if (decisionLines > 0) {
+      rows.push({
+        label: 'Decision log',
+        value: `${decisionLines} lines`,
+        detail: 'Past project decisions are saved for agent context.',
+      })
+    }
+    const projectNoteLines = context?.projectNotes?.nonEmptyLines ?? 0
+    if (projectNoteLines > 0) {
+      rows.push({
+        label: 'Project notes',
+        value: `${projectNoteLines} lines`,
+        detail: 'Project-specific notes are saved for agent context.',
+      })
+    }
+    return rows
+  })
   const activeLearningCount = $derived(
     projectLearnings.filter(item => item.status === 'active').length +
       userLearnings.filter(item => item.status === 'active').length +
@@ -926,7 +1032,8 @@
                 tone={bootstrapShellTone}
               />
               {#if !bootstrapReady}
-                <Button variant="secondary" size="sm" onclick={runBootstrap} disabled={bootstrapRunning}>
+                <Button variant="agent" size="sm" onclick={runBootstrap} disabled={bootstrapRunning}>
+                  <Icon name="sparkles" size={14} />
                   {bootstrapRunning ? 'Running…' : 'Run bootstrap'}
                 </Button>
               {/if}
@@ -1062,7 +1169,8 @@
             {/if}
 
             <Row justify="end">
-              <Button onclick={runBootstrap} disabled={bootstrapRunning}>
+              <Button variant="agent" onclick={runBootstrap} disabled={bootstrapRunning}>
+                <Icon name="sparkles" size={14} />
                 {bootstrapRunning ? 'Running…' : 'Re-run bootstrap'}
               </Button>
             </Row>
@@ -1111,8 +1219,8 @@
     {:else if section === 'learning'}
       <SectionHeader
         eyebrow="Settings"
-        title="Memory and habits"
-        description="Review the habits Guildhall wants to reuse. Suggested items stay off until you choose to use them."
+        title="Reusable guidance"
+        description="Project facts and decisions are already saved. This page is for reusable habits, preferences, and playbooks Guildhall should apply again."
         headingTag="h2"
         density="compact"
       >
@@ -1131,19 +1239,51 @@
           <p>Reading project and user learning records…</p>
         </NoticeBand>
       {:else}
+        <FrameCard class="learning-card learning-card-wide context-card">
+          {#snippet header()}
+            <SectionHeader
+              title="Project context Guildhall already has"
+              description="This is durable project context agents can read now. Reusable habits below only appear after Guildhall finds a pattern worth applying again."
+              headingTag="h3"
+              density="dense"
+            />
+          {/snippet}
+          {#if projectContextRows.length === 0}
+            <p class="muted">
+              No durable project context has been saved yet. Use Facts or answer a project check-in question to give Guildhall something concrete to keep.
+            </p>
+          {:else}
+            <div class="context-memory-list">
+              {#each projectContextRows as row (row.label)}
+                <div class="context-memory-row">
+                  <div>
+                    <strong>{row.label}</strong>
+                    <span>{row.detail}</span>
+                  </div>
+                  <div class="context-memory-meta">
+                    <StatusPill label={row.value} tone={row.value === 'empty' ? 'warn' : 'ok'} density="dense" />
+                    {#if row.href}
+                      <a class="learning-evidence-link" href={projectActionHref(row.href)}>Open</a>
+                    {/if}
+                  </div>
+                </div>
+              {/each}
+            </div>
+          {/if}
+        </FrameCard>
         <div class="learning-grid">
           <FrameCard class="learning-card">
             {#snippet header()}
               <SectionHeader
-                title="This project"
-                description="Repo-specific habits, commands, and facts. These do not affect other projects."
+                title="Project habits"
+                description="Reusable repo-specific guidance Guildhall has proposed. These do not affect other projects."
                 headingTag="h3"
                 density="dense"
               />
             {/snippet}
             <Stack gap="3">
               {#if projectLearnings.length === 0}
-                <p class="muted">Nothing saved yet. After a task teaches Guildhall a repeatable project habit, it will ask here before reusing it.</p>
+                <p class="muted">No reusable project habits yet. That does not mean the project has no memory; it means Guildhall has not promoted a repeated pattern into a reusable rule.</p>
               {:else}
                 {#each projectLearnings as item (item.id)}
                   <article class="learning-item">
@@ -1162,7 +1302,22 @@
                       <p class="learning-label">Why Guildhall suggested this</p>
                       <ul class="learning-evidence">
                         {#each item.evidence as evidence, i (`${item.id}-${i}`)}
-                          <li>{evidence.summary}</li>
+                          <li>
+                            <span>{evidence.summary}</span>
+                            {#if evidence.links?.length}
+                              <span class="learning-evidence-links">
+                                {#each evidence.links as link, j (`${item.id}-${i}-${j}`)}
+                                  {#if link.href}
+                                    <a
+                                      class="learning-evidence-link"
+                                      href={projectActionHref(link.href)}
+                                      title={link.localHistoryRef ? `Local evidence: ${link.localHistoryRef}` : undefined}
+                                    >{link.label ?? 'Open evidence'}</a>
+                                  {/if}
+                                {/each}
+                              </span>
+                            {/if}
+                          </li>
                         {/each}
                       </ul>
                     {/if}
@@ -1550,6 +1705,29 @@
                 <div><span class="muted">Design system</span><strong>{codebaseMapStatus.designSystem?.maturity ?? '—'}</strong></div>
                 <div><span class="muted">Corpus</span><strong>{codebaseMapStatus.semantic?.corpusKind ?? '—'}</strong></div>
               </div>
+              {#if codebaseMapStatus.project}
+                <div class="map-semantic">
+                  <strong>What Guildhall knows</strong>
+                  <p>{codebaseMapStatus.project.summary}</p>
+                  {#if codebaseMapStatus.project.languages.length || codebaseMapStatus.project.primaryFrameworks.length || codebaseMapStatus.project.packageManagers.length}
+                    <div class="map-chip-list" aria-label="Detected stack">
+                      {#each [...codebaseMapStatus.project.primaryFrameworks, ...codebaseMapStatus.project.packageManagers, ...codebaseMapStatus.project.languages].slice(0, 12) as item, i (`stack-${i}-${item}`)}
+                        <span>{item}</span>
+                      {/each}
+                    </div>
+                  {/if}
+                </div>
+              {/if}
+              {#if codebaseMapStatus.entrypoints?.length}
+                <div class="map-section">
+                  <strong>Start here</strong>
+                  <ul class="map-recommendations">
+                    {#each codebaseMapStatus.entrypoints as entry (entry.path)}
+                      <li><code>{entry.path}</code> — {entry.summary}</li>
+                    {/each}
+                  </ul>
+                </div>
+              {/if}
               {#if codebaseMapStatus.semantic}
                 <div class="map-semantic">
                   <div class="map-semantic-meta">
@@ -1559,6 +1737,16 @@
                     {/if}
                   </div>
                   <p>{codebaseMapStatus.semantic.projectPurpose}</p>
+                  {#if codebaseMapStatus.semantic.currentTruth?.length}
+                    <div>
+                      <strong>Current truth</strong>
+                      <ul class="map-recommendations">
+                        {#each codebaseMapStatus.semantic.currentTruth.slice(0, 4) as truth, i (`truth-${i}`)}
+                          <li>{truth}</li>
+                        {/each}
+                      </ul>
+                    </div>
+                  {/if}
                   {#if codebaseMapStatus.semantic.readNext.length}
                     <div>
                       <strong>Read next</strong>
@@ -1579,14 +1767,106 @@
                       </ul>
                     </div>
                   {/if}
+                  {#if codebaseMapStatus.semantic.architectureAreas?.length}
+                    <div>
+                      <strong>Architecture areas</strong>
+                      <div class="map-list-grid">
+                        {#each codebaseMapStatus.semantic.architectureAreas.slice(0, 3) as area (area.name)}
+                          <article>
+                            <h4>{area.name}</h4>
+                            <p>{area.purpose}</p>
+                            {#if area.canonicalFiles.length}
+                              <code>{area.canonicalFiles.slice(0, 2).join(', ')}</code>
+                            {/if}
+                          </article>
+                        {/each}
+                      </div>
+                    </div>
+                  {/if}
+                  {#if codebaseMapStatus.semantic.canonicalAbstractions?.length}
+                    <div>
+                      <strong>Canonical abstractions</strong>
+                      <div class="map-list-grid">
+                        {#each codebaseMapStatus.semantic.canonicalAbstractions.slice(0, 3) as abstraction (abstraction.name)}
+                          <article>
+                            <h4>{abstraction.name}</h4>
+                            <p>{abstraction.purpose}</p>
+                            <p>{abstraction.reuseRule}</p>
+                          </article>
+                        {/each}
+                      </div>
+                    </div>
+                  {/if}
+                  {#if codebaseMapStatus.semantic.gapsOrRisks?.length}
+                    <div>
+                      <strong>Gaps or risks</strong>
+                      <ul class="map-recommendations">
+                        {#each codebaseMapStatus.semantic.gapsOrRisks.slice(0, 4) as risk, i (`risk-${i}`)}
+                          <li>{risk}</li>
+                        {/each}
+                      </ul>
+                    </div>
+                  {/if}
+                </div>
+              {/if}
+              {#if codebaseMapStatus.areas?.length}
+                <div class="map-section">
+                  <strong>Mapped areas</strong>
+                  <div class="map-list-grid">
+                    {#each codebaseMapStatus.areas.slice(0, 4) as area (area.id)}
+                      <article>
+                        <h4>{area.title}</h4>
+                        <p>{area.summary}</p>
+                        {#if area.canonicalFiles.length}
+                          <ul class="map-mini-list">
+                            {#each area.canonicalFiles.slice(0, 3) as file (file.path)}
+                              <li><code>{file.path}</code></li>
+                            {/each}
+                          </ul>
+                        {/if}
+                        {#if area.tests.length}
+                          <p class="muted">Tests: {area.tests.slice(0, 3).join(', ')}</p>
+                        {/if}
+                      </article>
+                    {/each}
+                  </div>
+                </div>
+              {/if}
+              {#if codebaseMapStatus.abstractions?.length}
+                <div class="map-section">
+                  <strong>Reusable abstractions</strong>
+                  <div class="map-list-grid">
+                    {#each codebaseMapStatus.abstractions.slice(0, 4) as abstraction (abstraction.id)}
+                      <article>
+                        <h4>{abstraction.title}</h4>
+                        <p><code>{abstraction.canonicalPath}</code></p>
+                        {#if abstraction.useWhen.length}
+                          <p>{abstraction.useWhen[0]}</p>
+                        {/if}
+                        {#if abstraction.related.length}
+                          <div class="map-chip-list" aria-label={`Related files for ${abstraction.title}`}>
+                            {#each abstraction.related.slice(0, 3) as related (related)}
+                              <span>{related}</span>
+                            {/each}
+                          </div>
+                        {/if}
+                      </article>
+                    {/each}
+                  </div>
                 </div>
               {/if}
               {#if codebaseMapStatus.designSystem?.recommendations?.length}
-                <ul class="map-recommendations">
-                  {#each codebaseMapStatus.designSystem.recommendations.slice(0, 2) as recommendation, i (`ds-rec-${i}`)}
-                    <li>{recommendation}</li>
-                  {/each}
-                </ul>
+                <div class="map-section">
+                  <strong>Design-system findings</strong>
+                  <ul class="map-recommendations">
+                    {#each codebaseMapStatus.designSystem.recommendations.slice(0, 3) as recommendation, i (`ds-rec-${i}`)}
+                      <li>{recommendation}</li>
+                    {/each}
+                  </ul>
+                  {#if codebaseMapStatus.designSystem.componentFiles?.length}
+                    <p class="muted">Component files sampled: {codebaseMapStatus.designSystem.componentFiles.slice(0, 4).join(', ')}</p>
+                  {/if}
+                </div>
               {/if}
               {#if codebaseMapStatus.generatedAt}
                 <Byline verb="Last built" at={codebaseMapStatus.generatedAt} />
@@ -1832,6 +2112,51 @@
     gap: var(--gh-space-4);
   }
 
+  :global(.context-card) {
+    max-inline-size: 62rem;
+    margin-block-end: var(--gh-space-4);
+  }
+
+  .context-memory-list {
+    display: grid;
+    gap: var(--gh-space-2);
+  }
+
+  .context-memory-row {
+    display: flex;
+    flex-wrap: wrap;
+    gap: var(--gh-space-3);
+    align-items: center;
+    justify-content: space-between;
+    padding: var(--gh-space-3);
+    border: 1px solid var(--border);
+    border-radius: var(--r-2);
+    background: var(--bg);
+  }
+
+  .context-memory-row > div:first-child {
+    display: grid;
+    gap: var(--gh-space-1);
+    min-inline-size: min(28rem, 100%);
+  }
+
+  .context-memory-row strong {
+    font-size: var(--fs-2);
+    line-height: var(--lh-tight);
+  }
+
+  .context-memory-row span {
+    color: var(--text-muted);
+    font-size: var(--fs-1);
+    line-height: var(--lh-body);
+  }
+
+  .context-memory-meta {
+    display: inline-flex;
+    gap: var(--gh-space-2);
+    align-items: center;
+  }
+
   .learning-item {
     display: grid;
     gap: var(--gh-space-2);
@@ -1887,6 +2212,20 @@
     color: var(--text-muted);
     font-size: var(--fs-1);
     line-height: var(--lh-body);
+  }
+
+  .learning-evidence-links {
+    display: inline-flex;
+    flex-wrap: wrap;
+    gap: var(--gh-space-2);
+    margin-inline-start: var(--gh-space-2);
+  }
+
+  .learning-evidence-link {
+    color: var(--accent);
+    font-weight: 700;
+    text-decoration: underline;
+    text-underline-offset: 2px;
   }
 
   .suggestion-list {
@@ -2031,6 +2370,65 @@
     line-height: var(--lh-body);
   }
 
+  .map-section {
+    display: grid;
+    gap: var(--gh-space-2);
+  }
+
+  .map-list-grid {
+    display: grid;
+    gap: var(--gh-space-2);
+  }
+
+  .map-list-grid article {
+    display: grid;
+    gap: var(--gh-space-2);
+    padding: var(--gh-space-3);
+    border: 1px solid color-mix(in srgb, var(--glass-border) 72%, transparent);
+    border-radius: var(--radius-sm);
+    background: color-mix(in srgb, var(--bg-sunken) 78%, transparent);
+  }
+
+  .map-list-grid h4 {
+    margin: 0;
+    font-size: var(--fs-2);
+  }
+
+  .map-list-grid p {
+    margin: 0;
+    color: var(--text-muted);
+    font-size: var(--fs-1);
+    line-height: var(--lh-body);
+  }
+
+  .map-mini-list {
+    display: grid;
+    gap: var(--gh-space-1);
+    margin: 0;
+    padding-inline-start: var(--gh-space-4);
+    color: var(--text-muted);
+    font-size: var(--fs-1);
+  }
+
+  .map-chip-list {
+    display: flex;
+    flex-wrap: wrap;
+    gap: var(--gh-space-1);
+  }
+
+  .map-chip-list span {
+    max-width: min(28rem, 100%);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    padding: 0.2rem 0.55rem;
+    border: 1px solid color-mix(in srgb, var(--accent) 32%, var(--glass-border));
+    border-radius: var(--radius-sm);
+    color: var(--text-muted);
+    background: color-mix(in srgb, var(--accent) 8%, transparent);
+    font-size: var(--fs-0);
+  }
+
   .workspace-project-list {
     list-style: none;
     display: grid;
@@ -2159,6 +2557,10 @@
     .ds-facts,
     .map-facts {
       grid-template-columns: repeat(4, minmax(0, 1fr));
+    }
+
+    .map-list-grid {
+      grid-template-columns: repeat(2, minmax(0, 1fr));
     }
 
   }

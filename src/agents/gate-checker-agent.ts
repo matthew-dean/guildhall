@@ -75,6 +75,13 @@ If a hard gate cannot be made to pass (e.g. environment-level failure,
 infrastructure outage, or a gate that times out even after a clean rerun),
 use raise-escalation with reason='gate_hard_failure'. Do not set the task
 to 'blocked' by hand.
+Do not raise a human escalation just because a task lacks a saved test result,
+proof packet, or acceptance-criteria evidence block. Run the gate, record the
+result, and route the task according to the normal outcome. Escalate only when
+Guildhall cannot run the gate because of an external service, credential,
+environment outage, or decision outside the repo.
+When that happens, include externalChecklist on raise-escalation with the
+specific outside-Guildhall setup steps required before the gate can be retried.
 
 ## Important
 - Never skip a gate. Hard gates are non-negotiable.

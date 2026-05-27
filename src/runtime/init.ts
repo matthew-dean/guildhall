@@ -317,7 +317,7 @@ export async function runInit(opts: InitOptions): Promise<void> {
   }
 
   console.log(`\n[guildhall] ✓ guildhall.yaml → ${absPath}`)
-  console.log(`[guildhall] ✓ memory/ directory ready`)
+  console.log(`[guildhall] ✓ .guildhall/ project state ready`)
   console.log()
   console.log('Next step:')
   console.log(`  • The dashboard will now launch at http://localhost:7777`)

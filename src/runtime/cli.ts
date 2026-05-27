@@ -3,9 +3,39 @@ import { dirname, resolve, join } from 'node:path'
 import { homedir } from 'node:os'
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
+import { confirm } from '@inquirer/prompts'
 import { runOrchestrator } from './orchestrator.js'
 import { renderBakeoffMarkdown, runContextIndexerBakeoff, runModelBakeoff } from './model-bakeoff.js'
+import { migrateLegacyMemoryToLocalHistory } from './memory-migration.js'
+import {
+  applyProjectMigrations,
+  getProjectMigrationStatus,
+  type ProjectMigrationStatus,
+  type ProjectMigrationStatusItem,
+} from './migrations.js'
+import { migrateTaskState } from './task-state-migration.js'
+import { compactProjectState } from './project-state-compaction.js'
+import { projectRuntimeCompatibilityBlocker } from './runtime-compatibility.js'
+import {
+  buildCalibrationCaseDraftFromEscapedMiss,
+  recordCalibrationCorpusValidation,
+} from './review-calibration.js'
+import {
+  loadReviewPlanningCasesFromDirectory,
+  recordReviewPlanningFrontier,
+} from './review-planning-calibration.js'
+import {
+  loadTaskSizingCasesFromDirectory,
+  recordTaskSizingFrontier,
+} from './task-sizing-calibration.js'
+import { createReviewAuditStore } from './review-audit-store.js'
 import { resolveWorkspace, loadWorkspace } from './workspace-loader.js'
+import {
+  configureClaudeProjectMcpBridge,
+  configureCodexMcpBridge,
+  installAgentBridgeInstructions,
+  type AgentBridgeTarget,
+} from './agent-bridge-install.js'
 import { runInit } from './init.js'
 import { runServe } from './serve.js'
 import {
@@ -23,6 +53,8 @@ import { exec, spawn } from 'node:child_process'
 import { platform } from 'node:os'
 import { buildSemanticIndexPrompt, refreshCodebaseMap, type CorpusSemanticIndexer } from '@guildhall/corpus-map'
 import { OpenAICompatibleClient } from '@guildhall/providers'
+import { getProjectStateDir } from '@guildhall/sessions'
+import { FileBackedGuildhallPersistence } from '@guildhall/persistence'
 
 function openBrowser(url: string): void {
   const cmd = platform() === 'darwin' ? `open "${url}"`
@@ -179,7 +211,7 @@ export function parseArgs(rawArgs: string[]): {
   getFlag: (flag: string) => string | undefined
   positionals: string[]
 } {
-  const valueFlags = new Set(['--port', '--service-state', '--domain', '--max-ticks'])
+  const valueFlags = new Set(['--port', '--service-state', '--domain', '--max-ticks', '--cases', '--task', '--lane', '--finding', '--action', '--missed-by', '--migration'])
   function getFlag(flag: string): string | undefined {
     const idx = rawArgs.indexOf(flag)
     return idx !== -1 ? rawArgs[idx + 1] : undefined
@@ -263,8 +295,21 @@ export function resolveServiceLifecycleIntent(
 //   guildhall config [id|path]          — re-run the init wizard on an existing workspace
 //   guildhall corpus-map refresh [--semantic] [path]
 //                                      — rebuild memory/codebase-map.yaml for a workspace
+//   guildhall memory migrate-0.8.0 [--apply] [--delete-source] [--update-gitignore] [path]
+//   guildhall memory migrate-local-history [--apply] [--delete-source] [--update-gitignore] [path]
+//                                      — move old transcripts/events/sessions into ~/.guildhall
+//   guildhall migrate status [id|path] — show generic migration status
+//   guildhall migrate plan [id|path]   — show pending generic migrations
+//   guildhall migrate apply [id|path]  — apply automatic generic migrations
+//   guildhall review-calibration validate [path] [--cases <dir>]
+//                                      — validate and record review calibration corpus coverage
+//   guildhall review-calibration escaped-miss [path] --task <id> --lane <lane> --finding <text>
+//                                      — record a missed review finding for calibration follow-up
 //   guildhall model-bakeoff [--context-indexer] [output]
 //                                      — write replay model bakeoff JSON + Markdown
+//   guildhall mcp serve [path]          — serve Guildhall project context over MCP stdio
+//   guildhall bridge install [--target codex|claude|all] [--yes|--no-configure-mcp] [id|path]
+//                                      — install agent instructions for Guildhall MCP
 // ---------------------------------------------------------------------------
 
 export const SHIPPED_CLI_COMMANDS = [
@@ -279,7 +324,12 @@ export const SHIPPED_CLI_COMMANDS = [
   'open',
   'config',
   'corpus-map',
+  'memory',
+  'migrate',
+  'review-calibration',
   'model-bakeoff',
+  'mcp',
+  'bridge',
 ] as const
 
 const [command = 'help', ...args] = process.argv.slice(2)
@@ -294,7 +344,7 @@ function getFlag(flag: string): string | undefined {
 // another flag — otherwise boolean flags like `--no-browser` would eat the
 // following positional by mistake.
 function positionals(): string[] {
-  const valueFlags = new Set(['--port', '--domain', '--max-ticks', '--service-state'])
+  const valueFlags = new Set(['--port', '--domain', '--max-ticks', '--service-state', '--target', '--cases', '--task', '--lane', '--finding', '--action', '--missed-by', '--migration'])
   const result: string[] = []
   for (let i = 0; i < args.length; i++) {
     const a = args[i]
@@ -339,8 +389,56 @@ Usage:
   guildhall config [id|path]         Re-run the init wizard on an existing workspace
   guildhall corpus-map refresh [--semantic] [path]
                                   Rebuild compact codebase map context
+  guildhall memory migrate-0.8.0 [path]
+                                  Bring a project onto the 0.8.0 storage layout
+  guildhall memory migrate-local-history [path]
+                                  Compatibility alias for the 0.8.0 storage migration
+  guildhall memory compact-project-state [path]
+                                  Archive terminal tasks and move heartbeat progress local
+    --apply                      Write files. Without this, prints a dry run
+    --delete-source              Remove migrated old memory/ files after copying
+    --update-gitignore           Write/refresh Guildhall's managed .gitignore block
+  guildhall migrate status [id|path]
+                                  Show pending, blocked, and applied project migrations
+  guildhall migrate plan [id|path]
+                                  Show the migration plan without writing files
+  guildhall migrate apply [id|path]
+                                  Apply automatic project migrations
+    --all                        Apply/status every registered project
+    --include-prompt             Also run migrations that normally require a prompt
+    --migration <id>             Limit the command to one migration id
+  guildhall migrate task-state [id|path]
+                                  Compatibility command for the 0.8.0 task-state migration
+    --apply                      Write files. Without this, prints a dry run
+  guildhall review-calibration validate [id|path]
+                                  Validate and record calibration corpus coverage
+    --cases <dir>                Corpus directory (default: internal/calibration/cases)
+  guildhall review-calibration validate-planning [id|path]
+                                  Validate and record review-planning frontier coverage
+    --cases <dir>                Planning corpus directory (default: internal/calibration/planning)
+  guildhall review-calibration validate-sizing [id|path]
+                                  Validate and record task-sizing frontier coverage
+    --cases <dir>                Task sizing corpus directory (default: internal/calibration/task-sizing)
+  guildhall review-calibration draft-case [id|path]
+                                  Print a calibration-case draft from an escaped miss
+    --task <id>                  Task where the miss escaped review
+    --lane <lane>                Review lane that missed the issue
+    --finding <text>             Human finding that reviewers missed
+    --title <text>               Draft calibration case title
+    --scenario <text>            Draft scenario to test
+  guildhall review-calibration escaped-miss [id|path]
+                                  Record a missed review finding for calibration follow-up
+    --task <id>                  Task where the miss escaped review
+    --lane <lane>                Review lane that missed the issue
+    --finding <text>             Human finding that reviewers missed
+    --action <action>            create_case, update_case, run_bakeoff, add_deterministic_gate, or adjust_planner
+    --missed-by <recipe>         Optional reviewer recipe that missed it
   guildhall model-bakeoff [--context-indexer] [output]
                                   Write replay model bakeoff JSON + Markdown
+  guildhall mcp serve [project-path]
+                                  Serve Guildhall project context over MCP stdio
+  guildhall bridge install [--target codex|claude|all] [--yes|--no-configure-mcp] [id|path]
+                                  Install agent instructions that point to Guildhall MCP
 
 Options:
   --help, -h                     Show this help
@@ -350,8 +448,21 @@ Examples:
   guildhall run looma
   guildhall serve
   guildhall corpus-map refresh --semantic .
+  guildhall memory migrate-0.8.0 --apply --delete-source --update-gitignore .
+  guildhall memory compact-project-state --apply .
+  guildhall migrate status .
+  guildhall migrate plan --all
+  guildhall migrate apply --include-prompt --migration 0.8.0/codex-agent-bridge .
+  guildhall migrate task-state --apply .
+  guildhall review-calibration validate . --cases internal/calibration/cases/ux
+  guildhall review-calibration validate-planning .
+  guildhall review-calibration validate-sizing .
+  guildhall review-calibration draft-case . --task task-1 --lane ux_comprehension --finding "Primary action was ambiguous" --title "Ambiguous action" --scenario "A setup card hides the safe next action"
+  guildhall review-calibration escaped-miss . --task task-1 --lane ux_comprehension --finding "Primary action was ambiguous"
   guildhall model-bakeoff artifacts/model-bakeoff/report.json
   guildhall model-bakeoff --context-indexer
+  guildhall mcp serve .
+  guildhall bridge install --target all --yes .
 `.trim()
 }
 
@@ -477,6 +588,22 @@ async function cmdRun() {
     }
   } catch (err) {
     console.error(`[guildhall] ${err instanceof Error ? err.message : String(err)}`)
+    process.exit(1)
+  }
+
+  const runtimeBlocker = projectRuntimeCompatibilityBlocker({ projectRoot: workspace.root })
+  if (runtimeBlocker) {
+    console.error(`[guildhall] ${runtimeBlocker.message}`)
+    process.exit(1)
+  }
+
+  const migrationStatus = await getProjectMigrationStatus({ projectRoot: workspace.root })
+  if (migrationStatus.blocked.length > 0) {
+    console.error('[guildhall] This project has required migrations that must run before Guildhall can start.')
+    for (const item of migrationStatus.blocked) {
+      console.error(`[guildhall]   - ${item.id}: ${item.title}`)
+    }
+    console.error('[guildhall] Run "guildhall migrate plan" to review them, then "guildhall migrate apply --include-prompt" when you are ready.')
     process.exit(1)
   }
 
@@ -632,7 +759,7 @@ async function cmdCorpusMap() {
   const semanticIndexer = semantic ? createSemanticIndexer(projectPath) : undefined
   const result = await refreshCodebaseMap({
     projectRoot: projectPath,
-    memoryDir: join(projectPath, 'memory'),
+    memoryDir: getProjectStateDir(projectPath),
     reason: 'manual',
     ...(semanticIndexer ? { semanticIndexer } : {}),
   })
@@ -643,7 +770,454 @@ async function cmdCorpusMap() {
   if (result.map.semantic) {
     console.log(`[guildhall] Semantic: ${result.map.semantic.corpusKind} via ${result.map.semantic.modelId}`)
   }
-  console.log(`[guildhall] Written: ${join(projectPath, 'memory', 'codebase-map.yaml')}`)
+  console.log(`[guildhall] Written: ${join(getProjectStateDir(projectPath), 'codebase-map.yaml')}`)
+}
+
+async function cmdMemory() {
+  const pos = positionals()
+  const subcommand = pos[0] ?? 'migrate-0.8.0'
+  if (!['migrate-0.8.0', 'migrate-local-history', 'compact-project-state'].includes(subcommand)) {
+    console.error('[guildhall] Usage: guildhall memory <migrate-0.8.0|migrate-local-history|compact-project-state> [--apply] [id|path]')
+    process.exit(1)
+  }
+  const idOrPath = pos[1]
+  let projectPath: string
+  if (idOrPath) {
+    const entry = findWorkspace(idOrPath)
+    projectPath = resolve(expandPath(entry?.path ?? idOrPath))
+  } else {
+    projectPath = process.cwd()
+  }
+  const dryRun = !args.includes('--apply')
+  if (subcommand === 'migrate-0.8.0') {
+    const migration = await migrateLegacyMemoryToLocalHistory({
+      projectRoot: projectPath,
+      dryRun,
+      deleteSource: args.includes('--delete-source'),
+      updateGitignore: args.includes('--update-gitignore'),
+    })
+    const compaction = dryRun
+      ? await compactProjectState({ projectRoot: projectPath, dryRun: true })
+      : migration.compaction ?? await compactProjectState({ projectRoot: projectPath, dryRun: false })
+
+    console.log(`[guildhall] 0.8.0 project storage migration ${dryRun ? 'dry run' : 'complete'}.`)
+    console.log(`[guildhall] Project: ${migration.projectRoot}`)
+    console.log(`[guildhall] Local history: ${migration.localHistoryDir}`)
+    console.log(`[guildhall] Legacy memory files found: ${migration.filesToCopy.length}`)
+    console.log(`[guildhall] Active tasks kept: ${compaction.activeTasksKept}`)
+    console.log(`[guildhall] Terminal tasks archived: ${compaction.archivedTasks}`)
+    console.log(`[guildhall] Archived task files compacted: ${compaction.archivedTaskFilesCompacted}`)
+    console.log(`[guildhall] Codebase map compacted: ${compaction.codebaseMapCompacted ? 'yes' : 'no'}`)
+    console.log(`[guildhall] Heartbeat blocks moved: ${compaction.progressHeartbeatsMoved}`)
+    console.log(`[guildhall] Shared state bytes: ${compaction.bytesBefore} -> ${compaction.bytesAfter}`)
+    if (!dryRun) {
+      console.log(`[guildhall] Legacy files copied: ${migration.copied}`)
+      console.log(`[guildhall] Legacy source files deleted: ${migration.deleted}`)
+      console.log(`[guildhall] .gitignore updated: ${migration.gitignoreUpdated ? 'yes' : 'no'}`)
+      if (migration.gitignoreRoots.length > 0) {
+        console.log(`[guildhall] .gitignore roots: ${migration.gitignoreRoots.join(', ')}`)
+      }
+      if (migration.untrackedIgnoredFiles.length > 0) {
+        console.log(`[guildhall] Tracked ignored files removed from Git index: ${migration.untrackedIgnoredFiles.length}`)
+      }
+    } else {
+      console.log('[guildhall] Re-run with --apply to perform this migration.')
+    }
+    return
+  }
+  if (subcommand === 'compact-project-state') {
+    const result = await compactProjectState({ projectRoot: projectPath, dryRun })
+    console.log(`[guildhall] Project state compaction ${dryRun ? 'dry run' : 'complete'}.`)
+    console.log(`[guildhall] Project: ${result.projectRoot}`)
+    console.log(`[guildhall] State dir: ${result.stateDir}`)
+    console.log(`[guildhall] Local history: ${result.localHistoryDir}`)
+    console.log(`[guildhall] Active tasks kept: ${result.activeTasksKept}`)
+    console.log(`[guildhall] Terminal tasks archived: ${result.archivedTasks}`)
+    console.log(`[guildhall] Archived task files compacted: ${result.archivedTaskFilesCompacted}`)
+    console.log(`[guildhall] Codebase map compacted: ${result.codebaseMapCompacted ? 'yes' : 'no'}`)
+    console.log(`[guildhall] Heartbeat blocks moved: ${result.progressHeartbeatsMoved}`)
+    console.log(`[guildhall] Shared TASKS/PROGRESS bytes: ${result.bytesBefore} -> ${result.bytesAfter}`)
+    if (dryRun) {
+      console.log('[guildhall] Re-run with --apply to compact these files.')
+    }
+    return
+  }
+  const result = await migrateLegacyMemoryToLocalHistory({
+    projectRoot: projectPath,
+    dryRun,
+    deleteSource: args.includes('--delete-source'),
+    updateGitignore: args.includes('--update-gitignore'),
+  })
+
+  console.log(`[guildhall] Legacy memory migration ${dryRun ? 'dry run' : 'complete'}.`)
+  console.log(`[guildhall] Project: ${result.projectRoot}`)
+  console.log(`[guildhall] Local history: ${result.localHistoryDir}`)
+  console.log(`[guildhall] Files found: ${result.filesToCopy.length}`)
+  if (!dryRun) {
+    console.log(`[guildhall] Files copied: ${result.copied}`)
+    console.log(`[guildhall] Source files deleted: ${result.deleted}`)
+    console.log(`[guildhall] .gitignore updated: ${result.gitignoreUpdated ? 'yes' : 'no'}`)
+    if (result.gitignoreRoots.length > 0) {
+      console.log(`[guildhall] .gitignore roots: ${result.gitignoreRoots.join(', ')}`)
+    }
+    if (result.untrackedIgnoredFiles.length > 0) {
+      console.log(`[guildhall] Tracked ignored files removed from Git index: ${result.untrackedIgnoredFiles.length}`)
+    }
+    if (result.compaction) {
+      console.log(`[guildhall] Terminal tasks archived: ${result.compaction.archivedTasks}`)
+      console.log(`[guildhall] Archived task files compacted: ${result.compaction.archivedTaskFilesCompacted}`)
+      console.log(`[guildhall] Codebase map compacted: ${result.compaction.codebaseMapCompacted ? 'yes' : 'no'}`)
+      console.log(`[guildhall] Heartbeat blocks moved: ${result.compaction.progressHeartbeatsMoved}`)
+    }
+  } else if (result.filesToCopy.length > 0) {
+    console.log('[guildhall] Re-run with --apply to copy these files.')
+  }
+}
+
+async function cmdMigrate() {
+  const pos = positionals()
+  const subcommand = pos[0] ?? 'status'
+  if (subcommand === 'task-state') {
+    const idOrPath = pos[1]
+    const entry = idOrPath ? findWorkspace(idOrPath) : null
+    const projectPath = entry?.path ?? (idOrPath ? resolve(expandPath(idOrPath)) : process.cwd())
+    const apply = args.includes('--apply') && !args.includes('--dry-run')
+    if (apply) {
+      const runtimeBlocker = projectRuntimeCompatibilityBlocker({ projectRoot: projectPath })
+      if (runtimeBlocker) {
+        console.error(`[guildhall] ${runtimeBlocker.message}`)
+        process.exit(1)
+      }
+    }
+    const result = await migrateTaskState({ projectRoot: projectPath, apply })
+    console.log(`[guildhall] Task state migration ${apply ? 'complete' : 'dry run'}.`)
+    console.log(`[guildhall] Project: ${projectPath}`)
+    console.log(`[guildhall] Tasks inspected: ${result.tasksInspected}`)
+    console.log(`[guildhall] Runtime records: ${result.runtimeRecords}`)
+    console.log(`[guildhall] Workspace records: ${result.workspaceRecords}`)
+    console.log(`[guildhall] Evidence records: ${result.evidenceRecords}`)
+    console.log(`[guildhall] Task definitions to rewrite: ${result.taskDefinitionsRewritten}`)
+    if (result.backupPath) console.log(`[guildhall] Backup: ${result.backupPath}`)
+    if (!apply) console.log('[guildhall] Re-run with --apply to perform this migration.')
+    return
+  }
+
+  if (!['status', 'plan', 'apply'].includes(subcommand)) {
+    console.error('[guildhall] Usage: guildhall migrate <status|plan|apply> [--all] [--include-prompt] [--migration <id>] [id|path]')
+    process.exit(1)
+  }
+
+  const projectArgs = pos.slice(1)
+  const onlyMigration = getFlag('--migration')
+  const projectPaths = resolveMigrationProjectPaths(projectArgs[0])
+  for (const projectPath of projectPaths) {
+    if (subcommand === 'apply') {
+      const runtimeBlocker = projectRuntimeCompatibilityBlocker({ projectRoot: projectPath })
+      if (runtimeBlocker) {
+        console.error(`[guildhall] ${runtimeBlocker.message}`)
+        process.exit(1)
+      }
+      const result = await applyProjectMigrations({
+        projectRoot: projectPath,
+        includePrompt: args.includes('--include-prompt'),
+        ...(onlyMigration ? { only: [onlyMigration] } : {}),
+      })
+      console.log(`[guildhall] Migration apply complete for ${projectPath}`)
+      printMigrationItems('Applied', result.applied)
+      printMigrationItems('Skipped', result.skipped)
+      printMigrationItems('Failed', result.failed)
+      if (result.skipped.length > 0 && !args.includes('--include-prompt')) {
+        console.log('[guildhall] Re-run with --include-prompt to apply prompt-required migrations.')
+      }
+      continue
+    }
+
+    const status = await getProjectMigrationStatus({ projectRoot: projectPath })
+    printMigrationStatus(status, subcommand === 'plan' ? 'Migration plan' : 'Migration status', onlyMigration)
+  }
+}
+
+function resolveMigrationProjectPaths(idOrPath?: string): string[] {
+  if (args.includes('--all')) {
+    const workspaces = listWorkspaces()
+    return workspaces.length > 0 ? workspaces.map(workspace => resolve(workspace.path)) : [process.cwd()]
+  }
+  const entry = idOrPath ? findWorkspace(idOrPath) : null
+  return [entry?.path ?? (idOrPath ? resolve(expandPath(idOrPath)) : process.cwd())]
+}
+
+function filterMigrationItems(
+  items: ProjectMigrationStatusItem[],
+  onlyMigration?: string,
+): ProjectMigrationStatusItem[] {
+  return onlyMigration ? items.filter(item => item.id === onlyMigration) : items
+}
+
+function printMigrationItems(label: string, items: ProjectMigrationStatusItem[]): void {
+  console.log(`[guildhall] ${label}: ${items.length}`)
+  for (const item of items) {
+    console.log(`[guildhall]   - ${item.id} [${item.safety}] ${item.title}`)
+  }
+}
+
+function printMigrationStatus(
+  status: ProjectMigrationStatus,
+  label: string,
+  onlyMigration?: string,
+): void {
+  const pending = filterMigrationItems(status.pending, onlyMigration)
+  const blocked = filterMigrationItems(status.blocked, onlyMigration)
+  const applied = filterMigrationItems(status.applied, onlyMigration)
+  console.log(`[guildhall] ${label} for ${status.projectRoot}`)
+  printMigrationItems('Pending', pending)
+  printMigrationItems('Blocked', blocked)
+  printMigrationItems('Applied', applied)
+  if (pending.length === 0 && blocked.length === 0) {
+    console.log('[guildhall] No pending migrations.')
+  }
+}
+
+export async function validateReviewCalibrationCorpus(input: {
+  projectPath: string
+  casesDir?: string
+  recordedBy?: string
+  now?: () => Date
+}) {
+  const projectPath = resolve(expandPath(input.projectPath))
+  const casesDir = input.casesDir
+    ? resolve(projectPath, input.casesDir)
+    : resolve(process.cwd(), 'internal/calibration/cases')
+  const store = createReviewAuditStore({
+    projectRoot: projectPath,
+    persistence: new FileBackedGuildhallPersistence(),
+    ...(input.now ? { now: input.now } : {}),
+  })
+  return recordCalibrationCorpusValidation({
+    casesDir,
+    store,
+    recordedBy: input.recordedBy ?? 'guildhall-cli',
+    ...(input.now ? { now: input.now } : {}),
+  })
+}
+
+export async function validateReviewPlanningCorpus(input: {
+  projectPath: string
+  casesDir?: string
+  recordedBy?: string
+  now?: () => Date
+}) {
+  const projectPath = resolve(expandPath(input.projectPath))
+  const casesDir = input.casesDir
+    ? resolve(projectPath, input.casesDir)
+    : resolve(process.cwd(), 'internal/calibration/planning')
+  const store = createReviewAuditStore({
+    projectRoot: projectPath,
+    persistence: new FileBackedGuildhallPersistence(),
+    ...(input.now ? { now: input.now } : {}),
+  })
+  const cases = await loadReviewPlanningCasesFromDirectory(casesDir)
+  return recordReviewPlanningFrontier({
+    cases,
+    variants: [
+      { variantId: 'lean', reviewEffort: 'lean' },
+      { variantId: 'balanced', reviewEffort: 'balanced' },
+      { variantId: 'thorough', reviewEffort: 'thorough' },
+      { variantId: 'balanced_split_ux_copy', reviewEffort: 'balanced', recipeBundleMode: 'split_ux_copy' },
+    ],
+    store,
+    recordedBy: input.recordedBy ?? 'guildhall-cli',
+    ...(input.now ? { now: input.now } : {}),
+  })
+}
+
+export async function validateTaskSizingCorpus(input: {
+  projectPath: string
+  casesDir?: string
+  recordedBy?: string
+  now?: () => Date
+}) {
+  const projectPath = resolve(expandPath(input.projectPath))
+  const casesDir = input.casesDir
+    ? resolve(projectPath, input.casesDir)
+    : resolve(process.cwd(), 'internal/calibration/task-sizing')
+  const store = createReviewAuditStore({
+    projectRoot: projectPath,
+    persistence: new FileBackedGuildhallPersistence(),
+    ...(input.now ? { now: input.now } : {}),
+  })
+  const cases = await loadTaskSizingCasesFromDirectory(casesDir)
+  return recordTaskSizingFrontier({
+    cases,
+    variants: [
+      { variantId: 'balanced', strictness: 'balanced' },
+      { variantId: 'split_sensitive', strictness: 'split_sensitive' },
+    ],
+    store,
+    recordedBy: input.recordedBy ?? 'guildhall-cli',
+    ...(input.now ? { now: input.now } : {}),
+  })
+}
+
+export async function recordEscapedReviewMiss(input: {
+  projectPath: string
+  taskId: string
+  missedLane: string
+  humanFinding: string
+  nextCalibrationAction?: string
+  missedByRecipe?: string
+  recordedBy?: string
+  recordedAt?: string
+}) {
+  const projectPath = resolve(expandPath(input.projectPath))
+  const store = createReviewAuditStore({
+    projectRoot: projectPath,
+    persistence: new FileBackedGuildhallPersistence(),
+  })
+  return store.linkEscapedMiss({
+    taskId: input.taskId,
+    missedLane: input.missedLane as never,
+    humanFinding: input.humanFinding,
+    nextCalibrationAction: (input.nextCalibrationAction ?? 'create_case') as never,
+    ...(input.missedByRecipe ? { missedByRecipe: input.missedByRecipe } : {}),
+    recordedBy: input.recordedBy ?? 'guildhall-cli',
+    ...(input.recordedAt ? { recordedAt: input.recordedAt } : {}),
+  })
+}
+
+export function draftEscapedMissCalibrationCase(input: {
+  taskId: string
+  missedLane: string
+  humanFinding: string
+  title: string
+  scenario: string
+  missedByRecipe?: string
+  recordedBy?: string
+  recordedAt?: string
+  labeledBy?: string
+  labeledAt?: string
+  reviewAfter?: string
+}) {
+  const recordedAt = input.recordedAt ?? new Date().toISOString()
+  const reviewAfter = input.reviewAfter ?? new Date(Date.now() + 180 * 24 * 60 * 60 * 1000)
+    .toISOString()
+    .slice(0, 10)
+  return buildCalibrationCaseDraftFromEscapedMiss({
+    miss: {
+      taskId: input.taskId,
+      missedLane: input.missedLane as never,
+      ...(input.missedByRecipe ? { missedByRecipe: input.missedByRecipe } : {}),
+      humanFinding: input.humanFinding,
+      nextCalibrationAction: 'create_case',
+      recordedAt,
+      recordedBy: input.recordedBy ?? 'guildhall-cli',
+    },
+    title: input.title,
+    scenario: input.scenario,
+    labeledBy: input.labeledBy ?? input.recordedBy ?? 'guildhall-cli',
+    labeledAt: input.labeledAt ?? recordedAt,
+    reviewAfter,
+  })
+}
+
+async function cmdReviewCalibration() {
+  const pos = positionals()
+  const subcommand = pos[0] ?? 'validate'
+  if (!['validate', 'validate-planning', 'validate-sizing', 'draft-case', 'escaped-miss'].includes(subcommand)) {
+    console.error('[guildhall] Usage: guildhall review-calibration <validate|validate-planning|validate-sizing|draft-case|escaped-miss> [id|path]')
+    process.exit(1)
+  }
+  const idOrPath = pos[1]
+  const entry = idOrPath ? findWorkspace(idOrPath) : null
+  const projectPath = entry?.path ?? (idOrPath ? resolve(expandPath(idOrPath)) : process.cwd())
+  if (subcommand === 'draft-case') {
+    const taskId = getFlag('--task')
+    const missedLane = getFlag('--lane')
+    const humanFinding = getFlag('--finding')
+    const title = getFlag('--title')
+    const scenario = getFlag('--scenario')
+    if (!taskId || !missedLane || !humanFinding || !title || !scenario) {
+      console.error('[guildhall] Usage: guildhall review-calibration draft-case [id|path] --task <id> --lane <lane> --finding <text> --title <text> --scenario <text>')
+      process.exit(1)
+    }
+    const draft = draftEscapedMissCalibrationCase({
+      taskId,
+      missedLane,
+      humanFinding,
+      title,
+      scenario,
+      ...(getFlag('--missed-by') ? { missedByRecipe: getFlag('--missed-by') } : {}),
+      recordedBy: 'guildhall-cli',
+    })
+    console.log(JSON.stringify(draft, null, 2))
+    return
+  }
+  if (subcommand === 'escaped-miss') {
+    const taskId = getFlag('--task')
+    const missedLane = getFlag('--lane')
+    const humanFinding = getFlag('--finding')
+    if (!taskId || !missedLane || !humanFinding) {
+      console.error('[guildhall] Usage: guildhall review-calibration escaped-miss [id|path] --task <id> --lane <lane> --finding <text> [--action <action>] [--missed-by <recipe>]')
+      process.exit(1)
+    }
+    const result = await recordEscapedReviewMiss({
+      projectPath,
+      taskId,
+      missedLane,
+      humanFinding,
+      ...(getFlag('--action') ? { nextCalibrationAction: getFlag('--action') } : {}),
+      ...(getFlag('--missed-by') ? { missedByRecipe: getFlag('--missed-by') } : {}),
+      recordedBy: 'guildhall-cli',
+    })
+    console.log('[guildhall] Escaped review miss recorded.')
+    console.log(`[guildhall] Task: ${result.payload.taskId}`)
+    console.log(`[guildhall] Lane: ${result.payload.missedLane}`)
+    console.log(`[guildhall] Next calibration action: ${result.payload.nextCalibrationAction}`)
+    console.log(`[guildhall] Audit stream: ${result.ref.path}`)
+    return
+  }
+  const casesDir = getFlag('--cases')
+  if (subcommand === 'validate-planning') {
+    const result = await validateReviewPlanningCorpus({
+      projectPath,
+      ...(casesDir ? { casesDir } : {}),
+      recordedBy: 'guildhall-cli',
+    })
+
+    console.log('[guildhall] Review planning corpus validated.')
+    console.log(`[guildhall] Recommended variant: ${result.summary.recommendedVariantId ?? 'none'}`)
+    console.log(`[guildhall] Variants: ${result.summary.runs.map((run) => run.variantId).join(', ')}`)
+    console.log(`[guildhall] Frontier record: ${result.record.ref.path}`)
+    return
+  }
+  if (subcommand === 'validate-sizing') {
+    const result = await validateTaskSizingCorpus({
+      projectPath,
+      ...(casesDir ? { casesDir } : {}),
+      recordedBy: 'guildhall-cli',
+    })
+
+    console.log('[guildhall] Task sizing corpus validated.')
+    console.log(`[guildhall] Recommended variant: ${result.summary.recommendedVariantId ?? 'none'}`)
+    console.log(`[guildhall] Variants: ${result.summary.runs.map((run) => run.variantId).join(', ')}`)
+    console.log(`[guildhall] Frontier record: ${result.record.ref.path}`)
+    return
+  }
+  const result = await validateReviewCalibrationCorpus({
+    projectPath,
+    ...(casesDir ? { casesDir } : {}),
+    recordedBy: 'guildhall-cli',
+  })
+
+  console.log('[guildhall] Review calibration corpus validated.')
+  console.log(`[guildhall] Cases: ${result.summary.caseCount}`)
+  console.log(`[guildhall] Known findings: ${result.summary.knownFindingCount}`)
+  console.log(`[guildhall] Negative controls: ${result.summary.negativeControlCount}`)
+  console.log(`[guildhall] Recipes: ${result.summary.recipeIds.join(', ')}`)
+  console.log(`[guildhall] Audit record: ${result.record.ref.path}`)
+  if (result.summary.missingCaseIds.length > 0) {
+    console.error(`[guildhall] Missing calibration cases: ${result.summary.missingCaseIds.join(', ')}`)
+    process.exitCode = 1
+  }
 }
 
 function createSemanticIndexer(projectPath: string): CorpusSemanticIndexer {
@@ -668,7 +1242,7 @@ function createSemanticIndexer(projectPath: string): CorpusSemanticIndexer {
     async completeJson({ prompt }) {
       const maxTokens = semanticCompletionBudget(prompt)
       console.log(`[guildhall] Semantic Corpus Map: ${modelId} with up to ${maxTokens} completion tokens.`)
-      const text = await completeOpenAiCompatibleJson(client, {
+      const text = await completeOpenAiCompatibleJsonWithClient(client, {
         modelId,
         systemPrompt: 'You produce compact, valid JSON for codebase/documentation orientation. Do not include markdown.',
         prompt,
@@ -683,7 +1257,7 @@ function createSemanticIndexer(projectPath: string): CorpusSemanticIndexer {
       const mapPrompt = buildSemanticIndexPrompt(map)
       const maxTokens = semanticRepairCompletionBudget(mapPrompt, raw)
       console.log(`[guildhall] Semantic Corpus Map repair: ${repairModelId} with up to ${maxTokens} completion tokens.`)
-      return completeOpenAiCompatibleJson(client, {
+      return completeOpenAiCompatibleJsonWithClient(client, {
         modelId: repairModelId,
         systemPrompt: 'You repair malformed or schema-invalid JSON. Return only valid JSON. Preserve substance; fix syntax and schema shape.',
         prompt: [
@@ -733,13 +1307,31 @@ function clampTokenBudget(value: number, min: number, max: number): number {
   return Math.max(min, Math.min(max, value))
 }
 
-async function completeOpenAiCompatibleJson(
+export async function completeOpenAiCompatibleJson(input: {
+  baseUrl: string
+  apiKey: string
+  modelId: string
+  systemPrompt: string
+  prompt: string
+  maxTokens: number
+  responseFormat?: Record<string, unknown>
+}): Promise<string> {
+  const client = new OpenAICompatibleClient({
+    baseUrl: input.baseUrl,
+    apiKey: input.apiKey,
+    requestTimeoutMs: 180_000,
+  })
+  return completeOpenAiCompatibleJsonWithClient(client, input)
+}
+
+async function completeOpenAiCompatibleJsonWithClient(
   client: OpenAICompatibleClient,
   input: {
     modelId: string
     systemPrompt: string
     prompt: string
     maxTokens: number
+    responseFormat?: Record<string, unknown>
   },
 ): Promise<string> {
   let text = ''
@@ -750,6 +1342,7 @@ async function completeOpenAiCompatibleJson(
     max_tokens: input.maxTokens,
     temperature: 0,
     tools: [],
+    ...(input.responseFormat ? { response_format: input.responseFormat } : {}),
   })) {
     if (event.type === 'text_delta') text += event.text
   }
@@ -791,6 +1384,104 @@ function cmdModelBakeoff() {
   console.log(`[guildhall] Model bakeoff summary: ${markdownPath}`)
 }
 
+async function cmdMcp() {
+  const pos = positionals()
+  const subcommand = pos[0] ?? 'serve'
+  if (subcommand !== 'serve') {
+    console.error('[guildhall] Usage: guildhall mcp serve [project-path]')
+    process.exit(1)
+  }
+  const projectPath = pos[1] ? resolve(expandPath(pos[1])) : process.cwd()
+  const { serveGuildhallMcpStdio } = await import('@guildhall/mcp-server')
+  await serveGuildhallMcpStdio(projectPath)
+}
+
+async function cmdBridge() {
+  const pos = positionals()
+  const subcommand = pos[0] ?? 'install'
+  if (subcommand !== 'install') {
+    console.error('[guildhall] Usage: guildhall bridge install [--target codex|claude|all] [--yes|--no-configure-mcp] [id|path]')
+    process.exit(1)
+  }
+
+  const projectArg = pos[1]
+  const entry = projectArg ? findWorkspace(projectArg) : null
+  const projectPath = entry?.path ?? (projectArg ? resolve(expandPath(projectArg)) : process.cwd())
+  const targets = resolveBridgeTargets(getFlag('--target') ?? 'codex')
+  for (const target of targets) {
+    const result = installAgentBridgeInstructions({ projectPath, target })
+    console.log(`[guildhall] ${target} agent bridge ${result.action}: ${result.filePath}`)
+  }
+  if (targets.includes('codex')) {
+    await maybeConfigureCodexMcp()
+  }
+  if (targets.includes('claude')) {
+    await maybeConfigureClaudeMcp(projectPath)
+  }
+}
+
+function resolveBridgeTargets(target: string): AgentBridgeTarget[] {
+  if (target === 'all') return ['codex', 'claude']
+  if (target === 'codex' || target === 'claude') return [target]
+  throw new Error(`Unsupported agent bridge target "${target}". Supported targets: codex, claude, all`)
+}
+
+async function maybeConfigureCodexMcp() {
+  if (args.includes('--no-configure-mcp')) {
+    console.log('[guildhall] Codex MCP configuration skipped.')
+    return
+  }
+
+  let shouldConfigure = args.includes('--yes')
+  if (!shouldConfigure) {
+    if (!process.stdin.isTTY || !process.stdout.isTTY) {
+      console.log('[guildhall] Codex MCP configuration not changed because this is not an interactive terminal.')
+      console.log('[guildhall] Re-run with `--yes` to configure: codex mcp add guildhall -- guildhall mcp serve .')
+      return
+    }
+    shouldConfigure = await confirm({
+      message: 'Configure Codex MCP globally as `guildhall mcp serve .`?',
+      default: true,
+    })
+  }
+
+  if (!shouldConfigure) {
+    console.log('[guildhall] Codex MCP configuration skipped.')
+    return
+  }
+
+  const codex = configureCodexMcpBridge()
+  console.log(`[guildhall] ${codex.message}`)
+}
+
+async function maybeConfigureClaudeMcp(projectPath: string) {
+  if (args.includes('--no-configure-mcp')) {
+    console.log('[guildhall] Claude MCP configuration skipped.')
+    return
+  }
+
+  let shouldConfigure = args.includes('--yes')
+  if (!shouldConfigure) {
+    if (!process.stdin.isTTY || !process.stdout.isTTY) {
+      console.log('[guildhall] Claude MCP configuration not changed because this is not an interactive terminal.')
+      console.log('[guildhall] Re-run with `--yes` to configure project .mcp.json.')
+      return
+    }
+    shouldConfigure = await confirm({
+      message: 'Configure Claude project MCP in `.mcp.json`?',
+      default: true,
+    })
+  }
+
+  if (!shouldConfigure) {
+    console.log('[guildhall] Claude MCP configuration skipped.')
+    return
+  }
+
+  const claude = configureClaudeProjectMcpBridge({ projectPath })
+  console.log(`[guildhall] ${claude.message}`)
+}
+
 async function main() {
   if (command === '--help' || command === '-h' || command === 'help') {
     printHelp()
@@ -810,7 +1501,12 @@ async function main() {
     case 'serve-internal': return cmdServeInternal()
     case 'config':  return cmdConfig()
     case 'corpus-map': return cmdCorpusMap()
+    case 'memory': return cmdMemory()
+    case 'migrate': return cmdMigrate()
+    case 'review-calibration': return cmdReviewCalibration()
     case 'model-bakeoff': return cmdModelBakeoff()
+    case 'mcp': return cmdMcp()
+    case 'bridge': return cmdBridge()
     default:
       console.error(`[guildhall] Unknown command: ${command}`)
       console.error(`[guildhall] Run "guildhall help" for usage.`)

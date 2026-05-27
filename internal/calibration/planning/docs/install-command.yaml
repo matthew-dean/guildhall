@@ -1,0 +1,23 @@
+id: docs-install-command-plan
+title: Public install command review plan
+task:
+  id: task-docs-install-command
+  title: Update install command docs
+  description: Correct the public guide and README command for installing the CLI.
+  priority: low
+  changedFiles:
+    - docs/guide/quick-start.md
+    - README.md
+expected:
+  requiredLanes:
+    - docs_truth
+    - copy_clarity
+    - test_adequacy
+    - plan_completeness
+  deterministicChecks:
+    - public-doc-copy-boundary
+  maxReviewerAgents: 4
+labelGovernance:
+  labeledBy: review-calibration-seed
+  labeledAt: '2026-05-25'
+  reviewStatus: seed

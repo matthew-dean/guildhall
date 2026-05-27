@@ -3,6 +3,7 @@ import fs from 'node:fs/promises'
 import path from 'node:path'
 import os from 'node:os'
 import { bootstrapWorkspace, readAgentSettings } from '@guildhall/config'
+import { getProjectStateDir } from '@guildhall/sessions'
 import { saveAgentSetting, saveAgentSettingTool } from '../agent-settings-tool.js'
 
 let tmpDir: string
@@ -11,7 +12,7 @@ let decisionsPath: string
 beforeEach(async () => {
   tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'guildhall-agent-settings-tool-'))
   bootstrapWorkspace(tmpDir, { name: 'Agent Settings Tool' })
-  decisionsPath = path.join(tmpDir, 'memory', 'DECISIONS.md')
+  decisionsPath = path.join(getProjectStateDir(tmpDir), 'DECISIONS.md')
 })
 
 afterEach(async () => {

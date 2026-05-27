@@ -32,12 +32,29 @@ Examples include:
 - refreshing a stale edit target after an `oldString` miss
 - proposing a change order when evidence shows the blueprint is wrong
 - stopping with a concrete question when the setup issue is outside the task
+- reframing a confusing task before implementation begins
 
 Thread and blocker summaries explain the real reason, not raw internal schema
 names. The audit trail keeps the typed classification and playbook record for
 future inspection.
 
+Reframe is deliberately stage-aware. If implementation, review, or gate checks
+have already started, Guildhall preserves the work trace and uses a change
+order, pause, follow-up, or revision instead of erasing the task back to intake.
+
 ## Memory layers
+
+Guildhall uses two storage lanes. Compact shared state lives in `./.guildhall/`
+so another checkout can understand the same project without a fresh intake.
+Bulky or private history lives under `~/.guildhall/data/projects/<project-hash>/`
+so transcripts, checkpoints, debug snapshots, and full task evidence do not
+fill every pull request.
+
+The compact layer is a navigation layer, not a magic replacement for evidence.
+When a saved lesson, task summary, preference suggestion, or playbook proposal
+can change future behavior, Guildhall keeps source links back to the fuller
+local history that produced it. You can read the short version first, then
+open the evidence when the reason matters.
 
 Guildhall separates lessons by scope, because “remember this” can mean very
 different things:
@@ -52,6 +69,19 @@ different things:
 Project facts do not silently become global preferences. Product ideas do not
 silently change how Guildhall runs. If a behavior would increase autonomy or
 apply more broadly, it needs explicit approval.
+
+Cross-project preferences use a flexible shape instead of a fixed list of
+software categories. A preference can describe a package manager, a game engine,
+a writing tone, a release habit, or any other subject Guildhall has evidence
+for. The useful parts are the same: what area the preference belongs to, what
+you prefer, what you avoid, how strong the signal is, and whether there are
+exceptions.
+
+For example, one preference might say you prefer `pnpm` and avoid `npm` for
+JavaScript package management. Another might say you prefer a lightweight game
+engine and avoid an editor-first engine unless the project already uses it.
+Guildhall keeps those as suggestions until you choose to use them everywhere or
+only in the current project.
 
 ## Memory and habits
 

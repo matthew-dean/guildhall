@@ -10,8 +10,8 @@ export type Route =
 export function parseRoute(p: string, state: unknown = null): Route {
   const pathname = p.split(/[?#]/, 1)[0] || '/'
   p = pathname
-  if (p === '/' || p === '/projects') return { kind: 'projects' }
-  if (p === '/needs-you' || p === '/notifications') return { kind: 'fleet-inbox' }
+  if (p === '/' || p === '/projects' || p === '/overview') return { kind: 'projects' }
+  if (p === '/inbox' || p === '/needs-you' || p === '/notifications') return { kind: 'fleet-inbox' }
   if (p === '/setup') return { kind: 'setup', projectId: null }
   const projectSetupMatch = /^\/projects\/([^/]+)\/setup$/.exec(p)
   if (projectSetupMatch) return { kind: 'setup', projectId: decodeURIComponent(projectSetupMatch[1] ?? '') }
@@ -48,7 +48,7 @@ export function parseRoute(p: string, state: unknown = null): Route {
     const backgroundPath =
       state && typeof state === 'object' && typeof (state as { backgroundPath?: unknown }).backgroundPath === 'string'
         ? ((state as { backgroundPath: string }).backgroundPath)
-        : '/project/thread'
+        : '/projects'
     const backgroundRoute = parseRoute(backgroundPath)
     if (backgroundRoute.kind === 'project') {
       return {
@@ -60,26 +60,25 @@ export function parseRoute(p: string, state: unknown = null): Route {
         backgroundPath,
       }
     }
-    return {
-      kind: 'project',
-      projectId: null,
-      view: 'thread',
-      sub: null,
-      drawerTaskId: decodeURIComponent(taskMatch[1] ?? ''),
-      backgroundPath,
-    }
+    return { kind: 'projects' }
   }
   const projectMatch = /^\/projects\/([^/]+)(?:\/(.*))?$/.exec(p)
   if (projectMatch) {
     const projectId = decodeURIComponent(projectMatch[1] ?? '')
-    const suffix = projectMatch[2] ? `/${projectMatch[2]}` : '/thread'
+    const suffix = projectMatch[2] ? `/${projectMatch[2]}` : '/overview'
     const normalized = suffix
+    if (normalized === '/overview')
+      return { kind: 'project', projectId, view: 'overview', sub: null, drawerTaskId: null, backgroundPath: null }
+    if (normalized === '/overview/inbox')
+      return { kind: 'project', projectId, view: 'overview', sub: 'inbox', drawerTaskId: null, backgroundPath: null }
     if (normalized === '/thread')
       return { kind: 'project', projectId, view: 'thread', sub: null, drawerTaskId: null, backgroundPath: null }
     if (normalized === '/inbox' || normalized === '/notifications')
-      return { kind: 'project', projectId, view: 'inbox', sub: null, drawerTaskId: null, backgroundPath: null }
+      return { kind: 'project', projectId, view: 'overview', sub: 'inbox', drawerTaskId: null, backgroundPath: null }
     if (normalized === '/work')
       return { kind: 'project', projectId, view: 'work', sub: null, drawerTaskId: null, backgroundPath: null }
+    if (normalized === '/work/board')
+      return { kind: 'project', projectId, view: 'planner', sub: null, drawerTaskId: null, backgroundPath: null }
     if (normalized === '/workspace-import')
       return { kind: 'project', projectId, view: 'workspace-import', sub: null, drawerTaskId: null, backgroundPath: null }
     const settingsSub = /^\/settings\/(.+)$/.exec(normalized)
@@ -105,42 +104,7 @@ export function parseRoute(p: string, state: unknown = null): Route {
     if (normalized === '/planner') return { kind: 'project', projectId, view: 'planner', sub: null, drawerTaskId: null, backgroundPath: null }
     if (normalized === '/facts') return { kind: 'project', projectId, view: 'facts', sub: null, drawerTaskId: null, backgroundPath: null }
     if (normalized === '/timeline') return { kind: 'project', projectId, view: 'timeline', sub: null, drawerTaskId: null, backgroundPath: null }
-    return { kind: 'project', projectId, view: 'thread', sub: null, drawerTaskId: null, backgroundPath: null }
+    return { kind: 'project', projectId, view: 'overview', sub: null, drawerTaskId: null, backgroundPath: null }
   }
-  const projectPath = p === '/project' ? '/project/thread' : p
-  const normalized = projectPath.startsWith('/project/')
-    ? projectPath.slice('/project'.length)
-    : projectPath
-  if (normalized === '/thread')
-    return { kind: 'project', projectId: null, view: 'thread', sub: null, drawerTaskId: null, backgroundPath: null }
-  if (normalized === '/inbox' || normalized === '/notifications')
-    return { kind: 'project', projectId: null, view: 'inbox', sub: null, drawerTaskId: null, backgroundPath: null }
-  if (normalized === '/work')
-    return { kind: 'project', projectId: null, view: 'work', sub: null, drawerTaskId: null, backgroundPath: null }
-  if (normalized === '/workspace-import')
-    return { kind: 'project', projectId: null, view: 'workspace-import', sub: null, drawerTaskId: null, backgroundPath: null }
-  const settingsSub = /^\/settings\/(.+)$/.exec(normalized)
-  if (settingsSub)
-    return { kind: 'project', projectId: null, view: 'settings', sub: settingsSub[1] ?? '', drawerTaskId: null, backgroundPath: null }
-  if (normalized === '/settings')
-    return { kind: 'project', projectId: null, view: 'settings', sub: null, drawerTaskId: null, backgroundPath: null }
-  const releaseSub = /^\/release\/(.+)$/.exec(normalized)
-  if (releaseSub)
-    return { kind: 'project', projectId: null, view: 'release', sub: releaseSub[1] ?? '', drawerTaskId: null, backgroundPath: null }
-  if (normalized === '/release')
-    return { kind: 'project', projectId: null, view: 'release', sub: null, drawerTaskId: null, backgroundPath: null }
-  const routingSub = /^\/routing\/(.+)$/.exec(normalized)
-  if (routingSub)
-    return { kind: 'project', projectId: null, view: 'settings', sub: 'coordinators', drawerTaskId: null, backgroundPath: null }
-  if (normalized === '/routing')
-    return { kind: 'project', projectId: null, view: 'settings', sub: 'coordinators', drawerTaskId: null, backgroundPath: null }
-  const coordSub = /^\/coordinators\/(.+)$/.exec(normalized)
-  if (coordSub)
-    return { kind: 'project', projectId: null, view: 'settings', sub: 'coordinators', drawerTaskId: null, backgroundPath: null }
-  if (normalized === '/coordinators')
-    return { kind: 'project', projectId: null, view: 'settings', sub: 'coordinators', drawerTaskId: null, backgroundPath: null }
-  if (normalized === '/planner') return { kind: 'project', projectId: null, view: 'planner', sub: null, drawerTaskId: null, backgroundPath: null }
-  if (normalized === '/facts') return { kind: 'project', projectId: null, view: 'facts', sub: null, drawerTaskId: null, backgroundPath: null }
-  if (normalized === '/timeline') return { kind: 'project', projectId: null, view: 'timeline', sub: null, drawerTaskId: null, backgroundPath: null }
-  return { kind: 'project', projectId: null, view: 'thread', sub: null, drawerTaskId: null, backgroundPath: null }
+  return { kind: 'projects' }
 }

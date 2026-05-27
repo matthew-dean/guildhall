@@ -1,0 +1,23 @@
+id: accessibility-contrast-token-plan
+title: Contrast token regression review plan
+task:
+  id: task-accessibility-contrast-token
+  title: Adjust secondary text color tokens
+  description: Update CSS color tokens for muted labels and verify contrast stays readable in light and dark themes.
+  priority: normal
+  changedFiles:
+    - src/web/tokens.css
+expected:
+  requiredLanes:
+    - accessibility
+    - visual_design
+    - test_adequacy
+  requiredArtifacts:
+    - visual-evidence
+  deterministicChecks:
+    - browser-or-screenshot-evidence
+  maxReviewerAgents: 6
+labelGovernance:
+  labeledBy: review-calibration-seed
+  labeledAt: '2026-05-25'
+  reviewStatus: seed

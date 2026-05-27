@@ -1,5 +1,5 @@
 /**
- * Read / write `memory/agent-settings.yaml`.
+ * Read / write `.guildhall/agent-settings.yaml`.
  *
  * The file is the single source of truth for lever positions. On first read,
  * if the file is missing, we seed it with `makeDefaultSettings()` and write
@@ -250,9 +250,8 @@ export function projectLever<K extends keyof ProjectLevers>(
 }
 
 /**
- * Default path helper for a given project root. Mirrors the
- * `memory/agent-settings.yaml` convention from FR-08 and §2.1.
+ * Default path helper for a given project root.
  */
 export function defaultAgentSettingsPath(projectRoot: string): string {
-  return join(projectRoot, 'memory', AGENT_SETTINGS_FILENAME)
+  return join(projectRoot, '.guildhall', AGENT_SETTINGS_FILENAME)
 }

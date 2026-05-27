@@ -29,6 +29,8 @@
   const notes = $derived(task.notes ?? [])
   const entries = $derived(parseExploringTranscript(exploringTranscript?.content ?? ''))
   const hasNotes = $derived(notes.length > 0)
+  const taskIsDone = $derived(task.status === 'done')
+  const doneSummary = $derived(task.doneSummaryBundle ?? null)
 
   function parseExploringTranscript(content: string): TranscriptEntry[] {
     const entries: TranscriptEntry[] = []
@@ -44,6 +46,20 @@
     return entries
   }
 </script>
+
+{#if taskIsDone}
+  <section class="source-note" aria-label="Source conversation">
+    <h4>Source conversation</h4>
+    <p>
+      This task is done, so Journey is the friendly summary. Transcript stays here as the source conversation
+      {#if doneSummary?.retention?.compactedFullTranscript}
+        , and Guildhall has already reduced it into a done-task summary.
+      {:else}
+        when you need the original thread.
+      {/if}
+    </p>
+  </section>
+{/if}
 
 {#if entries.length === 0 && !hasNotes}
   <p class="muted">No transcript entries or task notes yet.</p>
@@ -94,6 +110,16 @@
     display: flex;
     flex-direction: column;
     gap: var(--s-3);
+  }
+  .source-note {
+    background: var(--bg);
+    border: 1px solid var(--border);
+    border-radius: var(--r-2);
+    padding: var(--s-3);
+    margin-bottom: var(--s-3);
+    display: flex;
+    flex-direction: column;
+    gap: var(--s-2);
   }
   h4 {
     margin: 0;

@@ -7,6 +7,8 @@ import {
   resolveEffectiveTaskSuccessGates,
   resolveEffectiveTaskVerificationCommands,
   resolveEffectiveTaskProjectPath,
+  normalizeAutomatedAcceptanceCriterionCommands,
+  reconcileAutomatedAcceptanceCommandsFromVerifiedWork,
   renderTaskScopedGateInstructions,
   renderTaskScopedVerificationInstructions,
   rewriteWorkspaceCommandsForIsolatedTaskWorktree,
@@ -30,6 +32,15 @@ describe('resolveEffectiveTaskProjectPath', () => {
         '/tmp/workspace',
       ),
     ).toBe('/tmp/subproject')
+  })
+
+  it('resolves relative task project paths from the workspace root', () => {
+    expect(
+      resolveEffectiveTaskProjectPath(
+        { projectPath: 'frontend/' },
+        '/repo/fair-labor-license',
+      ),
+    ).toBe('/repo/fair-labor-license/frontend')
   })
 })
 
@@ -151,6 +162,89 @@ describe('resolveEffectiveTaskBootstrapBlock', () => {
 })
 
 describe('resolveEffectiveTaskSuccessGates', () => {
+  it('normalizes stored automated commands to the package that owns the script', async () => {
+    const frontendDir = path.join(tmpDir, 'frontend')
+    await fs.mkdir(frontendDir, { recursive: true })
+    await fs.writeFile(
+      path.join(frontendDir, 'package.json'),
+      JSON.stringify({
+        name: 'frontend',
+        scripts: {
+          build: 'vite build',
+          typecheck: 'tsc --noEmit',
+        },
+      }),
+      'utf8',
+    )
+    await fs.writeFile(path.join(frontendDir, 'tsconfig.json'), '{}\n', 'utf8')
+    const task = {
+      projectPath: tmpDir,
+      acceptanceCriteria: [
+        {
+          id: 'ac-build',
+          description: 'frontend build passes',
+          verifiedBy: 'automated',
+          command: 'pnpm build',
+          met: false,
+        },
+        {
+          id: 'ac-typecheck',
+          description: 'frontend typecheck passes',
+          verifiedBy: 'automated',
+          command: 'pnpm tsc --noEmit',
+          met: false,
+        },
+      ],
+    } as any
+
+    expect(normalizeAutomatedAcceptanceCriterionCommands({
+      task,
+      workspaceProjectPath: tmpDir,
+    })).toBe(true)
+
+    expect(task.acceptanceCriteria.map((criterion: { command?: string }) => criterion.command)).toEqual([
+      'pnpm --dir frontend build',
+      'pnpm --dir frontend exec tsc --noEmit',
+    ])
+  })
+
+  it('learns the durable automated command from a passed worker verification', async () => {
+    const frontendDir = path.join(tmpDir, 'frontend')
+    await fs.mkdir(frontendDir, { recursive: true })
+    await fs.writeFile(
+      path.join(frontendDir, 'package.json'),
+      JSON.stringify({
+        name: 'frontend',
+        scripts: {
+          build: 'vite build',
+        },
+      }),
+      'utf8',
+    )
+    const task = {
+      projectPath: tmpDir,
+      acceptanceCriteria: [
+        {
+          id: 'ac-build',
+          description: 'build succeeds',
+          verifiedBy: 'automated',
+          command: 'pnpm build',
+          met: false,
+        },
+      ],
+    } as any
+
+    expect(reconcileAutomatedAcceptanceCommandsFromVerifiedWork({
+      task,
+      workspaceProjectPath: tmpDir,
+      recentVerifiedWork: [
+        'Ran bash command cd frontend && pnpm build [PASS]',
+      ],
+    })).toBe(true)
+
+    expect(task.acceptanceCriteria[0].command).toBe('cd frontend && pnpm build')
+  })
+
   it('uses automated acceptance commands to override broader project defaults', async () => {
     const webDir = path.join(tmpDir, 'web')
     await fs.mkdir(path.join(webDir, 'tests/unit/pages'), { recursive: true })
@@ -610,6 +704,18 @@ describe('resolveEffectiveTaskVerificationCommands', () => {
       'pnpm --dir frontend exec tsc --noEmit',
       'pnpm --dir frontend build',
     ])
+  })
+
+  it('renders nested package verification with the workspace cwd that owns the scoped command', async () => {
+    const instructions = renderTaskScopedVerificationInstructions({
+      projectPath: path.join(tmpDir, 'frontend'),
+      verificationCwd: tmpDir,
+      successGates: ['pnpm --dir frontend build'],
+    })
+
+    expect(instructions).toContain(`Working directory: \`${tmpDir}\``)
+    expect(instructions).toContain('pnpm --dir frontend build')
+    expect(instructions).not.toContain(`run commands against \`${path.join(tmpDir, 'frontend')}\``)
   })
 
   it('scopes explicit direct-binary acceptance commands through pnpm exec for nested projects', async () => {

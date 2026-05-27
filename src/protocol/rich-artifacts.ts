@@ -22,7 +22,7 @@ export type RichArtifact = z.infer<typeof richArtifactSchema>
 export type RichArtifactKind = z.infer<typeof richArtifactKindSchema>
 
 export type RichArtifactComponent = {
-  type: 'gh-checklist' | 'gh-step' | 'gh-decision' | 'gh-option'
+  type: 'gh-checklist' | 'gh-step' | 'gh-decision' | 'gh-option' | 'gh-table' | 'gh-diagram'
   props: Record<string, string>
   text?: string
 }
@@ -73,7 +73,7 @@ const ALLOWED_HTML_TAGS = new Set([
   'ul',
 ])
 
-const ALLOWED_COMPONENT_TAGS = new Set(['gh-checklist', 'gh-step', 'gh-decision', 'gh-option'])
+const ALLOWED_COMPONENT_TAGS = new Set(['gh-checklist', 'gh-step', 'gh-decision', 'gh-option', 'gh-table', 'gh-diagram'])
 const ALLOWED_ATTRS = new Set(['href', 'id', 'mode', 'recommended', 'status', 'title', 'value'])
 const URI_ATTRS = new Set(['href'])
 const TAG_PATTERN = /<\/?\s*([a-zA-Z][\w:-]*)\b([^>]*)>/g
@@ -179,7 +179,7 @@ function safeUrl(value: string): boolean {
 }
 
 function isLeafComponent(tag: string): boolean {
-  return tag === 'gh-step' || tag === 'gh-option'
+  return tag === 'gh-step' || tag === 'gh-option' || tag === 'gh-diagram'
 }
 
 function componentText(html: string, tag: string, start: number, leaf: boolean): string | undefined {

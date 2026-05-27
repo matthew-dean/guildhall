@@ -74,6 +74,85 @@ export type EscalationRecoveryCopy = {
   detail: string
 }
 
+export type EscalationUserGuidance = {
+  title: string
+  detail: string
+  nextStep: string
+  actionOwner: 'guildhall' | 'user'
+  technicalNote?: string
+}
+
+function stripInternalAcceptanceIds(text: string): string {
+  return text
+    .replace(/\bAC-\d+\b/gi, 'acceptance-criteria')
+    .replace(/\s+/g, ' ')
+    .trim()
+}
+
+function inferEvidenceArea(text: string): string {
+  if (/\bauth|email confirmation|profile management|login|signup\b/i.test(text)) return 'auth'
+  if (/\bcss|style|visual|layout\b/i.test(text)) return 'UI'
+  if (/\bapi|endpoint|request|response\b/i.test(text)) return 'API'
+  return 'this task'
+}
+
+function hasInternalRecoveryLanguage(text: string): boolean {
+  return /authoritative|checkpoint-touched|worktree|AC-\d+|handoff packet|coordinator scoped|bounded repair|policy read|human_judgment_required|spec_ambiguous|gate_hard_failure/i.test(text)
+}
+
+export function escalationUserGuidance(
+  escalation: {
+    summary?: string | undefined
+    details?: string | undefined
+    agentId?: string | undefined
+    reason?: string | undefined
+  } | undefined | null,
+): EscalationUserGuidance {
+  const summary = escalation?.summary ?? ''
+  const details = escalation?.details ?? ''
+  const text = `${summary}\n${details}`
+  if (/\bAC-\d+\b/i.test(text) && /\bevidence\b/i.test(text)) {
+    const area = inferEvidenceArea(text)
+    return {
+      title: 'Guildhall needs to run one missing check.',
+      detail: `This is not asking you to prove anything. The ${area} task needs a saved frontend test result before Guildhall can mark it finished.`,
+      nextStep: 'Use the Guildhall action on this card. Guildhall will resume the task, run or refresh the relevant tests, save the result, and continue. Only add the result yourself if you already ran the check outside Guildhall.',
+      actionOwner: 'guildhall',
+    }
+  }
+
+  if (/authoritative verification|upstream workspace build failure|checkpoint-touched|task worktree/i.test(text)) {
+    return {
+      title: 'The project build is failing outside this task.',
+      detail: 'Guildhall tried to verify the task, but the failure appears to come from nearby workspace code rather than the focused files for this work.',
+      nextStep: 'Decide how to handle that mismatch: use Reframe task if the task itself is unclear, fix the unrelated build first if it is real project debt, or retry gates after the build issue is addressed.',
+      actionOwner: 'user',
+    }
+  }
+
+  if (
+    escalation?.agentId === 'worker-agent' &&
+    /timed out|turn limit|maximum turn|no visible progress|model provider|provider unavailable|local model/i.test(text)
+  ) {
+    return {
+      title: 'Guildhall can retry the worker.',
+      detail: 'The last worker attempt stalled before it finished useful work. This is a Guildhall recovery step, not something you need to solve by hand.',
+      nextStep: 'Use Retry worker to close this blocker and let Guildhall try again. Use Reframe task only if the task itself is wrong, too broad, or unclear.',
+      actionOwner: 'guildhall',
+    }
+  }
+
+  const recovery = escalationRecoveryCopy(escalation)
+  const hasSpecificRecovery = /no visible progress|made no visible progress|no saved (?:spec|draft)|no durable (?:draft|update)/i.test(text)
+  return {
+    title: hasSpecificRecovery ? recovery.headline : 'This task needs a recovery decision.',
+    detail: hasSpecificRecovery ? recovery.detail : recovery.headline,
+    nextStep: 'Choose the action that matches what you know: resume Guildhall if it can continue, rework the spec if the brief is unclear, or mark it resolved only if you already handled the blocker outside Guildhall.',
+    actionOwner: 'user',
+    technicalNote: details && !hasInternalRecoveryLanguage(details) ? stripInternalAcceptanceIds(details) : undefined,
+  }
+}
+
 export function escalationRecoveryCopy(
   escalation: {
     summary?: string | undefined
@@ -92,7 +171,7 @@ export function escalationRecoveryCopy(
   return {
     headline: escalation?.summary ?? 'This task needs attention.',
     detail: role === 'Unknown'
-      ? 'Open the task to review the blocker and choose the next step.'
+      ? 'Review the blocker and choose the next step.'
       : `${role} needs a recovery decision before this task can continue.`,
   }
 }
@@ -108,6 +187,13 @@ export function escalationPrimaryAction(
   const reason = escalation?.reason ?? ''
   const agentId = escalation?.agentId ?? ''
   const text = `${escalation?.summary ?? ''}\n${escalation?.details ?? ''}`
+  if (/\bAC-\d+\b/i.test(text) && /\bevidence\b/i.test(text)) {
+    return {
+      label: 'Let Guildhall run the check',
+      nextStatus: 'ready',
+      resolution: 'Resume the task so Guildhall can run the missing verification check, save the result, and continue.',
+    }
+  }
   if (reason === 'gate_hard_failure') {
     return {
       label: 'Retry gates',
@@ -115,11 +201,14 @@ export function escalationPrimaryAction(
       resolution: 'Retrying gates after addressing the failure.',
     }
   }
-  if (agentId === 'worker-agent' && /turn limit|maximum turn/i.test(text)) {
+  if (
+    agentId === 'worker-agent' &&
+    /turn limit|maximum turn|timed out|no visible progress|made no visible progress|model provider|provider unavailable|local model/i.test(text)
+  ) {
     return {
-      label: 'Resume worker',
+      label: 'Retry worker',
       nextStatus: 'in_progress',
-      resolution: 'Resume the worker with the current spec and continue from the last attempt.',
+      resolution: 'Retry the worker with the current task brief and continue from the last attempt.',
     }
   }
   if (reason === 'spec_ambiguous') {

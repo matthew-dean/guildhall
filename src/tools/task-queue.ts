@@ -2,7 +2,7 @@ import { defineTool } from '@guildhall/engine'
 import { z } from 'zod'
 import fs from 'node:fs/promises'
 import path from 'node:path'
-import { AcceptanceCriteria, GateResult, Task, TaskQueue, TaskStatus, parseAcceptanceCriteriaFromSpec } from '@guildhall/core'
+import { AcceptanceCriteria, GateResult, Task, TaskQueue, TaskStatus, buildTaskSizePlan, parseAcceptanceCriteriaFromSpec } from '@guildhall/core'
 import { atomicWriteText } from '@guildhall/sessions'
 
 const TASKS_PATH_SCHEMA = z.string().describe('Absolute path to the TASKS.json file')
@@ -78,6 +78,9 @@ export interface UpdateTaskResult {
   taskId?: string
   error?: string
 }
+
+type TaskRecord = z.infer<typeof Task>
+type TaskQueueRecord = z.infer<typeof TaskQueue>
 
 function inferMetadataTaskId(metadata: Record<string, unknown> = {}): string | null {
   const taskId = metadata['current_task_id']
@@ -178,6 +181,20 @@ export async function updateTask(
     if (input.note) {
       task.notes.push({ ...input.note, timestamp: new Date().toISOString() })
     }
+    if (normalizedSpec !== undefined && normalizedSpec.trim() !== '') {
+      const sizePlanCreatedAt = new Date().toISOString()
+      task.sizePlan = buildTaskSizePlan({
+        task,
+        riskLanes: inferSizingRiskLanes(task),
+        createdAt: sizePlanCreatedAt,
+      })
+      if ((task.sizePlan.action === 'split_recommended' || task.sizePlan.action === 'split_required') && !task.parentGoalId) {
+        task.parentGoalId = `goal-${task.id}`
+      }
+      if (task.sizePlan.action === 'split_required' && task.status === 'ready') {
+        materializeRequiredSplitChildren(queue, task, sizePlanCreatedAt)
+      }
+    }
     task.updatedAt = new Date().toISOString()
     queue.lastUpdated = new Date().toISOString()
 
@@ -186,6 +203,133 @@ export async function updateTask(
   } catch (err) {
     return { success: false, error: String(err) }
   }
+}
+
+export function materializeRequiredSplitChildren(
+  queue: TaskQueueRecord,
+  parent: TaskRecord,
+  timestamp: string,
+): void {
+  if (parent.sizePlan?.action !== 'split_required') return
+  if (!parent.parentGoalId) parent.parentGoalId = `goal-${parent.id}`
+  const recommendations = parent.sizePlan.recommendedChildren ?? []
+  if (recommendations.length === 0) return
+
+  const planned = recommendations.map((recommendation, index) => {
+    const existingById = recommendation.createdTaskId
+      ? queue.tasks.find((task) => task.id === recommendation.createdTaskId)
+      : undefined
+    const existingByTitle = queue.tasks.find((task) =>
+      task.id !== parent.id &&
+      task.parentGoalId === parent.parentGoalId &&
+      normalizeTaskTitle(task.title) === normalizeTaskTitle(recommendation.title),
+    )
+    const task = existingById ?? existingByTitle ?? createSplitChildTask({
+      parent,
+      title: recommendation.title,
+      reason: recommendation.reason,
+      suggestedDomain: recommendation.suggestedDomain,
+      index,
+      queue,
+      timestamp,
+    })
+    if (!queue.tasks.some((candidate) => candidate.id === task.id)) queue.tasks.push(task)
+    recommendation.createdTaskId = task.id
+    return { recommendation, task }
+  })
+
+  const titleToId = new Map(planned.map(({ recommendation, task }) => [
+    normalizeTaskTitle(recommendation.title),
+    task.id,
+  ]))
+  for (const { recommendation, task } of planned) {
+    task.dependsOn = (recommendation.dependsOn ?? [])
+      .map((dependency) => titleToId.get(normalizeTaskTitle(dependency)) ?? dependency)
+      .filter((dependency, index, all) => dependency !== task.id && all.indexOf(dependency) === index)
+    task.updatedAt = timestamp
+  }
+  parent.status = 'parent'
+  delete parent.assignedTo
+
+  const notePrefix = 'Split required: created linked child tasks'
+  if (!parent.notes.some((note) => note.agentId === 'task-sizing' && note.content.startsWith(notePrefix))) {
+    parent.notes.push({
+      agentId: 'task-sizing',
+      role: 'coordinator',
+      content: `${notePrefix}: ${planned.map(({ task }) => task.id).join(', ')}.`,
+      timestamp,
+    })
+  }
+}
+
+function createSplitChildTask(input: {
+  parent: TaskRecord
+  title: string
+  reason: string
+  suggestedDomain?: string
+  index: number
+  queue: TaskQueueRecord
+  timestamp: string
+}): TaskRecord {
+  const id = uniqueSplitChildTaskId(input.queue, input.parent.id, input.title, input.index)
+  return Task.parse({
+    id,
+    title: input.title,
+    description: [
+      input.reason,
+      '',
+      `Split from parent task ${input.parent.id}: ${input.parent.title}.`,
+    ].join('\n'),
+    domain: input.suggestedDomain ?? input.parent.domain,
+    projectPath: input.parent.projectPath,
+    status: 'exploring',
+    priority: input.parent.priority,
+    dependsOn: [],
+    outOfScope: [],
+    acceptanceCriteria: [],
+    notes: [
+      {
+        agentId: 'task-sizing',
+        role: 'coordinator',
+        content: `Created from split-required parent ${input.parent.id}. ${input.reason}`,
+        timestamp: input.timestamp,
+      },
+    ],
+    gateResults: [],
+    reviewVerdicts: [],
+    adjudications: [],
+    escalations: [],
+    revisionCount: 0,
+    origination: 'system',
+    proposedBy: 'task-sizing',
+    proposalRationale: input.reason,
+    parentGoalId: input.parent.parentGoalId,
+    createdAt: input.timestamp,
+    updatedAt: input.timestamp,
+  })
+}
+
+function uniqueSplitChildTaskId(queue: TaskQueueRecord, parentId: string, title: string, index: number): string {
+  const base = `${parentId}-split-${slugForTaskId(title) || index + 1}`
+  let candidate = base
+  let suffix = 2
+  while (queue.tasks.some((task) => task.id === candidate)) {
+    candidate = `${base}-${suffix}`
+    suffix += 1
+  }
+  return candidate
+}
+
+function slugForTaskId(value: string): string {
+  return value
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '')
+    .slice(0, 56)
+}
+
+function normalizeTaskTitle(value: string | undefined): string {
+  return (value ?? '').trim().replace(/\s+/g, ' ').toLowerCase()
 }
 
 function normalizeAssignmentForStatus(
@@ -205,6 +349,7 @@ function normalizeAssignmentForStatus(
       task.assignedTo = 'gate-checker-agent'
       return
     case 'ready':
+    case 'parent':
     case 'spec_review':
     case 'exploring':
     case 'proposed':
@@ -228,6 +373,24 @@ function hasTaskMutation(input: UpdateTaskInput): boolean {
     input.acceptanceCriteria !== undefined ||
     input.gateResults !== undefined ||
     input.completedAt !== undefined
+}
+
+function inferSizingRiskLanes(task: z.infer<typeof Task>): string[] {
+  const text = [
+    task.title,
+    task.description,
+    task.spec,
+    ...task.acceptanceCriteria.map((criterion) => criterion.description),
+  ].join('\n').toLowerCase()
+  const lanes = new Set<string>()
+  if (/\b(ui|ux|screen|settings|toolbar|dashboard|form|copy)\b/.test(text)) lanes.add('ux_comprehension')
+  if (/\b(api|endpoint|route|contract|status code)\b/.test(text)) lanes.add('api_contract')
+  if (/\b(database|migration|migrate|backfill|schema|subscription|analytics|persistence)\b/.test(text)) lanes.add('data_integrity')
+  if (/\b(migration|migrate|backfill|schema)\b/.test(text)) lanes.add('migration_safety')
+  if (/\b(auth|privacy|pii|token|tenant|permission)\b/.test(text)) lanes.add('privacy')
+  if (/\b(release|rollout|flag|deploy|launch)\b/.test(text)) lanes.add('release_risk')
+  if (/\b(docs?|readme|guide|analytics)\b/.test(text)) lanes.add('docs_truth')
+  return [...lanes]
 }
 
 function inferSingleActiveTaskId(queue: z.infer<typeof TaskQueue>): string | null {

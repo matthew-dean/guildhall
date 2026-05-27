@@ -16,6 +16,33 @@ function baseTask(): Task {
   }
 }
 
+function readyTaskNeedingBriefCleanup(): Task {
+  return {
+    ...baseTask(),
+    productBrief: {
+      userJob: 'Add block menu controls.',
+      successMetric: '',
+      antiPatterns: [],
+    },
+    spec: '',
+    acceptanceCriteria: [],
+  }
+}
+
+function readyTaskCompleteForWorker(): Task {
+  return {
+    ...baseTask(),
+    productBrief: {
+      userJob: 'Add link controls.',
+      successMetric: 'Links can be edited inline.',
+      antiPatterns: [],
+      approvedAt: now,
+    },
+    spec: '## Summary\nAdd link controls.',
+    acceptanceCriteria: [{ description: 'Controls render.' }],
+  }
+}
+
 function handlers() {
   return {
     onApproveBrief: vi.fn(),
@@ -23,6 +50,8 @@ function handlers() {
     onRunTask: vi.fn(),
     onShapeDraft: vi.fn(),
     onOpenSpecTab: vi.fn(),
+    onOpenEscalationAction: vi.fn(),
+    onResolveEscalation: vi.fn(async () => {}),
     onAnswerQuestion: vi.fn(async () => {}),
   }
 }
@@ -41,6 +70,24 @@ function renderCurrent(turns: TaskThreadTurn[], options: { runError?: string | n
   return props
 }
 
+function renderCurrentWithTask(
+  task: Task,
+  turns: TaskThreadTurn[],
+  options: { runError?: string | null; runStatus?: string } = {},
+) {
+  const props = {
+    task,
+    turns,
+    busy: false,
+    runBusy: false,
+    runError: options.runError ?? null,
+    runStatus: options.runStatus ?? 'stopped',
+    ...handlers(),
+  }
+  render(CurrentTab, props)
+  return props
+}
+
 describe('CurrentTab', () => {
   afterEach(() => {
     cleanup()
@@ -48,10 +95,29 @@ describe('CurrentTab', () => {
   })
 
   it('renders a neutral state when nothing is waiting', () => {
-    renderCurrent([])
+    renderCurrentWithTask(readyTaskCompleteForWorker(), [])
 
     expect(screen.getByText('Nothing is waiting')).toBeTruthy()
     expect(screen.getByText('This task does not currently need a decision from you.')).toBeTruthy()
+  })
+
+  it('keeps task-level brief cleanup visible even when there is no active thread turn', async () => {
+    const props = renderCurrentWithTask(readyTaskNeedingBriefCleanup(), [])
+
+    expect(screen.getByText('Needs brief cleanup')).toBeTruthy()
+    const briefCleanupChip = screen.getByText('Brief cleanup needed')
+    expect(briefCleanupChip).toBeTruthy()
+    expect(briefCleanupChip.classList.contains('tone-agent-attention')).toBe(true)
+    expect(screen.getByText(/marked ready, but its brief\/spec is not complete enough/i)).toBeTruthy()
+    const viewButton = screen.getByRole('button', { name: /view brief/i })
+    const startButton = screen.getByRole('button', { name: 'Start' })
+    expect(startButton.classList.contains('v-agent')).toBe(true)
+    expect(viewButton.compareDocumentPosition(startButton) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+    await userEvent.click(startButton)
+
+    expect(props.onRunTask).toHaveBeenCalledOnce()
+    expect(props.onOpenSpecTab).not.toHaveBeenCalled()
+    expect(screen.queryByText('Nothing is waiting')).toBeNull()
   })
 
   it('answers task-scoped questions inline', async () => {
@@ -197,6 +263,7 @@ describe('CurrentTab', () => {
     expect(screen.getByText(/You can add context, but you do not need to babysit the draft/i)).toBeTruthy()
     expect(screen.queryByText('Task brief in progress')).toBeNull()
     expect(screen.queryByText(/Continue drafting the brief here when you are ready/i)).toBeNull()
+    expect(screen.getByRole('button', { name: /continue shaping brief/i })).toBeTruthy()
   })
 
   it('surfaces partial durable progress as recovery instead of queued work', () => {
@@ -223,6 +290,69 @@ describe('CurrentTab', () => {
     expect(screen.getByText(/Guildhall made partial progress, then the agent failed/i)).toBeTruthy()
     expect(screen.getByText('Write file src/components/LinkEditor.svelte')).toBeTruthy()
     expect(screen.queryByText('Queued')).toBeNull()
+  })
+
+  it('turns escalation blockers into a decision card with a recommended action', async () => {
+    const props = renderCurrent([
+      {
+        id: 'turn-escalation',
+        kind: 'escalation',
+        at: now,
+        persona: 'worker',
+        status: 'active',
+        phase: 'blocked',
+        taskId: 'task-link-editor',
+        taskTitle: 'Knit: add link editor controls',
+        escalationId: 'esc-1',
+        escalationAgentId: 'worker-agent',
+        escalationReason: 'spec_ambiguous',
+        summary: 'Card component exists but template syntax mismatch prevents edit',
+        details: 'The worker found src/components/Card.svelte, but the requested dashboard edit does not match the current file shape.',
+      },
+    ])
+
+    expect(screen.getByText('Recovery needed')).toBeTruthy()
+    expect(screen.getByText('Spec unclear')).toBeTruthy()
+    expect(screen.getByText(/The worker found src\/components\/Card.svelte/i)).toBeTruthy()
+    expect(screen.getByText(/Most likely next step/i)).toBeTruthy()
+    expect(screen.queryByText(/Open the task/i)).toBeNull()
+    expect(screen.queryByRole('button', { name: /Review task details/i })).toBeNull()
+
+    const reworkButton = screen.getByRole('button', { name: /^Rework spec$/i })
+    expect(reworkButton.classList.contains('v-agent')).toBe(true)
+    await userEvent.click(reworkButton)
+    await userEvent.click(screen.getByRole('button', { name: /View spec and evidence/i }))
+
+    expect(props.onOpenEscalationAction).toHaveBeenCalledWith('esc-1', 'retry')
+    expect(props.onOpenSpecTab).toHaveBeenCalledOnce()
+  })
+
+  it('turns acceptance-criteria evidence blockers into a concrete Guildhall action', async () => {
+    const props = renderCurrent([
+      {
+        id: 'turn-escalation',
+        kind: 'escalation',
+        at: now,
+        persona: 'worker',
+        status: 'active',
+        phase: 'blocked',
+        taskId: 'task-link-editor',
+        taskTitle: 'Knit: add link editor controls',
+        escalationId: 'esc-1',
+        escalationAgentId: 'worker-agent',
+        summary: 'Cannot satisfy required AC-8 evidence command under current authoritative verification gate.',
+        details: 'Coordinator scoped instructions require an AC-8 evidence block with the exact pnpm --dir frontend test result (timestamp + exit code) and concrete auth test specs.',
+      },
+    ])
+
+    expect(screen.getByText('Guildhall can continue')).toBeTruthy()
+    expect(screen.getByText('Guildhall needs to run one missing check.')).toBeTruthy()
+    expect(screen.getByText(/not asking you to prove anything/i)).toBeTruthy()
+    expect(screen.getByRole('button', { name: /Let Guildhall run the check/i })).toBeTruthy()
+    expect(screen.getByRole('button', { name: /View spec and evidence/i })).toBeTruthy()
+    await userEvent.click(screen.getByRole('button', { name: /Let Guildhall run the check/i }))
+    expect(props.onOpenEscalationAction).toHaveBeenCalledWith('esc-1', 'retry')
+    expect(document.body.textContent).not.toMatch(/\bAC-8\b/)
   })
 
   it('shows queued work, run errors, and checklist progress in one card', async () => {
@@ -297,27 +427,67 @@ describe('CurrentTab', () => {
         taskStatus: 'ready',
         summary: 'Ready for work.',
         checklist: {
-          title: 'Task checklist',
+          title: 'Task brief checklist',
           doneCount: 2,
           totalSteps: 4,
           activeStepId: 'success',
           steps: [
-            { id: 'title', title: 'Give the task a title', why: 'Needed downstream.', status: 'done' },
-            { id: 'description', title: 'Describe what the agent is looking at', why: 'Needed downstream.', status: 'done' },
-            { id: 'success', title: 'Explain what success looks like', why: 'Review needs this.', status: 'active' },
-            { id: 'criteria', title: 'Add at least one acceptance criterion', why: 'Review needs this.', status: 'pending' },
+            { id: 'title', title: 'Readable title', why: 'Give this work a name someone can recognize later.', status: 'done' },
+            { id: 'description', title: 'Starting point', why: 'Say what Guildhall should inspect or use as the starting evidence.', status: 'done' },
+            { id: 'success', title: 'Success target', why: 'State what should be true when this work is finished.', status: 'active' },
+            { id: 'criteria', title: 'Acceptance criteria', why: 'Add the concrete checks Guildhall should use before calling the work done.', status: 'pending' },
           ],
         },
       },
     ])
 
-    expect(screen.getByText('Needs task brief')).toBeTruthy()
-    expect(screen.getByText(/not ready for worker implementation/i)).toBeTruthy()
+    expect(screen.getByText('Needs brief cleanup')).toBeTruthy()
+    expect(screen.getByText('Brief cleanup needed')).toBeTruthy()
+    expect(screen.getByText('Guildhall needs to turn the source notes into an outcome and acceptance checks before implementation.')).toBeTruthy()
+    expect(screen.getAllByText('Missing').length).toBeGreaterThanOrEqual(1)
     expect(screen.queryByRole('button', { name: /start work/i })).toBeNull()
-    await userEvent.click(screen.getByRole('button', { name: /review checklist/i }))
+    const startButton = screen.getByRole('button', { name: 'Start' })
+    expect(startButton.classList.contains('v-agent')).toBe(true)
+    await userEvent.click(startButton)
 
-    expect(props.onOpenSpecTab).toHaveBeenCalledOnce()
-    expect(props.onRunTask).not.toHaveBeenCalled()
+    expect(props.onRunTask).toHaveBeenCalledOnce()
+    expect(props.onOpenSpecTab).not.toHaveBeenCalled()
+  })
+
+  it('names the exact missing brief field in task details', async () => {
+    const props = renderCurrent([
+      {
+        id: 'turn-incomplete-ready',
+        kind: 'inflight',
+        at: now,
+        persona: 'worker',
+        status: 'active',
+        phase: 'inflight',
+        taskId: 'task-link-editor',
+        taskTitle: 'Block menu / block side menu',
+        taskStatus: 'ready',
+        summary: 'Ready for work.',
+        checklist: {
+          title: 'Task brief checklist',
+          doneCount: 3,
+          totalSteps: 4,
+          activeStepId: 'acceptance',
+          steps: [
+            { id: 'title', title: 'Readable title', why: 'Give this work a name someone can recognize later.', status: 'done' },
+            { id: 'description', title: 'Starting point', why: 'Say what Guildhall should inspect or use as the starting evidence.', status: 'done' },
+            { id: 'success', title: 'Success target', why: 'State what should be true when this work is finished.', status: 'done' },
+            { id: 'acceptance', title: 'Acceptance criteria', why: 'Add the concrete checks Guildhall should use before calling the work done.', status: 'pending' },
+          ],
+        },
+      },
+    ])
+
+    expect(screen.getByText('Needs brief cleanup')).toBeTruthy()
+    expect(screen.getByText('Brief cleanup needed')).toBeTruthy()
+    expect(screen.getByText('Guildhall needs to turn the source notes into concrete acceptance checks before implementation.')).toBeTruthy()
+    await userEvent.click(screen.getByRole('button', { name: 'Start' }))
+
+    expect(props.onRunTask).toHaveBeenCalledOnce()
   })
 
   it('shows already-running ready work as queued instead of starting silently', () => {
@@ -339,7 +509,9 @@ describe('CurrentTab', () => {
       { runStatus: 'running' },
     )
 
-    expect(screen.getByText('Queued for Guildhall')).toBeTruthy()
+    const queuedChip = screen.getByText('Queued for Guildhall')
+    expect(queuedChip).toBeTruthy()
+    expect(queuedChip.classList.contains('tone-agent')).toBe(true)
     expect(screen.getByRole('button', { name: /already queued/i })).toHaveProperty('disabled', true)
     expect(screen.queryByRole('button', { name: /start work/i })).toBeNull()
   })
@@ -369,8 +541,42 @@ describe('CurrentTab', () => {
       },
     ])
 
+    expect(screen.getByText('Live progress')).toBeTruthy()
     expect(screen.getByText('In flight')).toBeTruthy()
+    expect(screen.getByText('Activity log')).toBeTruthy()
     expect(screen.getByText('Started write checkpoint')).toBeTruthy()
+  })
+
+  it('keeps start and finish events visible inside an explicit activity log', () => {
+    renderCurrent([
+      {
+        id: 'turn-live',
+        kind: 'inflight',
+        at: now,
+        persona: 'worker',
+        status: 'active',
+        phase: 'inflight',
+        taskId: 'task-link-editor',
+        taskTitle: 'Knit: add link editor controls',
+        taskStatus: 'in_progress',
+        summary: 'Worker is editing files.',
+        liveAgent: {
+          name: 'worker-agent',
+          startedAt: now,
+          lastEventLabel: 'Finished log progress',
+          lastEventAt: '2026-05-19T15:01:00.000Z',
+        },
+        activity: [
+          { at: now, label: 'Started log progress', tone: 'running' },
+          { at: '2026-05-19T15:01:00.000Z', label: 'Finished log progress', tone: 'ok' },
+        ],
+      },
+    ])
+
+    expect(screen.getByText('Current status')).toBeTruthy()
+    expect(screen.getByText('Activity log')).toBeTruthy()
+    expect(screen.getByText('Started log progress')).toBeTruthy()
+    expect(screen.getByText('Finished log progress')).toBeTruthy()
   })
 
   it('shows local model startup waits as still active instead of silently stuck', () => {
@@ -420,7 +626,9 @@ describe('CurrentTab', () => {
     ])
 
     expect(screen.getByText('Spec revision queued')).toBeTruthy()
-    await userEvent.click(screen.getByRole('button', { name: /revise spec/i }))
+    const reviseButton = screen.getByRole('button', { name: /revise spec/i })
+    expect(reviseButton.classList.contains('v-agent')).toBe(true)
+    await userEvent.click(reviseButton)
 
     expect(props.onRunTask).toHaveBeenCalledOnce()
   })

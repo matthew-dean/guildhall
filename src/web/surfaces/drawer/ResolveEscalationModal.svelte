@@ -12,6 +12,7 @@
   import Stack from '../../lib/Stack.svelte'
   import Field from '../../lib/Field.svelte'
   import Chip from '../../lib/Chip.svelte'
+  import Icon from '../../lib/Icon.svelte'
   import { escalationPrimaryAction, escalationReasonLabel, roleLabel } from '../../lib/escalation-labels.js'
   import type { Escalation } from '../../lib/types.js'
 
@@ -55,6 +56,11 @@
   }
 
   const reasonText = $derived(escalationReasonLabel(escalation?.reason))
+  const displayedReasonText = $derived(
+    mode === 'retry' && primaryAction.label === 'Retry worker'
+      ? 'Worker stalled'
+      : reasonText,
+  )
   const roleText = $derived(roleLabel(escalation?.agentId))
 </script>
 
@@ -69,13 +75,13 @@
       <Stack gap="4">
         <Stack gap="2">
           <div class="chips">
-            <Chip label={reasonText} tone="warn" />
+            <Chip label={displayedReasonText} tone="warn" />
             <Chip label={roleText} tone="accent" />
           </div>
           <p class="summary">{escalation.summary}</p>
           <p class="mode-help">
             {mode === 'retry'
-              ? 'Guildhall will close this blocker and try the task again from the selected step.'
+              ? 'Guildhall will close this blocker and continue from the step this recovery action is built for.'
               : 'Use this when you handled the blocker yourself or want to tell Guildhall exactly where to continue.'}
           </p>
         </Stack>
@@ -93,19 +99,21 @@
           />
         </Field>
 
-        <Field label="Resume at" hint="Which step the task re-enters.">
-          <Select
-            bind:value={nextStatus}
-            options={[
-              { value: 'ready', label: 'Ready (coordinator picks next step)' },
-              { value: 'gate_check', label: 'Gate check (re-run gates)' },
-              { value: 'in_progress', label: 'In progress (keep working)' },
-              { value: 'review', label: 'Review (send to reviewer)' },
-              { value: 'exploring', label: 'Exploring (re-investigate)' },
-              { value: 'spec_review', label: 'Awaiting approval' },
-            ]}
-          />
-        </Field>
+        {#if mode === 'resolve'}
+          <Field label="Resume at" hint="Which step the task re-enters.">
+            <Select
+              bind:value={nextStatus}
+              options={[
+                { value: 'ready', label: 'Ready (coordinator picks next step)' },
+                { value: 'gate_check', label: 'Gate check (re-run gates)' },
+                { value: 'in_progress', label: 'In progress (keep working)' },
+                { value: 'review', label: 'Review (send to reviewer)' },
+                { value: 'exploring', label: 'Exploring (re-investigate)' },
+                { value: 'spec_review', label: 'Awaiting approval' },
+              ]}
+            />
+          </Field>
+        {/if}
       </Stack>
     {/if}
   {/snippet}
@@ -113,7 +121,8 @@
   {#snippet footer()}
     <Button variant="ghost" disabled={busy} onclick={onClose}>Cancel</Button>
     {#if mode === 'retry'}
-      <Button variant="primary" disabled={busy} onclick={handleRetry}>
+      <Button variant="agent" disabled={busy} onclick={handleRetry}>
+        <Icon name="sparkles" size={14} />
         {primaryAction.label}
       </Button>
     {:else}

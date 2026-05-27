@@ -59,7 +59,7 @@ describe('workspace-config', () => {
   // bootstrapWorkspace
   // -------------------------------------------------------------------------
   describe('bootstrapWorkspace', () => {
-    it('creates guildhall.yaml and memory files', () => {
+    it('creates guildhall.yaml and shared .guildhall project-state files', () => {
       const wsDir = join(TMP, 'bootstrap-test')
       const config = bootstrapWorkspace(wsDir, { name: 'Bootstrap Test' })
 
@@ -68,10 +68,11 @@ describe('workspace-config', () => {
       expect(existsSync(join(wsDir, FORGE_YAML_FILENAME))).toBe(true)
       expect(existsSync(join(wsDir, '.guildhall'))).toBe(true)
       expect(readFileSync(join(wsDir, '.gitignore'), 'utf8')).toContain('.guildhall/')
-      expect(existsSync(join(wsDir, 'memory', 'TASKS.json'))).toBe(true)
-      expect(existsSync(join(wsDir, 'memory', 'MEMORY.md'))).toBe(true)
-      expect(existsSync(join(wsDir, 'memory', 'DECISIONS.md'))).toBe(true)
-      expect(existsSync(join(wsDir, 'memory', 'PROGRESS.md'))).toBe(true)
+      expect(existsSync(join(wsDir, '.guildhall', 'TASKS.json'))).toBe(true)
+      expect(existsSync(join(wsDir, '.guildhall', 'MEMORY.md'))).toBe(true)
+      expect(existsSync(join(wsDir, '.guildhall', 'DECISIONS.md'))).toBe(true)
+      expect(existsSync(join(wsDir, '.guildhall', 'PROGRESS.md'))).toBe(true)
+      expect(existsSync(join(wsDir, 'memory'))).toBe(false)
     })
 
     it('does not overwrite existing guildhall.yaml', () => {
@@ -84,14 +85,15 @@ describe('workspace-config', () => {
     it('seeds TASKS.json as empty array', () => {
       const wsDir = join(TMP, 'tasks-seed')
       bootstrapWorkspace(wsDir, { name: 'Tasks Seed' })
-      const tasksRaw = readFileSync(join(wsDir, 'memory', 'TASKS.json'), 'utf8')
+      const tasksRaw = readFileSync(join(wsDir, '.guildhall', 'TASKS.json'), 'utf8')
       expect(JSON.parse(tasksRaw)).toEqual([])
     })
 
-    it('creates memory/exploring/ subdirectory (FR-08)', () => {
+    it('does not seed local transcript history into project memory', () => {
       const wsDir = join(TMP, 'exploring-seed')
       bootstrapWorkspace(wsDir, { name: 'Exploring Seed' })
-      expect(existsSync(join(wsDir, 'memory', 'exploring'))).toBe(true)
+      expect(existsSync(join(wsDir, '.guildhall', 'exploring'))).toBe(false)
+      expect(existsSync(join(wsDir, 'memory'))).toBe(false)
     })
   })
 
@@ -129,6 +131,52 @@ describe('workspace-config', () => {
       expect(() => readWorkspaceConfig(wsDir)).toThrow(/guildhall.yaml not found/)
     })
 
+    it('keeps project-shaped settings on child projects in a workspace', () => {
+      const wsDir = join(TMP, 'workspace-child-settings')
+      mkdirSync(wsDir)
+
+      writeWorkspaceConfig(wsDir, {
+        name: 'Workspace Child Settings',
+        id: 'workspace-child-settings',
+        kind: 'workspace',
+        projects: [
+          {
+            id: 'looma',
+            path: 'looma',
+            bootstrap: {
+              commands: ['pnpm install'],
+              successGates: ['pnpm lint'],
+            },
+            worktree: {
+              include: ['.env'],
+            },
+            gitStory: {
+              completionTarget: 'open_pr',
+              commit: 'ask',
+              push: 'auto',
+              pullRequest: 'ask',
+            },
+          },
+          {
+            id: 'knit',
+            path: 'knit',
+          },
+        ],
+      } as any)
+
+      const parsed = readWorkspaceConfig(wsDir)
+      expect(parsed.kind).toBe('workspace')
+      expect(parsed.bootstrap).toBeUndefined()
+      expect(parsed.worktree).toBeUndefined()
+      expect(parsed.gitStory).toBeUndefined()
+      expect(parsed.projects[0]?.bootstrap?.successGates).toEqual(['pnpm lint'])
+      expect(parsed.projects[0]?.worktree?.include).toEqual(['.env'])
+      expect(parsed.projects[0]?.gitStory?.push).toBe('auto')
+      expect(parsed.projects[1]?.bootstrap).toBeUndefined()
+      expect(parsed.projects[1]?.worktree).toBeUndefined()
+      expect(parsed.projects[1]?.gitStory).toBeUndefined()
+    })
+
     it('explains YAML parse and schema validation failures', () => {
       const parseDir = join(TMP, 'bad-yaml')
       mkdirSync(parseDir)
@@ -146,8 +194,8 @@ describe('workspace-config', () => {
   // resolveMemoryDir
   // -------------------------------------------------------------------------
   describe('resolveMemoryDir', () => {
-    it('returns <workspacePath>/memory', () => {
-      expect(resolveMemoryDir('/home/user/project')).toBe('/home/user/project/memory')
+    it('returns <workspacePath>/.guildhall', () => {
+      expect(resolveMemoryDir('/home/user/project')).toBe('/home/user/project/.guildhall')
     })
   })
 
@@ -179,13 +227,13 @@ describe('workspace-config', () => {
     it('reports malformed and schema-invalid agent override files', () => {
       const wsDir = join(TMP, 'bad-agent-settings')
       bootstrapWorkspace(wsDir, { name: 'Bad Agent Settings' })
-      const overridesPath = join(wsDir, 'memory', 'agent-overrides.yaml')
+      const overridesPath = join(wsDir, '.guildhall', 'agent-overrides.yaml')
 
       writeFileSync(overridesPath, 'version: [unterminated\n')
-      expect(() => readAgentSettings(wsDir)).toThrow(/Failed to parse memory\/agent-overrides.yaml/)
+      expect(() => readAgentSettings(wsDir)).toThrow(/Failed to parse \.guildhall\/agent-overrides.yaml/)
 
       writeFileSync(overridesPath, 'version: nope\n')
-      expect(() => readAgentSettings(wsDir)).toThrow(/Invalid memory\/agent-overrides.yaml/)
+      expect(() => readAgentSettings(wsDir)).toThrow(/Invalid \.guildhall\/agent-overrides.yaml/)
     })
 
     it('merges coordinator settings append-only while deduplicating repeated facts', () => {

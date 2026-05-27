@@ -63,6 +63,161 @@ describe('OpenAICompatibleClient', () => {
     }
   })
 
+  it('passes prompt_cache_key through to OpenAI-compatible providers', async () => {
+    let captured: Record<string, unknown> | undefined
+    const fakeFetch = (async (_url: string, init?: RequestInit) => {
+      captured = JSON.parse((init?.body as string) ?? '{}') as Record<string, unknown>
+      return sseResponse([
+        dataFrame({ choices: [{ delta: { content: 'ok' }, finish_reason: 'stop' }] }),
+        'data: [DONE]\n\n',
+      ])
+    }) as unknown as typeof fetch
+
+    const client = new OpenAICompatibleClient({ fetch: fakeFetch })
+    await collect(
+      client.streamMessage({
+        model: 'llama-3',
+        messages: [{ role: 'user', content: [{ type: 'text', text: 'hi' }] }],
+        max_tokens: 64,
+        tools: [],
+        prompt_cache_key: 'openai-api:fll:task-006:worker:s1',
+      }),
+    )
+
+    expect(captured?.prompt_cache_key).toBe('openai-api:fll:task-006:worker:s1')
+  })
+
+  it('retries once without prompt_cache_key when a strict OpenAI-compatible server rejects it', async () => {
+    const bodies: Array<Record<string, unknown>> = []
+    const fakeFetch = (async (_url: string, init?: RequestInit) => {
+      bodies.push(JSON.parse((init?.body as string) ?? '{}') as Record<string, unknown>)
+      if (bodies.length === 1) {
+        return new Response('unknown parameter: prompt_cache_key', { status: 400 })
+      }
+      return sseResponse([
+        dataFrame({ choices: [{ delta: { content: 'ok' }, finish_reason: 'stop' }] }),
+        'data: [DONE]\n\n',
+      ])
+    }) as unknown as typeof fetch
+
+    const client = new OpenAICompatibleClient({ fetch: fakeFetch })
+    const events = await collect(
+      client.streamMessage({
+        model: 'llama-3',
+        messages: [{ role: 'user', content: [{ type: 'text', text: 'hi' }] }],
+        max_tokens: 64,
+        tools: [],
+        prompt_cache_key: 'openai-api:fll:task-006:worker:s1',
+      }),
+    )
+
+    expect(bodies).toHaveLength(2)
+    expect(bodies[0]?.prompt_cache_key).toBe('openai-api:fll:task-006:worker:s1')
+    expect(bodies[1]?.prompt_cache_key).toBeUndefined()
+    expect(events.at(-1)?.type).toBe('message_complete')
+  })
+
+  it('preserves provider cached-token usage details', async () => {
+    const fakeFetch = (async () => sseResponse([
+      dataFrame({ choices: [{ delta: { content: 'ok' }, finish_reason: null }] }),
+      dataFrame({
+        usage: {
+          prompt_tokens: 5000,
+          completion_tokens: 50,
+          prompt_tokens_details: { cached_tokens: 4800 },
+        },
+      }),
+      'data: [DONE]\n\n',
+    ])) as unknown as typeof fetch
+
+    const client = new OpenAICompatibleClient({ fetch: fakeFetch })
+    const events = await collect(
+      client.streamMessage({
+        model: 'llama-3',
+        messages: [{ role: 'user', content: [{ type: 'text', text: 'hi' }] }],
+        max_tokens: 64,
+        tools: [],
+      }),
+    )
+
+    const terminal = events.at(-1)
+    expect(terminal?.type).toBe('message_complete')
+    if (terminal?.type === 'message_complete') {
+      expect(terminal.usage).toEqual({
+        input_tokens: 5000,
+        output_tokens: 50,
+        cached_input_tokens: 4800,
+      })
+    }
+  })
+
+  it('passes reasoning and structured-output request options through to OpenAI-compatible providers', async () => {
+    let captured: Record<string, unknown> | undefined
+    const fakeFetch = (async (_url: string, init?: RequestInit) => {
+      captured = JSON.parse((init?.body as string) ?? '{}') as Record<string, unknown>
+      return sseResponse([
+        dataFrame({ choices: [{ delta: { content: '{"verdict":"pass"}' }, finish_reason: 'stop' }] }),
+        'data: [DONE]\n\n',
+      ])
+    }) as unknown as typeof fetch
+
+    const responseFormat = {
+      type: 'json_schema',
+      json_schema: {
+        name: 'guildhall_verdict',
+        strict: true,
+        schema: {
+          type: 'object',
+          properties: { verdict: { type: 'string' } },
+          required: ['verdict'],
+          additionalProperties: false,
+        },
+      },
+    }
+
+    const client = new OpenAICompatibleClient({ fetch: fakeFetch })
+    await collect(
+      client.streamMessage({
+        model: 'Qwen/Qwen3-235B-A22B-Thinking-2507',
+        messages: [{ role: 'user', content: [{ type: 'text', text: 'judge it' }] }],
+        max_tokens: 64,
+        tools: [],
+        reasoning_effort: 'low',
+        reasoning: { effort: 'low', exclude: false },
+        response_format: responseFormat,
+        tool_choice: 'auto',
+      }),
+    )
+
+    expect(captured?.reasoning_effort).toBe('low')
+    expect(captured?.reasoning).toEqual({ effort: 'low', exclude: false })
+    expect(captured?.response_format).toEqual(responseFormat)
+    expect(captured?.tool_choice).toBe('auto')
+  })
+
+  it('requests usage details for streamed tool-call responses', async () => {
+    let captured: Record<string, unknown> | undefined
+    const fakeFetch = (async (_url: string, init?: RequestInit) => {
+      captured = JSON.parse((init?.body as string) ?? '{}') as Record<string, unknown>
+      return sseResponse([
+        dataFrame({ choices: [{ delta: { content: 'ok' }, finish_reason: 'stop' }] }),
+        'data: [DONE]\n\n',
+      ])
+    }) as unknown as typeof fetch
+
+    const client = new OpenAICompatibleClient({ fetch: fakeFetch })
+    await collect(
+      client.streamMessage({
+        model: 'Qwen/Qwen3.5-35B-A3B',
+        messages: [{ role: 'user', content: [{ type: 'text', text: 'use a tool if needed' }] }],
+        max_tokens: 64,
+        tools: [{ name: 'read_file', description: 'Read a file', input_schema: { type: 'object' } }],
+      }),
+    )
+
+    expect(captured?.stream_options).toEqual({ include_usage: true })
+  })
+
   it('passes an abort signal and reports timeout errors clearly', async () => {
     let signalSeen = false
     const fakeFetch = (async (_url: string, init?: RequestInit) => {
@@ -413,6 +568,7 @@ describe('OpenAICompatibleClient retry behavior', () => {
     if (retryEvent?.type === 'retry') {
       expect(retryEvent.attempt).toBe(1)
       expect(retryEvent.max_attempts).toBe(3)
+      expect(retryEvent.delay_seconds).toBe(5)
     }
     expect(call).toBe(2)
     const terminal = events.at(-1)

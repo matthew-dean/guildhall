@@ -3,6 +3,8 @@ import { readmeSource } from './sources/readme.js'
 import { agentsMdSource } from './sources/agents-md.js'
 import { roadmapSource } from './sources/roadmap.js'
 import { planningDocsSource } from './sources/planning-docs.js'
+import { schemaSurfaceSource } from './sources/schema-surface.js'
+import { textCorpusSource } from './sources/text-corpus.js'
 import { todoCommentsSource } from './sources/todo-comments.js'
 import { gitLogSource } from './sources/git-log.js'
 
@@ -16,6 +18,8 @@ export const BUILTIN_TASK_SOURCES: readonly TaskSource[] = [
   agentsMdSource,
   roadmapSource,
   planningDocsSource,
+  textCorpusSource,
+  schemaSurfaceSource,
   gitLogSource,
   todoCommentsSource,
 ]

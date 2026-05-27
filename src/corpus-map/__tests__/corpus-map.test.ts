@@ -4,6 +4,7 @@ import path from 'node:path'
 import { execFile } from 'node:child_process'
 import { promisify } from 'node:util'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
+import { getProjectStateDir } from '@guildhall/sessions'
 import { parse as parseYaml } from 'yaml'
 import {
   buildWorkerCorpusContext,
@@ -30,7 +31,7 @@ describe('corpus map', () => {
 
   beforeEach(async () => {
     projectRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'guildhall-corpus-map-'))
-    memoryDir = path.join(projectRoot, 'memory')
+    memoryDir = getProjectStateDir(projectRoot)
     await writeFixtureProject(projectRoot)
   })
 
@@ -53,7 +54,7 @@ describe('corpus map', () => {
     expect(result.map.abstractions.map((abstraction) => abstraction.id)).toContain('button')
     expect(result.map.abstractions.map((abstraction) => abstraction.id)).toContain('design-system')
     expect(result.map.designSystem).toMatchObject({
-      sourcePath: 'memory/design-system.yaml',
+      sourcePath: '.guildhall/design-system.yaml',
       approved: true,
       maturity: 'thin',
       tokenCounts: { color: 1, spacing: 1, typography: 0, radius: 0, shadow: 0 },
@@ -143,7 +144,7 @@ describe('corpus map', () => {
       projectRoot,
       memoryDir,
       reason: 'worker-completion',
-      touchedFiles: ['memory/design-system.yaml'],
+      touchedFiles: ['.guildhall/design-system.yaml'],
     })
 
     expect(next.mode).toBe('full')
@@ -424,7 +425,7 @@ async function writeFixtureProject(root: string): Promise<void> {
   await fs.mkdir(path.join(root, 'src/web/surfaces/project'), { recursive: true })
   await fs.mkdir(path.join(root, 'src/runtime'), { recursive: true })
   await fs.mkdir(path.join(root, 'docs'), { recursive: true })
-  await fs.mkdir(path.join(root, 'memory'), { recursive: true })
+  await fs.mkdir(path.join(root, '.guildhall'), { recursive: true })
   await fs.writeFile(
     path.join(root, 'package.json'),
     JSON.stringify({ name: 'fixture', scripts: { test: 'vitest' }, dependencies: { svelte: '5.0.0' } }, null, 2),
@@ -455,7 +456,7 @@ async function writeFixtureProject(root: string): Promise<void> {
     'utf-8',
   )
   await fs.writeFile(
-    path.join(root, 'memory/design-system.yaml'),
+    path.join(root, '.guildhall/design-system.yaml'),
     [
       'revision: 1',
       'tokens:',

@@ -45,13 +45,48 @@ describe('global providers store', () => {
 
   it('setProvider preserves siblings — multi-provider is the common case', () => {
     setProvider('anthropic-api', { apiKey: 'a' })
-    setProvider('openai-api', { apiKey: 'o', baseUrl: 'https://integrate.api.nvidia.com/v1' })
+    setProvider('openai-api', {
+      apiKey: 'o',
+      baseUrl: 'https://integrate.api.nvidia.com/v1',
+      maxConcurrency: 64,
+    })
     setProvider('llama-cpp', { url: 'http://localhost:1234/v1' })
     const g = readGlobalProviders()
     expect(g.providers['anthropic-api']?.apiKey).toBe('a')
     expect(g.providers['openai-api']?.apiKey).toBe('o')
     expect(g.providers['openai-api']?.baseUrl).toBe('https://integrate.api.nvidia.com/v1')
+    expect(g.providers['openai-api']?.maxConcurrency).toBe(64)
     expect(g.providers['llama-cpp']?.url).toBe('http://localhost:1234/v1')
+  })
+
+  it('validates provider-group max concurrency as part of provider config', () => {
+    expect(() =>
+      writeGlobalProviders({
+        version: 1,
+        providers: {
+          'openai-api': {
+            apiKey: 'o',
+            maxConcurrency: 201,
+          },
+        },
+      }),
+    ).toThrow(/maxConcurrency/)
+
+    writeGlobalProviders({
+      version: 1,
+      providers: {
+        'claude-oauth': { verifiedAt: '2026-04-24T12:00:00Z', maxConcurrency: 10 },
+        'codex-oauth': { maxConcurrency: 10 },
+        'openai-api': { apiKey: 'o', maxConcurrency: 200 },
+        'llama-cpp': { url: 'http://localhost:1234/v1', maxConcurrency: 2 },
+      },
+    })
+
+    const g = readGlobalProviders()
+    expect(g.providers['claude-oauth']?.maxConcurrency).toBe(10)
+    expect(g.providers['codex-oauth']?.maxConcurrency).toBe(10)
+    expect(g.providers['openai-api']?.maxConcurrency).toBe(200)
+    expect(g.providers['llama-cpp']?.maxConcurrency).toBe(2)
   })
 
   it('removeProvider is idempotent and leaves siblings intact', () => {
@@ -105,14 +140,14 @@ describe('global providers store', () => {
   })
 
   it('writes commented placeholder keys so the file documents the schema', () => {
-    setProvider('llama-cpp', { url: 'http://minipc:1234/v1' })
+    setProvider('llama-cpp', { url: 'http://minipc:1234/v1', maxConcurrency: 2 })
     const raw = readFileSync(globalProvidersPath(), 'utf8')
     expect(raw).toMatch(/# anthropic-api:/)
     expect(raw).toMatch(/#   apiKey: "sk-ant-\.\.\."/)
     expect(raw).toMatch(/# openai-api:/)
     expect(raw).toMatch(/#   apiKey: "sk-\.\.\."/)
     expect(raw).toMatch(/#   baseUrl: "https:\/\/api\.openai\.com\/v1"/)
-    expect(raw).toMatch(/llama-cpp:\n    url: "http:\/\/minipc:1234\/v1"/)
+    expect(raw).toMatch(/llama-cpp:\n    url: "http:\/\/minipc:1234\/v1"\n    maxConcurrency: 2/)
   })
 
   describe('resolveGlobalCredentials', () => {

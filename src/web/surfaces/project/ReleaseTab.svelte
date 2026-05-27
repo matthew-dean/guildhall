@@ -1,8 +1,8 @@
 <!--
-  Release readiness view. Primary/secondary/overflow IA:
+  Current work closure view. Primary/secondary/overflow IA:
     · Primary: single verdict band — shared status treatment + one-line reason.
     · Secondary: criteria list, one row per check, expandable into task links.
-    · Overflow: compact release counts and task-state tally.
+    · Overflow: compact closure counts and task-state tally.
 -->
 <script lang="ts">
   import FrameCard from '../../../../packages/ui/src/components/FrameCard.svelte'
@@ -10,7 +10,7 @@
   import SectionHeader from '../../../../packages/ui/src/components/SectionHeader.svelte'
   import StatusPill from '../../../../packages/ui/src/components/StatusPill.svelte'
   import { nav } from '../../lib/nav.svelte.js'
-  import { projectFetch } from '../../lib/project-routes.js'
+  import { currentTaskHref, projectFetch } from '../../lib/project-routes.js'
 
   interface ReleaseItem {
     id?: string
@@ -25,6 +25,11 @@
   interface ReleasePayload {
     initializationNeeded?: boolean
     error?: string
+    scope?: {
+      kind: string
+      label: string
+      description: string
+    }
     openEscalations: ReleaseItem[]
     unapprovedBriefs: ReleaseItem[]
     unapprovedSpecs: ReleaseItem[]
@@ -34,11 +39,26 @@
       drafted: boolean
       approved: boolean
       revision?: number
+      source?: 'guildhall' | 'repo' | 'none' | string
+      label?: string
+      reason?: string
     }
     dirtyCheckout?: {
       ownedCount: number
       files: string[]
       error?: string
+    }
+    gitStory?: {
+      ready?: boolean
+      state?: string
+      blockers?: Array<{
+        id?: string
+        label?: string
+        state?: string
+        reason?: string
+        nextAction?: string
+        taskId?: string
+      }>
     }
     statusCounts: Record<string, number>
     totals: {
@@ -47,10 +67,13 @@
       unfinishedCount?: number
       designSystemBlockingCount?: number
       dirtyCheckoutBlockingCount?: number
+      gitStoryBlockingCount?: number
       tasks: number
       done: number
     }
   }
+
+  type GitStoryBlocker = NonNullable<NonNullable<ReleasePayload['gitStory']>['blockers']>[number]
 
   interface Props {
     subView?: string | null
@@ -94,7 +117,7 @@
   }
 
   function openTask(id: string) {
-    if (id) nav('/task/' + encodeURIComponent(id))
+    if (id) nav(currentTaskHref(id))
   }
 
   interface Criterion {
@@ -123,7 +146,7 @@
             key: 'specs',
             label: 'Specs awaiting approval',
             items: data.unapprovedSpecs,
-            clearLabel: 'Nothing in spec_review.',
+            clearLabel: 'No specs awaiting approval.',
           },
           {
             key: 'shelved',
@@ -143,12 +166,15 @@
 
   const dsLabel = $derived(() => {
     const ds = data?.designSystem
-    if (!ds) return { label: 'not drafted', tone: 'warn' as const, clear: false }
-    if (!ds.drafted) return { label: 'not drafted', tone: 'warn' as const, clear: false }
-    if (ds.approved) {
-      return { label: `approved · rev ${ds.revision ?? 0}`, tone: 'ok' as const, clear: true }
+    if (!ds) return { label: 'not captured', tone: 'warn' as const, clear: false }
+    if (!ds.drafted) return { label: ds.label ?? 'not captured', tone: 'warn' as const, clear: false }
+    if (ds.source === 'repo') {
+      return { label: ds.label ?? 'detected in repo', tone: 'ok' as const, clear: true }
     }
-    return { label: `draft · rev ${ds.revision ?? 0}`, tone: 'warn' as const, clear: false }
+    if (ds.approved) {
+      return { label: ds.label ?? `approved · rev ${ds.revision ?? 0}`, tone: 'ok' as const, clear: true }
+    }
+    return { label: ds.label ?? `draft · rev ${ds.revision ?? 0}`, tone: 'warn' as const, clear: false }
   })
 
   const unfinishedCount = $derived.by(() => {
@@ -159,6 +185,96 @@
     }, 0)
   })
   const dirtyCheckoutCount = $derived(data?.dirtyCheckout?.ownedCount ?? 0)
+  const dirtyCheckoutError = $derived(data?.dirtyCheckout?.error ?? '')
+  const checkoutInspectionError = $derived(
+    dirtyCheckoutError
+      ? /git status|fatal: not a git repository|spawn git enoent/i.test(dirtyCheckoutError)
+        ? 'Guildhall could not inspect this checkout with git. Check that the project path is a Git checkout and that git is available to Guildhall.'
+        : dirtyCheckoutError
+      : '',
+  )
+  function normalizedGitStoryState(state: string | undefined): string {
+    return String(state ?? '').trim().toLowerCase()
+  }
+
+  function isGitInspectionFailure(blocker: GitStoryBlocker): boolean {
+    const haystack = `${blocker.state ?? ''}\n${blocker.reason ?? ''}\n${blocker.nextAction ?? ''}`.toLowerCase()
+    return (
+      normalizedGitStoryState(blocker.state) === 'unknown' ||
+      haystack.includes('spawn git enoent') ||
+      haystack.includes('fatal: not a git repository') ||
+      haystack.includes('could not read it')
+    )
+  }
+
+  function gitBlockerCopy(blocker: GitStoryBlocker): { label: string; detail: string } {
+    if (isGitInspectionFailure(blocker)) {
+      return {
+        label: 'Guildhall could not inspect this checkout.',
+        detail: 'Check that this project path is a Git checkout and that git is available to the Guildhall runtime.',
+      }
+    }
+    const haystack = `${blocker.state ?? ''}\n${blocker.reason ?? ''}\n${blocker.nextAction ?? ''}`.toLowerCase()
+    if (haystack.includes('no upstream')) {
+      return {
+        label: 'A branch needs a sharing decision.',
+        detail: 'Push it, open a PR, or mark the work local-only/deferred if it should not be shared.',
+      }
+    }
+    if (haystack.includes('dirty') || haystack.includes('uncommitted')) {
+      return {
+        label: 'A checkout has uncommitted work.',
+        detail: 'Review the diff, then commit it or mark the work local-only/deferred.',
+      }
+    }
+    return {
+      label: blocker.reason ?? blocker.label ?? blocker.state ?? 'Git story needs closure.',
+      detail: blocker.nextAction ?? (blocker.label && blocker.reason ? blocker.reason : ''),
+    }
+  }
+
+  function gitBlockerKey(blocker: GitStoryBlocker): string {
+    const copy = gitBlockerCopy(blocker)
+    if (isGitInspectionFailure(blocker)) return `inspection:${blocker.taskId ?? blocker.id ?? 'project'}`
+    return [
+      normalizedGitStoryState(blocker.state),
+      blocker.taskId ?? '',
+      blocker.id ?? '',
+      copy.label,
+      copy.detail,
+    ].join('|')
+  }
+
+  function dedupeGitBlockers(blockers: GitStoryBlocker[]): GitStoryBlocker[] {
+    const seen = new Set<string>()
+    const out: GitStoryBlocker[] = []
+    for (const blocker of blockers) {
+      const key = gitBlockerKey(blocker)
+      if (seen.has(key)) continue
+      seen.add(key)
+      out.push(blocker)
+    }
+    return out
+  }
+
+  function statusLabel(status: string): string {
+    switch (status) {
+      case 'exploring': return 'Being shaped'
+      case 'import_draft': return 'Imported drafts'
+      case 'gate_check': return 'Gate checks'
+      case 'spec_review': return 'Spec review'
+      case 'in_progress': return 'In progress'
+      case 'pending_pr': return 'Pending PR'
+      case 'ready': return 'Ready'
+      case 'blocked': return 'Blocked'
+      case 'done': return 'Done'
+      case 'shelved': return 'Shelved'
+      default: return status.replace(/[_-]/g, ' ').replace(/\b\w/g, c => c.toUpperCase())
+    }
+  }
+
+  const gitStoryBlockers = $derived(dedupeGitBlockers(data?.gitStory?.blockers ?? []))
+  const visibleGitStoryBlockers = $derived(gitStoryBlockers.slice(0, 5))
 
   const verdict = $derived.by(() => {
     if (!data) return { label: 'Loading', tone: 'neutral' as const, reason: '' }
@@ -166,14 +282,14 @@
       return {
         label: 'Not yet',
         tone: 'warn' as const,
-        reason: 'No tasks in this project.',
+        reason: 'No tracked work yet. Shape the first task before judging closure.',
       }
     }
-    if (data.totals.blockingCount === 0 && unfinishedCount === 0 && dirtyCheckoutCount === 0 && dsLabel().clear) {
+    if (data.totals.blockingCount === 0 && unfinishedCount === 0 && dirtyCheckoutCount === 0 && !dirtyCheckoutError && dsLabel().clear) {
       return {
-        label: 'Ready to ship',
+        label: 'Closed',
         tone: 'ok' as const,
-        reason: `${data.totals.done}/${data.totals.tasks} tasks done · no human blockers.`,
+        reason: `${data.totals.done}/${data.totals.tasks} tasks done · no open closure blockers.`,
       }
     }
     if (unfinishedCount > 0) {
@@ -190,13 +306,28 @@
         reason: `${dirtyCheckoutCount} Guildhall-owned project file${dirtyCheckoutCount === 1 ? '' : 's'} still need cleanup or landing.`,
       }
     }
+    if (dirtyCheckoutError) {
+      return {
+        label: 'Blocked',
+        tone: 'warn' as const,
+        reason: 'Guildhall could not inspect the project checkout.',
+      }
+    }
+    if (gitStoryBlockers.length > 0) {
+      return {
+        label: 'Blocked',
+        tone: 'warn' as const,
+        reason: `${gitStoryBlockers.length} git stor${gitStoryBlockers.length === 1 ? 'y needs' : 'ies need'} closure.`,
+      }
+    }
     if (!dsLabel().clear) {
       return {
         label: 'Blocked',
         tone: 'warn' as const,
-        reason: data.designSystem?.drafted
-          ? 'Design system is drafted but not approved yet.'
-          : 'Design system is not drafted yet.',
+        reason: data.designSystem?.reason
+          ?? (data.designSystem?.drafted
+            ? 'A design guardrail is drafted but still needs approval.'
+            : 'No design-system guardrail is captured yet.'),
       }
     }
     return {
@@ -209,12 +340,13 @@
   const sectionCopy = $derived(
     section === 'criteria'
       ? {
-          title: 'Release criteria',
-          description: 'Expand any row to inspect the tasks or approvals still holding this release.',
+          title: 'Closure checks',
+          description: 'Expand any row to inspect the tasks, approvals, or Git stories still keeping the current work open.',
         }
       : {
-          title: 'Release readiness',
-          description: 'A quick read on whether this project is ready to ship right now.',
+          title: 'Current work closure',
+          description: data?.scope?.description
+            ?? 'A quick read on whether the work Guildhall is tracking now is closed enough to hand off, ship, or deliberately defer.',
         },
   )
 
@@ -223,30 +355,31 @@
   )
   const releaseBlockerLabel = $derived(
     data
-      ? `${data.totals.blockingCount} release blocker${data.totals.blockingCount === 1 ? '' : 's'}`
-      : '0 release blockers',
+      ? `${data.totals.blockingCount} closure blocker${data.totals.blockingCount === 1 ? '' : 's'}`
+      : '0 closure blockers',
   )
+  const taskDoneLabel = $derived(data?.totals.tasks === 0 ? 'No tracked work yet' : `${data?.totals.done ?? 0}/${data?.totals.tasks ?? 0} done`)
 </script>
 
 {#if initNeeded}
-  <NoticeBand tone="warn" role="note" label="Release" title="Project not initialized yet">
+  <NoticeBand tone="warn" role="note" label="Closure" title="Project not initialized yet">
     {#snippet actions()}
       <a class="notice-link" href="/setup">Open setup wizard</a>
     {/snippet}
-    <p>Complete the setup wizard before you can assess release readiness.</p>
+    <p>Complete the setup wizard before Guildhall can assess whether the current work is closed.</p>
   </NoticeBand>
 {:else if error}
-  <NoticeBand tone="danger" role="alert" label="Release" title="Could not load release readiness">
+  <NoticeBand tone="danger" role="alert" label="Closure" title="Could not load closure checks">
     <p>{error}</p>
   </NoticeBand>
 {:else if !data}
-  <NoticeBand tone="neutral" role="status" label="Release" title="Loading release readiness">
-    <p>Collecting release status, approvals, and task counts…</p>
+  <NoticeBand tone="neutral" role="status" label="Closure" title="Loading closure checks">
+    <p>Collecting task status, approvals, Git stories, and checkout state…</p>
   </NoticeBand>
 {:else}
   <div class="release-shell">
     <SectionHeader
-      eyebrow="Release"
+      eyebrow={data.scope?.label ?? 'Current Guildhall work'}
       title={sectionCopy.title}
       description={sectionCopy.description}
       headingTag="h2"
@@ -254,7 +387,7 @@
     >
       {#snippet meta()}
         <StatusPill label={verdict.label} tone={verdict.tone} emphasis="default" />
-        <StatusPill label={`${data.totals.done}/${data.totals.tasks} done`} tone="neutral" />
+        <StatusPill label={taskDoneLabel} tone="neutral" />
       {/snippet}
     </SectionHeader>
 
@@ -276,7 +409,7 @@
         {#snippet header()}
           <SectionHeader
             title="Current counts"
-            description="A compact view of the signals feeding the release verdict."
+            description="A compact view of the signals feeding the closure verdict."
             headingTag="h3"
             density="dense"
           >
@@ -286,13 +419,13 @@
           </SectionHeader>
         {/snippet}
 
-        <div class="summary-grid" aria-label="Release summary counts">
+        <div class="summary-grid" aria-label="Current work closure summary counts">
           <div class="summary-stat">
             <span class="summary-label">Tasks done</span>
-            <strong>{data.totals.done}/{data.totals.tasks}</strong>
+            <strong>{data.totals.tasks === 0 ? 'No tracked work' : `${data.totals.done}/${data.totals.tasks}`}</strong>
           </div>
           <div class="summary-stat">
-            <span class="summary-label">Total release blockers</span>
+            <span class="summary-label">Total closure blockers</span>
             <strong>{data.totals.blockingCount}</strong>
           </div>
           <div class="summary-stat">
@@ -306,18 +439,50 @@
           {#if data.dirtyCheckout}
             <div class="summary-stat">
               <span class="summary-label">Project checkout</span>
+          <StatusPill
+                label={dirtyCheckoutError ? 'inspection failed' : dirtyCheckoutCount > 0 ? `${dirtyCheckoutCount} Guildhall files dirty` : 'clean'}
+                tone={dirtyCheckoutError || dirtyCheckoutCount > 0 ? 'warn' : 'ok'}
+              />
+            </div>
+          {/if}
+          {#if data.gitStory}
+            <div class="summary-stat">
+              <span class="summary-label">Git story</span>
               <StatusPill
-                label={dirtyCheckoutCount > 0 ? `${dirtyCheckoutCount} Guildhall files dirty` : 'clean'}
-                tone={dirtyCheckoutCount > 0 ? 'warn' : 'ok'}
+                label={gitStoryBlockers.length > 0 ? `${gitStoryBlockers.length} unresolved` : 'closed'}
+                tone={gitStoryBlockers.length > 0 ? 'warn' : 'ok'}
               />
             </div>
           {/if}
         </div>
         {#if data.dirtyCheckout && dirtyCheckoutCount > 0}
           <p class="dirty-detail">
-            Guildhall-owned metadata is still present in the project checkout:
-            {data.dirtyCheckout.files.slice(0, 4).join(', ')}{dirtyCheckoutCount > 4 ? ', …' : ''}.
+            {dirtyCheckoutCount} project-local Guildhall {dirtyCheckoutCount === 1 ? 'file needs' : 'files need'} cleanup before the current work can close.
+            Open diagnostics if you need the exact file list.
           </p>
+        {:else if dirtyCheckoutError}
+          <p class="dirty-detail">
+            <strong>Could not inspect checkout</strong>. {checkoutInspectionError}
+          </p>
+        {/if}
+        {#if gitStoryBlockers.length > 0}
+          <div class="git-story-detail">
+            <strong>Git story needs closure</strong>
+            {#if gitStoryBlockers.length > visibleGitStoryBlockers.length}
+              <p class="muted">Showing {visibleGitStoryBlockers.length} of {gitStoryBlockers.length} git stories.</p>
+            {/if}
+            <ul>
+              {#each visibleGitStoryBlockers as blocker, index (`${blocker.id ?? 'git'}:${index}`)}
+                {@const copy = gitBlockerCopy(blocker)}
+                <li>
+                  <span>{copy.label}</span>
+                  {#if copy.detail}
+                    <small>{copy.detail}</small>
+                  {/if}
+                </li>
+              {/each}
+            </ul>
+          </div>
         {/if}
       </FrameCard>
     {/if}
@@ -371,10 +536,46 @@
             <div class="crit-summary crit-static">
               <span class="crit-copy">
                 <span class="crit-label">Design system</span>
-                <span class="crit-detail">Current approval state for the operator-facing design system draft.</span>
+                <span class="crit-detail">How Guildhall knows which design rules apply here.</span>
               </span>
               <StatusPill label={dsLabel().label} tone={dsLabel().tone} />
             </div>
+          </li>
+          <li class="crit-row">
+            <details class="crit-det" open={false}>
+              <summary class="crit-summary" aria-disabled={gitStoryBlockers.length === 0}>
+                <span class="crit-copy">
+                  <span class="crit-label">Git story</span>
+                  <span class="crit-detail">
+                    {gitStoryBlockers.length === 0 ? 'No unresolved git stories.' : `${gitStoryBlockers.length} unresolved git stor${gitStoryBlockers.length === 1 ? 'y' : 'ies'}.`}
+                  </span>
+                </span>
+                <StatusPill
+                  label={gitStoryBlockers.length === 0 ? 'clear' : `${gitStoryBlockers.length} open`}
+                  tone={gitStoryBlockers.length === 0 ? 'ok' : 'warn'}
+                />
+              </summary>
+              {#if gitStoryBlockers.length > 0}
+                {#if gitStoryBlockers.length > visibleGitStoryBlockers.length}
+                  <p class="muted">Showing {visibleGitStoryBlockers.length} of {gitStoryBlockers.length} git stories.</p>
+                {/if}
+                <ul class="crit-items">
+                  {#each visibleGitStoryBlockers as blocker, index (`${blocker.id ?? 'git'}:${index}`)}
+                    {@const copy = gitBlockerCopy(blocker)}
+                    <li>
+                      {#if blocker.taskId}
+                        <button type="button" class="link" onclick={() => openTask(blocker.taskId ?? '')}>
+                          {copy.label}
+                        </button>
+                      {:else}
+                        <span>{copy.label}</span>
+                      {/if}
+                      <span class="muted">{copy.detail}</span>
+                    </li>
+                  {/each}
+                </ul>
+              {/if}
+            </details>
           </li>
         </ul>
       </FrameCard>
@@ -388,7 +589,7 @@
             density="dense"
           >
             {#snippet meta()}
-              <StatusPill label={`${data.totals.done}/${data.totals.tasks} done`} tone="neutral" />
+              <StatusPill label={taskDoneLabel} tone="neutral" />
             {/snippet}
           </SectionHeader>
         {/snippet}
@@ -400,7 +601,7 @@
             <tbody>
               {#each statusRows as [k, v] (k)}
                 <tr>
-                  <td><code>{k}</code></td>
+                  <td>{statusLabel(k)}</td>
                   <td>{v}</td>
                 </tr>
               {/each}
@@ -452,6 +653,30 @@
     color: var(--text-muted);
     font-size: var(--fs-2);
     line-height: var(--lh-body);
+  }
+
+  .git-story-detail {
+    display: grid;
+    gap: var(--gh-space-2);
+    margin: var(--gh-space-3) 0 0;
+    color: var(--text);
+    font-size: var(--fs-2);
+  }
+
+  .git-story-detail ul {
+    display: grid;
+    gap: var(--gh-space-1);
+    margin: 0;
+    padding-inline-start: 1.1rem;
+  }
+
+  .git-story-detail li {
+    display: grid;
+    gap: 0.1rem;
+  }
+
+  .git-story-detail small {
+    color: var(--text-muted);
   }
 
   .criteria {
@@ -562,14 +787,6 @@
 
   .tally tbody tr:first-child td {
     border-top: none;
-  }
-
-  code {
-    font-family: 'SF Mono', monospace;
-    background: var(--bg-raised-2);
-    padding: 0 4px;
-    border-radius: var(--r-1);
-    font-size: var(--fs-1);
   }
 
   @container (min-width: 42rem) {

@@ -14,6 +14,8 @@ import path from 'node:path'
 import type { BackendEvent } from '@guildhall/backend-host'
 import { resolveConfig } from '@guildhall/config'
 import type { ResolvedConfig } from '@guildhall/config'
+import { getProjectRecentEventsPath } from '@guildhall/sessions'
+import { getProjectStateDir } from '@guildhall/sessions'
 import { runOrchestrator } from './orchestrator.js'
 import type { OrchestratorRunResult } from './orchestrator.js'
 import { subscribeProviderClientHealth, type ProviderClientHealthSnapshot } from './provider-client-pool.js'
@@ -175,13 +177,12 @@ export interface SupervisorLifecycleEvent {
 const RECENT_EVENT_LIMIT = 200
 const PERSISTED_EVENT_LINE_LIMIT = RECENT_EVENT_LIMIT * 5
 const PERSISTED_EVENT_READ_BYTES = 512 * 1024
-const PERSISTED_EVENT_FILE = 'recent-events.jsonl'
 
 type RunOrchestratorFn = typeof runOrchestrator
 type ResolveConfigFn = (opts: { workspacePath: string }) => ResolvedConfig
 
 function persistedEventPath(workspacePath: string): string {
-  return path.join(workspacePath, 'memory', PERSISTED_EVENT_FILE)
+  return getProjectRecentEventsPath(workspacePath)
 }
 
 function readPersistedEventLines(file: string): string[] {
@@ -358,7 +359,7 @@ export class OrchestratorSupervisor {
     }
     // Clear any stale marker from a previous run so a brand-new orchestrator
     // doesn't stop on its first tick.
-    const memoryDir = path.join(opts.workspacePath, 'memory')
+    const memoryDir = getProjectStateDir(opts.workspacePath)
     void clearStopRequested(memoryDir)
 
     const recordAndEmit = (event: BackendEvent | SupervisorLifecycleEvent): void => {
@@ -431,7 +432,7 @@ export class OrchestratorSupervisor {
     // FR-28: also write the on-disk marker so external observers (a sibling
     // CLI process, a container orchestrator) see the stop request even if
     // they missed the in-memory flag flip.
-    void writeStopRequested(path.join(run.workspacePath, 'memory'), {
+    void writeStopRequested(getProjectStateDir(run.workspacePath), {
       requestedAt: new Date().toISOString(),
       requestedBy: 'supervisor',
       ...(opts.reason ? { reason: opts.reason } : {}),
@@ -453,7 +454,7 @@ export class OrchestratorSupervisor {
 
     // Clear the marker on clean exit so the next start() doesn't see it.
     if (isTerminated()) {
-      await clearStopRequested(path.join(run.workspacePath, 'memory'))
+      await clearStopRequested(getProjectStateDir(run.workspacePath))
     }
 
     return isTerminated()

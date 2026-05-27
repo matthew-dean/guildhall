@@ -96,6 +96,48 @@ describe('buildProjectTicker', () => {
 
     expect(
       buildProjectTicker(
+        {
+          ...detail,
+          gitStory: {
+            ready: false,
+            state: 'unknown',
+            blockers: [{ state: 'unknown', reason: 'spawn git ENOENT' }],
+            snapshots: [{ state: 'unknown', reason: 'spawn git ENOENT' }],
+          },
+        },
+        { event: { type: 'supervisor_error', message: 'spawn git ENOENT' } },
+        now,
+      ),
+    ).toMatchObject({
+      tone: 'danger',
+      actorLabel: 'Git',
+      label: 'Error',
+      message: 'Guildhall could not find git while inspecting this project.',
+    })
+
+    expect(
+      buildProjectTicker(
+        {
+          ...detail,
+          tasks: [{ id: 'task-1', status: 'ready', title: 'Polish task cards' }],
+          gitStory: {
+            ready: true,
+            state: 'clean',
+            blockers: [],
+            snapshots: [{ state: 'clean', reason: 'No local changes or unpublished branch work detected.' }],
+          },
+        },
+        { event: { type: 'supervisor_error', message: 'spawn git ENOENT' } },
+        now,
+      ),
+    ).toMatchObject({
+      tone: 'idle',
+      actorLabel: 'Paused',
+      message: '1 task paused until Guildhall starts',
+    })
+
+    expect(
+      buildProjectTicker(
         detail,
         { event: { type: 'agent_issue', task_id: 'task-1' } },
         now,
@@ -199,6 +241,31 @@ describe('buildProjectTicker', () => {
       tone: 'idle',
       actorLabel: 'Idle',
       message: 'No recent activity',
+    })
+  })
+
+  it('shows the run error instead of calling queued work paused', () => {
+    expect(
+      buildProjectTicker(
+        {
+          run: {
+            status: 'error',
+            error: 'spawn git ENOENT',
+          },
+          tasks: [
+            { id: 'task-1', status: 'in_progress', title: 'Basic project listing' },
+            { id: 'task-2', status: 'ready', title: 'Stripe Connect' },
+          ],
+        },
+        null,
+        now,
+      ),
+    ).toMatchObject({
+      tone: 'danger',
+      pulse: false,
+      actorLabel: 'Run error',
+      label: 'Error',
+      message: 'Guildhall could not find git while inspecting this project.',
     })
   })
 

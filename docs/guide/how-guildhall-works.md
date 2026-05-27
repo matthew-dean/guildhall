@@ -23,7 +23,7 @@ Each run pulls from a few kinds of state:
 4. **Execution state**: active worktree, checkpoint, previous attempts,
    verification output, and unresolved reviewer feedback.
 5. **Inspection state**: reviewer rubrics, guild specialists, gate results,
-   release readiness, and your decisions.
+   current work closure, and your decisions.
 6. **Learning state**: project habits and cross-project preferences that can be
    accepted, ignored, or scoped.
 
@@ -79,17 +79,36 @@ this mandatory process cathedral."
 Good output usually comes from a chain of smaller wins:
 
 1. The task is framed clearly enough that an agent knows what success means.
-2. The helper sees the project state and constraints that matter for that task.
-3. The task points toward the existing helpers, tokens, tests, and conventions
+2. The request type is clear: spec, implementation, question, or a parent
+   feature that needs linked child tasks.
+3. The helper sees the project state and constraints that matter for that task.
+4. The task points toward the existing helpers, tokens, tests, and conventions
    that matter.
-4. The run leaves durable evidence: a blueprint, question, code diff,
+5. The run leaves durable evidence: a blueprint, question, code diff,
    checkpoint, review finding, gate result, or decision.
-5. Another role or deterministic check inspects that evidence.
+6. Another role or deterministic check inspects that evidence.
 
 That is why Guildhall invests in blueprints, context packets, [Corpus Map](./corpus-map),
 design-system summaries, review rubrics, checkpoints, and gates. None of those
 exist to make the app feel busy. They exist because plausible-looking work is
 still wrong if it ignores the project around it.
+
+The [Research-backed design](./research-backed-design) page keeps the citations
+and friendly explainers for the ideas behind this shape. The short version:
+keep decisions small enough to answer, keep work small enough to review, make
+uncertainty visible, and keep evidence attached.
+
+In practice, that should feel simple: smaller work packets, one question at a
+time, visible proof of done, and fewer half-finished tasks hanging around. The
+point is not to make you manage a process. The point is to take as much
+cognitive overhead off your plate as Guildhall safely can while leaving the
+real product, risk, taste, and release judgments with you.
+
+Guildhall also tries to keep the stack of work visible. A broad ask may contain
+a policy decision, a spec, implementation surfaces, data or API changes, docs,
+release work, and verification. Those can be linked without being crammed into
+one task. You should be able to see why Guildhall asked a question, split the
+work, or kept it together.
 
 ## Feedback loops
 
@@ -101,7 +120,7 @@ you are comfortable shipping it, Guildhall asks.
 
 Reviewer feedback belongs where another lens catches a class of mistake:
 architecture fit, product flow, accessibility, security, test coverage,
-design-system consistency, or release readiness.
+design-system consistency, or closure readiness.
 
 Copy review is part of that loop. When a task changes docs or a visible
 surface, Guildhall brings in the Copywriter to check the small words too:
@@ -145,6 +164,7 @@ from becoming a magic trick.
 The system records:
 
 - what you asked for
+- how Guildhall read the request shape
 - what questions were asked and answered
 - what blueprint was accepted
 - what context the worker received
@@ -199,11 +219,12 @@ Guildhall’s default loop is:
 1. Survey the project and capture facts.
 2. Draft or revise the blueprint.
 3. Ask bounded questions only when your answer changes the plan.
-4. Promote ready work into implementation.
-5. Give the worker scoped context, likely files, and [Corpus Map](./corpus-map) guidance.
-6. Record checkpoints and verification evidence as work changes.
-7. Inspect the result with reviewers and deterministic gates.
-8. Finish, revise, escalate, or record a change order.
+4. Size the task and split oversized work into linked child tasks.
+5. Promote ready work into implementation.
+6. Give the worker scoped context, likely files, and [Corpus Map](./corpus-map) guidance.
+7. Record checkpoints and verification evidence as work changes.
+8. Inspect the result with reviewers and deterministic gates.
+9. Finish, revise, escalate, or record a change order.
 
 This is why Guildhall has visible task states, transcripts, review packets,
 checkpoints, and settings provenance. The product is not just the final diff.

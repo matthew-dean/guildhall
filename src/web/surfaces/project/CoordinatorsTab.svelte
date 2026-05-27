@@ -7,6 +7,7 @@
   import TaskCard from '../../lib/TaskCard.svelte'
   import { friendlyDomain, friendlyStewardName } from '../../lib/display.js'
   import { nav } from '../../lib/nav.svelte.js'
+  import { currentProjectHref } from '../../lib/project-routes.js'
   import { buildCoordinatorsSurface } from '../../lib/project-data.js'
   import type { ProjectDetail } from '../../lib/types.js'
 
@@ -51,7 +52,7 @@
   <section class="intro">
     <div class="intro-head">
       <h2>{selectedColumn ? friendlyStewardName(undefined, selectedColumn.c.domain, selectedColumn.c.id) : 'Internal routing'}</h2>
-      <button type="button" class="linkbtn" onclick={() => nav('/settings/routing')}>
+      <button type="button" class="linkbtn" onclick={() => nav(currentProjectHref('/settings/routing', detail.id))}>
         How routing works →
       </button>
     </div>
@@ -82,7 +83,7 @@
               <span class="domain-chip">Part: {friendlyDomain(selectedColumn.c.domain) || 'Unknown'}</span>
               <span class="scope-chip">Scope: {scopeLabel(selectedColumn.c.path)}</span>
               </div>
-              <button type="button" class="linkbtn" onclick={() => nav('/routing')}>
+              <button type="button" class="linkbtn" onclick={() => nav(currentProjectHref('/routing', detail.id))}>
               View all routing →
               </button>
             </div>
@@ -204,7 +205,7 @@
             <div class="mandate">{protectsLabel(col.c.mandate)}</div>
           </div>
           <ActionBar className="routing-actions">
-            <button type="button" class="linkbtn" onclick={() => nav('/routing/' + encodeURIComponent((col.c.id ?? col.c.domain ?? '').toString()))}>
+            <button type="button" class="linkbtn" onclick={() => nav(currentProjectHref('/routing/' + encodeURIComponent((col.c.id ?? col.c.domain ?? '').toString()), detail.id))}>
               View routing →
             </button>
           </ActionBar>

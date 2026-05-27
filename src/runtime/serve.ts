@@ -9,7 +9,8 @@ import type { Context } from 'hono'
 import { Hono } from 'hono'
 import { streamSSE } from 'hono/streaming'
 import { serve } from '@hono/node-server'
-import { atomicWriteText } from '@guildhall/sessions'
+import { atomicWriteText, getProjectStateDir, getProjectTranscriptPath } from '@guildhall/sessions'
+import { readTaskWorkspaceStore } from './task-state-store.js'
 import {
   readWorkspaceConfig,
   writeWorkspaceConfig,
@@ -33,20 +34,25 @@ import {
   resolveGlobalCredentials,
   migrateProjectProvidersToGlobal,
   resolveModelsForProvider,
+  mergeModels,
   type ProviderKind,
+  type WorkspaceYamlConfig,
   writeModelsForProvider,
 } from '@guildhall/config'
 import {
   MODEL_CATALOG,
+  MODEL_BEHAVIOR_PROFILES,
   type Checkpoint,
   DEFAULT_LOCAL_MODEL_ASSIGNMENT,
   DEFAULT_CLOUD_MODEL_ASSIGNMENT,
   type ModelAssignmentConfig,
+  type ModelBehaviorProfile,
 } from '@guildhall/core'
 import {
   loadCodebaseMap,
   loadCodebaseMapStaleState,
   refreshCodebaseMap,
+  type CodebaseMap,
 } from '@guildhall/corpus-map'
 import {
   loadLeverSettings,
@@ -66,9 +72,10 @@ import {
   readCheckpoint,
   readExploringTranscript,
   resolveEscalation,
+  materializeRequiredSplitChildren,
   updateDesignSystem,
 } from '@guildhall/tools'
-import { DesignSystem, summarizeDesignSystem, type Task } from '@guildhall/core'
+import { DesignSystem, summarizeDesignSystem, TaskQueue, type DesignSystem as DesignSystemRecord, type Task } from '@guildhall/core'
 import {
   loadProjectGuildRoster,
   selectApplicableGuilds,
@@ -102,13 +109,23 @@ import {
 } from './provider-metadata.js'
 import {
   createExploringTask,
+  createRoutedRequest,
   approveSpec,
+  enrichTask,
+  reframeTask,
   resumeExploring,
   rerunTaskStage,
   shapeImportDraft,
   createBugReportTask,
   parseStackTraceTopFile,
 } from './intake.js'
+import {
+  answerPressureTestQuestion,
+  createPressureTestIntake,
+  loadPressureTestIntake,
+  listPressureTestIntakes,
+  summarizeProjectCheckIn,
+} from './pressure-test-intake.js'
 import { loadDesignSystem, saveDesignSystem } from './design-system-store.js'
 import {
   approveMetaIntake,
@@ -162,14 +179,37 @@ import {
 } from '@guildhall/skills'
 import { normalizeImportedDraftTask } from './import-drafts.js'
 import { buildInbox, buildInboxBlockers, detectRepoAnchors } from './inbox.js'
+import {
+  buildProjectMigrationAdvisories,
+  buildProjectUnderstandingAdvisories,
+  markAttentionDismissed,
+  reconcileAttentionRecords,
+  recordReconciliationResolved,
+} from './attention.js'
+import { projectRuntimeCompatibilityBlocker } from './runtime-compatibility.js'
 import { buildThread } from './thread.js'
+import { NodeGitDriver } from './git-driver.js'
+import {
+  inspectGitStory,
+  summarizeGitStories,
+  type GitStorySummary,
+} from './git-story.js'
+import {
+  effectiveGitStoryPolicy,
+  resolveWorkspaceProjectPaths,
+} from './git-story-policy.js'
 import { taskHasUnansweredVisibleQuestion } from './question-visibility.js'
 import { repairStaleBlockersForProject } from './stale-blocker-repair.js'
 import {
   buildCoordinatorProjectPathMap,
   resolveTaskProjectPath,
 } from './task-project-path.js'
+import { buildEffectiveTask } from './effective-task.js'
+import { buildDoneTaskSummaryBundle } from './done-task-summary.js'
 import { readContextDebugForTask } from './context-observability.js'
+import { createReviewAuditStore } from './review-audit-store.js'
+import { userFacingText } from './user-facing-text.js'
+import { FileBackedGuildhallPersistence } from '@guildhall/persistence'
 import {
   buildSnapshot,
   listWizards,
@@ -181,18 +221,18 @@ import {
   progressForTask,
   type WizardsState,
 } from './wizards.js'
+import { applyProjectMigrations, getProjectMigrationStatus } from './migrations.js'
 import { stringify as stringifyYaml } from 'yaml'
 
 // ---------------------------------------------------------------------------
 // guildhall serve — local service over many projects
 //
 // `guildhall serve` now acts like the friendly entrypoint to a local
-// user-level service. During the 0.5.0 transition, the backend already knows
-// about many registered projects and can surface service-level metadata even
-// while the UI still leans on one foreground project API surface.
+// user-level service. The backend knows about many registered projects; project
+// APIs are scoped by explicit project id instead of mutable daemon foreground.
 //
 // Routes:
-//   GET    /api/service               → service metadata + current selected project
+//   GET    /api/service               → service metadata + registered projects
 //   GET    /                          → SPA (root = project detail or setup)
 //   GET    /setup                     → SPA setup wizard route
 //   GET    /api/project               → project detail (config + tasks + run state)
@@ -206,16 +246,20 @@ import { stringify as stringifyYaml } from 'yaml'
 //   GET    /api/project/bootstrap/status   → last run + whether it needs re-running
 //   POST   /api/project/bootstrap/run      → run the verified bootstrap synchronously
 //   GET    /api/project/task/:id      → full task + recent events for drawer
-//   POST   /api/project/task/:id/pause              → human override → blocked
+//   POST   /api/project/task/:id/hold               → human hold → blocked
+//   POST   /api/project/task/:id/resume-hold        → blocked hold → previous stage
+//   POST   /api/project/task/:id/pause              → deprecated alias for hold
 //   POST   /api/project/task/:id/shelve             → human override → shelved
 //   POST   /api/project/task/:id/unshelve           → shelved → proposed (clear shelveReason)
 //   POST   /api/project/task/:id/approve-spec       → spec_review → ready
 //   POST   /api/project/task/:id/approve-brief      → mark the product brief as human-approved
+//   POST   /api/project/task/:id/mark-done          → human confirms task is already complete
 //   POST   /api/project/task/:id/resume             → append follow-up to exploring transcript
 //   POST   /api/project/task/:id/resolve-escalation → close an open escalation; unblocks when none remain
 //   GET    /api/project/activity      → summary for persistent agent chip
 //   GET    /api/project/progress      → tail of memory/PROGRESS.md
 //   GET    /api/project/events        → SSE feed of orchestrator events
+//   GET    /api/health                → running package/git/build identity
 //   GET    /api/config                → project-local config (secrets redacted)
 //   GET    /api/config/levers         → lever positions for Settings UI
 //   GET    /api/project/design-system → current design system (or null)
@@ -291,7 +335,6 @@ interface ServiceProjectSummary {
   path: string
   name: string
   initializationNeeded: boolean
-  selected?: boolean
   tags?: string[]
   summary?: string | null
   taskCounts?: {
@@ -323,6 +366,15 @@ interface ServiceProjectSummary {
     stopSummary?: unknown
     providerStatus?: unknown
   }
+  gitStory?: GitStorySummary
+  providerStatus?: unknown
+  migrationSummary?: {
+    pending: number
+    blocked: number
+    applied: number
+    error?: string
+  }
+  projectCheckIn?: ReturnType<typeof summarizeProjectCheckIn> | null
 }
 
 function humanizeGeneratedProjectName(name: string): string {
@@ -654,7 +706,7 @@ async function buildProjectInboxSnapshot(input: {
   // existing goals/tasks on its own and surfaces them for review.
   // No-op if already seeded, off, or not needed.
   try {
-    const memoryDir = join(input.projectPath, 'memory')
+    const memoryDir = getProjectStateDir(input.projectPath)
     const goalsPath = join(memoryDir, 'workspace-goals.json')
     if (!existsSync(goalsPath) && input.coordinatorCount > 0) {
       await maybeSeedWorkspaceImport({ memoryDir, projectPath: input.projectPath })
@@ -667,9 +719,37 @@ async function buildProjectInboxSnapshot(input: {
   } catch {
     /* never let stale-blocker repair break an inbox read */
   }
-  const items = buildInbox({ projectPath: input.projectPath })
-  const blockers = buildInboxBlockers(items)
-  return { items, blockers }
+  const runtimeBlocker = projectRuntimeCompatibilityBlocker({ projectRoot: input.projectPath })
+  if (runtimeBlocker) {
+    return {
+      items: [{
+        id: 'runtime:too-old',
+        kind: 'project_understanding' as const,
+        severity: 'high' as const,
+        title: 'Upgrade Guildhall before changing this project',
+        detail: runtimeBlocker.message,
+        signals: ['runtime_compatibility'],
+        actionHref: runtimeBlocker.actionHref,
+        dismissEndpoint: '',
+        status: 'open' as const,
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+      }],
+      history: [],
+      blockers: { bootstrap: false, workspaceImport: false },
+    }
+  }
+  const computedItems = [
+    ...await buildProjectMigrationAdvisories(input.projectPath),
+    ...buildProjectUnderstandingAdvisories(input.projectPath),
+    ...buildInbox({ projectPath: input.projectPath }),
+  ]
+  const attention = reconcileAttentionRecords({
+    projectPath: input.projectPath,
+    openItems: computedItems,
+  })
+  const blockers = buildInboxBlockers(attention.openItems)
+  return { items: attention.openItems, history: attention.history, blockers }
 }
 
 // ---------------------------------------------------------------------------
@@ -677,7 +757,7 @@ async function buildProjectInboxSnapshot(input: {
 // on-disk layout of memory/wizards.yaml.
 // ---------------------------------------------------------------------------
 function writeWizardsState(projectPath: string, state: WizardsState): void {
-  const memDir = join(projectPath, 'memory')
+  const memDir = getProjectStateDir(projectPath)
   if (!existsSync(memDir)) mkdirSync(memDir, { recursive: true })
   const path = join(memDir, 'wizards.yaml')
   writeFileSync(path, stringifyYaml(state), 'utf8')
@@ -795,6 +875,134 @@ function summarizeProject(project: ResolvedProject): ServiceProjectSummary {
   }
 }
 
+async function summarizeProjectMigrations(projectPath: string): Promise<NonNullable<ServiceProjectSummary['migrationSummary']>> {
+  try {
+    const status = await getProjectMigrationStatus({ projectRoot: projectPath })
+    return {
+      pending: status.pending.length,
+      blocked: status.blocked.length,
+      applied: status.applied.length,
+    }
+  } catch (err) {
+    return {
+      pending: 0,
+      blocked: 0,
+      applied: 0,
+      error: err instanceof Error ? err.message : String(err),
+    }
+  }
+}
+
+async function startBlockerForRequiredMigrations(projectPath: string): Promise<{
+  canStart: false
+  code: 'required_migration_pending'
+  message: string
+  actionHref: string
+} | null> {
+  const status = await getProjectMigrationStatus({ projectRoot: projectPath })
+  if (status.blocked.length === 0) return null
+  const first = status.blocked[0]
+  return {
+    canStart: false,
+    code: 'required_migration_pending',
+    message: first
+      ? `Run required Guildhall migration ${first.id} before starting this project.`
+      : 'Run required Guildhall migrations before starting this project.',
+    actionHref: '/migrations',
+  }
+}
+
+type ReleaseDesignSystemSource = 'guildhall' | 'repo' | 'none'
+
+interface ReleaseDesignSystemStatus {
+  drafted: boolean
+  approved: boolean
+  revision: number
+  source: ReleaseDesignSystemSource
+  label: string
+  reason?: string
+}
+
+function hasRepoDesignSystemSignals(config: WorkspaceYamlConfig | null, map: CodebaseMap | null | undefined): boolean {
+  const componentFiles = map?.designSystem?.componentFiles?.length ?? 0
+  const primitives = map?.designSystem?.primitives?.length ?? 0
+  const tokenCounts = map?.designSystem?.tokenCounts
+    ? Object.values(map.designSystem.tokenCounts).reduce((sum, count) => sum + count, 0)
+    : 0
+  if (componentFiles >= 3 || primitives > 0 || tokenCounts > 0) return true
+
+  if (!config) return false
+  const text = [
+    config.name,
+    config.kind,
+    ...(config.tags ?? []),
+    config.council?.mandate ?? '',
+    ...(config.projects ?? []).flatMap(project => [
+      project.id,
+      project.label ?? '',
+      project.type ?? '',
+      project.path,
+      project.coordinator ?? '',
+    ]),
+    ...(config.coordinators ?? []).flatMap(coordinator => [
+      coordinator.id,
+      coordinator.name ?? '',
+      coordinator.domain,
+      coordinator.path ?? '',
+      coordinator.mandate,
+    ]),
+  ].join('\n').toLowerCase()
+
+  return [
+    'design system',
+    'design-system',
+    'component library',
+    'component-library',
+    'ui library',
+    'ui-library',
+  ].some(signal => text.includes(signal))
+}
+
+function releaseDesignSystemStatus(
+  ds: DesignSystemRecord | undefined,
+  config: WorkspaceYamlConfig | null,
+  map: CodebaseMap | null | undefined,
+): ReleaseDesignSystemStatus {
+  if (ds) {
+    const approved = Boolean(ds.approvedAt)
+    return {
+      drafted: true,
+      approved,
+      revision: ds.revision ?? 0,
+      source: 'guildhall',
+      label: approved ? `approved · rev ${ds.revision ?? 0}` : `draft · rev ${ds.revision ?? 0}`,
+      reason: approved
+        ? 'Guildhall has an approved design guardrail for this project.'
+        : 'A design guardrail is drafted but still needs approval.',
+    }
+  }
+
+  if (hasRepoDesignSystemSignals(config, map)) {
+    return {
+      drafted: true,
+      approved: true,
+      revision: 0,
+      source: 'repo',
+      label: 'detected in repo',
+      reason: 'This project already contains its design system or component library.',
+    }
+  }
+
+  return {
+    drafted: false,
+    approved: false,
+    revision: 0,
+    source: 'none',
+    label: 'not captured',
+    reason: 'No design-system guardrail is captured yet.',
+  }
+}
+
 async function chooseProjectFolderMacOS(): Promise<string | null> {
   try {
     const { stdout } = await execFileP('osascript', [
@@ -877,6 +1085,30 @@ function summarizeTaskCounts(tasks: Array<Record<string, unknown>>): ServiceProj
   }
 }
 
+function hasApprovedProductBriefRecord(task: Record<string, unknown>): boolean {
+  const brief = task.productBrief
+  return Boolean(
+    brief &&
+    typeof brief === 'object' &&
+    !Array.isArray(brief) &&
+    typeof (brief as { approvedAt?: unknown }).approvedAt === 'string' &&
+    (brief as { approvedAt: string }).approvedAt.trim().length > 0,
+  )
+}
+
+function hasSpecDraftRecord(task: Record<string, unknown>): boolean {
+  return (
+    typeof task.spec === 'string' &&
+    task.spec.trim().length > 0 &&
+    Array.isArray(task.acceptanceCriteria) &&
+    task.acceptanceCriteria.length > 0
+  )
+}
+
+function isReadyForWorkerHandoffRecord(task: Record<string, unknown>): boolean {
+  return hasApprovedProductBriefRecord(task) && hasSpecDraftRecord(task)
+}
+
 function summarizeTaskActivity(
   tasks: Array<Record<string, unknown>>,
   now = new Date(),
@@ -927,7 +1159,7 @@ function summarizeProjectText(project: ResolvedProject): string | null {
   if (project.initializationNeeded) {
     return 'Attached to this folder. Initialize Guildhall here to inspect the repo, configure providers, and start task flow.'
   }
-  const briefPath = join(project.path, 'memory', 'project-brief.md')
+  const briefPath = join(getProjectStateDir(project.path), 'project-brief.md')
   if (existsSync(briefPath)) {
     const brief = readFileSync(briefPath, 'utf8')
       .split(/\r?\n/)
@@ -1010,13 +1242,30 @@ function friendlyProjectEventToolName(tool: string): string {
 
 function summarizeProjectEvent(ev: Record<string, unknown> | undefined): string {
   const type = String(ev?.type ?? '')
+  const message = typeof ev?.message === 'string' ? ev.message.trim() : ''
+  if ((type === 'line_complete' || type === 'error') && isProviderCapacityEventMessage(message)) {
+    return providerCapacityEventLabel(message)
+  }
   const tool = friendlyProjectEventToolName(typeof ev?.tool_name === 'string' ? ev.tool_name : '')
   if ((type === 'tool_started' || type === 'tool_execution_started') && tool) return `Started ${tool}`
   if ((type === 'tool_completed' || type === 'tool_execution_completed') && ev?.is_error && tool) return `Failed ${tool}`
   if ((type === 'tool_completed' || type === 'tool_execution_completed') && tool) return `Finished ${tool}`
-  if (type === 'error') return String(ev?.message ?? 'Agent error')
-  if (type === 'line_complete') return String(ev?.message ?? 'Agent update')
+  if (type === 'error') return userFacingText(message, 'Agent error')
+  if (type === 'line_complete') return userFacingText(message, 'Agent update')
   return type.replace(/_/g, ' ') || 'Agent activity'
+}
+
+function isProviderCapacityEventMessage(value: string): boolean {
+  return /HTTP 429|Too Many Requests|rate limit|engine_overloaded|Model busy, retry later|retryable provider throttle/i.test(value)
+}
+
+function providerCapacityEventLabel(value: string): string {
+  const retry = value.match(/retrying in ([\d.]+)s \(attempt (\d+) of (\d+)\)/i)
+  if (retry) return `Provider busy; retrying in ${retry[1]}s (attempt ${retry[2]} of ${retry[3]}).`
+  if (/retryable provider throttle/i.test(value)) return 'Provider busy; Guildhall will resume this task later.'
+  if (/Agent .* failed on .*API error/i.test(value)) return 'Provider busy; this agent turn stopped.'
+  if (/API error/i.test(value)) return 'Provider busy; request failed after retries.'
+  return 'Provider busy; retry later.'
 }
 
 function toneForProjectEvent(
@@ -1024,8 +1273,10 @@ function toneForProjectEvent(
 ): 'neutral' | 'running' | 'ok' | 'warn' | 'danger' {
   const type = String(ev?.type ?? '')
   if (type === 'error') {
+    if (isProviderCapacityEventMessage(String(ev?.message ?? ''))) return 'warn'
     return /empty assistant/i.test(String(ev?.message ?? '')) ? 'warn' : 'danger'
   }
+  if (type === 'line_complete' && isProviderCapacityEventMessage(String(ev?.message ?? ''))) return 'warn'
   if (type === 'tool_completed' || type === 'tool_execution_completed') return ev?.is_error ? 'danger' : 'ok'
   if (type === 'tool_started' || type === 'tool_execution_started') return 'running'
   if (type === 'line_complete') return 'running'
@@ -1177,13 +1428,231 @@ function buildTerminalSummary(
   return undefined
 }
 
+function taskGitStoryOverride(task: Record<string, unknown>): {
+  override?: 'local_only' | 'deferred'
+  reason?: string
+} | undefined {
+  const raw = task.gitStory
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return undefined
+  const record = raw as Record<string, unknown>
+  const override = record.override
+  if (override !== 'local_only' && override !== 'deferred') return undefined
+  return {
+    override,
+    ...(typeof record.reason === 'string' ? { reason: record.reason } : {}),
+  }
+}
+
+function taskForGitStory(
+  task: Record<string, unknown>,
+  workspace?: { worktreePath?: string },
+): Parameters<typeof inspectGitStory>[1]['task'] {
+  const mergeRecord =
+    task.mergeRecord && typeof task.mergeRecord === 'object' && !Array.isArray(task.mergeRecord)
+      ? task.mergeRecord as { result?: string }
+      : undefined
+  return {
+    ...(typeof task.id === 'string' ? { id: task.id } : {}),
+    ...(typeof task.title === 'string' ? { title: task.title } : {}),
+    ...(typeof workspace?.worktreePath === 'string'
+      ? { worktreePath: workspace.worktreePath }
+      : typeof task.worktreePath === 'string'
+        ? { worktreePath: task.worktreePath }
+        : {}),
+    ...(mergeRecord ? { mergeRecord } : {}),
+    ...(taskGitStoryOverride(task) ? { gitStory: taskGitStoryOverride(task) } : {}),
+  }
+}
+
+function taskGitStoryRepoPath(
+  projectPath: string,
+  task: Record<string, unknown>,
+  workspace?: { worktreePath?: string },
+): string {
+  const worktreePath = typeof workspace?.worktreePath === 'string' && workspace.worktreePath.trim()
+    ? workspace.worktreePath.trim()
+    : typeof task.worktreePath === 'string' && task.worktreePath.trim()
+      ? task.worktreePath.trim()
+    : ''
+  if (worktreePath) return worktreePath
+  const taskProjectPath = typeof task.projectPath === 'string' && task.projectPath.trim()
+    ? task.projectPath.trim()
+    : ''
+  return taskProjectPath || projectPath
+}
+
+const TASK_FILE_PREVIEW_LIMIT_BYTES = 256 * 1024
+
+function isWithinPath(candidate: string, root: string): boolean {
+  const rel = relative(root, candidate)
+  return rel === '' || (!rel.startsWith('..') && !isAbsolute(rel))
+}
+
+function languageForPath(filePath: string): string {
+  const ext = extname(filePath).toLowerCase().replace(/^\./, '')
+  if (ext === 'ts' || ext === 'tsx') return 'typescript'
+  if (ext === 'js' || ext === 'jsx' || ext === 'mjs' || ext === 'cjs') return 'javascript'
+  if (ext === 'vue') return 'vue'
+  if (ext === 'svelte') return 'svelte'
+  if (ext === 'md' || ext === 'markdown') return 'markdown'
+  if (ext === 'yaml' || ext === 'yml') return 'yaml'
+  if (ext === 'json') return 'json'
+  if (ext === 'css') return 'css'
+  if (ext === 'html') return 'html'
+  if (ext === 'sql') return 'sql'
+  if (ext === 'sh' || ext === 'bash' || ext === 'zsh') return 'shell'
+  return ext || 'text'
+}
+
+async function resolveTaskInspectableFile(
+  projectPath: string,
+  task: Record<string, unknown>,
+  requestedPath: string,
+  workspace?: { worktreePath?: string },
+): Promise<{ absolutePath: string; displayPath: string }> {
+  const requested = requestedPath.trim()
+  if (!requested) throw new Error('path is required')
+  const basePath = resolve(taskGitStoryRepoPath(projectPath, task, workspace))
+  const rootCandidates = [
+    projectPath,
+    typeof task.projectPath === 'string' ? task.projectPath : '',
+    typeof task.worktreePath === 'string' ? task.worktreePath : '',
+    typeof workspace?.worktreePath === 'string' ? workspace.worktreePath : '',
+    basePath,
+  ]
+  const roots = [...new Set(rootCandidates.map(item => item.trim()).filter(Boolean).map(item => resolve(item)))]
+  const candidate = isAbsolute(requested)
+    ? resolve(requested)
+    : resolve(basePath, requested)
+  const realCandidate = await fsp.realpath(candidate).catch(() => candidate)
+  const realRoots = await Promise.all(roots.map(async root => fsp.realpath(root).catch(() => root)))
+  const allowedRoot = realRoots.find(root => isWithinPath(realCandidate, root))
+  if (!allowedRoot) throw new Error('path is outside the task workspace')
+  const displayPath = isAbsolute(requested)
+    ? requested
+    : requested.split(pathSeparator).join('/')
+  return { absolutePath: realCandidate, displayPath }
+}
+
+async function gitStoryForTask(
+  projectPath: string,
+  task: Record<string, unknown>,
+  workspace?: { worktreePath?: string },
+) {
+  const driver = new NodeGitDriver()
+  const inspectedPath = taskGitStoryRepoPath(projectPath, task, workspace)
+  return inspectGitStory(driver, {
+    repoRoot: typeof task.projectPath === 'string' && task.projectPath.trim() ? task.projectPath.trim() : projectPath,
+    inspectedPath,
+    task: taskForGitStory(task, workspace),
+    inspectPr: false,
+  })
+}
+
+async function buildProjectGitStorySummary(projectPath: string, tasks?: Array<Record<string, unknown>>): Promise<GitStorySummary> {
+  const driver = new NodeGitDriver()
+  const workspaceConfig = readWorkspaceConfig(projectPath)
+  const workspaceProjects = workspaceConfig.kind === 'workspace'
+    ? resolveWorkspaceProjectPaths(projectPath, workspaceConfig)
+    : []
+  const rootSnapshots = workspaceProjects.length > 0
+    ? await Promise.all(workspaceProjects.map(child =>
+        inspectGitStory(driver, {
+          repoRoot: child.path,
+          inspectedPath: child.path,
+          inspectPr: false,
+        }),
+      ))
+    : [
+        await inspectGitStory(driver, {
+          repoRoot: projectPath,
+          inspectedPath: projectPath,
+          inspectPr: false,
+        }),
+      ]
+  const snapshots = [...rootSnapshots]
+  const taskRecords = tasks ?? await readTasksFileNormalized(join(getProjectStateDir(projectPath), 'TASKS.json')).catch(() => [])
+  const workspaceStore = await readTaskWorkspaceStore(projectPath).catch(() => undefined)
+  for (const task of taskRecords) {
+    const taskId = typeof task.id === 'string' ? task.id : ''
+    const workspace = taskId ? workspaceStore?.workspaces[taskId] : undefined
+    const taskStatus = typeof task.status === 'string' ? task.status : ''
+    const mergeRecord =
+      task.mergeRecord && typeof task.mergeRecord === 'object' && !Array.isArray(task.mergeRecord)
+        ? task.mergeRecord as { result?: string }
+        : undefined
+    const hasUnresolvedTaskGit =
+      typeof workspace?.worktreePath === 'string' ||
+      typeof task.worktreePath === 'string' ||
+      Boolean(taskGitStoryOverride(task)) ||
+      mergeRecord?.result === 'skipped' ||
+      mergeRecord?.result === 'conflict' ||
+      taskStatus === 'pending_pr'
+    if (!hasUnresolvedTaskGit) continue
+    snapshots.push(await gitStoryForTask(projectPath, task, workspace))
+  }
+  return summarizeGitStories(snapshots)
+}
+
+function gitStoryAutomationFor(
+  projectPath: string,
+  workspaceConfig: ReturnType<typeof readWorkspaceConfig> | null,
+  task: Record<string, unknown>,
+  action: 'commit' | 'push' | 'pullRequest',
+): 'ask' | 'auto' | 'never' {
+  const policy = effectiveGitStoryPolicy({
+    workspacePath: projectPath,
+    workspaceProjectPath: projectPath,
+    ...(workspaceConfig?.gitStory ? { workspaceGitStory: workspaceConfig.gitStory } : {}),
+    workspaceProjects: workspaceConfig ? resolveWorkspaceProjectPaths(projectPath, workspaceConfig) : [],
+    task,
+  })
+  const value = policy[action]
+  return value === 'auto' || value === 'never' ? value : 'ask'
+}
+
+function isSafeRelativeGitPath(file: string): boolean {
+  const trimmed = file.trim()
+  return Boolean(trimmed) && !isAbsolute(trimmed) && !trimmed.split(/[\\/]+/).includes('..')
+}
+
+function policyAllowsGitWrite(
+  projectPath: string,
+  workspaceConfig: ReturnType<typeof readWorkspaceConfig> | null,
+  task: Record<string, unknown>,
+  action: 'commit' | 'push' | 'pullRequest',
+  body: { confirmed?: boolean; automationSource?: string },
+): { ok: true } | { ok: false; error: string; status: number } {
+  const mode = gitStoryAutomationFor(projectPath, workspaceConfig, task, action)
+  if (mode === 'never') return { ok: false, error: `Project policy disables ${action}.`, status: 403 }
+  if (mode === 'auto' && body.automationSource === 'project_policy') return { ok: true }
+  if (body.confirmed === true) return { ok: true }
+  return { ok: false, error: `${action} requires confirmation for this project policy.`, status: 409 }
+}
+
+async function commitGitStoryFiles(input: {
+  cwd: string
+  files: string[]
+  message: string
+}): Promise<{ ok: boolean; commitSha?: string; detail?: string }> {
+  try {
+    await execFileP('git', ['add', '--', ...input.files], { cwd: input.cwd })
+    await execFileP('git', ['commit', '--no-verify', '-m', input.message], { cwd: input.cwd })
+    const { stdout } = await execFileP('git', ['rev-parse', 'HEAD'], { cwd: input.cwd })
+    return { ok: true, commitSha: stdout.trim() }
+  } catch (err) {
+    return { ok: false, detail: err instanceof Error ? err.message : String(err) }
+  }
+}
+
 async function enrichTaskForServe(
   projectPath: string,
   task: Record<string, unknown>,
 ): Promise<Record<string, unknown>> {
-  const normalized = normalizeTaskForDrawer(task)
+  const effective = await buildEffectiveTask(projectPath, task as Task)
+  const normalized = normalizeTaskForDrawer(effective)
   const taskId = typeof normalized.id === 'string' ? normalized.id : ''
-  const memoryDir = join(projectPath, 'memory')
+  const memoryDir = getProjectStateDir(projectPath)
   const checkpoint = taskId ? await readCheckpoint(memoryDir, taskId) : null
   const reviewerFeedbackCutoffMs = (() => {
     const cutoff = latestResolvedRetryEscalationAt(normalized as import('@guildhall/core').Task)
@@ -1208,12 +1677,24 @@ async function enrichTaskForServe(
     (note) => isWorkerSelfCritiqueNote(note),
   )
   const terminalSummary = buildTerminalSummary(normalized)
+  const workspaceStore = await readTaskWorkspaceStore(projectPath).catch(() => undefined)
+  const workspace = taskId ? workspaceStore?.workspaces[taskId] : undefined
+  const gitStory = await gitStoryForTask(projectPath, normalized, workspace).catch(() => undefined)
+  const reviewAudit = taskId
+    ? await createReviewAuditStore({
+        projectRoot: projectPath,
+        persistence: new FileBackedGuildhallPersistence(),
+      }).readTaskReviewAudit(taskId).catch(() => null)
+    : null
 
   return {
     ...normalized,
+    ...(reviewAudit?.plan ? { reviewPlan: reviewAudit.plan.payload } : {}),
+    ...(reviewAudit ? { reviewAuditSummary: buildReviewAuditSummary(reviewAudit) } : {}),
     ...(latestReviewerSummary ? { latestReviewerSummary } : {}),
     ...(latestSelfCritique ? { latestSelfCritique } : {}),
     ...(terminalSummary ? { terminalSummary } : {}),
+    ...(gitStory ? { gitStory } : {}),
     ...(checkpoint
       ? {
           latestCheckpoint: {
@@ -1226,6 +1707,33 @@ async function enrichTaskForServe(
           },
         }
       : {}),
+  }
+}
+
+function buildReviewAuditSummary(reviewAudit: {
+  reviewerRuns: Array<{
+    recordedAt?: string
+    payload?: {
+      verdict?: string
+      recordedAt?: string
+    }
+  }>
+  escapedMisses: readonly unknown[]
+}): {
+  reviewerRunCount: number
+  reviseCount: number
+  escapedMissCount: number
+  latestReviewerRunAt?: string
+} {
+  const runTimes = reviewAudit.reviewerRuns
+    .map((run) => run.payload?.recordedAt ?? run.recordedAt)
+    .filter((value): value is string => typeof value === 'string' && value.length > 0)
+    .sort()
+  return {
+    reviewerRunCount: reviewAudit.reviewerRuns.length,
+    reviseCount: reviewAudit.reviewerRuns.filter((run) => run.payload?.verdict === 'revise').length,
+    escapedMissCount: reviewAudit.escapedMisses.length,
+    ...(runTimes.length > 0 ? { latestReviewerRunAt: runTimes[runTimes.length - 1] } : {}),
   }
 }
 
@@ -1247,27 +1755,23 @@ export function buildServeApp(opts: ServeOptions = {}): {
     ?? getRegisteredProjects()[0]?.path
     ?? process.cwd()
   const projectPath = resolve(fallbackProjectPath)
-  let selectedProjectPath = resolve(projectPath)
+  let configuredProjectPath = resolve(projectPath)
   const requestProjectPathStore = new AsyncLocalStorage<string>()
-  const syncSelectedProject = (): ResolvedProject => resolveProject(selectedProjectPath)
-  const currentProject = (): ResolvedProject => resolveProject(requestProjectPathStore.getStore() ?? selectedProjectPath)
+  const currentProject = (): ResolvedProject => resolveProject(requestProjectPathStore.getStore() ?? configuredProjectPath)
   const refreshProject = (path = currentProject().path): ResolvedProject => {
     const refreshed = resolveProject(path)
-    if (resolve(selectedProjectPath) === resolve(path)) selectedProjectPath = refreshed.path
+    if (resolve(configuredProjectPath) === resolve(path)) configuredProjectPath = refreshed.path
     return refreshed
-  }
-  const selectForegroundProject = (path: string): ResolvedProject => {
-    const resolvedPath = resolve(path)
-    selectedProjectPath = resolvedPath
-    return resolveProject(resolvedPath)
   }
   const resolveProjectPathForRequest = (c: Context): string | null => {
     const requestedId = c.req.query('projectId')?.trim()
-    if (!requestedId) return selectedProjectPath
-    const selected = syncSelectedProject()
-    if (selected.id === requestedId) return selected.path
+    if (!requestedId) return null
     const entry = getRegisteredProjects().find(item => item.id === requestedId)
-    if (!entry) return null
+    if (!entry) {
+      const configuredProject = resolveProject(configuredProjectPath)
+      if (configuredProject.id === requestedId) return configuredProject.path
+      return null
+    }
     return resolve(entry.path)
   }
   const project = new Proxy({} as ResolvedProject, {
@@ -1292,8 +1796,13 @@ export function buildServeApp(opts: ServeOptions = {}): {
   const bindProjectScope = async (
     c: Context,
     next: () => Promise<void>,
-    { requireExplicitForMutation = false }: { requireExplicitForMutation?: boolean } = {},
+    {
+      requireExplicitForMutation = false,
+    }: { requireExplicitForMutation?: boolean } = {},
   ) => {
+    if (!c.req.query('projectId')?.trim()) {
+      return c.json({ error: 'projectId is required for project-scoped requests.' }, 400)
+    }
     if (
       requireExplicitForMutation &&
       c.req.method !== 'GET' &&
@@ -1306,13 +1815,48 @@ export function buildServeApp(opts: ServeOptions = {}): {
     if (!resolvedPath) {
       return c.json({ error: 'Unknown project id for this local Guildhall service.' }, 404)
     }
+    if (
+      c.req.path.startsWith('/api/project') &&
+      c.req.method !== 'GET' &&
+      c.req.method !== 'HEAD'
+    ) {
+      const runtimeBlocker = projectRuntimeCompatibilityBlocker({ projectRoot: resolvedPath })
+      if (runtimeBlocker) {
+        return c.json(
+          {
+            error: runtimeBlocker.message,
+            code: runtimeBlocker.code,
+            actionHref: runtimeBlocker.actionHref,
+          },
+          409,
+        )
+      }
+    }
+    if (
+      c.req.path.startsWith('/api/project') &&
+      !c.req.path.startsWith('/api/project/migrations') &&
+      c.req.method !== 'GET' &&
+      c.req.method !== 'HEAD'
+    ) {
+      const requiredMigrationBlocker = await startBlockerForRequiredMigrations(resolvedPath)
+      if (requiredMigrationBlocker) {
+        return c.json(
+          {
+            error: requiredMigrationBlocker.message,
+            code: requiredMigrationBlocker.code,
+            actionHref: requiredMigrationBlocker.actionHref,
+          },
+          409,
+        )
+      }
+    }
     return requestProjectPathStore.run(resolvedPath, next)
   }
 
   app.use('/api/project', (c, next) => bindProjectScope(c, next, { requireExplicitForMutation: true }))
   app.use('/api/project/*', (c, next) => bindProjectScope(c, next, { requireExplicitForMutation: true }))
-  app.use('/api/config', (c, next) => bindProjectScope(c, next, { requireExplicitForMutation: true }))
-  app.use('/api/config/*', (c, next) => bindProjectScope(c, next, { requireExplicitForMutation: true }))
+  app.use('/api/config', bindProjectScope)
+  app.use('/api/config/*', bindProjectScope)
   app.use('/api/setup', bindProjectScope)
   app.use('/api/setup/*', bindProjectScope)
 
@@ -1330,26 +1874,61 @@ export function buildServeApp(opts: ServeOptions = {}): {
   // API: runtime version (shown next to the "Guildhall" wordmark)
   // -------------------------------------------------------------------------
   let _cachedVersion: string | null = null
+  let _cachedPackageRoot: string | null | undefined = undefined
+  type RuntimeBuildIdentity = {
+    version?: string
+    builtAt: string
+    source: string
+    git: {
+      commit: string
+      shortCommit: string
+      branch: string
+      dirty: boolean
+    }
+  }
+
+  function runtimePackageRoot(): string | null {
+    if (_cachedPackageRoot !== undefined) return _cachedPackageRoot
+    try {
+      const here = dirname(fileURLToPath(import.meta.url))
+      for (const start of [here, process.cwd()]) {
+        let dir = start
+        for (let i = 0; i < 8; i++) {
+          const candidate = join(dir, 'package.json')
+          if (existsSync(candidate)) {
+            const pkg = JSON.parse(readFileSync(candidate, 'utf-8')) as {
+              name?: string
+            }
+            if (pkg?.name === 'guildhall' || pkg?.name === '@guildhall/cli') {
+              _cachedPackageRoot = dir
+              return _cachedPackageRoot
+            }
+          }
+          const next = dirname(dir)
+          if (next === dir) break
+          dir = next
+        }
+      }
+    } catch {
+      /* fall through */
+    }
+    _cachedPackageRoot = null
+    return _cachedPackageRoot
+  }
+
   function readRuntimeVersion(): string {
     if (_cachedVersion !== null) return _cachedVersion
     try {
-      // src/runtime/serve.ts → up to package root
-      const here = dirname(fileURLToPath(import.meta.url))
-      // Walk up until we find a package.json.
-      let dir = here
-      for (let i = 0; i < 6; i++) {
-        const candidate = join(dir, 'package.json')
+      const root = runtimePackageRoot()
+      if (root) {
+        const candidate = join(root, 'package.json')
         if (existsSync(candidate)) {
           const pkg = JSON.parse(readFileSync(candidate, 'utf-8')) as {
-            name?: string
             version?: string
           }
-          if (pkg?.name === 'guildhall' || pkg?.name === '@guildhall/cli') {
-            _cachedVersion = pkg.version ?? 'unknown'
-            return _cachedVersion
-          }
+          _cachedVersion = pkg.version ?? 'unknown'
+          return _cachedVersion
         }
-        dir = dirname(dir)
       }
     } catch {
       /* fall through */
@@ -1368,6 +1947,16 @@ export function buildServeApp(opts: ServeOptions = {}): {
     const projects = await Promise.all(
       registeredProjects.map(async (entry) => {
         const resolved = resolveProject(entry.path)
+        const run = runsById.get(resolved.id)
+        const providerStatus = resolved.initializationNeeded
+          ? null
+          : await buildProjectProviderStatusForPath(entry.path, run?.providerStatus)
+        const migrationSummary = resolved.initializationNeeded
+          ? null
+          : await summarizeProjectMigrations(entry.path)
+        const projectCheckIn = resolved.initializationNeeded
+          ? null
+          : summarizeProjectCheckIn(getProjectStateDir(entry.path))
         let taskCounts: ServiceProjectSummary['taskCounts'] = {
           total: 0,
           active: 0,
@@ -1379,25 +1968,50 @@ export function buildServeApp(opts: ServeOptions = {}): {
         let highlights: ServiceProjectSummary['highlights'] = undefined
         let taskActivity: ServiceProjectSummary['taskActivity'] = undefined
         try {
-          const tasks = await readTasksFileNormalized(join(entry.path, 'memory', 'TASKS.json'))
+          const tasks = await readTasksFileNormalized(join(getProjectStateDir(entry.path), 'TASKS.json'))
           taskCounts = summarizeTaskCounts(tasks)
           taskActivity = summarizeTaskActivity(tasks)
+          const gitStory = await buildProjectGitStorySummary(entry.path, tasks as Array<Record<string, unknown>>).catch(() => undefined)
           highlights = {
             activeTaskTitle: latestTaskTitleByStatus(tasks, ['in_progress', 'review', 'gate_check', 'exploring']),
             blockedTaskTitle: latestTaskTitleByStatus(tasks, ['blocked']),
             recentCompletedTaskTitle: latestTaskTitleByStatus(tasks, ['done']),
           }
+          return {
+            ...summarizeProject(resolved),
+            summary: summarizeProjectText(resolved),
+            taskCounts,
+            ...(taskActivity ? { taskActivity } : {}),
+            ...(highlights ? { highlights } : {}),
+            ...(gitStory ? { gitStory } : {}),
+            ...(providerStatus ? { providerStatus } : {}),
+            ...(migrationSummary ? { migrationSummary } : {}),
+            projectCheckIn,
+            ...(run
+              ? {
+                  run: {
+                    status: run.status,
+                    startedAt: run.startedAt,
+                    stoppedAt: run.stoppedAt,
+                    error: run.error,
+                    stopSummary: run.stopSummary,
+                    providerStatus: run.providerStatus,
+                  },
+                }
+              : {}),
+          } satisfies ServiceProjectSummary
         } catch {
           // leave zeroed summary for missing/unreadable task files
         }
-        const run = runsById.get(resolved.id)
         return {
           ...summarizeProject(resolved),
           summary: summarizeProjectText(resolved),
-          selected: resolved.path === resolve(selectedProjectPath),
           taskCounts,
           ...(taskActivity ? { taskActivity } : {}),
           ...(highlights ? { highlights } : {}),
+          ...(providerStatus ? { providerStatus } : {}),
+          ...(migrationSummary ? { migrationSummary } : {}),
+          projectCheckIn,
           ...(run
             ? {
                 run: {
@@ -1415,27 +2029,15 @@ export function buildServeApp(opts: ServeOptions = {}): {
     )
     return c.json({
       pid: process.pid,
-      selectedProject: summarizeProject(syncSelectedProject()),
-      foregroundProject: summarizeProject(syncSelectedProject()),
+      defaultProviderStatus: buildGlobalDefaultProviderStatus(),
       projects,
     })
   })
 
   app.post('/api/service/select-project', async c => {
-    const body = await c.req.json().catch(() => ({})) as { projectId?: string; path?: string }
-    const registeredProjects = getRegisteredProjects()
-    const selectedPath =
-      (body.projectId ? registeredProjects.find((entry) => entry.id === body.projectId)?.path : undefined)
-      ?? body.path
-    if (!selectedPath) {
-      return c.json({ error: 'projectId or path is required' }, 400)
-    }
-    const entry = registeredProjects.find((item) => resolve(item.path) === resolve(selectedPath))
-    if (!entry) {
-      return c.json({ error: 'Project is not registered with this local Guildhall service.' }, 404)
-    }
-    const next = selectForegroundProject(entry.path)
-    return c.json({ ok: true, selectedProject: summarizeProject(next) })
+    return c.json({
+      error: 'Guildhall no longer has a service-wide selected project. Open /projects/:projectId or pass projectId to project APIs.',
+    }, 410)
   })
 
   app.post('/api/service/attach-project', async c => {
@@ -1450,11 +2052,10 @@ export function buildServeApp(opts: ServeOptions = {}): {
       }
       const next = resolveProject(resolvedPath)
       const sync = syncRegistryEntryForProject(next)
-      selectForegroundProject(next.path)
       return c.json({
         ok: true,
         attached: sync.attached,
-        selectedProject: summarizeProject(next),
+        project: summarizeProject(next),
       })
     } catch (err) {
       return c.json({ error: err instanceof Error ? err.message : String(err) }, 500)
@@ -1522,12 +2123,102 @@ export function buildServeApp(opts: ServeOptions = {}): {
     }
   }
 
+  function readBakedBuildIdentity(): RuntimeBuildIdentity | null {
+    try {
+      const here = dirname(fileURLToPath(import.meta.url))
+      const candidates = [
+        join(here, 'build-info.json'),
+        join(here, 'dist', 'build-info.json'),
+        join(here, '..', 'build-info.json'),
+      ]
+      for (const candidate of candidates) {
+        if (!existsSync(candidate)) continue
+        const parsed = JSON.parse(readFileSync(candidate, 'utf-8')) as Partial<RuntimeBuildIdentity>
+        const git = (parsed.git ?? {}) as Record<string, unknown>
+        if (
+          typeof parsed.builtAt === 'string' &&
+          typeof parsed.source === 'string' &&
+          typeof git.commit === 'string' &&
+          typeof git.shortCommit === 'string' &&
+          typeof git.branch === 'string' &&
+          typeof git.dirty === 'boolean'
+        ) {
+          return {
+            version: typeof parsed.version === 'string' ? parsed.version : undefined,
+            builtAt: parsed.builtAt,
+            source: parsed.source,
+            git: {
+              commit: git.commit,
+              shortCommit: git.shortCommit,
+              branch: git.branch,
+              dirty: git.dirty,
+            },
+          }
+        }
+      }
+    } catch {
+      /* fall through to live git */
+    }
+    return null
+  }
+
+  async function gitOutput(args: string[], fallback = 'unknown'): Promise<string> {
+    try {
+      const cwd = runtimePackageRoot() ?? process.cwd()
+      const { stdout } = await execFileP('git', args, { cwd })
+      const value = stdout.trim()
+      return value.length > 0 ? value : fallback
+    } catch {
+      return fallback
+    }
+  }
+
+  async function liveBuildIdentity(): Promise<RuntimeBuildIdentity> {
+    const status = await gitOutput(['status', '--porcelain=v1', '--untracked-files=all'], '')
+    const commit = await gitOutput(['rev-parse', 'HEAD'])
+    const shortCommit = commit === 'unknown'
+      ? 'unknown'
+      : await gitOutput(['rev-parse', '--short=12', 'HEAD'], commit.slice(0, 12))
+    return {
+      version: readRuntimeVersion(),
+      builtAt: processStartedAt,
+      source: 'live-git',
+      git: {
+        commit,
+        shortCommit,
+        branch: await gitOutput(['branch', '--show-current']),
+        dirty: status.length > 0,
+      },
+    }
+  }
+
+  async function runningHealthPayload() {
+    const served = servedBundleFreshnessPayload()
+    const identity = readBakedBuildIdentity() ?? await liveBuildIdentity()
+    const migrations = await summarizeProjectMigrations(configuredProjectPath)
+    return {
+      version: identity.version ?? readRuntimeVersion(),
+      git: identity.git,
+      build: {
+        builtAt: identity.builtAt,
+        source: identity.source,
+        distPath: served.distPath,
+      },
+      served,
+      migrations,
+    }
+  }
+
   app.get('/api/build-info', c => {
     return c.json(servedBundleFreshnessPayload())
   })
 
   app.get('/api/stale-server', c => {
     return c.json(servedBundleFreshnessPayload())
+  })
+
+  app.get('/api/health', async c => {
+    return c.json(await runningHealthPayload())
   })
 
   // -------------------------------------------------------------------------
@@ -1542,9 +2233,10 @@ export function buildServeApp(opts: ServeOptions = {}): {
           setupUrl: '/setup',
         })
       }
-      const tasksPath = join(project.path, 'memory', 'TASKS.json')
+      const tasksPath = join(getProjectStateDir(project.path), 'TASKS.json')
       const rawTasks = await readTasksFileNormalized(tasksPath)
       const tasks = await Promise.all(rawTasks.map((task) => enrichTaskForServe(project.path, task)))
+      const gitStory = await buildProjectGitStorySummary(project.path, rawTasks as Array<Record<string, unknown>>)
       const run = supervisor.get(project.id)
       const resolvedConfig = resolveConfig({ workspacePath: project.path })
       const runtimeProvider = getRuntimeProviderConfig({
@@ -1556,7 +2248,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
         ? normalizePreferredProvider(preferredProvider)
         : undefined
       const recent = supervisor.recent(project.id, undefined, project.path)
-      const bootstrapStatus = readBootstrapStatus(join(project.path, 'memory'))
+      const bootstrapStatus = readBootstrapStatus(getProjectStateDir(project.path))
       const preferredHealth = providerHealthForRun({
         credentials: runtimeProvider.credentials,
         activeProvider: preferredActiveProvider ?? null,
@@ -1577,6 +2269,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
               }),
               warnings: await providerWarningsForRun({
                 projectPath: project.path,
+                preferredProvider,
                 activeProvider: preferredActiveProvider ?? null,
                 health: preferredHealth,
               }),
@@ -1615,10 +2308,40 @@ export function buildServeApp(opts: ServeOptions = {}): {
             }
           : null,
         providerStatus,
+        gitStory,
         startReadiness,
         recentEvents: recent,
         ...(bootstrapStatus ? { bootstrapStatus } : {}),
       })
+    } catch (err) {
+      return c.json({ error: err instanceof Error ? err.message : String(err) }, 500)
+    }
+  })
+
+  app.get('/api/project/migrations', async c => {
+    try {
+      return c.json(await getProjectMigrationStatus({ projectRoot: project.path }))
+    } catch (err) {
+      return c.json({ error: err instanceof Error ? err.message : String(err) }, 500)
+    }
+  })
+
+  app.post('/api/project/migrations/apply', async c => {
+    try {
+      const body = await c.req.json().catch(() => ({})) as {
+        includePrompt?: boolean
+        migrationId?: string
+      }
+      const result = await applyProjectMigrations({
+        projectRoot: project.path,
+        includePrompt: body.includePrompt === true,
+        ...(body.migrationId ? { only: [body.migrationId] } : {}),
+      })
+      return c.json({
+        ok: result.failed.length === 0,
+        result,
+        status: await getProjectMigrationStatus({ projectRoot: project.path }),
+      }, result.failed.length === 0 ? 200 : 500)
     } catch (err) {
       return c.json({ error: err instanceof Error ? err.message : String(err) }, 500)
     }
@@ -1830,6 +2553,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
 
   async function providerWarningsForRun(input: {
     projectPath: string
+    preferredProvider?: PreferredProviderKey | ProviderName | null
     activeProvider: ProviderName | null | undefined
     health?: ReturnType<typeof providerHealthForRun>
   }) {
@@ -1838,6 +2562,30 @@ export function buildServeApp(opts: ServeOptions = {}): {
       severity: 'info' | 'warn' | 'error'
       message: string
     }> = []
+    const preferredProvider = input.preferredProvider
+      ? normalizePreferredProvider(input.preferredProvider as PreferredProviderKey)
+      : null
+    if (preferredProvider) {
+      const global = readGlobalConfig()
+      const workspace = readWorkspaceConfig(input.projectPath)
+      const mismatches = [
+        providerScopedModelMismatchWarning({
+          scope: 'Global',
+          models: global.models,
+          preferredProvider,
+        }),
+        providerScopedModelMismatchWarning({
+          scope: 'Project',
+          models: workspace.models,
+          preferredProvider,
+        }),
+      ].filter((warning): warning is {
+        code: string
+        severity: 'warn'
+        message: string
+      } => Boolean(warning))
+      warnings.push(...mismatches)
+    }
     if (input.health?.state === 'degraded') {
       warnings.push({
         code: 'provider_pool_health_degraded',
@@ -1848,6 +2596,109 @@ export function buildServeApp(opts: ServeOptions = {}): {
       })
     }
     return warnings
+  }
+
+  const providerModelKeys = ['claude-oauth', 'anthropic-api', 'codex', 'codex-oauth', 'openai-api', 'llama-cpp'] as const
+
+  function configuredProviderModelKeys(models: unknown): Array<(typeof providerModelKeys)[number]> {
+    if (!models || typeof models !== 'object' || Array.isArray(models)) return []
+    return Object.keys(models).filter((key): key is (typeof providerModelKeys)[number] =>
+      (providerModelKeys as readonly string[]).includes(key),
+    )
+  }
+
+  function modelProviderKeyMatchesPreferred(
+    modelProvider: (typeof providerModelKeys)[number],
+    preferredProvider: ProviderName,
+  ): boolean {
+    const normalizedModelProvider = modelProvider === 'codex' ? 'codex-oauth' : modelProvider
+    return normalizedModelProvider === preferredProvider
+  }
+
+  function providerScopedModelMismatchWarning(input: {
+    scope: 'Global' | 'Project'
+    models: unknown
+    preferredProvider: ProviderName
+  }): {
+    code: string
+    severity: 'warn'
+    message: string
+  } | null {
+    const keys = configuredProviderModelKeys(input.models)
+    if (keys.length === 0) return null
+    if (keys.some(key => modelProviderKeyMatchesPreferred(key, input.preferredProvider))) return null
+    const configuredLabels = [...new Set(keys.map(key => providerLabelForAnyKey(key)))].join(', ')
+    const preferredLabel = providerLabelForAnyKey(input.preferredProvider)
+    return {
+      code: 'provider_model_scope_mismatch',
+      severity: 'warn',
+      message:
+        `${input.scope} model overrides are configured for ${configuredLabels}, but this project is set to use ${preferredLabel}. ` +
+        `Guildhall will use ${preferredLabel} defaults unless you switch providers or configure models for ${preferredLabel}.`,
+    }
+  }
+
+  function buildGlobalDefaultProviderStatus() {
+    const global = readGlobalConfig()
+    const preferredProvider = global.preferredProvider ?? null
+    if (!preferredProvider) return null
+    const activeProvider = normalizePreferredProvider(preferredProvider)
+    const models = mergeModels(
+      resolveModelsForProvider(global.models, preferredProvider),
+      undefined,
+      defaultAssignmentForProvider(activeProvider) ?? DEFAULT_LOCAL_MODEL_ASSIGNMENT,
+    )
+    const warning = providerScopedModelMismatchWarning({
+      scope: 'Global',
+      models: global.models,
+      preferredProvider: activeProvider,
+    })
+    return buildProviderStatusSnapshot({
+      preferredProvider,
+      activeProvider,
+      fallback: false,
+      allowPaidProviderFallback: global.allowPaidProviderFallback,
+      activeModel: models.worker,
+      models,
+      ...(warning ? { warnings: [warning] } : {}),
+    })
+  }
+
+  async function buildProjectProviderStatusForPath(projectPath: string, liveProviderStatus?: unknown) {
+    if (liveProviderStatus) return liveProviderStatus
+    const resolvedConfig = resolveConfig({ workspacePath: projectPath })
+    const runtimeProvider = getRuntimeProviderConfig({
+      projectPath,
+      models: resolvedConfig.models,
+    })
+    const preferredProvider = runtimeProvider.preferredProvider
+    const preferredActiveProvider = preferredProvider
+      ? normalizePreferredProvider(preferredProvider)
+      : undefined
+    if (!preferredActiveProvider) return null
+    const preferredHealth = providerHealthForRun({
+      credentials: runtimeProvider.credentials,
+      activeProvider: preferredActiveProvider,
+    })
+    return buildProviderStatusSnapshot({
+      preferredProvider,
+      activeProvider: null,
+      fallback: false,
+      health: preferredHealth,
+      allowPaidProviderFallback: runtimeProvider.allowPaidProviderFallback,
+      activeModel: resolvedConfig.models.worker,
+      models: resolvedConfig.models,
+      laneConcurrency: await providerLaneConcurrencyForRun({
+        projectPath,
+        activeProvider: preferredActiveProvider,
+      }),
+      warnings: await providerWarningsForRun({
+        projectPath,
+        preferredProvider,
+        activeProvider: preferredActiveProvider,
+        health: preferredHealth,
+      }),
+    })
   }
 
   function providerHealthForRun(input: {
@@ -1997,8 +2848,20 @@ export function buildServeApp(opts: ServeOptions = {}): {
     message?: string
     actionHref?: string
   }> {
+    const runtimeBlocker = projectRuntimeCompatibilityBlocker({ projectRoot: input.projectPath })
+    if (runtimeBlocker) return runtimeBlocker
+
+    const requiredMigrationBlocker = await startBlockerForRequiredMigrations(input.projectPath)
+    if (requiredMigrationBlocker) return requiredMigrationBlocker
+
+    const ownerInputBlocker = startBlockerForOwnerInput(input.projectPath)
+    if (ownerInputBlocker) return ownerInputBlocker
+
     const importDraftBlocker = await startBlockerForImportDrafts(input.projectPath)
     if (importDraftBlocker) return importDraftBlocker
+
+    const taskReadinessBlocker = await startBlockerForTaskReadiness(input.projectPath)
+    if (taskReadinessBlocker) return taskReadinessBlocker
 
     const terminal = terminalStartState(input.projectPath)
     if (terminal) {
@@ -2106,7 +2969,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
       }
     }
   } | null {
-    const tasksPath = join(projectPath, 'memory', 'TASKS.json')
+    const tasksPath = join(getProjectStateDir(projectPath), 'TASKS.json')
     if (!existsSync(tasksPath)) return null
     let raw: unknown
     try {
@@ -2172,7 +3035,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
     message: string
     actionHref: string
   } | null> {
-    const tasksPath = join(projectPath, 'memory', 'TASKS.json')
+    const tasksPath = join(getProjectStateDir(projectPath), 'TASKS.json')
     if (!existsSync(tasksPath)) return null
     const raw = JSON.parse(await fsp.readFile(tasksPath, 'utf-8')) as
       | { tasks?: Array<Record<string, unknown>> }
@@ -2200,6 +3063,108 @@ export function buildServeApp(opts: ServeOptions = {}): {
     }
   }
 
+  async function startBlockerForTaskReadiness(projectPath: string): Promise<{
+    canStart: false
+    code: 'no_unattended_progress'
+    message: string
+    actionHref: string
+  } | null> {
+    const tasksPath = join(getProjectStateDir(projectPath), 'TASKS.json')
+    if (!existsSync(tasksPath)) return null
+    const raw = JSON.parse(await fsp.readFile(tasksPath, 'utf-8')) as
+      | { tasks?: Array<Record<string, unknown>> }
+      | Array<Record<string, unknown>>
+    const tasks = Array.isArray(raw) ? raw : raw.tasks ?? []
+    if (tasks.length === 0) return null
+
+    let runnable = 0
+    let needsBriefCleanup = 0
+    let waitingForApproval = 0
+    let terminal = 0
+    for (const task of tasks) {
+      if (!task || typeof task !== 'object') continue
+      const status = String((task as { status?: unknown }).status ?? '')
+      if (['done', 'blocked', 'shelved', 'pending_pr'].includes(status)) {
+        terminal += 1
+        continue
+      }
+      if (status === 'spec_review') {
+        waitingForApproval += 1
+        continue
+      }
+      if (status === 'ready' && !isReadyForWorkerHandoffRecord(task)) {
+        needsBriefCleanup += 1
+        continue
+      }
+      if (['proposed', 'exploring', 'ready', 'in_progress', 'review', 'gate_check'].includes(status)) {
+        runnable += 1
+      }
+    }
+
+    if (runnable > 0 || terminal === tasks.length) return null
+    if (needsBriefCleanup > 0) {
+      return {
+        canStart: false,
+        code: 'no_unattended_progress',
+        message:
+          needsBriefCleanup === 1
+            ? 'One task needs a clearer brief and acceptance criteria before Guildhall can build unattended.'
+            : `${needsBriefCleanup} tasks need clearer briefs and acceptance criteria before Guildhall can build unattended.`,
+        actionHref: '/work',
+      }
+    }
+    if (waitingForApproval > 0) {
+      return {
+        canStart: false,
+        code: 'no_unattended_progress',
+        message:
+          waitingForApproval === 1
+            ? 'Review the waiting spec before starting Guildhall.'
+            : `Review ${waitingForApproval} waiting specs before starting Guildhall.`,
+        actionHref: '/thread',
+      }
+    }
+    return null
+  }
+
+  function startBlockerForOwnerInput(projectPath: string): {
+    canStart: false
+    code: 'owner_input_required'
+    message: string
+    actionHref: string
+  } | null {
+    const ownerItems = buildInbox({ projectPath }).filter(item =>
+      item.severity !== 'low' &&
+      [
+        'project_check_in',
+        'pressure_test_pending',
+        'agent_question_pending',
+        'brief_approval',
+        'spec_approval',
+        'open_escalation',
+      ].includes(item.kind),
+    )
+    const first = ownerItems[0]
+    if (!first) return null
+    const questionCount = ownerItems.filter(item =>
+      item.kind === 'pressure_test_pending' || item.kind === 'agent_question_pending',
+    ).length
+    const action =
+      questionCount > 0
+        ? `${questionCount} ${questionCount === 1 ? 'question needs' : 'questions need'} your answer before Guildhall can continue`
+        : first.kind === 'brief_approval'
+          ? 'Review the waiting task brief before Guildhall can continue'
+          : first.kind === 'spec_approval'
+            ? 'Review the waiting spec before Guildhall can continue'
+            : 'Choose a recovery path for the blocked task'
+    return {
+      canStart: false,
+      code: 'owner_input_required',
+      message: action,
+      actionHref: first.actionHref ?? '/thread',
+    }
+  }
+
   app.post('/api/project/start', async c => {
     try {
       const body = await c.req.json().catch(() => ({})) as {
@@ -2222,6 +3187,17 @@ export function buildServeApp(opts: ServeOptions = {}): {
       }
       if (project.initializationNeeded) {
         return c.json({ error: 'Project not initialized. Complete /setup first.' }, 400)
+      }
+      const requiredMigrationBlocker = await startBlockerForRequiredMigrations(project.path)
+      if (requiredMigrationBlocker) {
+        return c.json(
+          {
+            error: requiredMigrationBlocker.message,
+            code: requiredMigrationBlocker.code,
+            actionHref: requiredMigrationBlocker.actionHref,
+          },
+          409,
+        )
       }
       const importDraftBlocker = await startBlockerForImportDrafts(project.path)
       if (importDraftBlocker) {
@@ -2428,6 +3404,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
         }),
         warnings: await providerWarningsForRun({
           projectPath: project.path,
+          preferredProvider: preferred ?? null,
           activeProvider: effectiveProvider,
           health: activeHealth,
         }),
@@ -2485,13 +3462,111 @@ export function buildServeApp(opts: ServeOptions = {}): {
         return c.json({ error: 'Guildhall has not inferred repo structure here yet — run repo inspection first' }, 400)
       }
       const result = await createExploringTask({
-        memoryDir: join(project.path, 'memory'),
+        memoryDir: getProjectStateDir(project.path),
         ask: body.ask,
         domain,
         projectPath: resolveTaskPathForDomain(project, domain),
         ...(body.title ? { title: body.title } : {}),
       })
       return c.json(result)
+    } catch (err) {
+      return c.json({ error: err instanceof Error ? err.message : String(err) }, 500)
+    }
+  })
+
+  app.post('/api/project/request', async c => {
+    try {
+      if (project.initializationNeeded) {
+        return c.json({ error: 'Project not initialized. Complete /setup first.' }, 400)
+      }
+      const body = await c.req.json().catch(() => ({})) as {
+        ask?: string
+        domain?: string
+        title?: string
+      }
+      if (!body.ask || body.ask.trim().length === 0) {
+        return c.json({ error: 'Missing "ask" in request body' }, 400)
+      }
+      const coordinators = project.config?.coordinators ?? []
+      const defaultDomain = coordinators[0]?.domain
+      const domain = body.domain ?? defaultDomain
+      if (!domain) {
+        return c.json({ error: 'Guildhall has not inferred repo structure here yet — run repo inspection first' }, 400)
+      }
+      const result = await createRoutedRequest({
+        memoryDir: getProjectStateDir(project.path),
+        ask: body.ask,
+        domain,
+        projectPath: resolveTaskPathForDomain(project, domain),
+        ...(body.title ? { title: body.title } : {}),
+      })
+      return c.json(result)
+    } catch (err) {
+      return c.json({ error: err instanceof Error ? err.message : String(err) }, 500)
+    }
+  })
+
+  app.post('/api/project/project-check-in', async c => {
+    try {
+      if (project.initializationNeeded) {
+        return c.json({ error: 'Project not initialized. Complete /setup first.' }, 400)
+      }
+      const memoryDir = getProjectStateDir(project.path)
+      const existing = listPressureTestIntakes(memoryDir)
+      const active = existing.find(intake => intake.status === 'active')
+      if (active) return c.json({ intake: active, existing: true })
+      if (existing.length > 0) {
+        return c.json({
+          skipped: true,
+          projectCheckIn: summarizeProjectCheckIn(memoryDir),
+        })
+      }
+      const title = `${project.config?.name ?? project.id} project check-in`
+      const intake = await createPressureTestIntake({
+        memoryDir,
+        target: {
+          type: 'project',
+          id: `${project.id}-project-check-in`,
+          title,
+        },
+        rawRequest: `Start a project check-in for ${project.config?.name ?? project.id}.`,
+      })
+      return c.json({ intake, projectCheckIn: summarizeProjectCheckIn(memoryDir) })
+    } catch (err) {
+      return c.json({ error: err instanceof Error ? err.message : String(err) }, 500)
+    }
+  })
+
+  app.get('/api/project/pressure-test/:id', async c => {
+    try {
+      const intake = await loadPressureTestIntake({
+        memoryDir: getProjectStateDir(project.path),
+        intakeId: c.req.param('id'),
+      })
+      return c.json({ intake })
+    } catch (err) {
+      return c.json({ error: err instanceof Error ? err.message : String(err) }, 500)
+    }
+  })
+
+  app.post('/api/project/pressure-test/:id/answer', async c => {
+    try {
+      const body = await c.req.json().catch(() => ({})) as {
+        questionId?: string
+        answer?: string
+      }
+      const questionId = body.questionId?.trim()
+      const answer = body.answer?.trim()
+      if (!questionId || !answer) {
+        return c.json({ error: 'Question and answer are required.' }, 400)
+      }
+      const intake = await answerPressureTestQuestion({
+        memoryDir: getProjectStateDir(project.path),
+        intakeId: c.req.param('id'),
+        questionId,
+        answer,
+      })
+      return c.json({ intake })
     } catch (err) {
       return c.json({ error: err instanceof Error ? err.message : String(err) }, 500)
     }
@@ -2533,7 +3608,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
       }
       domain = domain ?? coordinators[0]!.domain
       const result = await createBugReportTask({
-        memoryDir: join(project.path, 'memory'),
+        memoryDir: getProjectStateDir(project.path),
         projectPath: resolveTaskPathForDomain(project, domain),
         title: body.title,
         body: body.body,
@@ -2554,7 +3629,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
         return c.json({ error: 'Project not initialized. Complete /setup first.' }, 400)
       }
       const result = await createMetaIntakeTask({
-        memoryDir: join(project.path, 'memory'),
+        memoryDir: getProjectStateDir(project.path),
         projectPath: project.path,
       })
       return c.json(result)
@@ -2569,7 +3644,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
         return c.json({ error: 'Project not initialized. Complete /setup first.' }, 400)
       }
       const result = await rerunMetaIntakeTask({
-        memoryDir: join(project.path, 'memory'),
+        memoryDir: getProjectStateDir(project.path),
         projectPath: project.path,
       })
       return c.json({ ok: true, ...result })
@@ -2614,7 +3689,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
       if (!bootstrap || bootstrap.commands.length === 0) {
         return c.json({ configured: false, needed: false, status: null, workspaceProjects })
       }
-      const memoryDir = join(project.path, 'memory')
+      const memoryDir = getProjectStateDir(project.path)
       const status = readBootstrapStatus(memoryDir)
       const needed = bootstrapNeeded(
         memoryDir,
@@ -2645,7 +3720,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
         return c.json({ error: 'Project not initialized. Complete /setup first.' }, 400)
       }
       const bootstrap = project.config?.bootstrap
-      const memoryDir = join(project.path, 'memory')
+      const memoryDir = getProjectStateDir(project.path)
 
       // Legacy path: run the array-based commands from guildhall.yaml when
       // present. Fall through to detection-based bootstrap otherwise so
@@ -2676,7 +3751,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
   })
 
   async function renderCodebaseMapStatus(projectPath: string) {
-    const memoryDir = join(projectPath, 'memory')
+    const memoryDir = getProjectStateDir(projectPath)
     const [map, stale] = await Promise.all([
       loadCodebaseMap(memoryDir),
       loadCodebaseMapStaleState(memoryDir),
@@ -2690,12 +3765,41 @@ export function buildServeApp(opts: ServeOptions = {}): {
         areas: map?.areas.length ?? 0,
         abstractions: map?.abstractions.length ?? 0,
       },
+      project: map
+        ? {
+            summary: map.project.summary,
+            languages: map.project.languages,
+            packageManagers: map.project.packageManagers,
+            primaryFrameworks: map.project.primaryFrameworks,
+          }
+        : null,
+      entrypoints: map?.entrypoints.slice(0, 8) ?? [],
+      areas: map?.areas.slice(0, 6).map(area => ({
+        id: area.id,
+        title: area.title,
+        summary: area.summary,
+        owns: area.owns.slice(0, 4),
+        canonicalFiles: area.canonicalFiles.slice(0, 5),
+        conventions: area.conventions.slice(0, 4),
+        tests: area.tests.slice(0, 4),
+      })) ?? [],
+      abstractions: map?.abstractions.slice(0, 8).map(abstraction => ({
+        id: abstraction.id,
+        title: abstraction.title,
+        kind: abstraction.kind,
+        canonicalPath: abstraction.canonicalPath,
+        useWhen: abstraction.useWhen.slice(0, 3),
+        avoid: abstraction.avoid.slice(0, 3),
+        related: abstraction.related.slice(0, 5),
+      })) ?? [],
       designSystem: map?.designSystem
         ? {
             maturity: map.designSystem.maturity,
             approved: map.designSystem.approved,
             tokenCounts: map.designSystem.tokenCounts,
             primitives: map.designSystem.primitives.length,
+            tokenSamples: map.designSystem.tokenSamples.slice(0, 8),
+            componentFiles: map.designSystem.componentFiles.slice(0, 8),
             recommendations: map.designSystem.recommendations,
           }
         : null,
@@ -2705,6 +3809,10 @@ export function buildServeApp(opts: ServeOptions = {}): {
             corpusKind: map.semantic.corpusKind,
             confidence: map.semantic.confidence,
             projectPurpose: map.semantic.projectPurpose,
+            currentTruth: map.semantic.currentTruth.slice(0, 6),
+            architectureAreas: map.semantic.architectureAreas.slice(0, 6),
+            canonicalAbstractions: map.semantic.canonicalAbstractions.slice(0, 6),
+            gapsOrRisks: map.semantic.gapsOrRisks.slice(0, 6),
             readNext: map.semantic.readNext.slice(0, 4),
             workerGuidance: map.semantic.workerGuidance.slice(0, 4),
             needsBroaderRead: map.semantic.needsBroaderRead,
@@ -2733,7 +3841,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
       }
       const result = await refreshCodebaseMap({
         projectRoot: project.path,
-        memoryDir: join(project.path, 'memory'),
+        memoryDir: getProjectStateDir(project.path),
         reason: 'manual',
       })
       return c.json({
@@ -2755,7 +3863,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
       if (project.initializationNeeded) {
         return c.json({ status: 'uninitialized', taskExists: false, specReady: false, drafts: [] })
       }
-      const tasksPath = join(project.path, 'memory', 'TASKS.json')
+      const tasksPath = join(getProjectStateDir(project.path), 'TASKS.json')
       if (!existsSync(tasksPath)) {
         return c.json({ status: 'no-task', taskExists: false, specReady: false, drafts: [] })
       }
@@ -2796,7 +3904,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
       if (project.initializationNeeded) {
         return c.json({ error: 'Project not initialized. Complete /setup first.' }, 400)
       }
-      const memoryDir = join(project.path, 'memory')
+      const memoryDir = getProjectStateDir(project.path)
       const result = await approveMetaIntake({
         workspacePath: project.path,
         memoryDir,
@@ -2857,7 +3965,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
       }
       const result = await synthesizeMetaIntakeDraft({
         workspacePath: project.path,
-        memoryDir: join(project.path, 'memory'),
+        memoryDir: getProjectStateDir(project.path),
       })
       if (!result.success) {
         return c.json({ error: result.error ?? 'Could not synthesize meta-intake draft' }, 400)
@@ -2881,7 +3989,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
           draft: { goals: 0, tasks: 0, milestones: 0 },
         })
       }
-      const memoryDir = join(project.path, 'memory')
+      const memoryDir = getProjectStateDir(project.path)
       const need = await workspaceNeedsImport({
         memoryDir,
         projectPath: project.path,
@@ -2949,7 +4057,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
       if (project.initializationNeeded) {
         return c.json({ error: 'Project not initialized. Complete /setup first.' }, 400)
       }
-      const memoryDir = join(project.path, 'memory')
+      const memoryDir = getProjectStateDir(project.path)
       const res = await maybeSeedWorkspaceImport({
         memoryDir,
         projectPath: project.path,
@@ -2974,7 +4082,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
       if (project.initializationNeeded) {
         return c.json({ error: 'Project not initialized. Complete /setup first.' }, 400)
       }
-      const memoryDir = join(project.path, 'memory')
+      const memoryDir = getProjectStateDir(project.path)
       const result = await rerunWorkspaceImportTask({
         memoryDir,
         projectPath: project.path,
@@ -3014,7 +4122,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
           anchors,
         })
       }
-      const memoryDir = join(project.path, 'memory')
+      const memoryDir = getProjectStateDir(project.path)
       // Dismissed state — surface it so the UI can show an "undo" affordance
       // instead of re-running the scan silently.
       let dismissed = false
@@ -3143,7 +4251,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
       if (project.initializationNeeded) {
         return c.json({ error: 'Project not initialized. Complete /setup first.' }, 400)
       }
-      const memoryDir = join(project.path, 'memory')
+      const memoryDir = getProjectStateDir(project.path)
       const body = await c.req.json().catch(() => ({})) as {
         areaKeys?: string[]
         sourceKeys?: string[]
@@ -3270,6 +4378,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
         selectedSourceKeys,
         selectedTaskIds,
       })
+      recordReconciliationResolved(project.path)
       return c.json({
         ok: true,
         tasksAdded: result.tasksAdded ?? 0,
@@ -3292,7 +4401,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
   app.get('/api/project/facts', async c => {
     try {
       if (project.initializationNeeded) return c.json({ initializationNeeded: true })
-      const memoryDir = join(project.path, 'memory')
+      const memoryDir = getProjectStateDir(project.path)
       const cfg = project.config
 
       // Bootstrap block from guildhall.yaml (structural form).
@@ -3387,7 +4496,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
         },
         workspace: {
           goals: workspaceGoals,
-          reviewHref: '/workspace-import',
+          reviewHref: `/projects/${encodeURIComponent(project.id)}/workspace-import`,
         },
         coordinators: {
           count: cfg?.coordinators?.length ?? 0,
@@ -3410,7 +4519,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
   app.post('/api/project/workspace-import/dismiss', async c => {
     try {
       if (project.initializationNeeded) return c.json({ error: 'not initialized' }, 400)
-      const memoryDir = join(project.path, 'memory')
+      const memoryDir = getProjectStateDir(project.path)
       await fsp.mkdir(memoryDir, { recursive: true })
       const goalsPath = join(memoryDir, 'workspace-goals.json')
       await fsp.writeFile(
@@ -3425,6 +4534,58 @@ export function buildServeApp(opts: ServeOptions = {}): {
     }
   })
 
+  app.post('/api/project/attention/dismiss', async c => {
+    try {
+      if (project.initializationNeeded) return c.json({ error: 'not initialized' }, 400)
+      const id = c.req.query('id')?.trim()
+      if (!id) return c.json({ error: 'id is required' }, 400)
+      const record = markAttentionDismissed(project.path, id)
+      if (!record) return c.json({ error: 'attention item not found' }, 404)
+      return c.json({ ok: true, record })
+    } catch (err) {
+      return c.json({ error: err instanceof Error ? err.message : String(err) }, 500)
+    }
+  })
+
+  async function fileSummary(filePath: string): Promise<{ present: boolean; nonEmptyLines: number }> {
+    if (!existsSync(filePath)) return { present: false, nonEmptyLines: 0 }
+    try {
+      const raw = await fsp.readFile(filePath, 'utf-8')
+      const nonEmptyLines = raw
+        .split(/\r?\n/)
+        .map(line => line.trim())
+        .filter(line => line.length > 0 && !/^#\s/.test(line) && !/^_Updated by GuildHall agents\._$/i.test(line))
+        .length
+      return { present: true, nonEmptyLines }
+    } catch {
+      return { present: true, nonEmptyLines: 0 }
+    }
+  }
+
+  async function buildProjectContextSummary(memoryDir: string): Promise<{
+    projectBrief: { present: boolean; nonEmptyLines: number }
+    projectNotes: { present: boolean; nonEmptyLines: number }
+    decisions: { present: boolean; nonEmptyLines: number }
+    workspaceGoals: { present: boolean; goalCount: number }
+  }> {
+    const [projectBrief, projectNotes, decisions] = await Promise.all([
+      fileSummary(join(memoryDir, 'project-brief.md')),
+      fileSummary(join(memoryDir, 'MEMORY.md')),
+      fileSummary(join(memoryDir, 'DECISIONS.md')),
+    ])
+    let workspaceGoals = { present: false, goalCount: 0 }
+    const goalsPath = join(memoryDir, 'workspace-goals.json')
+    if (existsSync(goalsPath)) {
+      try {
+        const raw = JSON.parse(await fsp.readFile(goalsPath, 'utf-8')) as { goals?: unknown[] }
+        workspaceGoals = { present: true, goalCount: Array.isArray(raw.goals) ? raw.goals.length : 0 }
+      } catch {
+        workspaceGoals = { present: true, goalCount: 0 }
+      }
+    }
+    return { projectBrief, projectNotes, decisions, workspaceGoals }
+  }
+
   app.get('/api/project/learning', async c => {
     try {
       if (project.initializationNeeded) {
@@ -3432,9 +4593,10 @@ export function buildServeApp(opts: ServeOptions = {}): {
           project: null,
           user: null,
           effective: null,
+          projectContext: null,
         })
       }
-      const memoryDir = join(project.path, 'memory')
+      const memoryDir = getProjectStateDir(project.path)
       const inventory = await detectWorkspaceSignals({ projectPath: project.path })
       const draft = formWorkspaceHypothesis(inventory)
       const tasksPath = join(memoryDir, 'TASKS.json')
@@ -3460,6 +4622,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
       return c.json({
         ...buildLearningSnapshot({ memoryDir, review, draft }),
         projectSkillProposals: readProjectSkillProposals(memoryDir),
+        projectContext: await buildProjectContextSummary(memoryDir),
       })
     } catch (err) {
       return c.json({ error: err instanceof Error ? err.message : String(err) }, 500)
@@ -3474,7 +4637,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
         scope?: 'project' | 'user_global'
         id?: string
       }
-      const memoryDir = join(project.path, 'memory')
+      const memoryDir = getProjectStateDir(project.path)
       const scope = body.scope === 'user_global' ? 'user_global' : 'project'
       if (body.kind === 'accept') {
         if (!body.id) return c.json({ error: 'id is required' }, 400)
@@ -3509,7 +4672,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
         id?: string
         approved?: boolean
       }
-      const memoryDir = join(project.path, 'memory')
+      const memoryDir = getProjectStateDir(project.path)
       if (body.kind === 'activate') {
         if (!body.id) return c.json({ error: 'id is required' }, 400)
         await activateProjectSkillProposal({
@@ -3541,7 +4704,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
         scope?: 'project' | 'all'
       }
       const scope = body.scope === 'all' ? 'all' : 'project'
-      const memoryDir = join(project.path, 'memory')
+      const memoryDir = getProjectStateDir(project.path)
       await resetProjectLearning(memoryDir)
       if (scope === 'all') {
         await resetGlobalLearning()
@@ -3580,6 +4743,29 @@ export function buildServeApp(opts: ServeOptions = {}): {
         runStatus: supervisor.get(project.id)?.status ?? 'stopped',
         recentEvents: supervisor.recent(project.id, undefined, project.path),
       })
+      const taskIds = new Set(
+        thread.turns
+          .map(turn => ('taskId' in turn ? turn.taskId : null))
+          .filter((id): id is string => Boolean(id)),
+      )
+      if (taskIds.size > 0) {
+        const tasks = await readTasksFileNormalized(join(getProjectStateDir(project.path), 'TASKS.json')).catch(() => [])
+        const workspaceStore = await readTaskWorkspaceStore(project.path).catch(() => undefined)
+        const gitStories = new Map<string, Awaited<ReturnType<typeof gitStoryForTask>>>()
+        for (const task of tasks) {
+          const id = typeof task.id === 'string' ? task.id : ''
+          if (!id || !taskIds.has(id)) continue
+          const gitStory = await gitStoryForTask(project.path, task, workspaceStore?.workspaces[id]).catch(() => undefined)
+          if (gitStory) gitStories.set(id, gitStory)
+        }
+        if (gitStories.size > 0) {
+          thread.turns = thread.turns.map(turn => {
+            if (!('taskId' in turn)) return turn
+            const gitStory = gitStories.get(turn.taskId)
+            return gitStory ? { ...turn, gitStory } : turn
+          })
+        }
+      }
       return c.json(thread)
     } catch (err) {
       return c.json({ error: err instanceof Error ? err.message : String(err) }, 500)
@@ -3722,7 +4908,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
   app.get('/api/project/task/:id/wizards', c => {
     try {
       if (project.initializationNeeded) return c.json({ wizards: [] })
-      const tasksPath = join(project.path, 'memory', 'TASKS.json')
+      const tasksPath = join(getProjectStateDir(project.path), 'TASKS.json')
       if (!existsSync(tasksPath)) return c.json({ error: 'no tasks file' }, 404)
       const raw = JSON.parse(readFileSync(tasksPath, 'utf8')) as
         | { tasks?: Array<Record<string, unknown>> }
@@ -3825,7 +5011,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
   app.get('/api/project/brief', c => {
     try {
       if (project.initializationNeeded) return c.json({ current: '', seed: { readme: '', roadmap: [] } })
-      const briefPath = join(project.path, 'memory', 'project-brief.md')
+      const briefPath = join(getProjectStateDir(project.path), 'project-brief.md')
       const current = existsSync(briefPath) ? readFileSync(briefPath, 'utf8') : ''
       const readmePath = join(project.path, 'README.md')
       const roadmapPath = join(project.path, 'ROADMAP.md')
@@ -3851,10 +5037,20 @@ export function buildServeApp(opts: ServeOptions = {}): {
       const body = (await c.req.json().catch(() => ({}))) as { content?: string }
       const content = typeof body.content === 'string' ? body.content.trim() : ''
       if (content.length < 40) return c.json({ error: 'brief must be at least 40 characters' }, 400)
-      const memDir = join(project.path, 'memory')
+      const memDir = getProjectStateDir(project.path)
       if (!existsSync(memDir)) mkdirSync(memDir, { recursive: true })
       writeFileSync(join(memDir, 'project-brief.md'), content + '\n', 'utf8')
       return c.json({ ok: true })
+    } catch (err) {
+      return c.json({ error: err instanceof Error ? err.message : String(err) }, 500)
+    }
+  })
+
+  app.get('/api/project/git-story', async c => {
+    try {
+      if (project.initializationNeeded) return c.json({ initializationNeeded: true })
+      const tasks = await readTasksFileNormalized(join(getProjectStateDir(project.path), 'TASKS.json')).catch(() => [])
+      return c.json(await buildProjectGitStorySummary(project.path, tasks as Array<Record<string, unknown>>))
     } catch (err) {
       return c.json({ error: err instanceof Error ? err.message : String(err) }, 500)
     }
@@ -3868,14 +5064,14 @@ export function buildServeApp(opts: ServeOptions = {}): {
   app.get('/api/project/task/:id', async c => {
     try {
       if (project.initializationNeeded) return c.json({ error: 'not initialized' }, 400)
-      const tasksPath = join(project.path, 'memory', 'TASKS.json')
+      const tasksPath = join(getProjectStateDir(project.path), 'TASKS.json')
       if (!existsSync(tasksPath)) return c.json({ error: 'no tasks file' }, 404)
       const tasks = await readTasksFileNormalized(tasksPath)
       const id = c.req.param('id')
       const task = tasks.find(t => (t as { id?: string }).id === id)
       if (!task) return c.json({ error: 'task not found' }, 404)
       const recent = filterEventsForTask(supervisor.recent(project.id, undefined, project.path), id)
-      const memoryDir = join(project.path, 'memory')
+      const memoryDir = getProjectStateDir(project.path)
       const contextDebug = await readContextDebugForTask(memoryDir, id)
       const exploringTranscript = await readExploringTranscript({ memoryDir, taskId: id })
       const snapshot = buildSnapshot({ projectPath: project.path })
@@ -3895,6 +5091,235 @@ export function buildServeApp(opts: ServeOptions = {}): {
         contextDebug,
         exploringTranscript,
         threadTurns,
+      })
+    } catch (err) {
+      return c.json({ error: err instanceof Error ? err.message : String(err) }, 500)
+    }
+  })
+
+  app.get('/api/project/task/:id/evidence', async c => {
+    try {
+      if (project.initializationNeeded) return c.json({ error: 'not initialized' }, 400)
+      const tasksPath = join(getProjectStateDir(project.path), 'TASKS.json')
+      if (!existsSync(tasksPath)) return c.json({ error: 'no tasks file' }, 404)
+      const tasks = await readTasksFileNormalized(tasksPath)
+      const id = c.req.param('id')
+      const task = tasks.find(t => (t as { id?: string }).id === id) as Task | undefined
+      if (!task) return c.json({ error: 'task not found' }, 404)
+      const effective = await buildEffectiveTask(project.path, task)
+      return c.json({ taskId: id, evidence: effective.evidence })
+    } catch (err) {
+      return c.json({ error: err instanceof Error ? err.message : String(err) }, 500)
+    }
+  })
+
+  app.get('/api/project/task/:id/file', async c => {
+    try {
+      if (project.initializationNeeded) return c.json({ error: 'not initialized' }, 400)
+      const tasksPath = join(getProjectStateDir(project.path), 'TASKS.json')
+      if (!existsSync(tasksPath)) return c.json({ error: 'no tasks file' }, 404)
+      const tasks = await readTasksFileNormalized(tasksPath)
+      const id = c.req.param('id')
+      const task = tasks.find(t => (t as { id?: string }).id === id) as Record<string, unknown> | undefined
+      if (!task) return c.json({ error: 'task not found' }, 404)
+      const requestedPath = c.req.query('path')?.trim() ?? ''
+      if (!requestedPath) return c.json({ error: 'path is required' }, 400)
+      const workspaceStore = await readTaskWorkspaceStore(project.path).catch(() => undefined)
+      const workspace = workspaceStore?.workspaces[id]
+      const resolved = await resolveTaskInspectableFile(project.path, task, requestedPath, workspace)
+      const stat = await fsp.stat(resolved.absolutePath)
+      if (!stat.isFile()) return c.json({ error: 'path is not a file' }, 400)
+      const handle = await fsp.open(resolved.absolutePath, 'r')
+      try {
+        const bytesToRead = Math.min(stat.size, TASK_FILE_PREVIEW_LIMIT_BYTES)
+        const buffer = Buffer.alloc(bytesToRead)
+        const { bytesRead } = await handle.read(buffer, 0, bytesToRead, 0)
+        return c.json({
+          taskId: id,
+          path: resolved.displayPath,
+          absolutePath: resolved.absolutePath,
+          content: buffer.subarray(0, bytesRead).toString('utf8'),
+          language: languageForPath(resolved.displayPath),
+          truncated: stat.size > TASK_FILE_PREVIEW_LIMIT_BYTES,
+        })
+      } finally {
+        await handle.close()
+      }
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err)
+      if (
+        message === 'path is required' ||
+        message === 'path is outside the task workspace' ||
+        /ENOENT|not found/i.test(message)
+      ) {
+        return c.json({ error: message === 'path is outside the task workspace' ? message : 'file not found' }, 400)
+      }
+      return c.json({ error: message }, 500)
+    }
+  })
+
+  app.get('/api/project/task/:id/history', async c => {
+    try {
+      if (project.initializationNeeded) return c.json({ error: 'not initialized' }, 400)
+      const tasksPath = join(getProjectStateDir(project.path), 'TASKS.json')
+      if (!existsSync(tasksPath)) return c.json({ error: 'no tasks file' }, 404)
+      const tasks = await readTasksFileNormalized(tasksPath)
+      const id = c.req.param('id')
+      const task = tasks.find(t => (t as { id?: string }).id === id) as Task | undefined
+      if (!task) return c.json({ error: 'task not found' }, 404)
+      const effective = await buildEffectiveTask(project.path, task)
+      return c.json({
+        taskId: id,
+        events: effective.evidence.filter(event =>
+          event.kind === 'note' ||
+          event.kind === 'escalation' ||
+          event.kind === 'agent_issue' ||
+          event.kind === 'gate_result' ||
+          event.kind === 'merge_record'
+        ),
+      })
+    } catch (err) {
+      return c.json({ error: err instanceof Error ? err.message : String(err) }, 500)
+    }
+  })
+
+  app.get('/api/project/task/:id/review', async c => {
+    try {
+      if (project.initializationNeeded) return c.json({ error: 'not initialized' }, 400)
+      const tasksPath = join(getProjectStateDir(project.path), 'TASKS.json')
+      if (!existsSync(tasksPath)) return c.json({ error: 'no tasks file' }, 404)
+      const tasks = await readTasksFileNormalized(tasksPath)
+      const id = c.req.param('id')
+      const task = tasks.find(t => (t as { id?: string }).id === id) as Task | undefined
+      if (!task) return c.json({ error: 'task not found' }, 404)
+      const effective = await buildEffectiveTask(project.path, task)
+      return c.json({
+        taskId: id,
+        verdicts: effective.evidence.filter(event => event.kind === 'review_verdict'),
+        adjudications: effective.evidence.filter(event => event.kind === 'adjudication'),
+      })
+    } catch (err) {
+      return c.json({ error: err instanceof Error ? err.message : String(err) }, 500)
+    }
+  })
+
+  app.get('/api/project/task/:id/git-story', async c => {
+    try {
+      if (project.initializationNeeded) return c.json({ error: 'not initialized' }, 400)
+      const tasksPath = join(getProjectStateDir(project.path), 'TASKS.json')
+      if (!existsSync(tasksPath)) return c.json({ error: 'no tasks file' }, 404)
+      const tasks = await readTasksFileNormalized(tasksPath)
+      const id = c.req.param('id')
+      const task = tasks.find(t => (t as { id?: string }).id === id) as Record<string, unknown> | undefined
+      if (!task) return c.json({ error: 'task not found' }, 404)
+      const workspaceStore = await readTaskWorkspaceStore(project.path).catch(() => undefined)
+      const snapshot = await gitStoryForTask(project.path, task, workspaceStore?.workspaces[id])
+      return c.json({ taskId: id, gitStory: snapshot })
+    } catch (err) {
+      return c.json({ error: err instanceof Error ? err.message : String(err) }, 500)
+    }
+  })
+
+  app.post('/api/project/task/:id/git-story/:closureAction', async c => {
+    try {
+      if (project.initializationNeeded) return c.json({ error: 'not initialized' }, 400)
+      const id = c.req.param('id')
+      const closureAction = c.req.param('closureAction')
+      const known = ['local-only', 'defer', 'commit', 'push', 'open-pr']
+      if (!known.includes(closureAction)) {
+        return c.json({ error: 'unknown git story action' }, 400)
+      }
+      const body = await c.req.json().catch(() => ({})) as {
+        reason?: string
+        message?: string
+        files?: string[]
+        title?: string
+        prBody?: string
+        body?: string
+        confirmed?: boolean
+        automationSource?: string
+      }
+      const memoryDir = getProjectStateDir(project.path)
+      const tasksPath = join(memoryDir, 'TASKS.json')
+      if (!existsSync(tasksPath)) return c.json({ error: 'no tasks file' }, 404)
+      const parsed = JSON.parse(readFileSync(tasksPath, 'utf8')) as
+        | { tasks?: Array<Record<string, unknown>>; version?: number; lastUpdated?: string }
+        | Array<Record<string, unknown>>
+      const queue = Array.isArray(parsed)
+        ? { version: 1, lastUpdated: new Date().toISOString(), tasks: parsed }
+        : { version: parsed.version ?? 1, lastUpdated: parsed.lastUpdated ?? new Date().toISOString(), tasks: parsed.tasks ?? [] }
+      const task = queue.tasks.find(t => (t as { id?: string }).id === id) as Record<string, unknown> | undefined
+      if (!task) return c.json({ error: 'task not found' }, 404)
+      const now = new Date().toISOString()
+      if (closureAction === 'commit') {
+        const allowed = policyAllowsGitWrite(project.path, project.config, task, 'commit', body)
+        if (!allowed.ok) return c.json({ error: allowed.error }, allowed.status as 403 | 409)
+        const message = typeof body.message === 'string' ? body.message.trim() : ''
+        const files = Array.isArray(body.files) ? body.files.filter((file): file is string => typeof file === 'string' && isSafeRelativeGitPath(file)) : []
+        if (!message) return c.json({ error: 'message is required' }, 400)
+        if (files.length === 0) return c.json({ error: 'files are required' }, 400)
+        const cwd = taskGitStoryRepoPath(project.path, task)
+        const result = await commitGitStoryFiles({ cwd, files, message })
+        if (!result.ok) return c.json({ error: result.detail ?? 'commit failed' }, 500)
+        const notes = Array.isArray(task.notes) ? [...(task.notes as unknown[])] : []
+        notes.push({ agentId: 'system:git-story', role: 'system', content: `Committed git story changes: ${result.commitSha ?? 'unknown commit'}.`, timestamp: now })
+        task.notes = notes
+        task.updatedAt = now
+        queue.lastUpdated = now
+        atomicWriteText(tasksPath, JSON.stringify(queue, null, 2) + '\n')
+        return c.json({ ok: true, commitSha: result.commitSha, task: await enrichTaskForServe(project.path, task) })
+      }
+      if (closureAction === 'push') {
+        const allowed = policyAllowsGitWrite(project.path, project.config, task, 'push', body)
+        if (!allowed.ok) return c.json({ error: allowed.error }, allowed.status as 403 | 409)
+        const cwd = taskGitStoryRepoPath(project.path, task)
+        const branch = typeof task.branchName === 'string' && task.branchName.trim()
+          ? task.branchName.trim()
+          : await new NodeGitDriver().currentBranch(cwd)
+        const result = await new NodeGitDriver().push(cwd, branch)
+        if (!result.ok) {
+          const fetchFirst = /fetch first|non-fast-forward|rejected/i.test(result.detail ?? '')
+          return c.json({
+            error: result.detail ?? 'push failed',
+            ...(fetchFirst ? { nextAction: 'Fetch and merge the remote branch, rerun verification, then push again.' } : {}),
+          }, fetchFirst ? 409 : 500)
+        }
+        return c.json({ ok: true, branch, task: await enrichTaskForServe(project.path, task) })
+      }
+      if (closureAction === 'open-pr') {
+        const allowed = policyAllowsGitWrite(project.path, project.config, task, 'pullRequest', body)
+        if (!allowed.ok) return c.json({ error: allowed.error }, allowed.status as 403 | 409)
+        const cwd = taskGitStoryRepoPath(project.path, task)
+        const branch = typeof task.branchName === 'string' && task.branchName.trim()
+          ? task.branchName.trim()
+          : await new NodeGitDriver().currentBranch(cwd)
+        const baseBranch = typeof task.baseBranch === 'string' && task.baseBranch.trim() ? task.baseBranch.trim() : 'main'
+        const title = typeof body.title === 'string' && body.title.trim() ? body.title.trim() : String(task.title ?? id)
+        const result = await new NodeGitDriver().openPullRequest(cwd, {
+          branch,
+          baseBranch,
+          title,
+          body: typeof body.prBody === 'string' ? body.prBody : typeof body.body === 'string' ? body.body : undefined,
+        })
+        if (!result.ok) return c.json({ error: result.detail ?? 'open PR failed' }, 500)
+        return c.json({ ok: true, url: result.url, task: await enrichTaskForServe(project.path, task) })
+      }
+
+      const reason = typeof body.reason === 'string' ? body.reason.trim() : ''
+      if (!reason) return c.json({ error: 'reason is required' }, 400)
+      const override = closureAction === 'local-only' ? 'local_only' : 'deferred'
+      task.gitStory = {
+        override,
+        reason,
+        recordedAt: now,
+        recordedBy: 'user',
+      }
+      task.updatedAt = now
+      queue.lastUpdated = now
+      atomicWriteText(tasksPath, JSON.stringify(queue, null, 2) + '\n')
+      return c.json({
+        ok: true,
+        task: await enrichTaskForServe(project.path, task),
       })
     } catch (err) {
       return c.json({ error: err instanceof Error ? err.message : String(err) }, 500)
@@ -3928,7 +5353,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
   app.get('/api/project/task/:id/experts', async c => {
     try {
       if (project.initializationNeeded) return c.json({ error: 'not initialized' }, 400)
-      const tasksPath = join(project.path, 'memory', 'TASKS.json')
+      const tasksPath = join(getProjectStateDir(project.path), 'TASKS.json')
       if (!existsSync(tasksPath)) return c.json({ error: 'no tasks file' }, 404)
       const raw = JSON.parse(readFileSync(tasksPath, 'utf8')) as
         | { tasks?: Array<Record<string, unknown>> }
@@ -3940,7 +5365,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
         | undefined
       if (!task) return c.json({ error: 'task not found' }, 404)
 
-      const memDir = join(project.path, 'memory')
+      const memDir = getProjectStateDir(project.path)
       const designSystem = await loadDesignSystem(memDir).catch(() => undefined)
       const { guilds: roster, warnings } = loadProjectGuildRoster(memDir)
 
@@ -4039,14 +5464,21 @@ export function buildServeApp(opts: ServeOptions = {}): {
   })
 
   // POST /api/project/task/:id/:action — human overrides on a task.
-  //   pause              → blocked      (any non-terminal task)
+  //   hold               → blocked      (any non-terminal task; reversible)
+  //   resume-hold        → previous status from hold record
+  //   pause              → deprecated alias for hold
   //   shelve             → shelved      (any non-done task)
   //   unshelve           → proposed     (shelved task only; clears shelveReason)
   //   approve-spec       → ready  (human approves a spec_review task; body: {approvalNote?})
   //   approve-brief      → mark productBrief.approvedBy/approvedAt = human
+  //   mark-done          → done   (human confirms the task is already complete; body: {evidence?})
+  //   update-brief       → fill missing task-brief fields from human input
   //   add-acceptance     → append a human-written acceptance criterion
   //   resume             → append a follow-up message to an exploring transcript
   //                        (body: {message?, resolveEscalationId?, resolution?})
+  //   enrich-task        → add missing checklist/split structure while preserving useful context
+  //   reframe-task       → reopen a stale/inscrutable task for fresh shaping
+  //   create-split-children → materialize stored split-required child recommendations
   //   resolve-escalation → close a named escalation; unblocks when none remain
   //                        (body: {escalationId, resolution, nextStatus?})
   app.post('/api/project/task/:id/:action', async c => {
@@ -4056,11 +5488,17 @@ export function buildServeApp(opts: ServeOptions = {}): {
       const action = c.req.param('action')
       const KNOWN_ACTIONS = [
         'pause',
+        'hold',
+        'resume-hold',
         'shelve',
         'approve-spec',
         'approve-brief',
+        'mark-done',
+        'update-brief',
         'add-acceptance',
         'resume',
+        'reframe-task',
+        'enrich-task',
         'unshelve',
         'resolve-escalation',
         'stage-answer',
@@ -4068,12 +5506,13 @@ export function buildServeApp(opts: ServeOptions = {}): {
         'answer-questions',
         'rerun-stage',
         'shape-draft',
+        'create-split-children',
       ] as const
       if (!(KNOWN_ACTIONS as readonly string[]).includes(action)) {
         return c.json({ error: 'unknown action' }, 400)
       }
 
-      const memoryDir = join(project.path, 'memory')
+      const memoryDir = getProjectStateDir(project.path)
 
       // approve-spec and resume have their own persistence (intake.ts owns the
       // write). Delegate to them so the exploring-transcript stays in sync.
@@ -4119,6 +5558,34 @@ export function buildServeApp(opts: ServeOptions = {}): {
         return c.json({ ok: true })
       }
 
+      if (action === 'reframe-task') {
+        const body = await c.req.json().catch(() => ({})) as {
+          reason?: string
+        }
+        const result = await reframeTask({
+          memoryDir,
+          taskId: id,
+          ...(body.reason ? { reason: body.reason } : {}),
+        })
+        if (!result.success) return c.json({ error: result.error ?? 'reframe failed' }, 400)
+        return c.json({ ok: true, status: result.newStatus })
+      }
+
+      if (action === 'enrich-task') {
+        const body = await c.req.json().catch(() => ({})) as {
+          instruction?: string
+          mode?: 'split' | 'checklist' | 'general'
+        }
+        const result = await enrichTask({
+          memoryDir,
+          taskId: id,
+          mode: body.mode,
+          instruction: body.instruction,
+        })
+        if (!result.success) return c.json({ error: result.error ?? 'enrich failed' }, 400)
+        return c.json({ ok: true, status: result.newStatus })
+      }
+
       if (action === 'rerun-stage') {
         const body = await c.req.json().catch(() => ({})) as {
           stage?: 'spec' | 'review' | 'gate'
@@ -4142,6 +5609,29 @@ export function buildServeApp(opts: ServeOptions = {}): {
         })
         if (!result.success) return c.json({ error: result.error ?? 'shape failed' }, 400)
         return c.json({ ok: true, status: result.newStatus })
+      }
+
+      if (action === 'create-split-children') {
+        const tasksPath = join(memoryDir, 'TASKS.json')
+        if (!existsSync(tasksPath)) return c.json({ error: 'no tasks file' }, 404)
+        const queue = TaskQueue.parse(JSON.parse(readFileSync(tasksPath, 'utf8')))
+        const task = queue.tasks.find(t => t.id === id)
+        if (!task) return c.json({ error: 'task not found' }, 404)
+        if (task.sizePlan?.action !== 'split_required') {
+          return c.json({ error: 'task does not require a split' }, 400)
+        }
+        const now = new Date().toISOString()
+        materializeRequiredSplitChildren(queue, task, now)
+        task.updatedAt = now
+        queue.lastUpdated = now
+        atomicWriteText(tasksPath, JSON.stringify(queue, null, 2) + '\n')
+        return c.json({
+          ok: true,
+          parentTaskId: task.id,
+          createdTaskIds: task.sizePlan.recommendedChildren
+            .map(child => child.createdTaskId)
+            .filter((createdTaskId): createdTaskId is string => Boolean(createdTaskId)),
+        })
       }
 
       if (action === 'approve-brief') {
@@ -4185,6 +5675,77 @@ export function buildServeApp(opts: ServeOptions = {}): {
         return c.json({ ok: true, status: task.status })
       }
 
+      if (action === 'mark-done') {
+        const body = await c.req.json().catch(() => ({})) as { evidence?: string }
+        const evidence = (body.evidence ?? '').trim()
+        const tasksPath = join(memoryDir, 'TASKS.json')
+        if (!existsSync(tasksPath)) return c.json({ error: 'no tasks file' }, 404)
+        const parsed = JSON.parse(readFileSync(tasksPath, 'utf8')) as
+          | { tasks?: Array<Record<string, unknown>>; version?: number; lastUpdated?: string }
+          | Array<Record<string, unknown>>
+        const queue = Array.isArray(parsed)
+          ? { version: 1, lastUpdated: new Date().toISOString(), tasks: parsed }
+          : { version: parsed.version ?? 1, lastUpdated: parsed.lastUpdated ?? new Date().toISOString(), tasks: parsed.tasks ?? [] }
+        const task = queue.tasks.find(t => (t as { id?: string }).id === id) as Record<string, unknown> | undefined
+        if (!task) return c.json({ error: 'task not found' }, 404)
+        if (task.status === 'done') return c.json({ ok: true, status: 'done' })
+        if (task.status === 'in_progress' || task.status === 'review' || task.status === 'gate_check') {
+          return c.json({ error: `task is ${task.status}; stop or finish the active run before marking it done` }, 400)
+        }
+
+        const now = new Date().toISOString()
+        const criteria = Array.isArray(task.acceptanceCriteria)
+          ? [...task.acceptanceCriteria as Array<Record<string, unknown>>]
+          : []
+        task.acceptanceCriteria = criteria.map(criterion => ({
+          ...criterion,
+          met: true,
+        }))
+        if (Array.isArray(task.escalations)) {
+          task.escalations = (task.escalations as Array<Record<string, unknown>>).map(escalation => (
+            escalation.resolvedAt
+              ? escalation
+              : {
+                  ...escalation,
+                  resolvedAt: now,
+                  resolvedBy: 'human',
+                  resolution: evidence || 'Human confirmed this task is complete.',
+                }
+          ))
+        }
+        delete task.blockReason
+        task.status = 'done'
+        task.assignedTo = null
+        task.updatedAt = now
+        const notes = Array.isArray(task.notes)
+          ? [...task.notes as Array<Record<string, unknown>>]
+          : []
+        notes.push({
+          agentId: 'system:human',
+          role: 'human',
+          content: evidence
+            ? `Marked done from Thread. Evidence: ${evidence}`
+            : 'Marked done from Thread after human confirmation.',
+          timestamp: now,
+        })
+        task.notes = notes
+        task.doneSummaryBundle = buildDoneTaskSummaryBundle({
+          task: task as Task,
+          transcriptRef: {
+            scope: 'local_history',
+            collection: 'transcripts',
+            id,
+            path: getProjectTranscriptPath(project.path, 'exploring', id),
+            contentType: 'text/markdown',
+          },
+          createdAt: now,
+          createdBy: 'system:mark-done',
+        })
+        queue.lastUpdated = now
+        atomicWriteText(tasksPath, JSON.stringify(queue, null, 2) + '\n')
+        return c.json({ ok: true, status: 'done' })
+      }
+
       if (action === 'add-acceptance') {
         const body = await c.req.json().catch(() => ({})) as { description?: string }
         const description = (body.description ?? '').trim()
@@ -4224,6 +5785,79 @@ export function buildServeApp(opts: ServeOptions = {}): {
         queue.lastUpdated = now
         atomicWriteText(tasksPath, JSON.stringify(queue, null, 2) + '\n')
         return c.json({ ok: true, count: criteria.length })
+      }
+
+      if (action === 'update-brief') {
+        const body = await c.req.json().catch(() => ({})) as {
+          successTarget?: string
+          acceptanceCriterion?: string
+          userJob?: string
+        }
+        const successTarget = (body.successTarget ?? '').trim()
+        const acceptanceCriterion = (body.acceptanceCriterion ?? '').trim()
+        const userJob = (body.userJob ?? '').trim()
+        if (!successTarget && !acceptanceCriterion && !userJob) {
+          return c.json({ error: 'Add a success target or an acceptance criterion.' }, 400)
+        }
+        const tasksPath = join(memoryDir, 'TASKS.json')
+        if (!existsSync(tasksPath)) return c.json({ error: 'no tasks file' }, 404)
+        const parsed = JSON.parse(readFileSync(tasksPath, 'utf8')) as
+          | { tasks?: Array<Record<string, unknown>>; version?: number; lastUpdated?: string }
+          | Array<Record<string, unknown>>
+        const queue = Array.isArray(parsed)
+          ? { version: 1, lastUpdated: new Date().toISOString(), tasks: parsed }
+          : { version: parsed.version ?? 1, lastUpdated: parsed.lastUpdated ?? new Date().toISOString(), tasks: parsed.tasks ?? [] }
+        const task = queue.tasks.find(t => (t as { id?: string }).id === id) as Record<string, unknown> | undefined
+        if (!task) return c.json({ error: 'task not found' }, 404)
+        const now = new Date().toISOString()
+        const currentBrief = task.productBrief && typeof task.productBrief === 'object' && !Array.isArray(task.productBrief)
+          ? task.productBrief as Record<string, unknown>
+          : {}
+        const fallbackUserJob =
+          typeof currentBrief.userJob === 'string' && currentBrief.userJob.trim()
+            ? currentBrief.userJob.trim()
+            : userJob ||
+              (typeof task.description === 'string' && task.description.trim()
+                ? task.description.trim()
+                : String(task.title ?? id).trim())
+        task.productBrief = {
+          ...currentBrief,
+          userJob: fallbackUserJob,
+          ...(successTarget ? { successMetric: successTarget, successCriteria: successTarget } : {}),
+          authoredBy: currentBrief.authoredBy ?? 'human',
+        }
+
+        if (acceptanceCriterion) {
+          const criteria = Array.isArray(task.acceptanceCriteria)
+            ? [...task.acceptanceCriteria as Array<Record<string, unknown>>]
+            : []
+          criteria.push({
+            id: `ac-${criteria.length + 1}`,
+            description: acceptanceCriterion,
+            verifiedBy: 'review',
+            met: false,
+          })
+          task.acceptanceCriteria = criteria
+        }
+
+        const notes = Array.isArray(task.notes)
+          ? [...task.notes as Array<Record<string, unknown>>]
+          : []
+        const noteParts = [
+          successTarget ? `Success target: ${successTarget}` : '',
+          acceptanceCriterion ? `Acceptance criterion: ${acceptanceCriterion}` : '',
+        ].filter(Boolean)
+        notes.push({
+          agentId: 'human',
+          role: 'specifier',
+          content: `Updated task brief. ${noteParts.join(' ')}`.trim(),
+          timestamp: now,
+        })
+        task.notes = notes
+        task.updatedAt = now
+        queue.lastUpdated = now
+        atomicWriteText(tasksPath, JSON.stringify(queue, null, 2) + '\n')
+        return c.json({ ok: true })
       }
 
       if (action === 'answer-question') {
@@ -4384,7 +6018,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
         return c.json({ ok: true })
       }
 
-      // pause / shelve / unshelve: in-place mutation of TASKS.json.
+      // hold / resume-hold / shelve / unshelve: in-place mutation of TASKS.json.
       const tasksPath = join(memoryDir, 'TASKS.json')
       if (!existsSync(tasksPath)) return c.json({ error: 'no tasks file' }, 404)
       const parsed = JSON.parse(readFileSync(tasksPath, 'utf8')) as
@@ -4397,13 +6031,42 @@ export function buildServeApp(opts: ServeOptions = {}): {
       if (!task) return c.json({ error: 'task not found' }, 404)
       const now = new Date().toISOString()
       const notes = Array.isArray(task.notes) ? [...(task.notes as unknown[])] : []
-      if (action === 'pause') {
-        if (task.status === 'done' || task.status === 'shelved') {
+      if (action === 'hold' || action === 'pause') {
+        const run = supervisor.get(project.id)
+        if (run && (run.status === 'running' || run.status === 'stopping')) {
+          return c.json({ error: 'Stop Guildhall before putting a task on hold.' }, 409)
+        }
+        if (task.status === 'done' || task.status === 'shelved' || task.status === 'pending_pr') {
           return c.json({ error: `task is ${task.status}` }, 400)
         }
+        if (task.status === 'blocked' && task.hold) {
+          return c.json({ ok: true, status: 'blocked' })
+        }
+        const body = await c.req.json().catch(() => ({})) as { reason?: string }
+        const reason = (body.reason ?? '').trim()
+        task.hold = {
+          previousStatus: task.status,
+          ...(reason ? { reason } : {}),
+          heldAt: now,
+          heldBy: 'human',
+        }
         task.status = 'blocked'
-        task.blockReason = 'Paused by human from dashboard'
-        notes.push({ agentId: 'system:human', role: 'human', content: 'Task paused via dashboard', timestamp: now })
+        task.blockReason = reason ? `On hold: ${reason}` : 'On hold by human.'
+        notes.push({
+          agentId: 'system:human',
+          role: 'human',
+          content: reason ? `Task put on hold: ${reason}` : 'Task put on hold.',
+          timestamp: now,
+        })
+      } else if (action === 'resume-hold') {
+        const hold = task.hold as { previousStatus?: string } | undefined
+        if (task.status !== 'blocked' || !hold) {
+          return c.json({ error: 'task is not on hold' }, 400)
+        }
+        task.status = hold.previousStatus ?? 'ready'
+        delete task.hold
+        delete task.blockReason
+        notes.push({ agentId: 'system:human', role: 'human', content: 'Task returned from hold.', timestamp: now })
       } else if (action === 'unshelve') {
         if (task.status !== 'shelved') {
           return c.json({ error: `task is ${task.status}, not shelved` }, 400)
@@ -4442,7 +6105,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
     try {
       if (project.initializationNeeded) return c.json({ running: false, counts: {}, inFlight: [] })
       const run = supervisor.get(project.id)
-      const tasksPath = join(project.path, 'memory', 'TASKS.json')
+      const tasksPath = join(getProjectStateDir(project.path), 'TASKS.json')
       const empty = { running: run?.status === 'running', counts: {}, inFlight: [] as unknown[] }
       if (!existsSync(tasksPath)) return c.json(empty)
       const raw = JSON.parse(readFileSync(tasksPath, 'utf8')) as
@@ -4506,7 +6169,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
   app.get('/api/project/progress', c => {
     try {
       if (project.initializationNeeded) return c.json({ progress: '' })
-      const progressPath = join(project.path, 'memory', 'PROGRESS.md')
+      const progressPath = join(getProjectStateDir(project.path), 'PROGRESS.md')
       if (!existsSync(progressPath)) return c.json({ progress: '' })
       const raw = readFileSync(progressPath, 'utf8')
       // Heartbeat blocks are routine forward transitions — they duplicate
@@ -4631,6 +6294,24 @@ export function buildServeApp(opts: ServeOptions = {}): {
     }
   })
 
+  app.get('/api/config/git-story', c => {
+    try {
+      const system = readGlobalConfig().gitStory
+      const projectConfig = readProjectConfig(currentProjectPath())
+      const projectPolicy = projectConfig.gitStory ?? {
+        ...system,
+        copiedFromSystemAt: null,
+      }
+      return c.json({
+        system,
+        project: projectPolicy,
+        copiedFromSystem: !projectConfig.gitStory,
+      })
+    } catch (err) {
+      return c.json({ error: String(err) }, 500)
+    }
+  })
+
   app.post('/api/config/levers', async c => {
     try {
       const body = await c.req.json().catch(() => ({})) as {
@@ -4698,14 +6379,14 @@ export function buildServeApp(opts: ServeOptions = {}): {
   // -------------------------------------------------------------------------
   // API: design system
   //
-  // Project-scoped; lives at memory/design-system.yaml. The spec agent
+  // Project-scoped; lives at .guildhall/design-system.yaml. The spec agent
   // drafts it; a human approves. Agents consume the approved revision via
   // context-builder's summary block — read the full file for richer surface.
   // -------------------------------------------------------------------------
   app.get('/api/project/design-system', async c => {
     try {
       if (project.initializationNeeded) return c.json({ initializationNeeded: true })
-      const memoryDir = join(project.path, 'memory')
+      const memoryDir = getProjectStateDir(project.path)
       const ds = await loadDesignSystem(memoryDir)
       if (!ds) return c.json({ designSystem: null })
       return c.json({ designSystem: ds, summary: summarizeDesignSystem(ds) })
@@ -4717,7 +6398,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
   app.post('/api/project/design-system', async c => {
     try {
       if (project.initializationNeeded) return c.json({ error: 'not initialized' }, 400)
-      const memoryDir = join(project.path, 'memory')
+      const memoryDir = getProjectStateDir(project.path)
       const body = await c.req.json().catch(() => ({})) as Record<string, unknown>
       const authoredBy = typeof body.authoredBy === 'string' ? body.authoredBy : 'human'
       const result = await updateDesignSystem({
@@ -4740,7 +6421,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
   app.post('/api/project/design-system/approve', async c => {
     try {
       if (project.initializationNeeded) return c.json({ error: 'not initialized' }, 400)
-      const memoryDir = join(project.path, 'memory')
+      const memoryDir = getProjectStateDir(project.path)
       const ds = await loadDesignSystem(memoryDir)
       if (!ds) return c.json({ error: 'no design system drafted yet' }, 400)
       const now = new Date().toISOString()
@@ -4757,27 +6438,82 @@ export function buildServeApp(opts: ServeOptions = {}): {
   })
 
   // -------------------------------------------------------------------------
-  // API: release readiness
+  // API: current work closure
   //
-  // Aggregates the signals that decide "is this project ready to ship its
-  // next milestone?" into a single readout. Intentionally shallow — it
-  // summarizes, it doesn't gate. The Release view renders the sections
+  // Aggregates the signals that decide "is the work Guildhall is tracking
+  // currently closed enough to hand off, ship, or intentionally defer?" into a
+  // single readout. Intentionally shallow — it summarizes, it doesn't gate.
+  // The Closure view renders the sections
   // and links back into drawers / Settings for fix-its.
   // -------------------------------------------------------------------------
   app.get('/api/project/release-readiness', async c => {
     try {
-      if (project.initializationNeeded) return c.json({ initializationNeeded: true })
-      const memoryDir = join(project.path, 'memory')
+      const closureScope = {
+        kind: 'current_work',
+        label: 'Current Guildhall work',
+        description:
+          'Guildhall is checking the work it is tracking now. This is not a named version or milestone selector yet.',
+      }
+      if (project.initializationNeeded) return c.json({ initializationNeeded: true, scope: closureScope })
+      const memoryDir = getProjectStateDir(project.path)
       const tasksPath = join(memoryDir, 'TASKS.json')
-      const tasks: Array<Record<string, unknown>> = (() => {
+      const rawTasks: Array<Record<string, unknown>> = (() => {
         if (!existsSync(tasksPath)) return []
         const raw = JSON.parse(readFileSync(tasksPath, 'utf8')) as
           | { tasks?: Array<Record<string, unknown>> }
           | Array<Record<string, unknown>>
         return Array.isArray(raw) ? raw : raw.tasks ?? []
       })()
-      const ds = await loadDesignSystem(memoryDir).catch(() => undefined)
+      const tasks = await Promise.all(rawTasks.map((task) => buildEffectiveTask(project.path, task as Task)))
+      const activePressureTest = listPressureTestIntakes(memoryDir)
+        .find(intake => intake.status === 'active' && intake.pendingQuestion)
+      if (activePressureTest?.pendingQuestion) {
+        return c.json({
+          scope: closureScope,
+          ready: false,
+          notReadyReason: `Guildhall has one more question for ${activePressureTest.target.title}. Answer it before judging whether the current work can close.`,
+          statusCounts: {},
+          openEscalations: [],
+          unapprovedBriefs: [],
+          unapprovedSpecs: [],
+          shelvedUnclaimed: [],
+          blockedByAgent: [],
+          designSystem: {
+            drafted: false,
+            approved: false,
+            revision: 0,
+            source: 'none',
+            label: 'not captured',
+            reason: 'No design-system guardrail is captured yet.',
+          },
+          dirtyCheckout: {
+            ownedCount: 0,
+            samplePaths: [],
+          },
+          gitStory: {
+            ready: true,
+            blockers: [],
+            snapshots: [],
+          },
+          totals: {
+            tasks: rawTasks.length,
+            blockingCount: 0,
+            humanBlockingCount: 0,
+            unfinishedCount: 0,
+            designSystemBlockingCount: 0,
+            dirtyCheckoutBlockingCount: 0,
+            gitStoryBlockingCount: 0,
+            done: rawTasks.filter(task => task.status === 'done').length,
+          },
+        })
+      }
+      const [ds, codebaseMap] = await Promise.all([
+        loadDesignSystem(memoryDir).catch(() => undefined),
+        loadCodebaseMap(memoryDir).catch(() => null),
+      ])
+      const designSystem = releaseDesignSystemStatus(ds, project.config, codebaseMap)
       const dirtyCheckout = await guildhallOwnedDirtyCheckout(project.path)
+      const gitStory = await buildProjectGitStorySummary(project.path, tasks)
 
       const statusCounts: Record<string, number> = {}
       const openEscalations: Array<{ taskId: string; taskTitle: string; escalationId: string; reason: string; summary: string }> = []
@@ -4810,7 +6546,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
           const br = (t as { blockReason?: string }).blockReason
           blockedByAgent.push({ id, title, ...(br ? { reason: br } : {}) })
         }
-        for (const e of activeEscalations(t as import('@guildhall/core').Task)) {
+        for (const e of activeEscalations(t as unknown as import('@guildhall/core').Task)) {
           openEscalations.push({
             taskId: id,
             taskTitle: title,
@@ -4821,36 +6557,34 @@ export function buildServeApp(opts: ServeOptions = {}): {
         }
       }
 
-      const designSystemApproved = Boolean(ds?.approvedAt)
-      const designSystemDrafted = Boolean(ds)
-
       const humanBlockingCount =
         openEscalations.length
         + unapprovedBriefs.length
         + unapprovedSpecs.length
         + blockedByAgent.length
-      const designSystemBlockingCount = tasks.length > 0 && !designSystemApproved ? 1 : 0
-      const dirtyCheckoutBlockingCount = dirtyCheckout.ownedCount > 0 ? 1 : 0
+      const designSystemBlockingCount = tasks.length > 0 && !designSystem.approved ? 1 : 0
+      const dirtyCheckoutBlockingCount = dirtyCheckout.ownedCount > 0 || dirtyCheckout.error ? 1 : 0
+      const gitStoryBlockingCount = gitStory.blockers.length
       const blockingCount =
         humanBlockingCount
         + unfinishedCount
         + designSystemBlockingCount
         + dirtyCheckoutBlockingCount
+        + gitStoryBlockingCount
 
       return c.json({
-        ready: blockingCount === 0,
+        scope: closureScope,
+        ready: tasks.length > 0 && blockingCount === 0,
+        ...(tasks.length === 0 ? { notReadyReason: 'No tasks in this project yet.' } : {}),
         statusCounts,
         openEscalations,
         unapprovedBriefs,
         unapprovedSpecs,
         shelvedUnclaimed,
         blockedByAgent,
-        designSystem: {
-          drafted: designSystemDrafted,
-          approved: designSystemApproved,
-          revision: ds?.revision ?? 0,
-        },
+        designSystem,
         dirtyCheckout,
+        gitStory,
         totals: {
           tasks: tasks.length,
           blockingCount,
@@ -4858,6 +6592,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
           unfinishedCount,
           designSystemBlockingCount,
           dirtyCheckoutBlockingCount,
+          gitStoryBlockingCount,
           done: statusCounts['done'] ?? 0,
         },
       })
@@ -4871,8 +6606,36 @@ export function buildServeApp(opts: ServeOptions = {}): {
     files: string[]
     error?: string
   }> {
+    const workspaceConfig = readWorkspaceConfig(projectPath)
+    const childProjects = workspaceConfig.kind === 'workspace'
+      ? resolveWorkspaceProjectPaths(projectPath, workspaceConfig)
+      : []
+    if (childProjects.length > 0) {
+      const results = await Promise.all(childProjects.map(async (child) => {
+        const result = await guildhallOwnedDirtyCheckoutInRepo(child.path)
+        return {
+          ...result,
+          files: result.files.map(file => `${child.id}/${file}`),
+        }
+      }))
+      const ownedFiles = results.flatMap(result => result.files)
+      const errors = results.filter(result => result.error).map(result => result.error).filter(Boolean)
+      return {
+        ownedCount: ownedFiles.length,
+        files: ownedFiles.slice(0, 12),
+        ...(ownedFiles.length === 0 && errors.length === results.length && errors[0] ? { error: errors[0] } : {}),
+      }
+    }
+    return guildhallOwnedDirtyCheckoutInRepo(projectPath)
+  }
+
+  async function guildhallOwnedDirtyCheckoutInRepo(projectPath: string): Promise<{
+    ownedCount: number
+    files: string[]
+    error?: string
+  }> {
     try {
-      const { stdout } = await execFileP('git', ['status', '--short', '--untracked-files=all', '--', 'guildhall.yaml', 'memory', '.gitignore'], {
+      const { stdout } = await execFileP('git', ['status', '--short', '--untracked-files=all', '--', 'guildhall.yaml', '.guildhall', 'memory', '.gitignore'], {
         cwd: projectPath,
         timeout: 2000,
       })
@@ -5037,6 +6800,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
       const configuredOpenAiBaseUrl = creds.openaiBaseUrl ?? ''
 
       const v = (kind: ProviderKind) => global.providers[kind]?.verifiedAt ?? null
+      const maxConcurrency = (kind: ProviderKind) => global.providers[kind]?.maxConcurrency ?? null
 
       return c.json({
         preferredProvider: stored.preferredProvider ?? readGlobalConfig().preferredProvider ?? null,
@@ -5045,6 +6809,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
             label: providerLabelForSetupKey('claude-oauth'),
             detected: claudeInstalled,
             verifiedAt: v('claude-oauth'),
+            maxConcurrency: maxConcurrency('claude-oauth'),
             detail: claudeInstalled
               ? `Credentials detected at ${claudeCredPath}`
               : 'Install Claude Code and run `claude auth login`.',
@@ -5053,6 +6818,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
             label: providerLabelForSetupKey('codex'),
             detected: codexInstalled,
             verifiedAt: v('codex-oauth'),
+            maxConcurrency: maxConcurrency('codex-oauth'),
             detail: codexInstalled
               ? `Credentials detected at ${codexCredPath}`
               : 'Install the Codex CLI and run `codex auth login`.',
@@ -5061,6 +6827,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
             label: providerLabelForSetupKey('llama-cpp'),
             detected: llamaReachable,
             verifiedAt: v('llama-cpp'),
+            maxConcurrency: maxConcurrency('llama-cpp'),
             url: llamaReachable ? llamaUrl : configuredLlamaUrl || null,
             detail:
               configuredLlamaUrl.length === 0 && !llamaReachable
@@ -5073,6 +6840,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
             label: providerLabelForSetupKey('anthropic-api'),
             detected: Boolean(creds.anthropicApiKey),
             verifiedAt: v('anthropic-api'),
+            maxConcurrency: maxConcurrency('anthropic-api'),
             detail: global.providers['anthropic-api']?.apiKey
               ? 'Stored in ~/.guildhall/providers.yaml'
               : process.env.ANTHROPIC_API_KEY
@@ -5083,6 +6851,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
             label: providerLabelForSetupKey('openai-api'),
             detected: Boolean(creds.openaiApiKey),
             verifiedAt: v('openai-api'),
+            maxConcurrency: maxConcurrency('openai-api'),
             baseUrl: configuredOpenAiBaseUrl || null,
             detail: global.providers['openai-api']?.apiKey
               ? configuredOpenAiBaseUrl
@@ -5104,13 +6873,38 @@ export function buildServeApp(opts: ServeOptions = {}): {
   app.post('/api/setup/providers/config', async c => {
     try {
       const body = (await c.req.json().catch(() => ({}))) as {
+        provider?: string
         preferredProvider?: string
         anthropicApiKey?: string
         openaiApiKey?: string
         openaiBaseUrl?: string
         lmStudioUrl?: string
+        maxConcurrency?: number
       }
       const allowed = SETUP_PROVIDER_ORDER
+      const requestedMaxConcurrency = body.maxConcurrency == null
+        ? undefined
+        : Math.floor(Number(body.maxConcurrency))
+      if (body.maxConcurrency != null) {
+        const ceiling = readGlobalConfig().maxProviderConcurrency
+        if (
+          requestedMaxConcurrency == null ||
+          !Number.isFinite(requestedMaxConcurrency) ||
+          requestedMaxConcurrency < 1 ||
+          requestedMaxConcurrency > ceiling
+        ) {
+          return c.json({ error: `maxConcurrency must be between 1 and ${ceiling}` }, 400)
+        }
+      }
+      const maxConcurrency = requestedMaxConcurrency
+      const providerForConcurrency = body.provider === 'codex'
+        ? 'codex-oauth'
+        : body.provider
+      if (providerForConcurrency && !((
+        [...allowed, 'codex-oauth'] as readonly string[]
+      ).includes(providerForConcurrency))) {
+        return c.json({ error: `Unknown provider "${body.provider}"` }, 400)
+      }
       // preferredProvider is machine-level by default. Projects may still
       // override it locally when needed, but the setup flow writes the shared
       // default rather than stamping every project.
@@ -5123,9 +6917,31 @@ export function buildServeApp(opts: ServeOptions = {}): {
           preferredProvider: body.preferredProvider as (typeof allowed)[number],
         })
       }
+      if (
+        maxConcurrency != null &&
+        (providerForConcurrency === 'claude-oauth' || providerForConcurrency === 'codex-oauth')
+      ) {
+        const existing = readGlobalProviders().providers[providerForConcurrency]
+        setProvider(providerForConcurrency, {
+          ...(existing ?? {}),
+          maxConcurrency,
+        })
+      }
       // Credentials go to the global store.
       if (typeof body.anthropicApiKey === 'string' && body.anthropicApiKey.trim().length > 0) {
-        setProvider('anthropic-api', { apiKey: body.anthropicApiKey.trim() })
+        const existing = readGlobalProviders().providers['anthropic-api']
+        setProvider('anthropic-api', {
+          apiKey: body.anthropicApiKey.trim(),
+          ...(existing?.verifiedAt ? { verifiedAt: existing.verifiedAt } : {}),
+          ...(maxConcurrency != null && providerForConcurrency === 'anthropic-api'
+            ? { maxConcurrency }
+            : existing?.maxConcurrency
+              ? { maxConcurrency: existing.maxConcurrency }
+              : {}),
+        })
+      } else if (maxConcurrency != null && providerForConcurrency === 'anthropic-api') {
+        const existing = readGlobalProviders().providers['anthropic-api']
+        if (existing?.apiKey) setProvider('anthropic-api', { ...existing, maxConcurrency })
       }
       if (typeof body.openaiApiKey === 'string' && body.openaiApiKey.trim().length > 0) {
         const existing = readGlobalProviders().providers['openai-api']
@@ -5134,6 +6950,11 @@ export function buildServeApp(opts: ServeOptions = {}): {
           apiKey: body.openaiApiKey.trim(),
           ...(baseUrl ? { baseUrl } : {}),
           ...(existing?.verifiedAt ? { verifiedAt: existing.verifiedAt } : {}),
+          ...(maxConcurrency != null && providerForConcurrency === 'openai-api'
+            ? { maxConcurrency }
+            : existing?.maxConcurrency
+              ? { maxConcurrency: existing.maxConcurrency }
+              : {}),
         })
       } else if (typeof body.openaiBaseUrl === 'string') {
         const existing = readGlobalProviders().providers['openai-api']
@@ -5143,12 +6964,32 @@ export function buildServeApp(opts: ServeOptions = {}): {
             apiKey: existing.apiKey,
             ...(baseUrl ? { baseUrl } : {}),
             ...(existing.verifiedAt ? { verifiedAt: existing.verifiedAt } : {}),
+            ...(maxConcurrency != null && providerForConcurrency === 'openai-api'
+              ? { maxConcurrency }
+              : existing.maxConcurrency
+                ? { maxConcurrency: existing.maxConcurrency }
+                : {}),
           })
         }
+      } else if (maxConcurrency != null && providerForConcurrency === 'openai-api') {
+        const existing = readGlobalProviders().providers['openai-api']
+        if (existing?.apiKey) setProvider('openai-api', { ...existing, maxConcurrency })
       }
       if (typeof body.lmStudioUrl === 'string' && body.lmStudioUrl.trim().length > 0) {
         const url = body.lmStudioUrl.trim()
-        setProvider('llama-cpp', { url })
+        const existing = readGlobalProviders().providers['llama-cpp']
+        setProvider('llama-cpp', {
+          url,
+          ...(existing?.verifiedAt ? { verifiedAt: existing.verifiedAt } : {}),
+          ...(maxConcurrency != null && providerForConcurrency === 'llama-cpp'
+            ? { maxConcurrency }
+            : existing?.maxConcurrency
+              ? { maxConcurrency: existing.maxConcurrency }
+              : {}),
+        })
+      } else if (maxConcurrency != null && providerForConcurrency === 'llama-cpp') {
+        const existing = readGlobalProviders().providers['llama-cpp']
+        if (existing?.url) setProvider('llama-cpp', { ...existing, maxConcurrency })
       }
       return c.json({ ok: true })
     } catch (err) {
@@ -5500,6 +7341,10 @@ export function buildServeApp(opts: ServeOptions = {}): {
         globalModels: resolveModelsForProvider(global.models, preferredProvider),
         projectModels: resolveModelsForProvider(workspace.models, preferredProvider),
         effectiveModels: resolved.models,
+        globalBehavior: global.modelBehavior ?? {},
+        projectBehavior: workspace.modelBehavior ?? {},
+        effectiveBehavior: resolved.modelBehavior,
+        behaviorProfiles: MODEL_BEHAVIOR_PROFILES,
         loadedModels,
         missingModels,
         catalog: [
@@ -5541,9 +7386,14 @@ export function buildServeApp(opts: ServeOptions = {}): {
         role?: keyof ModelAssignmentConfig
         model?: string
         models?: Partial<ModelAssignmentConfig>
+        behaviorProfile?: ModelBehaviorProfile
       }
       const roles: Array<keyof ModelAssignmentConfig> = ['spec', 'coordinator', 'worker', 'reviewer', 'gateChecker', 'contextIndexer']
+      const behaviorIds = new Set(MODEL_BEHAVIOR_PROFILES.map(profile => profile.id))
       if (!body.scope) return c.json({ error: 'Missing "scope"' }, 400)
+      if (body.scope !== 'global' && !c.req.query('projectId')?.trim()) {
+        return c.json({ error: 'Choose a project before saving project model overrides.' }, 400)
+      }
       const workspacePath = currentProjectPath()
       const projectCfg = readProjectConfig(workspacePath)
       const preferredProvider = projectCfg.preferredProvider ?? readGlobalConfig().preferredProvider
@@ -5560,6 +7410,20 @@ export function buildServeApp(opts: ServeOptions = {}): {
       if (!requestedModels && (!body.role || !roles.includes(body.role))) {
         return c.json({ error: 'Unknown model role' }, 400)
       }
+      if (body.role && !roles.includes(body.role)) {
+        return c.json({ error: 'Unknown model role' }, 400)
+      }
+      const requestedBehavior = typeof body.behaviorProfile === 'string'
+        ? body.behaviorProfile.trim()
+        : undefined
+      if (requestedBehavior && !behaviorIds.has(requestedBehavior as ModelBehaviorProfile)) {
+        return c.json({ error: 'Unknown behavior profile' }, 400)
+      }
+      const hasSingleModel = typeof body.model === 'string'
+      const hasBehavior = requestedBehavior !== undefined
+      if (!requestedModels && !hasSingleModel && !hasBehavior && body.scope !== 'global-default') {
+        return c.json({ error: 'Missing "model" or behaviorProfile' }, 400)
+      }
 
       if (body.scope === 'global') {
         const global = readGlobalConfig()
@@ -5570,25 +7434,32 @@ export function buildServeApp(opts: ServeOptions = {}): {
             if (!trimmed) return c.json({ error: 'Missing "model"' }, 400)
             nextModels[role] = trimmed
           }
-        } else {
+        } else if (hasSingleModel) {
           const model = body.model?.trim()
           if (!model || !body.role) return c.json({ error: 'Missing "model"' }, 400)
           nextModels[body.role] = model
         }
         updateGlobalConfig({
           ...global,
-          models: writeModelsForProvider(global.models, preferredProvider, nextModels),
+          ...(requestedModels || hasSingleModel
+            ? { models: writeModelsForProvider(global.models, preferredProvider, nextModels) }
+            : {}),
+          ...(requestedBehavior && body.role
+            ? { modelBehavior: { ...(global.modelBehavior ?? {}), [body.role]: requestedBehavior as ModelBehaviorProfile } }
+            : {}),
         })
         return c.json({ ok: true })
       }
 
       const workspace = readWorkspaceConfig(workspacePath)
       const nextModels = { ...resolveModelsForProvider(workspace.models, preferredProvider) }
+      const nextBehavior = { ...(workspace.modelBehavior ?? {}) }
       if (body.scope === 'global-default') {
         if (requestedModels) {
           for (const [role] of requestedModels) delete nextModels[role]
         } else if (body.role) {
           delete nextModels[body.role]
+          delete nextBehavior[body.role]
         }
       } else if (body.scope === 'project') {
         if (requestedModels) {
@@ -5597,10 +7468,13 @@ export function buildServeApp(opts: ServeOptions = {}): {
             if (!trimmed) return c.json({ error: 'Missing "model"' }, 400)
             nextModels[role] = trimmed
           }
-        } else if (body.role) {
+        } else if (hasSingleModel && body.role) {
           const model = body.model?.trim()
           if (!model) return c.json({ error: 'Missing "model"' }, 400)
           nextModels[body.role] = model
+        }
+        if (requestedBehavior && body.role) {
+          nextBehavior[body.role] = requestedBehavior as ModelBehaviorProfile
         }
       } else {
         return c.json({ error: 'Unknown model scope' }, 400)
@@ -5611,6 +7485,11 @@ export function buildServeApp(opts: ServeOptions = {}): {
         nextConfig.models = writeModelsForProvider(workspace.models, preferredProvider, nextModels)
       } else {
         delete nextConfig.models
+      }
+      if (Object.keys(nextBehavior).length > 0) {
+        nextConfig.modelBehavior = nextBehavior
+      } else {
+        delete nextConfig.modelBehavior
       }
       writeWorkspaceConfig(workspacePath, nextConfig)
       refreshProject(project.path)

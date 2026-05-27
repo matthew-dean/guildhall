@@ -26,11 +26,11 @@
   --accent-2: #4ecca3;
   --light-violet-warm: #8f65f2;
   --signal-warn-strong: #ff8a32;
-  --text: #e8e8f0;
-  --text-strong: #f4f4fa;
-  --text-readable: #d9d9e5;
-  --text-soft: #b9b9c8;
-  --text-muted: #888899;
+  --text: #e2e2eb;
+  --text-strong: #eeeef6;
+  --text-readable: #d8d8e4;
+  --text-soft: #c2c2d0;
+  --text-muted: #9e9ead;
   --danger: #e05252;
   --warn: #d4a23c;
 
@@ -113,6 +113,7 @@
   --chip-danger-fg: var(--danger);
   --chip-accent-bg: #584ab0;
   --chip-accent-fg: #fbfaff;
+  --chip-status-on-dark-fg: rgb(255 255 255 / 0.88);
 
   /* status stripes — saturated 3px left borders for cards/rows.
      Kept as solid colors (not tints) so the stripe remains legible on

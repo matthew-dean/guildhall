@@ -138,9 +138,7 @@
   class={`gh-tooltip placement-${placement} ${className}`.trim()}
   {style}
   onmouseenter={show}
-  onmouseover={show}
   onmouseleave={hide}
-  onmouseout={hide}
   onfocus={show}
   onfocusin={show}
   onblur={hide}

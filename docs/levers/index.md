@@ -9,14 +9,14 @@ help_summary: |
 
 # Levers
 
-Every behavioral knob in Guildhall is a **named lever** with a fixed set of **positions**. Levers are persisted in `./memory/agent-settings.yaml` with full provenance (*who set it, when, why*).
+Every behavioral knob in Guildhall is a **named lever** with a fixed set of **positions**. Levers are persisted in `./.guildhall/agent-settings.yaml` with full provenance (*who set it, when, why*).
 
 - 9 **project levers** — singleton per workspace.
 - 9 **domain levers** — per coordinator domain, with a `default` fallback.
 
 ## How levers get set
 
-On first run, Guildhall seeds every lever with `setBy: system-default` so there are no invisible defaults. During browser onboarding, meta-intake can infer better starting positions from the project interview. The Spec Agent emits a `levers:` YAML draft alongside coordinator definitions; when you approve it, Guildhall writes those positions to `./memory/agent-settings.yaml` with `setBy: spec-agent-intake` and the agent's rationale.
+On first run, Guildhall seeds every lever with `setBy: system-default` so there are no invisible defaults. During browser onboarding, meta-intake can infer better starting positions from the project interview. The Spec Agent emits a `levers:` YAML draft alongside coordinator definitions; when you approve it, Guildhall writes those positions to `./.guildhall/agent-settings.yaml` with `setBy: spec-agent-intake` and the agent's rationale.
 
 The agent should infer only what the conversation supports. Anything uncertain stays at the system default until you change it in Settings or edit the file directly. See [Onboarding and levers](../guide/onboarding-and-levers) for the end-to-end flow.
 
@@ -58,6 +58,7 @@ Per coordinator domain; one `default:` entry is required as fallback.
 | [`completion_approval`](./completion-approval) | `human_required`, `coordinator_sufficient`, `gates_sufficient` | `coordinator_sufficient` |
 | [`reviewer_mode`](./reviewer-mode) | `llm_only`, `deterministic_only`, `llm_with_deterministic_fallback` | `llm_with_deterministic_fallback` |
 | [`reviewer_fanout_policy`](./reviewer-fanout-policy) | `strict`, `coordinator_adjudicates_on_conflict`, `advisory`, `majority` | `strict` |
+| [`review_effort`](./review-effort) | `lean`, `balanced`, `thorough`, `release_critical` | `balanced` |
 | [`max_revisions`](./max-revisions) | integer | `3` |
 | [`escalation_on_ambiguity`](./escalation-on-ambiguity) | `always`, `coordinator_first`, `never` | `coordinator_first` |
 | [`crash_recovery_default`](./crash-recovery-default) | `prefer_resume`, `prefer_restart_clean`, `pause_for_review` | `prefer_resume` |
