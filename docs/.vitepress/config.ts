@@ -431,7 +431,9 @@ function addVersionedSidebars(
 
 const archivedVersionSidebars = Object.assign(
   {},
-  ...listVersionDirs().map((version) => addVersionedSidebars(`/versions/${version}`)),
+  ...listVersionDirs()
+    .filter((version) => version !== stableVersion)
+    .map((version) => addVersionedSidebars(`/versions/${version}`)),
 )
 
 export default defineConfig({
