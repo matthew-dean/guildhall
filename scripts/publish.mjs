@@ -121,7 +121,7 @@ if (flags.dryRun) {
   trackReleaseArtifacts(nextVersion)
   updatePublicDocsVersion(nextVersion)
   log(`Cutting docs version ${nextVersion} from current docs...`)
-  run('node', ['scripts/version-docs.mjs', nextVersion, '--replace-minor'])
+  run('node', ['scripts/version-docs.mjs', nextVersion])
 }
 
 const releaseHelpDocsEnv = flags.dryRun

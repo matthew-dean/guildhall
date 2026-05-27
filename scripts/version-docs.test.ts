@@ -96,7 +96,7 @@ describe('docs versioning script', () => {
     }
   })
 
-  it('can replace older patch snapshots from the same minor version', async () => {
+  it('replaces older patch snapshots from the same minor version by default', async () => {
     const tmp = await fs.mkdtemp(path.join(os.tmpdir(), 'guildhall-version-docs-'))
     try {
       await createDocsFixture(tmp)
@@ -105,7 +105,7 @@ describe('docs versioning script', () => {
       await fs.mkdir(path.join(tmp, 'docs/versions/1.2.2'), { recursive: true })
       await fs.mkdir(path.join(tmp, 'docs/versions/2.0.0'), { recursive: true })
 
-      await execFileP('node', ['scripts/version-docs.mjs', '1.2.3', '--replace-minor'], { cwd: tmp })
+      await execFileP('node', ['scripts/version-docs.mjs', '1.2.3'], { cwd: tmp })
 
       await expect(fs.stat(path.join(tmp, 'docs/versions/1.1.9'))).resolves.toBeTruthy()
       await expect(fs.stat(path.join(tmp, 'docs/versions/1.2.0'))).rejects.toThrow()
