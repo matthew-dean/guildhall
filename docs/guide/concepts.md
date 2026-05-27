@@ -54,10 +54,11 @@ without turning it into one oversized task.
 
 ## Pressure-Test Intake
 
-The one-question-at-a-time intake path for broad releases, features, and risky
-product asks. Guildhall routes the request, inspects what it can, asks focused
-questions in Thread, persists assumptions and deferrals, and turns the result
-into a buildable spec. See [Pressure-Test Intake](./pressure-test-intake).
+Guildhall's completeness pass before work becomes implementation. Every task
+is pressure-tested, but the depth scales with risk and uncertainty. Small work
+may only need automatic scope, verification, and review checks; broad or risky
+work can enter a one-question-at-a-time intake loop in Thread. See
+[Pressure-Test Intake](./pressure-test-intake).
 
 ## Blueprint
 

@@ -48,11 +48,15 @@ That is the little heartbeat you want before asking for more ambitious work.
 
 ## Install
 
+Guildhall 0.9's local app is release-supported on macOS. Your project can be
+anything Guildhall can work on; this compatibility note is about the machine
+running Guildhall itself.
+
 ```bash
 curl -fsSL https://raw.githubusercontent.com/matthew-dean/guildhall/main/scripts/install.sh | sh
 ```
 
-If you prefer npm and already have Node.js 20 or newer:
+If you prefer npm and already have Node.js 22 or newer:
 
 ```bash
 npm install -g guildhall
@@ -65,6 +69,14 @@ checks `guildhall-macos.tar.gz.sha256` before installing. To pin a release:
 curl -fsSL https://raw.githubusercontent.com/matthew-dean/guildhall/main/scripts/install.sh | GUILDHALL_VERSION=0.8.0 sh
 ```
 
+The package installer does not install Podman, create a VM, pull the runtime
+image, or start a container. That work happens later from Guildhall's guided
+runtime setup, after you approve it in the app. If Podman is missing, Guildhall
+shows the official macOS installer path and, when Homebrew is already present,
+the matching Homebrew install option. If Podman is installed but its local
+runtime service has not been created or started, Guildhall can finish that step
+for you from Settings.
+
 ## Open one project
 
 ```bash
@@ -76,6 +88,12 @@ Guildhall opens the browser. If this is the first time the repo has been
 opened, the setup wizard asks for the basics: the project name, a stable URL
 slug, and which model provider to use. That is the first site survey: where is
 the project, what is it called, and can Guildhall work safely?
+
+After the project opens, check **Settings → Ready**. The Local runtime card
+shows whether the Podman-backed Debian runtime is ready, needs setup, or should
+stay in **Host-run compatibility mode** for now.
+
+![Guildhall Settings Ready view showing the local runtime setup card.](../assets/ui-audit/0-9-0/settings-runtime.jpg)
 
 ![Guildhall Thread view showing setup prompts, project questions, and next actions.](../assets/ui-audit/0-7-0/thread.png)
 

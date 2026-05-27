@@ -122,6 +122,19 @@ touch project-facing files. Use `--include-prompt` when you are ready for those:
 guildhall migrate apply --include-prompt .
 ```
 
+Guildhall 0.9 also lists a manual runtime-backed project migration. That
+migration is not applied by the package installer or by `guildhall migrate
+apply`. It is guided from the app because Guildhall first checks the mounted
+project directory, the mounted `~/.guildhall` directory, required runtime tools,
+DNS, and command-log persistence. Host-run compatibility remains available
+until those checks pass and you accept runtime-backed mode for that project.
+
+The runtime migration record lives in host-owned local history, not in the
+project checkout. It records the runtime image tag/digest, runtime API version,
+mount layout such as `/workspace/<project-slug>` and
+`/home/guildhall/.guildhall`, the health-check result, and the rollback state
+needed to return to host-run compatibility.
+
 If `guildhall migrate status` shows a migration under `Blocked`, the current
 runtime cannot safely run the project yet. That usually means the project is on
 an old storage location or incompatible schema. Guildhall asks before writing
