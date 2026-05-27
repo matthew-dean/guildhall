@@ -14,10 +14,11 @@ const DOCS_BASE = normalizeDocsBase(process.env.GUILDHALL_DOCS_BASE ?? '/')
 const args = process.argv.slice(2)
 const version = args.find((arg) => !arg.startsWith('--'))
 const force = args.includes('--force')
+const replaceMinor = args.includes('--replace-minor')
 const fromRef = takeFlagValue('--from-ref')
 
 if (!version || !/^\d+\.\d+\.\d+(-[\w.]+)?$/.test(version)) {
-  console.error('Usage: node scripts/version-docs.mjs <version> [--force] [--from-ref <git-ref>]')
+  console.error('Usage: node scripts/version-docs.mjs <version> [--force] [--replace-minor] [--from-ref <git-ref>]')
   process.exit(1)
 }
 
@@ -130,6 +131,24 @@ async function rewriteStableReleaseIndex(root) {
   await writeFile(file, next, 'utf8')
 }
 
+async function removeSameMinorSnapshots(targetVersion) {
+  const versionsRoot = join(DOCS, 'versions')
+  if (!replaceMinor || !existsSync(versionsRoot)) return
+  const targetMinor = minorLine(targetVersion)
+  const entries = await readdir(versionsRoot, { withFileTypes: true })
+  for (const entry of entries) {
+    if (!entry.isDirectory()) continue
+    if (entry.name === targetVersion) continue
+    if (minorLine(entry.name) !== targetMinor) continue
+    await rm(join(versionsRoot, entry.name), { recursive: true, force: true })
+  }
+}
+
+function minorLine(value) {
+  const match = value.match(/^(\d+)\.(\d+)(?:\.\d+)?(?:-[\w.]+)?$/)
+  return match ? `${match[1]}.${match[2]}` : value
+}
+
 async function main() {
   const { sourceRoot, cleanup } = await docsSourceRoot()
   try {
@@ -141,6 +160,7 @@ async function main() {
       await rm(target, { recursive: true, force: true })
     }
 
+    await removeSameMinorSnapshots(version)
     await mkdir(target, { recursive: true })
     for (const entry of VERSIONED_ENTRIES) {
       await copyEntry(sourceRoot, target, entry, VERSIONED_EXCLUDES)

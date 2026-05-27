@@ -60,6 +60,8 @@ describe('release publish script', () => {
     const tmp = await fs.mkdtemp(path.join(os.tmpdir(), 'guildhall-publish-script-'))
     try {
       await createMinimalReleaseFixture(tmp)
+      await fs.mkdir(path.join(tmp, 'docs/versions/0.5.0/guide'), { recursive: true })
+      await fs.writeFile(path.join(tmp, 'docs/versions/0.5.0/guide/quick-start.md'), '# Old patch docs\n')
 
       const fakeBin = path.join(tmp, 'fake-bin')
       await fs.mkdir(fakeBin)
@@ -72,7 +74,7 @@ describe('release publish script', () => {
       await runGit(tmp, ['add', '.'])
       await runGit(tmp, ['commit', '--no-verify', '-m', 'init'])
 
-      const result = await execFileP('node', ['scripts/publish.mjs', '0.5.0'], {
+      const result = await execFileP('node', ['scripts/publish.mjs', '0.5.1'], {
         cwd: tmp,
         env: { ...process.env, PATH: `${fakeBin}${path.delimiter}${process.env.PATH ?? ''}` },
       }).then(
@@ -87,12 +89,13 @@ describe('release publish script', () => {
       const docsHome = await fs.readFile(path.join(tmp, 'docs/index.md'), 'utf8')
       const releasesIndex = await fs.readFile(path.join(tmp, 'docs/releases/index.md'), 'utf8')
       expect(result.status).not.toBe(0)
-      expect(result.output).toContain('Bumped package.json to 0.5.0')
+      expect(result.output).toContain('Bumped package.json to 0.5.1')
       expect(result.output).toContain('Command failed: pnpm typecheck')
       expect(manifest.version).toBe('0.4.0')
       expect(docsHome).toContain('Guildhall 0.4.0')
       expect(releasesIndex).toContain('Guildhall 0.4.0')
-      await expect(fs.stat(path.join(tmp, 'docs/versions/0.5.0'))).rejects.toThrow()
+      await expect(fs.stat(path.join(tmp, 'docs/versions/0.5.0/guide/quick-start.md'))).resolves.toBeTruthy()
+      await expect(fs.stat(path.join(tmp, 'docs/versions/0.5.1'))).rejects.toThrow()
     } finally {
       await fs.rm(tmp, { recursive: true, force: true })
     }

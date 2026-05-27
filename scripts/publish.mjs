@@ -39,7 +39,8 @@
  */
 
 import { execFileSync, spawnSync } from 'node:child_process'
-import { existsSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { cpSync, existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
@@ -70,7 +71,9 @@ let restoreManifestOnExit = false
 const releaseArtifactRollback = {
   active: false,
   files: new Map(),
+  dirsToRestore: new Map(),
   dirsToRemove: [],
+  tempDirs: [],
 }
 process.on('exit', () => {
   if (restoreManifestOnExit) writeFileSync(MANIFEST, originalManifestText)
@@ -118,7 +121,7 @@ if (flags.dryRun) {
   trackReleaseArtifacts(nextVersion)
   updatePublicDocsVersion(nextVersion)
   log(`Cutting docs version ${nextVersion} from current docs...`)
-  run('node', ['scripts/version-docs.mjs', nextVersion])
+  run('node', ['scripts/version-docs.mjs', nextVersion, '--replace-minor'])
 }
 
 const releaseHelpDocsEnv = flags.dryRun
@@ -171,6 +174,7 @@ log(`Publishing guildhall@${nextVersion} (tag: ${flags.tag})${flags.dryRun ? ' [
 run('npm', publishArgs)
 if (!flags.dryRun) {
   restoreManifestOnExit = false
+  cleanupReleaseArtifactBackups()
   releaseArtifactRollback.active = false
 }
 
@@ -188,7 +192,7 @@ const releasePaths = [
   'package.json',
   'docs/index.md',
   'docs/releases/index.md',
-  `docs/versions/${nextVersion}`,
+  'docs/versions',
 ]
 run('git', ['add', ...releasePaths])
 if (hasStagedDiff(releasePaths)) {
@@ -280,6 +284,21 @@ function trackReleaseArtifacts(version) {
   if (!existsSync(versionDir)) {
     releaseArtifactRollback.dirsToRemove.push(versionDir)
   }
+  const versionsRoot = join(ROOT, 'docs/versions')
+  if (existsSync(versionsRoot)) {
+    const targetMinor = minorLine(version)
+    const backupRoot = mkdtempSync(join(tmpdir(), 'guildhall-release-docs-'))
+    releaseArtifactRollback.tempDirs.push(backupRoot)
+    for (const entry of readdirSync(versionsRoot, { withFileTypes: true })) {
+      if (!entry.isDirectory()) continue
+      if (entry.name === version) continue
+      if (minorLine(entry.name) !== targetMinor) continue
+      const source = join(versionsRoot, entry.name)
+      const backup = join(backupRoot, entry.name)
+      cpSync(source, backup, { recursive: true })
+      releaseArtifactRollback.dirsToRestore.set(source, backup)
+    }
+  }
   releaseArtifactRollback.active = true
 }
 
@@ -290,6 +309,20 @@ function restoreReleaseArtifacts() {
   for (const dir of releaseArtifactRollback.dirsToRemove) {
     rmSync(dir, { recursive: true, force: true })
   }
+  for (const [target, backup] of releaseArtifactRollback.dirsToRestore) {
+    rmSync(target, { recursive: true, force: true })
+    cpSync(backup, target, { recursive: true })
+  }
+  for (const dir of releaseArtifactRollback.tempDirs) {
+    rmSync(dir, { recursive: true, force: true })
+  }
+}
+
+function cleanupReleaseArtifactBackups() {
+  for (const dir of releaseArtifactRollback.tempDirs) {
+    rmSync(dir, { recursive: true, force: true })
+  }
+  releaseArtifactRollback.tempDirs = []
 }
 
 function replaceFileText(path, transform) {
@@ -397,6 +430,11 @@ function resolveNextVersion(current, spec) {
     case 'major': return `${maj + 1}.0.0`
     default: die(`Unknown version spec "${spec}". Pass semver or patch/minor/major.`)
   }
+}
+
+function minorLine(version) {
+  const match = version.match(/^(\d+)\.(\d+)(?:\.\d+)?(?:-[\w.]+)?$/)
+  return match ? `${match[1]}.${match[2]}` : version
 }
 
 function preflightGit() {

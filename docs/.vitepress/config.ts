@@ -12,7 +12,8 @@ const nextBase = '/next'
 const docsBase = normalizeDocsBase(process.env.GUILDHALL_DOCS_BASE ?? '/')
 const archiveVersionItems = listVersionDirs()
   .filter((version) => version !== stableVersion)
-  .map((version) => ({ text: `v${version}`, link: `/versions/${version}/guide/quick-start` }))
+  .filter((version, index, versions) => versions.findIndex((candidate) => minorLine(candidate) === minorLine(version)) === index)
+  .map((version) => ({ text: `v${minorLine(version)}`, link: `/versions/${version}/guide/quick-start` }))
 
 type SidebarSection = {
   text: string
@@ -65,6 +66,11 @@ function resolveNextMinorVersion(version: string): string {
   const minor = Number(match[2])
   if (!Number.isFinite(major) || !Number.isFinite(minor)) return 'Next'
   return `${major}.${minor + 1}.0`
+}
+
+function minorLine(version: string): string {
+  const match = version.match(/^(\d+)\.(\d+)(?:\.\d+)?(?:-[\w.]+)?$/)
+  return match ? `${match[1]}.${match[2]}` : version
 }
 
 function listVersionDirs(): string[] {
@@ -423,6 +429,11 @@ function addVersionedSidebars(
   return sidebars
 }
 
+const archivedVersionSidebars = Object.assign(
+  {},
+  ...listVersionDirs().map((version) => addVersionedSidebars(`/versions/${version}`)),
+)
+
 export default defineConfig({
   title: 'Guildhall',
   description: 'Local service for unattended software work with visible state, reviewer guardrails, and inspectable transcripts.',
@@ -464,20 +475,21 @@ export default defineConfig({
   ],
   themeConfig: {
     nav: [
-      { text: 'Get started', link: '/guide/introduction', activeMatch: '^(/next)?/guide/(introduction|concepts|quick-start|how-guildhall-works|new-project|existing-project|first-tasks|managing-projects)' },
-      { text: 'Guide', link: '/guide/', activeMatch: '^(/next)?/guide/(?!(introduction|concepts|quick-start|how-guildhall-works|new-project|existing-project|first-tasks|managing-projects))' },
-      { text: 'Reference', link: '/reference/', activeMatch: '^(/next)?/(reference|cli|web-ui|levers|releases)/' },
+      { text: 'Get started', link: '/guide/introduction', activeMatch: '^(/next|/versions/[^/]+)?/guide/(introduction|concepts|quick-start|how-guildhall-works|new-project|existing-project|first-tasks|managing-projects)' },
+      { text: 'Guide', link: '/guide/', activeMatch: '^(/next|/versions/[^/]+)?/guide/(?!(introduction|concepts|quick-start|how-guildhall-works|new-project|existing-project|first-tasks|managing-projects))' },
+      { text: 'Reference', link: '/reference/', activeMatch: '^(/next|/versions/[^/]+)?/(reference|cli|web-ui|levers|releases)/' },
       {
         text: 'Version',
         items: [
-          { text: `Current (v${stableVersion})`, link: '/guide/introduction' },
-          { text: `Next (v${nextVersion})`, link: `${nextBase}/guide/` },
+          { text: `Current (v${minorLine(stableVersion)})`, link: '/guide/introduction' },
+          { text: `Next (v${minorLine(nextVersion)})`, link: `${nextBase}/guide/` },
           ...archiveVersionItems,
         ],
       },
     ],
     sidebar: {
       ...addVersionedSidebars(currentBase),
+      ...archivedVersionSidebars,
       ...addVersionedSidebars(stableBase),
       ...addVersionedSidebars(nextBase, { includeNextOnlyPages: true }),
     },

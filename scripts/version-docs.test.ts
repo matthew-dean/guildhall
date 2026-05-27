@@ -95,4 +95,25 @@ describe('docs versioning script', () => {
       await fs.rm(tmp, { recursive: true, force: true })
     }
   })
+
+  it('can replace older patch snapshots from the same minor version', async () => {
+    const tmp = await fs.mkdtemp(path.join(os.tmpdir(), 'guildhall-version-docs-'))
+    try {
+      await createDocsFixture(tmp)
+      await fs.mkdir(path.join(tmp, 'docs/versions/1.1.9'), { recursive: true })
+      await fs.mkdir(path.join(tmp, 'docs/versions/1.2.0'), { recursive: true })
+      await fs.mkdir(path.join(tmp, 'docs/versions/1.2.2'), { recursive: true })
+      await fs.mkdir(path.join(tmp, 'docs/versions/2.0.0'), { recursive: true })
+
+      await execFileP('node', ['scripts/version-docs.mjs', '1.2.3', '--replace-minor'], { cwd: tmp })
+
+      await expect(fs.stat(path.join(tmp, 'docs/versions/1.1.9'))).resolves.toBeTruthy()
+      await expect(fs.stat(path.join(tmp, 'docs/versions/1.2.0'))).rejects.toThrow()
+      await expect(fs.stat(path.join(tmp, 'docs/versions/1.2.2'))).rejects.toThrow()
+      await expect(fs.stat(path.join(tmp, 'docs/versions/1.2.3'))).resolves.toBeTruthy()
+      await expect(fs.stat(path.join(tmp, 'docs/versions/2.0.0'))).resolves.toBeTruthy()
+    } finally {
+      await fs.rm(tmp, { recursive: true, force: true })
+    }
+  })
 })
