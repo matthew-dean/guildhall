@@ -20,7 +20,7 @@ description: Local AI agent harness for planning, running, reviewing, and recove
       <div class="gh-home-hero__actions">
         <div class="gh-cta-row">
           <a class="gh-cta gh-cta-primary" href="/guide/quick-start">Get started</a>
-          <a class="gh-cta gh-cta-secondary" href="/guide/introduction">How it works</a>
+          <a class="gh-cta gh-cta-secondary" href="/guide/how-guildhall-works">How it works</a>
           <a class="gh-cta gh-cta-secondary" href="https://github.com/matthew-dean/guildhall">GitHub</a>
         </div>
         <p class="gh-home-version">Current docs: <a href="/releases/0.8.0">0.8.0</a>.</p>
@@ -93,8 +93,8 @@ description: Local AI agent harness for planning, running, reviewing, and recove
       <article class="gh-limit-card">
         <h3>Start here</h3>
         <ul>
-          <li><a href="/guide/introduction">What Guildhall is</a></li>
           <li><a href="/guide/quick-start">Install and open one project</a></li>
+          <li><a href="/guide/introduction">Why Guildhall exists</a></li>
           <li><a href="/guide/concepts">Core concepts glossary</a></li>
         </ul>
       </article>

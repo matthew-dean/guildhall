@@ -1,15 +1,16 @@
 ---
-title: How Guildhall works
+title: How the work loop works
 ---
 
-# How Guildhall works
+# How the work loop works
 
-Guildhall is a local service that keeps AI work from disappearing into a chat
-fog. It watches the project, frames the work, sends the right helper into the
-right lane, and keeps the receipts where you can inspect them later.
-
-The point is not a gigantic prompt. The point is a visible loop: plan the work,
+Once Guildhall has a project and a task, it runs a visible loop: plan the work,
 do the work, inspect the work, and remember what changed.
+
+Here is the machinery tour. If you only want to install and try a small task,
+start with [Start here](./quick-start). Come back when you want to know why
+Guildhall cares about blueprints, gates, context packets, and all the other
+nouns it keeps politely placing on the table.
 
 Each run pulls from a few kinds of state:
 

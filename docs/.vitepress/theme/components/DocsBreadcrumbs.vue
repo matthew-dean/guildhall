@@ -16,10 +16,9 @@ const sections: Record<string, { label: string; href: string }> = {
 }
 
 const getStartedPaths = new Set([
+  '/guide/quick-start',
   '/guide/introduction',
   '/guide/concepts',
-  '/guide/quick-start',
-  '/guide/how-guildhall-works',
   '/guide/new-project',
   '/guide/existing-project',
   '/guide/first-tasks',
@@ -51,7 +50,7 @@ const crumbs = computed(() => {
   const normalizedPath = path.replace(/\/$/, '')
   if (getStartedPaths.has(normalizedPath)) {
     return [
-      { label: 'Get started', href: hrefForVersion('/guide/introduction') },
+      { label: 'Get started', href: hrefForVersion('/guide/quick-start') },
       { label: page.value.title || 'Get started' },
     ]
   }

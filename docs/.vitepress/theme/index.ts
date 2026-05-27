@@ -28,8 +28,38 @@ const GuildhallThemeLayout = defineComponent({
     }
 
     const currentDocsPrefix = () => {
-      const match = route.path.match(/^\/guildhall(\/next|\/versions\/[^/]+)?\//)
+      const match = route.path.match(/^(?:\/guildhall)?(\/next|\/versions\/[^/]+)?\//)
       return match?.[1] ?? ''
+    }
+
+    const extractVersionLabel = (text: string | null | undefined) => {
+      const match = text?.match(/\(v([^)]+)\)/)
+      return match ? `v${match[1]}` : null
+    }
+
+    const currentVersionLabel = () => {
+      const prefix = currentDocsPrefix()
+      const archived = prefix.match(/^\/versions\/(\d+\.\d+)(?:\.\d+)?(?:-[^/]+)?$/)
+      if (archived) return `v${archived[1]}`
+
+      const navText = Array.from(document.querySelectorAll<HTMLElement>('.VPFlyout .VPMenuLink span'))
+        .map((element) => element.textContent?.trim() ?? '')
+
+      if (prefix === '/next') {
+        return extractVersionLabel(navText.find((text) => text.startsWith('Next '))) ?? 'Next'
+      }
+
+      return extractVersionLabel(navText.find((text) => text.startsWith('Current '))) ?? 'Current'
+    }
+
+    const syncVersionNavLabel = () => {
+      const label = currentVersionLabel()
+      for (const buttonText of document.querySelectorAll<HTMLElement>('.VPNavBarMenuGroup .button .text')) {
+        const text = buttonText.textContent?.trim() ?? ''
+        if (text === 'Version' || text === 'Next' || text === 'Current' || /^v\d+\.\d+$/.test(text)) {
+          buttonText.textContent = label
+        }
+      }
     }
 
     const syncVersionedNavLinks = () => {
@@ -42,9 +72,12 @@ const GuildhallThemeLayout = defineComponent({
         const href = anchor.getAttribute('href')
         if (!href) continue
         for (const section of sections) {
-          const root = `/guildhall/${section}`
+          const root = href.startsWith('/guildhall/') ? `/guildhall/${section}` : `/${section}`
           if (href === root || href.startsWith(`${root}/`)) {
-            anchor.setAttribute('href', href.replace(root, `/guildhall${prefix}/${section}`))
+            const versionedRoot = href.startsWith('/guildhall/')
+              ? `/guildhall${prefix}/${section}`
+              : `${prefix}/${section}`
+            anchor.setAttribute('href', href.replace(root, versionedRoot))
             break
           }
         }
@@ -54,6 +87,7 @@ const GuildhallThemeLayout = defineComponent({
     onMounted(() => {
       syncTheme()
       syncVersionedNavLinks()
+      syncVersionNavLabel()
       observer = new MutationObserver(syncTheme)
       observer.observe(document.documentElement, {
         attributes: true,
@@ -64,7 +98,10 @@ const GuildhallThemeLayout = defineComponent({
     watch(
       () => route.path,
       () => {
-        nextTick(syncVersionedNavLinks)
+        nextTick(() => {
+          syncVersionedNavLinks()
+          syncVersionNavLabel()
+        })
       },
     )
 

@@ -92,18 +92,17 @@ function withDocsBase(path: string): string {
 }
 
 const guideStartItems = [
-  { text: 'What Guildhall is', link: '/guide/introduction' },
   { text: 'Start here', link: '/guide/quick-start' },
-  { text: 'How Guildhall works', link: '/guide/how-guildhall-works' },
+  { text: 'Why Guildhall exists', link: '/guide/introduction' },
+  { text: 'Core concepts', link: '/guide/concepts' },
   { text: 'New project', link: '/guide/new-project' },
   { text: 'Existing project', link: '/guide/existing-project' },
   { text: 'First task set', link: '/guide/first-tasks' },
   { text: 'Many projects', link: '/guide/managing-projects' },
-  { text: 'Core concepts', link: '/guide/concepts' },
 ]
 
 const guideWorksItems = [
-  { text: 'How Guildhall works', link: '/guide/how-guildhall-works' },
+  { text: 'How the work loop works', link: '/guide/how-guildhall-works' },
   { text: 'How Guildhall builds', link: '/guide/how-guildhall-builds' },
   { text: 'Research-backed design', link: '/guide/research-backed-design' },
   { text: 'Agent context', link: '/guide/agent-context' },
@@ -187,7 +186,7 @@ const guide060SidebarSections = [
   {
     text: 'Concepts',
     items: [
-      { text: 'Introduction', link: '/guide/introduction' },
+      { text: 'Why Guildhall exists', link: '/guide/introduction' },
       { text: 'How Guildhall builds', link: '/guide/how-guildhall-builds' },
       { text: 'Core concepts', link: '/guide/concepts' },
     ],
@@ -203,7 +202,6 @@ const stableGuideSidebarSections = guideSidebarSections.map((section) => section
     ? {
         ...section,
         items: section.items.filter((item) =>
-          item.link !== '/guide/how-guildhall-works' &&
           item.link !== '/guide/agent-context' &&
           item.link !== '/guide/corpus-map'),
       }
@@ -414,10 +412,9 @@ function addVersionedSidebars(
   }
   if (includeStarted) {
     for (const path of [
+      '/guide/quick-start',
       '/guide/introduction',
       '/guide/concepts',
-      '/guide/quick-start',
-      '/guide/how-guildhall-works',
       '/guide/new-project',
       '/guide/existing-project',
       '/guide/first-tasks',
@@ -477,13 +474,13 @@ export default defineConfig({
   ],
   themeConfig: {
     nav: [
-      { text: 'Get started', link: '/guide/introduction', activeMatch: '^(/next|/versions/[^/]+)?/guide/(introduction|concepts|quick-start|how-guildhall-works|new-project|existing-project|first-tasks|managing-projects)' },
-      { text: 'Guide', link: '/guide/', activeMatch: '^(/next|/versions/[^/]+)?/guide/(?!(introduction|concepts|quick-start|how-guildhall-works|new-project|existing-project|first-tasks|managing-projects))' },
+      { text: 'Get started', link: '/guide/quick-start', activeMatch: '^(/next|/versions/[^/]+)?/guide/(quick-start|introduction|concepts|new-project|existing-project|first-tasks|managing-projects)' },
+      { text: 'Guide', link: '/guide/', activeMatch: '^(/next|/versions/[^/]+)?/guide/(?!(quick-start|introduction|concepts|new-project|existing-project|first-tasks|managing-projects))' },
       { text: 'Reference', link: '/reference/', activeMatch: '^(/next|/versions/[^/]+)?/(reference|cli|web-ui|levers|releases)/' },
       {
         text: 'Version',
         items: [
-          { text: `Current (v${minorLine(stableVersion)})`, link: '/guide/introduction' },
+          { text: `Current (v${minorLine(stableVersion)})`, link: '/guide/quick-start' },
           { text: `Next (v${minorLine(nextVersion)})`, link: `${nextBase}/guide/` },
           ...archiveVersionItems,
         ],
