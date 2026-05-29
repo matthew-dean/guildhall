@@ -85,7 +85,7 @@ Modal credentials. A Hermes one-shot attempt failed before any model call with:
 AuthError: No inference provider configured. Run 'hermes model' to choose a provider and model, or set an API key (OPENROUTER_API_KEY, OPENAI_API_KEY, etc.) in ~/.hermes/.env.
 ```
 
-On the later local smoke check, Hermes was configured at `/Users/matthew/.hermes`
+On the later local smoke check, Hermes was configured at `<home>/.hermes`
 and `Hermes Agent v0.15.1 (2026.5.29)` was runnable. The normal one-shot path
 successfully created a file, and `hermes sessions export` exposed session-level
 token fields. Cost was still not reliable for that run:

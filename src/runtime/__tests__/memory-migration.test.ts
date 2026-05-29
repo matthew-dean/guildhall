@@ -142,6 +142,7 @@ describe('migrateLegacyMemoryToLocalHistory', () => {
     expect(gitignore).toContain('# BEGIN Guildhall managed')
     expect(gitignore).toContain('!.guildhall/**')
     expect(gitignore).toContain('.guildhall/config.yaml')
+    expect(gitignore).toContain('.guildhall/codebase-map.yaml')
     expect(gitignore).toContain('.guildhall/local/')
     expect(gitignore).not.toContain('/memory/')
   })
@@ -179,7 +180,9 @@ describe('migrateLegacyMemoryToLocalHistory', () => {
     await expect(fs.access(path.join(workspaceRoot, '.gitignore'))).rejects.toThrow()
     expect(await fs.readFile(path.join(loomaRoot, '.gitignore'), 'utf8')).toContain('dist')
     expect(await fs.readFile(path.join(loomaRoot, '.gitignore'), 'utf8')).toContain('.guildhall/worktrees/')
+    expect(await fs.readFile(path.join(loomaRoot, '.gitignore'), 'utf8')).toContain('.guildhall/codebase-map.yaml')
     expect(await fs.readFile(path.join(knitRoot, '.gitignore'), 'utf8')).toContain('.guildhall/worktrees/')
+    expect(await fs.readFile(path.join(knitRoot, '.gitignore'), 'utf8')).toContain('.guildhall/codebase-map.yaml')
   })
 
   it('stops tracking local Guildhall files that become ignored during migration', async () => {

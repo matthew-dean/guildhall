@@ -14,7 +14,7 @@ id: looma-knit
 
 # Absolute path to the project root this workspace tracks.
 # Defaults to the directory containing this file.
-projectPath: /Users/matthew/git/oss
+projectPath: /path/to/projects
 
 # ---------------------------------------------------------------------------
 # Model assignment

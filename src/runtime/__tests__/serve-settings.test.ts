@@ -196,13 +196,14 @@ describe('general project status endpoints', () => {
     await fs.writeFile(path.join(tmpDir, 'src/web/lib/Button.svelte'), '<button><slot /></button>\n', 'utf8')
     const { app } = buildServeApp({ projectPath: tmpDir })
 
-    const empty = await app.fetch(new Request(scoped('/api/project/codebase-map/status')))
-    expect(empty.status).toBe(200)
-    expect(await empty.json()).toMatchObject({
-      configured: false,
-      generatedAt: null,
-      counts: { files: 0, areas: 0, abstractions: 0 },
+    const initial = await app.fetch(new Request(scoped('/api/project/codebase-map/status')))
+    expect(initial.status).toBe(200)
+    const initialBody = await initial.json() as Record<string, any>
+    expect(initialBody).toMatchObject({
+      configured: true,
+      counts: { abstractions: 1 },
     })
+    expect(initialBody.generatedAt).toEqual(expect.any(String))
 
     const refresh = await app.fetch(new Request(scoped('/api/project/codebase-map/refresh'), { method: 'POST' }))
     expect(refresh.status).toBe(200)

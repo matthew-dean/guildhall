@@ -1,7 +1,7 @@
 # OpenHarness → Guildhall Port Mapping
 
 **Companion to:** [SPEC.md](SPEC.md), [PLAN.md](PLAN.md)
-**Upstream reference:** `/Users/matthew/git/oss/OpenHarness/` (pinned to cloned SHA; update this doc when re-syncing)
+**Upstream reference:** local OpenHarness checkout (pinned to cloned SHA; update this doc when re-syncing)
 
 This is the working plan for translating OpenHarness modules from Python to TypeScript. It lists each module, its target location, port difficulty, idiom notes, and test strategy. Update as ports land.
 

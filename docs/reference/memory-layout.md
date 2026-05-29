@@ -82,14 +82,25 @@ Commit:
 Ignore:
 
 - `./.guildhall/config.yaml`
+- generated Corpus Map files such as `./.guildhall/codebase-map.yaml`,
+  `./.guildhall/codebase-map.stale.json`, and
+  `./.guildhall/codebase-map.history.jsonl`
+- `./.guildhall/external-agent-links.json`, which can contain local agent ids
+  and checkout-specific target paths
 - local/private `./.guildhall/` buckets such as `local/`, `worktrees/`,
   `cache/`, `tmp/`, `logs/`, `sessions/`, `transcripts/`, `context-debug/`,
-  `events/`, and `checkpoints/`
+  `events/`, `checkpoints/`, and `dev-tools/`
 - everything under `~/.guildhall/`
 
 Guildhall writes and migrates a small managed block in the project
 `.gitignore` for this. The mental model is: commit the project plan and compact
 state; do not commit machine state.
+
+The Corpus Map is regenerated from the checkout when Guildhall assembles agent
+context or when you refresh it from Settings/CLI. Because it records the local
+project root and deterministic scan output, the generated map is ignored even
+though human-authored overlays such as
+`./.guildhall/codebase-map.overrides.yaml` remain trackable.
 
 Inside committed `.guildhall`, Guildhall keeps the files bounded. Active tasks
 stay in `TASKS.json`; finished work is sealed into compact task archives;

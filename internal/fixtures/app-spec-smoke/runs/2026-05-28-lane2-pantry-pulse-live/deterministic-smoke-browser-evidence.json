@@ -1,6 +1,6 @@
 {
   "url": "http://127.0.0.1:56369/",
-  "root": "/var/folders/fp/sdnhgkpn4c12nbb913bxnpym0000gn/T/guildhall-pantry-pulse-BUzYJf",
+  "root": "<tmp>/guildhall-pantry-pulse-BUzYJf",
   "desktopMetrics": {
     "title": "Pantry Pulse",
     "itemCount": 5,
@@ -26,7 +26,7 @@
   "afterFilterCount": 3,
   "afterMarkUsedCount": "2 active items",
   "screenshots": [
-    "internal/fixtures/app-spec-smoke/runs/2026-05-28-lane2-pantry-pulse-live/deterministic-smoke-desktop.png",
-    "internal/fixtures/app-spec-smoke/runs/2026-05-28-lane2-pantry-pulse-live/deterministic-smoke-mobile.png"
+    "internal/fixtures/app-spec-smoke/runs/2026-05-28-lane2-pantry-pulse-live/deterministic-smoke-desktop.webp",
+    "internal/fixtures/app-spec-smoke/runs/2026-05-28-lane2-pantry-pulse-live/deterministic-smoke-mobile.webp"
   ]
 }

@@ -10,7 +10,7 @@ blocker that prevented a Hermes task run.
 
 ## Sources Checked
 
-- Guildhall repo: `/Users/matthew/git/oss/guildhall`
+- Guildhall repo: `<guildhall-repo>`
 - Guildhall branch: `feature/0.9.0-orientation-proof-paths`
 - Guildhall commit: `5cdc0db926e7`
 - Hermes release tag: `v2026.5.28`
@@ -124,7 +124,7 @@ Result:
 
 ```text
 Hermes Agent v0.15.0 (2026.5.28)
-Project: /private/tmp/guildhall-hermes-comparison-20260528/hermes-agent-main
+Project: <tmp>/guildhall-hermes-comparison-20260528/hermes-agent-main
 Python: 3.11.13
 OpenAI SDK: 2.24.0
 Up to date

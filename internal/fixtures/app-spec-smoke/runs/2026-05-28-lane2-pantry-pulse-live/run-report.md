@@ -6,7 +6,7 @@
 - Initial run date: 2026-05-28
 - Recovery run date: 2026-05-29
 - Result: `APP_CREATED_AND_BROWSER_PROVED_WITH_RELEASE_AUDIT_GAPS`
-- Live project: `/var/folders/fp/sdnhgkpn4c12nbb913bxnpym0000gn/T/guildhall-live-pantry-pulse-5Vh9A5`
+- Live project: `<tmp>/guildhall-live-pantry-pulse-5Vh9A5`
 - Live task: `task-pantry-pulse-live`
 
 The fixed Pantry Pulse spec now reaches the important proof point that was
@@ -24,7 +24,7 @@ evidence instead of requiring transcript or task-note archaeology.
 
 ```sh
 pnpm exec vitest run src/runtime/__tests__/orchestrator.test.ts src/runtime/__tests__/context-builder.test.ts src/engine/__tests__/run-query.test.ts src/runtime/__tests__/app-spec-smoke.test.ts src/runtime/__tests__/intake.test.ts src/benchmarks/__tests__/benchmarks.test.ts src/runtime/__tests__/cli.test.ts --reporter=dot
-GUILDHALL_LIVE_PANTRY_PROOF=1 GUILDHALL_PRESERVE_LIVE_PROOF=1 GUILDHALL_LIVE_PANTRY_PROJECT_PATH=/var/folders/fp/sdnhgkpn4c12nbb913bxnpym0000gn/T/guildhall-live-pantry-pulse-5Vh9A5 GUILDHALL_LIVE_PANTRY_TASK_ID=task-pantry-pulse-live pnpm exec vitest run src/runtime/__tests__/app-spec-smoke.test.ts --reporter=verbose --testNamePattern "uses live Guildhall agents"
+GUILDHALL_LIVE_PANTRY_PROOF=1 GUILDHALL_PRESERVE_LIVE_PROOF=1 GUILDHALL_LIVE_PANTRY_PROJECT_PATH=<tmp>/guildhall-live-pantry-pulse-5Vh9A5 GUILDHALL_LIVE_PANTRY_TASK_ID=task-pantry-pulse-live pnpm exec vitest run src/runtime/__tests__/app-spec-smoke.test.ts --reporter=verbose --testNamePattern "uses live Guildhall agents"
 ```
 
 ## Pass / Fail

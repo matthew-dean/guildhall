@@ -645,7 +645,7 @@
           "agentId": "worker-agent",
           "role": "worker",
           "timestamp": "2026-05-04T23:42:30.000Z",
-          "content": "Validated the worktree-path repair live on a fresh Looma/Knit replay. The worker still requested write-file against /Users/matthew/git/oss/looma-knit/knit/web/tests/unit/composables/use-presence.test.ts, but Guildhall completed the write against /Users/matthew/git/oss/looma-knit/knit/.guildhall/worktrees/task-011/web/tests/unit/composables/use-presence.test.ts and recorded the worktree path in the tool result."
+          "content": "Validated the worktree-path repair live on a fresh Looma/Knit replay. The worker still requested write-file against the Looma/Knit main-repo test path, but Guildhall completed the write against the task-011 worktree path and recorded the worktree path in the tool result."
         },
         {
           "agentId": "worker-agent",
@@ -885,7 +885,7 @@
         {
           "at": "2026-05-28T19:49:32.523Z",
           "by": "codex",
-          "content": "User requested an agent-tracked Looma public release setup for https://github.com/threadlabs-studio/looma and noted @threadlabs already exists as an npm org. Local Looma currently lives at /Users/matthew/git/oss/looma-knit/looma and still has origin git@bitbucket.org:mdean-projects/granola.git, so the task starts with an audit and approval-safe remote plan before any push/publish action."
+          "content": "User requested an agent-tracked Looma public release setup for https://github.com/threadlabs-studio/looma and noted @threadlabs already exists as an npm org. Local Looma currently lives in the Looma/Knit checkout and still has origin git@bitbucket.org:mdean-projects/granola.git, so the task starts with an audit and approval-safe remote plan before any push/publish action."
         },
         {
           "at": "2026-05-28T19:54:54.047Z",

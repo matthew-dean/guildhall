@@ -6,21 +6,21 @@ any blocking gaps, and decide what a fair benchmark harness needs next.
 
 ## Environment
 
-- Guildhall: local repo build from `/Users/matthew/git/oss/guildhall`.
+- Guildhall: local repo build from `<guildhall-repo>`.
 - Hermes: `Hermes Agent v0.15.1 (2026.5.29)`.
-- Hermes home: `/Users/matthew/.hermes`.
-- Hermes project: `/Users/matthew/.hermes/hermes-agent`.
-- Smoke output root: `/tmp/guildhall-hermes-smoke-20260528-214434`.
+- Hermes home: `<home>/.hermes`.
+- Hermes project: `<home>/.hermes/hermes-agent`.
+- Smoke output root: `<tmp>/guildhall-hermes-smoke-20260528-214434`.
 
 ## Smoke Results
 
 | Lane | Result | Evidence |
 | --- | --- | --- |
-| Guildhall deterministic lifecycle smoke | Pass, 9/9 | `/tmp/guildhall-hermes-smoke-20260528-214434/guildhall/lifecycle/lifecycle-07eadfa7-e2fe-4c52-b804-e03af4c474d5.md` |
-| Guildhall deterministic SWE-local smoke | Pass, 1/1 | `/tmp/guildhall-hermes-smoke-20260528-214434/guildhall/swe-local/swe-local-d93f43f7-6cb1-43ab-8b52-be08ab20260e.md` |
-| Hermes one-shot file creation | Pass | `/tmp/guildhall-hermes-smoke-20260528-214434/hermes-work/hermes_smoke.txt` contains `HERMES_SMOKE_OK`. |
+| Guildhall deterministic lifecycle smoke | Pass, 9/9 | `<tmp>/guildhall-hermes-smoke-20260528-214434/guildhall/lifecycle/lifecycle-07eadfa7-e2fe-4c52-b804-e03af4c474d5.md` |
+| Guildhall deterministic SWE-local smoke | Pass, 1/1 | `<tmp>/guildhall-hermes-smoke-20260528-214434/guildhall/swe-local/swe-local-d93f43f7-6cb1-43ab-8b52-be08ab20260e.md` |
+| Hermes one-shot file creation | Pass | `<tmp>/guildhall-hermes-smoke-20260528-214434/hermes-work/hermes_smoke.txt` contains `HERMES_SMOKE_OK`. |
 | Guildhall live `task run-once` file creation | Failed smoke / useful gap | No `guildhall_smoke.txt`; no `run-once-report.json`; task looped in spec review until stopped. |
-| Hermes benchmark preflight | Inconclusive | `/tmp/guildhall-hermes-smoke-20260528-214434/preflight/hermes-compare-89d52b8c-ea0d-41bb-aa2b-569c7edc47ea.md` |
+| Hermes benchmark preflight | Inconclusive | `<tmp>/guildhall-hermes-smoke-20260528-214434/preflight/hermes-compare-89d52b8c-ea0d-41bb-aa2b-569c7edc47ea.md` |
 
 ## Commands Run
 
@@ -43,12 +43,12 @@ HERMES_HOME="$HOME/.hermes" hermes -z \
   'Create a file named hermes_smoke.txt in the current directory containing exactly HERMES_SMOKE_OK, then reply with exactly DONE.' \
   --ignore-rules
 
-node /Users/matthew/git/oss/guildhall/dist/cli.js task run-once \
+node <guildhall-repo>/dist/cli.js task run-once \
   'Create a file named guildhall_smoke.txt in the project root containing exactly GUILDHALL_SMOKE_OK.' \
-  --project /tmp/guildhall-hermes-smoke-20260528-214434/guildhall-runonce-project \
+  --project <tmp>/guildhall-hermes-smoke-20260528-214434/guildhall-runonce-project \
   --automation fully-automated \
   --proof commands \
-  --output /tmp/guildhall-hermes-smoke-20260528-214434/guildhall/run-once-report.json \
+  --output <tmp>/guildhall-hermes-smoke-20260528-214434/guildhall/run-once-report.json \
   --max-ticks 12
 ```
 

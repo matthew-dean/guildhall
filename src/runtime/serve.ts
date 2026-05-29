@@ -4133,12 +4133,21 @@ export function buildServeApp(opts: ServeOptions = {}): {
     }
   })
 
-  async function renderCodebaseMapStatus(projectPath: string) {
+  async function renderCodebaseMapStatus(projectPath: string, opts: { createIfMissing?: boolean } = {}) {
     const memoryDir = getProjectStateDir(projectPath)
-    const [map, stale] = await Promise.all([
+    let [map, stale] = await Promise.all([
       loadCodebaseMap(memoryDir),
       loadCodebaseMapStaleState(memoryDir),
     ])
+    if (!map && opts.createIfMissing) {
+      const result = await refreshCodebaseMap({
+        projectRoot: projectPath,
+        memoryDir,
+        reason: 'setup',
+      })
+      map = result.map
+      stale = await loadCodebaseMapStaleState(memoryDir)
+    }
     return {
       configured: Boolean(map),
       generatedAt: map?.generatedAt ?? null,
@@ -4211,7 +4220,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
       if (project.initializationNeeded) {
         return c.json({ configured: false, generatedAt: null, stale: null })
       }
-      return c.json(await renderCodebaseMapStatus(project.path))
+      return c.json(await renderCodebaseMapStatus(project.path, { createIfMissing: true }))
     } catch (err) {
       return c.json({ error: err instanceof Error ? err.message : String(err) }, 500)
     }

@@ -161,6 +161,11 @@ internal/benchmarks/runs/
 !.guildhall/**
 # Local/private Guildhall state stays out of git.
 .guildhall/config.yaml
+.guildhall/codebase-map.yaml
+.guildhall/codebase-map.stale.json
+.guildhall/codebase-map.history.jsonl
+.guildhall/codebase-map/
+.guildhall/external-agent-links.json
 .guildhall/worktrees/
 .guildhall/local/
 .guildhall/cache/
@@ -172,4 +177,8 @@ internal/benchmarks/runs/
 .guildhall/events/
 .guildhall/checkpoints/
 .guildhall/dev-tools/
+.guildhall/.session-epoch
 # END Guildhall managed
+
+# Local editor/agent launch settings
+.claude/launch.json
