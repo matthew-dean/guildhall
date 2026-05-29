@@ -16,6 +16,7 @@
   import { buildWorkSurface } from '../../lib/project-data.js'
   import { friendlyRuntimeMessage } from '../../lib/runtime-message.js'
   import { effectiveWorkStatus, isCompleteForWorkerHandoff, needsWorkerHandoffSpecCleanup } from '../../lib/task-state.js'
+  import { buildWorkHierarchy, nestedWorkCountLabel, workKindLabel } from '../../lib/work-hierarchy.js'
   import type { ProjectDetail, Task } from '../../lib/types.js'
   import PlannerTab from './PlannerTab.svelte'
 
@@ -66,8 +67,11 @@
   let progress = $state('Loading...')
   let sortKey = $state<SortKey>('updated')
   let sortDir = $state<SortDir>('desc')
+  let showClosedWork = $state(false)
 
   const boardMode = $derived(mode === 'board')
+  const hierarchy = $derived(buildWorkHierarchy(tasks))
+  const visibleTasks = $derived(tasks.filter(task => showClosedWork || !['done', 'pending_pr', 'shelved'].includes(task.status ?? '')))
 
   const taskCounts = $derived.by(() => {
     const all = tasks
@@ -92,7 +96,7 @@
   }
 
   const sortedTasks = $derived.by(() => {
-    const list = [...tasks]
+    const list = [...visibleTasks]
     list.sort((left, right) => compareTasks(left, right, sortKey, sortDir))
     return list
   })
@@ -233,11 +237,21 @@
   }
 
   function taskSecondaryText(task: Task): string {
+    const node = hierarchy.byId.get(task.id)
+    const childCount = node?.childIds.length ?? 0
+    if (childCount > 0) return nestedWorkCountLabel(childCount)
+    if (task.workKind) return workKindLabel(task.workKind)
     if (task.blockReason) return friendlyRuntimeMessage(task.blockReason)
     if (task.terminalSummary?.headline) return task.terminalSummary.headline
     if (task.latestCheckpoint?.nextPlannedAction) return task.latestCheckpoint.nextPlannedAction
     if (task.description) return task.description
     return friendlyTaskId(task.id)
+  }
+
+  function hierarchyBreadcrumb(task: Task): string {
+    const crumbs = hierarchy.byId.get(task.id)?.breadcrumb ?? []
+    if (crumbs.length <= 1) return ''
+    return crumbs.map(crumb => crumb.title).join(' / ')
   }
 
   $effect(() => {
@@ -293,9 +307,17 @@
   </details>
 {:else}
   <div class="work-list-view">
-    <Card title={`Work list (${taskCounts.total})`} titleTag="h2">
+    <Card title={`Work list (${visibleTasks.length} visible, ${taskCounts.total} total)`} titleTag="h2">
       {#snippet actions()}
         <div class="view-switch" role="tablist" aria-label="Work view mode">
+          <Button
+            variant={showClosedWork ? 'primary' : 'secondary'}
+            size="sm"
+            onclick={() => { showClosedWork = !showClosedWork }}
+            ariaLabel={showClosedWork ? 'Hide done and shelved work' : 'Show done and shelved work'}
+          >
+            {showClosedWork ? 'Hide done' : 'Show done'}
+          </Button>
           <Button
             variant={mode === 'list' ? 'primary' : 'secondary'}
             size="sm"
@@ -400,6 +422,9 @@
                 >
                   <td class="cell-task">
                     <div class="task-title">{task.title ?? '(untitled)'}</div>
+                    {#if hierarchyBreadcrumb(task)}
+                      <div class="task-breadcrumb">{hierarchyBreadcrumb(task)}</div>
+                    {/if}
                     <div class="task-subcopy">{taskSecondaryText(task)}</div>
                   </td>
                   <td class="cell-status">
@@ -571,6 +596,12 @@
     -webkit-line-clamp: 2;
     -webkit-box-orient: vertical;
     overflow: hidden;
+  }
+  .task-breadcrumb {
+    margin-top: 4px;
+    color: var(--text-muted);
+    font-size: var(--fs-0);
+    line-height: var(--lh-tight);
   }
   .cell-status,
   .cell-priority,

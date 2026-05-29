@@ -27,6 +27,16 @@ describe('pressure-test intake state', () => {
       status: 'active',
       closeoutAsked: false,
     })
+    expect(intake.domains.map(domain => domain.id)).toEqual([
+      'product-goals',
+      'workflows',
+      'design-quality',
+      'task-boundaries',
+      'acceptance-criteria',
+      'verification-tdd',
+      'review-lenses',
+      'risks',
+    ])
     expect(intake.pendingQuestion?.domainId).toBe('product-goals')
 
     const saved = await loadPressureTestIntake({ memoryDir, intakeId: intake.id })
@@ -195,8 +205,30 @@ describe('pressure-test intake state', () => {
     const spec = renderPressureTestSpec(intake)
 
     expect(spec).toContain('Acceptance Criteria')
+    expect(spec).toContain('Verification And TDD')
+    expect(spec).toContain('Design Quality')
+    expect(spec).toContain('Reviewer Lenses')
+    expect(spec).toContain('Task Boundaries')
     expect(spec).toContain('Users type one broad request')
     expect(spec).toContain('Deferred domains are explicit')
+  })
+
+  it('asks design-quality questions for UI feature pressure tests', async () => {
+    const memoryDir = await mkdtemp(path.join(tmpdir(), 'guildhall-pressure-'))
+    const intake = await createPressureTestIntake({
+      memoryDir,
+      target: { type: 'feature', id: 'pantry-pulse', title: 'Pantry Pulse app spec' },
+      rawRequest: 'Build a Pantry Pulse web app with filters, item cards, and a polished palette.',
+    })
+
+    const designDomain = intake.domains.find(domain => domain.id === 'design-quality')
+
+    expect(designDomain).toMatchObject({
+      title: 'Design quality',
+      whyItMatters: expect.stringContaining('app-store-caliber'),
+    })
+    expect(designDomain?.openUnknowns.join('\n')).toContain('interaction patterns')
+    expect(designDomain?.openUnknowns.join('\n')).toContain('palette')
   })
 
   it('advances domains through closeout and records accepted answers as language-map candidates', async () => {

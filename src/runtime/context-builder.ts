@@ -33,6 +33,11 @@ import { loadDesignSystem } from './design-system-store.js'
 import { loadLanguageMap, renderLanguageMapContext } from './language-map.js'
 import { renderWorkerMode, selectWorkerMode, type SelectedWorkerMode } from './worker-modes.js'
 import { resolveRuntimePath } from './path-utils.js'
+import { renderCompletionHandoffContext, CompletionHandoff } from './completion-handoff.js'
+import { buildProofPathContext, ProofPath } from './proof-paths.js'
+import type { CompletionHandoff as CompletionHandoffType } from './completion-handoff.js'
+import type { ProofPath as ProofPathType } from './proof-paths.js'
+import { buildEffectiveMemoryPacket, type EffectiveMemoryPacket } from './effective-memory-packet.js'
 
 // ---------------------------------------------------------------------------
 // Just-in-time context builder
@@ -74,6 +79,9 @@ const GLOB_CANDIDATE_RE = /[*?{}]/
 const ENV_FILE_RE = /^\.env(?:\.[A-Za-z0-9_-]+)?$/
 const ENV_KEY_RE = /^\s*(?:export\s+)?([A-Za-z_][A-Za-z0-9_]*)\s*=/
 const ENV_CONTEXT_TASK_RE = /\b(env|environment|credential|secret|key|token|oauth|provider|supabase|stripe|vercel|google|apple|webhook)\b/i
+const LOCAL_WEB_APP_STARTER_FILES = ['package.json', 'index.html', 'src/main.js', 'src/styles.css']
+const SINGLE_FILE_WEB_APP_FILES = ['index.html']
+const UI_TASK_RE = /\b(ui|ux|frontend|front-end|web app|browser app|single-page app|page|screen|view|route|component|primitive|button|form|input|modal|drawer|toast|nav|toolbar|sidebar|layout|card|visual|design|palette|screenshot|app-store-caliber)\b/i
 
 async function loadOrCreateCodebaseMap(memoryDir: string, task: Task) {
   const projectRoot = (task.worktreePath?.trim() || task.projectPath?.trim())
@@ -168,6 +176,17 @@ ${reviewerFeedbackText}`
     (match) => (match[1] ?? '').trim(),
   )
     .filter(isActionableFileCandidate)
+  const localWebStarterHints =
+    rootedHints.length === 0 &&
+    fallbackBacktickedHints.length === 0 &&
+    referencedBacktickedTestHints.length === 0 &&
+    bareMetricHints.length === 0 &&
+    checkpointFilesTouched.length === 0 &&
+    shouldInferLocalWebAppStarterFiles(specText)
+      ? shouldInferSingleFileWebApp(specText)
+        ? SINGLE_FILE_WEB_APP_FILES
+        : LOCAL_WEB_APP_STARTER_FILES
+      : []
   const preferredRootPrefix =
     rootedHints
       .map((candidate) => candidate.split('/'))
@@ -271,10 +290,47 @@ ${reviewerFeedbackText}`
   for (const candidate of bareMetricHints) {
     push(candidate)
   }
+  for (const candidate of localWebStarterHints) {
+    push(candidate)
+  }
   for (const candidate of checkpointFilesTouched) {
     push(candidate)
   }
   return out.slice(0, 8)
+}
+
+function shouldInferLocalWebAppStarterFiles(specText: string): boolean {
+  const normalized = specText.toLowerCase()
+  const asksForRunnableApp =
+    /\b(?:build|create|scaffold|implement)\b/.test(normalized) &&
+    /\b(?:app|web app|page|ui|browser)\b/.test(normalized)
+  const localWebSurface =
+    /\bsingle-page\b/.test(normalized) ||
+    /\bdependency-free\b/.test(normalized) ||
+    /\bplain html\b/.test(normalized) ||
+    /\bindex\.html\b/.test(normalized) ||
+    /\blocal web\b/.test(normalized) ||
+    /\bstatic web\b/.test(normalized) ||
+    /\bbrowser-proof(?:able)?\b/.test(normalized) ||
+    /\bbrowser proof\b/.test(normalized) ||
+    /\blocal runtime\/browser proof\b/.test(normalized)
+  const excludesGeneratedPaths =
+    !/\b(?:ios|android|react native|swiftui|electron|backend service|api server)\b/.test(normalized)
+  return asksForRunnableApp && localWebSurface && excludesGeneratedPaths
+}
+
+function shouldInferSingleFileWebApp(specText: string): boolean {
+  const normalized = specText.toLowerCase()
+  const namesSingleHtml =
+    /\bsingle file\b/.test(normalized) ||
+    /\bsingle `?index\.html`? file\b/.test(normalized) ||
+    /\bindex\.html\b/.test(normalized)
+  const excludesPackage =
+    /\bno package\.json\b/.test(normalized) ||
+    /\bno npm\b/.test(normalized) ||
+    /\bno build (?:step|tools?)\b/.test(normalized) ||
+    /\bdo not require npm install\b/.test(normalized)
+  return namesSingleHtml && excludesPackage
 }
 
 function renderLikelyTaskFiles(task: Task, checkpointFilesTouched: readonly string[] = []): string {
@@ -398,6 +454,55 @@ function renderProjectSkills(task: Task, memoryDir: string, enabled: boolean): s
       skill.content.trim(),
     ].join('\n'))
     .join('\n\n')
+}
+
+function isFrontendUiTask(task: Task): boolean {
+  return UI_TASK_RE.test([
+    task.title,
+    task.description,
+    task.spec ?? '',
+    task.productBrief?.userJob ?? '',
+    task.productBrief?.successMetric ?? '',
+    ...task.acceptanceCriteria.map((criterion) => criterion.description),
+  ].join('\n'))
+}
+
+function renderFrontendUiDesignQualityBar(task: Task): string {
+  if (!isFrontendUiTask(task)) return ''
+  return [
+    '### Frontend/UI Design Quality Bar',
+    'Functional acceptance is not enough. Build a shippable product surface: composition, hierarchy, density, copy, affordance, motion, and palette must work together.',
+    '- Pick the right product layout, not a generic centered demo.',
+    '- Use realistic domain data and compact IA.',
+    '- Require screenshots/live previews when visual presentation changed.',
+    '- Revise checklist-compliant but visually weak work before review.',
+  ].join('\n')
+}
+
+function looksLikeStaleNewRequestBrief(task: Task): boolean {
+  const brief = task.productBrief
+  if (!brief || brief.approvedAt) return false
+  const text = `${brief.userJob}\n${brief.successMetric}`
+  if (!/\bNew request\b/i.test(text)) return false
+  const taskText = `${task.title}\n${task.description}\n${task.spec ?? ''}`
+  return !/^\s*New request\s*$/i.test(task.title) && taskText.trim().length > 0
+}
+
+function renderProductBriefContext(task: Task): string {
+  if (!task.productBrief || looksLikeStaleNewRequestBrief(task)) return ''
+  return `\n### Product Brief${task.productBrief.approvedAt ? ' (human-approved)' : ' (DRAFT — not yet approved)'}\n**User job:** ${task.productBrief.userJob}\n**Success metric:** ${task.productBrief.successMetric}${task.productBrief.antiPatterns.length > 0 ? `\n**Anti-patterns (must NOT do):**\n${task.productBrief.antiPatterns.map(a => `- ${a}`).join('\n')}` : ''}${task.productBrief.rolloutPlan ? `\n**Rollout plan:** ${task.productBrief.rolloutPlan}` : ''}`
+}
+
+function summarizeRawDesignSystem(raw: string): string {
+  const trimmed = raw.trim()
+  if (!trimmed) return ''
+  return [
+    '**Draft design system:** raw `.guildhall/design-system.yaml` could not be normalized yet, but it is still authoritative design context for this task. Preserve its intent and normalize it later instead of ignoring it.',
+    '',
+    '```yaml',
+    clipContextBlock(trimmed, 3500),
+    '```',
+  ].join('\n')
 }
 
 function hasWorkerSelfCritiqueNote(task: Task): boolean {
@@ -710,6 +815,10 @@ export interface BuiltContext {
   workerMode?: SelectedWorkerMode
   languageMap?: string
   reviewPacket?: string
+  proofPaths?: string
+  completionHandoff?: string
+  effectiveMemory?: string
+  effectiveMemoryPacket?: EffectiveMemoryPacket
   /** Concatenated string ready to prepend to an agent message */
   formatted: string
 }
@@ -827,10 +936,11 @@ export async function buildContext(
   }
 
   const projectRoot = inferProjectRootFromMemoryDir(memoryDir)
-  const [memory, progress, decisions, exploring, goal, ds, worktreeResume, checkpoint, codebaseMap, languageMapData, envManifest] = await Promise.all([
+  const [memory, progress, decisions, designSystemRaw, exploring, goal, ds, worktreeResume, checkpoint, codebaseMap, languageMapData, envManifest] = await Promise.all([
     readSafe('MEMORY.md'),
     readSafe('PROGRESS.md'),
     readSafe('DECISIONS.md'),
+    readSafe('design-system.yaml'),
     // Only bother with the transcript when we're actually in the exploring phase.
     task.status === 'exploring'
       ? fs.readFile(getProjectTranscriptPath(projectRoot, 'exploring', task.id), 'utf-8').catch(() => readSafe(path.join('exploring', `${task.id}.md`)))
@@ -934,7 +1044,7 @@ export async function buildContext(
     }
   }
 
-  const designSystem = ds ? summarizeDesignSystem(ds) : ''
+  const designSystem = ds ? summarizeDesignSystem(ds) : summarizeRawDesignSystem(designSystemRaw)
   const rubricSelection = selectApplicableReviewRubrics(task, ds)
   const coreRubrics = renderRubricSelection(rubricSelection)
   // Reviewer rubric items are attached per-reviewer at dispatch time (fan-out),
@@ -1018,6 +1128,17 @@ export async function buildContext(
         task.productBrief?.successMetric ?? '',
       ].join('\n'))
     : ''
+  const parsedProofPaths = parseProofPaths((task as Task & { proofPaths?: unknown }).proofPaths)
+  const proofPaths = buildProofPathContext(parsedProofPaths)
+  const completionHandoff = parseCompletionHandoff((task as Task & { completionHandoff?: unknown }).completionHandoff)
+  const completionHandoffContext = completionHandoff ? renderCompletionHandoffContext(completionHandoff) : ''
+  const effectiveMemoryPacket = await buildEffectiveMemoryPacket({ memoryDir, task }).catch(() => ({
+    included: [],
+    withheld: [],
+    evidenceRefs: [],
+    rendered: '',
+  }))
+  const effectiveMemory = effectiveMemoryPacket.rendered
 
   const taskSummary = [
     `## Current Task: ${task.id}`,
@@ -1031,9 +1152,8 @@ export async function buildContext(
       ? `**Current blocker:** ${task.blockReason}`
       : '',
     specOverview ? `\n### Spec Overview\n${specOverview}` : '',
-    task.productBrief
-      ? `\n### Product Brief${task.productBrief.approvedAt ? ' (human-approved)' : ' (DRAFT — not yet approved)'}\n**User job:** ${task.productBrief.userJob}\n**Success metric:** ${task.productBrief.successMetric}${task.productBrief.antiPatterns.length > 0 ? `\n**Anti-patterns (must NOT do):**\n${task.productBrief.antiPatterns.map(a => `- ${a}`).join('\n')}` : ''}${task.productBrief.rolloutPlan ? `\n**Rollout plan:** ${task.productBrief.rolloutPlan}` : ''}`
-      : '',
+    renderProductBriefContext(task),
+    renderFrontendUiDesignQualityBar(task),
     task.acceptanceCriteria.length > 0
       ? `\n### Acceptance Criteria\n${task.acceptanceCriteria.map((c, i) => `${i + 1}. ${c.description}`).join('\n')}`
       : '',
@@ -1093,6 +1213,12 @@ export async function buildContext(
     '',
     languageMap,
     '',
+    proofPaths,
+    '',
+    completionHandoffContext,
+    '',
+    effectiveMemory,
+    '',
     projectMemory ? `## Relevant Project Memory\n${projectMemory}` : '',
     '',
     recentProgress ? `## Recent Progress\n${recentProgress}` : '',
@@ -1123,6 +1249,23 @@ export async function buildContext(
     workerMode,
     languageMap,
     reviewPacket,
+    proofPaths,
+    completionHandoff: completionHandoffContext,
+    effectiveMemory,
+    effectiveMemoryPacket,
     formatted,
   }
+}
+
+function parseProofPaths(value: unknown): ProofPathType[] {
+  if (!Array.isArray(value)) return []
+  return value.flatMap((item) => {
+    const parsed = ProofPath.safeParse(item)
+    return parsed.success ? [parsed.data] : []
+  })
+}
+
+function parseCompletionHandoff(value: unknown): CompletionHandoffType | null {
+  const parsed = CompletionHandoff.safeParse(value)
+  return parsed.success ? parsed.data : null
 }

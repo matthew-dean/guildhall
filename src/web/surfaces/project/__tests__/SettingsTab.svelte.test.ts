@@ -25,6 +25,13 @@ function installProjectState() {
     name: 'Looma + Knit',
     path: '/workspace/looma-knit',
     tasks: [],
+    memoryHealth: {
+      total: 3,
+      active: 1,
+      proposed: 1,
+      used: 1,
+      recentUse: [{ taskId: 'task-link-editor', included: 2, withheld: 1, at: now }],
+    },
     config: {
       coordinators: [
         {
@@ -157,6 +164,65 @@ describe('SettingsTab', () => {
 
     await screen.findByText('Bootstrap failed: pnpm install failed')
     expect(screen.getByText('pnpm install failed')).toBeInTheDocument()
+  })
+
+  it('shows active capability grants and revokes them from project settings', async () => {
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = new URL(String(input), 'http://localhost')
+      if (url.pathname === '/api/setup/status') return json({ initialized: true, name: 'Looma + Knit', id: 'looma-knit' })
+      if (url.pathname === '/api/config/levers') return json({ levers: [] })
+      if (url.pathname === '/api/project/design-system') return json({ designSystem: null })
+      if (url.pathname === '/api/project/codebase-map/status') return json(codebaseMapStatus())
+      if (url.pathname === '/api/setup/providers') return json(providersPayload())
+      if (url.pathname === '/api/project/bootstrap/status') {
+        return json({ configured: true, needed: false, status: null, bootstrap: { commands: [], successGates: [], timeoutMs: 0 } })
+      }
+      if (url.pathname === '/api/project/capability-requests') {
+        return json({
+          requests: [{
+            id: 'cap-task-fixtures-1',
+            taskId: 'task-fixtures',
+            reason: 'Need fixture reads.',
+            status: 'approved',
+            grant: {
+              id: 'grant-task-fixtures-1',
+              kind: 'mount_directory',
+              hostPath: '/Users/matthew/git/fixtures',
+              containerPath: '/mnt/guildhall-grants/grant-task-fixtures-1',
+              access: 'read-only',
+              duration: 'this task',
+              status: 'active',
+              evidence: 'Granted read-only mount.',
+            },
+          }],
+          activeGrants: [{
+            id: 'grant-task-fixtures-1',
+            kind: 'mount_directory',
+            hostPath: '/Users/matthew/git/fixtures',
+            containerPath: '/mnt/guildhall-grants/grant-task-fixtures-1',
+            access: 'read-only',
+            duration: 'this task',
+            status: 'active',
+            evidence: 'Granted read-only mount.',
+          }],
+        })
+      }
+      if (url.pathname === '/api/project/capability-requests/cap-task-fixtures-1/revoke') {
+        expect(init?.method).toBe('POST')
+        return json({ ok: true })
+      }
+      return json({})
+    })
+    vi.stubGlobal('fetch', fetchMock)
+
+    render(SettingsTab, { subView: 'ready' })
+
+    await screen.findByText('/Users/matthew/git/fixtures')
+    expect(screen.getByText('/mnt/guildhall-grants/grant-task-fixtures-1')).toBeInTheDocument()
+    await userEvent.click(screen.getByRole('button', { name: /^revoke$/i }))
+    await waitFor(() => {
+      expect(fetchMock.mock.calls.some(([input]) => String(input).includes('/api/project/capability-requests/cap-task-fixtures-1/revoke'))).toBe(true)
+    })
   })
 
   it('explains workspace child-project gates without treating the root shell as the only app', async () => {
@@ -345,6 +411,106 @@ describe('SettingsTab', () => {
           },
         })
       }
+      if (url.pathname === '/api/project/design-system/discovery') {
+        return json({
+          primarySystem: 'looma',
+          preview: { adapter: 'storybook', summary: 'Storybook preview detected.' },
+          libraries: [{ id: 'looma', label: 'Looma', role: 'foundation' }],
+          tokenFiles: ['src/web/tokens.css'],
+          componentFiles: ['src/web/lib/Button.svelte'],
+          proofContract: { targetDesignSystem: 'looma', componentIntents: ['Button'] },
+          recommendations: ['Looma is available as the project design-system foundation.'],
+        })
+      }
+      if (url.pathname === '/api/project/design-feedback') {
+        return json({
+          feedback: {
+            findings: [{ id: 'finding-filter-state' }],
+            decisions: [],
+            ownerFeedback: [{
+              summary: 'Show all should read as a filter choice.',
+              status: 'accepted',
+            }],
+            decisionPackets: [{
+              summary: 'Accepted owner feedback ready for implementation/review.',
+            }],
+            candidates: [{
+              summary: 'Segmented filter selected state is unclear in compact mobile layouts.',
+              targetDesignSystem: 'looma',
+              status: 'queued',
+            }],
+            loomaImprovements: [{
+              summary: 'Segmented filter selected state is unclear in compact mobile layouts.',
+              targetPackage: 'core',
+              status: 'queued',
+            }],
+          },
+          loomaHook: {
+            enabled: false,
+            status: 'inactive',
+            reason: 'Experimental local Looma development is not configured.',
+          },
+        })
+      }
+      if (url.pathname === '/api/project/design-taste') {
+        return json({
+          summary: 'Interaction: mutually exclusive modes use segmented-control-or-tabs. palette semantic-oklch-roles with controlled saturation. Visual direction: warm-functional-polish.',
+          taste: {
+            opinions: {
+              interactionSemantics: {
+                mutuallyExclusiveModes: 'segmented-control-or-tabs',
+                oneShotCommand: 'button',
+              },
+              paletteStrategy: {
+                defaultMode: 'semantic-oklch-roles',
+                saturationBudget: 'controlled',
+                avoid: ['all-purple-gradient-app'],
+              },
+              visualDirection: {
+                default: 'warm-functional-polish',
+                avoid: ['tiny-unexplained-controls'],
+              },
+            },
+            patternRecipes: {
+              filterModes: { preferred: 'segmented-control' },
+            },
+          },
+          layers: [
+            { id: 'builtin', label: 'Guildhall defaults', applied: true },
+            { id: 'user', label: 'User overrides', applied: false },
+            { id: 'project', label: 'Project overrides', applied: true },
+          ],
+        })
+      }
+      if (url.pathname === '/api/project/design-system/catalog') {
+        return json({
+          previewAdapter: 'storybook',
+          interactable: true,
+          entries: [
+            {
+              id: 'storybook-src-web-lib-button-stories-ts',
+              kind: 'component',
+              title: 'Button',
+              source: 'storybook',
+              previewUrl: '/iframe.html?path=/story/button',
+            },
+          ],
+          recommendations: ['Storybook is the preferred interactable catalog for this web project.'],
+        })
+      }
+      if (url.pathname === '/api/project/design-intent-surrogate') {
+        return json({
+          platform: 'ios',
+          previewMode: 'browser-surrogate',
+          approximate: true,
+          label: 'Preview approximation: this rendering proves design intent and state coverage.',
+          warning: 'Native platform proof still needs simulator/device screenshots before release.',
+          nativeProofRequired: true,
+          detectedNativeTooling: ['swiftui-preview', 'xcodeproj'],
+          componentIntents: ['segmented-filter'],
+          recommendations: ['Use the browser surrogate for fast owner feedback on hierarchy, palette, spacing, states, and interaction semantics.'],
+        })
+      }
       if (url.pathname === '/api/project/design-system/approve') {
         expect(url.searchParams.get('projectId')).toBe('looma-knit')
         expect(init?.method).toBe('POST')
@@ -490,6 +656,27 @@ describe('SettingsTab', () => {
     await screen.findByText('122')
 
     await screen.findByText('Revision 2')
+    expect(screen.getByText('Foundation')).toBeInTheDocument()
+    expect(screen.getByText('storybook')).toBeInTheDocument()
+    expect(screen.getByText('Looma is available as the project design-system foundation.')).toBeInTheDocument()
+    expect(screen.getByText('Owner feedback')).toBeInTheDocument()
+    expect(screen.getByText('Decision packets')).toBeInTheDocument()
+    expect(screen.getByText('Reusable candidates')).toBeInTheDocument()
+    expect(screen.getByText('Looma follow-ups')).toBeInTheDocument()
+    expect(screen.getByText('Taste memory')).toBeInTheDocument()
+    expect(screen.getByText('warm-functional-polish')).toBeInTheDocument()
+    expect(screen.getByText('segmented-control-or-tabs')).toBeInTheDocument()
+    expect(screen.getByText('2 of 3 layers')).toBeInTheDocument()
+    expect(screen.getByText('Catalog')).toBeInTheDocument()
+    expect(screen.getByText('storybook · 1 item')).toBeInTheDocument()
+    expect(screen.getByText('Intent preview')).toBeInTheDocument()
+    expect(screen.getByText('ios · browser-surrogate')).toBeInTheDocument()
+    expect(screen.getByText('Native proof')).toBeInTheDocument()
+    expect(screen.getByText('required')).toBeInTheDocument()
+    expect(screen.getByText('Native platform proof still needs simulator/device screenshots before release.')).toBeInTheDocument()
+    expect(screen.getByText('looma follow-up')).toBeInTheDocument()
+    expect(screen.getByText('Segmented filter selected state is unclear in compact mobile layouts.')).toBeInTheDocument()
+    expect(screen.getByText('Local hook inactive')).toBeInTheDocument()
     await userEvent.click(screen.getByRole('button', { name: /approve current draft/i }))
     await screen.findByText('approved')
   })
@@ -609,7 +796,7 @@ describe('SettingsTab', () => {
 
     render(SettingsTab, { subView: 'learning' })
 
-    await screen.findByRole('heading', { name: /reusable guidance/i })
+    await screen.findByRole('heading', { name: /memory controls/i })
     expect(screen.getByText('0 in use')).toBeInTheDocument()
     expect(screen.getByText('3 waiting')).toBeInTheDocument()
     expect(screen.getByText('Project context Guildhall already has')).toBeInTheDocument()
@@ -617,6 +804,10 @@ describe('SettingsTab', () => {
     expect(screen.getByText('Workspace goals')).toBeInTheDocument()
     expect(screen.getByText('Import choices')).toBeInTheDocument()
     expect(screen.getByText('Decision log')).toBeInTheDocument()
+    expect(screen.getByText('Recent memory use')).toBeInTheDocument()
+    expect(screen.getByText('task-link-editor')).toBeInTheDocument()
+    expect(screen.getByText('2 included')).toBeInTheDocument()
+    expect(screen.getByText('1 withheld')).toBeInTheDocument()
     expect(screen.getByText('2 approved')).toBeInTheDocument()
     expect(screen.getByText('1 goal')).toBeInTheDocument()
     expect(screen.getByText('Run Knit typecheck from web root after API changes.')).toBeInTheDocument()

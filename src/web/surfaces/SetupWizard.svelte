@@ -23,6 +23,7 @@
   interface Defaults {
     suggestedName?: string
     suggestedId?: string
+    path?: string
   }
   interface Status {
     initialized?: boolean
@@ -83,6 +84,7 @@
   let idError = $state<string | null>(null)
   let busy = $state(false)
   let loaded = $state(false)
+  let setupLoadError = $state<string | null>(null)
 
   let providers = $state<Record<string, ProviderMeta> | null>(null)
   let selectedProvider = $state<string | null>(null)
@@ -131,6 +133,24 @@
     return projectFetch(input, init, activeProjectId)
   }
 
+  async function readSetupJson<T extends { error?: string }>(response: Response): Promise<T> {
+    const json = (await response.json()) as T
+    if (!response.ok) {
+      throw new Error(json.error ?? `Setup request failed (${response.status})`)
+    }
+    return json
+  }
+
+  function displayProjectPath(rawPath?: string | null): string | null {
+    const trimmed = rawPath?.trim()
+    if (!trimmed) return null
+    const macHome = /^\/Users\/[^/]+(\/.*)?$/.exec(trimmed)
+    if (macHome) return `~${macHome[1] ?? ''}`
+    const linuxHome = /^\/home\/[^/]+(\/.*)?$/.exec(trimmed)
+    if (linuxHome) return `~${linuxHome[1] ?? ''}`
+    return trimmed
+  }
+
   function setupHref(nextStep: 1 | 2 | 3): string {
     return activeProjectId ? projectHref(activeProjectId, `/setup?step=${nextStep}`) : `/setup?step=${nextStep}`
   }
@@ -145,15 +165,16 @@
 
   $effect(() => {
     Promise.all([
-      setupFetch('/api/setup/defaults').then(r => r.json() as Promise<Defaults>),
-      setupFetch('/api/setup/status').then(r => r.json() as Promise<Status>),
+      setupFetch('/api/setup/defaults').then(r => readSetupJson<Defaults>(r)),
+      setupFetch('/api/setup/status').then(r => readSetupJson<Status>(r)),
     ])
       .then(([defaults, status]) => {
+        setupLoadError = null
         if (status.initialized && status.id) activeProjectId = status.id
         identity = {
           name: status.name || defaults.suggestedName,
           id: status.id || defaults.suggestedId,
-          path: status.path,
+          path: status.path ?? defaults.path,
           initialized: status.initialized,
           providerConfigured: status.providerConfigured,
         }
@@ -181,7 +202,8 @@
         }
         loaded = true
       })
-      .catch(() => {
+      .catch(error => {
+        setupLoadError = error instanceof Error ? error.message : 'Setup could not load this project.'
         loaded = true
       })
   })
@@ -498,23 +520,45 @@
   <div class="page"><p class="muted">Loading setup...</p></div>
 {:else}
   <div class="page">
-    <div class="step-header">
-      {#each [1, 2, 3] as n, i (n)}
-        {@const labels = ['Identity', 'Provider', 'Launch']}
-        <span class="dot" class:done={n < step} class:active={n === step}>
-          {n < step ? '✓' : n}
-        </span>
-        <span class="step-label">{labels[i]}</span>
-      {/each}
-    </div>
-
-    {#if step === 1}
-      <Card title="Name this project">
+    {#if setupLoadError}
+      <Card title="Setup needs a project folder">
         <Stack gap="3">
           <p class="muted">
-            Guildhall will write <code>guildhall.yaml</code> at <code>{identity.path ?? ''}</code>.
+            Open setup from a project in the Projects view so Guildhall knows which folder it is configuring.
+          </p>
+          <p class="error">{setupLoadError}</p>
+        </Stack>
+      </Card>
+      <Row justify="end" gap="2">
+        <Button variant="primary" onclick={() => nav('/projects')}>Projects</Button>
+      </Row>
+    {:else}
+      <div class="step-header">
+        {#each [1, 2, 3] as n, i (n)}
+          {@const labels = ['Identity', 'Provider', 'Launch']}
+          <span class="dot" class:done={n < step} class:active={n === step}>
+            {n < step ? '✓' : n}
+          </span>
+          <span class="step-label">{labels[i]}</span>
+        {/each}
+      </div>
+
+      {#if step === 1}
+      <Card title="Name this project">
+        <Stack gap="3">
+          {@const projectPath = displayProjectPath(identity.path)}
+          <p class="muted">
+            Guildhall will write <code>guildhall.yaml</code> in this project folder.
             These are just labels — you can change them later from Settings or by editing the file.
           </p>
+          {#if projectPath}
+            <div class="project-orientation">
+              <span>Project folder</span>
+              <code title={identity.path}>{projectPath}</code>
+            </div>
+          {:else}
+            <p class="error">Project folder unavailable. Open setup from a project in the Projects view.</p>
+          {/if}
           <label class="field">
             <span>Workspace name</span>
             <Input value={name} oninput={onNameInput} />
@@ -530,7 +574,7 @@
       </Card>
       <Row justify="end" gap="2">
         <Button variant="secondary" onclick={() => nav(dashboardHref())}>Cancel</Button>
-        <Button variant="primary" disabled={busy} onclick={saveIdentity}>
+        <Button variant="primary" disabled={busy || !identity.path} onclick={saveIdentity}>
           Save and continue →
         </Button>
       </Row>
@@ -725,6 +769,7 @@
         </Card>
       {/if}
     {/if}
+    {/if}
   </div>
 {/if}
 
@@ -792,6 +837,26 @@
     color: var(--text-muted);
     font-size: var(--fs-2);
     line-height: var(--lh-body);
+  }
+  .project-orientation {
+    display: grid;
+    gap: var(--s-1);
+    padding: var(--s-2) var(--s-3);
+    border: 1px solid var(--border);
+    border-radius: var(--r-1);
+    background: var(--bg-raised-2);
+  }
+  .project-orientation span {
+    color: var(--text-muted);
+    font-size: var(--fs-0);
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+  }
+  .project-orientation code {
+    width: fit-content;
+    max-width: 100%;
+    overflow-wrap: anywhere;
   }
   .section-title {
     display: flex;

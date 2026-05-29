@@ -57,6 +57,34 @@ babysit setup/import/provider/release states across multiple pages.
 
 ## Current Follow-Ups
 
+- [x] Align intake pressure-testing with the "all tasks are pressure-tested"
+  principle. Routed build-changing requests now persist `pressureTestRequired`,
+  ordinary task intake writes a system-owned `pressureTestSummary`, legacy
+  intake records receive a safe default summary, and deeper Pressure-Test
+  Intake domains now include task boundaries, acceptance criteria,
+  verification/TDD, and reviewer lenses. Remaining design work is tracked in
+  `internal/audits/2026-05-27-pressure-test-intake-alignment.md`.
+- [x] Add lightweight advisory reasoning lenses to review plans without adding
+  a new council UI. Review plans can now select contrarian, first-principles,
+  executor, outsider, and expansionist lenses as advisory-only inputs, with the
+  planner defaulting to the smallest useful set and constraining outsider /
+  expansionist to matching user-facing or future-opportunity work.
+- [x] Capture the broader role-alignment follow-up from the pressure-test
+  discussion. `internal/audits/2026-05-27-guildhall-role-alignment.md` now
+  records Guildhall's 0.9 trust role, obvious misses, and the release-priority
+  adjustment so runtime, memory, MCP, review, and UI work all point back to
+  turning rough intent into trustworthy project work.
+- [x] Add guided runtime backend setup to Settings. The Ready tab now shows a
+  Local runtime card with Podman detection, macOS support status, Podman machine
+  state, owner-approved setup/start actions, retry, and visible Host-run
+  compatibility. The backend records setup decisions/results in host-owned
+  runtime state, and the public quick-start/running docs describe the guided
+  setup path with a fresh 0.9 runtime screenshot.
+- [x] Add runtime-backed migration and health-check contracts. Guildhall now
+  defines stable runtime mount paths, checks project and `~/.guildhall` mounts,
+  verifies required runtime tools plus DNS and command-log persistence, and
+  records an accepted runtime-backed migration with rollback state while keeping
+  host-run compatibility available until the owner accepts the migration.
 - [x] Run a multi-agent 0.8 user-testing pass on the documented Narrative
   Harness project and repair the bounded regressions found live. The pass
   covered migration/runtime authority, workspace-intake depth, and
@@ -5807,6 +5835,221 @@ local 0.7 release-candidate build at `http://localhost:7777/projects/narrative-h
     a shared user-facing text normalizer used by Inbox, Thread, activity, and
     wire-event errors. The package and home-page current-docs label now report
     0.8.0 so fresh served UI does not identify itself as the previous release.
+  - [x] 0.9.0 now has an internal benchmark and Hermes-comparison planning
+    lane, deliberately placed after the higher-priority runtime, persistence,
+    proof-path, memory, MCP, task-shaping, and review-calibration work. The plan
+    lives at `internal/plans/2026-05-27-guildhall-0-9-benchmarks-and-hermes-comparison.md`
+    and prioritizes a Guildhall-native lifecycle eval, TBLite/Terminal-Bench
+    comparison, SWE-bench-style coding fixtures, and a careful Hermes comparison
+    runbook without public leaderboard-style claims.
+  - [x] The Hermes lane now has an honest comparison preflight instead of a
+    hand-written "comparison" story. `guildhall benchmarks compare hermes`
+    writes JSONL/Markdown output with explicit `inconclusive` /
+    `harness_failure` status when Hermes cannot run, including missing CLI,
+    missing benchmark entrypoints, missing provider credentials, and missing
+    Modal credentials. This fixes the reporting shape; it does not claim an
+    actual Guildhall-vs-Hermes task result exists yet.
+  - [x] The 0.9.0 benchmark lane now also tracks the question-resolution
+    primitive that unattended benchmarks likely need: multiple-choice questions
+    can carry recommended answers, benchmark/CLI runs can choose an explicit
+    automation policy, Guildhall-made answers are persisted separately from
+    human answers, and non-delegable decisions remain policy-blocked unless a
+    fixture supplies a synthetic answer.
+  - [x] Task-drawer escalation actions now follow ownership consistently.
+    Guildhall-owned blockers such as gate retries and worker timeouts show a
+    single agent action that resolves the escalation and resumes the task;
+    human-owned blockers such as provider dashboards, credentials, and external
+    setup show `I handled this...` / reframe actions without pretending
+    Guildhall can click through a real outside dependency.
+  - [x] First-run setup no longer opens as a blank, unscoped identity form. The
+    identity step now shows the project folder as an explicit orientation row,
+    renders home-relative paths for user folders, carries the project path in
+    setup defaults, and turns a missing `projectId` / failed setup load into a
+    clear `Setup needs a project folder` recovery card instead of `at .` plus
+    empty labels.
+  - [x] Condense the public first-read docs path for 0.8.0 and 0.9.0. The
+    homepage, guide overview, sidebar, nav, and breadcrumbs now make `Start
+    here` the real first stop, retitle the old introduction as `Why Guildhall
+    exists`, keep `Core concepts` as glossary support, and move the deeper loop
+    explanation under `How it works` as `How the work loop works`. Verified
+    with `pnpm docs:check-copy`, `pnpm docs:build`, and browser clicks through
+    the source and `/versions/0.8.0/` docs paths.
+  - [x] Make the docs header version label match the selected docs line. The
+    VitePress header now says `v0.8`, `v0.9`, or the selected archive line
+    instead of the generic `Version`, and the versioned nav-link sync works for
+    both root-hosted and `/guildhall`-hosted docs. Browser preview verified
+    current, `/next/`, `/versions/0.8.0/`, and `/versions/0.7.0/`.
+  - [x] Milestone 6 now has the first runtime command execution spine:
+    typed command requests and events, supervisor-backed runtime startup,
+    command execution as the `guildhall` runtime user, command timeout and
+    cancellation handling, JSONL evidence under local history, an API endpoint
+    for runtime commands, concrete Podman `create/start/exec` backend wiring,
+    and denied host-access failures translated into pending `mount_directory`
+    capability requests. Focused runtime/API tests pass for event ordering,
+    evidence records, idle keep-alive release, capability-request creation,
+    and the Podman command/mount/user contract. A local Podman smoke also
+    passed against the existing 0.9 runtime image, proving `guildhall-exec`
+    runs as `guildhall` with the repo and host `~/.guildhall` mounted.
+  - [x] Milestone 7 now has the runtime dev-server and browser-proof spine:
+    host-port allocation with conflict reporting, persisted dev-server records,
+    starting/running/stopped/failed/stale states, browser proof against exposed
+    host URLs, redacted log disclosure, start/list/stop/restart service APIs,
+    and Thread/task-drawer controls that show command, cwd, port mapping,
+    readiness, and proof status. Focused tests cover port allocation/release,
+    conflict handling, state reconciliation after runtime stop, API controls,
+    and Podman port publishing. A local Podman smoke published a disposable
+    runtime dev server on `127.0.0.1:45179` and fetched `package.json` through
+    the host port before cleanup.
+  - [x] Milestone 8 now has owner-approved capability grants instead of
+    ambient host access. Pending `mount_directory` requests carry reason, exact
+    host path, access level, duration, fallback, and task evidence; Thread lets
+    the owner approve read-only/read-write, narrow to an alternate path, deny,
+    or mark blocked; Settings lists active grants and revokes them. Approved
+    grants mount at `/mnt/guildhall-grants/<grant-id>`, Podman only receives
+    active grants, and MCP exposes active/denied/blocked/revoked request state.
+    Focused runtime/API/MCP/UI tests and typecheck passed. A local Podman proof
+    mounted a disposable folder read-only and verified the runtime user could
+    read it but could not write to it.
+  - [x] Milestone 9 now has the central persistence boundary in front of the
+    new runtime evidence surfaces. `GuildhallPersistence` covers typed records,
+    append-only events, artifact refs, placement scopes, visibility and commit
+    metadata, content hashes, compaction summaries, and evidence resolution.
+    Runtime command evidence, capability grant evidence, and context-debug
+    records now append persistence events. Runtime command JSONL is now treated
+    as migration input rather than an ongoing write format: the 0.9 migration
+    moves old JSONL into persistence and removes the legacy file, while reads
+    keep a temporary fallback for pre-migration installs. A static managed-path
+    guardrail test now fails new direct durable writes unless they live in
+    approved low-level persistence modules or the documented migration exception
+    inventory.
+  - [x] Milestone 10 now has typed proof paths and completion handoffs. Tasks
+    can carry task-scoped and project-scoped proof paths with safe launch steps
+    (copy command, open URL, manual step, external dashboard, blocked until
+    setup), expected evidence, and actual verification records. Completion
+    handoffs summarize automated, manual/browser, and provider proof without
+    overclaiming missing evidence. Context injection, spec/worker/reviewer/gate
+    prompt responsibilities, persistence records, and Journey rendering are all
+    covered by focused tests, typecheck, build, and a browser smoke of the
+    built dashboard.
+  - [x] Milestone 11 now has the first effective-memory spine. `memory-store`
+    normalizes lifecycle states (`observed`, `proposed`, `active`, `used`,
+    `retired`) and memory types across project facts, habits, user preferences,
+    project skills, codebase knowledge, and product ideas. It adapts existing
+    `MEMORY.md`, project/global `learning.json`, and `project-skills.json`
+    into deterministic queryable records. `effective-memory-packet` injects
+    only active/used matching memory into agent context, keeps proposed memory
+    withheld until accepted, clips rendered memory to preserve context budget,
+    and records memory use in context-debug.
+  - [x] Milestone 12 now exposes the 0.9 audit story through MCP. External
+    agents can read runtime, memory, learning, context-debug, local-history
+    health, and codebase-knowledge resources without reconstructing state from
+    shell reads. The project overview resource summarizes runtime health,
+    memory health, codebase-map freshness, and latest context-debug health.
+    Memory tools now list/read records, record observations, update lifecycle
+    status, and render the effective memory packet for a task. Broad resources
+    are clipped and redact common secret tokens; local history stays
+    health-only by default rather than dumping transcripts or command logs.
+    Evidence: `pnpm vitest run src/mcp-server` passed with 10 tests including
+    stdio reads for memory/runtime/context; `pnpm typecheck`, `pnpm build`, and
+    `git diff --check` passed.
+  - [x] Milestone 13 now shows the 0.9 owner-facing truth in the UI. Project
+    Overview surfaces runtime state, compatibility mode, memory health, primary
+    proof paths, and existing blocker/current-state cards. Journey shows
+    runtime evidence and remaining uncertainty next to proof paths, changed
+    files, review summaries, and completion handoff. Settings Guidance is now
+    Memory, with recent memory-use evidence, while Thread renders runtime state,
+    capability decisions, and behind-the-scenes splitting/reorientation in
+    owner language. Evidence: focused Svelte tests passed for Overview,
+    Settings, Thread, and Journey/drawer tabs (81 tests); `pnpm typecheck`
+    passed; `pnpm test:ui` passed after build (5 Playwright tests); live smoke
+    on the built service against Looma + Knit showed runtime stopped,
+    compatibility mode, memory health, primary proof paths, and Thread runtime
+    state.
+  - [x] Milestone 14 now has flexible work hierarchy and scoped work-item
+    starts. Tasks can carry `workKind`, hierarchy, and completion-boundary
+    fields while legacy `parentGoalId`, `parent` status, and split
+    recommendations still derive into the same model. The runtime computes
+    hierarchy nodes, rollups, subtree scope, work-list groups, and completion
+    boundary status without mixing dependencies into containment. The Work list
+    hides done/shelved work by default, reveals it on demand, and shows
+    breadcrumbs plus nested-work counts. The drawer uses containing/nested work
+    language, supports hierarchy-native parent links, and scoped Start uses the
+    task-specific start endpoint so unrelated ready work does not dispatch.
+    Public docs now include `Ways to work`, covering whole-project work,
+    feature-at-a-time New requests, focused work-item starts, setup/proof lanes,
+    and exploration/decision work. Evidence: focused runtime/Svelte tests
+    passed for hierarchy, intake wording, task endpoints, WorkTab, and
+    TaskDrawer (149 tests); `pnpm docs:build`, `pnpm typecheck`, and
+    `pnpm test:ui` passed; browser proof on a disposable three-level project
+    showed 3 of 5 work items visible by default, closed work reveal, app ->
+    feature -> implementation breadcrumbs, hierarchy-native drawer containing
+    work, no legacy parent-goal fallback copy, and `Start only this work item`
+    in the Action tab.
+  - [x] Milestone 15 now has task shaping and finishability artifacts in task
+    state. Tasks can carry task kind, readiness assessment, Definition of Done,
+    if-then blocker plans, context budget, decomposition reasons, and advisory
+    coordinator reflection candidates. Spec approval applies task shaping before
+    dispatch, and the picker refuses ready work whose persisted readiness still
+    says it needs a question, research/spike, a split, or deferral. Evidence:
+    `pnpm vitest run src/runtime/__tests__/task-readiness.test.ts
+    src/runtime/__tests__/task-decomposition.test.ts
+    src/runtime/__tests__/intake.test.ts --reporter=dot` passed with 44 tests;
+    `pnpm typecheck` and `git diff --check` passed. The tracker-form command
+    `pnpm test -- src/runtime/__tests__/task-readiness.test.ts
+    src/runtime/__tests__/task-decomposition.test.ts --reporter=dot` expanded
+    into the broader suite in this repo and hit the pre-existing
+    `CurrentTab.svelte.test.ts` recovery-action failures: missing `Rework spec`
+    button and `onRunEscalationAction` not provided.
+  - [x] Milestone 16 now separates the fixed-spec Pantry Pulse completion proof
+    from the zero-information spec-from-scratch proof, and the live-agent proof
+    now creates the app instead of merely narrating completion. Pantry Pulse has
+    app spec, completion boundary, expected hierarchy, proof checklist,
+    run-report template, recorded-run artifact, and an e2e-style deterministic
+    test. Live-agent evidence on 2026-05-29: the fixed spec recovered from
+    blueprint-sanity rejection, rejected stale worker self-critiques that had no
+    project-file changes, created the runnable Pantry Pulse app in the isolated
+    worktree, reached `done`, and browser-proved seeded items, expiring-soon
+    filtering, and the Mark used count update. Release-grade handoff, memory,
+    and MCP/context audit evidence still need to be wired into the live report
+    before treating this as the final 0.9 release acceptance proof.
+    Evidence: `GUILDHALL_LIVE_PANTRY_PROOF=1 GUILDHALL_PRESERVE_LIVE_PROOF=1
+    GUILDHALL_LIVE_PANTRY_PROJECT_PATH=/var/folders/fp/sdnhgkpn4c12nbb913bxnpym0000gn/T/guildhall-live-pantry-pulse-5Vh9A5
+    GUILDHALL_LIVE_PANTRY_TASK_ID=task-pantry-pulse-live pnpm exec vitest run
+    src/runtime/__tests__/app-spec-smoke.test.ts --reporter=verbose
+    --testNamePattern "uses live Guildhall agents"` passed with one live test
+    and six skipped fixture tests.
+    Lane 2 rerun on 2026-05-28 showed the design-quality machinery now improves
+    the front half of the run: the live spec created `.guildhall/design-system.yaml`
+    with semantic palette, segmented-control, badge/card/button, a11y, and copy
+    voice guidance. The app still did not complete. Blueprint sanity rejected the
+    approved Markdown spec because structured `acceptanceCriteria` was empty,
+    then task sizing converted the app spec into a parent with an unrelated
+    analytics/documentation child. Report and screenshots:
+    `internal/fixtures/app-spec-smoke/runs/2026-05-28-lane2-pantry-pulse-live/run-report.md`.
+    Follow-up on 2026-05-29: the design-quality proof now has a format-agnostic
+    palette-token audit for Pantry Pulse, covering CSS custom properties,
+    Sass/Less variables, JavaScript/TypeScript token objects, JSON/YAML tokens,
+    and similar token sources. The live benchmark now fails generic cool-blue or
+    medical-blue primary/accent choices for the domestic food mood unless an
+    accepted design decision packet justifies them.
   - [ ] Add the follow-on global scheduler that fairly spends the provider
     budget across all turned-on projects instead of requiring each project to
     be manually started and budgeted in isolation.
+  - [ ] Add and browser-proof the 0.10.0 OpenRouter provider setup path. The
+    implementation plan lives at
+    `internal/plans/2026-05-28-guildhall-0-10-openrouter-support.md` and should
+    treat OpenRouter as guided setup with model-lane presets, attribution,
+    privacy/cost routing, and listing-readiness proof rather than a generic
+    OpenAI-compatible URL field.
+  - [ ] Add the 0.10.0 structural/domain intelligence intake lane. The spec
+    lives at
+    `internal/specs/2026-05-29-guildhall-0-10-structural-domain-intelligence.md`
+    and should keep project, workspace, monorepo, package graph, domain group,
+    cross-cutting domain, executable unit, memory scope, and Git authority root
+    separate while producing context packets with prioritized includes,
+    summaries, handles, and auditable omissions.
+  - [ ] Add the 0.10.0 external task authority lane. The spec lives at
+    `internal/specs/2026-05-29-guildhall-0-10-external-task-authority.md` and
+    should treat Jira/Linear/GitHub Issues/Azure DevOps/Asana as planning
+    authorities while Guildhall keeps a local execution mirror with proof,
+    stale-state handling, safe proposed writes, and context-budget manifests.

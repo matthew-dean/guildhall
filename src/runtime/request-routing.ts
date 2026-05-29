@@ -126,7 +126,7 @@ function routeSingleRequest(input: RouteRequestInput): RouteRequestResult {
       title,
       safety: /\b(global|default)\b/.test(lower) ? 'global-write' : 'project-write',
       targetType: 'project',
-      pressureTestRequired: false,
+      pressureTestRequired: true,
       reason: 'settings or configuration change request',
       matchedSignals: ['settings_change'],
     }))
@@ -138,7 +138,7 @@ function routeSingleRequest(input: RouteRequestInput): RouteRequestResult {
       title,
       safety: 'project-write',
       targetType: 'project',
-      pressureTestRequired: false,
+      pressureTestRequired: true,
       reason: 'persona or practice proposal request',
       matchedSignals: ['persona_practice_proposal'],
     }))
@@ -150,7 +150,7 @@ function routeSingleRequest(input: RouteRequestInput): RouteRequestResult {
       title,
       safety: 'project-write',
       targetType: 'bug',
-      pressureTestRequired: false,
+      pressureTestRequired: true,
       reason: 'repair or triage request',
       matchedSignals: ['repair_triage'],
     }))
@@ -173,7 +173,7 @@ function routeSingleRequest(input: RouteRequestInput): RouteRequestResult {
     title,
     safety: 'project-write',
     targetType: 'task',
-    pressureTestRequired: false,
+    pressureTestRequired: true,
     reason: 'small concrete implementation request',
     matchedSignals: ['task_like'],
   }))
@@ -189,7 +189,7 @@ function one(input: {
   matchedSignals: string[]
 }): RouteRequestResult {
   const nextStep =
-    input.pressureTestRequired ? 'pressure-test-intake'
+    input.kind === 'pressure_test_intake' ? 'pressure-test-intake'
       : input.kind === 'project_question' ? 'answer-question'
         : input.kind === 'settings_proposal' ? 'settings-proposal'
           : input.kind === 'persona_practice_proposal' ? 'proposal-review'

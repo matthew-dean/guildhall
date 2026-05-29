@@ -1,10 +1,12 @@
 # Guildhall 0.9.0 Task Shaping And Finishability
 
-**Status:** proposed 0.9.0 direction  
-**Owner:** future Guildhall release planning  
-**Depends on:** 0.8.0 Pressure-Test Intake and Git Story Closure  
+**Status:** proposed 0.9.0 direction
+**Owner:** future Guildhall release planning
+**Depends on:** shipped 0.8.0 Pressure-Test Intake, Git Story Closure, and Task State Boundary baseline (`v0.8.0`, `docs/releases/0.8.0.md`)
 **Related sources:**
 
+- `internal/plans/2026-05-27-project-orientation-and-proof-paths.md`
+- `internal/design-notes/project-construction-manifesto.md`
 - `internal/specs/2026-05-22-guildhall-0-8-podman-project-runtime.md`
 - `internal/design-notes/ux-review-calibration-and-work-review-integration.md`
 - `internal/research/2026-05-25-ux-review-calibration-source-notes.md`
@@ -32,6 +34,10 @@ them into small product behaviors:
 - separate learning tasks from implementation tasks;
 - keep active work-in-progress low;
 - make completion evidence explicit;
+- make completed work orient the owner to current project state: what changed,
+  what can be done now, and where to click or run to prove it;
+- turn proof guidance into launchable, copyable, or manually actionable steps
+  when Guildhall can safely own the action;
 - make review evidence explicit, including calibrated UX review when a task
   changes user-facing comprehension, recovery, trust, or task flow;
 - require plan-completeness review so important governance, privacy, rollout,
@@ -40,6 +46,8 @@ them into small product behaviors:
 - centralize persistence so task state, evidence, logs, memory, artifacts,
   review audit, archives, and compaction all use one storage boundary;
 - move risky execution into an explicit runtime boundary;
+- suggest better-fit tools, libraries, shared abstractions, and visibility
+  helpers instead of generating everything bespoke;
 - escalate product, taste, risk, and release judgment instead of silently
   deciding those for the user.
 
@@ -186,6 +194,10 @@ Guildhall should take off the user's plate:
 - routing implementation, research, repair, release, and settings asks into
   different lanes;
 - preserving evidence and follow-up state.
+- orienting the user after work completes: what changed, what is possible now,
+  how to prove it, and what remains unverified.
+- noticing when a better-fit tool, library, project abstraction, preview
+  surface, seed script, or smoke test would make the work more repeatable.
 
 Guildhall should not take off the user's plate:
 
@@ -196,6 +208,8 @@ Guildhall should not take off the user's plate:
 - business or ethical tradeoffs;
 - granting ambient access to host paths, local daemons, browser state, or
   container sockets;
+- installing, adopting, or running new tooling paths that change the project
+  contract without confirmation;
 - permission to mutate Git history or publish work when policy says to ask.
 
 The key design question for every human step is:
@@ -204,6 +218,64 @@ The key design question for every human step is:
 > inspection it can safely do itself?
 
 ## Proposed 0.9.0 Capabilities
+
+### Project Orientation And Proof Paths
+
+Make project orientation and proof paths a central 0.9.0 finishability lane.
+The detailed source plan is
+`internal/plans/2026-05-27-project-orientation-and-proof-paths.md`.
+
+The product question this lane answers is:
+
+> What changed, what can I do now, and where do I click or run to prove it?
+
+Key product changes:
+
+- store current project orientation in checked-in `.guildhall/` project state,
+  with append-only evidence in local history;
+- add agent-authored, schema-validated proof paths and completion handoffs;
+- require agents to propose and refine proof paths as part of doing the work;
+- distinguish automated verification, manual proof, local proof, staging proof,
+  production proof, test-provider proof, and live-provider proof;
+- add confidence labels such as agent-proposed, discovered from config,
+  confirmed by successful run, owner-confirmed, stale, and unverified;
+- expose launch steps as copy/open/manual actions first, and only later as
+  managed long-running command buttons;
+- require readiness, status, stop/restart, port-conflict, log-inspection,
+  redaction, and reload-recovery behavior before Guildhall runs long-lived
+  local commands;
+- fold rare owner-attention items into the first list on Project Overview
+  instead of keeping a standalone Inbox by default;
+- keep Thread as the active command/conversation surface and Work as the task
+  operations surface;
+- rename task-level Overview to Summary so project Overview remains the only
+  Overview;
+- reduce task-drawer detail tabs to Summary, Spec, Journey, Review, and
+  Evidence, with Journey absorbing proof paths and completion handoffs.
+
+Preferred project IA direction:
+
+```text
+Project
+  Overview
+  Memory
+
+Thread
+Work
+Release
+Activity
+
+Settings
+```
+
+This lane should start data-model-first with a small visible Journey slice:
+
+1. add structured `ProofPath` and `CompletionHandoff` state;
+2. teach the spec, worker, reviewer, and coordinator agents to produce and
+   validate it;
+3. render proof paths and completion handoffs in task Journey;
+4. use the resulting data to reshape Project Overview around current-state
+   orientation.
 
 ### Task Readiness Score
 
@@ -379,6 +451,41 @@ This should start as a manual spike before becoming the default runtime:
    provenance;
 6. make denied or expired capabilities visible as task blockers.
 
+### Internal Benchmarks And Hermes Comparison
+
+Add benchmarks as a late 0.9.0 implementation lane after the runtime,
+persistence, proof-path, memory, MCP, task-shaping, and review-calibration
+work. The detailed source plan is
+`internal/plans/2026-05-27-guildhall-0-9-benchmarks-and-hermes-comparison.md`.
+
+This lane should measure Guildhall's actual finishability promise before it
+tries to publish any external score:
+
+- a Guildhall-native lifecycle eval for intake, readiness, decomposition,
+  worker scope, review, gate checks, proof paths, completion handoffs, memory
+  reuse, and MCP auditability;
+- a Terminal-Bench/TBLite-style adapter as the first high-value external
+  comparison, because it maps to terminal-backed project work and Hermes
+  documents the same benchmark family;
+- a SWE-bench-style coding lane for worker patch quality, starting with local
+  fixtures before public SWE-bench Lite or Verified infrastructure;
+- a Hermes comparison runbook that fixes model/provider settings, benchmark
+  version, task subset hash, timeout, retry policy, cost, latency, and evidence
+  paths before comparing results;
+- a question-resolution path for benchmark and CLI runs where multiple-choice
+  owner questions can carry one recommended answer, run-scoped automation
+  policy can auto-resolve eligible questions, and every Guildhall-made answer
+  is recorded separately from human input;
+- tau-bench-style policy/tool scenarios and OSWorld/WebArena-style browser or
+  desktop tasks as later follow-ons unless another 0.9 task explicitly depends
+  on them.
+
+The scorecard should include false-success rate, owner interventions,
+auto-resolutions, unnecessary questions, split quality, proof completeness,
+handoff quality, memory precision, auditability, cost, latency, and
+deterministic pass/fail. It should not produce public "Guildhall beats Hermes"
+claims.
+
 ## Public Docs Posture
 
 Public docs may lightly say Guildhall uses evidence-backed ideas from
@@ -402,6 +509,13 @@ Bad public framing:
   relationship.
 - A task cannot be marked ready for implementation without outcome, boundary,
   and proof fields.
+- A completed task produces an owner-facing handoff that says what changed,
+  what can be done now, how to prove it, what Guildhall verified, and what
+  remains unverified.
+- Project Overview can orient a cold user to current project state without
+  requiring transcript archaeology.
+- Proof paths can render copy/open/manual launch steps with confidence and
+  scope labels before any long-running process runner ships.
 - Human-facing intake cards ask one decision at a time and show only the
   evidence needed to answer that decision.
 - Research, decision, and implementation tasks have distinct completion

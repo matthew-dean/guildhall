@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "lastUpdated": "2026-05-24T05:46:41.084Z",
+  "lastUpdated": "2026-05-28T19:49:32.523Z",
   "tasks": [
     {
       "id": "looma-001",
@@ -826,6 +826,82 @@
       "revisionCount": 0,
       "createdAt": "2026-05-02T17:45:00Z",
       "updatedAt": "2026-05-07T18:44:00.000Z"
+    },
+    {
+      "id": "looma-004",
+      "title": "Move Looma to public GitHub and prepare MIT/package publishing",
+      "description": "Prepare Looma to be a public, reusable foundation for Guildhall-generated and user projects. Move or mirror the current Looma repository from its legacy Bitbucket Granola remote to github.com/threadlabs-studio/looma, set up proper MIT licensing, and verify the package publishing plan for the existing @threadlabs npm org. This task is tracking/setup work first: audit current local changes, remote state, package scopes, license headers, docs, CI, and release implications before pushing or publishing.",
+      "domain": "looma",
+      "projectPath": "../looma",
+      "status": "in-progress",
+      "priority": "high",
+      "dependsOn": [],
+      "outOfScope": [
+        "Changing Looma component APIs except where required for package metadata or licensing",
+        "Publishing npm packages before the repository/license/package plan is reviewed",
+        "Force-pushing or rewriting any shared remote history without explicit approval",
+        "Making Guildhall depend on a local Looma checkout for normal users"
+      ],
+      "acceptanceCriteria": [
+        {
+          "id": "ac-1",
+          "description": "Current Looma repo state is audited: active branch, dirty files, existing Bitbucket remote, package names/scopes, license files, CI/release scripts, and Storybook/docs publish surfaces are documented in a task note or artifact",
+          "verifiedBy": "review",
+          "met": false
+        },
+        {
+          "id": "ac-2",
+          "description": "GitHub remote strategy is implemented or ready for approval for git@github.com:threadlabs-studio/looma.git without losing existing history",
+          "verifiedBy": "review",
+          "met": false
+        },
+        {
+          "id": "ac-3",
+          "description": "MIT license is added or verified at the repo root, and package/docs metadata clearly identify Looma as MIT-licensed",
+          "verifiedBy": "review",
+          "met": false
+        },
+        {
+          "id": "ac-4",
+          "description": "Package publishing plan for the @threadlabs npm org is documented, including package names, access level, versioning, and any migration from @looma/* names",
+          "verifiedBy": "review",
+          "met": false
+        },
+        {
+          "id": "ac-5",
+          "description": "CI/release readiness is verified with Looma checks such as pnpm install, pnpm typecheck, pnpm build, pnpm test, and docs/Storybook build where available",
+          "verifiedBy": "automated",
+          "command": "pnpm install && pnpm typecheck && pnpm build && pnpm test && pnpm build:docs && pnpm build:storybook",
+          "met": false
+        },
+        {
+          "id": "ac-6",
+          "description": "Guildhall 0.9 design-quality tracker is updated with the final Looma public/MIT/package status and any follow-up tasks",
+          "verifiedBy": "review",
+          "met": false
+        }
+      ],
+      "notes": [
+        {
+          "at": "2026-05-28T19:49:32.523Z",
+          "by": "codex",
+          "content": "User requested an agent-tracked Looma public release setup for https://github.com/threadlabs-studio/looma and noted @threadlabs already exists as an npm org. Local Looma currently lives at /Users/matthew/git/oss/looma-knit/looma and still has origin git@bitbucket.org:mdean-projects/granola.git, so the task starts with an audit and approval-safe remote plan before any push/publish action."
+        },
+        {
+          "at": "2026-05-28T19:54:54.047Z",
+          "by": "codex",
+          "content": "Spawned Codex worker subagent Herschel (019e7025-5434-7fa2-a400-ebd7894f3a2c) for the Looma public GitHub/MIT/npm readiness work. Guildhall now tracks the handoff in .guildhall/external-agent-links.json via link-looma-004-codex-subagent."
+        },
+        {
+          "at": "2026-05-28T20:05:57.136Z",
+          "by": "codex",
+          "content": "Codex worker Herschel completed the Looma public setup handoff: pushed initial main to https://github.com/threadlabs-studio/looma at commit ecf731986d17e2ed0e2115dcafd2ba96e9fa1c70, added MIT/public release metadata in an isolated worktree, confirmed npm packages are not published, and identified remaining release blockers in @looma/core build/typecheck/test plus invalid npm auth. Guildhall external-agent link link-looma-004-codex-subagent is now completed."
+        }
+      ],
+      "gateResults": [],
+      "revisionCount": 0,
+      "createdAt": "2026-05-28T19:49:32.523Z",
+      "updatedAt": "2026-05-28T20:05:57.136Z"
     }
   ]
 }

@@ -12,11 +12,10 @@ readiness play out. It keeps the current state visible so you do not have to
 hold the whole run in your head.
 
 <picture class="gh-doc-picture">
-  <source srcset="../assets/ui-audit/0-7-0/projects.avif" type="image/avif" />
-  <img src="../assets/ui-audit/0-7-0/projects.png" alt="Guildhall projects home showing several local projects with status, activity, and start controls." />
+  <img src="../assets/ui-audit/0-9-0/projects.png" alt="Guildhall v0.9.0 projects home showing several local projects with status, activity, and start controls." />
 </picture>
 
-![Guildhall work view with active tasks, live progress, and reviewer signals.](../assets/ui-audit/0-7-0/work.png)
+![Guildhall v0.9.0 work view with active tasks, hierarchy, and reviewer signals.](../assets/ui-audit/0-9-0/work.png)
 
 ## What it does well
 

@@ -320,6 +320,7 @@ describe('general project status endpoints', () => {
     const defaultsBody = await defaults.json() as Record<string, any>
     expect(defaultsBody.suggestedName).toBe('Settings Test')
     expect(defaultsBody.suggestedId).toBe(PROJECT_ID)
+    expect(defaultsBody.path).toBe(tmpDir)
     expect(Array.isArray(defaultsBody.localModels)).toBe(true)
     expect(Array.isArray(defaultsBody.cloudModels)).toBe(true)
   })

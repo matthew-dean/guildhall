@@ -1,0 +1,50 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+node_version="$(node --version 2>/dev/null || true)"
+python_version="$(python3 --version 2>/dev/null || true)"
+
+jq -n \
+  --arg apiVersion "1" \
+  --arg imageFamily "guildhall-runtime-debian" \
+  --arg osDistribution "${GUILDHALL_RUNTIME_OS:-debian}" \
+  --arg osVersion "${GUILDHALL_RUNTIME_DEBIAN_VERSION:-13}" \
+  --arg osCodename "${GUILDHALL_RUNTIME_DEBIAN_CODENAME:-trixie}" \
+  --arg imageTag "${GUILDHALL_RUNTIME_IMAGE_TAG:-}" \
+  --arg nodeVersion "$node_version" \
+  --arg pythonVersion "$python_version" \
+  --arg projectRoot "${GUILDHALL_PROJECT_ROOT:-}" \
+  --arg guildhallHome "${GUILDHALL_HOME:-}" \
+  --arg projectId "${GUILDHALL_PROJECT_ID:-}" \
+  --arg runtimeId "${GUILDHALL_RUNTIME_ID:-}" \
+  '{
+    apiVersion: $apiVersion,
+    image: {
+      family: $imageFamily,
+      tag: ($imageTag | if . == "" then null else . end),
+      os: {
+        distribution: $osDistribution,
+        version: $osVersion,
+        codename: $osCodename
+      }
+    },
+    versions: {
+      node: $nodeVersion,
+      python: $pythonVersion
+    },
+    executables: [
+      "guildhall-runtime",
+      "guildhall-exec",
+      "guildhall-healthcheck",
+      "guildhall-capability-request",
+      "guildhall-runtime-info"
+    ],
+    mounts: {
+      projectRoot: $projectRoot,
+      guildhallHome: $guildhallHome
+    },
+    project: {
+      id: ($projectId | if . == "" then null else . end),
+      runtimeId: ($runtimeId | if . == "" then null else . end)
+    }
+  }'

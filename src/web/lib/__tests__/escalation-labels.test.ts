@@ -137,6 +137,18 @@ describe('escalationUserGuidance', () => {
       nextStatus: 'in_progress',
     })
   })
+
+  it('treats gate failures as Guildhall-owned retries', () => {
+    const guidance = escalationUserGuidance({
+      agentId: 'gate-checker',
+      reason: 'gate_hard_failure',
+      summary: 'Verification failed.',
+    })
+
+    expect(guidance.title).toBe('Guildhall can retry the gates.')
+    expect(guidance.nextStep).toContain('Retry gates')
+    expect(guidance.actionOwner).toBe('guildhall')
+  })
 })
 
 describe('roleLabel', () => {

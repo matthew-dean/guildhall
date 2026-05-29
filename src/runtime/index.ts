@@ -55,6 +55,84 @@ export {
   REMEDIATION_ACTIONS,
   DESTRUCTIVE_REMEDIATION_ACTIONS,
 } from './remediation.js'
+export {
+  discoverDesignPreviewAdapter,
+  DESIGN_STORIES_FILE,
+  DesignStory,
+  DesignStoryManifest,
+} from './design-preview.js'
+export type {
+  DesignPreviewAdapter,
+  DesignStory as DesignStoryType,
+  DesignStoryManifest as DesignStoryManifestType,
+  StorybookPreviewAdapter,
+} from './design-preview.js'
+export {
+  EXTERNAL_AGENT_LINKS_FILE,
+  ExternalAgentLink,
+  ExternalAgentLinkProvider,
+  ExternalAgentLinkStatus,
+  ExternalAgentLinksStore,
+  listExternalAgentLinks,
+  readExternalAgentLinksStore,
+  recordExternalAgentLink,
+  updateExternalAgentLinkStatus,
+} from './external-agent-links.js'
+export type {
+  ExternalAgentLink as ExternalAgentLinkType,
+  ExternalAgentLinkInput,
+  ExternalAgentLinkProvider as ExternalAgentLinkProviderType,
+  ExternalAgentLinkStatus as ExternalAgentLinkStatusType,
+  ExternalAgentLinksStore as ExternalAgentLinksStoreType,
+} from './external-agent-links.js'
+export {
+  DESIGN_TASTE_FILE,
+  DesignTaste,
+  DesignTasteLayer,
+  DesignTasteOpinions,
+  DesignTasteSource,
+  EffectiveDesignTastePacket,
+  InteractionSemanticsTaste,
+  PaletteStrategyTaste,
+  PatternRecipeTaste,
+  VisualDirectionTaste,
+  designTastePath,
+  loadEffectiveDesignTaste,
+  summarizeDesignTaste,
+  userDesignTastePath,
+} from './design-taste.js'
+export type {
+  DesignTaste as DesignTasteType,
+  DesignTasteInput,
+  DesignTasteLayer as DesignTasteLayerType,
+  DesignTasteOpinions as DesignTasteOpinionsType,
+  DesignTasteSource as DesignTasteSourceType,
+  EffectiveDesignTastePacket as EffectiveDesignTastePacketType,
+  InteractionSemanticsTaste as InteractionSemanticsTasteType,
+  PaletteStrategyTaste as PaletteStrategyTasteType,
+  PatternRecipeTaste as PatternRecipeTasteType,
+  VisualDirectionTaste as VisualDirectionTasteType,
+} from './design-taste.js'
+export {
+  DesignSystemCatalog,
+  DesignSystemCatalogEntry,
+  buildDesignSystemCatalog,
+} from './design-system-catalog.js'
+export type {
+  DesignSystemCatalog as DesignSystemCatalogType,
+  DesignSystemCatalogEntry as DesignSystemCatalogEntryType,
+} from './design-system-catalog.js'
+export {
+  DesignIntentPlatform,
+  DesignIntentPreviewMode,
+  DesignIntentSurrogate,
+  buildDesignIntentSurrogate,
+} from './design-intent-surrogate.js'
+export type {
+  DesignIntentPlatform as DesignIntentPlatformType,
+  DesignIntentPreviewMode as DesignIntentPreviewModeType,
+  DesignIntentSurrogate as DesignIntentSurrogateType,
+} from './design-intent-surrogate.js'
 export type {
   RemediationTrigger,
   RemediationTriggerKind,
@@ -78,6 +156,73 @@ export {
   DEFAULT_PORT_STRIDE,
   DEFAULT_ENV_PREFIX_TEMPLATE,
 } from './slot-allocator.js'
+export {
+  detectRuntimeBackendSetup,
+  runRuntimeBackendSetupAction,
+} from './runtime-backend-setup.js'
+export {
+  CompletionHandoff,
+  buildCompletionHandoff,
+  recordCompletionHandoff,
+  renderCompletionHandoffContext,
+  reviewCompletionHandoff,
+} from './completion-handoff.js'
+export type {
+  CompletionHandoff as CompletionHandoffType,
+} from './completion-handoff.js'
+export {
+  ExpectedEvidence,
+  EvidenceKind,
+  LaunchStep,
+  ProofPath,
+  ProofPathScope,
+  VerificationRecord,
+  buildProofPathContext,
+  buildTaskProofPath,
+  recordProofPath,
+} from './proof-paths.js'
+export type {
+  EvidenceKind as EvidenceKindType,
+  ExpectedEvidence as ExpectedEvidenceType,
+  LaunchStep as LaunchStepType,
+  ProofPath as ProofPathType,
+  ProofPathScope as ProofPathScopeType,
+  VerificationRecord as VerificationRecordType,
+} from './proof-paths.js'
+export {
+  buildRuntimeMountLayout,
+  runRuntimeHealthChecks,
+  runtimeProjectSlug,
+} from './runtime-health.js'
+export {
+  applyProjectRuntimeMigration,
+  planProjectRuntimeMigration,
+  rollbackProjectRuntimeMigration,
+} from './project-runtime-migration.js'
+export type {
+  RuntimeBackendCommandRunner,
+  RuntimeBackendSetupAction,
+  RuntimeBackendSetupActionId,
+  RuntimeBackendSetupActionInput,
+  RuntimeBackendSetupActionResult,
+  RuntimeBackendSetupDetector,
+  RuntimeBackendSetupOptions,
+  RuntimeBackendSetupReadout,
+  RuntimeBackendSetupStatus,
+} from './runtime-backend-setup.js'
+export type {
+  RuntimeHealthCheck,
+  RuntimeHealthCommandResult,
+  RuntimeHealthCommandRunner,
+  RuntimeHealthOptions,
+  RuntimeHealthReport,
+} from './runtime-health.js'
+export type {
+  ApplyProjectRuntimeMigrationInput,
+  ApplyProjectRuntimeMigrationResult,
+  ProjectRuntimeMigrationPlan,
+  RollbackProjectRuntimeMigrationResult,
+} from './project-runtime-migration.js'
 export type {
   RuntimeIsolationConfig,
   Slot,
@@ -130,11 +275,17 @@ export type {
   FrontierRunRecord as FrontierRunRecordType,
   EscapedMissRecord as EscapedMissRecordType,
 } from './review-audit-store.js'
-export { buildReviewPlan, ensureTaskReviewPlanRecorded } from './review-planner.js'
+export {
+  buildReviewPlan,
+  buildTaskReviewRiskProfile,
+  ensureTaskReviewPlanRecorded,
+  evaluateReviewArtifactReadiness,
+} from './review-planner.js'
 export type {
   BuildReviewPlanInput,
   EnsureTaskReviewPlanRecordedInput,
   EnsureTaskReviewPlanRecordedResult,
+  ReviewArtifactReadiness,
 } from './review-planner.js'
 export {
   CalibrationArtifact,
@@ -162,6 +313,78 @@ export type {
   CalibrationReviewPacket,
   ReviewCalibrationRecipe as ReviewCalibrationRecipeType,
 } from './review-calibration.js'
+export {
+  defaultProjectRuntimeState,
+  readProjectRuntimeState,
+  writeProjectRuntimeState,
+} from './project-runtime-store.js'
+export type {
+  ProjectRuntimeBackendName,
+  ProjectRuntimeStatus,
+  ProjectRuntimeHealthStatus,
+  RuntimeKeepAliveReason,
+  ProjectRuntimeImageState,
+  ProjectRuntimeMountState,
+  ProjectRuntimePort,
+  ProjectRuntimeHealth,
+  ProjectRuntimeState,
+} from './project-runtime-store.js'
+export {
+  ProjectRuntimeSupervisor,
+  NoopProjectRuntimeBackend,
+} from './project-runtime-supervisor.js'
+export type {
+  RuntimeStartReason,
+  ProjectRuntimeBackend,
+  RuntimeBackendCommandRequest,
+  RuntimeBackendCommandEvent,
+  ProjectRuntimeSupervisorOptions,
+} from './project-runtime-supervisor.js'
+export {
+  RuntimeCommandEventSchema,
+  ProjectRuntimeCommandRequest,
+  appendRuntimeCommandEvidence,
+  createRuntimeCommandId,
+  parseDeniedHostAccess,
+  readRuntimeCommandEvidence,
+  suggestedCapabilityMountForHostPath,
+} from './project-runtime-command.js'
+export {
+  PodmanProjectRuntimeBackend,
+} from './podman-project-runtime-backend.js'
+export type {
+  PodmanProjectRuntimeBackendOptions,
+} from './podman-project-runtime-backend.js'
+export {
+  DevServerManager,
+  PodmanDevServerLauncher,
+  readRuntimeDevServers,
+  redactLogs,
+  writeRuntimeDevServers,
+} from './dev-server-manager.js'
+export type {
+  DevServerLauncher,
+  DevServerRecord,
+  DevServerReadiness,
+  DevServerStatus,
+  StartDevServerRequest,
+} from './dev-server-manager.js'
+export {
+  RuntimePortConflictError,
+  allocateRuntimePort,
+  isHostPortAvailable,
+  releaseRuntimePort,
+} from './port-router.js'
+export type {
+  RuntimePortAllocationRequest,
+  RuntimePortRange,
+  RuntimePortReservation,
+} from './port-router.js'
+export type {
+  RuntimeCommandEvent,
+  RuntimeCommandEvidenceRecord,
+  RuntimeCommandResult,
+} from './project-runtime-command.js'
 export {
   ReviewRecipeBundleMetadata,
   ReviewPlanningCalibrationCase,
@@ -220,12 +443,21 @@ export * from './pressure-test-intake.js'
 export * from './commit-story.js'
 export * from './language-map.js'
 export * from './migrations.js'
+export * from './context-observability.js'
+export * from './learning.js'
 export * from './runtime-compatibility.js'
 export * from './done-task-summary.js'
 export * from './task-sizing-calibration.js'
 export * from './worker-modes.js'
 export * from './artifact-store.js'
 export * from './capability-requests.js'
+export * from './capability-grants.js'
+export * from './memory-store.js'
+export * from './effective-memory-packet.js'
+export * from './design-feedback.js'
+export * from './design-lens-review.js'
+export * from './improvement-review.js'
+export * from './design-system-discovery.js'
 export type {
   PackageManager,
   GateName,
@@ -296,6 +528,25 @@ export type {
   ApproveSpecResult,
   ResumeExploringInput,
 } from './intake.js'
+export {
+  applyRunAutomationPolicy,
+  summarizeScopedRun,
+} from './run-automation.js'
+export type {
+  RunAutomationPolicy,
+  RunAutomationResolution,
+  RunAutomationResult,
+  ScopedRunSummary,
+} from './run-automation.js'
+export {
+  runGuildhallTaskOnce,
+} from './run-once.js'
+export type {
+  RunOnceAutomationPolicy,
+  RunOnceInput,
+  RunOnceProofMode,
+  RunOnceReport,
+} from './run-once.js'
 export {
   createMetaIntakeTask,
   approveMetaIntake,

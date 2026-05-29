@@ -43,6 +43,7 @@ import { cpSync, existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, wri
 import { tmpdir } from 'node:os'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { assertRuntimeReleaseReady, buildReleaseManifest } from './release-manifest.mjs'
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..')
 const MANIFEST = join(ROOT, 'package.json')
@@ -109,6 +110,15 @@ if (manifest.version !== nextVersion) {
   log(`Bumped package.json to ${nextVersion}.`)
 } else {
   log(`package.json already at ${nextVersion}; continuing without a manifest bump.`)
+}
+
+const releaseManifest = buildReleaseManifest({
+  guildhallVersion: nextVersion,
+})
+try {
+  assertRuntimeReleaseReady(releaseManifest, { dryRun: flags.dryRun })
+} catch (error) {
+  die(error instanceof Error ? error.message : String(error))
 }
 
 // ---------------------------------------------------------------------------

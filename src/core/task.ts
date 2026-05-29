@@ -454,9 +454,187 @@ export const TaskRequest = z.object({
   kind: TaskRequestKind,
   title: z.string(),
   routingSummary: z.string(),
+  pressureTestRequired: z.boolean().default(true),
   createdAt: z.string(),
 })
 export type TaskRequest = z.infer<typeof TaskRequest>
+
+export const WorkKind = z.enum([
+  'app_spec',
+  'feature_spec',
+  'implementation',
+  'setup',
+  'verification',
+  'release',
+  'research',
+  'decision',
+  'cleanup',
+  'learning',
+])
+export type WorkKind = z.infer<typeof WorkKind>
+
+export const WorkHierarchy = z.object({
+  parentId: z.string().optional(),
+  childIds: z.array(z.string()).default([]),
+  order: z.number().default(0),
+  depth: z.number().int().nonnegative().optional(),
+  path: z.array(z.string()).optional(),
+})
+export type WorkHierarchy = z.infer<typeof WorkHierarchy>
+
+export const WorkCompletionBoundary = z.object({
+  summary: z.string(),
+  requiredChildPolicy: z.enum(['all_required_done', 'selected_children_done', 'manual_handoff']),
+  requiredChildIds: z.array(z.string()).optional(),
+  proofPathRequired: z.boolean().default(false),
+  handoffRequired: z.boolean().default(false),
+  deferAllowed: z.boolean().default(false),
+})
+export type WorkCompletionBoundary = z.infer<typeof WorkCompletionBoundary>
+
+export const TaskKind = z.enum([
+  'implementation',
+  'research',
+  'decision',
+  'spike',
+  'cleanup',
+  'verification',
+  'release',
+  'learning',
+])
+export type TaskKind = z.infer<typeof TaskKind>
+
+export const TaskReadinessDimensionId = z.enum([
+  'outcome_clarity',
+  'size',
+  'proofability',
+  'context_load',
+  'dependency_risk',
+  'uncertainty',
+  'user_judgment_exposure',
+])
+export type TaskReadinessDimensionId = z.infer<typeof TaskReadinessDimensionId>
+
+export const TaskReadinessRecommendation = z.enum([
+  'ready',
+  'needs_one_question',
+  'needs_research_spike',
+  'split',
+  'shelve_defer',
+])
+export type TaskReadinessRecommendation = z.infer<typeof TaskReadinessRecommendation>
+
+export const DefinitionOfDone = z.object({
+  items: z.array(z.string()).default([]),
+  evidenceRequired: z.array(z.string()).default([]),
+  updatedAt: z.string().optional(),
+  createdBy: z.string().default('task-readiness'),
+})
+export type DefinitionOfDone = z.infer<typeof DefinitionOfDone>
+
+export const IfThenBlockerPlan = z.object({
+  if: z.string(),
+  then: z.string(),
+  owner: z.enum(['guildhall', 'owner', 'external']).default('guildhall'),
+  reason: z.string().optional(),
+})
+export type IfThenBlockerPlan = z.infer<typeof IfThenBlockerPlan>
+
+export const ContextBudgetEstimate = z.object({
+  estimatedTokens: z.number().int().nonnegative(),
+  risk: z.enum(['low', 'medium', 'high']),
+  fitsInOneWorkerBrief: z.boolean(),
+  reasons: z.array(z.string()).default([]),
+})
+export type ContextBudgetEstimate = z.infer<typeof ContextBudgetEstimate>
+
+export const TaskReadinessDimension = z.object({
+  id: TaskReadinessDimensionId,
+  status: z.enum(['ok', 'warn', 'blocked']),
+  summary: z.string(),
+  evidence: z.array(z.string()).default([]),
+})
+export type TaskReadinessDimension = z.infer<typeof TaskReadinessDimension>
+
+export const TaskReadinessAssessment = z.object({
+  taskKind: TaskKind,
+  recommendation: TaskReadinessRecommendation,
+  summary: z.string(),
+  dimensions: z.array(TaskReadinessDimension),
+  definitionOfDone: DefinitionOfDone,
+  blockerPlans: z.array(IfThenBlockerPlan).default([]),
+  contextBudget: ContextBudgetEstimate,
+  openQuestion: z.object({
+    prompt: z.string(),
+    reason: z.string(),
+  }).optional(),
+  assessedAt: z.string(),
+  assessedBy: z.string().default('coordinator-readiness'),
+})
+export type TaskReadinessAssessment = z.infer<typeof TaskReadinessAssessment>
+
+export const ReviewRiskRecipe = z.object({
+  recipeId: z.string(),
+  version: z.string(),
+  required: z.boolean().default(true),
+  releaseBlocking: z.boolean().default(false),
+  lanes: z.array(z.string()).default([]),
+  requiredArtifacts: z.array(z.string()).default([]),
+  reason: z.string(),
+})
+export type ReviewRiskRecipe = z.infer<typeof ReviewRiskRecipe>
+
+export const ReviewRiskProfile = z.object({
+  lanes: z.array(z.string()).default([]),
+  recipes: z.array(ReviewRiskRecipe).default([]),
+  requiredArtifacts: z.array(z.string()).default([]),
+  artifactPolicy: z.enum(['advisory', 'required_before_review']).default('advisory'),
+  assessedAt: z.string(),
+  assessedBy: z.string().default('coordinator-review-planner'),
+})
+export type ReviewRiskProfile = z.infer<typeof ReviewRiskProfile>
+
+export const TaskDecompositionReasonCode = z.enum([
+  'too_broad',
+  'unclear_outcome',
+  'missing_proof_path',
+  'too_much_context',
+  'hidden_dependency',
+  'product_judgment_required',
+  'mixed_research_and_implementation',
+])
+export type TaskDecompositionReasonCode = z.infer<typeof TaskDecompositionReasonCode>
+
+export const TaskDecompositionRecord = z.object({
+  action: z.enum(['keep', 'ask_one_question', 'research_first', 'split', 'defer']),
+  reasons: z.array(z.object({
+    code: TaskDecompositionReasonCode,
+    detail: z.string(),
+  })).default([]),
+  childDrafts: z.array(z.object({
+    title: z.string(),
+    kind: TaskKind,
+    reason: z.string(),
+    dependsOn: z.array(z.string()).default([]),
+    definitionOfDone: DefinitionOfDone,
+  })).default([]),
+  createdAt: z.string(),
+  createdBy: z.string().default('task-decomposition'),
+})
+export type TaskDecompositionRecord = z.infer<typeof TaskDecompositionRecord>
+
+export const CoordinatorReflectionRecord = z.object({
+  summary: z.string(),
+  candidates: z.array(z.object({
+    kind: z.enum(['practice', 'preference']),
+    title: z.string(),
+    rationale: z.string(),
+    status: z.enum(['proposed', 'accepted', 'rejected']).default('proposed'),
+  })).default([]),
+  createdAt: z.string(),
+  createdBy: z.string().default('coordinator-reflection'),
+})
+export type CoordinatorReflectionRecord = z.infer<typeof CoordinatorReflectionRecord>
 
 export const RequestIntakeComponentKind = z.enum([
   'policy_decision',
@@ -469,6 +647,47 @@ export const RequestIntakeComponentKind = z.enum([
   'release_plan',
 ])
 export type RequestIntakeComponentKind = z.infer<typeof RequestIntakeComponentKind>
+
+export const PressureTestDegree = z.enum(['automatic', 'guided', 'deep'])
+export type PressureTestDegree = z.infer<typeof PressureTestDegree>
+
+export const PressureTestCheck = z.object({
+  id: z.string(),
+  title: z.string(),
+  status: z.enum(['system-check', 'needs-owner-judgment']),
+  reason: z.string(),
+})
+export type PressureTestCheck = z.infer<typeof PressureTestCheck>
+
+export const PressureTestSummary = z.object({
+  systemOwned: z.boolean(),
+  degree: PressureTestDegree,
+  qualityBar: z.string(),
+  ownerQuestionPolicy: z.string(),
+  checks: z.array(PressureTestCheck),
+})
+export type PressureTestSummary = z.infer<typeof PressureTestSummary>
+
+const DEFAULT_PRESSURE_TEST_SUMMARY: PressureTestSummary = {
+  systemOwned: true,
+  degree: 'automatic',
+  qualityBar: 'Apply enough pressure to make this task trustworthy without asking the owner to choose a process.',
+  ownerQuestionPolicy: 'Only ask when the answer could change product intent, quality bar, risk tolerance, release boundary, or a tradeoff the repo cannot decide on its own.',
+  checks: [
+    {
+      id: 'owner-intent',
+      title: 'Owner intent',
+      status: 'system-check',
+      reason: 'Guildhall infers intent from the request and project evidence unless owner judgment would change the work.',
+    },
+    {
+      id: 'verification',
+      title: 'Verification',
+      status: 'system-check',
+      reason: 'Guildhall must identify how this work can be proven before implementation starts.',
+    },
+  ],
+}
 
 export const RequestIntake = z.object({
   intent: z.enum([
@@ -489,6 +708,7 @@ export const RequestIntake = z.object({
     title: z.string(),
     role: z.string(),
   })).default([]),
+  pressureTestSummary: PressureTestSummary.default(DEFAULT_PRESSURE_TEST_SUMMARY),
   clarifyingQuestions: z.array(z.string()).default([]),
   createdAt: z.string(),
   createdBy: z.string(),
@@ -618,6 +838,17 @@ export const Task = z.object({
   proposedBy: z.string().optional(),          // agent id that proposed the task
   proposalRationale: z.string().optional(),   // why the proposing agent thinks this is worth doing
   parentGoalId: z.string().optional(),        // FR-23 business envelope — tasks carry a goalId
+  workKind: WorkKind.optional(),
+  hierarchy: WorkHierarchy.optional(),
+  completionBoundary: WorkCompletionBoundary.optional(),
+  taskKind: TaskKind.optional(),
+  taskReadiness: TaskReadinessAssessment.optional(),
+  reviewRisk: ReviewRiskProfile.optional(),
+  definitionOfDone: DefinitionOfDone.optional(),
+  blockerPlans: z.array(IfThenBlockerPlan).optional(),
+  contextBudget: ContextBudgetEstimate.optional(),
+  decomposition: TaskDecompositionRecord.optional(),
+  coordinatorReflections: z.array(CoordinatorReflectionRecord).optional(),
 
   // Task sizing asks whether this is a good-sized unit of work for one agent
   // implementation/review loop. Large scores should be split into linked child
@@ -653,6 +884,12 @@ export const Task = z.object({
       createdBy: z.string(),
     })
     .optional(),
+
+  // Proof paths and completion handoffs are public task artifacts generated by
+  // the 0.9 finishability flow. Runtime owns their detailed schemas; core keeps
+  // these fields permissive so older queues and UI payloads can carry them.
+  proofPaths: z.array(z.unknown()).optional(),
+  completionHandoff: z.unknown().optional(),
 
   // FR-22: recorded when a worker pre-rejects the task, or when the
   // orchestrator shelves a task per a policy decision (e.g. FR-21 human_only).

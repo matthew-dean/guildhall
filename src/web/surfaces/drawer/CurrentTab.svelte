@@ -46,6 +46,7 @@
     onShapeDraft: () => void
     onOpenSpecTab: () => void
     onOpenEscalationAction: (escalationId: string, mode: 'retry' | 'resolve') => void
+    onRunEscalationAction: (escalationId: string) => void
     onAnswerQuestion: (questionId: string, answer: string) => Promise<void>
   }
 
@@ -62,6 +63,7 @@
     onShapeDraft,
     onOpenSpecTab,
     onOpenEscalationAction,
+    onRunEscalationAction,
     onAnswerQuestion,
   }: Props = $props()
 
@@ -132,7 +134,7 @@
       if (isProjectRunActive()) {
         return 'Approved and queued. Guildhall is already running for this project, so this task will stay in the queue until the coordinator picks it.'
       }
-      return 'Approved and queued. Start Guildhall when you want it to pick this up.'
+      return 'Approved and queued. Start only this work item when you want Guildhall to pick it up.'
     }
     if (turn.taskStatus === 'import_draft' && !turn.liveAgent) {
       return 'Imported from your project notes, but not ready for a worker yet. Next step: turn this note into a task brief with scope, evidence, and acceptance criteria.'
@@ -197,7 +199,7 @@
 
   function runLabel(turn: TaskThreadInFlightTurn): string {
     switch (turn.taskStatus) {
-      case 'ready': return hasIncompleteTaskChecklist(turn) ? briefFixButtonLabel(turn) : 'Start work'
+      case 'ready': return hasIncompleteTaskChecklist(turn) ? briefFixButtonLabel(turn) : 'Start only this work item'
       case 'import_draft': return 'Draft task brief'
       case 'exploring':
         if (turn.importedDraft || hasIncompleteTaskChecklist(turn)) return 'Continue shaping brief'
@@ -438,21 +440,30 @@
               <Button variant="secondary" onclick={onOpenSpecTab}>View spec and evidence</Button>
               {#if guidance.actionOwner === 'user'}
                 <Button
+                  variant="agent"
+                  disabled={busy}
+                  onclick={() => onOpenEscalationAction(turn.escalationId, 'retry')}
+                >
+                  <Icon name="sparkles" size={14} />
+                  {recoveryAction.label}
+                </Button>
+                <Button
                   variant="secondary"
                   disabled={busy}
                   onclick={() => onOpenEscalationAction(turn.escalationId, 'resolve')}
                 >
                   I handled this...
                 </Button>
+              {:else}
+                <Button
+                  variant="agent"
+                  disabled={busy || runBusy}
+                  onclick={() => onRunEscalationAction(turn.escalationId)}
+                >
+                  <Icon name="sparkles" size={14} />
+                  {recoveryAction.label}
+                </Button>
               {/if}
-              <Button
-                variant="agent"
-                disabled={busy}
-                onclick={() => onOpenEscalationAction(turn.escalationId, 'retry')}
-              >
-                <Icon name="sparkles" size={14} />
-                {recoveryAction.label}
-              </Button>
             </Row>
             {#if turn.activity?.length}
               <section class="state-section" aria-label="Activity log">

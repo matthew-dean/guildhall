@@ -8,7 +8,10 @@ Date: 2026-05-25
 
 ## Status
 
-Proposed 0.9.0 planning slice.
+Implemented for the 0.9.0 review-calibration slice. The current code includes
+the corpus and recipe schemas, seed cases across UX and non-UX lanes, grading,
+escaped-miss draft creation, persistence-backed audit records, task
+`reviewRisk` projection, and required-artifact readiness checks.
 
 ## Source docs
 

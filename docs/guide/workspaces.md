@@ -14,7 +14,8 @@ A **workspace** is the advanced shape for related projects that need to be
 coordinated as one effort. Use it when the folders have separate setup/startup
 contracts but the work has to be planned together. For example, Looma and Knit
 are separate buildable projects, but Knit product needs can drive Looma
-primitive design.
+primitive design, while Looma's component docs and metadata can teach agents
+which primitive, variant, prop, and layout control to choose.
 
 In that shape, the workspace has a lightweight **council**: the coordination
 rules that explain how the child projects influence each other. The council is
@@ -70,6 +71,14 @@ over multiple buildable projects:
 In a workspace, the parent coordinates; the child project runs. That means a
 Looma task bootstraps Looma, a Knit task bootstraps Knit, and a cross-project
 task gets split or linked so each side has an explicit lane.
+
+For a design-system workspace, that coordination is part of the product
+contract. Looma should grow into an agent-ready UI library: a split button,
+layout primitive, or form control should explain when it fits, why its variants
+exist, what each prop changes, and where spacing belongs. The happy path for a
+Knit task is to follow that surface. Adding external margins, wrapper CSS, or
+bespoke styling on top of controls should be treated as a design-system gap or
+a reviewed exception, not the default move.
 
 ## Multiple Projects In The Service
 

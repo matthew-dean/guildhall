@@ -14,7 +14,7 @@ Once you open a project, Guildhall shifts from "service over projects" into
 "show me what is happening." Setup, active work, reviewer feedback, and your next
 decision live in one place.
 
-![Guildhall project shell with work queue, live activity, and progress groups.](../assets/ui-audit/0-7-0/work.png)
+![Guildhall v0.9.0 project shell showing project health, current work, and navigation.](../assets/ui-audit/0-9-0/project-overview.png)
 
 ## The views that matter most
 
@@ -42,11 +42,11 @@ decision live in one place.
   waiting on a PR, or blocked by a conflict
 - Let you drill into transcripts and provenance without leaving the shell
 
-![Guildhall task drawer showing transcript, spec, history, and provenance.](../assets/ui-audit/0-7-0/task-drawer.png)
+![Guildhall v0.9.0 Work view showing task hierarchy, blocked work, and queue health.](../assets/ui-audit/0-9-0/work.png)
 
-![Guildhall closure view showing readiness checks and remaining blockers.](../assets/ui-audit/0-7-0/release.png)
+![Guildhall v0.9.0 Settings Ready view showing local runtime readiness.](../assets/ui-audit/0-9-0/settings-runtime.png)
 
-![Guildhall settings view showing readiness checks, provider setup, and project facts.](../assets/ui-audit/0-7-0/settings.png)
+![Guildhall v0.9.0 Advanced settings showing memory, design, and runtime-adjacent project controls.](../assets/ui-audit/0-9-0/settings-advanced.png)
 
 ## Current strengths
 

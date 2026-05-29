@@ -71,6 +71,18 @@ export function getProjectProgressHeartbeatsPath(projectRoot: string): string {
   return join(getProjectLocalHistoryDir(projectRoot), 'progress', 'heartbeats.md')
 }
 
+export function getProjectRuntimeStatePath(projectRoot: string): string {
+  return join(getProjectLocalHistoryDir(projectRoot), 'runtime', 'state.json')
+}
+
+export function getProjectRuntimeCommandEvidencePath(projectRoot: string): string {
+  return join(getProjectLocalHistoryDir(projectRoot), 'runtime', 'command-evidence.jsonl')
+}
+
+export function getProjectRuntimeDevServersPath(projectRoot: string): string {
+  return join(getProjectLocalHistoryDir(projectRoot), 'runtime', 'dev-servers.json')
+}
+
 async function walkFiles(dir: string): Promise<string[]> {
   try {
     const entries = await fs.readdir(dir, { withFileTypes: true })

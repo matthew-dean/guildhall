@@ -7,6 +7,7 @@ import {
   getProjectContextDebugSnapshotDir,
   inferProjectRootFromMemoryDir,
 } from '@guildhall/sessions'
+import { FileBackedGuildhallPersistence } from '@guildhall/persistence'
 
 export interface ContextSectionStat {
   key: string
@@ -52,10 +53,16 @@ export interface ContextDebugRecord {
   primaryEngineerSlug: string | null
   openQuestionCount: number
   acceptanceCriteriaCount: number
+  memoryPacket?: {
+    included: Array<{ id: string; type: string; scope: string }>
+    withheld: Array<{ id: string; reason: string }>
+    evidenceRefs: number
+  }
 }
 
 const DEBUG_LOG_NAME = 'context-debug.jsonl'
 const MAX_PROMPT_PREVIEW_CHARS = 1200
+const MAX_SNAPSHOT_CONTEXT_CHARS = 16_000
 const MAX_SNAPSHOT_PROMPT_CHARS = 16_000
 const SNAPSHOT_RETENTION_PER_TASK = 12
 
@@ -76,6 +83,7 @@ function sectionStats(ctx: BuiltContext): ContextSectionStat[] {
     ['designSystem', 'Design system', ctx.designSystem],
     ['reviewRubrics', 'Review rubrics', ctx.reviewRubrics],
     ['corpusMap', 'Corpus map', ctx.corpusMap],
+    ['effectiveMemory', 'Effective memory', ctx.effectiveMemory ?? ''],
     ['projectMemory', 'Project memory', ctx.projectMemory],
     ['recentProgress', 'Recent progress', ctx.recentProgress],
     ['recentDecisions', 'Recent decisions', ctx.recentDecisions],
@@ -225,6 +233,7 @@ function explainContext(input: {
   if (input.ctx.reviewRubrics.trim()) reasons.push('Review rubrics were injected.')
   if (input.ctx.corpusMap.trim()) reasons.push('Corpus map guidance was injected.')
   if (input.ctx.projectMemory.trim()) reasons.push('Relevant project memory excerpts were injected.')
+  if (input.ctx.effectiveMemory?.trim()) reasons.push('Effective memory packet was injected.')
   return reasons
 }
 
@@ -304,6 +313,10 @@ export async function writeContextDebugRecord(input: {
     input.prompt.length <= MAX_SNAPSHOT_PROMPT_CHARS
       ? input.prompt
       : `${input.prompt.slice(0, MAX_SNAPSHOT_PROMPT_CHARS)}\n\n[truncated ${input.prompt.length - MAX_SNAPSHOT_PROMPT_CHARS} chars]`
+  const boundedContext =
+    input.ctx.formatted.length <= MAX_SNAPSHOT_CONTEXT_CHARS
+      ? input.ctx.formatted
+      : `${input.ctx.formatted.slice(0, MAX_SNAPSHOT_CONTEXT_CHARS)}\n\n[truncated ${input.ctx.formatted.length - MAX_SNAPSHOT_CONTEXT_CHARS} chars]`
   const snapshot = [
     `# Context Snapshot`,
     ``,
@@ -325,6 +338,11 @@ export async function writeContextDebugRecord(input: {
     ``,
     `## Section sizes`,
     ...sections.map((section) => `- ${section.label}: ${section.chars} chars${section.included ? '' : ' (empty)'}`),
+    ``,
+    `## Formatted Context`,
+    '```md',
+    boundedContext,
+    '```',
     ``,
     `## Full Prompt`,
     '```md',
@@ -360,9 +378,44 @@ export async function writeContextDebugRecord(input: {
     primaryEngineerSlug: input.ctx.primaryEngineerSlug,
     openQuestionCount: input.task.openQuestions?.length ?? 0,
     acceptanceCriteriaCount: input.task.acceptanceCriteria?.length ?? 0,
+    ...(input.ctx.effectiveMemoryPacket
+      ? {
+          memoryPacket: {
+            included: input.ctx.effectiveMemoryPacket.included.map((record) => ({
+              id: record.id,
+              type: record.type,
+              scope: record.scope,
+            })),
+            withheld: input.ctx.effectiveMemoryPacket.withheld.map((record) => ({
+              id: record.id,
+              reason: record.reason,
+            })),
+            evidenceRefs: input.ctx.effectiveMemoryPacket.evidenceRefs.length,
+          },
+        }
+      : {}),
   }
 
   const ledgerPath = getProjectContextDebugLedgerPath(projectRoot)
+  const persistence = new FileBackedGuildhallPersistence()
+  await persistence.appendEvent({
+    projectRoot,
+    placement: {
+      scope: 'local_history',
+      retention: 'debug',
+      visibility: 'internal_audit',
+      commitPolicy: 'ignored',
+    },
+    collection: 'context-debug',
+    streamId: input.task.id,
+    eventId: id,
+    schemaName: 'context-debug-record',
+    schemaVersion: 1,
+    createdBy: 'context-observability',
+    sourceRefs: [`task:${input.task.id}`],
+    payload: record,
+    now: () => new Date(at),
+  })
   await fs.appendFile(ledgerPath, `${JSON.stringify(record)}\n`, 'utf8')
   return record
 }

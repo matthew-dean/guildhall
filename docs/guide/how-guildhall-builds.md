@@ -14,14 +14,16 @@ Guildhall keeps the important pieces visible:
 
 1. **Survey**: what repo is this, what tools does it use, what plans or notes
    already exist, and what might block a safe run?
-2. **Blueprint**: what is the goal, what is out of scope, and how will the work
+2. **Pressure-test**: what is missing, vague, risky, unverifiable, or likely to
+   make the spec drift away from the user's vision?
+3. **Blueprint**: what is the goal, what is out of scope, and how will the work
    be checked?
-3. **Frame**: which pieces can move now, which depend on something else, and
+4. **Frame**: which pieces can move now, which depend on something else, and
    which need your decision first?
-4. **Build**: make focused changes against the accepted plan.
-5. **Inspect**: review the work, run checks, and keep the evidence attached.
-6. **Revise**: if the facts change, update the plan instead of drifting.
-7. **Finish**: separate real release blockers from follow-up polish.
+5. **Build**: make focused changes against the accepted plan.
+6. **Inspect**: review the work, run checks, and keep the evidence attached.
+7. **Revise**: if the facts change, update the plan instead of drifting.
+8. **Finish**: separate real release blockers from follow-up polish.
 
 ## Not a fixed template
 
@@ -36,17 +38,20 @@ look the same. It builds a working plan from:
 - review standards
 - evidence from the work itself
 
-Small work stays small. A tiny documentation fix does not need a release map. A
-new product area probably does. Guildhall follows the obvious local convention
-when the choice is routine. When a choice changes what you are building, who it
-serves, what data it touches, or whether you are comfortable shipping it, the
-app brings that choice to you with enough context to answer.
+Small work stays small, but it is still pressure-tested. A tiny documentation
+fix does not need a release map; Guildhall still applies enough pressure to
+check intent, tone, location, and proof. A new product area probably needs a
+deeper map. Guildhall follows the obvious local convention when the choice is
+routine. When a choice changes what you are building, who it serves, what data
+it touches, or whether you are comfortable shipping it, the app brings that
+choice to you with enough context to answer.
 
-Some asks need one extra beat before they become a task. "Set a policy" might
-mean "write the policy," "build the feature that enforces it," or "make a parent
-plan and split the work." Guildhall looks for that ambiguity, records the
-pieces that fit together, and asks a focused question instead of quietly sending
-a worker into a task that is really a feature in disguise.
+Some asks need one extra beat before they become work. "Set a policy" might
+mean "write the policy," "build the feature that enforces it," or "make
+containing work and split the pieces below it." Guildhall looks for that
+ambiguity, records the pieces that fit together, and asks a focused question
+instead of quietly sending a worker into a task that is really a feature in
+disguise.
 
 For example, you do not need a giant menu of database engines before Guildhall
 knows whether the project needs a database. If a database choice matters, the
@@ -115,17 +120,19 @@ When Guildhall needs your answer, the question is bounded and useful. A
 good question protects product quality. A bad question makes you do the tool's
 ordinary thinking for it.
 
-When a task looks too large, Guildhall sizes it before it moves. Tiny and small
-tasks can proceed. Medium tasks get a little caution. Large tasks get split
-recommendations, and epic-sized work becomes a parent-sized task with linked
-child tasks. The point is not story-point theater; it is keeping the unit of
-work small enough for a worker and reviewers to understand.
+When a work item looks too large, Guildhall sizes it before it moves. Tiny and
+small items can proceed. Medium items get a little caution. Large work gets
+split recommendations, and epic-sized work becomes containing work with linked
+nested items. The point is not story-point theater; it is keeping each runnable
+piece small enough for a worker and reviewers to understand.
 
 ## Where to go next
 
 - [Start here](./quick-start) for the first browser run.
-- [How Guildhall works](./how-guildhall-works) for the system model behind
+- [How the work loop works](./how-guildhall-works) for the system model behind
   context, agents, [Corpus Map](./corpus-map), and inspections.
+- [Ways to work](./ways-to-work) for whole-project runs, feature requests,
+  focused starts, setup lanes, and decision work.
 - [Agent context](./agent-context) for what agents receive before they act.
 - [Corpus Map](./corpus-map) for how Guildhall indexes codebase structure.
 - [New project](./new-project) for a clean or early repo.

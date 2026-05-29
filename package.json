@@ -26,6 +26,7 @@
     "dev": "node ./build.mjs --watch",
     "dev:install": "node ./scripts/dev-install.mjs",
     "dev:uninstall": "node ./scripts/dev-uninstall.mjs",
+    "dev:hermes:install": "node ./scripts/install-hermes-dev.mjs",
     "typecheck": "tsgo -p tsconfig.json --noEmit && pnpm typecheck:ui",
     "typecheck:ui": "pnpm --filter @guildhall/ui typecheck",
     "test": "vitest run",
@@ -37,6 +38,13 @@
     "clean": "rm -rf dist",
     "release": "node scripts/publish.mjs",
     "release:dry": "node scripts/publish.mjs --dry-run",
+    "runtime:image:build": "podman build -f runtime/Containerfile -t ghcr.io/matthew-dean/guildhall-runtime-debian:0.9.0-trixie-node22-python313-playwright -t ghcr.io/matthew-dean/guildhall-runtime-debian:0.9-trixie-node22-python313-playwright .",
+    "runtime:image:smoke": "node scripts/runtime-image-smoke.mjs",
+    "benchmarks:smoke": "pnpm build && node dist/cli.js benchmarks run lifecycle --fixture-set smoke --automation fully-automated && node dist/cli.js benchmarks run tblite --subset smoke --automation fully-automated && node dist/cli.js benchmarks run swe-local --subset smoke --automation fully-automated",
+    "benchmarks:compare:hermes": "pnpm build && node dist/cli.js benchmarks compare hermes --hermes-root .guildhall/dev-tools/hermes-agent",
+    "benchmarks:compare:hermes-quality": "pnpm build && node scripts/compare-hermes-quality.mjs",
+    "benchmarks:compare:hermes-app-explicit": "pnpm build && node scripts/compare-hermes-quality.mjs --mode app-explicit",
+    "benchmarks:compare:hermes-app-infer": "pnpm build && node scripts/compare-hermes-quality.mjs --mode app-infer",
     "smoke:release": "node scripts/release-smoke.mjs",
     "model:bakeoff": "node scripts/model-bakeoff.mjs",
     "docs:prepare-versions": "node scripts/prepare-versioned-docs.mjs",
@@ -83,7 +91,7 @@
     "vitest": "^3.1.1"
   },
   "engines": {
-    "node": ">=20"
+    "node": ">=22"
   },
   "keywords": [
     "agents",

@@ -1,0 +1,38 @@
+{
+  "id": "run-once-20260529T15594-task-001",
+  "createdAt": "2026-05-29T15:59:42.768Z",
+  "projectRoot": "/Users/matthew/git/oss/guildhall/internal/benchmarks/runs/2026-05-29-quality/pantry-pulse-rerun-explicit/guildhall-work",
+  "taskId": "task-001",
+  "title": "Build a dependency-free single-page Pantry Pulse web app...",
+  "prompt": "Build a dependency-free single-page Pantry Pulse web app in this project root. Use plain HTML, CSS, and JavaScript only; do not require npm install or a dev server. The app must include a visible heading \"Pantry Pulse\", at least seven seeded pantry items with category, quantity, and expiration text, an All / Expiring soon mutually-exclusive filter, a Mark used action that removes one visible item or marks it used, and a visible remaining-item count that updates. The design should feel app-store-caliber for a small domestic food utility: warm off-white or soft neutral base, sage/leaf green or warm amber primary/accent, coral/tomato or amber urgency, clear hierarchy, polished spacing, responsive mobile layout, and no generic blue primary/accent. Use semantic HTML and accessible controls. Then complete with truthful proof.",
+  "automationPolicy": "fully_automated",
+  "proof": "commands",
+  "outputPath": "/Users/matthew/git/oss/guildhall/internal/benchmarks/runs/2026-05-29-quality/pantry-pulse-rerun-explicit/guildhall-run-once-report.json",
+  "stopReason": "idle_limit",
+  "stopMessage": "No actionable tasks remain right now: 0 active, 1 fresh, 0 escalated, 0 dependency-blocked.",
+  "scopedStatusSummary": "1 ready",
+  "orchestrator": {
+    "ticks": 13,
+    "stopReason": "idle_limit",
+    "stopMessage": "No actionable tasks remain right now: 0 active, 1 fresh, 0 escalated, 0 dependency-blocked.",
+    "idleSummary": {
+      "reason": "no_eligible_tasks",
+      "message": "No actionable tasks remain right now: 0 active, 1 fresh, 0 escalated, 0 dependency-blocked.",
+      "counts": {
+        "total": 1,
+        "actionable": 1,
+        "terminal": 0,
+        "done": 0,
+        "blocked": 0,
+        "shelved": 0,
+        "waitingOnUser": 0,
+        "draftReview": 0,
+        "awaitingApproval": 0,
+        "dependencyBlocked": 0,
+        "escalated": 0,
+        "active": 0,
+        "fresh": 1
+      }
+    }
+  }
+}

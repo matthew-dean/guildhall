@@ -7,36 +7,31 @@ pageClass: gh-first-visit-page
 
 Guildhall is a local app for handing real project work to AI agents without
 losing the plot. It keeps the plan, the work, the review, and the blockers in
-one visible place. You do not need to learn the internal machinery before your
-first run.
+one visible place.
+
+You do not need the whole machine model before your first run. The job here is
+smaller: install Guildhall, open one repo, and try one modest task where you can
+see the loop.
 
 ![Guildhall settings view showing readiness checks and project setup state.](../assets/ui-audit/0-7-0/settings.png)
 
 ## The first mental model
 
-Think of Guildhall as a small project office for AI-assisted software work.
-The name comes from a guild hall: a shared room where different skilled trades
-coordinate work and standards. In Guildhall, those "trades" are AI agents with
-different jobs.
+Think of Guildhall as a small project office for AI-assisted software work. You
+bring a repo and a concrete goal; Guildhall turns that into visible task state,
+asks when your answer changes the outcome, and keeps evidence attached to the
+work instead of buried in a heroic transcript.
 
-The pieces you touch first are:
+The pieces you touch first are simple:
 
 - **Projects** are your repos.
-- **Blueprints** are the accepted plans for what gets built and how it
-  will be checked.
-- **Tasks** are framed pieces of work that can move through planning,
-  implementation, review, and gates.
-- **Agents** are the helpers that plan, build, inspect, and report.
-- **The shell** is the browser screen where you see the current project.
+- **Tasks** are framed pieces of work.
+- **Blueprints** are the accepted plans for what gets built and checked.
+- **The shell** is the browser screen where the current project lives.
 
-The goal of getting started is simple: open one project, give it one small
-task set, and see whether the work moves with clear evidence. Read
-[How Guildhall builds](./how-guildhall-builds) when you want the full mental
-model, or keep [Core concepts](./concepts) nearby as the glossary.
-
-Setup stays short by design. Guildhall can infer routine defaults and save
-your attention for choices that change what you are building, how safe the run
-is, or whether the result is good enough.
+That is enough vocabulary for now. Keep [Core concepts](./concepts) nearby when
+a term gets fuzzy, and read [How the work loop works](./how-guildhall-works)
+when you want the machinery tour.
 
 ## What a good first run proves
 

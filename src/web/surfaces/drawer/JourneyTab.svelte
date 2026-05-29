@@ -11,7 +11,7 @@
   import Markdown from '../../lib/Markdown.svelte'
   import Modal from '../../lib/Modal.svelte'
   import { projectFetch } from '../../lib/project-routes.js'
-  import type { Task } from '../../lib/types.js'
+  import type { ExpectedEvidence, LaunchStep, Task, VerificationRecord } from '../../lib/types.js'
 
   interface Props {
     task: Task
@@ -39,6 +39,8 @@
   const sizePlan = $derived(task.sizePlan ?? null)
   const requestIntake = $derived(task.requestIntake ?? null)
   const doneSummary = $derived(task.doneSummaryBundle ?? null)
+  const proofPaths = $derived(task.proofPaths ?? [])
+  const completionHandoff = $derived(task.completionHandoff ?? null)
   const verdicts = $derived(task.reviewVerdicts ?? [])
   const gates = $derived(task.gateResults ?? [])
   const changedFiles = $derived(uniqueFiles([
@@ -47,6 +49,17 @@
   ]))
   const passedGateCount = $derived(gates.filter(gate => gate.passed).length)
   const failedGateCount = $derived(gates.filter(gate => gate.passed === false).length)
+  const runtimeEvidence = $derived.by(() => {
+    const proofEvidence = proofPaths
+      .flatMap(path => path.verificationRecords ?? [])
+      .filter(record => record.command || record.url || record.summary)
+    const gateEvidence = gates.map(gate => ({
+      status: gate.passed ? 'passed' : 'failed',
+      summary: gate.output ?? gate.gateId ?? 'Gate recorded.',
+      command: gate.gateId,
+    }))
+    return [...proofEvidence, ...gateEvidence].slice(0, 6)
+  })
   const reviewLaneSummary = $derived((reviewPlan?.selectedLanes ?? []).slice(0, 4).map(friendlyToken).join(', '))
   const hiddenLaneCount = $derived(Math.max(0, (reviewPlan?.selectedLanes?.length ?? 0) - 4))
 
@@ -140,6 +153,34 @@
     if (action === 'proceed_with_warning') return 'Proceed with warning'
     if (action === 'ask_clarifying_question') return 'Ask a question'
     return friendlyToken(action)
+  }
+
+  function evidenceChipLabel(evidence: ExpectedEvidence): string {
+    return `${friendlyToken(evidence.kind)} ${evidence.required === false ? 'Optional' : 'Required'}`
+  }
+
+  function verificationTone(record: { status?: string }): 'ok' | 'danger' | 'warn' | 'neutral' {
+    if (record.status === 'passed') return 'ok'
+    if (record.status === 'failed') return 'danger'
+    if (record.status === 'blocked') return 'warn'
+    return 'neutral'
+  }
+
+  function launchStepDetail(step: LaunchStep): string {
+    switch (step.kind) {
+      case 'copy_command':
+        return step.command ?? ''
+      case 'open_url':
+        return step.url ?? ''
+      case 'manual_step':
+        return step.instructions ?? ''
+      case 'external_dashboard':
+        return [step.service, step.url, step.instructions].filter(Boolean).join(' · ')
+      case 'blocked_until_setup':
+        return [step.setupRequirement, step.ownerAction].filter(Boolean).join(' · ')
+      default:
+        return step.expectedOutcome ?? ''
+    }
   }
 </script>
 
@@ -290,6 +331,71 @@
               {/each}
             </div>
           {/if}
+          {#if proofPaths.length > 0}
+            <section class="detail">
+              <h4>Proof path</h4>
+              <Stack gap="2">
+                {#each proofPaths as proofPath, i (`proof-${proofPath.id ?? i}`)}
+                  <article class="mini-record proof-record">
+                    <div>
+                      <strong>{proofPath.title ?? 'Proof path'}</strong>
+                      {#if proofPath.summary}<p class="muted">{proofPath.summary}</p>{/if}
+                    </div>
+                    <div class="chips">
+                      <Chip label={friendlyToken(proofPath.status)} tone={proofPath.status === 'verified' ? 'ok' : proofPath.status === 'blocked' ? 'warn' : 'neutral'} />
+                      {#if proofPath.scope?.type}<Chip label={`${friendlyToken(proofPath.scope.type)} scope`} tone="neutral" />{/if}
+                    </div>
+                    {#if proofPath.launchSteps?.length}
+                      <ul class="proof-list">
+                        {#each proofPath.launchSteps as step, stepIndex (`launch-${step.id ?? stepIndex}`)}
+                          <li>
+                            <span>{step.title ?? friendlyToken(step.kind)}</span>
+                            {#if step.kind === 'open_url' && step.url}
+                              <a href={step.url} target="_blank" rel="noreferrer">{step.title ?? step.url}</a>
+                            {:else if step.kind === 'copy_command' && step.command}
+                              <code>{step.command}</code>
+                            {:else if launchStepDetail(step)}
+                              <small>{launchStepDetail(step)}</small>
+                            {/if}
+                          </li>
+                        {/each}
+                      </ul>
+                    {/if}
+                    {#if proofPath.expectedEvidence?.length}
+                      <div class="chips">
+                        {#each proofPath.expectedEvidence as evidence, evidenceIndex (`evidence-${evidence.id ?? evidenceIndex}`)}
+                          <Chip label={evidenceChipLabel(evidence)} tone={evidence.required === false ? 'neutral' : 'accent'} />
+                        {/each}
+                      </div>
+                    {/if}
+                    {#if proofPath.verificationRecords?.length}
+                      <ul class="proof-list">
+                        {#each proofPath.verificationRecords as record, recordIndex (`verification-${record.id ?? recordIndex}`)}
+                          <li>
+                            <Chip label={record.status ?? 'recorded'} tone={verificationTone(record)} />
+                            <span>{record.summary ?? record.command ?? record.url ?? 'Verification recorded.'}</span>
+                          </li>
+                        {/each}
+                      </ul>
+                    {/if}
+                  </article>
+                {/each}
+              </Stack>
+            </section>
+          {/if}
+          {#if runtimeEvidence.length > 0}
+            <section class="detail">
+              <h4>Runtime evidence</h4>
+              <ul class="proof-list">
+                {#each runtimeEvidence as record, i (`runtime-evidence-${i}`)}
+                  <li>
+                    <Chip label={record.status ?? 'recorded'} tone={verificationTone(record)} />
+                    <span>{record.summary ?? record.command ?? record.url ?? 'Runtime evidence recorded.'}</span>
+                  </li>
+                {/each}
+              </ul>
+            </section>
+          {/if}
         </div>
       </article>
     </li>
@@ -328,6 +434,24 @@
             </section>
           {:else}
             <p>{outcomeText()}</p>
+          {/if}
+          {#if completionHandoff}
+            <section class="detail">
+              <h4>Completion handoff</h4>
+              {#if completionHandoff.summary}<p>{completionHandoff.summary}</p>{/if}
+              {#if completionHandoff.verificationSummary}<p class="muted">{completionHandoff.verificationSummary}</p>{/if}
+              <div class="chips">
+                <Chip label={`${completionHandoff.automatedProof?.length ?? 0} automated`} tone={(completionHandoff.automatedProof?.length ?? 0) > 0 ? 'ok' : 'neutral'} />
+                <Chip label={`${completionHandoff.manualProof?.length ?? 0} manual`} tone={(completionHandoff.manualProof?.length ?? 0) > 0 ? 'ok' : 'neutral'} />
+                <Chip label={`${completionHandoff.providerProof?.length ?? 0} provider`} tone={(completionHandoff.providerProof?.length ?? 0) > 0 ? 'ok' : 'neutral'} />
+              </div>
+              {#if completionHandoff.residualRisk}
+                <section class="detail">
+                  <h4>Remaining uncertainty</h4>
+                  <p class="muted">{completionHandoff.residualRisk}</p>
+                </section>
+              {/if}
+            </section>
           {/if}
           {#if task.terminalSummary?.detail}
             <Markdown source={task.terminalSummary.detail} />
@@ -465,6 +589,37 @@
     color: var(--text);
     font-size: var(--fs-1);
     line-height: var(--lh-body);
+    overflow-wrap: anywhere;
+  }
+  .proof-record {
+    align-items: stretch;
+    flex-direction: column;
+  }
+  .proof-list {
+    margin: 0;
+    padding-left: 1.1rem;
+    color: var(--text);
+    font-size: var(--fs-1);
+    line-height: var(--lh-body);
+    display: flex;
+    flex-direction: column;
+    gap: var(--s-1);
+    overflow-wrap: anywhere;
+  }
+  .proof-list li {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: baseline;
+    gap: var(--s-2);
+  }
+  .proof-list code,
+  .proof-list small {
+    color: var(--text-muted);
+    font-family: var(--font-mono);
+    font-size: var(--fs-0);
+  }
+  .proof-list a {
+    color: var(--accent);
     overflow-wrap: anywhere;
   }
   .file-list button {

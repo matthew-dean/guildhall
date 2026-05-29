@@ -36,6 +36,7 @@
     onShelve: () => void
     onUnshelve: () => void
     onResolveEscalation: (escalation: Escalation, mode: 'retry' | 'resolve') => void
+    onRunEscalationAction: (escalation: Escalation) => void
     onSendFollowUp: (message: string) => Promise<void>
     onAddAcceptance: (description: string) => Promise<void>
   }
@@ -49,6 +50,7 @@
     onShelve,
     onUnshelve,
     onResolveEscalation,
+    onRunEscalationAction,
     onSendFollowUp,
     onAddAcceptance,
   }: Props = $props()
@@ -191,6 +193,7 @@
       {busy}
       onUnshelve={onUnshelve}
       onResolve={onResolveEscalation}
+      onRun={onRunEscalationAction}
     />
   {/if}
 

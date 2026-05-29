@@ -63,6 +63,19 @@ export const ReviewRecipeRef = z.object({
 })
 export type ReviewRecipeRef = z.infer<typeof ReviewRecipeRef>
 
+export const ReviewAdvisoryLens = z.object({
+  lens: z.enum([
+    'contrarian',
+    'first_principles',
+    'expansionist',
+    'outsider',
+    'executor',
+  ]),
+  reason: z.string().min(1),
+  blocking: z.literal('advisory').default('advisory'),
+})
+export type ReviewAdvisoryLens = z.infer<typeof ReviewAdvisoryLens>
+
 export const ReviewPlanRecord = z.object({
   taskId: z.string().min(1),
   effort: ReviewEffort,
@@ -73,6 +86,7 @@ export const ReviewPlanRecord = z.object({
     reason: z.string().min(1),
   })).default([]),
   requiredRecipes: z.array(ReviewRecipeRef).default([]),
+  advisoryLenses: z.array(ReviewAdvisoryLens).default([]),
   deterministicChecks: z.array(z.string()).default([]),
   requiredArtifacts: z.array(z.string()).default([]),
   budget: ReviewBudget.default({}),
@@ -152,7 +166,7 @@ export type EscapedMissRecord = z.infer<typeof EscapedMissRecord>
 type InputWithDefaults<T, K extends keyof T> = Omit<T, K> & Partial<Pick<T, K>>
 
 export interface ReviewAuditStore {
-  saveReviewPlan(input: InputWithDefaults<ReviewPlanRecord, 'createdAt' | 'skippedLanes' | 'requiredRecipes' | 'deterministicChecks' | 'requiredArtifacts' | 'budget' | 'aggregation' | 'reasons'>): Promise<PersistedRecord<ReviewPlanRecord>>
+  saveReviewPlan(input: InputWithDefaults<ReviewPlanRecord, 'createdAt' | 'skippedLanes' | 'requiredRecipes' | 'advisoryLenses' | 'deterministicChecks' | 'requiredArtifacts' | 'budget' | 'aggregation' | 'reasons'>): Promise<PersistedRecord<ReviewPlanRecord>>
   appendReviewPlanEvent(input: Omit<ReviewPlanEvent, 'recordedAt'> & { recordedAt?: string }): Promise<PersistedEvent<ReviewPlanEvent>>
   saveReviewerRun(input: InputWithDefaults<ReviewerRunRecord, 'recordedAt' | 'model' | 'provider' | 'settingsHash' | 'contextHash' | 'artifactRefs' | 'findings' | 'cost'>): Promise<PersistedEvent<ReviewerRunRecord>>
   saveFrontierRun(input: InputWithDefaults<FrontierRunRecord, 'recordedAt' | 'metrics' | 'recommendedDefault'>): Promise<PersistedRecord<FrontierRunRecord>>

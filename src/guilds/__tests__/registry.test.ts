@@ -155,6 +155,66 @@ describe('BUILTIN_GUILDS', () => {
     expect(rubricQuestions).toContain('component-level')
     expect(rubricQuestions).toContain('real browser')
   })
+
+  it('Component Designer reviews interaction semantics, not only component APIs', () => {
+    const componentDesigner = BUILTIN_GUILDS.find((g) => g.slug === 'component-designer')!
+    const rubricQuestions = componentDesigner.rubric?.map((item) => item.question).join('\n') ?? ''
+
+    expect(componentDesigner.specContribution).toContain('mutually exclusive mode')
+    expect(componentDesigner.principles).toContain('Interaction semantics')
+    expect(rubricQuestions).toContain('segmented control')
+    expect(rubricQuestions).toContain('persistent binary state')
+  })
+
+  it('Color Theorist applies to broad UI app work and reviews palette intent', () => {
+    const sel = selectApplicableGuilds({
+      task: {
+        ...baseTask,
+        title: 'Pantry Pulse app spec',
+        description: 'Build a polished web app page with item cards, filters, and expiry status.',
+        domain: 'product',
+      },
+      memoryDir: '/tmp',
+      projectPath: '/nonexistent-directory-should-not-be-a-ts-project',
+    })
+    const colorTheorist = BUILTIN_GUILDS.find((g) => g.slug === 'color-theorist')!
+    const rubricQuestions = colorTheorist.rubric?.map((item) => item.question).join('\n') ?? ''
+
+    expect(sel.map((g) => g.slug)).toContain('color-theorist')
+    expect(colorTheorist.specContribution).toContain('emotional job')
+    expect(rubricQuestions).toContain('product mood')
+    expect(rubricQuestions).toContain('saturation')
+  })
+
+  it('API Designer reviews abstraction fit for schemas, APIs, and MCP resources', () => {
+    const sel = selectApplicableGuilds({
+      task: {
+        ...baseTask,
+        title: 'Add MCP feedback resource',
+        description: 'Expose design feedback through a project MCP resource and typed API schema.',
+        domain: 'runtime',
+      },
+      memoryDir: '/tmp',
+      projectPath: '/nonexistent-directory-should-not-be-a-ts-project',
+    })
+    const apiDesigner = BUILTIN_GUILDS.find((g) => g.slug === 'api-designer')!
+    const rubricQuestions = apiDesigner.rubric?.map((item) => item.question).join('\n') ?? ''
+
+    expect(sel.map((g) => g.slug)).toContain('api-designer')
+    expect(apiDesigner.specContribution).toContain('Abstraction fit')
+    expect(apiDesigner.specContribution).toContain('generic shell')
+    expect(rubricQuestions).toContain('too narrow')
+    expect(rubricQuestions).toContain('too generic')
+  })
+
+  it('TypeScript Engineer reviews schema taxonomy as part of type design', () => {
+    const tsEngineer = BUILTIN_GUILDS.find((g) => g.slug === 'typescript-engineer')!
+    const rubricQuestions = tsEngineer.rubric?.map((item) => item.question).join('\n') ?? ''
+
+    expect(tsEngineer.principles).toContain('Schema taxonomy')
+    expect(rubricQuestions).toContain('durable contract')
+    expect(rubricQuestions).toContain('generic shell')
+  })
 })
 
 describe('selectApplicableGuilds', () => {

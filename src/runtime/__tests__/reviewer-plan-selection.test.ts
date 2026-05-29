@@ -24,6 +24,7 @@ function plan(overrides: Partial<ReviewPlanRecord> = {}): ReviewPlanRecord {
     selectedLanes: ['ux_comprehension', 'copy_clarity', 'test_adequacy'],
     skippedLanes: [],
     requiredRecipes: [],
+    advisoryLenses: [],
     deterministicChecks: [],
     requiredArtifacts: [],
     budget: { maxReviewerAgents: 2 },

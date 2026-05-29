@@ -22,6 +22,34 @@ The current 0.8.0 MVP tracker is
 design sources live in `internal/specs/`.
 The proposed 0.9.0 task-shaping direction is
 `internal/plans/2026-05-24-guildhall-0-9-task-shaping-and-finishability.md`.
+The 0.9.0 implementation tracker is
+`internal/plans/2026-05-27-guildhall-0-9-implementation-tracker.md`.
+The 0.9.0 trust and completeness proposal is
+`internal/plans/2026-05-27-guildhall-0-9-trust-and-completeness-proposal.md`.
+The late 0.9.0 internal benchmark and Hermes comparison lane is
+`internal/plans/2026-05-27-guildhall-0-9-benchmarks-and-hermes-comparison.md`.
+The proposed 0.10.0 OpenRouter support plan is
+`internal/plans/2026-05-28-guildhall-0-10-openrouter-support.md`.
+The proposed 0.10.0 external agent memory bridge spec is
+`internal/specs/2026-05-28-guildhall-0-10-agent-memory-bridge.md`.
+The proposed 0.10.0 structural/domain intelligence spec is
+`internal/specs/2026-05-29-guildhall-0-10-structural-domain-intelligence.md`.
+The proposed 0.10.0 external task authority spec is
+`internal/specs/2026-05-29-guildhall-0-10-external-task-authority.md`.
 Live product/runtime audit checklists live in `internal/audits/`.
 Older exploratory design notes live in `internal/design-notes/`.
 Source-backed research notes live in `internal/research/`.
+
+## Release state
+
+For whether a version has shipped, prefer release artifacts over inference from
+planning trackers:
+
+1. a Git tag such as `v0.8.0`;
+2. the public release note under `docs/releases/<version>.md`;
+3. the matching versioned docs snapshot under `docs/versions/<version>/`;
+4. `package.json` and install docs only as supporting evidence.
+
+Internal MVP trackers describe what a release was trying to ship. After a
+release lands, they may retain planning-era notes and should not be treated as
+the release-status authority.

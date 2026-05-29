@@ -543,6 +543,30 @@
   const providerWarningSeverity = $derived(
     providerStatus?.warnings?.[0]?.severity ?? 'info',
   )
+  const runtimeSummary = $derived(detail?.runtime ?? null)
+  const runtimeStatusLabel = $derived(
+    runtimeSummary?.status === 'running'
+      ? 'Runtime running'
+      : runtimeSummary?.status === 'creating'
+        ? 'Runtime starting'
+        : runtimeSummary?.status === 'failed'
+          ? 'Runtime failed'
+          : 'Runtime stopped',
+  )
+  const runtimeModeLabel = $derived(
+    runtimeSummary?.migration?.mode === 'runtime-backed'
+      ? 'Podman runtime mode'
+      : runtimeSummary?.migration?.mode === 'host-run'
+        ? 'Compatibility mode'
+        : 'Runtime mode unknown',
+  )
+  const runtimeButtonTone = $derived(
+    runtimeSummary?.status === 'failed' || runtimeSummary?.health?.status === 'unhealthy'
+      ? 'danger'
+      : runtimeSummary?.status === 'creating' || runtimeSummary?.health?.status === 'degraded'
+          ? 'warn'
+          : 'neutral',
+  )
   const providerHealthText = $derived(
     providerStatus?.health?.state === 'degraded'
       ? `${providerHeaderLabel ?? 'Current provider'} has seen ${providerStatus.health.consecutiveFailures} consecutive pooled failures${providerStatus.health.lastError ? ` (${providerStatus.health.lastError})` : ''}.`
@@ -966,6 +990,7 @@
     <ProjectAttachFlow
       projectName={projectDisplayPathLeaf}
       projectPath={projectDisplayPath}
+      projectId={activeProjectId}
     />
   </ProjectShell>
 {:else if project.error}
@@ -1131,6 +1156,18 @@
               onclick={() => go(currentProjectHref('/settings/providers', activeProjectId))}
               title={providerTitle}
               ariaLabel={providerTitle}
+            />
+          {/if}
+          {#if runtimeSummary}
+            <StatusButton
+              tone={runtimeButtonTone}
+              icon={runtimeSummary.status === 'failed' ? 'alert-triangle' : 'package'}
+              label="Runtime"
+              showLabel={!topbarLabelsCollapsed}
+              tooltip={topbarLabelsCollapsed}
+              onclick={() => go(currentProjectHref('/settings/ready', activeProjectId))}
+              title={`${runtimeStatusLabel}: ${runtimeModeLabel}`}
+              ariaLabel={`${runtimeStatusLabel}: ${runtimeModeLabel}`}
             />
           {/if}
           {#if stuckCount > 0}

@@ -2,7 +2,7 @@
   Banner at the top of the Spec tab when a task is blocked, shelved, or has
   an open escalation. Primary/secondary/overflow IA:
     · Primary: one-line reason headline + chip row (reason code + role).
-    · Secondary: single action row (Retry gates / Resolve...).
+    · Secondary: single action row (Retry gates / I handled this...).
     · Overflow: details collapsed behind a <details> toggle.
 -->
 <script lang="ts">
@@ -18,6 +18,7 @@
     escalationReasonLabel,
     escalationPrimaryAction,
     escalationRecoveryCopy,
+    escalationUserGuidance,
     roleLabel,
     roleBlurb,
   } from '../../lib/escalation-labels.js'
@@ -28,9 +29,10 @@
     busy?: boolean
     onUnshelve: () => void
     onResolve: (escalation: Escalation, mode: 'retry' | 'resolve') => void
+    onRun: (escalation: Escalation) => void
   }
 
-  let { task, busy = false, onUnshelve, onResolve }: Props = $props()
+  let { task, busy = false, onUnshelve, onResolve, onRun }: Props = $props()
 
   const openEscalations = $derived(
     activeEscalations(task),
@@ -70,6 +72,7 @@
     firstOpen ? roleBlurb(firstOpen.agentId) : '',
   )
   const primaryAction = $derived(escalationPrimaryAction(firstOpen))
+  const guidance = $derived(escalationUserGuidance(firstOpen))
   const recoveryDetail = $derived(firstOpen ? escalationRecoveryCopy(firstOpen).detail : null)
 </script>
 
@@ -109,21 +112,24 @@
         </Button>
       {/if}
       {#if firstOpen}
-        <Button
-          variant="agent"
-          disabled={busy}
-          onclick={() => onResolve(firstOpen, 'retry')}
-        >
-          <Icon name="sparkles" size={14} />
-          {primaryAction.label}
-        </Button>
-        <Button
-          variant="primary"
-          disabled={busy}
-          onclick={() => onResolve(firstOpen, 'resolve')}
-        >
-          Resolve...
-        </Button>
+        {#if guidance.actionOwner === 'guildhall'}
+          <Button
+            variant="agent"
+            disabled={busy}
+            onclick={() => onRun(firstOpen)}
+          >
+            <Icon name="sparkles" size={14} />
+            {primaryAction.label}
+          </Button>
+        {:else}
+          <Button
+            variant="primary"
+            disabled={busy}
+            onclick={() => onResolve(firstOpen, 'resolve')}
+          >
+            I handled this...
+          </Button>
+        {/if}
       {/if}
     </Row>
   </Stack>

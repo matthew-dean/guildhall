@@ -1,0 +1,348 @@
+{
+  "id": "guildhall-hermes-quality-app-hermes",
+  "generatedAt": "2026-05-29T14:44:13.877Z",
+  "startedAt": "2026-05-29T14:30:28.877Z",
+  "completedAt": "2026-05-29T14:44:13.877Z",
+  "task": {
+    "mode": "app",
+    "id": "pantry-pulse-app-quality",
+    "prompt": "Build a dependency-free single-page Pantry Pulse web app in this project root. Use plain HTML, CSS, and JavaScript only; do not require npm install or a dev server. The app must include a visible heading \"Pantry Pulse\", at least seven seeded pantry items with category, quantity, and expiration text, an All / Expiring soon mutually-exclusive filter, a Mark used action that removes one visible item or marks it used, and a visible remaining-item count that updates. The design should feel app-store-caliber for a small domestic food utility: warm off-white or soft neutral base, sage/leaf green or warm amber primary/accent, coral/tomato or amber urgency, clear hierarchy, polished spacing, responsive mobile layout, and no generic blue primary/accent. Use semantic HTML and accessible controls. Then complete with truthful proof.",
+    "expectedFile": "quality_smoke.txt",
+    "expectedContent": "QUALITY_SMOKE_OK"
+  },
+  "outputRoot": "/Users/matthew/git/oss/guildhall/internal/benchmarks/runs/2026-05-29-quality/app-hermes",
+  "summary": {
+    "qualityFirst": true,
+    "guildhallScore": 5,
+    "hermesScore": 100,
+    "winner": "hermes",
+    "note": "Quality score is primary. Token and cost telemetry are secondary and may be unavailable."
+  },
+  "results": {
+    "guildhall": {
+      "harness": "guildhall",
+      "projectRoot": "/Users/matthew/git/oss/guildhall/internal/benchmarks/runs/2026-05-29-quality/app-hermes/guildhall-work",
+      "command": "\"/Users/matthew/Library/Application Support/fnm/node-versions/v24.11.1/installation/bin/node\" /Users/matthew/git/oss/guildhall/dist/cli.js task run-once \"Build a dependency-free single-page Pantry Pulse web app in this project root. Use plain HTML, CSS, and JavaScript only; do not require npm install or a dev server. The app must include a visible heading \\\"Pantry Pulse\\\", at least seven seeded pantry items with category, quantity, and expiration text, an All / Expiring soon mutually-exclusive filter, a Mark used action that removes one visible item or marks it used, and a visible remaining-item count that updates. The design should feel app-store-caliber for a small domestic food utility: warm off-white or soft neutral base, sage/leaf green or warm amber primary/accent, coral/tomato or amber urgency, clear hierarchy, polished spacing, responsive mobile layout, and no generic blue primary/accent. Use semantic HTML and accessible controls. Then complete with truthful proof.\" --project /Users/matthew/git/oss/guildhall/internal/benchmarks/runs/2026-05-29-quality/app-hermes/guildhall-work --automation fully-automated --proof commands --output /Users/matthew/git/oss/guildhall/internal/benchmarks/runs/2026-05-29-quality/app-hermes/guildhall-run-once-report.json --max-ticks 40",
+      "exitCode": 1,
+      "stdout": "[guildhall] Provider: openai-api (OpenAI-compatible API at https://api.deepinfra.com/v1/openai)\n[guildhall] Workspace: Guildhall Hermes Quality Smoke (guildhall-hermes-quality-smoke)\n[guildhall] Project:   /Users/matthew/git/oss/guildhall/internal/benchmarks/runs/2026-05-29-quality/app-hermes/guildhall-work\n[guildhall] Memory:    /Users/matthew/git/oss/guildhall/internal/benchmarks/runs/2026-05-29-quality/app-hermes/guildhall-work/.guildhall\n[guildhall] Model assignment:\n  spec:        deepseek-ai/DeepSeek-V4-Flash\n  coordinator: deepseek-ai/DeepSeek-V4-Flash\n  worker:      Qwen/Qwen3.5-35B-A3B\n  reviewer:    deepseek-ai/DeepSeek-V4-Flash\n  gateChecker: deepseek-ai/DeepSeek-V4-Flash\n  contextIndexer: zai-org/GLM-4.6\n[guildhall] Coordinator started.\n[guildhall] tick 1: task-001 exploring → exploring via spec-agent (no change)\n[guildhall] tick 2: task-001 exploring → spec_review via spec-agent\n[guildhall] fully automated run resolved 1 owner checkpoint(s).\n[guildhall] tick 3: task-001 exploring → spec_review via spec-agent\n[guildhall] fully automated run resolved 1 owner checkpoint(s).\n[guildhall] tick 4: task-001 ready → in_progress via task-claimer\n[guildhall] tick 5: task-001 in_progress → in_progress via worker-agent (no change)\n[guildhall] tick 6: task-001 in_progress → in_progress via worker-agent (no change)\n[guildhall] tick 7: task-001 in_progress → in_progress via worker-agent (no change)\n[guildhall] tick 8: task-001 in_progress → in_progress via worker-agent (no change)\n[guildhall] tick 9: task-001 in_progress → in_progress via worker-agent (no change)\n[guildhall] tick 10: task-001 in_progress → review via worker-agent\n",
+      "stderr": "",
+      "durationMs": 600015,
+      "runReportPath": null,
+      "stopReason": null,
+      "scopedStatusSummary": null,
+      "telemetry": {
+        "tokens": "run-report",
+        "cost": "run-report",
+        "stopReason": null,
+        "stopMessage": null
+      },
+      "artifact": {
+        "expectedPath": "/Users/matthew/git/oss/guildhall/internal/benchmarks/runs/2026-05-29-quality/app-hermes/guildhall-work/index.html",
+        "fileExists": false,
+        "exactContent": false,
+        "actualContent": null,
+        "unexpectedFiles": [],
+        "appFiles": [],
+        "palette": {
+          "roles": [],
+          "primary": null,
+          "warmDomestic": false,
+          "genericBluePrimary": false
+        },
+        "browserProof": {
+          "loaded": false,
+          "headingVisible": false,
+          "seededItemCount": 0,
+          "filterWorked": false,
+          "markUsedWorked": false,
+          "screenshots": [],
+          "errors": [
+            "index.html missing"
+          ]
+        }
+      },
+      "qualityScore": {
+        "total": 5,
+        "checks": [
+          {
+            "id": "app_entry_created",
+            "points": 10,
+            "passed": false
+          },
+          {
+            "id": "browser_loads",
+            "points": 15,
+            "passed": false
+          },
+          {
+            "id": "seeded_items_visible",
+            "points": 15,
+            "passed": false
+          },
+          {
+            "id": "expiring_filter_works",
+            "points": 15,
+            "passed": false
+          },
+          {
+            "id": "mark_used_updates",
+            "points": 15,
+            "passed": false
+          },
+          {
+            "id": "desktop_mobile_screenshots",
+            "points": 10,
+            "passed": false
+          },
+          {
+            "id": "warm_domestic_palette",
+            "points": 10,
+            "passed": false
+          },
+          {
+            "id": "no_generic_blue_primary",
+            "points": 5,
+            "passed": true
+          },
+          {
+            "id": "clean_exit",
+            "points": 5,
+            "passed": false
+          }
+        ]
+      }
+    },
+    "hermes": {
+      "harness": "hermes",
+      "projectRoot": "/Users/matthew/git/oss/guildhall/internal/benchmarks/runs/2026-05-29-quality/app-hermes/hermes-work",
+      "command": "hermes -z \"Build a dependency-free single-page Pantry Pulse web app in this project root. Use plain HTML, CSS, and JavaScript only; do not require npm install or a dev server. The app must include a visible heading \\\"Pantry Pulse\\\", at least seven seeded pantry items with category, quantity, and expiration text, an All / Expiring soon mutually-exclusive filter, a Mark used action that removes one visible item or marks it used, and a visible remaining-item count that updates. The design should feel app-store-caliber for a small domestic food utility: warm off-white or soft neutral base, sage/leaf green or warm amber primary/accent, coral/tomato or amber urgency, clear hierarchy, polished spacing, responsive mobile layout, and no generic blue primary/accent. Use semantic HTML and accessible controls. Then complete with truthful proof.\"",
+      "exitCode": 0,
+      "stdout": "All checks pass. Here's the proof summary:\n\n## ✅ Pantry Pulse — Delivered\n\n**Location:** `/Users/matthew/git/oss/guildhall/internal/benchmarks/runs/2026-05-29-quality/app-hermes/hermes-work/`\n\n**Three files — zero dependencies:**\n- `index.html` — semantic HTML5\n- `styles.css` — no frameworks, no blue primary\n- `app.js` — vanilla JS, no libraries, no build step\n\n### Proof checklist\n\n| Requirement | Status | Detail |\n|---|---|---|\n| Visible heading \"Pantry Pulse\" | ✅ | `<h1>Pantry Pulse</h1>` in header |\n| ≥7 seeded items | ✅ | **9 items** (oats, chickpeas, milk, spinach, sourdough, eggs, rice, tomatoes, yogurt) |\n| Each with category | ✅ | grains, canned, dairy, produce, bakery |\n| Each with quantity | ✅ | half full, 3 cans, 1 quart, 1 bag, half loaf, 4 eggs, ¾ full, 1 pint, 2 cups |\n| Each with expiration text | ✅ | All dates, formatted naturally (\"Expires tomorrow\", \"Expired 1d ago\", \"Expires Jul 12\") |\n| All / Expiring soon filter | ✅ | Mutually exclusive buttons; \"Expiring soon\" shows items ≤3 days out (including expired) |\n| Mark used action | ✅ | Removes via animation, updates count; button text toggles to \"Used ✓\" |\n| Visible remaining count | ✅ | `countBadge` with `aria-live=\"polite\"` — shows \"N items\" or \"N expiring\" |\n| Warm neutral palette | ✅ | `#f6f3ee` bg, `#ffffff` surface, `#e5ddd3` borders |\n| Sage/leaf green accent | ✅ | `#6b8f71` sage — active filter, hover states, badge |\n| Warm amber accent | ✅ | `#d48d3b` — expiring filter, warning text, badge |\n| Coral/tomato urgency | ✅ | `#d95c4a` — expired/alert items, badge |\n| No blue primary | ✅ | Zero occurrences of `blue`, `#00` (only black-based hexes for text) |\n| Responsive layout | ✅ | `max-width: 480px` with breakpoints at 420px and 600px |\n| Semantic HTML | ✅ | `<header>`, `<h1>`, `<ul role=\"list\">`, `<li role=\"listitem\">`, `<footer>`, `<button>`, `aria-pressed`, `aria-live` |\n| Polished spacing | ✅ | `rem`-based spacing, `gap` in flex containers, `padding` consistent |\n| No npm / no dev server | ✅ | No `package.json`, no imports, open directly in a browser |\n\nOpen `index.html` directly in any browser to use it.\n",
+      "stderr": "",
+      "durationMs": 224914,
+      "telemetry": {
+        "tokens": "session-export",
+        "cost": "insights",
+        "sessionExportPath": "/Users/matthew/git/oss/guildhall/internal/benchmarks/runs/2026-05-29-quality/app-hermes/hermes-sessions.jsonl",
+        "insightsPath": "/Users/matthew/git/oss/guildhall/internal/benchmarks/runs/2026-05-29-quality/app-hermes/hermes-insights.txt",
+        "notes": []
+      },
+      "artifact": {
+        "expectedPath": "/Users/matthew/git/oss/guildhall/internal/benchmarks/runs/2026-05-29-quality/app-hermes/hermes-work/index.html",
+        "fileExists": true,
+        "exactContent": true,
+        "actualContent": "<!DOCTYPE html>\n<html lang=\"en\">\n<head>\n  <meta charset=\"UTF-8\" />\n  <meta name=\"viewport\" content=\"width=device-width, initial-scale=1.0\" />\n  <title>Pantry Pulse</title>\n  <link rel=\"stylesheet\" href=\"styles.css\" />\n</head>\n<body>\n  <div id=\"app\">\n    <header>\n      <div class=\"header-row\">\n        <h1>Pantry Pulse</h1>\n        <span class=\"count-badge\" id=\"countBadge\" aria-live=\"polite\">7 items</span>\n      </div>\n      <p class=\"subtitle\">Know what's on hand before you shop.</p>\n    </header>\n\n    <div class=\"filters\" role=\"group\" aria-label=\"Filter pantry items\">\n      <button class=\"filter-btn active\" data-filter=\"all\" aria-pressed=\"true\">All</button>\n      <button class=\"filter-btn\" data-filter=\"expiring\" aria-pressed=\"false\">Expiring soon</button>\n    </div>\n\n    <ul class=\"pantry-list\" id=\"pantryList\" role=\"list\" aria-label=\"Pantry items\"></ul>\n\n    <footer class=\"app-footer\">\n      <p>Pantry Pulse &mdash; keep your kitchen honest.</p>\n    </footer>\n  </div>\n  <script src=\"app.js\"></script>\n</body>\n</html>\n",
+        "unexpectedFiles": [],
+        "appFiles": [
+          "app.js",
+          "index.html",
+          "styles.css"
+        ],
+        "palette": {
+          "roles": [
+            {
+              "name": "--bg",
+              "value": "#f6f3ee",
+              "h": 37.499999999999865,
+              "s": 30.76923076923074,
+              "l": 94.90196078431372,
+              "family": "warm-amber"
+            },
+            {
+              "name": "--surface",
+              "value": "#ffffff",
+              "h": 0,
+              "s": 0,
+              "l": 100,
+              "family": "warm-off-white"
+            },
+            {
+              "name": "--border",
+              "value": "#e5ddd3",
+              "h": 33.333333333333364,
+              "s": 25.71428571428575,
+              "l": 86.27450980392157,
+              "family": "warm-amber"
+            },
+            {
+              "name": "--text",
+              "value": "#2c241b",
+              "h": 31.764705882352942,
+              "s": 23.943661971830984,
+              "l": 13.92156862745098,
+              "family": "warm-amber"
+            },
+            {
+              "name": "--text-secondary",
+              "value": "#736b62",
+              "h": 31.764705882352935,
+              "s": 7.981220657276994,
+              "l": 41.76470588235294,
+              "family": "neutral"
+            },
+            {
+              "name": "--text-muted",
+              "value": "#9e958b",
+              "h": 31.57894736842109,
+              "s": 8.920187793427237,
+              "l": 58.23529411764705,
+              "family": "neutral"
+            },
+            {
+              "name": "--sage",
+              "value": "#6b8f71",
+              "h": 130,
+              "s": 14.399999999999999,
+              "l": 49.01960784313726,
+              "family": "leaf-green"
+            },
+            {
+              "name": "--sage-light",
+              "value": "#eaf1eb",
+              "h": 128.57142857142856,
+              "s": 20.000000000000014,
+              "l": 93.13725490196079,
+              "family": "leaf-green"
+            },
+            {
+              "name": "--sage-dark",
+              "value": "#4a6b4f",
+              "h": 129.0909090909091,
+              "s": 18.232044198895025,
+              "l": 35.490196078431374,
+              "family": "leaf-green"
+            },
+            {
+              "name": "--amber",
+              "value": "#d48d3b",
+              "h": 32.15686274509804,
+              "s": 64.01673640167364,
+              "l": 53.13725490196079,
+              "family": "warm-amber"
+            },
+            {
+              "name": "--amber-light",
+              "value": "#faf0e1",
+              "h": 36.000000000000014,
+              "s": 71.42857142857144,
+              "l": 93.13725490196079,
+              "family": "warm-amber"
+            },
+            {
+              "name": "--amber-dark",
+              "value": "#a86a1f",
+              "h": 32.846715328467155,
+              "s": 68.84422110552764,
+              "l": 39.01960784313726,
+              "family": "warm-amber"
+            },
+            {
+              "name": "--coral",
+              "value": "#d95c4a",
+              "h": 7.55244755244755,
+              "s": 65.29680365296802,
+              "l": 57.05882352941176,
+              "family": "tomato-coral"
+            },
+            {
+              "name": "--coral-bg",
+              "value": "#fdedea",
+              "h": 9.473684210526363,
+              "s": 82.60869565217388,
+              "l": 95.49019607843137,
+              "family": "warm-amber"
+            },
+            {
+              "name": "color",
+              "value": "#fff",
+              "h": 0,
+              "s": 0,
+              "l": 100,
+              "family": "warm-off-white"
+            },
+            {
+              "name": "border-color",
+              "value": "#d6cdc0",
+              "h": 35.45454545454547,
+              "s": 21.153846153846168,
+              "l": 79.6078431372549,
+              "family": "warm-amber"
+            }
+          ],
+          "primary": {
+            "name": "--sage-dark",
+            "value": "#4a6b4f",
+            "h": 129.0909090909091,
+            "s": 18.232044198895025,
+            "l": 35.490196078431374,
+            "family": "leaf-green"
+          },
+          "warmDomestic": true,
+          "genericBluePrimary": false
+        },
+        "browserProof": {
+          "loaded": true,
+          "headingVisible": true,
+          "seededItemCount": 9,
+          "filterWorked": true,
+          "markUsedWorked": true,
+          "screenshots": [
+            "/Users/matthew/git/oss/guildhall/internal/benchmarks/runs/2026-05-29-quality/app-hermes/screenshots/hermes/desktop.png",
+            "/Users/matthew/git/oss/guildhall/internal/benchmarks/runs/2026-05-29-quality/app-hermes/screenshots/hermes/mobile.png"
+          ],
+          "errors": []
+        }
+      },
+      "qualityScore": {
+        "total": 100,
+        "checks": [
+          {
+            "id": "app_entry_created",
+            "points": 10,
+            "passed": true
+          },
+          {
+            "id": "browser_loads",
+            "points": 15,
+            "passed": true
+          },
+          {
+            "id": "seeded_items_visible",
+            "points": 15,
+            "passed": true
+          },
+          {
+            "id": "expiring_filter_works",
+            "points": 15,
+            "passed": true
+          },
+          {
+            "id": "mark_used_updates",
+            "points": 15,
+            "passed": true
+          },
+          {
+            "id": "desktop_mobile_screenshots",
+            "points": 10,
+            "passed": true
+          },
+          {
+            "id": "warm_domestic_palette",
+            "points": 10,
+            "passed": true
+          },
+          {
+            "id": "no_generic_blue_primary",
+            "points": 5,
+            "passed": true
+          },
+          {
+            "id": "clean_exit",
+            "points": 5,
+            "passed": true
+          }
+        ]
+      }
+    }
+  }
+}

@@ -2471,6 +2471,21 @@ function hasReviewHandoffEvidence(
   return false
 }
 
+function hasImplementationEvidenceForSelfCritique(
+  toolMetadata: Record<string, unknown> | undefined,
+  taskId: string,
+): boolean {
+  if (missingAuthoritativeVerificationCommands(toolMetadata, taskId).length > 0) {
+    return false
+  }
+  const evidence = reviewHandoffEvidence(toolMetadata)
+  if (evidence?.taskId === taskId) {
+    if (evidence.inspectedImplementationFile && evidence.changedOrVerified) return true
+    if (currentTaskLooksLikeVerificationOnly(toolMetadata) && evidence.changedOrVerified) return true
+  }
+  return checkpointFilesTouched(toolMetadata).length > 0
+}
+
 function hasStructuredSelfCritiqueForReviewHandoff(
   input: Record<string, unknown>,
   toolMetadata: Record<string, unknown> | undefined,
@@ -2484,8 +2499,32 @@ function reviewHandoffGuardResult(
   input: Record<string, unknown>,
   toolMetadata: Record<string, unknown> | undefined,
 ): ToolResultBlock | null {
-  if (toolName !== 'update-task' || input['status'] !== 'review') return null
+  if (toolName !== 'update-task') return null
   const taskId = taskIdForReviewHandoff(input, toolMetadata)
+  const requestedStatus = typeof input['status'] === 'string' ? input['status'].trim() : ''
+  if (
+    requestedStatus !== 'review' &&
+    requestedStatus !== 'in_progress'
+  ) {
+    return null
+  }
+  const hasStructuredSelfCritique = hasStructuredSelfCritiqueForReviewHandoff(input, toolMetadata)
+  if (
+    requestedStatus === 'in_progress' &&
+    hasStructuredSelfCritique &&
+    taskId &&
+    !hasImplementationEvidenceForSelfCritique(toolMetadata, taskId)
+  ) {
+    return {
+      type: 'tool_result',
+      tool_use_id: toolUseId,
+      content: currentTaskLooksLikeVerificationOnly(toolMetadata)
+        ? 'Blocked self-critique: produce a durable verification artifact or concrete verification step before writing the review self-critique. Do not claim completion from task metadata alone.'
+        : 'Blocked self-critique: inspect, change, or verify implementation files before writing the review self-critique. Do not claim files or acceptance criteria are complete from task metadata alone.',
+      is_error: true,
+    }
+  }
+  if (requestedStatus !== 'review') return null
   const missingImport = missingLocalImportEvidence(toolMetadata)
   if (missingImport) {
     return {
@@ -2503,7 +2542,6 @@ function reviewHandoffGuardResult(
   }
   const missingVerification = taskId ? missingAuthoritativeVerificationCommands(toolMetadata, taskId) : []
   const hasImplementationEvidence = taskId && hasReviewHandoffEvidence(toolMetadata, taskId)
-  const hasStructuredSelfCritique = hasStructuredSelfCritiqueForReviewHandoff(input, toolMetadata)
   if (missingVerification.length > 0) {
     return {
       type: 'tool_result',

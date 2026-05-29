@@ -11,6 +11,11 @@ import { installAgentBridgeInstructions } from './agent-bridge-install.js'
 import { migrateLegacyMemoryToLocalHistory } from './memory-migration.js'
 import { migrateTaskState } from './task-state-migration.js'
 import { recordGuildhallRuntimeWrite } from './runtime-compatibility.js'
+import { readProjectRuntimeState } from './project-runtime-store.js'
+import {
+  hasLegacyRuntimeCommandEvidence,
+  migrateLegacyRuntimeCommandEvidenceToPersistence,
+} from './project-runtime-command.js'
 
 export type MigrationScope = 'machine' | 'project' | 'workspace' | 'database'
 export type MigrationSafety = 'automatic' | 'prompt' | 'manual' | 'required'
@@ -252,6 +257,49 @@ const BUILT_IN_PROJECT_MIGRATIONS: ProjectMigrationDefinition[] = [
       }
     },
   },
+  {
+    id: '0.9.0/runtime-command-evidence-persistence',
+    title: 'Move runtime command evidence into persistence',
+    introducedIn: '0.9.0',
+    scope: 'project',
+    safety: 'automatic',
+    summary: 'Moves legacy runtime command evidence JSONL into GuildhallPersistence events.',
+    async detect(projectRoot) {
+      const needed = await hasLegacyRuntimeCommandEvidence(projectRoot)
+      return {
+        needed,
+        affectedPaths: needed ? ['host-owned runtime command evidence JSONL'] : [],
+      }
+    },
+    async apply(projectRoot) {
+      const result = await migrateLegacyRuntimeCommandEvidenceToPersistence(projectRoot)
+      return {
+        summary: `Moved ${result.migrated} runtime command evidence record${result.migrated === 1 ? '' : 's'} into persistence${result.skipped > 0 ? `; skipped ${result.skipped} already-present record${result.skipped === 1 ? '' : 's'}` : ''}.`,
+        affectedPaths: result.affectedPaths,
+      }
+    },
+  },
+  {
+    id: '0.9.0/runtime-backed-project',
+    title: 'Move project commands into the local runtime',
+    introducedIn: '0.9.0',
+    scope: 'project',
+    safety: 'manual',
+    summary: 'Guides this project from host-run compatibility into runtime-backed execution after health checks pass.',
+    async detect(projectRoot) {
+      const state = await readProjectRuntimeState(projectRoot)
+      return {
+        needed: state.migration.mode !== 'runtime-backed',
+        affectedPaths: ['host-owned runtime state'],
+      }
+    },
+    async apply() {
+      return {
+        summary: 'Open Settings to run runtime health checks and accept runtime-backed mode.',
+        affectedPaths: ['host-owned runtime state'],
+      }
+    },
+  },
 ]
 
 function toStatusItem(
@@ -299,6 +347,7 @@ function shouldApplyMigration(
   migration: ProjectMigrationDefinition,
   input: { includePrompt?: boolean; only?: string[] },
 ): boolean {
+  if (migration.safety === 'manual') return false
   if (input.only?.includes(migration.id)) return true
   if (input.only && input.only.length > 0) return false
   if (migration.safety === 'automatic') return true

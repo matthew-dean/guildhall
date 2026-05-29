@@ -124,7 +124,7 @@ work small enough for a worker and reviewers to understand.
 ## Where to go next
 
 - [Start here](./quick-start) for the first browser run.
-- [How Guildhall works](./how-guildhall-works) for the system model behind
+- [How the work loop works](./how-guildhall-works) for the system model behind
   context, agents, [Corpus Map](./corpus-map), and inspections.
 - [Agent context](./agent-context) for what agents receive before they act.
 - [Corpus Map](./corpus-map) for how Guildhall indexes codebase structure.

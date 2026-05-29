@@ -208,6 +208,13 @@ Guildhall records:
 - a maturity rating: `absent`, `thin`, `emerging`, or `established`
 - recommendations for reuse or just-in-time systemization
 
+Guildhall also builds a **Design System Profile** for UI-heavy projects. The
+profile is the design-system companion to the Corpus Map: it summarizes the
+detected UI libraries, preview/catalog surface, token and component files,
+drafted Guildhall design-system state, proof expectations, and recommendations
+that point work toward reuse, small system extensions, or clearer guidance
+before local styles pile up.
+
 This helps agents avoid the pattern where every screen invents its own button,
 card, badge, spacing, or color treatment. It also keeps the system from
 becoming ceremony for small projects. A thin or absent design system is not an

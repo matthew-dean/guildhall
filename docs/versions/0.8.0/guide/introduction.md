@@ -1,29 +1,16 @@
 ---
-title: Introduction
+title: Why Guildhall exists
 ---
 
-# Introduction
+# Why Guildhall exists
 
-Guildhall is a **local AI agent harness for software projects**. It sits around
-large language models and gives them shared project state, task plans, tools,
-review rules, recovery paths, and a browser surface where you can see what is
-happening.
+Guildhall is a **local AI agent harness for software projects**. It wraps large
+language models with project state, task plans, review rules, recovery paths,
+and a browser surface where you can see what is happening.
 
-A chat assistant can help with a task. Guildhall tries to help with the shape
-around the task: what should be done, who is doing it, what context they saw,
-what changed, what passed review, and what still needs a decision.
-
-The name comes from a **guild hall**: a shared place where skilled trades work
-under common standards. That is only the metaphor. In the product, the
-"trades" are AI agents with different responsibilities: a **spec agent** turns
-rough intent into a blueprint, a **coordinator** keeps the work coherent,
-**workers** make bounded changes, **reviewers** inspect the result, and
-**gate-checkers** run hard checks.
-
-In practice, you point Guildhall at one project, open the project shell, and
-run the day from there. Guildhall can keep running while the service is active
-and your computer is awake. If the machine sleeps, the process pauses with it;
-when you start the service again, Guildhall resumes from saved project state.
+A chat assistant can help with a task. Guildhall helps with the work around the
+task: what should be done, what context matters, what changed, what passed
+review, and what still needs a decision.
 
 ## Why people use it
 
@@ -65,7 +52,7 @@ harness-shaped: you help frame the work, agents build against the accepted
 plan, inspectors check the result, and you step in for product calls and
 meaningful changes, not for babysitting.
 
-Three properties follow from this:
+Four properties follow from this:
 
 1. **Everything is explicit.** Behavior lives in named settings instead of
    disappearing into prompt vibes.
@@ -77,6 +64,13 @@ Three properties follow from this:
    Progress leaves durable evidence: a blueprint, decision, diff, check,
    review finding, or change order.
 
+## Why the name
+
+The name comes from a **guild hall**: a shared place where skilled trades work
+under common standards. That is only the metaphor. The real product promise is
+more practical: different helpers, one project room, visible progress, fewer
+"wait, what did it just do?" moments.
+
 ## Why the construction language
 
 Real projects are built by many people and many tools following shared plans,
@@ -86,8 +80,8 @@ is building into.
 
 ## Next
 
-- Start the service for a project: [Quick start](./quick-start).
-- Learn the operating model: [How Guildhall builds](./how-guildhall-builds).
+- Start the service for a project: [Start here](./quick-start).
+- Learn the operating loop: [How the work loop works](./how-guildhall-works).
 - Tour the operating surface: [Projects and work](./dashboard).
 - Understand the vocabulary: [Core concepts](./concepts).
 - Tune behavior: [Levers](../levers/).

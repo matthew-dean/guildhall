@@ -2971,6 +2971,175 @@ describe('Orchestrator.tick — feedback loop', () => {
     }
   })
 
+  it('treats worker self-critique without project-file changes as no progress', async () => {
+    await writeQueue([
+      mkTask({
+        id: 'pantry-live',
+        status: 'in_progress',
+        assignedTo: 'worker-agent',
+        title: 'Pantry Pulse app spec',
+        spec: [
+          '## Summary',
+          'Build Pantry Pulse, a small local web app.',
+          '',
+          '## Completion Boundary',
+          '- What Guildhall can complete in code: Create the local static web app files, seeded data, filter behavior, styles, and browser-proofable UI.',
+          '- Verification environment: Local runtime/browser proof.',
+        ].join('\n'),
+      }),
+    ])
+    const worker = stubAgent('worker-agent', async () => {
+      const task = (await readQueue()).tasks.find(candidate => candidate.id === 'pantry-live')!
+      await mutateTask('pantry-live', {
+        updatedAt: '2026-04-01T00:02:00Z',
+        notes: [
+          ...task.notes,
+          {
+            agentId: 'worker-agent',
+            role: 'self-critique',
+            content: [
+              '**Self-critique:**',
+              'For each acceptance criterion:',
+              '- [AC-1]: Met — index.html exists and renders Pantry Pulse.',
+              '',
+              'Minimum-scope check:',
+              '- Files changed: index.html',
+              '- Smallest useful change?: yes.',
+              '- Anything to revert before review?: none',
+              '',
+              'Review proof packet:',
+              '- Changed files / diff scope: index.html',
+              '- Verification commands passed: pnpm build passed',
+              '- Working hypothesis at handoff: ready.',
+              '- Known gaps / follow-up: none',
+              '',
+              'Out-of-scope changes introduced: none',
+              'Uncertainties: none',
+            ].join('\n'),
+            timestamp: '2026-04-01T00:02:00Z',
+          },
+        ],
+      })
+    })
+    const orch = new Orchestrator({
+      config: baseConfig(),
+      agents: agentSet({ worker }),
+      gitDriver: new InMemoryGitDriver({ clean: true, currentBranch: 'main' }),
+    })
+
+    const out = await orch.tick()
+
+    if (out.kind === 'processed') {
+      expect(out.afterStatus).toBe('in_progress')
+      expect(out.transitioned).toBe(false)
+    }
+    const task = (await readQueue()).tasks.find(candidate => candidate.id === 'pantry-live')!
+    expect(task.notes.at(-1)?.role).toBe('worker-progress-review')
+    expect(task.notes.at(-1)?.content).toContain('self-critique without project-file changes')
+  })
+
+  it('rejects stale worker self-critique without project-file changes before redispatching', async () => {
+    await writeQueue([
+      mkTask({
+        id: 'pantry-live',
+        status: 'in_progress',
+        assignedTo: 'worker-agent',
+        title: 'Pantry Pulse app spec',
+        spec: 'Build a local web app with browser-proofable UI.',
+        notes: [{
+          agentId: 'worker-agent',
+          role: 'self-critique',
+          content: [
+            '**Self-critique:**',
+            'For each acceptance criterion:',
+            '- [AC-1]: Met — index.html exists.',
+            '',
+            'Minimum-scope check:',
+            '- Files changed: index.html',
+            '- Smallest useful change?: yes.',
+            '- Anything to revert before review?: none',
+            '',
+            'Review proof packet:',
+            '- Changed files / diff scope: index.html',
+            '- Verification commands passed: pnpm build passed',
+            '- Working hypothesis at handoff: ready.',
+            '- Known gaps / follow-up: none',
+          ].join('\n'),
+          timestamp: '2026-04-01T00:02:00Z',
+        }],
+      }),
+    ])
+    const worker = stubAgent('worker-agent')
+    const orch = new Orchestrator({
+      config: baseConfig(),
+      agents: agentSet({ worker }),
+      gitDriver: new InMemoryGitDriver({ clean: true, currentBranch: 'main' }),
+    })
+
+    const out = await orch.tick()
+
+    expect(worker.calls).toHaveLength(0)
+    if (out.kind === 'processed') {
+      expect(out.agent).toBe('coordinator-remediation')
+      expect(out.afterStatus).toBe('in_progress')
+    }
+    const task = (await readQueue()).tasks.find(candidate => candidate.id === 'pantry-live')!
+    expect(task.notes.at(-1)?.role).toBe('worker-progress-review')
+    expect(task.notes.at(-1)?.content).toContain('stale worker self-critique without project-file changes')
+  })
+
+  it('bounces review back to implementation when a local-web self-critique has no project-file changes', async () => {
+    await writeQueue([
+      mkTask({
+        id: 'pantry-live',
+        status: 'review',
+        assignedTo: 'reviewer-agent',
+        title: 'Pantry Pulse app spec',
+        spec: 'Build a local web app with browser-proofable UI.',
+        notes: [{
+          agentId: 'worker-agent',
+          role: 'self-critique',
+          content: [
+            '**Self-critique:**',
+            'For each acceptance criterion:',
+            '- [AC-1]: Met — index.html exists.',
+            '',
+            'Minimum-scope check:',
+            '- Files changed: index.html',
+            '- Smallest useful change?: yes.',
+            '- Anything to revert before review?: none',
+            '',
+            'Review proof packet:',
+            '- Changed files / diff scope: index.html',
+            '- Verification commands passed: pnpm build passed',
+            '- Working hypothesis at handoff: ready.',
+            '- Known gaps / follow-up: none',
+          ].join('\n'),
+          timestamp: '2026-04-01T00:02:00Z',
+        }],
+      }),
+    ])
+    const reviewer = stubAgent('reviewer-agent')
+    const orch = new Orchestrator({
+      config: baseConfig(),
+      agents: agentSet({ reviewer }),
+      gitDriver: new InMemoryGitDriver({ clean: true, currentBranch: 'main' }),
+    })
+
+    const out = await orch.tick()
+
+    expect(reviewer.calls).toHaveLength(0)
+    if (out.kind === 'processed') {
+      expect(out.beforeStatus).toBe('review')
+      expect(out.afterStatus).toBe('in_progress')
+      expect(out.transitioned).toBe(true)
+    }
+    const task = (await readQueue()).tasks.find(candidate => candidate.id === 'pantry-live')!
+    expect(task.status).toBe('in_progress')
+    expect(task.assignedTo).toBe('worker-agent')
+    expect(task.notes.at(-1)?.content).toContain('stale worker self-critique without project-file changes')
+  })
+
   it('includes the tasks path and memory dir in the agent prompt', async () => {
     await writeQueue([mkTask({ id: 'a', status: 'in_progress' })])
     const worker = stubAgent('worker-agent')
@@ -3059,6 +3228,51 @@ describe('Orchestrator.tick — feedback loop', () => {
     expect(reviewCall!.prompt).toContain('added focused unit coverage')
     expect(reviewCall!.prompt).toContain('## Policy Decision Packet')
     expect(reviewCall!.prompt).toContain('repair_touched_file_failure')
+  })
+
+  it('marks UI review packets as missing visual evidence when no screenshots are recorded', async () => {
+    const worktree = path.join(tmpDir, 'task-worktree')
+    await fs.mkdir(worktree, { recursive: true })
+    execFileSync('git', ['init'], { cwd: worktree, stdio: 'ignore' })
+    await fs.writeFile(
+      path.join(worktree, 'index.html'),
+      '<!doctype html><html><body><h1>Pantry Pulse</h1></body></html>\n',
+      'utf-8',
+    )
+    await writeQueue([
+      mkTask({
+        id: 'a',
+        title: 'Build Pantry Pulse UI',
+        description: 'Build a polished frontend UI for Pantry Pulse.',
+        spec: '## Summary\nBuild a polished browser app with app-store-caliber visual design.',
+        status: 'in_progress',
+        worktreePath: worktree,
+        notes: [{
+          agentId: 'worker-agent',
+          role: 'self-critique',
+          content: 'Self-critique: UI implemented but no screenshot proof captured.',
+          timestamp: '2026-04-01T00:02:00Z',
+        }],
+      }),
+    ])
+    const worker = stubAgent('worker-agent', async () => {
+      await mutateTask('a', {
+        status: 'review',
+      })
+    })
+    const reviewer = stubAgent('reviewer-agent')
+    const orch = new Orchestrator({
+      config: baseConfig(),
+      agents: agentSet({ worker, reviewer }),
+    })
+
+    await orch.tick()
+    await orch.tick()
+
+    const packet = await fs.readFile(taskHistoryPath('a', 'review-packet.md'), 'utf-8')
+    expect(packet).toContain('## Visual Evidence')
+    expect(packet).toContain('Missing desktop/mobile screenshot evidence')
+    expect(packet).toContain('visual reviewers must not approve')
   })
 
   it('records reflection learning when completed work has a successful playbook', async () => {
@@ -9295,6 +9509,53 @@ describe('Orchestrator worker no-progress escalation', () => {
     expect(task?.notes.find((note) => note.role === 'policy-classification')?.content)
       .toContain('"class":"provider_unavailable"')
   })
+
+  it('preserves dirty worktree progress when a worker exceeds its total turn budget', async () => {
+    const worktreePath = path.join(tmpDir, '.guildhall', 'worktrees', 'task-013')
+    await fs.mkdir(worktreePath, { recursive: true })
+    await writeQueue([
+      mkTask({
+        id: 'task-013',
+        title: 'Build small local app',
+        status: 'in_progress',
+        assignedTo: 'worker-agent',
+        projectPath: tmpDir,
+        worktreePath,
+        spec: 'Build the app files and hand off to review.',
+        acceptanceCriteria: [{
+          id: 'ac-1',
+          description: 'app files exist',
+          verifiedBy: 'review',
+          met: false,
+        } as any],
+      }),
+    ])
+
+    const worker = stubAgent('worker-agent')
+    worker.generate = async () => await new Promise(() => {}) as never
+    const gitDriver = new InMemoryGitDriver()
+    gitDriver.setClean(false)
+    const orch = new Orchestrator({
+      config: baseConfig(),
+      agents: agentSet({ worker }),
+      gitDriver,
+      agentGenerateTimeoutMs: 60_000,
+      agentGenerateWallClockTimeoutMs: 10,
+    })
+
+    const outcome = await orch.tick({ dispatchLimit: 1 })
+
+    expect(outcome.kind).toBe('processed')
+    if (outcome.kind === 'processed') {
+      expect(outcome.agent).toBe('worker-agent')
+      expect(outcome.beforeStatus).toBe('in_progress')
+      expect(outcome.afterStatus).toBe('in_progress')
+      expect(outcome.transitioned).toBe(false)
+    }
+    const task = (await readQueue()).tasks.find((candidate) => candidate.id === 'task-013')
+    expect(task?.status).toBe('in_progress')
+    expect(task?.escalations).toEqual([])
+  })
 })
 
 describe('Orchestrator — FR-24 slot allocation / runtime isolation', () => {
@@ -9836,6 +10097,60 @@ describe('Orchestrator.tick \u2014 AC-18 reviewer_mode dispatch', () => {
       expect(task.acceptanceCriteria).toHaveLength(2)
       expect(task.acceptanceCriteria.every((criterion) => criterion.met)).toBe(true)
       expect(task.reviewVerdicts.at(-1)?.verdict).toBe('approve')
+    },
+  )
+
+  it(
+    'llm_with_deterministic_fallback: reconciles AC-01 criteria from AC1 self-critique shorthand after a total turn budget timeout',
+    async () => {
+      await writeReviewerMode('llm_with_deterministic_fallback')
+      await writeQueue([
+        reviewReadyTask({
+          acceptanceCriteria: [
+            { id: 'AC-01', description: 'Page loads.', verifiedBy: 'review', met: false },
+            { id: 'AC-02', description: 'Mark used removes an item.', verifiedBy: 'review', met: false },
+          ] as any,
+          gateResults: [],
+          notes: [
+            {
+              agentId: 'worker-agent',
+              role: 'self-critique',
+              content: [
+                '**Self-critique:**',
+                '- AC1 (Page loads): Met — Verified in browser.',
+                '- AC2 (Mark used removes an item): Met — Verified in browser.',
+              ].join('\n'),
+              timestamp: '2026-04-21T00:00:00Z',
+            },
+          ],
+        }),
+      ])
+
+      const timedOutReviewer: StubAgent = {
+        name: 'reviewer-agent',
+        calls: [],
+        async generate(prompt: string) {
+          this.calls.push({ prompt })
+          throw new Error('reviewer-agent exceeded 120000ms total turn budget')
+        },
+      }
+
+      const orch = new Orchestrator({
+        config: baseConfig(),
+        agents: agentSet({ reviewer: timedOutReviewer }),
+      })
+      const out = await orch.tick()
+
+      expect(out.kind).toBe('processed')
+      if (out.kind === 'processed') {
+        expect(out.afterStatus).toBe('gate_check')
+        expect(out.agent).toBe('reviewer-deterministic-fallback')
+      }
+
+      const task = (await readQueue()).tasks[0]!
+      expect(task.acceptanceCriteria.every((criterion) => criterion.met)).toBe(true)
+      expect(task.reviewVerdicts.at(-1)?.verdict).toBe('approve')
+      expect(task.reviewVerdicts.at(-1)?.llmError).toContain('total turn budget')
     },
   )
 

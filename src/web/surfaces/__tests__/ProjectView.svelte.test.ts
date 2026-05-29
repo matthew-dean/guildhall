@@ -803,7 +803,7 @@ describe('ProjectView', () => {
     expect(screen.getByRole('heading', { name: /looma-knit is attached, but not initialized yet/i })).toBeInTheDocument()
 
     await user.click(screen.getByRole('button', { name: /initialize this project/i }))
-    await waitFor(() => expect(path.value).toBe('/setup'))
+    await waitFor(() => expect(path.value).toBe('/projects/looma-knit/setup'))
   })
 
   it('blocks project actions and points users at readiness when bootstrap fails', async () => {

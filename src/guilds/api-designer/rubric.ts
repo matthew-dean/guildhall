@@ -38,6 +38,12 @@ export const API_DESIGNER_RUBRIC: SoftGateRubricItem[] = [
     weight: 0.9,
   },
   {
+    id: 'api-abstraction-fit',
+    question:
+      'Is each durable contract surface (endpoint, schema, MCP resource, event, public packet) neither too narrow nor too generic, using a generic shell with typed domain payloads when that is the right fit?',
+    weight: 1.0,
+  },
+  {
     id: 'api-breaking-changes-communicated',
     question:
       'Are any breaking changes covered by deprecation headers, changelog entries, and a migration note — never a silent removal?',

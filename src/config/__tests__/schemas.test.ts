@@ -390,6 +390,28 @@ describe('GlobalConfig', () => {
     expect(config.maxProviderConcurrency).toBe(200)
   })
 
+  it('parses experimental local Looma development config without making it required', () => {
+    expect(GlobalConfig.parse({}).experimental).toBeUndefined()
+
+    const config = GlobalConfig.parse({
+      experimental: {
+        designSystemDevelopment: {
+          looma: {
+            enabled: true,
+            path: '/Users/matthew/git/oss/looma-knit/looma',
+            writeThrough: 'queue',
+          },
+        },
+      },
+    })
+
+    expect(config.experimental?.designSystemDevelopment?.looma).toEqual({
+      enabled: true,
+      path: '/Users/matthew/git/oss/looma-knit/looma',
+      writeThrough: 'queue',
+    })
+  })
+
   it('validates servePort range', () => {
     expect(() => GlobalConfig.parse({ servePort: 80 })).toThrow()
     expect(GlobalConfig.parse({ servePort: 3000 }).servePort).toBe(3000)

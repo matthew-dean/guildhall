@@ -98,7 +98,8 @@ describe('WorkTab', () => {
       },
     })
 
-    await screen.findByText('Work list (3)')
+    await screen.findByText('Work list (2 visible, 3 total)')
+    await userEvent.click(screen.getByRole('button', { name: /show done and shelved/i }))
     await userEvent.click(screen.getByRole('button', { name: /^task$/i }))
     expect(screen.getAllByRole('button', { name: /open task/i })[0]?.textContent).toContain('Alpha task')
 
@@ -121,6 +122,65 @@ describe('WorkTab', () => {
     const gammaRow = screen.getByRole('button', { name: /open task gamma task/i })
     await fireEvent.keyDown(gammaRow, { key: 'Enter' })
     expect(path.value).toBe('/projects/looma-knit/task/task-gamma')
+  })
+
+  it('hides done and shelved work by default and reveals it on request', async () => {
+    render(WorkTab, {
+      props: {
+        detail: detail([
+          task({ id: 'task-ready', title: 'Ready feature work', status: 'ready' }),
+          task({ id: 'task-done', title: 'Completed feature proof', status: 'done' }),
+          task({ id: 'task-shelved', title: 'Shelved idea', status: 'shelved' }),
+        ]),
+      },
+    })
+
+    await screen.findByText('Work list (1 visible, 3 total)')
+    expect(screen.getByText('Ready feature work')).toBeTruthy()
+    expect(screen.queryByText('Completed feature proof')).toBeNull()
+    expect(screen.queryByText('Shelved idea')).toBeNull()
+
+    await userEvent.click(screen.getByRole('button', { name: /show done and shelved/i }))
+
+    expect(screen.getByText('Work list (3 visible, 3 total)')).toBeTruthy()
+    expect(screen.getByText('Completed feature proof')).toBeTruthy()
+    expect(screen.getByText('Shelved idea')).toBeTruthy()
+  })
+
+  it('shows flexible work hierarchy breadcrumbs and child rollups without parent-task wording', async () => {
+    render(WorkTab, {
+      props: {
+        detail: detail([
+          task({
+            id: 'app-spec',
+            title: 'Pantry Pulse app spec',
+            status: 'parent',
+            workKind: 'app_spec',
+            hierarchy: { childIds: ['feature-inventory'], order: 0 },
+          }),
+          task({
+            id: 'feature-inventory',
+            title: 'Inventory tracking feature',
+            status: 'parent',
+            workKind: 'feature_spec',
+            hierarchy: { parentId: 'app-spec', childIds: ['task-build-inventory'], order: 0 },
+          }),
+          task({
+            id: 'task-build-inventory',
+            title: 'Build inventory list',
+            status: 'ready',
+            workKind: 'implementation',
+            hierarchy: { parentId: 'feature-inventory', childIds: [], order: 0 },
+          }),
+        ]),
+      },
+    })
+
+    await screen.findByText('Pantry Pulse app spec')
+    expect(screen.getAllByText('1 nested work item').length).toBeGreaterThanOrEqual(1)
+    expect(screen.getByText('Pantry Pulse app spec / Inventory tracking feature')).toBeTruthy()
+    expect(screen.getByText('Pantry Pulse app spec / Inventory tracking feature / Build inventory list')).toBeTruthy()
+    expect(document.body.textContent).not.toMatch(/parent task/i)
   })
 
   it('uses explicit work summary labels instead of overloaded active/draft terms', async () => {

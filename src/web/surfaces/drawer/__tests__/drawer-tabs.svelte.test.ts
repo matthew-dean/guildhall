@@ -174,6 +174,94 @@ describe('drawer task detail tabs', () => {
     expect(screen.getByText(/Apply the policy in product surfaces/)).toBeInTheDocument()
   })
 
+  it('renders proof paths and completion handoff without executable launch controls', () => {
+    render(JourneyTab, {
+      task: task({
+        proofPaths: [
+          {
+            id: 'task-link-editor-proof-path',
+            scope: { type: 'task', id: 'task-link-editor' },
+            title: 'Verify link editor controls',
+            summary: 'Run focused tests and inspect the editor route.',
+            status: 'verified',
+            launchSteps: [
+              {
+                id: 'test',
+                kind: 'copy_command',
+                title: 'Run focused tests',
+                command: 'pnpm vitest run src/editor/link-editor.test.ts',
+              },
+              {
+                id: 'route',
+                kind: 'open_url',
+                title: 'Open editor',
+                url: 'http://localhost:5173/editor',
+              },
+            ],
+            expectedEvidence: [
+              { id: 'unit', kind: 'automated', description: 'Focused editor tests pass.', required: true },
+              { id: 'browser', kind: 'manual', description: 'Editor route was inspected.', required: true },
+              { id: 'preview', kind: 'provider', description: 'Preview deployment is green.', required: false },
+            ],
+            verificationRecords: [
+              {
+                id: 'unit-run',
+                evidenceId: 'unit',
+                kind: 'automated',
+                status: 'passed',
+                summary: 'Focused editor tests passed.',
+                command: 'pnpm vitest run src/editor/link-editor.test.ts',
+                recordedAt: now,
+                recordedBy: 'worker-agent',
+              },
+            ],
+            createdAt: now,
+            updatedAt: now,
+            createdBy: 'spec-agent',
+          },
+        ],
+        completionHandoff: {
+          id: 'task-link-editor-completion-handoff',
+          taskId: 'task-link-editor',
+          completedAt: now,
+          completedBy: 'gate-checker-agent',
+          summary: 'The link editor controls are ready to inspect.',
+          proofPathIds: ['task-link-editor-proof-path'],
+          verificationSummary: '1 automated proof, 0 manual proof, 0 provider proof.',
+          automatedProof: [
+            {
+              id: 'unit-run',
+              evidenceId: 'unit',
+              kind: 'automated',
+              status: 'passed',
+              summary: 'Focused editor tests passed.',
+              command: 'pnpm vitest run src/editor/link-editor.test.ts',
+              recordedAt: now,
+              recordedBy: 'worker-agent',
+            },
+          ],
+          manualProof: [],
+          providerProof: [],
+          residualRisk: 'Browser inspection is still required before release.',
+        },
+      }),
+    })
+
+    expect(screen.getByText('Proof path')).toBeInTheDocument()
+    expect(screen.getByText('Verify link editor controls')).toBeInTheDocument()
+    expect(screen.getByText('Run focused tests')).toBeInTheDocument()
+    expect(screen.getByText('pnpm vitest run src/editor/link-editor.test.ts')).toBeInTheDocument()
+    expect(screen.getByRole('link', { name: 'Open editor' })).toHaveAttribute('href', 'http://localhost:5173/editor')
+    expect(screen.getByText('Automated Required')).toBeInTheDocument()
+    expect(screen.getByText('Manual Required')).toBeInTheDocument()
+    expect(screen.getByText('Provider Optional')).toBeInTheDocument()
+    expect(screen.getByText('Completion handoff')).toBeInTheDocument()
+    expect(screen.getByText('Runtime evidence')).toBeInTheDocument()
+    expect(screen.getByText('Remaining uncertainty')).toBeInTheDocument()
+    expect(screen.getByText('Browser inspection is still required before release.')).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: /start/i })).not.toBeInTheDocument()
+  })
+
   it('renders provenance, terminal outcome, shelve reason, and context health in one audit trail', () => {
     const contextDebug: ContextDebugRecord[] = [
       {

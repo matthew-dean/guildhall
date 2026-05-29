@@ -119,3 +119,23 @@ test('pinned project rail reserves layout width at medium desktop sizes', async 
   expect(expandedRail!.width).toBeGreaterThanOrEqual(230)
   expect(expandedMain!.x).toBeGreaterThanOrEqual(expandedRail!.width - 1)
 })
+
+test('advanced settings exposes design taste and interactable catalog state', async ({ page }) => {
+  await page.setViewportSize({ width: 1280, height: 900 })
+  await page.goto('/projects/looma-knit/settings/advanced')
+
+  await expect(page.getByRole('heading', { name: 'Advanced settings' })).toBeVisible()
+  await expect(page.getByRole('heading', { name: 'Design system' })).toBeVisible()
+  await expect(page.getByText('Taste memory')).toBeVisible()
+  await expect(page.getByText('warm-functional-polish', { exact: true })).toBeVisible()
+  await expect(page.getByText('segmented-control-or-tabs', { exact: true })).toBeVisible()
+  await expect(page.getByText('Catalog', { exact: true })).toBeVisible()
+  await expect(page.getByText(/guildhall-portable · 1 item/)).toBeVisible()
+  await expect(page.getByText('Guildhall portable stories are available as the interactable catalog')).toBeVisible()
+  await expect(page.getByText('Intent preview', { exact: true })).toBeVisible()
+  await expect(page.getByText('web · real-web-preview', { exact: true })).toBeVisible()
+  await expect(page.getByText('Native proof', { exact: true })).toBeVisible()
+  await expect(page.getByText('not required', { exact: true })).toBeVisible()
+  await expect(page.getByText('Owner feedback', { exact: true })).toBeVisible()
+  await expect(page.getByText('Decision packets', { exact: true })).toBeVisible()
+})

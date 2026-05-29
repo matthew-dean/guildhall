@@ -7,36 +7,31 @@ pageClass: gh-first-visit-page
 
 Guildhall is a local app for handing real project work to AI agents without
 losing the plot. It keeps the plan, the work, the review, and the blockers in
-one visible place. You do not need to learn the internal machinery before your
-first run.
+one visible place.
 
-![Guildhall settings view showing readiness checks and project setup state.](../assets/ui-audit/0-7-0/settings.png)
+You do not need the whole machine model before your first run. The job here is
+smaller: install Guildhall, open one repo, and try one modest task where you can
+see the loop.
+
+![Guildhall v0.9.0 project settings showing readiness checks and local runtime setup state.](../assets/ui-audit/0-9-0/settings-runtime.png)
 
 ## The first mental model
 
-Think of Guildhall as a small project office for AI-assisted software work.
-The name comes from a guild hall: a shared room where different skilled trades
-coordinate work and standards. In Guildhall, those "trades" are AI agents with
-different jobs.
+Think of Guildhall as a small project office for AI-assisted software work. You
+bring a repo and a concrete goal; Guildhall turns that into visible task state,
+asks when your answer changes the outcome, and keeps evidence attached to the
+work instead of buried in a heroic transcript.
 
-The pieces you touch first are:
+The pieces you touch first are simple:
 
 - **Projects** are your repos.
-- **Blueprints** are the accepted plans for what gets built and how it
-  will be checked.
-- **Tasks** are framed pieces of work that can move through planning,
-  implementation, review, and gates.
-- **Agents** are the helpers that plan, build, inspect, and report.
-- **The shell** is the browser screen where you see the current project.
+- **Tasks** are framed pieces of work.
+- **Blueprints** are the accepted plans for what gets built and checked.
+- **The shell** is the browser screen where the current project lives.
 
-The goal of getting started is simple: open one project, give it one small
-task set, and see whether the work moves with clear evidence. Read
-[How Guildhall builds](./how-guildhall-builds) when you want the full mental
-model, or keep [Core concepts](./concepts) nearby as the glossary.
-
-Setup stays short by design. Guildhall can infer routine defaults and save
-your attention for choices that change what you are building, how safe the run
-is, or whether the result is good enough.
+That is enough vocabulary for now. Keep [Core concepts](./concepts) nearby when
+a term gets fuzzy, and read [How the work loop works](./how-guildhall-works)
+when you want the machinery tour.
 
 ## What a good first run proves
 
@@ -53,11 +48,15 @@ That is the little heartbeat you want before asking for more ambitious work.
 
 ## Install
 
+Guildhall 0.9's local app is release-supported on macOS. Your project can be
+anything Guildhall can work on; this compatibility note is about the machine
+running Guildhall itself.
+
 ```bash
 curl -fsSL https://raw.githubusercontent.com/matthew-dean/guildhall/main/scripts/install.sh | sh
 ```
 
-If you prefer npm and already have Node.js 20 or newer:
+If you prefer npm and already have Node.js 22 or newer:
 
 ```bash
 npm install -g guildhall
@@ -67,8 +66,16 @@ The installer downloads the latest macOS package from GitHub Releases and
 checks `guildhall-macos.tar.gz.sha256` before installing. To pin a release:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/matthew-dean/guildhall/main/scripts/install.sh | GUILDHALL_VERSION=0.8.0 sh
+curl -fsSL https://raw.githubusercontent.com/matthew-dean/guildhall/main/scripts/install.sh | GUILDHALL_VERSION=0.9.0 sh
 ```
+
+The package installer does not install Podman, create a VM, pull the runtime
+image, or start a container. That work happens later from Guildhall's guided
+runtime setup, after you approve it in the app. If Podman is missing, Guildhall
+shows the official macOS installer path and, when Homebrew is already present,
+the matching Homebrew install option. If Podman is installed but its local
+runtime service has not been created or started, Guildhall can finish that step
+for you from Settings.
 
 ## Open one project
 
@@ -82,7 +89,13 @@ opened, the setup wizard asks for the basics: the project name, a stable URL
 slug, and which model provider to use. That is the first site survey: where is
 the project, what is it called, and can Guildhall work safely?
 
-![Guildhall Thread view showing setup prompts, project questions, and next actions.](../assets/ui-audit/0-7-0/thread.png)
+After the project opens, check **Settings → Ready**. The Local runtime card
+shows whether the Podman-backed Debian runtime is ready, needs setup, or should
+stay in **Host-run compatibility mode** for now.
+
+![Guildhall v0.9.0 Settings Ready view showing the local runtime setup card.](../assets/ui-audit/0-9-0/settings-runtime.png)
+
+![Guildhall v0.9.0 project overview showing needs-you work, task health, and project navigation.](../assets/ui-audit/0-9-0/project-overview.png)
 
 ## What Guildhall may ask
 

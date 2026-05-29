@@ -1,0 +1,146 @@
+{
+  "id": "guildhall-hermes-quality-neutral-hermes",
+  "generatedAt": "2026-05-29T14:19:28.253Z",
+  "startedAt": "2026-05-29T14:14:50.898Z",
+  "completedAt": "2026-05-29T14:19:28.253Z",
+  "task": {
+    "id": "quality-file-smoke",
+    "prompt": "Create a file named quality_smoke.txt in the current project root containing exactly QUALITY_SMOKE_OK. Do not create any other files. Then complete with truthful proof.",
+    "expectedFile": "quality_smoke.txt",
+    "expectedContent": "QUALITY_SMOKE_OK"
+  },
+  "outputRoot": "/Users/matthew/git/oss/guildhall/internal/benchmarks/runs/2026-05-29-quality/neutral-hermes",
+  "summary": {
+    "qualityFirst": true,
+    "guildhallScore": 85,
+    "hermesScore": 100,
+    "winner": "hermes",
+    "note": "Quality score is primary. Token and cost telemetry are secondary and may be unavailable."
+  },
+  "results": {
+    "guildhall": {
+      "harness": "guildhall",
+      "projectRoot": "/Users/matthew/git/oss/guildhall/internal/benchmarks/runs/2026-05-29-quality/neutral-hermes/guildhall-work",
+      "command": "\"/Users/matthew/Library/Application Support/fnm/node-versions/v24.11.1/installation/bin/node\" /Users/matthew/git/oss/guildhall/dist/cli.js task run-once \"Create a file named quality_smoke.txt in the current project root containing exactly QUALITY_SMOKE_OK. Do not create any other files. Then complete with truthful proof.\" --project /Users/matthew/git/oss/guildhall/internal/benchmarks/runs/2026-05-29-quality/neutral-hermes/guildhall-work --automation fully-automated --proof commands --output /Users/matthew/git/oss/guildhall/internal/benchmarks/runs/2026-05-29-quality/neutral-hermes/guildhall-run-once-report.json --max-ticks 80",
+      "exitCode": 0,
+      "stdout": "[guildhall] Provider: openai-api (OpenAI-compatible API at https://api.deepinfra.com/v1/openai)\n[guildhall] Workspace: Guildhall Hermes Quality Smoke (guildhall-hermes-quality-smoke)\n[guildhall] Project:   /Users/matthew/git/oss/guildhall/internal/benchmarks/runs/2026-05-29-quality/neutral-hermes/guildhall-work\n[guildhall] Memory:    /Users/matthew/git/oss/guildhall/internal/benchmarks/runs/2026-05-29-quality/neutral-hermes/guildhall-work/.guildhall\n[guildhall] Model assignment:\n  spec:        deepseek-ai/DeepSeek-V4-Flash\n  coordinator: deepseek-ai/DeepSeek-V4-Flash\n  worker:      Qwen/Qwen3.5-35B-A3B\n  reviewer:    deepseek-ai/DeepSeek-V4-Flash\n  gateChecker: deepseek-ai/DeepSeek-V4-Flash\n  contextIndexer: zai-org/GLM-4.6\n[guildhall] Coordinator started.\n[guildhall] tick 1: task-001 exploring → exploring via spec-agent (no change)\n[guildhall] tick 2: task-001 exploring → spec_review via spec-agent\n[guildhall] fully automated run resolved 2 owner checkpoint(s).\n[guildhall] tick 3: task-001 ready → in_progress via task-claimer\n[guildhall] tick 4: task-001 in_progress → review via worker-agent\n[guildhall] tick 5: task-001 review → gate_check via reviewer-deterministic-fallback\n[guildhall] tick 6: task-001 gate_check → done via gate-checker-agent\n[guildhall] No actionable tasks remain: 1 done, 0 blocked, 0 shelved. Shutting down.\n[guildhall] Coordinator stopped after 7 ticks (all_terminal).\n[guildhall] Run-once request: task-001\n[guildhall] Status: all_terminal — Run-once request task-001 exhausted: 1 done.\n[guildhall] Scoped tasks: 1 done\n[guildhall] Report: /Users/matthew/git/oss/guildhall/internal/benchmarks/runs/2026-05-29-quality/neutral-hermes/guildhall-run-once-report.json\n",
+      "stderr": "",
+      "durationMs": 263606,
+      "runReportPath": "/Users/matthew/git/oss/guildhall/internal/benchmarks/runs/2026-05-29-quality/neutral-hermes/guildhall-run-once-report.json",
+      "stopReason": "all_terminal",
+      "scopedStatusSummary": "1 done",
+      "telemetry": {
+        "tokens": "run-report",
+        "cost": "run-report",
+        "stopReason": "all_terminal",
+        "stopMessage": "Run-once request task-001 exhausted: 1 done."
+      },
+      "artifact": {
+        "expectedPath": "/Users/matthew/git/oss/guildhall/internal/benchmarks/runs/2026-05-29-quality/neutral-hermes/guildhall-work/quality_smoke.txt",
+        "fileExists": true,
+        "exactContent": true,
+        "actualContent": "QUALITY_SMOKE_OK",
+        "unexpectedFiles": [
+          ".guildhall/.session-epoch",
+          ".guildhall/agent-settings.yaml",
+          ".guildhall/codebase-map.yaml",
+          ".guildhall/persistence/events/review-plan-events/task-001.jsonl",
+          ".guildhall/persistence/records/review-plans/task-001.json"
+        ]
+      },
+      "qualityScore": {
+        "total": 85,
+        "checks": [
+          {
+            "id": "expected_file_created",
+            "points": 30,
+            "passed": true
+          },
+          {
+            "id": "exact_content",
+            "points": 30,
+            "passed": true
+          },
+          {
+            "id": "no_unexpected_files",
+            "points": 15,
+            "passed": false
+          },
+          {
+            "id": "clean_exit",
+            "points": 10,
+            "passed": true
+          },
+          {
+            "id": "truthful_completion_signal",
+            "points": 10,
+            "passed": true
+          },
+          {
+            "id": "proof_or_status_present",
+            "points": 5,
+            "passed": true
+          }
+        ]
+      }
+    },
+    "hermes": {
+      "harness": "hermes",
+      "projectRoot": "/Users/matthew/git/oss/guildhall/internal/benchmarks/runs/2026-05-29-quality/neutral-hermes/hermes-work",
+      "command": "hermes -z \"Create a file named quality_smoke.txt in the current project root containing exactly QUALITY_SMOKE_OK. Do not create any other files. Then complete with truthful proof.\"",
+      "exitCode": 0,
+      "stdout": "Proof:\n\n- File created at: `/Users/matthew/git/oss/guildhall/internal/benchmarks/runs/2026-05-29-quality/neutral-hermes/hermes-work/quality_smoke.txt`\n- Contents read back: `QUALITY_SMOKE_OK` (16 bytes, single line)\n- Only file created (no other files touched)\n- Task complete.\n",
+      "stderr": "",
+      "durationMs": 13679,
+      "telemetry": {
+        "tokens": "session-export",
+        "cost": "insights",
+        "sessionExportPath": "/Users/matthew/git/oss/guildhall/internal/benchmarks/runs/2026-05-29-quality/neutral-hermes/hermes-sessions.jsonl",
+        "insightsPath": "/Users/matthew/git/oss/guildhall/internal/benchmarks/runs/2026-05-29-quality/neutral-hermes/hermes-insights.txt",
+        "notes": []
+      },
+      "artifact": {
+        "expectedPath": "/Users/matthew/git/oss/guildhall/internal/benchmarks/runs/2026-05-29-quality/neutral-hermes/hermes-work/quality_smoke.txt",
+        "fileExists": true,
+        "exactContent": true,
+        "actualContent": "QUALITY_SMOKE_OK",
+        "unexpectedFiles": []
+      },
+      "qualityScore": {
+        "total": 100,
+        "checks": [
+          {
+            "id": "expected_file_created",
+            "points": 30,
+            "passed": true
+          },
+          {
+            "id": "exact_content",
+            "points": 30,
+            "passed": true
+          },
+          {
+            "id": "no_unexpected_files",
+            "points": 15,
+            "passed": true
+          },
+          {
+            "id": "clean_exit",
+            "points": 10,
+            "passed": true
+          },
+          {
+            "id": "truthful_completion_signal",
+            "points": 10,
+            "passed": true
+          },
+          {
+            "id": "proof_or_status_present",
+            "points": 5,
+            "passed": true
+          }
+        ]
+      }
+    }
+  }
+}

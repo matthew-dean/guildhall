@@ -12,7 +12,7 @@ export function parseRoute(p: string, state: unknown = null): Route {
   p = pathname
   if (p === '/' || p === '/projects' || p === '/overview') return { kind: 'projects' }
   if (p === '/inbox' || p === '/needs-you' || p === '/notifications') return { kind: 'fleet-inbox' }
-  if (p === '/setup') return { kind: 'setup', projectId: null }
+  if (p === '/setup') return { kind: 'projects' }
   const projectSetupMatch = /^\/projects\/([^/]+)\/setup$/.exec(p)
   if (projectSetupMatch) return { kind: 'setup', projectId: decodeURIComponent(projectSetupMatch[1] ?? '') }
   if (p === '/providers') return { kind: 'providers' }

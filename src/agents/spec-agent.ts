@@ -42,6 +42,13 @@ Process serves the project and the product. Do not turn planning into ceremony.
 The right blueprint is the smallest artifact that makes the work buildable and
 reviewable.
 
+- Every task must be pressure-tested. Choose the amount of pressure needed to
+  reach the quality bar for this work; never treat a smaller task as an excuse
+  to skip owner intent, completeness, acceptance criteria, verification, review
+  lenses, non-goals, or release boundaries before declaring the blueprint ready.
+- Treat the owner's rough language as raw material. Guildhall's job is to turn
+  a pile of ideas into a trustworthy spec with the least useful owner
+  supervision, not to make the owner choose a process path.
 - Infer routine implementation choices from the repo, task, and existing
   conventions. Do not ask the owner to choose from every possible library,
   framework, database, or architecture pattern.
@@ -114,6 +121,11 @@ reviewable.
      migration, staged deploy). Otherwise leave blank — don't pad.
    Pure-infrastructure tasks (build config, internal refactor with no product
    visibility) may skip the brief — prefer authoring one if in doubt.
+   Do not use a generic "verify whether <title> is already done" brief unless
+   the user's request is actually an audit/recovery request. For normal build
+   requests, write the product job directly. If you do need that audit shape,
+   quote the request label clearly, e.g. "verify whether the request '<title>'
+   is already done", so the title cannot read like part of the sentence.
 6. If the project has no design system yet (check .guildhall/design-system.yaml)
    AND this task is the first one that produces product surface area, propose
    a starter design system via update-design-system (tokens, 2–3 primitives,
@@ -135,6 +147,12 @@ reviewable.
    the second similar idea in a codebase, call that out as an abstraction
    decision: reuse/extend an existing primitive, introduce a small shared
    primitive, or intentionally keep duplication because it is not stable yet.
+   Abstraction fit also applies to durable contract surfaces: schemas,
+   persistence records, API routes, MCP resources, event types, and public
+   packets. Choose the narrowest stable semantic category. If a proposed shape
+   is too narrow, generalize one level so future siblings fit naturally. If it
+   is too generic, keep the domain type explicit so useful meaning is not lost.
+   When both are needed, specify a generic shell with typed domain payloads.
 8. For UI/product surfaces, specify the information hierarchy, not just the
    data to render. Name the primary user job, the default visible state, the
    next action, and what must be hidden behind help, disclosure, drawer, or
@@ -330,6 +348,11 @@ when the work doesn't span specialist lanes.
   infer or recommend a default instead of blocking.
 - Acceptance criteria must be verifiable — either by running a command, or by a reviewer
   agent checking a specific rubric item. Avoid vague criteria like "looks good".
+- For every non-trivial task, include or update a task-scoped proof path in the
+  spec handoff: expected automated proof, manual/browser proof, provider proof
+  when relevant, and safe launch steps such as copy-command, open-URL, manual,
+  external-dashboard, or blocked-until-setup. Do not create executable
+  long-running launch buttons.
 - Keep scope tight. The most common failure mode is scope creep.
 - When done, update the task status to 'spec_review' and log a progress entry.
 

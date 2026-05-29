@@ -1,0 +1,458 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Pantry Pulse</title>
+  <style>
+    /* ===== Reset & Base ===== */
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    html { font-size: 16px; -webkit-text-size-adjust: 100%; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+      background: #f5f0ea;
+      color: #2c2a26;
+      line-height: 1.5;
+      min-height: 100vh;
+      padding: 0 1rem 3rem;
+    }
+
+    /* ===== Layout ===== */
+    .app-wrapper {
+      max-width: 44rem;
+      margin: 0 auto;
+    }
+
+    /* ===== Header ===== */
+    header {
+      padding: 2rem 0 1.25rem;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      flex-wrap: wrap;
+      gap: 0.75rem;
+    }
+    .logo-area {
+      display: flex;
+      align-items: center;
+      gap: 0.6rem;
+    }
+    .logo-icon {
+      width: 2.25rem;
+      height: 2.25rem;
+      background: #6b8f5e;
+      border-radius: 0.55rem;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      flex-shrink: 0;
+    }
+    .logo-icon svg {
+      width: 1.4rem;
+      height: 1.4rem;
+      fill: #f5f0ea;
+    }
+    h1 {
+      font-size: 1.65rem;
+      font-weight: 650;
+      letter-spacing: -0.025em;
+      color: #3a3a35;
+    }
+    .count-badge {
+      background: #e2ddd5;
+      color: #5a5a52;
+      font-size: 0.8rem;
+      font-weight: 600;
+      padding: 0.3rem 0.75rem;
+      border-radius: 2rem;
+      white-space: nowrap;
+    }
+
+    /* ===== Filters ===== */
+    .filter-bar {
+      display: flex;
+      gap: 0.5rem;
+      margin: 0.25rem 0 1.25rem;
+      background: #ece7e0;
+      border-radius: 0.75rem;
+      padding: 0.25rem;
+    }
+    .filter-btn {
+      flex: 1;
+      border: none;
+      background: transparent;
+      font-size: 0.875rem;
+      font-weight: 550;
+      padding: 0.55rem 0.75rem;
+      border-radius: 0.6rem;
+      cursor: pointer;
+      color: #5a5a52;
+      transition: background 0.15s, color 0.15s, box-shadow 0.15s;
+    }
+    .filter-btn:hover { color: #2c2a26; }
+    .filter-btn:focus-visible {
+      outline: 2px solid #6b8f5e;
+      outline-offset: 1px;
+    }
+    .filter-btn[aria-pressed="true"] {
+      background: #fff;
+      color: #3a3a35;
+      box-shadow: 0 1px 4px rgba(0,0,0,0.06);
+    }
+
+    /* ===== Item Card ===== */
+    .pantry-list {
+      display: flex;
+      flex-direction: column;
+      gap: 0.625rem;
+    }
+    .pantry-item {
+      background: #fff;
+      border-radius: 0.875rem;
+      padding: 1rem 1.125rem;
+      display: flex;
+      align-items: flex-start;
+      gap: 0.875rem;
+      box-shadow: 0 1px 3px rgba(0,0,0,0.04);
+      transition: box-shadow 0.15s;
+      position: relative;
+    }
+    .pantry-item:hover { box-shadow: 0 2px 8px rgba(0,0,0,0.06); }
+    .pantry-item.used {
+      opacity: 0.4;
+      order: 999;
+      pointer-events: none;
+    }
+    .pantry-item.used .item-name { text-decoration: line-through; }
+
+    /* Category dot */
+    .category-dot {
+      width: 0.625rem;
+      height: 0.625rem;
+      border-radius: 50%;
+      flex-shrink: 0;
+      margin-top: 0.35rem;
+    }
+    .cat-dairy        { background: #c7b198; }
+    .cat-produce      { background: #6b8f5e; }
+    .cat-grains       { background: #d4a55a; }
+    .cat-condiments   { background: #c97c5c; }
+    .cat-protein      { background: #b36b6b; }
+    .cat-snacks       { background: #e2a76f; }
+    .cat-beverages    { background: #7fa8b0; }
+
+    .item-body {
+      flex: 1;
+      min-width: 0;
+    }
+    .item-header {
+      display: flex;
+      align-items: baseline;
+      justify-content: space-between;
+      gap: 0.5rem;
+      flex-wrap: wrap;
+    }
+    .item-name {
+      font-weight: 600;
+      font-size: 1rem;
+      color: #2c2a26;
+    }
+    .item-qty {
+      font-size: 0.8125rem;
+      color: #7a7a72;
+      background: #f0ece5;
+      padding: 0.1rem 0.55rem;
+      border-radius: 1rem;
+      font-weight: 500;
+    }
+    .item-meta {
+      display: flex;
+      align-items: center;
+      gap: 0.625rem;
+      margin-top: 0.3rem;
+      flex-wrap: wrap;
+    }
+    .item-expiry {
+      font-size: 0.8125rem;
+      color: #7a7a72;
+    }
+    .item-expiry.urgent {
+      color: #cc5a4a;
+      font-weight: 600;
+    }
+    .item-expiry.amber {
+      color: #c98a3a;
+      font-weight: 600;
+    }
+    .item-category-label {
+      font-size: 0.7rem;
+      text-transform: uppercase;
+      letter-spacing: 0.04em;
+      color: #8a8a82;
+      font-weight: 500;
+    }
+
+    /* Mark Used Button */
+    .mark-used-btn {
+      background: transparent;
+      border: 1px solid #ddd8d0;
+      color: #6a6a62;
+      font-size: 0.75rem;
+      font-weight: 550;
+      padding: 0.35rem 0.7rem;
+      border-radius: 0.5rem;
+      cursor: pointer;
+      flex-shrink: 0;
+      transition: background 0.12s, border-color 0.12s, color 0.12s;
+      white-space: nowrap;
+    }
+    .mark-used-btn:hover {
+      background: #f0ece5;
+      border-color: #c97c5c;
+      color: #c97c5c;
+    }
+    .mark-used-btn:focus-visible {
+      outline: 2px solid #6b8f5e;
+      outline-offset: 2px;
+    }
+    .pantry-item.used .mark-used-btn { display: none; }
+
+    /* ===== Empty state ===== */
+    .empty-state {
+      text-align: center;
+      padding: 3rem 1rem;
+      color: #7a7a72;
+    }
+    .empty-state svg {
+      width: 3rem;
+      height: 3rem;
+      fill: #ccc8c0;
+      margin-bottom: 0.75rem;
+    }
+    .empty-state p { font-size: 0.95rem; }
+
+    /* ===== Footer Count ===== */
+    .footer-count {
+      margin-top: 1.25rem;
+      text-align: center;
+      font-size: 0.85rem;
+      color: #7a7a72;
+      font-weight: 500;
+      padding: 0.75rem 0;
+    }
+    .footer-count strong { color: #4a4a42; }
+
+    /* ===== Visually hidden (accessible) ===== */
+    .visually-hidden:not(:focus):not(:active) {
+      position: absolute;
+      width: 1px;
+      height: 1px;
+      margin: -1px;
+      border: 0;
+      padding: 0;
+      white-space: nowrap;
+      clip: rect(0 0 0 0);
+      overflow: hidden;
+    }
+
+    /* ===== Responsive ===== */
+    @media (max-width: 480px) {
+      body { padding: 0 0.75rem 2rem; }
+      header { padding: 1.25rem 0 1rem; }
+      h1 { font-size: 1.4rem; }
+      .pantry-item { padding: 0.85rem 0.9rem; }
+      .mark-used-btn { padding: 0.3rem 0.55rem; font-size: 0.7rem; }
+    }
+  </style>
+</head>
+<body>
+  <div class="app-wrapper">
+    <header>
+      <div class="logo-area">
+        <div class="logo-icon" aria-hidden="true">
+          <svg viewBox="0 0 24 24"><path d="M12 2C8.13 2 5 5.13 5 9c0 5.25 7 13 7 13s7-7.75 7-13c0-3.87-3.13-7-7-7zm0 9.5c-1.38 0-2.5-1.12-2.5-2.5s1.12-2.5 2.5-2.5 2.5 1.12 2.5 2.5-1.12 2.5-2.5 2.5z"/></svg>
+        </div>
+        <h1>Pantry Pulse</h1>
+      </div>
+      <span class="count-badge" id="countBadge" role="status" aria-live="polite">0 items</span>
+    </header>
+
+    <div class="filter-bar" role="group" aria-label="Filter pantry items">
+      <button class="filter-btn" data-filter="all" aria-pressed="true" type="button">All</button>
+      <button class="filter-btn" data-filter="expiring" aria-pressed="false" type="button">Expiring soon</button>
+    </div>
+
+    <div id="pantryList" class="pantry-list" role="list" aria-label="Pantry items">
+      <!-- Items rendered by JavaScript -->
+    </div>
+
+    <div id="emptyState" class="empty-state" hidden>
+      <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 2C8.13 2 5 5.13 5 9c0 5.25 7 13 7 13s7-7.75 7-13c0-3.87-3.13-7-7-7zm0 9.5c-1.38 0-2.5-1.12-2.5-2.5s1.12-2.5 2.5-2.5 2.5 1.12 2.5 2.5-1.12 2.5-2.5 2.5z"/></svg>
+      <p>No items to show.</p>
+    </div>
+
+    <div class="footer-count" id="footerCount" role="status" aria-live="polite"><strong id="remainingCount">0</strong> item(s) remaining</div>
+  </div>
+
+  <script>
+    (function() {
+      'use strict';
+
+      /* ---- Seeded Data ---- */
+      const SEED_DATA = [
+        { id: 'p1', name: 'Whole Milk',           category: 'Dairy',       qty: 1,  expDays: 5  },
+        { id: 'p2', name: 'Baby Spinach',          category: 'Produce',     qty: 1,  expDays: 2  },
+        { id: 'p3', name: 'Sourdough Loaf',        category: 'Grains',      qty: 1,  expDays: 10 },
+        { id: 'p4', name: 'Dijon Mustard',         category: 'Condiments',  qty: 1,  expDays: 180},
+        { id: 'p5', name: 'Free-Range Eggs',       category: 'Protein',     qty: 12, expDays: 14 },
+        { id: 'p6', name: 'Greek Yogurt',          category: 'Dairy',       qty: 2,  expDays: 7  },
+        { id: 'p7', name: 'Heirloom Tomatoes',     category: 'Produce',     qty: 4,  expDays: 3  },
+        { id: 'p8', name: 'Rolled Oats',           category: 'Grains',      qty: 1,  expDays: 90 },
+        { id: 'p9', name: 'Smoked Paprika',        category: 'Condiments',  qty: 1,  expDays: 365},
+        { id: 'p10', name: 'Frozen Blueberries',   category: 'Produce',     qty: 2,  expDays: 60 },
+        { id: 'p11', name: 'Brown Rice',           category: 'Grains',      qty: 1,  expDays: 180},
+        { id: 'p12', name: 'Chicken Breast',       category: 'Protein',     qty: 3,  expDays: 2  },
+        { id: 'p13', name: 'Almond Butter',        category: 'Condiments',  qty: 1,  expDays: 120},
+        { id: 'p14', name: 'Sparkling Water',      category: 'Beverages',   qty: 6,  expDays: 365},
+      ];
+
+      /* ---- Helpers ---- */
+      function daysUntil(targetDays) {
+        // targetDays is how many days from "today" the item expires
+        const now = new Date();
+        const exp = new Date(now.getFullYear(), now.getMonth(), now.getDate() + targetDays);
+        const diff = Math.ceil((exp - now) / (1000 * 60 * 60 * 24));
+        return diff;
+      }
+
+      function isExpiringSoon(days) {
+        const d = daysUntil(days);
+        return d <= 3;
+      }
+
+      function expiryText(days) {
+        const d = daysUntil(days);
+        if (d < 0) return `Expired ${Math.abs(d)} day${Math.abs(d) !== 1 ? 's' : ''} ago`;
+        if (d === 0) return 'Expires today';
+        if (d === 1) return 'Expires tomorrow';
+        return `Expires in ${d} days`;
+      }
+
+      function expiryClass(days) {
+        const d = daysUntil(days);
+        if (d <= 0) return 'urgent';
+        if (d <= 2) return 'urgent';
+        if (d <= 3) return 'amber';
+        return '';
+      }
+
+      /* ---- App State ---- */
+      let items = [];
+      let usedIds = new Set();
+      let activeFilter = 'all';  // 'all' | 'expiring'
+
+      /* ---- DOM Refs ---- */
+      const listEl = document.getElementById('pantryList');
+      const emptyEl = document.getElementById('emptyState');
+      const countBadge = document.getElementById('countBadge');
+      const remainingCount = document.getElementById('remainingCount');
+      const filterBtns = document.querySelectorAll('.filter-btn');
+
+      /* ---- Render ---- */
+      function render() {
+        const visible = items.filter(item => {
+          if (usedIds.has(item.id)) return false;
+          if (activeFilter === 'expiring' && !isExpiringSoon(item.expDays)) return false;
+          return true;
+        });
+
+        const count = visible.length;
+        const totalActive = items.filter(i => !usedIds.has(i.id)).length;
+
+        // Update counts
+        countBadge.textContent = totalActive === 1 ? '1 item' : totalActive + ' items';
+        remainingCount.textContent = totalActive;
+
+        // Empty state
+        if (visible.length === 0) {
+          listEl.innerHTML = '';
+          emptyEl.hidden = false;
+          return;
+        }
+        emptyEl.hidden = true;
+
+        // Build cards
+        const fragment = document.createDocumentFragment();
+        for (const item of visible) {
+          const catClass = 'cat-' + item.category.toLowerCase();
+
+          const card = document.createElement('div');
+          card.className = 'pantry-item';
+          card.dataset.id = item.id;
+          card.setAttribute('role', 'listitem');
+
+          card.innerHTML = `
+            <span class="category-dot ${catClass}" aria-hidden="true"></span>
+            <div class="item-body">
+              <div class="item-header">
+                <span class="item-name">${escapeHTML(item.name)}</span>
+                <span class="item-qty">${item.qty} ${item.qty === 1 ? 'unit' : 'units'}</span>
+              </div>
+              <div class="item-meta">
+                <span class="item-expiry ${expiryClass(item.expDays)}">${expiryText(item.expDays)}</span>
+                <span class="item-category-label">${escapeHTML(item.category)}</span>
+              </div>
+            </div>
+            <button class="mark-used-btn" type="button" data-id="${item.id}">Mark used</button>
+          `;
+
+          fragment.appendChild(card);
+        }
+
+        listEl.innerHTML = '';
+        listEl.appendChild(fragment);
+
+        // Click handlers on buttons (delegation below)
+      }
+
+      function escapeHTML(str) {
+        const div = document.createElement('div');
+        div.textContent = str;
+        return div.innerHTML;
+      }
+
+      /* ---- Event Handlers ---- */
+
+      // Mark used — click delegation on list
+      listEl.addEventListener('click', function(e) {
+        const btn = e.target.closest('.mark-used-btn');
+        if (!btn) return;
+        const id = btn.dataset.id;
+        if (!id || usedIds.has(id)) return;
+        usedIds.add(id);
+        render();
+      });
+
+      // Filter buttons
+      filterBtns.forEach(btn => {
+        btn.addEventListener('click', function() {
+          const filter = this.dataset.filter;
+          if (filter === activeFilter) return;
+          activeFilter = filter;
+          filterBtns.forEach(b => b.setAttribute('aria-pressed', b.dataset.filter === filter ? 'true' : 'false'));
+          render();
+        });
+      });
+
+      /* ---- Init ---- */
+      items = SEED_DATA.slice();
+      render();
+
+      // Expose for dev inspection
+      if (typeof window !== 'undefined') {
+        window.__pantry = { items, usedIds, activeFilter, render };
+      }
+    })();
+  </script>
+</body>
+</html>

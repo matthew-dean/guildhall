@@ -130,6 +130,15 @@ export function escalationUserGuidance(
     }
   }
 
+  if (escalation?.reason === 'gate_hard_failure') {
+    return {
+      title: 'Guildhall can retry the gates.',
+      detail: 'The task is waiting on automated verification. If the underlying issue has been addressed, Guildhall can close this blocker and run the gates again.',
+      nextStep: 'Use Retry gates to close this blocker and let Guildhall run the gate-check step again.',
+      actionOwner: 'guildhall',
+    }
+  }
+
   if (
     escalation?.agentId === 'worker-agent' &&
     /timed out|turn limit|maximum turn|no visible progress|model provider|provider unavailable|local model/i.test(text)

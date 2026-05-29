@@ -265,4 +265,56 @@ describe('ProjectOverviewTab', () => {
     expect(text.indexOf('Work mix')).toBeGreaterThan(-1)
     expect(text.indexOf('Moving now')).toBeLessThan(text.indexOf('Work mix'))
   })
+
+  it('surfaces runtime health, memory health, and primary proof paths', () => {
+    render(ProjectOverviewTab, {
+      detail: {
+        id: 'guildhall',
+        name: 'Guildhall',
+        path: '/Users/matthew/git/oss/guildhall',
+        run: { status: 'stopped' },
+        runtime: {
+          status: 'stopped',
+          health: { status: 'healthy' },
+          migration: { mode: 'host-run' },
+        },
+        memoryHealth: {
+          total: 6,
+          active: 3,
+          proposed: 2,
+          used: 1,
+        },
+        tasks: [
+          {
+            id: 'task-runtime-ui',
+            title: 'Runtime UI',
+            status: 'ready',
+            proofPaths: [{
+              id: 'proof-runtime',
+              title: 'Verify runtime card',
+              summary: 'Check that runtime health is visible.',
+              status: 'planned',
+            }],
+          },
+        ],
+      },
+      inboxLoaded: true,
+      inboxItems: [],
+      projectTicker: {
+        label: 'Not running',
+        actorLabel: 'Guildhall',
+        message: 'Project is waiting.',
+        tone: 'idle',
+        pulse: false,
+      },
+      activeProjectId: 'guildhall',
+    })
+
+    expect(screen.getAllByText('Runtime stopped').length).toBeGreaterThan(0)
+    expect(screen.getAllByText(/Compatibility mode/).length).toBeGreaterThan(0)
+    expect(screen.getAllByText('Memory health').length).toBeGreaterThan(0)
+    expect(screen.getAllByText(/3 active/).length).toBeGreaterThan(0)
+    expect(screen.getByText('Primary proof paths')).toBeInTheDocument()
+    expect(screen.getByText('Verify runtime card')).toBeInTheDocument()
+  })
 })

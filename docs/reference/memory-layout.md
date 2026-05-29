@@ -122,6 +122,19 @@ touch project-facing files. Use `--include-prompt` when you are ready for those:
 guildhall migrate apply --include-prompt .
 ```
 
+Guildhall 0.9 also lists a manual runtime-backed project migration. That
+migration is not applied by the package installer or by `guildhall migrate
+apply`. It is guided from the app because Guildhall first checks the mounted
+project directory, the mounted `~/.guildhall` directory, required runtime tools,
+DNS, and command-log persistence. Host-run compatibility remains available
+until those checks pass and you accept runtime-backed mode for that project.
+
+The runtime migration record lives in host-owned local history, not in the
+project checkout. It records the runtime image tag/digest, runtime API version,
+mount layout such as `/workspace/<project-slug>` and
+`/home/guildhall/.guildhall`, the health-check result, and the rollback state
+needed to return to host-run compatibility.
+
 If `guildhall migrate status` shows a migration under `Blocked`, the current
 runtime cannot safely run the project yet. That usually means the project is on
 an old storage location or incompatible schema. Guildhall asks before writing
@@ -195,3 +208,35 @@ Machine-global Guildhall state sits outside the project:
 - `~/.guildhall/config.yaml` — machine-wide defaults
 - `~/.guildhall/learning.json` — user/global learned preferences
 - `~/.guildhall/data/projects/<project-hash>/` — local history for one project
+
+## MCP View
+
+MCP resources are a bounded view over the same split. They are not raw directory
+listings.
+
+Stable project resources include:
+
+- `guildhall://project` — compact project, runtime, memory, codebase, and
+  context health.
+- `guildhall://project/tasks` and `guildhall://project/tasks/<task-id>` —
+  queue and task summaries.
+- `guildhall://project/artifacts` and
+  `guildhall://project/artifacts/<artifact-id>` — registered artifacts such as
+  flow audits.
+- `guildhall://project/feedback` — accepted feedback and decision packets for
+  workers and reviewers.
+- `guildhall://project/design` — Design System Profile, taste,
+  catalog/preview, and design feedback summary.
+- `guildhall://project/memory` and `guildhall://project/learning` — active
+  memory and suggested learnings.
+- `guildhall://project/context` and `guildhall://project/local-history` —
+  bounded context-debug and local-history health, not raw transcripts.
+- `guildhall://project/codebase-knowledge` — Corpus Map freshness and read-next
+  pointers.
+- `guildhall://project/runtime` — runtime state, image, migration mode, mounts,
+  ports, and health checks.
+- `guildhall://project/capability-requests` — requested host access or other
+  missing capabilities.
+
+The bridge also exposes memory tools so outside agents can list, read, record,
+or update memory through the same validation path Guildhall uses.

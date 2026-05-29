@@ -16,8 +16,10 @@ const REQUIRED_COMPLETION_BOUNDARY_FIELDS = [
 ] as const
 
 const EMPTY_FIELD_PATTERN = /\b(tbd|todo|unknown|unclear|not sure|to be decided|n\/a\?)\b/i
-const NO_EXTERNAL_DEPENDENCY_PATTERN = /^(none|no|nothing|not required|no external dependencies)\.?$/i
-const NO_SPLIT_OR_BLOCK_PATTERN = /^(none|nothing|not required|no split|no blockers?|nothing to split)\.?$/i
+const NO_EXTERNAL_DEPENDENCY_PATTERN = /^(none|no|nothing|not required|no external dependencies)(?:[.\s].*)?$/i
+const BROWSER_ONLY_VERIFICATION_DEPENDENCY_PATTERN =
+  /\b(?:modern\s+)?(?:web\s+)?browser\b[\s\S]*\b(?:verification|verify|inspect|screenshot|headless|local)\b[\s\S]*\b(?:no runtime dependencies|no APIs|no CDN|no backend|no credentials|no deployed infrastructure|no network)\b/i
+const NO_SPLIT_OR_BLOCK_PATTERN = /^(none|nothing|not required|no split|no blockers?|nothing to split)(?:[.\s].*)?$/i
 const EXTERNAL_SETUP_RESOLUTION_PATTERN =
   /\b(owner|user|admin|operator|human|create|configure|set up|setup|provision|dashboard|credential|secret|key|callback|webhook|env|environment|supabase|provider)\b/i
 const SPLIT_OR_BLOCK_RESOLUTION_PATTERN =
@@ -25,15 +27,21 @@ const SPLIT_OR_BLOCK_RESOLUTION_PATTERN =
 const LIVE_VERIFICATION_PATTERN =
   /\b(end[- ]to[- ]end|e2e|live|staging|production|configured|configuration|provider|credential|callback|webhook|verified|works|can actually|real user|target environment)\b/i
 
-function sectionBody(markdown: string, heading: string): string {
+export function specSectionBody(markdown: string, heading: string): string {
   const escaped = heading.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
   const match = new RegExp(`^#{2,3}\\s+${escaped}\\s*$([\\s\\S]*?)(?=^#{2,3}\\s+|(?![\\s\\S]))`, 'im').exec(markdown)
   return match?.[1]?.trim() ?? ''
 }
 
+function sectionBody(markdown: string, heading: string): string {
+  return specSectionBody(markdown, heading)
+}
+
 function normalizeFieldName(raw: string): string {
   return raw
     .trim()
+    .replace(/^\*{1,3}|\*{1,3}$/g, '')
+    .replace(/^_{1,3}|_{1,3}$/g, '')
     .toLowerCase()
     .replace(/\s+/g, ' ')
     .replace(/:$/, '')
@@ -41,11 +49,18 @@ function normalizeFieldName(raw: string): string {
 
 function completionBoundaryFields(boundary: string): Map<string, string> {
   const fields = new Map<string, string>()
+  let currentField: string | null = null
   for (const rawLine of boundary.split('\n')) {
     const line = rawLine.trim().replace(/^[-*]\s+/, '')
-    const match = /^([^:]+):\s*(.+)$/.exec(line)
-    if (!match) continue
-    fields.set(normalizeFieldName(match[1]!), match[2]!.trim())
+    const match = /^([^:]+):\s*(.*)$/.exec(line)
+    if (match) {
+      currentField = normalizeFieldName(match[1]!)
+      fields.set(currentField, match[2]!.trim())
+      continue
+    }
+    if (!currentField || !line) continue
+    const existing = fields.get(currentField) ?? ''
+    fields.set(currentField, [existing, line].filter(Boolean).join('\n').trim())
   }
   return fields
 }
@@ -91,7 +106,9 @@ export function validateSpecCompletionBoundary(task: Pick<Task,
   const done = fields.get('what counts as done') ?? ''
   const splitOrBlocked = fields.get('what must be split or blocked') ?? ''
   const hasExternalDependencies =
-    isFilled(externalDependencies) && !NO_EXTERNAL_DEPENDENCY_PATTERN.test(externalDependencies.trim())
+    isFilled(externalDependencies) &&
+    !NO_EXTERNAL_DEPENDENCY_PATTERN.test(externalDependencies.trim()) &&
+    !BROWSER_ONLY_VERIFICATION_DEPENDENCY_PATTERN.test(externalDependencies.trim())
 
   if (hasExternalDependencies) {
     const ownerSetupResolved =
@@ -113,4 +130,30 @@ export function validateSpecCompletionBoundary(task: Pick<Task,
   }
 
   return { ok: errors.length === 0, errors }
+}
+
+export function extractAcceptanceCriteriaFromSpec(spec: string): Task['acceptanceCriteria'] {
+  const body = specSectionBody(spec, 'Acceptance Criteria')
+  if (!body) return []
+  const criteria: Task['acceptanceCriteria'] = []
+  for (const rawLine of body.split('\n')) {
+    const line = rawLine.trim()
+    if (!line) continue
+    const match = /^(?:[-*]\s+|\d+[.)]\s+)(.+)$/.exec(line)
+    if (!match) continue
+    const description = match[1]!.trim().replace(/\s+/g, ' ')
+    if (!description || /^none\.?$/i.test(description)) continue
+    criteria.push({
+      id: `AC-${criteria.length + 1}`,
+      description,
+      verifiedBy: inferVerificationKind(description),
+      met: false,
+    })
+  }
+  return criteria
+}
+
+function inferVerificationKind(description: string): Task['acceptanceCriteria'][number]['verifiedBy'] {
+  if (/\b(test|build|lint|typecheck|command)\b/i.test(description)) return 'automated'
+  return 'review'
 }

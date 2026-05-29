@@ -107,6 +107,9 @@ Also supported:
 npm install -g guildhall
 ```
 
+The npm path expects Node.js 22 or newer. The macOS installer bundles its own
+Node runtime.
+
 ## Quick start
 
 Start GuildHall:

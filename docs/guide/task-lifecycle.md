@@ -104,6 +104,22 @@ If review discovers that the plan itself was wrong, the next step is a change
 order: what assumption changed, what evidence caused the change, and how scope
 or sequencing changes.
 
+## Review risk and required evidence
+
+0.9 adds a review-risk profile to shaped work. Guildhall plans review lanes
+from the task, changed files, priority, and project settings, then records the
+recipes and evidence that should exist before reviewers accept the result.
+
+For user-facing UI work, that can mean visual evidence. For API or migration
+work, it can mean a contract or state-diff artifact. For release work, it can
+mean rollout or smoke evidence. The goal is not to make every task heavy. It is
+to make the amount of review match the risk, and to stop a task from reaching
+done when the needed proof never existed.
+
+Escaped misses become calibration records. If a reviewer missed something a
+person later caught, Guildhall can turn that miss into a case for future review
+recipes instead of treating it as a one-off embarrassment.
+
 ## Pre-rejection
 
 A *pre-rejection* fires before work starts — e.g. a scope issue flagged at `spec_review`. The [`pre_rejection_policy`](../levers/pre-rejection-policy) lever controls what happens: terminal shelving, re-queueing with lower priority, or re-queueing with [rejection dampening](../levers/rejection-dampening).

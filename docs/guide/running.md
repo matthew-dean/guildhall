@@ -23,6 +23,39 @@ From there, use the **Start** / **Stop** controls in the project shell. This
 is the main operating path: you can inspect Thread, Work, Needs you, task
 drawers, and release state without leaving the UI.
 
+## Local runtime setup
+
+Guildhall 0.9 is supported as a local macOS app. Runtime-backed project work
+uses Podman, but Guildhall does not make Podman a surprise installer side
+effect. The package install leaves your host alone: no Podman install, no
+machine creation, no image pull, and no container startup.
+
+Open **Settings → Ready** and look at **Local runtime**:
+
+- **Ready** means Podman is installed and its local runtime service is running.
+  Guildhall still starts project containers only when work needs them.
+- **Needs Podman** means Podman is missing. Guildhall shows the official macOS
+  installer path, and also shows the Homebrew option when Homebrew is already
+  available on the Mac.
+- **Setup needed** means Podman is installed, but the local runtime service has
+  not been created yet. Press **Set up local runtime** and Guildhall runs the
+  approved setup for you.
+- **Stopped** means the service exists but is not running. Press **Start local
+  runtime** and Guildhall starts it, then checks again.
+- **Host-run compatibility mode** remains available when setup is skipped,
+  fails, or the host is not supported by the 0.9 local runtime setup flow.
+
+Setup choices and results are saved in host-owned Guildhall runtime state, not
+inside the project checkout. Project containers also stay off by default; they
+start on demand when an AI run needs the runtime.
+
+The 0.9 runtime image is part of the release set. Guildhall publishes it to
+GitHub Container Registry as `ghcr.io/matthew-dean/guildhall-runtime-debian`
+with an immutable 0.9.0 tag and a 0.9 minor-line tag. The release manifest
+records the expected Debian, Node, Python, runtime API, image tag, and digest.
+Guildhall pulls or smokes that image only during approved runtime setup or first
+runtime use.
+
 Projects & Workspaces uses the same runtime as the CLI. Curated progress is
 written to `./.guildhall/PROGRESS.md`; detailed events, heartbeat updates, full
 transcripts, checkpoints, and bulky evidence live in user-local Guildhall
@@ -31,6 +64,12 @@ history so they do not fill project commits.
 Progress also leaves durable evidence: a task blueprint, decision,
 change order, implementation diff, verification result, review finding, or
 learning record. Transcript motion alone is not enough.
+
+When a task reaches the end of the loop, Guildhall also records proof paths and
+a completion handoff. The proof path names how the result was launched,
+verified, reviewed, and what evidence backs it. The handoff is the readable
+closeout: what shipped, what was checked, what was out of scope, and any
+remaining risk.
 
 ## From the CLI
 

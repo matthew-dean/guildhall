@@ -571,6 +571,51 @@ function parseRecoveryPlaybookNote(content: string): Record<string, unknown> | n
 
 function taskReflectionCandidates(task: Task): LearningCandidate[] {
   const candidates: LearningCandidate[] = []
+  const doneSummaryLearning = task.doneSummaryBundle?.summary.learningCandidates ?? []
+  for (const [index, summary] of doneSummaryLearning.entries()) {
+    candidates.push({
+      id: `task-${task.id}-done-learning-${index + 1}`,
+      source: 'task',
+      summary,
+      evidence: [
+        {
+          kind: 'task',
+          summary: `Completion summary for task ${task.id}.`,
+          ref: task.id,
+        },
+      ],
+      proposedScope: 'project',
+      proposedDestination: 'project_memory',
+      confidence: 'medium',
+      risk: 'low',
+      requiresApproval: true,
+    })
+  }
+  const proofPaths = Array.isArray((task as Task & { proofPaths?: unknown }).proofPaths)
+    ? (task as Task & { proofPaths?: Array<Record<string, unknown>> }).proofPaths ?? []
+    : []
+  for (const proofPath of proofPaths) {
+    const status = typeof proofPath.status === 'string' ? proofPath.status : ''
+    const title = typeof proofPath.title === 'string' ? proofPath.title : ''
+    if (status !== 'verified' || !title) continue
+    candidates.push({
+      id: `task-${task.id}-proof-path-${String(proofPath.id ?? title).replace(/[^a-z0-9_-]+/gi, '-')}`,
+      source: 'task',
+      summary: `Verified proof path for future similar work: ${title}.`,
+      evidence: [
+        {
+          kind: 'verification',
+          summary: `Proof path ${title} was verified during task ${task.id}.`,
+          ref: typeof proofPath.id === 'string' ? proofPath.id : task.id,
+        },
+      ],
+      proposedScope: 'project',
+      proposedDestination: 'project_memory',
+      confidence: 'medium',
+      risk: 'low',
+      requiresApproval: true,
+    })
+  }
   for (const note of task.notes) {
     if (note.role !== 'recovery-playbook') continue
     const parsed = parseRecoveryPlaybookNote(note.content)
@@ -624,6 +669,25 @@ function taskReflectionCandidates(task: Task): LearningCandidate[] {
     }
   }
   for (const verdict of task.reviewVerdicts) {
+    if (verdict.verdict === 'revise') {
+      candidates.push({
+        id: `task-${task.id}-review-miss-${verdict.recordedAt.replace(/[^0-9A-Za-z_-]+/g, '-')}`,
+        source: 'review',
+        summary: `Reviewer found a gap worth checking next time: ${verdict.reason}`,
+        evidence: [
+          {
+            kind: 'review',
+            summary: verdict.reason,
+            ref: verdict.recordedAt,
+          },
+        ],
+        proposedScope: 'project',
+        proposedDestination: 'project_memory',
+        confidence: 'medium',
+        risk: 'low',
+        requiresApproval: true,
+      })
+    }
     if (!verdict.llmError) continue
     candidates.push({
       id: `task-${task.id}-model-lane-${verdict.recordedAt}`,

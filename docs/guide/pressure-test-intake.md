@@ -2,30 +2,46 @@
 title: Pressure-Test Intake
 help_topic: guide.pressure_test_intake
 help_summary: |
-  New Request routes broad or risky asks into Pressure-Test Intake. Guildhall
-  asks one question at a time, keeps the answers, and turns the result into a
-  buildable spec with assumptions and deferrals called out.
+  Guildhall pressure-tests every task. It inspects the project, reasons about
+  completeness, asks only the questions that need owner judgment, and turns
+  rough intent into buildable work with assumptions and deferrals called out.
 ---
 
 # Pressure-Test Intake
 
-Some requests are ready to become a task. Others are more like a foggy field
-with a useful building somewhere inside it.
+Pressure testing is not an optional mode you have to choose. It is part of
+Guildhall's job.
 
-Pressure-Test Intake is the path for the second kind. It is how Guildhall takes
-a broad feature, release, or product request and turns it into something a
-worker can actually build without making up the important parts.
+You should be able to dump a pile of ideas, bugs, worries, half-plans, and
+taste notes into Guildhall. Guildhall's job is to turn that into work you can
+trust: a spec that matches the vision, names what is complete, names what is
+still uncertain, gives workers clear boundaries, gives reviewers real things
+to check, and keeps human supervision focused on the calls only you can make.
+
+That means every task gets pressure-tested. Guildhall decides how much pressure
+the work needs to reach the quality bar. A tiny one-file repair may only need
+automatic checks against scope, repo evidence, tests, and review expectations.
+A release, product change, policy decision, or vague "make this better" request
+may need a longer intake loop with focused questions in Thread.
+
+Either way, the burden is not on you to pick the right path. Guildhall routes
+the request, inspects what it can, and asks for your judgment only when an
+answer could reveal a missing truth.
 
 ## What New Request does first
 
 When you add a New Request, Guildhall routes it before it creates work. A small
 bug fix can become a task brief. A question can stay a question. A settings
-change can go to Settings. A repair ask can become triage.
+change can go to Settings. A repair ask can become triage. All of those paths
+still carry a pressure-test requirement: Guildhall checks whether the request
+has enough context, scope, verification, review coverage, and project fit to
+move safely.
 
-Broad release and feature requests take the Pressure-Test path. So do requests
-that sound like "pressure test this," "ask me everything," or "turn this into a
-product spec." Multi-part requests are split into reviewable actions instead of
-being mashed into one grand mystery sandwich.
+Broad release and feature requests take the deeper Pressure-Test Intake path.
+So do requests that sound like "ask me everything," "turn this into a product
+spec," or "I have a bunch of thoughts and need Guildhall to shape them."
+Multi-part requests are split into reviewable actions instead of being mashed
+into one oversized task.
 
 Guildhall also watches for a quieter kind of ambiguity: requests that sound
 like policy, planning, or spec work but could also mean "go implement this now."
@@ -44,14 +60,17 @@ The first visible card is simple: **New request**, the original ask, and the
 routing summary. If Guildhall finds a similar live card, it reuses that card
 instead of starting a duplicate trail.
 
-The aim is to remove overhead, not judgment. Guildhall inspects project
-evidence, narrows the uncertainty, and asks the smallest useful question it
-can. Product taste, risk tolerance, release judgment, and the calls that
-actually need your hand stay visible instead of being quietly decided for you.
+The aim is to remove overhead, not judgment. Guildhall does the work it can do
+automatically: inspect the repo, read project memory, compare against accepted
+plans, identify likely gaps, propose task boundaries, attach verification
+paths, and prepare review lenses. Product taste, risk tolerance, release
+judgment, and the calls that actually need your hand stay visible instead of
+being quietly decided for you.
 
 ## The intake rhythm
 
-Pressure-Test Intake asks one question at a time in Thread. Each question has:
+When the deeper intake loop is needed, Pressure-Test Intake asks one question
+at a time in Thread. Each question has:
 
 - the target it is pressure-testing;
 - the domain it belongs to, such as product goals, workflows, or risks and non-goals;
@@ -59,12 +78,14 @@ Pressure-Test Intake asks one question at a time in Thread. Each question has:
 - any evidence Guildhall already found in project notes or docs.
 
 After you answer, Guildhall saves the answer and decides the next useful move.
-If the answer is still too soft for a worker, it asks for one concrete example
-or threshold. If the domain looks covered, it asks a closeout question before
-moving on.
+If the answer is still too soft for a worker, Guildhall can ask for one
+concrete example or threshold. If the domain looks covered, it asks a closeout
+question before moving on.
 
-This is intentionally slower than "sure, I'll build it." It is also where a lot
-of future pain gets politely mugged before it reaches your codebase.
+This is intentionally more careful than "sure, I'll build it." It is where
+Guildhall tries to find missing requirements, hidden assumptions, vague quality
+bars, risky non-goals, weak verification, and reviewer concerns before they
+reach the codebase.
 
 ## What gets persisted
 
@@ -83,29 +104,40 @@ That matters because a release plan is rarely decided in one sitting. You can
 answer a question, stop, come back, and still see what Guildhall believes it
 knows.
 
-## The output
+## What Guildhall Is Trying To Prove
 
-When the intake closes, Guildhall can render a buildable spec or release plan.
-The useful part is not the formatting. The useful part is that the spec tells
-the truth:
+The output is not just a prettier spec. Guildhall is trying to make the best
+effort case that the work is ready to build:
 
-- what domains were covered;
-- what Guildhall is assuming;
-- what was explicitly deferred;
-- what a worker and reviewer need to verify.
+- the spec matches the user's actual vision;
+- the work is complete enough for the current phase;
+- important assumptions, non-goals, and deferrals are visible;
+- task boundaries are small enough to build and review;
+- acceptance criteria are concrete;
+- TDD and verification paths are known before implementation;
+- the right expert lenses can review the result;
+- a human can digest the plan without reading the whole transcript.
 
-A completed intake makes the next task smaller, not just prettier. If a
-domain is unknown, it stays visible as an assumption or deferral instead of
-quietly turning into a surprise halfway through implementation.
+If a domain is unknown, it stays visible as an assumption or deferral instead
+of quietly turning into a surprise halfway through implementation.
 
 For ambiguous policy/spec requests, the output may be a parent feature rather
 than one runnable task. That parent can hold the decision and spec while linked
 child tasks handle UI, API, data, docs, release, and verification work in
 smaller pieces.
 
-## When not to use it
+## What Changes With The Work
 
-Pressure-Test Intake is for broad, risky, or under-shaped work. A tiny docs
-copy edit, a known failing test, or a one-file repair can take the shorter
-task path. Guildhall can still ask a clarification question when needed, but it
-does not need to stage a whole town meeting for a missing comma.
+Every task is pressure-tested, but the system owns how much pressure to apply.
+The goal is always the same: enough inspection, verification, and review to make
+the work trustworthy.
+
+A tiny docs edit still gets checked for intent, location, tone, and verification
+need. A known failing test still gets checked for the real failing path, likely
+blast radius, and proof that the fix answers the failure. A one-file repair
+still gets checked for scope, regression risk, and review expectations.
+
+The difference is not a weaker standard. The difference is how much Guildhall
+can prove automatically. It only stops you when your answer could change the
+work: product intent, quality bar, risk tolerance, release boundary, or a
+tradeoff the repo cannot decide on its own.

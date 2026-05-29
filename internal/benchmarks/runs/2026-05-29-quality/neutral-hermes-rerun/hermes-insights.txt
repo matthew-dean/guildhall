@@ -1,0 +1,47 @@
+
+  ╔══════════════════════════════════════════════════════════╗
+  ║                    📊 Hermes Insights                    ║
+  ║                       Last 1 days                        ║
+  ╚══════════════════════════════════════════════════════════╝
+
+  Period: May 28, 2026 — May 29, 2026
+
+  📋 Overview
+  ────────────────────────────────────────────────────────
+  Sessions:          7             Messages:        28
+  Tool calls:        7             User messages:   7
+  Input tokens:      135,728       Output tokens:   865
+  Total tokens:      172,433
+  Avg msgs/session:  4.0
+
+  🤖 Models Used
+  ────────────────────────────────────────────────────────
+  Model                          Sessions       Tokens
+  DeepSeek-V4-Flash                     7      172,433
+
+  🔧 Top Tools
+  ────────────────────────────────────────────────────────
+  Tool                            Calls        %
+  write_file                          4    57.1%
+  terminal                            2    28.6%
+  read_file                           1    14.3%
+
+  📅 Activity Patterns
+  ────────────────────────────────────────────────────────
+  Mon                  0
+  Tue                  0
+  Wed                  0
+  Thu  ███████████████ 4
+  Fri  ███████████     3
+  Sat                  0
+  Sun                  0
+
+  Peak hours: 9PM (4), 7AM (3)
+  Active days: 2
+  Best streak: 2 consecutive days
+
+  🏆 Notable Sessions
+  ────────────────────────────────────────────────────────
+  Most messages        8 msgs             (May 29, 20260529_072404_)
+  Most tokens          36,229 tokens      (May 29, 20260529_071915_)
+  Most tool calls      3 calls            (May 29, 20260529_072404_)

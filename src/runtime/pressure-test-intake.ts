@@ -267,6 +267,8 @@ export function summarizeProjectCheckIn(memoryDir: string): ProjectCheckInSummar
 export function renderPressureTestSpec(intake: PressureTestIntake): string {
   const covered = intake.domains.filter(d => d.status === 'closed' || d.summary)
   const deferrals = intake.domains.filter(d => d.status === 'deferred')
+  const domainSummary = (id: string, fallback: string) =>
+    intake.domains.find(domain => domain.id === id)?.summary ?? fallback
   return [
     `# ${intake.target.title}`,
     '',
@@ -278,6 +280,18 @@ export function renderPressureTestSpec(intake: PressureTestIntake): string {
     '## Assumptions And Deferrals',
     ...intake.outputs.assumptions.map(a => `- ${a}`),
     ...(deferrals.length ? deferrals.map(d => `- **${d.title}:** deferred`) : ['- No deferred domains.']),
+    '',
+    '## Task Boundaries',
+    domainSummary('task-boundaries', 'Task boundaries must be small enough to build, verify, and review without losing the approved owner intent.'),
+    '',
+    '## Verification And TDD',
+    domainSummary('verification-tdd', 'The implementation plan must name the tests, commands, manual checks, or review proof needed before work starts.'),
+    '',
+    '## Design Quality',
+    domainSummary('design-quality', 'For UI work, the spec must name the design-system source or compact foundation, interaction patterns, palette direction, visual hierarchy, state coverage, and rendered proof needed before implementation can be trusted.'),
+    '',
+    '## Reviewer Lenses',
+    domainSummary('review-lenses', 'The review plan must name the expert lenses or rubrics needed to catch gaps before closure.'),
     '',
     '## Acceptance Criteria',
     '- Given the accepted intake, when a worker starts implementation, then it can identify the user workflow, non-goals, risks, and verification path without guessing.',
@@ -313,6 +327,65 @@ function seedDomains(): Array<z.infer<typeof PressureTestDomain>> {
       status: 'seeded',
       knownFacts: [],
       openUnknowns: ['Where should the user see, answer, and resume the intake?'],
+      askedQuestions: [],
+      followUpCandidates: [],
+      closeoutAsked: false,
+    },
+    {
+      id: 'design-quality',
+      title: 'Design quality',
+      whyItMatters: 'UI work should reach an app-store-caliber result, not merely a functional one.',
+      status: 'seeded',
+      knownFacts: [],
+      openUnknowns: [
+        'Which design system, component catalog, or compact foundation should the worker use?',
+        'Which interaction patterns match the user jobs, especially filters, toggles, navigation, and destructive actions?',
+        'What palette mood, semantic color roles, saturation budget, and visual proof should reviewers inspect?',
+      ],
+      askedQuestions: [],
+      followUpCandidates: [],
+      closeoutAsked: false,
+    },
+    {
+      id: 'task-boundaries',
+      title: 'Task boundaries',
+      whyItMatters: 'Guildhall needs work slices small enough to build, verify, and review without losing the bigger goal.',
+      status: 'seeded',
+      knownFacts: [],
+      openUnknowns: ['What should be split, deferred, or kept together so quality does not depend on one oversized task?'],
+      askedQuestions: [],
+      followUpCandidates: [],
+      closeoutAsked: false,
+    },
+    {
+      id: 'acceptance-criteria',
+      title: 'Acceptance criteria',
+      whyItMatters: 'Workers and reviewers need concrete proof points before implementation starts.',
+      status: 'seeded',
+      knownFacts: [],
+      openUnknowns: ['What observable outcomes prove this work is complete?'],
+      askedQuestions: [],
+      followUpCandidates: [],
+      closeoutAsked: false,
+    },
+    {
+      id: 'verification-tdd',
+      title: 'Verification and TDD',
+      whyItMatters: 'Guildhall should know how to prove the work and where tests should lead the implementation.',
+      status: 'seeded',
+      knownFacts: [],
+      openUnknowns: ['Which test, command, manual check, or proof packet should fail before the fix and pass after it?'],
+      askedQuestions: [],
+      followUpCandidates: [],
+      closeoutAsked: false,
+    },
+    {
+      id: 'review-lenses',
+      title: 'Reviewer lenses',
+      whyItMatters: 'Different expert reviews catch different misses, so Guildhall should choose review pressure before closure.',
+      status: 'seeded',
+      knownFacts: [],
+      openUnknowns: ['Which expert lenses should inspect this work before it is trusted?'],
       askedQuestions: [],
       followUpCandidates: [],
       closeoutAsked: false,
@@ -357,6 +430,16 @@ function firstQuestionPrompt(domainTitle: string, target: PressureTestIntake['ta
       return `For ${targetLabel}, what outcome should this request achieve?`
     case 'workflows':
       return `For ${targetLabel}, what workflow or user path should Guildhall understand before splitting the work?`
+    case 'design quality':
+      return `For ${targetLabel}, what design-system source, interaction pattern, palette direction, or visual proof would make the result feel shippable?`
+    case 'task boundaries':
+      return `For ${targetLabel}, what should stay in this work, and what should split into a separate task or deferral?`
+    case 'acceptance criteria':
+      return `For ${targetLabel}, what observable result would prove the work is complete?`
+    case 'verification and tdd':
+      return `For ${targetLabel}, what test, command, or review proof should verify the work?`
+    case 'reviewer lenses':
+      return `For ${targetLabel}, which expert concerns should reviewers inspect before Guildhall calls it done?`
     case 'risks and non-goals':
       return `For ${targetLabel}, what risk, boundary, or non-goal should Guildhall keep in mind?`
     default:
@@ -370,6 +453,16 @@ function projectCheckInQuestionPrompt(domainTitle: string): string {
       return 'What outcome would make this project successful?'
     case 'workflows':
       return 'What workflow or day-to-day constraint should Guildhall understand about this project?'
+    case 'design quality':
+      return 'What design-system source, interaction pattern, palette direction, or visual proof should Guildhall remember for this project?'
+    case 'task boundaries':
+      return 'What work should Guildhall keep together here, and what should become a separate task or deferral?'
+    case 'acceptance criteria':
+      return 'What observable result would prove this project work is complete?'
+    case 'verification and tdd':
+      return 'What test, command, or review proof should Guildhall use to verify this project work?'
+    case 'reviewer lenses':
+      return 'Which expert concerns should Guildhall review before trusting this project work?'
     case 'risks and non-goals':
       return 'What risk, boundary, or non-goal should Guildhall remember for this project?'
     default:

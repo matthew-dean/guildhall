@@ -6,7 +6,12 @@ import type {
   PersistencePlacement,
 } from '@guildhall/persistence'
 
-import { buildReviewPlan, ensureTaskReviewPlanRecorded } from '../review-planner.js'
+import {
+  buildReviewPlan,
+  buildTaskReviewRiskProfile,
+  ensureTaskReviewPlanRecorded,
+  evaluateReviewArtifactReadiness,
+} from '../review-planner.js'
 import type {
   ReviewAuditStore,
   ReviewPlanEvent,
@@ -140,8 +145,103 @@ describe('buildReviewPlan', () => {
       ]),
     })
     expect(plan.deterministicChecks).toContain('browser-or-screenshot-evidence')
+    expect(plan.deterministicChecks).toContain('design-system-control-reference-check')
     expect(plan.requiredArtifacts).toContain('visual-evidence')
     expect(plan.budget.maxReviewerAgents).toBeGreaterThan(3)
+  })
+
+  it('brings design-system control-choice work into generic UX, visual, and accessibility review', () => {
+    const plan = buildReviewPlan({
+      task: task({
+        title: 'Make the project UI library agent-ready',
+        description: 'Document when to use split buttons, variants, props, and layout controls so agents choose from the design system instead of adding margins or bespoke wrapper styles.',
+      }),
+      changedFiles: [
+        'packages/ui/src/components/SplitButton.tsx',
+        'packages/ui/docs/controls.md',
+      ],
+      createdAt: '2026-05-25T12:00:00.000Z',
+    })
+
+    expect(plan.selectedLanes).toEqual(expect.arrayContaining([
+      'ux_comprehension',
+      'visual_design',
+      'accessibility',
+      'test_adequacy',
+      'plan_completeness',
+    ]))
+    expect(plan.requiredRecipes.map((recipe) => recipe.recipeId)).toContain('product-ux-zero-context')
+    expect(plan.deterministicChecks).toEqual(expect.arrayContaining([
+      'browser-or-screenshot-evidence',
+      'design-system-control-reference-check',
+    ]))
+    expect(plan.reasons).toContain('Design-system control selection needs reviewer context for component intent, variants, layout ownership, findability, and accessible semantics.')
+  })
+
+  it('flags long select-list work for control-choice review', () => {
+    const plan = buildReviewPlan({
+      task: task({
+        title: 'Replace long country select with typeahead',
+        description: 'The form currently uses a huge dropdown. Prefer a combobox/autocomplete affordance so people can type to complete long option lists.',
+      }),
+      changedFiles: ['src/components/CountrySelect.tsx'],
+      createdAt: '2026-05-25T12:00:00.000Z',
+    })
+
+    expect(plan.selectedLanes).toEqual(expect.arrayContaining([
+      'ux_comprehension',
+      'visual_design',
+      'accessibility',
+    ]))
+    expect(plan.deterministicChecks).toContain('design-system-control-reference-check')
+    expect(plan.reasons).toContain('Design-system control selection needs reviewer context for component intent, variants, layout ownership, findability, and accessible semantics.')
+  })
+
+  it('projects review plans into task review-risk profiles with artifact gates', () => {
+    const plan = buildReviewPlan({
+      task: task({
+        title: 'Improve setup wizard empty state',
+        description: 'The browser setup flow has confusing labels and missing keyboard focus behavior.',
+      }),
+      changedFiles: ['src/web/surfaces/SetupWizard.svelte'],
+      createdAt: '2026-05-25T12:00:00.000Z',
+      createdBy: 'coordinator-review-planner',
+    })
+
+    const profile = buildTaskReviewRiskProfile(plan)
+
+    expect(profile).toMatchObject({
+      lanes: expect.arrayContaining(['ux_comprehension', 'visual_design', 'accessibility']),
+      requiredArtifacts: expect.arrayContaining([
+        'implementation-summary',
+        'verification-evidence',
+        'visual-evidence',
+      ]),
+      artifactPolicy: 'required_before_review',
+      assessedAt: '2026-05-25T12:00:00.000Z',
+      assessedBy: 'coordinator-review-planner',
+    })
+    expect(profile.recipes.find((recipe) => recipe.recipeId === 'product-ux-zero-context')).toMatchObject({
+      required: true,
+      releaseBlocking: true,
+      requiredArtifacts: expect.arrayContaining(['visual-evidence']),
+      reason: expect.stringContaining('ux_comprehension'),
+    })
+
+    expect(evaluateReviewArtifactReadiness({
+      reviewRisk: profile,
+      artifactRefs: ['implementation-summary', 'verification-evidence'],
+    })).toMatchObject({
+      ready: false,
+      missingArtifacts: ['visual-evidence'],
+    })
+    expect(evaluateReviewArtifactReadiness({
+      reviewRisk: profile,
+      artifactRefs: ['implementation-summary', 'verification-evidence', 'visual-evidence'],
+    })).toMatchObject({
+      ready: true,
+      missingArtifacts: [],
+    })
   })
 
   it('escalates critical auth migration work to release-critical depth and strict aggregation', () => {
@@ -222,6 +322,45 @@ describe('buildReviewPlan', () => {
     expect(plan.budget.maxReviewerAgents).toBe(8)
     expect(plan.aggregation.security).toBe('strict')
   })
+
+  it('adds a small set of advisory reasoning lenses for rough spec shaping', () => {
+    const plan = buildReviewPlan({
+      task: task({
+        status: 'spec_review',
+        title: 'Shape a rough product idea into first runnable work',
+        description: 'The request is ambiguous and needs a spec, task boundary, acceptance criteria, and proof path before implementation.',
+      }),
+      createdAt: '2026-05-25T12:00:00.000Z',
+    })
+
+    expect(plan.advisoryLenses.map((lens) => lens.lens)).toEqual([
+      'first_principles',
+      'contrarian',
+      'executor',
+    ])
+    expect(plan.advisoryLenses.every((lens) => lens.blocking === 'advisory')).toBe(true)
+  })
+
+  it('keeps outsider and expansionist lenses constrained to matching work', () => {
+    const plan = buildReviewPlan({
+      task: task({
+        title: 'Improve public docs onboarding copy',
+        description: 'Make the guide easier for a brand new reader and note one future follow-up opportunity without expanding this task.',
+      }),
+      changedFiles: ['docs/guide/index.md'],
+      createdAt: '2026-05-25T12:00:00.000Z',
+    })
+
+    expect(plan.advisoryLenses.map((lens) => lens.lens)).toEqual([
+      'first_principles',
+      'executor',
+      'outsider',
+      'expansionist',
+    ])
+    expect(plan.advisoryLenses.find((lens) => lens.lens === 'expansionist')).toMatchObject({
+      blocking: 'advisory',
+    })
+  })
 })
 
 describe('ensureTaskReviewPlanRecorded', () => {
@@ -261,6 +400,8 @@ describe('ensureTaskReviewPlanRecorded', () => {
     })
 
     expect(result.recorded).toBe(true)
+    expect(result.reviewRisk.requiredArtifacts).toContain('visual-evidence')
+    expect(result.reviewRisk.artifactPolicy).toBe('required_before_review')
     expect(savedPlans).toHaveLength(1)
     expect(savedEvents).toHaveLength(1)
     expect(savedEvents[0]!.kind).toBe('created')

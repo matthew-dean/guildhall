@@ -5,6 +5,7 @@ import {
   createReviewerAgent,
   createGateCheckerAgent,
   createPersonaReviewerAgent,
+  personaReviewerSystemPrompt,
   buildModelSet,
   temperatureForRole,
   type GuildhallAgent,
@@ -155,6 +156,8 @@ import {
   resolveLandingStrategy,
   type LandingStrategy,
 } from './merge-dispatcher.js'
+import { workSubtreeIds } from './work-hierarchy.js'
+import { applyRunAutomationPolicy as applyRunAutomationLeverPolicy } from './run-automation.js'
 import {
   atomicWriteText,
   getProjectStateDir,
@@ -241,8 +244,44 @@ function worktreeIncludeForTaskProject(
  */
 const PROPOSAL_PROMOTER_AGENT_ID = 'proposal-promoter'
 const PRE_REJECTION_POLICY_AGENT_ID = 'pre-rejection-policy'
+const REVIEW_UI_TASK_RE = /\b(ui|ux|frontend|front-end|web app|browser app|single-page app|page|screen|view|route|component|primitive|button|form|input|modal|drawer|toast|nav|toolbar|sidebar|layout|card|visual|design|palette|screenshot|app-store-caliber)\b/i
+const VISUAL_EVIDENCE_REF_RE = /(?:\b(?:screenshot|preview|rendered proof|visual evidence)\s*[:=-]\s*)?((?:\/|\.\.?\/|[A-Za-z0-9_.-]+\/)[^\s)"']+\.(?:png|jpg|jpeg|webp)|https?:\/\/[^\s)"']+\.(?:png|jpg|jpeg|webp))/gi
 
 type AgentGenerateResult = Awaited<ReturnType<OrchestratorAgent['generate']>>
+
+function isFrontendUiReviewTask(task: Task): boolean {
+  return REVIEW_UI_TASK_RE.test([
+    task.title,
+    task.description,
+    task.spec ?? '',
+    task.productBrief?.userJob ?? '',
+    task.productBrief?.successMetric ?? '',
+    ...task.acceptanceCriteria.map((criterion) => criterion.description),
+  ].join('\n'))
+}
+
+function collectVisualEvidenceRefs(task: Task): string[] {
+  const sources = [
+    ...task.notes.map((note) => note.content),
+    ...task.gateResults.flatMap((gate) => [
+      gate.output ?? '',
+      gate.gateId,
+    ]),
+    JSON.stringify(task.proofPaths ?? []),
+    JSON.stringify(task.completionHandoff ?? {}),
+  ]
+  const refs: string[] = []
+  const seen = new Set<string>()
+  for (const source of sources) {
+    for (const match of String(source).matchAll(VISUAL_EVIDENCE_REF_RE)) {
+      const ref = (match[1] ?? '').trim().replace(/[),.;:]+$/g, '')
+      if (!ref || seen.has(ref)) continue
+      seen.add(ref)
+      refs.push(ref)
+    }
+  }
+  return refs.slice(0, 12)
+}
 
 function hasConcreteSpecDraft(task: Task): boolean {
   return (
@@ -1639,8 +1678,13 @@ export interface OrchestratorOptions {
   reviewerFanout?: ReviewerFanoutRunner
   /** Optional review audit store used to persist review plans before work review runs. */
   reviewAuditStore?: ReviewAuditStore
-  /** Optional wall-clock timeout for a single agent turn. */
+  /** Optional inactivity timeout for a single agent turn. */
   agentGenerateTimeoutMs?: number
+  /** Optional total wall-clock timeout for a single agent turn, even if it streams events. */
+  agentGenerateWallClockTimeoutMs?: number | Partial<Record<
+    'spec' | 'coordinator' | 'worker' | 'reviewer' | 'gateChecker' | 'contextIndexer',
+    number
+  >>
 }
 
 const DEFAULT_IDLE_SHUTDOWN = 10
@@ -1658,8 +1702,23 @@ function resolveAgentGenerateTimeoutMs(
   return DEFAULT_LONGFORM_AGENT_GENERATE_TIMEOUT_MS
 }
 
+function resolveAgentGenerateWallClockTimeoutMs(
+  agentName: string,
+  configured: OrchestratorOptions['agentGenerateWallClockTimeoutMs'],
+): number | undefined {
+  if (configured == null) return undefined
+  if (typeof configured === 'number') return Math.max(100, Math.floor(configured))
+  const role = roleForAgentName(agentName)
+  const value = configured[role as keyof typeof configured]
+  return value == null ? undefined : Math.max(100, Math.floor(value))
+}
+
 function agentInactivityTimeoutMessage(agentName: string, timeoutMs: number): string {
   return `${agentName} timed out after ${timeoutMs}ms of inactivity`
+}
+
+function agentWallClockTimeoutMessage(agentName: string, timeoutMs: number): string {
+  return `${agentName} exceeded ${timeoutMs}ms total turn budget`
 }
 
 type CheckpointResumeContext = NonNullable<Checkpoint['resumeContext']>
@@ -2015,9 +2074,14 @@ export class Orchestrator {
     }
   }
 
-  private summarizeIdleQueue(queue: TaskQueue): NonNullable<Extract<TickOutcome, { kind: 'idle' }>['summary']> {
+  private summarizeIdleQueue(
+    queue: TaskQueue,
+    scopeTaskId?: string,
+  ): NonNullable<Extract<TickOutcome, { kind: 'idle' }>['summary']> {
+    const scopedIds = scopeTaskId ? new Set(workSubtreeIds(queue.tasks, scopeTaskId)) : null
+    const tasks = scopedIds ? queue.tasks.filter(task => scopedIds.has(task.id)) : queue.tasks
     const counts = {
-      total: queue.tasks.length,
+      total: tasks.length,
       actionable: 0,
       terminal: 0,
       done: 0,
@@ -2031,7 +2095,7 @@ export class Orchestrator {
       active: 0,
       fresh: 0,
     }
-    for (const task of queue.tasks) {
+    for (const task of tasks) {
       if ((TERMINAL_TASK_STATUSES as readonly TaskStatus[]).includes(task.status)) {
         counts.terminal += 1
         if (task.status === 'done') counts.done += 1
@@ -2142,6 +2206,8 @@ export class Orchestrator {
     if (landingRepair.changed) await this.writeQueue(queueBefore)
     const pendingPrRepair = await this.reconcilePendingPrLanding(queueBefore)
     if (pendingPrRepair.changed) await this.writeQueue(queueBefore)
+    const runAutomation = await this.applyRunAutomationPolicy(queueBefore, opts.preferredTaskId)
+    if (runAutomation.changed) queueBefore = await this.readQueue()
     const capacity =
       opts.dispatchLimit === undefined
         ? resolvedCapacity
@@ -2178,10 +2244,16 @@ export class Orchestrator {
 
     if (picks.length === 0) {
       this.consecutiveIdleTicks++
-      const allDone = queueBefore.tasks.every((t) =>
+      const scopedIds = opts.preferredTaskId
+        ? new Set(workSubtreeIds(queueBefore.tasks, opts.preferredTaskId))
+        : null
+      const scopedTasks = scopedIds
+        ? queueBefore.tasks.filter((task) => scopedIds.has(task.id))
+        : queueBefore.tasks
+      const allDone = scopedTasks.length > 0 && scopedTasks.every((t) =>
         (TERMINAL_TASK_STATUSES as readonly TaskStatus[]).includes(t.status),
       )
-      const summary = this.summarizeIdleQueue(queueBefore)
+      const summary = this.summarizeIdleQueue(queueBefore, opts.preferredTaskId)
       return {
         kind: 'idle',
         consecutiveIdleTicks: this.consecutiveIdleTicks,
@@ -2218,6 +2290,35 @@ export class Orchestrator {
     }
   }
 
+  private async applyRunAutomationPolicy(
+    queue: TaskQueue,
+    preferredTaskId?: string,
+  ): Promise<{ changed: boolean }> {
+    let settings
+    try {
+      settings = await this.readLeverSettings()
+    } catch {
+      return { changed: false }
+    }
+    const policy = settings.project.run_automation.position
+    if (policy !== 'fully_automated') return { changed: false }
+    const rootTask = preferredTaskId ? queue.tasks.find(task => task.id === preferredTaskId) : undefined
+    const ownerIntent = rootTask
+      ? [rootTask.title, rootTask.description, rootTask.request?.raw].filter(Boolean).join('\n')
+      : undefined
+    const result = await applyRunAutomationLeverPolicy({
+      memoryDir: this.opts.config.memoryDir,
+      policy,
+      ...(preferredTaskId ? { rootTaskId: preferredTaskId } : {}),
+      ...(ownerIntent ? { ownerIntent } : {}),
+      actor: 'run-automation',
+    })
+    if (result.resolutions.length > 0) {
+      console.log(`[guildhall] fully automated run resolved ${result.resolutions.length} owner checkpoint(s).`)
+    }
+    return { changed: result.changed }
+  }
+
   /**
    * Dispatch a single task. Handles pre-policy (proposed, shelved) paths,
    * agent dispatch (with worktree setup + slot allocation), reviewer-mode
@@ -2246,6 +2347,10 @@ export class Orchestrator {
     if (task.status === 'ready') {
       return await this.claimReadyTaskInline(task)
     }
+
+    const staleWorkerSelfCritiqueRecovery =
+      await this.rejectStaleWorkerSelfCritiqueWithoutProjectChanges(task, task.status)
+    if (staleWorkerSelfCritiqueRecovery) return staleWorkerSelfCritiqueRecovery
 
     // Guild deterministic-check pre-pass at `gate_check`: each applicable
     // guild's pure-function checks (WCAG contrast, OKLab near-duplicates, ...)
@@ -2941,20 +3046,31 @@ export class Orchestrator {
       agent.name,
       this.opts.agentGenerateTimeoutMs,
     )
+    const agentGenerateWallClockTimeoutMs = resolveAgentGenerateWallClockTimeoutMs(
+      agent.name,
+      this.opts.agentGenerateWallClockTimeoutMs,
+    )
     const controller = new AbortController()
     const externalAbort = this.opts.abortSignal
     const abortListener = () => controller.abort()
-    let timeoutHandle: ReturnType<typeof setTimeout> | undefined
+    let inactivityTimeoutHandle: ReturnType<typeof setTimeout> | undefined
+    let wallClockTimeoutHandle: ReturnType<typeof setTimeout> | undefined
     try {
       externalAbort?.addEventListener('abort', abortListener)
       const result = typeof agent.generateWithEvents === 'function'
         ? await new Promise<Awaited<ReturnType<typeof agent.generateWithEvents>>>((resolve, reject) => {
             const resetInactivityTimeout = () => {
-              if (timeoutHandle) clearTimeout(timeoutHandle)
-              timeoutHandle = setTimeout(() => {
+              if (inactivityTimeoutHandle) clearTimeout(inactivityTimeoutHandle)
+              inactivityTimeoutHandle = setTimeout(() => {
                 controller.abort()
                 reject(new Error(agentInactivityTimeoutMessage(agent.name, agentGenerateTimeoutMs)))
               }, agentGenerateTimeoutMs)
+            }
+            if (agentGenerateWallClockTimeoutMs != null) {
+              wallClockTimeoutHandle = setTimeout(() => {
+                controller.abort()
+                reject(new Error(agentWallClockTimeoutMessage(agent.name, agentGenerateWallClockTimeoutMs)))
+              }, agentGenerateWallClockTimeoutMs)
             }
 
             resetInactivityTimeout()
@@ -2988,10 +3104,19 @@ export class Orchestrator {
         : await Promise.race([
             agent.generate(prompt),
             new Promise<never>((_, reject) => {
-              timeoutHandle = setTimeout(() => {
+              inactivityTimeoutHandle = setTimeout(() => {
                 reject(new Error(agentInactivityTimeoutMessage(agent.name, agentGenerateTimeoutMs)))
               }, agentGenerateTimeoutMs)
             }),
+            ...(agentGenerateWallClockTimeoutMs != null
+              ? [
+                  new Promise<never>((_, reject) => {
+                    wallClockTimeoutHandle = setTimeout(() => {
+                      reject(new Error(agentWallClockTimeoutMessage(agent.name, agentGenerateWallClockTimeoutMs)))
+                    }, agentGenerateWallClockTimeoutMs)
+                  }),
+                ]
+              : []),
           ])
       generatedText = result.text
       if (agent.name === 'spec-agent' && beforeStatus === 'exploring') {
@@ -3218,13 +3343,31 @@ export class Orchestrator {
       if (
         agent.name === 'worker-agent' &&
         beforeStatus === 'in_progress' &&
-        /timed out after \d+ms/.test(message)
+        /timed out after \d+ms|exceeded \d+ms total turn budget/.test(message)
       ) {
         const likelyWorkerTargets = resolveLikelyTaskFiles(task)
         const worktreeDirty =
           typeof task.worktreePath === 'string' &&
           task.worktreePath.trim().length > 0 &&
           !(await this.gitDriver.isClean(resolveRuntimePath(task.worktreePath)))
+        if (worktreeDirty) {
+          await this.emitBackendEvent({
+            type: 'line_complete',
+            task_id: task.id,
+            agent_name: agent.name,
+            message:
+              'The worker hit its turn budget after making worktree edits, so Guildhall is preserving that partial implementation for the next pass.',
+          })
+          return {
+            kind: 'processed',
+            taskId: task.id,
+            agent: agent.name,
+            beforeStatus,
+            afterStatus: beforeStatus,
+            transitioned: false,
+            revisionCount: task.revisionCount,
+          }
+        }
         if (likelyWorkerTargets.length > 0 && !worktreeDirty) {
           const escalation = await raiseEscalation({
             tasksPath,
@@ -3274,7 +3417,8 @@ export class Orchestrator {
         error: message,
       }
     } finally {
-      if (timeoutHandle) clearTimeout(timeoutHandle)
+      if (inactivityTimeoutHandle) clearTimeout(inactivityTimeoutHandle)
+      if (wallClockTimeoutHandle) clearTimeout(wallClockTimeoutHandle)
       externalAbort?.removeEventListener('abort', abortListener)
     }
 
@@ -3570,6 +3714,16 @@ export class Orchestrator {
         const hasWorkerTurnEvidence =
           beforeStatus === 'in_progress' &&
           this.hasDurableWorkerHandoffEvidence(successfulAgentMetadata, task.id)
+        const workerFalseCompletionNarration =
+          agent.name === 'worker-agent' &&
+          beforeStatus === 'in_progress' &&
+          afterStatus === 'in_progress' &&
+          !transitioned &&
+          dirtyTaskFilesAfter.length === 0 &&
+          !hasDirtyWorktreeAfter &&
+          !hasDirtyLikelyTargetProgress &&
+          !hasCheckpointScopedVerifiedProgress &&
+          workerAddedSelfCritiqueSince(task, taskAfter, agent.name)
         const canAutoPromoteReviewFromCheckpointHandoff =
           agent.name === 'worker-agent' &&
           beforeStatus === 'in_progress' &&
@@ -3600,6 +3754,36 @@ export class Orchestrator {
             transitioned: true,
             revisionCount: taskAfter.revisionCount,
           }
+        }
+        if (workerFalseCompletionNarration) {
+          const alreadyRejected = taskAfter.notes.slice(-3).some((note) =>
+            note.agentId === 'coordinator' &&
+            note.role === 'worker-progress-review' &&
+            /self-critique without project-file changes/i.test(note.content),
+          )
+          if (!alreadyRejected) {
+            taskAfter.notes.push({
+              agentId: 'coordinator',
+              role: 'worker-progress-review',
+              content:
+                'Guildhall rejected the last worker self-critique without project-file changes outside `.guildhall`. Resume implementation by creating or editing the likely target files, then run focused verification before writing another self-critique.',
+              timestamp: this.now(),
+            })
+            taskAfter.updatedAt = this.now()
+            queueAfter.lastUpdated = taskAfter.updatedAt
+            await this.writeQueue(queueAfter)
+          }
+          if (typeof agent.resetConversation === 'function') {
+            agent.resetConversation()
+          }
+          await this.emitBackendEvent({
+            type: 'line_complete',
+            task_id: task.id,
+            agent_name: agent.name,
+            is_error: true,
+            message:
+              'Worker wrote a self-critique without any project-file changes. Guildhall is treating that as no progress and forcing a fresh implementation pass.',
+          })
         }
         if (
           agent.name === 'worker-agent' &&
@@ -3635,11 +3819,11 @@ export class Orchestrator {
           beforeStatus === 'in_progress' &&
           afterStatus === 'in_progress' &&
           !transitioned &&
-          taskAfter.updatedAt === task.updatedAt &&
+          (taskAfter.updatedAt === task.updatedAt || workerFalseCompletionNarration) &&
           (!hasDirtyWorktreeAfter || (hasFailedCheckpointVerification && !hasWorkerTurnEvidence)) &&
           !hasDirtyLikelyTargetProgress &&
           !hasCheckpointScopedVerifiedProgress &&
-          likelyWorkerTargets.length > 0
+          (likelyWorkerTargets.length > 0 || workerFalseCompletionNarration)
         if (repeatedWorkerNoProgress) {
           const attempts = this.bumpWorkerNoProgress(task.id)
           if (attempts >= WORKER_NO_PROGRESS_ESCALATION_AFTER) {
@@ -4776,7 +4960,7 @@ export class Orchestrator {
           kind: 'agent',
           agent: this.opts.agents.worker,
           promptSuffix:
-            "Implement this task per the spec. Before any review handoff, persist a self-critique note that includes: acceptance-criterion status, a minimum-scope check, a Review proof packet with changed files/diff scope, exact verification commands and pass/fail results, the current working hypothesis, and known gaps. Only after that proof packet is durable should you transition status to 'review'.",
+            "Implement this task per the spec. Before any review handoff, persist a self-critique note that includes: acceptance-criterion status, a minimum-scope check, a Review proof packet with changed files/diff scope, exact verification commands and pass/fail results, proof path updates for actual commands/routes/manual workflows/provider dashboards/blocking setup, the current working hypothesis, and known gaps. Only after that proof packet is durable should you transition status to 'review'.",
         }
       case 'review':
         return {
@@ -6784,6 +6968,9 @@ export class Orchestrator {
       '## Changed File Excerpts',
       ...changedFiles.excerpts,
       '',
+      '## Visual Evidence',
+      ...this.renderVisualEvidence(task),
+      '',
       '## Latest Self-Critique',
       ...selfCritique,
       '',
@@ -6811,6 +6998,25 @@ export class Orchestrator {
     ]
 
     return lines.join('\n')
+  }
+
+  private renderVisualEvidence(task: Task): string[] {
+    const evidenceRefs = collectVisualEvidenceRefs(task)
+    if (evidenceRefs.length > 0) {
+      return [
+        '- Recorded visual evidence:',
+        ...evidenceRefs.map((ref) => `  - ${ref}`),
+      ]
+    }
+
+    if (!isFrontendUiReviewTask(task)) {
+      return ['- No visual evidence recorded for this non-UI task.']
+    }
+
+    return [
+      '- Missing desktop/mobile screenshot evidence for this frontend/UI task.',
+      '- Because visual presentation changed, visual reviewers must not approve until rendered proof exists or the task explicitly records why screenshots are impossible.',
+    ]
   }
 
   private renderPolicyDecisionPacket(task: Task, checkpoint: Checkpoint | null): string[] {
@@ -7067,6 +7273,65 @@ export class Orchestrator {
       beforeStatus: input.beforeStatus,
       afterStatus: task.status,
       transitioned,
+      revisionCount: task.revisionCount,
+    }
+  }
+
+  private async rejectStaleWorkerSelfCritiqueWithoutProjectChanges(
+    task: Task,
+    beforeStatus: TaskStatus,
+  ): Promise<TickOutcome | null> {
+    if (beforeStatus !== 'in_progress' && beforeStatus !== 'review' && beforeStatus !== 'gate_check') return null
+    const latestSelfCritiqueIndex = findLatestWorkerSelfCritiqueIndex(task)
+    if (latestSelfCritiqueIndex < 0) return null
+    const latestRejectionIndex = findLatestWorkerSelfCritiqueRejectionIndex(task)
+    if (latestRejectionIndex > latestSelfCritiqueIndex) return null
+    const likelyTargets = resolveLikelyTaskFiles(task)
+    const likelyLocalWebStarter =
+      likelyTargets.some((file) => /(?:^|\/)package\.json$/.test(file)) &&
+      likelyTargets.some((file) => /(?:^|\/)index\.html$/.test(file))
+    if (!likelyLocalWebStarter) return null
+    const dirtyTaskFiles = await this.changedFilesForTask(task)
+    if (dirtyTaskFiles.length > 0) return null
+
+    const now = this.now()
+    await this.withQueueWriteLock(async () => {
+      const queue = await this.readQueue()
+      const queuedTask = queue.tasks.find((candidate) => candidate.id === task.id)
+      if (!queuedTask) return
+      if (findLatestWorkerSelfCritiqueRejectionIndex(queuedTask) > findLatestWorkerSelfCritiqueIndex(queuedTask)) {
+        return
+      }
+      queuedTask.status = 'in_progress'
+      queuedTask.assignedTo = 'worker-agent'
+      queuedTask.notes.push({
+        agentId: 'coordinator',
+        role: 'worker-progress-review',
+        content:
+          'Guildhall rejected the stale worker self-critique without project-file changes outside `.guildhall`. Resume implementation by creating or editing the likely target files, then run focused verification before writing another self-critique.',
+        timestamp: now,
+      })
+      queuedTask.updatedAt = now
+      queue.lastUpdated = now
+      await this.writeQueue(queue)
+    })
+
+    await this.emitBackendEvent({
+      type: 'line_complete',
+      task_id: task.id,
+      agent_name: 'coordinator-remediation',
+      is_error: true,
+      message:
+        'Rejected a stale worker self-critique because the project has no implementation-file changes.',
+    })
+
+    return {
+      kind: 'processed',
+      taskId: task.id,
+      agent: 'coordinator-remediation',
+      beforeStatus,
+      afterStatus: 'in_progress',
+      transitioned: beforeStatus !== 'in_progress',
       revisionCount: task.revisionCount,
     }
   }
@@ -8076,6 +8341,9 @@ export async function runOrchestrator(
     abortSignal?: AbortSignal | undefined
     providerOverride?: string
     modelAssignmentOverride?: ModelAssignmentConfig
+    agentGenerateTimeoutMs?: number
+    agentGenerateWallClockTimeoutMs?: OrchestratorOptions['agentGenerateWallClockTimeoutMs']
+    preferredTaskId?: string
   } = {},
 ): Promise<OrchestratorRunResult> {
   // Provider selection reads project-local config (`.guildhall/config.yaml`)
@@ -8299,6 +8567,10 @@ export async function runOrchestrator(
     ...(opts.onBackendEvent ? { onBackendEvent: opts.onBackendEvent } : {}),
     ...(opts.stopSignal ? { stopSignal: opts.stopSignal } : {}),
     ...(opts.abortSignal ? { abortSignal: opts.abortSignal } : {}),
+    ...(opts.agentGenerateTimeoutMs !== undefined ? { agentGenerateTimeoutMs: opts.agentGenerateTimeoutMs } : {}),
+    ...(opts.agentGenerateWallClockTimeoutMs !== undefined
+      ? { agentGenerateWallClockTimeoutMs: opts.agentGenerateWallClockTimeoutMs }
+      : {}),
   })
 
   try {
@@ -8306,6 +8578,7 @@ export async function runOrchestrator(
       ...(opts.maxTicks !== undefined ? { maxTicks: opts.maxTicks } : {}),
       ...(opts.tickDelayMs !== undefined ? { tickDelayMs: opts.tickDelayMs } : {}),
       ...(opts.stopAfterOneTask !== undefined ? { stopAfterOneTask: opts.stopAfterOneTask } : {}),
+      ...(opts.preferredTaskId !== undefined ? { preferredTaskId: opts.preferredTaskId } : {}),
     })
   } finally {
     await mcpManager.close()
@@ -8434,6 +8707,39 @@ function isWorkerSelfCritiqueNote(
   if (role === 'self-critique') return true
   if (agentId === expectedAgentId.toLowerCase()) return true
   return role === 'implementation' || role === 'implementer' || role === 'worker'
+}
+
+function workerAddedSelfCritiqueSince(
+  before: Task,
+  after: Task,
+  expectedAgentId = 'worker-agent',
+): boolean {
+  const previousCount = before.notes.length
+  return after.notes.slice(previousCount).some((note) =>
+    isWorkerSelfCritiqueNote(note, expectedAgentId),
+  )
+}
+
+function findLatestWorkerSelfCritiqueIndex(task: Task): number {
+  for (let i = task.notes.length - 1; i >= 0; i -= 1) {
+    const note = task.notes[i]
+    if (note && isWorkerSelfCritiqueNote(note)) return i
+  }
+  return -1
+}
+
+function findLatestWorkerSelfCritiqueRejectionIndex(task: Task): number {
+  for (let i = task.notes.length - 1; i >= 0; i -= 1) {
+    const note = task.notes[i]
+    if (
+      note?.agentId === 'coordinator' &&
+      note.role === 'worker-progress-review' &&
+      /self-critique without project-file changes/i.test(note.content)
+    ) {
+      return i
+    }
+  }
+  return -1
 }
 
 function normalizedWorkerCheckpointNextAction(
@@ -8599,7 +8905,11 @@ function reconcileAcceptanceCriteriaFromLatestWorkerSelfCritique(task: Task): vo
     .find((note) => isWorkerSelfCritiqueNote(note))
   if (!latestWorkerNote) return
 
-  const criteriaById = new Map(task.acceptanceCriteria.map((criterion) => [criterion.id.toLowerCase(), criterion]))
+  const criteriaById = new Map<string, Task['acceptanceCriteria'][number]>()
+  for (const criterion of task.acceptanceCriteria) {
+    criteriaById.set(criterion.id.toLowerCase(), criterion)
+    criteriaById.set(normalizeAcceptanceCriterionId(criterion.id), criterion)
+  }
   let positionalIndex = 0
   for (const rawLine of latestWorkerNote.content.split('\n')) {
     const line = rawLine.trim()
@@ -8611,7 +8921,9 @@ function reconcileAcceptanceCriteriaFromLatestWorkerSelfCritique(task: Task): vo
     const met = !/^not met$/i.test(stateMatch[1]!)
 
     if (explicitIdMatch) {
-      const criterion = criteriaById.get(explicitIdMatch[1]!.toLowerCase())
+      const criterion =
+        criteriaById.get(explicitIdMatch[1]!.toLowerCase()) ??
+        criteriaById.get(normalizeAcceptanceCriterionId(explicitIdMatch[1]!))
       if (criterion) criterion.met = met
       continue
     }
@@ -8622,9 +8934,15 @@ function reconcileAcceptanceCriteriaFromLatestWorkerSelfCritique(task: Task): vo
   }
 }
 
+function normalizeAcceptanceCriterionId(value: string): string {
+  const match = /^ac[-_ ]*0*([0-9]+)$/i.exec(value.trim())
+  if (match) return `ac${match[1]}`
+  return value.toLowerCase().replace(/[^a-z0-9]/g, '')
+}
+
 function isInfrastructureLikeReviewerError(text: string | undefined): boolean {
   if (!text) return false
-  return /HTTP 429|Too Many Requests|rate limit|engine_overloaded|Model busy, retry later|provider timeout|connection refused|Exceeded maximum turn limit \(\d+\)|temporarily unavailable|service unavailable|timed out after \d+ms/i.test(text)
+  return /HTTP 429|Too Many Requests|rate limit|engine_overloaded|Model busy, retry later|provider timeout|connection refused|Exceeded maximum turn limit \(\d+\)|temporarily unavailable|service unavailable|timed out after \d+ms|exceeded \d+ms total turn budget/i.test(text)
 }
 
 function isRetryableProviderCapacityError(text: string | undefined): boolean {
@@ -8725,11 +9043,22 @@ export function buildDefaultReviewerFanout(
       ].join('\n')
       if (opts.contextDebug) {
         try {
+          const personaPrompt = personaReviewerSystemPrompt(persona)
+          const debugContext = {
+            ...builtContext,
+            personaPrompt,
+            formatted: [
+              builtContext.formatted,
+              '',
+              '## Reviewer Persona',
+              personaPrompt,
+            ].join('\n'),
+          }
           await writeContextDebugRecord({
             memoryDir: opts.contextDebug.memoryDir,
             workspacePath: opts.contextDebug.workspacePath,
             task,
-            ctx: builtContext,
+            ctx: debugContext,
             agentName: `reviewer-persona-${persona.slug}`,
             modelId: reviewerLlm.modelId,
             ...(reviewerLlm.temperature !== undefined ? { temperature: reviewerLlm.temperature } : {}),

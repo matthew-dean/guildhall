@@ -89,16 +89,28 @@ projects:
       pullRequest: ask
 
 council:
-  mandate: Keep Looma generic while letting Knit needs drive priority.
+  mandate: Keep Looma generic and agent-ready while letting Knit needs drive priority.
   coordinationRules:
     - id: knit-drives-looma
       from: knit
       to: looma
       rule: Reusable Knit UI needs should become Looma primitives before app-specific wiring.
+    - id: looma-agent-ready
+      from: looma
+      to: knit
+      rule: Looma primitives should document when to use each component, variant, prop, and layout control so agents choose the library surface instead of inventing margins or bespoke styles.
 ```
 
 The parent workspace coordinates planning. Tasks still bind to a child project
 for setup, worktree creation, gates, and verification.
+
+For UI-library work, the council should capture how reusable controls become
+easy for agents to use correctly. A split button, for example, should not only
+exist as a component; its docs and metadata should say when it is preferable to
+a plain button or menu, what each variant means, which props change behavior,
+and which parent layout primitive owns spacing around it. That keeps Knit from
+papering over gaps with external margins, wrapper CSS, or local one-off control
+styles.
 
 Git policy follows the same shape. In a multi-project workspace, Guildhall
 keeps the workspace-level `.guildhall/` state at the parent so planning and

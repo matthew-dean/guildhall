@@ -127,6 +127,23 @@ import {
   summarizeProjectCheckIn,
 } from './pressure-test-intake.js'
 import { loadDesignSystem, saveDesignSystem } from './design-system-store.js'
+import { discoverDesignPreviewAdapter } from './design-preview.js'
+import { buildDesignSystemProfile } from './design-system-discovery.js'
+import {
+  buildDesignDecisionPacket,
+  captureOwnerDesignFeedback,
+  discoverLoomaDevelopmentHook,
+  readDesignFeedbackStore,
+  recordDesignFinding,
+  routeDesignFinding,
+} from './design-feedback.js'
+import { buildDesignSystemCatalog } from './design-system-catalog.js'
+import { buildDesignIntentSurrogate } from './design-intent-surrogate.js'
+import {
+  listExternalAgentLinks,
+  recordExternalAgentLink,
+} from './external-agent-links.js'
+import { loadEffectiveDesignTaste } from './design-taste.js'
 import {
   approveMetaIntake,
   createMetaIntakeTask,
@@ -187,6 +204,31 @@ import {
   recordReconciliationResolved,
 } from './attention.js'
 import { projectRuntimeCompatibilityBlocker } from './runtime-compatibility.js'
+import { ProjectRuntimeSupervisor } from './project-runtime-supervisor.js'
+import { createCapabilityRequest, listCapabilityRequests } from './capability-requests.js'
+import {
+  approveMountDirectoryRequest,
+  denyCapabilityRequest,
+  listActiveCapabilityGrants,
+  markCapabilityRequestBlocked,
+  revokeCapabilityGrant,
+} from './capability-grants.js'
+import {
+  parseDeniedHostAccess,
+  ProjectRuntimeCommandRequest,
+  suggestedCapabilityMountForHostPath,
+} from './project-runtime-command.js'
+import { listMemoryRecords } from './memory-store.js'
+import { readProjectRuntimeState } from './project-runtime-store.js'
+import {
+  DevServerManager,
+  type StartDevServerRequest,
+} from './dev-server-manager.js'
+import {
+  detectRuntimeBackendSetup,
+  runRuntimeBackendSetupAction,
+  type RuntimeBackendSetupDetector,
+} from './runtime-backend-setup.js'
 import { buildThread } from './thread.js'
 import { NodeGitDriver } from './git-driver.js'
 import {
@@ -280,6 +322,12 @@ export interface ServeOptions {
   serviceStatePath?: string
   /** Optional folder picker override for tests or alternate shells. */
   pickProjectFolder?: () => Promise<string | null>
+  /** Optional project-runtime supervisor override for tests. */
+  runtimeSupervisor?: ProjectRuntimeSupervisor
+  /** Optional runtime backend setup detector override for tests. */
+  runtimeBackendSetup?: RuntimeBackendSetupDetector
+  /** Optional runtime dev-server manager override for tests. */
+  devServerManager?: Pick<DevServerManager, 'list' | 'start' | 'stop' | 'restart'>
 }
 
 export interface ShutdownHttpServer {
@@ -1737,6 +1785,45 @@ function buildReviewAuditSummary(reviewAudit: {
   }
 }
 
+function parseStartDevServerRequest(body: Partial<StartDevServerRequest>): {
+  ok: true
+  value: StartDevServerRequest
+} | {
+  ok: false
+  error: string
+} {
+  const id = typeof body.id === 'string' ? body.id.trim() : ''
+  const projectId = typeof body.projectId === 'string' ? body.projectId.trim() : ''
+  const taskId = typeof body.taskId === 'string' && body.taskId.trim() ? body.taskId.trim() : undefined
+  const cwd = typeof body.cwd === 'string' ? body.cwd.trim() : ''
+  const argv = Array.isArray(body.argv)
+    ? body.argv.filter((item): item is string => typeof item === 'string' && item.trim().length > 0)
+    : []
+  const containerPort = typeof body.containerPort === 'number' ? body.containerPort : Number.NaN
+  const preferredHostPort = typeof body.preferredHostPort === 'number' ? body.preferredHostPort : undefined
+  const readinessPath = typeof body.readinessPath === 'string' ? body.readinessPath : undefined
+  if (!id) return { ok: false, error: 'Missing dev server id.' }
+  if (!projectId) return { ok: false, error: 'Missing projectId.' }
+  if (!cwd) return { ok: false, error: 'Missing cwd.' }
+  if (argv.length === 0) return { ok: false, error: 'Missing argv.' }
+  if (!Number.isInteger(containerPort) || containerPort <= 0) {
+    return { ok: false, error: 'containerPort must be a positive integer.' }
+  }
+  return {
+    ok: true,
+    value: {
+      id,
+      projectId,
+      ...(taskId ? { taskId } : {}),
+      cwd,
+      argv,
+      containerPort,
+      ...(preferredHostPort ? { preferredHostPort } : {}),
+      ...(readinessPath ? { readinessPath } : {}),
+    },
+  }
+}
+
 /**
  * Build the Hono app for a project without binding to a port. Exposed for
  * integration tests that want to call `app.fetch(new Request(...))` directly;
@@ -1745,6 +1832,7 @@ function buildReviewAuditSummary(reviewAudit: {
 export function buildServeApp(opts: ServeOptions = {}): {
   app: Hono
   supervisor: OrchestratorSupervisor
+  runtimeSupervisor: ProjectRuntimeSupervisor
   projectPath: string
 } {
   const preferredProjectPath = opts.preferredProjectPath ?? opts.projectPath ?? null
@@ -1790,6 +1878,9 @@ export function buildServeApp(opts: ServeOptions = {}): {
   })
 
   const supervisor = new OrchestratorSupervisor()
+  const runtimeSupervisor = opts.runtimeSupervisor ?? new ProjectRuntimeSupervisor()
+  const runtimeBackendSetup = opts.runtimeBackendSetup ?? detectRuntimeBackendSetup
+  const devServerManager = opts.devServerManager ?? new DevServerManager({ runtimeSupervisor })
   const app = new Hono()
   const currentProjectPath = () => currentProject().path
 
@@ -2224,13 +2315,55 @@ export function buildServeApp(opts: ServeOptions = {}): {
   // -------------------------------------------------------------------------
   // API: project
   // -------------------------------------------------------------------------
+  async function projectMemoryHealth(projectPath: string, tasks: Array<{ id: string }>): Promise<{
+    total: number
+    active: number
+    proposed: number
+    used: number
+    retired: number
+    project: number
+    userGlobal: number
+    guildhallProduct: number
+    recentUse: Array<{ taskId: string; included: number; withheld: number; at: string }>
+  }> {
+    const memoryDir = getProjectStateDir(projectPath)
+    const records = await listMemoryRecords({ memoryDir })
+    const count = (predicate: (record: typeof records[number]) => boolean) =>
+      records.filter(predicate).length
+    const recentUse: Array<{ taskId: string; included: number; withheld: number; at: string }> = []
+    for (const task of tasks.slice(0, 12)) {
+      const debug = await readContextDebugForTask(memoryDir, task.id, 1)
+      const latest = debug[0]
+      if (!latest?.memoryPacket || !latest.at) continue
+      recentUse.push({
+        taskId: task.id,
+        included: latest.memoryPacket.included.length,
+        withheld: latest.memoryPacket.withheld.length,
+        at: latest.at,
+      })
+    }
+    return {
+      total: records.length,
+      active: count(record => record.status === 'active'),
+      proposed: count(record => record.status === 'observed' || record.status === 'proposed'),
+      used: count(record => record.status === 'used'),
+      retired: count(record => record.status === 'retired'),
+      project: count(record => record.scope === 'project'),
+      userGlobal: count(record => record.scope === 'user_global'),
+      guildhallProduct: count(record => record.scope === 'guildhall_product'),
+      recentUse: recentUse
+        .sort((left, right) => right.at.localeCompare(left.at))
+        .slice(0, 5),
+    }
+  }
+
   app.get('/api/project', async c => {
     try {
       if (project.initializationNeeded) {
         return c.json({
           initializationNeeded: true,
           path: project.path,
-          setupUrl: '/setup',
+          setupUrl: `/projects/${encodeURIComponent(project.id)}/setup`,
         })
       }
       const tasksPath = join(getProjectStateDir(project.path), 'TASKS.json')
@@ -2282,6 +2415,14 @@ export function buildServeApp(opts: ServeOptions = {}): {
         runtimeProvider,
         allowPaidProviderFallback: runtimeProvider.allowPaidProviderFallback,
       })
+      const [runtime, memoryHealth] = await Promise.all([
+        readProjectRuntimeState(project.path),
+        projectMemoryHealth(
+          project.path,
+          tasks
+            .filter((task): task is { id: string } => typeof task.id === 'string'),
+        ),
+      ])
       const inbox = await buildProjectInboxSnapshot({
         projectPath: project.path,
         initializationNeeded: project.initializationNeeded,
@@ -2308,6 +2449,8 @@ export function buildServeApp(opts: ServeOptions = {}): {
             }
           : null,
         providerStatus,
+        runtime,
+        memoryHealth,
         gitStory,
         startReadiness,
         recentEvents: recent,
@@ -2321,6 +2464,216 @@ export function buildServeApp(opts: ServeOptions = {}): {
   app.get('/api/project/migrations', async c => {
     try {
       return c.json(await getProjectMigrationStatus({ projectRoot: project.path }))
+    } catch (err) {
+      return c.json({ error: err instanceof Error ? err.message : String(err) }, 500)
+    }
+  })
+
+  app.get('/api/project/runtime', async c => {
+    try {
+      return c.json(await runtimeSupervisor.inspect(project.path))
+    } catch (err) {
+      return c.json({ error: err instanceof Error ? err.message : String(err) }, 500)
+    }
+  })
+
+  app.get('/api/project/runtime/health', async c => {
+    try {
+      return c.json(await runtimeSupervisor.health(project.path))
+    } catch (err) {
+      return c.json({ error: err instanceof Error ? err.message : String(err) }, 500)
+    }
+  })
+
+  app.post('/api/project/runtime/command', async c => {
+    try {
+      const rawBody = await c.req.json().catch(() => ({}))
+      const parsed = ProjectRuntimeCommandRequest.safeParse(rawBody)
+      if (!parsed.success) {
+        return c.json({ error: 'Invalid runtime command request.', issues: parsed.error.issues }, 400)
+      }
+      if (parsed.data.projectId !== project.id) {
+        return c.json({ error: `Runtime command projectId must match ${project.id}.` }, 400)
+      }
+
+      const result = await runtimeSupervisor.runCommand(project.path, parsed.data)
+      const deniedHostPath = parseDeniedHostAccess(result.error)
+      const capabilityRequest = deniedHostPath && result.taskId
+        ? await createCapabilityRequest({
+            memoryDir: getProjectStateDir(project.path),
+            taskId: result.taskId,
+            kind: 'mount_directory',
+            requestedBy: 'runtime-command',
+            reason: `Runtime command ${result.commandId} needs access to ${deniedHostPath}.`,
+            mount: suggestedCapabilityMountForHostPath(deniedHostPath),
+          })
+        : null
+
+      return c.json({
+        ...result,
+        ...(capabilityRequest ? { capabilityRequest } : {}),
+      })
+    } catch (err) {
+      return c.json({ error: err instanceof Error ? err.message : String(err) }, 500)
+    }
+  })
+
+  app.get('/api/project/capability-requests', async c => {
+    try {
+      const memoryDir = getProjectStateDir(project.path)
+      return c.json({
+        requests: listCapabilityRequests(memoryDir),
+        activeGrants: listActiveCapabilityGrants(memoryDir),
+      })
+    } catch (err) {
+      return c.json({ error: err instanceof Error ? err.message : String(err) }, 500)
+    }
+  })
+
+  app.post('/api/project/capability-requests/:requestId/approve', async c => {
+    try {
+      const body = await c.req.json().catch(() => ({})) as {
+        access?: 'read-only' | 'read-write'
+        hostPath?: string
+        duration?: string
+      }
+      return c.json(await approveMountDirectoryRequest({
+        memoryDir: getProjectStateDir(project.path),
+        projectRoot: project.path,
+        requestId: c.req.param('requestId'),
+        approvedBy: 'owner',
+        ...(body.access ? { access: body.access } : {}),
+        ...(body.hostPath ? { hostPath: body.hostPath } : {}),
+        ...(body.duration ? { duration: body.duration } : {}),
+      }))
+    } catch (err) {
+      return c.json({ error: err instanceof Error ? err.message : String(err) }, 500)
+    }
+  })
+
+  app.post('/api/project/capability-requests/:requestId/deny', async c => {
+    try {
+      const body = await c.req.json().catch(() => ({})) as { fallback?: string }
+      return c.json(await denyCapabilityRequest({
+        memoryDir: getProjectStateDir(project.path),
+        projectRoot: project.path,
+        requestId: c.req.param('requestId'),
+        deniedBy: 'owner',
+        ...(body.fallback ? { fallback: body.fallback } : {}),
+      }))
+    } catch (err) {
+      return c.json({ error: err instanceof Error ? err.message : String(err) }, 500)
+    }
+  })
+
+  app.post('/api/project/capability-requests/:requestId/block', async c => {
+    try {
+      const body = await c.req.json().catch(() => ({})) as { reason?: string }
+      return c.json(await markCapabilityRequestBlocked({
+        memoryDir: getProjectStateDir(project.path),
+        projectRoot: project.path,
+        requestId: c.req.param('requestId'),
+        blockedBy: 'owner',
+        reason: body.reason?.trim() || 'Owner marked the capability request blocked.',
+      }))
+    } catch (err) {
+      return c.json({ error: err instanceof Error ? err.message : String(err) }, 500)
+    }
+  })
+
+  app.post('/api/project/capability-requests/:requestId/revoke', async c => {
+    try {
+      const body = await c.req.json().catch(() => ({})) as { reason?: string }
+      return c.json(await revokeCapabilityGrant({
+        memoryDir: getProjectStateDir(project.path),
+        projectRoot: project.path,
+        requestId: c.req.param('requestId'),
+        revokedBy: 'owner',
+        ...(body.reason ? { reason: body.reason } : {}),
+      }))
+    } catch (err) {
+      return c.json({ error: err instanceof Error ? err.message : String(err) }, 500)
+    }
+  })
+
+  app.get('/api/project/runtime/dev-servers', async c => {
+    try {
+      return c.json({ devServers: await devServerManager.list(project.path) })
+    } catch (err) {
+      return c.json({ error: err instanceof Error ? err.message : String(err) }, 500)
+    }
+  })
+
+  app.post('/api/project/runtime/dev-servers', async c => {
+    try {
+      const body = await c.req.json().catch(() => ({})) as Partial<StartDevServerRequest>
+      const request = parseStartDevServerRequest(body)
+      if (!request.ok) return c.json({ error: request.error }, 400)
+      if (request.value.projectId !== project.id) {
+        return c.json({ error: `Dev server projectId must match ${project.id}.` }, 400)
+      }
+      return c.json(await devServerManager.start(project.path, request.value))
+    } catch (err) {
+      return c.json({ error: err instanceof Error ? err.message : String(err) }, 500)
+    }
+  })
+
+  app.post('/api/project/runtime/dev-servers/:id/stop', async c => {
+    try {
+      return c.json(await devServerManager.stop(project.path, c.req.param('id')))
+    } catch (err) {
+      return c.json({ error: err instanceof Error ? err.message : String(err) }, 500)
+    }
+  })
+
+  app.post('/api/project/runtime/dev-servers/:id/restart', async c => {
+    try {
+      return c.json(await devServerManager.restart(project.path, c.req.param('id')))
+    } catch (err) {
+      return c.json({ error: err instanceof Error ? err.message : String(err) }, 500)
+    }
+  })
+
+  app.get('/api/project/runtime/setup', async c => {
+    try {
+      return c.json(await runtimeBackendSetup())
+    } catch (err) {
+      return c.json({ error: err instanceof Error ? err.message : String(err) }, 500)
+    }
+  })
+
+  app.post('/api/project/runtime/setup/action', async c => {
+    try {
+      const body = await c.req.json().catch(() => ({})) as {
+        action?: unknown
+        approved?: unknown
+      }
+      const action = typeof body.action === 'string' ? body.action : ''
+      if (![
+        'install-instructions',
+        'initialize-machine',
+        'start-machine',
+        'retry-detection',
+        'use-host-run-compatibility',
+      ].includes(action)) {
+        return c.json({ error: 'Unknown runtime setup action.' }, 400)
+      }
+      if (
+        (action === 'initialize-machine' || action === 'start-machine')
+        && body.approved !== true
+      ) {
+        const result = await runRuntimeBackendSetupAction(project.path, {
+          action: action as never,
+          approved: false,
+        })
+        return c.json(result, 403)
+      }
+
+      const result = await runRuntimeBackendSetupAction(project.path, {
+        action: action as never,
+        approved: body.approved === true,
+      })
+      return c.json(result, result.ok ? 200 : 500)
     } catch (err) {
       return c.json({ error: err instanceof Error ? err.message : String(err) }, 500)
     }
@@ -3165,6 +3518,35 @@ export function buildServeApp(opts: ServeOptions = {}): {
     }
   }
 
+  app.post('/api/project/task/:id/start', async c => {
+    try {
+      const taskId = c.req.param('id')
+      const tasksPath = join(getProjectStateDir(project.path), 'TASKS.json')
+      const tasks = await readTasksFileNormalized(tasksPath).catch(() => [])
+      if (!tasks.some(task => task.id === taskId)) {
+        return c.json({ error: 'task not found' }, 404)
+      }
+      const url = new URL(c.req.url)
+      url.pathname = '/api/project/start'
+      const res = await app.fetch(
+        new Request(url, {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ mode: 'one_task', taskId, scope: 'work_item' }),
+        }),
+        c.env,
+      )
+      if (!res.ok) return res
+      const body = await res.json().catch(() => ({})) as Record<string, unknown>
+      return c.json({
+        ...body,
+        scope: { type: 'work_item', taskId },
+      })
+    } catch (err) {
+      return c.json({ error: err instanceof Error ? err.message : String(err) }, 500)
+    }
+  })
+
   app.post('/api/project/start', async c => {
     try {
       const body = await c.req.json().catch(() => ({})) as {
@@ -3498,6 +3880,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
         ask: body.ask,
         domain,
         projectPath: resolveTaskPathForDomain(project, domain),
+        workspacePath: project.path,
         ...(body.title ? { title: body.title } : {}),
       })
       return c.json(result)
@@ -6395,6 +6778,20 @@ export function buildServeApp(opts: ServeOptions = {}): {
     }
   })
 
+  app.get('/api/project/design-system/discovery', async c => {
+    try {
+      if (project.initializationNeeded) return c.json({ initializationNeeded: true })
+      const memoryDir = getProjectStateDir(project.path)
+      const profile = await buildDesignSystemProfile({
+        projectPath: project.path,
+        memoryDir,
+      })
+      return c.json(profile)
+    } catch (err) {
+      return c.json({ error: String(err) }, 500)
+    }
+  })
+
   app.post('/api/project/design-system', async c => {
     try {
       if (project.initializationNeeded) return c.json({ error: 'not initialized' }, 400)
@@ -6432,6 +6829,151 @@ export function buildServeApp(opts: ServeOptions = {}): {
       })
       await saveDesignSystem(memoryDir, approved)
       return c.json({ ok: true, approvedAt: now })
+    } catch (err) {
+      return c.json({ error: String(err) }, 500)
+    }
+  })
+
+  app.get('/api/project/design-preview', async c => {
+    try {
+      if (project.initializationNeeded) return c.json({ initializationNeeded: true })
+      const memoryDir = getProjectStateDir(project.path)
+      const adapter = await discoverDesignPreviewAdapter({
+        projectPath: project.path,
+        memoryDir,
+      })
+      return c.json(adapter)
+    } catch (err) {
+      return c.json({ error: String(err) }, 500)
+    }
+  })
+
+  app.get('/api/project/design-feedback', async c => {
+    try {
+      if (project.initializationNeeded) return c.json({ initializationNeeded: true })
+      const memoryDir = getProjectStateDir(project.path)
+      const feedback = await readDesignFeedbackStore(memoryDir)
+      const loomaHook = await discoverLoomaDevelopmentHook({
+        globalConfig: readGlobalConfig(),
+      })
+      return c.json({ feedback, loomaHook })
+    } catch (err) {
+      return c.json({ error: String(err) }, 500)
+    }
+  })
+
+  app.post('/api/project/design-feedback/findings', async c => {
+    try {
+      if (project.initializationNeeded) return c.json({ error: 'not initialized' }, 400)
+      const memoryDir = getProjectStateDir(project.path)
+      const body = await c.req.json().catch(() => ({})) as Record<string, unknown>
+      const finding = await recordDesignFinding({
+        memoryDir,
+        finding: body as never,
+      })
+      const routed = await routeDesignFinding({ memoryDir, findingId: finding.id })
+      const feedback = await readDesignFeedbackStore(memoryDir)
+      const loomaHook = await discoverLoomaDevelopmentHook({
+        globalConfig: readGlobalConfig(),
+      })
+      return c.json({ ok: true, routed, feedback, loomaHook })
+    } catch (err) {
+      return c.json({ error: String(err) }, 400)
+    }
+  })
+
+  app.post('/api/project/design-feedback/owner-feedback', async c => {
+    try {
+      if (project.initializationNeeded) return c.json({ error: 'not initialized' }, 400)
+      const memoryDir = getProjectStateDir(project.path)
+      const body = await c.req.json().catch(() => ({})) as Record<string, unknown>
+      const ownerFeedback = await captureOwnerDesignFeedback({
+        memoryDir,
+        feedback: body as never,
+      })
+      const feedback = await readDesignFeedbackStore(memoryDir)
+      const loomaHook = await discoverLoomaDevelopmentHook({
+        globalConfig: readGlobalConfig(),
+      })
+      return c.json({ ok: true, ownerFeedback, feedback, loomaHook })
+    } catch (err) {
+      return c.json({ error: String(err) }, 400)
+    }
+  })
+
+  app.post('/api/project/design-feedback/decision-packet', async c => {
+    try {
+      if (project.initializationNeeded) return c.json({ error: 'not initialized' }, 400)
+      const memoryDir = getProjectStateDir(project.path)
+      const body = await c.req.json().catch(() => ({})) as { feedbackIds?: unknown }
+      const feedbackIds = Array.isArray(body.feedbackIds)
+        ? body.feedbackIds.filter((id): id is string => typeof id === 'string')
+        : undefined
+      const packet = await buildDesignDecisionPacket({
+        memoryDir,
+        ...(feedbackIds ? { feedbackIds } : {}),
+      })
+      const feedback = await readDesignFeedbackStore(memoryDir)
+      const loomaHook = await discoverLoomaDevelopmentHook({
+        globalConfig: readGlobalConfig(),
+      })
+      return c.json({ ok: true, packet, feedback, loomaHook })
+    } catch (err) {
+      return c.json({ error: String(err) }, 400)
+    }
+  })
+
+  app.get('/api/project/external-agent-links', async c => {
+    try {
+      if (project.initializationNeeded) return c.json({ initializationNeeded: true })
+      const memoryDir = getProjectStateDir(project.path)
+      const taskId = c.req.query('taskId')
+      return c.json(await listExternalAgentLinks({ memoryDir, ...(taskId ? { taskId } : {}) }))
+    } catch (err) {
+      return c.json({ error: String(err) }, 500)
+    }
+  })
+
+  app.post('/api/project/external-agent-links', async c => {
+    try {
+      if (project.initializationNeeded) return c.json({ error: 'not initialized' }, 400)
+      const memoryDir = getProjectStateDir(project.path)
+      const body = await c.req.json().catch(() => ({})) as Record<string, unknown>
+      const link = await recordExternalAgentLink({
+        memoryDir,
+        link: body as never,
+      })
+      return c.json({ ok: true, link })
+    } catch (err) {
+      return c.json({ error: String(err) }, 400)
+    }
+  })
+
+  app.get('/api/project/design-taste', async c => {
+    try {
+      if (project.initializationNeeded) return c.json({ initializationNeeded: true })
+      const memoryDir = getProjectStateDir(project.path)
+      return c.json(await loadEffectiveDesignTaste({ memoryDir }))
+    } catch (err) {
+      return c.json({ error: String(err) }, 500)
+    }
+  })
+
+  app.get('/api/project/design-system/catalog', async c => {
+    try {
+      if (project.initializationNeeded) return c.json({ initializationNeeded: true })
+      const memoryDir = getProjectStateDir(project.path)
+      return c.json(await buildDesignSystemCatalog({ projectPath: project.path, memoryDir }))
+    } catch (err) {
+      return c.json({ error: String(err) }, 500)
+    }
+  })
+
+  app.get('/api/project/design-intent-surrogate', async c => {
+    try {
+      if (project.initializationNeeded) return c.json({ initializationNeeded: true })
+      const memoryDir = getProjectStateDir(project.path)
+      return c.json(await buildDesignIntentSurrogate({ projectPath: project.path, memoryDir }))
     } catch (err) {
       return c.json({ error: String(err) }, 500)
     }
@@ -6682,6 +7224,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
       .filter(m => m.provider !== 'lm-studio')
       .map(m => ({ id: m.id, provider: m.provider, notes: m.notes ?? '' }))
     return c.json({
+      path: project.path,
       suggestedName,
       suggestedId,
       defaultLocalAssignment: DEFAULT_LOCAL_MODEL_ASSIGNMENT,
@@ -7729,7 +8272,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
     return c.html(dashboardHtml())
   })
 
-  return { app, supervisor, projectPath }
+  return { app, supervisor, runtimeSupervisor, projectPath }
 }
 
 export async function runServe(opts: ServeOptions = {}): Promise<void> {

@@ -28,8 +28,7 @@ into the wrong repo.
 ## Use the projects home to triage
 
 <picture class="gh-doc-picture">
-  <source srcset="../assets/ui-audit/0-7-0/projects.avif" type="image/avif" />
-  <img src="../assets/ui-audit/0-7-0/projects.png" alt="Guildhall projects home with Looma + Knit, Font something, Fair Labor License, Tiny demo, Narrative Harness, and Linecraft visible as local project cards." />
+  <img src="../assets/ui-audit/0-9-0/projects.png" alt="Guildhall v0.9.0 projects home with several registered local projects, work mix, attention, and launch controls." />
 </picture>
 
 The projects home answers:

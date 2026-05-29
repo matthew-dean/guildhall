@@ -23,7 +23,14 @@ export type ParsedGuildhallUri =
   | { kind: 'artifacts' }
   | { kind: 'artifact'; artifactId: string }
   | { kind: 'decisions' }
+  | { kind: 'feedback' }
+  | { kind: 'design' }
   | { kind: 'memory' }
+  | { kind: 'learning' }
+  | { kind: 'context' }
+  | { kind: 'localHistory' }
+  | { kind: 'codebaseKnowledge' }
+  | { kind: 'runtime' }
   | { kind: 'capabilityRequests' }
 
 export function projectUri(): string {
@@ -58,7 +65,14 @@ export function parseGuildhallUri(uri: string): ParsedGuildhallUri {
     return { kind: 'artifact', artifactId: parts[1]! }
   }
   if (parts.length === 1 && parts[0] === 'decisions') return { kind: 'decisions' }
+  if (parts.length === 1 && parts[0] === 'feedback') return { kind: 'feedback' }
+  if (parts.length === 1 && parts[0] === 'design') return { kind: 'design' }
   if (parts.length === 1 && parts[0] === 'memory') return { kind: 'memory' }
+  if (parts.length === 1 && parts[0] === 'learning') return { kind: 'learning' }
+  if (parts.length === 1 && parts[0] === 'context') return { kind: 'context' }
+  if (parts.length === 1 && parts[0] === 'local-history') return { kind: 'localHistory' }
+  if (parts.length === 1 && parts[0] === 'codebase-knowledge') return { kind: 'codebaseKnowledge' }
+  if (parts.length === 1 && parts[0] === 'runtime') return { kind: 'runtime' }
   if (parts.length === 1 && parts[0] === 'capability-requests') {
     return { kind: 'capabilityRequests' }
   }

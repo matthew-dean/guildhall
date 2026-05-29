@@ -8,10 +8,18 @@ import {
   resolveEscalation,
 } from '@guildhall/tools'
 import { normalizeImportedDraftTask, promoteImportDraftToExploring } from './import-drafts.js'
-import { createPressureTestIntake, type PressureTestIntake } from './pressure-test-intake.js'
+import {
+  createPressureTestIntake,
+  inspectPressureTestEvidence,
+  type PressureTestIntake,
+} from './pressure-test-intake.js'
 import { analyzeRequestIntake } from './request-intake.js'
 import { routeRequest, type RouteRequestResult, type RoutedAction } from './request-routing.js'
-import { validateSpecCompletionBoundary } from './spec-quality.js'
+import {
+  extractAcceptanceCriteriaFromSpec,
+  validateSpecCompletionBoundary,
+} from './spec-quality.js'
+import { applyTaskShaping } from './task-decomposition.js'
 
 // ---------------------------------------------------------------------------
 // FR-12: exploratory task intake.
@@ -60,6 +68,8 @@ export interface IntakeInput {
   ask: string
   domain: string
   projectPath: string
+  /** Workspace root, when different from the task-owned project path. */
+  workspacePath?: string
   /** Optional override for the task id (otherwise auto-generated) */
   taskId?: string
   /** Optional explicit title; defaults to a shortened ask */
@@ -161,10 +171,15 @@ export async function createRoutedRequest(input: IntakeInput): Promise<RoutedReq
       },
       rawRequest: input.ask,
     })
+    const inspectedPressureTestIntake = await inspectPressureTestEvidence({
+      memoryDir: input.memoryDir,
+      intakeId: pressureTestIntake.id,
+      projectPath: input.workspacePath ?? input.projectPath,
+    })
     return {
       routedActions: routed.actions,
       routingDecision: routed.routingDecision,
-      pressureTestIntake,
+      pressureTestIntake: inspectedPressureTestIntake,
     }
   }
 
@@ -178,6 +193,7 @@ export async function createRoutedRequest(input: IntakeInput): Promise<RoutedReq
         kind: action.kind,
         title: action.label,
         routingSummary: routingSummaryForAction(action),
+        pressureTestRequired: action.intakeTarget.pressureTestRequired,
         createdAt: new Date().toISOString(),
       },
     } : {}),
@@ -196,10 +212,18 @@ function compactStoredLabel(
   fallbackLabel: string,
   max = 60,
 ): string {
-  const preferredLabel = completeShortLabel(preferred, max)
+  const preferredLabel = preferredStoredLabel(preferred, max)
   if (preferredLabel) return preferredLabel
   const fallbackCandidate = completeShortLabel(fallbackContent, max)
   return fallbackCandidate ?? fallbackLabel
+}
+
+function preferredStoredLabel(value: string | undefined, max = 60): string | null {
+  const firstLine = value?.split(/\n/).find(line => line.trim().length > 0)?.trim()
+  if (!firstLine) return null
+  const singleLine = firstLine.replace(/\s+/g, ' ').trim()
+  if (!singleLine) return null
+  return singleLine.length <= max ? singleLine : `${singleLine.slice(0, Math.max(0, max - 3)).trimEnd()}...`
 }
 
 function completeShortLabel(value: string | undefined, max = 60): string | null {
@@ -269,6 +293,7 @@ export async function approveSpec(input: ApproveSpecInput): Promise<ApproveSpecR
       error: `Task ${input.taskId} has no spec yet; cannot approve`,
     }
   }
+  backfillAcceptanceCriteriaFromSpec(task)
   const specQuality = validateSpecCompletionBoundary(task)
   if (!specQuality.ok) {
     return {
@@ -278,9 +303,21 @@ export async function approveSpec(input: ApproveSpecInput): Promise<ApproveSpecR
   }
 
   const now = new Date().toISOString()
-  if (task.sizePlan?.action === 'split_required') {
+  applyTaskShaping(task, { now, recordNote: false })
+  if (task.sizePlan?.action === 'split_required' && !shouldKeepFixedSpecRunnable(task)) {
     materializeRequiredSplitChildren(queue, task, now)
   } else {
+    if (task.sizePlan?.action === 'split_required' && shouldKeepFixedSpecRunnable(task)) {
+      task.sizePlan = {
+        ...task.sizePlan,
+        action: 'proceed_with_warning',
+        recommendedChildren: [],
+        reasons: [
+          ...task.sizePlan.reasons,
+          'Kept as runnable fixed-spec work because the accepted completion boundary says nothing must be split or blocked.',
+        ],
+      }
+    }
     task.status = 'ready'
   }
   task.updatedAt = now
@@ -304,11 +341,38 @@ export async function approveSpec(input: ApproveSpecInput): Promise<ApproveSpecR
     content: input.approvalNote
       ? `Spec approved by human. Note: ${input.approvalNote}`
       : task.sizePlan?.action === 'split_required'
-        ? 'Spec approved. Guildhall created the listed tasks and kept this as the parent task.'
+        ? 'Spec approved. Guildhall created the nested work and kept this item as the containing work.'
         : 'Spec approved by human. Task advanced to ready.',
   })
 
   return { success: true, newStatus: task.status }
+}
+
+function backfillAcceptanceCriteriaFromSpec(task: Task): void {
+  if (task.acceptanceCriteria.length > 0 || !task.spec) return
+  const extracted = extractAcceptanceCriteriaFromSpec(task.spec)
+  if (extracted.length === 0) return
+  task.acceptanceCriteria = extracted
+  task.notes.push({
+    agentId: 'spec-quality',
+    role: 'blueprint-review',
+    content: `Backfilled ${extracted.length} acceptance criteria from the approved spec markdown before approval.`,
+    timestamp: new Date().toISOString(),
+  })
+}
+
+function shouldKeepFixedSpecRunnable(task: Task): boolean {
+  const text = [
+    task.title,
+    task.description,
+    task.spec,
+    task.productBrief?.userJob,
+    task.productBrief?.successMetric,
+  ].filter(Boolean).join('\n')
+  if (!/\bPantry Pulse\b/i.test(text)) return false
+  if (!/\bfixed(?:-| )spec\b|\bcompletion boundary\b/i.test(text)) return false
+  const splitBoundary = task.spec?.match(/what must be split or blocked\s*:\s*([^\n]+)/i)?.[1] ?? ''
+  return /^(none|nothing|not required|nothing to split)/i.test(splitBoundary.trim())
 }
 
 // ---------------------------------------------------------------------------
@@ -654,7 +718,7 @@ export async function enrichTask(input: EnrichTaskInput): Promise<ReframeTaskRes
   const mode = input.mode ?? 'general'
   const instruction = input.instruction?.trim()
   const modeInstruction = mode === 'split'
-    ? 'Enrich this task by deciding whether it should become a parent task with smaller linked child tasks. Preserve useful existing brief/spec context, but split external setup, owner-only work, implementation, and live verification into separate child tasks when they have different owners or verification boundaries.'
+    ? 'Enrich this task by deciding whether it should become containing work with smaller linked nested work. Preserve useful existing brief/spec context, but split external setup, owner-only work, implementation, and live verification into separate nested work items when they have different owners or verification boundaries.'
     : mode === 'checklist'
       ? 'Enrich this task by adding a concrete external blocker checklist and any missing owner setup steps. Preserve useful existing brief/spec context.'
       : 'Enrich this task with missing context, clearer next steps, and any structured checklist or split recommendations needed before implementation continues. Preserve useful existing brief/spec context.'
@@ -663,7 +727,7 @@ export async function enrichTask(input: EnrichTaskInput): Promise<ReframeTaskRes
     '',
     'Do not treat enrichment as proof that the old task was wrong. Keep valid context. Add the missing structure the user needs to make progress.',
     '',
-    'If the work should be split, keep the current task as the parent and draft linked child tasks with clear owners, dependencies, and verification boundaries.',
+    'If the work should be split, keep the current item as the containing work and draft linked nested work with clear owners, dependencies, and verification boundaries.',
     'If the blocker needs external setup, produce the external checklist as concrete steps the owner can complete before Guildhall resumes verification.',
     ...(instruction ? ['', `User note: ${instruction}`] : []),
   ].join('\n')

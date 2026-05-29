@@ -20,10 +20,28 @@ export const VISUAL_DESIGNER_RUBRIC: SoftGateRubricItem[] = [
     weight: 0.8,
   },
   {
+    id: 'visual-product-composition',
+    question:
+      'Does the rendered surface feel like a shippable product experience for this domain, not a generic checklist/demo screen?',
+    weight: 1.0,
+  },
+  {
+    id: 'visual-evidence-reviewed',
+    question:
+      'When visual presentation changed, did the review inspect rendered screenshot/live-preview evidence rather than only source snippets?',
+    weight: 1.0,
+  },
+  {
     id: 'visual-rhythm-consistent',
     question:
       'Do spacings feel even across the surface — no arbitrary competing gaps (8 here, 12 there for no reason)?',
     weight: 0.7,
+  },
+  {
+    id: 'visual-information-density',
+    question:
+      'Does the density match the workflow, with enough real content to feel useful and no oversized empty marketing/demo composition?',
+    weight: 0.8,
   },
   {
     id: 'visual-optical-alignment',

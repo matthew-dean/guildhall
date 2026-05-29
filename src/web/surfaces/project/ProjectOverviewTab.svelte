@@ -66,6 +66,14 @@
   const displayPath = $derived(formatUserPath(detail.path))
   const running = $derived(detail.run?.status === 'running')
   const actionableInbox = $derived(inboxItems.filter(item => item.severity !== 'low').slice(0, 3))
+  const runtime = $derived(detail.runtime ?? null)
+  const memoryHealth = $derived(detail.memoryHealth ?? null)
+  const primaryProofPaths = $derived.by(() => {
+    return tasks
+      .flatMap(task => (task.proofPaths ?? []).map(proofPath => ({ task, proofPath })))
+      .sort((left, right) => proofRank(left.proofPath.status) - proofRank(right.proofPath.status))
+      .slice(0, 3)
+  })
 
   const counts = $derived.by(() => {
     const count = (statuses: string[]) => tasks.filter(task => statuses.includes(task.status ?? '')).length
@@ -169,6 +177,24 @@
         detail: detail.bootstrapStatus.lastRunAt ? `Checked ${formatDate(detail.bootstrapStatus.lastRunAt)}.` : 'Readiness checks passed.',
         tone: 'ok',
         href: currentProjectHref('/settings/ready', activeProjectId),
+      })
+    }
+
+    if (runtime) {
+      items.push({
+        label: runtimeHealthLabel(runtime.status, runtime.health?.status),
+        detail: runtimeModeLabel(runtime.migration?.mode),
+        tone: runtimeTone(runtime.status, runtime.health?.status),
+        href: currentProjectHref('/settings/ready', activeProjectId),
+      })
+    }
+
+    if (memoryHealth) {
+      items.push({
+        label: 'Memory health',
+        detail: `${memoryHealth.active ?? 0} active, ${memoryHealth.proposed ?? 0} proposed, ${memoryHealth.used ?? 0} recently used.`,
+        tone: (memoryHealth.active ?? 0) > 0 ? 'ok' : (memoryHealth.proposed ?? 0) > 0 ? 'warn' : 'neutral',
+        href: currentProjectHref('/settings/learning', activeProjectId),
       })
     }
 
@@ -458,6 +484,38 @@
   function go(href: string): void {
     nav(projectActionHref(href, activeProjectId), { backgroundPath: path.value })
   }
+
+  function proofRank(status: string | undefined): number {
+    switch (status) {
+      case 'blocked': return 0
+      case 'in_progress': return 1
+      case 'planned': return 2
+      case 'stale': return 3
+      case 'verified': return 4
+      default: return 5
+    }
+  }
+
+  function runtimeTone(status: string | undefined, health: string | undefined): Tone {
+    if (status === 'failed' || health === 'unhealthy') return 'danger'
+    if (health === 'degraded' || status === 'creating') return 'warn'
+    if (status === 'running' && health === 'healthy') return 'ok'
+    if (status === 'running') return 'running'
+    return 'neutral'
+  }
+
+  function runtimeHealthLabel(status: string | undefined, health: string | undefined): string {
+    if (status === 'failed') return 'Runtime failed'
+    if (status === 'running') return health === 'healthy' ? 'Runtime healthy' : 'Runtime running'
+    if (status === 'creating') return 'Runtime starting'
+    return 'Runtime stopped'
+  }
+
+  function runtimeModeLabel(mode: string | undefined): string {
+    if (mode === 'runtime-backed') return 'Podman runtime mode'
+    if (mode === 'host-run') return 'Compatibility mode'
+    return 'Runtime mode unknown'
+  }
 </script>
 
 <div class="overview">
@@ -616,6 +674,47 @@
   </section>
 
   <section class="overview-grid">
+    <Card title="Runtime and memory" titleTag="h2" className="overview-card">
+      <div class="signal-list">
+        <button type="button" class="signal-row" onclick={() => go(currentProjectHref('/settings/ready', activeProjectId))}>
+          <StatusDot tone={runtimeTone(runtime?.status, runtime?.health?.status) === 'running' ? 'active' : runtimeTone(runtime?.status, runtime?.health?.status) === 'ok' ? 'ok' : runtimeTone(runtime?.status, runtime?.health?.status) === 'danger' ? 'danger' : runtimeTone(runtime?.status, runtime?.health?.status) === 'warn' ? 'warn' : 'idle'} pulse={runtime?.status === 'running'} size="sm" />
+          <div>
+            <strong>{runtimeHealthLabel(runtime?.status, runtime?.health?.status)}</strong>
+            <span>{runtimeModeLabel(runtime?.migration?.mode)}{#if runtime?.lastActivityAt} · active {formatDate(runtime.lastActivityAt)}{/if}</span>
+          </div>
+        </button>
+        <button type="button" class="signal-row" onclick={() => go(currentProjectHref('/settings/learning', activeProjectId))}>
+          <StatusDot tone={(memoryHealth?.active ?? 0) > 0 ? 'ok' : (memoryHealth?.proposed ?? 0) > 0 ? 'warn' : 'idle'} size="sm" />
+          <div>
+            <strong>Memory health</strong>
+            <span>
+              {memoryHealth?.active ?? 0} active · {memoryHealth?.proposed ?? 0} proposed · {memoryHealth?.used ?? 0} used
+            </span>
+          </div>
+        </button>
+      </div>
+    </Card>
+
+    <Card title="Primary proof paths" titleTag="h2" className="overview-card">
+      {#if primaryProofPaths.length === 0}
+        <p class="muted">No proof paths have been planned yet.</p>
+      {:else}
+        <div class="proof-path-list">
+          {#each primaryProofPaths as item (`${item.task.id}:${item.proofPath.id ?? item.proofPath.title}`)}
+            <button type="button" class="proof-path-row" onclick={() => go(currentTaskHref(item.task.id, activeProjectId))}>
+              <div>
+                <strong>{item.proofPath.title ?? 'Proof path'}</strong>
+                <span>{item.proofPath.summary ?? taskLabel(item.task)}</span>
+              </div>
+              <Chip label={friendlyStatus(item.proofPath.status)} tone={item.proofPath.status === 'verified' ? 'ok' : item.proofPath.status === 'blocked' ? 'warn' : 'neutral'} />
+            </button>
+          {/each}
+        </div>
+      {/if}
+    </Card>
+  </section>
+
+  <section class="overview-grid">
     <Card title="Project health" titleTag="h2" className="overview-card">
       <div class="health-list">
         {#each healthItems as item (`${item.label}:${item.detail}`)}
@@ -732,6 +831,8 @@
   }
   .action-row,
   .health-row,
+  .signal-row,
+  .proof-path-row,
   .run-blocker,
   .run-plan-row {
     border: 1px solid var(--border);
@@ -764,6 +865,8 @@
   .action-list,
   .motion-list,
   .health-list,
+  .signal-list,
+  .proof-path-list,
   .event-list,
   .dependency-list,
   .run-plan-list {
@@ -790,6 +893,8 @@
     line-height: var(--lh-body);
   }
   .health-row,
+  .signal-row,
+  .proof-path-row,
   .run-blocker,
   .run-plan-row {
     display: grid;
@@ -799,6 +904,8 @@
     padding: var(--s-3);
   }
   .health-row div,
+  .signal-row div,
+  .proof-path-row div,
   .run-blocker div,
   .run-plan-row div {
     display: grid;
@@ -806,6 +913,8 @@
     min-width: 0;
   }
   .health-row strong,
+  .signal-row strong,
+  .proof-path-row strong,
   .run-blocker strong,
   .run-plan-row strong {
     color: var(--text);
@@ -816,6 +925,8 @@
     min-height: 0;
   }
   .run-blocker span,
+  .signal-row span,
+  .proof-path-row span,
   .run-plan-row span {
     color: var(--text-muted);
     font-size: var(--fs-1);

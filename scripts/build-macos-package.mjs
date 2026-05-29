@@ -42,6 +42,7 @@ writeFileSync(
     executableRelativePath: 'bin/guildhall',
     runtimeRelativePath: 'runtime/node',
     cliEntrypointRelativePath: 'app/dist/cli.js',
+    releaseManifestRelativePath: 'app/dist/release-manifest.json',
   }, null, 2) + '\n',
 )
 

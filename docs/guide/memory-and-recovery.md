@@ -102,6 +102,20 @@ Common actions:
 The normal task flow does not ask you to approve every lesson. Suggested items
 stay off until you choose to use them.
 
+## What future agents receive
+
+Accepted memory can enter future agent context as an effective memory packet.
+Guildhall filters by scope, type, domain, task kind, file area, confidence,
+risk, and freshness so a worker sees the project facts and habits that are
+likely to matter now, not every note Guildhall has ever written.
+
+High-risk or merely proposed memory stays out of automatic worker context until
+it is accepted. When memory is withheld, Guildhall keeps the reason so the
+decision can be audited later.
+
+Outside tools can inspect the same memory layer through MCP. See
+[External agents and MCP](./external-agents) for the resource list.
+
 ## Product feedback
 
 Product ideas are for improving Guildhall itself. They include the suggestion,

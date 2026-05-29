@@ -140,6 +140,11 @@ describe('POST /api/project/intake', () => {
 
 describe('POST /api/project/request', () => {
   it('starts pressure-test intake for release ideas', async () => {
+    await fs.writeFile(
+      path.join(tmpDir, 'README.md'),
+      '# Intake Test\n\nGuildhall should turn rough owner intent into complete, verifiable work without offloading routine decisions.',
+      'utf-8',
+    )
     const { app } = buildServeApp({ projectPath: tmpDir })
     const res = await app.fetch(new Request(projectUrl('/api/project/request'), {
       method: 'POST',
@@ -150,7 +155,11 @@ describe('POST /api/project/request', () => {
     expect(res.status).toBe(200)
     const body = await res.json() as {
       routedActions?: Array<{ kind?: string; intakeTarget?: { type?: string; pressureTestRequired?: boolean } }>
-      pressureTestIntake?: { status?: string; activeDomainId?: string }
+      pressureTestIntake?: {
+        status?: string
+        activeDomainId?: string
+        pendingQuestion?: { evidence?: string[] }
+      }
     }
     expect(body.routedActions?.[0]).toMatchObject({
       kind: 'pressure_test_intake',
@@ -160,6 +169,11 @@ describe('POST /api/project/request', () => {
       status: 'active',
       activeDomainId: 'product-goals',
     })
+    expect(body.pressureTestIntake?.pendingQuestion?.evidence?.some(evidence =>
+      evidence.includes('README.md:') &&
+      evidence.includes('rough owner intent') &&
+      evidence.includes('verifiable work'),
+    )).toBe(true)
   })
 
   it('preserves ordinary task intake behavior', async () => {
@@ -182,7 +196,15 @@ describe('POST /api/project/request', () => {
       kind: 'task_spec',
       raw: 'Add a loading spinner to Providers.',
       routingSummary: 'Routed to Task Intake',
+      pressureTestRequired: true,
     })
+    expect(queue.tasks[0]?.requestIntake?.pressureTestSummary).toMatchObject({
+      systemOwned: true,
+      degree: 'automatic',
+      qualityBar: expect.stringContaining('trustworthy'),
+    })
+    expect(queue.tasks[0]?.requestIntake?.pressureTestSummary?.checks.map(check => check.id)).toContain('verification')
+    expect(queue.tasks[0]?.requestIntake?.pressureTestSummary?.checks.map(check => check.id)).toContain('review-lenses')
   })
 
   it('keeps project questions visible as routed project-question requests', async () => {

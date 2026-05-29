@@ -73,6 +73,59 @@ describe('SetupWizard', () => {
     expect(window.location.search).toBe('?step=2')
   })
 
+  it('orients identity setup around the project folder', async () => {
+    installBrowserFakes('/projects/file-insurance/setup?step=1')
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (input: RequestInfo | URL) => {
+        const url = String(input)
+        if (url.startsWith('/api/setup/defaults')) {
+          return json({
+            suggestedName: 'File Insurance',
+            suggestedId: 'file-insurance',
+            path: '/Users/matthew/git/work/file-insurance',
+          })
+        }
+        if (url.startsWith('/api/setup/status')) {
+          return json({
+            initialized: false,
+            providerConfigured: false,
+            path: '/Users/matthew/git/work/file-insurance',
+          })
+        }
+        return json({})
+      }),
+    )
+
+    render(SetupWizard, { projectId: 'file-insurance' })
+
+    await screen.findByText('Name this project')
+    expect(screen.getByText('Project folder')).toBeInTheDocument()
+    expect(screen.getByText('~/git/work/file-insurance')).toBeInTheDocument()
+    expect(screen.getByDisplayValue('File Insurance')).toBeInTheDocument()
+    expect(screen.getByDisplayValue('file-insurance')).toBeInTheDocument()
+  })
+
+  it('does not show a blank setup form when opened without a project folder', async () => {
+    installBrowserFakes('/setup?step=1')
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (input: RequestInfo | URL) => {
+        const url = String(input)
+        if (url.startsWith('/api/setup/defaults') || url.startsWith('/api/setup/status')) {
+          return json({ error: 'projectId is required for project-scoped requests.' }, { status: 400 })
+        }
+        return json({})
+      }),
+    )
+
+    render(SetupWizard)
+
+    await screen.findByText('Setup needs a project folder')
+    expect(screen.getByText(/Open setup from a project in the Projects view/)).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: /save and continue/i })).not.toBeInTheDocument()
+  })
+
   it('starts meta-intake with the active project id when launched from setup', async () => {
     installBrowserFakes('/projects/font-improvement/setup?step=3')
     const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
