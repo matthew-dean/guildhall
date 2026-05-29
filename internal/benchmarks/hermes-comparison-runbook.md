@@ -20,6 +20,11 @@ Record these fields before running either harness:
   latency, and the source of each number.
 - Output directory for JSONL, Markdown, command logs, and evidence refs.
 
+Raw run output belongs under `internal/benchmarks/runs/`, which is ignored.
+When a run teaches us something durable, write a compact curated entry under
+`internal/benchmarks/history/` instead of committing raw sessions, generated
+projects, screenshots, or bulky comparison JSON.
+
 ## Guildhall Lifecycle Smoke
 
 ```bash
@@ -124,7 +129,8 @@ quality score ignores it when checking for unexpected project files.
 
 2026-05-29 smoke result:
 
-- Report: `internal/benchmarks/runs/2026-05-29-quality/neutral-hermes-rerun/quality-comparison-report.md`
+- Durable summary: `internal/benchmarks/history/2026-05-29-hermes-quality.md`
+- Raw local report: `internal/benchmarks/runs/2026-05-29-quality/neutral-hermes-rerun/quality-comparison-report.md`
 - Guildhall: 100/100 on the deterministic file task.
 - Hermes: 100/100 on the deterministic file task.
 - Hermes completed faster on this direct task; Guildhall used its normal
@@ -161,7 +167,8 @@ palette fit, then embed screenshots in the Markdown report.
 
 2026-05-29 explicit app-quality result:
 
-- Report: `internal/benchmarks/runs/2026-05-29-quality/app-hermes/quality-comparison-report.md`
+- Durable summary: `internal/benchmarks/history/2026-05-29-hermes-quality.md`
+- Raw local report: `internal/benchmarks/runs/2026-05-29-quality/app-hermes/quality-comparison-report.md`
 - Initial Guildhall score: 5/100. That score was misleading: the worker created
   `index.html` in the task worktree, but the comparator only inspected the
   project root and therefore produced no Guildhall screenshots.
