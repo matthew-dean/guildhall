@@ -152,8 +152,8 @@ vite.config.ts.timestamp-*
 test-results/
 playwright-report/
 
-# Benchmark scratch projects generated as nested Git worktrees.
-internal/benchmarks/runs/**/guildhall-work/
+# Benchmark run output: generated projects, screenshots, model logs, and reports.
+internal/benchmarks/runs/
 
 # BEGIN Guildhall managed
 # Shared Guildhall project state is trackable by default.
