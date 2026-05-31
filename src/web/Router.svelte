@@ -9,7 +9,7 @@
   import TaskDrawer from './surfaces/TaskDrawer.svelte'
   import SetupWizard from './surfaces/SetupWizard.svelte'
   import ProvidersPage from './surfaces/ProvidersPage.svelte'
-  import { Toaster } from 'svelte-sonner'
+  import ToastHost from './lib/ToastHost.svelte'
   import { path, nav } from './lib/nav.svelte.js'
   import { connectStream, disconnectStream } from './lib/events.js'
   import { parseRoute } from './lib/router.js'
@@ -33,7 +33,7 @@
   }
 </script>
 
-<Toaster theme="dark" position="bottom-right" richColors closeButton />
+<ToastHost />
 
 {#if route.kind === 'projects'}
   <ProjectsHome />

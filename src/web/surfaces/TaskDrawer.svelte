@@ -30,7 +30,7 @@
   import { project } from '../lib/project.svelte.js'
   import { nav, path as navPath } from '../lib/nav.svelte.js'
   import { onMount, onDestroy } from 'svelte'
-  import { toast } from 'svelte-sonner'
+  import { toast } from '../lib/toast.svelte.js'
   import { activeEscalations } from '../lib/escalation.js'
   import { escalationPrimaryAction, escalationUserGuidance } from '../lib/escalation-labels.js'
 

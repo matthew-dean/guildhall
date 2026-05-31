@@ -6179,6 +6179,24 @@ local 0.7 release-candidate build at `http://localhost:7777/projects/narrative-h
     src/runtime/__tests__/evidence-work-graph-intake.test.ts
     src/runtime/__tests__/workspace-importer.test.ts --reporter=dot
     --test-timeout 10000` passed with 36 tests; `pnpm typecheck` passed.
+  - [x] Added the 0.9.0 Re-intake Project slice. Project Settings -> Memory
+    now has a Re-intake Project entry point, `/settings/reintake` renders a
+    reviewable draft, and the runtime exposes `/api/project/reintake/status`,
+    `/rerun`, `/draft`, `/apply`, and `/dismiss`. Re-intake drafts treat old
+    tasks and progress as evidence rather than gospel: tests prove stale vague
+    tasks are reframed, completed work is preserved, duplicate blocked cards
+    merge, unsupported blocked cards archive without deletion, rich Looma/Knit
+    evidence creates implementation plus integration work, and a single bounded
+    edit remains one task. Apply preserves task ids for reframes, keeps proof
+    paths/dependencies on created graph tasks, supports selected groups, and
+    rejects stale drafts when `TASKS.json` changed since draft creation.
+    Evidence: `pnpm vitest run
+    src/runtime/__tests__/project-reintake.test.ts
+    src/runtime/__tests__/project-reintake-apply.test.ts
+    src/runtime/__tests__/serve-settings.test.ts
+    src/web/surfaces/project/__tests__/SettingsTab.svelte.test.ts
+    --reporter=dot --test-timeout 10000` passed with 68 tests; `pnpm
+    typecheck` passed.
   - [ ] Add the follow-on global scheduler that fairly spends the provider
     budget across all turned-on projects instead of requiring each project to
     be manually started and budgeted in isolation.

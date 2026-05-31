@@ -51,7 +51,7 @@
   } from '../../lib/task-state.js'
   import { project } from '../../lib/project.svelte.js'
   import type { GitStorySnapshot, ProjectRuntimeSummary } from '../../lib/types.js'
-  import { toast } from 'svelte-sonner'
+  import { toast } from '../../lib/toast.svelte.js'
 
   interface Props {
     projectId?: string | null

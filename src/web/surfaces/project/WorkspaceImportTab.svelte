@@ -12,7 +12,7 @@
   import { project } from '../../lib/project.svelte.js'
   import { nav } from '../../lib/nav.svelte.js'
   import { projectActionHref, projectFetch } from '../../lib/project-routes.js'
-  import { toast } from 'svelte-sonner'
+  import { toast } from '../../lib/toast.svelte.js'
 
   interface DetectedGoal {
     id: string

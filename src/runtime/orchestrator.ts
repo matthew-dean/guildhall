@@ -5643,7 +5643,7 @@ export class Orchestrator {
           transitioned: true,
           note: `acceptance command gates passed (${results.length}) → done`,
         })
-        await this.maybeCleanupWorktree(current, resolveWorktreeMode(this.opts.config))
+        await this.maybeCleanupWorktree(current, await this.resolveWorktreeModeSafe())
         return {
           kind: 'processed',
           taskId: current.id,

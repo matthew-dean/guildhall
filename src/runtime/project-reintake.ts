@@ -43,10 +43,13 @@ export interface ReintakeChangeGroup {
 export type ReintakeChange =
   | { kind: 'keep'; taskId: string; reason: string }
   | { kind: 'reframe'; taskId: string; before: TaskSummary; after: ReintakeTaskDraft; reason: string }
-  | { kind: 'merge'; survivorTaskId: string; mergedTaskIds: string[]; reason: string }
+  | ReintakeMergeChange
   | { kind: 'archive'; taskId: string; reason: string }
   | { kind: 'create'; task: ReintakeTaskDraft; reason: string }
   | { kind: 'preserve_progress'; taskId: string; reason: string }
+
+type ReintakeMergeChange = { kind: 'merge'; survivorTaskId: string; mergedTaskIds: string[]; reason: string }
+type EvidenceReconciliation = { existingTaskId: string; action: 'reframed_existing_task'; reason: string }
 
 export interface TaskSummary {
   id: string
@@ -316,10 +319,7 @@ async function appendReintakeProgress(memoryDir: string, draft: ProjectReintakeD
   await fs.appendFile(path.join(memoryDir, 'PROGRESS.md'), summary, 'utf-8').catch(() => undefined)
 }
 
-function graphTaskChange(
-  task: EvidenceTask,
-  reconciliations: ProjectReintakeDraft['groups'][number]['changes'],
-): ReintakeChange {
+function graphTaskChange(task: EvidenceTask, reconciliations: EvidenceReconciliation[]): ReintakeChange {
   const reframe = reconciliations.find(change =>
     'existingTaskId' in change && change.existingTaskId === task.id,
   ) as { existingTaskId?: string; reason?: string } | undefined
@@ -363,7 +363,7 @@ function evidenceTaskToDraft(task: EvidenceTask): ReintakeTaskDraft {
   }
 }
 
-function duplicateMergeChanges(tasks: Array<Record<string, unknown>>): ReintakeChange[] {
+function duplicateMergeChanges(tasks: Array<Record<string, unknown>>): ReintakeMergeChange[] {
   const byTitle = new Map<string, Array<Record<string, unknown>>>()
   for (const task of tasks) {
     const id = stringField(task, 'id')
@@ -376,7 +376,7 @@ function duplicateMergeChanges(tasks: Array<Record<string, unknown>>): ReintakeC
     byTitle.set(key, bucket)
   }
 
-  const changes: ReintakeChange[] = []
+  const changes: ReintakeMergeChange[] = []
   for (const tasksWithTitle of byTitle.values()) {
     if (tasksWithTitle.length < 2) continue
     const survivor = stringField(tasksWithTitle[0] ?? {}, 'id')
@@ -398,7 +398,8 @@ function preserveProgressChanges(tasks: Array<Record<string, unknown>>, usedTask
   return tasks
     .filter(task => stringField(task, 'status') === 'done')
     .map(task => stringField(task, 'id'))
-    .filter((id): id is string => Boolean(id) && !usedTaskIds.has(id))
+    .filter((id): id is string => Boolean(id))
+    .filter(id => !usedTaskIds.has(id))
     .map(taskId => ({
       kind: 'preserve_progress' as const,
       taskId,

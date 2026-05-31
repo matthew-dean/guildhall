@@ -31,8 +31,8 @@
     subView?: string | null
   }
   let { subView = null }: Props = $props()
-  type SettingSection = 'ready' | 'providers' | 'facts' | 'coordinators' | 'learning' | 'advanced'
-  const KNOWN_SECTIONS = new Set<SettingSection>(['ready', 'providers', 'facts', 'coordinators', 'learning', 'advanced'])
+  type SettingSection = 'ready' | 'providers' | 'facts' | 'coordinators' | 'learning' | 'reintake' | 'advanced'
+  const KNOWN_SECTIONS = new Set<SettingSection>(['ready', 'providers', 'facts', 'coordinators', 'learning', 'reintake', 'advanced'])
   const section = $derived(KNOWN_SECTIONS.has(subView as SettingSection) ? subView as SettingSection : 'ready')
   const settingsSections: Array<{ id: SettingSection; label: string }> = [
     { id: 'ready', label: 'Ready' },
@@ -188,6 +188,37 @@
     projectSkillProposals: ProjectSkillProposal[]
     projectContext?: ProjectContextSummary | null
   }
+  interface ReintakeSummary {
+    kept?: number
+    reframed?: number
+    merged?: number
+    archived?: number
+    created?: number
+    preservedDone?: number
+  }
+  interface ReintakeStatus {
+    draftExists?: boolean
+    status?: 'draft' | 'applied' | 'dismissed' | string | null
+    createdAt?: string | null
+    summary?: ReintakeSummary | null
+  }
+  interface ReintakeDraft {
+    status?: string
+    summary?: ReintakeSummary
+    groups?: Array<{
+      id: string
+      title: string
+      rationale?: string
+      changes?: Array<{
+        kind?: string
+        taskId?: string
+        reason?: string
+        before?: { title?: string }
+        after?: { title?: string }
+        task?: { title?: string }
+      }>
+    }>
+  }
   interface CodebaseMapStatus {
     configured: boolean
     generatedAt: string | null
@@ -266,6 +297,10 @@
   let learning = $state<LearningSnapshot | null>(null)
   let learningError = $state<string | null>(null)
   let learningBusy = $state<string | null>(null)
+  let reintakeStatus = $state<ReintakeStatus | null>(null)
+  let reintakeDraft = $state<ReintakeDraft | null>(null)
+  let reintakeBusy = $state<null | 'rerun' | 'apply'>(null)
+  let reintakeError = $state<string | null>(null)
 
   interface BootstrapStep {
     kind: 'command' | 'gate'
@@ -464,9 +499,14 @@
       .catch(() => (providerStatus = { configured: false }))
     void loadBootstrap()
     void loadLearning()
+    void loadReintakeStatus()
     void loadWorktreeIncludes()
     void loadRuntimeSetup()
     void loadCapabilityGrants()
+  })
+
+  $effect(() => {
+    if (section === 'reintake') void loadReintakeDraft()
   })
 
   async function loadCapabilityGrants() {
@@ -682,6 +722,67 @@
       }
     } catch (err) {
       learningError = err instanceof Error ? err.message : String(err)
+    }
+  }
+
+  async function loadReintakeStatus() {
+    try {
+      const r = await projectFetch('/api/project/reintake/status', { cache: 'no-store' })
+      const j = await r.json().catch(() => null) as ReintakeStatus & { error?: string } | null
+      if (!r.ok || j?.error) throw new Error(j?.error ?? `HTTP ${r.status}`)
+      reintakeStatus = j
+      reintakeError = null
+    } catch (err) {
+      reintakeError = err instanceof Error ? err.message : String(err)
+    }
+  }
+
+  async function loadReintakeDraft() {
+    try {
+      const r = await projectFetch('/api/project/reintake/draft', { cache: 'no-store' })
+      const j = await r.json().catch(() => null) as ReintakeDraft & { error?: string } | null
+      if (!r.ok || j?.error) throw new Error(j?.error ?? `HTTP ${r.status}`)
+      reintakeDraft = j
+      reintakeError = null
+    } catch (err) {
+      reintakeError = err instanceof Error ? err.message : String(err)
+      reintakeDraft = null
+    }
+  }
+
+  async function startReintake() {
+    reintakeBusy = 'rerun'
+    reintakeError = null
+    try {
+      const r = await projectFetch('/api/project/reintake/rerun', { method: 'POST' })
+      const j = await r.json().catch(() => null) as { draft?: ReintakeDraft; error?: string } | null
+      if (!r.ok || j?.error) throw new Error(j?.error ?? `HTTP ${r.status}`)
+      reintakeDraft = j?.draft ?? null
+      await loadReintakeStatus()
+    } catch (err) {
+      reintakeError = err instanceof Error ? err.message : String(err)
+    } finally {
+      reintakeBusy = null
+    }
+  }
+
+  async function applyReintakeSelected() {
+    const groupIds = reintakeDraft?.groups?.map(group => group.id) ?? []
+    reintakeBusy = 'apply'
+    reintakeError = null
+    try {
+      const r = await projectFetch('/api/project/reintake/apply', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ groupIds }),
+      })
+      const j = await r.json().catch(() => null) as { error?: string } | null
+      if (!r.ok || j?.error) throw new Error(j?.error ?? `HTTP ${r.status}`)
+      await loadReintakeStatus()
+    } catch (err) {
+      reintakeError = err instanceof Error ? err.message : String(err)
+    } finally {
+      reintakeBusy = null
     }
   }
 
@@ -1130,6 +1231,16 @@
   const skillProposals = $derived(learning?.projectSkillProposals ?? [])
   const productSuggestions = $derived(learning?.effective?.productSuggestions ?? [])
   const recentMemoryUse = $derived(project.detail?.memoryHealth?.recentUse ?? [])
+  const reintakeSummaryText = $derived.by(() => {
+    const summary = reintakeStatus?.summary ?? reintakeDraft?.summary
+    if (!summary) return 'No draft yet'
+    const parts = [
+      `${summary.reframed ?? 0} reframed`,
+      `${summary.created ?? 0} created`,
+      `${summary.archived ?? 0} archived`,
+    ]
+    return parts.join(', ')
+  })
   const projectContextRows = $derived.by(() => {
     const rows: Array<{ label: string; value: string; detail: string; href?: string }> = []
     const context = learning?.projectContext
@@ -1656,6 +1767,34 @@
         <FrameCard class="learning-card learning-card-wide context-card">
           {#snippet header()}
             <SectionHeader
+              title="Re-intake Project"
+              description="Re-read this project with the current Guildhall reasoning model and propose a cleaner task graph. Existing tasks and progress are used as evidence, not treated as final."
+              headingTag="h3"
+              density="dense"
+            >
+              {#snippet meta()}
+                <StatusPill label={reintakeStatus?.status === 'draft' ? 'Draft ready' : reintakeStatus?.status === 'applied' ? 'Applied' : 'Not started'} tone={reintakeStatus?.status === 'draft' ? 'warn' : reintakeStatus?.status === 'applied' ? 'ok' : 'neutral'} density="dense" />
+              {/snippet}
+            </SectionHeader>
+          {/snippet}
+          <Row justify="between" align="center" gap="3" wrap>
+            <p class="muted">{reintakeSummaryText}</p>
+            <Row gap="2" justify="end" wrap>
+              {#if reintakeStatus?.draftExists}
+                <Button size="sm" variant="secondary" onclick={() => nav(projectActionHref('/settings/reintake'))}>Review draft</Button>
+              {/if}
+              <Button size="sm" variant="agent" disabled={reintakeBusy !== null} onclick={startReintake}>
+                {reintakeBusy === 'rerun' ? 'Starting...' : reintakeStatus?.draftExists ? 'Refresh draft' : 'Start re-intake'}
+              </Button>
+            </Row>
+          </Row>
+          {#if reintakeError}
+            <p class="form-error">{reintakeError}</p>
+          {/if}
+        </FrameCard>
+        <FrameCard class="learning-card learning-card-wide context-card">
+          {#snippet header()}
+            <SectionHeader
               title="Project context Guildhall already has"
               description="This is durable project context agents can read now. Reusable habits below only appear after Guildhall finds a pattern worth applying again."
               headingTag="h3"
@@ -1915,6 +2054,71 @@
               </div>
             {/if}
           </FrameCard>
+        </div>
+      {/if}
+    {:else if section === 'reintake'}
+      <SectionHeader
+        eyebrow="Settings"
+        title="Review re-intake draft"
+        description="Review the proposed project task-graph cleanup before applying anything."
+        headingTag="h2"
+        density="compact"
+      >
+        {#snippet meta()}
+          <StatusPill label={reintakeDraft?.status ?? reintakeStatus?.status ?? 'draft'} tone="warn" />
+        {/snippet}
+      </SectionHeader>
+
+      {#if reintakeError}
+        <NoticeBand tone="danger" role="alert" label="Re-intake" title="Could not load re-intake draft" density="compact">
+          <p>{reintakeError}</p>
+        </NoticeBand>
+      {:else if !reintakeDraft}
+        <NoticeBand tone="neutral" role="status" label="Re-intake" title="Loading draft" density="compact">
+          <p>Reading the latest re-intake draft…</p>
+        </NoticeBand>
+      {:else}
+        <FrameCard class="learning-card learning-card-wide context-card">
+          {#snippet header()}
+            <SectionHeader
+              title="Draft summary"
+              description={reintakeSummaryText}
+              headingTag="h3"
+              density="dense"
+            />
+          {/snippet}
+          <Row justify="end" gap="2">
+            <Button size="sm" variant="agent" disabled={reintakeBusy !== null || (reintakeDraft.groups?.length ?? 0) === 0} onclick={applyReintakeSelected}>
+              {reintakeBusy === 'apply' ? 'Applying...' : 'Apply selected'}
+            </Button>
+          </Row>
+        </FrameCard>
+        <div class="context-memory-list">
+          {#each reintakeDraft.groups ?? [] as group (group.id)}
+            <FrameCard class="learning-card learning-card-wide context-card">
+              {#snippet header()}
+                <SectionHeader
+                  title={group.title}
+                  description={group.rationale ?? ''}
+                  headingTag="h3"
+                  density="dense"
+                />
+              {/snippet}
+              <div class="context-memory-list">
+                {#each group.changes ?? [] as change, index (`${group.id}-${index}`)}
+                  <div class="context-memory-row">
+                    <div>
+                      <strong>{change.kind}</strong>
+                      <span>{change.after?.title ?? change.task?.title ?? change.before?.title ?? change.taskId ?? change.reason}</span>
+                    </div>
+                    <div class="context-memory-meta">
+                      <StatusPill label={change.kind ?? 'change'} tone="neutral" density="dense" />
+                    </div>
+                  </div>
+                {/each}
+              </div>
+            </FrameCard>
+          {/each}
         </div>
       {/if}
     {:else if section === 'advanced'}

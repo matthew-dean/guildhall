@@ -225,6 +225,82 @@ describe('SettingsTab', () => {
     })
   })
 
+  it('shows Re-intake Project in Memory and starts a re-intake draft', async () => {
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = new URL(String(input), 'http://localhost')
+      if (url.pathname === '/api/setup/status') return json({ initialized: true, name: 'Looma + Knit', id: 'looma-knit' })
+      if (url.pathname === '/api/config/levers') return json({ levers: [] })
+      if (url.pathname === '/api/project/design-system') return json({ designSystem: null })
+      if (url.pathname === '/api/project/codebase-map/status') return json(codebaseMapStatus())
+      if (url.pathname === '/api/setup/providers') return json(providersPayload())
+      if (url.pathname === '/api/project/bootstrap/status') return json({ configured: true, needed: false, status: null })
+      if (url.pathname === '/api/project/capability-requests') return json({ requests: [], activeGrants: [] })
+      if (url.pathname === '/api/project/learning') return json({ project: { suggestedLearnings: [] }, user: { suggestedLearnings: [] }, effective: { productSuggestions: [] }, projectSkillProposals: [], projectContext: {} })
+      if (url.pathname === '/api/project/reintake/status') return json({ draftExists: false, status: null, summary: null })
+      if (url.pathname === '/api/project/reintake/rerun') {
+        expect(init?.method).toBe('POST')
+        return json({ ok: true, draft: { summary: { reframed: 1, created: 2, archived: 0, merged: 0, kept: 0, preservedDone: 0 } } })
+      }
+      return json({})
+    })
+    vi.stubGlobal('fetch', fetchMock)
+
+    render(SettingsTab, { subView: 'learning' })
+
+    await screen.findByRole('heading', { name: /memory controls/i })
+    expect(screen.getByRole('heading', { name: 'Re-intake Project' })).toBeInTheDocument()
+    await userEvent.click(screen.getByRole('button', { name: /^start re-intake$/i }))
+    await waitFor(() => {
+      expect(fetchMock.mock.calls.some(([input]) => String(input).includes('/api/project/reintake/rerun'))).toBe(true)
+    })
+  })
+
+  it('renders the re-intake review route and applies selected groups', async () => {
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = new URL(String(input), 'http://localhost')
+      if (url.pathname === '/api/setup/status') return json({ initialized: true, name: 'Looma + Knit', id: 'looma-knit' })
+      if (url.pathname === '/api/config/levers') return json({ levers: [] })
+      if (url.pathname === '/api/project/design-system') return json({ designSystem: null })
+      if (url.pathname === '/api/project/codebase-map/status') return json(codebaseMapStatus())
+      if (url.pathname === '/api/setup/providers') return json(providersPayload())
+      if (url.pathname === '/api/project/bootstrap/status') return json({ configured: true, needed: false, status: null })
+      if (url.pathname === '/api/project/capability-requests') return json({ requests: [], activeGrants: [] })
+      if (url.pathname === '/api/project/learning') return json({ project: { suggestedLearnings: [] }, user: { suggestedLearnings: [] }, effective: { productSuggestions: [] }, projectSkillProposals: [], projectContext: {} })
+      if (url.pathname === '/api/project/reintake/status') return json({ draftExists: true, status: 'draft', summary: { reframed: 1, created: 1, archived: 0, merged: 0, kept: 0, preservedDone: 0 } })
+      if (url.pathname === '/api/project/reintake/draft') {
+        return json({
+          status: 'draft',
+          summary: { reframed: 1, created: 1, archived: 0, merged: 0, kept: 0, preservedDone: 0 },
+          groups: [{
+            id: 'evidence-work-graph',
+            title: 'Rebuild task graph from current evidence',
+            rationale: 'Structured evidence.',
+            changes: [
+              { kind: 'reframe', taskId: 'task-039', reason: 'Current evidence.', before: { title: 'Build AlertDialog primitive' }, after: { title: 'Build AlertDialog' } },
+            ],
+          }],
+        })
+      }
+      if (url.pathname === '/api/project/reintake/apply') {
+        expect(init?.method).toBe('POST')
+        expect(JSON.parse(String(init?.body))).toEqual({ groupIds: ['evidence-work-graph'] })
+        return json({ success: true, appliedGroups: 1 })
+      }
+      return json({})
+    })
+    vi.stubGlobal('fetch', fetchMock)
+
+    render(SettingsTab, { subView: 'reintake' })
+
+    await screen.findByRole('heading', { name: /review re-intake draft/i })
+    expect(screen.getByText('Rebuild task graph from current evidence')).toBeInTheDocument()
+    expect(document.body.textContent?.toLowerCase()).not.toContain('reset')
+    await userEvent.click(screen.getByRole('button', { name: /^apply selected$/i }))
+    await waitFor(() => {
+      expect(fetchMock.mock.calls.some(([input]) => String(input).includes('/api/project/reintake/apply'))).toBe(true)
+    })
+  })
+
   it('explains workspace child-project gates without treating the root shell as the only app', async () => {
     const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
       const url = new URL(String(input), 'http://localhost')

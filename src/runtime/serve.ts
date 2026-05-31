@@ -649,6 +649,45 @@ function readDirents(dir: string): Array<Dirent> {
   return readdirSync(dir, { withFileTypes: true })
 }
 
+async function collectProjectReintakeSources(projectPath: string): Promise<Array<{ path: string; content: string }>> {
+  const sources: Array<{ path: string; content: string }> = []
+  const skip = new Set(['.git', '.guildhall', 'node_modules', 'dist', 'build'])
+  const maxSources = 80
+
+  async function walk(dir: string): Promise<void> {
+    if (sources.length >= maxSources) return
+    let entries: Dirent[]
+    try {
+      entries = await fsp.readdir(dir, { withFileTypes: true })
+    } catch {
+      return
+    }
+    for (const entry of entries) {
+      if (sources.length >= maxSources) return
+      if (skip.has(entry.name)) continue
+      const absolute = join(dir, entry.name)
+      if (entry.isDirectory()) {
+        await walk(absolute)
+        continue
+      }
+      if (!entry.isFile()) continue
+      const ext = extname(entry.name).toLowerCase()
+      if (!['.md', '.markdown', '.txt'].includes(ext)) continue
+      let content = ''
+      try {
+        content = await fsp.readFile(absolute, 'utf-8')
+      } catch {
+        continue
+      }
+      if (!/Deliverable|Foundation|Consumer|should say|missing/i.test(content)) continue
+      sources.push({ path: relative(projectPath, absolute) || entry.name, content })
+    }
+  }
+
+  await walk(projectPath)
+  return sources
+}
+
 const execFileP = promisify(execFile)
 
 function isReviewOwnershipMismatch(task: Record<string, unknown>): boolean {
