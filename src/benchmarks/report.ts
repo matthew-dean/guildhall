@@ -1,5 +1,6 @@
 import fs from 'node:fs/promises'
 import path from 'node:path'
+import { assertSafePersistentBenchmarkOutputDir } from './paths.js'
 
 import {
   BenchmarkReport,
@@ -114,9 +115,10 @@ export async function writeBenchmarkReport(
   outputDir: string,
 ): Promise<BenchmarkReportData> {
   const report = BenchmarkReport.parse(reportInput)
-  await fs.mkdir(outputDir, { recursive: true })
-  const jsonl = path.join(outputDir, `${report.id}.jsonl`)
-  const markdown = path.join(outputDir, `${report.id}.md`)
+  const safeOutputDir = assertSafePersistentBenchmarkOutputDir(outputDir)
+  await fs.mkdir(safeOutputDir, { recursive: true })
+  const jsonl = path.join(safeOutputDir, `${report.id}.jsonl`)
+  const markdown = path.join(safeOutputDir, `${report.id}.md`)
   const lines = [
     ...report.results.map(result => JSON.stringify({ type: 'result', payload: result })),
     ...report.autoResolutions.map(record => JSON.stringify({ type: 'auto_resolution', payload: record })),

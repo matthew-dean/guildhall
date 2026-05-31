@@ -8,6 +8,7 @@ import { readRuntimeCommandEvidence } from '../../runtime/project-runtime-comman
 import { isNonDelegableQuestion, resolveOwnerQuestion } from '../automation-policy.js'
 import { resolveBenchmarkFixtureRoot } from '../fixtures.js'
 import { inspectHermesPreflight, runHermesComparisonPreflight } from '../hermes.js'
+import { assertSafePersistentBenchmarkOutputDir } from '../paths.js'
 import { renderBenchmarkMarkdown } from '../report.js'
 import { runArtifactLocalBenchmark, runLifecycleBenchmark, runSweLocalBenchmark, runTbliteBenchmark } from '../runner.js'
 import { BenchmarkRunResult, type BenchmarkOwnerQuestion } from '../types.js'
@@ -337,6 +338,15 @@ describe('benchmark runners', () => {
     await expect(fs.stat(report.outputPaths!.jsonl)).resolves.toBeTruthy()
     await expect(fs.stat(report.outputPaths!.markdown)).resolves.toBeTruthy()
     await expect(fs.readFile(report.outputPaths!.jsonl, 'utf8')).resolves.toContain('"type":"auto_resolution"')
+  })
+
+  it('rejects tracked fixture and Guildhall state roots as persistent benchmark output dirs', () => {
+    expect(() => assertSafePersistentBenchmarkOutputDir('internal/benchmarks/fixtures/swe-local/smoke/run-output')).toThrow(
+      /must not be written inside tracked fixture or Guildhall state directories/i,
+    )
+    expect(() => assertSafePersistentBenchmarkOutputDir('.guildhall/benchmark-fixtures/run-output')).toThrow(
+      /must not be written inside tracked fixture or Guildhall state directories/i,
+    )
   })
 
   it('records Hermes comparison blockers and telemetry gaps as a machine-readable report', async () => {

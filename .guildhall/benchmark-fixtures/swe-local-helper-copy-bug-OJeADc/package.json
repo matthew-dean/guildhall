@@ -1,8 +1,0 @@
-{
-  "name": "swe-local-helper-copy",
-  "private": true,
-  "type": "module",
-  "scripts": {
-    "test": "node scripts/test.js"
-  }
-}

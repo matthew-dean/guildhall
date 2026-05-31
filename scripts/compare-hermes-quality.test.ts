@@ -4,7 +4,7 @@ import path from 'node:path'
 
 import { describe, expect, it } from 'vitest'
 
-import { discoverGuildhallArtifactRoots, guildhallProjectIdForOutputRoot, gradeArtifact, scoreQuality } from './compare-hermes-quality.mjs'
+import { discoverGuildhallArtifactRoots, guildhallProjectIdForOutputRoot, gradeArtifact, resolvePersistentReportRoot, scoreQuality } from './compare-hermes-quality.mjs'
 
 describe('Hermes quality comparator artifact discovery', () => {
   it('grades a Guildhall app from the task worktree while marking it unlanded', async () => {
@@ -55,6 +55,15 @@ describe('Hermes quality comparator artifact discovery', () => {
     expect(guildhallProjectIdForOutputRoot('/tmp/run-a')).toBe('guildhall-hermes-quality-run-a')
     expect(guildhallProjectIdForOutputRoot('/tmp/run-b')).toBe('guildhall-hermes-quality-run-b')
     expect(guildhallProjectIdForOutputRoot('/tmp/!!!')).toMatch(/^guildhall-hermes-quality-/)
+  })
+
+  it('rejects tracked fixture and Guildhall state roots as persistent report outputs', () => {
+    expect(() => resolvePersistentReportRoot('internal/benchmarks/fixtures/swe-local/smoke/out')).toThrow(
+      /must not be written inside tracked fixture or Guildhall state directories/i,
+    )
+    expect(() => resolvePersistentReportRoot('.guildhall/benchmark-fixtures/out')).toThrow(
+      /must not be written inside tracked fixture or Guildhall state directories/i,
+    )
   })
 })
 

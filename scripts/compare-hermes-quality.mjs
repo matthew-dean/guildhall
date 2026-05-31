@@ -6,9 +6,11 @@ import fs from 'node:fs/promises'
 import http from 'node:http'
 import os from 'node:os'
 import path from 'node:path'
+import { fileURLToPath } from 'node:url'
 import { promisify } from 'node:util'
 
 const execFile = promisify(execFileCb)
+const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
 
 const DEFAULT_EXPECTED_FILE = 'quality_smoke.txt'
 const DEFAULT_EXPECTED_CONTENT = 'QUALITY_SMOKE_OK'
@@ -34,8 +36,9 @@ const DEFAULT_APP_INFER_PROMPT = [
 export async function main(argv = process.argv.slice(2), env = process.env) {
   const options = parseArgs(argv)
   const startedAt = new Date().toISOString()
-  const outputRoot = path.resolve(options.outputDir ?? path.join(os.tmpdir(), `guildhall-hermes-quality-${Date.now().toString(36)}`))
-  await fs.mkdir(outputRoot, { recursive: true })
+  const reportRoot = resolvePersistentReportRoot(options.outputDir)
+  const artifactRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'guildhall-hermes-quality-artifacts-'))
+  await fs.mkdir(reportRoot, { recursive: true })
 
   const task = {
     mode: options.mode,
@@ -45,21 +48,22 @@ export async function main(argv = process.argv.slice(2), env = process.env) {
     expectedContent: options.expectedContent ?? DEFAULT_EXPECTED_CONTENT,
   }
 
-  const guildhallProject = path.join(outputRoot, 'guildhall-work')
-  const hermesProject = path.join(outputRoot, 'hermes-work')
-  await setupGuildhallProject(guildhallProject, guildhallProjectIdForOutputRoot(outputRoot))
+  const guildhallProject = path.join(artifactRoot, 'guildhall-work')
+  const hermesProject = path.join(artifactRoot, 'hermes-work')
+  await setupGuildhallProject(guildhallProject, guildhallProjectIdForOutputRoot(artifactRoot))
   await setupPlainProject(hermesProject)
 
-  const guildhall = await runGuildhall({ outputRoot, projectRoot: guildhallProject, task, options, env })
-  const hermes = await runHermes({ outputRoot, projectRoot: hermesProject, task, options, env })
+  const guildhall = await runGuildhall({ artifactRoot, projectRoot: guildhallProject, task, options, env })
+  const hermes = await runHermes({ artifactRoot, projectRoot: hermesProject, task, options, env })
   const completedAt = new Date().toISOString()
   const report = {
-    id: `guildhall-hermes-quality-${path.basename(outputRoot)}`,
+    id: `guildhall-hermes-quality-${path.basename(reportRoot)}`,
     generatedAt: completedAt,
     startedAt,
     completedAt,
     task,
-    outputRoot,
+    reportRoot,
+    artifactRoot,
     summary: {
       qualityFirst: true,
       guildhallScore: guildhall.qualityScore.total,
@@ -72,8 +76,8 @@ export async function main(argv = process.argv.slice(2), env = process.env) {
     results: { guildhall, hermes },
   }
 
-  const jsonPath = path.join(outputRoot, 'quality-comparison-report.json')
-  const markdownPath = path.join(outputRoot, 'quality-comparison-report.md')
+  const jsonPath = path.join(reportRoot, 'quality-comparison-report.json')
+  const markdownPath = path.join(reportRoot, 'quality-comparison-report.md')
   await fs.writeFile(jsonPath, `${JSON.stringify(report, null, 2)}\n`, 'utf8')
   await fs.writeFile(markdownPath, renderMarkdown(report), 'utf8')
   console.log(`[guildhall] Quality comparison complete: ${report.summary.winner}`)
@@ -128,7 +132,7 @@ function defaultPromptForMode(mode) {
 }
 
 async function runGuildhall(input) {
-  const reportPath = path.join(input.outputRoot, 'guildhall-run-once-report.json')
+  const reportPath = path.join(input.artifactRoot, 'guildhall-run-once-report.json')
   const startedAt = Date.now()
   const command = [
     process.execPath,
@@ -153,7 +157,7 @@ async function runGuildhall(input) {
     timeout: input.options.timeoutMs,
   })
   const artifactRoots = await discoverGuildhallArtifactRoots(input.projectRoot)
-  const artifact = await gradeArtifact(input.projectRoot, input.task, path.join(input.outputRoot, 'screenshots', 'guildhall'), artifactRoots)
+  const artifact = await gradeArtifact(input.projectRoot, input.task, path.join(input.artifactRoot, 'screenshots', 'guildhall'), artifactRoots)
   const report = await readJsonOptional(reportPath)
   return {
     harness: 'guildhall',
@@ -186,8 +190,8 @@ async function runHermes(input) {
     env: { ...input.env, HERMES_HOME: input.options.hermesHome },
     timeout: input.options.timeoutMs,
   })
-  const artifact = await gradeArtifact(input.projectRoot, input.task, path.join(input.outputRoot, 'screenshots', 'hermes'))
-  const telemetry = await readHermesTelemetry(input.options.hermesBin, input.options.hermesHome, input.outputRoot, input.env)
+  const artifact = await gradeArtifact(input.projectRoot, input.task, path.join(input.artifactRoot, 'screenshots', 'hermes'))
+  const telemetry = await readHermesTelemetry(input.options.hermesBin, input.options.hermesHome, input.artifactRoot, input.env)
   return {
     harness: 'hermes',
     projectRoot: input.projectRoot,
@@ -206,6 +210,26 @@ async function runHermes(input) {
       proofPresent: run.exitCode === 0,
     }),
   }
+}
+
+export function resolvePersistentReportRoot(outputDir) {
+  const resolved = path.resolve(outputDir ?? path.join(os.tmpdir(), `guildhall-hermes-quality-${Date.now().toString(36)}`))
+  const blockedRoots = [
+    path.join(REPO_ROOT, 'internal', 'benchmarks', 'fixtures'),
+    path.join(REPO_ROOT, '.guildhall'),
+    path.join(REPO_ROOT, '.playwright-fixtures'),
+  ]
+  for (const blockedRoot of blockedRoots) {
+    if (isWithin(resolved, blockedRoot)) {
+      throw new Error(`Hermes quality reports must not be written inside tracked fixture or Guildhall state directories: ${resolved}`)
+    }
+  }
+  return resolved
+}
+
+function isWithin(target, root) {
+  const relative = path.relative(root, target)
+  return relative === '' || (!relative.startsWith('..') && !path.isAbsolute(relative))
 }
 
 async function setupGuildhallProject(projectRoot, projectId) {

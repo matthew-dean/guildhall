@@ -154,12 +154,14 @@ playwright-report/
 
 # Benchmark run output: generated projects, screenshots, model logs, and reports.
 internal/benchmarks/runs/
+.playwright-fixtures/
 
 # BEGIN Guildhall managed
 # Shared Guildhall project state is trackable by default.
 !.guildhall/
 !.guildhall/**
 # Local/private Guildhall state stays out of git.
+.guildhall/benchmark-fixtures/
 .guildhall/config.yaml
 .guildhall/codebase-map.yaml
 .guildhall/codebase-map.stale.json

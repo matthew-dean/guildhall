@@ -1,13 +1,17 @@
 #!/usr/bin/env node
-import { existsSync, mkdirSync } from 'node:fs'
-import { homedir } from 'node:os'
+import { existsSync, mkdirSync, rmSync } from 'node:fs'
+import { tmpdir } from 'node:os'
 import { resolve } from 'node:path'
 import { spawnSync } from 'node:child_process'
 
 const image = process.env.GUILDHALL_RUNTIME_IMAGE
   ?? 'ghcr.io/matthew-dean/guildhall-runtime-debian:0.9.0-trixie-node22-python313-playwright'
 const projectRoot = process.cwd()
-const guildhallHome = resolve(homedir(), '.guildhall')
+const explicitGuildhallHome = process.env.GUILDHALL_HOME?.trim()
+const guildhallHome = explicitGuildhallHome
+  ? resolve(explicitGuildhallHome)
+  : resolve(tmpdir(), `guildhall-runtime-smoke-${process.pid}`)
+const shouldCleanupGuildhallHome = !explicitGuildhallHome
 
 if (!existsSync(guildhallHome)) {
   mkdirSync(guildhallHome, { recursive: true })
@@ -31,5 +35,9 @@ const result = spawnSync('podman', [
   cwd: projectRoot,
   stdio: 'inherit',
 })
+
+if (shouldCleanupGuildhallHome) {
+  rmSync(guildhallHome, { recursive: true, force: true })
+}
 
 process.exit(result.status ?? 1)
