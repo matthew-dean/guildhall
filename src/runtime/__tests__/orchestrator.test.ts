@@ -1893,6 +1893,7 @@ describe('Orchestrator.tick — routing', () => {
 
     const out = await orch.tick()
     expect(out.kind).toBe('escalated')
+    if (out.kind !== 'escalated') throw new Error(`expected escalation, got ${out.kind}`)
     expect(out.reason).toBe('Spec shaping timed out before saving durable progress.')
 
     const queue = await readQueue()

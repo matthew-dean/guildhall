@@ -3268,6 +3268,8 @@ export function buildServeApp(opts: ServeOptions = {}): {
     code?: string
     message?: string
     actionHref?: string
+    loadedModels?: string[]
+    missingModels?: string[]
   }> {
     const runtimeBlocker = projectRuntimeCompatibilityBlocker({ projectRoot: input.projectPath })
     if (runtimeBlocker) return runtimeBlocker
@@ -3347,8 +3349,9 @@ export function buildServeApp(opts: ServeOptions = {}): {
           canStart: false,
           code: 'no_loaded_model',
           message:
-            'The configured local server is reachable, but Guildhall could not see a loaded model. Load the model you want on that server, then start again.',
+            'The configured local server is reachable, but Guildhall could not see a loaded model. To avoid surprise memory pressure from JIT loading, load the model you want on that server, then start again.',
           actionHref: '/providers',
+          loadedModels,
         }
       }
       return { canStart: true }
@@ -3368,8 +3371,10 @@ export function buildServeApp(opts: ServeOptions = {}): {
       code: 'model_unavailable',
       message:
         `The configured local server currently has ${loadedModels.join(', ')} loaded, but this project is configured for ${missingModels.join(', ')}. ` +
-        'Load one of the configured models on that server, or choose a loaded model in Providers.',
+        'Guildhall will not JIT-load missing models automatically; load the configured model on that server or choose a loaded model in Providers.',
       actionHref: '/providers',
+      loadedModels,
+      missingModels,
     }
   }
 
@@ -3695,6 +3700,8 @@ export function buildServeApp(opts: ServeOptions = {}): {
             error: startReadiness.message ?? 'Guildhall needs one thing resolved before it can start.',
             code: startReadiness.code,
             actionHref: startReadiness.actionHref,
+            loadedModels: startReadiness.loadedModels,
+            missingModels: startReadiness.missingModels,
           },
           blockedStartStatus(startReadiness.code),
         )

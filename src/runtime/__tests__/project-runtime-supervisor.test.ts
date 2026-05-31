@@ -5,8 +5,8 @@ import { describe, expect, it } from 'vitest'
 
 import {
   ProjectRuntimeSupervisor,
-  type ProjectRuntimeBackend,
 } from '../project-runtime-supervisor.js'
+import type { ProjectRuntimeBackend } from '../project-runtime-backend.js'
 
 class FakeBackend implements ProjectRuntimeBackend {
   createCalls = 0

@@ -6,7 +6,7 @@ import path from 'node:path'
 import { promisify } from 'node:util'
 
 import { FileBackedGuildhallPersistence, type PersistencePlacement } from '@guildhall/persistence'
-import { runGuildhallTaskOnce, type RunOnceReport } from '../runtime/run-once.js'
+import { runGuildhallTaskOnce, type RunOnceReport } from '@guildhall/runtime'
 import {
   AutoResolutionRecord,
   BenchmarkRunResult,

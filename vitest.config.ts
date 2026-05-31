@@ -20,6 +20,7 @@ export default defineConfig({
     alias: [
       'agents',
       'backend-host',
+      'benchmarks',
       'compaction',
       'config',
       'corpus-map',

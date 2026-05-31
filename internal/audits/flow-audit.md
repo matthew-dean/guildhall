@@ -78,7 +78,7 @@ babysit setup/import/provider/release states across multiple pages.
   human resolution actions, surfaces should prefer one bounded-chat entry point
   such as `Resolve blocker`, `Choose next step`, or `Review options` over a
   dense row of competing buttons.
-- [ ] Complete the 0.9 release-hardening proof matrix before shipping 0.9.0.
+- [x] Complete the 0.9 release-hardening proof matrix before shipping 0.9.0.
   Plan: `internal/plans/2026-05-31-guildhall-0-9-release-hardening-proof-matrix.md`.
   This is the current release-readiness gate: first stabilize the orchestrator
   lifecycle failures, then prove component+consumer, frontend app, backend/API,
@@ -289,6 +289,24 @@ babysit setup/import/provider/release states across multiple pages.
   the checked task route. Remaining risk is now spec quality and downstream
   implementation proof, not intake durability: the seeded spec is intentionally
   conservative and should still be reviewed before worker execution.
+  2026-05-31 release-matrix closeout made the ship gate green. The release
+  dry-run now passes end-to-end with typecheck, docs build, dependency lint
+  (`0 errors, 50 warnings`), full Vitest (`285 passed / 1 skipped` files,
+  `3412 passed / 3 skipped` tests), build, macOS packaging, package-contents
+  check, and npm dry-run. Focused coverage also passed for the release proof
+  matrix, orchestrator lifecycle, provider preflight, managed-path guardrail,
+  ProjectView trust routing, App shell, docs snapshot asset filtering, runtime
+  backend types, and CLI resolver wiring. Final fixes in this pass: local
+  server start-readiness responses again include loaded/missing model evidence
+  and explicit no-JIT-load copy; ProjectView pairs disabled Start states with a
+  compact action link for setup/import/readiness blockers; the sparse topbar
+  contract is locked by tests so `Needs you`/notification shortcuts do not
+  creep back in; versioned/current/next docs skip `assets/ui-audit/*/README.md`
+  while still copying images; benchmark and improvement-review managed-state
+  writes are documented in the guardrail; and `@guildhall/benchmarks` resolves
+  under both TypeScript and Vitest. `pnpm smoke:release` also confirmed the
+  served bundle is fresh on the installed service, with the expected 0.9
+  runtime image tag.
 - [ ] Harden Guildhall against web/Node/Looma/Knit overfitting across runtime
   inference, task shaping, proof paths, and smoke tests. Plan:
   `internal/plans/2026-05-31-guildhall-generalization-overfitting-hardening.md`.
@@ -342,7 +360,7 @@ babysit setup/import/provider/release states across multiple pages.
   `/api/project/thread?projectId=narrative-harness` now returns `What should a
   worker or reviewer be able to see before Guildhall treats this project's
   visual direction as met?` with no injected prior answer.
-- [ ] Tighten the focused work-item path before calling 0.9.0 ready. Live
+- [x] Tighten the focused work-item path before calling 0.9.0 ready. Live
   Looma + Knit browser proof on 2026-05-30 against installed `0.9.0`
   (`/api/stale-server` returned `stale:false`) showed that a concrete
   "Build AlertDialog primitive" request can be created and shaped, but the

@@ -10,10 +10,12 @@ import { getProjectStateDir } from '@guildhall/sessions'
 import { buildServeApp } from '../serve.js'
 import {
   ProjectRuntimeSupervisor,
-  type ProjectRuntimeBackend,
-  type RuntimeBackendCommandEvent,
-  type RuntimeBackendCommandRequest,
 } from '../project-runtime-supervisor.js'
+import type {
+  ProjectRuntimeBackend,
+  RuntimeBackendCommandEvent,
+  RuntimeBackendCommandRequest,
+} from '../project-runtime-backend.js'
 import type { ProjectRuntimeState } from '../project-runtime-store.js'
 import type { RuntimeBackendSetupDetector } from '../runtime-backend-setup.js'
 import { createCapabilityRequest, listCapabilityRequests } from '../capability-requests.js'

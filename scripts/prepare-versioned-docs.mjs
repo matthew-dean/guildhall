@@ -43,6 +43,10 @@ const NEXT_EXCLUDES = [
   /^web-ui\/help-system\.md$/,
 ]
 
+const SNAPSHOT_ASSET_EXCLUDES = [
+  /^assets\/ui-audit\/[^/]+\/README\.md$/,
+]
+
 function normalizeDocsBase(value) {
   const trimmed = String(value).trim()
   if (!trimmed || trimmed === '/') return '/'
@@ -141,11 +145,11 @@ async function main() {
   const currentRoot = join(DOCS, 'current')
   const currentSnapshotRoot = join(DOCS, 'versions', currentVersion)
   const currentSourceRoot = existsSync(currentSnapshotRoot) ? currentSnapshotRoot : DOCS
-  await copyEntries(currentSourceRoot, currentRoot, CURRENT_ENTRIES)
+  await copyEntries(currentSourceRoot, currentRoot, CURRENT_ENTRIES, SNAPSHOT_ASSET_EXCLUDES)
   await rewriteCurrentDocLinks(currentRoot, currentVersion)
 
   const nextRoot = join(DOCS, 'next')
-  await copyEntries(DOCS, nextRoot, NEXT_ENTRIES, NEXT_EXCLUDES)
+  await copyEntries(DOCS, nextRoot, NEXT_ENTRIES, [...NEXT_EXCLUDES, ...SNAPSHOT_ASSET_EXCLUDES])
   await rewriteAbsoluteDocLinks(nextRoot, '/next')
   await rewriteNextHomeStableLinks(nextRoot, currentVersion)
 

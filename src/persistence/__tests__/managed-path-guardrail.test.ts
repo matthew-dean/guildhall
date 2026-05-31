@@ -25,6 +25,7 @@ const approvedMigratingModules = new Set([
   'src/runtime/dev-server-manager.ts',
   'src/runtime/git-driver.ts',
   'src/runtime/inbox.ts',
+  'src/runtime/improvement-review.ts',
   'src/runtime/intake.ts',
   'src/runtime/language-map.ts',
   'src/runtime/learning.ts',
@@ -59,6 +60,9 @@ const approvedMigratingModules = new Set([
   'src/tools/report-issue.ts',
   'src/tools/run-gates-tool.ts',
   'src/tools/task-queue.ts',
+  // Benchmark fixture materialization seeds disposable projects before running
+  // Guildhall against them; these writes are not production project mutation paths.
+  'src/benchmarks/runner.ts',
 ])
 
 const writePattern = /\b(?:fs\.)?(?:writeFile|appendFile)\b|atomicWriteText\(|createWriteStream\(/g

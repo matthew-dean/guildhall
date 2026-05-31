@@ -7,7 +7,7 @@ import { createCapabilityRequest } from '../capability-requests.js'
 import { approveMountDirectoryRequest } from '../capability-grants.js'
 import { PodmanProjectRuntimeBackend } from '../podman-project-runtime-backend.js'
 import { defaultProjectRuntimeState } from '../project-runtime-store.js'
-import type { RuntimeBackendCommandEvent } from '../project-runtime-supervisor.js'
+import type { RuntimeBackendCommandEvent } from '../project-runtime-backend.js'
 
 describe('podman project runtime backend', () => {
   it('creates, starts, and runs commands through podman as the guildhall user', async () => {

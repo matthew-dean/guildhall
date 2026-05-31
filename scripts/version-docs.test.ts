@@ -17,6 +17,7 @@ async function createDocsFixture(tmp: string, marker = 'current docs'): Promise<
   await fs.mkdir(path.join(tmp, 'docs/guide'), { recursive: true })
   await fs.mkdir(path.join(tmp, 'docs/web-ui'), { recursive: true })
   await fs.mkdir(path.join(tmp, 'docs/releases'), { recursive: true })
+  await fs.mkdir(path.join(tmp, 'docs/assets/ui-audit/0-9-0'), { recursive: true })
   await fs.copyFile(path.join(root, 'scripts/version-docs.mjs'), path.join(tmp, 'scripts/version-docs.mjs'))
   await fs.writeFile(
     path.join(tmp, 'docs/index.md'),
@@ -33,6 +34,8 @@ async function createDocsFixture(tmp: string, marker = 'current docs'): Promise<
   )
   await fs.writeFile(path.join(tmp, 'docs/web-ui/project-view.md'), '# Project view\n')
   await fs.writeFile(path.join(tmp, 'docs/web-ui/flow-audit.md'), '# Internal checklist\n')
+  await fs.writeFile(path.join(tmp, 'docs/assets/ui-audit/0-9-0/README.md'), '# Screenshot notes\n')
+  await fs.writeFile(path.join(tmp, 'docs/assets/ui-audit/0-9-0/project-overview.webp'), 'image')
   await fs.writeFile(
     path.join(tmp, 'docs/releases/index.md'),
     [
@@ -62,6 +65,8 @@ describe('docs versioning script', () => {
       const releaseIndex = await fs.readFile(path.join(versionRoot, 'releases/index.md'), 'utf8')
 
       await expect(fs.stat(path.join(versionRoot, 'web-ui/flow-audit.md'))).rejects.toThrow()
+      await expect(fs.stat(path.join(versionRoot, 'assets/ui-audit/0-9-0/README.md'))).rejects.toThrow()
+      await expect(fs.stat(path.join(versionRoot, 'assets/ui-audit/0-9-0/project-overview.webp'))).resolves.toBeTruthy()
       expect(home).toContain('/versions/1.2.3/guide/quick-start')
       expect(home).not.toContain('/guildhall/')
       expect(quickStart).toContain('/versions/1.2.3/web-ui/project-view')

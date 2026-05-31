@@ -202,7 +202,9 @@
       if (railForcedCollapsed || railPreference === 'expanded') railPreviewOpen = false
       railCollapsed = railForcedCollapsed || railPreference === 'collapsed'
     }
-    const saved = window.localStorage.getItem(RAIL_PREFERENCE_KEY)
+    const saved = typeof window.localStorage?.getItem === 'function'
+      ? window.localStorage.getItem(RAIL_PREFERENCE_KEY)
+      : null
     if (saved === 'expanded' || saved === 'collapsed') {
       railPreference = saved
     }
@@ -232,7 +234,9 @@
     railPreference = railCollapsed ? 'expanded' : 'collapsed'
     railCollapsed = railPreference === 'collapsed'
     railPreviewOpen = false
-    window.localStorage.setItem(RAIL_PREFERENCE_KEY, railPreference)
+    if (typeof window.localStorage?.setItem === 'function') {
+      window.localStorage.setItem(RAIL_PREFERENCE_KEY, railPreference)
+    }
   }
 
   function openRailPreview(): void {
@@ -732,6 +736,20 @@
       ? detail.bootstrapStatus.steps?.find(s => s.result === 'fail') ?? null
       : null,
   )
+  const startReadinessNoticeHref = $derived.by(() => {
+    if (!startReadiness || startReadiness.canStart || allTerminalStart || requiredMigrationBlocked) return null
+    if (startReadiness.actionHref) return projectActionHref(startReadiness.actionHref, activeProjectId)
+    if (metaIntakePending) return currentProjectHref('/setup', activeProjectId)
+    if (blockers.bootstrap) return currentProjectHref('/settings/ready', activeProjectId)
+    return null
+  })
+  const startReadinessNoticeLabel = $derived.by(() => {
+    if (!startReadinessNoticeHref) return null
+    if (metaIntakePending) return 'Open project setup'
+    if (startReadiness?.code === 'import_drafts_waiting') return 'Review drafts'
+    if (blockers.bootstrap) return 'Open readiness checks'
+    return startReadinessActionLabel(startReadiness?.message)
+  })
   const bootstrapFailureText = $derived.by(() => {
     const step = failedBootstrapStep
     if (!step) return null
@@ -1243,6 +1261,14 @@
         {#if allTerminalReadinessMessage}
           <NoticeBand tone="accent" icon="check-circle-2" density="compact">
             <strong>{allTerminalReadinessMessage}</strong>
+          </NoticeBand>
+        {/if}
+        {#if startReadinessNoticeHref && startReadinessNoticeLabel && startReadiness?.message}
+          <NoticeBand tone="warn" icon="alert-triangle" density="compact">
+            <strong>{startReadiness.message}</strong>
+            {#snippet actions()}
+              <a href={startReadinessNoticeHref} onclick={(e) => { e.preventDefault(); nav(startReadinessNoticeHref) }}>{startReadinessNoticeLabel}</a>
+            {/snippet}
           </NoticeBand>
         {/if}
         {#if runStopSummaryText}

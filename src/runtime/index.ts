@@ -335,11 +335,13 @@ export {
 } from './project-runtime-supervisor.js'
 export type {
   RuntimeStartReason,
+  ProjectRuntimeSupervisorOptions,
+} from './project-runtime-supervisor.js'
+export type {
   ProjectRuntimeBackend,
   RuntimeBackendCommandRequest,
   RuntimeBackendCommandEvent,
-  ProjectRuntimeSupervisorOptions,
-} from './project-runtime-supervisor.js'
+} from './project-runtime-backend.js'
 export {
   RuntimeCommandEventSchema,
   ProjectRuntimeCommandRequest,

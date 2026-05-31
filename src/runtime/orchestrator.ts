@@ -9480,13 +9480,13 @@ function answeredQuestionDecisionTexts(task: Task): string[] {
   return (task.openQuestions ?? [])
     .filter((question) => question.answeredAt && typeof question.answer === 'string' && question.answer.trim())
     .filter((question) => {
-      const prompt = typeof question.prompt === 'string' ? question.prompt.trim() : ''
+      const prompt = 'prompt' in question && typeof question.prompt === 'string' ? question.prompt.trim() : ''
       return !isQuestionListPrompt(prompt) && !isOperationalFallbackPrompt(prompt)
     })
     .map((question) => {
       const answer = normalizeFallbackWhitespace(String(question.answer).trim())
       if (answer.length >= 24 || /[.!?]$/.test(answer)) return answer
-      const prompt = typeof question.prompt === 'string' && question.prompt.trim()
+      const prompt = 'prompt' in question && typeof question.prompt === 'string' && question.prompt.trim()
         ? normalizeFallbackWhitespace(question.prompt.trim()).replace(/\?$/, '')
         : 'Owner decision'
       return `${prompt}: ${answer}`

@@ -7,10 +7,12 @@ import { getProjectRuntimeCommandEvidencePath } from '@guildhall/sessions'
 import { FileBackedGuildhallPersistence } from '@guildhall/persistence'
 import {
   ProjectRuntimeSupervisor,
-  type ProjectRuntimeBackend,
-  type RuntimeBackendCommandEvent,
-  type RuntimeBackendCommandRequest,
 } from '../project-runtime-supervisor.js'
+import type {
+  ProjectRuntimeBackend,
+  RuntimeBackendCommandEvent,
+  RuntimeBackendCommandRequest,
+} from '../project-runtime-backend.js'
 import type { ProjectRuntimeState } from '../project-runtime-store.js'
 import {
   migrateLegacyRuntimeCommandEvidenceToPersistence,

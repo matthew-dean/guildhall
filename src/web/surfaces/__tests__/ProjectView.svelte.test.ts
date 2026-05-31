@@ -380,7 +380,7 @@ describe('ProjectView', () => {
 
     expect(screen.getAllByText(expectedText).length).toBeGreaterThan(0)
     expect(screen.getByRole('button', { name: /Start|Stop/ })).toBeInTheDocument()
-    expect(screen.getByLabelText(/notifications need you/i)).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: /notifications need you/i })).not.toBeInTheDocument()
   })
 
   it('does not foreground resolved git runtime errors in Overview', async () => {
@@ -427,7 +427,7 @@ describe('ProjectView', () => {
       projectPayload,
     )
 
-    await user.click(screen.getByRole('button', { name: /project setup needs attention/i }))
+    await user.click(screen.getByRole('link', { name: /open project setup/i }))
     expect(path.value).toBe('/projects/looma-knit/setup')
   })
 
@@ -452,7 +452,7 @@ describe('ProjectView', () => {
     installFetchFakes(projectPayload)
     await renderProjectView('thread', null, 'looma-knit', projectPayload)
 
-    const attention = screen.getByRole('button', { name: /imported drafts need review/i })
+    const attention = screen.getByRole('link', { name: /review drafts/i })
     expect(attention).toHaveTextContent(/Review drafts/i)
     await user.click(attention)
     expect(path.value).toBe('/projects/looma-knit/task/task-import-1')
@@ -878,7 +878,7 @@ describe('ProjectView', () => {
 
     expect(screen.getByText('pnpm test exited 1: Cannot find module ./Button.svelte')).toBeInTheDocument()
     expect(screen.queryByRole('button', { name: /new task/i })).not.toBeInTheDocument()
-    expect(screen.getByRole('button', { name: /readiness checks need attention/i })).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: /readiness checks need attention/i })).not.toBeInTheDocument()
     expect(screen.getByRole('button', { name: /fix the bootstrap failure before starting/i })).toBeDisabled()
 
     await user.click(screen.getByRole('link', { name: /open readiness checks/i }))

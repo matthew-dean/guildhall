@@ -19,6 +19,7 @@
     "paths": {
       "@guildhall/agents": ["./src/agents/index.ts"],
       "@guildhall/backend-host": ["./src/backend-host/index.ts"],
+      "@guildhall/benchmarks": ["./src/benchmarks/index.ts"],
       "@guildhall/compaction": ["./src/compaction/index.ts"],
       "@guildhall/config": ["./src/config/index.ts"],
       "@guildhall/corpus-map": ["./src/corpus-map/index.ts"],

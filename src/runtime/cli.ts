@@ -63,7 +63,7 @@ import {
   runSweLocalBenchmark,
   runTbliteBenchmark,
   type BenchmarkAutomationPolicy,
-} from '../benchmarks/index.js'
+} from '@guildhall/benchmarks'
 
 function openBrowser(url: string): void {
   const cmd = platform() === 'darwin' ? `open "${url}"`

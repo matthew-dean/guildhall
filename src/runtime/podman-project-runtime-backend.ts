@@ -7,7 +7,7 @@ import { capabilityGrantMounts } from './capability-grants.js'
 import type {
   RuntimeBackendCommandEvent,
   RuntimeBackendCommandRequest,
-} from './project-runtime-supervisor.js'
+} from './project-runtime-backend.js'
 import type {
   ProjectRuntimeHealth,
   ProjectRuntimeState,
