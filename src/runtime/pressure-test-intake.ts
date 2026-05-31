@@ -119,7 +119,7 @@ export async function createPressureTestIntake(input: {
     await savePressureTestIntake(input.memoryDir, intake)
     return intake
   }
-  const domains = seedDomains()
+  const domains = seedDomainsForRequest(input.rawRequest)
   domains[0]!.status = 'active'
   const intake: PressureTestIntake = {
     id: `pti-${input.target.id.replace(/[^a-zA-Z0-9-]/g, '-').toLowerCase()}`,
@@ -431,6 +431,12 @@ async function answerProjectQuestion(
       reason: classification.reason,
       answer,
     })
+    intake.status = 'active'
+    intake.activeDomainId = 'project-planner'
+    intake.outputs.projectQuestionPlanner = planner
+    intake.updatedAt = now
+    await savePressureTestIntake(memoryDir, intake)
+    return intake
   }
 
   const followUp = planFollowUpForAnswer(currentAnswer)
@@ -612,6 +618,22 @@ function seedDomains(): Array<z.infer<typeof PressureTestDomain>> {
       closeoutAsked: false,
     },
   ]
+}
+
+function seedDomainsForRequest(rawRequest: string): Array<z.infer<typeof PressureTestDomain>> {
+  const domains = seedDomains()
+  if (!isNonUiRuntimeRequest(rawRequest) || requestsUiGuidance(rawRequest)) {
+    return domains
+  }
+  return domains.filter(domain => domain.id !== 'design-quality')
+}
+
+function isNonUiRuntimeRequest(rawRequest: string): boolean {
+  return /\b(api|endpoint|membership|cli|command|--json|inspect|docs?|quick start|install warning|migration|schema|rollback|bugfix|duplicate rows?)\b/i.test(rawRequest)
+}
+
+function requestsUiGuidance(rawRequest: string): boolean {
+  return /\b(ui|web app|browser|component|drawer|palette|visual|screen|modal|card|layout|frontend|settings footer)\b/i.test(rawRequest)
 }
 
 function firstQuestion(

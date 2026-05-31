@@ -385,6 +385,60 @@ describe('pressure-test intake state', () => {
     expect(designDomain?.openUnknowns.join('\n')).toContain('palette')
   })
 
+  it('does not inject UI design-quality questions into backend, CLI, or docs-only pressure tests', async () => {
+    for (const scenario of [
+      {
+        target: { type: 'feature' as const, id: 'comments-api', title: 'Comments API' },
+        rawRequest: 'Add a comment endpoint and prove membership checks.',
+      },
+      {
+        target: { type: 'feature' as const, id: 'inspect-json', title: 'Inspect JSON output' },
+        rawRequest: 'Add --json output to the inspect CLI command.',
+      },
+      {
+        target: { type: 'task' as const, id: 'quick-start-warning', title: 'Quick start warning' },
+        rawRequest: 'Clarify the install warning in the quick start.',
+      },
+    ]) {
+      const memoryDir = await mkdtemp(path.join(tmpdir(), 'guildhall-pressure-'))
+      const intake = await createPressureTestIntake({
+        memoryDir,
+        target: scenario.target,
+        rawRequest: scenario.rawRequest,
+      })
+
+      expect(intake.domains.map(domain => domain.id)).not.toContain('design-quality')
+      expect(JSON.stringify(intake)).not.toMatch(/\b(component|palette|visual proof|browser)\b/i)
+    }
+  })
+
+  it('keeps confused project-check-in answers pending instead of storing them as memory facts', async () => {
+    const memoryDir = await mkdtemp(path.join(tmpdir(), 'guildhall-pressure-'))
+    const intake = await createPressureTestIntake({
+      memoryDir,
+      target: { type: 'project', id: 'generic-project-check-in', title: 'Generic project check-in' },
+      rawRequest: 'Start a project check-in.',
+    })
+
+    const next = await answerPressureTestQuestion({
+      memoryDir,
+      intakeId: intake.id,
+      questionId: intake.pendingQuestion!.id,
+      answer: "I don't understand the nature of the question.",
+    })
+
+    expect(next.status).toBe('active')
+    expect(next.pendingQuestion?.id).toBe(intake.pendingQuestion?.id)
+    expect(next.outputs.decisions).toEqual([])
+    expect(next.outputs.projectQuestionPlanner?.inferredFacts.map(fact => fact.text).join('\n')).not.toContain(
+      "I don't understand",
+    )
+    expect(next.outputs.projectQuestionPlanner?.discardedAnswers).toContainEqual(expect.objectContaining({
+      questionId: intake.pendingQuestion?.id,
+      reason: 'confused',
+    }))
+  })
+
   it('advances domains through closeout and records accepted answers as language-map candidates', async () => {
     const memoryDir = await mkdtemp(path.join(tmpdir(), 'guildhall-pressure-'))
     const intake = await createPressureTestIntake({

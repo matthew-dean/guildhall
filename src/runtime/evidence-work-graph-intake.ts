@@ -13,6 +13,7 @@ export type EvidenceUnit = {
   need: string
   targetArea: string
   producedArtifact: string
+  workShape: 'ui-component' | 'frontend-integration' | 'backend-api' | 'cli-tool' | 'docs' | 'migration' | 'bugfix' | 'single-edit' | 'generic'
   statusHint: 'missing' | 'shipped' | 'unknown'
   buildsOn: string[]
   sharedFoundations: string[]
@@ -120,6 +121,7 @@ export function planEvidenceWorkGraph(input: EvidenceWorkGraphInput): EvidenceWo
 function extractUnits(source: EvidenceSource): EvidenceUnit[] {
   return extractTableSeeds(source).map(seed => {
     const statusHint = inferStatusHint(seed.need)
+    const workShape = inferWorkShape(seed)
     const targetArea = inferTargetArea(seed.path, seed.deliverable)
     const producedArtifact = inferProducedArtifact(seed.deliverable, seed.need)
     const buildsOn = parseFoundations(seed.foundation)
@@ -130,6 +132,7 @@ function extractUnits(source: EvidenceSource): EvidenceUnit[] {
       need: seed.need,
       targetArea,
       producedArtifact,
+      workShape,
       statusHint,
       buildsOn,
       sharedFoundations,
@@ -279,6 +282,46 @@ function dependenciesFor(
 }
 
 function implementationAcceptanceCriteria(unit: EvidenceUnit): EvidenceTask['acceptanceCriteria'] {
+  if (unit.workShape === 'backend-api') {
+    return [
+      { id: 'api-contract', description: `${unit.name} exposes the requested API behavior.` },
+      { id: 'authorization-contract', description: `${unit.name} proves membership, permission, or tenancy checks.` },
+      { id: 'integration-proof', description: `${unit.name} has deterministic API integration proof.` },
+    ]
+  }
+  if (unit.workShape === 'cli-tool') {
+    return [
+      { id: 'cli-contract', description: `${unit.name} exposes the requested command behavior.` },
+      { id: 'output-fixture', description: `${unit.name} has stable command output fixture proof.` },
+      { id: 'regression-test', description: `${unit.name} is covered by a regression test.` },
+    ]
+  }
+  if (unit.workShape === 'docs') {
+    return [
+      { id: 'docs-diff', description: `${unit.name} changes only the intended documentation.` },
+      { id: 'docs-proof', description: `${unit.name} passes the docs check or deterministic content review.` },
+    ]
+  }
+  if (unit.workShape === 'migration') {
+    return [
+      { id: 'migration-up', description: `${unit.name} applies the schema/data change.` },
+      { id: 'migration-rollback', description: `${unit.name} proves rollback or downgrade behavior.` },
+      { id: 'validation-proof', description: `${unit.name} validates migrated data shape.` },
+    ]
+  }
+  if (unit.workShape === 'bugfix') {
+    return [
+      { id: 'regression-reproduction', description: `${unit.name} starts from a failing regression case.` },
+      { id: 'fix-proof', description: `${unit.name} passes the focused regression after the fix.` },
+    ]
+  }
+  if (unit.workShape === 'single-edit') {
+    return [
+      { id: 'focused-edit', description: `${unit.name} stays bounded to the named edit.` },
+      { id: 'focused-proof', description: `${unit.name} has focused diff or test proof.` },
+    ]
+  }
+
   return [
     { id: 'source-implementation', description: `${unit.name} is implemented in ${unit.targetArea}.` },
     { id: 'public-contract', description: `${unit.name} exposes the expected public contract.` },
@@ -307,8 +350,67 @@ function integrationAcceptanceCriteria(): EvidenceTask['acceptanceCriteria'] {
 function implementationProofPaths(unit: EvidenceUnit): EvidenceTask['proofPaths'] {
   const packageName = unit.targetArea === 'looma' ? '@looma/core' : unit.targetArea
 
+  if (unit.workShape === 'backend-api') {
+    return [
+      {
+        kind: 'command',
+        command: `pnpm test -- ${slugify(unit.name)}.integration`,
+        expectedEvidence: [`${unit.name} integration proof covers membership checks.`],
+      },
+    ]
+  }
+  if (unit.workShape === 'cli-tool') {
+    return [
+      {
+        kind: 'command',
+        command: `pnpm test -- ${slugify(unit.name)}-inspect-json`,
+        expectedEvidence: [`${unit.name} command output fixture is stable.`],
+      },
+    ]
+  }
+  if (unit.workShape === 'docs') {
+    return [
+      {
+        kind: 'command',
+        command: 'pnpm docs:check-help-sync',
+        expectedEvidence: [`${unit.name} docs diff is limited to the requested wording.`],
+      },
+    ]
+  }
+  if (unit.workShape === 'migration') {
+    return [
+      {
+        kind: 'command',
+        command: `pnpm test -- ${slugify(unit.name)}-migration`,
+        expectedEvidence: [`${unit.name} applies cleanly.`, `${unit.name} rollback proof passes.`],
+      },
+    ]
+  }
+  if (unit.workShape === 'bugfix') {
+    return [
+      {
+        kind: 'command',
+        command: `pnpm test -- ${slugify(unit.name)}-regression`,
+        expectedEvidence: [`${unit.name} fails before the fix and passes after it.`],
+      },
+    ]
+  }
+  if (unit.workShape === 'single-edit') {
+    return [
+      {
+        kind: 'command',
+        command: `pnpm test -- ${slugify(unit.name)}-focused`,
+        expectedEvidence: [`${unit.name} stays one bounded edit.`],
+      },
+    ]
+  }
+
   return [
-    { kind: 'command', command: `pnpm --filter ${packageName} test` },
+    {
+      kind: 'command',
+      command: `pnpm --filter ${packageName} test`,
+      expectedEvidence: [`${unit.name} component contract passes.`],
+    },
     {
       kind: 'review',
       expectedEvidence: [
@@ -344,13 +446,17 @@ function inferStatusHint(need: string): EvidenceUnit['statusHint'] {
   if (/\b(shipped|complete|done|already)\b/i.test(need)) {
     return 'shipped'
   }
-  if (/\b(missing|gap|add|allow|expose|needs?|build|replace)\b/i.test(need)) {
+  if (/\b(missing|gap|add|allow|expose|needs?|build|replace|clarify|rename|fix|migration|migrate)\b/i.test(need)) {
     return 'missing'
   }
   return 'unknown'
 }
 
 function inferTargetArea(path: string, deliverable: string): string {
+  const releaseFixture = path.match(/(?:^|\/)release-proof-matrix\/([^/]+)/)
+  if (releaseFixture?.[1]) {
+    return releaseFixture[1]
+  }
   const firstPathSegment = path.split('/').find(Boolean)
   if (firstPathSegment && !['docs', 'internal'].includes(firstPathSegment)) {
     return firstPathSegment
@@ -359,6 +465,35 @@ function inferTargetArea(path: string, deliverable: string): string {
     return 'Admin settings page'
   }
   return firstPathSegment ?? 'project'
+}
+
+function inferWorkShape(seed: UnitSeed): EvidenceUnit['workShape'] {
+  const text = `${seed.deliverable} ${seed.need} ${seed.foundation} ${seed.consumer}`.toLowerCase()
+  if (/\b(rename|wording|copy)\b/.test(seed.need) || /\bsettings footer\b/.test(text)) {
+    return 'single-edit'
+  }
+  if (/\b(fix|duplicate|regression)\b/.test(seed.need)) {
+    return 'bugfix'
+  }
+  if (/\b(data-migration|migration|rollback|archived_at|schema)\b/.test(text)) {
+    return 'migration'
+  }
+  if (/\b(cli|command|--json|inspect)\b/.test(text)) {
+    return 'cli-tool'
+  }
+  if (/\b(backend-api|api|endpoint|membership checks?|tenant|permission)\b/.test(text)) {
+    return 'backend-api'
+  }
+  if (/\bdashboard integration\b/.test(seed.deliverable)) {
+    return 'frontend-integration'
+  }
+  if (/\b(component|primitive|dialog|drawer|button)\b/.test(text)) {
+    return 'ui-component'
+  }
+  if (/\b(docs-only|docs|quick start|documentation|install warning|clarify)\b/.test(text)) {
+    return 'docs'
+  }
+  return 'generic'
 }
 
 function inferProducedArtifact(deliverable: string, need: string): string {
@@ -405,7 +540,11 @@ function primaryConsumerSurface(unit: EvidenceUnit): string {
 }
 
 function needsIntegrationTask(unit: EvidenceUnit): boolean {
-  return unit.consumerSurfaces.some(surface => /Knit|dashboard|settings page|consumer|admin/i.test(surface))
+  if (unit.workShape === 'ui-component') {
+    return unit.consumerSurfaces.some(surface => /Knit|demo app|app|flow|drawer|consumer/i.test(surface))
+      && unit.statusHint !== 'shipped'
+  }
+  return unit.consumerSurfaces.some(surface => /dashboard|settings page|admin/i.test(surface))
     && unit.statusHint !== 'shipped'
 }
 

@@ -268,6 +268,25 @@ function isLeanCommandBackedTask(task: Task): boolean {
   )
 }
 
+function shouldRunAcceptanceCommandCriterion(
+  task: Task,
+  criterion: Task['acceptanceCriteria'][number],
+): boolean {
+  const command = typeof criterion.command === 'string' ? criterion.command.trim() : ''
+  if (!command) return false
+  if (!criterion.met) return true
+
+  const latestHardGate = latestHardGateResultForId(task, criterion.id)
+  if (latestHardGate?.passed === true) return false
+  if (latestHardGate?.passed === false) return true
+
+  return task.notes.some((note) => {
+    if (note.agentId !== 'worker-agent') return false
+    if (note.role === 'self-critique') return true
+    return /self-critique|review proof packet|verification commands? passed|\bmet\b/i.test(note.content)
+  })
+}
+
 function normalizeAcceptanceCommandForGuildhallState(command: string): string {
   if (!/^git\s+diff\b/.test(command)) return command
   const operatorMatch = command.match(/\s(?:\||&&|\|\||;)\s/)
@@ -2464,21 +2483,6 @@ export class Orchestrator {
       await this.normalizeSpecReviewOwnership(task)
     }
 
-    // If review's only remaining uncertainty is automated hard verification,
-    // do not spend LLM/persona review budget on qualitative debate. Hand the
-    // task straight to gate_check so the hard runner decides the remaining
-    // truth.
-    if (
-      task.status === 'review' &&
-      shouldAdvanceToGateCheckPendingAutomatedVerification(task)
-    ) {
-      return await this.applyReviewVerdictInline({
-        task,
-        queue: queueBefore,
-        llmError: undefined,
-      })
-    }
-
     // Reviewer fan-out at `review`: each applicable persona (Component
     // Designer, Accessibility Specialist, Color Theorist, ...) reviews
     // independently through its own lens. Aggregation is strict — any revise
@@ -2511,6 +2515,22 @@ export class Orchestrator {
       beforeStatus === 'review' ? await this.resolveReviewerMode(task.domain) : 'llm_only'
 
     if (beforeStatus === 'review' && reviewerMode === 'deterministic_only') {
+      return await this.applyReviewVerdictInline({
+        task,
+        queue: queueBefore,
+        llmError: undefined,
+      })
+    }
+
+    // If review's only remaining uncertainty is automated hard verification,
+    // deterministic review can hand straight to gate_check so the hard runner
+    // decides the remaining truth. LLM-backed modes still get their configured
+    // reviewer attempt so fallback audit paths stay deterministic.
+    if (
+      beforeStatus === 'review' &&
+      reviewerMode === 'llm_only' &&
+      shouldAdvanceToGateCheckPendingAutomatedVerification(task)
+    ) {
       return await this.applyReviewVerdictInline({
         task,
         queue: queueBefore,
@@ -5666,7 +5686,7 @@ export class Orchestrator {
     if (task.status !== 'gate_check') return null
     const commandCriteria = task.acceptanceCriteria
       .map((criterion, index) => ({ criterion, index }))
-      .filter(({ criterion }) => typeof criterion.command === 'string' && criterion.command.trim().length > 0)
+      .filter(({ criterion }) => shouldRunAcceptanceCommandCriterion(task, criterion))
     if (commandCriteria.length === 0) return null
 
     const taskProjectPath =
@@ -5716,7 +5736,36 @@ export class Orchestrator {
       current.updatedAt = now
       queue.lastUpdated = now
 
-      if (!summary.allPassed) {
+      const scopedHardGateDisposition = !summary.allPassed
+        ? summarizeScopedHardGateDisposition(
+            {
+              projectPath: current.projectPath,
+              likelyTargetFiles: resolveLikelyTaskFiles(current),
+              resolvedDecisionTexts: resolvedScopeDecisionTexts(current),
+            },
+            latestHardGateResults(current),
+          )
+        : null
+      const scopedFailuresExempted = scopedHardGateDisposition?.shouldPass === true
+      if (scopedFailuresExempted) {
+        const exemptedIds = new Set(scopedHardGateDisposition.exemptedFailures.map((gate) => gate.gateId))
+        for (const criterion of current.acceptanceCriteria) {
+          if (exemptedIds.has(criterion.id)) criterion.met = true
+        }
+        if (scopedHardGateDisposition.exemptedFailures.length > 0) {
+          const exemptedSummary = scopedHardGateDisposition.exemptedFailures
+            .map((gate) => `${gate.gateId}: scoped unrelated repo-red excluded per resolved human decision`)
+            .join('; ')
+          current.notes.push({
+            agentId: 'acceptance-command-gates',
+            role: 'gate-checker',
+            content: `Gate-check scope exception applied: ${exemptedSummary}`,
+            timestamp: now,
+          })
+        }
+      }
+
+      if (!summary.allPassed && !scopedFailuresExempted) {
         const failed = results.filter((result) => !result.passed)
         current.status = 'in_progress'
         ensureWorkerOwnership(current)
@@ -7658,6 +7707,16 @@ export class Orchestrator {
       typeof criterion.command === 'string' && criterion.command.trim().length > 0,
     )
     if (!likelyLocalWebStarter && !hasCommandBackedAcceptance) return null
+    if (
+      beforeStatus === 'review' &&
+      hasMixedReviewAndAutomatedAcceptanceCriteria(task) &&
+      (
+        shouldAdvanceToGateCheckPendingAutomatedVerification(task) ||
+        workerSelfCritiqueMarksAcceptanceCriteriaMetBeforeHardGates(task)
+      )
+    ) {
+      return null
+    }
     const dirtyTaskFiles = await this.changedFilesForTask(task)
     if (dirtyTaskFiles.length > 0) return null
 
@@ -9187,6 +9246,17 @@ function latestHardGateResults(task: Task): Array<NonNullable<Task['gateResults'
   return [...latestById.values()]
 }
 
+function latestHardGateResultForId(
+  task: Task,
+  gateId: string,
+): NonNullable<Task['gateResults']>[number] | undefined {
+  for (let i = task.gateResults.length - 1; i >= 0; i -= 1) {
+    const gate = task.gateResults[i]
+    if (gate?.type === 'hard' && gate.gateId === gateId) return gate
+  }
+  return undefined
+}
+
 function isProceduralOnlyFanoutDissent(dissenting: readonly PersonaVerdict[]): boolean {
   if (dissenting.length === 0) return false
   return dissenting.every((verdict) => {
@@ -9324,7 +9394,45 @@ function shouldAdvanceInfraFallbackToGateCheck(
 ): boolean {
   if (!isInfrastructureLikeReviewerError(llmError)) return false
   if (verdict.verdict !== 'revise') return false
-  return shouldAdvanceToGateCheckPendingHardGates(task, verdict.failingSignals)
+  return (
+    shouldAdvanceToGateCheckPendingAutomatedVerification(task) ||
+    shouldAdvanceToGateCheckPendingHardGates(task, verdict.failingSignals) ||
+    workerSelfCritiqueMarksAcceptanceCriteriaMetBeforeHardGates(task)
+  )
+}
+
+function workerSelfCritiqueMarksAcceptanceCriteriaMetBeforeHardGates(task: Task): boolean {
+  if (task.gateResults.some((gate) => gate.type === 'hard')) return false
+  if (task.acceptanceCriteria.length === 0) return false
+  const latestWorkerNote = [...task.notes]
+    .reverse()
+    .find((note) => isWorkerSelfCritiqueNote(note))
+  if (!latestWorkerNote) return false
+
+  const statedCriterionResults = latestWorkerNote.content
+    .split('\n')
+    .map((rawLine) => rawLine.trim())
+    .filter((line) => /^(?:[-*]|\d+[.)])\s+/.test(line))
+    .map((line) => /\b(Not met|Met)\b/i.exec(line)?.[1]?.toLowerCase())
+    .filter((state): state is string => Boolean(state))
+
+  return (
+    statedCriterionResults.length >= task.acceptanceCriteria.length &&
+    statedCriterionResults.every((state) => state === 'met')
+  )
+}
+
+function hasMixedReviewAndAutomatedAcceptanceCriteria(task: Task): boolean {
+  let hasAutomated = false
+  let hasReviewBacked = false
+  for (const criterion of task.acceptanceCriteria) {
+    if (criterion.verifiedBy === 'automated') {
+      hasAutomated = true
+    } else {
+      hasReviewBacked = true
+    }
+  }
+  return hasAutomated && hasReviewBacked
 }
 
 function isInfrastructureOnlyFanoutFailure(verdict: PersonaVerdict): boolean {

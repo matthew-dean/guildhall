@@ -1,0 +1,7 @@
+{
+  "name": "guildhall-release-fixture-cli-tool",
+  "private": true,
+  "scripts": {
+    "test": "node -e \"console.log(JSON.stringify({ command: 'inspect', json: true }))\""
+  }
+}

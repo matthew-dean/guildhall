@@ -30,6 +30,20 @@ const compliancePipelineEvidence = [
   'The worker must not be scheduled until the policy schema exists. The dashboard integration must wait for the export API and worker status.',
 ].join('\n')
 
+const releaseMatrixEvidence = [
+  '# 0.9 release matrix sample',
+  '',
+  '| Deliverable | Need | Foundation | Consumer |',
+  '| --- | --- | --- | --- |',
+  '| AlertDialog primitive | build reusable component primitive | Dialog foundation | demo app destructive action |',
+  '| Comment endpoint | add backend API endpoint with membership checks | existing membership policy | API clients |',
+  '| Inspect json output | add --json output to the inspect CLI command | existing inspect command | CLI users |',
+  '| Quick start install warning | clarify docs-only install warning | quick start page | docs readers |',
+  '| Archived at migration | add archived_at migration and rollback proof | current issue schema | migration runner |',
+  '| Summary duplicate row bugfix | fix duplicate rows in summary output | existing summary renderer | CLI report users |',
+  '| Settings footer copy | rename Host-run to Runs on host in settings footer | settings footer copy | settings footer |',
+].join('\n')
+
 describe('evidence-to-work-graph intake', () => {
   it('extracts deliverable units from source evidence instead of flattening them into one vague task', () => {
     const plan = planEvidenceWorkGraph({
@@ -180,5 +194,75 @@ describe('evidence-to-work-graph intake', () => {
         reason: expect.stringContaining('AlertDialog'),
       }),
     ])
+  })
+
+  it('keeps reusable component work split from consumer integration with dependency proof', () => {
+    const plan = planEvidenceWorkGraph({
+      sources: [{ path: 'internal/fixtures/release-proof-matrix/component-consumer/plan.md', content: releaseMatrixEvidence }],
+      existingTasks: [],
+    })
+
+    const component = plan.tasks.find(task => task.deliverableName === 'AlertDialog primitive' && task.kind === 'implementation')
+    const integration = plan.tasks.find(task => task.deliverableName === 'AlertDialog primitive' && task.kind === 'integration')
+
+    expect(component).toMatchObject({
+      targetArea: 'component-consumer',
+      proofPaths: expect.arrayContaining([
+        expect.objectContaining({ kind: 'command', expectedEvidence: expect.arrayContaining([expect.stringMatching(/component/i)]) }),
+      ]),
+    })
+    expect(integration).toMatchObject({
+      targetArea: 'demo app destructive action',
+      consumerSurface: 'demo app destructive action',
+      dependsOn: [component?.id],
+      proofPaths: expect.arrayContaining([
+        expect.objectContaining({ kind: 'browser', expectedEvidence: expect.arrayContaining([expect.stringMatching(/demo app destructive action/)]) }),
+      ]),
+    })
+  })
+
+  it('shapes backend/API, CLI/tooling, docs-only, migration/data, bugfix, and single-edit scenarios without UI assumptions', () => {
+    const plan = planEvidenceWorkGraph({
+      sources: [{ path: 'internal/fixtures/release-proof-matrix/backend-api/plan.md', content: releaseMatrixEvidence }],
+      existingTasks: [],
+    })
+
+    const byName = (name: string) => plan.tasks.filter(task => task.deliverableName === name)
+    expect(byName('Comment endpoint')).toHaveLength(1)
+    expect(byName('Inspect json output')).toHaveLength(1)
+    expect(byName('Quick start install warning')).toHaveLength(1)
+    expect(byName('Archived at migration')).toHaveLength(1)
+    expect(byName('Summary duplicate row bugfix')).toHaveLength(1)
+    expect(byName('Settings footer copy')).toHaveLength(1)
+
+    const apiTask = byName('Comment endpoint')[0]!
+    const cliTask = byName('Inspect json output')[0]!
+    const docsTask = byName('Quick start install warning')[0]!
+    const migrationTask = byName('Archived at migration')[0]!
+    const bugfixTask = byName('Summary duplicate row bugfix')[0]!
+    const singleEditTask = byName('Settings footer copy')[0]!
+
+    expect(apiTask.proofPaths).toEqual(expect.arrayContaining([
+      expect.objectContaining({ kind: 'command', command: expect.stringMatching(/integration/i) }),
+    ]))
+    expect(cliTask.proofPaths).toEqual(expect.arrayContaining([
+      expect.objectContaining({ kind: 'command', command: expect.stringMatching(/inspect.*json|json.*inspect/i) }),
+    ]))
+    expect(docsTask.proofPaths).toEqual(expect.arrayContaining([
+      expect.objectContaining({ kind: 'command', command: expect.stringMatching(/docs/) }),
+    ]))
+    expect(migrationTask.proofPaths).toEqual(expect.arrayContaining([
+      expect.objectContaining({ kind: 'command', expectedEvidence: expect.arrayContaining([expect.stringMatching(/rollback/i)]) }),
+    ]))
+    expect(bugfixTask.acceptanceCriteria).toEqual(expect.arrayContaining([
+      expect.objectContaining({ id: 'regression-reproduction' }),
+    ]))
+    expect(singleEditTask.dependsOn).toEqual([])
+
+    for (const task of [apiTask, cliTask, docsTask, migrationTask, bugfixTask, singleEditTask]) {
+      expect(task.kind).toBe('implementation')
+      expect(task.proofPaths.map(proof => proof.kind)).not.toContain('browser')
+      expect(JSON.stringify(task)).not.toMatch(/\b(component|design-system|look-and-feel|renders|visual|browser)\b/i)
+    }
   })
 })

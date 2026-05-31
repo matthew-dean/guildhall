@@ -166,4 +166,41 @@ describe('project question planner', () => {
       expect(followUp.question.prompt.length).toBeLessThan(220)
     }
   })
+
+  it('does not ask UI or browser-oriented project questions for API, CLI, or docs evidence', () => {
+    const evidence = buildProjectQuestionEvidence({
+      projectId: 'release-matrix-service',
+      projectName: 'Release Matrix Service',
+      files: [
+        {
+          path: 'README.md',
+          text: [
+            'Release Matrix Service exposes backend API endpoints for project comments and membership checks.',
+            'The command-line inspect tool supports machine-readable output for automation.',
+            'The docs quick start explains install warnings for operators.',
+          ].join(' '),
+        },
+        {
+          path: '.guildhall/TASKS.json',
+          text: JSON.stringify({
+            tasks: [
+              { id: 'api', title: 'Add comment endpoint with membership checks' },
+              { id: 'cli', title: 'Add --json output to inspect command' },
+              { id: 'docs', title: 'Clarify quick start install warning' },
+            ],
+          }),
+        },
+      ],
+      currentAnswers: [],
+    })
+
+    const plan = planNextProjectQuestion({
+      evidence,
+      answeredQuestions: [],
+      askedCandidateIds: [],
+    })
+
+    const text = plan.kind === 'ask' ? `${plan.question.prompt} ${plan.question.why} ${(plan.question.choices ?? []).join(' ')}` : plan.reason
+    expect(text).not.toMatch(/\b(UI|visual|palette|browser|component|drawer|card)\b/i)
+  })
 })

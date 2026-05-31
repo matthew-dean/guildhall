@@ -205,3 +205,11 @@ Tightened the sticky benchmark fixes after a fresh live run showed the worker co
 Evidence: focused agent/benchmark/improvement/design/orchestrator/task-sizing/task-decomposition/task-queue tests passed with 43 selected tests; `pnpm build` passed; `git diff --check` passed.
 
 source: codex:sticky-benchmark-false-proof-hardening
+
+## 2026-05-31T03:20:00.000Z local evidence for artifact:flow-audit
+
+Reran the full artifact-local smoke benchmark after sticky command-gate hardening. The run first exposed and fixed three real harness bugs: piped `git diff | grep` acceptance commands put `.guildhall` exclusions after the pipe, command gates ran against the project checkout instead of the active task worktree, and command-gated `done` transitions cleaned up worktrees before landing accepted work back into the project. Final report: `internal/benchmarks/runs/2026-05-30-live/artifact-local-full-rerun-after-command-gate-landing-fix/artifact-local-79f7665d-3abd-46e5-8139-6f53076ccab7.md`.
+
+Result: 2/2 passed, 0 false successes, average quality 100. Remaining efficiency issue: both tiny artifact fixtures still needed one automation-blocker recovery in spec shaping before completion.
+
+source: codex:artifact-local-command-gate-landing-proof

@@ -1,0 +1,4 @@
+CREATE TABLE records (
+  id INTEGER PRIMARY KEY,
+  title TEXT NOT NULL
+);

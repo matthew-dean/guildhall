@@ -64,6 +64,13 @@ babysit setup/import/provider/release states across multiple pages.
   CLI/tooling, docs-only, data/migration, bugfix, and single-edit scenarios
   through graphing, execution, proof, and user-path checks. 0.9.0 is not ready
   until the release matrix and final smoke commands in that plan are green.
+  Owned Tasks 4/5 slice: non-UI work-graph and intake coverage now proves the
+  component+consumer split still carries a dependency and integration proof,
+  backend/API, CLI/tooling, docs-only, migration/data, bugfix, and single-edit
+  scenarios do not inherit UI/browser proof assumptions, bounded copy edits
+  stay as one task, API/CLI/docs pressure tests do not seed design-quality
+  questions unless UI guidance is requested, and confused project answers
+  remain discarded pending answers instead of becoming durable project memory.
 - [ ] Harden Guildhall against web/Node/Looma/Knit overfitting across runtime
   inference, task shaping, proof paths, and smoke tests. Plan:
   `internal/plans/2026-05-31-guildhall-generalization-overfitting-hardening.md`.
@@ -6275,3 +6282,15 @@ local 0.7 release-candidate build at `http://localhost:7777/projects/narrative-h
     should treat Jira/Linear/GitHub Issues/Azure DevOps/Asana as planning
     authorities while Guildhall keeps a local execution mirror with proof,
     stale-state handling, safe proposed writes, and context-budget manifests.
+
+## 2026-05-31T03:20:00.000Z MCP evidence for artifact:flow-audit
+
+Reran the full artifact-local smoke benchmark and fixed the remaining command-gate lifecycle bugs it exposed. First diagnostic run showed piped `git diff | grep` acceptance commands receiving `.guildhall` pathspec exclusions after the pipe, making `grep` fail on pathspec arguments. Second diagnostic run showed command gates executing against the original project checkout while the worker had correctly edited the isolated task worktree. Third diagnostic run showed acceptance-command gates marking a worktree task done and cleaning up before the normal completed-work landing path, so the benchmark project copy stayed unchanged. The final run passed 2/2 with zero false successes and average quality 100.
+
+Report: `internal/benchmarks/runs/2026-05-30-live/artifact-local-full-rerun-after-command-gate-landing-fix/artifact-local-79f7665d-3abd-46e5-8139-6f53076ccab7.md`.
+
+Remaining efficiency fat: both fixtures still spent one `resolve_automation_blocker` repair on spec-agent no-durable-progress before recovering, plus product-brief repair and spec approval. Tiny deterministic artifact patches should get a leaner spec path.
+
+Verification: focused orchestrator regression tests for `.guildhall` git-diff exclusions, piped git-diff gates, worktree command gates, and command-gated worktree landing passed; `pnpm build` passed; live artifact-local benchmark passed 2/2.
+
+source: codex:artifact-local-command-gate-landing-proof
