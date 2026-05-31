@@ -57,6 +57,13 @@ babysit setup/import/provider/release states across multiple pages.
 
 ## Current Follow-Ups
 
+- [ ] Complete the 0.9 release-hardening proof matrix before shipping 0.9.0.
+  Plan: `internal/plans/2026-05-31-guildhall-0-9-release-hardening-proof-matrix.md`.
+  This is the current release-readiness gate: first stabilize the orchestrator
+  lifecycle failures, then prove component+consumer, frontend app, backend/API,
+  CLI/tooling, docs-only, data/migration, bugfix, and single-edit scenarios
+  through graphing, execution, proof, and user-path checks. 0.9.0 is not ready
+  until the release matrix and final smoke commands in that plan are green.
 - [ ] Harden Guildhall against web/Node/Looma/Knit overfitting across runtime
   inference, task shaping, proof paths, and smoke tests. Plan:
   `internal/plans/2026-05-31-guildhall-generalization-overfitting-hardening.md`.

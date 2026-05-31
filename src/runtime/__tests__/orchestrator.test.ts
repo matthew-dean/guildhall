@@ -4188,6 +4188,133 @@ describe('Orchestrator.tick — progress logging (FR-09)', () => {
     expect(task.gateResults[0]?.output).not.toContain('grep: :!.guildhall')
   })
 
+  it('runs acceptance command gates in the active task worktree when one exists', async () => {
+    const projectPath = path.join(tmpDir, 'acceptance-command-project-copy')
+    const worktreePath = path.join(tmpDir, 'acceptance-command-task-worktree')
+    await fs.mkdir(projectPath, { recursive: true })
+    await fs.mkdir(path.join(worktreePath, '.guildhall'), { recursive: true })
+    await fs.writeFile(path.join(projectPath, 'RELEASE_NOTES.md'), '# Release Notes\n\n- Placeholder note.\n', 'utf8')
+    execFileSync('git', ['init'], { cwd: worktreePath, stdio: 'ignore' })
+    await fs.writeFile(path.join(worktreePath, 'RELEASE_NOTES.md'), '# Release Notes\n\n- Placeholder note.\n', 'utf8')
+    execFileSync('git', ['add', 'RELEASE_NOTES.md'], { cwd: worktreePath, stdio: 'ignore' })
+    execFileSync('git', ['commit', '-m', 'seed'], {
+      cwd: worktreePath,
+      stdio: 'ignore',
+      env: {
+        ...process.env,
+        GIT_AUTHOR_NAME: 'Test',
+        GIT_AUTHOR_EMAIL: 'test@example.com',
+        GIT_COMMITTER_NAME: 'Test',
+        GIT_COMMITTER_EMAIL: 'test@example.com',
+      },
+    })
+    await fs.appendFile(path.join(worktreePath, 'RELEASE_NOTES.md'), '- Added benchmark artifact evidence.\n')
+    await fs.writeFile(path.join(worktreePath, '.guildhall', 'TASKS.json'), '{"version":1}\n', 'utf8')
+
+    await writeQueue([
+      mkTask({
+        id: 'artifact-patch',
+        status: 'gate_check',
+        assignedTo: 'gate-checker-agent',
+        projectPath,
+        worktreePath,
+        acceptanceCriteria: [
+          {
+            id: 'AC-1',
+            description: 'RELEASE_NOTES.md contains benchmark artifact evidence.',
+            verifiedBy: 'automated',
+            command: "grep -q 'benchmark artifact evidence' RELEASE_NOTES.md",
+            met: false,
+          },
+          {
+            id: 'AC-2',
+            description: 'Only RELEASE_NOTES.md changed.',
+            verifiedBy: 'automated',
+            command: "git diff --name-only | grep -q '^RELEASE_NOTES.md$'",
+            met: false,
+          },
+        ],
+      }),
+    ])
+
+    const orch = new Orchestrator({
+      config: baseConfig(),
+      agents: agentSet({ gateChecker: stubAgent('gate-checker-agent') }),
+    })
+
+    const out = await orch.tick()
+
+    expect(out.kind).toBe('processed')
+    if (out.kind === 'processed') {
+      expect(out.agent).toBe('acceptance-command-gates')
+      expect(out.afterStatus).toBe('done')
+    }
+    const task = (await readQueue()).tasks.find(candidate => candidate.id === 'artifact-patch')!
+    expect(task.acceptanceCriteria.every((criterion) => criterion.met)).toBe(true)
+    expect(await fs.readFile(path.join(projectPath, 'RELEASE_NOTES.md'), 'utf8')).not.toContain('benchmark artifact evidence')
+  })
+
+  it('lands accepted command-gated task work before cleaning up the task worktree', async () => {
+    const projectPath = path.join(tmpDir, 'acceptance-command-land-project')
+    const worktreePath = path.join(tmpDir, 'acceptance-command-land-worktree')
+    await fs.mkdir(projectPath, { recursive: true })
+    execFileSync('git', ['init', '-b', 'main'], { cwd: projectPath, stdio: 'ignore' })
+    execFileSync('git', ['config', 'user.name', 'Guildhall Test'], { cwd: projectPath, stdio: 'ignore' })
+    execFileSync('git', ['config', 'user.email', 'guildhall-tests@example.com'], { cwd: projectPath, stdio: 'ignore' })
+    await fs.writeFile(path.join(projectPath, 'RELEASE_NOTES.md'), '# Release Notes\n\n- Placeholder note.\n', 'utf8')
+    execFileSync('git', ['add', 'RELEASE_NOTES.md'], { cwd: projectPath, stdio: 'ignore' })
+    execFileSync('git', ['commit', '-m', 'seed'], { cwd: projectPath, stdio: 'ignore' })
+    execFileSync('git', ['worktree', 'add', '-b', 'guildhall/task-task-001', worktreePath, 'main'], {
+      cwd: projectPath,
+      stdio: 'ignore',
+    })
+    execFileSync('git', ['config', 'user.name', 'Guildhall Test'], { cwd: worktreePath, stdio: 'ignore' })
+    execFileSync('git', ['config', 'user.email', 'guildhall-tests@example.com'], { cwd: worktreePath, stdio: 'ignore' })
+    await fs.appendFile(path.join(worktreePath, 'RELEASE_NOTES.md'), '- Added benchmark artifact evidence.\n')
+
+    await writeQueue([
+      mkTask({
+        id: 'artifact-patch',
+        status: 'gate_check',
+        assignedTo: 'gate-checker-agent',
+        projectPath,
+        worktreePath,
+        branchName: 'guildhall/task-task-001',
+        baseBranch: 'main',
+        acceptanceCriteria: [
+          {
+            id: 'AC-1',
+            description: 'RELEASE_NOTES.md contains benchmark artifact evidence.',
+            verifiedBy: 'automated',
+            command: "grep -q 'benchmark artifact evidence' RELEASE_NOTES.md",
+            met: false,
+          },
+        ],
+      }),
+    ])
+
+    const orch = new Orchestrator({
+      config: baseConfig(),
+      agents: agentSet({ gateChecker: stubAgent('gate-checker-agent') }),
+    })
+
+    const out = await orch.tick()
+
+    expect(out.kind).toBe('processed')
+    if (out.kind === 'processed') {
+      expect(out.agent).toBe('acceptance-command-gates')
+      expect(out.afterStatus).toBe('done')
+    }
+    const projectReleaseNotes = await fs.readFile(path.join(projectPath, 'RELEASE_NOTES.md'), 'utf8')
+    expect(projectReleaseNotes).toContain('- Added benchmark artifact evidence.')
+    const task = (await readQueue()).tasks.find(candidate => candidate.id === 'artifact-patch')!
+    expect(task.mergeRecord).toMatchObject({
+      fromBranch: 'guildhall/task-task-001',
+      toBranch: 'main',
+      result: 'merged',
+    })
+  })
+
   it('skips qualitative review for lean command-backed tasks and hands them to command gates', async () => {
     await writeQueue([
       mkTask({

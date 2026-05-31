@@ -5669,7 +5669,10 @@ export class Orchestrator {
       .filter(({ criterion }) => typeof criterion.command === 'string' && criterion.command.trim().length > 0)
     if (commandCriteria.length === 0) return null
 
-    const taskProjectPath = resolveEffectiveTaskProjectPath(task, this.opts.config.projectPath)
+    const taskProjectPath =
+      typeof task.worktreePath === 'string' && task.worktreePath.trim().length > 0
+        ? task.worktreePath.trim()
+        : resolveEffectiveTaskProjectPath(task, this.opts.config.projectPath)
     const gates = commandCriteria.map(({ criterion }) => ({
       id: criterion.id,
       label: criterion.description || criterion.id,
@@ -5752,22 +5755,79 @@ export class Orchestrator {
         current.status = 'done'
         current.assignedTo = undefined
         current.completedAt = now
+        const autoCommit = await this.maybeAutoCommitCompletedTaskWork(current)
+        if (!autoCommit.ok) {
+          current.status = 'blocked'
+          current.assignedTo = null
+          current.blockReason =
+            `Guildhall could not auto-commit completed work: ${autoCommit.detail ?? 'unknown git error'}.`
+          current.notes.push({
+            agentId: 'coordinator',
+            role: 'git-story',
+            content:
+              `Auto-commit was required by project Git Story policy, but it failed: ${autoCommit.detail ?? 'unknown git error'}.`,
+            timestamp: now,
+          })
+          current.mergeRecord = {
+            fromBranch: current.branchName ?? '<unknown>',
+            toBranch: current.baseBranch ?? '<unknown>',
+            strategy: await this.resolveLandingStrategySafe(),
+            result: 'skipped',
+            mergedAt: now,
+            detail: 'auto-commit failed before landing',
+          }
+        } else {
+          const landingStrategy = await this.resolveLandingStrategySafe()
+          const worktreeMode = await this.resolveWorktreeModeSafe()
+          const completionWorktreeMode = current.worktreePath?.trim() ? 'per_task' : worktreeMode
+          if (completionWorktreeMode !== 'none' && current.branchName && current.baseBranch) {
+            const effectiveTaskProjectPath = resolveEffectiveTaskProjectPath(
+              current,
+              this.opts.config.projectPath,
+            )
+            const mergeOutcome = await dispatchMerge({
+              task: current,
+              policy: landingStrategy,
+              projectPath: effectiveTaskProjectPath,
+              memoryDir: this.opts.config.memoryDir,
+              gitDriver: this.gitDriver,
+              now: this.now(),
+            })
+            current.mergeRecord = mergeOutcome.record
+            current.status = mergeOutcome.newStatus
+            if (mergeOutcome.fixupTask) appendFixupTask(queue, mergeOutcome.fixupTask, this.now())
+            if (mergeOutcome.newStatus === 'done') shelveSupersededFixupTasks(queue, current.id, this.now())
+          } else if (!current.mergeRecord) {
+            current.mergeRecord = {
+              fromBranch: current.branchName ?? '<unknown>',
+              toBranch: current.baseBranch ?? '<unknown>',
+              strategy: landingStrategy,
+              result: 'skipped',
+              mergedAt: now,
+              detail:
+                completionWorktreeMode === 'none'
+                  ? 'worktree isolation disabled — merge skipped'
+                  : 'branch metadata missing — merge skipped',
+            }
+          }
+        }
         await this.writeQueue(queue)
+        await this.maybeCleanupWorktree(current, await this.resolveWorktreeModeSafe())
+        const afterStatus = current.status
         await this.logTickProgress({
           task: current,
           agent: 'acceptance-command-gates',
           beforeStatus,
-          afterStatus: 'done',
+          afterStatus,
           transitioned: true,
-          note: `acceptance command gates passed (${results.length}) → done`,
+          note: `acceptance command gates passed (${results.length}) → ${afterStatus}`,
         })
-        await this.maybeCleanupWorktree(current, await this.resolveWorktreeModeSafe())
         return {
           kind: 'processed',
           taskId: current.id,
           agent: 'acceptance-command-gates',
           beforeStatus,
-          afterStatus: 'done',
+          afterStatus,
           transitioned: true,
           revisionCount: current.revisionCount,
         } as TickOutcome
