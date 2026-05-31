@@ -13,8 +13,10 @@ task: what should be done, what context matters, what changed, what passed
 review, and what still needs a decision.
 
 The point is trust. Guildhall gives agent-run work a place to plan, build,
-check, and recover. You still make the product calls, but you should not have
-to babysit every step or reconstruct the run from a transcript.
+check, and recover. It reasons about completeness before work starts, during
+implementation, during review, and before closure. You still make the product
+calls, but you should not have to babysit every step or reconstruct the run
+from a transcript.
 
 ## Why people use it
 
