@@ -44,7 +44,7 @@ order, pause, follow-up, or revision instead of erasing the task back to intake.
 
 ## Memory layers
 
-Guildhall uses two storage lanes. Compact shared state lives in `./.guildhall/`
+Guildhall uses two storage layers. Compact shared state lives in `./.guildhall/`
 so another checkout can understand the same project without a fresh intake.
 Bulky or private history lives under `~/.guildhall/data/projects/<project-hash>/`
 so transcripts, checkpoints, debug snapshots, and full task evidence do not

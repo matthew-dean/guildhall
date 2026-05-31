@@ -12,10 +12,10 @@ Most people do not need more vocabulary than that.
 
 A **workspace** is the advanced shape for related projects that need to be
 coordinated as one effort. Use it when the folders have separate setup/startup
-contracts but the work has to be planned together. For example, Looma and Knit
-are separate buildable projects, but Knit product needs can drive Looma
-primitive design, while Looma's component docs and metadata can teach agents
-which primitive, variant, prop, and layout control to choose.
+contracts but the work has to be planned together. For example, a design system
+and an app can be separate buildable projects, while app needs drive reusable
+component work and the design system's docs teach agents which primitive,
+variant, prop, and layout control to choose.
 
 In that shape, the workspace has a lightweight **council**: the coordination
 rules that explain how the child projects influence each other. The council is
@@ -69,16 +69,17 @@ over multiple buildable projects:
 - some tasks intentionally coordinate across children
 
 In a workspace, the parent coordinates; the child project runs. That means a
-Looma task bootstraps Looma, a Knit task bootstraps Knit, and a cross-project
-task gets split or linked so each side has an explicit lane.
+design-system task bootstraps the design-system child, an app task bootstraps
+the app child, and a cross-project task gets split or linked so each side has a
+clear part to finish.
 
 For a design-system workspace, that coordination is part of the product
-contract. Looma should grow into an agent-ready UI library: a split button,
+contract. The library should grow into an agent-ready UI system: a split button,
 layout primitive, or form control should explain when it fits, why its variants
-exist, what each prop changes, and where spacing belongs. The happy path for a
-Knit task is to follow that surface. Adding external margins, wrapper CSS, or
-bespoke styling on top of controls should be treated as a design-system gap or
-a reviewed exception, not the default move.
+exist, what each prop changes, and where spacing belongs. The app should follow
+that surface. Adding external margins, wrapper CSS, or bespoke styling on top of
+controls should be treated as a design-system gap or a reviewed exception, not
+the default move.
 
 ## Multiple Projects In The Service
 
@@ -119,7 +120,7 @@ These layers can coexist, and they do different jobs:
 The config loader merges them instead of treating them as alternatives.
 Project-local settings override user-global local settings where appropriate.
 Provider secrets are no longer expected in the project-local file. Machine-wide
-provider choice and model-lane defaults belong in `~/.guildhall/config.yaml`;
+provider choice and model defaults belong in `~/.guildhall/config.yaml`;
 see [Open model recommendations](./open-models) for the currently tested
 open-model split. The project-local file only overrides those defaults when a
 single project truly needs different behavior, and it still holds local runtime

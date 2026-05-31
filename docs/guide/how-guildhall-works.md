@@ -58,8 +58,8 @@ whether the whole project still makes sense.
 ## Structured flexibility
 
 Software work is not deterministic, and pretending otherwise is how tools
-become brittle. Guildhall uses lanes instead: enough structure to stop drift,
-enough room to solve the real problem.
+become brittle. Guildhall uses named paths for the work: enough structure to
+stop drift, enough room to solve the real problem.
 
 For example:
 
@@ -252,7 +252,7 @@ The loop looks like this:
 1. Finish anything waiting on gates.
 2. Resolve work already in review.
 3. Continue active implementation.
-4. Claim the next ready task only when the active lane is clear.
+4. Claim the next ready task only when active work is clear.
 
 That keeps the queue honest. Blocked work is marked as blocked instead of
 quietly falling behind fresher work. Ready work is claimed explicitly so two

@@ -6,17 +6,15 @@ title: Why Guildhall exists
 
 Guildhall is a **local AI agent harness for software projects**. It wraps large
 language models with project state, task plans, review rules, recovery paths,
-and a browser surface where you can see what is happening.
+and a browser UI where you can see what is happening.
 
 A chat assistant can help with a task. Guildhall helps with the work around the
 task: what should be done, what context matters, what changed, what passed
 review, and what still needs a decision.
 
-The point is trust. Guildhall exists to put automatic, agent-run guardrails
-around every project phase and every task so the work can reach the highest
-quality possible with the least useful amount of human supervision. It should
-reason about completeness before work starts, during implementation, during
-review, and before closure.
+The point is trust. Guildhall gives agent-run work a place to plan, build,
+check, and recover. You still make the product calls, but you should not have
+to babysit every step or reconstruct the run from a transcript.
 
 ## Why people use it
 
@@ -36,8 +34,8 @@ task is called done.
 
 It is especially useful when the work is bigger than one prompt but smaller
 than “hire a team”: feature slices, cleanup passes, docs alignment, test
-coverage, UI hardening, release prep, and the slightly cursed middle bits that
-usually take six tabs and a coffee refill.
+coverage, UI hardening, release prep, and the middle bits that usually take six
+tabs to keep straight.
 
 ### If you know the product better than the code
 
@@ -62,7 +60,7 @@ meaningful changes, not for babysitting.
 Four properties follow from this:
 
 1. **Everything is explicit.** Behavior lives in named settings instead of
-   disappearing into prompt vibes.
+   disappearing into a prompt.
 2. **Everything is visible.** Tasks, blueprints, transcripts, blockers, and
    review results stay attached to project state.
 3. **Everything is reviewable.** Work moves through stages and can be blocked

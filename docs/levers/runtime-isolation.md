@@ -2,16 +2,18 @@
 title: runtime_isolation
 help_topic: lever.runtime_isolation
 help_summary: |
-  Whether parallel workers get isolated runtime resources (ports, PIDs,
-  filesystem scratch dirs). `slot_allocation` assigns each worker a numbered
-  slot whose env vars offset ports and paths; `none` lets workers share.
+  Whether parallel workers get isolated runtime slots for ports and scratch
+  paths. `slot_allocation` assigns each worker a numbered slot whose env vars
+  offset ports and paths; `none` lets workers share.
 ---
 
 # `runtime_isolation`
 
 **Scope:** project • **Default:** `none`
 
-Whether fanned-out workers get isolated port/path slots.
+Whether fanned-out workers get isolated port/path slots. This lever is about
+parallel task slots, not the Podman-backed local runtime shown in Settings ->
+Ready.
 
 ## Positions
 

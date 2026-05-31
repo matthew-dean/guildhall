@@ -134,10 +134,22 @@ describe('recommendModelsForRole', () => {
     expect(results.map(m => m.id)).toEqual(
       expect.arrayContaining([
         'zai-org/GLM-4.6',
+        'nvidia/Nemotron-3-Nano-Omni-30B-A3B-Reasoning',
         'deepseek-ai/DeepSeek-V4-Flash',
         'Qwen/Qwen3.6-35B-A3B',
       ]),
     )
+  })
+
+  it('tracks the current DeepInfra open-model reviewer/context lane', () => {
+    const nemotron = findModel('nvidia/Nemotron-3-Nano-Omni-30B-A3B-Reasoning')
+    expect(nemotron).toMatchObject({
+      provider: 'deepinfra',
+      recommendedRoles: expect.arrayContaining(['reviewer', 'contextIndexer']),
+      contextWindow: 262_144,
+      inputPricePerMillionUsd: 0.20,
+      outputPricePerMillionUsd: 0.80,
+    })
   })
 
   it('recommends a cached-price Qwen model for DeepInfra worker runs', () => {

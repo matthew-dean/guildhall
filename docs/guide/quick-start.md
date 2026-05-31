@@ -95,7 +95,7 @@ stay in **Host-run compatibility mode** for now.
 
 ![Guildhall v0.9.0 Settings Ready view showing the local runtime setup card.](../assets/ui-audit/0-9-0/settings-runtime.webp)
 
-![Guildhall v0.9.0 project overview showing needs-you work, task health, and project navigation.](../assets/ui-audit/0-9-0/project-overview.webp)
+![Guildhall v0.9.0 project overview showing attention work, task health, and project navigation.](../assets/ui-audit/0-9-0/project-overview.webp)
 
 ## What Guildhall may ask
 
@@ -208,7 +208,12 @@ Good blockers tell you:
 - what Guildhall recommends
 
 If a blocker only says "Needs you" without context, that is a product problem,
-not a puzzle you were supposed to solve with vibes.
+not a puzzle you were supposed to solve.
+
+If an existing project has old cards that no longer match the repo, use
+**Settings -> Re-intake**. Guildhall re-reads the project, treats existing tasks
+and progress as evidence instead of final truth, and drafts a cleaner plan you
+can inspect before applying.
 
 ## A first-run example
 

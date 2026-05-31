@@ -63,10 +63,10 @@ Guildhall can help with the ordinary closure moves:
 - mark the work local-only;
 - defer the Git story with a reason.
 
-Those writes are gated by the project's Git Story policy. The default posture
-is ask-first. If your global policy says completed work should be auto-committed,
-new projects can inherit that preference; a project can still opt out and ask
-every time.
+Those writes follow the project's Git Story policy. By default, Guildhall asks
+first. If your global policy says completed work should be auto-committed, new
+projects can inherit that preference; a project can still opt out and ask every
+time.
 
 Guildhall does not force-push, rebase shared branches, or rewrite published
 history as part of the normal 0.8.0 path. That kind of move belongs behind an

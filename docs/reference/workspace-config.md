@@ -54,11 +54,11 @@ projects should influence each other.
 kind: workspace
 
 projects:
-  - id: looma
-    label: Looma
+  - id: design-system
+    label: Design System
     type: library
-    path: looma
-    coordinator: looma
+    path: packages/design-system
+    coordinator: design-system
     bootstrap:
       commands:
         - pnpm install
@@ -67,11 +67,11 @@ projects:
         - pnpm build
         - pnpm lint
 
-  - id: knit
-    label: Knit
+  - id: app
+    label: Product App
     type: app
-    path: knit
-    coordinator: knit
+    path: apps/product-app
+    coordinator: app
     bootstrap:
       commands:
         - pnpm install
@@ -89,16 +89,16 @@ projects:
       pullRequest: ask
 
 council:
-  mandate: Keep Looma generic and agent-ready while letting Knit needs drive priority.
+  mandate: Keep the design system generic and agent-ready while letting app needs drive priority.
   coordinationRules:
-    - id: knit-drives-looma
-      from: knit
-      to: looma
-      rule: Reusable Knit UI needs should become Looma primitives before app-specific wiring.
-    - id: looma-agent-ready
-      from: looma
-      to: knit
-      rule: Looma primitives should document when to use each component, variant, prop, and layout control so agents choose the library surface instead of inventing margins or bespoke styles.
+    - id: app-drives-library
+      from: app
+      to: design-system
+      rule: Reusable app UI needs should become design-system primitives before app-specific wiring.
+    - id: library-agent-ready
+      from: design-system
+      to: app
+      rule: Design-system primitives should document when to use each component, variant, prop, and layout control so agents choose the library surface instead of inventing margins or bespoke styles.
 ```
 
 The parent workspace coordinates planning. Tasks still bind to a child project
@@ -108,7 +108,7 @@ For UI-library work, the council should capture how reusable controls become
 easy for agents to use correctly. A split button, for example, should not only
 exist as a component; its docs and metadata should say when it is preferable to
 a plain button or menu, what each variant means, which props change behavior,
-and which parent layout primitive owns spacing around it. That keeps Knit from
+and which parent layout primitive owns spacing around it. That keeps the app from
 papering over gaps with external margins, wrapper CSS, or local one-off control
 styles.
 
@@ -122,8 +122,9 @@ repos.
 Child-project settings are project settings. If a workspace coordinates
 multiple buildable projects, put local worktree files under the matching
 `projects[]` entry so paths stay relative to that child project. Do not put
-`knit/.env` in the parent workspace include list; a Knit task resolves includes
-from the Knit project root, so the child setting should be `.env`.
+`apps/product-app/.env` in the parent workspace include list; an app task
+resolves includes from the app project root, so the child setting should be
+`.env`.
 
 The same rule applies to setup and Git closure policy. Put child-specific
 `bootstrap`, `worktree`, and `gitStory` blocks on the matching `projects[]`
@@ -136,10 +137,10 @@ workspace-wide defaults.
 models:
   spec: deepseek-ai/DeepSeek-V4-Flash
   coordinator: deepseek-ai/DeepSeek-V4-Flash
-  worker: Qwen/Qwen3.5-35B-A3B
-  reviewer: deepseek-ai/DeepSeek-V4-Flash
+  worker: deepseek-ai/DeepSeek-V4-Flash
+  reviewer: nvidia/Nemotron-3-Nano-Omni-30B-A3B-Reasoning
   gateChecker: deepseek-ai/DeepSeek-V4-Flash
-  contextIndexer: zai-org/GLM-4.6
+  contextIndexer: nvidia/Nemotron-3-Nano-Omni-30B-A3B-Reasoning
 ```
 
 Each model role must resolve against the model catalog in `./src/core/models.ts`.
@@ -239,11 +240,11 @@ gitStory:
 `open_pr`, or `merge_landing_branch`. The action fields use `ask`, `auto`, or
 `never`.
 
-The default posture is ask-first. If `commit` is `auto`, Guildhall can
-auto-commit completed task work with a Commit Story message. Push and PR
-creation still follow their own policy fields. `localOnlyAllowed` and
-`deferAllowed` let you record intentional leftovers with a reason instead of
-leaving them to look like forgotten work.
+The default is ask-first. If `commit` is `auto`, Guildhall can auto-commit
+completed task work with a Commit Story message. Push and PR creation still
+follow their own policy fields. `localOnlyAllowed` and `deferAllowed` let you
+record intentional leftovers with a reason instead of leaving them to look like
+forgotten work.
 
 Dangerous history moves are off by default. Leave `allowForcePush` and
 `allowSharedBranchRebase` false unless a project has a very deliberate reason
@@ -262,10 +263,11 @@ runtime:
   envVarPrefixTemplate: GUILDHALL_SLOT_{slot}
 ```
 
-Slot allocation is not container isolation. It is a lightweight way to give
-parallel workers separate port ranges and environment hints while they still
-run in normal task worktrees. Containerized runtimes remain a future design
-candidate, not a `0.7.0` claim.
+Slot allocation is not the Podman-backed project runtime. It is a lightweight
+way to give parallel workers separate port ranges and environment hints while
+they still run in normal task worktrees. The 0.9 local runtime is configured
+from **Settings -> Ready** and host-owned Guildhall runtime state, not this
+`guildhall.yaml` block.
 
 ## `skills`
 

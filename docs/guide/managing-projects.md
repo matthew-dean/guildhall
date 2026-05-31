@@ -36,7 +36,7 @@ The projects home answers:
 - what the overall **Work mix** looks like
 - which project owns the current **Attention** item
 - which projects are **Running now**
-- which projects have **Needs you** work
+- which projects have work waiting on your answer
 - which project cards are paused, queued, stable, inspecting, or waiting on task briefs
 
 Open the project shell when you need details. The projects home is just the map
