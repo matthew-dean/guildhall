@@ -9,7 +9,8 @@
  * the recommended 0.5.x UX is the packaged macOS installer.
  *
  * What this script does, in order:
- *   1. Parse the target version (explicit semver or `patch`/`minor`/`major`).
+ *   1. Parse the target version (explicit semver or `patch`/`minor`/`major`)
+ *      against the latest published npm release, not the local manifest.
  *   2. Refuse to run on a dirty worktree or when not on `main` (override with
  *      `--allow-dirty` / `--allow-branch`).
  *   3. Bump the root `package.json` to the new version.
@@ -20,7 +21,8 @@
  *   7. Build the macOS packaged artifact used by the curl installer.
  *   8. Verify package contents exclude raw docs/ but keep generated help.
  *   9. `npm publish` with `--access=public`.
- *   10. Commit the version/docs bump and tag `v<version>`.
+ *   10. Commit the release snapshot and tag `v<version>`.
+ *   11. Move `package.json` to the next development version and commit that bump.
  *
  * Flags:
  *   --dry-run             Print each step; run everything except `npm publish`
@@ -31,6 +33,9 @@
  *   --allow-branch        Allow publishing from a branch other than `main`.
  *   --tag <dist-tag>      npm dist-tag (defaults to `latest`; use `next` for
  *                         prereleases).
+ *   --next-version <v>    Version to write back into package.json after a real
+ *                         release commit/tag. Defaults to the next patch after
+ *                         the published release version.
  *
  * Usage:
  *   node scripts/publish.mjs 0.4.0
@@ -66,6 +71,7 @@ const flags = {
   allowDirty: args.includes('--allow-dirty'),
   allowBranch: args.includes('--allow-branch'),
   tag: takeFlagValue('--tag') ?? 'latest',
+  nextVersion: takeFlagValue('--next-version') ?? null,
 }
 const originalManifestText = readFileSync(MANIFEST, 'utf-8')
 let restoreManifestOnExit = false
@@ -87,10 +93,20 @@ if (!versionArg) die('Missing version argument. Pass a semver or `patch`/`minor`
 // 1. Resolve target version
 // ---------------------------------------------------------------------------
 
-const currentVersion = readJson(MANIFEST).version
-const nextVersion = resolveNextVersion(currentVersion, versionArg)
-log(`Current version: ${currentVersion}`)
-log(`Target version:  ${nextVersion}`)
+const manifestJson = readJson(MANIFEST)
+const currentVersion = manifestJson.version
+const publishedVersion = fetchPublishedVersion(manifestJson.name, flags.tag)
+const nextVersion = resolveNextVersion(publishedVersion ?? currentVersion, versionArg)
+const postReleaseVersion = flags.dryRun ? null : resolvePostReleaseVersion(nextVersion, flags.nextVersion)
+log(`Manifest version:  ${currentVersion}`)
+log(`Published version: ${publishedVersion ?? '(none found)'}`)
+log(`Target version:    ${nextVersion}`)
+if (postReleaseVersion) {
+  log(`Next dev version: ${postReleaseVersion}`)
+}
+if (publishedVersion === nextVersion && !flags.dryRun) {
+  die(`guildhall@${nextVersion} is already published on npm; choose a newer release version.`)
+}
 
 // ---------------------------------------------------------------------------
 // 2. Git preflight
@@ -217,6 +233,17 @@ if (gitRefExists(`refs/tags/v${nextVersion}`)) {
 }
 
 log(`\n✓ Published guildhall@${nextVersion}`)
+if (postReleaseVersion) {
+  const nextManifest = readJson(MANIFEST)
+  nextManifest.version = postReleaseVersion
+  writeJson(MANIFEST, nextManifest)
+  run('git', ['add', 'package.json'])
+  if (hasStagedDiff(['package.json'])) {
+    run('git', ['commit', '-m', `chore: start ${postReleaseVersion}`])
+  } else {
+    warn(`package.json already at ${postReleaseVersion}; skipping post-release bump commit.`)
+  }
+}
 log(`  Push when ready:  git push origin main --follow-tags`)
 log(`  Pushing v${nextVersion} triggers the GitHub release workflow for guildhall-macos.tar.gz.`)
 
@@ -237,6 +264,8 @@ Flags:
   --allow-dirty      Permit a dirty worktree.
   --allow-branch     Publish from a branch other than main.
   --tag <dist-tag>   npm dist-tag (default: latest; use 'next' for pre-releases).
+  --next-version <v> Version to restore into package.json after a real release
+                     (default: next patch after the published release).
   -h, --help         Show this help.
 `)
 }
@@ -361,6 +390,15 @@ function runCapture(cmd, argv) {
   }
 }
 
+function runCaptureOptional(cmd, argv) {
+  const result = spawnSync(cmd, argv, {
+    cwd: ROOT,
+    encoding: 'utf-8',
+    stdio: ['ignore', 'pipe', 'pipe'],
+  })
+  return result
+}
+
 function hasStagedDiff(paths) {
   const result = spawnSync('git', ['diff', '--cached', '--quiet', '--', ...paths], {
     cwd: ROOT,
@@ -440,6 +478,30 @@ function resolveNextVersion(current, spec) {
     case 'major': return `${maj + 1}.0.0`
     default: die(`Unknown version spec "${spec}". Pass semver or patch/minor/major.`)
   }
+}
+
+function resolvePostReleaseVersion(releasedVersion, explicitNextVersion) {
+  if (explicitNextVersion) {
+    if (!/^\d+\.\d+\.\d+(-[\w.]+)?$/.test(explicitNextVersion)) {
+      die(`Post-release version "${explicitNextVersion}" is not valid semver.`)
+    }
+    return explicitNextVersion
+  }
+  return resolveNextVersion(releasedVersion, 'patch')
+}
+
+function fetchPublishedVersion(packageName, distTag) {
+  const queries = distTag && distTag !== 'latest'
+    ? [['view', packageName, `dist-tags.${distTag}`], ['view', packageName, 'version']]
+    : [['view', packageName, 'version']]
+
+  for (const query of queries) {
+    const result = runCaptureOptional('npm', query)
+    if (result.status !== 0) continue
+    const value = `${result.stdout ?? ''}`.trim()
+    if (value) return value
+  }
+  return null
 }
 
 function minorLine(version) {
