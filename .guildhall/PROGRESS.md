@@ -189,3 +189,19 @@ Repaired semantic split sizing and the worker handoff recovery exposed by the li
 Verification: focused task-sizing/task-decomposition/task-queue/orchestrator tests passed, `pnpm exec tsc --noEmit` passed, `pnpm build` passed, and `git diff --check` passed.
 
 source: codex:semantic-work-unit-split-fix
+
+## 2026-05-31T01:30:00.000Z MCP evidence for artifact:flow-audit
+
+Ran the live artifact-local benchmark specifically for process-cost and false-proof friction. The semantic split fix held, but the run exposed three sticky quality/cost problems: benchmark summaries hid per-run automation repairs, generated out-of-scope/review boilerplate triggered extra design/improvement-review lanes on tiny file patches, and the gate path could accept narrated worker/gate-checker proof even when `RELEASE_NOTES.md` was unchanged. Fixed the first two and added an orchestrator-owned acceptance-command gate pre-pass so command-backed ACs are decided by observed process exits before model narration. Diagnostic rerun `artifact-local-process-cost-rerun4` was intentionally stopped after the new gate bounced false proof twice; remaining sticky issue is worker/tool-use reliability on tiny edit tasks, plus generated `git diff` commands need to ignore Guildhall's own `.guildhall` state.
+
+Evidence: focused benchmark/improvement/design/orchestrator/task-sizing/task-decomposition/task-queue tests passed with 36 selected tests; `pnpm build` passed. Live diagnostic showed tick 5 and tick 8 bouncing `gate_check -> in_progress` via `acceptance-command-gates` instead of falsely completing an unchanged file.
+
+source: codex:benchmark-process-cost-and-false-proof-audit
+
+## 2026-05-31T02:35:00.000Z MCP evidence for artifact:flow-audit
+
+Tightened the sticky benchmark fixes after a fresh live run showed the worker could still narrate completion, write fake hard gate results into TASKS.json, and move to review without touching the target file. Workers can no longer author hard gate results or mark command-backed automated ACs as met through update-task; command-backed facts must come from observed gates. Review now rejects command-backed worker handoffs with likely target files but no project-file diff before any reviewer can approve them. Lean command-backed tasks skip qualitative review and go straight to command gates, and git-diff acceptance gates ignore Guildhall-owned `.guildhall` bookkeeping. The worker prompt now tells exact tiny artifact edits to edit/write the target first instead of proving the pre-mutation failure.
+
+Evidence: focused agent/benchmark/improvement/design/orchestrator/task-sizing/task-decomposition/task-queue tests passed with 43 selected tests; `pnpm build` passed; `git diff --check` passed.
+
+source: codex:sticky-benchmark-false-proof-hardening

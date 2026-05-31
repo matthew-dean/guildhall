@@ -108,6 +108,7 @@ function baseRunRecord(
     autoResolutionCount: number
     blockedByPolicyCount: number
     automationResolutionKinds?: Record<string, number>
+    tokenUse?: { input: number; output: number }
     result: BenchmarkRunResultData['result']
     failureClass: BenchmarkRunResultData['failureClass']
     failureSummary?: string
@@ -151,6 +152,7 @@ function baseRunRecord(
     autoResolutionCount: input.autoResolutionCount,
     blockedByPolicyCount: input.blockedByPolicyCount,
     automationResolutionKinds: input.automationResolutionKinds ?? {},
+    tokenUse: input.tokenUse ?? { input: 0, output: 0 },
     result: input.result,
     failureClass: input.failureClass,
     failureSummary: input.failureSummary ?? '',
@@ -394,6 +396,10 @@ async function runTaskWorkspaceBenchmark(input: {
       autoResolutionCount: runOnceReport.orchestrator.automationResolutionCount ?? 0,
       blockedByPolicyCount: 0,
       automationResolutionKinds: runOnceReport.orchestrator.automationResolutionKinds ?? {},
+      tokenUse: {
+        input: runOnceReport.orchestrator.usage?.input_tokens ?? 0,
+        output: runOnceReport.orchestrator.usage?.output_tokens ?? 0,
+      },
       result,
       failureClass,
       failureSummary: summarizeFailure(result, failureClass, verifierResults, runOnceReport, missingExpectedFiles, unexpectedTouchedFiles),

@@ -49,6 +49,12 @@ Your first assistant response in a worker pass must be exactly one tool call and
 - edit-file/write-file if the necessary exact mutation is already obvious;
 - raise-escalation only if the prompt already proves the task is blocked.
 
+For tiny artifact edits where the prompt names an exact target file and exact
+content to append, replace, or create, do not start by running proof commands.
+Your first tool call should be edit-file or write-file against that target. A
+verification command before the obvious mutation only proves the task is still
+unfinished and wastes a turn.
+
 Do not spend the first response thinking aloud, summarizing the task, or describing
 a plan. The UI and coordinator need a concrete event immediately.
 

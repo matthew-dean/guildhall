@@ -228,6 +228,7 @@ interface PressureTestQuestionTurnForTest {
     id: string
     prompt: string
     why: string
+    choices?: string[]
     evidence: string[]
   }
   answerEndpoint: string
@@ -517,6 +518,44 @@ describe('ThreadTab', () => {
     expect(calls.filter(call => call.url.startsWith('/api/project/thread')).length).toBeGreaterThan(1)
     expect(calls.some(call => call.url.startsWith('/api/project?projectId=looma-knit'))).toBe(true)
     await waitFor(() => expect((answer as HTMLTextAreaElement).value).toBe(''))
+  })
+
+  it('renders pressure-test choices as direct answer buttons', async () => {
+    const { calls } = installFetchFakes([
+      pressureTestQuestionTurn({
+        id: 'pressure-test:pti-narrative-harness:project-direction-priority',
+        targetTitle: 'Narrative Harness',
+        domainId: 'project-planner',
+        domainTitle: 'Project direction',
+        question: {
+          id: 'project-direction-priority',
+          prompt: 'For the next few Narrative Harness tasks, should Guildhall bias toward reviewer-lane MVPs, author-facing editor UX, story-memory/schema foundations, or generation/evaluation loops?',
+          why: 'This changes which backlog items Guildhall should shape first and what evidence workers need.',
+          choices: [
+            'Reviewer-lane MVPs',
+            'Author-facing editor UX',
+            'Story-memory/schema foundations',
+            'Generation/evaluation loops',
+          ],
+          evidence: ['project-brief.md: Narrative Harness is fiction-writing software.'],
+        },
+        answerEndpoint: '/api/project/pressure-test/pti-narrative-harness/answer',
+      }),
+    ], 'pressure-test:pti-narrative-harness:project-direction-priority')
+
+    render(ThreadTab)
+    await screen.findByRole('button', { name: 'Reviewer-lane MVPs' })
+    expect(screen.queryByPlaceholderText('Answer with a sentence or short paragraph. Include constraints or success measures if they matter.')).toBeNull()
+
+    await userEvent.click(screen.getByRole('button', { name: 'Reviewer-lane MVPs' }))
+
+    await waitFor(() => {
+      expect(calls.some(call => (
+        call.url.includes('/api/project/pressure-test/pti-narrative-harness/answer') &&
+        call.body?.questionId === 'project-direction-priority' &&
+        call.body?.answer === 'Reviewer-lane MVPs'
+      ))).toBe(true)
+    })
   })
 
   it('keeps bulky task context and older activity behind progressive disclosure', async () => {

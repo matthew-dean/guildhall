@@ -110,7 +110,7 @@ describe('pressure-test intake state', () => {
 
     expect(intake.target.title).toBe('Looma + Knit project check-in')
     expect(intake.pendingQuestion?.prompt).toBe(
-      "What outcome would make this project successful?",
+      'What should Guildhall use as the main direction for Looma + Knit when shaping work?',
     )
   })
 
@@ -157,9 +157,63 @@ describe('pressure-test intake state', () => {
     const intake = await loadPressureTestIntake({ memoryDir, intakeId: 'pti-project-check-in' })
 
     expect(intake.target.title).toBe('Looma + Knit project check-in')
-    expect(intake.pendingQuestion?.prompt).toBe(
-      "What outcome would make this project successful?",
+    expect(intake.pendingQuestion?.prompt).not.toContain('Project check-in needed before Guildhall treats this workspace as current')
+  })
+
+  it('starts project check-in with a planned question from project evidence', async () => {
+    const memoryDir = await mkdtemp(path.join(tmpdir(), 'guildhall-pressure-'))
+    await writeFile(
+      path.join(memoryDir, 'project-brief.md'),
+      [
+        'Narrative Harness is fiction-writing software for building, drafting, and revising a coherent novel.',
+        'The project includes author voice, reader knowledge, coherence reviewers, and quiet commercial editor direction.',
+      ].join('\n'),
+      'utf-8',
     )
+
+    const intake = await createPressureTestIntake({
+      memoryDir,
+      target: { type: 'project', id: 'narrative-harness-project-check-in', title: 'Narrative Harness project check-in' },
+      rawRequest: 'Start a project check-in for Narrative Harness.',
+    })
+
+    expect(intake.pendingQuestion?.prompt).toBe(
+      'For the next few Narrative Harness tasks, should Guildhall bias toward reviewer-lane MVPs, author-facing editor UX, story-memory/schema foundations, or generation/evaluation loops?',
+    )
+    expect(intake.pendingQuestion?.choices).toEqual([
+      'Reviewer-lane MVPs',
+      'Author-facing editor UX',
+      'Story-memory/schema foundations',
+      'Generation/evaluation loops',
+    ])
+    expect(intake.pendingQuestion?.prompt).not.toMatch(/workflow|day-to-day|anything else/i)
+  })
+
+  it('records confused project-check-in answers as discarded and does not ask closeout questions', async () => {
+    const memoryDir = await mkdtemp(path.join(tmpdir(), 'guildhall-pressure-'))
+    await writeFile(
+      path.join(memoryDir, 'project-brief.md'),
+      'Narrative Harness is fiction-writing software for building and revising a coherent novel with author voice and reader knowledge reviewers.',
+      'utf-8',
+    )
+    const intake = await createPressureTestIntake({
+      memoryDir,
+      target: { type: 'project', id: 'narrative-harness-project-check-in', title: 'Narrative Harness project check-in' },
+      rawRequest: 'Start a project check-in for Narrative Harness.',
+    })
+
+    const next = await answerPressureTestQuestion({
+      memoryDir,
+      intakeId: intake.id,
+      questionId: intake.pendingQuestion!.id,
+      answer: "Hmm I don't understand the nature of the question?",
+    })
+
+    expect(next.outputs.projectQuestionPlanner?.discardedAnswers).toContainEqual(expect.objectContaining({
+      reason: 'confused',
+      answer: "Hmm I don't understand the nature of the question?",
+    }))
+    expect(next.pendingQuestion?.prompt ?? '').not.toContain('anything else')
   })
 
   it('records answers and asks a follow-up before closing vague product goals', async () => {
@@ -215,12 +269,9 @@ describe('pressure-test intake state', () => {
       answer,
     })
 
-    expect(next.pendingQuestion?.prompt).toBe(
-      "What should a worker or reviewer be able to see before Guildhall treats this project's visual direction as met?",
-    )
-    expect(next.pendingQuestion?.prompt).not.toContain('Should Guildhall remember')
-    expect(next.pendingQuestion?.prompt).not.toContain('muted palette')
-    expect(next.pendingQuestion?.why).toBe('Workers and reviewers need visible proof, not just a taste adjective.')
+    expect(next.status).toBe('complete')
+    expect(next.pendingQuestion).toBeNull()
+    expect(next.outputs.decisions).toContain(answer)
   })
 
   it('repairs persisted injected follow-up prompts on load', async () => {
@@ -278,6 +329,14 @@ describe('pressure-test intake state', () => {
     expect(loaded.domains[0]?.askedQuestions[0]?.prompt).toBe(
       "What should a worker or reviewer be able to see before Guildhall treats this project's visual direction as met?",
     )
+  })
+
+  it('does not contain the old answer-interpolation follow-up template', async () => {
+    const source = await import('node:fs/promises').then(fs =>
+      fs.readFile(new URL('../pressure-test-intake.ts', import.meta.url), 'utf-8'),
+    )
+
+    expect(source).not.toContain('What is one concrete example or threshold that would make "${input.answer}" true')
   })
 
   it('renders a spec from completed pressure-test domains', async () => {
@@ -363,7 +422,7 @@ describe('pressure-test intake state', () => {
     const memoryDir = await mkdtemp(path.join(tmpdir(), 'guildhall-pressure-'))
     const intake = await createPressureTestIntake({
       memoryDir,
-      target: { type: 'project', id: 'fair-labor-license', title: 'Fair Labor License' },
+      target: { type: 'feature', id: 'fair-labor-license', title: 'Fair Labor License' },
       rawRequest: 'Project check-in needed.',
     })
     const closeout = await answerPressureTestQuestion({

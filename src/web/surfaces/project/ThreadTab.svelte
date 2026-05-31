@@ -248,6 +248,7 @@
       id: string
       prompt: string
       why: string
+      choices?: string[]
       evidence: string[]
     }
     answerEndpoint: string
@@ -1943,8 +1944,8 @@
     }
   }
 
-  async function answerPressureTestQuestion(turn: PressureTestQuestionTurn): Promise<void> {
-    const answer = (pressureTestAnswers[turn.id] ?? '').trim()
+  async function answerPressureTestQuestion(turn: PressureTestQuestionTurn, answerOverride?: string): Promise<void> {
+    const answer = (answerOverride ?? pressureTestAnswers[turn.id] ?? '').trim()
     if (!answer) return
     busyTurnId = turn.id
     try {
@@ -2430,26 +2431,40 @@
                 {/if}
                 {#if t.status !== 'done'}
                   <Stack gap="2">
-                    <Textarea
-                      value={pressureTestAnswers[t.id] ?? ''}
-                      rows={4}
-                      placeholder="Answer with a sentence or short paragraph. Include constraints or success measures if they matter."
-                      disabled={busyTurnId === t.id}
-                      oninput={(v) => setPressureTestAnswer(t.id, v)}
-                    />
-                    <Row justify="end" gap="2">
-                      <Button
-                        variant="primary"
-                        disabled={busyTurnId === t.id || !(pressureTestAnswers[t.id] ?? '').trim()}
-                        onclick={() => answerPressureTestQuestion(t)}
-                      >
-                          {busyTurnId === t.id
-                            ? 'Submitting...'
-                            : hiddenPressureQuestionCount > 0
-                              ? 'Submit and continue'
-                              : 'Submit answer'}
-                      </Button>
-                    </Row>
+                    {#if t.question.choices?.length}
+                      <div class="pressure-choice-list" aria-label="Answer choices">
+                        {#each t.question.choices as choice}
+                          <Button
+                            variant="secondary"
+                            disabled={busyTurnId === t.id}
+                            onclick={() => answerPressureTestQuestion(t, choice)}
+                          >
+                            {choice}
+                          </Button>
+                        {/each}
+                      </div>
+                    {:else}
+                      <Textarea
+                        value={pressureTestAnswers[t.id] ?? ''}
+                        rows={4}
+                        placeholder="Answer with a sentence or short paragraph. Include constraints or success measures if they matter."
+                        disabled={busyTurnId === t.id}
+                        oninput={(v) => setPressureTestAnswer(t.id, v)}
+                      />
+                      <Row justify="end" gap="2">
+                        <Button
+                          variant="primary"
+                          disabled={busyTurnId === t.id || !(pressureTestAnswers[t.id] ?? '').trim()}
+                          onclick={() => answerPressureTestQuestion(t)}
+                        >
+                            {busyTurnId === t.id
+                              ? 'Submitting...'
+                              : hiddenPressureQuestionCount > 0
+                                ? 'Submit and continue'
+                                : 'Submit answer'}
+                        </Button>
+                      </Row>
+                    {/if}
                     {#if pressureTestErrors[t.id]}
                       <p class="error">{pressureTestErrors[t.id]}</p>
                     {/if}
@@ -3516,6 +3531,12 @@
     color: var(--text-soft);
     font-size: var(--fs-1);
     line-height: var(--lh-body);
+  }
+  .pressure-choice-list {
+    display: flex;
+    align-items: stretch;
+    gap: var(--s-2);
+    flex-wrap: wrap;
   }
   .git-story-callout {
     display: flex;

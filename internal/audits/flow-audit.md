@@ -77,6 +77,25 @@ babysit setup/import/provider/release states across multiple pages.
   browser measurements on `/projects/narrative-harness/overview/inbox` showed
   Item, State, Updated, and Action column starts aligned across the first
   visible rows.
+- [x] Replace generic project check-in interviewing with a project-evidence
+  question planner. Narrative Harness exposed a deeper failure than bad copy:
+  Guildhall was asking canned, low-discernment project questions, then turning
+  confused answers into more questions. Project pressure-test intake now builds
+  a small evidence packet from project docs and work state, infers durable
+  project facts, asks only the highest-impact unresolved fork, discards
+  confused/non-answer replies, and only asks bounded follow-ups when the answer
+  still leaves execution scope ambiguous. The existing Narrative Harness
+  check-in was repaired to one active `Project direction` question with direct
+  choices instead of a free-text blob. Verification: `pnpm vitest run
+  src/runtime/__tests__/project-question-planner.test.ts
+  src/runtime/__tests__/pressure-test-intake.test.ts
+  src/runtime/__tests__/thread.test.ts src/runtime/__tests__/inbox.test.ts
+  src/web/surfaces/project/__tests__/InboxTab.svelte.test.ts
+  src/web/surfaces/project/__tests__/ThreadTab.svelte.test.ts --reporter=dot`,
+  `pnpm build`, installed-app refresh, `/api/stale-server` `stale:false`, and
+  live browser proof on `/projects/narrative-harness/thread` showed the
+  reviewer-lane/editor-UX/story-memory/generation choice set with the old
+  injected-answer prompts absent from current cards.
 - [x] Remove pressure-test follow-up prompts that injected the previous answer
   into the next question. Live Narrative Harness Thread testing on 2026-05-30
   exposed a project check-in card asking `What is one concrete example or
@@ -5946,6 +5965,37 @@ local 0.7 release-candidate build at `http://localhost:7777/projects/narrative-h
     verified worker proof packets to review when the worker forgets the status
     transition. Report:
     `internal/benchmarks/runs/2026-05-30-live/artifact-local-semantic-work-units-rerun/artifact-local-cfc84d57-242d-4310-b0c8-710e1e1e2f92.md`.
+  - [x] Added process-cost telemetry and false-proof guardrails to the neutral
+    benchmark loop. Benchmark result rows now expose orchestrator ticks and
+    automation repair kinds, and summaries count per-run auto repairs instead
+    of hiding them. Design/improvement advisory passes now ignore generated
+    negative boundary sections, generated bookkeeping notes, file-path tokens,
+    and lean command-backed size-1 tasks so tiny artifact patches do not pick
+    up generic review paperwork. Gate-check now runs command-backed acceptance
+    criteria itself before a gate-checker agent can write narrated hard-gate
+    results; failed commands bounce directly to `in_progress` with real hard
+    gate output. Live diagnostic `artifact-local-process-cost-rerun4` proved
+    the guard by refusing to complete an unchanged `RELEASE_NOTES.md`, bouncing
+    `gate_check -> in_progress` via `acceptance-command-gates` twice. Remaining
+    sticky benchmark findings: the worker still tends to narrate success
+    instead of performing a tiny file edit, and generated `git diff` scope
+    commands must ignore Guildhall-owned `.guildhall` state. Evidence: focused
+    benchmark/improvement/design/orchestrator/task-sizing/task-decomposition/
+    task-queue tests passed with 36 selected tests; `pnpm build` passed.
+  - [x] Hardened the sticky benchmark fixes after the next live diagnostic
+    proved the worker could still write a polished self-critique, fake hard
+    gate results, and move to review without editing the target file. Workers
+    can no longer author hard gate results or mark command-backed automated
+    acceptance criteria as met through `update-task`; those facts must come
+    from observed gates. Review now rejects command-backed handoffs with likely
+    target files but no project-file diff before a reviewer can approve them.
+    Lean command-backed tasks skip qualitative review and go directly to
+    command gates, git-diff acceptance gates ignore Guildhall-owned
+    `.guildhall` bookkeeping, and worker guidance now tells exact tiny artifact
+    edits to edit/write first rather than proving the pre-mutation failure.
+    Evidence: focused agent/benchmark/improvement/design/orchestrator/
+    task-sizing/task-decomposition/task-queue tests passed with 43 selected
+    tests; `pnpm build` passed; `git diff --check` passed.
   - [x] Task-drawer escalation actions now follow ownership consistently.
     Guildhall-owned blockers such as gate retries and worker timeouts show a
     single agent action that resolves the escalation and resumes the task;

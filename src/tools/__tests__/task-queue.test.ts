@@ -334,6 +334,40 @@ describe('updateTask', () => {
     )).toEqual([])
   })
 
+  it('rejects worker-authored hard gate results', async () => {
+    const result = await updateTask({
+      tasksPath,
+      taskId: 'task-001',
+      gateResults: [{
+        gateId: 'AC-1',
+        type: 'hard',
+        passed: true,
+        checkedAt: '2026-05-30T00:00:00.000Z',
+        output: 'claimed pass',
+      }],
+    }, { current_agent_id: 'worker-agent' })
+
+    expect(result.success).toBe(false)
+    expect(result.error).toContain('Workers cannot author hard gate results')
+  })
+
+  it('rejects worker-authored met=true command-backed acceptance criteria', async () => {
+    const result = await updateTask({
+      tasksPath,
+      taskId: 'task-001',
+      acceptanceCriteria: [{
+        id: 'AC-1',
+        description: 'RELEASE_NOTES.md contains benchmark artifact evidence.',
+        verifiedBy: 'automated',
+        command: "grep -q 'benchmark artifact evidence' RELEASE_NOTES.md",
+        met: true,
+      }],
+    }, { current_agent_id: 'worker-agent' })
+
+    expect(result.success).toBe(false)
+    expect(result.error).toContain('Workers cannot mark command-backed acceptance criteria as met')
+  })
+
   it('rejects spec_review promotion when the spec buries unanswered human questions in markdown', async () => {
     const result = await updateTask({
       tasksPath,

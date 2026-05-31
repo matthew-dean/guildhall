@@ -260,6 +260,26 @@ function isFrontendUiReviewTask(task: Task): boolean {
   ].join('\n'))
 }
 
+function isLeanCommandBackedTask(task: Task): boolean {
+  return (
+    task.sizePlan?.score === 1 &&
+    task.sizePlan.reviewBudgetHint === 'lean' &&
+    task.acceptanceCriteria.some((criterion) => typeof criterion.command === 'string' && criterion.command.trim().length > 0)
+  )
+}
+
+function normalizeAcceptanceCommandForGuildhallState(command: string): string {
+  if (!/^git\s+diff\b/.test(command)) return command
+  const operatorMatch = command.match(/\s(?:\||&&|\|\||;)\s/)
+  const gitDiffSegment = operatorMatch ? command.slice(0, operatorMatch.index) : command
+  const remainder = operatorMatch ? command.slice(operatorMatch.index) : ''
+  if (/(?:^|\s)['"]?:!\.guildhall(?:\/\*\*)?['"]?(?:\s|$)/.test(gitDiffSegment)) return command
+  if (/\s--(?:\s|$)/.test(gitDiffSegment)) {
+    return `${gitDiffSegment} ':!.guildhall' ':!.guildhall/**'${remainder}`
+  }
+  return `${gitDiffSegment} -- ':!.guildhall' ':!.guildhall/**'${remainder}`
+}
+
 function collectVisualEvidenceRefs(task: Task): string[] {
   const sources = [
     ...task.notes.map((note) => note.content),
@@ -1003,6 +1023,11 @@ export interface OrchestratorAgent {
   readonly name: string
   readonly messages?: Array<{ role?: string; content?: unknown }>
   readonly calls?: unknown[]
+  readonly totalUsage?: {
+    input_tokens: number
+    output_tokens: number
+    cached_input_tokens?: number
+  }
   generate(prompt: string): Promise<{
     text: string
     messages?: Array<{ role?: string; content?: unknown }>
@@ -1074,6 +1099,11 @@ export interface OrchestratorRunOptions {
 
 export interface OrchestratorRunResult {
   ticks: number
+  usage?: {
+    input_tokens: number
+    output_tokens: number
+    cached_input_tokens?: number
+  }
   automationResolutionCount?: number
   automationResolutionKinds?: Record<string, number>
   stopReason:
@@ -1913,12 +1943,21 @@ function renderImmediateResumeInstructions(
   const latestSelfCritiqueIndex = findLatestWorkerSelfCritiqueIndex(task)
   const previousProofWasRejected =
     latestRejectionIndex >= 0 && latestRejectionIndex > latestSelfCritiqueIndex
+  const latestAcceptanceGateFailure = [...task.notes]
+    .reverse()
+    .find((note) =>
+      note.agentId === 'acceptance-command-gates' &&
+      note.role === 'gate-checker' &&
+      /Acceptance command gates failed/i.test(note.content),
+    )
   return [
     '### Immediate Resume Instructions',
     'You are resuming an in-progress coding task.',
-    ...(previousProofWasRejected
+    ...(previousProofWasRejected || latestAcceptanceGateFailure
       ? [
-          'Previous worker proof was rejected because it claimed completion without project-file changes.',
+          latestAcceptanceGateFailure
+            ? `Acceptance command gates failed on the last gate-check pass: ${latestAcceptanceGateFailure.content.split('\n').slice(0, 3).join(' ')}`
+            : 'Previous worker proof was rejected because it claimed completion without project-file changes.',
           'Your next action must be a concrete file mutation in the likely target file or a focused verification command that proves the target file already satisfies the spec.',
           'Do not write another self-critique, mark acceptance criteria as met, or attempt a review handoff until after that mutation or authoritative verification.',
         ]
@@ -2405,6 +2444,10 @@ export class Orchestrator {
     if (task.status === 'review' && hasPendingHandoffStep(task)) {
       const handoffOutcome = await this.advanceHandoffStepInline(task)
       if (handoffOutcome) return handoffOutcome
+    }
+
+    if (task.status === 'review' && isLeanCommandBackedTask(task)) {
+      return await this.advanceLeanCommandBackedReviewInline(task)
     }
 
     let reviewPlan: ReviewPlanRecord | null = null
@@ -4627,6 +4670,7 @@ export class Orchestrator {
       }
     }
     finalResult.ticks = tick
+    finalResult.usage = this.aggregateAgentUsage()
     finalResult.automationResolutionCount = this.runAutomationResolutionCount
     finalResult.automationResolutionKinds = Object.fromEntries(this.runAutomationResolutionKinds)
 
@@ -4646,6 +4690,28 @@ export class Orchestrator {
     }
 
     return finalResult
+  }
+
+  private aggregateAgentUsage(): NonNullable<OrchestratorRunResult['usage']> {
+    const agents = new Set<OrchestratorAgent>([
+      this.opts.agents.spec,
+      this.opts.agents.worker,
+      this.opts.agents.reviewer,
+      this.opts.agents.gateChecker,
+      ...Object.values(this.opts.agents.coordinators),
+    ])
+    const usage = {
+      input_tokens: 0,
+      output_tokens: 0,
+      cached_input_tokens: 0,
+    }
+    for (const agent of agents) {
+      if (!agent.totalUsage) continue
+      usage.input_tokens += agent.totalUsage.input_tokens
+      usage.output_tokens += agent.totalUsage.output_tokens
+      usage.cached_input_tokens += agent.totalUsage.cached_input_tokens ?? 0
+    }
+    return usage
   }
 
   /**
@@ -5541,6 +5607,58 @@ export class Orchestrator {
    * path does, and we enforce `maxRevisions` the same way.
    */
   /**
+   * Lean command-backed tasks do not need a qualitative reviewer pass once the
+   * worker hands off. The command gates are the reviewer for this class.
+   */
+  private async advanceLeanCommandBackedReviewInline(task: Task): Promise<TickOutcome> {
+    const beforeStatus = task.status
+    return await this.withQueueWriteLock(async () => {
+      const queue = await this.readQueue()
+      const current = queue.tasks.find((candidate) => candidate.id === task.id)
+      if (!current || current.status !== 'review') {
+        return {
+          kind: 'processed',
+          taskId: task.id,
+          agent: 'lean-command-review',
+          beforeStatus,
+          afterStatus: task.status,
+          transitioned: false,
+          revisionCount: task.revisionCount,
+        } as TickOutcome
+      }
+      current.status = 'gate_check'
+      current.assignedTo = 'gate-checker-agent'
+      current.updatedAt = this.now()
+      queue.lastUpdated = current.updatedAt
+      current.notes.push({
+        agentId: 'lean-command-review',
+        role: 'reviewer',
+        content:
+          'Lean command-backed task skipped qualitative review. Command-backed acceptance criteria will be verified by acceptance-command-gates.',
+        timestamp: current.updatedAt,
+      })
+      await this.writeQueue(queue)
+      await this.logTickProgress({
+        task: current,
+        agent: 'lean-command-review',
+        beforeStatus,
+        afterStatus: 'gate_check',
+        transitioned: true,
+        note: 'lean command-backed task handed directly to command gates',
+      })
+      return {
+        kind: 'processed',
+        taskId: current.id,
+        agent: 'lean-command-review',
+        beforeStatus,
+        afterStatus: 'gate_check',
+        transitioned: true,
+        revisionCount: current.revisionCount,
+      } as TickOutcome
+    })
+  }
+
+  /**
    * Command-backed acceptance criteria are hard gates. They must be verified
    * by observed command exits, not by a worker or gate-checker saying they ran.
    */
@@ -5555,7 +5673,7 @@ export class Orchestrator {
     const gates = commandCriteria.map(({ criterion }) => ({
       id: criterion.id,
       label: criterion.description || criterion.id,
-      command: criterion.command!.trim(),
+      command: normalizeAcceptanceCommandForGuildhallState(criterion.command!.trim()),
       timeoutMs: 120_000,
     }))
     const summary = await runGates({
@@ -7476,7 +7594,10 @@ export class Orchestrator {
     const likelyLocalWebStarter =
       likelyTargets.some((file) => /(?:^|\/)package\.json$/.test(file)) &&
       likelyTargets.some((file) => /(?:^|\/)index\.html$/.test(file))
-    if (!likelyLocalWebStarter) return null
+    const hasCommandBackedAcceptance = task.acceptanceCriteria.some((criterion) =>
+      typeof criterion.command === 'string' && criterion.command.trim().length > 0,
+    )
+    if (!likelyLocalWebStarter && !hasCommandBackedAcceptance) return null
     const dirtyTaskFiles = await this.changedFilesForTask(task)
     if (dirtyTaskFiles.length > 0) return null
 

@@ -3,6 +3,15 @@ import fsp from 'node:fs/promises'
 import path from 'node:path'
 import { z } from 'zod'
 import { atomicWriteText } from '@guildhall/sessions'
+import {
+  buildProjectQuestionEvidence,
+  classifyProjectAnswer,
+  inferProjectMemory,
+  planFollowUpForAnswer,
+  planNextProjectQuestion,
+  type ProjectQuestionAnswer,
+  type ProjectQuestionEvidenceFile,
+} from './project-question-planner.js'
 
 const DomainStatus = z.enum([
   'seeded',
@@ -21,6 +30,7 @@ export const PressureTestQuestion = z.object({
   domainId: z.string(),
   prompt: z.string(),
   why: z.string(),
+  choices: z.array(z.string()).optional(),
   evidence: z.array(z.string()).default([]),
   askedAt: z.string(),
 })
@@ -44,6 +54,25 @@ const PressureTestDomain = z.object({
   summary: z.string().optional(),
 })
 
+const ProjectQuestionPlannerMemory = z.object({
+  inferredFacts: z.array(z.object({
+    id: z.string(),
+    text: z.string(),
+    source: z.string(),
+  })).default([]),
+  decisions: z.array(z.object({
+    id: z.string(),
+    text: z.string(),
+    sourceQuestionId: z.string(),
+  })).default([]),
+  discardedAnswers: z.array(z.object({
+    questionId: z.string(),
+    reason: z.enum(['confused', 'non_answer', 'already_known', 'not_actionable']),
+    answer: z.string(),
+  })).default([]),
+  askedCandidateIds: z.array(z.string()).default([]),
+})
+
 export const PressureTestIntake = z.object({
   id: z.string(),
   rawRequest: z.string(),
@@ -61,6 +90,7 @@ export const PressureTestIntake = z.object({
     decisions: z.array(z.string()).default([]),
     languageMapCandidates: z.array(z.string()).default([]),
     taskSplitCandidates: z.array(z.string()).default([]),
+    projectQuestionPlanner: ProjectQuestionPlannerMemory.optional(),
   }),
   createdAt: z.string(),
   updatedAt: z.string(),
@@ -84,6 +114,11 @@ export async function createPressureTestIntake(input: {
   rawRequest: string
 }): Promise<PressureTestIntake> {
   const now = new Date().toISOString()
+  if (input.target.type === 'project') {
+    const intake = await createProjectQuestionIntake(input.memoryDir, input.target, input.rawRequest, now)
+    await savePressureTestIntake(input.memoryDir, intake)
+    return intake
+  }
   const domains = seedDomains()
   domains[0]!.status = 'active'
   const intake: PressureTestIntake = {
@@ -134,6 +169,9 @@ export async function answerPressureTestQuestion(input: {
     memoryDir: input.memoryDir,
     intakeId: input.intakeId,
   })
+  if (intake.target.type === 'project') {
+    return answerProjectQuestion(input.memoryDir, intake, input.questionId, input.answer)
+  }
   const domain = intake.domains.find(d => d.id === intake.activeDomainId)
   if (!domain || !intake.pendingQuestion || intake.pendingQuestion.id !== input.questionId) {
     throw new Error(`Question ${input.questionId} is not pending`)
@@ -298,6 +336,185 @@ export function pressureTestPath(memoryDir: string, intakeId: string): string {
 
 function pressureTestDir(memoryDir: string): string {
   return path.join(memoryDir, 'pressure-test-intake')
+}
+
+async function createProjectQuestionIntake(
+  memoryDir: string,
+  target: PressureTestIntake['target'],
+  rawRequest: string,
+  now: string,
+): Promise<PressureTestIntake> {
+  const files = await loadProjectQuestionEvidenceFiles(memoryDir)
+  const projectName = cleanProjectCheckInTitle(target.title)
+  const evidence = buildProjectQuestionEvidence({
+    projectId: target.id,
+    projectName,
+    files,
+    currentAnswers: [],
+  })
+  const memory = inferProjectMemory(evidence)
+  const plan = planNextProjectQuestion({
+    evidence,
+    answeredQuestions: [],
+    askedCandidateIds: [],
+  })
+  return {
+    id: `pti-${target.id.replace(/[^a-zA-Z0-9-]/g, '-').toLowerCase()}`,
+    rawRequest,
+    target,
+    status: plan.kind === 'ask' ? 'active' : 'complete',
+    activeDomainId: plan.kind === 'ask' ? 'project-planner' : null,
+    pendingQuestion: plan.kind === 'ask'
+      ? {
+          id: plan.question.id,
+          domainId: 'project-planner',
+          prompt: plan.question.prompt,
+          why: plan.question.why,
+          choices: plan.question.choices,
+          evidence: plan.question.evidence,
+          askedAt: now,
+        }
+      : null,
+    domains: seedDomains(),
+    outputs: {
+      assumptions: [],
+      decisions: [],
+      languageMapCandidates: [],
+      taskSplitCandidates: [],
+      projectQuestionPlanner: {
+        inferredFacts: memory.inferredFacts,
+        decisions: [],
+        discardedAnswers: [],
+        askedCandidateIds: plan.kind === 'ask' ? [plan.question.id] : [],
+      },
+    },
+    createdAt: now,
+    updatedAt: now,
+  }
+}
+
+async function answerProjectQuestion(
+  memoryDir: string,
+  intake: PressureTestIntake,
+  questionId: string,
+  answer: string,
+): Promise<PressureTestIntake> {
+  if (!intake.pendingQuestion || intake.pendingQuestion.id !== questionId) {
+    throw new Error(`Question ${questionId} is not pending`)
+  }
+
+  const now = new Date().toISOString()
+  const currentAnswer: ProjectQuestionAnswer = {
+    questionId,
+    prompt: intake.pendingQuestion.prompt,
+    answer,
+  }
+  const planner = intake.outputs.projectQuestionPlanner ?? {
+    inferredFacts: [],
+    decisions: [],
+    discardedAnswers: [],
+    askedCandidateIds: [],
+  }
+  const classification = classifyProjectAnswer(currentAnswer)
+  if (classification.kind === 'decision') {
+    planner.decisions.push({
+      id: `${questionId}-decision`,
+      text: classification.text,
+      sourceQuestionId: questionId,
+    })
+    if (!intake.outputs.decisions.includes(classification.text)) {
+      intake.outputs.decisions.push(classification.text)
+    }
+  } else {
+    planner.discardedAnswers.push({
+      questionId,
+      reason: classification.reason,
+      answer,
+    })
+  }
+
+  const followUp = planFollowUpForAnswer(currentAnswer)
+  if (followUp.kind === 'ask' && !planner.askedCandidateIds.includes(followUp.question.id)) {
+    planner.askedCandidateIds.push(followUp.question.id)
+    intake.status = 'active'
+    intake.activeDomainId = 'project-planner'
+    intake.pendingQuestion = {
+      id: followUp.question.id,
+      domainId: 'project-planner',
+      prompt: followUp.question.prompt,
+      why: followUp.question.why,
+      choices: followUp.question.choices,
+      evidence: followUp.question.evidence,
+      askedAt: now,
+    }
+  } else {
+    const files = await loadProjectQuestionEvidenceFiles(memoryDir)
+    const answeredQuestions = planner.decisions.map(decision => ({
+      questionId: decision.sourceQuestionId,
+      prompt: '',
+      answer: decision.text,
+    }))
+    const evidence = buildProjectQuestionEvidence({
+      projectId: intake.target.id,
+      projectName: cleanProjectCheckInTitle(intake.target.title),
+      files,
+      currentAnswers: answeredQuestions,
+    })
+    const next = planNextProjectQuestion({
+      evidence,
+      answeredQuestions,
+      askedCandidateIds: planner.askedCandidateIds,
+    })
+    if (next.kind === 'ask') {
+      planner.askedCandidateIds.push(next.question.id)
+      intake.status = 'active'
+      intake.activeDomainId = 'project-planner'
+      intake.pendingQuestion = {
+        id: next.question.id,
+        domainId: 'project-planner',
+        prompt: next.question.prompt,
+        why: next.question.why,
+        choices: next.question.choices,
+        evidence: next.question.evidence,
+        askedAt: now,
+      }
+    } else {
+      intake.status = 'complete'
+      intake.activeDomainId = null
+      intake.pendingQuestion = null
+    }
+  }
+
+  intake.outputs.projectQuestionPlanner = planner
+  intake.updatedAt = now
+  await savePressureTestIntake(memoryDir, intake)
+  return intake
+}
+
+async function loadProjectQuestionEvidenceFiles(memoryDir: string): Promise<ProjectQuestionEvidenceFile[]> {
+  const projectRoot = path.dirname(memoryDir)
+  const candidates = [
+    { file: path.join(memoryDir, 'project-brief.md'), source: 'project-brief.md' },
+    { file: path.join(memoryDir, 'TASKS.json'), source: '.guildhall/TASKS.json' },
+    { file: path.join(projectRoot, 'README.md'), source: 'README.md' },
+    { file: path.join(projectRoot, 'docs', 'index.md'), source: 'docs/index.md' },
+  ]
+  const files: ProjectQuestionEvidenceFile[] = []
+  for (const candidate of candidates) {
+    try {
+      files.push({
+        path: candidate.source,
+        text: await fsp.readFile(candidate.file, 'utf-8'),
+      })
+    } catch {
+      // Missing project evidence files are normal for fresh projects.
+    }
+  }
+  return files
+}
+
+function cleanProjectCheckInTitle(title: string): string {
+  return title.replace(/\s+project check-in$/i, '')
 }
 
 function seedDomains(): Array<z.infer<typeof PressureTestDomain>> {
@@ -570,6 +787,48 @@ function normalizePressureTestIntake(intake: PressureTestIntake): PressureTestIn
     }
   }
 
+  if (intake.target.type === 'project') {
+    const planner = intake.outputs.projectQuestionPlanner ?? {
+      inferredFacts: [],
+      decisions: [],
+      discardedAnswers: [],
+      askedCandidateIds: [],
+    }
+    const repairedDomains = intake.domains.map(domain => {
+      const repairedQuestions = domain.askedQuestions.map(question => {
+        if (question.answered && question.answer) {
+          const classification = classifyProjectAnswer({
+            questionId: question.questionId,
+            prompt: question.prompt,
+            answer: question.answer,
+          })
+          if (classification.kind === 'discard' && !planner.discardedAnswers.some(existing => existing.questionId === question.questionId)) {
+            planner.discardedAnswers.push({
+              questionId: question.questionId,
+              reason: classification.reason,
+              answer: question.answer,
+            })
+          }
+        }
+        return question
+      })
+      return {
+        ...domain,
+        askedQuestions: repairedQuestions,
+        ...(domain.summary && isConfusedProjectSummary(domain.summary) ? { summary: undefined } : {}),
+      }
+    })
+    intake = {
+      ...intake,
+      domains: repairedDomains,
+      outputs: {
+        ...intake.outputs,
+        languageMapCandidates: intake.outputs.languageMapCandidates.filter(candidate => !/^Hmm I:/.test(candidate)),
+        projectQuestionPlanner: planner,
+      },
+    }
+  }
+
   return intake
 }
 
@@ -599,6 +858,10 @@ function normalizeQuestionCopy<T extends { prompt: string; why?: string }>(
 
 function needsConcreteFollowUp(answer: string): boolean {
   return /\b(rigorous|annoying|fast|safe|simple|good|strict|polished|clear|friendly|better|worse)\b/i.test(answer)
+}
+
+function isConfusedProjectSummary(summary: string): boolean {
+  return /\b(i do not understand|i don't understand|nature of the question|confusing)\b/i.test(summary)
 }
 
 function isCloseoutComplete(answer: string): boolean {

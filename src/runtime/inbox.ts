@@ -124,6 +124,9 @@ function cleanPressureTargetTitle(title: string): string {
 function pressureQuestionDetail(prompt: string, targetTitle: string): string {
   const target = cleanPressureTargetTitle(targetTitle)
   const trimmed = prompt.trim()
+  if (trimmed.length > 0) {
+    return userFacingText(trimmed, 'Guildhall needs one answer before it can keep going.')
+  }
   if (/^What outcome would make this project successful\?$/i.test(trimmed)) {
     return `What would make ${target} successful?`
   }

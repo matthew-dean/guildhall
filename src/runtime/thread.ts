@@ -254,6 +254,7 @@ export interface PressureTestQuestionTurn extends TurnBase {
     id: string
     prompt: string
     why: string
+    choices?: string[] | undefined
     evidence: string[]
   }
   answerEndpoint: string
@@ -842,17 +843,21 @@ function pressureTestTurns(projectPath: string): ThreadTurn[] {
 
     if (intake.status === 'active' && intake.pendingQuestion) {
       const domain = intake.domains.find(d => d.id === intake.pendingQuestion?.domainId)
+      const domainTitle = intake.pendingQuestion.domainId === 'project-planner'
+        ? 'Project direction'
+        : domain?.title ?? intake.pendingQuestion.domainId
       turns.push({
         kind: 'pressure_test_question',
         id: `pressure-test:${intake.id}:${intake.pendingQuestion.id}`,
         intakeId: intake.id,
         targetTitle: intake.target.title,
         domainId: intake.pendingQuestion.domainId,
-        domainTitle: domain?.title ?? intake.pendingQuestion.domainId,
+        domainTitle,
         question: {
           id: intake.pendingQuestion.id,
           prompt: intake.pendingQuestion.prompt,
           why: intake.pendingQuestion.why,
+          choices: intake.pendingQuestion.choices,
           evidence: intake.pendingQuestion.evidence,
         },
         answerEndpoint: `/api/project/pressure-test/${encodeURIComponent(intake.id)}/answer`,

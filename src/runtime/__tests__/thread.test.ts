@@ -75,6 +75,88 @@ describe('buildThread', () => {
     }
   })
 
+  it('projects planned project check-in questions as project direction turns', async () => {
+    const projectPath = await mkdtemp(path.join(tmpdir(), 'guildhall-thread-'))
+    try {
+      await mkdir(path.join(projectPath, '.guildhall', 'pressure-test-intake'), { recursive: true })
+      await writeFile(
+        path.join(projectPath, '.guildhall', 'pressure-test-intake', 'pti-narrative-harness-project-check-in.json'),
+        JSON.stringify({
+          id: 'pti-narrative-harness-project-check-in',
+          rawRequest: 'Start a project check-in for Narrative Harness.',
+          target: { type: 'project', id: 'narrative-harness-project-check-in', title: 'Narrative Harness project check-in' },
+          status: 'active',
+          activeDomainId: 'project-planner',
+          pendingQuestion: {
+            id: 'project-direction-priority',
+            domainId: 'project-planner',
+            prompt: 'For the next few Narrative Harness tasks, should Guildhall bias toward reviewer-lane MVPs, author-facing editor UX, story-memory/schema foundations, or generation/evaluation loops?',
+            why: 'This changes which backlog items Guildhall should shape first and what evidence workers need.',
+            choices: [
+              'Reviewer-lane MVPs',
+              'Author-facing editor UX',
+              'Story-memory/schema foundations',
+              'Generation/evaluation loops',
+            ],
+            evidence: ['README.md: fiction-writing software'],
+            askedAt: '2026-05-31T00:00:00.000Z',
+          },
+          domains: [],
+          outputs: {
+            assumptions: [],
+            decisions: [],
+            languageMapCandidates: [],
+            taskSplitCandidates: [],
+            projectQuestionPlanner: {
+              inferredFacts: [],
+              decisions: [],
+              discardedAnswers: [],
+              askedCandidateIds: ['project-direction-priority'],
+            },
+          },
+          createdAt: '2026-05-31T00:00:00.000Z',
+          updatedAt: '2026-05-31T00:00:00.000Z',
+        }),
+      )
+
+      const snapshot: ProjectSnapshot = {
+        projectPath,
+        config: {
+          id: 'narrative-harness',
+          name: 'Narrative Harness',
+          bootstrap: { verifiedAt: new Date().toISOString() },
+          coordinators: [{ id: 'harness', name: 'Harness' }],
+        },
+        bootstrapVerified: true,
+        hasProvider: true,
+        hasDirection: true,
+        workspaceImportReviewed: true,
+        taskCount: 0,
+        wizardState: emptyWizardsState(),
+      }
+
+      const thread = buildThread({ projectPath, snapshot })
+      const question = thread.turns.find(turn => turn.kind === 'pressure_test_question')
+
+      expect(question).toMatchObject({
+        kind: 'pressure_test_question',
+        domainTitle: 'Project direction',
+        question: {
+          choices: [
+            'Reviewer-lane MVPs',
+            'Author-facing editor UX',
+            'Story-memory/schema foundations',
+            'Generation/evaluation loops',
+          ],
+        },
+      })
+      expect(JSON.stringify(thread.turns)).not.toContain('anything else Guildhall should know')
+      expect(JSON.stringify(thread.turns)).not.toContain('workflow or day-to-day constraint')
+    } finally {
+      await rm(projectPath, { recursive: true, force: true })
+    }
+  })
+
   it('projects a project check-in card when the project has not answered Guildhall project questions yet', async () => {
     const projectPath = await mkdtemp(path.join(tmpdir(), 'guildhall-thread-'))
     try {

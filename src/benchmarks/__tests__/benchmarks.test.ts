@@ -235,6 +235,11 @@ describe('benchmark runners', () => {
             ticks: 6,
             stopReason: 'all_terminal',
             stopMessage: 'done',
+            usage: {
+              input_tokens: 123,
+              output_tokens: 45,
+              cached_input_tokens: 100,
+            },
             automationResolutionCount: 2,
             automationResolutionKinds: {
               repair_product_brief: 1,
@@ -252,6 +257,7 @@ describe('benchmark runners', () => {
     expect(report.results[0]?.result).toBe('pass')
     expect(report.results[0]?.orchestratorTicks).toBe(6)
     expect(report.results[0]?.turns).toBe(6)
+    expect(report.results[0]?.tokenUse).toEqual({ input: 123, output: 45 })
     expect(report.results[0]?.autoResolutionCount).toBe(2)
     expect(report.results[0]?.automationResolutionKinds).toEqual({
       repair_product_brief: 1,

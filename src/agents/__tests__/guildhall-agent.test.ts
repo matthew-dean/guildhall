@@ -469,6 +469,8 @@ describe('agent factories', () => {
     expect(prompt).toContain('## No plan-only turns')
     expect(prompt).toContain('Every assistant turn must make observable progress')
     expect(prompt).toContain('If you know the next step, take it with a tool call')
+    expect(prompt).toContain('For tiny artifact edits')
+    expect(prompt).toContain('Your first tool call should be edit-file or write-file')
   })
 
   it('createWorkerAgent requires a minimum-scope self-review before handoff', async () => {

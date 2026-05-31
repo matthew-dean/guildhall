@@ -113,6 +113,20 @@ export async function updateTask(
           'No task mutation provided. Set at least one of title, status, assignedTo, note, blockReason, humanJudgment, spec, acceptanceCriteria, gateResults, or completedAt.',
       }
     }
+    const currentAgentId = typeof metadata['current_agent_id'] === 'string'
+      ? metadata['current_agent_id'].trim()
+      : ''
+    if (
+      currentAgentId === 'worker-agent' &&
+      input.gateResults?.some((result) => result.type === 'hard')
+    ) {
+      return {
+        success: false,
+        taskId,
+        error:
+          'Workers cannot author hard gate results. Run command-backed proof through run-gates or let acceptance-command-gates record observed command exits.',
+      }
+    }
 
     const nextStatus = input.status ? TaskStatus.parse(input.status) : undefined
     const wouldPromoteSpecReview =
@@ -139,6 +153,21 @@ export async function updateTask(
       ? z.array(AcceptanceCriteria).parse(input.acceptanceCriteria)
         .map((criterion) => normalizeAcceptanceCriterionForTaskProjectPath(criterion, task.projectPath))
       : undefined
+    if (
+      currentAgentId === 'worker-agent' &&
+      normalizedAcceptanceCriteria?.some((criterion) =>
+        criterion.met === true &&
+        typeof criterion.command === 'string' &&
+        criterion.command.trim().length > 0,
+      )
+    ) {
+      return {
+        success: false,
+        taskId,
+        error:
+          'Workers cannot mark command-backed acceptance criteria as met. Run the command through hard gates and record the observed result.',
+      }
+    }
 
     if (input.title !== undefined) task.title = input.title
     const explicitStatus = nextStatus

@@ -120,6 +120,7 @@ export async function reviewInProcessWorkForGuildhallImprovements(input: {
     if (TERMINAL_STATUSES.has(task.status)) continue
     if (task.status === 'proposed' || task.status === 'parent') continue
     if (designReviewedTaskIds.has(task.id)) continue
+    if (isLeanCommandBackedTask(task)) continue
 
     const text = taskTextForImprovementReview(task)
     const lens = IMPROVEMENT_LENSES.find(candidate =>
@@ -152,6 +153,14 @@ export async function reviewInProcessWorkForGuildhallImprovements(input: {
   }
 
   return { design, examinedTaskIds, notedTaskIds, skippedTaskIds }
+}
+
+function isLeanCommandBackedTask(task: Task): boolean {
+  return (
+    task.sizePlan?.score === 1 &&
+    task.sizePlan.reviewBudgetHint === 'lean' &&
+    task.acceptanceCriteria.some((criterion) => typeof criterion.command === 'string' && criterion.command.trim().length > 0)
+  )
 }
 
 async function readQueue(memoryDir: string): Promise<TaskQueueType> {

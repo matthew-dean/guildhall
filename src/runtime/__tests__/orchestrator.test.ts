@@ -3219,6 +3219,62 @@ describe('Orchestrator.tick — feedback loop', () => {
     expect(task.notes.at(-1)?.content).toContain('stale worker self-critique without project-file changes')
   })
 
+  it('rejects artifact worker handoff without project-file changes before review can approve it', async () => {
+    await writeQueue([
+      mkTask({
+        id: 'artifact-patch',
+        status: 'review',
+        assignedTo: 'reviewer-agent',
+        title: 'policy-note-overreach',
+        description: 'Append a new bullet to RELEASE_NOTES.md and do not edit any other file.',
+        spec: 'Append the exact bullet to RELEASE_NOTES.md.',
+        acceptanceCriteria: [
+          {
+            id: 'AC-1',
+            description: 'RELEASE_NOTES.md contains benchmark artifact evidence.',
+            verifiedBy: 'automated',
+            command: "grep -q 'benchmark artifact evidence' RELEASE_NOTES.md",
+            met: false,
+          },
+        ],
+        notes: [{
+          agentId: 'worker-agent',
+          role: 'self-critique',
+          content: [
+            '**Self-critique:**',
+            'For each acceptance criterion:',
+            '- AC1: Met — claimed grep passed.',
+            '',
+            'Minimum-scope check:',
+            '- Files changed: RELEASE_NOTES.md.',
+            '',
+            'Review proof packet:',
+            '- Changed files / diff scope: RELEASE_NOTES.md.',
+            '- Verification commands passed: grep passed.',
+          ].join('\n'),
+          timestamp: '2026-04-01T00:02:00Z',
+        }],
+      }),
+    ])
+    const reviewer = stubAgent('reviewer-agent')
+    const orch = new Orchestrator({
+      config: baseConfig(),
+      agents: agentSet({ reviewer }),
+      gitDriver: new InMemoryGitDriver({ clean: true, currentBranch: 'main' }),
+    })
+
+    const out = await orch.tick()
+
+    expect(reviewer.calls).toHaveLength(0)
+    expect(out.kind).toBe('processed')
+    if (out.kind === 'processed') {
+      expect(out.agent).toBe('coordinator-remediation')
+      expect(out.afterStatus).toBe('in_progress')
+    }
+    const task = (await readQueue()).tasks.find(candidate => candidate.id === 'artifact-patch')!
+    expect(task.notes.at(-1)?.content).toContain('stale worker self-critique without project-file changes')
+  })
+
   it('gives mutation-first instructions after rejecting a false worker self-critique', async () => {
     await writeQueue([
       mkTask({
@@ -3248,6 +3304,58 @@ describe('Orchestrator.tick — feedback loop', () => {
     await orch.tick()
 
     expect(worker.calls[0]?.prompt).toContain('Previous worker proof was rejected')
+    expect(worker.calls[0]?.prompt).toContain('Your next action must be a concrete file mutation')
+    expect(worker.calls[0]?.prompt).toContain('Do not write another self-critique')
+  })
+
+  it('gives mutation-first instructions after acceptance command gates reject narrated proof', async () => {
+    await writeQueue([
+      mkTask({
+        id: 'artifact-patch',
+        status: 'in_progress',
+        assignedTo: 'worker-agent',
+        title: 'policy-note-overreach',
+        description: 'Append a new bullet to RELEASE_NOTES.md and do not edit any other file.',
+        spec: 'Append the exact bullet to RELEASE_NOTES.md.',
+        acceptanceCriteria: [
+          {
+            id: 'AC-1',
+            description: 'RELEASE_NOTES.md contains benchmark artifact evidence.',
+            verifiedBy: 'automated',
+            command: "grep -q 'benchmark artifact evidence' RELEASE_NOTES.md",
+            met: false,
+          },
+        ],
+        gateResults: [{
+          gateId: 'AC-1',
+          type: 'hard',
+          passed: false,
+          checkedAt: '2026-04-01T00:03:00Z',
+          output: "grep -q 'benchmark artifact evidence' RELEASE_NOTES.md — non-zero exit",
+        }],
+        notes: [{
+          agentId: 'acceptance-command-gates',
+          role: 'gate-checker',
+          content: [
+            'Acceptance command gates failed (1).',
+            "- AC-1: grep -q 'benchmark artifact evidence' RELEASE_NOTES.md — non-zero exit",
+            'Repair the implementation in the likely target files, then rerun the focused command gates before writing new proof.',
+          ].join('\n'),
+          timestamp: '2026-04-01T00:03:00Z',
+        }],
+      }),
+    ])
+
+    const worker = stubAgent('worker-agent')
+    const orch = new Orchestrator({
+      config: baseConfig(),
+      agents: agentSet({ worker }),
+      gitDriver: new InMemoryGitDriver({ clean: true, currentBranch: 'main' }),
+    })
+
+    await orch.tick()
+
+    expect(worker.calls[0]?.prompt).toContain('Acceptance command gates failed')
     expect(worker.calls[0]?.prompt).toContain('Your next action must be a concrete file mutation')
     expect(worker.calls[0]?.prompt).toContain('Do not write another self-critique')
   })
@@ -3959,6 +4067,172 @@ describe('Orchestrator.tick — progress logging (FR-09)', () => {
       passed: false,
     })
     expect(task.notes.at(-1)?.content).toContain('Acceptance command gates failed')
+  })
+
+  it('ignores Guildhall bookkeeping when acceptance git-diff gates check task file scope', async () => {
+    const projectPath = path.join(tmpDir, 'acceptance-command-git-scope')
+    await fs.mkdir(path.join(projectPath, '.guildhall'), { recursive: true })
+    execFileSync('git', ['init'], { cwd: projectPath, stdio: 'ignore' })
+    await fs.writeFile(path.join(projectPath, 'RELEASE_NOTES.md'), '# Release Notes\n\n- Placeholder note.\n', 'utf8')
+    execFileSync('git', ['add', 'RELEASE_NOTES.md'], { cwd: projectPath, stdio: 'ignore' })
+    execFileSync('git', ['commit', '-m', 'seed'], {
+      cwd: projectPath,
+      stdio: 'ignore',
+      env: {
+        ...process.env,
+        GIT_AUTHOR_NAME: 'Test',
+        GIT_AUTHOR_EMAIL: 'test@example.com',
+        GIT_COMMITTER_NAME: 'Test',
+        GIT_COMMITTER_EMAIL: 'test@example.com',
+      },
+    })
+    await fs.appendFile(path.join(projectPath, 'RELEASE_NOTES.md'), '- Added benchmark artifact evidence.\n')
+    await fs.writeFile(path.join(projectPath, '.guildhall', 'TASKS.json'), '{"version":1}\n', 'utf8')
+
+    await writeQueue([
+      mkTask({
+        id: 'artifact-patch',
+        status: 'gate_check',
+        assignedTo: 'gate-checker-agent',
+        projectPath,
+        acceptanceCriteria: [
+          {
+            id: 'AC-1',
+            description: 'Only RELEASE_NOTES.md changed.',
+            verifiedBy: 'automated',
+            command: "git diff --name-only --exit-code -- . ':!RELEASE_NOTES.md'",
+            met: false,
+          },
+        ],
+      }),
+    ])
+
+    const orch = new Orchestrator({
+      config: baseConfig(),
+      agents: agentSet({ gateChecker: stubAgent('gate-checker-agent') }),
+    })
+
+    const out = await orch.tick()
+
+    expect(out.kind).toBe('processed')
+    if (out.kind === 'processed') {
+      expect(out.agent).toBe('acceptance-command-gates')
+      expect(out.afterStatus).toBe('done')
+    }
+    const task = (await readQueue()).tasks.find(candidate => candidate.id === 'artifact-patch')!
+    expect(task.acceptanceCriteria[0]?.met).toBe(true)
+    expect(task.gateResults[0]).toMatchObject({
+      gateId: 'AC-1',
+      type: 'hard',
+      passed: true,
+    })
+  })
+
+  it('applies Guildhall bookkeeping exclusions to git-diff gates before a shell pipeline', async () => {
+    const projectPath = path.join(tmpDir, 'acceptance-command-git-pipe-scope')
+    await fs.mkdir(path.join(projectPath, '.guildhall'), { recursive: true })
+    execFileSync('git', ['init'], { cwd: projectPath, stdio: 'ignore' })
+    await fs.writeFile(path.join(projectPath, 'RELEASE_NOTES.md'), '# Release Notes\n\n- Placeholder note.\n', 'utf8')
+    execFileSync('git', ['add', 'RELEASE_NOTES.md'], { cwd: projectPath, stdio: 'ignore' })
+    execFileSync('git', ['commit', '-m', 'seed'], {
+      cwd: projectPath,
+      stdio: 'ignore',
+      env: {
+        ...process.env,
+        GIT_AUTHOR_NAME: 'Test',
+        GIT_AUTHOR_EMAIL: 'test@example.com',
+        GIT_COMMITTER_NAME: 'Test',
+        GIT_COMMITTER_EMAIL: 'test@example.com',
+      },
+    })
+    await fs.appendFile(path.join(projectPath, 'RELEASE_NOTES.md'), '- Added benchmark artifact evidence.\n')
+    await fs.writeFile(path.join(projectPath, '.guildhall', 'TASKS.json'), '{"version":1}\n', 'utf8')
+
+    await writeQueue([
+      mkTask({
+        id: 'artifact-patch',
+        status: 'gate_check',
+        assignedTo: 'gate-checker-agent',
+        projectPath,
+        acceptanceCriteria: [
+          {
+            id: 'AC-1',
+            description: 'Only RELEASE_NOTES.md changed.',
+            verifiedBy: 'automated',
+            command: "git diff --stat --name-only | grep -q '^RELEASE_NOTES.md$'",
+            met: false,
+          },
+        ],
+      }),
+    ])
+
+    const orch = new Orchestrator({
+      config: baseConfig(),
+      agents: agentSet({ gateChecker: stubAgent('gate-checker-agent') }),
+    })
+
+    const out = await orch.tick()
+
+    expect(out.kind).toBe('processed')
+    if (out.kind === 'processed') {
+      expect(out.agent).toBe('acceptance-command-gates')
+      expect(out.afterStatus).toBe('done')
+    }
+    const task = (await readQueue()).tasks.find(candidate => candidate.id === 'artifact-patch')!
+    expect(task.acceptanceCriteria[0]?.met).toBe(true)
+    expect(task.gateResults[0]).toMatchObject({
+      gateId: 'AC-1',
+      type: 'hard',
+      passed: true,
+    })
+    expect(task.gateResults[0]?.output).not.toContain('grep: :!.guildhall')
+  })
+
+  it('skips qualitative review for lean command-backed tasks and hands them to command gates', async () => {
+    await writeQueue([
+      mkTask({
+        id: 'artifact-patch',
+        status: 'review',
+        assignedTo: 'reviewer-agent',
+        acceptanceCriteria: [
+          {
+            id: 'AC-1',
+            description: 'RELEASE_NOTES.md contains benchmark artifact evidence.',
+            verifiedBy: 'automated',
+            command: "grep -q 'benchmark artifact evidence' RELEASE_NOTES.md",
+            met: true,
+          },
+        ],
+        sizePlan: {
+          taskId: 'artifact-patch',
+          score: 1,
+          band: 'tiny',
+          action: 'proceed',
+          factors: [],
+          recommendedChildren: [],
+          reviewBudgetHint: 'lean',
+          reasons: ['Single command-backed artifact patch.'],
+          createdAt: '2026-05-29T12:00:00.000Z',
+          createdBy: 'test',
+        },
+      }),
+    ])
+    const reviewer = stubAgent('reviewer-agent', async () => {
+      throw new Error('reviewer should not run for a lean command-backed patch')
+    })
+    const orch = new Orchestrator({
+      config: baseConfig(),
+      agents: agentSet({ reviewer }),
+    })
+
+    const out = await orch.tick()
+
+    expect(reviewer.calls).toHaveLength(0)
+    expect(out.kind).toBe('processed')
+    if (out.kind === 'processed') {
+      expect(out.agent).toBe('lean-command-review')
+      expect(out.afterStatus).toBe('gate_check')
+    }
   })
 
   it('treats unrelated typecheck failures as scoped exceptions when a resolved human decision says broader repo-red is out of scope', async () => {

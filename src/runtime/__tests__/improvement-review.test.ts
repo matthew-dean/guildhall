@@ -203,8 +203,21 @@ describe('Guildhall improvement review', () => {
             id: 'AC-01',
             description: 'Existing content preserved.',
             verifiedBy: 'review',
+            command: 'tail -1 RELEASE_NOTES.md',
             met: false,
           }],
+          sizePlan: {
+            taskId: 'task-release-note',
+            score: 1,
+            band: 'tiny',
+            action: 'proceed',
+            factors: [],
+            recommendedChildren: [],
+            reviewBudgetHint: 'lean',
+            reasons: ['Single command-backed artifact patch.'],
+            createdAt: '2026-05-29T12:00:00.000Z',
+            createdBy: 'test',
+          },
         }),
       ])
 

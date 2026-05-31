@@ -360,6 +360,50 @@ describe('buildInbox', () => {
     expect(items.find(i => i.kind === 'project_check_in')).toBeUndefined()
   })
 
+  it('pressure_test_pending: uses the specific planner question as inbox detail', async () => {
+    await writeCompleteBootstrap()
+    await writeJson('.guildhall/workspace-goals.json', {
+      goals: [{ title: 'Keep the project moving', source: 'test' }],
+    })
+    await writeJson('.guildhall/TASKS.json', { version: 1, lastUpdated: '', tasks: [] })
+    await writeJson('.guildhall/pressure-test-intake/pti-narrative-harness-project-check-in.json', {
+      id: 'pti-narrative-harness-project-check-in',
+      rawRequest: 'Start a project check-in for Narrative Harness.',
+      target: { type: 'project', id: 'narrative-harness-project-check-in', title: 'Narrative Harness project check-in' },
+      status: 'active',
+      activeDomainId: 'project-planner',
+      pendingQuestion: {
+        id: 'project-direction-priority',
+        domainId: 'project-planner',
+        prompt: 'For the next few Narrative Harness tasks, should Guildhall bias toward reviewer-lane MVPs, author-facing editor UX, story-memory/schema foundations, or generation/evaluation loops?',
+        why: 'This changes which backlog items Guildhall should shape first and what evidence workers need.',
+        evidence: [],
+        askedAt: '2026-05-31T00:00:00.000Z',
+      },
+      domains: [],
+      outputs: {
+        assumptions: [],
+        decisions: [],
+        languageMapCandidates: [],
+        taskSplitCandidates: [],
+        projectQuestionPlanner: {
+          inferredFacts: [],
+          decisions: [],
+          discardedAnswers: [],
+          askedCandidateIds: ['project-direction-priority'],
+        },
+      },
+      createdAt: '2026-05-31T00:00:00.000Z',
+      updatedAt: '2026-05-31T00:00:00.000Z',
+    })
+
+    const items = buildInboxWithProviderSetup()
+    const hit = items.find(i => i.kind === 'pressure_test_pending')
+
+    expect(hit?.detail).toContain('reviewer-lane MVPs')
+    expect(hit?.detail).not.toContain('Start the check-in pass')
+  })
+
   it('brief_approval: emitted for tasks whose productBrief has no approvedAt', async () => {
     await writeCompleteBootstrap()
     await writeJson('.guildhall/workspace-goals.json', { goals: [] })
