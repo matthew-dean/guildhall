@@ -11,6 +11,7 @@
   import Markdown from '../../lib/Markdown.svelte'
   import Modal from '../../lib/Modal.svelte'
   import { projectFetch } from '../../lib/project-routes.js'
+  import { readableTaskDescription } from '../../lib/task-display.js'
   import type { ExpectedEvidence, LaunchStep, Task, VerificationRecord } from '../../lib/types.js'
 
   interface Props {
@@ -43,6 +44,7 @@
   const completionHandoff = $derived(task.completionHandoff ?? null)
   const verdicts = $derived(task.reviewVerdicts ?? [])
   const gates = $derived(task.gateResults ?? [])
+  const taskDescription = $derived(readableTaskDescription(task.description, task.title) || 'Guildhall shaped the task from the saved brief and spec.')
   const changedFiles = $derived(uniqueFiles([
     ...(checkpoint?.filesTouched ?? []),
     ...(task.gitStory?.samplePaths ?? []),
@@ -200,7 +202,7 @@
             <strong>Planned</strong>
             {#if task.createdAt}<time>{task.createdAt}</time>{/if}
           </header>
-          <p>{task.description ?? 'Guildhall shaped the task from the saved brief and spec.'}</p>
+          <p>{taskDescription}</p>
           {#if reviewPlan}
             <div class="chips">
               <Chip label={`${friendlyToken(reviewPlan.effort)} review`} tone="accent" />

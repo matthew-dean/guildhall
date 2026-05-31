@@ -26,11 +26,13 @@
   import { project } from '../../lib/project.svelte.js'
   import { currentProjectHref, projectActionHref, projectFetch } from '../../lib/project-routes.js'
   import { buildProductFeedbackIssueUrl } from '../../lib/product-feedback.js'
+  import type { ProjectMigrationStatus } from '../../lib/types.js'
 
   interface Props {
     subView?: string | null
+    onMigrate?: () => void | Promise<void>
   }
-  let { subView = null }: Props = $props()
+  let { subView = null, onMigrate }: Props = $props()
   type SettingSection = 'ready' | 'providers' | 'facts' | 'coordinators' | 'learning' | 'reintake' | 'advanced'
   const KNOWN_SECTIONS = new Set<SettingSection>(['ready', 'providers', 'facts', 'coordinators', 'learning', 'reintake', 'advanced'])
   const section = $derived(KNOWN_SECTIONS.has(subView as SettingSection) ? subView as SettingSection : 'ready')
@@ -40,6 +42,7 @@
     { id: 'coordinators', label: 'Coordinators' },
     { id: 'facts', label: 'Facts' },
     { id: 'learning', label: 'Memory' },
+    { id: 'reintake', label: 'Re-intake' },
     { id: 'advanced', label: 'Advanced' },
   ]
 
@@ -301,6 +304,10 @@
   let reintakeDraft = $state<ReintakeDraft | null>(null)
   let reintakeBusy = $state<null | 'rerun' | 'apply'>(null)
   let reintakeError = $state<string | null>(null)
+  let reintakeNoDraft = $state(false)
+  let reintakeApplied = $state(false)
+  let migrationStatus = $state<ProjectMigrationStatus | null>(null)
+  let migrationStatusError = $state<string | null>(null)
 
   interface BootstrapStep {
     kind: 'command' | 'gate'
@@ -500,6 +507,7 @@
     void loadBootstrap()
     void loadLearning()
     void loadReintakeStatus()
+    void loadMigrationStatus()
     void loadWorktreeIncludes()
     void loadRuntimeSetup()
     void loadCapabilityGrants()
@@ -737,16 +745,41 @@
     }
   }
 
+  async function loadMigrationStatus() {
+    try {
+      const r = await projectFetch('/api/project/migrations', { cache: 'no-store' })
+      const j = await r.json().catch(() => null) as ProjectMigrationStatus & { error?: string } | null
+      if (!r.ok || j?.error) throw new Error(j?.error ?? `HTTP ${r.status}`)
+      migrationStatus = j
+      migrationStatusError = null
+    } catch (err) {
+      migrationStatusError = err instanceof Error ? err.message : String(err)
+      migrationStatus = null
+    }
+  }
+
   async function loadReintakeDraft() {
     try {
       const r = await projectFetch('/api/project/reintake/draft', { cache: 'no-store' })
       const j = await r.json().catch(() => null) as ReintakeDraft & { error?: string } | null
-      if (!r.ok || j?.error) throw new Error(j?.error ?? `HTTP ${r.status}`)
+      if (!r.ok || j?.error) {
+        const message = j?.error ?? `HTTP ${r.status}`
+        if (r.status === 404 && /no re-intake draft/i.test(message)) {
+          reintakeDraft = null
+          reintakeError = null
+          reintakeNoDraft = true
+          return
+        }
+        throw new Error(message)
+      }
       reintakeDraft = j
       reintakeError = null
+      reintakeNoDraft = false
+      reintakeApplied = j?.status === 'applied'
     } catch (err) {
       reintakeError = err instanceof Error ? err.message : String(err)
       reintakeDraft = null
+      reintakeNoDraft = false
     }
   }
 
@@ -758,6 +791,8 @@
       const j = await r.json().catch(() => null) as { draft?: ReintakeDraft; error?: string } | null
       if (!r.ok || j?.error) throw new Error(j?.error ?? `HTTP ${r.status}`)
       reintakeDraft = j?.draft ?? null
+      reintakeNoDraft = false
+      reintakeApplied = false
       await loadReintakeStatus()
     } catch (err) {
       reintakeError = err instanceof Error ? err.message : String(err)
@@ -778,6 +813,10 @@
       })
       const j = await r.json().catch(() => null) as { error?: string } | null
       if (!r.ok || j?.error) throw new Error(j?.error ?? `HTTP ${r.status}`)
+      reintakeDraft = reintakeDraft
+        ? { ...reintakeDraft, status: 'applied', groups: [] }
+        : null
+      reintakeApplied = true
       await loadReintakeStatus()
     } catch (err) {
       reintakeError = err instanceof Error ? err.message : String(err)
@@ -1002,6 +1041,27 @@
   const coordinatorsReady = $derived(coordinators.length > 0)
   const readinessCount = $derived(
     (bootstrapReady ? 1 : 0) + (coordinatorsReady ? 1 : 0) + (providerReady ? 1 : 0),
+  )
+  const projectStartBlocker = $derived(
+    project.detail?.startReadiness?.canStart === false &&
+      project.detail.startReadiness.code !== 'all_terminal'
+      ? project.detail.startReadiness
+      : null,
+  )
+  const readinessPillLabel = $derived(projectStartBlocker ? 'Blocked' : `${readinessCount}/3 ready`)
+  const readinessPillTone = $derived(projectStartBlocker ? 'warn' : readinessCount === 3 ? 'ok' : 'warn')
+  const projectStartBlockerActionLabel = $derived(
+    projectStartBlocker?.code === 'required_migration_pending'
+      ? 'Migrate project'
+      : /question|answer/i.test(projectStartBlocker?.message ?? '')
+        ? 'Answer question'
+        : /spec/i.test(projectStartBlocker?.message ?? '')
+          ? 'Review spec'
+          : 'Review recovery',
+  )
+  const migrationCount = $derived((migrationStatus?.blocked?.length ?? 0) + (migrationStatus?.pending?.length ?? 0))
+  const hasSecondaryMigrations = $derived(
+    migrationCount > 0 && projectStartBlocker?.code !== 'required_migration_pending',
   )
 
   function flashIdentity(text: string, error: boolean) {
@@ -1241,6 +1301,7 @@
     ]
     return parts.join(', ')
   })
+  const reintakeGroupCount = $derived(reintakeDraft?.groups?.length ?? 0)
   const projectContextRows = $derived.by(() => {
     const rows: Array<{ label: string; value: string; detail: string; href?: string }> = []
     const context = learning?.projectContext
@@ -1413,12 +1474,39 @@
       >
         {#snippet meta()}
           <StatusPill
-            label={`${readinessCount}/3 ready`}
-            tone={readinessCount === 3 ? 'ok' : 'warn'}
+            label={readinessPillLabel}
+            tone={readinessPillTone}
             emphasis="default"
           />
         {/snippet}
       </SectionHeader>
+
+      {#if projectStartBlocker}
+        <NoticeBand tone="warn" icon="alert-triangle" density="compact">
+          <strong>{projectStartBlocker.message ?? 'Resolve the project blocker before starting Guildhall.'}</strong>
+          {#snippet actions()}
+            {#if projectStartBlocker.code === 'required_migration_pending'}
+              <Button variant="secondary" size="sm" onclick={() => { void onMigrate?.() }}>{projectStartBlockerActionLabel}</Button>
+            {:else if projectStartBlocker.actionHref}
+              <a href={projectActionHref(projectStartBlocker.actionHref)} onclick={(e) => { e.preventDefault(); nav(projectActionHref(projectStartBlocker.actionHref)) }}>{projectStartBlockerActionLabel}</a>
+            {/if}
+          {/snippet}
+        </NoticeBand>
+      {/if}
+      {#if hasSecondaryMigrations}
+        <NoticeBand tone="neutral" icon="refresh-cw" density="compact">
+          <strong>
+            {migrationCount} pending Guildhall migration{migrationCount === 1 ? '' : 's'} will need review after the current blocker.
+          </strong>
+          {#snippet actions()}
+            <Button variant="secondary" size="sm" onclick={() => { void onMigrate?.() }}>Review migrations</Button>
+          {/snippet}
+        </NoticeBand>
+      {:else if migrationStatusError}
+        <NoticeBand tone="warn" icon="alert-triangle" density="compact">
+          <strong>Could not check project migrations: {migrationStatusError}</strong>
+        </NoticeBand>
+      {/if}
 
       <FrameCard class="readiness-card" density="compact">
         <ul class="checklist">
@@ -2059,13 +2147,16 @@
     {:else if section === 'reintake'}
       <SectionHeader
         eyebrow="Settings"
-        title="Review re-intake draft"
-        description="Review the proposed project task-graph cleanup before applying anything."
+        title={reintakeNoDraft ? 'Start re-intake' : reintakeApplied ? 'Re-intake applied' : 'Review re-intake draft'}
+        description={reintakeNoDraft ? 'Refresh the project from current evidence before changing tasks.' : reintakeApplied ? 'The selected project task-graph cleanup was applied.' : 'Review the proposed project task-graph cleanup before applying anything.'}
         headingTag="h2"
         density="compact"
       >
         {#snippet meta()}
-          <StatusPill label={reintakeDraft?.status ?? reintakeStatus?.status ?? 'draft'} tone="warn" />
+          <StatusPill
+            label={reintakeNoDraft ? 'not started' : reintakeApplied ? 'applied' : reintakeDraft?.status ?? reintakeStatus?.status ?? 'draft'}
+            tone={reintakeApplied ? 'ok' : reintakeNoDraft ? 'neutral' : 'warn'}
+          />
         {/snippet}
       </SectionHeader>
 
@@ -2073,6 +2164,22 @@
         <NoticeBand tone="danger" role="alert" label="Re-intake" title="Could not load re-intake draft" density="compact">
           <p>{reintakeError}</p>
         </NoticeBand>
+      {:else if reintakeNoDraft}
+        <FrameCard class="learning-card learning-card-wide context-card">
+          {#snippet header()}
+            <SectionHeader
+              title="No draft yet"
+              description="Start re-intake to compare current project evidence with the task graph."
+              headingTag="h3"
+              density="dense"
+            />
+          {/snippet}
+          <Row justify="end" gap="2">
+            <Button size="sm" variant="agent" disabled={reintakeBusy !== null} onclick={startReintake}>
+              {reintakeBusy === 'rerun' ? 'Starting...' : 'Start re-intake'}
+            </Button>
+          </Row>
+        </FrameCard>
       {:else if !reintakeDraft}
         <NoticeBand tone="neutral" role="status" label="Re-intake" title="Loading draft" density="compact">
           <p>Reading the latest re-intake draft…</p>
@@ -2087,11 +2194,26 @@
               density="dense"
             />
           {/snippet}
-          <Row justify="end" gap="2">
-            <Button size="sm" variant="agent" disabled={reintakeBusy !== null || (reintakeDraft.groups?.length ?? 0) === 0} onclick={applyReintakeSelected}>
-              {reintakeBusy === 'apply' ? 'Applying...' : 'Apply selected'}
-            </Button>
-          </Row>
+          {#if reintakeApplied}
+            <NoticeBand tone="success" role="status" label="Re-intake" title="Re-intake applied" density="compact">
+              <p>The selected cleanup groups were applied. Start another re-intake if the project evidence changed again.</p>
+            </NoticeBand>
+          {:else if reintakeGroupCount === 0}
+            <NoticeBand tone="neutral" role="status" label="Re-intake" title="No changes proposed" density="compact">
+              <p>Guildhall did not find task-graph changes to apply from the current evidence.</p>
+            </NoticeBand>
+            <Row justify="end" gap="2">
+              <Button size="sm" variant="secondary" disabled={reintakeBusy !== null} onclick={startReintake}>
+                {reintakeBusy === 'rerun' ? 'Refreshing...' : 'Refresh draft'}
+              </Button>
+            </Row>
+          {:else}
+            <Row justify="end" gap="2">
+              <Button size="sm" variant="agent" disabled={reintakeBusy !== null} onclick={applyReintakeSelected}>
+                {reintakeBusy === 'apply' ? 'Applying...' : 'Apply selected'}
+              </Button>
+            </Row>
+          {/if}
         </FrameCard>
         <div class="context-memory-list">
           {#each reintakeDraft.groups ?? [] as group (group.id)}

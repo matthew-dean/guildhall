@@ -1,4 +1,5 @@
 // @vitest-environment happy-dom
+import '@testing-library/jest-dom/vitest'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { cleanup, fireEvent, render, screen, within } from '@testing-library/svelte'
 import userEvent from '@testing-library/user-event'
@@ -122,6 +123,91 @@ describe('WorkTab', () => {
     const gammaRow = screen.getByRole('button', { name: /open task gamma task/i })
     await fireEvent.keyDown(gammaRow, { key: 'Enter' })
     expect(path.value).toBe('/projects/looma-knit/task/task-gamma')
+  })
+
+  it('does not show an empty new-request prompt when a zero-task project is blocked by migration', async () => {
+    render(WorkTab, {
+      props: {
+        detail: {
+          ...detail([]),
+          startReadiness: {
+            canStart: false,
+            code: 'required_migration_pending',
+            message: 'Run the required Guildhall migration before Guildhall can update this project.',
+            actionHref: '/migrations',
+          },
+          inbox: {
+            items: [
+              {
+                kind: 'pressure_test_pending',
+                severity: 'medium',
+                title: 'Saved search labels',
+                detail: 'Which labels should be saved first?',
+                actionHref: '/thread',
+                status: 'open',
+                id: 'pressure-test:labels',
+                createdAt: '2026-05-19T10:01:00.000Z',
+                updatedAt: '2026-05-19T10:01:00.000Z',
+              },
+              {
+                kind: 'required_migration',
+                severity: 'high',
+                title: 'Required migration: Project state layout',
+                detail: 'Move project state into the new layout before Guildhall can update it.',
+                actionHref: '/migrations',
+                status: 'open',
+                id: 'migration:project-state-layout',
+                createdAt: '2026-05-19T10:00:00.000Z',
+                updatedAt: '2026-05-19T10:00:00.000Z',
+              },
+            ],
+            history: [],
+            blockers: { bootstrap: false, workspaceImport: false },
+          },
+        },
+      },
+    })
+
+    expect(screen.getByText('Move project state into the new layout before Guildhall can update it.')).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: /migrate project/i })).toBeInTheDocument()
+    expect(screen.queryByText(/No tasks yet.*New request/i)).not.toBeInTheDocument()
+  })
+
+  it('does not show an empty new-request prompt when a zero-task project has a pending question', async () => {
+    render(WorkTab, {
+      props: {
+        detail: {
+          ...detail([]),
+          startReadiness: {
+            canStart: false,
+            code: 'owner_input_required',
+            message: '1 question needs your answer before Guildhall can continue',
+            actionHref: '/thread',
+          },
+          inbox: {
+            items: [
+              {
+                kind: 'pressure_test_pending',
+                severity: 'medium',
+                title: 'Saved search labels',
+                detail: 'Which labels should be saved first?',
+                actionHref: '/thread',
+                status: 'open',
+                id: 'pressure-test:labels',
+                createdAt: '2026-05-19T10:00:00.000Z',
+                updatedAt: '2026-05-19T10:00:00.000Z',
+              },
+            ],
+            history: [],
+            blockers: { bootstrap: false, workspaceImport: false },
+          },
+        },
+      },
+    })
+
+    expect(screen.getByText('Which labels should be saved first?')).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: /answer question/i })).toBeInTheDocument()
+    expect(screen.queryByText(/No tasks yet.*New request/i)).not.toBeInTheDocument()
   })
 
   it('shows the opt-in column browser without selecting a default packet', async () => {

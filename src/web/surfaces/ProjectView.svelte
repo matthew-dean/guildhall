@@ -627,6 +627,12 @@
     })
   })
   const runStopSummary = $derived.by(() => {
+    if (startReadiness?.code === 'required_migration_pending') {
+      return {
+        stopReason: 'required_migration_pending',
+        stopMessage: startReadiness.message ?? 'Run the required Guildhall migration before starting this project.',
+      }
+    }
     if (startReadiness?.code === 'owner_input_required') {
       return {
         stopReason: 'awaiting_human',
@@ -648,7 +654,7 @@
   const runStopSummarySeverity = $derived<'info' | 'warn' | 'error'>(() => {
     const reason = runStopSummary?.stopReason
     if (!reason) return 'info'
-    if (reason === 'awaiting_human' || reason === 'blocked_only' || reason === 'dependency_blocked') return 'warn'
+    if (reason === 'awaiting_human' || reason === 'blocked_only' || reason === 'dependency_blocked' || reason === 'required_migration_pending') return 'warn'
     return 'info'
   })
   const runStopSummaryText = $derived.by(() => {
@@ -704,6 +710,9 @@
     if (runStopSummary?.stopReason === 'awaiting_human') {
       return projectActionHref(startReadiness?.actionHref ?? '/overview/inbox', activeProjectId)
     }
+    if (runStopSummary?.stopReason === 'required_migration_pending') {
+      return projectActionHref(startReadiness?.actionHref ?? '/migrations', activeProjectId)
+    }
     if (runStopSummary?.stopReason === 'blocked_only') {
       return currentProjectHref('/overview', activeProjectId)
     }
@@ -711,9 +720,9 @@
   })
   const runStopActionLabel = $derived(
     runStopSummary?.stopReason === 'awaiting_human'
-      ? startReadiness?.message && /spec/i.test(startReadiness.message)
-        ? 'Review spec'
-        : 'Open item'
+      ? startReadinessActionLabel(startReadiness?.message)
+      : runStopSummary?.stopReason === 'required_migration_pending'
+        ? 'Migrate project'
       : runStopSummary?.stopReason === 'blocked_only'
         ? 'Open Overview'
         : null,
@@ -834,6 +843,14 @@
   const showAdvanceOneTaskAction = $derived(
     !allTerminalStart,
   )
+
+  function startReadinessActionLabel(message: string | undefined): string {
+    if (/question|answer/i.test(message ?? '')) return 'Answer question'
+    if (/spec/i.test(message ?? '')) return 'Review spec'
+    if (/brief/i.test(message ?? '')) return 'Review brief'
+    if (/recover|blocked|escalation/i.test(message ?? '')) return 'Review recovery'
+    return 'Open next action'
+  }
 </script>
 
 <svelte:document onclick={handleDocumentClick} />
@@ -1279,7 +1296,7 @@
           {:else if currentView === 'release'}
             <ReleaseTab subView={currentSub} />
         {:else if currentView === 'settings'}
-          <SettingsTab subView={currentSub} />
+          <SettingsTab subView={currentSub} onMigrate={openMigrationModal} />
         {/if}
         </div>
 

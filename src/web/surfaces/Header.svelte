@@ -38,9 +38,12 @@
   const sseLabel = $derived(
     sseStatus === 'live' ? 'connected' : sseStatus === 'reconnecting' ? 'reconnecting' : 'connecting',
   )
-  const parsedRoute = $derived(parseProjectRoute(path.value))
+  const headerPath = $derived(path.value)
+  const browserPath = $derived(typeof window === 'undefined' ? headerPath : window.location.pathname)
+  const parsedRoute = $derived(parseProjectRoute(headerPath))
+  const browserRoute = $derived(parseProjectRoute(browserPath))
   const showProjectMenu = $derived(path.value.startsWith('/project') || parsedRoute.projectScoped)
-  const showSseStatus = $derived(parsedRoute.projectScoped || path.value.startsWith('/project'))
+  const showSseStatus = $derived(browserRoute.projectScoped || browserPath.startsWith('/project'))
   const savedProjectTitle = $derived(
     parsedRoute.projectScoped && project.detail?.id === parsedRoute.projectId
       ? (project.detail.name?.trim() || null)
@@ -73,6 +76,11 @@
 
   function toggleProjectNav() {
     window.dispatchEvent(new CustomEvent('guildhall:toggle-project-nav'))
+  }
+
+  function browserIsGlobalPage(): boolean {
+    if (typeof window === 'undefined') return false
+    return ['/', '/projects', '/overview', '/providers', '/needs-you', '/notifications', '/inbox'].includes(window.location.pathname)
   }
 </script>
 
@@ -107,7 +115,7 @@
     {/if}
   </div>
   <div class="header-right">
-    {#if showSseStatus}
+    {#if showSseStatus && !browserIsGlobalPage()}
       <span class="sse-status">
         <StatusDot tone={sseTone} pulse={sseStatus === 'live'} />
         {sseLabel}

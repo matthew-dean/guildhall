@@ -1774,6 +1774,31 @@ describe('Orchestrator.tick — routing', () => {
     expect(task.openQuestions ?? []).toHaveLength(0)
   })
 
+  it('does not convert transcript-note summaries into fallback questions', async () => {
+    await writeQueue([mkTask({ id: 'a', status: 'exploring', title: 'Autoencoder baseline quality pass' })])
+    const spec = stubAgent(
+      'spec-agent',
+      undefined,
+      [
+        'From the transcript notes:',
+        '',
+        '- Baseline means measure the current autoencoder as-is.',
+        '- Do not change the model until the first quality report exists.',
+      ].join('\n'),
+    )
+    const orch = new Orchestrator({
+      config: baseConfig(),
+      agents: agentSet({ spec }),
+    })
+
+    const out = await orch.tick()
+    expect(out.kind).toBe('processed')
+
+    const queue = await readQueue()
+    const task = queue.tasks[0]!
+    expect(task.openQuestions ?? []).toHaveLength(0)
+  })
+
   it('does not promote research-summary narration into fallback choice questions', async () => {
     await writeQueue([mkTask({ id: 'a', status: 'exploring', title: 'Rust outline preprocessing' })])
     const spec = stubAgent(
@@ -1849,6 +1874,134 @@ describe('Orchestrator.tick — routing', () => {
       choices: ['Initial collection tree normalization', 'Optimistic create/update behavior'],
     })
     expect(task.escalations ?? []).toHaveLength(0)
+  })
+
+  it('turns spec-agent inactivity timeouts into explicit recovery instead of raw agent errors', async () => {
+    await writeQueue([mkTask({ id: 'a', status: 'exploring', title: 'Build AlertDialog primitive' })])
+    const spec = {
+      name: 'spec-agent',
+      calls: [] as Array<{ prompt: string }>,
+      async generate(prompt: string) {
+        this.calls.push({ prompt })
+        throw new Error('spec-agent timed out after 120000ms of inactivity')
+      },
+    }
+    const orch = new Orchestrator({
+      config: baseConfig(),
+      agents: agentSet({ spec: spec as any }),
+    })
+
+    const out = await orch.tick()
+    expect(out.kind).toBe('escalated')
+    expect(out.reason).toBe('Spec shaping timed out before saving durable progress.')
+
+    const queue = await readQueue()
+    const task = queue.tasks[0]!
+    expect(task.status).toBe('blocked')
+    expect(task.escalations[0]).toMatchObject({
+      reason: 'human_judgment_required',
+      summary: 'Spec shaping timed out before saving durable progress.',
+    })
+    expect(task.blockReason).toContain('Spec shaping timed out')
+  })
+
+  it('writes a deterministic recovery spec seed before redispatching a reframed shaping task', async () => {
+    await writeQueue([
+      mkTask({
+        id: 'a',
+        status: 'exploring',
+        title: 'Block menu / block side menu',
+        description: 'looma/docs/editor-roadmap.md: - **Block menu / block side menu**',
+        productBrief: {
+          userJob: 'I want the old broken build failure repaired.',
+          successMetric: 'The stale missing import disappears.',
+          antiPatterns: ['Keep researching instead of writing a spec.'],
+          authoredBy: 'spec-agent',
+          authoredAt: '2026-05-25T06:59:09.130Z',
+        },
+        openQuestions: [
+          {
+            id: 'q-fake-batch',
+            kind: 'choice',
+            askedBy: 'spec-agent',
+            askedAt: '2026-05-18T19:50:01.167Z',
+            answeredAt: '2026-05-19T22:26:12.323Z',
+            answer: 'Answer the concrete questions directly.',
+            prompt: "I've drafted the product brief and posted three focused questions:",
+            choices: ['Scope', 'Turn into options', 'Drag-handle'],
+            selectionMode: 'single',
+          },
+          {
+            id: 'q-scope',
+            kind: 'choice',
+            askedBy: 'spec-agent',
+            askedAt: '2026-05-18T19:49:46.995Z',
+            answeredAt: '2026-05-19T22:26:12.323Z',
+            answer: 'Drag-handle is out of scope for this task. Treat drag-and-drop reordering as a separate follow-up task.',
+            prompt: 'Should drag-and-drop reordering be in scope?',
+            choices: ['Include drag-handle', 'Separate task'],
+            selectionMode: 'single',
+          },
+        ],
+        notes: [
+          {
+            agentId: 'system',
+            role: 'system',
+            content: 'Reframe requested from blocked. Guildhall will rebuild the task in plain language before continuing.',
+            timestamp: '2026-05-31T16:15:07.044Z',
+          },
+        ],
+        escalations: [
+          {
+            id: 'esc-old-build',
+            taskId: 'a',
+            agentId: 'worker-agent',
+            reason: 'decision_required',
+            summary: 'Build failing due to unresolved import in packages/core/loader/index.js',
+            details: 'Old build failure from a stale task shape.',
+            raisedAt: '2026-05-25T06:59:09.130Z',
+            resolvedAt: '2026-05-31T16:15:07.044Z',
+            resolvedBy: 'human',
+            resolution: 'Superseded by a task reframe request.',
+          },
+        ],
+      }),
+    ])
+    const spec = stubAgent('spec-agent')
+    const orch = new Orchestrator({
+      config: baseConfig(),
+      agents: agentSet({ spec }),
+    })
+
+    const out = await orch.tick()
+    expect(out).toMatchObject({
+      kind: 'processed',
+      taskId: 'a',
+      agent: 'coordinator-recovery',
+      beforeStatus: 'exploring',
+      afterStatus: 'spec_review',
+      transitioned: true,
+    })
+    expect(spec.calls).toHaveLength(0)
+
+    const queue = await readQueue()
+    const task = queue.tasks[0]!
+    expect(task.status).toBe('spec_review')
+    expect(task.productBrief).toMatchObject({
+      authoredBy: 'coordinator-recovery',
+    })
+    expect(task.productBrief?.userJob).toContain('Block menu / block side menu')
+    expect(task.productBrief?.userJob).not.toContain('old broken build failure')
+    expect(task.spec).toContain('## Completion Boundary')
+    expect(task.spec).toContain('Drag-handle is out of scope')
+    expect(task.spec).toContain('Block menu / block side menu from looma/docs/editor-roadmap.md')
+    expect(task.spec).not.toContain('looma/docs/editor-roadmap.md: - **')
+    expect(task.spec).not.toContain('Should drag-and-drop reordering be in scope?')
+    expect(task.spec).not.toContain("I've drafted the product brief")
+    expect(task.spec).not.toContain('Build failing due to unresolved import')
+    expect(task.spec).not.toContain('Superseded by a task reframe request')
+    expect(task.acceptanceCriteria).toHaveLength(3)
+    expect(task.notes.some(note => note.content.includes('deterministic recovery spec seed'))).toBe(true)
   })
 
   it('does not fossilize agent research narration into the fallback brief', async () => {

@@ -691,6 +691,45 @@ describe('TaskDrawer', () => {
     )
   })
 
+  it('does not offer task-only start when the project has an unresolved start blocker', async () => {
+    openDrawerOn('current')
+    const blockedProject = {
+      ...projectDetail(),
+      startReadiness: {
+        canStart: false,
+        code: 'owner_input_required',
+        message: 'Choose a recovery path for the blocked task',
+        actionHref: '/task/task-blocked?tab=current',
+      },
+    }
+    project.detail = blockedProject
+    const payload = drawerPayload({
+      threadTurns: [],
+      task: {
+        ...drawerPayload().task,
+        status: 'ready',
+        openQuestions: [],
+      },
+    })
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input)
+      if (url.startsWith('/api/project/task/task-link-editor')) return json(payload)
+      if (url.startsWith('/api/project')) return json(blockedProject)
+      return json({})
+    })
+    vi.stubGlobal('fetch', fetchMock)
+
+    render(TaskDrawer, {
+      taskId: 'task-link-editor',
+      projectId: 'looma-knit',
+      onClose: vi.fn(),
+    })
+
+    await screen.findByText('Knit: add link editor controls')
+    expect(screen.queryByRole('button', { name: 'Start only this work item' })).not.toBeInTheDocument()
+    expect(screen.getByText('Choose a recovery path for the blocked task')).toBeInTheDocument()
+  })
+
   it('replaces the drawer task when hierarchy links are clicked and preserves the background page', async () => {
     window.history.replaceState(
       { backgroundPath: '/projects/looma-knit/overview' },
@@ -949,6 +988,28 @@ describe('TaskDrawer', () => {
 
   it('opens the Action tab when a question notification deep-links to the current surface', async () => {
     window.history.replaceState({}, '', '/projects/looma-knit/task/task-link-editor?tab=current')
+    path.value = '/projects/looma-knit/task/task-link-editor'
+    const payload = drawerPayload()
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input)
+      if (url.startsWith('/api/project/task/task-link-editor')) return json(payload)
+      if (url.startsWith('/api/project')) return json(projectDetail())
+      return json({})
+    })
+    vi.stubGlobal('fetch', fetchMock)
+
+    render(TaskDrawer, {
+      taskId: 'task-link-editor',
+      projectId: 'looma-knit',
+      onClose: vi.fn(),
+    })
+
+    await screen.findByText('Which controls belong in the link editor?')
+    expect(screen.getByRole('tab', { name: 'Action' }).getAttribute('aria-selected')).toBe('true')
+  })
+
+  it('treats tab=action as the Action tab deep link', async () => {
+    window.history.replaceState({}, '', '/projects/looma-knit/task/task-link-editor?tab=action')
     path.value = '/projects/looma-knit/task/task-link-editor'
     const payload = drawerPayload()
     const fetchMock = vi.fn(async (input: RequestInfo | URL) => {

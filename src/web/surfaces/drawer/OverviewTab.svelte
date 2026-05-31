@@ -10,6 +10,7 @@
   import { labelForIdentifier } from '../../lib/identifier-labels.js'
   import { currentTaskHref } from '../../lib/project-routes.js'
   import { roleLabel } from '../../lib/escalation-labels.js'
+  import { readableTaskDescription } from '../../lib/task-display.js'
   import type { Task } from '../../lib/types.js'
 
   interface Props {
@@ -33,6 +34,7 @@
   const requestIntake = $derived(task.requestIntake ?? null)
   const latestCheckpoint = $derived(task.latestCheckpoint ?? null)
   const recommendedChildren = $derived(sizePlan?.recommendedChildren ?? [])
+  const taskDescription = $derived(readableTaskDescription(task.description, task.title) || '(no description)')
   const createdChildren = $derived(recommendedChildren.filter((child) => child.createdTaskId))
   const parentTaskId = $derived(taskIdFromParentGoal(task.parentGoalId))
   const containingWorkId = $derived(task.hierarchy?.parentId ?? parentTaskId)
@@ -109,7 +111,7 @@
 <Stack gap="4">
   <Card title="Overview">
     <Stack gap="3">
-      <Markdown source={task.description ?? '(no description)'} />
+      <Markdown source={taskDescription} />
       <Row wrap gap="2">
         <Chip label={friendlyStatus(task.status)} tone={statusTone(task.status)} />
         {#if task.domain}<Chip label={friendlyDomain(task.domain)} tone="neutral" />{/if}

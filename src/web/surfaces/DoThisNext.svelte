@@ -22,8 +22,15 @@
     taskId?: string
     actionHref?: string
   }
+  interface StartReadiness {
+    canStart?: boolean
+    code?: string
+    message?: string
+    actionHref?: string
+  }
 
   let items = $state<InboxItem[]>([])
+  let startReadiness = $state<StartReadiness | null>(null)
   let loaded = $state(false)
 
   async function load(): Promise<void> {
@@ -32,6 +39,11 @@
       if (inboxRes.ok) {
         const j = (await inboxRes.json()) as { items?: InboxItem[] }
         items = j.items ?? []
+      }
+      const projectRes = await projectFetch('/api/project')
+      if (projectRes.ok) {
+        const j = (await projectRes.json()) as { startReadiness?: StartReadiness | null }
+        startReadiness = j.startReadiness ?? null
       }
     } catch {
       /* keep prior */
@@ -69,6 +81,25 @@
   function prescribe(item: InboxItem): Prescription {
     const id = item.taskId ? ` on ${item.title}` : ''
     switch (item.kind) {
+      case 'start_readiness':
+        return {
+          verb:
+            item.title ||
+            (item.detail?.toLowerCase().includes('migration')
+              ? 'Run the required migration'
+              : 'Resolve the project blocker'),
+          why: item.detail?.toLowerCase().includes('migration')
+            ? item.detail
+            : 'Guildhall needs this resolved before project work can move safely.',
+          button: item.detail?.toLowerCase().includes('migration')
+            ? 'Migrate project'
+            : item.detail?.toLowerCase().includes('question') || item.detail?.toLowerCase().includes('answer')
+              ? 'Answer question'
+              : item.detail?.toLowerCase().includes('spec')
+                ? 'Review spec'
+                : 'Review recovery',
+          href: item.actionHref ?? '/overview/inbox',
+        }
       case 'bootstrap_missing':
         return {
           verb: 'Verify your bootstrap commands',
@@ -86,7 +117,7 @@
       case 'open_escalation':
         return {
           verb: `Review the blocked task${id}`,
-          why: item.detail ? `Recovery needed. Detail: ${item.detail}` : 'Choose the next recovery action so Guildhall can continue.',
+          why: item.detail ?? 'Choose the next recovery action so Guildhall can continue.',
           button: 'Review recovery',
           href: item.actionHref ?? '/work',
         }
@@ -184,7 +215,23 @@
     moreHref: string
   }
 
-  const prescribedItems = $derived.by(() => items.map(item => ({ item, prescription: prescribe(item) })))
+  const readinessItem = $derived<InboxItem | null>(
+    startReadiness?.canStart === false && startReadiness.code !== 'all_terminal'
+      ? {
+          kind: 'start_readiness',
+          severity: 'high',
+          title: startReadiness.code === 'required_migration_pending'
+            ? 'Required migration'
+            : startReadiness.message ?? 'Resolve project blocker',
+          detail: startReadiness.message,
+          actionHref: startReadiness.actionHref,
+        }
+      : null,
+  )
+  const prescribedItems = $derived.by(() => [
+    ...(readinessItem ? [readinessItem] : []),
+    ...items,
+  ].map(item => ({ item, prescription: prescribe(item) })))
   const visibleItems = $derived.by(() =>
     prescribedItems.filter(({ prescription }) => routeOnly(projectActionHref(prescription.href)) !== path.value),
   )

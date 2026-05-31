@@ -18,6 +18,7 @@
   import Byline from '../../lib/Byline.svelte'
   import { briefDoneWhenForReaders, briefScopeForReaders } from '../../lib/brief-display.js'
   import { parseReviewerSummarySections, type ReviewerAdvisoryScores } from '../../lib/reviewer-summary.js'
+  import { readableTaskDescription } from '../../lib/task-display.js'
   import WhyStuck from './WhyStuck.svelte'
   import SpecFillChecklist from './SpecFillChecklist.svelte'
   import SuggestionCard from './SuggestionCard.svelte'
@@ -80,13 +81,23 @@
   const latestCheckpoint = $derived(task.latestCheckpoint ?? null)
   const reviewPlan = $derived(task.reviewPlan ?? null)
   const reviewAuditSummary = $derived(task.reviewAuditSummary ?? null)
+  const taskDescription = $derived(readableTaskDescription(task.description, task.title) || '(no description)')
+  const hasRecoverySpecSeed = $derived(
+    task.status === 'spec_review' &&
+      (task.notes ?? []).some((note) =>
+        /deterministic recovery spec seed/i.test(note.content ?? ''),
+      ),
+  )
   const reviewPlanLanes = $derived(reviewPlan?.selectedLanes ?? [])
   const reviewPlanHiddenLaneCount = $derived(Math.max(0, reviewPlanLanes.length - 4))
   const reviewPlanRecipeCount = $derived(reviewPlan?.requiredRecipes?.length ?? 0)
   const hasReviewPacket = $derived(
-    latestReviewerSummary.length > 0 ||
-      latestSelfCritique.length > 0 ||
-      Boolean(latestCheckpoint),
+    !hasRecoverySpecSeed &&
+      (
+        latestReviewerSummary.length > 0 ||
+        latestSelfCritique.length > 0 ||
+        Boolean(latestCheckpoint)
+      ),
   )
   const exploring = $derived(task.status === 'exploring')
   const specApprovalPending = $derived(task.status === 'spec_review' && specText.length > 0)
@@ -202,7 +213,7 @@
   <div data-spec-section="section-about">
   <Card title="About">
     <Stack gap="2">
-      <Markdown source={task.description ?? '(no description)'} />
+      <Markdown source={taskDescription} />
       <Row wrap gap="2">
         <Chip label={friendlyStatus(task.status)} tone="neutral" />
         {#if task.domain}<Chip label={friendlyDomain(task.domain)} tone="neutral" />{/if}

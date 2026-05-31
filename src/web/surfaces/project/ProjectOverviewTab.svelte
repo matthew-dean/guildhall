@@ -117,6 +117,15 @@
       .sort((left, right) => (right.updatedAt ?? '').localeCompare(left.updatedAt ?? ''))
       .slice(0, 4)
   })
+  const requiredMigrationBlocked = $derived(detail.startReadiness?.code === 'required_migration_pending')
+  const startBlocked = $derived(detail.startReadiness?.canStart === false)
+  const emptyWorkMixLabel = $derived(
+    requiredMigrationBlocked
+      ? 'Run the required Guildhall migration before creating or running work.'
+      : startBlocked
+        ? 'Resolve the project blocker before adding more work.'
+        : 'No tasks yet. Create a request when you are ready.',
+  )
 
   const recentEvents = $derived.by(() => {
     return (detail.recentEvents ?? [])
@@ -125,6 +134,7 @@
       .map(event => ({ event, label: summarizeEvent(event) }))
       .filter(item => !isResolvedGitUnavailableEvent(item.event))
       .filter(item => item.label && !isLowSignalEvent(item.event))
+      .filter(item => !(requiredMigrationBlocked && isAllTerminalStoppedEvent(item.event)))
       .slice(0, 5)
   })
 
@@ -218,6 +228,19 @@
         href: '/migrations',
         tone: 'danger' as Tone,
         action: 'migration' as NextActionKind,
+      }
+    }
+    if (detail.startReadiness?.canStart === false) {
+      const href = detail.startReadiness.actionHref ?? currentProjectHref('/overview', activeProjectId)
+      const matchingInbox = inboxItems.find(item => item.severity !== 'low' && item.actionHref === href)
+      return {
+        label: detail.startReadiness.message ?? matchingInbox?.title ?? startReadinessLabel(detail.startReadiness.code),
+        detail: matchingInbox?.detail ?? 'Guildhall needs this resolved before Start can move work.',
+        content: matchingInbox?.taskDescription,
+        button: matchingInbox ? inboxActionLabel(matchingInbox) : 'Open item',
+        href,
+        tone: matchingInbox?.severity === 'high' ? 'danger' as Tone : 'warn' as Tone,
+        action: 'navigate' as NextActionKind,
       }
     }
     const inbox = actionableInbox[0]
@@ -372,6 +395,12 @@
     return isGitUnavailableMessage(message) && !hasCurrentGitUnavailableStory(detail)
   }
 
+  function isAllTerminalStoppedEvent(event: EventEnvelope): boolean {
+    const type = event.event?.type ?? event.type ?? ''
+    const reason = event.event?.reason ?? event.reason
+    return type === 'supervisor_stopped' && reason === 'all_terminal'
+  }
+
   function formatDate(value: string | undefined): string {
     if (!value) return ''
     const date = new Date(value)
@@ -424,6 +453,9 @@
     }
     if (/research budget exhausted|hit the research budget|refusing more read-only tool calls|do not call more read-only tools now/i.test(text)) {
       return 'Guildhall paused after gathering enough context. Open the task to choose the next step.'
+    }
+    if (/spec (?:author|agent|shaping).*(?:turn limit|maximum turn|timed out)|kept researching after guildhall asked for durable progress/i.test(text)) {
+      return 'Spec shaping stopped before Guildhall saved the next draft. Open the task to retry from the transcript or reframe the work.'
     }
     if (/\bAC-\d+\b/i.test(text) && /\bevidence\b/i.test(text)) {
       return 'Guildhall needs to run or save one missing verification check before this task can finish.'
@@ -601,7 +633,7 @@
       <WorkMixChart
         ariaLabel={`Work mix: ${counts.total} tasks`}
         {segments}
-        emptyLabel="No tasks yet. Create a request when you are ready."
+        emptyLabel={emptyWorkMixLabel}
         onLegendClick={() => go(currentProjectHref('/work', activeProjectId))}
       />
     </Card>
@@ -669,7 +701,15 @@
         </button>
       {/if}
       {#if runPlanRows.length === 0}
-        <p class="muted">Nothing is queued for the next run yet.</p>
+        <p class="muted">
+          {#if requiredMigrationBlocked}
+            The next run is blocked until the required migration is applied.
+          {:else if startBlocked}
+            The next run is blocked until the project blocker is resolved.
+          {:else}
+            Nothing is queued for the next run yet.
+          {/if}
+        </p>
       {:else}
         <div class="run-plan-list" aria-label="Likely next run order">
           {#each runPlanRows as row, index (`${row.task?.id ?? 'fallback'}:${index}`)}

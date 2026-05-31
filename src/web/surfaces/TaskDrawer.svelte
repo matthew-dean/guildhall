@@ -33,6 +33,7 @@
   import { toast } from '../lib/toast.svelte.js'
   import { activeEscalations } from '../lib/escalation.js'
   import { escalationPrimaryAction, escalationUserGuidance } from '../lib/escalation-labels.js'
+  import { readableTaskDescription } from '../lib/task-display.js'
 
   type RuntimeDevServerStatus = 'starting' | 'running' | 'stopped' | 'failed' | 'stale'
   interface RuntimeDevServer {
@@ -160,6 +161,7 @@
   function requestedInitialTab(): DrawerTab | null {
     if (typeof window === 'undefined') return null
     const raw = new URLSearchParams(window.location.search).get('tab')
+    if (raw === 'action') return 'current'
     if (
       raw === 'current' ||
       raw === 'overview' ||
@@ -540,8 +542,14 @@
   const isWorkspaceImportTask = $derived(task?.id === 'task-workspace-import')
   const openEscalations = $derived(task ? activeEscalations(task) : [])
   const firstOpenEscalation = $derived(openEscalations[0] ?? null)
-  const canRunTaskDirectly = $derived(!hasCurrentTurns && !isTerminalRunTask && !isParentTask && !firstOpenEscalation)
-  const canResumeHold = $derived(isHeld && !firstOpenEscalation)
+  const projectStartBlocker = $derived(
+    project.detail?.startReadiness?.canStart === false
+      ? project.detail.startReadiness
+      : null,
+  )
+  const projectStartBlockerMessage = $derived(projectStartBlocker?.message ?? null)
+  const canRunTaskDirectly = $derived(!projectStartBlocker && !hasCurrentTurns && !isTerminalRunTask && !isParentTask && !firstOpenEscalation)
+  const canResumeHold = $derived(!projectStartBlocker && isHeld && !firstOpenEscalation)
   const firstOpenEscalationAction = $derived(escalationPrimaryAction(firstOpenEscalation))
   const firstOpenEscalationGuidance = $derived(escalationUserGuidance(firstOpenEscalation))
   const firstOpenEscalationText = $derived(
@@ -650,7 +658,7 @@
   })
   const displayTaskDescription = $derived.by(() => {
     if (!task || typeof task.description !== 'string') return ''
-    const description = task.description.trim()
+    const description = readableTaskDescription(task.description, displayTaskTitle)
     if (!description || description === displayTaskTitle) return ''
     return description
   })
@@ -903,6 +911,7 @@
           {runBusy}
           {runError}
           {runStatus}
+          {projectStartBlockerMessage}
           onApproveBrief={() => post('approve-brief')}
           onApproveSpec={handleApproveSpec}
           onRunTask={() => runProject('start', taskId)}
@@ -973,6 +982,9 @@
           <div class="run-controls">
             {#if runError}
               <span class="run-error">{runError}</span>
+            {/if}
+            {#if projectStartBlockerMessage}
+              <span class="run-error">{projectStartBlockerMessage}</span>
             {/if}
             {#if canRunTaskDirectly}
               {#if runStatus === 'running'}

@@ -213,3 +213,28 @@ Reran the full artifact-local smoke benchmark after sticky command-gate hardenin
 Result: 2/2 passed, 0 false successes, average quality 100. Remaining efficiency issue: both tiny artifact fixtures still needed one automation-blocker recovery in spec shaping before completion.
 
 source: codex:artifact-local-command-gate-landing-proof
+## 2026-05-31T14:35:21.225Z MCP evidence for artifact:flow-audit
+
+Added internal 0.10 bounded-chat feature spec covering two-role conversation/coordinator architecture, bounded context policy, intake flow, New request flow, memory policy, UI states, test plan, and release bar. Updated flow-audit with a checked entry pointing to internal/plans/2026-05-31-guildhall-0-10-bounded-chat.md.
+
+source: codex:bounded-chat-spec
+## 2026-05-31T14:37:08.996Z MCP evidence for artifact:flow-audit
+
+Updated the 0.10 bounded-chat spec and flow-audit entry to make the UI replacement explicit: async-style Thread deep-intake question cards should become one actionable bounded-chat notification per objective across Overview/Inbox/Thread/task detail, and New request should open the bounded-chat surface directly. Recommended the 0.10 UI as a route-backed modal overlay that can expand to full-screen for narrow or long sessions.
+
+source: codex:bounded-chat-ui-clarification
+## 2026-05-31T14:42:03.587Z MCP evidence for artifact:flow-audit
+
+Expanded the 0.10 bounded-chat spec with a Replacement Map and Recovery/Blocker Resolution section. Bounded chat is now defined as the standard pattern whenever Guildhall needs more information, permission, judgment, prioritization, or owner help, including complex blocker resolution through retry, revised scope, shelving, prerequisite task, capability request, or blocked outcomes.
+
+source: codex:bounded-chat-owner-input-scope
+## 2026-05-31T14:43:01.359Z MCP evidence for artifact:flow-audit
+
+Updated the 0.10 bounded-chat spec to capture UI simplification: when one blocker or owner-input situation has several possible human resolution actions, surfaces should prefer one bounded-chat entry point over a dense button cluster. Added label guidance such as Resolve blocker, Choose next step, Shape request, Answer project questions, and Review options.
+
+source: codex:bounded-chat-button-simplification
+## 2026-05-31T15:43:50.908Z MCP evidence for guildhall-automation-007
+
+Live installed-app audit for Looma + Knit (`projectId=looma-knit`) verified `/api/stale-server` as `stale:false`, opened `/projects/looma-knit/settings/reintake`, found no existing draft, refreshed re-intake via the project API after the section page exposed only a 404 state, and got draft `reintake-20260531T15381` with 14 sources scanned but 0 groups/0 reframes/0 creates/0 archives. The top recovery item `task-import-gh97p0` was reframed through the UI, then the remaining 36 stale imported blockers were reframed through the same `/api/project/task/:id/reframe-task` action endpoint. API readiness moved to `canStart:true`; a one-task start returned HTTP 200 and ran `task-import-1y7kmp6`, then stopped after one tick with `agent-error` because the spec agent timed out after 120000ms of inactivity and left all 39 tasks in `exploring`. Flow finding: re-intake cleanup cleared the owner blocker, but the Re-intake section lacks an obvious start/refresh affordance when no draft exists, and Looma + Knit is now runnable but not yet trustworthy for forward progress because the spec-agent durable-progress timeout remains.
+
+source: Codex live Looma + Knit re-intake audit 2026-05-31

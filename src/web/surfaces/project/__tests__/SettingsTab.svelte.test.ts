@@ -129,6 +129,7 @@ describe('SettingsTab', () => {
     await screen.findByRole('heading', { name: /ready to start/i })
     expect(screen.getByRole('navigation', { name: /settings sections/i })).toBeInTheDocument()
     expect(screen.getByRole('button', { name: 'Ready' })).toHaveAttribute('aria-current', 'page')
+    expect(screen.getByRole('button', { name: 'Re-intake' })).toBeInTheDocument()
 
     await userEvent.click(screen.getByRole('button', { name: 'Providers' }))
     expect(path.value).toBe('/projects/looma-knit/settings/providers')
@@ -301,6 +302,84 @@ describe('SettingsTab', () => {
     })
   })
 
+  it('lets users start re-intake from the direct review route when no draft exists', async () => {
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = new URL(String(input), 'http://localhost')
+      if (url.pathname === '/api/setup/status') return json({ initialized: true, name: 'Looma + Knit', id: 'looma-knit' })
+      if (url.pathname === '/api/config/levers') return json({ levers: [] })
+      if (url.pathname === '/api/project/design-system') return json({ designSystem: null })
+      if (url.pathname === '/api/project/codebase-map/status') return json(codebaseMapStatus())
+      if (url.pathname === '/api/setup/providers') return json(providersPayload())
+      if (url.pathname === '/api/project/bootstrap/status') return json({ configured: true, needed: false, status: null })
+      if (url.pathname === '/api/project/capability-requests') return json({ requests: [], activeGrants: [] })
+      if (url.pathname === '/api/project/learning') return json({ project: { suggestedLearnings: [] }, user: { suggestedLearnings: [] }, effective: { productSuggestions: [] }, projectSkillProposals: [], projectContext: {} })
+      if (url.pathname === '/api/project/reintake/status') return json({ draftExists: false, status: null, summary: null })
+      if (url.pathname === '/api/project/reintake/draft') return json({ error: 'No re-intake draft found.' }, 404)
+      if (url.pathname === '/api/project/reintake/rerun') {
+        expect(init?.method).toBe('POST')
+        return json({
+          ok: true,
+          draft: {
+            status: 'draft',
+            summary: { reframed: 0, created: 0, archived: 0, merged: 0, kept: 0, preservedDone: 0 },
+            groups: [],
+          },
+        })
+      }
+      return json({})
+    })
+    vi.stubGlobal('fetch', fetchMock)
+
+    render(SettingsTab, { subView: 'reintake' })
+
+    await screen.findByRole('heading', { name: /start re-intake/i })
+    await userEvent.click(screen.getByRole('button', { name: /^start re-intake$/i }))
+
+    await waitFor(() => {
+      expect(fetchMock.mock.calls.some(([input]) => String(input).includes('/api/project/reintake/rerun'))).toBe(true)
+    })
+    expect(screen.getByText(/no changes proposed/i)).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: /^apply selected$/i })).not.toBeInTheDocument()
+  })
+
+  it('marks a re-intake draft applied after a successful apply instead of leaving stale draft actions visible', async () => {
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = new URL(String(input), 'http://localhost')
+      if (url.pathname === '/api/setup/status') return json({ initialized: true, name: 'Looma + Knit', id: 'looma-knit' })
+      if (url.pathname === '/api/config/levers') return json({ levers: [] })
+      if (url.pathname === '/api/project/design-system') return json({ designSystem: null })
+      if (url.pathname === '/api/project/codebase-map/status') return json(codebaseMapStatus())
+      if (url.pathname === '/api/setup/providers') return json(providersPayload())
+      if (url.pathname === '/api/project/bootstrap/status') return json({ configured: true, needed: false, status: null })
+      if (url.pathname === '/api/project/capability-requests') return json({ requests: [], activeGrants: [] })
+      if (url.pathname === '/api/project/learning') return json({ project: { suggestedLearnings: [] }, user: { suggestedLearnings: [] }, effective: { productSuggestions: [] }, projectSkillProposals: [], projectContext: {} })
+      if (url.pathname === '/api/project/reintake/status') return json({ draftExists: true, status: 'draft', summary: { reframed: 1, created: 0, archived: 0, merged: 0, kept: 0, preservedDone: 0 } })
+      if (url.pathname === '/api/project/reintake/draft') {
+        return json({
+          status: 'draft',
+          summary: { reframed: 1, created: 0, archived: 0, merged: 0, kept: 0, preservedDone: 0 },
+          groups: [{ id: 'stale-task', title: 'Reframe stale task', changes: [{ kind: 'reframe', taskId: 'task-old' }] }],
+        })
+      }
+      if (url.pathname === '/api/project/reintake/apply') {
+        expect(JSON.parse(String(init?.body))).toMatchObject({ groupIds: ['stale-task'] })
+        return json({ success: true, appliedGroups: 1 })
+      }
+      return json({})
+    })
+    vi.stubGlobal('fetch', fetchMock)
+
+    render(SettingsTab, { subView: 'reintake' })
+
+    await screen.findByRole('heading', { name: /review re-intake draft/i })
+    await userEvent.click(screen.getByRole('button', { name: /^apply selected$/i }))
+
+    await waitFor(() => {
+      expect(screen.getAllByText(/re-intake applied/i).length).toBeGreaterThan(0)
+    })
+    expect(screen.queryByRole('button', { name: /^apply selected$/i })).not.toBeInTheDocument()
+  })
+
   it('explains workspace child-project gates without treating the root shell as the only app', async () => {
     const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
       const url = new URL(String(input), 'http://localhost')
@@ -371,6 +450,88 @@ describe('SettingsTab', () => {
     expect(screen.getByText('3/3 ready')).toBeInTheDocument()
     expect(screen.getByText('not required')).toBeInTheDocument()
     expect(screen.queryByRole('button', { name: /^run bootstrap$/i })).not.toBeInTheDocument()
+  })
+
+  it('does not present local readiness as project-start readiness when a migration blocks the project', async () => {
+    project.detail = {
+      ...project.detail,
+      startReadiness: {
+        canStart: false,
+        code: 'required_migration_pending',
+        message: 'Run required Guildhall migration 0.8.0/project-state-layout before starting this project.',
+        actionHref: '/migrations',
+      },
+    }
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const url = new URL(String(input), 'http://localhost')
+      if (url.pathname === '/api/setup/status') return json({ initialized: true, name: 'Font Something', id: 'font-something' })
+      if (url.pathname === '/api/config/levers') return json({ levers: [] })
+      if (url.pathname === '/api/project/design-system') return json({ designSystem: null })
+      if (url.pathname === '/api/project/codebase-map/status') return json(codebaseMapStatus())
+      if (url.pathname === '/api/setup/providers') return json(providersPayload())
+      if (url.pathname === '/api/project/bootstrap/status') {
+        return json({
+          configured: false,
+          needed: false,
+          status: null,
+          workspaceProjects: [],
+        })
+      }
+      return json({})
+    })
+    vi.stubGlobal('fetch', fetchMock)
+
+    render(SettingsTab, { subView: 'ready' })
+
+    await screen.findByRole('heading', { name: /ready to start/i })
+    expect(screen.getByText('Blocked')).toBeInTheDocument()
+    expect(screen.queryByText('3/3 ready')).toBeNull()
+    expect(screen.getByText('Run required Guildhall migration 0.8.0/project-state-layout before starting this project.')).toBeInTheDocument()
+    expect(screen.getByText('Migrate project')).toBeInTheDocument()
+  })
+
+  it('shows pending migrations even when owner input is the primary start blocker', async () => {
+    project.detail = {
+      ...project.detail,
+      startReadiness: {
+        canStart: false,
+        code: 'owner_input_required',
+        message: 'Choose a recovery path for the blocked task',
+        actionHref: '/task/task-stripe-connect-account-setup',
+      },
+    }
+    const onMigrate = vi.fn()
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const url = new URL(String(input), 'http://localhost')
+      if (url.pathname === '/api/setup/status') return json({ initialized: true, name: 'Fair Labor License', id: 'fair-labor-license' })
+      if (url.pathname === '/api/config/levers') return json({ levers: [] })
+      if (url.pathname === '/api/project/design-system') return json({ designSystem: null })
+      if (url.pathname === '/api/project/codebase-map/status') return json(codebaseMapStatus())
+      if (url.pathname === '/api/setup/providers') return json(providersPayload())
+      if (url.pathname === '/api/project/bootstrap/status') {
+        return json({ configured: false, needed: false, status: null, workspaceProjects: [] })
+      }
+      if (url.pathname === '/api/project/migrations') {
+        return json({
+          pending: [{ id: '0.8.0/codex-agent-bridge', title: 'Install bridge instructions' }],
+          blocked: [
+            { id: '0.8.0/project-state-layout', title: 'Move legacy project memory into split project state' },
+            { id: '0.8.0/task-state-layout', title: 'Move legacy task state' },
+          ],
+          applied: [],
+        })
+      }
+      return json({})
+    })
+    vi.stubGlobal('fetch', fetchMock)
+
+    render(SettingsTab, { subView: 'ready', onMigrate })
+
+    await screen.findByRole('heading', { name: /ready to start/i })
+    expect(screen.getByText('Choose a recovery path for the blocked task')).toBeInTheDocument()
+    expect(screen.getByText('3 pending Guildhall migrations will need review after the current blocker.')).toBeInTheDocument()
+    await userEvent.click(screen.getByRole('button', { name: /review migrations/i }))
+    expect(onMigrate).toHaveBeenCalledTimes(1)
   })
 
   it('does not count bootstrap as ready when a previous pass succeeded but must be rerun', async () => {

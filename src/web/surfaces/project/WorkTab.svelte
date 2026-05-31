@@ -61,12 +61,22 @@
   const importDraftCount = $derived(viewModel.importDraftCount)
   const nextImportDraft = $derived(viewModel.nextImportDraft)
   const needsMeta = $derived(viewModel.needsMeta)
-  const setupInboxItem = $derived(detail.inbox?.items?.find(item => (
-    item.kind === 'setup_pending' ||
-    item.kind === 'project_check_in' ||
-    item.kind === 'pressure_test_pending' ||
-    item.actionHref === '/setup'
-  )) ?? null)
+  const setupInboxItem = $derived.by(() => {
+    const items = detail.inbox?.items ?? []
+    const priority = [
+      'required_migration',
+      'open_escalation',
+      'agent_question_pending',
+      'pressure_test_pending',
+      'setup_pending',
+      'project_check_in',
+    ]
+    for (const kind of priority) {
+      const match = items.find(item => item.kind === kind)
+      if (match) return match
+    }
+    return items.find(item => item.actionHref === '/setup') ?? null
+  })
 
   let progress = $state('Loading...')
   let sortKey = $state<SortKey>('updated')
@@ -415,10 +425,14 @@
           <div class="setup-empty">
             <p class="muted">{setupInboxItem?.detail ?? 'No tasks yet. Finish project setup first.'}</p>
             <Button variant="primary" size="sm" onclick={() => nav(currentProjectHref(setupInboxItem?.actionHref ?? '/setup'))}>
-              {setupInboxItem?.kind === 'project_check_in'
+              {setupInboxItem?.kind === 'required_migration'
+                ? 'Migrate project'
+                : setupInboxItem?.kind === 'project_check_in'
                 ? 'Start check-in'
-                : setupInboxItem?.kind === 'pressure_test_pending'
+                : setupInboxItem?.kind === 'pressure_test_pending' || setupInboxItem?.kind === 'agent_question_pending'
                   ? 'Answer question'
+                  : setupInboxItem?.kind === 'open_escalation'
+                    ? 'Review recovery'
                   : 'Open setup'}
             </Button>
           </div>

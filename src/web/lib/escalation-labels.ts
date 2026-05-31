@@ -151,6 +151,18 @@ export function escalationUserGuidance(
     }
   }
 
+  if (
+    escalation?.agentId === 'spec-agent' &&
+    /timed out|turn limit|maximum turn|kept researching|durable progress/i.test(text)
+  ) {
+    return {
+      title: 'Guildhall can retry spec shaping.',
+      detail: 'The spec lane stalled before saving the next useful draft. This is not a project decision you need to solve by hand.',
+      nextStep: 'Use Retry spec to close this blocker and let Guildhall shape the task again from the transcript. Use Reframe task if the task is too broad or pointed at the wrong work.',
+      actionOwner: 'guildhall',
+    }
+  }
+
   const recovery = escalationRecoveryCopy(escalation)
   const hasSpecificRecovery = /no visible progress|made no visible progress|no saved (?:spec|draft)|no durable (?:draft|update)/i.test(text)
   return {
@@ -174,6 +186,15 @@ export function escalationRecoveryCopy(
     return {
       headline: 'Guildhall found context but did not save the next draft.',
       detail: 'The transcript may contain useful observations. Retry from those notes or resolve the blocker after reviewing them.',
+    }
+  }
+  if (
+    escalation?.agentId === 'spec-agent' &&
+    /timed out|turn limit|maximum turn|kept researching|durable progress/i.test(text)
+  ) {
+    return {
+      headline: 'Spec shaping stopped before saving the next draft.',
+      detail: 'Guildhall can retry from the transcript notes or reframe the task if the request is too broad.',
     }
   }
   const role = roleLabel(escalation?.agentId)

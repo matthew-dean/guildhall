@@ -3294,4 +3294,60 @@ coordinators:
       await rm(projectPath, { recursive: true, force: true })
     }
   })
+
+  it('does not revive a resolved escalation from a stale task blockReason', async () => {
+    const projectPath = await mkdtemp(path.join(tmpdir(), 'guildhall-thread-'))
+    try {
+      await mkdir(path.join(projectPath, '.guildhall'), { recursive: true })
+      await writeFile(
+        path.join(projectPath, '.guildhall', 'TASKS.json'),
+        JSON.stringify({
+          tasks: [
+            {
+              id: 'task-resolved',
+              title: 'Recovered task',
+              description: 'The visible recovery has already been handled.',
+              domain: 'frontend',
+              projectPath,
+              status: 'blocked',
+              blockReason: 'Spec agent kept researching after Guildhall asked for durable progress.',
+              escalations: [
+                {
+                  id: 'esc-resolved',
+                  reason: 'spec_no_progress',
+                  summary: 'Spec agent kept researching after Guildhall asked for durable progress.',
+                  resolvedAt: '2026-05-31T14:00:00.000Z',
+                  resolution: 'User chose retry from transcript.',
+                },
+              ],
+              createdAt: '2026-05-31T13:00:00.000Z',
+              updatedAt: '2026-05-31T14:00:00.000Z',
+            },
+          ],
+        }),
+      )
+      const snapshot: ProjectSnapshot = {
+        projectPath,
+        config: {
+          id: 'demo',
+          name: 'Demo',
+          bootstrap: { verifiedAt: new Date().toISOString() },
+          coordinators: [{ id: 'frontend', name: 'Frontend' }],
+        },
+        bootstrapVerified: true,
+        hasProvider: true,
+        hasDirection: true,
+        workspaceImportReviewed: true,
+        taskCount: 1,
+        wizardState: emptyWizardsState(),
+      }
+
+      const thread = buildThread({ projectPath, snapshot, recentEvents: [] })
+
+      expect(thread.turns.find(t => t.kind === 'escalation' && t.taskId === 'task-resolved')).toBeUndefined()
+      expect(JSON.stringify(thread.turns)).not.toContain('Spec agent kept researching')
+    } finally {
+      await rm(projectPath, { recursive: true, force: true })
+    }
+  })
 })

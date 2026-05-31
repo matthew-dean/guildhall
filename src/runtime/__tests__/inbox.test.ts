@@ -431,6 +431,28 @@ describe('buildInbox', () => {
     expect(hit.actionHref).toBe('/task/task-a?tab=current')
   })
 
+  it('brief_approval: suppressed when a failed spec pass left only a hollow brief shell', async () => {
+    await writeCompleteBootstrap()
+    await writeJson('.guildhall/workspace-goals.json', { goals: [] })
+    await writeJson('.guildhall/TASKS.json', {
+      version: 1,
+      lastUpdated: '',
+      tasks: [
+        {
+          id: 'task-hollow',
+          title: 'Shape component work',
+          status: 'exploring',
+          productBrief: {
+            authoredBy: 'spec-agent',
+          },
+        },
+      ],
+    })
+
+    const items = buildInboxWithProviderSetup()
+    expect(items.find(i => i.kind === 'brief_approval' && i.taskId === 'task-hollow')).toBeUndefined()
+  })
+
   it('brief_approval: suppressed while the same task has an unanswered question', async () => {
     await writeCompleteBootstrap()
     await writeJson('.guildhall/workspace-goals.json', { goals: [] })
@@ -975,6 +997,35 @@ coordinators:
     expect(first.detail).toMatch(/scope/i)
   })
 
+  it('open_escalation: does not revive a resolved escalation from the stale blockReason fallback', async () => {
+    await writeCompleteBootstrap()
+    await writeJson('.guildhall/workspace-goals.json', { goals: [] })
+    await writeJson('.guildhall/TASKS.json', {
+      version: 1,
+      lastUpdated: '',
+      tasks: [
+        {
+          id: 'task-resolved',
+          title: 'Recovered task',
+          status: 'blocked',
+          blockReason: 'Spec agent kept researching after Guildhall asked for durable progress.',
+          escalations: [
+            {
+              id: 'esc-resolved',
+              reason: 'spec_no_progress',
+              summary: 'Spec agent kept researching after Guildhall asked for durable progress.',
+              resolvedAt: '2026-05-31T14:00:00.000Z',
+              resolution: 'User chose retry from transcript.',
+            },
+          ],
+        },
+      ],
+    })
+
+    const items = buildInbox({ projectPath: tmpDir })
+    expect(items.find(i => i.kind === 'open_escalation' && i.taskId === 'task-resolved')).toBeUndefined()
+  })
+
   it('open_escalation: keeps full task content separate from the compact title', async () => {
     await writeCompleteBootstrap()
     await writeJson('.guildhall/workspace-goals.json', { goals: [] })
@@ -1000,6 +1051,50 @@ coordinators:
     if (!hit || hit.kind !== 'open_escalation') throw new Error('unreachable')
     expect(hit.title).toBe('We should have a system-wide policy of how much FLL charges on overhe...')
     expect(hit.taskDescription).toBe('We should have a system-wide policy of how much FLL charges on overhead for maintenance fees etc.')
+  })
+
+  it('open_escalation: turns old spec shaping failures into retry/reframe recovery copy', async () => {
+    await writeCompleteBootstrap()
+    await writeJson('.guildhall/workspace-goals.json', { goals: [] })
+    await writeJson('.guildhall/TASKS.json', {
+      version: 1,
+      lastUpdated: '',
+      tasks: [
+        {
+          id: 'task-spec-turn-limit',
+          title: 'Shape context packet compaction',
+          status: 'blocked',
+          escalations: [
+            {
+              id: 'esc-spec-turn-limit',
+              reason: 'human_judgment_required',
+              summary: 'Spec author stopped after hitting its turn limit.',
+            },
+          ],
+        },
+        {
+          id: 'task-spec-research-loop',
+          title: 'Break down expansion tasks',
+          status: 'blocked',
+          escalations: [
+            {
+              id: 'esc-spec-research-loop',
+              reason: 'human_judgment_required',
+              summary: 'Spec agent kept researching after Guildhall asked for durable progress.',
+            },
+          ],
+        },
+      ],
+    })
+
+    const items = buildInbox({ projectPath: tmpDir })
+    const hits = items.filter(i => i.kind === 'open_escalation')
+    expect(hits).toHaveLength(2)
+    for (const hit of hits) {
+      if (hit.kind !== 'open_escalation') throw new Error('unreachable')
+      expect(hit.detail).toBe('Spec shaping stopped before Guildhall saved the next draft. Open the task to retry from the transcript or reframe the work.')
+      expect(hit.detail).not.toMatch(/turn limit|kept researching/i)
+    }
   })
 
   it('open_escalation: collapses duplicate visible rows so the next move is not buried', async () => {

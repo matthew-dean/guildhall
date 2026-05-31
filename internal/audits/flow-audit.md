@@ -57,6 +57,27 @@ babysit setup/import/provider/release states across multiple pages.
 
 ## Current Follow-Ups
 
+- [x] Specify the 0.10 bounded-chat pivot for intake and New request flows.
+  Plan: `internal/plans/2026-05-31-guildhall-0-10-bounded-chat.md`.
+  The accepted direction is a two-role flow: a conversation agent handles the
+  owner-facing exchange, while a coordinator owns objective fulfillment,
+  structured memory, setting changes, task drafts, and completion decisions.
+  Context is bounded by objective and sub-objective rather than by one strict
+  question at a time: raw turns stay local to the active question/follow-up
+  chain, while accepted facts, decisions, unresolved forks, and discarded
+  responses carry forward as structured state. Follow-up clarification on
+  2026-05-31: this should replace async-style Thread-based deep intake
+  question cards. Overview, Inbox, Thread, and task detail should show one
+  actionable notification per bounded-chat objective, and the New request
+  button should open the bounded-chat surface directly. Follow-up clarification:
+  the pattern applies broadly whenever Guildhall needs more information,
+  permission, judgment, prioritization, or owner help, including complex blocker
+  resolution where the user may need a short interaction to choose retry,
+  revised scope, shelving, a prerequisite task, a capability request, or a safe
+  blocked state. UI simplification note: when one blocker has several possible
+  human resolution actions, surfaces should prefer one bounded-chat entry point
+  such as `Resolve blocker`, `Choose next step`, or `Review options` over a
+  dense row of competing buttons.
 - [ ] Complete the 0.9 release-hardening proof matrix before shipping 0.9.0.
   Plan: `internal/plans/2026-05-31-guildhall-0-9-release-hardening-proof-matrix.md`.
   This is the current release-readiness gate: first stabilize the orchestrator
@@ -71,6 +92,203 @@ babysit setup/import/provider/release states across multiple pages.
   stay as one task, API/CLI/docs pressure tests do not seed design-quality
   questions unless UI guidance is requested, and confused project answers
   remain discarded pending answers instead of becoming durable project memory.
+  Multi-agent installed-app autonomy walkthrough on 2026-05-30 kept the release
+  gate open: Narrative Harness, Looma + Knit, Fair Labor License, Font
+  something, and Commerce project all truthfully refused unattended start, but
+  each exposed mixed next-action routing. Narrative Harness clearly needed a
+  project-direction answer, yet a task drawer still exposed `Start only this
+  work item`; Looma + Knit had no runnable tasks and `Advance one task`
+  disabled, but the global open item routed to old `task-import-1y7kmp6`
+  instead of the visible AlertDialog recovery; Fair Labor License was correctly
+  blocked on owner credentials/setup, but overview, persistent status, and task
+  drawer competed between discovery review, recovery decision, and `Resume
+  task`; Font something and Commerce project both showed required migration as
+  the run blocker, while Commerce simultaneously said `0 tasks / No tasks yet`
+  and showed a pending pressure-test question. Fix before release: one project
+  should expose one authoritative next action, and task-level start affordances
+  must inherit project-level blockers.
+  2026-05-30 fix pass wired that authority through the affected surfaces:
+  task-level Start/Resume affordances now inherit project-level start blockers,
+  the persistent stop band uses action-specific labels like `Answer question`
+  and `Review recovery` instead of `Open item`, Overview promotes
+  `startReadiness` over incidental discovery cards and resolves the matching
+  inbox item even when it is not in the first three rows, Work no longer tells
+  zero-task blocked projects to create a new request, and recovery-only
+  projects route Start to the newest blocked task rather than stale historic
+  blockers. Verification: `pnpm vitest run
+  src/runtime/__tests__/serve-settings.test.ts
+  src/web/surfaces/__tests__/TaskDrawer.svelte.test.ts
+  src/web/surfaces/project/__tests__/ProjectOverviewTab.svelte.test.ts
+  src/web/surfaces/project/__tests__/WorkTab.svelte.test.ts --reporter=dot`,
+  `pnpm build`, `pnpm dev:install`, `/api/stale-server` `stale:false`, and
+  live API checks showed Looma + Knit Start pointing at `/task/task-039`, Fair
+  Labor License Start pointing at the matching Stripe recovery item, and
+  Commerce still migration-blocked without treating `0 tasks` as the next job.
+  2026-05-30 follow-up autonomy audit kept this gate open. Installed service
+  freshness was confirmed with `/api/stale-server` `stale:false`. Looma + Knit
+  correctly routed the global blocker to current AlertDialog work (`task-039`)
+  before recovery, but after clearing the visible recovery the project
+  `startReadiness` fell through to an older blocked docs/storybook task
+  (`task-import-gh97p0`). A direct focused one-task start for `task-039` still
+  succeeded through the API despite that project-level owner blocker, ran one
+  tick, then stopped as `agent-error`: the spec agent re-read tasks/transcript,
+  timed out after 120000ms of inactivity, and left `task-039` with no durable
+  spec and zero acceptance criteria. The task detail still surfaced the old
+  escalation summaries as open-like current recovery despite the raw task
+  record carrying `resolvedAt` on both escalation records. Net: Guildhall did
+  not significantly push Knit toward the AlertDialog goal; it repeated the
+  read-only/spec-agent failure mode and exposed a backend/UI contract gap where
+  focused starts can bypass project-level blockers.
+  Other-project agents found partial progress and more release blockers:
+  Narrative Harness safely answered the project-direction pressure-test
+  question, cleared one recovery, and started a run, but then showed
+  inconsistent run state (`task` detail live agent/running while project
+  summary said stopped in one observation), surfaced a fallback prompt that
+  read `From the transcript notes:` instead of a real question, and showed a
+  brief-approval item while the task still had no acceptance criteria in the
+  final subagent poll. The run was manually stopped after the audit. Fair Labor
+  License truthfully refused autonomous progress on external Stripe/OAuth/
+  Supabase credential setup, but `startReadiness` selected Stripe while Thread
+  reported Google OAuth as the active turn. Font Something and Commerce Project
+  correctly blocked on required migration in project Overview, but Projects
+  Home still advertised Commerce as `READY / INTAKE` with `Start intake` and
+  Font Something as resumable/questions despite `required_migration_pending`.
+  Fix before release: start endpoints must enforce the same project-level
+  blockers as the UI, resolved escalations must not reappear as current
+  recovery, spec-agent durable-progress failure must become a deterministic
+  recovery state with no fake brief/spec approval, and fleet/project cards must
+  inherit required-migration readiness.
+  2026-05-31 blocker follow-up fixed the cross-surface trust breaks found in
+  that pass. The backend start endpoint now enforces `projectStartReadiness`
+  for focused starts as well as global starts, so Looma + Knit `task-039`,
+  Narrative Harness `context-packet-compaction-core`, and Commerce Project
+  direct starts return `409` with the same owner-input or migration action the
+  UI shows. Service summaries now carry `startReadiness`, and project cards,
+  project tickers, Settings → Ready, the persistent stop band, and Do This Next
+  use that readiness before stale run summaries, project check-ins, or
+  discovery advisories. Required-migration projects no longer advertise Start,
+  Start intake, Resume, `3/3 ready`, `No actionable tasks remain`, or a generic
+  paused/ready activity row. Resolved escalation history no longer revives a
+  stale blocker, hollow brief shells no longer create fake brief approvals, and
+  attention sorting now ranks live inbox severity before old attention record
+  timestamps while lowering project-understanding discovery advisories below
+  real recovery/migration blockers. Verification: focused Vitest coverage for
+  start readiness, inbox/thread recovery filtering, Do This Next, Task Drawer,
+  Overview, Work, Settings, Projects Home, and project activity passed; `pnpm
+  build`, `pnpm dev:install`, and `/api/stale-server` returned `stale:false`;
+  live browser checks showed Commerce Settings as `Blocked` with `Migrate
+  project`, Looma Settings as `Blocked` with `Review recovery`, and Commerce/
+  Font project cards as `NEEDS MIGRATION / MIGRATE` with `Needs migration` as
+  the activity text.
+  Remaining release risk is project-state quality, not autonomous execution:
+  Looma + Knit still routes readiness to an old recovery task
+  (`task-import-gh97p0`) instead of being able to confidently pursue the
+  AlertDialog graph, and Narrative/Fair Labor License still have older
+  contradictory task/evidence records that may be better handled by the
+  Re-intake Project / project reframe lane than by asking agents to push work
+  forward. The next multi-agent pass should explicitly branch: runnable
+  projects may attempt feature progress, but projects blocked on owner input,
+  credentials, required migrations, or stale task graphs should audit whether
+  the UI reflects those recorded facts and should exercise project reframe
+  where the state itself looks untrustworthy.
+  2026-05-31 second multi-agent pass confirmed the core blocker contract now
+  holds across Looma + Knit, Narrative Harness, Fair Labor License, Commerce
+  Project, Font Something, and T minus t: installed app freshness was
+  `stale:false`; migration-blocked projects returned `409
+  required_migration_pending` from Start and showed `NEEDS MIGRATION / MIGRATE`
+  in cards, Overview, Settings, and Do This Next; owner-input projects returned
+  `409 owner_input_required` and routed to recovery/credential setup instead of
+  autonomous execution. The pass found four remaining trust cuts, all fixed in
+  this follow-up: Projects Home no longer leaves a stale `CONNECTING` status in
+  the global header, Settings → Ready exposes pending migrations even when
+  owner input is the primary blocker, Settings has a first-class `Re-intake`
+  tab so stale project/task graphs have an obvious project-level repair path,
+  and migration-blocked empty projects no longer say `No tasks yet. Create a
+  request when you are ready` or show historical `No actionable tasks remain`
+  events on Overview. Task drawer `?tab=action` links now open the Action tab
+  directly. Verification: `pnpm vitest run` for Header, TaskDrawer,
+  ProjectOverviewTab, SettingsTab, serve-settings, inbox, thread, DoThisNext,
+  ProjectsHome, WorkTab, and project-activity passed with 274 tests; `pnpm
+  build` passed; `pnpm dev:install` refreshed the installed app; `guildhall
+  start` plus `/api/stale-server` returned `stale:false`; live browser checks
+  showed `/projects` without `CONNECTING`, Commerce Overview with migration
+  language and no stale empty/history copy, Looma Settings with `Re-intake`,
+  `Review recovery`, and pending migration notice.
+  2026-05-31 three-agent re-intake/reframe proof pass ran against the installed
+  app with `/api/stale-server` `stale:false`. Looma + Knit refreshed re-intake
+  from 14 sources, but the draft produced `0 kept / 0 reframed / 0 merged / 0
+  archived / 0 created`; the pass reframed the visible recovery task plus 36
+  repeated stale imported blockers, leaving `39 exploring / 0 blocked`, then a
+  one-task start ran `task-import-1y7kmp6` and stopped as `agent-error` after a
+  120000ms spec-agent timeout with no durable progress saved. Narrative
+  Harness generated and applied a re-intake draft that only preserved one done
+  workspace-import task, reframed two unhealthy stale planning tasks, started a
+  real run, then returned to owner-input recovery after repeated spec-agent
+  turn-limit/researching failures; the audit stopped that run cleanly after 4
+  ticks. Font Something applied the required `0.8.0/project-state-layout`
+  migration, ran and applied an empty re-intake draft, answered/cleared the
+  visible quality-pass and fallback questions, approved one valid brief, then
+  correctly refused start because `import-model-precision-improvements` still
+  fails the spec approval contract: missing project job/success metric,
+  acceptance criteria, and Completion Boundary. New trust cuts from this pass:
+  direct `/settings/reintake` empty state says no draft exists without an
+  obvious Start/Refresh action, empty/no-op drafts still expose an Apply
+  affordance, apply can look visually stuck even after the API succeeds,
+  fallback-question cards can show agent narration instead of a real decision,
+  workspace-import `Skip import for now` can leave the item feeling unresolved,
+  and spec-agent durable-progress failures remain the hard release blocker for
+  autonomous project progress.
+  2026-05-31 trust-blocker fix pass closed the UI/state regressions from that
+  audit while preserving the real autonomous-progress blocker. Re-intake now
+  has a direct repair route from Settings, an actionable first-run empty state,
+  no Apply affordance for empty/no-op drafts, and an applied state that does
+  not look stuck. Workspace import now says `Shelve import review` and renders
+  a clear shelved state with a `Re-read project notes` repair action. Spec
+  fallback parsing no longer converts transcript-note narration into fake user
+  questions. Spec-agent inactivity while shaping now escalates as
+  `Spec shaping timed out before saving durable progress.` instead of a raw
+  `agent-error`, and old persisted spec turn-limit/research-loop blockers are
+  normalized in Inbox, Do This Next, Overview, and task recovery copy as
+  retry/reframe work owned by Guildhall. Verification: focused Vitest coverage
+  for Settings re-intake, Workspace Import, orchestrator fallback/timeout
+  recovery, escalation labels, Project Overview, Inbox, and Do This Next
+  passed; `pnpm build` passed; `pnpm dev:install` refreshed the installed app;
+  `guildhall start` plus `/api/stale-server` returned `stale:false`.
+  Follow-up browser audit on the installed app found no visible raw
+  `missing repo evidence`, spec turn-limit, spec-research-loop, `Recovery
+  needed. Detail`, stale `CONNECTING`, empty-project start, or stale
+  `No actionable tasks remain` copy on the checked Looma + Knit, Narrative
+  Harness, Font Something, Commerce Project, and Projects Home routes after
+  load. Start endpoints for Looma + Knit, Narrative Harness, Font Something,
+  and Commerce Project refused execution with the same owner-input or required
+  migration actions shown in the UI. Remaining release risk: the spec agent is
+  still failing to save durable progress for Looma/Narrative-style shaping
+  tasks, so Guildhall now fails more truthfully and recoverably, but the
+  release-hardening matrix still needs an autonomous durable-progress proof
+  before 0.9.0 should ship.
+  2026-05-31 durable-progress proof closed that release blocker for the
+  recovery path. The orchestrator now writes a deterministic recovery spec seed
+  before redispatching a reframed shaping task: it uses current source intent,
+  answered owner questions, and non-superseded durable decisions; filters stale
+  worker/build recovery loops and fake fallback-question prompts; records a
+  product brief, spec, acceptance criteria, completion boundary, and system note;
+  then moves the task to `spec_review` without spending another model turn in
+  read-only intake. The task drawer hides stale handoff packets after this
+  recovery seed so old worker self-critiques do not appear above the new spec.
+  Verification: `pnpm vitest run src/runtime/__tests__/orchestrator.test.ts -t
+  "recovery spec seed|inactivity timeouts|durable spec progress"
+  --reporter=dot`, `pnpm vitest run
+  src/web/surfaces/drawer/__tests__/drawer-tabs.svelte.test.ts -t "recovery
+  spec seed" --reporter=dot`, `pnpm build`, `pnpm dev:install`, restart, and
+  `/api/stale-server` `stale:false`. Live Looma + Knit proof: reframed
+  `task-import-1y7kmp6`, ran `one_task`, and the installed app stopped after
+  one processed tick with the task in `spec_review`, no `blockReason`, a
+  coordinator-recovery product brief, three acceptance criteria, a Completion
+  Boundary, and no visible stale `missing repo evidence`, spec timeout,
+  research-loop, old build-escalation, fake-question, or handoff-packet text in
+  the checked task route. Remaining risk is now spec quality and downstream
+  implementation proof, not intake durability: the seeded spec is intentionally
+  conservative and should still be reviewed before worker execution.
 - [ ] Harden Guildhall against web/Node/Looma/Knit overfitting across runtime
   inference, task shaping, proof paths, and smoke tests. Plan:
   `internal/plans/2026-05-31-guildhall-generalization-overfitting-hardening.md`.
@@ -6282,6 +6500,24 @@ local 0.7 release-candidate build at `http://localhost:7777/projects/narrative-h
     should treat Jira/Linear/GitHub Issues/Azure DevOps/Asana as planning
     authorities while Guildhall keeps a local execution mirror with proof,
     stale-state handling, safe proposed writes, and context-budget manifests.
+  - [x] Closed the remaining Looma + Knit reframe trust blocker. Recovery
+    spec seeds now rewrite stale product briefs, clean imported source
+    snippets, promote answered owner questions into plain decisions, filter
+    stale build/reframe noise, and hide stale handoff packets once a recovered
+    task returns to spec review. The drawer also normalizes imported task
+    descriptions so users see readable provenance such as `From
+    looma/docs/editor-roadmap.md`, not raw markdown fragments from roadmap
+    intake.
+    Evidence: `pnpm vitest run src/runtime/__tests__/orchestrator.test.ts
+    src/web/surfaces/drawer/__tests__/drawer-tabs.svelte.test.ts
+    --reporter=dot` passed with 302 tests; `pnpm build` passed; `pnpm
+    dev:install` passed; the installed service was restarted and
+    `/api/stale-server` reported `"stale": false` for
+    `/Users/matthew/.guildhall/app/0.9.0/app/dist/cli.js`; a live Looma + Knit
+    reframe plus one-task run moved `task-import-1y7kmp6` to `spec_review`
+    with `coordinator-recovery` as brief author, cleaned source text,
+    cleaned owner decisions, no stale build/import prompt text, no fake posted
+    question text, and no stale handoff packet in the browser drawer.
 
 ## 2026-05-31T03:20:00.000Z MCP evidence for artifact:flow-audit
 

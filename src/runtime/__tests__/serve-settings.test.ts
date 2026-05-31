@@ -720,6 +720,28 @@ describe('POST /api/project/start', () => {
     })
   })
 
+  it('includes project start readiness in service summaries so fleet cards inherit start blockers', async () => {
+    registerWorkspace({ id: PROJECT_ID, name: 'Settings Test', path: tmpDir, tags: [] })
+    await fs.mkdir(path.join(tmpDir, 'memory'), { recursive: true })
+    await fs.writeFile(path.join(tmpDir, 'memory', 'MEMORY.md'), '# Legacy\n', 'utf8')
+    const { app } = buildServeApp({ projectPath: tmpDir })
+
+    const service = await app.fetch(new Request('http://localhost/api/service'))
+    expect(service.status).toBe(200)
+    const body = (await service.json()) as {
+      projects?: Array<{
+        id?: string
+        startReadiness?: { canStart?: boolean; code?: string; actionHref?: string }
+      }>
+    }
+    const project = body.projects?.find(entry => entry.id === PROJECT_ID)
+    expect(project?.startReadiness).toMatchObject({
+      canStart: false,
+      code: 'required_migration_pending',
+      actionHref: '/migrations',
+    })
+  })
+
   it('blocks project mutations when project state requires a newer Guildhall runtime', async () => {
     await fs.writeFile(
       path.join(tmpDir, '.guildhall', 'runtime.json'),
@@ -1076,6 +1098,164 @@ describe('POST /api/project/start', () => {
       actionHref: '/task/task-question?tab=current',
     })
     expect(projectBody.startReadiness?.message).toContain('1 question needs your answer')
+  })
+
+  it('points recovery-only Start blockers at the newest blocked task instead of stale historical blockers', async () => {
+    const older = '2026-05-19T10:00:00.000Z'
+    const newer = '2026-05-19T12:00:00.000Z'
+    await fs.writeFile(
+      path.join(tmpDir, '.guildhall', 'TASKS.json'),
+      JSON.stringify({
+        version: 1,
+        lastUpdated: newer,
+        tasks: [
+          {
+            id: 'task-old-import',
+            title: 'Old import blocker',
+            description: 'Historical blocked task.',
+            domain: 'core',
+            status: 'blocked',
+            priority: 'normal',
+            acceptanceCriteria: [],
+            outOfScope: [],
+            dependsOn: [],
+            notes: [],
+            openQuestions: [],
+            escalations: [{ id: 'esc-old', summary: 'Old recovery path' }],
+            agentIssues: [],
+            gateResults: [],
+            reviewVerdicts: [],
+            adjudications: [],
+            revisionCount: 0,
+            remediationAttempts: 0,
+            createdAt: older,
+            updatedAt: older,
+          },
+          {
+            id: 'task-current',
+            title: 'Current blocked task',
+            description: 'The task the user is looking at now.',
+            domain: 'core',
+            status: 'blocked',
+            priority: 'normal',
+            acceptanceCriteria: [],
+            outOfScope: [],
+            dependsOn: [],
+            notes: [],
+            openQuestions: [],
+            escalations: [{ id: 'esc-current', summary: 'Current recovery path' }],
+            agentIssues: [],
+            gateResults: [],
+            reviewVerdicts: [],
+            adjudications: [],
+            revisionCount: 0,
+            remediationAttempts: 0,
+            createdAt: newer,
+            updatedAt: newer,
+          },
+        ],
+      }, null, 2),
+      'utf8',
+    )
+
+    const { app } = buildServeApp({ projectPath: tmpDir })
+    const projectRes = await app.fetch(new Request(scoped('/api/project')))
+    const projectBody = (await projectRes.json()) as {
+      startReadiness?: { canStart?: boolean; code?: string; actionHref?: string; message?: string }
+    }
+
+    expect(projectBody.startReadiness).toMatchObject({
+      canStart: false,
+      code: 'owner_input_required',
+      actionHref: '/task/task-current',
+    })
+    expect(projectBody.startReadiness?.message).toContain('Choose a recovery path')
+  })
+
+  it('rejects focused task starts while project-level owner input is still blocking Start', async () => {
+    const now = new Date().toISOString()
+    await fs.writeFile(
+      path.join(tmpDir, '.guildhall', 'TASKS.json'),
+      JSON.stringify({
+        version: 1,
+        lastUpdated: now,
+        tasks: [
+          {
+            id: 'task-needs-answer',
+            title: 'Needs answer first',
+            description: 'The project-level blocker.',
+            domain: 'core',
+            status: 'exploring',
+            priority: 'normal',
+            acceptanceCriteria: [],
+            outOfScope: [],
+            dependsOn: [],
+            notes: [],
+            openQuestions: [{
+              id: 'q-1',
+              askedBy: 'spec-agent',
+              askedAt: now,
+              kind: 'choice',
+              prompt: 'Which implementation direction should Guildhall use?',
+              choices: ['Option A', 'Option B'],
+            }],
+            escalations: [],
+            agentIssues: [],
+            gateResults: [],
+            reviewVerdicts: [],
+            adjudications: [],
+            revisionCount: 0,
+            remediationAttempts: 0,
+            createdAt: now,
+            updatedAt: now,
+          },
+          {
+            id: 'task-other',
+            title: 'Other ready-looking task',
+            description: 'This should not be startable while the project is blocked.',
+            domain: 'core',
+            status: 'ready',
+            priority: 'normal',
+            acceptanceCriteria: ['It has a real acceptance criterion.'],
+            outOfScope: [],
+            dependsOn: [],
+            notes: [],
+            productBrief: {
+              userJob: 'Move another task forward.',
+              successMetric: 'The task completes.',
+              approvedAt: now,
+            },
+            escalations: [],
+            agentIssues: [],
+            gateResults: [],
+            reviewVerdicts: [],
+            adjudications: [],
+            revisionCount: 0,
+            remediationAttempts: 0,
+            createdAt: now,
+            updatedAt: now,
+          },
+        ],
+      }, null, 2),
+      'utf8',
+    )
+
+    const { app } = buildServeApp({ projectPath: tmpDir })
+    const res = await app.fetch(
+      new Request(scoped('/api/project/start'), {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ mode: 'one_task', taskId: 'task-other', scope: 'work_item' }),
+      }),
+    )
+
+    expect(res.status).toBe(409)
+    const body = (await res.json()) as { code?: string; actionHref?: string; error?: string }
+    expect(body).toMatchObject({
+      code: 'owner_input_required',
+      actionHref: '/task/task-needs-answer?tab=current',
+    })
+    expect(body.error).toContain('1 question needs your answer')
   })
 
   it('rejects fanout without worktree isolation with a clear error', async () => {
@@ -2199,6 +2379,86 @@ describe('GET /api/project/inbox — blockers', () => {
       item.status === 'resolved' &&
       item.resolution === 'verified',
     )).toBe(true)
+  })
+
+  it('returns open attention sorted by current inbox priority instead of stale record recency', async () => {
+    const yamlPath = path.join(tmpDir, 'guildhall.yaml')
+    const current = await fs.readFile(yamlPath, 'utf8')
+    await fs.writeFile(
+      yamlPath,
+      current +
+        '\nbootstrap:\n  verifiedAt: "2026-04-24T00:00:00Z"\n  packageManager: pnpm\n  install: { command: "pnpm install", status: ok }\n  gates:\n    lint: { command: "pnpm lint", available: true }\n',
+      'utf8',
+    )
+    await fs.writeFile(
+      path.join(tmpDir, '.guildhall', 'workspace-goals.json'),
+      JSON.stringify({ goals: [] }, null, 2),
+      'utf8',
+    )
+    await fs.writeFile(
+      path.join(tmpDir, '.guildhall', 'TASKS.json'),
+      JSON.stringify({
+        version: 1,
+        lastUpdated: '2026-05-31T15:00:00.000Z',
+        tasks: [
+          {
+            id: 'task-thin',
+            title: 'Thin ready task',
+            description: 'Needs acceptance criteria.',
+            status: 'ready',
+            productBrief: {
+              userJob: 'Use the task.',
+              successMetric: 'Task works.',
+              approvedAt: '2026-05-31T14:00:00.000Z',
+            },
+            acceptanceCriteria: [],
+            escalations: [],
+          },
+          {
+            id: 'task-blocked',
+            title: 'Blocked task',
+            description: 'Needs recovery.',
+            status: 'blocked',
+            escalations: [{ id: 'esc-block', summary: 'Needs recovery.' }],
+          },
+        ],
+      }, null, 2),
+      'utf8',
+    )
+    await fs.writeFile(
+      path.join(tmpDir, '.guildhall', 'attention.json'),
+      JSON.stringify({
+        version: 1,
+        records: [
+          {
+            id: 'spec_fill_pending:task-thin',
+            status: 'open',
+            kind: 'spec_fill_pending',
+            severity: 'low',
+            taskId: 'task-thin',
+            title: 'Thin ready task',
+            detail: 'Optional cleanup: add acceptance criteria so agents and reviewers have a clearer brief.',
+            actionHref: '/task/task-thin?tab=spec',
+            missingSteps: ['acceptance'],
+            createdAt: '2026-05-31T16:00:00.000Z',
+            updatedAt: '2026-05-31T16:00:00.000Z',
+          },
+        ],
+      }, null, 2),
+      'utf8',
+    )
+
+    const { app } = buildServeApp({ projectPath: tmpDir })
+    const res = await app.fetch(new Request(scoped('/api/project/inbox')))
+    const body = (await res.json()) as {
+      items?: Array<{ kind?: string; taskId?: string; severity?: string }>
+    }
+    const relevant = (body.items ?? []).filter(item =>
+      item.taskId === 'task-thin' || item.taskId === 'task-blocked',
+    )
+
+    expect(relevant.map(item => item.kind)).toEqual(['open_escalation', 'spec_fill_pending'])
+    expect(relevant.map(item => item.severity)).toEqual(['high', 'low'])
   })
 
   it('describes project-understanding reconciliation without implying Git is missing', async () => {

@@ -29,7 +29,9 @@ describe('DoThisNext', () => {
 
   it('prescribes the highest-priority non-current action and keeps project routing', async () => {
     const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
-      expect(String(input)).toBe('/api/project/inbox?projectId=looma-knit')
+      const url = String(input)
+      if (url === '/api/project?projectId=looma-knit') return json({ startReadiness: { canStart: true } })
+      expect(url).toBe('/api/project/inbox?projectId=looma-knit')
       return json({
         items: [
           {
@@ -67,6 +69,42 @@ describe('DoThisNext', () => {
     await userEvent.click(screen.getByRole('button', { name: /open readiness checks/i }))
 
     expect(path.value).toBe('/projects/looma-knit/settings/ready')
+  })
+
+  it('uses project start readiness ahead of stale inbox ordering', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (input: RequestInfo | URL) => {
+        const url = String(input)
+        if (url === '/api/project?projectId=looma-knit') {
+          return json({
+            startReadiness: {
+              canStart: false,
+              code: 'owner_input_required',
+              message: 'Choose a recovery path for the blocked task',
+              actionHref: '/task/task-current',
+            },
+          })
+        }
+        return json({
+          items: [
+            {
+              kind: 'project_understanding',
+              severity: 'high',
+              title: 'Review project discovery update',
+              detail: 'Review the reconciliation.',
+              actionHref: '/workspace-import?mode=reconcile',
+            },
+          ],
+        })
+      }),
+    )
+
+    render(DoThisNext)
+
+    await screen.findByText('Choose a recovery path for the blocked task')
+    expect(screen.getByRole('button', { name: /review recovery/i })).toBeTruthy()
+    expect(screen.queryByText('Review project discovery update')).toBeNull()
   })
 
   it('hides low-severity inbox noise when nothing actionable is waiting', async () => {
@@ -158,5 +196,34 @@ describe('DoThisNext', () => {
     await userEvent.click(more)
 
     expect(path.value).toBe('/projects/looma-knit/overview/inbox')
+  })
+
+  it('shows recovery detail directly instead of stacking extra status boilerplate', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (input: RequestInfo | URL) => {
+        const url = String(input)
+        if (url === '/api/project?projectId=looma-knit') return json({ startReadiness: { canStart: true } })
+        return json({
+          items: [
+            {
+              kind: 'open_escalation',
+              severity: 'high',
+              title: 'AlertDialog',
+              detail: 'Spec shaping stopped before Guildhall saved the next draft. Open the task to retry from the transcript or reframe the work.',
+              taskId: 'task-alert-dialog',
+              actionHref: '/task/task-alert-dialog?tab=action',
+            },
+          ],
+        })
+      }),
+    )
+
+    render(DoThisNext)
+
+    await screen.findByText('Review the blocked task on AlertDialog')
+    expect(screen.getByText('Spec shaping stopped before Guildhall saved the next draft. Open the task to retry from the transcript or reframe the work.')).toBeTruthy()
+    expect(screen.queryByText(/Recovery needed\. Detail/i)).toBeNull()
+    expect(screen.queryByText(/turn limit|kept researching/i)).toBeNull()
   })
 })

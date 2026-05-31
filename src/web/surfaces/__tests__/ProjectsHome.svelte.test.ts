@@ -216,6 +216,65 @@ describe('ProjectsHome', () => {
     expect(screen.queryByText('Check-in')).toBeNull()
   })
 
+  it('does not advertise Start intake or Resume when service readiness says a migration blocks the project', async () => {
+    const fetchMock = vi.fn(async () => json({
+      ...servicePayload,
+      projects: [
+        {
+          id: 'commerce',
+          path: '/repo/commerce',
+          name: 'Commerce',
+          taskCounts: { total: 0, active: 0, draftReview: 0, blocked: 0, done: 0, shelved: 0 },
+          run: { status: 'stopped', mode: 'continuous' },
+          projectCheckIn: {
+            needed: true,
+            label: 'Project questions',
+            title: 'Project check-in needed',
+            detail: 'Start the check-in pass.',
+          },
+          startReadiness: {
+            canStart: false,
+            code: 'required_migration_pending',
+            message: 'Run the required Guildhall migration before starting this project.',
+            actionHref: '/migrations',
+          },
+        },
+        {
+          id: 'font-something',
+          path: '/repo/font-something',
+          name: 'Font Something',
+          taskCounts: { total: 3, active: 2, draftReview: 0, blocked: 0, done: 1, shelved: 0 },
+          highlights: { activeTaskTitle: 'Revise type scale' },
+          run: { status: 'stopped', mode: 'continuous' },
+          projectCheckIn: {
+            needed: true,
+            label: 'Project questions',
+            title: 'Project check-in needed',
+            detail: 'Start the check-in pass.',
+          },
+          startReadiness: {
+            canStart: false,
+            code: 'required_migration_pending',
+            message: 'Run the required Guildhall migration before starting this project.',
+            actionHref: '/migrations',
+          },
+        },
+      ],
+    } satisfies ServiceDetail))
+    vi.stubGlobal('fetch', fetchMock)
+
+    render(ProjectsHome)
+    await screen.findByText('Commerce')
+
+    expect(screen.getAllByText('Needs migration').length).toBeGreaterThanOrEqual(2)
+    expect(screen.getAllByText('Migrate')).toHaveLength(2)
+    expect(screen.queryByText('ready')).toBeNull()
+    expect(screen.queryByText('2 paused')).toBeNull()
+    expect(screen.queryByText('Project questions')).toBeNull()
+    expect(screen.queryByRole('button', { name: /start intake/i })).toBeNull()
+    expect(screen.queryByRole('button', { name: /^resume$/i })).toBeNull()
+  })
+
   it('summarizes the project floor and exposes card work mix visuals', async () => {
     const fetchMock = vi.fn(async () => json(servicePayload))
     vi.stubGlobal('fetch', fetchMock)

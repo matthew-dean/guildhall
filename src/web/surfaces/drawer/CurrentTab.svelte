@@ -40,6 +40,7 @@
     runBusy?: boolean
     runError?: string | null
     runStatus?: string
+    projectStartBlockerMessage?: string | null
     onApproveBrief: () => void
     onApproveSpec: () => void
     onRunTask: () => void
@@ -57,6 +58,7 @@
     runBusy = false,
     runError = null,
     runStatus = 'stopped',
+    projectStartBlockerMessage = null,
     onApproveBrief,
     onApproveSpec,
     onRunTask,
@@ -139,6 +141,9 @@
       if (hasIncompleteTaskChecklist(turn)) {
         return briefFixDescription(turn)
       }
+      if (projectStartBlockerMessage) {
+        return projectStartBlockerMessage
+      }
       if (isProjectRunActive()) {
         return 'Approved and queued. Guildhall is already running for this project, so this task will stay in the queue until the coordinator picks it.'
       }
@@ -185,6 +190,7 @@
   }
 
   function canRunTask(turn: TaskThreadInFlightTurn): boolean {
+    if (projectStartBlockerMessage) return false
     if (turn.taskStatus === 'ready' && hasIncompleteTaskChecklist(turn)) return false
     if (isProjectRunActive() && turn.taskStatus !== 'import_draft') return false
     return !turn.liveAgent && (
@@ -224,12 +230,22 @@
   }
 
   function showsTaskAction(turn: TaskThreadInFlightTurn): boolean {
+    if (projectStartBlockerMessage) {
+      return !turn.liveAgent && (
+        turn.taskStatus === 'ready' ||
+        turn.taskStatus === 'exploring' ||
+        turn.taskStatus === 'in_progress' ||
+        turn.taskStatus === 'review' ||
+        turn.taskStatus === 'gate_check'
+      )
+    }
     return canRunTask(turn) ||
       (!turn.liveAgent && turn.taskStatus === 'ready' && hasIncompleteTaskChecklist(turn)) ||
       (!turn.liveAgent && turn.taskStatus !== 'import_draft' && isProjectRunActive())
   }
 
   function runLabel(turn: TaskThreadInFlightTurn): string {
+    if (projectStartBlockerMessage) return 'Project blocked'
     if (briefShapingTimedOut(turn) || briefShapingPaused(turn)) return 'Try shaping brief again'
     switch (turn.taskStatus) {
       case 'ready': return hasIncompleteTaskChecklist(turn) ? briefFixButtonLabel(turn) : 'Start only this work item'
@@ -346,9 +362,9 @@
         </p>
         <Row justify="end" gap="2">
           <Button variant="secondary" onclick={onOpenSpecTab}>View brief</Button>
-          <Button variant="agent" disabled={runBusy} onclick={onRunTask}>
+          <Button variant="agent" disabled={runBusy || Boolean(projectStartBlockerMessage)} onclick={onRunTask}>
             <Icon name="sparkles" size={14} />
-            Start
+            {projectStartBlockerMessage ? 'Project blocked' : 'Start'}
           </Button>
         </Row>
       </Stack>
@@ -571,9 +587,9 @@
             {#if showsTaskAction(turn)}
               <Row justify="end" gap="2">
                 {#if turn.taskStatus === 'ready' && hasIncompleteTaskChecklist(turn)}
-                  <Button variant="agent" disabled={runBusy} onclick={onRunTask}>
+                  <Button variant="agent" disabled={runBusy || Boolean(projectStartBlockerMessage)} onclick={onRunTask}>
                     <Icon name="sparkles" size={14} />
-                    {briefFixButtonLabel(turn)}
+                    {projectStartBlockerMessage ? 'Project blocked' : briefFixButtonLabel(turn)}
                   </Button>
                 {:else if turn.taskStatus !== 'import_draft' && isProjectRunActive()}
                   <Button variant="secondary" disabled>
@@ -582,7 +598,7 @@
                 {:else if turn.importedDraft && !turn.liveAgent}
                   <Button
                     variant="agent"
-                    disabled={runBusy}
+                    disabled={runBusy || Boolean(projectStartBlockerMessage)}
                     onclick={turn.taskStatus === 'import_draft' ? onShapeDraft : onRunTask}
                   >
                     <Icon name="sparkles" size={14} />
@@ -591,7 +607,7 @@
                 {:else if isQueuedSpecRevision(turn)}
                   <Button
                     variant="agent"
-                    disabled={runBusy}
+                    disabled={runBusy || Boolean(projectStartBlockerMessage)}
                     onclick={onRunTask}
                   >
                     <Icon name="sparkles" size={14} />
@@ -600,7 +616,7 @@
                 {:else}
                   <Button
                     variant="agent"
-                    disabled={runBusy}
+                    disabled={runBusy || Boolean(projectStartBlockerMessage)}
                     onclick={turn.taskStatus === 'import_draft' ? onShapeDraft : onRunTask}
                   >
                     <Icon name="sparkles" size={14} />

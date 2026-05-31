@@ -422,6 +422,12 @@ interface ServiceProjectSummary {
   }
   gitStory?: GitStorySummary
   providerStatus?: unknown
+  startReadiness?: {
+    canStart: boolean
+    code?: string
+    message?: string
+    actionHref?: string
+  } | null
   migrationSummary?: {
     pending: number
     blocked: number
@@ -2093,6 +2099,21 @@ export function buildServeApp(opts: ServeOptions = {}): {
         const projectCheckIn = resolved.initializationNeeded
           ? null
           : summarizeProjectCheckIn(getProjectStateDir(entry.path))
+        const startReadiness = resolved.initializationNeeded
+          ? null
+          : await (async () => {
+              const entryConfig = readProjectConfig(entry.path)
+              const entryResolvedConfig = resolveConfig({ workspacePath: entry.path })
+              return projectStartReadiness({
+                projectPath: entry.path,
+                resolvedConfig: entryResolvedConfig,
+                runtimeProvider: getRuntimeProviderConfig({
+                  projectPath: entry.path,
+                  models: entryResolvedConfig.models,
+                }),
+                allowPaidProviderFallback: Boolean(entryConfig.allowPaidProviderFallback),
+              })
+            })().catch(() => null)
         let taskCounts: ServiceProjectSummary['taskCounts'] = {
           total: 0,
           active: 0,
@@ -2121,6 +2142,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
             ...(highlights ? { highlights } : {}),
             ...(gitStory ? { gitStory } : {}),
             ...(providerStatus ? { providerStatus } : {}),
+            ...(startReadiness ? { startReadiness } : {}),
             ...(migrationSummary ? { migrationSummary } : {}),
             projectCheckIn,
             ...(run
@@ -2146,6 +2168,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
           ...(taskActivity ? { taskActivity } : {}),
           ...(highlights ? { highlights } : {}),
           ...(providerStatus ? { providerStatus } : {}),
+          ...(startReadiness ? { startReadiness } : {}),
           ...(migrationSummary ? { migrationSummary } : {}),
           projectCheckIn,
           ...(run
@@ -3350,6 +3373,17 @@ export function buildServeApp(opts: ServeOptions = {}): {
     }
   }
 
+  function blockedStartStatus(code: string | undefined): 400 | 409 {
+    switch (code) {
+      case 'required_migration_pending':
+      case 'runtime_too_old':
+      case 'owner_input_required':
+        return 409
+      default:
+        return 400
+    }
+  }
+
   function terminalStartState(projectPath: string): {
     canStart: false
     code: 'all_terminal'
@@ -3619,58 +3653,6 @@ export function buildServeApp(opts: ServeOptions = {}): {
       if (project.initializationNeeded) {
         return c.json({ error: 'Project not initialized. Complete /setup first.' }, 400)
       }
-      const requiredMigrationBlocker = await startBlockerForRequiredMigrations(project.path)
-      if (requiredMigrationBlocker) {
-        return c.json(
-          {
-            error: requiredMigrationBlocker.message,
-            code: requiredMigrationBlocker.code,
-            actionHref: requiredMigrationBlocker.actionHref,
-          },
-          409,
-        )
-      }
-      const importDraftBlocker = await startBlockerForImportDrafts(project.path)
-      if (importDraftBlocker) {
-        return c.json(
-          {
-            error: importDraftBlocker.message,
-            code: importDraftBlocker.code,
-            actionHref: importDraftBlocker.actionHref,
-          },
-          400,
-        )
-      }
-      const terminal = terminalStartState(project.path)
-      if (terminal) {
-        return c.json({
-          status: 'stopped',
-          mode: 'continuous',
-          code: terminal.code,
-          stopSummary: terminal.stopSummary,
-        })
-      }
-      try {
-        const settings = await loadLeverSettings({
-          path: defaultAgentSettingsPath(project.path),
-        })
-        const invariant = projectLeverInvariantError(settings.project)
-        if (invariant) {
-          return c.json(
-            { error: invariant, code: 'invalid_lever_combo', actionHref: '/settings/advanced' },
-            400,
-          )
-        }
-      } catch (err) {
-        const message = err instanceof Error ? err.message : String(err)
-        if (/concurrent_task_dispatch.*worktree_isolation/i.test(message)) {
-          return c.json(
-            { error: message, code: 'invalid_lever_combo', actionHref: '/settings/advanced' },
-            400,
-          )
-        }
-        throw err
-      }
       // Preflight: a run with no provider is worse than no run — the
       // orchestrator boots, every tick fails, and the UI shows "Running"
       // while nothing actually moves. Catch the missing-provider case here
@@ -3690,6 +3672,33 @@ export function buildServeApp(opts: ServeOptions = {}): {
         projectPath: project.path,
         models: resolvedConfig.models,
       })
+      const startReadiness = await projectStartReadiness({
+        projectPath: project.path,
+        resolvedConfig,
+        runtimeProvider,
+        allowPaidProviderFallback: Boolean(projectCfg.allowPaidProviderFallback),
+      })
+      if (!startReadiness.canStart) {
+        if (startReadiness.code === 'all_terminal') {
+          const terminal = terminalStartState(project.path)
+          if (terminal) {
+            return c.json({
+              status: 'stopped',
+              mode: 'continuous',
+              code: terminal.code,
+              stopSummary: terminal.stopSummary,
+            })
+          }
+        }
+        return c.json(
+          {
+            error: startReadiness.message ?? 'Guildhall needs one thing resolved before it can start.',
+            code: startReadiness.code,
+            actionHref: startReadiness.actionHref,
+          },
+          blockedStartStatus(startReadiness.code),
+        )
+      }
       const creds = runtimeProvider.credentials
       const preferred = runtimeProvider.preferredProvider
       const allowPaidProviderFallback = runtimeProvider.allowPaidProviderFallback

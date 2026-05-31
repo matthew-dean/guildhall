@@ -9,6 +9,7 @@ import JourneyTab from '../JourneyTab.svelte'
 import ProvenanceTab from '../ProvenanceTab.svelte'
 import TranscriptTab from '../TranscriptTab.svelte'
 import SpecFillChecklist from '../SpecFillChecklist.svelte'
+import SpecTab from '../SpecTab.svelte'
 import SuggestionCard from '../SuggestionCard.svelte'
 import LogViewer from '../../../lib/LogViewer.svelte'
 import Section from '../../../lib/Section.svelte'
@@ -260,6 +261,64 @@ describe('drawer task detail tabs', () => {
     expect(screen.getByText('Remaining uncertainty')).toBeInTheDocument()
     expect(screen.getByText('Browser inspection is still required before release.')).toBeInTheDocument()
     expect(screen.queryByRole('button', { name: /start/i })).not.toBeInTheDocument()
+  })
+
+  it('hides stale handoff packets after a recovery spec seed moves a task back to spec review', () => {
+    render(SpecTab, {
+      task: task({
+        status: 'spec_review',
+        title: 'Block menu / block side menu',
+        description: 'looma/docs/editor-roadmap.md: - **Block menu / block side menu**',
+        spec: '## Summary\nBuild the block menu.\n\n## Completion Boundary\n- Product outcome: The block menu works.',
+        acceptanceCriteria: [
+          {
+            id: 'ac-1',
+            description: 'Given the editor, when the block handle opens, then block actions are available.',
+            verifiedBy: 'review',
+            met: false,
+          },
+        ],
+        productBrief: {
+          userJob: 'I want block menu work shaped from current evidence.',
+          successMetric: 'A reviewable spec exists.',
+          antiPatterns: [],
+          authoredBy: 'coordinator-recovery',
+          authoredAt: now,
+        },
+        latestSelfCritique: 'Self-critique: stale worker handoff said the build was failing.',
+        latestCheckpoint: {
+          step: 4,
+          agentId: 'worker-agent',
+          writtenAt: now,
+          intent: 'Old implementation attempt.',
+        },
+        notes: [
+          {
+            agentId: 'coordinator-recovery',
+            role: 'system',
+            content: 'Guildhall wrote a deterministic recovery spec seed from the current task evidence before redispatching the spec lane.',
+            timestamp: now,
+          },
+        ],
+      }),
+      busy: false,
+      onApproveBrief: vi.fn(),
+      onApproveSpec: vi.fn(),
+      onPause: vi.fn(),
+      onShelve: vi.fn(),
+      onUnshelve: vi.fn(),
+      onResolveEscalation: vi.fn(),
+      onRunEscalationAction: vi.fn(),
+      onSendFollowUp: vi.fn(),
+      onAddAcceptance: vi.fn(),
+    })
+
+    expect(screen.queryByText('Latest handoff packet')).not.toBeInTheDocument()
+    expect(screen.queryByText(/stale worker handoff/i)).not.toBeInTheDocument()
+    expect(screen.getByText('From looma/docs/editor-roadmap.md')).toBeInTheDocument()
+    expect(screen.queryByText(/looma\/docs\/editor-roadmap\.md: -/)).not.toBeInTheDocument()
+    expect(screen.getByText('Task brief')).toBeInTheDocument()
+    expect(screen.getByText(/Build the block menu/)).toBeInTheDocument()
   })
 
   it('renders provenance, terminal outcome, shelve reason, and context health in one audit trail', () => {

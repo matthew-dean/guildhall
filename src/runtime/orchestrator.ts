@@ -1263,6 +1263,7 @@ function isQuestionListPrompt(promptBody: string): boolean {
     /\bquestions?\s+remain\b/.test(normalized) ||
     /\bposted\s+(?:two|three|four|five|\d+)\s+questions?\b/.test(normalized) ||
     /\bposted\s+(?:a\s+|one\s+)?(?:focused\s+|scope\s+|structured\s+)*questions?\b/.test(normalized) ||
+    /\bposted\s+(?:two|three|four|five|\d+)\s+focused\s+questions?\b/.test(normalized) ||
     /\bquestions?\s+to\s+help\b/.test(normalized)
   )
 }
@@ -1281,6 +1282,7 @@ function isEvidenceSummaryPrompt(promptBody: string): boolean {
     /^let me (?:piece|synthesize|summarize|recap)\b/.test(normalized) ||
     /^let me check what (?:i|we) know\b/.test(normalized) ||
     /^here'?s what i (?:found|know|learned|asked)\b/.test(normalized) ||
+    /^from (?:the )?transcript (?:notes?|history|context)\b/.test(normalized) ||
     /^what (?:guildhall|i|we) (?:found|know|learned)\b/.test(normalized) ||
     /^what i (?:found|know|learned)\b/.test(normalized)
   )
@@ -2483,6 +2485,9 @@ export class Orchestrator {
       await this.normalizeSpecReviewOwnership(task)
     }
 
+    const recoverySpecSeed = await this.maybeWriteExploringRecoverySpecSeed(task)
+    if (recoverySpecSeed) return recoverySpecSeed
+
     // Reviewer fan-out at `review`: each applicable persona (Component
     // Designer, Accessibility Specialist, Color Theorist, ...) reviews
     // independently through its own lens. Aggregation is strict — any revise
@@ -3439,6 +3444,51 @@ export class Orchestrator {
             taskId: task.id,
             agent: agent.name,
             reason: message,
+            escalationId: escalation.escalationId,
+          }
+        }
+      }
+      if (
+        agent.name === 'spec-agent' &&
+        beforeStatus === 'exploring' &&
+        /timed out after \d+ms|exceeded \d+ms total turn budget/i.test(message)
+      ) {
+        const summary = 'Spec shaping timed out before saving durable progress.'
+        const escalation = await raiseEscalation({
+          tasksPath,
+          progressPath: this.progressPath(),
+          taskId: task.id,
+          agentId: agent.name,
+          reason: 'human_judgment_required',
+          summary,
+          details:
+            `${message}\n\n` +
+            'Guildhall did not get a saved brief, question, spec, or task transition before the spec lane timed out. Retry the shaping lane, switch provider, or reframe the task before attempting autonomous work again.',
+        })
+        if (escalation.success && escalation.escalationId) {
+          await this.annotateWorkerBlockedClassification({
+            taskId: task.id,
+            agentId: 'coordinator',
+            classification: {
+              class: 'provider_unavailable',
+              confidence: 'medium',
+              evidence: [{
+                kind: 'task',
+                summary,
+                ref: message,
+              }],
+              scope: 'task',
+              safePlaybooks: ['ask_concrete_human_question'],
+              needsHuman: true,
+              humanQuestion:
+                'The spec lane timed out before saving a brief, question, or spec. Should Guildhall retry this lane, switch provider, or reframe the task?',
+            },
+          })
+          return {
+            kind: 'escalated',
+            taskId: task.id,
+            agent: agent.name,
+            reason: summary,
             escalationId: escalation.escalationId,
           }
         }
@@ -7690,6 +7740,101 @@ export class Orchestrator {
     }
   }
 
+  private async maybeWriteExploringRecoverySpecSeed(task: Task): Promise<TickOutcome | null> {
+    if (task.status !== 'exploring') return null
+    if (typeof task.spec === 'string' && task.spec.trim().length > 0) return null
+    if (taskHasUnansweredVisibleQuestion(task)) return null
+    const notes = Array.isArray(task.notes) ? task.notes : []
+    const isRecoveryRetry = notes.some((note) =>
+      /reframe requested|fresh spec pass|retry.*spec|rebuild the task/i.test(note.content ?? ''),
+    )
+    if (!isRecoveryRetry) return null
+
+    const now = this.now()
+    const queue = await this.readQueue()
+    const liveTask = queue.tasks.find((candidate) => candidate.id === task.id)
+    if (!liveTask || liveTask.status !== 'exploring') return null
+    if (typeof liveTask.spec === 'string' && liveTask.spec.trim().length > 0) return null
+    if (taskHasUnansweredVisibleQuestion(liveTask)) return null
+
+    const answeredDecisions = recoverySpecSeedDecisionTexts(liveTask)
+    const sourceIntent = formatRecoverySpecSourceIntent(liveTask.description || liveTask.title)
+    const decisionLines = answeredDecisions.length > 0
+      ? answeredDecisions.map((decision) => `- ${decision}`).join('\n')
+      : '- No unresolved owner decisions are recorded on the task.'
+    const outOfScope = answeredDecisions
+      .filter((decision) => /\bout of scope|separate|not in scope|do not|don't/i.test(decision))
+      .map((decision) => `- ${decision}`)
+    const spec = [
+      '## Summary',
+      `Build ${liveTask.title} from the current project evidence, preserving the source intent: ${sourceIntent}`,
+      '',
+      'Resolved owner decisions:',
+      decisionLines,
+      '',
+      '## Acceptance Criteria',
+      `1. Given the existing project conventions and source evidence, when ${liveTask.title} is implemented, then the feature appears in the appropriate repo surface without introducing a one-off parallel pattern.`,
+      `2. Given the resolved owner decisions above, when the task is reviewed, then the implementation honors each recorded scope choice and leaves explicitly separate work out of this task.`,
+      '3. Given the implementation is complete, when the relevant project checks or review proof run, then Guildhall records the commands, screenshots, or manual verification needed to prove the behavior.',
+      '',
+      '## Out of Scope',
+      ...(outOfScope.length > 0 ? outOfScope : ['- Work not implied by the source evidence or resolved owner decisions.']),
+      '',
+      '## Open Questions',
+      '- None known from the current task record. If the coordinator finds a product decision still missing, send this task back to exploring with one focused question.',
+      '',
+      '## Completion Boundary',
+      `- Product outcome: A user can use ${liveTask.title} in the intended project surface.`,
+      '- What Guildhall can complete in code: the repo-local component, integration, tests, docs/story evidence, and proof artifacts required by the implementation.',
+      '- External dependencies: None known from the current task record.',
+      '- Owner-only setup: None known.',
+      '- Verification environment: The local project checkout and any existing app/demo/story surface named by the repo.',
+      '- What counts as done: The behavior is implemented, reviewed against the resolved scope decisions, and backed by recorded verification.',
+      '- What must be split or blocked: Any external setup, missing dependency, or newly discovered product decision that cannot be resolved from current evidence.',
+    ].join('\n')
+
+    liveTask.spec = spec
+    liveTask.acceptanceCriteria = parseAcceptanceCriteriaFromSpec(spec)
+    liveTask.productBrief = {
+      userJob: `I want ${liveTask.title} turned into concrete project work using the evidence and owner decisions already recorded.`,
+      successMetric: `${liveTask.title} has a reviewable spec, acceptance criteria, and a clear completion boundary before implementation starts.`,
+      antiPatterns: [
+        'Do not preserve stale recovery-loop wording as the task brief.',
+        'Do not ask the owner to re-answer decisions already recorded on the task.',
+      ],
+      authoredBy: 'coordinator-recovery',
+      authoredAt: now,
+    }
+    liveTask.status = 'spec_review'
+    liveTask.assignedTo = null
+    liveTask.updatedAt = now
+    liveTask.notes.push({
+      agentId: 'coordinator-recovery',
+      role: 'system',
+      content:
+        'Guildhall wrote a deterministic recovery spec seed from the current task evidence before redispatching the spec lane, so the task has durable progress instead of returning to a read-only shaping loop.',
+      timestamp: now,
+    })
+    queue.lastUpdated = now
+    await this.writeQueue(queue)
+    await this.emitBackendEvent({
+      type: 'line_complete',
+      task_id: liveTask.id,
+      agent_name: 'coordinator-recovery',
+      message:
+        'Guildhall saved a recovery spec seed from the task evidence so this work can move to review instead of looping in intake.',
+    })
+    return {
+      kind: 'processed',
+      taskId: liveTask.id,
+      agent: 'coordinator-recovery',
+      beforeStatus: 'exploring',
+      afterStatus: 'spec_review',
+      transitioned: true,
+      revisionCount: liveTask.revisionCount,
+    }
+  }
+
   private async rejectStaleWorkerSelfCritiqueWithoutProjectChanges(
     task: Task,
     beforeStatus: TaskStatus,
@@ -9329,6 +9474,54 @@ function resolvedScopeDecisionTexts(task: Task): string[] {
   return task.escalations
     .filter((escalation) => escalation.resolvedAt && escalation.resolution?.trim())
     .map((escalation) => [escalation.summary, escalation.details ?? '', escalation.resolution ?? ''].join('\n'))
+}
+
+function answeredQuestionDecisionTexts(task: Task): string[] {
+  return (task.openQuestions ?? [])
+    .filter((question) => question.answeredAt && typeof question.answer === 'string' && question.answer.trim())
+    .filter((question) => {
+      const prompt = typeof question.prompt === 'string' ? question.prompt.trim() : ''
+      return !isQuestionListPrompt(prompt) && !isOperationalFallbackPrompt(prompt)
+    })
+    .map((question) => {
+      const answer = normalizeFallbackWhitespace(String(question.answer).trim())
+      if (answer.length >= 24 || /[.!?]$/.test(answer)) return answer
+      const prompt = typeof question.prompt === 'string' && question.prompt.trim()
+        ? normalizeFallbackWhitespace(question.prompt.trim()).replace(/\?$/, '')
+        : 'Owner decision'
+      return `${prompt}: ${answer}`
+    })
+}
+
+function formatRecoverySpecSourceIntent(source: string | undefined): string {
+  const raw = normalizeFallbackWhitespace(source ?? '')
+  if (!raw) return 'the task title'
+
+  const markdownSource = raw.match(/^([^:\n]+):\s*(?:[-*]\s*)?(?:\*\*)?(.+?)(?:\*\*)?$/)
+  if (markdownSource) {
+    const sourcePath = markdownSource[1]?.trim()
+    const label = markdownSource[2]
+      ?.replace(/\*\*/g, '')
+      .replace(/`/g, '')
+      .trim()
+    if (sourcePath && label) return `${label} from ${sourcePath}`
+  }
+
+  return raw
+    .replace(/\*\*/g, '')
+    .replace(/`/g, '')
+    .replace(/:\s*[-*]\s*/g, ': ')
+    .trim()
+}
+
+function recoverySpecSeedDecisionTexts(task: Task): string[] {
+  const durableEscalationDecisions = resolvedScopeDecisionTexts(task)
+    .filter((decision) => !/superseded by a task (?:reframe|enrichment) request/i.test(decision))
+    .filter((decision) => !/build failing due to unresolved import|required source directories not found/i.test(decision))
+  return uniqueNonEmptyStrings([
+    ...answeredQuestionDecisionTexts(task),
+    ...durableEscalationDecisions,
+  ])
 }
 
 function reconcileAcceptanceCriteriaFromLatestWorkerSelfCritique(task: Task): void {

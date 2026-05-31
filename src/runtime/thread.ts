@@ -374,6 +374,26 @@ function hasApprovedProductBrief(task: Pick<Task, 'productBrief'>): boolean {
   )
 }
 
+function hasReviewableProductBrief(brief: unknown): brief is {
+  userJob?: string
+  successMetric?: string
+  successCriteria?: string
+  antiPatterns?: string[]
+  rolloutPlan?: string
+  authoredBy?: string
+  approvedAt?: string | null
+} {
+  if (!brief || typeof brief !== 'object') return false
+  const b = brief as { userJob?: unknown; successMetric?: unknown; successCriteria?: unknown }
+  const userJob = typeof b.userJob === 'string' ? b.userJob.trim() : ''
+  const success = typeof b.successMetric === 'string' && b.successMetric.trim()
+    ? b.successMetric.trim()
+    : typeof b.successCriteria === 'string'
+      ? b.successCriteria.trim()
+      : ''
+  return Boolean(userJob && success)
+}
+
 function taskNeedsSpecFill(task: Pick<Task, 'spec' | 'acceptanceCriteria' | 'productBrief'>): boolean {
   return !hasApprovedProductBrief(task) || !hasSpecDraftContent(task)
 }
@@ -1488,7 +1508,7 @@ export function buildThread(opts: BuildThreadOptions): Thread {
       | undefined
     const approvedAt = brief && typeof brief === 'object' ? brief.approvedAt ?? null : null
     const liveAgent = liveAgents.get(taskId)
-    if (brief && typeof brief === 'object' && unansweredQuestions.length === 0) {
+    if (hasReviewableProductBrief(brief) && unansweredQuestions.length === 0) {
       const briefStillNeedsHuman = !approvedAt && taskStatus === 'exploring'
       const status: TurnStatus = !briefStillNeedsHuman
         ? 'done'
@@ -1745,7 +1765,8 @@ export function buildThread(opts: BuildThreadOptions): Thread {
 
     // Open escalations
     const openEscalations = activeEscalations(t)
-    const fallbackBlockedEscalations = openEscalations.length === 0 && t.status === 'blocked' && typeof t.blockReason === 'string' && t.blockReason.trim()
+    const hasEscalationHistory = Array.isArray(t.escalations) && t.escalations.length > 0
+    const fallbackBlockedEscalations = !hasEscalationHistory && openEscalations.length === 0 && t.status === 'blocked' && typeof t.blockReason === 'string' && t.blockReason.trim()
       ? [{
           id: 'block-reason',
           summary: t.blockReason.trim(),

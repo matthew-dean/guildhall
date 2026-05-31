@@ -941,6 +941,7 @@ export interface ServiceProjectSummary {
   run?: ProjectRun | null
   providerStatus?: ProviderStatus | null
   gitStory?: GitStorySummary | null
+  startReadiness?: StartReadiness | null
   projectCheckIn?: {
     needed?: boolean
     label?: string
