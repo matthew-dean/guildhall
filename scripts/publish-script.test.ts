@@ -278,4 +278,63 @@ describe('release publish script', () => {
       await fs.rm(tmp, { recursive: true, force: true })
     }
   })
+
+  it('warns and continues when a 0.9 release has no runtime image digest yet', async () => {
+    const tmp = await fs.mkdtemp(path.join(os.tmpdir(), 'guildhall-publish-script-'))
+    try {
+      await createMinimalReleaseFixture(tmp)
+      const manifestPath = path.join(tmp, 'package.json')
+      const manifest = JSON.parse(await fs.readFile(manifestPath, 'utf8'))
+      manifest.name = 'guildhall'
+      manifest.version = '0.9.0'
+      await fs.writeFile(manifestPath, JSON.stringify(manifest, null, 2) + '\n')
+
+      const fakeBin = path.join(tmp, 'fake-bin')
+      await fs.mkdir(fakeBin)
+      await writeExecutable(path.join(fakeBin, 'pnpm'), '#!/bin/sh\nexit 0\n')
+      await writeExecutable(
+        path.join(fakeBin, 'npm'),
+        [
+          '#!/bin/sh',
+          'if [ "$1" = "view" ] && [ "$2" = "guildhall" ] && [ "$3" = "version" ]; then',
+          '  echo "0.8.0"',
+          '  exit 0',
+          'fi',
+          'if [ "$1" = "pack" ]; then',
+          '  printf \'[{"files":[{"path":"dist/web/app.js"}]}]\\n\'',
+          '  exit 0',
+          'fi',
+          'if [ "$1" = "publish" ]; then',
+          '  exit 0',
+          'fi',
+          'echo "unexpected npm args: $*" >&2',
+          'exit 1',
+          '',
+        ].join('\n'),
+      )
+
+      await runGit(tmp, ['init', '-b', 'main'])
+      await runGit(tmp, ['config', 'user.name', 'Guildhall Test'])
+      await runGit(tmp, ['config', 'user.email', 'guildhall-test@example.com'])
+      await runGit(tmp, ['add', '.'])
+      await runGit(tmp, ['commit', '--no-verify', '-m', 'init'])
+
+      const result = await execFileP('node', ['scripts/publish.mjs', '0.9.0', '--skip-tests'], {
+        cwd: tmp,
+        env: { ...process.env, PATH: `${fakeBin}${path.delimiter}${process.env.PATH ?? ''}` },
+      }).then(
+        ({ stdout, stderr }) => ({ status: 0, output: stdout + stderr }),
+        (error: { code?: number; stdout?: string; stderr?: string }) => ({
+          status: error.code ?? 1,
+          output: `${error.stdout ?? ''}${error.stderr ?? ''}`,
+        }),
+      )
+
+      expect(result.status).toBe(0)
+      expect(result.output).toContain('Guildhall 0.9.0 requires a verified default runtime image digest before release.')
+      expect(result.output).toContain('Continuing with the immutable runtime image tag only')
+    } finally {
+      await fs.rm(tmp, { recursive: true, force: true })
+    }
+  })
 })

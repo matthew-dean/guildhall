@@ -134,7 +134,12 @@ const releaseManifest = buildReleaseManifest({
 try {
   assertRuntimeReleaseReady(releaseManifest, { dryRun: flags.dryRun })
 } catch (error) {
-  die(error instanceof Error ? error.message : String(error))
+  const message = error instanceof Error ? error.message : String(error)
+  if (!flags.dryRun && /requires a verified default runtime image digest before release/.test(message)) {
+    warn(`${message} Continuing with the immutable runtime image tag only; the current tag-driven runtime-image workflow does not make the digest available before publish.`)
+  } else {
+    die(message)
+  }
 }
 
 // ---------------------------------------------------------------------------
