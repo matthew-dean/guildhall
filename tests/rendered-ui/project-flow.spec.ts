@@ -68,7 +68,7 @@ test('required migration blocks thread work until it is applied', async ({ page 
   await page.goto('/projects/looma-knit/thread')
 
   await expect(page.getByRole('heading', { name: 'Thread' })).toBeVisible()
-  await expect(page.getByRole('button', { name: /Required migration:/ }).first()).toBeVisible()
+  await expect(page.getByRole('button', { name: 'Migrate project' }).first()).toBeVisible()
   await expect(page.getByText('Which controls belong in the link editor?')).toHaveCount(0)
 
   await page.getByRole('button', { name: 'Migrate project' }).first().click()
@@ -154,7 +154,7 @@ test('advanced settings exposes design taste and interactable catalog state', as
   await page.goto('/projects/looma-knit/settings/advanced')
 
   await expect(page.getByRole('heading', { name: 'Advanced settings' })).toBeVisible()
-  await expect(page.getByRole('heading', { name: 'Design system' })).toBeVisible()
+  await expect(page.getByRole('heading', { name: 'Design system', exact: true })).toBeVisible()
   await expect(page.getByText('Taste memory')).toBeVisible()
   await expect(page.getByText('warm-functional-polish', { exact: true })).toBeVisible()
   await expect(page.getByText('segmented-control-or-tabs', { exact: true })).toBeVisible()
