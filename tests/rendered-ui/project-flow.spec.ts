@@ -120,6 +120,35 @@ test('pinned project rail reserves layout width at medium desktop sizes', async 
   expect(expandedMain!.x).toBeGreaterThanOrEqual(expandedRail!.width - 1)
 })
 
+test('work view switcher swaps between columns list and board surfaces', async ({ page }) => {
+  await page.setViewportSize({ width: 1280, height: 820 })
+  await page.goto('/projects/looma-knit/work?view=columns')
+
+  await expect(page.getByRole('toolbar', { name: 'Work view controls' })).toBeVisible()
+  await expect(page.getByRole('button', { name: 'Columns' })).toHaveAttribute('aria-pressed', 'true')
+  await expect(page.getByLabel('Work hierarchy columns')).toBeVisible()
+  await expect(page.getByRole('heading', { name: 'Work list' })).toHaveCount(0)
+
+  await page.getByRole('button', { name: 'List' }).click()
+  await expect(page).toHaveURL(/\/projects\/looma-knit\/work\?view=list$/)
+  await expect(page.getByRole('heading', { name: 'Work list' })).toBeVisible()
+  await expect(page.getByRole('button', { name: 'List' })).toHaveAttribute('aria-pressed', 'true')
+  await expect(page.getByRole('button', { name: 'Columns' })).toBeVisible()
+  await expect(page.getByRole('combobox', { name: 'Show', exact: true })).toBeVisible()
+  await expect(page.getByLabel('Work hierarchy columns')).toHaveCount(0)
+
+  await page.getByRole('button', { name: 'Columns' }).click()
+  await expect(page).toHaveURL(/\/projects\/looma-knit\/work\?view=columns$/)
+  await expect(page.getByLabel('Work hierarchy columns')).toBeVisible()
+
+  await page.getByRole('button', { name: 'Board' }).click()
+  await expect(page).toHaveURL(/\/projects\/looma-knit\/work\?view=board$/)
+  await expect(page.getByText('Next focus')).toBeVisible()
+  await expect(page.getByRole('button', { name: 'Board' })).toHaveAttribute('aria-pressed', 'true')
+  await expect(page.getByRole('button', { name: 'Columns' })).toBeVisible()
+  await expect(page.getByRole('combobox', { name: 'Show', exact: true })).toBeVisible()
+})
+
 test('advanced settings exposes design taste and interactable catalog state', async ({ page }) => {
   await page.setViewportSize({ width: 1280, height: 900 })
   await page.goto('/projects/looma-knit/settings/advanced')

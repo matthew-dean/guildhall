@@ -57,6 +57,40 @@ babysit setup/import/provider/release states across multiple pages.
 
 ## Current Follow-Ups
 
+- [ ] Tighten the focused work-item path before calling 0.9.0 ready. Live
+  Looma + Knit browser proof on 2026-05-30 against installed `0.9.0`
+  (`/api/stale-server` returned `stale:false`) showed that a concrete
+  "Build AlertDialog primitive" request can be created and shaped, but the
+  user journey still feels untrustworthy: task-local "Continue shaping brief"
+  work is easy to lose inside the huge Thread feed, unrelated older questions
+  and recovery cards dominate the global status, the runtime bar reports
+  `Runtime stopped / Compatibility mode` while a one-step run affordance is
+  present, and the drawer can show "Already queued" after `/api/project`
+  reports no active run. The actual task question was answerable
+  ("StencilJS component matching ui-dialog, or vanilla web component?") and the
+  StencilJS answer persisted, but approval left the task at 3/4 checklist
+  items with missing acceptance criteria after a `spec-agent timed out after
+  120000ms of inactivity` activity event. Treat this as a release blocker:
+  focused task starts must stay visually anchored to the task, phantom run
+  state must clear without reloads, timed-out shaping should become an explicit
+  recovery/try-again state, and duplicate/older AlertDialog work should not
+  obscure the user's current task.
+  2026-05-30 follow-up pass fixed the code/UI trust blockers from this live
+  path: project-scoped task URLs now anchor on Overview, the task drawer uses
+  fresh drawer run state and retries stale `run_already_active`, shaping
+  timeout/read-budget pauses render as explicit `Shaping timed out` /
+  `Shaping paused` retry states, spec-agent durable-progress refusals escalate
+  immediately, non-question agent narration no longer creates fake owner-input
+  blockers, owner-input Start blockers link to the actual pending question
+  before unrelated escalations, recovery blockers label the disabled project
+  action as `Needs recovery` instead of `Waiting on answer`, and secondary
+  status pills (`Runtime`, `Stuck`, `Needs you`, `Provider`, `Open Thread`)
+  have been removed from the top toolbar. Browser proof on installed 0.9.0
+  showed `task-039` with no crowded top-bar statuses, `Shaping paused`, and
+  `Try shaping brief again`; `/api/stale-server` returned `stale:false`.
+  Remaining product/data caveat: Looma + Knit still has a large historic
+  blocked/escalated pile, so the global Overview can truthfully foreground a
+  recovery item unrelated to the currently opened AlertDialog task.
 - [x] Align intake pressure-testing with the "all tasks are pressure-tested"
   principle. Routed build-changing requests now persist `pressureTestRequired`,
   ordinary task intake writes a system-owned `pressureTestSummary`, legacy
@@ -5855,6 +5889,16 @@ local 0.7 release-candidate build at `http://localhost:7777/projects/narrative-h
     automation policy, Guildhall-made answers are persisted separately from
     human answers, and non-delegable decisions remain policy-blocked unless a
     fixture supplies a synthetic answer.
+  - [x] Split sizing now has an explicit semantic work-unit analysis path
+    instead of treating definition-of-done or proof bullets as separate work.
+    Spec agents write `workUnitAnalysis`, coordinators are prompted to correct
+    it before approval, and task sizing uses that structured judgment ahead of
+    fallback heuristics. Regression coverage proves a single bounded artifact
+    patch with several proof checks stays one runnable task, while a clear
+    multi-outcome launch request becomes five child recommendations without
+    depending on exact wording.
+  - [ ] Rerun the real `artifact-local` benchmark after the semantic work-unit
+    fix and record whether the previous over-split/readiness stall is gone.
   - [x] Task-drawer escalation actions now follow ownership consistently.
     Guildhall-owned blockers such as gate retries and worker timeouts show a
     single agent action that resolves the escalation and resumes the task;
@@ -6032,6 +6076,38 @@ local 0.7 release-candidate build at `http://localhost:7777/projects/narrative-h
     and similar token sources. The live benchmark now fails generic cool-blue or
     medical-blue primary/accent choices for the domestic food mood unless an
     accepted design decision packet justifies them.
+  - [x] Work view Columns/List/Board navigation now shares one work-view header
+    instead of swapping to separate per-surface headers. Query-only navigation
+    is reactive, so `?tree=preview` Columns can switch to List without leaving
+    stale column content behind, and Board keeps the same segmented Work view
+    control. Evidence: `pnpm vitest run
+    src/web/surfaces/project/__tests__/WorkTab.svelte.test.ts --reporter=dot`
+    passed with 16 tests; `pnpm exec playwright test
+    tests/rendered-ui/project-flow.spec.ts -g "work view switcher"` passed; the
+    installed app reports `/api/stale-server` with `"stale": false`; browser
+    proof on Narrative Harness showed Columns -> List -> Board -> Columns
+    updating URL, active segmented button, and rendered surface correctly.
+    Follow-up pass: the header now keeps the same left Work view segmented
+    control and right Show select across Columns, List, and Board. The Show
+    filter is shared (`Open`, `All`, `Runnable`, `Blocked`, `Needs you`) rather
+    than changing into List-only buttons, the List view uses stacked work rows
+    instead of a dense table, and zero-count summary chips are suppressed.
+    Evidence: `pnpm vitest run
+    src/web/surfaces/project/__tests__/WorkTab.svelte.test.ts --reporter=dot`,
+    `pnpm build`, and `pnpm exec playwright test
+    tests/rendered-ui/project-flow.spec.ts -g "work view switcher"` passed;
+    installed app reports `"stale": false`; browser proof on Narrative Harness
+    showed the same Work view/Show header in List and Board.
+    Follow-up alignment fix: the List view rows now use real aligned columns
+    (`Task`, `Stage`, `Part`, `Priority`, `Updated`, `Revs`) over the same
+    parent grid/subgrid tracks, rather than packing the chips inside one broad
+    state bucket. Work view buttons now generate one consistent URL family:
+    `/work?view=list`, `/work?view=columns`, and `/work?view=board`; legacy
+    `/planner` and `?tree=preview` remain readable compatibility paths.
+    Evidence: focused WorkTab/router unit tests, `pnpm build`, and the
+    work-view Playwright test passed; installed app reports `"stale": false`;
+    browser proof measured identical left offsets for the first six Narrative
+    Harness List rows across every data column.
   - [ ] Add the follow-on global scheduler that fairly spends the provider
     budget across all turned-on projects instead of requiring each project to
     be manually started and budgeted in isolation.

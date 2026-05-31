@@ -311,8 +311,8 @@
       icon: 'list-checks',
       suffix: '/work',
       subs: [
-        { id: 'queue', label: 'Queue', path: currentProjectHref('/work', activeProjectId) },
-        { id: 'board', label: 'Board', path: currentProjectHref('/planner', activeProjectId) },
+        { id: 'queue', label: 'Queue', path: currentProjectHref('/work?view=list', activeProjectId) },
+        { id: 'board', label: 'Board', path: currentProjectHref('/work?view=board', activeProjectId) },
       ],
     },
     { id: 'timeline', label: 'Timeline', icon: 'clock', suffix: '/timeline' },

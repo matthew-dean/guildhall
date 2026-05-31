@@ -16,6 +16,7 @@
     iconOnly?: boolean
     type?: 'button' | 'submit'
     ariaLabel?: string
+    pressed?: boolean
     title?: string
     className?: string
     onclick?: (e: MouseEvent) => void
@@ -29,6 +30,7 @@
     iconOnly = false,
     type = 'button',
     ariaLabel,
+    pressed,
     title,
     className = '',
     onclick,
@@ -43,6 +45,7 @@
     {disabled}
     {onclick}
     aria-label={ariaLabel}
+    aria-pressed={pressed}
   >
     {@render children?.()}
   </button>
