@@ -44,7 +44,7 @@ Fixed the misleading Guildhall 5/100 app-comparison result. The worker had creat
 source: codex
 ## 2026-05-28T22:43:03.756Z MCP evidence for task-pantry-pulse-live
 
-Pantry Pulse Lane 2 live rerun did not create the app: live spec/design-system improved, but blueprint sanity rejected approved Markdown because structured acceptanceCriteria stayed empty; task sizing converted the app spec into a parent with unrelated analytics/documentation child. Report: internal/fixtures/app-spec-smoke/runs/2026-05-28-lane2-pantry-pulse-live/run-report.md
+Pantry Pulse Lane 2 live rerun did not create the app: live spec/design-system improved, but blueprint sanity rejected approved Markdown because structured acceptanceCriteria stayed empty; task sizing converted the app spec into a parent with unrelated analytics/documentation child. Durable summary: internal/benchmarks/history/2026-05-29-pantry-pulse-live-proof.md
 
 source: codex-lane2
 ## 2026-05-29T14:07:48.288Z MCP evidence for guildhall-architecture-006

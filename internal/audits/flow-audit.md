@@ -6416,7 +6416,7 @@ local 0.7 release-candidate build at `http://localhost:7777/projects/narrative-h
     approved Markdown spec because structured `acceptanceCriteria` was empty,
     then task sizing converted the app spec into a parent with an unrelated
     analytics/documentation child. Report and screenshots:
-    `internal/fixtures/app-spec-smoke/runs/2026-05-28-lane2-pantry-pulse-live/run-report.md`.
+    `internal/benchmarks/history/2026-05-29-pantry-pulse-live-proof.md`.
     Follow-up on 2026-05-29: the design-quality proof now has a format-agnostic
     palette-token audit for Pantry Pulse, covering CSS custom properties,
     Sass/Less variables, JavaScript/TypeScript token objects, JSON/YAML tokens,

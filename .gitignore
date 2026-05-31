@@ -154,6 +154,7 @@ playwright-report/
 
 # Benchmark run output: generated projects, screenshots, model logs, and reports.
 internal/benchmarks/runs/
+internal/fixtures/**/runs/
 .playwright-fixtures/
 
 # BEGIN Guildhall managed
