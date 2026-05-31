@@ -145,6 +145,51 @@ describe('assessTaskReadiness', () => {
     expect(assessment.contextBudget.fitsInOneWorkerBrief).toBe(false)
     expect(assessment.dimensions.find(dimension => dimension.id === 'context_load')?.status).toBe('blocked')
   })
+
+  it('keeps an exact single-file release-notes patch ready instead of splitting it', () => {
+    const assessment = assessTaskReadiness(task({
+      title: 'release-note-patch',
+      description: 'Append the exact bullet to RELEASE_NOTES.md and do not edit any other file.',
+      status: 'ready',
+      spec: [
+        '## Summary',
+        'Append a single release-note bullet.',
+        '',
+        '## Acceptance Criteria',
+        '1. RELEASE_NOTES.md ends with the exact requested bullet.',
+        '2. No other files change.',
+        '',
+        '## Completion Boundary',
+        '- **Product outcome:** `RELEASE_NOTES.md` contains the requested bullet at the end of the file.',
+        '- **What Guildhall can complete in code:** Append the exact line to `RELEASE_NOTES.md` and leave every other file untouched.',
+        '- **External dependencies:** None. This is a local-only file patch.',
+        '- **Owner-only setup:** None.',
+        '- **Verification environment:** Local filesystem on the current machine.',
+        '- **What counts as done:** `grep -q \"benchmark artifact evidence\" RELEASE_NOTES.md` exits 0 and `git diff --stat` shows only `RELEASE_NOTES.md`.',
+        '- **What must be split or blocked:** Nothing.',
+      ].join('\n'),
+      acceptanceCriteria: [
+        { id: 'AC-1', description: 'RELEASE_NOTES.md ends with the exact requested bullet.', verifiedBy: 'automated', command: 'grep -q "benchmark artifact evidence" RELEASE_NOTES.md', met: false },
+        { id: 'AC-2', description: 'No other files change.', verifiedBy: 'automated', command: 'git diff --stat', met: false },
+      ],
+      sizePlan: {
+        taskId: 'task-1',
+        score: 1,
+        band: 'tiny',
+        action: 'proceed',
+        factors: [],
+        recommendedChildren: [],
+        reviewBudgetHint: 'lean',
+        reasons: ['Task size score: 1.'],
+        createdAt: now,
+        createdBy: 'test',
+      },
+    }))
+
+    expect(assessment.recommendation).toBe('ready')
+    expect(assessment.dimensions.find(dimension => dimension.id === 'size')?.status).toBe('ok')
+    expect(assessment.dimensions.find(dimension => dimension.id === 'context_load')?.status).toBe('ok')
+  })
 })
 
 describe('finishability helpers', () => {

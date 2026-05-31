@@ -1,5 +1,5 @@
 import { z } from 'zod'
-import { TaskSizePlan } from './task-sizing.js'
+import { TaskSizePlan, WorkUnitAnalysis } from './task-sizing.js'
 
 // ---------------------------------------------------------------------------
 // Task status lifecycle (FR-01)
@@ -849,6 +849,7 @@ export const Task = z.object({
   contextBudget: ContextBudgetEstimate.optional(),
   decomposition: TaskDecompositionRecord.optional(),
   coordinatorReflections: z.array(CoordinatorReflectionRecord).optional(),
+  workUnitAnalysis: WorkUnitAnalysis.optional(),
 
   // Task sizing asks whether this is a good-sized unit of work for one agent
   // implementation/review loop. Large scores should be split into linked child

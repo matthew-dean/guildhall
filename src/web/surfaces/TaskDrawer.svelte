@@ -483,7 +483,7 @@
     rerunStageBusy = stage
     try {
       await post('rerun-stage', { stage })
-      await project.refresh()
+      await project.refresh(scopedProjectId())
     } finally {
       rerunStageBusy = null
     }
@@ -506,7 +506,7 @@
   }
 
   const task = $derived(payload?.task)
-  const runStatus = $derived(project.detail?.run?.status ?? 'stopped')
+  const runStatus = $derived(payload?.runStatus ?? project.detail?.run?.status ?? 'stopped')
   const hasCurrentTurns = $derived((payload?.threadTurns?.length ?? 0) > 0)
   const tabs = $derived(
     hasCurrentTurns
@@ -724,7 +724,7 @@
     }
   })
 
-  async function runProject(action: 'start' | 'stop', nextTaskId?: string) {
+  async function runProject(action: 'start' | 'stop', nextTaskId?: string, retryStaleActive = true) {
     runBusy = true
     runError = null
     try {
@@ -744,9 +744,20 @@
       if (!res.ok) {
         const b = await res.json().catch(() => ({})) as { code?: string; error?: string; status?: string }
         if (b.code === 'run_already_active') {
-          toast.info('Guildhall is already running. This task stays queued for the coordinator.')
-          await project.refresh()
           await load()
+          await project.refresh(scopedProjectId())
+          const latestRunStatus = payload?.runStatus ?? project.detail?.run?.status ?? 'stopped'
+          if (
+            retryStaleActive &&
+            action === 'start' &&
+            nextTaskId &&
+            latestRunStatus !== 'running' &&
+            latestRunStatus !== 'stopping'
+          ) {
+            await runProject(action, nextTaskId, false)
+            return
+          }
+          toast.info('Guildhall is already running. This task stays queued for the coordinator.')
           return
         }
         runError = b.error ?? `${action === 'start' ? 'Start' : 'Stop'} failed (HTTP ${res.status})`
@@ -762,8 +773,8 @@
           toast.info(stopMessage)
         }
       }
-      setTimeout(() => void project.refresh(), 500)
-      setTimeout(() => void project.refresh(), 1800)
+      setTimeout(() => void project.refresh(scopedProjectId()), 500)
+      setTimeout(() => void project.refresh(scopedProjectId()), 1800)
     } catch (err) {
       runError = friendlyFetchError(err)
     } finally {

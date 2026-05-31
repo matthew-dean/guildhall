@@ -14,6 +14,7 @@ import {
   WORKSPACE_IMPORT_TASK_ID,
   WORKSPACE_IMPORT_DOMAIN,
 } from '../workspace-importer.js'
+import { pickNextTask } from '../orchestrator-picker.js'
 import { detectWorkspaceSignals } from '../workspace-import/index.js'
 import { formWorkspaceHypothesis } from '../workspace-import/hypothesis.js'
 import type { WorkspaceInventory } from '../workspace-import/detect.js'
@@ -818,6 +819,112 @@ tasks:
     expect(q.tasks.find((t) => t.id === 'task-knit-auth')?.projectPath).toBe(
       path.join(tmpDir, 'knit'),
     )
+  })
+
+  it('materializes referenced evidence as a dependency-aware work graph that scheduling respects', async () => {
+    await fs.mkdir(path.join(tmpDir, 'looma/docs'), { recursive: true })
+    await fs.writeFile(
+      path.join(tmpDir, 'looma/docs/component-library-audit.md'),
+      [
+        '# Component audit',
+        '',
+        '| Deliverable | Need | Foundation | Consumer |',
+        '| --- | --- | --- | --- |',
+        '| Dialog | shipped as `ui-dialog` | native dialog + overlay manager | Knit BaseDialog already uses it |',
+        '| AlertDialog | missing P0 gap | builds on Dialog and Button | Knit destructive confirmation flow |',
+        '| Drawer | missing | builds on Dialog and overlay manager | Knit mobile navigation drawer |',
+        '',
+        '- Knit delete collection confirmation needs `AlertDialog` before replacing the local BaseDialog variant.',
+      ].join('\n'),
+      'utf-8',
+    )
+    await seedImporterWithSpec(`
+\`\`\`yaml
+tasks:
+  - id: task-039
+    title: Build AlertDialog primitive
+    description: Build the Looma AlertDialog primitive as a concrete UI-library component.
+    domain: looma
+    priority: high
+    references:
+      - looma/docs/component-library-audit.md
+\`\`\`
+`)
+
+    const approved = await approveWorkspaceImport({
+      memoryDir,
+      projectPath: tmpDir,
+      coordinatorProjectPaths: {
+        looma: path.join(tmpDir, 'looma'),
+        knit: path.join(tmpDir, 'knit'),
+      },
+    })
+    expect(approved).toMatchObject({ success: true, tasksAdded: 4 })
+
+    const q = await readQueue()
+    const alertDialog = q.tasks.find((task) => task.id === 'task-039')!
+    const alertDialogIntegration = q.tasks.find((task) => task.id === 'task-alert-dialog-integration')!
+    const drawer = q.tasks.find((task) => task.id === 'task-drawer')!
+    const drawerIntegration = q.tasks.find((task) => task.id === 'task-drawer-integration')!
+
+    expect(alertDialog).toMatchObject({
+      title: 'Build AlertDialog',
+      domain: 'looma',
+      projectPath: path.join(tmpDir, 'looma'),
+      status: 'import_draft',
+      dependsOn: [],
+    })
+    expect(alertDialog.acceptanceCriteria.map((criterion) => criterion.id)).toEqual([
+      'source-implementation',
+      'public-contract',
+      'foundation-reuse',
+      'design-system-conformance',
+      'accessibility-contract',
+      'automated-proof',
+    ])
+    expect(alertDialog.proofPaths).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ kind: 'command', command: expect.stringContaining('@looma/core') }),
+      ]),
+    )
+
+    expect(alertDialogIntegration).toMatchObject({
+      title: 'Integrate AlertDialog into Knit destructive confirmation flow',
+      domain: 'knit',
+      projectPath: path.join(tmpDir, 'knit'),
+      dependsOn: ['task-039'],
+    })
+    expect(alertDialogIntegration.acceptanceCriteria.map((criterion) => criterion.id)).toEqual([
+      'public-consumer-import',
+      'consumer-flow-renders',
+      'runtime-proof',
+      'look-and-feel-proof',
+      'integration-regression-test',
+    ])
+    expect(drawer).toMatchObject({ domain: 'looma' })
+    expect(drawerIntegration).toMatchObject({ domain: 'knit', dependsOn: ['task-drawer'] })
+    expect(q.tasks.some((task) => task.title === 'looma/docs/component-library-audit.md: AlertDialog')).toBe(false)
+
+    const runnableQueue = {
+      ...q,
+      tasks: q.tasks.map((task) => {
+        if (task.id === 'task-workspace-import') return task
+        if (task.id === 'task-039') return { ...task, status: 'ready' as const }
+        if (task.id === 'task-alert-dialog-integration') {
+          return { ...task, status: 'ready' as const, priority: 'critical' as const }
+        }
+        return task
+      }),
+    }
+    expect(pickNextTask(runnableQueue)?.id).toBe('task-039')
+
+    const afterImplementation = {
+      ...runnableQueue,
+      tasks: runnableQueue.tasks.map((task) =>
+        task.id === 'task-039' ? { ...task, status: 'done' as const } : task,
+      ),
+    }
+    expect(pickNextTask(afterImplementation)?.id).toBe('task-alert-dialog-integration')
   })
 })
 

@@ -15,7 +15,6 @@
   import Icon, { type IconName } from '../lib/Icon.svelte'
   import Modal from '../lib/Modal.svelte'
   import NoticeBand from '../lib/NoticeBand.svelte'
-  import StatusButton from '../lib/StatusButton.svelte'
   import StatusDot from '../lib/StatusDot.svelte'
   import ProjectShell from '../lib/layout/ProjectShell.svelte'
   import Tooltip from '../lib/Tooltip.svelte'
@@ -34,8 +33,7 @@
   import { project } from '../lib/project.svelte.js'
   import { onEvent } from '../lib/events.js'
   import { path, nav } from '../lib/nav.svelte.js'
-  import { currentProjectHref, projectFetch } from '../lib/project-routes.js'
-  import { activeEscalations } from '../lib/escalation.js'
+  import { currentProjectHref, projectActionHref, projectFetch } from '../lib/project-routes.js'
   import { buildProjectTicker } from '../lib/project-activity.js'
   import { buildProviderIndicator } from '../lib/provider-indicator.js'
   import { formatUserPath } from '../lib/display-path.js'
@@ -83,8 +81,6 @@
   // (e.g. bootstrap not verified) can't be bypassed by pressing Start.
   interface Blockers { bootstrap: boolean; workspaceImport: boolean }
   let blockers = $state<Blockers>({ bootstrap: false, workspaceImport: false })
-  let inboxActionableCount = $state(0)
-  let inboxHasHighSeverity = $state(false)
   let inboxItems = $state<InboxItem[]>([])
   let inboxHistory = $state<InboxItem[]>([])
   let inboxLoaded = $state(false)
@@ -131,8 +127,6 @@
       inboxItems = j.items ?? []
       inboxHistory = j.history ?? inboxItems
       if (j.blockers) blockers = j.blockers
-      inboxActionableCount = inboxItems.filter(i => i.severity !== 'low').length
-      inboxHasHighSeverity = inboxItems.some(i => i.severity === 'high')
       inboxError = null
     } catch (err) {
       inboxError = err instanceof Error ? err.message : String(err)
@@ -524,7 +518,6 @@
   const startReadiness = $derived(detail?.startReadiness ?? null)
   const providerIndicator = $derived(buildProviderIndicator(providerStatus, runStatus))
   const providerHeaderLabel = $derived(providerIndicator?.summaryLabel ?? null)
-  const providerTitle = $derived(providerIndicator?.title ?? 'Provider not selected')
   const providerDecisionText = $derived(
     providerStatus?.decisions?.[0]?.message ?? providerStatus?.reason ?? null,
   )
@@ -542,30 +535,6 @@
   )
   const providerWarningSeverity = $derived(
     providerStatus?.warnings?.[0]?.severity ?? 'info',
-  )
-  const runtimeSummary = $derived(detail?.runtime ?? null)
-  const runtimeStatusLabel = $derived(
-    runtimeSummary?.status === 'running'
-      ? 'Runtime running'
-      : runtimeSummary?.status === 'creating'
-        ? 'Runtime starting'
-        : runtimeSummary?.status === 'failed'
-          ? 'Runtime failed'
-          : 'Runtime stopped',
-  )
-  const runtimeModeLabel = $derived(
-    runtimeSummary?.migration?.mode === 'runtime-backed'
-      ? 'Podman runtime mode'
-      : runtimeSummary?.migration?.mode === 'host-run'
-        ? 'Compatibility mode'
-        : 'Runtime mode unknown',
-  )
-  const runtimeButtonTone = $derived(
-    runtimeSummary?.status === 'failed' || runtimeSummary?.health?.status === 'unhealthy'
-      ? 'danger'
-      : runtimeSummary?.status === 'creating' || runtimeSummary?.health?.status === 'degraded'
-          ? 'warn'
-          : 'neutral',
   )
   const providerHealthText = $derived(
     providerStatus?.health?.state === 'degraded'
@@ -731,6 +700,24 @@
       }
     }
   })
+  const runStopActionHref = $derived.by(() => {
+    if (runStopSummary?.stopReason === 'awaiting_human') {
+      return projectActionHref(startReadiness?.actionHref ?? '/overview/inbox', activeProjectId)
+    }
+    if (runStopSummary?.stopReason === 'blocked_only') {
+      return currentProjectHref('/overview', activeProjectId)
+    }
+    return null
+  })
+  const runStopActionLabel = $derived(
+    runStopSummary?.stopReason === 'awaiting_human'
+      ? startReadiness?.message && /spec/i.test(startReadiness.message)
+        ? 'Review spec'
+        : 'Open item'
+      : runStopSummary?.stopReason === 'blocked_only'
+        ? 'Open Overview'
+        : null,
+  )
   const failedBootstrapStep = $derived(
     detail?.bootstrapStatus?.success === false
       ? detail.bootstrapStatus.steps?.find(s => s.result === 'fail') ?? null
@@ -800,16 +787,8 @@
       return isWorkerRunnableStatus(t)
     }).length,
   )
-  const activeCountLabel = $derived(
-    runStatus === 'running' || runStatus === 'stopping' ? 'active' : 'open',
-  )
   const awaitingApprovalCount = $derived(
     taskList.filter(t => (t as { status?: string }).status === 'spec_review').length,
-  )
-  const stuckCount = $derived(
-    taskList.filter(t => {
-      return activeEscalations(t).length > 0
-    }).length,
   )
 
   const startDisabledReason = $derived(
@@ -836,53 +815,20 @@
           : 'Complete bootstrap in Thread before creating a request'
         : null,
   )
-  const setupAttentionHref = $derived(
-    currentProjectHref(
-      needsMeta || metaIntakePending
-        ? '/setup'
-        : startReadiness?.actionHref ?? '/settings/ready',
-      activeProjectId,
-    ),
-  )
-  const setupAttentionLabel = $derived(
-    requiredMigrationBlocked
-      ? 'Required migration'
-      : startReadiness?.code === 'owner_input_required'
-      ? 'Needs your answer'
-      : startReadiness?.code === 'import_drafts_waiting'
-      ? 'Imported drafts need review'
-      : startReadiness?.code === 'no_unattended_progress'
-        ? 'Nothing ready to run'
-      : needsMeta || metaIntakePending
-        ? 'Project setup needs attention'
-        : startDisabledReason === 'No tasks to start'
-          ? 'No tasks to start'
-        : 'Readiness checks need attention',
-  )
-  const setupAttentionButtonLabel = $derived(
-    requiredMigrationBlocked
-      ? 'Migrate'
-      : startReadiness?.code === 'owner_input_required'
-      ? 'Open Thread'
-      : startReadiness?.code === 'import_drafts_waiting'
-      ? 'Review drafts'
-      : startReadiness?.code === 'no_unattended_progress'
-        ? 'Open Work'
-      : startDisabledReason === 'No tasks to start'
-        ? 'Ready'
-        : 'Setup',
-  )
-  const showSetupAttention = $derived(
-    Boolean(!allTerminalStart && (newTaskDisabledReason || (runStatus !== 'running' && startDisabledReason && startDisabledReason !== 'No tasks to start'))),
-  )
   const showRunButton = $derived(
     runStatus === 'running' || runStatus === 'stopping' || (!allTerminalStart && startDisabledReason !== 'No tasks to start'),
   )
   const runButtonIdleLabel = $derived(
     requiredMigrationBlocked
       ? 'Migrate'
-      : startReadiness?.code === 'owner_input_required'
-      ? 'Waiting on answer'
+    : startReadiness?.code === 'owner_input_required'
+      ? /question|answer/i.test(startReadiness.message ?? '')
+        ? 'Waiting on answer'
+        : /recover|blocked|escalation/i.test(startReadiness.message ?? '')
+          ? 'Needs recovery'
+          : /review|approve/i.test(startReadiness.message ?? '')
+            ? 'Review needed'
+            : 'Needs input'
       : 'Start',
   )
   const showAdvanceOneTaskAction = $derived(
@@ -1133,82 +1079,7 @@
             {/if}
           </Button>
         </div>
-        <div class="topbar-leading">
-          {#if showSetupAttention}
-            <StatusButton
-              tone="warn"
-              icon="alert-triangle"
-              label={setupAttentionButtonLabel}
-              showLabel={!topbarLabelsCollapsed}
-              tooltip={topbarLabelsCollapsed}
-              onclick={() => { if (requiredMigrationBlocked) void openMigrationModal(); else go(setupAttentionHref) }}
-              title={setupAttentionLabel}
-              ariaLabel={`${setupAttentionLabel}: ${newTaskDisabledReason ?? startDisabledReason ?? 'Review required'}`}
-            />
-          {/if}
-          {#if providerStatus?.fallback && providerHeaderLabel}
-            <StatusButton
-              tone="warn"
-              icon="plug"
-              label="Provider"
-              showLabel={!topbarLabelsCollapsed}
-              tooltip={topbarLabelsCollapsed}
-              onclick={() => go(currentProjectHref('/settings/providers', activeProjectId))}
-              title={providerTitle}
-              ariaLabel={providerTitle}
-            />
-          {/if}
-          {#if runtimeSummary}
-            <StatusButton
-              tone={runtimeButtonTone}
-              icon={runtimeSummary.status === 'failed' ? 'alert-triangle' : 'package'}
-              label="Runtime"
-              showLabel={!topbarLabelsCollapsed}
-              tooltip={topbarLabelsCollapsed}
-              onclick={() => go(currentProjectHref('/settings/ready', activeProjectId))}
-              title={`${runtimeStatusLabel}: ${runtimeModeLabel}`}
-              ariaLabel={`${runtimeStatusLabel}: ${runtimeModeLabel}`}
-            />
-          {/if}
-          {#if stuckCount > 0}
-            <StatusButton
-              tone="warn"
-              icon="alert-triangle"
-              label="Stuck"
-              count={stuckCount}
-              showLabel={!topbarLabelsCollapsed}
-              tooltip={topbarLabelsCollapsed}
-              onclick={() => go(currentProjectHref('/work', activeProjectId))}
-              title={`${stuckCount} stuck`}
-              ariaLabel={`${activeCount} ${activeCountLabel}, ${awaitingApprovalCount} awaiting approval, ${stuckCount} stuck`}
-            />
-          {/if}
-          {#if inboxActionableCount > 0}
-            <StatusButton
-              tone={inboxHasHighSeverity ? 'danger' : 'warn'}
-              icon="inbox"
-              label="Needs you"
-              count={inboxActionableCount}
-              showLabel={!topbarLabelsCollapsed}
-              tooltip={topbarLabelsCollapsed}
-              onclick={() => go(currentProjectHref('/overview/inbox', activeProjectId))}
-              title={`${inboxActionableCount} need you`}
-              ariaLabel={`${inboxActionableCount} notifications need you`}
-            />
-          {/if}
-          {#if stuckCount === 0 && inboxActionableCount === 0 && (activeCount > 0 || awaitingApprovalCount > 0)}
-            <StatusButton
-              icon={awaitingApprovalCount > 0 ? 'check-circle-2' : 'list-checks'}
-              label={awaitingApprovalCount > 0 ? 'Review' : 'Work'}
-              count={awaitingApprovalCount > 0 ? awaitingApprovalCount : activeCount}
-              showLabel={!topbarLabelsCollapsed}
-              tooltip={topbarLabelsCollapsed}
-              onclick={() => go(currentProjectHref('/work', activeProjectId))}
-              title={awaitingApprovalCount > 0 ? 'Review' : 'Work'}
-              ariaLabel={`${activeCount} ${activeCountLabel}, ${awaitingApprovalCount} awaiting approval`}
-            />
-          {/if}
-        </div>
+        <div class="topbar-leading" aria-hidden="true"></div>
         <div class="topbar-actions">
           {#if newTaskDisabledReason === null && !newTaskInOverflow}
             <Button
@@ -1365,10 +1236,8 @@
           >
             <strong>{runStopSummaryText}</strong>
             {#snippet actions()}
-              {#if runStopSummary?.stopReason === 'awaiting_human'}
-                <a href={currentProjectHref('/thread', activeProjectId)} onclick={(e) => { e.preventDefault(); nav(currentProjectHref('/thread', activeProjectId)) }}>Open Thread</a>
-              {:else if runStopSummary?.stopReason === 'blocked_only'}
-                <a href={currentProjectHref('/overview', activeProjectId)} onclick={(e) => { e.preventDefault(); nav(currentProjectHref('/overview', activeProjectId)) }}>Open Overview</a>
+              {#if runStopActionHref && runStopActionLabel}
+                <a href={runStopActionHref} onclick={(e) => { e.preventDefault(); nav(runStopActionHref) }}>{runStopActionLabel}</a>
               {/if}
             {/snippet}
           </NoticeBand>

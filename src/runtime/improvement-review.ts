@@ -8,6 +8,14 @@ import { reviewInProcessWorkForDesignLens, type DesignLensReviewResult } from '.
 import { workSubtreeIds } from './work-hierarchy.js'
 
 const TERMINAL_STATUSES = new Set<TaskStatus>(TERMINAL_TASK_STATUSES)
+const GENERATED_NOTE_ROLES = new Set([
+  'automation',
+  'approver',
+  'blueprint-review',
+  'git-story',
+  'improvement-review',
+  'orchestrator',
+])
 
 type ImprovementLensId =
   | 'spec-pressure-test'
@@ -37,7 +45,7 @@ const IMPROVEMENT_LENSES: ImprovementLens[] = [
   {
     id: 'review-calibration',
     label: 'Review calibration',
-    signal: /\b(review|rubric|persona|fan[- ]out|adjudicat|approve|revise|risk|regression|gate)\b/i,
+    signal: /\b(rubric|persona|fan[- ]out|adjudicat|revise|risk|regression|gate)\b/i,
     statuses: ['review', 'gate_check', 'in_progress', 'ready'],
     summary: 'Apply the current review calibration and advisory lenses when this task reaches review.',
   },
@@ -58,7 +66,7 @@ const IMPROVEMENT_LENSES: ImprovementLens[] = [
   {
     id: 'memory-context',
     label: 'Memory and context',
-    signal: /\b(memory|learning|context|corpus map|profile|project knowledge|handoff|transcript|local history|agent context)\b/i,
+    signal: /\b(memory|learning|context|corpus map|profile|project knowledge|transcript|local history|agent context)\b/i,
     summary: 'Refresh the task context from current Guildhall memory, learning, and project-profile guidance before continuing.',
   },
   {
@@ -165,19 +173,39 @@ function hasImprovementReviewNote(task: Task, lensId: ImprovementLensId): boolea
 }
 
 function taskTextForImprovementReview(task: Task): string {
-  return [
+  return normalizeImprovementReviewText([
     task.title,
     task.description,
     task.request?.raw,
-    task.spec,
+    stripGeneratedBoundarySections(task.spec),
     task.productBrief?.userJob,
     task.productBrief?.successMetric,
     task.productBrief?.antiPatterns?.join('\n'),
-    task.acceptanceCriteria.map(ac => `${ac.id} ${ac.description} ${ac.verifiedBy} ${ac.command ?? ''}`).join('\n'),
-    task.outOfScope.join('\n'),
+    task.acceptanceCriteria.map(ac => `${ac.id} ${ac.description} ${ac.command ?? ''}`).join('\n'),
     task.notes
-      .filter(note => note.role !== 'improvement-review')
+      .filter(note => !GENERATED_NOTE_ROLES.has(note.role))
       .map(note => note.content)
       .join('\n'),
-  ].filter(Boolean).join('\n')
+  ].filter(Boolean).join('\n'))
+}
+
+function stripGeneratedBoundarySections(text: string | undefined): string | undefined {
+  if (!text) return undefined
+  const stripped: string[] = []
+  let skipping = false
+  for (const line of text.split('\n')) {
+    if (/^##\s+(Out of Scope|Security Review|Handoff sequence)\b/i.test(line)) {
+      skipping = true
+      continue
+    }
+    if (skipping && /^##\s+/.test(line)) {
+      skipping = false
+    }
+    if (!skipping) stripped.push(line)
+  }
+  return stripped.join('\n')
+}
+
+function normalizeImprovementReviewText(text: string): string {
+  return text.replace(/\b[\w./-]+\.(?:md|mdx|txt|json|jsonl|ya?ml|toml|ts|tsx|js|jsx|css|scss|less|html|sh)\b/gi, '[file]')
 }

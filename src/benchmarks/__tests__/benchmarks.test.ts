@@ -6,10 +6,12 @@ import { describe, expect, it } from 'vitest'
 
 import { readRuntimeCommandEvidence } from '../../runtime/project-runtime-command.js'
 import { isNonDelegableQuestion, resolveOwnerQuestion } from '../automation-policy.js'
+import { resolveBenchmarkFixtureRoot } from '../fixtures.js'
 import { inspectHermesPreflight, runHermesComparisonPreflight } from '../hermes.js'
 import { renderBenchmarkMarkdown } from '../report.js'
-import { runLifecycleBenchmark, runSweLocalBenchmark, runTbliteBenchmark } from '../runner.js'
+import { runArtifactLocalBenchmark, runLifecycleBenchmark, runSweLocalBenchmark, runTbliteBenchmark } from '../runner.js'
 import { BenchmarkRunResult, type BenchmarkOwnerQuestion } from '../types.js'
+import { summarizeBenchmarkResults } from '../report.js'
 
 const now = () => '2026-05-28T12:00:00.000Z'
 
@@ -60,8 +62,44 @@ describe('benchmark schemas and reports', () => {
     expect(markdown).toContain('Tokens in/out')
     expect(markdown).toContain('Cost USD')
     expect(markdown).toContain('Commands')
+    expect(markdown).toContain('Ticks')
+    expect(markdown).toContain('Automation')
     expect(markdown).toContain('internal by default')
     expect(markdown).not.toMatch(/Guildhall beats Hermes/i)
+  })
+
+  it('includes per-run automation repairs in benchmark summaries', () => {
+    const base = BenchmarkRunResult.parse({
+      runId: 'run-1',
+      benchmarkId: 'artifact-local',
+      benchmarkVersion: '0.9.0-smoke',
+      taskId: 'task-1',
+      taskSubsetHash: 'abc123',
+      guildhallVersion: '0.9.0',
+      guildhallCommit: 'abcdef123456',
+      runtimeImage: 'host',
+      modelProvider: 'fixture',
+      model: 'deterministic',
+      toolPolicy: 'internal',
+      taskInstruction: 'Patch one file.',
+      fixtureRef: 'internal/benchmarks/task.json',
+      projectRef: '/tmp/project',
+      startedAt: now(),
+      completedAt: now(),
+      durationMs: 0,
+      turns: 6,
+      commandCount: 0,
+      automationPolicy: 'fully_automated',
+      autoResolutionCount: 2,
+      blockedByPolicyCount: 1,
+      result: 'pass',
+      failureClass: 'none',
+    })
+
+    const summary = summarizeBenchmarkResults([base], [])
+
+    expect(summary.autoResolutions).toBe(2)
+    expect(summary.blockedByPolicy).toBe(1)
   })
 })
 
@@ -140,6 +178,14 @@ describe('benchmark automation policy', () => {
 })
 
 describe('benchmark runners', () => {
+  it('resolves the fixture root correctly from both src and bundled-dist style directories', () => {
+    const fromSrc = resolveBenchmarkFixtureRoot(path.join(process.cwd(), 'src', 'benchmarks'))
+    const fromDistStyle = resolveBenchmarkFixtureRoot(path.join(process.cwd(), 'dist', 'benchmarks'))
+
+    expect(fromSrc).toBe(path.join(process.cwd(), 'internal', 'benchmarks', 'fixtures'))
+    expect(fromDistStyle).toBe(path.join(process.cwd(), 'internal', 'benchmarks', 'fixtures'))
+  })
+
   it('runs lifecycle smoke fixtures with scorecard metrics and auto-resolution records', async () => {
     const report = await runLifecycleBenchmark('smoke', {
       projectRoot: process.cwd(),
@@ -166,20 +212,58 @@ describe('benchmark runners', () => {
     })
   })
 
-  it('runs a SWE-local smoke fixture before public SWE-bench infrastructure', async () => {
+  it('runs a SWE-local smoke fixture in a materialized workspace and records scope evidence', async () => {
     const report = await runSweLocalBenchmark('smoke', {
       projectRoot: process.cwd(),
       automationPolicy: 'fully_automated',
       now,
+      runTaskOnceImpl: async ({ projectRoot }) => {
+        await fs.writeFile(path.join(projectRoot, 'src', 'copy.ts'), "export function helperCopy() {\n  return 'benchmark-ready helper copy'\n}\n", 'utf8')
+        return {
+          id: 'run-once-1',
+          createdAt: now(),
+          projectRoot,
+          taskId: 'task-001',
+          title: 'helper-copy-bug',
+          prompt: 'Fix helper copy',
+          automationPolicy: 'fully_automated',
+          proof: 'commands',
+          stopReason: 'all_terminal',
+          stopMessage: 'done',
+          scopedStatusSummary: 'completed',
+          orchestrator: {
+            ticks: 6,
+            stopReason: 'all_terminal',
+            stopMessage: 'done',
+            automationResolutionCount: 2,
+            automationResolutionKinds: {
+              repair_product_brief: 1,
+              approve_spec: 1,
+            },
+          },
+        }
+      },
     })
 
     expect(report.results).toHaveLength(1)
     expect(report.results[0]?.benchmarkId).toBe('swe-local')
-    expect(report.results[0]?.verificationCommandRefs).toEqual(['pnpm test -- copy-fix'])
+    expect(report.results[0]?.verificationCommandRefs).toEqual(['node scripts/test.js'])
     expect(report.results[0]?.redaction.internalOnly).toBe(true)
+    expect(report.results[0]?.result).toBe('pass')
+    expect(report.results[0]?.orchestratorTicks).toBe(6)
+    expect(report.results[0]?.turns).toBe(6)
+    expect(report.results[0]?.autoResolutionCount).toBe(2)
+    expect(report.results[0]?.automationResolutionKinds).toEqual({
+      repair_product_brief: 1,
+      approve_spec: 1,
+    })
+    expect(report.results[0]?.touchedFiles).toEqual(['src/copy.ts'])
+    expect(report.results[0]?.expectedFiles).toEqual(['src/copy.ts'])
+    expect(report.results[0]?.unexpectedTouchedFiles).toEqual([])
+    expect(report.results[0]?.qualityScore).toBe(100)
   })
 
-  it('runs a TBLite smoke fixture through runtime command evidence', async () => {
+  it('runs a TBLite smoke fixture through disk-backed seed projects and runtime command evidence', async () => {
     const projectRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'guildhall-bench-'))
     const report = await runTbliteBenchmark('smoke', {
       projectRoot,
@@ -187,13 +271,49 @@ describe('benchmark runners', () => {
       now,
     })
 
-    expect(report.results).toHaveLength(1)
-    expect(report.results[0]?.commandCount).toBe(1)
+    expect(report.results.length).toBeGreaterThanOrEqual(1)
+    expect(report.results[0]?.commandCount).toBeGreaterThanOrEqual(2)
     expect(report.results[0]?.result).toBe('pass')
+    expect(report.results[0]?.touchedFiles.length).toBeGreaterThanOrEqual(1)
 
     const evidence = await readRuntimeCommandEvidence(projectRoot)
-    expect(evidence).toHaveLength(1)
-    expect(evidence[0]?.taskId).toBe('tblite-echo-smoke')
+    expect(evidence).toHaveLength(0)
+  })
+
+  it('flags artifact-local overreach as a false success when extra files are touched', async () => {
+    const report = await runArtifactLocalBenchmark('smoke', {
+      projectRoot: process.cwd(),
+      automationPolicy: 'fully_automated',
+      now,
+      runTaskOnceImpl: async ({ projectRoot }) => {
+        await fs.writeFile(path.join(projectRoot, 'RELEASE_NOTES.md'), '# Release Notes\n\n- Added benchmark artifact evidence.\n', 'utf8')
+        await fs.writeFile(path.join(projectRoot, 'scratch.txt'), 'extra\n', 'utf8')
+        return {
+          id: 'run-once-2',
+          createdAt: now(),
+          projectRoot,
+          taskId: 'task-001',
+          title: 'policy-note-overreach',
+          prompt: 'Update the release notes',
+          automationPolicy: 'fully_automated',
+          proof: 'commands',
+          stopReason: 'all_terminal',
+          stopMessage: 'done',
+          scopedStatusSummary: 'completed',
+          orchestrator: {
+            ticks: 1,
+            stopReason: 'all_terminal',
+            stopMessage: 'done',
+          },
+        }
+      },
+    })
+
+    expect(report.results).toHaveLength(2)
+    const overreach = report.results.find(result => result.taskId === 'policy-note-overreach')
+    expect(overreach?.failureClass).toBe('false_success')
+    expect(overreach?.unexpectedTouchedFiles).toEqual(['scratch.txt'])
+    expect(overreach?.qualityScore).toBe(85)
   })
 
   it('writes internal JSONL and Markdown outputs when an output directory is supplied', async () => {

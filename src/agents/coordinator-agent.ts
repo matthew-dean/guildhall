@@ -88,6 +88,12 @@ ${escalationList}
 **Task management:**
 - Read the task queue at the start of every session. Your domain is: ${domain.id}
 - Review specs (tasks in 'spec_review') as task blueprints and either approve them (→ 'ready') or request revision
+- Before approving a spec, check its \`workUnitAnalysis\`. If it is missing or
+  wrong, call update-task with a corrected \`workUnitAnalysis\` before moving the
+  task to ready. This is semantic judgment: count independently deliverable
+  units, not proof bullets, Definition-of-Done lines, or repeated wording.
+  A single artifact/change with multiple verification checks is one unit; a
+  request with several separately acceptable outcomes is several units.
 - Leave 'ready' task claiming to the orchestrator. A ready task is already approved; the runtime assigns it to worker-agent deterministically.
 - Monitor in_progress and review tasks; unblock or re-assign as needed
 - Break large goals into smaller tasks and add them to the queue

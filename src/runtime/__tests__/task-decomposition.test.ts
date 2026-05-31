@@ -103,6 +103,54 @@ describe('decomposeTaskForFinishability', () => {
     expect(result.decomposition?.action).toBe('keep')
     expect(result.notes.at(-1)?.content).toContain('Task readiness: ready')
   })
+
+  it('does not draft split children for one bounded deliverable with multiple proof bullets', () => {
+    const target = task({
+      title: 'policy note patch',
+      description: 'Append one sentence to STATUS_NOTE.md and do not edit any other file.',
+      spec: [
+        '## Summary',
+        'Append one sentence to STATUS_NOTE.md.',
+        '## Acceptance Criteria',
+        '1. STATUS_NOTE.md contains the requested sentence.',
+        '2. Existing content remains unchanged.',
+        '3. No other files change.',
+        '## Completion Boundary',
+        '- Product outcome: STATUS_NOTE.md contains the requested sentence.',
+        '- What Guildhall can complete in code: Append one sentence to STATUS_NOTE.md.',
+        '- External dependencies: None.',
+        '- Owner-only setup: None.',
+        '- Verification environment: Local filesystem.',
+        '- What counts as done:',
+        '  1. grep exits 0 for the sentence.',
+        '  2. git diff shows only STATUS_NOTE.md changed.',
+        '  3. Original lines remain untouched.',
+        '- What must be split or blocked: Nothing.',
+      ].join('\n'),
+      acceptanceCriteria: [
+        { id: 'AC-1', description: 'STATUS_NOTE.md contains the requested sentence.', verifiedBy: 'automated', met: false },
+        { id: 'AC-2', description: 'Existing content remains unchanged.', verifiedBy: 'automated', met: false },
+        { id: 'AC-3', description: 'No other files change.', verifiedBy: 'automated', met: false },
+      ],
+      sizePlan: {
+        taskId: 'task-1',
+        score: 1,
+        band: 'tiny',
+        action: 'proceed',
+        factors: [],
+        recommendedChildren: [],
+        reviewBudgetHint: 'lean',
+        reasons: ['One bounded deliverable.'],
+        createdAt: now,
+        createdBy: 'test',
+      },
+    })
+
+    const decomposition = decomposeTaskForFinishability(target)
+
+    expect(decomposition.action).toBe('keep')
+    expect(decomposition.childDrafts).toEqual([])
+  })
 })
 
 describe('suggestCoordinatorReflection', () => {

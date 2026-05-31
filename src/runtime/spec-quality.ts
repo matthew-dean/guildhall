@@ -19,6 +19,10 @@ const EMPTY_FIELD_PATTERN = /\b(tbd|todo|unknown|unclear|not sure|to be decided|
 const NO_EXTERNAL_DEPENDENCY_PATTERN = /^(none|no|nothing|not required|no external dependencies)(?:[.\s].*)?$/i
 const BROWSER_ONLY_VERIFICATION_DEPENDENCY_PATTERN =
   /\b(?:modern\s+)?(?:web\s+)?browser\b[\s\S]*\b(?:verification|verify|inspect|screenshot|headless|local)\b[\s\S]*\b(?:no runtime dependencies|no APIs|no CDN|no backend|no credentials|no deployed infrastructure|no network)\b/i
+const STANDARD_LOCAL_TOOLING_PATTERN =
+  /\b(?:node(?:\.js)?|npm|pnpm|yarn|bun|python|ruby|go|rust|cargo|java|dotnet|swift|xcode|git|bash|zsh|shell)\b/i
+const LOCAL_TOOLING_ALREADY_AVAILABLE_PATTERN =
+  /\b(?:already available|already installed|available on path|available in the execution environment|local filesystem|local[- ]only|no external services|no external dependencies|none)\b/i
 const NO_SPLIT_OR_BLOCK_PATTERN = /^(none|nothing|not required|no split|no blockers?|nothing to split)(?:[.\s].*)?$/i
 const EXTERNAL_SETUP_RESOLUTION_PATTERN =
   /\b(owner|user|admin|operator|human|create|configure|set up|setup|provision|dashboard|credential|secret|key|callback|webhook|env|environment|supabase|provider)\b/i
@@ -52,7 +56,9 @@ function completionBoundaryFields(boundary: string): Map<string, string> {
   let currentField: string | null = null
   for (const rawLine of boundary.split('\n')) {
     const line = rawLine.trim().replace(/^[-*]\s+/, '')
-    const match = /^([^:]+):\s*(.*)$/.exec(line)
+    const emphasizedMatch =
+      /^(?:\*{1,3}|_{1,3})(.+?)(?::)(?:\*{1,3}|_{1,3})\s*(.*)$/.exec(line)
+    const match = emphasizedMatch ?? /^([^:]+):\s*(.*)$/.exec(line)
     if (match) {
       currentField = normalizeFieldName(match[1]!)
       fields.set(currentField, match[2]!.trim())
@@ -105,10 +111,17 @@ export function validateSpecCompletionBoundary(task: Pick<Task,
   const verificationEnvironment = fields.get('verification environment') ?? ''
   const done = fields.get('what counts as done') ?? ''
   const splitOrBlocked = fields.get('what must be split or blocked') ?? ''
+  const localToolingAlreadyAvailable =
+    isFilled(externalDependencies) &&
+    STANDARD_LOCAL_TOOLING_PATTERN.test(externalDependencies) &&
+    LOCAL_TOOLING_ALREADY_AVAILABLE_PATTERN.test(
+      `${externalDependencies}\n${ownerOnlySetup}\n${verificationEnvironment}\n${splitOrBlocked}`,
+    )
   const hasExternalDependencies =
     isFilled(externalDependencies) &&
     !NO_EXTERNAL_DEPENDENCY_PATTERN.test(externalDependencies.trim()) &&
-    !BROWSER_ONLY_VERIFICATION_DEPENDENCY_PATTERN.test(externalDependencies.trim())
+    !BROWSER_ONLY_VERIFICATION_DEPENDENCY_PATTERN.test(externalDependencies.trim()) &&
+    !localToolingAlreadyAvailable
 
   if (hasExternalDependencies) {
     const ownerSetupResolved =

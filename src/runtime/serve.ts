@@ -265,6 +265,12 @@ import {
 } from './wizards.js'
 import { applyProjectMigrations, getProjectMigrationStatus } from './migrations.js'
 import { stringify as stringifyYaml } from 'yaml'
+import {
+  applyProjectReintakeDraft,
+  planProjectReintake,
+  readProjectReintakeDraft,
+  writeProjectReintakeDraft,
+} from './project-reintake.js'
 
 // ---------------------------------------------------------------------------
 // guildhall serve — local service over many projects
@@ -3499,9 +3505,13 @@ export function buildServeApp(opts: ServeOptions = {}): {
     )
     const first = ownerItems[0]
     if (!first) return null
+    const firstQuestion = ownerItems.find(item =>
+      item.kind === 'pressure_test_pending' || item.kind === 'agent_question_pending',
+    )
     const questionCount = ownerItems.filter(item =>
       item.kind === 'pressure_test_pending' || item.kind === 'agent_question_pending',
     ).length
+    const actionItem = questionCount > 0 && firstQuestion ? firstQuestion : first
     const action =
       questionCount > 0
         ? `${questionCount} ${questionCount === 1 ? 'question needs' : 'questions need'} your answer before Guildhall can continue`
@@ -3514,7 +3524,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
       canStart: false,
       code: 'owner_input_required',
       message: action,
-      actionHref: first.actionHref ?? '/thread',
+      actionHref: actionItem.actionHref ?? '/thread',
     }
   }
 
@@ -4491,6 +4501,83 @@ export function buildServeApp(opts: ServeOptions = {}): {
           stats: result.draft.stats,
         },
       })
+    } catch (err) {
+      return c.json({ error: err instanceof Error ? err.message : String(err) }, 500)
+    }
+  })
+
+  app.get('/api/project/reintake/status', async c => {
+    try {
+      if (project.initializationNeeded) {
+        return c.json({ draftExists: false, status: null, summary: null })
+      }
+      const draft = await readProjectReintakeDraft(getProjectStateDir(project.path))
+      return c.json({
+        draftExists: Boolean(draft),
+        status: draft?.status ?? null,
+        createdAt: draft?.createdAt ?? null,
+        summary: draft?.summary ?? null,
+      })
+    } catch (err) {
+      return c.json({ error: err instanceof Error ? err.message : String(err) }, 500)
+    }
+  })
+
+  app.post('/api/project/reintake/rerun', async c => {
+    try {
+      if (project.initializationNeeded) {
+        return c.json({ error: 'Project not initialized. Complete /setup first.' }, 400)
+      }
+      const memoryDir = getProjectStateDir(project.path)
+      const tasks = await readTasksFileNormalized(join(memoryDir, 'TASKS.json')).catch(() => [])
+      const sources = await collectProjectReintakeSources(project.path)
+      const draft = planProjectReintake({ sources, tasks })
+      await writeProjectReintakeDraft(memoryDir, draft)
+      return c.json({ ok: true, draft })
+    } catch (err) {
+      return c.json({ error: err instanceof Error ? err.message : String(err) }, 500)
+    }
+  })
+
+  app.get('/api/project/reintake/draft', async c => {
+    try {
+      if (project.initializationNeeded) {
+        return c.json({ error: 'Project not initialized. Complete /setup first.' }, 400)
+      }
+      const draft = await readProjectReintakeDraft(getProjectStateDir(project.path))
+      if (!draft) return c.json({ error: 'No re-intake draft found.' }, 404)
+      return c.json(draft)
+    } catch (err) {
+      return c.json({ error: err instanceof Error ? err.message : String(err) }, 500)
+    }
+  })
+
+  app.post('/api/project/reintake/apply', async c => {
+    try {
+      if (project.initializationNeeded) {
+        return c.json({ error: 'Project not initialized. Complete /setup first.' }, 400)
+      }
+      const body = await c.req.json().catch(() => ({})) as { groupIds?: string[] }
+      const result = await applyProjectReintakeDraft({
+        memoryDir: getProjectStateDir(project.path),
+        selectedGroupIds: Array.isArray(body.groupIds) ? body.groupIds : undefined,
+      })
+      return c.json(result, result.success ? 200 : 400)
+    } catch (err) {
+      return c.json({ error: err instanceof Error ? err.message : String(err) }, 500)
+    }
+  })
+
+  app.post('/api/project/reintake/dismiss', async c => {
+    try {
+      if (project.initializationNeeded) {
+        return c.json({ error: 'Project not initialized. Complete /setup first.' }, 400)
+      }
+      const memoryDir = getProjectStateDir(project.path)
+      const draft = await readProjectReintakeDraft(memoryDir)
+      if (!draft) return c.json({ ok: true, dismissed: false })
+      await writeProjectReintakeDraft(memoryDir, { ...draft, status: 'dismissed' })
+      return c.json({ ok: true, dismissed: true })
     } catch (err) {
       return c.json({ error: err instanceof Error ? err.message : String(err) }, 500)
     }
@@ -5477,8 +5564,10 @@ export function buildServeApp(opts: ServeOptions = {}): {
         if (!('taskId' in turn)) return false
         return turn.taskId === id
       })
+      const runStatus = supervisor.get(project.id)?.status ?? 'stopped'
       return c.json({
         task: await enrichTaskForServe(project.path, task as Record<string, unknown>),
+        runStatus,
         recentEvents: recent,
         contextDebug,
         exploringTranscript,

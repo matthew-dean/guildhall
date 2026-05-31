@@ -16,6 +16,14 @@ const DESIGN_REVIEW_TASK_SIGNALS = /\b(ui|ux|frontend|front[- ]end|screen|page|v
 const ARCHITECTURE_OPPORTUNITY_SIGNALS = /\b(third[- ]party|dependency|package|library|bespoke|custom|replace|remove|overhead|bundle|virtuali[sz]ation|positioning|combobox|autocomplete|typeahead|architecture|pivot)\b/i
 const TOKEN_GAP_SIGNALS = /\b(token|spacing|radius|density|motion|contrast|palette|color|typography)\b/i
 const TERMINAL_STATUSES = new Set<TaskStatus>(TERMINAL_TASK_STATUSES)
+const GENERATED_NOTE_ROLES = new Set([
+  'automation',
+  'approver',
+  'blueprint-review',
+  'git-story',
+  'improvement-review',
+  'orchestrator',
+])
 
 export interface DesignLensReviewResult {
   examinedTaskIds: string[]
@@ -120,12 +128,31 @@ function designLensTaskText(task: Task): string {
     task.title,
     task.description,
     task.request?.raw,
-    task.spec,
+    stripGeneratedBoundarySections(task.spec),
     task.productBrief?.userJob,
     task.productBrief?.successMetric,
     task.productBrief?.antiPatterns?.join('\n'),
     task.acceptanceCriteria.map(ac => `${ac.id} ${ac.description}`).join('\n'),
-    task.outOfScope.join('\n'),
-    task.notes.map(note => note.content).join('\n'),
+    task.notes
+      .filter(note => !GENERATED_NOTE_ROLES.has(note.role))
+      .map(note => note.content)
+      .join('\n'),
   ].filter(Boolean).join('\n')
+}
+
+function stripGeneratedBoundarySections(text: string | undefined): string | undefined {
+  if (!text) return undefined
+  const stripped: string[] = []
+  let skipping = false
+  for (const line of text.split('\n')) {
+    if (/^##\s+(Out of Scope|Security Review)\b/i.test(line)) {
+      skipping = true
+      continue
+    }
+    if (skipping && /^##\s+/.test(line)) {
+      skipping = false
+    }
+    if (!skipping) stripped.push(line)
+  }
+  return stripped.join('\n')
 }

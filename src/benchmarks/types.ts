@@ -104,10 +104,13 @@ export const BenchmarkRunResult = z.object({
   }).default({ input: 0, output: 0 }),
   costUsd: z.number().nonnegative().default(0),
   turns: z.number().int().nonnegative(),
+  orchestratorTicks: z.number().int().nonnegative().default(0),
+  orchestratorStopReason: z.string().default(''),
   commandCount: z.number().int().nonnegative(),
   automationPolicy: BenchmarkAutomationPolicy,
   autoResolutionCount: z.number().int().nonnegative(),
   blockedByPolicyCount: z.number().int().nonnegative(),
+  automationResolutionKinds: z.record(z.number().int().nonnegative()).default({}),
   result: z.enum(['pass', 'fail', 'unsupported', 'inconclusive', 'aborted']),
   failureClass: z.enum([
     'none',
@@ -120,6 +123,16 @@ export const BenchmarkRunResult = z.object({
     'inconclusive',
   ]),
   failureSummary: z.string().default(''),
+  expectedFiles: z.array(z.string()).default([]),
+  touchedFiles: z.array(z.string()).default([]),
+  missingExpectedFiles: z.array(z.string()).default([]),
+  unexpectedTouchedFiles: z.array(z.string()).default([]),
+  verifierResults: z.array(z.object({
+    command: z.string().min(1),
+    exitCode: z.number().int(),
+    stdout: z.string().default(''),
+    stderr: z.string().default(''),
+  })).default([]),
   proofPathRefs: z.array(BenchmarkEvidenceRef).default([]),
   evidenceRefs: z.array(BenchmarkEvidenceRef).default([]),
   auditRefs: z.array(BenchmarkEvidenceRef).default([]),
@@ -129,6 +142,7 @@ export const BenchmarkRunResult = z.object({
     redactionNotes: z.array(z.string()).default([]),
   }).default({ internalOnly: true, publishable: false, redactionNotes: [] }),
   metrics: z.record(z.number()).default({}),
+  qualityScore: z.number().min(0).max(100).default(0),
 })
 export type BenchmarkRunResult = z.infer<typeof BenchmarkRunResult>
 
@@ -149,6 +163,8 @@ export const BenchmarkReport = z.object({
     falseSuccesses: z.number().int().nonnegative(),
     blockedByPolicy: z.number().int().nonnegative(),
     autoResolutions: z.number().int().nonnegative(),
+    scoreableResults: z.number().int().nonnegative().default(0),
+    averageQualityScore: z.number().min(0).max(100).default(0),
   }),
   outputPaths: z.object({
     jsonl: z.string().min(1),

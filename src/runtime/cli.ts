@@ -57,6 +57,7 @@ import { OpenAICompatibleClient } from '@guildhall/providers'
 import { getProjectStateDir } from '@guildhall/sessions'
 import { FileBackedGuildhallPersistence } from '@guildhall/persistence'
 import {
+  runArtifactLocalBenchmark,
   runLifecycleBenchmark,
   runHermesComparisonPreflight,
   runSweLocalBenchmark,
@@ -323,6 +324,8 @@ export function resolveServiceLifecycleIntent(
 //                                      — run internal lifecycle finishability benchmark
 //   guildhall benchmarks run tblite --subset smoke
 //                                      — run internal TBLite-style runtime smoke benchmark
+//   guildhall benchmarks run artifact-local --subset smoke
+//                                      — run local artifact-generation fixture benchmark
 //   guildhall benchmarks run swe-local --subset smoke
 //                                      — run local SWE-bench-style coding fixture benchmark
 //   guildhall mcp serve [path]          — serve Guildhall project context over MCP stdio
@@ -470,6 +473,8 @@ Usage:
     --output-dir <path>           Output directory (default: internal/benchmarks/runs)
   guildhall benchmarks run tblite [id|path]
                                   Run internal TBLite-style runtime smoke fixtures
+  guildhall benchmarks run artifact-local [id|path]
+                                  Run local artifact-generation fixtures
   guildhall benchmarks run swe-local [id|path]
                                   Run local SWE-bench-style coding fixtures
     --subset <name>               Subset (default: smoke)
@@ -508,6 +513,7 @@ Examples:
   guildhall model-bakeoff --context-indexer
   guildhall benchmarks run lifecycle --fixture-set smoke --automation fully-automated
   guildhall benchmarks run tblite --subset smoke --automation fully-automated
+  guildhall benchmarks run artifact-local --subset smoke --automation fully-automated
   guildhall benchmarks run swe-local --subset smoke --automation fully-automated
   guildhall benchmarks compare hermes --hermes-root /tmp/hermes-agent
   guildhall mcp serve .
@@ -1398,8 +1404,8 @@ async function cmdBenchmarks() {
     }
     return
   }
-  if (subcommand !== 'run' || (benchmark !== 'lifecycle' && benchmark !== 'tblite' && benchmark !== 'swe-local')) {
-    console.error('[guildhall] Usage: guildhall benchmarks run <lifecycle|tblite|swe-local> [id|path] [--fixture-set smoke|--subset smoke] [--automation fully-automated]')
+  if (subcommand !== 'run' || (benchmark !== 'lifecycle' && benchmark !== 'tblite' && benchmark !== 'artifact-local' && benchmark !== 'swe-local')) {
+    console.error('[guildhall] Usage: guildhall benchmarks run <lifecycle|tblite|artifact-local|swe-local> [id|path] [--fixture-set smoke|--subset smoke] [--automation fully-automated]')
     console.error('[guildhall]    or: guildhall benchmarks compare hermes [id|path] [--hermes-root <path>]')
     process.exit(1)
   }
@@ -1427,7 +1433,9 @@ async function cmdBenchmarks() {
     ? await runLifecycleBenchmark(getFlag('--fixture-set') ?? 'smoke', common)
     : benchmark === 'tblite'
       ? await runTbliteBenchmark(getFlag('--subset') ?? 'smoke', common)
-      : await runSweLocalBenchmark(getFlag('--subset') ?? 'smoke', common)
+      : benchmark === 'artifact-local'
+        ? await runArtifactLocalBenchmark(getFlag('--subset') ?? 'smoke', common)
+        : await runSweLocalBenchmark(getFlag('--subset') ?? 'smoke', common)
 
   console.log(`[guildhall] Benchmark complete: ${report.title}`)
   console.log(`[guildhall] Task subset hash: ${report.taskSubsetHash}`)

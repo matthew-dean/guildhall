@@ -2,7 +2,7 @@ import { defineTool } from '@guildhall/engine'
 import { z } from 'zod'
 import fs from 'node:fs/promises'
 import path from 'node:path'
-import { AcceptanceCriteria, GateResult, Task, TaskQueue, TaskStatus, buildTaskSizePlan, parseAcceptanceCriteriaFromSpec } from '@guildhall/core'
+import { AcceptanceCriteria, GateResult, Task, TaskQueue, TaskStatus, WorkUnitAnalysis, buildTaskSizePlan, parseAcceptanceCriteriaFromSpec } from '@guildhall/core'
 import { atomicWriteText } from '@guildhall/sessions'
 
 const TASKS_PATH_SCHEMA = z.string().describe('Absolute path to the TASKS.json file')
@@ -68,6 +68,7 @@ const updateTaskInputSchema = z.object({
   humanJudgment: z.string().optional(),
   spec: z.string().optional(),
   acceptanceCriteria: z.array(AcceptanceCriteria).optional(),
+  workUnitAnalysis: WorkUnitAnalysis.optional(),
   gateResults: z.array(GateResult).optional(),
   completedAt: z.string().optional(),
 })
@@ -174,6 +175,9 @@ export async function updateTask(
     if (normalizedAcceptanceCriteria !== undefined && normalizedAcceptanceCriteria.length > 0) {
       task.acceptanceCriteria = z.array(AcceptanceCriteria).parse(normalizedAcceptanceCriteria)
     }
+    if (input.workUnitAnalysis !== undefined) {
+      task.workUnitAnalysis = WorkUnitAnalysis.parse(input.workUnitAnalysis)
+    }
     if (input.gateResults !== undefined && input.gateResults.length > 0) {
       task.gateResults = z.array(GateResult).parse(input.gateResults)
     }
@@ -181,7 +185,10 @@ export async function updateTask(
     if (input.note) {
       task.notes.push({ ...input.note, timestamp: new Date().toISOString() })
     }
-    if (normalizedSpec !== undefined && normalizedSpec.trim() !== '') {
+    const shouldRefreshSizePlan =
+      (normalizedSpec !== undefined && normalizedSpec.trim() !== '') ||
+      input.workUnitAnalysis !== undefined
+    if (shouldRefreshSizePlan) {
       const sizePlanCreatedAt = new Date().toISOString()
       task.sizePlan = buildTaskSizePlan({
         task,
@@ -371,6 +378,7 @@ function hasTaskMutation(input: UpdateTaskInput): boolean {
     input.humanJudgment !== undefined ||
     input.spec !== undefined ||
     input.acceptanceCriteria !== undefined ||
+    input.workUnitAnalysis !== undefined ||
     input.gateResults !== undefined ||
     input.completedAt !== undefined
 }
@@ -553,6 +561,38 @@ export const updateTaskTool = defineTool({
           },
           required: ['id', 'description', 'verifiedBy'],
         },
+      },
+      workUnitAnalysis: {
+        type: 'object',
+        properties: {
+          summary: {
+            type: 'string',
+            description: 'Semantic summary of how many independently deliverable work units the task contains.',
+          },
+          units: {
+            type: 'array',
+            items: {
+              type: 'object',
+              properties: {
+                id: { type: 'string' },
+                title: { type: 'string' },
+                deliverable: { type: 'string' },
+                rationale: { type: 'string' },
+                suggestedDomain: { type: 'string' },
+                dependsOn: { type: 'array', items: { type: 'string' } },
+              },
+              required: ['id', 'title', 'deliverable', 'rationale'],
+            },
+          },
+          proofOnlyItems: {
+            type: 'array',
+            items: { type: 'string' },
+            description: 'Verification, review, or evidence items that prove a unit but are not separate deliverables.',
+          },
+          createdAt: { type: 'string' },
+          createdBy: { type: 'string' },
+        },
+        required: ['summary', 'units', 'createdAt'],
       },
       gateResults: {
         type: 'array',

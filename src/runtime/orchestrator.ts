@@ -104,7 +104,7 @@ import {
   resolveEffectiveTaskVerificationCommands,
   rewriteWorkspaceCommandsForIsolatedTaskWorktree,
 } from './task-gates.js'
-import { summarizeScopedHardGateDisposition } from '@guildhall/tools'
+import { runGates, summarizeScopedHardGateDisposition } from '@guildhall/tools'
 import {
   evaluatePreRejection,
   type PreRejectionAction,
@@ -1074,6 +1074,8 @@ export interface OrchestratorRunOptions {
 
 export interface OrchestratorRunResult {
   ticks: number
+  automationResolutionCount?: number
+  automationResolutionKinds?: Record<string, number>
   stopReason:
     | 'all_terminal'
     | 'awaiting_human'
@@ -1223,11 +1225,14 @@ function isEvidenceSummaryPrompt(promptBody: string): boolean {
     .trim()
     .toLowerCase()
   return (
+    /^research budget (?:hit|exhausted)\b/.test(normalized) ||
     /^i have enough\b/.test(normalized) ||
     /^ok,\s*i['’]ve hit the research budget\b/.test(normalized) ||
     /^i['’]ve hit the research budget\b/.test(normalized) ||
     /^let me (?:piece|synthesize|summarize|recap)\b/.test(normalized) ||
+    /^let me check what (?:i|we) know\b/.test(normalized) ||
     /^here'?s what i (?:found|know|learned|asked)\b/.test(normalized) ||
+    /^what (?:guildhall|i|we) (?:found|know|learned)\b/.test(normalized) ||
     /^what i (?:found|know|learned)\b/.test(normalized)
   )
 }
@@ -1251,6 +1256,7 @@ function isOperationalFallbackPrompt(promptBody: string): boolean {
 function inferFallbackQuestionsFromPlaintext(text: string): FallbackQuestionDraft[] {
   const trimmed = text.trim()
   if (!trimmed) return []
+  if (isEvidenceSummaryPrompt(trimmed)) return []
 
   const embeddedQuestion = extractEmbeddedFallbackQuestion(trimmed)
   if (embeddedQuestion) return [embeddedQuestion]
@@ -1903,9 +1909,20 @@ function renderImmediateResumeInstructions(
     .map((file) => mapResumeTargetFileToWorktree(file, taskProjectPath, activeWorktreePath))
   if (targetFiles.length === 0) return ''
   const latestVerification = checkpoint?.resumeContext?.verification?.[checkpoint.resumeContext.verification.length - 1]
+  const latestRejectionIndex = findLatestWorkerSelfCritiqueRejectionIndex(task)
+  const latestSelfCritiqueIndex = findLatestWorkerSelfCritiqueIndex(task)
+  const previousProofWasRejected =
+    latestRejectionIndex >= 0 && latestRejectionIndex > latestSelfCritiqueIndex
   return [
     '### Immediate Resume Instructions',
     'You are resuming an in-progress coding task.',
+    ...(previousProofWasRejected
+      ? [
+          'Previous worker proof was rejected because it claimed completion without project-file changes.',
+          'Your next action must be a concrete file mutation in the likely target file or a focused verification command that proves the target file already satisfies the spec.',
+          'Do not write another self-critique, mark acceptance criteria as met, or attempt a review handoff until after that mutation or authoritative verification.',
+        ]
+      : []),
     ...(checkpoint?.resumeContext?.workingHypothesis
       ? [`Working hypothesis: ${checkpoint.resumeContext.workingHypothesis}`]
       : []),
@@ -1993,6 +2010,8 @@ export class Orchestrator {
   private readonly emptyAssistantResets = new Map<string, number>()
   private readonly exploringNoProgressCounts = new Map<string, number>()
   private readonly workerNoProgressCounts = new Map<string, number>()
+  private runAutomationResolutionCount = 0
+  private readonly runAutomationResolutionKinds = new Map<string, number>()
 
   constructor(opts: OrchestratorOptions) {
     this.opts = opts
@@ -2314,6 +2333,13 @@ export class Orchestrator {
       actor: 'run-automation',
     })
     if (result.resolutions.length > 0) {
+      this.runAutomationResolutionCount += result.resolutions.length
+      for (const resolution of result.resolutions) {
+        this.runAutomationResolutionKinds.set(
+          resolution.kind,
+          (this.runAutomationResolutionKinds.get(resolution.kind) ?? 0) + 1,
+        )
+      }
       console.log(`[guildhall] fully automated run resolved ${result.resolutions.length} owner checkpoint(s).`)
     }
     return { changed: result.changed }
@@ -2351,6 +2377,14 @@ export class Orchestrator {
     const staleWorkerSelfCritiqueRecovery =
       await this.rejectStaleWorkerSelfCritiqueWithoutProjectChanges(task, task.status)
     if (staleWorkerSelfCritiqueRecovery) return staleWorkerSelfCritiqueRecovery
+
+    // Acceptance-command pre-pass at `gate_check`: command-backed acceptance
+    // criteria are decided by observed process exits before any model can
+    // narrate gate results.
+    if (task.status === 'gate_check') {
+      const acceptanceGateOutcome = await this.runAcceptanceCommandGatesInline(task)
+      if (acceptanceGateOutcome) return acceptanceGateOutcome
+    }
 
     // Guild deterministic-check pre-pass at `gate_check`: each applicable
     // guild's pure-function checks (WCAG contrast, OKLab near-duplicates, ...)
@@ -3091,6 +3125,12 @@ export class Orchestrator {
                     ) ||
                     /ending the turn so the orchestrator can treat this as no progress/i.test(
                       backendEvent.message ?? '',
+                    ) ||
+                    /kept researching after an explicit durable-progress nudge/i.test(
+                      backendEvent.message ?? '',
+                    ) ||
+                    /kept researching without recording durable progress/i.test(
+                      backendEvent.message ?? '',
                     )
                   )
                 ) {
@@ -3643,18 +3683,24 @@ export class Orchestrator {
           !madeExploringProgress
         if (repeatedExploringNoProgress) {
           const attempts = this.bumpExploringNoProgress(task.id)
-          if (attempts >= EXPLORING_NO_PROGRESS_ESCALATION_AFTER) {
+          const shouldEscalateNow = checkpointNoProgressStatusSeen ||
+            attempts >= EXPLORING_NO_PROGRESS_ESCALATION_AFTER
+          if (shouldEscalateNow) {
+            const summary = checkpointNoProgressStatusSeen
+              ? 'Spec agent kept researching after Guildhall asked for durable progress.'
+              : `Spec agent made no visible progress after ${attempts} passes.`
             const escalation = await raiseEscalation({
               tasksPath: this.tasksPath(),
               progressPath: this.progressPath(),
               taskId: task.id,
               agentId: agent.name,
               reason: 'human_judgment_required',
-              summary:
-                `Spec agent made no visible progress after ${attempts} passes.`,
+              summary,
               details:
-                `Task remained in exploring with no saved spec, note, or status transition. ` +
-                `Review the task ask/transcript or provider behavior before retrying.`,
+                checkpointNoProgressStatusSeen
+                  ? `Task remained in exploring after the agent ignored the durable-progress nudge and kept using read-only exploration. Review the task transcript or provider behavior before retrying.`
+                  : `Task remained in exploring with no saved spec, note, or status transition. ` +
+                    `Review the task ask/transcript or provider behavior before retrying.`,
             })
             this.clearExploringNoProgress(task.id)
             await this.maybeCleanupWorktree(taskAfter, worktreeMode)
@@ -3662,8 +3708,7 @@ export class Orchestrator {
               kind: 'escalated',
               taskId: task.id,
               agent: agent.name,
-              reason:
-                `Spec agent made no visible progress after ${attempts} passes.`,
+              reason: summary,
               escalationId:
                 escalation.escalationId ?? `auto-exploring-stall-${task.id}`,
             }
@@ -3732,7 +3777,16 @@ export class Orchestrator {
           hasCheckpointScopedVerifiedProgress &&
           this.hasReviewProofPacket(taskAfter) &&
           looksLikeReviewHandoffNextAction(checkpointNextAction)
-        if (canAutoPromoteReviewFromCheckpointHandoff) {
+        const canAutoPromoteReviewFromFreshHandoff =
+          agent.name === 'worker-agent' &&
+          beforeStatus === 'in_progress' &&
+          afterStatus === 'in_progress' &&
+          !transitioned &&
+          workerAddedSelfCritiqueSince(task, taskAfter, agent.name) &&
+          hasWorkerTurnEvidence &&
+          this.hasReviewProofPacket(taskAfter) &&
+          (hasDirtyLikelyTargetProgress || hasDirtyWorktreeAfter || hasCheckpointScopedVerifiedProgress)
+        if (canAutoPromoteReviewFromCheckpointHandoff || canAutoPromoteReviewFromFreshHandoff) {
           ensureReviewerOwnership(taskAfter)
           taskAfter.status = 'review'
           taskAfter.updatedAt = this.now()
@@ -4338,6 +4392,8 @@ export class Orchestrator {
     let finalResult: OrchestratorRunResult | null = null
 
     this.banner()
+    this.runAutomationResolutionCount = 0
+    this.runAutomationResolutionKinds.clear()
 
     // FR-18: SESSION_START is the "orchestrator woke up" event. Hooks may use
     // it to prime a log, bump a health counter, or gate startup with a
@@ -4571,6 +4627,8 @@ export class Orchestrator {
       }
     }
     finalResult.ticks = tick
+    finalResult.automationResolutionCount = this.runAutomationResolutionCount
+    finalResult.automationResolutionKinds = Object.fromEntries(this.runAutomationResolutionKinds)
 
     console.log(
       `[guildhall] Coordinator stopped after ${tick} ticks (${finalResult.stopReason}).`,
@@ -5482,6 +5540,134 @@ export class Orchestrator {
    * the task back to `in_progress` bumps `revisionCount` just like the LLM
    * path does, and we enforce `maxRevisions` the same way.
    */
+  /**
+   * Command-backed acceptance criteria are hard gates. They must be verified
+   * by observed command exits, not by a worker or gate-checker saying they ran.
+   */
+  private async runAcceptanceCommandGatesInline(task: Task): Promise<TickOutcome | null> {
+    if (task.status !== 'gate_check') return null
+    const commandCriteria = task.acceptanceCriteria
+      .map((criterion, index) => ({ criterion, index }))
+      .filter(({ criterion }) => typeof criterion.command === 'string' && criterion.command.trim().length > 0)
+    if (commandCriteria.length === 0) return null
+
+    const taskProjectPath = resolveEffectiveTaskProjectPath(task, this.opts.config.projectPath)
+    const gates = commandCriteria.map(({ criterion }) => ({
+      id: criterion.id,
+      label: criterion.description || criterion.id,
+      command: criterion.command!.trim(),
+      timeoutMs: 120_000,
+    }))
+    const summary = await runGates({
+      cwd: resolveRuntimePath(taskProjectPath),
+      gates,
+      failFast: false,
+      now: () => this.now(),
+    })
+    const commandByGateId = new Map(gates.map((gate) => [gate.id, gate.command]))
+    const results = summary.results.map((result) => {
+      const command = commandByGateId.get(result.gateId) ?? result.gateId
+      const outcome = `${command} — ${result.passed ? 'exit 0' : 'non-zero exit'}`
+      return {
+        ...result,
+        output: result.output ? `${outcome}\n${result.output}` : outcome,
+      }
+    })
+
+    const beforeStatus = task.status
+    return await this.withQueueWriteLock(async () => {
+      const queue = await this.readQueue()
+      const current = queue.tasks.find((candidate) => candidate.id === task.id)
+      if (!current || current.status !== 'gate_check') return null
+
+      const resultByGateId = new Map(results.map((result) => [result.gateId, result]))
+      const resultIds = new Set(resultByGateId.keys())
+      current.gateResults = [
+        ...current.gateResults.filter((result) => !(result.type === 'hard' && resultIds.has(result.gateId))),
+        ...results,
+      ]
+      for (const criterion of current.acceptanceCriteria) {
+        const result = resultByGateId.get(criterion.id)
+        if (result) criterion.met = result.passed
+      }
+
+      const now = this.now()
+      current.updatedAt = now
+      queue.lastUpdated = now
+
+      if (!summary.allPassed) {
+        const failed = results.filter((result) => !result.passed)
+        current.status = 'in_progress'
+        ensureWorkerOwnership(current)
+        current.revisionCount += 1
+        current.notes.push({
+          agentId: 'acceptance-command-gates',
+          role: 'gate-checker',
+          content: [
+            `Acceptance command gates failed (${failed.length}).`,
+            ...failed.map((result) => `- ${result.gateId}: ${(result.output ?? '').split('\n')[0] ?? 'failed'}`),
+            'Repair the implementation in the likely target files, then rerun the focused command gates before writing new proof.',
+          ].join('\n'),
+          timestamp: now,
+        })
+        await this.writeQueue(queue)
+        await this.logTickProgress({
+          task: current,
+          agent: 'acceptance-command-gates',
+          beforeStatus,
+          afterStatus: 'in_progress',
+          transitioned: true,
+          note: `acceptance command gates failed (${failed.length}) → in_progress`,
+        })
+        return {
+          kind: 'processed',
+          taskId: current.id,
+          agent: 'acceptance-command-gates',
+          beforeStatus,
+          afterStatus: 'in_progress',
+          transitioned: true,
+          revisionCount: current.revisionCount,
+        } as TickOutcome
+      }
+
+      if (current.acceptanceCriteria.length > 0 && current.acceptanceCriteria.every((criterion) => criterion.met)) {
+        current.status = 'done'
+        current.assignedTo = undefined
+        current.completedAt = now
+        await this.writeQueue(queue)
+        await this.logTickProgress({
+          task: current,
+          agent: 'acceptance-command-gates',
+          beforeStatus,
+          afterStatus: 'done',
+          transitioned: true,
+          note: `acceptance command gates passed (${results.length}) → done`,
+        })
+        await this.maybeCleanupWorktree(current, resolveWorktreeMode(this.opts.config))
+        return {
+          kind: 'processed',
+          taskId: current.id,
+          agent: 'acceptance-command-gates',
+          beforeStatus,
+          afterStatus: 'done',
+          transitioned: true,
+          revisionCount: current.revisionCount,
+        } as TickOutcome
+      }
+
+      await this.writeQueue(queue)
+      await this.logTickProgress({
+        task: current,
+        agent: 'acceptance-command-gates',
+        beforeStatus,
+        afterStatus: current.status,
+        transitioned: false,
+        note: `acceptance command gates passed (${results.length}); remaining non-command criteria still need gate review`,
+      })
+      return null
+    })
+  }
+
   /**
    * Guild deterministic-check pre-pass at `gate_check`. Runs the applicable
    * guilds' pure-function checks (e.g. WCAG contrast matrix, OKLab near-

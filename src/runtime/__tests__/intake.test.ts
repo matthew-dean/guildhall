@@ -371,6 +371,30 @@ describe('approveSpec', () => {
     expect(result.newStatus).toBe('ready')
   })
 
+  it('approves specs when the Completion Boundary colon is inside the markdown emphasis', async () => {
+    const queue = await readQueue()
+    queue.tasks[0]!.spec = [
+      '## Summary',
+      'Patch a local markdown file.',
+      '## Acceptance Criteria',
+      '1. The local file is updated.',
+      '## Completion Boundary',
+      '- **Product outcome:** The markdown file reflects the new note.',
+      '- **What Guildhall can complete in code:** Append the requested note to the local file.',
+      '- **External dependencies:** None. This is a local-only fixture change.',
+      '- **Owner-only setup:** None. No manual steps are required.',
+      '- **Verification environment:** Local filesystem on the current machine.',
+      '- **What counts as done:** The file contains the requested note and only the intended file changed.',
+      '- **What must be split or blocked:** Nothing. The task is self-contained.',
+    ].join('\n')
+    await fs.writeFile(tasksPath, JSON.stringify(queue, null, 2), 'utf-8')
+
+    const result = await approveSpec({ memoryDir, taskId: 'task-001' })
+
+    expect(result.success).toBe(true)
+    expect(result.newStatus).toBe('ready')
+  })
+
   it('approves specs with multiline Completion Boundary values and local dev dependencies', async () => {
     const queue = await readQueue()
     queue.tasks[0]!.spec = [
@@ -411,6 +435,30 @@ describe('approveSpec', () => {
       '- **Owner-only setup**: None. The app works by opening index.html directly.',
       '- **Verification environment**: Local browser or headless browser screenshot.',
       '- **What counts as done**: The app renders and passes browser inspection.',
+      '- **What must be split or blocked**: Nothing.',
+    ].join('\n')
+    await fs.writeFile(tasksPath, JSON.stringify(queue, null, 2), 'utf-8')
+
+    const result = await approveSpec({ memoryDir, taskId: 'task-001' })
+
+    expect(result.success).toBe(true)
+    expect(result.newStatus).toBe('ready')
+  })
+
+  it('approves tiny local repair specs when standard local tooling is already available', async () => {
+    const queue = await readQueue()
+    queue.tasks[0]!.spec = [
+      '## Summary',
+      'Repair the seeded helper copy.',
+      '## Acceptance Criteria',
+      '1. node scripts/test.js exits with code 0.',
+      '## Completion Boundary',
+      "- **Product outcome**: helperCopy returns 'benchmark-ready helper copy'.",
+      "- **What Guildhall can complete in code**: Edit src/copy.ts to replace 'stale helper copy' with 'benchmark-ready helper copy'.",
+      '- **External dependencies**: Node.js runtime only. The task uses only built-in modules and no external service is required.',
+      '- **Owner-only setup**: None. Node.js is already available on PATH in the execution environment.',
+      '- **Verification environment**: Local filesystem project root with Node.js available on PATH.',
+      '- **What counts as done**: node scripts/test.js exits with code 0.',
       '- **What must be split or blocked**: Nothing.',
     ].join('\n')
     await fs.writeFile(tasksPath, JSON.stringify(queue, null, 2), 'utf-8')

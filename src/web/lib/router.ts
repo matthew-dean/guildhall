@@ -22,7 +22,7 @@ export function parseRoute(p: string, state: unknown = null): Route {
     const backgroundPath =
       state && typeof state === 'object' && typeof (state as { backgroundPath?: unknown }).backgroundPath === 'string'
         ? ((state as { backgroundPath: string }).backgroundPath)
-        : `/projects/${encodeURIComponent(projectId)}/thread`
+        : `/projects/${encodeURIComponent(projectId)}/overview`
     const backgroundRoute = parseRoute(backgroundPath)
     if (backgroundRoute.kind === 'project') {
       return {
@@ -37,7 +37,7 @@ export function parseRoute(p: string, state: unknown = null): Route {
     return {
       kind: 'project',
       projectId,
-      view: 'thread',
+      view: 'overview',
       sub: null,
       drawerTaskId: decodeURIComponent(projectTaskMatch[2] ?? ''),
       backgroundPath,

@@ -12,6 +12,11 @@ import {
 } from './workspace-import/index.js'
 import { normalizeImportedDraftTask } from './import-drafts.js'
 import { resolveTaskProjectPath } from './task-project-path.js'
+import {
+  planEvidenceWorkGraph,
+  type EvidenceTask,
+  type EvidenceSource,
+} from './evidence-work-graph-intake.js'
 
 // ---------------------------------------------------------------------------
 // FR-34: reserved workspace-importer task.
@@ -446,6 +451,13 @@ export interface ParsedTask {
   references: readonly string[]
 }
 
+interface MaterializedImportTask extends ParsedTask {
+  acceptanceCriteria?: Array<{ id: string; description: string; verifiedBy?: string }>
+  dependsOn?: readonly string[]
+  proofPaths?: readonly unknown[]
+  evidenceGraphTask?: boolean
+}
+
 export interface ParsedMilestone {
   title: string
   evidence: string
@@ -736,6 +748,129 @@ function uniqueTaskId(existingIds: Set<string>, suggested: string): string {
   throw new Error(`Cannot allocate unique id for ${suggested}`)
 }
 
+async function evidenceSourcesForParsedTasks(
+  projectPath: string,
+  tasks: readonly ParsedTask[],
+): Promise<EvidenceSource[]> {
+  const seen = new Set<string>()
+  const sources: EvidenceSource[] = []
+
+  for (const task of tasks) {
+    for (const reference of task.references) {
+      const trimmed = reference.trim()
+      if (!trimmed || /^[a-z]+:\/\//i.test(trimmed)) {
+        continue
+      }
+      const absolute = path.isAbsolute(trimmed)
+        ? path.resolve(trimmed)
+        : path.resolve(projectPath, trimmed)
+      if (seen.has(absolute)) {
+        continue
+      }
+      seen.add(absolute)
+
+      let stat: Awaited<ReturnType<typeof fs.stat>>
+      try {
+        stat = await fs.stat(absolute)
+      } catch {
+        continue
+      }
+      if (!stat.isFile()) {
+        continue
+      }
+
+      const ext = path.extname(absolute).toLowerCase()
+      if (!['.md', '.markdown', '.txt'].includes(ext)) {
+        continue
+      }
+
+      const content = await fs.readFile(absolute, 'utf-8')
+      sources.push({
+        path: path.relative(projectPath, absolute) || path.basename(absolute),
+        content,
+      })
+    }
+  }
+
+  return sources
+}
+
+async function materializeEvidenceWorkGraphTasks(
+  input: {
+    projectPath: string
+    queue: TaskQueue
+    parsedTasks: readonly ParsedTask[]
+  },
+): Promise<MaterializedImportTask[]> {
+  const sources = await evidenceSourcesForParsedTasks(input.projectPath, input.parsedTasks)
+  if (sources.length === 0) {
+    return [...input.parsedTasks]
+  }
+
+  const plan = planEvidenceWorkGraph({
+    sources,
+    existingTasks: [
+      ...input.queue.tasks,
+      ...input.parsedTasks.map(task => ({
+        id: task.id,
+        title: task.title,
+        description: task.description,
+        status: 'import_draft',
+        acceptanceCriteria: [],
+        dependsOn: [],
+      })),
+    ],
+  })
+  if (plan.tasks.length === 0) {
+    return [...input.parsedTasks]
+  }
+
+  const graphTaskIds = new Set(plan.tasks.map(task => task.id))
+  const reconciledIds = new Set(plan.reconciliations.map(reconciliation => reconciliation.existingTaskId))
+  const graphTasks = plan.tasks.map(task => graphTaskToParsedTask(task, sources))
+  const untouchedParsedTasks = input.parsedTasks.filter(task =>
+    !graphTaskIds.has(task.id) &&
+    !reconciledIds.has(task.id),
+  )
+
+  return [...graphTasks, ...untouchedParsedTasks]
+}
+
+function graphTaskToParsedTask(task: EvidenceTask, sources: readonly EvidenceSource[]): MaterializedImportTask {
+  const references = sources.map(source => source.path)
+  return {
+    id: task.id,
+    title: task.title,
+    description: [
+      task.kind === 'integration'
+        ? `Wire ${task.deliverableName} into ${task.consumerSurface ?? task.targetArea}.`
+        : `Build ${task.deliverableName} as ${task.producedArtifact ?? 'a deliverable'}.`,
+      task.buildsOn.length > 0 ? `Builds on: ${task.buildsOn.join(', ')}.` : '',
+      references.length > 0 ? `Evidence: ${references.join(', ')}.` : '',
+    ].filter(Boolean).join(' '),
+    domain: task.targetArea,
+    priority: task.kind === 'integration' ? 'normal' : 'high',
+    references,
+    acceptanceCriteria: task.acceptanceCriteria,
+    dependsOn: task.dependsOn,
+    proofPaths: task.proofPaths,
+    evidenceGraphTask: true,
+  }
+}
+
+function materializedAcceptanceCriteria(task: MaterializedImportTask): Task['acceptanceCriteria'] {
+  return (task.acceptanceCriteria ?? []).map(criterion => ({
+    id: criterion.id,
+    description: criterion.description,
+    verifiedBy: criterion.verifiedBy === 'automated' || criterion.verifiedBy === 'review'
+      ? criterion.verifiedBy
+      : criterion.id.includes('automated') || criterion.id.includes('regression')
+        ? 'automated'
+        : 'review',
+    met: false,
+  }))
+}
+
 /**
  * Consume the workspace-import draft: parse fences, append tasks as
  * `import_draft` + `origination='human'`, record milestones to PROGRESS.md,
@@ -790,13 +925,28 @@ export async function approveWorkspaceImport(
   }
 
   const now = new Date().toISOString()
+  const materializedTasks = await materializeEvidenceWorkGraphTasks({
+    projectPath: input.projectPath,
+    queue,
+    parsedTasks: parsed.tasks,
+  })
 
   // Merge tasks into the queue as intake candidates. Dup ids get suffixed.
   const existingIds = new Set(queue.tasks.map((t) => t.id))
-  let tasksAdded = 0
-  for (const t of parsed.tasks) {
+  const allocatedTaskIds: string[] = []
+  const dependencyIdMap = new Map<string, string>()
+  for (const t of materializedTasks) {
     const id = uniqueTaskId(existingIds, t.id)
     existingIds.add(id)
+    allocatedTaskIds.push(id)
+    if (!dependencyIdMap.has(t.id)) {
+      dependencyIdMap.set(t.id, id)
+    }
+  }
+
+  let tasksAdded = 0
+  for (const [index, t] of materializedTasks.entries()) {
+    const id = allocatedTaskIds[index] ?? t.id
     const taskProjectPath =
       input.coordinatorProjectPaths?.[t.domain] ??
       resolveTaskProjectPath({
@@ -823,9 +973,9 @@ export async function approveWorkspaceImport(
       // shaping drafts first; only after shaping do they enter normal intake.
       status: 'import_draft',
       priority: t.priority,
-      dependsOn: [],
+      dependsOn: [...(t.dependsOn ?? [])].map(dependency => dependencyIdMap.get(dependency) ?? dependency),
       outOfScope: [],
-      acceptanceCriteria: [],
+      acceptanceCriteria: materializedAcceptanceCriteria(t),
       notes: t.references.length > 0
         ? [
             {
@@ -841,6 +991,7 @@ export async function approveWorkspaceImport(
       adjudications: [],
       escalations: [],
       agentIssues: [],
+      ...(t.proofPaths ? { proofPaths: [...t.proofPaths] } : {}),
       revisionCount: 0,
       remediationAttempts: 0,
       origination: 'human',

@@ -167,14 +167,7 @@ export async function answerPressureTestQuestion(input: {
     }
   } else if (needsConcreteFollowUp(input.answer)) {
     domain.status = 'follow-up'
-    intake.pendingQuestion = {
-      id: `${domain.id}-q-${domain.askedQuestions.length + 1}`,
-      domainId: domain.id,
-      prompt: `What is one concrete example or threshold that would make "${input.answer}" true for ${intake.target.title}?`,
-      why: 'The answer names a quality bar, but workers need an observable example or threshold.',
-      evidence: domain.knownFacts.map(f => `${f.source}: ${f.fact}`),
-      askedAt: now,
-    }
+    intake.pendingQuestion = followUpQuestion(domain, intake.target, now, domain.askedQuestions.length + 1)
   } else {
     domain.status = 'closeout'
     domain.closeoutAsked = true
@@ -447,6 +440,82 @@ function firstQuestionPrompt(domainTitle: string, target: PressureTestIntake['ta
   }
 }
 
+function followUpQuestion(
+  domain: z.infer<typeof PressureTestDomain>,
+  target: PressureTestIntake['target'],
+  askedAt: string,
+  index: number,
+): PressureTestQuestion {
+  return {
+    id: `${domain.id}-q-${index}`,
+    domainId: domain.id,
+    prompt: followUpQuestionPrompt(domain.id, target),
+    why: followUpQuestionWhy(domain.id),
+    evidence: domain.knownFacts.map(f => `${f.source}: ${f.fact}`),
+    askedAt,
+  }
+}
+
+function followUpQuestionPrompt(domainId: string, target: PressureTestIntake['target']): string {
+  if (target.type === 'project') {
+    switch (domainId) {
+      case 'product-goals':
+        return 'What observable result would tell you this project is succeeding?'
+      case 'workflows':
+        return 'What concrete user path or routine should Guildhall preserve while planning this project?'
+      case 'design-quality':
+        return "What should a worker or reviewer be able to see before Guildhall treats this project's visual direction as met?"
+      case 'task-boundaries':
+        return 'What is one concrete example of work that belongs here, and one example that should split out?'
+      case 'acceptance-criteria':
+        return 'What specific evidence would prove a task in this project is finished?'
+      case 'verification-tdd':
+        return 'What command, test, or manual check should Guildhall expect before trusting project work?'
+      case 'review-lenses':
+        return 'What kind of expert review would catch the misses you care about most?'
+      case 'risks':
+        return 'What concrete failure should Guildhall avoid while shaping work for this project?'
+      default:
+        return 'What concrete example should Guildhall remember for this project?'
+    }
+  }
+
+  const targetLabel = `"${target.title}"`
+  switch (domainId) {
+    case 'product-goals':
+      return `For ${targetLabel}, what observable result would show the work succeeded?`
+    case 'workflows':
+      return `For ${targetLabel}, what concrete user path or workflow should the worker preserve?`
+    case 'design-quality':
+      return `For ${targetLabel}, what should a reviewer be able to see before calling the visual direction met?`
+    case 'task-boundaries':
+      return `For ${targetLabel}, what is one concrete example of work that belongs here, and one that should split out?`
+    case 'acceptance-criteria':
+      return `For ${targetLabel}, what specific evidence would prove the work is finished?`
+    case 'verification-tdd':
+      return `For ${targetLabel}, what command, test, or manual check should verify the result?`
+    case 'review-lenses':
+      return `For ${targetLabel}, what expert review would catch the misses that matter most?`
+    case 'risks':
+      return `For ${targetLabel}, what concrete failure should Guildhall avoid?`
+    default:
+      return `For ${targetLabel}, what concrete example should Guildhall remember?`
+  }
+}
+
+function followUpQuestionWhy(domainId: string): string {
+  switch (domainId) {
+    case 'design-quality':
+      return 'Workers and reviewers need visible proof, not just a taste adjective.'
+    case 'verification-tdd':
+      return 'Guildhall needs a proof path it can hand to workers and reviewers.'
+    case 'task-boundaries':
+      return 'Concrete examples help Guildhall split work without inventing scope.'
+    default:
+      return 'Guildhall needs one observable example so future work can use this answer.'
+  }
+}
+
 function projectCheckInQuestionPrompt(domainTitle: string): string {
   switch (domainTitle.toLowerCase()) {
     case 'product goals':
@@ -485,12 +554,13 @@ function normalizePressureTestIntake(intake: PressureTestIntake): PressureTestIn
     }
   }
 
+  const pendingDomain = intake.domains.find(domain => domain.id === intake.pendingQuestion?.domainId)
   const normalizedPendingQuestion = intake.pendingQuestion
-    ? normalizeCloseoutQuestionCopy(intake.pendingQuestion)
+    ? normalizeQuestionCopy(intake.pendingQuestion, pendingDomain, intake.target)
     : intake.pendingQuestion
   const normalizedDomains = intake.domains.map(domain => ({
     ...domain,
-    askedQuestions: domain.askedQuestions.map(normalizeCloseoutQuestionCopy),
+    askedQuestions: domain.askedQuestions.map(question => normalizeQuestionCopy(question, domain, intake.target)),
   }))
   if (normalizedPendingQuestion !== intake.pendingQuestion || normalizedDomains.some((domain, index) => domain !== intake.domains[index])) {
     intake = {
@@ -503,14 +573,22 @@ function normalizePressureTestIntake(intake: PressureTestIntake): PressureTestIn
   return intake
 }
 
-function normalizeCloseoutQuestionCopy<T extends { prompt: string; why?: string }>(question: T): T {
-  const prompt = question.prompt
+function normalizeQuestionCopy<T extends { prompt: string; why?: string }>(
+  question: T,
+  domain: z.infer<typeof PressureTestDomain> | undefined,
+  target: PressureTestIntake['target'],
+): T {
+  let prompt = question.prompt
     .replace(/before this domain closes\?/g, 'before we move to the next topic?')
     .replace(/before the domain closes\?/g, 'before we move to the next topic?')
-  const why = question.why?.replace(
+  let why = question.why?.replace(
     /Pressure-test intake closes each domain deliberately so hidden constraints do not vanish\./g,
     'Guildhall asks this before leaving a topic so hidden constraints do not vanish.',
   )
+  if (domain && /^What is one concrete example or threshold that would make "[\s\S]+" true for [\s\S]+\?$/.test(prompt)) {
+    prompt = followUpQuestionPrompt(domain.id, target)
+    why = followUpQuestionWhy(domain.id)
+  }
   if (prompt === question.prompt && why === question.why) return question
   return {
     ...question,

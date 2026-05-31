@@ -94,6 +94,32 @@ describe('DoThisNext', () => {
     })
   })
 
+  it('frames project understanding advisories as a discovery update', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () =>
+        json({
+          items: [
+            {
+              kind: 'project_understanding',
+              severity: 'high',
+              title: 'Review project discovery update',
+              detail: 'Guildhall can now scan more planning docs and migrations. Review the reconciliation so it can update or dismiss stale imported work.',
+              actionHref: '/workspace-import?mode=reconcile',
+            },
+          ],
+        }),
+      ),
+    )
+
+    render(DoThisNext)
+
+    await screen.findByText('Review project discovery update')
+    expect(screen.getByText(/scan more planning docs and migrations/i)).toBeTruthy()
+    expect(screen.getByRole('button', { name: /review update/i })).toBeTruthy()
+    expect(screen.queryByText(/missing repo evidence/i)).toBeNull()
+  })
+
   it('uses kind-specific copy for draft shaping and inbox overflow navigation', async () => {
     vi.stubGlobal(
       'fetch',

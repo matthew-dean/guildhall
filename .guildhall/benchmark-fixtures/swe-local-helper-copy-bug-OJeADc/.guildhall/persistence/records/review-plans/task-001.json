@@ -1,0 +1,230 @@
+{
+  "schema": {
+    "name": "review-plan",
+    "version": 1
+  },
+  "ref": {
+    "scope": "shared_project",
+    "collection": "review-plans",
+    "id": "task-001",
+    "path": "/Users/matthew/git/oss/guildhall/.guildhall/benchmark-fixtures/swe-local-helper-copy-bug-OJeADc/.guildhall/persistence/records/review-plans/task-001.json"
+  },
+  "placement": {
+    "scope": "shared_project",
+    "retention": "active",
+    "visibility": "internal_audit",
+    "commitPolicy": "committed"
+  },
+  "provenance": {
+    "createdAt": "2026-05-30T23:19:45.230Z",
+    "updatedAt": "2026-05-30T23:19:45.230Z",
+    "createdBy": "coordinator-review-planner",
+    "sourceRefs": [
+      "task:task-001"
+    ]
+  },
+  "contentHash": "3654f52f9a46f870ab530946173366adc71160a434629a4b02e5a1d5eed88c5e",
+  "payload": {
+    "taskId": "task-001",
+    "effort": "thorough",
+    "depth": "deep",
+    "selectedLanes": [
+      "ux_comprehension",
+      "copy_clarity",
+      "visual_design",
+      "api_contract",
+      "data_integrity",
+      "test_adequacy",
+      "performance",
+      "docs_truth",
+      "release_risk",
+      "plan_completeness",
+      "evidence_privacy",
+      "calibration_governance",
+      "cost_control",
+      "rollout_safety"
+    ],
+    "skippedLanes": [
+      {
+        "lane": "accessibility",
+        "reason": "No matching signal found in task text or changed-file hints."
+      },
+      {
+        "lane": "security",
+        "reason": "No matching signal found in task text or changed-file hints."
+      },
+      {
+        "lane": "privacy",
+        "reason": "No matching signal found in task text or changed-file hints."
+      },
+      {
+        "lane": "migration_safety",
+        "reason": "No matching signal found in task text or changed-file hints."
+      }
+    ],
+    "requiredRecipes": [
+      {
+        "recipeId": "product-ux-zero-context",
+        "version": "v1",
+        "lanes": [
+          "ux_comprehension",
+          "copy_clarity",
+          "visual_design"
+        ],
+        "blocking": "high",
+        "required": true,
+        "calibrationRecipeIds": [
+          "ux-zero-context-comprehension",
+          "ux-error-recovery",
+          "ux-cross-surface-consistency",
+          "accessibility-keyboard-path",
+          "docs-truth-quickstart"
+        ]
+      },
+      {
+        "recipeId": "security-privacy-boundary",
+        "version": "v1",
+        "lanes": [
+          "evidence_privacy"
+        ],
+        "blocking": "high",
+        "required": true,
+        "calibrationRecipeIds": []
+      },
+      {
+        "recipeId": "api-data-migration-contract",
+        "version": "v1",
+        "lanes": [
+          "api_contract",
+          "data_integrity"
+        ],
+        "blocking": "high",
+        "required": true,
+        "calibrationRecipeIds": [
+          "security-tenant-boundary",
+          "api-compatibility-contract",
+          "data-idempotent-side-effects",
+          "performance-critical-path"
+        ]
+      },
+      {
+        "recipeId": "quality-performance-release",
+        "version": "v1",
+        "lanes": [
+          "test_adequacy",
+          "performance",
+          "release_risk",
+          "rollout_safety"
+        ],
+        "blocking": "high",
+        "required": true,
+        "calibrationRecipeIds": [
+          "performance-critical-path"
+        ]
+      },
+      {
+        "recipeId": "docs-truth-and-plan",
+        "version": "v1",
+        "lanes": [
+          "docs_truth",
+          "plan_completeness"
+        ],
+        "blocking": "high",
+        "required": true,
+        "calibrationRecipeIds": [
+          "api-compatibility-contract",
+          "docs-truth-quickstart"
+        ]
+      },
+      {
+        "recipeId": "agent-calibration-cost",
+        "version": "v1",
+        "lanes": [
+          "calibration_governance",
+          "cost_control"
+        ],
+        "blocking": "high",
+        "required": true,
+        "calibrationRecipeIds": []
+      }
+    ],
+    "advisoryLenses": [
+      {
+        "lens": "first_principles",
+        "reason": "Check the real user job, task boundary, and simplest useful shape before implementation.",
+        "blocking": "advisory"
+      },
+      {
+        "lens": "contrarian",
+        "reason": "Pressure-test fragile assumptions and false consensus before the plan is accepted.",
+        "blocking": "advisory"
+      },
+      {
+        "lens": "executor",
+        "reason": "Keep the recommendation tied to the smallest runnable and provable next move.",
+        "blocking": "advisory"
+      },
+      {
+        "lens": "outsider",
+        "reason": "Read the result like a new user or reader who does not know Guildhall internals.",
+        "blocking": "advisory"
+      },
+      {
+        "lens": "expansionist",
+        "reason": "Capture adjacent opportunities as non-blocking follow-up instead of expanding this task.",
+        "blocking": "advisory"
+      }
+    ],
+    "deterministicChecks": [
+      "node scripts/test.js"
+    ],
+    "requiredArtifacts": [
+      "implementation-summary",
+      "verification-evidence",
+      "visual-evidence",
+      "contract-or-state-diff",
+      "review-variant-comparison"
+    ],
+    "budget": {
+      "maxReviewerAgents": 6,
+      "maxEstimatedTokens": 85000,
+      "maxWallClockMinutes": 35,
+      "maxRevisionLoops": 3
+    },
+    "aggregation": {
+      "ux_comprehension": "blocking_on_high",
+      "copy_clarity": "blocking_on_high",
+      "visual_design": "blocking_on_high",
+      "api_contract": "strict",
+      "data_integrity": "strict",
+      "test_adequacy": "blocking_on_high",
+      "performance": "blocking_on_high",
+      "docs_truth": "blocking_on_high",
+      "release_risk": "blocking_on_high",
+      "plan_completeness": "blocking_on_high",
+      "evidence_privacy": "blocking_on_high",
+      "calibration_governance": "blocking_on_high",
+      "cost_control": "blocking_on_high",
+      "rollout_safety": "blocking_on_high"
+    },
+    "reasons": [
+      "Always include test adequacy and plan completeness so work-review quality does not depend only on detected keywords.",
+      "The task changes wording that users or readers may rely on.",
+      "The task changes visual presentation or component layout.",
+      "The task changes a boundary another caller may depend on.",
+      "The task changes persisted or coordinated state.",
+      "The task may change runtime cost or responsiveness.",
+      "The task changes product documentation or help surfaces.",
+      "The task affects release, deployment, or distribution behavior.",
+      "The task records evidence that may need retention and redaction rules.",
+      "The task changes review, evaluation, or agent-governance behavior.",
+      "The task affects model, provider, or resource spending.",
+      "The task needs staged rollout or fallback thinking.",
+      "Changed-file hints include frontend or style files.",
+      "Review effort: thorough.",
+      "Reviewer budget: up to 6 grouped reviewer agent(s)."
+    ],
+    "createdAt": "2026-05-30T23:19:45.228Z",
+    "createdBy": "coordinator-review-planner"
+  }
+}

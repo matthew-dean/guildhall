@@ -1138,7 +1138,17 @@ function toolCompletedDetail(
 ): string | undefined {
   if (ev?.type !== 'tool_completed' && ev?.type !== 'error') return undefined
   const tool = typeof ev?.tool_name === 'string' ? ev.tool_name : ''
-  if (ev?.type === 'tool_completed' && !ev.is_error && (tool === 'read-file' || tool === 'list-files' || tool === 'search-files')) {
+  if (
+    ev?.type === 'tool_completed' &&
+    !ev.is_error &&
+    (
+      tool === 'read-file' ||
+      tool === 'list-files' ||
+      tool === 'search-files' ||
+      tool === 'read-tasks' ||
+      tool === 'read-exploring-transcript'
+    )
+  ) {
     return undefined
   }
   if (ev?.type === 'tool_completed' && !ev.is_error && tool === 'post-user-question') {

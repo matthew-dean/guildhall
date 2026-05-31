@@ -86,6 +86,38 @@ describe('ProjectOverviewTab', () => {
     expect(screen.getAllByText('We should have a system-wide policy of how much FLL charges on overhead for maintenance fees etc.').length).toBeGreaterThan(0)
   })
 
+  it('uses the project-discovery action label instead of a generic Open button', () => {
+    render(ProjectOverviewTab, {
+      detail: {
+        id: 'looma-knit',
+        name: 'Looma + Knit',
+        path: '/Users/matthew/git/oss/looma-knit',
+        tasks: [],
+      },
+      inboxLoaded: true,
+      inboxItems: [
+        {
+          kind: 'project_understanding',
+          severity: 'high',
+          title: 'Review project discovery update',
+          detail: 'Guildhall can now scan more planning docs and migrations. Review the reconciliation so it can update or dismiss stale imported work.',
+          actionHref: '/workspace-import?mode=reconcile',
+        },
+      ],
+      projectTicker: {
+        label: 'Not running',
+        actorLabel: 'Guildhall',
+        message: 'Project is waiting for owner action.',
+        tone: 'idle',
+        pulse: false,
+      },
+      activeProjectId: 'looma-knit',
+    })
+
+    expect(screen.getByRole('button', { name: /review update/i })).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: /^open$/i })).not.toBeInTheDocument()
+  })
+
   it('uses a compact chip for blocked-work status instead of a separate status panel', () => {
     const { container } = render(ProjectOverviewTab, {
       detail: {

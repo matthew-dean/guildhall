@@ -1014,6 +1014,35 @@ coordinators:
     expect(items.find(i => i.kind === 'agent_question_pending' && i.taskId === 'task-question-receipt')).toBeUndefined()
   })
 
+  it('agent_question_pending: hides pre-question drafting narration', async () => {
+    await writeCompleteBootstrap()
+    await writeJson('.guildhall/workspace-goals.json', { goals: [] })
+    await writeJson('.guildhall/TASKS.json', {
+      version: 1,
+      lastUpdated: '',
+      tasks: [
+        {
+          id: 'task-pre-question',
+          title: 'AlertDialog',
+          description: 'Draft the missing primitive.',
+          status: 'exploring',
+          openQuestions: [
+            {
+              id: 'q-pre-question',
+              kind: 'text',
+              askedBy: 'spec-agent',
+              askedAt: '2026-05-23T00:00:00.000Z',
+              prompt: 'The key question I need to ask before drafting: what variants does the user need? Let me write the product brief first, then ask.',
+            },
+          ],
+        },
+      ],
+    })
+
+    const items = buildInbox({ projectPath: tmpDir })
+    expect(items.find(i => i.kind === 'agent_question_pending' && i.taskId === 'task-pre-question')).toBeUndefined()
+  })
+
   it('open_escalation: surfaces blocked tasks that only have a block reason', async () => {
     await writeCompleteBootstrap()
     await writeJson('.guildhall/workspace-goals.json', { goals: [] })

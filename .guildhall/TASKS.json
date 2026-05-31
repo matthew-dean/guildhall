@@ -833,7 +833,7 @@
       "description": "Prepare Looma to be a public, reusable foundation for Guildhall-generated and user projects. Move or mirror the current Looma repository from its legacy Bitbucket Granola remote to github.com/threadlabs-studio/looma, set up proper MIT licensing, and verify the package publishing plan for the existing @threadlabs npm org. This task is tracking/setup work first: audit current local changes, remote state, package scopes, license headers, docs, CI, and release implications before pushing or publishing.",
       "domain": "looma",
       "projectPath": "../looma",
-      "status": "in-progress",
+      "status": "in_progress",
       "priority": "high",
       "dependsOn": [],
       "outOfScope": [

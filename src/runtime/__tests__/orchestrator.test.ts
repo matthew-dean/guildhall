@@ -999,6 +999,108 @@ describe('Orchestrator.tick — routing', () => {
     expect(task.escalations[0]!.reason).toBe('human_judgment_required')
   })
 
+  it('escalates immediately when the spec agent ignores the durable-progress nudge', async () => {
+    await writeQueue([mkTask({ id: 'a', status: 'exploring', title: 'Build AlertDialog primitive' })])
+    const spec = {
+      name: 'spec-agent',
+      calls: [] as { prompt: string }[],
+      async generate(prompt: string) {
+        this.calls.push({ prompt })
+        return { text: '' }
+      },
+      async generateWithEvents(prompt: string, onEvent: (event: any) => void | Promise<void>) {
+        this.calls.push({ prompt })
+        await onEvent({
+          type: 'status',
+          message:
+            'Assistant kept retrying read-only exploration after repeated intake-budget refusals; ending the turn so the orchestrator can treat this as no progress.',
+        })
+        return { text: '' }
+      },
+    }
+    const orch = new Orchestrator({
+      config: baseConfig(),
+      agents: agentSet({ spec }),
+    })
+
+    const out = await orch.tick()
+
+    expect(out.kind).toBe('escalated')
+    if (out.kind === 'escalated') expect(out.reason).toContain('kept researching')
+    const queue = await readQueue()
+    const task = queue.tasks[0]!
+    expect(task.status).toBe('blocked')
+    expect(task.blockReason).toContain('Spec agent kept researching')
+    expect(task.escalations[0]?.details).toContain('durable-progress nudge')
+  })
+
+  it('treats the live durable-progress refusal wording as spec-agent no-progress', async () => {
+    await writeQueue([mkTask({ id: 'a', status: 'exploring', title: 'Build AlertDialog primitive' })])
+    const spec = {
+      name: 'spec-agent',
+      calls: [] as { prompt: string }[],
+      async generate(prompt: string) {
+        this.calls.push({ prompt })
+        return { text: '' }
+      },
+      async generateWithEvents(prompt: string, onEvent: (event: any) => void | Promise<void>) {
+        this.calls.push({ prompt })
+        await onEvent({
+          type: 'status',
+          message:
+            'Assistant kept researching after an explicit durable-progress nudge; refusing more read-only tool calls for this turn.',
+        })
+        return { text: '' }
+      },
+    }
+    const orch = new Orchestrator({
+      config: baseConfig(),
+      agents: agentSet({ spec }),
+    })
+
+    const out = await orch.tick()
+
+    expect(out.kind).toBe('escalated')
+    const queue = await readQueue()
+    const task = queue.tasks[0]!
+    expect(task.status).toBe('blocked')
+    expect(task.blockReason).toContain('Spec agent kept researching')
+  })
+
+  it('treats the live durable-progress nudge wording as spec-agent no-progress', async () => {
+    await writeQueue([mkTask({ id: 'a', status: 'exploring', title: 'Build AlertDialog primitive' })])
+    const spec = {
+      name: 'spec-agent',
+      calls: [] as { prompt: string }[],
+      async generate(prompt: string) {
+        this.calls.push({ prompt })
+        return { text: '' }
+      },
+      async generateWithEvents(prompt: string, onEvent: (event: any) => void | Promise<void>) {
+        this.calls.push({ prompt })
+        await onEvent({
+          type: 'status',
+          message:
+            'Assistant kept researching without recording durable progress; asking it to write the brief, question, spec, or escalation now.',
+        })
+        return { text: '' }
+      },
+    }
+    const orch = new Orchestrator({
+      config: baseConfig(),
+      agents: agentSet({ spec }),
+    })
+
+    const out = await orch.tick()
+
+    expect(out.kind).toBe('escalated')
+    const queue = await readQueue()
+    const task = queue.tasks[0]!
+    expect(task.status).toBe('blocked')
+    expect(task.blockReason).toContain('Spec agent kept researching')
+  })
+
+
   it('does not count transcript-only intake narration as spec progress', async () => {
     await writeQueue([mkTask({ id: 'a', status: 'exploring' })])
     const spec = stubAgent(
@@ -1628,6 +1730,35 @@ describe('Orchestrator.tick — routing', () => {
         '',
         '- Full autoencoder quality pass',
         '- Narrow glyph outline review',
+      ].join('\n'),
+    )
+    const orch = new Orchestrator({
+      config: baseConfig(),
+      agents: agentSet({ spec }),
+    })
+
+    const out = await orch.tick()
+    expect(out.kind).toBe('processed')
+
+    const queue = await readQueue()
+    const task = queue.tasks[0]!
+    expect(task.openQuestions ?? []).toHaveLength(0)
+  })
+
+  it('does not convert research-budget evidence summaries into fallback questions', async () => {
+    await writeQueue([mkTask({ id: 'a', status: 'exploring', title: 'Build AlertDialog primitive' })])
+    const spec = stubAgent(
+      'spec-agent',
+      undefined,
+      [
+        'Research budget hit. I have enough from the task data and the file listing to know the structure. Let me check what I know:',
+        '',
+        'What Guildhall found',
+        '',
+        '- `ui-dialog` is a StencilJS component at `packages/core/src/components/ui-dialog/ui-dialog.tsx`',
+        '- `ui-button` is a StencilJS component at `packages/core/src/components/ui-button/ui-button.tsx`',
+        '- No design system YAML exists yet',
+        '- The user confirmed: StencilJS component matching existing ui-dialog pattern',
       ].join('\n'),
     )
     const orch = new Orchestrator({
@@ -3088,6 +3219,39 @@ describe('Orchestrator.tick — feedback loop', () => {
     expect(task.notes.at(-1)?.content).toContain('stale worker self-critique without project-file changes')
   })
 
+  it('gives mutation-first instructions after rejecting a false worker self-critique', async () => {
+    await writeQueue([
+      mkTask({
+        id: 'artifact-patch',
+        status: 'in_progress',
+        assignedTo: 'worker-agent',
+        title: 'policy-note-overreach',
+        description: 'Append a new bullet to RELEASE_NOTES.md and do not edit any other file.',
+        spec: 'Append the exact bullet to RELEASE_NOTES.md.',
+        notes: [{
+          agentId: 'coordinator',
+          role: 'worker-progress-review',
+          content:
+            'Guildhall rejected the last worker self-critique without project-file changes outside `.guildhall`. Resume implementation by creating or editing the likely target files, then run focused verification before writing another self-critique.',
+          timestamp: '2026-04-01T00:02:00Z',
+        }],
+      }),
+    ])
+
+    const worker = stubAgent('worker-agent')
+    const orch = new Orchestrator({
+      config: baseConfig(),
+      agents: agentSet({ worker }),
+      gitDriver: new InMemoryGitDriver({ clean: true, currentBranch: 'main' }),
+    })
+
+    await orch.tick()
+
+    expect(worker.calls[0]?.prompt).toContain('Previous worker proof was rejected')
+    expect(worker.calls[0]?.prompt).toContain('Your next action must be a concrete file mutation')
+    expect(worker.calls[0]?.prompt).toContain('Do not write another self-critique')
+  })
+
   it('bounces review back to implementation when a local-web self-critique has no project-file changes', async () => {
     await writeQueue([
       mkTask({
@@ -3729,6 +3893,72 @@ describe('Orchestrator.tick — progress logging (FR-09)', () => {
     expect(queue.tasks[0]!.status).toBe('in_progress')
     expect(queue.tasks[0]!.assignedTo).toBe('worker-agent')
     expect(queue.tasks[0]!.gateResults).toHaveLength(2)
+  })
+
+  it('runs acceptance command gates before gate-checker narration can mark false proof green', async () => {
+    const projectPath = path.join(tmpDir, 'acceptance-command-gates')
+    await fs.mkdir(projectPath, { recursive: true })
+    execFileSync('git', ['init'], { cwd: projectPath, stdio: 'ignore' })
+    await fs.writeFile(path.join(projectPath, 'RELEASE_NOTES.md'), '# Release Notes\n\n- Placeholder note.\n', 'utf8')
+
+    await writeQueue([
+      mkTask({
+        id: 'artifact-patch',
+        status: 'gate_check',
+        assignedTo: 'gate-checker-agent',
+        projectPath,
+        acceptanceCriteria: [
+          {
+            id: 'AC-1',
+            description: 'RELEASE_NOTES.md contains benchmark artifact evidence.',
+            verifiedBy: 'automated',
+            command: "grep -q 'benchmark artifact evidence' RELEASE_NOTES.md",
+            met: true,
+          },
+        ],
+        notes: [{
+          agentId: 'worker-agent',
+          role: 'self-critique',
+          content: [
+            '**Self-critique:**',
+            '- AC1: Met — claimed grep passed.',
+            '',
+            'Minimum-scope check:',
+            '- Files changed: RELEASE_NOTES.md.',
+            '',
+            'Review proof packet:',
+            '- Changed files / diff scope: RELEASE_NOTES.md.',
+            '- Verification commands passed: grep passed.',
+          ].join('\n'),
+          timestamp: '2026-04-01T00:02:00Z',
+        }],
+      }),
+    ])
+    const gateChecker = stubAgent('gate-checker-agent', async () => {
+      throw new Error('gate-checker should not run before authoritative command gates')
+    })
+    const orch = new Orchestrator({
+      config: baseConfig(),
+      agents: agentSet({ gateChecker }),
+    })
+
+    const out = await orch.tick()
+
+    expect(gateChecker.calls).toHaveLength(0)
+    expect(out.kind).toBe('processed')
+    if (out.kind === 'processed') {
+      expect(out.beforeStatus).toBe('gate_check')
+      expect(out.afterStatus).toBe('in_progress')
+      expect(out.transitioned).toBe(true)
+    }
+    const task = (await readQueue()).tasks.find(candidate => candidate.id === 'artifact-patch')!
+    expect(task.acceptanceCriteria[0]?.met).toBe(false)
+    expect(task.gateResults.at(-1)).toMatchObject({
+      gateId: 'AC-1',
+      type: 'hard',
+      passed: false,
+    })
+    expect(task.notes.at(-1)?.content).toContain('Acceptance command gates failed')
   })
 
   it('treats unrelated typecheck failures as scoped exceptions when a resolved human decision says broader repo-red is out of scope', async () => {
@@ -5616,6 +5846,116 @@ describe('Orchestrator.run — full loops', () => {
     expect(task?.status).toBe('review')
     expect(task?.assignedTo).toBe('reviewer-agent')
     expect(task?.blockReason ?? null).toBeNull()
+  })
+
+  it('auto-promotes fresh worker self-critique handoffs with verified target-file changes', async () => {
+    const projectPath = path.join(tmpDir, 'fresh-handoff-target-change')
+    await fs.mkdir(projectPath, { recursive: true })
+    execFileSync('git', ['init'], { cwd: projectPath, stdio: 'ignore' })
+    await fs.writeFile(path.join(projectPath, 'RELEASE_NOTES.md'), '# Release Notes\n- Placeholder note.\n', 'utf8')
+
+    await writeQueue([
+      mkTask({
+        id: 'artifact-patch',
+        status: 'in_progress',
+        assignedTo: 'worker-agent',
+        projectPath,
+        spec: [
+          '## Summary',
+          'Append the exact bullet `- Added benchmark artifact evidence.` to `RELEASE_NOTES.md`.',
+          '',
+          '## Acceptance Criteria',
+          '1. `RELEASE_NOTES.md` contains `- Added benchmark artifact evidence.`.',
+          '2. No other files change.',
+        ].join('\n'),
+        acceptanceCriteria: [
+          {
+            id: 'AC1',
+            description: 'RELEASE_NOTES.md contains the requested bullet.',
+            verifiedBy: 'automated',
+            met: false,
+          },
+          {
+            id: 'AC2',
+            description: 'No other files change.',
+            verifiedBy: 'automated',
+            met: false,
+          },
+        ],
+      }),
+    ])
+
+    const worker: OrchestratorAgent = {
+      name: 'worker-agent',
+      async generate() {
+        await fs.appendFile(path.join(projectPath, 'RELEASE_NOTES.md'), '- Added benchmark artifact evidence.\n')
+        await mutateTask('artifact-patch', {
+          notes: [
+            {
+              agentId: 'worker-agent',
+              role: 'self-critique',
+              content: [
+                '**Self-critique:**',
+                '',
+                'For each acceptance criterion:',
+                '- AC1: Met — grep exits 0.',
+                '- AC2: Met — git diff --name-only shows only RELEASE_NOTES.md.',
+                '',
+                'Minimum-scope check:',
+                '- Files changed: RELEASE_NOTES.md.',
+                '- Smallest useful change?: yes — one line appended.',
+                '- Corpus fit: existing release notes artifact.',
+                '- Abstraction fit: n-a.',
+                '- Anything to revert before review?: none.',
+                '',
+                'Review proof packet:',
+                '- Changed files / diff scope: RELEASE_NOTES.md only.',
+                '- Verification commands passed: grep -q "benchmark artifact evidence" RELEASE_NOTES.md passed.',
+                '- Proof path updates: local filesystem proof only.',
+                '- Working hypothesis at handoff: The artifact patch is ready for review.',
+                '- Known gaps / follow-up: none.',
+                '',
+                'Out-of-scope changes introduced: None.',
+                'Uncertainties: None.',
+              ].join('\n'),
+              timestamp: '2026-05-30T12:00:00.000Z',
+            },
+          ],
+        })
+        return { text: 'Implemented and handed off.' }
+      },
+      getToolMetadata() {
+        return {
+          review_handoff_evidence: {
+            taskId: 'artifact-patch',
+            changedOrVerified: true,
+          },
+          recent_verified_work: [
+            'Edited file RELEASE_NOTES.md',
+            'Ran bash command grep -q "benchmark artifact evidence" RELEASE_NOTES.md [PASS]',
+          ],
+        }
+      },
+    }
+
+    const orch = new Orchestrator({
+      config: baseConfig(),
+      agents: agentSet({ worker }),
+      gitDriver: new InMemoryGitDriver({ clean: true }),
+    })
+    const out = await orch.tick()
+
+    expect(out.kind).toBe('processed')
+    if (out.kind === 'processed') {
+      expect(out.beforeStatus).toBe('in_progress')
+      expect(out.afterStatus).toBe('review')
+      expect(out.transitioned).toBe(true)
+    }
+
+    const task = (await readQueue()).tasks.find((candidate) => candidate.id === 'artifact-patch')
+    expect(task?.status).toBe('review')
+    expect(task?.assignedTo).toBe('reviewer-agent')
+    expect(task?.notes.some((note) => note.role === 'worker-progress-review')).toBe(false)
   })
 
   it('uses handoff-specific immediate resume instructions instead of file-open instructions when a review handoff checkpoint exists', async () => {

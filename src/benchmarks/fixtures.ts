@@ -1,4 +1,7 @@
 import { createHash } from 'node:crypto'
+import { existsSync, readdirSync, readFileSync } from 'node:fs'
+import path from 'node:path'
+import { fileURLToPath } from 'node:url'
 
 import type { BenchmarkOwnerQuestion } from './types.js'
 
@@ -25,14 +28,38 @@ export interface TbliteFixture {
   instruction: string
   command: string[]
   verifier: string[]
+  seedDir: string
+  fixturePath: string
+  expectedFiles: string[]
+}
+
+export interface ArtifactLocalFixture {
+  id: string
+  instruction: string
+  issueRef: string
+  verifier: string[]
+  seedDir: string
+  fixturePath: string
+  expectedFiles: string[]
 }
 
 export interface SweLocalFixture {
   id: string
   instruction: string
   issueRef: string
+  verifier: string[]
+  seedDir: string
+  fixturePath: string
   expectedFiles: string[]
-  verificationCommands: string[]
+}
+
+interface RawFixtureFile {
+  id?: string
+  instruction?: string
+  issueRef?: string
+  command?: string[]
+  verifier?: string[]
+  expectedFiles?: string[]
 }
 
 const evidence = {
@@ -134,24 +161,52 @@ export const lifecycleSmokeFixtures: LifecycleFixture[] = [
   },
 ]
 
-export const tbliteSmokeFixtures: TbliteFixture[] = [
-  {
-    id: 'tblite-echo-smoke',
-    instruction: 'Create a proof file and verify its contents.',
-    command: ['node', '-e', 'console.log("guildhall tblite smoke")'],
-    verifier: ['node', '-e', 'process.exit(0)'],
-  },
-]
+export function resolveBenchmarkFixtureRoot(baseDir = path.dirname(fileURLToPath(import.meta.url))): string {
+  let cursor = path.resolve(baseDir)
+  while (true) {
+    const candidate = path.join(cursor, 'internal', 'benchmarks', 'fixtures')
+    if (existsSync(candidate)) return candidate
+    const parent = path.dirname(cursor)
+    if (parent === cursor) {
+      throw new Error(`Could not resolve benchmark fixture root from ${baseDir}`)
+    }
+    cursor = parent
+  }
+}
 
-export const sweLocalSmokeFixtures: SweLocalFixture[] = [
-  {
-    id: 'swe-local-copy-fix',
-    instruction: 'Patch a tiny local fixture so the expected user-facing copy is present and the focused verifier passes.',
-    issueRef: 'internal/benchmarks/swe-local/smoke/copy-fix.md',
-    expectedFiles: ['src/App.tsx'],
-    verificationCommands: ['pnpm test -- copy-fix'],
-  },
-]
+function readFixtureFile<T extends RawFixtureFile>(family: string, subset: string, dirName: string): T & {
+  id: string
+  instruction: string
+  verifier?: string[]
+  command?: string[]
+  expectedFiles: string[]
+  fixturePath: string
+  seedDir: string
+} {
+  const fixtureRoot = resolveBenchmarkFixtureRoot()
+  const fixturePath = path.join(fixtureRoot, family, subset, dirName, 'fixture.json')
+  const seedDir = path.join(fixtureRoot, family, subset, dirName, 'seed')
+  const raw = JSON.parse(readFileSync(fixturePath, 'utf8')) as T
+  const id = raw.id?.trim() || dirName
+  const instruction = raw.instruction?.trim()
+  if (!instruction) throw new Error(`Fixture ${fixturePath} is missing "instruction".`)
+  return {
+    ...raw,
+    id,
+    instruction,
+    expectedFiles: raw.expectedFiles ?? [],
+    fixturePath,
+    seedDir,
+  }
+}
+
+function loadFixtureDirs(family: string, subset: string): string[] {
+  const subsetDir = path.join(resolveBenchmarkFixtureRoot(), family, subset)
+  return readdirSync(subsetDir, { withFileTypes: true })
+    .filter(entry => entry.isDirectory())
+    .map(entry => entry.name)
+    .sort()
+}
 
 export function taskSubsetHash(ids: readonly string[]): string {
   return createHash('sha256').update([...ids].sort().join('\n')).digest('hex').slice(0, 16)
@@ -163,11 +218,52 @@ export function lifecycleFixturesForSet(fixtureSet: string): LifecycleFixture[] 
 }
 
 export function tbliteFixturesForSubset(subset: string): TbliteFixture[] {
-  if (subset !== 'smoke') throw new Error(`Unknown TBLite subset: ${subset}`)
-  return tbliteSmokeFixtures
+  return loadFixtureDirs('tblite', subset).map((dirName) => {
+    const raw = readFixtureFile<{ command?: string[]; verifier?: string[] }>('tblite', subset, dirName)
+    if (!raw.command?.length) throw new Error(`Fixture ${raw.fixturePath} is missing "command".`)
+    if (!raw.verifier?.length) throw new Error(`Fixture ${raw.fixturePath} is missing "verifier".`)
+    return {
+      id: raw.id,
+      instruction: raw.instruction,
+      command: raw.command,
+      verifier: raw.verifier,
+      seedDir: raw.seedDir,
+      fixturePath: raw.fixturePath,
+      expectedFiles: raw.expectedFiles,
+    }
+  })
+}
+
+export function artifactLocalFixturesForSubset(subset: string): ArtifactLocalFixture[] {
+  return loadFixtureDirs('artifact-local', subset).map((dirName) => {
+    const raw = readFixtureFile<{ issueRef?: string; verifier?: string[] }>('artifact-local', subset, dirName)
+    if (!raw.issueRef?.trim()) throw new Error(`Fixture ${raw.fixturePath} is missing "issueRef".`)
+    if (!raw.verifier?.length) throw new Error(`Fixture ${raw.fixturePath} is missing "verifier".`)
+    return {
+      id: raw.id,
+      instruction: raw.instruction,
+      issueRef: raw.issueRef,
+      verifier: raw.verifier,
+      seedDir: raw.seedDir,
+      fixturePath: raw.fixturePath,
+      expectedFiles: raw.expectedFiles,
+    }
+  })
 }
 
 export function sweLocalFixturesForSubset(subset: string): SweLocalFixture[] {
-  if (subset !== 'smoke') throw new Error(`Unknown SWE-local subset: ${subset}`)
-  return sweLocalSmokeFixtures
+  return loadFixtureDirs('swe-local', subset).map((dirName) => {
+    const raw = readFixtureFile<{ issueRef?: string; verifier?: string[] }>('swe-local', subset, dirName)
+    if (!raw.issueRef?.trim()) throw new Error(`Fixture ${raw.fixturePath} is missing "issueRef".`)
+    if (!raw.verifier?.length) throw new Error(`Fixture ${raw.fixturePath} is missing "verifier".`)
+    return {
+      id: raw.id,
+      instruction: raw.instruction,
+      issueRef: raw.issueRef,
+      verifier: raw.verifier,
+      seedDir: raw.seedDir,
+      fixturePath: raw.fixturePath,
+      expectedFiles: raw.expectedFiles,
+    }
+  })
 }

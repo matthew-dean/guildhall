@@ -4,6 +4,7 @@ import { execFileSync, spawnSync } from 'node:child_process'
 import { copyFileSync, cpSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync, chmodSync } from 'node:fs'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { copyRuntimeDylibs } from './macos-runtime-libs.mjs'
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..')
 const ARTIFACTS_DIR = join(ROOT, 'artifacts', 'macos')
@@ -27,6 +28,9 @@ mkdirSync(join(PACKAGE_DIR, 'install'), { recursive: true })
 deployApp(join(PACKAGE_DIR, 'app'))
 copyFileSync(process.execPath, join(PACKAGE_DIR, 'runtime', 'node'))
 chmodSync(join(PACKAGE_DIR, 'runtime', 'node'), 0o755)
+for (const copied of copyRuntimeDylibs(join(PACKAGE_DIR, 'runtime', 'node'))) {
+  console.log(`[guildhall package] copied runtime dylib ${copied.source}`)
+}
 
 copyFileSync(join(ROOT, 'scripts', 'install-launch-agent.mjs'), join(PACKAGE_DIR, 'install', 'install-launch-agent.mjs'))
 copyFileSync(join(ROOT, 'scripts', 'uninstall-launch-agent.mjs'), join(PACKAGE_DIR, 'install', 'uninstall-launch-agent.mjs'))

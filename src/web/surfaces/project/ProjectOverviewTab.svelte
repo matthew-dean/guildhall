@@ -226,7 +226,7 @@
         label: inbox.title,
         detail: inbox.detail,
         content: inbox.taskDescription,
-        button: 'Open',
+        button: inboxActionLabel(inbox),
         href: inbox.actionHref ?? '/thread',
         tone: inbox.severity === 'high' ? 'danger' as Tone : 'warn' as Tone,
         action: 'navigate' as NextActionKind,
@@ -271,6 +271,20 @@
       action: 'navigate' as NextActionKind,
     }
   })
+
+  function inboxActionLabel(item: InboxItem): string {
+    switch (item.kind) {
+      case 'project_understanding': return 'Review update'
+      case 'workspace_import_pending': return 'Review import'
+      case 'agent_question_pending': return 'Answer question'
+      case 'pressure_test_pending': return 'Answer question'
+      case 'open_escalation': return 'Review recovery'
+      case 'brief_approval': return 'Review brief'
+      case 'spec_approval': return 'Review spec'
+      case 'required_migration': return 'Migrate'
+      default: return 'Open'
+    }
+  }
 
   const blockedRows = $derived.by(() => {
     return tasks

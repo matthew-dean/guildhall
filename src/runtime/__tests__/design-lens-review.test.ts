@@ -81,6 +81,55 @@ describe('design lens review', () => {
       await fs.rm(memoryDir, { recursive: true, force: true })
     }
   })
+
+  it('does not treat generated out-of-scope UI language as an in-scope design signal', async () => {
+    const memoryDir = await fs.mkdtemp(path.join(os.tmpdir(), 'guildhall-design-lens-review-out-of-scope-'))
+    try {
+      await writeQueue(memoryDir, [
+        task({
+          id: 'task-policy-note',
+          title: 'Append policy release note',
+          description: 'Append one exact sentence to RELEASE_NOTES.md and do not edit any other file.',
+          status: 'in_progress',
+          spec: [
+            '# Spec',
+            '',
+            'Append the requested sentence to RELEASE_NOTES.md.',
+            '',
+            '## Out of Scope',
+            '',
+            '- Any design system, UI, API, product surface, or CSS work.',
+            '',
+            '## Security Review',
+            '',
+            'No browser surface is affected.',
+          ].join('\n'),
+          outOfScope: [
+            'Any design system, UI, API, product surface, or CSS work.',
+            'Browser surfaces are not applicable.',
+          ],
+          notes: [{
+            agentId: 'run-automation',
+            role: 'approver',
+            content: 'Fully automated mode approved this spec after checking the generated out-of-scope boundaries.',
+            timestamp: '2026-05-29T12:00:00.000Z',
+          }],
+        }),
+      ])
+
+      const result = await reviewInProcessWorkForDesignLens({
+        memoryDir,
+        now: () => '2026-05-29T12:00:00.000Z',
+      })
+
+      expect(result.examinedTaskIds).toEqual([])
+      expect(result.createdFindingIds).toEqual([])
+      const store = await readDesignFeedbackStore(memoryDir)
+      expect(store.findings).toHaveLength(0)
+    } finally {
+      await fs.rm(memoryDir, { recursive: true, force: true })
+    }
+  })
 })
 
 async function writeQueue(memoryDir: string, tasks: Task[]): Promise<void> {

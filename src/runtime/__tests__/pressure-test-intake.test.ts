@@ -178,11 +178,106 @@ describe('pressure-test intake state', () => {
     })
 
     expect(next.activeDomainId).toBe('product-goals')
-    expect(next.pendingQuestion?.prompt).toContain('concrete')
+    expect(next.pendingQuestion?.prompt).toBe('For "Guildhall 0.8.0", what observable result would show the work succeeded?')
+    expect(next.pendingQuestion?.prompt).not.toContain(next.domains[0]?.askedQuestions[0]?.answer ?? '')
+    expect(next.pendingQuestion?.why).toBe('Guildhall needs one observable example so future work can use this answer.')
     expect(next.domains[0]?.askedQuestions[0]).toMatchObject({
       answered: true,
       answer: 'It should feel rigorous but not annoying.',
     })
+  })
+
+  it('asks project design-quality follow-ups without injecting the previous answer into the prompt', async () => {
+    const memoryDir = await mkdtemp(path.join(tmpdir(), 'guildhall-pressure-'))
+    const intake = await createPressureTestIntake({
+      memoryDir,
+      target: { type: 'project', id: 'narrative-harness-project-check-in', title: 'Narrative Harness project check-in' },
+      rawRequest: 'Start a project check-in for Narrative Harness.',
+    })
+    intake.activeDomainId = 'design-quality'
+    intake.domains[0]!.status = 'closed'
+    intake.domains[2]!.status = 'active'
+    intake.pendingQuestion = {
+      id: 'design-quality-q-1',
+      domainId: 'design-quality',
+      prompt: 'What design-system source, interaction pattern, palette direction, or visual proof should Guildhall remember for this project?',
+      why: intake.domains[2]!.whyItMatters,
+      evidence: [],
+      askedAt: intake.createdAt,
+    }
+    await writeFile(pressureTestPath(memoryDir, intake.id), JSON.stringify(intake, null, 2), 'utf-8')
+
+    const answer = 'Should Guildhall remember? I guess it should be reader / writer friendly -- muted palette, clean lines, generous whitespace, minimalist'
+    const next = await answerPressureTestQuestion({
+      memoryDir,
+      intakeId: intake.id,
+      questionId: 'design-quality-q-1',
+      answer,
+    })
+
+    expect(next.pendingQuestion?.prompt).toBe(
+      "What should a worker or reviewer be able to see before Guildhall treats this project's visual direction as met?",
+    )
+    expect(next.pendingQuestion?.prompt).not.toContain('Should Guildhall remember')
+    expect(next.pendingQuestion?.prompt).not.toContain('muted palette')
+    expect(next.pendingQuestion?.why).toBe('Workers and reviewers need visible proof, not just a taste adjective.')
+  })
+
+  it('repairs persisted injected follow-up prompts on load', async () => {
+    const memoryDir = await mkdtemp(path.join(tmpdir(), 'guildhall-pressure-'))
+    await mkdir(path.join(memoryDir, 'pressure-test-intake'), { recursive: true })
+    await writeFile(
+      path.join(memoryDir, 'pressure-test-intake', 'pti-narrative-harness-project-check-in.json'),
+      JSON.stringify({
+        id: 'pti-narrative-harness-project-check-in',
+        rawRequest: 'Start a project check-in for Narrative Harness.',
+        target: {
+          type: 'project',
+          id: 'narrative-harness-project-check-in',
+          title: 'Narrative Harness project check-in',
+        },
+        status: 'active',
+        activeDomainId: 'design-quality',
+        pendingQuestion: {
+          id: 'design-quality-q-2',
+          domainId: 'design-quality',
+          prompt: 'What is one concrete example or threshold that would make "Should Guildhall remember? I guess it should be reader / writer friendly -- muted palette, clean lines, generous whitespace, minimalist" true for Narrative Harness project check-in?',
+          why: 'The answer names a quality bar, but workers need an observable example or threshold.',
+          evidence: [],
+          askedAt: '2026-05-31T00:56:17.298Z',
+        },
+        domains: [{
+          id: 'design-quality',
+          title: 'Design quality',
+          whyItMatters: 'UI work should reach an app-store-caliber result, not merely a functional one.',
+          status: 'follow-up',
+          knownFacts: [],
+          openUnknowns: [],
+          askedQuestions: [{
+            questionId: 'design-quality-q-2',
+            prompt: 'What is one concrete example or threshold that would make "muted palette, clean lines" true for Narrative Harness project check-in?',
+            answered: true,
+            answer: 'Show a calm editor surface.',
+          }],
+          followUpCandidates: [],
+          closeoutAsked: false,
+        }],
+        outputs: { assumptions: [], decisions: [], languageMapCandidates: [], taskSplitCandidates: [] },
+        createdAt: '2026-05-31T00:53:58.947Z',
+        updatedAt: '2026-05-31T00:56:17.298Z',
+      }),
+      'utf-8',
+    )
+
+    const loaded = await loadPressureTestIntake({ memoryDir, intakeId: 'pti-narrative-harness-project-check-in' })
+
+    expect(loaded.pendingQuestion?.prompt).toBe(
+      "What should a worker or reviewer be able to see before Guildhall treats this project's visual direction as met?",
+    )
+    expect(loaded.pendingQuestion?.why).toBe('Workers and reviewers need visible proof, not just a taste adjective.')
+    expect(loaded.domains[0]?.askedQuestions[0]?.prompt).toBe(
+      "What should a worker or reviewer be able to see before Guildhall treats this project's visual direction as met?",
+    )
   })
 
   it('renders a spec from completed pressure-test domains', async () => {

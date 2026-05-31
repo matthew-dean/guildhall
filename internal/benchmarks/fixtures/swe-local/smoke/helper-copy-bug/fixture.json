@@ -1,0 +1,11 @@
+{
+  "id": "helper-copy-bug",
+  "instruction": "In src/copy.ts, replace the return value 'stale helper copy' with 'benchmark-ready helper copy'. Do not edit any other file. Prove the fix by running node scripts/test.js.",
+  "issueRef": "internal/benchmarks/fixtures/swe-local/smoke/helper-copy-bug/issue.md",
+  "verifier": [
+    "node scripts/test.js"
+  ],
+  "expectedFiles": [
+    "src/copy.ts"
+  ]
+}

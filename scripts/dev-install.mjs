@@ -17,7 +17,7 @@ run('sh', [fileURLToPath(new URL('./install.sh', import.meta.url))], {
   },
 })
 
-run(paths.localBinPath, ['--help'])
+runWithRetry(paths.localBinPath, ['--help'], { attempts: 5, delayMs: 100 })
 
 const commandLookup = spawnSync('sh', ['-lc', 'command -v guildhall'], {
   env: {
@@ -38,4 +38,23 @@ console.log('[guildhall dev] Try: guildhall serve')
 
 function run(cmd, argv, options = {}) {
   execFileSync(cmd, argv, { cwd: ROOT, stdio: 'inherit', ...options })
+}
+
+function runWithRetry(cmd, argv, { attempts, delayMs }) {
+  let lastError
+  for (let attempt = 1; attempt <= attempts; attempt += 1) {
+    try {
+      run(cmd, argv)
+      return
+    } catch (err) {
+      lastError = err
+      if (attempt === attempts) break
+      sleep(delayMs)
+    }
+  }
+  throw lastError
+}
+
+function sleep(ms) {
+  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms)
 }

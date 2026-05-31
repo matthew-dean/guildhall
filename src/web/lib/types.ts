@@ -507,6 +507,7 @@ export interface ContextDebugRecord {
 
 export interface DrawerPayload {
   task: Task
+  runStatus?: string
   recentEvents?: unknown[]
   contextDebug?: ContextDebugRecord[]
   threadTurns?: TaskThreadTurn[]

@@ -77,6 +77,148 @@ describe('Guildhall improvement review', () => {
       await fs.rm(memoryDir, { recursive: true, force: true })
     }
   })
+
+  it('does not add improvement-review notes only because run-once automation copy mentions review or handoff', async () => {
+    const memoryDir = await fs.mkdtemp(path.join(os.tmpdir(), 'guildhall-improvement-review-automation-'))
+    try {
+      await writeQueue(memoryDir, [
+        task({
+          id: 'task-tiny',
+          title: 'policy-note-patch',
+          description: 'Append one exact sentence to STATUS_NOTE.md and do not edit any other file.',
+          status: 'ready',
+          notes: [{
+            agentId: 'run-once',
+            role: 'automation',
+            content: [
+              'Run-once automation policy: fully_automated.',
+              'Requested proof mode: commands.',
+              'This task was created through the scriptable run-once lane; normal Guildhall pressure-test, review, gate, and handoff rules still apply.',
+            ].join('\n'),
+            timestamp: '2026-05-29T12:00:00.000Z',
+          }],
+        }),
+      ])
+
+      const result = await reviewInProcessWorkForGuildhallImprovements({
+        memoryDir,
+        maxDesignFindings: 0,
+        now: () => '2026-05-29T12:01:00.000Z',
+      })
+
+      expect(result.notedTaskIds).toEqual([])
+      const queue = await readQueue(memoryDir)
+      expect(queue.tasks[0]?.notes.filter(note => note.role === 'improvement-review')).toEqual([])
+    } finally {
+      await fs.rm(memoryDir, { recursive: true, force: true })
+    }
+  })
+
+  it('does not add improvement-review notes only because generated bookkeeping mentions review boundaries', async () => {
+    const memoryDir = await fs.mkdtemp(path.join(os.tmpdir(), 'guildhall-improvement-review-generated-'))
+    try {
+      await writeQueue(memoryDir, [
+        task({
+          id: 'task-policy-note',
+          title: 'policy-note-patch',
+          description: 'Append one exact sentence to RELEASE_NOTES.md and do not edit any other file.',
+          status: 'ready',
+          spec: [
+            '# Spec',
+            '',
+            'Append the requested sentence to RELEASE_NOTES.md.',
+            '',
+            '## Out of Scope',
+            '',
+            '- Any design system, UI, API, product surface, or CSS work.',
+            '',
+            '## Security Review',
+            '',
+            'No browser, runtime, or release surface is affected.',
+          ].join('\n'),
+          outOfScope: [
+            'Any design system, UI, API, product surface, or CSS work.',
+            'No release process changes.',
+          ],
+          notes: [
+            {
+              agentId: 'run-once',
+              role: 'automation',
+              content: 'Run-once automation policy: fully_automated. Normal review and gate rules still apply.',
+              timestamp: '2026-05-29T12:00:00.000Z',
+            },
+            {
+              agentId: 'run-automation',
+              role: 'approver',
+              content: 'Fully automated mode approved this spec for implementation.',
+              timestamp: '2026-05-29T12:00:00.000Z',
+            },
+            {
+              agentId: 'blueprint-review',
+              role: 'blueprint-review',
+              content: 'Blueprint review found the task bounded enough for one artifact patch.',
+              timestamp: '2026-05-29T12:00:00.000Z',
+            },
+          ],
+        }),
+      ])
+
+      const result = await reviewInProcessWorkForGuildhallImprovements({
+        memoryDir,
+        maxDesignFindings: 0,
+        now: () => '2026-05-29T12:01:00.000Z',
+      })
+
+      expect(result.notedTaskIds).toEqual([])
+      const queue = await readQueue(memoryDir)
+      expect(queue.tasks[0]?.notes.filter(note => note.role === 'improvement-review')).toEqual([])
+    } finally {
+      await fs.rm(memoryDir, { recursive: true, force: true })
+    }
+  })
+
+  it('does not add improvement-review notes for a tiny artifact task only because its generated spec mentions handoff or review verification', async () => {
+    const memoryDir = await fs.mkdtemp(path.join(os.tmpdir(), 'guildhall-improvement-review-handoff-'))
+    try {
+      await writeQueue(memoryDir, [
+        task({
+          id: 'task-release-note',
+          title: 'policy-note-overreach',
+          description: 'Append one exact sentence to RELEASE_NOTES.md and do not edit any other file.',
+          status: 'ready',
+          spec: [
+            '## Summary',
+            '',
+            'Append the requested sentence to `RELEASE_NOTES.md`.',
+            '',
+            '## Acceptance Criteria',
+            '',
+            '1. **AC-01: Existing content preserved** — verified by review.',
+            '',
+            '## Handoff sequence',
+            '',
+            'Not needed — this is a single atomic edit.',
+          ].join('\n'),
+          acceptanceCriteria: [{
+            id: 'AC-01',
+            description: 'Existing content preserved.',
+            verifiedBy: 'review',
+            met: false,
+          }],
+        }),
+      ])
+
+      const result = await reviewInProcessWorkForGuildhallImprovements({
+        memoryDir,
+        maxDesignFindings: 0,
+        now: () => '2026-05-29T12:01:00.000Z',
+      })
+
+      expect(result.notedTaskIds).toEqual([])
+    } finally {
+      await fs.rm(memoryDir, { recursive: true, force: true })
+    }
+  })
 })
 
 async function writeQueue(memoryDir: string, tasks: Task[]): Promise<void> {

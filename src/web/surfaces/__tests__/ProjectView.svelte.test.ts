@@ -119,6 +119,16 @@ function json(data: unknown, status = 200): Response {
 }
 
 function installBrowserFakes() {
+  const storage = new Map<string, string>()
+  Object.defineProperty(window, 'localStorage', {
+    configurable: true,
+    value: {
+      clear: vi.fn(() => storage.clear()),
+      getItem: vi.fn((key: string) => storage.get(key) ?? null),
+      removeItem: vi.fn((key: string) => storage.delete(key)),
+      setItem: vi.fn((key: string, value: string) => storage.set(key, String(value))),
+    },
+  })
   Object.defineProperty(window, 'matchMedia', {
     configurable: true,
     value: vi.fn().mockImplementation((query: string) => ({
@@ -669,6 +679,37 @@ describe('ProjectView', () => {
     expect(screen.queryByRole('button', { name: /advance one task/i })).not.toBeInTheDocument()
   })
 
+  it('keeps secondary project statuses out of the top bar', async () => {
+    await renderProjectView('thread')
+
+    const topbar = document.querySelector('header.topbar')
+    expect(topbar).not.toBeNull()
+    expect(topbar).toHaveTextContent('Projects')
+    expect(topbar).toHaveTextContent('New request')
+    expect(topbar).toHaveTextContent('Start')
+    expect(topbar).not.toHaveTextContent('Open Thread')
+    expect(topbar).not.toHaveTextContent('Runtime')
+    expect(topbar).not.toHaveTextContent('Needs you')
+    expect(topbar).not.toHaveTextContent('Stuck')
+    expect(topbar).not.toHaveTextContent('Provider')
+  })
+
+  it('labels owner-input recovery blockers without saying answer', async () => {
+    const recoveryDetail = detail({
+      startReadiness: {
+        canStart: false,
+        code: 'owner_input_required',
+        message: 'Choose a recovery path for the blocked task',
+        actionHref: '/task/task-blocked',
+      },
+    })
+    installFetchFakes(recoveryDetail)
+    await renderProjectView('thread', null, 'looma-knit', recoveryDetail)
+
+    expect(screen.getByRole('button', { name: /choose a recovery path/i })).toHaveTextContent('Needs recovery')
+    expect(screen.queryByRole('button', { name: /waiting on answer/i })).not.toBeInTheDocument()
+  })
+
   it('collapses topbar labels before the project toolbar wraps', async () => {
     installViewportMatchMedia(680)
 
@@ -914,12 +955,13 @@ describe('ProjectView', () => {
     expect(screen.queryByText('Fair labor license')).not.toBeInTheDocument()
   })
 
-  it('routes the top-bar Needs you indicator to the project inbox, even from overview', async () => {
+  it('does not expose Needs you as a top-bar shortcut from overview', async () => {
     await renderProjectView('overview')
 
-    await userEvent.click(screen.getByRole('button', { name: /notifications need you/i }))
-
-    expect(path.value).toBe('/projects/looma-knit/overview/inbox')
+    const topbar = document.querySelector('header.topbar')
+    expect(topbar).not.toBeNull()
+    expect(topbar).not.toHaveTextContent('Needs you')
+    expect(screen.queryByRole('button', { name: /notifications need you/i })).not.toBeInTheDocument()
   })
 
   it('keeps Settings pinned in the rail utility section instead of expanding settings subsections there', async () => {

@@ -2079,6 +2079,83 @@ coordinators:
     }
   })
 
+  it('does not present old exploring transcript questions as a current wait state', async () => {
+    const projectPath = await mkdtemp(path.join(tmpdir(), 'guildhall-thread-'))
+    try {
+      await mkdir(path.join(projectPath, '.guildhall'), { recursive: true })
+      await writeFile(
+        path.join(projectPath, '.guildhall', 'TASKS.json'),
+        JSON.stringify({
+          tasks: [
+            {
+              id: 'task-1',
+              title: 'Shape AlertDialog',
+              status: 'exploring',
+              openQuestions: [
+                {
+                  id: 'q-1',
+                  prompt: 'Stencil or vanilla?',
+                  answeredAt: new Date().toISOString(),
+                  answer: 'Stencil',
+                },
+              ],
+              createdAt: new Date(Date.now() - 600_000).toISOString(),
+              updatedAt: new Date(Date.now() - 300_000).toISOString(),
+            },
+          ],
+        }),
+      )
+      const snapshot: ProjectSnapshot = {
+        projectPath,
+        config: {
+          id: 'demo',
+          name: 'Demo',
+          bootstrap: { verifiedAt: new Date().toISOString() },
+          coordinators: [{ id: 'core', name: 'Core' }],
+        },
+        hasProvider: true,
+        hasDirection: true,
+        workspaceImportReviewed: true,
+        taskCount: 1,
+        wizardState: emptyWizardsState(),
+      }
+
+      const thread = buildThread({
+        projectPath,
+        snapshot,
+        recentEvents: [
+          {
+            at: new Date(Date.now() - 2_000).toISOString(),
+            event: {
+              type: 'agent_started',
+              task_id: 'task-1',
+              agent_name: 'spec-agent',
+            },
+          },
+          {
+            at: new Date(Date.now() - 1_000).toISOString(),
+            event: {
+              type: 'tool_completed',
+              task_id: 'task-1',
+              agent_name: 'spec-agent',
+              tool_name: 'read-exploring-transcript',
+              is_error: false,
+              output:
+                '## [2026-05-30T23:24:19.974Z] spec-agent\n\nI already posted two questions via `post-user-question` in my last turn. Let me record the transcript and wait for answers.',
+            },
+          },
+        ],
+      })
+
+      const turn = thread.turns.find(t => t.kind === 'inflight')
+      if (!turn || turn.kind !== 'inflight') throw new Error('expected inflight turn')
+      const rendered = JSON.stringify(turn.activity ?? [])
+      expect(rendered).not.toContain('Guildhall asked a question and is waiting for the answer.')
+    } finally {
+      await rm(projectPath, { recursive: true, force: true })
+    }
+  })
+
   it('rewrites internal target-file guard language before it reaches Thread', async () => {
     const projectPath = await mkdtemp(path.join(tmpdir(), 'guildhall-thread-'))
     try {

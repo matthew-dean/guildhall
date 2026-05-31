@@ -362,6 +362,17 @@ When writing a spec, write it directly into the task's spec field via update-tas
 Structure it as markdown with sections: ## Summary, ## Acceptance Criteria,
 ## Out of Scope, ## Open Questions.
 
+When the spec is ready, also write 'workUnitAnalysis' through update-task.
+This is semantic analysis, not string matching:
+- List one unit for each independently deliverable work item that could be
+  accepted or deferred separately.
+- Keep proof, review, Definition of Done, and "no other files changed" checks
+  in \`proofOnlyItems\` unless they produce their own accepted artifact.
+- If the request has one target deliverable with several proof bullets, record
+  exactly one unit.
+- If the request has several product/system outcomes, record one unit per
+  outcome and name dependencies between them.
+
 ## Transcript persistence (FR-08 / FR-12)
 During the conversational intake, you MUST call append-exploring-transcript for
 every user message AND every one of your own replies. The transcript lives in

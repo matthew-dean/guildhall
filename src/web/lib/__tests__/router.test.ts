@@ -74,10 +74,10 @@ describe('parseRoute', () => {
     expect(parseRoute('/projects/looma-knit/task/task-import-2')).toEqual({
       kind: 'project',
       projectId: 'looma-knit',
-      view: 'thread',
+      view: 'overview',
       sub: null,
       drawerTaskId: 'task-import-2',
-      backgroundPath: '/projects/looma-knit/thread',
+      backgroundPath: '/projects/looma-knit/overview',
     })
   })
 
@@ -85,10 +85,10 @@ describe('parseRoute', () => {
     expect(parseRoute('/projects/looma-knit/task/task-import-2?sourceNoteCheck=1#now')).toEqual({
       kind: 'project',
       projectId: 'looma-knit',
-      view: 'thread',
+      view: 'overview',
       sub: null,
       drawerTaskId: 'task-import-2',
-      backgroundPath: '/projects/looma-knit/thread',
+      backgroundPath: '/projects/looma-knit/overview',
     })
   })
 

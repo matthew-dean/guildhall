@@ -94,6 +94,8 @@
 
   function taskStateLabel(turn: TaskThreadInFlightTurn): string {
     if (needsRecovery(turn)) return 'Needs recovery'
+    if (briefShapingTimedOut(turn)) return 'Shaping timed out'
+    if (briefShapingPaused(turn)) return 'Shaping paused'
     if (turn.liveAgent?.name === 'spec-agent') return turn.importedDraft ? 'Shaping draft' : 'Drafting'
     if (turn.liveAgent?.name?.startsWith('coordinator-')) return 'Ready'
     if (turn.liveAgent?.name === 'worker-agent') return 'In flight'
@@ -116,6 +118,12 @@
   function taskStateDescription(turn: TaskThreadInFlightTurn): string {
     if (needsRecovery(turn)) {
       return 'Guildhall made partial progress, then the agent failed. Review the durable worktree changes or restart from that recovery point.'
+    }
+    if (briefShapingTimedOut(turn)) {
+      return 'Guildhall stopped while shaping the brief before it could write the missing acceptance criteria. Try again from this task, or open the spec if you want to add the checks yourself.'
+    }
+    if (briefShapingPaused(turn)) {
+      return 'Guildhall stopped before writing the missing acceptance criteria. Try again from this task, or open the spec if you want to add the checks yourself.'
     }
     if (
       turn.liveAgent?.lastEventLabel === 'Waiting for the local model to respond.' &&
@@ -161,6 +169,8 @@
 
   function taskStateTone(turn: TaskThreadInFlightTurn): 'neutral' | 'ok' | 'warn' | 'danger' | 'accent' | 'running' | 'agent' | 'agent-attention' {
     if (needsRecovery(turn)) return 'warn'
+    if (briefShapingTimedOut(turn)) return 'warn'
+    if (briefShapingPaused(turn)) return 'warn'
     if (turn.liveAgent) return 'running'
     if (turn.taskStatus === 'ready' && hasIncompleteTaskChecklist(turn)) return 'agent-attention'
     switch (turn.taskStatus) {
@@ -187,6 +197,28 @@
     )
   }
 
+  function briefShapingTimedOut(turn: TaskThreadInFlightTurn): boolean {
+    if (turn.liveAgent) return false
+    if (turn.taskStatus !== 'exploring') return false
+    if (!hasIncompleteTaskChecklist(turn)) return false
+    return (turn.activity ?? []).some(item => {
+      const label = typeof item.label === 'string' ? item.label : ''
+      const detail = typeof item.detail === 'string' ? item.detail : ''
+      return /spec-agent timed out|Agent spec-agent failed/i.test(`${label} ${detail}`)
+    })
+  }
+
+  function briefShapingPaused(turn: TaskThreadInFlightTurn): boolean {
+    if (turn.liveAgent) return false
+    if (turn.taskStatus !== 'exploring') return false
+    if (!hasIncompleteTaskChecklist(turn)) return false
+    return (turn.activity ?? []).some(item => {
+      const label = typeof item.label === 'string' ? item.label : ''
+      const detail = typeof item.detail === 'string' ? item.detail : ''
+      return /paused after gathering enough context|durable-progress nudge|read-only tool calls/i.test(`${label} ${detail}`)
+    })
+  }
+
   function isProjectRunActive(): boolean {
     return runStatus === 'running' || runStatus === 'stopping'
   }
@@ -198,6 +230,7 @@
   }
 
   function runLabel(turn: TaskThreadInFlightTurn): string {
+    if (briefShapingTimedOut(turn) || briefShapingPaused(turn)) return 'Try shaping brief again'
     switch (turn.taskStatus) {
       case 'ready': return hasIncompleteTaskChecklist(turn) ? briefFixButtonLabel(turn) : 'Start only this work item'
       case 'import_draft': return 'Draft task brief'
@@ -257,6 +290,8 @@
   }
 
   function cardTitleForTurn(turn: TaskThreadInFlightTurn): string {
+    if (briefShapingTimedOut(turn)) return 'Shaping timed out'
+    if (briefShapingPaused(turn)) return 'Shaping paused'
     if (hasIncompleteTaskChecklist(turn)) return 'Needs brief cleanup'
     return turn.liveAgent ? 'Live progress' : 'Task status'
   }
@@ -484,12 +519,12 @@
           </Stack>
         </Card>
       {:else if turn.kind === 'inflight'}
-        <Card title={cardTitleForTurn(turn)} tone={hasIncompleteTaskChecklist(turn) ? 'warn' : turn.importedDraft ? 'accent' : 'default'}>
+        <Card title={cardTitleForTurn(turn)} tone={briefShapingTimedOut(turn) || briefShapingPaused(turn) || hasIncompleteTaskChecklist(turn) ? 'warn' : turn.importedDraft ? 'accent' : 'default'}>
           <Stack gap="3">
             <section class="state-section" aria-label="Current task status">
               <p class="section-label">Current status</p>
               <StateSummary
-                label={hasIncompleteTaskChecklist(turn) ? briefFixTitle(turn) : taskStateLabel(turn)}
+                label={briefShapingTimedOut(turn) || briefShapingPaused(turn) ? taskStateLabel(turn) : hasIncompleteTaskChecklist(turn) ? briefFixTitle(turn) : taskStateLabel(turn)}
                 description={taskStateDescription(turn)}
                 tone={taskStateTone(turn)}
               />

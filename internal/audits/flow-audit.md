@@ -57,6 +57,40 @@ babysit setup/import/provider/release states across multiple pages.
 
 ## Current Follow-Ups
 
+- [ ] Harden Guildhall against web/Node/Looma/Knit overfitting across runtime
+  inference, task shaping, proof paths, and smoke tests. Plan:
+  `internal/plans/2026-05-31-guildhall-generalization-overfitting-hardening.md`.
+  The fix should land with red-to-green generalization coverage for Node web,
+  Python CLI, Rust library, Go service, Java Gradle service, Swift package,
+  native CLI, Terraform module, and docs-only work, plus negative vocabulary
+  guardrails that keep project-specific product names out of generic runtime
+  modules.
+- [x] Align project Inbox rows with the shared wide-list pattern. Live
+  Narrative Harness testing on 2026-05-30 showed the Inbox still using
+  per-row flex alignment while Work had moved toward column-aligned lists.
+  `AlignedActionList` now provides the common header/grid/subgrid shell,
+  project Inbox uses it for icon, item, state, updated, and action columns,
+  and responsive collapse keeps the row as a single readable card on narrow
+  viewports. Verification: `pnpm vitest run
+  src/web/surfaces/project/__tests__/InboxTab.svelte.test.ts --reporter=dot`,
+  `pnpm build`, installed-app refresh, `/api/stale-server` `stale:false`, and
+  browser measurements on `/projects/narrative-harness/overview/inbox` showed
+  Item, State, Updated, and Action column starts aligned across the first
+  visible rows.
+- [x] Remove pressure-test follow-up prompts that injected the previous answer
+  into the next question. Live Narrative Harness Thread testing on 2026-05-30
+  exposed a project check-in card asking `What is one concrete example or
+  threshold that would make "..." true`, where the quoted block was the user's
+  entire prior answer. Follow-ups are now domain-aware prompts that ask for an
+  observable anchor without quoting the answer blob, stale injected prompts are
+  normalized on load, and the existing Narrative Harness pressure-test intake
+  file was repaired. Verification: `pnpm vitest run
+  src/runtime/__tests__/pressure-test-intake.test.ts
+  src/runtime/__tests__/thread.test.ts --reporter=dot`, `pnpm build`,
+  installed-app refresh, `/api/stale-server` `stale:false`, and
+  `/api/project/thread?projectId=narrative-harness` now returns `What should a
+  worker or reviewer be able to see before Guildhall treats this project's
+  visual direction as met?` with no injected prior answer.
 - [ ] Tighten the focused work-item path before calling 0.9.0 ready. Live
   Looma + Knit browser proof on 2026-05-30 against installed `0.9.0`
   (`/api/stale-server` returned `stale:false`) showed that a concrete
@@ -91,6 +125,13 @@ babysit setup/import/provider/release states across multiple pages.
   Remaining product/data caveat: Looma + Knit still has a large historic
   blocked/escalated pile, so the global Overview can truthfully foreground a
   recovery item unrelated to the currently opened AlertDialog task.
+  2026-05-30 follow-up after another installed pass found and fixed two more
+  trust breaks in the same path: historical `read-exploring-transcript` /
+  `read-tasks` output no longer renders old answered questions as current
+  owner waits, and research-budget evidence summaries no longer synthesize fake
+  fallback questions. The pass also tightened the durable-progress wording that
+  counts as immediate spec-agent no-progress. The bogus persisted fallback
+  question on Looma + Knit `task-039` was removed from local project state.
 - [x] Align intake pressure-testing with the "all tasks are pressure-tested"
   principle. Routed build-changing requests now persist `pressureTestRequired`,
   ordinary task intake writes a system-owned `pressureTestSummary`, legacy
@@ -5897,8 +5938,14 @@ local 0.7 release-candidate build at `http://localhost:7777/projects/narrative-h
     patch with several proof checks stays one runnable task, while a clear
     multi-outcome launch request becomes five child recommendations without
     depending on exact wording.
-  - [ ] Rerun the real `artifact-local` benchmark after the semantic work-unit
-    fix and record whether the previous over-split/readiness stall is gone.
+  - [x] Reran the real `artifact-local` benchmark after the semantic work-unit
+    fix and confirmed the previous over-split/readiness stall is gone. Both
+    smoke fixtures passed with 100 quality; the first fixture moved
+    `exploring -> spec_review -> ready -> in_progress -> review -> gate_check -> done`
+    without fake child work, and a fresh orchestrator recovery now promotes
+    verified worker proof packets to review when the worker forgets the status
+    transition. Report:
+    `internal/benchmarks/runs/2026-05-30-live/artifact-local-semantic-work-units-rerun/artifact-local-cfc84d57-242d-4310-b0c8-710e1e1e2f92.md`.
   - [x] Task-drawer escalation actions now follow ownership consistently.
     Guildhall-owned blockers such as gate retries and worker timeouts show a
     single agent action that resolves the escalation and resumes the task;
@@ -6108,6 +6155,30 @@ local 0.7 release-candidate build at `http://localhost:7777/projects/narrative-h
     work-view Playwright test passed; installed app reports `"stale": false`;
     browser proof measured identical left offsets for the first six Narrative
     Harness List rows across every data column.
+  - [x] Added the 0.9.0 evidence-to-work-graph intake spec and first pure
+    planner seam for the Looma + Knit trust failure class. The planner now
+    extracts deliverable units from structured source evidence, preserves
+    foundations and dependencies, separates reusable implementation work from
+    consuming-surface integration work, generates proof contracts, and
+    reconciles a vague existing task into the structured task instead of
+    creating duplicate competing work. The planner is now wired into workspace
+    import approval: referenced Markdown evidence is loaded, materialized into
+    structured import-draft tasks, and preserved with `dependsOn`, acceptance
+    criteria, proof paths, coordinator domains, and project paths. The importer
+    test also proves the scheduler respects the generated edges by selecting
+    the implementation task before the higher-priority downstream integration,
+    then selecting the integration only after the dependency is done. The tests
+    include both the Looma + Knit AlertDialog/Drawer fixture and a radically
+    different data-retention compliance pipeline fixture so the behavior is not
+    overfit to UI components. Remaining release work is to run the live Looma +
+    Knit project-understanding repair/import pass and verify the real backlog
+    matches this graph.
+    Evidence: `pnpm vitest run
+    src/runtime/__tests__/evidence-work-graph-intake.test.ts --reporter=dot
+    --test-timeout 10000` passed with 6 tests; `pnpm vitest run
+    src/runtime/__tests__/evidence-work-graph-intake.test.ts
+    src/runtime/__tests__/workspace-importer.test.ts --reporter=dot
+    --test-timeout 10000` passed with 36 tests; `pnpm typecheck` passed.
   - [ ] Add the follow-on global scheduler that fairly spends the provider
     budget across all turned-on projects instead of requiring each project to
     be manually started and budgeted in isolation.

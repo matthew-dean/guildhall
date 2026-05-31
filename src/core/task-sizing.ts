@@ -29,6 +29,25 @@ export const TaskSplitRecommendation = z.object({
 })
 export type TaskSplitRecommendation = z.infer<typeof TaskSplitRecommendation>
 
+export const WorkUnit = z.object({
+  id: z.string(),
+  title: z.string(),
+  deliverable: z.string(),
+  rationale: z.string(),
+  suggestedDomain: z.string().optional(),
+  dependsOn: z.array(z.string()).default([]),
+})
+export type WorkUnit = z.infer<typeof WorkUnit>
+
+export const WorkUnitAnalysis = z.object({
+  summary: z.string(),
+  units: z.array(WorkUnit).default([]),
+  proofOnlyItems: z.array(z.string()).default([]),
+  createdAt: z.string(),
+  createdBy: z.string().default('coordinator-work-unit-analysis'),
+})
+export type WorkUnitAnalysis = z.infer<typeof WorkUnitAnalysis>
+
 export const TaskSizePlan = z.object({
   taskId: z.string(),
   score: z.union([z.literal(1), z.literal(2), z.literal(3), z.literal(5), z.literal(8)]),
@@ -52,6 +71,7 @@ export interface BuildTaskSizePlanInput {
     spec?: string
     acceptanceCriteria?: Array<{ description: string; [key: string]: unknown }>
     outOfScope?: string[]
+    workUnitAnalysis?: WorkUnitAnalysis
   }
   changedFiles?: readonly string[]
   riskLanes?: readonly string[]
@@ -70,6 +90,8 @@ export function buildTaskSizePlan(input: BuildTaskSizePlanInput): TaskSizePlan {
   const files = [...new Set((input.changedFiles ?? []).map((file) => file.trim()).filter(Boolean))]
   const lanes = [...new Set((input.riskLanes ?? []).map((lane) => lane.trim()).filter(Boolean))]
   const factors: TaskSizeFactor[] = []
+  const semanticPlan = sizePlanFromWorkUnitAnalysis(input)
+  if (semanticPlan) return semanticPlan
 
   const outcomeCount = estimateOutcomeCount(text, input.task.acceptanceCriteria?.length ?? 0)
   if (isDeterministicSingleFileTask({
@@ -224,6 +246,66 @@ export function buildTaskSizePlan(input: BuildTaskSizePlanInput): TaskSizePlan {
             : 'The task is too large for one high-quality agent pass and should become linked child tasks.',
     ],
     createdAt: input.createdAt ?? new Date().toISOString(),
+    createdBy: input.createdBy ?? 'task-sizing',
+  })
+}
+
+function sizePlanFromWorkUnitAnalysis(input: BuildTaskSizePlanInput): TaskSizePlan | null {
+  const analysis = input.task.workUnitAnalysis
+  if (!analysis || analysis.units.length === 0) return null
+  const createdAt = input.createdAt ?? new Date().toISOString()
+  const units = analysis.units
+  if (units.length === 1) {
+    return TaskSizePlan.parse({
+      taskId: input.task.id,
+      score: 1,
+      band: 'tiny',
+      action: 'proceed',
+      factors: [{
+        id: 'semantic_single_deliverable',
+        label: 'Semantic single deliverable',
+        weight: 0,
+        reason: analysis.summary,
+      }],
+      recommendedChildren: [],
+      reviewBudgetHint: 'lean',
+      reasons: [
+        'Task size score: 1.',
+        `Semantic work-unit analysis found one deliverable: ${units[0]!.deliverable}`,
+        ...(analysis.proofOnlyItems.length > 0
+          ? [`Proof-only items stay with the deliverable: ${analysis.proofOnlyItems.join('; ')}`]
+          : []),
+      ],
+      createdAt,
+      createdBy: input.createdBy ?? 'task-sizing',
+    })
+  }
+
+  const score = units.length >= 5 ? 8 : units.length >= 3 ? 5 : 3
+  const recommendedChildren = units.map((unit) => ({
+    title: unit.title,
+    reason: unit.rationale || unit.deliverable,
+    dependsOn: unit.dependsOn,
+    ...(unit.suggestedDomain ? { suggestedDomain: unit.suggestedDomain } : {}),
+  }))
+  return TaskSizePlan.parse({
+    taskId: input.task.id,
+    score,
+    band: bandForScore(score),
+    action: actionForScore(score),
+    factors: [{
+      id: 'semantic_work_units',
+      label: 'Semantic work units',
+      weight: Math.min(6, units.length),
+      reason: analysis.summary,
+    }],
+    recommendedChildren,
+    reviewBudgetHint: score >= 8 ? 'release_critical' : score >= 5 ? 'thorough' : 'balanced',
+    reasons: [
+      `Task size score: ${score}.`,
+      `Semantic work-unit analysis found ${units.length} independently deliverable units.`,
+    ],
+    createdAt,
     createdBy: input.createdBy ?? 'task-sizing',
   })
 }

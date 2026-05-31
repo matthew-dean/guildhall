@@ -110,6 +110,85 @@ describe('GET /api/config/levers', () => {
   })
 })
 
+describe('project re-intake endpoints', () => {
+  it('creates, returns, applies, and dismisses a re-intake draft', async () => {
+    await fs.mkdir(path.join(tmpDir, 'looma/docs'), { recursive: true })
+    await fs.writeFile(
+      path.join(tmpDir, 'looma/docs/component-library-audit.md'),
+      [
+        '# Component audit',
+        '',
+        '| Deliverable | Need | Foundation | Consumer |',
+        '| --- | --- | --- | --- |',
+        '| Dialog | shipped as `ui-dialog` | native dialog + overlay manager | Knit BaseDialog already uses it |',
+        '| AlertDialog | missing P0 gap | builds on Dialog and Button | Knit destructive confirmation flow |',
+      ].join('\n'),
+      'utf8',
+    )
+    const tasksPath = path.join(tmpDir, '.guildhall', 'TASKS.json')
+    await fs.writeFile(
+      tasksPath,
+      JSON.stringify({
+        version: 1,
+        lastUpdated: '2026-05-30T20:00:00.000Z',
+        tasks: [{
+          id: 'task-039',
+          title: 'Build AlertDialog primitive',
+          description: 'Old task',
+          domain: 'looma',
+          projectPath: tmpDir,
+          status: 'blocked',
+          priority: 'high',
+          dependsOn: [],
+          outOfScope: [],
+          acceptanceCriteria: [],
+          notes: [],
+          gateResults: [],
+          reviewVerdicts: [],
+          adjudications: [],
+          escalations: [],
+          agentIssues: [],
+          revisionCount: 0,
+          remediationAttempts: 0,
+          origination: 'human',
+          createdAt: '2026-05-30T20:00:00.000Z',
+          updatedAt: '2026-05-30T20:00:00.000Z',
+        }],
+      }, null, 2),
+      'utf8',
+    )
+
+    const { app } = buildServeApp({ projectPath: tmpDir })
+    const rerun = await app.fetch(new Request(scoped('/api/project/reintake/rerun'), { method: 'POST' }))
+    expect(rerun.status).toBe(200)
+    const rerunBody = await rerun.json() as { draft: { summary: { reframed: number; created: number } } }
+    expect(rerunBody.draft.summary.reframed).toBe(1)
+    expect(rerunBody.draft.summary.created).toBeGreaterThan(0)
+
+    const draftResponse = await app.fetch(new Request(scoped('/api/project/reintake/draft')))
+    const draft = await draftResponse.json() as { groups: Array<{ id: string }> }
+    expect(draft.groups.map(group => group.id)).toContain('evidence-work-graph')
+
+    const apply = await app.fetch(new Request(scoped('/api/project/reintake/apply'), {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ groupIds: ['evidence-work-graph'] }),
+    }))
+    expect(apply.status).toBe(200)
+    const tasks = await readTasks(tmpDir)
+    expect(tasks.find(task => task.id === 'task-039')).toMatchObject({
+      title: 'Build AlertDialog',
+      status: 'import_draft',
+    })
+    expect(tasks.find(task => task.id === 'task-alert-dialog-integration')).toMatchObject({
+      dependsOn: ['task-039'],
+    })
+
+    const dismiss = await app.fetch(new Request(scoped('/api/project/reintake/dismiss'), { method: 'POST' }))
+    expect(dismiss.status).toBe(200)
+  })
+})
+
 describe('POST /api/config/levers', () => {
   it('writes a project override and can return the lever to the global default', async () => {
     const { app } = buildServeApp({ projectPath: tmpDir })
@@ -919,6 +998,84 @@ describe('POST /api/project/start', () => {
       actionHref: '/work',
     })
     expect(projectBody.startReadiness?.message).toContain('clearer brief')
+  })
+
+  it('points owner-input Start blockers at the pending question instead of a separate escalation', async () => {
+    const now = new Date().toISOString()
+    await fs.writeFile(
+      path.join(tmpDir, '.guildhall', 'TASKS.json'),
+      JSON.stringify({
+        version: 1,
+        lastUpdated: now,
+        tasks: [
+          {
+            id: 'task-blocked',
+            title: 'Blocked task',
+            description: 'Already has a separate escalation.',
+            domain: 'core',
+            status: 'blocked',
+            priority: 'normal',
+            acceptanceCriteria: [],
+            outOfScope: [],
+            dependsOn: [],
+            notes: [],
+            openQuestions: [],
+            escalations: [{ id: 'esc-1', summary: 'Build is failing' }],
+            agentIssues: [],
+            gateResults: [],
+            reviewVerdicts: [],
+            adjudications: [],
+            revisionCount: 0,
+            remediationAttempts: 0,
+            createdAt: now,
+            updatedAt: now,
+          },
+          {
+            id: 'task-question',
+            title: 'Question task',
+            description: 'Needs one owner decision.',
+            domain: 'core',
+            status: 'exploring',
+            priority: 'normal',
+            acceptanceCriteria: [],
+            outOfScope: [],
+            dependsOn: [],
+            notes: [],
+            openQuestions: [{
+              id: 'q-1',
+              askedBy: 'spec-agent',
+              askedAt: now,
+              kind: 'choice',
+              prompt: 'Which API shape should this component use?',
+              choices: ['Stencil component', 'Vanilla web component'],
+            }],
+            escalations: [],
+            agentIssues: [],
+            gateResults: [],
+            reviewVerdicts: [],
+            adjudications: [],
+            revisionCount: 0,
+            remediationAttempts: 0,
+            createdAt: now,
+            updatedAt: now,
+          },
+        ],
+      }, null, 2),
+      'utf8',
+    )
+
+    const { app } = buildServeApp({ projectPath: tmpDir })
+    const projectRes = await app.fetch(new Request(scoped('/api/project')))
+    const projectBody = (await projectRes.json()) as {
+      startReadiness?: { canStart?: boolean; code?: string; actionHref?: string; message?: string }
+    }
+
+    expect(projectBody.startReadiness).toMatchObject({
+      canStart: false,
+      code: 'owner_input_required',
+      actionHref: '/task/task-question?tab=current',
+    })
+    expect(projectBody.startReadiness?.message).toContain('1 question needs your answer')
   })
 
   it('rejects fanout without worktree isolation with a clear error', async () => {
@@ -2042,6 +2199,28 @@ describe('GET /api/project/inbox — blockers', () => {
       item.status === 'resolved' &&
       item.resolution === 'verified',
     )).toBe(true)
+  })
+
+  it('describes project-understanding reconciliation without implying Git is missing', async () => {
+    await fs.writeFile(
+      path.join(tmpDir, '.guildhall', 'workspace-goals.json'),
+      JSON.stringify({ goals: [{ id: 'goal-1', title: 'Existing imported plan' }] }, null, 2),
+      'utf8',
+    )
+    const { app } = buildServeApp({ projectPath: tmpDir })
+
+    const res = await app.fetch(new Request(scoped('/api/project/inbox')))
+    const body = (await res.json()) as {
+      items?: Array<{ kind?: string; title?: string; detail?: string; actionHref?: string }>
+    }
+    const item = body.items?.find(candidate => candidate.kind === 'project_understanding')
+
+    expect(item).toMatchObject({
+      title: 'Review project discovery update',
+      detail: 'Guildhall can now scan more planning docs and migrations. Review the reconciliation so it can update or dismiss stale imported work.',
+      actionHref: '/workspace-import?mode=reconcile',
+    })
+    expect(`${item?.title ?? ''} ${item?.detail ?? ''}`).not.toMatch(/missing repo evidence/i)
   })
 })
 

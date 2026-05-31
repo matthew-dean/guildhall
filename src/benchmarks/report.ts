@@ -12,6 +12,15 @@ export function summarizeBenchmarkResults(
   results: readonly BenchmarkRunResult[],
   autoResolutions: readonly AutoResolutionRecord[],
 ): BenchmarkReportData['summary'] {
+  const scoreableResults = results.filter(result => Number.isFinite(result.qualityScore)).length
+  const resultAutoResolutions = results.reduce((sum, result) => sum + result.autoResolutionCount, 0)
+  const resultBlockedByPolicy = results.reduce((sum, result) => sum + result.blockedByPolicyCount, 0)
+  const averageQualityScore = scoreableResults === 0
+    ? 0
+    : Number(
+        (results.reduce((sum, result) => sum + (Number.isFinite(result.qualityScore) ? result.qualityScore : 0), 0) /
+          scoreableResults).toFixed(1),
+      )
   return {
     total: results.length,
     passed: results.filter(result => result.result === 'pass').length,
@@ -19,8 +28,10 @@ export function summarizeBenchmarkResults(
     unsupported: results.filter(result => result.result === 'unsupported').length,
     inconclusive: results.filter(result => result.result === 'inconclusive').length,
     falseSuccesses: results.filter(result => result.failureClass === 'false_success').length,
-    blockedByPolicy: autoResolutions.filter(record => record.status === 'blocked_by_policy').length,
-    autoResolutions: autoResolutions.filter(record => record.status !== 'blocked_by_policy').length,
+    blockedByPolicy: resultBlockedByPolicy + autoResolutions.filter(record => record.status === 'blocked_by_policy').length,
+    autoResolutions: resultAutoResolutions + autoResolutions.filter(record => record.status !== 'blocked_by_policy').length,
+    scoreableResults,
+    averageQualityScore,
   }
 }
 
@@ -49,20 +60,31 @@ export function renderBenchmarkMarkdown(report: BenchmarkReportData): string {
     `- False successes: ${report.summary.falseSuccesses}`,
     `- Blocked by policy: ${report.summary.blockedByPolicy}`,
     `- Auto-resolutions: ${report.summary.autoResolutions}`,
+    `- Average quality: ${report.summary.averageQualityScore} (${report.summary.scoreableResults} scored)`,
     '',
     '## Results',
     '',
-    '| Task | Result | Failure class | Tokens in/out | Cost USD | Turns | Commands | Latency ms | Evidence |',
-    '| --- | --- | --- | --- | --- | --- | --- | --- | --- |',
+    '| Task | Result | Failure class | Quality | Tokens in/out | Cost USD | Ticks | Automation | Commands | Latency ms | Touched files | Evidence |',
+    '| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |',
     ...report.results.map(result => [
       result.taskId,
       result.result,
       result.failureClass,
+      result.qualityScore,
       `${result.tokenUse.input}/${result.tokenUse.output}`,
       result.costUsd.toFixed(6),
-      result.turns,
+      result.orchestratorTicks || result.turns,
+      [
+        result.autoResolutionCount > 0 ? `${result.autoResolutionCount} repair(s)` : '0',
+        ...Object.entries(result.automationResolutionKinds).map(([kind, count]) => `${kind}:${count}`),
+      ].join('<br>'),
       result.commandCount,
       result.durationMs,
+      [
+        result.touchedFiles.join(', ') || 'none',
+        result.unexpectedTouchedFiles.length > 0 ? `unexpected: ${result.unexpectedTouchedFiles.join(', ')}` : '',
+        result.missingExpectedFiles.length > 0 ? `missing: ${result.missingExpectedFiles.join(', ')}` : '',
+      ].filter(Boolean).join('<br>'),
       [...result.evidenceRefs, ...result.auditRefs].map(ref => ref.ref).join('<br>') || 'none',
     ].map(cell => String(cell).replace(/\|/g, '\\|')).join(' | ')).map(row => `| ${row} |`),
     '',

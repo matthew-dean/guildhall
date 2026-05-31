@@ -111,6 +111,13 @@
           button: 'Start check-in',
           href: item.actionHref ?? '/thread',
         }
+      case 'project_understanding':
+        return {
+          verb: item.title,
+          why: item.detail ?? 'Review the newer project-discovery pass and decide whether to update imported work.',
+          button: 'Review update',
+          href: item.actionHref ?? '/workspace-import?mode=reconcile',
+        }
       case 'import_draft_queue':
         return {
           verb: 'Shape the imported drafts',
