@@ -6,6 +6,36 @@ import type { EventEnvelope, ProjectDetail, ServiceProjectSummary } from '../typ
 describe('buildProjectTicker', () => {
   const now = new Date('2026-05-12T13:00:20.000Z')
 
+  it('lets required migration readiness override stale run summaries', () => {
+    expect(
+      buildProjectTicker(
+        {
+          startReadiness: {
+            canStart: false,
+            code: 'required_migration_pending',
+            message: 'Run required Guildhall migration before starting this project.',
+            actionHref: '/migrations',
+          },
+          run: {
+            status: 'stopped',
+            stopSummary: {
+              stopReason: 'all_terminal',
+              stopMessage: 'No actionable tasks remain.',
+            },
+          },
+          tasks: [],
+        },
+        null,
+        now,
+      ),
+    ).toMatchObject({
+      label: 'Needs migration',
+      actorLabel: 'Needs migration',
+      message: 'Run required Guildhall migration before starting this project.',
+      tone: 'warn',
+    })
+  })
+
   it('surfaces active worker progress from recent events', () => {
     const detail: ProjectDetail = {
       run: { status: 'running' },

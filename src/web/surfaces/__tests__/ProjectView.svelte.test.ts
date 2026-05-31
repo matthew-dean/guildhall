@@ -119,6 +119,16 @@ function json(data: unknown, status = 200): Response {
 }
 
 function installBrowserFakes() {
+  const storage = new Map<string, string>()
+  Object.defineProperty(window, 'localStorage', {
+    configurable: true,
+    value: {
+      clear: vi.fn(() => storage.clear()),
+      getItem: vi.fn((key: string) => storage.get(key) ?? null),
+      removeItem: vi.fn((key: string) => storage.delete(key)),
+      setItem: vi.fn((key: string, value: string) => storage.set(key, String(value))),
+    },
+  })
   Object.defineProperty(window, 'matchMedia', {
     configurable: true,
     value: vi.fn().mockImplementation((query: string) => ({
@@ -370,7 +380,7 @@ describe('ProjectView', () => {
 
     expect(screen.getAllByText(expectedText).length).toBeGreaterThan(0)
     expect(screen.getByRole('button', { name: /Start|Stop/ })).toBeInTheDocument()
-    expect(screen.getByLabelText(/notifications need you/i)).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: /notifications need you/i })).not.toBeInTheDocument()
   })
 
   it('does not foreground resolved git runtime errors in Overview', async () => {
@@ -417,7 +427,7 @@ describe('ProjectView', () => {
       projectPayload,
     )
 
-    await user.click(screen.getByRole('button', { name: /project setup needs attention/i }))
+    await user.click(screen.getByRole('link', { name: /open project setup/i }))
     expect(path.value).toBe('/projects/looma-knit/setup')
   })
 
@@ -442,7 +452,7 @@ describe('ProjectView', () => {
     installFetchFakes(projectPayload)
     await renderProjectView('thread', null, 'looma-knit', projectPayload)
 
-    const attention = screen.getByRole('button', { name: /imported drafts need review/i })
+    const attention = screen.getByRole('link', { name: /review drafts/i })
     expect(attention).toHaveTextContent(/Review drafts/i)
     await user.click(attention)
     expect(path.value).toBe('/projects/looma-knit/task/task-import-1')
@@ -669,6 +679,37 @@ describe('ProjectView', () => {
     expect(screen.queryByRole('button', { name: /advance one task/i })).not.toBeInTheDocument()
   })
 
+  it('keeps secondary project statuses out of the top bar', async () => {
+    await renderProjectView('thread')
+
+    const topbar = document.querySelector('header.topbar')
+    expect(topbar).not.toBeNull()
+    expect(topbar).toHaveTextContent('Projects')
+    expect(topbar).toHaveTextContent('New request')
+    expect(topbar).toHaveTextContent('Start')
+    expect(topbar).not.toHaveTextContent('Open Thread')
+    expect(topbar).not.toHaveTextContent('Runtime')
+    expect(topbar).not.toHaveTextContent('Needs you')
+    expect(topbar).not.toHaveTextContent('Stuck')
+    expect(topbar).not.toHaveTextContent('Provider')
+  })
+
+  it('labels owner-input recovery blockers without saying answer', async () => {
+    const recoveryDetail = detail({
+      startReadiness: {
+        canStart: false,
+        code: 'owner_input_required',
+        message: 'Choose a recovery path for the blocked task',
+        actionHref: '/task/task-blocked',
+      },
+    })
+    installFetchFakes(recoveryDetail)
+    await renderProjectView('thread', null, 'looma-knit', recoveryDetail)
+
+    expect(screen.getByRole('button', { name: /choose a recovery path/i })).toHaveTextContent('Needs recovery')
+    expect(screen.queryByRole('button', { name: /waiting on answer/i })).not.toBeInTheDocument()
+  })
+
   it('collapses topbar labels before the project toolbar wraps', async () => {
     installViewportMatchMedia(680)
 
@@ -803,7 +844,7 @@ describe('ProjectView', () => {
     expect(screen.getByRole('heading', { name: /looma-knit is attached, but not initialized yet/i })).toBeInTheDocument()
 
     await user.click(screen.getByRole('button', { name: /initialize this project/i }))
-    await waitFor(() => expect(path.value).toBe('/setup'))
+    await waitFor(() => expect(path.value).toBe('/projects/looma-knit/setup'))
   })
 
   it('blocks project actions and points users at readiness when bootstrap fails', async () => {
@@ -837,7 +878,7 @@ describe('ProjectView', () => {
 
     expect(screen.getByText('pnpm test exited 1: Cannot find module ./Button.svelte')).toBeInTheDocument()
     expect(screen.queryByRole('button', { name: /new task/i })).not.toBeInTheDocument()
-    expect(screen.getByRole('button', { name: /readiness checks need attention/i })).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: /readiness checks need attention/i })).not.toBeInTheDocument()
     expect(screen.getByRole('button', { name: /fix the bootstrap failure before starting/i })).toBeDisabled()
 
     await user.click(screen.getByRole('link', { name: /open readiness checks/i }))
@@ -914,12 +955,13 @@ describe('ProjectView', () => {
     expect(screen.queryByText('Fair labor license')).not.toBeInTheDocument()
   })
 
-  it('routes the top-bar Needs you indicator to the project inbox, even from overview', async () => {
+  it('does not expose Needs you as a top-bar shortcut from overview', async () => {
     await renderProjectView('overview')
 
-    await userEvent.click(screen.getByRole('button', { name: /notifications need you/i }))
-
-    expect(path.value).toBe('/projects/looma-knit/overview/inbox')
+    const topbar = document.querySelector('header.topbar')
+    expect(topbar).not.toBeNull()
+    expect(topbar).not.toHaveTextContent('Needs you')
+    expect(screen.queryByRole('button', { name: /notifications need you/i })).not.toBeInTheDocument()
   })
 
   it('keeps Settings pinned in the rail utility section instead of expanding settings subsections there', async () => {

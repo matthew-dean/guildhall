@@ -191,6 +191,53 @@ describe('buildContext — task summary', () => {
     expect(ctx.taskSummary).toContain('pnpm build passes')
   })
 
+  it('injects proof paths and completion handoff as agent context', async () => {
+    const ctx = await buildContext({
+      ...baseTask,
+      proofPaths: [
+        {
+          id: 'task-001-proof-path',
+          scope: { type: 'task', id: 'task-001' },
+          title: 'Verify ghost button',
+          summary: 'Run focused tests and inspect the toolbar route.',
+          status: 'in_progress',
+          launchSteps: [
+            { id: 'test', kind: 'copy_command', title: 'Run tests', command: 'pnpm vitest run Button.test.ts' },
+            { id: 'route', kind: 'open_url', title: 'Open toolbar', url: 'http://localhost:5173/toolbar' },
+          ],
+          expectedEvidence: [
+            { id: 'ac-1', kind: 'manual', description: 'Toolbar route inspected.', required: true },
+          ],
+          verificationRecords: [],
+          createdAt: '2026-05-27T12:00:00.000Z',
+          updatedAt: '2026-05-27T12:00:00.000Z',
+          createdBy: 'spec-agent',
+        },
+      ],
+      completionHandoff: {
+        id: 'task-001-completion-handoff',
+        taskId: 'task-001',
+        completedAt: '2026-05-27T12:30:00.000Z',
+        completedBy: 'gate-checker-agent',
+        summary: 'Ghost button is ready to inspect.',
+        proofPathIds: ['task-001-proof-path'],
+        verificationSummary: '0 verification records, 0 automated, 0 manual, 0 provider, 0 artifact',
+        automatedProof: [],
+        manualProof: [],
+        providerProof: [],
+        residualRisk: 'Browser inspection is still pending.',
+      },
+    }, tmpDir)
+
+    expect(ctx.proofPaths).toContain('## Proof Paths')
+    expect(ctx.proofPaths).toContain('Verify ghost button')
+    expect(ctx.proofPaths).toContain('copy command: pnpm vitest run Button.test.ts')
+    expect(ctx.completionHandoff).toContain('## Completion Handoff')
+    expect(ctx.completionHandoff).toContain('Browser inspection is still pending.')
+    expect(ctx.formatted).toContain('## Proof Paths')
+    expect(ctx.formatted).toContain('## Completion Handoff')
+  })
+
   it('includes the current blocker when the task is blocked', async () => {
     const ctx = await buildContext({
       ...baseTask,
@@ -515,6 +562,119 @@ describe('buildContext — task summary', () => {
       '/projects/knit/.guildhall/worktrees/task-012/web/app/types/supabase.ts',
       '/projects/knit/.guildhall/worktrees/task-012/web/app/composables/use-workspace.ts',
     ])
+  })
+
+  it('infers starter files for empty local-web app implementation specs', () => {
+    const taskWithLocalWebAppSpec: Task = {
+      ...baseTask,
+      projectPath: '/projects/pantry-pulse',
+      title: 'Pantry Pulse app spec',
+      spec: [
+        '## Summary',
+        'Build Pantry Pulse, a small local web app.',
+        '',
+        '## Completion Boundary',
+        '- What Guildhall can complete in code: Create the local static web app files, seeded data, filter behavior, Mark used interaction, styles, and browser-proofable UI.',
+        '- Verification environment: Local runtime/browser proof.',
+      ].join('\n'),
+    }
+
+    expect(resolveLikelyTaskFiles(taskWithLocalWebAppSpec)).toEqual([
+      '/projects/pantry-pulse/package.json',
+      '/projects/pantry-pulse/index.html',
+      '/projects/pantry-pulse/src/main.js',
+      '/projects/pantry-pulse/src/styles.css',
+    ])
+  })
+
+  it('infers only index.html for fixed single-file dependency-free web specs', () => {
+    const taskWithSingleFileSpec: Task = {
+      ...baseTask,
+      projectPath: '/projects/pantry-pulse',
+      title: 'Pantry Pulse single-page app',
+      description: 'Build a dependency-free single-page Pantry Pulse web app.',
+      spec: [
+        '## Summary',
+        'Build a dependency-free single-page Pantry Pulse web app.',
+        'Use plain HTML, CSS, and JavaScript only; do not require npm install or a dev server.',
+        '',
+        '## File Structure',
+        'Single file: `index.html` in the project root. Contains all HTML, CSS, and JavaScript.',
+        '',
+        '## Completion Boundary',
+        '- What Guildhall can complete in code: The single `index.html` file with all HTML, CSS, and JS.',
+        '- External dependencies: None.',
+        '- What counts as done: `index.html` exists in the project root.',
+      ].join('\n'),
+    }
+
+    expect(resolveLikelyTaskFiles(taskWithSingleFileSpec)).toEqual([
+      '/projects/pantry-pulse/index.html',
+    ])
+  })
+
+  it('injects raw draft design-system YAML for UI work even when the schema is not normalized yet', async () => {
+    await fs.writeFile(
+      path.join(tmpDir, 'design-system.yaml'),
+      [
+        '# Pantry Pulse Design System',
+        'version: 1',
+        'status: draft',
+        'tokens:',
+        '  color:',
+        '    bg-page: "#faf6f0"',
+        '    primary: "#6b8f5e"',
+        'primitives:',
+        '  - name: Segmented filter',
+        '    variants:',
+        '      - active',
+      ].join('\n'),
+      'utf-8',
+    )
+
+    const ctx = await buildContext({
+      ...baseTask,
+      title: 'Build Pantry Pulse app',
+      description: 'Build a frontend UI with a warm pantry design.',
+    }, tmpDir)
+
+    expect(ctx.designSystem).toContain('Draft design system')
+    expect(ctx.designSystem).toContain('bg-page')
+    expect(ctx.designSystem).toContain('Segmented filter')
+    expect(ctx.formatted).toContain('## Design System')
+  })
+
+  it('omits stale generic New request product briefs when a concrete UI spec supersedes them', async () => {
+    const ctx = await buildContext({
+      ...baseTask,
+      title: 'Build Pantry Pulse app',
+      description: 'Build a dependency-free single-page Pantry Pulse web app.',
+      productBrief: {
+        userJob: 'I want to verify whether New request is already done and, if not, capture only the remaining delta.',
+        successMetric: 'The remaining work for "New request" is described clearly enough to approve or narrow with one focused question.',
+        antiPatterns: [],
+        authoredBy: 'spec-agent',
+        authoredAt: '2026-05-29T14:31:00.862Z',
+      },
+      spec: '## Summary\nBuild Pantry Pulse as a polished single-page pantry tracker.',
+    }, tmpDir)
+
+    expect(ctx.taskSummary).not.toContain('verify whether New request is already done')
+    expect(ctx.taskSummary).not.toContain('remaining work for "New request"')
+    expect(ctx.taskSummary).toContain('Build Pantry Pulse')
+  })
+
+  it('adds a strong frontend design quality bar to UI worker context', async () => {
+    const ctx = await buildContext({
+      ...baseTask,
+      title: 'Build Pantry Pulse app',
+      description: 'Build a frontend UI that should feel app-store-caliber.',
+      spec: '## Summary\nBuild a polished Pantry Pulse browser app.',
+    }, tmpDir)
+
+    expect(ctx.taskSummary).toContain('### Frontend/UI Design Quality Bar')
+    expect(ctx.taskSummary).toContain('composition, hierarchy, density')
+    expect(ctx.taskSummary).toContain('shippable product surface')
   })
 
   it('uses recent reviewer feedback when deriving likely target files for revision work', () => {

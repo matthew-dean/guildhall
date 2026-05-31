@@ -999,6 +999,108 @@ describe('Orchestrator.tick — routing', () => {
     expect(task.escalations[0]!.reason).toBe('human_judgment_required')
   })
 
+  it('escalates immediately when the spec agent ignores the durable-progress nudge', async () => {
+    await writeQueue([mkTask({ id: 'a', status: 'exploring', title: 'Build AlertDialog primitive' })])
+    const spec = {
+      name: 'spec-agent',
+      calls: [] as { prompt: string }[],
+      async generate(prompt: string) {
+        this.calls.push({ prompt })
+        return { text: '' }
+      },
+      async generateWithEvents(prompt: string, onEvent: (event: any) => void | Promise<void>) {
+        this.calls.push({ prompt })
+        await onEvent({
+          type: 'status',
+          message:
+            'Assistant kept retrying read-only exploration after repeated intake-budget refusals; ending the turn so the orchestrator can treat this as no progress.',
+        })
+        return { text: '' }
+      },
+    }
+    const orch = new Orchestrator({
+      config: baseConfig(),
+      agents: agentSet({ spec }),
+    })
+
+    const out = await orch.tick()
+
+    expect(out.kind).toBe('escalated')
+    if (out.kind === 'escalated') expect(out.reason).toContain('kept researching')
+    const queue = await readQueue()
+    const task = queue.tasks[0]!
+    expect(task.status).toBe('blocked')
+    expect(task.blockReason).toContain('Spec agent kept researching')
+    expect(task.escalations[0]?.details).toContain('durable-progress nudge')
+  })
+
+  it('treats the live durable-progress refusal wording as spec-agent no-progress', async () => {
+    await writeQueue([mkTask({ id: 'a', status: 'exploring', title: 'Build AlertDialog primitive' })])
+    const spec = {
+      name: 'spec-agent',
+      calls: [] as { prompt: string }[],
+      async generate(prompt: string) {
+        this.calls.push({ prompt })
+        return { text: '' }
+      },
+      async generateWithEvents(prompt: string, onEvent: (event: any) => void | Promise<void>) {
+        this.calls.push({ prompt })
+        await onEvent({
+          type: 'status',
+          message:
+            'Assistant kept researching after an explicit durable-progress nudge; refusing more read-only tool calls for this turn.',
+        })
+        return { text: '' }
+      },
+    }
+    const orch = new Orchestrator({
+      config: baseConfig(),
+      agents: agentSet({ spec }),
+    })
+
+    const out = await orch.tick()
+
+    expect(out.kind).toBe('escalated')
+    const queue = await readQueue()
+    const task = queue.tasks[0]!
+    expect(task.status).toBe('blocked')
+    expect(task.blockReason).toContain('Spec agent kept researching')
+  })
+
+  it('treats the live durable-progress nudge wording as spec-agent no-progress', async () => {
+    await writeQueue([mkTask({ id: 'a', status: 'exploring', title: 'Build AlertDialog primitive' })])
+    const spec = {
+      name: 'spec-agent',
+      calls: [] as { prompt: string }[],
+      async generate(prompt: string) {
+        this.calls.push({ prompt })
+        return { text: '' }
+      },
+      async generateWithEvents(prompt: string, onEvent: (event: any) => void | Promise<void>) {
+        this.calls.push({ prompt })
+        await onEvent({
+          type: 'status',
+          message:
+            'Assistant kept researching without recording durable progress; asking it to write the brief, question, spec, or escalation now.',
+        })
+        return { text: '' }
+      },
+    }
+    const orch = new Orchestrator({
+      config: baseConfig(),
+      agents: agentSet({ spec }),
+    })
+
+    const out = await orch.tick()
+
+    expect(out.kind).toBe('escalated')
+    const queue = await readQueue()
+    const task = queue.tasks[0]!
+    expect(task.status).toBe('blocked')
+    expect(task.blockReason).toContain('Spec agent kept researching')
+  })
+
+
   it('does not count transcript-only intake narration as spec progress', async () => {
     await writeQueue([mkTask({ id: 'a', status: 'exploring' })])
     const spec = stubAgent(
@@ -1643,6 +1745,60 @@ describe('Orchestrator.tick — routing', () => {
     expect(task.openQuestions ?? []).toHaveLength(0)
   })
 
+  it('does not convert research-budget evidence summaries into fallback questions', async () => {
+    await writeQueue([mkTask({ id: 'a', status: 'exploring', title: 'Build AlertDialog primitive' })])
+    const spec = stubAgent(
+      'spec-agent',
+      undefined,
+      [
+        'Research budget hit. I have enough from the task data and the file listing to know the structure. Let me check what I know:',
+        '',
+        'What Guildhall found',
+        '',
+        '- `ui-dialog` is a StencilJS component at `packages/core/src/components/ui-dialog/ui-dialog.tsx`',
+        '- `ui-button` is a StencilJS component at `packages/core/src/components/ui-button/ui-button.tsx`',
+        '- No design system YAML exists yet',
+        '- The user confirmed: StencilJS component matching existing ui-dialog pattern',
+      ].join('\n'),
+    )
+    const orch = new Orchestrator({
+      config: baseConfig(),
+      agents: agentSet({ spec }),
+    })
+
+    const out = await orch.tick()
+    expect(out.kind).toBe('processed')
+
+    const queue = await readQueue()
+    const task = queue.tasks[0]!
+    expect(task.openQuestions ?? []).toHaveLength(0)
+  })
+
+  it('does not convert transcript-note summaries into fallback questions', async () => {
+    await writeQueue([mkTask({ id: 'a', status: 'exploring', title: 'Autoencoder baseline quality pass' })])
+    const spec = stubAgent(
+      'spec-agent',
+      undefined,
+      [
+        'From the transcript notes:',
+        '',
+        '- Baseline means measure the current autoencoder as-is.',
+        '- Do not change the model until the first quality report exists.',
+      ].join('\n'),
+    )
+    const orch = new Orchestrator({
+      config: baseConfig(),
+      agents: agentSet({ spec }),
+    })
+
+    const out = await orch.tick()
+    expect(out.kind).toBe('processed')
+
+    const queue = await readQueue()
+    const task = queue.tasks[0]!
+    expect(task.openQuestions ?? []).toHaveLength(0)
+  })
+
   it('does not promote research-summary narration into fallback choice questions', async () => {
     await writeQueue([mkTask({ id: 'a', status: 'exploring', title: 'Rust outline preprocessing' })])
     const spec = stubAgent(
@@ -1718,6 +1874,135 @@ describe('Orchestrator.tick — routing', () => {
       choices: ['Initial collection tree normalization', 'Optimistic create/update behavior'],
     })
     expect(task.escalations ?? []).toHaveLength(0)
+  })
+
+  it('turns spec-agent inactivity timeouts into explicit recovery instead of raw agent errors', async () => {
+    await writeQueue([mkTask({ id: 'a', status: 'exploring', title: 'Build AlertDialog primitive' })])
+    const spec = {
+      name: 'spec-agent',
+      calls: [] as Array<{ prompt: string }>,
+      async generate(prompt: string) {
+        this.calls.push({ prompt })
+        throw new Error('spec-agent timed out after 120000ms of inactivity')
+      },
+    }
+    const orch = new Orchestrator({
+      config: baseConfig(),
+      agents: agentSet({ spec: spec as any }),
+    })
+
+    const out = await orch.tick()
+    expect(out.kind).toBe('escalated')
+    if (out.kind !== 'escalated') throw new Error(`expected escalation, got ${out.kind}`)
+    expect(out.reason).toBe('Spec shaping timed out before saving durable progress.')
+
+    const queue = await readQueue()
+    const task = queue.tasks[0]!
+    expect(task.status).toBe('blocked')
+    expect(task.escalations[0]).toMatchObject({
+      reason: 'human_judgment_required',
+      summary: 'Spec shaping timed out before saving durable progress.',
+    })
+    expect(task.blockReason).toContain('Spec shaping timed out')
+  })
+
+  it('writes a deterministic recovery spec seed before redispatching a reframed shaping task', async () => {
+    await writeQueue([
+      mkTask({
+        id: 'a',
+        status: 'exploring',
+        title: 'Block menu / block side menu',
+        description: 'looma/docs/editor-roadmap.md: - **Block menu / block side menu**',
+        productBrief: {
+          userJob: 'I want the old broken build failure repaired.',
+          successMetric: 'The stale missing import disappears.',
+          antiPatterns: ['Keep researching instead of writing a spec.'],
+          authoredBy: 'spec-agent',
+          authoredAt: '2026-05-25T06:59:09.130Z',
+        },
+        openQuestions: [
+          {
+            id: 'q-fake-batch',
+            kind: 'choice',
+            askedBy: 'spec-agent',
+            askedAt: '2026-05-18T19:50:01.167Z',
+            answeredAt: '2026-05-19T22:26:12.323Z',
+            answer: 'Answer the concrete questions directly.',
+            prompt: "I've drafted the product brief and posted three focused questions:",
+            choices: ['Scope', 'Turn into options', 'Drag-handle'],
+            selectionMode: 'single',
+          },
+          {
+            id: 'q-scope',
+            kind: 'choice',
+            askedBy: 'spec-agent',
+            askedAt: '2026-05-18T19:49:46.995Z',
+            answeredAt: '2026-05-19T22:26:12.323Z',
+            answer: 'Drag-handle is out of scope for this task. Treat drag-and-drop reordering as a separate follow-up task.',
+            prompt: 'Should drag-and-drop reordering be in scope?',
+            choices: ['Include drag-handle', 'Separate task'],
+            selectionMode: 'single',
+          },
+        ],
+        notes: [
+          {
+            agentId: 'system',
+            role: 'system',
+            content: 'Reframe requested from blocked. Guildhall will rebuild the task in plain language before continuing.',
+            timestamp: '2026-05-31T16:15:07.044Z',
+          },
+        ],
+        escalations: [
+          {
+            id: 'esc-old-build',
+            taskId: 'a',
+            agentId: 'worker-agent',
+            reason: 'decision_required',
+            summary: 'Build failing due to unresolved import in packages/core/loader/index.js',
+            details: 'Old build failure from a stale task shape.',
+            raisedAt: '2026-05-25T06:59:09.130Z',
+            resolvedAt: '2026-05-31T16:15:07.044Z',
+            resolvedBy: 'human',
+            resolution: 'Superseded by a task reframe request.',
+          },
+        ],
+      }),
+    ])
+    const spec = stubAgent('spec-agent')
+    const orch = new Orchestrator({
+      config: baseConfig(),
+      agents: agentSet({ spec }),
+    })
+
+    const out = await orch.tick()
+    expect(out).toMatchObject({
+      kind: 'processed',
+      taskId: 'a',
+      agent: 'coordinator-recovery',
+      beforeStatus: 'exploring',
+      afterStatus: 'spec_review',
+      transitioned: true,
+    })
+    expect(spec.calls).toHaveLength(0)
+
+    const queue = await readQueue()
+    const task = queue.tasks[0]!
+    expect(task.status).toBe('spec_review')
+    expect(task.productBrief).toMatchObject({
+      authoredBy: 'coordinator-recovery',
+    })
+    expect(task.productBrief?.userJob).toContain('Block menu / block side menu')
+    expect(task.productBrief?.userJob).not.toContain('old broken build failure')
+    expect(task.spec).toContain('## Completion Boundary')
+    expect(task.spec).toContain('Drag-handle is out of scope')
+    expect(task.spec).toContain('Block menu / block side menu from looma/docs/editor-roadmap.md')
+    expect(task.spec).not.toContain('looma/docs/editor-roadmap.md: - **')
+    expect(task.spec).not.toContain('Should drag-and-drop reordering be in scope?')
+    expect(task.spec).not.toContain("I've drafted the product brief")
+    expect(task.spec).not.toContain('Build failing due to unresolved import')
+    expect(task.spec).not.toContain('Superseded by a task reframe request')
+    expect(task.acceptanceCriteria).toHaveLength(3)
+    expect(task.notes.some(note => note.content.includes('deterministic recovery spec seed'))).toBe(true)
   })
 
   it('does not fossilize agent research narration into the fallback brief', async () => {
@@ -2971,6 +3256,316 @@ describe('Orchestrator.tick — feedback loop', () => {
     }
   })
 
+  it('treats worker self-critique without project-file changes as no progress', async () => {
+    await writeQueue([
+      mkTask({
+        id: 'pantry-live',
+        status: 'in_progress',
+        assignedTo: 'worker-agent',
+        title: 'Pantry Pulse app spec',
+        spec: [
+          '## Summary',
+          'Build Pantry Pulse, a small local web app.',
+          '',
+          '## Completion Boundary',
+          '- What Guildhall can complete in code: Create the local static web app files, seeded data, filter behavior, styles, and browser-proofable UI.',
+          '- Verification environment: Local runtime/browser proof.',
+        ].join('\n'),
+      }),
+    ])
+    const worker = stubAgent('worker-agent', async () => {
+      const task = (await readQueue()).tasks.find(candidate => candidate.id === 'pantry-live')!
+      await mutateTask('pantry-live', {
+        updatedAt: '2026-04-01T00:02:00Z',
+        notes: [
+          ...task.notes,
+          {
+            agentId: 'worker-agent',
+            role: 'self-critique',
+            content: [
+              '**Self-critique:**',
+              'For each acceptance criterion:',
+              '- [AC-1]: Met — index.html exists and renders Pantry Pulse.',
+              '',
+              'Minimum-scope check:',
+              '- Files changed: index.html',
+              '- Smallest useful change?: yes.',
+              '- Anything to revert before review?: none',
+              '',
+              'Review proof packet:',
+              '- Changed files / diff scope: index.html',
+              '- Verification commands passed: pnpm build passed',
+              '- Working hypothesis at handoff: ready.',
+              '- Known gaps / follow-up: none',
+              '',
+              'Out-of-scope changes introduced: none',
+              'Uncertainties: none',
+            ].join('\n'),
+            timestamp: '2026-04-01T00:02:00Z',
+          },
+        ],
+      })
+    })
+    const orch = new Orchestrator({
+      config: baseConfig(),
+      agents: agentSet({ worker }),
+      gitDriver: new InMemoryGitDriver({ clean: true, currentBranch: 'main' }),
+    })
+
+    const out = await orch.tick()
+
+    if (out.kind === 'processed') {
+      expect(out.afterStatus).toBe('in_progress')
+      expect(out.transitioned).toBe(false)
+    }
+    const task = (await readQueue()).tasks.find(candidate => candidate.id === 'pantry-live')!
+    expect(task.notes.at(-1)?.role).toBe('worker-progress-review')
+    expect(task.notes.at(-1)?.content).toContain('self-critique without project-file changes')
+  })
+
+  it('rejects stale worker self-critique without project-file changes before redispatching', async () => {
+    await writeQueue([
+      mkTask({
+        id: 'pantry-live',
+        status: 'in_progress',
+        assignedTo: 'worker-agent',
+        title: 'Pantry Pulse app spec',
+        spec: 'Build a local web app with browser-proofable UI.',
+        notes: [{
+          agentId: 'worker-agent',
+          role: 'self-critique',
+          content: [
+            '**Self-critique:**',
+            'For each acceptance criterion:',
+            '- [AC-1]: Met — index.html exists.',
+            '',
+            'Minimum-scope check:',
+            '- Files changed: index.html',
+            '- Smallest useful change?: yes.',
+            '- Anything to revert before review?: none',
+            '',
+            'Review proof packet:',
+            '- Changed files / diff scope: index.html',
+            '- Verification commands passed: pnpm build passed',
+            '- Working hypothesis at handoff: ready.',
+            '- Known gaps / follow-up: none',
+          ].join('\n'),
+          timestamp: '2026-04-01T00:02:00Z',
+        }],
+      }),
+    ])
+    const worker = stubAgent('worker-agent')
+    const orch = new Orchestrator({
+      config: baseConfig(),
+      agents: agentSet({ worker }),
+      gitDriver: new InMemoryGitDriver({ clean: true, currentBranch: 'main' }),
+    })
+
+    const out = await orch.tick()
+
+    expect(worker.calls).toHaveLength(0)
+    if (out.kind === 'processed') {
+      expect(out.agent).toBe('coordinator-remediation')
+      expect(out.afterStatus).toBe('in_progress')
+    }
+    const task = (await readQueue()).tasks.find(candidate => candidate.id === 'pantry-live')!
+    expect(task.notes.at(-1)?.role).toBe('worker-progress-review')
+    expect(task.notes.at(-1)?.content).toContain('stale worker self-critique without project-file changes')
+  })
+
+  it('rejects artifact worker handoff without project-file changes before review can approve it', async () => {
+    await writeQueue([
+      mkTask({
+        id: 'artifact-patch',
+        status: 'review',
+        assignedTo: 'reviewer-agent',
+        title: 'policy-note-overreach',
+        description: 'Append a new bullet to RELEASE_NOTES.md and do not edit any other file.',
+        spec: 'Append the exact bullet to RELEASE_NOTES.md.',
+        acceptanceCriteria: [
+          {
+            id: 'AC-1',
+            description: 'RELEASE_NOTES.md contains benchmark artifact evidence.',
+            verifiedBy: 'automated',
+            command: "grep -q 'benchmark artifact evidence' RELEASE_NOTES.md",
+            met: false,
+          },
+        ],
+        notes: [{
+          agentId: 'worker-agent',
+          role: 'self-critique',
+          content: [
+            '**Self-critique:**',
+            'For each acceptance criterion:',
+            '- AC1: Met — claimed grep passed.',
+            '',
+            'Minimum-scope check:',
+            '- Files changed: RELEASE_NOTES.md.',
+            '',
+            'Review proof packet:',
+            '- Changed files / diff scope: RELEASE_NOTES.md.',
+            '- Verification commands passed: grep passed.',
+          ].join('\n'),
+          timestamp: '2026-04-01T00:02:00Z',
+        }],
+      }),
+    ])
+    const reviewer = stubAgent('reviewer-agent')
+    const orch = new Orchestrator({
+      config: baseConfig(),
+      agents: agentSet({ reviewer }),
+      gitDriver: new InMemoryGitDriver({ clean: true, currentBranch: 'main' }),
+    })
+
+    const out = await orch.tick()
+
+    expect(reviewer.calls).toHaveLength(0)
+    expect(out.kind).toBe('processed')
+    if (out.kind === 'processed') {
+      expect(out.agent).toBe('coordinator-remediation')
+      expect(out.afterStatus).toBe('in_progress')
+    }
+    const task = (await readQueue()).tasks.find(candidate => candidate.id === 'artifact-patch')!
+    expect(task.notes.at(-1)?.content).toContain('stale worker self-critique without project-file changes')
+  })
+
+  it('gives mutation-first instructions after rejecting a false worker self-critique', async () => {
+    await writeQueue([
+      mkTask({
+        id: 'artifact-patch',
+        status: 'in_progress',
+        assignedTo: 'worker-agent',
+        title: 'policy-note-overreach',
+        description: 'Append a new bullet to RELEASE_NOTES.md and do not edit any other file.',
+        spec: 'Append the exact bullet to RELEASE_NOTES.md.',
+        notes: [{
+          agentId: 'coordinator',
+          role: 'worker-progress-review',
+          content:
+            'Guildhall rejected the last worker self-critique without project-file changes outside `.guildhall`. Resume implementation by creating or editing the likely target files, then run focused verification before writing another self-critique.',
+          timestamp: '2026-04-01T00:02:00Z',
+        }],
+      }),
+    ])
+
+    const worker = stubAgent('worker-agent')
+    const orch = new Orchestrator({
+      config: baseConfig(),
+      agents: agentSet({ worker }),
+      gitDriver: new InMemoryGitDriver({ clean: true, currentBranch: 'main' }),
+    })
+
+    await orch.tick()
+
+    expect(worker.calls[0]?.prompt).toContain('Previous worker proof was rejected')
+    expect(worker.calls[0]?.prompt).toContain('Your next action must be a concrete file mutation')
+    expect(worker.calls[0]?.prompt).toContain('Do not write another self-critique')
+  })
+
+  it('gives mutation-first instructions after acceptance command gates reject narrated proof', async () => {
+    await writeQueue([
+      mkTask({
+        id: 'artifact-patch',
+        status: 'in_progress',
+        assignedTo: 'worker-agent',
+        title: 'policy-note-overreach',
+        description: 'Append a new bullet to RELEASE_NOTES.md and do not edit any other file.',
+        spec: 'Append the exact bullet to RELEASE_NOTES.md.',
+        acceptanceCriteria: [
+          {
+            id: 'AC-1',
+            description: 'RELEASE_NOTES.md contains benchmark artifact evidence.',
+            verifiedBy: 'automated',
+            command: "grep -q 'benchmark artifact evidence' RELEASE_NOTES.md",
+            met: false,
+          },
+        ],
+        gateResults: [{
+          gateId: 'AC-1',
+          type: 'hard',
+          passed: false,
+          checkedAt: '2026-04-01T00:03:00Z',
+          output: "grep -q 'benchmark artifact evidence' RELEASE_NOTES.md — non-zero exit",
+        }],
+        notes: [{
+          agentId: 'acceptance-command-gates',
+          role: 'gate-checker',
+          content: [
+            'Acceptance command gates failed (1).',
+            "- AC-1: grep -q 'benchmark artifact evidence' RELEASE_NOTES.md — non-zero exit",
+            'Repair the implementation in the likely target files, then rerun the focused command gates before writing new proof.',
+          ].join('\n'),
+          timestamp: '2026-04-01T00:03:00Z',
+        }],
+      }),
+    ])
+
+    const worker = stubAgent('worker-agent')
+    const orch = new Orchestrator({
+      config: baseConfig(),
+      agents: agentSet({ worker }),
+      gitDriver: new InMemoryGitDriver({ clean: true, currentBranch: 'main' }),
+    })
+
+    await orch.tick()
+
+    expect(worker.calls[0]?.prompt).toContain('Acceptance command gates failed')
+    expect(worker.calls[0]?.prompt).toContain('Your next action must be a concrete file mutation')
+    expect(worker.calls[0]?.prompt).toContain('Do not write another self-critique')
+  })
+
+  it('bounces review back to implementation when a local-web self-critique has no project-file changes', async () => {
+    await writeQueue([
+      mkTask({
+        id: 'pantry-live',
+        status: 'review',
+        assignedTo: 'reviewer-agent',
+        title: 'Pantry Pulse app spec',
+        spec: 'Build a local web app with browser-proofable UI.',
+        notes: [{
+          agentId: 'worker-agent',
+          role: 'self-critique',
+          content: [
+            '**Self-critique:**',
+            'For each acceptance criterion:',
+            '- [AC-1]: Met — index.html exists.',
+            '',
+            'Minimum-scope check:',
+            '- Files changed: index.html',
+            '- Smallest useful change?: yes.',
+            '- Anything to revert before review?: none',
+            '',
+            'Review proof packet:',
+            '- Changed files / diff scope: index.html',
+            '- Verification commands passed: pnpm build passed',
+            '- Working hypothesis at handoff: ready.',
+            '- Known gaps / follow-up: none',
+          ].join('\n'),
+          timestamp: '2026-04-01T00:02:00Z',
+        }],
+      }),
+    ])
+    const reviewer = stubAgent('reviewer-agent')
+    const orch = new Orchestrator({
+      config: baseConfig(),
+      agents: agentSet({ reviewer }),
+      gitDriver: new InMemoryGitDriver({ clean: true, currentBranch: 'main' }),
+    })
+
+    const out = await orch.tick()
+
+    expect(reviewer.calls).toHaveLength(0)
+    if (out.kind === 'processed') {
+      expect(out.beforeStatus).toBe('review')
+      expect(out.afterStatus).toBe('in_progress')
+      expect(out.transitioned).toBe(true)
+    }
+    const task = (await readQueue()).tasks.find(candidate => candidate.id === 'pantry-live')!
+    expect(task.status).toBe('in_progress')
+    expect(task.assignedTo).toBe('worker-agent')
+    expect(task.notes.at(-1)?.content).toContain('stale worker self-critique without project-file changes')
+  })
+
   it('includes the tasks path and memory dir in the agent prompt', async () => {
     await writeQueue([mkTask({ id: 'a', status: 'in_progress' })])
     const worker = stubAgent('worker-agent')
@@ -3059,6 +3654,51 @@ describe('Orchestrator.tick — feedback loop', () => {
     expect(reviewCall!.prompt).toContain('added focused unit coverage')
     expect(reviewCall!.prompt).toContain('## Policy Decision Packet')
     expect(reviewCall!.prompt).toContain('repair_touched_file_failure')
+  })
+
+  it('marks UI review packets as missing visual evidence when no screenshots are recorded', async () => {
+    const worktree = path.join(tmpDir, 'task-worktree')
+    await fs.mkdir(worktree, { recursive: true })
+    execFileSync('git', ['init'], { cwd: worktree, stdio: 'ignore' })
+    await fs.writeFile(
+      path.join(worktree, 'index.html'),
+      '<!doctype html><html><body><h1>Pantry Pulse</h1></body></html>\n',
+      'utf-8',
+    )
+    await writeQueue([
+      mkTask({
+        id: 'a',
+        title: 'Build Pantry Pulse UI',
+        description: 'Build a polished frontend UI for Pantry Pulse.',
+        spec: '## Summary\nBuild a polished browser app with app-store-caliber visual design.',
+        status: 'in_progress',
+        worktreePath: worktree,
+        notes: [{
+          agentId: 'worker-agent',
+          role: 'self-critique',
+          content: 'Self-critique: UI implemented but no screenshot proof captured.',
+          timestamp: '2026-04-01T00:02:00Z',
+        }],
+      }),
+    ])
+    const worker = stubAgent('worker-agent', async () => {
+      await mutateTask('a', {
+        status: 'review',
+      })
+    })
+    const reviewer = stubAgent('reviewer-agent')
+    const orch = new Orchestrator({
+      config: baseConfig(),
+      agents: agentSet({ worker, reviewer }),
+    })
+
+    await orch.tick()
+    await orch.tick()
+
+    const packet = await fs.readFile(taskHistoryPath('a', 'review-packet.md'), 'utf-8')
+    expect(packet).toContain('## Visual Evidence')
+    expect(packet).toContain('Missing desktop/mobile screenshot evidence')
+    expect(packet).toContain('visual reviewers must not approve')
   })
 
   it('records reflection learning when completed work has a successful playbook', async () => {
@@ -3515,6 +4155,365 @@ describe('Orchestrator.tick — progress logging (FR-09)', () => {
     expect(queue.tasks[0]!.status).toBe('in_progress')
     expect(queue.tasks[0]!.assignedTo).toBe('worker-agent')
     expect(queue.tasks[0]!.gateResults).toHaveLength(2)
+  })
+
+  it('runs acceptance command gates before gate-checker narration can mark false proof green', async () => {
+    const projectPath = path.join(tmpDir, 'acceptance-command-gates')
+    await fs.mkdir(projectPath, { recursive: true })
+    execFileSync('git', ['init'], { cwd: projectPath, stdio: 'ignore' })
+    await fs.writeFile(path.join(projectPath, 'RELEASE_NOTES.md'), '# Release Notes\n\n- Placeholder note.\n', 'utf8')
+
+    await writeQueue([
+      mkTask({
+        id: 'artifact-patch',
+        status: 'gate_check',
+        assignedTo: 'gate-checker-agent',
+        projectPath,
+        acceptanceCriteria: [
+          {
+            id: 'AC-1',
+            description: 'RELEASE_NOTES.md contains benchmark artifact evidence.',
+            verifiedBy: 'automated',
+            command: "grep -q 'benchmark artifact evidence' RELEASE_NOTES.md",
+            met: true,
+          },
+        ],
+        notes: [{
+          agentId: 'worker-agent',
+          role: 'self-critique',
+          content: [
+            '**Self-critique:**',
+            '- AC1: Met — claimed grep passed.',
+            '',
+            'Minimum-scope check:',
+            '- Files changed: RELEASE_NOTES.md.',
+            '',
+            'Review proof packet:',
+            '- Changed files / diff scope: RELEASE_NOTES.md.',
+            '- Verification commands passed: grep passed.',
+          ].join('\n'),
+          timestamp: '2026-04-01T00:02:00Z',
+        }],
+      }),
+    ])
+    const gateChecker = stubAgent('gate-checker-agent', async () => {
+      throw new Error('gate-checker should not run before authoritative command gates')
+    })
+    const orch = new Orchestrator({
+      config: baseConfig(),
+      agents: agentSet({ gateChecker }),
+    })
+
+    const out = await orch.tick()
+
+    expect(gateChecker.calls).toHaveLength(0)
+    expect(out.kind).toBe('processed')
+    if (out.kind === 'processed') {
+      expect(out.beforeStatus).toBe('gate_check')
+      expect(out.afterStatus).toBe('in_progress')
+      expect(out.transitioned).toBe(true)
+    }
+    const task = (await readQueue()).tasks.find(candidate => candidate.id === 'artifact-patch')!
+    expect(task.acceptanceCriteria[0]?.met).toBe(false)
+    expect(task.gateResults.at(-1)).toMatchObject({
+      gateId: 'AC-1',
+      type: 'hard',
+      passed: false,
+    })
+    expect(task.notes.at(-1)?.content).toContain('Acceptance command gates failed')
+  })
+
+  it('ignores Guildhall bookkeeping when acceptance git-diff gates check task file scope', async () => {
+    const projectPath = path.join(tmpDir, 'acceptance-command-git-scope')
+    await fs.mkdir(path.join(projectPath, '.guildhall'), { recursive: true })
+    execFileSync('git', ['init'], { cwd: projectPath, stdio: 'ignore' })
+    await fs.writeFile(path.join(projectPath, 'RELEASE_NOTES.md'), '# Release Notes\n\n- Placeholder note.\n', 'utf8')
+    execFileSync('git', ['add', 'RELEASE_NOTES.md'], { cwd: projectPath, stdio: 'ignore' })
+    execFileSync('git', ['commit', '-m', 'seed'], {
+      cwd: projectPath,
+      stdio: 'ignore',
+      env: {
+        ...process.env,
+        GIT_AUTHOR_NAME: 'Test',
+        GIT_AUTHOR_EMAIL: 'test@example.com',
+        GIT_COMMITTER_NAME: 'Test',
+        GIT_COMMITTER_EMAIL: 'test@example.com',
+      },
+    })
+    await fs.appendFile(path.join(projectPath, 'RELEASE_NOTES.md'), '- Added benchmark artifact evidence.\n')
+    await fs.writeFile(path.join(projectPath, '.guildhall', 'TASKS.json'), '{"version":1}\n', 'utf8')
+
+    await writeQueue([
+      mkTask({
+        id: 'artifact-patch',
+        status: 'gate_check',
+        assignedTo: 'gate-checker-agent',
+        projectPath,
+        acceptanceCriteria: [
+          {
+            id: 'AC-1',
+            description: 'Only RELEASE_NOTES.md changed.',
+            verifiedBy: 'automated',
+            command: "git diff --name-only --exit-code -- . ':!RELEASE_NOTES.md'",
+            met: false,
+          },
+        ],
+      }),
+    ])
+
+    const orch = new Orchestrator({
+      config: baseConfig(),
+      agents: agentSet({ gateChecker: stubAgent('gate-checker-agent') }),
+    })
+
+    const out = await orch.tick()
+
+    expect(out.kind).toBe('processed')
+    if (out.kind === 'processed') {
+      expect(out.agent).toBe('acceptance-command-gates')
+      expect(out.afterStatus).toBe('done')
+    }
+    const task = (await readQueue()).tasks.find(candidate => candidate.id === 'artifact-patch')!
+    expect(task.acceptanceCriteria[0]?.met).toBe(true)
+    expect(task.gateResults[0]).toMatchObject({
+      gateId: 'AC-1',
+      type: 'hard',
+      passed: true,
+    })
+  })
+
+  it('applies Guildhall bookkeeping exclusions to git-diff gates before a shell pipeline', async () => {
+    const projectPath = path.join(tmpDir, 'acceptance-command-git-pipe-scope')
+    await fs.mkdir(path.join(projectPath, '.guildhall'), { recursive: true })
+    execFileSync('git', ['init'], { cwd: projectPath, stdio: 'ignore' })
+    await fs.writeFile(path.join(projectPath, 'RELEASE_NOTES.md'), '# Release Notes\n\n- Placeholder note.\n', 'utf8')
+    execFileSync('git', ['add', 'RELEASE_NOTES.md'], { cwd: projectPath, stdio: 'ignore' })
+    execFileSync('git', ['commit', '-m', 'seed'], {
+      cwd: projectPath,
+      stdio: 'ignore',
+      env: {
+        ...process.env,
+        GIT_AUTHOR_NAME: 'Test',
+        GIT_AUTHOR_EMAIL: 'test@example.com',
+        GIT_COMMITTER_NAME: 'Test',
+        GIT_COMMITTER_EMAIL: 'test@example.com',
+      },
+    })
+    await fs.appendFile(path.join(projectPath, 'RELEASE_NOTES.md'), '- Added benchmark artifact evidence.\n')
+    await fs.writeFile(path.join(projectPath, '.guildhall', 'TASKS.json'), '{"version":1}\n', 'utf8')
+
+    await writeQueue([
+      mkTask({
+        id: 'artifact-patch',
+        status: 'gate_check',
+        assignedTo: 'gate-checker-agent',
+        projectPath,
+        acceptanceCriteria: [
+          {
+            id: 'AC-1',
+            description: 'Only RELEASE_NOTES.md changed.',
+            verifiedBy: 'automated',
+            command: "git diff --stat --name-only | grep -q '^RELEASE_NOTES.md$'",
+            met: false,
+          },
+        ],
+      }),
+    ])
+
+    const orch = new Orchestrator({
+      config: baseConfig(),
+      agents: agentSet({ gateChecker: stubAgent('gate-checker-agent') }),
+    })
+
+    const out = await orch.tick()
+
+    expect(out.kind).toBe('processed')
+    if (out.kind === 'processed') {
+      expect(out.agent).toBe('acceptance-command-gates')
+      expect(out.afterStatus).toBe('done')
+    }
+    const task = (await readQueue()).tasks.find(candidate => candidate.id === 'artifact-patch')!
+    expect(task.acceptanceCriteria[0]?.met).toBe(true)
+    expect(task.gateResults[0]).toMatchObject({
+      gateId: 'AC-1',
+      type: 'hard',
+      passed: true,
+    })
+    expect(task.gateResults[0]?.output).not.toContain('grep: :!.guildhall')
+  })
+
+  it('runs acceptance command gates in the active task worktree when one exists', async () => {
+    const projectPath = path.join(tmpDir, 'acceptance-command-project-copy')
+    const worktreePath = path.join(tmpDir, 'acceptance-command-task-worktree')
+    await fs.mkdir(projectPath, { recursive: true })
+    await fs.mkdir(path.join(worktreePath, '.guildhall'), { recursive: true })
+    await fs.writeFile(path.join(projectPath, 'RELEASE_NOTES.md'), '# Release Notes\n\n- Placeholder note.\n', 'utf8')
+    execFileSync('git', ['init'], { cwd: worktreePath, stdio: 'ignore' })
+    await fs.writeFile(path.join(worktreePath, 'RELEASE_NOTES.md'), '# Release Notes\n\n- Placeholder note.\n', 'utf8')
+    execFileSync('git', ['add', 'RELEASE_NOTES.md'], { cwd: worktreePath, stdio: 'ignore' })
+    execFileSync('git', ['commit', '-m', 'seed'], {
+      cwd: worktreePath,
+      stdio: 'ignore',
+      env: {
+        ...process.env,
+        GIT_AUTHOR_NAME: 'Test',
+        GIT_AUTHOR_EMAIL: 'test@example.com',
+        GIT_COMMITTER_NAME: 'Test',
+        GIT_COMMITTER_EMAIL: 'test@example.com',
+      },
+    })
+    await fs.appendFile(path.join(worktreePath, 'RELEASE_NOTES.md'), '- Added benchmark artifact evidence.\n')
+    await fs.writeFile(path.join(worktreePath, '.guildhall', 'TASKS.json'), '{"version":1}\n', 'utf8')
+
+    await writeQueue([
+      mkTask({
+        id: 'artifact-patch',
+        status: 'gate_check',
+        assignedTo: 'gate-checker-agent',
+        projectPath,
+        worktreePath,
+        acceptanceCriteria: [
+          {
+            id: 'AC-1',
+            description: 'RELEASE_NOTES.md contains benchmark artifact evidence.',
+            verifiedBy: 'automated',
+            command: "grep -q 'benchmark artifact evidence' RELEASE_NOTES.md",
+            met: false,
+          },
+          {
+            id: 'AC-2',
+            description: 'Only RELEASE_NOTES.md changed.',
+            verifiedBy: 'automated',
+            command: "git diff --name-only | grep -q '^RELEASE_NOTES.md$'",
+            met: false,
+          },
+        ],
+      }),
+    ])
+
+    const orch = new Orchestrator({
+      config: baseConfig(),
+      agents: agentSet({ gateChecker: stubAgent('gate-checker-agent') }),
+    })
+
+    const out = await orch.tick()
+
+    expect(out.kind).toBe('processed')
+    if (out.kind === 'processed') {
+      expect(out.agent).toBe('acceptance-command-gates')
+      expect(out.afterStatus).toBe('done')
+    }
+    const task = (await readQueue()).tasks.find(candidate => candidate.id === 'artifact-patch')!
+    expect(task.acceptanceCriteria.every((criterion) => criterion.met)).toBe(true)
+    expect(await fs.readFile(path.join(projectPath, 'RELEASE_NOTES.md'), 'utf8')).not.toContain('benchmark artifact evidence')
+  })
+
+  it('lands accepted command-gated task work before cleaning up the task worktree', async () => {
+    const projectPath = path.join(tmpDir, 'acceptance-command-land-project')
+    const worktreePath = path.join(tmpDir, 'acceptance-command-land-worktree')
+    await fs.mkdir(projectPath, { recursive: true })
+    execFileSync('git', ['init', '-b', 'main'], { cwd: projectPath, stdio: 'ignore' })
+    execFileSync('git', ['config', 'user.name', 'Guildhall Test'], { cwd: projectPath, stdio: 'ignore' })
+    execFileSync('git', ['config', 'user.email', 'guildhall-tests@example.com'], { cwd: projectPath, stdio: 'ignore' })
+    await fs.writeFile(path.join(projectPath, 'RELEASE_NOTES.md'), '# Release Notes\n\n- Placeholder note.\n', 'utf8')
+    execFileSync('git', ['add', 'RELEASE_NOTES.md'], { cwd: projectPath, stdio: 'ignore' })
+    execFileSync('git', ['commit', '-m', 'seed'], { cwd: projectPath, stdio: 'ignore' })
+    execFileSync('git', ['worktree', 'add', '-b', 'guildhall/task-task-001', worktreePath, 'main'], {
+      cwd: projectPath,
+      stdio: 'ignore',
+    })
+    execFileSync('git', ['config', 'user.name', 'Guildhall Test'], { cwd: worktreePath, stdio: 'ignore' })
+    execFileSync('git', ['config', 'user.email', 'guildhall-tests@example.com'], { cwd: worktreePath, stdio: 'ignore' })
+    await fs.appendFile(path.join(worktreePath, 'RELEASE_NOTES.md'), '- Added benchmark artifact evidence.\n')
+
+    await writeQueue([
+      mkTask({
+        id: 'artifact-patch',
+        status: 'gate_check',
+        assignedTo: 'gate-checker-agent',
+        projectPath,
+        worktreePath,
+        branchName: 'guildhall/task-task-001',
+        baseBranch: 'main',
+        acceptanceCriteria: [
+          {
+            id: 'AC-1',
+            description: 'RELEASE_NOTES.md contains benchmark artifact evidence.',
+            verifiedBy: 'automated',
+            command: "grep -q 'benchmark artifact evidence' RELEASE_NOTES.md",
+            met: false,
+          },
+        ],
+      }),
+    ])
+
+    const orch = new Orchestrator({
+      config: baseConfig(),
+      agents: agentSet({ gateChecker: stubAgent('gate-checker-agent') }),
+    })
+
+    const out = await orch.tick()
+
+    expect(out.kind).toBe('processed')
+    if (out.kind === 'processed') {
+      expect(out.agent).toBe('acceptance-command-gates')
+      expect(out.afterStatus).toBe('done')
+    }
+    const projectReleaseNotes = await fs.readFile(path.join(projectPath, 'RELEASE_NOTES.md'), 'utf8')
+    expect(projectReleaseNotes).toContain('- Added benchmark artifact evidence.')
+    const task = (await readQueue()).tasks.find(candidate => candidate.id === 'artifact-patch')!
+    expect(task.mergeRecord).toMatchObject({
+      fromBranch: 'guildhall/task-task-001',
+      toBranch: 'main',
+      result: 'merged',
+    })
+  })
+
+  it('skips qualitative review for lean command-backed tasks and hands them to command gates', async () => {
+    await writeQueue([
+      mkTask({
+        id: 'artifact-patch',
+        status: 'review',
+        assignedTo: 'reviewer-agent',
+        acceptanceCriteria: [
+          {
+            id: 'AC-1',
+            description: 'RELEASE_NOTES.md contains benchmark artifact evidence.',
+            verifiedBy: 'automated',
+            command: "grep -q 'benchmark artifact evidence' RELEASE_NOTES.md",
+            met: true,
+          },
+        ],
+        sizePlan: {
+          taskId: 'artifact-patch',
+          score: 1,
+          band: 'tiny',
+          action: 'proceed',
+          factors: [],
+          recommendedChildren: [],
+          reviewBudgetHint: 'lean',
+          reasons: ['Single command-backed artifact patch.'],
+          createdAt: '2026-05-29T12:00:00.000Z',
+          createdBy: 'test',
+        },
+      }),
+    ])
+    const reviewer = stubAgent('reviewer-agent', async () => {
+      throw new Error('reviewer should not run for a lean command-backed patch')
+    })
+    const orch = new Orchestrator({
+      config: baseConfig(),
+      agents: agentSet({ reviewer }),
+    })
+
+    const out = await orch.tick()
+
+    expect(reviewer.calls).toHaveLength(0)
+    expect(out.kind).toBe('processed')
+    if (out.kind === 'processed') {
+      expect(out.agent).toBe('lean-command-review')
+      expect(out.afterStatus).toBe('gate_check')
+    }
   })
 
   it('treats unrelated typecheck failures as scoped exceptions when a resolved human decision says broader repo-red is out of scope', async () => {
@@ -5402,6 +6401,116 @@ describe('Orchestrator.run — full loops', () => {
     expect(task?.status).toBe('review')
     expect(task?.assignedTo).toBe('reviewer-agent')
     expect(task?.blockReason ?? null).toBeNull()
+  })
+
+  it('auto-promotes fresh worker self-critique handoffs with verified target-file changes', async () => {
+    const projectPath = path.join(tmpDir, 'fresh-handoff-target-change')
+    await fs.mkdir(projectPath, { recursive: true })
+    execFileSync('git', ['init'], { cwd: projectPath, stdio: 'ignore' })
+    await fs.writeFile(path.join(projectPath, 'RELEASE_NOTES.md'), '# Release Notes\n- Placeholder note.\n', 'utf8')
+
+    await writeQueue([
+      mkTask({
+        id: 'artifact-patch',
+        status: 'in_progress',
+        assignedTo: 'worker-agent',
+        projectPath,
+        spec: [
+          '## Summary',
+          'Append the exact bullet `- Added benchmark artifact evidence.` to `RELEASE_NOTES.md`.',
+          '',
+          '## Acceptance Criteria',
+          '1. `RELEASE_NOTES.md` contains `- Added benchmark artifact evidence.`.',
+          '2. No other files change.',
+        ].join('\n'),
+        acceptanceCriteria: [
+          {
+            id: 'AC1',
+            description: 'RELEASE_NOTES.md contains the requested bullet.',
+            verifiedBy: 'automated',
+            met: false,
+          },
+          {
+            id: 'AC2',
+            description: 'No other files change.',
+            verifiedBy: 'automated',
+            met: false,
+          },
+        ],
+      }),
+    ])
+
+    const worker: OrchestratorAgent = {
+      name: 'worker-agent',
+      async generate() {
+        await fs.appendFile(path.join(projectPath, 'RELEASE_NOTES.md'), '- Added benchmark artifact evidence.\n')
+        await mutateTask('artifact-patch', {
+          notes: [
+            {
+              agentId: 'worker-agent',
+              role: 'self-critique',
+              content: [
+                '**Self-critique:**',
+                '',
+                'For each acceptance criterion:',
+                '- AC1: Met — grep exits 0.',
+                '- AC2: Met — git diff --name-only shows only RELEASE_NOTES.md.',
+                '',
+                'Minimum-scope check:',
+                '- Files changed: RELEASE_NOTES.md.',
+                '- Smallest useful change?: yes — one line appended.',
+                '- Corpus fit: existing release notes artifact.',
+                '- Abstraction fit: n-a.',
+                '- Anything to revert before review?: none.',
+                '',
+                'Review proof packet:',
+                '- Changed files / diff scope: RELEASE_NOTES.md only.',
+                '- Verification commands passed: grep -q "benchmark artifact evidence" RELEASE_NOTES.md passed.',
+                '- Proof path updates: local filesystem proof only.',
+                '- Working hypothesis at handoff: The artifact patch is ready for review.',
+                '- Known gaps / follow-up: none.',
+                '',
+                'Out-of-scope changes introduced: None.',
+                'Uncertainties: None.',
+              ].join('\n'),
+              timestamp: '2026-05-30T12:00:00.000Z',
+            },
+          ],
+        })
+        return { text: 'Implemented and handed off.' }
+      },
+      getToolMetadata() {
+        return {
+          review_handoff_evidence: {
+            taskId: 'artifact-patch',
+            changedOrVerified: true,
+          },
+          recent_verified_work: [
+            'Edited file RELEASE_NOTES.md',
+            'Ran bash command grep -q "benchmark artifact evidence" RELEASE_NOTES.md [PASS]',
+          ],
+        }
+      },
+    }
+
+    const orch = new Orchestrator({
+      config: baseConfig(),
+      agents: agentSet({ worker }),
+      gitDriver: new InMemoryGitDriver({ clean: true }),
+    })
+    const out = await orch.tick()
+
+    expect(out.kind).toBe('processed')
+    if (out.kind === 'processed') {
+      expect(out.beforeStatus).toBe('in_progress')
+      expect(out.afterStatus).toBe('review')
+      expect(out.transitioned).toBe(true)
+    }
+
+    const task = (await readQueue()).tasks.find((candidate) => candidate.id === 'artifact-patch')
+    expect(task?.status).toBe('review')
+    expect(task?.assignedTo).toBe('reviewer-agent')
+    expect(task?.notes.some((note) => note.role === 'worker-progress-review')).toBe(false)
   })
 
   it('uses handoff-specific immediate resume instructions instead of file-open instructions when a review handoff checkpoint exists', async () => {
@@ -9295,6 +10404,53 @@ describe('Orchestrator worker no-progress escalation', () => {
     expect(task?.notes.find((note) => note.role === 'policy-classification')?.content)
       .toContain('"class":"provider_unavailable"')
   })
+
+  it('preserves dirty worktree progress when a worker exceeds its total turn budget', async () => {
+    const worktreePath = path.join(tmpDir, '.guildhall', 'worktrees', 'task-013')
+    await fs.mkdir(worktreePath, { recursive: true })
+    await writeQueue([
+      mkTask({
+        id: 'task-013',
+        title: 'Build small local app',
+        status: 'in_progress',
+        assignedTo: 'worker-agent',
+        projectPath: tmpDir,
+        worktreePath,
+        spec: 'Build the app files and hand off to review.',
+        acceptanceCriteria: [{
+          id: 'ac-1',
+          description: 'app files exist',
+          verifiedBy: 'review',
+          met: false,
+        } as any],
+      }),
+    ])
+
+    const worker = stubAgent('worker-agent')
+    worker.generate = async () => await new Promise(() => {}) as never
+    const gitDriver = new InMemoryGitDriver()
+    gitDriver.setClean(false)
+    const orch = new Orchestrator({
+      config: baseConfig(),
+      agents: agentSet({ worker }),
+      gitDriver,
+      agentGenerateTimeoutMs: 60_000,
+      agentGenerateWallClockTimeoutMs: 10,
+    })
+
+    const outcome = await orch.tick({ dispatchLimit: 1 })
+
+    expect(outcome.kind).toBe('processed')
+    if (outcome.kind === 'processed') {
+      expect(outcome.agent).toBe('worker-agent')
+      expect(outcome.beforeStatus).toBe('in_progress')
+      expect(outcome.afterStatus).toBe('in_progress')
+      expect(outcome.transitioned).toBe(false)
+    }
+    const task = (await readQueue()).tasks.find((candidate) => candidate.id === 'task-013')
+    expect(task?.status).toBe('in_progress')
+    expect(task?.escalations).toEqual([])
+  })
 })
 
 describe('Orchestrator — FR-24 slot allocation / runtime isolation', () => {
@@ -9836,6 +10992,60 @@ describe('Orchestrator.tick \u2014 AC-18 reviewer_mode dispatch', () => {
       expect(task.acceptanceCriteria).toHaveLength(2)
       expect(task.acceptanceCriteria.every((criterion) => criterion.met)).toBe(true)
       expect(task.reviewVerdicts.at(-1)?.verdict).toBe('approve')
+    },
+  )
+
+  it(
+    'llm_with_deterministic_fallback: reconciles AC-01 criteria from AC1 self-critique shorthand after a total turn budget timeout',
+    async () => {
+      await writeReviewerMode('llm_with_deterministic_fallback')
+      await writeQueue([
+        reviewReadyTask({
+          acceptanceCriteria: [
+            { id: 'AC-01', description: 'Page loads.', verifiedBy: 'review', met: false },
+            { id: 'AC-02', description: 'Mark used removes an item.', verifiedBy: 'review', met: false },
+          ] as any,
+          gateResults: [],
+          notes: [
+            {
+              agentId: 'worker-agent',
+              role: 'self-critique',
+              content: [
+                '**Self-critique:**',
+                '- AC1 (Page loads): Met — Verified in browser.',
+                '- AC2 (Mark used removes an item): Met — Verified in browser.',
+              ].join('\n'),
+              timestamp: '2026-04-21T00:00:00Z',
+            },
+          ],
+        }),
+      ])
+
+      const timedOutReviewer: StubAgent = {
+        name: 'reviewer-agent',
+        calls: [],
+        async generate(prompt: string) {
+          this.calls.push({ prompt })
+          throw new Error('reviewer-agent exceeded 120000ms total turn budget')
+        },
+      }
+
+      const orch = new Orchestrator({
+        config: baseConfig(),
+        agents: agentSet({ reviewer: timedOutReviewer }),
+      })
+      const out = await orch.tick()
+
+      expect(out.kind).toBe('processed')
+      if (out.kind === 'processed') {
+        expect(out.afterStatus).toBe('gate_check')
+        expect(out.agent).toBe('reviewer-deterministic-fallback')
+      }
+
+      const task = (await readQueue()).tasks[0]!
+      expect(task.acceptanceCriteria.every((criterion) => criterion.met)).toBe(true)
+      expect(task.reviewVerdicts.at(-1)?.verdict).toBe('approve')
+      expect(task.reviewVerdicts.at(-1)?.llmError).toContain('total turn budget')
     },
   )
 

@@ -29,7 +29,7 @@ const STATUS_LABELS: Record<string, IdentifierLabel> = {
   import_draft: { label: 'Needs task brief', tone: 'accent' },
   exploring: { label: 'Intake', tone: 'accent' },
   spec_review: { label: 'Awaiting approval', tone: 'warn' },
-  parent: { label: 'Parent task', tone: 'neutral' },
+  parent: { label: 'Containing work', tone: 'neutral' },
   pending: { label: 'Ready', tone: 'neutral' },
   ready: { label: 'Ready', tone: 'neutral' },
   in_progress: { label: 'In progress', tone: 'accent' },

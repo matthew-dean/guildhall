@@ -24,22 +24,25 @@
   import Help from '../../lib/Help.svelte'
   import { nav } from '../../lib/nav.svelte.js'
   import { project } from '../../lib/project.svelte.js'
-  import { projectActionHref, projectFetch } from '../../lib/project-routes.js'
+  import { currentProjectHref, projectActionHref, projectFetch } from '../../lib/project-routes.js'
   import { buildProductFeedbackIssueUrl } from '../../lib/product-feedback.js'
+  import type { ProjectMigrationStatus } from '../../lib/types.js'
 
   interface Props {
     subView?: string | null
+    onMigrate?: () => void | Promise<void>
   }
-  let { subView = null }: Props = $props()
-  type SettingSection = 'ready' | 'providers' | 'facts' | 'coordinators' | 'learning' | 'advanced'
-  const KNOWN_SECTIONS = new Set<SettingSection>(['ready', 'providers', 'facts', 'coordinators', 'learning', 'advanced'])
+  let { subView = null, onMigrate }: Props = $props()
+  type SettingSection = 'ready' | 'providers' | 'facts' | 'coordinators' | 'learning' | 'reintake' | 'advanced'
+  const KNOWN_SECTIONS = new Set<SettingSection>(['ready', 'providers', 'facts', 'coordinators', 'learning', 'reintake', 'advanced'])
   const section = $derived(KNOWN_SECTIONS.has(subView as SettingSection) ? subView as SettingSection : 'ready')
   const settingsSections: Array<{ id: SettingSection; label: string }> = [
     { id: 'ready', label: 'Ready' },
     { id: 'providers', label: 'Providers' },
     { id: 'coordinators', label: 'Coordinators' },
     { id: 'facts', label: 'Facts' },
-    { id: 'learning', label: 'Guidance' },
+    { id: 'learning', label: 'Memory' },
+    { id: 'reintake', label: 'Re-intake' },
     { id: 'advanced', label: 'Advanced' },
   ]
 
@@ -65,6 +68,70 @@
     tokens?: Record<string, unknown[]>
     copyVoice?: { tone?: string }
     a11y?: { minContrastRatio?: number }
+  }
+  interface DesignFeedbackStore {
+    findings?: unknown[]
+    decisions?: unknown[]
+    candidates?: Array<{ summary?: string; targetDesignSystem?: string; status?: string }>
+    loomaImprovements?: Array<{ summary?: string; targetPackage?: string; status?: string }>
+    ownerFeedback?: Array<{ summary?: string; status?: string }>
+    decisionPackets?: Array<{ summary?: string; workerContext?: string }>
+  }
+  interface LoomaHookStatus {
+    enabled?: boolean
+    status?: 'active' | 'inactive' | string
+    reason?: string
+    path?: string
+    writeThrough?: string
+  }
+  interface DesignSystemProfile {
+    primarySystem?: string
+    preview?: { adapter?: string; summary?: string }
+    libraries?: Array<{ id?: string; label?: string; role?: string }>
+    tokenFiles?: string[]
+    componentFiles?: string[]
+    proofContract?: { targetDesignSystem?: string; componentIntents?: string[] }
+    recommendations?: string[]
+  }
+  interface DesignTastePacket {
+    summary?: string
+    taste?: {
+      opinions?: {
+        interactionSemantics?: {
+          mutuallyExclusiveModes?: string
+          oneShotCommand?: string
+          persistentBinaryState?: string
+        }
+        paletteStrategy?: {
+          defaultMode?: string
+          saturationBudget?: string
+          avoid?: string[]
+        }
+        visualDirection?: {
+          default?: string
+          avoid?: string[]
+        }
+      }
+      patternRecipes?: Record<string, { preferred?: string }>
+    }
+    layers?: Array<{ id?: string; label?: string; applied?: boolean }>
+  }
+  interface DesignSystemCatalog {
+    previewAdapter?: string
+    interactable?: boolean
+    entries?: Array<{ id?: string; kind?: string; title?: string; previewUrl?: string }>
+    recommendations?: string[]
+  }
+  interface DesignIntentSurrogate {
+    platform?: string
+    previewMode?: string
+    approximate?: boolean
+    label?: string
+    warning?: string
+    nativeProofRequired?: boolean
+    detectedNativeTooling?: string[]
+    componentIntents?: string[]
+    recommendations?: string[]
   }
   interface LearningEvidence {
     kind?: string
@@ -123,6 +190,37 @@
     effective: { productSuggestions: ProductSuggestion[]; workspaceImport?: WorkspaceImportLearning } | null
     projectSkillProposals: ProjectSkillProposal[]
     projectContext?: ProjectContextSummary | null
+  }
+  interface ReintakeSummary {
+    kept?: number
+    reframed?: number
+    merged?: number
+    archived?: number
+    created?: number
+    preservedDone?: number
+  }
+  interface ReintakeStatus {
+    draftExists?: boolean
+    status?: 'draft' | 'applied' | 'dismissed' | string | null
+    createdAt?: string | null
+    summary?: ReintakeSummary | null
+  }
+  interface ReintakeDraft {
+    status?: string
+    summary?: ReintakeSummary
+    groups?: Array<{
+      id: string
+      title: string
+      rationale?: string
+      changes?: Array<{
+        kind?: string
+        taskId?: string
+        reason?: string
+        before?: { title?: string }
+        after?: { title?: string }
+        task?: { title?: string }
+      }>
+    }>
   }
   interface CodebaseMapStatus {
     configured: boolean
@@ -190,12 +288,26 @@
   let leversError = $state<string | null>(null)
   let savingLever = $state<string | null>(null)
   let designSystem = $state<DesignSystem | null | undefined>(undefined)
+  let designSystemProfile = $state<DesignSystemProfile | null>(null)
+  let designTaste = $state<DesignTastePacket | null>(null)
+  let designSystemCatalog = $state<DesignSystemCatalog | null>(null)
+  let designIntentSurrogate = $state<DesignIntentSurrogate | null>(null)
+  let designFeedback = $state<DesignFeedbackStore | null>(null)
+  let loomaHook = $state<LoomaHookStatus | null>(null)
   let codebaseMapStatus = $state<CodebaseMapStatus | null>(null)
   let codebaseMapBusy = $state(false)
   let codebaseMapError = $state<string | null>(null)
   let learning = $state<LearningSnapshot | null>(null)
   let learningError = $state<string | null>(null)
   let learningBusy = $state<string | null>(null)
+  let reintakeStatus = $state<ReintakeStatus | null>(null)
+  let reintakeDraft = $state<ReintakeDraft | null>(null)
+  let reintakeBusy = $state<null | 'rerun' | 'apply'>(null)
+  let reintakeError = $state<string | null>(null)
+  let reintakeNoDraft = $state(false)
+  let reintakeApplied = $state(false)
+  let migrationStatus = $state<ProjectMigrationStatus | null>(null)
+  let migrationStatusError = $state<string | null>(null)
 
   interface BootstrapStep {
     kind: 'command' | 'gate'
@@ -264,6 +376,75 @@
   }
   let providerStatus = $state<ProviderStatus | null>(null)
 
+  type RuntimeSetupStatus =
+    | 'ready'
+    | 'missing'
+    | 'machine-not-created'
+    | 'machine-stopped'
+    | 'unsupported-platform'
+    | 'unknown-error'
+  type RuntimeSetupActionId =
+    | 'install-instructions'
+    | 'initialize-machine'
+    | 'start-machine'
+    | 'retry-detection'
+    | 'use-host-run-compatibility'
+  interface RuntimeSetupAction {
+    id: RuntimeSetupActionId
+    label: string
+    description: string
+    mutatesHost: boolean
+    requiresApproval: boolean
+    command?: string[]
+    homebrewAvailable?: boolean
+    officialInstallerUrl?: string
+  }
+  interface RuntimeSetupReadout {
+    status: RuntimeSetupStatus
+    message: string
+    platform: string
+    supportedHost: boolean
+    podmanPath: string | null
+    podmanVersion: string | null
+    homebrewPath: string | null
+    compatibilityModeLabel: string
+    installGuidance?: {
+      homebrew: string
+      officialInstallerUrl: string
+    }
+    machine: {
+      exists: boolean
+      name: string | null
+      running: boolean
+    }
+    actions: RuntimeSetupAction[]
+  }
+  let runtimeSetup = $state<RuntimeSetupReadout | null>(null)
+  let runtimeSetupBusy = $state<RuntimeSetupActionId | null>(null)
+  let runtimeSetupError = $state<string | null>(null)
+  type CapabilityAccess = 'read-only' | 'read-write'
+  interface CapabilityGrant {
+    id: string
+    kind: 'mount_directory'
+    hostPath: string
+    containerPath: string
+    access: CapabilityAccess
+    duration: string
+    status: 'active' | 'revoked'
+    evidence: string
+  }
+  interface CapabilityRequest {
+    id: string
+    taskId: string
+    reason: string
+    status: 'pending' | 'approved' | 'denied' | 'blocked' | 'revoked'
+    grant?: CapabilityGrant
+  }
+  let capabilityRequests = $state<CapabilityRequest[]>([])
+  let activeCapabilityGrants = $state<CapabilityGrant[]>([])
+  let capabilityGrantBusyId = $state<string | null>(null)
+  let capabilityGrantError = $state<string | null>(null)
+
   $effect(() => {
     projectFetch('/api/setup/status')
       .then(r => r.json())
@@ -284,6 +465,32 @@
       .then(r => r.json())
       .then(j => (designSystem = j?.designSystem ?? null))
       .catch(() => (designSystem = null))
+    projectFetch('/api/project/design-system/discovery')
+      .then(r => r.json())
+      .then(j => (designSystemProfile = j ?? null))
+      .catch(() => (designSystemProfile = null))
+    projectFetch('/api/project/design-taste')
+      .then(r => r.json())
+      .then(j => (designTaste = j ?? null))
+      .catch(() => (designTaste = null))
+    projectFetch('/api/project/design-system/catalog')
+      .then(r => r.json())
+      .then(j => (designSystemCatalog = j ?? null))
+      .catch(() => (designSystemCatalog = null))
+    projectFetch('/api/project/design-intent-surrogate')
+      .then(r => r.json())
+      .then(j => (designIntentSurrogate = j ?? null))
+      .catch(() => (designIntentSurrogate = null))
+    projectFetch('/api/project/design-feedback')
+      .then(r => r.json())
+      .then(j => {
+        designFeedback = j?.feedback ?? null
+        loomaHook = j?.loomaHook ?? null
+      })
+      .catch(() => {
+        designFeedback = null
+        loomaHook = null
+      })
     void loadCodebaseMapStatus()
     projectFetch('/api/setup/providers')
       .then(r => (r.ok ? r.json() : null))
@@ -299,8 +506,123 @@
       .catch(() => (providerStatus = { configured: false }))
     void loadBootstrap()
     void loadLearning()
+    void loadReintakeStatus()
+    void loadMigrationStatus()
     void loadWorktreeIncludes()
+    void loadRuntimeSetup()
+    void loadCapabilityGrants()
   })
+
+  $effect(() => {
+    if (section === 'reintake') void loadReintakeDraft()
+  })
+
+  async function loadCapabilityGrants() {
+    try {
+      const r = await projectFetch('/api/project/capability-requests', { cache: 'no-store' })
+      const j = await r.json() as {
+        requests?: CapabilityRequest[]
+        activeGrants?: CapabilityGrant[]
+        error?: string
+      }
+      if (!r.ok || j.error) throw new Error(j.error ?? `HTTP ${r.status}`)
+      capabilityRequests = j.requests ?? []
+      activeCapabilityGrants = j.activeGrants ?? []
+      capabilityGrantError = null
+    } catch (err) {
+      capabilityGrantError = err instanceof Error ? err.message : String(err)
+      capabilityRequests = []
+      activeCapabilityGrants = []
+    }
+  }
+
+  async function revokeCapabilityGrant(grant: CapabilityGrant) {
+    const request = capabilityRequests.find(candidate => candidate.grant?.id === grant.id)
+    if (!request) return
+    capabilityGrantBusyId = grant.id
+    capabilityGrantError = null
+    try {
+      const r = await projectFetch(`/api/project/capability-requests/${encodeURIComponent(request.id)}/revoke`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ reason: 'Revoked from project settings.' }),
+      })
+      const j = await r.json().catch(() => ({})) as { error?: string }
+      if (!r.ok || j.error) throw new Error(j.error ?? `HTTP ${r.status}`)
+      await loadCapabilityGrants()
+    } catch (err) {
+      capabilityGrantError = err instanceof Error ? err.message : String(err)
+    } finally {
+      capabilityGrantBusyId = null
+    }
+  }
+
+  async function loadRuntimeSetup() {
+    try {
+      const r = await projectFetch('/api/project/runtime/setup', { cache: 'no-store' })
+      const j = await r.json() as RuntimeSetupReadout & { error?: string }
+      if (j.error) {
+        runtimeSetupError = j.error
+        return
+      }
+      runtimeSetup = {
+        ...j,
+        machine: j.machine ?? { exists: false, name: null, running: false },
+        actions: j.actions ?? [],
+      }
+      runtimeSetupError = null
+    } catch (err) {
+      runtimeSetupError = err instanceof Error ? err.message : String(err)
+    }
+  }
+
+  function runtimeStatusTone(status: RuntimeSetupStatus): 'ok' | 'warn' | 'neutral' {
+    if (status === 'ready') return 'ok'
+    if (status === 'unsupported-platform') return 'neutral'
+    return 'warn'
+  }
+
+  function runtimeStatusLabel(status: RuntimeSetupStatus): string {
+    switch (status) {
+      case 'ready': return 'ready'
+      case 'missing': return 'needs Podman'
+      case 'machine-not-created': return 'setup needed'
+      case 'machine-stopped': return 'stopped'
+      case 'unsupported-platform': return 'compatibility mode'
+      case 'unknown-error': return 'needs attention'
+    }
+  }
+
+  async function runRuntimeSetupAction(action: RuntimeSetupAction) {
+    if (action.id === 'install-instructions') {
+      const url = action.officialInstallerUrl ?? runtimeSetup?.installGuidance?.officialInstallerUrl
+      if (url) window.open(url, '_blank', 'noopener,noreferrer')
+      return
+    }
+
+    runtimeSetupBusy = action.id
+    runtimeSetupError = null
+    try {
+      const r = await projectFetch('/api/project/runtime/setup/action', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ action: action.id, approved: action.mutatesHost }),
+      })
+      const j = await r.json() as {
+        ok?: boolean
+        error?: string
+        status?: RuntimeSetupReadout
+      }
+      if (!r.ok || j.error) {
+        runtimeSetupError = j.error ?? `Runtime setup action failed with ${r.status}.`
+      }
+      if (j.status) runtimeSetup = j.status
+    } catch (err) {
+      runtimeSetupError = err instanceof Error ? err.message : String(err)
+    } finally {
+      runtimeSetupBusy = null
+    }
+  }
 
   async function loadBootstrap() {
     try {
@@ -408,6 +730,98 @@
       }
     } catch (err) {
       learningError = err instanceof Error ? err.message : String(err)
+    }
+  }
+
+  async function loadReintakeStatus() {
+    try {
+      const r = await projectFetch('/api/project/reintake/status', { cache: 'no-store' })
+      const j = await r.json().catch(() => null) as ReintakeStatus & { error?: string } | null
+      if (!r.ok || j?.error) throw new Error(j?.error ?? `HTTP ${r.status}`)
+      reintakeStatus = j
+      reintakeError = null
+    } catch (err) {
+      reintakeError = err instanceof Error ? err.message : String(err)
+    }
+  }
+
+  async function loadMigrationStatus() {
+    try {
+      const r = await projectFetch('/api/project/migrations', { cache: 'no-store' })
+      const j = await r.json().catch(() => null) as ProjectMigrationStatus & { error?: string } | null
+      if (!r.ok || j?.error) throw new Error(j?.error ?? `HTTP ${r.status}`)
+      migrationStatus = j
+      migrationStatusError = null
+    } catch (err) {
+      migrationStatusError = err instanceof Error ? err.message : String(err)
+      migrationStatus = null
+    }
+  }
+
+  async function loadReintakeDraft() {
+    try {
+      const r = await projectFetch('/api/project/reintake/draft', { cache: 'no-store' })
+      const j = await r.json().catch(() => null) as ReintakeDraft & { error?: string } | null
+      if (!r.ok || j?.error) {
+        const message = j?.error ?? `HTTP ${r.status}`
+        if (r.status === 404 && /no re-intake draft/i.test(message)) {
+          reintakeDraft = null
+          reintakeError = null
+          reintakeNoDraft = true
+          return
+        }
+        throw new Error(message)
+      }
+      reintakeDraft = j
+      reintakeError = null
+      reintakeNoDraft = false
+      reintakeApplied = j?.status === 'applied'
+    } catch (err) {
+      reintakeError = err instanceof Error ? err.message : String(err)
+      reintakeDraft = null
+      reintakeNoDraft = false
+    }
+  }
+
+  async function startReintake() {
+    reintakeBusy = 'rerun'
+    reintakeError = null
+    try {
+      const r = await projectFetch('/api/project/reintake/rerun', { method: 'POST' })
+      const j = await r.json().catch(() => null) as { draft?: ReintakeDraft; error?: string } | null
+      if (!r.ok || j?.error) throw new Error(j?.error ?? `HTTP ${r.status}`)
+      reintakeDraft = j?.draft ?? null
+      reintakeNoDraft = false
+      reintakeApplied = false
+      await loadReintakeStatus()
+    } catch (err) {
+      reintakeError = err instanceof Error ? err.message : String(err)
+    } finally {
+      reintakeBusy = null
+    }
+  }
+
+  async function applyReintakeSelected() {
+    const groupIds = reintakeDraft?.groups?.map(group => group.id) ?? []
+    reintakeBusy = 'apply'
+    reintakeError = null
+    try {
+      const r = await projectFetch('/api/project/reintake/apply', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ groupIds }),
+      })
+      const j = await r.json().catch(() => null) as { error?: string } | null
+      if (!r.ok || j?.error) throw new Error(j?.error ?? `HTTP ${r.status}`)
+      reintakeDraft = reintakeDraft
+        ? { ...reintakeDraft, status: 'applied', groups: [] }
+        : null
+      reintakeApplied = true
+      await loadReintakeStatus()
+    } catch (err) {
+      reintakeError = err instanceof Error ? err.message : String(err)
+    } finally {
+      reintakeBusy = null
     }
   }
 
@@ -628,6 +1042,27 @@
   const readinessCount = $derived(
     (bootstrapReady ? 1 : 0) + (coordinatorsReady ? 1 : 0) + (providerReady ? 1 : 0),
   )
+  const projectStartBlocker = $derived(
+    project.detail?.startReadiness?.canStart === false &&
+      project.detail.startReadiness.code !== 'all_terminal'
+      ? project.detail.startReadiness
+      : null,
+  )
+  const readinessPillLabel = $derived(projectStartBlocker ? 'Blocked' : `${readinessCount}/3 ready`)
+  const readinessPillTone = $derived(projectStartBlocker ? 'warn' : readinessCount === 3 ? 'ok' : 'warn')
+  const projectStartBlockerActionLabel = $derived(
+    projectStartBlocker?.code === 'required_migration_pending'
+      ? 'Migrate project'
+      : /question|answer/i.test(projectStartBlocker?.message ?? '')
+        ? 'Answer question'
+        : /spec/i.test(projectStartBlocker?.message ?? '')
+          ? 'Review spec'
+          : 'Review recovery',
+  )
+  const migrationCount = $derived((migrationStatus?.blocked?.length ?? 0) + (migrationStatus?.pending?.length ?? 0))
+  const hasSecondaryMigrations = $derived(
+    migrationCount > 0 && projectStartBlocker?.code !== 'required_migration_pending',
+  )
 
   function flashIdentity(text: string, error: boolean) {
     identityStatus = { text, error }
@@ -830,6 +1265,21 @@
         (designSystem.tokens?.shadow?.length ?? 0)
       : 0,
   )
+  const designTasteLayerCount = $derived(
+    designTaste?.layers
+      ? `${designTaste.layers.filter(layer => layer.applied).length} of ${designTaste.layers.length} layers`
+      : '—',
+  )
+  const designCatalogSummary = $derived(
+    designSystemCatalog
+      ? `${designSystemCatalog.previewAdapter ?? 'none'} · ${designSystemCatalog.entries?.length ?? 0} item${(designSystemCatalog.entries?.length ?? 0) === 1 ? '' : 's'}`
+      : '—',
+  )
+  const designIntentSummary = $derived(
+    designIntentSurrogate
+      ? `${designIntentSurrogate.platform ?? 'unknown'} · ${designIntentSurrogate.previewMode ?? 'none'}`
+      : '—',
+  )
   const projectLearnings = $derived(
     (learning?.project?.suggestedLearnings ?? [])
       .filter(item => item.scope === 'project' && item.destination !== 'product_suggestion'),
@@ -840,6 +1290,18 @@
   )
   const skillProposals = $derived(learning?.projectSkillProposals ?? [])
   const productSuggestions = $derived(learning?.effective?.productSuggestions ?? [])
+  const recentMemoryUse = $derived(project.detail?.memoryHealth?.recentUse ?? [])
+  const reintakeSummaryText = $derived.by(() => {
+    const summary = reintakeStatus?.summary ?? reintakeDraft?.summary
+    if (!summary) return 'No draft yet'
+    const parts = [
+      `${summary.reframed ?? 0} reframed`,
+      `${summary.created ?? 0} created`,
+      `${summary.archived ?? 0} archived`,
+    ]
+    return parts.join(', ')
+  })
+  const reintakeGroupCount = $derived(reintakeDraft?.groups?.length ?? 0)
   const projectContextRows = $derived.by(() => {
     const rows: Array<{ label: string; value: string; detail: string; href?: string }> = []
     const context = learning?.projectContext
@@ -965,7 +1427,7 @@
 {:else if !initialized}
   <NoticeBand tone="warn" role="note" label="Settings" title="Project not initialized yet">
     {#snippet actions()}
-      <Button variant="primary" onclick={() => nav('/setup')}>Open setup wizard</Button>
+      <Button variant="primary" onclick={() => nav(currentProjectHref('/setup'))}>Open setup wizard</Button>
     {/snippet}
     <p>Complete the setup wizard first.</p>
   </NoticeBand>
@@ -1012,12 +1474,39 @@
       >
         {#snippet meta()}
           <StatusPill
-            label={`${readinessCount}/3 ready`}
-            tone={readinessCount === 3 ? 'ok' : 'warn'}
+            label={readinessPillLabel}
+            tone={readinessPillTone}
             emphasis="default"
           />
         {/snippet}
       </SectionHeader>
+
+      {#if projectStartBlocker}
+        <NoticeBand tone="warn" icon="alert-triangle" density="compact">
+          <strong>{projectStartBlocker.message ?? 'Resolve the project blocker before starting Guildhall.'}</strong>
+          {#snippet actions()}
+            {#if projectStartBlocker.code === 'required_migration_pending'}
+              <Button variant="secondary" size="sm" onclick={() => { void onMigrate?.() }}>{projectStartBlockerActionLabel}</Button>
+            {:else if projectStartBlocker.actionHref}
+              <a href={projectActionHref(projectStartBlocker.actionHref)} onclick={(e) => { e.preventDefault(); nav(projectActionHref(projectStartBlocker.actionHref)) }}>{projectStartBlockerActionLabel}</a>
+            {/if}
+          {/snippet}
+        </NoticeBand>
+      {/if}
+      {#if hasSecondaryMigrations}
+        <NoticeBand tone="neutral" icon="refresh-cw" density="compact">
+          <strong>
+            {migrationCount} pending Guildhall migration{migrationCount === 1 ? '' : 's'} will need review after the current blocker.
+          </strong>
+          {#snippet actions()}
+            <Button variant="secondary" size="sm" onclick={() => { void onMigrate?.() }}>Review migrations</Button>
+          {/snippet}
+        </NoticeBand>
+      {:else if migrationStatusError}
+        <NoticeBand tone="warn" icon="alert-triangle" density="compact">
+          <strong>Could not check project migrations: {migrationStatusError}</strong>
+        </NoticeBand>
+      {/if}
 
       <FrameCard class="readiness-card" density="compact">
         <ul class="checklist">
@@ -1079,6 +1568,130 @@
             </div>
           </li>
         </ul>
+      </FrameCard>
+
+      <FrameCard class="runtime-setup-card" density="compact">
+        {#snippet header()}
+          <SectionHeader
+            title="Local runtime"
+            description="Guildhall can run project work in a Podman-backed Debian runtime on macOS. Until that is ready, host-run compatibility stays available."
+            headingTag="h3"
+            density="dense"
+          >
+            {#snippet meta()}
+              {#if runtimeSetup}
+                <StatusPill
+                  label={runtimeStatusLabel(runtimeSetup.status)}
+                  tone={runtimeStatusTone(runtimeSetup.status)}
+                />
+              {/if}
+            {/snippet}
+          </SectionHeader>
+        {/snippet}
+
+        {#if runtimeSetup}
+          <Stack gap="3">
+            <p class="runtime-message">{runtimeSetup.message}</p>
+            <dl class="runtime-facts" aria-label="Local runtime setup facts">
+              <div>
+                <dt>Host</dt>
+                <dd>{runtimeSetup.platform === 'darwin' ? 'macOS' : runtimeSetup.platform}</dd>
+              </div>
+              <div>
+                <dt>Podman</dt>
+                <dd>{runtimeSetup.podmanVersion ?? (runtimeSetup.podmanPath ? 'installed' : 'not installed')}</dd>
+              </div>
+              <div>
+                <dt>Service</dt>
+                <dd>{runtimeSetup.machine.exists ? `${runtimeSetup.machine.name ?? 'default'} ${runtimeSetup.machine.running ? 'running' : 'stopped'}` : 'not created'}</dd>
+              </div>
+            </dl>
+            {#if runtimeSetup.status === 'missing'}
+              <NoticeBand tone="neutral" role="note" label="Install" title="Podman is a separate Mac runtime" density="compact">
+                <p>
+                  Guildhall does not install Podman during package install. Use the official macOS installer,
+                  or Homebrew if it is already on this Mac, then come back here and retry.
+                </p>
+                {#if runtimeSetup.homebrewPath}
+                  <p>Homebrew is available at <code>{runtimeSetup.homebrewPath}</code>; the matching install command is <code>{runtimeSetup.installGuidance?.homebrew}</code>.</p>
+                {:else}
+                  <p>Homebrew was not detected, so the official Podman macOS installer is the guided path.</p>
+                {/if}
+              </NoticeBand>
+            {/if}
+            <div class="runtime-actions">
+              {#each runtimeSetup.actions as action (action.id)}
+                <Button
+                  variant={action.id === 'use-host-run-compatibility' ? 'ghost' : action.mutatesHost ? 'agent' : 'secondary'}
+                  size="sm"
+                  disabled={runtimeSetupBusy !== null}
+                  onclick={() => runRuntimeSetupAction(action)}
+                >
+                  {#if runtimeSetupBusy === action.id}
+                    Working…
+                  {:else}
+                    {action.label}
+                  {/if}
+                </Button>
+              {/each}
+            </div>
+            <p class="runtime-compatibility">{runtimeSetup.compatibilityModeLabel} keeps existing host execution available when setup is skipped or fails.</p>
+          </Stack>
+        {:else}
+          <p class="muted">Checking local runtime setup…</p>
+        {/if}
+        {#if runtimeSetupError}
+          <p class="row-error">{runtimeSetupError}</p>
+        {/if}
+      </FrameCard>
+
+      <FrameCard class="capability-grants-card" density="compact">
+        {#snippet header()}
+          <SectionHeader
+            title="Extra folder access"
+            description="Approved mounts are narrow, visible, and revocable from the project."
+            headingTag="h3"
+            density="dense"
+          >
+            {#snippet meta()}
+              <StatusPill
+                label={activeCapabilityGrants.length === 1 ? '1 active grant' : `${activeCapabilityGrants.length} active grants`}
+                tone={activeCapabilityGrants.length > 0 ? 'warn' : 'ok'}
+              />
+            {/snippet}
+          </SectionHeader>
+        {/snippet}
+
+        {#if activeCapabilityGrants.length > 0}
+          <Stack gap="3">
+            {#each activeCapabilityGrants as grant (grant.id)}
+              <div class="grant-row">
+                <div class="grant-copy">
+                  <Row gap="2" align="center" wrap>
+                    <strong>{grant.hostPath}</strong>
+                    <StatusPill label={grant.access} tone={grant.access === 'read-only' ? 'ok' : 'warn'} />
+                    <StatusPill label={grant.duration} tone="neutral" />
+                  </Row>
+                  <p>{grant.containerPath}</p>
+                  <p>{grant.evidence}</p>
+                </div>
+                <Button
+                  variant="secondary"
+                  size="sm"
+                  disabled={capabilityGrantBusyId === grant.id}
+                  onclick={() => revokeCapabilityGrant(grant)}
+                >
+                  {capabilityGrantBusyId === grant.id ? 'Revoking…' : 'Revoke'}
+                </Button>
+              </div>
+            {/each}
+          </Stack>
+        {:else}
+          <p class="muted">No extra host folders are mounted for this project.</p>
+        {/if}
+        {#if capabilityGrantError}
+          <p class="row-error">{capabilityGrantError}</p>
+        {/if}
       </FrameCard>
 
       {#if hasWorkspaceChildProjects}
@@ -1219,8 +1832,8 @@
     {:else if section === 'learning'}
       <SectionHeader
         eyebrow="Settings"
-        title="Reusable guidance"
-        description="Project facts and decisions are already saved. This page is for reusable habits, preferences, and playbooks Guildhall should apply again."
+        title="Memory controls"
+        description="See what Guildhall knows, what it wants to reuse, and where that memory recently entered agent context."
         headingTag="h2"
         density="compact"
       >
@@ -1239,6 +1852,34 @@
           <p>Reading project and user learning records…</p>
         </NoticeBand>
       {:else}
+        <FrameCard class="learning-card learning-card-wide context-card">
+          {#snippet header()}
+            <SectionHeader
+              title="Re-intake Project"
+              description="Re-read this project with the current Guildhall reasoning model and propose a cleaner task graph. Existing tasks and progress are used as evidence, not treated as final."
+              headingTag="h3"
+              density="dense"
+            >
+              {#snippet meta()}
+                <StatusPill label={reintakeStatus?.status === 'draft' ? 'Draft ready' : reintakeStatus?.status === 'applied' ? 'Applied' : 'Not started'} tone={reintakeStatus?.status === 'draft' ? 'warn' : reintakeStatus?.status === 'applied' ? 'ok' : 'neutral'} density="dense" />
+              {/snippet}
+            </SectionHeader>
+          {/snippet}
+          <Row justify="between" align="center" gap="3" wrap>
+            <p class="muted">{reintakeSummaryText}</p>
+            <Row gap="2" justify="end" wrap>
+              {#if reintakeStatus?.draftExists}
+                <Button size="sm" variant="secondary" onclick={() => nav(projectActionHref('/settings/reintake'))}>Review draft</Button>
+              {/if}
+              <Button size="sm" variant="agent" disabled={reintakeBusy !== null} onclick={startReintake}>
+                {reintakeBusy === 'rerun' ? 'Starting...' : reintakeStatus?.draftExists ? 'Refresh draft' : 'Start re-intake'}
+              </Button>
+            </Row>
+          </Row>
+          {#if reintakeError}
+            <p class="form-error">{reintakeError}</p>
+          {/if}
+        </FrameCard>
         <FrameCard class="learning-card learning-card-wide context-card">
           {#snippet header()}
             <SectionHeader
@@ -1265,6 +1906,34 @@
                     {#if row.href}
                       <a class="learning-evidence-link" href={projectActionHref(row.href)}>Open</a>
                     {/if}
+                  </div>
+                </div>
+              {/each}
+            </div>
+          {/if}
+        </FrameCard>
+        <FrameCard class="learning-card learning-card-wide context-card">
+          {#snippet header()}
+            <SectionHeader
+              title="Recent memory use"
+              description="The latest task contexts that included or withheld saved memory."
+              headingTag="h3"
+              density="dense"
+            />
+          {/snippet}
+          {#if recentMemoryUse.length === 0}
+            <p class="muted">No recent memory packet use has been recorded yet.</p>
+          {:else}
+            <div class="context-memory-list">
+              {#each recentMemoryUse as use (`${use.taskId}:${use.at}`)}
+                <div class="context-memory-row">
+                  <div>
+                    <strong>{use.taskId}</strong>
+                    <span>{use.at}</span>
+                  </div>
+                  <div class="context-memory-meta">
+                    <StatusPill label={`${use.included ?? 0} included`} tone={(use.included ?? 0) > 0 ? 'ok' : 'neutral'} density="dense" />
+                    <StatusPill label={`${use.withheld ?? 0} withheld`} tone={(use.withheld ?? 0) > 0 ? 'warn' : 'neutral'} density="dense" />
                   </div>
                 </div>
               {/each}
@@ -1473,6 +2142,105 @@
               </div>
             {/if}
           </FrameCard>
+        </div>
+      {/if}
+    {:else if section === 'reintake'}
+      <SectionHeader
+        eyebrow="Settings"
+        title={reintakeNoDraft ? 'Start re-intake' : reintakeApplied ? 'Re-intake applied' : 'Review re-intake draft'}
+        description={reintakeNoDraft ? 'Refresh the project from current evidence before changing tasks.' : reintakeApplied ? 'The selected project task-graph cleanup was applied.' : 'Review the proposed project task-graph cleanup before applying anything.'}
+        headingTag="h2"
+        density="compact"
+      >
+        {#snippet meta()}
+          <StatusPill
+            label={reintakeNoDraft ? 'not started' : reintakeApplied ? 'applied' : reintakeDraft?.status ?? reintakeStatus?.status ?? 'draft'}
+            tone={reintakeApplied ? 'ok' : reintakeNoDraft ? 'neutral' : 'warn'}
+          />
+        {/snippet}
+      </SectionHeader>
+
+      {#if reintakeError}
+        <NoticeBand tone="danger" role="alert" label="Re-intake" title="Could not load re-intake draft" density="compact">
+          <p>{reintakeError}</p>
+        </NoticeBand>
+      {:else if reintakeNoDraft}
+        <FrameCard class="learning-card learning-card-wide context-card">
+          {#snippet header()}
+            <SectionHeader
+              title="No draft yet"
+              description="Start re-intake to compare current project evidence with the task graph."
+              headingTag="h3"
+              density="dense"
+            />
+          {/snippet}
+          <Row justify="end" gap="2">
+            <Button size="sm" variant="agent" disabled={reintakeBusy !== null} onclick={startReintake}>
+              {reintakeBusy === 'rerun' ? 'Starting...' : 'Start re-intake'}
+            </Button>
+          </Row>
+        </FrameCard>
+      {:else if !reintakeDraft}
+        <NoticeBand tone="neutral" role="status" label="Re-intake" title="Loading draft" density="compact">
+          <p>Reading the latest re-intake draft…</p>
+        </NoticeBand>
+      {:else}
+        <FrameCard class="learning-card learning-card-wide context-card">
+          {#snippet header()}
+            <SectionHeader
+              title="Draft summary"
+              description={reintakeSummaryText}
+              headingTag="h3"
+              density="dense"
+            />
+          {/snippet}
+          {#if reintakeApplied}
+            <NoticeBand tone="success" role="status" label="Re-intake" title="Re-intake applied" density="compact">
+              <p>The selected cleanup groups were applied. Start another re-intake if the project evidence changed again.</p>
+            </NoticeBand>
+          {:else if reintakeGroupCount === 0}
+            <NoticeBand tone="neutral" role="status" label="Re-intake" title="No changes proposed" density="compact">
+              <p>Guildhall did not find task-graph changes to apply from the current evidence.</p>
+            </NoticeBand>
+            <Row justify="end" gap="2">
+              <Button size="sm" variant="secondary" disabled={reintakeBusy !== null} onclick={startReintake}>
+                {reintakeBusy === 'rerun' ? 'Refreshing...' : 'Refresh draft'}
+              </Button>
+            </Row>
+          {:else}
+            <Row justify="end" gap="2">
+              <Button size="sm" variant="agent" disabled={reintakeBusy !== null} onclick={applyReintakeSelected}>
+                {reintakeBusy === 'apply' ? 'Applying...' : 'Apply selected'}
+              </Button>
+            </Row>
+          {/if}
+        </FrameCard>
+        <div class="context-memory-list">
+          {#each reintakeDraft.groups ?? [] as group (group.id)}
+            <FrameCard class="learning-card learning-card-wide context-card">
+              {#snippet header()}
+                <SectionHeader
+                  title={group.title}
+                  description={group.rationale ?? ''}
+                  headingTag="h3"
+                  density="dense"
+                />
+              {/snippet}
+              <div class="context-memory-list">
+                {#each group.changes ?? [] as change, index (`${group.id}-${index}`)}
+                  <div class="context-memory-row">
+                    <div>
+                      <strong>{change.kind}</strong>
+                      <span>{change.after?.title ?? change.task?.title ?? change.before?.title ?? change.taskId ?? change.reason}</span>
+                    </div>
+                    <div class="context-memory-meta">
+                      <StatusPill label={change.kind ?? 'change'} tone="neutral" density="dense" />
+                    </div>
+                  </div>
+                {/each}
+              </div>
+            </FrameCard>
+          {/each}
         </div>
       {/if}
     {:else if section === 'advanced'}
@@ -1949,6 +2717,107 @@
                 </Row>
               {/if}
             {/if}
+
+            {#if designSystemProfile}
+              <div class="map-section">
+                <strong>Design System Profile</strong>
+              </div>
+              <div class="ds-facts">
+                <div><span class="muted">Foundation</span><strong>{designSystemProfile.primarySystem ?? 'portable'}</strong></div>
+                <div><span class="muted">Preview</span><strong>{designSystemProfile.preview?.adapter ?? 'none'}</strong></div>
+                <div><span class="muted">Libraries</span><strong>{designSystemProfile.libraries?.length ?? 0}</strong></div>
+                <div><span class="muted">Token files</span><strong>{designSystemProfile.tokenFiles?.length ?? 0}</strong></div>
+              </div>
+
+              {#if designSystemProfile.recommendations?.length}
+                <ul class="map-recommendations">
+                  {#each designSystemProfile.recommendations.slice(0, 3) as recommendation, i (`design-system-profile-${i}`)}
+                    <li>{recommendation}</li>
+                  {/each}
+                </ul>
+              {/if}
+            {/if}
+
+            {#if designTaste}
+              <div class="map-section">
+                <strong>Taste memory</strong>
+                <div class="ds-facts">
+                  <div><span class="muted">Direction</span><strong>{designTaste.taste?.opinions?.visualDirection?.default ?? '—'}</strong></div>
+                  <div><span class="muted">Controls</span><strong>{designTaste.taste?.opinions?.interactionSemantics?.mutuallyExclusiveModes ?? '—'}</strong></div>
+                  <div><span class="muted">Palette</span><strong>{designTaste.taste?.opinions?.paletteStrategy?.defaultMode ?? '—'}</strong></div>
+                  <div><span class="muted">Layers</span><strong>{designTasteLayerCount}</strong></div>
+                </div>
+                {#if designTaste.summary}
+                  <p class="muted">{designTaste.summary}</p>
+                {/if}
+              </div>
+            {/if}
+
+            {#if designSystemCatalog}
+              <div class="ds-facts">
+                <div><span class="muted">Catalog</span><strong>{designCatalogSummary}</strong></div>
+                <div><span class="muted">Interactable</span><strong>{designSystemCatalog.interactable ? 'yes' : 'no'}</strong></div>
+              </div>
+              {#if designSystemCatalog.recommendations?.length}
+                <ul class="map-recommendations">
+                  {#each designSystemCatalog.recommendations.slice(0, 2) as recommendation, i (`catalog-rec-${i}`)}
+                    <li>{recommendation}</li>
+                  {/each}
+                </ul>
+              {/if}
+            {/if}
+
+            {#if designIntentSurrogate}
+              <div class="ds-facts">
+                <div><span class="muted">Intent preview</span><strong>{designIntentSummary}</strong></div>
+                <div><span class="muted">Native proof</span><strong>{designIntentSurrogate.nativeProofRequired ? 'required' : 'not required'}</strong></div>
+              </div>
+              {#if designIntentSurrogate.warning}
+                <NoticeBand
+                  tone={designIntentSurrogate.approximate ? 'warn' : 'neutral'}
+                  role="note"
+                  label="Design proof"
+                  title={designIntentSurrogate.approximate ? 'Approximate preview' : 'Preview ready'}
+                  density="compact"
+                >
+                  <p>{designIntentSurrogate.warning}</p>
+                </NoticeBand>
+              {/if}
+            {/if}
+
+            {#if designFeedback}
+              <div class="ds-facts">
+                <div><span class="muted">Design findings</span><strong>{designFeedback.findings?.length ?? 0}</strong></div>
+                <div><span class="muted">Project decisions</span><strong>{designFeedback.decisions?.length ?? 0}</strong></div>
+                <div><span class="muted">Owner feedback</span><strong>{designFeedback.ownerFeedback?.length ?? 0}</strong></div>
+                <div><span class="muted">Decision packets</span><strong>{designFeedback.decisionPackets?.length ?? 0}</strong></div>
+                <div><span class="muted">Reusable candidates</span><strong>{designFeedback.candidates?.length ?? 0}</strong></div>
+                <div><span class="muted">Looma follow-ups</span><strong>{designFeedback.loomaImprovements?.length ?? 0}</strong></div>
+              </div>
+
+              {#if designFeedback.candidates?.length}
+                <ul class="ds-prims">
+                  {#each designFeedback.candidates.slice(0, 3) as candidate, i (`candidate-${i}`)}
+                    <li>
+                      <strong>{candidate.targetDesignSystem ?? 'portable'} follow-up</strong>
+                      <span class="muted">{candidate.summary ?? 'Reusable design-system candidate queued.'}</span>
+                    </li>
+                  {/each}
+                </ul>
+              {/if}
+            {/if}
+
+            {#if loomaHook}
+              <NoticeBand
+                tone={loomaHook.status === 'active' ? 'ok' : 'neutral'}
+                role="note"
+                label="Looma development"
+                title={loomaHook.status === 'active' ? 'Local hook active' : 'Local hook inactive'}
+                density="compact"
+              >
+                <p>{loomaHook.status === 'active' ? `Queued follow-ups can target ${loomaHook.path ?? 'the configured Looma checkout'}.` : loomaHook.reason ?? 'No local Looma checkout is configured for this machine.'}</p>
+              </NoticeBand>
+            {/if}
           </Stack>
         </FrameCard>
       </div>
@@ -2074,6 +2943,86 @@
 
   .row-error {
     font-size: var(--fs-1);
+  }
+
+  :global(.runtime-setup-card) {
+    margin-block-start: var(--gh-space-4);
+  }
+
+  :global(.capability-grants-card) {
+    margin-block-start: var(--gh-space-4);
+  }
+
+  .runtime-message,
+  .runtime-compatibility {
+    color: var(--text-muted);
+    font-size: var(--fs-2);
+    line-height: var(--lh-body);
+    margin: 0;
+  }
+
+  .runtime-facts {
+    display: grid;
+    gap: var(--gh-space-2);
+    grid-template-columns: repeat(auto-fit, minmax(11rem, 1fr));
+    margin: 0;
+  }
+
+  .runtime-facts div {
+    display: grid;
+    gap: var(--gh-space-1);
+    padding: var(--gh-space-3);
+    border: 1px solid var(--border);
+    border-radius: var(--r-1);
+    background: var(--bg);
+    min-inline-size: 0;
+  }
+
+  .runtime-facts dt {
+    color: var(--text-muted);
+    font-size: var(--fs-1);
+    font-weight: 700;
+    line-height: var(--lh-tight);
+    text-transform: uppercase;
+  }
+
+  .runtime-facts dd {
+    color: var(--text);
+    font-size: var(--fs-2);
+    line-height: var(--lh-body);
+    margin: 0;
+    overflow-wrap: anywhere;
+  }
+
+  .runtime-actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: var(--gh-space-2);
+  }
+
+  .grant-row {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    gap: var(--gh-space-3);
+    align-items: start;
+    padding: var(--gh-space-3);
+    border: 1px solid var(--border);
+    border-radius: var(--r-1);
+    background: var(--bg);
+  }
+
+  .grant-copy {
+    display: grid;
+    gap: var(--gh-space-1);
+    min-inline-size: 0;
+  }
+
+  .grant-copy p {
+    margin: 0;
+    color: var(--text-muted);
+    font-size: var(--fs-1);
+    line-height: var(--lh-body);
+    overflow-wrap: anywhere;
   }
 
   .coord-list {
@@ -2563,6 +3512,12 @@
       grid-template-columns: repeat(2, minmax(0, 1fr));
     }
 
+  }
+
+  @container (max-width: 42rem) {
+    .grant-row {
+      grid-template-columns: 1fr;
+    }
   }
 
   @container (min-width: 84rem) {

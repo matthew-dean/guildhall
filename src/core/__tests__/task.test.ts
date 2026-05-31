@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { Task, TaskQueue, TaskStatus, TaskPriority, AcceptanceCriteria } from '../task.js'
+import { AcceptanceCriteria, Task, TaskQueue, TaskStatus } from '../task.js'
 
 describe('TaskStatus', () => {
   it('accepts all valid statuses', () => {
@@ -104,6 +104,56 @@ describe('Task', () => {
     expect(result.shelveReason?.source).toBeUndefined()
     expect(result.shelveReason?.policyApplied).toBeUndefined()
     expect(result.shelveReason?.requeueCount).toBeUndefined()
+  })
+
+  it('defaults pressure-test summary on legacy request intake records', () => {
+    const result = Task.parse({
+      ...validTask,
+      requestIntake: {
+        intent: 'implementation',
+        recommendedNextAction: 'proceed_to_implementation_spec',
+        componentStack: [],
+        clarifyingQuestions: [],
+        createdAt: new Date().toISOString(),
+        createdBy: 'request-intake',
+      },
+    })
+
+    expect(result.requestIntake?.pressureTestSummary).toMatchObject({
+      systemOwned: true,
+      degree: 'automatic',
+    })
+    expect(result.requestIntake?.pressureTestSummary.checks.map(check => check.id)).toContain('verification')
+  })
+
+  it('accepts a review-risk profile for calibrated review routing', () => {
+    const result = Task.parse({
+      ...validTask,
+      status: 'ready',
+      reviewRisk: {
+        lanes: ['ux_comprehension', 'copy_clarity'],
+        recipes: [{
+          recipeId: 'product-ux-zero-context',
+          version: 'v1',
+          required: true,
+          releaseBlocking: true,
+          lanes: ['ux_comprehension', 'copy_clarity'],
+          requiredArtifacts: ['visual-evidence'],
+          reason: 'The task changes a user-facing first-run flow.',
+        }],
+        requiredArtifacts: ['implementation-summary', 'verification-evidence', 'visual-evidence'],
+        artifactPolicy: 'required_before_review',
+        assessedAt: '2026-05-25T12:00:00.000Z',
+        assessedBy: 'coordinator-review-planner',
+      },
+    })
+
+    expect(result.reviewRisk?.lanes).toEqual(['ux_comprehension', 'copy_clarity'])
+    expect(result.reviewRisk?.recipes[0]).toMatchObject({
+      recipeId: 'product-ux-zero-context',
+      releaseBlocking: true,
+    })
+    expect(result.reviewRisk?.artifactPolicy).toBe('required_before_review')
   })
 })
 

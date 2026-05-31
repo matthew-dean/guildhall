@@ -222,6 +222,17 @@ export function buildProjectTicker(
     }
   }
 
+  if (detail?.startReadiness?.code === 'required_migration_pending') {
+    return {
+      tone: 'warn',
+      pulse: false,
+      actorLabel: 'Needs migration',
+      label: 'Needs migration',
+      message: detail.startReadiness.message || 'Run the required Guildhall migration before starting this project.',
+      timeLabel: null,
+    }
+  }
+
   if (detail?.run?.status === 'error') {
     return {
       tone: 'danger',
@@ -336,6 +347,22 @@ export function buildProjectCardTicker(project: ServiceProjectSummary): ProjectA
   const counts = project.taskCounts ?? { total: 0, active: 0, draftReview: 0, blocked: 0, done: 0, shelved: 0 }
   if (project.initializationNeeded) {
     return { tone: 'warn', pulse: false, label: 'Setup', message: 'First-time Guildhall setup' }
+  }
+  if (project.startReadiness?.code === 'required_migration_pending') {
+    return {
+      tone: 'warn',
+      pulse: false,
+      label: 'Needs migration',
+      message: project.startReadiness.message ?? 'Run the required Guildhall migration before starting this project.',
+    }
+  }
+  if (project.startReadiness?.code === 'owner_input_required') {
+    return {
+      tone: 'warn',
+      pulse: false,
+      label: 'Needs you',
+      message: project.startReadiness.message ?? 'Guildhall is waiting on your input.',
+    }
   }
   if (project.run?.status === 'running') {
     return {

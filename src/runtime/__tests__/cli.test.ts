@@ -192,7 +192,8 @@ describe('CLI service lifecycle helpers', () => {
 
     expect(launchRouteForProject(null)).toBe('/projects')
     expect(launchRouteForProject(initialized)).toBe('/project')
-    expect(launchRouteForProject(uninitialized)).toBe('/setup')
+    const uninitializedId = uninitialized.split('/').pop()?.toLowerCase() ?? 'project'
+    expect(launchRouteForProject(uninitialized)).toBe(`/projects/${uninitializedId}/setup`)
   })
 })
 
@@ -268,6 +269,7 @@ describe('Guildhall CLI surface', () => {
       'unregister',
       'list',
       'run',
+      'task',
       'serve',
       'start',
       'stop',
@@ -278,6 +280,7 @@ describe('Guildhall CLI surface', () => {
       'migrate',
       'review-calibration',
       'model-bakeoff',
+      'benchmarks',
       'mcp',
       'bridge',
     ])
@@ -295,6 +298,7 @@ describe('Guildhall CLI surface', () => {
     expect(help).not.toContain('guildhall resume')
     expect(help).not.toContain('guildhall meta-intake')
     expect(help).not.toContain('guildhall approve-meta-intake')
+    expect(help).toContain('guildhall task run-once')
     expect(help).toContain('guildhall memory migrate-0.8.0')
     expect(help).toContain('guildhall migrate status')
     expect(help).toContain('guildhall migrate plan')

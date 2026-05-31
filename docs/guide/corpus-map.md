@@ -14,13 +14,15 @@ exists somewhere else.
 
 ## What it stores
 
-Guildhall writes the shared map under `./.guildhall/` and keeps bulky refresh
-history local:
+Guildhall writes the generated map under `./.guildhall/`, but the map itself is
+local runtime state. It can contain this checkout's absolute project root,
+fingerprints, and deterministic scan output, so Guildhall ignores it in Git and
+recreates it when needed. Human-authored overrides stay trackable.
 
 | File | Purpose |
 |---|---|
-| `./.guildhall/codebase-map.yaml` | Current compact map. |
-| `~/.guildhall/data/projects/<project-hash>/codebase-map/codebase-map.full.yaml` | Full local map snapshot when the committed map is compacted. |
+| `./.guildhall/codebase-map.yaml` | Current compact map, generated locally and ignored by Git. |
+| `~/.guildhall/data/projects/<project-hash>/codebase-map/codebase-map.full.yaml` | Full local map snapshot when the generated map is compacted. |
 | `~/.guildhall/data/projects/<project-hash>/codebase-map.history.jsonl` | Refresh history and why each refresh ran. |
 | `~/.guildhall/data/projects/<project-hash>/codebase-map.stale.json` | Last refresh failure, if the map could not be rebuilt. |
 | `./.guildhall/codebase-map.overrides.yaml` | Human or learned corrections layered over automatic discovery. |
@@ -207,6 +209,13 @@ Guildhall records:
 - whether the design system has been approved
 - a maturity rating: `absent`, `thin`, `emerging`, or `established`
 - recommendations for reuse or just-in-time systemization
+
+Guildhall also builds a **Design System Profile** for UI-heavy projects. The
+profile is the design-system companion to the Corpus Map: it summarizes the
+detected UI libraries, preview/catalog surface, token and component files,
+drafted Guildhall design-system state, proof expectations, and recommendations
+that point work toward reuse, small system extensions, or clearer guidance
+before local styles pile up.
 
 This helps agents avoid the pattern where every screen invents its own button,
 card, badge, spacing, or color treatment. It also keeps the system from

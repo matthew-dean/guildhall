@@ -50,8 +50,8 @@
     needsRecovery as taskNeedsRecovery,
   } from '../../lib/task-state.js'
   import { project } from '../../lib/project.svelte.js'
-  import type { GitStorySnapshot } from '../../lib/types.js'
-  import { toast } from 'svelte-sonner'
+  import type { GitStorySnapshot, ProjectRuntimeSummary } from '../../lib/types.js'
+  import { toast } from '../../lib/toast.svelte.js'
 
   interface Props {
     projectId?: string | null
@@ -67,6 +67,46 @@
   type ThreadView = 'current' | 'archive'
   type ConstructionMode = 'survey' | 'blueprint' | 'frame' | 'build' | 'inspect' | 'change_order' | 'punch_list'
   type SetupAffordance = 'link' | 'inline-text' | 'inline-textarea' | 'inline-button' | 'inline-choice'
+  type RuntimeDevServerStatus = 'starting' | 'running' | 'stopped' | 'failed' | 'stale'
+  interface RuntimeDevServer {
+    id: string
+    taskId?: string
+    status: RuntimeDevServerStatus
+    readiness: 'unknown' | 'ready' | 'failed'
+    command: { cwd: string; argv: string[] }
+    ports: Array<{ container: number; host: number; purpose: string }>
+    url: string
+    readinessPath: string
+    browserProof: { url: string; ok: boolean; status: number | null; error: string | null } | null
+    logs: string[]
+    error: string | null
+  }
+  type CapabilityAccess = 'read-only' | 'read-write'
+  interface CapabilityMount {
+    hostPath: string
+    containerPath: string
+    access: CapabilityAccess
+  }
+  interface CapabilityGrant extends CapabilityMount {
+    id: string
+    kind: 'mount_directory'
+    duration: string
+    status: 'active' | 'revoked'
+    evidence: string
+  }
+  interface CapabilityRequest {
+    id: string
+    taskId: string
+    kind: 'mount_directory'
+    requestedBy: string
+    reason: string
+    duration: string
+    fallback?: string
+    mount: CapabilityMount
+    status: 'pending' | 'approved' | 'denied' | 'blocked' | 'revoked'
+    blockedReason?: string
+    grant?: CapabilityGrant
+  }
   interface LiveAgent {
     name: string
     startedAt?: string | undefined
@@ -208,6 +248,7 @@
       id: string
       prompt: string
       why: string
+      choices?: string[]
       evidence: string[]
     }
     answerEndpoint: string
@@ -242,6 +283,15 @@
   let contextErrors = $state<Record<string, string>>({})
   let pressureTestAnswers = $state<Record<string, string>>({})
   let pressureTestErrors = $state<Record<string, string>>({})
+  let devServers = $state<RuntimeDevServer[]>([])
+  let threadRuntime = $state<ProjectRuntimeSummary | null>(null)
+  let devServerBusyId = $state<string | null>(null)
+  let capabilityRequests = $state<CapabilityRequest[]>([])
+  let capabilityBusyId = $state<string | null>(null)
+  let capabilityPathDrafts = $state<Record<string, string>>({})
+  let capabilityFallbackDrafts = $state<Record<string, string>>({})
+  let capabilityBlockDrafts = $state<Record<string, string>>({})
+  const pendingCapabilityRequests = $derived(capabilityRequests.filter(request => request.status === 'pending'))
   let briefFixTurnId = $state<string | null>(null)
   let briefFixDrafts = $state<Record<string, { successTarget: string; acceptanceCriterion: string }>>({})
   let briefFixErrors = $state<Record<string, string>>({})
@@ -263,6 +313,7 @@
   let runError = $state<string | null>(null)
   const startReadiness = $derived(project.detail?.startReadiness ?? null)
   const runStatus = $derived(project.detail?.run?.status ?? 'stopped')
+  const projectRuntime = $derived((threadRuntime ?? project.detail?.runtime ?? null) as ProjectRuntimeSummary | null)
   const allTerminalReadinessMessage = $derived(
     startReadiness?.code === 'all_terminal'
       ? startReadiness?.message ?? 'All tasks are already finished.'
@@ -375,6 +426,9 @@
       if (!r.ok) throw new Error(`HTTP ${r.status}`)
       const j = (await r.json()) as { turns?: Turn[]; activeTurnId?: string | null; caughtUp?: boolean }
       turns = j.turns ?? []
+      await loadRuntimeStatus()
+      await loadDevServers()
+      await loadCapabilityRequests()
       activeTurnId = j.activeTurnId ?? null
       caughtUp = !!j.caughtUp
       const nextSentReplies = { ...sentReplies }
@@ -407,11 +461,176 @@
     } catch (err) {
       loadError = err instanceof Error ? err.message : String(err)
       turns = []
+      devServers = []
+      threadRuntime = null
+      capabilityRequests = []
       activeTurnId = null
       caughtUp = false
     } finally {
       loaded = true
     }
+  }
+
+  async function loadDevServers(): Promise<void> {
+    try {
+      const r = await scopedProjectFetch('/api/project/runtime/dev-servers', { cache: 'no-store' })
+      if (!r.ok) return
+      const j = (await r.json()) as { devServers?: RuntimeDevServer[] }
+      devServers = j.devServers ?? []
+    } catch {
+      devServers = []
+    }
+  }
+
+  async function loadRuntimeStatus(): Promise<void> {
+    try {
+      const r = await scopedProjectFetch('/api/project/runtime', { cache: 'no-store' })
+      if (!r.ok) return
+      threadRuntime = await r.json().catch(() => null) as ProjectRuntimeSummary | null
+    } catch {
+      threadRuntime = null
+    }
+  }
+
+  async function loadCapabilityRequests(): Promise<void> {
+    try {
+      const r = await scopedProjectFetch('/api/project/capability-requests', { cache: 'no-store' })
+      if (!r.ok) return
+      const j = (await r.json()) as { requests?: CapabilityRequest[] }
+      capabilityRequests = j.requests ?? []
+      const nextPaths = { ...capabilityPathDrafts }
+      const nextFallbacks = { ...capabilityFallbackDrafts }
+      const nextBlocks = { ...capabilityBlockDrafts }
+      for (const request of capabilityRequests) {
+        if (nextPaths[request.id] === undefined) nextPaths[request.id] = request.mount.hostPath
+        if (nextFallbacks[request.id] === undefined) nextFallbacks[request.id] = request.fallback ?? ''
+        if (nextBlocks[request.id] === undefined) nextBlocks[request.id] = request.blockedReason ?? ''
+      }
+      capabilityPathDrafts = nextPaths
+      capabilityFallbackDrafts = nextFallbacks
+      capabilityBlockDrafts = nextBlocks
+    } catch {
+      capabilityRequests = []
+    }
+  }
+
+  async function approveCapabilityRequest(request: CapabilityRequest, access: CapabilityAccess): Promise<void> {
+    capabilityBusyId = request.id
+    try {
+      const r = await scopedProjectFetch(`/api/project/capability-requests/${encodeURIComponent(request.id)}/approve`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          access,
+          hostPath: capabilityPathDrafts[request.id]?.trim() || request.mount.hostPath,
+          duration: request.duration,
+        }),
+      })
+      if (!r.ok) throw new Error(`HTTP ${r.status}`)
+      toast.success('Capability grant approved')
+      await loadCapabilityRequests()
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : String(err))
+    } finally {
+      capabilityBusyId = null
+    }
+  }
+
+  async function denyCapabilityRequest(request: CapabilityRequest): Promise<void> {
+    capabilityBusyId = request.id
+    try {
+      const r = await scopedProjectFetch(`/api/project/capability-requests/${encodeURIComponent(request.id)}/deny`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ fallback: capabilityFallbackDrafts[request.id]?.trim() || request.fallback }),
+      })
+      if (!r.ok) throw new Error(`HTTP ${r.status}`)
+      toast.success('Capability request denied')
+      await loadCapabilityRequests()
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : String(err))
+    } finally {
+      capabilityBusyId = null
+    }
+  }
+
+  async function blockCapabilityRequest(request: CapabilityRequest): Promise<void> {
+    capabilityBusyId = request.id
+    try {
+      const r = await scopedProjectFetch(`/api/project/capability-requests/${encodeURIComponent(request.id)}/block`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ reason: capabilityBlockDrafts[request.id]?.trim() || 'Owner marked this grant request blocked.' }),
+      })
+      if (!r.ok) throw new Error(`HTTP ${r.status}`)
+      toast.success('Capability request marked blocked')
+      await loadCapabilityRequests()
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : String(err))
+    } finally {
+      capabilityBusyId = null
+    }
+  }
+
+  async function stopDevServer(id: string): Promise<void> {
+    devServerBusyId = id
+    try {
+      const r = await scopedProjectFetch(`/api/project/runtime/dev-servers/${encodeURIComponent(id)}/stop`, { method: 'POST' })
+      if (!r.ok) throw new Error(`HTTP ${r.status}`)
+      await loadDevServers()
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : String(err))
+    } finally {
+      devServerBusyId = null
+    }
+  }
+
+  async function restartDevServer(id: string): Promise<void> {
+    devServerBusyId = id
+    try {
+      const r = await scopedProjectFetch(`/api/project/runtime/dev-servers/${encodeURIComponent(id)}/restart`, { method: 'POST' })
+      if (!r.ok) throw new Error(`HTTP ${r.status}`)
+      await loadDevServers()
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : String(err))
+    } finally {
+      devServerBusyId = null
+    }
+  }
+
+  function devServerTone(status: RuntimeDevServerStatus): 'ok' | 'running' | 'warn' | 'danger' | 'neutral' {
+    if (status === 'running') return 'ok'
+    if (status === 'starting') return 'running'
+    if (status === 'failed') return 'danger'
+    if (status === 'stale') return 'warn'
+    return 'neutral'
+  }
+
+  function runtimeUiLabel(status: string | undefined): string {
+    if (status === 'running') return 'Runtime running'
+    if (status === 'creating') return 'Runtime starting'
+    if (status === 'failed') return 'Runtime failed'
+    return 'Runtime stopped'
+  }
+
+  function runtimeUiDetail(): string {
+    const runtime = projectRuntime
+    if (!runtime) return 'Runtime state has not been recorded yet.'
+    const mode = runtime.migration?.mode === 'runtime-backed'
+      ? 'Podman runtime mode'
+      : runtime.migration?.mode === 'host-run'
+        ? 'Compatibility mode'
+        : 'Runtime mode unknown'
+    const health = runtime.health?.status ? ` · ${runtime.health.status}` : ''
+    const setup = runtime.backendSetup?.status ? ` · setup ${runtime.backendSetup.status}` : ''
+    return `${mode}${health}${setup}`
+  }
+
+  function runtimeUiTone(): 'neutral' | 'ok' | 'warn' | 'danger' | 'running' {
+    if (projectRuntime?.status === 'failed' || projectRuntime?.health?.status === 'unhealthy') return 'danger'
+    if (projectRuntime?.status === 'creating' || projectRuntime?.health?.status === 'degraded') return 'warn'
+    if (projectRuntime?.status === 'running') return 'running'
+    return 'neutral'
   }
 
   async function runLoad(): Promise<void> {
@@ -1442,6 +1661,22 @@
     return turn.summary
   }
 
+  function behindTheScenesNote(turn: InFlightTurn): string | null {
+    if (turn.taskId === 'task-meta-intake' && turn.checklist) {
+      return 'Guildhall is splitting the project into starter lanes before worker tasks begin.'
+    }
+    if (turn.importedDraft && (turn.taskStatus === 'import_draft' || turn.taskStatus === 'exploring')) {
+      return 'Guildhall is reorienting this imported note into a runnable task brief.'
+    }
+    if (turn.checklist && hasIncompleteTaskChecklist(turn)) {
+      return 'Guildhall is completing the brief checklist before it lets a worker start.'
+    }
+    if (turn.requestKind === 'project_question') {
+      return 'Guildhall is treating this as a project question, not implementation work.'
+    }
+    return null
+  }
+
   function gitStoryVisible(turn: Turn): boolean {
     if (!('gitStory' in turn) || !turn.gitStory?.state) return false
     if (turn.kind === 'inflight' && hasIncompleteTaskChecklist(turn)) return false
@@ -1709,8 +1944,8 @@
     }
   }
 
-  async function answerPressureTestQuestion(turn: PressureTestQuestionTurn): Promise<void> {
-    const answer = (pressureTestAnswers[turn.id] ?? '').trim()
+  async function answerPressureTestQuestion(turn: PressureTestQuestionTurn, answerOverride?: string): Promise<void> {
+    const answer = (answerOverride ?? pressureTestAnswers[turn.id] ?? '').trim()
     if (!answer) return
     busyTurnId = turn.id
     try {
@@ -1827,6 +2062,128 @@
           </Button>
         </Row>
       </Row>
+    </Card>
+  {/if}
+
+  {#if loaded && projectRuntime}
+    <Card title="Runtime">
+      <div class="runtime-state-row">
+        <StatusLine
+          label={runtimeUiLabel(projectRuntime.status)}
+          detail={runtimeUiDetail()}
+          tone={runtimeUiTone()}
+          pulse={projectRuntime.status === 'running' || projectRuntime.status === 'creating'}
+        />
+        {#if projectRuntime.lastError}
+          <p class="error">{projectRuntime.lastError}</p>
+        {/if}
+      </div>
+    </Card>
+  {/if}
+
+  {#if loaded && devServers.length > 0}
+    <Card title="Runtime dev servers">
+      <Stack gap="3">
+        {#each devServers as server}
+          <div class="dev-server-row">
+            <div class="dev-server-main">
+              <Row gap="2" align="center" wrap>
+                <strong>{server.id}</strong>
+                <Chip label={server.status} tone={devServerTone(server.status)} />
+                <Chip label={server.readiness} tone={server.readiness === 'ready' ? 'ok' : server.readiness === 'failed' ? 'danger' : 'neutral'} />
+              </Row>
+              <p class="muted">
+                {server.command.argv.join(' ')} · {server.command.cwd}
+              </p>
+              <p class="muted">
+                {server.ports[0]?.container ?? '?'} -> {server.ports[0]?.host ?? '?'}
+                {#if server.browserProof}
+                  · Browser proof {server.browserProof.ok ? 'passed' : `failed${server.browserProof.error ? `: ${server.browserProof.error}` : ''}`}
+                {/if}
+              </p>
+              {#if server.logs.length > 0}
+                <details class="thread-disclosure">
+                  <summary>Recent logs</summary>
+                  <pre class="dev-server-logs">{server.logs.join('\n')}</pre>
+                </details>
+              {/if}
+            </div>
+            <Row gap="2" align="center" wrap>
+              <Button variant="secondary" size="sm" onclick={() => window.open(server.url, '_blank', 'noopener')}>
+                Open
+              </Button>
+              {#if server.status === 'running' || server.status === 'starting'}
+                <Button variant="secondary" size="sm" disabled={devServerBusyId === server.id} onclick={() => void stopDevServer(server.id)}>
+                  Stop
+                </Button>
+              {:else}
+                <Button variant="secondary" size="sm" disabled={devServerBusyId === server.id} onclick={() => void restartDevServer(server.id)}>
+                  Restart
+                </Button>
+              {/if}
+            </Row>
+          </div>
+        {/each}
+      </Stack>
+    </Card>
+  {/if}
+
+  {#if loaded && pendingCapabilityRequests.length > 0}
+    <Card title="Access requests">
+      <Stack gap="3">
+        {#each pendingCapabilityRequests as request (request.id)}
+          <div class="capability-request-row">
+            <div class="capability-request-main">
+              <Row gap="2" align="center" wrap>
+                <strong>{request.taskId}</strong>
+                <Chip label={request.mount.access} tone={request.mount.access === 'read-only' ? 'ok' : 'warn'} />
+                <Chip label={request.duration} tone="neutral" />
+              </Row>
+              <p class="muted">Guildhall needs a decision before it can safely use this folder: {request.reason}</p>
+              <dl class="capability-facts" aria-label={`Capability request ${request.id}`}>
+                <div>
+                  <dt>Folder on this Mac</dt>
+                  <dd>{request.mount.hostPath}</dd>
+                </div>
+                <div>
+                  <dt>Runtime mount</dt>
+                  <dd>{request.mount.containerPath}</dd>
+                </div>
+                <div>
+                  <dt>If you say no</dt>
+                  <dd>{request.fallback || 'No fallback recorded yet.'}</dd>
+                </div>
+              </dl>
+              <label class="field compact-field">
+                <span>Approve this folder, or choose a narrower one</span>
+                <Input bind:value={capabilityPathDrafts[request.id]} />
+              </label>
+              <label class="field compact-field">
+                <span>Fallback if denied</span>
+                <Input bind:value={capabilityFallbackDrafts[request.id]} placeholder="What should Guildhall try instead?" />
+              </label>
+              <label class="field compact-field">
+                <span>Blocked note</span>
+                <Input bind:value={capabilityBlockDrafts[request.id]} placeholder="What needs to happen before this can continue?" />
+              </label>
+            </div>
+            <Row gap="2" align="center" wrap>
+              <Button variant="agent" size="sm" disabled={capabilityBusyId === request.id} onclick={() => void approveCapabilityRequest(request, 'read-only')}>
+                Approve read-only
+              </Button>
+              <Button variant="secondary" size="sm" disabled={capabilityBusyId === request.id} onclick={() => void approveCapabilityRequest(request, 'read-write')}>
+                Approve read/write
+              </Button>
+              <Button variant="ghost" size="sm" disabled={capabilityBusyId === request.id} onclick={() => void denyCapabilityRequest(request)}>
+                Deny
+              </Button>
+              <Button variant="ghost" size="sm" disabled={capabilityBusyId === request.id} onclick={() => void blockCapabilityRequest(request)}>
+                Mark blocked
+              </Button>
+            </Row>
+          </div>
+        {/each}
+      </Stack>
     </Card>
   {/if}
 
@@ -2074,26 +2431,40 @@
                 {/if}
                 {#if t.status !== 'done'}
                   <Stack gap="2">
-                    <Textarea
-                      value={pressureTestAnswers[t.id] ?? ''}
-                      rows={4}
-                      placeholder="Answer with a sentence or short paragraph. Include constraints or success measures if they matter."
-                      disabled={busyTurnId === t.id}
-                      oninput={(v) => setPressureTestAnswer(t.id, v)}
-                    />
-                    <Row justify="end" gap="2">
-                      <Button
-                        variant="primary"
-                        disabled={busyTurnId === t.id || !(pressureTestAnswers[t.id] ?? '').trim()}
-                        onclick={() => answerPressureTestQuestion(t)}
-                      >
-                          {busyTurnId === t.id
-                            ? 'Submitting...'
-                            : hiddenPressureQuestionCount > 0
-                              ? 'Submit and continue'
-                              : 'Submit answer'}
-                      </Button>
-                    </Row>
+                    {#if t.question.choices?.length}
+                      <div class="pressure-choice-list" aria-label="Answer choices">
+                        {#each t.question.choices as choice}
+                          <Button
+                            variant="secondary"
+                            disabled={busyTurnId === t.id}
+                            onclick={() => answerPressureTestQuestion(t, choice)}
+                          >
+                            {choice}
+                          </Button>
+                        {/each}
+                      </div>
+                    {:else}
+                      <Textarea
+                        value={pressureTestAnswers[t.id] ?? ''}
+                        rows={4}
+                        placeholder="Answer with a sentence or short paragraph. Include constraints or success measures if they matter."
+                        disabled={busyTurnId === t.id}
+                        oninput={(v) => setPressureTestAnswer(t.id, v)}
+                      />
+                      <Row justify="end" gap="2">
+                        <Button
+                          variant="primary"
+                          disabled={busyTurnId === t.id || !(pressureTestAnswers[t.id] ?? '').trim()}
+                          onclick={() => answerPressureTestQuestion(t)}
+                        >
+                            {busyTurnId === t.id
+                              ? 'Submitting...'
+                              : hiddenPressureQuestionCount > 0
+                                ? 'Submit and continue'
+                                : 'Submit answer'}
+                        </Button>
+                      </Row>
+                    {/if}
                     {#if pressureTestErrors[t.id]}
                       <p class="error">{pressureTestErrors[t.id]}</p>
                     {/if}
@@ -2555,6 +2926,13 @@
                   tone={taskStateTone(t)}
                   showLabel={!isQueuedForGuildhall(t)}
                 />
+                {#if behindTheScenesNote(t)}
+                  <StateSummary
+                    label="Behind the scenes"
+                    description={behindTheScenesNote(t) ?? ''}
+                    tone="neutral"
+                  />
+                {/if}
                 {#if t.taskStatus === 'ready' && hasIncompleteTaskChecklist(t) && replyTurnId !== t.id}
                   {#if briefFixTurnId === t.id}
                     {@const draft = briefFixDrafts[t.id] ?? { successTarget: '', acceptanceCriterion: '' }}
@@ -3154,6 +3532,12 @@
     font-size: var(--fs-1);
     line-height: var(--lh-body);
   }
+  .pressure-choice-list {
+    display: flex;
+    align-items: stretch;
+    gap: var(--s-2);
+    flex-wrap: wrap;
+  }
   .git-story-callout {
     display: flex;
     align-items: center;
@@ -3529,6 +3913,57 @@
     font-size: var(--fs-2);
     line-height: var(--lh-body);
   }
+  .dev-server-row,
+  .capability-request-row {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    align-items: start;
+    gap: var(--s-3);
+    padding: var(--s-3);
+    border: 1px solid var(--border);
+    border-radius: var(--r-2);
+    background: var(--bg);
+  }
+  .dev-server-main,
+  .capability-request-main {
+    min-width: 0;
+    display: grid;
+    gap: var(--s-1);
+  }
+  .dev-server-main p,
+  .capability-request-main p {
+    margin: 0;
+    overflow-wrap: anywhere;
+  }
+  .capability-facts {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: var(--s-2);
+    margin: var(--s-2) 0;
+  }
+  .capability-facts div {
+    min-width: 0;
+  }
+  .capability-facts dt {
+    color: var(--text-muted);
+    font-size: var(--fs-1);
+  }
+  .capability-facts dd {
+    margin: var(--s-1) 0 0;
+    overflow-wrap: anywhere;
+    font-size: var(--fs-1);
+  }
+  .compact-field {
+    margin-top: var(--s-1);
+  }
+  .dev-server-logs {
+    margin: var(--s-2) 0 0;
+    max-height: 12rem;
+    overflow: auto;
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+    font-size: var(--fs-1);
+  }
   .brief-fix-panel {
     display: grid;
     gap: var(--s-2);
@@ -3630,6 +4065,13 @@
     margin: 0;
   }
   @media (max-width: 640px) {
+    .dev-server-row,
+    .capability-request-row {
+      grid-template-columns: 1fr;
+    }
+    .capability-facts {
+      grid-template-columns: 1fr;
+    }
     .setup-form {
       grid-template-columns: 1fr;
     }

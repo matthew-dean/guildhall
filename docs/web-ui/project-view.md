@@ -14,7 +14,7 @@ Once you open a project, Guildhall shifts from "service over projects" into
 "show me what is happening." Setup, active work, reviewer feedback, and your next
 decision live in one place.
 
-![Guildhall project shell with work queue, live activity, and progress groups.](../assets/ui-audit/0-7-0/work.png)
+![Guildhall v0.9.0 project shell showing project health, current work, and navigation.](../assets/ui-audit/0-9-0/project-overview.webp)
 
 ## The views that matter most
 
@@ -24,13 +24,14 @@ decision live in one place.
 - **Thread**: the request and decision view. Setup prompts, New Request
   routing, pressure-test questions, spec approvals, live worker trouble, and
   “you need to answer this now” all gather here.
-- **Work**: the queue and movement view. This is where you judge whether the guild is making progress or just manufacturing elegant confusion.
+- **Work**: the queue and movement view. This is where you check whether the
+  project is actually moving.
 - **Closure**: the current-work verdict view. It tells you whether the work
   Guildhall is tracking now is actually closed, including unresolved Git
   stories. It is not a version or milestone picker yet.
-- **Settings**: the setup and behavior layer. Ready checks, Providers,
-  Coordinators, Facts, Memory, Advanced settings, and the knobs that determine
-  how much autonomy the guild gets.
+- **Settings**: setup and behavior. Ready checks, Providers, Coordinators,
+  Facts, Memory, Re-intake, Advanced settings, and the controls that decide how
+  much autonomy Guildhall gets.
 
 ## What the shell is optimizing for
 
@@ -42,11 +43,11 @@ decision live in one place.
   waiting on a PR, or blocked by a conflict
 - Let you drill into transcripts and provenance without leaving the shell
 
-![Guildhall task drawer showing transcript, spec, history, and provenance.](../assets/ui-audit/0-7-0/task-drawer.png)
+![Guildhall v0.9.0 Work view showing task hierarchy, blocked work, and queue health.](../assets/ui-audit/0-9-0/work.webp)
 
-![Guildhall closure view showing readiness checks and remaining blockers.](../assets/ui-audit/0-7-0/release.png)
+![Guildhall v0.9.0 Settings Ready view showing local runtime readiness.](../assets/ui-audit/0-9-0/settings-runtime.webp)
 
-![Guildhall settings view showing readiness checks, provider setup, and project facts.](../assets/ui-audit/0-7-0/settings.png)
+![Guildhall v0.9.0 Advanced settings showing memory, design, and runtime-adjacent project controls.](../assets/ui-audit/0-9-0/settings-advanced.webp)
 
 ## Current strengths
 
@@ -54,6 +55,18 @@ decision live in one place.
 - Left-rail shell structure
 - Task drawer inspection model
 - Closure, reviewer, and Git Story visibility
+- Sparse project controls with one primary Start or Stop path
+- Re-intake when old project state needs to be reconsidered
+
+## Start, stop, and blockers
+
+The top bar is for the main action, not every possible status. **Start** or
+**Stop** should remain easy to find. If the project cannot move yet, the control
+is disabled and the notice below it names the blocker with a route to the exact
+question, spec, migration, or task that needs attention.
+
+Generic labels are not enough. A card that says the project needs you should
+also tell you what it needs and where to answer.
 
 ## Thread as the intake view
 
@@ -65,6 +78,14 @@ time, with evidence and the reason Guildhall is asking.
 Those answers are not trapped in the transcript. They update persisted intake
 state so the eventual spec can name assumptions, decisions, deferrals, and the
 domains that were actually covered.
+
+## Re-intake stale project state
+
+Use **Settings -> Re-intake** when a project has old imported tasks, stale
+blockers, or cards that no longer match what the repo and docs say. Re-intake
+reads current evidence, compares it with accepted tasks and progress, and drafts
+a cleaner plan for review. Empty drafts cannot be applied, and applying a
+re-intake records why the project plan changed.
 
 ## Closure as the current-work view
 

@@ -98,7 +98,7 @@ current GitHub Release and verifies it against the matching `.sha256` asset.
 To install a specific release instead:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/matthew-dean/guildhall/main/scripts/install.sh | GUILDHALL_VERSION=0.8.0 sh
+curl -fsSL https://raw.githubusercontent.com/matthew-dean/guildhall/main/scripts/install.sh | GUILDHALL_VERSION=0.9.0 sh
 ```
 
 Also supported:
@@ -106,6 +106,9 @@ Also supported:
 ```bash
 npm install -g guildhall
 ```
+
+The npm path expects Node.js 22 or newer. The macOS installer bundles its own
+Node runtime.
 
 ## Quick start
 

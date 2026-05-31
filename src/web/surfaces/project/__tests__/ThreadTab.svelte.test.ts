@@ -228,6 +228,7 @@ interface PressureTestQuestionTurnForTest {
     id: string
     prompt: string
     why: string
+    choices?: string[]
     evidence: string[]
   }
   answerEndpoint: string
@@ -296,6 +297,8 @@ function installFetchFakes(
   options: {
     answerQuestionsResponse?: Response
     sourceNoteResponse?: Response | (() => Response | Promise<Response>)
+    capabilityRequests?: unknown[]
+    runtime?: unknown
     caughtUp?: boolean
   } = {},
 ) {
@@ -319,6 +322,16 @@ function installFetchFakes(
         content: '# Roadmap source\n\nThis is the source note Guildhall used.',
         truncated: false,
       })
+    }
+    if (url.startsWith('/api/project/runtime/dev-servers')) {
+      return json({ devServers: [] })
+    }
+    if (url.startsWith('/api/project/runtime')) {
+      return json(options.runtime ?? null)
+    }
+    if (url.startsWith('/api/project/capability-requests')) {
+      if (url.includes('/approve') || url.includes('/deny') || url.includes('/block')) return json({ ok: true })
+      return json({ requests: options.capabilityRequests ?? [], activeGrants: [] })
     }
     if (url.startsWith('/api/project/task/') && url.endsWith('/shape-draft?projectId=looma-knit')) {
       return json({ ok: true })
@@ -350,6 +363,7 @@ function installFetchFakes(
         name: 'Looma + Knit',
         path: '/repo/looma-knit',
         run: { status: 'running', mode: 'continuous' },
+        ...(options.runtime ? { runtime: options.runtime } : {}),
         tasks: [],
       })
     }
@@ -392,6 +406,61 @@ describe('ThreadTab', () => {
     expect(setupCall?.body).toMatchObject({
       name: 'Looma + Knit Docs',
     })
+  })
+
+  it('renders capability requests with narrow approval controls', async () => {
+    const { calls } = installFetchFakes([], null, {
+      capabilityRequests: [{
+        id: 'cap-task-fixtures-1',
+        taskId: 'task-fixtures',
+        kind: 'mount_directory',
+        requestedBy: 'runtime-command',
+        reason: 'Runtime command needs access to a sibling fixture folder.',
+        duration: 'this task',
+        fallback: 'Use copied fixtures.',
+        status: 'pending',
+        mount: {
+          hostPath: '/Users/matthew/git/fixtures',
+          containerPath: '/mnt/requested/fixtures',
+          access: 'read-write',
+        },
+      }],
+    })
+
+    render(ThreadTab)
+
+    await screen.findByText('Access requests')
+    expect(screen.getByText(/Guildhall needs a decision before it can safely use this folder/)).toBeTruthy()
+    expect(screen.getByText(/Runtime command needs access to a sibling fixture folder/)).toBeTruthy()
+    const pathInput = screen.getByDisplayValue('/Users/matthew/git/fixtures')
+    await userEvent.clear(pathInput)
+    await userEvent.type(pathInput, '/Users/matthew/git/fixtures/screenshots')
+    await userEvent.click(screen.getByRole('button', { name: /approve read-only/i }))
+
+    await waitFor(() => {
+      expect(calls.some(call => call.url.includes('/api/project/capability-requests/cap-task-fixtures-1/approve'))).toBe(true)
+    })
+    expect(calls.find(call => call.url.includes('/approve'))?.body).toMatchObject({
+      access: 'read-only',
+      hostPath: '/Users/matthew/git/fixtures/screenshots',
+    })
+  })
+
+  it('renders runtime state in owner language', async () => {
+    installFetchFakes([], null, {
+      runtime: {
+        status: 'stopped',
+        health: { status: 'healthy' },
+        migration: { mode: 'host-run' },
+        backendSetup: { status: 'ready', selectedMode: 'host-run' },
+      },
+    })
+
+    render(ThreadTab)
+
+    await screen.findByText('Runtime')
+    expect(screen.getByText('Runtime stopped')).toBeTruthy()
+    expect(screen.getByText(/Compatibility mode/)).toBeTruthy()
   })
 
   it('renders request and active pressure-test question turns as owner input', async () => {
@@ -449,6 +518,44 @@ describe('ThreadTab', () => {
     expect(calls.filter(call => call.url.startsWith('/api/project/thread')).length).toBeGreaterThan(1)
     expect(calls.some(call => call.url.startsWith('/api/project?projectId=looma-knit'))).toBe(true)
     await waitFor(() => expect((answer as HTMLTextAreaElement).value).toBe(''))
+  })
+
+  it('renders pressure-test choices as direct answer buttons', async () => {
+    const { calls } = installFetchFakes([
+      pressureTestQuestionTurn({
+        id: 'pressure-test:pti-narrative-harness:project-direction-priority',
+        targetTitle: 'Narrative Harness',
+        domainId: 'project-planner',
+        domainTitle: 'Project direction',
+        question: {
+          id: 'project-direction-priority',
+          prompt: 'For the next few Narrative Harness tasks, should Guildhall bias toward reviewer-lane MVPs, author-facing editor UX, story-memory/schema foundations, or generation/evaluation loops?',
+          why: 'This changes which backlog items Guildhall should shape first and what evidence workers need.',
+          choices: [
+            'Reviewer-lane MVPs',
+            'Author-facing editor UX',
+            'Story-memory/schema foundations',
+            'Generation/evaluation loops',
+          ],
+          evidence: ['project-brief.md: Narrative Harness is fiction-writing software.'],
+        },
+        answerEndpoint: '/api/project/pressure-test/pti-narrative-harness/answer',
+      }),
+    ], 'pressure-test:pti-narrative-harness:project-direction-priority')
+
+    render(ThreadTab)
+    await screen.findByRole('button', { name: 'Reviewer-lane MVPs' })
+    expect(screen.queryByPlaceholderText('Answer with a sentence or short paragraph. Include constraints or success measures if they matter.')).toBeNull()
+
+    await userEvent.click(screen.getByRole('button', { name: 'Reviewer-lane MVPs' }))
+
+    await waitFor(() => {
+      expect(calls.some(call => (
+        call.url.includes('/api/project/pressure-test/pti-narrative-harness/answer') &&
+        call.body?.questionId === 'project-direction-priority' &&
+        call.body?.answer === 'Reviewer-lane MVPs'
+      ))).toBe(true)
+    })
   })
 
   it('keeps bulky task context and older activity behind progressive disclosure', async () => {

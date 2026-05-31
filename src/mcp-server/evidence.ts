@@ -66,7 +66,7 @@ export async function createMcpCapabilityRequest(
     reason: input.reason,
     mount: {
       hostPath: input.hostPath,
-      containerPath: `/mnt/guildhall/${sanitizeMountName(input.hostPath)}`,
+      containerPath: `/mnt/guildhall-grants/${sanitizeMountName(input.hostPath)}`,
       access: input.access,
     },
   })
@@ -78,9 +78,13 @@ export async function listMcpCapabilityRequests(ctx: GuildhallMcpContext): Promi
   return [
     '# Capability Requests',
     '',
-    ...requests.map((request) =>
-      `- ${request.id}: ${request.status} ${request.mount.access} ${request.mount.hostPath} for ${request.taskId}. ${request.reason}`,
-    ),
+    ...requests.map((request) => {
+      const grant = request.grant
+        ? ` Grant: ${request.grant.status} ${request.grant.access} ${request.grant.hostPath} -> ${request.grant.containerPath}.`
+        : ''
+      const fallback = request.fallback ? ` Fallback: ${request.fallback}` : ''
+      return `- ${request.id}: ${request.status} ${request.mount.access} ${request.mount.hostPath} for ${request.taskId}. ${request.reason}${fallback}${grant}`
+    }),
     '',
   ].join('\n')
 }

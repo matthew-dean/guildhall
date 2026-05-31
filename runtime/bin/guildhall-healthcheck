@@ -1,0 +1,14 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+if [[ ! -d "${GUILDHALL_PROJECT_ROOT:-}" ]]; then
+  echo "missing project mount: ${GUILDHALL_PROJECT_ROOT:-<unset>}" >&2
+  exit 1
+fi
+
+if [[ ! -d "${GUILDHALL_HOME:-}" ]]; then
+  echo "missing guildhall home mount: ${GUILDHALL_HOME:-<unset>}" >&2
+  exit 1
+fi
+
+echo "guildhall runtime healthy"

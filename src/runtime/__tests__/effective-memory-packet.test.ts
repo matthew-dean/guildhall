@@ -1,0 +1,227 @@
+import { afterEach, beforeEach, describe, expect, it } from 'vitest'
+import fs from 'node:fs/promises'
+import os from 'node:os'
+import path from 'node:path'
+
+import { buildContext } from '../context-builder.js'
+import { buildEffectiveMemoryPacket } from '../effective-memory-packet.js'
+import { recordMemoryObservation } from '../memory-store.js'
+import { writeContextDebugRecord } from '../context-observability.js'
+import type { Task } from '@guildhall/core'
+
+let tmpDir: string
+let memoryDir: string
+let previousHome: string | undefined
+let previousDataDir: string | undefined
+
+beforeEach(async () => {
+  previousHome = process.env.HOME
+  previousDataDir = process.env.GUILDHALL_DATA_DIR
+  tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'guildhall-effective-memory-'))
+  process.env.HOME = tmpDir
+  process.env.GUILDHALL_DATA_DIR = path.join(tmpDir, 'data')
+  memoryDir = path.join(tmpDir, 'project', '.guildhall')
+  await fs.mkdir(memoryDir, { recursive: true })
+})
+
+function task(overrides: Partial<Task> = {}): Task {
+  return {
+    id: 'task-memory',
+    title: 'Render proof path in Journey drawer',
+    description: 'Update src/web/surfaces/drawer/JourneyTab.svelte so proof paths are easy to inspect.',
+    domain: 'frontend',
+    projectPath: path.dirname(memoryDir),
+    status: 'in_progress',
+    priority: 'normal',
+    acceptanceCriteria: [],
+    outOfScope: [],
+    dependsOn: [],
+    notes: [],
+    gateResults: [],
+    reviewVerdicts: [],
+    adjudications: [],
+    escalations: [],
+    agentIssues: [],
+    revisionCount: 0,
+    remediationAttempts: 0,
+    origination: 'human',
+    createdAt: '2026-05-28T00:00:00.000Z',
+    updatedAt: '2026-05-28T00:00:00.000Z',
+    spec: '## Summary\nRender proof path details in Journey.',
+    ...overrides,
+  }
+}
+
+afterEach(async () => {
+  if (previousHome === undefined) delete process.env.HOME
+  else process.env.HOME = previousHome
+  if (previousDataDir === undefined) delete process.env.GUILDHALL_DATA_DIR
+  else process.env.GUILDHALL_DATA_DIR = previousDataDir
+  await fs.rm(tmpDir, { recursive: true, force: true })
+})
+
+describe('effective memory packet', () => {
+  it('includes active matching memory and withholds proposed or risky memory with evidence refs', async () => {
+    await recordMemoryObservation({
+      memoryDir,
+      record: {
+        id: 'active-proof-ui',
+        scope: 'project',
+        type: 'codebase_knowledge',
+        status: 'active',
+        summary: 'JourneyTab is the drawer surface for proof handoffs.',
+        content: 'Use JourneyTab.svelte for proof-path and completion-handoff rendering.',
+        tags: ['proof', 'ui'],
+        domains: ['frontend'],
+        taskKinds: ['ui'],
+        fileAreas: ['src/web/surfaces/drawer'],
+        confidence: 'high',
+        risk: 'low',
+        freshness: 'fresh',
+        evidenceRefs: [{ kind: 'artifact', ref: 'src/web/surfaces/drawer/JourneyTab.svelte', summary: 'Canonical UI surface.' }],
+        createdAt: '2026-05-28T00:00:00.000Z',
+        updatedAt: '2026-05-28T00:00:00.000Z',
+        source: 'test',
+      },
+    })
+    await recordMemoryObservation({
+      memoryDir,
+      record: {
+        id: 'proposed-risky',
+        scope: 'project',
+        type: 'product_idea',
+        status: 'proposed',
+        summary: 'Replace Journey with a dashboard.',
+        content: 'Do not inject before approval.',
+        tags: ['ui'],
+        domains: ['frontend'],
+        taskKinds: ['ui'],
+        fileAreas: ['src/web'],
+        confidence: 'low',
+        risk: 'high',
+        freshness: 'fresh',
+        evidenceRefs: [],
+        createdAt: '2026-05-28T00:00:00.000Z',
+        updatedAt: '2026-05-28T00:00:00.000Z',
+        source: 'test',
+      },
+    })
+
+    const packet = await buildEffectiveMemoryPacket({
+      memoryDir,
+      task: task(),
+      maxRecords: 6,
+    })
+
+    expect(packet.included.map((record) => record.id)).toEqual(['active-proof-ui'])
+    expect(packet.withheld).toEqual([
+      expect.objectContaining({ id: 'proposed-risky', reason: 'status:proposed' }),
+    ])
+    expect(packet.evidenceRefs).toEqual([
+      expect.objectContaining({ ref: 'src/web/surfaces/drawer/JourneyTab.svelte' }),
+    ])
+    expect(packet.rendered).toContain('## Effective Memory')
+    expect(packet.rendered).toContain('JourneyTab is the drawer surface')
+    expect(packet.rendered).not.toContain('Replace Journey')
+  })
+
+  it('injects active memory into buildContext and keeps proposed memory inert', async () => {
+    await recordMemoryObservation({
+      memoryDir,
+      record: {
+        id: 'accepted-user-pref',
+        scope: 'user_global',
+        type: 'user_preference',
+        status: 'active',
+        summary: 'Do not dual-write legacy formats when a migration exists.',
+        content: 'Use migrations to carry old state forward; new writes should use the canonical store.',
+        tags: ['migration'],
+        domains: ['runtime'],
+        taskKinds: ['migration'],
+        fileAreas: ['src/runtime'],
+        confidence: 'high',
+        risk: 'low',
+        freshness: 'fresh',
+        evidenceRefs: [],
+        createdAt: '2026-05-28T00:00:00.000Z',
+        updatedAt: '2026-05-28T00:00:00.000Z',
+        source: 'test',
+      },
+    })
+    await recordMemoryObservation({
+      memoryDir,
+      record: {
+        id: 'unaccepted',
+        scope: 'project',
+        type: 'project_fact',
+        status: 'proposed',
+        summary: 'Unaccepted idea should not be injected.',
+        content: 'This should remain withheld.',
+        tags: ['migration'],
+        domains: ['runtime'],
+        taskKinds: ['migration'],
+        fileAreas: ['src/runtime'],
+        confidence: 'medium',
+        risk: 'low',
+        freshness: 'fresh',
+        evidenceRefs: [],
+        createdAt: '2026-05-28T00:00:00.000Z',
+        updatedAt: '2026-05-28T00:00:00.000Z',
+        source: 'test',
+      },
+    })
+
+    const ctx = await buildContext(task({
+      title: 'Migrate runtime command evidence',
+      description: 'Stop dual-writing legacy JSONL in src/runtime/project-runtime-command.ts.',
+      domain: 'runtime',
+    }), memoryDir)
+
+    expect(ctx.effectiveMemory).toContain('## Effective Memory')
+    expect(ctx.effectiveMemory).toContain('Do not dual-write legacy formats')
+    expect(ctx.formatted).toContain('Do not dual-write legacy formats')
+    expect(ctx.formatted).not.toContain('Unaccepted idea should not be injected')
+  })
+
+  it('records memory use in context debug records', async () => {
+    await recordMemoryObservation({
+      memoryDir,
+      record: {
+        id: 'used-memory',
+        scope: 'project',
+        type: 'project_habit',
+        status: 'active',
+        summary: 'Use Journey for proof rendering.',
+        content: 'Journey is the proof rendering surface.',
+        tags: ['ui'],
+        domains: ['frontend'],
+        taskKinds: ['ui'],
+        fileAreas: ['src/web/surfaces/drawer'],
+        confidence: 'high',
+        risk: 'low',
+        freshness: 'fresh',
+        evidenceRefs: [],
+        createdAt: '2026-05-28T00:00:00.000Z',
+        updatedAt: '2026-05-28T00:00:00.000Z',
+        source: 'test',
+      },
+    })
+    const ctx = await buildContext(task(), memoryDir)
+
+    const debug = await writeContextDebugRecord({
+      memoryDir,
+      workspacePath: path.dirname(memoryDir),
+      task: task(),
+      ctx,
+      agentName: 'worker-agent',
+      modelId: 'test-model',
+      prompt: ctx.formatted,
+    })
+
+    expect(debug.memoryPacket).toMatchObject({
+      included: [{ id: 'used-memory', type: 'project_habit', scope: 'project' }],
+      withheld: [],
+    })
+    expect(debug.sections.some((section) => section.key === 'effectiveMemory' && section.included)).toBe(true)
+  })
+})

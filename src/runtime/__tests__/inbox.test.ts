@@ -360,6 +360,50 @@ describe('buildInbox', () => {
     expect(items.find(i => i.kind === 'project_check_in')).toBeUndefined()
   })
 
+  it('pressure_test_pending: uses the specific planner question as inbox detail', async () => {
+    await writeCompleteBootstrap()
+    await writeJson('.guildhall/workspace-goals.json', {
+      goals: [{ title: 'Keep the project moving', source: 'test' }],
+    })
+    await writeJson('.guildhall/TASKS.json', { version: 1, lastUpdated: '', tasks: [] })
+    await writeJson('.guildhall/pressure-test-intake/pti-narrative-harness-project-check-in.json', {
+      id: 'pti-narrative-harness-project-check-in',
+      rawRequest: 'Start a project check-in for Narrative Harness.',
+      target: { type: 'project', id: 'narrative-harness-project-check-in', title: 'Narrative Harness project check-in' },
+      status: 'active',
+      activeDomainId: 'project-planner',
+      pendingQuestion: {
+        id: 'project-direction-priority',
+        domainId: 'project-planner',
+        prompt: 'For the next few Narrative Harness tasks, should Guildhall bias toward reviewer-lane MVPs, author-facing editor UX, story-memory/schema foundations, or generation/evaluation loops?',
+        why: 'This changes which backlog items Guildhall should shape first and what evidence workers need.',
+        evidence: [],
+        askedAt: '2026-05-31T00:00:00.000Z',
+      },
+      domains: [],
+      outputs: {
+        assumptions: [],
+        decisions: [],
+        languageMapCandidates: [],
+        taskSplitCandidates: [],
+        projectQuestionPlanner: {
+          inferredFacts: [],
+          decisions: [],
+          discardedAnswers: [],
+          askedCandidateIds: ['project-direction-priority'],
+        },
+      },
+      createdAt: '2026-05-31T00:00:00.000Z',
+      updatedAt: '2026-05-31T00:00:00.000Z',
+    })
+
+    const items = buildInboxWithProviderSetup()
+    const hit = items.find(i => i.kind === 'pressure_test_pending')
+
+    expect(hit?.detail).toContain('reviewer-lane MVPs')
+    expect(hit?.detail).not.toContain('Start the check-in pass')
+  })
+
   it('brief_approval: emitted for tasks whose productBrief has no approvedAt', async () => {
     await writeCompleteBootstrap()
     await writeJson('.guildhall/workspace-goals.json', { goals: [] })
@@ -385,6 +429,28 @@ describe('buildInbox', () => {
     if (!hit || hit.kind !== 'brief_approval') throw new Error('unreachable')
     expect(hit.taskId).toBe('task-a')
     expect(hit.actionHref).toBe('/task/task-a?tab=current')
+  })
+
+  it('brief_approval: suppressed when a failed spec pass left only a hollow brief shell', async () => {
+    await writeCompleteBootstrap()
+    await writeJson('.guildhall/workspace-goals.json', { goals: [] })
+    await writeJson('.guildhall/TASKS.json', {
+      version: 1,
+      lastUpdated: '',
+      tasks: [
+        {
+          id: 'task-hollow',
+          title: 'Shape component work',
+          status: 'exploring',
+          productBrief: {
+            authoredBy: 'spec-agent',
+          },
+        },
+      ],
+    })
+
+    const items = buildInboxWithProviderSetup()
+    expect(items.find(i => i.kind === 'brief_approval' && i.taskId === 'task-hollow')).toBeUndefined()
   })
 
   it('brief_approval: suppressed while the same task has an unanswered question', async () => {
@@ -931,6 +997,35 @@ coordinators:
     expect(first.detail).toMatch(/scope/i)
   })
 
+  it('open_escalation: does not revive a resolved escalation from the stale blockReason fallback', async () => {
+    await writeCompleteBootstrap()
+    await writeJson('.guildhall/workspace-goals.json', { goals: [] })
+    await writeJson('.guildhall/TASKS.json', {
+      version: 1,
+      lastUpdated: '',
+      tasks: [
+        {
+          id: 'task-resolved',
+          title: 'Recovered task',
+          status: 'blocked',
+          blockReason: 'Spec agent kept researching after Guildhall asked for durable progress.',
+          escalations: [
+            {
+              id: 'esc-resolved',
+              reason: 'spec_no_progress',
+              summary: 'Spec agent kept researching after Guildhall asked for durable progress.',
+              resolvedAt: '2026-05-31T14:00:00.000Z',
+              resolution: 'User chose retry from transcript.',
+            },
+          ],
+        },
+      ],
+    })
+
+    const items = buildInbox({ projectPath: tmpDir })
+    expect(items.find(i => i.kind === 'open_escalation' && i.taskId === 'task-resolved')).toBeUndefined()
+  })
+
   it('open_escalation: keeps full task content separate from the compact title', async () => {
     await writeCompleteBootstrap()
     await writeJson('.guildhall/workspace-goals.json', { goals: [] })
@@ -956,6 +1051,50 @@ coordinators:
     if (!hit || hit.kind !== 'open_escalation') throw new Error('unreachable')
     expect(hit.title).toBe('We should have a system-wide policy of how much FLL charges on overhe...')
     expect(hit.taskDescription).toBe('We should have a system-wide policy of how much FLL charges on overhead for maintenance fees etc.')
+  })
+
+  it('open_escalation: turns old spec shaping failures into retry/reframe recovery copy', async () => {
+    await writeCompleteBootstrap()
+    await writeJson('.guildhall/workspace-goals.json', { goals: [] })
+    await writeJson('.guildhall/TASKS.json', {
+      version: 1,
+      lastUpdated: '',
+      tasks: [
+        {
+          id: 'task-spec-turn-limit',
+          title: 'Shape context packet compaction',
+          status: 'blocked',
+          escalations: [
+            {
+              id: 'esc-spec-turn-limit',
+              reason: 'human_judgment_required',
+              summary: 'Spec author stopped after hitting its turn limit.',
+            },
+          ],
+        },
+        {
+          id: 'task-spec-research-loop',
+          title: 'Break down expansion tasks',
+          status: 'blocked',
+          escalations: [
+            {
+              id: 'esc-spec-research-loop',
+              reason: 'human_judgment_required',
+              summary: 'Spec agent kept researching after Guildhall asked for durable progress.',
+            },
+          ],
+        },
+      ],
+    })
+
+    const items = buildInbox({ projectPath: tmpDir })
+    const hits = items.filter(i => i.kind === 'open_escalation')
+    expect(hits).toHaveLength(2)
+    for (const hit of hits) {
+      if (hit.kind !== 'open_escalation') throw new Error('unreachable')
+      expect(hit.detail).toBe('Spec shaping stopped before Guildhall saved the next draft. Open the task to retry from the transcript or reframe the work.')
+      expect(hit.detail).not.toMatch(/turn limit|kept researching/i)
+    }
   })
 
   it('open_escalation: collapses duplicate visible rows so the next move is not buried', async () => {
@@ -1012,6 +1151,35 @@ coordinators:
 
     const items = buildInbox({ projectPath: tmpDir })
     expect(items.find(i => i.kind === 'agent_question_pending' && i.taskId === 'task-question-receipt')).toBeUndefined()
+  })
+
+  it('agent_question_pending: hides pre-question drafting narration', async () => {
+    await writeCompleteBootstrap()
+    await writeJson('.guildhall/workspace-goals.json', { goals: [] })
+    await writeJson('.guildhall/TASKS.json', {
+      version: 1,
+      lastUpdated: '',
+      tasks: [
+        {
+          id: 'task-pre-question',
+          title: 'AlertDialog',
+          description: 'Draft the missing primitive.',
+          status: 'exploring',
+          openQuestions: [
+            {
+              id: 'q-pre-question',
+              kind: 'text',
+              askedBy: 'spec-agent',
+              askedAt: '2026-05-23T00:00:00.000Z',
+              prompt: 'The key question I need to ask before drafting: what variants does the user need? Let me write the product brief first, then ask.',
+            },
+          ],
+        },
+      ],
+    })
+
+    const items = buildInbox({ projectPath: tmpDir })
+    expect(items.find(i => i.kind === 'agent_question_pending' && i.taskId === 'task-pre-question')).toBeUndefined()
   })
 
   it('open_escalation: surfaces blocked tasks that only have a block reason', async () => {

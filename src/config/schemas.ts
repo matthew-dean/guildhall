@@ -312,6 +312,23 @@ export type WorkspaceYamlConfig = z.infer<typeof WorkspaceYamlConfig>
 // <project>/.guildhall/config.yaml.
 // ---------------------------------------------------------------------------
 
+export const ExperimentalLoomaDevelopmentConfig = z.object({
+  enabled: z.boolean().default(false),
+  path: z.string().min(1).optional(),
+  writeThrough: z.enum(['off', 'queue']).default('queue'),
+})
+export type ExperimentalLoomaDevelopmentConfig = z.infer<typeof ExperimentalLoomaDevelopmentConfig>
+
+export const ExperimentalDesignSystemDevelopmentConfig = z.object({
+  looma: ExperimentalLoomaDevelopmentConfig.optional(),
+})
+export type ExperimentalDesignSystemDevelopmentConfig = z.infer<typeof ExperimentalDesignSystemDevelopmentConfig>
+
+export const ExperimentalConfig = z.object({
+  designSystemDevelopment: ExperimentalDesignSystemDevelopmentConfig.optional(),
+})
+export type ExperimentalConfig = z.infer<typeof ExperimentalConfig>
+
 export const GlobalConfig = z.object({
   // Default model assignments (merged with per-workspace models)
   models: ModelConfigInputSchema.optional(),
@@ -362,6 +379,10 @@ export const GlobalConfig = z.object({
    * profiles can choose lower defaults, but never exceed this limit.
    */
   maxProviderConcurrency: z.number().int().positive().max(200).default(200),
+
+  // Experimental machine-local integrations. These are optional by design and
+  // must degrade to inactive when their local paths are unavailable.
+  experimental: ExperimentalConfig.optional(),
 })
 export type GlobalConfig = z.infer<typeof GlobalConfig>
 

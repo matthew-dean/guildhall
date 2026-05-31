@@ -254,6 +254,7 @@ export interface PressureTestQuestionTurn extends TurnBase {
     id: string
     prompt: string
     why: string
+    choices?: string[] | undefined
     evidence: string[]
   }
   answerEndpoint: string
@@ -371,6 +372,26 @@ function hasApprovedProductBrief(task: Pick<Task, 'productBrief'>): boolean {
     typeof task.productBrief.approvedAt === 'string' &&
     task.productBrief.approvedAt.trim().length > 0,
   )
+}
+
+function hasReviewableProductBrief(brief: unknown): brief is {
+  userJob?: string
+  successMetric?: string
+  successCriteria?: string
+  antiPatterns?: string[]
+  rolloutPlan?: string
+  authoredBy?: string
+  approvedAt?: string | null
+} {
+  if (!brief || typeof brief !== 'object') return false
+  const b = brief as { userJob?: unknown; successMetric?: unknown; successCriteria?: unknown }
+  const userJob = typeof b.userJob === 'string' ? b.userJob.trim() : ''
+  const success = typeof b.successMetric === 'string' && b.successMetric.trim()
+    ? b.successMetric.trim()
+    : typeof b.successCriteria === 'string'
+      ? b.successCriteria.trim()
+      : ''
+  return Boolean(userJob && success)
 }
 
 function taskNeedsSpecFill(task: Pick<Task, 'spec' | 'acceptanceCriteria' | 'productBrief'>): boolean {
@@ -842,17 +863,21 @@ function pressureTestTurns(projectPath: string): ThreadTurn[] {
 
     if (intake.status === 'active' && intake.pendingQuestion) {
       const domain = intake.domains.find(d => d.id === intake.pendingQuestion?.domainId)
+      const domainTitle = intake.pendingQuestion.domainId === 'project-planner'
+        ? 'Project direction'
+        : domain?.title ?? intake.pendingQuestion.domainId
       turns.push({
         kind: 'pressure_test_question',
         id: `pressure-test:${intake.id}:${intake.pendingQuestion.id}`,
         intakeId: intake.id,
         targetTitle: intake.target.title,
         domainId: intake.pendingQuestion.domainId,
-        domainTitle: domain?.title ?? intake.pendingQuestion.domainId,
+        domainTitle,
         question: {
           id: intake.pendingQuestion.id,
           prompt: intake.pendingQuestion.prompt,
           why: intake.pendingQuestion.why,
+          choices: intake.pendingQuestion.choices,
           evidence: intake.pendingQuestion.evidence,
         },
         answerEndpoint: `/api/project/pressure-test/${encodeURIComponent(intake.id)}/answer`,
@@ -1138,7 +1163,17 @@ function toolCompletedDetail(
 ): string | undefined {
   if (ev?.type !== 'tool_completed' && ev?.type !== 'error') return undefined
   const tool = typeof ev?.tool_name === 'string' ? ev.tool_name : ''
-  if (ev?.type === 'tool_completed' && !ev.is_error && (tool === 'read-file' || tool === 'list-files' || tool === 'search-files')) {
+  if (
+    ev?.type === 'tool_completed' &&
+    !ev.is_error &&
+    (
+      tool === 'read-file' ||
+      tool === 'list-files' ||
+      tool === 'search-files' ||
+      tool === 'read-tasks' ||
+      tool === 'read-exploring-transcript'
+    )
+  ) {
     return undefined
   }
   if (ev?.type === 'tool_completed' && !ev.is_error && tool === 'post-user-question') {
@@ -1473,7 +1508,7 @@ export function buildThread(opts: BuildThreadOptions): Thread {
       | undefined
     const approvedAt = brief && typeof brief === 'object' ? brief.approvedAt ?? null : null
     const liveAgent = liveAgents.get(taskId)
-    if (brief && typeof brief === 'object' && unansweredQuestions.length === 0) {
+    if (hasReviewableProductBrief(brief) && unansweredQuestions.length === 0) {
       const briefStillNeedsHuman = !approvedAt && taskStatus === 'exploring'
       const status: TurnStatus = !briefStillNeedsHuman
         ? 'done'
@@ -1730,7 +1765,8 @@ export function buildThread(opts: BuildThreadOptions): Thread {
 
     // Open escalations
     const openEscalations = activeEscalations(t)
-    const fallbackBlockedEscalations = openEscalations.length === 0 && t.status === 'blocked' && typeof t.blockReason === 'string' && t.blockReason.trim()
+    const hasEscalationHistory = Array.isArray(t.escalations) && t.escalations.length > 0
+    const fallbackBlockedEscalations = !hasEscalationHistory && openEscalations.length === 0 && t.status === 'blocked' && typeof t.blockReason === 'string' && t.blockReason.trim()
       ? [{
           id: 'block-reason',
           summary: t.blockReason.trim(),

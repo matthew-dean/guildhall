@@ -13,7 +13,7 @@ You do not need the whole machine model before your first run. The job here is
 smaller: install Guildhall, open one repo, and try one modest task where you can
 see the loop.
 
-![Guildhall settings view showing readiness checks and project setup state.](../assets/ui-audit/0-7-0/settings.png)
+![Guildhall v0.9.0 project settings showing readiness checks and local runtime setup state.](../assets/ui-audit/0-9-0/settings-runtime.webp)
 
 ## The first mental model
 
@@ -66,7 +66,7 @@ The installer downloads the latest macOS package from GitHub Releases and
 checks `guildhall-macos.tar.gz.sha256` before installing. To pin a release:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/matthew-dean/guildhall/main/scripts/install.sh | GUILDHALL_VERSION=0.8.0 sh
+curl -fsSL https://raw.githubusercontent.com/matthew-dean/guildhall/main/scripts/install.sh | GUILDHALL_VERSION=0.9.0 sh
 ```
 
 The package installer does not install Podman, create a VM, pull the runtime
@@ -93,9 +93,9 @@ After the project opens, check **Settings → Ready**. The Local runtime card
 shows whether the Podman-backed Debian runtime is ready, needs setup, or should
 stay in **Host-run compatibility mode** for now.
 
-![Guildhall Settings Ready view showing the local runtime setup card.](../assets/ui-audit/0-9-0/settings-runtime.jpg)
+![Guildhall v0.9.0 Settings Ready view showing the local runtime setup card.](../assets/ui-audit/0-9-0/settings-runtime.webp)
 
-![Guildhall Thread view showing setup prompts, project questions, and next actions.](../assets/ui-audit/0-7-0/thread.png)
+![Guildhall v0.9.0 project overview showing attention work, task health, and project navigation.](../assets/ui-audit/0-9-0/project-overview.webp)
 
 ## What Guildhall may ask
 
@@ -208,7 +208,12 @@ Good blockers tell you:
 - what Guildhall recommends
 
 If a blocker only says "Needs you" without context, that is a product problem,
-not a puzzle you were supposed to solve with vibes.
+not a puzzle you were supposed to solve.
+
+If an existing project has old cards that no longer match the repo, use
+**Settings -> Re-intake**. Guildhall re-reads the project, treats existing tasks
+and progress as evidence instead of final truth, and drafts a cleaner plan you
+can inspect before applying.
 
 ## A first-run example
 

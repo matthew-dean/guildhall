@@ -1,0 +1,109 @@
+<script lang="ts">
+  import { CheckCircle2, Info, X, XCircle } from 'lucide-svelte'
+  import { dismiss, getToasts, type ToastKind } from './toast.svelte.js'
+
+  const toasts = $derived(getToasts())
+
+  function iconFor(kind: ToastKind) {
+    if (kind === 'success') return CheckCircle2
+    if (kind === 'error') return XCircle
+    return Info
+  }
+</script>
+
+{#if toasts.length}
+  <div class="toast-host" role="region" aria-label="Notifications">
+    {#each toasts as item (item.id)}
+      {@const ToastIcon = iconFor(item.kind)}
+      <div class={`toast toast-${item.kind}`} role={item.kind === 'error' ? 'alert' : 'status'}>
+        <ToastIcon size={18} aria-hidden="true" />
+        <p>{item.message}</p>
+        <button type="button" aria-label="Dismiss notification" onclick={() => dismiss(item.id)}>
+          <X size={16} aria-hidden="true" />
+        </button>
+      </div>
+    {/each}
+  </div>
+{/if}
+
+<style>
+  .toast-host {
+    position: fixed;
+    right: 20px;
+    bottom: 20px;
+    z-index: 1000;
+    display: grid;
+    width: min(380px, calc(100vw - 32px));
+    gap: 10px;
+    pointer-events: none;
+  }
+
+  .toast {
+    display: grid;
+    grid-template-columns: 18px minmax(0, 1fr) 28px;
+    align-items: center;
+    gap: 10px;
+    min-height: 44px;
+    padding: 10px 10px 10px 12px;
+    border: 1px solid var(--glass-border-strong);
+    border-radius: 8px;
+    color: var(--text);
+    background: color-mix(in srgb, var(--surface-0) 94%, transparent);
+    box-shadow: var(--shadow-lg);
+    backdrop-filter: var(--glass-filter);
+    pointer-events: auto;
+  }
+
+  .toast p {
+    min-width: 0;
+    margin: 0;
+    color: inherit;
+    font-size: 13px;
+    font-weight: 700;
+    line-height: 1.3;
+    overflow-wrap: anywhere;
+  }
+
+  .toast button {
+    display: grid;
+    width: 28px;
+    height: 28px;
+    place-items: center;
+    border: 0;
+    border-radius: 6px;
+    color: var(--muted);
+    background: transparent;
+    cursor: pointer;
+  }
+
+  .toast button:hover {
+    color: var(--text);
+    background: color-mix(in srgb, var(--surface-3) 80%, transparent);
+  }
+
+  .toast-success {
+    border-color: color-mix(in srgb, var(--ok) 45%, var(--glass-border-strong));
+  }
+
+  .toast-success :global(svg:first-child) {
+    color: var(--ok);
+  }
+
+  .toast-error {
+    border-color: color-mix(in srgb, var(--danger) 55%, var(--glass-border-strong));
+  }
+
+  .toast-error :global(svg:first-child) {
+    color: var(--danger);
+  }
+
+  .toast-info,
+  .toast-message {
+    border-color: color-mix(in srgb, var(--accent) 42%, var(--glass-border-strong));
+  }
+
+  .toast-info :global(svg:first-child),
+  .toast-message :global(svg:first-child) {
+    color: var(--accent);
+  }
+</style>

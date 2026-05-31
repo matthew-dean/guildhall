@@ -25,11 +25,15 @@ inspects, one enforces deterministic checks, and one enriches project context.
 models:
   spec: deepseek-ai/DeepSeek-V4-Flash
   coordinator: deepseek-ai/DeepSeek-V4-Flash
-  worker: Qwen/Qwen3.5-35B-A3B
-  reviewer: deepseek-ai/DeepSeek-V4-Flash
+  worker: deepseek-ai/DeepSeek-V4-Flash
+  reviewer: nvidia/Nemotron-3-Nano-Omni-30B-A3B-Reasoning
   gateChecker: deepseek-ai/DeepSeek-V4-Flash
-  contextIndexer: zai-org/GLM-4.6
+  contextIndexer: nvidia/Nemotron-3-Nano-Omni-30B-A3B-Reasoning
 ```
+
+That example comes from the latest open-model checks. It is not a packaged
+provider preset, and Guildhall will not configure that provider for you. Treat
+it as evidence about model roles, not as a required setup.
 
 Model IDs resolve against Guildhall's bundled model catalog.
 

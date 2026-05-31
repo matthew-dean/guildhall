@@ -23,6 +23,7 @@ import {
   makeDefaultSettings,
   saveLeverSettings,
 } from '@guildhall/levers'
+import { getProjectContextDebugSnapshotDir } from '@guildhall/sessions'
 import type { ConversationMessage, UsageSnapshot } from '@guildhall/protocol'
 import { z } from 'zod'
 import { InMemoryGitDriver } from '../git-driver.js'
@@ -36,15 +37,20 @@ import { InMemoryGitDriver } from '../git-driver.js'
 let tmpDir: string
 let memoryDir: string
 let tasksPath: string
+let originalDataDir: string | undefined
 
 beforeEach(async () => {
   tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'reviewer-fanout-test-'))
+  originalDataDir = process.env.GUILDHALL_DATA_DIR
+  process.env.GUILDHALL_DATA_DIR = path.join(tmpDir, 'data')
   memoryDir = path.join(tmpDir, 'memory')
   await fs.mkdir(memoryDir, { recursive: true })
   tasksPath = path.join(memoryDir, 'TASKS.json')
 })
 
 afterEach(async () => {
+  if (originalDataDir === undefined) delete process.env.GUILDHALL_DATA_DIR
+  else process.env.GUILDHALL_DATA_DIR = originalDataDir
   await fs.rm(tmpDir, { recursive: true, force: true })
 })
 
@@ -336,6 +342,7 @@ describe('Orchestrator — reviewer fan-out at review', () => {
           required: true,
           calibrationRecipeIds: ['ux-zero-context-comprehension'],
         }],
+        advisoryLenses: [],
         deterministicChecks: ['browser-or-screenshot-evidence'],
         requiredArtifacts: ['visual-evidence'],
         budget: { maxReviewerAgents: 4 },
@@ -358,6 +365,59 @@ describe('Orchestrator — reviewer fan-out at review', () => {
     expect(requestText).toContain('Completeness pass')
     expect(requestText).toContain('missing risk lane')
     expect(requestText).toContain('pitfall')
+  })
+
+  it('default fanout context debug snapshots include the reviewer persona prompt', async () => {
+    const client = new ScriptedApiClient([
+      {
+        message: assistantMsg(
+          [
+            '**Rubric:**',
+            '- review: yes - checked context',
+            '',
+            '**Verdict:** approve',
+            '',
+            '**Reasoning:** Persona role context was present.',
+          ].join('\n'),
+        ),
+      },
+    ])
+    const runner = buildDefaultReviewerFanout(
+      { apiClient: client, modelId: 'm' },
+      {
+        personaTimeoutMs: 1_000,
+        contextDebug: { memoryDir, workspacePath: tmpDir },
+      },
+    )
+
+    await runner({
+      task: mkTask(),
+      personas: [
+        {
+          slug: 'project-manager',
+          name: 'The Project Manager',
+          blurb: 'Checks handoff quality.',
+          role: 'overseer',
+          principles: 'Check handoff quality.',
+          rubric: [{ id: 'review', question: 'Is the review packet usable?', weight: 1 }],
+          deterministicChecks: [],
+          applicable: () => true,
+        },
+      ],
+      builtContext: builtContextStub(),
+      context: 'Review the task.',
+      memoryDir,
+      projectPath: tmpDir,
+    })
+
+    const snapshotDir = getProjectContextDebugSnapshotDir(tmpDir, 'task-001')
+    const snapshots = await fs.readdir(snapshotDir)
+    const reviewerSnapshot = snapshots.find((name) => name.includes('reviewer-persona-project-manager'))
+    expect(reviewerSnapshot).toBeTruthy()
+    const snapshot = await fs.readFile(path.join(snapshotDir, reviewerSnapshot!), 'utf-8')
+    expect(snapshot).not.toContain('Persona prompt: 0 chars (empty)')
+    expect(snapshot).toContain('## Reviewer Persona')
+    expect(snapshot).toContain('You are The Project Manager')
   })
 
   it('times out a hanging persona call instead of stalling review forever', async () => {

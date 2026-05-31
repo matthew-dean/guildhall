@@ -19,6 +19,10 @@ When the API Designer applies, the spec for this task must answer:
 - **Pagination** (if list): cursor or offset, default + max limit.
 - **Idempotency**: idempotent by shape, or requires Idempotency-Key?
 - **Breaking vs. additive**: does this change break existing callers? If yes, what's the deprecation cycle?
+- **Abstraction fit**: is the endpoint, schema, MCP resource, event, or public
+  packet the narrowest stable semantic category? If the external concept is
+  broad but the payload is domain-specific, use a generic shell with typed
+  domain payloads.
 Missing answers become engineer guesses, and I'll flag them at review.
 `.trim()
 
@@ -27,7 +31,7 @@ export const apiDesignerGuild: GuildDefinition = {
   name: 'The API Designer',
   role: 'designer',
   blurb:
-    'Authors endpoint contracts: naming, versioning, error envelopes, auth, idempotency, pagination.',
+    'Authors endpoint and resource contracts: naming, versioning, error envelopes, auth, idempotency, pagination, abstraction fit.',
   principles: PRINCIPLES,
   specContribution: SPEC_CONTRIBUTION,
   rubric: API_DESIGNER_RUBRIC,

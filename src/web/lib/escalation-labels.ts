@@ -130,6 +130,15 @@ export function escalationUserGuidance(
     }
   }
 
+  if (escalation?.reason === 'gate_hard_failure') {
+    return {
+      title: 'Guildhall can retry the gates.',
+      detail: 'The task is waiting on automated verification. If the underlying issue has been addressed, Guildhall can close this blocker and run the gates again.',
+      nextStep: 'Use Retry gates to close this blocker and let Guildhall run the gate-check step again.',
+      actionOwner: 'guildhall',
+    }
+  }
+
   if (
     escalation?.agentId === 'worker-agent' &&
     /timed out|turn limit|maximum turn|no visible progress|model provider|provider unavailable|local model/i.test(text)
@@ -138,6 +147,18 @@ export function escalationUserGuidance(
       title: 'Guildhall can retry the worker.',
       detail: 'The last worker attempt stalled before it finished useful work. This is a Guildhall recovery step, not something you need to solve by hand.',
       nextStep: 'Use Retry worker to close this blocker and let Guildhall try again. Use Reframe task only if the task itself is wrong, too broad, or unclear.',
+      actionOwner: 'guildhall',
+    }
+  }
+
+  if (
+    escalation?.agentId === 'spec-agent' &&
+    /timed out|turn limit|maximum turn|kept researching|durable progress/i.test(text)
+  ) {
+    return {
+      title: 'Guildhall can retry spec shaping.',
+      detail: 'The spec lane stalled before saving the next useful draft. This is not a project decision you need to solve by hand.',
+      nextStep: 'Use Retry spec to close this blocker and let Guildhall shape the task again from the transcript. Use Reframe task if the task is too broad or pointed at the wrong work.',
       actionOwner: 'guildhall',
     }
   }
@@ -165,6 +186,15 @@ export function escalationRecoveryCopy(
     return {
       headline: 'Guildhall found context but did not save the next draft.',
       detail: 'The transcript may contain useful observations. Retry from those notes or resolve the blocker after reviewing them.',
+    }
+  }
+  if (
+    escalation?.agentId === 'spec-agent' &&
+    /timed out|turn limit|maximum turn|kept researching|durable progress/i.test(text)
+  ) {
+    return {
+      headline: 'Spec shaping stopped before saving the next draft.',
+      detail: 'Guildhall can retry from the transcript notes or reframe the task if the request is too broad.',
     }
   }
   const role = roleLabel(escalation?.agentId)

@@ -101,6 +101,15 @@ const SEVERITY_ORDER: Record<InboxSeverity, number> = {
   low: 2,
 }
 
+export function compareInboxItems(
+  a: Pick<InboxItem, 'kind' | 'severity'>,
+  b: Pick<InboxItem, 'kind' | 'severity'>,
+): number {
+  const sev = SEVERITY_ORDER[a.severity] - SEVERITY_ORDER[b.severity]
+  if (sev !== 0) return sev
+  return KIND_ORDER[a.kind] - KIND_ORDER[b.kind]
+}
+
 function truncateTitle(title: string, max = 80): string {
   if (title.length <= max) return title
   return title.slice(0, max - 1).trimEnd() + '...'
@@ -110,6 +119,18 @@ function inboxTitle(taskId: string, title: string): string {
   if (taskId === 'task-meta-intake') return 'Inspect the repo and draft starter tasks'
   if (taskId === 'task-workspace-import') return 'Review existing project work'
   return truncateTitle(title)
+}
+
+function reviewableBrief(brief: unknown): brief is { userJob?: unknown; successMetric?: unknown; successCriteria?: unknown; approvedAt?: unknown } {
+  if (!brief || typeof brief !== 'object') return false
+  const b = brief as { userJob?: unknown; successMetric?: unknown; successCriteria?: unknown }
+  const userJob = typeof b.userJob === 'string' ? b.userJob.trim() : ''
+  const success = typeof b.successMetric === 'string' && b.successMetric.trim()
+    ? b.successMetric.trim()
+    : typeof b.successCriteria === 'string'
+      ? b.successCriteria.trim()
+      : ''
+  return Boolean(userJob && success)
 }
 
 function cleanPressureTargetTitle(title: string): string {
@@ -124,6 +145,9 @@ function cleanPressureTargetTitle(title: string): string {
 function pressureQuestionDetail(prompt: string, targetTitle: string): string {
   const target = cleanPressureTargetTitle(targetTitle)
   const trimmed = prompt.trim()
+  if (trimmed.length > 0) {
+    return userFacingText(trimmed, 'Guildhall needs one answer before it can keep going.')
+  }
   if (/^What outcome would make this project successful\?$/i.test(trimmed)) {
     return `What would make ${target} successful?`
   }
@@ -144,6 +168,9 @@ function escalationInboxDetail(summary: string, reason: string): string {
   }
   if (/no visible progress|made no visible progress|no saved (?:spec|draft)|no durable (?:draft|update)/i.test(text)) {
     return 'Guildhall found useful context but did not save the next draft. Review the task and decide whether to retry from those notes or reframe it.'
+  }
+  if (/spec (?:author|agent|shaping).*(?:turn limit|maximum turn|timed out)|kept researching after guildhall asked for durable progress/i.test(text)) {
+    return 'Spec shaping stopped before Guildhall saved the next draft. Open the task to retry from the transcript or reframe the work.'
   }
   const withoutCodePrefix = text.replace(/^[a-z][a-z0-9_]*:\s*/i, '').trim()
   if (reason === 'spec_ambiguous') {
@@ -444,7 +471,12 @@ export function buildInbox(opts: BuildInboxOptions): InboxItem[] {
   // anyway, and the per-task Spec tab shows full progress inline.
   const SPEC_FILL_EMIT_CAP = 3
   let specFillEmitted = 0
-  for (const t of tasks) {
+  const taskInboxOrder = [...tasks].sort((left, right) => {
+    const leftUpdated = typeof left?.updatedAt === 'string' ? left.updatedAt : ''
+    const rightUpdated = typeof right?.updatedAt === 'string' ? right.updatedAt : ''
+    return rightUpdated.localeCompare(leftUpdated)
+  })
+  for (const t of taskInboxOrder) {
     const id = typeof t.id === 'string' ? t.id : ''
     const title = typeof t.title === 'string' ? t.title : id
     const taskDescription = typeof t.description === 'string' && t.description.trim()
@@ -472,8 +504,7 @@ export function buildInbox(opts: BuildInboxOptions): InboxItem[] {
       })
     }
     const briefNeedsHuman =
-      brief &&
-      typeof brief === 'object' &&
+      reviewableBrief(brief) &&
       !brief.approvedAt &&
       status === 'exploring' &&
       !hasUnansweredQuestions
@@ -561,7 +592,8 @@ export function buildInbox(opts: BuildInboxOptions): InboxItem[] {
     }
 
     const openEscalations = activeEscalations(t)
-    const fallbackBlockedEscalations = openEscalations.length === 0 && t.status === 'blocked' && typeof t.blockReason === 'string' && t.blockReason.trim()
+    const hasEscalationHistory = Array.isArray(t.escalations) && t.escalations.length > 0
+    const fallbackBlockedEscalations = !hasEscalationHistory && openEscalations.length === 0 && t.status === 'blocked' && typeof t.blockReason === 'string' && t.blockReason.trim()
       ? [{
           id: 'block-reason',
           summary: t.blockReason.trim(),
@@ -622,11 +654,7 @@ export function buildInbox(opts: BuildInboxOptions): InboxItem[] {
   }
 
   // --- stable sort ---------------------------------------------------------
-  items.sort((a, b) => {
-    const sev = SEVERITY_ORDER[a.severity] - SEVERITY_ORDER[b.severity]
-    if (sev !== 0) return sev
-    return KIND_ORDER[a.kind] - KIND_ORDER[b.kind]
-  })
+  items.sort(compareInboxItems)
 
   return dedupeInboxItems(items)
 }

@@ -68,7 +68,7 @@ test('required migration blocks thread work until it is applied', async ({ page 
   await page.goto('/projects/looma-knit/thread')
 
   await expect(page.getByRole('heading', { name: 'Thread' })).toBeVisible()
-  await expect(page.getByRole('button', { name: /Required migration:/ }).first()).toBeVisible()
+  await expect(page.getByRole('button', { name: 'Migrate project' }).first()).toBeVisible()
   await expect(page.getByText('Which controls belong in the link editor?')).toHaveCount(0)
 
   await page.getByRole('button', { name: 'Migrate project' }).first().click()
@@ -118,4 +118,53 @@ test('pinned project rail reserves layout width at medium desktop sizes', async 
   expect(expandedMain).not.toBeNull()
   expect(expandedRail!.width).toBeGreaterThanOrEqual(230)
   expect(expandedMain!.x).toBeGreaterThanOrEqual(expandedRail!.width - 1)
+})
+
+test('work view switcher swaps between columns list and board surfaces', async ({ page }) => {
+  await page.setViewportSize({ width: 1280, height: 820 })
+  await page.goto('/projects/looma-knit/work?view=columns')
+
+  await expect(page.getByRole('toolbar', { name: 'Work view controls' })).toBeVisible()
+  await expect(page.getByRole('button', { name: 'Columns' })).toHaveAttribute('aria-pressed', 'true')
+  await expect(page.getByLabel('Work hierarchy columns')).toBeVisible()
+  await expect(page.getByRole('heading', { name: 'Work list' })).toHaveCount(0)
+
+  await page.getByRole('button', { name: 'List' }).click()
+  await expect(page).toHaveURL(/\/projects\/looma-knit\/work\?view=list$/)
+  await expect(page.getByRole('heading', { name: 'Work list' })).toBeVisible()
+  await expect(page.getByRole('button', { name: 'List' })).toHaveAttribute('aria-pressed', 'true')
+  await expect(page.getByRole('button', { name: 'Columns' })).toBeVisible()
+  await expect(page.getByRole('combobox', { name: 'Show', exact: true })).toBeVisible()
+  await expect(page.getByLabel('Work hierarchy columns')).toHaveCount(0)
+
+  await page.getByRole('button', { name: 'Columns' }).click()
+  await expect(page).toHaveURL(/\/projects\/looma-knit\/work\?view=columns$/)
+  await expect(page.getByLabel('Work hierarchy columns')).toBeVisible()
+
+  await page.getByRole('button', { name: 'Board' }).click()
+  await expect(page).toHaveURL(/\/projects\/looma-knit\/work\?view=board$/)
+  await expect(page.getByText('Next focus')).toBeVisible()
+  await expect(page.getByRole('button', { name: 'Board' })).toHaveAttribute('aria-pressed', 'true')
+  await expect(page.getByRole('button', { name: 'Columns' })).toBeVisible()
+  await expect(page.getByRole('combobox', { name: 'Show', exact: true })).toBeVisible()
+})
+
+test('advanced settings exposes design taste and interactable catalog state', async ({ page }) => {
+  await page.setViewportSize({ width: 1280, height: 900 })
+  await page.goto('/projects/looma-knit/settings/advanced')
+
+  await expect(page.getByRole('heading', { name: 'Advanced settings' })).toBeVisible()
+  await expect(page.getByRole('heading', { name: 'Design system', exact: true })).toBeVisible()
+  await expect(page.getByText('Taste memory')).toBeVisible()
+  await expect(page.getByText('warm-functional-polish', { exact: true })).toBeVisible()
+  await expect(page.getByText('segmented-control-or-tabs', { exact: true })).toBeVisible()
+  await expect(page.getByText('Catalog', { exact: true })).toBeVisible()
+  await expect(page.getByText(/guildhall-portable · 1 item/)).toBeVisible()
+  await expect(page.getByText('Guildhall portable stories are available as the interactable catalog')).toBeVisible()
+  await expect(page.getByText('Intent preview', { exact: true })).toBeVisible()
+  await expect(page.getByText('web · real-web-preview', { exact: true })).toBeVisible()
+  await expect(page.getByText('Native proof', { exact: true })).toBeVisible()
+  await expect(page.getByText('not required', { exact: true })).toBeVisible()
+  await expect(page.getByText('Owner feedback', { exact: true })).toBeVisible()
+  await expect(page.getByText('Decision packets', { exact: true })).toBeVisible()
 })

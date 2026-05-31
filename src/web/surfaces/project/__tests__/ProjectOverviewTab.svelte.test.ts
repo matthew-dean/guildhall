@@ -86,6 +86,124 @@ describe('ProjectOverviewTab', () => {
     expect(screen.getAllByText('We should have a system-wide policy of how much FLL charges on overhead for maintenance fees etc.').length).toBeGreaterThan(0)
   })
 
+  it('uses the project-discovery action label instead of a generic Open button', () => {
+    render(ProjectOverviewTab, {
+      detail: {
+        id: 'looma-knit',
+        name: 'Looma + Knit',
+        path: '/Users/matthew/git/oss/looma-knit',
+        tasks: [],
+      },
+      inboxLoaded: true,
+      inboxItems: [
+        {
+          kind: 'project_understanding',
+          severity: 'high',
+          title: 'Review project discovery update',
+          detail: 'Guildhall can now scan more planning docs and migrations. Review the reconciliation so it can update or dismiss stale imported work.',
+          actionHref: '/workspace-import?mode=reconcile',
+        },
+      ],
+      projectTicker: {
+        label: 'Not running',
+        actorLabel: 'Guildhall',
+        message: 'Project is waiting for owner action.',
+        tone: 'idle',
+        pulse: false,
+      },
+      activeProjectId: 'looma-knit',
+    })
+
+    expect(screen.getByRole('button', { name: /review update/i })).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: /^open$/i })).not.toBeInTheDocument()
+  })
+
+  it('uses start readiness as the authoritative next action over lower-priority discovery items', () => {
+    render(ProjectOverviewTab, {
+      detail: {
+        id: 'fair-labor-license',
+        name: 'Fair Labor License',
+        path: '/Users/matthew/git/oss/fair-labor-license',
+        tasks: [
+          {
+            id: 'task-oauth',
+            title: 'Configure Google OAuth credentials',
+            status: 'blocked',
+            blockReason: 'Owner credentials are required.',
+          },
+        ],
+        startReadiness: {
+          canStart: false,
+          code: 'owner_input_required',
+          message: 'Choose a recovery path for the blocked task',
+          actionHref: '/task/task-oauth',
+        },
+      },
+      inboxLoaded: true,
+      inboxItems: [
+        {
+          kind: 'project_understanding',
+          severity: 'high',
+          title: 'Review project discovery update',
+          detail: 'Guildhall can now scan more planning docs and migrations.',
+          actionHref: '/workspace-import?mode=reconcile',
+        },
+        {
+          kind: 'open_escalation',
+          severity: 'high',
+          taskId: 'task-oauth',
+          escalationId: 'esc-oauth',
+          title: 'Configure Google OAuth credentials',
+          detail: 'Owner credentials are required.',
+          actionHref: '/task/task-oauth',
+        },
+      ],
+      projectTicker: {
+        label: 'Not running',
+        actorLabel: 'Guildhall',
+        message: 'Project is waiting for owner action.',
+        tone: 'idle',
+        pulse: false,
+      },
+      activeProjectId: 'fair-labor-license',
+    })
+
+    expect(screen.getByRole('heading', { name: 'Choose a recovery path for the blocked task' })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: /review recovery/i })).toBeInTheDocument()
+    expect(screen.queryByRole('heading', { name: 'Review project discovery update' })).not.toBeInTheDocument()
+  })
+
+  it('does not invite new work when a migration blocks an empty project', () => {
+    render(ProjectOverviewTab, {
+      detail: {
+        id: 'commerce-project',
+        name: 'Commerce project',
+        path: '/Users/matthew/git/oss/commerce-project',
+        tasks: [],
+        startReadiness: {
+          canStart: false,
+          code: 'required_migration_pending',
+          message: 'Run required Guildhall migration 0.8.0/project-state-layout before starting this project.',
+          actionHref: '/migrations',
+        },
+      },
+      inboxLoaded: true,
+      inboxItems: [],
+      projectTicker: {
+        label: 'Needs migration',
+        actorLabel: 'Needs migration',
+        message: 'Run required Guildhall migration 0.8.0/project-state-layout before starting this project.',
+        tone: 'warn',
+        pulse: false,
+      },
+      activeProjectId: 'commerce-project',
+    })
+
+    expect(screen.getByText('Run the required Guildhall migration before creating or running work.')).toBeInTheDocument()
+    expect(screen.getByText('The next run is blocked until the required migration is applied.')).toBeInTheDocument()
+    expect(screen.queryByText('No tasks yet. Create a request when you are ready.')).not.toBeInTheDocument()
+  })
+
   it('uses a compact chip for blocked-work status instead of a separate status panel', () => {
     const { container } = render(ProjectOverviewTab, {
       detail: {
@@ -264,5 +382,57 @@ describe('ProjectOverviewTab', () => {
     expect(text.indexOf('Moving now')).toBeGreaterThan(-1)
     expect(text.indexOf('Work mix')).toBeGreaterThan(-1)
     expect(text.indexOf('Moving now')).toBeLessThan(text.indexOf('Work mix'))
+  })
+
+  it('surfaces runtime health, memory health, and primary proof paths', () => {
+    render(ProjectOverviewTab, {
+      detail: {
+        id: 'guildhall',
+        name: 'Guildhall',
+        path: '/Users/matthew/git/oss/guildhall',
+        run: { status: 'stopped' },
+        runtime: {
+          status: 'stopped',
+          health: { status: 'healthy' },
+          migration: { mode: 'host-run' },
+        },
+        memoryHealth: {
+          total: 6,
+          active: 3,
+          proposed: 2,
+          used: 1,
+        },
+        tasks: [
+          {
+            id: 'task-runtime-ui',
+            title: 'Runtime UI',
+            status: 'ready',
+            proofPaths: [{
+              id: 'proof-runtime',
+              title: 'Verify runtime card',
+              summary: 'Check that runtime health is visible.',
+              status: 'planned',
+            }],
+          },
+        ],
+      },
+      inboxLoaded: true,
+      inboxItems: [],
+      projectTicker: {
+        label: 'Not running',
+        actorLabel: 'Guildhall',
+        message: 'Project is waiting.',
+        tone: 'idle',
+        pulse: false,
+      },
+      activeProjectId: 'guildhall',
+    })
+
+    expect(screen.getAllByText('Runtime stopped').length).toBeGreaterThan(0)
+    expect(screen.getAllByText(/Compatibility mode/).length).toBeGreaterThan(0)
+    expect(screen.getAllByText('Memory health').length).toBeGreaterThan(0)
+    expect(screen.getAllByText(/3 active/).length).toBeGreaterThan(0)
+    expect(screen.getByText('Primary proof paths')).toBeInTheDocument()
+    expect(screen.getByText('Verify runtime card')).toBeInTheDocument()
   })
 })

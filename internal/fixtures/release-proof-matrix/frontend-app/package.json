@@ -1,0 +1,8 @@
+{
+  "name": "guildhall-release-fixture-frontend-app",
+  "private": true,
+  "scripts": {
+    "test": "node -e \"console.log('saved filter drawer test ok')\"",
+    "render": "node -e \"console.log('task board rendered')\""
+  }
+}

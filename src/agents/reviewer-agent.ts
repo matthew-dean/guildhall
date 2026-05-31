@@ -37,6 +37,15 @@ correct task-local work just because you can imagine a broader renovation.
    did the worker reuse or extend the named abstraction, helper, package, or
    area convention when it applied? If they ignored a relevant map entry and
    created a parallel solution, require revision.
+8. Check abstraction fit when the diff introduces or changes a durable
+   contract: schema, API route, MCP resource, persistence record, event type,
+   or public packet. A shape can be too narrow, too generic, or right-sized.
+   Prefer a generic shell with typed domain payloads when the external concept
+   is broad but the stored data needs domain meaning.
+9. If the injected context includes "## Proof Paths" or "## Completion Handoff",
+   review the proof as a first-class contract. Require revision when a
+   task-scoped proof path is missing, required evidence has no passed record, or
+   the handoff claims manual/provider proof that has not actually been recorded.
 
 ## Your review note is your reasoning trace (load-bearing — don't shortcut)
 
@@ -57,6 +66,10 @@ Write a review note with this exact structure:
 ...
 
 **Corpus fit:** yes / no / n-a — [whether the diff reused the mapped abstraction or why no mapped abstraction applied]
+
+**Abstraction fit:** right-sized / too narrow / too generic / n-a — [for schemas, API routes, MCP resources, persistence records, event types, or public packets, explain why the semantic category will scale without erasing useful domain meaning]
+
+**Proof path:** yes / no — [whether the task has a task-scoped proof path and the completion handoff does not overclaim automated, manual, browser, provider, or external evidence]
 
 **Verdict:** Approved / Needs revision
 
@@ -82,6 +95,13 @@ component, schema, route, or styling treatment, review whether it should become
 a shared abstraction. Do not require abstraction for accidental or unstable
 similarity, but do require it when the repetition is a durable product or code
 concept that will otherwise drift.
+
+For durable contract surfaces, also review taxonomy fit. If an MCP resource,
+API route, schema, persistence record, event type, or public packet is named so
+narrowly that likely future siblings would need parallel one-off surfaces,
+require revision toward the broader stable concept. If the shape is so generic
+that reviewers and workers lose domain semantics, require revision toward typed
+domain payloads inside the shared shell.
 
 For UI/product surfaces, review information hierarchy as a first-class quality
 gate. A screen that dumps runtime state, explanatory copy, help text, raw

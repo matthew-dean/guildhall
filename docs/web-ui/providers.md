@@ -31,6 +31,11 @@ For each provider, the page shows:
 - **OpenAI-compatible APIs** — OpenAI itself and OpenAI-shaped hosted endpoints.
 - **Local OpenAI-compatible servers** — usually llama.cpp or LM Studio, but conceptually just another OpenAI-compatible endpoint running on your machine.
 
+Local servers need the configured model to be loaded already. Guildhall checks
+the reachable endpoint and reports loaded and missing models before starting a
+run; it does not silently JIT-load a missing LM Studio or llama.cpp model for
+you.
+
 ## Where credentials live
 
 - Machine-scoped provider credentials: `~/.guildhall/providers.yaml`.
@@ -45,8 +50,9 @@ The page only reveals credentials that are explicitly in config — it will neve
 ## Default provider visibility
 
 Projects Home shows the machine-default provider and active worker model group
-so you can spot the lane before starting work. The chip routes here, to global
-Providers, because provider drift usually affects the whole local service.
+so you can spot the model choice before starting work. The chip routes here, to
+global Providers, because provider drift usually affects the whole local
+service.
 
 Fallback is intentionally loud. If the preferred provider is unavailable, or a
 scoped model override points at a provider family that does not match the

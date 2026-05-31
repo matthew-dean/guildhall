@@ -88,6 +88,7 @@ export const projectLeversSchema = z.object({
   remediation_autonomy: entry(
     z.enum(['auto', 'confirm_destructive', 'confirm_all', 'pause_all_on_issue']),
   ),
+  run_automation: entry(z.enum(['supervised', 'fully_automated'])),
   runtime_isolation: entry(z.enum(['none', 'slot_allocation'])),
   workspace_import_autonomy: entry(z.enum(['off', 'suggest', 'apply'])),
 })
@@ -177,6 +178,7 @@ export const PROJECT_LEVER_NAMES = [
   'business_envelope_strictness',
   'agent_health_strictness',
   'remediation_autonomy',
+  'run_automation',
   'runtime_isolation',
   'workspace_import_autonomy',
 ] as const satisfies readonly (keyof ProjectLevers)[]

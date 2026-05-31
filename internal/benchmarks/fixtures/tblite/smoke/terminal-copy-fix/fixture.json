@@ -1,0 +1,15 @@
+{
+  "id": "terminal-copy-fix",
+  "instruction": "Repair the seeded copy file so the verifier sees benchmark-ready copy.",
+  "command": [
+    "node",
+    "-e",
+    "const fs=require('node:fs');const file='notes.txt';fs.writeFileSync(file,fs.readFileSync(file,'utf8').replace('stale benchmark copy','benchmark-ready copy'));"
+  ],
+  "verifier": [
+    "node -e \"const fs=require('node:fs');process.exit(fs.readFileSync('notes.txt','utf8').includes('benchmark-ready copy')?0:1)\""
+  ],
+  "expectedFiles": [
+    "notes.txt"
+  ]
+}

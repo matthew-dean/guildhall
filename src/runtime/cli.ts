@@ -5,6 +5,7 @@ import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node
 import { fileURLToPath } from 'node:url'
 import { confirm } from '@inquirer/prompts'
 import { runOrchestrator } from './orchestrator.js'
+import { runGuildhallTaskOnce, type RunOnceAutomationPolicy, type RunOnceProofMode } from './run-once.js'
 import { renderBakeoffMarkdown, runContextIndexerBakeoff, runModelBakeoff } from './model-bakeoff.js'
 import { migrateLegacyMemoryToLocalHistory } from './memory-migration.js'
 import {
@@ -55,6 +56,14 @@ import { buildSemanticIndexPrompt, refreshCodebaseMap, type CorpusSemanticIndexe
 import { OpenAICompatibleClient } from '@guildhall/providers'
 import { getProjectStateDir } from '@guildhall/sessions'
 import { FileBackedGuildhallPersistence } from '@guildhall/persistence'
+import {
+  runArtifactLocalBenchmark,
+  runLifecycleBenchmark,
+  runHermesComparisonPreflight,
+  runSweLocalBenchmark,
+  runTbliteBenchmark,
+  type BenchmarkAutomationPolicy,
+} from '@guildhall/benchmarks'
 
 function openBrowser(url: string): void {
   const cmd = platform() === 'darwin' ? `open "${url}"`
@@ -95,9 +104,12 @@ export function launchRouteForProject(pathHint: string | null): string {
   try {
     const entry = findWorkspace(resolved)
     const projectPath = entry?.path ?? resolved
-    return readWorkspaceConfig(projectPath) ? '/project' : '/setup'
+    if (readWorkspaceConfig(projectPath)) return '/project'
+    const projectId = entry?.id ?? slugify(projectPath.split('/').pop() ?? 'project')
+    return `/projects/${encodeURIComponent(projectId)}/setup`
   } catch {
-    return '/setup'
+    const projectId = slugify(resolved.split('/').pop() ?? 'project')
+    return `/projects/${encodeURIComponent(projectId)}/setup`
   }
 }
 
@@ -211,7 +223,7 @@ export function parseArgs(rawArgs: string[]): {
   getFlag: (flag: string) => string | undefined
   positionals: string[]
 } {
-  const valueFlags = new Set(['--port', '--service-state', '--domain', '--max-ticks', '--cases', '--task', '--lane', '--finding', '--action', '--missed-by', '--migration'])
+  const valueFlags = new Set(['--port', '--service-state', '--domain', '--max-ticks', '--cases', '--task', '--lane', '--finding', '--action', '--missed-by', '--migration', '--fixture-set', '--subset', '--automation', '--output-dir', '--output', '--project', '--model', '--provider', '--hermes-root', '--from-file', '--proof', '--title'])
   function getFlag(flag: string): string | undefined {
     const idx = rawArgs.indexOf(flag)
     return idx !== -1 ? rawArgs[idx + 1] : undefined
@@ -290,6 +302,7 @@ export function resolveServiceLifecycleIntent(
 //     --domain <id>                 — only process tasks for one coordinator domain
 //     --max-ticks <n>               — stop after N ticks (useful for testing)
 //     --one-task                    — stop after one task reaches a handoff point
+//   guildhall task run-once "<prompt>"  — create a request, run it through Guildhall, emit a report
 //   guildhall serve                     — start the web dashboard (all workspaces)
 //     --port <n>                    — override the dashboard port (default: 7777)
 //   guildhall config [id|path]          — re-run the init wizard on an existing workspace
@@ -307,6 +320,14 @@ export function resolveServiceLifecycleIntent(
 //                                      — record a missed review finding for calibration follow-up
 //   guildhall model-bakeoff [--context-indexer] [output]
 //                                      — write replay model bakeoff JSON + Markdown
+//   guildhall benchmarks run lifecycle --fixture-set smoke
+//                                      — run internal lifecycle finishability benchmark
+//   guildhall benchmarks run tblite --subset smoke
+//                                      — run internal TBLite-style runtime smoke benchmark
+//   guildhall benchmarks run artifact-local --subset smoke
+//                                      — run local artifact-generation fixture benchmark
+//   guildhall benchmarks run swe-local --subset smoke
+//                                      — run local SWE-bench-style coding fixture benchmark
 //   guildhall mcp serve [path]          — serve Guildhall project context over MCP stdio
 //   guildhall bridge install [--target codex|claude|all] [--yes|--no-configure-mcp] [id|path]
 //                                      — install agent instructions for Guildhall MCP
@@ -318,6 +339,7 @@ export const SHIPPED_CLI_COMMANDS = [
   'unregister',
   'list',
   'run',
+  'task',
   'serve',
   'start',
   'stop',
@@ -328,6 +350,7 @@ export const SHIPPED_CLI_COMMANDS = [
   'migrate',
   'review-calibration',
   'model-bakeoff',
+  'benchmarks',
   'mcp',
   'bridge',
 ] as const
@@ -344,7 +367,7 @@ function getFlag(flag: string): string | undefined {
 // another flag — otherwise boolean flags like `--no-browser` would eat the
 // following positional by mistake.
 function positionals(): string[] {
-  const valueFlags = new Set(['--port', '--domain', '--max-ticks', '--service-state', '--target', '--cases', '--task', '--lane', '--finding', '--action', '--missed-by', '--migration'])
+  const valueFlags = new Set(['--port', '--domain', '--max-ticks', '--service-state', '--target', '--cases', '--task', '--lane', '--finding', '--action', '--missed-by', '--migration', '--fixture-set', '--subset', '--automation', '--output-dir', '--output', '--project', '--model', '--provider', '--hermes-root', '--from-file', '--proof', '--title'])
   const result: string[] = []
   for (let i = 0; i < args.length; i++) {
     const a = args[i]
@@ -379,6 +402,14 @@ Usage:
     --domain <id>                Filter to tasks in one coordinator domain
     --max-ticks <n>              Stop after N ticks (testing)
     --one-task                   Stop after one task reaches terminal/PR/block
+
+  guildhall task run-once "<prompt>" Create a request, pressure-test it, and run the scoped request
+    --project <path>              Project to run in (default: current directory)
+    --from-file <path>            Read the request prompt from a file instead of argv
+    --automation <policy>         ask-more-often, ask-when-necessary, or fully-automated
+    --proof <mode>                auto, browser, commands, or none
+    --output <path>               Write the compact final report JSON
+    --max-ticks <n>               Stop after N orchestrator ticks
 
   guildhall serve [path]             Start Guildhall in this terminal and open the browser
     --no-open                    Start without opening a browser
@@ -435,6 +466,23 @@ Usage:
     --missed-by <recipe>         Optional reviewer recipe that missed it
   guildhall model-bakeoff [--context-indexer] [output]
                                   Write replay model bakeoff JSON + Markdown
+  guildhall benchmarks run lifecycle [id|path]
+                                  Run internal lifecycle benchmark fixtures
+    --fixture-set <name>          Fixture set (default: smoke)
+    --automation <policy>         ask-more-often, ask-when-necessary, or fully-automated
+    --output-dir <path>           Output directory (default: internal/benchmarks/runs)
+  guildhall benchmarks run tblite [id|path]
+                                  Run internal TBLite-style runtime smoke fixtures
+  guildhall benchmarks run artifact-local [id|path]
+                                  Run local artifact-generation fixtures
+  guildhall benchmarks run swe-local [id|path]
+                                  Run local SWE-bench-style coding fixtures
+    --subset <name>               Subset (default: smoke)
+    --automation <policy>         ask-more-often, ask-when-necessary, or fully-automated
+    --output-dir <path>           Output directory (default: internal/benchmarks/runs)
+  guildhall benchmarks compare hermes [id|path]
+                                  Check whether a real Hermes comparison can run
+    --hermes-root <path>          Optional Hermes checkout to inspect/run
   guildhall mcp serve [project-path]
                                   Serve Guildhall project context over MCP stdio
   guildhall bridge install [--target codex|claude|all] [--yes|--no-configure-mcp] [id|path]
@@ -446,6 +494,8 @@ Options:
 Examples:
   guildhall init ~/projects/my-app
   guildhall run looma
+  guildhall task run-once "Create a tiny app that tracks pantry staples" --automation fully-automated --proof browser --output report.json
+  guildhall task run-once --from-file prompt.md --project . --automation fully-automated
   guildhall serve
   guildhall corpus-map refresh --semantic .
   guildhall memory migrate-0.8.0 --apply --delete-source --update-gitignore .
@@ -461,6 +511,11 @@ Examples:
   guildhall review-calibration escaped-miss . --task task-1 --lane ux_comprehension --finding "Primary action was ambiguous"
   guildhall model-bakeoff artifacts/model-bakeoff/report.json
   guildhall model-bakeoff --context-indexer
+  guildhall benchmarks run lifecycle --fixture-set smoke --automation fully-automated
+  guildhall benchmarks run tblite --subset smoke --automation fully-automated
+  guildhall benchmarks run artifact-local --subset smoke --automation fully-automated
+  guildhall benchmarks run swe-local --subset smoke --automation fully-automated
+  guildhall benchmarks compare hermes --hermes-root /tmp/hermes-agent
   guildhall mcp serve .
   guildhall bridge install --target all --yes .
 `.trim()
@@ -488,11 +543,11 @@ async function cmdInit() {
   // Default path: open the browser and let the web wizard do the rest.
   console.log(`[guildhall] Project directory: ${absPath}`)
   console.log(`[guildhall] Launching dashboard...`)
-  console.log(`[guildhall] The setup wizard will open at http://localhost:${port}/setup`)
+  console.log(`[guildhall] The setup wizard will open at http://localhost:${port}${launchRouteForProject(absPath)}`)
   console.log()
   const opts: Parameters<typeof runServe>[0] = { projectPath: absPath, port }
   await runServe(opts)
-  if (!noOpen) setTimeout(() => openBrowser(`http://localhost:${port}/setup`), 400)
+  if (!noOpen) setTimeout(() => openBrowser(`http://localhost:${port}${launchRouteForProject(absPath)}`), 400)
 }
 
 async function cmdRegister() {
@@ -612,6 +667,56 @@ async function cmdRun() {
     maxTicks,
     ...(oneTask ? { stopAfterOneTask: true } : {}),
   })
+}
+
+async function cmdTask() {
+  const pos = positionals()
+  const subcommand = pos[0]
+  if (subcommand !== 'run-once') {
+    console.error('[guildhall] Usage: guildhall task run-once "<prompt>" [--from-file prompt.md] [--automation fully-automated] [--proof browser] [--output report.json]')
+    process.exit(1)
+  }
+
+  let automationPolicy: RunOnceAutomationPolicy
+  try {
+    automationPolicy = normalizeRunOnceAutomationPolicy(getFlag('--automation'))
+  } catch (err) {
+    console.error(`[guildhall] ${err instanceof Error ? err.message : String(err)}`)
+    process.exit(1)
+  }
+  let proof: RunOnceProofMode
+  try {
+    proof = normalizeRunOnceProofMode(getFlag('--proof'))
+  } catch (err) {
+    console.error(`[guildhall] ${err instanceof Error ? err.message : String(err)}`)
+    process.exit(1)
+  }
+  const maxTicksArg = getFlag('--max-ticks')
+  const maxTicks = maxTicksArg ? Number(maxTicksArg) : undefined
+  if (maxTicksArg && (!Number.isFinite(maxTicks) || maxTicks! <= 0)) {
+    console.error('[guildhall] --max-ticks must be a positive number.')
+    process.exit(1)
+  }
+
+  try {
+    const report = await runGuildhallTaskOnce({
+      projectRoot: resolve(expandPath(getFlag('--project') ?? process.cwd())),
+      prompt: getFlag('--from-file') ? undefined : pos.slice(1).join(' '),
+      fromFile: getFlag('--from-file'),
+      title: getFlag('--title'),
+      outputPath: getFlag('--output'),
+      automationPolicy,
+      proof,
+      ...(maxTicks !== undefined ? { maxTicks } : {}),
+    })
+    console.log(`[guildhall] Run-once request: ${report.taskId}`)
+    console.log(`[guildhall] Status: ${report.stopReason} — ${report.stopMessage}`)
+    console.log(`[guildhall] Scoped tasks: ${report.scopedStatusSummary}`)
+    if (report.outputPath) console.log(`[guildhall] Report: ${report.outputPath}`)
+  } catch (err) {
+    console.error(`[guildhall] ${err instanceof Error ? err.message : String(err)}`)
+    process.exit(1)
+  }
 }
 
 async function waitForServiceReady(home = homedir(), attempts = 40): Promise<ServiceRuntimeState> {
@@ -1220,6 +1325,129 @@ async function cmdReviewCalibration() {
   }
 }
 
+function normalizeBenchmarkAutomationPolicy(value?: string): BenchmarkAutomationPolicy {
+  const normalized = (value ?? 'ask-when-necessary').replace(/-/g, '_')
+  if (
+    normalized === 'ask_more_often' ||
+    normalized === 'ask_when_necessary' ||
+    normalized === 'fully_automated'
+  ) {
+    return normalized
+  }
+  throw new Error(`Unknown automation policy: ${value}`)
+}
+
+function normalizeRunOnceAutomationPolicy(value?: string): RunOnceAutomationPolicy {
+  return normalizeBenchmarkAutomationPolicy(value) as RunOnceAutomationPolicy
+}
+
+function normalizeRunOnceProofMode(value?: string): RunOnceProofMode {
+  const normalized = value ?? 'auto'
+  if (
+    normalized === 'auto' ||
+    normalized === 'browser' ||
+    normalized === 'commands' ||
+    normalized === 'none'
+  ) {
+    return normalized
+  }
+  throw new Error(`Unknown proof mode: ${value}`)
+}
+
+function readPackageVersionFallback(projectRoot: string): string {
+  for (const candidate of [resolve(projectRoot, 'package.json'), resolve(process.cwd(), 'package.json')]) {
+    try {
+      const parsed = JSON.parse(readFileSync(candidate, 'utf8')) as { version?: unknown }
+      if (typeof parsed.version === 'string' && parsed.version.length > 0) return parsed.version
+    } catch {
+      // best-effort CLI metadata only
+    }
+  }
+  return 'unknown'
+}
+
+function resolveBenchmarkProjectRoot(idOrPath?: string): string {
+  const project = getFlag('--project') ?? idOrPath
+  if (!project) return process.cwd()
+  const entry = findWorkspace(project)
+  return resolve(expandPath(entry?.path ?? project))
+}
+
+async function cmdBenchmarks() {
+  const pos = positionals()
+  const subcommand = pos[0]
+  const benchmark = pos[1]
+  const idOrPath = pos[2]
+  if (subcommand === 'compare' && benchmark === 'hermes') {
+    let automationPolicy: BenchmarkAutomationPolicy
+    try {
+      automationPolicy = normalizeBenchmarkAutomationPolicy(getFlag('--automation'))
+    } catch (err) {
+      console.error(`[guildhall] ${err instanceof Error ? err.message : String(err)}`)
+      process.exit(1)
+    }
+    const projectRoot = resolveBenchmarkProjectRoot(idOrPath)
+    const outputDir = resolve(expandPath(getFlag('--output-dir') ?? 'internal/benchmarks/runs'))
+    const report = await runHermesComparisonPreflight({
+      projectRoot,
+      outputDir,
+      automationPolicy,
+      ...(getFlag('--hermes-root') ? { hermesRoot: expandPath(getFlag('--hermes-root')!) } : {}),
+    })
+    const result = report.results[0]
+    console.log(`[guildhall] Hermes comparison preflight: ${result?.result ?? 'unknown'}`)
+    console.log(`[guildhall] Failure class: ${result?.failureClass ?? 'unknown'}`)
+    if (result?.failureSummary) console.log(`[guildhall] Blocker: ${result.failureSummary}`)
+    if (report.outputPaths) {
+      console.log(`[guildhall] JSONL: ${report.outputPaths.jsonl}`)
+      console.log(`[guildhall] Markdown: ${report.outputPaths.markdown}`)
+    }
+    return
+  }
+  if (subcommand !== 'run' || (benchmark !== 'lifecycle' && benchmark !== 'tblite' && benchmark !== 'artifact-local' && benchmark !== 'swe-local')) {
+    console.error('[guildhall] Usage: guildhall benchmarks run <lifecycle|tblite|artifact-local|swe-local> [id|path] [--fixture-set smoke|--subset smoke] [--automation fully-automated]')
+    console.error('[guildhall]    or: guildhall benchmarks compare hermes [id|path] [--hermes-root <path>]')
+    process.exit(1)
+  }
+
+  let automationPolicy: BenchmarkAutomationPolicy
+  try {
+    automationPolicy = normalizeBenchmarkAutomationPolicy(getFlag('--automation'))
+  } catch (err) {
+    console.error(`[guildhall] ${err instanceof Error ? err.message : String(err)}`)
+    process.exit(1)
+  }
+
+  const projectRoot = resolveBenchmarkProjectRoot(idOrPath)
+  const outputDir = resolve(expandPath(getFlag('--output-dir') ?? 'internal/benchmarks/runs'))
+  const common = {
+    projectRoot,
+    outputDir,
+    automationPolicy,
+    guildhallVersion: readPackageVersionFallback(projectRoot),
+    ...(getFlag('--provider') ? { modelProvider: getFlag('--provider') } : {}),
+    ...(getFlag('--model') ? { model: getFlag('--model') } : {}),
+  }
+
+  const report = benchmark === 'lifecycle'
+    ? await runLifecycleBenchmark(getFlag('--fixture-set') ?? 'smoke', common)
+    : benchmark === 'tblite'
+      ? await runTbliteBenchmark(getFlag('--subset') ?? 'smoke', common)
+      : benchmark === 'artifact-local'
+        ? await runArtifactLocalBenchmark(getFlag('--subset') ?? 'smoke', common)
+        : await runSweLocalBenchmark(getFlag('--subset') ?? 'smoke', common)
+
+  console.log(`[guildhall] Benchmark complete: ${report.title}`)
+  console.log(`[guildhall] Task subset hash: ${report.taskSubsetHash}`)
+  console.log(`[guildhall] Passed: ${report.summary.passed}/${report.summary.total}`)
+  console.log(`[guildhall] False successes: ${report.summary.falseSuccesses}`)
+  console.log(`[guildhall] Blocked by policy: ${report.summary.blockedByPolicy}`)
+  if (report.outputPaths) {
+    console.log(`[guildhall] JSONL: ${report.outputPaths.jsonl}`)
+    console.log(`[guildhall] Markdown: ${report.outputPaths.markdown}`)
+  }
+}
+
 function createSemanticIndexer(projectPath: string): CorpusSemanticIndexer {
   const providers = readGlobalProviders().providers
   const openai = providers['openai-api']
@@ -1494,6 +1722,7 @@ async function main() {
     case 'unregister': return cmdUnregister()
     case 'list':    return cmdList()
     case 'run':     return cmdRun()
+    case 'task':    return cmdTask()
     case 'serve':   return cmdServe()
     case 'start':   return cmdStart()
     case 'stop':    return cmdStop()
@@ -1505,6 +1734,7 @@ async function main() {
     case 'migrate': return cmdMigrate()
     case 'review-calibration': return cmdReviewCalibration()
     case 'model-bakeoff': return cmdModelBakeoff()
+    case 'benchmarks': return cmdBenchmarks()
     case 'mcp': return cmdMcp()
     case 'bridge': return cmdBridge()
     default:

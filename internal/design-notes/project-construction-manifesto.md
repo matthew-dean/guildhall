@@ -60,6 +60,32 @@ the owner to choose from every database engine. Decide whether a database is
 needed; if it is, recommend one engine with a short rationale and maybe one or
 two realistic alternatives.
 
+Guildhall should also be willing to suggest better tools, libraries, helpers,
+or project conventions when they would make the work clearer, safer, more
+repeatable, or less bespoke. It should act like a restrained project coach: if
+the current approach is forcing custom code where a well-fit library, existing
+project abstraction, visibility tool, seed script, smoke test, preview surface,
+or shared helper would better serve the spec, Guildhall should say so and ask
+for confirmation when adopting that path changes the project contract.
+
+The point is not to nag the owner with every possible alternative. Suggestions
+should be timely, specific, and tied to the work in front of Guildhall:
+
+- "This flow needs repeatable local proof; a smoke test command would make it
+  easier to trust."
+- "This UI is becoming the second version of the same pattern; extend the
+  shared primitive instead of adding another local component."
+- "This provider integration needs webhook replay; propose a small helper
+  rather than relying on hand-run terminal archaeology."
+- "This problem is already solved by a library that fits the stack and risk
+  profile; confirm before adding it."
+
+Agents should not default to generating everything bespoke. They should look
+for existing project abstractions first, then well-fit ecosystem tools, and only
+then custom code. When the best answer is a tool or library change, Guildhall
+should surface that as an owner-facing suggestion with the tradeoff, adoption
+cost, and proof benefit.
+
 ## What This Represents
 
 This model covers the parts of software development where structure, balance,

@@ -32,7 +32,7 @@ description: Local AI agent harness for planning, running, reviewing, and recove
       </div>
     </div>
     <div class="gh-home-hero__media gh-home-hero__media-illustration">
-      <img class="gh-home-hero__illustration" src="./assets/illustrations/hall-3d-compressed.png" alt="A 3D illustrated guild hall with workers, banners, tools, and shared work areas." />
+      <img class="gh-home-hero__illustration" src="./assets/illustrations/hall-3d-compressed.webp" alt="A 3D illustrated guild hall with workers, banners, tools, and shared work areas." />
     </div>
   </section>
 

@@ -27,7 +27,7 @@ jobs:
 
       - uses: actions/setup-node@v4
         with:
-          node-version: '20'
+          node-version: '22'
           cache: pnpm
 
       - name: Install dependencies
@@ -42,14 +42,14 @@ jobs:
       - name: Check dependency boundaries
         run: pnpm lint:deps
 
+      - name: Install browser for browser-backed tests
+        run: pnpm test:ui:install
+
       - name: Unit and integration tests
         run: pnpm test
 
       - name: Build
         run: pnpm build
-
-      - name: Install browser for rendered UI checks
-        run: pnpm test:ui:install
 
       - name: Rendered UI checks
         run: pnpm test:ui

@@ -1,0 +1,9 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+cat <<JSON
+{
+  "status": "unsupported",
+  "message": "Runtime capability requests will be brokered by the host supervisor in the 0.9 runtime milestone."
+}
+JSON

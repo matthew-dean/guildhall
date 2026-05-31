@@ -111,6 +111,49 @@ For UI work, the reviewer also checks whether the worker reused approved
 tokens and primitives, or whether the design-system summary indicates a
 legitimate gap that deserves a small shared addition.
 
+For design-system work, review context should include the local control catalog
+and, when the catalog is thin, a small outside reference set. The reviewer is
+checking more than "does a component exist?" A useful catalog tells agents when
+to use a control, when not to use it, what nearby alternatives exist, what each
+variant and important prop means, and which layout primitive owns spacing. When
+that guidance is missing, reviewers can lean on established control-pattern
+references such as WAI-ARIA Authoring Practices for semantics and keyboard
+behavior, Material Design or Apple HIG for component intent, and usability
+research for selection-control choices. The result should still be adapted to
+the project's own design system rather than copied wholesale.
+
+That review should include affordance quality, not only correctness. Long,
+searchable, user-specific, or remote option sets usually deserve a
+combobox/typeahead/autocomplete instead of a strict select, because typing to
+narrow a list is faster than scanning a wall of options. Short, stable lists
+can still be radios, segmented controls, or selects when seeing all choices is
+the easier path. Reviewers should expect loading, empty, no-results, keyboard,
+and screen-reader behavior to be part of the component contract.
+
+Design review starts by preserving the author's intent: the audience, product
+job, taste direction, constraints, and scope that made this work worth doing.
+From there, Guildhall can still raise the bar. It can point out blind spots,
+rough affordances, missing states, or places where the interface would become
+clearer and more pleasant with a small system addition. When the stronger move
+is broader, Guildhall keeps it visible: replacing a brittle bespoke control
+with a tested primitive, or removing a third-party package whose overhead is
+larger than the product need, becomes a design opportunity for you to accept,
+defer, or reject.
+
+Those stronger review lenses also apply to work already in motion. When
+Guildhall learns better design-system guidance, it can recheck active UI tasks
+and record design findings for work that may have started before the stronger
+lens existed. That keeps existing projects from being stranded on older
+assumptions while still giving you the choice to accept, defer, or reject the
+new opportunity.
+
+The same backstop applies outside design. Current Guildhall improvements can
+also recheck active work for spec readiness, review calibration, proof paths,
+runtime access, memory context, architecture fit, and accessibility. The pass is
+deliberately conservative: it is a cheap inspection that records a small
+advisory note only when the task clearly matches a lens. Deeper analysis waits
+until the task naturally reaches spec, implementation, review, or gate check.
+
 ### Gate checker
 
 The gate checker mostly needs deterministic commands, task state, and recorded

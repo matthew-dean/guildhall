@@ -46,14 +46,14 @@ not to use.
 When Guildhall has sized a task, Journey shows the score in plain language:
 tiny, small, medium, large, or epic. Small work can move ahead. Medium work gets
 a little extra caution. Large work gets split recommendations. Epic work shows
-the linked child tasks Guildhall created so the coordinator can keep each child
-task clear, reviewable, and tied back to the same parent task. If an older task
-has a split-required plan but has not been split yet, Overview says it is
-ready to split, shows the tasks it will create, and offers **Split this task**.
+the linked nested work Guildhall created so each runnable item stays clear,
+reviewable, and tied back to the same containing work. If an older item has a
+split-required plan but has not been split yet, Overview says it is ready to
+split, shows the work it will create, and offers **Split this work**.
 
 For new work, that button should be the exception. If a spec says the work is
-more than one task, approving the spec creates those tasks and leaves the
-original as the parent task.
+more than one runnable item, approving the spec creates the nested work and
+keeps the original as the containing work.
 
 The point is not ceremony. It is to stop one task from quietly turning into five
 different jobs with one tired reviewer at the end.
@@ -67,12 +67,12 @@ fit together, and asks a focused question before pretending it knows.
 
 Those pieces are the component stack: the policy decision, spec, implementation
 surfaces, data or API changes, docs, release work, and verification that may
-need to become linked child tasks. It is a small breadcrumb trail for why the
-coordinator split the work, asked a question, or kept it as one task.
+need to become linked nested work. It is a small breadcrumb trail for why the
+coordinator split the work, asked a question, or kept it as one item.
 
-Overview also lets you move through the hierarchy. Parent-task, dependency, and
-child-task links replace the open drawer task while keeping the same project
-page behind it, so you can walk the split without losing your place.
+Overview also lets you move through the hierarchy. Containing work, dependency,
+and nested-work links replace the open drawer item while keeping the same
+project page behind it, so you can walk the split without losing your place.
 
 ## Done tasks
 

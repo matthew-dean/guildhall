@@ -73,10 +73,47 @@ function statusFromRun(run: ProjectRun | null | undefined): ProjectCardSummary['
   return 'success'
 }
 
+function readinessStage(project: ServiceProjectSummary): string | null {
+  const readiness = project.startReadiness
+  if (!readiness || readiness.canStart !== false) return null
+  switch (readiness.code) {
+    case 'required_migration_pending': return 'Needs migration'
+    case 'owner_input_required': return 'Needs you'
+    case 'no_provider': return 'Needs provider'
+    case 'invalid_lever_combo': return 'Settings blocked'
+    case 'runtime_too_old': return 'Update Guildhall'
+    case 'all_terminal': return 'Complete'
+    default: return 'Blocked'
+  }
+}
+
+function readinessMaturity(project: ServiceProjectSummary): Pick<ProjectCardSummary, 'maturityLabel' | 'maturityDescription'> | null {
+  const readiness = project.startReadiness
+  if (!readiness || readiness.canStart !== false) return null
+  if (readiness.code === 'required_migration_pending') {
+    return {
+      maturityLabel: 'Migrate',
+      maturityDescription: readiness.message ?? 'Run the required Guildhall migration before starting this project.',
+    }
+  }
+  if (readiness.code === 'owner_input_required') {
+    return {
+      maturityLabel: 'Needs you',
+      maturityDescription: readiness.message ?? 'Guildhall is waiting for a project decision before it can continue.',
+    }
+  }
+  return {
+    maturityLabel: readinessStage(project) ?? 'Blocked',
+    maturityDescription: readiness.message ?? 'Resolve this start blocker before Guildhall can move the project forward.',
+  }
+}
+
 function stageLabel(project: ServiceProjectSummary, counts: ProjectCardSummary['counts']): string {
   const runStatus = project.run?.status ?? 'stopped'
-  if (project.projectCheckIn?.needed) return project.projectCheckIn.label ?? 'Project questions'
   if (project.initializationNeeded) return 'Needs setup'
+  const readiness = readinessStage(project)
+  if (readiness && readiness !== 'Complete') return readiness
+  if (project.projectCheckIn?.needed) return project.projectCheckIn.label ?? 'Project questions'
   if (runStatus === 'error') return 'Needs attention'
   if (runStatus === 'stopping') return 'Stopping'
   if (runStatus === 'running') return 'Running'
@@ -93,8 +130,11 @@ function statusLabel(project: ServiceProjectSummary, counts: ProjectCardSummary[
 }
 
 function activityLabel(project: ServiceProjectSummary, counts: ProjectCardSummary['counts']): string {
-  if (project.projectCheckIn?.needed) return `${project.projectCheckIn.title ?? 'Project check-in needed'}.`
   if (project.initializationNeeded) return 'Needs first-time Guildhall setup.'
+  if (project.startReadiness?.canStart === false && project.startReadiness.message) {
+    return project.startReadiness.message
+  }
+  if (project.projectCheckIn?.needed) return `${project.projectCheckIn.title ?? 'Project check-in needed'}.`
   const running = (project.run?.status ?? 'stopped') === 'running'
   if (running && counts.active > 0) {
     return counts.active === 1
@@ -143,6 +183,11 @@ function completedLabel(project: ServiceProjectSummary, counts: ProjectCardSumma
 }
 
 function nextLabel(project: ServiceProjectSummary, counts: ProjectCardSummary['counts']): string | null {
+  if (project.startReadiness?.canStart === false) {
+    if (project.startReadiness.code === 'required_migration_pending') return 'Run required migration'
+    if (project.startReadiness.code === 'owner_input_required') return project.startReadiness.message ?? 'Answer project blocker'
+    return project.startReadiness.message ?? 'Resolve start blocker'
+  }
   if (project.projectCheckIn?.needed) return 'Answer project questions'
   if (project.highlights?.blockedTaskTitle) return `Unblock: ${project.highlights.blockedTaskTitle}`
   if (project.highlights?.activeTaskTitle) {
@@ -165,6 +210,8 @@ function nextLabel(project: ServiceProjectSummary, counts: ProjectCardSummary['c
 }
 
 function maturity(project: ServiceProjectSummary, counts: ProjectCardSummary['counts']): Pick<ProjectCardSummary, 'maturityLabel' | 'maturityDescription'> {
+  const readiness = readinessMaturity(project)
+  if (readiness) return readiness
   if (project.projectCheckIn?.needed) {
     return {
       maturityLabel: 'Check-in',
@@ -254,6 +301,8 @@ export function summarizeProjectCard(
   const running = project.run?.status === 'running'
   const initializationNeeded = Boolean(project.initializationNeeded)
   const maturityState = maturity(project, counts)
+  const startBlocked = project.startReadiness?.canStart === false
+  const projectCheckIn = startBlocked ? undefined : project.projectCheckIn
   const gitStory = project.gitStory &&
     project.gitStory.state &&
     project.gitStory.state !== 'clean' &&
@@ -286,7 +335,7 @@ export function summarizeProjectCard(
     path: formatUserPath(project.path),
     statusLabel: statusLabel(project, counts),
     tone:
-      project.projectCheckIn?.needed || initializationNeeded || project.run?.status === 'error'
+      projectCheckIn?.needed || initializationNeeded || startBlocked || project.run?.status === 'error'
         ? 'warn'
         : (project.run?.status ?? 'stopped') === 'running'
           ? 'active'
@@ -304,7 +353,7 @@ export function summarizeProjectCard(
     nextLabel: nextLabel(project, counts),
     maturityLabel: maturityState.maturityLabel,
     maturityDescription: maturityState.maturityDescription,
-    ...(project.projectCheckIn ? { projectCheckIn: project.projectCheckIn } : {}),
+    ...(projectCheckIn ? { projectCheckIn } : {}),
     ...(provider ? { provider } : {}),
     blurb: project.summary ?? null,
     tags: project.tags ?? [],
@@ -316,6 +365,8 @@ export function summarizeProjectCard(
       ? null
       : running
         ? 'Stop'
+        : startBlocked
+          ? null
         : counts.active > 0
           ? 'Resume'
           : counts.total === 0
@@ -324,6 +375,7 @@ export function summarizeProjectCard(
     canOpen: true,
     canStart: !running &&
       !initializationNeeded &&
+      !startBlocked &&
       (counts.active > 0 || counts.total === 0) &&
       !(counts.draftReview > 0 && counts.active === 0),
     canStop: running,

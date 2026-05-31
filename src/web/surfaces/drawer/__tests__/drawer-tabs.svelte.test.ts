@@ -9,6 +9,7 @@ import JourneyTab from '../JourneyTab.svelte'
 import ProvenanceTab from '../ProvenanceTab.svelte'
 import TranscriptTab from '../TranscriptTab.svelte'
 import SpecFillChecklist from '../SpecFillChecklist.svelte'
+import SpecTab from '../SpecTab.svelte'
 import SuggestionCard from '../SuggestionCard.svelte'
 import LogViewer from '../../../lib/LogViewer.svelte'
 import Section from '../../../lib/Section.svelte'
@@ -172,6 +173,152 @@ describe('drawer task detail tabs', () => {
     expect(screen.getByText('Ask Clarifying Question')).toBeInTheDocument()
     expect(screen.getByText(/Decide the overhead charge policy/)).toBeInTheDocument()
     expect(screen.getByText(/Apply the policy in product surfaces/)).toBeInTheDocument()
+  })
+
+  it('renders proof paths and completion handoff without executable launch controls', () => {
+    render(JourneyTab, {
+      task: task({
+        proofPaths: [
+          {
+            id: 'task-link-editor-proof-path',
+            scope: { type: 'task', id: 'task-link-editor' },
+            title: 'Verify link editor controls',
+            summary: 'Run focused tests and inspect the editor route.',
+            status: 'verified',
+            launchSteps: [
+              {
+                id: 'test',
+                kind: 'copy_command',
+                title: 'Run focused tests',
+                command: 'pnpm vitest run src/editor/link-editor.test.ts',
+              },
+              {
+                id: 'route',
+                kind: 'open_url',
+                title: 'Open editor',
+                url: 'http://localhost:5173/editor',
+              },
+            ],
+            expectedEvidence: [
+              { id: 'unit', kind: 'automated', description: 'Focused editor tests pass.', required: true },
+              { id: 'browser', kind: 'manual', description: 'Editor route was inspected.', required: true },
+              { id: 'preview', kind: 'provider', description: 'Preview deployment is green.', required: false },
+            ],
+            verificationRecords: [
+              {
+                id: 'unit-run',
+                evidenceId: 'unit',
+                kind: 'automated',
+                status: 'passed',
+                summary: 'Focused editor tests passed.',
+                command: 'pnpm vitest run src/editor/link-editor.test.ts',
+                recordedAt: now,
+                recordedBy: 'worker-agent',
+              },
+            ],
+            createdAt: now,
+            updatedAt: now,
+            createdBy: 'spec-agent',
+          },
+        ],
+        completionHandoff: {
+          id: 'task-link-editor-completion-handoff',
+          taskId: 'task-link-editor',
+          completedAt: now,
+          completedBy: 'gate-checker-agent',
+          summary: 'The link editor controls are ready to inspect.',
+          proofPathIds: ['task-link-editor-proof-path'],
+          verificationSummary: '1 automated proof, 0 manual proof, 0 provider proof.',
+          automatedProof: [
+            {
+              id: 'unit-run',
+              evidenceId: 'unit',
+              kind: 'automated',
+              status: 'passed',
+              summary: 'Focused editor tests passed.',
+              command: 'pnpm vitest run src/editor/link-editor.test.ts',
+              recordedAt: now,
+              recordedBy: 'worker-agent',
+            },
+          ],
+          manualProof: [],
+          providerProof: [],
+          residualRisk: 'Browser inspection is still required before release.',
+        },
+      }),
+    })
+
+    expect(screen.getByText('Proof path')).toBeInTheDocument()
+    expect(screen.getByText('Verify link editor controls')).toBeInTheDocument()
+    expect(screen.getByText('Run focused tests')).toBeInTheDocument()
+    expect(screen.getByText('pnpm vitest run src/editor/link-editor.test.ts')).toBeInTheDocument()
+    expect(screen.getByRole('link', { name: 'Open editor' })).toHaveAttribute('href', 'http://localhost:5173/editor')
+    expect(screen.getByText('Automated Required')).toBeInTheDocument()
+    expect(screen.getByText('Manual Required')).toBeInTheDocument()
+    expect(screen.getByText('Provider Optional')).toBeInTheDocument()
+    expect(screen.getByText('Completion handoff')).toBeInTheDocument()
+    expect(screen.getByText('Runtime evidence')).toBeInTheDocument()
+    expect(screen.getByText('Remaining uncertainty')).toBeInTheDocument()
+    expect(screen.getByText('Browser inspection is still required before release.')).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: /start/i })).not.toBeInTheDocument()
+  })
+
+  it('hides stale handoff packets after a recovery spec seed moves a task back to spec review', () => {
+    render(SpecTab, {
+      task: task({
+        status: 'spec_review',
+        title: 'Block menu / block side menu',
+        description: 'looma/docs/editor-roadmap.md: - **Block menu / block side menu**',
+        spec: '## Summary\nBuild the block menu.\n\n## Completion Boundary\n- Product outcome: The block menu works.',
+        acceptanceCriteria: [
+          {
+            id: 'ac-1',
+            description: 'Given the editor, when the block handle opens, then block actions are available.',
+            verifiedBy: 'review',
+            met: false,
+          },
+        ],
+        productBrief: {
+          userJob: 'I want block menu work shaped from current evidence.',
+          successMetric: 'A reviewable spec exists.',
+          antiPatterns: [],
+          authoredBy: 'coordinator-recovery',
+          authoredAt: now,
+        },
+        latestSelfCritique: 'Self-critique: stale worker handoff said the build was failing.',
+        latestCheckpoint: {
+          step: 4,
+          agentId: 'worker-agent',
+          writtenAt: now,
+          intent: 'Old implementation attempt.',
+        },
+        notes: [
+          {
+            agentId: 'coordinator-recovery',
+            role: 'system',
+            content: 'Guildhall wrote a deterministic recovery spec seed from the current task evidence before redispatching the spec lane.',
+            timestamp: now,
+          },
+        ],
+      }),
+      busy: false,
+      onApproveBrief: vi.fn(),
+      onApproveSpec: vi.fn(),
+      onPause: vi.fn(),
+      onShelve: vi.fn(),
+      onUnshelve: vi.fn(),
+      onResolveEscalation: vi.fn(),
+      onRunEscalationAction: vi.fn(),
+      onSendFollowUp: vi.fn(),
+      onAddAcceptance: vi.fn(),
+    })
+
+    expect(screen.queryByText('Latest handoff packet')).not.toBeInTheDocument()
+    expect(screen.queryByText(/stale worker handoff/i)).not.toBeInTheDocument()
+    expect(screen.getByText('From looma/docs/editor-roadmap.md')).toBeInTheDocument()
+    expect(screen.queryByText(/looma\/docs\/editor-roadmap\.md: -/)).not.toBeInTheDocument()
+    expect(screen.getByText('Task brief')).toBeInTheDocument()
+    expect(screen.getByText(/Build the block menu/)).toBeInTheDocument()
   })
 
   it('renders provenance, terminal outcome, shelve reason, and context health in one audit trail', () => {

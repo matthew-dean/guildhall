@@ -31,4 +31,16 @@ export const COLOR_THEORIST_RUBRIC: SoftGateRubricItem[] = [
       'Does the change describe its color in terms of role (primary, danger, on-surface, ...) rather than a specific hue?',
     weight: 0.5,
   },
+  {
+    id: 'color-product-mood-fit',
+    question:
+      'Does the palette fit the product mood and audience instead of defaulting to a generic, overused, or misleading trend direction?',
+    weight: 0.8,
+  },
+  {
+    id: 'color-saturation-budget',
+    question:
+      'Does the palette define a saturation budget, keeping surfaces calm while reserving stronger saturation for brand accents, status, or meaningful emphasis?',
+    weight: 0.7,
+  },
 ]

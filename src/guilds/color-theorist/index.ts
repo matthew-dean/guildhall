@@ -19,6 +19,9 @@ function readPrinciples(): string {
 
 const COLOR_THEORIST_SPEC_CONTRIBUTION = `
 When the Color Theorist applies, the spec for this task must answer:
+- What **emotional job** should the palette do for this product? (calm, fast, premium, playful, trustworthy, warm, clinical, ...)
+- What **palette mood** and hue families fit that job, and which overused or misleading directions should be avoided?
+- What **saturation budget** applies? Name which roles can carry energy and which surfaces should stay quiet.
 - What **role** does any new color serve? (primary, accent, danger, info, success, warning, surface, text, on-surface, ...)
 - Is the role already covered by an existing token? If yes, reuse — don't invent.
 - What are the **light and dark** variants of the role?

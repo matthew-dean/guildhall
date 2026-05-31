@@ -35,6 +35,7 @@ const VERSIONED_ENTRIES = [
 
 const VERSIONED_EXCLUDES = [
   /^web-ui\/flow-audit\.md$/,
+  /^assets\/ui-audit\/[^/]+\/README\.md$/,
 ]
 
 function normalizeDocsBase(value) {

@@ -1502,7 +1502,7 @@ describe('POST /api/project/task/:id/enrich-task', () => {
     expect(task.escalations[0]?.resolution).toMatch(/enrichment request/i)
     const transcript = (await readExploringTranscript({ memoryDir, taskId: 'task-1' })).content ?? ''
     expect(transcript).toContain('Enrich this task')
-    expect(transcript).toContain('parent task with smaller linked child tasks')
+    expect(transcript).toContain('containing work with smaller linked nested work')
     expect(transcript).toContain('Split Google OAuth setup')
   })
 })

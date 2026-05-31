@@ -82,14 +82,25 @@ Commit:
 Ignore:
 
 - `./.guildhall/config.yaml`
+- generated Corpus Map files such as `./.guildhall/codebase-map.yaml`,
+  `./.guildhall/codebase-map.stale.json`, and
+  `./.guildhall/codebase-map.history.jsonl`
+- `./.guildhall/external-agent-links.json`, which can contain local agent ids
+  and checkout-specific target paths
 - local/private `./.guildhall/` buckets such as `local/`, `worktrees/`,
   `cache/`, `tmp/`, `logs/`, `sessions/`, `transcripts/`, `context-debug/`,
-  `events/`, and `checkpoints/`
+  `events/`, `checkpoints/`, and `dev-tools/`
 - everything under `~/.guildhall/`
 
 Guildhall writes and migrates a small managed block in the project
 `.gitignore` for this. The mental model is: commit the project plan and compact
 state; do not commit machine state.
+
+The Corpus Map is regenerated from the checkout when Guildhall assembles agent
+context or when you refresh it from Settings/CLI. Because it records the local
+project root and deterministic scan output, the generated map is ignored even
+though human-authored overlays such as
+`./.guildhall/codebase-map.overrides.yaml` remain trackable.
 
 Inside committed `.guildhall`, Guildhall keeps the files bounded. Active tasks
 stay in `TASKS.json`; finished work is sealed into compact task archives;
@@ -208,3 +219,35 @@ Machine-global Guildhall state sits outside the project:
 - `~/.guildhall/config.yaml` — machine-wide defaults
 - `~/.guildhall/learning.json` — user/global learned preferences
 - `~/.guildhall/data/projects/<project-hash>/` — local history for one project
+
+## MCP View
+
+MCP resources are a bounded view over the same split. They are not raw directory
+listings.
+
+Stable project resources include:
+
+- `guildhall://project` — compact project, runtime, memory, codebase, and
+  context health.
+- `guildhall://project/tasks` and `guildhall://project/tasks/<task-id>` —
+  queue and task summaries.
+- `guildhall://project/artifacts` and
+  `guildhall://project/artifacts/<artifact-id>` — registered artifacts such as
+  flow audits.
+- `guildhall://project/feedback` — accepted feedback and decision packets for
+  workers and reviewers.
+- `guildhall://project/design` — Design System Profile, taste,
+  catalog/preview, and design feedback summary.
+- `guildhall://project/memory` and `guildhall://project/learning` — active
+  memory and suggested learnings.
+- `guildhall://project/context` and `guildhall://project/local-history` —
+  bounded context-debug and local-history health, not raw transcripts.
+- `guildhall://project/codebase-knowledge` — Corpus Map freshness and read-next
+  pointers.
+- `guildhall://project/runtime` — runtime state, image, migration mode, mounts,
+  ports, and health checks.
+- `guildhall://project/capability-requests` — requested host access or other
+  missing capabilities.
+
+The bridge also exposes memory tools so outside agents can list, read, record,
+or update memory through the same validation path Guildhall uses.

@@ -21,6 +21,8 @@ digging through raw files. Instead of asking an outside agent to guess which
 - current task queue and individual task records
 - registered artifact IDs, including audit checklists
 - project memory, decisions, and capability requests
+- runtime state, local-history health, codebase knowledge, learning
+  suggestions, feedback packets, and design context
 - tools for reading artifacts, appending task evidence, and requesting missing
   capabilities
 
@@ -95,7 +97,14 @@ guildhall://project/tasks
 guildhall://project/tasks/<task-id>
 guildhall://project/artifacts
 guildhall://project/decisions
+guildhall://project/feedback
+guildhall://project/design
 guildhall://project/memory
+guildhall://project/learning
+guildhall://project/context
+guildhall://project/local-history
+guildhall://project/codebase-knowledge
+guildhall://project/runtime
 guildhall://project/capability-requests
 ```
 
@@ -106,10 +115,16 @@ guildhall.read_artifact
 guildhall.append_task_evidence
 guildhall.create_capability_request
 guildhall.list_capability_requests
+guildhall.list_memory
+guildhall.read_memory
+guildhall.record_memory_observation
+guildhall.update_memory_status
+guildhall.read_effective_context
 ```
 
 That lets an outside agent answer questions like "what did Guildhall decide
-about this task?", "which checklist is active?", or "what evidence marked this
+about this task?", "which checklist is active?", "what does Guildhall remember
+for this project?", "is the runtime healthy?", or "what evidence marked this
 work done?" without treating internal storage files as its public API.
 
 ## When to use it

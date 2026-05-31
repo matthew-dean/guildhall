@@ -83,7 +83,9 @@
   ].map(member => ({ ...member, tone: avatarToneForRole(member.role) })).slice(0, 4))
 
   const primaryTaskSignal = $derived(
-    summary.counts.blocked > 0
+    ['Needs migration', 'Needs provider', 'Update Guildhall'].includes(displayStatusLabel)
+      ? displayStatusLabel
+      : summary.counts.blocked > 0
       ? `${summary.counts.blocked} blocked`
       : summary.counts.active > 0
         ? effectiveRunning

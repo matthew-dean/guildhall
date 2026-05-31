@@ -8,6 +8,7 @@
   import Card from '../../lib/Card.svelte'
   import Chip from '../../lib/Chip.svelte'
   import ProgressFeed from '../../lib/ProgressFeed.svelte'
+  import SegmentedControl from '../../lib/SegmentedControl.svelte'
   import TaskCard from '../../lib/TaskCard.svelte'
   import { friendlyDomain, friendlyPriority, friendlyStatus } from '../../lib/display.js'
   import { friendlyTaskId } from '../../lib/identifier-labels.js'
@@ -16,8 +17,10 @@
   import { buildWorkSurface } from '../../lib/project-data.js'
   import { friendlyRuntimeMessage } from '../../lib/runtime-message.js'
   import { effectiveWorkStatus, isCompleteForWorkerHandoff, needsWorkerHandoffSpecCleanup } from '../../lib/task-state.js'
+  import { buildWorkHierarchy, nestedWorkCountLabel, workKindLabel } from '../../lib/work-hierarchy.js'
   import type { ProjectDetail, Task } from '../../lib/types.js'
   import PlannerTab from './PlannerTab.svelte'
+  import WorkTreePreview from './WorkTreePreview.svelte'
 
   interface Props {
     detail: ProjectDetail
@@ -26,6 +29,8 @@
 
   type SortKey = 'title' | 'status' | 'area' | 'priority' | 'updated' | 'revisions'
   type SortDir = 'asc' | 'desc'
+  type WorkView = 'columns' | 'list' | 'board'
+  type WorkFilter = 'open' | 'all' | 'runnable' | 'blocked' | 'needs-you'
 
   const STATUS_SORT_ORDER: Record<string, number> = {
     proposed: 0,
@@ -56,18 +61,51 @@
   const importDraftCount = $derived(viewModel.importDraftCount)
   const nextImportDraft = $derived(viewModel.nextImportDraft)
   const needsMeta = $derived(viewModel.needsMeta)
-  const setupInboxItem = $derived(detail.inbox?.items?.find(item => (
-    item.kind === 'setup_pending' ||
-    item.kind === 'project_check_in' ||
-    item.kind === 'pressure_test_pending' ||
-    item.actionHref === '/setup'
-  )) ?? null)
+  const setupInboxItem = $derived.by(() => {
+    const items = detail.inbox?.items ?? []
+    const priority = [
+      'required_migration',
+      'open_escalation',
+      'agent_question_pending',
+      'pressure_test_pending',
+      'setup_pending',
+      'project_check_in',
+    ]
+    for (const kind of priority) {
+      const match = items.find(item => item.kind === kind)
+      if (match) return match
+    }
+    return items.find(item => item.actionHref === '/setup') ?? null
+  })
 
   let progress = $state('Loading...')
   let sortKey = $state<SortKey>('updated')
   let sortDir = $state<SortDir>('desc')
+  let routeWorkView = $state<WorkView>('list')
+  let workFilter = $state<WorkFilter>('open')
+
+  const viewOptions = [
+    { value: 'columns', label: 'Columns' },
+    { value: 'list', label: 'List' },
+    { value: 'board', label: 'Board' },
+  ]
+
+  const workFilterOptions = [
+    { value: 'open', label: 'Open' },
+    { value: 'all', label: 'All' },
+    { value: 'runnable', label: 'Runnable' },
+    { value: 'blocked', label: 'Blocked' },
+    { value: 'needs-you', label: 'Needs you' },
+  ]
 
   const boardMode = $derived(mode === 'board')
+  const activeWorkView = $derived<WorkView>(routeWorkView)
+  const hierarchy = $derived(buildWorkHierarchy(tasks))
+  const visibleTasks = $derived(tasks.filter(matchesWorkFilter))
+  const boardDetail = $derived({
+    ...detail,
+    tasks: visibleTasks,
+  } as ProjectDetail)
 
   const taskCounts = $derived.by(() => {
     const all = tasks
@@ -92,7 +130,7 @@
   }
 
   const sortedTasks = $derived.by(() => {
-    const list = [...tasks]
+    const list = [...visibleTasks]
     list.sort((left, right) => compareTasks(left, right, sortKey, sortDir))
     return list
   })
@@ -184,6 +222,18 @@
     return effectiveWorkStatus(task, detail.run?.status === 'running')
   }
 
+  function hasOpenQuestion(task: Task): boolean {
+    return Boolean(task.openQuestions?.some(question => !question.answeredAt && !question.answer))
+  }
+
+  function matchesWorkFilter(task: Task): boolean {
+    if (workFilter === 'all') return true
+    if (workFilter === 'open') return !['done', 'pending_pr', 'shelved'].includes(task.status ?? '')
+    if (workFilter === 'blocked') return task.status === 'blocked'
+    if (workFilter === 'needs-you') return hasOpenQuestion(task)
+    return ['ready', 'spec_review', 'review', 'gate_check'].includes(task.status ?? '')
+  }
+
   function effectiveStatusLabel(task: Task): string {
     switch (effectiveStatus(task)) {
       case 'paused': return 'Paused'
@@ -233,11 +283,21 @@
   }
 
   function taskSecondaryText(task: Task): string {
+    const node = hierarchy.byId.get(task.id)
+    const childCount = node?.childIds.length ?? 0
+    if (childCount > 0) return nestedWorkCountLabel(childCount)
+    if (task.workKind) return workKindLabel(task.workKind)
     if (task.blockReason) return friendlyRuntimeMessage(task.blockReason)
     if (task.terminalSummary?.headline) return task.terminalSummary.headline
     if (task.latestCheckpoint?.nextPlannedAction) return task.latestCheckpoint.nextPlannedAction
     if (task.description) return task.description
     return friendlyTaskId(task.id)
+  }
+
+  function hierarchyBreadcrumb(task: Task): string {
+    const crumbs = hierarchy.byId.get(task.id)?.breadcrumb ?? []
+    if (crumbs.length <= 1) return ''
+    return crumbs.map(crumb => crumb.title).join(' / ')
   }
 
   $effect(() => {
@@ -255,90 +315,90 @@
       })
   })
 
-  function setMode(next: 'list' | 'board') {
-    if (next === mode) return
-    nav(next === 'board' ? currentProjectHref('/planner') : currentProjectHref('/work'))
+  $effect(() => {
+    path.href
+    path.value
+    routeWorkView = readWorkViewFromUrl(boardMode)
+  })
+
+  function setWorkView(next: string) {
+    if (next === 'columns') nav(currentProjectHref('/work?view=columns'))
+    if (next === 'list') nav(currentProjectHref('/work?view=list'))
+    if (next === 'board') nav(currentProjectHref('/work?view=board'))
+  }
+
+  function readWorkViewFromUrl(fallbackBoard: boolean): WorkView {
+    if (fallbackBoard) return 'board'
+    const params = new URL(window.location.href).searchParams
+    const view = params.get('view')
+    if (view === 'columns' || view === 'list' || view === 'board') return view
+    if (params.get('tree') === 'preview') return 'columns'
+    return 'list'
+  }
+
+  function onWorkFilterSelect(event: Event): void {
+    workFilter = (event.currentTarget as HTMLSelectElement).value as WorkFilter
   }
 </script>
 
-{#if boardMode}
-  <Card title="Task board" titleTag="h2">
-    {#snippet actions()}
-      <div class="view-switch" role="tablist" aria-label="Work view mode">
-        <Button
-          variant={mode === 'list' ? 'primary' : 'secondary'}
-          size="sm"
-          onclick={() => setMode('list')}
-          ariaLabel="List view"
-        >
-          List
-        </Button>
-        <Button
-          variant={mode === 'board' ? 'primary' : 'secondary'}
-          size="sm"
-          onclick={() => setMode('board')}
-          ariaLabel="Board view"
-        >
-          Board
-        </Button>
+<div class="work-list-view">
+  <div class="work-view-header" role="toolbar" aria-label="Work view controls">
+    <SegmentedControl label="Work view" ariaLabel="Work view" value={activeWorkView} options={viewOptions} onChange={setWorkView} />
+    <div class="work-view-actions">
+      <div class="show-picker" role="group" aria-label="Shown work">
+        <label for="work-view-show">Show</label>
+        <span class="select-shell">
+          <select id="work-view-show" value={workFilter} onchange={onWorkFilterSelect}>
+            {#each workFilterOptions as option (option.value)}
+              <option value={option.value}>{option.label}</option>
+            {/each}
+          </select>
+        </span>
       </div>
-    {/snippet}
+    </div>
+  </div>
 
-    <PlannerTab {detail} />
-  </Card>
+  {#if activeWorkView === 'board'}
+    <PlannerTab detail={boardDetail} />
+  {:else if activeWorkView === 'columns'}
+    <WorkTreePreview tasks={tasks} filter={workFilter} />
+  {:else}
+    <Card title="Work list" titleTag="h2">
 
-  <details class="progress-more progress-more--full">
-    <summary>Recent progress</summary>
-    <ProgressFeed {progress} {tasks} />
-  </details>
-{:else}
-  <div class="work-list-view">
-    <Card title={`Work list (${taskCounts.total})`} titleTag="h2">
-      {#snippet actions()}
-        <div class="view-switch" role="tablist" aria-label="Work view mode">
-          <Button
-            variant={mode === 'list' ? 'primary' : 'secondary'}
-            size="sm"
-            onclick={() => setMode('list')}
-            ariaLabel="List view"
-          >
-            List
-          </Button>
-          <Button
-            variant={mode === 'board' ? 'primary' : 'secondary'}
-            size="sm"
-            onclick={() => setMode('board')}
-            ariaLabel="Board view"
-          >
-            Board
-          </Button>
+      <div class="work-list-overview">
+        <div class="work-list-count">{visibleTasks.length} shown · {taskCounts.total} total</div>
+        <div class="work-summary">
+          {#if taskCounts.agentActive > 0}
+            <Chip label={countLabel(taskCounts.agentActive, 'Guildhall working', 'Guildhall working')} tone="agent" />
+          {/if}
+          {#if taskCounts.paused > 0}
+            <Chip label={countLabel(taskCounts.paused, 'paused task')} tone="neutral" />
+          {/if}
+          {#if taskCounts.reviewWaiting > 0}
+            <Chip label={countLabel(taskCounts.reviewWaiting, 'review waiting', 'review waiting')} tone="warn" />
+          {/if}
+          {#if taskCounts.gatesWaiting > 0}
+            <Chip label={countLabel(taskCounts.gatesWaiting, 'gates waiting', 'gates waiting')} tone="warn" />
+          {/if}
+          {#if taskCounts.shaping > 0}
+            <Chip label={countLabel(taskCounts.shaping, 'being shaped', 'being shaped')} tone="agent" />
+          {/if}
+          {#if taskCounts.readyForWorker > 0}
+            <Chip label={countLabel(taskCounts.readyForWorker, 'ready to start', 'ready to start')} tone="agent" />
+          {/if}
+          {#if taskCounts.needsSpecCleanup > 0}
+            <Chip label={countLabel(taskCounts.needsSpecCleanup, 'need brief cleanup', 'need brief cleanup')} tone="agent-attention" />
+          {/if}
+          {#if taskCounts.awaitingApproval > 0}
+            <Chip label={`${taskCounts.awaitingApproval} awaiting approval`} tone="warn" />
+          {/if}
+          {#if taskCounts.done > 0}
+            <Chip label={`${taskCounts.done} done`} tone="ok" />
+          {/if}
+          {#if importDraftCount > 0}
+            <Chip label={countLabel(importDraftCount, 'import draft')} tone="neutral" />
+          {/if}
         </div>
-      {/snippet}
-
-      <div class="work-summary">
-        <Chip label={`${taskCounts.total} tasks`} tone="neutral" />
-        {#if taskCounts.agentActive > 0}
-          <Chip label={countLabel(taskCounts.agentActive, 'Guildhall working', 'Guildhall working')} tone="agent" />
-        {/if}
-        {#if taskCounts.paused > 0}
-          <Chip label={countLabel(taskCounts.paused, 'paused task')} tone="neutral" />
-        {/if}
-        {#if taskCounts.reviewWaiting > 0}
-          <Chip label={countLabel(taskCounts.reviewWaiting, 'review waiting', 'review waiting')} tone="warn" />
-        {/if}
-        {#if taskCounts.gatesWaiting > 0}
-          <Chip label={countLabel(taskCounts.gatesWaiting, 'gates waiting', 'gates waiting')} tone="warn" />
-        {/if}
-        <Chip label={countLabel(taskCounts.shaping, 'being shaped', 'being shaped')} tone="agent" />
-        <Chip label={countLabel(taskCounts.readyForWorker, 'ready to start', 'ready to start')} tone="agent" />
-        {#if taskCounts.needsSpecCleanup > 0}
-          <Chip label={countLabel(taskCounts.needsSpecCleanup, 'need brief cleanup', 'need brief cleanup')} tone="agent-attention" />
-        {/if}
-        <Chip label={`${taskCounts.awaitingApproval} awaiting approval`} tone="warn" />
-        <Chip label={`${taskCounts.done} done`} tone="ok" />
-        {#if importDraftCount > 0}
-          <Chip label={countLabel(importDraftCount, 'import draft')} tone="neutral" />
-        {/if}
       </div>
 
       {#if importDraftCount > 0 && nextImportDraft}
@@ -365,10 +425,14 @@
           <div class="setup-empty">
             <p class="muted">{setupInboxItem?.detail ?? 'No tasks yet. Finish project setup first.'}</p>
             <Button variant="primary" size="sm" onclick={() => nav(currentProjectHref(setupInboxItem?.actionHref ?? '/setup'))}>
-              {setupInboxItem?.kind === 'project_check_in'
+              {setupInboxItem?.kind === 'required_migration'
+                ? 'Migrate project'
+                : setupInboxItem?.kind === 'project_check_in'
                 ? 'Start check-in'
-                : setupInboxItem?.kind === 'pressure_test_pending'
+                : setupInboxItem?.kind === 'pressure_test_pending' || setupInboxItem?.kind === 'agent_question_pending'
                   ? 'Answer question'
+                  : setupInboxItem?.kind === 'open_escalation'
+                    ? 'Review recovery'
                   : 'Open setup'}
             </Button>
           </div>
@@ -376,55 +440,57 @@
           <p class="muted">No tasks yet — <strong>New request</strong> to begin.</p>
         {/if}
       {:else}
-        <div class="task-table-wrap">
-          <table class="task-table">
-            <thead>
-              <tr>
-                <th><button type="button" class="sort-btn" onclick={() => toggleSort('title')}>Task{sortLabel('title')}</button></th>
-                <th><button type="button" class="sort-btn" onclick={() => toggleSort('status')}>Stage{sortLabel('status')}</button></th>
-                <th><button type="button" class="sort-btn" onclick={() => toggleSort('area')}>Part{sortLabel('area')}</button></th>
-                <th><button type="button" class="sort-btn" onclick={() => toggleSort('priority')}>Priority{sortLabel('priority')}</button></th>
-                <th class="col-revisions"><button type="button" class="sort-btn" onclick={() => toggleSort('revisions')}>Revisions{sortLabel('revisions')}</button></th>
-                <th><button type="button" class="sort-btn align-end" onclick={() => toggleSort('updated')}>Updated{sortLabel('updated')}</button></th>
-              </tr>
-            </thead>
-            <tbody>
-              {#each sortedTasks as task (task.id)}
-                <tr
-                  class="task-row"
-                  tabindex="0"
-                  role="button"
-                  aria-label={`Open task ${task.title ?? task.id}`}
-                  onclick={() => openTask(task)}
-                  onkeydown={(event) => onTaskKey(event, task)}
-                >
-                  <td class="cell-task">
-                    <div class="task-title">{task.title ?? '(untitled)'}</div>
-                    <div class="task-subcopy">{taskSecondaryText(task)}</div>
-                  </td>
-                  <td class="cell-status">
-                    <Chip label={effectiveStatusLabel(task)} tone={effectiveStatusTone(task)} />
-                  </td>
-                  <td class="cell-steward">{friendlyDomain(task.domain) || 'Project'}</td>
-                  <td class="cell-priority">
-                    <Chip label={friendlyPriority(task.priority)} tone={priorityTone(task.priority)} />
-                  </td>
-                  <td class="cell-revisions">{task.revisionCount ?? 0}</td>
-                  <td class="cell-updated">{formatUpdatedAt(task.updatedAt)}</td>
-                </tr>
-              {/each}
-            </tbody>
-          </table>
+        <div class="work-list-stack">
+          <div class="list-column-head" aria-label="Sort work list">
+            <button type="button" class:active={sortKey === 'title'} onclick={() => toggleSort('title')}>Task{sortLabel('title')}</button>
+            <button type="button" class:active={sortKey === 'status'} onclick={() => toggleSort('status')}>Stage{sortLabel('status')}</button>
+            <button type="button" class:active={sortKey === 'area'} onclick={() => toggleSort('area')}>Part{sortLabel('area')}</button>
+            <button type="button" class:active={sortKey === 'priority'} onclick={() => toggleSort('priority')}>Priority{sortLabel('priority')}</button>
+            <button type="button" class:active={sortKey === 'updated'} onclick={() => toggleSort('updated')}>Updated{sortLabel('updated')}</button>
+            <button type="button" class:active={sortKey === 'revisions'} onclick={() => toggleSort('revisions')}>Revs{sortLabel('revisions')}</button>
+          </div>
+          {#each sortedTasks as task (task.id)}
+            <button
+              type="button"
+              class="work-list-row"
+              aria-label={`Open task ${task.title ?? task.id}`}
+              onclick={() => openTask(task)}
+              onkeydown={(event) => onTaskKey(event, task)}
+            >
+              <span class="row-main">
+                <span class="task-title">{task.title ?? '(untitled)'}</span>
+                {#if hierarchyBreadcrumb(task)}
+                  <span class="task-breadcrumb">{hierarchyBreadcrumb(task)}</span>
+                {/if}
+                <span class="task-subcopy">{taskSecondaryText(task)}</span>
+              </span>
+              <span class="row-status">
+                <Chip label={effectiveStatusLabel(task)} tone={effectiveStatusTone(task)} />
+              </span>
+              <span class="row-domain">
+                {friendlyDomain(task.domain) || 'Project'}
+              </span>
+              <span class="row-priority">
+                <Chip label={friendlyPriority(task.priority)} tone={priorityTone(task.priority)} />
+              </span>
+              <span class="row-updated">
+                {formatUpdatedAt(task.updatedAt)}
+              </span>
+              <span class="row-revisions">
+                {task.revisionCount ?? 0}
+              </span>
+            </button>
+          {/each}
         </div>
       {/if}
     </Card>
+  {/if}
 
-    <details class="progress-more progress-more--full">
-      <summary>Recent progress</summary>
-      <ProgressFeed {progress} {tasks} />
-    </details>
-  </div>
-{/if}
+  <details class="progress-more progress-more--full">
+    <summary>Recent progress</summary>
+    <ProgressFeed {progress} {tasks} />
+  </details>
+</div>
 
 <style>
   .work-list-view {
@@ -433,15 +499,100 @@
     gap: var(--s-4);
     min-width: 0;
   }
-  .view-switch {
+  .work-view-header {
     display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: var(--s-3);
+    padding: var(--s-3);
+    border: 1px solid var(--border);
+    border-radius: var(--r-2);
+    background: var(--bg-raised);
+  }
+  .work-view-actions {
+    display: inline-flex;
+    align-items: center;
+    justify-content: flex-end;
     gap: var(--s-2);
+    min-width: 0;
+  }
+  .show-picker {
+    display: inline-flex;
+    align-items: center;
+    gap: var(--s-2);
+    white-space: nowrap;
+  }
+  .show-picker label {
+    color: var(--text-muted);
+    font-size: var(--fs-0);
+    font-weight: 800;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+  }
+  .select-shell {
+    position: relative;
+    display: inline-flex;
+  }
+  .select-shell::after {
+    content: '';
+    position: absolute;
+    right: var(--s-3);
+    top: 50%;
+    width: 7px;
+    height: 7px;
+    border-right: 2px solid var(--text-muted);
+    border-bottom: 2px solid var(--text-muted);
+    pointer-events: none;
+    transform: translateY(-65%) rotate(45deg);
+  }
+  .show-picker select {
+    appearance: none;
+    -webkit-appearance: none;
+    min-height: 28px;
+    padding: 0 calc(var(--s-5) + var(--s-2)) 0 var(--s-3);
+    border: 1px solid color-mix(in srgb, var(--glass-border-strong) 72%, var(--button-secondary-border));
+    border-radius: var(--r-1);
+    background:
+      linear-gradient(180deg, color-mix(in srgb, white 8%, transparent), transparent 48%),
+      color-mix(in srgb, var(--button-secondary-bg) 72%, transparent);
+    color: var(--text);
+    box-shadow:
+      var(--glass-inset-etch),
+      inset 0 1px 0 color-mix(in srgb, white 8%, transparent);
+    backdrop-filter: var(--glass-blur);
+    -webkit-backdrop-filter: var(--glass-blur);
+    font: inherit;
+    font-size: var(--fs-2);
+    font-weight: 600;
+  }
+  .show-picker select::-ms-expand {
+    display: none;
+  }
+  .show-picker select:focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: 2px;
+  }
+  .work-list-overview {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: var(--s-3);
+    margin-bottom: var(--s-3);
+  }
+  .work-list-count {
+    flex: 0 0 auto;
+    color: var(--text-muted);
+    font-size: var(--fs-1);
+    font-weight: 700;
+    line-height: var(--lh-tight);
+    white-space: nowrap;
   }
   .work-summary {
     display: flex;
     flex-wrap: wrap;
+    justify-content: flex-end;
     gap: var(--s-2);
-    margin-bottom: var(--s-3);
+    min-width: 0;
   }
   .setup-empty {
     display: flex;
@@ -455,12 +606,6 @@
   }
   .setup-empty p {
     margin: 0;
-  }
-  .task-table-wrap {
-    overflow-x: auto;
-    border: 1px solid var(--border);
-    border-radius: var(--r-2);
-    background: var(--bg-raised);
   }
   .draft-queue-card {
     display: flex;
@@ -499,97 +644,137 @@
     font-size: var(--fs-1);
     line-height: var(--lh-body);
   }
-  .task-table {
-    width: 100%;
-    border-collapse: collapse;
-    min-width: 780px;
+  .work-list-stack {
+    --work-list-columns:
+      minmax(280px, 1fr)
+      minmax(172px, max-content)
+      minmax(112px, 132px)
+      minmax(92px, max-content)
+      minmax(116px, max-content)
+      44px;
+    display: grid;
+    grid-template-columns: var(--work-list-columns);
+    gap: var(--s-2);
   }
-  .task-table th,
-  .task-table td {
-    padding: var(--s-3);
-    border-bottom: 1px solid var(--border);
-    vertical-align: top;
-  }
-  .task-table tbody tr:last-child td {
-    border-bottom: none;
-  }
-  .task-table th {
-    background: var(--bg-raised-2);
-    text-align: left;
-    font-size: var(--fs-0);
-    text-transform: uppercase;
-    letter-spacing: 0.05em;
-    color: var(--text-muted);
-    font-weight: 700;
-    white-space: nowrap;
-  }
-  .sort-btn {
-    display: inline-flex;
+  .list-column-head {
+    display: grid;
+    grid-column: 1 / -1;
+    grid-template-columns: subgrid;
     align-items: center;
-    gap: 4px;
-    background: transparent;
-    border: none;
-    color: inherit;
-    font: inherit;
-    font-weight: inherit;
-    text-transform: inherit;
-    letter-spacing: inherit;
+    gap: var(--s-3);
+    padding: 0 var(--s-3);
+  }
+  .list-column-head button {
+    min-width: 0;
     padding: 0;
+    border: 0;
+    background: transparent;
+    color: var(--text-muted);
+    font: inherit;
+    font-size: var(--fs-0);
+    font-weight: 800;
+    letter-spacing: 0.05em;
+    line-height: var(--lh-tight);
+    text-align: left;
+    text-transform: uppercase;
     cursor: pointer;
   }
-  .sort-btn:hover {
+  .list-column-head button:nth-child(5),
+  .list-column-head button:nth-child(6) {
+    text-align: right;
+  }
+  .list-column-head button:hover,
+  .list-column-head button.active {
     color: var(--text);
   }
-  .sort-btn.align-end {
-    margin-left: auto;
-  }
-  .task-row {
+  .work-list-row {
+    display: grid;
+    grid-column: 1 / -1;
+    grid-template-columns: subgrid;
+    align-items: center;
+    gap: var(--s-3);
+    width: 100%;
+    padding: var(--s-3);
+    border: 1px solid var(--border);
+    border-left: 3px solid var(--stripe-neutral);
+    border-radius: var(--r-2);
+    background: var(--bg-raised);
+    color: inherit;
+    font: inherit;
+    text-align: left;
     cursor: pointer;
-    transition: background 140ms ease, box-shadow 140ms ease;
+    transition: background 140ms ease, border-color 140ms ease, box-shadow 140ms ease;
   }
-  .task-row:hover,
-  .task-row:focus-visible {
+  .work-list-row:hover,
+  .work-list-row:focus-visible {
+    border-color: color-mix(in srgb, var(--accent) 38%, var(--border));
+    border-left-color: var(--stripe-accent);
     background: color-mix(in srgb, var(--accent) 6%, var(--bg-raised));
     outline: none;
-    box-shadow: inset 3px 0 0 var(--stripe-accent);
+    box-shadow: 0 0 0 1px color-mix(in srgb, var(--accent) 12%, transparent);
   }
-  .cell-task {
-    min-width: 260px;
+  .row-main {
+    display: grid;
+    gap: 4px;
+    min-width: 0;
   }
   .task-title {
+    display: -webkit-box;
+    overflow: hidden;
     font-size: var(--fs-2);
     font-weight: 700;
     color: var(--text);
     line-height: var(--lh-tight);
+    -webkit-line-clamp: 1;
+    -webkit-box-orient: vertical;
   }
   .task-subcopy {
-    margin-top: 6px;
+    display: -webkit-box;
+    overflow: hidden;
     font-size: var(--fs-1);
     color: var(--text-muted);
     line-height: var(--lh-body);
-    display: -webkit-box;
     -webkit-line-clamp: 2;
     -webkit-box-orient: vertical;
-    overflow: hidden;
   }
-  .cell-status,
-  .cell-priority,
-  .cell-revisions,
-  .cell-updated,
-  .col-revisions {
-    white-space: nowrap;
+  .task-breadcrumb {
+    color: var(--text-muted);
+    font-size: var(--fs-0);
+    line-height: var(--lh-tight);
   }
-  .cell-steward,
-  .cell-updated,
-  .cell-revisions {
+  .row-status,
+  .row-domain,
+  .row-priority,
+  .row-updated,
+  .row-revisions {
+    min-width: 0;
+  }
+  .row-status,
+  .row-priority {
+    display: inline-flex;
+    align-items: center;
+    justify-content: flex-start;
+  }
+  .row-domain {
     color: var(--text-muted);
     font-size: var(--fs-1);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
   }
-  .cell-updated {
+  .row-updated,
+  .row-revisions {
+    color: var(--text-muted);
+    font-size: var(--fs-0);
+    line-height: var(--lh-tight);
     text-align: right;
+    white-space: nowrap;
   }
-  .cell-revisions {
-    text-align: center;
+  @supports not (grid-template-columns: subgrid) {
+    .list-column-head,
+    .work-list-row {
+      grid-template-columns: var(--work-list-columns);
+    }
   }
   .progress-more {
     align-self: stretch;
@@ -619,42 +804,33 @@
   }
 
   @media (max-width: 860px) {
+    .work-view-header {
+      align-items: stretch;
+      flex-direction: column;
+    }
+    .work-view-actions {
+      justify-content: flex-start;
+    }
     .draft-queue-card {
       flex-direction: column;
       align-items: stretch;
     }
-    .task-table-wrap {
-      overflow-x: hidden;
-    }
-    .task-table {
-      min-width: 0;
-      display: block;
-    }
-    .task-table thead {
-      display: none;
-    }
-    .task-table tbody {
-      display: flex;
+    .work-list-overview {
       flex-direction: column;
+      align-items: stretch;
     }
-    .task-table tr,
-    .task-table td {
-      display: block;
+    .work-summary {
+      justify-content: flex-start;
     }
-    .task-table .task-row {
-      padding: var(--s-3);
-      border-bottom: 1px solid var(--border);
+    .work-list-row {
+      grid-template-columns: minmax(0, 1fr);
+      align-items: stretch;
     }
-    .task-table .task-row:last-child {
-      border-bottom: 0;
-    }
-    .task-table td {
+    .list-column-head {
+      display: flex;
+      flex-wrap: wrap;
+      gap: var(--s-2);
       padding: 0;
-      border-bottom: 0;
-    }
-    .cell-task {
-      min-width: 0;
-      margin-bottom: var(--s-2);
     }
     .task-title {
       font-size: var(--fs-1);
@@ -662,34 +838,13 @@
     .task-subcopy {
       -webkit-line-clamp: 3;
     }
-    .cell-status,
-    .cell-steward,
-    .cell-priority,
-    .cell-revisions,
-    .cell-updated {
-      display: inline-flex;
-      align-items: center;
-      gap: var(--s-1);
-      margin: 0 var(--s-2) var(--s-1) 0;
-      white-space: normal;
+    .row-status,
+    .row-priority {
+      justify-content: flex-start;
+    }
+    .row-updated,
+    .row-revisions {
       text-align: left;
     }
-    .cell-status::before,
-    .cell-steward::before,
-    .cell-priority::before,
-    .cell-revisions::before,
-    .cell-updated::before {
-      margin-right: var(--s-1);
-      color: var(--text-muted);
-      font-size: var(--fs-0);
-      font-weight: 700;
-      text-transform: uppercase;
-      letter-spacing: 0.04em;
-    }
-    .cell-status::before { content: 'Stage'; }
-    .cell-steward::before { content: 'Part'; }
-    .cell-priority::before { content: 'Priority'; }
-    .cell-revisions::before { content: 'Revisions'; }
-    .cell-updated::before { content: 'Updated'; }
   }
 </style>

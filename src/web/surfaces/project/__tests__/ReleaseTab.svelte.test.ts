@@ -25,18 +25,22 @@ const readyPayload = {
 
 describe('ReleaseTab', () => {
   afterEach(() => {
+    window.history.replaceState({}, '', '/release')
+    path.value = '/release'
     vi.restoreAllMocks()
     cleanup()
   })
 
   it('surfaces initialization-needed state before closure checks are available', async () => {
     vi.stubGlobal('fetch', vi.fn(async () => json({ initializationNeeded: true })))
+    window.history.replaceState({}, '', '/projects/looma-knit/release')
+    path.value = '/projects/looma-knit/release'
 
     render(ReleaseTab)
 
     expect(await screen.findByText('Project not initialized yet')).toBeTruthy()
     expect(screen.getByText('Complete the setup wizard before Guildhall can assess whether the current work is closed.')).toBeTruthy()
-    expect(screen.getByRole('link', { name: 'Open setup wizard' }).getAttribute('href')).toBe('/setup')
+    expect(screen.getByRole('link', { name: 'Open setup wizard' }).getAttribute('href')).toBe('/projects/looma-knit/setup')
   })
 
   it('surfaces closure-check load failures instead of showing a stale verdict', async () => {

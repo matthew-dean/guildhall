@@ -1147,6 +1147,90 @@ describe('runQuery — unknown tool + invalid input', () => {
     expect(completed?.type === 'tool_execution_completed' ? completed.output : '').toContain('Blocked transition to review')
   })
 
+  it('blocks worker self-critique notes before implementation evidence exists', async () => {
+    const registry = new ToolRegistry()
+    let updateCalls = 0
+    registry.register(
+      defineTool({
+        name: 'update-task',
+        description: '',
+        inputSchema: z.object({
+          taskId: z.string(),
+          status: z.string(),
+          note: z.object({
+            agentId: z.string(),
+            role: z.string(),
+            content: z.string(),
+          }).optional(),
+        }),
+        execute: async () => {
+          updateCalls += 1
+          return { output: 'updated', is_error: false }
+        },
+      }),
+    )
+    const client = new ScriptedApiClient([
+      {
+        message: assistantToolUse(
+          'update-task',
+          {
+            taskId: 'task-1',
+            status: 'in_progress',
+            note: {
+              agentId: 'worker-agent',
+              role: 'self-critique',
+              content: `**Self-critique:**
+For each acceptance criterion:
+- [ac-1]: Met — index.html exists and renders the app.
+
+Minimum-scope check:
+- Files changed: index.html
+- Smallest useful change?: yes — created the app shell.
+- Anything to revert before review?: none
+
+Review proof packet:
+- Changed files / diff scope: index.html
+- Verification commands passed: pnpm test passed
+- Working hypothesis at handoff: The app shell is ready.
+- Known gaps / follow-up: none
+
+Out-of-scope changes introduced: none
+Uncertainties: none`,
+            },
+          },
+        ),
+      },
+      { message: assistantText('ok') },
+    ])
+    const events = await drain(
+      runQuery(
+        {
+          apiClient: client,
+          toolRegistry: registry,
+          permissionChecker: autoChecker(),
+          cwd: '/workspace/project',
+          model: 'test',
+          systemPrompt: '',
+          maxTokens: 256,
+          maxTurns: 4,
+          toolMetadata: {
+            current_task_id: 'task-1',
+            current_agent_id: 'worker-agent',
+          },
+        },
+        [{ role: 'user', content: [{ type: 'text', text: 'go' }] }],
+      ),
+    )
+
+    const completed = events.find((e) =>
+      e.type === 'tool_execution_completed' &&
+      e.output.includes('Blocked self-critique'),
+    )
+    expect(updateCalls).toBe(0)
+    expect(completed?.type === 'tool_execution_completed' ? completed.is_error : false).toBe(true)
+    expect(completed?.type === 'tool_execution_completed' ? completed.output : '').toContain('before writing the review self-critique')
+  })
+
   it('allows review handoff after source inspection, verification, and a structured self-critique note', async () => {
     const registry = new ToolRegistry()
     let called = false

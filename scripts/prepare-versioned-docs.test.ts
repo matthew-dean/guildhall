@@ -14,8 +14,10 @@ async function createPrepareFixture(tmp: string): Promise<void> {
   await fs.mkdir(path.join(tmp, 'docs/levers'), { recursive: true })
   await fs.mkdir(path.join(tmp, 'docs/releases'), { recursive: true })
   await fs.mkdir(path.join(tmp, 'docs/web-ui'), { recursive: true })
+  await fs.mkdir(path.join(tmp, 'docs/assets/ui-audit/0-9-0'), { recursive: true })
   await fs.mkdir(path.join(tmp, 'docs/versions/1.0.0/guide'), { recursive: true })
   await fs.mkdir(path.join(tmp, 'docs/versions/1.0.0/releases'), { recursive: true })
+  await fs.mkdir(path.join(tmp, 'docs/versions/1.0.0/assets/ui-audit/0-9-0'), { recursive: true })
   await fs.writeFile(
     path.join(tmp, 'package.json'),
     JSON.stringify({ name: 'guildhall-docs-fixture', version: '1.0.0' }, null, 2),
@@ -40,6 +42,8 @@ async function createPrepareFixture(tmp: string): Promise<void> {
   await fs.writeFile(path.join(tmp, 'docs/levers/index.md'), '[Guide](../guide/quick-start)\n')
   await fs.writeFile(path.join(tmp, 'docs/releases/index.md'), '[Next](/next/guide/)\n')
   await fs.writeFile(path.join(tmp, 'docs/web-ui/flow-audit.md'), '# Internal checklist\n')
+  await fs.writeFile(path.join(tmp, 'docs/assets/ui-audit/0-9-0/README.md'), '# Screenshot notes\n')
+  await fs.writeFile(path.join(tmp, 'docs/assets/ui-audit/0-9-0/project-overview.webp'), 'image')
 
   await fs.writeFile(
     path.join(tmp, 'docs/versions/1.0.0/guide/quick-start.md'),
@@ -51,6 +55,8 @@ async function createPrepareFixture(tmp: string): Promise<void> {
     ].join('\n'),
   )
   await fs.writeFile(path.join(tmp, 'docs/versions/1.0.0/releases/index.md'), '# Releases\n')
+  await fs.writeFile(path.join(tmp, 'docs/versions/1.0.0/assets/ui-audit/0-9-0/README.md'), '# Version screenshot notes\n')
+  await fs.writeFile(path.join(tmp, 'docs/versions/1.0.0/assets/ui-audit/0-9-0/project-overview.webp'), 'image')
 }
 
 describe('docs prepare-versioned script', () => {
@@ -65,6 +71,10 @@ describe('docs prepare-versioned script', () => {
       const nextHome = await fs.readFile(path.join(tmp, 'docs/next/index.md'), 'utf8')
       const nextQuickStart = await fs.readFile(path.join(tmp, 'docs/next/guide/quick-start.md'), 'utf8')
 
+      await expect(fs.stat(path.join(tmp, 'docs/current/assets/ui-audit/0-9-0/README.md'))).rejects.toThrow()
+      await expect(fs.stat(path.join(tmp, 'docs/next/assets/ui-audit/0-9-0/README.md'))).rejects.toThrow()
+      await expect(fs.stat(path.join(tmp, 'docs/current/assets/ui-audit/0-9-0/project-overview.webp'))).resolves.toBeTruthy()
+      await expect(fs.stat(path.join(tmp, 'docs/next/assets/ui-audit/0-9-0/project-overview.webp'))).resolves.toBeTruthy()
       expect(currentQuickStart).toContain('/guide/quick-start')
       expect(currentQuickStart).toContain('[Relative stable](../releases/)')
       expect(currentQuickStart).not.toContain('/guildhall/')

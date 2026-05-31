@@ -51,6 +51,7 @@ function handlers() {
     onShapeDraft: vi.fn(),
     onOpenSpecTab: vi.fn(),
     onOpenEscalationAction: vi.fn(),
+    onRunEscalationAction: vi.fn(),
     onResolveEscalation: vi.fn(async () => {}),
     onAnswerQuestion: vi.fn(async () => {}),
   }
@@ -351,7 +352,7 @@ describe('CurrentTab', () => {
     expect(screen.getByRole('button', { name: /Let Guildhall run the check/i })).toBeTruthy()
     expect(screen.getByRole('button', { name: /View spec and evidence/i })).toBeTruthy()
     await userEvent.click(screen.getByRole('button', { name: /Let Guildhall run the check/i }))
-    expect(props.onOpenEscalationAction).toHaveBeenCalledWith('esc-1', 'retry')
+    expect(props.onRunEscalationAction).toHaveBeenCalledWith('esc-1')
     expect(document.body.textContent).not.toMatch(/\bAC-8\b/)
   })
 
@@ -386,7 +387,7 @@ describe('CurrentTab', () => {
     expect(screen.getByText('Ready')).toBeTruthy()
     expect(screen.getByText('Implementation path')).toBeTruthy()
     expect(screen.getByText('Repo is dirty.')).toBeTruthy()
-    await userEvent.click(screen.getByRole('button', { name: /start work/i }))
+    await userEvent.click(screen.getByRole('button', { name: /start only this work item/i }))
 
     expect(props.onRunTask).toHaveBeenCalledOnce()
   })
@@ -410,6 +411,7 @@ describe('CurrentTab', () => {
     expect(screen.getByText('Task completed.')).toBeTruthy()
     expect(screen.queryByRole('button', { name: /run this task/i })).toBeNull()
     expect(screen.queryByRole('button', { name: /start work/i })).toBeNull()
+    expect(screen.queryByRole('button', { name: /start only this work item/i })).toBeNull()
     expect(props.onRunTask).not.toHaveBeenCalled()
   })
 

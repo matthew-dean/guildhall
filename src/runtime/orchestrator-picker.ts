@@ -18,6 +18,7 @@ import { hasOpenEscalation } from '@guildhall/tools'
 import { META_INTAKE_TASK_ID } from './meta-intake.js'
 import { WORKSPACE_IMPORT_TASK_ID } from './workspace-importer.js'
 import { taskHasUnansweredVisibleQuestion } from './question-visibility.js'
+import { workSubtreeIds } from './work-hierarchy.js'
 
 export type TaskLane = 'spec' | 'worker' | 'review' | 'coordinator'
 
@@ -31,6 +32,10 @@ export function taskHasUnansweredOpenQuestion(task: Task): boolean {
 
 function holdsDraftedSpecReviewForManualApproval(task: Task): boolean {
   return task.id === META_INTAKE_TASK_ID || task.id === WORKSPACE_IMPORT_TASK_ID
+}
+
+function finishabilityAllowsDispatch(task: Task): boolean {
+  return task.status !== 'ready' || task.taskReadiness == null || task.taskReadiness.recommendation === 'ready'
 }
 
 /**
@@ -97,9 +102,15 @@ export function pickNextTask(
   preferredTaskId?: string,
 ): Task | undefined {
   const priority = ['critical', 'high', 'normal', 'low'] as const
+  const scopedIds = preferredTaskId
+    ? new Set(workSubtreeIds(queue.tasks, preferredTaskId))
+    : null
   const isExcluded = exclude
     ? (t: Task) => exclude.has(t.id)
     : (_t: Task) => false
+  const matchesScope = scopedIds
+    ? (t: Task) => scopedIds.has(t.id)
+    : (_t: Task) => true
   const matchesLane = lane
     ? (t: Task) => laneForTask(t) === lane
     : (_t: Task) => true
@@ -109,11 +120,13 @@ export function pickNextTask(
     priorityLevel: (typeof priority)[number],
   ): boolean =>
     task.status === status &&
+    finishabilityAllowsDispatch(task) &&
     !(task.status === 'spec_review' && Boolean(task.spec?.trim()) && holdsDraftedSpecReviewForManualApproval(task)) &&
     !((task.status === 'exploring' || task.status === 'spec_review') && hasUnansweredOpenQuestion(task)) &&
     matchesLane(task) &&
     task.priority === priorityLevel &&
     (!domain || task.domain === domain) &&
+    matchesScope(task) &&
     dependenciesSatisfied(queue, task) &&
     !hasOpenEscalation(task) &&
     !isExcluded(task)
@@ -129,6 +142,7 @@ export function pickNextTask(
         matchesLane(t) &&
         t.priority === p &&
         (!domain || t.domain === domain) &&
+        matchesScope(t) &&
         !hasOpenEscalation(t) &&
         !isExcluded(t),
     )
@@ -159,6 +173,17 @@ export function pickNextTask(
         }
       }
     }
+    if (scopedIds?.size) {
+      for (const status of [...activeStatuses, ...freshStatuses]) {
+        for (const p of priority) {
+          const task = queue.tasks.find(
+            (t) => t.id !== preferredTaskId && matchesStatusSlot(t, status, p),
+          )
+          if (task) return task
+        }
+      }
+    }
+    return undefined
   }
 
   for (const status of [...activeStatuses, ...freshStatuses]) {

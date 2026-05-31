@@ -14,6 +14,7 @@
   import Button from '../../lib/Button.svelte'
   import Textarea from '../../lib/Textarea.svelte'
   import Markdown from '../../lib/Markdown.svelte'
+  import { readableTaskDescription } from '../../lib/task-display.js'
   import type { Task } from '../../lib/types.js'
 
   interface Props {
@@ -31,6 +32,7 @@
 
   const proposedBy = $derived(task.proposedBy ?? task.authoredBy ?? 'an agent')
   const rationale = $derived(task.proposalRationale?.trim() ?? '')
+  const taskDescription = $derived(readableTaskDescription(task.description, task.title))
 
   async function submitDifferent(): Promise<void> {
     const msg = correction.trim()
@@ -46,9 +48,9 @@
 
   <h2 class="title">{task.title}</h2>
 
-  {#if task.description}
+  {#if taskDescription}
     <div class="body">
-      <Markdown source={task.description} />
+      <Markdown source={taskDescription} />
     </div>
   {/if}
 

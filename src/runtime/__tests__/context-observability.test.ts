@@ -3,6 +3,7 @@ import fs from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
 import type { Task } from '@guildhall/core'
+import { FileBackedGuildhallPersistence } from '@guildhall/persistence'
 import {
   readContextDebugForTask,
   writeContextDebugRecord,
@@ -11,6 +12,7 @@ import type { BuiltContext } from '../context-builder.js'
 
 let tmpDir: string
 let memoryDir: string
+let priorDataDir: string | undefined
 
 function mkTask(overrides: Partial<Task> = {}): Task {
   return {
@@ -61,11 +63,15 @@ function mkContext(overrides: Partial<BuiltContext> = {}): BuiltContext {
 
 beforeEach(async () => {
   tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'guildhall-context-debug-'))
+  priorDataDir = process.env.GUILDHALL_DATA_DIR
+  process.env.GUILDHALL_DATA_DIR = path.join(tmpDir, 'data')
   memoryDir = path.join(tmpDir, 'memory')
   await fs.mkdir(memoryDir, { recursive: true })
 })
 
 afterEach(async () => {
+  if (priorDataDir === undefined) delete process.env.GUILDHALL_DATA_DIR
+  else process.env.GUILDHALL_DATA_DIR = priorDataDir
   await fs.rm(tmpDir, { recursive: true, force: true })
 })
 
@@ -96,6 +102,29 @@ describe('writeContextDebugRecord', () => {
     expect(loaded).toHaveLength(1)
     expect(loaded[0]?.id).toBe(record.id)
     expect(loaded[0]?.temperature).toBe(0.1)
+
+    const persistence = new FileBackedGuildhallPersistence()
+    const events = await persistence.listEvents({
+      projectRoot: tmpDir,
+      placement: {
+        scope: 'local_history',
+        retention: 'debug',
+        visibility: 'internal_audit',
+        commitPolicy: 'ignored',
+      },
+      collection: 'context-debug',
+      streamId: 'task-ctx',
+    })
+    expect(events).toHaveLength(1)
+    expect(events[0]).toMatchObject({
+      schema: { name: 'context-debug-record', version: 1 },
+      recordedBy: 'context-observability',
+      payload: {
+        id: record.id,
+        taskId: 'task-ctx',
+        snapshotPath: record.snapshotPath,
+      },
+    })
   })
 
   it('warns when a subproject task is mismatched to the active worktree', async () => {

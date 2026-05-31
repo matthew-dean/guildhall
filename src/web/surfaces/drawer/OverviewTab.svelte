@@ -10,6 +10,7 @@
   import { labelForIdentifier } from '../../lib/identifier-labels.js'
   import { currentTaskHref } from '../../lib/project-routes.js'
   import { roleLabel } from '../../lib/escalation-labels.js'
+  import { readableTaskDescription } from '../../lib/task-display.js'
   import type { Task } from '../../lib/types.js'
 
   interface Props {
@@ -33,8 +34,11 @@
   const requestIntake = $derived(task.requestIntake ?? null)
   const latestCheckpoint = $derived(task.latestCheckpoint ?? null)
   const recommendedChildren = $derived(sizePlan?.recommendedChildren ?? [])
+  const taskDescription = $derived(readableTaskDescription(task.description, task.title) || '(no description)')
   const createdChildren = $derived(recommendedChildren.filter((child) => child.createdTaskId))
   const parentTaskId = $derived(taskIdFromParentGoal(task.parentGoalId))
+  const containingWorkId = $derived(task.hierarchy?.parentId ?? parentTaskId)
+  const nestedWorkIds = $derived(task.hierarchy?.childIds ?? [])
   const needsSplitAction = $derived(
     sizePlan?.action === 'split_required' &&
     recommendedChildren.length > 0 &&
@@ -107,7 +111,7 @@
 <Stack gap="4">
   <Card title="Overview">
     <Stack gap="3">
-      <Markdown source={task.description ?? '(no description)'} />
+      <Markdown source={taskDescription} />
       <Row wrap gap="2">
         <Chip label={friendlyStatus(task.status)} tone={statusTone(task.status)} />
         {#if task.domain}<Chip label={friendlyDomain(task.domain)} tone="neutral" />{/if}
@@ -118,23 +122,31 @@
     </Stack>
   </Card>
 
-  <Card title="Task hierarchy" tone={splitNeeded ? 'warn' : 'default'}>
+  <Card title="Work hierarchy" tone={splitNeeded ? 'warn' : 'default'}>
     <Stack gap="3">
-      {#if task.parentGoalId}
+      {#if containingWorkId}
         <div class="hierarchy-row">
-          <span>{parentTaskId === task.id ? 'Hierarchy role' : parentTaskId ? 'Parent task' : 'Parent goal'}</span>
-          {#if parentTaskId && parentTaskId !== task.id}
-            <a href={currentTaskHref(parentTaskId, projectId)} onclick={(event) => navigateTask(event, parentTaskId)}>
-              {parentGoalLabel(task.parentGoalId)}
+          <span>{containingWorkId === task.id ? 'Hierarchy role' : 'Containing work'}</span>
+          {#if containingWorkId !== task.id}
+            <a href={currentTaskHref(containingWorkId, projectId)} onclick={(event) => navigateTask(event, containingWorkId)}>
+              {task.parentGoalId ? parentGoalLabel(task.parentGoalId) : containingWorkId}
             </a>
-          {:else if parentTaskId === task.id}
-            <strong>Parent task</strong>
           {:else}
-            <strong>{parentGoalLabel(task.parentGoalId)}</strong>
+            <strong>Containing work</strong>
           {/if}
         </div>
+      {:else if nestedWorkIds.length > 0 || task.status === 'parent'}
+        <div class="hierarchy-row">
+          <span>Hierarchy role</span>
+          <strong>Containing work</strong>
+        </div>
+      {:else if task.parentGoalId}
+        <div class="hierarchy-row">
+          <span>Containing goal</span>
+          <strong>{parentGoalLabel(task.parentGoalId)}</strong>
+        </div>
       {:else}
-        <p class="muted">No parent goal recorded.</p>
+        <p class="muted">No containing work recorded.</p>
       {/if}
 
       {#if dependsOn.length > 0}
@@ -163,11 +175,11 @@
           </strong>
           <span>
             {#if createdChildren.length > 0}
-              This task is the parent. Work should happen in the linked child tasks below.
+              Work happens in the nested work below.
             {:else if needsSplitAction}
-              Split it now: Guildhall will keep this as the parent task and create the tasks below.
+              Split it now: Guildhall will keep this as containing work and create the nested work below.
             {:else}
-              Guildhall has sized this as too large for one clean worker/review pass. Split it into a parent task with the tasks below before work starts.
+              Guildhall has sized this as too large for one clean worker/review pass. Split it into containing work with nested work below before work starts.
             {/if}
           </span>
           {#if canCreateSplitChildren}
@@ -181,9 +193,24 @@
         </div>
       {/if}
 
+      {#if nestedWorkIds.length > 0 && createdChildren.length === 0}
+        <div>
+          <h4>Nested work</h4>
+          <ul class="link-list">
+            {#each nestedWorkIds as childId (childId)}
+              <li>
+                <a href={currentTaskHref(childId, projectId)} onclick={(event) => navigateTask(event, childId)}>
+                  {childId}
+                </a>
+              </li>
+            {/each}
+          </ul>
+        </div>
+      {/if}
+
       {#if recommendedChildren.length > 0}
         <div>
-          <h4>{createdChildren.length > 0 ? 'Child tasks' : needsSplitAction ? 'Tasks Guildhall will create' : 'Recommended child tasks'}</h4>
+          <h4>{createdChildren.length > 0 ? 'Nested work' : needsSplitAction ? 'Work Guildhall will create' : 'Recommended nested work'}</h4>
           <ul class="child-list">
             {#each recommendedChildren as child, index (`${child.title ?? 'child'}-${index}`)}
               <li>

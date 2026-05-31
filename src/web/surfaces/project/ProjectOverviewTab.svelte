@@ -66,6 +66,14 @@
   const displayPath = $derived(formatUserPath(detail.path))
   const running = $derived(detail.run?.status === 'running')
   const actionableInbox = $derived(inboxItems.filter(item => item.severity !== 'low').slice(0, 3))
+  const runtime = $derived(detail.runtime ?? null)
+  const memoryHealth = $derived(detail.memoryHealth ?? null)
+  const primaryProofPaths = $derived.by(() => {
+    return tasks
+      .flatMap(task => (task.proofPaths ?? []).map(proofPath => ({ task, proofPath })))
+      .sort((left, right) => proofRank(left.proofPath.status) - proofRank(right.proofPath.status))
+      .slice(0, 3)
+  })
 
   const counts = $derived.by(() => {
     const count = (statuses: string[]) => tasks.filter(task => statuses.includes(task.status ?? '')).length
@@ -109,6 +117,15 @@
       .sort((left, right) => (right.updatedAt ?? '').localeCompare(left.updatedAt ?? ''))
       .slice(0, 4)
   })
+  const requiredMigrationBlocked = $derived(detail.startReadiness?.code === 'required_migration_pending')
+  const startBlocked = $derived(detail.startReadiness?.canStart === false)
+  const emptyWorkMixLabel = $derived(
+    requiredMigrationBlocked
+      ? 'Run the required Guildhall migration before creating or running work.'
+      : startBlocked
+        ? 'Resolve the project blocker before adding more work.'
+        : 'No tasks yet. Create a request when you are ready.',
+  )
 
   const recentEvents = $derived.by(() => {
     return (detail.recentEvents ?? [])
@@ -117,6 +134,7 @@
       .map(event => ({ event, label: summarizeEvent(event) }))
       .filter(item => !isResolvedGitUnavailableEvent(item.event))
       .filter(item => item.label && !isLowSignalEvent(item.event))
+      .filter(item => !(requiredMigrationBlocked && isAllTerminalStoppedEvent(item.event)))
       .slice(0, 5)
   })
 
@@ -172,6 +190,24 @@
       })
     }
 
+    if (runtime) {
+      items.push({
+        label: runtimeHealthLabel(runtime.status, runtime.health?.status),
+        detail: runtimeModeLabel(runtime.migration?.mode),
+        tone: runtimeTone(runtime.status, runtime.health?.status),
+        href: currentProjectHref('/settings/ready', activeProjectId),
+      })
+    }
+
+    if (memoryHealth) {
+      items.push({
+        label: 'Memory health',
+        detail: `${memoryHealth.active ?? 0} active, ${memoryHealth.proposed ?? 0} proposed, ${memoryHealth.used ?? 0} recently used.`,
+        tone: (memoryHealth.active ?? 0) > 0 ? 'ok' : (memoryHealth.proposed ?? 0) > 0 ? 'warn' : 'neutral',
+        href: currentProjectHref('/settings/learning', activeProjectId),
+      })
+    }
+
     if (!items.length) {
       items.push({
         label: 'Health unknown',
@@ -194,13 +230,26 @@
         action: 'migration' as NextActionKind,
       }
     }
+    if (detail.startReadiness?.canStart === false) {
+      const href = detail.startReadiness.actionHref ?? currentProjectHref('/overview', activeProjectId)
+      const matchingInbox = inboxItems.find(item => item.severity !== 'low' && item.actionHref === href)
+      return {
+        label: detail.startReadiness.message ?? matchingInbox?.title ?? startReadinessLabel(detail.startReadiness.code),
+        detail: matchingInbox?.detail ?? 'Guildhall needs this resolved before Start can move work.',
+        content: matchingInbox?.taskDescription,
+        button: matchingInbox ? inboxActionLabel(matchingInbox) : 'Open item',
+        href,
+        tone: matchingInbox?.severity === 'high' ? 'danger' as Tone : 'warn' as Tone,
+        action: 'navigate' as NextActionKind,
+      }
+    }
     const inbox = actionableInbox[0]
     if (inbox) {
       return {
         label: inbox.title,
         detail: inbox.detail,
         content: inbox.taskDescription,
-        button: 'Open',
+        button: inboxActionLabel(inbox),
         href: inbox.actionHref ?? '/thread',
         tone: inbox.severity === 'high' ? 'danger' as Tone : 'warn' as Tone,
         action: 'navigate' as NextActionKind,
@@ -245,6 +294,20 @@
       action: 'navigate' as NextActionKind,
     }
   })
+
+  function inboxActionLabel(item: InboxItem): string {
+    switch (item.kind) {
+      case 'project_understanding': return 'Review update'
+      case 'workspace_import_pending': return 'Review import'
+      case 'agent_question_pending': return 'Answer question'
+      case 'pressure_test_pending': return 'Answer question'
+      case 'open_escalation': return 'Review recovery'
+      case 'brief_approval': return 'Review brief'
+      case 'spec_approval': return 'Review spec'
+      case 'required_migration': return 'Migrate'
+      default: return 'Open'
+    }
+  }
 
   const blockedRows = $derived.by(() => {
     return tasks
@@ -332,6 +395,12 @@
     return isGitUnavailableMessage(message) && !hasCurrentGitUnavailableStory(detail)
   }
 
+  function isAllTerminalStoppedEvent(event: EventEnvelope): boolean {
+    const type = event.event?.type ?? event.type ?? ''
+    const reason = event.event?.reason ?? event.reason
+    return type === 'supervisor_stopped' && reason === 'all_terminal'
+  }
+
   function formatDate(value: string | undefined): string {
     if (!value) return ''
     const date = new Date(value)
@@ -384,6 +453,9 @@
     }
     if (/research budget exhausted|hit the research budget|refusing more read-only tool calls|do not call more read-only tools now/i.test(text)) {
       return 'Guildhall paused after gathering enough context. Open the task to choose the next step.'
+    }
+    if (/spec (?:author|agent|shaping).*(?:turn limit|maximum turn|timed out)|kept researching after guildhall asked for durable progress/i.test(text)) {
+      return 'Spec shaping stopped before Guildhall saved the next draft. Open the task to retry from the transcript or reframe the work.'
     }
     if (/\bAC-\d+\b/i.test(text) && /\bevidence\b/i.test(text)) {
       return 'Guildhall needs to run or save one missing verification check before this task can finish.'
@@ -458,6 +530,38 @@
   function go(href: string): void {
     nav(projectActionHref(href, activeProjectId), { backgroundPath: path.value })
   }
+
+  function proofRank(status: string | undefined): number {
+    switch (status) {
+      case 'blocked': return 0
+      case 'in_progress': return 1
+      case 'planned': return 2
+      case 'stale': return 3
+      case 'verified': return 4
+      default: return 5
+    }
+  }
+
+  function runtimeTone(status: string | undefined, health: string | undefined): Tone {
+    if (status === 'failed' || health === 'unhealthy') return 'danger'
+    if (health === 'degraded' || status === 'creating') return 'warn'
+    if (status === 'running' && health === 'healthy') return 'ok'
+    if (status === 'running') return 'running'
+    return 'neutral'
+  }
+
+  function runtimeHealthLabel(status: string | undefined, health: string | undefined): string {
+    if (status === 'failed') return 'Runtime failed'
+    if (status === 'running') return health === 'healthy' ? 'Runtime healthy' : 'Runtime running'
+    if (status === 'creating') return 'Runtime starting'
+    return 'Runtime stopped'
+  }
+
+  function runtimeModeLabel(mode: string | undefined): string {
+    if (mode === 'runtime-backed') return 'Podman runtime mode'
+    if (mode === 'host-run') return 'Compatibility mode'
+    return 'Runtime mode unknown'
+  }
 </script>
 
 <div class="overview">
@@ -529,7 +633,7 @@
       <WorkMixChart
         ariaLabel={`Work mix: ${counts.total} tasks`}
         {segments}
-        emptyLabel="No tasks yet. Create a request when you are ready."
+        emptyLabel={emptyWorkMixLabel}
         onLegendClick={() => go(currentProjectHref('/work', activeProjectId))}
       />
     </Card>
@@ -597,7 +701,15 @@
         </button>
       {/if}
       {#if runPlanRows.length === 0}
-        <p class="muted">Nothing is queued for the next run yet.</p>
+        <p class="muted">
+          {#if requiredMigrationBlocked}
+            The next run is blocked until the required migration is applied.
+          {:else if startBlocked}
+            The next run is blocked until the project blocker is resolved.
+          {:else}
+            Nothing is queued for the next run yet.
+          {/if}
+        </p>
       {:else}
         <div class="run-plan-list" aria-label="Likely next run order">
           {#each runPlanRows as row, index (`${row.task?.id ?? 'fallback'}:${index}`)}
@@ -608,6 +720,47 @@
                 <span>{row.detail}</span>
               </div>
               <Chip label={row.tone === 'running' ? 'Live' : row.tone === 'warn' ? 'Needs review' : row.tone === 'accent' ? 'Likely next' : 'Later'} tone={row.tone === 'running' ? 'ok' : row.tone === 'warn' ? 'warn' : row.tone === 'accent' ? 'accent' : 'neutral'} />
+            </button>
+          {/each}
+        </div>
+      {/if}
+    </Card>
+  </section>
+
+  <section class="overview-grid">
+    <Card title="Runtime and memory" titleTag="h2" className="overview-card">
+      <div class="signal-list">
+        <button type="button" class="signal-row" onclick={() => go(currentProjectHref('/settings/ready', activeProjectId))}>
+          <StatusDot tone={runtimeTone(runtime?.status, runtime?.health?.status) === 'running' ? 'active' : runtimeTone(runtime?.status, runtime?.health?.status) === 'ok' ? 'ok' : runtimeTone(runtime?.status, runtime?.health?.status) === 'danger' ? 'danger' : runtimeTone(runtime?.status, runtime?.health?.status) === 'warn' ? 'warn' : 'idle'} pulse={runtime?.status === 'running'} size="sm" />
+          <div>
+            <strong>{runtimeHealthLabel(runtime?.status, runtime?.health?.status)}</strong>
+            <span>{runtimeModeLabel(runtime?.migration?.mode)}{#if runtime?.lastActivityAt} · active {formatDate(runtime.lastActivityAt)}{/if}</span>
+          </div>
+        </button>
+        <button type="button" class="signal-row" onclick={() => go(currentProjectHref('/settings/learning', activeProjectId))}>
+          <StatusDot tone={(memoryHealth?.active ?? 0) > 0 ? 'ok' : (memoryHealth?.proposed ?? 0) > 0 ? 'warn' : 'idle'} size="sm" />
+          <div>
+            <strong>Memory health</strong>
+            <span>
+              {memoryHealth?.active ?? 0} active · {memoryHealth?.proposed ?? 0} proposed · {memoryHealth?.used ?? 0} used
+            </span>
+          </div>
+        </button>
+      </div>
+    </Card>
+
+    <Card title="Primary proof paths" titleTag="h2" className="overview-card">
+      {#if primaryProofPaths.length === 0}
+        <p class="muted">No proof paths have been planned yet.</p>
+      {:else}
+        <div class="proof-path-list">
+          {#each primaryProofPaths as item (`${item.task.id}:${item.proofPath.id ?? item.proofPath.title}`)}
+            <button type="button" class="proof-path-row" onclick={() => go(currentTaskHref(item.task.id, activeProjectId))}>
+              <div>
+                <strong>{item.proofPath.title ?? 'Proof path'}</strong>
+                <span>{item.proofPath.summary ?? taskLabel(item.task)}</span>
+              </div>
+              <Chip label={friendlyStatus(item.proofPath.status)} tone={item.proofPath.status === 'verified' ? 'ok' : item.proofPath.status === 'blocked' ? 'warn' : 'neutral'} />
             </button>
           {/each}
         </div>
@@ -732,6 +885,8 @@
   }
   .action-row,
   .health-row,
+  .signal-row,
+  .proof-path-row,
   .run-blocker,
   .run-plan-row {
     border: 1px solid var(--border);
@@ -764,6 +919,8 @@
   .action-list,
   .motion-list,
   .health-list,
+  .signal-list,
+  .proof-path-list,
   .event-list,
   .dependency-list,
   .run-plan-list {
@@ -790,6 +947,8 @@
     line-height: var(--lh-body);
   }
   .health-row,
+  .signal-row,
+  .proof-path-row,
   .run-blocker,
   .run-plan-row {
     display: grid;
@@ -799,6 +958,8 @@
     padding: var(--s-3);
   }
   .health-row div,
+  .signal-row div,
+  .proof-path-row div,
   .run-blocker div,
   .run-plan-row div {
     display: grid;
@@ -806,6 +967,8 @@
     min-width: 0;
   }
   .health-row strong,
+  .signal-row strong,
+  .proof-path-row strong,
   .run-blocker strong,
   .run-plan-row strong {
     color: var(--text);
@@ -816,6 +979,8 @@
     min-height: 0;
   }
   .run-blocker span,
+  .signal-row span,
+  .proof-path-row span,
   .run-plan-row span {
     color: var(--text-muted);
     font-size: var(--fs-1);

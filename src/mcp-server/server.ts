@@ -8,9 +8,28 @@ import {
 } from './evidence.js'
 import {
   buildGuildhallResourceIndex,
+  listMcpMemory,
   readGuildhallResource,
+  readMcpEffectiveContext,
+  readMcpMemory,
+  recordMcpMemoryObservation,
+  updateMcpMemoryStatus,
 } from './project-reader.js'
 import type { GuildhallMcpContext } from './types.js'
+
+const memoryStatus = z.enum(['observed', 'proposed', 'active', 'used', 'retired'])
+const memoryType = z.enum([
+  'project_fact',
+  'project_habit',
+  'user_preference',
+  'project_skill',
+  'codebase_knowledge',
+  'product_idea',
+])
+const memoryScope = z.enum(['project', 'user_global', 'guildhall_product'])
+const confidence = z.enum(['low', 'medium', 'high'])
+const risk = z.enum(['low', 'medium', 'high'])
+const freshness = z.enum(['fresh', 'recent', 'stale'])
 
 export function buildGuildhallMcpManifest() {
   return {
@@ -19,7 +38,14 @@ export function buildGuildhallMcpManifest() {
       { uri: 'guildhall://project/tasks', name: 'Guildhall tasks' },
       { uri: 'guildhall://project/artifacts', name: 'Guildhall artifacts' },
       { uri: 'guildhall://project/decisions', name: 'Guildhall decisions' },
+      { uri: 'guildhall://project/feedback', name: 'Guildhall feedback' },
+      { uri: 'guildhall://project/design', name: 'Guildhall design context' },
       { uri: 'guildhall://project/memory', name: 'Guildhall memory' },
+      { uri: 'guildhall://project/learning', name: 'Guildhall learning' },
+      { uri: 'guildhall://project/context', name: 'Guildhall context health' },
+      { uri: 'guildhall://project/local-history', name: 'Guildhall local history' },
+      { uri: 'guildhall://project/codebase-knowledge', name: 'Guildhall codebase knowledge' },
+      { uri: 'guildhall://project/runtime', name: 'Guildhall runtime' },
       { uri: 'guildhall://project/capability-requests', name: 'Guildhall capability requests' },
     ],
     resourceTemplates: [
@@ -31,6 +57,11 @@ export function buildGuildhallMcpManifest() {
       { name: 'guildhall.append_task_evidence' },
       { name: 'guildhall.create_capability_request' },
       { name: 'guildhall.list_capability_requests' },
+      { name: 'guildhall.list_memory' },
+      { name: 'guildhall.read_memory' },
+      { name: 'guildhall.record_memory_observation' },
+      { name: 'guildhall.update_memory_status' },
+      { name: 'guildhall.read_effective_context' },
     ],
   }
 }
@@ -117,6 +148,106 @@ export async function createGuildhallMcpServer(ctx: GuildhallMcpContext): Promis
     },
     async () => ({
       content: [{ type: 'text', text: await listMcpCapabilityRequests(ctx) }],
+    }),
+  )
+
+  server.registerTool(
+    'guildhall.list_memory',
+    {
+      description: 'List bounded Guildhall memory records with optional filters.',
+      inputSchema: {
+        statuses: z.array(memoryStatus).optional(),
+        scopes: z.array(memoryScope).optional(),
+        types: z.array(memoryType).optional(),
+        tags: z.array(z.string()).optional(),
+        domains: z.array(z.string()).optional(),
+        taskKinds: z.array(z.string()).optional(),
+        fileAreas: z.array(z.string()).optional(),
+        minConfidence: confidence.optional(),
+        maxRisk: risk.optional(),
+        freshness: z.array(freshness).optional(),
+        text: z.string().optional(),
+      },
+    },
+    async (input) => ({
+      content: [{ type: 'text', text: await listMcpMemory(ctx, input) }],
+    }),
+  )
+
+  server.registerTool(
+    'guildhall.read_memory',
+    {
+      description: 'Read one Guildhall memory record by id.',
+      inputSchema: {
+        id: z.string(),
+        scope: memoryScope.optional(),
+      },
+    },
+    async (input) => ({
+      content: [{ type: 'text', text: await readMcpMemory(ctx, input) }],
+    }),
+  )
+
+  server.registerTool(
+    'guildhall.record_memory_observation',
+    {
+      description: 'Record or replace a Guildhall memory observation.',
+      inputSchema: {
+        id: z.string(),
+        scope: memoryScope,
+        type: memoryType,
+        status: memoryStatus.default('observed'),
+        summary: z.string(),
+        content: z.string(),
+        tags: z.array(z.string()).default([]),
+        domains: z.array(z.string()).default([]),
+        taskKinds: z.array(z.string()).default([]),
+        fileAreas: z.array(z.string()).default([]),
+        confidence: confidence.default('medium'),
+        risk: risk.default('low'),
+        freshness: freshness.default('fresh'),
+        evidenceRefs: z.array(z.object({
+          kind: z.string(),
+          summary: z.string(),
+          ref: z.string().optional(),
+          path: z.string().optional(),
+        })).default([]),
+        createdAt: z.string(),
+        updatedAt: z.string(),
+        source: z.string().default('mcp'),
+      },
+    },
+    async (input) => ({
+      content: [{ type: 'text', text: await recordMcpMemoryObservation(ctx, input) }],
+    }),
+  )
+
+  server.registerTool(
+    'guildhall.update_memory_status',
+    {
+      description: 'Update the lifecycle status of a Guildhall memory record.',
+      inputSchema: {
+        id: z.string(),
+        status: memoryStatus,
+        updatedAt: z.string().optional(),
+      },
+    },
+    async (input) => ({
+      content: [{ type: 'text', text: await updateMcpMemoryStatus(ctx, input) }],
+    }),
+  )
+
+  server.registerTool(
+    'guildhall.read_effective_context',
+    {
+      description: 'Read the effective memory context Guildhall would inject for a task.',
+      inputSchema: {
+        taskId: z.string(),
+        maxRecords: z.number().int().positive().max(20).optional(),
+      },
+    },
+    async (input) => ({
+      content: [{ type: 'text', text: await readMcpEffectiveContext(ctx, input) }],
     }),
   )
 

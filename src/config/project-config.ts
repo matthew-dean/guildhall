@@ -22,6 +22,11 @@ export const SHARED_PROJECT_METADATA_GITIGNORE_ENTRIES = [
 export const LOCAL_PROJECT_STATE_GITIGNORE_ENTRIES = [
   '# Local/private Guildhall state stays out of git.',
   `${PROJECT_CONFIG_DIRNAME}/${PROJECT_CONFIG_FILENAME}`,
+  `${PROJECT_CONFIG_DIRNAME}/codebase-map.yaml`,
+  `${PROJECT_CONFIG_DIRNAME}/codebase-map.stale.json`,
+  `${PROJECT_CONFIG_DIRNAME}/codebase-map.history.jsonl`,
+  `${PROJECT_CONFIG_DIRNAME}/codebase-map/`,
+  `${PROJECT_CONFIG_DIRNAME}/external-agent-links.json`,
   `${PROJECT_CONFIG_DIRNAME}/worktrees/`,
   `${PROJECT_CONFIG_DIRNAME}/local/`,
   `${PROJECT_CONFIG_DIRNAME}/cache/`,
@@ -32,6 +37,7 @@ export const LOCAL_PROJECT_STATE_GITIGNORE_ENTRIES = [
   `${PROJECT_CONFIG_DIRNAME}/context-debug/`,
   `${PROJECT_CONFIG_DIRNAME}/events/`,
   `${PROJECT_CONFIG_DIRNAME}/checkpoints/`,
+  `${PROJECT_CONFIG_DIRNAME}/dev-tools/`,
   `${PROJECT_CONFIG_DIRNAME}/.session-epoch`,
 ] as const
 export const GUILDHALL_GITIGNORE_BEGIN = '# BEGIN Guildhall managed'
@@ -58,6 +64,11 @@ const LEGACY_GUILDHALL_POLICY_LINES = new Set([
   `!${PROJECT_CONFIG_DIRNAME}/`,
   `!${PROJECT_CONFIG_DIRNAME}/*.yaml`,
   `${PROJECT_CONFIG_DIRNAME}/${PROJECT_CONFIG_FILENAME}`,
+  `${PROJECT_CONFIG_DIRNAME}/codebase-map.yaml`,
+  `${PROJECT_CONFIG_DIRNAME}/codebase-map.stale.json`,
+  `${PROJECT_CONFIG_DIRNAME}/codebase-map.history.jsonl`,
+  `${PROJECT_CONFIG_DIRNAME}/codebase-map/`,
+  `${PROJECT_CONFIG_DIRNAME}/external-agent-links.json`,
   `${PROJECT_CONFIG_DIRNAME}/worktrees/`,
   `${PROJECT_CONFIG_DIRNAME}/local/`,
   `${PROJECT_CONFIG_DIRNAME}/cache/`,
@@ -68,6 +79,7 @@ const LEGACY_GUILDHALL_POLICY_LINES = new Set([
   `${PROJECT_CONFIG_DIRNAME}/context-debug/`,
   `${PROJECT_CONFIG_DIRNAME}/events/`,
   `${PROJECT_CONFIG_DIRNAME}/checkpoints/`,
+  `${PROJECT_CONFIG_DIRNAME}/dev-tools/`,
   `${PROJECT_CONFIG_DIRNAME}/.session-epoch`,
 ])
 

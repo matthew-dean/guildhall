@@ -12,7 +12,7 @@ export function parseRoute(p: string, state: unknown = null): Route {
   p = pathname
   if (p === '/' || p === '/projects' || p === '/overview') return { kind: 'projects' }
   if (p === '/inbox' || p === '/needs-you' || p === '/notifications') return { kind: 'fleet-inbox' }
-  if (p === '/setup') return { kind: 'setup', projectId: null }
+  if (p === '/setup') return { kind: 'projects' }
   const projectSetupMatch = /^\/projects\/([^/]+)\/setup$/.exec(p)
   if (projectSetupMatch) return { kind: 'setup', projectId: decodeURIComponent(projectSetupMatch[1] ?? '') }
   if (p === '/providers') return { kind: 'providers' }
@@ -22,7 +22,7 @@ export function parseRoute(p: string, state: unknown = null): Route {
     const backgroundPath =
       state && typeof state === 'object' && typeof (state as { backgroundPath?: unknown }).backgroundPath === 'string'
         ? ((state as { backgroundPath: string }).backgroundPath)
-        : `/projects/${encodeURIComponent(projectId)}/thread`
+        : `/projects/${encodeURIComponent(projectId)}/overview`
     const backgroundRoute = parseRoute(backgroundPath)
     if (backgroundRoute.kind === 'project') {
       return {
@@ -37,7 +37,7 @@ export function parseRoute(p: string, state: unknown = null): Route {
     return {
       kind: 'project',
       projectId,
-      view: 'thread',
+      view: 'overview',
       sub: null,
       drawerTaskId: decodeURIComponent(projectTaskMatch[2] ?? ''),
       backgroundPath,

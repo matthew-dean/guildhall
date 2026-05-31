@@ -12,7 +12,7 @@
   import { project } from '../../lib/project.svelte.js'
   import { nav } from '../../lib/nav.svelte.js'
   import { projectActionHref, projectFetch } from '../../lib/project-routes.js'
-  import { toast } from 'svelte-sonner'
+  import { toast } from '../../lib/toast.svelte.js'
 
   interface DetectedGoal {
     id: string
@@ -770,7 +770,7 @@
         toast.error(`Dismiss failed (${r.status})`)
         return
       }
-      toast.success('Import review dismissed for now.')
+      toast.success('Import review shelved.')
       await load()
     } catch (e) {
       toast.error(e instanceof Error ? e.message : String(e))
@@ -814,6 +814,27 @@
     </Card>
   {:else if !data}
     <p class="muted">Loading import findings...</p>
+  {:else if data.dismissed}
+    <Card>
+      <Stack gap="4">
+        <div class="section-intro">
+          <div class="section-kicker">
+            <Chip label="Shelved" tone="neutral" />
+            <span>Workspace import</span>
+          </div>
+          <h3 class="section-title">Import review shelved</h3>
+          <p class="section-copy">
+            Guildhall will leave this import out of the active queue. Re-read project notes if the docs changed or you want to review it again.
+          </p>
+        </div>
+        <Row justify="end" gap="3" wrap>
+          <Button variant="agent" onclick={rerun} disabled={busy !== null}>
+            <Icon name="sparkles" size={14} />
+            {busy === 'rerun' ? 'Re-reading...' : 'Re-read project notes'}
+          </Button>
+        </Row>
+      </Stack>
+    </Card>
   {:else if !data.detected}
     <Card>
       <Stack gap="4">
@@ -1023,7 +1044,7 @@
           {/if}
           <Row justify="end" gap="3" wrap>
             <Button variant="secondary" onclick={dismiss} disabled={busy !== null}>
-              {busy === 'dismiss' ? 'Dismissing...' : 'Skip import for now'}
+              {busy === 'dismiss' ? 'Shelving...' : 'Shelve import review'}
             </Button>
             <Button variant="primary" onclick={() => (step = 'parts')}>
               {hasTaskCandidates ? 'Choose parts to review' : 'Review found sources'}

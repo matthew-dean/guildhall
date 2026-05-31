@@ -37,9 +37,9 @@ describe('PR workflow', () => {
       'pnpm typecheck',
       'pnpm docs:check-help-sync',
       'pnpm lint:deps',
+      'pnpm test:ui:install',
       'pnpm test',
       'pnpm build',
-      'pnpm test:ui:install',
       'pnpm test:ui',
     ])
   })

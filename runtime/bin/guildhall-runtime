@@ -1,0 +1,9 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+if [[ $# -gt 0 ]]; then
+  exec "$@"
+fi
+
+guildhall-runtime-info
+exec tini -- tail -f /dev/null

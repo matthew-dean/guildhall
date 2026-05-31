@@ -3,6 +3,15 @@ import fsp from 'node:fs/promises'
 import path from 'node:path'
 import { z } from 'zod'
 import { atomicWriteText } from '@guildhall/sessions'
+import {
+  buildProjectQuestionEvidence,
+  classifyProjectAnswer,
+  inferProjectMemory,
+  planFollowUpForAnswer,
+  planNextProjectQuestion,
+  type ProjectQuestionAnswer,
+  type ProjectQuestionEvidenceFile,
+} from './project-question-planner.js'
 
 const DomainStatus = z.enum([
   'seeded',
@@ -21,6 +30,7 @@ export const PressureTestQuestion = z.object({
   domainId: z.string(),
   prompt: z.string(),
   why: z.string(),
+  choices: z.array(z.string()).optional(),
   evidence: z.array(z.string()).default([]),
   askedAt: z.string(),
 })
@@ -44,6 +54,25 @@ const PressureTestDomain = z.object({
   summary: z.string().optional(),
 })
 
+const ProjectQuestionPlannerMemory = z.object({
+  inferredFacts: z.array(z.object({
+    id: z.string(),
+    text: z.string(),
+    source: z.string(),
+  })).default([]),
+  decisions: z.array(z.object({
+    id: z.string(),
+    text: z.string(),
+    sourceQuestionId: z.string(),
+  })).default([]),
+  discardedAnswers: z.array(z.object({
+    questionId: z.string(),
+    reason: z.enum(['confused', 'non_answer', 'already_known', 'not_actionable']),
+    answer: z.string(),
+  })).default([]),
+  askedCandidateIds: z.array(z.string()).default([]),
+})
+
 export const PressureTestIntake = z.object({
   id: z.string(),
   rawRequest: z.string(),
@@ -61,6 +90,7 @@ export const PressureTestIntake = z.object({
     decisions: z.array(z.string()).default([]),
     languageMapCandidates: z.array(z.string()).default([]),
     taskSplitCandidates: z.array(z.string()).default([]),
+    projectQuestionPlanner: ProjectQuestionPlannerMemory.optional(),
   }),
   createdAt: z.string(),
   updatedAt: z.string(),
@@ -84,7 +114,12 @@ export async function createPressureTestIntake(input: {
   rawRequest: string
 }): Promise<PressureTestIntake> {
   const now = new Date().toISOString()
-  const domains = seedDomains()
+  if (input.target.type === 'project') {
+    const intake = await createProjectQuestionIntake(input.memoryDir, input.target, input.rawRequest, now)
+    await savePressureTestIntake(input.memoryDir, intake)
+    return intake
+  }
+  const domains = seedDomainsForRequest(input.rawRequest)
   domains[0]!.status = 'active'
   const intake: PressureTestIntake = {
     id: `pti-${input.target.id.replace(/[^a-zA-Z0-9-]/g, '-').toLowerCase()}`,
@@ -134,6 +169,9 @@ export async function answerPressureTestQuestion(input: {
     memoryDir: input.memoryDir,
     intakeId: input.intakeId,
   })
+  if (intake.target.type === 'project') {
+    return answerProjectQuestion(input.memoryDir, intake, input.questionId, input.answer)
+  }
   const domain = intake.domains.find(d => d.id === intake.activeDomainId)
   if (!domain || !intake.pendingQuestion || intake.pendingQuestion.id !== input.questionId) {
     throw new Error(`Question ${input.questionId} is not pending`)
@@ -167,14 +205,7 @@ export async function answerPressureTestQuestion(input: {
     }
   } else if (needsConcreteFollowUp(input.answer)) {
     domain.status = 'follow-up'
-    intake.pendingQuestion = {
-      id: `${domain.id}-q-${domain.askedQuestions.length + 1}`,
-      domainId: domain.id,
-      prompt: `What is one concrete example or threshold that would make "${input.answer}" true for ${intake.target.title}?`,
-      why: 'The answer names a quality bar, but workers need an observable example or threshold.',
-      evidence: domain.knownFacts.map(f => `${f.source}: ${f.fact}`),
-      askedAt: now,
-    }
+    intake.pendingQuestion = followUpQuestion(domain, intake.target, now, domain.askedQuestions.length + 1)
   } else {
     domain.status = 'closeout'
     domain.closeoutAsked = true
@@ -267,6 +298,8 @@ export function summarizeProjectCheckIn(memoryDir: string): ProjectCheckInSummar
 export function renderPressureTestSpec(intake: PressureTestIntake): string {
   const covered = intake.domains.filter(d => d.status === 'closed' || d.summary)
   const deferrals = intake.domains.filter(d => d.status === 'deferred')
+  const domainSummary = (id: string, fallback: string) =>
+    intake.domains.find(domain => domain.id === id)?.summary ?? fallback
   return [
     `# ${intake.target.title}`,
     '',
@@ -278,6 +311,18 @@ export function renderPressureTestSpec(intake: PressureTestIntake): string {
     '## Assumptions And Deferrals',
     ...intake.outputs.assumptions.map(a => `- ${a}`),
     ...(deferrals.length ? deferrals.map(d => `- **${d.title}:** deferred`) : ['- No deferred domains.']),
+    '',
+    '## Task Boundaries',
+    domainSummary('task-boundaries', 'Task boundaries must be small enough to build, verify, and review without losing the approved owner intent.'),
+    '',
+    '## Verification And TDD',
+    domainSummary('verification-tdd', 'The implementation plan must name the tests, commands, manual checks, or review proof needed before work starts.'),
+    '',
+    '## Design Quality',
+    domainSummary('design-quality', 'For UI work, the spec must name the design-system source or compact foundation, interaction patterns, palette direction, visual hierarchy, state coverage, and rendered proof needed before implementation can be trusted.'),
+    '',
+    '## Reviewer Lenses',
+    domainSummary('review-lenses', 'The review plan must name the expert lenses or rubrics needed to catch gaps before closure.'),
     '',
     '## Acceptance Criteria',
     '- Given the accepted intake, when a worker starts implementation, then it can identify the user workflow, non-goals, risks, and verification path without guessing.',
@@ -291,6 +336,191 @@ export function pressureTestPath(memoryDir: string, intakeId: string): string {
 
 function pressureTestDir(memoryDir: string): string {
   return path.join(memoryDir, 'pressure-test-intake')
+}
+
+async function createProjectQuestionIntake(
+  memoryDir: string,
+  target: PressureTestIntake['target'],
+  rawRequest: string,
+  now: string,
+): Promise<PressureTestIntake> {
+  const files = await loadProjectQuestionEvidenceFiles(memoryDir)
+  const projectName = cleanProjectCheckInTitle(target.title)
+  const evidence = buildProjectQuestionEvidence({
+    projectId: target.id,
+    projectName,
+    files,
+    currentAnswers: [],
+  })
+  const memory = inferProjectMemory(evidence)
+  const plan = planNextProjectQuestion({
+    evidence,
+    answeredQuestions: [],
+    askedCandidateIds: [],
+  })
+  return {
+    id: `pti-${target.id.replace(/[^a-zA-Z0-9-]/g, '-').toLowerCase()}`,
+    rawRequest,
+    target,
+    status: plan.kind === 'ask' ? 'active' : 'complete',
+    activeDomainId: plan.kind === 'ask' ? 'project-planner' : null,
+    pendingQuestion: plan.kind === 'ask'
+      ? {
+          id: plan.question.id,
+          domainId: 'project-planner',
+          prompt: plan.question.prompt,
+          why: plan.question.why,
+          choices: plan.question.choices,
+          evidence: plan.question.evidence,
+          askedAt: now,
+        }
+      : null,
+    domains: seedDomains(),
+    outputs: {
+      assumptions: [],
+      decisions: [],
+      languageMapCandidates: [],
+      taskSplitCandidates: [],
+      projectQuestionPlanner: {
+        inferredFacts: memory.inferredFacts,
+        decisions: [],
+        discardedAnswers: [],
+        askedCandidateIds: plan.kind === 'ask' ? [plan.question.id] : [],
+      },
+    },
+    createdAt: now,
+    updatedAt: now,
+  }
+}
+
+async function answerProjectQuestion(
+  memoryDir: string,
+  intake: PressureTestIntake,
+  questionId: string,
+  answer: string,
+): Promise<PressureTestIntake> {
+  if (!intake.pendingQuestion || intake.pendingQuestion.id !== questionId) {
+    throw new Error(`Question ${questionId} is not pending`)
+  }
+
+  const now = new Date().toISOString()
+  const currentAnswer: ProjectQuestionAnswer = {
+    questionId,
+    prompt: intake.pendingQuestion.prompt,
+    answer,
+  }
+  const planner = intake.outputs.projectQuestionPlanner ?? {
+    inferredFacts: [],
+    decisions: [],
+    discardedAnswers: [],
+    askedCandidateIds: [],
+  }
+  const classification = classifyProjectAnswer(currentAnswer)
+  if (classification.kind === 'decision') {
+    planner.decisions.push({
+      id: `${questionId}-decision`,
+      text: classification.text,
+      sourceQuestionId: questionId,
+    })
+    if (!intake.outputs.decisions.includes(classification.text)) {
+      intake.outputs.decisions.push(classification.text)
+    }
+  } else {
+    planner.discardedAnswers.push({
+      questionId,
+      reason: classification.reason,
+      answer,
+    })
+    intake.status = 'active'
+    intake.activeDomainId = 'project-planner'
+    intake.outputs.projectQuestionPlanner = planner
+    intake.updatedAt = now
+    await savePressureTestIntake(memoryDir, intake)
+    return intake
+  }
+
+  const followUp = planFollowUpForAnswer(currentAnswer)
+  if (followUp.kind === 'ask' && !planner.askedCandidateIds.includes(followUp.question.id)) {
+    planner.askedCandidateIds.push(followUp.question.id)
+    intake.status = 'active'
+    intake.activeDomainId = 'project-planner'
+    intake.pendingQuestion = {
+      id: followUp.question.id,
+      domainId: 'project-planner',
+      prompt: followUp.question.prompt,
+      why: followUp.question.why,
+      choices: followUp.question.choices,
+      evidence: followUp.question.evidence,
+      askedAt: now,
+    }
+  } else {
+    const files = await loadProjectQuestionEvidenceFiles(memoryDir)
+    const answeredQuestions = planner.decisions.map(decision => ({
+      questionId: decision.sourceQuestionId,
+      prompt: '',
+      answer: decision.text,
+    }))
+    const evidence = buildProjectQuestionEvidence({
+      projectId: intake.target.id,
+      projectName: cleanProjectCheckInTitle(intake.target.title),
+      files,
+      currentAnswers: answeredQuestions,
+    })
+    const next = planNextProjectQuestion({
+      evidence,
+      answeredQuestions,
+      askedCandidateIds: planner.askedCandidateIds,
+    })
+    if (next.kind === 'ask') {
+      planner.askedCandidateIds.push(next.question.id)
+      intake.status = 'active'
+      intake.activeDomainId = 'project-planner'
+      intake.pendingQuestion = {
+        id: next.question.id,
+        domainId: 'project-planner',
+        prompt: next.question.prompt,
+        why: next.question.why,
+        choices: next.question.choices,
+        evidence: next.question.evidence,
+        askedAt: now,
+      }
+    } else {
+      intake.status = 'complete'
+      intake.activeDomainId = null
+      intake.pendingQuestion = null
+    }
+  }
+
+  intake.outputs.projectQuestionPlanner = planner
+  intake.updatedAt = now
+  await savePressureTestIntake(memoryDir, intake)
+  return intake
+}
+
+async function loadProjectQuestionEvidenceFiles(memoryDir: string): Promise<ProjectQuestionEvidenceFile[]> {
+  const projectRoot = path.dirname(memoryDir)
+  const candidates = [
+    { file: path.join(memoryDir, 'project-brief.md'), source: 'project-brief.md' },
+    { file: path.join(memoryDir, 'TASKS.json'), source: '.guildhall/TASKS.json' },
+    { file: path.join(projectRoot, 'README.md'), source: 'README.md' },
+    { file: path.join(projectRoot, 'docs', 'index.md'), source: 'docs/index.md' },
+  ]
+  const files: ProjectQuestionEvidenceFile[] = []
+  for (const candidate of candidates) {
+    try {
+      files.push({
+        path: candidate.source,
+        text: await fsp.readFile(candidate.file, 'utf-8'),
+      })
+    } catch {
+      // Missing project evidence files are normal for fresh projects.
+    }
+  }
+  return files
+}
+
+function cleanProjectCheckInTitle(title: string): string {
+  return title.replace(/\s+project check-in$/i, '')
 }
 
 function seedDomains(): Array<z.infer<typeof PressureTestDomain>> {
@@ -318,6 +548,65 @@ function seedDomains(): Array<z.infer<typeof PressureTestDomain>> {
       closeoutAsked: false,
     },
     {
+      id: 'design-quality',
+      title: 'Design quality',
+      whyItMatters: 'UI work should reach an app-store-caliber result, not merely a functional one.',
+      status: 'seeded',
+      knownFacts: [],
+      openUnknowns: [
+        'Which design system, component catalog, or compact foundation should the worker use?',
+        'Which interaction patterns match the user jobs, especially filters, toggles, navigation, and destructive actions?',
+        'What palette mood, semantic color roles, saturation budget, and visual proof should reviewers inspect?',
+      ],
+      askedQuestions: [],
+      followUpCandidates: [],
+      closeoutAsked: false,
+    },
+    {
+      id: 'task-boundaries',
+      title: 'Task boundaries',
+      whyItMatters: 'Guildhall needs work slices small enough to build, verify, and review without losing the bigger goal.',
+      status: 'seeded',
+      knownFacts: [],
+      openUnknowns: ['What should be split, deferred, or kept together so quality does not depend on one oversized task?'],
+      askedQuestions: [],
+      followUpCandidates: [],
+      closeoutAsked: false,
+    },
+    {
+      id: 'acceptance-criteria',
+      title: 'Acceptance criteria',
+      whyItMatters: 'Workers and reviewers need concrete proof points before implementation starts.',
+      status: 'seeded',
+      knownFacts: [],
+      openUnknowns: ['What observable outcomes prove this work is complete?'],
+      askedQuestions: [],
+      followUpCandidates: [],
+      closeoutAsked: false,
+    },
+    {
+      id: 'verification-tdd',
+      title: 'Verification and TDD',
+      whyItMatters: 'Guildhall should know how to prove the work and where tests should lead the implementation.',
+      status: 'seeded',
+      knownFacts: [],
+      openUnknowns: ['Which test, command, manual check, or proof packet should fail before the fix and pass after it?'],
+      askedQuestions: [],
+      followUpCandidates: [],
+      closeoutAsked: false,
+    },
+    {
+      id: 'review-lenses',
+      title: 'Reviewer lenses',
+      whyItMatters: 'Different expert reviews catch different misses, so Guildhall should choose review pressure before closure.',
+      status: 'seeded',
+      knownFacts: [],
+      openUnknowns: ['Which expert lenses should inspect this work before it is trusted?'],
+      askedQuestions: [],
+      followUpCandidates: [],
+      closeoutAsked: false,
+    },
+    {
       id: 'risks',
       title: 'Risks and non-goals',
       whyItMatters: 'The spec needs clear boundaries so Guildhall does not turn every request into ceremony.',
@@ -329,6 +618,22 @@ function seedDomains(): Array<z.infer<typeof PressureTestDomain>> {
       closeoutAsked: false,
     },
   ]
+}
+
+function seedDomainsForRequest(rawRequest: string): Array<z.infer<typeof PressureTestDomain>> {
+  const domains = seedDomains()
+  if (!isNonUiRuntimeRequest(rawRequest) || requestsUiGuidance(rawRequest)) {
+    return domains
+  }
+  return domains.filter(domain => domain.id !== 'design-quality')
+}
+
+function isNonUiRuntimeRequest(rawRequest: string): boolean {
+  return /\b(api|endpoint|membership|cli|command|--json|inspect|docs?|quick start|install warning|migration|schema|rollback|bugfix|duplicate rows?)\b/i.test(rawRequest)
+}
+
+function requestsUiGuidance(rawRequest: string): boolean {
+  return /\b(ui|web app|browser|component|drawer|palette|visual|screen|modal|card|layout|frontend|settings footer)\b/i.test(rawRequest)
 }
 
 function firstQuestion(
@@ -357,10 +662,96 @@ function firstQuestionPrompt(domainTitle: string, target: PressureTestIntake['ta
       return `For ${targetLabel}, what outcome should this request achieve?`
     case 'workflows':
       return `For ${targetLabel}, what workflow or user path should Guildhall understand before splitting the work?`
+    case 'design quality':
+      return `For ${targetLabel}, what design-system source, interaction pattern, palette direction, or visual proof would make the result feel shippable?`
+    case 'task boundaries':
+      return `For ${targetLabel}, what should stay in this work, and what should split into a separate task or deferral?`
+    case 'acceptance criteria':
+      return `For ${targetLabel}, what observable result would prove the work is complete?`
+    case 'verification and tdd':
+      return `For ${targetLabel}, what test, command, or review proof should verify the work?`
+    case 'reviewer lenses':
+      return `For ${targetLabel}, which expert concerns should reviewers inspect before Guildhall calls it done?`
     case 'risks and non-goals':
       return `For ${targetLabel}, what risk, boundary, or non-goal should Guildhall keep in mind?`
     default:
       return `What should Guildhall understand first about ${targetLabel}?`
+  }
+}
+
+function followUpQuestion(
+  domain: z.infer<typeof PressureTestDomain>,
+  target: PressureTestIntake['target'],
+  askedAt: string,
+  index: number,
+): PressureTestQuestion {
+  return {
+    id: `${domain.id}-q-${index}`,
+    domainId: domain.id,
+    prompt: followUpQuestionPrompt(domain.id, target),
+    why: followUpQuestionWhy(domain.id),
+    evidence: domain.knownFacts.map(f => `${f.source}: ${f.fact}`),
+    askedAt,
+  }
+}
+
+function followUpQuestionPrompt(domainId: string, target: PressureTestIntake['target']): string {
+  if (target.type === 'project') {
+    switch (domainId) {
+      case 'product-goals':
+        return 'What observable result would tell you this project is succeeding?'
+      case 'workflows':
+        return 'What concrete user path or routine should Guildhall preserve while planning this project?'
+      case 'design-quality':
+        return "What should a worker or reviewer be able to see before Guildhall treats this project's visual direction as met?"
+      case 'task-boundaries':
+        return 'What is one concrete example of work that belongs here, and one example that should split out?'
+      case 'acceptance-criteria':
+        return 'What specific evidence would prove a task in this project is finished?'
+      case 'verification-tdd':
+        return 'What command, test, or manual check should Guildhall expect before trusting project work?'
+      case 'review-lenses':
+        return 'What kind of expert review would catch the misses you care about most?'
+      case 'risks':
+        return 'What concrete failure should Guildhall avoid while shaping work for this project?'
+      default:
+        return 'What concrete example should Guildhall remember for this project?'
+    }
+  }
+
+  const targetLabel = `"${target.title}"`
+  switch (domainId) {
+    case 'product-goals':
+      return `For ${targetLabel}, what observable result would show the work succeeded?`
+    case 'workflows':
+      return `For ${targetLabel}, what concrete user path or workflow should the worker preserve?`
+    case 'design-quality':
+      return `For ${targetLabel}, what should a reviewer be able to see before calling the visual direction met?`
+    case 'task-boundaries':
+      return `For ${targetLabel}, what is one concrete example of work that belongs here, and one that should split out?`
+    case 'acceptance-criteria':
+      return `For ${targetLabel}, what specific evidence would prove the work is finished?`
+    case 'verification-tdd':
+      return `For ${targetLabel}, what command, test, or manual check should verify the result?`
+    case 'review-lenses':
+      return `For ${targetLabel}, what expert review would catch the misses that matter most?`
+    case 'risks':
+      return `For ${targetLabel}, what concrete failure should Guildhall avoid?`
+    default:
+      return `For ${targetLabel}, what concrete example should Guildhall remember?`
+  }
+}
+
+function followUpQuestionWhy(domainId: string): string {
+  switch (domainId) {
+    case 'design-quality':
+      return 'Workers and reviewers need visible proof, not just a taste adjective.'
+    case 'verification-tdd':
+      return 'Guildhall needs a proof path it can hand to workers and reviewers.'
+    case 'task-boundaries':
+      return 'Concrete examples help Guildhall split work without inventing scope.'
+    default:
+      return 'Guildhall needs one observable example so future work can use this answer.'
   }
 }
 
@@ -370,6 +761,16 @@ function projectCheckInQuestionPrompt(domainTitle: string): string {
       return 'What outcome would make this project successful?'
     case 'workflows':
       return 'What workflow or day-to-day constraint should Guildhall understand about this project?'
+    case 'design quality':
+      return 'What design-system source, interaction pattern, palette direction, or visual proof should Guildhall remember for this project?'
+    case 'task boundaries':
+      return 'What work should Guildhall keep together here, and what should become a separate task or deferral?'
+    case 'acceptance criteria':
+      return 'What observable result would prove this project work is complete?'
+    case 'verification and tdd':
+      return 'What test, command, or review proof should Guildhall use to verify this project work?'
+    case 'reviewer lenses':
+      return 'Which expert concerns should Guildhall review before trusting this project work?'
     case 'risks and non-goals':
       return 'What risk, boundary, or non-goal should Guildhall remember for this project?'
     default:
@@ -392,12 +793,13 @@ function normalizePressureTestIntake(intake: PressureTestIntake): PressureTestIn
     }
   }
 
+  const pendingDomain = intake.domains.find(domain => domain.id === intake.pendingQuestion?.domainId)
   const normalizedPendingQuestion = intake.pendingQuestion
-    ? normalizeCloseoutQuestionCopy(intake.pendingQuestion)
+    ? normalizeQuestionCopy(intake.pendingQuestion, pendingDomain, intake.target)
     : intake.pendingQuestion
   const normalizedDomains = intake.domains.map(domain => ({
     ...domain,
-    askedQuestions: domain.askedQuestions.map(normalizeCloseoutQuestionCopy),
+    askedQuestions: domain.askedQuestions.map(question => normalizeQuestionCopy(question, domain, intake.target)),
   }))
   if (normalizedPendingQuestion !== intake.pendingQuestion || normalizedDomains.some((domain, index) => domain !== intake.domains[index])) {
     intake = {
@@ -407,17 +809,67 @@ function normalizePressureTestIntake(intake: PressureTestIntake): PressureTestIn
     }
   }
 
+  if (intake.target.type === 'project') {
+    const planner = intake.outputs.projectQuestionPlanner ?? {
+      inferredFacts: [],
+      decisions: [],
+      discardedAnswers: [],
+      askedCandidateIds: [],
+    }
+    const repairedDomains = intake.domains.map(domain => {
+      const repairedQuestions = domain.askedQuestions.map(question => {
+        if (question.answered && question.answer) {
+          const classification = classifyProjectAnswer({
+            questionId: question.questionId,
+            prompt: question.prompt,
+            answer: question.answer,
+          })
+          if (classification.kind === 'discard' && !planner.discardedAnswers.some(existing => existing.questionId === question.questionId)) {
+            planner.discardedAnswers.push({
+              questionId: question.questionId,
+              reason: classification.reason,
+              answer: question.answer,
+            })
+          }
+        }
+        return question
+      })
+      return {
+        ...domain,
+        askedQuestions: repairedQuestions,
+        ...(domain.summary && isConfusedProjectSummary(domain.summary) ? { summary: undefined } : {}),
+      }
+    })
+    intake = {
+      ...intake,
+      domains: repairedDomains,
+      outputs: {
+        ...intake.outputs,
+        languageMapCandidates: intake.outputs.languageMapCandidates.filter(candidate => !/^Hmm I:/.test(candidate)),
+        projectQuestionPlanner: planner,
+      },
+    }
+  }
+
   return intake
 }
 
-function normalizeCloseoutQuestionCopy<T extends { prompt: string; why?: string }>(question: T): T {
-  const prompt = question.prompt
+function normalizeQuestionCopy<T extends { prompt: string; why?: string }>(
+  question: T,
+  domain: z.infer<typeof PressureTestDomain> | undefined,
+  target: PressureTestIntake['target'],
+): T {
+  let prompt = question.prompt
     .replace(/before this domain closes\?/g, 'before we move to the next topic?')
     .replace(/before the domain closes\?/g, 'before we move to the next topic?')
-  const why = question.why?.replace(
+  let why = question.why?.replace(
     /Pressure-test intake closes each domain deliberately so hidden constraints do not vanish\./g,
     'Guildhall asks this before leaving a topic so hidden constraints do not vanish.',
   )
+  if (domain && /^What is one concrete example or threshold that would make "[\s\S]+" true for [\s\S]+\?$/.test(prompt)) {
+    prompt = followUpQuestionPrompt(domain.id, target)
+    why = followUpQuestionWhy(domain.id)
+  }
   if (prompt === question.prompt && why === question.why) return question
   return {
     ...question,
@@ -428,6 +880,10 @@ function normalizeCloseoutQuestionCopy<T extends { prompt: string; why?: string 
 
 function needsConcreteFollowUp(answer: string): boolean {
   return /\b(rigorous|annoying|fast|safe|simple|good|strict|polished|clear|friendly|better|worse)\b/i.test(answer)
+}
+
+function isConfusedProjectSummary(summary: string): boolean {
+  return /\b(i do not understand|i don't understand|nature of the question|confusing)\b/i.test(summary)
 }
 
 function isCloseoutComplete(answer: string): boolean {

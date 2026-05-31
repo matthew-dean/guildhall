@@ -10,7 +10,7 @@
   import SectionHeader from '../../../../packages/ui/src/components/SectionHeader.svelte'
   import StatusPill from '../../../../packages/ui/src/components/StatusPill.svelte'
   import { nav } from '../../lib/nav.svelte.js'
-  import { currentTaskHref, projectFetch } from '../../lib/project-routes.js'
+  import { currentProjectHref, currentTaskHref, projectFetch } from '../../lib/project-routes.js'
 
   interface ReleaseItem {
     id?: string
@@ -364,7 +364,7 @@
 {#if initNeeded}
   <NoticeBand tone="warn" role="note" label="Closure" title="Project not initialized yet">
     {#snippet actions()}
-      <a class="notice-link" href="/setup">Open setup wizard</a>
+      <a class="notice-link" href={currentProjectHref('/setup')}>Open setup wizard</a>
     {/snippet}
     <p>Complete the setup wizard before Guildhall can assess whether the current work is closed.</p>
   </NoticeBand>

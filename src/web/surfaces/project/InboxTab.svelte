@@ -4,6 +4,7 @@
   tasks move down to the Work tab.
 -->
 <script lang="ts">
+  import AlignedActionList from '../../lib/AlignedActionList.svelte'
   import Card from '../../lib/Card.svelte'
   import Icon, { type IconName } from '../../lib/Icon.svelte'
   import { inboxItemKey, type InboxItem } from '../../lib/inbox-item-key.js'
@@ -133,7 +134,7 @@
 
   const DEFAULT_VERBS: Record<InboxItem['kind'], string> = {
     required_migration: 'Migrate',
-    project_understanding: 'Reconcile',
+    project_understanding: 'Review update',
     bootstrap_missing: 'Configure',
     setup_pending: 'Open setup',
     workspace_import_pending: 'Review import',
@@ -247,37 +248,43 @@
     {/if}
 
     {#if displayItems.length > 0}
-      <ul class="list">
+      <AlignedActionList
+        ariaLabel="Needs you items"
+        columns="64px minmax(360px, 1fr) minmax(116px, max-content) minmax(136px, max-content) minmax(220px, max-content)"
+        headers={['', 'Item', 'State', 'Updated', 'Action']}
+      >
         {#each displayItems as item, i (inboxItemKey(item))}
           {@const handling = handlingIndex === items.indexOf(item)}
           {@const handler = AGENT_HANDLERS[item.kind]}
-          <li>
-            <div class="row row-{item.severity}" class:handling>
-              <button
-                type="button"
-                class="row-main"
-                onclick={() => goTo(item)}
-                aria-label={item.title}
-              >
-                <span class="dot dot-{item.severity}" aria-hidden="true"></span>
-                <span class="kind-ic" aria-hidden="true">
-                  <Icon name={ICONS[item.kind]} size={16} />
-                </span>
-                <div class="body">
-                  <div class="title" title={item.title}>{item.title}</div>
-                  <div class="detail" title={item.detail}>{item.detail}</div>
-                  {#if itemDigest(item)}
-                    <div class="digest">{itemDigest(item)}</div>
-                  {/if}
-                  {#if item.resolutionDetail}
-                    <div class="digest">{item.resolutionDetail}</div>
-                  {/if}
-                </div>
-                <span class={`status-pill ${statusClass(item)}`}>{statusLabel(item)}</span>
-                {#if itemTime(item)}
-                  <span class="time">{itemTime(item)}</span>
+          <div class="inbox-row aligned-list-row row-{item.severity}" class:handling role="listitem">
+            <span class="signal" aria-hidden="true">
+              <span class="dot dot-{item.severity}"></span>
+              <span class="kind-ic">
+                <Icon name={ICONS[item.kind]} size={16} />
+              </span>
+            </span>
+            <button
+              type="button"
+              class="item-main"
+              onclick={() => goTo(item)}
+              aria-label={item.title}
+            >
+              <span class="body">
+                <span class="title" title={item.title}>{item.title}</span>
+                <span class="detail" title={item.detail}>{item.detail}</span>
+                {#if itemDigest(item)}
+                  <span class="digest">{itemDigest(item)}</span>
                 {/if}
-                <span class="verb">{actionVerb(item)} →</span>
+                {#if item.resolutionDetail}
+                  <span class="digest">{item.resolutionDetail}</span>
+                {/if}
+              </span>
+            </button>
+            <span class={`status-pill ${statusClass(item)}`}>{statusLabel(item)}</span>
+            <span class="time">{itemTime(item) || '—'}</span>
+            <span class="actions">
+              <button type="button" class="verb" onclick={() => goTo(item)}>
+                {actionVerb(item)} →
               </button>
               {#if isOpen(item) && handler}
                 <button
@@ -300,46 +307,10 @@
                   Dismiss
                 </button>
               {/if}
-            </div>
-          </li>
+            </span>
+          </div>
         {/each}
-      </ul>
-    {/if}
-
-    {#if false && housekeepingItems.length > 0}
-      <section class="housekeeping">
-        <header class="subhead">
-          <h3>Optional cleanup</h3>
-          <span class="count">({housekeepingItems.length})</span>
-        </header>
-        <ul class="list list-housekeeping">
-          {#each housekeepingItems as item (inboxItemKey(item))}
-            <li>
-              <div class="row row-{item.severity}">
-                <button
-                  type="button"
-                  class="row-main"
-                  onclick={() => goTo(item)}
-                  aria-label={item.title}
-                >
-                  <span class="dot dot-{item.severity}" aria-hidden="true"></span>
-                  <span class="kind-ic" aria-hidden="true">
-                    <Icon name={ICONS[item.kind]} size={16} />
-                  </span>
-                  <div class="body">
-                    <div class="title" title={item.title}>{item.title}</div>
-                    <div class="detail" title={item.detail}>{item.detail}</div>
-                    {#if itemDigest(item)}
-                      <div class="digest">{itemDigest(item)}</div>
-                    {/if}
-                  </div>
-                  <span class="verb">{actionVerb(item)} →</span>
-                </button>
-              </div>
-            </li>
-          {/each}
-        </ul>
-      </section>
+      </AlignedActionList>
     {/if}
 
     {#if handlingMessage}
@@ -366,17 +337,6 @@
     font-size: var(--fs-4);
     font-weight: 700;
   }
-  .subhead {
-    display: flex;
-    align-items: baseline;
-    gap: var(--s-2);
-  }
-  .subhead h3 {
-    margin: 0;
-    font-size: var(--fs-2);
-    font-weight: 650;
-    color: var(--text-muted);
-  }
   .count {
     color: var(--text-muted);
     font-size: var(--fs-2);
@@ -396,62 +356,55 @@
   }
   .empty p { margin: 0; }
 
-  .list {
-    list-style: none;
-    padding: 0;
-    margin: 0;
-    display: flex;
-    flex-direction: column;
-    gap: var(--s-1);
-  }
-  .list-housekeeping {
-    gap: var(--s-2);
-  }
-  .list li { margin: 0; padding: 0; }
-  .housekeeping {
-    display: flex;
-    flex-direction: column;
-    gap: var(--s-2);
-    padding-top: var(--s-2);
-  }
-  .row {
-    display: flex;
-    align-items: stretch;
+  .inbox-row {
     background: var(--bg-raised);
     border: 1px solid var(--border);
     border-radius: var(--r-1);
-    overflow: hidden;
+    padding-block: var(--s-3);
+    min-width: 0;
   }
-  .row:hover,
-  .row:focus-within {
+  .inbox-row:hover,
+  .inbox-row:focus-within {
     background: var(--bg-elevated);
     border-color: var(--border-strong);
   }
-  .row.handling {
+  .inbox-row.handling {
     opacity: 0.7;
   }
-  .row-main {
-    display: grid;
-    grid-template-columns: 4px 20px minmax(0, 1fr) auto auto auto;
+  .signal {
+    display: inline-flex;
     align-items: center;
-    gap: var(--s-3);
-    padding: var(--s-3);
-    flex: 1;
+    justify-content: center;
+    gap: var(--s-2);
+    min-width: 0;
+  }
+  .item-main {
+    display: block;
     min-width: 0;
     background: transparent;
     border: 0;
+    padding: 0;
     cursor: pointer;
     outline: none;
     text-align: left;
     font: inherit;
     color: inherit;
   }
+  .item-main:hover .title,
+  .item-main:focus-visible .title {
+    color: var(--accent);
+  }
+  .actions {
+    display: inline-flex;
+    align-items: center;
+    justify-content: flex-end;
+    gap: var(--s-2);
+    min-width: 0;
+    padding-inline-end: var(--s-3);
+  }
   .agent-verb {
-    flex: none;
-    align-self: stretch;
-    padding: 0 var(--s-3);
+    padding: 0;
     border: 0;
-    border-left: 1px solid var(--border);
     background: transparent;
     color: var(--accent);
     font: inherit;
@@ -461,7 +414,6 @@
     white-space: nowrap;
   }
   .agent-verb:hover {
-    background: var(--bg-raised-2);
     color: var(--text);
   }
   .agent-verb:disabled {
@@ -469,11 +421,8 @@
     cursor: default;
   }
   .dismiss-verb {
-    flex: none;
-    align-self: stretch;
-    padding: 0 var(--s-3);
+    padding: 0;
     border: 0;
-    border-left: 1px solid var(--border);
     background: transparent;
     color: var(--text-muted);
     font: inherit;
@@ -482,7 +431,6 @@
     white-space: nowrap;
   }
   .dismiss-verb:hover {
-    background: var(--bg-raised-2);
     color: var(--text);
   }
   .handling-msg {
@@ -531,9 +479,14 @@
     white-space: normal;
   }
   .verb {
+    border: 0;
+    background: transparent;
     color: var(--accent);
+    cursor: pointer;
+    font: inherit;
     font-size: var(--fs-1);
     font-weight: 600;
+    padding: 0;
     white-space: nowrap;
     text-transform: uppercase;
     letter-spacing: 0.04em;
@@ -567,15 +520,26 @@
     font-size: var(--fs-1);
     white-space: nowrap;
   }
+  @media (min-width: 861px) {
+    .status-pill,
+    .time {
+      justify-self: start;
+    }
+    .actions {
+      justify-self: end;
+    }
+  }
   @media (max-width: 760px) {
-    .row-main {
-      grid-template-columns: 4px 20px minmax(0, 1fr);
+    .inbox-row {
+      align-items: start;
     }
     .status-pill,
     .time,
-    .verb {
-      grid-column: 3;
+    .actions {
       justify-self: start;
+    }
+    .signal {
+      grid-row: 1;
     }
   }
 </style>

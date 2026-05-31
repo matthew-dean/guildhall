@@ -17,7 +17,9 @@ async function writeProject({
 }) {
   const projectPath = join(projectsRoot, id)
   const memoryDir = join(projectPath, 'memory')
+  const projectStateDir = join(projectPath, '.guildhall')
   await mkdir(memoryDir, { recursive: true })
+  await mkdir(projectStateDir, { recursive: true })
   await mkdir(join(memoryDir, 'exploring'), { recursive: true })
   await writeFile(
     join(projectPath, 'guildhall.yaml'),
@@ -33,6 +35,13 @@ async function writeProject({
     ].join('\n'),
     'utf8',
   )
+  if (id === 'looma-knit') {
+    await writeFile(
+      join(projectPath, 'package.json'),
+      JSON.stringify({ dependencies: { svelte: '^5.0.0' } }, null, 2),
+      'utf8',
+    )
+  }
   await writeFile(join(memoryDir, 'MEMORY.md'), `# ${name} Memory\n`, 'utf8')
   await writeFile(join(memoryDir, 'DECISIONS.md'), `# ${name} Decisions\n`, 'utf8')
   await writeFile(join(memoryDir, 'PROGRESS.md'), `# ${name} Progress\n`, 'utf8')
@@ -89,6 +98,98 @@ async function writeProject({
       : {}),
   }))
   await writeFile(join(memoryDir, 'TASKS.json'), JSON.stringify(tasks, null, 2), 'utf8')
+  if (id === 'looma-knit') {
+    await writeFile(
+      join(projectStateDir, 'design-taste.yaml'),
+      [
+        'version: 1',
+        'opinions:',
+        '  visualDirection:',
+        '    default: warm-functional-polish',
+        '  interactionSemantics:',
+        '    mutuallyExclusiveModes: segmented-control-or-tabs',
+        '  paletteStrategy:',
+        '    defaultMode: semantic-oklch-roles',
+        '    saturationBudget: controlled',
+        '',
+      ].join('\n'),
+      'utf8',
+    )
+    await writeFile(
+      join(projectStateDir, 'design-stories.yaml'),
+      [
+        'version: 1',
+        'stories:',
+        '  - id: pantry-filter.default',
+        '    componentIntent: segmented-filter',
+        '    title: Pantry filter / Default',
+        '    states: [default, selected]',
+        '',
+      ].join('\n'),
+      'utf8',
+    )
+    await writeFile(
+      join(projectStateDir, 'design-system.yaml'),
+      [
+        'version: 1',
+        'revision: 1',
+        'tokens:',
+        '  color: []',
+        '  spacing: []',
+        '  typography: []',
+        '  radius: []',
+        '  shadow: []',
+        'primitives:',
+        '  - name: Segmented filter',
+        '    usage: Mutually exclusive mode choices.',
+        'copyVoice:',
+        '  tone: warm',
+        'a11y:',
+        '  minContrastRatio: 4.5',
+        '  focusOutlineRequired: true',
+        '  keyboardRules: []',
+        '  reducedMotionRespected: true',
+        '',
+      ].join('\n'),
+      'utf8',
+    )
+    await writeFile(
+      join(projectStateDir, 'design-feedback.json'),
+      JSON.stringify({
+        version: 1,
+        findings: [],
+        decisions: [],
+        candidates: [],
+        loomaImprovements: [],
+        ownerFeedback: [{
+          id: 'owner-show-all',
+          summary: 'Show all should read as a filter choice.',
+          target: {
+            componentName: 'PantryFilter',
+            selector: '[data-testid="show-all"]',
+            viewport: 'desktop-1280',
+          },
+          sentiment: 'revise',
+          rationaleTags: ['better-controls'],
+          status: 'accepted',
+          createdAt: now,
+          updatedAt: now,
+        }],
+        decisionPackets: [{
+          id: 'design-decision-packet-fixture',
+          feedbackIds: ['owner-show-all'],
+          decisionIds: [],
+          summary: 'Accepted owner design feedback ready for implementation/review.',
+          constraints: ['Show all should read as a filter choice.'],
+          reviewChecklist: ['Verify better control semantics.'],
+          workerContext: 'Accepted design feedback: Show all should read as a filter choice.',
+          createdAt: now,
+          updatedAt: now,
+        }],
+      }, null, 2),
+      'utf8',
+    )
+  }
   return projectPath
 }
 

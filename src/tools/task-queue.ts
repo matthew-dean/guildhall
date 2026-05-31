@@ -2,7 +2,7 @@ import { defineTool } from '@guildhall/engine'
 import { z } from 'zod'
 import fs from 'node:fs/promises'
 import path from 'node:path'
-import { AcceptanceCriteria, GateResult, Task, TaskQueue, TaskStatus, buildTaskSizePlan, parseAcceptanceCriteriaFromSpec } from '@guildhall/core'
+import { AcceptanceCriteria, GateResult, Task, TaskQueue, TaskStatus, WorkUnitAnalysis, buildTaskSizePlan, parseAcceptanceCriteriaFromSpec } from '@guildhall/core'
 import { atomicWriteText } from '@guildhall/sessions'
 
 const TASKS_PATH_SCHEMA = z.string().describe('Absolute path to the TASKS.json file')
@@ -68,6 +68,7 @@ const updateTaskInputSchema = z.object({
   humanJudgment: z.string().optional(),
   spec: z.string().optional(),
   acceptanceCriteria: z.array(AcceptanceCriteria).optional(),
+  workUnitAnalysis: WorkUnitAnalysis.optional(),
   gateResults: z.array(GateResult).optional(),
   completedAt: z.string().optional(),
 })
@@ -112,6 +113,20 @@ export async function updateTask(
           'No task mutation provided. Set at least one of title, status, assignedTo, note, blockReason, humanJudgment, spec, acceptanceCriteria, gateResults, or completedAt.',
       }
     }
+    const currentAgentId = typeof metadata['current_agent_id'] === 'string'
+      ? metadata['current_agent_id'].trim()
+      : ''
+    if (
+      currentAgentId === 'worker-agent' &&
+      input.gateResults?.some((result) => result.type === 'hard')
+    ) {
+      return {
+        success: false,
+        taskId,
+        error:
+          'Workers cannot author hard gate results. Run command-backed proof through run-gates or let acceptance-command-gates record observed command exits.',
+      }
+    }
 
     const nextStatus = input.status ? TaskStatus.parse(input.status) : undefined
     const wouldPromoteSpecReview =
@@ -138,6 +153,21 @@ export async function updateTask(
       ? z.array(AcceptanceCriteria).parse(input.acceptanceCriteria)
         .map((criterion) => normalizeAcceptanceCriterionForTaskProjectPath(criterion, task.projectPath))
       : undefined
+    if (
+      currentAgentId === 'worker-agent' &&
+      normalizedAcceptanceCriteria?.some((criterion) =>
+        criterion.met === true &&
+        typeof criterion.command === 'string' &&
+        criterion.command.trim().length > 0,
+      )
+    ) {
+      return {
+        success: false,
+        taskId,
+        error:
+          'Workers cannot mark command-backed acceptance criteria as met. Run the command through hard gates and record the observed result.',
+      }
+    }
 
     if (input.title !== undefined) task.title = input.title
     const explicitStatus = nextStatus
@@ -174,6 +204,9 @@ export async function updateTask(
     if (normalizedAcceptanceCriteria !== undefined && normalizedAcceptanceCriteria.length > 0) {
       task.acceptanceCriteria = z.array(AcceptanceCriteria).parse(normalizedAcceptanceCriteria)
     }
+    if (input.workUnitAnalysis !== undefined) {
+      task.workUnitAnalysis = WorkUnitAnalysis.parse(input.workUnitAnalysis)
+    }
     if (input.gateResults !== undefined && input.gateResults.length > 0) {
       task.gateResults = z.array(GateResult).parse(input.gateResults)
     }
@@ -181,7 +214,10 @@ export async function updateTask(
     if (input.note) {
       task.notes.push({ ...input.note, timestamp: new Date().toISOString() })
     }
-    if (normalizedSpec !== undefined && normalizedSpec.trim() !== '') {
+    const shouldRefreshSizePlan =
+      (normalizedSpec !== undefined && normalizedSpec.trim() !== '') ||
+      input.workUnitAnalysis !== undefined
+    if (shouldRefreshSizePlan) {
       const sizePlanCreatedAt = new Date().toISOString()
       task.sizePlan = buildTaskSizePlan({
         task,
@@ -371,6 +407,7 @@ function hasTaskMutation(input: UpdateTaskInput): boolean {
     input.humanJudgment !== undefined ||
     input.spec !== undefined ||
     input.acceptanceCriteria !== undefined ||
+    input.workUnitAnalysis !== undefined ||
     input.gateResults !== undefined ||
     input.completedAt !== undefined
 }
@@ -553,6 +590,38 @@ export const updateTaskTool = defineTool({
           },
           required: ['id', 'description', 'verifiedBy'],
         },
+      },
+      workUnitAnalysis: {
+        type: 'object',
+        properties: {
+          summary: {
+            type: 'string',
+            description: 'Semantic summary of how many independently deliverable work units the task contains.',
+          },
+          units: {
+            type: 'array',
+            items: {
+              type: 'object',
+              properties: {
+                id: { type: 'string' },
+                title: { type: 'string' },
+                deliverable: { type: 'string' },
+                rationale: { type: 'string' },
+                suggestedDomain: { type: 'string' },
+                dependsOn: { type: 'array', items: { type: 'string' } },
+              },
+              required: ['id', 'title', 'deliverable', 'rationale'],
+            },
+          },
+          proofOnlyItems: {
+            type: 'array',
+            items: { type: 'string' },
+            description: 'Verification, review, or evidence items that prove a unit but are not separate deliverables.',
+          },
+          createdAt: { type: 'string' },
+          createdBy: { type: 'string' },
+        },
+        required: ['summary', 'units', 'createdAt'],
       },
       gateResults: {
         type: 'array',

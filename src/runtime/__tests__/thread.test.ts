@@ -75,6 +75,88 @@ describe('buildThread', () => {
     }
   })
 
+  it('projects planned project check-in questions as project direction turns', async () => {
+    const projectPath = await mkdtemp(path.join(tmpdir(), 'guildhall-thread-'))
+    try {
+      await mkdir(path.join(projectPath, '.guildhall', 'pressure-test-intake'), { recursive: true })
+      await writeFile(
+        path.join(projectPath, '.guildhall', 'pressure-test-intake', 'pti-narrative-harness-project-check-in.json'),
+        JSON.stringify({
+          id: 'pti-narrative-harness-project-check-in',
+          rawRequest: 'Start a project check-in for Narrative Harness.',
+          target: { type: 'project', id: 'narrative-harness-project-check-in', title: 'Narrative Harness project check-in' },
+          status: 'active',
+          activeDomainId: 'project-planner',
+          pendingQuestion: {
+            id: 'project-direction-priority',
+            domainId: 'project-planner',
+            prompt: 'For the next few Narrative Harness tasks, should Guildhall bias toward reviewer-lane MVPs, author-facing editor UX, story-memory/schema foundations, or generation/evaluation loops?',
+            why: 'This changes which backlog items Guildhall should shape first and what evidence workers need.',
+            choices: [
+              'Reviewer-lane MVPs',
+              'Author-facing editor UX',
+              'Story-memory/schema foundations',
+              'Generation/evaluation loops',
+            ],
+            evidence: ['README.md: fiction-writing software'],
+            askedAt: '2026-05-31T00:00:00.000Z',
+          },
+          domains: [],
+          outputs: {
+            assumptions: [],
+            decisions: [],
+            languageMapCandidates: [],
+            taskSplitCandidates: [],
+            projectQuestionPlanner: {
+              inferredFacts: [],
+              decisions: [],
+              discardedAnswers: [],
+              askedCandidateIds: ['project-direction-priority'],
+            },
+          },
+          createdAt: '2026-05-31T00:00:00.000Z',
+          updatedAt: '2026-05-31T00:00:00.000Z',
+        }),
+      )
+
+      const snapshot: ProjectSnapshot = {
+        projectPath,
+        config: {
+          id: 'narrative-harness',
+          name: 'Narrative Harness',
+          bootstrap: { verifiedAt: new Date().toISOString() },
+          coordinators: [{ id: 'harness', name: 'Harness' }],
+        },
+        bootstrapVerified: true,
+        hasProvider: true,
+        hasDirection: true,
+        workspaceImportReviewed: true,
+        taskCount: 0,
+        wizardState: emptyWizardsState(),
+      }
+
+      const thread = buildThread({ projectPath, snapshot })
+      const question = thread.turns.find(turn => turn.kind === 'pressure_test_question')
+
+      expect(question).toMatchObject({
+        kind: 'pressure_test_question',
+        domainTitle: 'Project direction',
+        question: {
+          choices: [
+            'Reviewer-lane MVPs',
+            'Author-facing editor UX',
+            'Story-memory/schema foundations',
+            'Generation/evaluation loops',
+          ],
+        },
+      })
+      expect(JSON.stringify(thread.turns)).not.toContain('anything else Guildhall should know')
+      expect(JSON.stringify(thread.turns)).not.toContain('workflow or day-to-day constraint')
+    } finally {
+      await rm(projectPath, { recursive: true, force: true })
+    }
+  })
+
   it('projects a project check-in card when the project has not answered Guildhall project questions yet', async () => {
     const projectPath = await mkdtemp(path.join(tmpdir(), 'guildhall-thread-'))
     try {
@@ -2079,6 +2161,83 @@ coordinators:
     }
   })
 
+  it('does not present old exploring transcript questions as a current wait state', async () => {
+    const projectPath = await mkdtemp(path.join(tmpdir(), 'guildhall-thread-'))
+    try {
+      await mkdir(path.join(projectPath, '.guildhall'), { recursive: true })
+      await writeFile(
+        path.join(projectPath, '.guildhall', 'TASKS.json'),
+        JSON.stringify({
+          tasks: [
+            {
+              id: 'task-1',
+              title: 'Shape AlertDialog',
+              status: 'exploring',
+              openQuestions: [
+                {
+                  id: 'q-1',
+                  prompt: 'Stencil or vanilla?',
+                  answeredAt: new Date().toISOString(),
+                  answer: 'Stencil',
+                },
+              ],
+              createdAt: new Date(Date.now() - 600_000).toISOString(),
+              updatedAt: new Date(Date.now() - 300_000).toISOString(),
+            },
+          ],
+        }),
+      )
+      const snapshot: ProjectSnapshot = {
+        projectPath,
+        config: {
+          id: 'demo',
+          name: 'Demo',
+          bootstrap: { verifiedAt: new Date().toISOString() },
+          coordinators: [{ id: 'core', name: 'Core' }],
+        },
+        hasProvider: true,
+        hasDirection: true,
+        workspaceImportReviewed: true,
+        taskCount: 1,
+        wizardState: emptyWizardsState(),
+      }
+
+      const thread = buildThread({
+        projectPath,
+        snapshot,
+        recentEvents: [
+          {
+            at: new Date(Date.now() - 2_000).toISOString(),
+            event: {
+              type: 'agent_started',
+              task_id: 'task-1',
+              agent_name: 'spec-agent',
+            },
+          },
+          {
+            at: new Date(Date.now() - 1_000).toISOString(),
+            event: {
+              type: 'tool_completed',
+              task_id: 'task-1',
+              agent_name: 'spec-agent',
+              tool_name: 'read-exploring-transcript',
+              is_error: false,
+              output:
+                '## [2026-05-30T23:24:19.974Z] spec-agent\n\nI already posted two questions via `post-user-question` in my last turn. Let me record the transcript and wait for answers.',
+            },
+          },
+        ],
+      })
+
+      const turn = thread.turns.find(t => t.kind === 'inflight')
+      if (!turn || turn.kind !== 'inflight') throw new Error('expected inflight turn')
+      const rendered = JSON.stringify(turn.activity ?? [])
+      expect(rendered).not.toContain('Guildhall asked a question and is waiting for the answer.')
+    } finally {
+      await rm(projectPath, { recursive: true, force: true })
+    }
+  })
+
   it('rewrites internal target-file guard language before it reaches Thread', async () => {
     const projectPath = await mkdtemp(path.join(tmpdir(), 'guildhall-thread-'))
     try {
@@ -3131,6 +3290,62 @@ coordinators:
       if (!inflight || inflight.kind !== 'inflight') throw new Error('expected inflight turn')
       expect(inflight.activity?.[0]?.label).toBe('Failed shell')
       expect(inflight.activity?.[0]?.detail).toContain('error TS1434')
+    } finally {
+      await rm(projectPath, { recursive: true, force: true })
+    }
+  })
+
+  it('does not revive a resolved escalation from a stale task blockReason', async () => {
+    const projectPath = await mkdtemp(path.join(tmpdir(), 'guildhall-thread-'))
+    try {
+      await mkdir(path.join(projectPath, '.guildhall'), { recursive: true })
+      await writeFile(
+        path.join(projectPath, '.guildhall', 'TASKS.json'),
+        JSON.stringify({
+          tasks: [
+            {
+              id: 'task-resolved',
+              title: 'Recovered task',
+              description: 'The visible recovery has already been handled.',
+              domain: 'frontend',
+              projectPath,
+              status: 'blocked',
+              blockReason: 'Spec agent kept researching after Guildhall asked for durable progress.',
+              escalations: [
+                {
+                  id: 'esc-resolved',
+                  reason: 'spec_no_progress',
+                  summary: 'Spec agent kept researching after Guildhall asked for durable progress.',
+                  resolvedAt: '2026-05-31T14:00:00.000Z',
+                  resolution: 'User chose retry from transcript.',
+                },
+              ],
+              createdAt: '2026-05-31T13:00:00.000Z',
+              updatedAt: '2026-05-31T14:00:00.000Z',
+            },
+          ],
+        }),
+      )
+      const snapshot: ProjectSnapshot = {
+        projectPath,
+        config: {
+          id: 'demo',
+          name: 'Demo',
+          bootstrap: { verifiedAt: new Date().toISOString() },
+          coordinators: [{ id: 'frontend', name: 'Frontend' }],
+        },
+        bootstrapVerified: true,
+        hasProvider: true,
+        hasDirection: true,
+        workspaceImportReviewed: true,
+        taskCount: 1,
+        wizardState: emptyWizardsState(),
+      }
+
+      const thread = buildThread({ projectPath, snapshot, recentEvents: [] })
+
+      expect(thread.turns.find(t => t.kind === 'escalation' && t.taskId === 'task-resolved')).toBeUndefined()
+      expect(JSON.stringify(thread.turns)).not.toContain('Spec agent kept researching')
     } finally {
       await rm(projectPath, { recursive: true, force: true })
     }

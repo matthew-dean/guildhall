@@ -1,7 +1,7 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { getProjectStateDir } from '@guildhall/sessions'
-import type { InboxItem } from './inbox.js'
+import { compareInboxItems, type InboxItem } from './inbox.js'
 import { getProjectMigrationStatus } from './migrations.js'
 import { recordGuildhallRuntimeWrite } from './runtime-compatibility.js'
 
@@ -165,9 +165,9 @@ export function buildProjectUnderstandingAdvisories(projectPath: string): InboxI
   if (missing.length === 0) return []
   return [{
     kind: 'project_understanding',
-    severity: 'high',
-    title: 'Project plan may be missing repo evidence',
-    detail: 'Guildhall has new intake coverage for text docs and migrations. Re-index and compare it against the current task list.',
+    severity: 'medium',
+    title: 'Review project discovery update',
+    detail: 'Guildhall can now scan more planning docs and migrations. Review the reconciliation so it can update or dismiss stale imported work.',
     signals: [...missing],
     actionHref: '/workspace-import?mode=reconcile',
     dismissEndpoint: '/api/project/attention/dismiss?id=project-understanding%3Aintake-reconcile',
@@ -220,7 +220,9 @@ export function reconcileAttentionRecords(input: {
 
   const history = normalized
   return {
-    openItems: history.filter(record => record.status === 'open'),
+    openItems: history
+      .filter(record => record.status === 'open')
+      .sort((a, b) => compareInboxItems(a, b) || (b.updatedAt || b.createdAt).localeCompare(a.updatedAt || a.createdAt)),
     history,
   }
 }

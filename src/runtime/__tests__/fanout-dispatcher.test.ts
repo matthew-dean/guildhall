@@ -26,6 +26,7 @@ function makeProject(
     business_envelope_strictness: entry('off' as const),
     agent_health_strictness: entry('standard' as const),
     remediation_autonomy: entry('auto' as const),
+    run_automation: entry('supervised' as const),
     runtime_isolation: entry('none' as const),
     workspace_import_autonomy: entry('suggest' as const),
   }

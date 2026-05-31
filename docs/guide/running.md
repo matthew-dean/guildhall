@@ -20,7 +20,7 @@ is running, opens the browser UI, and usually drops you into either the
 current project's shell or the service home.
 
 From there, use the **Start** / **Stop** controls in the project shell. This
-is the main operating path: you can inspect Thread, Work, Needs you, task
+is the main operating path: you can inspect Thread, Work, attention items, task
 drawers, and release state without leaving the UI.
 
 ## Local runtime setup
@@ -49,14 +49,24 @@ Setup choices and results are saved in host-owned Guildhall runtime state, not
 inside the project checkout. Project containers also stay off by default; they
 start on demand when an AI run needs the runtime.
 
+The 0.9 runtime image is part of the release. The release manifest records the
+expected Debian, Node, Python, runtime API, image tags, and final digest before
+the package is shipped. Guildhall pulls or checks the release image only during
+approved runtime setup or first runtime use.
+
 Projects & Workspaces uses the same runtime as the CLI. Curated progress is
 written to `./.guildhall/PROGRESS.md`; detailed events, heartbeat updates, full
 transcripts, checkpoints, and bulky evidence live in user-local Guildhall
 history so they do not fill project commits.
 
-Progress also leaves durable evidence: a task blueprint, decision,
+Progress also leaves evidence you can inspect: a task blueprint, decision,
 change order, implementation diff, verification result, review finding, or
 learning record. Transcript motion alone is not enough.
+
+When a task reaches the end of the loop, Guildhall records how the result was
+launched, verified, reviewed, and backed by evidence. The completion handoff is
+the readable closeout: what shipped, what was checked, what was out of scope,
+and any remaining risk.
 
 ## From the CLI
 
@@ -107,5 +117,5 @@ Each tick:
 4. For any tasks in `gate_check`: run hard gates.
 5. Persist state; emit events.
 
-The Thread, Work, and Closure views show the same state machine without needing
-to read Guildhall's source code.
+The Thread, Work, and Closure views show those steps without making you read
+Guildhall's source code.

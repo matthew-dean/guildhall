@@ -108,7 +108,13 @@ export function resolveConfig(opts: ResolveOptions): ResolvedConfig {
 
   // Resolve project path
   const projectPath = workspace.projectPath
-    ? resolve(workspace.projectPath.replace(/^~/, process.env['HOME'] ?? ''))
+    ? (
+        workspace.projectPath.startsWith('~')
+          ? resolve(workspace.projectPath.replace(/^~/, process.env['HOME'] ?? ''))
+          : isAbsolute(workspace.projectPath)
+            ? workspace.projectPath
+            : join(workspacePath, workspace.projectPath)
+      )
     : workspacePath
 
   // Workspace id

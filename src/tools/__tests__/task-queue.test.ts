@@ -276,6 +276,98 @@ describe('updateTask', () => {
     expect(raw.tasks[0].spec).toContain('Build the thing')
   })
 
+  it('does not invent split pressure or child tasks for one bounded artifact patch spec', async () => {
+    await updateTask({
+      tasksPath,
+      taskId: 'task-001',
+      status: 'ready',
+      spec: [
+        '## Summary',
+        'Append one sentence to STATUS_NOTE.md and do not edit any other file.',
+        '',
+        '## Acceptance Criteria',
+        '- STATUS_NOTE.md contains the requested sentence.',
+        '- Existing content remains unchanged.',
+        '- No other files change.',
+        '',
+        '## Completion Boundary',
+        '- Product outcome: STATUS_NOTE.md contains the requested sentence.',
+        '- What Guildhall can complete in code: Append one sentence to STATUS_NOTE.md.',
+        '- External dependencies: None.',
+        '- Owner-only setup: None.',
+        '- Verification environment: Local filesystem.',
+        '- What counts as done:',
+        '  1. grep exits 0 for the sentence.',
+        '  2. git diff shows only STATUS_NOTE.md changed.',
+        '  3. Original lines remain untouched.',
+        '- What must be split or blocked: Nothing.',
+      ].join('\n'),
+      acceptanceCriteria: [
+        { id: 'ac-1', description: 'STATUS_NOTE.md contains the requested sentence.', verifiedBy: 'automated' },
+        { id: 'ac-2', description: 'Existing content remains unchanged.', verifiedBy: 'automated' },
+        { id: 'ac-3', description: 'No other files change.', verifiedBy: 'automated' },
+      ],
+      workUnitAnalysis: {
+        summary: 'One deliverable with three proof checks.',
+        units: [{
+          id: 'unit-1',
+          title: 'Patch status note artifact',
+          deliverable: 'STATUS_NOTE.md contains the requested sentence while preserving existing content.',
+          rationale: 'Content, preservation, and diff checks all verify the same artifact change.',
+        }],
+        proofOnlyItems: ['content check', 'diff scope check', 'preservation check'],
+        createdAt: '2026-05-30T12:05:00.000Z',
+        createdBy: 'coordinator-test',
+      },
+    })
+
+    const raw = JSON.parse(await fs.readFile(tasksPath, 'utf-8'))
+    expect(raw.tasks[0].sizePlan).toMatchObject({
+      taskId: 'task-001',
+      score: 1,
+      action: 'proceed',
+    })
+    expect(raw.tasks[0].status).toBe('ready')
+    expect(raw.tasks[0].parentGoalId).toBeUndefined()
+    expect(raw.tasks.filter((task: { id: string; parentGoalId?: string }) =>
+      task.id !== 'task-001' && task.parentGoalId === 'goal-task-001',
+    )).toEqual([])
+  })
+
+  it('rejects worker-authored hard gate results', async () => {
+    const result = await updateTask({
+      tasksPath,
+      taskId: 'task-001',
+      gateResults: [{
+        gateId: 'AC-1',
+        type: 'hard',
+        passed: true,
+        checkedAt: '2026-05-30T00:00:00.000Z',
+        output: 'claimed pass',
+      }],
+    }, { current_agent_id: 'worker-agent' })
+
+    expect(result.success).toBe(false)
+    expect(result.error).toContain('Workers cannot author hard gate results')
+  })
+
+  it('rejects worker-authored met=true command-backed acceptance criteria', async () => {
+    const result = await updateTask({
+      tasksPath,
+      taskId: 'task-001',
+      acceptanceCriteria: [{
+        id: 'AC-1',
+        description: 'RELEASE_NOTES.md contains benchmark artifact evidence.',
+        verifiedBy: 'automated',
+        command: "grep -q 'benchmark artifact evidence' RELEASE_NOTES.md",
+        met: true,
+      }],
+    }, { current_agent_id: 'worker-agent' })
+
+    expect(result.success).toBe(false)
+    expect(result.error).toContain('Workers cannot mark command-backed acceptance criteria as met')
+  })
+
   it('rejects spec_review promotion when the spec buries unanswered human questions in markdown', async () => {
     const result = await updateTask({
       tasksPath,

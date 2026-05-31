@@ -1,4 +1,5 @@
 // @vitest-environment happy-dom
+import '@testing-library/jest-dom/vitest'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { cleanup, fireEvent, render, screen, within } from '@testing-library/svelte'
 import userEvent from '@testing-library/user-event'
@@ -98,7 +99,8 @@ describe('WorkTab', () => {
       },
     })
 
-    await screen.findByText('Work list (3)')
+    await screen.findByText('2 shown · 3 total')
+    await userEvent.selectOptions(screen.getByRole('combobox', { name: /^show$/i }), 'all')
     await userEvent.click(screen.getByRole('button', { name: /^task$/i }))
     expect(screen.getAllByRole('button', { name: /open task/i })[0]?.textContent).toContain('Alpha task')
 
@@ -121,6 +123,302 @@ describe('WorkTab', () => {
     const gammaRow = screen.getByRole('button', { name: /open task gamma task/i })
     await fireEvent.keyDown(gammaRow, { key: 'Enter' })
     expect(path.value).toBe('/projects/looma-knit/task/task-gamma')
+  })
+
+  it('does not show an empty new-request prompt when a zero-task project is blocked by migration', async () => {
+    render(WorkTab, {
+      props: {
+        detail: {
+          ...detail([]),
+          startReadiness: {
+            canStart: false,
+            code: 'required_migration_pending',
+            message: 'Run the required Guildhall migration before Guildhall can update this project.',
+            actionHref: '/migrations',
+          },
+          inbox: {
+            items: [
+              {
+                kind: 'pressure_test_pending',
+                severity: 'medium',
+                title: 'Saved search labels',
+                detail: 'Which labels should be saved first?',
+                actionHref: '/thread',
+                status: 'open',
+                id: 'pressure-test:labels',
+                createdAt: '2026-05-19T10:01:00.000Z',
+                updatedAt: '2026-05-19T10:01:00.000Z',
+              },
+              {
+                kind: 'required_migration',
+                severity: 'high',
+                title: 'Required migration: Project state layout',
+                detail: 'Move project state into the new layout before Guildhall can update it.',
+                actionHref: '/migrations',
+                status: 'open',
+                id: 'migration:project-state-layout',
+                createdAt: '2026-05-19T10:00:00.000Z',
+                updatedAt: '2026-05-19T10:00:00.000Z',
+              },
+            ],
+            history: [],
+            blockers: { bootstrap: false, workspaceImport: false },
+          },
+        },
+      },
+    })
+
+    expect(screen.getByText('Move project state into the new layout before Guildhall can update it.')).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: /migrate project/i })).toBeInTheDocument()
+    expect(screen.queryByText(/No tasks yet.*New request/i)).not.toBeInTheDocument()
+  })
+
+  it('does not show an empty new-request prompt when a zero-task project has a pending question', async () => {
+    render(WorkTab, {
+      props: {
+        detail: {
+          ...detail([]),
+          startReadiness: {
+            canStart: false,
+            code: 'owner_input_required',
+            message: '1 question needs your answer before Guildhall can continue',
+            actionHref: '/thread',
+          },
+          inbox: {
+            items: [
+              {
+                kind: 'pressure_test_pending',
+                severity: 'medium',
+                title: 'Saved search labels',
+                detail: 'Which labels should be saved first?',
+                actionHref: '/thread',
+                status: 'open',
+                id: 'pressure-test:labels',
+                createdAt: '2026-05-19T10:00:00.000Z',
+                updatedAt: '2026-05-19T10:00:00.000Z',
+              },
+            ],
+            history: [],
+            blockers: { bootstrap: false, workspaceImport: false },
+          },
+        },
+      },
+    })
+
+    expect(screen.getByText('Which labels should be saved first?')).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: /answer question/i })).toBeInTheDocument()
+    expect(screen.queryByText(/No tasks yet.*New request/i)).not.toBeInTheDocument()
+  })
+
+  it('shows the opt-in column browser without selecting a default packet', async () => {
+    window.history.replaceState({}, '', '/projects/looma-knit/work?tree=preview')
+    path.value = '/projects/looma-knit/work?tree=preview'
+
+    render(WorkTab, {
+      props: {
+        detail: detail([
+          task({
+            id: 'feature-root',
+            title: 'Interface design system',
+            status: 'parent',
+            description: 'Build the interface design system.',
+            hierarchy: { childIds: ['task-button'], order: 0 },
+          }),
+          task({
+            id: 'task-button',
+            title: 'Button primitive',
+            status: 'ready',
+            description: 'Ship the reusable button primitive.',
+            hierarchy: { parentId: 'feature-root', childIds: [], order: 0 },
+          }),
+        ]),
+      },
+    })
+
+    expect((await screen.findAllByText('Columns')).length).toBeGreaterThan(0)
+    const columns = screen.getByLabelText('Work hierarchy columns')
+    expect(columns).toBeTruthy()
+    expect(screen.getByLabelText('Selected deliverable packet').textContent).toContain('Select work to inspect')
+    expect(within(columns).getAllByText('Interface design system').length).toBe(1)
+
+    await userEvent.click(within(columns).getByRole('button', { name: /interface design system/i }))
+
+    expect(screen.getByLabelText('Selected deliverable packet').textContent).toContain('Build the interface design system')
+    expect(within(columns).getByText('Button primitive')).toBeTruthy()
+
+    await userEvent.click(within(columns).getByRole('button', { name: /button primitive/i }))
+
+    expect(screen.getByLabelText('Selected deliverable packet').textContent).toContain('Ship the reusable button primitive')
+  })
+
+  it('does not echo the selected title across every columns preview panel', async () => {
+    window.history.replaceState({}, '', '/projects/looma-knit/work?tree=preview')
+    path.value = '/projects/looma-knit/work?tree=preview'
+
+    render(WorkTab, {
+      props: {
+        detail: detail([
+          task({
+            id: 'feature-root',
+            title: 'Interface design system',
+            status: 'parent',
+            description: 'Build the interface design system.',
+            hierarchy: { childIds: ['task-button'], order: 0 },
+          }),
+          task({
+            id: 'task-button',
+            title: 'Button primitive',
+            status: 'ready',
+            description: 'Ship the reusable button primitive.',
+            hierarchy: { parentId: 'feature-root', childIds: [], order: 0 },
+          }),
+        ]),
+      },
+    })
+
+    const workbench = await screen.findByLabelText('Deliverable tree workbench')
+    const columns = screen.getByLabelText('Work hierarchy columns')
+
+    await userEvent.click(within(columns).getByRole('button', { name: /interface design system/i }))
+    await userEvent.click(within(columns).getByRole('button', { name: /button primitive/i }))
+
+    expect((workbench.textContent?.match(/Button primitive/g) ?? []).length).toBe(1)
+    expect(within(workbench).getByText('Child work')).toBeTruthy()
+    expect(within(workbench).getByText('Details')).toBeTruthy()
+  })
+
+  it('groups columns preview controls into one toolbar', async () => {
+    window.history.replaceState({}, '', '/projects/looma-knit/work?tree=preview')
+    path.value = '/projects/looma-knit/work?tree=preview'
+
+    render(WorkTab, {
+      props: {
+        detail: detail([
+          task({ id: 'task-ready', title: 'Ready task', status: 'ready' }),
+        ]),
+      },
+    })
+
+    const toolbar = await screen.findByRole('toolbar', { name: /work view controls/i })
+    expect(within(toolbar).getByText('Work view')).toBeTruthy()
+    expect(within(toolbar).getByRole('button', { name: /^columns$/i }).getAttribute('aria-pressed')).toBe('true')
+    expect(within(toolbar).getByRole('button', { name: /^list$/i }).getAttribute('aria-pressed')).toBe('false')
+    expect(within(toolbar).getByRole('button', { name: /^board$/i }).getAttribute('aria-pressed')).toBe('false')
+    expect(screen.getByRole('combobox', { name: /^show$/i })).toBeTruthy()
+    expect(screen.queryByText(/Work list \(/)).toBeNull()
+
+    await userEvent.click(within(toolbar).getByRole('button', { name: /^list$/i }))
+    expect(path.value).toBe('/projects/looma-knit/work')
+    expect(path.href).toBe('/projects/looma-knit/work?view=list')
+    expect(await screen.findByRole('heading', { name: 'Work list' })).toBeTruthy()
+    expect(screen.queryByLabelText('Work hierarchy columns')).toBeNull()
+
+    cleanup()
+    path.value = '/projects/looma-knit/work?tree=preview'
+    window.history.replaceState({}, '', '/projects/looma-knit/work?tree=preview')
+    render(WorkTab, {
+      props: {
+        detail: detail([
+          task({ id: 'task-ready', title: 'Ready task', status: 'ready' }),
+        ]),
+      },
+    })
+    const nextToolbar = await screen.findByRole('toolbar', { name: /work view controls/i })
+    await userEvent.click(within(nextToolbar).getByRole('button', { name: /^board$/i }))
+    expect(path.value).toBe('/projects/looma-knit/work')
+    expect(path.href).toBe('/projects/looma-knit/work?view=board')
+  })
+
+  it('flags broad flat ready work as needing breakdown review in the columns preview', async () => {
+    window.history.replaceState({}, '', '/projects/looma-knit/work?tree=preview')
+    path.value = '/projects/looma-knit/work?tree=preview'
+
+    render(WorkTab, {
+      props: {
+        detail: detail([
+          task({
+            id: 'broad-ready',
+            title: 'Build end-to-end interface system',
+            status: 'ready',
+            description: 'Deliver the whole interface system.',
+            acceptanceCriteria: Array.from({ length: 7 }, (_, index) => ({
+              description: `Requirement ${index + 1}`,
+            })),
+            hierarchy: { childIds: [], order: 0 },
+          }),
+        ]),
+      },
+    })
+
+    const columns = await screen.findByLabelText('Work hierarchy columns')
+    expect(within(columns).getByText('Review breakdown')).toBeTruthy()
+    expect(within(columns).queryByText('Ready')).toBeNull()
+
+    await userEvent.click(within(columns).getByRole('button', { name: /build end-to-end interface system/i }))
+
+    expect(within(columns).getByText(/No child tasks or decomposition proposal exists yet/i)).toBeTruthy()
+    const packet = screen.getByLabelText('Selected deliverable packet')
+    expect(within(packet).getByText('Review breakdown')).toBeTruthy()
+    expect(within(packet).getByText(/7 requirements; no child tasks or decomposition proposal yet/i)).toBeTruthy()
+  })
+
+  it('hides done and shelved work by default and reveals it on request', async () => {
+    render(WorkTab, {
+      props: {
+        detail: detail([
+          task({ id: 'task-ready', title: 'Ready feature work', status: 'ready' }),
+          task({ id: 'task-done', title: 'Completed feature proof', status: 'done' }),
+          task({ id: 'task-shelved', title: 'Shelved idea', status: 'shelved' }),
+        ]),
+      },
+    })
+
+    await screen.findByText('1 shown · 3 total')
+    expect(screen.getByText('Ready feature work')).toBeTruthy()
+    expect(screen.queryByText('Completed feature proof')).toBeNull()
+    expect(screen.queryByText('Shelved idea')).toBeNull()
+
+    await userEvent.selectOptions(screen.getByRole('combobox', { name: /^show$/i }), 'all')
+
+    expect(screen.getByText('3 shown · 3 total')).toBeTruthy()
+    expect(screen.getByText('Completed feature proof')).toBeTruthy()
+    expect(screen.getByText('Shelved idea')).toBeTruthy()
+  })
+
+  it('shows flexible work hierarchy breadcrumbs and child rollups without parent-task wording', async () => {
+    render(WorkTab, {
+      props: {
+        detail: detail([
+          task({
+            id: 'app-spec',
+            title: 'Pantry Pulse app spec',
+            status: 'parent',
+            workKind: 'app_spec',
+            hierarchy: { childIds: ['feature-inventory'], order: 0 },
+          }),
+          task({
+            id: 'feature-inventory',
+            title: 'Inventory tracking feature',
+            status: 'parent',
+            workKind: 'feature_spec',
+            hierarchy: { parentId: 'app-spec', childIds: ['task-build-inventory'], order: 0 },
+          }),
+          task({
+            id: 'task-build-inventory',
+            title: 'Build inventory list',
+            status: 'ready',
+            workKind: 'implementation',
+            hierarchy: { parentId: 'feature-inventory', childIds: [], order: 0 },
+          }),
+        ]),
+      },
+    })
+
+    await screen.findByText('Pantry Pulse app spec')
+    expect(screen.getAllByText('1 nested work item').length).toBeGreaterThanOrEqual(1)
+    expect(screen.getByText('Pantry Pulse app spec / Inventory tracking feature')).toBeTruthy()
+    expect(screen.getByText('Pantry Pulse app spec / Inventory tracking feature / Build inventory list')).toBeTruthy()
+    expect(document.body.textContent).not.toMatch(/parent task/i)
   })
 
   it('uses explicit work summary labels instead of overloaded active/draft terms', async () => {
@@ -247,7 +545,8 @@ describe('WorkTab', () => {
     path.value = '/projects/looma-knit/work'
     window.history.replaceState({}, '', '/projects/looma-knit/work')
     await userEvent.click(screen.getByRole('button', { name: /board/i }))
-    expect(path.value).toBe('/projects/looma-knit/planner')
+    expect(path.value).toBe('/projects/looma-knit/work')
+    expect(path.href).toBe('/projects/looma-knit/work?view=board')
   })
 
   it('switches board mode back to the work list without depending on the details pane', async () => {
@@ -267,10 +566,12 @@ describe('WorkTab', () => {
       },
     })
 
-    await screen.findByText('Task board')
+    await screen.findByText('Next focus')
     expect(within(screen.getByText('Next focus').closest('.focus-strip') as HTMLElement).getByText('Board task')).toBeTruthy()
+    expect(screen.getByRole('button', { name: /^board$/i }).getAttribute('aria-pressed')).toBe('true')
     await userEvent.click(screen.getByRole('button', { name: /list/i }))
     expect(path.value).toBe('/projects/looma-knit/work')
+    expect(path.href).toBe('/projects/looma-knit/work?view=list')
   })
 
   it('renders progress metadata with friendly labels instead of raw identifiers', async () => {

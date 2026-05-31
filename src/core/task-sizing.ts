@@ -29,6 +29,25 @@ export const TaskSplitRecommendation = z.object({
 })
 export type TaskSplitRecommendation = z.infer<typeof TaskSplitRecommendation>
 
+export const WorkUnit = z.object({
+  id: z.string(),
+  title: z.string(),
+  deliverable: z.string(),
+  rationale: z.string(),
+  suggestedDomain: z.string().optional(),
+  dependsOn: z.array(z.string()).default([]),
+})
+export type WorkUnit = z.infer<typeof WorkUnit>
+
+export const WorkUnitAnalysis = z.object({
+  summary: z.string(),
+  units: z.array(WorkUnit).default([]),
+  proofOnlyItems: z.array(z.string()).default([]),
+  createdAt: z.string(),
+  createdBy: z.string().default('coordinator-work-unit-analysis'),
+})
+export type WorkUnitAnalysis = z.infer<typeof WorkUnitAnalysis>
+
 export const TaskSizePlan = z.object({
   taskId: z.string(),
   score: z.union([z.literal(1), z.literal(2), z.literal(3), z.literal(5), z.literal(8)]),
@@ -52,6 +71,7 @@ export interface BuildTaskSizePlanInput {
     spec?: string
     acceptanceCriteria?: Array<{ description: string; [key: string]: unknown }>
     outOfScope?: string[]
+    workUnitAnalysis?: WorkUnitAnalysis
   }
   changedFiles?: readonly string[]
   riskLanes?: readonly string[]
@@ -66,12 +86,65 @@ const RELEASE_PATTERNS = /\b(release|rollout|flag|canary|deploy|launch|fallback)
 const SECURITY_PATTERNS = /\b(auth|oauth|permission|privacy|pii|token|tenant|csrf|secret)\b/i
 
 export function buildTaskSizePlan(input: BuildTaskSizePlanInput): TaskSizePlan {
-  const text = taskText(input.task)
+  const text = inScopeTaskText(input.task)
   const files = [...new Set((input.changedFiles ?? []).map((file) => file.trim()).filter(Boolean))]
   const lanes = [...new Set((input.riskLanes ?? []).map((lane) => lane.trim()).filter(Boolean))]
   const factors: TaskSizeFactor[] = []
+  const semanticPlan = sizePlanFromWorkUnitAnalysis(input)
+  if (semanticPlan) return semanticPlan
 
   const outcomeCount = estimateOutcomeCount(text, input.task.acceptanceCriteria?.length ?? 0)
+  if (isDeterministicSingleFileTask({
+    text,
+    files,
+    acceptanceCount: input.task.acceptanceCriteria?.length ?? 0,
+  })) {
+    const createdAt = input.createdAt ?? new Date().toISOString()
+    return TaskSizePlan.parse({
+      taskId: input.task.id,
+      score: 1,
+      band: 'tiny',
+      action: 'proceed',
+      factors: [{
+        id: 'deterministic_single_file',
+        label: 'Deterministic single file',
+        weight: 0,
+        reason: 'The task creates one file with exact short content and a direct file/content proof.',
+      }],
+      recommendedChildren: [],
+      reviewBudgetHint: 'lean',
+      reasons: [
+        'Task size score: 1.',
+        'The task is deterministic, bounded to one file, and can be proven with a direct content check.',
+      ],
+      createdAt,
+      createdBy: input.createdBy ?? 'task-sizing',
+    })
+  }
+  if (isSingleFileLocalWebAppTask({ text, files })) {
+    const createdAt = input.createdAt ?? new Date().toISOString()
+    return TaskSizePlan.parse({
+      taskId: input.task.id,
+      score: 3,
+      band: 'medium',
+      action: 'proceed_with_warning',
+      factors: [{
+        id: 'single_file_web_app',
+        label: 'Single-file local web app',
+        weight: 1,
+        reason: 'The app is bounded to one index.html file with no install or build step, so splitting would add coordination overhead instead of reducing delivery risk.',
+      }],
+      recommendedChildren: [],
+      reviewBudgetHint: 'balanced',
+      reasons: [
+        'Task size score: 3.',
+        'The task is a bounded single-file local web app. Proceed as one worker pass, with browser and visual review proof.',
+      ],
+      createdAt,
+      createdBy: input.createdBy ?? 'task-sizing',
+    })
+  }
+
   if (outcomeCount >= 3) {
     factors.push({
       id: 'multiple_outcomes',
@@ -177,6 +250,116 @@ export function buildTaskSizePlan(input: BuildTaskSizePlanInput): TaskSizePlan {
   })
 }
 
+function sizePlanFromWorkUnitAnalysis(input: BuildTaskSizePlanInput): TaskSizePlan | null {
+  const analysis = input.task.workUnitAnalysis
+  if (!analysis || analysis.units.length === 0) return null
+  const createdAt = input.createdAt ?? new Date().toISOString()
+  const units = analysis.units
+  if (units.length === 1) {
+    return TaskSizePlan.parse({
+      taskId: input.task.id,
+      score: 1,
+      band: 'tiny',
+      action: 'proceed',
+      factors: [{
+        id: 'semantic_single_deliverable',
+        label: 'Semantic single deliverable',
+        weight: 0,
+        reason: analysis.summary,
+      }],
+      recommendedChildren: [],
+      reviewBudgetHint: 'lean',
+      reasons: [
+        'Task size score: 1.',
+        `Semantic work-unit analysis found one deliverable: ${units[0]!.deliverable}`,
+        ...(analysis.proofOnlyItems.length > 0
+          ? [`Proof-only items stay with the deliverable: ${analysis.proofOnlyItems.join('; ')}`]
+          : []),
+      ],
+      createdAt,
+      createdBy: input.createdBy ?? 'task-sizing',
+    })
+  }
+
+  const score = units.length >= 5 ? 8 : units.length >= 3 ? 5 : 3
+  const recommendedChildren = units.map((unit) => ({
+    title: unit.title,
+    reason: unit.rationale || unit.deliverable,
+    dependsOn: unit.dependsOn,
+    ...(unit.suggestedDomain ? { suggestedDomain: unit.suggestedDomain } : {}),
+  }))
+  return TaskSizePlan.parse({
+    taskId: input.task.id,
+    score,
+    band: bandForScore(score),
+    action: actionForScore(score),
+    factors: [{
+      id: 'semantic_work_units',
+      label: 'Semantic work units',
+      weight: Math.min(6, units.length),
+      reason: analysis.summary,
+    }],
+    recommendedChildren,
+    reviewBudgetHint: score >= 8 ? 'release_critical' : score >= 5 ? 'thorough' : 'balanced',
+    reasons: [
+      `Task size score: ${score}.`,
+      `Semantic work-unit analysis found ${units.length} independently deliverable units.`,
+    ],
+    createdAt,
+    createdBy: input.createdBy ?? 'task-sizing',
+  })
+}
+
+function isDeterministicSingleFileTask(input: {
+  text: string
+  files: readonly string[]
+  acceptanceCount: number
+}): boolean {
+  if (input.files.length > 1) return false
+  const text = input.text
+  if (!/\b(?:create|write|add)\s+(?:a\s+|one\s+|single\s+)?file\b/i.test(text)) return false
+  if (!/\b(?:named|called|at|path)\s+[`'"]?[\w./-]+\.[\w-]+[`'"]?/i.test(text)) return false
+  if (!/\b(?:containing|content(?:s)?\s+(?:is|are)|with(?:\s+content)?)\s+exactly\b/i.test(text)) return false
+  if (input.acceptanceCount > 3) return false
+  const exactContent = /exactly\s+(?:the\s+string\s+)?[`'"]([^`'"\n]{1,200})[`'"]|exactly\s+([A-Z0-9_./:-]{1,200})(?:[.\s]|$)/i.exec(text)
+  if (!exactContent) return false
+  const domainRiskText = text
+    .split('\n')
+    .filter((line) => !/\b(no|not|without|none|nothing|out of scope)\b/i.test(line))
+    .join('\n')
+  return !(
+    UI_PATTERNS.test(domainRiskText) ||
+    DATA_PATTERNS.test(domainRiskText) ||
+    API_PATTERNS.test(domainRiskText) ||
+    RELEASE_PATTERNS.test(domainRiskText) ||
+    SECURITY_PATTERNS.test(domainRiskText)
+  )
+}
+
+function isSingleFileLocalWebAppTask(input: {
+  text: string
+  files: readonly string[]
+}): boolean {
+  if (input.files.length > 1) return false
+  if (input.files.length === 1 && !/(^|\/)index\.html$/i.test(input.files[0] ?? '')) return false
+  const text = input.text
+  const asksForWebApp =
+    /\b(?:build|create|implement|scaffold)\b/i.test(text) &&
+    /\b(?:web app|single-page|browser app|app)\b/i.test(text)
+  const singleFile =
+    /\bsingle file\b/i.test(text) ||
+    /\bindex\.html\b/i.test(text) ||
+    input.files.some(file => /(^|\/)index\.html$/i.test(file))
+  const dependencyFree =
+    /\bdependency-free\b/i.test(text) ||
+    /\bplain html\b/i.test(text) ||
+    /\bno (?:npm|install|build step|dev server)\b/i.test(text) ||
+    /\bdo not require npm install\b/i.test(text)
+  const excludesNativeOrService =
+    !/\b(?:ios|android|react native|swiftui|electron|backend service|api server|database|migration)\b/i.test(text)
+  return asksForWebApp && singleFile && dependencyFree && excludesNativeOrService
+}
+
 function taskText(task: BuildTaskSizePlanInput['task']): string {
   return [
     task.title,
@@ -185,6 +368,33 @@ function taskText(task: BuildTaskSizePlanInput['task']): string {
     ...(task.acceptanceCriteria ?? []).map((criterion) => criterion.description),
     ...(task.outOfScope ?? []),
   ].filter(Boolean).join('\n')
+}
+
+function inScopeTaskText(task: BuildTaskSizePlanInput['task']): string {
+  return stripOutOfScopeSections([
+    task.title,
+    task.description,
+    task.spec,
+    ...(task.acceptanceCriteria ?? []).map((criterion) => criterion.description),
+  ].filter(Boolean).join('\n'))
+}
+
+function stripOutOfScopeSections(text: string): string {
+  const kept: string[] = []
+  let skippingOutOfScope = false
+  for (const line of text.split('\n')) {
+    if (/^#{2,3}\s+Out of Scope\s*$/i.test(line.trim())) {
+      skippingOutOfScope = true
+      continue
+    }
+    if (skippingOutOfScope && /^#{2,3}\s+/.test(line.trim())) {
+      skippingOutOfScope = false
+    }
+    if (skippingOutOfScope) continue
+    if (/^\s*[-*]\s+(?:no|not|without|out of scope)\b/i.test(line)) continue
+    kept.push(line)
+  }
+  return kept.join('\n')
 }
 
 function estimateOutcomeCount(text: string, acceptanceCount: number): number {

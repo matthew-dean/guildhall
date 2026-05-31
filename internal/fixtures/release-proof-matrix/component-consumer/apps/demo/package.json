@@ -1,0 +1,7 @@
+{
+  "name": "guildhall-release-fixture-component-demo",
+  "private": true,
+  "scripts": {
+    "test": "node -e \"console.log('consumer render ok')\""
+  }
+}

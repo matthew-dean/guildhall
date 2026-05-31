@@ -4,7 +4,7 @@ help_topic: reference.cli
 help_summary: |
   Every shipped `guildhall` subcommand — init, register, unregister, list,
   run, serve, start, open, stop, config, corpus-map, migrations,
-  MCP bridge, and model-bakeoff — with flags and examples.
+  review calibration, MCP bridge, and model-bakeoff — with flags and examples.
 ---
 
 # CLI reference
@@ -231,6 +231,32 @@ Flags:
 See [External agents and MCP](../guide/external-agents) for what outside agents
 can read through the bridge.
 
+## `guildhall review-calibration validate [id|path]`
+
+Validate the review failure corpus and record the result through Guildhall's
+review audit store.
+
+```bash
+guildhall review-calibration validate .
+guildhall review-calibration validate . --cases internal/calibration/cases/ux
+```
+
+Flags:
+
+- `--cases <dir>` — corpus directory. Defaults to
+  `internal/calibration/cases`.
+
+Related commands:
+
+- `guildhall review-calibration validate-planning [id|path]` — validate the
+  review-planning frontier corpus.
+- `guildhall review-calibration validate-sizing [id|path]` — validate the task
+  sizing corpus.
+- `guildhall review-calibration draft-case [id|path]` — print a calibration
+  case draft from an escaped miss.
+- `guildhall review-calibration escaped-miss [id|path]` — record a missed
+  review finding so Guildhall can turn it into calibration follow-up.
+
 ## `guildhall model-bakeoff [--context-indexer] [output.json]`
 
 Write a deterministic model comparison replay report. The command currently
@@ -265,6 +291,7 @@ guildhall corpus-map refresh --semantic .
 guildhall migrate status .
 guildhall migrate apply --include-prompt .
 guildhall migrate task-state --apply .
+guildhall review-calibration validate . --cases internal/calibration/cases/ux
 guildhall model-bakeoff artifacts/model-bakeoff/report.json
 guildhall model-bakeoff --context-indexer
 ```

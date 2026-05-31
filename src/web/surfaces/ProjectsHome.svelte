@@ -61,6 +61,7 @@
         taskCounts: project.taskCounts,
         highlights: project.highlights,
         run: project.run,
+        startReadiness: project.startReadiness,
         providerStatus: project.providerStatus,
         gitStory: project.gitStory,
         projectCheckIn: project.projectCheckIn,

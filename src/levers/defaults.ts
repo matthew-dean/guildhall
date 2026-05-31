@@ -52,6 +52,10 @@ export function makeDefaultSettings(now: Date = new Date()): LeverSettings {
       position: 'confirm_destructive',
       ...stub('coordinator may act on non-destructive remediations; restart_clean / shelve_task / pause_task_line require a human'),
     },
+    run_automation: {
+      position: 'supervised',
+      ...stub('default runs may stop for owner approval; explicit fully automated runs delegate approval and question handling to Guildhall'),
+    },
     runtime_isolation: {
       position: 'none',
       ...stub('no slot allocation until fanout is enabled'),

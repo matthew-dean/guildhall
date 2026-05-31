@@ -110,6 +110,85 @@ describe('GET /api/config/levers', () => {
   })
 })
 
+describe('project re-intake endpoints', () => {
+  it('creates, returns, applies, and dismisses a re-intake draft', async () => {
+    await fs.mkdir(path.join(tmpDir, 'looma/docs'), { recursive: true })
+    await fs.writeFile(
+      path.join(tmpDir, 'looma/docs/component-library-audit.md'),
+      [
+        '# Component audit',
+        '',
+        '| Deliverable | Need | Foundation | Consumer |',
+        '| --- | --- | --- | --- |',
+        '| Dialog | shipped as `ui-dialog` | native dialog + overlay manager | Knit BaseDialog already uses it |',
+        '| AlertDialog | missing P0 gap | builds on Dialog and Button | Knit destructive confirmation flow |',
+      ].join('\n'),
+      'utf8',
+    )
+    const tasksPath = path.join(tmpDir, '.guildhall', 'TASKS.json')
+    await fs.writeFile(
+      tasksPath,
+      JSON.stringify({
+        version: 1,
+        lastUpdated: '2026-05-30T20:00:00.000Z',
+        tasks: [{
+          id: 'task-039',
+          title: 'Build AlertDialog primitive',
+          description: 'Old task',
+          domain: 'looma',
+          projectPath: tmpDir,
+          status: 'blocked',
+          priority: 'high',
+          dependsOn: [],
+          outOfScope: [],
+          acceptanceCriteria: [],
+          notes: [],
+          gateResults: [],
+          reviewVerdicts: [],
+          adjudications: [],
+          escalations: [],
+          agentIssues: [],
+          revisionCount: 0,
+          remediationAttempts: 0,
+          origination: 'human',
+          createdAt: '2026-05-30T20:00:00.000Z',
+          updatedAt: '2026-05-30T20:00:00.000Z',
+        }],
+      }, null, 2),
+      'utf8',
+    )
+
+    const { app } = buildServeApp({ projectPath: tmpDir })
+    const rerun = await app.fetch(new Request(scoped('/api/project/reintake/rerun'), { method: 'POST' }))
+    expect(rerun.status).toBe(200)
+    const rerunBody = await rerun.json() as { draft: { summary: { reframed: number; created: number } } }
+    expect(rerunBody.draft.summary.reframed).toBe(1)
+    expect(rerunBody.draft.summary.created).toBeGreaterThan(0)
+
+    const draftResponse = await app.fetch(new Request(scoped('/api/project/reintake/draft')))
+    const draft = await draftResponse.json() as { groups: Array<{ id: string }> }
+    expect(draft.groups.map(group => group.id)).toContain('evidence-work-graph')
+
+    const apply = await app.fetch(new Request(scoped('/api/project/reintake/apply'), {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ groupIds: ['evidence-work-graph'] }),
+    }))
+    expect(apply.status).toBe(200)
+    const tasks = await readTasks(tmpDir)
+    expect(tasks.find(task => task.id === 'task-039')).toMatchObject({
+      title: 'Build AlertDialog',
+      status: 'import_draft',
+    })
+    expect(tasks.find(task => task.id === 'task-alert-dialog-integration')).toMatchObject({
+      dependsOn: ['task-039'],
+    })
+
+    const dismiss = await app.fetch(new Request(scoped('/api/project/reintake/dismiss'), { method: 'POST' }))
+    expect(dismiss.status).toBe(200)
+  })
+})
+
 describe('POST /api/config/levers', () => {
   it('writes a project override and can return the lever to the global default', async () => {
     const { app } = buildServeApp({ projectPath: tmpDir })
@@ -196,13 +275,14 @@ describe('general project status endpoints', () => {
     await fs.writeFile(path.join(tmpDir, 'src/web/lib/Button.svelte'), '<button><slot /></button>\n', 'utf8')
     const { app } = buildServeApp({ projectPath: tmpDir })
 
-    const empty = await app.fetch(new Request(scoped('/api/project/codebase-map/status')))
-    expect(empty.status).toBe(200)
-    expect(await empty.json()).toMatchObject({
-      configured: false,
-      generatedAt: null,
-      counts: { files: 0, areas: 0, abstractions: 0 },
+    const initial = await app.fetch(new Request(scoped('/api/project/codebase-map/status')))
+    expect(initial.status).toBe(200)
+    const initialBody = await initial.json() as Record<string, any>
+    expect(initialBody).toMatchObject({
+      configured: true,
+      counts: { abstractions: 1 },
     })
+    expect(initialBody.generatedAt).toEqual(expect.any(String))
 
     const refresh = await app.fetch(new Request(scoped('/api/project/codebase-map/refresh'), { method: 'POST' }))
     expect(refresh.status).toBe(200)
@@ -320,6 +400,7 @@ describe('general project status endpoints', () => {
     const defaultsBody = await defaults.json() as Record<string, any>
     expect(defaultsBody.suggestedName).toBe('Settings Test')
     expect(defaultsBody.suggestedId).toBe(PROJECT_ID)
+    expect(defaultsBody.path).toBe(tmpDir)
     expect(Array.isArray(defaultsBody.localModels)).toBe(true)
     expect(Array.isArray(defaultsBody.cloudModels)).toBe(true)
   })
@@ -639,6 +720,28 @@ describe('POST /api/project/start', () => {
     })
   })
 
+  it('includes project start readiness in service summaries so fleet cards inherit start blockers', async () => {
+    registerWorkspace({ id: PROJECT_ID, name: 'Settings Test', path: tmpDir, tags: [] })
+    await fs.mkdir(path.join(tmpDir, 'memory'), { recursive: true })
+    await fs.writeFile(path.join(tmpDir, 'memory', 'MEMORY.md'), '# Legacy\n', 'utf8')
+    const { app } = buildServeApp({ projectPath: tmpDir })
+
+    const service = await app.fetch(new Request('http://localhost/api/service'))
+    expect(service.status).toBe(200)
+    const body = (await service.json()) as {
+      projects?: Array<{
+        id?: string
+        startReadiness?: { canStart?: boolean; code?: string; actionHref?: string }
+      }>
+    }
+    const project = body.projects?.find(entry => entry.id === PROJECT_ID)
+    expect(project?.startReadiness).toMatchObject({
+      canStart: false,
+      code: 'required_migration_pending',
+      actionHref: '/migrations',
+    })
+  })
+
   it('blocks project mutations when project state requires a newer Guildhall runtime', async () => {
     await fs.writeFile(
       path.join(tmpDir, '.guildhall', 'runtime.json'),
@@ -917,6 +1020,242 @@ describe('POST /api/project/start', () => {
       actionHref: '/work',
     })
     expect(projectBody.startReadiness?.message).toContain('clearer brief')
+  })
+
+  it('points owner-input Start blockers at the pending question instead of a separate escalation', async () => {
+    const now = new Date().toISOString()
+    await fs.writeFile(
+      path.join(tmpDir, '.guildhall', 'TASKS.json'),
+      JSON.stringify({
+        version: 1,
+        lastUpdated: now,
+        tasks: [
+          {
+            id: 'task-blocked',
+            title: 'Blocked task',
+            description: 'Already has a separate escalation.',
+            domain: 'core',
+            status: 'blocked',
+            priority: 'normal',
+            acceptanceCriteria: [],
+            outOfScope: [],
+            dependsOn: [],
+            notes: [],
+            openQuestions: [],
+            escalations: [{ id: 'esc-1', summary: 'Build is failing' }],
+            agentIssues: [],
+            gateResults: [],
+            reviewVerdicts: [],
+            adjudications: [],
+            revisionCount: 0,
+            remediationAttempts: 0,
+            createdAt: now,
+            updatedAt: now,
+          },
+          {
+            id: 'task-question',
+            title: 'Question task',
+            description: 'Needs one owner decision.',
+            domain: 'core',
+            status: 'exploring',
+            priority: 'normal',
+            acceptanceCriteria: [],
+            outOfScope: [],
+            dependsOn: [],
+            notes: [],
+            openQuestions: [{
+              id: 'q-1',
+              askedBy: 'spec-agent',
+              askedAt: now,
+              kind: 'choice',
+              prompt: 'Which API shape should this component use?',
+              choices: ['Stencil component', 'Vanilla web component'],
+            }],
+            escalations: [],
+            agentIssues: [],
+            gateResults: [],
+            reviewVerdicts: [],
+            adjudications: [],
+            revisionCount: 0,
+            remediationAttempts: 0,
+            createdAt: now,
+            updatedAt: now,
+          },
+        ],
+      }, null, 2),
+      'utf8',
+    )
+
+    const { app } = buildServeApp({ projectPath: tmpDir })
+    const projectRes = await app.fetch(new Request(scoped('/api/project')))
+    const projectBody = (await projectRes.json()) as {
+      startReadiness?: { canStart?: boolean; code?: string; actionHref?: string; message?: string }
+    }
+
+    expect(projectBody.startReadiness).toMatchObject({
+      canStart: false,
+      code: 'owner_input_required',
+      actionHref: '/task/task-question?tab=current',
+    })
+    expect(projectBody.startReadiness?.message).toContain('1 question needs your answer')
+  })
+
+  it('points recovery-only Start blockers at the newest blocked task instead of stale historical blockers', async () => {
+    const older = '2026-05-19T10:00:00.000Z'
+    const newer = '2026-05-19T12:00:00.000Z'
+    await fs.writeFile(
+      path.join(tmpDir, '.guildhall', 'TASKS.json'),
+      JSON.stringify({
+        version: 1,
+        lastUpdated: newer,
+        tasks: [
+          {
+            id: 'task-old-import',
+            title: 'Old import blocker',
+            description: 'Historical blocked task.',
+            domain: 'core',
+            status: 'blocked',
+            priority: 'normal',
+            acceptanceCriteria: [],
+            outOfScope: [],
+            dependsOn: [],
+            notes: [],
+            openQuestions: [],
+            escalations: [{ id: 'esc-old', summary: 'Old recovery path' }],
+            agentIssues: [],
+            gateResults: [],
+            reviewVerdicts: [],
+            adjudications: [],
+            revisionCount: 0,
+            remediationAttempts: 0,
+            createdAt: older,
+            updatedAt: older,
+          },
+          {
+            id: 'task-current',
+            title: 'Current blocked task',
+            description: 'The task the user is looking at now.',
+            domain: 'core',
+            status: 'blocked',
+            priority: 'normal',
+            acceptanceCriteria: [],
+            outOfScope: [],
+            dependsOn: [],
+            notes: [],
+            openQuestions: [],
+            escalations: [{ id: 'esc-current', summary: 'Current recovery path' }],
+            agentIssues: [],
+            gateResults: [],
+            reviewVerdicts: [],
+            adjudications: [],
+            revisionCount: 0,
+            remediationAttempts: 0,
+            createdAt: newer,
+            updatedAt: newer,
+          },
+        ],
+      }, null, 2),
+      'utf8',
+    )
+
+    const { app } = buildServeApp({ projectPath: tmpDir })
+    const projectRes = await app.fetch(new Request(scoped('/api/project')))
+    const projectBody = (await projectRes.json()) as {
+      startReadiness?: { canStart?: boolean; code?: string; actionHref?: string; message?: string }
+    }
+
+    expect(projectBody.startReadiness).toMatchObject({
+      canStart: false,
+      code: 'owner_input_required',
+      actionHref: '/task/task-current',
+    })
+    expect(projectBody.startReadiness?.message).toContain('Choose a recovery path')
+  })
+
+  it('rejects focused task starts while project-level owner input is still blocking Start', async () => {
+    const now = new Date().toISOString()
+    await fs.writeFile(
+      path.join(tmpDir, '.guildhall', 'TASKS.json'),
+      JSON.stringify({
+        version: 1,
+        lastUpdated: now,
+        tasks: [
+          {
+            id: 'task-needs-answer',
+            title: 'Needs answer first',
+            description: 'The project-level blocker.',
+            domain: 'core',
+            status: 'exploring',
+            priority: 'normal',
+            acceptanceCriteria: [],
+            outOfScope: [],
+            dependsOn: [],
+            notes: [],
+            openQuestions: [{
+              id: 'q-1',
+              askedBy: 'spec-agent',
+              askedAt: now,
+              kind: 'choice',
+              prompt: 'Which implementation direction should Guildhall use?',
+              choices: ['Option A', 'Option B'],
+            }],
+            escalations: [],
+            agentIssues: [],
+            gateResults: [],
+            reviewVerdicts: [],
+            adjudications: [],
+            revisionCount: 0,
+            remediationAttempts: 0,
+            createdAt: now,
+            updatedAt: now,
+          },
+          {
+            id: 'task-other',
+            title: 'Other ready-looking task',
+            description: 'This should not be startable while the project is blocked.',
+            domain: 'core',
+            status: 'ready',
+            priority: 'normal',
+            acceptanceCriteria: ['It has a real acceptance criterion.'],
+            outOfScope: [],
+            dependsOn: [],
+            notes: [],
+            productBrief: {
+              userJob: 'Move another task forward.',
+              successMetric: 'The task completes.',
+              approvedAt: now,
+            },
+            escalations: [],
+            agentIssues: [],
+            gateResults: [],
+            reviewVerdicts: [],
+            adjudications: [],
+            revisionCount: 0,
+            remediationAttempts: 0,
+            createdAt: now,
+            updatedAt: now,
+          },
+        ],
+      }, null, 2),
+      'utf8',
+    )
+
+    const { app } = buildServeApp({ projectPath: tmpDir })
+    const res = await app.fetch(
+      new Request(scoped('/api/project/start'), {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ mode: 'one_task', taskId: 'task-other', scope: 'work_item' }),
+      }),
+    )
+
+    expect(res.status).toBe(409)
+    const body = (await res.json()) as { code?: string; actionHref?: string; error?: string }
+    expect(body).toMatchObject({
+      code: 'owner_input_required',
+      actionHref: '/task/task-needs-answer?tab=current',
+    })
+    expect(body.error).toContain('1 question needs your answer')
   })
 
   it('rejects fanout without worktree isolation with a clear error', async () => {
@@ -2040,6 +2379,108 @@ describe('GET /api/project/inbox — blockers', () => {
       item.status === 'resolved' &&
       item.resolution === 'verified',
     )).toBe(true)
+  })
+
+  it('returns open attention sorted by current inbox priority instead of stale record recency', async () => {
+    const yamlPath = path.join(tmpDir, 'guildhall.yaml')
+    const current = await fs.readFile(yamlPath, 'utf8')
+    await fs.writeFile(
+      yamlPath,
+      current +
+        '\nbootstrap:\n  verifiedAt: "2026-04-24T00:00:00Z"\n  packageManager: pnpm\n  install: { command: "pnpm install", status: ok }\n  gates:\n    lint: { command: "pnpm lint", available: true }\n',
+      'utf8',
+    )
+    await fs.writeFile(
+      path.join(tmpDir, '.guildhall', 'workspace-goals.json'),
+      JSON.stringify({ goals: [] }, null, 2),
+      'utf8',
+    )
+    await fs.writeFile(
+      path.join(tmpDir, '.guildhall', 'TASKS.json'),
+      JSON.stringify({
+        version: 1,
+        lastUpdated: '2026-05-31T15:00:00.000Z',
+        tasks: [
+          {
+            id: 'task-thin',
+            title: 'Thin ready task',
+            description: 'Needs acceptance criteria.',
+            status: 'ready',
+            productBrief: {
+              userJob: 'Use the task.',
+              successMetric: 'Task works.',
+              approvedAt: '2026-05-31T14:00:00.000Z',
+            },
+            acceptanceCriteria: [],
+            escalations: [],
+          },
+          {
+            id: 'task-blocked',
+            title: 'Blocked task',
+            description: 'Needs recovery.',
+            status: 'blocked',
+            escalations: [{ id: 'esc-block', summary: 'Needs recovery.' }],
+          },
+        ],
+      }, null, 2),
+      'utf8',
+    )
+    await fs.writeFile(
+      path.join(tmpDir, '.guildhall', 'attention.json'),
+      JSON.stringify({
+        version: 1,
+        records: [
+          {
+            id: 'spec_fill_pending:task-thin',
+            status: 'open',
+            kind: 'spec_fill_pending',
+            severity: 'low',
+            taskId: 'task-thin',
+            title: 'Thin ready task',
+            detail: 'Optional cleanup: add acceptance criteria so agents and reviewers have a clearer brief.',
+            actionHref: '/task/task-thin?tab=spec',
+            missingSteps: ['acceptance'],
+            createdAt: '2026-05-31T16:00:00.000Z',
+            updatedAt: '2026-05-31T16:00:00.000Z',
+          },
+        ],
+      }, null, 2),
+      'utf8',
+    )
+
+    const { app } = buildServeApp({ projectPath: tmpDir })
+    const res = await app.fetch(new Request(scoped('/api/project/inbox')))
+    const body = (await res.json()) as {
+      items?: Array<{ kind?: string; taskId?: string; severity?: string }>
+    }
+    const relevant = (body.items ?? []).filter(item =>
+      item.taskId === 'task-thin' || item.taskId === 'task-blocked',
+    )
+
+    expect(relevant.map(item => item.kind)).toEqual(['open_escalation', 'spec_fill_pending'])
+    expect(relevant.map(item => item.severity)).toEqual(['high', 'low'])
+  })
+
+  it('describes project-understanding reconciliation without implying Git is missing', async () => {
+    await fs.writeFile(
+      path.join(tmpDir, '.guildhall', 'workspace-goals.json'),
+      JSON.stringify({ goals: [{ id: 'goal-1', title: 'Existing imported plan' }] }, null, 2),
+      'utf8',
+    )
+    const { app } = buildServeApp({ projectPath: tmpDir })
+
+    const res = await app.fetch(new Request(scoped('/api/project/inbox')))
+    const body = (await res.json()) as {
+      items?: Array<{ kind?: string; title?: string; detail?: string; actionHref?: string }>
+    }
+    const item = body.items?.find(candidate => candidate.kind === 'project_understanding')
+
+    expect(item).toMatchObject({
+      title: 'Review project discovery update',
+      detail: 'Guildhall can now scan more planning docs and migrations. Review the reconciliation so it can update or dismiss stale imported work.',
+      actionHref: '/workspace-import?mode=reconcile',
+    })
+    expect(`${item?.title ?? ''} ${item?.detail ?? ''}`).not.toMatch(/missing repo evidence/i)
   })
 })
 

@@ -56,6 +56,10 @@ ${descriptions}
 3. Prefer the run-gates tool: it runs each gate serially, captures output, and
    reports pass/fail. Use shell only for ad-hoc checks not in the registered set.
 4. Record each result (passed/failed, output) in the task's gateResults.
+5. When proof-path context exists, update only the automated verification
+   records you can prove by running commands. Do not mark manual, provider,
+   external dashboard, or browser proof as passed unless that proof was
+   explicitly recorded by the responsible workflow.
 
 ## Outcomes
 

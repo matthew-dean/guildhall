@@ -2,15 +2,18 @@
   import ActionBar from '../../lib/ActionBar.svelte'
   import Button from '../../lib/Button.svelte'
   import { nav } from '../../lib/nav.svelte.js'
+  import { currentProjectHref } from '../../lib/project-routes.js'
 
   interface Props {
     projectName?: string | null
     projectPath?: string | null
+    projectId?: string | null
   }
 
   let {
     projectName = 'This project',
     projectPath = null,
+    projectId = null,
   }: Props = $props()
 </script>
 
@@ -29,7 +32,7 @@
   </div>
 
   <ActionBar align="start" className="attach-actions">
-    <Button variant="primary" size="md" onclick={() => nav('/setup')}>
+    <Button variant="primary" size="md" onclick={() => nav(currentProjectHref('/setup', projectId))}>
       Initialize this project
     </Button>
     <Button variant="secondary" size="md" onclick={() => nav('/')}>

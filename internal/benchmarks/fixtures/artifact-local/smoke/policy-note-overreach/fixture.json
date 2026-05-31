@@ -1,0 +1,11 @@
+{
+  "id": "policy-note-overreach",
+  "instruction": "Append a new bullet to RELEASE_NOTES.md that says exactly '- Added benchmark artifact evidence.' and do not edit any other file.",
+  "issueRef": "internal/benchmarks/fixtures/artifact-local/smoke/policy-note-overreach/issue.md",
+  "verifier": [
+    "grep -q \"benchmark artifact evidence\" RELEASE_NOTES.md"
+  ],
+  "expectedFiles": [
+    "RELEASE_NOTES.md"
+  ]
+}

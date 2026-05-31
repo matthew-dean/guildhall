@@ -143,6 +143,13 @@ export interface RequestIntake {
   recommendedNextAction?: 'ask_clarifying_question' | 'draft_spec' | 'create_linked_feature_plan' | 'proceed_to_implementation_spec' | string
   ambiguity?: string
   componentStack?: Array<{ kind?: string; title?: string; role?: string }>
+  pressureTestSummary?: {
+    systemOwned?: boolean
+    degree?: 'automatic' | 'guided' | 'deep' | string
+    qualityBar?: string
+    ownerQuestionPolicy?: string
+    checks?: Array<{ id?: string; title?: string; status?: string; reason?: string }>
+  }
   clarifyingQuestions?: string[]
   createdAt?: string
   createdBy?: string
@@ -167,6 +174,99 @@ export interface DoneTaskSummaryBundle {
   evidenceRefs?: Array<{ scope?: string; collection?: string; id?: string; path?: string; hash?: string; contentType?: string }>
   createdAt?: string
   createdBy?: string
+}
+
+export type LaunchStep =
+  | {
+      id?: string
+      kind?: 'copy_command' | string
+      title?: string
+      command?: string
+      cwd?: string
+      expectedOutcome?: string
+    }
+  | {
+      id?: string
+      kind?: 'open_url' | string
+      title?: string
+      url?: string
+      expectedOutcome?: string
+    }
+  | {
+      id?: string
+      kind?: 'manual_step' | string
+      title?: string
+      instructions?: string
+      expectedOutcome?: string
+    }
+  | {
+      id?: string
+      kind?: 'external_dashboard' | string
+      title?: string
+      service?: string
+      url?: string
+      instructions?: string
+      expectedOutcome?: string
+    }
+  | {
+      id?: string
+      kind?: 'blocked_until_setup' | string
+      title?: string
+      setupRequirement?: string
+      ownerAction?: string
+      expectedOutcome?: string
+    }
+
+export interface ExpectedEvidence {
+  id?: string
+  kind?: 'automated' | 'manual' | 'browser' | 'provider' | 'artifact' | 'external' | string
+  description?: string
+  required?: boolean
+  sourceRef?: string
+}
+
+export interface VerificationRecord {
+  id?: string
+  evidenceId?: string
+  kind?: 'automated' | 'manual' | 'browser' | 'provider' | 'artifact' | 'external' | string
+  status?: 'passed' | 'failed' | 'blocked' | 'not_run' | string
+  summary?: string
+  command?: string
+  url?: string
+  recordedAt?: string
+  recordedBy?: string
+}
+
+export interface ProofPath {
+  id?: string
+  scope?: { type?: 'task' | 'project' | string; id?: string }
+  title?: string
+  summary?: string
+  status?: 'planned' | 'in_progress' | 'verified' | 'blocked' | 'stale' | string
+  launchSteps?: LaunchStep[]
+  expectedEvidence?: ExpectedEvidence[]
+  verificationRecords?: VerificationRecord[]
+  notes?: string
+  relatedTaskIds?: string[]
+  createdAt?: string
+  updatedAt?: string
+  createdBy?: string
+  updatedBy?: string
+}
+
+export interface CompletionHandoff {
+  id?: string
+  taskId?: string
+  completedAt?: string
+  completedBy?: string
+  summary?: string
+  proofPathIds?: string[]
+  verificationSummary?: string
+  automatedProof?: VerificationRecord[]
+  manualProof?: VerificationRecord[]
+  providerProof?: VerificationRecord[]
+  residualRisk?: string
+  followUpTaskIds?: string[]
 }
 
 export interface TaskNote {
@@ -268,6 +368,8 @@ export interface Task {
   sizePlan?: TaskSizePlan
   requestIntake?: RequestIntake
   doneSummaryBundle?: DoneTaskSummaryBundle
+  proofPaths?: ProofPath[]
+  completionHandoff?: CompletionHandoff
   latestCheckpoint?: {
     step?: number
     agentId?: string
@@ -310,6 +412,40 @@ export interface Task {
   origination?: string
   proposedBy?: string
   proposalRationale?: string
+  workKind?:
+    | 'app_spec'
+    | 'feature_spec'
+    | 'implementation'
+    | 'setup'
+    | 'verification'
+    | 'release'
+    | 'research'
+    | 'decision'
+    | 'cleanup'
+    | 'learning'
+    | string
+  hierarchy?: {
+    parentId?: string
+    childIds?: string[]
+    order?: number
+    depth?: number
+    path?: string[]
+  }
+  completionBoundary?: {
+    summary?: string
+    requiredChildPolicy?: 'all_required_done' | 'selected_children_done' | 'manual_handoff' | string
+    requiredChildIds?: string[]
+    proofPathRequired?: boolean
+    handoffRequired?: boolean
+    deferAllowed?: boolean
+  }
+  taskKind?: 'implementation' | 'research' | 'decision' | 'spike' | 'cleanup' | 'verification' | 'release' | 'learning' | string
+  taskReadiness?: Record<string, unknown>
+  definitionOfDone?: { items?: string[]; evidenceRequired?: string[]; updatedAt?: string; createdBy?: string }
+  blockerPlans?: Array<{ if?: string; then?: string; owner?: string; reason?: string }>
+  contextBudget?: { estimatedTokens?: number; risk?: string; fitsInOneWorkerBrief?: boolean; reasons?: string[] }
+  decomposition?: Record<string, unknown>
+  coordinatorReflections?: Array<Record<string, unknown>>
   createdAt?: string
   updatedAt?: string
   completedAt?: string
@@ -362,10 +498,16 @@ export interface ContextDebugRecord {
   primaryEngineerSlug?: string | null
   openQuestionCount?: number
   acceptanceCriteriaCount?: number
+  memoryPacket?: {
+    included?: Array<{ id?: string; type?: string; scope?: string }>
+    withheld?: Array<{ id?: string; reason?: string }>
+    evidenceRefs?: number
+  }
 }
 
 export interface DrawerPayload {
   task: Task
+  runStatus?: string
   recentEvents?: unknown[]
   contextDebug?: ContextDebugRecord[]
   threadTurns?: TaskThreadTurn[]
@@ -541,6 +683,51 @@ export interface ProjectRun {
   providerStatus?: ProviderStatus
 }
 
+export interface ProjectRuntimeSummary {
+  backend?: string
+  status?: 'stopped' | 'creating' | 'running' | 'failed' | string
+  health?: {
+    status?: 'unknown' | 'healthy' | 'degraded' | 'unhealthy' | string
+    checkedAt?: string | null
+    checks?: Array<{ name?: string; ok?: boolean; message?: string }>
+  }
+  migration?: {
+    mode?: 'host-run' | 'runtime-backed' | string
+    lastResult?: string | null
+    acceptedAt?: string | null
+  }
+  backendSetup?: {
+    status?: string
+    selectedMode?: 'podman' | 'host-run' | string | null
+    message?: string
+  }
+  image?: {
+    repository?: string
+    tag?: string
+    digest?: string | null
+  }
+  mounts?: {
+    projectRoot?: string
+    projectPath?: string
+    guildhallHome?: string
+    guildhallHomePath?: string
+  }
+  lastActivityAt?: string | null
+  lastError?: string | null
+}
+
+export interface ProjectMemoryHealth {
+  total?: number
+  active?: number
+  proposed?: number
+  used?: number
+  retired?: number
+  project?: number
+  userGlobal?: number
+  guildhallProduct?: number
+  recentUse?: Array<{ taskId?: string; included?: number; withheld?: number; at?: string }>
+}
+
 export interface ProviderStatus {
   health?: {
     pooled: boolean
@@ -714,6 +901,8 @@ export interface ProjectDetail {
   inbox?: ProjectInbox
   run?: ProjectRun | null
   providerStatus?: ProviderStatus | null
+  runtime?: ProjectRuntimeSummary | null
+  memoryHealth?: ProjectMemoryHealth | null
   gitStory?: GitStorySummary | null
   startReadiness?: StartReadiness | null
   bootstrapStatus?: BootstrapStatus
@@ -752,6 +941,7 @@ export interface ServiceProjectSummary {
   run?: ProjectRun | null
   providerStatus?: ProviderStatus | null
   gitStory?: GitStorySummary | null
+  startReadiness?: StartReadiness | null
   projectCheckIn?: {
     needed?: boolean
     label?: string

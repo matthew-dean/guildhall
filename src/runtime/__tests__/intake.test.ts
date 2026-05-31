@@ -92,6 +92,57 @@ describe('createExploringTask', () => {
     expect(transcript).toContain('user')
   })
 
+  it('attaches an automatic pressure-test summary to small tasks', async () => {
+    await createExploringTask({
+      memoryDir,
+      ask: 'Update the README install command.',
+      domain: 'docs',
+      projectPath: '/projects/docs',
+    })
+
+    const queue = await readQueue()
+    expect(queue.tasks[0]?.requestIntake?.pressureTestSummary).toMatchObject({
+      systemOwned: true,
+      degree: 'automatic',
+      qualityBar: 'Apply enough pressure to make this task trustworthy without asking the owner to choose a process.',
+    })
+    expect(queue.tasks[0]?.requestIntake?.pressureTestSummary?.checks.map(check => check.id)).toEqual([
+      'owner-intent',
+      'scope-boundary',
+      'acceptance-criteria',
+      'verification',
+      'review-lenses',
+      'release-boundary',
+    ])
+    expect(queue.tasks[0]?.requestIntake?.pressureTestSummary?.ownerQuestionPolicy).toContain(
+      'Only ask when the answer could change product intent',
+    )
+  })
+
+  it('adds design-quality pressure to UI tasks before implementation', async () => {
+    await createExploringTask({
+      memoryDir,
+      ask: 'Build a Pantry Pulse web app page with all-items and expiring-soon filters.',
+      domain: 'product',
+      projectPath: '/projects/pantry-pulse',
+      title: 'Pantry Pulse app spec',
+    })
+
+    const queue = await readQueue()
+    const task = queue.tasks[0]!
+    expect(task.requestIntake?.componentStack.map(component => component.kind)).toContain('ui_surface')
+    expect(task.requestIntake?.pressureTestSummary?.checks.map(check => check.id)).toEqual(expect.arrayContaining([
+      'design-system',
+      'interaction-semantics',
+      'palette-direction',
+      'visual-proof',
+    ]))
+    expect(task.requestIntake?.pressureTestSummary?.checks.find(check => check.id === 'interaction-semantics')).toMatchObject({
+      status: 'system-check',
+      reason: expect.stringContaining('segmented control'),
+    })
+  })
+
   it('handles a bare-array TASKS.json (bootstrap legacy format)', async () => {
     // Already seeded as '[]' in beforeEach — createExploringTask should cope.
     const result = await createExploringTask({
@@ -169,6 +220,10 @@ describe('createExploringTask', () => {
     expect(task.requestIntake).toMatchObject({
       intent: 'ambiguous_spec_or_implementation',
       recommendedNextAction: 'ask_clarifying_question',
+      pressureTestSummary: {
+        systemOwned: true,
+        degree: 'guided',
+      },
     })
     expect(task.requestIntake?.componentStack.map(component => component.kind)).toEqual([
       'policy_decision',
@@ -186,6 +241,31 @@ describe('createExploringTask', () => {
         'Apply the policy now',
       ],
     })
+  })
+
+  it('does not reuse the FLL policy question for concrete app specs', async () => {
+    await createExploringTask({
+      memoryDir,
+      ask: [
+        '# Pantry Pulse App Spec',
+        '',
+        'Build a small local web app that tracks pantry items, highlights what expires soon, filters expiring items, and lets the user mark an item as used.',
+        '',
+        'The app is complete only when the visible behavior works in the browser and the proof path records the browser checks.',
+      ].join('\n'),
+      domain: 'product',
+      projectPath: '/projects/pantry-pulse',
+      title: 'Pantry Pulse app spec',
+    })
+
+    const queue = await readQueue()
+    const task = queue.tasks[0]!
+    expect(task.requestIntake).toMatchObject({
+      intent: 'implementation',
+      recommendedNextAction: 'proceed_to_implementation_spec',
+    })
+    expect(task.openQuestions ?? []).toEqual([])
+    expect(JSON.stringify(task.requestIntake)).not.toContain('FLL overhead')
   })
 
   it('rejects reusing an existing task id', async () => {
@@ -241,9 +321,146 @@ describe('approveSpec', () => {
     expect(queue.tasks[0]!.status).toBe('ready')
   })
 
+  it('persists task readiness and finishability artifacts when a spec is approved', async () => {
+    const queue = await readQueue()
+    queue.tasks[0]!.proofPaths = [{ id: 'proof-ghost-button' }]
+    await fs.writeFile(tasksPath, JSON.stringify(queue, null, 2), 'utf-8')
+
+    await approveSpec({ memoryDir, taskId: 'task-001' })
+
+    const updated = await readQueue()
+    expect(updated.tasks[0]!.taskReadiness?.recommendation).toBe('ready')
+    expect(updated.tasks[0]!.definitionOfDone?.items.length).toBeGreaterThan(0)
+    expect(updated.tasks[0]!.blockerPlans?.length).toBeGreaterThan(0)
+    expect(updated.tasks[0]!.contextBudget?.fitsInOneWorkerBrief).toBe(true)
+    expect(updated.tasks[0]!.decomposition?.action).toBe('keep')
+  })
+
   it('approves specs where Completion Boundary is the final section', async () => {
     const queue = await readQueue()
     queue.tasks[0]!.spec = buildableSpec()
+    await fs.writeFile(tasksPath, JSON.stringify(queue, null, 2), 'utf-8')
+
+    const result = await approveSpec({ memoryDir, taskId: 'task-001' })
+
+    expect(result.success).toBe(true)
+    expect(result.newStatus).toBe('ready')
+  })
+
+  it('approves specs with markdown-formatted Completion Boundary labels', async () => {
+    const queue = await readQueue()
+    queue.tasks[0]!.spec = [
+      '## Summary',
+      'Build a tiny local app.',
+      '## Acceptance Criteria',
+      '1. It runs locally.',
+      '## Completion Boundary',
+      '- **Product outcome**: A user can open the local app.',
+      '- **What Guildhall can complete in code**: Add the app source files.',
+      '- **External dependencies**: None.',
+      '- **Owner-only setup**: None.',
+      '- **Verification environment**: Local browser.',
+      '- **What counts as done**: The app renders in a browser.',
+      '- **What must be split or blocked**: Nothing.',
+    ].join('\n')
+    await fs.writeFile(tasksPath, JSON.stringify(queue, null, 2), 'utf-8')
+
+    const result = await approveSpec({ memoryDir, taskId: 'task-001' })
+
+    expect(result.success).toBe(true)
+    expect(result.newStatus).toBe('ready')
+  })
+
+  it('approves specs when the Completion Boundary colon is inside the markdown emphasis', async () => {
+    const queue = await readQueue()
+    queue.tasks[0]!.spec = [
+      '## Summary',
+      'Patch a local markdown file.',
+      '## Acceptance Criteria',
+      '1. The local file is updated.',
+      '## Completion Boundary',
+      '- **Product outcome:** The markdown file reflects the new note.',
+      '- **What Guildhall can complete in code:** Append the requested note to the local file.',
+      '- **External dependencies:** None. This is a local-only fixture change.',
+      '- **Owner-only setup:** None. No manual steps are required.',
+      '- **Verification environment:** Local filesystem on the current machine.',
+      '- **What counts as done:** The file contains the requested note and only the intended file changed.',
+      '- **What must be split or blocked:** Nothing. The task is self-contained.',
+    ].join('\n')
+    await fs.writeFile(tasksPath, JSON.stringify(queue, null, 2), 'utf-8')
+
+    const result = await approveSpec({ memoryDir, taskId: 'task-001' })
+
+    expect(result.success).toBe(true)
+    expect(result.newStatus).toBe('ready')
+  })
+
+  it('approves specs with multiline Completion Boundary values and local dev dependencies', async () => {
+    const queue = await readQueue()
+    queue.tasks[0]!.spec = [
+      '## Summary',
+      'Build a tiny Vite app.',
+      '## Acceptance Criteria',
+      '1. It runs locally.',
+      '## Completion Boundary',
+      '- **Product outcome**: A user can open the app in a browser.',
+      '- **What Guildhall can complete in code**: Add the app source files.',
+      '- **External dependencies**: None. Vite is installed locally via npm and no external service is required.',
+      '- **Owner-only setup**: None. Run npm install and npm run dev.',
+      '- **Verification environment**: Local browser at http://localhost:5173.',
+      '- **What counts as done**:',
+      '  1. The app starts locally.',
+      '  2. The browser shows the expected page.',
+      '- **What must be split or blocked**: Nothing — this is a single self-contained task.',
+    ].join('\n')
+    await fs.writeFile(tasksPath, JSON.stringify(queue, null, 2), 'utf-8')
+
+    const result = await approveSpec({ memoryDir, taskId: 'task-001' })
+
+    expect(result.success).toBe(true)
+    expect(result.newStatus).toBe('ready')
+  })
+
+  it('does not treat a local browser used for verification as an external runtime dependency', async () => {
+    const queue = await readQueue()
+    queue.tasks[0]!.spec = [
+      '## Summary',
+      'Build a dependency-free Pantry Pulse app.',
+      '## Acceptance Criteria',
+      '1. It renders locally.',
+      '## Completion Boundary',
+      '- **Product outcome**: A user can open index.html and manage pantry items locally.',
+      '- **What Guildhall can complete in code**: Add the dependency-free index.html app.',
+      '- **External dependencies**: A modern web browser is required to open and verify the app. The app itself has no runtime dependencies — no APIs, no CDN resources, no backend services, no credentials, no deployed infrastructure, and no network.',
+      '- **Owner-only setup**: None. The app works by opening index.html directly.',
+      '- **Verification environment**: Local browser or headless browser screenshot.',
+      '- **What counts as done**: The app renders and passes browser inspection.',
+      '- **What must be split or blocked**: Nothing.',
+    ].join('\n')
+    await fs.writeFile(tasksPath, JSON.stringify(queue, null, 2), 'utf-8')
+
+    const result = await approveSpec({ memoryDir, taskId: 'task-001' })
+
+    expect(result.success).toBe(true)
+    expect(result.newStatus).toBe('ready')
+  })
+
+  it('approves tiny local repair specs when standard local tooling is already available', async () => {
+    const queue = await readQueue()
+    queue.tasks[0]!.spec = [
+      '## Summary',
+      'Repair the seeded helper copy.',
+      '## Acceptance Criteria',
+      '1. node scripts/test.js exits with code 0.',
+      '## Completion Boundary',
+      "- **Product outcome**: helperCopy returns 'benchmark-ready helper copy'.",
+      "- **What Guildhall can complete in code**: Edit src/copy.ts to replace 'stale helper copy' with 'benchmark-ready helper copy'.",
+      '- **External dependencies**: Node.js runtime only. The task uses only built-in modules and no external service is required.',
+      '- **Owner-only setup**: None. Node.js is already available on PATH in the execution environment.',
+      '- **Verification environment**: Local filesystem project root with Node.js available on PATH.',
+      '- **What counts as done**: node scripts/test.js exits with code 0.',
+      '- **What must be split or blocked**: Nothing.',
+    ].join('\n')
     await fs.writeFile(tasksPath, JSON.stringify(queue, null, 2), 'utf-8')
 
     const result = await approveSpec({ memoryDir, taskId: 'task-001' })
@@ -307,6 +524,105 @@ describe('approveSpec', () => {
     expect(updated.tasks[2]!.dependsOn).toEqual(['task-001-split-implement-the-billing-settings-workflow'])
   })
 
+  it('backfills acceptance criteria from approved markdown specs before blueprint sanity', async () => {
+    const queue = await readQueue()
+    const task = queue.tasks[0]!
+    task.title = 'Pantry Pulse app spec'
+    task.description = 'Build a Pantry Pulse app.'
+    task.domain = 'product'
+    task.projectPath = tmpDir
+    task.status = 'spec_review'
+    task.spec = [
+      '## Summary',
+      'Build Pantry Pulse.',
+      '## Acceptance Criteria',
+      '1. A page titled Pantry Pulse is visible.',
+      '2. Mark used updates the visible count.',
+      '## Completion Boundary',
+      'Product outcome: Users can track pantry items.',
+      'What Guildhall can complete in code: Build the local web app.',
+      'External dependencies: None.',
+      'Owner-only setup: None.',
+      'Verification environment: Local automated tests and browser review.',
+      'What counts as done: The app can be opened and reviewed locally.',
+      'What must be split or blocked: Nothing to split.',
+    ].join('\n')
+    task.productBrief = {
+      userJob: 'Track pantry items.',
+      successMetric: 'Browser review shows the title and count update.',
+      antiPatterns: [],
+    }
+    task.acceptanceCriteria = []
+    await fs.writeFile(tasksPath, JSON.stringify(queue, null, 2), 'utf-8')
+
+    const approved = await approveSpec({ memoryDir, taskId: task.id })
+
+    expect(approved.success).toBe(true)
+    expect(approved.newStatus).toBe('ready')
+    const updated = await readQueue()
+    expect(updated.tasks.find(candidate => candidate.id === task.id)?.acceptanceCriteria.map(ac => ac.description)).toEqual([
+      'A page titled Pantry Pulse is visible.',
+      'Mark used updates the visible count.',
+    ])
+  })
+
+  it('keeps fixed Pantry Pulse specs runnable when a stale size plan suggests unrelated splits', async () => {
+    const queue = await readQueue()
+    const task = queue.tasks[0]!
+    task.title = 'Pantry Pulse app spec'
+    task.description = 'Run the fixed-spec Pantry Pulse completion proof.'
+    task.domain = 'product'
+    task.projectPath = tmpDir
+    task.status = 'spec_review'
+    task.spec = [
+      '## Summary',
+      'Build Pantry Pulse.',
+      '## Acceptance Criteria',
+      '1. A page titled Pantry Pulse is visible.',
+      '2. Mark used updates the visible count.',
+      '## Completion Boundary',
+      'Product outcome: Users can track pantry items.',
+      'What Guildhall can complete in code: Build the local web app.',
+      'External dependencies: None.',
+      'Owner-only setup: None.',
+      'Verification environment: Local automated tests and browser review.',
+      'What counts as done: The app can be opened and reviewed locally.',
+      'What must be split or blocked: Nothing to split.',
+    ].join('\n')
+    task.productBrief = {
+      userJob: 'Track pantry items.',
+      successMetric: 'Browser review shows the title and count update.',
+      antiPatterns: [],
+    }
+    task.sizePlan = {
+      taskId: task.id,
+      score: 8,
+      band: 'epic',
+      action: 'split_required',
+      factors: [],
+      recommendedChildren: [{
+        title: 'Instrument analytics documentation',
+        reason: 'Unrelated stale split recommendation.',
+        suggestedDomain: 'docs',
+        dependsOn: [],
+      }],
+      reviewBudgetHint: 'release_critical',
+      reasons: ['Stale model split.'],
+      createdAt: '2026-05-28T12:00:00.000Z',
+      createdBy: 'task-sizing',
+    }
+    await fs.writeFile(tasksPath, JSON.stringify(queue, null, 2), 'utf-8')
+
+    const approved = await approveSpec({ memoryDir, taskId: task.id })
+
+    expect(approved.success).toBe(true)
+    expect(approved.newStatus).toBe('ready')
+    const updated = await readQueue()
+    expect(updated.tasks).toHaveLength(1)
+    expect(updated.tasks[0]?.status).toBe('ready')
+    expect(updated.tasks[0]?.sizePlan?.action).toBe('proceed_with_warning')
+  })
+
   it('records an approval note on the task when provided', async () => {
     await approveSpec({
       memoryDir,
@@ -366,7 +682,7 @@ describe('approveSpec', () => {
       getProjectTranscriptPath(tmpDir, 'exploring', 'task-001'),
       'utf-8',
     )
-    expect(transcript).toContain('Spec approved. Guildhall created the listed tasks and kept this as the parent task.')
+    expect(transcript).toContain('Spec approved. Guildhall created the nested work and kept this item as the containing work.')
   })
 
   it('refuses to approve a task that has no spec', async () => {

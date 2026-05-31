@@ -58,8 +58,8 @@ whether the whole project still makes sense.
 ## Structured flexibility
 
 Software work is not deterministic, and pretending otherwise is how tools
-become brittle. Guildhall uses lanes instead: enough structure to stop drift,
-enough room to solve the real problem.
+become brittle. Guildhall uses named paths for the work: enough structure to
+stop drift, enough room to solve the real problem.
 
 For example:
 
@@ -144,6 +144,12 @@ It does not treat every correction as a new law. A lesson has a scope and a
 source. Some lessons belong only to the current task, some become project
 habits, and some are candidates for your global defaults. Broad changes stay
 off until you approve them.
+
+When Guildhall itself gets better, active work gets a light recheck too. The
+improvement review looks for obvious matches against current Guildhall features
+and records a small advisory note when an in-progress task may benefit. It is
+bounded on purpose: no full repo crawl, no surprise rewrite, and no expensive
+deep dive until the task reaches the moment where that lens matters.
 
 That keeps learning useful without making the product spooky. You can inspect
 what Guildhall wants to remember in **Settings -> Memory**, choose whether it
@@ -246,7 +252,7 @@ The loop looks like this:
 1. Finish anything waiting on gates.
 2. Resolve work already in review.
 3. Continue active implementation.
-4. Claim the next ready task only when the active lane is clear.
+4. Claim the next ready task only when active work is clear.
 
 That keeps the queue honest. Blocked work is marked as blocked instead of
 quietly falling behind fresher work. Ready work is claimed explicitly so two

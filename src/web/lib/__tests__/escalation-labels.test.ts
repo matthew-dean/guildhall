@@ -72,6 +72,19 @@ describe('escalationRecoveryCopy', () => {
       detail: 'The transcript may contain useful observations. Retry from those notes or resolve the blocker after reviewing them.',
     })
   })
+
+  it('humanizes spec turn-limit blockers as retryable shaping recovery', () => {
+    expect(
+      escalationRecoveryCopy({
+        agentId: 'spec-agent',
+        summary: 'Spec author stopped after hitting its turn limit.',
+        details: 'Exceeded maximum turn limit (8)',
+      }),
+    ).toEqual({
+      headline: 'Spec shaping stopped before saving the next draft.',
+      detail: 'Guildhall can retry from the transcript notes or reframe the task if the request is too broad.',
+    })
+  })
 })
 
 describe('escalationUserGuidance', () => {
@@ -136,6 +149,32 @@ describe('escalationUserGuidance', () => {
       label: 'Retry worker',
       nextStatus: 'in_progress',
     })
+  })
+
+  it('treats spec turn-limit blockers as Guildhall-owned retry options', () => {
+    const guidance = escalationUserGuidance({
+      agentId: 'spec-agent',
+      reason: 'human_judgment_required',
+      summary: 'Spec author stopped after hitting its turn limit.',
+      details: 'Exceeded maximum turn limit (8)',
+    })
+
+    expect(guidance.title).toBe('Guildhall can retry spec shaping.')
+    expect(guidance.detail).toContain('not a project decision')
+    expect(guidance.nextStep).toContain('Retry spec')
+    expect(guidance.actionOwner).toBe('guildhall')
+  })
+
+  it('treats gate failures as Guildhall-owned retries', () => {
+    const guidance = escalationUserGuidance({
+      agentId: 'gate-checker',
+      reason: 'gate_hard_failure',
+      summary: 'Verification failed.',
+    })
+
+    expect(guidance.title).toBe('Guildhall can retry the gates.')
+    expect(guidance.nextStep).toContain('Retry gates')
+    expect(guidance.actionOwner).toBe('guildhall')
   })
 })
 

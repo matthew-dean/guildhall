@@ -1,11 +1,13 @@
 # Guildhall 0.8.0 MVP Tracker
 
-**Status:** active release tracker  
-**Owner:** Guildhall 0.8.0 release work  
-**Primary priority:** Pressure-Test Intake  
+**Status:** shipped planning tracker; release artifacts are the release-status authority
+**Owner:** Guildhall 0.8.0 release work
+**Primary priority:** Pressure-Test Intake
 **New release blockers:** Git Story Closure; Task State Boundary
 
-This tracker is the single internal truth for what belongs in the 0.8.0 MVP.
+This tracker was the single internal truth for what belonged in the 0.8.0 MVP.
+For shipped status, use the `v0.8.0` tag, `docs/releases/0.8.0.md`, and
+`docs/versions/0.8.0/`.
 The older 0.8.0 specs remain useful design sources, but they are no longer a
 promise that every candidate slice ships in 0.8.0.
 

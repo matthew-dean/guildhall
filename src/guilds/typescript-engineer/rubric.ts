@@ -26,6 +26,12 @@ export const TYPESCRIPT_ENGINEER_RUBRIC: SoftGateRubricItem[] = [
     weight: 0.7,
   },
   {
+    id: 'ts-schema-taxonomy-fit',
+    question:
+      'When a schema becomes a durable contract, is its taxonomy right-sized, using a generic shell with typed domain payloads when needed instead of going too narrow or too generic?',
+    weight: 0.8,
+  },
+  {
     id: 'ts-named-exports-only',
     question:
       'Does the change avoid introducing default exports on ordinary source modules, except where the framework or file-contract explicitly requires one?',

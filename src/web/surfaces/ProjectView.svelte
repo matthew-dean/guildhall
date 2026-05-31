@@ -15,7 +15,6 @@
   import Icon, { type IconName } from '../lib/Icon.svelte'
   import Modal from '../lib/Modal.svelte'
   import NoticeBand from '../lib/NoticeBand.svelte'
-  import StatusButton from '../lib/StatusButton.svelte'
   import StatusDot from '../lib/StatusDot.svelte'
   import ProjectShell from '../lib/layout/ProjectShell.svelte'
   import Tooltip from '../lib/Tooltip.svelte'
@@ -34,8 +33,7 @@
   import { project } from '../lib/project.svelte.js'
   import { onEvent } from '../lib/events.js'
   import { path, nav } from '../lib/nav.svelte.js'
-  import { currentProjectHref, projectFetch } from '../lib/project-routes.js'
-  import { activeEscalations } from '../lib/escalation.js'
+  import { currentProjectHref, projectActionHref, projectFetch } from '../lib/project-routes.js'
   import { buildProjectTicker } from '../lib/project-activity.js'
   import { buildProviderIndicator } from '../lib/provider-indicator.js'
   import { formatUserPath } from '../lib/display-path.js'
@@ -83,8 +81,6 @@
   // (e.g. bootstrap not verified) can't be bypassed by pressing Start.
   interface Blockers { bootstrap: boolean; workspaceImport: boolean }
   let blockers = $state<Blockers>({ bootstrap: false, workspaceImport: false })
-  let inboxActionableCount = $state(0)
-  let inboxHasHighSeverity = $state(false)
   let inboxItems = $state<InboxItem[]>([])
   let inboxHistory = $state<InboxItem[]>([])
   let inboxLoaded = $state(false)
@@ -131,8 +127,6 @@
       inboxItems = j.items ?? []
       inboxHistory = j.history ?? inboxItems
       if (j.blockers) blockers = j.blockers
-      inboxActionableCount = inboxItems.filter(i => i.severity !== 'low').length
-      inboxHasHighSeverity = inboxItems.some(i => i.severity === 'high')
       inboxError = null
     } catch (err) {
       inboxError = err instanceof Error ? err.message : String(err)
@@ -208,7 +202,9 @@
       if (railForcedCollapsed || railPreference === 'expanded') railPreviewOpen = false
       railCollapsed = railForcedCollapsed || railPreference === 'collapsed'
     }
-    const saved = window.localStorage.getItem(RAIL_PREFERENCE_KEY)
+    const saved = typeof window.localStorage?.getItem === 'function'
+      ? window.localStorage.getItem(RAIL_PREFERENCE_KEY)
+      : null
     if (saved === 'expanded' || saved === 'collapsed') {
       railPreference = saved
     }
@@ -238,7 +234,9 @@
     railPreference = railCollapsed ? 'expanded' : 'collapsed'
     railCollapsed = railPreference === 'collapsed'
     railPreviewOpen = false
-    window.localStorage.setItem(RAIL_PREFERENCE_KEY, railPreference)
+    if (typeof window.localStorage?.setItem === 'function') {
+      window.localStorage.setItem(RAIL_PREFERENCE_KEY, railPreference)
+    }
   }
 
   function openRailPreview(): void {
@@ -311,8 +309,8 @@
       icon: 'list-checks',
       suffix: '/work',
       subs: [
-        { id: 'queue', label: 'Queue', path: currentProjectHref('/work', activeProjectId) },
-        { id: 'board', label: 'Board', path: currentProjectHref('/planner', activeProjectId) },
+        { id: 'queue', label: 'Queue', path: currentProjectHref('/work?view=list', activeProjectId) },
+        { id: 'board', label: 'Board', path: currentProjectHref('/work?view=board', activeProjectId) },
       ],
     },
     { id: 'timeline', label: 'Timeline', icon: 'clock', suffix: '/timeline' },
@@ -524,7 +522,6 @@
   const startReadiness = $derived(detail?.startReadiness ?? null)
   const providerIndicator = $derived(buildProviderIndicator(providerStatus, runStatus))
   const providerHeaderLabel = $derived(providerIndicator?.summaryLabel ?? null)
-  const providerTitle = $derived(providerIndicator?.title ?? 'Provider not selected')
   const providerDecisionText = $derived(
     providerStatus?.decisions?.[0]?.message ?? providerStatus?.reason ?? null,
   )
@@ -634,6 +631,12 @@
     })
   })
   const runStopSummary = $derived.by(() => {
+    if (startReadiness?.code === 'required_migration_pending') {
+      return {
+        stopReason: 'required_migration_pending',
+        stopMessage: startReadiness.message ?? 'Run the required Guildhall migration before starting this project.',
+      }
+    }
     if (startReadiness?.code === 'owner_input_required') {
       return {
         stopReason: 'awaiting_human',
@@ -655,7 +658,7 @@
   const runStopSummarySeverity = $derived<'info' | 'warn' | 'error'>(() => {
     const reason = runStopSummary?.stopReason
     if (!reason) return 'info'
-    if (reason === 'awaiting_human' || reason === 'blocked_only' || reason === 'dependency_blocked') return 'warn'
+    if (reason === 'awaiting_human' || reason === 'blocked_only' || reason === 'dependency_blocked' || reason === 'required_migration_pending') return 'warn'
     return 'info'
   })
   const runStopSummaryText = $derived.by(() => {
@@ -707,11 +710,46 @@
       }
     }
   })
+  const runStopActionHref = $derived.by(() => {
+    if (runStopSummary?.stopReason === 'awaiting_human') {
+      return projectActionHref(startReadiness?.actionHref ?? '/overview/inbox', activeProjectId)
+    }
+    if (runStopSummary?.stopReason === 'required_migration_pending') {
+      return projectActionHref(startReadiness?.actionHref ?? '/migrations', activeProjectId)
+    }
+    if (runStopSummary?.stopReason === 'blocked_only') {
+      return currentProjectHref('/overview', activeProjectId)
+    }
+    return null
+  })
+  const runStopActionLabel = $derived(
+    runStopSummary?.stopReason === 'awaiting_human'
+      ? startReadinessActionLabel(startReadiness?.message)
+      : runStopSummary?.stopReason === 'required_migration_pending'
+        ? 'Migrate project'
+      : runStopSummary?.stopReason === 'blocked_only'
+        ? 'Open Overview'
+        : null,
+  )
   const failedBootstrapStep = $derived(
     detail?.bootstrapStatus?.success === false
       ? detail.bootstrapStatus.steps?.find(s => s.result === 'fail') ?? null
       : null,
   )
+  const startReadinessNoticeHref = $derived.by(() => {
+    if (!startReadiness || startReadiness.canStart || allTerminalStart || requiredMigrationBlocked) return null
+    if (startReadiness.actionHref) return projectActionHref(startReadiness.actionHref, activeProjectId)
+    if (metaIntakePending) return currentProjectHref('/setup', activeProjectId)
+    if (blockers.bootstrap) return currentProjectHref('/settings/ready', activeProjectId)
+    return null
+  })
+  const startReadinessNoticeLabel = $derived.by(() => {
+    if (!startReadinessNoticeHref) return null
+    if (metaIntakePending) return 'Open project setup'
+    if (startReadiness?.code === 'import_drafts_waiting') return 'Review drafts'
+    if (blockers.bootstrap) return 'Open readiness checks'
+    return startReadinessActionLabel(startReadiness?.message)
+  })
   const bootstrapFailureText = $derived.by(() => {
     const step = failedBootstrapStep
     if (!step) return null
@@ -776,16 +814,8 @@
       return isWorkerRunnableStatus(t)
     }).length,
   )
-  const activeCountLabel = $derived(
-    runStatus === 'running' || runStatus === 'stopping' ? 'active' : 'open',
-  )
   const awaitingApprovalCount = $derived(
     taskList.filter(t => (t as { status?: string }).status === 'spec_review').length,
-  )
-  const stuckCount = $derived(
-    taskList.filter(t => {
-      return activeEscalations(t).length > 0
-    }).length,
   )
 
   const startDisabledReason = $derived(
@@ -812,58 +842,33 @@
           : 'Complete bootstrap in Thread before creating a request'
         : null,
   )
-  const setupAttentionHref = $derived(
-    currentProjectHref(
-      needsMeta || metaIntakePending
-        ? '/setup'
-        : startReadiness?.actionHref ?? '/settings/ready',
-      activeProjectId,
-    ),
-  )
-  const setupAttentionLabel = $derived(
-    requiredMigrationBlocked
-      ? 'Required migration'
-      : startReadiness?.code === 'owner_input_required'
-      ? 'Needs your answer'
-      : startReadiness?.code === 'import_drafts_waiting'
-      ? 'Imported drafts need review'
-      : startReadiness?.code === 'no_unattended_progress'
-        ? 'Nothing ready to run'
-      : needsMeta || metaIntakePending
-        ? 'Project setup needs attention'
-        : startDisabledReason === 'No tasks to start'
-          ? 'No tasks to start'
-        : 'Readiness checks need attention',
-  )
-  const setupAttentionButtonLabel = $derived(
-    requiredMigrationBlocked
-      ? 'Migrate'
-      : startReadiness?.code === 'owner_input_required'
-      ? 'Open Thread'
-      : startReadiness?.code === 'import_drafts_waiting'
-      ? 'Review drafts'
-      : startReadiness?.code === 'no_unattended_progress'
-        ? 'Open Work'
-      : startDisabledReason === 'No tasks to start'
-        ? 'Ready'
-        : 'Setup',
-  )
-  const showSetupAttention = $derived(
-    Boolean(!allTerminalStart && (newTaskDisabledReason || (runStatus !== 'running' && startDisabledReason && startDisabledReason !== 'No tasks to start'))),
-  )
   const showRunButton = $derived(
     runStatus === 'running' || runStatus === 'stopping' || (!allTerminalStart && startDisabledReason !== 'No tasks to start'),
   )
   const runButtonIdleLabel = $derived(
     requiredMigrationBlocked
       ? 'Migrate'
-      : startReadiness?.code === 'owner_input_required'
-      ? 'Waiting on answer'
+    : startReadiness?.code === 'owner_input_required'
+      ? /question|answer/i.test(startReadiness.message ?? '')
+        ? 'Waiting on answer'
+        : /recover|blocked|escalation/i.test(startReadiness.message ?? '')
+          ? 'Needs recovery'
+          : /review|approve/i.test(startReadiness.message ?? '')
+            ? 'Review needed'
+            : 'Needs input'
       : 'Start',
   )
   const showAdvanceOneTaskAction = $derived(
     !allTerminalStart,
   )
+
+  function startReadinessActionLabel(message: string | undefined): string {
+    if (/question|answer/i.test(message ?? '')) return 'Answer question'
+    if (/spec/i.test(message ?? '')) return 'Review spec'
+    if (/brief/i.test(message ?? '')) return 'Review brief'
+    if (/recover|blocked|escalation/i.test(message ?? '')) return 'Review recovery'
+    return 'Open next action'
+  }
 </script>
 
 <svelte:document onclick={handleDocumentClick} />
@@ -966,6 +971,7 @@
     <ProjectAttachFlow
       projectName={projectDisplayPathLeaf}
       projectPath={projectDisplayPath}
+      projectId={activeProjectId}
     />
   </ProjectShell>
 {:else if project.error}
@@ -1108,70 +1114,7 @@
             {/if}
           </Button>
         </div>
-        <div class="topbar-leading">
-          {#if showSetupAttention}
-            <StatusButton
-              tone="warn"
-              icon="alert-triangle"
-              label={setupAttentionButtonLabel}
-              showLabel={!topbarLabelsCollapsed}
-              tooltip={topbarLabelsCollapsed}
-              onclick={() => { if (requiredMigrationBlocked) void openMigrationModal(); else go(setupAttentionHref) }}
-              title={setupAttentionLabel}
-              ariaLabel={`${setupAttentionLabel}: ${newTaskDisabledReason ?? startDisabledReason ?? 'Review required'}`}
-            />
-          {/if}
-          {#if providerStatus?.fallback && providerHeaderLabel}
-            <StatusButton
-              tone="warn"
-              icon="plug"
-              label="Provider"
-              showLabel={!topbarLabelsCollapsed}
-              tooltip={topbarLabelsCollapsed}
-              onclick={() => go(currentProjectHref('/settings/providers', activeProjectId))}
-              title={providerTitle}
-              ariaLabel={providerTitle}
-            />
-          {/if}
-          {#if stuckCount > 0}
-            <StatusButton
-              tone="warn"
-              icon="alert-triangle"
-              label="Stuck"
-              count={stuckCount}
-              showLabel={!topbarLabelsCollapsed}
-              tooltip={topbarLabelsCollapsed}
-              onclick={() => go(currentProjectHref('/work', activeProjectId))}
-              title={`${stuckCount} stuck`}
-              ariaLabel={`${activeCount} ${activeCountLabel}, ${awaitingApprovalCount} awaiting approval, ${stuckCount} stuck`}
-            />
-          {/if}
-          {#if inboxActionableCount > 0}
-            <StatusButton
-              tone={inboxHasHighSeverity ? 'danger' : 'warn'}
-              icon="inbox"
-              label="Needs you"
-              count={inboxActionableCount}
-              showLabel={!topbarLabelsCollapsed}
-              tooltip={topbarLabelsCollapsed}
-              onclick={() => go(currentProjectHref('/overview/inbox', activeProjectId))}
-              title={`${inboxActionableCount} need you`}
-              ariaLabel={`${inboxActionableCount} notifications need you`}
-            />
-          {/if}
-          {#if stuckCount === 0 && inboxActionableCount === 0 && (activeCount > 0 || awaitingApprovalCount > 0)}
-            <StatusButton
-              icon={awaitingApprovalCount > 0 ? 'check-circle-2' : 'list-checks'}
-              label={awaitingApprovalCount > 0 ? 'Review' : 'Work'}
-              count={awaitingApprovalCount > 0 ? awaitingApprovalCount : activeCount}
-              showLabel={!topbarLabelsCollapsed}
-              tooltip={topbarLabelsCollapsed}
-              onclick={() => go(currentProjectHref('/work', activeProjectId))}
-              title={awaitingApprovalCount > 0 ? 'Review' : 'Work'}
-              ariaLabel={`${activeCount} ${activeCountLabel}, ${awaitingApprovalCount} awaiting approval`}
-            />
-          {/if}
-        </div>
+        <div class="topbar-leading" aria-hidden="true"></div>
         <div class="topbar-actions">
           {#if newTaskDisabledReason === null && !newTaskInOverflow}
             <Button
@@ -1320,6 +1263,14 @@
             <strong>{allTerminalReadinessMessage}</strong>
           </NoticeBand>
         {/if}
+        {#if startReadinessNoticeHref && startReadinessNoticeLabel && startReadiness?.message}
+          <NoticeBand tone="warn" icon="alert-triangle" density="compact">
+            <strong>{startReadiness.message}</strong>
+            {#snippet actions()}
+              <a href={startReadinessNoticeHref} onclick={(e) => { e.preventDefault(); nav(startReadinessNoticeHref) }}>{startReadinessNoticeLabel}</a>
+            {/snippet}
+          </NoticeBand>
+        {/if}
         {#if runStopSummaryText}
           <NoticeBand
             tone={runStopSummarySeverity === 'warn' ? 'warn' : runStopSummarySeverity === 'error' ? 'danger' : 'accent'}
@@ -1328,10 +1279,8 @@
           >
             <strong>{runStopSummaryText}</strong>
             {#snippet actions()}
-              {#if runStopSummary?.stopReason === 'awaiting_human'}
-                <a href={currentProjectHref('/thread', activeProjectId)} onclick={(e) => { e.preventDefault(); nav(currentProjectHref('/thread', activeProjectId)) }}>Open Thread</a>
-              {:else if runStopSummary?.stopReason === 'blocked_only'}
-                <a href={currentProjectHref('/overview', activeProjectId)} onclick={(e) => { e.preventDefault(); nav(currentProjectHref('/overview', activeProjectId)) }}>Open Overview</a>
+              {#if runStopActionHref && runStopActionLabel}
+                <a href={runStopActionHref} onclick={(e) => { e.preventDefault(); nav(runStopActionHref) }}>{runStopActionLabel}</a>
               {/if}
             {/snippet}
           </NoticeBand>
@@ -1373,7 +1322,7 @@
           {:else if currentView === 'release'}
             <ReleaseTab subView={currentSub} />
         {:else if currentView === 'settings'}
-          <SettingsTab subView={currentSub} />
+          <SettingsTab subView={currentSub} onMigrate={openMigrationModal} />
         {/if}
         </div>
 

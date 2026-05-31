@@ -1,0 +1,7 @@
+{
+  "name": "guildhall-release-fixture-bugfix",
+  "private": true,
+  "scripts": {
+    "test": "node -e \"console.log('duplicate summary rows regression ok')\""
+  }
+}

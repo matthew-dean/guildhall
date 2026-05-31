@@ -500,7 +500,7 @@ describe('WorkspaceImportTab', () => {
 
     await userEvent.click(screen.getByRole('button', { name: /retry/i }))
     await screen.findByText(/Guildhall found planning notes/)
-    await userEvent.click(screen.getByRole('button', { name: /skip import for now/i }))
+    await userEvent.click(screen.getByRole('button', { name: /shelve import review/i }))
     await userEvent.click(screen.getByRole('button', { name: /choose parts to review/i }))
     await userEvent.click(screen.getByRole('button', { name: /review 1 selected part/i }))
     await userEvent.click(screen.getByRole('button', { name: /review selected tasks/i }))
@@ -512,6 +512,32 @@ describe('WorkspaceImportTab', () => {
       expect(calls.some(call => call.startsWith('/api/project/workspace-import/approve'))).toBe(true)
       expect(calls.some(call => call.startsWith('/api/project/workspace-import/dismiss'))).toBe(true)
     })
+  })
+
+  it('shows a clear dismissed state after skipping import review', async () => {
+    const dismissedDraft = { ...detectedDraft, dismissed: true }
+    let dismissed = false
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input)
+      if (url.startsWith('/api/project/workspace-import/draft')) {
+        return json(dismissed ? dismissedDraft : detectedDraft)
+      }
+      if (url.startsWith('/api/project/workspace-import/dismiss')) {
+        dismissed = true
+        return json({ ok: true })
+      }
+      if (url.startsWith('/api/project')) return json({ project: { id: 'looma-knit', name: 'Looma + Knit' }, tasks: [] })
+      return json({})
+    })
+    vi.stubGlobal('fetch', fetchMock)
+
+    render(WorkspaceImportTab)
+    await screen.findByText(/Guildhall found planning notes/)
+
+    await userEvent.click(screen.getByRole('button', { name: /shelve import review/i }))
+
+    expect(await screen.findByText(/import review shelved/i)).toBeTruthy()
+    expect(screen.queryByText(/Guildhall found planning notes/)).toBeNull()
   })
 
   it('handles empty import findings with rerun and dismiss actions', async () => {

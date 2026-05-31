@@ -8,6 +8,7 @@ import { cpSync, existsSync, mkdirSync, rmSync, chmodSync, readFileSync, writeFi
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { spawnSync } from 'node:child_process'
+import { buildReleaseManifest } from './scripts/release-manifest.mjs'
 
 const __dirname = dirname(fileURLToPath(import.meta.url))
 const ROOT = __dirname
@@ -97,6 +98,13 @@ function writeBuildInfo() {
   writeFileSync(join(OUT_DIR, 'build-info.json'), `${JSON.stringify(payload, null, 2)}\n`)
 }
 
+function writeReleaseManifest() {
+  const payload = buildReleaseManifest({
+    guildhallVersion: manifest.version ?? 'unknown',
+  })
+  writeFileSync(join(OUT_DIR, 'release-manifest.json'), `${JSON.stringify(payload, null, 2)}\n`)
+}
+
 const buildOptions = {
   entryPoints: [ENTRY],
   bundle: true,
@@ -174,6 +182,7 @@ mkdirSync(WEB_OUT_DIR, { recursive: true })
 copyWebIcons()
 extractHelpTopics()
 writeBuildInfo()
+writeReleaseManifest()
 
 if (watch) {
   const ctx = await context(buildOptions)
@@ -188,4 +197,5 @@ if (watch) {
   chmodSync(join(OUT_DIR, 'cli.js'), 0o755)
   console.log(`[guildhall build] ✓ dist/cli.js`)
   console.log(`[guildhall build] ✓ dist/web/app.js + app.css`)
+  console.log(`[guildhall build] ✓ dist/release-manifest.json`)
 }

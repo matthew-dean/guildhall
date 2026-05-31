@@ -389,6 +389,10 @@ describe('agent factories', () => {
     const prompt = (a as unknown as { engine: { getSystemPrompt(): string } }).engine.getSystemPrompt()
     expect(prompt).toContain('Construction mode: blueprint')
     expect(prompt).toContain('Process serves the project and the product')
+    expect(prompt).toContain('Every task must be pressure-tested')
+    expect(prompt).toContain('Choose the amount of pressure needed')
+    expect(prompt).toContain('reach the quality bar')
+    expect(prompt).toContain('useful owner')
     expect(prompt).toContain('Infer routine implementation choices from the repo')
     expect(prompt).toContain('Ask the owner only when the answer changes product intent')
     expect(prompt).toContain('recommend the strongest default')
@@ -403,6 +407,16 @@ describe('agent factories', () => {
     expect(prompt).toContain('starting inventory')
   })
 
+  it('createSpecAgent frames abstraction fit as durable contract taxonomy, not only reuse', () => {
+    const a = createSpecAgent(llm)
+    const prompt = (a as unknown as { engine: { getSystemPrompt(): string } }).engine.getSystemPrompt()
+    expect(prompt).toContain('Abstraction fit')
+    expect(prompt).toContain('durable contract')
+    expect(prompt).toContain('too narrow')
+    expect(prompt).toContain('too generic')
+    expect(prompt).toContain('generic shell with typed domain payloads')
+  })
+
   it('createSpecAgent includes the pressure-test intake operating contract', () => {
     const a = createSpecAgent(llm)
     const prompt = (a as unknown as { engine: { getSystemPrompt(): string } }).engine.getSystemPrompt()
@@ -413,6 +427,27 @@ describe('agent factories', () => {
     expect(prompt).toContain('`body`/`prompt` is only the exact answerable question')
     expect(prompt).toContain('`subject` is a short topic')
     expect(prompt).toContain('`description` is the context')
+  })
+
+  it('agent prompts assign proof-path responsibilities across spec, worker, reviewer, and gate checker', () => {
+    const spec = createSpecAgent(llm)
+    const worker = createWorkerAgent(llm)
+    const reviewer = createReviewerAgent(llm)
+    const gateChecker = createGateCheckerAgent(llm)
+
+    const specPrompt = (spec as unknown as { engine: { getSystemPrompt(): string } }).engine.getSystemPrompt()
+    const workerPrompt = (worker as unknown as { engine: { getSystemPrompt(): string } }).engine.getSystemPrompt()
+    const reviewerPrompt = (reviewer as unknown as { engine: { getSystemPrompt(): string } }).engine.getSystemPrompt()
+    const gatePrompt = (gateChecker as unknown as { engine: { getSystemPrompt(): string } }).engine.getSystemPrompt()
+
+    expect(specPrompt).toContain('task-scoped proof path')
+    expect(specPrompt).toContain('Do not create executable')
+    expect(workerPrompt).toContain('Proof path updates')
+    expect(workerPrompt).toContain('separate automated proof from manual/provider proof')
+    expect(reviewerPrompt).toContain('task-scoped proof path is missing')
+    expect(reviewerPrompt).toContain('manual/provider proof')
+    expect(gatePrompt).toContain('update only the automated verification')
+    expect(gatePrompt).toContain('Do not mark manual, provider')
   })
 
   it('createWorkerAgent registers shell + file tools', async () => {
@@ -434,6 +469,8 @@ describe('agent factories', () => {
     expect(prompt).toContain('## No plan-only turns')
     expect(prompt).toContain('Every assistant turn must make observable progress')
     expect(prompt).toContain('If you know the next step, take it with a tool call')
+    expect(prompt).toContain('For tiny artifact edits')
+    expect(prompt).toContain('Your first tool call should be edit-file or write-file')
   })
 
   it('createWorkerAgent requires a minimum-scope self-review before handoff', async () => {
@@ -451,6 +488,15 @@ describe('agent factories', () => {
     expect(prompt).toContain('## Corpus Map')
     expect(prompt).toContain('Reuse / Extend')
     expect(prompt).toContain('Corpus fit required')
+  })
+
+  it('createWorkerAgent requires abstraction-fit notes for durable schemas and resources', async () => {
+    const a = createWorkerAgent(llm)
+    const prompt = (a as unknown as { engine: { getSystemPrompt(): string } }).engine.getSystemPrompt()
+    expect(prompt).toContain('Abstraction fit')
+    expect(prompt).toContain('schema, API route, MCP resource')
+    expect(prompt).toContain('generic shell with typed domain payloads')
+    expect(prompt).toContain('right-sized')
   })
 
   it('createWorkerAgent treats shell verification as durable progress', async () => {
@@ -523,6 +569,16 @@ describe('agent factories', () => {
     expect(prompt).toContain('## Corpus Map')
     expect(prompt).toContain('check corpus fit')
     expect(prompt).toContain('**Corpus fit:**')
+  })
+
+  it('createReviewerAgent checks abstraction fit for schema/API/MCP contract surfaces', () => {
+    const a = createReviewerAgent(llm)
+    const prompt = (a as unknown as { engine: { getSystemPrompt(): string } }).engine.getSystemPrompt()
+    expect(prompt).toContain('**Abstraction fit:**')
+    expect(prompt).toContain('too narrow')
+    expect(prompt).toContain('too generic')
+    expect(prompt).toContain('schema, API route, MCP resource')
+    expect(prompt).toContain('generic shell with typed domain payloads')
   })
 
   it('createGateCheckerAgent', () => {

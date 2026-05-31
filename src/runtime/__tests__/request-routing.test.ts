@@ -38,7 +38,7 @@ describe('routeRequest', () => {
     })
   })
 
-  it('keeps a small concrete implementation ask on the normal task path', () => {
+  it('keeps a small concrete implementation ask on the task path while still requiring pressure testing', () => {
     const result = routeRequest({
       raw: 'Add a loading spinner to the Providers page.',
       source: 'modal',
@@ -49,7 +49,8 @@ describe('routeRequest', () => {
       kind: 'task_spec',
       intakeTarget: {
         type: 'task',
-        pressureTestRequired: false,
+        pressureTestRequired: true,
+        nextStep: 'task-intake',
       },
     })
   })
@@ -75,6 +76,7 @@ describe('routeRequest', () => {
     }).actions[0]).toMatchObject({
       kind: 'settings_proposal',
       safety: 'project-write',
+      intakeTarget: { pressureTestRequired: true },
       requiresConfirmation: false,
     })
 
@@ -84,7 +86,7 @@ describe('routeRequest', () => {
       routeContext: { projectId: 'guildhall' },
     }).actions[0]).toMatchObject({
       kind: 'persona_practice_proposal',
-      intakeTarget: { nextStep: 'proposal-review' },
+      intakeTarget: { pressureTestRequired: true, nextStep: 'proposal-review' },
     })
 
     expect(routeRequest({
@@ -93,7 +95,7 @@ describe('routeRequest', () => {
       routeContext: { projectId: 'guildhall' },
     }).actions[0]).toMatchObject({
       kind: 'repair_triage',
-      intakeTarget: { nextStep: 'repair-triage' },
+      intakeTarget: { pressureTestRequired: true, nextStep: 'repair-triage' },
     })
 
     expect(routeRequest({

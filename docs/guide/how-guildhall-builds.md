@@ -46,11 +46,12 @@ routine. When a choice changes what you are building, who it serves, what data
 it touches, or whether you are comfortable shipping it, the app brings that
 choice to you with enough context to answer.
 
-Some asks need one extra beat before they become a task. "Set a policy" might
-mean "write the policy," "build the feature that enforces it," or "make a parent
-plan and split the work." Guildhall looks for that ambiguity, records the
-pieces that fit together, and asks a focused question instead of quietly sending
-a worker into a task that is really a feature in disguise.
+Some asks need one extra beat before they become work. "Set a policy" might
+mean "write the policy," "build the feature that enforces it," or "make
+containing work and split the pieces below it." Guildhall looks for that
+ambiguity, records the pieces that fit together, and asks a focused question
+instead of quietly sending a worker into a task that is really a feature in
+disguise.
 
 For example, you do not need a giant menu of database engines before Guildhall
 knows whether the project needs a database. If a database choice matters, the
@@ -119,17 +120,19 @@ When Guildhall needs your answer, the question is bounded and useful. A
 good question protects product quality. A bad question makes you do the tool's
 ordinary thinking for it.
 
-When a task looks too large, Guildhall sizes it before it moves. Tiny and small
-tasks can proceed. Medium tasks get a little caution. Large tasks get split
-recommendations, and epic-sized work becomes a parent-sized task with linked
-child tasks. The point is not story-point theater; it is keeping the unit of
-work small enough for a worker and reviewers to understand.
+When a work item looks too large, Guildhall sizes it before it moves. Tiny and
+small items can proceed. Medium items get a little caution. Large work gets
+split recommendations, and epic-sized work becomes containing work with linked
+nested items. The point is not story-point theater; it is keeping each runnable
+piece small enough for a worker and reviewers to understand.
 
 ## Where to go next
 
 - [Start here](./quick-start) for the first browser run.
 - [How the work loop works](./how-guildhall-works) for the system model behind
   context, agents, [Corpus Map](./corpus-map), and inspections.
+- [Ways to work](./ways-to-work) for whole-project runs, feature requests,
+  focused starts, setup lanes, and decision work.
 - [Agent context](./agent-context) for what agents receive before they act.
 - [Corpus Map](./corpus-map) for how Guildhall indexes codebase structure.
 - [New project](./new-project) for a clean or early repo.

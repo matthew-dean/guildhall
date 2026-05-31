@@ -154,6 +154,28 @@ describe('InboxTab', () => {
     expect(screen.queryByRole('button', { name: /dismiss/i })).not.toBeInTheDocument()
   })
 
+  it('labels project understanding rows as discovery updates', async () => {
+    render(InboxTab, {
+      items: [
+        {
+          id: 'project-understanding:intake-reconcile',
+          kind: 'project_understanding',
+          severity: 'high',
+          title: 'Review project discovery update',
+          detail: 'Guildhall can now scan more planning docs and migrations. Review the reconciliation so it can update or dismiss stale imported work.',
+          actionHref: '/workspace-import?mode=reconcile',
+          status: 'open',
+        },
+      ] as any,
+      loaded: true,
+    })
+
+    expect(screen.getByText('Review project discovery update')).toBeInTheDocument()
+    expect(screen.getByText(/scan more planning docs and migrations/i)).toBeInTheDocument()
+    expect(screen.getByText(/Review update/)).toBeInTheDocument()
+    expect(screen.queryByText(/missing repo evidence/i)).not.toBeInTheDocument()
+  })
+
   it('counts the visible ledger rows instead of only actionable rows', async () => {
     render(InboxTab, {
       items: [
@@ -203,6 +225,46 @@ describe('InboxTab', () => {
 
     expect(screen.getByText('(3 items)')).toBeInTheDocument()
     expect(screen.getByText('Migrated')).toBeInTheDocument()
+  })
+
+  it('uses the shared aligned action list structure for wide inbox rows', async () => {
+    const items = [
+      {
+        id: 'spec',
+        kind: 'spec_approval',
+        severity: 'medium',
+        title: 'Review the waiting spec before Guildhall can continue',
+        detail: 'Spec awaiting approval.',
+        actionHref: '/task/task-link-editor?tab=spec',
+        status: 'open',
+      },
+      {
+        id: 'resolved',
+        kind: 'open_escalation',
+        severity: 'high',
+        title: 'Resolve dirty repo state',
+        detail: 'Guildhall could not start because the repo is dirty.',
+        actionHref: '/task/task-link-editor?tab=current',
+        status: 'resolved',
+        resolution: 'verified',
+      },
+    ] as any
+
+    const { container } = render(InboxTab, {
+      items,
+      loaded: true,
+    })
+
+    const list = screen.getByLabelText('Needs you items')
+    expect(list).toHaveStyle({
+      '--aligned-list-columns': '64px minmax(360px, 1fr) minmax(116px, max-content) minmax(136px, max-content) minmax(220px, max-content)',
+    })
+    expect(container.querySelectorAll('.aligned-list-head span')).toHaveLength(5)
+    expect(container.querySelectorAll('.inbox-row.aligned-list-row')).toHaveLength(2)
+    expect(screen.getByText('State')).toBeInTheDocument()
+    expect(screen.getByText('Updated')).toBeInTheDocument()
+    expect(screen.getByText('Action')).toBeInTheDocument()
+    expect(screen.getByText('Review spec →')).toBeInTheDocument()
   })
 
   it('surfaces inbox load and handler failures without hiding the row', async () => {

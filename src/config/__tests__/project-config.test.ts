@@ -7,6 +7,13 @@ import { ensureProjectLocalStateIgnored, readProjectConfig, updateProjectConfig 
 
 const TMP = join(tmpdir(), `guildhall-project-config-test-${process.pid}`)
 const EXTRA_LOCAL_IGNORES = [
+  '.guildhall/codebase-map.yaml',
+  '.guildhall/codebase-map.stale.json',
+  '.guildhall/codebase-map.history.jsonl',
+  '.guildhall/codebase-map/',
+  '.guildhall/external-agent-links.json',
+  '.guildhall/worktrees/',
+  '.guildhall/local/',
   '.guildhall/cache/',
   '.guildhall/tmp/',
   '.guildhall/logs/',
@@ -15,6 +22,7 @@ const EXTRA_LOCAL_IGNORES = [
   '.guildhall/context-debug/',
   '.guildhall/events/',
   '.guildhall/checkpoints/',
+  '.guildhall/dev-tools/',
   '.guildhall/.session-epoch',
 ]
 
@@ -40,8 +48,6 @@ describe('project config local state guard', () => {
       '!.guildhall/**',
       '# Local/private Guildhall state stays out of git.',
       '.guildhall/config.yaml',
-      '.guildhall/worktrees/',
-      '.guildhall/local/',
       ...EXTRA_LOCAL_IGNORES,
       '# END Guildhall managed',
       '',
@@ -65,8 +71,6 @@ describe('project config local state guard', () => {
       '!.guildhall/**',
       '# Local/private Guildhall state stays out of git.',
       '.guildhall/config.yaml',
-      '.guildhall/worktrees/',
-      '.guildhall/local/',
       ...EXTRA_LOCAL_IGNORES,
       '# END Guildhall managed',
       '',
@@ -90,8 +94,6 @@ describe('project config local state guard', () => {
       '!.guildhall/**',
       '# Local/private Guildhall state stays out of git.',
       '.guildhall/config.yaml',
-      '.guildhall/worktrees/',
-      '.guildhall/local/',
       ...EXTRA_LOCAL_IGNORES,
       '# END Guildhall managed',
       '',
@@ -114,8 +116,6 @@ describe('project config local state guard', () => {
       '!.guildhall/**',
       '# Local/private Guildhall state stays out of git.',
       '.guildhall/config.yaml',
-      '.guildhall/worktrees/',
-      '.guildhall/local/',
       ...EXTRA_LOCAL_IGNORES,
       '# END Guildhall managed',
       '',
@@ -147,8 +147,6 @@ describe('project config local state guard', () => {
       '!.guildhall/**',
       '# Local/private Guildhall state stays out of git.',
       '.guildhall/config.yaml',
-      '.guildhall/worktrees/',
-      '.guildhall/local/',
       ...EXTRA_LOCAL_IGNORES,
       '# END Guildhall managed',
       '',
@@ -164,6 +162,8 @@ describe('project config local state guard', () => {
     writeFileSync(join(project, '.guildhall', 'TASKS.json'), '[]\n', 'utf8')
     writeFileSync(join(project, '.guildhall', 'agent-settings.yaml'), 'version: 1\n', 'utf8')
     writeFileSync(join(project, '.guildhall', 'config.yaml'), 'preferredProvider: codex\n', 'utf8')
+    writeFileSync(join(project, '.guildhall', 'codebase-map.yaml'), 'project:\n  root: /Users/matthew/git/example\n', 'utf8')
+    writeFileSync(join(project, '.guildhall', 'external-agent-links.json'), '{"links":[]}\n', 'utf8')
     writeFileSync(join(project, '.guildhall', '.session-epoch'), 'epoch-1\n', 'utf8')
     mkdirSync(join(project, '.guildhall', 'worktrees', 'task-1'), { recursive: true })
     writeFileSync(join(project, '.guildhall', 'worktrees', 'task-1', 'file.txt'), 'local\n', 'utf8')
@@ -172,6 +172,8 @@ describe('project config local state guard', () => {
 
     for (const ignored of [
       '.guildhall/config.yaml',
+      '.guildhall/codebase-map.yaml',
+      '.guildhall/external-agent-links.json',
       '.guildhall/.session-epoch',
       '.guildhall/worktrees/task-1/file.txt',
       '.guildhall/context-debug/snapshot.md',

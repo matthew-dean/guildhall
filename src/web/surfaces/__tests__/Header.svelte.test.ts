@@ -92,4 +92,13 @@ describe('Header', () => {
     expect(screen.queryByText(/connecting|connected|reconnecting/i)).toBeNull()
     await screen.findByText('v0.5.1')
   })
+
+  it('does not keep a stale project connection label on the projects page', async () => {
+    window.history.replaceState({}, '', '/projects')
+    path.value = '/projects/looma-knit/overview'
+
+    render(Header)
+
+    expect(screen.queryByText(/connecting|connected|reconnecting/i)).toBeNull()
+  })
 })

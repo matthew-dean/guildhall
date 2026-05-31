@@ -14,7 +14,7 @@ id: looma-knit
 
 # Absolute path to the project root this workspace tracks.
 # Defaults to the directory containing this file.
-projectPath: /Users/matthew/git/oss
+projectPath: /path/to/projects
 
 # ---------------------------------------------------------------------------
 # Model assignment
@@ -56,6 +56,10 @@ coordinators:
       general-purpose: no Knit-specific vocabulary in component APIs, no app
       business logic, no tight coupling to any single consumer. Every component
       shipped in Looma must be usable in a context completely unrelated to Knit.
+      Looma should also become an agent-ready UI library: component docs and
+      metadata must make it clear when to use a primitive, why to choose one
+      variant or prop shape over another, and how the component expects layout
+      spacing to be owned.
       Accessibility and progressive enhancement are non-negotiable.
     concerns:
       - id: api-genericity
@@ -74,7 +78,15 @@ coordinators:
         description: Every shipped component needs a contract README, API metadata, a docs page, and a story.
         reviewQuestions:
           - Is there a contract README in the component directory?
+          - Does the README explain when and why to use this component instead of nearby alternatives?
+          - Do variants and props include decision guidance an LLM can use without guessing?
           - Is there a Storybook story?
+      - id: layout-discipline
+        description: Components should expose intentional layout controls and avoid caller-side styling escape hatches.
+        reviewQuestions:
+          - Does this component avoid external margins so spacing stays owned by parent layout primitives?
+          - Are layout props limited to named, documented controls rather than arbitrary bespoke styling?
+          - Would an agent know which Stack, Cluster, grid, or region primitive should compose this control?
     autonomousDecisions:
       - Approve or reject component promotion candidates from Knit
       - Decide API naming for new primitives
@@ -106,6 +118,7 @@ coordinators:
         reviewQuestions:
           - Does this task advance or at least not regress the Looma migration inventory?
           - Are Looma primitives being used where they are available and appropriate?
+          - Is Knit using Looma's documented layout and variant guidance instead of adding margins, wrapper styles, or one-off control tweaks?
     autonomousDecisions:
       - Prioritize tasks within the V1 polish scope
       - Approve minor migration steps already in the migration inventory

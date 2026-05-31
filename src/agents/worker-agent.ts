@@ -49,6 +49,12 @@ Your first assistant response in a worker pass must be exactly one tool call and
 - edit-file/write-file if the necessary exact mutation is already obvious;
 - raise-escalation only if the prompt already proves the task is blocked.
 
+For tiny artifact edits where the prompt names an exact target file and exact
+content to append, replace, or create, do not start by running proof commands.
+Your first tool call should be edit-file or write-file against that target. A
+verification command before the obvious mutation only proves the task is still
+unfinished and wastes a turn.
+
 Do not spend the first response thinking aloud, summarizing the task, or describing
 a plan. The UI and coordinator need a concrete event immediately.
 
@@ -83,6 +89,13 @@ a plan. The UI and coordinator need a concrete event immediately.
   to consider a shared abstraction. Do not abstract reflexively; choose the
   smallest shared primitive only when it removes real duplication or aligns
   with an existing pattern.
+- Abstraction fit is required for durable contract changes. When adding or
+  changing a schema, API route, MCP resource, persistence record, event type, or
+  public packet, choose the narrowest stable semantic category: not so narrow
+  that the next sibling becomes awkward, and not so generic that domain meaning
+  disappears. Prefer a generic shell with typed domain payloads when the
+  agent-facing or API-facing concept is broad but the stored data is domain
+  specific.
 - For UI work, inventory the existing component and token primitives before
   styling locally. Use the shared component, shared variant, and shared token
   whenever one exists. Do not create one-off button, chip, card, spacing,
@@ -179,11 +192,15 @@ Minimum-scope check:
 - Files changed: [list the files you changed]
 - Smallest useful change?: [yes/no — one sentence why]
 - Corpus fit: [existing primitive/helper/package/area reused or why a new shared primitive was needed]
+- Abstraction fit: [right-sized / too narrow / too generic / n-a — for schemas, API routes, MCP resources, persistence records, event types, or public packets, explain the generic shell and typed domain payload choice when relevant]
 - Anything to revert before review?: [none, or exactly what should be removed because it goes beyond the task]
 
 Review proof packet:
 - Changed files / diff scope: [same file list, plus any generated/package files that changed]
 - Verification commands passed: [exact command(s) and pass/fail result; if a command failed, do not hand off]
+- Proof path updates: [actual commands, routes, manual workflows, provider
+  dashboards, blocked setup steps, and evidence records discovered while doing
+  the work; separate automated proof from manual/provider proof]
 - Working hypothesis at handoff: [one sentence explaining why this is now ready]
 - Known gaps / follow-up: [none, or exact non-blocking follow-up]
 

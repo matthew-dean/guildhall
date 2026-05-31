@@ -28,8 +28,7 @@ into the wrong repo.
 ## Use the projects home to triage
 
 <picture class="gh-doc-picture">
-  <source srcset="../assets/ui-audit/0-7-0/projects.avif" type="image/avif" />
-  <img src="../assets/ui-audit/0-7-0/projects.png" alt="Guildhall projects home with Looma + Knit, Font something, Fair Labor License, Tiny demo, Narrative Harness, and Linecraft visible as local project cards." />
+  <img src="../assets/ui-audit/0-9-0/projects.webp" alt="Guildhall v0.9.0 projects home with several registered local projects, work mix, attention, and launch controls." />
 </picture>
 
 The projects home answers:
@@ -37,7 +36,7 @@ The projects home answers:
 - what the overall **Work mix** looks like
 - which project owns the current **Attention** item
 - which projects are **Running now**
-- which projects have **Needs you** work
+- which projects have work waiting on your answer
 - which project cards are paused, queued, stable, inspecting, or waiting on task briefs
 
 Open the project shell when you need details. The projects home is just the map

@@ -31,7 +31,7 @@
 
   ```sh
   pnpm build
-  node dist/cli.js mcp serve /Users/matthew/git/oss/guildhall
+  node dist/cli.js mcp serve /path/to/guildhall
   ```
 
 ## Task log discipline

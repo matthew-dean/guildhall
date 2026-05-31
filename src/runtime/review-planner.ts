@@ -1,8 +1,9 @@
-import type { Task, TaskPriority } from '@guildhall/core'
+import type { ReviewRiskProfile, Task, TaskPriority } from '@guildhall/core'
 import type {
   ReviewBudget,
   ReviewEffort,
   ReviewAuditStore,
+  ReviewAdvisoryLens,
   ReviewPlanRecord,
   ReviewRecipeRef,
   ReviewRiskLane,
@@ -79,7 +80,7 @@ const LANE_PATTERNS: Array<{
 }> = [
   {
     lane: 'ux_comprehension',
-    pattern: /\b(ui|ux|screen|flow|journey|wizard|drawer|modal|button|form|empty state|onboarding|dashboard|browser|viewport)\b/i,
+    pattern: /\b(ui|ux|screen|flow|journey|wizard|drawer|modal|button|split button|menu button|form|control|combobox|typeahead|autocomplete|select|dropdown|long list|empty state|onboarding|dashboard|browser|viewport)\b/i,
     reason: 'The task touches a user-facing interaction or screen.',
   },
   {
@@ -89,12 +90,12 @@ const LANE_PATTERNS: Array<{
   },
   {
     lane: 'visual_design',
-    pattern: /\b(css|style|layout|spacing|color|icon|responsive|mobile|desktop|component|svelte|react|vue|tailwind)\b/i,
+    pattern: /\b(css|style|layout|spacing|color|icon|responsive|mobile|desktop|component|design system|design-system|ui library|component library|primitive|variant|props?|tokens?|svelte|react|vue|tailwind)\b/i,
     reason: 'The task changes visual presentation or component layout.',
   },
   {
     lane: 'accessibility',
-    pattern: /\b(a11y|accessibility|aria|keyboard|focus|focus state|screen reader|contrast|tab order|semantic|tap target|hit target|overlap|overlaps|overlapping|reachable)\b/i,
+    pattern: /\b(a11y|accessibility|aria|keyboard|focus|focus state|screen reader|contrast|tab order|semantic|semantics|tap target|hit target|overlap|overlaps|overlapping|reachable|controls?|combobox|typeahead|autocomplete|select|dropdown|listbox|menu button|split button|disclosure|radio|checkbox|switch|tabs?|segmented)\b/i,
     reason: 'The task mentions accessibility-sensitive behavior.',
   },
   {
@@ -197,7 +198,7 @@ const RECIPE_CATALOG: Array<{
 ]
 
 export interface BuildReviewPlanInput {
-  task: Pick<Task, 'id' | 'title' | 'description' | 'priority' | 'spec' | 'acceptanceCriteria' | 'outOfScope' | 'notes'>
+  task: Pick<Task, 'id' | 'title' | 'description' | 'priority' | 'spec' | 'acceptanceCriteria' | 'outOfScope' | 'notes'> & Partial<Pick<Task, 'status'>>
   changedFiles?: readonly string[]
   requestedEffort?: ReviewEffort
   requiredArtifacts?: readonly string[]
@@ -215,6 +216,13 @@ export interface EnsureTaskReviewPlanRecordedInput extends Omit<BuildReviewPlanI
 export interface EnsureTaskReviewPlanRecordedResult {
   recorded: boolean
   plan: ReviewPlanRecord
+  reviewRisk: ReviewRiskProfile
+}
+
+export interface ReviewArtifactReadiness {
+  ready: boolean
+  missingArtifacts: string[]
+  reason: string
 }
 
 export function buildReviewPlan(input: BuildReviewPlanInput): ReviewPlanRecord {
@@ -229,6 +237,7 @@ export function buildReviewPlan(input: BuildReviewPlanInput): ReviewPlanRecord {
     ...input.budgetOverride,
   }
   const requiredRecipes = selectRecipes(selectedLanes, effort)
+  const advisoryLenses = selectAdvisoryLenses(input, signals, selectedLanes, effort)
   const aggregation = Object.fromEntries(selectedLanes.map((lane) => [
     lane,
     blockingPolicyForLane(lane, effort),
@@ -246,6 +255,7 @@ export function buildReviewPlan(input: BuildReviewPlanInput): ReviewPlanRecord {
         reason: signals.skippedReasons.get(lane) ?? 'No signal in task text, file hints, or requested effort.',
       })),
     requiredRecipes,
+    advisoryLenses,
     deterministicChecks: [...(input.deterministicChecks ?? defaultDeterministicChecks(selectedLanes))],
     requiredArtifacts: [...(input.requiredArtifacts ?? defaultRequiredArtifacts(selectedLanes))],
     budget,
@@ -268,6 +278,7 @@ export async function ensureTaskReviewPlanRecorded(
     return {
       recorded: false,
       plan: existing.plan.payload,
+      reviewRisk: buildTaskReviewRiskProfile(existing.plan.payload),
     }
   }
 
@@ -288,6 +299,50 @@ export async function ensureTaskReviewPlanRecorded(
   return {
     recorded: true,
     plan,
+    reviewRisk: buildTaskReviewRiskProfile(plan),
+  }
+}
+
+export function buildTaskReviewRiskProfile(plan: ReviewPlanRecord): ReviewRiskProfile {
+  const releaseBlockingThresholds = new Set(['high', 'strict'])
+  return {
+    lanes: [...plan.selectedLanes],
+    recipes: plan.requiredRecipes.map((recipe) => ({
+      recipeId: recipe.recipeId,
+      version: recipe.version,
+      required: recipe.required,
+      releaseBlocking: recipe.required && releaseBlockingThresholds.has(recipe.blocking),
+      lanes: [...recipe.lanes],
+      requiredArtifacts: requiredArtifactsForRecipe(recipe, plan.requiredArtifacts),
+      reason: `Covers ${recipe.lanes.join(', ') || 'declared review'} at ${recipe.blocking} blocking strength.`,
+    })),
+    requiredArtifacts: [...plan.requiredArtifacts],
+    artifactPolicy: plan.requiredArtifacts.length > 0 ? 'required_before_review' : 'advisory',
+    assessedAt: plan.createdAt,
+    assessedBy: plan.createdBy,
+  }
+}
+
+export function evaluateReviewArtifactReadiness(input: {
+  reviewRisk: Pick<ReviewRiskProfile, 'requiredArtifacts' | 'artifactPolicy'> | null | undefined
+  artifactRefs: readonly string[]
+}): ReviewArtifactReadiness {
+  const reviewRisk = input.reviewRisk
+  if (!reviewRisk || reviewRisk.artifactPolicy !== 'required_before_review') {
+    return {
+      ready: true,
+      missingArtifacts: [],
+      reason: 'No blocking review artifact policy is declared.',
+    }
+  }
+  const provided = new Set(input.artifactRefs)
+  const missingArtifacts = reviewRisk.requiredArtifacts.filter((artifact) => !provided.has(artifact))
+  return {
+    ready: missingArtifacts.length === 0,
+    missingArtifacts,
+    reason: missingArtifacts.length === 0
+      ? 'All required review artifacts are present.'
+      : `Missing required review artifact(s): ${missingArtifacts.join(', ')}.`,
   }
 }
 
@@ -306,6 +361,7 @@ function detectReviewSignals(input: BuildReviewPlanInput): {
   selectedLanes: ReviewRiskLane[]
   reasons: string[]
   skippedReasons: Map<ReviewRiskLane, string>
+  text: string
 } {
   const text = [
     input.task.title,
@@ -331,6 +387,13 @@ function detectReviewSignals(input: BuildReviewPlanInput): {
     }
   }
 
+  if (/\b(design system|design-system|ui library|component library|primitive|split button|menu button|layout control|variant|props?|control choice|when to use|combobox|typeahead|autocomplete|long list|select list|dropdown)\b/i.test(text)) {
+    selected.add('ux_comprehension')
+    selected.add('visual_design')
+    selected.add('accessibility')
+    reasons.push('Design-system control selection needs reviewer context for component intent, variants, layout ownership, findability, and accessible semantics.')
+  }
+
   if ((input.changedFiles ?? []).some((file) => /\.(svelte|tsx?|jsx?|css|scss|html)$/.test(file))) {
     selected.add('visual_design')
     selected.add('ux_comprehension')
@@ -350,7 +413,49 @@ function detectReviewSignals(input: BuildReviewPlanInput): {
     selectedLanes: ALL_LANES.filter((lane) => selected.has(lane)),
     reasons,
     skippedReasons,
+    text,
   }
+}
+
+function selectAdvisoryLenses(
+  input: BuildReviewPlanInput,
+  signals: { text: string },
+  lanes: readonly ReviewRiskLane[],
+  effort: ReviewEffort,
+): ReviewAdvisoryLens[] {
+  const selected: ReviewAdvisoryLens[] = []
+  const add = (lens: ReviewAdvisoryLens['lens'], reason: string) => {
+    if (selected.some((candidate) => candidate.lens === lens)) return
+    selected.push({ lens, reason, blocking: 'advisory' })
+  }
+  const laneSet = new Set(lanes)
+  const text = signals.text
+  const isSpecShaping = ['exploring', 'spec_review', 'proposed'].includes(input.task.status ?? '')
+  const isAmbiguous = /\b(ambiguous|unclear|rough|shape|spec|boundary|acceptance criteria|proof path|what should|not sure)\b/i.test(text)
+  const isHighRisk = effort === 'thorough' || effort === 'release_critical'
+  const isReaderOrUserFacing =
+    laneSet.has('ux_comprehension') ||
+    laneSet.has('copy_clarity') ||
+    laneSet.has('docs_truth')
+  const asksForFutureOpportunity = /\b(future|follow-up|opportunit|roadmap|explor|later|next phase)\b/i.test(text)
+
+  if (isSpecShaping || isAmbiguous || isReaderOrUserFacing) {
+    add('first_principles', 'Check the real user job, task boundary, and simplest useful shape before implementation.')
+  }
+  if (isAmbiguous || isHighRisk) {
+    add('contrarian', 'Pressure-test fragile assumptions and false consensus before the plan is accepted.')
+  }
+
+  add('executor', 'Keep the recommendation tied to the smallest runnable and provable next move.')
+
+  if (isReaderOrUserFacing) {
+    add('outsider', 'Read the result like a new user or reader who does not know Guildhall internals.')
+  }
+  if (asksForFutureOpportunity) {
+    add('expansionist', 'Capture adjacent opportunities as non-blocking follow-up instead of expanding this task.')
+  }
+
+  return selected
 }
 
 function inferEffort(priority: TaskPriority, lanes: readonly ReviewRiskLane[]): ReviewEffort {
@@ -446,6 +551,7 @@ function defaultDeterministicChecks(lanes: readonly ReviewRiskLane[]): string[] 
   const checks = new Set(['required-verification-commands', 'changed-file-scope'])
   if (lanes.some((lane) => ['ux_comprehension', 'visual_design', 'accessibility'].includes(lane))) {
     checks.add('browser-or-screenshot-evidence')
+    checks.add('design-system-control-reference-check')
   }
   if (lanes.includes('docs_truth')) checks.add('public-doc-copy-boundary')
   if (lanes.some((lane) => ['security', 'privacy', 'evidence_privacy'].includes(lane))) {
@@ -464,6 +570,29 @@ function defaultRequiredArtifacts(lanes: readonly ReviewRiskLane[]): string[] {
   }
   if (lanes.some((lane) => ['calibration_governance', 'cost_control'].includes(lane))) {
     artifacts.add('review-variant-comparison')
+  }
+  return [...artifacts]
+}
+
+function requiredArtifactsForRecipe(
+  recipe: ReviewRecipeRef,
+  planRequiredArtifacts: readonly string[],
+): string[] {
+  const artifacts = new Set<string>()
+  if (recipe.lanes.some((lane) => ['ux_comprehension', 'visual_design', 'accessibility'].includes(lane))) {
+    artifacts.add('visual-evidence')
+  }
+  if (recipe.lanes.some((lane) => ['api_contract', 'data_integrity', 'migration_safety'].includes(lane))) {
+    artifacts.add('contract-or-state-diff')
+  }
+  for (const artifact of planRequiredArtifacts) {
+    if (
+      artifact === 'implementation-summary' ||
+      artifact === 'verification-evidence' ||
+      artifacts.has(artifact)
+    ) {
+      artifacts.add(artifact)
+    }
   }
   return [...artifacts]
 }

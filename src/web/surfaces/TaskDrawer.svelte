@@ -8,6 +8,7 @@
 -->
 <script lang="ts">
   import Button from '../lib/Button.svelte'
+  import Chip from '../lib/Chip.svelte'
   import Icon from '../lib/Icon.svelte'
   import Tabs from '../lib/Tabs.svelte'
   import Modal from '../lib/Modal.svelte'
@@ -29,9 +30,22 @@
   import { project } from '../lib/project.svelte.js'
   import { nav, path as navPath } from '../lib/nav.svelte.js'
   import { onMount, onDestroy } from 'svelte'
-  import { toast } from 'svelte-sonner'
+  import { toast } from '../lib/toast.svelte.js'
   import { activeEscalations } from '../lib/escalation.js'
   import { escalationPrimaryAction, escalationUserGuidance } from '../lib/escalation-labels.js'
+  import { readableTaskDescription } from '../lib/task-display.js'
+
+  type RuntimeDevServerStatus = 'starting' | 'running' | 'stopped' | 'failed' | 'stale'
+  interface RuntimeDevServer {
+    id: string
+    taskId?: string
+    status: RuntimeDevServerStatus
+    readiness: 'unknown' | 'ready' | 'failed'
+    command: { cwd: string; argv: string[] }
+    ports: Array<{ container: number; host: number; purpose: string }>
+    url: string
+    browserProof: { ok: boolean; status: number | null; error: string | null } | null
+  }
 
   interface Props {
     taskId: string
@@ -46,6 +60,8 @@
   let busy = $state(false)
   let runBusy = $state(false)
   let runError = $state<string | null>(null)
+  let devServers = $state<RuntimeDevServer[]>([])
+  let devServerBusyId = $state<string | null>(null)
   let activeTab = $state<DrawerTab>('overview')
   let initializedTabForTaskId = $state<string | null>(null)
   let pollHandle: ReturnType<typeof setInterval> | null = null
@@ -145,6 +161,7 @@
   function requestedInitialTab(): DrawerTab | null {
     if (typeof window === 'undefined') return null
     const raw = new URLSearchParams(window.location.search).get('tab')
+    if (raw === 'action') return 'current'
     if (
       raw === 'current' ||
       raw === 'overview' ||
@@ -179,9 +196,47 @@
         return
       }
       payload = (await res.json()) as DrawerPayload
+      await loadDevServers()
       error = null
     } catch (err) {
       error = friendlyFetchError(err)
+    }
+  }
+
+  async function loadDevServers(): Promise<void> {
+    try {
+      const res = await drawerFetch('/api/project/runtime/dev-servers', { cache: 'no-store' })
+      if (!res.ok) return
+      const body = (await res.json().catch(() => ({}))) as { devServers?: RuntimeDevServer[] }
+      devServers = (body.devServers ?? []).filter(server => server.taskId === taskId)
+    } catch {
+      devServers = []
+    }
+  }
+
+  async function stopDevServer(id: string): Promise<void> {
+    devServerBusyId = id
+    try {
+      const res = await drawerFetch(`/api/project/runtime/dev-servers/${encodeURIComponent(id)}/stop`, { method: 'POST' })
+      if (!res.ok) throw new Error(`HTTP ${res.status}`)
+      await loadDevServers()
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : String(err))
+    } finally {
+      devServerBusyId = null
+    }
+  }
+
+  async function restartDevServer(id: string): Promise<void> {
+    devServerBusyId = id
+    try {
+      const res = await drawerFetch(`/api/project/runtime/dev-servers/${encodeURIComponent(id)}/restart`, { method: 'POST' })
+      if (!res.ok) throw new Error(`HTTP ${res.status}`)
+      await loadDevServers()
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : String(err))
+    } finally {
+      devServerBusyId = null
     }
   }
 
@@ -281,6 +336,24 @@
     handleResolveEscalation(escalation, mode)
   }
 
+  async function handleRunEscalationAction(escalation: Escalation) {
+    const action = escalationPrimaryAction(escalation)
+    if (!(await post('resolve-escalation', {
+      escalationId: escalation.id,
+      resolution: action.resolution,
+      nextStatus: action.nextStatus,
+    }))) return
+    await project.refresh()
+    toast.success('Guildhall can continue this task.')
+    await runProject('start', taskId)
+  }
+
+  function handleRunEscalationById(escalationId: string) {
+    const escalation = openEscalations.find(item => item.id === escalationId)
+    if (!escalation) return
+    void handleRunEscalationAction(escalation)
+  }
+
   async function submitResolveEscalation(args: { resolution: string; nextStatus: string }) {
     const current = resolveModal
     if (!current) return
@@ -364,10 +437,10 @@
     reworkModal = {
       mode: 'split',
       title: 'Split task',
-      intro: 'Use this when one task is hiding separate pieces of work, external setup, or decisions. Guildhall will keep the original as the parent and draft smaller child tasks.',
+      intro: 'Use this when one work item is hiding separate pieces of work, external setup, or decisions. Guildhall will keep the original as containing work and draft smaller nested work.',
       label: 'What should be separated?',
       placeholder: 'Optional: e.g. split Google OAuth setup, Apple OAuth setup, and live sign-in verification.',
-      fallbackInstruction: 'Split this task into smaller child tasks before implementation.',
+      fallbackInstruction: 'Split this work into smaller nested work before implementation.',
       submitLabel: 'Split task',
       success: 'Guildhall will split this into smaller tasks.',
     }
@@ -412,7 +485,7 @@
     rerunStageBusy = stage
     try {
       await post('rerun-stage', { stage })
-      await project.refresh()
+      await project.refresh(scopedProjectId())
     } finally {
       rerunStageBusy = null
     }
@@ -424,7 +497,7 @@
       if (!(await post('create-split-children'))) return
       await project.refresh()
       await load()
-      toast.success('Task split into a parent with linked child tasks.')
+      toast.success('Work split into containing work with linked nested items.')
     } finally {
       splitTaskBusy = false
     }
@@ -435,7 +508,7 @@
   }
 
   const task = $derived(payload?.task)
-  const runStatus = $derived(project.detail?.run?.status ?? 'stopped')
+  const runStatus = $derived(payload?.runStatus ?? project.detail?.run?.status ?? 'stopped')
   const hasCurrentTurns = $derived((payload?.threadTurns?.length ?? 0) > 0)
   const tabs = $derived(
     hasCurrentTurns
@@ -469,6 +542,14 @@
   const isWorkspaceImportTask = $derived(task?.id === 'task-workspace-import')
   const openEscalations = $derived(task ? activeEscalations(task) : [])
   const firstOpenEscalation = $derived(openEscalations[0] ?? null)
+  const projectStartBlocker = $derived(
+    project.detail?.startReadiness?.canStart === false
+      ? project.detail.startReadiness
+      : null,
+  )
+  const projectStartBlockerMessage = $derived(projectStartBlocker?.message ?? null)
+  const canRunTaskDirectly = $derived(!projectStartBlocker && !hasCurrentTurns && !isTerminalRunTask && !isParentTask && !firstOpenEscalation)
+  const canResumeHold = $derived(!projectStartBlocker && isHeld && !firstOpenEscalation)
   const firstOpenEscalationAction = $derived(escalationPrimaryAction(firstOpenEscalation))
   const firstOpenEscalationGuidance = $derived(escalationUserGuidance(firstOpenEscalation))
   const firstOpenEscalationText = $derived(
@@ -501,9 +582,9 @@
     if (task.status === 'parent') {
       return {
         tone: 'info',
-        eyebrow: 'Parent task',
-        title: 'Work happens in the child tasks.',
-        detail: 'Open Overview to move through the linked tasks.',
+        eyebrow: 'Containing work',
+        title: 'Work happens in the nested work below.',
+        detail: 'Open Overview to move through the linked work.',
       }
     }
     if (task.terminalSummary?.headline) {
@@ -577,7 +658,7 @@
   })
   const displayTaskDescription = $derived.by(() => {
     if (!task || typeof task.description !== 'string') return ''
-    const description = task.description.trim()
+    const description = readableTaskDescription(task.description, displayTaskTitle)
     if (!description || description === displayTaskTitle) return ''
     return description
   })
@@ -651,26 +732,40 @@
     }
   })
 
-  async function runProject(action: 'start' | 'stop', nextTaskId?: string) {
+  async function runProject(action: 'start' | 'stop', nextTaskId?: string, retryStaleActive = true) {
     runBusy = true
     runError = null
     try {
-      const res = await drawerFetch(`/api/project/${action}`, {
+      const endpoint = action === 'start' && nextTaskId
+        ? `/api/project/task/${encodeURIComponent(nextTaskId)}/start`
+        : `/api/project/${action}`
+      const res = await drawerFetch(endpoint, {
         method: 'POST',
         headers: action === 'start' ? { 'content-type': 'application/json' } : undefined,
         body: action === 'start'
           ? JSON.stringify({
-              mode: 'continuous',
-              ...(nextTaskId ? { taskId: nextTaskId } : {}),
+              mode: nextTaskId ? 'one_task' : 'continuous',
+              scope: nextTaskId ? 'work_item' : 'project',
             })
           : undefined,
       })
       if (!res.ok) {
         const b = await res.json().catch(() => ({})) as { code?: string; error?: string; status?: string }
         if (b.code === 'run_already_active') {
-          toast.info('Guildhall is already running. This task stays queued for the coordinator.')
-          await project.refresh()
           await load()
+          await project.refresh(scopedProjectId())
+          const latestRunStatus = payload?.runStatus ?? project.detail?.run?.status ?? 'stopped'
+          if (
+            retryStaleActive &&
+            action === 'start' &&
+            nextTaskId &&
+            latestRunStatus !== 'running' &&
+            latestRunStatus !== 'stopping'
+          ) {
+            await runProject(action, nextTaskId, false)
+            return
+          }
+          toast.info('Guildhall is already running. This task stays queued for the coordinator.')
           return
         }
         runError = b.error ?? `${action === 'start' ? 'Start' : 'Stop'} failed (HTTP ${res.status})`
@@ -686,8 +781,8 @@
           toast.info(stopMessage)
         }
       }
-      setTimeout(() => void project.refresh(), 500)
-      setTimeout(() => void project.refresh(), 1800)
+      setTimeout(() => void project.refresh(scopedProjectId()), 500)
+      setTimeout(() => void project.refresh(scopedProjectId()), 1800)
     } catch (err) {
       runError = friendlyFetchError(err)
     } finally {
@@ -778,6 +873,36 @@
           <span>{drawerOutcome.detail}</span>
         </section>
       {/if}
+      {#if devServers.length > 0}
+        <section class="drawer-dev-servers" aria-label="Runtime dev servers">
+          {#each devServers as server}
+            <div class="drawer-dev-server">
+              <div>
+                <div class="drawer-dev-server-head">
+                  <strong>{server.id}</strong>
+                  <Chip label={server.status} tone={server.status === 'running' ? 'ok' : server.status === 'failed' ? 'danger' : server.status === 'stale' ? 'warn' : 'neutral'} />
+                  <Chip label={server.readiness} tone={server.readiness === 'ready' ? 'ok' : server.readiness === 'failed' ? 'danger' : 'neutral'} />
+                </div>
+                <p>{server.command.argv.join(' ')} · {server.command.cwd}</p>
+                <p>
+                  {server.ports[0]?.container ?? '?'} -> {server.ports[0]?.host ?? '?'}
+                  {#if server.browserProof}
+                    · Browser proof {server.browserProof.ok ? 'passed' : 'failed'}
+                  {/if}
+                </p>
+              </div>
+              <div class="drawer-dev-server-actions">
+                <Button variant="secondary" size="sm" onclick={() => window.open(server.url, '_blank', 'noopener')}>Open</Button>
+                {#if server.status === 'running' || server.status === 'starting'}
+                  <Button variant="secondary" size="sm" disabled={devServerBusyId === server.id} onclick={() => void stopDevServer(server.id)}>Stop</Button>
+                {:else}
+                  <Button variant="secondary" size="sm" disabled={devServerBusyId === server.id} onclick={() => void restartDevServer(server.id)}>Restart</Button>
+                {/if}
+              </div>
+            </div>
+          {/each}
+        </section>
+      {/if}
       {#if activeTab === 'current'}
         <CurrentTab
           task={payload.task}
@@ -786,12 +911,14 @@
           {runBusy}
           {runError}
           {runStatus}
+          {projectStartBlockerMessage}
           onApproveBrief={() => post('approve-brief')}
           onApproveSpec={handleApproveSpec}
           onRunTask={() => runProject('start', taskId)}
           onShapeDraft={handleShapeDraft}
           onOpenSpecTab={() => (activeTab = 'spec')}
           onOpenEscalationAction={handleOpenEscalationAction}
+          onRunEscalationAction={handleRunEscalationById}
           onAnswerQuestion={answerQuestion}
         />
       {:else if activeTab === 'overview'}
@@ -812,6 +939,7 @@
           onShelve={() => confirmed('Shelve') && post('shelve')}
           onUnshelve={() => confirmed('Unshelve') && post('unshelve')}
           onResolveEscalation={handleResolveEscalation}
+          onRunEscalationAction={handleRunEscalationAction}
           onSendFollowUp={handleSendFollowUp}
           onAddAcceptance={handleAddAcceptance}
         />
@@ -855,7 +983,10 @@
             {#if runError}
               <span class="run-error">{runError}</span>
             {/if}
-            {#if !hasCurrentTurns && !isTerminalRunTask && !isParentTask}
+            {#if projectStartBlockerMessage}
+              <span class="run-error">{projectStartBlockerMessage}</span>
+            {/if}
+            {#if canRunTaskDirectly}
               {#if runStatus === 'running'}
                 <Button
                   variant="danger"
@@ -870,10 +1001,10 @@
                   variant="agent"
                   size="sm"
                   disabled={runBusy || runStatus === 'stopping'}
-                  onclick={() => runProject('start')}
+                  onclick={() => runProject('start', task.id)}
                 >
                   <Icon name="sparkles" size={14} />
-                  Run this task
+                  Start only this work item
                 </Button>
               {/if}
             {/if}
@@ -983,23 +1114,26 @@
                 </Button>
               {/if}
             {/if}
-            <Button
-              variant="secondary"
-              size="sm"
-              disabled={busy}
-              onclick={() => handleResolveEscalation(firstOpenEscalation, 'resolve')}
-            >
-              I handled this...
-            </Button>
-            <Button
-              variant="agent"
-              size="sm"
-              disabled={busy}
-              onclick={() => handleResolveEscalation(firstOpenEscalation, 'retry')}
-            >
-              <Icon name="sparkles" size={14} />
-              {firstOpenEscalationAction.label}
-            </Button>
+            {#if firstOpenEscalationGuidance.actionOwner === 'guildhall'}
+              <Button
+                variant="agent"
+                size="sm"
+                disabled={busy || runBusy}
+                onclick={() => handleRunEscalationAction(firstOpenEscalation)}
+              >
+                <Icon name="sparkles" size={14} />
+                {firstOpenEscalationAction.label}
+              </Button>
+            {:else}
+              <Button
+                variant="secondary"
+                size="sm"
+                disabled={busy}
+                onclick={() => handleResolveEscalation(firstOpenEscalation, 'resolve')}
+              >
+                I handled this...
+              </Button>
+            {/if}
           {/if}
           {#if isShelved}
             <Button
@@ -1011,7 +1145,7 @@
               Unshelve
             </Button>
           {/if}
-          {#if isHeld}
+          {#if canResumeHold}
             <Button
               variant="agent"
               size="sm"
@@ -1285,6 +1419,33 @@
   .drawer-outcome.tone-info {
     border-left-color: var(--accent);
   }
+  .drawer-dev-servers {
+    display: grid;
+    gap: var(--s-2);
+    margin-bottom: var(--s-3);
+  }
+  .drawer-dev-server {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    gap: var(--s-3);
+    padding: var(--s-3);
+    border: 1px solid var(--border);
+    border-radius: var(--r-2);
+    background: var(--bg-raised-2);
+  }
+  .drawer-dev-server-head,
+  .drawer-dev-server-actions {
+    display: flex;
+    align-items: center;
+    gap: var(--s-2);
+    flex-wrap: wrap;
+  }
+  .drawer-dev-server p {
+    margin: var(--s-1) 0 0;
+    color: var(--text-muted);
+    font-size: var(--fs-1);
+    overflow-wrap: anywhere;
+  }
   .gh-drawer-foot {
     position: relative;
     z-index: 3;
@@ -1409,6 +1570,9 @@
     color: var(--danger);
   }
   @media (max-width: 720px) {
+    .drawer-dev-server {
+      grid-template-columns: 1fr;
+    }
     .gh-drawer-foot,
     .footer-actions-left,
     .footer-actions-right {
