@@ -250,11 +250,14 @@ agent packet integration, coordinator assignment, or remote authority support.
 
 ### Remaining Work Ledger
 
-**Remaining: 17 items. Next item: 1.**
+**Remaining: 16 items. Next item: 2.**
 
-1. [ ] Replace the current pnpm-only discovery core with a provider interface
+1. [x] Replace the current pnpm-only discovery core with a provider interface
    for package/workspace discovery. After this: implement JS/npm/yarn/bun
-   providers.
+   providers. Completed in `feature/0.10-structural-domain-intelligence`:
+   `draftStructuralMap` now accepts structural discovery providers, default
+   pnpm workspace discovery is behind `pnpmStructuralDiscoveryProvider`, and
+   provider evidence is recorded on drafts.
 2. [ ] Add JS package-manager providers for npm, yarn, bun, and package.json
    workspaces, including lockfile/source evidence where cheap. After this:
    add non-JS fixtures.

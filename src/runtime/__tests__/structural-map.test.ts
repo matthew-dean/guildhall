@@ -12,6 +12,7 @@ import {
   requestStructuralMapCorrection,
   shapeStructuralDependencyRequest,
   submitStructuralMapForReview,
+  type StructuralDiscoveryProvider,
 } from '../structural-map.js'
 import {
   beginProjectDependencyConsumerReview,
@@ -47,6 +48,63 @@ afterEach(async () => {
 })
 
 describe('structural map drafting', () => {
+  it('runs structural discovery providers so package managers can be added without changing the draft core', async () => {
+    const customProvider: StructuralDiscoveryProvider = {
+      id: 'fixture-provider',
+      label: 'Fixture provider',
+      async detect() {
+        return {
+          detected: true,
+          evidence: [{ kind: 'manifest', ref: 'fixture.project', confidence: 'high' }],
+        }
+      },
+      async discover() {
+        return {
+          nodes: [
+            {
+              id: 'workspace:fixture',
+              kind: 'workspace',
+              label: 'Fixture workspace',
+              relativePath: '.',
+              evidence: [{ kind: 'manifest', ref: 'fixture.project', confidence: 'high' }],
+              confidence: 'high',
+            },
+            {
+              id: 'package:fixture-lib',
+              kind: 'package',
+              label: '@fixture/lib',
+              relativePath: 'lib',
+              packageName: '@fixture/lib',
+              packageId: 'fixture-lib',
+              scripts: { test: 'fixture test' },
+              evidence: [{ kind: 'manifest', ref: 'fixture.project#lib', confidence: 'high' }],
+              confidence: 'high',
+            },
+          ],
+          edges: [],
+          evidenceRefs: ['manifest:fixture.project'],
+        }
+      },
+    }
+
+    const draft = await draftStructuralMap({
+      projectId: 'fixture',
+      projectRoot,
+      discoveryProviders: [customProvider],
+      now: '2026-06-01T12:00:00.000Z',
+    })
+
+    expect(draft.nodes).toEqual(expect.arrayContaining([
+      expect.objectContaining({ id: 'workspace:fixture', kind: 'workspace' }),
+      expect.objectContaining({ id: 'package:fixture-lib', kind: 'package' }),
+      expect.objectContaining({
+        id: 'exec:fixture-lib:test',
+        command: 'pnpm --filter @fixture/lib test',
+      }),
+    ]))
+    expect(draft.evidenceRefs).toEqual(expect.arrayContaining(['provider:fixture-provider', 'manifest:fixture.project']))
+  })
+
   it('persists an evidence-backed draft without mutating target repo config', async () => {
     await writeRepoFixture(projectRoot, {
       name: '@example/root',

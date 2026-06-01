@@ -56,6 +56,24 @@ export interface StructuralMapNode {
   confidence: StructuralConfidence
 }
 
+export interface StructuralDiscoveryDetection {
+  detected: boolean
+  evidence: EvidenceRef[]
+}
+
+export interface StructuralDiscoveryResult {
+  nodes: StructuralMapNode[]
+  edges: StructuralMapEdge[]
+  evidenceRefs: string[]
+}
+
+export interface StructuralDiscoveryProvider {
+  id: string
+  label: string
+  detect: (input: { projectRoot: string }) => Promise<StructuralDiscoveryDetection> | StructuralDiscoveryDetection
+  discover: (input: { projectRoot: string }) => Promise<StructuralDiscoveryResult> | StructuralDiscoveryResult
+}
+
 export interface StructuralMapEdge {
   from: string
   to: string
@@ -169,16 +187,65 @@ export const structuralMapReviewMachine = defineStateMachine<
   },
 })
 
+export function defaultStructuralDiscoveryProviders(): StructuralDiscoveryProvider[] {
+  return [pnpmStructuralDiscoveryProvider]
+}
+
+export const pnpmStructuralDiscoveryProvider: StructuralDiscoveryProvider = {
+  id: 'pnpm-workspace',
+  label: 'pnpm workspace',
+  detect({ projectRoot }) {
+    const workspacePath = path.join(projectRoot, 'pnpm-workspace.yaml')
+    const detected = fs.existsSync(workspacePath)
+    return {
+      detected,
+      evidence: detected
+        ? evidence('manifest', 'pnpm-workspace.yaml', 'high')
+        : evidence('manifest', 'pnpm-workspace.yaml', 'low'),
+    }
+  },
+  async discover({ projectRoot }) {
+    const workspacePatterns = readPnpmWorkspacePatterns(path.join(projectRoot, 'pnpm-workspace.yaml'))
+    if (workspacePatterns.length === 0) {
+      return { nodes: [], edges: [], evidenceRefs: [] }
+    }
+    const packageNodes = await discoverPnpmWorkspacePackages(projectRoot, workspacePatterns)
+    return {
+      nodes: [
+        {
+          id: 'workspace:pnpm',
+          kind: 'workspace',
+          label: 'pnpm workspace',
+          relativePath: '.',
+          evidence: evidence('manifest', 'pnpm-workspace.yaml', 'high'),
+          confidence: 'high',
+        },
+        ...packageNodes,
+      ],
+      edges: [],
+      evidenceRefs: ['manifest:pnpm-workspace.yaml'],
+    }
+  },
+}
+
 export async function draftStructuralMap(input: {
   projectId: string
   projectRoot: string
+  discoveryProviders?: StructuralDiscoveryProvider[]
   now?: string
 }): Promise<StructuralMapDraft> {
   const now = input.now ?? new Date().toISOString()
   const projectRoot = path.resolve(input.projectRoot)
   const rootPackage = readJsonIfExists(path.join(projectRoot, 'package.json')) as PackageJson | undefined
-  const workspacePatterns = readPnpmWorkspacePatterns(path.join(projectRoot, 'pnpm-workspace.yaml'))
-  const packageNodes = await discoverWorkspacePackages(projectRoot, workspacePatterns)
+  const providers = input.discoveryProviders ?? defaultStructuralDiscoveryProviders()
+  const providerResults = await runStructuralDiscoveryProviders(projectRoot, providers)
+  const providerNodes = providerResults.flatMap(result => result.result.nodes)
+  const packageNodes = providerNodes.filter((node): node is StructuralMapNode & { kind: 'package' } => node.kind === 'package')
+  const providerEvidence = providerResults.flatMap(result => [
+    `provider:${result.provider.id}`,
+    ...result.result.evidenceRefs,
+  ])
+  const workspaceDetected = providerNodes.some(node => node.kind === 'workspace')
   const nodes: StructuralMapNode[] = [
     {
       id: 'project:root',
@@ -202,20 +269,13 @@ export async function draftStructuralMap(input: {
       kind: 'monorepo',
       label: 'Root monorepo',
       relativePath: '.',
-      evidence: evidence('manifest', 'pnpm-workspace.yaml', workspacePatterns.length > 0 ? 'high' : 'low'),
-      confidence: workspacePatterns.length > 0 ? 'high' : 'low',
+      evidence: workspaceDetected
+        ? providerResults.flatMap(result => result.detection.evidence)
+        : evidence('manifest', 'pnpm-workspace.yaml', 'low'),
+      confidence: workspaceDetected ? 'high' : 'low',
     },
   ]
-  if (workspacePatterns.length > 0) {
-    nodes.push({
-      id: 'workspace:pnpm',
-      kind: 'workspace',
-      label: 'pnpm workspace',
-      relativePath: '.',
-      evidence: evidence('manifest', 'pnpm-workspace.yaml', 'high'),
-      confidence: 'high',
-    })
-  }
+  nodes.push(...providerNodes.filter(node => node.kind !== 'package'))
   const edges: StructuralMapEdge[] = []
 
   for (const pkg of packageNodes) {
@@ -238,6 +298,9 @@ export async function draftStructuralMap(input: {
   }
   for (const edge of packageDependencyEdges(packageNodes)) {
     edges.push(edge)
+  }
+  for (const result of providerResults) {
+    edges.push(...result.result.edges)
   }
 
   if (hasNodeCopyEvidence(projectRoot, rootPackage)) {
@@ -277,7 +340,7 @@ export async function draftStructuralMap(input: {
     ownerQuestions,
     correctionRequests: [],
     transitionReceipts: [],
-    evidenceRefs: ['manifest:package.json', 'manifest:pnpm-workspace.yaml'],
+    evidenceRefs: uniqueStrings(['manifest:package.json', ...providerEvidence]),
   }
   await writeStructuralMap(projectRoot, draft)
   return draft
@@ -515,7 +578,32 @@ interface PackageJson {
   peerDependencies?: Record<string, string>
 }
 
-async function discoverWorkspacePackages(projectRoot: string, patterns: string[]): Promise<StructuralMapNode[]> {
+async function runStructuralDiscoveryProviders(
+  projectRoot: string,
+  providers: StructuralDiscoveryProvider[],
+): Promise<Array<{
+    provider: StructuralDiscoveryProvider
+    detection: StructuralDiscoveryDetection
+    result: StructuralDiscoveryResult
+  }>> {
+  const results: Array<{
+    provider: StructuralDiscoveryProvider
+    detection: StructuralDiscoveryDetection
+    result: StructuralDiscoveryResult
+  }> = []
+  for (const provider of providers) {
+    const detection = await provider.detect({ projectRoot })
+    if (!detection.detected) continue
+    results.push({
+      provider,
+      detection,
+      result: await provider.discover({ projectRoot }),
+    })
+  }
+  return results
+}
+
+async function discoverPnpmWorkspacePackages(projectRoot: string, patterns: string[]): Promise<StructuralMapNode[]> {
   const packageDirs = new Set<string>()
   for (const pattern of patterns) {
     if (pattern.endsWith('/*')) {
@@ -682,6 +770,10 @@ function uniqueNodes(nodes: StructuralMapNode[]): StructuralMapNode[] {
 function uniqueEdges(edges: StructuralMapEdge[]): StructuralMapEdge[] {
   return [...new Map(edges.map(edge => [`${edge.from}:${edge.kind}:${edge.to}`, edge])).values()]
     .sort((left, right) => `${left.from}:${left.to}`.localeCompare(`${right.from}:${right.to}`))
+}
+
+function uniqueStrings(values: string[]): string[] {
+  return [...new Set(values)].sort()
 }
 
 function evidence(kind: EvidenceRef['kind'], ref: string, confidence: StructuralConfidence): EvidenceRef[] {
