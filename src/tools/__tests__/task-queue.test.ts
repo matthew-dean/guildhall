@@ -88,6 +88,9 @@ describe('updateTask', () => {
   })
 
   it('normalizes reviewer ownership when a task moves into review', async () => {
+    await updateTask({ tasksPath, taskId: 'task-001', status: 'spec_review' })
+    await updateTask({ tasksPath, taskId: 'task-001', status: 'ready' })
+    await updateTask({ tasksPath, taskId: 'task-001', status: 'in_progress' })
     await updateTask({ tasksPath, taskId: 'task-001', status: 'review' })
     const raw = JSON.parse(await fs.readFile(tasksPath, 'utf-8'))
     expect(raw.tasks[0].status).toBe('review')
@@ -95,6 +98,10 @@ describe('updateTask', () => {
   })
 
   it('normalizes gate-checker ownership when a task moves into gate_check', async () => {
+    await updateTask({ tasksPath, taskId: 'task-001', status: 'spec_review' })
+    await updateTask({ tasksPath, taskId: 'task-001', status: 'ready' })
+    await updateTask({ tasksPath, taskId: 'task-001', status: 'in_progress' })
+    await updateTask({ tasksPath, taskId: 'task-001', status: 'review' })
     await updateTask({ tasksPath, taskId: 'task-001', status: 'gate_check' })
     const raw = JSON.parse(await fs.readFile(tasksPath, 'utf-8'))
     expect(raw.tasks[0].status).toBe('gate_check')
@@ -102,6 +109,9 @@ describe('updateTask', () => {
   })
 
   it('preserves an explicitly supplied assignee when provided alongside a status', async () => {
+    await updateTask({ tasksPath, taskId: 'task-001', status: 'spec_review' })
+    await updateTask({ tasksPath, taskId: 'task-001', status: 'ready' })
+    await updateTask({ tasksPath, taskId: 'task-001', status: 'in_progress' })
     await updateTask({
       tasksPath,
       taskId: 'task-001',
@@ -110,6 +120,16 @@ describe('updateTask', () => {
     })
     const raw = JSON.parse(await fs.readFile(tasksPath, 'utf-8'))
     expect(raw.tasks[0].assignedTo).toBe('custom-review-owner')
+  })
+
+  it('rejects impossible explicit status jumps through the transition boundary', async () => {
+    const result = await updateTask({ tasksPath, taskId: 'task-001', status: 'review' })
+
+    expect(result.success).toBe(false)
+    expect(result.error).toContain('cannot request review from exploring')
+
+    const raw = JSON.parse(await fs.readFile(tasksPath, 'utf-8'))
+    expect(raw.tasks[0].status).toBe('exploring')
   })
 
   it('updates task title', async () => {
@@ -609,6 +629,8 @@ describe('updateTask', () => {
       completedAt: '2026-04-29T00:00:00.000Z',
       assignedTo: 'worker-agent',
     })
+    await updateTask({ tasksPath, taskId: 'task-001', status: 'ready' })
+    await updateTask({ tasksPath, taskId: 'task-001', status: 'in_progress' })
 
     await updateTask({
       tasksPath,
@@ -710,6 +732,8 @@ describe('updateTask', () => {
         },
       ],
     })
+    await updateTask({ tasksPath, taskId: 'task-001', status: 'spec_review' })
+    await updateTask({ tasksPath, taskId: 'task-001', status: 'ready' })
 
     await updateTask({
       tasksPath,
@@ -747,7 +771,7 @@ describe('updateTask', () => {
     const result = await updateTask(
       {
         tasksPath,
-        status: 'review',
+        status: 'spec_review',
       },
       {
         current_task_id: 'task-001',
@@ -758,8 +782,7 @@ describe('updateTask', () => {
     expect(result.taskId).toBe('task-001')
 
     const raw = JSON.parse(await fs.readFile(tasksPath, 'utf-8'))
-    expect(raw.tasks[0].status).toBe('review')
-    expect(raw.tasks[0].assignedTo).toBe('reviewer-agent')
+    expect(raw.tasks[0].status).toBe('spec_review')
   })
 })
 
@@ -828,6 +851,8 @@ describe('engine tool wrappers', () => {
   })
 
   it('updateTaskTool infers the task id when exactly one task is active', async () => {
+    await updateTask({ tasksPath, taskId: 'task-001', status: 'spec_review' })
+    await updateTask({ tasksPath, taskId: 'task-001', status: 'ready' })
     await updateTask({ tasksPath, taskId: 'task-001', status: 'in_progress' })
     const result = await updateTaskTool.execute(
       {

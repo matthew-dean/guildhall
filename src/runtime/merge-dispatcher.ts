@@ -17,7 +17,7 @@ import type { Task, TaskQueue, TaskStatus } from '@guildhall/core'
 import type { ProjectLevers } from '@guildhall/levers'
 import type { GitDriver } from './git-driver.js'
 import { attemptRemoteSync } from './local-only-mode.js'
-import { applyTaskTransition } from './task-transition.js'
+import { applyTaskTransition, type TaskTransitionReceipt } from './task-transition.js'
 
 export type LandingStrategy = ProjectLevers['landing_strategy']['position']
 
@@ -73,6 +73,7 @@ export interface DispatchMergeResult {
    *     also produced)
    */
   newStatus: TaskStatus
+  transitionReceipt?: TaskTransitionReceipt
   /**
    * When non-null, the caller must append this task to the queue (a FR-25
    * fixup task parented to the failing merge's goal).
@@ -131,6 +132,13 @@ export async function dispatchMerge(
           detail: push.detail ?? 'push failed before PR creation',
         },
         newStatus: 'pending_pr',
+        transitionReceipt: landingTransitionReceipt({
+          task,
+          event: 'await_pull_request',
+          actor: 'merge-dispatcher',
+          evidenceRefs: ['task:landing:pending-pr'],
+          now,
+        }),
         degradedToLocal: true,
       }
     }
@@ -148,6 +156,13 @@ export async function dispatchMerge(
         ...(pr.detail ? { detail: pr.detail } : {}),
       },
       newStatus: 'pending_pr',
+      transitionReceipt: landingTransitionReceipt({
+        task,
+        event: 'await_pull_request',
+        actor: 'merge-dispatcher',
+        evidenceRefs: ['task:landing:pending-pr'],
+        now,
+      }),
     }
   }
 
@@ -170,6 +185,13 @@ export async function dispatchMerge(
         },
         // Conflict blocks the task — a fixup is queued separately.
         newStatus: 'blocked',
+        transitionReceipt: landingTransitionReceipt({
+          task,
+          event: 'landing_failed',
+          actor: 'merge-dispatcher',
+          evidenceRefs: ['task:landing:conflict'],
+          now,
+        }),
         fixupTask: fixup,
       }
     }
@@ -180,6 +202,13 @@ export async function dispatchMerge(
           detail: merge.detail ?? 'cherry-pick failed; no conflict recorded',
       },
       newStatus: 'blocked',
+      transitionReceipt: landingTransitionReceipt({
+        task,
+        event: 'landing_failed',
+        actor: 'merge-dispatcher',
+        evidenceRefs: ['task:landing:failed'],
+        now,
+      }),
     }
   }
 
@@ -223,6 +252,25 @@ export async function dispatchMerge(
     },
     newStatus: 'done',
     degradedToLocal: true,
+  }
+}
+
+function landingTransitionReceipt(input: {
+  task: Task
+  event: 'await_pull_request' | 'landing_failed'
+  actor: string
+  evidenceRefs: string[]
+  now: string
+}): TaskTransitionReceipt {
+  const result = applyTaskTransition(input)
+  if (result.kind === 'rejected') {
+    throw new Error(
+      `Task ${input.task.id} cannot ${input.event.replaceAll('_', ' ')} from ${input.task.status}: ${result.reason}`,
+    )
+  }
+  return {
+    ...result.receipt,
+    machineId: 'task-lifecycle',
   }
 }
 

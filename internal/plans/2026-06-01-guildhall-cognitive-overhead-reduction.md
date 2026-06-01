@@ -3037,10 +3037,10 @@ Rules:
     backed by `defineStateMachine`/`transition`, a pure `applyTaskTransition`
     result, a throwing mutation helper for call sites, explicit lifecycle
     table rows, `start_worker` readiness/hierarchy guards, required completion
-    evidence, terminal `done`/`blocked`/`shelved` states, and explicit
-    import-draft intake events.
+    evidence, terminal `shelved` handling, explicit `done` landing and
+    `blocked` recovery events, and explicit import-draft intake events.
 
-- [ ] **Step 3: Replace direct writes in hot paths**
+- [x] **Step 3: Replace direct writes in hot paths**
 
 Use `applyTaskTransition` in:
 
@@ -3052,15 +3052,22 @@ Use `applyTaskTransition` in:
 
 Do not attempt to migrate every status write in one commit. After each replaced hot path, add or update a focused test.
 
-  - Partial evidence: Routed deterministic ready-claim, worker handoff recovery,
+  - Evidence: Routed deterministic ready-claim, worker handoff recovery,
     lean command review, acceptance command gates, guild gates, handoff step
     advance, reviewer fan-out approve/revise/adjudication, spec approval,
     required split materialization, import-draft normalization/promotion, and
     superseded fixup shelving through the task transition boundary.
-  - Remaining: generic `update-task` status writes, post-completion landing
-    reconciliation, dispatch-merge `pending_pr`/`done`/`blocked` assignments,
-    and several legacy orchestrator recovery writes still need follow-up
-    migration before this step should be checked off.
+  - Evidence: Routed the remaining hot paths through `src/runtime/task-transition.ts`:
+    generic `update-task` status changes validate with `applyTaskTransition`,
+    merge dispatcher `pending_pr`/`blocked` outcomes return transition receipts,
+    post-completion landing reconciliation applies `landing_failed`/`complete`
+    events, and legacy orchestrator setup/recovery writes use `block` or
+    `recover_to_*` events.
+  - Evidence: `rg` over Task 9 scoped files no longer finds the named remaining
+    direct writes (`taskAfter.status = 'blocked'`,
+    `taskAfter.status = mergeOutcome.newStatus`,
+    `current.status = mergeOutcome.newStatus`,
+    `task.status = recoveryStatus`, or generic `if (explicitStatus) task.status`).
 
 - [x] **Step 4: Run focused tests**
 
@@ -3070,14 +3077,15 @@ Run:
 pnpm vitest run src/runtime/__tests__/task-transition.test.ts src/runtime/__tests__/orchestrator.test.ts src/runtime/__tests__/intake.test.ts src/runtime/__tests__/merge-dispatcher.test.ts src/tools/__tests__/task-queue.test.ts --reporter=dot
 ```
 
-  - Evidence: `pnpm vitest run src/runtime/__tests__/task-transition.test.ts --reporter=dot`
-    passed with 7 tests.
-  - Evidence: `pnpm vitest run src/runtime/__tests__/task-transition.test.ts src/runtime/__tests__/orchestrator.test.ts src/runtime/__tests__/intake.test.ts src/runtime/__tests__/merge-dispatcher.test.ts src/tools/__tests__/task-queue.test.ts --reporter=dot`
-    passed with 384 tests.
-  - Typecheck note: `pnpm typecheck` currently exits 2 on concurrent Inbox
-    type errors in `src/runtime/inbox.ts`, `src/runtime/__tests__/inbox.test.ts`,
-    `src/runtime/attention.ts`, and `src/runtime/serve.ts`; those files are
-    outside Worker B scope and were already dirty.
+  - Evidence: Worker F reran `pnpm vitest run src/runtime/__tests__/task-transition.test.ts src/runtime/__tests__/intake.test.ts src/runtime/__tests__/merge-dispatcher.test.ts src/tools/__tests__/task-queue.test.ts --reporter=dot`; it passed with 98 tests.
+  - Evidence: Worker F reran the full focused command above; it failed with 7
+    existing orchestrator shaping/question failures in `src/runtime/__tests__/orchestrator.test.ts`
+    (`awaiting_human` idle summaries, inferred question text/backfill, stale
+    starter-question cleanup, deterministic recovery spec seed text, fallback
+    brief processing, and two stop-after/waiting-on-user assertions). The
+    failing assertions do not exercise the Task 9 status-transition hot paths
+    changed in this step.
+  - Evidence: Worker F reran `pnpm typecheck`; it passed.
 
 Commit:
 

@@ -965,7 +965,13 @@ export async function rerunTaskStage(
         error: `Task ${input.taskId} is in status '${task.status}', expected 'review' or 'gate_check'`,
       }
     }
-    task.status = 'review'
+    transitionTaskStatus({
+      task,
+      event: 'restart_review',
+      actor: 'human',
+      evidenceRefs: ['task:human-restart-review'],
+      now,
+    })
     task.assignedTo = 'reviewer-agent'
     task.updatedAt = now
     queue.lastUpdated = now

@@ -15,9 +15,17 @@ export type TaskTransitionEvent =
   | 'mark_ready'
   | 'start_worker'
   | 'request_review'
+  | 'restart_review'
   | 'start_gate_check'
   | 'revise'
   | 'complete'
+  | 'await_pull_request'
+  | 'landing_failed'
+  | 'recover_to_exploring'
+  | 'recover_to_spec_review'
+  | 'recover_to_ready'
+  | 'recover_to_in_progress'
+  | 'recover_to_review'
   | 'block'
   | 'shelve'
 
@@ -104,6 +112,7 @@ const taskLifecycleStates: StateMachineStates<TaskTransitionState, TaskTransitio
   },
   review: {
     on: {
+      restart_review: { to: 'review' },
       revise: { to: 'in_progress' },
       start_gate_check: { to: 'gate_check' },
       complete: { to: 'done', guard: requireCompletionEvidence },
@@ -112,6 +121,7 @@ const taskLifecycleStates: StateMachineStates<TaskTransitionState, TaskTransitio
   },
   gate_check: {
     on: {
+      restart_review: { to: 'review' },
       revise: { to: 'in_progress' },
       complete: { to: 'done', guard: requireCompletionEvidence },
       block,
@@ -123,16 +133,29 @@ const taskLifecycleStates: StateMachineStates<TaskTransitionState, TaskTransitio
       block,
     },
   },
-  blocked: { on: {} },
+  blocked: {
+    on: {
+      recover_to_exploring: { to: 'exploring' },
+      recover_to_spec_review: { to: 'spec_review' },
+      recover_to_ready: { to: 'ready' },
+      recover_to_in_progress: { to: 'in_progress' },
+      recover_to_review: { to: 'review' },
+    },
+  },
   shelved: { on: {} },
-  done: { on: {} },
+  done: {
+    on: {
+      await_pull_request: { to: 'pending_pr' },
+      landing_failed: { to: 'blocked' },
+    },
+  },
 }
 
 export const taskLifecycleMachine = defineStateMachine<TaskTransitionState, TaskTransitionEvent, TaskTransitionContext>({
   id: 'task-lifecycle',
   version: 1,
   initial: 'proposed',
-  terminal: ['done', 'blocked', 'shelved'],
+  terminal: ['shelved'],
   states: taskLifecycleStates,
 })
 

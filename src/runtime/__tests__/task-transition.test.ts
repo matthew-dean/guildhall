@@ -102,6 +102,55 @@ describe('task transitions', () => {
     expect(applied).toMatchObject({ kind: 'applied', nextState: 'done' })
   })
 
+  it('routes landing outcomes after a task first reaches done', () => {
+    const pendingPr = applyTaskTransition({
+      task: { id: 'task-1', status: 'done' },
+      event: 'await_pull_request',
+      actor: 'merge-dispatcher',
+      now,
+      evidenceRefs: ['task:landing:pending-pr'],
+    })
+    const landed = applyTaskTransition({
+      task: { id: 'task-2', status: 'pending_pr' },
+      event: 'complete',
+      actor: 'merge-dispatcher',
+      now,
+      evidenceRefs: ['task:pr-merged'],
+      requiredEvidencePresent: true,
+    })
+
+    expect(pendingPr).toMatchObject({
+      kind: 'applied',
+      nextState: 'pending_pr',
+      receipt: { from: 'done', to: 'pending_pr', event: 'await_pull_request' },
+    })
+    expect(landed).toMatchObject({ kind: 'applied', nextState: 'done' })
+  })
+
+  it('routes legacy blocked-task recovery through explicit recovery events', () => {
+    const review = applyTaskTransition({
+      task: { id: 'task-1', status: 'blocked' },
+      event: 'recover_to_review',
+      actor: 'orchestrator-recovery',
+      now,
+      evidenceRefs: ['task:recovery:review-ready'],
+    })
+    const ready = applyTaskTransition({
+      task: { id: 'task-2', status: 'blocked' },
+      event: 'recover_to_ready',
+      actor: 'orchestrator-recovery',
+      now,
+      evidenceRefs: ['task:recovery:runnable'],
+    })
+
+    expect(review).toMatchObject({
+      kind: 'applied',
+      nextState: 'review',
+      receipt: { from: 'blocked', to: 'review', event: 'recover_to_review' },
+    })
+    expect(ready).toMatchObject({ kind: 'applied', nextState: 'ready' })
+  })
+
   it('normalizes imported drafts through explicit intake events', () => {
     const draft = transitionTaskStatus({
       task: { id: 'task-1', status: 'exploring' },

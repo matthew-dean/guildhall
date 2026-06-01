@@ -15,7 +15,7 @@ import {
   renderStructuredSpecMarkdown,
 } from '@guildhall/core'
 import { atomicWriteText } from '@guildhall/sessions'
-import { applyTaskTransition } from '../runtime/task-transition.js'
+import { applyTaskTransition, type TaskTransitionEvent } from '../runtime/task-transition.js'
 
 const TASKS_PATH_SCHEMA = z.string().describe('Absolute path to the TASKS.json file')
 
@@ -198,9 +198,29 @@ export async function updateTask(
       }
     }
 
-    if (input.title !== undefined) task.title = input.title
     const explicitStatus = nextStatus
-    if (explicitStatus) task.status = explicitStatus
+    const statusTransition = explicitStatus && explicitStatus !== task.status
+      ? applyTaskTransition({
+        task,
+        event: eventForExplicitStatus(task.status, explicitStatus),
+        actor: currentAgentId || 'update-task',
+        evidenceRefs: [`update-task:status:${task.status}->${explicitStatus}`],
+        now: new Date().toISOString(),
+        requiredEvidencePresent: explicitStatus === 'done' ? updateIncludesCompletionEvidence(input, task) : undefined,
+      })
+      : null
+    if (statusTransition?.kind === 'rejected') {
+      return {
+        success: false,
+        taskId,
+        error:
+          `Task ${taskId} cannot ${eventForExplicitStatus(task.status, explicitStatus!).replaceAll('_', ' ')} ` +
+          `from ${task.status}: ${statusTransition.reason}`,
+      }
+    }
+
+    if (input.title !== undefined) task.title = input.title
+    if (statusTransition?.kind === 'applied') task.status = statusTransition.nextState
     if (input.assignedTo !== undefined) {
       if ((input.assignedTo ?? '').trim() === '') delete task.assignedTo
       else task.assignedTo = input.assignedTo
@@ -475,6 +495,50 @@ function normalizeAssignmentForStatus(
       if (opts.explicitStatus) delete task.assignedTo
       return
   }
+}
+
+function eventForExplicitStatus(from: z.infer<typeof TaskStatus>, to: z.infer<typeof TaskStatus>): TaskTransitionEvent {
+  switch (to) {
+    case 'import_draft':
+      return 'mark_import_draft'
+    case 'exploring':
+      return from === 'import_draft' ? 'start_intake' : 'recover_to_exploring'
+    case 'spec_review':
+      return from === 'blocked' ? 'recover_to_spec_review' : 'mark_spec_review'
+    case 'ready':
+      return from === 'blocked' ? 'recover_to_ready' : 'mark_ready'
+    case 'in_progress':
+      if (from === 'review' || from === 'gate_check') return 'revise'
+      if (from === 'blocked') return 'recover_to_in_progress'
+      return 'start_worker'
+    case 'review':
+      return from === 'blocked' ? 'recover_to_review' : 'request_review'
+    case 'gate_check':
+      return 'start_gate_check'
+    case 'pending_pr':
+      return 'await_pull_request'
+    case 'done':
+      return 'complete'
+    case 'blocked':
+      return 'block'
+    case 'shelved':
+      return 'shelve'
+    case 'proposed':
+      return 'recover_to_exploring'
+  }
+}
+
+function updateIncludesCompletionEvidence(input: UpdateTaskInput, task: z.infer<typeof Task>): boolean {
+  if (input.completedAt?.trim()) return true
+  if (input.gateResults?.some((result) => result.type === 'hard' && result.passed)) return true
+  if (Array.isArray(input.acceptanceCriteria)) {
+    for (const criterion of input.acceptanceCriteria) {
+      const parsed = AcceptanceCriteria.safeParse(criterion)
+      if (parsed.success && parsed.data.met === true) return true
+    }
+  }
+  if (task.gateResults.some((result) => result.type === 'hard' && result.passed)) return true
+  return task.acceptanceCriteria.length > 0 && task.acceptanceCriteria.every((criterion) => criterion.met === true)
 }
 
 function hasTaskMutation(input: UpdateTaskInput): boolean {

@@ -78,7 +78,7 @@ import {
   type ProjectLevers,
 } from '@guildhall/levers'
 import { buildContext, resolveLikelyTaskFiles } from './context-builder.js'
-import { applyTaskTransition, transitionTaskStatus } from './task-transition.js'
+import { applyTaskTransition, transitionTaskStatus, type TaskTransitionEvent } from './task-transition.js'
 import { recordTaskReflection } from './learning.js'
 import {
   modelForAgentName,
@@ -1152,6 +1152,23 @@ const ONE_TASK_STOP_STATUSES: ReadonlySet<TaskStatus> = new Set<TaskStatus>([
 ])
 const EXPLORING_NO_PROGRESS_ESCALATION_AFTER = 3
 const WORKER_NO_PROGRESS_ESCALATION_AFTER = 5
+
+function recoveryEventForStatus(status: TaskStatus): TaskTransitionEvent {
+  switch (status) {
+    case 'exploring':
+      return 'recover_to_exploring'
+    case 'spec_review':
+      return 'recover_to_spec_review'
+    case 'ready':
+      return 'recover_to_ready'
+    case 'in_progress':
+      return 'recover_to_in_progress'
+    case 'review':
+      return 'recover_to_review'
+    default:
+      throw new Error(`No task recovery transition exists for status ${status}`)
+  }
+}
 
 function looksLikePlaintextUserQuestion(text: string): boolean {
   const trimmed = text.trim()
@@ -2618,7 +2635,13 @@ export class Orchestrator {
             const queuedTask = queue.tasks.find((candidate) => candidate.id === task.id)
             const now = this.now()
             if (queuedTask) {
-              queuedTask.status = 'blocked'
+              transitionTaskStatus({
+                task: queuedTask,
+                event: 'block',
+                actor: 'orchestrator-worktree-setup',
+                evidenceRefs: ['task:worktree-setup:dirty-checkout'],
+                now,
+              })
               queuedTask.assignedTo = null
               queuedTask.blockReason =
                 `Guildhall could not start work because the target repo is dirty: ${message}. ` +
@@ -2735,7 +2758,13 @@ export class Orchestrator {
         const queuedTask = queue.tasks.find((candidate) => candidate.id === task.id)
         const now = this.now()
         if (queuedTask) {
-          queuedTask.status = 'blocked'
+          transitionTaskStatus({
+            task: queuedTask,
+            event: 'block',
+            actor: 'orchestrator-worktree-setup',
+            evidenceRefs: ['task:worktree-setup:create-failed'],
+            now,
+          })
           queuedTask.assignedTo = null
           queuedTask.blockReason =
             `Guildhall could not create a task worktree: ${message}. ` +
@@ -2861,7 +2890,13 @@ export class Orchestrator {
           const queuedTask = queue.tasks.find((candidate) => candidate.id === task.id)
           const now = this.now()
           if (queuedTask) {
-            queuedTask.status = 'blocked'
+            transitionTaskStatus({
+              task: queuedTask,
+              event: 'block',
+              actor: 'orchestrator-worktree-bootstrap',
+              evidenceRefs: ['task:worktree-bootstrap:failed'],
+              now,
+            })
             queuedTask.assignedTo = null
             queuedTask.blockReason =
               `Guildhall could not start work because task setup failed: ${msg}. ` +
@@ -4159,7 +4194,23 @@ export class Orchestrator {
           newest.resolution =
             'Superseded because the blocker describes a self-authored verification failure in files the worker already touched. Guildhall kept the task in the worker repair lane.'
           newest.resolvedBy = 'orchestrator'
-          taskAfter.status = 'in_progress'
+          if (taskAfter.status === 'blocked') {
+            transitionTaskStatus({
+              task: taskAfter,
+              event: 'recover_to_in_progress',
+              actor: 'self-authored-verification-recovery',
+              evidenceRefs: ['task:worker-owned-verification'],
+              now,
+            })
+          } else if (taskAfter.status !== 'in_progress') {
+            transitionTaskStatus({
+              task: taskAfter,
+              event: 'revise',
+              actor: 'self-authored-verification-recovery',
+              evidenceRefs: ['task:worker-owned-verification'],
+              now,
+            })
+          }
           ensureWorkerOwnership(taskAfter)
           taskAfter.blockReason = undefined
           const classification = classifyAgentFailure({
@@ -4234,7 +4285,13 @@ export class Orchestrator {
       if (afterStatus === 'done' && beforeStatus !== 'done') {
         const autoCommit = await this.maybeAutoCommitCompletedTaskWork(taskAfter)
         if (!autoCommit.ok) {
-          taskAfter.status = 'blocked'
+          transitionTaskStatus({
+            task: taskAfter,
+            event: 'landing_failed',
+            actor: 'orchestrator-landing',
+            evidenceRefs: ['task:landing:auto-commit-failed'],
+            now: this.now(),
+          })
           taskAfter.assignedTo = null
           taskAfter.blockReason =
             `Guildhall could not auto-commit completed work: ${autoCommit.detail ?? 'unknown git error'}.`
@@ -4316,7 +4373,13 @@ export class Orchestrator {
                 detail: 'worktree isolation disabled — shared-checkout work checkpointed to task branch',
               }
             } else {
-              taskAfter.status = 'blocked'
+              transitionTaskStatus({
+                task: taskAfter,
+                event: 'landing_failed',
+                actor: 'orchestrator-landing',
+                evidenceRefs: ['task:landing:checkpoint-failed'],
+                now: this.now(),
+              })
               taskAfter.assignedTo = null
               taskAfter.blockReason =
                 'Guildhall completed the task work but could not checkpoint shared-checkout edits into a task branch. Resolve the repo state and resume the task before treating it as done.'
@@ -4396,7 +4459,9 @@ export class Orchestrator {
             now: this.now(),
           })
           taskAfter.mergeRecord = mergeOutcome.record
-          taskAfter.status = mergeOutcome.newStatus
+          if (mergeOutcome.transitionReceipt) {
+            taskAfter.status = mergeOutcome.transitionReceipt.to
+          }
           if (mergeOutcome.fixupTask) {
             appendFixupTask(queueAfter, mergeOutcome.fixupTask, this.now())
           }
@@ -5928,7 +5993,13 @@ export class Orchestrator {
         current.completedAt = now
         const autoCommit = await this.maybeAutoCommitCompletedTaskWork(current)
         if (!autoCommit.ok) {
-          current.status = 'blocked'
+          transitionTaskStatus({
+            task: current,
+            event: 'landing_failed',
+            actor: 'acceptance-command-gates',
+            evidenceRefs: ['task:landing:auto-commit-failed'],
+            now,
+          })
           current.assignedTo = null
           current.blockReason =
             `Guildhall could not auto-commit completed work: ${autoCommit.detail ?? 'unknown git error'}.`
@@ -5965,7 +6036,9 @@ export class Orchestrator {
               now: this.now(),
             })
             current.mergeRecord = mergeOutcome.record
-            current.status = mergeOutcome.newStatus
+            if (mergeOutcome.transitionReceipt) {
+              current.status = mergeOutcome.transitionReceipt.to
+            }
             if (mergeOutcome.fixupTask) appendFixupTask(queue, mergeOutcome.fixupTask, this.now())
             if (mergeOutcome.newStatus === 'done') shelveSupersededFixupTasks(queue, current.id, this.now())
           } else if (!current.mergeRecord) {
@@ -7083,7 +7156,13 @@ export class Orchestrator {
       } else if (isRecoverableStaleReviewCheckpointBlocker(task)) {
         resolveRecoverableStaleReviewCheckpointEscalations(task, now)
         if (activeEscalations(task).length > 0) continue
-        task.status = 'review'
+        transitionTaskStatus({
+          task,
+          event: 'recover_to_review',
+          actor: 'orchestrator-recovery',
+          evidenceRefs: ['task:recovery:stale-review-checkpoint'],
+          now,
+        })
         task.assignedTo = 'reviewer-agent'
         task.blockReason = undefined
         task.notes.push({
@@ -7156,7 +7235,13 @@ export class Orchestrator {
           'Superseded after reviewer availability failures stopped counting as substantive rejection.',
         )
         if (activeEscalations(task).length > 0) continue
-        task.status = 'review'
+        transitionTaskStatus({
+          task,
+          event: 'recover_to_review',
+          actor: 'orchestrator-recovery',
+          evidenceRefs: ['task:recovery:infra-only-max-revisions'],
+          now,
+        })
         task.assignedTo = 'reviewer-agent'
         task.blockReason = undefined
         task.notes.push({
@@ -7188,7 +7273,13 @@ export class Orchestrator {
       } else {
         continue
       }
-      task.status = recoveryStatus
+      transitionTaskStatus({
+        task,
+        event: recoveryEventForStatus(recoveryStatus),
+        actor: 'orchestrator-recovery',
+        evidenceRefs: [`task:recovery:${recoveryStatus}`],
+        now,
+      })
       task.assignedTo = recoveryAssignee
       task.blockReason = undefined
       task.notes.push({
@@ -7292,7 +7383,13 @@ export class Orchestrator {
       if (task.mergeRecord) continue
       if (!task.worktreePath?.trim()) continue
       if (!task.branchName?.trim() || !task.baseBranch?.trim()) {
-        task.status = 'blocked'
+        transitionTaskStatus({
+          task,
+          event: 'landing_failed',
+          actor: 'landing-reconciliation',
+          evidenceRefs: ['task:landing:missing-branch-metadata'],
+          now: this.now(),
+        })
         task.assignedTo = null
         task.blockReason =
           'Guildhall found completed work in a task worktree, but branch metadata is missing, so it cannot safely land the work.'
@@ -7304,7 +7401,13 @@ export class Orchestrator {
 
       const autoCommit = await this.maybeAutoCommitCompletedTaskWork(task)
       if (!autoCommit.ok) {
-        task.status = 'blocked'
+        transitionTaskStatus({
+          task,
+          event: 'landing_failed',
+          actor: 'landing-reconciliation',
+          evidenceRefs: ['task:landing:auto-commit-failed'],
+          now: this.now(),
+        })
         task.assignedTo = null
         task.blockReason =
           `Guildhall found completed work in a task worktree, but could not commit it before landing: ${autoCommit.detail ?? 'unknown git error'}.`
@@ -7335,7 +7438,9 @@ export class Orchestrator {
         now: this.now(),
       })
       task.mergeRecord = mergeOutcome.record
-      task.status = mergeOutcome.newStatus
+      if (mergeOutcome.transitionReceipt) {
+        task.status = mergeOutcome.transitionReceipt.to
+      }
       if (mergeOutcome.fixupTask) appendFixupTask(queue, mergeOutcome.fixupTask, this.now())
       if (mergeOutcome.newStatus === 'done') shelveSupersededFixupTasks(queue, task.id, this.now())
       task.updatedAt = this.now()
@@ -7368,7 +7473,14 @@ export class Orchestrator {
       if (!pr.ok || pr.state?.toUpperCase() !== 'MERGED') continue
 
       const previous = task.mergeRecord
-      task.status = 'done'
+      transitionTaskStatus({
+        task,
+        event: 'complete',
+        actor: 'pending-pr-reconciliation',
+        evidenceRefs: ['task:pr-merged'],
+        now: this.now(),
+        requiredEvidencePresent: true,
+      })
       task.assignedTo = null
       task.mergeRecord = {
         fromBranch: previous?.fromBranch ?? branch,
@@ -8112,7 +8224,13 @@ export class Orchestrator {
           afterStatus = queuedTask?.status ?? task.status
           return
         }
-        queuedTask.status = 'blocked'
+        transitionTaskStatus({
+          task: queuedTask,
+          event: 'block',
+          actor: 'empty-assistant-recovery',
+          evidenceRefs: ['task:worker-recovery-checkpoint'],
+          now,
+        })
         queuedTask.assignedTo = null
         queuedTask.blockReason = blockReason
         queuedTask.updatedAt = now
