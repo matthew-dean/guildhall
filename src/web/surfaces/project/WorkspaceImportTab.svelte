@@ -8,6 +8,7 @@
   import Icon from '../../lib/Icon.svelte'
   import Markdown from '../../lib/Markdown.svelte'
   import SideDrawer from '../../lib/SideDrawer.svelte'
+  import UtilityPanel from '../../lib/UtilityPanel.svelte'
   import WizardStepper from '../../lib/WizardStepper.svelte'
   import { project } from '../../lib/project.svelte.js'
   import { nav } from '../../lib/nav.svelte.js'
@@ -1075,7 +1076,7 @@
           </div>
           <Stack gap="4">
           {#each primaryAreas as area (area.key)}
-            <div class:selected={selectedAreaKeys.includes(area.key)} class="source-card">
+            <UtilityPanel className="source-card" selected={selectedAreaKeys.includes(area.key)} tone="neutral">
               <Row justify="between" align="start" gap="4" wrap>
                 <div class="card-main">
                   <Stack gap="3">
@@ -1112,7 +1113,7 @@
                   {/if}
                 </ActionBar>
               </Row>
-            </div>
+            </UtilityPanel>
           {/each}
           </Stack>
           {#if secondaryAreas.length > 0}
@@ -1134,7 +1135,7 @@
               </div>
               <Stack gap="4">
               {#each secondaryAreas as area (area.key)}
-                <div class:selected={selectedAreaKeys.includes(area.key)} class="source-card secondary">
+                <UtilityPanel className="source-card secondary" selected={selectedAreaKeys.includes(area.key)} tone="neutral">
                   <Row justify="between" align="start" gap="4" wrap>
                     <div class="card-main">
                       <Stack gap="3">
@@ -1169,7 +1170,7 @@
                       {/if}
                     </ActionBar>
                   </Row>
-                </div>
+                </UtilityPanel>
               {/each}
               </Stack>
             </details>
@@ -1210,7 +1211,7 @@
         {#if currentArea}
           <Stack gap="4">
             {#each currentAreaPrimarySources as group (group.key)}
-              <div class:selected={selectedSourceKeys.includes(group.key)} class="source-card">
+              <UtilityPanel className="source-card" selected={selectedSourceKeys.includes(group.key)} tone="neutral">
                 <Row justify="between" align="start" gap="4" wrap>
                   <div class="card-main">
                     <Stack gap="3">
@@ -1249,7 +1250,7 @@
                     </Button>
                   </ActionBar>
                 </Row>
-              </div>
+              </UtilityPanel>
             {/each}
           </Stack>
           {#if currentAreaSecondarySources.length > 0}
@@ -1287,7 +1288,7 @@
                 {#if individualSourceReviewOpen}
                 <Stack gap="4">
                   {#each currentAreaSecondarySources as group (group.key)}
-                    <div class:selected={selectedSourceKeys.includes(group.key)} class="source-card secondary">
+                    <UtilityPanel className="source-card secondary" selected={selectedSourceKeys.includes(group.key)} tone="neutral">
                       <Row justify="between" align="start" gap="4" wrap>
                         <label class="source-check">
                           <input
@@ -1320,7 +1321,7 @@
                           Details
                         </Button>
                       </Row>
-                    </div>
+                    </UtilityPanel>
                   {/each}
                 </Stack>
                 {/if}
@@ -1912,22 +1913,11 @@
     flex: 1;
     min-width: 0;
   }
-  .source-card {
-    border: 1px solid var(--border);
-    border-radius: var(--r-1);
-    background: var(--bg-raised);
-    padding: var(--s-4);
+  :global(.source-card) {
   }
-  .source-card.selected {
-    border-color: color-mix(in srgb, var(--accent) 50%, var(--border));
-    background: color-mix(in srgb, var(--accent) 12%, var(--bg-raised));
-  }
-  .source-card.secondary {
-    background: var(--surface-neutral);
-  }
-  .source-card.secondary.selected {
-    border-color: color-mix(in srgb, var(--accent) 50%, var(--border));
-    background: color-mix(in srgb, var(--accent) 12%, var(--surface-neutral));
+  :global(.source-card.secondary) {
+    --panel-glow:
+      radial-gradient(circle at 80% 20%, color-mix(in srgb, var(--accent) 4%, transparent), transparent 28%);
   }
   .source-title-row {
     display: flex;

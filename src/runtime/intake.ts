@@ -1,6 +1,6 @@
 import fs from 'node:fs/promises'
 import path from 'node:path'
-import { TaskQueue, type Task, type TaskRequest, type TaskStatus } from '@guildhall/core'
+import { TaskQueue, type AgentQuestion, type RequestIntake, type Task, type TaskRequest, type TaskStatus } from '@guildhall/core'
 import { atomicWriteText } from '@guildhall/sessions'
 import {
   appendExploringTranscript,
@@ -76,6 +76,10 @@ export interface IntakeInput {
   title?: string
   /** User-facing routed request metadata for Thread projection. */
   request?: TaskRequest
+  /** Optional precomputed intake state when another flow already resolved routing questions. */
+  requestIntakeOverride?: RequestIntake
+  /** Optional explicit open questions. Use `[]` to suppress inferred questions. */
+  openQuestionsOverride?: AgentQuestion[] | undefined
 }
 
 export interface IntakeResult {
@@ -96,11 +100,15 @@ export async function createExploringTask(input: IntakeInput): Promise<IntakeRes
 
   const now = new Date().toISOString()
   const title = compactStoredLabel(input.title, input.ask, 'New request')
-  const requestIntake = analyzeRequestIntake({
+  const requestIntakeAnalysis = analyzeRequestIntake({
     ask: input.ask,
     title,
     createdAt: now,
   })
+  const requestIntake = input.requestIntakeOverride ?? requestIntakeAnalysis.requestIntake
+  const openQuestions = input.openQuestionsOverride ?? (
+    requestIntakeAnalysis.openQuestion ? [requestIntakeAnalysis.openQuestion] : undefined
+  )
 
   const task: Task = {
     id,
@@ -123,8 +131,8 @@ export async function createExploringTask(input: IntakeInput): Promise<IntakeRes
     remediationAttempts: 0,
     origination: 'human',
     ...(input.request ? { request: input.request } : {}),
-    requestIntake: requestIntake.requestIntake,
-    ...(requestIntake.openQuestion ? { openQuestions: [requestIntake.openQuestion] } : {}),
+    requestIntake,
+    ...(openQuestions ? { openQuestions } : {}),
     createdAt: now,
     updatedAt: now,
   }

@@ -6,10 +6,13 @@
 <script lang="ts">
   import Button from '../../lib/Button.svelte'
   import Card from '../../lib/Card.svelte'
+  import CardList from '../../lib/CardList.svelte'
+  import CardListItem from '../../lib/CardListItem.svelte'
   import Chip from '../../lib/Chip.svelte'
   import Icon from '../../lib/Icon.svelte'
   import OverviewTaskRow from '../../lib/OverviewTaskRow.svelte'
   import StatusDot from '../../lib/StatusDot.svelte'
+  import UtilityPanel from '../../lib/UtilityPanel.svelte'
   import WorkMixChart from '../../lib/WorkMixChart.svelte'
   import type { WorkMixSegment } from '../../lib/WorkMixChart.svelte'
   import { friendlyDomain, friendlyStatus } from '../../lib/display.js'
@@ -573,7 +576,7 @@
         <p class="path">{displayPath}</p>
       {/if}
     </div>
-    <div class="live-card live-card-{projectTicker.tone}">
+    <UtilityPanel className={`live-card live-card-${projectTicker.tone}`} tone={projectTicker.tone === 'danger' ? 'danger' : projectTicker.tone === 'warn' ? 'warn' : projectTicker.tone === 'active' || projectTicker.tone === 'running' ? 'ok' : 'accent'}>
       <StatusDot tone={projectTicker.tone} pulse={projectTicker.pulse} size="sm" />
       <div>
         <strong>{projectTicker.actorLabel ?? projectTicker.label}</strong>
@@ -582,7 +585,7 @@
       {#if projectTicker.timeLabel}
         <small>{projectTicker.timeLabel}</small>
       {/if}
-    </div>
+    </UtilityPanel>
   </section>
 
   <section class="overview-grid overview-grid-main">
@@ -604,7 +607,7 @@
       {/if}
     </Card>
 
-    <Card title="Do this next" titleTag="h2" tone={nextAction.tone === 'danger' ? 'danger' : nextAction.tone === 'warn' ? 'warn' : nextAction.tone === 'running' ? 'ok' : 'accent'} className="overview-card">
+    <Card title="Do this next" titleTag="h2" tone={nextAction.tone === 'danger' ? 'danger' : nextAction.tone === 'warn' ? 'warn' : nextAction.tone === 'running' ? 'ok' : 'accent'} variant="callout" railStrength="strong" className="overview-card">
       <div class="next-action">
         <Chip label={nextAction.tone === 'running' ? 'Live' : nextAction.tone === 'warn' || nextAction.tone === 'danger' ? 'Needs attention' : 'Ready'} tone={nextAction.tone === 'danger' ? 'danger' : nextAction.tone === 'warn' ? 'warn' : nextAction.tone === 'running' ? 'ok' : 'neutral'} />
         <h2>{nextAction.label}</h2>
@@ -646,17 +649,17 @@
       {:else if actionableInbox.length === 0}
         <p class="muted">No owner action is blocking the project right now.</p>
       {:else}
-        <div class="action-list">
+        <CardList className="action-list">
           {#each actionableInbox as item (inboxItemKey(item))}
-            <button type="button" class="action-row" onclick={() => go(item.actionHref ?? '/thread')}>
+            <CardListItem as="button" className="action-row" onclick={() => go(item.actionHref ?? '/thread')}>
               <span class="action-title">{item.title}</span>
               {#if item.taskDescription && item.taskDescription !== item.title}
                 <span class="action-content">{item.taskDescription}</span>
               {/if}
               <span>{item.detail}</span>
-            </button>
+            </CardListItem>
           {/each}
-        </div>
+        </CardList>
       {/if}
     </Card>
   </section>
@@ -682,9 +685,11 @@
 
     <Card title="Next run" titleTag="h2" className="overview-card">
       {#if runBlocker}
-        <button
-          type="button"
-          class="run-blocker"
+        <UtilityPanel
+          as="button"
+          interactive
+          className="run-blocker"
+          tone="warn"
           onclick={() => {
             if (detail.startReadiness?.code === 'required_migration_pending') {
               void onMigrate?.()
@@ -698,7 +703,7 @@
             <strong>{runBlocker.label}</strong>
             <span>{runBlocker.detail}</span>
           </div>
-        </button>
+        </UtilityPanel>
       {/if}
       {#if runPlanRows.length === 0}
         <p class="muted">
@@ -713,14 +718,14 @@
       {:else}
         <div class="run-plan-list" aria-label="Likely next run order">
           {#each runPlanRows as row, index (`${row.task?.id ?? 'fallback'}:${index}`)}
-            <button type="button" class="run-plan-row" onclick={() => go(row.href)}>
+            <UtilityPanel as="button" interactive className="run-plan-row" tone={row.tone === 'warn' ? 'warn' : row.tone === 'running' ? 'ok' : row.tone === 'accent' ? 'accent' : 'neutral'} onclick={() => go(row.href)}>
               <span class="run-index">{index + 1}</span>
               <div>
                 <strong>{row.label}</strong>
                 <span>{row.detail}</span>
               </div>
               <Chip label={row.tone === 'running' ? 'Live' : row.tone === 'warn' ? 'Needs review' : row.tone === 'accent' ? 'Likely next' : 'Later'} tone={row.tone === 'running' ? 'ok' : row.tone === 'warn' ? 'warn' : row.tone === 'accent' ? 'accent' : 'neutral'} />
-            </button>
+            </UtilityPanel>
           {/each}
         </div>
       {/if}
@@ -730,14 +735,14 @@
   <section class="overview-grid">
     <Card title="Runtime and memory" titleTag="h2" className="overview-card">
       <div class="signal-list">
-        <button type="button" class="signal-row" onclick={() => go(currentProjectHref('/settings/ready', activeProjectId))}>
+        <UtilityPanel as="button" interactive className="signal-row" tone="neutral" onclick={() => go(currentProjectHref('/settings/ready', activeProjectId))}>
           <StatusDot tone={runtimeTone(runtime?.status, runtime?.health?.status) === 'running' ? 'active' : runtimeTone(runtime?.status, runtime?.health?.status) === 'ok' ? 'ok' : runtimeTone(runtime?.status, runtime?.health?.status) === 'danger' ? 'danger' : runtimeTone(runtime?.status, runtime?.health?.status) === 'warn' ? 'warn' : 'idle'} pulse={runtime?.status === 'running'} size="sm" />
           <div>
             <strong>{runtimeHealthLabel(runtime?.status, runtime?.health?.status)}</strong>
             <span>{runtimeModeLabel(runtime?.migration?.mode)}{#if runtime?.lastActivityAt} · active {formatDate(runtime.lastActivityAt)}{/if}</span>
           </div>
-        </button>
-        <button type="button" class="signal-row" onclick={() => go(currentProjectHref('/settings/learning', activeProjectId))}>
+        </UtilityPanel>
+        <UtilityPanel as="button" interactive className="signal-row" tone={(memoryHealth?.active ?? 0) > 0 ? 'ok' : (memoryHealth?.proposed ?? 0) > 0 ? 'warn' : 'neutral'} onclick={() => go(currentProjectHref('/settings/learning', activeProjectId))}>
           <StatusDot tone={(memoryHealth?.active ?? 0) > 0 ? 'ok' : (memoryHealth?.proposed ?? 0) > 0 ? 'warn' : 'idle'} size="sm" />
           <div>
             <strong>Memory health</strong>
@@ -745,7 +750,7 @@
               {memoryHealth?.active ?? 0} active · {memoryHealth?.proposed ?? 0} proposed · {memoryHealth?.used ?? 0} used
             </span>
           </div>
-        </button>
+        </UtilityPanel>
       </div>
     </Card>
 
@@ -755,13 +760,13 @@
       {:else}
         <div class="proof-path-list">
           {#each primaryProofPaths as item (`${item.task.id}:${item.proofPath.id ?? item.proofPath.title}`)}
-            <button type="button" class="proof-path-row" onclick={() => go(currentTaskHref(item.task.id, activeProjectId))}>
+            <UtilityPanel as="button" interactive className="proof-path-row" tone={item.proofPath.status === 'blocked' ? 'warn' : item.proofPath.status === 'verified' ? 'ok' : 'neutral'} onclick={() => go(currentTaskHref(item.task.id, activeProjectId))}>
               <div>
                 <strong>{item.proofPath.title ?? 'Proof path'}</strong>
                 <span>{item.proofPath.summary ?? taskLabel(item.task)}</span>
               </div>
               <Chip label={friendlyStatus(item.proofPath.status)} tone={item.proofPath.status === 'verified' ? 'ok' : item.proofPath.status === 'blocked' ? 'warn' : 'neutral'} />
-            </button>
+            </UtilityPanel>
           {/each}
         </div>
       {/if}
@@ -842,33 +847,29 @@
     font-size: var(--fs-2);
     overflow-wrap: anywhere;
   }
-  .live-card {
+  :global(.live-card) {
     display: grid;
     grid-template-columns: auto minmax(0, 1fr) auto;
     align-items: center;
     gap: var(--s-3);
     min-width: 0;
-    padding: var(--s-3);
-    border: 1px solid var(--border);
-    border-radius: var(--r-2);
-    background: var(--bg-raised);
   }
-  .live-card div {
+  :global(.live-card) div {
     display: grid;
     gap: var(--s-1);
     min-width: 0;
   }
-  .live-card strong {
+  :global(.live-card) strong {
     color: var(--text);
     font-size: var(--fs-1);
   }
-  .live-card span,
-  .live-card small,
+  :global(.live-card) span,
+  :global(.live-card) small,
   .muted {
     color: var(--text-muted);
     line-height: var(--lh-body);
   }
-  .live-card span {
+  :global(.live-card) span {
     overflow-wrap: anywhere;
   }
   .overview-grid {
@@ -883,19 +884,13 @@
   :global(.overview-card) {
     min-width: 0;
   }
-  .action-row,
+  :global(.action-row),
   .health-row,
-  .signal-row,
-  .proof-path-row,
-  .run-blocker,
-  .run-plan-row {
-    border: 1px solid var(--border);
-    border-radius: var(--r-1);
-    background: color-mix(in srgb, var(--bg-raised) 84%, transparent);
+  :global(.signal-row),
+  :global(.proof-path-row),
+  :global(.run-blocker),
+  :global(.run-plan-row) {
     color: var(--text);
-    cursor: pointer;
-    font: inherit;
-    text-align: left;
   }
   .next-action {
     display: grid;
@@ -916,7 +911,7 @@
     color: var(--text);
     overflow-wrap: anywhere;
   }
-  .action-list,
+  :global(.action-list),
   .motion-list,
   .health-list,
   .signal-list,
@@ -927,10 +922,9 @@
     display: grid;
     gap: var(--s-2);
   }
-  .action-row {
+  :global(.action-row) {
     display: grid;
     gap: var(--s-1);
-    padding: var(--s-3);
   }
   .action-title {
     color: var(--text);
@@ -940,37 +934,36 @@
     color: var(--text);
     overflow-wrap: anywhere;
   }
-  .action-row span:last-child,
+  :global(.action-row) span:last-child,
   .health-row span {
     color: var(--text-muted);
     font-size: var(--fs-1);
     line-height: var(--lh-body);
   }
   .health-row,
-  .signal-row,
-  .proof-path-row,
-  .run-blocker,
-  .run-plan-row {
+  :global(.signal-row),
+  :global(.proof-path-row),
+  :global(.run-blocker),
+  :global(.run-plan-row) {
     display: grid;
     grid-template-columns: auto minmax(0, 1fr);
     gap: var(--s-3);
     align-items: center;
-    padding: var(--s-3);
   }
   .health-row div,
-  .signal-row div,
-  .proof-path-row div,
-  .run-blocker div,
-  .run-plan-row div {
+  :global(.signal-row) div,
+  :global(.proof-path-row) div,
+  :global(.run-blocker) div,
+  :global(.run-plan-row) div {
     display: grid;
     gap: var(--s-1);
     min-width: 0;
   }
   .health-row strong,
-  .signal-row strong,
-  .proof-path-row strong,
-  .run-blocker strong,
-  .run-plan-row strong {
+  :global(.signal-row) strong,
+  :global(.proof-path-row) strong,
+  :global(.run-blocker) strong,
+  :global(.run-plan-row) strong {
     color: var(--text);
     overflow-wrap: anywhere;
   }
@@ -978,15 +971,15 @@
   .dependency-list :global(.overview-task-row) {
     min-height: 0;
   }
-  .run-blocker span,
-  .signal-row span,
-  .proof-path-row span,
-  .run-plan-row span {
+  :global(.run-blocker) span,
+  :global(.signal-row) span,
+  :global(.proof-path-row) span,
+  :global(.run-plan-row) span {
     color: var(--text-muted);
     font-size: var(--fs-1);
     line-height: var(--lh-body);
   }
-  .run-blocker {
+  :global(.run-blocker) {
     margin-bottom: var(--s-2);
     border-color: color-mix(in srgb, var(--warn) 52%, var(--border));
     background: color-mix(in srgb, var(--warn) 8%, var(--bg-raised));
@@ -1002,7 +995,7 @@
     font-size: var(--fs-0) !important;
     font-weight: 800;
   }
-  .run-plan-row {
+  :global(.run-plan-row) {
     grid-template-columns: auto minmax(0, 1fr) auto;
   }
   .event-row {
@@ -1027,9 +1020,13 @@
     line-height: var(--lh-body);
     overflow-wrap: anywhere;
   }
-  button:hover {
+  :global(.action-row:hover),
+  :global(.signal-row:hover),
+  :global(.proof-path-row:hover),
+  :global(.run-plan-row:hover),
+  :global(.run-blocker:hover),
+  :global(.overview-task-row:hover) {
     border-color: var(--border-strong);
-    background: var(--bg-raised-2);
   }
 
   @media (max-width: 980px) {
@@ -1048,25 +1045,25 @@
       padding: var(--s-3);
       gap: var(--s-3);
     }
-    .live-card {
+    :global(.live-card) {
       grid-template-columns: auto minmax(0, 1fr);
     }
     h1 {
       font-size: var(--fs-5);
     }
-    .live-card small {
+    :global(.live-card) small {
       grid-column: 2;
     }
     .next-action :global(.btn) {
       width: 100%;
     }
     .health-row,
-    .run-blocker,
-    .run-plan-row,
-    .action-row {
+    :global(.run-blocker),
+    :global(.run-plan-row),
+    :global(.action-row) {
       padding: var(--s-2);
     }
-    .run-plan-row { grid-template-columns: 1fr; }
+    :global(.run-plan-row) { grid-template-columns: 1fr; }
     .run-index {
       width: 1.5rem;
       height: 1.5rem;

@@ -4,6 +4,7 @@
 -->
 <script lang="ts">
   import Chip from './Chip.svelte'
+  import UtilityPanel from './UtilityPanel.svelte'
 
   type ChipTone =
     | 'neutral'
@@ -32,7 +33,7 @@
   }: Props = $props()
 </script>
 
-<button type="button" class="overview-task-row" {onclick}>
+<UtilityPanel as="button" interactive className="overview-task-row" {onclick}>
   <div class="row-copy">
     <div class="row-head">
       <strong>{title}</strong>
@@ -42,23 +43,12 @@
       <span>{detail}</span>
     {/if}
   </div>
-</button>
+</UtilityPanel>
 
 <style>
-  .overview-task-row {
-    display: grid;
-    gap: var(--s-3);
+  :global(.overview-task-row) {
     align-items: start;
-    min-width: 0;
     width: 100%;
-    padding: var(--s-3);
-    border: 1px solid var(--border);
-    border-radius: var(--r-1);
-    background: color-mix(in srgb, var(--bg-raised) 84%, transparent);
-    color: var(--text);
-    cursor: pointer;
-    font: inherit;
-    text-align: left;
   }
 
   .row-copy {
@@ -86,19 +76,14 @@
     justify-self: end;
   }
 
-  .overview-task-row span {
+  :global(.overview-task-row) span {
     color: var(--text-muted);
     font-size: var(--fs-1);
     line-height: var(--lh-body);
   }
 
-  .overview-task-row:hover {
-    border-color: var(--border-strong);
-    background: var(--bg-raised-2);
-  }
-
   @media (max-width: 640px) {
-    .overview-task-row {
+    :global(.overview-task-row) {
       padding: var(--s-2);
     }
   }

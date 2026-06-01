@@ -13,6 +13,7 @@ import {
   onboardWizard,
   progressFor,
   buildSnapshot,
+  buildSnapshotAsync,
   emptyWizardsState,
   type ProjectSnapshot,
 } from '../wizards.js'
@@ -325,6 +326,28 @@ describe('buildSnapshot', () => {
       detectOauthProviders: () => ({ claude: false, codex: false }),
     })
     expect(snap.taskCount).toBe(3)
+  })
+
+  it('buildSnapshotAsync prefers tasks/index.json for task counts on the hot path', async () => {
+    mkdirSync(join(tmp, '.guildhall', 'tasks'), { recursive: true })
+    writeFileSync(
+      join(tmp, '.guildhall', 'tasks', 'index.json'),
+      JSON.stringify({
+        version: 1,
+        activeTaskIds: ['task-001', 'task-meta-intake', 'task-workspace-import', 'task-002'],
+        archivedTaskIds: ['task-archive-001'],
+        archivedCount: 1,
+      }),
+    )
+    writeFileSync(join(tmp, '.guildhall', 'TASKS.json'), '{not-json')
+
+    const snap = await buildSnapshotAsync({
+      projectPath: tmp,
+      readProviders: () => ({ providers: {} }),
+      detectOauthProviders: () => ({ claude: false, codex: false }),
+    })
+
+    expect(snap.taskCount).toBe(2)
   })
 
   it('counts user-created starter tasks even when they are routed through the meta lane', () => {

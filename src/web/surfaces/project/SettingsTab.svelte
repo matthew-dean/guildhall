@@ -12,13 +12,16 @@
   import Stack from '../../lib/Stack.svelte'
   import Row from '../../lib/Row.svelte'
   import Button from '../../lib/Button.svelte'
+  import Card from '../../lib/Card.svelte'
   import Input from '../../lib/Input.svelte'
   import Select from '../../lib/Select.svelte'
+  import Textarea from '../../lib/Textarea.svelte'
   import Markdown from '../../lib/Markdown.svelte'
   import Byline from '../../lib/Byline.svelte'
   import LogViewer from '../../lib/LogViewer.svelte'
   import DefinitionList from '../../lib/DefinitionList.svelte'
   import Icon from '../../lib/Icon.svelte'
+  import UtilityPanel from '../../lib/UtilityPanel.svelte'
   import FactsTab from './FactsTab.svelte'
   import ProjectProvidersSection from './ProjectProvidersSection.svelte'
   import Help from '../../lib/Help.svelte'
@@ -45,6 +48,10 @@
     { id: 'reintake', label: 'Re-intake' },
     { id: 'advanced', label: 'Advanced' },
   ]
+  const settingsSectionOptions = settingsSections.map(item => ({
+    value: item.id,
+    label: item.label,
+  }))
 
   function settingsSectionHref(id: SettingSection): string {
     return projectActionHref(id === 'ready' ? '/settings/ready' : `/settings/${id}`)
@@ -1050,15 +1057,6 @@
   )
   const readinessPillLabel = $derived(projectStartBlocker ? 'Blocked' : `${readinessCount}/3 ready`)
   const readinessPillTone = $derived(projectStartBlocker ? 'warn' : readinessCount === 3 ? 'ok' : 'warn')
-  const projectStartBlockerActionLabel = $derived(
-    projectStartBlocker?.code === 'required_migration_pending'
-      ? 'Migrate project'
-      : /question|answer/i.test(projectStartBlocker?.message ?? '')
-        ? 'Answer question'
-        : /spec/i.test(projectStartBlocker?.message ?? '')
-          ? 'Review spec'
-          : 'Review recovery',
-  )
   const migrationCount = $derived((migrationStatus?.blocked?.length ?? 0) + (migrationStatus?.pending?.length ?? 0))
   const hasSecondaryMigrations = $derived(
     migrationCount > 0 && projectStartBlocker?.code !== 'required_migration_pending',
@@ -1445,20 +1443,33 @@
       </NoticeBand>
     {/if}
 
-    <nav class="settings-section-nav" aria-label="Settings sections">
-      {#each settingsSections as item (item.id)}
-        {@const active = section === item.id}
-        <button
-          type="button"
-          class="settings-section-button"
-          class:active
-          aria-current={active ? 'page' : undefined}
-          onclick={() => nav(settingsSectionHref(item.id))}
-        >
-          {item.label}
-        </button>
-      {/each}
-    </nav>
+    <div class="settings-section-picker">
+      <label class="settings-section-picker-label" for="settings-section-select">Section</label>
+      <Select
+        id="settings-section-select"
+        ariaLabel="Settings section"
+        value={section}
+        options={settingsSectionOptions}
+        onchange={(value) => nav(settingsSectionHref(value as SettingSection))}
+      />
+    </div>
+
+    <Card className="settings-section-card" frosted>
+      <nav class="settings-section-nav" aria-label="Settings sections">
+        {#each settingsSections as item (item.id)}
+          {@const active = section === item.id}
+          <button
+            type="button"
+            class="settings-section-button"
+            class:active
+            aria-current={active ? 'page' : undefined}
+            onclick={() => nav(settingsSectionHref(item.id))}
+          >
+            {item.label}
+          </button>
+        {/each}
+      </nav>
+    </Card>
 
     {#if section === 'facts'}
       <FactsTab />
@@ -1481,18 +1492,6 @@
         {/snippet}
       </SectionHeader>
 
-      {#if projectStartBlocker}
-        <NoticeBand tone="warn" icon="alert-triangle" density="compact">
-          <strong>{projectStartBlocker.message ?? 'Resolve the project blocker before starting Guildhall.'}</strong>
-          {#snippet actions()}
-            {#if projectStartBlocker.code === 'required_migration_pending'}
-              <Button variant="secondary" size="sm" onclick={() => { void onMigrate?.() }}>{projectStartBlockerActionLabel}</Button>
-            {:else if projectStartBlocker.actionHref}
-              <a href={projectActionHref(projectStartBlocker.actionHref)} onclick={(e) => { e.preventDefault(); nav(projectActionHref(projectStartBlocker.actionHref)) }}>{projectStartBlockerActionLabel}</a>
-            {/if}
-          {/snippet}
-        </NoticeBand>
-      {/if}
       {#if hasSecondaryMigrations}
         <NoticeBand tone="neutral" icon="refresh-cw" density="compact">
           <strong>
@@ -1508,7 +1507,7 @@
         </NoticeBand>
       {/if}
 
-      <FrameCard class="readiness-card" density="compact">
+      <Card className="readiness-card" frosted>
         <ul class="checklist">
           <li class="check-row">
             <div class="check-copy">
@@ -1568,43 +1567,37 @@
             </div>
           </li>
         </ul>
-      </FrameCard>
+      </Card>
 
-      <FrameCard class="runtime-setup-card" density="compact">
-        {#snippet header()}
-          <SectionHeader
-            title="Local runtime"
-            description="Guildhall can run project work in a Podman-backed Debian runtime on macOS. Until that is ready, host-run compatibility stays available."
-            headingTag="h3"
-            density="dense"
-          >
-            {#snippet meta()}
-              {#if runtimeSetup}
-                <StatusPill
-                  label={runtimeStatusLabel(runtimeSetup.status)}
-                  tone={runtimeStatusTone(runtimeSetup.status)}
-                />
-              {/if}
-            {/snippet}
-          </SectionHeader>
-        {/snippet}
-
+      <Card className="runtime-setup-card" frosted>
+        <div class="runtime-head">
+          <div class="runtime-head-copy">
+            <h3>Local runtime</h3>
+            <p>Guildhall can run project work in a Podman-backed Debian runtime on macOS. Until that is ready, host-run compatibility stays available.</p>
+          </div>
+          {#if runtimeSetup}
+            <StatusPill
+              label={runtimeStatusLabel(runtimeSetup.status)}
+              tone={runtimeStatusTone(runtimeSetup.status)}
+            />
+          {/if}
+        </div>
         {#if runtimeSetup}
           <Stack gap="3">
             <p class="runtime-message">{runtimeSetup.message}</p>
             <dl class="runtime-facts" aria-label="Local runtime setup facts">
-              <div>
+              <UtilityPanel as="div" className="runtime-fact" tone="neutral">
                 <dt>Host</dt>
                 <dd>{runtimeSetup.platform === 'darwin' ? 'macOS' : runtimeSetup.platform}</dd>
-              </div>
-              <div>
+              </UtilityPanel>
+              <UtilityPanel as="div" className="runtime-fact" tone="neutral">
                 <dt>Podman</dt>
                 <dd>{runtimeSetup.podmanVersion ?? (runtimeSetup.podmanPath ? 'installed' : 'not installed')}</dd>
-              </div>
-              <div>
+              </UtilityPanel>
+              <UtilityPanel as="div" className="runtime-fact" tone="neutral">
                 <dt>Service</dt>
                 <dd>{runtimeSetup.machine.exists ? `${runtimeSetup.machine.name ?? 'default'} ${runtimeSetup.machine.running ? 'running' : 'stopped'}` : 'not created'}</dd>
-              </div>
+              </UtilityPanel>
             </dl>
             {#if runtimeSetup.status === 'missing'}
               <NoticeBand tone="neutral" role="note" label="Install" title="Podman is a separate Mac runtime" density="compact">
@@ -1643,7 +1636,7 @@
         {#if runtimeSetupError}
           <p class="row-error">{runtimeSetupError}</p>
         {/if}
-      </FrameCard>
+      </Card>
 
       <FrameCard class="capability-grants-card" density="compact">
         {#snippet header()}
@@ -1665,7 +1658,7 @@
         {#if activeCapabilityGrants.length > 0}
           <Stack gap="3">
             {#each activeCapabilityGrants as grant (grant.id)}
-              <div class="grant-row">
+              <UtilityPanel as="div" className="grant-row" tone="neutral">
                 <div class="grant-copy">
                   <Row gap="2" align="center" wrap>
                     <strong>{grant.hostPath}</strong>
@@ -1683,7 +1676,7 @@
                 >
                   {capabilityGrantBusyId === grant.id ? 'Revoking…' : 'Revoke'}
                 </Button>
-              </div>
+              </UtilityPanel>
             {/each}
           </Stack>
         {:else}
@@ -1814,7 +1807,7 @@
         <FrameCard class="coordinators-card">
           <div class="coord-list">
             {#each coordinators as coordinator, i (coordinator.id ?? coordinator.name ?? i)}
-              <section class="coord">
+              <UtilityPanel as="section" className="coord" tone="neutral">
                 <header class="coord-title">
                   <strong>{coordinator.name ?? coordinator.id}</strong>
                   {#if coordinator.domain}
@@ -1824,7 +1817,7 @@
                 {#if coordinator.mandate}
                   <Markdown source={coordinator.mandate} />
                 {/if}
-              </section>
+              </UtilityPanel>
             {/each}
           </div>
         </FrameCard>
@@ -1896,7 +1889,7 @@
           {:else}
             <div class="context-memory-list">
               {#each projectContextRows as row (row.label)}
-                <div class="context-memory-row">
+                <UtilityPanel as="div" className="context-memory-row" tone="neutral">
                   <div>
                     <strong>{row.label}</strong>
                     <span>{row.detail}</span>
@@ -1907,7 +1900,7 @@
                       <a class="learning-evidence-link" href={projectActionHref(row.href)}>Open</a>
                     {/if}
                   </div>
-                </div>
+                </UtilityPanel>
               {/each}
             </div>
           {/if}
@@ -1926,7 +1919,7 @@
           {:else}
             <div class="context-memory-list">
               {#each recentMemoryUse as use (`${use.taskId}:${use.at}`)}
-                <div class="context-memory-row">
+                <UtilityPanel as="div" className="context-memory-row" tone="neutral">
                   <div>
                     <strong>{use.taskId}</strong>
                     <span>{use.at}</span>
@@ -1935,7 +1928,7 @@
                     <StatusPill label={`${use.included ?? 0} included`} tone={(use.included ?? 0) > 0 ? 'ok' : 'neutral'} density="dense" />
                     <StatusPill label={`${use.withheld ?? 0} withheld`} tone={(use.withheld ?? 0) > 0 ? 'warn' : 'neutral'} density="dense" />
                   </div>
-                </div>
+                </UtilityPanel>
               {/each}
             </div>
           {/if}
@@ -1955,7 +1948,7 @@
                 <p class="muted">No reusable project habits yet. That does not mean the project has no memory; it means Guildhall has not promoted a repeated pattern into a reusable rule.</p>
               {:else}
                 {#each projectLearnings as item (item.id)}
-                  <article class="learning-item">
+                  <UtilityPanel as="article" className="learning-item" tone="neutral">
                     <header class="learning-title">
                       <strong>{item.summary}</strong>
                       <StatusPill label={learningStatusLabel(item.status)} tone={learningStatusTone(item.status)} density="dense" />
@@ -1998,7 +1991,7 @@
                         <Button size="sm" variant="ghost" disabled={learningBusy !== null} onclick={() => runLearningAction('dismiss', 'project', item.id)}>Ignore</Button>
                       {/if}
                     </Row>
-                  </article>
+                  </UtilityPanel>
                 {/each}
               {/if}
               {#if projectLearnings.length > 0}
@@ -2023,7 +2016,7 @@
                 <p class="muted">No cross-project preferences yet. Guildhall needs repeated evidence before suggesting one.</p>
               {:else}
                 {#each userLearnings as item (item.id)}
-                  <article class="learning-item">
+                  <UtilityPanel as="article" className="learning-item" tone="neutral">
                     <header class="learning-title">
                       <strong>{item.summary}</strong>
                       <StatusPill label={learningStatusLabel(item.status)} tone={learningStatusTone(item.status)} density="dense" />
@@ -2041,7 +2034,7 @@
                         <Button size="sm" variant="ghost" disabled={learningBusy !== null} onclick={() => runLearningAction('dismiss', 'user_global', item.id)}>Ignore</Button>
                       {/if}
                     </Row>
-                  </article>
+                  </UtilityPanel>
                 {/each}
               {/if}
               {#if userLearnings.length > 0}
@@ -2066,7 +2059,7 @@
                 <p class="muted">No playbooks yet. Guildhall will suggest one only after a workflow looks worth repeating.</p>
               {:else}
                 {#each skillProposals as skill (skill.id)}
-                  <article class="learning-item">
+                  <UtilityPanel as="article" className="learning-item" tone="neutral">
                     <header class="learning-title">
                       <strong>{skill.name}</strong>
                       <StatusPill label={learningStatusLabel(skill.status)} tone={learningStatusTone(skill.status)} density="dense" />
@@ -2088,7 +2081,7 @@
                         <Button size="sm" variant="ghost" disabled={learningBusy !== null} onclick={() => runSkillAction('dismiss', skill.id)}>Ignore</Button>
                       {/if}
                     </Row>
-                  </article>
+                  </UtilityPanel>
                 {/each}
               {/if}
               {#if skillProposals.length > 0}
@@ -2113,7 +2106,7 @@
             {:else}
               <div class="suggestion-list">
                 {#each productSuggestions as suggestion (suggestion.id)}
-                  <article class="learning-item">
+                  <UtilityPanel as="article" className="learning-item" tone="neutral">
                     <header class="learning-title">
                       <strong>{suggestion.title}</strong>
                       <StatusPill label="not active" tone="info" density="dense" />
@@ -2128,16 +2121,15 @@
                       </ul>
                     {/if}
                     <Row justify="end">
-                      <a
-                        class="feedback-link"
-                        href={buildProductFeedbackIssueUrl({ suggestion, project: project.detail })}
-                        target="_blank"
-                        rel="noreferrer"
+                      <Button
+                        size="sm"
+                        variant="secondary"
+                        onclick={() => window.open(buildProductFeedbackIssueUrl({ suggestion, project: project.detail }), '_blank', 'noopener,noreferrer')}
                       >
                         Give product feedback
-                      </a>
+                      </Button>
                     </Row>
-                  </article>
+                  </UtilityPanel>
                 {/each}
               </div>
             {/if}
@@ -2228,7 +2220,7 @@
               {/snippet}
               <div class="context-memory-list">
                 {#each group.changes ?? [] as change, index (`${group.id}-${index}`)}
-                  <div class="context-memory-row">
+                  <UtilityPanel as="div" className="context-memory-row" tone="neutral">
                     <div>
                       <strong>{change.kind}</strong>
                       <span>{change.after?.title ?? change.task?.title ?? change.before?.title ?? change.taskId ?? change.reason}</span>
@@ -2236,7 +2228,7 @@
                     <div class="context-memory-meta">
                       <StatusPill label={change.kind ?? 'change'} tone="neutral" density="dense" />
                     </div>
-                  </div>
+                  </UtilityPanel>
                 {/each}
               </div>
             </FrameCard>
@@ -2304,42 +2296,39 @@
             {#if worktreeIncludeScopes.length > 1}
               <div class="candidate-list" aria-label="Workspace project worktree settings">
                 {#each worktreeIncludeScopes as scope (scope.projectId ?? scope.rootPath)}
-                  <button
-                    type="button"
-                    class="candidate-chip"
-                    class:selected={(scope.projectId ?? null) === selectedWorktreeProjectId}
+                  <Button
+                    size="sm"
+                    variant={(scope.projectId ?? null) === selectedWorktreeProjectId ? 'secondary' : 'ghost'}
                     title={scope.rootPath}
                     onclick={() => selectWorktreeIncludeScope(scope)}
                   >
                     {scope.label ?? scope.projectId ?? 'Workspace'}
-                  </button>
+                  </Button>
                 {/each}
               </div>
             {/if}
             {#if worktreeIncludeCandidates.length > 0}
               <div class="candidate-list" aria-label="Detected local config candidates">
                 {#each worktreeIncludeCandidates.slice(0, 6) as candidate (candidate.path)}
-                  <button
-                    type="button"
-                    class="candidate-chip"
-                    class:selected={worktreeIncludeText.split(/\r?\n/).map(line => line.trim()).includes(candidate.path)}
+                  <Button
+                    size="sm"
+                    variant={worktreeIncludeText.split(/\r?\n/).map(line => line.trim()).includes(candidate.path) ? 'secondary' : 'ghost'}
                     title={candidate.reason}
                     onclick={() => addWorktreeIncludeCandidate(candidate.path)}
                   >
                     {candidate.path}
-                  </button>
+                  </Button>
                 {/each}
               </div>
             {/if}
             <label class="field">
               <span>Include in task worktrees</span>
-              <textarea
-                class="settings-textarea"
+              <Textarea
                 bind:value={worktreeIncludeText}
                 rows="5"
                 spellcheck="false"
                 placeholder=".env&#10;appsettings.local.yaml&#10;config/local/**"
-              ></textarea>
+              />
             </label>
             <Row justify="start" gap="2" align="center" wrap>
               {#if worktreeIncludeStatus}
@@ -2394,7 +2383,7 @@
                   </header>
                   <div class="lever-list">
                     {#each entries as lever, i (lever.name + i)}
-                      <article class="lever-card">
+                      <UtilityPanel as="article" className="lever-card" tone="neutral">
                         <header class="lever-card-head">
                           <div class="lever-title-block">
                             <div class="lever-title-row">
@@ -2428,7 +2417,7 @@
                         {#if lever.rationale}
                           <p class="lever-rationale">{lever.rationale}</p>
                         {/if}
-                      </article>
+                      </UtilityPanel>
                     {/each}
                   </div>
                 </section>
@@ -2540,13 +2529,13 @@
                       <strong>Architecture areas</strong>
                       <div class="map-list-grid">
                         {#each codebaseMapStatus.semantic.architectureAreas.slice(0, 3) as area (area.name)}
-                          <article>
+                          <UtilityPanel as="article" className="map-card" tone="neutral">
                             <h4>{area.name}</h4>
                             <p>{area.purpose}</p>
                             {#if area.canonicalFiles.length}
                               <code>{area.canonicalFiles.slice(0, 2).join(', ')}</code>
                             {/if}
-                          </article>
+                          </UtilityPanel>
                         {/each}
                       </div>
                     </div>
@@ -2556,11 +2545,11 @@
                       <strong>Canonical abstractions</strong>
                       <div class="map-list-grid">
                         {#each codebaseMapStatus.semantic.canonicalAbstractions.slice(0, 3) as abstraction (abstraction.name)}
-                          <article>
+                          <UtilityPanel as="article" className="map-card" tone="neutral">
                             <h4>{abstraction.name}</h4>
                             <p>{abstraction.purpose}</p>
                             <p>{abstraction.reuseRule}</p>
-                          </article>
+                          </UtilityPanel>
                         {/each}
                       </div>
                     </div>
@@ -2582,7 +2571,7 @@
                   <strong>Mapped areas</strong>
                   <div class="map-list-grid">
                     {#each codebaseMapStatus.areas.slice(0, 4) as area (area.id)}
-                      <article>
+                      <UtilityPanel as="article" className="map-card" tone="neutral">
                         <h4>{area.title}</h4>
                         <p>{area.summary}</p>
                         {#if area.canonicalFiles.length}
@@ -2595,7 +2584,7 @@
                         {#if area.tests.length}
                           <p class="muted">Tests: {area.tests.slice(0, 3).join(', ')}</p>
                         {/if}
-                      </article>
+                      </UtilityPanel>
                     {/each}
                   </div>
                 </div>
@@ -2605,7 +2594,7 @@
                   <strong>Reusable abstractions</strong>
                   <div class="map-list-grid">
                     {#each codebaseMapStatus.abstractions.slice(0, 4) as abstraction (abstraction.id)}
-                      <article>
+                      <UtilityPanel as="article" className="map-card" tone="neutral">
                         <h4>{abstraction.title}</h4>
                         <p><code>{abstraction.canonicalPath}</code></p>
                         {#if abstraction.useWhen.length}
@@ -2618,7 +2607,7 @@
                             {/each}
                           </div>
                         {/if}
-                      </article>
+                      </UtilityPanel>
                     {/each}
                   </div>
                 </div>
@@ -2833,43 +2822,76 @@
     max-inline-size: 72rem;
   }
 
-  .settings-section-nav {
-    display: flex;
-    flex-wrap: wrap;
+  .settings-section-picker {
+    display: none;
     gap: var(--gh-space-2);
-    align-items: center;
+    inline-size: 100%;
+  }
+
+  .settings-section-picker-label {
+    color: var(--text-muted);
+    font-size: var(--fs-1);
+    font-weight: 700;
+    line-height: var(--lh-tight);
+    text-transform: uppercase;
+  }
+
+  :global(.settings-section-card) {
     padding: var(--gh-space-2);
-    border: 1px solid var(--border);
-    border-radius: var(--r-2);
-    background: var(--bg-raised);
-    inline-size: min(100%, 62rem);
+  }
+
+  .settings-section-nav {
+    display: grid;
+    gap: var(--gh-space-2);
+    grid-template-columns: repeat(7, minmax(0, 1fr));
+    inline-size: 100%;
   }
 
   .settings-section-button {
     appearance: none;
-    border: 1px solid var(--border);
+    border: none;
     border-radius: var(--r-1);
-    background: var(--bg);
+    background: transparent;
     color: var(--text-muted);
     cursor: pointer;
-    flex: 1 1 8rem;
     font: inherit;
     font-size: var(--fs-1);
     font-weight: 650;
     line-height: var(--lh-tight);
     min-block-size: 34px;
+    min-inline-size: 0;
     padding: var(--gh-space-2) var(--gh-space-3);
   }
 
   .settings-section-button:hover {
     color: var(--text);
-    background: var(--bg-raised-2);
+    background: color-mix(in srgb, white 5%, transparent);
+  }
+
+  .settings-section-button:focus-visible {
+    outline: 2px solid color-mix(in srgb, var(--accent) 54%, transparent);
+    outline-offset: 2px;
   }
 
   .settings-section-button.active {
     color: var(--text);
-    border-color: color-mix(in srgb, var(--accent) 64%, var(--border-strong));
-    background: var(--bg-elevated);
+    background:
+      linear-gradient(180deg, color-mix(in srgb, white 8%, transparent), transparent 52%),
+      color-mix(in srgb, var(--glass-bg-strong) 72%, var(--bg-raised-2));
+    box-shadow:
+      inset 0 1px 0 color-mix(in srgb, white 8%, transparent),
+      0 0 0 1px color-mix(in srgb, var(--glass-border) 74%, transparent),
+      0 1px 0 color-mix(in srgb, black 18%, transparent);
+  }
+
+  @container (max-width: 44rem) {
+    .settings-section-picker {
+      display: grid;
+    }
+
+    :global(.settings-section-card) {
+      display: none;
+    }
   }
 
   .field {
@@ -2899,6 +2921,7 @@
     display: grid;
     gap: 0;
     padding: 0;
+    margin: 0;
   }
 
   .check-row {
@@ -2949,6 +2972,38 @@
     margin-block-start: var(--gh-space-4);
   }
 
+  .runtime-head {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: start;
+    justify-content: space-between;
+    gap: var(--gh-space-3);
+    margin-bottom: var(--gh-space-3);
+  }
+
+  .runtime-head-copy {
+    display: grid;
+    gap: var(--gh-space-2);
+    min-inline-size: min(28rem, 100%);
+  }
+
+  .runtime-head-copy h3 {
+    margin: 0;
+    font-size: var(--fs-4);
+    line-height: var(--lh-tight);
+  }
+
+  .runtime-head-copy p {
+    margin: 0;
+    color: var(--text-muted);
+    font-size: var(--fs-2);
+    line-height: var(--lh-body);
+  }
+
+  :global(.readiness-card) {
+    gap: 0;
+  }
+
   :global(.capability-grants-card) {
     margin-block-start: var(--gh-space-4);
   }
@@ -2968,13 +3023,9 @@
     margin: 0;
   }
 
-  .runtime-facts div {
+  :global(.runtime-fact) {
     display: grid;
     gap: var(--gh-space-1);
-    padding: var(--gh-space-3);
-    border: 1px solid var(--border);
-    border-radius: var(--r-1);
-    background: var(--bg);
     min-inline-size: 0;
   }
 
@@ -3000,15 +3051,11 @@
     gap: var(--gh-space-2);
   }
 
-  .grant-row {
+  :global(.grant-row) {
     display: grid;
     grid-template-columns: minmax(0, 1fr) auto;
     gap: var(--gh-space-3);
     align-items: start;
-    padding: var(--gh-space-3);
-    border: 1px solid var(--border);
-    border-radius: var(--r-1);
-    background: var(--bg);
   }
 
   .grant-copy {
@@ -3030,13 +3077,9 @@
     gap: var(--gh-space-3);
   }
 
-  .coord {
+  :global(.coord) {
     display: grid;
     gap: var(--gh-space-1);
-    padding: var(--gh-space-3);
-    border: 1px solid var(--border);
-    border-radius: var(--r-2);
-    background: var(--bg);
   }
 
   .coord-title {
@@ -3071,30 +3114,26 @@
     gap: var(--gh-space-2);
   }
 
-  .context-memory-row {
+  :global(.context-memory-row) {
     display: flex;
     flex-wrap: wrap;
     gap: var(--gh-space-3);
     align-items: center;
     justify-content: space-between;
-    padding: var(--gh-space-3);
-    border: 1px solid var(--border);
-    border-radius: var(--r-2);
-    background: var(--bg);
   }
 
-  .context-memory-row > div:first-child {
+  :global(.context-memory-row) > div:first-child {
     display: grid;
     gap: var(--gh-space-1);
     min-inline-size: min(28rem, 100%);
   }
 
-  .context-memory-row strong {
+  :global(.context-memory-row) strong {
     font-size: var(--fs-2);
     line-height: var(--lh-tight);
   }
 
-  .context-memory-row span {
+  :global(.context-memory-row) span {
     color: var(--text-muted);
     font-size: var(--fs-1);
     line-height: var(--lh-body);
@@ -3106,13 +3145,9 @@
     align-items: center;
   }
 
-  .learning-item {
+  :global(.learning-item) {
     display: grid;
     gap: var(--gh-space-2);
-    padding: var(--gh-space-3);
-    border: 1px solid var(--border);
-    border-radius: var(--r-2);
-    background: var(--bg);
     min-inline-size: 0;
   }
 
@@ -3182,31 +3217,6 @@
     gap: var(--gh-space-3);
   }
 
-  .feedback-link {
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-    min-height: 22px;
-    padding: 2px var(--s-2);
-    border: 1px solid var(--border-strong);
-    border-radius: var(--r-1);
-    background: var(--bg-raised-2);
-    color: var(--text);
-    font-size: var(--fs-1);
-    font-weight: 600;
-    line-height: 1;
-    text-decoration: none;
-    white-space: nowrap;
-    box-shadow:
-      inset 0 1px 0 color-mix(in srgb, white 8%, transparent),
-      0 1px 0 color-mix(in srgb, black 22%, transparent);
-  }
-
-  .feedback-link:hover {
-    background: color-mix(in srgb, var(--bg-raised-2) 82%, white 18%);
-    border-color: color-mix(in srgb, var(--border-strong) 68%, var(--text) 32%);
-  }
-
   .lever-scope {
     display: grid;
     gap: 12px;
@@ -3238,13 +3248,9 @@
     gap: 12px;
   }
 
-  .lever-card {
+  :global(.lever-card) {
     display: grid;
     gap: 12px;
-    padding: 14px;
-    border: 1px solid var(--border);
-    border-radius: var(--r-2);
-    background: var(--bg);
   }
 
   .lever-card-head {
@@ -3329,13 +3335,9 @@
     gap: var(--gh-space-2);
   }
 
-  .map-list-grid article {
+  :global(.map-card) {
     display: grid;
     gap: var(--gh-space-2);
-    padding: var(--gh-space-3);
-    border: 1px solid color-mix(in srgb, var(--glass-border) 72%, transparent);
-    border-radius: var(--radius-sm);
-    background: color-mix(in srgb, var(--bg-sunken) 78%, transparent);
   }
 
   .map-list-grid h4 {
@@ -3415,41 +3417,6 @@
     gap: var(--gh-space-2);
   }
 
-  .candidate-chip {
-    border: 1px solid var(--border);
-    border-radius: var(--r-2);
-    background: var(--bg);
-    color: var(--text-muted);
-    padding: 6px 10px;
-    font: inherit;
-    font-size: var(--fs-1);
-    cursor: pointer;
-  }
-
-  .candidate-chip:hover,
-  .candidate-chip:focus-visible,
-  .candidate-chip.selected {
-    border-color: var(--accent);
-    color: var(--accent);
-  }
-
-  .settings-textarea {
-    inline-size: 100%;
-    min-block-size: 8rem;
-    resize: vertical;
-    border: 1px solid var(--border);
-    border-radius: var(--r-2);
-    background: var(--bg);
-    color: var(--text);
-    padding: var(--gh-space-3);
-    font: 500 var(--fs-2) / var(--lh-body) var(--font-mono);
-  }
-
-  .settings-textarea:focus {
-    outline: 2px solid var(--accent);
-    outline-offset: 2px;
-  }
-
   .map-semantic {
     display: grid;
     gap: var(--gh-space-3);
@@ -3515,7 +3482,7 @@
   }
 
   @container (max-width: 42rem) {
-    .grant-row {
+    :global(.grant-row) {
       grid-template-columns: 1fr;
     }
   }

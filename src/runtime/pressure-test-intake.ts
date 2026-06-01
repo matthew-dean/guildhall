@@ -3,6 +3,8 @@ import fsp from 'node:fs/promises'
 import path from 'node:path'
 import { z } from 'zod'
 import { atomicWriteText } from '@guildhall/sessions'
+import { readCachedJson } from './file-read-cache.js'
+import { listBoundedChatSessions } from './bounded-chat.js'
 import {
   buildProjectQuestionEvidence,
   classifyProjectAnswer,
@@ -270,11 +272,41 @@ export function listPressureTestIntakes(memoryDir: string): PressureTestIntake[]
     .sort((left, right) => left.createdAt.localeCompare(right.createdAt))
 }
 
+export async function listPressureTestIntakesAsync(memoryDir: string): Promise<PressureTestIntake[]> {
+  const dir = pressureTestDir(memoryDir)
+  const names = await fsp.readdir(dir).catch((err) => {
+    if ((err as NodeJS.ErrnoException).code === 'ENOENT') return []
+    throw err
+  })
+  const intakes = await Promise.all(
+    names
+      .filter(name => name.endsWith('.json'))
+      .map(async (name) => {
+        const raw = await readCachedJson<unknown>(path.join(dir, name)).catch(() => null)
+        if (!raw) return null
+        try {
+          return normalizePressureTestIntake(PressureTestIntake.parse(raw))
+        } catch {
+          return null
+        }
+      }),
+  )
+  return intakes
+    .filter((intake): intake is PressureTestIntake => !!intake)
+    .sort((left, right) => left.createdAt.localeCompare(right.createdAt))
+}
+
 export function summarizeProjectCheckIn(memoryDir: string): ProjectCheckInSummary {
   const intakes = listPressureTestIntakes(memoryDir)
-  const activeCount = intakes.filter(intake => intake.status === 'active').length
-  const completedCount = intakes.filter(intake => intake.status === 'complete').length
-  const needed = intakes.length === 0
+  const chats = listBoundedChatSessions(memoryDir)
+    .filter(session => session.objective.kind === 'project_check_in' || session.objective.kind === 'project_intake')
+  const activeCount =
+    intakes.filter(intake => intake.status === 'active').length +
+    chats.filter(chat => chat.status === 'waiting_for_user' || chat.status === 'coordinator_review').length
+  const completedCount =
+    intakes.filter(intake => intake.status === 'complete').length +
+    chats.filter(chat => chat.status === 'fulfilled').length
+  const needed = intakes.length === 0 && chats.length === 0
   return {
     needed,
     label: 'Project questions',

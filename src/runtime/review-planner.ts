@@ -391,7 +391,7 @@ function detectReviewSignals(input: BuildReviewPlanInput): {
     selected.add('ux_comprehension')
     selected.add('visual_design')
     selected.add('accessibility')
-    reasons.push('Design-system control selection needs reviewer context for component intent, variants, layout ownership, findability, and accessible semantics.')
+    reasons.push('Design-system control selection needs reviewer context for component intent, variants, layout ownership, anti-sprawl extraction opportunities, findability, and accessible semantics.')
   }
 
   if ((input.changedFiles ?? []).some((file) => /\.(svelte|tsx?|jsx?|css|scss|html)$/.test(file))) {
@@ -552,6 +552,8 @@ function defaultDeterministicChecks(lanes: readonly ReviewRiskLane[]): string[] 
   if (lanes.some((lane) => ['ux_comprehension', 'visual_design', 'accessibility'].includes(lane))) {
     checks.add('browser-or-screenshot-evidence')
     checks.add('design-system-control-reference-check')
+    checks.add('style-sprawl-regression-scan')
+    checks.add('shared-primitive-opportunity-scan')
   }
   if (lanes.includes('docs_truth')) checks.add('public-doc-copy-boundary')
   if (lanes.some((lane) => ['security', 'privacy', 'evidence_privacy'].includes(lane))) {

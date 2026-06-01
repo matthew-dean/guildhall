@@ -5,6 +5,7 @@
 -->
 <script lang="ts">
   import { nav, path } from './nav.svelte.js'
+  import CardListItem from './CardListItem.svelte'
   import { currentTaskHref } from './project-routes.js'
   import Icon, { type IconName } from './Icon.svelte'
   import StatusLight from './StatusLight.svelte'
@@ -138,12 +139,18 @@
 
 </script>
 
-<div
-  class="task-card st-{status} tone-{statusTone}"
-  class:st-active={isActive}
-  class:st-blocked-bold={status === 'blocked'}
-  role="button"
-  tabindex="0"
+<CardListItem
+  as="button"
+  className={[
+    'task-card',
+    `st-${status}`,
+    `tone-${statusTone}`,
+    isActive ? 'st-active' : '',
+    status === 'blocked' ? 'st-blocked-bold' : '',
+  ].filter(Boolean).join(' ')}
+  tone={statusTone === 'accent' ? 'accent' : statusTone === 'ok' ? 'ok' : statusTone === 'warn' ? 'warn' : statusTone === 'danger' ? 'danger' : 'neutral'}
+  railTone={statusTone === 'accent' ? 'accent' : statusTone === 'ok' ? 'ok' : statusTone === 'warn' ? 'warn' : statusTone === 'danger' ? 'danger' : null}
+  railStrength="strong"
   onclick={open}
   onkeydown={onKey}
 >
@@ -179,43 +186,35 @@
       <span>{summary.text}</span>
     </div>
   {/if}
-</div>
+</CardListItem>
 
 <style>
-  .task-card {
-    background: var(--bg-raised);
-    border: 1px solid var(--border-strong);
-    border-radius: var(--r-2);
+  :global(.task-card) {
     padding: var(--s-2) var(--s-3);
-    cursor: pointer;
     display: flex;
     flex-direction: column;
     gap: var(--s-1);
-    border-left-width: 3px;
-    border-left-color: var(--stripe-neutral);
   }
-  .task-card:hover {
+  :global(.task-card:hover),
+  :global(.task-card:focus-visible) {
     border-color: var(--accent);
-    border-left-width: 3px;
   }
-  .tone-danger { border-left-color: var(--stripe-danger); }
-  .tone-warn { border-left-color: var(--stripe-warn); }
-  .tone-ok { border-left-color: var(--stripe-ok); }
-  .tone-accent { border-left-color: var(--stripe-accent); }
 
-  .st-active {
-    background: color-mix(in srgb, var(--accent) 8%, var(--bg-raised));
+  :global(.task-card.st-active) {
+    box-shadow:
+      0 0 0 1px color-mix(in srgb, var(--accent) 12%, transparent),
+      var(--glass-etch);
   }
-  .st-done {
-    background: color-mix(in srgb, var(--accent-2) 6%, var(--bg-raised));
+  :global(.task-card.st-done) {
     border-color: color-mix(in srgb, var(--accent-2) 24%, var(--border-strong));
   }
-  .st-shelved {
-    background: color-mix(in srgb, var(--warn) 6%, var(--bg-raised));
+  :global(.task-card.st-shelved) {
     border-color: color-mix(in srgb, var(--warn) 24%, var(--border-strong));
   }
-  .st-blocked-bold {
-    background: color-mix(in srgb, var(--danger) 8%, var(--bg-raised));
+  :global(.task-card.st-blocked-bold) {
+    box-shadow:
+      0 0 0 1px color-mix(in srgb, var(--danger) 12%, transparent),
+      var(--glass-etch);
   }
 
   .tc-head {
@@ -302,12 +301,12 @@
     font-weight: 700;
     color: var(--text-dim);
   }
-  .st-done .tc-title,
-  .st-shelved .tc-title {
+  :global(.task-card.st-done) .tc-title,
+  :global(.task-card.st-shelved) .tc-title {
     color: color-mix(in srgb, var(--text) 88%, var(--text-muted));
   }
-  .st-done .tc-meta,
-  .st-shelved .tc-meta {
+  :global(.task-card.st-done) .tc-meta,
+  :global(.task-card.st-shelved) .tc-meta {
     color: color-mix(in srgb, var(--text-muted) 88%, var(--text-dim));
   }
   .tc-rev {

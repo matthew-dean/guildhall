@@ -28,12 +28,14 @@
  * and share it across every registered wizard.
  */
 import { existsSync, readFileSync } from 'node:fs'
+import fsp from 'node:fs/promises'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
 import { parse as parseYaml } from 'yaml'
 import { readGlobalProviders, type ProviderKind } from '@guildhall/config'
 import { bootstrapNeeded, readBootstrapStatus } from './bootstrap-runner.js'
 import { getProjectLocalHistoryDir, getProjectStateDir } from '@guildhall/sessions'
+import { readCachedJson, readCachedText, readCachedYaml } from './file-read-cache.js'
 
 // ---------------------------------------------------------------------------
 // Facts / snapshot
@@ -486,6 +488,17 @@ export function readWizardsState(projectPath: string): WizardsState {
   }
 }
 
+export async function readWizardsStateAsync(projectPath: string): Promise<WizardsState> {
+  const path = join(getProjectStateDir(projectPath), 'wizards.yaml')
+  const raw = await readCachedYaml<Partial<WizardsState>>(path).catch(() => null)
+  if (!raw || typeof raw !== 'object') return emptyWizardsState()
+  return {
+    version: 1,
+    skipped: (raw.skipped && typeof raw.skipped === 'object' ? raw.skipped : {}) as Record<string, string[]>,
+    completedAt: (raw.completedAt && typeof raw.completedAt === 'object' ? raw.completedAt : {}) as Record<string, string>,
+  }
+}
+
 export interface BuildSnapshotOptions {
   projectPath: string
   /** Override for tests — defaults to `readGlobalProviders`. */
@@ -499,6 +512,33 @@ export interface BuildSnapshotOptions {
    * connection just like a stored API key.
    */
   detectOauthProviders?: () => { claude: boolean; codex: boolean }
+}
+
+interface TaskIndexShape {
+  activeTaskIds?: unknown
+}
+
+async function activeTaskCountFromIndex(projectPath: string): Promise<number | null> {
+  const file = join(getProjectStateDir(projectPath), 'tasks', 'index.json')
+  const raw = await readCachedJson<TaskIndexShape>(file).catch(() => null)
+  const ids = Array.isArray(raw?.activeTaskIds)
+    ? raw.activeTaskIds.filter((id): id is string => typeof id === 'string')
+    : null
+  if (!ids) return null
+  return ids.filter((id) => id !== 'task-meta-intake' && id !== 'task-workspace-import').length
+}
+
+function taskCountFromRaw(raw: unknown): number {
+  const tasks = Array.isArray(raw)
+    ? raw
+    : raw && typeof raw === 'object' && Array.isArray((raw as { tasks?: unknown }).tasks)
+      ? (raw as { tasks: unknown[] }).tasks
+      : []
+  return tasks.filter(task => {
+    if (!task || typeof task !== 'object') return false
+    const t = task as { id?: unknown }
+    return t.id !== 'task-meta-intake' && t.id !== 'task-workspace-import'
+  }).length
 }
 
 export function buildSnapshot(opts: BuildSnapshotOptions): ProjectSnapshot {
@@ -612,5 +652,105 @@ export function buildSnapshot(opts: BuildSnapshotOptions): ProjectSnapshot {
     workspaceImportReviewed,
     taskCount,
     wizardState: readState(projectPath),
+  }
+}
+
+export async function buildSnapshotAsync(opts: BuildSnapshotOptions): Promise<ProjectSnapshot> {
+  const { projectPath } = opts
+  const readProv = opts.readProviders ?? readGlobalProviders
+  const readState = opts.readWizardsState ?? readWizardsStateAsync
+  const detectOauth =
+    opts.detectOauthProviders ??
+    (() => ({
+      claude: existsSync(join(homedir(), '.claude', '.credentials.json')),
+      codex: existsSync(join(homedir(), '.codex', 'auth.json')),
+    }))
+
+  const cfgPath = join(projectPath, 'guildhall.yaml')
+  const cfg = await readCachedYaml<ProjectSnapshot['config']>(cfgPath).catch(() => null) ?? undefined
+
+  let bootstrapVerified = false
+  const verifiedAt = cfg?.bootstrap?.verifiedAt
+  if (typeof verifiedAt === 'string' && verifiedAt.length > 0) {
+    bootstrapVerified = true
+  } else if (cfg?.bootstrap) {
+    const commands = Array.isArray((cfg.bootstrap as { commands?: unknown }).commands)
+      ? ((cfg.bootstrap as { commands?: string[] }).commands ?? [])
+      : []
+    const successGates = Array.isArray((cfg.bootstrap as { successGates?: unknown }).successGates)
+      ? ((cfg.bootstrap as { successGates?: string[] }).successGates ?? [])
+      : []
+    const memoryDir = getProjectStateDir(projectPath)
+    const status = readBootstrapStatus(memoryDir)
+    if (status?.success && !bootstrapNeeded(memoryDir, projectPath, commands, successGates)) {
+      bootstrapVerified = true
+    }
+  }
+
+  let hasProvider = false
+  try {
+    const g = readProv()
+    const entries = g.providers ?? {}
+    hasProvider = Object.values(entries).some(v => v && typeof v === 'object')
+  } catch {
+    hasProvider = false
+  }
+  if (!hasProvider) {
+    try {
+      const oauth = detectOauth()
+      if (oauth.claude || oauth.codex) hasProvider = true
+    } catch {
+      /* leave hasProvider as-is */
+    }
+  }
+
+  const projectStateDir = getProjectStateDir(projectPath)
+  const localHistoryDir = getProjectLocalHistoryDir(projectPath)
+  const briefPath = join(projectStateDir, 'project-brief.md')
+  const briefBody = await readCachedText(briefPath).catch(() => null)
+  const hasDirection = typeof briefBody === 'string' && briefBody.trim().length > 40
+
+  const goalsPath = join(projectStateDir, 'workspace-goals.json')
+  const dismissPath = join(localHistoryDir, 'workspace-import-dismissed')
+  let workspaceImportReviewed = false
+  try {
+    await fsp.access(goalsPath)
+    workspaceImportReviewed = true
+  } catch {
+    try {
+      await fsp.access(dismissPath)
+      workspaceImportReviewed = true
+    } catch {
+      const anchors = ['README.md', 'pnpm-workspace.yaml', 'package.json', 'packages', 'skills', 'ROADMAP.md']
+      const anchorChecks = await Promise.all(
+        anchors.map(async (anchor) => {
+          try {
+            await fsp.access(join(projectPath, anchor))
+            return true
+          } catch {
+            return false
+          }
+        }),
+      )
+      workspaceImportReviewed = !anchorChecks.some(Boolean)
+    }
+  }
+
+  let taskCount = await activeTaskCountFromIndex(projectPath)
+  if (taskCount == null) {
+    const tasksPath = join(projectStateDir, 'TASKS.json')
+    const tasksRaw = await readCachedJson<unknown>(tasksPath).catch(() => null)
+    taskCount = taskCountFromRaw(tasksRaw)
+  }
+
+  return {
+    projectPath,
+    ...(cfg ? { config: cfg } : {}),
+    bootstrapVerified,
+    hasProvider,
+    hasDirection,
+    workspaceImportReviewed,
+    taskCount,
+    wizardState: await Promise.resolve(readState(projectPath)),
   }
 }

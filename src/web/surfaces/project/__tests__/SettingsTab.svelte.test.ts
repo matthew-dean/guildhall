@@ -142,6 +142,35 @@ describe('SettingsTab', () => {
     expect(fetchMock.mock.calls.some(([input]) => String(input).startsWith('/api/project/bootstrap/run'))).toBe(true)
   })
 
+  it('routes section changes through the compact settings selector', async () => {
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const url = new URL(String(input), 'http://localhost')
+      if (url.pathname === '/api/setup/status') return json({ initialized: true, name: 'Looma + Knit', id: 'looma-knit' })
+      if (url.pathname === '/api/config/levers') return json({ levers: [] })
+      if (url.pathname === '/api/project/design-system') return json({ designSystem: null })
+      if (url.pathname === '/api/project/codebase-map/status') return json(codebaseMapStatus())
+      if (url.pathname === '/api/setup/providers') return json(providersPayload())
+      if (url.pathname === '/api/project/bootstrap/status') {
+        return json({
+          configured: true,
+          needed: false,
+          status: null,
+          bootstrap: { commands: ['pnpm install'], successGates: ['pnpm test'], timeoutMs: 120000 },
+        })
+      }
+      return json({})
+    })
+    vi.stubGlobal('fetch', fetchMock)
+
+    render(SettingsTab, { subView: 'ready' })
+
+    await screen.findByRole('heading', { name: /ready to start/i })
+    const selector = screen.getByRole('combobox', { name: /settings section/i })
+    await userEvent.selectOptions(selector, 'providers')
+
+    expect(path.value).toBe('/projects/looma-knit/settings/providers')
+  })
+
   it('surfaces bootstrap run failures without marking the project ready', async () => {
     const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
       const url = new URL(String(input), 'http://localhost')
@@ -486,8 +515,8 @@ describe('SettingsTab', () => {
     await screen.findByRole('heading', { name: /ready to start/i })
     expect(screen.getByText('Blocked')).toBeInTheDocument()
     expect(screen.queryByText('3/3 ready')).toBeNull()
-    expect(screen.getByText('Run required Guildhall migration 0.8.0/project-state-layout before starting this project.')).toBeInTheDocument()
-    expect(screen.getByText('Migrate project')).toBeInTheDocument()
+    expect(screen.queryByText('Run required Guildhall migration 0.8.0/project-state-layout before starting this project.')).toBeNull()
+    expect(screen.queryByText('Migrate project')).toBeNull()
   })
 
   it('shows pending migrations even when owner input is the primary start blocker', async () => {
@@ -528,7 +557,7 @@ describe('SettingsTab', () => {
     render(SettingsTab, { subView: 'ready', onMigrate })
 
     await screen.findByRole('heading', { name: /ready to start/i })
-    expect(screen.getByText('Choose a recovery path for the blocked task')).toBeInTheDocument()
+    expect(screen.queryByText('Choose a recovery path for the blocked task')).toBeNull()
     expect(screen.getByText('3 pending Guildhall migrations will need review after the current blocker.')).toBeInTheDocument()
     await userEvent.click(screen.getByRole('button', { name: /review migrations/i }))
     expect(onMigrate).toHaveBeenCalledTimes(1)
@@ -1060,10 +1089,7 @@ describe('SettingsTab', () => {
     expect(screen.getByText('workspace')).toBeInTheDocument()
     expect(screen.getByText('api')).toBeInTheDocument()
     expect(screen.getByText('Make outline-first task shaping explicit')).toBeInTheDocument()
-    expect(screen.getByRole('link', { name: /give product feedback/i })).toHaveAttribute(
-      'href',
-      expect.stringContaining('Make+outline-first+task+shaping+explicit'),
-    )
+    expect(screen.getByRole('button', { name: /give product feedback/i })).toBeInTheDocument()
 
     await userEvent.click(screen.getByRole('button', { name: /use this/i }))
     await screen.findByText('1 in use')

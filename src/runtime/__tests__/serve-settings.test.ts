@@ -2381,7 +2381,7 @@ describe('GET /api/project/inbox — blockers', () => {
     )).toBe(true)
   })
 
-  it('returns open attention sorted by current inbox priority instead of stale record recency', async () => {
+  it('returns only needs-you alerts sorted by current inbox priority instead of stale record recency', async () => {
     const yamlPath = path.join(tmpDir, 'guildhall.yaml')
     const current = await fs.readFile(yamlPath, 'utf8')
     await fs.writeFile(
@@ -2457,8 +2457,8 @@ describe('GET /api/project/inbox — blockers', () => {
       item.taskId === 'task-thin' || item.taskId === 'task-blocked',
     )
 
-    expect(relevant.map(item => item.kind)).toEqual(['open_escalation', 'spec_fill_pending'])
-    expect(relevant.map(item => item.severity)).toEqual(['high', 'low'])
+    expect(relevant.map(item => item.kind)).toEqual(['spec_fill_pending'])
+    expect(relevant.map(item => item.severity)).toEqual(['low'])
   })
 
   it('describes project-understanding reconciliation without implying Git is missing', async () => {
@@ -2481,6 +2481,77 @@ describe('GET /api/project/inbox — blockers', () => {
       actionHref: '/workspace-import?mode=reconcile',
     })
     expect(`${item?.title ?? ''} ${item?.detail ?? ''}`).not.toMatch(/missing repo evidence/i)
+  })
+
+  it('keeps thread-owned approvals and questions out of the needs-you inbox snapshot', async () => {
+    await fs.writeFile(
+      path.join(tmpDir, '.guildhall', 'TASKS.json'),
+      JSON.stringify({
+        version: 1,
+        lastUpdated: '2026-05-31T15:00:00.000Z',
+        tasks: [
+          {
+            id: 'task-spec',
+            title: 'Approve the spec draft',
+            status: 'spec_review',
+            spec: 'Draft spec',
+            escalations: [],
+            openQuestions: [],
+            createdAt: '2026-05-31T14:00:00.000Z',
+            updatedAt: '2026-05-31T14:05:00.000Z',
+          },
+          {
+            id: 'task-question',
+            title: 'Pick a scope',
+            status: 'exploring',
+            productBrief: {
+              userJob: 'Ship the thing.',
+              successMetric: 'The thing works.',
+            },
+            openQuestions: [
+              {
+                id: 'q-1',
+                kind: 'text',
+                askedBy: 'coordinator',
+                askedAt: '2026-05-31T14:10:00.000Z',
+                prompt: 'Which scope should Guildhall use?',
+              },
+            ],
+            escalations: [],
+            createdAt: '2026-05-31T14:00:00.000Z',
+            updatedAt: '2026-05-31T14:10:00.000Z',
+          },
+          {
+            id: 'task-thin',
+            title: 'Fill in acceptance criteria',
+            status: 'ready',
+            productBrief: {
+              userJob: 'Use the task.',
+              successMetric: 'Task works.',
+              approvedAt: '2026-05-31T14:00:00.000Z',
+            },
+            acceptanceCriteria: [],
+            openQuestions: [],
+            escalations: [],
+            createdAt: '2026-05-31T14:00:00.000Z',
+            updatedAt: '2026-05-31T14:20:00.000Z',
+          },
+        ],
+      }, null, 2),
+      'utf8',
+    )
+
+    const { app } = buildServeApp({ projectPath: tmpDir })
+    const res = await app.fetch(new Request(scoped('/api/project/inbox')))
+    expect(res.status).toBe(200)
+    const body = (await res.json()) as {
+      items?: Array<{ kind?: string; taskId?: string }>
+      history?: Array<{ kind?: string; taskId?: string }>
+    }
+
+    expect(body.items?.some(item => item.kind === 'spec_approval' || item.kind === 'agent_question_pending')).toBe(false)
+    expect(body.items?.some(item => item.kind === 'spec_fill_pending' && item.taskId === 'task-thin')).toBe(true)
+    expect(body.history?.some(item => item.kind === 'spec_approval' || item.kind === 'agent_question_pending')).toBe(false)
   })
 })
 
@@ -2557,7 +2628,7 @@ describe('GET /api/project — bootstrap status', () => {
     }
 
     expect(projectBody.inbox).toEqual(inboxBody)
-    expect(projectBody.inbox?.items?.some(item => item.kind === 'spec_approval' && item.taskId === 'task-1')).toBe(true)
+    expect(projectBody.inbox?.items?.some(item => item.kind === 'spec_approval' && item.taskId === 'task-1')).toBe(false)
   })
 
   it('marks dynamic project payloads as non-cacheable', async () => {

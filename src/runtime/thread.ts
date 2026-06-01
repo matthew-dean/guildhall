@@ -35,7 +35,8 @@ import { shouldUseImportDraftState } from './import-drafts.js'
 import { META_INTAKE_TASK_ID, parseCoordinatorDraft } from './meta-intake.js'
 import { visibleOpenQuestions } from './question-visibility.js'
 import { thresholdMs } from './liveness.js'
-import { listPressureTestIntakes, summarizeProjectCheckIn } from './pressure-test-intake.js'
+import { listPressureTestIntakes, summarizeProjectCheckIn, type PressureTestIntake, type ProjectCheckInSummary } from './pressure-test-intake.js'
+import { listBoundedChatSessions, type BoundedChatSession } from './bounded-chat.js'
 import { getProjectStateDir } from '@guildhall/sessions'
 import type { GitStorySnapshot } from './git-story.js'
 import { userFacingText } from './user-facing-text.js'
@@ -239,6 +240,7 @@ export interface InFlightTurn extends TurnBase {
 export interface RequestTurn extends TurnBase {
   kind: 'request'
   requestId: string
+  taskId?: string | undefined
   rawRequest: string
   title: string
   routingSummary: string
@@ -288,6 +290,14 @@ export interface BuildThreadOptions {
   projectPath: string
   /** Optional pre-built snapshot (lets callers share one snapshot per request). */
   snapshot?: ProjectSnapshot
+  /** Optional preloaded current tasks to avoid re-reading TASKS.json. */
+  tasks?: Task[]
+  /** Optional preloaded bounded-chat sessions for current owner-input threads. */
+  boundedChatSessions?: BoundedChatSession[]
+  /** Optional preloaded pressure-test intakes. */
+  pressureTestIntakes?: PressureTestIntake[]
+  /** Optional preloaded project check-in summary. */
+  projectCheckInSummary?: ProjectCheckInSummary
   /** Current coordinator run status; when stopped, stale task activity should not project as live work. */
   runStatus?: string | undefined
   /** Recent supervisor events, used only for live "agent is currently busy" hints. */
@@ -823,7 +833,8 @@ function setupContextSummary(
 }
 
 function phaseForTurn(turn: ThreadTurn): TurnPhase {
-  if (turn.kind === 'request' || turn.kind === 'pressure_test_question') return 'intake'
+  if (turn.kind === 'request') return turn.status === 'done' ? 'done' : 'intake'
+  if (turn.kind === 'pressure_test_question') return 'intake'
   if (turn.kind === 'review_feedback') return turn.phase
   if (turn.status === 'done') return 'done'
   switch (turn.kind) {
@@ -845,8 +856,7 @@ function phaseForTurn(turn: ThreadTurn): TurnPhase {
   }
 }
 
-function pressureTestTurns(projectPath: string): ThreadTurn[] {
-  const intakes = listPressureTestIntakes(getProjectStateDir(projectPath))
+function pressureTestTurns(projectPath: string, intakes: PressureTestIntake[]): ThreadTurn[] {
   return intakes.flatMap((intake) => {
     const turns: ThreadTurn[] = [{
       kind: 'request',
@@ -892,6 +902,58 @@ function pressureTestTurns(projectPath: string): ThreadTurn[] {
   })
 }
 
+function boundedChatTurns(projectPath: string, sessions: BoundedChatSession[]): ThreadTurn[] {
+  void projectPath
+  const relevantSessions = sessions
+    .filter(session => session.objective.kind === 'project_check_in' || session.objective.kind === 'new_request')
+  const turns: ThreadTurn[] = []
+  for (const session of relevantSessions) {
+    if ((session.status === 'fulfilled' || session.status === 'blocked' || session.status === 'cancelled') && session.closure) {
+      turns.push({
+        kind: 'request',
+        id: `bounded-chat-done:${session.id}`,
+        requestId: session.id,
+        rawRequest: session.acceptedState.decisions.map(item => item.decision).join('\n'),
+        title: session.objective.kind === 'project_check_in'
+          ? 'Project check-in complete'
+          : session.objective.kind === 'new_request'
+            ? 'New request complete'
+            : `${session.objective.label} complete`,
+        routingSummary: session.closure.summary,
+        at: session.closure.closedAt,
+        persona: 'intake',
+        status: 'done',
+        phase: 'done',
+      })
+      continue
+    }
+    if (session.status !== 'waiting_for_user') continue
+    const active = session.subObjectives.find(item => item.id === session.activeSubObjectiveId && item.status === 'active')
+    if (!active) continue
+    turns.push({
+      kind: 'pressure_test_question',
+      id: `bounded-chat:${session.id}:${active.id}`,
+      intakeId: session.id,
+      targetTitle: session.projectId.replace(/-/g, ' ').replace(/\b\w/g, letter => letter.toUpperCase()),
+      domainId: 'bounded-chat',
+      domainTitle: session.objective.kind === 'new_request' ? 'New request' : 'Project check-in',
+      question: {
+        id: active.id,
+        prompt: active.prompt,
+        why: active.helperText ?? 'Guildhall needs one clear answer before it shapes future work.',
+        choices: active.choices,
+        evidence: session.acceptedState.facts.map(fact => fact.fact),
+      },
+      answerEndpoint: `/api/project/bounded-chat/${encodeURIComponent(session.id)}/answer`,
+      at: session.updatedAt,
+      persona: 'intake',
+      status: 'active',
+      phase: 'intake',
+    })
+  }
+  return turns
+}
+
 function taskRequestTurn(task: Task, taskId: string, taskStatus: string, createdAt: string): RequestTurn | null {
   const request = task.request
   if (!request || typeof request !== 'object') return null
@@ -910,6 +972,7 @@ function taskRequestTurn(task: Task, taskId: string, taskStatus: string, created
     kind: 'request',
     id: `request:${requestId}`,
     requestId,
+    taskId,
     rawRequest,
     title,
     routingSummary,
@@ -1330,8 +1393,11 @@ export function buildThread(opts: BuildThreadOptions): Thread {
   const snap = opts.snapshot ?? buildSnapshot({ projectPath: opts.projectPath })
   const turns: ThreadTurn[] = []
   const tasksPath = join(getProjectStateDir(opts.projectPath), 'TASKS.json')
-  const tasks = existsSync(tasksPath) ? tasksArray(readJsonSafe(tasksPath)) : []
-  turns.push(...pressureTestTurns(opts.projectPath))
+  const tasks = opts.tasks ?? (existsSync(tasksPath) ? tasksArray(readJsonSafe(tasksPath)) : [])
+  const boundedChats = opts.boundedChatSessions ?? listBoundedChatSessions(getProjectStateDir(opts.projectPath))
+  const pressureTests = opts.pressureTestIntakes ?? listPressureTestIntakes(getProjectStateDir(opts.projectPath))
+  turns.push(...boundedChatTurns(opts.projectPath, boundedChats))
+  turns.push(...pressureTestTurns(opts.projectPath, pressureTests))
   const activityCutoffs = currentActivityCutoffs(tasks)
   const liveAgents = liveAgentsByTask(opts.recentEvents, activityCutoffs)
   const liveActivity = activityByTask(opts.recentEvents, activityCutoffs)
@@ -1399,7 +1465,7 @@ export function buildThread(opts: BuildThreadOptions): Thread {
     })
   }
 
-  const projectCheckIn = summarizeProjectCheckIn(getProjectStateDir(opts.projectPath))
+  const projectCheckIn = opts.projectCheckInSummary ?? summarizeProjectCheckIn(getProjectStateDir(opts.projectPath))
   if (projectCheckIn.needed) {
     turns.push({
       kind: 'setup_step',

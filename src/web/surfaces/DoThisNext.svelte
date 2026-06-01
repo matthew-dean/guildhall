@@ -8,8 +8,8 @@
 -->
 <script lang="ts">
   import ActionBar from '../lib/ActionBar.svelte'
-  import Card from '../lib/Card.svelte'
   import Button from '../lib/Button.svelte'
+  import Card from '../lib/Card.svelte'
   import { onEvent } from '../lib/events.js'
   import { nav, path } from '../lib/nav.svelte.js'
   import { projectActionHref, projectFetch } from '../lib/project-routes.js'
@@ -22,15 +22,7 @@
     taskId?: string
     actionHref?: string
   }
-  interface StartReadiness {
-    canStart?: boolean
-    code?: string
-    message?: string
-    actionHref?: string
-  }
-
   let items = $state<InboxItem[]>([])
-  let startReadiness = $state<StartReadiness | null>(null)
   let loaded = $state(false)
 
   async function load(): Promise<void> {
@@ -39,11 +31,6 @@
       if (inboxRes.ok) {
         const j = (await inboxRes.json()) as { items?: InboxItem[] }
         items = j.items ?? []
-      }
-      const projectRes = await projectFetch('/api/project')
-      if (projectRes.ok) {
-        const j = (await projectRes.json()) as { startReadiness?: StartReadiness | null }
-        startReadiness = j.startReadiness ?? null
       }
     } catch {
       /* keep prior */
@@ -81,25 +68,6 @@
   function prescribe(item: InboxItem): Prescription {
     const id = item.taskId ? ` on ${item.title}` : ''
     switch (item.kind) {
-      case 'start_readiness':
-        return {
-          verb:
-            item.title ||
-            (item.detail?.toLowerCase().includes('migration')
-              ? 'Run the required migration'
-              : 'Resolve the project blocker'),
-          why: item.detail?.toLowerCase().includes('migration')
-            ? item.detail
-            : 'Guildhall needs this resolved before project work can move safely.',
-          button: item.detail?.toLowerCase().includes('migration')
-            ? 'Migrate project'
-            : item.detail?.toLowerCase().includes('question') || item.detail?.toLowerCase().includes('answer')
-              ? 'Answer question'
-              : item.detail?.toLowerCase().includes('spec')
-                ? 'Review spec'
-                : 'Review recovery',
-          href: item.actionHref ?? '/overview/inbox',
-        }
       case 'bootstrap_missing':
         return {
           verb: 'Verify your bootstrap commands',
@@ -215,23 +183,7 @@
     moreHref: string
   }
 
-  const readinessItem = $derived<InboxItem | null>(
-    startReadiness?.canStart === false && startReadiness.code !== 'all_terminal'
-      ? {
-          kind: 'start_readiness',
-          severity: 'high',
-          title: startReadiness.code === 'required_migration_pending'
-            ? 'Required migration'
-            : startReadiness.message ?? 'Resolve project blocker',
-          detail: startReadiness.message,
-          actionHref: startReadiness.actionHref,
-        }
-      : null,
-  )
-  const prescribedItems = $derived.by(() => [
-    ...(readinessItem ? [readinessItem] : []),
-    ...items,
-  ].map(item => ({ item, prescription: prescribe(item) })))
+  const prescribedItems = $derived.by(() => items.map(item => ({ item, prescription: prescribe(item) })))
   const visibleItems = $derived.by(() =>
     prescribedItems.filter(({ prescription }) => routeOnly(projectActionHref(prescription.href)) !== path.value),
   )
@@ -262,12 +214,12 @@
           })()
         : null,
   )
-  const tone = $derived(
+  const tone = $derived<'default' | 'warn'>(
     source?.severity === 'high'
-      ? 'danger'
+      ? 'warn'
       : source?.severity === 'medium'
         ? 'warn'
-        : 'neutral',
+        : 'default',
   )
   const moreCount = $derived(visibleItems.length - 1)
 
@@ -280,7 +232,7 @@
 
 {#if loaded && source}
   <div class="next-wrap">
-    <Card {tone}>
+    <Card tone={tone} variant="callout" railStrength="strong" frosted className="next-card">
     <div class="row">
       <div class="text">
         <div class="eyebrow">Do this next</div>
@@ -308,13 +260,24 @@
   .next-wrap {
     margin-block: var(--s-3) var(--s-4);
   }
+
+  .next-wrap :global(.next-card) {
+    gap: var(--s-3);
+  }
+
   .row {
     display: flex;
     align-items: center;
     gap: var(--s-3);
     flex-wrap: wrap;
+    min-block-size: 3.75rem;
   }
-  .text { flex: 1; min-width: 220px; }
+  .text {
+    flex: 1 1 30rem;
+    min-width: 18rem;
+    display: grid;
+    align-content: center;
+  }
   .eyebrow {
     font-size: var(--fs-1);
     font-weight: 700;
@@ -333,5 +296,9 @@
     font-size: var(--fs-1);
     color: var(--text-muted);
     line-height: var(--lh-body);
+  }
+
+  .next-wrap :global(.action-bar) {
+    align-self: center;
   }
 </style>

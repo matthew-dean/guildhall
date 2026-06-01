@@ -71,21 +71,11 @@ describe('DoThisNext', () => {
     expect(path.value).toBe('/projects/looma-knit/settings/ready')
   })
 
-  it('uses project start readiness ahead of stale inbox ordering', async () => {
+  it('stays focused on inbox work even when project start readiness exists elsewhere', async () => {
     vi.stubGlobal(
       'fetch',
       vi.fn(async (input: RequestInfo | URL) => {
         const url = String(input)
-        if (url === '/api/project?projectId=looma-knit') {
-          return json({
-            startReadiness: {
-              canStart: false,
-              code: 'owner_input_required',
-              message: 'Choose a recovery path for the blocked task',
-              actionHref: '/task/task-current',
-            },
-          })
-        }
         return json({
           items: [
             {
@@ -102,9 +92,8 @@ describe('DoThisNext', () => {
 
     render(DoThisNext)
 
-    await screen.findByText('Choose a recovery path for the blocked task')
-    expect(screen.getByRole('button', { name: /review recovery/i })).toBeTruthy()
-    expect(screen.queryByText('Review project discovery update')).toBeNull()
+    await screen.findByText('Review project discovery update')
+    expect(screen.getByRole('button', { name: /review update/i })).toBeTruthy()
   })
 
   it('hides low-severity inbox noise when nothing actionable is waiting', async () => {

@@ -24,7 +24,7 @@ describe('InboxTab', () => {
     cleanup()
   })
 
-  it('loads its own inbox data, navigates scoped actions, and shows low-priority items in the ledger', async () => {
+  it('loads its own needs-you data, points people back to Threads for conversations, and shows optional nudges separately', async () => {
     vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
       const url = new URL(String(input), 'http://localhost')
       if (url.pathname === '/api/project/inbox') {
@@ -65,7 +65,10 @@ describe('InboxTab', () => {
     render(InboxTab)
 
     await screen.findByText('Choose link editor scope')
-    expect(screen.queryByText('Optional cleanup')).not.toBeInTheDocument()
+    expect(screen.getByText('Active conversations now live in Threads.')).toBeInTheDocument()
+    expect(screen.getByRole('link', { name: 'Open Threads' })).toHaveAttribute('href', '/projects/looma-knit/thread')
+    expect(screen.getByText('Project alerts')).toBeInTheDocument()
+    expect(screen.getByText('Optional nudges')).toBeInTheDocument()
     expect(screen.getByText('Review imported notes')).toBeInTheDocument()
     expect(screen.getByText(/Safe defaults are active/)).toBeInTheDocument()
     expect(screen.getByText(/Review them only if you want to tune autonomy, recovery, or review strictness/)).toBeInTheDocument()
@@ -176,7 +179,7 @@ describe('InboxTab', () => {
     expect(screen.queryByText(/missing repo evidence/i)).not.toBeInTheDocument()
   })
 
-  it('counts the visible ledger rows instead of only actionable rows', async () => {
+  it('counts the visible history rows instead of only actionable rows', async () => {
     render(InboxTab, {
       items: [
         {
@@ -225,9 +228,10 @@ describe('InboxTab', () => {
 
     expect(screen.getByText('(3 items)')).toBeInTheDocument()
     expect(screen.getByText('Migrated')).toBeInTheDocument()
+    expect(screen.getByText('Recent history')).toBeInTheDocument()
   })
 
-  it('uses the shared aligned action list structure for wide inbox rows', async () => {
+  it('uses compact utility-panel groups instead of the old wide inbox table', async () => {
     const items = [
       {
         id: 'spec',
@@ -252,18 +256,13 @@ describe('InboxTab', () => {
 
     const { container } = render(InboxTab, {
       items,
+      history: items,
       loaded: true,
     })
 
-    const list = screen.getByLabelText('Needs you items')
-    expect(list).toHaveStyle({
-      '--aligned-list-columns': '64px minmax(360px, 1fr) minmax(116px, max-content) minmax(136px, max-content) minmax(220px, max-content)',
-    })
-    expect(container.querySelectorAll('.aligned-list-head span')).toHaveLength(5)
-    expect(container.querySelectorAll('.inbox-row.aligned-list-row')).toHaveLength(2)
-    expect(screen.getByText('State')).toBeInTheDocument()
-    expect(screen.getByText('Updated')).toBeInTheDocument()
-    expect(screen.getByText('Action')).toBeInTheDocument()
+    expect(container.querySelectorAll('.utility-panel')).not.toHaveLength(0)
+    expect(screen.getByText('Project alerts')).toBeInTheDocument()
+    expect(screen.getByText('Recent history')).toBeInTheDocument()
     expect(screen.getByText('Review spec →')).toBeInTheDocument()
   })
 

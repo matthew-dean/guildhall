@@ -4,7 +4,9 @@
 -->
 <script lang="ts">
   import ActionBar from '../../lib/ActionBar.svelte'
+  import Chip from '../../lib/Chip.svelte'
   import TaskCard from '../../lib/TaskCard.svelte'
+  import UtilityPanel from '../../lib/UtilityPanel.svelte'
   import { friendlyDomain, friendlyStewardName } from '../../lib/display.js'
   import { nav } from '../../lib/nav.svelte.js'
   import { currentProjectHref } from '../../lib/project-routes.js'
@@ -69,19 +71,19 @@
       </p>
     {/if}
     <ul class="intro-meta">
-      <li><code>domain</code> is the routing label Guildhall uses for tasks.</li>
-      <li><code>path</code> is optional and only narrows scope when a slice covers a subproject.</li>
-      <li>Editing still lives in <code>guildhall.yaml</code>.</li>
+      <UtilityPanel as="li" tone="neutral" dense><code>domain</code> is the routing label Guildhall uses for tasks.</UtilityPanel>
+      <UtilityPanel as="li" tone="neutral" dense><code>path</code> is optional and only narrows scope when a slice covers a subproject.</UtilityPanel>
+      <UtilityPanel as="li" tone="neutral" dense>Editing still lives in <code>guildhall.yaml</code>.</UtilityPanel>
     </ul>
   </section>
   {#if selectedColumn}
     <section class="detail-shell">
       <div class="detail-main">
-        <div class="detail-card">
+        <UtilityPanel className="detail-card" tone="neutral">
             <div class="detail-head">
               <div class="detail-meta-row">
-              <span class="domain-chip">Part: {friendlyDomain(selectedColumn.c.domain) || 'Unknown'}</span>
-              <span class="scope-chip">Scope: {scopeLabel(selectedColumn.c.path)}</span>
+              <Chip label={`Part: ${friendlyDomain(selectedColumn.c.domain) || 'Unknown'}`} tone="accent" />
+              <Chip label={`Scope: ${scopeLabel(selectedColumn.c.path)}`} tone="neutral" />
               </div>
               <button type="button" class="linkbtn" onclick={() => nav(currentProjectHref('/routing', detail.id))}>
               View all routing →
@@ -92,7 +94,7 @@
             <p class="detail-copy">{fullMandate(selectedColumn.c.mandate)}</p>
           </div>
           <div class="detail-grid">
-            <div class="policy-card">
+            <UtilityPanel className="policy-card" tone="neutral" dense>
               <div class="label">Concerns</div>
               {#if selectedColumn.c.concerns?.length}
                 <div class="policy-list">
@@ -113,8 +115,8 @@
               {:else}
                 <p class="detail-empty">No specific concerns recorded yet.</p>
               {/if}
-            </div>
-            <div class="policy-card">
+            </UtilityPanel>
+            <UtilityPanel className="policy-card" tone="neutral" dense>
               <div class="label">Autonomous decisions</div>
               {#if selectedColumn.c.autonomousDecisions?.length}
                 <ul class="policy-bullets">
@@ -125,8 +127,8 @@
               {:else}
                 <p class="detail-empty">No autonomous decisions recorded yet.</p>
               {/if}
-            </div>
-            <div class="policy-card">
+            </UtilityPanel>
+            <UtilityPanel className="policy-card" tone="neutral" dense>
               <div class="label">Escalation triggers</div>
               {#if selectedColumn.c.escalationTriggers?.length}
                 <ul class="policy-bullets">
@@ -137,23 +139,23 @@
               {:else}
                 <p class="detail-empty">No escalation triggers recorded yet.</p>
               {/if}
-            </div>
+            </UtilityPanel>
           </div>
-        </div>
+        </UtilityPanel>
       </div>
       <aside class="detail-side">
-        <div class="detail-card">
+        <UtilityPanel className="detail-card" tone="neutral">
           <div class="label">Live summary</div>
           <dl class="stats-list">
-            <div><dt>Active</dt><dd>{selectedColumn.active}</dd></div>
-            <div><dt>Blocked</dt><dd>{selectedColumn.blocked}</dd></div>
-            <div><dt>Awaiting approval</dt><dd>{selectedColumn.awaitingApproval}</dd></div>
-            <div><dt>Done</dt><dd>{selectedColumn.done}</dd></div>
-            <div><dt>Total</dt><dd>{selectedColumn.domainTasks.length}</dd></div>
+            <UtilityPanel as="div" tone="neutral" dense><dt>Active</dt><dd>{selectedColumn.active}</dd></UtilityPanel>
+            <UtilityPanel as="div" tone="neutral" dense><dt>Blocked</dt><dd>{selectedColumn.blocked}</dd></UtilityPanel>
+            <UtilityPanel as="div" tone="neutral" dense><dt>Awaiting approval</dt><dd>{selectedColumn.awaitingApproval}</dd></UtilityPanel>
+            <UtilityPanel as="div" tone="neutral" dense><dt>Done</dt><dd>{selectedColumn.done}</dd></UtilityPanel>
+            <UtilityPanel as="div" tone="neutral" dense><dt>Total</dt><dd>{selectedColumn.domainTasks.length}</dd></UtilityPanel>
           </dl>
           <div class="label">Recent flow</div>
           <div class="spark">{selectedColumn.spark}</div>
-        </div>
+        </UtilityPanel>
       </aside>
     </section>
   {/if}
@@ -181,12 +183,12 @@
   {:else}
     <div class="board">
       {#each columns as col (col.c.id ?? col.c.domain)}
-        <div class="col">
+        <UtilityPanel as="section" className="col" tone="neutral">
           <div class="col-head">
             <span class="name">{friendlyStewardName(undefined, col.c.domain, col.c.id)}</span>
             <div class="meta-row">
-              <span class="domain-chip">Part: {friendlyDomain(col.c.domain) || 'Unknown'}</span>
-              <span class="scope-chip">Scope: {scopeLabel(col.c.path)}</span>
+              <Chip label={`Part: ${friendlyDomain(col.c.domain) || 'Unknown'}`} tone="accent" />
+              <Chip label={`Scope: ${scopeLabel(col.c.path)}`} tone="neutral" />
             </div>
             <span class="mini">
               {col.active} active
@@ -223,7 +225,7 @@
               </div>
             {/if}
           {/if}
-        </div>
+        </UtilityPanel>
       {/each}
     </div>
   {/if}
@@ -264,12 +266,6 @@
     list-style: none;
     font-size: var(--fs-1);
     color: var(--text-muted);
-  }
-  .intro-meta li {
-    background: var(--bg-raised);
-    border: 1px solid var(--border);
-    border-radius: var(--r-1);
-    padding: 6px 10px;
   }
   .linkbtn {
     background: transparent;
@@ -320,10 +316,6 @@
     min-width: 0;
   }
   .detail-card {
-    background: var(--bg-raised);
-    border: 1px solid var(--border);
-    border-radius: var(--r-3);
-    padding: var(--s-3);
     display: flex;
     flex-direction: column;
     gap: var(--s-3);
@@ -357,10 +349,6 @@
     gap: var(--s-2);
   }
   .policy-card {
-    background: var(--bg);
-    border: 1px solid var(--border);
-    border-radius: var(--r-2);
-    padding: var(--s-3);
     display: flex;
     flex-direction: column;
     gap: var(--s-2);
@@ -408,10 +396,7 @@
     gap: var(--s-2);
     margin: 0;
   }
-  .stats-list div {
-    background: var(--bg);
-    border: 1px solid var(--border);
-    border-radius: var(--r-1);
+  .stats-list :global(.utility-panel) {
     padding: 8px 10px;
   }
   .stats-list dt {
@@ -429,10 +414,6 @@
     color: var(--text);
   }
   .col {
-    background: var(--bg-raised);
-    border: 1px solid var(--border);
-    border-radius: var(--r-3);
-    padding: var(--s-3);
     display: flex;
     flex-direction: column;
     gap: var(--s-2);
@@ -452,22 +433,6 @@
     display: flex;
     flex-wrap: wrap;
     gap: 8px;
-  }
-  .domain-chip,
-  .scope-chip {
-    display: inline-flex;
-    align-items: center;
-    min-height: 24px;
-    padding: 0 10px;
-    border-radius: 999px;
-    font-size: var(--fs-0);
-    font-weight: 700;
-    border: 1px solid var(--border);
-    background: var(--bg-raised-2);
-    color: var(--text-muted);
-  }
-  .domain-chip {
-    color: var(--accent-2);
   }
   .mini {
     font-size: var(--fs-0);

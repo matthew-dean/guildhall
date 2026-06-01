@@ -124,8 +124,24 @@ import {
   createPressureTestIntake,
   loadPressureTestIntake,
   listPressureTestIntakes,
+  listPressureTestIntakesAsync,
   summarizeProjectCheckIn,
 } from './pressure-test-intake.js'
+import { routeRequest } from './request-routing.js'
+import {
+  answerProjectCheckInBoundedChat,
+  createProjectCheckInBoundedChat,
+  resumeProjectCheckInBoundedChat,
+} from './bounded-chat-project-check-in.js'
+import {
+  answerNewRequestBoundedChat,
+  createNewRequestBoundedChat,
+} from './bounded-chat-new-request.js'
+import {
+  listBoundedChatSessions,
+  listBoundedChatSessionsAsync,
+  loadBoundedChatSession,
+} from './bounded-chat.js'
 import { loadDesignSystem, saveDesignSystem } from './design-system-store.js'
 import { discoverDesignPreviewAdapter } from './design-preview.js'
 import { buildDesignSystemProfile } from './design-system-discovery.js'
@@ -195,7 +211,13 @@ import {
   resetProjectSkillProposals,
 } from '@guildhall/skills'
 import { normalizeImportedDraftTask } from './import-drafts.js'
-import { buildInbox, buildInboxBlockers, detectRepoAnchors } from './inbox.js'
+import {
+  buildInbox,
+  buildInboxBlockers,
+  detectRepoAnchors,
+  isAttentionOwnedInboxItem,
+  isThreadOwnedInboxItem,
+} from './inbox.js'
 import {
   buildProjectMigrationAdvisories,
   buildProjectUnderstandingAdvisories,
@@ -254,6 +276,7 @@ import { userFacingText } from './user-facing-text.js'
 import { FileBackedGuildhallPersistence } from '@guildhall/persistence'
 import {
   buildSnapshot,
+  buildSnapshotAsync,
   listWizards,
   progressFor,
   readWizardsState,
@@ -263,6 +286,7 @@ import {
   progressForTask,
   type WizardsState,
 } from './wizards.js'
+import { readCachedJson } from './file-read-cache.js'
 import { applyProjectMigrations, getProjectMigrationStatus } from './migrations.js'
 import { stringify as stringifyYaml } from 'yaml'
 import {
@@ -729,15 +753,27 @@ function isTerminalOwnershipMismatch(task: Record<string, unknown>): boolean {
   )
 }
 
-  async function readTasksFileNormalized(
+const normalizedTasksCache = new Map<string, { raw: unknown; tasks: Array<Record<string, unknown>> }>()
+
+function sameSerializedTasks(left: unknown, right: unknown): boolean {
+  return JSON.stringify(left) === JSON.stringify(right)
+}
+
+async function readTasksFileNormalized(
   tasksPath: string,
 ): Promise<Array<Record<string, unknown>>> {
   if (!existsSync(tasksPath)) return []
-  const rawText = await fsp.readFile(tasksPath, 'utf8')
-  const parsed = JSON.parse(rawText) as
+  const parsed = await readCachedJson<
     | { tasks?: Array<Record<string, unknown>>; version?: unknown; lastUpdated?: unknown }
     | Array<Record<string, unknown>>
-  const tasks = Array.isArray(parsed) ? parsed : Array.isArray(parsed?.tasks) ? parsed.tasks : []
+  >(tasksPath)
+  if (parsed == null) return []
+  const cached = normalizedTasksCache.get(tasksPath)
+  if (cached && sameSerializedTasks(cached.raw, parsed)) {
+    return cached.tasks.map(task => ({ ...task }))
+  }
+  const tasks = (Array.isArray(parsed) ? parsed : Array.isArray(parsed?.tasks) ? parsed.tasks : [])
+    .map(task => ({ ...task }))
   let changed = false
   for (const task of tasks) {
     if (normalizeImportedDraftTask(task as never)) {
@@ -778,7 +814,10 @@ function isTerminalOwnershipMismatch(task: Record<string, unknown>): boolean {
       changed = true
     }
   }
-  if (!changed) return tasks
+  if (!changed) {
+    normalizedTasksCache.set(tasksPath, { raw: parsed, tasks: tasks.map(task => ({ ...task })) })
+    return tasks
+  }
 
   const rewritten = Array.isArray(parsed)
     ? tasks
@@ -788,7 +827,63 @@ function isTerminalOwnershipMismatch(task: Record<string, unknown>): boolean {
         lastUpdated: new Date().toISOString(),
       }
   await atomicWriteText(tasksPath, JSON.stringify(rewritten, null, 2))
+  normalizedTasksCache.set(tasksPath, { raw: rewritten, tasks: tasks.map(task => ({ ...task })) })
   return tasks
+}
+
+function projectCheckInSummaryFromState(
+  intakes: Array<{ status: string }>,
+  chats: Array<{ status: string; objective: { kind: string } }>,
+) {
+  const projectChats = chats.filter(session => session.objective.kind === 'project_check_in' || session.objective.kind === 'project_intake')
+  const activeCount =
+    intakes.filter(intake => intake.status === 'active').length +
+    projectChats.filter(chat => chat.status === 'waiting_for_user' || chat.status === 'coordinator_review').length
+  const completedCount =
+    intakes.filter(intake => intake.status === 'complete').length +
+    projectChats.filter(chat => chat.status === 'fulfilled').length
+  const needed = intakes.length === 0 && projectChats.length === 0
+  return {
+    needed,
+    label: 'Project questions',
+    title: needed
+      ? 'Run project check-in'
+      : activeCount > 0
+        ? 'Project questions in progress'
+        : 'Project questions answered',
+    detail: needed
+      ? 'Guildhall has not generated the first project questions yet. Start the check-in pass so it can ask one clear question at a time.'
+      : activeCount > 0
+        ? 'Keep answering the current project questions in Thread.'
+        : 'Guildhall has already recorded project-level answers for this workspace.',
+    actionHref: '/thread',
+    totalCount: intakes.length,
+    activeCount,
+    completedCount,
+  }
+}
+
+async function loadThreadProjectionState(projectPath: string) {
+  const memoryDir = getProjectStateDir(projectPath)
+  const [snapshot, tasks, boundedChatSessions, pressureTestIntakes] = await Promise.all([
+    buildSnapshotAsync({ projectPath }),
+    readTasksFileNormalized(join(memoryDir, 'TASKS.json')).catch(() => []),
+    listBoundedChatSessionsAsync(memoryDir).catch(() => []),
+    listPressureTestIntakesAsync(memoryDir).catch(() => []),
+  ])
+  return {
+    snapshot,
+    tasks,
+    boundedChatSessions,
+    pressureTestIntakes,
+    projectCheckInSummary: projectCheckInSummaryFromState(pressureTestIntakes, boundedChatSessions),
+  }
+}
+
+function formatServerTiming(metrics: Array<{ name: string; startedAt: number; endedAt?: number }>): string {
+  return metrics
+    .map(metric => `${metric.name};dur=${Math.max(0, (metric.endedAt ?? Date.now()) - metric.startedAt)}`)
+    .join(', ')
 }
 
 async function buildProjectInboxSnapshot(input: {
@@ -842,13 +937,17 @@ async function buildProjectInboxSnapshot(input: {
     ...await buildProjectMigrationAdvisories(input.projectPath),
     ...buildProjectUnderstandingAdvisories(input.projectPath),
     ...buildInbox({ projectPath: input.projectPath }),
-  ]
+  ].filter(isAttentionOwnedInboxItem)
   const attention = reconcileAttentionRecords({
     projectPath: input.projectPath,
     openItems: computedItems,
   })
   const blockers = buildInboxBlockers(attention.openItems)
-  return { items: attention.openItems, history: attention.history, blockers }
+  return {
+    items: attention.openItems.filter(isAttentionOwnedInboxItem),
+    history: attention.history.filter(isAttentionOwnedInboxItem),
+    blockers,
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -3570,17 +3669,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
     message: string
     actionHref: string
   } | null {
-    const ownerItems = buildInbox({ projectPath }).filter(item =>
-      item.severity !== 'low' &&
-      [
-        'project_check_in',
-        'pressure_test_pending',
-        'agent_question_pending',
-        'brief_approval',
-        'spec_approval',
-        'open_escalation',
-      ].includes(item.kind),
-    )
+    const ownerItems = buildInbox({ projectPath }).filter(item => item.severity !== 'low' && isThreadOwnedInboxItem(item))
     const first = ownerItems[0]
     if (!first) return null
     const firstQuestion = ownerItems.find(item =>
@@ -3940,6 +4029,37 @@ export function buildServeApp(opts: ServeOptions = {}): {
       if (!domain) {
         return c.json({ error: 'Guildhall has not inferred repo structure here yet — run repo inspection first' }, 400)
       }
+      const routed = routeRequest({
+        raw: body.ask,
+        source: 'api',
+        routeContext: { route: '/api/project/request' },
+      })
+      const firstAction = routed.actions[0]
+      if (firstAction?.kind === 'pressure_test_intake') {
+        const result = await createRoutedRequest({
+          memoryDir: getProjectStateDir(project.path),
+          ask: body.ask,
+          domain,
+          projectPath: resolveTaskPathForDomain(project, domain),
+          workspacePath: project.path,
+          ...(body.title ? { title: body.title } : {}),
+        })
+        return c.json(result)
+      }
+      if (firstAction?.kind === 'task_spec') {
+        const boundedChat = await createNewRequestBoundedChat({
+          memoryDir: getProjectStateDir(project.path),
+          projectId: project.id,
+          ask: body.ask,
+          domain,
+          projectPath: resolveTaskPathForDomain(project, domain),
+          workspacePath: project.path,
+          ...(body.title ? { title: body.title } : {}),
+          routedRequestKind: firstAction.kind,
+          routingSummary: 'Routed to Task Intake',
+        })
+        return c.json({ boundedChat })
+      }
       const result = await createRoutedRequest({
         memoryDir: getProjectStateDir(project.path),
         ask: body.ask,
@@ -3960,26 +4080,85 @@ export function buildServeApp(opts: ServeOptions = {}): {
         return c.json({ error: 'Project not initialized. Complete /setup first.' }, 400)
       }
       const memoryDir = getProjectStateDir(project.path)
+      const existingChats = listBoundedChatSessions(memoryDir)
+        .filter(session => session.objective.kind === 'project_check_in' || session.objective.kind === 'project_intake')
+      const activeChat = existingChats.find(session => session.status === 'waiting_for_user' || session.status === 'coordinator_review')
+      if (activeChat) {
+        const boundedChat = await resumeProjectCheckInBoundedChat({
+          memoryDir,
+          projectId: project.id,
+          projectName: project.config?.name ?? project.id,
+        })
+        return c.json({ boundedChat, existing: true })
+      }
       const existing = listPressureTestIntakes(memoryDir)
       const active = existing.find(intake => intake.status === 'active')
       if (active) return c.json({ intake: active, existing: true })
-      if (existing.length > 0) {
+      if (existingChats.length > 0 || existing.length > 0) {
         return c.json({
           skipped: true,
           projectCheckIn: summarizeProjectCheckIn(memoryDir),
         })
       }
-      const title = `${project.config?.name ?? project.id} project check-in`
-      const intake = await createPressureTestIntake({
+      const boundedChat = await createProjectCheckInBoundedChat({
         memoryDir,
-        target: {
-          type: 'project',
-          id: `${project.id}-project-check-in`,
-          title,
-        },
-        rawRequest: `Start a project check-in for ${project.config?.name ?? project.id}.`,
+        projectId: project.id,
+        projectName: project.config?.name ?? project.id,
       })
-      return c.json({ intake, projectCheckIn: summarizeProjectCheckIn(memoryDir) })
+      return c.json({ boundedChat, projectCheckIn: summarizeProjectCheckIn(memoryDir) })
+    } catch (err) {
+      return c.json({ error: err instanceof Error ? err.message : String(err) }, 500)
+    }
+  })
+
+  app.get('/api/project/bounded-chat/:id', async c => {
+    try {
+      const boundedChat = await loadBoundedChatSession({
+        memoryDir: getProjectStateDir(project.path),
+        sessionId: c.req.param('id'),
+      })
+      return c.json({ boundedChat })
+    } catch (err) {
+      return c.json({ error: err instanceof Error ? err.message : String(err) }, 500)
+    }
+  })
+
+  app.post('/api/project/bounded-chat/:id/answer', async c => {
+    try {
+      const body = await c.req.json().catch(() => ({})) as {
+        questionId?: string
+        subObjectiveId?: string
+        answer?: string
+        response?: string
+      }
+      const subObjectiveId = body.subObjectiveId?.trim() || body.questionId?.trim()
+      const response = body.response?.trim() || body.answer?.trim()
+      if (!subObjectiveId || !response) {
+        return c.json({ error: 'Sub-objective and response are required.' }, 400)
+      }
+      const session = await loadBoundedChatSession({
+        memoryDir: getProjectStateDir(project.path),
+        sessionId: c.req.param('id'),
+      })
+      if (session.objective.kind === 'project_check_in') {
+        const boundedChat = await answerProjectCheckInBoundedChat({
+          memoryDir: getProjectStateDir(project.path),
+          sessionId: session.id,
+          subObjectiveId,
+          response,
+        })
+        return c.json({ boundedChat })
+      }
+      if (session.objective.kind === 'new_request') {
+        const boundedChat = await answerNewRequestBoundedChat({
+          memoryDir: getProjectStateDir(project.path),
+          sessionId: session.id,
+          subObjectiveId,
+          response,
+        })
+        return c.json({ boundedChat })
+      }
+      return c.json({ error: 'This bounded chat objective is not supported here yet.' }, 400)
     } catch (err) {
       return c.json({ error: err instanceof Error ? err.message : String(err) }, 500)
     }
@@ -5267,13 +5446,45 @@ export function buildServeApp(opts: ServeOptions = {}): {
       if (project.initializationNeeded) {
         return c.json({ turns: [], activeTurnId: null, caughtUp: false })
       }
+      const timing: Array<{ name: string; startedAt: number; endedAt?: number }> = [{ name: 'thread-core', startedAt: Date.now() }]
       try {
         repairStaleBlockersForProject(project.path)
       } catch {
         /* never let stale-blocker repair break a thread read */
       }
+      const state = await loadThreadProjectionState(project.path)
       const thread = buildThread({
         projectPath: project.path,
+        snapshot: state.snapshot,
+        tasks: state.tasks as never,
+        boundedChatSessions: state.boundedChatSessions,
+        pressureTestIntakes: state.pressureTestIntakes,
+        projectCheckInSummary: state.projectCheckInSummary,
+        runStatus: supervisor.get(project.id)?.status ?? 'stopped',
+        recentEvents: supervisor.recent(project.id, undefined, project.path),
+      })
+      timing[0]!.endedAt = Date.now()
+      c.header('server-timing', formatServerTiming(timing))
+      return c.json(thread)
+    } catch (err) {
+      return c.json({ error: err instanceof Error ? err.message : String(err) }, 500)
+    }
+  })
+
+  app.get('/api/project/thread/extras', async c => {
+    try {
+      if (project.initializationNeeded) {
+        return c.json({ taskGitStories: {} })
+      }
+      const timing: Array<{ name: string; startedAt: number; endedAt?: number }> = [{ name: 'thread-extras', startedAt: Date.now() }]
+      const state = await loadThreadProjectionState(project.path)
+      const thread = buildThread({
+        projectPath: project.path,
+        snapshot: state.snapshot,
+        tasks: state.tasks as never,
+        boundedChatSessions: state.boundedChatSessions,
+        pressureTestIntakes: state.pressureTestIntakes,
+        projectCheckInSummary: state.projectCheckInSummary,
         runStatus: supervisor.get(project.id)?.status ?? 'stopped',
         recentEvents: supervisor.recent(project.id, undefined, project.path),
       })
@@ -5282,25 +5493,19 @@ export function buildServeApp(opts: ServeOptions = {}): {
           .map(turn => ('taskId' in turn ? turn.taskId : null))
           .filter((id): id is string => Boolean(id)),
       )
+      const taskGitStories: Record<string, unknown> = {}
       if (taskIds.size > 0) {
-        const tasks = await readTasksFileNormalized(join(getProjectStateDir(project.path), 'TASKS.json')).catch(() => [])
         const workspaceStore = await readTaskWorkspaceStore(project.path).catch(() => undefined)
-        const gitStories = new Map<string, Awaited<ReturnType<typeof gitStoryForTask>>>()
-        for (const task of tasks) {
+        for (const task of state.tasks) {
           const id = typeof task.id === 'string' ? task.id : ''
           if (!id || !taskIds.has(id)) continue
           const gitStory = await gitStoryForTask(project.path, task, workspaceStore?.workspaces[id]).catch(() => undefined)
-          if (gitStory) gitStories.set(id, gitStory)
-        }
-        if (gitStories.size > 0) {
-          thread.turns = thread.turns.map(turn => {
-            if (!('taskId' in turn)) return turn
-            const gitStory = gitStories.get(turn.taskId)
-            return gitStory ? { ...turn, gitStory } : turn
-          })
+          if (gitStory) taskGitStories[id] = gitStory
         }
       }
-      return c.json(thread)
+      timing[0]!.endedAt = Date.now()
+      c.header('server-timing', formatServerTiming(timing))
+      return c.json({ taskGitStories })
     } catch (err) {
       return c.json({ error: err instanceof Error ? err.message : String(err) }, 500)
     }

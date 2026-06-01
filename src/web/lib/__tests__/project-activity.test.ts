@@ -386,6 +386,22 @@ describe('buildProjectTicker', () => {
     })
   })
 
+  it('summarizes owner-input readiness without repeating the full blocker sentence', () => {
+    const detail: ProjectDetail = {
+      startReadiness: {
+        canStart: false,
+        code: 'owner_input_required',
+        message: 'Review the waiting spec before Guildhall can continue',
+      },
+    }
+
+    expect(buildProjectTicker(detail, null, now)).toMatchObject({
+      tone: 'warn',
+      actorLabel: 'Needs you',
+      message: 'Spec review pending',
+    })
+  })
+
   it('lets current actionable draft state beat stale stopped-event copy', () => {
     const detail: ProjectDetail = {
       run: { status: 'stopped' },

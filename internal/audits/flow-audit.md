@@ -57,6 +57,26 @@ babysit setup/import/provider/release states across multiple pages.
 
 ## Current Follow-Ups
 
+- [x] Specify the 0.10 state-machine substrate and local project graph pivot.
+  Spec:
+  `internal/specs/2026-06-01-guildhall-0-10-state-machines-project-graph.md`.
+  The accepted direction is to stop adding lifecycle-heavy "status buckets" and
+  introduce a small deterministic state-machine primitive with legal
+  transitions, guards, required evidence, and append-only receipts. The pure
+  transition result should be only `applied` or `rejected`; retry idempotency
+  belongs in command handling and must not become a `noop` pseudo-state. The
+  first new product customer should be a local project graph dependency edge
+  where one local Guildhall project can request provider-owned work from
+  another, the provider can shape and deliver it, and the consumer must verify
+  or return the delivery before the edge resolves. Clarification: a project
+  never writes into another project's files, tasks, mirrors, evidence, or
+  delivery records. Projects publish typed requests to a neutral exchange; the
+  provider project imports and acts on them under its own authority. Provider
+  and consumer coordinators negotiate through typed packets while each reasons
+  from its own project context, not a blended cross-project prompt. The first
+  implementation should also migrate one small existing lifecycle, preferably
+  capability requests, to prove the primitive outside the project-graph feature
+  while leaving broad task-status cleanup for 0.11.0.
 - [x] Specify the 0.10 bounded-chat pivot for intake and New request flows.
   Plan: `internal/plans/2026-05-31-guildhall-0-10-bounded-chat.md`.
   The accepted direction is a two-role flow: a conversation agent handles the
@@ -78,6 +98,41 @@ babysit setup/import/provider/release states across multiple pages.
   human resolution actions, surfaces should prefer one bounded-chat entry point
   such as `Resolve blocker`, `Choose next step`, or `Review options` over a
   dense row of competing buttons.
+- [x] Tighten bounded-chat proof before widening the rollout.
+  Focused runtime and serve coverage now proves that project check-in bounded
+  chat keeps asking until planned root questions are exhausted, reuses the
+  same active session when the user comes back later, records confused answers
+  as discarded instead of durable guidance, persists the accepted answers and
+  closure receipt to disk, and projects a completed Thread turn instead of
+  letting fulfilled bounded-chat sessions disappear silently.
+- [x] Start moving New request clarification into bounded chat instead of task
+  open-question cards.
+  Ambiguous policy/spec requests now create a `new_request` bounded-chat
+  session from `/api/project/request` rather than seeding an exploring task
+  with `openQuestions`. The answer path creates the shaped task only after the
+  owner clarifies scope, suppresses the stale follow-up question card on the
+  created task, records the accepted clarification in bounded-chat state, and
+  projects both active and completed New request turns in Thread. Current
+  limitation: direct task-like requests now also route through bounded chat,
+  the modal now routes directly into `Threads` after creation, but a dedicated
+  thread-list selection/resume model and pure project-question conversation
+  threads are still pending.
+- [x] Narrow `Needs you` to alert-owned items while `Threads` absorbs the
+  conversation-shaped attention flow.
+  Runtime inbox classification now explicitly marks project check-in,
+  pressure-test questions, agent questions, approvals, and escalations as
+  thread-owned. `/api/project/inbox` returns only alert-owned items plus alert
+  history, the project rail now labels the conversation surface `Threads`, and
+  the `Needs you` tab uses compact utility panels with an explicit pointer
+  back to Threads for active conversations.
+- [x] Keep the initial Threads route fast even when project/runtime extras are
+  slow.
+  Thread now renders from a cached async core projection instead of waiting on
+  synchronous snapshot/session reads plus per-task git-story inspection.
+  `/api/project/thread` returns the core turns first, `/api/project/thread/extras`
+  hydrates git-story callouts separately, and `buildSnapshotAsync` can use
+  `.guildhall/tasks/index.json` for hot-path task counts instead of reparsing
+  `TASKS.json` just to answer “how many current tasks exist?”.
 - [x] Complete the 0.9 release-hardening proof matrix before shipping 0.9.0.
   Plan: `internal/plans/2026-05-31-guildhall-0-9-release-hardening-proof-matrix.md`.
   This is the current release-readiness gate: first stabilize the orchestrator
@@ -238,6 +293,22 @@ babysit setup/import/provider/release states across multiple pages.
   workspace-import `Skip import for now` can leave the item feeling unresolved,
   and spec-agent durable-progress failures remain the hard release blocker for
   autonomous project progress.
+- [x] Start 0.10 bounded-chat implementation with the runtime contract slice.
+  Tracker: `internal/plans/2026-05-31-guildhall-0-10-implementation-tracker.md`.
+  Begin with bounded-chat storage, session transitions, coordinator-action
+  validation, and idempotent closure receipts before routing intake or New
+  request through the new surface. This is the first active 0.10 code lane and
+  should stay smaller than the full replacement map until the state contract is
+  proven by tests. Runtime contract now lives in `src/runtime/bounded-chat.ts`
+  with focused coverage in `src/runtime/__tests__/bounded-chat.test.ts` for
+  session creation, prompt retrieval, response submission, coordinator follow-
+  up, durable closure receipt, blocked receipt, idempotent action replay, and
+  stale-write rejection. Project check-in now starts through bounded chat and
+  answers through `/api/project/bounded-chat/:id/answer`, with Thread projecting
+  the active session through the existing question card so the flow is already
+  usable before the dedicated bounded-chat UI lands. Next bounded-chat step:
+  move deeper intake/New request onto the same contract and replace the
+  pressure-test-specific projection with a real bounded-chat surface.
   2026-05-31 trust-blocker fix pass closed the UI/state regressions from that
   audit while preserving the real autonomous-progress blocker. Re-intake now
   has a direct repair route from Settings, an actionable first-run empty state,

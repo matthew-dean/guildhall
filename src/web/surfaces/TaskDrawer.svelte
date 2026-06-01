@@ -10,6 +10,7 @@
   import Button from '../lib/Button.svelte'
   import Chip from '../lib/Chip.svelte'
   import Icon from '../lib/Icon.svelte'
+  import UtilityPanel from '../lib/UtilityPanel.svelte'
   import Tabs from '../lib/Tabs.svelte'
   import Modal from '../lib/Modal.svelte'
   import Textarea from '../lib/Textarea.svelte'
@@ -630,6 +631,10 @@
     }
     return null
   })
+  const drawerOutcomeTone = $derived<'accent' | 'warn' | 'ok'>(() => {
+    if (!drawerOutcome) return 'accent'
+    return drawerOutcome.tone === 'info' ? 'accent' : drawerOutcome.tone
+  })
   const activeTabOwnsEscalationDecision = $derived(
     Boolean(firstOpenEscalation) && (activeTab === 'current' || activeTab === 'spec'),
   )
@@ -865,18 +870,24 @@
       </div>
     {:else if !payload}
       <p class="loading">Loading...</p>
-    {:else}
+      {:else}
       {#if drawerOutcome && !activeTabOwnsEscalationDecision}
-        <section class={`drawer-outcome tone-${drawerOutcome.tone}`} aria-label={drawerOutcome.eyebrow}>
+        <UtilityPanel
+          as="section"
+          className="drawer-outcome"
+          tone={drawerOutcomeTone}
+          railStrength="strong"
+          ariaLabel={drawerOutcome.eyebrow}
+        >
           <span class="outcome-eyebrow">{drawerOutcome.eyebrow}</span>
           <strong>{drawerOutcome.title}</strong>
           <span>{drawerOutcome.detail}</span>
-        </section>
+        </UtilityPanel>
       {/if}
       {#if devServers.length > 0}
         <section class="drawer-dev-servers" aria-label="Runtime dev servers">
           {#each devServers as server}
-            <div class="drawer-dev-server">
+            <UtilityPanel as="div" className="drawer-dev-server" tone="neutral">
               <div>
                 <div class="drawer-dev-server-head">
                   <strong>{server.id}</strong>
@@ -899,7 +910,7 @@
                   <Button variant="secondary" size="sm" disabled={devServerBusyId === server.id} onclick={() => void restartDevServer(server.id)}>Restart</Button>
                 {/if}
               </div>
-            </div>
+            </UtilityPanel>
           {/each}
         </section>
       {/if}
@@ -1341,18 +1352,12 @@
     overflow-y: auto;
     padding: var(--s-4);
   }
-  .drawer-outcome {
+  :global(.drawer-outcome) {
     display: grid;
     gap: var(--s-1);
     margin-bottom: var(--s-4);
-    padding: var(--s-3);
-    border: 1px solid var(--border);
-    border-left-width: 3px;
-    border-radius: var(--radius-md);
-    background: var(--bg);
-    color: var(--text);
   }
-  .drawer-outcome strong {
+  :global(.drawer-outcome) strong {
     font-size: var(--fs-2);
     line-height: var(--lh-tight);
   }
@@ -1392,7 +1397,7 @@
     line-height: var(--lh-copy);
     overflow-wrap: anywhere;
   }
-  .drawer-outcome span:last-child {
+  :global(.drawer-outcome) span:last-child {
     color: var(--text-muted);
     font-size: var(--fs-1);
     line-height: var(--lh-copy);
@@ -1410,37 +1415,24 @@
     letter-spacing: 0.08em;
     text-transform: uppercase;
   }
-  .drawer-outcome.tone-warn {
-    border-left-color: var(--warning);
-  }
-  .drawer-outcome.tone-ok {
-    border-left-color: var(--success);
-  }
-  .drawer-outcome.tone-info {
-    border-left-color: var(--accent);
-  }
   .drawer-dev-servers {
     display: grid;
     gap: var(--s-2);
     margin-bottom: var(--s-3);
   }
-  .drawer-dev-server {
+  :global(.drawer-dev-server) {
     display: grid;
     grid-template-columns: minmax(0, 1fr) auto;
     gap: var(--s-3);
-    padding: var(--s-3);
-    border: 1px solid var(--border);
-    border-radius: var(--r-2);
-    background: var(--bg-raised-2);
   }
-  .drawer-dev-server-head,
-  .drawer-dev-server-actions {
+  :global(.drawer-dev-server) .drawer-dev-server-head,
+  :global(.drawer-dev-server) .drawer-dev-server-actions {
     display: flex;
     align-items: center;
     gap: var(--s-2);
     flex-wrap: wrap;
   }
-  .drawer-dev-server p {
+  :global(.drawer-dev-server) p {
     margin: var(--s-1) 0 0;
     color: var(--text-muted);
     font-size: var(--fs-1);
@@ -1550,11 +1542,6 @@
     cursor: not-allowed;
     opacity: 0.55;
   }
-  .copy-link {
-    color: var(--text-muted);
-    font-size: var(--fs-1);
-    text-decoration: underline dotted;
-  }
   .error-stack {
     display: flex;
     flex-direction: column;
@@ -1570,7 +1557,7 @@
     color: var(--danger);
   }
   @media (max-width: 720px) {
-    .drawer-dev-server {
+    :global(.drawer-dev-server) {
       grid-template-columns: 1fr;
     }
     .gh-drawer-foot,

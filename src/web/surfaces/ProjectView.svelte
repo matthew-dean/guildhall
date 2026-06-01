@@ -4,8 +4,8 @@
       mobile hides the rail until the hamburger opens a full-screen menu):
       primary nav entries + accordion sub-nav + Settings pinned as a utility
       to the bottom.
-    · Top bar (slim): workspace name chip + run-status chip + Start/Stop
-      + New request. No tab strip.
+    · Top bar (slim): workspace name chip + run-status chip + Start work/Stop
+      + New thread. No tab strip.
     · Main: the active view component (sub-paths pass a `subView` prop to
       surfaces that support it).
 -->
@@ -14,7 +14,8 @@
   import Chip from '../lib/Chip.svelte'
   import Icon, { type IconName } from '../lib/Icon.svelte'
   import Modal from '../lib/Modal.svelte'
-  import NoticeBand from '../lib/NoticeBand.svelte'
+  import AlertBand from '../../../packages/ui/src/components/AlertBand.svelte'
+  import NoticeBand from '../../../packages/ui/src/components/NoticeBand.svelte'
   import StatusDot from '../lib/StatusDot.svelte'
   import ProjectShell from '../lib/layout/ProjectShell.svelte'
   import Tooltip from '../lib/Tooltip.svelte'
@@ -41,6 +42,7 @@
   import { isWorkerRunnableStatus } from '../lib/task-state.js'
   import { isOperationalReceiptQuestion } from '@guildhall/shared'
   import type { InboxItem } from '../lib/inbox-item-key.js'
+  import type { AlertBandTone } from '../../../packages/ui/src/components/types.js'
   import type { AgentQuestion, EventEnvelope, ProjectMigrationStatus, ProjectMigrationStatusItem, ProjectView, ProviderStatus, Task } from '../lib/types.js'
 
   interface Props {
@@ -67,6 +69,7 @@
   let mobileRailOpen = $state(false)
   let railPreviewOpen = $state(false)
   let railPreference = $state<'collapsed' | 'expanded'>('collapsed')
+  let navContextMode = $state<'project' | 'list' | 'detail' | 'split'>('project')
   let topbarLabelsCollapsed = $state(false)
   let newTaskInOverflow = $state(false)
   let migrationModalOpen = $state(false)
@@ -78,7 +81,7 @@
   const RAIL_PREFERENCE_KEY = 'guildhall:project-rail'
 
   // Inbox blockers drive disabled-state on top-bar actions so hard blockers
-  // (e.g. bootstrap not verified) can't be bypassed by pressing Start.
+  // (e.g. bootstrap not verified) can't be bypassed by pressing Start work.
   interface Blockers { bootstrap: boolean; workspaceImport: boolean }
   let blockers = $state<Blockers>({ bootstrap: false, workspaceImport: false })
   let inboxItems = $state<InboxItem[]>([])
@@ -273,6 +276,21 @@
   }
 
   $effect(() => {
+    const handle = (event: Event) => {
+      const detail = (event as CustomEvent<{ surface?: string; mode?: 'project' | 'list' | 'detail' | 'split' }>).detail
+      navContextMode = detail?.mode ?? 'project'
+    }
+    window.addEventListener('guildhall:set-nav-context', handle as EventListener)
+    return () => window.removeEventListener('guildhall:set-nav-context', handle as EventListener)
+  })
+
+  $effect(() => {
+    if (railForcedCollapsed && currentView === 'thread' && navContextMode === 'detail' && mobileRailOpen) {
+      mobileRailOpen = false
+    }
+  })
+
+  $effect(() => {
     const off = onEvent(ev => {
       const t = ev.event?.type ?? ''
       if (t.startsWith('supervisor_') || t === 'provider_health_changed') void project.refresh(activeProjectId)
@@ -299,10 +317,10 @@
       suffix: '/overview',
       subs: [
         { id: 'summary', label: 'Summary', path: currentProjectHref('/overview', activeProjectId) },
-        { id: 'inbox', label: 'Inbox', path: currentProjectHref('/overview/inbox', activeProjectId) },
+        { id: 'inbox', label: 'Needs you', path: currentProjectHref('/overview/inbox', activeProjectId) },
       ],
     },
-    { id: 'thread', label: 'Thread', icon: 'sparkles', suffix: '/thread' },
+    { id: 'thread', label: 'Threads', icon: 'sparkles', suffix: '/thread' },
     {
       id: 'work',
       label: 'Work',
@@ -326,10 +344,27 @@
     },
   ])
   const settingsPath = $derived(currentProjectHref('/settings', activeProjectId))
+  const canRenderWithoutProjectDetail = $derived(
+    currentView === 'thread' || currentView === 'inbox',
+  )
+  const showingCompactThreadDetail = $derived(
+    railForcedCollapsed && currentView === 'thread' && navContextMode === 'detail',
+  )
+  const topbarBackLabel = $derived(showingCompactThreadDetail ? 'Threads' : 'Projects')
+  const topbarBackTitle = $derived(showingCompactThreadDetail ? 'Back to Threads' : 'Back to Projects')
+  const showTopbarBackLabel = $derived(showingCompactThreadDetail || !topbarLabelsCollapsed)
 
   function go(href: string) {
     closeMobileRail()
     nav(href)
+  }
+
+  function handleTopbarBack(): void {
+    if (showingCompactThreadDetail) {
+      window.dispatchEvent(new CustomEvent('guildhall:thread-show-list'))
+      return
+    }
+    go('/')
   }
 
   function closeActionsMenu(): void {
@@ -661,6 +696,12 @@
     if (reason === 'awaiting_human' || reason === 'blocked_only' || reason === 'dependency_blocked' || reason === 'required_migration_pending') return 'warn'
     return 'info'
   })
+
+  function shellAlertTone(severity: 'info' | 'warn' | 'error'): AlertBandTone {
+    if (severity === 'error') return 'danger'
+    if (severity === 'warn') return 'warn'
+    return 'accent'
+  }
   const runStopSummaryText = $derived.by(() => {
     if (runStatus === 'running' || runStatus === 'stopping') return null
     const summary = runStopSummary
@@ -735,6 +776,9 @@
     detail?.bootstrapStatus?.success === false
       ? detail.bootstrapStatus.steps?.find(s => s.result === 'fail') ?? null
       : null,
+  )
+  const showDoThisNext = $derived(
+    currentView !== 'overview' && currentView !== 'thread' && currentView !== 'inbox',
   )
   const startReadinessNoticeHref = $derived.by(() => {
     if (!startReadiness || startReadiness.canStart || allTerminalStart || requiredMigrationBlocked) return null
@@ -856,7 +900,7 @@
           : /review|approve/i.test(startReadiness.message ?? '')
             ? 'Review needed'
             : 'Needs input'
-      : 'Start',
+      : 'Start work',
   )
   const showAdvanceOneTaskAction = $derived(
     !allTerminalStart,
@@ -869,6 +913,13 @@
     if (/recover|blocked|escalation/i.test(message ?? '')) return 'Review recovery'
     return 'Open next action'
   }
+  const showRunStopSummaryNotice = $derived.by(() => {
+    if (!runStopSummaryText) return false
+    if (startReadiness?.code === 'owner_input_required' || startReadiness?.code === 'required_migration_pending') {
+      return false
+    }
+    return true
+  })
 </script>
 
 <svelte:document onclick={handleDocumentClick} />
@@ -953,14 +1004,14 @@
           <Button
             variant="secondary"
             size="sm"
-            iconOnly={topbarLabelsCollapsed}
-            onclick={() => go('/')}
-            ariaLabel="Back to Projects"
-            title="Back to Projects"
+            iconOnly={!showTopbarBackLabel}
+            onclick={handleTopbarBack}
+            ariaLabel={topbarBackTitle}
+            title={topbarBackTitle}
           >
             <Icon name="chevron-left" size={16} />
-            {#if !topbarLabelsCollapsed}
-              <span>Projects</span>
+            {#if showTopbarBackLabel}
+              <span>{topbarBackLabel}</span>
             {/if}
           </Button>
         </div>
@@ -978,7 +1029,7 @@
   <div class="page-centered">
     <p class="muted">Error: {project.error}</p>
   </div>
-{:else if !detail}
+{:else if !detail && !canRenderWithoutProjectDetail}
   <div class="page-centered">
     <p class="muted">Loading project...</p>
   </div>
@@ -1004,7 +1055,7 @@
       onfocusin={openRailPreview}
       onfocusout={closeRailPreview}
     >
-      <div class="rail-head" title={detail.name}>
+      <div class="rail-head" title={projectDisplayPath}>
         <div class="rail-head-top">
           <div class="rail-project">{projectDisplayName}</div>
           <div class="rail-head-actions">
@@ -1035,7 +1086,7 @@
           </div>
         </div>
         <div class="rail-status">
-          <Chip label={phaseLabel} tone={phaseTone} />
+          <Chip label={detail ? phaseLabel : 'Loading'} tone={detail ? phaseTone : 'neutral'} />
         </div>
       </div>
       <nav class="rail-nav">
@@ -1103,36 +1154,36 @@
           <Button
             variant="secondary"
             size="sm"
-            iconOnly={topbarLabelsCollapsed}
-            onclick={() => go('/')}
-            ariaLabel="Back to Projects"
-            title="Back to Projects"
+            iconOnly={!showTopbarBackLabel}
+            onclick={handleTopbarBack}
+            ariaLabel={topbarBackTitle}
+            title={topbarBackTitle}
           >
             <Icon name="chevron-left" size={16} />
-            {#if !topbarLabelsCollapsed}
-              <span>Projects</span>
+            {#if showTopbarBackLabel}
+              <span>{topbarBackLabel}</span>
             {/if}
           </Button>
         </div>
         <div class="topbar-leading" aria-hidden="true"></div>
         <div class="topbar-actions">
-          {#if newTaskDisabledReason === null && !newTaskInOverflow}
+          {#if detail && newTaskDisabledReason === null && !newTaskInOverflow}
             <Button
               variant="secondary"
               size="sm"
               iconOnly={topbarLabelsCollapsed}
               disabled={busy}
               onclick={newTask}
-              ariaLabel="New request"
-              title="New request"
+              ariaLabel="New thread"
+              title="New thread"
             >
               <Icon name="plus" size={16} />
               {#if !topbarLabelsCollapsed}
-                <span>New request</span>
+                <span>New thread</span>
               {/if}
             </Button>
           {/if}
-          {#if showRunButton}
+          {#if detail && showRunButton}
             <Button
               variant={runStatus === 'running' || runStatus === 'stopping' ? 'danger' : requiredMigrationBlocked ? 'human' : 'agent'}
               size="sm"
@@ -1146,7 +1197,7 @@
                   ? (runMode === 'one_task' ? 'Stop one-step run' : 'Stop')
                   : requiredMigrationBlocked
                   ? 'Migrate project'
-                  : (startDisabledReason ?? 'Start')
+                  : (startDisabledReason ?? 'Start work')
               }
               title={
                 runStatus === 'stopping'
@@ -1164,134 +1215,171 @@
               {/if}
             </Button>
           {/if}
-          <div class="actions-menu" bind:this={actionsMenuEl}>
-            <Button
-              variant="ghost"
-              size="sm"
-              iconOnly
-              ariaLabel="Open actions menu"
-              title={actionsMenuOpen ? undefined : 'Open actions menu'}
-              onclick={toggleActionsMenu}
-            >
-              <Icon name="ellipsis" size={18} />
-            </Button>
-            {#if actionsMenuOpen}
-              <div class="actions-menu-panel">
-                {#if newTaskDisabledReason === null && newTaskInOverflow}
-                  <button
-                    type="button"
-                    class="actions-menu-item"
-                    disabled={busy}
-                    onclick={() => { closeActionsMenu(); void newTask() }}
-                  >
-                    <Icon name="plus" size={16} />
-                    <span>New request</span>
-                  </button>
-                {/if}
-                {#if showAdvanceOneTaskAction}
-                  <button
-                    type="button"
-                    class="actions-menu-item"
-                    disabled={busy || requiredMigrationBlocked || startDisabledReason !== null || runStatus === 'running' || runStatus === 'stopping'}
-                    title={startDisabledReason ?? ''}
-                    onclick={() => { closeActionsMenu(); start('one_task') }}
-                  >
-                    <Icon name="check-circle-2" size={16} />
-                    <span>Advance one task</span>
-                  </button>
-                {/if}
-              </div>
-            {/if}
-          </div>
+          {#if detail}
+            <div class="actions-menu" bind:this={actionsMenuEl}>
+              <Button
+                variant="ghost"
+                size="sm"
+                iconOnly
+                ariaLabel="Open actions menu"
+                title={actionsMenuOpen ? undefined : 'Open actions menu'}
+                onclick={toggleActionsMenu}
+              >
+                <Icon name="ellipsis" size={18} />
+              </Button>
+              {#if actionsMenuOpen}
+                <div class="actions-menu-panel">
+                  {#if newTaskDisabledReason === null && newTaskInOverflow}
+                    <button
+                      type="button"
+                      class="actions-menu-item"
+                      disabled={busy}
+                      onclick={() => { closeActionsMenu(); void newTask() }}
+                    >
+                      <Icon name="plus" size={16} />
+                      <span>New thread</span>
+                    </button>
+                  {/if}
+                  {#if showAdvanceOneTaskAction}
+                    <button
+                      type="button"
+                      class="actions-menu-item"
+                      disabled={busy || requiredMigrationBlocked || startDisabledReason !== null || runStatus === 'running' || runStatus === 'stopping'}
+                      title={startDisabledReason ?? ''}
+                      onclick={() => { closeActionsMenu(); start('one_task') }}
+                    >
+                      <Icon name="check-circle-2" size={16} />
+                      <span>Advance one task</span>
+                    </button>
+                  {/if}
+                </div>
+              {/if}
+            </div>
+          {/if}
         </div>
       </header>
     {/snippet}
     {#snippet band()}
-        {#if runError}
-          <NoticeBand tone="danger" icon="alert-triangle" density="compact">
+        {#if detail && runError}
+          <AlertBand tone="danger" role="alert" density="compact" ariaLabel="Run error">
             <strong>{runError}</strong>
             {#snippet actions()}
-            {#if /provider/i.test(runError)}
-              <a href={currentProjectHref('/settings/providers', activeProjectId)} onclick={(e) => { e.preventDefault(); nav(currentProjectHref('/settings/providers', activeProjectId)) }}>Open project providers</a>
-            {/if}
-            <button class="dismiss" onclick={() => (runError = null)} aria-label="Dismiss">×</button>
+              {#if /provider/i.test(runError)}
+                <a href={currentProjectHref('/settings/providers', activeProjectId)} onclick={(e) => { e.preventDefault(); nav(currentProjectHref('/settings/providers', activeProjectId)) }}>
+                  Open project providers
+                </a>
+              {/if}
+              <button type="button" class="gh-notice-inline-dismiss" aria-label="Dismiss" onclick={() => (runError = null)}>×</button>
             {/snippet}
-          </NoticeBand>
+          </AlertBand>
         {/if}
-        {#if bootstrapFailureText}
-          <NoticeBand tone="danger" icon="alert-triangle" density="compact">
+        {#if detail && bootstrapFailureText}
+          <AlertBand tone="danger" role="alert" density="compact" ariaLabel="Bootstrap failed">
             <strong>{bootstrapFailureText}</strong>
             {#snippet actions()}
-              <a href={currentProjectHref('/settings/ready', activeProjectId)} onclick={(e) => { e.preventDefault(); nav(currentProjectHref('/settings/ready', activeProjectId)) }}>Open readiness checks</a>
+              <a href={currentProjectHref('/settings/ready', activeProjectId)} onclick={(e) => { e.preventDefault(); nav(currentProjectHref('/settings/ready', activeProjectId)) }}>
+                Open readiness checks
+              </a>
             {/snippet}
-          </NoticeBand>
+          </AlertBand>
         {/if}
-        {#if providerStatus?.fallback}
-          <NoticeBand
-            tone={providerDecisionSeverity === 'warn' ? 'warn' : providerDecisionSeverity === 'error' ? 'danger' : 'accent'}
-            icon="plug"
+        {#if detail && providerStatus?.fallback}
+          {@const providerFallbackTone = shellAlertTone(providerDecisionSeverity)}
+          <AlertBand
+            tone={providerFallbackTone}
+            role={providerFallbackTone === 'accent' ? 'status' : 'alert'}
             density="compact"
+            ariaLabel="Provider fallback"
           >
             <strong>{providerNoticeText}</strong>
             {#snippet actions()}
-              <a href={currentProjectHref('/settings/providers', activeProjectId)} onclick={(e) => { e.preventDefault(); nav(currentProjectHref('/settings/providers', activeProjectId)) }}>Open project providers</a>
+              <a href={currentProjectHref('/settings/providers', activeProjectId)} onclick={(e) => { e.preventDefault(); nav(currentProjectHref('/settings/providers', activeProjectId)) }}>
+                Open project providers
+              </a>
             {/snippet}
-          </NoticeBand>
+          </AlertBand>
         {/if}
-        {#if providerWarningText}
-          <NoticeBand
-            tone={providerWarningSeverity === 'warn' ? 'warn' : providerWarningSeverity === 'error' ? 'danger' : 'accent'}
-            icon="alert-triangle"
+        {#if detail && providerWarningText}
+          {@const providerStatusTone = shellAlertTone(providerWarningSeverity)}
+          <AlertBand
+            tone={providerStatusTone}
+            role={providerStatusTone === 'accent' ? 'status' : 'alert'}
             density="compact"
+            ariaLabel="Provider attention"
           >
             <strong>{providerWarningText}</strong>
             {#snippet actions()}
-              <a href={currentProjectHref('/settings/providers', activeProjectId)} onclick={(e) => { e.preventDefault(); nav(currentProjectHref('/settings/providers', activeProjectId)) }}>Open Settings</a>
+              <a href={currentProjectHref('/settings/providers', activeProjectId)} onclick={(e) => { e.preventDefault(); nav(currentProjectHref('/settings/providers', activeProjectId)) }}>
+                Open settings
+              </a>
             {/snippet}
-          </NoticeBand>
+          </AlertBand>
         {/if}
-        {#if providerHealthText}
-          <NoticeBand tone="warn" icon="activity" density="compact">
+        {#if detail && providerHealthText}
+          <AlertBand tone="warn" role="alert" density="compact" ariaLabel="Provider health">
             <strong>{providerHealthText}</strong>
             {#snippet actions()}
-              <a href={currentProjectHref('/settings/providers', activeProjectId)} onclick={(e) => { e.preventDefault(); nav(currentProjectHref('/settings/providers', activeProjectId)) }}>Open Settings</a>
+              <a href={currentProjectHref('/settings/providers', activeProjectId)} onclick={(e) => { e.preventDefault(); nav(currentProjectHref('/settings/providers', activeProjectId)) }}>
+                Open settings
+              </a>
             {/snippet}
-          </NoticeBand>
+          </AlertBand>
         {/if}
-        {#if allTerminalReadinessMessage}
-          <NoticeBand tone="accent" icon="check-circle-2" density="compact">
+        {#if detail && allTerminalReadinessMessage}
+          <AlertBand tone="ok" role="status" density="compact" ariaLabel="Ready">
             <strong>{allTerminalReadinessMessage}</strong>
-          </NoticeBand>
+          </AlertBand>
         {/if}
-        {#if startReadinessNoticeHref && startReadinessNoticeLabel && startReadiness?.message}
-          <NoticeBand tone="warn" icon="alert-triangle" density="compact">
+        {#if detail && startReadinessNoticeHref && startReadinessNoticeLabel && startReadiness?.message}
+          <AlertBand
+            tone="attention"
+            role="alert"
+            density="compact"
+            ariaLabel="Needs you"
+          >
             <strong>{startReadiness.message}</strong>
             {#snippet actions()}
-              <a href={startReadinessNoticeHref} onclick={(e) => { e.preventDefault(); nav(startReadinessNoticeHref) }}>{startReadinessNoticeLabel}</a>
+              <a href={startReadinessNoticeHref} onclick={(e) => { e.preventDefault(); nav(startReadinessNoticeHref) }}>
+                {startReadinessNoticeLabel}
+              </a>
             {/snippet}
-          </NoticeBand>
+          </AlertBand>
         {/if}
-        {#if runStopSummaryText}
-          <NoticeBand
-            tone={runStopSummarySeverity === 'warn' ? 'warn' : runStopSummarySeverity === 'error' ? 'danger' : 'accent'}
-            icon={runStopSummarySeverity === 'warn' || runStopSummarySeverity === 'error' ? 'alert-triangle' : 'check-circle-2'}
+        {#if detail && showRunStopSummaryNotice}
+          {@const runStopTone = shellAlertTone(runStopSummarySeverity)}
+          <AlertBand
+            tone={runStopTone}
+            role={runStopTone === 'accent' ? 'status' : 'alert'}
             density="compact"
+            ariaLabel={runStopTone === 'danger' ? 'Blocked' : runStopTone === 'warn' ? 'Needs attention' : 'Status'}
           >
             <strong>{runStopSummaryText}</strong>
             {#snippet actions()}
               {#if runStopActionHref && runStopActionLabel}
-                <a href={runStopActionHref} onclick={(e) => { e.preventDefault(); nav(runStopActionHref) }}>{runStopActionLabel}</a>
+                <a href={runStopActionHref} onclick={(e) => { e.preventDefault(); nav(runStopActionHref) }}>
+                  {runStopActionLabel}
+                </a>
               {/if}
             {/snippet}
-          </NoticeBand>
+          </AlertBand>
         {/if}
     {/snippet}
-        {#if currentView !== 'overview' && currentView !== 'thread' && currentView !== 'inbox'}
+        {#if detail && showDoThisNext}
           <DoThisNext />
         {/if}
 
         <div class="body">
-          {#if currentView === 'overview'}
+          {#if !detail}
+            {#if currentView === 'thread'}
+              <ThreadTab projectId={activeProjectId} />
+            {:else if currentView === 'inbox'}
+              <InboxTab items={inboxItems} history={inboxHistory} loaded={inboxLoaded} error={inboxError} refresh={loadInbox} />
+            {:else}
+              <div class="page-centered page-centered-inline">
+                <p class="muted">Loading project...</p>
+              </div>
+            {/if}
+          {:else if currentView === 'overview'}
             {#if currentSub === 'inbox'}
               <InboxTab items={inboxItems} history={inboxHistory} loaded={inboxLoaded} error={inboxError} refresh={loadInbox} />
             {:else}
@@ -1360,9 +1448,7 @@
       {#if migrationStatusLoading}
         <p class="muted">Checking migrations...</p>
       {:else if migrationError}
-        <NoticeBand tone="danger" icon="alert-triangle" density="compact">
-          <strong>{migrationError}</strong>
-        </NoticeBand>
+        <NoticeBand tone="danger" role="alert" density="compact" label="Migration error" title={migrationError} />
       {:else if primaryRequiredMigration}
         <div class="migration-card">
           <Chip label="Required migration" tone="danger" />
@@ -1379,9 +1465,13 @@
           {/if}
         </div>
       {:else}
-        <NoticeBand tone="accent" icon="check-circle-2" density="compact">
-          <strong>{migrationAppliedMessage ?? 'No required migrations are blocking this project.'}</strong>
-        </NoticeBand>
+        <NoticeBand
+          tone="ok"
+          role="status"
+          density="compact"
+          label="Migration status"
+          title={migrationAppliedMessage ?? 'No required migrations are blocking this project.'}
+        />
       {/if}
     </div>
     {#snippet footer()}
@@ -1771,14 +1861,6 @@
     gap: var(--s-2);
   }
   .page-centered {
-  }
-  .dismiss {
-    background: none;
-    border: none;
-    color: inherit;
-    font-size: 16px;
-    cursor: pointer;
-    padding: 0 var(--s-1);
   }
   .body {
     display: flex;

@@ -24,6 +24,8 @@ The proposed 0.9.0 task-shaping direction is
 `internal/plans/2026-05-24-guildhall-0-9-task-shaping-and-finishability.md`.
 The 0.9.0 implementation tracker is
 `internal/plans/2026-05-27-guildhall-0-9-implementation-tracker.md`.
+The 0.10.0 implementation tracker is
+`internal/plans/2026-05-31-guildhall-0-10-implementation-tracker.md`.
 The 0.9.0 trust and completeness proposal is
 `internal/plans/2026-05-27-guildhall-0-9-trust-and-completeness-proposal.md`.
 The late 0.9.0 internal benchmark and Hermes comparison lane is
@@ -36,6 +38,8 @@ The proposed 0.10.0 structural/domain intelligence spec is
 `internal/specs/2026-05-29-guildhall-0-10-structural-domain-intelligence.md`.
 The proposed 0.10.0 external task authority spec is
 `internal/specs/2026-05-29-guildhall-0-10-external-task-authority.md`.
+The proposed 0.10.0 state-machine substrate and local project graph spec is
+`internal/specs/2026-06-01-guildhall-0-10-state-machines-project-graph.md`.
 Live product/runtime audit checklists live in `internal/audits/`.
 Older exploratory design notes live in `internal/design-notes/`.
 Source-backed research notes live in `internal/research/`.

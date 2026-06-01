@@ -10,6 +10,7 @@
 -->
 <script lang="ts">
   import ActionBar from '../../lib/ActionBar.svelte'
+  import Card from '../../lib/Card.svelte'
   import Stack from '../../lib/Stack.svelte'
   import Button from '../../lib/Button.svelte'
   import Textarea from '../../lib/Textarea.svelte'
@@ -43,7 +44,7 @@
   }
 </script>
 
-<div class="suggestion">
+<Card tone="accent" railStrength="strong" className="suggestion-card">
   <div class="meta">Suggested by {proposedBy}{rationale ? ' — ' + rationale : ''}.</div>
 
   <h2 class="title">{task.title}</h2>
@@ -89,18 +90,13 @@
       </ActionBar>
     </Stack>
   {/if}
-</div>
+</Card>
 
 <style>
-  .suggestion {
+  :global(.suggestion-card) {
     display: flex;
     flex-direction: column;
     gap: var(--s-3);
-    padding: var(--s-4);
-    border: 1px solid var(--border);
-    border-left: 3px solid var(--accent);
-    border-radius: var(--r-1);
-    background: var(--bg-raised);
   }
   .meta {
     font-size: var(--fs-1);

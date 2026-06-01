@@ -4,9 +4,8 @@
   tasks move down to the Work tab.
 -->
 <script lang="ts">
-  import AlignedActionList from '../../lib/AlignedActionList.svelte'
-  import Card from '../../lib/Card.svelte'
   import Icon, { type IconName } from '../../lib/Icon.svelte'
+  import UtilityPanel from '../../lib/UtilityPanel.svelte'
   import { inboxItemKey, type InboxItem } from '../../lib/inbox-item-key.js'
   import { nav, path } from '../../lib/nav.svelte.js'
   import { projectActionHref, projectFetch } from '../../lib/project-routes.js'
@@ -28,6 +27,7 @@
   }: Props = $props()
 
   let localItems = $state<InboxItem[]>([])
+  let localHistory = $state<InboxItem[]>([])
   let localLoaded = $state(false)
   let localError = $state<string | null>(null)
   // Which item (by list index) is currently being handled by an agent action.
@@ -36,6 +36,7 @@
   let handlingMessage = $state<string | null>(null)
 
   const items = $derived(suppliedItems ?? localItems)
+  const history = $derived(suppliedHistory ?? localHistory)
   const loaded = $derived(suppliedItems ? suppliedLoaded : localLoaded)
   const error = $derived(suppliedItems ? suppliedError : localError)
 
@@ -49,7 +50,7 @@
       if (!r.ok) throw new Error(`HTTP ${r.status}`)
       const j = (await r.json()) as { items?: InboxItem[]; history?: InboxItem[] }
       localItems = j.items ?? []
-      if (j.history) localItems = j.history
+      localHistory = j.history ?? j.items ?? []
       localError = null
     } catch (e) {
       localError = e instanceof Error ? e.message : String(e)
@@ -176,13 +177,20 @@
 
   const priorityItems = $derived(items.filter(item => item.severity !== 'low'))
   const housekeepingItems = $derived(items.filter(item => item.severity === 'low'))
-  const displayItems = $derived.by(() => {
-    const source = suppliedHistory ?? items
-    return [...source]
+  const historyItems = $derived.by(() => {
+    return [...history]
+      .filter(item => !isOpen(item))
       .sort((left, right) => ((right.updatedAt ?? right.createdAt ?? '')).localeCompare(left.updatedAt ?? left.createdAt ?? ''))
       .slice(0, 50)
   })
-  const displayCount = $derived(displayItems.length)
+  const displayCount = $derived((history.length > 0 ? history : items).length)
+
+  function toneFor(item: InboxItem): 'danger' | 'warn' | 'neutral' | 'ok' {
+    if (!isOpen(item) && item.status === 'resolved') return 'ok'
+    if (item.severity === 'high') return 'danger'
+    if (item.severity === 'medium') return 'warn'
+    return 'neutral'
+  }
 
   function statusLabel(item: InboxItem): string {
     if (!item.status || item.status === 'open') return 'Open'
@@ -228,89 +236,194 @@
       <span class="count">({displayCount} item{displayCount === 1 ? '' : 's'})</span>
     {/if}
   </header>
+  <p class="summary">Project alerts and durable follow-ups live here. Active conversations and approvals now happen in Threads.</p>
 
   {#if error}
-    <Card tone="warn">
+    <UtilityPanel tone="warn">
       <p class="muted">Couldn't load inbox: {error}</p>
-    </Card>
+    </UtilityPanel>
   {:else if !loaded}
     <p class="muted">Loading...</p>
-  {:else if items.length === 0}
-    <div class="empty">
+  {:else if items.length === 0 && historyItems.length === 0}
+    <UtilityPanel className="empty" tone="ok">
       <Icon name="check-circle-2" size={24} />
       <p>All caught up — nothing is waiting on you right now.</p>
-    </div>
+    </UtilityPanel>
   {:else}
-    {#if priorityItems.length === 0}
-      <Card tone="neutral">
-        <p class="muted">Nothing is blocked right now. The remaining items are optional cleanup.</p>
-      </Card>
+    <UtilityPanel tone="neutral" className="threads-note">
+      <div class="threads-note-copy">
+        <strong>Active conversations now live in Threads.</strong>
+        <p>Use this view for project alerts, setup checks, optional nudges, and recent alert history.</p>
+      </div>
+      <a class="threads-link" href={projectActionHref('/thread')}>Open Threads</a>
+    </UtilityPanel>
+
+    {#if priorityItems.length > 0}
+      <section class="group" aria-labelledby="needs-you-alerts">
+        <div class="group-head">
+          <h3 id="needs-you-alerts">Project alerts</h3>
+          <span>{priorityItems.length}</span>
+        </div>
+        <div class="item-list">
+          {#each priorityItems as item, i (inboxItemKey(item))}
+            {@const handling = handlingIndex === items.indexOf(item)}
+            {@const handler = AGENT_HANDLERS[item.kind]}
+            <UtilityPanel className="item-card" dense tone={toneFor(item)}>
+              <div class="item-head">
+                <span class="signal" aria-hidden="true">
+                  <span class="dot dot-{item.severity}"></span>
+                  <span class="kind-ic">
+                    <Icon name={ICONS[item.kind]} size={16} />
+                  </span>
+                </span>
+                <button
+                  type="button"
+                  class="item-main"
+                  onclick={() => goTo(item)}
+                  aria-label={item.title}
+                >
+                  <span class="body">
+                    <span class="title" title={item.title}>{item.title}</span>
+                    <span class="detail" title={item.detail}>{item.detail}</span>
+                    {#if itemDigest(item)}
+                      <span class="digest">{itemDigest(item)}</span>
+                    {/if}
+                    {#if item.resolutionDetail}
+                      <span class="digest">{item.resolutionDetail}</span>
+                    {/if}
+                  </span>
+                </button>
+                <div class="meta">
+                  <span class={`status-pill ${statusClass(item)}`}>{statusLabel(item)}</span>
+                  <span class="time">{itemTime(item) || '—'}</span>
+                </div>
+              </div>
+              <div class="actions" class:handling>
+                <button type="button" class="verb" onclick={() => goTo(item)}>
+                  {actionVerb(item)} →
+                </button>
+                {#if isOpen(item) && handler}
+                  <button
+                    type="button"
+                    class="agent-verb"
+                    onclick={e => runAgentHandler(item, items.indexOf(item), e)}
+                    disabled={handlingIndex !== null}
+                    title="Agent runs this automatically"
+                  >
+                    {handling ? handler.pending : handler.verb}
+                  </button>
+                {/if}
+                {#if isOpen(item) && item.dismissEndpoint}
+                  <button
+                    type="button"
+                    class="dismiss-verb"
+                    onclick={e => dismissItem(item, e)}
+                    title="Hide from Needs you (stays reachable elsewhere)"
+                  >
+                    Dismiss
+                  </button>
+                {/if}
+              </div>
+            </UtilityPanel>
+          {/each}
+        </div>
+      </section>
+    {:else}
+      <UtilityPanel tone="ok">
+        <p class="muted">Nothing is blocked right now. The remaining items are optional cleanup or recent history.</p>
+      </UtilityPanel>
     {/if}
 
-    {#if displayItems.length > 0}
-      <AlignedActionList
-        ariaLabel="Needs you items"
-        columns="64px minmax(360px, 1fr) minmax(116px, max-content) minmax(136px, max-content) minmax(220px, max-content)"
-        headers={['', 'Item', 'State', 'Updated', 'Action']}
-      >
-        {#each displayItems as item, i (inboxItemKey(item))}
-          {@const handling = handlingIndex === items.indexOf(item)}
-          {@const handler = AGENT_HANDLERS[item.kind]}
-          <div class="inbox-row aligned-list-row row-{item.severity}" class:handling role="listitem">
-            <span class="signal" aria-hidden="true">
-              <span class="dot dot-{item.severity}"></span>
-              <span class="kind-ic">
-                <Icon name={ICONS[item.kind]} size={16} />
-              </span>
-            </span>
-            <button
-              type="button"
-              class="item-main"
-              onclick={() => goTo(item)}
-              aria-label={item.title}
-            >
-              <span class="body">
-                <span class="title" title={item.title}>{item.title}</span>
-                <span class="detail" title={item.detail}>{item.detail}</span>
-                {#if itemDigest(item)}
-                  <span class="digest">{itemDigest(item)}</span>
-                {/if}
-                {#if item.resolutionDetail}
-                  <span class="digest">{item.resolutionDetail}</span>
-                {/if}
-              </span>
-            </button>
-            <span class={`status-pill ${statusClass(item)}`}>{statusLabel(item)}</span>
-            <span class="time">{itemTime(item) || '—'}</span>
-            <span class="actions">
-              <button type="button" class="verb" onclick={() => goTo(item)}>
-                {actionVerb(item)} →
-              </button>
-              {#if isOpen(item) && handler}
+    {#if housekeepingItems.length > 0}
+      <section class="group" aria-labelledby="needs-you-nudges">
+        <div class="group-head">
+          <h3 id="needs-you-nudges">Optional nudges</h3>
+          <span>{housekeepingItems.length}</span>
+        </div>
+        <div class="item-list">
+          {#each housekeepingItems as item (inboxItemKey(item))}
+            <UtilityPanel className="item-card" dense tone="neutral">
+              <div class="item-head">
+                <span class="signal" aria-hidden="true">
+                  <span class="dot dot-{item.severity}"></span>
+                  <span class="kind-ic">
+                    <Icon name={ICONS[item.kind]} size={16} />
+                  </span>
+                </span>
                 <button
                   type="button"
-                  class="agent-verb"
-                  onclick={e => runAgentHandler(item, items.indexOf(item), e)}
-                  disabled={handlingIndex !== null}
-                  title="Agent runs this automatically"
+                  class="item-main"
+                  onclick={() => goTo(item)}
+                  aria-label={item.title}
                 >
-                  {handling ? handler.pending : handler.verb}
+                  <span class="body">
+                    <span class="title" title={item.title}>{item.title}</span>
+                    <span class="detail" title={item.detail}>{item.detail}</span>
+                    {#if itemDigest(item)}
+                      <span class="digest">{itemDigest(item)}</span>
+                    {/if}
+                  </span>
                 </button>
-              {/if}
-              {#if isOpen(item) && item.dismissEndpoint}
+                <div class="meta">
+                  <span class={`status-pill ${statusClass(item)}`}>{statusLabel(item)}</span>
+                  <span class="time">{itemTime(item) || '—'}</span>
+                </div>
+              </div>
+              <div class="actions">
+                <button type="button" class="verb" onclick={() => goTo(item)}>
+                  {actionVerb(item)} →
+                </button>
+              </div>
+            </UtilityPanel>
+          {/each}
+        </div>
+      </section>
+    {/if}
+
+    {#if historyItems.length > 0}
+      <section class="group" aria-labelledby="needs-you-history">
+        <div class="group-head">
+          <h3 id="needs-you-history">Recent history</h3>
+          <span>{historyItems.length}</span>
+        </div>
+        <div class="item-list">
+          {#each historyItems as item (inboxItemKey(item))}
+            <UtilityPanel className="item-card" dense tone={toneFor(item)}>
+              <div class="item-head">
+                <span class="signal" aria-hidden="true">
+                  <span class="dot dot-{item.severity}"></span>
+                  <span class="kind-ic">
+                    <Icon name={ICONS[item.kind]} size={16} />
+                  </span>
+                </span>
                 <button
                   type="button"
-                  class="dismiss-verb"
-                  onclick={e => dismissItem(item, e)}
-                  title="Hide from Inbox (stays reachable elsewhere)"
+                  class="item-main"
+                  onclick={() => goTo(item)}
+                  aria-label={item.title}
                 >
-                  Dismiss
+                  <span class="body">
+                    <span class="title" title={item.title}>{item.title}</span>
+                    <span class="detail" title={item.detail}>{item.detail}</span>
+                    {#if item.resolutionDetail}
+                      <span class="digest">{item.resolutionDetail}</span>
+                    {/if}
+                  </span>
                 </button>
-              {/if}
-            </span>
-          </div>
-        {/each}
-      </AlignedActionList>
+                <div class="meta">
+                  <span class={`status-pill ${statusClass(item)}`}>{statusLabel(item)}</span>
+                  <span class="time">{itemTime(item) || '—'}</span>
+                </div>
+              </div>
+              <div class="actions">
+                <button type="button" class="verb" onclick={() => goTo(item)}>
+                  {actionVerb(item)} →
+                </button>
+              </div>
+            </UtilityPanel>
+          {/each}
+        </div>
+      </section>
     {/if}
 
     {#if handlingMessage}
@@ -337,6 +450,11 @@
     font-size: var(--fs-4);
     font-weight: 700;
   }
+  .summary {
+    margin: calc(var(--s-1) * -1) 0 0;
+    color: var(--text-muted);
+    max-width: 64ch;
+  }
   .count {
     color: var(--text-muted);
     font-size: var(--fs-2);
@@ -350,33 +468,67 @@
     align-items: center;
     gap: var(--s-2);
     color: var(--text-muted);
-    padding: var(--s-4);
-    border: 1px dashed var(--border);
-    border-radius: var(--r-1);
   }
-  .empty p { margin: 0; }
-
-  .inbox-row {
-    background: var(--bg-raised);
-    border: 1px solid var(--border);
-    border-radius: var(--r-1);
-    padding-block: var(--s-3);
+  .empty :global(p) { margin: 0; }
+  .threads-note {
+    grid-template-columns: 1fr auto;
+    align-items: center;
+    gap: var(--s-3);
+  }
+  .threads-note-copy {
+    display: grid;
+    gap: var(--s-1);
+  }
+  .threads-note-copy p {
+    margin: 0;
+    color: var(--text-muted);
+  }
+  .threads-link {
+    color: var(--accent);
+    font-weight: 600;
+    text-decoration: none;
+    white-space: nowrap;
+  }
+  .threads-link:hover {
+    color: var(--text);
+  }
+  .group {
+    display: grid;
+    gap: var(--s-3);
+  }
+  .group-head {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: var(--s-2);
+  }
+  .group-head h3 {
+    margin: 0;
+    font-size: var(--fs-2);
+    font-weight: 700;
+  }
+  .group-head span {
+    color: var(--text-muted);
+    font-size: var(--fs-1);
+  }
+  .item-list {
+    display: grid;
+    gap: var(--s-2);
+  }
+  .item-card {
     min-width: 0;
   }
-  .inbox-row:hover,
-  .inbox-row:focus-within {
-    background: var(--bg-elevated);
-    border-color: var(--border-strong);
-  }
-  .inbox-row.handling {
-    opacity: 0.7;
+  .item-head {
+    display: grid;
+    grid-template-columns: auto minmax(0, 1fr) auto;
+    gap: var(--s-2);
+    align-items: start;
   }
   .signal {
     display: inline-flex;
     align-items: center;
-    justify-content: center;
     gap: var(--s-2);
-    min-width: 0;
+    padding-top: 2px;
   }
   .item-main {
     display: block;
@@ -397,10 +549,12 @@
   .actions {
     display: inline-flex;
     align-items: center;
-    justify-content: flex-end;
+    justify-content: flex-start;
+    flex-wrap: wrap;
     gap: var(--s-2);
-    min-width: 0;
-    padding-inline-end: var(--s-3);
+  }
+  .actions.handling {
+    opacity: 0.7;
   }
   .agent-verb {
     padding: 0;
@@ -458,19 +612,18 @@
     flex-direction: column;
     gap: 2px;
   }
+  .meta {
+    display: grid;
+    gap: var(--s-1);
+    justify-items: end;
+  }
   .title {
     font-weight: 600;
     color: var(--text);
-    white-space: nowrap;
-    overflow: hidden;
-    text-overflow: ellipsis;
   }
   .detail {
     color: var(--text-muted);
     font-size: var(--fs-1);
-    white-space: nowrap;
-    overflow: hidden;
-    text-overflow: ellipsis;
   }
   .digest {
     color: var(--text-muted);
@@ -520,26 +673,21 @@
     font-size: var(--fs-1);
     white-space: nowrap;
   }
-  @media (min-width: 861px) {
-    .status-pill,
-    .time {
-      justify-self: start;
-    }
-    .actions {
-      justify-self: end;
-    }
-  }
   @media (max-width: 760px) {
-    .inbox-row {
-      align-items: start;
+    .threads-note {
+      grid-template-columns: 1fr;
     }
-    .status-pill,
-    .time,
+    .item-head {
+      grid-template-columns: auto minmax(0, 1fr);
+    }
+    .meta {
+      grid-column: 2;
+      justify-items: start;
+      grid-auto-flow: column;
+      align-items: center;
+    }
     .actions {
-      justify-self: start;
-    }
-    .signal {
-      grid-row: 1;
+      padding-left: calc(var(--s-2) + 16px);
     }
   }
 </style>

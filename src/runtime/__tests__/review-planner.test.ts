@@ -146,6 +146,8 @@ describe('buildReviewPlan', () => {
     })
     expect(plan.deterministicChecks).toContain('browser-or-screenshot-evidence')
     expect(plan.deterministicChecks).toContain('design-system-control-reference-check')
+    expect(plan.deterministicChecks).toContain('style-sprawl-regression-scan')
+    expect(plan.deterministicChecks).toContain('shared-primitive-opportunity-scan')
     expect(plan.requiredArtifacts).toContain('visual-evidence')
     expect(plan.budget.maxReviewerAgents).toBeGreaterThan(3)
   })
@@ -174,8 +176,10 @@ describe('buildReviewPlan', () => {
     expect(plan.deterministicChecks).toEqual(expect.arrayContaining([
       'browser-or-screenshot-evidence',
       'design-system-control-reference-check',
+      'style-sprawl-regression-scan',
+      'shared-primitive-opportunity-scan',
     ]))
-    expect(plan.reasons).toContain('Design-system control selection needs reviewer context for component intent, variants, layout ownership, findability, and accessible semantics.')
+    expect(plan.reasons).toContain('Design-system control selection needs reviewer context for component intent, variants, layout ownership, anti-sprawl extraction opportunities, findability, and accessible semantics.')
   })
 
   it('flags long select-list work for control-choice review', () => {
@@ -194,7 +198,8 @@ describe('buildReviewPlan', () => {
       'accessibility',
     ]))
     expect(plan.deterministicChecks).toContain('design-system-control-reference-check')
-    expect(plan.reasons).toContain('Design-system control selection needs reviewer context for component intent, variants, layout ownership, findability, and accessible semantics.')
+    expect(plan.deterministicChecks).toContain('style-sprawl-regression-scan')
+    expect(plan.reasons).toContain('Design-system control selection needs reviewer context for component intent, variants, layout ownership, anti-sprawl extraction opportunities, findability, and accessible semantics.')
   })
 
   it('projects review plans into task review-risk profiles with artifact gates', () => {

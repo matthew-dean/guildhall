@@ -12,8 +12,8 @@ import {
 } from './design-feedback.js'
 import { workSubtreeIds } from './work-hierarchy.js'
 
-const DESIGN_REVIEW_TASK_SIGNALS = /\b(ui|ux|frontend|front[- ]end|screen|page|view|form|modal|drawer|panel|toolbar|navigation|nav|component|primitive|variant|props?|control|button|split button|menu button|select|dropdown|combobox|typeahead|autocomplete|listbox|long list|layout|spacing|css|style|tailwind|token|design system|design-system|storybook|ladle|looma)\b/i
-const ARCHITECTURE_OPPORTUNITY_SIGNALS = /\b(third[- ]party|dependency|package|library|bespoke|custom|replace|remove|overhead|bundle|virtuali[sz]ation|positioning|combobox|autocomplete|typeahead|architecture|pivot)\b/i
+const DESIGN_REVIEW_TASK_SIGNALS = /\b(ui|ux|frontend|front[- ]end|screen|page|view|form|modal|drawer|panel|toolbar|navigation|nav|component|primitive|variant|props?|control|button|split button|menu button|select|dropdown|combobox|typeahead|autocomplete|listbox|long list|layout|spacing|css|style|tailwind|token|design system|design-system|storybook|ladle|looma|ad-hoc|one-off|inline style|className)\b/i
+const ARCHITECTURE_OPPORTUNITY_SIGNALS = /\b(third[- ]party|dependency|package|library|bespoke|custom|replace|remove|overhead|bundle|virtuali[sz]ation|positioning|combobox|autocomplete|typeahead|architecture|pivot|ad-hoc|one-off|style sprawl|inline style|wrapper class)\b/i
 const TOKEN_GAP_SIGNALS = /\b(token|spacing|radius|density|motion|contrast|palette|color|typography)\b/i
 const TERMINAL_STATUSES = new Set<TaskStatus>(TERMINAL_TASK_STATUSES)
 const GENERATED_NOTE_ROLES = new Set([
@@ -89,11 +89,11 @@ function buildDesignLensFinding(
 ): Omit<DesignFinding, 'classification'> {
   const classification = classifyTaskForDesignLens(taskText)
   const architectureLine = classification === 'architecture-opportunity'
-    ? ' Check whether the stronger move is an owner-visible dependency or architecture pivot, including bespoke-to-library or library-to-bespoke.'
+    ? ' Check whether the stronger move is an owner-visible dependency or architecture pivot, including bespoke-to-library or library-to-bespoke. If the current shape is style sprawl, prefer elevating the need into shared UI primitives, shared layout controls, or clearer design-system prop semantics.'
     : ''
   return {
     id: findingId,
-    summary: `Recheck active work "${task.title}" with the current design lens before it advances. Preserve the accepted intent, fill design blind spots, and confirm the control, layout, and design-system choices are still strong.${architectureLine}`,
+    summary: `Recheck active work "${task.title}" with the current design lens before it advances. Preserve the accepted intent, fill design blind spots, and confirm the control, layout, and design-system choices are still strong. Do not let the task add new style sprawl in product surfaces when the stronger move is to extend or extract shared UI semantics.${architectureLine}`,
     source: {
       kind: 'design-lens-review',
       artifactId: `task:${task.id}`,

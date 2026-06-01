@@ -11,7 +11,15 @@ import os from 'node:os'
 import { stringify as stringifyYaml } from 'yaml'
 import { getProjectLocalHistoryDir, getProjectStateDir } from '@guildhall/sessions'
 
-import { buildInbox, buildInboxBlockers, type InboxItem } from '../inbox.js'
+import {
+  ATTENTION_OWNED_INBOX_KINDS,
+  THREAD_OWNED_INBOX_KINDS,
+  buildInbox,
+  buildInboxBlockers,
+  isAttentionOwnedInboxItem,
+  isThreadOwnedInboxItem,
+  type InboxItem,
+} from '../inbox.js'
 
 let tmpDir: string
 let dataDir: string
@@ -118,6 +126,32 @@ afterEach(async () => {
 })
 
 describe('buildInbox', () => {
+  it('classifies thread-owned and needs-you-owned inbox kinds explicitly', async () => {
+    expect(THREAD_OWNED_INBOX_KINDS).toEqual([
+      'project_check_in',
+      'pressure_test_pending',
+      'agent_question_pending',
+      'brief_approval',
+      'spec_approval',
+      'open_escalation',
+    ])
+    expect(ATTENTION_OWNED_INBOX_KINDS).toEqual([
+      'required_migration',
+      'project_understanding',
+      'bootstrap_missing',
+      'setup_pending',
+      'workspace_import_pending',
+      'import_draft_queue',
+      'lever_questions',
+      'spec_fill_pending',
+    ])
+
+    expect(isThreadOwnedInboxItem({ kind: 'brief_approval' } as InboxItem)).toBe(true)
+    expect(isThreadOwnedInboxItem({ kind: 'workspace_import_pending' } as InboxItem)).toBe(false)
+    expect(isAttentionOwnedInboxItem({ kind: 'workspace_import_pending' } as InboxItem)).toBe(true)
+    expect(isAttentionOwnedInboxItem({ kind: 'open_escalation' } as InboxItem)).toBe(false)
+  })
+
   it('empty state: complete bootstrap, no tasks, no workspace signals, no default levers → no items', async () => {
     await writeCompleteBootstrap()
     // Suppress workspace-import: also write workspace-goals.json so the check

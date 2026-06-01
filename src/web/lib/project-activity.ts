@@ -195,6 +195,14 @@ function lineFromEvent(
   }
 }
 
+function ownerInputTickerMessage(message: string | undefined): string {
+  if (/question|answer/i.test(message ?? '')) return 'Waiting for your answer'
+  if (/spec/i.test(message ?? '')) return 'Spec review pending'
+  if (/brief/i.test(message ?? '')) return 'Brief review pending'
+  if (/recover|blocked|escalation/i.test(message ?? '')) return 'Recovery decision pending'
+  return 'Waiting on your input'
+}
+
 export function buildProjectTicker(
   detail: ProjectDetail | null | undefined,
   latestEvent: EventEnvelope | null,
@@ -217,7 +225,7 @@ export function buildProjectTicker(
       pulse: false,
       actorLabel: 'Needs you',
       label: 'Needs you',
-      message: detail.startReadiness.message || 'Guildhall is waiting on your answer',
+      message: ownerInputTickerMessage(detail.startReadiness.message),
       timeLabel: null,
     }
   }

@@ -6,10 +6,14 @@
 <script lang="ts">
   import Button from '../../lib/Button.svelte'
   import Card from '../../lib/Card.svelte'
+  import CardList from '../../lib/CardList.svelte'
+  import CardListItem from '../../lib/CardListItem.svelte'
   import Chip from '../../lib/Chip.svelte'
   import ProgressFeed from '../../lib/ProgressFeed.svelte'
+  import Select from '../../lib/Select.svelte'
   import SegmentedControl from '../../lib/SegmentedControl.svelte'
   import TaskCard from '../../lib/TaskCard.svelte'
+  import UtilityPanel from '../../lib/UtilityPanel.svelte'
   import { friendlyDomain, friendlyPriority, friendlyStatus } from '../../lib/display.js'
   import { friendlyTaskId } from '../../lib/identifier-labels.js'
   import { nav, path } from '../../lib/nav.svelte.js'
@@ -270,6 +274,12 @@
     }
   }
 
+  function listItemTone(task: Task): 'accent' | 'ok' | 'warn' | 'danger' | 'neutral' {
+    const tone = effectiveStatusTone(task)
+    if (tone === 'agent' || tone === 'agent-attention') return 'accent'
+    return tone
+  }
+
   function formatUpdatedAt(value: string | undefined): string {
     if (!value) return '—'
     const date = new Date(value)
@@ -336,27 +346,21 @@
     return 'list'
   }
 
-  function onWorkFilterSelect(event: Event): void {
-    workFilter = (event.currentTarget as HTMLSelectElement).value as WorkFilter
+  function onWorkFilterSelect(value: string): void {
+    workFilter = value as WorkFilter
   }
 </script>
 
 <div class="work-list-view">
-  <div class="work-view-header" role="toolbar" aria-label="Work view controls">
+  <UtilityPanel as="div" className="work-view-header" tone="neutral" role="toolbar" ariaLabel="Work view controls">
     <SegmentedControl label="Work view" ariaLabel="Work view" value={activeWorkView} options={viewOptions} onChange={setWorkView} />
     <div class="work-view-actions">
       <div class="show-picker" role="group" aria-label="Shown work">
         <label for="work-view-show">Show</label>
-        <span class="select-shell">
-          <select id="work-view-show" value={workFilter} onchange={onWorkFilterSelect}>
-            {#each workFilterOptions as option (option.value)}
-              <option value={option.value}>{option.label}</option>
-            {/each}
-          </select>
-        </span>
+        <Select id="work-view-show" value={workFilter} options={workFilterOptions} onchange={onWorkFilterSelect} />
       </div>
     </div>
-  </div>
+  </UtilityPanel>
 
   {#if activeWorkView === 'board'}
     <PlannerTab detail={boardDetail} />
@@ -402,7 +406,7 @@
       </div>
 
       {#if importDraftCount > 0 && nextImportDraft}
-        <div class="draft-queue-card">
+        <UtilityPanel as="div" className="draft-queue-card" tone="neutral">
           <div class="draft-queue-copy">
             <p class="draft-queue-label">Imported draft queue</p>
             <div class="draft-queue-title">{nextImportDraft.title ?? 'Imported draft'}</div>
@@ -417,12 +421,12 @@
           <Button variant="secondary" size="sm" onclick={() => openImportedDraft(nextImportDraft)}>
             {nextImportDraft.id === 'task-workspace-import' ? 'Open import review' : 'Draft task brief'}
           </Button>
-        </div>
+        </UtilityPanel>
       {/if}
 
       {#if tasks.length === 0}
         {#if needsMeta || setupInboxItem}
-          <div class="setup-empty">
+          <UtilityPanel as="div" className="setup-empty" tone="neutral">
             <p class="muted">{setupInboxItem?.detail ?? 'No tasks yet. Finish project setup first.'}</p>
             <Button variant="primary" size="sm" onclick={() => nav(currentProjectHref(setupInboxItem?.actionHref ?? '/setup'))}>
               {setupInboxItem?.kind === 'required_migration'
@@ -435,12 +439,12 @@
                     ? 'Review recovery'
                   : 'Open setup'}
             </Button>
-          </div>
+          </UtilityPanel>
         {:else}
-          <p class="muted">No tasks yet — <strong>New request</strong> to begin.</p>
+          <p class="muted">No tasks yet — <strong>New thread</strong> to begin.</p>
         {/if}
       {:else}
-        <div class="work-list-stack">
+        <CardList className="work-list-stack">
           <div class="list-column-head" aria-label="Sort work list">
             <button type="button" class:active={sortKey === 'title'} onclick={() => toggleSort('title')}>Task{sortLabel('title')}</button>
             <button type="button" class:active={sortKey === 'status'} onclick={() => toggleSort('status')}>Stage{sortLabel('status')}</button>
@@ -450,10 +454,13 @@
             <button type="button" class:active={sortKey === 'revisions'} onclick={() => toggleSort('revisions')}>Revs{sortLabel('revisions')}</button>
           </div>
           {#each sortedTasks as task (task.id)}
-            <button
-              type="button"
-              class="work-list-row"
-              aria-label={`Open task ${task.title ?? task.id}`}
+            <CardListItem
+              as="button"
+              className="work-list-row"
+              tone={listItemTone(task)}
+              railTone={listItemTone(task) === 'neutral' ? 'neutral' : listItemTone(task)}
+              railStrength="strong"
+              ariaLabel={`Open task ${task.title ?? task.id}`}
               onclick={() => openTask(task)}
               onkeydown={(event) => onTaskKey(event, task)}
             >
@@ -479,9 +486,9 @@
               <span class="row-revisions">
                 {task.revisionCount ?? 0}
               </span>
-            </button>
+            </CardListItem>
           {/each}
-        </div>
+        </CardList>
       {/if}
     </Card>
   {/if}
@@ -499,15 +506,11 @@
     gap: var(--s-4);
     min-width: 0;
   }
-  .work-view-header {
+  :global(.work-view-header) {
     display: flex;
     align-items: center;
     justify-content: space-between;
     gap: var(--s-3);
-    padding: var(--s-3);
-    border: 1px solid var(--border);
-    border-radius: var(--r-2);
-    background: var(--bg-raised);
   }
   .work-view-actions {
     display: inline-flex;
@@ -529,48 +532,8 @@
     text-transform: uppercase;
     letter-spacing: 0.05em;
   }
-  .select-shell {
-    position: relative;
-    display: inline-flex;
-  }
-  .select-shell::after {
-    content: '';
-    position: absolute;
-    right: var(--s-3);
-    top: 50%;
-    width: 7px;
-    height: 7px;
-    border-right: 2px solid var(--text-muted);
-    border-bottom: 2px solid var(--text-muted);
-    pointer-events: none;
-    transform: translateY(-65%) rotate(45deg);
-  }
-  .show-picker select {
-    appearance: none;
-    -webkit-appearance: none;
-    min-height: 28px;
-    padding: 0 calc(var(--s-5) + var(--s-2)) 0 var(--s-3);
-    border: 1px solid color-mix(in srgb, var(--glass-border-strong) 72%, var(--button-secondary-border));
-    border-radius: var(--r-1);
-    background:
-      linear-gradient(180deg, color-mix(in srgb, white 8%, transparent), transparent 48%),
-      color-mix(in srgb, var(--button-secondary-bg) 72%, transparent);
-    color: var(--text);
-    box-shadow:
-      var(--glass-inset-etch),
-      inset 0 1px 0 color-mix(in srgb, white 8%, transparent);
-    backdrop-filter: var(--glass-blur);
-    -webkit-backdrop-filter: var(--glass-blur);
-    font: inherit;
-    font-size: var(--fs-2);
-    font-weight: 600;
-  }
-  .show-picker select::-ms-expand {
-    display: none;
-  }
-  .show-picker select:focus-visible {
-    outline: 2px solid var(--accent);
-    outline-offset: 2px;
+  .show-picker :global(.select) {
+    min-width: 132px;
   }
   .work-list-overview {
     display: flex;
@@ -594,29 +557,21 @@
     gap: var(--s-2);
     min-width: 0;
   }
-  .setup-empty {
+  :global(.setup-empty) {
     display: flex;
     align-items: center;
     justify-content: space-between;
     gap: var(--s-3);
-    padding: var(--s-3);
-    border: 1px solid var(--border);
-    border-radius: var(--radius-sm);
-    background: var(--bg-subtle);
   }
-  .setup-empty p {
+  :global(.setup-empty) p {
     margin: 0;
   }
-  .draft-queue-card {
+  :global(.draft-queue-card) {
     display: flex;
     align-items: center;
     justify-content: space-between;
     gap: var(--s-4);
-    padding: var(--s-4);
     margin-bottom: var(--s-4);
-    border: 1px solid var(--border);
-    border-radius: var(--r-2);
-    background: var(--bg-raised);
   }
   .draft-queue-copy {
     display: flex;
@@ -644,7 +599,7 @@
     font-size: var(--fs-1);
     line-height: var(--lh-body);
   }
-  .work-list-stack {
+  :global(.work-list-stack) {
     --work-list-columns:
       minmax(280px, 1fr)
       minmax(172px, max-content)
@@ -687,38 +642,29 @@
   .list-column-head button.active {
     color: var(--text);
   }
-  .work-list-row {
+  :global(.work-list-row) {
     display: grid;
     grid-column: 1 / -1;
     grid-template-columns: subgrid;
     align-items: center;
     gap: var(--s-3);
     width: 100%;
-    padding: var(--s-3);
-    border: 1px solid var(--border);
-    border-left: 3px solid var(--stripe-neutral);
     border-radius: var(--r-2);
-    background: var(--bg-raised);
     color: inherit;
     font: inherit;
     text-align: left;
     cursor: pointer;
-    transition: background 140ms ease, border-color 140ms ease, box-shadow 140ms ease;
   }
-  .work-list-row:hover,
-  .work-list-row:focus-visible {
-    border-color: color-mix(in srgb, var(--accent) 38%, var(--border));
-    border-left-color: var(--stripe-accent);
-    background: color-mix(in srgb, var(--accent) 6%, var(--bg-raised));
+  :global(.work-list-row:hover),
+  :global(.work-list-row:focus-visible) {
     outline: none;
-    box-shadow: 0 0 0 1px color-mix(in srgb, var(--accent) 12%, transparent);
   }
-  .row-main {
+  :global(.work-list-row) .row-main {
     display: grid;
     gap: 4px;
     min-width: 0;
   }
-  .task-title {
+  :global(.work-list-row) .task-title {
     display: -webkit-box;
     overflow: hidden;
     font-size: var(--fs-2);
@@ -728,7 +674,7 @@
     -webkit-line-clamp: 1;
     -webkit-box-orient: vertical;
   }
-  .task-subcopy {
+  :global(.work-list-row) .task-subcopy {
     display: -webkit-box;
     overflow: hidden;
     font-size: var(--fs-1);
@@ -737,33 +683,33 @@
     -webkit-line-clamp: 2;
     -webkit-box-orient: vertical;
   }
-  .task-breadcrumb {
+  :global(.work-list-row) .task-breadcrumb {
     color: var(--text-muted);
     font-size: var(--fs-0);
     line-height: var(--lh-tight);
   }
-  .row-status,
-  .row-domain,
-  .row-priority,
-  .row-updated,
-  .row-revisions {
+  :global(.work-list-row) .row-status,
+  :global(.work-list-row) .row-domain,
+  :global(.work-list-row) .row-priority,
+  :global(.work-list-row) .row-updated,
+  :global(.work-list-row) .row-revisions {
     min-width: 0;
   }
-  .row-status,
-  .row-priority {
+  :global(.work-list-row) .row-status,
+  :global(.work-list-row) .row-priority {
     display: inline-flex;
     align-items: center;
     justify-content: flex-start;
   }
-  .row-domain {
+  :global(.work-list-row) .row-domain {
     color: var(--text-muted);
     font-size: var(--fs-1);
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
   }
-  .row-updated,
-  .row-revisions {
+  :global(.work-list-row) .row-updated,
+  :global(.work-list-row) .row-revisions {
     color: var(--text-muted);
     font-size: var(--fs-0);
     line-height: var(--lh-tight);
@@ -772,7 +718,7 @@
   }
   @supports not (grid-template-columns: subgrid) {
     .list-column-head,
-    .work-list-row {
+    :global(.work-list-row) {
       grid-template-columns: var(--work-list-columns);
     }
   }
@@ -804,14 +750,14 @@
   }
 
   @media (max-width: 860px) {
-    .work-view-header {
+    :global(.work-view-header) {
       align-items: stretch;
       flex-direction: column;
     }
     .work-view-actions {
       justify-content: flex-start;
     }
-    .draft-queue-card {
+    :global(.draft-queue-card) {
       flex-direction: column;
       align-items: stretch;
     }
@@ -822,7 +768,7 @@
     .work-summary {
       justify-content: flex-start;
     }
-    .work-list-row {
+    :global(.work-list-row) {
       grid-template-columns: minmax(0, 1fr);
       align-items: stretch;
     }
@@ -832,18 +778,18 @@
       gap: var(--s-2);
       padding: 0;
     }
-    .task-title {
+    :global(.work-list-row) .task-title {
       font-size: var(--fs-1);
     }
-    .task-subcopy {
+    :global(.work-list-row) .task-subcopy {
       -webkit-line-clamp: 3;
     }
-    .row-status,
-    .row-priority {
+    :global(.work-list-row) .row-status,
+    :global(.work-list-row) .row-priority {
       justify-content: flex-start;
     }
-    .row-updated,
-    .row-revisions {
+    :global(.work-list-row) .row-updated,
+    :global(.work-list-row) .row-revisions {
       text-align: left;
     }
   }

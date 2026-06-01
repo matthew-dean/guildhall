@@ -9,6 +9,7 @@
   import ProjectCard from '../lib/ProjectCard.svelte'
   import SideDrawer from '../lib/SideDrawer.svelte'
   import Tooltip from '../lib/Tooltip.svelte'
+  import UtilityPanel from '../lib/UtilityPanel.svelte'
   import WorkMixChart from '../lib/WorkMixChart.svelte'
   import { avatarToneForRole } from '../lib/avatar-palette.js'
   import { summarizeProjects, type ProjectCardSummary } from '../lib/project-summary.js'
@@ -414,7 +415,7 @@
     </section>
 
     <section class="dashboard" aria-label="Projects dashboard">
-      <div class="dashboard-panel dashboard-panel-wide">
+      <UtilityPanel className="dashboard-panel dashboard-panel-wide" tone="accent">
         <div class="panel-head">
           <div>
             <p class="panel-kicker">Work mix</p>
@@ -460,8 +461,8 @@
           ]}
           emptyLabel="No tasks yet"
         />
-      </div>
-      <div class="dashboard-panel">
+      </UtilityPanel>
+      <UtilityPanel className="dashboard-panel" tone={needsYouCount === 0 ? 'neutral' : 'warn'}>
         <div class="panel-head">
           <div>
             <p class="panel-kicker">Attention</p>
@@ -474,8 +475,8 @@
             ? 'No project needs your decision right now.'
             : `${firstNeedsYouProject?.name ?? 'A project'} has the first waiting item.`}
         </p>
-      </div>
-      <div class="dashboard-panel">
+      </UtilityPanel>
+      <UtilityPanel className="dashboard-panel" tone={overview.running > 0 ? 'ok' : 'neutral'}>
         <div class="panel-head">
           <div>
             <p class="panel-kicker">Running now</p>
@@ -490,7 +491,7 @@
             </Tooltip>
           {/each}
         </div>
-      </div>
+      </UtilityPanel>
     </section>
 
     <div class="projects-area">
@@ -864,14 +865,6 @@
     display: grid;
     gap: var(--s-2);
     align-content: start;
-    padding: var(--s-3);
-    border: 1px solid var(--glass-border);
-    border-radius: var(--r-2);
-    background:
-      radial-gradient(circle at 84% 18%, color-mix(in srgb, var(--accent) 10%, transparent), transparent 30%),
-      linear-gradient(180deg, color-mix(in srgb, white 4%, transparent), color-mix(in srgb, white 1%, transparent)),
-      var(--glass-bg);
-    box-shadow: var(--glass-etch);
   }
   .panel-head {
     min-width: 0;

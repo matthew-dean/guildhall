@@ -176,7 +176,7 @@ describe('POST /api/project/request', () => {
     )).toBe(true)
   })
 
-  it('preserves ordinary task intake behavior', async () => {
+  it('starts bounded chat for ordinary task intake instead of creating work immediately', async () => {
     const { app } = buildServeApp({ projectPath: tmpDir })
     const res = await app.fetch(new Request(projectUrl('/api/project/request'), {
       method: 'POST',
@@ -186,25 +186,211 @@ describe('POST /api/project/request', () => {
 
     expect(res.status).toBe(200)
     const body = await res.json() as {
-      routedActions?: Array<{ kind?: string }>
-      taskId?: string
+      boundedChat?: {
+        id?: string
+        objective?: { kind?: string }
+        subObjectives?: Array<{ id?: string; prompt?: string }>
+      }
     }
-    expect(body.routedActions?.[0]?.kind).toBe('task_spec')
-    expect(body.taskId).toMatch(/^task-/)
+    expect(body.boundedChat?.objective?.kind).toBe('new_request')
+    expect(body.boundedChat?.subObjectives?.[0]).toMatchObject({
+      id: 'request-shaping',
+      prompt: 'Before Guildhall shapes this into work, what requirements, acceptance criteria, test expectations, or deliverables matter most?',
+    })
+
     const queue = await readQueue()
-    expect(queue.tasks[0]?.request).toMatchObject({
-      kind: 'task_spec',
-      raw: 'Add a loading spinner to Providers.',
-      routingSummary: 'Routed to Task Intake',
-      pressureTestRequired: true,
+    expect(queue.tasks).toEqual([])
+  })
+
+  it('stores ambiguous policy requests with an owner-facing clarifying question instead of inventing intent', async () => {
+    const { app } = buildServeApp({ projectPath: tmpDir })
+    const ask = 'Set the FLL overhead charge policy and decide whether we should also apply it across the product.'
+    const res = await app.fetch(new Request(projectUrl('/api/project/request'), {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ ask }),
+    }))
+
+    expect(res.status).toBe(200)
+    const body = await res.json() as {
+      boundedChat?: {
+        id?: string
+        objective?: { kind?: string }
+        subObjectives?: Array<{ id?: string; prompt?: string; choices?: string[] }>
+      }
+    }
+    expect(body.boundedChat?.objective?.kind).toBe('new_request')
+    expect(body.boundedChat?.subObjectives?.[0]).toMatchObject({
+      id: 'request-scope',
+      prompt: 'Should Guildhall draft the FLL overhead policy first, or also turn it into linked implementation work?',
+      choices: [
+        'Draft the policy/spec first',
+        'Draft the policy and create linked implementation tasks',
+        'Apply the policy now',
+      ],
     })
-    expect(queue.tasks[0]?.requestIntake?.pressureTestSummary).toMatchObject({
-      systemOwned: true,
-      degree: 'automatic',
-      qualityBar: expect.stringContaining('trustworthy'),
+
+    const queue = await readQueue()
+    expect(queue.tasks).toEqual([])
+  })
+
+  it('turns a bounded-chat New Request clarification into a shaped task and closes the session', async () => {
+    const { app } = buildServeApp({ projectPath: tmpDir })
+    const ask = 'Set the FLL overhead charge policy and decide whether we should also apply it across the product.'
+    const start = await app.fetch(new Request(projectUrl('/api/project/request'), {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ ask }),
+    }))
+    const started = await start.json() as {
+      boundedChat?: { id?: string; subObjectives?: Array<{ id?: string }> }
+    }
+    const sessionId = started.boundedChat?.id
+    const subObjectiveId = started.boundedChat?.subObjectives?.[0]?.id
+    expect(sessionId).toBeTruthy()
+    expect(subObjectiveId).toBe('request-scope')
+
+    const answer = await app.fetch(new Request(projectUrl(`/api/project/bounded-chat/${encodeURIComponent(sessionId!)}/answer`), {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        subObjectiveId,
+        response: 'Draft the policy/spec first.',
+      }),
+    }))
+
+    expect(answer.status).toBe(200)
+    const answered = await answer.json() as {
+      boundedChat?: {
+        status?: string
+        closure?: { outcome?: string; summary?: string }
+        acceptedState?: { decisions?: Array<{ decision?: string }> }
+      }
+    }
+    expect(answered.boundedChat).toMatchObject({
+      status: 'fulfilled',
+      closure: {
+        outcome: 'fulfilled',
+        summary: 'Guildhall shaped the new request into runnable work.',
+      },
     })
-    expect(queue.tasks[0]?.requestIntake?.pressureTestSummary?.checks.map(check => check.id)).toContain('verification')
-    expect(queue.tasks[0]?.requestIntake?.pressureTestSummary?.checks.map(check => check.id)).toContain('review-lenses')
+    expect(answered.boundedChat?.acceptedState?.decisions?.map(item => item.decision)).toEqual([
+      'Draft the policy/spec first.',
+    ])
+
+    const queue = await readQueue()
+    expect(queue.tasks).toHaveLength(1)
+    expect(queue.tasks[0]).toMatchObject({
+      description: ask,
+      status: 'exploring',
+      request: {
+        kind: 'task_spec',
+        raw: ask,
+        routingSummary: 'Routed to Task Intake',
+      },
+      requestIntake: {
+        intent: 'ambiguous_spec_or_implementation',
+        recommendedNextAction: 'ask_clarifying_question',
+      },
+    })
+    expect(queue.tasks[0]?.openQuestions ?? []).toEqual([])
+  })
+
+  it('turns a bounded-chat task request into shaped work only after the intake answer arrives', async () => {
+    const { app } = buildServeApp({ projectPath: tmpDir })
+    const ask = 'Add a loading spinner to Providers.'
+    const start = await app.fetch(new Request(projectUrl('/api/project/request'), {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ ask }),
+    }))
+    const started = await start.json() as {
+      boundedChat?: { id?: string; subObjectives?: Array<{ id?: string }> }
+    }
+    const sessionId = started.boundedChat?.id
+    const subObjectiveId = started.boundedChat?.subObjectives?.[0]?.id
+    expect(sessionId).toBeTruthy()
+    expect(subObjectiveId).toBe('request-shaping')
+
+    const answer = await app.fetch(new Request(projectUrl(`/api/project/bounded-chat/${encodeURIComponent(sessionId!)}/answer`), {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        subObjectiveId,
+        response: 'Keep it in the existing Providers header, show it while provider health is loading, verify with UI tests, and do not add a second spinner elsewhere.',
+      }),
+    }))
+
+    expect(answer.status).toBe(200)
+    const answered = await answer.json() as {
+      boundedChat?: {
+        status?: string
+        closure?: { outcome?: string }
+        acceptedState?: { decisions?: Array<{ decision?: string }> }
+      }
+    }
+    expect(answered.boundedChat?.status).toBe('fulfilled')
+    expect(answered.boundedChat?.closure?.outcome).toBe('fulfilled')
+    expect(answered.boundedChat?.acceptedState?.decisions?.map(item => item.decision)).toEqual([
+      'Keep it in the existing Providers header, show it while provider health is loading, verify with UI tests, and do not add a second spinner elsewhere.',
+    ])
+
+    const queue = await readQueue()
+    expect(queue.tasks).toHaveLength(1)
+    expect(queue.tasks[0]).toMatchObject({
+      description: ask,
+      status: 'exploring',
+      request: {
+        kind: 'task_spec',
+        raw: ask,
+        routingSummary: 'Routed to Task Intake',
+      },
+      requestIntake: {
+        intent: 'implementation',
+        recommendedNextAction: 'proceed_to_implementation_spec',
+      },
+    })
+    expect(queue.tasks[0]?.openQuestions ?? []).toEqual([])
+  })
+
+  it('keeps a bounded-chat New Request open when the owner is confused', async () => {
+    const { app } = buildServeApp({ projectPath: tmpDir })
+    const ask = 'Set the FLL overhead charge policy and decide whether we should also apply it across the product.'
+    const start = await app.fetch(new Request(projectUrl('/api/project/request'), {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ ask }),
+    }))
+    const started = await start.json() as {
+      boundedChat?: { id?: string; subObjectives?: Array<{ id?: string }> }
+    }
+    const sessionId = started.boundedChat?.id
+
+    const answer = await app.fetch(new Request(projectUrl(`/api/project/bounded-chat/${encodeURIComponent(sessionId!)}/answer`), {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        subObjectiveId: 'request-scope',
+        response: "I don't understand the nature of the question.",
+      }),
+    }))
+
+    expect(answer.status).toBe(200)
+    const answered = await answer.json() as {
+      boundedChat?: {
+        status?: string
+        activeSubObjectiveId?: string
+        acceptedState?: { discardedResponses?: Array<{ reason?: string }> }
+      }
+    }
+    expect(answered.boundedChat).toMatchObject({
+      status: 'waiting_for_user',
+      activeSubObjectiveId: 'request-scope',
+    })
+    expect(answered.boundedChat?.acceptedState?.discardedResponses?.[0]?.reason).toBe('confused')
+
+    const queue = await readQueue()
+    expect(queue.tasks).toEqual([])
   })
 
   it('keeps project questions visible as routed project-question requests', async () => {
@@ -231,6 +417,182 @@ describe('POST /api/project/request', () => {
       kind: 'project_question',
       raw: 'What commands should I run before release?',
       routingSummary: 'Routed to Project Question',
+    })
+  })
+})
+
+describe('project check-in bounded chat endpoints', () => {
+  it('starts and answers project check-in through bounded chat', async () => {
+    await fs.writeFile(
+      path.join(getProjectStateDir(tmpDir), 'project-brief.md'),
+      [
+        'Narrative Harness is fiction-writing software for building, drafting, and revising a coherent novel.',
+        'The project includes author voice, reader knowledge, coherence reviewers, and quiet commercial editor direction.',
+      ].join('\n'),
+      'utf-8',
+    )
+
+    const { app } = buildServeApp({ projectPath: tmpDir })
+    const start = await app.fetch(new Request(projectUrl('/api/project/project-check-in'), {
+      method: 'POST',
+    }))
+
+    expect(start.status).toBe(200)
+    const started = await start.json() as {
+      boundedChat?: {
+        id?: string
+        objective?: { kind?: string }
+        subObjectives?: Array<{ id?: string; prompt?: string }>
+      }
+    }
+    expect(started.boundedChat?.objective?.kind).toBe('project_check_in')
+    expect(started.boundedChat?.subObjectives?.[0]?.prompt).toContain('Intake Test tasks')
+
+    const sessionId = started.boundedChat?.id
+    const subObjectiveId = started.boundedChat?.subObjectives?.[0]?.id
+    expect(sessionId).toBeTruthy()
+    expect(subObjectiveId).toBeTruthy()
+
+    const answer = await app.fetch(new Request(projectUrl(`/api/project/bounded-chat/${encodeURIComponent(sessionId!)}/answer`), {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        subObjectiveId,
+        response: 'Probably reviewer stuff, but only if it helps us know whether a novel is actually good.',
+      }),
+    }))
+
+    expect(answer.status).toBe(200)
+    const answered = await answer.json() as {
+      boundedChat?: {
+        status?: string
+        subObjectives?: Array<{ prompt?: string; followUpDepth?: number }>
+      }
+    }
+    expect(answered.boundedChat?.status).toBe('waiting_for_user')
+    expect(answered.boundedChat?.subObjectives?.[0]).toMatchObject({
+      followUpDepth: 1,
+      prompt: 'Should reviewer-lane MVPs judge internal story coherence, reader engagement, author voice preservation, or all three?',
+    })
+  })
+
+  it('reuses the same active project check-in session when reopened later', async () => {
+    await fs.writeFile(
+      path.join(getProjectStateDir(tmpDir), 'project-brief.md'),
+      [
+        'Narrative Harness is fiction-writing software for building, drafting, and revising a coherent novel.',
+        'The project includes author voice, reader knowledge, coherence reviewers, and quiet commercial editor direction.',
+        'The UI should feel quiet and commercially credible.',
+      ].join('\n'),
+      'utf-8',
+    )
+
+    const { app } = buildServeApp({ projectPath: tmpDir })
+    const start = await app.fetch(new Request(projectUrl('/api/project/project-check-in'), {
+      method: 'POST',
+    }))
+    const started = await start.json() as {
+      boundedChat?: { id?: string; subObjectives?: Array<{ id?: string }> }
+    }
+    const sessionId = started.boundedChat?.id
+    const subObjectiveId = started.boundedChat?.subObjectives?.[0]?.id
+    expect(sessionId).toBeTruthy()
+    expect(subObjectiveId).toBeTruthy()
+
+    await app.fetch(new Request(projectUrl(`/api/project/bounded-chat/${encodeURIComponent(sessionId!)}/answer`), {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        subObjectiveId,
+        response: 'Reviewer-lane MVPs first, especially author voice and coherence reviewers. Save editor UX for later.',
+      }),
+    }))
+
+    const reopen = await app.fetch(new Request(projectUrl('/api/project/project-check-in'), {
+      method: 'POST',
+    }))
+    expect(reopen.status).toBe(200)
+    const reopened = await reopen.json() as {
+      existing?: boolean
+      boundedChat?: {
+        id?: string
+        activeSubObjectiveId?: string
+      }
+    }
+    expect(reopened.existing).toBe(true)
+    expect(reopened.boundedChat?.id).toBe(sessionId)
+    expect(reopened.boundedChat?.activeSubObjectiveId).toBe('visual-direction-mode')
+  })
+
+  it('closes project check-in with a persisted done receipt after the final answer', async () => {
+    await fs.writeFile(
+      path.join(getProjectStateDir(tmpDir), 'project-brief.md'),
+      [
+        'Narrative Harness is fiction-writing software for building, drafting, and revising a coherent novel.',
+        'The project includes author voice, reader knowledge, coherence reviewers, and quiet commercial editor direction.',
+        'The UI should feel quiet and commercially credible.',
+      ].join('\n'),
+      'utf-8',
+    )
+
+    const { app } = buildServeApp({ projectPath: tmpDir })
+    const start = await app.fetch(new Request(projectUrl('/api/project/project-check-in'), {
+      method: 'POST',
+    }))
+    const started = await start.json() as {
+      boundedChat?: { id?: string; subObjectives?: Array<{ id?: string }> }
+    }
+    const sessionId = started.boundedChat?.id
+    const subObjectiveId = started.boundedChat?.subObjectives?.[0]?.id
+
+    await app.fetch(new Request(projectUrl(`/api/project/bounded-chat/${encodeURIComponent(sessionId!)}/answer`), {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        subObjectiveId,
+        response: 'Reviewer-lane MVPs first, especially author voice and coherence reviewers. Save editor UX for later.',
+      }),
+    }))
+
+    const finish = await app.fetch(new Request(projectUrl(`/api/project/bounded-chat/${encodeURIComponent(sessionId!)}/answer`), {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        subObjectiveId: 'visual-direction-mode',
+        response: 'Professional editorial tool.',
+      }),
+    }))
+
+    expect(finish.status).toBe(200)
+    const finished = await finish.json() as {
+      boundedChat?: {
+        status?: string
+        closure?: { outcome?: string; summary?: string }
+      }
+    }
+    expect(finished.boundedChat).toMatchObject({
+      status: 'fulfilled',
+      closure: {
+        outcome: 'fulfilled',
+        summary: 'Guildhall recorded the project check-in direction.',
+      },
+    })
+
+    const persistedRaw = await fs.readFile(
+      path.join(getProjectStateDir(tmpDir), 'bounded-chat', `${sessionId}.json`),
+      'utf-8',
+    )
+    const persisted = JSON.parse(persistedRaw) as {
+      acceptedState?: { decisions?: Array<{ decision: string }> }
+      closure?: { outcome?: string; summary?: string }
+    }
+    expect(persisted.acceptedState?.decisions?.map(item => item.decision)).toEqual([
+      'Reviewer-lane MVPs first, especially author voice and coherence reviewers. Save editor UX for later.',
+      'Professional editorial tool.',
+    ])
+    expect(persisted.closure).toMatchObject({
+      outcome: 'fulfilled',
+      summary: 'Guildhall recorded the project check-in direction.',
     })
   })
 })

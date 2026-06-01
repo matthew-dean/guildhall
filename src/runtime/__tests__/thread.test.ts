@@ -208,6 +208,499 @@ describe('buildThread', () => {
     }
   })
 
+  it('projects an active bounded-chat project check-in instead of the old setup card', async () => {
+    const projectPath = await mkdtemp(path.join(tmpdir(), 'guildhall-thread-'))
+    try {
+      await mkdir(path.join(projectPath, '.guildhall', 'bounded-chat'), { recursive: true })
+      await writeFile(
+        path.join(projectPath, '.guildhall', 'bounded-chat', 'bc-narrative-project-check-in.json'),
+        JSON.stringify({
+          id: 'bc-narrative-project-check-in',
+          projectId: 'narrative-harness',
+          source: 'thread:project-check-in',
+          objective: {
+            kind: 'project_check_in',
+            label: 'Project check-in',
+            successCriteria: ['Capture the near-term project direction.'],
+            startedAt: '2026-05-31T00:00:00.000Z',
+          },
+          status: 'waiting_for_user',
+          activeSubObjectiveId: 'project-direction-priority',
+          subObjectives: [{
+            id: 'project-direction-priority',
+            objective: 'Capture project direction',
+            prompt: 'For the next few Narrative Harness tasks, should Guildhall bias toward reviewer-lane MVPs, author-facing editor UX, story-memory/schema foundations, or generation/evaluation loops?',
+            helperText: 'This changes which backlog items Guildhall should shape first and what evidence workers need.',
+            choices: [
+              'Reviewer-lane MVPs',
+              'Author-facing editor UX',
+              'Story-memory/schema foundations',
+              'Generation/evaluation loops',
+            ],
+            followUpDepth: 0,
+            localTurns: [],
+            status: 'active',
+          }],
+          acceptedState: {
+            facts: [
+              {
+                fact: 'Narrative Harness is fiction-writing software for building and revising a coherent novel.',
+                sourceSubObjectiveId: 'project-direction-priority',
+              },
+            ],
+            decisions: [],
+            leverUpdates: [],
+            settingUpdates: [],
+            taskDrafts: [],
+            unresolvedForks: [],
+            discardedResponses: [],
+          },
+          pendingActions: [],
+          appliedActionIds: [],
+          createdAt: '2026-05-31T00:00:00.000Z',
+          updatedAt: '2026-05-31T00:00:00.000Z',
+        }),
+      )
+
+      const snapshot: ProjectSnapshot = {
+        projectPath,
+        config: {
+          id: 'narrative-harness',
+          name: 'Narrative Harness',
+          bootstrap: { verifiedAt: new Date().toISOString() },
+          coordinators: [{ id: 'harness', name: 'Harness' }],
+        },
+        bootstrapVerified: true,
+        hasProvider: true,
+        hasDirection: true,
+        workspaceImportReviewed: true,
+        taskCount: 0,
+        wizardState: emptyWizardsState(),
+      }
+
+      const thread = buildThread({ projectPath, snapshot })
+      const question = thread.turns.find(turn => turn.id === 'bounded-chat:bc-narrative-project-check-in:project-direction-priority')
+
+      expect(question).toMatchObject({
+        kind: 'pressure_test_question',
+        targetTitle: 'Narrative Harness',
+        domainTitle: 'Project check-in',
+        answerEndpoint: '/api/project/bounded-chat/bc-narrative-project-check-in/answer',
+        question: {
+          choices: [
+            'Reviewer-lane MVPs',
+            'Author-facing editor UX',
+            'Story-memory/schema foundations',
+            'Generation/evaluation loops',
+          ],
+          evidence: ['Narrative Harness is fiction-writing software for building and revising a coherent novel.'],
+        },
+      })
+      expect(thread.turns.find(t => t.id === 'setup:project-check-in')).toBeUndefined()
+      expect(thread.activeTurnId).toBe('bounded-chat:bc-narrative-project-check-in:project-direction-priority')
+    } finally {
+      await rm(projectPath, { recursive: true, force: true })
+    }
+  })
+
+  it('projects an active bounded-chat New Request clarification as the live intake turn', async () => {
+    const projectPath = await mkdtemp(path.join(tmpdir(), 'guildhall-thread-'))
+    try {
+      await mkdir(path.join(projectPath, '.guildhall', 'bounded-chat'), { recursive: true })
+      await writeFile(
+        path.join(projectPath, '.guildhall', 'bounded-chat', 'bc-request-clarify.json'),
+        JSON.stringify({
+          id: 'bc-request-clarify',
+          projectId: 'narrative-harness',
+          source: 'thread:new-request',
+          objective: {
+            kind: 'new_request',
+            label: 'Shape a new request',
+            successCriteria: ['Classify the request and shape the next action.'],
+            startedAt: '2026-05-31T00:00:00.000Z',
+          },
+          status: 'waiting_for_user',
+          activeSubObjectiveId: 'request-scope',
+          subObjectives: [{
+            id: 'request-scope',
+            objective: 'Clarify request scope',
+            prompt: 'Should Guildhall draft the FLL overhead policy first, or also turn it into linked implementation work?',
+            helperText: 'This changes whether Guildhall should shape one policy task or a broader execution plan.',
+            choices: [
+              'Draft the policy/spec first',
+              'Draft the policy and create linked implementation tasks',
+              'Apply the policy now',
+            ],
+            followUpDepth: 0,
+            localTurns: [],
+            status: 'active',
+          }],
+          acceptedState: {
+            facts: [],
+            decisions: [],
+            leverUpdates: [],
+            settingUpdates: [],
+            taskDrafts: [],
+            unresolvedForks: [],
+            discardedResponses: [],
+          },
+          pendingActions: [],
+          appliedActionIds: [],
+          plannerState: {
+            newRequest: {
+              ask: 'Set the FLL overhead charge policy and decide whether we should also apply it across the product.',
+              title: 'Set the FLL overhead charge policy and decide whether we...',
+              domain: 'frontend',
+              projectPath,
+              routedRequestKind: 'task_spec',
+              routingSummary: 'Routed to Task Intake',
+            },
+          },
+          createdAt: '2026-05-31T00:00:00.000Z',
+          updatedAt: '2026-05-31T00:00:00.000Z',
+        }),
+      )
+
+      const snapshot: ProjectSnapshot = {
+        projectPath,
+        config: {
+          id: 'narrative-harness',
+          name: 'Narrative Harness',
+          bootstrap: { verifiedAt: new Date().toISOString() },
+          coordinators: [{ id: 'harness', name: 'Harness' }],
+        },
+        bootstrapVerified: true,
+        hasProvider: true,
+        hasDirection: true,
+        workspaceImportReviewed: true,
+        taskCount: 0,
+        wizardState: emptyWizardsState(),
+      }
+
+      const thread = buildThread({ projectPath, snapshot })
+      const question = thread.turns.find(turn => turn.id === 'bounded-chat:bc-request-clarify:request-scope')
+
+      expect(question).toMatchObject({
+        kind: 'pressure_test_question',
+        targetTitle: 'Narrative Harness',
+        domainTitle: 'New request',
+        answerEndpoint: '/api/project/bounded-chat/bc-request-clarify/answer',
+        question: {
+          prompt: 'Should Guildhall draft the FLL overhead policy first, or also turn it into linked implementation work?',
+          choices: [
+            'Draft the policy/spec first',
+            'Draft the policy and create linked implementation tasks',
+            'Apply the policy now',
+          ],
+        },
+      })
+      expect(thread.activeTurnId).toBe('bounded-chat:bc-request-clarify:request-scope')
+    } finally {
+      await rm(projectPath, { recursive: true, force: true })
+    }
+  })
+
+  it('prefers preloaded thread state over re-reading current disk projections', async () => {
+    const projectPath = await mkdtemp(path.join(tmpdir(), 'guildhall-thread-'))
+    try {
+      await mkdir(path.join(projectPath, '.guildhall', 'bounded-chat'), { recursive: true })
+      await writeFile(
+        path.join(projectPath, '.guildhall', 'bounded-chat', 'bc-disk-only.json'),
+        JSON.stringify({
+          id: 'bc-disk-only',
+          projectId: 'narrative-harness',
+          source: 'thread:new-request',
+          objective: {
+            kind: 'new_request',
+            label: 'Shape a new request',
+            successCriteria: ['Classify the request and shape the next action.'],
+            startedAt: '2026-05-31T00:00:00.000Z',
+          },
+          status: 'waiting_for_user',
+          activeSubObjectiveId: 'request-scope',
+          subObjectives: [{
+            id: 'request-scope',
+            objective: 'Clarify request scope',
+            prompt: 'Disk question that should be ignored when preloaded state is supplied.',
+            followUpDepth: 0,
+            localTurns: [],
+            status: 'active',
+          }],
+          acceptedState: {
+            facts: [],
+            decisions: [],
+            leverUpdates: [],
+            settingUpdates: [],
+            taskDrafts: [],
+            unresolvedForks: [],
+            discardedResponses: [],
+          },
+          pendingActions: [],
+          appliedActionIds: [],
+          createdAt: '2026-05-31T00:00:00.000Z',
+          updatedAt: '2026-05-31T00:00:00.000Z',
+        }),
+      )
+
+      const snapshot: ProjectSnapshot = {
+        projectPath,
+        config: {
+          id: 'narrative-harness',
+          name: 'Narrative Harness',
+          bootstrap: { verifiedAt: new Date().toISOString() },
+          coordinators: [{ id: 'harness', name: 'Harness' }],
+        },
+        bootstrapVerified: true,
+        hasProvider: true,
+        hasDirection: true,
+        workspaceImportReviewed: true,
+        taskCount: 1,
+        wizardState: emptyWizardsState(),
+      }
+
+      const thread = buildThread({
+        projectPath,
+        snapshot,
+        tasks: [{
+          id: 'task-001',
+          title: 'Shape thread performance',
+          description: 'Use injected state instead of re-reading disk turns.',
+          domain: 'product',
+          projectPath,
+          status: 'exploring',
+          createdAt: '2026-05-31T00:00:00.000Z',
+          updatedAt: '2026-05-31T00:00:00.000Z',
+        }] as never,
+        boundedChatSessions: [],
+        pressureTestIntakes: [],
+        projectCheckInSummary: {
+          needed: false,
+          label: 'Project questions',
+          title: 'Project questions answered',
+          detail: 'Guildhall has already recorded project-level answers for this workspace.',
+          actionHref: '/thread',
+          totalCount: 1,
+          activeCount: 0,
+          completedCount: 1,
+        },
+      })
+
+      expect(thread.turns.find(turn => turn.id === 'bounded-chat:bc-disk-only:request-scope')).toBeUndefined()
+      expect(thread.turns.some(turn => 'taskId' in turn && turn.taskId === 'task-001')).toBe(true)
+    } finally {
+      await rm(projectPath, { recursive: true, force: true })
+    }
+  })
+
+  it('projects a completed bounded-chat project check-in as a done turn', async () => {
+    const projectPath = await mkdtemp(path.join(tmpdir(), 'guildhall-thread-'))
+    try {
+      await mkdir(path.join(projectPath, '.guildhall', 'bounded-chat'), { recursive: true })
+      await writeFile(
+        path.join(projectPath, '.guildhall', 'bounded-chat', 'bc-narrative-project-check-in.json'),
+        JSON.stringify({
+          id: 'bc-narrative-project-check-in',
+          projectId: 'narrative-harness',
+          source: 'thread:project-check-in',
+          objective: {
+            kind: 'project_check_in',
+            label: 'Project check-in',
+            successCriteria: ['Capture the near-term project direction.'],
+            startedAt: '2026-05-31T00:00:00.000Z',
+          },
+          status: 'fulfilled',
+          activeSubObjectiveId: 'visual-direction-mode',
+          subObjectives: [{
+            id: 'project-direction-priority',
+            objective: 'Capture project direction',
+            prompt: 'For the next few Narrative Harness tasks, should Guildhall bias toward reviewer-lane MVPs, author-facing editor UX, story-memory/schema foundations, or generation/evaluation loops?',
+            helperText: 'This changes which backlog items Guildhall should shape first and what evidence workers need.',
+            choices: [
+              'Reviewer-lane MVPs',
+              'Author-facing editor UX',
+              'Story-memory/schema foundations',
+              'Generation/evaluation loops',
+            ],
+            followUpDepth: 0,
+            localTurns: [{
+              role: 'user',
+              content: 'Reviewer-lane MVPs first.',
+              selectedChoiceIds: [],
+            }],
+            status: 'answered',
+          }, {
+            id: 'visual-direction-mode',
+            objective: 'Capture project direction',
+            prompt: 'Should Narrative Harness feel more like a calm writing desk, a professional editorial tool, or an analytical story-debugging cockpit?',
+            helperText: 'This changes UI acceptance criteria and reviewer expectations for author-facing work.',
+            choices: [
+              'Calm writing desk',
+              'Professional editorial tool',
+              'Analytical story-debugging cockpit',
+            ],
+            followUpDepth: 0,
+            localTurns: [{
+              role: 'user',
+              content: 'Professional editorial tool.',
+              selectedChoiceIds: [],
+            }],
+            status: 'answered',
+          }],
+          acceptedState: {
+            facts: [],
+            decisions: [{
+              decision: 'Reviewer-lane MVPs first.',
+              sourceSubObjectiveId: 'project-direction-priority',
+            }, {
+              decision: 'Professional editorial tool.',
+              sourceSubObjectiveId: 'visual-direction-mode',
+            }],
+            leverUpdates: [],
+            settingUpdates: [],
+            taskDrafts: [],
+            unresolvedForks: [],
+            discardedResponses: [],
+          },
+          pendingActions: [],
+          appliedActionIds: ['close-1'],
+          closure: {
+            outcome: 'fulfilled',
+            summary: 'Guildhall recorded the project check-in direction.',
+            settingUpdates: [],
+            taskDrafts: [],
+            evidence: [],
+            closedAt: '2026-05-31T00:10:00.000Z',
+          },
+          createdAt: '2026-05-31T00:00:00.000Z',
+          updatedAt: '2026-05-31T00:10:00.000Z',
+        }),
+      )
+
+      const snapshot: ProjectSnapshot = {
+        projectPath,
+        config: {
+          id: 'narrative-harness',
+          name: 'Narrative Harness',
+          bootstrap: { verifiedAt: new Date().toISOString() },
+          coordinators: [{ id: 'harness', name: 'Harness' }],
+        },
+        bootstrapVerified: true,
+        hasProvider: true,
+        hasDirection: true,
+        workspaceImportReviewed: true,
+        taskCount: 0,
+        wizardState: emptyWizardsState(),
+      }
+
+      const thread = buildThread({ projectPath, snapshot })
+      const turn = thread.turns.find(item => item.id === 'bounded-chat-done:bc-narrative-project-check-in')
+
+      expect(turn).toMatchObject({
+        kind: 'request',
+        status: 'done',
+        phase: 'done',
+        title: 'Project check-in complete',
+        routingSummary: 'Guildhall recorded the project check-in direction.',
+      })
+    } finally {
+      await rm(projectPath, { recursive: true, force: true })
+    }
+  })
+
+  it('projects a completed bounded-chat New Request as a done turn', async () => {
+    const projectPath = await mkdtemp(path.join(tmpdir(), 'guildhall-thread-'))
+    try {
+      await mkdir(path.join(projectPath, '.guildhall', 'bounded-chat'), { recursive: true })
+      await writeFile(
+        path.join(projectPath, '.guildhall', 'bounded-chat', 'bc-request-done.json'),
+        JSON.stringify({
+          id: 'bc-request-done',
+          projectId: 'narrative-harness',
+          source: 'thread:new-request',
+          objective: {
+            kind: 'new_request',
+            label: 'Shape a new request',
+            successCriteria: ['Classify the request and shape the next action.'],
+            startedAt: '2026-05-31T00:00:00.000Z',
+          },
+          status: 'fulfilled',
+          activeSubObjectiveId: 'request-scope',
+          subObjectives: [{
+            id: 'request-scope',
+            objective: 'Clarify request scope',
+            prompt: 'Should Guildhall draft the FLL overhead policy first, or also turn it into linked implementation work?',
+            helperText: 'This changes whether Guildhall should shape one policy task or a broader execution plan.',
+            choices: [
+              'Draft the policy/spec first',
+              'Draft the policy and create linked implementation tasks',
+              'Apply the policy now',
+            ],
+            followUpDepth: 0,
+            localTurns: [{
+              role: 'user',
+              content: 'Draft the policy/spec first.',
+              selectedChoiceIds: [],
+            }],
+            status: 'answered',
+          }],
+          acceptedState: {
+            facts: [],
+            decisions: [{
+              decision: 'Draft the policy/spec first.',
+              sourceSubObjectiveId: 'request-scope',
+            }],
+            leverUpdates: [],
+            settingUpdates: [],
+            taskDrafts: ['task-001'],
+            unresolvedForks: [],
+            discardedResponses: [],
+          },
+          pendingActions: [],
+          appliedActionIds: ['close-1'],
+          closure: {
+            outcome: 'fulfilled',
+            summary: 'Guildhall shaped the new request into runnable work.',
+            settingUpdates: [],
+            taskDrafts: ['task-001'],
+            evidence: [],
+            closedAt: '2026-05-31T00:10:00.000Z',
+          },
+          createdAt: '2026-05-31T00:00:00.000Z',
+          updatedAt: '2026-05-31T00:10:00.000Z',
+        }),
+      )
+
+      const snapshot: ProjectSnapshot = {
+        projectPath,
+        config: {
+          id: 'narrative-harness',
+          name: 'Narrative Harness',
+          bootstrap: { verifiedAt: new Date().toISOString() },
+          coordinators: [{ id: 'harness', name: 'Harness' }],
+        },
+        bootstrapVerified: true,
+        hasProvider: true,
+        hasDirection: true,
+        workspaceImportReviewed: true,
+        taskCount: 0,
+        wizardState: emptyWizardsState(),
+      }
+
+      const thread = buildThread({ projectPath, snapshot })
+      const turn = thread.turns.find(item => item.id === 'bounded-chat-done:bc-request-done')
+
+      expect(turn).toMatchObject({
+        kind: 'request',
+        status: 'done',
+        phase: 'done',
+        title: 'New request complete',
+        routingSummary: 'Guildhall shaped the new request into runnable work.',
+      })
+    } finally {
+      await rm(projectPath, { recursive: true, force: true })
+    }
+  })
+
   it('projects routed task requests as request turns until the task is complete', async () => {
     const projectPath = await mkdtemp(path.join(tmpdir(), 'guildhall-thread-'))
     try {

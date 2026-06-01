@@ -7,7 +7,7 @@
   binary because no one restarted `guildhall serve`.
 -->
 <script lang="ts">
-  import NoticeBand from './NoticeBand.svelte'
+  import AlertBand from '../../../packages/ui/src/components/AlertBand.svelte'
 
   interface BuildInfo {
     pid: number
@@ -67,11 +67,14 @@
 
 {#if visible}
   <div class="stale" bind:this={bannerEl}>
-    <NoticeBand tone="warn" icon="alert-triangle" density="compact">
-      <div class="msg">
-        <strong>Guildhall needs a restart to show recent code changes.</strong>
-        <span>This local server is {ageMinutes} min behind the code on disk.</span>
-      </div>
+    <AlertBand
+      tone="warn"
+      role="alert"
+      density="compact"
+      ariaLabel="Restart needed"
+    >
+      <strong>Guildhall needs a restart to show recent code changes.</strong>
+      <span>This local server is {ageMinutes} min behind the code on disk.</span>
       {#snippet actions()}
         <details class="hint">
           <summary>Show restart steps</summary>
@@ -82,29 +85,15 @@
             <span>and reload.</span>
           </div>
         </details>
-        <button type="button" class="x" onclick={() => (dismissed = true)} aria-label="Dismiss">
-          ×
-        </button>
+        <button type="button" class="gh-notice-inline-dismiss" aria-label="Dismiss" onclick={() => (dismissed = true)}>×</button>
       {/snippet}
-    </NoticeBand>
+    </AlertBand>
   </div>
 {/if}
 
 <style>
   .stale {
     z-index: var(--z-banner);
-  }
-  .msg {
-    min-width: 0;
-    display: flex;
-    align-items: baseline;
-    gap: var(--s-2);
-    flex-wrap: wrap;
-    line-height: var(--lh-tight);
-  }
-  .msg strong,
-  .msg span {
-    min-width: 0;
   }
   .hint {
     min-width: 0;
@@ -136,9 +125,5 @@
     font-family: 'SF Mono', monospace;
     max-width: 100%;
     overflow-wrap: anywhere;
-  }
-  .x {
-    padding: 0 var(--s-1);
-    line-height: 1;
   }
 </style>

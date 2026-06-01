@@ -71,11 +71,42 @@ export interface InboxBlockers {
   workspaceImport: boolean
 }
 
+export const THREAD_OWNED_INBOX_KINDS = [
+  'project_check_in',
+  'pressure_test_pending',
+  'agent_question_pending',
+  'brief_approval',
+  'spec_approval',
+  'open_escalation',
+] as const satisfies readonly InboxItem['kind'][]
+
+export const ATTENTION_OWNED_INBOX_KINDS = [
+  'required_migration',
+  'project_understanding',
+  'bootstrap_missing',
+  'setup_pending',
+  'workspace_import_pending',
+  'import_draft_queue',
+  'lever_questions',
+  'spec_fill_pending',
+] as const satisfies readonly InboxItem['kind'][]
+
+const THREAD_OWNED_INBOX_KIND_SET = new Set<InboxItem['kind']>(THREAD_OWNED_INBOX_KINDS)
+const ATTENTION_OWNED_INBOX_KIND_SET = new Set<InboxItem['kind']>(ATTENTION_OWNED_INBOX_KINDS)
+
 export function buildInboxBlockers(items: readonly InboxItem[]): InboxBlockers {
   return {
     bootstrap: items.some(i => i.kind === 'bootstrap_missing'),
     workspaceImport: items.some(i => i.kind === 'workspace_import_pending'),
   }
+}
+
+export function isThreadOwnedInboxItem(item: Pick<InboxItem, 'kind'>): boolean {
+  return THREAD_OWNED_INBOX_KIND_SET.has(item.kind)
+}
+
+export function isAttentionOwnedInboxItem(item: Pick<InboxItem, 'kind'>): boolean {
+  return ATTENTION_OWNED_INBOX_KIND_SET.has(item.kind)
 }
 
 const KIND_ORDER: Record<InboxItem['kind'], number> = {

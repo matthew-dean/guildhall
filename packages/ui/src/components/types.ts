@@ -42,6 +42,20 @@ export interface NoticeBandProps extends Omit<HTMLAttributes<HTMLElement>, 'role
   actions?: Snippet
 }
 
+export type AlertBandTone = 'neutral' | 'accent' | 'attention' | 'ok' | 'warn' | 'danger'
+export type AlertBandDensity = 'regular' | 'compact'
+export type AlertBandIcon = 'alert-triangle' | 'check-circle-2' | 'sparkles'
+
+export interface AlertBandProps extends HTMLAttributes<HTMLDivElement> {
+  tone?: AlertBandTone
+  density?: AlertBandDensity
+  icon?: AlertBandIcon | false
+  role?: 'status' | 'alert'
+  ariaLabel?: string
+  children?: Snippet
+  actions?: Snippet
+}
+
 export type FrameCardTone = 'default' | 'info' | 'accent' | 'ok' | 'warn' | 'danger'
 export type FrameCardPadding = 'compact' | 'default' | 'roomy'
 export type FrameCardElementTag = 'article' | 'div' | 'section'

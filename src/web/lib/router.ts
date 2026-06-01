@@ -73,7 +73,7 @@ export function parseRoute(p: string, state: unknown = null): Route {
       return { kind: 'project', projectId, view: 'overview', sub: 'inbox', drawerTaskId: null, backgroundPath: null }
     if (normalized === '/thread')
       return { kind: 'project', projectId, view: 'thread', sub: null, drawerTaskId: null, backgroundPath: null }
-    if (normalized === '/inbox' || normalized === '/notifications')
+    if (normalized === '/inbox' || normalized === '/needs-you' || normalized === '/notifications')
       return { kind: 'project', projectId, view: 'overview', sub: 'inbox', drawerTaskId: null, backgroundPath: null }
     if (normalized === '/work')
       return { kind: 'project', projectId, view: 'work', sub: null, drawerTaskId: null, backgroundPath: null }

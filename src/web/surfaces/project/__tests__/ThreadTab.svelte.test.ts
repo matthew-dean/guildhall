@@ -1,6 +1,6 @@
 // @vitest-environment happy-dom
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { cleanup, render, screen, waitFor } from '@testing-library/svelte'
+import { cleanup, render, screen, waitFor, within } from '@testing-library/svelte'
 import userEvent from '@testing-library/user-event'
 import ThreadTab from '../ThreadTab.svelte'
 import { path } from '../../../lib/nav.svelte.js'
@@ -11,6 +11,47 @@ function json(data: unknown, init: ResponseInit = {}): Response {
     status: 200,
     headers: { 'content-type': 'application/json' },
     ...init,
+  })
+}
+
+function selectedThread() {
+  return within(
+    ((screen.queryByRole('region', { name: 'Selected thread' }) as HTMLElement | null)
+      ?? document.querySelector('.thread-detail')
+      ?? document.querySelector('.thread')
+      ?? document.body) as HTMLElement,
+  )
+}
+
+function threadHistory() {
+  return within(screen.getByLabelText('Thread history'))
+}
+
+function activeThreadDock() {
+  return within(screen.getByLabelText('Active thread dock'))
+}
+
+function installViewportMatchMedia(width: number) {
+  Object.defineProperty(window, 'matchMedia', {
+    configurable: true,
+    value: vi.fn().mockImplementation((query: string) => {
+      const max = query.match(/max-width:\s*(\d+)px/)
+      const min = query.match(/min-width:\s*(\d+)px/)
+      const matches = Boolean(
+        (max && width <= Number(max[1])) ||
+        (min && width >= Number(min[1])),
+      )
+      return {
+        matches,
+        media: query,
+        onchange: null,
+        addEventListener: vi.fn(),
+        removeEventListener: vi.fn(),
+        addListener: vi.fn(),
+        removeListener: vi.fn(),
+        dispatchEvent: vi.fn(),
+      }
+    }),
   })
 }
 
@@ -289,6 +330,14 @@ function installBrowserFakes(url = '/projects/looma-knit/thread') {
   }
   project.error = null
   Element.prototype.scrollIntoView = vi.fn()
+  Element.prototype.animate = vi.fn().mockReturnValue({
+    cancel: vi.fn(),
+    commitStyles: vi.fn(),
+    finished: Promise.resolve(),
+    onfinish: null,
+    pause: vi.fn(),
+    play: vi.fn(),
+  } as unknown as Animation)
 }
 
 function installFetchFakes(
@@ -390,7 +439,7 @@ describe('ThreadTab', () => {
     const { calls } = installFetchFakes([setupTurn()], 'setup-identity')
 
     render(ThreadTab)
-    await screen.findByText('Name this project')
+    await selectedThread().findByText('Name this project')
 
     const input = screen.getByPlaceholderText('Project name')
     await userEvent.clear(input)
@@ -472,13 +521,13 @@ describe('ThreadTab', () => {
 
     render(ThreadTab)
 
-    await screen.findByText('New request')
+    await screen.findByText('New thread')
     expect(screen.queryByLabelText('Thread operations summary')).toBeNull()
-    expect(screen.getByText('0.8.0 should prioritize pressure-test intake.')).toBeTruthy()
-    expect(screen.getByText(/Guildhall 0\.8\.0 · Product goals/)).toBeTruthy()
-    expect(screen.getByText('What should Guildhall 0.8.0 accomplish?')).toBeTruthy()
-    expect(screen.getByText('This decides the release slice.')).toBeTruthy()
-    expect(screen.getByText('internal/plans/guildhall-0-8.md: release goals')).toBeTruthy()
+    expect(selectedThread().getByText('0.8.0 should prioritize pressure-test intake.')).toBeTruthy()
+    expect(selectedThread().getByText(/Guildhall 0\.8\.0 · Product goals/)).toBeTruthy()
+    expect(selectedThread().getByText('What should Guildhall 0.8.0 accomplish?')).toBeTruthy()
+    expect(selectedThread().getByText('This decides the release slice.')).toBeTruthy()
+    expect(selectedThread().getByText('internal/plans/guildhall-0-8.md: release goals')).toBeTruthy()
     expect(screen.getByText('Needs you')).toBeTruthy()
     expect(scrollIntoView).not.toHaveBeenCalled()
   })
@@ -491,7 +540,7 @@ describe('ThreadTab', () => {
 
     render(ThreadTab)
 
-    await screen.findByText('Work is paused. Start Guildhall when you want it to continue.')
+    await selectedThread().findByText('Work is paused. Start Guildhall when you want it to continue.')
     expect(scrollIntoView).not.toHaveBeenCalled()
   })
 
@@ -502,7 +551,7 @@ describe('ThreadTab', () => {
     ], 'pressure-test:pti-guildhall-0-8-0:product-goals-q-1')
 
     render(ThreadTab)
-    await screen.findByText('What should Guildhall 0.8.0 accomplish?')
+    await selectedThread().findByText('What should Guildhall 0.8.0 accomplish?')
 
     const answer = screen.getByPlaceholderText('Answer with a sentence or short paragraph. Include constraints or success measures if they matter.')
     await userEvent.type(answer, 'Keep the request visible and ask one focused question at a time.')
@@ -518,6 +567,55 @@ describe('ThreadTab', () => {
     expect(calls.filter(call => call.url.startsWith('/api/project/thread')).length).toBeGreaterThan(1)
     expect(calls.some(call => call.url.startsWith('/api/project?projectId=looma-knit'))).toBe(true)
     await waitFor(() => expect((answer as HTMLTextAreaElement).value).toBe(''))
+  })
+
+  it('routes free-form agent questions through the shared thread composer', async () => {
+    const { calls } = installFetchFakes([
+      questionTurn(
+        'question-text',
+        'q-text-1',
+        'What constraint matters most before Guildhall shapes this task?',
+        [],
+        {
+          kind: 'text',
+          choices: [],
+        },
+      ),
+    ], 'question-text')
+
+    render(ThreadTab)
+
+    await screen.findByLabelText('Active thread dock')
+    expect(activeThreadDock().getByText('Reply in thread')).toBeTruthy()
+    const composer = activeThreadDock().getByPlaceholderText('Answer this question or redirect Guildhall…')
+    await userEvent.type(composer, 'Keep the first pass narrowly focused on owner-facing intake.')
+    await userEvent.click(activeThreadDock().getByRole('button', { name: 'Send answer' }))
+
+    await waitFor(() => {
+      expect(calls.some(call => (
+        call.url.includes('/api/project/task/task-link-controls/answer-questions') &&
+        Array.isArray(call.body?.answers) &&
+        (call.body?.answers as Array<Record<string, unknown>>).some(answer => (
+          answer.questionId === 'q-text-1' &&
+          answer.answer === 'Keep the first pass narrowly focused on owner-facing intake.'
+        ))
+      ))).toBe(true)
+    })
+  })
+
+  it('opens spec change requests in the shared thread composer', async () => {
+    installFetchFakes([
+      specReviewTurn('task-link-controls'),
+    ], 'spec-task-link-controls')
+
+    render(ThreadTab)
+
+    await screen.findByLabelText('Active thread dock')
+    expect(activeThreadDock().getByText('Review the spec draft')).toBeTruthy()
+    await userEvent.click(activeThreadDock().getByRole('button', { name: 'Request changes' }))
+
+    expect(screen.getByText('Request changes to the spec')).toBeTruthy()
+    expect(screen.getByPlaceholderText('Correct the spec or ask Guildhall to revisit it…')).toBeTruthy()
   })
 
   it('renders pressure-test choices as direct answer buttons', async () => {
@@ -606,7 +704,7 @@ describe('ThreadTab', () => {
     ], 'setup:firstTask')
 
     render(ThreadTab)
-    await screen.findByText('Shape the first spec')
+    await selectedThread().findByText('Shape the first spec')
 
     const input = screen.getByPlaceholderText('Describe the product idea or first outcome')
     await userEvent.type(input, 'Amazon competitor seeded through merchant tools')
@@ -642,7 +740,7 @@ describe('ThreadTab', () => {
     ], 'inflight-task-db-bootstrap')
 
     render(ThreadTab)
-    await screen.findByText('Bootstrap database — run migrations, verify schema')
+    await selectedThread().findByText('Bootstrap database — run migrations, verify schema')
 
     vi.spyOn(window, 'confirm').mockReturnValue(true)
     await userEvent.click(screen.getByRole('button', { name: /mark done/i }))
@@ -677,7 +775,7 @@ describe('ThreadTab', () => {
     ], 'setup:direction')
 
     render(ThreadTab, { projectId: 'font-something' })
-    await screen.findByText('Give the project direction')
+    await selectedThread().findByText('Give the project direction')
 
     const threadCall = calls.find(call => call.url.startsWith('/api/project/thread'))
     expect(threadCall?.url).toContain('projectId=font-something')
@@ -753,7 +851,7 @@ describe('ThreadTab', () => {
     )
 
     render(ThreadTab)
-    await screen.findByText('Describe the project')
+    await selectedThread().findByText('Describe the project')
 
     await userEvent.type(screen.getByPlaceholderText('What should Guildhall know?'), 'Knit owns the editor UI.')
     await userEvent.click(screen.getByRole('button', { name: /save direction/i }))
@@ -787,7 +885,7 @@ describe('ThreadTab', () => {
     )
 
     render(ThreadTab)
-    await screen.findByText('Describe the project')
+    await selectedThread().findByText('Describe the project')
     await userEvent.click(screen.getByRole('button', { name: /open setup/i }))
 
     expect(path.value).toBe('/projects/looma-knit/setup')
@@ -812,7 +910,7 @@ describe('ThreadTab', () => {
     )
 
     render(ThreadTab)
-    await screen.findByText('Project check-in needed')
+    await selectedThread().findByText('Project check-in needed')
     const startCheckInButton = screen.getByRole('button', { name: /start project check-in/i })
     expect(startCheckInButton.classList.contains('v-agent')).toBe(true)
     await userEvent.click(startCheckInButton)
@@ -862,22 +960,22 @@ describe('ThreadTab', () => {
     vi.stubGlobal('fetch', fetchMock)
 
     render(ThreadTab)
-    await screen.findByText('Run setup checks')
+    await selectedThread().findByText('Run setup checks')
     await userEvent.click(screen.getByRole('button', { name: /run checks/i }))
 
-    await screen.findByText('pnpm test exited 1: Cannot find module ./Button.svelte')
+    await selectedThread().findByText('pnpm test exited 1: Cannot find module ./Button.svelte')
   })
 
   it('keeps imported draft source context and actions inline in Thread', async () => {
     const { calls } = installFetchFakes([importedDraftTurn()], 'draft-link-controls')
 
     render(ThreadTab)
-    await screen.findByText('Knit: add link editor controls')
-    expect(screen.getByText('Needs task brief')).toBeTruthy()
-    expect(screen.getByText(/Next step: turn this note into a task brief with scope, evidence, and acceptance criteria/)).toBeTruthy()
-    expect(screen.getByText('Build URL input, display text, open-in-new-tab, and remove link controls.')).toBeTruthy()
-    expect(screen.getByText('docs/roadmap.md')).toBeTruthy()
-    expect(screen.getByText('web/app/components/editor/toolbar.ts')).toBeTruthy()
+    await selectedThread().findByText('Knit: add link editor controls')
+    expect(selectedThread().getByText('Needs task brief')).toBeTruthy()
+    expect(selectedThread().getByText(/Next step: turn this note into a task brief with scope, evidence, and acceptance criteria/)).toBeTruthy()
+    expect(selectedThread().getByText('Build URL input, display text, open-in-new-tab, and remove link controls.')).toBeTruthy()
+    expect(selectedThread().getByText('docs/roadmap.md')).toBeTruthy()
+    expect(selectedThread().getByText('web/app/components/editor/toolbar.ts')).toBeTruthy()
     await userEvent.click(screen.getByRole('button', { name: /open source note.*roadmap\.md/i }))
     await screen.findByRole('dialog', { name: 'Source note' })
     expect(screen.getByText('Roadmap source')).toBeTruthy()
@@ -890,8 +988,9 @@ describe('ThreadTab', () => {
     })
 
     await userEvent.click(screen.getByRole('button', { name: /add optional note/i }))
-    await userEvent.type(screen.getByPlaceholderText('Tell the agent what to do next'), 'Keep drag handles out of scope.')
-    await userEvent.click(screen.getByRole('button', { name: /^send$/i }))
+    await screen.findByText('Add a thread note')
+    await userEvent.type(screen.getByPlaceholderText('Add a note for Guildhall…'), 'Keep drag handles out of scope.')
+    await userEvent.click(screen.getByRole('button', { name: 'Send note' }))
     await waitFor(() => {
       expect(
         calls.some(
@@ -933,7 +1032,7 @@ describe('ThreadTab', () => {
     ], 'draft-link-controls')
 
     render(ThreadTab)
-    await screen.findByText('Knit: add link editor controls')
+    await selectedThread().findByText('Knit: add link editor controls')
     expect(screen.queryByText('Unknown')).toBeNull()
     expect(screen.queryByText('spawn git ENOENT')).toBeNull()
   })
@@ -969,11 +1068,11 @@ describe('ThreadTab', () => {
 
     render(ThreadTab)
 
-    await screen.findByText('Needs brief')
-    const needsBriefChip = screen.getByText('Needs brief')
+    await selectedThread().findByText('Needs brief')
+    const needsBriefChip = selectedThread().getByText('Needs brief')
     expect(needsBriefChip).toBeTruthy()
     expect(needsBriefChip.classList.contains('tone-agent-attention')).toBe(true)
-    expect(screen.getByText('Brief checklist')).toBeTruthy()
+    expect(selectedThread().getByText('Brief checklist')).toBeTruthy()
     expect(screen.queryByText('No upstream')).toBeNull()
     expect(screen.queryByText(/has no upstream branch/)).toBeNull()
     expect(screen.queryByText('Guildhall next')).toBeNull()
@@ -1016,7 +1115,7 @@ describe('ThreadTab', () => {
 
     render(ThreadTab)
 
-    await screen.findByText('Needs brief')
+    await selectedThread().findByText('Needs brief')
     expect(screen.queryByText('No upstream')).toBeNull()
     expect(screen.queryByText(/has no upstream branch/)).toBeNull()
     const startButton = screen.getByRole('button', { name: 'Start' })
@@ -1056,8 +1155,8 @@ describe('ThreadTab', () => {
 
     render(ThreadTab)
 
-    await screen.findByText('HoverCard')
-    expect(screen.getByText('Brief checklist')).toBeTruthy()
+    await selectedThread().findByText('HoverCard')
+    expect(selectedThread().getByText('Brief checklist')).toBeTruthy()
     expect(screen.queryByText('No upstream')).toBeNull()
     expect(screen.queryByText(/has no upstream branch/)).toBeNull()
     expect(screen.queryByText(/Set an upstream branch/)).toBeNull()
@@ -1134,7 +1233,7 @@ describe('ThreadTab', () => {
     })
 
     render(ThreadTab)
-    await screen.findByText('Knit: add link editor controls')
+    await selectedThread().findByText('Knit: add link editor controls')
     await userEvent.click(screen.getByRole('button', { name: /open source note.*roadmap\.md/i }))
 
     await screen.findByRole('dialog', { name: 'Source note' })
@@ -1164,7 +1263,7 @@ describe('ThreadTab', () => {
     })
 
     render(ThreadTab)
-    await screen.findByText('Knit: add link editor controls')
+    await selectedThread().findByText('Knit: add link editor controls')
     await userEvent.click(screen.getByRole('button', { name: /open source note.*roadmap\.md/i }))
 
     await screen.findByRole('dialog', { name: 'Source note' })
@@ -1184,7 +1283,7 @@ describe('ThreadTab', () => {
     })
 
     render(ThreadTab)
-    await screen.findByText('Knit: add link editor controls')
+    await selectedThread().findByText('Knit: add link editor controls')
     await userEvent.click(screen.getByRole('button', { name: /open source note.*roadmap\.md/i }))
 
     await screen.findByRole('dialog', { name: 'Source note' })
@@ -1205,8 +1304,8 @@ describe('ThreadTab', () => {
 
     render(ThreadTab)
 
-    await screen.findByText('Knit draft 1')
-    expect(screen.getByText('Imported note 9 needs a task brief.')).toBeTruthy()
+    await selectedThread().findByText('Knit draft 1')
+    expect(selectedThread().getByText('Imported note 9 needs a task brief.')).toBeTruthy()
     expect(screen.queryByLabelText(/Compact .* operations/)).toBeNull()
     expect(screen.queryByText(/compact rows/i)).toBeNull()
   })
@@ -1235,7 +1334,7 @@ describe('ThreadTab', () => {
     render(ThreadTab)
 
     await userEvent.click(await screen.findByRole('tab', { name: /archive/i }))
-    await screen.findByText('Finished task 1')
+    await selectedThread().findByText('Finished task 1')
     expect(screen.queryByLabelText(/Compact .* operations/)).toBeNull()
     expect(screen.queryByRole('button', { name: /^Done/i })).toBeNull()
   })
@@ -1294,7 +1393,7 @@ describe('ThreadTab', () => {
 
     render(ThreadTab)
 
-    expect(await screen.findByText('Gate checks are queued. Start Guildhall when you want it to continue.')).toBeTruthy()
+    expect(await selectedThread().findByText('Gate checks are queued. Start Guildhall when you want it to continue.')).toBeTruthy()
   })
 
   it('summarizes and prioritizes high-volume thread operations', async () => {
@@ -1340,7 +1439,7 @@ describe('ThreadTab', () => {
 
     render(ThreadTab)
 
-    await screen.findByText('Which direction?')
+    await selectedThread().findByText('Which direction?')
     const bodyText = document.body.textContent ?? ''
     expect(bodyText.indexOf('Which direction?')).toBeLessThan(bodyText.indexOf('Live spec task'))
     expect(bodyText.indexOf('Live spec task')).toBeLessThan(bodyText.indexOf('Queued ready task'))
@@ -1397,8 +1496,8 @@ describe('ThreadTab', () => {
 
     render(ThreadTab)
     await screen.findByRole('button', { name: /Let Guildhall run the check/i })
-    expect(screen.getByText('Guildhall needs to run one missing check.')).toBeTruthy()
-    expect(screen.getByText(/not asking you to prove anything/i)).toBeTruthy()
+    expect(selectedThread().getByText('Guildhall needs to run one missing check.')).toBeTruthy()
+    expect(selectedThread().getByText(/not asking you to prove anything/i)).toBeTruthy()
     expect(screen.getByRole('button', { name: /Let Guildhall run the check/i })).toBeTruthy()
     expect(screen.queryByText(/Technical note/i)).toBeNull()
     expect(document.body.textContent).not.toMatch(/\bAC-8\b/)
@@ -1420,7 +1519,7 @@ describe('ThreadTab', () => {
 
     render(ThreadTab)
 
-    await screen.findByText('Needs you')
+    await selectedThread().findByText('Needs you')
     expect(screen.getAllByText('Queued').length).toBeGreaterThanOrEqual(1)
     expect(screen.queryByText('Guildhall next')).toBeNull()
     expect(screen.queryByText('Blueprint')).toBeNull()
@@ -1444,9 +1543,9 @@ describe('ThreadTab', () => {
     )
 
     render(ThreadTab)
-    await screen.findByText('Should drag-and-drop be in scope?')
-    expect(screen.queryByText('Which link UI should be built?')).toBeNull()
-    expect(screen.getByText(/1 more question will stay here/i)).toBeTruthy()
+    await selectedThread().findByText('Should drag-and-drop be in scope?')
+    expect(selectedThread().queryByText('Which link UI should be built?')).toBeNull()
+    expect(selectedThread().getByText(/1 more question will stay here/i)).toBeTruthy()
 
     await userEvent.click(screen.getByRole('button', { name: /drag handle is out of scope/i }))
     await waitFor(() => {
@@ -1509,12 +1608,12 @@ describe('ThreadTab', () => {
     )
 
     render(ThreadTab)
-    await screen.findByText('Should drag-and-drop be in scope?')
+    await selectedThread().findByText('Should drag-and-drop be in scope?')
 
     await userEvent.click(screen.getByRole('button', { name: /drag handle is out of scope/i }))
 
-    await waitFor(() => expect(screen.getByText('disk is full')).toBeTruthy())
-    expect(screen.getByText('Should drag-and-drop be in scope?')).toBeTruthy()
+    await waitFor(() => expect(selectedThread().getByText('disk is full')).toBeTruthy())
+    expect(selectedThread().getByText('Should drag-and-drop be in scope?')).toBeTruthy()
     expect(calls.some(call => call.url.includes('/answer-questions'))).toBe(true)
   })
 
@@ -1530,13 +1629,14 @@ describe('ThreadTab', () => {
     )
 
     render(ThreadTab)
-    await screen.findByText('Pick one: what is the single source of truth for migration status?')
-    expect(screen.getByText('Missing context is expected.')).toBeTruthy()
-    expect(screen.getByText(/Ask Guildhall to explain project terms, source notes, or assumptions before you answer/)).toBeTruthy()
+    await selectedThread().findByText('Pick one: what is the single source of truth for migration status?')
+    expect(selectedThread().getByText('Missing context is expected.')).toBeTruthy()
+    expect(selectedThread().getByText(/Ask Guildhall to explain project terms, source notes, or assumptions before you answer/)).toBeTruthy()
 
     await userEvent.click(screen.getByRole('button', { name: /ask guildhall to explain/i }))
+    await screen.findByText('Ask Guildhall to explain first')
     await userEvent.type(
-      screen.getByPlaceholderText('Ask what the agent means or what source/evidence it is using'),
+      screen.getByPlaceholderText('Ask what Guildhall means, what evidence it used, or what context is missing…'),
       'Which migration status are you asking about?',
     )
     await userEvent.click(screen.getAllByRole('button', { name: /ask for context/i }).at(-1)!)
@@ -1611,7 +1711,7 @@ describe('ThreadTab', () => {
     )
 
     render(ThreadTab)
-    await screen.findByText('Stripe Connect -- payment flow for licensed projects')
+    await selectedThread().findByText('Stripe Connect -- payment flow for licensed projects')
 
     await userEvent.click(screen.getByRole('button', { name: /approve spec/i }))
 
@@ -1647,7 +1747,7 @@ describe('ThreadTab', () => {
     ], 'brief-link-controls')
 
     render(ThreadTab)
-    await screen.findByText('Review this task brief')
+    await selectedThread().findByText('Review this task brief')
 
     expect(screen.queryByText('Is this what you want?')).toBeNull()
     expect(screen.queryByText('What it thinks you want')).toBeNull()
@@ -1672,8 +1772,8 @@ describe('ThreadTab', () => {
     )
 
     render(ThreadTab)
-    await screen.findByText('Review this task brief')
-    expect(screen.getByText(/Answer 1 open question in Thread before approving/)).toBeTruthy()
+    await selectedThread().findByText('Review this task brief')
+    expect(selectedThread().getByText(/Answer 1 open question in Thread before approving/)).toBeTruthy()
     expect((screen.getByRole('button', { name: /yes, that's right/i }) as HTMLButtonElement).disabled).toBe(true)
     expect((screen.getByRole('button', { name: /approve spec/i }) as HTMLButtonElement).disabled).toBe(true)
   })
@@ -1704,7 +1804,7 @@ describe('ThreadTab', () => {
     )
 
     render(ThreadTab)
-    await screen.findByText('Repo inspection')
+    await selectedThread().findByText('Repo inspection')
     const splitProposalButton = screen.getAllByRole('button', { name: /create split proposal/i })[0]!
     expect(splitProposalButton.classList.contains('v-agent')).toBe(true)
     await userEvent.click(splitProposalButton)
@@ -1742,7 +1842,7 @@ describe('ThreadTab', () => {
     )
 
     render(ThreadTab)
-    await screen.findByText(/Still waiting for the local model/)
+    await screen.findAllByText(/Still waiting for the local model/)
     expect(screen.getByText('Started write checkpoint')).toBeTruthy()
     expect(screen.getByText('Writing implementation notes')).toBeTruthy()
   })
@@ -1805,7 +1905,7 @@ describe('ThreadTab', () => {
     )
 
     render(ThreadTab)
-    await screen.findByText(/partial progress/i)
+    await selectedThread().findByText(/partial progress/i)
     await userEvent.click(screen.getByRole('button', { name: 'Resume work' }))
 
     await waitFor(() => {
@@ -1829,8 +1929,8 @@ describe('ThreadTab', () => {
     )
 
     render(ThreadTab)
-    await screen.findByText('Guildhall shaping')
-    expect(screen.getByText('Guildhall shaping')).toBeTruthy()
+    await selectedThread().findByText('Guildhall shaping')
+    expect(selectedThread().getByText('Guildhall shaping')).toBeTruthy()
     expect(screen.queryByLabelText('Thread operations summary')).toBeNull()
   })
 
@@ -1883,10 +1983,160 @@ describe('ThreadTab', () => {
     vi.stubGlobal('fetch', fetchMock)
 
     render(ThreadTab)
-    await screen.findByText(/Guildhall has started shaping this task/)
+    await selectedThread().findByText(/Guildhall has started shaping this task/)
     await userEvent.click(screen.getByRole('button', { name: /continue drafting spec/i }))
 
     await screen.findByText('Provider model is not loaded.')
+  })
+
+  it('docks the selected active shaping turn above the composer controls', async () => {
+    installFetchFakes([
+      importedDraftTurn({
+        id: 'draft-docked-shaping',
+        taskId: 'task-docked-shaping',
+        taskTitle: 'Knit: add link editor controls',
+        importedDraft: false,
+        taskStatus: 'exploring',
+        phase: 'inflight',
+        summary: 'Guildhall has started shaping this task, but the brief is not ready yet. The checklist shows what is still missing.',
+        checklist: {
+          title: 'Task brief checklist',
+          doneCount: 2,
+          totalSteps: 4,
+          steps: [
+            { id: 'title', title: 'Readable title', why: 'Give this work a name someone can recognize later.', status: 'done' },
+            { id: 'description', title: 'Starting point', why: 'Say what Guildhall should inspect or use as the starting evidence.', status: 'done' },
+            { id: 'success', title: 'Success target', why: 'State what should be true when this work is finished.', status: 'active' },
+            { id: 'criteria', title: 'Acceptance criteria', why: 'Add the concrete checks Guildhall should use before calling the work done.', status: 'pending' },
+          ],
+        },
+      }),
+    ], 'draft-docked-shaping')
+
+    render(ThreadTab)
+
+    await screen.findByLabelText('Active thread dock')
+    expect(activeThreadDock().getByText('Knit: add link editor controls')).toBeTruthy()
+    expect(activeThreadDock().getByText(/Guildhall has started shaping this task/)).toBeTruthy()
+    expect(activeThreadDock().getByText('Brief checklist')).toBeTruthy()
+    expect(activeThreadDock().getByRole('button', { name: /inspect details/i })).toBeTruthy()
+    expect(activeThreadDock().getByRole('button', { name: /add optional note/i })).toBeTruthy()
+    expect(activeThreadDock().getByRole('button', { name: /continue shaping brief/i })).toBeTruthy()
+    expect(threadHistory().queryByText(/Guildhall has started shaping this task/)).toBeNull()
+  })
+
+  it('uses compact list-detail navigation instead of stacking panes', async () => {
+    installViewportMatchMedia(640)
+    installFetchFakes([
+      importedDraftTurn({
+        id: 'draft-compact-nav',
+        taskId: 'task-compact-nav',
+        taskTitle: 'Knit: add compact nav behavior',
+        importedDraft: false,
+        taskStatus: 'exploring',
+        phase: 'inflight',
+        summary: 'Guildhall has started shaping this task, but the brief is not ready yet.',
+      }),
+    ], 'draft-compact-nav')
+
+    render(ThreadTab)
+
+    await screen.findByRole('button', { name: /knit: add compact nav behavior/i })
+    expect(screen.queryByLabelText('Selected thread')).toBeNull()
+
+    await userEvent.click(screen.getByRole('button', { name: /knit: add compact nav behavior/i }))
+    await screen.findByLabelText('Selected thread')
+    expect(screen.getByLabelText('Thread list').getAttribute('inert')).not.toBeNull()
+
+    window.dispatchEvent(new CustomEvent('guildhall:thread-show-list'))
+    await screen.findByLabelText('Thread list')
+    expect(screen.getByLabelText('Selected thread').getAttribute('inert')).not.toBeNull()
+  })
+
+  it('strips compact list view down to the mailbox surface', async () => {
+    installViewportMatchMedia(640)
+    installFetchFakes([
+      importedDraftTurn({
+        id: 'draft-compact-mailbox',
+        taskId: 'task-compact-mailbox',
+        taskTitle: 'Knit: compact mailbox cleanup',
+        importedDraft: false,
+        taskStatus: 'exploring',
+        phase: 'inflight',
+        summary: 'Guildhall has started shaping this task, but the brief is not ready yet.',
+      }),
+    ], 'draft-compact-mailbox', {
+      runtime: {
+        status: 'stopped',
+        mode: 'compatibility',
+        health: { status: 'unknown' },
+        setup: { status: 'unknown-error' },
+      },
+    })
+
+    render(ThreadTab)
+
+    await screen.findByLabelText('Thread list')
+    expect(screen.queryByRole('heading', { name: 'Threads' })).toBeNull()
+    expect(screen.queryByText('Decisions, questions, and live task updates.')).toBeNull()
+    expect(screen.queryByText('Runtime')).toBeNull()
+    expect(screen.getByRole('button', { name: /knit: compact mailbox cleanup/i })).toBeTruthy()
+  })
+
+  it('renders thread content before runtime side-loaders finish', async () => {
+    installViewportMatchMedia(1280)
+    const pending = new Promise<Response>(() => {})
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input)
+      if (url.startsWith('/api/project/thread/extras')) {
+        return pending
+      }
+      if (url.startsWith('/api/project/thread')) {
+        return json({
+          turns: [
+            importedDraftTurn({
+              id: 'draft-nonblocking-load',
+              taskId: 'task-nonblocking-load',
+              taskTitle: 'Knit: do not block thread rendering on runtime fetches',
+              importedDraft: false,
+              taskStatus: 'exploring',
+              phase: 'inflight',
+              summary: 'Guildhall has started shaping this task, but the brief is not ready yet.',
+            }),
+          ],
+          activeTurnId: 'draft-nonblocking-load',
+          caughtUp: false,
+        })
+      }
+      if (
+        url.startsWith('/api/project/runtime') ||
+        url.startsWith('/api/project/runtime/dev-servers') ||
+        url.startsWith('/api/project/capability-requests')
+      ) {
+        return pending
+      }
+      if (url.startsWith('/api/project')) {
+        return json({
+          id: 'looma-knit',
+          name: 'Looma + Knit',
+          path: '/repo/looma-knit',
+          run: { status: 'running', mode: 'continuous' },
+          tasks: [],
+        })
+      }
+      return json({})
+    })
+    vi.stubGlobal('fetch', fetchMock)
+
+    render(ThreadTab)
+
+    await screen.findByRole(
+      'button',
+      { name: /knit: do not block thread rendering on runtime fetches/i },
+      { timeout: 400 },
+    )
+    expect(screen.queryByText('Loading...')).toBeNull()
+    expect(fetchMock.mock.calls.some(([input]) => String(input).startsWith('/api/project/thread/extras'))).toBe(true)
   })
 
   it('shows a retryable load error when the thread endpoint fails', async () => {

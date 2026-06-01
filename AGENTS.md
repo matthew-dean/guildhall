@@ -54,6 +54,35 @@
   user is actively testing, not the Guildhall repo root, unless the work is
   specifically about first-run initialization.
 
+## Design-system constitution
+
+- Treat design-system integrity as a first-class product and agent responsibility.
+  Guildhall should always push the codebase toward more order, less duplication,
+  and clearer UI ownership rather than accepting style sprawl as normal.
+- Product surfaces such as pages, feature components, data components, and
+  one-off views should compose shared UI components, shared layout primitives,
+  and design-system tokens. They should not introduce new bespoke styling
+  patterns just because nearby code is already messy.
+- If a task exposes a visual or layout need that the current shared primitives
+  cannot express cleanly, elevate that need into the design system first:
+  define the semantics, decide whether it belongs in an existing primitive or a
+  new shared primitive, choose coherent prop names, and explain the intended use
+  case before using it in content-specific surfaces.
+- “Do not add to sprawl” is the default rule. Existing local CSS, wrapper
+  classes, or inline styles are not permission to copy the pattern forward.
+  When touching an ad-hoc area, prefer extracting or extending shared
+  primitives, shared props, or layout components so the area becomes more
+  consistent after the change.
+- Rare local styling is acceptable only when the need is genuinely
+  infrastructure-level, platform-constrained, or being added inside the shared
+  UI/design-system layer itself. In those cases, keep it minimal and make the
+  design-system intent obvious in the implementation and review notes.
+- Deterministic checks that look for style sprawl, duplicate treatments, or
+  copy/paste UI patterns are advisory pressure reducers, not excuses to stop
+  thinking. A task should not be treated as failed only because a touched file
+  already had old mess, but the agent must not add new mess and should reduce
+  nearby sprawl when it is practical inside scope.
+
 ## Docs boundary
 
 - Treat `docs/guide`, `docs/reference`, `docs/releases`, `docs/levers`, and

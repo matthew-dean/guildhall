@@ -17,6 +17,8 @@
   let sseStatus = $state<SseStatus>('connecting')
   let version = $state<string | null>(null)
   let projectTitle = $state<string | null>(null)
+  let compactProjectNav = $state(false)
+  let navContextMode = $state<'project' | 'list' | 'detail' | 'split'>('project')
 
   $effect(() => {
     const off = onStatus(s => (sseStatus = s))
@@ -42,7 +44,11 @@
   const browserPath = $derived(typeof window === 'undefined' ? headerPath : window.location.pathname)
   const parsedRoute = $derived(parseProjectRoute(headerPath))
   const browserRoute = $derived(parseProjectRoute(browserPath))
-  const showProjectMenu = $derived(path.value.startsWith('/project') || parsedRoute.projectScoped)
+  const showProjectMenu = $derived(
+    (path.value.startsWith('/project') || parsedRoute.projectScoped) &&
+    compactProjectNav &&
+    navContextMode !== 'detail',
+  )
   const showSseStatus = $derived(browserRoute.projectScoped || browserPath.startsWith('/project'))
   const savedProjectTitle = $derived(
     parsedRoute.projectScoped && project.detail?.id === parsedRoute.projectId
@@ -68,6 +74,25 @@
     }
     window.addEventListener('guildhall:set-project-title', handle as EventListener)
     return () => window.removeEventListener('guildhall:set-project-title', handle as EventListener)
+  })
+
+  $effect(() => {
+    const media = window.matchMedia('(max-width: 920px)')
+    const sync = () => {
+      compactProjectNav = media.matches
+    }
+    sync()
+    media.addEventListener('change', sync)
+    return () => media.removeEventListener('change', sync)
+  })
+
+  $effect(() => {
+    const handle = (event: Event) => {
+      const detail = (event as CustomEvent<{ mode?: 'project' | 'list' | 'detail' | 'split' }>).detail
+      navContextMode = detail?.mode ?? 'project'
+    }
+    window.addEventListener('guildhall:set-nav-context', handle as EventListener)
+    return () => window.removeEventListener('guildhall:set-nav-context', handle as EventListener)
   })
 
   function goHome() {
