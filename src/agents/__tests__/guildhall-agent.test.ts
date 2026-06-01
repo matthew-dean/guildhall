@@ -397,6 +397,10 @@ describe('agent factories', () => {
     expect(prompt).toContain('Ask the owner only when the answer changes product intent')
     expect(prompt).toContain('recommend the strongest default')
     expect(prompt).toContain('Do not invent product requirements')
+    expect(prompt).toContain('structuredSpec')
+    expect(prompt).toContain('deterministic validator')
+    expect(prompt).toContain('matches what was actually asked for')
+    expect(prompt).toContain('deep intake')
   })
 
   it('createSpecAgent uses Corpus Map entries as the starting abstraction inventory', () => {
@@ -579,6 +583,15 @@ describe('agent factories', () => {
     expect(prompt).toContain('too generic')
     expect(prompt).toContain('schema, API route, MCP resource')
     expect(prompt).toContain('generic shell with typed domain payloads')
+  })
+
+  it('createReviewerAgent requires semantic request-fit review for specs', () => {
+    const a = createReviewerAgent(llm)
+    const prompt = (a as unknown as { engine: { getSystemPrompt(): string } }).engine.getSystemPrompt()
+    expect(prompt).toContain('semantic intake fit')
+    expect(prompt).toContain('match what was actually asked for')
+    expect(prompt).toContain('real user cases revealed')
+    expect(prompt).toContain('**Request fit:** yes / no')
   })
 
   it('createGateCheckerAgent', () => {

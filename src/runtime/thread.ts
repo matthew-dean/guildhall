@@ -33,7 +33,7 @@ import {
 } from './wizards.js'
 import { shouldUseImportDraftState } from './import-drafts.js'
 import { META_INTAKE_TASK_ID, parseCoordinatorDraft } from './meta-intake.js'
-import { visibleOpenQuestions } from './question-visibility.js'
+import { visibleQuestions, visibleOpenQuestions } from './question-visibility.js'
 import { thresholdMs } from './liveness.js'
 import { listPressureTestIntakes, summarizeProjectCheckIn, type PressureTestIntake, type ProjectCheckInSummary } from './pressure-test-intake.js'
 import { listBoundedChatSessions, type BoundedChatSession } from './bounded-chat.js'
@@ -199,6 +199,23 @@ export interface ReviewFeedbackTurn extends TurnBase {
   revisionCount?: number | undefined
 }
 
+export interface HistoryNoteTurn extends TurnBase {
+  kind: 'history_note'
+  taskId: string
+  taskTitle: string
+  constructionMode: ConstructionMode
+  category: 'source' | 'request' | 'system'
+  label: string
+  summary: string
+  references?: string[] | undefined
+  count?: number | undefined
+  entries?: Array<{
+    at: string
+    label: string
+    summary: string
+  }> | undefined
+}
+
 /** Task is currently running; informational, no user action required. */
 export interface InFlightTurn extends TurnBase {
   kind: 'inflight'
@@ -269,6 +286,7 @@ export type ThreadTurn =
   | BriefTurn
   | AgentQuestionTurn
   | SpecReviewTurn
+  | HistoryNoteTurn
   | ReviewFeedbackTurn
   | EscalationTurn
   | InFlightTurn
@@ -418,8 +436,10 @@ function isQueuedSpecRevision(task: Task): boolean {
 
 function firstSpecSummaryLine(spec: string | undefined): string | undefined {
   if (typeof spec !== 'string' || !spec.trim()) return undefined
-  const summaryMatch = spec.match(/## Summary\s+([\s\S]*?)(?:\n## |\n### |\Z)/i)
-  const summaryBlock = (summaryMatch?.[1] ?? spec).trim()
+  const anchor = /^##\s+(?:Summary|What this is)\s*$/im.exec(spec)
+  const normalized = anchor ? spec.slice(anchor.index + anchor[0].length).trim() : spec.trim()
+  const nextHeadingIndex = normalized.search(/\n##\s|\n###\s/)
+  const summaryBlock = (nextHeadingIndex >= 0 ? normalized.slice(0, nextHeadingIndex) : normalized).trim()
   if (!summaryBlock) return undefined
   const firstParagraph = summaryBlock.split(/\n\s*\n/)[0]?.trim() ?? ''
   if (!firstParagraph) return undefined
@@ -460,6 +480,90 @@ function sourceNoteForTask(task: Task): TaskSourceNote | undefined {
   const description = cleanTaskDescription(task)
   if (references.length === 0 && !description) return undefined
   return { description, references }
+}
+
+function noteRole(note: Record<string, unknown>): string {
+  return typeof note.role === 'string' ? note.role : ''
+}
+
+function noteAgentId(note: Record<string, unknown>): string {
+  return typeof note.agentId === 'string' ? note.agentId : ''
+}
+
+function noteContent(note: Record<string, unknown>): string {
+  return typeof note.content === 'string' ? note.content.trim() : ''
+}
+
+function noteTimestamp(note: Record<string, unknown>, fallback: string): string {
+  return typeof note.timestamp === 'string' ? note.timestamp : fallback
+}
+
+function formatSourceReferences(references: string[]): string {
+  const names = references.map((ref) => basename(ref))
+  if (names.length === 0) return 'Imported from project notes.'
+  if (names.length === 1) return `Imported from ${names[0]}.`
+  if (names.length === 2) return `Imported from ${names[0]} and ${names[1]}.`
+  return `Imported from ${names[0]}, ${names[1]}, and ${names.length - 2} more sources.`
+}
+
+function firstImporterTimestamp(notes: Array<Record<string, unknown>>, fallback: string): string {
+  for (const note of notes) {
+    if (noteRole(note) !== 'importer') continue
+    if (!/^Imported from:\s*/i.test(noteContent(note))) continue
+    return noteTimestamp(note, fallback)
+  }
+  return fallback
+}
+
+function firstShapingRequestTimestamp(notes: Array<Record<string, unknown>>, fallback: string): string | null {
+  for (const note of notes) {
+    if (noteRole(note) !== 'shaping-request') continue
+    return noteTimestamp(note, fallback)
+  }
+  return null
+}
+
+function latestReframeRequest(notes: Array<Record<string, unknown>>): { at: string; summary: string } | null {
+  for (let index = notes.length - 1; index >= 0; index -= 1) {
+    const note = notes[index]
+    if (!note) continue
+    if (noteRole(note) !== 'human') continue
+    const content = noteContent(note)
+    if (!/^Asked Guildhall to reframe this task\./i.test(content)) continue
+    const reason = content.match(/Reason:\s*(.+)$/i)?.[1]?.trim() ?? content
+    return {
+      at: noteTimestamp(note, new Date().toISOString()),
+      summary: truncateSummary(reason),
+    }
+  }
+  return null
+}
+
+function classifyRecoveryNote(note: Record<string, unknown>): { label: string; summary: string } | null {
+  const role = noteRole(note)
+  const agentId = noteAgentId(note)
+  const content = noteContent(note)
+  if (!content) return null
+
+  if (role === 'recovery' && /stale .*claim/i.test(content)) {
+    return {
+      label: 'Cleared stale spec-agent claim',
+      summary: 'Guildhall cleared a stale active claim so this task could wait in the shaping queue honestly.',
+    }
+  }
+  if ((role === 'system' || agentId === 'coordinator-recovery') && /deterministic recovery spec seed/i.test(content)) {
+    return {
+      label: 'Saved deterministic recovery spec seed',
+      summary: 'Guildhall preserved a durable recovery spec seed before retrying the spec lane.',
+    }
+  }
+  if (role === 'bootstrap-failure') {
+    return {
+      label: 'Recovery blocked on setup',
+      summary: firstSentence(stripMarkdown(content)),
+    }
+  }
+  return null
 }
 
 function displayTaskTitle(task: Task): string {
@@ -838,6 +942,8 @@ function phaseForTurn(turn: ThreadTurn): TurnPhase {
   if (turn.kind === 'review_feedback') return turn.phase
   if (turn.status === 'done') return 'done'
   switch (turn.kind) {
+    case 'history_note':
+      return 'done'
     case 'setup_step':
       return 'setup'
     case 'brief_approval':
@@ -854,6 +960,7 @@ function phaseForTurn(turn: ThreadTurn): TurnPhase {
       if (turn.taskStatus === 'exploring' || turn.taskStatus === 'import_draft') return 'intake'
       return 'inflight'
   }
+  return 'done'
 }
 
 function pressureTestTurns(projectPath: string, intakes: PressureTestIntake[]): ThreadTurn[] {
@@ -1513,9 +1620,9 @@ export function buildThread(opts: BuildThreadOptions): Thread {
     const requestTurn = taskRequestTurn(t, taskId, taskStatus, createdAt)
     if (requestTurn) turns.push(requestTurn)
 
-    const openQs = visibleOpenQuestions<Record<string, unknown>>(t)
+    const openQs = visibleQuestions<Record<string, unknown>>(t)
     const seenQuestionSignatures = new Set<string>()
-    const visibleQuestions: Array<{
+    const questionHistory: Array<{
       q: Record<string, unknown>
       qid: string
       askedAt: string
@@ -1530,7 +1637,7 @@ export function buildThread(opts: BuildThreadOptions): Thread {
       const askedAt = typeof q.askedAt === 'string' ? q.askedAt : createdAt
       if (!qid) continue
       if (!answeredAt && signature) seenQuestionSignatures.add(signature)
-      visibleQuestions.push({
+      questionHistory.push({
         q,
         qid,
         askedAt,
@@ -1554,11 +1661,96 @@ export function buildThread(opts: BuildThreadOptions): Thread {
         },
       })
     }
-    const unansweredQuestions = visibleQuestions.filter((entry) => !entry.answeredAt)
-    const answeredQuestions = visibleQuestions.filter((entry) => entry.answeredAt)
+    const unansweredQuestions = questionHistory.filter((entry) => !entry.answeredAt)
+    const answeredQuestions = questionHistory.filter((entry) => entry.answeredAt)
     const notes = Array.isArray(t.notes)
       ? (t.notes as Array<Record<string, unknown>>)
       : []
+
+    if (sourceNote?.references.length) {
+      turns.push({
+        kind: 'history_note',
+        id: `source:${taskId}`,
+        at: firstImporterTimestamp(notes, createdAt),
+        persona: 'intake',
+        status: 'done',
+        phase: 'done',
+        taskId,
+        taskTitle,
+        constructionMode,
+        category: 'source',
+        label: 'Imported from source',
+        summary: formatSourceReferences(sourceNote.references),
+        references: sourceNote.references,
+      })
+    }
+
+    const shapingRequestAt = firstShapingRequestTimestamp(notes, createdAt)
+    if (shapingRequestAt) {
+      turns.push({
+        kind: 'history_note',
+        id: `request:${taskId}:shape`,
+        at: shapingRequestAt,
+        persona: 'intake',
+        status: 'done',
+        phase: 'done',
+        taskId,
+        taskTitle,
+        constructionMode,
+        category: 'request',
+        label: 'Asked Guildhall to shape this task',
+        summary: 'Guildhall was asked to turn this imported draft into a concrete task before implementation.',
+      })
+    }
+
+    const reframeRequest = latestReframeRequest(notes)
+    if (reframeRequest) {
+      turns.push({
+        kind: 'history_note',
+        id: `request:${taskId}:reframe`,
+        at: reframeRequest.at,
+        persona: 'intake',
+        status: 'done',
+        phase: 'done',
+        taskId,
+        taskTitle,
+        constructionMode,
+        category: 'request',
+        label: 'Asked Guildhall to reframe this task',
+        summary: reframeRequest.summary,
+      })
+    }
+
+    const recoveryEntries = notes
+      .map((note) => {
+        const classified = classifyRecoveryNote(note)
+        if (!classified) return null
+        return {
+          at: noteTimestamp(note, createdAt),
+          label: classified.label,
+          summary: classified.summary,
+        }
+      })
+      .filter((entry): entry is { at: string; label: string; summary: string } => Boolean(entry))
+    if (recoveryEntries.length > 0) {
+      const latest = recoveryEntries[recoveryEntries.length - 1]!
+      turns.push({
+        kind: 'history_note',
+        id: `system:${taskId}:recovery`,
+        at: latest.at,
+        persona: 'system',
+        status: 'done',
+        phase: 'done',
+        taskId,
+        taskTitle,
+        constructionMode,
+        category: 'system',
+        label: 'Recovery history',
+        summary: latest.summary,
+        count: recoveryEntries.length,
+        entries: recoveryEntries,
+      })
+    }
 
     // Brief approval (or done card)
     const brief = t.productBrief as

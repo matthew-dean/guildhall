@@ -3,6 +3,7 @@
   Parent supplies the full providers map and controls the selected key.
 -->
 <script lang="ts">
+  import Chip from './Chip.svelte'
   import Input from './Input.svelte'
 
   interface ProviderMeta {
@@ -60,9 +61,7 @@
         <span class="label">{row.meta.label}</span>
         <span class="detail">{row.meta.detail}</span>
       </span>
-      <span class="chip" class:ok={row.meta.detected} class:missing={!row.meta.detected}>
-        {row.meta.detected ? 'ready' : 'not found'}
-      </span>
+      <Chip label={row.meta.detected ? 'ready' : 'not found'} tone={row.meta.detected ? 'ok' : 'neutral'} />
     </button>
   {/each}
 </div>
@@ -151,22 +150,6 @@
     font-size: var(--fs-1);
     color: var(--text-muted);
     line-height: var(--lh-body);
-  }
-  .chip {
-    font-size: var(--fs-0);
-    font-weight: 700;
-    text-transform: uppercase;
-    letter-spacing: 0.05em;
-    padding: 2px var(--s-2);
-    border-radius: 10px;
-  }
-  .chip.ok {
-    background: rgba(78, 204, 163, 0.15);
-    color: var(--accent-2);
-  }
-  .chip.missing {
-    background: rgba(136, 136, 153, 0.12);
-    color: var(--text-muted);
   }
   .field-label {
     display: block;

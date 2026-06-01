@@ -7,6 +7,7 @@
     eyebrow,
     headingTag = 'h2',
     align = 'start',
+    metaPlacement = 'edge',
     mode = 'operator',
     density = 'comfortable',
     titleRole = 'title',
@@ -20,7 +21,7 @@
 
 <header
   {...restProps}
-  class={['gh-section-header', `align-${align}`, `mode-${mode}`, `density-${density}`, className].filter(Boolean).join(' ')}
+  class={['gh-section-header', `align-${align}`, `meta-${metaPlacement}`, `mode-${mode}`, `density-${density}`, className].filter(Boolean).join(' ')}
 >
   <div class="gh-section-header-copy">
     {#if eyebrow}
@@ -30,7 +31,7 @@
     <div class="gh-section-header-title-row">
       <svelte:element this={headingTag} class={`gh-section-header-title role-${titleRole}`}>{title}</svelte:element>
 
-      {#if meta}
+      {#if meta && metaPlacement === 'inline'}
         <div class="gh-section-header-meta">
           {@render meta()}
         </div>
@@ -41,6 +42,12 @@
       <p class={`gh-section-header-description role-${descriptionRole}`}>{description}</p>
     {/if}
   </div>
+
+  {#if meta && metaPlacement === 'edge'}
+    <div class="gh-section-header-meta gh-section-header-meta-edge">
+      {@render meta()}
+    </div>
+  {/if}
 
   {#if actions}
     <div class="gh-section-header-actions">
@@ -109,6 +116,10 @@
     align-items: center;
     gap: var(--gh-space-2);
     color: var(--gh-color-text-secondary);
+  }
+
+  .gh-section-header-meta-edge {
+    justify-content: flex-start;
   }
 
   .gh-section-header-description {
@@ -180,6 +191,15 @@
     .gh-section-header.align-start .gh-section-header-title-row {
       grid-template-columns: minmax(0, 1fr) auto;
       align-items: center;
+    }
+
+    .gh-section-header.align-start.meta-edge {
+      align-items: start;
+    }
+
+    .gh-section-header.align-start.meta-edge .gh-section-header-meta-edge {
+      justify-content: flex-end;
+      align-self: start;
     }
   }
 

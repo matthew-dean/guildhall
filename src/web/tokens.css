@@ -105,14 +105,21 @@
      Chips are the compact expression of the same semantic palette. */
   --chip-neutral-bg: #383844;
   --chip-neutral-fg: #ececf6;
+  --chip-neutral-border: color-mix(in srgb, var(--chip-neutral-bg) 58%, white 24%);
   --chip-ok-bg: rgba(78, 204, 163, 0.15);
   --chip-ok-fg: var(--accent-2);
+  --chip-ok-border: color-mix(in srgb, var(--accent-2) 44%, white 18%);
   --chip-warn-bg: rgba(212, 162, 60, 0.15);
   --chip-warn-fg: var(--warn);
+  --chip-warn-border: color-mix(in srgb, var(--warn) 54%, white 16%);
   --chip-danger-bg: rgba(224, 82, 82, 0.15);
   --chip-danger-fg: var(--danger);
+  --chip-danger-border: color-mix(in srgb, var(--danger) 52%, white 14%);
   --chip-accent-bg: #584ab0;
   --chip-accent-fg: #fbfaff;
+  --chip-accent-border: color-mix(in srgb, var(--chip-accent-bg) 74%, white 18%);
+  --chip-agent-border: color-mix(in srgb, var(--accent-2) 54%, white 10%);
+  --chip-agent-attention-border: color-mix(in srgb, var(--accent-2) 44%, var(--warn) 22%);
   --chip-status-on-dark-fg: rgb(255 255 255 / 0.88);
 
   /* status stripes — saturated 3px left borders for cards/rows.

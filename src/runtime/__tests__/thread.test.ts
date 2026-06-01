@@ -2045,6 +2045,146 @@ describe('buildThread', () => {
     }
   })
 
+  it('surfaces source and request milestones, preserves answered questions, and collapses repetitive recovery churn', async () => {
+    const projectPath = await mkdtemp(path.join(tmpdir(), 'guildhall-thread-'))
+    try {
+      await mkdir(path.join(projectPath, '.guildhall'), { recursive: true })
+      const importedAt = '2026-05-10T16:40:53.757Z'
+      const askedAt = '2026-05-18T19:49:46.995Z'
+      const answeredAt = '2026-05-19T22:26:12.323Z'
+      const reframeAt = '2026-05-31T16:52:42.757Z'
+      const latestRecoveryAt = '2026-05-31T16:53:00.787Z'
+      await writeFile(
+        path.join(projectPath, '.guildhall', 'TASKS.json'),
+        JSON.stringify({
+          tasks: [
+            {
+              id: 'task-import-1',
+              title: 'Block menu / block side menu',
+              description: 'looma/docs/editor-roadmap.md: - **Block menu / block side menu**',
+              status: 'spec_review',
+              createdAt: importedAt,
+              updatedAt: latestRecoveryAt,
+              productBrief: {
+                userJob: 'Turn this imported draft into concrete project work.',
+                successMetric: 'The task has a reviewable spec and acceptance criteria.',
+                authoredBy: 'coordinator-recovery',
+              },
+              spec: '## Summary\nBuild the block menu.\n\n## Acceptance Criteria\n- The feature is reviewable.',
+              acceptanceCriteria: [{ id: 'ac-1', text: 'Reviewable', met: false }],
+              notes: [
+                {
+                  agentId: 'workspace-importer',
+                  role: 'importer',
+                  content: 'Imported from: /repo/looma/docs/editor-roadmap.md, /repo/looma/apps/docs/docs/component-library-audit.md',
+                  timestamp: importedAt,
+                },
+                {
+                  agentId: 'human',
+                  role: 'shaping-request',
+                  content: 'User asked Guildhall to shape this imported draft into a complete task.',
+                  timestamp: '2026-05-18T19:47:52.792Z',
+                },
+                {
+                  agentId: 'human',
+                  role: 'human',
+                  content: 'Asked Guildhall to reframe this task. Reason: Final release-blocker cleanup: regenerate the recovery spec with cleaned owner decisions and source evidence.',
+                  timestamp: reframeAt,
+                },
+                {
+                  agentId: 'system',
+                  role: 'system',
+                  content: 'Reframe requested for "Block menu / block side menu" from spec_review. Guildhall will rebuild the task in plain language before continuing.',
+                  timestamp: reframeAt,
+                },
+                {
+                  agentId: 'coordinator',
+                  role: 'recovery',
+                  content: 'Runtime cleared a stale spec-agent claim so this draft waits in the shaping queue instead of pretending an agent is actively working on it.',
+                  timestamp: '2026-05-31T16:53:00.658Z',
+                },
+                {
+                  agentId: 'coordinator-recovery',
+                  role: 'system',
+                  content: 'Guildhall wrote a deterministic recovery spec seed from the current task evidence before redispatching the spec lane, so the task has durable progress instead of returning to a read-only shaping loop.',
+                  timestamp: latestRecoveryAt,
+                },
+              ],
+              openQuestions: [
+                {
+                  id: 'q-scope',
+                  kind: 'choice',
+                  askedBy: 'spec-agent',
+                  askedAt,
+                  answeredAt,
+                  answer: 'Drag-handle is out of scope — separate task.',
+                  prompt: 'Should drag-and-drop reordering be in scope?',
+                  choices: ['Include drag-handle in scope', 'Drag-handle is out of scope'],
+                  selectionMode: 'single',
+                },
+                {
+                  id: 'q-options',
+                  kind: 'choice',
+                  askedBy: 'spec-agent',
+                  askedAt: '2026-05-18T19:49:59.577Z',
+                  answeredAt,
+                  answer: 'Looma should ship defaults, but apps can override or extend.',
+                  prompt: 'Should Looma ship defaults or require apps to supply the full list?',
+                  choices: ['Apps supply the full list', 'Looma ships defaults', 'Looma ships defaults but apps can override'],
+                  selectionMode: 'single',
+                },
+              ],
+            },
+          ],
+        }),
+      )
+      const snapshot: ProjectSnapshot = {
+        projectPath,
+        config: {
+          id: 'demo',
+          name: 'Demo',
+          bootstrap: { verifiedAt: latestRecoveryAt },
+          coordinators: [{ id: 'looma', name: 'Looma' }],
+        },
+        bootstrapVerified: true,
+        hasProvider: true,
+        hasDirection: true,
+        workspaceImportReviewed: true,
+        taskCount: 1,
+        wizardState: emptyWizardsState(),
+      }
+
+      const thread = buildThread({ projectPath, snapshot })
+
+      const sourceTurn = thread.turns.find((turn) => turn.kind === 'history_note' && turn.label === 'Imported from source')
+      expect(sourceTurn).toBeTruthy()
+      if (!sourceTurn || sourceTurn.kind !== 'history_note') throw new Error('expected source history note')
+      expect(sourceTurn.references).toEqual([
+        '/repo/looma/docs/editor-roadmap.md',
+        '/repo/looma/apps/docs/docs/component-library-audit.md',
+      ])
+
+      const answeredQuestionTurns = thread.turns.filter((turn) => turn.kind === 'agent_question' && turn.status === 'done')
+      expect(answeredQuestionTurns).toHaveLength(2)
+
+      const reframeTurn = thread.turns.find((turn) => turn.kind === 'history_note' && turn.label === 'Asked Guildhall to reframe this task')
+      expect(reframeTurn).toBeTruthy()
+      if (!reframeTurn || reframeTurn.kind !== 'history_note') throw new Error('expected reframe history note')
+      expect(reframeTurn.summary).toContain('Final release-blocker cleanup')
+
+      const recoveryCluster = thread.turns.find((turn) => turn.kind === 'history_note' && turn.label === 'Recovery history')
+      expect(recoveryCluster).toBeTruthy()
+      if (!recoveryCluster || recoveryCluster.kind !== 'history_note') throw new Error('expected recovery history note')
+      expect(recoveryCluster.count).toBe(2)
+      expect(recoveryCluster.entries?.map((entry) => entry.label)).toEqual([
+        'Cleared stale spec-agent claim',
+        'Saved deterministic recovery spec seed',
+      ])
+    } finally {
+      await rm(projectPath, { recursive: true, force: true })
+    }
+  })
+
   it('keeps an unanswered agent question active and demotes spec review until the question is answered', async () => {
     const projectPath = await mkdtemp(path.join(tmpdir(), 'guildhall-thread-'))
     try {

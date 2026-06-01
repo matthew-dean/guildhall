@@ -103,8 +103,10 @@
 
   function firstSpecSummaryLine(spec: string | undefined): string | null {
     if (typeof spec !== 'string' || !spec.trim()) return null
-    const summaryMatch = spec.match(/## Summary\s+([\s\S]*?)(?:\n## |\n### |\Z)/i)
-    const summaryBlock = (summaryMatch?.[1] ?? spec).trim()
+    const anchor = /^##\s+(?:Summary|What this is)\s*$/im.exec(spec)
+    const normalized = anchor ? spec.slice(anchor.index + anchor[0].length).trim() : spec.trim()
+    const nextHeadingIndex = normalized.search(/\n##\s|\n###\s/)
+    const summaryBlock = (nextHeadingIndex >= 0 ? normalized.slice(0, nextHeadingIndex) : normalized).trim()
     if (!summaryBlock) return null
     const firstParagraph = summaryBlock.split(/\n\s*\n/)[0]?.trim() ?? ''
     if (!firstParagraph) return null

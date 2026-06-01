@@ -70,7 +70,7 @@
     align-items: center;
     justify-content: space-between;
     gap: var(--gh-space-3);
-    padding: 0.35rem var(--gh-space-4);
+    padding: 0.4rem var(--gh-space-4);
     border-top: var(--gh-layout-rule-default) solid var(--gh-color-border-subtle);
     border-bottom: var(--gh-layout-rule-default) solid var(--gh-color-border-subtle);
     background: var(--gh-color-surface-raised);
@@ -80,13 +80,13 @@
 
   .gh-alert-band.density-compact {
     gap: var(--gh-space-2);
-    padding: 0.125rem var(--gh-space-3);
+    padding: 0.28rem var(--gh-space-3);
   }
 
   .gh-alert-band-copy {
     min-inline-size: 0;
     display: flex;
-    align-items: baseline;
+    align-items: center;
     gap: var(--gh-space-2);
   }
 
@@ -100,9 +100,11 @@
 
   .gh-alert-band-body {
     min-inline-size: 0;
-    display: block;
-    font-size: var(--gh-type-size-1);
-    line-height: 1.15;
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    font-size: var(--gh-type-size-2);
+    line-height: 1.2;
   }
 
   .gh-alert-band-body :global(strong) {
@@ -130,7 +132,7 @@
     display: flex;
     align-items: center;
     gap: var(--gh-space-1);
-    font-size: var(--gh-type-size-1);
+    font-size: var(--gh-type-size-2);
   }
 
   .gh-alert-band.density-compact .gh-alert-band-actions {
@@ -138,13 +140,18 @@
   }
 
   .gh-alert-band-actions :global(a) {
+    display: inline-flex;
+    align-items: center;
     color: inherit;
     text-decoration: underline;
     font-size: inherit;
     font-weight: var(--gh-type-weight-strong);
+    line-height: 1.2;
   }
 
   .gh-alert-band-actions :global(button) {
+    display: inline-flex;
+    align-items: center;
     background: transparent;
     border: none;
     color: inherit;
@@ -152,21 +159,25 @@
     font-weight: var(--gh-type-weight-strong);
     cursor: pointer;
     padding: 0;
+    line-height: 1.2;
   }
 
   .gh-alert-band-actions :global(summary) {
+    display: inline-flex;
+    align-items: center;
     font-size: inherit;
     font-weight: var(--gh-type-weight-strong);
+    line-height: 1.2;
   }
 
   .gh-alert-band.density-compact .gh-alert-band-icon :global(svg) {
-    width: 14px;
-    height: 14px;
+    width: 15px;
+    height: 15px;
   }
 
   .gh-alert-band.density-compact .gh-alert-band-body,
   .gh-alert-band.density-compact .gh-alert-band-actions {
-    font-size: var(--gh-type-size-0);
+    font-size: var(--gh-type-size-1);
   }
 
   .gh-alert-band.tone-neutral {
@@ -232,7 +243,7 @@
     }
 
     .gh-alert-band.density-compact {
-      padding: 0.2rem var(--gh-space-3);
+      padding: 0.25rem var(--gh-space-3);
     }
 
     .gh-alert-band-actions {

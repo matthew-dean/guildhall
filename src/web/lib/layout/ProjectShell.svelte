@@ -4,6 +4,7 @@
 
   interface Props {
     uninitialized?: boolean
+    pageMode?: 'document' | 'surface-fill'
     railCollapsed?: boolean
     railPreviewOpen?: boolean
     mobileRailMode?: boolean
@@ -17,6 +18,7 @@
 
   let {
     uninitialized = false,
+    pageMode = 'document',
     railCollapsed = false,
     railPreviewOpen = false,
     mobileRailMode = false,
@@ -35,7 +37,7 @@
   mainClass="main"
   topbarClass={`shell-topbar ${uninitialized ? 'shell-topbar--uninitialized' : ''}`}
   bandClass="band"
-  pageClass="page"
+  pageClass={`page ${pageMode === 'surface-fill' ? 'page--surface-fill' : ''}`.trim()}
   {railCollapsed}
   {railPreviewOpen}
   {mobileRailMode}

@@ -38,6 +38,8 @@
     | 'ellipsis'
     | 'help-circle'
     | 'sparkles'
+    | 'arrow-up'
+    | 'arrow-right'
 </script>
 
 <script lang="ts">
@@ -73,6 +75,8 @@
   import Ellipsis from 'lucide-svelte/icons/ellipsis'
   import HelpCircle from 'lucide-svelte/icons/circle-help'
   import Sparkles from 'lucide-svelte/icons/sparkles'
+  import ArrowUp from 'lucide-svelte/icons/arrow-up'
+  import ArrowRight from 'lucide-svelte/icons/arrow-right'
 
   interface Props {
     name: IconName
@@ -117,6 +121,8 @@
   {:else if name === 'ellipsis'}<Ellipsis {size} {strokeWidth} />
   {:else if name === 'help-circle'}<HelpCircle {size} {strokeWidth} />
   {:else if name === 'sparkles'}<Sparkles {size} {strokeWidth} />
+  {:else if name === 'arrow-up'}<ArrowUp {size} {strokeWidth} />
+  {:else if name === 'arrow-right'}<ArrowRight {size} {strokeWidth} />
   {/if}
 </span>
 

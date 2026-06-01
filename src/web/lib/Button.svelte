@@ -35,6 +35,7 @@
     className = '',
     onclick,
     children,
+    ...restProps
   }: Props = $props()
 </script>
 
@@ -44,6 +45,7 @@
     {type}
     {disabled}
     {onclick}
+    {...restProps}
     aria-label={ariaLabel}
     aria-pressed={pressed}
   >

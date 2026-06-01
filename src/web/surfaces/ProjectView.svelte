@@ -95,6 +95,11 @@
   const projectDisplayName = $derived(
     project.detail?.name?.trim() || humanizeProjectName(project.detail?.id ?? 'Project'),
   )
+  const pageMode = $derived<'document' | 'surface-fill'>(
+    currentView === 'thread' ? 'surface-fill' : 'document',
+  )
+  const RAIL_PREVIEW_OPEN_DELAY_MS = 150
+  let railPreviewTimer = $state<ReturnType<typeof setTimeout> | null>(null)
   const projectDisplayPath = $derived(formatUserPath(project.detail?.path))
   const projectDisplayPathLeaf = $derived(projectDisplayPath.split('/').filter(Boolean).pop() ?? 'This project')
 
@@ -242,11 +247,29 @@
     }
   }
 
-  function openRailPreview(): void {
+  function cancelRailPreviewTimer(): void {
+    if (railPreviewTimer) {
+      clearTimeout(railPreviewTimer)
+      railPreviewTimer = null
+    }
+  }
+
+  function openRailPreviewImmediately(): void {
+    cancelRailPreviewTimer()
     if (!railForcedCollapsed && railCollapsed) railPreviewOpen = true
   }
 
+  function scheduleRailPreviewOpen(): void {
+    if (railForcedCollapsed || !railCollapsed) return
+    cancelRailPreviewTimer()
+    railPreviewTimer = window.setTimeout(() => {
+      railPreviewTimer = null
+      if (!railForcedCollapsed && railCollapsed) railPreviewOpen = true
+    }, RAIL_PREVIEW_OPEN_DELAY_MS)
+  }
+
   function closeRailPreview(event?: FocusEvent | MouseEvent): void {
+    cancelRailPreviewTimer()
     if (railForcedCollapsed || !railCollapsed) return
     const current = event?.currentTarget
     const related = event?.relatedTarget
@@ -288,6 +311,10 @@
     if (railForcedCollapsed && currentView === 'thread' && navContextMode === 'detail' && mobileRailOpen) {
       mobileRailOpen = false
     }
+  })
+
+  $effect(() => {
+    return () => cancelRailPreviewTimer()
   })
 
   $effect(() => {
@@ -928,6 +955,7 @@
 {#if detail?.initializationNeeded}
   <ProjectShell
     uninitialized
+      pageMode={pageMode}
     railCollapsed={railCollapsed && !railOverlayOpen}
     railPreviewOpen={railPreviewOpen}
     mobileRailMode={railForcedCollapsed}
@@ -943,9 +971,9 @@
       class:rail-mobile-open={railOverlayOpen}
       class:rail-preview-open={railPreviewOpen}
       aria-label="Project navigation"
-      onmouseenter={openRailPreview}
+      onmouseenter={scheduleRailPreviewOpen}
       onmouseleave={closeRailPreview}
-      onfocusin={openRailPreview}
+      onfocusin={openRailPreviewImmediately}
       onfocusout={closeRailPreview}
     >
       <div class="rail-head" title={projectDisplayPath}>
@@ -1035,6 +1063,7 @@
   </div>
 {:else}
   <ProjectShell
+      pageMode={pageMode}
     railCollapsed={railCollapsed && !railOverlayOpen}
     railPreviewOpen={railPreviewOpen}
     mobileRailMode={railForcedCollapsed}
@@ -1050,9 +1079,9 @@
       class:rail-mobile-open={railOverlayOpen}
       class:rail-preview-open={railPreviewOpen}
       aria-label="Project navigation"
-      onmouseenter={openRailPreview}
+      onmouseenter={scheduleRailPreviewOpen}
       onmouseleave={closeRailPreview}
-      onfocusin={openRailPreview}
+      onfocusin={openRailPreviewImmediately}
       onfocusout={closeRailPreview}
     >
       <div class="rail-head" title={projectDisplayPath}>

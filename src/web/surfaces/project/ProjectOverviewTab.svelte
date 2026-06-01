@@ -777,13 +777,19 @@
     <Card title="Project health" titleTag="h2" className="overview-card">
       <div class="health-list">
         {#each healthItems as item (`${item.label}:${item.detail}`)}
-          <button type="button" class="health-row" onclick={() => go(item.href)}>
+          <UtilityPanel
+            as="button"
+            interactive
+            className="health-row"
+            tone={item.tone === 'running' ? 'ok' : item.tone === 'ok' ? 'ok' : item.tone === 'danger' ? 'danger' : item.tone === 'warn' ? 'warn' : 'neutral'}
+            onclick={() => go(item.href)}
+          >
             <StatusDot tone={item.tone === 'running' ? 'active' : item.tone === 'ok' ? 'ok' : item.tone === 'danger' ? 'danger' : item.tone === 'warn' ? 'warn' : 'idle'} pulse={item.tone === 'running'} size="sm" />
             <div>
               <strong>{item.label}</strong>
               <span>{item.detail}</span>
             </div>
-          </button>
+          </UtilityPanel>
         {/each}
       </div>
     </Card>
@@ -885,7 +891,7 @@
     min-width: 0;
   }
   :global(.action-row),
-  .health-row,
+  :global(.health-row),
   :global(.signal-row),
   :global(.proof-path-row),
   :global(.run-blocker),
@@ -935,12 +941,12 @@
     overflow-wrap: anywhere;
   }
   :global(.action-row) span:last-child,
-  .health-row span {
+  :global(.health-row) span {
     color: var(--text-muted);
     font-size: var(--fs-1);
     line-height: var(--lh-body);
   }
-  .health-row,
+  :global(.health-row),
   :global(.signal-row),
   :global(.proof-path-row),
   :global(.run-blocker),
@@ -950,7 +956,7 @@
     gap: var(--s-3);
     align-items: center;
   }
-  .health-row div,
+  :global(.health-row) div,
   :global(.signal-row) div,
   :global(.proof-path-row) div,
   :global(.run-blocker) div,
@@ -959,7 +965,7 @@
     gap: var(--s-1);
     min-width: 0;
   }
-  .health-row strong,
+  :global(.health-row) strong,
   :global(.signal-row) strong,
   :global(.proof-path-row) strong,
   :global(.run-blocker) strong,
@@ -1057,7 +1063,7 @@
     .next-action :global(.btn) {
       width: 100%;
     }
-    .health-row,
+    :global(.health-row),
     :global(.run-blocker),
     :global(.run-plan-row),
     :global(.action-row) {

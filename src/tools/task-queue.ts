@@ -2,7 +2,18 @@ import { defineTool } from '@guildhall/engine'
 import { z } from 'zod'
 import fs from 'node:fs/promises'
 import path from 'node:path'
-import { AcceptanceCriteria, GateResult, Task, TaskQueue, TaskStatus, WorkUnitAnalysis, buildTaskSizePlan, parseAcceptanceCriteriaFromSpec } from '@guildhall/core'
+import {
+  AcceptanceCriteria,
+  GateResult,
+  Task,
+  TaskQueue,
+  TaskStatus,
+  WorkUnitAnalysis,
+  StructuredSpec,
+  buildTaskSizePlan,
+  parseAcceptanceCriteriaFromSpec,
+  renderStructuredSpecMarkdown,
+} from '@guildhall/core'
 import { atomicWriteText } from '@guildhall/sessions'
 
 const TASKS_PATH_SCHEMA = z.string().describe('Absolute path to the TASKS.json file')
@@ -67,6 +78,7 @@ const updateTaskInputSchema = z.object({
   blockReason: z.string().optional(),
   humanJudgment: z.string().optional(),
   spec: z.string().optional(),
+  structuredSpec: StructuredSpec.optional(),
   acceptanceCriteria: z.array(AcceptanceCriteria).optional(),
   workUnitAnalysis: WorkUnitAnalysis.optional(),
   gateResults: z.array(GateResult).optional(),
@@ -110,9 +122,17 @@ export async function updateTask(
         success: false,
         taskId,
         error:
-          'No task mutation provided. Set at least one of title, status, assignedTo, note, blockReason, humanJudgment, spec, acceptanceCriteria, gateResults, or completedAt.',
+          'No task mutation provided. Set at least one of title, status, assignedTo, note, blockReason, humanJudgment, spec, structuredSpec, acceptanceCriteria, gateResults, or completedAt.',
       }
     }
+    if (input.spec !== undefined && input.structuredSpec !== undefined) {
+      return {
+        success: false,
+        taskId,
+        error: 'Provide either spec markdown or structuredSpec JSON, not both.',
+      }
+    }
+
     const currentAgentId = typeof metadata['current_agent_id'] === 'string'
       ? metadata['current_agent_id'].trim()
       : ''
@@ -133,8 +153,10 @@ export async function updateTask(
       nextStatus === 'spec_review' ||
       (
         nextStatus === undefined &&
-        input.spec !== undefined &&
-        input.spec.trim() !== '' &&
+        (
+          (input.spec !== undefined && input.spec.trim() !== '') ||
+          input.structuredSpec !== undefined
+        ) &&
         task.status === 'exploring'
       )
     if (wouldPromoteSpecReview && input.spec && hasUnansweredMarkdownOpenQuestions(input.spec)) {
@@ -148,6 +170,12 @@ export async function updateTask(
 
     const normalizedSpec = input.spec !== undefined
       ? normalizeSpecForTaskProjectPath(input.spec, task.projectPath)
+      : undefined
+    const normalizedStructuredSpec = input.structuredSpec !== undefined
+      ? StructuredSpec.parse(input.structuredSpec)
+      : undefined
+    const renderedStructuredSpec = normalizedStructuredSpec
+      ? normalizeSpecForTaskProjectPath(renderStructuredSpecMarkdown(normalizedStructuredSpec), task.projectPath)
       : undefined
     const normalizedAcceptanceCriteria = input.acceptanceCriteria !== undefined
       ? z.array(AcceptanceCriteria).parse(input.acceptanceCriteria)
@@ -178,21 +206,31 @@ export async function updateTask(
     }
     if (input.blockReason !== undefined && input.blockReason.trim() !== '') task.blockReason = input.blockReason
     if (input.humanJudgment !== undefined && input.humanJudgment.trim() !== '') task.humanJudgment = input.humanJudgment
-    if (normalizedSpec !== undefined && normalizedSpec.trim() !== '') {
-      task.spec = normalizedSpec
+    const nextSpec = renderedStructuredSpec ?? normalizedSpec
+    if (normalizedStructuredSpec !== undefined) {
+      task.structuredSpec = normalizedStructuredSpec
+    } else if (normalizedSpec !== undefined) {
+      delete task.structuredSpec
+    }
+    if (nextSpec !== undefined && nextSpec.trim() !== '') {
+      task.spec = nextSpec
       if (input.title === undefined) {
         const derivedTitle = deriveImportedTaskTitle(task)
         if (derivedTitle) task.title = derivedTitle
       }
-      if (task.acceptanceCriteria.length === 0) {
-        const derivedCriteria = parseAcceptanceCriteriaFromSpec(normalizedSpec)
+      if (normalizedStructuredSpec && normalizedAcceptanceCriteria === undefined) {
+        task.acceptanceCriteria = parseAcceptanceCriteriaFromSpec(nextSpec)
+      } else if (task.acceptanceCriteria.length === 0) {
+        const derivedCriteria = parseAcceptanceCriteriaFromSpec(nextSpec)
         if (derivedCriteria.length > 0) task.acceptanceCriteria = derivedCriteria
       }
     }
     if (
       input.status === undefined &&
-      input.spec !== undefined &&
-      input.spec.trim() !== '' &&
+      (
+        (input.spec !== undefined && input.spec.trim() !== '') ||
+        input.structuredSpec !== undefined
+      ) &&
       task.status === 'exploring'
     ) {
       task.status = 'spec_review'
@@ -215,7 +253,7 @@ export async function updateTask(
       task.notes.push({ ...input.note, timestamp: new Date().toISOString() })
     }
     const shouldRefreshSizePlan =
-      (normalizedSpec !== undefined && normalizedSpec.trim() !== '') ||
+      (nextSpec !== undefined && nextSpec.trim() !== '') ||
       input.workUnitAnalysis !== undefined
     if (shouldRefreshSizePlan) {
       const sizePlanCreatedAt = new Date().toISOString()
@@ -406,6 +444,7 @@ function hasTaskMutation(input: UpdateTaskInput): boolean {
     input.blockReason !== undefined ||
     input.humanJudgment !== undefined ||
     input.spec !== undefined ||
+    input.structuredSpec !== undefined ||
     input.acceptanceCriteria !== undefined ||
     input.workUnitAnalysis !== undefined ||
     input.gateResults !== undefined ||
@@ -521,9 +560,10 @@ function importedAreaLabel(task: z.infer<typeof Task>): string | null {
 
 function firstSpecSummaryLine(spec: string | undefined): string | null {
   if (typeof spec !== 'string' || !spec.trim()) return null
-  const normalized = spec.replace(/^## Summary\s*/i, '').trim()
-  const summaryMatch = normalized.match(/^([\s\S]*?)(?:\n## |\n### |\Z)/i)
-  const summaryBlock = (summaryMatch?.[1] ?? normalized).trim()
+  const anchor = /^##\s+(?:Summary|What this is)\s*$/im.exec(spec)
+  const normalized = anchor ? spec.slice(anchor.index + anchor[0].length).trim() : spec.trim()
+  const nextHeadingIndex = normalized.search(/\n##\s|\n###\s/)
+  const summaryBlock = (nextHeadingIndex >= 0 ? normalized.slice(0, nextHeadingIndex) : normalized).trim()
   if (!summaryBlock) return null
   const firstParagraph = summaryBlock.split(/\n\s*\n/)[0]?.trim() ?? ''
   if (!firstParagraph) return null
@@ -540,7 +580,7 @@ function lowercaseFirst(value: string): string {
 export const updateTaskTool = defineTool({
   name: 'update-task',
   description:
-    "Update a task's title, status, spec, acceptance criteria, assignment, or notes. Use this to transition tasks through the lifecycle.",
+    "Update a task's title, status, spec, structuredSpec, acceptance criteria, assignment, or notes. Use this to transition tasks through the lifecycle.",
   inputSchema: updateTaskInputSchema,
   jsonSchema: {
     type: 'object',
@@ -577,6 +617,7 @@ export const updateTaskTool = defineTool({
       blockReason: { type: 'string' },
       humanJudgment: { type: 'string' },
       spec: { type: 'string' },
+      structuredSpec: { type: 'object', description: 'Structured JSON spec payload. Guildhall renders this into markdown deterministically.' },
       acceptanceCriteria: {
         type: 'array',
         items: {

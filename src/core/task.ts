@@ -1,5 +1,6 @@
 import { z } from 'zod'
 import { TaskSizePlan, WorkUnitAnalysis } from './task-sizing.js'
+import { StructuredSpec } from './structured-spec.js'
 
 // ---------------------------------------------------------------------------
 // Task status lifecycle (FR-01)
@@ -736,6 +737,7 @@ export const Task = z.object({
 
   // Set by Spec Agent before implementation begins
   spec: z.string().optional(),
+  structuredSpec: StructuredSpec.optional(),
   acceptanceCriteria: z.array(AcceptanceCriteria).default([]),
 
   // Product brief: the *why* layer of a task — user job, success metric,

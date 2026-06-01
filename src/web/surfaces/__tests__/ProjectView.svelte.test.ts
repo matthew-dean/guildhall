@@ -855,7 +855,7 @@ describe('ProjectView', () => {
     project.detail = null
     project.error = null
     const loading = render(ProjectView, { initialView: 'thread', projectId: 'looma-knit' })
-    await screen.findByRole('heading', { name: 'Threads' })
+    await screen.findByRole('button', { name: 'Threads' })
     expect(screen.getByRole('complementary', { name: 'Project navigation' })).toBeInTheDocument()
     expect(screen.queryByText('Loading project...')).toBeNull()
     loading.unmount()
@@ -873,6 +873,12 @@ describe('ProjectView', () => {
 
     await user.click(screen.getByRole('button', { name: /initialize this project/i }))
     await waitFor(() => expect(path.value).toBe('/projects/looma-knit/setup'))
+  })
+
+  it('uses the fill-mode page shell for Threads instead of the padded document page', async () => {
+    await renderProjectView('thread')
+
+    expect(document.querySelector('.app-shell-page')).toHaveClass('page--surface-fill')
   })
 
   it('blocks project actions and points users at readiness when bootstrap fails', async () => {
@@ -951,6 +957,28 @@ describe('ProjectView', () => {
     await waitFor(() => {
       expect(screen.queryByRole('button', { name: /close project navigation/i })).not.toBeInTheDocument()
     })
+  })
+
+  it('waits before opening the collapsed rail preview on hover, but opens immediately on focus', async () => {
+    vi.useFakeTimers()
+    try {
+      await renderProjectView('thread')
+      const shell = document.querySelector('.app-shell')
+      const rail = screen.getByRole('complementary', { name: 'Project navigation' })
+      expect(shell).not.toHaveClass('rail-preview-open')
+
+      rail.dispatchEvent(new MouseEvent('mouseenter', { bubbles: true }))
+      await vi.advanceTimersByTimeAsync(149)
+      expect(shell).not.toHaveClass('rail-preview-open')
+
+      await vi.advanceTimersByTimeAsync(1)
+      expect(shell).toHaveClass('rail-preview-open')
+
+      shell?.dispatchEvent(new FocusEvent('focusin', { bubbles: true }))
+      expect(shell).toHaveClass('rail-preview-open')
+    } finally {
+      vi.useRealTimers()
+    }
   })
 
   it('switches the topbar back action to Threads while compact thread detail is active', async () => {

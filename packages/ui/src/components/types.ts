@@ -10,6 +10,7 @@ import type {
 
 export type SectionHeaderHeadingTag = 'h1' | 'h2' | 'h3' | 'h4'
 export type SectionHeaderAlign = 'start' | 'center'
+export type SectionHeaderMetaPlacement = 'inline' | 'edge'
 
 export interface SectionHeaderProps extends HTMLAttributes<HTMLElement> {
   title: string
@@ -17,6 +18,7 @@ export interface SectionHeaderProps extends HTMLAttributes<HTMLElement> {
   eyebrow?: string
   headingTag?: SectionHeaderHeadingTag
   align?: SectionHeaderAlign
+  metaPlacement?: SectionHeaderMetaPlacement
   mode?: GuildhallShellMode
   density?: GuildhallDensityMode
   titleRole?: Extract<GuildhallTypeRole, 'title'>

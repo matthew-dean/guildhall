@@ -34,6 +34,36 @@ export interface ProductBrief {
   authoredBy?: string
 }
 
+export interface StructuredSpecCompletionBoundary {
+  productOutcome?: string
+  whatGuildhallCanCompleteInCode?: string
+  externalDependencies?: string
+  ownerOnlySetup?: string
+  verificationEnvironment?: string
+  whatCountsAsDone?: string
+  whatMustBeSplitOrBlocked?: string
+}
+
+export interface StructuredSpec {
+  whatThisIs?: string
+  problemContext?: string
+  goals?: string[]
+  nonGoals?: string[]
+  proposedDesign?: string
+  keyDecisions?: string[]
+  acceptanceCriteria?: string[]
+  verification?: string[]
+  completionBoundary?: StructuredSpecCompletionBoundary
+  userFacingBehavior?: string
+  visualInteractionNotes?: string
+  componentApiShape?: string
+  dataModelSchemaChanges?: string
+  migrationRollout?: string
+  performanceReliabilitySecurity?: string
+  risksOpenQuestions?: string[]
+  handoffSequence?: string[]
+}
+
 /**
  * Agent → user question. Mirrors `AgentQuestion` in src/core/task.ts.
  * Producers MUST classify any prompt to the user into one of these kinds —
@@ -356,6 +386,7 @@ export interface Task {
   productBrief?: ProductBrief
   openQuestions?: AgentQuestion[]
   spec?: string
+  structuredSpec?: StructuredSpec
   acceptanceCriteria?: AcceptanceCriterion[]
   gateResults?: GateResult[]
   reviewVerdicts?: ReviewVerdict[]

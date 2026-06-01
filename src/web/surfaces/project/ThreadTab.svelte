@@ -204,6 +204,18 @@
     gitStory?: GitStorySnapshot | undefined
     summary: string; feedback: string; revisionCount?: number | undefined
   }
+  interface HistoryNoteTurn {
+    kind: 'history_note'
+    id: string; at: string; persona: TurnPersona; status: TurnStatus; phase: TurnPhase
+    taskId: string; taskTitle: string
+    constructionMode?: ConstructionMode | undefined
+    category: 'source' | 'request' | 'system'
+    label: string
+    summary: string
+    references?: string[] | undefined
+    count?: number | undefined
+    entries?: Array<{ at: string; label: string; summary: string }> | undefined
+  }
   interface InFlightTurn {
     kind: 'inflight'
     id: string; at: string; persona: TurnPersona; status: TurnStatus; phase: TurnPhase
@@ -260,6 +272,7 @@
     | BriefTurn
     | AgentQuestionTurn
     | SpecReviewTurn
+    | HistoryNoteTurn
     | ReviewFeedbackTurn
     | EscalationTurn
     | InFlightTurn
@@ -271,6 +284,7 @@
     turns: Turn[]
     latestTurn: Turn
     activeTurn: Turn | null
+    currentTurn: Turn | null
   }
 
   let turns = $state<Turn[]>([])
@@ -311,10 +325,19 @@
   let sourcePreviewLoadingRef = $state<string | null>(null)
   let sourcePreviewError = $state<string | null>(null)
   let sourcePreviewRequestId = 0
+  let documentPreview = $state<{
+    kind: 'brief' | 'spec'
+    taskId: string
+    taskTitle: string
+    title: string
+    content: string
+  } | null>(null)
   let importHandoff = $state<{ tasksAdded: number; sourceCount: number } | null>(null)
   let importHandoffFocused = $state(false)
   let selectedTurnId = $state<string | null>(null)
   let detailScrollEl = $state<HTMLElement | null>(null)
+  let detailShouldStickToBottom = $state(true)
+  let lastAutoScrollKey = $state<string | null>(null)
   let compactThreadMode = $state(false)
   let compactPane = $state<'list' | 'detail'>('list')
   let pollHandle: ReturnType<typeof setInterval> | null = null
@@ -393,6 +416,34 @@
     return {
       content: content.slice(0, SOURCE_PREVIEW_RENDER_CHAR_LIMIT).trimEnd(),
       truncated: true,
+    }
+  }
+
+  function openBriefPreview(turn: BriefTurn): void {
+    const sections = [
+      `## Scope\n${briefScopeForReaders(turn.brief, turn.taskTitle)}`,
+    ]
+    const doneWhen = briefDoneWhenForReaders(turn.brief)
+    if (doneWhen) sections.push(`## Done when\n${doneWhen}`)
+    if (turn.brief.antiPatterns?.length) {
+      sections.push(`## Out of scope\n${turn.brief.antiPatterns.map(item => `- ${item}`).join('\n')}`)
+    }
+    documentPreview = {
+      kind: 'brief',
+      taskId: turn.taskId,
+      taskTitle: turn.taskTitle,
+      title: 'Brief',
+      content: sections.join('\n\n'),
+    }
+  }
+
+  function openSpecPreview(turn: SpecReviewTurn): void {
+    documentPreview = {
+      kind: 'spec',
+      taskId: turn.taskId,
+      taskTitle: turn.taskTitle,
+      title: 'Spec',
+      content: turn.spec.trim() || '_No spec saved yet._',
     }
   }
 
@@ -957,6 +1008,22 @@
     return 'neutral'
   }
 
+  function turnIndexChip(
+    turn: Turn,
+  ): { label: string; tone: 'ok' | 'warn' | 'neutral' | 'accent' | 'running' | 'agent' | 'agent-attention' } | null {
+    const owner = ownershipLabel(turn)
+    if (owner) {
+      return { label: owner, tone: ownershipTone(turn) }
+    }
+    if (showStatusChip(turn)) {
+      return { label: turnStatusChipLabel(turn), tone: turnStatusChipTone(turn) }
+    }
+    if (turn.kind === 'inflight' && turn.status !== 'done') {
+      return { label: taskStateLabel(turn), tone: tone(turn) === 'warn' ? 'warn' : 'agent' }
+    }
+    return null
+  }
+
   function turnLiveAgent(t: Turn): LiveAgent | undefined {
     if (t.status !== 'active') return undefined
     if (runStatus !== 'running' && runStatus !== 'stopping') return undefined
@@ -1124,14 +1191,26 @@
   })
 
   function threadChainKey(turn: Turn): string {
-    if (turn.kind === 'setup_step') return `setup:${turn.stepId}`
+    if (turn.kind === 'setup_step') return 'setup'
     if (turn.kind === 'pressure_test_question') return `intake:${turn.intakeId}`
     if (turn.kind === 'request') {
       if (turn.taskId) return `task:${turn.taskId}`
-      return `request:${turn.requestId}`
+      return `intake:${turn.requestId}`
     }
     if ('taskId' in turn) return `task:${turn.taskId}`
     return turn.id
+  }
+
+  function setCapabilityPathDraft(requestId: string, value: string): void {
+    capabilityPathDrafts = { ...capabilityPathDrafts, [requestId]: value }
+  }
+
+  function setCapabilityFallbackDraft(requestId: string, value: string): void {
+    capabilityFallbackDrafts = { ...capabilityFallbackDrafts, [requestId]: value }
+  }
+
+  function setCapabilityBlockDraft(requestId: string, value: string): void {
+    capabilityBlockDrafts = { ...capabilityBlockDrafts, [requestId]: value }
   }
 
   const threadChains = $derived.by((): ThreadChain[] => {
@@ -1147,7 +1226,10 @@
         const ordered = [...chainTurns].sort(compareOperationTurns)
         const latestTurn = [...chainTurns].sort(compareArchiveTurns)[0] ?? ordered[ordered.length - 1]!
         const activeTurn = [...ordered].reverse().find(turn => turn.status === 'active') ?? null
-        return { id, turns: ordered, latestTurn, activeTurn }
+        const currentTurn = [...chainTurns]
+          .filter(turn => turn.status !== 'done' || turn.phase !== 'done')
+          .sort(compareOperationTurns)[0] ?? null
+        return { id, turns: ordered, latestTurn, activeTurn, currentTurn }
       })
       .filter(chain => chain.turns.some(turn => turn.phase !== 'done'))
       .sort((left, right) => compareArchiveTurns(left.latestTurn, right.latestTurn))
@@ -1164,12 +1246,26 @@
       : threadChains[0]?.id ?? null
     if (!selectedTurnId || !threadChains.some(chain => chain.id === selectedTurnId)) {
       selectedTurnId = preferred
+      detailShouldStickToBottom = true
     }
     if (!compactThreadMode) {
       compactPane = 'detail'
     } else if (compactPane === 'detail' && !selectedTurnId) {
       compactPane = 'list'
     }
+  })
+
+  $effect(() => {
+    const key = detailAutoScrollKey
+    if (!detailScrollEl) return
+    if (lastAutoScrollKey === key) return
+    lastAutoScrollKey = key
+    if (!detailShouldStickToBottom) return
+    queueMicrotask(() => {
+      requestAnimationFrame(() => {
+        scrollDetailToBottom('auto')
+      })
+    })
   })
 
   $effect(() => {
@@ -2179,6 +2275,7 @@
     if (turn.kind === 'setup_step') return turn.why
     if (turn.kind === 'request') return turn.routingSummary
     if (turn.kind === 'pressure_test_question') return pressureQuestionWhy(turn)
+    if (turn.kind === 'history_note') return turn.summary
     if (turn.kind === 'agent_question') {
       const question = visibleQuestionsForCard(questionsForTurn(turn))[0]
       return question?.restatement ?? question?.prompt ?? 'Guildhall needs an answer.'
@@ -2191,11 +2288,183 @@
     return ''
   }
 
+  function isHistoricalTaskEvent(turn: Turn): boolean {
+    if (turn.kind === 'history_note') return true
+    return (
+      (turn.kind === 'agent_question' ||
+        turn.kind === 'brief_approval' ||
+        turn.kind === 'spec_review' ||
+        turn.kind === 'inflight' ||
+        turn.kind === 'review_feedback' ||
+        turn.kind === 'escalation') &&
+      (turn.status === 'done' || turn.phase === 'done')
+    )
+  }
+
+  function historyEventLabel(turn: Turn): string | null {
+    switch (turn.kind) {
+      case 'history_note':
+        return turn.label
+      case 'brief_approval':
+        return turn.status === 'done' ? 'Brief finalized' : 'Brief draft'
+      case 'spec_review':
+        return turn.status === 'done' ? 'Spec approved' : 'Spec draft'
+      case 'agent_question':
+        return turn.status === 'done' ? 'Question answered' : 'Question asked'
+      case 'review_feedback':
+        return 'Review feedback'
+      case 'escalation':
+        return turn.status === 'done' ? 'Blocker resolved' : 'Blocker raised'
+      case 'inflight':
+        if (turn.importedDraft || turn.taskStatus === 'exploring' || turn.taskStatus === 'import_draft') {
+          return 'Task shaping update'
+        }
+        if (turn.taskStatus === 'in_progress') return 'Work update'
+        if (turn.taskStatus === 'ready') return 'Ready for work'
+        return 'Task update'
+      default:
+        return null
+    }
+  }
+
+  function historyEventSummary(turn: Turn): string {
+    switch (turn.kind) {
+      case 'history_note':
+        return turn.summary
+      case 'brief_approval':
+        return turn.status === 'done'
+          ? 'Guildhall locked the brief and carried this thread into spec drafting.'
+          : 'Guildhall drafted the brief and is waiting for a final decision.'
+      case 'spec_review':
+        if (turn.taskId === 'task-meta-intake') {
+          return turn.status === 'done'
+            ? 'The proposed project split was accepted and can shape the next work.'
+            : 'Guildhall drafted a proposed project split and is waiting for approval.'
+        }
+        return turn.status === 'done'
+          ? 'The spec was approved and this thread can move into ready work.'
+          : 'Guildhall drafted a spec and is waiting for review.'
+      case 'agent_question': {
+        const answered = [...questionsForTurn(turn)].reverse().find((question) => (question.answer ?? '').trim())
+        return answered?.answer?.trim()
+          ?? 'You answered Guildhall’s clarifying question and the thread moved forward.'
+      }
+      case 'review_feedback':
+        return turn.summary
+      case 'escalation':
+        return turn.details?.trim() || turn.summary
+      case 'inflight':
+        if (turn.importedDraft || turn.taskStatus === 'exploring' || turn.taskStatus === 'import_draft') {
+          return 'Guildhall reshaped the request into concrete task requirements and acceptance checks.'
+        }
+        if (turn.taskStatus === 'ready') {
+          return 'Guildhall finished shaping this work and left it ready to start.'
+        }
+        if (turn.taskStatus === 'in_progress') {
+          return turn.summary || 'Guildhall advanced this thread into active work.'
+        }
+        return turn.summary || 'Guildhall advanced this thread to the next stage.'
+      default:
+        return turnIndexSummary(turn)
+    }
+  }
+
+  function historyEventNeedsSummary(turn: Turn): boolean {
+    if (turn.kind === 'brief_approval' && turn.status === 'done') return false
+    if (turn.kind === 'history_note' && turn.category === 'request') return false
+    return historyEventSummary(turn).trim().length > 0
+  }
+
+  function historyQuestionPrompt(turn: AgentQuestionTurn): string {
+    const question = [...questionsForTurn(turn)].find(candidate =>
+      Boolean((candidate.restatement ?? candidate.prompt ?? '').trim()),
+    ) ?? turn.question
+    return (question.restatement ?? question.prompt ?? 'Guildhall asked a clarifying question.').trim()
+  }
+
+  function historyQuestionAnswer(turn: AgentQuestionTurn): string {
+    const answered = [...questionsForTurn(turn)].reverse().find((question) => (question.answer ?? '').trim())
+    return answered?.answer?.trim()
+      ?? 'You answered Guildhall’s clarifying question and the thread moved forward.'
+  }
+
+  function showHistoricalMeta(turn: Turn): boolean {
+    return !isHistoricalTaskEvent(turn)
+  }
+
+  function showHistoricalStatus(turn: Turn): boolean {
+    return !isHistoricalTaskEvent(turn)
+  }
+
+  function activeDockTitle(turn: Turn): string {
+    if (turn.kind === 'brief_approval') return 'Review this task brief'
+    if (turn.kind === 'spec_review') {
+      return turn.taskId === 'task-meta-intake' ? 'Review the proposed split' : 'Review the spec draft'
+    }
+    if (turn.kind === 'inflight') {
+      if (turn.importedDraft || turn.taskStatus === 'exploring' || turn.taskStatus === 'import_draft') {
+        return 'Continue shaping brief'
+      }
+      if (turn.taskStatus === 'ready') return 'Ready for work'
+      if (turn.taskStatus === 'in_progress') return 'Work in progress'
+    }
+    return turnIndexTitle(turn)
+  }
+
+  function activeDockSummary(turn: Turn): string | null {
+    if (turn.kind === 'brief_approval') return null
+    if (turn.kind === 'spec_review') return null
+    if (turn.kind === 'inflight' && (turn.importedDraft || turn.taskStatus === 'exploring' || turn.taskStatus === 'import_draft')) {
+      return null
+    }
+    const summary = turnIndexSummary(turn).trim()
+    return summary.length ? summary : null
+  }
+
+  function taskTabHref(taskId: string, tab: 'current' | 'spec'): string {
+    return `${currentTaskHref(taskId)}?tab=${tab}`
+  }
+
+  function dockSourceSummary(turn: InFlightTurn): string | null {
+    const references = turn.sourceNote?.references?.length ?? 0
+    if (turn.taskDescription && references > 0) {
+      return `Starting point saved · ${references} source note${references === 1 ? '' : 's'}`
+    }
+    if (turn.taskDescription) return 'Starting point saved'
+    if (references > 0) return `${references} source note${references === 1 ? '' : 's'} attached`
+    return null
+  }
+
+  function dockChecklistSummary(turn: InFlightTurn): { complete: string; missing: string } | null {
+    const checklist = turn.checklist
+    if (!checklist) return null
+    const missingCount = checklist.steps.filter(step => step.status !== 'done' && step.status !== 'skipped').length
+    return {
+      complete: `${checklist.doneCount} of ${checklist.totalSteps} complete`,
+      missing: missingCount === 0 ? 'Nothing missing' : `${missingCount} item${missingCount === 1 ? '' : 's'} still missing`,
+    }
+  }
+
+  function detailNearBottom(el: HTMLElement): boolean {
+    return el.scrollHeight - el.clientHeight - el.scrollTop <= 24
+  }
+
+  function scrollDetailToBottom(behavior: ScrollBehavior = 'auto'): void {
+    if (!detailScrollEl) return
+    detailScrollEl.scrollTo({ top: detailScrollEl.scrollHeight, behavior })
+  }
+
+  function handleDetailScroll(): void {
+    if (!detailScrollEl) return
+    detailShouldStickToBottom = detailNearBottom(detailScrollEl)
+  }
+
   function focusTurn(turnId: string): void {
     selectedTurnId = turnId
+    detailShouldStickToBottom = true
     if (compactThreadMode) compactPane = 'detail'
     queueMicrotask(() => {
-      detailScrollEl?.scrollTo({ top: detailScrollEl.scrollHeight, behavior: 'smooth' })
+      scrollDetailToBottom('smooth')
     })
   }
 
@@ -2207,18 +2476,17 @@
   type DockedTurn = AgentQuestionTurn | PressureTestQuestionTurn | BriefTurn | SpecReviewTurn | InFlightTurn
 
   function isDockableTurn(turn: Turn): turn is DockedTurn {
-    return (
-      turn.kind === 'agent_question' ||
-      turn.kind === 'pressure_test_question' ||
-      turn.kind === 'brief_approval' ||
-      turn.kind === 'spec_review' ||
-      turn.kind === 'inflight'
-    )
+    if (turn.kind === 'agent_question' || turn.kind === 'pressure_test_question') {
+      return turn.status === 'active'
+    }
+    return (turn.kind === 'brief_approval' || turn.kind === 'spec_review' || turn.kind === 'inflight') && turn.status !== 'done'
   }
 
   const selectedTurn = $derived.by(() => {
     if (!selectedTurnId) return null
-    return threadChains.find(chain => chain.id === selectedTurnId)?.latestTurn ?? null
+    const chain = threadChains.find(candidate => candidate.id === selectedTurnId)
+    if (!chain) return null
+    return chain.currentTurn ?? chain.latestTurn
   })
 
   const selectedChain = $derived.by(() => {
@@ -2227,9 +2495,9 @@
   })
 
   const activeDockTurn = $derived.by((): DockedTurn | null => {
-    const active = selectedChain?.activeTurn
-    if (!active || !isDockableTurn(active)) return null
-    return active
+    const current = selectedChain?.currentTurn
+    if (!current || !isDockableTurn(current)) return null
+    return current
   })
 
   const historyTurns = $derived.by(() => {
@@ -2242,6 +2510,13 @@
     if (!selectedChain) return []
     if (!selectedTurn) return selectedChain.turns
     return [selectedTurn, ...selectedChain.turns.filter(turn => turn.id !== selectedTurn.id)]
+  })
+
+  const detailAutoScrollKey = $derived.by(() => {
+    const chainId = selectedChain?.id ?? 'none'
+    const historyKey = historyTurns.map(turn => turn.id).join('|')
+    const dockId = activeDockTurn?.id ?? 'none'
+    return `${chainId}::${historyKey}::${dockId}`
   })
 
   type FooterComposer =
@@ -2291,7 +2566,7 @@
         title: 'Request changes to the brief',
         description: 'Tell Guildhall what should change before this brief moves forward.',
         placeholder: 'Correct the brief or add missing context…',
-        submitLabel: 'Send changes',
+        submitLabel: 'Send',
       }
     }
     if (turn.kind === 'spec_review') {
@@ -2299,14 +2574,14 @@
         title: turn.taskId === 'task-meta-intake' ? 'Change the proposed split' : 'Request changes to the spec',
         description: 'Keep the thread moving, but redirect the current draft before Guildhall treats it as approved.',
         placeholder: 'Correct the spec or ask Guildhall to revisit it…',
-        submitLabel: 'Send changes',
+        submitLabel: 'Send',
       }
     }
     return {
       title: 'Add a thread note',
       description: 'Give Guildhall a correction, constraint, or steering note for this active work.',
       placeholder: 'Add a note for Guildhall…',
-      submitLabel: 'Send note',
+      submitLabel: 'Send',
     }
   }
 
@@ -2331,7 +2606,7 @@
           title: 'Ask Guildhall to explain first',
           description: 'This keeps the question open while Guildhall explains its assumptions, project terms, or source evidence.',
           placeholder: 'Ask what Guildhall means, what evidence it used, or what context is missing…',
-          submitLabel: 'Ask for context',
+          submitLabel: 'Send',
         }
       }
     }
@@ -2363,7 +2638,7 @@
             title: 'Reply in thread',
             description: 'Guildhall is waiting on a free-form answer before it can continue this thread.',
             placeholder: 'Answer this question or redirect Guildhall…',
-            submitLabel: 'Send answer',
+            submitLabel: 'Send',
           }
         }
       }
@@ -2378,8 +2653,23 @@
           title: 'Reply in thread',
           description: 'Answer this intake question here to keep the thread moving without opening a separate card form.',
           placeholder: 'Answer with a sentence or short paragraph. Include constraints or success measures if they matter.',
-          submitLabel: hiddenPressureQuestionCount > 0 ? 'Submit and continue' : 'Submit answer',
+          submitLabel: 'Send',
         }
+      }
+    }
+
+    if (
+      activeDockTurn &&
+      (
+        activeDockTurn.kind === 'brief_approval' ||
+        activeDockTurn.kind === 'spec_review' ||
+        activeDockTurn.kind === 'inflight'
+      )
+    ) {
+      return {
+        kind: 'task_reply',
+        turn: activeDockTurn,
+        ...footerReplyDetails(activeDockTurn),
       }
     }
 
@@ -2472,13 +2762,59 @@
       </Row>
     </Card>
   {:else if turns.length === 0}
-    <Card title="Nothing here yet">
-      <p class="muted">
-        {allTerminalReadinessMessage ?? 'Add a task to start the thread.'}
-      </p>
-    </Card>
-  {:else}
     <Stack gap="3">
+      <Card title="Nothing here yet">
+        <p class="muted">
+          {allTerminalReadinessMessage ?? 'Add a task to start the thread.'}
+        </p>
+      </Card>
+
+      {#if pendingCapabilityRequests.length > 0}
+        <Card title="Access requests" tone="warn" frosted>
+          <Stack gap="3">
+            {#each pendingCapabilityRequests as request (request.id)}
+              <UtilityPanel tone="warn">
+                <Stack gap="3">
+                  <div class="field">
+                    <strong>Guildhall needs a decision before it can safely use this folder.</strong>
+                    <p class="muted">{request.reason}</p>
+                  </div>
+
+                  {#if request.mount}
+                    <Input
+                      value={capabilityPathDrafts[request.id] ?? request.mount.hostPath}
+                      oninput={(value) => setCapabilityPathDraft(request.id, value)}
+                    />
+                  {/if}
+
+                  {#if request.fallback}
+                    <Textarea
+                      rows={2}
+                      value={capabilityFallbackDrafts[request.id] ?? request.fallback}
+                      oninput={(value) => setCapabilityFallbackDraft(request.id, value)}
+                    />
+                  {/if}
+
+                  <Row justify="end" gap="2" wrap>
+                    <Button variant="secondary" onclick={() => void approveCapabilityRequest(request, 'read-only')}>
+                      Approve read-only
+                    </Button>
+                    <Button variant="primary" onclick={() => void approveCapabilityRequest(request, 'read-write')}>
+                      Approve read-write
+                    </Button>
+                    <Button variant="ghost" onclick={() => void denyCapabilityRequest(request)}>
+                      Use fallback
+                    </Button>
+                  </Row>
+                </Stack>
+              </UtilityPanel>
+            {/each}
+          </Stack>
+        </Card>
+      {/if}
+    </Stack>
+  {:else}
+    <div class="thread-body">
       {#if threadChains.length === 0}
         <Card title="Nothing current">
           <p class="muted">
@@ -2498,28 +2834,26 @@
           >
             <div class="thread-index-list">
               {#each threadChains as chain (chain.id)}
+                {@const indexTurn = chain.currentTurn ?? chain.latestTurn}
+                {@const indexChip = turnIndexChip(indexTurn)}
                 <button
                   type="button"
                   class="thread-index-row"
                   class:active={selectedTurnId === chain.id}
                   onclick={() => focusTurn(chain.id)}
                 >
+                  <div class="thread-index-row-chips">
+                    {#if indexChip}
+                      <Chip label={indexChip.label} tone={indexChip.tone} />
+                    {/if}
+                  </div>
                   <div class="thread-index-row-top">
                     <strong>{turnIndexTitle(chain.latestTurn)}</strong>
                     {#if compactRelativeTime(chain.latestTurn.at)}
                       <span class="thread-index-time">{compactRelativeTime(chain.latestTurn.at)}</span>
                     {/if}
                   </div>
-                  <div class="thread-index-row-chips">
-                    {#if chain.activeTurn && ownershipLabel(chain.activeTurn)}
-                      <Chip label={ownershipLabel(chain.activeTurn) ?? ''} tone={ownershipTone(chain.activeTurn)} />
-                    {:else if chain.activeTurn && showStatusChip(chain.activeTurn)}
-                      <Chip label={turnStatusChipLabel(chain.activeTurn)} tone={turnStatusChipTone(chain.activeTurn)} />
-                    {:else if showStatusChip(chain.latestTurn)}
-                      <Chip label={turnStatusChipLabel(chain.latestTurn)} tone={turnStatusChipTone(chain.latestTurn)} />
-                    {/if}
-                  </div>
-                  <p>{turnIndexSummary(chain.activeTurn ?? chain.latestTurn)}</p>
+                  <p>{turnIndexSummary(indexTurn)}</p>
                 </button>
               {/each}
             </div>
@@ -2530,23 +2864,101 @@
           <section
             class="thread-detail"
             aria-label="Selected thread"
+            bind:this={detailScrollEl}
+            onscroll={handleDetailScroll}
             in:fly|local={{ x: compactThreadMode ? 26 : 0, duration: 180, opacity: 0.16 }}
             out:fly|local={{ x: compactThreadMode ? 20 : 0, duration: 160, opacity: 0.12 }}
           >
             <div class="thread-detail-scroll-wrap">
-              <div class="thread-detail-scroll" bind:this={detailScrollEl} aria-label="Thread history">
-                <div class="thread-detail-spacer" aria-hidden="true"></div>
+              <div class="thread-detail-scroll" aria-label="Thread history">
                 <Stack gap="3" class="thread-list">
                   {#each historyTurns as t (t.id)}
-        <div
-          class="turn turn-{t.status}"
-          class:turn-import-queue={t.kind === 'inflight' && t.importedDraft && t.status === 'pending'}
-          data-turn-id={t.id}
-        >
-          <Card tone={tone(t)}>
-            <InteractionCardLayout>
+        {#if isHistoricalTaskEvent(t)}
+          <div
+            class="thread-history-item"
+            class:thread-history-item-question={t.kind === 'agent_question'}
+            data-turn-id={t.id}
+          >
+            {#if t.kind === 'agent_question'}
+              <div class="thread-chat-bubble thread-chat-bubble-agent">
+                <div class="thread-chat-bubble-head">
+                  <strong>Guildhall</strong>
+                  {#if compactRelativeTime(t.at)}
+                    <span>{compactRelativeTime(t.at)}</span>
+                  {/if}
+                </div>
+                <p>{historyQuestionPrompt(t)}</p>
+              </div>
+              <div class="thread-chat-bubble thread-chat-bubble-user">
+                <div class="thread-chat-bubble-head">
+                  <strong>You</strong>
+                </div>
+                <p>{historyQuestionAnswer(t)}</p>
+              </div>
+            {:else}
+              <div
+                class="thread-event"
+                class:thread-event-source={t.kind === 'history_note' && t.category === 'source'}
+                class:thread-event-request={t.kind === 'history_note' && t.category === 'request'}
+                class:thread-event-system={t.kind === 'history_note' && t.category === 'system'}
+                class:thread-event-milestone={t.kind !== 'history_note'}
+              >
+                <div class="thread-event-head">
+                  <strong>{historyEventLabel(t) ?? 'Update'}</strong>
+                  {#if compactRelativeTime(t.at)}
+                    <span>{compactRelativeTime(t.at)}</span>
+                  {/if}
+                </div>
+                {#if historyEventNeedsSummary(t)}
+                  <p>{historyEventSummary(t)}</p>
+                {/if}
+                {#if t.kind === 'history_note' && t.references?.length}
+                  <div class="thread-event-links">
+                    {#each t.references as ref (ref)}
+                      <button
+                        type="button"
+                        class="thread-event-link"
+                        title="Open source note"
+                        aria-label={`Open source note ${ref}`}
+                        disabled={sourcePreviewLoadingRef === ref}
+                        onclick={() => void openSourceNote(ref)}
+                      >
+                        <span>{sourceDisplayName(ref)}</span>
+                      </button>
+                    {/each}
+                  </div>
+                {/if}
+                {#if t.kind === 'history_note' && t.category === 'system' && (t.count ?? 0) > 1 && t.entries?.length}
+                  <details class="thread-history-cluster">
+                    <summary>Show {t.count} recovery updates</summary>
+                    <div class="thread-history-cluster-list">
+                      {#each t.entries as entry (`${entry.at}:${entry.label}`)}
+                        <div class="thread-history-cluster-item">
+                          <div class="thread-history-cluster-head">
+                            <strong>{entry.label}</strong>
+                            {#if compactRelativeTime(entry.at)}
+                              <span>{compactRelativeTime(entry.at)}</span>
+                            {/if}
+                          </div>
+                          <p>{entry.summary}</p>
+                        </div>
+                      {/each}
+                    </div>
+                  </details>
+                {/if}
+              </div>
+            {/if}
+          </div>
+        {:else}
+          <div
+            class="turn turn-{t.status}"
+            class:turn-import-queue={t.kind === 'inflight' && t.importedDraft && t.status === 'pending'}
+            data-turn-id={t.id}
+          >
+            <Card tone={tone(t)} frosted>
+              <InteractionCardLayout>
               {#snippet status()}
-                {#if hasCardStatus(t)}
+                {#if showHistoricalStatus(t) && hasCardStatus(t)}
                   <Row align="center" gap="2">
                     {#if showConstructionModeChip(t)}
                       <Chip label={constructionModeLabel(t) ?? ''} tone="neutral" />
@@ -2565,7 +2977,7 @@
               {/snippet}
               {#snippet meta()}
                 <div class="meta">
-                  {#if 'taskTitle' in t}
+                  {#if showHistoricalMeta(t) && 'taskTitle' in t}
                     {@const taskTitle = displayTaskTitle(t)}
                     <button
                       type="button"
@@ -2576,9 +2988,11 @@
                       <span class="task-chip-text">{taskTitle}</span>
                     </button>
                   {/if}
-                  <span class="persona">{personaLabel(t.persona)}</span>
-                  {#if t.phase === 'done' && formatArchiveTime(t.at)}
-                    <span class="archive-time">Completed {formatArchiveTime(t.at)}</span>
+                  {#if showHistoricalMeta(t)}
+                    <span class="persona">{personaLabel(t.persona)}</span>
+                    {#if t.phase === 'done' && formatArchiveTime(t.at)}
+                      <span class="archive-time">Completed {formatArchiveTime(t.at)}</span>
+                    {/if}
                   {/if}
                 </div>
               {/snippet}
@@ -2593,7 +3007,7 @@
                   />
                 {/if}
               {/snippet}
-              {#if gitStoryVisible(t) && 'gitStory' in t && t.gitStory}
+              {#if !isHistoricalTaskEvent(t) && gitStoryVisible(t) && 'gitStory' in t && t.gitStory}
                 <div class="git-story-callout" aria-label="Git story">
                   <div class="git-story-main">
                     <Chip label={gitStoryLabel(t.gitStory)} tone={gitStoryTone(t.gitStory)} />
@@ -2604,7 +3018,57 @@
                   {/if}
                 </div>
               {/if}
-                {#if t.kind === 'setup_step'}
+                {#if isHistoricalTaskEvent(t)}
+                  <div
+                    class="thread-event"
+                    class:thread-event-source={t.kind === 'history_note' && t.category === 'source'}
+                    class:thread-event-request={t.kind === 'history_note' && t.category === 'request'}
+                    class:thread-event-system={t.kind === 'history_note' && t.category === 'system'}
+                    class:thread-event-milestone={t.kind !== 'history_note'}
+                  >
+                    <div class="thread-event-head">
+                      <strong>{historyEventLabel(t) ?? 'Update'}</strong>
+                      {#if compactRelativeTime(t.at)}
+                        <span>{compactRelativeTime(t.at)}</span>
+                      {/if}
+                    </div>
+                    <p>{historyEventSummary(t)}</p>
+                    {#if t.kind === 'history_note' && t.references?.length}
+                      <div class="thread-event-links">
+                        {#each t.references as ref (ref)}
+                          <button
+                            type="button"
+                            class="thread-event-link"
+                            title="Open source note"
+                            aria-label={`Open source note ${ref}`}
+                            disabled={sourcePreviewLoadingRef === ref}
+                            onclick={() => void openSourceNote(ref)}
+                          >
+                            <span>{sourceDisplayName(ref)}</span>
+                          </button>
+                        {/each}
+                      </div>
+                    {/if}
+                    {#if t.kind === 'history_note' && t.category === 'system' && (t.count ?? 0) > 1 && t.entries?.length}
+                      <details class="thread-history-cluster">
+                        <summary>Show {t.count} recovery updates</summary>
+                        <div class="thread-history-cluster-list">
+                          {#each t.entries as entry (`${entry.at}:${entry.label}`)}
+                            <div class="thread-history-cluster-item">
+                              <div class="thread-history-cluster-head">
+                                <strong>{entry.label}</strong>
+                                {#if compactRelativeTime(entry.at)}
+                                  <span>{compactRelativeTime(entry.at)}</span>
+                                {/if}
+                              </div>
+                              <p>{entry.summary}</p>
+                            </div>
+                          {/each}
+                        </div>
+                      </details>
+                    {/if}
+                  </div>
+                {:else if t.kind === 'setup_step'}
                   <div class="setup-title">
                     <h3 class="prompt"><Markdown source={t.title} inline /></h3>
                     {#if t.skippable}
@@ -3157,7 +3621,7 @@
                   {:else}
                   <Row justify="end" gap="2">
                     <Button variant="secondary" disabled={busyTurnId === t.id} onclick={() => nav(currentTaskHref(t.taskId))}>
-                      Open task
+                      Details...
                     </Button>
                     <Button variant="secondary" disabled={busyTurnId === t.id} onclick={() => (replyTurnId = t.id)}>
                       {isMetaIntakeDraft ? 'Change the split' : 'Request changes'}
@@ -3214,7 +3678,7 @@
                 {/if}
                 {#if t.status === 'active'}
                   <Row justify="end" gap="2">
-                    <Button variant={guidance.actionOwner === 'guildhall' ? 'secondary' : 'primary'} onclick={() => nav(currentTaskHref(t.taskId))}>Open task</Button>
+                    <Button variant={guidance.actionOwner === 'guildhall' ? 'secondary' : 'primary'} onclick={() => nav(currentTaskHref(t.taskId))}>Details...</Button>
                     {#if guidance.actionOwner === 'guildhall'}
                       <Button variant="agent" disabled={busyTurnId === t.id || runBusy} onclick={() => resolveEscalationAndResume(t)}>
                         <Icon name="sparkles" size={14} />
@@ -3242,7 +3706,7 @@
                       size="sm"
                       onclick={() => nav(currentTaskHref(t.taskId))}
                     >
-                      Open task
+                      Details...
                     </Button>
                   </Row>
                 </UtilityPanel>
@@ -3370,7 +3834,7 @@
                 {#if t.taskId !== 'task-meta-intake' && t.taskStatus === 'exploring' && !turnLiveAgent(t) && !isQueuedSpecRevision(t)}
                   <Row justify="end" gap="2" wrap>
                     <Button variant="secondary" onclick={() => nav(currentTaskHref(t.taskId))}>
-                      Inspect details
+                      Details...
                     </Button>
                     <Button variant="ghost" disabled={busyTurnId === t.id} onclick={() => (replyTurnId = t.id)}>
                       Add optional note
@@ -3496,7 +3960,7 @@
                       {/if}
                     {:else if t.importedDraft && (t.taskStatus === 'import_draft' || t.taskStatus === 'exploring') && !turnLiveAgent(t)}
                       <Button variant="secondary" disabled={busyTurnId === t.id} onclick={() => nav(currentTaskHref(t.taskId))}>
-                        Inspect details
+                        Details...
                       </Button>
                       <Button variant="ghost" disabled={busyTurnId === t.id} onclick={() => (replyTurnId = t.id)}>
                         Add optional note
@@ -3566,7 +4030,7 @@
                       {/if}
                     {:else}
                       <Button variant={t.taskStatus === 'exploring' ? 'human' : 'secondary'} onclick={() => nav(currentTaskHref(t.taskId))}>
-                        {t.taskStatus === 'exploring' ? 'Inspect details' : 'Open task'}
+                        Details...
                       </Button>
                       {#if t.taskStatus === 'ready' && hasIncompleteTaskChecklist(t)}
                         <Button variant="ghost" disabled={busyTurnId === t.id} onclick={() => (replyTurnId = t.id)}>
@@ -3648,9 +4112,10 @@
                   {/if}
                 {/if}
               {/if}
-            </InteractionCardLayout>
-          </Card>
-        </div>
+              </InteractionCardLayout>
+            </Card>
+          </div>
+        {/if}
                   {/each}
                 </Stack>
 
@@ -3669,143 +4134,151 @@
                     {/if}
                   </p>
                 {/if}
-              </div>
-              <div class="thread-detail-mask" aria-hidden="true"></div>
-            </div>
 
-            {#if activeDockTurn}
-              <div
-                class="thread-active-dock"
-                aria-label="Active thread dock"
-                data-turn-id={activeDockTurn.id}
-              >
-                <Card tone={tone(activeDockTurn)}>
-                  <div class="thread-active-dock-body">
-                    <div class="thread-active-dock-head">
-                      <div class="thread-active-dock-copy">
-                        <strong>{turnIndexTitle(activeDockTurn)}</strong>
-                        <p>{turnIndexSummary(activeDockTurn)}</p>
-                      </div>
-                      <div class="thread-active-dock-chips">
-                        {#if ownershipLabel(activeDockTurn)}
-                          <Chip label={ownershipLabel(activeDockTurn) ?? ''} tone={ownershipTone(activeDockTurn)} />
-                        {:else if showStatusChip(activeDockTurn)}
-                          <Chip label={turnStatusChipLabel(activeDockTurn)} tone={turnStatusChipTone(activeDockTurn)} />
-                        {/if}
-                      </div>
-                    </div>
-
-                    {#if activeDockTurn.kind === 'inflight'}
-                      {#if activeDockTurn.taskDescription || activeDockTurn.sourceNote}
-                        <details class="thread-disclosure task-context-disclosure">
-                          <summary>
-                            <span>Starting point and source notes</span>
-                            {#if activeDockTurn.sourceNote?.references?.length}
-                              <Chip label={badgeCountLabel(activeDockTurn.sourceNote.references.length)} tone="neutral" />
+                {#if activeDockTurn || footerComposer}
+                  <div class="thread-footer" aria-label="Thread footer">
+                    {#if activeDockTurn}
+                      <div
+                        class="thread-active-dock"
+                        aria-label="Active thread dock"
+                        data-turn-id={activeDockTurn.id}
+                      >
+                        <Card tone={tone(activeDockTurn)} frosted>
+                          <div class="thread-active-dock-body">
+                        <div class="thread-active-dock-head">
+                          <div class="thread-active-dock-copy">
+                            <strong>{activeDockTitle(activeDockTurn)}</strong>
+                            {#if activeDockSummary(activeDockTurn)}
+                              <p>{activeDockSummary(activeDockTurn)}</p>
                             {/if}
-                          </summary>
-                          <UtilityPanel className="task-context" tone="neutral">
-                            {#if activeDockTurn.taskDescription}
-                              <div class="field">
-                                <span class="field-label">Starting point</span>
-                                <Markdown source={activeDockTurn.taskDescription} />
+                          </div>
+                          <div class="thread-active-dock-chips">
+                            {#if ownershipLabel(activeDockTurn)}
+                              <Chip label={ownershipLabel(activeDockTurn) ?? ''} tone={ownershipTone(activeDockTurn)} />
+                            {:else if showStatusChip(activeDockTurn)}
+                              <Chip label={turnStatusChipLabel(activeDockTurn)} tone={turnStatusChipTone(activeDockTurn)} />
+                            {/if}
+                          </div>
+                        </div>
+
+                        {#if activeDockTurn.kind === 'inflight'}
+                          {#if dockSourceSummary(activeDockTurn)}
+                            <p class="thread-active-summary">{dockSourceSummary(activeDockTurn)}</p>
+                          {/if}
+
+                          {#if dockChecklistSummary(activeDockTurn)}
+                            {@const checklistSummary = dockChecklistSummary(activeDockTurn)}
+                            <UtilityPanel className="thread-active-checklist" tone={hasIncompleteTaskChecklist(activeDockTurn) ? 'warn' : 'neutral'}>
+                              <div class="thread-active-checklist-head">
+                                <strong>{hasIncompleteTaskChecklist(activeDockTurn) ? 'Brief checklist' : activeDockTurn.checklist?.title}</strong>
                               </div>
-                            {/if}
-                            {#if activeDockTurn.sourceNote?.references?.length}
-                              <div class="field">
-                                <span class="field-label">Imported from</span>
-                                <div class="source-list">
-                                  {#each activeDockTurn.sourceNote.references as ref (ref)}
-                                    <button
-                                      type="button"
-                                      class="source-ref"
-                                      title="Open source note"
-                                      aria-label={`Open source note ${ref}`}
-                                      disabled={sourcePreviewLoadingRef === ref}
-                                      onclick={() => void openSourceNote(ref)}
-                                    >
-                                      <span>Open source note</span>
-                                      <code>{sourceDisplayName(ref)}</code>
-                                      {#if sourceDisplayHint(ref) !== sourceDisplayName(ref)}
-                                        <small>{sourceDisplayHint(ref)}</small>
-                                      {/if}
-                                    </button>
-                                  {/each}
+                              <div class="thread-active-checklist-lines">
+                                <div class="thread-active-checklist-line">
+                                  <span>{checklistSummary.complete}</span>
+                                </div>
+                                <div class="thread-active-checklist-line">
+                                  <span>{checklistSummary.missing}</span>
                                 </div>
                               </div>
-                            {/if}
-                          </UtilityPanel>
-                        </details>
-                      {/if}
+                            </UtilityPanel>
+                          {/if}
 
-                      {#if activeDockTurn.checklist}
-                        <UtilityPanel className="thread-active-checklist" tone={hasIncompleteTaskChecklist(activeDockTurn) ? 'warn' : 'neutral'}>
-                          <div class="thread-active-checklist-head">
-                            <strong>{hasIncompleteTaskChecklist(activeDockTurn) ? 'Brief checklist' : activeDockTurn.checklist.title}</strong>
-                            <Chip
-                              label={`${activeDockTurn.checklist.doneCount} of ${activeDockTurn.checklist.totalSteps}`}
-                              tone={hasIncompleteTaskChecklist(activeDockTurn) ? 'warn' : 'neutral'}
-                            />
-                          </div>
-                          <div class="thread-active-checklist-lines">
-                            {#if activeDockTurn.checklist.doneCount > 0}
-                              <div class="thread-active-checklist-line is-complete">
-                                <span>{activeDockTurn.checklist.doneCount} completed</span>
-                                <span>Done</span>
-                              </div>
+                          <Row justify="end" gap="2" wrap>
+                            <Button variant="secondary" onclick={() => nav(currentTaskHref(activeDockTurn.taskId))}>
+                              Details...
+                            </Button>
+                            {#if activeDockTurn.taskStatus === 'import_draft'}
+                              <Button variant="agent" disabled={busyTurnId === activeDockTurn.id} onclick={() => shapeDraft(activeDockTurn)}>
+                                <Icon name="sparkles" size={14} />
+                                {startTaskLabel(activeDockTurn)}
+                              </Button>
+                            {:else if activeDockTurn.taskId === 'task-meta-intake' && metaIntakeChecklistComplete(activeDockTurn)}
+                              <Button variant="agent" disabled={busyTurnId === activeDockTurn.id} onclick={() => synthesizeMetaIntake(activeDockTurn)}>
+                                <Icon name="sparkles" size={14} />
+                                {startTaskLabel(activeDockTurn)}
+                              </Button>
+                            {:else if canStartTaskTurn(activeDockTurn)}
+                              <Button
+                                variant="agent"
+                                disabled={projectRunBlocksTaskStart(activeDockTurn) || runBusy || busyTurnId === activeDockTurn.id}
+                                onclick={() => startTaskRun(activeDockTurn.taskId)}
+                              >
+                                <Icon name="sparkles" size={14} />
+                                {projectRunBlocksTaskStart(activeDockTurn) ? 'Already queued' : startTaskLabel(activeDockTurn)}
+                              </Button>
                             {/if}
-                            {#each activeDockTurn.checklist.steps.filter(step => step.status !== 'done' && step.status !== 'skipped') as step (step.id)}
-                              <div class="thread-active-checklist-line">
-                                <span>{step.title}</span>
-                                <span>{checklistStepLabel(activeDockTurn, step)}</span>
+                          </Row>
+                          {#if runError && canStartTaskTurn(activeDockTurn)}
+                            <p class="error">{runError}</p>
+                          {/if}
+                        {:else if activeDockTurn.kind === 'agent_question'}
+                          {@const dockQuestions = visibleQuestionsForCard(questionsForTurn(activeDockTurn))}
+                          <div class="thread-active-question">
+                            <strong>{dockQuestions.length === 1 ? 'Latest question' : 'Open questions'}</strong>
+                            {#each dockQuestions as question (question.id)}
+                              <div class="thread-active-question-block">
+                                <Markdown source={question.restatement ?? question.prompt ?? ''} />
+                                {#if question.kind === 'choice' && question.choices?.length}
+                                  <div class="pressure-choice-list" aria-label="Answer choices">
+                                    {#each question.choices as choice}
+                                      <Button
+                                        variant="secondary"
+                                        disabled={busyTaskId === activeDockTurn.taskId}
+                                        onclick={() => answerQuestion({ ...activeDockTurn, question }, choice)}
+                                      >
+                                        {choice}
+                                      </Button>
+                                    {/each}
+                                  </div>
+                                {/if}
                               </div>
                             {/each}
                           </div>
-                        </UtilityPanel>
-                      {/if}
-
-                      <Row justify="end" gap="2" wrap>
-                        <Button variant="secondary" onclick={() => nav(currentTaskHref(activeDockTurn.taskId))}>
-                          Inspect details
-                        </Button>
-                        <Button variant="ghost" disabled={busyTurnId === activeDockTurn.id} onclick={() => (replyTurnId = activeDockTurn.id)}>
-                          Add optional note
-                        </Button>
-                        {#if activeDockTurn.taskStatus === 'import_draft'}
-                          <Button variant="agent" disabled={busyTurnId === activeDockTurn.id} onclick={() => shapeDraft(activeDockTurn)}>
-                            <Icon name="sparkles" size={14} />
-                            {startTaskLabel(activeDockTurn)}
-                          </Button>
-                        {:else if activeDockTurn.taskId === 'task-meta-intake' && metaIntakeChecklistComplete(activeDockTurn)}
-                          <Button variant="agent" disabled={busyTurnId === activeDockTurn.id} onclick={() => synthesizeMetaIntake(activeDockTurn)}>
-                            <Icon name="sparkles" size={14} />
-                            {startTaskLabel(activeDockTurn)}
-                          </Button>
-                        {:else if canStartTaskTurn(activeDockTurn)}
-                          <Button
-                            variant="agent"
-                            disabled={projectRunBlocksTaskStart(activeDockTurn) || runBusy || busyTurnId === activeDockTurn.id}
-                            onclick={() => startTaskRun(activeDockTurn.taskId)}
-                          >
-                            <Icon name="sparkles" size={14} />
-                            {projectRunBlocksTaskStart(activeDockTurn) ? 'Already queued' : startTaskLabel(activeDockTurn)}
-                          </Button>
-                        {/if}
-                      </Row>
-                    {:else if activeDockTurn.kind === 'agent_question'}
-                      {@const dockQuestions = visibleQuestionsForCard(questionsForTurn(activeDockTurn))}
-                      <div class="thread-active-question">
-                        <strong>{dockQuestions.length === 1 ? 'Latest question' : 'Open questions'}</strong>
-                        {#each dockQuestions as question (question.id)}
-                          <div class="thread-active-question-block">
-                            <Markdown source={question.restatement ?? question.prompt ?? ''} />
-                            {#if question.kind === 'choice' && question.choices?.length}
+                          {#if replyErrors[activeDockTurn.id]}
+                            <p class="error">{replyErrors[activeDockTurn.id]}</p>
+                          {/if}
+                          <UtilityPanel className="question-context-actions" tone="neutral">
+                            {#if contextTurnId === activeDockTurn.id}
+                              <div class="question-context-copy">
+                                <strong>Reply using the shared composer below.</strong>
+                                <span>Guildhall will keep this question open and explain the missing context first.</span>
+                              </div>
+                            {:else}
+                              <div class="question-context-copy">
+                                <strong>Missing context is expected.</strong>
+                                <span>Ask Guildhall to explain project terms, source notes, or assumptions before you answer. This keeps the question open.</span>
+                              </div>
+                              <Button
+                                variant="human"
+                                size="sm"
+                                disabled={busyTurnId === activeDockTurn.id}
+                                onclick={() => (contextTurnId = activeDockTurn.id)}
+                              >
+                                Ask Guildhall to explain
+                              </Button>
+                            {/if}
+                          </UtilityPanel>
+                        {:else if activeDockTurn.kind === 'pressure_test_question'}
+                          <div class="thread-active-question">
+                            <strong>{pressureQuestionMeta(activeDockTurn)}</strong>
+                            <Markdown source={pressureQuestionPrompt(activeDockTurn)} />
+                            {#if activeDockTurn.question.evidence.length}
+                              <div class="field">
+                                <span class="field-label">Evidence</span>
+                                <ul class="bullet">
+                                  {#each activeDockTurn.question.evidence as item}
+                                    <li><Markdown source={item} inline /></li>
+                                  {/each}
+                                </ul>
+                              </div>
+                            {/if}
+                            {#if activeDockTurn.question.choices?.length}
                               <div class="pressure-choice-list" aria-label="Answer choices">
-                                {#each question.choices as choice}
+                                {#each activeDockTurn.question.choices as choice}
                                   <Button
                                     variant="secondary"
-                                    disabled={busyTaskId === activeDockTurn.taskId}
-                                    onclick={() => answerQuestion({ ...activeDockTurn, question }, choice)}
+                                    disabled={busyTurnId === activeDockTurn.id}
+                                    onclick={() => answerPressureTestQuestion(activeDockTurn, choice)}
                                   >
                                     {choice}
                                   </Button>
@@ -3813,97 +4286,67 @@
                               </div>
                             {/if}
                           </div>
-                        {/each}
-                      </div>
-                    {:else if activeDockTurn.kind === 'pressure_test_question'}
-                      <div class="thread-active-question">
-                        <strong>{pressureQuestionMeta(activeDockTurn)}</strong>
-                        <Markdown source={pressureQuestionPrompt(activeDockTurn)} />
-                        {#if activeDockTurn.question.choices?.length}
-                          <div class="pressure-choice-list" aria-label="Answer choices">
-                            {#each activeDockTurn.question.choices as choice}
-                              <Button
-                                variant="secondary"
-                                disabled={busyTurnId === activeDockTurn.id}
-                                onclick={() => answerPressureTestQuestion(activeDockTurn, choice)}
-                              >
-                                {choice}
-                              </Button>
-                            {/each}
+                        {:else if activeDockTurn.kind === 'brief_approval'}
+                          {@const blockedByQuestions = hasOpenQuestionsForTask(activeDockTurn.taskId)}
+                          <div class="thread-active-review">
+                            <p>{briefScopeForReaders(activeDockTurn.brief, activeDockTurn.taskTitle)}</p>
                           </div>
+                          <Row justify="end" gap="2" wrap>
+                            <Button variant="secondary" disabled={busyTurnId === activeDockTurn.id} onclick={() => openBriefPreview(activeDockTurn)}>
+                              View brief
+                            </Button>
+                            <Button variant="ghost" disabled={busyTurnId === activeDockTurn.id} onclick={() => nav(currentTaskHref(activeDockTurn.taskId))}>
+                              Details...
+                            </Button>
+                            <Button
+                              variant="primary"
+                              disabled={busyTurnId === activeDockTurn.id || blockedByQuestions}
+                              onclick={() => approveBrief(activeDockTurn)}
+                            >
+                              Yes, that's right
+                            </Button>
+                          </Row>
+                        {:else if activeDockTurn.kind === 'spec_review'}
+                          {@const missingSpec = activeDockTurn.taskId !== 'task-meta-intake' && activeDockTurn.spec.trim().length === 0}
+                          {@const blockedByQuestions = hasOpenQuestionsForTask(activeDockTurn.taskId)}
+                          <div class="thread-active-review">
+                            <p class="thread-active-summary">
+                              {activeDockTurn.taskId === 'task-meta-intake'
+                                ? 'Open the full split before you approve it or redirect it.'
+                                : 'Open the full spec before you approve it or redirect it.'}
+                            </p>
+                          </div>
+                          <Row justify="end" gap="2" wrap>
+                            <Button variant="secondary" disabled={busyTurnId === activeDockTurn.id} onclick={() => openSpecPreview(activeDockTurn)}>
+                              View spec
+                            </Button>
+                            <Button variant="ghost" disabled={busyTurnId === activeDockTurn.id} onclick={() => nav(currentTaskHref(activeDockTurn.taskId))}>
+                              Details...
+                            </Button>
+                            <Button
+                              variant="primary"
+                              disabled={busyTurnId === activeDockTurn.id || blockedByQuestions || missingSpec}
+                              onclick={() => approveSpec(activeDockTurn)}
+                            >
+                              {activeDockTurn.taskId === 'task-meta-intake' ? 'Yes, use this split' : 'Approve spec'}
+                            </Button>
+                          </Row>
                         {/if}
+
+                          </div>
+                        </Card>
                       </div>
-                    {:else if activeDockTurn.kind === 'brief_approval'}
-                      {@const blockedByQuestions = hasOpenQuestionsForTask(activeDockTurn.taskId)}
-                      <div class="thread-active-review">
-                        <strong>Review this task brief</strong>
-                        <p>{briefScopeForReaders(activeDockTurn.brief, activeDockTurn.taskTitle)}</p>
-                      </div>
-                      <Row justify="end" gap="2" wrap>
-                        <Button variant="secondary" disabled={busyTurnId === activeDockTurn.id} onclick={() => nav(currentTaskHref(activeDockTurn.taskId))}>
-                          Open task
-                        </Button>
-                        <Button variant="ghost" disabled={busyTurnId === activeDockTurn.id} onclick={() => (replyTurnId = activeDockTurn.id)}>
-                          Request changes
-                        </Button>
-                        <Button
-                          variant="primary"
-                          disabled={busyTurnId === activeDockTurn.id || blockedByQuestions}
-                          onclick={() => approveBrief(activeDockTurn)}
-                        >
-                          Yes, that's right
-                        </Button>
-                      </Row>
-                    {:else if activeDockTurn.kind === 'spec_review'}
-                      {@const missingSpec = activeDockTurn.taskId !== 'task-meta-intake' && activeDockTurn.spec.trim().length === 0}
-                      {@const blockedByQuestions = hasOpenQuestionsForTask(activeDockTurn.taskId)}
-                      <div class="thread-active-review">
-                        <strong>{activeDockTurn.taskId === 'task-meta-intake' ? 'Review the proposed split' : 'Review the spec draft'}</strong>
-                        {#if activeDockTurn.spec}
-                          <UtilityPanel className="spec-preview-panel" tone="neutral" dense>
-                            <div class="spec-preview"><Markdown source={activeDockTurn.spec} /></div>
-                          </UtilityPanel>
-                        {/if}
-                      </div>
-                      <Row justify="end" gap="2" wrap>
-                        <Button variant="secondary" disabled={busyTurnId === activeDockTurn.id} onclick={() => nav(currentTaskHref(activeDockTurn.taskId))}>
-                          Open task
-                        </Button>
-                        <Button variant="ghost" disabled={busyTurnId === activeDockTurn.id} onclick={() => (replyTurnId = activeDockTurn.id)}>
-                          {activeDockTurn.taskId === 'task-meta-intake' ? 'Change the split' : 'Request changes'}
-                        </Button>
-                        <Button
-                          variant="primary"
-                          disabled={busyTurnId === activeDockTurn.id || blockedByQuestions || missingSpec}
-                          onclick={() => approveSpec(activeDockTurn)}
-                        >
-                          {activeDockTurn.taskId === 'task-meta-intake' ? 'Yes, use this split' : 'Approve spec'}
-                        </Button>
-                      </Row>
                     {/if}
 
-                    {#if footerComposer && footerComposer.turn.id === activeDockTurn.id}
-                      <div class="thread-composer-shell" class:thread-composer-working={footerComposer.kind === 'working'}>
-                        <div class="thread-composer-head">
-                          <div class="thread-composer-copy">
-                            <strong>{footerComposer.title}</strong>
-                            <p>{footerComposer.description}</p>
-                          </div>
-                          <Chip
-                            label={footerComposer.kind === 'working'
-                              ? 'Guildhall working'
-                              : footerComposer.kind === 'task_reply'
-                                ? 'Thread reply'
-                                : footerComposer.kind === 'question_context'
-                                  ? 'Ask for context'
-                                  : footerComposer.kind === 'agent_question_text'
-                                    ? 'Question'
-                                    : 'Intake answer'}
-                            tone={footerComposer.kind === 'working' ? 'agent' : 'neutral'}
-                          />
-                        </div>
-
+                    {#if footerComposer}
+                      <div class="thread-composer-shell" aria-label="Thread composer" class:thread-composer-working={footerComposer.kind === 'working'}>
                         {#if footerComposer.kind === 'working'}
+                          <div class="thread-composer-head">
+                            <div class="thread-composer-copy">
+                              <strong>{footerComposer.title}</strong>
+                              <p>{footerComposer.description}</p>
+                            </div>
+                          </div>
                           <StatusLine
                             label={footerComposer.title}
                             detail={footerComposer.description}
@@ -3912,55 +4355,42 @@
                             loud
                           />
                         {:else}
-                          <div class="thread-composer-frame">
-                            <Textarea
-                              value={footerComposer.kind === 'task_reply'
-                                ? (replyDrafts[footerComposer.turn.id] ?? '')
-                                : footerComposer.kind === 'question_context'
-                                  ? (contextDrafts[footerComposer.turn.id] ?? '')
-                                  : footerComposer.kind === 'agent_question_text'
-                                    ? (footerQuestionDrafts[footerComposer.question.id] ?? '')
-                                    : (pressureTestAnswers[footerComposer.turn.id] ?? '')}
-                              rows={3}
-                              resize="none"
-                              placeholder={footerComposer.placeholder}
-                              disabled={footerComposer.kind === 'agent_question_text'
-                                ? busyTaskId === footerComposer.turn.taskId
-                                : busyTurnId === footerComposer.turn.id}
-                              oninput={(value) => {
-                                if (footerComposer.kind === 'task_reply') setReplyDraft(footerComposer.turn.id, value)
-                                else if (footerComposer.kind === 'question_context') setContextDraft(footerComposer.turn.id, value)
-                                else if (footerComposer.kind === 'agent_question_text') setFooterQuestionDraft(footerComposer.question.id, value)
-                                else setPressureTestAnswer(footerComposer.turn.id, value)
-                              }}
-                            />
-                            <div class="thread-composer-actions">
-                              <div class="thread-composer-hint">
-                                {#if footerComposer.kind === 'task_reply'}
-                                  Send a correction without leaving the thread.
-                                {:else if footerComposer.kind === 'question_context'}
-                                  Guildhall should explain before this question closes.
-                                {:else if footerComposer.kind === 'agent_question_text'}
-                                  Free-form answers stay in the active thread flow.
-                                {:else}
-                                  This answer feeds directly into intake shaping.
-                                {/if}
+                          {#if footerComposer.kind !== 'task_reply'}
+                            <div class="thread-composer-head">
+                              <div class="thread-composer-copy">
+                                <strong>{footerComposer.title}</strong>
+                                <p>{footerComposer.description}</p>
                               </div>
-                              <Row justify="end" gap="2" wrap>
-                                {#if footerComposer.kind === 'task_reply'}
-                                  <Button variant="ghost" disabled={busyTurnId === footerComposer.turn.id} onclick={() => (replyTurnId = null)}>
-                                    Cancel
-                                  </Button>
-                                  <Button
-                                    variant="primary"
-                                    disabled={busyTurnId === footerComposer.turn.id || !(replyDrafts[footerComposer.turn.id] ?? '').trim()}
-                                    onclick={() => sendTaskReply(footerComposer.turn)}
-                                  >
-                                    {footerComposer.submitLabel}
-                                  </Button>
-                                {:else if footerComposer.kind === 'question_context'}
+                            </div>
+                          {/if}
+                          <div class="thread-composer-frame">
+                            <div class="thread-composer-input-shell">
+                              <Textarea
+                                value={footerComposer.kind === 'task_reply'
+                                  ? (replyDrafts[footerComposer.turn.id] ?? '')
+                                  : footerComposer.kind === 'question_context'
+                                    ? (contextDrafts[footerComposer.turn.id] ?? '')
+                                    : footerComposer.kind === 'agent_question_text'
+                                      ? (footerQuestionDrafts[footerComposer.question.id] ?? '')
+                                      : (pressureTestAnswers[footerComposer.turn.id] ?? '')}
+                                rows={2}
+                                resize="none"
+                                placeholder={footerComposer.placeholder}
+                                disabled={footerComposer.kind === 'agent_question_text'
+                                  ? busyTaskId === footerComposer.turn.taskId
+                                  : busyTurnId === footerComposer.turn.id}
+                                oninput={(value) => {
+                                  if (footerComposer.kind === 'task_reply') setReplyDraft(footerComposer.turn.id, value)
+                                  else if (footerComposer.kind === 'question_context') setContextDraft(footerComposer.turn.id, value)
+                                  else if (footerComposer.kind === 'agent_question_text') setFooterQuestionDraft(footerComposer.question.id, value)
+                                  else setPressureTestAnswer(footerComposer.turn.id, value)
+                                }}
+                              />
+                              <div class="thread-composer-actions">
+                                {#if footerComposer.kind === 'question_context'}
                                   <Button
                                     variant="ghost"
+                                    size="sm"
                                     disabled={busyTurnId === footerComposer.turn.id}
                                     onclick={() => {
                                       contextTurnId = null
@@ -3969,32 +4399,33 @@
                                   >
                                     Cancel
                                   </Button>
-                                  <Button
-                                    variant="agent"
-                                    disabled={busyTurnId === footerComposer.turn.id || !(contextDrafts[footerComposer.turn.id] ?? '').trim()}
-                                    onclick={() => askQuestionContext(footerComposer.turn)}
-                                  >
-                                    <Icon name="sparkles" size={14} />
-                                    {footerComposer.submitLabel}
-                                  </Button>
-                                {:else if footerComposer.kind === 'agent_question_text'}
-                                  <Button
-                                    variant="primary"
-                                    disabled={busyTaskId === footerComposer.turn.taskId || !(footerQuestionDrafts[footerComposer.question.id] ?? '').trim()}
-                                    onclick={() => answerFooterQuestion(footerComposer.turn, footerComposer.question)}
-                                  >
-                                    {footerComposer.submitLabel}
-                                  </Button>
-                                {:else}
-                                  <Button
-                                    variant="primary"
-                                    disabled={busyTurnId === footerComposer.turn.id || !(pressureTestAnswers[footerComposer.turn.id] ?? '').trim()}
-                                    onclick={() => answerPressureTestQuestion(footerComposer.turn)}
-                                  >
-                                    {busyTurnId === footerComposer.turn.id ? 'Submitting...' : footerComposer.submitLabel}
-                                  </Button>
                                 {/if}
-                              </Row>
+                                <Button
+                                  variant={footerComposer.kind === 'question_context' ? 'agent' : 'primary'}
+                                  size="sm"
+                                  iconOnly
+                                  ariaLabel={busyTurnId === (footerComposer.kind === 'agent_question_text' ? undefined : footerComposer.turn.id) ? 'Sending' : 'Send'}
+                                  title="Send"
+                                  disabled={
+                                    footerComposer.kind === 'task_reply'
+                                      ? busyTurnId === footerComposer.turn.id || !(replyDrafts[footerComposer.turn.id] ?? '').trim()
+                                      : footerComposer.kind === 'question_context'
+                                        ? busyTurnId === footerComposer.turn.id || !(contextDrafts[footerComposer.turn.id] ?? '').trim()
+                                        : footerComposer.kind === 'agent_question_text'
+                                          ? busyTaskId === footerComposer.turn.taskId || !(footerQuestionDrafts[footerComposer.question.id] ?? '').trim()
+                                          : busyTurnId === footerComposer.turn.id || !(pressureTestAnswers[footerComposer.turn.id] ?? '').trim()
+                                  }
+                                  onclick={() => {
+                                    if (footerComposer.kind === 'task_reply') void sendTaskReply(footerComposer.turn)
+                                    else if (footerComposer.kind === 'question_context') void askQuestionContext(footerComposer.turn)
+                                    else if (footerComposer.kind === 'agent_question_text') void answerFooterQuestion(footerComposer.turn, footerComposer.question)
+                                    else void answerPressureTestQuestion(footerComposer.turn)
+                                  }}
+                                  className="thread-composer-send"
+                                >
+                                  <Icon name="arrow-up" size={14} />
+                                </Button>
+                              </div>
                             </div>
                             {#if footerComposer.kind === 'task_reply' && replyErrors[footerComposer.turn.id]}
                               <p class="error">{replyErrors[footerComposer.turn.id]}</p>
@@ -4010,141 +4441,16 @@
                       </div>
                     {/if}
                   </div>
-                </Card>
-              </div>
-            {:else if footerComposer}
-              <div class="thread-composer-shell" class:thread-composer-working={footerComposer.kind === 'working'}>
-                <div class="thread-composer-head">
-                  <div class="thread-composer-copy">
-                    <strong>{footerComposer.title}</strong>
-                    <p>{footerComposer.description}</p>
-                  </div>
-                  <Chip
-                    label={footerComposer.kind === 'working'
-                      ? 'Guildhall working'
-                      : footerComposer.kind === 'task_reply'
-                        ? 'Thread reply'
-                        : footerComposer.kind === 'question_context'
-                          ? 'Ask for context'
-                          : footerComposer.kind === 'agent_question_text'
-                            ? 'Question'
-                            : 'Intake answer'}
-                    tone={footerComposer.kind === 'working' ? 'agent' : 'neutral'}
-                  />
-                </div>
-
-                {#if footerComposer.kind === 'working'}
-                  <StatusLine
-                    label={footerComposer.title}
-                    detail={footerComposer.description}
-                    tone="running"
-                    pulse
-                    loud
-                  />
-                {:else}
-                  <div class="thread-composer-frame">
-                    <Textarea
-                      value={footerComposer.kind === 'task_reply'
-                        ? (replyDrafts[footerComposer.turn.id] ?? '')
-                        : footerComposer.kind === 'question_context'
-                          ? (contextDrafts[footerComposer.turn.id] ?? '')
-                          : footerComposer.kind === 'agent_question_text'
-                            ? (footerQuestionDrafts[footerComposer.question.id] ?? '')
-                            : (pressureTestAnswers[footerComposer.turn.id] ?? '')}
-                      rows={3}
-                      resize="none"
-                      placeholder={footerComposer.placeholder}
-                      disabled={footerComposer.kind === 'agent_question_text'
-                        ? busyTaskId === footerComposer.turn.taskId
-                        : busyTurnId === footerComposer.turn.id}
-                      oninput={(value) => {
-                        if (footerComposer.kind === 'task_reply') setReplyDraft(footerComposer.turn.id, value)
-                        else if (footerComposer.kind === 'question_context') setContextDraft(footerComposer.turn.id, value)
-                        else if (footerComposer.kind === 'agent_question_text') setFooterQuestionDraft(footerComposer.question.id, value)
-                        else setPressureTestAnswer(footerComposer.turn.id, value)
-                      }}
-                    />
-                    <div class="thread-composer-actions">
-                      <div class="thread-composer-hint">
-                        {#if footerComposer.kind === 'task_reply'}
-                          Send a correction without leaving the thread.
-                        {:else if footerComposer.kind === 'question_context'}
-                          Guildhall should explain before this question closes.
-                        {:else if footerComposer.kind === 'agent_question_text'}
-                          Free-form answers stay in the active thread flow.
-                        {:else}
-                          This answer feeds directly into intake shaping.
-                        {/if}
-                      </div>
-                      <Row justify="end" gap="2" wrap>
-                        {#if footerComposer.kind === 'task_reply'}
-                          <Button variant="ghost" disabled={busyTurnId === footerComposer.turn.id} onclick={() => (replyTurnId = null)}>
-                            Cancel
-                          </Button>
-                          <Button
-                            variant="primary"
-                            disabled={busyTurnId === footerComposer.turn.id || !(replyDrafts[footerComposer.turn.id] ?? '').trim()}
-                            onclick={() => sendTaskReply(footerComposer.turn)}
-                          >
-                            {footerComposer.submitLabel}
-                          </Button>
-                        {:else if footerComposer.kind === 'question_context'}
-                          <Button
-                            variant="ghost"
-                            disabled={busyTurnId === footerComposer.turn.id}
-                            onclick={() => {
-                              contextTurnId = null
-                              setContextDraft(footerComposer.turn.id, '')
-                            }}
-                          >
-                            Cancel
-                          </Button>
-                          <Button
-                            variant="agent"
-                            disabled={busyTurnId === footerComposer.turn.id || !(contextDrafts[footerComposer.turn.id] ?? '').trim()}
-                            onclick={() => askQuestionContext(footerComposer.turn)}
-                          >
-                            <Icon name="sparkles" size={14} />
-                            {footerComposer.submitLabel}
-                          </Button>
-                        {:else if footerComposer.kind === 'agent_question_text'}
-                          <Button
-                            variant="primary"
-                            disabled={busyTaskId === footerComposer.turn.taskId || !(footerQuestionDrafts[footerComposer.question.id] ?? '').trim()}
-                            onclick={() => answerFooterQuestion(footerComposer.turn, footerComposer.question)}
-                          >
-                            {footerComposer.submitLabel}
-                          </Button>
-                        {:else}
-                          <Button
-                            variant="primary"
-                            disabled={busyTurnId === footerComposer.turn.id || !(pressureTestAnswers[footerComposer.turn.id] ?? '').trim()}
-                            onclick={() => answerPressureTestQuestion(footerComposer.turn)}
-                          >
-                            {busyTurnId === footerComposer.turn.id ? 'Submitting...' : footerComposer.submitLabel}
-                          </Button>
-                        {/if}
-                      </Row>
-                    </div>
-                    {#if footerComposer.kind === 'task_reply' && replyErrors[footerComposer.turn.id]}
-                      <p class="error">{replyErrors[footerComposer.turn.id]}</p>
-                    {:else if footerComposer.kind === 'question_context' && contextErrors[footerComposer.turn.id]}
-                      <p class="error">{contextErrors[footerComposer.turn.id]}</p>
-                    {:else if footerComposer.kind === 'agent_question_text' && replyErrors[footerComposer.turn.id]}
-                      <p class="error">{replyErrors[footerComposer.turn.id]}</p>
-                    {:else if footerComposer.kind === 'pressure_test' && pressureTestErrors[footerComposer.turn.id]}
-                      <p class="error">{pressureTestErrors[footerComposer.turn.id]}</p>
-                    {/if}
-                  </div>
                 {/if}
               </div>
-            {/if}
+            </div>
           </section>
           {/if}
         </div>
       {/if}
-    </Stack>
+    </div>
   {/if}
+
 </div>
 
 <Modal
@@ -4180,13 +4486,52 @@
   {/if}
 </Modal>
 
+<Modal
+  open={Boolean(documentPreview)}
+  title={documentPreview?.title ?? 'Document'}
+  size="lg"
+  onClose={() => {
+    documentPreview = null
+  }}
+>
+  {#if documentPreview}
+    <div class="thread-document-preview">
+      <header class="thread-document-preview-head">
+        <strong>{documentPreview.taskTitle}</strong>
+      </header>
+      <Markdown source={documentPreview.content} />
+    </div>
+  {/if}
+</Modal>
+
 <style>
   .thread {
+    --thread-fs-meta: var(--fs-0);
+    --thread-fs-body: var(--fs-1);
+    --thread-fs-title: var(--fs-2);
+    --thread-fs-display: var(--fs-4);
+    --thread-color-strong: color-mix(in srgb, var(--text) 84%, var(--text-soft));
+    --thread-color-body: color-mix(in srgb, var(--text) 86%, var(--text-soft));
+    --thread-color-soft: color-mix(in srgb, var(--text-soft) 90%, var(--text-muted));
+    --thread-color-muted: var(--text-muted);
     width: 100%;
     margin: 0;
-    padding: var(--s-4) 0 var(--s-6);
+    flex: 1 1 auto;
+    min-height: 0;
+    padding: 0;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
   }
-  .lede { margin: 0; color: var(--text-muted); font-size: var(--fs-2); }
+  .thread-body {
+    flex: 1 1 auto;
+    min-height: 0;
+    display: flex;
+    flex-direction: column;
+    gap: var(--s-3);
+    overflow: hidden;
+  }
+  .lede { margin: 0; color: var(--thread-color-muted); font-size: var(--thread-fs-body); }
   .handoff-copy {
     display: flex;
     flex-direction: column;
@@ -4198,19 +4543,22 @@
   }
   .thread-columns {
     display: grid;
+    flex: 1 1 auto;
     grid-template-columns: clamp(220px, 24vw, 320px) minmax(0, 1fr);
     gap: 0;
-    align-items: start;
+    align-items: stretch;
     min-height: 0;
+    height: 100%;
     margin-inline: 0;
+    overflow: hidden;
   }
   .thread-columns.thread-columns-compact {
     grid-template-columns: minmax(0, 1fr);
   }
   .thread-index {
-    position: sticky;
-    top: calc(var(--app-shell-page-padding-block-start) + 56px);
-    max-height: calc(100vh - var(--app-shell-page-padding-block-start) - var(--s-5));
+    position: relative;
+    min-height: 0;
+    height: 100%;
     overflow: auto;
     padding: 0;
     border-right: 1px solid color-mix(in srgb, var(--border) 92%, transparent);
@@ -4247,10 +4595,15 @@
     background: color-mix(in srgb, var(--accent) 7%, transparent);
   }
   .thread-index-row.active {
-    border-left-color: color-mix(in srgb, var(--accent) 58%, transparent);
-    border-color: color-mix(in srgb, var(--accent) 30%, var(--border));
-    background: color-mix(in srgb, var(--accent) 9%, transparent);
-    box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--accent) 26%, transparent);
+    border-left-color: color-mix(in srgb, var(--accent) 66%, transparent);
+    border-color: color-mix(in srgb, var(--accent) 38%, var(--border));
+    background:
+      linear-gradient(180deg, color-mix(in srgb, var(--accent) 10%, transparent), color-mix(in srgb, var(--accent) 4%, transparent)),
+      color-mix(in srgb, var(--accent) 8%, transparent);
+    box-shadow:
+      inset 0 0 0 1px color-mix(in srgb, var(--accent) 32%, transparent),
+      inset 0 1px 0 color-mix(in srgb, white 12%, transparent),
+      0 16px 28px -24px color-mix(in srgb, var(--accent) 55%, transparent);
   }
   .thread-index-row-top {
     display: flex;
@@ -4260,25 +4613,46 @@
   }
   .thread-index-row-top strong {
     min-width: 0;
-    font-size: var(--fs-3);
+    color: var(--thread-color-strong);
+    font-size: var(--thread-fs-title);
     line-height: var(--lh-tight);
+    font-weight: 650;
   }
   .thread-index-time {
     flex: none;
-    color: var(--text-soft);
-    font-size: var(--fs-0);
-    font-weight: 700;
+    color: var(--thread-color-muted);
+    font-size: var(--thread-fs-meta);
+    font-weight: 600;
   }
   .thread-index-row-chips {
     display: flex;
     align-items: center;
     gap: var(--s-1);
     flex-wrap: wrap;
+    min-height: 1rem;
+    margin-bottom: 2px;
+  }
+  .thread :global(.chip) {
+    font-size: var(--thread-fs-meta);
+    letter-spacing: 0.04em;
+  }
+  .thread :global(.chip-count) {
+    font-size: var(--thread-fs-meta);
+  }
+  .thread-index-row-chips :global(.chip) {
+    font-size: var(--thread-fs-meta);
+    padding: 0 0.35rem;
+  }
+  .thread-index-row-chips :global(.chip-count) {
+    min-width: 1rem;
+    height: 1rem;
+    padding: 0 0.2rem;
+    font-size: var(--thread-fs-meta);
   }
   .thread-index-row p {
     margin: 0;
-    color: var(--text-muted);
-    font-size: var(--fs-2);
+    color: var(--thread-color-soft);
+    font-size: var(--thread-fs-body);
     line-height: var(--lh-body);
     display: -webkit-box;
     -webkit-line-clamp: 1;
@@ -4286,43 +4660,46 @@
     overflow: hidden;
   }
   .thread-detail {
-    position: sticky;
-    top: calc(var(--app-shell-page-padding-block-start) + 56px);
+    position: relative;
     display: flex;
     flex-direction: column;
     gap: var(--s-2);
-    min-height: calc(100vh - var(--app-shell-page-padding-block-start) - var(--s-5));
-    max-height: calc(100vh - var(--app-shell-page-padding-block-start) - var(--s-5));
-    padding-left: var(--s-4);
-    padding-right: var(--app-shell-page-padding-inline);
-  }
-  .thread-detail-scroll-wrap {
-    position: relative;
-    flex: 1;
     min-height: 0;
-    overflow: hidden;
-    border-radius: calc(var(--r-2) + var(--s-1));
-  }
-  .thread-detail-scroll {
     height: 100%;
     overflow: auto;
+    scrollbar-gutter: stable;
+    padding-left: var(--s-4);
+    padding-right: var(--s-4);
+  }
+  .thread-detail-scroll-wrap {
+    flex: 1;
+    min-height: 0;
+    display: flex;
+    flex-direction: column;
+  }
+  .thread-detail-scroll {
     display: flex;
     flex-direction: column;
     gap: var(--s-3);
-    padding-inline: var(--s-1) 0;
+    min-height: 100%;
   }
-  .thread-detail-spacer {
-    flex: 1 0 var(--s-4);
-    min-height: var(--s-4);
+  .thread-detail-header {
+    display: grid;
+    gap: 4px;
+    padding: var(--s-2) 0 var(--s-1);
   }
-  .thread-detail-mask {
-    position: absolute;
-    left: 0;
-    right: var(--s-1);
-    bottom: 0;
-    height: 64px;
-    pointer-events: none;
-    background: linear-gradient(180deg, transparent 0%, color-mix(in srgb, var(--bg-base) 90%, transparent) 100%);
+  .thread-detail-header strong {
+    font-size: var(--thread-fs-display);
+    line-height: var(--lh-tight);
+  }
+  .thread-detail-header p {
+    margin: 0;
+    color: var(--thread-color-muted);
+    font-size: var(--thread-fs-body);
+    line-height: var(--lh-body);
+  }
+  .thread-list {
+    margin-top: auto;
   }
   .turn-active-focus :global(.card) {
     border-color: color-mix(in srgb, var(--accent) 38%, var(--border));
@@ -4333,7 +4710,7 @@
     z-index: 1;
     display: grid;
     gap: var(--s-2);
-    padding: var(--s-3);
+    padding: var(--s-2);
     border: 1px solid color-mix(in srgb, var(--glass-border-strong) 60%, var(--border));
     border-radius: calc(var(--r-2) + var(--s-1));
     background:
@@ -4343,10 +4720,21 @@
     backdrop-filter: saturate(1.15) var(--glass-blur);
     -webkit-backdrop-filter: saturate(1.15) var(--glass-blur);
   }
+  .thread-footer {
+    position: sticky;
+    bottom: 0;
+    z-index: 2;
+    display: grid;
+    gap: var(--s-2);
+    padding-top: var(--s-1);
+    padding-bottom: var(--s-1);
+    margin-top: auto;
+    background: linear-gradient(180deg, transparent 0%, color-mix(in srgb, var(--bg-base) 88%, transparent) 18%, var(--bg-base) 100%);
+  }
   .thread-active-dock {
     position: relative;
     z-index: 1;
-    padding-inline: var(--s-1) 0;
+    padding-inline: 0;
   }
   .thread-active-dock :global(.card) {
     padding: var(--s-3);
@@ -4367,13 +4755,15 @@
     gap: 2px;
   }
   .thread-active-dock-copy strong {
-    font-size: var(--fs-2);
+    color: var(--thread-color-strong);
+    font-size: var(--thread-fs-body);
     line-height: var(--lh-tight);
+    font-weight: 650;
   }
   .thread-active-dock-copy p {
     margin: 0;
-    color: var(--text-muted);
-    font-size: var(--fs-1);
+    color: var(--thread-color-muted);
+    font-size: var(--thread-fs-meta);
     line-height: var(--lh-body);
   }
   .thread-active-dock-chips {
@@ -4401,8 +4791,8 @@
     align-items: center;
     justify-content: space-between;
     gap: var(--s-2);
-    color: var(--text-muted);
-    font-size: var(--fs-1);
+    color: var(--thread-color-muted);
+    font-size: var(--thread-fs-body);
     line-height: var(--lh-body);
   }
   .thread-active-checklist-line.is-complete {
@@ -4411,7 +4801,13 @@
   .thread-active-question,
   .thread-active-review {
     display: grid;
-    gap: var(--s-2);
+    gap: var(--s-1);
+  }
+  .thread-active-summary {
+    margin: 0;
+    color: var(--thread-color-body);
+    font-size: var(--thread-fs-body);
+    line-height: var(--lh-body);
   }
   .thread-active-question-block {
     display: grid;
@@ -4421,10 +4817,8 @@
     border-color: color-mix(in srgb, var(--accent-2) 34%, var(--border));
   }
   .thread-composer-head {
-    display: flex;
-    align-items: flex-start;
-    justify-content: space-between;
-    gap: var(--s-2);
+    display: grid;
+    gap: 2px;
   }
   .thread-composer-copy {
     min-width: 0;
@@ -4433,38 +4827,45 @@
     gap: 2px;
   }
   .thread-composer-copy strong {
-    color: var(--text);
-    font-size: var(--fs-2);
+    color: var(--thread-color-strong);
+    font-size: var(--thread-fs-meta);
     line-height: var(--lh-tight);
   }
   .thread-composer-copy p {
     margin: 0;
-    color: var(--text-muted);
-    font-size: var(--fs-1);
+    color: var(--thread-color-muted);
+    font-size: var(--thread-fs-meta);
     line-height: var(--lh-body);
   }
   .thread-composer-frame {
     display: grid;
-    gap: var(--s-2);
+    gap: var(--s-1);
+  }
+  .thread-composer-input-shell {
+    position: relative;
+  }
+  .thread-composer-input-shell :global(.textarea) {
+    min-height: 74px;
+    padding-right: calc(var(--control-pad-x) + 2rem);
+    font-size: var(--fs-1);
   }
   .thread-composer-actions {
+    position: absolute;
+    right: var(--s-2);
+    bottom: var(--s-2);
     display: flex;
     align-items: center;
-    justify-content: space-between;
-    gap: var(--s-2);
-    flex-wrap: wrap;
+    gap: var(--s-1);
   }
-  .thread-composer-hint {
-    min-width: 220px;
-    flex: 1;
-    color: var(--text-muted);
-    font-size: var(--fs-1);
-    line-height: var(--lh-body);
+  .thread-composer-send {
+    width: 32px;
+    min-width: 32px;
+    height: 32px;
+    min-height: 32px;
+    padding: 0;
+    border-radius: 999px;
   }
   @media (max-width: 1100px) {
-    .thread {
-      padding-top: var(--s-3);
-    }
     .thread-columns {
       grid-template-columns: clamp(200px, 30vw, 280px) minmax(0, 1fr);
     }
@@ -4475,7 +4876,7 @@
   @media (max-width: 900px) {
     .thread {
       width: 100%;
-      padding: 0 0 var(--s-5);
+      padding: 0;
     }
     .thread-columns {
       margin-inline: 0;
@@ -4513,11 +4914,11 @@
       box-shadow: inset 3px 0 0 color-mix(in srgb, var(--accent) 56%, transparent);
     }
     .thread.thread-compact-list .thread-index-row-top strong {
-      font-size: var(--fs-3);
+      font-size: var(--thread-fs-title);
     }
     .thread.thread-compact-list .thread-index-row p {
       -webkit-line-clamp: 1;
-      font-size: var(--fs-2);
+      font-size: var(--thread-fs-body);
     }
     .thread.thread-compact-detail {
       padding-top: 0;
@@ -4528,9 +4929,11 @@
     .thread.thread-compact-detail .thread-detail {
       position: relative;
       top: 0;
-      min-height: calc(100vh - var(--app-shell-page-padding-block-start) - var(--s-4));
+      min-height: 0;
+      height: 100%;
       max-height: none;
       padding-right: 0;
+      padding-left: 0;
     }
     .thread.thread-compact-detail .thread-detail-scroll-wrap {
       border-radius: 0;
@@ -4538,15 +4941,212 @@
     .thread.thread-compact-detail .thread-detail-scroll {
       padding-inline: 0;
     }
-    .thread.thread-compact-detail .thread-detail-mask {
-      right: 0;
-    }
     .thread.thread-compact-detail .thread-active-dock {
       padding-inline: 0;
     }
   }
   .turn :global(.card) {
     padding: var(--s-3);
+  }
+  .thread-history-item {
+    display: grid;
+    gap: var(--s-2);
+  }
+  .thread-history-item-question {
+    gap: var(--s-3);
+  }
+  .thread-chat-bubble {
+    max-width: min(42rem, 74%);
+    display: grid;
+    gap: var(--s-1);
+    padding: var(--s-2) var(--s-3);
+    border: 1px solid color-mix(in srgb, var(--glass-border-strong) 40%, var(--border));
+    border-radius: 1.35rem;
+    box-shadow:
+      var(--glass-shadow),
+      inset 0 1px 0 color-mix(in srgb, white 8%, transparent);
+    backdrop-filter: saturate(1.12) blur(14px);
+    -webkit-backdrop-filter: saturate(1.12) blur(14px);
+  }
+  .thread-chat-bubble-agent {
+    justify-self: start;
+    background:
+      linear-gradient(180deg, color-mix(in srgb, white 3%, transparent), transparent 34%),
+      color-mix(in srgb, var(--bg-raised) 84%, transparent);
+    border-color: color-mix(in srgb, var(--glass-border-strong) 44%, var(--border));
+  }
+  .thread-chat-bubble-user {
+    justify-self: end;
+    background:
+      linear-gradient(180deg, color-mix(in srgb, white 5%, transparent), transparent 32%),
+      color-mix(in srgb, var(--accent) 16%, var(--bg-raised));
+    border-color: color-mix(in srgb, var(--accent) 30%, var(--glass-border-strong));
+  }
+  .thread-chat-bubble-head {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: var(--s-2);
+  }
+  .thread-chat-bubble-head strong {
+    color: var(--thread-color-strong);
+    font-size: var(--thread-fs-meta);
+    line-height: var(--lh-tight);
+    font-weight: 650;
+  }
+  .thread-chat-bubble-head span {
+    color: var(--thread-color-muted);
+    font-size: var(--thread-fs-meta);
+    font-weight: 600;
+  }
+  .thread-chat-bubble p {
+    margin: 0;
+    color: var(--thread-color-body);
+    font-size: var(--thread-fs-body);
+    line-height: var(--lh-body);
+  }
+  .thread-event {
+    --thread-event-accent: color-mix(in srgb, var(--accent-warn) 72%, transparent);
+    --thread-event-title: color-mix(in srgb, var(--text) 78%, var(--text-soft));
+    --thread-event-copy: color-mix(in srgb, var(--text) 88%, var(--text-muted));
+    display: grid;
+    gap: calc(var(--s-1) + 2px);
+    padding: var(--s-1) 0 var(--s-2) var(--s-3);
+    border: 0;
+    background: none;
+    box-shadow: none;
+    position: relative;
+  }
+  .thread-event::before {
+    content: '';
+    position: absolute;
+    left: 0;
+    top: 0.1rem;
+    bottom: 0.15rem;
+    width: 2px;
+    border-radius: 999px;
+    background: var(--thread-event-accent);
+    box-shadow: 0 0 18px color-mix(in srgb, var(--thread-event-accent) 18%, transparent);
+  }
+  .thread-event-source {
+    --thread-event-accent: color-mix(in srgb, var(--accent) 66%, transparent);
+    --thread-event-title: color-mix(in srgb, var(--accent) 62%, var(--text-soft));
+  }
+  .thread-event-request {
+    --thread-event-accent: color-mix(in srgb, var(--accent-2) 68%, transparent);
+    --thread-event-title: color-mix(in srgb, var(--accent-2) 60%, var(--text-soft));
+  }
+  .thread-event-system {
+    --thread-event-accent: color-mix(in srgb, var(--text-soft) 42%, transparent);
+    --thread-event-title: color-mix(in srgb, var(--text-soft) 92%, var(--text-muted));
+    --thread-event-copy: color-mix(in srgb, var(--text-soft) 88%, var(--text-muted));
+  }
+  .thread-event-milestone {
+    --thread-event-accent: color-mix(in srgb, var(--accent-warn) 70%, transparent);
+    --thread-event-title: color-mix(in srgb, var(--accent-warn) 58%, var(--text-soft));
+  }
+  .thread-event-head {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: var(--s-2);
+  }
+  .thread-event-head strong {
+    font-size: var(--thread-fs-body);
+    line-height: var(--lh-tight);
+    color: var(--thread-event-title);
+    font-weight: 650;
+  }
+  .thread-event-head span {
+    color: var(--thread-color-muted);
+    font-size: var(--thread-fs-meta);
+    font-weight: 600;
+  }
+  .thread-event p {
+    margin: 0;
+    color: var(--thread-event-copy);
+    font-size: var(--thread-fs-body);
+    line-height: var(--lh-body);
+  }
+  .thread-event-links {
+    display: flex;
+    flex-wrap: wrap;
+    gap: var(--s-1);
+  }
+  .thread-event-link {
+    display: inline-flex;
+    align-items: center;
+    gap: var(--s-1);
+    padding: 0.35rem 0.6rem;
+    border: 1px solid color-mix(in srgb, var(--glass-border-strong) 32%, var(--border));
+    border-radius: 999px;
+    background: color-mix(in srgb, var(--bg-raised) 72%, transparent);
+    color: var(--thread-color-muted);
+    font-size: var(--thread-fs-meta);
+    line-height: 1;
+    transition:
+      border-color 140ms ease,
+      background-color 140ms ease,
+      color 140ms ease;
+  }
+  .thread-event-link:hover:not(:disabled),
+  .thread-event-link:focus-visible {
+    border-color: color-mix(in srgb, var(--accent) 32%, var(--glass-border-strong));
+    background: color-mix(in srgb, var(--accent) 10%, var(--bg-raised));
+    color: var(--text);
+  }
+  .thread-event-link:disabled {
+    opacity: 0.65;
+  }
+  .thread-history-cluster {
+    display: grid;
+    gap: var(--s-2);
+  }
+  .thread-history-cluster summary {
+    cursor: pointer;
+    color: var(--text-muted);
+    font-size: var(--fs-0);
+  }
+  .thread-document-preview {
+    display: grid;
+    gap: var(--s-3);
+  }
+  .thread-document-preview-head {
+    display: grid;
+    gap: 2px;
+  }
+  .thread-document-preview-head strong {
+    font-size: var(--fs-1);
+    line-height: var(--lh-tight);
+  }
+  .thread-history-cluster-list {
+    display: grid;
+    gap: var(--s-2);
+    padding-top: var(--s-1);
+  }
+  .thread-history-cluster-item {
+    display: grid;
+    gap: 2px;
+  }
+  .thread-history-cluster-head {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: var(--s-2);
+  }
+  .thread-history-cluster-head strong {
+    font-size: var(--fs-0);
+    line-height: var(--lh-tight);
+  }
+  .thread-history-cluster-head span {
+    color: var(--text-soft);
+    font-size: var(--fs-0);
+  }
+  .thread-history-cluster-item p {
+    margin: 0;
+    color: var(--text-muted);
+    font-size: var(--fs-0);
+    line-height: var(--lh-body);
   }
   .meta {
     display: flex;

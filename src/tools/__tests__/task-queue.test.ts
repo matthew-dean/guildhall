@@ -161,6 +161,81 @@ describe('updateTask', () => {
     })
   })
 
+  it('renders structuredSpec JSON into markdown and deterministic acceptance criteria', async () => {
+    await updateTask({
+      tasksPath,
+      taskId: 'task-001',
+      structuredSpec: {
+        whatThisIs: 'A block menu for Looma selection actions.',
+        problemContext: 'The imported roadmap draft and answered questions already narrowed the scope.',
+        goals: ['Ship the approved block menu interaction.'],
+        nonGoals: ['Do not include drag-and-drop reordering.'],
+        proposedDesign: 'Extend the existing editor action surface with a block menu entry point.',
+        keyDecisions: ['Keep drag-handle work split into a follow-up task.'],
+        acceptanceCriteria: [
+          'Given a selected block, when the menu opens, then the approved actions appear.',
+        ],
+        verification: ['Review the block menu locally in the editor shell.'],
+        completionBoundary: {
+          productOutcome: 'Editors can use the approved block menu locally.',
+          whatGuildhallCanCompleteInCode: 'The repo-local menu UI and tests.',
+          externalDependencies: 'None.',
+          ownerOnlySetup: 'None.',
+          verificationEnvironment: 'Local editor shell and repo tests.',
+          whatCountsAsDone: 'The block menu is reviewable and behaves as specified.',
+          whatMustBeSplitOrBlocked: 'Drag-handle work stays split.',
+        },
+        userFacingBehavior: 'The menu appears beside the selected block and shows only the approved actions.',
+      },
+    })
+
+    const raw = JSON.parse(await fs.readFile(tasksPath, 'utf-8'))
+    expect(raw.tasks[0].structuredSpec.whatThisIs).toBe('A block menu for Looma selection actions.')
+    expect(raw.tasks[0].spec).toContain('## What this is')
+    expect(raw.tasks[0].spec).toContain('## User-facing behavior')
+    expect(raw.tasks[0].acceptanceCriteria).toEqual([
+      {
+        id: 'ac-1',
+        description: 'Given a selected block, when the menu opens, then the approved actions appear.',
+        verifiedBy: 'review',
+        met: false,
+      },
+    ])
+  })
+
+  it('rejects updates that provide both markdown spec and structuredSpec JSON', async () => {
+    const result = await updateTask({
+      tasksPath,
+      taskId: 'task-001',
+      spec: '## Summary\nLegacy spec.',
+      structuredSpec: {
+        whatThisIs: 'A block menu.',
+        problemContext: 'Need one.',
+        goals: ['Ship it.'],
+        nonGoals: ['No drag handle.'],
+        proposedDesign: 'Use the existing surface.',
+        keyDecisions: ['Reuse the current selection model.'],
+        acceptanceCriteria: ['Given x, when y, then z.'],
+        verification: ['Review locally.'],
+        completionBoundary: {
+          productOutcome: 'It works.',
+          whatGuildhallCanCompleteInCode: 'Repo changes.',
+          externalDependencies: 'None.',
+          ownerOnlySetup: 'None.',
+          verificationEnvironment: 'Local.',
+          whatCountsAsDone: 'Reviewable.',
+          whatMustBeSplitOrBlocked: 'None.',
+        },
+      },
+    })
+
+    expect(result).toEqual({
+      success: false,
+      taskId: 'task-001',
+      error: 'Provide either spec markdown or structuredSpec JSON, not both.',
+    })
+  })
+
   it('records a split-required sizing plan when a shaped task is too large', async () => {
     await updateTask({
       tasksPath,

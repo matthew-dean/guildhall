@@ -22,6 +22,16 @@ describe('Chip visual contract', () => {
     expect(chipSource).toContain('warn: human decision or risk state')
   })
 
+  it('gives every chip a readable border instead of relying on fill contrast alone', () => {
+    expect(chipSource).toContain('border: 1px solid var(--chip-neutral-border)')
+    expect(chipSource).toContain('border-color: var(--chip-ok-border)')
+    expect(chipSource).toContain('border-color: var(--chip-warn-border)')
+    expect(chipSource).toContain('border-color: var(--chip-danger-border)')
+    expect(chipSource).toContain('border-color: var(--chip-accent-border)')
+    expect(chipSource).toContain('border-color: var(--chip-agent-border)')
+    expect(chipSource).toContain('border-color: var(--chip-agent-attention-border)')
+  })
+
   it('uses translucent white text on automation chips so their fills participate in the color', () => {
     const agentBlock = chipSource.match(/\.tone-agent\s*\{([\s\S]*?)\n\s*\}/)?.[1] ?? ''
     const agentAttentionBlock = chipSource.match(/\.tone-agent-attention\s*\{([\s\S]*?)\n\s*\}/)?.[1] ?? ''

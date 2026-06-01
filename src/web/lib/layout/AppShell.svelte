@@ -139,6 +139,18 @@
     padding: var(--s-5) var(--s-5) var(--s-6);
     box-sizing: border-box;
   }
+  .app-shell-page.page--surface-fill {
+    width: 100%;
+    max-width: none;
+    margin: 0;
+    display: grid;
+    grid-template-rows: minmax(0, 1fr);
+    align-items: stretch;
+    gap: 0;
+    padding: 0;
+    overflow: hidden;
+    --app-shell-page-padding-block-start: 0px;
+  }
   .app-shell-footer {
     min-width: 0;
     min-height: 0;
@@ -173,6 +185,7 @@
       gap: var(--s-4);
       padding: var(--s-4);
     }
+    .app-shell-page.page--surface-fill { padding: 0; }
   }
   @media (max-width: 520px) {
     .app-shell-page {
@@ -180,5 +193,6 @@
       gap: var(--s-3);
       padding: var(--s-3) var(--s-2) var(--s-4);
     }
+    .app-shell-page.page--surface-fill { padding: 0; }
   }
 </style>

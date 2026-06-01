@@ -1458,15 +1458,15 @@
       <nav class="settings-section-nav" aria-label="Settings sections">
         {#each settingsSections as item (item.id)}
           {@const active = section === item.id}
-          <button
-            type="button"
-            class="settings-section-button"
-            class:active
+          <Button
+            variant={active ? 'secondary' : 'ghost'}
+            size="md"
+            className="settings-section-button"
             aria-current={active ? 'page' : undefined}
             onclick={() => nav(settingsSectionHref(item.id))}
           >
             {item.label}
-          </button>
+          </Button>
         {/each}
       </nav>
     </Card>
@@ -2843,45 +2843,39 @@
   .settings-section-nav {
     display: grid;
     gap: var(--gh-space-2);
-    grid-template-columns: repeat(7, minmax(0, 1fr));
+    grid-template-columns: repeat(auto-fit, minmax(min(9.5rem, 100%), 1fr));
     inline-size: 100%;
+    align-items: stretch;
   }
 
-  .settings-section-button {
-    appearance: none;
-    border: none;
-    border-radius: var(--r-1);
-    background: transparent;
-    color: var(--text-muted);
-    cursor: pointer;
-    font: inherit;
+  :global(.settings-section-button) {
+    inline-size: 100%;
+    justify-content: center;
+    min-inline-size: 0;
+    min-block-size: 38px;
     font-size: var(--fs-1);
     font-weight: 650;
     line-height: var(--lh-tight);
-    min-block-size: 34px;
-    min-inline-size: 0;
-    padding: var(--gh-space-2) var(--gh-space-3);
+    color: var(--text-muted);
+    box-shadow: none;
   }
 
-  .settings-section-button:hover {
+  :global(.settings-section-button[aria-current='page']) {
     color: var(--text);
-    background: color-mix(in srgb, white 5%, transparent);
-  }
-
-  .settings-section-button:focus-visible {
-    outline: 2px solid color-mix(in srgb, var(--accent) 54%, transparent);
-    outline-offset: 2px;
-  }
-
-  .settings-section-button.active {
-    color: var(--text);
-    background:
-      linear-gradient(180deg, color-mix(in srgb, white 8%, transparent), transparent 52%),
-      color-mix(in srgb, var(--glass-bg-strong) 72%, var(--bg-raised-2));
     box-shadow:
-      inset 0 1px 0 color-mix(in srgb, white 8%, transparent),
-      0 0 0 1px color-mix(in srgb, var(--glass-border) 74%, transparent),
-      0 1px 0 color-mix(in srgb, black 18%, transparent);
+      inset 0 1px 0 color-mix(in srgb, white 10%, transparent),
+      0 1px 0 color-mix(in srgb, black 14%, transparent);
+  }
+
+  :global(.settings-section-button:not([aria-current='page'])) {
+    background:
+      linear-gradient(180deg, color-mix(in srgb, white 4%, transparent), transparent 58%),
+      transparent;
+    color: var(--text-muted);
+  }
+
+  :global(.settings-section-button:not([aria-current='page']):hover) {
+    color: var(--text);
   }
 
   @container (max-width: 44rem) {

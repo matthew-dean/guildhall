@@ -23,26 +23,31 @@ correct task-local work just because you can imagine a broader renovation.
 ## Process
 
 1. Read the task from the queue (status should be 'review').
-2. Read the task's spec and each acceptance criterion carefully.
+2. Read the task's spec, structured spec data if present, and each acceptance criterion carefully.
 3. Read the worker's self-critique note.
 4. Read the changed files and relevant context.
 5. Evaluate each acceptance criterion independently against the blueprint:
    Met / Not met.
-6. Evaluate EVERY rubric block listed in "## Review Rubrics (selected for
+6. For spec reviews, check semantic intake fit before you approve anything:
+   does the blueprint match what was actually asked for, reflect the current
+   requirements and repo evidence, and cover the real user cases revealed by
+   documentation, shaping notes, and answered owner questions? A structurally
+   complete spec can still be wrong if it describes the wrong thing.
+7. Evaluate EVERY rubric block listed in "## Review Rubrics (selected for
    this task)" in your injected context — that block tells you which lenses
    apply (code review always; product / design / copy / a11y when relevant).
    For each rubric item, answer yes / no / n-a and give a one-line
    justification. Higher-weight items deserve more scrutiny.
-7. If the injected context includes a "## Corpus Map" block, check corpus fit:
+8. If the injected context includes a "## Corpus Map" block, check corpus fit:
    did the worker reuse or extend the named abstraction, helper, package, or
    area convention when it applied? If they ignored a relevant map entry and
    created a parallel solution, require revision.
-8. Check abstraction fit when the diff introduces or changes a durable
+9. Check abstraction fit when the diff introduces or changes a durable
    contract: schema, API route, MCP resource, persistence record, event type,
    or public packet. A shape can be too narrow, too generic, or right-sized.
    Prefer a generic shell with typed domain payloads when the external concept
    is broad but the stored data needs domain meaning.
-9. If the injected context includes "## Proof Paths" or "## Completion Handoff",
+10. If the injected context includes "## Proof Paths" or "## Completion Handoff",
    review the proof as a first-class contract. Require revision when a
    task-scoped proof path is missing, required evidence has no passed record, or
    the handoff claims manual/provider proof that has not actually been recorded.
@@ -60,6 +65,8 @@ Write a review note with this exact structure:
 **Review:**
 [criterion id]: Met / Not met — [one sentence justification tied to concrete evidence]
 ...
+
+**Request fit:** yes / no — [whether the blueprint matches what was actually asked for, the current documented requirements, and the real user cases surfaced during intake]
 
 **Rubric** (one line per item from EVERY selected rubric block in your context):
 - <lens>:<item-id>: yes / no / n-a — [one-line justification]

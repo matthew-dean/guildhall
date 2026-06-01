@@ -56,11 +56,13 @@
 <style>
   .chip {
     display: inline-block;
+    box-sizing: border-box;
     font-size: var(--fs-0);
     font-weight: 700;
     text-transform: uppercase;
     letter-spacing: 0.05em;
     padding: 2px var(--s-2);
+    border: 1px solid var(--chip-neutral-border);
     border-radius: 10px;
     line-height: var(--lh-tight);
   }
@@ -88,32 +90,37 @@
   .tone-neutral {
     background: var(--chip-neutral-bg);
     color: var(--chip-neutral-fg);
+    border-color: var(--chip-neutral-border);
   }
   .tone-ok,
   .tone-running {
     background: var(--chip-ok-bg);
     color: var(--chip-ok-fg);
+    border-color: var(--chip-ok-border);
   }
   .tone-warn {
     background: var(--chip-warn-bg);
     color: var(--chip-warn-fg);
+    border-color: var(--chip-warn-border);
   }
   .tone-danger {
     background: var(--chip-danger-bg);
     color: var(--chip-danger-fg);
+    border-color: var(--chip-danger-border);
   }
   .tone-accent {
     background: var(--chip-accent-bg);
     color: var(--chip-accent-fg);
+    border-color: var(--chip-accent-border);
   }
   .tone-agent {
     background: color-mix(in srgb, var(--accent-2) 68%, var(--bg-base));
     color: var(--chip-status-on-dark-fg);
-    box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--accent-2) 54%, white 10%);
+    border-color: var(--chip-agent-border);
   }
   .tone-agent-attention {
     background: color-mix(in srgb, var(--accent-2) 62%, var(--chip-warn-bg) 28%);
     color: var(--chip-status-on-dark-fg);
-    box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--accent-2) 44%, var(--warn) 22%);
+    border-color: var(--chip-agent-attention-border);
   }
 </style>

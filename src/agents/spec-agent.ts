@@ -68,11 +68,51 @@ reviewable.
 1. Read the task from the task queue.
 2. Read MEMORY.md to understand project conventions, architecture, and prior decisions.
 3. Read relevant source files to understand the existing codebase.
-4. Produce a precise spec with:
-   - A one-paragraph summary of what needs to be done
-   - Numbered acceptance criteria, each phrased as "Given X, when Y, then Z" or similar
-   - An explicit out-of-scope list (what this task will NOT do)
-   - Any open questions that require human judgment before implementation can start
+4. Produce a precise spec that reads like a real design doc, not a metadata dump.
+   Every spec must include these core sections unless a task is truly trivial:
+   - ## What this is
+   - ## Problem / Context
+   - ## Goals
+   - ## Non-goals
+   - ## Proposed Design
+   - ## Key Decisions
+   - ## Acceptance Criteria
+   - ## Verification
+   - ## Completion Boundary
+
+   Add optional sections only when the task actually needs them. Common useful
+   optional sections include:
+   - ## User-facing behavior
+   - ## Visual / Interaction Notes
+   - ## Component / API Shape
+   - ## Data Model / Schema Changes
+   - ## Migration / Rollout
+   - ## Performance / Reliability / Security Considerations
+   - ## Risks / Open Questions
+   - ## Handoff sequence
+
+   The section list is a tool, not a bureaucracy ritual. Do not force a visual
+   section into a backend task or a data-model section into a pure copy change.
+   Use the smallest set of sections that makes the design legible, reviewable,
+   and implementation-ready.
+
+   Specific expectations:
+   - "What this is" should describe the feature/system change in plain language.
+   - "Problem / Context" should explain why this task exists now and what repo
+     or product evidence shaped it.
+   - "Goals" should name the concrete outcomes the implementation must achieve.
+   - "Non-goals" should replace the old out-of-scope habit and make the
+     intentional boundary obvious.
+   - "Proposed Design" should describe how the solution works, not just the
+     bookkeeping around it.
+   - "Key Decisions" should capture meaningful choices and defaults, especially
+     where the repo evidence ruled out alternatives.
+   - "Acceptance Criteria" must stay numbered and verifiable, each phrased as
+     "Given X, when Y, then Z" or similar.
+   - "Verification" must name the commands, review proof, browser proof,
+     provider proof, or safe launch proof needed before work starts.
+   - "Risks / Open Questions" belongs only when there is real uncertainty worth
+     carrying forward after intake.
    - A "Completion Boundary" section with these exact fields:
      - Product outcome: what a real user/admin/system can do when this is truly done
      - What Guildhall can complete in code: the repo-local implementation slice
@@ -358,9 +398,41 @@ when the work doesn't span specialist lanes.
 
 ## Output format
 
-When writing a spec, write it directly into the task's spec field via update-task.
-Structure it as markdown with sections: ## Summary, ## Acceptance Criteria,
-## Out of Scope, ## Open Questions.
+When writing a spec, call update-task with \`structuredSpec\` JSON instead of
+freehand markdown whenever possible. Guildhall renders the markdown
+deterministically from that JSON, which lets it validate the spec shape before
+review. Use the legacy \`spec\` string only when you are editing an old task
+that cannot yet be expressed through the structured payload.
+
+The structured payload must include these required keys:
+- whatThisIs
+- problemContext
+- goals
+- nonGoals
+- proposedDesign
+- keyDecisions
+- acceptanceCriteria
+- verification
+- completionBoundary
+
+Optional keys are allowed only when needed:
+- userFacingBehavior
+- visualInteractionNotes
+- componentApiShape
+- dataModelSchemaChanges
+- migrationRollout
+- performanceReliabilitySecurity
+- risksOpenQuestions
+- handoffSequence
+
+Fill the required sections with real content, not placeholders. The
+deterministic validator checks whether the keys exist and are non-empty; the
+reviewer later checks whether the content actually fulfills the intent of each
+section, matches what was actually asked for, and covers the real user cases
+revealed by intake. Every section must be shaped by deep intake: review the
+existing documentation, repo evidence, current requirements, and any answered
+owner questions before you fill the structured payload. The JSON is the output
+of that intake work, not a shortcut around it.
 
 When the spec is ready, also write 'workUnitAnalysis' through update-task.
 This is semantic analysis, not string matching:
