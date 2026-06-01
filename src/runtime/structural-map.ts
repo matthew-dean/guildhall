@@ -33,6 +33,14 @@ export type StructuralNodeKind =
   | 'memory_scope'
 
 export type StructuralConfidence = 'low' | 'medium' | 'high' | 'conflict'
+export type StructuralFreshness = 'fresh' | 'recent' | 'stale' | 'unknown'
+
+export interface StructuralConflict {
+  kind: 'label_conflict' | 'evidence_conflict'
+  targetId: string
+  summary: string
+  evidenceRefs: string[]
+}
 
 export interface EvidenceRef {
   kind: 'manifest' | 'script' | 'path' | 'docs' | 'git' | 'owner'
@@ -55,6 +63,9 @@ export interface StructuralMapNode {
   dependencyNames?: string[]
   evidence: EvidenceRef[]
   confidence: StructuralConfidence
+  evidenceScore?: number
+  freshness?: StructuralFreshness
+  conflicts?: StructuralConflict[]
 }
 
 export interface StructuralDiscoveryDetection {
@@ -84,6 +95,11 @@ export interface StructuralMapEdge {
     | 'domain_uses_executable_unit'
     | 'domain_owned_by_project'
     | 'package_owned_by_git_authority'
+  evidence?: EvidenceRef[]
+  confidence?: StructuralConfidence
+  evidenceScore?: number
+  freshness?: StructuralFreshness
+  conflicts?: StructuralConflict[]
 }
 
 export interface IgnoredGitRoot {
@@ -688,12 +704,14 @@ export async function draftStructuralMap(input: {
   nodes.push(...inferCrossCuttingConcernNodes(projectRoot, rootPackage))
 
   const ignoredGitRoots = await discoverIgnoredGitRoots(projectRoot)
+  const finalNodes = uniqueNodes(nodes)
+  const finalEdges = uniqueEdges(edges)
   const ownerQuestions: OwnerQuestion[] = [{
     id: 'confirm-domain-routing',
     reason: 'owner_review_required_before_routing_truth',
     prompt: 'Review the proposed domains, package graph, executable units, and Git authority before Guildhall uses this map for routing.',
-    targetIds: nodes.filter(node => node.kind === 'domain_group' || node.kind === 'cross_cutting_domain').map(node => node.id),
-  }]
+    targetIds: finalNodes.filter(node => node.kind === 'domain_group' || node.kind === 'cross_cutting_domain').map(node => node.id),
+  }, ...conflictOwnerQuestions(finalNodes, finalEdges)]
   const draft: StructuralMapDraft = {
     id: `structural-map-${Date.parse(now).toString(36)}`,
     version: 1,
@@ -705,8 +723,8 @@ export async function draftStructuralMap(input: {
       version: 1,
       state: 'draft',
     },
-    nodes: uniqueNodes(nodes),
-    edges: uniqueEdges(edges),
+    nodes: finalNodes,
+    edges: finalEdges,
     ignoredGitRoots,
     ownerQuestions,
     correctionRequests: [],
@@ -1373,12 +1391,98 @@ function assertAccepted(map: StructuralMapDraft, role: string): void {
 }
 
 function uniqueNodes(nodes: StructuralMapNode[]): StructuralMapNode[] {
-  return [...new Map(nodes.map(node => [node.id, node])).values()].sort((left, right) => left.id.localeCompare(right.id))
+  const merged = new Map<string, StructuralMapNode>()
+  for (const node of nodes) {
+    const existing = merged.get(node.id)
+    if (!existing) {
+      merged.set(node.id, annotateNodeEvidence({ ...node, evidence: [...node.evidence], conflicts: [...node.conflicts ?? []] }))
+      continue
+    }
+    const conflicts = [...existing.conflicts ?? [], ...node.conflicts ?? []]
+    if (existing.label !== node.label) {
+      conflicts.push({
+        kind: 'label_conflict',
+        targetId: node.id,
+        summary: `Structural evidence disagrees on label "${existing.label}" vs "${node.label}".`,
+        evidenceRefs: [...existing.evidence, ...node.evidence].map(ref => ref.ref),
+      })
+    }
+    merged.set(node.id, annotateNodeEvidence({
+      ...existing,
+      evidence: [...existing.evidence, ...node.evidence],
+      confidence: conflicts.length > 0 ? 'conflict' : strongestConfidence(existing.confidence, node.confidence),
+      conflicts,
+    }))
+  }
+  return [...merged.values()].sort((left, right) => left.id.localeCompare(right.id))
 }
 
 function uniqueEdges(edges: StructuralMapEdge[]): StructuralMapEdge[] {
   return [...new Map(edges.map(edge => [`${edge.from}:${edge.kind}:${edge.to}`, edge])).values()]
+    .map(annotateEdgeEvidence)
     .sort((left, right) => `${left.from}:${left.to}`.localeCompare(`${right.from}:${right.to}`))
+}
+
+function annotateNodeEvidence(node: StructuralMapNode): StructuralMapNode {
+  return {
+    ...node,
+    evidenceScore: evidenceScore(node.evidence, node.conflicts),
+    freshness: evidenceFreshness(node.evidence),
+  }
+}
+
+function annotateEdgeEvidence(edge: StructuralMapEdge): StructuralMapEdge {
+  return {
+    ...edge,
+    evidence: edge.evidence ?? [],
+    confidence: edge.confidence ?? 'medium',
+    evidenceScore: evidenceScore(edge.evidence ?? [], edge.conflicts),
+    freshness: evidenceFreshness(edge.evidence ?? []),
+  }
+}
+
+function conflictOwnerQuestions(nodes: StructuralMapNode[], edges: StructuralMapEdge[]): OwnerQuestion[] {
+  const nodeQuestions = nodes
+    .flatMap(node => node.conflicts ?? [])
+    .map(conflict => ({
+      id: `resolve-conflict-${slugify(conflict.targetId)}`,
+      reason: 'conflicting_structural_evidence',
+      prompt: conflict.summary,
+      targetIds: [conflict.targetId],
+    }))
+  const edgeQuestions = edges
+    .flatMap(edge => edge.conflicts ?? [])
+    .map(conflict => ({
+      id: `resolve-conflict-${slugify(conflict.targetId)}`,
+      reason: 'conflicting_structural_evidence',
+      prompt: conflict.summary,
+      targetIds: [conflict.targetId],
+    }))
+  return [...nodeQuestions, ...edgeQuestions]
+}
+
+function strongestConfidence(left: StructuralConfidence, right: StructuralConfidence): StructuralConfidence {
+  if (left === 'conflict' || right === 'conflict') return 'conflict'
+  const order: StructuralConfidence[] = ['low', 'medium', 'high']
+  return order.indexOf(left) >= order.indexOf(right) ? left : right
+}
+
+function evidenceScore(evidenceRefs: EvidenceRef[], conflicts: StructuralConflict[] = []): number {
+  if (conflicts.length > 0) return 0.25
+  if (evidenceRefs.length === 0) return 0.5
+  const score = evidenceRefs.reduce((sum, ref) => {
+    if (ref.confidence === 'high') return sum + 1
+    if (ref.confidence === 'medium') return sum + 0.66
+    if (ref.confidence === 'low') return sum + 0.33
+    return sum + 0.1
+  }, 0) / evidenceRefs.length
+  return Math.round(score * 100) / 100
+}
+
+function evidenceFreshness(evidenceRefs: EvidenceRef[]): StructuralFreshness {
+  if (evidenceRefs.some(ref => ref.kind === 'owner' || ref.kind === 'manifest' || ref.kind === 'path' || ref.kind === 'script')) return 'fresh'
+  if (evidenceRefs.some(ref => ref.kind === 'docs')) return 'recent'
+  return 'unknown'
 }
 
 function uniqueStrings(values: string[]): string[] {

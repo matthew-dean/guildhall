@@ -228,6 +228,41 @@ describe('structural map drafting', () => {
     }))
   })
 
+  it('scores evidence freshness and raises owner questions for conflicting structural evidence', async () => {
+    await writeCrossCuttingFixture(projectRoot)
+    await fsp.writeFile(path.join(projectRoot, '.guildhall', 'structural-domains.json'), `${JSON.stringify({
+      crossCuttingDomains: [
+        {
+          id: 'parser-parity',
+          label: 'Parsing contracts',
+          evidenceRefs: ['owner:renamed-parser-concern'],
+        },
+      ],
+    }, null, 2)}\n`)
+
+    const draft = await draftStructuralMap({
+      projectId: 'conflicts',
+      projectRoot,
+      now: '2026-06-01T12:00:00.000Z',
+    })
+
+    const parserConcern = draft.nodes.find(node => node.id === 'cross-cutting:parser-parity')
+    expect(parserConcern).toEqual(expect.objectContaining({
+      confidence: 'conflict',
+      evidenceScore: expect.any(Number),
+      freshness: 'fresh',
+      conflicts: [expect.objectContaining({
+        kind: 'label_conflict',
+        targetId: 'cross-cutting:parser-parity',
+      })],
+    }))
+    expect(draft.edges.every(edge => typeof edge.evidenceScore === 'number' && edge.freshness)).toBe(true)
+    expect(draft.ownerQuestions).toContainEqual(expect.objectContaining({
+      id: 'resolve-conflict-cross-cutting-parser-parity',
+      reason: 'conflicting_structural_evidence',
+    }))
+  })
+
   it('runs structural discovery providers so package managers can be added without changing the draft core', async () => {
     const customProvider: StructuralDiscoveryProvider = {
       id: 'fixture-provider',

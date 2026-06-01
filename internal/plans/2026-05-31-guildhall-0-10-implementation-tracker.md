@@ -250,7 +250,7 @@ agent packet integration, coordinator assignment, or remote authority support.
 
 ### Remaining Work Ledger
 
-**Remaining: 12 items. Next item: 6.**
+**Remaining: 11 items. Next item: 7.**
 
 1. [x] Replace the current pnpm-only discovery core with a provider interface
    for package/workspace discovery. After this: implement JS/npm/yarn/bun
@@ -288,9 +288,13 @@ agent packet integration, coordinator assignment, or remote authority support.
    covers those common concerns, preserves node-copy reduction, and reads
    owner-defined cross-cutting domains from
    `.guildhall/structural-domains.json`.
-6. [ ] Add structural evidence scoring, freshness, conflicts, and owner
+6. [x] Add structural evidence scoring, freshness, conflicts, and owner
    questions per node/edge instead of coarse confidence labels. After this:
-   add refresh/diff behavior.
+   add refresh/diff behavior. Completed in
+   `feature/0.10-structural-domain-intelligence`: final map nodes and edges
+   now carry evidence scores and freshness, duplicate structural IDs merge
+   evidence instead of overwriting, label conflicts are preserved, and conflict
+   owner questions are generated.
 7. [ ] Add structural-map refresh/diff support so manifest/source/Git changes
    mark only affected map areas stale and ask review questions only where
    routing, memory, commands, or Git authority changes. After this: wire maps
