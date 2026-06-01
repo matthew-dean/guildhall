@@ -39,9 +39,11 @@ import type { CompletionHandoff as CompletionHandoffType } from './completion-ha
 import type { ProofPath as ProofPathType } from './proof-paths.js'
 import { buildEffectiveMemoryPacket, type EffectiveMemoryPacket } from './effective-memory-packet.js'
 import {
+  buildStructuralContextSlice,
   readAcceptedStructuralMap,
   renderStructuralAgentPacket,
   type StructuralAgentRole,
+  type StructuralContextSlice,
 } from './structural-map.js'
 
 // ---------------------------------------------------------------------------
@@ -825,6 +827,7 @@ export interface BuiltContext {
   effectiveMemory?: string
   effectiveMemoryPacket?: EffectiveMemoryPacket
   structuralMapContext?: string
+  structuralMapOmitted?: StructuralContextSlice['omitted']
   /** Concatenated string ready to prepend to an agent message */
   formatted: string
 }
@@ -1147,18 +1150,21 @@ export async function buildContext(
   const effectiveMemory = effectiveMemoryPacket.rendered
   const structuralMap = readAcceptedStructuralMap(projectRoot)
   const structuralRole = structuralAgentRoleForTask(task)
+  const structuralTask = {
+    id: task.id,
+    title: task.title,
+    files: resolveLikelyTaskFiles(task),
+    text: `${task.description}\n${task.spec ?? ''}`,
+  }
+  const structuralMapSlice = structuralMap ? buildStructuralContextSlice(structuralMap, structuralTask) : null
   const structuralMapContext = structuralMap
     ? renderStructuralAgentPacket({
         map: structuralMap,
-        task: {
-          id: task.id,
-          title: task.title,
-          files: resolveLikelyTaskFiles(task),
-          text: `${task.description}\n${task.spec ?? ''}`,
-        },
+        task: structuralTask,
         role: structuralRole,
       })
     : ''
+  const structuralMapOmitted = structuralMapSlice?.omitted ?? []
 
   const taskSummary = [
     `## Current Task: ${task.id}`,
@@ -1276,6 +1282,7 @@ export async function buildContext(
     effectiveMemory,
     effectiveMemoryPacket,
     structuralMapContext,
+    structuralMapOmitted,
     formatted,
   }
 }
