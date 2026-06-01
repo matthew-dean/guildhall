@@ -167,6 +167,8 @@ describe('AcceptanceCriteria', () => {
       })
       expect(result.verifiedBy).toBe(type)
       expect(result.met).toBe(false) // default
+      expect(result.scenario).toBe('Test criterion')
+      expect(result.expectation).toBe('Test criterion')
     }
   })
 
@@ -178,6 +180,16 @@ describe('AcceptanceCriteria', () => {
       command: 'pnpm build',
     })
     expect(result.command).toBe('pnpm build')
+  })
+
+  it('derives structured scenario and expectation from given/when/then descriptions', () => {
+    const result = AcceptanceCriteria.parse({
+      id: 'ac-1',
+      description: 'Given a selected block, when the menu opens, then the approved actions appear.',
+      verifiedBy: 'review',
+    })
+    expect(result.scenario).toBe('Given a selected block, when the menu opens')
+    expect(result.expectation).toBe('Then the approved actions appear.')
   })
 
   it('normalizes command-like verifiedBy values from agent-written criteria', () => {

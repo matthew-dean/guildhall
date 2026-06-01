@@ -79,6 +79,10 @@ export function planProjectReintake(input: ProjectReintakeInput): ProjectReintak
   const now = input.now ?? new Date().toISOString()
   const groups: ReintakeChangeGroup[] = []
   const usedTaskIds = new Set<string>()
+  const protectedProgressTaskIds = new Set(input.tasks
+    .filter(task => isStartedOrCompletedTask(task))
+    .map(task => stringField(task, 'id'))
+    .filter((id): id is string => Boolean(id)))
 
   const duplicateMerges = duplicateMergeChanges(input.tasks)
   if (duplicateMerges.length > 0) {
@@ -104,6 +108,7 @@ export function planProjectReintake(input: ProjectReintakeInput): ProjectReintak
     .filter((id): id is string => Boolean(id)))
   const graphChanges = graphPlan.tasks
     .filter(task => !completedTaskIds.has(task.id))
+    .filter(task => !protectedProgressTaskIds.has(task.id))
     .map(task => graphTaskChange(
       { ...task, dependsOn: task.dependsOn.filter(dependency => !completedTaskIds.has(dependency)) },
       graphPlan.reconciliations,
@@ -147,6 +152,16 @@ export function planProjectReintake(input: ProjectReintakeInput): ProjectReintak
       title: 'Archive unsupported blocked cards',
       rationale: 'These blocked cards have no current source evidence and no durable proof.',
       changes: archiveChanges,
+    })
+  }
+
+  const staleWeakSpecChanges = archiveUnsupportedWeakPreImplementationTasks(input.tasks, usedTaskIds)
+  if (staleWeakSpecChanges.length > 0) {
+    groups.push({
+      id: 'archive-stale-preimplementation',
+      title: 'Archive stale pre-implementation tasks',
+      rationale: 'Not-started tasks with weak legacy specs should not override current evidence when no current source support remains.',
+      changes: staleWeakSpecChanges,
     })
   }
 
@@ -423,6 +438,24 @@ function archiveUnsupportedBlockedTasks(tasks: Array<Record<string, unknown>>, u
     }))
 }
 
+function archiveUnsupportedWeakPreImplementationTasks(
+  tasks: Array<Record<string, unknown>>,
+  usedTaskIds: Set<string>,
+): ReintakeChange[] {
+  return tasks
+    .filter(task => {
+      const id = stringField(task, 'id')
+      if (!id || usedTaskIds.has(id)) return false
+      if (!isOpenPreImplementationTask(task)) return false
+      return hasWeakLegacySpecShape(task)
+    })
+    .map(task => ({
+      kind: 'archive' as const,
+      taskId: stringField(task, 'id') ?? '',
+      reason: 'Pre-implementation task is unsupported by current evidence and still uses a weak legacy spec shape.',
+    }))
+}
+
 function singleEditChange(sources: ProjectReintakeSource[]): ReintakeChange | null {
   const text = sources.map(source => source.content).join('\n')
   if (!/should say/i.test(text) || !/SettingsTab\.svelte/i.test(text)) {
@@ -479,6 +512,64 @@ function stringField(source: Record<string, unknown>, key: string): string | und
 
 function normalize(value: string): string {
   return value.toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim()
+}
+
+function isStartedOrCompletedTask(task: Record<string, unknown>): boolean {
+  const status = stringField(task, 'status') ?? ''
+  return ['done', 'in_progress', 'review', 'gate_check', 'pending_pr'].includes(status)
+}
+
+function isOpenPreImplementationTask(task: Record<string, unknown>): boolean {
+  const status = stringField(task, 'status') ?? ''
+  return ['import_draft', 'exploring', 'spec_review', 'ready'].includes(status)
+}
+
+function hasWeakLegacySpecShape(task: Record<string, unknown>): boolean {
+  if (hasStructuredSpecRecord(task)) return false
+
+  const spec = stringField(task, 'spec')
+  const acceptanceCriteria = Array.isArray(task.acceptanceCriteria) ? task.acceptanceCriteria : []
+  const brief = task.productBrief && typeof task.productBrief === 'object' && !Array.isArray(task.productBrief)
+    ? task.productBrief as Record<string, unknown>
+    : null
+  const hasBriefShape = typeof brief?.userJob === 'string' && brief.userJob.trim().length > 0
+    && typeof brief?.whyItMattersNow === 'string' && brief.whyItMattersNow.trim().length > 0
+    && typeof brief?.successMetric === 'string' && brief.successMetric.trim().length > 0
+
+  if (!spec?.trim()) {
+    return true
+  }
+
+  if (!markdownLooksLikeModernSpec(spec)) {
+    return true
+  }
+
+  if (!hasBriefShape || acceptanceCriteria.length === 0) {
+    return true
+  }
+
+  return false
+}
+
+function hasStructuredSpecRecord(task: Record<string, unknown>): boolean {
+  const value = task.structuredSpec
+  return Boolean(value && typeof value === 'object' && !Array.isArray(value))
+}
+
+function markdownLooksLikeModernSpec(spec: string): boolean {
+  const headings = [
+    /^## What this is$/im,
+    /^## Problem \/ context$/im,
+    /^## Goals$/im,
+    /^## Non-goals$/im,
+    /^## Proposed design$/im,
+    /^## Key decisions$/im,
+    /^## Acceptance criteria$/im,
+    /^## Verification$/im,
+    /^## Completion boundary$/im,
+  ]
+  const matchCount = headings.filter(pattern => pattern.test(spec)).length
+  return matchCount >= 6
 }
 
 function stableHash(input: string): string {

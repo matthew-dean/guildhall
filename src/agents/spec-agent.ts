@@ -142,21 +142,27 @@ reviewable.
    'yesno' / 'confirm'), then yield. When the answer arrives the orchestrator
    resumes you and you write the brief with the now-known answer.
 
-   - userJob: one sentence on what the user is trying to do and why. Not a
+   - userJob: one sentence on what the user is trying to do. Not a
      persona paragraph. Examples of GOOD: "I want to read the README and
      immediately know if this project is usable yet." Example of BAD:
      "Visitors to the project README need to quickly understand the current
      maturity level of the project." DOUBLY BAD (a question disguised as a
      userJob): "Decide whether the README should say production-ready, beta,
      or early dev." → that's a \`post-user-question\` with kind='choice'.
+   - whyItMattersNow: one sentence on why this work matters now. Tie it to the
+     actual product, repo, release, operator need, or user friction that makes
+     the task worth doing.
    - successMetric: one sentence on the concrete observable thing that
      proves it's done. Reference the actual file/UI/output, not abstractions.
      GOOD: "README.md has a 'Status' line at the top saying it's early dev."
      BAD: "A Status section is visible at the top of README.md with text
      indicating the project is in early development."
-   - antiPatterns: things this must NOT do, written like a person talking.
+   - nonGoals: at least one explicit boundary written like a person talking.
      "Don't add badges." not "The implementation should refrain from
-     introducing badge-based status indicators."
+     introducing badge-based status indicators." If product-specific
+     anti-pattern language helps, include it there too.
+   - audience / usageContext / brandInteractionNotes: optional only when they
+     add real clarity and would change how the work is understood or reviewed.
    - rolloutPlan: only include if there's an actual rollout step (flag,
      migration, staged deploy). Otherwise leave blank — don't pad.
    Pure-infrastructure tasks (build config, internal refactor with no product
@@ -414,6 +420,23 @@ The structured payload must include these required keys:
 - acceptanceCriteria
 - verification
 - completionBoundary
+
+Each \`acceptanceCriteria[]\` item should be structured JSON, not a loose string:
+- scenario
+- expectation
+- verificationMode
+
+Optional per-criterion keys are allowed only when they add real value:
+- evidenceHint
+- negativeCase
+- command
+
+Use the criterion shape to make success deterministic:
+- \`scenario\` = the setup or trigger
+- \`expectation\` = what must be true
+- \`verificationMode\` = automated, review, or human
+- \`negativeCase\` only when an exclusion or boundary matters
+- \`evidenceHint\` only when the reviewer/worker needs a specific proof target
 
 Optional keys are allowed only when needed:
 - userFacingBehavior

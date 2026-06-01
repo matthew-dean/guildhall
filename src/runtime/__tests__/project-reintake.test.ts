@@ -69,6 +69,35 @@ describe('project re-intake planner', () => {
     expect(draft.summary.reframed).toBe(1)
   })
 
+  it('reframes weak legacy pre-implementation specs when current evidence still supports the task', () => {
+    const draft = planProjectReintake({
+      now,
+      sources: [{ path: 'looma/docs/component-library-audit.md', content: loomaAudit }],
+      tasks: [
+        task({
+          id: 'task-039',
+          title: 'Build AlertDialog primitive',
+          description: 'Build the Looma AlertDialog primitive.',
+          status: 'spec_review',
+          productBrief: {
+            userJob: 'Ship AlertDialog.',
+            successMetric: 'The task has a reviewable spec and acceptance criteria.',
+          },
+          spec: '## Summary\nBuild the AlertDialog primitive.\n\n## Acceptance Criteria\n- The feature is reviewable.',
+          acceptanceCriteria: [{ id: 'legacy', description: 'Feature is reviewable.', verifiedBy: 'review', met: false }],
+        }),
+      ],
+    })
+
+    expect(draft.groups.flatMap(group => group.changes)).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        kind: 'reframe',
+        taskId: 'task-039',
+        reason: expect.stringContaining('current evidence'),
+      }),
+    ]))
+  })
+
   it('preserves completed work as progress evidence instead of recreating it', () => {
     const draft = planProjectReintake({
       now,
@@ -103,6 +132,29 @@ describe('project re-intake planner', () => {
     expect(changes.some(change => change.kind === 'create' && change.task.title === 'Build Dialog')).toBe(false)
   })
 
+  it('preserves started implementation work instead of reframing it during re-intake', () => {
+    const draft = planProjectReintake({
+      now,
+      sources: [{ path: 'looma/docs/component-library-audit.md', content: loomaAudit }],
+      tasks: [
+        task({
+          id: 'task-drawer',
+          title: 'Build Drawer primitive',
+          description: 'Worker already started this implementation.',
+          status: 'in_progress',
+          spec: '## Summary\nBuild Drawer.\n\n## Acceptance Criteria\n- Ship Drawer.',
+          acceptanceCriteria: [],
+        }),
+      ],
+    })
+
+    const taskChanges = draft.groups.flatMap(group => group.changes).filter(change =>
+      ('taskId' in change && change.taskId === 'task-drawer')
+      || (change.kind === 'create' && change.task.id === 'task-drawer'),
+    )
+    expect(taskChanges).toEqual([])
+  })
+
   it('archives unsupported blocked task noise without deleting it', () => {
     const draft = planProjectReintake({
       now,
@@ -122,6 +174,34 @@ describe('project re-intake planner', () => {
         kind: 'archive',
         taskId: 'task-old',
         reason: expect.stringContaining('no current source evidence'),
+      }),
+    ])
+  })
+
+  it('archives stale weak pre-implementation specs that current evidence no longer supports', () => {
+    const draft = planProjectReintake({
+      now,
+      sources: [],
+      tasks: [
+        task({
+          id: 'task-tooltip',
+          title: 'Build Tooltip primitive',
+          status: 'ready',
+          productBrief: {
+            userJob: 'Ship Tooltip.',
+            successMetric: 'Tooltip is reviewable.',
+          },
+          spec: '## Summary\nBuild Tooltip.\n\n## Acceptance Criteria\n- The feature is reviewable.',
+          acceptanceCriteria: [{ id: 'legacy', description: 'Feature is reviewable.', verifiedBy: 'review', met: false }],
+        }),
+      ],
+    })
+
+    expect(draft.groups.flatMap(group => group.changes)).toEqual([
+      expect.objectContaining({
+        kind: 'archive',
+        taskId: 'task-tooltip',
+        reason: expect.stringContaining('weak legacy spec shape'),
       }),
     ])
   })

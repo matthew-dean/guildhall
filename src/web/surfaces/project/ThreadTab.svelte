@@ -4838,6 +4838,8 @@
     line-height: var(--lh-body);
   }
   .thread-composer-frame {
+    --thread-composer-action-inset: var(--s-2);
+    --thread-composer-action-size: 32px;
     display: grid;
     gap: var(--s-1);
   }
@@ -4846,13 +4848,14 @@
   }
   .thread-composer-input-shell :global(.textarea) {
     min-height: 74px;
-    padding-right: calc(var(--control-pad-x) + 2rem);
+    padding-right: calc(var(--thread-composer-action-inset) + var(--thread-composer-action-size) + var(--control-pad-x));
+    padding-bottom: calc(var(--thread-composer-action-inset) + var(--thread-composer-action-size) + var(--control-pad-y));
     font-size: var(--fs-1);
   }
   .thread-composer-actions {
     position: absolute;
-    right: var(--s-2);
-    bottom: var(--s-2);
+    right: var(--thread-composer-action-inset);
+    bottom: var(--thread-composer-action-inset);
     display: flex;
     align-items: center;
     gap: var(--s-1);

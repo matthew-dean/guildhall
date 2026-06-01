@@ -26,8 +26,10 @@ function hasProductBriefShape(task: Task): boolean {
   if (!brief) return false
   return Boolean(
     trimmed(brief.userJob) ||
+    trimmed(brief.whyItMattersNow) ||
     trimmed(brief.successMetric) ||
     trimmed(brief.rolloutPlan) ||
+    (Array.isArray(brief.nonGoals) && brief.nonGoals.length > 0) ||
     (Array.isArray(brief.antiPatterns) && brief.antiPatterns.length > 0),
   )
 }

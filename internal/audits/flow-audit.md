@@ -57,6 +57,20 @@ babysit setup/import/provider/release states across multiple pages.
 
 ## Current Follow-Ups
 
+- [ ] Reduce Guildhall cognitive overhead with hard conversions and clearer
+  abstraction boundaries. Plan:
+  `internal/plans/2026-06-01-guildhall-cognitive-overhead-reduction.md`.
+  The accepted direction is to use required conversion scripts for wrong
+  persisted shapes rather than preserving broad compatibility paths. In
+  particular, `parent` must stop being a task status; containment belongs in
+  explicit task hierarchy links. The plan also makes Threads the single
+  owner-input conversation surface, narrows Needs You to alerts, shrinks
+  Settings from an all-purpose cockpit into focused configuration panels,
+  replaces raw lever exposure with operating profiles and changed overrides,
+  adds component/token governance for duplicated bespoke UI, unmanaged font
+  sizes, font weights, spacing, radius, and variant sprawl, and moves
+  Looma/Knit/Dialog/Drawer knowledge out of generic runtime modules into
+  adapters, fixtures, or deletion.
 - [x] Specify the 0.10 state-machine substrate and local project graph pivot.
   Spec:
   `internal/specs/2026-06-01-guildhall-0-10-state-machines-project-graph.md`.

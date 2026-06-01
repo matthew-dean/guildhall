@@ -149,6 +149,8 @@ describe('updateTask', () => {
       {
         id: 'ac-1',
         description: 'Build passes',
+        scenario: 'Build passes',
+        expectation: 'Build passes',
         verifiedBy: 'automated',
         command: 'pnpm test',
         met: false,
@@ -173,7 +175,11 @@ describe('updateTask', () => {
         proposedDesign: 'Extend the existing editor action surface with a block menu entry point.',
         keyDecisions: ['Keep drag-handle work split into a follow-up task.'],
         acceptanceCriteria: [
-          'Given a selected block, when the menu opens, then the approved actions appear.',
+          {
+            scenario: 'Given a selected block, when the menu opens',
+            expectation: 'Then the approved actions appear.',
+            verificationMode: 'review',
+          },
         ],
         verification: ['Review the block menu locally in the editor shell.'],
         completionBoundary: {
@@ -196,7 +202,9 @@ describe('updateTask', () => {
     expect(raw.tasks[0].acceptanceCriteria).toEqual([
       {
         id: 'ac-1',
-        description: 'Given a selected block, when the menu opens, then the approved actions appear.',
+        description: 'Given a selected block, when the menu opens Then the approved actions appear.',
+        scenario: 'Given a selected block, when the menu opens',
+        expectation: 'Then the approved actions appear.',
         verifiedBy: 'review',
         met: false,
       },
@@ -574,12 +582,16 @@ describe('updateTask', () => {
       {
         id: 'ac-1',
         description: 'The table menu renders.',
+        scenario: 'The table menu renders.',
+        expectation: 'The table menu renders.',
         verifiedBy: 'review',
         met: false,
       },
       {
         id: 'ac-2',
         description: '`pnpm -F web build` passes.',
+        scenario: '`pnpm -F web build` passes.',
+        expectation: '`pnpm -F web build` passes.',
         verifiedBy: 'review',
         met: false,
       },
@@ -712,6 +724,8 @@ describe('updateTask', () => {
       {
         id: 'ac-1',
         description: 'Build passes',
+        scenario: 'Build passes',
+        expectation: 'Build passes',
         verifiedBy: 'automated',
         command: 'pnpm test',
         met: false,

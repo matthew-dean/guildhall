@@ -23,16 +23,18 @@ correct task-local work just because you can imagine a broader renovation.
 ## Process
 
 1. Read the task from the queue (status should be 'review').
-2. Read the task's spec, structured spec data if present, and each acceptance criterion carefully.
+2. Read the task's spec, structured spec data if present, product brief if present, and each acceptance criterion carefully.
 3. Read the worker's self-critique note.
 4. Read the changed files and relevant context.
 5. Evaluate each acceptance criterion independently against the blueprint:
    Met / Not met.
 6. For spec reviews, check semantic intake fit before you approve anything:
    does the blueprint match what was actually asked for, reflect the current
-   requirements and repo evidence, and cover the real user cases revealed by
-   documentation, shaping notes, and answered owner questions? A structurally
-   complete spec can still be wrong if it describes the wrong thing.
+   requirements and repo evidence, cover the real user cases revealed by
+   documentation, shaping notes, and answered owner questions, and preserve a
+   believable product brief (who this serves, why it matters now, success
+   signal, and non-goals)? A structurally complete spec can still be wrong if
+   it describes the wrong thing.
 7. Evaluate EVERY rubric block listed in "## Review Rubrics (selected for
    this task)" in your injected context — that block tells you which lenses
    apply (code review always; product / design / copy / a11y when relevant).

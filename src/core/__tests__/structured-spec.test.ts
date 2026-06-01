@@ -21,7 +21,12 @@ describe('StructuredSpec', () => {
         'Use the current selection model as the menu anchor.',
       ],
       acceptanceCriteria: [
-        'Given a selected block, when the menu opens, then the approved actions are available.',
+        {
+          scenario: 'Given a selected block, when the menu opens',
+          expectation: 'Then the approved actions are available.',
+          verificationMode: 'review',
+          negativeCase: 'Drag-and-drop reordering is not present in this task.',
+        },
       ],
       verification: [
         'Review the menu behavior in the local editor shell.',
@@ -51,6 +56,8 @@ describe('StructuredSpec', () => {
     expect(markdown).toContain('## Component / API Shape')
     expect(markdown).toContain('## Risks / Open Questions')
     expect(markdown).toContain('## Completion Boundary')
-    expect(markdown).toContain('1. Given a selected block, when the menu opens, then the approved actions are available.')
+    expect(markdown).toContain('1. Scenario: Given a selected block, when the menu opens')
+    expect(markdown).toContain('Expectation: Then the approved actions are available.')
+    expect(markdown).toContain('Negative case: Drag-and-drop reordering is not present in this task.')
   })
 })

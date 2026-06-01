@@ -36,6 +36,16 @@ export function analyzeRequestIntake(input: AnalyzeRequestIntakeInput): RequestI
         intent: 'ambiguous_spec_or_implementation',
         recommendedNextAction: 'ask_clarifying_question',
         ambiguity: 'The request could mean a documented policy/spec, implementation work, or a parent feature that splits into linked child tasks.',
+        assumptions: [
+          'The request names a real pricing/overhead policy decision, not just implementation cleanup.',
+          'The documented policy and the product changes it drives may need to be separated into linked work.',
+        ],
+        missingInformation: [
+          'Whether the owner wants policy drafting only or also wants linked implementation planning/work.',
+        ],
+        ownerDecisionNeeded: 'Choose whether Guildhall should stop at the policy/spec or also turn it into linked implementation work.',
+        whyOwnerDecisionMatters: 'That decision changes whether Guildhall should produce a parent feature plan, child implementation tasks, or a standalone documented policy.',
+        evidenceRefs: requestIntakeEvidenceRefs(input),
         pressureTestSummary: pressureTestSummary('guided'),
         componentStack: [
           {
@@ -88,6 +98,22 @@ export function analyzeRequestIntake(input: AnalyzeRequestIntakeInput): RequestI
         : specLike
           ? 'draft_spec'
           : 'ask_clarifying_question',
+      assumptions: intakeAssumptions({
+        implementationLike,
+        specLike,
+        uiLike,
+      }),
+      missingInformation: intakeMissingInformation({
+        implementationLike,
+        specLike,
+      }),
+      ...(implementationLike || specLike
+        ? {}
+        : {
+            ownerDecisionNeeded: 'Name the outcome or decision boundary clearly enough for Guildhall to draft trustworthy work.',
+            whyOwnerDecisionMatters: 'Without a concrete outcome boundary, Guildhall cannot tell whether this should become a spec, a research answer, or a broader follow-up split.',
+          }),
+      evidenceRefs: requestIntakeEvidenceRefs(input),
       componentStack: inferComponentStack(text),
       pressureTestSummary: pressureTestSummary(stackLike || specLike ? 'guided' : 'automatic', {
         designQuality: uiLike,
@@ -97,6 +123,42 @@ export function analyzeRequestIntake(input: AnalyzeRequestIntakeInput): RequestI
       createdBy: 'request-intake',
     },
   }
+}
+
+function intakeAssumptions(input: {
+  implementationLike: boolean
+  specLike: boolean
+  uiLike: boolean
+}): string[] {
+  const assumptions: string[] = [
+    'Routine implementation details should be inferred from repo evidence unless owner judgment would materially change the work.',
+  ]
+  if (input.implementationLike) {
+    assumptions.push('The request is asking for real product or code change work, not just a discussion artifact.')
+  }
+  if (input.specLike) {
+    assumptions.push('A documented spec or shaping pass is part of the expected path before execution.')
+  }
+  if (input.uiLike) {
+    assumptions.push('UI quality, interaction semantics, and visual proof are part of the acceptance bar for this request.')
+  }
+  return assumptions
+}
+
+function intakeMissingInformation(input: {
+  implementationLike: boolean
+  specLike: boolean
+}): string[] {
+  if (input.implementationLike || input.specLike) return []
+  return [
+    'A concrete implementation target, decision boundary, or product outcome is still underspecified.',
+  ]
+}
+
+function requestIntakeEvidenceRefs(input: AnalyzeRequestIntakeInput): string[] {
+  const refs: string[] = ['request:ask']
+  if (input.title?.trim()) refs.unshift('request:title')
+  return refs
 }
 
 function pressureTestSummary(

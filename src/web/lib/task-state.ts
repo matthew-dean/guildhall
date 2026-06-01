@@ -70,6 +70,22 @@ export function hasApprovedProductBrief(task: Pick<TaskSpecLike, 'productBrief'>
   )
 }
 
+function hasCompleteProductBrief(task: Pick<TaskSpecLike, 'productBrief'>): boolean {
+  const brief = task.productBrief
+  if (!brief || typeof brief !== 'object') return false
+  const nonGoals = Array.isArray(brief.nonGoals) ? brief.nonGoals.filter(Boolean) : []
+  const antiPatterns = Array.isArray(brief.antiPatterns) ? brief.antiPatterns.filter(Boolean) : []
+  return Boolean(
+    typeof brief.userJob === 'string' &&
+    brief.userJob.trim().length > 0 &&
+    typeof brief.whyItMattersNow === 'string' &&
+    brief.whyItMattersNow.trim().length > 0 &&
+    typeof brief.successMetric === 'string' &&
+    brief.successMetric.trim().length > 0 &&
+    (nonGoals.length > 0 || antiPatterns.length > 0),
+  )
+}
+
 export function hasSpecDraftContent(task: Pick<TaskSpecLike, 'spec' | 'acceptanceCriteria'>): boolean {
   return (
     typeof task.spec === 'string' &&
@@ -80,7 +96,7 @@ export function hasSpecDraftContent(task: Pick<TaskSpecLike, 'spec' | 'acceptanc
 }
 
 export function isCompleteForWorkerHandoff(task: TaskSpecLike): boolean {
-  return hasApprovedProductBrief(task) && hasSpecDraftContent(task)
+  return hasApprovedProductBrief(task) && hasCompleteProductBrief(task) && hasSpecDraftContent(task)
 }
 
 export function needsWorkerHandoffSpecCleanup(task: Pick<Task, 'status'> & TaskSpecLike): boolean {

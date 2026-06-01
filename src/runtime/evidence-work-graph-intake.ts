@@ -596,12 +596,23 @@ function findExistingTaskByDeliverable(deliverable: string, existingTasks: Array
 
     const acceptanceCriteria = Array.isArray(task.acceptanceCriteria) ? task.acceptanceCriteria : []
     const dependsOn = Array.isArray(task.dependsOn) ? task.dependsOn : []
+    const productBrief = task.productBrief && typeof task.productBrief === 'object' && !Array.isArray(task.productBrief)
+      ? task.productBrief as Record<string, unknown>
+      : null
+    const hasBriefShape = typeof productBrief?.userJob === 'string' && productBrief.userJob.trim().length > 0
+      && typeof productBrief?.whyItMattersNow === 'string' && productBrief.whyItMattersNow.trim().length > 0
+      && typeof productBrief?.successMetric === 'string' && productBrief.successMetric.trim().length > 0
+    const spec = typeof task.spec === 'string' ? task.spec : ''
+    const hasStructuredSpec = Boolean(task.structuredSpec && typeof task.structuredSpec === 'object' && !Array.isArray(task.structuredSpec))
+    const structuredEnough = hasStructuredSpec
+      || (markdownLooksLikeModernSpec(spec) && hasBriefShape && acceptanceCriteria.length > 0)
+      || (hasBriefShape && acceptanceCriteria.length > 0 && dependsOn.length > 0)
 
     return {
       id,
       status: typeof task.status === 'string' ? task.status : undefined,
       producedArtifact: typeof task.producedArtifact === 'string' ? task.producedArtifact : undefined,
-      structuredEnough: acceptanceCriteria.length > 0 || dependsOn.length > 0,
+      structuredEnough,
     }
   }
 
@@ -636,6 +647,21 @@ function normalizeDeliverableName(value: string): string {
     return 'Button'
   }
   return trimmed
+}
+
+function markdownLooksLikeModernSpec(spec: string): boolean {
+  const headings = [
+    /^## What this is$/im,
+    /^## Problem \/ context$/im,
+    /^## Goals$/im,
+    /^## Non-goals$/im,
+    /^## Proposed design$/im,
+    /^## Key decisions$/im,
+    /^## Acceptance criteria$/im,
+    /^## Verification$/im,
+    /^## Completion boundary$/im,
+  ]
+  return headings.filter(pattern => pattern.test(spec)).length >= 6
 }
 
 function foundationToArtifact(foundation: string): string {

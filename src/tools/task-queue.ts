@@ -625,8 +625,12 @@ export const updateTaskTool = defineTool({
           properties: {
             id: { type: 'string' },
             description: { type: 'string' },
+            scenario: { type: 'string' },
+            expectation: { type: 'string' },
             verifiedBy: { type: 'string', enum: ['automated', 'review', 'human'] },
             command: { type: 'string' },
+            evidenceHint: { type: 'string' },
+            negativeCase: { type: 'string' },
             met: { type: 'boolean' },
           },
           required: ['id', 'description', 'verifiedBy'],

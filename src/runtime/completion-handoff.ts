@@ -1,25 +1,7 @@
-import { z } from 'zod'
-import { EvidenceRef } from '@guildhall/persistence'
 import type { GuildhallPersistence, PersistedRecord, PersistencePlacement } from '@guildhall/persistence'
-import { ProofPath, VerificationRecord } from './proof-paths.js'
-import type { ProofPath as ProofPathType, VerificationRecord as VerificationRecordType } from './proof-paths.js'
+import { CompletionHandoff, ProofPath, type ProofPath as ProofPathType, type VerificationRecord as VerificationRecordType } from '@guildhall/core'
 
-export const CompletionHandoff = z.object({
-  id: z.string(),
-  taskId: z.string(),
-  completedAt: z.string(),
-  completedBy: z.string(),
-  summary: z.string(),
-  proofPathIds: z.array(z.string()).default([]),
-  verificationSummary: z.string(),
-  automatedProof: z.array(VerificationRecord).default([]),
-  manualProof: z.array(VerificationRecord).default([]),
-  providerProof: z.array(VerificationRecord).default([]),
-  residualRisk: z.string(),
-  followUpTaskIds: z.array(z.string()).default([]),
-  evidenceRefs: z.array(EvidenceRef).default([]),
-})
-export type CompletionHandoff = z.infer<typeof CompletionHandoff>
+export { CompletionHandoff }
 
 const completionHandoffPlacement: PersistencePlacement = {
   scope: 'shared_project',

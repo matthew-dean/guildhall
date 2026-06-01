@@ -471,6 +471,14 @@ milestones:
     expect(newTask.domain).toBe('ui')
     expect(newTask.priority).toBe('high')
     expect(newTask.notes[0]!.content).toContain('ROADMAP.md')
+    expect(newTask.requestIntake).toMatchObject({
+      intent: 'spec_only',
+      recommendedNextAction: 'draft_spec',
+      evidenceRefs: [expect.stringContaining('import:')],
+      pressureTestSummary: {
+        degree: 'guided',
+      },
+    })
 
     const goalsRaw = await fs.readFile(
       path.join(memoryDir, 'workspace-goals.json'),
@@ -894,6 +902,10 @@ tasks:
       projectPath: path.join(tmpDir, 'knit'),
       dependsOn: ['task-039'],
     })
+    expect(alertDialog.requestIntake).toMatchObject({
+      intent: 'spec_only',
+      recommendedNextAction: 'draft_spec',
+    })
     expect(alertDialogIntegration.acceptanceCriteria.map((criterion) => criterion.id)).toEqual([
       'public-consumer-import',
       'consumer-flow-renders',
@@ -974,5 +986,27 @@ describe('formatDetectedDraftAsSpec', () => {
     const spec = formatDetectedDraftAsSpec(draft)
     const parsed = parseWorkspaceImport(spec)
     expect(parsed.goals[0]?.title).toBe('Add "dark" mode')
+  })
+
+  it('round-trips richer import-draft shaping fields', () => {
+    const inventory = invWith([
+      {
+        source: 'roadmap',
+        kind: 'open_work',
+        title: 'Ship invite flow',
+        evidence: 'Complete the missing invite redirect and success state.',
+        confidence: 'medium',
+        references: ['ROADMAP.md'],
+      },
+    ])
+    const draft = formWorkspaceHypothesis(inventory)
+    const spec = formatDetectedDraftAsSpec(draft)
+    const parsed = parseWorkspaceImport(spec)
+    expect(parsed.tasks[0]).toMatchObject({
+      title: 'Ship invite flow',
+      whyThisMayMatter: 'Complete the missing invite redirect and success state.',
+      assumptions: expect.any(Array),
+      missingInformation: expect.any(Array),
+    })
   })
 })

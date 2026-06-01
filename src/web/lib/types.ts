@@ -25,10 +25,15 @@ export interface ExternalBlockerStep {
 
 export interface ProductBrief {
   userJob?: string
+  whyItMattersNow?: string
   successMetric?: string
   successCriteria?: string
+  nonGoals?: string[]
+  audience?: string
+  usageContext?: string
   antiPatterns?: string[]
   rolloutPlan?: string
+  brandInteractionNotes?: string
   approvedBy?: string | null
   approvedAt?: string | null
   authoredBy?: string

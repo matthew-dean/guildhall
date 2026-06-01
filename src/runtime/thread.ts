@@ -404,22 +404,34 @@ function hasApprovedProductBrief(task: Pick<Task, 'productBrief'>): boolean {
 
 function hasReviewableProductBrief(brief: unknown): brief is {
   userJob?: string
+  whyItMattersNow?: string
   successMetric?: string
   successCriteria?: string
+  nonGoals?: string[]
   antiPatterns?: string[]
   rolloutPlan?: string
   authoredBy?: string
   approvedAt?: string | null
 } {
   if (!brief || typeof brief !== 'object') return false
-  const b = brief as { userJob?: unknown; successMetric?: unknown; successCriteria?: unknown }
+  const b = brief as {
+    userJob?: unknown
+    whyItMattersNow?: unknown
+    successMetric?: unknown
+    successCriteria?: unknown
+    nonGoals?: unknown
+    antiPatterns?: unknown
+  }
   const userJob = typeof b.userJob === 'string' ? b.userJob.trim() : ''
+  const whyItMattersNow = typeof b.whyItMattersNow === 'string' ? b.whyItMattersNow.trim() : ''
   const success = typeof b.successMetric === 'string' && b.successMetric.trim()
     ? b.successMetric.trim()
     : typeof b.successCriteria === 'string'
       ? b.successCriteria.trim()
       : ''
-  return Boolean(userJob && success)
+  const nonGoals = Array.isArray(b.nonGoals) ? b.nonGoals.filter((item): item is string => typeof item === 'string' && item.trim().length > 0) : []
+  const antiPatterns = Array.isArray(b.antiPatterns) ? b.antiPatterns.filter((item): item is string => typeof item === 'string' && item.trim().length > 0) : []
+  return Boolean(userJob && whyItMattersNow && success && (nonGoals.length > 0 || antiPatterns.length > 0))
 }
 
 function taskNeedsSpecFill(task: Pick<Task, 'spec' | 'acceptanceCriteria' | 'productBrief'>): boolean {

@@ -117,6 +117,10 @@ describe('createExploringTask', () => {
     expect(queue.tasks[0]?.requestIntake?.pressureTestSummary?.ownerQuestionPolicy).toContain(
       'Only ask when the answer could change product intent',
     )
+    expect(queue.tasks[0]?.requestIntake?.assumptions).toEqual(expect.arrayContaining([
+      'Routine implementation details should be inferred from repo evidence unless owner judgment would materially change the work.',
+    ]))
+    expect(queue.tasks[0]?.requestIntake?.evidenceRefs).toEqual(['request:title', 'request:ask'])
   })
 
   it('adds design-quality pressure to UI tasks before implementation', async () => {
@@ -141,6 +145,10 @@ describe('createExploringTask', () => {
       status: 'system-check',
       reason: expect.stringContaining('segmented control'),
     })
+    expect(task.requestIntake?.assumptions).toEqual(expect.arrayContaining([
+      'UI quality, interaction semantics, and visual proof are part of the acceptance bar for this request.',
+    ]))
+    expect(task.requestIntake?.evidenceRefs).toEqual(['request:title', 'request:ask'])
   })
 
   it('handles a bare-array TASKS.json (bootstrap legacy format)', async () => {
@@ -220,6 +228,11 @@ describe('createExploringTask', () => {
     expect(task.requestIntake).toMatchObject({
       intent: 'ambiguous_spec_or_implementation',
       recommendedNextAction: 'ask_clarifying_question',
+      ownerDecisionNeeded: expect.stringContaining('policy/spec'),
+      whyOwnerDecisionMatters: expect.stringContaining('parent feature plan'),
+      missingInformation: [
+        'Whether the owner wants policy drafting only or also wants linked implementation planning/work.',
+      ],
       pressureTestSummary: {
         systemOwned: true,
         degree: 'guided',
@@ -241,6 +254,7 @@ describe('createExploringTask', () => {
         'Apply the policy now',
       ],
     })
+    expect(task.requestIntake?.evidenceRefs).toEqual(['request:title', 'request:ask'])
   })
 
   it('does not reuse the FLL policy question for concrete app specs', async () => {
@@ -264,6 +278,7 @@ describe('createExploringTask', () => {
       intent: 'implementation',
       recommendedNextAction: 'proceed_to_implementation_spec',
     })
+    expect(task.requestIntake?.missingInformation).toEqual([])
     expect(task.openQuestions ?? []).toEqual([])
     expect(JSON.stringify(task.requestIntake)).not.toContain('FLL overhead')
   })

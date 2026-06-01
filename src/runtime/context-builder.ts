@@ -490,7 +490,9 @@ function looksLikeStaleNewRequestBrief(task: Task): boolean {
 
 function renderProductBriefContext(task: Task): string {
   if (!task.productBrief || looksLikeStaleNewRequestBrief(task)) return ''
-  return `\n### Product Brief${task.productBrief.approvedAt ? ' (human-approved)' : ' (DRAFT — not yet approved)'}\n**User job:** ${task.productBrief.userJob}\n**Success metric:** ${task.productBrief.successMetric}${task.productBrief.antiPatterns.length > 0 ? `\n**Anti-patterns (must NOT do):**\n${task.productBrief.antiPatterns.map(a => `- ${a}`).join('\n')}` : ''}${task.productBrief.rolloutPlan ? `\n**Rollout plan:** ${task.productBrief.rolloutPlan}` : ''}`
+  const nonGoals = task.productBrief.nonGoals ?? []
+  const antiPatterns = task.productBrief.antiPatterns ?? []
+  return `\n### Product Brief${task.productBrief.approvedAt ? ' (human-approved)' : ' (DRAFT — not yet approved)'}\n**User job:** ${task.productBrief.userJob}${task.productBrief.whyItMattersNow ? `\n**Why it matters now:** ${task.productBrief.whyItMattersNow}` : ''}\n**Success metric:** ${task.productBrief.successMetric}${nonGoals.length > 0 ? `\n**Non-goals:**\n${nonGoals.map(a => `- ${a}`).join('\n')}` : antiPatterns.length > 0 ? `\n**Anti-patterns (must NOT do):**\n${antiPatterns.map(a => `- ${a}`).join('\n')}` : ''}${task.productBrief.rolloutPlan ? `\n**Rollout plan:** ${task.productBrief.rolloutPlan}` : ''}`
 }
 
 function summarizeRawDesignSystem(raw: string): string {

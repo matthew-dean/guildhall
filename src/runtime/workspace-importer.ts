@@ -446,6 +446,9 @@ export interface ParsedTask {
   id: string
   title: string
   description: string
+  whyThisMayMatter?: string
+  assumptions?: readonly string[]
+  missingInformation?: readonly string[]
   domain: string
   priority: TaskPriority
   references: readonly string[]
@@ -454,7 +457,7 @@ export interface ParsedTask {
 interface MaterializedImportTask extends ParsedTask {
   acceptanceCriteria?: Array<{ id: string; description: string; verifiedBy?: string }>
   dependsOn?: readonly string[]
-  proofPaths?: readonly unknown[]
+  proofPaths?: Task['proofPaths']
   evidenceGraphTask?: boolean
 }
 
@@ -597,6 +600,10 @@ export function parseWorkspaceImport(spec: string): ParsedImport {
         const title = typeof t['title'] === 'string' ? t['title'] : undefined
         const rawDescription =
           typeof t['description'] === 'string' ? t['description'] : ''
+        const whyThisMayMatter =
+          typeof t['whyThisMayMatter'] === 'string' && t['whyThisMayMatter'].trim()
+            ? t['whyThisMayMatter']
+            : undefined
         const domain = typeof t['domain'] === 'string' ? t['domain'] : 'core'
         const rawPriority = t['priority']
         const priority =
@@ -608,6 +615,9 @@ export function parseWorkspaceImport(spec: string): ParsedImport {
           id,
           title,
           description: supportingText(title, rawDescription),
+          ...(whyThisMayMatter ? { whyThisMayMatter } : {}),
+          ...(normStringList(t['assumptions']).length > 0 ? { assumptions: normStringList(t['assumptions']) } : {}),
+          ...(normStringList(t['missingInformation']).length > 0 ? { missingInformation: normStringList(t['missingInformation']) } : {}),
           domain,
           priority,
           references: normStringList(t['references']),
@@ -635,6 +645,10 @@ export function parseWorkspaceImport(spec: string): ParsedImport {
         const title = typeof t['title'] === 'string' ? t['title'] : undefined
         const rawDescription =
           typeof t['description'] === 'string' ? t['description'] : ''
+        const whyThisMayMatter =
+          typeof t['whyThisMayMatter'] === 'string' && t['whyThisMayMatter'].trim()
+            ? t['whyThisMayMatter']
+            : undefined
         const domain = typeof t['domain'] === 'string' ? t['domain'] : 'core'
         const rawPriority = t['priority']
         const priority =
@@ -646,6 +660,9 @@ export function parseWorkspaceImport(spec: string): ParsedImport {
           id,
           title,
           description: supportingText(title, rawDescription),
+          ...(whyThisMayMatter ? { whyThisMayMatter } : {}),
+          ...(normStringList(t['assumptions']).length > 0 ? { assumptions: normStringList(t['assumptions']) } : {}),
+          ...(normStringList(t['missingInformation']).length > 0 ? { missingInformation: normStringList(t['missingInformation']) } : {}),
           domain,
           priority,
           references: normStringList(t['references']),
@@ -698,8 +715,17 @@ export function formatDetectedDraftAsSpec(draft: WorkspaceImportDraft): string {
       lines.push(`  - id: ${escape(t.suggestedId)}`)
       lines.push(`    title: ${escape(t.title)}`)
       lines.push(`    description: ${escape(t.description || '')}`)
+      if (t.whyThisMayMatter) lines.push(`    whyThisMayMatter: ${escape(t.whyThisMayMatter)}`)
       lines.push(`    domain: ${escape(t.domain || 'core')}`)
       lines.push(`    priority: ${t.priority}`)
+      if (t.assumptions && t.assumptions.length > 0) {
+        lines.push('    assumptions:')
+        for (const assumption of t.assumptions) lines.push(`      - ${escape(assumption)}`)
+      }
+      if (t.missingInformation && t.missingInformation.length > 0) {
+        lines.push('    missingInformation:')
+        for (const missing of t.missingInformation) lines.push(`      - ${escape(missing)}`)
+      }
       if (t.references && t.references.length > 0) {
         lines.push('    references:')
         for (const r of t.references) lines.push(`      - ${escape(r)}`)
@@ -848,6 +874,15 @@ function graphTaskToParsedTask(task: EvidenceTask, sources: readonly EvidenceSou
       task.buildsOn.length > 0 ? `Builds on: ${task.buildsOn.join(', ')}.` : '',
       references.length > 0 ? `Evidence: ${references.join(', ')}.` : '',
     ].filter(Boolean).join(' '),
+    whyThisMayMatter: task.kind === 'integration'
+      ? `${task.consumerSurface ?? task.targetArea} depends on ${task.deliverableName} before the user-facing flow can be completed.`
+      : `${task.deliverableName} appears to be a missing prerequisite the project documentation already expects.`,
+    assumptions: [
+      'The referenced documentation still represents intended project direction.',
+    ],
+    missingInformation: [
+      'Guildhall still needs to confirm the final success criteria and implementation boundary during shaping.',
+    ],
     domain: task.targetArea,
     priority: task.kind === 'integration' ? 'normal' : 'high',
     references,
@@ -862,6 +897,8 @@ function materializedAcceptanceCriteria(task: MaterializedImportTask): Task['acc
   return (task.acceptanceCriteria ?? []).map(criterion => ({
     id: criterion.id,
     description: criterion.description,
+    scenario: criterion.description,
+    expectation: criterion.description,
     verifiedBy: criterion.verifiedBy === 'automated' || criterion.verifiedBy === 'review'
       ? criterion.verifiedBy
       : criterion.id.includes('automated') || criterion.id.includes('regression')
@@ -976,12 +1013,60 @@ export async function approveWorkspaceImport(
       dependsOn: [...(t.dependsOn ?? [])].map(dependency => dependencyIdMap.get(dependency) ?? dependency),
       outOfScope: [],
       acceptanceCriteria: materializedAcceptanceCriteria(t),
+      requestIntake: {
+        intent: 'spec_only',
+        recommendedNextAction: 'draft_spec',
+        assumptions: [...(t.assumptions ?? [])],
+        missingInformation: [...(t.missingInformation ?? [])],
+        ...(t.missingInformation && t.missingInformation.length > 0
+          ? {
+              ownerDecisionNeeded: 'Confirm the intended scope and success boundary if this imported draft no longer matches current project needs.',
+              whyOwnerDecisionMatters: 'Imported notes are evidence-backed candidates, but Guildhall should not treat them as current truth without reshaping.',
+            }
+          : {}),
+        evidenceRefs: normalizedReferences.map(ref => `import:${ref}`),
+        componentStack: [],
+        pressureTestSummary: {
+          systemOwned: true,
+          degree: 'guided',
+          qualityBar: 'Treat imported drafts as candidate work that must be reshaped against current evidence before implementation starts.',
+          ownerQuestionPolicy: 'Only ask when the imported evidence is no longer enough to choose a trustworthy task boundary or success condition.',
+          checks: [
+            {
+              id: 'source-relevance',
+              title: 'Source relevance',
+              status: 'system-check',
+              reason: 'Guildhall should verify that the imported note still matches current repo reality and project direction.',
+            },
+            {
+              id: 'scope-boundary',
+              title: 'Scope boundary',
+              status: 'needs-owner-judgment',
+              reason: 'Imported notes often name a direction but not yet the right implementation boundary.',
+            },
+            {
+              id: 'acceptance-criteria',
+              title: 'Acceptance criteria',
+              status: 'system-check',
+              reason: 'Guildhall must reshape the imported draft into concrete acceptance criteria before implementation starts.',
+            },
+          ],
+        },
+        clarifyingQuestions: [],
+        createdAt: now,
+        createdBy: 'workspace-importer',
+      },
       notes: t.references.length > 0
         ? [
             {
               agentId: 'workspace-importer',
               role: 'importer',
-              content: `Imported from: ${normalizedReferences.join(', ')}`,
+              content: [
+                `Imported from: ${normalizedReferences.join(', ')}`,
+                t.whyThisMayMatter ? `Why this may matter: ${t.whyThisMayMatter}` : '',
+                t.assumptions && t.assumptions.length > 0 ? `Assumptions: ${t.assumptions.join(' | ')}` : '',
+                t.missingInformation && t.missingInformation.length > 0 ? `Missing information: ${t.missingInformation.join(' | ')}` : '',
+              ].filter(Boolean).join('\n'),
               timestamp: now,
             },
           ]

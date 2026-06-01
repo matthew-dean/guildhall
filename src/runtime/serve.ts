@@ -1294,6 +1294,33 @@ function hasApprovedProductBriefRecord(task: Record<string, unknown>): boolean {
   )
 }
 
+function hasCompleteProductBriefRecord(task: Record<string, unknown>): boolean {
+  const brief = task.productBrief
+  if (!brief || typeof brief !== 'object' || Array.isArray(brief)) return false
+  const record = brief as {
+    userJob?: unknown
+    whyItMattersNow?: unknown
+    successMetric?: unknown
+    nonGoals?: unknown
+    antiPatterns?: unknown
+  }
+  const nonGoals = Array.isArray(record.nonGoals)
+    ? record.nonGoals.filter((item): item is string => typeof item === 'string' && item.trim().length > 0)
+    : []
+  const antiPatterns = Array.isArray(record.antiPatterns)
+    ? record.antiPatterns.filter((item): item is string => typeof item === 'string' && item.trim().length > 0)
+    : []
+  return Boolean(
+    typeof record.userJob === 'string' &&
+    record.userJob.trim().length > 0 &&
+    typeof record.whyItMattersNow === 'string' &&
+    record.whyItMattersNow.trim().length > 0 &&
+    typeof record.successMetric === 'string' &&
+    record.successMetric.trim().length > 0 &&
+    (nonGoals.length > 0 || antiPatterns.length > 0),
+  )
+}
+
 function hasSpecDraftRecord(task: Record<string, unknown>): boolean {
   return (
     typeof task.spec === 'string' &&
@@ -1304,7 +1331,7 @@ function hasSpecDraftRecord(task: Record<string, unknown>): boolean {
 }
 
 function isReadyForWorkerHandoffRecord(task: Record<string, unknown>): boolean {
-  return hasApprovedProductBriefRecord(task) && hasSpecDraftRecord(task)
+  return hasApprovedProductBriefRecord(task) && hasCompleteProductBriefRecord(task) && hasSpecDraftRecord(task)
 }
 
 function summarizeTaskActivity(
@@ -6390,8 +6417,44 @@ export function buildServeApp(opts: ServeOptions = {}): {
         if (!brief || typeof brief !== 'object') {
           return c.json({ error: 'no product brief drafted yet' }, 400)
         }
-        if (!brief.userJob || !brief.successMetric) {
-          return c.json({ error: 'brief is incomplete — needs userJob and successMetric' }, 400)
+        if (
+          (typeof brief.whyItMattersNow !== 'string' || !brief.whyItMattersNow.trim()) &&
+          typeof brief.userJob === 'string' &&
+          brief.userJob.trim() &&
+          typeof brief.successMetric === 'string' &&
+          brief.successMetric.trim()
+        ) {
+          brief.whyItMattersNow = `This matters now because Guildhall needs "${String(task.title ?? 'this task')}" framed tightly enough to reach this outcome: ${brief.successMetric.trim()}`
+        }
+        if (
+          (!Array.isArray(brief.nonGoals) || brief.nonGoals.length === 0) &&
+          Array.isArray(brief.antiPatterns)
+        ) {
+          brief.nonGoals = brief.antiPatterns
+        }
+        if (
+          (!Array.isArray(brief.nonGoals) || brief.nonGoals.length === 0) &&
+          (!Array.isArray(brief.antiPatterns) || brief.antiPatterns.length === 0)
+        ) {
+          brief.nonGoals = [`Do not let "${String(task.title ?? 'this task')}" quietly expand beyond the approved task boundary.`]
+          brief.antiPatterns = brief.nonGoals
+        }
+        const nonGoals = Array.isArray(brief.nonGoals)
+          ? brief.nonGoals.filter((item): item is string => typeof item === 'string' && item.trim().length > 0)
+          : []
+        const antiPatterns = Array.isArray(brief.antiPatterns)
+          ? brief.antiPatterns.filter((item): item is string => typeof item === 'string' && item.trim().length > 0)
+          : []
+        if (
+          typeof brief.userJob !== 'string' ||
+          !brief.userJob.trim() ||
+          typeof brief.whyItMattersNow !== 'string' ||
+          !brief.whyItMattersNow.trim() ||
+          typeof brief.successMetric !== 'string' ||
+          !brief.successMetric.trim() ||
+          (nonGoals.length === 0 && antiPatterns.length === 0)
+        ) {
+          return c.json({ error: 'brief is incomplete — needs userJob, whyItMattersNow, successMetric, and at least one non-goal' }, 400)
         }
         const now = new Date().toISOString()
         brief.approvedBy = 'human'

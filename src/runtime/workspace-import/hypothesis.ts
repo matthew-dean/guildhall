@@ -41,6 +41,9 @@ export interface DraftTask {
   suggestedId: string
   title: string
   description: string
+  whyThisMayMatter?: string
+  assumptions?: readonly string[]
+  missingInformation?: readonly string[]
   domain: string
   priority: 'critical' | 'high' | 'normal' | 'low'
   source: string
@@ -148,6 +151,29 @@ function priorityFromConfidence(confidence: DraftConfidence): DraftTask['priorit
   if (confidence === 'high') return 'normal'
   if (confidence === 'medium') return 'normal'
   return 'low'
+}
+
+function draftTaskAssumptions(sig: WorkspaceSignal): string[] {
+  const assumptions: string[] = []
+  if (sig.source === 'roadmap' || sig.source === 'planning-docs') {
+    assumptions.push('This item still reflects current project intent and has not already been completed or superseded elsewhere.')
+  }
+  if (sig.confidence === 'low') {
+    assumptions.push('The source signal may be incomplete and should be confirmed against current repo reality before shaping proceeds.')
+  }
+  return assumptions
+}
+
+function draftTaskMissingInformation(sig: WorkspaceSignal): string[] {
+  const missing: string[] = []
+  const supporting = supportingText(sig.title, sig.evidence)
+  if (!supporting) {
+    missing.push('The source names the work, but not yet the concrete outcome or proof boundary.')
+  }
+  if (sig.confidence !== 'high') {
+    missing.push('Guildhall still needs to confirm scope, current relevance, and success criteria during shaping.')
+  }
+  return missing
 }
 
 function domainFromSignal(sig: WorkspaceSignal): string {
@@ -324,6 +350,9 @@ function addTask(
       suggestedId: compactGeneratedId('task-import', sig.title, index.size + 1),
       title: sig.title,
       description: supportingText(sig.title, sig.evidence),
+      ...(supportingText(sig.title, sig.evidence) ? { whyThisMayMatter: sig.evidence } : {}),
+      assumptions: draftTaskAssumptions(sig),
+      missingInformation: draftTaskMissingInformation(sig),
       domain: domainFromSignal(sig),
       priority: priorityFromConfidence(sig.confidence),
       source: sig.source,
@@ -348,6 +377,9 @@ function addTask(
   if (refs) merged.references = refs
   if (shouldBump) {
     merged.description = supportingText(sig.title, sig.evidence)
+    merged.whyThisMayMatter = supportingText(sig.title, sig.evidence) ? sig.evidence : existing.whyThisMayMatter
+    merged.assumptions = draftTaskAssumptions(sig)
+    merged.missingInformation = draftTaskMissingInformation(sig)
     merged.source = sig.source
   }
   index.set(key, merged)

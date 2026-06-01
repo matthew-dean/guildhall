@@ -79,6 +79,39 @@ describe('project re-intake apply', () => {
     expect(reframed.notes.some((note: { content?: string }) => note.content?.includes('Re-intake reframed this task'))).toBe(true)
   })
 
+  it('shelves stale weak pre-implementation specs instead of carrying them forward', async () => {
+    const legacyTask = task({
+      id: 'task-tooltip',
+      title: 'Build Tooltip primitive',
+      status: 'ready',
+      productBrief: {
+        userJob: 'Ship Tooltip.',
+        successMetric: 'Tooltip is reviewable.',
+      },
+      spec: '## Summary\nBuild Tooltip.\n\n## Acceptance Criteria\n- The feature is reviewable.',
+      acceptanceCriteria: [{ id: 'legacy', description: 'Feature is reviewable.', verifiedBy: 'review', met: false }],
+    })
+    const memoryDir = await makeState([legacyTask])
+    const draft = planProjectReintake({
+      now,
+      sources: [],
+      tasks: [legacyTask],
+    })
+    await writeProjectReintakeDraft(memoryDir, draft)
+
+    const result = await applyProjectReintakeDraft({ memoryDir, now })
+    expect(result.success).toBe(true)
+
+    const queue = JSON.parse(await fs.readFile(path.join(memoryDir, 'TASKS.json'), 'utf-8'))
+    expect(queue.tasks.find((candidate: { id?: string }) => candidate.id === 'task-tooltip')).toMatchObject({
+      status: 'shelved',
+      shelveReason: expect.objectContaining({
+        code: 'no_op',
+        detail: expect.stringContaining('weak legacy spec shape'),
+      }),
+    })
+  })
+
   it('archives without deleting and creates graph tasks with dependency proof fields', async () => {
     const memoryDir = await makeState([
       task({ id: 'task-old', title: 'Retry project discovery update', status: 'blocked' }),

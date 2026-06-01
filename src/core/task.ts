@@ -1,6 +1,7 @@
 import { z } from 'zod'
 import { TaskSizePlan, WorkUnitAnalysis } from './task-sizing.js'
 import { StructuredSpec } from './structured-spec.js'
+import { CompletionHandoff, ProofPath } from './task-proof.js'
 
 // ---------------------------------------------------------------------------
 // Task status lifecycle (FR-01)
@@ -296,16 +297,65 @@ export const AgentQuestion = z.discriminatedUnion('kind', [
 ])
 export type AgentQuestion = z.infer<typeof AgentQuestion>
 
-export const ProductBrief = z.object({
-  userJob: z.string(),                            // The user's job-to-be-done this task serves
-  successMetric: z.string(),                      // How we'll know it worked
-  antiPatterns: z.array(z.string()).default([]),  // Things the task must NOT do (brand / ux / product-level)
-  rolloutPlan: z.string().optional(),             // Staging / flagging / migration notes
-  authoredBy: z.string().optional(),              // agent id or 'human'
+function normalizeStringList(value: unknown): string[] {
+  if (Array.isArray(value)) {
+    return value
+      .filter((item): item is string => typeof item === 'string')
+      .map(item => item.trim())
+      .filter(Boolean)
+  }
+  if (typeof value === 'string') {
+    return value
+      .split('\n')
+      .map(item => item.trim())
+      .map(item => item.replace(/^[*-]\s*/, '').trim())
+      .filter(Boolean)
+  }
+  return []
+}
+
+function normalizeProductBriefInput(value: unknown): unknown {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return value
+  const brief = value as Record<string, unknown>
+  const userJob = typeof brief.userJob === 'string' ? brief.userJob.trim() : ''
+  const successMetric =
+    typeof brief.successMetric === 'string' && brief.successMetric.trim()
+      ? brief.successMetric.trim()
+      : typeof brief.successCriteria === 'string'
+        ? brief.successCriteria.trim()
+        : ''
+  const whyItMattersNow =
+    typeof brief.whyItMattersNow === 'string' && brief.whyItMattersNow.trim()
+      ? brief.whyItMattersNow.trim()
+      : successMetric || userJob
+  const nonGoals = normalizeStringList(brief.nonGoals)
+  const antiPatterns = normalizeStringList(brief.antiPatterns)
+  const mergedNonGoals = Array.from(new Set([...nonGoals, ...antiPatterns]))
+  return {
+    ...brief,
+    ...(userJob ? { userJob } : {}),
+    ...(successMetric ? { successMetric } : {}),
+    ...(whyItMattersNow ? { whyItMattersNow } : {}),
+    nonGoals: mergedNonGoals,
+    antiPatterns: mergedNonGoals,
+  }
+}
+
+export const ProductBrief = z.preprocess(normalizeProductBriefInput, z.object({
+  userJob: z.string(),                              // The user's job-to-be-done this task serves
+  whyItMattersNow: z.string().optional(),           // Why this matters now / why the task exists
+  successMetric: z.string(),                        // How we'll know it worked
+  nonGoals: z.array(z.string()).optional(),         // Intentional boundary for this brief
+  audience: z.string().optional(),                  // Who this is for when it matters to say it plainly
+  usageContext: z.string().optional(),              // Where / when the user encounters this
+  antiPatterns: z.array(z.string()).optional(),     // Legacy/UI alias for nonGoals
+  rolloutPlan: z.string().optional(),               // Staging / flagging / migration notes
+  brandInteractionNotes: z.string().optional(),     // Optional tone/visual interaction notes
+  authoredBy: z.string().optional(),                // agent id or 'human'
   authoredAt: z.string().optional(),
   approvedBy: z.string().optional(),
   approvedAt: z.string().optional(),
-})
+}))
 export type ProductBrief = z.infer<typeof ProductBrief>
 
 // FR-31: structured agent-issue channel. Agents emit issues via the
@@ -410,20 +460,51 @@ export type Checkpoint = z.infer<typeof Checkpoint>
 
 const ACCEPTANCE_VERIFIERS = ['automated', 'review', 'human'] as const
 
+function parseScenarioExpectationFromDescription(description: string): { scenario: string; expectation: string } {
+  const normalized = description.trim().replace(/\s+/g, ' ')
+  const gwtMatch = /^given\s+(.+?),\s*when\s+(.+?),\s*then\s+(.+)$/i.exec(normalized)
+  if (gwtMatch) {
+    return {
+      scenario: `Given ${gwtMatch[1]!.trim()}, when ${gwtMatch[2]!.trim()}`,
+      expectation: `Then ${gwtMatch[3]!.trim()}`,
+    }
+  }
+  return { scenario: normalized, expectation: normalized }
+}
+
 function normalizeAcceptanceCriteria(input: unknown): unknown {
   if (!input || typeof input !== 'object' || Array.isArray(input)) return input
   const criterion = input as Record<string, unknown>
   const verifiedBy = criterion.verifiedBy
-  if (verifiedBy === undefined && typeof criterion.command === 'string' && criterion.command.trim()) {
-    return { ...criterion, verifiedBy: 'automated' }
+  const rawDescription = typeof criterion.description === 'string' ? criterion.description.trim() : ''
+  const rawScenario = typeof criterion.scenario === 'string' ? criterion.scenario.trim() : ''
+  const rawExpectation = typeof criterion.expectation === 'string' ? criterion.expectation.trim() : ''
+  const normalizedDescription = rawDescription || (
+    rawScenario && rawExpectation
+      ? `${rawScenario} ${rawExpectation}`.trim()
+      : rawScenario || rawExpectation
+  )
+  const normalizedScenarioExpectation = normalizedDescription
+    ? parseScenarioExpectationFromDescription(normalizedDescription)
+    : { scenario: rawScenario, expectation: rawExpectation }
+
+  const baseCriterion = {
+    ...criterion,
+    ...(normalizedDescription ? { description: normalizedDescription } : {}),
+    ...(rawScenario ? { scenario: rawScenario } : normalizedScenarioExpectation.scenario ? { scenario: normalizedScenarioExpectation.scenario } : {}),
+    ...(rawExpectation ? { expectation: rawExpectation } : normalizedScenarioExpectation.expectation ? { expectation: normalizedScenarioExpectation.expectation } : {}),
   }
-  if (typeof verifiedBy !== 'string') return input
-  if ((ACCEPTANCE_VERIFIERS as readonly string[]).includes(verifiedBy)) return input
+
+  if (verifiedBy === undefined && typeof criterion.command === 'string' && criterion.command.trim()) {
+    return { ...baseCriterion, verifiedBy: 'automated' }
+  }
+  if (typeof verifiedBy !== 'string') return baseCriterion
+  if ((ACCEPTANCE_VERIFIERS as readonly string[]).includes(verifiedBy)) return baseCriterion
 
   const value = verifiedBy.trim()
   const looksLikeCommand = /\s|\/|^(pnpm|npm|yarn|bun|vitest|tsx|node|tsgo|tsc|cargo|go|pytest|python|make)\b/.test(value)
   return {
-    ...criterion,
+    ...baseCriterion,
     verifiedBy: looksLikeCommand ? 'automated' : 'review',
     ...(looksLikeCommand && typeof criterion.command !== 'string' ? { command: value } : {}),
   }
@@ -432,9 +513,13 @@ function normalizeAcceptanceCriteria(input: unknown): unknown {
 export const AcceptanceCriteria = z.preprocess(normalizeAcceptanceCriteria, z.object({
   id: z.string(),
   description: z.string(),
+  scenario: z.string().optional(),
+  expectation: z.string().optional(),
   // How to verify: 'automated' = shell command, 'review' = reviewer agent judgment
   verifiedBy: z.enum(ACCEPTANCE_VERIFIERS),
   command: z.string().optional(), // for automated criteria
+  evidenceHint: z.string().optional(),
+  negativeCase: z.string().optional(),
   met: z.boolean().default(false),
 }))
 export type AcceptanceCriteria = z.infer<typeof AcceptanceCriteria>
@@ -709,6 +794,11 @@ export const RequestIntake = z.object({
     title: z.string(),
     role: z.string(),
   })).default([]),
+  assumptions: z.array(z.string()).default([]),
+  missingInformation: z.array(z.string()).default([]),
+  ownerDecisionNeeded: z.string().optional(),
+  whyOwnerDecisionMatters: z.string().optional(),
+  evidenceRefs: z.array(z.string()).default([]),
   pressureTestSummary: PressureTestSummary.default(DEFAULT_PRESSURE_TEST_SUMMARY),
   clarifyingQuestions: z.array(z.string()).default([]),
   createdAt: z.string(),
@@ -891,8 +981,14 @@ export const Task = z.object({
   // Proof paths and completion handoffs are public task artifacts generated by
   // the 0.9 finishability flow. Runtime owns their detailed schemas; core keeps
   // these fields permissive so older queues and UI payloads can carry them.
-  proofPaths: z.array(z.unknown()).optional(),
-  completionHandoff: z.unknown().optional(),
+  proofPaths: z.array(z.union([
+    ProofPath,
+    z.object({}).passthrough(),
+  ])).optional(),
+  completionHandoff: z.union([
+    CompletionHandoff,
+    z.object({ id: z.string().optional(), taskId: z.string().optional() }).passthrough(),
+  ]).optional(),
 
   // FR-22: recorded when a worker pre-rejects the task, or when the
   // orchestrator shelves a task per a policy decision (e.g. FR-21 human_only).

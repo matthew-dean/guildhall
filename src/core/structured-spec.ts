@@ -14,6 +14,38 @@ function cleanedStringList(label: string): z.ZodType<string[], z.ZodTypeDef, unk
     })
 }
 
+function parseStructuredAcceptanceCriterionDescription(description: string): { scenario: string; expectation: string } {
+  const normalized = description.trim().replace(/\s+/g, ' ')
+  const gwtMatch = /^given\s+(.+?),\s*when\s+(.+?),\s*then\s+(.+)$/i.exec(normalized)
+  if (gwtMatch) {
+    return {
+      scenario: `Given ${gwtMatch[1]!.trim()}, when ${gwtMatch[2]!.trim()}`,
+      expectation: `Then ${gwtMatch[3]!.trim()}`,
+    }
+  }
+  return { scenario: normalized, expectation: normalized }
+}
+
+export const StructuredAcceptanceCriterion = z.preprocess((value) => {
+  if (typeof value === 'string') {
+    const parsed = parseStructuredAcceptanceCriterionDescription(value)
+    return {
+      scenario: parsed.scenario,
+      expectation: parsed.expectation,
+      verificationMode: 'review',
+    }
+  }
+  return value
+}, z.object({
+  scenario: cleanedString('Acceptance criterion scenario'),
+  expectation: cleanedString('Acceptance criterion expectation'),
+  verificationMode: z.enum(['automated', 'review', 'human']),
+  evidenceHint: cleanedString('Acceptance criterion evidenceHint').optional(),
+  negativeCase: cleanedString('Acceptance criterion negativeCase').optional(),
+  command: cleanedString('Acceptance criterion command').optional(),
+}).strict())
+export type StructuredAcceptanceCriterion = z.infer<typeof StructuredAcceptanceCriterion>
+
 export const StructuredSpecCompletionBoundary = z.object({
   productOutcome: cleanedString('Completion Boundary productOutcome'),
   whatGuildhallCanCompleteInCode: cleanedString('Completion Boundary whatGuildhallCanCompleteInCode'),
@@ -32,7 +64,8 @@ export const StructuredSpec = z.object({
   nonGoals: cleanedStringList('nonGoals'),
   proposedDesign: cleanedString('proposedDesign'),
   keyDecisions: cleanedStringList('keyDecisions'),
-  acceptanceCriteria: cleanedStringList('acceptanceCriteria'),
+  acceptanceCriteria: z.array(StructuredAcceptanceCriterion)
+    .refine((values) => values.length > 0, { message: 'acceptanceCriteria must include at least one item.' }),
   verification: cleanedStringList('verification'),
   completionBoundary: StructuredSpecCompletionBoundary,
   userFacingBehavior: cleanedString('userFacingBehavior').optional(),
@@ -54,6 +87,20 @@ function renderNumberedList(items: string[]): string[] {
   return items.map((item, index) => `${index + 1}. ${item}`)
 }
 
+function renderAcceptanceCriteria(items: StructuredAcceptanceCriterion[]): string[] {
+  return items.flatMap((item, index) => {
+    const lines = [
+      `${index + 1}. Scenario: ${item.scenario}`,
+      `   Expectation: ${item.expectation}`,
+      `   Verification: ${item.verificationMode}`,
+    ]
+    if (item.command) lines.push(`   Command: ${item.command}`)
+    if (item.evidenceHint) lines.push(`   Evidence hint: ${item.evidenceHint}`)
+    if (item.negativeCase) lines.push(`   Negative case: ${item.negativeCase}`)
+    return lines
+  })
+}
+
 function appendSection(parts: string[], title: string, body: string[]): void {
   if (body.length === 0) return
   parts.push(`## ${title}`, ...body, '')
@@ -71,7 +118,7 @@ export function renderStructuredSpecMarkdown(spec: StructuredSpec): string {
   if (spec.componentApiShape) appendSection(parts, 'Component / API Shape', [spec.componentApiShape])
   if (spec.dataModelSchemaChanges) appendSection(parts, 'Data Model / Schema Changes', [spec.dataModelSchemaChanges])
   appendSection(parts, 'Key Decisions', renderBulletList(spec.keyDecisions))
-  appendSection(parts, 'Acceptance Criteria', renderNumberedList(spec.acceptanceCriteria))
+  appendSection(parts, 'Acceptance Criteria', renderAcceptanceCriteria(spec.acceptanceCriteria))
   appendSection(parts, 'Verification', renderBulletList(spec.verification))
   if (spec.migrationRollout) appendSection(parts, 'Migration / Rollout', [spec.migrationRollout])
   if (spec.performanceReliabilitySecurity) {
