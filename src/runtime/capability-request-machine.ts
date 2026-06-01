@@ -3,10 +3,13 @@ import {
   transition,
   type TransitionReceipt,
 } from './state-machine.js'
-import type { CapabilityRequest } from './capability-requests.js'
+import type {
+  CapabilityRequest,
+  CapabilityRequestStatus,
+  CapabilityRequestTransitionEvent,
+} from './capability-request-types.js'
 
-export type CapabilityRequestStatus = CapabilityRequest['status']
-export type CapabilityRequestEvent = 'approve' | 'deny' | 'block' | 'revoke'
+export type CapabilityRequestEvent = CapabilityRequestTransitionEvent
 export type CapabilityRequestTransitionReceipt = TransitionReceipt<CapabilityRequestStatus, CapabilityRequestEvent> & {
   machineId: 'capability-request'
 }

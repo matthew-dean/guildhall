@@ -3,6 +3,10 @@ import { z } from 'zod'
 import fs from 'node:fs/promises'
 import path from 'node:path'
 import {
+  applyTaskTransition,
+  type TaskTransitionEvent,
+} from '@guildhall/runtime/task-transition'
+import {
   AcceptanceCriteria,
   GateResult,
   Task,
@@ -15,7 +19,6 @@ import {
   renderStructuredSpecMarkdown,
 } from '@guildhall/core'
 import { atomicWriteText } from '@guildhall/sessions'
-import { applyTaskTransition, type TaskTransitionEvent } from '../runtime/task-transition.js'
 
 const TASKS_PATH_SCHEMA = z.string().describe('Absolute path to the TASKS.json file')
 

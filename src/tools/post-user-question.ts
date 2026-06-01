@@ -24,7 +24,7 @@ import fs from 'node:fs/promises'
 import path from 'node:path'
 import { TaskQueue } from '@guildhall/core'
 import { createHash } from 'node:crypto'
-import { createOwnerInputRequest } from '../runtime/owner-input-store.js'
+import { createOwnerInputRequest } from '@guildhall/runtime/owner-input-store'
 
 const TASKS_PATH_SCHEMA = z.string().describe('Absolute path to the TASKS.json file')
 

@@ -377,6 +377,27 @@ export {
   isHostPortAvailable,
   releaseRuntimePort,
 } from './port-router.js'
+export {
+  applyTaskTransition,
+  taskLifecycleMachine,
+  transitionTaskStatus,
+} from './task-transition.js'
+export type {
+  TaskTransitionContext,
+  TaskTransitionEvent,
+  TaskTransitionReceipt,
+  TaskTransitionState,
+} from './task-transition.js'
+export {
+  createOwnerInputRequest,
+  findOwnerInputRequestBySource,
+  listOwnerInputRequests,
+  listOwnerInputRequestsSync,
+} from './owner-input-store.js'
+export type {
+  CreateOwnerInputRequestInput,
+  CreateOwnerInputRequestResult,
+} from './owner-input-store.js'
 export type {
   RuntimePortAllocationRequest,
   RuntimePortRange,

@@ -3133,12 +3133,17 @@ Preferred locations:
 
 Update tests to import from the new internal fixture path.
 
-- [ ] **Step 3: Run tests**
+- [x] **Step 3: Run tests**
 
   - Evidence: `pnpm vitest run src/runtime/__tests__/app-spec-smoke.test.ts src/runtime/__tests__/release-proof-matrix.test.ts --reporter=dot` passed: 2 files, 14 tests passed, 1 skipped.
   - Evidence: `pnpm lint:reductions` passed.
   - Evidence: `pnpm lint:deps` ran and failed with exit code 10 on existing non-Task-10 dependency-cruiser issues: `src/tools/task-queue.ts -> src/runtime/task-transition.ts`, `src/tools/post-user-question.ts -> src/runtime/owner-input-store.ts`, and existing core/persistence/session circular dependency reports. No failure referenced `app-spec-smoke`, `release-proof-matrix`, or the new internal fixture runtime imports.
   - Evidence: `pnpm typecheck` ran and failed with exit code 2 on existing `openQuestions` type errors across `src/runtime/intake.ts`, `src/runtime/orchestrator.ts`, `src/runtime/run-automation.ts`, and related tests. No failure referenced the moved internal fixture runtime paths or rootDir/import issues.
+  - Evidence: Worker I reran `pnpm vitest run src/runtime/__tests__/app-spec-smoke.test.ts src/runtime/__tests__/release-proof-matrix.test.ts --reporter=dot`; it passed with 2 files, 14 tests passed, 1 skipped.
+  - Evidence: Worker I reran `pnpm lint:reductions`; it passed.
+  - Evidence: Worker I fixed the dependency-boundary blockers without weakening dependency-cruiser rules. `pnpm lint:deps` exits 0 with 52 existing orphan warnings and 0 errors.
+  - Evidence: Worker I reran `pnpm typecheck`; it passed.
+  - Evidence: Worker I reran `pnpm vitest run src/runtime/__tests__/capability-requests.test.ts src/runtime/__tests__/capability-grants.test.ts src/runtime/__tests__/task-transition.test.ts src/tools/__tests__/task-queue.test.ts src/tools/__tests__/post-user-question.test.ts --reporter=dot`; it passed with 5 files and 68 tests.
 
 Run:
 

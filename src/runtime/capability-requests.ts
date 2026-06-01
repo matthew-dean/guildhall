@@ -1,72 +1,30 @@
 import fs from 'node:fs'
 import fsp from 'node:fs/promises'
 import path from 'node:path'
-import { z } from 'zod'
 import { atomicWriteText } from '@guildhall/sessions'
 import { applyCapabilityRequestTransition } from './capability-request-machine.js'
+import {
+  CapabilityRequest,
+  type CapabilityMount,
+  type CapabilityRequest as CapabilityRequestRecord,
+} from './capability-request-types.js'
 
-export const CapabilityMount = z.object({
-  hostPath: z.string(),
-  containerPath: z.string(),
-  access: z.enum(['read-only', 'read-write']),
-})
-export type CapabilityMount = z.infer<typeof CapabilityMount>
-
-export const CapabilityGrant = z.object({
-  id: z.string(),
-  kind: z.literal('mount_directory'),
-  hostPath: z.string(),
-  containerPath: z.string(),
-  access: z.enum(['read-only', 'read-write']),
-  duration: z.string(),
-  status: z.enum(['active', 'revoked']),
-  evidence: z.string(),
-  grantedAt: z.string(),
-  grantedBy: z.string(),
-  revokedAt: z.string().optional(),
-  revokedBy: z.string().optional(),
-  revokeReason: z.string().optional(),
-})
-export type CapabilityGrant = z.infer<typeof CapabilityGrant>
-
-export const CapabilityRequestStatus = z.enum(['pending', 'approved', 'denied', 'blocked', 'revoked'])
-export type CapabilityRequestStatus = z.infer<typeof CapabilityRequestStatus>
-
-export const CapabilityRequestTransitionEvent = z.enum(['approve', 'deny', 'block', 'revoke'])
-export type CapabilityRequestTransitionEvent = z.infer<typeof CapabilityRequestTransitionEvent>
-
-export const CapabilityRequestTransitionReceipt = z.object({
-  machineId: z.literal('capability-request'),
-  machineVersion: z.number(),
-  commandId: z.string().optional(),
-  entityId: z.string(),
-  from: CapabilityRequestStatus,
-  event: CapabilityRequestTransitionEvent,
-  to: CapabilityRequestStatus,
-  actor: z.string(),
-  evidenceRefs: z.array(z.string()),
-  createdAt: z.string(),
-})
-export type CapabilityRequestTransitionReceipt = z.infer<typeof CapabilityRequestTransitionReceipt>
-
-export const CapabilityRequest = z.object({
-  id: z.string(),
-  taskId: z.string(),
-  kind: z.literal('mount_directory'),
-  requestedBy: z.string(),
-  reason: z.string(),
-  duration: z.string().default('this task'),
-  fallback: z.string().optional(),
-  mount: CapabilityMount,
-  status: CapabilityRequestStatus,
-  requestedAt: z.string(),
-  decidedAt: z.string().optional(),
-  decidedBy: z.string().optional(),
-  blockedReason: z.string().optional(),
-  grant: CapabilityGrant.optional(),
-  transitionReceipts: z.array(CapabilityRequestTransitionReceipt).default([]),
-})
-export type CapabilityRequest = z.infer<typeof CapabilityRequest>
+export {
+  CapabilityGrant,
+  CapabilityMount,
+  CapabilityRequest,
+  CapabilityRequestStatus,
+  CapabilityRequestTransitionEvent,
+  CapabilityRequestTransitionReceipt,
+} from './capability-request-types.js'
+export type {
+  CapabilityGrant as CapabilityGrantType,
+  CapabilityMount as CapabilityMountType,
+  CapabilityRequest as CapabilityRequestType,
+  CapabilityRequestStatus as CapabilityRequestStatusType,
+  CapabilityRequestTransitionEvent as CapabilityRequestTransitionEventType,
+  CapabilityRequestTransitionReceipt as CapabilityRequestTransitionReceiptType,
+} from './capability-request-types.js'
 
 export async function createCapabilityRequest(input: {
   memoryDir: string
@@ -77,9 +35,9 @@ export async function createCapabilityRequest(input: {
   duration?: string
   fallback?: string
   mount: CapabilityMount
-}): Promise<CapabilityRequest> {
+}): Promise<CapabilityRequestRecord> {
   const now = new Date().toISOString()
-  const request: CapabilityRequest = {
+  const request: CapabilityRequestRecord = {
     id: `cap-${slugify(input.taskId)}-${Date.now().toString(36)}`,
     taskId: input.taskId,
     kind: input.kind,
@@ -100,7 +58,7 @@ export async function approveCapabilityRequest(input: {
   memoryDir: string
   requestId: string
   approvedBy: string
-}): Promise<CapabilityRequest> {
+}): Promise<CapabilityRequestRecord> {
   const request = listCapabilityRequests(input.memoryDir).find(candidate => candidate.id === input.requestId)
   if (!request) throw new Error(`Capability request ${input.requestId} not found`)
   const now = new Date().toISOString()
@@ -132,7 +90,7 @@ export async function approveCapabilityRequest(input: {
   return request
 }
 
-export function listCapabilityRequests(memoryDir: string): CapabilityRequest[] {
+export function listCapabilityRequests(memoryDir: string): CapabilityRequestRecord[] {
   const dir = capabilityDir(memoryDir)
   if (!fs.existsSync(dir)) return []
   return fs.readdirSync(dir)
@@ -147,7 +105,7 @@ export function listCapabilityRequests(memoryDir: string): CapabilityRequest[] {
     .sort((left, right) => left.requestedAt.localeCompare(right.requestedAt))
 }
 
-export async function saveCapabilityRequest(memoryDir: string, request: CapabilityRequest): Promise<void> {
+export async function saveCapabilityRequest(memoryDir: string, request: CapabilityRequestRecord): Promise<void> {
   const filePath = path.join(capabilityDir(memoryDir), `${request.id}.json`)
   await fsp.mkdir(path.dirname(filePath), { recursive: true })
   atomicWriteText(filePath, JSON.stringify(request, null, 2) + '\n')

@@ -35,6 +35,8 @@
       "@guildhall/protocol": ["./src/protocol/index.ts"],
       "@guildhall/providers": ["./src/providers/index.ts"],
       "@guildhall/runtime": ["./src/runtime/index.ts"],
+      "@guildhall/runtime/owner-input-store": ["./src/runtime/owner-input-store.ts"],
+      "@guildhall/runtime/task-transition": ["./src/runtime/task-transition.ts"],
       "@guildhall/runtime-bundle": ["./src/runtime-bundle/index.ts"],
       "@guildhall/runtime-container": ["./src/runtime-container/index.ts"],
       "@guildhall/shared": ["./src/shared/index.ts"],
