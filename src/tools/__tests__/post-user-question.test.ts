@@ -3,13 +3,16 @@ import fs from 'node:fs/promises'
 import path from 'node:path'
 import os from 'node:os'
 import { postUserQuestionTool } from '../post-user-question.js'
+import { listOwnerInputRequests } from '../../runtime/owner-input-store.js'
+import { listBoundedChatSessions } from '../../runtime/bounded-chat.js'
 
 let tmpDir: string
 let tasksPath: string
 
 beforeEach(async () => {
   tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'guildhall-question-'))
-  tasksPath = path.join(tmpDir, 'TASKS.json')
+  await fs.mkdir(path.join(tmpDir, '.guildhall'), { recursive: true })
+  tasksPath = path.join(tmpDir, '.guildhall', 'TASKS.json')
   await fs.writeFile(
     tasksPath,
     JSON.stringify({
@@ -45,6 +48,41 @@ beforeEach(async () => {
   )
 })
 
+async function ownerInputPrompts(): Promise<string[]> {
+  const requests = await listOwnerInputRequests(tmpDir)
+  return requests.map(request => request.prompt)
+}
+
+async function ownerInputChoices(): Promise<Array<string[] | undefined>> {
+  const requests = await listOwnerInputRequests(tmpDir)
+  return requests.map(request => request.choices)
+}
+
+async function ownerInputCount(): Promise<number> {
+  return (await listOwnerInputRequests(tmpDir)).length
+}
+
+async function firstSessionPrompt(): Promise<string | undefined> {
+  const sessions = await listBoundedChatSessions(path.join(tmpDir, '.guildhall'))
+  return sessions[0]?.subObjectives[0]?.prompt
+}
+
+async function sessionQuestions(): Promise<Array<{ prompt?: string; choices?: string[]; helperText?: string }>> {
+  const sessions = await listBoundedChatSessions(path.join(tmpDir, '.guildhall'))
+  return sessions.map(session => ({
+    prompt: session.subObjectives[0]?.prompt,
+    choices: session.subObjectives[0]?.choices,
+    helperText: session.subObjectives[0]?.helperText,
+  }))
+}
+
+async function taskHasOpenQuestions(): Promise<boolean> {
+  const queue = JSON.parse(await fs.readFile(tasksPath, 'utf-8')) as {
+    tasks: Array<{ openQuestions?: unknown[] }>
+  }
+  return Boolean(queue.tasks[0]?.openQuestions?.length)
+}
+
 afterEach(async () => {
   await fs.rm(tmpDir, { recursive: true, force: true })
 })
@@ -69,12 +107,11 @@ describe('postUserQuestionTool', () => {
     )
     expect(result.is_error).toBe(false)
 
-    const queue = JSON.parse(await fs.readFile(tasksPath, 'utf-8')) as {
-      tasks: Array<{ openQuestions?: Array<{ askedBy?: string; prompt?: string }> }>
-    }
-    expect(queue.tasks[0]?.openQuestions).toHaveLength(1)
-    expect(queue.tasks[0]?.openQuestions?.[0]?.askedBy).toBe('spec-agent')
-    expect(queue.tasks[0]?.openQuestions?.[0]?.prompt).toBe('Pick one')
+    expect(await ownerInputCount()).toBe(1)
+    expect(await ownerInputPrompts()).toEqual(['Pick one'])
+    expect(await ownerInputChoices()).toEqual([['A', 'B']])
+    expect(await firstSessionPrompt()).toBe('Pick one')
+    expect(await taskHasOpenQuestions()).toBe(false)
   })
 
   it('accepts prompt as an alias for body on choice questions', async () => {
@@ -96,13 +133,11 @@ describe('postUserQuestionTool', () => {
     )
     expect(result.is_error).toBe(false)
 
-    const queue = JSON.parse(await fs.readFile(tasksPath, 'utf-8')) as {
-      tasks: Array<{ openQuestions?: Array<{ prompt?: string; choices?: string[] }> }>
-    }
-    expect(queue.tasks[0]?.openQuestions?.[0]).toMatchObject({
+    expect(await sessionQuestions()).toEqual([expect.objectContaining({
       prompt: 'Pick one',
       choices: ['A', 'B'],
-    })
+    })])
+    expect(await taskHasOpenQuestions()).toBe(false)
   })
 
   it('does not append a duplicate unanswered question with the same prompt and choices', async () => {
@@ -135,11 +170,9 @@ describe('postUserQuestionTool', () => {
     expect(second.is_error).toBe(false)
     expect(second.metadata?.questionId).toBe(first.metadata?.questionId)
 
-    const queue = JSON.parse(await fs.readFile(tasksPath, 'utf-8')) as {
-      tasks: Array<{ openQuestions?: Array<{ prompt?: string }> }>
-    }
-    expect(queue.tasks[0]?.openQuestions).toHaveLength(1)
-    expect(queue.tasks[0]?.openQuestions?.[0]?.prompt).toBe('Pick one')
+    expect(await ownerInputCount()).toBe(1)
+    expect(await ownerInputPrompts()).toEqual(['Pick one'])
+    expect(await taskHasOpenQuestions()).toBe(false)
   })
 
   it('infers structured choice questions from last_assistant_text when the model calls it with {}', async () => {
@@ -165,20 +198,17 @@ describe('postUserQuestionTool', () => {
     expect(first.is_error).toBe(false)
     expect(second.is_error).toBe(false)
 
-    const queue = JSON.parse(await fs.readFile(tasksPath, 'utf-8')) as {
-      tasks: Array<{ openQuestions?: Array<{ kind?: string; prompt?: string; choices?: string[] }> }>
-    }
-    expect(queue.tasks[0]?.openQuestions).toHaveLength(2)
-    expect(queue.tasks[0]?.openQuestions?.[0]).toMatchObject({
-      kind: 'choice',
+    const questions = await sessionQuestions()
+    expect(questions).toHaveLength(2)
+    expect(questions).toEqual(expect.arrayContaining([expect.objectContaining({
       prompt: 'Primary scenario to spec',
       choices: ['Validation failure', 'Empty assistant message'],
-    })
-    expect(queue.tasks[0]?.openQuestions?.[1]).toMatchObject({
-      kind: 'choice',
+    })]))
+    expect(questions).toEqual(expect.arrayContaining([expect.objectContaining({
       prompt: 'Stop behavior',
       choices: ['Stop immediately', 'Allow a batch, then stop'],
-    })
+    })]))
+    expect(await taskHasOpenQuestions()).toBe(false)
   })
 
   it('exposes a usable JSON schema so models see the real argument shape', () => {
@@ -228,15 +258,13 @@ describe('postUserQuestionTool', () => {
     const fourth = await postUserQuestionTool.execute({}, { cwd: '/tmp', metadata })
     expect(fourth.is_error).toBe(true)
 
-    const queue = JSON.parse(await fs.readFile(tasksPath, 'utf-8')) as {
-      tasks: Array<{ openQuestions?: Array<{ prompt?: string }> }>
-    }
-    expect(queue.tasks[0]?.openQuestions).toHaveLength(3)
-    expect(queue.tasks[0]?.openQuestions?.map((q) => q.prompt)).toEqual([
+    expect(await ownerInputCount()).toBe(3)
+    expect((await sessionQuestions()).map((q) => q.prompt)).toEqual(expect.arrayContaining([
       'First',
       'Second',
       'Third',
-    ])
+    ]))
+    expect(await taskHasOpenQuestions()).toBe(false)
   })
 
   it('prefers prompt-line plus numbered choices over promoting the trailing Other option into the prompt', async () => {
@@ -265,11 +293,9 @@ describe('postUserQuestionTool', () => {
     await postUserQuestionTool.execute({}, { cwd: '/tmp', metadata })
     await postUserQuestionTool.execute({}, { cwd: '/tmp', metadata })
 
-    const queue = JSON.parse(await fs.readFile(tasksPath, 'utf-8')) as {
-      tasks: Array<{ openQuestions?: Array<{ prompt?: string; choices?: string[] }> }>
-    }
-    expect(queue.tasks[0]?.openQuestions).toHaveLength(2)
-    expect(queue.tasks[0]?.openQuestions?.[0]).toMatchObject({
+    const questions = await sessionQuestions()
+    expect(questions).toHaveLength(2)
+    expect(questions[0]).toMatchObject({
       prompt: 'To lock scope before I draft acceptance criteria, pick one:',
       choices: [
         'Behavior spec only',
@@ -278,7 +304,7 @@ describe('postUserQuestionTool', () => {
         'Other',
       ],
     })
-    expect(queue.tasks[0]?.openQuestions?.[1]).toMatchObject({
+    expect(questions[1]).toMatchObject({
       prompt: 'Also, what should success look like in one concrete check?',
       choices: [
         'In first turn, agent asks at most N questions and yields.',
@@ -287,6 +313,7 @@ describe('postUserQuestionTool', () => {
         'Other.',
       ],
     })
+    expect(await taskHasOpenQuestions()).toBe(false)
   })
 
   it('infers multiple choice questions from headed sections that use lettered A/B/C options', async () => {
@@ -310,26 +337,25 @@ describe('postUserQuestionTool', () => {
     await postUserQuestionTool.execute({}, { cwd: '/tmp', metadata })
     await postUserQuestionTool.execute({}, { cwd: '/tmp', metadata })
 
-    const queue = JSON.parse(await fs.readFile(tasksPath, 'utf-8')) as {
-      tasks: Array<{ openQuestions?: Array<{ prompt?: string; choices?: string[] }> }>
-    }
-    expect(queue.tasks[0]?.openQuestions).toHaveLength(2)
-    expect(queue.tasks[0]?.openQuestions?.[0]).toMatchObject({
+    const questions = await sessionQuestions()
+    expect(questions).toHaveLength(2)
+    expect(questions).toEqual(expect.arrayContaining([expect.objectContaining({
       prompt: 'What should be the **primary success signal** for this task? (pick one)',
       choices: [
         'Spec quality only: clear ACs + testing strategy, no implementation expectations',
         'Implementation-ready: ACs are directly testable and mapped to unit/integration tests',
         'End-to-end governance: includes ACs for behavior, tests, task-state transitions, and transcript persistence as release gates',
       ],
-    })
-    expect(queue.tasks[0]?.openQuestions?.[1]).toMatchObject({
+    })]))
+    expect(questions).toEqual(expect.arrayContaining([expect.objectContaining({
       prompt: 'Coverage posture for the future implementation (pick one)',
       choices: [
         'Standard floor only (existing project defaults; no extra target)',
         'Elevated on touched intake modules (explicit higher expectation in spec)',
         'Standard floor + explicit exemption note allowed for non-deterministic orchestration paths',
       ],
-    })
+    })]))
+    expect(await taskHasOpenQuestions()).toBe(false)
   })
 
   it('does not infer fake user questions from planning prose about what the agent will do next', async () => {
@@ -504,16 +530,14 @@ describe('postUserQuestionTool', () => {
     const result = await postUserQuestionTool.execute({}, { cwd: '/tmp', metadata })
     expect(result.is_error).toBe(false)
 
-    const queue = JSON.parse(await fs.readFile(tasksPath, 'utf-8')) as {
-      tasks: Array<{ openQuestions?: Array<{ subject?: string; description?: string; prompt?: string }> }>
-    }
-    expect(queue.tasks[0]?.openQuestions).toHaveLength(1)
-    expect(queue.tasks[0]?.openQuestions?.[0]).toMatchObject({
-      subject: 'AlertDialog variants',
+    const questions = await sessionQuestions()
+    expect(questions).toHaveLength(1)
+    expect(questions[0]).toMatchObject({
       prompt: 'What variants does AlertDialog need?',
     })
-    expect(queue.tasks[0]?.openQuestions?.[0]?.description).toContain('roadmap lists AlertDialog as missing')
-    expect(queue.tasks[0]?.openQuestions?.[0]?.description).not.toContain('The key question I need to ask')
-    expect(queue.tasks[0]?.openQuestions?.[0]?.prompt).not.toContain('The key question I need to ask')
+    expect(questions[0]?.helperText).toContain('roadmap lists AlertDialog as missing')
+    expect(questions[0]?.helperText).not.toContain('The key question I need to ask')
+    expect(questions[0]?.prompt).not.toContain('The key question I need to ask')
+    expect(await taskHasOpenQuestions()).toBe(false)
   })
 })

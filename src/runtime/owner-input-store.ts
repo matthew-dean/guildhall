@@ -27,6 +27,7 @@ const CreateOwnerInputRequestInput = z.object({
   source: OwnerInputSource,
   target: OwnerInputTarget,
   prompt: z.string(),
+  helperText: z.string().optional(),
   choices: z.array(z.string()).optional(),
   objective: OwnerInputObjective,
   sessionSource: z.string().optional(),
@@ -72,6 +73,7 @@ export async function createOwnerInputRequest(
         : `owner-input-${shortHash(sourceKey)}`,
       objective: input.objective.label,
       prompt: input.prompt,
+      helperText: input.helperText,
       choices: input.choices,
     },
   })

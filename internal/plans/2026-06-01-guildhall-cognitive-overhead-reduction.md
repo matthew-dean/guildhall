@@ -1367,7 +1367,7 @@ of owning local question state:
 Focused tests must assert that these source records contain refs to
 owner-input/bounded-chat sessions rather than embedded question arrays.
 
-- [ ] **Step 10: Replace question writer path**
+- [x] **Step 10: Replace question writer path**
 
 Change `src/tools/post-user-question.ts` from a task mutator into one of these:
 
@@ -1375,6 +1375,20 @@ Change `src/tools/post-user-question.ts` from a task mutator into one of these:
 - a removed tool replaced by `start-owner-input-thread`.
 
 The resulting code must not assign `task.openQuestions`.
+
+Evidence, 2026-06-01 coordinator slice:
+
+- `src/tools/post-user-question.ts` now verifies the target task exists, then
+  creates or links an `OwnerInputRequest` plus bounded-chat session via
+  `createOwnerInputRequest`.
+- The tool no longer constructs or assigns `task.openQuestions`.
+- Question context is carried as bounded-chat sub-objective helper text.
+- `src/tools/__tests__/post-user-question.test.ts` now asserts owner-input and
+  bounded-chat records are created while `TASKS.json` remains free of new
+  task-local questions.
+- Evidence command: `pnpm vitest run src/tools/__tests__/post-user-question.test.ts --reporter=dot`
+  passed with 15 tests.
+- Evidence command: `pnpm typecheck` passed.
 
 - [ ] **Step 11: Remove normal `openQuestions` schema**
 
