@@ -16,10 +16,7 @@ import { join } from 'node:path'
 import { getProjectLocalHistoryDir, getProjectStateDir } from '@guildhall/sessions'
 import { parse as parseYaml } from 'yaml'
 import type { Task } from '@guildhall/core'
-import { activeEscalations } from '@guildhall/tools'
 import { META_INTAKE_TASK_ID } from './meta-intake.js'
-import { visibleOpenQuestions } from './question-visibility.js'
-import { userFacingText } from './user-facing-text.js'
 import type { BootstrapStatus } from './bootstrap-runner.js'
 import {
   buildSnapshot,
@@ -31,7 +28,6 @@ import {
   progressForTask,
   emptyWizardsState,
 } from './wizards.js'
-import { listPressureTestIntakes, summarizeProjectCheckIn } from './pressure-test-intake.js'
 
 export type InboxSeverity = 'high' | 'medium' | 'low'
 
@@ -41,13 +37,7 @@ export type InboxItem =
   | { kind: 'bootstrap_missing'; severity: 'high'; title: string; detail: string; actionHref?: string }
   | { kind: 'setup_pending'; severity: 'medium'; stepId: string; title: string; detail: string; actionHref: string }
   | { kind: 'workspace_import_pending'; severity: 'medium'; title: string; detail: string; signals: string[]; actionHref: string; dismissEndpoint: string }
-  | { kind: 'project_check_in'; severity: 'medium' | 'low'; title: string; detail: string; actionHref: string }
-  | { kind: 'pressure_test_pending'; severity: 'medium'; title: string; detail: string; actionHref: string }
-  | { kind: 'agent_question_pending'; severity: 'medium'; taskId: string; title: string; detail: string; actionHref: string }
   | { kind: 'import_draft_queue'; severity: 'medium'; taskId: string; title: string; detail: string; actionHref: string }
-  | { kind: 'brief_approval'; severity: 'medium'; taskId: string; title: string; detail: string; actionHref: string }
-  | { kind: 'spec_approval'; severity: 'medium'; taskId: string; title: string; detail: string; actionHref: string }
-  | { kind: 'open_escalation'; severity: 'high'; taskId: string; escalationId: string; title: string; detail: string; actionHref: string; taskDescription?: string }
   | { kind: 'lever_questions'; severity: 'low'; title: string; detail: string; defaultCount: number; actionHref: string }
   | { kind: 'spec_fill_pending'; severity: 'low'; taskId: string; title: string; detail: string; actionHref: string; missingSteps: string[] }
 
@@ -71,15 +61,6 @@ export interface InboxBlockers {
   workspaceImport: boolean
 }
 
-export const THREAD_OWNED_INBOX_KINDS = [
-  'project_check_in',
-  'pressure_test_pending',
-  'agent_question_pending',
-  'brief_approval',
-  'spec_approval',
-  'open_escalation',
-] as const satisfies readonly InboxItem['kind'][]
-
 export const ATTENTION_OWNED_INBOX_KINDS = [
   'required_migration',
   'project_understanding',
@@ -91,7 +72,6 @@ export const ATTENTION_OWNED_INBOX_KINDS = [
   'spec_fill_pending',
 ] as const satisfies readonly InboxItem['kind'][]
 
-const THREAD_OWNED_INBOX_KIND_SET = new Set<InboxItem['kind']>(THREAD_OWNED_INBOX_KINDS)
 const ATTENTION_OWNED_INBOX_KIND_SET = new Set<InboxItem['kind']>(ATTENTION_OWNED_INBOX_KINDS)
 
 export function buildInboxBlockers(items: readonly InboxItem[]): InboxBlockers {
@@ -99,10 +79,6 @@ export function buildInboxBlockers(items: readonly InboxItem[]): InboxBlockers {
     bootstrap: items.some(i => i.kind === 'bootstrap_missing'),
     workspaceImport: items.some(i => i.kind === 'workspace_import_pending'),
   }
-}
-
-export function isThreadOwnedInboxItem(item: Pick<InboxItem, 'kind'>): boolean {
-  return THREAD_OWNED_INBOX_KIND_SET.has(item.kind)
 }
 
 export function isAttentionOwnedInboxItem(item: Pick<InboxItem, 'kind'>): boolean {
@@ -115,15 +91,9 @@ const KIND_ORDER: Record<InboxItem['kind'], number> = {
   bootstrap_missing: 2,
   setup_pending: 3,
   workspace_import_pending: 4,
-  project_check_in: 5,
-  pressure_test_pending: 6,
-  open_escalation: 7,
-  agent_question_pending: 8,
-  import_draft_queue: 9,
-  brief_approval: 10,
-  spec_approval: 11,
-  lever_questions: 12,
-  spec_fill_pending: 13,
+  import_draft_queue: 5,
+  lever_questions: 6,
+  spec_fill_pending: 7,
 }
 
 const SEVERITY_ORDER: Record<InboxSeverity, number> = {
@@ -152,67 +122,6 @@ function inboxTitle(taskId: string, title: string): string {
   return truncateTitle(title)
 }
 
-function reviewableBrief(brief: unknown): brief is { userJob?: unknown; successMetric?: unknown; successCriteria?: unknown; approvedAt?: unknown } {
-  if (!brief || typeof brief !== 'object') return false
-  const b = brief as { userJob?: unknown; successMetric?: unknown; successCriteria?: unknown }
-  const userJob = typeof b.userJob === 'string' ? b.userJob.trim() : ''
-  const success = typeof b.successMetric === 'string' && b.successMetric.trim()
-    ? b.successMetric.trim()
-    : typeof b.successCriteria === 'string'
-      ? b.successCriteria.trim()
-      : ''
-  return Boolean(userJob && success)
-}
-
-function cleanPressureTargetTitle(title: string): string {
-  return title
-    .replace(/\s+project check-in$/i, '')
-    .replace(/^Pressure-test\s+/i, '')
-    .replace(/\.\s*Ask me.*$/i, '')
-    .trim()
-    || title
-}
-
-function pressureQuestionDetail(prompt: string, targetTitle: string): string {
-  const target = cleanPressureTargetTitle(targetTitle)
-  const trimmed = prompt.trim()
-  if (trimmed.length > 0) {
-    return userFacingText(trimmed, 'Guildhall needs one answer before it can keep going.')
-  }
-  if (/^What outcome would make this project successful\?$/i.test(trimmed)) {
-    return `What would make ${target} successful?`
-  }
-  const quotedOutcome = trimmed.match(/^For "(.+)", what outcome should this request achieve\?$/i)
-  if (quotedOutcome) {
-    return `What should ${cleanPressureTargetTitle(quotedOutcome[1] ?? target)} accomplish?`
-  }
-  return userFacingText(trimmed, 'Guildhall needs one answer before it can keep going.')
-}
-
-function escalationInboxDetail(summary: string, reason: string): string {
-  const text = userFacingText(summary).trim()
-  if (/\bAC-\d+\b/i.test(text) && /\bevidence\b/i.test(text)) {
-    return 'Guildhall needs to run or save one missing verification check before this task can finish.'
-  }
-  if (/authoritative verification|upstream workspace build failure|checkpoint-touched|task worktree/i.test(text)) {
-    return 'The project build is failing outside this task, so Guildhall needs you to choose whether to reframe the task, fix the wider build first, or retry after the build is healthy.'
-  }
-  if (/no visible progress|made no visible progress|no saved (?:spec|draft)|no durable (?:draft|update)/i.test(text)) {
-    return 'Guildhall found useful context but did not save the next draft. Review the task and decide whether to retry from those notes or reframe it.'
-  }
-  if (/spec (?:author|agent|shaping).*(?:turn limit|maximum turn|timed out)|kept researching after guildhall asked for durable progress/i.test(text)) {
-    return 'Spec shaping stopped before Guildhall saved the next draft. Open the task to retry from the transcript or reframe the work.'
-  }
-  const withoutCodePrefix = text.replace(/^[a-z][a-z0-9_]*:\s*/i, '').trim()
-  if (reason === 'spec_ambiguous') {
-    return withoutCodePrefix || 'The task brief is missing a decision or concrete implementation path.'
-  }
-  if (reason === 'human_judgment_required') {
-    return withoutCodePrefix || 'Guildhall needs a product or recovery decision before it can continue.'
-  }
-  return userFacingText(withoutCodePrefix, 'Open the task to choose the next step.')
-}
-
 function inboxItemDedupeKey(item: InboxItem): string {
   const taskId = 'taskId' in item ? item.taskId : ''
   const actionHref = 'actionHref' in item && typeof item.actionHref === 'string' ? item.actionHref : ''
@@ -236,10 +145,6 @@ export function dedupeInboxItems(items: readonly InboxItem[]): InboxItem[] {
     deduped.push(item)
   }
   return deduped
-}
-
-function unresolvedVisibleQuestions(task: Task): Array<{ answeredAt?: unknown; prompt?: unknown; restatement?: unknown }> {
-  return visibleOpenQuestions(task)
 }
 
 function readJsonSafe(path: string): unknown {
@@ -402,12 +307,9 @@ export function buildInbox(opts: BuildInboxOptions): InboxItem[] {
     workspaceImportTask != null &&
     !['done', 'cancelled', 'archived'].includes(workspaceImportTaskStatus)
 
-  const activePressureTest = listPressureTestIntakes(getProjectStateDir(projectPath))
-    .find(intake => intake.status === 'active' && intake.pendingQuestion)
-
   const setupProgress = progressFor(onboardWizard, buildSnapshot({ projectPath, ...(snapshotOptions ?? {}) }))
   const activeSetupStep = setupProgress.steps.find(step => step.id === setupProgress.activeStepId)
-  if (activeSetupStep && ['direction', 'firstTask'].includes(activeSetupStep.id) && !activePressureTest) {
+  if (activeSetupStep && ['direction', 'firstTask'].includes(activeSetupStep.id)) {
     items.push({
       kind: 'setup_pending',
       severity: 'medium',
@@ -444,34 +346,10 @@ export function buildInbox(opts: BuildInboxOptions): InboxItem[] {
     })
   }
 
-  // --- project_check_in ----------------------------------------------------
-  const projectCheckIn = summarizeProjectCheckIn(getProjectStateDir(projectPath))
-  if (projectCheckIn.needed) {
-    items.push({
-      kind: 'project_check_in',
-      severity: 'low',
-      title: projectCheckIn.title,
-      detail: projectCheckIn.detail,
-      actionHref: projectCheckIn.actionHref,
-    })
-  }
-  if (activePressureTest?.pendingQuestion) {
-    items.push({
-      kind: 'pressure_test_pending',
-      severity: 'medium',
-      title: cleanPressureTargetTitle(activePressureTest.target.title),
-      detail: pressureQuestionDetail(activePressureTest.pendingQuestion.prompt, activePressureTest.target.title),
-      actionHref: '/thread',
-    })
-  }
-
   // --- tasks: briefs / specs / escalations / spec-fill gaps ----------------
-  const workspaceImportNeedsAnswer = workspaceImportTask
-    ? unresolvedVisibleQuestions(workspaceImportTask).length > 0
-    : false
   const importDrafts = tasks.filter(t => t && typeof t === 'object' && t.status === 'import_draft')
   const setupStillOwnsNextAction = activeSetupStep != null && activeSetupStep.id !== 'workspaceImport'
-  if (importDrafts.length > 0 && !workspaceImportNeedsAnswer && !setupStillOwnsNextAction) {
+  if (importDrafts.length > 0 && !setupStillOwnsNextAction) {
     const nextDraft = importDrafts[0]!
     const nextDraftId = typeof nextDraft.id === 'string' ? nextDraft.id : ''
     const nextDraftTitle = typeof nextDraft.title === 'string' && nextDraft.title.trim()
@@ -510,66 +388,15 @@ export function buildInbox(opts: BuildInboxOptions): InboxItem[] {
   for (const t of taskInboxOrder) {
     const id = typeof t.id === 'string' ? t.id : ''
     const title = typeof t.title === 'string' ? t.title : id
-    const taskDescription = typeof t.description === 'string' && t.description.trim()
-      ? t.description.trim()
-      : undefined
     if (!id) continue
 
     const brief = t.productBrief as { approvedAt?: unknown } | undefined
-    const status = typeof t.status === 'string' ? t.status : ''
-    const openQuestions = unresolvedVisibleQuestions(t)
-    const hasUnansweredQuestions = openQuestions.length > 0
-    const firstUnansweredQuestion = openQuestions[0]
-    if (firstUnansweredQuestion) {
-      const questionDetail =
-        (typeof firstUnansweredQuestion.restatement === 'string' && firstUnansweredQuestion.restatement.trim()) ||
-        (typeof firstUnansweredQuestion.prompt === 'string' && firstUnansweredQuestion.prompt.trim()) ||
-        'Guildhall needs one answer before it can keep going.'
-      items.push({
-        kind: 'agent_question_pending',
-        severity: 'medium',
-        taskId: id,
-        title: inboxTitle(id, title),
-        detail: truncateTitle(userFacingText(questionDetail, 'Guildhall needs one answer before it can keep going.'), 140),
-        actionHref: '/task/' + encodeURIComponent(id) + '?tab=current',
-      })
-    }
-    const briefNeedsHuman =
-      reviewableBrief(brief) &&
-      !brief.approvedAt &&
-      status === 'exploring' &&
-      !hasUnansweredQuestions
-    if (briefNeedsHuman) {
-      items.push({
-        kind: 'brief_approval',
-        severity: 'medium',
-        taskId: id,
-        title: inboxTitle(id, title),
-        detail: 'Brief awaiting approval.',
-        actionHref: '/task/' + encodeURIComponent(id) + '?tab=current',
-      })
-    }
-
-    if (t.status === 'spec_review' && !hasUnansweredQuestions) {
-      items.push({
-        kind: 'spec_approval',
-        severity: 'medium',
-        taskId: id,
-        title: inboxTitle(id, title),
-        detail: 'Spec awaiting approval.',
-        actionHref: '/task/' + encodeURIComponent(id) + '?tab=current',
-      })
-    }
 
     // spec-fill gap: only for tasks where the wizard is applicable and
     // incomplete. Title/description are almost always filled by intake so
     // the practically-interesting misses are brief + acceptance criteria.
     // We emit the LIVE missing-step list so DoThisNext can say "missing
     // acceptance criteria" rather than the vague "spec incomplete".
-    //
-    // Dedupe with brief_approval / spec_approval: if the brief is drafted
-    // and awaiting approval, OR the spec is in review, don't also nudge
-    // "finish the spec" — those surface with their own prescriptive verb.
     const briefDraftPending =
       brief && typeof brief === 'object' && !brief.approvedAt
     const specInReview = t.status === 'spec_review'
@@ -577,8 +404,7 @@ export function buildInbox(opts: BuildInboxOptions): InboxItem[] {
       id !== 'task-workspace-import' &&
       specFillEmitted < SPEC_FILL_EMIT_CAP &&
       !briefDraftPending &&
-      !specInReview &&
-      !hasUnansweredQuestions
+      !specInReview
     ) {
       const snap = buildTaskSnapshot({
         projectPath,
@@ -622,34 +448,6 @@ export function buildInbox(opts: BuildInboxOptions): InboxItem[] {
       }
     }
 
-    const openEscalations = activeEscalations(t)
-    const hasEscalationHistory = Array.isArray(t.escalations) && t.escalations.length > 0
-    const fallbackBlockedEscalations = !hasEscalationHistory && openEscalations.length === 0 && t.status === 'blocked' && typeof t.blockReason === 'string' && t.blockReason.trim()
-      ? [{
-          id: 'block-reason',
-          summary: t.blockReason.trim(),
-        }]
-      : []
-    for (const esc of [...openEscalations, ...fallbackBlockedEscalations]) {
-      const escId = typeof esc.id === 'string' ? esc.id : ''
-      const reason = 'reason' in esc && typeof esc.reason === 'string' ? esc.reason : ''
-      const summary =
-        typeof esc.summary === 'string' && esc.summary.trim()
-          ? esc.summary
-          : reason
-            ? reason
-            : 'Agent escalation awaiting human input.'
-      items.push({
-        kind: 'open_escalation',
-        severity: 'high',
-        taskId: id,
-        escalationId: escId,
-        title: truncateTitle(title),
-        detail: escalationInboxDetail(summary, reason),
-        actionHref: '/task/' + encodeURIComponent(id),
-        ...(taskDescription ? { taskDescription } : {}),
-      })
-    }
   }
 
   // --- lever_questions -----------------------------------------------------

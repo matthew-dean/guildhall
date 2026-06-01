@@ -39,6 +39,16 @@ const forbiddenTaskShapes = [
     pattern: /function boundedChatTurns[\s\S]*?kind:\s*['"]pressure_test_question['"]/,
     message: 'Bounded chat sessions must project as bounded_chat/owner_input turns, not pressure_test_question.',
   },
+  {
+    path: /^src\/runtime\/inbox\.ts$/,
+    pattern: /\b(project_check_in|pressure_test_pending|agent_question_pending|brief_approval|spec_approval|open_escalation)\b/,
+    message: 'InboxItem must stay alert-owned. Route conversations, approvals, and escalations through Thread/owner-input.',
+  },
+  {
+    path: /^src\/web\/lib\/inbox-item-key\.ts$/,
+    pattern: /\b(project_check_in|pressure_test_pending|agent_question_pending|brief_approval|spec_approval|open_escalation)\b/,
+    message: 'Web InboxItemKind must stay alert-owned. Do not reintroduce conversation-owned inbox rows.',
+  },
 ]
 
 function walk(dir) {

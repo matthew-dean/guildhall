@@ -69,11 +69,9 @@
     const items = detail.inbox?.items ?? []
     const priority = [
       'required_migration',
-      'open_escalation',
-      'agent_question_pending',
-      'pressure_test_pending',
       'setup_pending',
-      'project_check_in',
+      'workspace_import_pending',
+      'import_draft_queue',
     ]
     for (const kind of priority) {
       const match = items.find(item => item.kind === kind)
@@ -431,12 +429,8 @@
             <Button variant="primary" size="sm" onclick={() => nav(currentProjectHref(setupInboxItem?.actionHref ?? '/setup'))}>
               {setupInboxItem?.kind === 'required_migration'
                 ? 'Migrate project'
-                : setupInboxItem?.kind === 'project_check_in'
-                ? 'Start check-in'
-                : setupInboxItem?.kind === 'pressure_test_pending' || setupInboxItem?.kind === 'agent_question_pending'
-                  ? 'Answer question'
-                  : setupInboxItem?.kind === 'open_escalation'
-                    ? 'Review recovery'
+                : setupInboxItem?.kind === 'workspace_import_pending' || setupInboxItem?.kind === 'import_draft_queue'
+                  ? 'Review import'
                   : 'Open setup'}
             </Button>
           </UtilityPanel>

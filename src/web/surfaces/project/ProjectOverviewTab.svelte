@@ -316,11 +316,6 @@
     switch (item.kind) {
       case 'project_understanding': return 'Review update'
       case 'workspace_import_pending': return 'Review import'
-      case 'agent_question_pending': return 'Answer question'
-      case 'pressure_test_pending': return 'Answer question'
-      case 'open_escalation': return 'Review recovery'
-      case 'brief_approval': return 'Review brief'
-      case 'spec_approval': return 'Review spec'
       case 'required_migration': return 'Migrate'
       default: return 'Open'
     }

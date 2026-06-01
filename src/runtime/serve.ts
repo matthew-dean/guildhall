@@ -240,8 +240,8 @@ import {
   buildInboxBlockers,
   detectRepoAnchors,
   isAttentionOwnedInboxItem,
-  isThreadOwnedInboxItem,
 } from './inbox.js'
+import { listOwnerInputRequestsSync } from './owner-input-store.js'
 import {
   buildProjectMigrationAdvisories,
   buildProjectUnderstandingAdvisories,
@@ -3928,29 +3928,33 @@ export function buildServeApp(opts: ServeOptions = {}): {
     message: string
     actionHref: string
   } | null {
-    const ownerItems = buildInbox({ projectPath }).filter(item => item.severity !== 'low' && isThreadOwnedInboxItem(item))
-    const first = ownerItems[0]
-    if (!first) return null
-    const firstQuestion = ownerItems.find(item =>
-      item.kind === 'pressure_test_pending' || item.kind === 'agent_question_pending',
-    )
-    const questionCount = ownerItems.filter(item =>
-      item.kind === 'pressure_test_pending' || item.kind === 'agent_question_pending',
-    ).length
-    const actionItem = questionCount > 0 && firstQuestion ? firstQuestion : first
-    const action =
-      questionCount > 0
-        ? `${questionCount} ${questionCount === 1 ? 'question needs' : 'questions need'} your answer before Guildhall can continue`
-        : first.kind === 'brief_approval'
-          ? 'Review the waiting task brief before Guildhall can continue'
-          : first.kind === 'spec_approval'
-            ? 'Review the waiting spec before Guildhall can continue'
-            : 'Choose a recovery path for the blocked task'
+    const waiting = listOwnerInputRequestsSync(projectPath)
+      .filter(request => request.status === 'waiting_for_owner')
+    if (waiting.length === 0) return null
+    const first = waiting[0]!
     return {
       canStart: false,
       code: 'owner_input_required',
-      message: action,
-      actionHref: actionItem.actionHref ?? '/thread',
+      message:
+        waiting.length === 1
+          ? `${first.objective.label} needs your answer before Guildhall can continue`
+          : `${waiting.length} owner decisions need your answer before Guildhall can continue`,
+      actionHref: ownerInputActionHref(first),
+    }
+  }
+
+  function ownerInputActionHref(request: ReturnType<typeof listOwnerInputRequestsSync>[number]): string {
+    switch (request.target.kind) {
+      case 'work_item':
+      case 'task':
+        return `/task/${encodeURIComponent(request.target.taskId)}?tab=current`
+      case 'project_structure':
+        return request.target.href
+      case 'structure':
+      case 'settings':
+        return request.target.href ?? '/thread'
+      case 'thread':
+        return '/thread'
     }
   }
 

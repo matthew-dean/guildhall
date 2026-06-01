@@ -35,12 +35,7 @@
       case 'required_migration': return 'Migrate'
       case 'project_understanding': return 'Reconcile'
       case 'workspace_import_pending': return 'Review import'
-      case 'pressure_test_pending': return 'Answer question'
-      case 'agent_question_pending': return 'Answer question'
       case 'import_draft_queue': return 'Review draft'
-      case 'brief_approval':
-      case 'spec_approval': return 'Review'
-      case 'open_escalation': return 'Resolve'
       case 'bootstrap_missing': return 'Configure'
       case 'lever_questions': return 'Review'
       case 'spec_fill_pending': return item.taskId === 'task-workspace-import' ? 'Review import' : 'Open checklist'
@@ -53,15 +48,6 @@
       const counts = project.taskCounts
       if (!counts) return []
       const items: InboxItem[] = []
-      if (counts.blocked > 0) {
-        items.push({
-          kind: 'open_escalation',
-          severity: 'high',
-          title: `${counts.blocked} blocked ${counts.blocked === 1 ? 'task' : 'tasks'}`,
-          detail: project.highlights?.blockedTaskTitle ?? 'Open the project inbox to resolve blockers.',
-          actionHref: '/overview/inbox',
-        } as InboxItem)
-      }
       if (counts.draftReview > 0) {
         items.push({
           kind: 'import_draft_queue',
@@ -69,15 +55,6 @@
           title: `${counts.draftReview} draft ${counts.draftReview === 1 ? 'brief' : 'briefs'}`,
           detail: 'Review drafted task briefs before Guildhall starts implementation.',
           actionHref: '/overview/inbox',
-        } as InboxItem)
-      }
-      if (project.projectCheckIn?.needed) {
-        items.push({
-          kind: 'project_check_in',
-          severity: 'medium',
-          title: project.projectCheckIn.title ?? 'Project questions',
-          detail: project.projectCheckIn.detail ?? 'Answer the project questions before Guildhall starts guessing.',
-          actionHref: project.projectCheckIn.actionHref ?? '/thread',
         } as InboxItem)
       }
       if (project.providerStatus?.warnings?.[0]) {
@@ -128,10 +105,6 @@
   }
 
   function goToItem(projectId: string, item: InboxItem): void {
-    if (item.kind === 'brief_approval' || item.kind === 'spec_approval') {
-      nav(projectHref(projectId, '/thread'))
-      return
-    }
     if (item.actionHref) {
       nav(projectHref(projectId, item.actionHref))
       return
@@ -194,7 +167,7 @@
     <header class="hero">
       <div>
         <h1>Needs you</h1>
-        <p class="lede">All project decisions, questions, and recovery items grouped by project.</p>
+        <p class="lede">Project alerts and durable follow-ups grouped by project.</p>
       </div>
       <ActionBar>
         <Button variant="secondary" onclick={() => nav('/')}>Projects</Button>

@@ -24,7 +24,7 @@ describe('InboxTab', () => {
     cleanup()
   })
 
-  it('loads its own needs-you data, points people back to Threads for conversations, and shows optional nudges separately', async () => {
+  it('loads alert-owned needs-you data, links Threads for conversations, and shows optional nudges separately', async () => {
     vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
       const url = new URL(String(input), 'http://localhost')
       if (url.pathname === '/api/project/inbox') {
@@ -32,20 +32,20 @@ describe('InboxTab', () => {
         return json({
           items: [
             {
-              id: 'q1',
-              kind: 'agent_question_pending',
+              id: 'bootstrap',
+              kind: 'bootstrap_missing',
               severity: 'high',
-              title: 'Choose link editor scope',
-              detail: 'Coordinator needs a scope decision.',
-              actionHref: '/task/task-migration?tab=current',
+              title: 'Verify bootstrap',
+              detail: 'Install command needs confirmation.',
+              actionHref: '/settings/ready',
             },
             {
               id: 'cleanup',
-              kind: 'workspace_import_pending',
+              kind: 'spec_fill_pending',
               severity: 'low',
-              title: 'Review imported notes',
-              detail: 'Optional project note cleanup.',
-              actionHref: '/workspace-import',
+              title: 'Fill acceptance criteria',
+              detail: 'Optional task cleanup.',
+              actionHref: '/task/task-migration?tab=spec',
             },
             {
               id: 'levers',
@@ -64,21 +64,21 @@ describe('InboxTab', () => {
 
     render(InboxTab)
 
-    await screen.findByText('Choose link editor scope')
+    await screen.findByText('Verify bootstrap')
     expect(screen.getByText('Active conversations now live in Threads.')).toBeInTheDocument()
     expect(screen.getByRole('link', { name: 'Open Threads' })).toHaveAttribute('href', '/projects/looma-knit/thread')
     expect(screen.getByText('Project alerts')).toBeInTheDocument()
     expect(screen.getByText('Optional nudges')).toBeInTheDocument()
-    expect(screen.getByText('Review imported notes')).toBeInTheDocument()
+    expect(screen.getByText('Fill acceptance criteria')).toBeInTheDocument()
     expect(screen.getByText(/Safe defaults are active/)).toBeInTheDocument()
     expect(screen.getByText(/Review them only if you want to tune autonomy, recovery, or review strictness/)).toBeInTheDocument()
 
-    await userEvent.click(screen.getByRole('button', { name: 'Choose link editor scope' }))
-    expect(window.location.pathname + window.location.search).toBe('/projects/looma-knit/task/task-migration?tab=current')
+    await userEvent.click(screen.getByRole('button', { name: 'Verify bootstrap' }))
+    expect(path.value).toBe('/projects/looma-knit/settings/ready')
 
     path.value = '/projects/looma-knit/notifications'
-    await userEvent.click(screen.getByRole('button', { name: 'Review imported notes' }))
-    expect(path.value).toBe('/projects/looma-knit/workspace-import')
+    await userEvent.click(screen.getByRole('button', { name: 'Fill acceptance criteria' }))
+    expect(window.location.pathname + window.location.search).toBe('/projects/looma-knit/task/task-migration?tab=spec')
   })
 
   it('lets safe agent-handled inbox items run autonomously and refreshes afterward', async () => {
@@ -184,22 +184,22 @@ describe('InboxTab', () => {
       items: [
         {
           id: 'open-high',
-          kind: 'agent_question_pending',
+          kind: 'bootstrap_missing',
           severity: 'high',
-          title: 'Choose scope',
-          detail: 'A decision is needed.',
-          actionHref: '/thread',
+          title: 'Verify bootstrap',
+          detail: 'A readiness check is needed.',
+          actionHref: '/settings/ready',
           status: 'open',
         },
       ] as any,
       history: [
         {
           id: 'open-high',
-          kind: 'agent_question_pending',
+          kind: 'bootstrap_missing',
           severity: 'high',
-          title: 'Choose scope',
-          detail: 'A decision is needed.',
-          actionHref: '/thread',
+          title: 'Verify bootstrap',
+          detail: 'A readiness check is needed.',
+          actionHref: '/settings/ready',
           status: 'open',
         },
         {
@@ -234,23 +234,23 @@ describe('InboxTab', () => {
   it('uses compact utility-panel groups instead of the old wide inbox table', async () => {
     const items = [
       {
-        id: 'spec',
-        kind: 'spec_approval',
+        id: 'import',
+        kind: 'workspace_import_pending',
         severity: 'medium',
-        title: 'Review the waiting spec before Guildhall can continue',
-        detail: 'Spec awaiting approval.',
-        actionHref: '/task/task-link-editor?tab=spec',
+        title: 'Review existing project work',
+        detail: 'Workspace import awaiting review.',
+        actionHref: '/workspace-import',
         status: 'open',
       },
       {
         id: 'resolved',
-        kind: 'open_escalation',
+        kind: 'required_migration',
         severity: 'high',
-        title: 'Resolve dirty repo state',
-        detail: 'Guildhall could not start because the repo is dirty.',
-        actionHref: '/task/task-link-editor?tab=current',
+        title: 'Required migration',
+        detail: 'Migration completed.',
+        actionHref: '/migrations',
         status: 'resolved',
-        resolution: 'verified',
+        resolution: 'migrated',
       },
     ] as any
 
@@ -263,7 +263,7 @@ describe('InboxTab', () => {
     expect(container.querySelectorAll('.utility-panel')).not.toHaveLength(0)
     expect(screen.getByText('Project alerts')).toBeInTheDocument()
     expect(screen.getByText('Recent history')).toBeInTheDocument()
-    expect(screen.getByText('Review spec →')).toBeInTheDocument()
+    expect(screen.getByText('Review import →')).toBeInTheDocument()
   })
 
   it('surfaces inbox load and handler failures without hiding the row', async () => {

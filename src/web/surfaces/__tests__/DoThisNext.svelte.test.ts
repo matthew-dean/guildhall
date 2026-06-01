@@ -35,14 +35,6 @@ describe('DoThisNext', () => {
       return json({
         items: [
           {
-            kind: 'agent_question_pending',
-            severity: 'high',
-            title: 'Knit: add link editor controls',
-            detail: 'Choose whether drag handles are in scope.',
-            taskId: 'task-link-editor',
-            actionHref: '/thread',
-          },
-          {
             kind: 'bootstrap_missing',
             severity: 'high',
             title: 'Ready check',
@@ -161,12 +153,11 @@ describe('DoThisNext', () => {
               actionHref: '/thread',
             },
             {
-              kind: 'open_escalation',
+              kind: 'workspace_import_pending',
               severity: 'medium',
-              title: 'Knit: add version diff view',
-              detail: 'Worker needs guidance.',
-              taskId: 'task-diff',
-              actionHref: '/task/task-diff',
+              title: 'Review existing project work',
+              detail: 'Review imported planning notes.',
+              actionHref: '/workspace-import',
             },
           ],
         }),
@@ -187,7 +178,7 @@ describe('DoThisNext', () => {
     expect(path.value).toBe('/projects/looma-knit/overview/inbox')
   })
 
-  it('shows recovery detail directly instead of stacking extra status boilerplate', async () => {
+  it('shows project-understanding detail directly instead of stacking extra status boilerplate', async () => {
     vi.stubGlobal(
       'fetch',
       vi.fn(async (input: RequestInfo | URL) => {
@@ -196,12 +187,11 @@ describe('DoThisNext', () => {
         return json({
           items: [
             {
-              kind: 'open_escalation',
+              kind: 'project_understanding',
               severity: 'high',
-              title: 'AlertDialog',
-              detail: 'Spec shaping stopped before Guildhall saved the next draft. Open the task to retry from the transcript or reframe the work.',
-              taskId: 'task-alert-dialog',
-              actionHref: '/task/task-alert-dialog?tab=action',
+              title: 'Review project discovery update',
+              detail: 'Guildhall can now scan more planning docs and migrations. Review the reconciliation so it can update or dismiss stale imported work.',
+              actionHref: '/workspace-import?mode=reconcile',
             },
           ],
         })
@@ -210,9 +200,8 @@ describe('DoThisNext', () => {
 
     render(DoThisNext)
 
-    await screen.findByText('Review the blocked task on AlertDialog')
-    expect(screen.getByText('Spec shaping stopped before Guildhall saved the next draft. Open the task to retry from the transcript or reframe the work.')).toBeTruthy()
-    expect(screen.queryByText(/Recovery needed\. Detail/i)).toBeNull()
-    expect(screen.queryByText(/turn limit|kept researching/i)).toBeNull()
+    await screen.findByText('Review project discovery update')
+    expect(screen.getByText('Guildhall can now scan more planning docs and migrations. Review the reconciliation so it can update or dismiss stale imported work.')).toBeTruthy()
+    expect(screen.queryByText(/missing repo evidence/i)).toBeNull()
   })
 })

@@ -32,7 +32,7 @@ describe('FleetNeedsYou', () => {
     cleanup()
   })
 
-  it('groups needs-you items by project and routes item actions with the project id', async () => {
+  it('groups alert-owned needs-you items by project and routes item actions with the project id', async () => {
     const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
       const url = new URL(String(input), 'http://localhost')
       if (url.pathname === '/api/service') return json(servicePayload)
@@ -40,12 +40,11 @@ describe('FleetNeedsYou', () => {
         return json({
           items: [
             {
-              kind: 'agent_question_pending',
-              severity: 'high',
-              title: 'Choose migration source',
-              detail: 'Pick the source of truth.',
-              taskId: 'task-migration',
-              actionHref: '/task/task-migration',
+              kind: 'workspace_import_pending',
+              severity: 'medium',
+              title: 'Review imported notes',
+              detail: 'Guildhall found planning notes to reconcile.',
+              actionHref: '/workspace-import',
             },
           ],
         })
@@ -54,12 +53,11 @@ describe('FleetNeedsYou', () => {
         return json({
           items: [
             {
-              kind: 'spec_approval',
-              severity: 'medium',
-              title: 'Approve auth spec',
-              detail: 'Spec is ready for review.',
-              taskId: 'task-auth',
-              actionHref: '/thread',
+              kind: 'bootstrap_missing',
+              severity: 'high',
+              title: 'Provider warning',
+              detail: 'Provider setup needs attention.',
+              actionHref: '/providers',
             },
           ],
         })
@@ -72,14 +70,14 @@ describe('FleetNeedsYou', () => {
 
     await screen.findByText('Looma + Knit')
     await screen.findByText('Fair Labor License')
-    expect(screen.getByText('Choose migration source')).toBeTruthy()
-    expect(screen.getByText('Approve auth spec')).toBeTruthy()
+    expect(screen.getByText('Review imported notes')).toBeTruthy()
+    expect(screen.getByText('Provider warning')).toBeTruthy()
     expect(screen.getAllByRole('button', { name: /^queue$/i })).toHaveLength(2)
     expect(screen.queryByRole('button', { name: /project needs you/i })).toBeNull()
 
-    await userEvent.click(screen.getByText('Choose migration source'))
+    await userEvent.click(screen.getByText('Review imported notes'))
 
-    expect(path.value).toBe('/projects/looma-knit/task/task-migration')
+    expect(path.value).toBe('/projects/looma-knit/workspace-import')
     await waitFor(() => {
       expect(fetchMock.mock.calls.some(([input]) => String(input).includes('projectId=looma-knit'))).toBe(true)
       expect(fetchMock.mock.calls.some(([input]) => String(input).includes('projectId=fair-labor-license'))).toBe(true)
@@ -117,16 +115,16 @@ describe('FleetNeedsYou', () => {
     })
 
     inboxResolvers.get('one')?.(json({ items: [{
-      kind: 'agent_question_pending',
-      severity: 'high',
-      title: 'First question',
-      detail: 'Answer this.',
-      actionHref: '/thread',
+      kind: 'workspace_import_pending',
+      severity: 'medium',
+      title: 'First import review',
+      detail: 'Review this.',
+      actionHref: '/workspace-import',
     }] }))
     inboxResolvers.get('two')?.(json({ items: [] }))
     inboxResolvers.get('three')?.(json({ items: [] }))
 
-    await screen.findByText('First question')
+    await screen.findByText('First import review')
   })
 
   it('renders repeated inbox rows without crashing the fleet queue', async () => {

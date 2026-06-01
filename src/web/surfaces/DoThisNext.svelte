@@ -82,34 +82,6 @@
           button: 'Open setup',
           href: item.actionHref ?? '/thread',
         }
-      case 'open_escalation':
-        return {
-          verb: `Review the blocked task${id}`,
-          why: item.detail ?? 'Choose the next recovery action so Guildhall can continue.',
-          button: 'Review recovery',
-          href: item.actionHref ?? '/work',
-        }
-      case 'agent_question_pending':
-        return {
-          verb: `Answer Guildhall’s question${id}`,
-          why: item.detail ?? 'Guildhall needs one answer before it can continue shaping the work.',
-          button: 'Answer question',
-          href: item.actionHref ?? '/thread',
-        }
-      case 'pressure_test_pending':
-        return {
-          verb: `Continue pressure test${id}`,
-          why: item.detail ?? 'Guildhall is pressure-testing this request before turning it into work.',
-          button: 'Answer question',
-          href: item.actionHref ?? '/thread',
-        }
-      case 'project_check_in':
-        return {
-          verb: item.title,
-          why: item.detail ?? 'Start the project check-in so Guildhall can use current context.',
-          button: 'Start check-in',
-          href: item.actionHref ?? '/thread',
-        }
       case 'project_understanding':
         return {
           verb: item.title,
@@ -122,20 +94,6 @@
           verb: 'Shape the imported drafts',
           why: item.detail ?? 'Guildhall imported planning work that still needs a quick shaping pass.',
           button: item.taskId === 'task-workspace-import' ? 'Open import review' : 'Draft task brief',
-          href: item.actionHref ?? '/thread',
-        }
-      case 'brief_approval':
-        return {
-          verb: `Review the product brief${id}`,
-          why: 'The spec agent is waiting for you to confirm the brief (or correct it).',
-          button: 'Review brief',
-          href: item.actionHref ?? '/thread',
-        }
-      case 'spec_approval':
-        return {
-          verb: `Approve the spec${id}`,
-          why: 'The worker can’t start until the spec is approved.',
-          button: 'Review spec',
           href: item.actionHref ?? '/thread',
         }
       case 'workspace_import_pending':

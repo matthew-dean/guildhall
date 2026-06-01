@@ -139,17 +139,6 @@ describe('WorkTab', () => {
           inbox: {
             items: [
               {
-                kind: 'pressure_test_pending',
-                severity: 'medium',
-                title: 'Saved search labels',
-                detail: 'Which labels should be saved first?',
-                actionHref: '/thread',
-                status: 'open',
-                id: 'pressure-test:labels',
-                createdAt: '2026-05-19T10:01:00.000Z',
-                updatedAt: '2026-05-19T10:01:00.000Z',
-              },
-              {
                 kind: 'required_migration',
                 severity: 'high',
                 title: 'Required migration: Project state layout',
@@ -173,27 +162,28 @@ describe('WorkTab', () => {
     expect(screen.queryByText(/No tasks yet.*New request/i)).not.toBeInTheDocument()
   })
 
-  it('does not show an empty new-request prompt when a zero-task project has a pending question', async () => {
+  it('does not show an empty new-request prompt when a zero-task project has setup work', async () => {
     render(WorkTab, {
       props: {
         detail: {
           ...detail([]),
           startReadiness: {
             canStart: false,
-            code: 'owner_input_required',
-            message: '1 question needs your answer before Guildhall can continue',
-            actionHref: '/thread',
+            code: 'setup_pending',
+            message: 'Finish project setup first.',
+            actionHref: '/setup',
           },
           inbox: {
             items: [
               {
-                kind: 'pressure_test_pending',
+                kind: 'setup_pending',
                 severity: 'medium',
-                title: 'Saved search labels',
-                detail: 'Which labels should be saved first?',
-                actionHref: '/thread',
+                stepId: 'direction',
+                title: 'Add project direction',
+                detail: 'Finish project setup first.',
+                actionHref: '/setup',
                 status: 'open',
-                id: 'pressure-test:labels',
+                id: 'setup:direction',
                 createdAt: '2026-05-19T10:00:00.000Z',
                 updatedAt: '2026-05-19T10:00:00.000Z',
               },
@@ -205,8 +195,8 @@ describe('WorkTab', () => {
       },
     })
 
-    expect(screen.getByText('Which labels should be saved first?')).toBeInTheDocument()
-    expect(screen.getByRole('button', { name: /answer question/i })).toBeInTheDocument()
+    expect(screen.getByText('Finish project setup first.')).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: /open setup/i })).toBeInTheDocument()
     expect(screen.queryByText(/No tasks yet.*New request/i)).not.toBeInTheDocument()
   })
 

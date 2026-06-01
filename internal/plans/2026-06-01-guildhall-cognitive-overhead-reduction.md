@@ -1484,7 +1484,7 @@ git commit -m "refactor: route owner input through bounded chat"
 - Modify: `src/web/surfaces/ProjectView.svelte`
 - Modify tests for these files
 
-- [ ] **Step 1: Write runtime test for alert-only inbox**
+- [x] **Step 1: Write runtime test for alert-only inbox**
 
 Update `src/runtime/__tests__/inbox.test.ts`:
 
@@ -1500,7 +1500,13 @@ it('does not expose conversation-owned items through project inbox', async () =>
 })
 ```
 
-- [ ] **Step 2: Delete thread-owned item kinds**
+Evidence:
+
+- Added alert-only/non-emission coverage in `src/runtime/__tests__/inbox.test.ts`.
+- `pnpm vitest run src/runtime/__tests__/inbox.test.ts --reporter=dot` passed
+  31 tests.
+
+- [x] **Step 2: Delete thread-owned item kinds**
 
 In `src/runtime/inbox.ts`:
 
@@ -1515,6 +1521,16 @@ In `src/runtime/inbox.ts`:
   - `open_escalation`
 - Keep only alert-owned kinds.
 
+Evidence:
+
+- Removed thread-owned `InboxItem` union members, `THREAD_OWNED_INBOX_KINDS`,
+  and `isThreadOwnedInboxItem` from `src/runtime/inbox.ts`.
+- Removed `agent_question_pending` and `open_escalation` attention ids from
+  `src/runtime/attention.ts`.
+- Added reduction guardrails that prevent reintroducing conversation-owned
+  inbox kinds in `src/runtime/inbox.ts` and `src/web/lib/inbox-item-key.ts`.
+- `pnpm lint:reductions` passed.
+
 - [ ] **Step 3: Move conversation routing to Thread**
 
 In `src/runtime/thread.ts`:
@@ -1526,6 +1542,16 @@ In `src/runtime/thread.ts`:
 - Do not synthesize thread turns from each source's local question shape. The
   linked bounded-chat session is the projection source.
 
+Partial evidence:
+
+- `src/runtime/serve.ts` now builds owner-input start blockers from
+  `.guildhall/owner-input` via `listOwnerInputRequestsSync`, rather than
+  looking for thread-owned rows inside `buildInbox`.
+- Remaining work: finish source-specific conversion so project check-in, task
+  shaping, approvals, escalations, structural-map review, project-graph review,
+  capability decisions, and recovery decisions all project from linked
+  owner-input/bounded-chat sessions.
+
 - [ ] **Step 4: Reduce UI duplication**
 
 - `DoThisNext.svelte` should choose between:
@@ -1534,13 +1560,28 @@ In `src/runtime/thread.ts`:
 - `FleetNeedsYou.svelte` should fetch one canonical fleet attention summary endpoint. It should not locally synthesize inbox groups and then replace them with project inbox results.
 - `InboxTab.svelte` should become `NeedsYouTab.svelte` or a narrow alert/history component.
 
-- [ ] **Step 5: Run tests**
+Partial evidence:
+
+- Removed conversation-kind branches and synthetic project check-in/escalation
+  rows from `DoThisNext.svelte`, `FleetNeedsYou.svelte`,
+  `ProjectOverviewTab.svelte`, `WorkTab.svelte`, and `InboxTab.svelte`.
+- Remaining work: rename/split `InboxTab.svelte` into a dedicated Needs You
+  alert surface and make fleet attention read one canonical summary endpoint.
+
+- [x] **Step 5: Run tests**
 
 Run:
 
 ```bash
 pnpm vitest run src/runtime/__tests__/inbox.test.ts src/runtime/__tests__/thread.test.ts src/web/surfaces/__tests__/DoThisNext.svelte.test.ts src/web/surfaces/__tests__/FleetNeedsYou.svelte.test.ts src/web/surfaces/project/__tests__/InboxTab.svelte.test.ts src/web/surfaces/__tests__/ProjectView.svelte.test.ts --reporter=dot
 ```
+
+Evidence:
+
+- `pnpm vitest run src/runtime/__tests__/inbox.test.ts src/runtime/__tests__/thread.test.ts src/web/surfaces/__tests__/DoThisNext.svelte.test.ts src/web/surfaces/__tests__/FleetNeedsYou.svelte.test.ts src/web/surfaces/project/__tests__/InboxTab.svelte.test.ts src/web/surfaces/project/__tests__/ProjectOverviewTab.svelte.test.ts src/web/surfaces/project/__tests__/WorkTab.svelte.test.ts src/web/surfaces/__tests__/ProjectView.svelte.test.ts --reporter=dot`
+  passed 8 files / 177 tests.
+- `pnpm lint:reductions` passed.
+- `pnpm typecheck` passed.
 
 Commit:
 

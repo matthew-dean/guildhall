@@ -18,7 +18,7 @@ describe('ProjectOverviewTab', () => {
     vi.restoreAllMocks()
   })
 
-  it('renders same-task escalation inbox items with distinct escalation ids', () => {
+  it('renders same-task alert inbox items with distinct action hrefs', () => {
     render(ProjectOverviewTab, {
       detail: {
         id: 'fair-labor-license',
@@ -29,22 +29,20 @@ describe('ProjectOverviewTab', () => {
       inboxLoaded: true,
       inboxItems: [
         {
-          kind: 'open_escalation',
-          severity: 'high',
+          kind: 'import_draft_queue',
+          severity: 'medium',
           taskId: 'task-006',
-          escalationId: 'esc-task-006-23',
           title: 'Set the platform fee policy',
-          detail: 'Card component exists but template syntax mismatch prevents edit',
+          detail: 'Review the imported draft and decide whether to shape it now.',
           actionHref: '/task/task-006',
         },
         {
-          kind: 'open_escalation',
-          severity: 'high',
+          kind: 'import_draft_queue',
+          severity: 'medium',
           taskId: 'task-006',
-          escalationId: 'esc-task-006-24',
           title: 'Set the platform fee policy',
-          detail: 'Card component exists but template syntax mismatch prevents edit',
-          actionHref: '/task/task-006',
+          detail: 'Review the second imported draft and decide whether to shape it now.',
+          actionHref: '/task/task-006?source=second',
         },
       ],
       projectTicker: {
@@ -72,13 +70,11 @@ describe('ProjectOverviewTab', () => {
       inboxLoaded: true,
       inboxItems: [
         {
-          kind: 'open_escalation',
-          severity: 'high',
+          kind: 'import_draft_queue',
+          severity: 'medium',
           taskId: 'task-006',
-          escalationId: 'esc-task-006-23',
           title: 'We should have a system-wide policy of how much FLL charges on overhe...',
-          taskDescription: 'We should have a system-wide policy of how much FLL charges on overhead for maintenance fees etc.',
-          detail: 'Card component exists but template syntax mismatch prevents edit',
+          detail: 'We should have a system-wide policy of how much FLL charges on overhead for maintenance fees etc.',
           actionHref: '/task/task-006',
         },
       ],
@@ -158,13 +154,12 @@ describe('ProjectOverviewTab', () => {
           actionHref: '/workspace-import?mode=reconcile',
         },
         {
-          kind: 'open_escalation',
-          severity: 'high',
+          kind: 'workspace_import_pending',
+          severity: 'medium',
           taskId: 'task-oauth',
-          escalationId: 'esc-oauth',
           title: 'Configure Google OAuth credentials',
           detail: 'Owner credentials are required.',
-          actionHref: '/task/task-oauth',
+          actionHref: '/workspace-import',
         },
       ],
       projectTicker: {
@@ -178,7 +173,7 @@ describe('ProjectOverviewTab', () => {
     })
 
     expect(screen.getByRole('heading', { name: 'Choose a recovery path for the blocked task' })).toBeInTheDocument()
-    expect(screen.getByRole('button', { name: /review recovery/i })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: /open item/i })).toBeInTheDocument()
     expect(screen.queryByRole('heading', { name: 'Review project discovery update' })).not.toBeInTheDocument()
   })
 
