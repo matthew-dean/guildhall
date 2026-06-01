@@ -11,6 +11,7 @@ import {
   draftStructuralMap,
   refreshStructuralMap,
   requestStructuralMapCorrection,
+  routeTaskWithStructuralMap,
   shapeStructuralDependencyRequest,
   submitStructuralMapForReview,
   type StructuralDiscoveryProvider,
@@ -523,6 +524,55 @@ describe('structural map drafting', () => {
 })
 
 describe('structural context and project graph handoffs', () => {
+  it('routes tasks through accepted structural maps with coordinator assignment and cross-cutting activation', async () => {
+    await writeRepoFixture(projectRoot, {
+      name: '@example/root',
+      workspace: ['packages/*'],
+      packages: [
+        { dir: 'packages/css-parser', name: '@example/css-parser', scripts: { test: 'vitest run packages/css-parser' } },
+        { dir: 'packages/less-parser', name: '@example/less-parser', scripts: { test: 'vitest run packages/less-parser' } },
+        { dir: 'packages/scss-parser', name: '@example/scss-parser', scripts: { test: 'vitest run packages/scss-parser' } },
+      ],
+    })
+    const accepted = await acceptFreshMap(projectRoot, 'example')
+
+    const route = routeTaskWithStructuralMap({
+      map: accepted,
+      task: {
+        id: 'task-parser-fixture',
+        title: 'Fix css parser fixture parity',
+        files: ['packages/css-parser/src/index.ts'],
+        text: 'Keep parser parity with Less and SCSS fixtures.',
+      },
+      coordinators: [
+        {
+          id: 'coordinator:parser',
+          domainIds: ['domain:parser'],
+          crossCuttingDomainIds: ['cross-cutting:parser-parity'],
+        },
+      ],
+    })
+
+    expect(route).toEqual(expect.objectContaining({
+      primaryDomainId: 'domain:parser',
+      coordinatorId: 'coordinator:parser',
+      gitAuthorityRootId: 'git:root',
+      packageIds: ['package:example-css-parser'],
+      executableUnitIds: ['exec:example-css-parser:test'],
+      crossCuttingDomainIds: ['cross-cutting:parser-parity'],
+    }))
+    expect(route.routeReasons).toEqual(expect.arrayContaining([
+      'matched-file:packages/css-parser/src/index.ts',
+      'activated-cross-cutting:cross-cutting:parser-parity',
+      'assigned-coordinator:coordinator:parser',
+    ]))
+
+    await expect(async () => routeTaskWithStructuralMap({
+      map: { ...accepted, stateMachine: { ...accepted.stateMachine, state: 'owner_review' } },
+      task: { id: 'blocked', title: 'Blocked' },
+    })).rejects.toThrow(/must be accepted/)
+  })
+
   it('builds a focused context slice with handles and omission reasons', async () => {
     await writeRepoFixture(projectRoot, {
       name: '@example/root',

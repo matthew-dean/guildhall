@@ -185,6 +185,23 @@ export interface StructuralMapRefreshResult {
   refreshedAt: string
 }
 
+export interface StructuralDomainCoordinator {
+  id: string
+  domainIds?: string[]
+  crossCuttingDomainIds?: string[]
+}
+
+export interface StructuralTaskRoute {
+  taskId: string
+  primaryDomainId?: string
+  coordinatorId?: string
+  gitAuthorityRootId?: string
+  packageIds: string[]
+  executableUnitIds: string[]
+  crossCuttingDomainIds: string[]
+  routeReasons: string[]
+}
+
 export const structuralMapReviewMachine = defineStateMachine<
   StructuralMapState,
   StructuralMapEvent,
@@ -933,6 +950,42 @@ export function buildStructuralContextSlice(map: StructuralMapDraft, task: {
   }
 }
 
+export function routeTaskWithStructuralMap(input: {
+  map: StructuralMapDraft
+  task: {
+    id: string
+    title: string
+    files?: string[]
+    text?: string
+  }
+  coordinators?: StructuralDomainCoordinator[]
+}): StructuralTaskRoute {
+  assertAccepted(input.map, 'task routing')
+  const slice = buildStructuralContextSlice(input.map, input.task)
+  const crossCuttingDomainIds = activatedCrossCuttingDomains(input.map, input.task)
+  const coordinator = input.coordinators?.find(candidate =>
+    (slice.routingAuthority.primaryDomainId && candidate.domainIds?.includes(slice.routingAuthority.primaryDomainId)) ||
+    crossCuttingDomainIds.some(domainId => candidate.crossCuttingDomainIds?.includes(domainId)))
+  const routeReasons: string[] = []
+  for (const file of input.task.files ?? []) {
+    if (slice.routingAuthority.packageIds.length > 0) routeReasons.push(`matched-file:${file}`)
+  }
+  for (const domainId of crossCuttingDomainIds) {
+    routeReasons.push(`activated-cross-cutting:${domainId}`)
+  }
+  if (coordinator) routeReasons.push(`assigned-coordinator:${coordinator.id}`)
+  return {
+    taskId: input.task.id,
+    primaryDomainId: slice.routingAuthority.primaryDomainId,
+    coordinatorId: coordinator?.id,
+    gitAuthorityRootId: slice.routingAuthority.gitAuthorityRootId,
+    packageIds: slice.routingAuthority.packageIds,
+    executableUnitIds: slice.routingAuthority.executableUnitIds,
+    crossCuttingDomainIds,
+    routeReasons,
+  }
+}
+
 export function shapeStructuralDependencyRequest(input: {
   consumerMap: StructuralMapDraft
   providerMap: StructuralMapDraft
@@ -1439,6 +1492,20 @@ function inferDomainFromText(map: StructuralMapDraft, text: string): StructuralM
   return map.nodes.find(node =>
     node.kind === 'domain_group' &&
     (normalized.includes(node.label.toLowerCase()) || normalized.includes(node.id.replace(/^domain:/, ''))))
+}
+
+function activatedCrossCuttingDomains(map: StructuralMapDraft, task: { files?: string[]; text?: string; title?: string }): string[] {
+  const haystack = `${task.title ?? ''} ${task.text ?? ''} ${(task.files ?? []).join(' ')}`.toLowerCase()
+  return map.nodes
+    .filter(node => node.kind === 'cross_cutting_domain')
+    .filter(node => {
+      const slug = node.id.replace(/^cross-cutting:/, '')
+      if (haystack.includes(slug.replaceAll('-', ' ')) || haystack.includes(slug)) return true
+      if (haystack.includes(node.label.toLowerCase())) return true
+      return node.evidence.some(ref => haystack.includes(ref.ref.toLowerCase()))
+    })
+    .map(node => node.id)
+    .sort()
 }
 
 function assertAccepted(map: StructuralMapDraft, role: string): void {
