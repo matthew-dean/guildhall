@@ -95,6 +95,10 @@ export interface ProjectGraphView {
     state: ProjectDependencyEdgeState
     summary: string
   }>
+  remoteAuthorityRefs: Array<RemoteAuthorityRef & {
+    edgeId: string
+    executionMode: 'local_request_reference'
+  }>
 }
 
 export type ProjectDependencyEdgeState =
@@ -144,6 +148,17 @@ export interface DeliveryChannelDescriptor {
   authorityRef?: string
 }
 
+export type RemoteAuthorityKind = 'jira' | 'linear' | 'github_issues' | 'generic'
+
+export interface RemoteAuthorityRef {
+  id: string
+  kind: RemoteAuthorityKind
+  label: string
+  externalId?: string
+  url?: string
+  projectKey?: string
+}
+
 export interface ProjectDependencyEdge {
   id: string
   stateMachine: {
@@ -164,6 +179,7 @@ export interface ProjectDependencyEdge {
     consumerVerificationPlan: string[]
   }
   providerTaskRef?: string
+  remoteAuthorityRefs?: RemoteAuthorityRef[]
   consumerReview?: {
     verificationContext: string
     reviewedBy: string
@@ -237,6 +253,7 @@ export interface CreateProjectDependencyRequestInput {
   consumerNeed: string
   rationale: string
   expectedDelivery?: ProjectDependencyEdge['expectedDelivery']
+  remoteAuthorityRefs?: RemoteAuthorityRef[]
   requestedBy: string
   consumerCoordinatorContext?: ProjectCoordinatorContext
   now?: string
@@ -410,6 +427,11 @@ export function queryProjectGraphView(input: {
         state: edge.stateMachine.state,
         summary: edge.consumerNeed,
       })),
+    remoteAuthorityRefs: edges.flatMap(edge => (edge.remoteAuthorityRefs ?? []).map(ref => ({
+      ...ref,
+      edgeId: edge.id,
+      executionMode: 'local_request_reference' as const,
+    }))),
   }
 }
 
@@ -438,6 +460,7 @@ export async function createProjectDependencyRequest(
     consumerNeed: input.consumerNeed,
     rationale: input.rationale,
     expectedDelivery: input.expectedDelivery,
+    remoteAuthorityRefs: input.remoteAuthorityRefs ?? [],
     deliveryReceipts: [],
     returnPackets: [],
     communicationRecords: [],
@@ -754,6 +777,7 @@ function readProjectDependencyEdge(edgeId: string): ProjectDependencyEdge {
   const edge = JSON.parse(fs.readFileSync(filePath, 'utf8')) as ProjectDependencyEdge
   edge.deliveryReceipts ??= []
   edge.returnPackets ??= []
+  edge.remoteAuthorityRefs ??= []
   edge.communicationRecords ??= []
   edge.transitionReceipts ??= []
   return edge

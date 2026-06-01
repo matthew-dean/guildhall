@@ -630,4 +630,58 @@ describe('local project graph', () => {
       }),
     ]))
   })
+
+  it('keeps future Jira Linear and GitHub authority refs as local references only', async () => {
+    bootstrapWorkspace(consumerProject, { id: 'knit', name: 'Knit' })
+    bootstrapWorkspace(providerProject, { id: 'looma', name: 'Looma' })
+    const edge = await createProjectDependencyRequest({
+      consumerProject: { id: 'knit', path: consumerProject, label: 'Knit' },
+      providerProject: { id: 'looma', path: providerProject, label: 'Looma' },
+      consumerNeed: 'Knit needs an editor adapter from Looma.',
+      rationale: 'The editor domain is tracked externally but executed locally.',
+      requestedBy: 'coordinator:knit',
+      remoteAuthorityRefs: [
+        {
+          id: 'jira:DESIGN-42',
+          kind: 'jira',
+          label: 'DESIGN-42',
+          externalId: 'DESIGN-42',
+          url: 'https://jira.example/browse/DESIGN-42',
+        },
+        {
+          id: 'github:123',
+          kind: 'github_issues',
+          label: 'Issue #123',
+          externalId: '123',
+          url: 'https://github.com/acme/looma/issues/123',
+        },
+      ],
+      now: '2026-06-01T12:00:00.000Z',
+    })
+
+    const view = queryProjectGraphView({
+      projectId: 'knit',
+      projectPath: consumerProject,
+    })
+
+    expect(edge.remoteAuthorityRefs).toEqual(expect.arrayContaining([
+      expect.objectContaining({ id: 'jira:DESIGN-42', kind: 'jira' }),
+      expect.objectContaining({ id: 'github:123', kind: 'github_issues' }),
+    ]))
+    expect(view.remoteAuthorityRefs).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        edgeId: edge.id,
+        id: 'jira:DESIGN-42',
+        kind: 'jira',
+        executionMode: 'local_request_reference',
+      }),
+      expect.objectContaining({
+        edgeId: edge.id,
+        id: 'github:123',
+        kind: 'github_issues',
+        executionMode: 'local_request_reference',
+      }),
+    ]))
+    expect(fs.existsSync(path.join(providerProject, '.guildhall', 'project-graph', 'incoming-requests', `${edge.id}.json`))).toBe(false)
+  })
 })

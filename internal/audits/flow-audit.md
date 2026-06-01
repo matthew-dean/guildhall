@@ -108,9 +108,9 @@ babysit setup/import/provider/release states across multiple pages.
 - [ ] Continue structural/domain intelligence from the remaining-work ledger
   in `internal/plans/2026-05-31-guildhall-0-10-implementation-tracker.md`.
   The feature is explicitly not complete after the foundation slice.
-  Remaining count after the generalized delivery-channel slice: 1 item. Next
-  item: add remote authority extension points for future Jira/Linear/GitHub
-  issue truth sources while keeping 0.10 execution local and request-based.
+  Remaining count after the local remote-authority reference slice: 0 items.
+  Next item: run milestone verification and decide whether to merge into
+  `0.10.0` or keep slicing.
 - [x] Specify the 0.10 bounded-chat pivot for intake and New request flows.
   Plan: `internal/plans/2026-05-31-guildhall-0-10-bounded-chat.md`.
   The accepted direction is a two-role flow: a conversation agent handles the

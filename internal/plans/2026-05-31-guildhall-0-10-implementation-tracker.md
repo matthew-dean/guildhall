@@ -250,7 +250,7 @@ agent packet integration, coordinator assignment, or remote authority support.
 
 ### Remaining Work Ledger
 
-**Remaining: 1 item. Next item: 17.**
+**Remaining: 0 items. Next item: milestone verification and merge decision.**
 
 1. [x] Replace the current pnpm-only discovery core with a provider interface
    for package/workspace discovery. After this: implement JS/npm/yarn/bun
@@ -381,10 +381,16 @@ agent packet integration, coordinator assignment, or remote authority support.
     docs/spec artifacts, patches, releases, MCP artifact IDs, and future
     remote authority refs; the project-graph view preserves descriptor kind,
     label, and coordinates while keeping legacy string channels compatible.
-17. [ ] Add remote authority extension points for future Jira/Linear/GitHub
+17. [x] Add remote authority extension points for future Jira/Linear/GitHub
     issue truth sources while keeping 0.10 execution local and request-based.
     After this: run full milestone verification and decide whether to merge
     into `0.10.0` or keep slicing.
+    Completed in `feature/0.10-structural-domain-intelligence`: dependency
+    edges can carry local-only remote authority refs for Jira, Linear, GitHub
+    Issues, and generic future systems; scoped project-graph views expose those
+    refs with `executionMode: local_request_reference`, preserving the 0.10
+    rule that local projects negotiate requests instead of letting remote
+    systems or other projects write into project state.
 
 ## Milestone 4: External Task Authority
 
