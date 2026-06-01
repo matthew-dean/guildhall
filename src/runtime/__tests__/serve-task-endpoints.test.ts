@@ -1127,7 +1127,7 @@ describe('POST /api/project/task/:id/create-split-children', () => {
   it('materializes stored split-required recommendations into child tasks', async () => {
     await seedTask('task-1', {
       status: 'spec_review',
-      parentGoalId: 'goal-task-1',
+      businessEnvelope: { goalId: 'goal-task-1' },
       sizePlan: {
         taskId: 'task-1',
         score: 8,
@@ -1170,12 +1170,19 @@ describe('POST /api/project/task/:id/create-split-children', () => {
 
     const raw = JSON.parse(await fs.readFile(path.join(memoryDir, 'TASKS.json'), 'utf8')) as Record<string, any>
     expect(raw.tasks).toHaveLength(3)
-    expect(raw.tasks[0].status).toBe('parent')
+    expect(raw.tasks[0].status).toBe('ready')
+    expect(raw.tasks[0].hierarchy.childIds).toEqual(body.createdTaskIds)
+    expect(raw.tasks[0].taskReadiness.recommendation).toBe('split')
     expect(raw.tasks[0].sizePlan.recommendedChildren.map((child: Record<string, unknown>) => child.createdTaskId)).toEqual(body.createdTaskIds)
     expect(raw.tasks[1]).toMatchObject({
       id: 'task-1-split-implement-the-billing-settings-workflow',
       status: 'exploring',
-      parentGoalId: 'goal-task-1',
+      businessEnvelope: { goalId: 'goal-task-1' },
+      hierarchy: {
+        parentId: 'task-1',
+        order: 0,
+        childIds: [],
+      },
       origination: 'system',
       proposedBy: 'task-sizing',
     })

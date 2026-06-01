@@ -69,7 +69,7 @@ describe('dispatchMerge — cherry_pick_local', () => {
     const driver = new InMemoryGitDriver()
     driver.setNextMergeResult({ ok: false, conflict: true, detail: 'conflict in x.ts' })
     const r = await dispatchMerge({
-      task: task({ id: 'parent', parentGoalId: 'goal-7' }),
+      task: task({ id: 'parent', businessEnvelope: { goalId: 'goal-7' } }),
       policy: 'cherry_pick_local',
       projectPath: '/repo',
       memoryDir,
@@ -82,7 +82,7 @@ describe('dispatchMerge — cherry_pick_local', () => {
     expect(r.fixupTask!.status).toBe('ready')
     expect(r.fixupTask!.priority).toBe('high')
     expect(r.fixupTask!.dependsOn).toEqual(['parent'])
-    expect(r.fixupTask!.parentGoalId).toBe('goal-7')
+    expect(r.fixupTask!.businessEnvelope?.goalId).toBe('goal-7')
   })
 })
 
@@ -184,7 +184,7 @@ describe('appendFixupTask', () => {
 })
 
 describe('shelveSupersededFixupTasks', () => {
-  it('shelves open fixup tasks after the parent task lands successfully', () => {
+  it('shelves open fixup tasks after the source task lands successfully', () => {
     const queue = {
       version: 1 as const,
       lastUpdated: 'old',

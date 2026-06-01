@@ -260,7 +260,7 @@ function buildFixupTask(opts: {
     escalations: [],
     agentIssues: [],
     origination: 'system',
-    ...(parent.parentGoalId ? { parentGoalId: parent.parentGoalId } : {}),
+    ...(parent.businessEnvelope ? { businessEnvelope: parent.businessEnvelope } : {}),
     createdAt: opts.now,
     updatedAt: opts.now,
   }
@@ -291,7 +291,7 @@ export function shelveSupersededFixupTasks(
     task.shelveReason = {
       code: 'duplicate',
       detail:
-        `Superseded because parent task ${parentTaskId} landed successfully after the fixup was created.`,
+        `Superseded because source task ${parentTaskId} landed successfully after the fixup was created.`,
       rejectedBy: 'system:merge-dispatcher',
       rejectedAt: now,
       source: 'proposal_policy',

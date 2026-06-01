@@ -467,6 +467,9 @@ export interface Task {
     depth?: number
     path?: string[]
   }
+  businessEnvelope?: {
+    goalId?: string
+  }
   completionBoundary?: {
     summary?: string
     requiredChildPolicy?: 'all_required_done' | 'selected_children_done' | 'manual_handoff' | string
@@ -491,7 +494,6 @@ export interface Task {
     assignedTo?: string | null
     updatedAt?: string
   }
-  parentGoalId?: string
   permissionMode?: string
   dependsOn?: string[]
 }

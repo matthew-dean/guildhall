@@ -118,7 +118,7 @@ export async function reviewInProcessWorkForGuildhallImprovements(input: {
     if (notedTaskIds.length >= noteBudget) break
     if (scopedIds && !scopedIds.has(task.id)) continue
     if (TERMINAL_STATUSES.has(task.status)) continue
-    if (task.status === 'proposed' || task.status === 'parent') continue
+    if (task.status === 'proposed') continue
     if (designReviewedTaskIds.has(task.id)) continue
     if (isLeanCommandBackedTask(task)) continue
 

@@ -43,7 +43,9 @@ const proposeTaskInputSchema = z.object({
     proposedBy: z.string(),
     /** Why the proposing agent thinks this is worth doing. */
     rationale: z.string(),
-    /** FR-23 — parent goal this proposal contributes to. */
+    /** FR-23 — goal envelope this proposal contributes to. */
+    businessEnvelope: z.object({ goalId: z.string() }).optional(),
+    /** @deprecated Use businessEnvelope.goalId. Accepted only at the tool boundary during 0.10 migration. */
     parentGoalId: z.string().optional(),
     /** Optional success condition / one-line acceptance. */
     successCondition: z.string().optional(),
@@ -80,7 +82,9 @@ export async function proposeTask(input: ProposeTaskInput): Promise<ProposeTaskR
       origination: 'agent',
       proposedBy: parsed.proposal.proposedBy,
       proposalRationale: parsed.proposal.rationale,
-      parentGoalId: parsed.proposal.parentGoalId,
+      businessEnvelope: parsed.proposal.businessEnvelope ?? (
+        parsed.proposal.parentGoalId ? { goalId: parsed.proposal.parentGoalId } : undefined
+      ),
       createdAt: now,
       updatedAt: now,
     })
@@ -120,7 +124,13 @@ export const proposeTaskTool = defineTool({
           },
           proposedBy: { type: 'string' },
           rationale: { type: 'string' },
-          parentGoalId: { type: 'string' },
+          businessEnvelope: {
+            type: 'object',
+            properties: {
+              goalId: { type: 'string' },
+            },
+            required: ['goalId'],
+          },
           successCondition: { type: 'string' },
         },
         required: ['id', 'title', 'description', 'domain', 'projectPath', 'proposedBy', 'rationale'],

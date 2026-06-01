@@ -796,8 +796,8 @@ export interface BuiltContext {
    */
   reviewerSlugs: string[]
   /**
-   * FR-23: business-envelope summary for the task's parent goal. Empty when
-   * the task has no `parentGoalId` or the goal book is absent. Agents see the
+   * FR-23: business-envelope summary for the task's goal. Empty when
+   * the task has no `businessEnvelope.goalId` or the goal book is absent. Agents see the
    * goal title, success condition, and guardrails so they can self-check
    * against the envelope before taking destructive actions; the coordinator
    * makes the authoritative call via `evaluateEnvelope`.
@@ -984,7 +984,7 @@ export async function buildContext(
     : ''
   const envelope = goal
     ? [
-        `**Parent goal:** ${goal.id} — ${goal.title} (${goal.status})`,
+        `**Goal envelope:** ${goal.id} — ${goal.title} (${goal.status})`,
         `**Success condition:** ${goal.successCondition}`,
         goal.guardrails.length > 0
           ? `**Guardrails:**\n${goal.guardrails

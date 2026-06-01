@@ -33,7 +33,7 @@ function task(overrides: Partial<Task> = {}): Task {
     createdAt: now,
     updatedAt: now,
     completedAt: now,
-    parentGoalId: 'goal-editor',
+    businessEnvelope: { goalId: 'goal-editor' },
     permissionMode: 'workspace-write',
     dependsOn: ['task-editor-foundation'],
     revisionCount: 2,

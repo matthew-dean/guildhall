@@ -31,7 +31,7 @@
     ['Created at', task.createdAt ?? ''],
     ['Updated at', task.updatedAt ?? ''],
     ['Completed at', task.completedAt ?? null],
-    ['Parent goal', task.parentGoalId ? labelForIdentifier('task', task.parentGoalId).label : null],
+    ['Goal envelope', task.businessEnvelope?.goalId ? labelForIdentifier('task', task.businessEnvelope.goalId).label : null],
     ['Permission mode', task.permissionMode ? labelForIdentifier('domain', task.permissionMode).label : null],
     ['Depends on', task.dependsOn?.length ? task.dependsOn.map(id => friendlyTaskId(id)).join(', ') : null],
   ])

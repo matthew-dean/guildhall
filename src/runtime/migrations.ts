@@ -9,6 +9,7 @@ import {
 import { getProjectStateDir } from '@guildhall/sessions'
 import { installAgentBridgeInstructions } from './agent-bridge-install.js'
 import { migrateLegacyMemoryToLocalHistory } from './memory-migration.js'
+import { migrateTaskHierarchyState } from './task-hierarchy-migration.js'
 import { migrateTaskState } from './task-state-migration.js'
 import { recordGuildhallRuntimeWrite } from './runtime-compatibility.js'
 import { readProjectRuntimeState } from './project-runtime-store.js'
@@ -231,6 +232,29 @@ const BUILT_IN_PROJECT_MIGRATIONS: ProjectMigrationDefinition[] = [
       return {
         summary: `Rewrote ${result.taskDefinitionsRewritten} task definition${result.taskDefinitionsRewritten === 1 ? '' : 's'} and moved ${result.evidenceRecords} evidence record${result.evidenceRecords === 1 ? '' : 's'}.`,
         affectedPaths: ['.guildhall/TASKS.json', ...(result.backupPath ? [result.backupPath] : [])],
+      }
+    },
+  },
+  {
+    id: '0.10.0/task-hierarchy-links',
+    title: 'Convert parent task status into explicit work hierarchy links',
+    introducedIn: '0.10.0',
+    scope: 'project',
+    safety: 'prompt',
+    requirement: 'required',
+    summary: 'Rewrites status: parent and hierarchy-shaped parentGoalId fields into task.hierarchy links.',
+    async detect(projectRoot) {
+      const result = await migrateTaskHierarchyState({ projectRoot, apply: false })
+      return {
+        needed: result.changedTasks.length > 0,
+        affectedPaths: result.affectedPaths,
+      }
+    },
+    async apply(projectRoot) {
+      const result = await migrateTaskHierarchyState({ projectRoot, apply: true })
+      return {
+        summary: `Converted ${result.changedTasks.length} task hierarchy record${result.changedTasks.length === 1 ? '' : 's'} into explicit links.`,
+        affectedPaths: result.affectedPaths,
       }
     },
   },

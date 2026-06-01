@@ -262,9 +262,6 @@ export async function updateTask(
         riskLanes: inferSizingRiskLanes(task),
         createdAt: sizePlanCreatedAt,
       })
-      if ((task.sizePlan.action === 'split_recommended' || task.sizePlan.action === 'split_required') && !task.parentGoalId) {
-        task.parentGoalId = `goal-${task.id}`
-      }
       if (task.sizePlan.action === 'split_required' && task.status === 'ready') {
         materializeRequiredSplitChildren(queue, task, sizePlanCreatedAt)
       }
@@ -285,17 +282,17 @@ export function materializeRequiredSplitChildren(
   timestamp: string,
 ): void {
   if (parent.sizePlan?.action !== 'split_required') return
-  if (!parent.parentGoalId) parent.parentGoalId = `goal-${parent.id}`
   const recommendations = parent.sizePlan.recommendedChildren ?? []
   if (recommendations.length === 0) return
 
+  const existingChildIds = new Set(parent.hierarchy?.childIds ?? [])
   const planned = recommendations.map((recommendation, index) => {
     const existingById = recommendation.createdTaskId
       ? queue.tasks.find((task) => task.id === recommendation.createdTaskId)
       : undefined
     const existingByTitle = queue.tasks.find((task) =>
       task.id !== parent.id &&
-      task.parentGoalId === parent.parentGoalId &&
+      task.hierarchy?.parentId === parent.id &&
       normalizeTaskTitle(task.title) === normalizeTaskTitle(recommendation.title),
     )
     const task = existingById ?? existingByTitle ?? createSplitChildTask({
@@ -309,6 +306,13 @@ export function materializeRequiredSplitChildren(
     })
     if (!queue.tasks.some((candidate) => candidate.id === task.id)) queue.tasks.push(task)
     recommendation.createdTaskId = task.id
+    task.hierarchy = {
+      ...(task.hierarchy ?? {}),
+      parentId: parent.id,
+      order: index,
+      childIds: task.hierarchy?.childIds ?? [],
+    }
+    existingChildIds.add(task.id)
     return { recommendation, task }
   })
 
@@ -322,7 +326,35 @@ export function materializeRequiredSplitChildren(
       .filter((dependency, index, all) => dependency !== task.id && all.indexOf(dependency) === index)
     task.updatedAt = timestamp
   }
-  parent.status = 'parent'
+  parent.hierarchy = {
+    ...(parent.hierarchy ?? {}),
+    order: parent.hierarchy?.order ?? 0,
+    childIds: [...existingChildIds],
+  }
+  parent.taskReadiness = {
+    taskKind: parent.taskReadiness?.taskKind ?? parent.taskKind ?? 'implementation',
+    recommendation: 'split',
+    summary: 'Split-required work is represented by linked child tasks.',
+    dimensions: parent.taskReadiness?.dimensions ?? [],
+    definitionOfDone: parent.taskReadiness?.definitionOfDone ?? {
+      items: ['All required child tasks are done or explicitly deferred.'],
+      evidenceRequired: ['Linked child task outcomes are recorded before the containing work is closed.'],
+      updatedAt: timestamp,
+      createdBy: 'task-sizing',
+    },
+    blockerPlans: parent.taskReadiness?.blockerPlans ?? [],
+    contextBudget: parent.taskReadiness?.contextBudget ?? {
+      estimatedTokens: 0,
+      risk: 'medium',
+      fitsInOneWorkerBrief: false,
+      reasons: ['This work was split into linked child tasks.'],
+    },
+    assessedAt: parent.taskReadiness?.assessedAt ?? timestamp,
+    assessedBy: parent.taskReadiness?.assessedBy ?? 'task-sizing',
+  }
+  if (!['blocked', 'review', 'gate_check', 'done', 'shelved'].includes(parent.status)) {
+    parent.status = 'ready'
+  }
   delete parent.assignedTo
 
   const notePrefix = 'Split required: created linked child tasks'
@@ -352,7 +384,7 @@ function createSplitChildTask(input: {
     description: [
       input.reason,
       '',
-      `Split from parent task ${input.parent.id}: ${input.parent.title}.`,
+      `Split from containing work ${input.parent.id}: ${input.parent.title}.`,
     ].join('\n'),
     domain: input.suggestedDomain ?? input.parent.domain,
     projectPath: input.parent.projectPath,
@@ -377,7 +409,7 @@ function createSplitChildTask(input: {
     origination: 'system',
     proposedBy: 'task-sizing',
     proposalRationale: input.reason,
-    parentGoalId: input.parent.parentGoalId,
+    businessEnvelope: input.parent.businessEnvelope,
     createdAt: input.timestamp,
     updatedAt: input.timestamp,
   })
@@ -423,7 +455,6 @@ function normalizeAssignmentForStatus(
       task.assignedTo = 'gate-checker-agent'
       return
     case 'ready':
-    case 'parent':
     case 'spec_review':
     case 'exploring':
     case 'proposed':

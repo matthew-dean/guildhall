@@ -38,6 +38,13 @@ function finishabilityAllowsDispatch(task: Task): boolean {
   return task.status !== 'ready' || task.taskReadiness == null || task.taskReadiness.recommendation === 'ready'
 }
 
+function isContainingWorkTask(task: Task): boolean {
+  return Boolean(task.hierarchy?.childIds?.length) ||
+    task.workKind === 'app_spec' ||
+    task.workKind === 'feature_spec' ||
+    Boolean(task.completionBoundary)
+}
+
 /**
  * A worker-shelved task is "fresh" (needs `pre_rejection_policy` applied)
  * when its shelveReason records a worker pre-rejection the orchestrator has
@@ -121,6 +128,7 @@ export function pickNextTask(
   ): boolean =>
     task.status === status &&
     finishabilityAllowsDispatch(task) &&
+    !isContainingWorkTask(task) &&
     !(task.status === 'spec_review' && Boolean(task.spec?.trim()) && holdsDraftedSpecReviewForManualApproval(task)) &&
     !((task.status === 'exploring' || task.status === 'spec_review') && hasUnansweredOpenQuestion(task)) &&
     matchesLane(task) &&

@@ -1302,8 +1302,8 @@ describe('buildContext — FR-23 business envelope injection', () => {
     await fs.writeFile(path.join(tmpDir, 'GOALS.json'), content, 'utf-8')
   }
 
-  it('injects goal summary when task has a parentGoalId resolving to an active goal', async () => {
-    const task: Task = { ...baseTask, parentGoalId: 'g-1' }
+  it('injects goal summary when task has a businessEnvelope.goalId resolving to an active goal', async () => {
+    const task: Task = { ...baseTask, businessEnvelope: { goalId: 'g-1' } }
     await writeGoals(JSON.stringify({
       version: 1,
       lastUpdated: '2026-04-20T00:00:00Z',
@@ -1328,14 +1328,14 @@ describe('buildContext — FR-23 business envelope injection', () => {
     expect(ctx.formatted).toContain('Business Envelope (FR-23)')
   })
 
-  it('leaves envelope empty when task has no parentGoalId', async () => {
+  it('leaves envelope empty when task has no businessEnvelope.goalId', async () => {
     const ctx = await buildContext(baseTask, tmpDir)
     expect(ctx.envelope).toBe('')
     expect(ctx.formatted).not.toContain('Business Envelope')
   })
 
-  it('leaves envelope empty when parentGoalId points at a missing goal', async () => {
-    const task: Task = { ...baseTask, parentGoalId: 'g-missing' }
+  it('leaves envelope empty when businessEnvelope.goalId points at a missing goal', async () => {
+    const task: Task = { ...baseTask, businessEnvelope: { goalId: 'g-missing' } }
     await writeGoals(JSON.stringify({
       version: 1,
       lastUpdated: '2026-04-20T00:00:00Z',
@@ -1346,7 +1346,7 @@ describe('buildContext — FR-23 business envelope injection', () => {
   })
 
   it('renders goal with no guardrails (success condition only)', async () => {
-    const task: Task = { ...baseTask, parentGoalId: 'g-1' }
+    const task: Task = { ...baseTask, businessEnvelope: { goalId: 'g-1' } }
     await writeGoals(JSON.stringify({
       version: 1,
       lastUpdated: '2026-04-20T00:00:00Z',

@@ -484,10 +484,10 @@ describe('approveSpec', () => {
     expect(result.newStatus).toBe('ready')
   })
 
-  it('splits a split-required spec into a parent task and child tasks when approved', async () => {
+  it('splits a split-required spec into containing work and child tasks when approved', async () => {
     const queue = await readQueue()
     const parent = queue.tasks[0]!
-    parent.parentGoalId = 'goal-task-001'
+    parent.businessEnvelope = { goalId: 'goal-task-001' }
     parent.sizePlan = {
       taskId: 'task-001',
       score: 8,
@@ -518,9 +518,10 @@ describe('approveSpec', () => {
     const result = await approveSpec({ memoryDir, taskId: 'task-001' })
 
     expect(result.success).toBe(true)
-    expect(result.newStatus).toBe('parent')
+    expect(result.newStatus).toBe('ready')
     const updated = await readQueue()
-    expect(updated.tasks[0]!.status).toBe('parent')
+    expect(updated.tasks[0]!.status).toBe('ready')
+    expect(updated.tasks[0]!.taskReadiness?.recommendation).toBe('split')
     expect(updated.tasks.map(task => task.title)).toEqual([
       'Add ghost button',
       'Implement the billing settings workflow',
@@ -530,9 +531,18 @@ describe('approveSpec', () => {
       'task-001-split-implement-the-billing-settings-workflow',
       'task-001-split-add-the-admin-subscription-api-contract',
     ])
+    expect(updated.tasks[0]!.hierarchy?.childIds).toEqual([
+      'task-001-split-implement-the-billing-settings-workflow',
+      'task-001-split-add-the-admin-subscription-api-contract',
+    ])
     expect(updated.tasks[1]).toMatchObject({
       status: 'exploring',
-      parentGoalId: 'goal-task-001',
+      businessEnvelope: { goalId: 'goal-task-001' },
+      hierarchy: {
+        parentId: 'task-001',
+        order: 0,
+        childIds: [],
+      },
       origination: 'system',
       proposedBy: 'task-sizing',
     })
@@ -669,7 +679,7 @@ describe('approveSpec', () => {
   it('describes split approval in plain language in the transcript', async () => {
     const queue = await readQueue()
     const parent = queue.tasks[0]!
-    parent.parentGoalId = 'goal-task-001'
+    parent.businessEnvelope = { goalId: 'goal-task-001' }
     parent.sizePlan = {
       taskId: 'task-001',
       score: 8,

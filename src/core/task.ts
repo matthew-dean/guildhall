@@ -6,9 +6,8 @@ import { CompletionHandoff, ProofPath } from './task-proof.js'
 // ---------------------------------------------------------------------------
 // Task status lifecycle (FR-01)
 //    proposed ─┐
-// import_draft ┼→ exploring → spec_review ┬→ ready → in_progress → review → gate_check → done
-//                                      └→ parent (split container; child tasks hold the runnable work)
-//              │                                                     ↘ blocked
+// import_draft ┼→ exploring → spec_review → ready → in_progress → review → gate_check → done
+//              │                                                   ↘ blocked
 //              └─────────────────────────→ shelved (worker pre-rejection, FR-22)
 //
 // Origination:
@@ -24,7 +23,6 @@ const TaskStatusValue = z.enum([
   'import_draft',  // Workspace-imported draft that still needs shaping before normal intake begins
   'exploring',     // Conversational intake — Spec Agent is building the spec with the user (FR-12)
   'spec_review',   // Spec drafted; awaiting human or coordinator approval
-  'parent',        // Split container; linked child tasks carry the runnable work
   'ready',         // Spec approved, ready for a worker to pick up
   'in_progress',   // Assigned to a worker agent
   'review',        // Worker done, awaiting reviewer agent
@@ -578,6 +576,11 @@ export const WorkCompletionBoundary = z.object({
 })
 export type WorkCompletionBoundary = z.infer<typeof WorkCompletionBoundary>
 
+export const BusinessEnvelope = z.object({
+  goalId: z.string(),
+})
+export type BusinessEnvelope = z.infer<typeof BusinessEnvelope>
+
 export const TaskKind = z.enum([
   'implementation',
   'research',
@@ -929,8 +932,11 @@ export const Task = z.object({
   origination: TaskOrigination.default('human'),
   proposedBy: z.string().optional(),          // agent id that proposed the task
   proposalRationale: z.string().optional(),   // why the proposing agent thinks this is worth doing
-  parentGoalId: z.string().optional(),        // FR-23 business envelope — tasks carry a goalId
+  businessEnvelope: BusinessEnvelope.optional(),
   workKind: WorkKind.optional(),
+  // Work containment is represented by hierarchy links, never by task status.
+  // Required migration 0.10.0/task-hierarchy-links converts old status: parent
+  // records before normal runtime paths parse task queues.
   hierarchy: WorkHierarchy.optional(),
   completionBoundary: WorkCompletionBoundary.optional(),
   taskKind: TaskKind.optional(),

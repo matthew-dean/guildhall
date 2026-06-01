@@ -238,7 +238,7 @@ describe('TaskDrawer', () => {
       task: {
         ...drawerPayload().task,
         status: 'spec_review',
-        parentGoalId: 'goal-task-fll-overhead-policy',
+        businessEnvelope: { goalId: 'goal-task-fll-overhead-policy' },
         dependsOn: ['task-fll-policy-decision'],
         sizePlan: {
           taskId: 'task-link-editor',
@@ -289,10 +289,8 @@ describe('TaskDrawer', () => {
     expect(screen.getByText('Work Guildhall will create')).toBeInTheDocument()
     expect(document.body.textContent).not.toContain('recommendations, not created child tasks yet')
     expect(document.body.textContent).not.toMatch(/parent task/i)
-    expect(screen.getByRole('link', { name: 'fll overhead policy' })).toHaveAttribute(
-      'href',
-      '/projects/looma-knit/task/task-fll-overhead-policy',
-    )
+    expect(screen.getByText('Goal envelope')).toBeInTheDocument()
+    expect(screen.getByText('fll overhead policy')).toBeInTheDocument()
     expect(screen.getByText('Draft the FLL overhead charge policy')).toBeInTheDocument()
     expect(screen.getByText('Apply the overhead charge policy')).toBeInTheDocument()
     expect(screen.getByRole('link', { name: 'task-fll-policy-decision' })).toHaveAttribute(
@@ -308,7 +306,7 @@ describe('TaskDrawer', () => {
       task: {
         ...drawerPayload().task,
         status: 'spec_review',
-        parentGoalId: 'goal-task-fll-overhead-policy',
+        businessEnvelope: { goalId: 'goal-task-fll-overhead-policy' },
         sizePlan: {
           taskId: 'task-link-editor',
           score: 8,
@@ -632,8 +630,16 @@ describe('TaskDrawer', () => {
       threadTurns: [],
       task: {
         ...drawerPayload().task,
-        status: 'parent',
-        parentGoalId: 'goal-task-fll-overhead-policy',
+        status: 'ready',
+        businessEnvelope: { goalId: 'goal-task-fll-overhead-policy' },
+        hierarchy: {
+          childIds: [
+            'task-fll-overhead-policy-spec',
+            'task-fll-overhead-policy-implementation',
+          ],
+          order: 0,
+        },
+        taskReadiness: { recommendation: 'split' },
         sizePlan: {
           taskId: 'task-link-editor',
           score: 8,
@@ -743,7 +749,7 @@ describe('TaskDrawer', () => {
       threadTurns: [],
       task: {
         ...drawerPayload().task,
-        parentGoalId: 'goal-task-fll-overhead-policy',
+        businessEnvelope: { goalId: 'goal-task-fll-overhead-policy' },
         dependsOn: ['task-fll-policy-decision'],
         sizePlan: {
           taskId: 'task-link-editor',

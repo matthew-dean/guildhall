@@ -271,7 +271,7 @@ describe('updateTask', () => {
       band: 'epic',
       action: 'split_required',
     })
-    expect(raw.tasks[0].parentGoalId).toBe('goal-task-001')
+    expect(raw.tasks[0].parentGoalId).toBeUndefined()
     expect(raw.tasks[0].sizePlan.recommendedChildren.length).toBeGreaterThanOrEqual(3)
   })
 
@@ -296,12 +296,13 @@ describe('updateTask', () => {
 
     const raw = JSON.parse(await fs.readFile(tasksPath, 'utf-8'))
     const parent = raw.tasks.find((task: { id: string }) => task.id === 'task-001')
-    const children = raw.tasks.filter((task: { id: string; parentGoalId?: string }) =>
-      task.id !== 'task-001' && task.parentGoalId === 'goal-task-001',
+    const children = raw.tasks.filter((task: { id: string; hierarchy?: { parentId?: string } }) =>
+      task.id !== 'task-001' && task.hierarchy?.parentId === 'task-001',
     )
 
     expect(parent.sizePlan.action).toBe('split_required')
-    expect(parent.status).toBe('parent')
+    expect(parent.status).toBe('ready')
+    expect(parent.hierarchy.childIds).toEqual(children.map((task: { id: string }) => task.id))
     expect(children.map((task: { title: string }) => task.title)).toEqual([
       'Implement the billing settings workflow',
       'Add the admin subscription API contract',
@@ -342,9 +343,9 @@ describe('updateTask', () => {
 
     const raw = JSON.parse(await fs.readFile(tasksPath, 'utf-8'))
     expect(raw.tasks[0].sizePlan.action).toBe('split_required')
-    expect(raw.tasks[0].status).toBe('parent')
-    expect(raw.tasks.filter((task: { id: string; parentGoalId?: string }) =>
-      task.id !== 'task-001' && task.parentGoalId === 'goal-task-001',
+    expect(raw.tasks[0].status).toBe('ready')
+    expect(raw.tasks.filter((task: { id: string; hierarchy?: { parentId?: string } }) =>
+      task.id !== 'task-001' && task.hierarchy?.parentId === 'task-001',
     ).length).toBeGreaterThan(0)
   })
 
@@ -412,8 +413,8 @@ describe('updateTask', () => {
     })
     expect(raw.tasks[0].status).toBe('ready')
     expect(raw.tasks[0].parentGoalId).toBeUndefined()
-    expect(raw.tasks.filter((task: { id: string; parentGoalId?: string }) =>
-      task.id !== 'task-001' && task.parentGoalId === 'goal-task-001',
+    expect(raw.tasks.filter((task: { id: string; hierarchy?: { parentId?: string } }) =>
+      task.id !== 'task-001' && task.hierarchy?.parentId === 'task-001',
     )).toEqual([])
   })
 

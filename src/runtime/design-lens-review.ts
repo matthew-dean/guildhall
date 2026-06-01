@@ -49,7 +49,7 @@ export async function reviewInProcessWorkForDesignLens(input: {
     if (createdFindingIds.length >= (input.maxFindings ?? 5)) break
     if (scopedIds && !scopedIds.has(task.id)) continue
     if (TERMINAL_STATUSES.has(task.status)) continue
-    if (task.status === 'proposed' || task.status === 'parent') continue
+    if (task.status === 'proposed') continue
     const taskText = designLensTaskText(task)
     if (!DESIGN_REVIEW_TASK_SIGNALS.test(taskText)) continue
 

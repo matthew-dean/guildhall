@@ -545,7 +545,8 @@ git commit -m "test: add cognitive overhead guardrails"
 - Modify: `src/runtime/orchestrator-picker.ts`
 - Modify tests that construct `status: 'parent'`
 
-- [ ] **Step 1: Write migration tests**
+- [x] **Step 1: Write migration tests**
+  - Evidence: Added `src/runtime/__tests__/task-hierarchy-migration.test.ts` covering old `status: "parent"` conversion, hierarchy-shaped `parentGoalId` links, non-hierarchy `businessEnvelope.goalId`, idempotency, and cycle rejection.
 
 Create `src/runtime/__tests__/task-hierarchy-migration.test.ts`:
 
@@ -613,7 +614,8 @@ function rootMarker() {
 }
 ```
 
-- [ ] **Step 2: Run tests and confirm red**
+- [x] **Step 2: Run tests and confirm red**
+  - Evidence: `pnpm vitest run src/runtime/__tests__/task-hierarchy-migration.test.ts --reporter=dot` initially failed because `src/runtime/task-hierarchy-migration.ts` did not exist.
 
 Run:
 
@@ -623,7 +625,8 @@ pnpm vitest run src/runtime/__tests__/task-hierarchy-migration.test.ts --reporte
 
 Expected: FAIL because `task-hierarchy-migration.ts` does not exist.
 
-- [ ] **Step 3: Implement `migrateTaskHierarchyState`**
+- [x] **Step 3: Implement `migrateTaskHierarchyState`**
+  - Evidence: Added `src/runtime/task-hierarchy-migration.ts`; `pnpm vitest run src/runtime/__tests__/task-hierarchy-migration.test.ts --reporter=dot` passed after implementation.
 
 Create `src/runtime/task-hierarchy-migration.ts` with these exported types and behavior:
 
@@ -662,7 +665,8 @@ Implementation rules:
   - `.guildhall/TASKS.before-0.10.0-task-hierarchy-links.json`.
 - Reject cycles by throwing an error before writing.
 
-- [ ] **Step 4: Register the required migration**
+- [x] **Step 4: Register the required migration**
+  - Evidence: Registered required migration `0.10.0/task-hierarchy-links` in `src/runtime/migrations.ts` with dry-run detection and apply summary.
 
 Add to `BUILT_IN_PROJECT_MIGRATIONS` in `src/runtime/migrations.ts`:
 
@@ -692,7 +696,8 @@ Add to `BUILT_IN_PROJECT_MIGRATIONS` in `src/runtime/migrations.ts`:
 }
 ```
 
-- [ ] **Step 5: Add migration wrapper**
+- [x] **Step 5: Add migration wrapper**
+  - Evidence: Added `scripts/migrations/0.10.0-task-hierarchy.mjs` to run the built CLI migration after `pnpm build`.
 
 Create `scripts/migrations/0.10.0-task-hierarchy.mjs`:
 
@@ -727,7 +732,8 @@ const result = spawnSync(process.execPath, [
 process.exit(result.status ?? 1)
 ```
 
-- [ ] **Step 6: Remove `parent` from the task status schema**
+- [x] **Step 6: Remove `parent` from the task status schema**
+  - Evidence: Removed `parent` from `TaskStatusValue`, added the hierarchy migration comment above `Task.hierarchy`, and updated project-manager prompt text to `businessEnvelope.goalId`.
 
 Modify `src/core/task.ts`:
 
@@ -741,7 +747,8 @@ Modify `src/core/task.ts`:
 // records before normal runtime paths parse task queues.
 ```
 
-- [ ] **Step 7: Stop writing parent status**
+- [x] **Step 7: Stop writing parent status**
+  - Evidence: `materializeRequiredSplitChildren` now writes explicit hierarchy links, keeps containing work in a non-terminal normal status, sets split readiness with a complete typed record, and copies `businessEnvelope` to children.
 
 Modify `materializeRequiredSplitChildren` in `src/tools/task-queue.ts`:
 
@@ -751,7 +758,8 @@ Modify `materializeRequiredSplitChildren` in `src/tools/task-queue.ts`:
 - Set `parent.taskReadiness.recommendation = 'split'` or keep the existing readiness if it already says split.
 - Keep parent status unchanged if it was already `blocked`, `review`, `gate_check`, `done`, or `shelved`; otherwise use `ready`.
 
-- [ ] **Step 8: Remove hierarchy compatibility inference**
+- [x] **Step 8: Remove hierarchy compatibility inference**
+  - Evidence: Removed `parentGoalId`/`legacyParentTaskId` fallback from runtime and web hierarchy builders; updated TaskDrawer/Overview projections to use `hierarchy` and `businessEnvelope` separately.
 
 Modify both hierarchy modules:
 
@@ -760,7 +768,8 @@ Modify both hierarchy modules:
 - Keep cycle handling.
 - `isContainingWork` is true when explicit child links exist, `workKind` is `app_spec` or `feature_spec`, or a completion boundary requires children.
 
-- [ ] **Step 9: Rename business envelope**
+- [x] **Step 9: Rename business envelope**
+  - Evidence: Added `Task.businessEnvelope.goalId`, migrated old non-hierarchy goal values in `task-hierarchy-migration`, and moved runtime/proposal/context/merge-dispatcher callers off normal `parentGoalId`.
 
 Modify `src/core/task.ts` and business-envelope callers:
 
@@ -776,7 +785,8 @@ businessEnvelope: z.object({
 - Remove `parentGoalId` from normal schema once all call sites are moved.
 - Update guild prompt files under `src/guilds/project-manager/` to say `businessEnvelope.goalId`.
 
-- [ ] **Step 10: Update tests**
+- [x] **Step 10: Update tests**
+  - Evidence: `pnpm vitest run src/runtime/__tests__/task-hierarchy-migration.test.ts src/runtime/__tests__/work-hierarchy.test.ts src/tools/__tests__/task-queue.test.ts src/runtime/__tests__/business-envelope.test.ts src/core/__tests__/task.test.ts src/runtime/__tests__/intake.test.ts src/runtime/__tests__/serve-task-endpoints.test.ts src/runtime/__tests__/merge-dispatcher.test.ts src/tools/__tests__/proposal.test.ts src/web/surfaces/__tests__/TaskDrawer.svelte.test.ts src/web/surfaces/project/__tests__/WorkTab.svelte.test.ts src/web/surfaces/drawer/__tests__/drawer-tabs.svelte.test.ts --reporter=dot` passed: 12 files, 290 tests. `pnpm typecheck` passed. `pnpm lint:reductions` now fails only on planned generic-runtime product vocabulary leaks in `design-feedback.ts`, `design-system-discovery.ts`, `evidence-work-graph-intake.ts`, and `guildhall.config.ts`.
 
 Run:
 
