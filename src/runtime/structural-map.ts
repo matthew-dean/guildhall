@@ -202,6 +202,8 @@ export interface StructuralTaskRoute {
   routeReasons: string[]
 }
 
+export type StructuralAgentRole = 'spec' | 'worker' | 'reviewer' | 'gate_checker'
+
 export const structuralMapReviewMachine = defineStateMachine<
   StructuralMapState,
   StructuralMapEvent,
@@ -859,6 +861,15 @@ export async function acceptStructuralMap(input: {
   return accepted
 }
 
+export function readAcceptedStructuralMap(projectRoot: string): StructuralMapDraft | null {
+  const filePath = path.join(structuralMapDir(projectRoot), 'accepted.json')
+  if (!fs.existsSync(filePath)) return null
+  const map = JSON.parse(fs.readFileSync(filePath, 'utf8')) as StructuralMapDraft
+  map.correctionRequests ??= []
+  map.transitionReceipts ??= []
+  return map
+}
+
 export async function refreshStructuralMap(input: {
   projectRoot: string
   previousMapId: string
@@ -984,6 +995,41 @@ export function routeTaskWithStructuralMap(input: {
     crossCuttingDomainIds,
     routeReasons,
   }
+}
+
+export function renderStructuralAgentPacket(input: {
+  map: StructuralMapDraft
+  task: {
+    id: string
+    title: string
+    files?: string[]
+    text?: string
+  }
+  role: StructuralAgentRole
+  coordinators?: StructuralDomainCoordinator[]
+}): string {
+  const route = routeTaskWithStructuralMap({
+    map: input.map,
+    task: input.task,
+    coordinators: input.coordinators,
+  })
+  const slice = buildStructuralContextSlice(input.map, input.task)
+  const budgetTier = structuralBudgetTier(input.role)
+  return [
+    '## Structural Map Slice',
+    `Role: ${input.role}`,
+    `Budget tier: ${budgetTier}`,
+    route.primaryDomainId ? `Primary domain: ${route.primaryDomainId}` : 'Primary domain: none inferred',
+    route.coordinatorId ? `Coordinator: ${route.coordinatorId}` : '',
+    route.gitAuthorityRootId ? `Git authority root: ${route.gitAuthorityRootId}` : '',
+    route.packageIds.length > 0 ? `Packages: ${route.packageIds.join(', ')}` : '',
+    route.executableUnitIds.length > 0 ? `Executable units: ${route.executableUnitIds.join(', ')}` : '',
+    route.crossCuttingDomainIds.length > 0 ? `Cross-cutting domains: ${route.crossCuttingDomainIds.join(', ')}` : '',
+    slice.handles.length > 0 ? `Handles: ${slice.handles.join(', ')}` : '',
+    slice.omitted.length > 0
+      ? `Omitted: ${slice.omitted.map(item => `${item.handle} (${item.reason})`).join(', ')}`
+      : '',
+  ].filter(Boolean).join('\n')
 }
 
 export function shapeStructuralDependencyRequest(input: {
@@ -1506,6 +1552,19 @@ function activatedCrossCuttingDomains(map: StructuralMapDraft, task: { files?: s
     })
     .map(node => node.id)
     .sort()
+}
+
+function structuralBudgetTier(role: StructuralAgentRole): string {
+  switch (role) {
+    case 'spec':
+      return 'required: domain/questions; high: dependency summary; medium: packages'
+    case 'worker':
+      return 'required: domain/git/executable units; high: package/cross-cutting; medium: omitted handles'
+    case 'reviewer':
+      return 'required: spec/domain/cross-cutting; high: proof expectations; medium: dependency impact'
+    case 'gate_checker':
+      return 'required: executable units/git authority; medium: domain summary'
+  }
 }
 
 function assertAccepted(map: StructuralMapDraft, role: string): void {

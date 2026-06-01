@@ -250,7 +250,7 @@ agent packet integration, coordinator assignment, or remote authority support.
 
 ### Remaining Work Ledger
 
-**Remaining: 9 items. Next item: 9.**
+**Remaining: 8 items. Next item: 10.**
 
 1. [x] Replace the current pnpm-only discovery core with a provider interface
    for package/workspace discovery. After this: implement JS/npm/yarn/bun
@@ -311,9 +311,13 @@ agent packet integration, coordinator assignment, or remote authority support.
    now requires an accepted map and returns primary domain, coordinator,
    package nodes, executable units, Git authority root, activated
    cross-cutting domains, and route reasons.
-9. [ ] Integrate structural slices into `buildContext`/agent packets for spec,
+9. [x] Integrate structural slices into `buildContext`/agent packets for spec,
    worker, reviewer, and gate-checker roles with role-specific budget tiers.
-   After this: add omitted-context audit persistence.
+   After this: add omitted-context audit persistence. Completed in
+   `feature/0.10-structural-domain-intelligence`: `buildContext` now loads an
+   accepted structural map when present, injects a structural map section into
+   formatted context, exposes `structuralMapContext`, and renders role-specific
+   budget tiers for spec, worker, reviewer, and gate-checker packets.
 10. [ ] Persist context-debug/omitted-context records with structural handles
     and reasons, and expose enough data for agents to retrieve deferred
     context on demand. After this: wire memory scopes.

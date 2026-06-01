@@ -38,6 +38,11 @@ import { buildProofPathContext, ProofPath } from './proof-paths.js'
 import type { CompletionHandoff as CompletionHandoffType } from './completion-handoff.js'
 import type { ProofPath as ProofPathType } from './proof-paths.js'
 import { buildEffectiveMemoryPacket, type EffectiveMemoryPacket } from './effective-memory-packet.js'
+import {
+  readAcceptedStructuralMap,
+  renderStructuralAgentPacket,
+  type StructuralAgentRole,
+} from './structural-map.js'
 
 // ---------------------------------------------------------------------------
 // Just-in-time context builder
@@ -819,6 +824,7 @@ export interface BuiltContext {
   completionHandoff?: string
   effectiveMemory?: string
   effectiveMemoryPacket?: EffectiveMemoryPacket
+  structuralMapContext?: string
   /** Concatenated string ready to prepend to an agent message */
   formatted: string
 }
@@ -1139,6 +1145,20 @@ export async function buildContext(
     rendered: '',
   }))
   const effectiveMemory = effectiveMemoryPacket.rendered
+  const structuralMap = readAcceptedStructuralMap(projectRoot)
+  const structuralRole = structuralAgentRoleForTask(task)
+  const structuralMapContext = structuralMap
+    ? renderStructuralAgentPacket({
+        map: structuralMap,
+        task: {
+          id: task.id,
+          title: task.title,
+          files: resolveLikelyTaskFiles(task),
+          text: `${task.description}\n${task.spec ?? ''}`,
+        },
+        role: structuralRole,
+      })
+    : ''
 
   const taskSummary = [
     `## Current Task: ${task.id}`,
@@ -1197,6 +1217,8 @@ export async function buildContext(
     '',
     taskSummary,
     '',
+    structuralMapContext,
+    '',
     personaPrompt,
     '',
     workerModePrompt,
@@ -1253,8 +1275,16 @@ export async function buildContext(
     completionHandoff: completionHandoffContext,
     effectiveMemory,
     effectiveMemoryPacket,
+    structuralMapContext,
     formatted,
   }
+}
+
+function structuralAgentRoleForTask(task: Task): StructuralAgentRole {
+  if (task.status === 'exploring') return 'spec'
+  if (task.status === 'review') return 'reviewer'
+  if (task.status === 'gate_check') return 'gate_checker'
+  return 'worker'
 }
 
 function parseProofPaths(value: unknown): ProofPathType[] {
