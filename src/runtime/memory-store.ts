@@ -46,6 +46,7 @@ export const MemoryRecord = z.object({
   content: z.string().min(1),
   tags: z.array(z.string()).default([]),
   domains: z.array(z.string()).default([]),
+  structuralScopes: z.array(z.string()).default([]),
   taskKinds: z.array(z.string()).default([]),
   fileAreas: z.array(z.string()).default([]),
   confidence: Confidence.default('medium'),

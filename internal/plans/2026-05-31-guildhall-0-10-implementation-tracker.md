@@ -250,7 +250,7 @@ agent packet integration, coordinator assignment, or remote authority support.
 
 ### Remaining Work Ledger
 
-**Remaining: 7 items. Next item: 11.**
+**Remaining: 6 items. Next item: 12.**
 
 1. [x] Replace the current pnpm-only discovery core with a provider interface
    for package/workspace discovery. After this: implement JS/npm/yarn/bun
@@ -325,10 +325,14 @@ agent packet integration, coordinator assignment, or remote authority support.
     structural omissions, context debug records persist omitted handles with
     reasons/confidence/retrieval hints, and context snapshots render deferred
     structural handles explicitly.
-11. [ ] Connect structural map scopes to memory selection/promotion so
+11. [x] Connect structural map scopes to memory selection/promotion so
     repo-global, domain, package, executable-unit, cross-cutting, and
     task-specific memories do not compete as flat project memory. After this:
-    add owner review UI.
+    add owner review UI. Completed in
+    `feature/0.10-structural-domain-intelligence`: memory records now support
+    `structuralScopes`, effective memory derives task route scope ids from the
+    accepted structural map, and structurally mismatched memory is withheld
+    instead of included through generic tag overlap.
 12. [ ] Build the owner review/correction UI for detected Git roots, ignored
     roots, package graph, domain groups, cross-cutting domains, executable
     units, confidence, conflicts, and questions. After this: add UI actions.

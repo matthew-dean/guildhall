@@ -1,10 +1,12 @@
 import type { Task } from '@guildhall/core'
+import { inferProjectRootFromMemoryDir } from '@guildhall/sessions'
 import {
   listMemoryRecords,
   type MemoryEvidenceRef,
   type MemoryRecord,
   type MemoryStatus,
 } from './memory-store.js'
+import { readAcceptedStructuralMap, routeTaskWithStructuralMap } from './structural-map.js'
 
 export interface WithheldMemory {
   id: string
@@ -37,17 +39,20 @@ export async function buildEffectiveMemoryPacket(input: {
   ].join('\n')
   const taskKinds = inferTaskKinds(queryText)
   const fileAreas = fileAreaHints(queryText)
+  const structuralScopeIds = structuralScopesForTask(input.memoryDir, input.task, fileAreas)
   const all = await listMemoryRecords({ memoryDir: input.memoryDir })
   const relevant = all
     .filter((record) => isRelevant(record, {
       domain: input.task.domain,
       taskKinds,
       fileAreas,
+      structuralScopeIds,
       text: queryText,
     }))
   const included = relevant
     .filter((record) => record.status === 'active' || record.status === 'used')
     .filter((record) => record.risk !== 'high')
+    .filter((record) => structuralScopeMatches(record, structuralScopeIds))
     .slice(0, input.maxRecords ?? 8)
   const includedIds = new Set(included.map((record) => record.id))
   const withheld = relevant
@@ -55,7 +60,7 @@ export async function buildEffectiveMemoryPacket(input: {
     .map((record) => ({
       id: record.id,
       status: record.status,
-      reason: withheldReason(record),
+      reason: withheldReason(record, structuralScopeIds),
       summary: record.summary,
     }))
   const evidenceRefs = included.flatMap((record) => record.evidenceRefs)
@@ -95,7 +100,8 @@ export function renderEffectiveMemory(
   return clip(lines.join('\n').trim(), MAX_RENDERED_MEMORY_CHARS)
 }
 
-function withheldReason(record: MemoryRecord): string {
+function withheldReason(record: MemoryRecord, structuralScopeIds: readonly string[]): string {
+  if (!structuralScopeMatches(record, structuralScopeIds)) return 'structural-scope:mismatch'
   if (record.status !== 'active' && record.status !== 'used') return `status:${record.status}`
   if (record.risk === 'high') return 'risk:high'
   return 'not-selected'
@@ -105,6 +111,7 @@ function isRelevant(record: MemoryRecord, input: {
   domain: string
   taskKinds: readonly string[]
   fileAreas: readonly string[]
+  structuralScopeIds: readonly string[]
   text: string
 }): boolean {
   if (record.domains.length > 0 && !record.domains.includes(input.domain)) return false
@@ -114,10 +121,45 @@ function isRelevant(record: MemoryRecord, input: {
     input.fileAreas.length > 0 &&
     !input.fileAreas.some((file) => record.fileAreas.some((area) => file.includes(area) || area.includes(file)))
   ) return false
+  if (
+    record.structuralScopes.length > 0 &&
+    input.structuralScopeIds.length > 0 &&
+    !structuralScopeMatches(record, input.structuralScopeIds)
+  ) return true
   if (record.tags.length === 0) return true
   const haystack = input.text.toLowerCase()
   return record.tags.some((tag) => haystack.includes(tag.toLowerCase())) ||
     record.summary.toLowerCase().split(/\s+/).some((word) => word.length > 4 && haystack.includes(word))
+}
+
+function structuralScopeMatches(record: MemoryRecord, structuralScopeIds: readonly string[]): boolean {
+  if (record.structuralScopes.length === 0 || structuralScopeIds.length === 0) return true
+  return record.structuralScopes.some(scope => structuralScopeIds.includes(scope))
+}
+
+function structuralScopesForTask(memoryDir: string, task: Task, fileAreas: readonly string[]): string[] {
+  const projectRoot = inferProjectRootFromMemoryDir(memoryDir)
+  const map = readAcceptedStructuralMap(projectRoot)
+  if (!map) return []
+  try {
+    const route = routeTaskWithStructuralMap({
+      map,
+      task: {
+        id: task.id,
+        title: task.title,
+        files: fileAreas,
+        text: `${task.description}\n${task.spec ?? ''}`,
+      },
+    })
+    return [...new Set([
+      route.primaryDomainId,
+      ...route.packageIds,
+      ...route.executableUnitIds,
+      ...route.crossCuttingDomainIds,
+    ].filter((value): value is string => Boolean(value)))]
+  } catch {
+    return []
+  }
 }
 
 function inferTaskKinds(text: string): string[] {
