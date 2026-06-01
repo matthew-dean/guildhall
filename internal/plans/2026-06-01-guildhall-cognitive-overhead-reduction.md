@@ -1,10 +1,10 @@
 # Guildhall Cognitive Overhead Reduction Implementation Plan
 
-> **For agentic workers:** REQUIRED SUB-SKILL: Use `superpowers:subagent-driven-development` (recommended) or `superpowers:executing-plans` to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
+> **For agentic workers:** REQUIRED SUB-SKILL: Use `superpowers:subagent-driven-development` (recommended) or `superpowers:executing-plans` to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking. As each step is completed, update this file in the same commit by changing that step to `- [x]` and adding the exact evidence command, result, or commit note requested by the step.
 
 **Goal:** Reduce Guildhall's cognitive overhead by removing wrong legacy shapes, collapsing duplicate owner-input surfaces, shrinking Settings into a real configuration surface, and moving product/project-specific knowledge out of generic runtime code.
 
-**Architecture:** Prefer hard conversions over long-lived compatibility shims. Existing persisted shapes that are wrong should be detected by required project migrations, converted into the correct model, and then removed from runtime, UI, and schema paths. Generic runtime modules should consume typed hierarchy, thread, policy profile, and domain-adapter contracts rather than knowing about old task statuses, project-specific product names, or raw lever/card details.
+**Architecture:** Prefer hard conversions over long-lived compatibility shims. Existing persisted shapes that are wrong should be detected by required project migrations, converted into the correct model, and then removed from runtime, UI, and schema paths. Generic runtime modules should consume typed hierarchy, owner-input, thread, policy profile, and domain-adapter contracts rather than knowing about old task statuses, project-specific product names, or raw lever/card details. Bounded chat must become the durable owner-input session model, backed by the shared state-machine substrate and receipts, instead of a bespoke status object projected differently by every surface.
 
 **Tech Stack:** TypeScript, Svelte 5, Vitest, existing Guildhall migration ledger, Guildhall MCP/artifact state, no new runtime dependency.
 
@@ -18,7 +18,12 @@
 - `internal/specs/2026-06-01-guildhall-0-10-state-machines-project-graph.md`
 - `internal/specs/2026-05-27-guildhall-0-9-flexible-work-hierarchy-and-work-list.md`
 - `internal/plans/2026-05-31-guildhall-generalization-overfitting-hardening.md`
+- `internal/constitutions/design-system-governance.md`
 - `src/core/task.ts`
+- `src/runtime/state-machine.ts`
+- `src/runtime/project-graph.ts`
+- `src/runtime/structural-map.ts`
+- `src/runtime/capability-request-machine.ts`
 - `src/runtime/work-hierarchy.ts`
 - `src/runtime/bounded-chat.ts`
 - `src/runtime/thread.ts`
@@ -26,6 +31,74 @@
 - `src/runtime/evidence-work-graph-intake.ts`
 - `src/runtime/design-feedback.ts`
 - `src/web/surfaces/project/SettingsTab.svelte`
+
+## Latest Commit Reincorporation: `d508302f`
+
+Reviewed current `HEAD` on 2026-06-01:
+
+```text
+d508302f Merge branch 'feature/0.10-structural-domain-intelligence' into 0.10.0
+```
+
+First-parent diff from the prior reduction-plan commit adds the structural
+domain/project graph work:
+
+- `src/runtime/state-machine.ts`
+- `src/runtime/capability-request-machine.ts`
+- `src/runtime/project-graph.ts`
+- `src/runtime/structural-map.ts`
+- graph and structural endpoints in `src/runtime/serve.ts`
+- structural context slices in `src/runtime/context-builder.ts`,
+  `src/runtime/context-observability.ts`, and
+  `src/runtime/effective-memory-packet.ts`
+- project graph UI in `src/web/surfaces/project/SettingsTab.svelte`
+- focused tests for state machines, capability grants, project graph, settings,
+  context, effective memory, and structural map behavior
+
+Reduction conclusions from the merge:
+
+1. **Keep the generic state-machine substrate.** It is the right abstraction for
+   reducing lifecycle sprawl. Task status cleanup should reuse
+   `src/runtime/state-machine.ts` instead of creating a parallel transition
+   primitive.
+2. **Keep structural map and project graph as product-core concepts.** They
+   clarify authority, routing, and cross-project work boundaries. They are not
+   chopping-block candidates by default.
+3. **Cut the UI placement, not the model.** The merge put Project graph state,
+   API calls, assignment picker state, request actions, and rendering into
+   `SettingsTab.svelte`, expanding the already overloaded Settings cockpit.
+   Project graph review/assignment should move to a focused project-structure
+   panel. Settings may show readiness or a link, but not own graph behavior.
+4. **Owner-review decisions belong with owner input.** Structural-map questions
+   and graph assignment choices may be summarized in a project-structure panel,
+   but discussion and clarification should route through Threads/bounded chat.
+5. **Design-system governance is now constitutional.** The plan no longer treats
+   UI cleanup as "add more tokens." `internal/constitutions/design-system-governance.md`
+   is the source of law for token roles, component contracts, variant budgets,
+   deletion criteria, and deterministic checks.
+6. **Use the merged state-machine substrate for bounded chat.** The merge's
+   `src/runtime/state-machine.ts` is the right shared abstraction for lifecycle
+   cleanup. Bounded chat must reuse it with receipts instead of continuing as a
+   bespoke `status` object with ad hoc mutation paths.
+
+## Plan Tracking Discipline
+
+This document is the execution checklist, not a static design note.
+
+Rules for agents implementing this plan:
+
+1. Before starting a task, read the whole task and confirm no newer checked item
+   contradicts it.
+2. When a step is completed, update that exact checkbox from `- [ ]` to
+   `- [x]` in the same commit as the work.
+3. Under the completed step, add an `Evidence:` bullet with the command run,
+   test result, migration result, browser proof, or commit hash.
+4. Do not mark a step checked because code was edited. Mark it checked only
+   after the step's expected verification passes.
+5. If a step is intentionally deferred, leave it unchecked and add a `Blocked:`
+   or `Deferred:` bullet explaining the specific reason and the next owner.
+6. Do not keep private scratch checklists that drift from this file. If the work
+   changes, update this plan.
 
 ## Reduction Policy
 
@@ -47,6 +120,23 @@
 6. **Design tokens and UI components need governance, not just more tokens.**
    A component that uses tokens can still be sprawling if every surface chooses its own size, weight, density, radius, or variant vocabulary. Typography, spacing, radius, elevation, tone, and component variants must have named roles and budgets. Surface-local styling should compose those roles, not invent one-off scales.
 
+   Source of law: `internal/constitutions/design-system-governance.md`.
+
+7. **Owner input is a linked session, not a local question card.**
+   Structural map, task shaping, project graph, capability request, request
+   intake, recovery, and settings flows must create or reuse an
+   `OwnerInputRequest` linked to one bounded-chat session. Thread, Needs You,
+   Overview, Settings, Work, and Structure surfaces may project that same
+   session; they must not each invent their own question model, inbox item, card
+   branch, or status field.
+
+8. **Bounded chat is not a pressure-test question.**
+   Projecting a bounded-chat session as `pressure_test_question` hides the real
+   domain model and spreads special cases through Thread, Inbox, and UI tests.
+   Bounded chat needs a first-class `bounded_chat`/`owner_input` projection
+   family. Any future pressure-test-specific UI must be a separate, explicit
+   domain, not the generic wrapper for owner input.
+
 ## Non-Goals
 
 - Do not remove bounded chat, Threads, MCP/artifacts, evidence-backed completion, the task/work hierarchy model, or release proof. Those are core product concepts.
@@ -61,11 +151,17 @@
 | Work hierarchy | `status: "parent"` | `task.hierarchy` links plus completion boundary/readiness | `TaskStatus` has no `parent`; conversion rewrites old queues; picker never dispatches containing work as runnable implementation. |
 | Hierarchy source | `parentGoalId` as containment | `hierarchy.parentId` and `hierarchy.childIds` | Runtime and UI hierarchy builders do not infer containment from `parentGoalId`. |
 | Business envelope | `parentGoalId` name | `businessEnvelope.goalId` or `scopeEnvelope.goalId` | Business-envelope code no longer uses a field name that implies hierarchy. |
-| Owner questions | `task.openQuestions` | bounded-chat sessions shown in Threads | Required migration converts unanswered questions to bounded chats; Inbox no longer emits `agent_question_pending`. |
+| Owner questions | `task.openQuestions`, `StructuralMapDraft.ownerQuestions`, graph/local question arrays, and surface-local prompt cards | `OwnerInputRequest` records linked to bounded-chat sessions | Required migrations and source adapters create one linked session per owner decision; source models keep refs/status summaries, not local question state. |
+| Bounded-chat lifecycle | bespoke `status` object and direct mutation helpers | `boundedChatMachine` backed by `src/runtime/state-machine.ts` receipts | Bounded-chat transitions use `transition`/`applyTransitionCommand`; sessions persist receipts; tests cover idempotent command replay and rejected illegal transitions. |
+| Thread projection | bounded chats disguised as `pressure_test_question` | first-class `bounded_chat` or `owner_input` turn family | `src/runtime/thread.ts` and `ThreadTab.svelte` never map bounded-chat sessions to `pressure_test_question`; tests fail on that string for bounded chat fixtures. |
+| Owner-input projections | Thread, Inbox, Overview, Settings, Work, and Structure each invent question cards | every surface projects the same linked bounded-chat session | Thread owns conversation; Needs You owns alerts; Overview/Settings/Structure/Work show links/status only and do not mutate owner-input state directly. |
 | Attention | Inbox as conversation plus alert queue | Threads for conversations, Needs You for alerts | `InboxItem` no longer includes thread-owned conversation kinds. |
-| Settings | 3,493-line all-purpose surface | small shell plus focused panels | `SettingsTab.svelte` is below 400 lines and owns only section routing/composition. |
+| Settings | 4,258-line all-purpose surface | small shell plus focused panels | `SettingsTab.svelte` is below 400 lines and owns only section routing/composition. |
 | Levers | raw list of every lever | operating profiles plus changed overrides | Owner sees profile summary by default; raw editor is developer-only/hidden. |
 | Work graph | Looma/Knit/Dialog/Drawer branches | configured domain adapters | Generic runtime tests fail on leaked sample-product vocabulary. |
+| State machines | one-off transition helpers per lifecycle | shared `src/runtime/state-machine.ts` plus lifecycle-specific machines | Task transition cleanup reuses the generic state-machine substrate and does not add another transition framework. |
+| Project graph UI | Settings owns graph state/API/rendering | focused project-structure graph panel plus Settings readiness link | `SettingsTab.svelte` has no `ProjectGraphView`, graph assignment picker state, or `/api/project/project-graph` calls. |
+| Structural map review | hidden diagnostics or Settings branch | focused structure review with Thread-owned questions | Owner questions route to Threads/bounded chat; structure panel shows review state and actions only. |
 | Design tokens | `--fs-*`, `--s-*`, raw weights, raw clamp sizes, duplicate type roles | one canonical `--gh-*` token family plus named text/spacing/elevation roles | Token audit reports no unmanaged font sizes, font weights, spacing, radii, or negative letter spacing outside the token/component layer. |
 | Component options | bespoke cards, panels, chips, status rows, and ad hoc bolding | governed component contracts with variant budgets | Component audit documents every primitive, owner, allowed variants, and replacement path for duplicates. |
 | UI primitives | parallel local/package card/notice systems | package UI foundation plus temporary wrappers | New or touched surfaces import the canonical primitive family. |
@@ -100,22 +196,75 @@
 
 ### Owner Input and Threads
 
+- Create `src/runtime/owner-input.ts`
+  - Defines `OwnerInputRequest`, `OwnerInputSource`, `OwnerInputTarget`,
+    `OwnerInputRequestStatus`, and source-link helpers.
+  - Owns "one owner decision, one bounded-chat session link" semantics.
+  - Source kinds include `task`, `structural_map`, `project_graph`,
+    `capability_request`, `request_intake`, `project_check_in`,
+    `recovery_decision`, and `settings`.
+- Create `src/runtime/owner-input-store.ts`
+  - Persists owner-input request records under `.guildhall/owner-input/`.
+  - Provides idempotent create-or-link behavior keyed by source kind/id/question
+    id, so migrations and refreshes do not duplicate sessions.
+- Create `src/runtime/bounded-chat-machine.ts`
+  - Defines `boundedChatMachine` using `src/runtime/state-machine.ts`.
+  - Events include `activate`, `wait_for_owner`, `submit_owner_response`,
+    `request_coordinator_review`, `fulfill`, `block`, and `cancel`.
+  - Exports transition helpers that append receipts to bounded-chat sessions.
 - Create `src/runtime/task-question-migration.ts`
-  - Converts unanswered `task.openQuestions` into bounded-chat sessions.
-  - Removes answered task questions after preserving answer evidence in task notes or bounded-chat accepted state.
+  - Converts unanswered `task.openQuestions` into `OwnerInputRequest` records
+    linked to bounded-chat sessions.
+  - Removes answered task questions after preserving answer evidence in task
+    notes or bounded-chat accepted state.
 - Create `src/runtime/__tests__/task-question-migration.test.ts`
-  - Proves conversion, idempotency, and no duplicate bounded-chat sessions.
+  - Proves conversion, idempotency, no duplicate owner-input records, and no
+    duplicate bounded-chat sessions.
+- Create `src/runtime/__tests__/owner-input.test.ts`
+  - Proves every source kind can create one owner-input request linked to one
+    bounded-chat session.
+- Create `src/runtime/__tests__/bounded-chat-machine.test.ts`
+  - Proves legal/rejected transitions, receipt persistence, and command
+    idempotency.
 - Add migration `0.10.0/task-open-questions-to-bounded-chat` in `src/runtime/migrations.ts`.
 - Modify `src/core/task.ts`
   - Removes `openQuestions` from the normal `Task` schema after migration is active.
 - Modify or remove `src/tools/post-user-question.ts`
-  - Replace task question writes with a bounded-chat start API/tool.
+  - Replace task question writes with an owner-input start API/tool.
+- Modify `src/runtime/bounded-chat.ts`
+  - Remove direct lifecycle mutation as the primary path.
+  - Persist transition receipts on sessions.
+  - Keep schema compatibility only inside migration readers, not normal
+    mutation code.
+- Modify `src/runtime/structural-map.ts`
+  - Replace durable `ownerQuestions` arrays with owner-input request refs or a
+    review summary that points to linked sessions.
+  - Structural-map review state may require owner input, but questions live in
+    bounded chat.
+- Modify `src/runtime/project-graph.ts`
+  - Create owner-input requests for assignment/review choices that need owner
+    discussion rather than local graph-specific question state.
+- Modify `src/runtime/capability-request-machine.ts`
+  - Use owner-input requests for owner decisions about capability grants when a
+    coordinator cannot decide alone.
 - Modify `src/runtime/thread.ts`
-  - Add a first-class `bounded_chat` turn family instead of projecting bounded chat as `pressure_test_question`.
+  - Add a first-class `bounded_chat` or `owner_input` turn family instead of
+    projecting bounded chat as `pressure_test_question`.
+  - Thread turn ids should link back to the `OwnerInputRequest.id` and
+    `BoundedChatSession.id`.
 - Modify `src/runtime/inbox.ts`
   - Delete thread-owned conversation item kinds from `InboxItem`.
+- Modify `src/runtime/attention.ts`
+  - Summarize waiting owner-input sessions as alert links only when something is
+    actionable; do not duplicate conversation state.
 - Modify `src/web/surfaces/project/ThreadTab.svelte`
   - Split into smaller components while keeping Threads as the canonical owner-input surface.
+- Modify `src/web/surfaces/project/ProjectOverviewTab.svelte`,
+  `src/web/surfaces/project/WorkTab.svelte`,
+  `src/web/surfaces/project/SettingsTab.svelte`, and
+  `src/web/surfaces/project/structure/*`
+  - Show status and navigation links to the linked bounded-chat session.
+  - Do not create surface-local question cards or local question status fields.
 - Modify `src/web/surfaces/project/InboxTab.svelte`, `src/web/surfaces/FleetNeedsYou.svelte`, and `src/web/surfaces/DoThisNext.svelte`
   - Remove conversation-kind branching and stale Inbox copy.
 
@@ -135,9 +284,25 @@
   - Owner-facing profile plus changed overrides.
 - Create `src/web/surfaces/project/settings/DeveloperToolsPanel.svelte`
   - Migrations, codebase-map diagnostics, raw lever editor, and local development hooks behind an explicit developer affordance.
+- Create `src/web/surfaces/project/structure/project-graph-store.svelte.ts`
+  - Loads project graph data and owns graph mutations, assignment picker state,
+    and request actions outside Settings.
+- Create `src/web/surfaces/project/structure/ProjectStructurePanel.svelte`
+  - Focused project-structure shell for structural map and project graph review.
+- Create `src/web/surfaces/project/structure/ProjectGraphPanel.svelte`
+  - Renders domain responsibility assignment, inbound/outgoing requests, and
+    delivery review without embedding that logic in Settings.
+- Create `src/web/surfaces/project/structure/StructuralMapReviewPanel.svelte`
+  - Shows map state, conflicts, accepted authority roots, and Thread links for
+    owner questions.
 - Modify `src/web/surfaces/project/SettingsTab.svelte`
   - Reduce to a shell under 400 lines.
   - Render only Settings sections, not memory/re-intake/design-intelligence internals.
+  - Remove the `graph` section, `ProjectGraphView` interface, graph fetches,
+    assignment picker state, and graph action handlers.
+- Modify `src/web/surfaces/ProjectView.svelte`
+  - Routes the focused project-structure panel from the project surface, separate
+    from Settings.
 - Create or move to `src/web/surfaces/project/intelligence/`
   - `ProjectMemoryPanel.svelte`
   - `ProjectReintakePanel.svelte`
@@ -201,8 +366,12 @@
 ### Lifecycle Transition Boundary
 
 - Create `src/runtime/task-transition.ts`
-  - Provides an event-based wrapper around high-risk task transitions.
-  - First events: `mark_ready`, `start_worker`, `request_review`, `start_gate_check`, `complete`, `block`, `shelve`, `hold`, `resume`.
+  - Provides an event-based wrapper around high-risk task transitions by reusing
+    `src/runtime/state-machine.ts`.
+  - First events: `mark_ready`, `start_worker`, `request_review`, `start_gate_check`, `complete`, `block`, `shelve`.
+  - Do not add `hold`/`resume` in this pass. Current task records have hold
+    metadata but no clean held lifecycle state; model that separately only if a
+    later migration creates a real state.
 - Create `src/runtime/__tests__/task-transition.test.ts`
   - Proves legal and rejected transitions for the wrapped hot paths.
 - Modify writer hot paths incrementally:
@@ -619,23 +788,226 @@ git add src/runtime/task-hierarchy-migration.ts src/runtime/__tests__/task-hiera
 git commit -m "refactor: convert work hierarchy away from parent status"
 ```
 
-## Task 3: Convert Task Questions to Bounded Chat and Remove `openQuestions`
+## Task 3: Build Owner-Input Linkage, Convert Task Questions, and Remove `openQuestions`
 
 **Files:**
+- Create: `src/runtime/owner-input.ts`
+- Create: `src/runtime/owner-input-store.ts`
+- Create: `src/runtime/bounded-chat-machine.ts`
+- Create: `src/runtime/__tests__/owner-input.test.ts`
+- Create: `src/runtime/__tests__/bounded-chat-machine.test.ts`
 - Create: `src/runtime/task-question-migration.ts`
 - Create: `src/runtime/__tests__/task-question-migration.test.ts`
 - Create: `scripts/migrations/0.10.0-task-questions.mjs`
 - Modify: `src/runtime/migrations.ts`
 - Modify: `src/core/task.ts`
+- Modify: `src/runtime/bounded-chat.ts`
+- Modify: `src/runtime/structural-map.ts`
+- Modify: `src/runtime/project-graph.ts`
+- Modify: `src/runtime/capability-request-machine.ts`
 - Modify: `src/tools/post-user-question.ts`
 - Modify: `src/runtime/orchestrator.ts`
 - Modify: `src/runtime/thread.ts`
 - Modify: `src/runtime/inbox.ts`
+- Modify: `src/runtime/attention.ts`
 - Modify: `src/web/surfaces/TaskDrawer.svelte`
 - Modify: `src/web/surfaces/project/ThreadTab.svelte`
+- Modify: `src/web/surfaces/project/ProjectOverviewTab.svelte`
+- Modify: `src/web/surfaces/project/WorkTab.svelte`
+- Modify: `src/web/surfaces/project/SettingsTab.svelte`
+- Modify: `src/web/surfaces/project/structure/*`
 - Modify tests that assert `openQuestions`
 
-- [ ] **Step 1: Write conversion tests**
+- [ ] **Step 1: Write owner-input and bounded-chat state-machine tests**
+
+Create `src/runtime/__tests__/owner-input.test.ts`:
+
+```ts
+import { mkdtemp } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
+import path from 'node:path'
+import { describe, expect, it } from 'vitest'
+import { createOwnerInputRequest, listOwnerInputRequests } from '../owner-input-store.js'
+import { listBoundedChatSessions } from '../bounded-chat.js'
+
+const now = '2026-06-01T12:00:00.000Z'
+
+describe('owner input requests', () => {
+  it('creates one linked bounded-chat session for a task question source', async () => {
+    const root = await mkdtemp(path.join(tmpdir(), 'guildhall-owner-input-'))
+    const first = await createOwnerInputRequest({
+      projectRoot: root,
+      projectId: 'demo',
+      commandId: 'task-question:task-1:q1',
+      now,
+      actor: 'migration',
+      source: { kind: 'task', taskId: 'task-1', questionId: 'q1' },
+      target: { kind: 'thread' },
+      prompt: 'Which billing policy should Guildhall follow?',
+      choices: ['A', 'B'],
+      objective: {
+        kind: 'task_shaping',
+        label: 'Clarify billing policy',
+        successCriteria: ['Owner chooses the billing policy.'],
+      },
+    })
+
+    const second = await createOwnerInputRequest({
+      projectRoot: root,
+      projectId: 'demo',
+      commandId: 'task-question:task-1:q1',
+      now,
+      actor: 'migration',
+      source: { kind: 'task', taskId: 'task-1', questionId: 'q1' },
+      target: { kind: 'thread' },
+      prompt: 'Which billing policy should Guildhall follow?',
+      choices: ['A', 'B'],
+      objective: {
+        kind: 'task_shaping',
+        label: 'Clarify billing policy',
+        successCriteria: ['Owner chooses the billing policy.'],
+      },
+    })
+
+    expect(second.request.id).toBe(first.request.id)
+    expect(second.session.id).toBe(first.session.id)
+
+    const requests = await listOwnerInputRequests(root)
+    expect(requests).toHaveLength(1)
+    expect(requests[0]).toMatchObject({
+      source: { kind: 'task', taskId: 'task-1', questionId: 'q1' },
+      boundedChatSessionId: first.session.id,
+      status: 'waiting_for_owner',
+    })
+
+    const sessions = listBoundedChatSessions(path.join(root, '.guildhall'))
+    expect(sessions).toHaveLength(1)
+    expect(sessions[0].id).toBe(first.session.id)
+  })
+
+  it.each([
+    [{ kind: 'structural_map', mapId: 'draft', questionId: 'confirm-domain-routing' }],
+    [{ kind: 'project_graph', edgeId: 'edge-1', questionId: 'assign-authority' }],
+    [{ kind: 'capability_request', requestId: 'cap-1', questionId: 'grant-or-deny' }],
+    [{ kind: 'request_intake', intakeId: 'intake-1', questionId: 'clarify-scope' }],
+  ] as const)('supports source %j without inventing a local question model', async (source) => {
+    const root = await mkdtemp(path.join(tmpdir(), 'guildhall-owner-input-source-'))
+    const result = await createOwnerInputRequest({
+      projectRoot: root,
+      projectId: 'demo',
+      commandId: `${source.kind}:source-test`,
+      now,
+      actor: 'test',
+      source,
+      target: { kind: 'thread' },
+      prompt: 'Owner decision needed.',
+      objective: {
+        kind: 'task_shaping',
+        label: 'Owner decision',
+        successCriteria: ['Owner answers the linked bounded chat.'],
+      },
+    })
+    expect(result.request.boundedChatSessionId).toBe(result.session.id)
+  })
+})
+```
+
+Create `src/runtime/__tests__/bounded-chat-machine.test.ts`:
+
+```ts
+import { describe, expect, it } from 'vitest'
+import { applyBoundedChatTransition, boundedChatMachine } from '../bounded-chat-machine.js'
+import { transitionTable } from '../state-machine.js'
+
+const now = '2026-06-01T12:00:00.000Z'
+
+describe('bounded chat state machine', () => {
+  it('documents the allowed lifecycle table', () => {
+    expect(transitionTable(boundedChatMachine)).toContainEqual({
+      from: 'waiting_for_owner',
+      event: 'submit_owner_response',
+      to: 'coordinator_review',
+    })
+  })
+
+  it('applies transitions with receipts and rejects illegal transitions', () => {
+    const applied = applyBoundedChatTransition({
+      sessionId: 'chat-1',
+      currentStatus: 'waiting_for_owner',
+      event: 'submit_owner_response',
+      commandId: 'response-1',
+      priorReceipts: [],
+      actor: 'owner',
+      evidenceRefs: ['response:1'],
+      now,
+      context: { activeSubObjectiveId: 'q1', ownerResponsePresent: true },
+    })
+
+    expect(applied.kind).toBe('applied')
+    if (applied.kind !== 'applied') throw new Error('expected applied')
+    expect(applied.nextState).toBe('coordinator_review')
+    expect(applied.receipt).toMatchObject({
+      machineId: 'bounded-chat',
+      entityId: 'chat-1',
+      commandId: 'response-1',
+      from: 'waiting_for_owner',
+      event: 'submit_owner_response',
+      to: 'coordinator_review',
+    })
+
+    const rejected = applyBoundedChatTransition({
+      sessionId: 'chat-1',
+      currentStatus: 'fulfilled',
+      event: 'submit_owner_response',
+      commandId: 'response-2',
+      priorReceipts: [],
+      actor: 'owner',
+      evidenceRefs: [],
+      now,
+      context: { activeSubObjectiveId: 'q1', ownerResponsePresent: true },
+    })
+    expect(rejected).toMatchObject({ kind: 'rejected', reason: 'terminal_state' })
+  })
+
+  it('returns already_applied for repeated command ids', () => {
+    const first = applyBoundedChatTransition({
+      sessionId: 'chat-1',
+      currentStatus: 'waiting_for_owner',
+      event: 'submit_owner_response',
+      commandId: 'response-1',
+      priorReceipts: [],
+      actor: 'owner',
+      evidenceRefs: ['response:1'],
+      now,
+      context: { activeSubObjectiveId: 'q1', ownerResponsePresent: true },
+    })
+    if (first.kind !== 'applied') throw new Error('expected applied')
+
+    const second = applyBoundedChatTransition({
+      sessionId: 'chat-1',
+      currentStatus: 'waiting_for_owner',
+      event: 'submit_owner_response',
+      commandId: 'response-1',
+      priorReceipts: [first.receipt],
+      actor: 'owner',
+      evidenceRefs: ['response:1'],
+      now,
+      context: { activeSubObjectiveId: 'q1', ownerResponsePresent: true },
+    })
+    expect(second).toMatchObject({ kind: 'already_applied', currentState: 'coordinator_review' })
+  })
+})
+```
+
+Run:
+
+```bash
+pnpm vitest run src/runtime/__tests__/owner-input.test.ts src/runtime/__tests__/bounded-chat-machine.test.ts --reporter=dot
+```
+
+Expected: FAIL because `owner-input-store.ts` and `bounded-chat-machine.ts` do not exist.
+
+- [ ] **Step 2: Write task question conversion tests**
 
 Create `src/runtime/__tests__/task-question-migration.test.ts`:
 
@@ -645,11 +1017,12 @@ import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { describe, expect, it } from 'vitest'
 import { migrateTaskQuestionsToBoundedChat } from '../task-question-migration.js'
+import { listOwnerInputRequests } from '../owner-input-store.js'
 
 const now = '2026-06-01T12:00:00.000Z'
 
 describe('task question migration', () => {
-  it('moves unanswered task questions into bounded chat sessions and removes openQuestions', async () => {
+  it('moves unanswered task questions into owner-input linked bounded chat and removes openQuestions', async () => {
     const root = await mkdtemp(path.join(tmpdir(), 'guildhall-questions-'))
     await mkdir(path.join(root, '.guildhall'), { recursive: true })
     await writeFile(path.join(root, '.guildhall', 'TASKS.json'), JSON.stringify({
@@ -677,21 +1050,33 @@ describe('task question migration', () => {
     }, null, 2))
 
     const result = await migrateTaskQuestionsToBoundedChat({ projectRoot: root, projectId: 'demo', apply: true, now })
+    expect(result.createdOwnerInputRequests).toHaveLength(1)
     expect(result.createdSessions).toHaveLength(1)
 
     const queue = JSON.parse(await readFile(path.join(root, '.guildhall', 'TASKS.json'), 'utf8'))
     expect(queue.tasks[0].openQuestions).toBeUndefined()
+
+    const requests = await listOwnerInputRequests(root)
+    expect(requests).toHaveLength(1)
+    expect(requests[0]).toMatchObject({
+      source: { kind: 'task', taskId: 'task-1', questionId: 'q1' },
+      boundedChatSessionId: result.createdSessions[0],
+      status: 'waiting_for_owner',
+    })
 
     const session = JSON.parse(await readFile(path.join(root, '.guildhall', 'bounded-chat', `${result.createdSessions[0]}.json`), 'utf8'))
     expect(session.objective.kind).toBe('task_shaping')
     expect(session.source).toBe('migration:0.10.0/task-open-questions-to-bounded-chat:task-1:q1')
     expect(session.subObjectives[0].prompt).toBe('Which policy should Guildhall follow?')
     expect(session.subObjectives[0].choices).toEqual(['A', 'B'])
+    expect(session.receipts).toEqual(expect.arrayContaining([
+      expect.objectContaining({ machineId: 'bounded-chat', event: 'wait_for_owner', to: 'waiting_for_owner' }),
+    ]))
   })
 })
 ```
 
-- [ ] **Step 2: Run tests and confirm red**
+- [ ] **Step 3: Run tests and confirm red**
 
 Run:
 
@@ -699,9 +1084,181 @@ Run:
 pnpm vitest run src/runtime/__tests__/task-question-migration.test.ts --reporter=dot
 ```
 
-Expected: FAIL because `task-question-migration.ts` does not exist.
+Expected: FAIL because `task-question-migration.ts`, `owner-input-store.ts`, and
+`bounded-chat-machine.ts` do not exist.
 
-- [ ] **Step 3: Implement migration**
+- [ ] **Step 4: Implement owner-input request records**
+
+Create `src/runtime/owner-input.ts` with these exported types:
+
+```ts
+export type OwnerInputSource =
+  | { kind: 'task'; taskId: string; questionId: string }
+  | { kind: 'structural_map'; mapId: string; questionId: string }
+  | { kind: 'project_graph'; edgeId?: string; domainId?: string; questionId: string }
+  | { kind: 'capability_request'; requestId: string; questionId: string }
+  | { kind: 'request_intake'; intakeId: string; questionId: string }
+  | { kind: 'project_check_in'; checkInId: string; questionId: string }
+  | { kind: 'recovery_decision'; recoveryId: string; questionId: string }
+  | { kind: 'settings'; settingId: string; questionId: string }
+
+export type OwnerInputTarget =
+  | { kind: 'thread' }
+  | { kind: 'project_structure'; href: string }
+  | { kind: 'work_item'; taskId: string }
+
+export type OwnerInputRequestStatus =
+  | 'waiting_for_owner'
+  | 'coordinator_review'
+  | 'fulfilled'
+  | 'blocked'
+  | 'cancelled'
+
+export interface OwnerInputRequest {
+  id: string
+  projectId: string
+  source: OwnerInputSource
+  target: OwnerInputTarget
+  boundedChatSessionId: string
+  status: OwnerInputRequestStatus
+  prompt: string
+  choices?: string[]
+  createdAt: string
+  updatedAt: string
+  receipts: Array<import('./state-machine.js').TransitionReceipt<OwnerInputRequestStatus, string>>
+}
+```
+
+Rules:
+
+- `OwnerInputRequest.id` must be deterministic from project id and source identity.
+- Source models may store this id as a reference. They must not copy prompt,
+  choices, or answer state back into local question arrays.
+- A source that asks the same owner decision twice must reuse the same request
+  and bounded-chat session unless it deliberately creates a new `questionId`.
+
+- [ ] **Step 5: Implement bounded-chat lifecycle with `state-machine.ts`**
+
+Create `src/runtime/bounded-chat-machine.ts`:
+
+```ts
+import {
+  applyTransitionCommand,
+  defineStateMachine,
+  type TransitionCommandResult,
+  type TransitionReceipt,
+} from './state-machine.js'
+
+export type BoundedChatLifecycleStatus =
+  | 'active'
+  | 'waiting_for_owner'
+  | 'coordinator_review'
+  | 'fulfilled'
+  | 'blocked'
+  | 'cancelled'
+
+export type BoundedChatLifecycleEvent =
+  | 'activate'
+  | 'wait_for_owner'
+  | 'submit_owner_response'
+  | 'request_coordinator_review'
+  | 'fulfill'
+  | 'block'
+  | 'cancel'
+
+export interface BoundedChatLifecycleContext {
+  activeSubObjectiveId?: string | null
+  ownerResponsePresent?: boolean
+  coordinatorSummaryPresent?: boolean
+  blockReasonPresent?: boolean
+}
+
+export const boundedChatMachine = defineStateMachine<BoundedChatLifecycleStatus, BoundedChatLifecycleEvent, BoundedChatLifecycleContext>({
+  id: 'bounded-chat',
+  version: 1,
+  initial: 'active',
+  terminal: ['fulfilled', 'blocked', 'cancelled'],
+  states: {
+    active: {
+      on: {
+        wait_for_owner: { to: 'waiting_for_owner', require: ['activeSubObjectiveId'] },
+        fulfill: { to: 'fulfilled', require: ['coordinatorSummaryPresent'] },
+        block: { to: 'blocked', require: ['blockReasonPresent'] },
+        cancel: { to: 'cancelled' },
+      },
+    },
+    waiting_for_owner: {
+      on: {
+        submit_owner_response: { to: 'coordinator_review', require: ['ownerResponsePresent'] },
+        block: { to: 'blocked', require: ['blockReasonPresent'] },
+        cancel: { to: 'cancelled' },
+      },
+    },
+    coordinator_review: {
+      on: {
+        wait_for_owner: { to: 'waiting_for_owner', require: ['activeSubObjectiveId'] },
+        fulfill: { to: 'fulfilled', require: ['coordinatorSummaryPresent'] },
+        block: { to: 'blocked', require: ['blockReasonPresent'] },
+        cancel: { to: 'cancelled' },
+      },
+    },
+    fulfilled: { on: {} },
+    blocked: { on: {} },
+    cancelled: { on: {} },
+  },
+})
+
+export function applyBoundedChatTransition(input: {
+  sessionId: string
+  currentStatus: BoundedChatLifecycleStatus
+  event: BoundedChatLifecycleEvent
+  commandId: string
+  priorReceipts: Array<TransitionReceipt<BoundedChatLifecycleStatus, BoundedChatLifecycleEvent>>
+  actor: string
+  evidenceRefs: string[]
+  now: string
+  context: BoundedChatLifecycleContext
+}): TransitionCommandResult<BoundedChatLifecycleStatus, BoundedChatLifecycleEvent> {
+  return applyTransitionCommand(boundedChatMachine, {
+    commandId: input.commandId,
+    priorReceipts: input.priorReceipts,
+    transition: {
+      entityId: input.sessionId,
+      currentState: input.currentStatus,
+      event: input.event,
+      context: input.context,
+      actor: input.actor,
+      evidenceRefs: input.evidenceRefs,
+      now: input.now,
+    },
+  })
+}
+```
+
+Then modify `src/runtime/bounded-chat.ts` so normal mutation paths:
+
+- call `applyBoundedChatTransition`;
+- append successful receipts to `session.receipts`;
+- reject illegal lifecycle changes instead of writing arbitrary statuses;
+- preserve legacy sessions only through migration/read compatibility, not direct
+  write paths.
+
+- [ ] **Step 6: Implement owner-input create-or-link store**
+
+Create `src/runtime/owner-input-store.ts`:
+
+- `createOwnerInputRequest(input)` creates or reuses a deterministic request.
+- It creates a linked bounded-chat session with the requested prompt when no
+  existing request exists.
+- It uses `applyBoundedChatTransition(... event: 'wait_for_owner' ...)` so the
+  session starts with a receipt.
+- It writes request records under `.guildhall/owner-input/<requestId>.json`.
+- It exports `listOwnerInputRequests(projectRoot)` and
+  `findOwnerInputRequestBySource(projectRoot, source)`.
+
+Do not let source-specific callers choose storage paths or session ids.
+
+- [ ] **Step 7: Implement migration**
 
 Create `src/runtime/task-question-migration.ts` with:
 
@@ -715,6 +1272,7 @@ export interface TaskQuestionMigrationInput {
 
 export interface TaskQuestionMigrationResult {
   changedTasks: string[]
+  createdOwnerInputRequests: string[]
   createdSessions: string[]
   affectedPaths: string[]
 }
@@ -723,7 +1281,8 @@ export interface TaskQuestionMigrationResult {
 Rules:
 
 - Read raw `.guildhall/TASKS.json`.
-- For every unanswered question, create one bounded-chat session with:
+- For every unanswered question, call `createOwnerInputRequest` to create one
+  owner-input request linked to one bounded-chat session with:
   - `objective.kind = "task_shaping"`;
   - `objective.label = "Clarify <task title>"`;
   - `source = "migration:0.10.0/task-open-questions-to-bounded-chat:<taskId>:<questionId>"`;
@@ -732,21 +1291,21 @@ Rules:
   - `initialSubObjective.choices = question.choices` when present.
 - For answered questions, append a task note that preserves the answer summary if no equivalent note already exists.
 - Remove `openQuestions` from every task.
-- Do not create duplicate sessions when applied twice.
+- Do not create duplicate owner-input requests or sessions when applied twice.
 
-- [ ] **Step 4: Register required migration**
+- [ ] **Step 8: Register required migration**
 
 Add built-in project migration:
 
 ```ts
 {
   id: '0.10.0/task-open-questions-to-bounded-chat',
-  title: 'Move task questions into bounded chat',
+  title: 'Move task questions into owner-input bounded chat',
   introducedIn: '0.10.0',
   scope: 'project',
   safety: 'prompt',
   requirement: 'required',
-  summary: 'Converts task.openQuestions into bounded-chat sessions and removes task-local question state.',
+  summary: 'Converts task.openQuestions into owner-input requests linked to bounded-chat sessions and removes task-local question state.',
   async detect(projectRoot) {
     const result = await migrateTaskQuestionsToBoundedChat({ projectRoot, projectId: path.basename(projectRoot), apply: false })
     return { needed: result.changedTasks.length > 0, affectedPaths: result.affectedPaths }
@@ -754,23 +1313,48 @@ Add built-in project migration:
   async apply(projectRoot) {
     const result = await migrateTaskQuestionsToBoundedChat({ projectRoot, projectId: path.basename(projectRoot), apply: true })
     return {
-      summary: `Moved ${result.createdSessions.length} task question${result.createdSessions.length === 1 ? '' : 's'} into bounded chat.`,
+      summary: `Moved ${result.createdOwnerInputRequests.length} task question${result.createdOwnerInputRequests.length === 1 ? '' : 's'} into owner-input bounded chat.`,
       affectedPaths: result.affectedPaths,
     }
   },
 }
 ```
 
-- [ ] **Step 5: Replace question writer path**
+- [ ] **Step 9: Convert source-specific owner questions into owner-input refs**
+
+Update source models so they create or link `OwnerInputRequest` records instead
+of owning local question state:
+
+- `src/runtime/structural-map.ts`
+  - Replace durable `ownerQuestions` persistence with `ownerInputRequestIds` or
+    a review summary that links to owner-input records.
+  - `structuralMapReviewMachine` may require owner input before accepting a map,
+    but the prompt/answer lifecycle belongs to bounded chat.
+- `src/runtime/project-graph.ts`
+  - Use owner-input requests when domain authority assignment, dependency edge
+    acceptance, return, redelivery, or conflicting ownership needs discussion.
+  - The graph may store the linked request id and current decision state; it must
+    not store another prompt/choices/answer object.
+- `src/runtime/capability-request-machine.ts`
+  - Use owner-input requests for owner approval when capability grant policy
+    cannot be decided by configured coordinator authority.
+- `src/runtime/request-intake.ts`
+  - Replace `openQuestion?: AgentQuestion` with an owner-input request ref or a
+    bounded-chat start result.
+
+Focused tests must assert that these source records contain refs to
+owner-input/bounded-chat sessions rather than embedded question arrays.
+
+- [ ] **Step 10: Replace question writer path**
 
 Change `src/tools/post-user-question.ts` from a task mutator into one of these:
 
-- a thin compatibility CLI/tool that calls `createBoundedChatSession`, or
+- a thin compatibility CLI/tool that calls `createOwnerInputRequest`, or
 - a removed tool replaced by `start-owner-input-thread`.
 
 The resulting code must not assign `task.openQuestions`.
 
-- [ ] **Step 6: Remove normal `openQuestions` schema**
+- [ ] **Step 11: Remove normal `openQuestions` schema**
 
 Modify `src/core/task.ts`:
 
@@ -778,28 +1362,56 @@ Modify `src/core/task.ts`:
 - Keep `AgentQuestion` type only if bounded-chat migration or old transcript readers still need to parse old records outside normal task parsing.
 - Update `src/web/lib/types.ts` after UI payloads stop including `openQuestions`.
 
-- [ ] **Step 7: Remove UI and Inbox question paths**
+- [ ] **Step 12: Remove UI and Inbox question paths**
 
 - Delete `agent_question_pending` from `InboxItem`.
 - Delete `visibleOpenQuestions` calls from Inbox construction.
 - Delete task drawer question answer UI or replace it with a Threads link to the bounded chat.
-- Replace `ThreadTab` pressure-test/question branches with a `bounded_chat` branch.
+- Replace `ThreadTab` pressure-test/question branches with a `bounded_chat` or
+  `owner_input` branch.
+- Delete code that maps bounded-chat sessions to `pressure_test_question`.
+- Add a test fixture with an active bounded-chat session and assert:
 
-- [ ] **Step 8: Run focused tests**
+```ts
+expect(thread.turns).toContainEqual(expect.objectContaining({ kind: 'bounded_chat' }))
+expect(thread.turns).not.toContainEqual(expect.objectContaining({ kind: 'pressure_test_question' }))
+```
+
+- `ProjectOverviewTab.svelte`, `WorkTab.svelte`, `SettingsTab.svelte`, and
+  `src/web/surfaces/project/structure/*` may show linked status and navigation,
+  but they must not render independent question cards or mutate answers.
+
+- [ ] **Step 13: Add projection guardrails**
+
+Add or extend `scripts/reduction-guardrails.mjs` so it fails when:
+
+- `boundedChatTurns` or equivalent code emits `kind: 'pressure_test_question'`;
+- `src/runtime/inbox.ts` emits `agent_question_pending`,
+  `pressure_test_pending`, or `project_check_in`;
+- `src/runtime/structural-map.ts` persists a durable `ownerQuestions` array
+  after owner-input refs are introduced;
+- app surfaces introduce local answer/question card branches for source-specific
+  owner decisions instead of linking to Thread.
+
+- [ ] **Step 14: Run focused tests**
 
 Run:
 
 ```bash
-pnpm vitest run src/runtime/__tests__/task-question-migration.test.ts src/runtime/__tests__/thread.test.ts src/runtime/__tests__/inbox.test.ts src/runtime/__tests__/serve-intake.test.ts src/web/surfaces/project/__tests__/ThreadTab.svelte.test.ts src/web/surfaces/__tests__/TaskDrawer.svelte.test.ts --reporter=dot
+pnpm vitest run src/runtime/__tests__/owner-input.test.ts src/runtime/__tests__/bounded-chat-machine.test.ts src/runtime/__tests__/task-question-migration.test.ts src/runtime/__tests__/thread.test.ts src/runtime/__tests__/inbox.test.ts src/runtime/__tests__/serve-intake.test.ts src/runtime/__tests__/structural-map.test.ts src/runtime/__tests__/project-graph.test.ts src/runtime/__tests__/capability-request-machine.test.ts src/web/surfaces/project/__tests__/ThreadTab.svelte.test.ts src/web/surfaces/__tests__/TaskDrawer.svelte.test.ts --reporter=dot
 ```
 
-Expected: PASS with no tests asserting task-local `openQuestions`.
+Expected: PASS with:
+
+- no tests asserting task-local `openQuestions`;
+- no bounded-chat fixture projected as `pressure_test_question`;
+- source-specific owner decisions linked through `OwnerInputRequest`.
 
 Commit:
 
 ```bash
-git add src/runtime/task-question-migration.ts src/runtime/__tests__/task-question-migration.test.ts scripts/migrations/0.10.0-task-questions.mjs src/runtime/migrations.ts src/core/task.ts src/tools/post-user-question.ts src/runtime/orchestrator.ts src/runtime/thread.ts src/runtime/inbox.ts src/web/lib/types.ts src/web/surfaces/TaskDrawer.svelte src/web/surfaces/project/ThreadTab.svelte
-git commit -m "refactor: move task questions into bounded chat"
+git add src/runtime/owner-input.ts src/runtime/owner-input-store.ts src/runtime/bounded-chat-machine.ts src/runtime/__tests__/owner-input.test.ts src/runtime/__tests__/bounded-chat-machine.test.ts src/runtime/task-question-migration.ts src/runtime/__tests__/task-question-migration.test.ts scripts/migrations/0.10.0-task-questions.mjs src/runtime/migrations.ts src/core/task.ts src/runtime/bounded-chat.ts src/runtime/structural-map.ts src/runtime/project-graph.ts src/runtime/capability-request-machine.ts src/runtime/request-intake.ts src/tools/post-user-question.ts src/runtime/orchestrator.ts src/runtime/thread.ts src/runtime/inbox.ts src/runtime/attention.ts src/web/lib/types.ts src/web/surfaces/TaskDrawer.svelte src/web/surfaces/project/ThreadTab.svelte src/web/surfaces/project/ProjectOverviewTab.svelte src/web/surfaces/project/WorkTab.svelte src/web/surfaces/project/SettingsTab.svelte src/web/surfaces/project/structure scripts/reduction-guardrails.mjs
+git commit -m "refactor: route owner input through bounded chat"
 ```
 
 ## Task 4: Collapse Inbox/Needs You to Alert Ownership
@@ -850,8 +1462,12 @@ In `src/runtime/inbox.ts`:
 
 In `src/runtime/thread.ts`:
 
-- Ensure project check-in, task shaping, approvals, escalations, and recovery decisions project as Thread turns.
+- Ensure project check-in, task shaping, approvals, escalations, structural-map
+  review, project-graph review, capability decisions, and recovery decisions
+  project as Thread turns from linked owner-input/bounded-chat sessions.
 - Add action hrefs that target `/thread?thread=<id>` instead of `/overview/inbox`.
+- Do not synthesize thread turns from each source's local question shape. The
+  linked bounded-chat session is the projection source.
 
 - [ ] **Step 4: Reduce UI duplication**
 
@@ -886,10 +1502,15 @@ git commit -m "refactor: narrow needs-you to alert-owned items"
 - Create: `src/web/surfaces/project/settings/SettingsCoordinatorsPanel.svelte`
 - Create: `src/web/surfaces/project/settings/OperatingProfilePanel.svelte`
 - Create: `src/web/surfaces/project/settings/DeveloperToolsPanel.svelte`
+- Create: `src/web/surfaces/project/structure/project-graph-store.svelte.ts`
+- Create: `src/web/surfaces/project/structure/ProjectStructurePanel.svelte`
+- Create: `src/web/surfaces/project/structure/ProjectGraphPanel.svelte`
+- Create: `src/web/surfaces/project/structure/StructuralMapReviewPanel.svelte`
 - Create: `src/web/surfaces/project/settings/__tests__/SettingsTab.structure.test.ts`
 - Create: `src/levers/profiles.ts`
 - Create: `src/levers/__tests__/profiles.test.ts`
 - Modify: `src/web/surfaces/project/SettingsTab.svelte`
+- Modify: `src/web/surfaces/ProjectView.svelte`
 - Modify: `src/levers/schema.ts`
 - Modify: `src/levers/storage.ts`
 - Modify: `src/runtime/migrations.ts`
@@ -909,6 +1530,9 @@ describe('SettingsTab structure', () => {
     expect(source).not.toMatch(/interface DesignFeedbackStore/)
     expect(source).not.toMatch(/interface LearningSnapshot/)
     expect(source).not.toMatch(/interface ReintakeDraft/)
+    expect(source).not.toMatch(/interface ProjectGraphView/)
+    expect(source).not.toContain('/api/project/project-graph')
+    expect(source).not.toMatch(/selectedProjectGraphDomainId/)
     expect(source).not.toMatch(/looma/i)
   })
 })
@@ -920,7 +1544,7 @@ Run:
 pnpm vitest run src/web/surfaces/project/settings/__tests__/SettingsTab.structure.test.ts --reporter=dot
 ```
 
-Expected: FAIL because the current file is 3,493 lines and owns all specialist types.
+Expected: FAIL because the current file is 4,258 lines and owns all specialist types.
 
 - [ ] **Step 2: Define Settings IA**
 
@@ -945,6 +1569,9 @@ Remove Settings sections:
 - `learning` moves to project intelligence.
 - `reintake` starts from Threads or Work as a review flow.
 - design feedback/codebase map details move to developer/project intelligence.
+- `graph` moves to a focused project-structure surface. Settings can show a
+  readiness warning or link, but it cannot own graph data, assignment picker
+  state, request actions, or graph rendering.
 
 - [ ] **Step 3: Extract typed settings store**
 
@@ -987,7 +1614,42 @@ export function createSettingsStore(projectFetch: typeof import('../../../lib/pr
 
 Use the existing endpoint names shown in the store snippet unless a task also changes the corresponding route and updates the same test in that commit.
 
-- [ ] **Step 4: Add lever operating profiles**
+- [ ] **Step 4: Extract project graph into a project-structure surface**
+
+Move the newly merged graph UI out of `SettingsTab.svelte` before continuing to
+shrink the rest of Settings:
+
+- `project-graph-store.svelte.ts` owns:
+  - `/api/project/project-graph` loading;
+  - domain authority selection;
+  - assignment picker query and selected responsibility;
+  - project graph mutation/action payload defaults;
+  - busy and error state.
+- `ProjectGraphPanel.svelte` renders:
+  - detected domains;
+  - assigned authority;
+  - searchable project assignment picker;
+  - inbound/outgoing request cards or rows;
+  - delivery review, return, redelivery, and acceptance actions.
+- `StructuralMapReviewPanel.svelte` renders:
+  - accepted/draft structural map status;
+  - conflicts and ignored Git roots;
+  - owner-question links to Threads/bounded chat.
+- `ProjectStructurePanel.svelte` composes the structural map and graph panels.
+
+Add `src/web/surfaces/project/structure/__tests__/ProjectStructurePanel.svelte.test.ts`
+covering:
+
+```ts
+expect(settingsSource).not.toMatch(/ProjectGraphView/)
+expect(settingsSource).not.toContain('/api/project/project-graph')
+expect(settingsSource).not.toMatch(/assignmentPicker/)
+```
+
+The Settings route may keep one compact readiness notice that links to the
+project-structure surface when structural graph review blocks work.
+
+- [ ] **Step 5: Add lever operating profiles**
 
 Create `src/levers/profiles.ts`:
 
@@ -1043,7 +1705,7 @@ export const OPERATING_PROFILES: OperatingProfile[] = [
 
 Create tests that assert every profile only references known lever names and valid positions.
 
-- [ ] **Step 5: Build `OperatingProfilePanel`**
+- [ ] **Step 6: Build `OperatingProfilePanel`**
 
 Panel behavior:
 
@@ -1052,7 +1714,7 @@ Panel behavior:
 - Shows raw lever editor only inside `DeveloperToolsPanel`, not the default Settings path.
 - Provides one "Reset project overrides" action.
 
-- [ ] **Step 6: Remove deprecated `merge_policy`**
+- [ ] **Step 7: Remove deprecated `merge_policy`**
 
 Add migration `0.10.0/merge-policy-to-landing-strategy`:
 
@@ -1063,20 +1725,22 @@ Add migration `0.10.0/merge-policy-to-landing-strategy`:
 
 Then remove `merge_policy` from `src/levers/schema.ts` and `src/levers/storage.ts`.
 
-- [ ] **Step 7: Move specialist panels**
+- [ ] **Step 8: Move remaining specialist panels**
 
 Move logic out of Settings:
 
 - Memory/suggested learnings -> project intelligence surface.
 - Re-intake -> bounded-chat/review thread entry point plus specialist review panel.
 - Design feedback/design-system/codebase map -> project intelligence or developer tools, depending on whether the owner is making a decision or debugging Guildhall.
+- Project graph/structural-map review -> project-structure surface. Do not
+  recreate this as a hidden developer section.
 
-- [ ] **Step 8: Run tests**
+- [ ] **Step 9: Run tests**
 
 Run:
 
 ```bash
-pnpm vitest run src/web/surfaces/project/settings/__tests__/SettingsTab.structure.test.ts src/levers/__tests__/profiles.test.ts src/runtime/__tests__/serve-settings.test.ts src/web/surfaces/project/__tests__/SettingsTab.svelte.test.ts --reporter=dot
+pnpm vitest run src/web/surfaces/project/settings/__tests__/SettingsTab.structure.test.ts src/web/surfaces/project/structure/__tests__/ProjectStructurePanel.svelte.test.ts src/levers/__tests__/profiles.test.ts src/runtime/__tests__/serve-settings.test.ts src/web/surfaces/project/__tests__/SettingsTab.svelte.test.ts --reporter=dot
 ```
 
 Expected: PASS, with `SettingsTab.svelte` under 400 lines.
@@ -1084,7 +1748,7 @@ Expected: PASS, with `SettingsTab.svelte` under 400 lines.
 Commit:
 
 ```bash
-git add src/web/surfaces/project/SettingsTab.svelte src/web/surfaces/project/settings src/levers/profiles.ts src/levers/__tests__/profiles.test.ts src/levers/schema.ts src/levers/storage.ts src/runtime/migrations.ts
+git add src/web/surfaces/project/SettingsTab.svelte src/web/surfaces/project/settings src/web/surfaces/project/structure src/web/surfaces/ProjectView.svelte src/levers/profiles.ts src/levers/__tests__/profiles.test.ts src/levers/schema.ts src/levers/storage.ts src/runtime/migrations.ts
 git commit -m "refactor: shrink settings into focused panels"
 ```
 
@@ -1288,6 +1952,8 @@ git commit -m "refactor: move product-specific work graph logic behind adapters"
 ## Task 7: Audit and Govern UI Components and Design Tokens
 
 **Files:**
+- Created: `internal/constitutions/README.md`
+- Created: `internal/constitutions/design-system-governance.md`
 - Create: `internal/audits/2026-06-01-ui-component-token-governance.md`
 - Create: `packages/ui/src/component-constitution.ts`
 - Create: `scripts/design-token-audit.mjs`
@@ -1296,6 +1962,24 @@ git commit -m "refactor: move product-specific work graph logic behind adapters"
 - Modify: token source that generates `packages/ui/src/styles.css`
 - Modify: `src/web/tokens.css`
 - Modify: `package.json`
+
+- [x] **Step 0: Enshrine design-system governance**
+
+Created `internal/constitutions/design-system-governance.md` as the source of
+law for this task. Implementation work must treat that file as authoritative
+for:
+
+- token roles and budgets;
+- typography, spacing, radius, elevation, and z-index rules;
+- variant vocabulary and deprecated aliases;
+- component contract fields;
+- surface ownership, including the rule that Project graph/structural-map review
+  must not remain inside Settings;
+- chopping-block criteria;
+- deterministic checks and amendment rules.
+
+`packages/ui/src/component-constitution.ts` should be a machine-readable subset
+of this constitution, not a competing policy.
 
 - [ ] **Step 1: Write the failing scanner test**
 
@@ -1504,13 +2188,17 @@ Create `packages/ui/src/component-constitution.ts`:
 
 ```ts
 export type ComponentTone = 'neutral' | 'info' | 'ok' | 'warn' | 'danger' | 'accent'
-export type ComponentDensity = 'compact' | 'default' | 'roomy'
+export type ComponentDensity = 'dense' | 'compact' | 'comfortable'
+export type ComponentPadding = 'compact' | 'default' | 'roomy'
+export type ComponentMode = 'operator' | 'display'
+export type ComponentEmphasis = 'quiet' | 'default' | 'strong'
 export type TextRole =
   | 'page-title'
   | 'section-title'
   | 'panel-title'
   | 'body'
   | 'body-strong'
+  | 'meta'
   | 'caption'
   | 'eyebrow'
   | 'code'
@@ -1522,6 +2210,9 @@ export interface ComponentContract {
   doNotUseFor: string[]
   allowedTones?: ComponentTone[]
   allowedDensities?: ComponentDensity[]
+  allowedPadding?: ComponentPadding[]
+  allowedModes?: ComponentMode[]
+  allowedEmphasis?: ComponentEmphasis[]
   replacementFor?: string[]
   maxVariantAxes: number
 }
@@ -1535,7 +2226,8 @@ export const textRoleTokens: Record<TextRole, {
   'section-title': { size: '--gh-type-size-section-title', weight: '--gh-type-weight-strong', lineHeight: '--gh-type-line-height-tight' },
   'panel-title': { size: '--gh-type-size-panel-title', weight: '--gh-type-weight-strong', lineHeight: '--gh-type-line-height-tight' },
   body: { size: '--gh-type-size-body', weight: '--gh-type-weight-body', lineHeight: '--gh-type-line-height-body' },
-  'body-strong': { size: '--gh-type-size-body', weight: '--gh-type-weight-strong', lineHeight: '--gh-type-line-height-body' },
+ 'body-strong': { size: '--gh-type-size-body', weight: '--gh-type-weight-strong', lineHeight: '--gh-type-line-height-body' },
+  meta: { size: '--gh-type-size-meta', weight: '--gh-type-weight-body', lineHeight: '--gh-type-line-height-body' },
   caption: { size: '--gh-type-size-caption', weight: '--gh-type-weight-body', lineHeight: '--gh-type-line-height-body' },
   eyebrow: { size: '--gh-type-size-eyebrow', weight: '--gh-type-weight-strong', lineHeight: '--gh-type-line-height-tight' },
   code: { size: '--gh-type-size-code', weight: '--gh-type-weight-body', lineHeight: '--gh-type-line-height-body' },
@@ -1548,7 +2240,9 @@ export const componentContracts: ComponentContract[] = [
     useFor: ['settings panels', 'release criteria', 'contained repeated panels'],
     doNotUseFor: ['page sections', 'nested card stacks', 'buttons disguised as cards'],
     allowedTones: ['neutral', 'info', 'ok', 'warn', 'danger'],
-    allowedDensities: ['compact', 'default', 'roomy'],
+    allowedDensities: ['dense', 'compact', 'comfortable'],
+    allowedPadding: ['compact', 'default', 'roomy'],
+    allowedModes: ['operator', 'display'],
     replacementFor: ['src/web/lib/Card.svelte'],
     maxVariantAxes: 3,
   },
@@ -1558,7 +2252,7 @@ export const componentContracts: ComponentContract[] = [
     useFor: ['blocking setup notices', 'migration warnings', 'empty/error/loading states that need action'],
     doNotUseFor: ['normal section intros', 'decorative callouts', 'success badges'],
     allowedTones: ['neutral', 'info', 'ok', 'warn', 'danger'],
-    allowedDensities: ['compact', 'default'],
+    allowedDensities: ['compact', 'comfortable'],
     replacementFor: ['src/web/lib/NoticeBand.svelte'],
     maxVariantAxes: 3,
   },
@@ -1568,7 +2262,8 @@ export const componentContracts: ComponentContract[] = [
     useFor: ['state chips', 'count labels', 'readiness labels'],
     doNotUseFor: ['primary actions', 'long prose labels'],
     allowedTones: ['neutral', 'info', 'ok', 'warn', 'danger', 'accent'],
-    allowedDensities: ['compact', 'default'],
+    allowedDensities: ['dense', 'compact', 'comfortable'],
+    allowedEmphasis: ['quiet', 'default', 'strong'],
     replacementFor: ['src/web/lib/Chip.svelte when the chip is state, not metadata'],
     maxVariantAxes: 3,
   },
@@ -1583,6 +2278,7 @@ Update the package token source and generated `packages/ui/src/styles.css` so co
 :root {
   --gh-type-size-caption: var(--gh-type-size-1);
   --gh-type-size-eyebrow: var(--gh-type-size-1);
+  --gh-type-size-meta: var(--gh-type-size-1);
   --gh-type-size-body: var(--gh-type-size-2);
   --gh-type-size-panel-title: var(--gh-type-size-3);
   --gh-type-size-section-title: var(--gh-type-size-4);
@@ -1610,6 +2306,12 @@ Create `internal/audits/2026-06-01-ui-component-token-governance.md` with this s
 
 ```markdown
 # UI Component and Token Governance Audit
+
+## Governing Constitution
+
+This audit implements `internal/constitutions/design-system-governance.md`.
+Any exception found here must name the constitutional rule it violates, the
+owner, and the removal condition.
 
 ## Problem
 
@@ -1668,11 +2370,17 @@ Every primitive must name its variant axes and keep them bounded. New variants r
 Start with the surfaces that showed obvious drift:
 
 - `src/web/surfaces/project/SettingsTab.svelte`
+- `src/web/surfaces/project/structure/ProjectStructurePanel.svelte`
+- `src/web/surfaces/project/structure/ProjectGraphPanel.svelte`
 - `src/web/surfaces/project/ThreadTab.svelte`
 - `src/web/surfaces/ProjectView.svelte`
 - `src/web/surfaces/project/WorkspaceImportTab.svelte`
 - `src/web/surfaces/FleetNeedsYou.svelte`
 - `src/web/surfaces/DoThisNext.svelte`
+- `packages/ui/src/components/AlertBand.svelte`
+- `packages/ui/src/components/FrameCard.svelte`
+- `packages/ui/src/components/SectionHeader.svelte`
+- `packages/ui/src/components/StatusPill.svelte`
 
 For each touched surface:
 
@@ -1689,7 +2397,7 @@ Run:
 ```bash
 pnpm vitest run scripts/design-token-audit.test.ts --reporter=dot
 pnpm lint:design
-pnpm vitest run src/web/surfaces/project/__tests__/SettingsTab.svelte.test.ts src/web/surfaces/project/__tests__/ThreadTab.svelte.test.ts src/web/surfaces/__tests__/ProjectView.svelte.test.ts src/web/surfaces/__tests__/DoThisNext.svelte.test.ts src/web/surfaces/__tests__/FleetNeedsYou.svelte.test.ts --reporter=dot
+pnpm vitest run src/web/surfaces/project/__tests__/SettingsTab.svelte.test.ts src/web/surfaces/project/structure/__tests__/ProjectStructurePanel.svelte.test.ts src/web/surfaces/project/__tests__/ThreadTab.svelte.test.ts src/web/surfaces/__tests__/ProjectView.svelte.test.ts src/web/surfaces/__tests__/DoThisNext.svelte.test.ts src/web/surfaces/__tests__/FleetNeedsYou.svelte.test.ts --reporter=dot
 ```
 
 Expected: PASS, with the design audit no longer flagging touched surfaces.
@@ -1697,7 +2405,7 @@ Expected: PASS, with the design audit no longer flagging touched surfaces.
 Commit:
 
 ```bash
-git add internal/audits/2026-06-01-ui-component-token-governance.md packages/ui/src/component-constitution.ts packages/ui/src/styles.css src/web/tokens.css scripts/design-token-audit.mjs scripts/design-token-audit.test.ts package.json src/web/surfaces/project/SettingsTab.svelte src/web/surfaces/project/ThreadTab.svelte src/web/surfaces/ProjectView.svelte src/web/surfaces/project/WorkspaceImportTab.svelte src/web/surfaces/FleetNeedsYou.svelte src/web/surfaces/DoThisNext.svelte
+git add internal/audits/2026-06-01-ui-component-token-governance.md internal/constitutions packages/ui/src/component-constitution.ts packages/ui/src/styles.css packages/ui/src/components src/web/tokens.css scripts/design-token-audit.mjs scripts/design-token-audit.test.ts package.json src/web/surfaces/project/SettingsTab.svelte src/web/surfaces/project/structure src/web/surfaces/project/ThreadTab.svelte src/web/surfaces/ProjectView.svelte src/web/surfaces/project/WorkspaceImportTab.svelte src/web/surfaces/FleetNeedsYou.svelte src/web/surfaces/DoThisNext.svelte
 git commit -m "refactor: govern UI components and design tokens"
 ```
 
@@ -1781,6 +2489,7 @@ git commit -m "refactor: consolidate web UI primitives"
 **Files:**
 - Create: `src/runtime/task-transition.ts`
 - Create: `src/runtime/__tests__/task-transition.test.ts`
+- Read/reuse: `src/runtime/state-machine.ts`
 - Modify: `src/runtime/orchestrator.ts`
 - Modify: `src/runtime/intake.ts`
 - Modify: `src/tools/task-queue.ts`
@@ -1802,8 +2511,13 @@ describe('task transitions', () => {
       event: 'start_worker',
       actor: 'orchestrator',
       now: '2026-06-01T12:00:00.000Z',
+      evidenceRefs: ['task:start-worker'],
     })
-    expect(result).toMatchObject({ kind: 'applied', from: 'ready', to: 'in_progress' })
+    expect(result).toMatchObject({
+      kind: 'applied',
+      nextState: 'in_progress',
+      receipt: { from: 'ready', to: 'in_progress', event: 'start_worker' },
+    })
   })
 
   it('rejects worker start for containing work that still needs split children', () => {
@@ -1817,6 +2531,7 @@ describe('task transitions', () => {
       event: 'start_worker',
       actor: 'orchestrator',
       now: '2026-06-01T12:00:00.000Z',
+      evidenceRefs: ['task:start-worker'],
     })
     expect(result).toMatchObject({ kind: 'rejected', reason: 'containing_work_not_runnable' })
   })
@@ -1828,6 +2543,8 @@ describe('task transitions', () => {
 Create `src/runtime/task-transition.ts`:
 
 ```ts
+import { defineStateMachine, transition, type TransitionResult } from './state-machine.js'
+
 export type TaskTransitionEvent =
   | 'mark_ready'
   | 'start_worker'
@@ -1836,16 +2553,68 @@ export type TaskTransitionEvent =
   | 'complete'
   | 'block'
   | 'shelve'
-  | 'hold'
-  | 'resume'
 
-export type TaskTransitionResult =
-  | { kind: 'applied'; from: string; to: string; event: TaskTransitionEvent; actor: string; at: string }
-  | { kind: 'rejected'; from: string; event: TaskTransitionEvent; actor: string; at: string; reason: string }
+export type TaskTransitionState =
+  | 'proposed'
+  | 'import_draft'
+  | 'exploring'
+  | 'spec_review'
+  | 'ready'
+  | 'in_progress'
+  | 'review'
+  | 'gate_check'
+  | 'pending_pr'
+  | 'blocked'
+  | 'shelved'
+  | 'done'
+
+export interface TaskTransitionContext {
+  task: {
+    id: string
+    status: TaskTransitionState
+    hierarchy?: { childIds?: string[] }
+    taskReadiness?: { recommendation?: string }
+  }
+  requiredEvidencePresent?: boolean
+}
+
+export const taskLifecycleMachine = defineStateMachine<TaskTransitionState, TaskTransitionEvent, TaskTransitionContext>({
+  id: 'task-lifecycle',
+  version: 1,
+  initial: 'proposed',
+  terminal: ['done'],
+  states: taskLifecycleStates,
+})
+
+export function applyTaskTransition(input: {
+  task: TaskTransitionContext['task']
+  event: TaskTransitionEvent
+  actor: string
+  evidenceRefs: string[]
+  now: string
+  requiredEvidencePresent?: boolean
+}): TransitionResult<TaskTransitionState, TaskTransitionEvent> {
+  return transition(taskLifecycleMachine, {
+    entityId: input.task.id,
+    currentState: input.task.status,
+    event: input.event,
+    context: { task: input.task, requiredEvidencePresent: input.requiredEvidencePresent },
+    actor: input.actor,
+    evidenceRefs: input.evidenceRefs,
+    now: input.now,
+  })
+}
 ```
 
 Rules:
 
+- Reuse `defineStateMachine`, `transition`, `TransitionResult`, and
+  `TransitionReceipt` from `src/runtime/state-machine.ts`.
+- Do not define a parallel task-only transition framework.
+- Define `taskLifecycleStates` with the same explicit table style used by
+  `projectDependencyEdgeMachine` and `structuralMapReviewMachine`.
+- Retry idempotency uses `applyTransitionCommand` at command-handling boundaries.
+  The pure task transition result remains only `applied` or `rejected`.
 - `start_worker` allowed only from `ready`.
 - `start_worker` rejected when `task.hierarchy.childIds.length > 0` and readiness is not `ready`.
 - `request_review` allowed from `in_progress`.
@@ -1853,8 +2622,9 @@ Rules:
 - `complete` allowed from `gate_check`, `review`, or `pending_pr` only when required evidence is present in context.
 - `block` allowed from any non-terminal status.
 - `shelve` allowed from `proposed`, `exploring`, `spec_review`, `ready`, or `in_progress`.
-- `hold` records `hold.previousStatus`.
-- `resume` returns to `hold.previousStatus`.
+- `hold` and `resume` are deliberately out of scope until Guildhall either
+  deletes hold metadata or introduces a real `held` state with a conversion
+  script.
 
 - [ ] **Step 3: Replace direct writes in hot paths**
 
@@ -2007,11 +2777,123 @@ git add internal/audits/flow-audit.md
 git commit -m "docs: record cognitive overhead reduction proof"
 ```
 
+## Task 12: Future Feature - Corpus Refresh Design-Governance Diagnostics
+
+**Status:** future feature, not required for the first reduction cutover.
+
+**Why:** The design-system constitution should not only police Guildhall's own
+web UI. The same lessons should improve the agent harness for any product
+Guildhall manages. Corpus digestion and refresh should detect design-system
+governance risks early, then feed them into worker/reviewer context before an
+agent creates more local UI sprawl.
+
+**Files:**
+- Modify: `src/corpus-map/index.ts`
+- Modify: `src/corpus-map/storage.ts`
+- Modify: `src/runtime/context-builder.ts`
+- Modify: `src/agents/worker-agent.ts`
+- Modify: `src/agents/reviewer-agent.ts`
+- Modify: `src/agents/spec-agent.ts`
+- Create: `src/corpus-map/design-governance-diagnostics.ts`
+- Create: `src/corpus-map/__tests__/design-governance-diagnostics.test.ts`
+- Modify: `docs/superpowers/specs/2026-05-21-corpus-map-engine-technical-spec.md`
+
+- [ ] **Step 1: Add a corpus-map diagnostic model**
+
+Add design-governance diagnostics to codebase-map/corpus-map output:
+
+```ts
+export interface DesignGovernanceDiagnostic {
+  id: string
+  severity: 'info' | 'warn' | 'blocker'
+  kind:
+    | 'token_family_split'
+    | 'raw_visual_values'
+    | 'variant_vocabulary_sprawl'
+    | 'duplicate_primitive_family'
+    | 'surface_ownership_sprawl'
+    | 'missing_component_contract'
+    | 'unreviewed_design_exception'
+  summary: string
+  evidence: Array<{ path: string; line?: number; excerpt?: string }>
+  recommendation: string
+  appliesToReviewerRoles: Array<'design' | 'accessibility' | 'product' | 'maintainability'>
+}
+```
+
+- [ ] **Step 2: Detect portable design-system risks during refresh**
+
+Corpus refresh should inspect UI projects for:
+
+- multiple token families serving the same role, such as old app-local scales
+  beside canonical package tokens;
+- raw font sizes, font weights, line heights, spacing, radii, shadows, z-index,
+  and hardcoded colors outside token/component layers;
+- variant vocabulary drift, such as `regular` vs `comfortable`, `attention` vs
+  `warn`, `default` vs `neutral`, or surface-specific `kind`/`appearance` axes;
+- duplicate primitive families, such as local cards, notices, chips, status
+  rows, and button-like wrappers;
+- route/surface components that own unrelated endpoint state, data fetching,
+  specialist workflows, and rendering;
+- component libraries without contracts for ownership, variants, accessibility,
+  and replacement paths.
+
+- [ ] **Step 3: Produce a design-governance packet for workers and reviewers**
+
+When a task is UI-related, context builder should inject a compact packet:
+
+```markdown
+## Design Governance
+
+- Canonical design-system authority: <path or absent>
+- Token authority: <path or absent>
+- Component authority: <paths>
+- Known duplicate primitive families: <summary>
+- Variant vocabulary risks: <summary>
+- Required reviewer checks:
+  - Name the token/component roles reused or extended.
+  - Reject local one-off styling when a governed primitive exists.
+  - Reject new variant names unless a component contract changed.
+```
+
+Workers should use the packet before implementation. Reviewers should use it as
+evidence, not taste: if a task adds a local primitive while the packet names a
+canonical owner, review should request changes unless the handoff records a real
+exception.
+
+- [ ] **Step 4: Feed cross-product learnings back into Guildhall**
+
+When reviewers repeatedly flag the same design-governance issue in managed
+products, Guildhall should propose one of:
+
+- a project-local design-system memory update;
+- a component contract addition;
+- a corpus-map override;
+- a Guildhall product learning if the issue is broadly portable.
+
+Do not let workers or reviewers mutate those records directly. They should emit
+evidence and proposals; owner/coordinator approval decides what becomes durable.
+
+- [ ] **Step 5: Test with Guildhall's own current failure modes**
+
+Use Guildhall as the first fixture:
+
+- split token families: `packages/ui/src/styles.css` vs `src/web/tokens.css`;
+- duplicate primitives: package `NoticeBand`/`FrameCard` vs app-local
+  `NoticeBand`/`Card`;
+- variant vocabulary drift: `regular`, `default`, `attention`, `comfortable`,
+  `dense`, `compact`;
+- surface ownership sprawl: `SettingsTab.svelte` owning readiness, providers,
+  facts, memory, re-intake, design feedback, project graph, and advanced levers.
+
+Expected: the diagnostic output names these as governance risks and the reviewer
+packet gives UI reviewers concrete checks before they approve future work.
+
 ## Rollout Order
 
 1. Guardrails.
 2. Work hierarchy conversion and `parent` status removal.
-3. Task question conversion and `openQuestions` removal.
+3. Owner-input linkage, bounded-chat state-machine receipts, task question conversion, and `openQuestions` removal.
 4. Inbox/Needs You alert-only collapse.
 5. Settings reduction and lever profiles.
 6. Product-specific runtime adapter extraction.
@@ -2020,6 +2902,7 @@ git commit -m "docs: record cognitive overhead reduction proof"
 9. Task transition boundary hot paths.
 10. Lab/proof fixture quarantine.
 11. Installed-app verification and `artifact:flow-audit` update.
+12. Future corpus-refresh design-governance diagnostics.
 
 This order keeps hard persisted-state migrations ahead of UI deletion. It also makes Settings smaller before deeper design-system hook cleanup, so the worst owner-facing cognitive overhead improves before every internal cleanup is perfect.
 
@@ -2028,6 +2911,8 @@ This order keeps hard persisted-state migrations ahead of UI deletion. It also m
 - Use a feature branch with the repository default prefix, for example `feature/cognitive-overhead-reduction`.
 - If the branch has already been pushed/shared, refresh from `origin/main` with `git merge origin/main`, not rebase.
 - Commit after each task.
+- Each commit that completes plan steps must update the corresponding checkboxes
+  in this plan and include an `Evidence:` bullet under each completed step.
 - Do not mix user dirty changes into these commits. If existing dirty files overlap, inspect and preserve them before editing.
 
 ## Final Acceptance
@@ -2037,12 +2922,27 @@ The reduction is complete when:
 - No normal runtime parser accepts `status: "parent"` as a task status.
 - No normal runtime/UI hierarchy builder infers containment from `parentGoalId`.
 - No normal task record carries `openQuestions`.
+- Bounded-chat lifecycle writes reuse `src/runtime/state-machine.ts` and persist
+  transition receipts; no bespoke direct status mutation path remains for normal
+  owner-input flows.
+- Structural map, task, project graph, capability request, request intake, and
+  recovery/settings flows create or reuse `OwnerInputRequest` records linked to
+  bounded-chat sessions.
+- No bounded-chat session is projected as `pressure_test_question`.
 - Threads is the only owner-input conversation surface.
 - Needs You is alert-owned.
+- Overview, Settings, Work, Structure, and Needs You project linked session
+  status/navigation only; they do not invent independent question cards.
 - `SettingsTab.svelte` is a small composition shell under 400 lines.
+- Project graph and structural-map review live in a focused project-structure
+  surface; Settings only links to it when readiness requires attention.
 - Raw levers are no longer the default owner-facing Settings experience.
 - Generic runtime modules do not branch on Looma/Knit/AlertDialog/Dialog/Drawer.
-- The UI has a component constitution, design-token audit, and no unmanaged font-size/font-weight/spacing/radius choices in touched surfaces.
+- Task lifecycle hot paths reuse `src/runtime/state-machine.ts`; no second task
+  transition framework exists.
+- The UI has an internal design-system governance constitution, a
+  machine-readable component constitution, a design-token audit, and no
+  unmanaged font-size/font-weight/spacing/radius choices in touched surfaces.
 - `--gh-*` is the canonical token family; old `--fs-*`, `--s-*`, and `--r-*` app scales are removed or only exist as temporary aliases during the migration task.
 - Touched web surfaces use canonical UI primitives or temporary compatibility wrappers.
 - The installed app proves the flow against the active test project with `stale:false`.

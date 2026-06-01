@@ -70,7 +70,20 @@ babysit setup/import/provider/release states across multiple pages.
   adds component/token governance for duplicated bespoke UI, unmanaged font
   sizes, font weights, spacing, radius, and variant sprawl, and moves
   Looma/Knit/Dialog/Drawer knowledge out of generic runtime modules into
-  adapters, fixtures, or deletion.
+  adapters, fixtures, or deletion. Refreshed after merge commit `d508302f`:
+  the new generic state-machine substrate, structural map, and project graph
+  are product-core concepts to keep, but their owner-facing graph/structure
+  review must not remain embedded in Settings. Project graph state, assignment
+  picker behavior, graph request actions, and structural-map review belong in a
+  focused project-structure surface with Thread/bounded chat owning any
+  discussion. Design-system cleanup is now governed by the internal constitution
+  `internal/constitutions/design-system-governance.md`, which treats token roles,
+  component contracts, variant budgets, surface ownership, and deletion criteria
+  as implementation law rather than optional style advice. Future follow-up:
+  corpus digestion/refresh should detect these same governance risks in managed
+  products and inject a compact design-governance packet into worker/reviewer
+  context so other projects do not repeat Guildhall's token/component/variant
+  sprawl.
 - [x] Specify the 0.10 state-machine substrate and local project graph pivot.
   Spec:
   `internal/specs/2026-06-01-guildhall-0-10-state-machines-project-graph.md`.
