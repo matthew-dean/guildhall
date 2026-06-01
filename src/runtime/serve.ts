@@ -159,6 +159,7 @@ import {
   listExternalAgentLinks,
   recordExternalAgentLink,
 } from './external-agent-links.js'
+import { queryProjectGraphView } from './project-graph.js'
 import {
   applyStructuralMapReviewAction,
   readStructuralMapReviewSummary,
@@ -2654,6 +2655,19 @@ export function buildServeApp(opts: ServeOptions = {}): {
         action,
       })
       return c.json({ structuralMapReview: summarizeStructuralMapForReview(map) })
+    } catch (err) {
+      return c.json({ error: err instanceof Error ? err.message : String(err) }, 500)
+    }
+  })
+
+  app.get('/api/project/project-graph', async c => {
+    try {
+      return c.json({
+        projectGraph: queryProjectGraphView({
+          projectId: project.id,
+          projectPath: project.path,
+        }),
+      })
     } catch (err) {
       return c.json({ error: err instanceof Error ? err.message : String(err) }, 500)
     }

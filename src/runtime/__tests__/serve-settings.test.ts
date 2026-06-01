@@ -18,6 +18,7 @@ import { getProjectLocalHistoryDir, getProjectTranscriptPath } from '@guildhall/
 import { buildServeApp } from '../serve.js'
 import { persistLearningCandidates } from '../learning.js'
 import { acceptStructuralMap, draftStructuralMap, submitStructuralMapForReview } from '../structural-map.js'
+import { createProjectDependencyRequest } from '../project-graph.js'
 import type { LearningCandidate } from '../policy.js'
 
 const execFileP = promisify(execFile)
@@ -2764,5 +2765,50 @@ describe('GET /api/project — bootstrap status', () => {
     expect(accept.status).toBe(200)
     const acceptBody = (await accept.json()) as { structuralMapReview?: { state?: string } }
     expect(acceptBody.structuralMapReview?.state).toBe('accepted')
+  })
+
+  it('serves the scoped local project graph view for the selected project', async () => {
+    const providerDir = await fs.mkdtemp(path.join(os.tmpdir(), 'guildhall-serve-settings-provider-'))
+    try {
+      bootstrapWorkspace(providerDir, { id: 'looma', name: 'Looma' })
+      await createProjectDependencyRequest({
+        consumerProject: { id: PROJECT_ID, path: tmpDir, label: 'Settings Test' },
+        providerProject: { id: 'looma', path: providerDir, label: 'Looma' },
+        domain: { id: 'domain:editor', label: 'Editor' },
+        consumerNeed: 'Settings Test needs an editor adapter.',
+        rationale: 'The editor domain is provider-owned by Looma.',
+        requestedBy: 'coordinator:settings-test',
+        expectedDelivery: {
+          format: 'Svelte editor adapter',
+          channel: 'npm dev tag',
+          consumerVerificationPlan: ['Run settings-test editor integration.'],
+        },
+        now: '2026-06-01T12:20:00.000Z',
+      })
+
+      const { app } = buildServeApp({ projectPath: tmpDir })
+      const res = await app.fetch(new Request(scoped('/api/project/project-graph')))
+      expect(res.status).toBe(200)
+      const body = (await res.json()) as {
+        projectGraph?: {
+          localProjects?: Array<{ id?: string; role?: string }>
+          authorityRoots?: Array<{ projectId?: string; domainId?: string }>
+          unresolvedRequests?: Array<{ waitingOn?: string }>
+        }
+      }
+      expect(body.projectGraph?.localProjects).toEqual(expect.arrayContaining([
+        expect.objectContaining({ id: PROJECT_ID, role: 'current' }),
+        expect.objectContaining({ id: 'looma', role: 'provider' }),
+      ]))
+      expect(body.projectGraph?.authorityRoots).toContainEqual(expect.objectContaining({
+        projectId: 'looma',
+        domainId: 'domain:editor',
+      }))
+      expect(body.projectGraph?.unresolvedRequests).toContainEqual(expect.objectContaining({
+        waitingOn: 'provider',
+      }))
+    } finally {
+      await fs.rm(providerDir, { recursive: true, force: true })
+    }
   })
 })

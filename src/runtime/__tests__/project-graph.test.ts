@@ -12,6 +12,7 @@ import {
   createProjectDependencyRequest,
   deliverProjectDependency,
   importProjectDependencyRequestForProvider,
+  queryProjectGraphView,
   readProjectGraphRegistry,
   requestProjectDependencyRevision,
   reviseProjectDependencyPlan,
@@ -478,5 +479,74 @@ describe('local project graph', () => {
     const communicationPath = path.join(systemDir, 'project-graph', 'exchange', 'coordinator-communications', `${edge.id}.jsonl`)
     const communicationLines = (await fsp.readFile(communicationPath, 'utf8')).trim().split('\n').map(line => JSON.parse(line))
     expect(communicationLines.map(record => record.kind)).toEqual(accepted.communicationRecords.map(record => record.kind))
+  })
+
+  it('queries a scoped project graph view with local projects, authorities, channels, and unresolved requests', async () => {
+    bootstrapWorkspace(consumerProject, { id: 'knit', name: 'Knit' })
+    bootstrapWorkspace(providerProject, { id: 'looma', name: 'Looma' })
+    const edge = await createProjectDependencyRequest({
+      consumerProject: { id: 'knit', path: consumerProject, label: 'Knit' },
+      providerProject: { id: 'looma', path: providerProject, label: 'Looma' },
+      domain: { id: 'domain:editor', label: 'Editor' },
+      consumerNeed: 'Knit needs inline editor comments from Looma.',
+      rationale: 'The editor domain is provider-owned by Looma.',
+      requestedBy: 'coordinator:knit',
+      expectedDelivery: {
+        format: 'Svelte editor annotation adapter',
+        channel: 'npm dev tag',
+        consumerVerificationPlan: ['Run Knit editor integration tests.'],
+      },
+      now: '2026-06-01T12:00:00.000Z',
+    })
+    await importProjectDependencyRequestForProvider({
+      edgeId: edge.id,
+      providerProjectPath: providerProject,
+      importedBy: 'coordinator:looma',
+      now: '2026-06-01T12:01:00.000Z',
+    })
+    await commitProjectDependencyDeliveryPlan({
+      edgeId: edge.id,
+      providerProjectPath: providerProject,
+      plannedBy: 'coordinator:looma',
+      deliveryExpectation: {
+        format: 'Svelte editor annotation adapter',
+        channel: 'npm dev tag',
+        providerProofPlan: ['Run Looma adapter tests.'],
+        consumerVerificationPlan: ['Run Knit editor integration tests.'],
+      },
+      now: '2026-06-01T12:02:00.000Z',
+    })
+
+    const view = queryProjectGraphView({
+      projectId: 'knit',
+      projectPath: consumerProject,
+    })
+
+    expect(view.currentProject.id).toBe('knit')
+    expect(view.localProjects).toEqual(expect.arrayContaining([
+      expect.objectContaining({ id: 'knit', role: 'current' }),
+      expect.objectContaining({ id: 'looma', role: 'provider' }),
+    ]))
+    expect(view.authorityRoots).toContainEqual(expect.objectContaining({
+      projectId: 'looma',
+      domainId: 'domain:editor',
+      authority: 'provider',
+    }))
+    expect(view.dependencyEdges).toContainEqual(expect.objectContaining({
+      id: edge.id,
+      state: 'provider_working',
+      consumerProjectId: 'knit',
+      providerProjectId: 'looma',
+      unresolved: true,
+    }))
+    expect(view.deliveryChannels).toContainEqual(expect.objectContaining({
+      edgeId: edge.id,
+      channel: 'npm dev tag',
+      format: 'Svelte editor annotation adapter',
+    }))
+    expect(view.unresolvedRequests).toContainEqual(expect.objectContaining({
+      edgeId: edge.id,
+      waitingOn: 'provider',
+    }))
   })
 })

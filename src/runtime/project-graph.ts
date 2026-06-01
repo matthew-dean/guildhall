@@ -51,6 +51,50 @@ export interface ProjectGraph {
   evidence: string[]
 }
 
+export interface ProjectGraphView {
+  currentProject: {
+    id: string
+    path: string
+    label?: string
+  }
+  localProjects: Array<{
+    id: string
+    label: string
+    path: string
+    role: 'current' | 'consumer' | 'provider' | 'related'
+  }>
+  authorityRoots: Array<{
+    projectId: string
+    domainId?: string
+    label?: string
+    authority: 'consumer' | 'provider'
+    edgeId: string
+  }>
+  dependencyEdges: Array<{
+    id: string
+    state: ProjectDependencyEdgeState
+    consumerProjectId: string
+    providerProjectId: string
+    domainId?: string
+    consumerNeed: string
+    unresolved: boolean
+    updatedAt: string
+  }>
+  deliveryChannels: Array<{
+    edgeId: string
+    channel: string
+    format: string
+    coordinates?: string
+    state: ProjectDependencyEdgeState
+  }>
+  unresolvedRequests: Array<{
+    edgeId: string
+    waitingOn: 'consumer' | 'provider'
+    state: ProjectDependencyEdgeState
+    summary: string
+  }>
+}
+
 export type ProjectDependencyEdgeState =
   | 'draft'
   | 'submitted'
@@ -280,6 +324,69 @@ export function writeLocalProjectGraphDraft(input: {
   }
   writeJsonFile(path.join(projectGraphRegistryDir(), 'graphs', 'local.json'), graph)
   return graph
+}
+
+export function queryProjectGraphView(input: {
+  projectId: string
+  projectPath: string
+}): ProjectGraphView {
+  const registry = readProjectGraphRegistry()
+  const edges = readProjectDependencyEdges()
+    .filter(edge => edge.consumer.id === input.projectId || edge.provider.id === input.projectId)
+    .sort((left, right) => right.updatedAt.localeCompare(left.updatedAt))
+  const projectRoles = new Map<string, ProjectGraphView['localProjects'][number]['role']>()
+  projectRoles.set(input.projectId, 'current')
+  for (const edge of edges) {
+    if (edge.consumer.id !== input.projectId && !projectRoles.has(edge.consumer.id)) projectRoles.set(edge.consumer.id, 'consumer')
+    if (edge.provider.id !== input.projectId && !projectRoles.has(edge.provider.id)) projectRoles.set(edge.provider.id, 'provider')
+  }
+  const registryProjects = new Map(registry.projects.map(project => [project.id.replace(/^local-project:/, ''), project]))
+  const localProjects = [...projectRoles.entries()].map(([id, role]) => {
+    const project = registryProjects.get(id)
+    return {
+      id,
+      label: project?.label ?? id,
+      path: project?.path ?? (id === input.projectId ? input.projectPath : ''),
+      role,
+    }
+  })
+
+  return {
+    currentProject: {
+      id: input.projectId,
+      path: input.projectPath,
+      label: registryProjects.get(input.projectId)?.label,
+    },
+    localProjects,
+    authorityRoots: edges
+      .filter(edge => edge.domain)
+      .map(edge => ({
+        projectId: edge.provider.id,
+        domainId: edge.domain?.id,
+        label: edge.domain?.label,
+        authority: 'provider' as const,
+        edgeId: edge.id,
+      })),
+    dependencyEdges: edges.map(edge => ({
+      id: edge.id,
+      state: edge.stateMachine.state,
+      consumerProjectId: edge.consumer.id,
+      providerProjectId: edge.provider.id,
+      domainId: edge.domain?.id,
+      consumerNeed: edge.consumerNeed,
+      unresolved: !isProjectDependencyTerminal(edge.stateMachine.state),
+      updatedAt: edge.updatedAt,
+    })),
+    deliveryChannels: edges.flatMap(edge => deliveryChannelsForEdge(edge)),
+    unresolvedRequests: edges
+      .filter(edge => !isProjectDependencyTerminal(edge.stateMachine.state))
+      .map(edge => ({
+        edgeId: edge.id,
+        waitingOn: waitingOnForEdge(edge),
+        state: edge.stateMachine.state,
+        summary: edge.consumerNeed,
+      })),
+  }
 }
 
 export async function createProjectDependencyRequest(
@@ -626,6 +733,47 @@ function readProjectDependencyEdge(edgeId: string): ProjectDependencyEdge {
   edge.communicationRecords ??= []
   edge.transitionReceipts ??= []
   return edge
+}
+
+function readProjectDependencyEdges(): ProjectDependencyEdge[] {
+  const dir = path.join(projectGraphRegistryDir(), 'edges')
+  if (!fs.existsSync(dir)) return []
+  return fs.readdirSync(dir)
+    .filter(file => file.endsWith('.json'))
+    .map(file => readProjectDependencyEdge(path.basename(file, '.json')))
+}
+
+function isProjectDependencyTerminal(state: ProjectDependencyEdgeState): boolean {
+  return state === 'resolved' || state === 'closed'
+}
+
+function waitingOnForEdge(edge: ProjectDependencyEdge): 'consumer' | 'provider' {
+  switch (edge.stateMachine.state) {
+    case 'delivered':
+    case 'consumer_reviewing':
+      return 'consumer'
+    default:
+      return 'provider'
+  }
+}
+
+function deliveryChannelsForEdge(edge: ProjectDependencyEdge): ProjectGraphView['deliveryChannels'] {
+  const planned = edge.expectedDelivery
+    ? [{
+        edgeId: edge.id,
+        channel: edge.expectedDelivery.channel,
+        format: edge.expectedDelivery.format,
+        state: edge.stateMachine.state,
+      }]
+    : []
+  const delivered = edge.deliveryReceipts.map(receipt => ({
+    edgeId: edge.id,
+    channel: receipt.channel,
+    format: receipt.format,
+    coordinates: receipt.coordinates,
+    state: edge.stateMachine.state,
+  }))
+  return [...planned, ...delivered]
 }
 
 async function writeProviderRequestPacket(

@@ -250,7 +250,7 @@ agent packet integration, coordinator assignment, or remote authority support.
 
 ### Remaining Work Ledger
 
-**Remaining: 3 items. Next item: 15.**
+**Remaining: 2 items. Next item: 16.**
 
 1. [x] Replace the current pnpm-only discovery core with a provider interface
    for package/workspace discovery. After this: implement JS/npm/yarn/bun
@@ -362,10 +362,15 @@ agent packet integration, coordinator assignment, or remote authority support.
     `.guildhall-home/project-graph/exchange/coordinator-communications/<edge-id>.jsonl`,
     and each lifecycle record includes the speaking coordinator's own project
     context rather than granting any coordinator cross-project write authority.
-15. [ ] Add project-graph queries/views that include other local projects,
+15. [x] Add project-graph queries/views that include other local projects,
     local authority roots, provider-owned domains, dependency edges, delivery
     channels, and unresolved requests. After this: add delivery-channel
     abstraction.
+    Completed in `feature/0.10-structural-domain-intelligence`:
+    `queryProjectGraphView` projects the current local project, related local
+    projects, provider authority roots/domains, dependency edges, delivery
+    channels, and unresolved requests; `/api/project/project-graph` serves the
+    scoped view for the selected project.
 16. [ ] Generalize delivery channels beyond npm/dev tags to package-manager
     coordinates, local path artifacts, docs/spec artifacts, patches, releases,
     MCP artifact IDs, and future remote authority refs without overfitting to
