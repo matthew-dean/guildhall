@@ -685,18 +685,7 @@ export async function draftStructuralMap(input: {
     edges.push(...result.result.edges)
   }
 
-  if (hasNodeCopyEvidence(projectRoot, rootPackage)) {
-    nodes.push({
-      id: 'cross-cutting:node-copy-reduction',
-      kind: 'cross_cutting_domain',
-      label: 'Node-copy reduction',
-      evidence: [
-        ...evidence('script', 'verify:node-copy-frontier', rootPackage?.scripts?.['verify:node-copy-frontier'] ? 'high' : 'low'),
-        ...evidence('docs', 'docs/future/node-copy-reduction', fs.existsSync(path.join(projectRoot, 'docs', 'future', 'node-copy-reduction')) ? 'high' : 'low'),
-      ],
-      confidence: 'high',
-    })
-  }
+  nodes.push(...inferCrossCuttingConcernNodes(projectRoot, rootPackage))
 
   const ignoredGitRoots = await discoverIgnoredGitRoots(projectRoot)
   const ownerQuestions: OwnerQuestion[] = [{
@@ -1174,6 +1163,21 @@ function findFirstFile(dir: string, predicate: (file: string) => boolean): strin
   return undefined
 }
 
+function findFirstFileContaining(
+  dir: string,
+  filePredicate: (file: string) => boolean,
+  contentPattern: RegExp,
+): string | undefined {
+  return findFirstFile(dir, (file) => {
+    if (!filePredicate(file)) return false
+    return contentPattern.test(fs.readFileSync(file, 'utf8'))
+  })
+}
+
+function normalizePath(filePath: string): string {
+  return filePath.replaceAll(path.sep, '/')
+}
+
 function collectModuleArchitectureEvidence(projectRoot: string): Map<string, EvidenceRef[]> {
   const domains = new Map<string, EvidenceRef[]>()
   addChildDirectoryDomains(domains, projectRoot, 'app/services')
@@ -1242,6 +1246,112 @@ function firstDomainPath(refs: EvidenceRef[]): string | undefined {
 function hasNodeCopyEvidence(projectRoot: string, manifest: PackageJson | undefined): boolean {
   return Boolean(manifest?.scripts?.['verify:node-copy-frontier']) ||
     fs.existsSync(path.join(projectRoot, 'docs', 'future', 'node-copy-reduction'))
+}
+
+function inferCrossCuttingConcernNodes(projectRoot: string, manifest: PackageJson | undefined): StructuralMapNode[] {
+  const nodes: StructuralMapNode[] = []
+  if (hasNodeCopyEvidence(projectRoot, manifest)) {
+    nodes.push(crossCuttingNode({
+      id: 'node-copy-reduction',
+      label: 'Node-copy reduction',
+      evidenceRefs: [
+        ...evidence('script', 'verify:node-copy-frontier', manifest?.scripts?.['verify:node-copy-frontier'] ? 'high' : 'low'),
+        ...evidence('docs', 'docs/future/node-copy-reduction', fs.existsSync(path.join(projectRoot, 'docs', 'future', 'node-copy-reduction')) ? 'high' : 'low'),
+      ],
+    }))
+  }
+
+  const parserDirs = ['css-parser', 'less-parser', 'scss-parser', 'jess-parser']
+    .map(dir => `packages/${dir}`)
+    .filter(relative => fs.existsSync(path.join(projectRoot, relative)))
+  if (parserDirs.length >= 2) {
+    nodes.push(crossCuttingNode({
+      id: 'parser-parity',
+      label: 'Parser parity',
+      evidenceRefs: parserDirs.map(ref => ({ kind: 'path', ref, confidence: 'high' })),
+    }))
+  }
+
+  if (fs.existsSync(path.join(projectRoot, 'packages', 'ui')) || fs.existsSync(path.join(projectRoot, 'design-system'))) {
+    nodes.push(crossCuttingNode({
+      id: 'design-system-reuse',
+      label: 'Design-system reuse',
+      evidenceRefs: [
+        ...evidence('path', fs.existsSync(path.join(projectRoot, 'packages', 'ui')) ? 'packages/ui' : 'design-system', 'medium'),
+      ],
+    }))
+  }
+
+  const authEvidence = findFirstFile(projectRoot, file => /(?:^|\/)(auth|session)(?:\/|\.|-|_)/.test(normalizePath(file)))
+  if (authEvidence) {
+    nodes.push(crossCuttingNode({
+      id: 'auth-session-security',
+      label: 'Auth/session security',
+      evidenceRefs: evidence('path', path.relative(projectRoot, authEvidence), 'medium'),
+    }))
+  }
+
+  if (fs.existsSync(path.join(projectRoot, 'db', 'migrations')) || fs.existsSync(path.join(projectRoot, 'migrations'))) {
+    nodes.push(crossCuttingNode({
+      id: 'migrations',
+      label: 'Migrations',
+      evidenceRefs: evidence('path', fs.existsSync(path.join(projectRoot, 'db', 'migrations')) ? 'db/migrations' : 'migrations', 'high'),
+    }))
+  }
+
+  const accessibilityEvidence = findFirstFileContaining(projectRoot, file => /\.(svelte|tsx|jsx|html|vue)$/.test(file), /\b(?:aria-|role=)/)
+  if (accessibilityEvidence) {
+    nodes.push(crossCuttingNode({
+      id: 'accessibility',
+      label: 'Accessibility',
+      evidenceRefs: evidence('path', path.relative(projectRoot, accessibilityEvidence), 'medium'),
+    }))
+  }
+
+  const observabilityEvidence = findFirstFile(projectRoot, file => /(?:observability|tracing|metrics|logging)/.test(normalizePath(file)))
+  if (observabilityEvidence) {
+    nodes.push(crossCuttingNode({
+      id: 'observability',
+      label: 'Observability',
+      evidenceRefs: evidence('path', path.relative(projectRoot, observabilityEvidence), 'medium'),
+    }))
+  }
+
+  if (manifest?.scripts?.release || fs.existsSync(path.join(projectRoot, 'scripts', 'release.mjs'))) {
+    nodes.push(crossCuttingNode({
+      id: 'release-packaging',
+      label: 'Release packaging',
+      evidenceRefs: evidence('script', manifest?.scripts?.release ? 'package.json#scripts.release' : 'scripts/release.mjs', 'medium'),
+    }))
+  }
+
+  nodes.push(...readOwnerDefinedCrossCuttingDomains(projectRoot))
+  return uniqueNodes(nodes)
+}
+
+function crossCuttingNode(input: {
+  id: string
+  label: string
+  evidenceRefs: EvidenceRef[]
+}): StructuralMapNode {
+  return {
+    id: `cross-cutting:${input.id}`,
+    kind: 'cross_cutting_domain',
+    label: input.label,
+    evidence: input.evidenceRefs,
+    confidence: input.evidenceRefs.some(ref => ref.confidence === 'high') ? 'high' : 'medium',
+  }
+}
+
+function readOwnerDefinedCrossCuttingDomains(projectRoot: string): StructuralMapNode[] {
+  const filePath = path.join(projectRoot, '.guildhall', 'structural-domains.json')
+  if (!fs.existsSync(filePath)) return []
+  const data = readJsonIfExists(filePath) as { crossCuttingDomains?: Array<{ id: string; label?: string; evidenceRefs?: string[] }> } | undefined
+  return (data?.crossCuttingDomains ?? []).map(domain => crossCuttingNode({
+    id: slugify(domain.id),
+    label: domain.label ?? titleCase(domain.id),
+    evidenceRefs: (domain.evidenceRefs ?? [`owner:${domain.id}`]).map(ref => ({ kind: 'owner', ref, confidence: 'high' })),
+  }))
 }
 
 function taskMatchesPath(task: { files?: string[]; text?: string; title?: string }, relativePath?: string): boolean {

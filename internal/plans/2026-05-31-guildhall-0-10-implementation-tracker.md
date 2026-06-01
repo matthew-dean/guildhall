@@ -250,7 +250,7 @@ agent packet integration, coordinator assignment, or remote authority support.
 
 ### Remaining Work Ledger
 
-**Remaining: 13 items. Next item: 5.**
+**Remaining: 12 items. Next item: 6.**
 
 1. [x] Replace the current pnpm-only discovery core with a provider interface
    for package/workspace discovery. After this: implement JS/npm/yarn/bun
@@ -280,10 +280,14 @@ agent packet integration, coordinator assignment, or remote authority support.
    conventional services, controllers, routes, migrations, tests, jobs, and
    commands into evidence-backed domain groups without treating them as
    packages.
-5. [ ] Expand cross-cutting concern inference beyond node-copy reduction:
+5. [x] Expand cross-cutting concern inference beyond node-copy reduction:
    parser parity, design-system reuse, auth/session security, migrations,
    accessibility, observability, release packaging, and owner-defined custom
-   domains. After this: add evidence/conflict scoring.
+   domains. After this: add evidence/conflict scoring. Completed in
+   `feature/0.10-structural-domain-intelligence`: cross-cutting inference now
+   covers those common concerns, preserves node-copy reduction, and reads
+   owner-defined cross-cutting domains from
+   `.guildhall/structural-domains.json`.
 6. [ ] Add structural evidence scoring, freshness, conflicts, and owner
    questions per node/edge instead of coarse confidence labels. After this:
    add refresh/diff behavior.

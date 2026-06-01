@@ -108,11 +108,9 @@ babysit setup/import/provider/release states across multiple pages.
 - [ ] Continue structural/domain intelligence from the remaining-work ledger
   in `internal/plans/2026-05-31-guildhall-0-10-implementation-tracker.md`.
   The feature is explicitly not complete after the foundation slice.
-  Remaining count after the module-architecture inference slice: 13 items.
-  Next item: expand cross-cutting concern inference beyond node-copy reduction
-  to parser parity, design-system reuse, auth/session security, migrations,
-  accessibility, observability, release packaging, and owner-defined custom
-  domains.
+  Remaining count after the cross-cutting concern inference slice: 12 items.
+  Next item: add structural evidence scoring, freshness, conflicts, and owner
+  questions per node/edge instead of coarse confidence labels.
 - [x] Specify the 0.10 bounded-chat pivot for intake and New request flows.
   Plan: `internal/plans/2026-05-31-guildhall-0-10-bounded-chat.md`.
   The accepted direction is a two-role flow: a conversation agent handles the

@@ -203,6 +203,31 @@ describe('structural map drafting', () => {
     expect(draft.evidenceRefs).toEqual(expect.arrayContaining(['provider:module-architecture']))
   })
 
+  it('infers common cross-cutting concerns from repo evidence and owner-defined domains', async () => {
+    await writeCrossCuttingFixture(projectRoot)
+
+    const draft = await draftStructuralMap({
+      projectId: 'concerns',
+      projectRoot,
+      now: '2026-06-01T12:00:00.000Z',
+    })
+
+    expect(draft.nodes).toEqual(expect.arrayContaining([
+      expect.objectContaining({ id: 'cross-cutting:parser-parity', label: 'Parser parity' }),
+      expect.objectContaining({ id: 'cross-cutting:design-system-reuse', label: 'Design-system reuse' }),
+      expect.objectContaining({ id: 'cross-cutting:auth-session-security', label: 'Auth/session security' }),
+      expect.objectContaining({ id: 'cross-cutting:migrations', label: 'Migrations' }),
+      expect.objectContaining({ id: 'cross-cutting:accessibility', label: 'Accessibility' }),
+      expect.objectContaining({ id: 'cross-cutting:observability', label: 'Observability' }),
+      expect.objectContaining({ id: 'cross-cutting:release-packaging', label: 'Release packaging' }),
+      expect.objectContaining({ id: 'cross-cutting:editor-contract', label: 'Editor contract' }),
+    ]))
+    expect(draft.nodes.find(node => node.id === 'cross-cutting:editor-contract')?.evidence).toContainEqual(expect.objectContaining({
+      kind: 'owner',
+      ref: 'owner:looma-knit-editor-contract',
+    }))
+  })
+
   it('runs structural discovery providers so package managers can be added without changing the draft core', async () => {
     const customProvider: StructuralDiscoveryProvider = {
       id: 'fixture-provider',
@@ -712,6 +737,34 @@ async function writeModuleArchitectureFixture(root: string): Promise<void> {
   await fsp.writeFile(path.join(root, 'app', 'jobs', 'inventory_sync_job.rb'), 'class InventorySyncJob; end\n')
   await fsp.mkdir(path.join(root, 'app', 'commands', 'inventory'), { recursive: true })
   await fsp.writeFile(path.join(root, 'app', 'commands', 'inventory', 'recount_command.rb'), 'class RecountCommand; end\n')
+}
+
+async function writeCrossCuttingFixture(root: string): Promise<void> {
+  await fsp.mkdir(path.join(root, 'packages', 'css-parser'), { recursive: true })
+  await fsp.mkdir(path.join(root, 'packages', 'less-parser'), { recursive: true })
+  await fsp.mkdir(path.join(root, 'packages', 'scss-parser'), { recursive: true })
+  await fsp.mkdir(path.join(root, 'packages', 'ui', 'src'), { recursive: true })
+  await fsp.writeFile(path.join(root, 'packages', 'ui', 'src', 'Button.svelte'), '<button><slot /></button>\n')
+  await fsp.mkdir(path.join(root, 'src', 'auth'), { recursive: true })
+  await fsp.writeFile(path.join(root, 'src', 'auth', 'session.ts'), 'export const session = true\n')
+  await fsp.mkdir(path.join(root, 'db', 'migrations'), { recursive: true })
+  await fsp.writeFile(path.join(root, 'db', 'migrations', '001_create_users.sql'), 'create table users;\n')
+  await fsp.mkdir(path.join(root, 'src', 'components'), { recursive: true })
+  await fsp.writeFile(path.join(root, 'src', 'components', 'Dialog.svelte'), '<div role="dialog" aria-label="Settings"></div>\n')
+  await fsp.mkdir(path.join(root, 'src', 'observability'), { recursive: true })
+  await fsp.writeFile(path.join(root, 'src', 'observability', 'tracing.ts'), 'export const trace = true\n')
+  await fsp.mkdir(path.join(root, 'scripts'), { recursive: true })
+  await fsp.writeFile(path.join(root, 'scripts', 'release.mjs'), 'console.log("release")\n')
+  await fsp.mkdir(path.join(root, '.guildhall'), { recursive: true })
+  await fsp.writeFile(path.join(root, '.guildhall', 'structural-domains.json'), `${JSON.stringify({
+    crossCuttingDomains: [
+      {
+        id: 'editor-contract',
+        label: 'Editor contract',
+        evidenceRefs: ['owner:looma-knit-editor-contract'],
+      },
+    ],
+  }, null, 2)}\n`)
 }
 
 async function acceptFreshMap(projectRoot: string, projectId: string) {
