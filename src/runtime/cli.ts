@@ -64,6 +64,20 @@ import {
   runTbliteBenchmark,
   type BenchmarkAutomationPolicy,
 } from '@guildhall/benchmarks'
+import {
+  acceptProjectDependencyDelivery,
+  beginProjectDependencyConsumerReview,
+  commitProjectDependencyDeliveryPlan,
+  deliverProjectDependency,
+  importProjectDependencyRequestForProvider,
+  projectGraphRegistryDir,
+  requestProjectDependencyRevision,
+  reviseProjectDependencyPlan,
+  writeLocalProjectGraphDraft,
+  type ConsumerReturnPacket,
+  type DeliveryReceipt,
+  type ProjectDependencyEdge,
+} from './project-graph.js'
 
 function openBrowser(url: string): void {
   const cmd = platform() === 'darwin' ? `open "${url}"`
@@ -223,7 +237,7 @@ export function parseArgs(rawArgs: string[]): {
   getFlag: (flag: string) => string | undefined
   positionals: string[]
 } {
-  const valueFlags = new Set(['--port', '--service-state', '--domain', '--max-ticks', '--cases', '--task', '--lane', '--finding', '--action', '--missed-by', '--migration', '--fixture-set', '--subset', '--automation', '--output-dir', '--output', '--project', '--model', '--provider', '--hermes-root', '--from-file', '--proof', '--title'])
+  const valueFlags = new Set(['--port', '--service-state', '--domain', '--max-ticks', '--cases', '--task', '--lane', '--finding', '--action', '--missed-by', '--migration', '--fixture-set', '--subset', '--automation', '--output-dir', '--output', '--project', '--model', '--provider', '--hermes-root', '--from-file', '--proof', '--title', '--edge', '--receipt', '--evidence', '--format', '--channel'])
   function getFlag(flag: string): string | undefined {
     const idx = rawArgs.indexOf(flag)
     return idx !== -1 ? rawArgs[idx + 1] : undefined
@@ -328,6 +342,13 @@ export function resolveServiceLifecycleIntent(
 //                                      — run local artifact-generation fixture benchmark
 //   guildhall benchmarks run swe-local --subset smoke
 //                                      — run local SWE-bench-style coding fixture benchmark
+//   guildhall graph request publish --edge <edge-id>
+//   guildhall graph request import --edge <edge-id> --project <provider-path>
+//   guildhall graph request accept --edge <edge-id> --project <provider-path> [--domain <domain-id>]
+//   guildhall graph plan --edge <edge-id> --project <provider-path> --from-file <plan.json>
+//   guildhall graph deliver --edge <edge-id> --project <provider-path> --receipt <receipt.json>
+//   guildhall graph delivery accept --edge <edge-id> --project <consumer-path> --proof <proof>
+//   guildhall graph delivery return --edge <edge-id> --project <consumer-path> --evidence <return.json>
 //   guildhall mcp serve [path]          — serve Guildhall project context over MCP stdio
 //   guildhall bridge install [--target codex|claude|all] [--yes|--no-configure-mcp] [id|path]
 //                                      — install agent instructions for Guildhall MCP
@@ -351,6 +372,7 @@ export const SHIPPED_CLI_COMMANDS = [
   'review-calibration',
   'model-bakeoff',
   'benchmarks',
+  'graph',
   'mcp',
   'bridge',
 ] as const
@@ -367,7 +389,7 @@ function getFlag(flag: string): string | undefined {
 // another flag — otherwise boolean flags like `--no-browser` would eat the
 // following positional by mistake.
 function positionals(): string[] {
-  const valueFlags = new Set(['--port', '--domain', '--max-ticks', '--service-state', '--target', '--cases', '--task', '--lane', '--finding', '--action', '--missed-by', '--migration', '--fixture-set', '--subset', '--automation', '--output-dir', '--output', '--project', '--model', '--provider', '--hermes-root', '--from-file', '--proof', '--title'])
+  const valueFlags = new Set(['--port', '--domain', '--max-ticks', '--service-state', '--target', '--cases', '--task', '--lane', '--finding', '--action', '--missed-by', '--migration', '--fixture-set', '--subset', '--automation', '--output-dir', '--output', '--project', '--model', '--provider', '--hermes-root', '--from-file', '--proof', '--title', '--edge', '--receipt', '--evidence', '--format', '--channel'])
   const result: string[] = []
   for (let i = 0; i < args.length; i++) {
     const a = args[i]
@@ -483,6 +505,22 @@ Usage:
   guildhall benchmarks compare hermes [id|path]
                                   Check whether a real Hermes comparison can run
     --hermes-root <path>          Optional Hermes checkout to inspect/run
+  guildhall graph draft
+                                  Refresh the local project graph registry from registered projects
+  guildhall graph request publish --edge <edge-id>
+                                  Publish an existing dependency edge request through the neutral exchange
+  guildhall graph request import --edge <edge-id> --project <provider-path>
+                                  Import a provider request from provider project authority
+  guildhall graph request accept --edge <edge-id> --project <provider-path>
+                                  Accept a provider request for shaping
+  guildhall graph plan --edge <edge-id> --project <provider-path> --from-file <plan.json>
+                                  Commit a provider-owned delivery plan
+  guildhall graph deliver --edge <edge-id> --project <provider-path> --receipt <receipt.json>
+                                  Record a provider delivery receipt
+  guildhall graph delivery accept --edge <edge-id> --project <consumer-path> --proof <proof>
+                                  Accept a delivery from consumer project authority
+  guildhall graph delivery return --edge <edge-id> --project <consumer-path> --evidence <return.json>
+                                  Return a delivery with structured consumer verification evidence
   guildhall mcp serve [project-path]
                                   Serve Guildhall project context over MCP stdio
   guildhall bridge install [--target codex|claude|all] [--yes|--no-configure-mcp] [id|path]
@@ -516,6 +554,9 @@ Examples:
   guildhall benchmarks run artifact-local --subset smoke --automation fully-automated
   guildhall benchmarks run swe-local --subset smoke --automation fully-automated
   guildhall benchmarks compare hermes --hermes-root /tmp/hermes-agent
+  guildhall graph draft
+  guildhall graph request import --edge edge-knit-looma --project /Users/me/git/looma
+  guildhall graph deliver --edge edge-knit-looma --project /Users/me/git/looma --receipt delivery.json
   guildhall mcp serve .
   guildhall bridge install --target all --yes .
 `.trim()
@@ -1624,6 +1665,146 @@ async function cmdMcp() {
   await serveGuildhallMcpStdio(projectPath)
 }
 
+async function cmdGraph() {
+  const pos = positionals()
+  const area = pos[0] ?? 'help'
+  const action = pos[1] ?? ''
+  const edgeId = getFlag('--edge')
+  const projectPath = getFlag('--project') ? resolve(expandPath(getFlag('--project')!)) : process.cwd()
+  const now = new Date().toISOString()
+
+  if (area === 'draft') {
+    const graph = writeLocalProjectGraphDraft({ now })
+    console.log(`[guildhall] Wrote local project graph with ${graph.nodes.length} node(s) to ${projectGraphRegistryDir()}`)
+    return
+  }
+
+  if (area === 'request') {
+    if (!edgeId) {
+      console.error('[guildhall] Usage: guildhall graph request <publish|import|accept> --edge <edge-id> --project <path>')
+      process.exit(1)
+    }
+    if (action === 'publish') {
+      console.log(`[guildhall] Provider request is available in the neutral graph exchange for edge ${edgeId}.`)
+      return
+    }
+    if (action === 'import' || action === 'accept') {
+      const edge = await importProjectDependencyRequestForProvider({
+        edgeId,
+        providerProjectPath: projectPath,
+        importedBy: 'guildhall-cli',
+        ...(getFlag('--domain') ? { domain: { id: getFlag('--domain')!, label: getFlag('--domain')! } } : {}),
+        now,
+      })
+      printGraphEdgeResult('Imported provider request', edge)
+      return
+    }
+  }
+
+  if (area === 'plan') {
+    if (!edgeId || !getFlag('--from-file')) {
+      console.error('[guildhall] Usage: guildhall graph plan --edge <edge-id> --project <provider-path> --from-file <plan.json>')
+      process.exit(1)
+    }
+    const deliveryExpectation = readJsonFile<NonNullable<ProjectDependencyEdge['expectedDelivery']>>(getFlag('--from-file')!)
+    const edge = await commitProjectDependencyDeliveryPlan({
+      edgeId,
+      providerProjectPath: projectPath,
+      plannedBy: 'guildhall-cli',
+      deliveryExpectation,
+      now,
+    })
+    printGraphEdgeResult('Committed delivery plan', edge)
+    return
+  }
+
+  if (area === 'deliver') {
+    if (!edgeId || !getFlag('--receipt')) {
+      console.error('[guildhall] Usage: guildhall graph deliver --edge <edge-id> --project <provider-path> --receipt <receipt.json>')
+      process.exit(1)
+    }
+    const edge = await deliverProjectDependency({
+      edgeId,
+      providerProjectPath: projectPath,
+      deliveredBy: 'guildhall-cli',
+      deliveryReceipt: readJsonFile<DeliveryReceipt>(getFlag('--receipt')!),
+      now,
+    })
+    printGraphEdgeResult('Recorded provider delivery', edge)
+    return
+  }
+
+  if (area === 'delivery') {
+    if (!edgeId) {
+      console.error('[guildhall] Usage: guildhall graph delivery <accept|return|review|revise> --edge <edge-id> --project <path>')
+      process.exit(1)
+    }
+    if (action === 'review') {
+      const edge = await beginProjectDependencyConsumerReview({
+        edgeId,
+        consumerProjectPath: projectPath,
+        reviewedBy: 'guildhall-cli',
+        verificationContext: getFlag('--proof') ?? 'consumer verification',
+        now,
+      })
+      printGraphEdgeResult('Began consumer review', edge)
+      return
+    }
+    if (action === 'accept') {
+      const proof = getFlag('--proof') ?? 'consumer accepted delivery'
+      const edge = await acceptProjectDependencyDelivery({
+        edgeId,
+        consumerProjectPath: projectPath,
+        acceptedBy: 'guildhall-cli',
+        consumerProof: [proof],
+        now,
+      })
+      printGraphEdgeResult('Accepted delivery', edge)
+      return
+    }
+    if (action === 'return') {
+      if (!getFlag('--evidence')) {
+        console.error('[guildhall] Usage: guildhall graph delivery return --edge <edge-id> --project <consumer-path> --evidence <return.json>')
+        process.exit(1)
+      }
+      const edge = await requestProjectDependencyRevision({
+        edgeId,
+        consumerProjectPath: projectPath,
+        returnedBy: 'guildhall-cli',
+        returnPacket: readJsonFile<ConsumerReturnPacket>(getFlag('--evidence')!),
+        now,
+      })
+      printGraphEdgeResult('Returned delivery to provider', edge)
+      return
+    }
+    if (action === 'revise') {
+      const deliveryExpectation = getFlag('--from-file')
+        ? readJsonFile<NonNullable<ProjectDependencyEdge['expectedDelivery']>>(getFlag('--from-file')!)
+        : undefined
+      const edge = await reviseProjectDependencyPlan({
+        edgeId,
+        providerProjectPath: projectPath,
+        revisedBy: 'guildhall-cli',
+        ...(deliveryExpectation ? { deliveryExpectation } : {}),
+        now,
+      })
+      printGraphEdgeResult('Revised provider plan', edge)
+      return
+    }
+  }
+
+  console.error('[guildhall] Usage: guildhall graph <draft|request|plan|deliver|delivery> ...')
+  process.exit(1)
+}
+
+function readJsonFile<T>(filePath: string): T {
+  return JSON.parse(readFileSync(resolve(expandPath(filePath)), 'utf8')) as T
+}
+
+function printGraphEdgeResult(prefix: string, edge: ProjectDependencyEdge): void {
+  console.log(`[guildhall] ${prefix}: ${edge.id} is ${edge.stateMachine.state}`)
+}
+
 async function cmdBridge() {
   const pos = positionals()
   const subcommand = pos[0] ?? 'install'
@@ -1735,6 +1916,7 @@ async function main() {
     case 'review-calibration': return cmdReviewCalibration()
     case 'model-bakeoff': return cmdModelBakeoff()
     case 'benchmarks': return cmdBenchmarks()
+    case 'graph': return cmdGraph()
     case 'mcp': return cmdMcp()
     case 'bridge': return cmdBridge()
     default:

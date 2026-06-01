@@ -174,27 +174,37 @@ provider/consumer dependency edges.
 
 **Primary source:** `internal/specs/2026-06-01-guildhall-0-10-state-machines-project-graph.md`
 
-- [ ] Add a small generic state-machine runtime with legal transitions,
+- [x] Add a small generic state-machine runtime with legal transitions,
   guards, required evidence, terminal states, and append-only transition
   receipts. The pure transition result must be only `applied` or `rejected`;
   idempotency-key replay belongs in command handling, not in the state-machine
-  result or transition table.
-- [ ] Migrate one small existing lifecycle, preferably capability requests, so
+  result or transition table. First implementation landed in
+  `src/runtime/state-machine.ts` with focused tests.
+- [x] Migrate one small existing lifecycle, preferably capability requests, so
   the primitive is proven outside the new project-graph feature without
-  rewriting the full task lifecycle.
-- [ ] Draft and persist a local project graph that can include other local
+  rewriting the full task lifecycle. Capability request approve, deny, block,
+  and revoke now route through a machine and append transition receipts.
+- [x] Draft and persist a local project graph that can include other local
   Guildhall projects, domains, packages, executable units, external authority
-  references, and delivery channels.
-- [ ] Add a project dependency edge state machine where provider completion is
+  references, and delivery channels. Initial user-level registry and local
+  graph snapshot are persisted under `~/.guildhall/project-graph/`.
+- [x] Add a project dependency edge state machine where provider completion is
   not enough; the edge resolves only after consumer verification, an explicit
-  alternate outcome, or closure/deferment.
-- [ ] Add coordinator negotiation packets so consumer and provider coordinators
+  alternate outcome, or closure/deferment. Edge helpers now cover provider
+  import, shaping, delivery, consumer review, consumer return, revised plan,
+  redelivery, and final acceptance.
+- [x] Add coordinator negotiation packets so consumer and provider coordinators
   talk through the neutral graph exchange while each reasons from its own
   project context. Do not build a blended cross-project prompt or let one
-  coordinator impersonate another project's authority.
-- [ ] Prove request, provider shaping, delivery receipt, consumer verification,
+  coordinator impersonate another project's authority. The implementation
+  writes provider requests and consumer returns to the neutral exchange, and
+  writes project-local mirrors only from the matching provider/consumer
+  authority helper.
+- [x] Prove request, provider shaping, delivery receipt, consumer verification,
   consumer return, redelivery, and final acceptance with local fixtures such as
-  Looma/Knit while keeping the model provider-neutral.
+  Looma/Knit while keeping the model provider-neutral. Runtime tests use
+  local Knit/Looma fixtures while asserting provider/consumer authority rather
+  than product-specific behavior.
 
 ## Milestone 3: Structural And Domain Intelligence
 

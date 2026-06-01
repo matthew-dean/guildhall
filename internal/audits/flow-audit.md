@@ -77,6 +77,22 @@ babysit setup/import/provider/release states across multiple pages.
   implementation should also migrate one small existing lifecycle, preferably
   capability requests, to prove the primitive outside the project-graph feature
   while leaving broad task-status cleanup for 0.11.0.
+- [x] Start the 0.10 state-machine/project-graph implementation in
+  `feature/0.10-state-machine-project-graph`. Added the generic
+  state-machine primitive, migrated capability request decisions through a
+  capability request machine with transition receipts, and added an initial
+  local project graph registry plus project dependency edge machine. The first
+  provider request path writes the neutral exchange and consumer outgoing
+  mirror only; it intentionally does not write provider-local mirrors or tasks.
+  Focused runtime tests and `pnpm build` pass in the worktree.
+- [x] Complete the first 0.10 state-machine/project-graph feature path in
+  `feature/0.10-state-machine-project-graph`. The graph runtime now supports
+  provider-authorized request import, delivery planning, delivery receipts,
+  consumer review, structured consumer returns, revised provider plans,
+  redelivery, and consumer acceptance. CLI fallback commands expose the same
+  authority-preserving flow through `guildhall graph ...`. Focused tests cover
+  the full consumer/provider loop and prove consumer code cannot create
+  provider-local mirrors. `pnpm build` passes.
 - [x] Specify the 0.10 bounded-chat pivot for intake and New request flows.
   Plan: `internal/plans/2026-05-31-guildhall-0-10-bounded-chat.md`.
   The accepted direction is a two-role flow: a conversation agent handles the

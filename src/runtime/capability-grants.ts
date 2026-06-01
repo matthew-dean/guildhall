@@ -8,6 +8,7 @@ import {
   listCapabilityRequests,
   saveCapabilityRequest,
 } from './capability-requests.js'
+import { applyCapabilityRequestTransition, type CapabilityRequestEvent } from './capability-request-machine.js'
 
 export interface CapabilityDecisionInput {
   memoryDir: string
@@ -28,7 +29,7 @@ export async function approveMountDirectoryRequest(input: CapabilityDecisionInpu
   const access = input.access ?? request.mount.access
   const duration = input.duration ?? request.duration
   const containerPath = `/mnt/guildhall-grants/${grantId}`
-  request.status = 'approved'
+  applyLifecycleDecision(request, 'approve', input.approvedBy, now)
   request.decidedAt = now
   request.decidedBy = input.approvedBy
   request.duration = duration
@@ -55,7 +56,7 @@ export async function denyCapabilityRequest(input: CapabilityDecisionInput & {
 }): Promise<CapabilityRequest> {
   const request = findRequest(input.memoryDir, input.requestId)
   const now = new Date().toISOString()
-  request.status = 'denied'
+  applyLifecycleDecision(request, 'deny', input.deniedBy, now)
   request.decidedAt = now
   request.decidedBy = input.deniedBy
   request.fallback = input.fallback ?? request.fallback
@@ -74,7 +75,7 @@ export async function markCapabilityRequestBlocked(input: CapabilityDecisionInpu
 }): Promise<CapabilityRequest> {
   const request = findRequest(input.memoryDir, input.requestId)
   const now = new Date().toISOString()
-  request.status = 'blocked'
+  applyLifecycleDecision(request, 'block', input.blockedBy, now)
   request.decidedAt = now
   request.decidedBy = input.blockedBy
   request.blockedReason = input.reason
@@ -92,9 +93,9 @@ export async function revokeCapabilityGrant(input: CapabilityDecisionInput & {
   reason?: string
 }): Promise<CapabilityRequest> {
   const request = findRequest(input.memoryDir, input.requestId)
-  if (!request.grant) throw new Error(`Capability request ${input.requestId} has no grant to revoke`)
   const now = new Date().toISOString()
-  request.status = 'revoked'
+  applyLifecycleDecision(request, 'revoke', input.revokedBy, now)
+  if (!request.grant) throw new Error(`Capability request ${input.requestId} has no grant to revoke`)
   request.grant.status = 'revoked'
   request.grant.revokedAt = now
   request.grant.revokedBy = input.revokedBy
@@ -126,6 +127,23 @@ function findRequest(memoryDir: string, requestId: string): CapabilityRequest {
   const request = listCapabilityRequests(memoryDir).find(candidate => candidate.id === requestId)
   if (!request) throw new Error(`Capability request ${requestId} not found`)
   return request
+}
+
+function applyLifecycleDecision(
+  request: CapabilityRequest,
+  event: CapabilityRequestEvent,
+  actor: string,
+  now: string,
+): void {
+  const receipt = applyCapabilityRequestTransition({
+    request,
+    event,
+    actor,
+    evidenceRefs: [`capability-request:${request.id}`, `task:${request.taskId}`],
+    now,
+  })
+  request.status = receipt.to
+  request.transitionReceipts.push(receipt)
 }
 
 async function recordCapabilityEvidence(
