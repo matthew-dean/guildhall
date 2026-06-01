@@ -2655,7 +2655,7 @@ git commit -m "refactor: consolidate web UI primitives"
 - Modify: `src/runtime/import-drafts.ts`
 - Modify: `src/runtime/merge-dispatcher.ts`
 
-- [ ] **Step 1: Write transition tests**
+- [x] **Step 1: Write transition tests**
 
 Create `src/runtime/__tests__/task-transition.test.ts`:
 
@@ -2697,7 +2697,13 @@ describe('task transitions', () => {
 })
 ```
 
-- [ ] **Step 2: Implement minimal transition boundary**
+  - Evidence: Added `src/runtime/__tests__/task-transition.test.ts` covering
+    legal ready-to-worker transitions, split-container worker rejection,
+    explicit runnable-container allowance, illegal worker starts, required
+    completion evidence, import-draft intake events, and the absence of
+    `hold`/`resume` lifecycle events.
+
+- [x] **Step 2: Implement minimal transition boundary**
 
 Create `src/runtime/task-transition.ts`:
 
@@ -2785,6 +2791,13 @@ Rules:
   deletes hold metadata or introduces a real `held` state with a conversion
   script.
 
+  - Evidence: Added `src/runtime/task-transition.ts` with `taskLifecycleMachine`
+    backed by `defineStateMachine`/`transition`, a pure `applyTaskTransition`
+    result, a throwing mutation helper for call sites, explicit lifecycle
+    table rows, `start_worker` readiness/hierarchy guards, required completion
+    evidence, terminal `done`/`blocked`/`shelved` states, and explicit
+    import-draft intake events.
+
 - [ ] **Step 3: Replace direct writes in hot paths**
 
 Use `applyTaskTransition` in:
@@ -2797,13 +2810,32 @@ Use `applyTaskTransition` in:
 
 Do not attempt to migrate every status write in one commit. After each replaced hot path, add or update a focused test.
 
-- [ ] **Step 4: Run focused tests**
+  - Partial evidence: Routed deterministic ready-claim, worker handoff recovery,
+    lean command review, acceptance command gates, guild gates, handoff step
+    advance, reviewer fan-out approve/revise/adjudication, spec approval,
+    required split materialization, import-draft normalization/promotion, and
+    superseded fixup shelving through the task transition boundary.
+  - Remaining: generic `update-task` status writes, post-completion landing
+    reconciliation, dispatch-merge `pending_pr`/`done`/`blocked` assignments,
+    and several legacy orchestrator recovery writes still need follow-up
+    migration before this step should be checked off.
+
+- [x] **Step 4: Run focused tests**
 
 Run:
 
 ```bash
 pnpm vitest run src/runtime/__tests__/task-transition.test.ts src/runtime/__tests__/orchestrator.test.ts src/runtime/__tests__/intake.test.ts src/runtime/__tests__/merge-dispatcher.test.ts src/tools/__tests__/task-queue.test.ts --reporter=dot
 ```
+
+  - Evidence: `pnpm vitest run src/runtime/__tests__/task-transition.test.ts --reporter=dot`
+    passed with 7 tests.
+  - Evidence: `pnpm vitest run src/runtime/__tests__/task-transition.test.ts src/runtime/__tests__/orchestrator.test.ts src/runtime/__tests__/intake.test.ts src/runtime/__tests__/merge-dispatcher.test.ts src/tools/__tests__/task-queue.test.ts --reporter=dot`
+    passed with 384 tests.
+  - Typecheck note: `pnpm typecheck` currently exits 2 on concurrent Inbox
+    type errors in `src/runtime/inbox.ts`, `src/runtime/__tests__/inbox.test.ts`,
+    `src/runtime/attention.ts`, and `src/runtime/serve.ts`; those files are
+    outside Worker B scope and were already dirty.
 
 Commit:
 

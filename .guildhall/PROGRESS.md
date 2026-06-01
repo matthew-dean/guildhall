@@ -259,3 +259,8 @@ source: codex:bounded-chat-project-check-in-adapter
 Live installed-app audit for Looma + Knit (`projectId=looma-knit`) verified `/api/stale-server` as `stale:false`, opened `/projects/looma-knit/settings/reintake`, found no existing draft, refreshed re-intake via the project API after the section page exposed only a 404 state, and got draft `reintake-20260531T15381` with 14 sources scanned but 0 groups/0 reframes/0 creates/0 archives. The top recovery item `task-import-gh97p0` was reframed through the UI, then the remaining 36 stale imported blockers were reframed through the same `/api/project/task/:id/reframe-task` action endpoint. API readiness moved to `canStart:true`; a one-task start returned HTTP 200 and ran `task-import-1y7kmp6`, then stopped after one tick with `agent-error` because the spec agent timed out after 120000ms of inactivity and left all 39 tasks in `exploring`. Flow finding: re-intake cleanup cleared the owner blocker, but the Re-intake section lacks an obvious start/refresh affordance when no draft exists, and Looma + Knit is now runnable but not yet trustworthy for forward progress because the spec-agent durable-progress timeout remains.
 
 source: Codex live Looma + Knit re-intake audit 2026-05-31
+## 2026-06-01T23:12:15.694Z MCP evidence for task-9
+
+Implemented Task 9 minimal task transition boundary in commit ceacfd4d. Added src/runtime/task-transition.ts backed by state-machine.ts, focused task-transition tests, routed deterministic hot paths through the boundary, updated Task 9 plan evidence, and verified with focused vitest suite: 384 tests passed. pnpm typecheck is currently blocked by concurrent Inbox/attention/serve type errors outside Worker B scope.
+
+source: codex-worker-b

@@ -78,6 +78,7 @@ import {
   type ProjectLevers,
 } from '@guildhall/levers'
 import { buildContext, resolveLikelyTaskFiles } from './context-builder.js'
+import { applyTaskTransition, transitionTaskStatus } from './task-transition.js'
 import { recordTaskReflection } from './learning.js'
 import {
   modelForAgentName,
@@ -3901,7 +3902,13 @@ export class Orchestrator {
           (hasDirtyLikelyTargetProgress || hasDirtyWorktreeAfter || hasCheckpointScopedVerifiedProgress)
         if (canAutoPromoteReviewFromCheckpointHandoff || canAutoPromoteReviewFromFreshHandoff) {
           ensureReviewerOwnership(taskAfter)
-          taskAfter.status = 'review'
+          transitionTaskStatus({
+            task: taskAfter,
+            event: 'request_review',
+            actor: 'worker-handoff-recovery',
+            evidenceRefs: ['task:review-proof-packet'],
+            now: this.now(),
+          })
           taskAfter.updatedAt = this.now()
           queueAfter.lastUpdated = taskAfter.updatedAt
           await this.writeQueue(queueAfter)
@@ -4108,7 +4115,13 @@ export class Orchestrator {
           newest.resolution =
             'Superseded because the worker correctly identified a stale review checkpoint after a durable review handoff. Guildhall preserved the review lane instead of blocking the task.'
           newest.resolvedBy = 'orchestrator'
-          taskAfter.status = 'review'
+          transitionTaskStatus({
+            task: taskAfter,
+            event: 'request_review',
+            actor: 'stale-review-checkpoint-recovery',
+            evidenceRefs: ['task:review-proof-packet'],
+            now,
+          })
           ensureReviewerOwnership(taskAfter)
           taskAfter.blockReason = undefined
           taskAfter.updatedAt = now
@@ -5258,7 +5271,47 @@ export class Orchestrator {
         })
       }
 
-      target.status = 'in_progress'
+      const transitionResult = applyTaskTransition({
+        task: target,
+        event: 'start_worker',
+        actor: 'task-claimer',
+        evidenceRefs: ['task:ready-claim'],
+        now: this.now(),
+      })
+      if (transitionResult.kind === 'rejected') {
+        target.notes.push({
+          agentId: 'task-claimer',
+          role: 'orchestrator',
+          content:
+            `Ready claim rejected by task lifecycle boundary: ${transitionResult.reason}. ` +
+            'Leave the task out of worker execution until its hierarchy/readiness state is corrected.',
+          timestamp: this.now(),
+        })
+        target.updatedAt = this.now()
+        queue.lastUpdated = this.now()
+        await this.writeQueue(queue)
+
+        await this.logTickProgress({
+          task: target,
+          agent: 'task-claimer',
+          beforeStatus,
+          afterStatus: target.status,
+          transitioned: false,
+          note: `task transition rejected: ${transitionResult.reason}`,
+        })
+
+        return {
+          kind: 'processed',
+          taskId: target.id,
+          agent: 'task-claimer',
+          beforeStatus,
+          afterStatus: target.status,
+          transitioned: false,
+          revisionCount: target.revisionCount,
+        }
+      }
+
+      target.status = transitionResult.nextState
       target.assignedTo = 'worker-agent'
       target.notes.push({
         agentId: 'task-claimer',
@@ -5696,7 +5749,13 @@ export class Orchestrator {
           revisionCount: task.revisionCount,
         } as TickOutcome
       }
-      current.status = 'gate_check'
+      transitionTaskStatus({
+        task: current,
+        event: 'start_gate_check',
+        actor: 'lean-command-review',
+        evidenceRefs: ['task:lean-command-review'],
+        now: this.now(),
+      })
       current.assignedTo = 'gate-checker-agent'
       current.updatedAt = this.now()
       queue.lastUpdated = current.updatedAt
@@ -5817,7 +5876,13 @@ export class Orchestrator {
 
       if (!summary.allPassed && !scopedFailuresExempted) {
         const failed = results.filter((result) => !result.passed)
-        current.status = 'in_progress'
+        transitionTaskStatus({
+          task: current,
+          event: 'revise',
+          actor: 'acceptance-command-gates',
+          evidenceRefs: failed.map((result) => `gate:${result.gateId}`),
+          now,
+        })
         ensureWorkerOwnership(current)
         current.revisionCount += 1
         current.notes.push({
@@ -5851,7 +5916,14 @@ export class Orchestrator {
       }
 
       if (current.acceptanceCriteria.length > 0 && current.acceptanceCriteria.every((criterion) => criterion.met)) {
-        current.status = 'done'
+        transitionTaskStatus({
+          task: current,
+          event: 'complete',
+          actor: 'acceptance-command-gates',
+          evidenceRefs: results.map((result) => `gate:${result.gateId}`),
+          now,
+          requiredEvidencePresent: results.length > 0,
+        })
         current.assignedTo = undefined
         current.completedAt = now
         const autoCommit = await this.maybeAutoCommitCompletedTaskWork(current)
@@ -6014,7 +6086,13 @@ export class Orchestrator {
         content: feedback,
         timestamp: this.now(),
       })
-      t.status = 'in_progress'
+      transitionTaskStatus({
+        task: t,
+        event: 'revise',
+        actor: 'guild-gate-runner',
+        evidenceRefs: failed.map((result) => `gate:${result.gateId}`),
+        now: this.now(),
+      })
       ensureWorkerOwnership(t)
       t.revisionCount += 1
       t.updatedAt = this.now()
@@ -6096,7 +6174,13 @@ export class Orchestrator {
           : s,
       )
       t.handoffStep = idx + 1
-      t.status = 'in_progress'
+      transitionTaskStatus({
+        task: t,
+        event: 'revise',
+        actor: 'handoff-orchestrator',
+        evidenceRefs: ['task:handoff-step'],
+        now,
+      })
       ensureWorkerOwnership(t)
       t.updatedAt = now
       queue.lastUpdated = now
@@ -6322,7 +6406,13 @@ export class Orchestrator {
           }
           t.reviewVerdicts.push(adjudicatedVerdict)
         }
-        t.status = 'gate_check'
+        transitionTaskStatus({
+          task: t,
+          event: 'start_gate_check',
+          actor: 'reviewer-fanout',
+          evidenceRefs: verdicts.map((verdict) => `reviewer-fanout:${verdict.guildSlug}`),
+          now,
+        })
         t.updatedAt = now
         queue.lastUpdated = now
         await this.writeQueue(queue)
@@ -6351,7 +6441,13 @@ export class Orchestrator {
         content: aggregate.combinedFeedback,
         timestamp: now,
       })
-      t.status = 'in_progress'
+      transitionTaskStatus({
+        task: t,
+        event: 'revise',
+        actor: 'reviewer-fanout',
+        evidenceRefs: aggregate.dissenting.map((verdict) => `reviewer-fanout:${verdict.guildSlug}`),
+        now,
+      })
       ensureWorkerOwnership(t)
       t.revisionCount += 1
       ensureRetryWindow(t)
@@ -6562,7 +6658,13 @@ export class Orchestrator {
       content: scopedFeedback,
       timestamp: input.now,
     })
-    input.task.status = 'in_progress'
+    transitionTaskStatus({
+      task: input.task,
+      event: 'revise',
+      actor: coordinatorId,
+      evidenceRefs: dissenterSlugs.map((slug) => `reviewer-fanout:${slug}`),
+      now: input.now,
+    })
     ensureWorkerOwnership(input.task)
     input.task.revisionCount += 1
     input.task.updatedAt = input.now

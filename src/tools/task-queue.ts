@@ -15,6 +15,7 @@ import {
   renderStructuredSpecMarkdown,
 } from '@guildhall/core'
 import { atomicWriteText } from '@guildhall/sessions'
+import { applyTaskTransition } from '../runtime/task-transition.js'
 
 const TASKS_PATH_SCHEMA = z.string().describe('Absolute path to the TASKS.json file')
 
@@ -353,7 +354,16 @@ export function materializeRequiredSplitChildren(
     assessedBy: parent.taskReadiness?.assessedBy ?? 'task-sizing',
   }
   if (!['blocked', 'review', 'gate_check', 'done', 'shelved'].includes(parent.status)) {
-    parent.status = 'ready'
+    if (parent.status !== 'ready') {
+      const transitionResult = applyTaskTransition({
+        task: parent,
+        event: 'mark_ready',
+        actor: 'task-sizing',
+        evidenceRefs: ['task:split-children-materialized'],
+        now: timestamp,
+      })
+      if (transitionResult.kind === 'applied') parent.status = transitionResult.nextState
+    }
   }
   delete parent.assignedTo
 

@@ -20,6 +20,7 @@ import {
   validateSpecCompletionBoundary,
 } from './spec-quality.js'
 import { applyTaskShaping } from './task-decomposition.js'
+import { transitionTaskStatus } from './task-transition.js'
 
 // ---------------------------------------------------------------------------
 // FR-12: exploratory task intake.
@@ -326,7 +327,13 @@ export async function approveSpec(input: ApproveSpecInput): Promise<ApproveSpecR
         ],
       }
     }
-    task.status = 'ready'
+    transitionTaskStatus({
+      task,
+      event: 'mark_ready',
+      actor: 'human',
+      evidenceRefs: ['task:approve-spec'],
+      now,
+    })
   }
   task.updatedAt = now
   queue.lastUpdated = now

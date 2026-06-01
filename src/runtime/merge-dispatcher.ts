@@ -17,6 +17,7 @@ import type { Task, TaskQueue, TaskStatus } from '@guildhall/core'
 import type { ProjectLevers } from '@guildhall/levers'
 import type { GitDriver } from './git-driver.js'
 import { attemptRemoteSync } from './local-only-mode.js'
+import { applyTaskTransition } from './task-transition.js'
 
 export type LandingStrategy = ProjectLevers['landing_strategy']['position']
 
@@ -285,7 +286,15 @@ export function shelveSupersededFixupTasks(
   for (const task of queue.tasks) {
     if (!task.id.startsWith(`${parentTaskId}-fixup-`)) continue
     if (task.status === 'done' || task.status === 'shelved') continue
-    task.status = 'shelved'
+    const transitionResult = applyTaskTransition({
+      task,
+      event: 'shelve',
+      actor: 'merge-dispatcher',
+      evidenceRefs: [`task:${parentTaskId}:landed`],
+      now,
+    })
+    if (transitionResult.kind !== 'applied') continue
+    task.status = transitionResult.nextState
     task.assignedTo = null
     task.blockReason = undefined
     task.shelveReason = {
