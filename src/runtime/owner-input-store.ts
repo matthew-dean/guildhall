@@ -29,6 +29,7 @@ const CreateOwnerInputRequestInput = z.object({
   prompt: z.string(),
   choices: z.array(z.string()).optional(),
   objective: OwnerInputObjective,
+  sessionSource: z.string().optional(),
 })
 
 export type CreateOwnerInputRequestInput = z.input<typeof CreateOwnerInputRequestInput>
@@ -62,7 +63,7 @@ export async function createOwnerInputRequest(
   const session = await createBoundedChatSession({
     memoryDir,
     projectId: input.projectId,
-    source: `owner-input:${sourceKey}`,
+    source: input.sessionSource ?? `owner-input:${sourceKey}`,
     now: input.now,
     objective: input.objective,
     initialSubObjective: {

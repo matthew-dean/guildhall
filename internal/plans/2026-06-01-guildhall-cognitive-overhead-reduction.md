@@ -1023,7 +1023,8 @@ pnpm vitest run src/runtime/__tests__/owner-input.test.ts src/runtime/__tests__/
 
 Expected: FAIL because `owner-input-store.ts` and `bounded-chat-machine.ts` do not exist.
 
-- [ ] **Step 2: Write task question conversion tests**
+- [x] **Step 2: Write task question conversion tests**
+  - Evidence: Added `src/runtime/__tests__/task-question-migration.test.ts` covering unanswered question conversion, linked owner-input/bounded-chat sessions, answered-question note preservation, and idempotency.
 
 Create `src/runtime/__tests__/task-question-migration.test.ts`:
 
@@ -1277,7 +1278,8 @@ Create `src/runtime/owner-input-store.ts`:
 
 Do not let source-specific callers choose storage paths or session ids.
 
-- [ ] **Step 7: Implement migration**
+- [x] **Step 7: Implement migration**
+  - Evidence: Added `src/runtime/task-question-migration.ts`, converting raw `TASKS.json` `openQuestions` into owner-input requests and bounded-chat sessions before normal task parsing; `pnpm vitest run src/runtime/__tests__/task-question-migration.test.ts src/runtime/__tests__/owner-input.test.ts src/runtime/__tests__/bounded-chat-machine.test.ts src/runtime/__tests__/bounded-chat.test.ts --reporter=dot` passed: 4 files, 25 tests.
 
 Create `src/runtime/task-question-migration.ts` with:
 
@@ -1312,7 +1314,8 @@ Rules:
 - Remove `openQuestions` from every task.
 - Do not create duplicate owner-input requests or sessions when applied twice.
 
-- [ ] **Step 8: Register required migration**
+- [x] **Step 8: Register required migration**
+  - Evidence: Registered required project migration `0.10.0/task-open-questions-to-bounded-chat` in `src/runtime/migrations.ts` and added wrapper `scripts/migrations/0.10.0-task-questions.mjs`; `pnpm typecheck` passed.
 
 Add built-in project migration:
 

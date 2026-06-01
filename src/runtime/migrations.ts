@@ -9,6 +9,7 @@ import {
 import { getProjectStateDir } from '@guildhall/sessions'
 import { installAgentBridgeInstructions } from './agent-bridge-install.js'
 import { migrateLegacyMemoryToLocalHistory } from './memory-migration.js'
+import { migrateTaskQuestionsToBoundedChat } from './task-question-migration.js'
 import { migrateTaskHierarchyState } from './task-hierarchy-migration.js'
 import { migrateTaskState } from './task-state-migration.js'
 import { recordGuildhallRuntimeWrite } from './runtime-compatibility.js'
@@ -254,6 +255,37 @@ const BUILT_IN_PROJECT_MIGRATIONS: ProjectMigrationDefinition[] = [
       const result = await migrateTaskHierarchyState({ projectRoot, apply: true })
       return {
         summary: `Converted ${result.changedTasks.length} task hierarchy record${result.changedTasks.length === 1 ? '' : 's'} into explicit links.`,
+        affectedPaths: result.affectedPaths,
+      }
+    },
+  },
+  {
+    id: '0.10.0/task-open-questions-to-bounded-chat',
+    title: 'Move task questions into owner-input bounded chat',
+    introducedIn: '0.10.0',
+    scope: 'project',
+    safety: 'prompt',
+    requirement: 'required',
+    summary: 'Converts task-local openQuestions into linked owner-input requests and bounded-chat sessions.',
+    async detect(projectRoot) {
+      const result = await migrateTaskQuestionsToBoundedChat({
+        projectRoot,
+        projectId: path.basename(projectRoot),
+        apply: false,
+      })
+      return {
+        needed: result.changedTasks.length > 0,
+        affectedPaths: result.affectedPaths,
+      }
+    },
+    async apply(projectRoot) {
+      const result = await migrateTaskQuestionsToBoundedChat({
+        projectRoot,
+        projectId: path.basename(projectRoot),
+        apply: true,
+      })
+      return {
+        summary: `Moved ${result.changedTasks.length} task question record${result.changedTasks.length === 1 ? '' : 's'} into owner-input bounded chat.`,
         affectedPaths: result.affectedPaths,
       }
     },
