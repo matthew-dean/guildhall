@@ -2713,6 +2713,14 @@ describe('GET /api/project — bootstrap status', () => {
     expect(body.structuralMapReview?.executableUnits?.some(item => item.command === 'npm --workspace @settings/core run test')).toBe(true)
     expect(body.structuralMapReview?.gitRoots?.[0]?.path).toBe('.')
     expect(body.structuralMapReview?.questions?.length).toBeGreaterThan(0)
+
+    const graphRes = await app.fetch(new Request(scoped('/api/project/project-graph')))
+    expect(graphRes.status).toBe(200)
+    const graphBody = (await graphRes.json()) as {
+      projectGraph?: { structuralDomains?: Array<{ id?: string; label?: string; kind?: string }> }
+    }
+    expect(graphBody.projectGraph?.structuralDomains?.some(item => item.id?.startsWith('domain:'))).toBe(true)
+    expect(graphBody.projectGraph?.structuralDomains?.every(item => item.kind === 'structural_domain')).toBe(true)
   })
 
   it('applies structural map review actions through the owning project endpoint', async () => {

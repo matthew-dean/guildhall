@@ -72,6 +72,7 @@ export interface ProjectGraphView {
     path: string
     role: 'current' | 'consumer' | 'provider' | 'related'
   }>
+  structuralDomains: ProjectGraphDomainNode[]
   authorityRoots: Array<{
     projectId: string
     domainId?: string
@@ -116,6 +117,25 @@ export interface ProjectGraphView {
     edgeId: string
     executionMode: 'local_request_reference'
   }>
+}
+
+export interface ProjectGraphDomainNode extends ProjectGraphNodeRef {
+  kind: 'structural_domain' | 'cross_cutting_domain' | 'coordinator_domain'
+  coordinatorId?: string
+  coordinatorName?: string
+  authorityProjectId?: string
+  authorityProjectLabel?: string
+}
+
+export interface ProjectGraphStructuralDomainInput extends ProjectGraphNodeRef {
+  kind: 'domain_group' | 'cross_cutting_domain'
+}
+
+export interface ProjectGraphCoordinatorInput {
+  id?: string
+  name?: string
+  domain?: string
+  path?: string
 }
 
 export type ProjectDependencyEdgeState =
@@ -392,6 +412,8 @@ export function writeLocalProjectGraphDraft(input: {
 export function queryProjectGraphView(input: {
   projectId: string
   projectPath: string
+  structuralDomains?: readonly ProjectGraphStructuralDomainInput[]
+  coordinators?: readonly ProjectGraphCoordinatorInput[]
 }): ProjectGraphView {
   const registry = readProjectGraphRegistry()
   const workspaceProjects = listWorkspaces()
@@ -445,6 +467,11 @@ export function queryProjectGraphView(input: {
   }
   const assignedAuthorities = (registry.domainAuthorities ?? [])
     .sort((left, right) => left.domain.label.localeCompare(right.domain.label))
+  const structuralDomains = projectGraphDomains({
+    structuralDomains: input.structuralDomains ?? [],
+    coordinators: input.coordinators ?? [],
+    domainAuthorities: assignedAuthorities,
+  })
 
   return {
     currentProject: {
@@ -455,6 +482,7 @@ export function queryProjectGraphView(input: {
     localProjects: localProjects.sort((left, right) =>
       left.role === 'current' ? -1 : right.role === 'current' ? 1 : left.label.localeCompare(right.label),
     ),
+    structuralDomains,
     authorityRoots: [
       ...assignedAuthorities.map(authority => ({
         projectId: authority.providerProject.id,
@@ -1115,6 +1143,53 @@ function updateRegistryForEdge(edge: ProjectDependencyEdge, now: string): void {
     domainAuthorities: registry.domainAuthorities ?? [],
     edges,
   } satisfies ProjectGraphRegistry)
+}
+
+function projectGraphDomains(input: {
+  structuralDomains: readonly ProjectGraphStructuralDomainInput[]
+  coordinators: readonly ProjectGraphCoordinatorInput[]
+  domainAuthorities: readonly ProjectDomainAuthority[]
+}): ProjectGraphDomainNode[] {
+  const byId = new Map<string, ProjectGraphDomainNode>()
+  for (const domain of input.structuralDomains) {
+    const authority = input.domainAuthorities.find(item => item.domain.id === domain.id)
+    byId.set(domain.id, {
+      id: domain.id,
+      label: domain.label,
+      path: domain.path,
+      kind: domain.kind === 'cross_cutting_domain' ? 'cross_cutting_domain' : 'structural_domain',
+      ...(authority ? {
+        authorityProjectId: authority.providerProject.id,
+        authorityProjectLabel: authority.providerProject.label,
+      } : {}),
+    })
+  }
+  for (const coordinator of input.coordinators) {
+    const domain = coordinator.domain?.trim()
+    if (!domain) continue
+    const id = domain.startsWith('domain:') ? domain : `domain:${slugify(domain)}`
+    const existing = byId.get(id)
+    byId.set(id, {
+      id,
+      label: existing?.label ?? titleCase(domain),
+      path: existing?.path ?? coordinator.path,
+      kind: existing?.kind ?? 'coordinator_domain',
+      coordinatorId: coordinator.id,
+      coordinatorName: coordinator.name,
+      authorityProjectId: existing?.authorityProjectId,
+      authorityProjectLabel: existing?.authorityProjectLabel,
+    })
+  }
+  return [...byId.values()].sort((left, right) => left.label.localeCompare(right.label))
+}
+
+function titleCase(value: string): string {
+  return value
+    .replace(/^domain:/, '')
+    .split(/[-_\s]+/)
+    .filter(Boolean)
+    .map(part => part.slice(0, 1).toUpperCase() + part.slice(1))
+    .join(' ') || value
 }
 
 function writeJson(filePath: string, value: unknown): void {

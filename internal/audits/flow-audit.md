@@ -117,6 +117,11 @@ babysit setup/import/provider/release states across multiple pages.
   redelivery, and consumer acceptance. Verification: `pnpm typecheck` passed;
   focused graph/API/UI tests passed with 82 tests; structural/context tests
   passed with 89 tests; `pnpm build` passed.
+- [x] Tighten the project graph boundary for monorepos vs external local
+  projects. Detected structural domains and local coordinator domains now live
+  on the graph itself. Registered sibling projects are visible as related local
+  projects, but they are not auto-assigned as authority unless the user assigns
+  that domain. Focused graph/API/UI tests pass with 83 tests.
 - [x] Specify the 0.10 bounded-chat pivot for intake and New request flows.
   Plan: `internal/plans/2026-05-31-guildhall-0-10-bounded-chat.md`.
   The accepted direction is a two-role flow: a conversation agent handles the

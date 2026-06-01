@@ -558,6 +558,16 @@
       assignedAt?: string
       assignedBy?: string
     }>
+    structuralDomains?: Array<{
+      id?: string
+      label?: string
+      path?: string
+      kind?: 'structural_domain' | 'cross_cutting_domain' | 'coordinator_domain' | string
+      coordinatorId?: string
+      coordinatorName?: string
+      authorityProjectId?: string
+      authorityProjectLabel?: string
+    }>
     dependencyEdges?: Array<{
       id: string
       state: string
@@ -1073,10 +1083,12 @@
 
   function structuralDomainsForGraph() {
     const seen = new Set<string>()
-    const nodes = [
-      ...(project.detail?.structuralMapReview?.domains ?? []),
-      ...(project.detail?.structuralMapReview?.crossCuttingDomains ?? []),
-    ]
+    const nodes = (projectGraph?.structuralDomains?.length ?? 0) > 0
+      ? projectGraph?.structuralDomains ?? []
+      : [
+          ...(project.detail?.structuralMapReview?.domains ?? []),
+          ...(project.detail?.structuralMapReview?.crossCuttingDomains ?? []),
+        ]
     return nodes.filter((node) => {
       if (!node.id || seen.has(node.id)) return false
       seen.add(node.id)
@@ -2080,6 +2092,8 @@
                     <span class="muted">{domain.id}</span>
                     {#if assignedProvider}
                       <span class="muted">Owned by {assignedProvider.label ?? assignedProvider.id}</span>
+                    {:else if domain.coordinatorName || domain.coordinatorId}
+                      <span class="muted">Routed by {domain.coordinatorName ?? domain.coordinatorId}</span>
                     {/if}
                   </div>
                   <div class="domain-assignment-controls">

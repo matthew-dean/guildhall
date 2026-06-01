@@ -176,6 +176,7 @@ import {
 } from './project-graph.js'
 import {
   applyStructuralMapReviewAction,
+  readAcceptedStructuralMap,
   readStructuralMapReviewSummary,
   summarizeStructuralMapForReview,
   type StructuralMapReviewAction,
@@ -2680,6 +2681,8 @@ export function buildServeApp(opts: ServeOptions = {}): {
         projectGraph: queryProjectGraphView({
           projectId: project.id,
           projectPath: project.path,
+          structuralDomains: structuralDomainsForProjectGraph(project.path),
+          coordinators: project.config?.coordinators ?? [],
         }),
       })
     } catch (err) {
@@ -2715,6 +2718,8 @@ export function buildServeApp(opts: ServeOptions = {}): {
         projectGraph: queryProjectGraphView({
           projectId: project.id,
           projectPath: project.path,
+          structuralDomains: structuralDomainsForProjectGraph(project.path),
+          coordinators: project.config?.coordinators ?? [],
         }),
       })
     } catch (err) {
@@ -2803,6 +2808,8 @@ export function buildServeApp(opts: ServeOptions = {}): {
         projectGraph: queryProjectGraphView({
           projectId: project.id,
           projectPath: project.path,
+          structuralDomains: structuralDomainsForProjectGraph(project.path),
+          coordinators: project.config?.coordinators ?? [],
         }),
       })
     } catch (err) {
@@ -8957,6 +8964,26 @@ function resolveLocalProjectRefForGraph(
     label: workspace.name,
     path: workspace.path,
   }
+}
+
+function structuralDomainsForProjectGraph(projectRoot: string): Array<{
+  id: string
+  label: string
+  path?: string
+  kind: 'domain_group' | 'cross_cutting_domain'
+}> {
+  const map = readAcceptedStructuralMap(projectRoot)
+  if (!map) return []
+  return map.nodes
+    .filter((node): node is typeof node & { kind: 'domain_group' | 'cross_cutting_domain' } =>
+      node.kind === 'domain_group' || node.kind === 'cross_cutting_domain',
+    )
+    .map(node => ({
+      id: node.id,
+      label: node.label,
+      ...(node.relativePath ? { path: node.relativePath } : {}),
+      kind: node.kind,
+    }))
 }
 
 function stringField(value: unknown): string | undefined {

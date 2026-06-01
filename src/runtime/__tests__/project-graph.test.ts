@@ -105,6 +105,46 @@ describe('local project graph', () => {
     }))
   })
 
+  it('builds an accurate monorepo domain and coordinator graph without cross-project auto-assignment', async () => {
+    bootstrapWorkspace(consumerProject, { name: 'Narrative Harness' })
+    bootstrapWorkspace(providerProject, { name: 'Looma' })
+    registerWorkspace({ id: 'harness', path: consumerProject, name: 'Narrative Harness', tags: [] })
+    registerWorkspace({ id: 'looma', path: providerProject, name: 'Looma', tags: [] })
+
+    const view = queryProjectGraphView({
+      projectId: 'harness',
+      projectPath: consumerProject,
+      structuralDomains: [
+        { id: 'domain:design', label: 'Design', kind: 'domain_group' },
+        { id: 'domain:story-engine', label: 'Story Engine', kind: 'domain_group' },
+      ],
+      coordinators: [
+        { id: 'design-coordinator', name: 'Design Coordinator', domain: 'design' },
+        { id: 'story-engine', name: 'Story Engine', domain: 'story-engine' },
+      ],
+    })
+
+    expect(view.localProjects).toEqual(expect.arrayContaining([
+      expect.objectContaining({ id: 'harness', role: 'current' }),
+      expect.objectContaining({ id: 'looma', role: 'related' }),
+    ]))
+    expect(view.structuralDomains).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        id: 'domain:design',
+        label: 'Design',
+        kind: 'structural_domain',
+        coordinatorId: 'design-coordinator',
+      }),
+      expect.objectContaining({
+        id: 'domain:story-engine',
+        label: 'Story Engine',
+        coordinatorId: 'story-engine',
+      }),
+    ]))
+    expect(view.domainAuthorities).toEqual([])
+    expect(view.authorityRoots).toEqual([])
+  })
+
   it('publishes a provider request through the neutral exchange and writes only the consumer mirror', async () => {
     bootstrapWorkspace(consumerProject, { name: 'Knit' })
     bootstrapWorkspace(providerProject, { name: 'Looma' })

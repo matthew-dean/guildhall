@@ -298,6 +298,13 @@ outside this branch's changed files:
     src/runtime/__tests__/serve-settings.test.ts
     src/web/surfaces/project/__tests__/SettingsTab.svelte.test.ts` passed with
     82 tests.
+23. [x] Make the project graph itself list detected structural domains and
+    local coordinator domains, while keeping separately registered local
+    projects unassigned until the owner explicitly assigns authority. This is
+    the monorepo boundary rule: domains/coordinators detected inside the
+    ingested project graph are automatic graph nodes; external sibling projects
+    are selectable but are not auto-assigned.
+    Evidence: focused graph/API/UI tests now pass with 83 tests.
 
 1. [x] Replace the current pnpm-only discovery core with a provider interface
    for package/workspace discovery. After this: implement JS/npm/yarn/bun
