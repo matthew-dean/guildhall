@@ -9,6 +9,7 @@ import {
   normalizeRelativePath,
   requiresFullRefresh,
 } from './discovery.js'
+import { buildDesignGovernanceDiagnostics } from './design-governance-diagnostics.js'
 import { enrichCodebaseMapSemantics } from './semantic.js'
 import {
   appendCodebaseMapHistory,
@@ -23,6 +24,7 @@ import type {
   CodebaseMap,
   CorpusAbstraction,
   CorpusArea,
+  CorpusDesignGovernanceSummary,
   CorpusDesignSystemSummary,
   CorpusFileEntry,
   CorpusOverrides,
@@ -32,6 +34,7 @@ import type {
 
 export async function buildCodebaseMap(input: BuildCodebaseMapInput): Promise<CodebaseMap> {
   const projectRoot = path.resolve(input.projectRoot)
+  const now = input.now ?? new Date()
   const files = await discoverProjectFiles(projectRoot)
   const entries: Record<string, CorpusFileEntry> = {}
   for (const file of files) {
@@ -40,15 +43,22 @@ export async function buildCodebaseMap(input: BuildCodebaseMapInput): Promise<Co
   }
   const overrides = input.memoryDir ? await loadCorpusOverrides(input.memoryDir) : undefined
   const designSystem = input.memoryDir ? await loadDesignSystemSummary(input.memoryDir, entries) : undefined
+  const designGovernance = await buildDesignGovernanceDiagnostics({
+    projectRoot,
+    files: entries,
+    designSystem,
+    now,
+  })
   const map = synthesizeMap({
     projectRoot,
     files: entries,
     overrides,
     designSystem,
-    now: input.now ?? new Date(),
+    designGovernance,
+    now,
   })
   return input.semanticIndexer
-    ? enrichCodebaseMapSemantics(map, input.semanticIndexer, input.now ?? new Date())
+    ? enrichCodebaseMapSemantics(map, input.semanticIndexer, now)
     : map
 }
 
@@ -92,7 +102,20 @@ export async function refreshCodebaseMap(input: RefreshCodebaseMapInput): Promis
         }
       }
       const refreshedDesignSystem = await loadDesignSystemSummary(memoryDir, files)
-      map = synthesizeMap({ projectRoot, files, overrides, designSystem: refreshedDesignSystem, now })
+      const refreshedDesignGovernance = await buildDesignGovernanceDiagnostics({
+        projectRoot,
+        files,
+        designSystem: refreshedDesignSystem,
+        now,
+      })
+      map = synthesizeMap({
+        projectRoot,
+        files,
+        overrides,
+        designSystem: refreshedDesignSystem,
+        designGovernance: refreshedDesignGovernance,
+        now,
+      })
       if (input.semanticIndexer) {
         map = await enrichCodebaseMapSemantics(map, input.semanticIndexer, now)
       }
@@ -136,6 +159,7 @@ function synthesizeMap(input: {
   files: Record<string, CorpusFileEntry>
   overrides?: CorpusOverrides
   designSystem?: CorpusDesignSystemSummary
+  designGovernance?: CorpusDesignGovernanceSummary
   now: Date
 }): CodebaseMap {
   const fileList = Object.values(input.files)
@@ -155,6 +179,7 @@ function synthesizeMap(input: {
     areas: applyAreaOverrides(buildAreas(fileList), overrides),
     abstractions: applyAbstractionOverrides(buildAbstractions(fileList, input.designSystem), overrides),
     ...(input.designSystem ? { designSystem: input.designSystem } : {}),
+    ...(input.designGovernance ? { designGovernance: input.designGovernance } : {}),
     verification: { commands: detectVerificationCommands(input.files) },
     ...(overrides ? { overrides } : {}),
   }

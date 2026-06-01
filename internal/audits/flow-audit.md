@@ -79,11 +79,12 @@ babysit setup/import/provider/release states across multiple pages.
   discussion. Design-system cleanup is now governed by the internal constitution
   `internal/constitutions/design-system-governance.md`, which treats token roles,
   component contracts, variant budgets, surface ownership, and deletion criteria
-  as implementation law rather than optional style advice. Future follow-up:
-  corpus digestion/refresh should detect these same governance risks in managed
-  products and inject a compact design-governance packet into worker/reviewer
-  context so other projects do not repeat Guildhall's token/component/variant
-  sprawl.
+  as implementation law rather than optional style advice. Task 12 now adds the
+  first corpus digestion/refresh diagnostic slice for those risks: indexed UI
+  projects can surface token-family split, raw visual values, variant drift,
+  duplicate primitive, surface-ownership, missing-contract, and exception
+  findings, then render a compact design-governance packet plus owner-approved
+  learning proposals for worker/reviewer context.
 - [x] Specify the 0.10 state-machine substrate and local project graph pivot.
   Spec:
   `internal/specs/2026-06-01-guildhall-0-10-state-machines-project-graph.md`.

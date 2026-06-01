@@ -3196,7 +3196,7 @@ agent creates more local UI sprawl.
 - Create: `src/corpus-map/__tests__/design-governance-diagnostics.test.ts`
 - Modify: `docs/superpowers/specs/2026-05-21-corpus-map-engine-technical-spec.md`
 
-- [ ] **Step 1: Add a corpus-map diagnostic model**
+- [x] **Step 1: Add a corpus-map diagnostic model**
 
 Add design-governance diagnostics to codebase-map/corpus-map output:
 
@@ -3219,7 +3219,7 @@ export interface DesignGovernanceDiagnostic {
 }
 ```
 
-- [ ] **Step 2: Detect portable design-system risks during refresh**
+- [x] **Step 2: Detect portable design-system risks during refresh**
 
 Corpus refresh should inspect UI projects for:
 
@@ -3236,7 +3236,7 @@ Corpus refresh should inspect UI projects for:
 - component libraries without contracts for ownership, variants, accessibility,
   and replacement paths.
 
-- [ ] **Step 3: Produce a design-governance packet for workers and reviewers**
+- [x] **Step 3: Produce a design-governance packet for workers and reviewers**
 
 When a task is UI-related, context builder should inject a compact packet:
 
@@ -3248,6 +3248,7 @@ When a task is UI-related, context builder should inject a compact packet:
 - Component authority: <paths>
 - Known duplicate primitive families: <summary>
 - Variant vocabulary risks: <summary>
+- Learning proposals require owner approval: <proposal kinds or none>
 - Required reviewer checks:
   - Name the token/component roles reused or extended.
   - Reject local one-off styling when a governed primitive exists.
@@ -3259,7 +3260,7 @@ evidence, not taste: if a task adds a local primitive while the packet names a
 canonical owner, review should request changes unless the handoff records a real
 exception.
 
-- [ ] **Step 4: Feed cross-product learnings back into Guildhall**
+- [x] **Step 4: Feed cross-product learnings back into Guildhall**
 
 When reviewers repeatedly flag the same design-governance issue in managed
 products, Guildhall should propose one of:
@@ -3272,7 +3273,7 @@ products, Guildhall should propose one of:
 Do not let workers or reviewers mutate those records directly. They should emit
 evidence and proposals; owner/coordinator approval decides what becomes durable.
 
-- [ ] **Step 5: Test with Guildhall's own current failure modes**
+- [x] **Step 5: Test with Guildhall's own current failure modes**
 
 Use Guildhall as the first fixture:
 
@@ -3286,6 +3287,32 @@ Use Guildhall as the first fixture:
 
 Expected: the diagnostic output names these as governance risks and the reviewer
 packet gives UI reviewers concrete checks before they approve future work.
+
+**Task 12 evidence (2026-06-01):**
+
+- Added `DesignGovernanceDiagnostic`, `CorpusDesignGovernanceSummary`, and
+  proposal-only `DesignGovernanceLearningProposal` model fields to the corpus
+  map, with deterministic refresh-time diagnostics in
+  `src/corpus-map/design-governance-diagnostics.ts`.
+- Corpus refresh now records `designGovernance` on full and partial map rebuilds.
+  UI-shaped corpus context renders `renderDesignGovernancePacket(...)` with
+  canonical design-system authority, token authority, component authority,
+  duplicate primitive families, variant vocabulary risks, owner-approved
+  learning proposals, and required reviewer checks.
+- Guildhall-shaped fixture coverage in
+  `src/corpus-map/__tests__/design-governance-diagnostics.test.ts` exercises
+  split token families, raw visual values, variant vocabulary drift, duplicate
+  package/app primitives, Settings-style surface ownership sprawl, missing
+  component contracts, worker/reviewer packet content, and proposal-only
+  learning hooks.
+- Verification:
+  - `pnpm vitest run src/corpus-map/__tests__/design-governance-diagnostics.test.ts`
+    first failed red with `2 failed` before the diagnostic API/proposal fields
+    existed; final rerun passed with `2 passed`.
+  - `pnpm vitest run src/corpus-map/__tests__/corpus-map.test.ts src/corpus-map/__tests__/design-governance-diagnostics.test.ts`
+    passed with `2 passed` test files and `14 passed` tests.
+  - `pnpm typecheck` passed (`tsgo -p tsconfig.json --noEmit` and
+    `@guildhall/ui` `tsc -p tsconfig.json --noEmit` completed successfully).
 
 ## Rollout Order
 

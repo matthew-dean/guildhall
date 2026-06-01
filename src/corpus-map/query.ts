@@ -1,4 +1,5 @@
 import path from 'node:path'
+import { renderDesignGovernancePacket } from './design-governance-diagnostics.js'
 import type {
   CodebaseMap,
   CodebaseMapQuery,
@@ -182,6 +183,9 @@ export function buildWorkerCorpusContext(
       if (item.abstraction.avoid[0]) lines.push(`  - Avoid: ${item.abstraction.avoid[0]}`)
     }
   }
+  if (map.designGovernance && isUiRelatedTask(task)) {
+    lines.push('', renderDesignGovernancePacket(map))
+  }
   if (result.readNext.length > 0) {
     lines.push('', 'Read next:')
     for (const item of map.semantic?.readNext.slice(0, readNextLimit) ?? []) {
@@ -219,4 +223,15 @@ function sortScored<T extends { score: number }>(left: T, right: T): number {
 
 function normalize(value: string): string {
   return value.replace(/\\/g, '/').replace(/^\.\//, '')
+}
+
+function isUiRelatedTask(task: CorpusTaskContext): boolean {
+  const text = [
+    task.title,
+    task.description,
+    task.domain ?? '',
+    ...(task.likelyFiles ?? []),
+  ].join('\n')
+  return /\b(?:ui|web|surface|component|style|css|svelte|visual|layout|button|card|notice|settings|design)\b/i.test(text) ||
+    (task.likelyFiles ?? []).some((file) => /(?:^src\/web\/|^packages\/ui\/|\.(?:svelte|vue|tsx|jsx|css|scss)$)/.test(normalize(file)))
 }
