@@ -306,6 +306,36 @@ outside this branch's changed files:
     are selectable but are not auto-assigned.
     Evidence: focused graph/API/UI tests now pass with 83 tests.
 
+### Project Graph UX Walkthrough Fix Plan
+
+**Remaining: 0 items. Next item: merge decision once the active bounded-chat worktree on `0.10.0` is clean enough to receive this branch.**
+
+Walkthrough finding: the underlying graph now has the right boundary model, but
+the UI still asks the owner to infer too much. A user needs to see which domains
+were detected in this project, which project is responsible for each domain,
+which nearby projects are merely available for manual assignment, and who is
+waiting on whom for each dependency request.
+
+1. [x] Rename and reframe the domain panel around responsibilities, not vague
+   ownership. Show each domain as detected in this project, explicitly assigned
+   elsewhere, explicitly assigned here, or not externally assigned.
+2. [x] Separate local project rows so the current project, connected projects,
+   and unrelated registered projects are visually and textually distinct.
+   Related external projects should read as available for manual assignment,
+   not implied owners.
+3. [x] Make dependency request cards show waiting-on provider/consumer in plain
+   language, plus the current project's role on that request.
+4. [x] Add focused Settings UI tests for the clarified walkthrough language:
+   detected domain, unassigned external responsibility, related project
+   available for assignment, and waiting-on text.
+5. [x] Rerun focused graph/API/UI verification, update this fix plan, commit,
+   and push.
+   Evidence: `pnpm typecheck` passed; `pnpm vitest run
+   src/runtime/__tests__/project-graph.test.ts
+   src/runtime/__tests__/serve-settings.test.ts
+   src/web/surfaces/project/__tests__/SettingsTab.svelte.test.ts` passed with
+   83 tests; `pnpm build` passed.
+
 1. [x] Replace the current pnpm-only discovery core with a provider interface
    for package/workspace discovery. After this: implement JS/npm/yarn/bun
    providers. Completed in `feature/0.10-structural-domain-intelligence`:

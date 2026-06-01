@@ -196,7 +196,16 @@ describe('SettingsTab', () => {
             currentProject: { id: 'looma-knit', label: 'Looma + Knit', path: '/workspace/looma-knit' },
             localProjects: [
               { id: 'looma-knit', label: 'Looma + Knit', role: 'current', path: '/workspace/looma-knit' },
-              { id: 'looma', label: 'Looma', role: 'provider', path: '/workspace/looma' },
+              { id: 'looma', label: 'Looma', role: 'related', path: '/workspace/looma' },
+            ],
+            structuralDomains: [
+              {
+                id: 'domain:editor',
+                label: 'Editor',
+                kind: 'structural_domain',
+                coordinatorId: 'editor-coordinator',
+                coordinatorName: 'Editor coordinator',
+              },
             ],
             domainAuthorities: [],
             dependencyEdges: [{
@@ -234,10 +243,16 @@ describe('SettingsTab', () => {
     render(SettingsTab, { subView: 'graph' })
 
     await screen.findByRole('heading', { name: 'Project graph' })
-    expect(screen.getByRole('heading', { name: 'Domain ownership' })).toBeInTheDocument()
+    expect(screen.getByRole('heading', { name: 'Domain responsibilities' })).toBeInTheDocument()
+    expect(screen.getByText('Detected here - routed by Editor coordinator')).toBeInTheDocument()
+    expect(screen.getByText('No external assignment')).toBeInTheDocument()
+    expect(screen.getByText('Available for manual assignment')).toBeInTheDocument()
+    expect(screen.getByText('Related local project')).toBeInTheDocument()
     expect(screen.getByText('Knit needs the Looma editor.')).toBeInTheDocument()
+    expect(screen.getByText('Waiting on provider')).toBeInTheDocument()
+    expect(screen.getByText('This project is provider')).toBeInTheDocument()
 
-    await userEvent.selectOptions(screen.getByRole('combobox', { name: /owner project for editor/i }), 'looma')
+    await userEvent.selectOptions(screen.getByRole('combobox', { name: /responsible project for editor/i }), 'looma')
     await userEvent.click(screen.getByRole('button', { name: 'Assign' }))
     await waitFor(() => expect(fetchMock.mock.calls.some(([input]) => String(input).includes('/domain-authority'))).toBe(true))
 

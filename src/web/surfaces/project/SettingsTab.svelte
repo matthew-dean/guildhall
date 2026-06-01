@@ -1103,6 +1103,24 @@
       project.detail?.id
   }
 
+  function domainAuthorityFor(domainId?: string) {
+    if (!domainId) return null
+    return projectGraph?.domainAuthorities?.find(item => item.domain?.id === domainId) ?? null
+  }
+
+  function domainSourceLabel(domain: { kind?: string; coordinatorName?: string; coordinatorId?: string }): string {
+    if (domain.kind === 'cross_cutting_domain') return 'Detected cross-cutting domain'
+    if (domain.coordinatorName || domain.coordinatorId) return `Detected here - routed by ${domain.coordinatorName ?? domain.coordinatorId}`
+    return 'Detected in this project'
+  }
+
+  function domainResponsibilityLabel(domain: { id?: string }): string {
+    const authority = domainAuthorityFor(domain.id)
+    if (!authority?.providerProject?.id) return 'No external assignment'
+    if (authority.providerProject.id === project.detail?.id) return 'Handled by this project'
+    return `Handled by ${authority.providerProject.label ?? authority.providerProject.id}`
+  }
+
   function setDomainAuthoritySelection(domainId: string, providerProjectId: string) {
     domainAuthoritySelections = {
       ...domainAuthoritySelections,
@@ -1228,6 +1246,31 @@
     if (edge.providerProjectId === project.detail?.id) return 'inbound'
     if (edge.consumerProjectId === project.detail?.id) return 'outgoing'
     return 'related'
+  }
+
+  function projectRowsForRole(role: string) {
+    return (projectGraph?.localProjects ?? []).filter(item => item.role === role)
+  }
+
+  function connectedProjectRows() {
+    return (projectGraph?.localProjects ?? []).filter(item => item.role === 'consumer' || item.role === 'provider')
+  }
+
+  function relatedProjectRows() {
+    return (projectGraph?.localProjects ?? []).filter(item => item.role === 'related')
+  }
+
+  function requestWaitingOn(edge: NonNullable<ProjectGraphView['dependencyEdges']>[number]): string {
+    if (!edge.unresolved) return 'Resolved'
+    if (edge.state === 'delivered' || edge.state === 'consumer_reviewing') return 'Waiting on consumer'
+    return 'Waiting on provider'
+  }
+
+  function requestRoleLabel(edge: NonNullable<ProjectGraphView['dependencyEdges']>[number]): string {
+    const role = edgeRole(edge)
+    if (role === 'inbound') return 'This project is provider'
+    if (role === 'outgoing') return 'This project is consumer'
+    return 'Related request'
   }
 
   const coordinators = $derived(project.detail?.config?.coordinators ?? [])
@@ -2050,7 +2093,7 @@
       <SectionHeader
         eyebrow="Settings"
         title="Project graph"
-        description="Assign structural domains to local projects and handle dependency requests without crossing project authority boundaries."
+        description="See the domains detected in this project, the local projects Guildhall knows about, and the dependency requests moving between project coordinators."
         headingTag="h2"
         density="compact"
       >
@@ -2072,33 +2115,28 @@
         <FrameCard class="graph-card">
           {#snippet header()}
             <SectionHeader
-              title="Domain ownership"
-              description="Each accepted structural domain can point at the local project that owns delivery for that domain."
+              title="Domain responsibilities"
+              description="Detected domains start in this project. Assign one only when another local project should take responsibility for delivery in that domain."
               headingTag="h3"
               density="dense"
             />
           {/snippet}
           {#if structuralDomainsForGraph().length === 0}
-            <p class="muted">Accept a structural map before assigning domain ownership.</p>
+            <p class="muted">Accept a structural map before assigning domain responsibilities.</p>
           {:else if graphProjectOptions().length === 0}
             <p class="muted">Register another local project before assigning domains across projects.</p>
           {:else}
             <div class="domain-assignment-list">
               {#each structuralDomainsForGraph() as domain (domain.id)}
-                {@const assignedProvider = projectGraph?.domainAuthorities?.find(item => item.domain?.id === domain.id)?.providerProject}
                 <UtilityPanel as="section" className="domain-assignment" tone="neutral" dense>
                   <div class="domain-assignment-copy">
                     <strong>{domain.label}</strong>
-                    <span class="muted">{domain.id}</span>
-                    {#if assignedProvider}
-                      <span class="muted">Owned by {assignedProvider.label ?? assignedProvider.id}</span>
-                    {:else if domain.coordinatorName || domain.coordinatorId}
-                      <span class="muted">Routed by {domain.coordinatorName ?? domain.coordinatorId}</span>
-                    {/if}
+                    <span class="muted">{domainSourceLabel(domain)}</span>
+                    <span class="muted">{domainResponsibilityLabel(domain)}</span>
                   </div>
                   <div class="domain-assignment-controls">
                     <Select
-                      ariaLabel={`Owner project for ${domain.label}`}
+                      ariaLabel={`Responsible project for ${domain.label}`}
                       value={assignedProviderForDomain(domain.id) ?? ''}
                       options={graphProjectOptions()}
                       onchange={(value) => setDomainAuthoritySelection(domain.id, value)}
@@ -2122,7 +2160,7 @@
           {#snippet header()}
             <SectionHeader
               title="Local projects"
-              description="The graph can include sibling Guildhall projects without requiring one shared folder."
+              description="Registered projects are visible to the graph, but related projects are only available for manual assignment."
               headingTag="h3"
               density="dense"
             />
@@ -2133,12 +2171,30 @@
             <p class="muted">No local projects registered yet.</p>
           {:else}
             <div class="project-chip-list">
-              {#each projectGraph.localProjects ?? [] as localProject (localProject.id)}
-                <UtilityPanel as="div" className="project-chip-row" tone={localProject.role === 'current' ? 'accent' : 'neutral'} dense>
+              {#each projectRowsForRole('current') as localProject (localProject.id)}
+                <UtilityPanel as="div" className="project-chip-row" tone="accent" dense>
                   <strong>{localProject.label}</strong>
-                  <span class="muted">{localProject.role}</span>
+                  <span class="muted">Current project</span>
                 </UtilityPanel>
               {/each}
+              {#if connectedProjectRows().length > 0}
+                <div class="project-group-label">Connected by requests</div>
+                {#each connectedProjectRows() as localProject (localProject.id)}
+                  <UtilityPanel as="div" className="project-chip-row" tone="neutral" dense>
+                    <strong>{localProject.label}</strong>
+                    <span class="muted">{localProject.role === 'provider' ? 'Provider on a request' : 'Consumer on a request'}</span>
+                  </UtilityPanel>
+                {/each}
+              {/if}
+              {#if relatedProjectRows().length > 0}
+                <div class="project-group-label">Available for manual assignment</div>
+                {#each relatedProjectRows() as localProject (localProject.id)}
+                  <UtilityPanel as="div" className="project-chip-row" tone="neutral" dense>
+                    <strong>{localProject.label}</strong>
+                    <span class="muted">Related local project</span>
+                  </UtilityPanel>
+                {/each}
+              {/if}
             </div>
           {/if}
         </FrameCard>
@@ -2146,9 +2202,9 @@
 
       <FrameCard class="graph-card graph-requests-card">
         {#snippet header()}
-          <SectionHeader
-            title="Dependency requests"
-            description="Inbound requests are handled by this project as provider; outgoing requests wait for provider delivery and consumer verification."
+            <SectionHeader
+              title="Dependency requests"
+              description="Requests move through provider delivery and consumer verification. Each card shows this project's role and who needs to act next."
             headingTag="h3"
             density="dense"
           />
@@ -2168,10 +2224,14 @@
                     <strong>{role === 'inbound' ? 'Inbound' : role === 'outgoing' ? 'Outgoing' : 'Related'} request</strong>
                     <p>{edge.consumerNeed}</p>
                   </div>
-                  <StatusPill label={edge.state.replaceAll('_', ' ')} tone={edge.unresolved ? 'warn' : 'ok'} />
+                  <div class="request-status-stack">
+                    <StatusPill label={requestWaitingOn(edge)} tone={edge.unresolved ? 'warn' : 'ok'} />
+                    <span class="muted">{requestRoleLabel(edge)}</span>
+                  </div>
                 </div>
                 <DefinitionList
                   rows={[
+                    ['State', edge.state.replaceAll('_', ' ')],
                     ['Domain', edge.domainLabel ?? edge.domainId ?? 'none'],
                     ['Consumer', edge.consumerProjectLabel ?? edge.consumerProjectId ?? 'unknown'],
                     ['Provider', edge.providerProjectLabel ?? edge.providerProjectId ?? 'unknown'],
@@ -3870,6 +3930,13 @@
     align-items: center;
   }
 
+  .project-group-label {
+    color: var(--text-muted);
+    font-size: var(--fs-1);
+    font-weight: 700;
+    margin-block-start: var(--gh-space-2);
+  }
+
   :global(.graph-request) {
     display: grid;
     gap: var(--gh-space-3);
@@ -3880,6 +3947,13 @@
     justify-content: space-between;
     gap: var(--gh-space-3);
     align-items: flex-start;
+  }
+
+  .request-status-stack {
+    display: grid;
+    justify-items: end;
+    gap: var(--gh-space-1);
+    min-width: max-content;
   }
 
   .graph-request-head p {

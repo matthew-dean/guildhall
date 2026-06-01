@@ -122,6 +122,13 @@ babysit setup/import/provider/release states across multiple pages.
   on the graph itself. Registered sibling projects are visible as related local
   projects, but they are not auto-assigned as authority unless the user assigns
   that domain. Focused graph/API/UI tests pass with 83 tests.
+- [x] Clarify the owner-facing project graph walkthrough. Remaining count: 0
+  items. Next item: merge decision once the active bounded-chat worktree on
+  `0.10.0` is clean enough to receive this branch. The Settings graph surface
+  now distinguishes detected domains from assigned responsibility, separates current/connected/related
+  local projects, and shows waiting-on plus this-project role labels on request
+  cards. Verification: `pnpm typecheck` passed; focused graph/API/UI tests
+  passed with 83 tests; `pnpm build` passed.
 - [x] Specify the 0.10 bounded-chat pivot for intake and New request flows.
   Plan: `internal/plans/2026-05-31-guildhall-0-10-bounded-chat.md`.
   The accepted direction is a two-role flow: a conversation agent handles the
