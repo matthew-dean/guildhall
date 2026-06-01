@@ -107,15 +107,16 @@ babysit setup/import/provider/release states across multiple pages.
   verification, and return-for-revision.
 - [x] Continue structural/domain intelligence from the remaining-work ledger
   in `internal/plans/2026-05-31-guildhall-0-10-implementation-tracker.md`.
-  Remaining count after the local remote-authority reference slice: 0 items.
-  Next item: merge once the active bounded-chat worktree on `0.10.0` is clean
-  enough to receive this branch. Verification on
-  `feature/0.10-structural-domain-intelligence`: `pnpm typecheck` passed;
-  focused runtime/MCP tests passed with 90 tests covering state machines,
-  project graph, structural memory context, MCP memory boundaries, stdio, and
-  serve-settings; `pnpm build` passed. Full `pnpm test` remains blocked by
-  bounded-chat UI test failures in ProjectView and ThreadTab, outside this
-  branch's changed files.
+  The remaining-work ledger was reopened for the complete project graph product
+  loop. Remaining count after graph API/UI/tests: 0 items. Next item: merge
+  decision once the active bounded-chat worktree on `0.10.0` is clean enough
+  to receive this branch. Implemented explicit domain authority
+  assignments, project-scoped graph action endpoints, the Settings Project
+  graph surface, inbound/outgoing request controls, and tests for assignment,
+  provider intake/planning/delivery, consumer review/return, provider
+  redelivery, and consumer acceptance. Verification: `pnpm typecheck` passed;
+  focused graph/API/UI tests passed with 82 tests; structural/context tests
+  passed with 89 tests; `pnpm build` passed.
 - [x] Specify the 0.10 bounded-chat pivot for intake and New request flows.
   Plan: `internal/plans/2026-05-31-guildhall-0-10-bounded-chat.md`.
   The accepted direction is a two-role flow: a conversation agent handles the

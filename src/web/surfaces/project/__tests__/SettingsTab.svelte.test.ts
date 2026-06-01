@@ -171,6 +171,80 @@ describe('SettingsTab', () => {
     expect(path.value).toBe('/projects/looma-knit/settings/providers')
   })
 
+  it('surfaces project graph domain assignment and inbound request actions', async () => {
+    project.detail = {
+      ...project.detail,
+      structuralMapReview: {
+        id: 'map-1',
+        state: 'accepted',
+        domains: [{ id: 'domain:editor', label: 'Editor' }],
+      },
+    }
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = new URL(String(input), 'http://localhost')
+      if (url.pathname === '/api/setup/status') return json({ initialized: true, name: 'Looma + Knit', id: 'looma-knit' })
+      if (url.pathname === '/api/config/levers') return json({ levers: [] })
+      if (url.pathname === '/api/project/design-system') return json({ designSystem: null })
+      if (url.pathname === '/api/project/codebase-map/status') return json(codebaseMapStatus())
+      if (url.pathname === '/api/setup/providers') return json(providersPayload())
+      if (url.pathname === '/api/project/bootstrap/status') {
+        return json({ configured: true, needed: false, status: null, bootstrap: { commands: [], successGates: [], timeoutMs: 0 } })
+      }
+      if (url.pathname === '/api/project/project-graph' && init?.method !== 'POST') {
+        return json({
+          projectGraph: {
+            currentProject: { id: 'looma-knit', label: 'Looma + Knit', path: '/workspace/looma-knit' },
+            localProjects: [
+              { id: 'looma-knit', label: 'Looma + Knit', role: 'current', path: '/workspace/looma-knit' },
+              { id: 'looma', label: 'Looma', role: 'provider', path: '/workspace/looma' },
+            ],
+            domainAuthorities: [],
+            dependencyEdges: [{
+              id: 'edge-knit-looma',
+              state: 'submitted',
+              consumerProjectId: 'knit',
+              consumerProjectLabel: 'Knit',
+              providerProjectId: 'looma-knit',
+              providerProjectLabel: 'Looma + Knit',
+              domainId: 'domain:editor',
+              domainLabel: 'Editor',
+              consumerNeed: 'Knit needs the Looma editor.',
+              unresolved: true,
+            }],
+          },
+        })
+      }
+      if (url.pathname === '/api/project/project-graph/domain-authority') {
+        expect(init?.method).toBe('POST')
+        const body = JSON.parse(String(init?.body ?? '{}'))
+        expect(body).toEqual(expect.objectContaining({
+          domainId: 'domain:editor',
+          providerProjectId: 'looma',
+        }))
+        return json({ projectGraph: { localProjects: [], domainAuthorities: [] } })
+      }
+      if (url.pathname === '/api/project/project-graph/requests/edge-knit-looma/provider-accept') {
+        expect(init?.method).toBe('POST')
+        return json({ projectGraph: { localProjects: [], dependencyEdges: [] } })
+      }
+      return json({})
+    })
+    vi.stubGlobal('fetch', fetchMock)
+
+    render(SettingsTab, { subView: 'graph' })
+
+    await screen.findByRole('heading', { name: 'Project graph' })
+    expect(screen.getByRole('heading', { name: 'Domain ownership' })).toBeInTheDocument()
+    expect(screen.getByText('Knit needs the Looma editor.')).toBeInTheDocument()
+
+    await userEvent.selectOptions(screen.getByRole('combobox', { name: /owner project for editor/i }), 'looma')
+    await userEvent.click(screen.getByRole('button', { name: 'Assign' }))
+    await waitFor(() => expect(fetchMock.mock.calls.some(([input]) => String(input).includes('/domain-authority'))).toBe(true))
+
+    await userEvent.click(screen.getByRole('button', { name: 'Accept request' }))
+    await waitFor(() => expect(fetchMock.mock.calls.some(([input]) => String(input).includes('/provider-accept'))).toBe(true))
+  })
+
   it('surfaces bootstrap run failures without marking the project ready', async () => {
     const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
       const url = new URL(String(input), 'http://localhost')

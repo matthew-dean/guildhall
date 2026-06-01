@@ -39,7 +39,16 @@ export interface ProjectGraphRegistry {
   version: 1
   updatedAt: string
   projects: Array<ProjectGraphNode & { type: 'local_guildhall_project'; path: string }>
+  domainAuthorities?: ProjectDomainAuthority[]
   edges: ProjectGraphEdgeSummary[]
+}
+
+export interface ProjectDomainAuthority {
+  domain: ProjectGraphNodeRef
+  providerProject: ProjectGraphNodeRef & { path: string }
+  assignedBy: string
+  assignedAt: string
+  evidenceRefs: string[]
 }
 
 export interface ProjectGraph {
@@ -69,14 +78,22 @@ export interface ProjectGraphView {
     label?: string
     authority: 'consumer' | 'provider'
     edgeId: string
+    assigned?: boolean
   }>
+  domainAuthorities: ProjectDomainAuthority[]
   dependencyEdges: Array<{
     id: string
     state: ProjectDependencyEdgeState
     consumerProjectId: string
+    consumerProjectLabel?: string
     providerProjectId: string
+    providerProjectLabel?: string
     domainId?: string
+    domainLabel?: string
     consumerNeed: string
+    expectedDelivery?: ProjectDependencyEdge['expectedDelivery']
+    latestDeliveryReceipt?: DeliveryReceipt
+    latestReturnPacket?: ConsumerReturnPacket
     unresolved: boolean
     updatedAt: string
   }>
@@ -329,7 +346,11 @@ export function readProjectGraphRegistry(): ProjectGraphRegistry {
   if (!fs.existsSync(filePath)) {
     return { version: 1, updatedAt: '', projects: [], edges: [] }
   }
-  return JSON.parse(fs.readFileSync(filePath, 'utf8')) as ProjectGraphRegistry
+  const registry = JSON.parse(fs.readFileSync(filePath, 'utf8')) as ProjectGraphRegistry
+  registry.domainAuthorities ??= []
+  registry.edges ??= []
+  registry.projects ??= []
+  return registry
 }
 
 export function writeLocalProjectGraphDraft(input: {
@@ -352,6 +373,7 @@ export function writeLocalProjectGraphDraft(input: {
     version: 1,
     updatedAt: now,
     projects,
+    domainAuthorities: current.domainAuthorities ?? [],
     edges: current.edges,
   }
   writeJsonFile(path.join(projectGraphRegistryDir(), 'registry.json'), registry)
@@ -372,6 +394,27 @@ export function queryProjectGraphView(input: {
   projectPath: string
 }): ProjectGraphView {
   const registry = readProjectGraphRegistry()
+  const workspaceProjects = listWorkspaces()
+    .filter(workspace => workspace.path)
+    .map(workspace => ({
+      id: workspace.id,
+      type: 'local_guildhall_project' as const,
+      label: workspace.name,
+      path: workspace.path,
+      pathFingerprint: pathFingerprint(workspace.path),
+      lastSeenAt: registry.updatedAt || new Date(0).toISOString(),
+    }))
+  const registryProjectsById = new Map(registry.projects.map(project => [project.id.replace(/^local-project:/, ''), project]))
+  for (const workspace of workspaceProjects) {
+    if (!registryProjectsById.has(workspace.id)) registryProjectsById.set(workspace.id, {
+      id: `local-project:${workspace.id}`,
+      type: 'local_guildhall_project',
+      label: workspace.label,
+      path: workspace.path,
+      pathFingerprint: workspace.pathFingerprint,
+      lastSeenAt: workspace.lastSeenAt,
+    })
+  }
   const edges = readProjectDependencyEdges()
     .filter(edge => edge.consumer.id === input.projectId || edge.provider.id === input.projectId)
     .sort((left, right) => right.updatedAt.localeCompare(left.updatedAt))
@@ -381,9 +424,8 @@ export function queryProjectGraphView(input: {
     if (edge.consumer.id !== input.projectId && !projectRoles.has(edge.consumer.id)) projectRoles.set(edge.consumer.id, 'consumer')
     if (edge.provider.id !== input.projectId && !projectRoles.has(edge.provider.id)) projectRoles.set(edge.provider.id, 'provider')
   }
-  const registryProjects = new Map(registry.projects.map(project => [project.id.replace(/^local-project:/, ''), project]))
   const localProjects = [...projectRoles.entries()].map(([id, role]) => {
-    const project = registryProjects.get(id)
+    const project = registryProjectsById.get(id)
     return {
       id,
       label: project?.label ?? id,
@@ -391,15 +433,38 @@ export function queryProjectGraphView(input: {
       role,
     }
   })
+  for (const [id, project] of registryProjectsById.entries()) {
+    if (!projectRoles.has(id)) {
+      localProjects.push({
+        id,
+        label: project.label,
+        path: project.path,
+        role: id === input.projectId ? 'current' : 'related',
+      })
+    }
+  }
+  const assignedAuthorities = (registry.domainAuthorities ?? [])
+    .sort((left, right) => left.domain.label.localeCompare(right.domain.label))
 
   return {
     currentProject: {
       id: input.projectId,
       path: input.projectPath,
-      label: registryProjects.get(input.projectId)?.label,
+      label: registryProjectsById.get(input.projectId)?.label,
     },
-    localProjects,
-    authorityRoots: edges
+    localProjects: localProjects.sort((left, right) =>
+      left.role === 'current' ? -1 : right.role === 'current' ? 1 : left.label.localeCompare(right.label),
+    ),
+    authorityRoots: [
+      ...assignedAuthorities.map(authority => ({
+        projectId: authority.providerProject.id,
+        domainId: authority.domain.id,
+        label: authority.domain.label,
+        authority: 'provider' as const,
+        edgeId: '',
+        assigned: true,
+      })),
+      ...edges
       .filter(edge => edge.domain)
       .map(edge => ({
         projectId: edge.provider.id,
@@ -408,13 +473,21 @@ export function queryProjectGraphView(input: {
         authority: 'provider' as const,
         edgeId: edge.id,
       })),
+    ],
+    domainAuthorities: assignedAuthorities,
     dependencyEdges: edges.map(edge => ({
       id: edge.id,
       state: edge.stateMachine.state,
       consumerProjectId: edge.consumer.id,
+      consumerProjectLabel: edge.consumer.label,
       providerProjectId: edge.provider.id,
+      providerProjectLabel: edge.provider.label,
       domainId: edge.domain?.id,
+      domainLabel: edge.domain?.label,
       consumerNeed: edge.consumerNeed,
+      expectedDelivery: edge.expectedDelivery,
+      latestDeliveryReceipt: edge.deliveryReceipts.at(-1),
+      latestReturnPacket: edge.returnPackets.at(-1),
       unresolved: !isProjectDependencyTerminal(edge.stateMachine.state),
       updatedAt: edge.updatedAt,
     })),
@@ -433,6 +506,46 @@ export function queryProjectGraphView(input: {
       executionMode: 'local_request_reference' as const,
     }))),
   }
+}
+
+export async function assignProjectDomainAuthority(input: {
+  domain: ProjectGraphNodeRef
+  providerProject: ProjectGraphNodeRef & { path: string }
+  assignedBy: string
+  evidenceRefs?: string[]
+  now?: string
+}): Promise<ProjectDomainAuthority> {
+  const now = input.now ?? new Date().toISOString()
+  const registry = readProjectGraphRegistry()
+  const authority: ProjectDomainAuthority = {
+    domain: input.domain,
+    providerProject: input.providerProject,
+    assignedBy: input.assignedBy,
+    assignedAt: now,
+    evidenceRefs: input.evidenceRefs ?? [`domain:${input.domain.id}`, `project:${input.providerProject.id}`],
+  }
+  const projectsById = new Map(registry.projects.map(project => [project.id, project]))
+  projectsById.set(`local-project:${input.providerProject.id}`, {
+    id: `local-project:${input.providerProject.id}`,
+    type: 'local_guildhall_project',
+    label: input.providerProject.label,
+    path: input.providerProject.path,
+    pathFingerprint: pathFingerprint(input.providerProject.path),
+    lastSeenAt: now,
+  })
+  const authorities = [
+    ...(registry.domainAuthorities ?? []).filter(item => item.domain.id !== input.domain.id),
+    authority,
+  ].sort((left, right) => left.domain.id.localeCompare(right.domain.id))
+  writeJson(path.join(projectGraphRegistryDir(), 'registry.json'), {
+    ...registry,
+    version: 1,
+    updatedAt: now,
+    projects: [...projectsById.values()].sort((left, right) => left.id.localeCompare(right.id)),
+    domainAuthorities: authorities,
+  } satisfies ProjectGraphRegistry)
+  writeJson(path.join(projectGraphRegistryDir(), 'domain-authorities', `${slugify(input.domain.id)}.json`), authority)
+  return authority
 }
 
 export async function createProjectDependencyRequest(
@@ -999,6 +1112,7 @@ function updateRegistryForEdge(edge: ProjectDependencyEdge, now: string): void {
     version: 1,
     updatedAt: now,
     projects: [...projectsById.values()].sort((left, right) => left.id.localeCompare(right.id)),
+    domainAuthorities: registry.domainAuthorities ?? [],
     edges,
   } satisfies ProjectGraphRegistry)
 }

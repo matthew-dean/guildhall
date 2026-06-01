@@ -7,6 +7,7 @@ import { bootstrapWorkspace, registerWorkspace } from '@guildhall/config'
 
 import {
   acceptProjectDependencyDelivery,
+  assignProjectDomainAuthority,
   beginProjectDependencyConsumerReview,
   commitProjectDependencyDeliveryPlan,
   createProjectDependencyRequest,
@@ -67,6 +68,41 @@ describe('local project graph', () => {
     ]))
     expect(fs.existsSync(path.join(systemDir, 'project-graph', 'registry.json'))).toBe(true)
     expect(fs.existsSync(path.join(systemDir, 'project-graph', 'graphs', 'local.json'))).toBe(true)
+  })
+
+  it('persists explicit domain authority assignments without writing provider project state', async () => {
+    bootstrapWorkspace(consumerProject, { name: 'Knit' })
+    bootstrapWorkspace(providerProject, { name: 'Looma' })
+    registerWorkspace({ id: 'knit', path: consumerProject, name: 'Knit', tags: [] })
+    registerWorkspace({ id: 'looma', path: providerProject, name: 'Looma', tags: [] })
+    writeLocalProjectGraphDraft({ now: '2026-06-01T12:00:00.000Z' })
+
+    await assignProjectDomainAuthority({
+      domain: { id: 'domain:editor', label: 'Editor' },
+      providerProject: { id: 'looma', label: 'Looma', path: providerProject },
+      assignedBy: 'owner',
+      now: '2026-06-01T12:01:00.000Z',
+    })
+
+    const registry = readProjectGraphRegistry()
+    expect(registry.domainAuthorities).toContainEqual(expect.objectContaining({
+      domain: { id: 'domain:editor', label: 'Editor' },
+      providerProject: expect.objectContaining({ id: 'looma', path: providerProject }),
+      assignedBy: 'owner',
+    }))
+    expect(fs.existsSync(path.join(systemDir, 'project-graph', 'domain-authorities', 'domain-editor.json'))).toBe(true)
+    expect(fs.existsSync(path.join(providerProject, '.guildhall', 'project-graph', 'incoming-requests'))).toBe(false)
+
+    const providerView = queryProjectGraphView({ projectId: 'looma', projectPath: providerProject })
+    expect(providerView.domainAuthorities).toContainEqual(expect.objectContaining({
+      domain: expect.objectContaining({ id: 'domain:editor' }),
+      providerProject: expect.objectContaining({ id: 'looma' }),
+    }))
+    expect(providerView.authorityRoots).toContainEqual(expect.objectContaining({
+      projectId: 'looma',
+      domainId: 'domain:editor',
+      assigned: true,
+    }))
   })
 
   it('publishes a provider request through the neutral exchange and writes only the consumer mirror', async () => {

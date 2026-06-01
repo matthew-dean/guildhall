@@ -253,13 +253,51 @@ agent packet integration, coordinator assignment, or remote authority support.
 **Remaining: 0 items. Next item: merge decision once the active bounded-chat worktree on `0.10.0` is clean enough to receive this branch.**
 
 Verification on `feature/0.10-structural-domain-intelligence`: `pnpm
-typecheck` passed; focused runtime/MCP verification passed with 90 tests across
-state-machine, project-graph, memory-store, effective-memory-packet,
-project-reader, MCP server, stdio smoke, and serve-settings coverage; `pnpm
-build` passed. Full `pnpm test` is currently blocked by bounded-chat UI tests
+typecheck` passed; `pnpm vitest run src/runtime/__tests__/project-graph.test.ts
+src/runtime/__tests__/serve-settings.test.ts
+src/web/surfaces/project/__tests__/SettingsTab.svelte.test.ts` passed with 82
+tests; `pnpm vitest run src/runtime/__tests__/structural-map.test.ts
+src/runtime/__tests__/context-builder.test.ts
+src/runtime/__tests__/effective-memory-packet.test.ts` passed with 89 tests;
+`pnpm build` passed. Full `pnpm test` remains blocked by bounded-chat UI tests
 outside this branch's changed files:
 `src/web/surfaces/__tests__/ProjectView.svelte.test.ts` and
 `src/web/surfaces/project/__tests__/ThreadTab.svelte.test.ts`.
+
+18. [x] Persist explicit project-domain authority assignments in the local
+    project graph. After this: expose project-graph actions through the project
+    API.
+    Completed in `feature/0.10-structural-domain-intelligence`: the global
+    local project graph now records domain authority assignments separately
+    from dependency requests, preserves those assignments in scoped graph views,
+    and never writes provider project state during assignment.
+19. [x] Add project API actions for assigning domain authority and moving
+    provider/consumer requests through the state machine from each owning
+    project context. After this: surface the graph in settings.
+    Completed in `feature/0.10-structural-domain-intelligence`: the project
+    API supports domain authority assignment plus provider accept/plan/deliver
+    and consumer review/return/accept actions, each scoped through the current
+    project path and the existing authority checks.
+20. [x] Add a settings graph surface that shows structural domains, lets the
+    owner assign each domain to a local project, and displays inbound/outgoing
+    dependency requests. After this: add request action controls.
+    Completed in `feature/0.10-structural-domain-intelligence`: Settings now
+    has a Project graph section with structural-domain assignment controls,
+    local project visibility, and inbound/outgoing request cards.
+21. [x] Add request action controls for provider intake/planning/delivery and
+    consumer review/return/acceptance, always scoped to the current project
+    authority. After this: prove the flow with tests.
+    Completed in `feature/0.10-structural-domain-intelligence`: request cards
+    expose only the actions valid for the current project role and edge state.
+22. [x] Add runtime/API/UI tests for the full cross-project domain lifecycle:
+    assign domain, create request, provider sees inbound request, provider
+    accepts/plans/delivers, consumer verifies/returns, provider redelivers, and
+    consumer accepts. After this: rerun verification, update this ledger, commit
+    and push.
+    Evidence: `pnpm vitest run src/runtime/__tests__/project-graph.test.ts
+    src/runtime/__tests__/serve-settings.test.ts
+    src/web/surfaces/project/__tests__/SettingsTab.svelte.test.ts` passed with
+    82 tests.
 
 1. [x] Replace the current pnpm-only discovery core with a provider interface
    for package/workspace discovery. After this: implement JS/npm/yarn/bun

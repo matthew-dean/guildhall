@@ -2811,4 +2811,156 @@ describe('GET /api/project — bootstrap status', () => {
       await fs.rm(providerDir, { recursive: true, force: true })
     }
   })
+
+  it('assigns domain authority and drives provider/consumer request actions through owning project endpoints', async () => {
+    const providerDir = await fs.mkdtemp(path.join(os.tmpdir(), 'guildhall-serve-settings-provider-'))
+    try {
+      bootstrapWorkspace(providerDir, { name: 'Looma' })
+      registerWorkspace({ id: 'looma', path: providerDir, name: 'Looma', tags: [] })
+
+      const consumerApp = buildServeApp({ projectPath: tmpDir }).app
+      const assign = await consumerApp.fetch(new Request(scoped('/api/project/project-graph/domain-authority'), {
+        method: 'POST',
+        body: JSON.stringify({
+          domainId: 'domain:editor',
+          domainLabel: 'Editor',
+          providerProjectId: 'looma',
+        }),
+      }))
+      expect(assign.status).toBe(200)
+      const assignBody = (await assign.json()) as {
+        projectGraph?: { domainAuthorities?: Array<{ domain?: { id?: string }; providerProject?: { id?: string } }> }
+      }
+      expect(assignBody.projectGraph?.domainAuthorities).toContainEqual(expect.objectContaining({
+        domain: expect.objectContaining({ id: 'domain:editor' }),
+        providerProject: expect.objectContaining({ id: 'looma' }),
+      }))
+
+      const edge = await createProjectDependencyRequest({
+        consumerProject: { id: PROJECT_ID, path: tmpDir, label: 'Settings Test' },
+        providerProject: { id: 'looma', path: providerDir, label: 'Looma' },
+        domain: { id: 'domain:editor', label: 'Editor' },
+        consumerNeed: 'Settings Test needs a portable editor control.',
+        rationale: 'The editor domain is provider-owned by Looma.',
+        requestedBy: 'coordinator:settings-test',
+        expectedDelivery: {
+          format: 'portable editor package',
+          channel: 'local path artifact',
+          consumerVerificationPlan: ['Run Settings Test editor integration.'],
+        },
+        now: '2026-06-01T12:30:00.000Z',
+      })
+
+      const providerApp = buildServeApp({ projectPath: providerDir }).app
+      const providerGraph = await providerApp.fetch(new Request(`http://localhost/api/project/project-graph?projectId=looma`))
+      expect(providerGraph.status).toBe(200)
+      const providerBody = (await providerGraph.json()) as {
+        projectGraph?: { dependencyEdges?: Array<{ id?: string; state?: string; consumerProjectId?: string }> }
+      }
+      expect(providerBody.projectGraph?.dependencyEdges).toContainEqual(expect.objectContaining({
+        id: edge.id,
+        state: 'submitted',
+        consumerProjectId: PROJECT_ID,
+      }))
+
+      const providerAccept = await providerApp.fetch(new Request(`http://localhost/api/project/project-graph/requests/${edge.id}/provider-accept?projectId=looma`, {
+        method: 'POST',
+        body: JSON.stringify({ providerTaskRef: 'task-editor-control' }),
+      }))
+      expect(providerAccept.status).toBe(200)
+      expect(await readJsonState(providerAccept)).toEqual(expect.objectContaining({ edgeState: 'provider_shaping' }))
+
+      const providerPlan = await providerApp.fetch(new Request(`http://localhost/api/project/project-graph/requests/${edge.id}/provider-plan?projectId=looma`, {
+        method: 'POST',
+        body: JSON.stringify({
+          format: 'portable editor package',
+          channel: 'local path artifact',
+          providerProofPlan: ['pnpm test editor'],
+          consumerVerificationPlan: ['pnpm test settings-editor'],
+        }),
+      }))
+      expect(providerPlan.status).toBe(200)
+      expect(await readJsonState(providerPlan)).toEqual(expect.objectContaining({ edgeState: 'provider_working' }))
+
+      const providerDeliver = await providerApp.fetch(new Request(`http://localhost/api/project/project-graph/requests/${edge.id}/provider-deliver?projectId=looma`, {
+        method: 'POST',
+        body: JSON.stringify({
+          id: 'delivery-1',
+          format: 'portable editor package',
+          channel: 'local path artifact',
+          coordinates: `${providerDir}/dist/editor.tgz`,
+          providerProof: ['pnpm test editor passed'],
+        }),
+      }))
+      expect(providerDeliver.status).toBe(200)
+      expect(await readJsonState(providerDeliver)).toEqual(expect.objectContaining({ edgeState: 'delivered' }))
+
+      const consumerReview = await consumerApp.fetch(new Request(scoped(`/api/project/project-graph/requests/${edge.id}/consumer-review`), {
+        method: 'POST',
+        body: JSON.stringify({ verificationContext: 'Settings Test tried the editor package.' }),
+      }))
+      expect(consumerReview.status).toBe(200)
+      expect(await readJsonState(consumerReview)).toEqual(expect.objectContaining({ edgeState: 'consumer_reviewing' }))
+
+      const consumerReturn = await consumerApp.fetch(new Request(scoped(`/api/project/project-graph/requests/${edge.id}/consumer-return`), {
+        method: 'POST',
+        body: JSON.stringify({
+          deliveryReceiptId: 'delivery-1',
+          mismatchKind: 'format',
+          expected: 'tarball package',
+          received: 'folder path',
+          failedVerification: ['install failed'],
+          requestedCorrection: 'Publish a tarball package.',
+        }),
+      }))
+      expect(consumerReturn.status).toBe(200)
+      expect(await readJsonState(consumerReturn)).toEqual(expect.objectContaining({ edgeState: 'revision_requested' }))
+
+      const providerRevise = await providerApp.fetch(new Request(`http://localhost/api/project/project-graph/requests/${edge.id}/provider-plan?projectId=looma`, {
+        method: 'POST',
+        body: JSON.stringify({
+          format: 'tarball package',
+          channel: 'local path artifact',
+          consumerVerificationPlan: ['install tarball'],
+        }),
+      }))
+      expect(providerRevise.status).toBe(200)
+      expect(await readJsonState(providerRevise)).toEqual(expect.objectContaining({ edgeState: 'provider_working' }))
+
+      const providerRedeliver = await providerApp.fetch(new Request(`http://localhost/api/project/project-graph/requests/${edge.id}/provider-deliver?projectId=looma`, {
+        method: 'POST',
+        body: JSON.stringify({
+          id: 'delivery-2',
+          format: 'tarball package',
+          channel: 'local path artifact',
+          coordinates: `${providerDir}/dist/editor-2.tgz`,
+          providerProof: ['tarball created'],
+        }),
+      }))
+      expect(providerRedeliver.status).toBe(200)
+      expect(await readJsonState(providerRedeliver)).toEqual(expect.objectContaining({ edgeState: 'delivered' }))
+
+      const consumerReviewAgain = await consumerApp.fetch(new Request(scoped(`/api/project/project-graph/requests/${edge.id}/consumer-review`), {
+        method: 'POST',
+        body: JSON.stringify({ verificationContext: 'Settings Test installed the tarball.' }),
+      }))
+      expect(consumerReviewAgain.status).toBe(200)
+
+      const consumerAccept = await consumerApp.fetch(new Request(scoped(`/api/project/project-graph/requests/${edge.id}/consumer-accept`), {
+        method: 'POST',
+        body: JSON.stringify({ consumerProof: ['install tarball passed'] }),
+      }))
+      expect(consumerAccept.status).toBe(200)
+      expect(await readJsonState(consumerAccept)).toEqual(expect.objectContaining({ edgeState: 'resolved' }))
+    } finally {
+      await fs.rm(providerDir, { recursive: true, force: true })
+    }
+  })
 })
+
+async function readJsonState(response: Response): Promise<{ edgeState?: string }> {
+  const body = (await response.json()) as {
+    edge?: { stateMachine?: { state?: string } }
+  }
+  return { edgeState: body.edge?.stateMachine?.state }
+}

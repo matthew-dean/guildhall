@@ -159,7 +159,21 @@ import {
   listExternalAgentLinks,
   recordExternalAgentLink,
 } from './external-agent-links.js'
-import { queryProjectGraphView } from './project-graph.js'
+import {
+  acceptProjectDependencyDelivery,
+  assignProjectDomainAuthority,
+  beginProjectDependencyConsumerReview,
+  commitProjectDependencyDeliveryPlan,
+  deliverProjectDependency,
+  importProjectDependencyRequestForProvider,
+  queryProjectGraphView,
+  requestProjectDependencyRevision,
+  reviseProjectDependencyPlan,
+  type ConsumerReturnPacket,
+  type DeliveryReceipt,
+  type ProjectDependencyEdge,
+  type ProjectGraphNodeRef,
+} from './project-graph.js'
 import {
   applyStructuralMapReviewAction,
   readStructuralMapReviewSummary,
@@ -2663,6 +2677,129 @@ export function buildServeApp(opts: ServeOptions = {}): {
   app.get('/api/project/project-graph', async c => {
     try {
       return c.json({
+        projectGraph: queryProjectGraphView({
+          projectId: project.id,
+          projectPath: project.path,
+        }),
+      })
+    } catch (err) {
+      return c.json({ error: err instanceof Error ? err.message : String(err) }, 500)
+    }
+  })
+
+  app.post('/api/project/project-graph/domain-authority', async c => {
+    try {
+      const body = await c.req.json().catch(() => ({})) as {
+        domainId?: unknown
+        domainLabel?: unknown
+        providerProjectId?: unknown
+      }
+      const domainId = typeof body.domainId === 'string' ? body.domainId.trim() : ''
+      const domainLabel = typeof body.domainLabel === 'string' && body.domainLabel.trim()
+        ? body.domainLabel.trim()
+        : domainId.replace(/^domain:/, '')
+      const providerProjectId = typeof body.providerProjectId === 'string' ? body.providerProjectId.trim() : ''
+      if (!domainId) return c.json({ error: 'domainId is required.' }, 400)
+      if (!providerProjectId) return c.json({ error: 'providerProjectId is required.' }, 400)
+
+      const providerProject = resolveLocalProjectRefForGraph(providerProjectId, project)
+      if (!providerProject) return c.json({ error: `Local project not found: ${providerProjectId}` }, 404)
+      const domainAuthority = await assignProjectDomainAuthority({
+        domain: { id: domainId, label: domainLabel },
+        providerProject,
+        assignedBy: 'owner',
+        evidenceRefs: [`project:${project.id}`, domainId],
+      })
+      return c.json({
+        domainAuthority,
+        projectGraph: queryProjectGraphView({
+          projectId: project.id,
+          projectPath: project.path,
+        }),
+      })
+    } catch (err) {
+      return c.json({ error: err instanceof Error ? err.message : String(err) }, 500)
+    }
+  })
+
+  app.post('/api/project/project-graph/requests/:edgeId/:action', async c => {
+    try {
+      const body = await c.req.json().catch(() => ({})) as Record<string, unknown>
+      const edgeId = c.req.param('edgeId')
+      const action = c.req.param('action')
+      let edge: ProjectDependencyEdge
+      switch (action) {
+        case 'provider-accept':
+          edge = await importProjectDependencyRequestForProvider({
+            edgeId,
+            providerProjectPath: project.path,
+            importedBy: 'owner',
+            providerTaskRef: stringField(body.providerTaskRef),
+            providerCoordinatorContext: {
+              projectId: project.id,
+              coordinatorId: stringField(body.coordinatorId) ?? 'owner',
+              summary: stringField(body.summary) ?? 'Provider accepted the incoming project request.',
+              evidenceRefs: [`project:${project.id}`, `edge:${edgeId}`],
+            },
+          })
+          break
+        case 'provider-plan': {
+          const deliveryExpectation = parseProjectDependencyDeliveryExpectation(body)
+          edge = await reviseProjectDependencyPlan({
+            edgeId,
+            providerProjectPath: project.path,
+            revisedBy: 'owner',
+            deliveryExpectation,
+          }).catch(async (err) => {
+            if (err instanceof Error && /cannot revise_plan from provider_shaping/.test(err.message)) {
+              return commitProjectDependencyDeliveryPlan({
+                edgeId,
+                providerProjectPath: project.path,
+                plannedBy: 'owner',
+                deliveryExpectation,
+              })
+            }
+            throw err
+          })
+          break
+        }
+        case 'provider-deliver':
+          edge = await deliverProjectDependency({
+            edgeId,
+            providerProjectPath: project.path,
+            deliveredBy: 'owner',
+            deliveryReceipt: parseProjectDependencyDeliveryReceipt(body),
+          })
+          break
+        case 'consumer-review':
+          edge = await beginProjectDependencyConsumerReview({
+            edgeId,
+            consumerProjectPath: project.path,
+            reviewedBy: 'owner',
+            verificationContext: stringField(body.verificationContext) ?? 'Consumer started verification against the requested delivery format.',
+          })
+          break
+        case 'consumer-return':
+          edge = await requestProjectDependencyRevision({
+            edgeId,
+            consumerProjectPath: project.path,
+            returnedBy: 'owner',
+            returnPacket: parseConsumerReturnPacket(body),
+          })
+          break
+        case 'consumer-accept':
+          edge = await acceptProjectDependencyDelivery({
+            edgeId,
+            consumerProjectPath: project.path,
+            acceptedBy: 'owner',
+            consumerProof: stringArrayField(body.consumerProof) ?? [stringField(body.proof) ?? 'Consumer verified the delivery.'],
+          })
+          break
+        default:
+          return c.json({ error: `Unknown project graph action: ${action}` }, 400)
+      }
+      return c.json({
+        edge,
         projectGraph: queryProjectGraphView({
           projectId: project.id,
           projectPath: project.path,
@@ -8799,6 +8936,102 @@ function parseStructuralMapReviewAction(value: unknown): StructuralMapReviewActi
       return str('questionId') ? { kind, questionId: str('questionId'), ...(str('reason') ? { reason: str('reason') } : {}) } : null
     default:
       return null
+  }
+}
+
+function resolveLocalProjectRefForGraph(
+  projectId: string,
+  currentProject: { id: string; path: string; config?: { name?: string } | null },
+): (ProjectGraphNodeRef & { path: string }) | null {
+  if (projectId === currentProject.id) {
+    return {
+      id: currentProject.id,
+      label: currentProject.config?.name ?? currentProject.id,
+      path: currentProject.path,
+    }
+  }
+  const workspace = listWorkspaces().find(candidate => candidate.id === projectId)
+  if (!workspace?.path) return null
+  return {
+    id: workspace.id,
+    label: workspace.name,
+    path: workspace.path,
+  }
+}
+
+function stringField(value: unknown): string | undefined {
+  return typeof value === 'string' && value.trim() ? value.trim() : undefined
+}
+
+function stringArrayField(value: unknown): string[] | undefined {
+  if (!Array.isArray(value)) return undefined
+  const items = value.filter((item): item is string => typeof item === 'string' && item.trim().length > 0)
+  return items.length > 0 ? items.map(item => item.trim()) : undefined
+}
+
+function parseProjectDependencyDeliveryExpectation(value: Record<string, unknown>): NonNullable<ProjectDependencyEdge['expectedDelivery']> {
+  const nested = value.deliveryExpectation && typeof value.deliveryExpectation === 'object'
+    ? value.deliveryExpectation as Record<string, unknown>
+    : value
+  const format = stringField(nested.format) ?? 'Project dependency delivery'
+  const channel = stringField(nested.channel) ?? 'local project graph'
+  return {
+    format,
+    channel,
+    consumerVerificationPlan: stringArrayField(nested.consumerVerificationPlan) ?? [
+      stringField(nested.consumerVerification) ?? `Verify ${format} from ${channel}.`,
+    ],
+    ...(stringArrayField(nested.providerProofPlan) ? { providerProofPlan: stringArrayField(nested.providerProofPlan) } : {}),
+  }
+}
+
+function parseProjectDependencyDeliveryReceipt(value: Record<string, unknown>): DeliveryReceipt {
+  const nested = value.deliveryReceipt && typeof value.deliveryReceipt === 'object'
+    ? value.deliveryReceipt as Record<string, unknown>
+    : value
+  const format = stringField(nested.format) ?? 'Project dependency delivery'
+  const channel = stringField(nested.channel) ?? 'local project graph'
+  const id = stringField(nested.id) ?? `delivery-${Date.now().toString(36)}`
+  return {
+    id,
+    format,
+    channel,
+    coordinates: stringField(nested.coordinates) ?? channel,
+    providerProof: stringArrayField(nested.providerProof) ?? [
+      stringField(nested.proof) ?? `Provider delivered ${format}.`,
+    ],
+  }
+}
+
+function parseConsumerReturnPacket(value: Record<string, unknown>): ConsumerReturnPacket {
+  const nested = value.returnPacket && typeof value.returnPacket === 'object'
+    ? value.returnPacket as Record<string, unknown>
+    : value
+  return {
+    deliveryReceiptId: stringField(nested.deliveryReceiptId) ?? stringField(nested.receiptId) ?? 'latest',
+    mismatchKind: consumerReturnMismatchKind(stringField(nested.mismatchKind)),
+    expected: stringField(nested.expected) ?? 'The delivery should match the negotiated format and channel.',
+    received: stringField(nested.received) ?? 'The delivery could not be consumed as provided.',
+    failedVerification: stringArrayField(nested.failedVerification) ?? [
+      stringField(nested.failedCheck) ?? 'Consumer verification failed.',
+    ],
+    evidenceRefs: stringArrayField(nested.evidenceRefs) ?? [],
+    requestedCorrection: stringField(nested.requestedCorrection) ?? 'Please redeliver in the negotiated format.',
+  }
+}
+
+function consumerReturnMismatchKind(value: string | undefined): ConsumerReturnPacket['mismatchKind'] {
+  switch (value) {
+    case 'format':
+    case 'channel':
+    case 'scope':
+    case 'behavior':
+    case 'compatibility':
+    case 'docs':
+    case 'proof':
+      return value
+    default:
+      return 'format'
   }
 }
 
