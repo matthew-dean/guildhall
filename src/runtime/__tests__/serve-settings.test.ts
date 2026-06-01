@@ -17,6 +17,7 @@ import { proposeProjectSkill } from '@guildhall/skills'
 import { getProjectLocalHistoryDir, getProjectTranscriptPath } from '@guildhall/sessions'
 import { buildServeApp } from '../serve.js'
 import { persistLearningCandidates } from '../learning.js'
+import { acceptStructuralMap, draftStructuralMap, submitStructuralMapForReview } from '../structural-map.js'
 import type { LearningCandidate } from '../policy.js'
 
 const execFileP = promisify(execFile)
@@ -2641,5 +2642,75 @@ describe('GET /api/project — bootstrap status', () => {
     const inboxRes = await app.fetch(new Request(scoped('/api/project/inbox')))
     expect(inboxRes.headers.get('cache-control')).toBe('no-store, no-cache, must-revalidate')
     expect(inboxRes.headers.get('pragma')).toBe('no-cache')
+  })
+
+  it('includes a structural map review summary for owner review', async () => {
+    await fs.mkdir(path.join(tmpDir, 'packages', 'core'), { recursive: true })
+    await fs.mkdir(path.join(tmpDir, 'packages', 'editor'), { recursive: true })
+    await fs.writeFile(
+      path.join(tmpDir, 'package.json'),
+      JSON.stringify({
+        name: 'settings-test',
+        private: true,
+        workspaces: ['packages/*'],
+      }, null, 2),
+      'utf8',
+    )
+    await fs.writeFile(
+      path.join(tmpDir, 'packages', 'core', 'package.json'),
+      JSON.stringify({
+        name: '@settings/core',
+        scripts: { test: 'vitest run' },
+      }, null, 2),
+      'utf8',
+    )
+    await fs.writeFile(
+      path.join(tmpDir, 'packages', 'editor', 'package.json'),
+      JSON.stringify({
+        name: '@settings/editor',
+        dependencies: { '@settings/core': 'workspace:*' },
+      }, null, 2),
+      'utf8',
+    )
+    const draft = await draftStructuralMap({
+      projectId: PROJECT_ID,
+      projectRoot: tmpDir,
+      now: '2026-06-01T12:00:00.000Z',
+    })
+    const review = await submitStructuralMapForReview({
+      projectRoot: tmpDir,
+      mapId: draft.id,
+      actor: 'coordinator',
+      now: '2026-06-01T12:01:00.000Z',
+    })
+    await acceptStructuralMap({
+      projectRoot: tmpDir,
+      mapId: review.id,
+      actor: 'owner',
+      now: '2026-06-01T12:02:00.000Z',
+    })
+
+    const { app } = buildServeApp({ projectPath: tmpDir })
+    const res = await app.fetch(new Request(scoped('/api/project')))
+    expect(res.status).toBe(200)
+    const body = (await res.json()) as {
+      structuralMapReview?: {
+        state?: string
+        counts?: Record<string, number>
+        packages?: Array<{ id: string; label: string }>
+        domains?: Array<{ id: string; label: string }>
+        executableUnits?: Array<{ id: string; command?: string }>
+        gitRoots?: Array<{ path: string }>
+        questions?: Array<{ id: string; prompt: string }>
+      }
+    }
+
+    expect(body.structuralMapReview?.state).toBe('accepted')
+    expect(body.structuralMapReview?.counts?.packages).toBe(2)
+    expect(body.structuralMapReview?.packages?.map(item => item.label)).toEqual(expect.arrayContaining(['@settings/core', '@settings/editor']))
+    expect(body.structuralMapReview?.domains?.some(item => item.id.startsWith('domain:'))).toBe(true)
+    expect(body.structuralMapReview?.executableUnits?.some(item => item.command === 'npm --workspace @settings/core run test')).toBe(true)
+    expect(body.structuralMapReview?.gitRoots?.[0]?.path).toBe('.')
+    expect(body.structuralMapReview?.questions?.length).toBeGreaterThan(0)
   })
 })

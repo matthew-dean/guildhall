@@ -71,6 +71,7 @@
   const actionableInbox = $derived(inboxItems.filter(item => item.severity !== 'low').slice(0, 3))
   const runtime = $derived(detail.runtime ?? null)
   const memoryHealth = $derived(detail.memoryHealth ?? null)
+  const structuralMapReview = $derived(detail.structuralMapReview ?? null)
   const primaryProofPaths = $derived.by(() => {
     return tasks
       .flatMap(task => (task.proofPaths ?? []).map(proofPath => ({ task, proofPath })))
@@ -311,6 +312,21 @@
       default: return 'Open'
     }
   }
+
+  const structuralMapMetricRows = $derived.by(() => {
+    const counts = structuralMapReview?.counts
+    if (!counts) return []
+    return [
+      countLabel(counts.packages ?? 0, 'package'),
+      countLabel(counts.domains ?? 0, 'domain'),
+      countLabel(counts.crossCuttingDomains ?? 0, 'cross-cutting'),
+      countLabel(counts.executableUnits ?? 0, 'command'),
+      countLabel(counts.gitRoots ?? 0, 'Git root'),
+      countLabel(counts.ignoredGitRoots ?? 0, 'ignored root'),
+      countLabel(counts.conflicts ?? 0, 'conflict'),
+      countLabel(counts.questions ?? 0, 'question'),
+    ]
+  })
 
   const blockedRows = $derived.by(() => {
     return tasks
@@ -565,6 +581,21 @@
     if (mode === 'host-run') return 'Compatibility mode'
     return 'Runtime mode unknown'
   }
+
+  function countLabel(value: number, singular: string): string {
+    return `${value} ${value === 1 ? singular : `${singular}s`}`
+  }
+
+  function structuralStateLabel(value: string | undefined): string {
+    switch (value) {
+      case 'accepted': return 'Accepted'
+      case 'owner_review': return 'Owner review'
+      case 'correction_requested': return 'Correction requested'
+      case 'draft': return 'Draft'
+      case 'superseded': return 'Superseded'
+      default: return 'Unknown'
+    }
+  }
 </script>
 
 <div class="overview">
@@ -753,6 +784,85 @@
         </UtilityPanel>
       </div>
     </Card>
+
+    {#if structuralMapReview}
+      <Card title="Project map" titleTag="h2" className="overview-card">
+        <div class="structural-map-review">
+          <div class="map-review-head">
+            <Chip label={structuralStateLabel(structuralMapReview.state)} tone={structuralMapReview.state === 'accepted' ? 'ok' : structuralMapReview.state === 'correction_requested' ? 'warn' : 'neutral'} />
+            {#if structuralMapReview.generatedAt}
+              <span>Mapped {formatDate(structuralMapReview.generatedAt)}</span>
+            {/if}
+          </div>
+
+          <div class="map-metrics" aria-label="Project map counts">
+            {#each structuralMapMetricRows as metric (metric)}
+              <span>{metric}</span>
+            {/each}
+          </div>
+
+          <div class="map-review-sections">
+            {#if (structuralMapReview.domains ?? []).length > 0 || (structuralMapReview.crossCuttingDomains ?? []).length > 0}
+              <div class="map-review-section">
+                <strong>Domains</strong>
+                <div class="map-token-list">
+                  {#each [...(structuralMapReview.domains ?? []), ...(structuralMapReview.crossCuttingDomains ?? [])] as item (item.id)}
+                    <span>{item.label}</span>
+                  {/each}
+                </div>
+              </div>
+            {/if}
+
+            {#if (structuralMapReview.packages ?? []).length > 0}
+              <div class="map-review-section">
+                <strong>Packages</strong>
+                <div class="map-token-list">
+                  {#each (structuralMapReview.packages ?? []).slice(0, 4) as item (item.id)}
+                    <span>{item.label}</span>
+                  {/each}
+                </div>
+              </div>
+            {/if}
+
+            {#if (structuralMapReview.executableUnits ?? []).length > 0}
+              <div class="map-review-section">
+                <strong>Executable units</strong>
+                <div class="map-token-list">
+                  {#each (structuralMapReview.executableUnits ?? []).slice(0, 3) as item (item.id)}
+                    <span>{item.command ?? item.label}</span>
+                  {/each}
+                </div>
+              </div>
+            {/if}
+
+            {#if (structuralMapReview.gitRoots ?? []).length > 0 || (structuralMapReview.ignoredGitRoots ?? []).length > 0}
+              <div class="map-review-section">
+                <strong>Git authority</strong>
+                <div class="map-token-list">
+                  {#each [...(structuralMapReview.gitRoots ?? []), ...(structuralMapReview.ignoredGitRoots ?? [])] as item (item.id)}
+                    <span>{item.path ?? item.label}</span>
+                  {/each}
+                </div>
+              </div>
+            {/if}
+
+            {#if (structuralMapReview.conflicts ?? []).length > 0}
+              <div class="map-review-section map-review-warning">
+                <strong>Conflicts</strong>
+                <span>{(structuralMapReview.conflicts ?? []).map(item => item.message).filter(Boolean).join(' ')}</span>
+              </div>
+            {/if}
+
+            {#if (structuralMapReview.questions ?? []).length > 0}
+              <div class="map-review-section map-review-warning">
+                <strong>Questions</strong>
+                <span>{(structuralMapReview.questions ?? []).map(item => item.prompt).filter(Boolean).join(' ')}</span>
+              </div>
+            {/if}
+          </div>
+        </div>
+      </Card>
+    {/if}
 
     <Card title="Primary proof paths" titleTag="h2" className="overview-card">
       {#if primaryProofPaths.length === 0}
@@ -997,6 +1107,64 @@
   }
   :global(.run-plan-row) {
     grid-template-columns: auto minmax(0, 1fr) auto;
+  }
+  .structural-map-review,
+  .map-review-sections {
+    display: grid;
+    gap: var(--s-3);
+    min-width: 0;
+  }
+  .map-review-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: var(--s-2);
+    color: var(--text-muted);
+    font-size: var(--fs-1);
+  }
+  .map-metrics {
+    display: flex;
+    flex-wrap: wrap;
+    gap: var(--s-1);
+  }
+  .map-metrics span {
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    padding: 0.2rem 0.45rem;
+    color: var(--text-muted);
+    font-size: var(--fs-0);
+    font-weight: 700;
+  }
+  .map-review-section {
+    display: grid;
+    gap: var(--s-1);
+    min-width: 0;
+    padding-top: var(--s-2);
+    border-top: 1px solid var(--border);
+  }
+  .map-review-section strong {
+    color: var(--text);
+    font-size: var(--fs-1);
+  }
+  .map-review-section span,
+  .map-token-list span {
+    color: var(--text-muted);
+    font-size: var(--fs-1);
+    line-height: var(--lh-body);
+    overflow-wrap: anywhere;
+  }
+  .map-token-list {
+    display: flex;
+    flex-wrap: wrap;
+    gap: var(--s-1);
+  }
+  .map-token-list span {
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    padding: 0.15rem 0.4rem;
+  }
+  .map-review-warning span {
+    color: var(--text);
   }
   .event-row {
     display: grid;

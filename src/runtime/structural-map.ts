@@ -185,6 +185,54 @@ export interface StructuralMapRefreshResult {
   refreshedAt: string
 }
 
+export interface StructuralMapReviewSummaryNode {
+  id: string
+  label: string
+  path?: string
+  command?: string
+  confidence: StructuralConfidence
+  evidenceScore?: number
+  freshness?: StructuralFreshness
+}
+
+export interface StructuralMapReviewSummaryConflict {
+  id: string
+  message: string
+  severity: 'low' | 'medium' | 'high'
+  targetId?: string
+}
+
+export interface StructuralMapReviewSummaryQuestion {
+  id: string
+  prompt: string
+  reason?: string
+  targetIds?: string[]
+}
+
+export interface StructuralMapReviewSummary {
+  id: string
+  state: StructuralMapState
+  generatedAt: string
+  counts: {
+    gitRoots: number
+    ignoredGitRoots: number
+    packages: number
+    domains: number
+    crossCuttingDomains: number
+    executableUnits: number
+    conflicts: number
+    questions: number
+  }
+  gitRoots: StructuralMapReviewSummaryNode[]
+  ignoredGitRoots: StructuralMapReviewSummaryNode[]
+  packages: StructuralMapReviewSummaryNode[]
+  domains: StructuralMapReviewSummaryNode[]
+  crossCuttingDomains: StructuralMapReviewSummaryNode[]
+  executableUnits: StructuralMapReviewSummaryNode[]
+  conflicts: StructuralMapReviewSummaryConflict[]
+  questions: StructuralMapReviewSummaryQuestion[]
+}
+
 export interface StructuralDomainCoordinator {
   id: string
   domainIds?: string[]
@@ -870,6 +918,11 @@ export function readAcceptedStructuralMap(projectRoot: string): StructuralMapDra
   return map
 }
 
+export function readStructuralMapReviewSummary(projectRoot: string): StructuralMapReviewSummary | null {
+  const map = readAcceptedStructuralMap(projectRoot)
+  return map ? summarizeStructuralMapForReview(map) : null
+}
+
 export async function refreshStructuralMap(input: {
   projectRoot: string
   previousMapId: string
@@ -906,6 +959,58 @@ export async function refreshStructuralMap(input: {
   }
   writeJsonFile(path.join(structuralMapDir(input.projectRoot), 'refreshes', `${result.id}.json`), result)
   return result
+}
+
+export function summarizeStructuralMapForReview(map: StructuralMapDraft): StructuralMapReviewSummary {
+  const nodesByKind = (kind: StructuralNodeKind) => map.nodes.filter(node => node.kind === kind)
+  const conflicts = map.nodes
+    .flatMap(node => (node.conflicts ?? []).map(conflict => ({
+      id: `${conflict.kind}:${conflict.targetId}`,
+      message: conflict.summary,
+      severity: conflict.evidenceRefs.length > 1 ? 'medium' as const : 'low' as const,
+      targetId: conflict.targetId,
+    })))
+  const gitRoots = nodesByKind('git_authority_root').map(summaryNode)
+  const ignoredGitRoots = map.ignoredGitRoots.map((root, index): StructuralMapReviewSummaryNode => ({
+    id: `ignored-git-root:${root.relativePath || index}`,
+    label: labelFromPath(root.relativePath) || 'Ignored Git root',
+    path: root.relativePath,
+    confidence: root.evidence[0]?.confidence ?? 'low',
+  }))
+  const packages = nodesByKind('package').map(summaryNode)
+  const domains = nodesByKind('domain_group').map(summaryNode)
+  const crossCuttingDomains = nodesByKind('cross_cutting_domain').map(summaryNode)
+  const executableUnits = nodesByKind('executable_unit').map(summaryNode)
+  const questions = map.ownerQuestions.map(question => ({
+    id: question.id,
+    prompt: question.prompt,
+    reason: question.reason,
+    targetIds: question.targetIds,
+  }))
+
+  return {
+    id: map.id,
+    state: map.stateMachine.state,
+    generatedAt: map.generatedAt,
+    counts: {
+      gitRoots: gitRoots.length,
+      ignoredGitRoots: ignoredGitRoots.length,
+      packages: packages.length,
+      domains: domains.length,
+      crossCuttingDomains: crossCuttingDomains.length,
+      executableUnits: executableUnits.length,
+      conflicts: conflicts.length,
+      questions: questions.length,
+    },
+    gitRoots,
+    ignoredGitRoots,
+    packages,
+    domains,
+    crossCuttingDomains,
+    executableUnits,
+    conflicts,
+    questions,
+  }
 }
 
 export function buildStructuralContextSlice(map: StructuralMapDraft, task: {
@@ -1777,6 +1882,23 @@ function parseQuotedList(value: string): string[] {
 
 function slugify(value: string): string {
   return value.toLowerCase().replace(/^@/, '').replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '') || 'item'
+}
+
+function summaryNode(node: StructuralMapNode): StructuralMapReviewSummaryNode {
+  return {
+    id: node.id,
+    label: node.packageName ?? node.label,
+    path: node.relativePath,
+    command: node.command,
+    confidence: node.confidence,
+    evidenceScore: node.evidenceScore,
+    freshness: node.freshness,
+  }
+}
+
+function labelFromPath(value: string): string {
+  if (!value || value === '.') return 'Project root'
+  return titleCase(path.basename(value))
 }
 
 function titleCase(value: string): string {

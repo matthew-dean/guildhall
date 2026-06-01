@@ -159,6 +159,7 @@ import {
   listExternalAgentLinks,
   recordExternalAgentLink,
 } from './external-agent-links.js'
+import { readStructuralMapReviewSummary } from './structural-map.js'
 import { loadEffectiveDesignTaste } from './design-taste.js'
 import {
   approveMetaIntake,
@@ -2590,6 +2591,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
             .filter((task): task is { id: string } => typeof task.id === 'string'),
         ),
       ])
+      const structuralMapReview = readStructuralMapReviewSummary(project.path)
       const inbox = await buildProjectInboxSnapshot({
         projectPath: project.path,
         initializationNeeded: project.initializationNeeded,
@@ -2618,6 +2620,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
         providerStatus,
         runtime,
         memoryHealth,
+        ...(structuralMapReview ? { structuralMapReview } : {}),
         gitStory,
         startReadiness,
         recentEvents: recent,
