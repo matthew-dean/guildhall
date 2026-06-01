@@ -1,3 +1,5 @@
+import { genericWorkGraphDomainAdapter } from './work-graph-domain-adapters.js'
+
 export type EvidenceSource = {
   path: string
   content: string
@@ -62,6 +64,7 @@ type ExistingTaskMatch = {
 }
 
 const DONEISH_STATUSES = new Set(['done', 'review', 'gate_check'])
+const workGraphDomainAdapter = genericWorkGraphDomainAdapter
 
 export function planEvidenceWorkGraph(input: EvidenceWorkGraphInput): EvidenceWorkGraphPlan {
   const units = input.sources.flatMap(source => extractUnits(source))
@@ -348,95 +351,24 @@ function integrationAcceptanceCriteria(): EvidenceTask['acceptanceCriteria'] {
 }
 
 function implementationProofPaths(unit: EvidenceUnit): EvidenceTask['proofPaths'] {
-  const packageName = unit.targetArea === 'looma' ? '@looma/core' : unit.targetArea
-
-  if (unit.workShape === 'backend-api') {
-    return [
-      {
-        kind: 'command',
-        command: `pnpm test -- ${slugify(unit.name)}.integration`,
-        expectedEvidence: [`${unit.name} integration proof covers membership checks.`],
-      },
-    ]
-  }
-  if (unit.workShape === 'cli-tool') {
-    return [
-      {
-        kind: 'command',
-        command: `pnpm test -- ${slugify(unit.name)}-inspect-json`,
-        expectedEvidence: [`${unit.name} command output fixture is stable.`],
-      },
-    ]
-  }
-  if (unit.workShape === 'docs') {
-    return [
-      {
-        kind: 'command',
-        command: 'pnpm docs:check-help-sync',
-        expectedEvidence: [`${unit.name} docs diff is limited to the requested wording.`],
-      },
-    ]
-  }
-  if (unit.workShape === 'migration') {
-    return [
-      {
-        kind: 'command',
-        command: `pnpm test -- ${slugify(unit.name)}-migration`,
-        expectedEvidence: [`${unit.name} applies cleanly.`, `${unit.name} rollback proof passes.`],
-      },
-    ]
-  }
-  if (unit.workShape === 'bugfix') {
-    return [
-      {
-        kind: 'command',
-        command: `pnpm test -- ${slugify(unit.name)}-regression`,
-        expectedEvidence: [`${unit.name} fails before the fix and passes after it.`],
-      },
-    ]
-  }
-  if (unit.workShape === 'single-edit') {
-    return [
-      {
-        kind: 'command',
-        command: `pnpm test -- ${slugify(unit.name)}-focused`,
-        expectedEvidence: [`${unit.name} stays one bounded edit.`],
-      },
-    ]
-  }
-
-  return [
-    {
-      kind: 'command',
-      command: `pnpm --filter ${packageName} test`,
-      expectedEvidence: [`${unit.name} component contract passes.`],
-    },
-    {
-      kind: 'review',
-      expectedEvidence: [
-        `${unit.name} reuses ${unit.sharedFoundations.join(', ') || 'named foundations'}.`,
-        `tokens or target-area conventions are respected for ${unit.name}.`,
-      ],
-    },
-  ]
+  return workGraphDomainAdapter.proofPaths(unit)
 }
 
 function integrationProofPaths(unit: EvidenceUnit): EvidenceTask['proofPaths'] {
   const consumerSurface = primaryConsumerSurface(unit)
-  const isKnit = unit.consumerSurfaces.some(surface => /knit/i.test(surface))
 
   return [
     {
       kind: 'browser',
       expectedEvidence: [
         `${unit.name} is visible or executable in ${consumerSurface}.`,
-        isKnit ? 'dialog is visible in the Knit flow.' : `${consumerSurface} works in the live consumer flow.`,
+        `${consumerSurface} works in the live consumer flow.`,
       ],
     },
     {
       kind: 'review',
       expectedEvidence: [
-        isKnit ? 'Knit tokens and interaction conventions are respected.' : `${consumerSurface} conventions are respected.`,
+        `${consumerSurface} conventions are respected.`,
       ],
     },
   ]
@@ -484,10 +416,10 @@ function inferWorkShape(seed: UnitSeed): EvidenceUnit['workShape'] {
   if (/\b(backend-api|api|endpoint|membership checks?|tenant|permission)\b/.test(text)) {
     return 'backend-api'
   }
-  if (/\bdashboard integration\b/.test(seed.deliverable)) {
+  if (/\bdashboard integration\b/i.test(seed.deliverable)) {
     return 'frontend-integration'
   }
-  if (/\b(component|primitive|dialog|drawer|button)\b/.test(text)) {
+  if (/\b(component|component-library|ui-library|primitive|design-system|confirmation|navigation)\b/.test(`${seed.path} ${text}`)) {
     return 'ui-component'
   }
   if (/\b(docs-only|docs|quick start|documentation|install warning|clarify)\b/.test(text)) {
@@ -524,45 +456,19 @@ function parseConsumers(value: string): string[] {
 }
 
 function primaryConsumerSurface(unit: EvidenceUnit): string {
-  const consumer = unit.consumerSurfaces[0] ?? unit.targetArea
-
-  if (/Knit destructive confirmation flow/i.test(consumer)) {
-    return 'destructive confirmation flow'
-  }
-  if (/Knit mobile navigation drawer/i.test(consumer)) {
-    return 'mobile navigation drawer'
-  }
-  if (/Admin settings page/i.test(consumer)) {
-    return 'Compliance dashboard'
-  }
-
-  return consumer
+  return workGraphDomainAdapter.primaryConsumerSurface(unit)
 }
 
 function needsIntegrationTask(unit: EvidenceUnit): boolean {
-  if (unit.workShape === 'ui-component') {
-    return unit.consumerSurfaces.some(surface => /Knit|demo app|app|flow|drawer|consumer/i.test(surface))
-      && unit.statusHint !== 'shipped'
-  }
-  return unit.consumerSurfaces.some(surface => /dashboard|settings page|admin/i.test(surface))
-    && unit.statusHint !== 'shipped'
+  return workGraphDomainAdapter.needsIntegrationTask(unit)
 }
 
 function integrationTitle(unit: EvidenceUnit, consumerSurface: string): string {
-  if (unit.consumerSurfaces.some(surface => /Knit/i.test(surface))) {
-    return `Integrate ${unit.name} into Knit ${consumerSurface}`
-  }
-  return `Integrate ${unit.name} into ${consumerSurface}`
+  return workGraphDomainAdapter.integrationTitle(unit, consumerSurface)
 }
 
 function integrationTargetArea(unit: EvidenceUnit, consumerSurface: string): string {
-  if (unit.consumerSurfaces.some(surface => /Knit/i.test(surface))) {
-    return 'knit'
-  }
-  if (/Compliance dashboard/i.test(consumerSurface)) {
-    return 'Admin settings page'
-  }
-  return consumerSurface
+  return workGraphDomainAdapter.integrationTargetArea(unit, consumerSurface)
 }
 
 function findExistingTaskForUnit(unit: EvidenceUnit, existingTasks: Array<Record<string, unknown>>): ExistingTaskMatch | undefined {
@@ -624,29 +530,7 @@ function isExistingDone(task: ExistingTaskMatch | undefined): boolean {
 }
 
 function normalizeDeliverableName(value: string): string {
-  const trimmed = value.trim()
-  if (/^retention policy schema$/i.test(trimmed)) {
-    return 'Retention policy schema'
-  }
-  if (/^retention worker$/i.test(trimmed)) {
-    return 'Retention worker'
-  }
-  if (/^audit export api$/i.test(trimmed)) {
-    return 'Audit export API'
-  }
-  if (/^alertdialog$/i.test(trimmed)) {
-    return 'AlertDialog'
-  }
-  if (/^dialog$/i.test(trimmed)) {
-    return 'Dialog'
-  }
-  if (/^drawer$/i.test(trimmed)) {
-    return 'Drawer'
-  }
-  if (/^button$/i.test(trimmed)) {
-    return 'Button'
-  }
-  return trimmed
+  return workGraphDomainAdapter.normalizeDeliverableName(value)
 }
 
 function markdownLooksLikeModernSpec(spec: string): boolean {

@@ -347,7 +347,7 @@ async function renderFeedback(ctx: GuildhallMcpContext): Promise<string> {
     '',
     `- Project decisions: ${design.decisions.length}`,
     `- Reusable candidates: ${design.candidates.length}`,
-    `- Looma follow-ups: ${design.loomaImprovements.length}`,
+    `- Design-system follow-ups: ${design.designSystemImprovements.length}`,
     '',
   ].filter(Boolean).join('\n')))
 }
@@ -402,7 +402,7 @@ async function renderDesign(ctx: GuildhallMcpContext): Promise<string> {
     `- Decision packets: ${feedback.decisionPackets.length}`,
     `- Project decisions: ${feedback.decisions.length}`,
     `- Reusable candidates: ${feedback.candidates.length}`,
-    `- Looma follow-ups: ${feedback.loomaImprovements.length}`,
+    `- Design-system follow-ups: ${feedback.designSystemImprovements.length}`,
     latestPacket ? `- Latest packet: ${latestPacket.id} - ${latestPacket.summary}` : '- Latest packet: none',
     '',
   ].filter(Boolean).join('\n')))

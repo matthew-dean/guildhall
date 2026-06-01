@@ -868,17 +868,18 @@ describe('SettingsTab', () => {
               targetDesignSystem: 'looma',
               status: 'queued',
             }],
-            loomaImprovements: [{
+            designSystemImprovements: [{
               summary: 'Segmented filter selected state is unclear in compact mobile layouts.',
               targetPackage: 'core',
               status: 'queued',
             }],
           },
-          loomaHook: {
+          designSystemDevelopmentTargets: [{
+            id: 'foundation',
             enabled: false,
             status: 'inactive',
-            reason: 'Experimental local Looma development is not configured.',
-          },
+            reason: 'No local design-system development target is configured.',
+          }],
         })
       }
       if (url.pathname === '/api/project/design-taste') {
@@ -1091,7 +1092,7 @@ describe('SettingsTab', () => {
     expect(screen.getByText('Owner feedback')).toBeInTheDocument()
     expect(screen.getByText('Decision packets')).toBeInTheDocument()
     expect(screen.getByText('Reusable candidates')).toBeInTheDocument()
-    expect(screen.getByText('Looma follow-ups')).toBeInTheDocument()
+    expect(screen.getByText('Design-system follow-ups')).toBeInTheDocument()
     expect(screen.getByText('Taste memory')).toBeInTheDocument()
     expect(screen.getByText('warm-functional-polish')).toBeInTheDocument()
     expect(screen.getByText('segmented-control-or-tabs')).toBeInTheDocument()

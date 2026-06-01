@@ -1808,7 +1808,7 @@ git commit -m "refactor: shrink settings into focused panels"
 - Modify: `src/tools/agent-settings-tool.ts`
 - Move: `src/runtime/guildhall.config.ts`
 
-- [ ] **Step 1: Write adapter tests**
+- [x] **Step 1: Write adapter tests**
 
 Create `src/runtime/__tests__/work-graph-domain-adapters.test.ts`:
 
@@ -1845,7 +1845,13 @@ describe('work graph domain adapters', () => {
 })
 ```
 
-- [ ] **Step 2: Run tests and confirm red**
+Evidence, 2026-06-01 coordinator slice:
+
+- Added `src/runtime/__tests__/work-graph-domain-adapters.test.ts` with
+  assertions that generic proof paths do not inject sample product names and
+  consumer metadata is not renamed to a known app.
+
+- [x] **Step 2: Run tests and confirm red**
 
 Run:
 
@@ -1855,7 +1861,12 @@ pnpm vitest run src/runtime/__tests__/work-graph-domain-adapters.test.ts --repor
 
 Expected: FAIL because adapter module does not exist.
 
-- [ ] **Step 3: Add adapter contract**
+Evidence, 2026-06-01 coordinator slice:
+
+- `pnpm vitest run src/runtime/__tests__/work-graph-domain-adapters.test.ts --reporter=dot`
+  failed because `../work-graph-domain-adapters.js` did not exist.
+
+- [x] **Step 3: Add adapter contract**
 
 Create `src/runtime/work-graph-domain-adapters.ts`:
 
@@ -1919,7 +1930,13 @@ function slugify(value: string): string {
 }
 ```
 
-- [ ] **Step 4: Replace hardcoded work-graph branches**
+Evidence, 2026-06-01 coordinator slice:
+
+- Added `src/runtime/work-graph-domain-adapters.ts` with a generic adapter
+  contract for normalization, consumer-surface selection, integration titles,
+  integration target areas, integration-task decisions, and proof paths.
+
+- [x] **Step 4: Replace hardcoded work-graph branches**
 
 In `src/runtime/evidence-work-graph-intake.ts`:
 
@@ -1931,7 +1948,16 @@ In `src/runtime/evidence-work-graph-intake.ts`:
 - Remove `AlertDialog`, `Dialog`, `Drawer`, and `Button` normalization.
 - Use adapter methods for all of the above.
 
-- [ ] **Step 5: Generalize design feedback**
+Evidence, 2026-06-01 coordinator slice:
+
+- `src/runtime/evidence-work-graph-intake.ts` now delegates normalization,
+  proof paths, integration titles, consumer surfaces, target areas, and
+  integration-task decisions through `genericWorkGraphDomainAdapter`.
+- Removed the special `@looma/core`, `isKnit`, known consumer-flow renames,
+  compliance-dashboard rename, and component-name normalization branches from
+  generic runtime code.
+
+- [x] **Step 5: Generalize design feedback**
 
 In `src/runtime/design-feedback.ts`:
 
@@ -1953,7 +1979,18 @@ export async function discoverDesignSystemDevelopmentTargets(input: {
   - `GUILDHALL_DESIGN_SYSTEM_PATH`
   - `GUILDHALL_DESIGN_SYSTEM_ID`
 
-- [ ] **Step 6: Move sample config out of runtime**
+Evidence, 2026-06-01 coordinator slice:
+
+- `src/runtime/design-feedback.ts` now exports
+  `DesignSystemImprovement`, `designSystemImprovements`, and
+  `discoverDesignSystemDevelopmentTargets`.
+- `src/config/schemas.ts` now supports generic
+  `experimental.designSystemDevelopment.targets[]` records with optional
+  package markers.
+- `src/runtime/serve.ts`, `src/mcp-server/project-reader.ts`, and
+  `src/web/surfaces/project/SettingsTab.svelte` consume the generic field names.
+
+- [x] **Step 6: Move sample config out of runtime**
 
 Move `src/runtime/guildhall.config.ts` to an internal fixture or example.
 
@@ -1964,7 +2001,14 @@ Acceptable targets:
 
 Update any tests/imports that expected it under `src/runtime`.
 
-- [ ] **Step 7: Replace examples**
+Evidence, 2026-06-01 coordinator slice:
+
+- Moved `src/runtime/guildhall.config.ts` to
+  `internal/fixtures/looma-knit/guildhall.config.ts`.
+- Updated `src/runtime/__tests__/guildhall-config.test.ts` to import the
+  fixture from its new non-runtime location.
+
+- [x] **Step 7: Replace examples**
 
 Change examples in:
 
@@ -1974,7 +2018,16 @@ Change examples in:
 
 Use neutral examples such as `frontend`, `backend`, `docs`, `release`, or `platform`.
 
-- [ ] **Step 8: Run guardrails and tests**
+Evidence, 2026-06-01 coordinator slice:
+
+- Replaced the setup-domain prompt example in `src/runtime/init.ts` with
+  `frontend`.
+- Replaced the agent-settings tool coordinator example with `frontend` and
+  `backend`.
+- Generalized design-system discovery tests to use a neutral scoped foundation
+  package.
+
+- [x] **Step 8: Run guardrails and tests**
 
 Run:
 
@@ -1984,6 +2037,13 @@ pnpm lint:reductions
 ```
 
 Expected: PASS after sample-product vocabulary is gone from generic runtime paths.
+
+Evidence, 2026-06-01 coordinator slice:
+
+- `pnpm vitest run src/runtime/__tests__/work-graph-domain-adapters.test.ts src/runtime/__tests__/evidence-work-graph-intake.test.ts src/runtime/__tests__/design-feedback.test.ts src/runtime/__tests__/design-system-discovery.test.ts src/runtime/__tests__/serve-design-feedback.test.ts src/config/__tests__/schemas.test.ts src/runtime/__tests__/guildhall-config.test.ts --reporter=dot`
+  passed with 67 tests.
+- `pnpm lint:reductions` passed.
+- `pnpm typecheck` passed.
 
 Commit:
 

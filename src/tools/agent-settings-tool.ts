@@ -17,7 +17,7 @@ const saveAgentSettingInputSchema = z.object({
   agentRole: z.string().describe('Your agent role: coordinator, worker, reviewer, gateChecker, or spec'),
   rationale: z.string().describe('Why are you saving this setting? Be specific about what you observed.'),
 
-  coordinatorId: z.string().optional().describe('Coordinator id to refine (e.g. "looma", "knit")'),
+  coordinatorId: z.string().optional().describe('Coordinator id to refine (e.g. "frontend", "backend")'),
   addConcern: z
     .object({
       id: z.string(),

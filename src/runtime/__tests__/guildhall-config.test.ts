@@ -21,7 +21,7 @@ async function loadForgeConfig(env: Record<string, string | undefined> = {}) {
   }
   Object.assign(process.env, env)
   try {
-    return (await import('../guildhall.config.js')).forgeConfig
+    return (await import('../../../internal/fixtures/looma-knit/guildhall.config.js')).forgeConfig
   } finally {
     process.env = previous
   }

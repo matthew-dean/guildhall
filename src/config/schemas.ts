@@ -312,15 +312,17 @@ export type WorkspaceYamlConfig = z.infer<typeof WorkspaceYamlConfig>
 // <project>/.guildhall/config.yaml.
 // ---------------------------------------------------------------------------
 
-export const ExperimentalLoomaDevelopmentConfig = z.object({
+export const ExperimentalDesignSystemDevelopmentTargetConfig = z.object({
+  id: z.string().min(1),
   enabled: z.boolean().default(false),
   path: z.string().min(1).optional(),
   writeThrough: z.enum(['off', 'queue']).default('queue'),
+  packageMarkers: z.array(z.string().min(1)).default([]),
 })
-export type ExperimentalLoomaDevelopmentConfig = z.infer<typeof ExperimentalLoomaDevelopmentConfig>
+export type ExperimentalDesignSystemDevelopmentTargetConfig = z.infer<typeof ExperimentalDesignSystemDevelopmentTargetConfig>
 
 export const ExperimentalDesignSystemDevelopmentConfig = z.object({
-  looma: ExperimentalLoomaDevelopmentConfig.optional(),
+  targets: z.array(ExperimentalDesignSystemDevelopmentTargetConfig).default([]),
 })
 export type ExperimentalDesignSystemDevelopmentConfig = z.infer<typeof ExperimentalDesignSystemDevelopmentConfig>
 

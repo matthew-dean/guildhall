@@ -148,7 +148,7 @@ import { buildDesignSystemProfile } from './design-system-discovery.js'
 import {
   buildDesignDecisionPacket,
   captureOwnerDesignFeedback,
-  discoverLoomaDevelopmentHook,
+  discoverDesignSystemDevelopmentTargets,
   readDesignFeedbackStore,
   recordDesignFinding,
   routeDesignFinding,
@@ -7506,10 +7506,10 @@ export function buildServeApp(opts: ServeOptions = {}): {
       if (project.initializationNeeded) return c.json({ initializationNeeded: true })
       const memoryDir = getProjectStateDir(project.path)
       const feedback = await readDesignFeedbackStore(memoryDir)
-      const loomaHook = await discoverLoomaDevelopmentHook({
+      const designSystemDevelopmentTargets = await discoverDesignSystemDevelopmentTargets({
         globalConfig: readGlobalConfig(),
       })
-      return c.json({ feedback, loomaHook })
+      return c.json({ feedback, designSystemDevelopmentTargets })
     } catch (err) {
       return c.json({ error: String(err) }, 500)
     }
@@ -7526,10 +7526,10 @@ export function buildServeApp(opts: ServeOptions = {}): {
       })
       const routed = await routeDesignFinding({ memoryDir, findingId: finding.id })
       const feedback = await readDesignFeedbackStore(memoryDir)
-      const loomaHook = await discoverLoomaDevelopmentHook({
+      const designSystemDevelopmentTargets = await discoverDesignSystemDevelopmentTargets({
         globalConfig: readGlobalConfig(),
       })
-      return c.json({ ok: true, routed, feedback, loomaHook })
+      return c.json({ ok: true, routed, feedback, designSystemDevelopmentTargets })
     } catch (err) {
       return c.json({ error: String(err) }, 400)
     }
@@ -7545,10 +7545,10 @@ export function buildServeApp(opts: ServeOptions = {}): {
         feedback: body as never,
       })
       const feedback = await readDesignFeedbackStore(memoryDir)
-      const loomaHook = await discoverLoomaDevelopmentHook({
+      const designSystemDevelopmentTargets = await discoverDesignSystemDevelopmentTargets({
         globalConfig: readGlobalConfig(),
       })
-      return c.json({ ok: true, ownerFeedback, feedback, loomaHook })
+      return c.json({ ok: true, ownerFeedback, feedback, designSystemDevelopmentTargets })
     } catch (err) {
       return c.json({ error: String(err) }, 400)
     }
@@ -7567,10 +7567,10 @@ export function buildServeApp(opts: ServeOptions = {}): {
         ...(feedbackIds ? { feedbackIds } : {}),
       })
       const feedback = await readDesignFeedbackStore(memoryDir)
-      const loomaHook = await discoverLoomaDevelopmentHook({
+      const designSystemDevelopmentTargets = await discoverDesignSystemDevelopmentTargets({
         globalConfig: readGlobalConfig(),
       })
-      return c.json({ ok: true, packet, feedback, loomaHook })
+      return c.json({ ok: true, packet, feedback, designSystemDevelopmentTargets })
     } catch (err) {
       return c.json({ error: String(err) }, 400)
     }

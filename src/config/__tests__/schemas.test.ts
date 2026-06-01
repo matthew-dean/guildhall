@@ -390,25 +390,29 @@ describe('GlobalConfig', () => {
     expect(config.maxProviderConcurrency).toBe(200)
   })
 
-  it('parses experimental local Looma development config without making it required', () => {
+  it('parses experimental local design-system development targets without making them required', () => {
     expect(GlobalConfig.parse({}).experimental).toBeUndefined()
 
     const config = GlobalConfig.parse({
       experimental: {
         designSystemDevelopment: {
-          looma: {
+          targets: [{
+            id: 'foundation',
             enabled: true,
-            path: '/Users/matthew/git/oss/looma-knit/looma',
+            path: '/Users/matthew/git/oss/design-system',
             writeThrough: 'queue',
-          },
+            packageMarkers: ['@example/foundation'],
+          }],
         },
       },
     })
 
-    expect(config.experimental?.designSystemDevelopment?.looma).toEqual({
+    expect(config.experimental?.designSystemDevelopment?.targets[0]).toEqual({
+      id: 'foundation',
       enabled: true,
-      path: '/Users/matthew/git/oss/looma-knit/looma',
+      path: '/Users/matthew/git/oss/design-system',
       writeThrough: 'queue',
+      packageMarkers: ['@example/foundation'],
     })
   })
 

@@ -193,7 +193,7 @@ export async function runInit(opts: InitOptions): Promise<void> {
     while (addAnother) {
       console.log()
       const coordDomain = await input({
-        message: 'Domain ID for task routing (e.g. "looma"):',
+        message: 'Domain ID for task routing (e.g. "frontend"):',
         default: '',
         validate: (v: string) => /^[a-z0-9-]+$/.test(v) || 'Use lowercase letters, numbers, dashes',
       })

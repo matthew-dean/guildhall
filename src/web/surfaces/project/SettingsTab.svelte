@@ -82,11 +82,12 @@
     findings?: unknown[]
     decisions?: unknown[]
     candidates?: Array<{ summary?: string; targetDesignSystem?: string; status?: string }>
-    loomaImprovements?: Array<{ summary?: string; targetPackage?: string; status?: string }>
+    designSystemImprovements?: Array<{ summary?: string; targetPackage?: string; status?: string }>
     ownerFeedback?: Array<{ summary?: string; status?: string }>
     decisionPackets?: Array<{ summary?: string; workerContext?: string }>
   }
-  interface LoomaHookStatus {
+  interface DesignSystemDevelopmentTargetStatus {
+    id?: string
     enabled?: boolean
     status?: 'active' | 'inactive' | string
     reason?: string
@@ -302,7 +303,7 @@
   let designSystemCatalog = $state<DesignSystemCatalog | null>(null)
   let designIntentSurrogate = $state<DesignIntentSurrogate | null>(null)
   let designFeedback = $state<DesignFeedbackStore | null>(null)
-  let loomaHook = $state<LoomaHookStatus | null>(null)
+  let designSystemDevelopmentTargets = $state<DesignSystemDevelopmentTargetStatus[]>([])
   let codebaseMapStatus = $state<CodebaseMapStatus | null>(null)
   let codebaseMapBusy = $state(false)
   let codebaseMapError = $state<string | null>(null)
@@ -501,11 +502,13 @@
       .then(r => r.json())
       .then(j => {
         designFeedback = j?.feedback ?? null
-        loomaHook = j?.loomaHook ?? null
+        designSystemDevelopmentTargets = Array.isArray(j?.designSystemDevelopmentTargets)
+          ? j.designSystemDevelopmentTargets
+          : []
       })
       .catch(() => {
         designFeedback = null
-        loomaHook = null
+        designSystemDevelopmentTargets = []
       })
     void loadCodebaseMapStatus()
     projectFetch('/api/setup/providers')
@@ -3385,7 +3388,7 @@
                 <div><span class="muted">Owner feedback</span><strong>{designFeedback.ownerFeedback?.length ?? 0}</strong></div>
                 <div><span class="muted">Decision packets</span><strong>{designFeedback.decisionPackets?.length ?? 0}</strong></div>
                 <div><span class="muted">Reusable candidates</span><strong>{designFeedback.candidates?.length ?? 0}</strong></div>
-                <div><span class="muted">Looma follow-ups</span><strong>{designFeedback.loomaImprovements?.length ?? 0}</strong></div>
+                <div><span class="muted">Design-system follow-ups</span><strong>{designFeedback.designSystemImprovements?.length ?? 0}</strong></div>
               </div>
 
               {#if designFeedback.candidates?.length}
@@ -3400,15 +3403,16 @@
               {/if}
             {/if}
 
-            {#if loomaHook}
+            {#if designSystemDevelopmentTargets.length}
+              {@const activeDesignSystemTarget = designSystemDevelopmentTargets.find(target => target.status === 'active') ?? designSystemDevelopmentTargets[0]}
               <NoticeBand
-                tone={loomaHook.status === 'active' ? 'ok' : 'neutral'}
+                tone={activeDesignSystemTarget.status === 'active' ? 'ok' : 'neutral'}
                 role="note"
-                label="Looma development"
-                title={loomaHook.status === 'active' ? 'Local hook active' : 'Local hook inactive'}
+                label="Design-system development"
+                title={activeDesignSystemTarget.status === 'active' ? 'Local target active' : 'Local target inactive'}
                 density="compact"
               >
-                <p>{loomaHook.status === 'active' ? `Queued follow-ups can target ${loomaHook.path ?? 'the configured Looma checkout'}.` : loomaHook.reason ?? 'No local Looma checkout is configured for this machine.'}</p>
+                <p>{activeDesignSystemTarget.status === 'active' ? `Queued follow-ups can target ${activeDesignSystemTarget.path ?? 'the configured design-system checkout'}.` : activeDesignSystemTarget.reason ?? 'No local design-system checkout is configured for this machine.'}</p>
               </NoticeBand>
             {/if}
           </Stack>
