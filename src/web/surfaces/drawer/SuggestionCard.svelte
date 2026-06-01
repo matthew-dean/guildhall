@@ -10,7 +10,7 @@
 -->
 <script lang="ts">
   import ActionBar from '../../lib/ActionBar.svelte'
-  import Card from '../../lib/Card.svelte'
+  import Card from '../../lib/ui-compat/Card.svelte'
   import Stack from '../../lib/Stack.svelte'
   import Button from '../../lib/Button.svelte'
   import Textarea from '../../lib/Textarea.svelte'

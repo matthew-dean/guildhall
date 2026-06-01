@@ -4,7 +4,7 @@
   prefer (see the project Settings → Providers sub-tab).
 -->
 <script lang="ts">
-  import Card from '../lib/Card.svelte'
+  import Card from '../lib/ui-compat/Card.svelte'
   import Button from '../lib/Button.svelte'
   import Chip from '../lib/Chip.svelte'
   import Stack from '../lib/Stack.svelte'

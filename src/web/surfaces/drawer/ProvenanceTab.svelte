@@ -4,7 +4,7 @@
 -->
 <script lang="ts">
   import Stack from '../../lib/Stack.svelte'
-  import Card from '../../lib/Card.svelte'
+  import Card from '../../lib/ui-compat/Card.svelte'
   import DefinitionList from '../../lib/DefinitionList.svelte'
   import Byline from '../../lib/Byline.svelte'
   import { friendlyTaskId, labelForIdentifier } from '../../lib/identifier-labels.js'

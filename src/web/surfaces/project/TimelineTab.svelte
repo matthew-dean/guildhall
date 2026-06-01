@@ -3,7 +3,7 @@
   the top so the user sees new events without scrolling.
 -->
 <script lang="ts">
-  import Card from '../../lib/Card.svelte'
+  import Card from '../../lib/ui-compat/Card.svelte'
   import { onEvent, summarizeEvent, eventTaskId, eventCssClass } from '../../lib/events.js'
   import { nav, path } from '../../lib/nav.svelte.js'
   import { currentTaskHref } from '../../lib/project-routes.js'

@@ -2819,7 +2819,7 @@ git commit -m "refactor: govern UI components and design tokens"
 - Modify touched Svelte surfaces
 - Delete duplicate local primitives after callers move
 
-- [ ] **Step 1: Add scan**
+- [x] **Step 1: Add scan**
 
 Create `scripts/ui-primitive-scan.mjs`:
 
@@ -2861,13 +2861,19 @@ if (failures.length) {
 }
 ```
 
-- [ ] **Step 2: Route old primitives through wrappers**
+  - Evidence: `pnpm vitest run scripts/ui-primitive-scan.test.ts --reporter=dot` passed, 2 tests. `node scripts/ui-primitive-scan.mjs` now detects the remaining direct import in `src/web/surfaces/project/SettingsTab.svelte`; that file is intentionally left for Worker H.
+
+- [x] **Step 2: Route old primitives through wrappers**
 
 Create wrappers in `src/web/lib/ui-compat/` that delegate to `packages/ui` and preserve only props still needed by existing callers. Then move callers incrementally.
 
-- [ ] **Step 3: Replace touched imports**
+  - Evidence: Added `src/web/lib/ui-compat/Card.svelte` over `packages/ui/src/components/FrameCard.svelte` and `src/web/lib/ui-compat/NoticeBand.svelte` over `packages/ui/src/components/AlertBand.svelte`; representative migrated-surface tests passed in Step 4 evidence.
+
+- [x] **Step 3: Replace touched imports**
 
 For every Svelte file touched by this plan, import canonical primitives from `packages/ui/src/components` or the temporary `ui-compat` wrapper. Do not add new local card/notice CSS.
+
+  - Evidence: Replaced old local Card imports in owned non-Settings/non-ProjectView files. `rg -n "from ['\\\"].*(?:\\.\\./)*lib/(Card|NoticeBand)\\.svelte|from ['\\\"]\\./(Card|NoticeBand)\\.svelte|from ['\\\"]\\$lib/(Card|NoticeBand)\\.svelte" src/web --glob '*.svelte'` reports only `src/web/surfaces/project/SettingsTab.svelte:15`, which is Worker H-owned.
 
 - [ ] **Step 4: Run tests**
 
@@ -2884,6 +2890,9 @@ Commit:
 git add scripts/ui-primitive-scan.mjs src/web/lib/ui-compat src/web/surfaces src/web/lib
 git commit -m "refactor: consolidate web UI primitives"
 ```
+
+  - Evidence: `pnpm vitest run scripts/ui-primitive-scan.test.ts src/web/surfaces/drawer/__tests__/CurrentTab.svelte.test.ts src/web/surfaces/drawer/__tests__/drawer-tabs.svelte.test.ts src/web/surfaces/project/__tests__/ProjectOverviewTab.svelte.test.ts src/web/surfaces/__tests__/FleetNeedsYou.svelte.test.ts src/web/surfaces/__tests__/ProvidersPage.svelte.test.ts src/web/surfaces/__tests__/SetupWizard.svelte.test.ts src/web/surfaces/project/__tests__/ProjectProvidersSection.svelte.test.ts src/web/surfaces/project/__tests__/TimelineTab.svelte.test.ts src/web/surfaces/project/__tests__/WorkTab.svelte.test.ts src/web/surfaces/project/__tests__/WorkspaceImportTab.svelte.test.ts --reporter=dot` passed, 11 files / 100 tests. `pnpm vitest run src/web/surfaces/project/__tests__/ThreadTab.svelte.test.ts -t "renders request and active pressure-test question turns as owner input" --reporter=dot` passed, 1 test / 66 skipped. `pnpm typecheck:ui` passed.
+  - Blocked: `node scripts/ui-primitive-scan.mjs` exits 1 because `src/web/surfaces/project/SettingsTab.svelte:15` still imports `../../lib/Card.svelte`; that file is Worker H-owned. The broad `ThreadTab.svelte.test.ts` suite still has 23 stale failures; one sampled failure (`docks the selected active shaping turn above the composer controls`) reproduced with the old local Card import, so it is not caused by the ui-compat wrapper.
 
 ## Task 9: Add a Task Transition Boundary for Hot Paths
 

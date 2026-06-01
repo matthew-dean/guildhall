@@ -2,7 +2,7 @@
   import { AlertTriangle, CheckCircle2, FolderOpen, Inbox } from 'lucide-svelte'
   import ActionBar from '../lib/ActionBar.svelte'
   import Button from '../lib/Button.svelte'
-  import Card from '../lib/Card.svelte'
+  import Card from '../lib/ui-compat/Card.svelte'
   import ProjectsShell from '../lib/layout/ProjectsShell.svelte'
   import { nav } from '../lib/nav.svelte.js'
   import { projectHref } from '../lib/project-routes.js'

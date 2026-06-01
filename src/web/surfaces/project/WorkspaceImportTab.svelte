@@ -1,6 +1,6 @@
 <script lang="ts">
   import ActionBar from '../../lib/ActionBar.svelte'
-  import Card from '../../lib/Card.svelte'
+  import Card from '../../lib/ui-compat/Card.svelte'
   import Row from '../../lib/Row.svelte'
   import Stack from '../../lib/Stack.svelte'
   import Button from '../../lib/Button.svelte'

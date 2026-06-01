@@ -20,7 +20,7 @@
 <script lang="ts">
   import { onMount, onDestroy } from 'svelte'
   import { fly } from 'svelte/transition'
-  import Card from '../../lib/Card.svelte'
+  import Card from '../../lib/ui-compat/Card.svelte'
   import Chip from '../../lib/Chip.svelte'
   import Button from '../../lib/Button.svelte'
   import Icon from '../../lib/Icon.svelte'

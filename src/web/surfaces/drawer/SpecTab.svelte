@@ -6,7 +6,7 @@
 <script lang="ts">
   import Stack from '../../lib/Stack.svelte'
   import Row from '../../lib/Row.svelte'
-  import Card from '../../lib/Card.svelte'
+  import Card from '../../lib/ui-compat/Card.svelte'
   import Chip from '../../lib/Chip.svelte'
   import { friendlyDomain, friendlyPriority, friendlyStatus } from '../../lib/display.js'
   import { activeEscalations } from '../../lib/escalation.js'
