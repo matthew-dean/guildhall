@@ -67,6 +67,21 @@ const forbiddenTaskShapes = [
     pattern: /\b(project_check_in|pressure_test_pending|agent_question_pending|brief_approval|spec_approval|open_escalation)\b/,
     message: 'Web InboxItemKind must stay alert-owned. Do not reintroduce conversation-owned inbox rows.',
   },
+  {
+    path: /^src\/web\/surfaces\/TaskDrawer\.svelte$/,
+    pattern: /answer-questions|onAnswerQuestion|function\s+answerQuestion/,
+    message: 'TaskDrawer must not answer owner-input locally. Link task questions to the Thread surface.',
+  },
+  {
+    path: /^src\/web\/surfaces\/drawer\/CurrentTab\.svelte$/,
+    pattern: /AgentQuestion|onAnswerQuestion|onAnswer=|answer-questions/,
+    message: 'CurrentTab must not render local answer cards. Link task questions to the Thread surface.',
+  },
+  {
+    path: /^src\/web\/surfaces\/project\/ProjectOverviewTab\.svelte$/,
+    pattern: /defer_decision|<strong>Questions<\/strong>/,
+    message: 'ProjectOverviewTab must not render source-specific owner-question actions. Link owner input to Thread.',
+  },
 ]
 
 function walk(dir) {

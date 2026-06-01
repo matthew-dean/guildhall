@@ -34,8 +34,10 @@ function readyTaskCompleteForWorker(): Task {
     ...baseTask(),
     productBrief: {
       userJob: 'Add link controls.',
+      whyItMattersNow: 'Editors need to correct links without leaving the writing flow.',
       successMetric: 'Links can be edited inline.',
       antiPatterns: [],
+      nonGoals: ['Do not redesign the editor toolbar.'],
       approvedAt: now,
     },
     spec: '## Summary\nAdd link controls.',
@@ -53,7 +55,7 @@ function handlers() {
     onOpenEscalationAction: vi.fn(),
     onRunEscalationAction: vi.fn(),
     onResolveEscalation: vi.fn(async () => {}),
-    onAnswerQuestion: vi.fn(async () => {}),
+    onOpenThread: vi.fn(),
   }
 }
 
@@ -121,7 +123,7 @@ describe('CurrentTab', () => {
     expect(screen.queryByText('Nothing is waiting')).toBeNull()
   })
 
-  it('answers task-scoped questions inline', async () => {
+  it('routes task-scoped questions to Thread instead of answering inline', async () => {
     const props = renderCurrent([
       {
         id: 'turn-question',
@@ -143,9 +145,11 @@ describe('CurrentTab', () => {
       },
     ])
 
-    await userEvent.click(screen.getByText(/url input only/i))
+    expect(screen.getByText('Question waiting in Thread')).toBeTruthy()
+    expect(screen.queryByRole('button', { name: /url input only/i })).toBeNull()
+    await userEvent.click(screen.getByRole('button', { name: /open thread/i }))
 
-    expect(props.onAnswerQuestion).toHaveBeenCalledWith('q-link-scope', 'URL input only')
+    expect(props.onOpenThread).toHaveBeenCalledOnce()
   })
 
   it('keeps brief approval actions available in the current task card', async () => {

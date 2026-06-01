@@ -495,6 +495,8 @@ describe('ProjectOverviewTab', () => {
     expect(screen.getByText('vendor/fixture')).toBeInTheDocument()
     expect(screen.getByText('Runtime appears in package and path evidence.')).toBeInTheDocument()
     expect(screen.getByText('Should runtime own provider routing?')).toBeInTheDocument()
+    expect(screen.getByRole('link', { name: 'Open Thread' })).toHaveAttribute('href', '/projects/guildhall/thread')
+    expect(screen.queryByRole('button', { name: /defer/i })).not.toBeInTheDocument()
   })
 
   it('posts structural map owner actions and updates the review state', async () => {

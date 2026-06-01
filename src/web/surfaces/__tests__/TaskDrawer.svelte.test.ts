@@ -110,22 +110,16 @@ describe('TaskDrawer', () => {
     cleanup()
   })
 
-  it('answers current task questions from the drawer with the project id included', async () => {
+  it('routes current task questions to Thread without posting drawer-local answers', async () => {
     openDrawerOn('current')
     const payload = drawerPayload()
     payload.task.status = 'ready'
     payload.task.spec = ''
     payload.task.acceptanceCriteria = []
-    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
       const url = String(input)
       if (url.startsWith('/api/project/task/task-link-editor/answer-questions')) {
-        expect(url).toContain('projectId=looma-knit')
-        expect(init?.method).toBe('POST')
-        expect(JSON.parse(String(init?.body))).toEqual({
-          projectId: 'looma-knit',
-          answers: [{ questionId: 'q-link-scope', answer: 'URL input only' }],
-        })
-        return json({ ok: true })
+        throw new Error('TaskDrawer must not answer owner-input questions locally')
       }
       if (url.startsWith('/api/project/task/task-link-editor')) return json(payload)
       if (url.startsWith('/api/project')) return json(projectDetail())
@@ -140,11 +134,13 @@ describe('TaskDrawer', () => {
     })
 
     await screen.findByText('Which controls belong in the link editor?')
-    await userEvent.click(screen.getByRole('button', { name: /url input only/i }))
+    expect(screen.queryByRole('button', { name: /url input only/i })).toBeNull()
+    await userEvent.click(screen.getByRole('button', { name: /open thread/i }))
 
     await waitFor(() => {
-      expect(fetchMock.mock.calls.some(([input]) => String(input).includes('/answer-questions'))).toBe(true)
+      expect(path.value).toBe('/projects/looma-knit/thread')
     })
+    expect(fetchMock.mock.calls.some(([input]) => String(input).includes('/answer-questions'))).toBe(false)
   })
 
   it('loads a project task with the explicit project id even from a legacy global task route', async () => {

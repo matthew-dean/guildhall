@@ -272,27 +272,8 @@
     }
   }
 
-  async function answerQuestion(questionId: string, answer: string): Promise<void> {
-    busy = true
-    try {
-      const res = await drawerFetch(`/api/project/task/${encodeURIComponent(taskId)}/answer-questions`, {
-        method: 'POST',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({
-          answers: [{ questionId, answer }],
-        }),
-      })
-      if (!res.ok) {
-        const b = await res.json().catch(() => ({}))
-        error = b.error ?? `HTTP ${res.status}`
-        return
-      }
-      await load()
-    } catch (err) {
-      error = friendlyFetchError(err)
-    } finally {
-      busy = false
-    }
+  function openThreadFromDrawer(): void {
+    nav(drawerProjectHref('/thread'))
   }
 
   function handleApproveSpec() {
@@ -940,7 +921,7 @@
           onOpenSpecTab={() => (activeTab = 'spec')}
           onOpenEscalationAction={handleOpenEscalationAction}
           onRunEscalationAction={handleRunEscalationById}
-          onAnswerQuestion={answerQuestion}
+          onOpenThread={openThreadFromDrawer}
         />
       {:else if activeTab === 'overview'}
         <OverviewTab

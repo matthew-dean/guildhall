@@ -57,7 +57,6 @@
     | { kind: 'mark_cross_cutting'; nodeId: string }
     | { kind: 'mark_package_only'; nodeId: string }
     | { kind: 'ignore_node'; nodeId: string; reason: string }
-    | { kind: 'defer_decision'; questionId: string; reason?: string }
 
   interface BlockedRow {
     task: Task
@@ -878,11 +877,6 @@
                 Package-only
               </Button>
             {/if}
-            {#if (structuralMapReview.questions ?? [])[0]}
-              <Button variant="ghost" size="sm" onclick={() => void applyStructuralMapAction({ kind: 'defer_decision', questionId: (structuralMapReview.questions ?? [])[0].id })} disabled={structuralMapActionBusy}>
-                Defer
-              </Button>
-            {/if}
           </div>
           {#if structuralMapActionError}
             <p class="map-action-error">{structuralMapActionError}</p>
@@ -948,8 +942,16 @@
 
             {#if (structuralMapReview.questions ?? []).length > 0}
               <div class="map-review-section map-review-warning">
-                <strong>Questions</strong>
+                <strong>Owner input</strong>
                 <span>{(structuralMapReview.questions ?? []).map(item => item.prompt).filter(Boolean).join(' ')}</span>
+                <a
+                  class="map-thread-link"
+                  href={currentProjectHref('/thread', activeProjectId)}
+                  onclick={(event) => {
+                    event.preventDefault()
+                    go(currentProjectHref('/thread', activeProjectId))
+                  }}
+                >Open Thread</a>
               </div>
             {/if}
           </div>
@@ -1275,6 +1277,16 @@
   }
   .map-review-warning span {
     color: var(--text);
+  }
+  .map-thread-link {
+    justify-self: start;
+    color: var(--accent);
+    font-size: var(--fs-1);
+    font-weight: 700;
+    text-decoration: none;
+  }
+  .map-thread-link:hover {
+    text-decoration: underline;
   }
   .event-row {
     display: grid;

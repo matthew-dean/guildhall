@@ -1430,7 +1430,7 @@ Evidence, 2026-06-01 coordinator slice:
   returns to the normal task schema.
 - Evidence command: `pnpm typecheck` passed.
 
-- [ ] **Step 12: Remove UI and Inbox question paths**
+- [x] **Step 12: Remove UI and Inbox question paths**
 
 - Delete `agent_question_pending` from `InboxItem`.
 - Delete `visibleOpenQuestions` calls from Inbox construction.
@@ -1463,7 +1463,23 @@ Partial evidence, 2026-06-01 coordinator slice:
   passed with 60 tests.
 - Evidence command: `pnpm typecheck` passed.
 
-- [ ] **Step 13: Add projection guardrails**
+Evidence, 2026-06-01 Worker G slice:
+
+- `src/web/surfaces/TaskDrawer.svelte` no longer posts to
+  `/api/project/task/:id/answer-questions`; task-scoped owner questions in the
+  drawer now route to Thread.
+- `src/web/surfaces/drawer/CurrentTab.svelte` no longer renders
+  `<AgentQuestion>` or local choice/text answer controls; it shows a linked
+  Thread status for the active task question.
+- `src/web/surfaces/project/ProjectOverviewTab.svelte` no longer renders a
+  local structural-map `defer_decision` action or a source-specific Questions
+  card; structural-map owner input now links to Thread.
+- Evidence commands:
+  - `pnpm vitest run src/web/surfaces/drawer/__tests__/CurrentTab.svelte.test.ts src/web/surfaces/__tests__/TaskDrawer.svelte.test.ts --reporter=dot` passed 2 files / 62 tests.
+  - `pnpm vitest run src/web/surfaces/project/__tests__/ProjectOverviewTab.svelte.test.ts --reporter=dot` passed 1 file / 13 tests.
+  - `pnpm typecheck` passed.
+
+- [x] **Step 13: Add projection guardrails**
 
 Add or extend `scripts/reduction-guardrails.mjs` so it fails when:
 
@@ -1484,9 +1500,18 @@ Partial evidence, 2026-06-01 coordinator slice:
 - `scripts/reduction-guardrails.mjs` now fails if `src/runtime/structural-map.ts`
   reintroduces a durable `ownerQuestions:` field, or if `src/runtime/intake.ts`
   writes `task.openQuestions`.
-- The app-surface projection guardrail is still open; `ThreadTab`/TaskDrawer
-  still need the remaining UI cleanup from Step 12.
 - Evidence command: `pnpm lint:reductions` passed.
+
+Evidence, 2026-06-01 Worker G slice:
+
+- `scripts/reduction-guardrails.mjs` now fails if `TaskDrawer.svelte` or
+  `CurrentTab.svelte` reintroduces drawer-local owner-input answer branches.
+- `scripts/reduction-guardrails.mjs` now fails if
+  `ProjectOverviewTab.svelte` reintroduces a structural-map local
+  `defer_decision`/Questions branch instead of linking owner input to Thread.
+- Red proof: `node scripts/reduction-guardrails.mjs` failed before the UI
+  cleanup on TaskDrawer/CurrentTab local answer paths.
+- Evidence command: `pnpm lint:reductions` passed after cleanup.
 
 - [ ] **Step 14: Run focused tests**
 
@@ -1510,6 +1535,22 @@ Partial evidence, 2026-06-01 coordinator slice:
 - Remaining open: the full Step 14 command still includes
   `ThreadTab.svelte.test.ts` and `TaskDrawer.svelte.test.ts`, which should run
   after Step 12 removes the remaining UI question-card paths.
+
+Evidence, 2026-06-01 Worker G slice:
+
+- `pnpm install --prefer-offline` was needed in this isolated worktree because
+  `node_modules` was missing and `pnpm vitest` initially reported
+  `Command "vitest" not found`.
+- The full Step 14 command ran after generating help topics with
+  `pnpm docs:extract-help`, but failed in
+  `src/web/surfaces/project/__tests__/ThreadTab.svelte.test.ts` with 23 stale
+  ThreadTab expectation failures around active dock/copy/chip behavior. Runtime
+  Step 14 files and `TaskDrawer.svelte.test.ts` executed in that run.
+- Focused owner-input/UI evidence passed:
+  - `pnpm lint:reductions`
+  - `pnpm vitest run src/web/surfaces/drawer/__tests__/CurrentTab.svelte.test.ts src/web/surfaces/__tests__/TaskDrawer.svelte.test.ts --reporter=dot`
+  - `pnpm vitest run src/web/surfaces/project/__tests__/ProjectOverviewTab.svelte.test.ts --reporter=dot`
+  - `pnpm typecheck`
 
 Commit:
 
@@ -1594,6 +1635,8 @@ Partial evidence:
 - `src/runtime/serve.ts` now builds owner-input start blockers from
   `.guildhall/owner-input` via `listOwnerInputRequestsSync`, rather than
   looking for thread-owned rows inside `buildInbox`.
+- Worker G overlap: Task drawer and Project Overview source-specific owner
+  prompts now route to Thread instead of posting local answer/defer mutations.
 - Remaining work: finish source-specific conversion so project check-in, task
   shaping, approvals, escalations, structural-map review, project-graph review,
   capability decisions, and recovery decisions all project from linked
@@ -1612,6 +1655,12 @@ Partial evidence:
 - Removed conversation-kind branches and synthetic project check-in/escalation
   rows from `DoThisNext.svelte`, `FleetNeedsYou.svelte`,
   `ProjectOverviewTab.svelte`, `WorkTab.svelte`, and `InboxTab.svelte`.
+- Worker G overlap: removed the remaining TaskDrawer local answer card path and
+  the ProjectOverview structural-map question/defer branch; both surfaces show
+  status/context with Thread navigation instead.
+- Evidence command:
+  `pnpm vitest run src/runtime/__tests__/inbox.test.ts src/runtime/__tests__/thread.test.ts src/web/surfaces/__tests__/DoThisNext.svelte.test.ts src/web/surfaces/__tests__/FleetNeedsYou.svelte.test.ts src/web/surfaces/project/__tests__/InboxTab.svelte.test.ts src/web/surfaces/__tests__/ProjectView.svelte.test.ts src/web/surfaces/project/__tests__/ProjectOverviewTab.svelte.test.ts src/web/surfaces/project/__tests__/WorkTab.svelte.test.ts --reporter=dot`
+  passed 8 files / 177 tests.
 - Remaining work: rename/split `InboxTab.svelte` into a dedicated Needs You
   alert surface and make fleet attention read one canonical summary endpoint.
 

@@ -8,7 +8,6 @@
   import StateSummary from '../../lib/StateSummary.svelte'
   import StatusLine from '../../lib/StatusLine.svelte'
   import StatusLight from '../../lib/StatusLight.svelte'
-  import AgentQuestion from '../../lib/AgentQuestion.svelte'
   import Markdown from '../../lib/Markdown.svelte'
   import {
     escalationPrimaryAction,
@@ -24,12 +23,10 @@
     needsRecovery,
   } from '../../lib/task-state.js'
   import type {
-    AgentQuestion as Question,
     Task,
     TaskThreadTurn,
     TaskThreadEscalationTurn,
     TaskThreadInFlightTurn,
-    TaskThreadQuestionTurn,
     ExternalBlockerStep,
   } from '../../lib/types.js'
 
@@ -48,7 +45,7 @@
     onOpenSpecTab: () => void
     onOpenEscalationAction: (escalationId: string, mode: 'retry' | 'resolve') => void
     onRunEscalationAction: (escalationId: string) => void
-    onAnswerQuestion: (questionId: string, answer: string) => Promise<void>
+    onOpenThread: () => void
   }
 
   let {
@@ -66,7 +63,7 @@
     onOpenSpecTab,
     onOpenEscalationAction,
     onRunEscalationAction,
-    onAnswerQuestion,
+    onOpenThread,
   }: Props = $props()
 
   const relevantTurns = $derived.by(() =>
@@ -331,10 +328,6 @@
     return 'Missing'
   }
 
-  async function answer(turn: TaskThreadQuestionTurn, answer: string): Promise<void> {
-    await onAnswerQuestion(turn.question.id, answer)
-  }
-
   function externalStepOwnerLabel(step: ExternalBlockerStep): string {
     if (step.owner === 'guildhall') return 'Guildhall'
     if (step.owner === 'external') return 'External service'
@@ -381,11 +374,19 @@
     {#each relevantTurns as turn (turn.id)}
       {#if turn.kind === 'agent_question'}
         <Card title="Needs your answer" tone="accent">
-          <AgentQuestion
-            question={turn.question as Question}
-            {busy}
-            onAnswer={(answerText) => answer(turn, answerText)}
-          />
+          <Stack gap="3">
+            <StateSummary
+              label="Question waiting in Thread"
+              description="Open Thread to answer this with the rest of the project conversation."
+              tone="accent"
+            />
+            <div class="question-link-preview">
+              <Markdown source={turn.question.prompt ?? turn.question.restatement ?? 'Guildhall needs one answer before it continues.'} />
+            </div>
+            <Row justify="end" gap="2">
+              <Button variant="primary" disabled={busy} onclick={onOpenThread}>Open Thread</Button>
+            </Row>
+          </Stack>
         </Card>
       {:else if turn.kind === 'brief_approval'}
         <Card title="Needs your approval" tone="accent">
