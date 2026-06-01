@@ -105,12 +105,17 @@ babysit setup/import/provider/release states across multiple pages.
   across project boundaries. Focused structural tests cover draft, correction,
   acceptance, context slices, provider request import, delivery, consumer
   verification, and return-for-revision.
-- [ ] Continue structural/domain intelligence from the remaining-work ledger
+- [x] Continue structural/domain intelligence from the remaining-work ledger
   in `internal/plans/2026-05-31-guildhall-0-10-implementation-tracker.md`.
-  The feature is explicitly not complete after the foundation slice.
   Remaining count after the local remote-authority reference slice: 0 items.
-  Next item: run milestone verification and decide whether to merge into
-  `0.10.0` or keep slicing.
+  Next item: merge once the active bounded-chat worktree on `0.10.0` is clean
+  enough to receive this branch. Verification on
+  `feature/0.10-structural-domain-intelligence`: `pnpm typecheck` passed;
+  focused runtime/MCP tests passed with 90 tests covering state machines,
+  project graph, structural memory context, MCP memory boundaries, stdio, and
+  serve-settings; `pnpm build` passed. Full `pnpm test` remains blocked by
+  bounded-chat UI test failures in ProjectView and ThreadTab, outside this
+  branch's changed files.
 - [x] Specify the 0.10 bounded-chat pivot for intake and New request flows.
   Plan: `internal/plans/2026-05-31-guildhall-0-10-bounded-chat.md`.
   The accepted direction is a two-role flow: a conversation agent handles the

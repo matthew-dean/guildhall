@@ -7,7 +7,9 @@ import type { CapabilityRequest } from './capability-requests.js'
 
 export type CapabilityRequestStatus = CapabilityRequest['status']
 export type CapabilityRequestEvent = 'approve' | 'deny' | 'block' | 'revoke'
-export type CapabilityRequestTransitionReceipt = TransitionReceipt<CapabilityRequestStatus, CapabilityRequestEvent>
+export type CapabilityRequestTransitionReceipt = TransitionReceipt<CapabilityRequestStatus, CapabilityRequestEvent> & {
+  machineId: 'capability-request'
+}
 
 export const capabilityRequestMachine = defineStateMachine<CapabilityRequestStatus, CapabilityRequestEvent, CapabilityRequest>({
   id: 'capability-request',
@@ -57,5 +59,8 @@ export function applyCapabilityRequestTransition(input: {
   if (result.kind === 'rejected') {
     throw new Error(`Capability request ${input.request.id} cannot ${input.event} from ${input.request.status}: ${result.reason}`)
   }
-  return result.receipt
+  return {
+    ...result.receipt,
+    machineId: 'capability-request',
+  }
 }

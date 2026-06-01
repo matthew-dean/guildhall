@@ -565,10 +565,12 @@ export const dotnetStructuralDiscoveryProvider: StructuralDiscoveryProvider = {
     const solutionName = path.basename(solution)
     const text = fs.readFileSync(solution, 'utf8')
     const projectMatches = [...text.matchAll(/=\s*"([^"]+)",\s*"([^"]+\.csproj)"/g)]
-    const packageNodes = projectMatches.map((match): StructuralMapNode => {
+    const packageNodes = projectMatches.flatMap((match): StructuralMapNode[] => {
       const label = match[1]
-      const relativeProjectPath = match[2].replaceAll('\\', '/')
-      return {
+      const projectPath = match[2]
+      if (!label || !projectPath) return []
+      const relativeProjectPath = projectPath.replaceAll('\\', '/')
+      return [{
         id: `package:dotnet-${slugify(label)}`,
         kind: 'package',
         label,
@@ -577,7 +579,7 @@ export const dotnetStructuralDiscoveryProvider: StructuralDiscoveryProvider = {
         packageId: `dotnet-${slugify(label)}`,
         evidence: evidence('manifest', relativeProjectPath, 'high'),
         confidence: 'high',
-      }
+      }]
     })
     return {
       nodes: [
@@ -1940,7 +1942,9 @@ function matchFirst(text: string, pattern: RegExp): string | undefined {
 }
 
 function parseQuotedList(value: string): string[] {
-  return [...value.matchAll(/"([^"]+)"/g)].map(match => match[1])
+  return [...value.matchAll(/"([^"]+)"/g)]
+    .map(match => match[1])
+    .filter((item): item is string => Boolean(item))
 }
 
 function slugify(value: string): string {

@@ -250,7 +250,16 @@ agent packet integration, coordinator assignment, or remote authority support.
 
 ### Remaining Work Ledger
 
-**Remaining: 0 items. Next item: milestone verification and merge decision.**
+**Remaining: 0 items. Next item: merge decision once the active bounded-chat worktree on `0.10.0` is clean enough to receive this branch.**
+
+Verification on `feature/0.10-structural-domain-intelligence`: `pnpm
+typecheck` passed; focused runtime/MCP verification passed with 90 tests across
+state-machine, project-graph, memory-store, effective-memory-packet,
+project-reader, MCP server, stdio smoke, and serve-settings coverage; `pnpm
+build` passed. Full `pnpm test` is currently blocked by bounded-chat UI tests
+outside this branch's changed files:
+`src/web/surfaces/__tests__/ProjectView.svelte.test.ts` and
+`src/web/surfaces/project/__tests__/ThreadTab.svelte.test.ts`.
 
 1. [x] Replace the current pnpm-only discovery core with a provider interface
    for package/workspace discovery. After this: implement JS/npm/yarn/bun

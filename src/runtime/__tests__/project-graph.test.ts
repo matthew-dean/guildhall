@@ -42,8 +42,8 @@ afterEach(async () => {
 
 describe('local project graph', () => {
   it('drafts a local graph from registered projects without requiring one shared folder', () => {
-    bootstrapWorkspace(consumerProject, { id: 'knit', name: 'Knit' })
-    bootstrapWorkspace(providerProject, { id: 'looma', name: 'Looma' })
+    bootstrapWorkspace(consumerProject, { name: 'Knit' })
+    bootstrapWorkspace(providerProject, { name: 'Looma' })
     registerWorkspace({ id: 'knit', path: consumerProject, name: 'Knit', tags: [] })
     registerWorkspace({ id: 'looma', path: providerProject, name: 'Looma', tags: [] })
 
@@ -70,8 +70,8 @@ describe('local project graph', () => {
   })
 
   it('publishes a provider request through the neutral exchange and writes only the consumer mirror', async () => {
-    bootstrapWorkspace(consumerProject, { id: 'knit', name: 'Knit' })
-    bootstrapWorkspace(providerProject, { id: 'looma', name: 'Looma' })
+    bootstrapWorkspace(consumerProject, { name: 'Knit' })
+    bootstrapWorkspace(providerProject, { name: 'Looma' })
 
     const edge = await createProjectDependencyRequest({
       consumerProject: { id: 'knit', path: consumerProject, label: 'Knit' },
@@ -118,8 +118,8 @@ describe('local project graph', () => {
   })
 
   it('lets only the provider project import, shape, and deliver a dependency request', async () => {
-    bootstrapWorkspace(consumerProject, { id: 'knit', name: 'Knit' })
-    bootstrapWorkspace(providerProject, { id: 'looma', name: 'Looma' })
+    bootstrapWorkspace(consumerProject, { name: 'Knit' })
+    bootstrapWorkspace(providerProject, { name: 'Looma' })
     const edge = await createProjectDependencyRequest({
       consumerProject: { id: 'knit', path: consumerProject, label: 'Knit' },
       providerProject: { id: 'looma', path: providerProject, label: 'Looma' },
@@ -187,8 +187,8 @@ describe('local project graph', () => {
   })
 
   it('keeps provider completion separate from consumer acceptance and supports return/redelivery', async () => {
-    bootstrapWorkspace(consumerProject, { id: 'knit', name: 'Knit' })
-    bootstrapWorkspace(providerProject, { id: 'looma', name: 'Looma' })
+    bootstrapWorkspace(consumerProject, { name: 'Knit' })
+    bootstrapWorkspace(providerProject, { name: 'Looma' })
     const edge = await createProjectDependencyRequest({
       consumerProject: { id: 'knit', path: consumerProject, label: 'Knit' },
       providerProject: { id: 'looma', path: providerProject, label: 'Looma' },
@@ -312,8 +312,8 @@ describe('local project graph', () => {
   })
 
   it('records coordinator communication packets with each project coordinator context', async () => {
-    bootstrapWorkspace(consumerProject, { id: 'knit', name: 'Knit' })
-    bootstrapWorkspace(providerProject, { id: 'looma', name: 'Looma' })
+    bootstrapWorkspace(consumerProject, { name: 'Knit' })
+    bootstrapWorkspace(providerProject, { name: 'Looma' })
     const edge = await createProjectDependencyRequest({
       consumerProject: { id: 'knit', path: consumerProject, label: 'Knit' },
       providerProject: { id: 'looma', path: providerProject, label: 'Looma' },
@@ -482,8 +482,8 @@ describe('local project graph', () => {
   })
 
   it('queries a scoped project graph view with local projects, authorities, channels, and unresolved requests', async () => {
-    bootstrapWorkspace(consumerProject, { id: 'knit', name: 'Knit' })
-    bootstrapWorkspace(providerProject, { id: 'looma', name: 'Looma' })
+    bootstrapWorkspace(consumerProject, { name: 'Knit' })
+    bootstrapWorkspace(providerProject, { name: 'Looma' })
     const edge = await createProjectDependencyRequest({
       consumerProject: { id: 'knit', path: consumerProject, label: 'Knit' },
       providerProject: { id: 'looma', path: providerProject, label: 'Looma' },
@@ -551,8 +551,8 @@ describe('local project graph', () => {
   })
 
   it('keeps delivery channels ecosystem-neutral instead of overfitting to npm dev tags', async () => {
-    bootstrapWorkspace(consumerProject, { id: 'harness', name: 'Narrative Harness' })
-    bootstrapWorkspace(providerProject, { id: 'guildhall', name: 'Guildhall' })
+    bootstrapWorkspace(consumerProject, { name: 'Narrative Harness' })
+    bootstrapWorkspace(providerProject, { name: 'Guildhall' })
     const edge = await createProjectDependencyRequest({
       consumerProject: { id: 'harness', path: consumerProject, label: 'Narrative Harness' },
       providerProject: { id: 'guildhall', path: providerProject, label: 'Guildhall' },
@@ -632,8 +632,8 @@ describe('local project graph', () => {
   })
 
   it('keeps future Jira Linear and GitHub authority refs as local references only', async () => {
-    bootstrapWorkspace(consumerProject, { id: 'knit', name: 'Knit' })
-    bootstrapWorkspace(providerProject, { id: 'looma', name: 'Looma' })
+    bootstrapWorkspace(consumerProject, { name: 'Knit' })
+    bootstrapWorkspace(providerProject, { name: 'Looma' })
     const edge = await createProjectDependencyRequest({
       consumerProject: { id: 'knit', path: consumerProject, label: 'Knit' },
       providerProject: { id: 'looma', path: providerProject, label: 'Looma' },

@@ -23,7 +23,7 @@ import {
   updateMemoryStatus,
   type ContextDebugRecord,
   type MemoryQuery,
-  type MemoryRecord,
+  type MemoryRecordInput,
   type MemoryStatus,
 } from '@guildhall/runtime'
 
@@ -615,7 +615,7 @@ export async function readMcpMemory(ctx: GuildhallMcpContext, input: {
   return trimForMcp(redactForMcp(JSON.stringify(record, null, 2)))
 }
 
-export async function recordMcpMemoryObservation(ctx: GuildhallMcpContext, record: MemoryRecord): Promise<string> {
+export async function recordMcpMemoryObservation(ctx: GuildhallMcpContext, record: MemoryRecordInput): Promise<string> {
   const saved = await recordMemoryObservation({ memoryDir: ctx.projectStateDir, record })
   return trimForMcp(redactForMcp(JSON.stringify(saved, null, 2)))
 }

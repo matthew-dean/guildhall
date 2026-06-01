@@ -147,7 +147,7 @@ function structuralScopesForTask(memoryDir: string, task: Task, fileAreas: reado
       task: {
         id: task.id,
         title: task.title,
-        files: fileAreas,
+        files: [...fileAreas],
         text: `${task.description}\n${task.spec ?? ''}`,
       },
     })

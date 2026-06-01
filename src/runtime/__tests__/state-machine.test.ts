@@ -165,7 +165,7 @@ describe('state machine primitive', () => {
         draft: { on: { close: { to: 'closed' } } },
         closed: { on: {} },
       },
-    })).toThrow(/initial state "missing" is not defined/)
+    } as any)).toThrow(/initial state "missing" is not defined/)
 
     expect(() => defineStateMachine({
       id: 'broken',
@@ -176,7 +176,7 @@ describe('state machine primitive', () => {
         draft: { on: { close: { to: 'missing' } } },
         closed: { on: {} },
       },
-    })).toThrow(/transition "draft" --close--> "missing" points to an unknown state/)
+    } as any)).toThrow(/transition "draft" --close--> "missing" points to an unknown state/)
   })
 
   it('keeps idempotency replay in command handling, not pure transition results', () => {

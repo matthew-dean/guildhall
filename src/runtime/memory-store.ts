@@ -57,7 +57,8 @@ export const MemoryRecord = z.object({
   updatedAt: z.string(),
   source: z.string(),
 })
-export type MemoryRecord = z.infer<typeof MemoryRecord>
+export type MemoryRecord = z.output<typeof MemoryRecord>
+export type MemoryRecordInput = z.input<typeof MemoryRecord>
 
 const MemoryStore = z.object({
   version: z.literal(1).default(1),
@@ -85,7 +86,7 @@ export function memoryStorePath(memoryDir: string): string {
 
 export async function recordMemoryObservation(input: {
   memoryDir: string
-  record: MemoryRecord
+  record: MemoryRecordInput
 }): Promise<MemoryRecord> {
   const store = readStore(input.memoryDir)
   const record = MemoryRecord.parse(input.record)

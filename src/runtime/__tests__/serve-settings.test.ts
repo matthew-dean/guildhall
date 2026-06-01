@@ -2770,7 +2770,7 @@ describe('GET /api/project — bootstrap status', () => {
   it('serves the scoped local project graph view for the selected project', async () => {
     const providerDir = await fs.mkdtemp(path.join(os.tmpdir(), 'guildhall-serve-settings-provider-'))
     try {
-      bootstrapWorkspace(providerDir, { id: 'looma', name: 'Looma' })
+      bootstrapWorkspace(providerDir, { name: 'Looma' })
       await createProjectDependencyRequest({
         consumerProject: { id: PROJECT_ID, path: tmpDir, label: 'Settings Test' },
         providerProject: { id: 'looma', path: providerDir, label: 'Looma' },
