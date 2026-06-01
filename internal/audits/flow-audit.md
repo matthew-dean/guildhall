@@ -108,10 +108,9 @@ babysit setup/import/provider/release states across multiple pages.
 - [ ] Continue structural/domain intelligence from the remaining-work ledger
   in `internal/plans/2026-05-31-guildhall-0-10-implementation-tracker.md`.
   The feature is explicitly not complete after the foundation slice.
-  Remaining count after the evidence scoring/conflict slice: 11 items. Next
-  item: add structural-map refresh/diff support so changed manifests, source,
-  or Git evidence marks only affected map areas stale and asks review
-  questions only where routing, memory, commands, or Git authority changes.
+  Remaining count after the refresh/diff slice: 10 items. Next item: use
+  accepted structural maps in actual task routing and coordinator assignment,
+  including domain coordinators and cross-cutting domain activation.
 - [x] Specify the 0.10 bounded-chat pivot for intake and New request flows.
   Plan: `internal/plans/2026-05-31-guildhall-0-10-bounded-chat.md`.
   The accepted direction is a two-role flow: a conversation agent handles the

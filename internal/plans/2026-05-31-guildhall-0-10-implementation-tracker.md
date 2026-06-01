@@ -250,7 +250,7 @@ agent packet integration, coordinator assignment, or remote authority support.
 
 ### Remaining Work Ledger
 
-**Remaining: 11 items. Next item: 7.**
+**Remaining: 10 items. Next item: 8.**
 
 1. [x] Replace the current pnpm-only discovery core with a provider interface
    for package/workspace discovery. After this: implement JS/npm/yarn/bun
@@ -295,10 +295,15 @@ agent packet integration, coordinator assignment, or remote authority support.
    now carry evidence scores and freshness, duplicate structural IDs merge
    evidence instead of overwriting, label conflicts are preserved, and conflict
    owner questions are generated.
-7. [ ] Add structural-map refresh/diff support so manifest/source/Git changes
+7. [x] Add structural-map refresh/diff support so manifest/source/Git changes
    mark only affected map areas stale and ask review questions only where
    routing, memory, commands, or Git authority changes. After this: wire maps
-   into task routing.
+   into task routing. Completed in
+   `feature/0.10-structural-domain-intelligence`: `refreshStructuralMap`
+   redrafts current structure, diffs it against a prior map, classifies review
+   impact, writes `.guildhall/structural-map/refreshes/<refresh-id>.json`, and
+   creates targeted review questions for changed routing/command/Git/memory
+   areas.
 8. [ ] Use accepted structural maps in actual task routing and coordinator
    assignment, including domain coordinators and cross-cutting domain
    activation. After this: wire maps into context-builder.

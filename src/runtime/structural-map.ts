@@ -166,6 +166,25 @@ export interface StructuralContextSlice {
   }>
 }
 
+export interface StructuralMapRefreshChange {
+  kind: 'added' | 'removed' | 'changed'
+  targetId: string
+  targetKind: StructuralNodeKind | StructuralMapEdge['kind']
+  reviewImpact: 'routing' | 'memory' | 'commands' | 'git_authority' | 'none'
+  summary: string
+}
+
+export interface StructuralMapRefreshResult {
+  id: string
+  previousMapId: string
+  nextMap: StructuralMapDraft
+  changes: StructuralMapRefreshChange[]
+  staleNodeIds: string[]
+  reviewQuestions: OwnerQuestion[]
+  refreshedBy: string
+  refreshedAt: string
+}
+
 export const structuralMapReviewMachine = defineStateMachine<
   StructuralMapState,
   StructuralMapEvent,
@@ -823,6 +842,44 @@ export async function acceptStructuralMap(input: {
   return accepted
 }
 
+export async function refreshStructuralMap(input: {
+  projectRoot: string
+  previousMapId: string
+  projectId: string
+  actor: string
+  now?: string
+}): Promise<StructuralMapRefreshResult> {
+  const now = input.now ?? new Date().toISOString()
+  const previous = readStructuralMap(input.projectRoot, input.previousMapId)
+  const nextMap = await draftStructuralMap({
+    projectId: input.projectId,
+    projectRoot: input.projectRoot,
+    now,
+  })
+  const changes = diffStructuralMaps(previous, nextMap)
+  const reviewQuestions = refreshReviewQuestions(changes)
+  nextMap.ownerQuestions = [
+    ...nextMap.ownerQuestions,
+    ...reviewQuestions,
+  ]
+  await writeStructuralMap(input.projectRoot, nextMap)
+  const result: StructuralMapRefreshResult = {
+    id: `refresh-${Date.parse(now).toString(36)}`,
+    previousMapId: previous.id,
+    nextMap,
+    changes,
+    staleNodeIds: changes
+      .filter(change => change.reviewImpact !== 'none')
+      .map(change => change.targetId)
+      .filter(id => id.startsWith('package:') || id.startsWith('domain:') || id.startsWith('exec:') || id.startsWith('git:') || id.startsWith('cross-cutting:')),
+    reviewQuestions,
+    refreshedBy: input.actor,
+    refreshedAt: now,
+  }
+  writeJsonFile(path.join(structuralMapDir(input.projectRoot), 'refreshes', `${result.id}.json`), result)
+  return result
+}
+
 export function buildStructuralContextSlice(map: StructuralMapDraft, task: {
   id: string
   title: string
@@ -1459,6 +1516,78 @@ function conflictOwnerQuestions(nodes: StructuralMapNode[], edges: StructuralMap
       targetIds: [conflict.targetId],
     }))
   return [...nodeQuestions, ...edgeQuestions]
+}
+
+function diffStructuralMaps(previous: StructuralMapDraft, next: StructuralMapDraft): StructuralMapRefreshChange[] {
+  const previousNodes = new Map(previous.nodes.map(node => [node.id, node]))
+  const nextNodes = new Map(next.nodes.map(node => [node.id, node]))
+  const changes: StructuralMapRefreshChange[] = []
+  for (const [id, node] of nextNodes) {
+    const before = previousNodes.get(id)
+    if (!before) {
+      changes.push({
+        kind: 'added',
+        targetId: id,
+        targetKind: node.kind,
+        reviewImpact: reviewImpactForNode(node),
+        summary: `Added ${node.kind} ${node.label}.`,
+      })
+      continue
+    }
+    if (nodeSignature(before) !== nodeSignature(node)) {
+      changes.push({
+        kind: 'changed',
+        targetId: id,
+        targetKind: node.kind,
+        reviewImpact: reviewImpactForNode(node),
+        summary: `Changed ${node.kind} ${node.label}.`,
+      })
+    }
+  }
+  for (const [id, node] of previousNodes) {
+    if (!nextNodes.has(id)) {
+      changes.push({
+        kind: 'removed',
+        targetId: id,
+        targetKind: node.kind,
+        reviewImpact: reviewImpactForNode(node),
+        summary: `Removed ${node.kind} ${node.label}.`,
+      })
+    }
+  }
+  return changes.sort((left, right) => left.targetId.localeCompare(right.targetId))
+}
+
+function refreshReviewQuestions(changes: StructuralMapRefreshChange[]): OwnerQuestion[] {
+  return changes
+    .filter(change => change.reviewImpact !== 'none')
+    .map(change => ({
+      id: `review-${change.kind}-${slugify(change.targetId)}`,
+      reason: `structural_refresh_changed_${change.reviewImpact}`,
+      prompt: `${change.summary} Review before this structural change affects ${change.reviewImpact}.`,
+      targetIds: [change.targetId],
+    }))
+}
+
+function reviewImpactForNode(node: StructuralMapNode): StructuralMapRefreshChange['reviewImpact'] {
+  if (node.kind === 'git_authority_root') return 'git_authority'
+  if (node.kind === 'executable_unit') return 'commands'
+  if (node.kind === 'memory_scope') return 'memory'
+  if (node.kind === 'package' || node.kind === 'domain_group' || node.kind === 'cross_cutting_domain' || node.kind === 'workspace' || node.kind === 'monorepo') return 'routing'
+  return 'none'
+}
+
+function nodeSignature(node: StructuralMapNode): string {
+  return JSON.stringify({
+    kind: node.kind,
+    label: node.label,
+    relativePath: node.relativePath,
+    packageName: node.packageName,
+    packageId: node.packageId,
+    domainId: node.domainId,
+    role: node.role,
+    command: node.command,
+  })
 }
 
 function strongestConfidence(left: StructuralConfidence, right: StructuralConfidence): StructuralConfidence {

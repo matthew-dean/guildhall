@@ -9,6 +9,7 @@ import {
   applyStructuralMapCorrection,
   buildStructuralContextSlice,
   draftStructuralMap,
+  refreshStructuralMap,
   requestStructuralMapCorrection,
   shapeStructuralDependencyRequest,
   submitStructuralMapForReview,
@@ -261,6 +262,45 @@ describe('structural map drafting', () => {
       id: 'resolve-conflict-cross-cutting-parser-parity',
       reason: 'conflicting_structural_evidence',
     }))
+  })
+
+  it('refreshes an accepted structural map with targeted diffs and review questions', async () => {
+    await writeRepoFixture(projectRoot, {
+      name: '@example/root',
+      workspace: ['packages/*'],
+      packages: [{ dir: 'packages/core', name: '@example/core', scripts: { test: 'vitest run packages/core' } }],
+    })
+    const accepted = await acceptFreshMap(projectRoot, 'example')
+    await fsp.mkdir(path.join(projectRoot, 'packages', 'editor', 'src'), { recursive: true })
+    await fsp.writeFile(path.join(projectRoot, 'packages', 'editor', 'package.json'), `${JSON.stringify({
+      name: '@example/editor',
+      scripts: { test: 'vitest run packages/editor' },
+    }, null, 2)}\n`)
+    await fsp.writeFile(path.join(projectRoot, 'README.md'), '# unchanged routing\n')
+
+    const refresh = await refreshStructuralMap({
+      projectRoot,
+      previousMapId: accepted.id,
+      projectId: 'example',
+      actor: 'coordinator:example',
+      now: '2026-06-01T12:05:00.000Z',
+    })
+
+    expect(refresh.nextMap.stateMachine.state).toBe('draft')
+    expect(refresh.changes).toContainEqual(expect.objectContaining({
+      kind: 'added',
+      targetId: 'package:example-editor',
+      reviewImpact: 'routing',
+    }))
+    expect(refresh.reviewQuestions).toContainEqual(expect.objectContaining({
+      id: 'review-added-package-example-editor',
+      reason: 'structural_refresh_changed_routing',
+    }))
+    expect(refresh.reviewQuestions).not.toContainEqual(expect.objectContaining({
+      id: 'review-changed-package-example-core',
+    }))
+    expect(refresh.staleNodeIds).toEqual(expect.arrayContaining(['package:example-editor', 'domain:editor', 'exec:example-editor:test']))
+    expect(fs.existsSync(path.join(projectRoot, '.guildhall', 'structural-map', 'refreshes', `${refresh.id}.json`))).toBe(true)
   })
 
   it('runs structural discovery providers so package managers can be added without changing the draft core', async () => {
