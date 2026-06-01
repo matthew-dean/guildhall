@@ -35,6 +35,7 @@
     "test:ui": "pnpm build && playwright test",
     "test:ui:install": "playwright install chromium",
     "lint:deps": "depcruise src",
+    "lint:reductions": "node scripts/reduction-guardrails.mjs",
     "clean": "rm -rf dist",
     "release": "node scripts/publish.mjs",
     "release:dry": "node scripts/publish.mjs 0.9.0 --dry-run --allow-branch",

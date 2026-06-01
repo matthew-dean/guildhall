@@ -396,7 +396,8 @@ Rules for agents implementing this plan:
 - Create: `src/runtime/__tests__/reduction-guardrails.test.ts`
 - Modify: `package.json`
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
+  - Evidence: Created `src/runtime/__tests__/reduction-guardrails.test.ts` with the specified `execFileSync(process.execPath, ['scripts/reduction-guardrails.mjs'])` assertion.
 
 Create `src/runtime/__tests__/reduction-guardrails.test.ts`:
 
@@ -416,7 +417,8 @@ describe('reduction guardrails', () => {
 })
 ```
 
-- [ ] **Step 2: Run test to confirm current red**
+- [x] **Step 2: Run test to confirm current red**
+  - Evidence: `pnpm vitest run src/runtime/__tests__/reduction-guardrails.test.ts --reporter=dot` failed with `MODULE_NOT_FOUND` for `scripts/reduction-guardrails.mjs`, the expected red state.
 
 Run:
 
@@ -426,7 +428,8 @@ pnpm vitest run src/runtime/__tests__/reduction-guardrails.test.ts --reporter=do
 
 Expected: FAIL because `scripts/reduction-guardrails.mjs` does not exist.
 
-- [ ] **Step 3: Add the guardrail script**
+- [x] **Step 3: Add the guardrail script**
+  - Evidence: Created `scripts/reduction-guardrails.mjs` with forbidden runtime vocabulary and legacy task-shape checks from this plan, allowing nested runtime `__tests__` fixtures so the guardrail focuses on shipping/runtime paths.
 
 Create `scripts/reduction-guardrails.mjs`:
 
@@ -446,7 +449,7 @@ const forbiddenRuntimeWords = [
 const allowedWordPaths = [
   /^internal\//,
   /^examples\//,
-  /^src\/runtime\/__tests__\//,
+  /^src\/runtime\/(?:.*\/)?__tests__\//,
   /^src\/runtime\/release-proof-matrix\.ts$/,
   /^src\/runtime\/app-spec-smoke\.ts$/,
 ]
@@ -501,7 +504,8 @@ if (failures.length) {
 }
 ```
 
-- [ ] **Step 4: Add package script**
+- [x] **Step 4: Add package script**
+  - Evidence: Added `"lint:reductions": "node scripts/reduction-guardrails.mjs"` to `package.json`.
 
 Add to `package.json` scripts:
 
@@ -509,7 +513,8 @@ Add to `package.json` scripts:
 "lint:reductions": "node scripts/reduction-guardrails.mjs"
 ```
 
-- [ ] **Step 5: Run and keep red until the reduction tasks land**
+- [x] **Step 5: Run and keep red until the reduction tasks land**
+  - Evidence: `pnpm lint:reductions` failed with expected existing violations in `src/core/task.ts`, generic runtime sample-product leaks, runtime/web hierarchy inference, and exit code 1.
 
 Run:
 
