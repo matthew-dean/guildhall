@@ -195,6 +195,11 @@ export function defaultStructuralDiscoveryProviders(): StructuralDiscoveryProvid
     yarnStructuralDiscoveryProvider,
     bunStructuralDiscoveryProvider,
     packageJsonWorkspacesStructuralDiscoveryProvider,
+    pythonStructuralDiscoveryProvider,
+    cargoStructuralDiscoveryProvider,
+    composerStructuralDiscoveryProvider,
+    dotnetStructuralDiscoveryProvider,
+    docsOnlyStructuralDiscoveryProvider,
   ]
 }
 
@@ -287,6 +292,248 @@ export const packageJsonWorkspacesStructuralDiscoveryProvider: StructuralDiscove
       label: 'package.json workspaces',
       packageNodes,
     })
+  },
+}
+
+export const pythonStructuralDiscoveryProvider: StructuralDiscoveryProvider = {
+  id: 'python-project',
+  label: 'Python project',
+  detect({ projectRoot }) {
+    const detected = fs.existsSync(path.join(projectRoot, 'pyproject.toml'))
+    return {
+      detected,
+      evidence: evidence('manifest', 'pyproject.toml', detected ? 'high' : 'low'),
+    }
+  },
+  discover({ projectRoot }) {
+    const pyproject = fs.readFileSync(path.join(projectRoot, 'pyproject.toml'), 'utf8')
+    const projectName = matchFirst(pyproject, /^\s*name\s*=\s*"([^"]+)"/m) ?? path.basename(projectRoot)
+    return {
+      nodes: [
+        {
+          id: `package:python-${slugify(projectName)}`,
+          kind: 'package',
+          label: projectName,
+          relativePath: '.',
+          packageName: projectName,
+          packageId: `python-${slugify(projectName)}`,
+          evidence: evidence('manifest', 'pyproject.toml', 'high'),
+          confidence: 'high',
+        },
+        {
+          id: 'exec:python:pytest',
+          kind: 'executable_unit',
+          label: 'pytest',
+          relativePath: '.',
+          command: 'python -m pytest',
+          evidence: evidence('manifest', 'pyproject.toml', 'medium'),
+          confidence: 'medium',
+        },
+      ],
+      edges: [],
+      evidenceRefs: ['manifest:pyproject.toml'],
+    }
+  },
+}
+
+export const cargoStructuralDiscoveryProvider: StructuralDiscoveryProvider = {
+  id: 'cargo-workspace',
+  label: 'Cargo workspace',
+  detect({ projectRoot }) {
+    const detected = fs.existsSync(path.join(projectRoot, 'Cargo.toml'))
+    return {
+      detected,
+      evidence: evidence('manifest', 'Cargo.toml', detected ? 'high' : 'low'),
+    }
+  },
+  discover({ projectRoot }) {
+    const cargo = fs.readFileSync(path.join(projectRoot, 'Cargo.toml'), 'utf8')
+    const members = parseQuotedList(matchFirst(cargo, /^\s*members\s*=\s*\[([^\]]+)\]/m) ?? '')
+    const packageNodes = members.map((member): StructuralMapNode | undefined => {
+      const memberManifestPath = path.join(projectRoot, member, 'Cargo.toml')
+      if (!fs.existsSync(memberManifestPath)) return undefined
+      const manifest = fs.readFileSync(memberManifestPath, 'utf8')
+      const crateName = matchFirst(manifest, /^\s*name\s*=\s*"([^"]+)"/m) ?? path.basename(member)
+      return {
+        id: `package:cargo-${slugify(crateName)}`,
+        kind: 'package',
+        label: crateName,
+        relativePath: member,
+        packageName: crateName,
+        packageId: `cargo-${slugify(crateName)}`,
+        evidence: evidence('manifest', `${member}/Cargo.toml`, 'high'),
+        confidence: 'high',
+      }
+    }).filter((node): node is StructuralMapNode => Boolean(node))
+    return {
+      nodes: [
+        {
+          id: 'workspace:cargo',
+          kind: 'workspace',
+          label: 'Cargo workspace',
+          relativePath: '.',
+          evidence: evidence('manifest', 'Cargo.toml', members.length > 0 ? 'high' : 'medium'),
+          confidence: members.length > 0 ? 'high' : 'medium',
+        },
+        ...packageNodes,
+        {
+          id: 'exec:cargo:test',
+          kind: 'executable_unit',
+          label: 'cargo test',
+          relativePath: '.',
+          command: 'cargo test --workspace',
+          evidence: evidence('manifest', 'Cargo.toml', 'high'),
+          confidence: 'high',
+        },
+      ],
+      edges: [],
+      evidenceRefs: ['manifest:Cargo.toml'],
+    }
+  },
+}
+
+export const composerStructuralDiscoveryProvider: StructuralDiscoveryProvider = {
+  id: 'composer-project',
+  label: 'Composer project',
+  detect({ projectRoot }) {
+    const detected = fs.existsSync(path.join(projectRoot, 'composer.json'))
+    return {
+      detected,
+      evidence: evidence('manifest', 'composer.json', detected ? 'high' : 'low'),
+    }
+  },
+  discover({ projectRoot }) {
+    const composer = readJsonIfExists(path.join(projectRoot, 'composer.json')) as { name?: string; scripts?: Record<string, string> } | undefined
+    const packageName = composer?.name ?? path.basename(projectRoot)
+    const nodes: StructuralMapNode[] = [
+      {
+        id: `package:composer-${slugify(packageName)}`,
+        kind: 'package',
+        label: packageName,
+        relativePath: '.',
+        packageName,
+        packageId: `composer-${slugify(packageName)}`,
+        evidence: evidence('manifest', 'composer.json', 'high'),
+        confidence: 'high',
+      },
+    ]
+    if (composer?.scripts?.test) {
+      nodes.push({
+        id: 'exec:composer:test',
+        kind: 'executable_unit',
+        label: 'composer test',
+        relativePath: '.',
+        command: 'composer test',
+        evidence: evidence('script', 'composer.json#scripts.test', 'high'),
+        confidence: 'high',
+      })
+    }
+    return {
+      nodes,
+      edges: [],
+      evidenceRefs: ['manifest:composer.json'],
+    }
+  },
+}
+
+export const dotnetStructuralDiscoveryProvider: StructuralDiscoveryProvider = {
+  id: 'dotnet-solution',
+  label: '.NET solution',
+  detect({ projectRoot }) {
+    const solution = findFirstFile(projectRoot, file => file.endsWith('.sln'))
+    return {
+      detected: Boolean(solution),
+      evidence: evidence('manifest', solution ? path.basename(solution) : '*.sln', solution ? 'high' : 'low'),
+    }
+  },
+  discover({ projectRoot }) {
+    const solution = findFirstFile(projectRoot, file => file.endsWith('.sln'))
+    if (!solution) return { nodes: [], edges: [], evidenceRefs: [] }
+    const solutionName = path.basename(solution)
+    const text = fs.readFileSync(solution, 'utf8')
+    const projectMatches = [...text.matchAll(/=\s*"([^"]+)",\s*"([^"]+\.csproj)"/g)]
+    const packageNodes = projectMatches.map((match): StructuralMapNode => {
+      const label = match[1]
+      const relativeProjectPath = match[2].replaceAll('\\', '/')
+      return {
+        id: `package:dotnet-${slugify(label)}`,
+        kind: 'package',
+        label,
+        relativePath: path.dirname(relativeProjectPath),
+        packageName: label,
+        packageId: `dotnet-${slugify(label)}`,
+        evidence: evidence('manifest', relativeProjectPath, 'high'),
+        confidence: 'high',
+      }
+    })
+    return {
+      nodes: [
+        {
+          id: 'workspace:dotnet',
+          kind: 'workspace',
+          label: solutionName,
+          relativePath: '.',
+          evidence: evidence('manifest', solutionName, 'high'),
+          confidence: 'high',
+        },
+        ...packageNodes,
+        {
+          id: 'exec:dotnet:test',
+          kind: 'executable_unit',
+          label: 'dotnet test',
+          relativePath: '.',
+          command: `dotnet test ${solutionName}`,
+          evidence: evidence('manifest', solutionName, 'high'),
+          confidence: 'high',
+        },
+      ],
+      edges: [],
+      evidenceRefs: [`manifest:${solutionName}`],
+    }
+  },
+}
+
+export const docsOnlyStructuralDiscoveryProvider: StructuralDiscoveryProvider = {
+  id: 'docs-only',
+  label: 'Docs-only project',
+  detect({ projectRoot }) {
+    const hasDocs = fs.existsSync(path.join(projectRoot, 'docs')) || fs.existsSync(path.join(projectRoot, 'README.md'))
+    const hasKnownManifest = [
+      'package.json',
+      'pnpm-workspace.yaml',
+      'pyproject.toml',
+      'Cargo.toml',
+      'composer.json',
+    ].some(file => fs.existsSync(path.join(projectRoot, file))) || Boolean(findFirstFile(projectRoot, file => file.endsWith('.sln')))
+    return {
+      detected: hasDocs && !hasKnownManifest,
+      evidence: hasDocs ? evidence('docs', 'docs-or-readme', 'medium') : evidence('docs', 'docs-or-readme', 'low'),
+    }
+  },
+  discover() {
+    return {
+      nodes: [
+        {
+          id: 'domain:docs',
+          kind: 'domain_group',
+          label: 'Docs',
+          relativePath: 'docs',
+          evidence: evidence('docs', 'docs', 'medium'),
+          confidence: 'medium',
+        },
+        {
+          id: 'exec:docs:review',
+          kind: 'executable_unit',
+          label: 'manual docs review',
+          relativePath: 'docs',
+          command: 'review docs manually',
+          evidence: evidence('docs', 'README.md', 'low'),
+          confidence: 'low',
+        },
+      ],
+      edges: [],
+      evidenceRefs: ['docs:docs-or-readme'],
+    }
   },
 }
 
@@ -881,6 +1128,19 @@ function hasAnyLockFile(projectRoot: string, lockFiles: string[]): boolean {
   return lockFiles.some(lockFile => fs.existsSync(path.join(projectRoot, lockFile)))
 }
 
+function findFirstFile(dir: string, predicate: (file: string) => boolean): string | undefined {
+  if (!fs.existsSync(dir)) return undefined
+  for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+    const absolutePath = path.join(dir, entry.name)
+    if (entry.isFile() && predicate(absolutePath)) return absolutePath
+    if (entry.isDirectory() && !['node_modules', '.git', 'dist', 'build'].includes(entry.name)) {
+      const child = findFirstFile(absolutePath, predicate)
+      if (child) return child
+    }
+  }
+  return undefined
+}
+
 function hasNodeCopyEvidence(projectRoot: string, manifest: PackageJson | undefined): boolean {
   return Boolean(manifest?.scripts?.['verify:node-copy-frontier']) ||
     fs.existsSync(path.join(projectRoot, 'docs', 'future', 'node-copy-reduction'))
@@ -938,6 +1198,14 @@ function packageScriptCommand(
     default:
       return `pnpm --filter ${workspace} ${script}`
   }
+}
+
+function matchFirst(text: string, pattern: RegExp): string | undefined {
+  return pattern.exec(text)?.[1]
+}
+
+function parseQuotedList(value: string): string[] {
+  return [...value.matchAll(/"([^"]+)"/g)].map(match => match[1])
 }
 
 function slugify(value: string): string {

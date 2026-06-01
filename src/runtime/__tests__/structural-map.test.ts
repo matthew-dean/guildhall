@@ -107,6 +107,69 @@ describe('structural map drafting', () => {
     expect(draft.nodes).not.toContainEqual(expect.objectContaining({ id: 'workspace:pnpm' }))
   })
 
+  it.each([
+    {
+      name: 'python',
+      setup: writePythonFixture,
+      expectedProvider: 'provider:python-project',
+      expectedNodes: [
+        { id: 'package:python-acme-tools', kind: 'package', label: 'acme-tools' },
+        { id: 'exec:python:pytest', kind: 'executable_unit', command: 'python -m pytest' },
+      ],
+    },
+    {
+      name: 'rust',
+      setup: writeRustFixture,
+      expectedProvider: 'provider:cargo-workspace',
+      expectedNodes: [
+        { id: 'workspace:cargo', kind: 'workspace', label: 'Cargo workspace' },
+        { id: 'package:cargo-core', kind: 'package', label: 'core' },
+        { id: 'exec:cargo:test', kind: 'executable_unit', command: 'cargo test --workspace' },
+      ],
+    },
+    {
+      name: 'composer',
+      setup: writeComposerFixture,
+      expectedProvider: 'provider:composer-project',
+      expectedNodes: [
+        { id: 'package:composer-acme-app', kind: 'package', label: 'acme/app' },
+        { id: 'exec:composer:test', kind: 'executable_unit', command: 'composer test' },
+      ],
+    },
+    {
+      name: 'dotnet',
+      setup: writeDotnetFixture,
+      expectedProvider: 'provider:dotnet-solution',
+      expectedNodes: [
+        { id: 'workspace:dotnet', kind: 'workspace', label: 'Acme.sln' },
+        { id: 'package:dotnet-acme-core', kind: 'package', label: 'Acme.Core' },
+        { id: 'exec:dotnet:test', kind: 'executable_unit', command: 'dotnet test Acme.sln' },
+      ],
+    },
+    {
+      name: 'docs-only',
+      setup: writeDocsOnlyFixture,
+      expectedProvider: 'provider:docs-only',
+      expectedNodes: [
+        { id: 'domain:docs', kind: 'domain_group', label: 'Docs' },
+        { id: 'exec:docs:review', kind: 'executable_unit', command: 'review docs manually' },
+      ],
+    },
+  ])('discovers minimal $name structural shape', async ({ setup, expectedProvider, expectedNodes }) => {
+    await setup(projectRoot)
+
+    const draft = await draftStructuralMap({
+      projectId: 'fixture',
+      projectRoot,
+      now: '2026-06-01T12:00:00.000Z',
+    })
+
+    for (const expectedNode of expectedNodes) {
+      expect(draft.nodes).toContainEqual(expect.objectContaining(expectedNode))
+    }
+    expect(draft.evidenceRefs).toEqual(expect.arrayContaining([expectedProvider]))
+  })
+
   it('runs structural discovery providers so package managers can be added without changing the draft core', async () => {
     const customProvider: StructuralDiscoveryProvider = {
       id: 'fixture-provider',
@@ -535,6 +598,70 @@ async function writePackageJsonWorkspaceFixture(root: string, input: {
     name: '@fixture/shared',
     scripts: { test: 'vitest run packages/shared' },
   }, null, 2)}\n`)
+}
+
+async function writePythonFixture(root: string): Promise<void> {
+  await fsp.writeFile(path.join(root, 'pyproject.toml'), [
+    '[project]',
+    'name = "acme-tools"',
+    'version = "0.1.0"',
+    '',
+    '[tool.pytest.ini_options]',
+    'testpaths = ["tests"]',
+    '',
+  ].join('\n'))
+  await fsp.mkdir(path.join(root, 'src', 'acme_tools'), { recursive: true })
+  await fsp.writeFile(path.join(root, 'src', 'acme_tools', '__init__.py'), '')
+  await fsp.mkdir(path.join(root, 'tests'), { recursive: true })
+  await fsp.writeFile(path.join(root, 'tests', 'test_smoke.py'), 'def test_smoke():\n    assert True\n')
+}
+
+async function writeRustFixture(root: string): Promise<void> {
+  await fsp.writeFile(path.join(root, 'Cargo.toml'), [
+    '[workspace]',
+    'members = ["crates/core"]',
+    '',
+  ].join('\n'))
+  await fsp.mkdir(path.join(root, 'crates', 'core', 'src'), { recursive: true })
+  await fsp.writeFile(path.join(root, 'crates', 'core', 'Cargo.toml'), [
+    '[package]',
+    'name = "core"',
+    'version = "0.1.0"',
+    'edition = "2021"',
+    '',
+  ].join('\n'))
+}
+
+async function writeComposerFixture(root: string): Promise<void> {
+  await fsp.writeFile(path.join(root, 'composer.json'), `${JSON.stringify({
+    name: 'acme/app',
+    autoload: { 'psr-4': { 'Acme\\\\': 'src/' } },
+    scripts: { test: 'phpunit' },
+  }, null, 2)}\n`)
+  await fsp.mkdir(path.join(root, 'src'), { recursive: true })
+  await fsp.writeFile(path.join(root, 'src', 'App.php'), '<?php\nnamespace Acme;\n')
+}
+
+async function writeDotnetFixture(root: string): Promise<void> {
+  await fsp.writeFile(path.join(root, 'Acme.sln'), [
+    'Microsoft Visual Studio Solution File, Format Version 12.00',
+    'Project("{GUID}") = "Acme.Core", "src\\Acme.Core\\Acme.Core.csproj", "{GUID2}"',
+    'EndProject',
+    '',
+  ].join('\n'))
+  await fsp.mkdir(path.join(root, 'src', 'Acme.Core'), { recursive: true })
+  await fsp.writeFile(path.join(root, 'src', 'Acme.Core', 'Acme.Core.csproj'), [
+    '<Project Sdk="Microsoft.NET.Sdk">',
+    '  <PropertyGroup><TargetFramework>net8.0</TargetFramework></PropertyGroup>',
+    '</Project>',
+    '',
+  ].join('\n'))
+}
+
+async function writeDocsOnlyFixture(root: string): Promise<void> {
+  await fsp.mkdir(path.join(root, 'docs'), { recursive: true })
+  await fsp.writeFile(path.join(root, 'README.md'), '# Research notes\n')
+  await fsp.writeFile(path.join(root, 'docs', 'index.md'), '# Project docs\n')
 }
 
 async function acceptFreshMap(projectRoot: string, projectId: string) {

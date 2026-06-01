@@ -250,7 +250,7 @@ agent packet integration, coordinator assignment, or remote authority support.
 
 ### Remaining Work Ledger
 
-**Remaining: 15 items. Next item: 3.**
+**Remaining: 14 items. Next item: 4.**
 
 1. [x] Replace the current pnpm-only discovery core with a provider interface
    for package/workspace discovery. After this: implement JS/npm/yarn/bun
@@ -265,9 +265,13 @@ agent packet integration, coordinator assignment, or remote authority support.
    discovery now includes npm, yarn, bun, and package.json workspace providers,
    detects lockfile/workspace evidence, and emits package-manager-specific
    executable commands.
-3. [ ] Add non-JS structural fixtures and minimal detectors for Python, Rust,
+3. [x] Add non-JS structural fixtures and minimal detectors for Python, Rust,
    PHP/Composer, .NET solution/project files, and docs-only repos. After this:
-   add module/class architecture inference.
+   add module/class architecture inference. Completed in
+   `feature/0.10-structural-domain-intelligence`: default discovery now
+   includes minimal providers for `pyproject.toml`, Cargo workspaces,
+   Composer projects, `.sln`/`.csproj` solutions, and docs-only repositories,
+   each with focused fixture coverage and evidence refs.
 4. [ ] Add module/class architecture inference for app folders, namespaces,
    routes, services, migrations, jobs, commands, and tests when packages do
    not describe domains. After this: expand cross-cutting concern inference.
