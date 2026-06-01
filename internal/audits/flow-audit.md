@@ -141,6 +141,13 @@ babysit setup/import/provider/release states across multiple pages.
   Harness walkthrough confirmed standalone `Looma` appears as a provider
   capability option without moving token values/product configuration out of
   Narrative Harness.
+- [x] Simplify the owner-facing project graph after live walkthrough feedback.
+  Remaining count: 0 items. Next item: merge decision once the active
+  bounded-chat worktree on `0.10.0` is clean enough to receive this branch.
+  The graph no longer exposes every responsibility facet as a select-box row.
+  It shows domains first, lets the owner click into a domain, and keeps
+  "Assign to project" actions inside the focused detail panel while local
+  product configuration and verification read as plain context.
 - [x] Specify the 0.10 bounded-chat pivot for intake and New request flows.
   Plan: `internal/plans/2026-05-31-guildhall-0-10-bounded-chat.md`.
   The accepted direction is a two-role flow: a conversation agent handles the

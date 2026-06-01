@@ -311,8 +311,8 @@
   let projectGraph = $state<ProjectGraphView | null>(null)
   let projectGraphError = $state<string | null>(null)
   let projectGraphBusy = $state<string | null>(null)
+  let selectedProjectGraphDomainId = $state<string | null>(null)
   let domainAuthoritySelections = $state<Record<string, string>>({})
-  let domainResponsibilitySelections = $state<Record<string, string>>({})
   let reintakeStatus = $state<ReintakeStatus | null>(null)
   let reintakeDraft = $state<ReintakeDraft | null>(null)
   let reintakeBusy = $state<null | 'rerun' | 'apply'>(null)
@@ -1082,13 +1082,6 @@
         if (domainId && providerId) nextSelections[domainId] = providerId
       }
       domainAuthoritySelections = nextSelections
-      const nextResponsibilitySelections = { ...domainResponsibilitySelections }
-      for (const responsibility of projectGraph?.domainResponsibilities ?? []) {
-        if (responsibility.assignable && responsibility.id && responsibility.responsibleProjectId) {
-          nextResponsibilitySelections[responsibility.id] = responsibility.responsibleProjectId
-        }
-      }
-      domainResponsibilitySelections = nextResponsibilitySelections
     } catch (err) {
       projectGraphError = err instanceof Error ? err.message : String(err)
     }
@@ -1148,31 +1141,36 @@
     return (projectGraph?.domainResponsibilities ?? []).filter(item => item.domainId === domainId)
   }
 
-  function selectedResponsibleProject(responsibility: NonNullable<ProjectGraphView['domainResponsibilities']>[number]): string {
-    return domainResponsibilitySelections[responsibility.id] ?? responsibility.responsibleProjectId
+  function selectedGraphDomain() {
+    if (!selectedProjectGraphDomainId) return null
+    return structuralDomainsForGraph().find(item => item.id === selectedProjectGraphDomainId) ?? null
   }
 
-  function setDomainResponsibilitySelection(responsibilityId: string, projectId: string) {
-    domainResponsibilitySelections = {
-      ...domainResponsibilitySelections,
-      [responsibilityId]: projectId,
+  function primaryAssignableResponsibility(domainId?: string) {
+    const assignable = responsibilitiesForDomain(domainId).filter(item => item.assignable)
+    return assignable.find(item => item.facet === 'provider_capability') ?? assignable[0] ?? null
+  }
+
+  function localResponsibilitiesForDomain(domainId?: string) {
+    return responsibilitiesForDomain(domainId).filter(item => !item.assignable)
+  }
+
+  function domainGraphSummary(domain: { id?: string }): string {
+    const responsibility = primaryAssignableResponsibility(domain.id)
+    if (!responsibility) return domainResponsibilityLabel(domain)
+    if (responsibility.assigned && responsibility.responsibleProjectId !== project.detail?.id) {
+      return `Assigned to ${responsibility.responsibleProjectLabel}`
     }
+    return 'Available to assign'
   }
 
-  function responsibilityTone(responsibility: NonNullable<ProjectGraphView['domainResponsibilities']>[number]): 'neutral' | 'accent' {
-    return responsibility.authority === 'consumer' ? 'accent' : 'neutral'
-  }
-
-  function responsibilityOwnerLabel(responsibility: NonNullable<ProjectGraphView['domainResponsibilities']>[number]): string {
-    if (responsibility.authority === 'consumer') return `Stays with ${responsibility.responsibleProjectLabel}`
-    if (responsibility.assigned) return `Handled by ${responsibility.responsibleProjectLabel}`
-    return `Currently ${responsibility.responsibleProjectLabel}`
-  }
-
-  function responsibilityAssignLabel(responsibility: NonNullable<ProjectGraphView['domainResponsibilities']>[number]): string {
-    if (responsibility.facet === 'provider_capability') return 'Assign capability'
-    if (responsibility.facet === 'shared_contract') return 'Assign contract'
-    return 'Assign'
+  function graphAssignmentTargets(responsibility: NonNullable<ProjectGraphView['domainResponsibilities']>[number]) {
+    return (projectGraph?.localProjects ?? [])
+      .filter(item => item.id && item.path && item.id !== responsibility.responsibleProjectId)
+      .map(item => ({
+        id: item.id,
+        label: item.id === project.detail?.id ? 'this project' : item.label,
+      }))
   }
 
   function setDomainAuthoritySelection(domainId: string, providerProjectId: string) {
@@ -1212,8 +1210,7 @@
     }
   }
 
-  async function assignDomainResponsibility(responsibility: NonNullable<ProjectGraphView['domainResponsibilities']>[number]) {
-    const responsibleProjectId = selectedResponsibleProject(responsibility)
+  async function assignDomainResponsibilityTo(responsibility: NonNullable<ProjectGraphView['domainResponsibilities']>[number], responsibleProjectId: string) {
     if (!responsibleProjectId) return
     projectGraphBusy = `assign-responsibility:${responsibility.id}`
     try {
@@ -2199,8 +2196,8 @@
         <FrameCard class="graph-card">
           {#snippet header()}
             <SectionHeader
-              title="Domain responsibilities"
-              description="Assign provider capabilities and shared contracts without moving product configuration or consumer verification out of this project."
+              title="Domains"
+              description="Click a domain to see where its work belongs."
               headingTag="h3"
               density="dense"
             />
@@ -2212,45 +2209,20 @@
           {:else}
             <div class="domain-assignment-list">
               {#each structuralDomainsForGraph() as domain (domain.id)}
-                <UtilityPanel as="section" className="domain-assignment" tone="neutral" dense>
+                <button
+                  type="button"
+                  class:active={selectedProjectGraphDomainId === domain.id}
+                  class="domain-graph-node"
+                  aria-label={`Open ${domain.label} domain`}
+                  aria-pressed={selectedProjectGraphDomainId === domain.id}
+                  onclick={() => selectedProjectGraphDomainId = domain.id ?? null}
+                >
                   <div class="domain-assignment-copy">
                     <strong>{domain.label}</strong>
                     <span class="muted">{domainSourceLabel(domain)}</span>
                   </div>
-                  {#if responsibilitiesForDomain(domain.id).length > 0}
-                    <div class="responsibility-facet-list">
-                      {#each responsibilitiesForDomain(domain.id) as responsibility (responsibility.id)}
-                        <UtilityPanel as="div" className="responsibility-facet" tone={responsibilityTone(responsibility)} dense>
-                          <div class="responsibility-facet-copy">
-                            <strong>{responsibility.facetLabel}</strong>
-                            <span class="muted">{responsibility.description}</span>
-                            <span class="muted">{responsibilityOwnerLabel(responsibility)}</span>
-                          </div>
-                          {#if responsibility.assignable}
-                            <div class="domain-assignment-controls">
-                              <Select
-                                ariaLabel={`Responsible project for ${domain.label} ${responsibility.facetLabel}`}
-                                value={selectedResponsibleProject(responsibility)}
-                                options={graphProjectOptions()}
-                                onchange={(value) => setDomainResponsibilitySelection(responsibility.id, value)}
-                              />
-                              <Button
-                                variant="secondary"
-                                size="sm"
-                                disabled={projectGraphBusy === `assign-responsibility:${responsibility.id}`}
-                                onclick={() => assignDomainResponsibility(responsibility)}
-                              >
-                                {responsibilityAssignLabel(responsibility)}
-                              </Button>
-                            </div>
-                          {/if}
-                        </UtilityPanel>
-                      {/each}
-                    </div>
-                  {:else}
-                    <span class="muted">{domainResponsibilityLabel(domain)}</span>
-                  {/if}
-                </UtilityPanel>
+                  <StatusPill label={domainGraphSummary(domain)} tone={primaryAssignableResponsibility(domain.id)?.assigned ? 'ok' : 'neutral'} />
+                </button>
               {/each}
             </div>
           {/if}
@@ -2299,6 +2271,52 @@
           {/if}
         </FrameCard>
       </div>
+
+      {#if selectedGraphDomain()}
+        {@const domain = selectedGraphDomain()}
+        {@const assignableResponsibility = primaryAssignableResponsibility(domain?.id)}
+        <FrameCard class="graph-card">
+          {#snippet header()}
+            <SectionHeader
+              title={domain?.label ?? 'Domain'}
+              description="Keep local product decisions here. Assign reusable work only when another project should provide it."
+              headingTag="h3"
+              density="dense"
+            />
+          {/snippet}
+          <div class="domain-detail">
+            <UtilityPanel as="section" className="domain-detail-section" tone="accent" dense>
+              <strong>Stays in {project.detail?.name ?? 'this project'}</strong>
+              {#each localResponsibilitiesForDomain(domain?.id) as responsibility (responsibility.id)}
+                <p>{responsibility.description}</p>
+              {/each}
+            </UtilityPanel>
+            {#if assignableResponsibility}
+              <UtilityPanel as="section" className="domain-detail-section" tone="neutral" dense>
+                <strong>Can be assigned</strong>
+                <p>{assignableResponsibility.description}</p>
+                {#if assignableResponsibility.assigned && assignableResponsibility.responsibleProjectId !== project.detail?.id}
+                  <p class="muted">Currently assigned to {assignableResponsibility.responsibleProjectLabel}.</p>
+                {/if}
+                {#if graphAssignmentTargets(assignableResponsibility).length > 0}
+                  <Row wrap>
+                    {#each graphAssignmentTargets(assignableResponsibility) as target (target.id)}
+                      <Button
+                        variant="secondary"
+                        size="sm"
+                        disabled={projectGraphBusy === `assign-responsibility:${assignableResponsibility.id}`}
+                        onclick={() => assignDomainResponsibilityTo(assignableResponsibility, target.id)}
+                      >
+                        Assign to {target.label}
+                      </Button>
+                    {/each}
+                  </Row>
+                {/if}
+              </UtilityPanel>
+            {/if}
+          </div>
+        </FrameCard>
+      {/if}
 
       <FrameCard class="graph-card graph-requests-card">
         {#snippet header()}
@@ -4008,34 +4026,48 @@
     gap: var(--gh-space-2);
   }
 
-  :global(.domain-assignment) {
-    display: grid;
-    gap: var(--gh-space-2);
-  }
-
   .domain-assignment-copy {
     display: grid;
     gap: var(--gh-space-1);
   }
 
-  .domain-assignment-controls {
+  .domain-graph-node {
+    appearance: none;
+    border: 1px solid var(--border-muted);
+    background: var(--surface);
+    border-radius: var(--gh-radius-2);
+    color: inherit;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: var(--gh-space-3);
+    padding: var(--gh-space-3);
+    text-align: left;
+    width: 100%;
+  }
+
+  .domain-graph-node:hover,
+  .domain-graph-node.active {
+    border-color: var(--border-strong);
+    background: var(--surface-raised);
+  }
+
+  .domain-detail {
     display: grid;
     gap: var(--gh-space-2);
   }
 
-  .responsibility-facet-list {
+  :global(.domain-detail-section) {
     display: grid;
     gap: var(--gh-space-2);
   }
 
-  :global(.responsibility-facet) {
-    display: grid;
-    gap: var(--gh-space-2);
-  }
-
-  .responsibility-facet-copy {
-    display: grid;
-    gap: var(--gh-space-1);
+  .domain-detail p {
+    margin: 0;
+    color: var(--text-muted);
+    font-size: var(--fs-1);
+    line-height: var(--lh-body);
   }
 
   :global(.project-chip-row) {
@@ -4103,16 +4135,6 @@
 
     .graph-grid {
       grid-template-columns: minmax(0, 1.4fr) minmax(18rem, 0.8fr);
-    }
-
-    :global(.domain-assignment) {
-      grid-template-columns: minmax(0, 1fr) minmax(18rem, auto);
-      align-items: center;
-    }
-
-    .domain-assignment-controls {
-      grid-template-columns: minmax(12rem, 1fr) auto;
-      align-items: center;
     }
 
   }

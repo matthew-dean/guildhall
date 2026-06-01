@@ -362,9 +362,9 @@ values, product taste, and consumer verification.
 4. [x] Implement persistent responsibility-facet assignment records in the
    local project graph registry, with project-scoped assignment helpers and
    scoped graph views.
-5. [x] Expose responsibility facets in the Settings graph API and UI so the
-   owner can assign provider capability/shared contract without assigning
-   consumer configuration or verification away from the current project.
+5. [x] Expose responsibility facets in the Settings graph API while keeping
+   the owner-facing Settings graph focused on domains first, not internal
+   responsibility machinery.
 6. [x] Add focused Settings UI tests for child project visibility and facet
    wording/actions.
 7. [x] Run focused graph/API/UI verification, refresh the live browser
@@ -380,6 +380,11 @@ values, product taste, and consumer verification.
    `http://localhost:7777/projects/narrative-harness/settings/graph` confirmed
    provider/shared/consumer facets, standalone `Looma` and `Knit` child-project
    options, and local consumer configuration/verification labels.
+8. [x] Simplify the Settings project-graph UI after live walkthrough feedback:
+   show domains as clickable graph nodes, move assignment into a focused domain
+   detail panel, remove select-box-plus-assign controls from the main graph,
+   and keep consumer-side responsibility text as plain local context. Focused
+   UI test passes.
 
 1. [x] Replace the current pnpm-only discovery core with a provider interface
    for package/workspace discovery. After this: implement JS/npm/yarn/bun
