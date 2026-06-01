@@ -170,6 +170,39 @@ describe('structural map drafting', () => {
     expect(draft.evidenceRefs).toEqual(expect.arrayContaining([expectedProvider]))
   })
 
+  it('infers domains from package-less module/class architecture evidence', async () => {
+    await writeModuleArchitectureFixture(projectRoot)
+
+    const draft = await draftStructuralMap({
+      projectId: 'modular-app',
+      projectRoot,
+      now: '2026-06-01T12:00:00.000Z',
+    })
+
+    expect(draft.nodes).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        id: 'domain:billing',
+        kind: 'domain_group',
+        label: 'Billing',
+        confidence: 'high',
+      }),
+      expect.objectContaining({
+        id: 'domain:inventory',
+        kind: 'domain_group',
+        label: 'Inventory',
+        confidence: 'medium',
+      }),
+    ]))
+    expect(draft.nodes.find(node => node.id === 'domain:billing')?.evidence.map(item => item.ref)).toEqual(expect.arrayContaining([
+      'app/services/billing',
+      'app/controllers/billing_controller.rb',
+      'routes/billing.rb',
+      'db/migrations/20260101_create_billing_tables.sql',
+      'tests/billing',
+    ]))
+    expect(draft.evidenceRefs).toEqual(expect.arrayContaining(['provider:module-architecture']))
+  })
+
   it('runs structural discovery providers so package managers can be added without changing the draft core', async () => {
     const customProvider: StructuralDiscoveryProvider = {
       id: 'fixture-provider',
@@ -662,6 +695,23 @@ async function writeDocsOnlyFixture(root: string): Promise<void> {
   await fsp.mkdir(path.join(root, 'docs'), { recursive: true })
   await fsp.writeFile(path.join(root, 'README.md'), '# Research notes\n')
   await fsp.writeFile(path.join(root, 'docs', 'index.md'), '# Project docs\n')
+}
+
+async function writeModuleArchitectureFixture(root: string): Promise<void> {
+  await fsp.mkdir(path.join(root, 'app', 'services', 'billing'), { recursive: true })
+  await fsp.writeFile(path.join(root, 'app', 'services', 'billing', 'invoice_service.rb'), 'class InvoiceService; end\n')
+  await fsp.mkdir(path.join(root, 'app', 'controllers'), { recursive: true })
+  await fsp.writeFile(path.join(root, 'app', 'controllers', 'billing_controller.rb'), 'class BillingController; end\n')
+  await fsp.mkdir(path.join(root, 'routes'), { recursive: true })
+  await fsp.writeFile(path.join(root, 'routes', 'billing.rb'), 'route "/billing"\n')
+  await fsp.mkdir(path.join(root, 'db', 'migrations'), { recursive: true })
+  await fsp.writeFile(path.join(root, 'db', 'migrations', '20260101_create_billing_tables.sql'), 'create table billing_invoices;\n')
+  await fsp.mkdir(path.join(root, 'tests', 'billing'), { recursive: true })
+  await fsp.writeFile(path.join(root, 'tests', 'billing', 'billing_test.rb'), 'assert true\n')
+  await fsp.mkdir(path.join(root, 'app', 'jobs'), { recursive: true })
+  await fsp.writeFile(path.join(root, 'app', 'jobs', 'inventory_sync_job.rb'), 'class InventorySyncJob; end\n')
+  await fsp.mkdir(path.join(root, 'app', 'commands', 'inventory'), { recursive: true })
+  await fsp.writeFile(path.join(root, 'app', 'commands', 'inventory', 'recount_command.rb'), 'class RecountCommand; end\n')
 }
 
 async function acceptFreshMap(projectRoot: string, projectId: string) {

@@ -199,6 +199,7 @@ export function defaultStructuralDiscoveryProviders(): StructuralDiscoveryProvid
     cargoStructuralDiscoveryProvider,
     composerStructuralDiscoveryProvider,
     dotnetStructuralDiscoveryProvider,
+    moduleArchitectureStructuralDiscoveryProvider,
     docsOnlyStructuralDiscoveryProvider,
   ]
 }
@@ -533,6 +534,38 @@ export const docsOnlyStructuralDiscoveryProvider: StructuralDiscoveryProvider = 
       ],
       edges: [],
       evidenceRefs: ['docs:docs-or-readme'],
+    }
+  },
+}
+
+export const moduleArchitectureStructuralDiscoveryProvider: StructuralDiscoveryProvider = {
+  id: 'module-architecture',
+  label: 'Module/class architecture',
+  detect({ projectRoot }) {
+    const evidenceRefs = collectModuleArchitectureEvidence(projectRoot)
+    return {
+      detected: evidenceRefs.size > 0,
+      evidence: evidenceRefs.size > 0
+        ? [...evidenceRefs.values()].flat().slice(0, 6)
+        : evidence('path', 'app-or-tests', 'low'),
+    }
+  },
+  discover({ projectRoot }) {
+    const evidenceRefs = collectModuleArchitectureEvidence(projectRoot)
+    const nodes = [...evidenceRefs.entries()]
+      .map(([domain, refs]): StructuralMapNode => ({
+        id: `domain:${domain}`,
+        kind: 'domain_group',
+        label: titleCase(domain),
+        relativePath: firstDomainPath(refs) ?? '.',
+        evidence: refs,
+        confidence: refs.length >= 4 ? 'high' : 'medium',
+      }))
+      .sort((left, right) => left.id.localeCompare(right.id))
+    return {
+      nodes,
+      edges: [],
+      evidenceRefs: ['architecture:module-folders'],
     }
   },
 }
@@ -1139,6 +1172,71 @@ function findFirstFile(dir: string, predicate: (file: string) => boolean): strin
     }
   }
   return undefined
+}
+
+function collectModuleArchitectureEvidence(projectRoot: string): Map<string, EvidenceRef[]> {
+  const domains = new Map<string, EvidenceRef[]>()
+  addChildDirectoryDomains(domains, projectRoot, 'app/services')
+  addChildDirectoryDomains(domains, projectRoot, 'app/commands')
+  addChildDirectoryDomains(domains, projectRoot, 'tests')
+  addFilenameDomains(domains, projectRoot, 'app/controllers', /(.+)_controller\.[^.]+$/)
+  addFilenameDomains(domains, projectRoot, 'app/jobs', /(.+?)(?:_sync)?_job\.[^.]+$/)
+  addFilenameDomains(domains, projectRoot, 'routes', /(.+)\.[^.]+$/)
+  addFilenameDomains(domains, projectRoot, 'db/migrations', /(?:create|add|update|alter)_([a-z0-9_]+?)(?:_tables?|_table|_invoices)?\.[^.]+$/)
+  return domains
+}
+
+function addChildDirectoryDomains(
+  domains: Map<string, EvidenceRef[]>,
+  projectRoot: string,
+  relativeDir: string,
+): void {
+  const absoluteDir = path.join(projectRoot, relativeDir)
+  if (!fs.existsSync(absoluteDir)) return
+  for (const entry of fs.readdirSync(absoluteDir, { withFileTypes: true })) {
+    if (!entry.isDirectory()) continue
+    addDomainEvidence(domains, entry.name, path.join(relativeDir, entry.name), 'path')
+  }
+}
+
+function addFilenameDomains(
+  domains: Map<string, EvidenceRef[]>,
+  projectRoot: string,
+  relativeDir: string,
+  pattern: RegExp,
+): void {
+  const absoluteDir = path.join(projectRoot, relativeDir)
+  if (!fs.existsSync(absoluteDir)) return
+  for (const entry of fs.readdirSync(absoluteDir, { withFileTypes: true })) {
+    if (!entry.isFile()) continue
+    const domain = pattern.exec(entry.name)?.[1]
+    if (!domain) continue
+    addDomainEvidence(domains, singularDomainName(domain), path.join(relativeDir, entry.name), 'path')
+  }
+}
+
+function addDomainEvidence(
+  domains: Map<string, EvidenceRef[]>,
+  domainName: string,
+  ref: string,
+  kind: EvidenceRef['kind'],
+): void {
+  const domain = slugify(domainName)
+  if (!domain) return
+  const refs = domains.get(domain) ?? []
+  refs.push({ kind, ref, confidence: 'medium' })
+  domains.set(domain, refs)
+}
+
+function singularDomainName(value: string): string {
+  return value
+    .replace(/_tables?$/, '')
+    .replace(/_invoices$/, '')
+    .replace(/_records$/, '')
+}
+
+function firstDomainPath(refs: EvidenceRef[]): string | undefined {
+  return refs.find(ref => !path.basename(ref.ref).includes('.'))?.ref
 }
 
 function hasNodeCopyEvidence(projectRoot: string, manifest: PackageJson | undefined): boolean {
