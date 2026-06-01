@@ -14,7 +14,7 @@ import {
   buildPantryPulseSmokeRun,
   validateZeroInfoSpecIntakeRun,
   validatePantryPulseSmokeRun,
-} from '../app-spec-smoke.js'
+} from '../../../internal/fixtures/app-spec-smoke/runtime.js'
 import {
   createExploringTask,
   approveSpec,

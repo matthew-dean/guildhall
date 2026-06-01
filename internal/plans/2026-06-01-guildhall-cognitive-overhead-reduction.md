@@ -2893,7 +2893,10 @@ git commit -m "refactor: route hot task transitions through a boundary"
 - Modify: tests/imports that reference those modules
 - Modify: `src/benchmarks/fixtures.ts`
 
-- [ ] **Step 1: Decide runtime necessity by import graph**
+- [x] **Step 1: Decide runtime necessity by import graph**
+
+  - Evidence: `rg -n "app-spec-smoke|release-proof-matrix" src scripts internal` showed the two modules were only code-imported by `src/runtime/__tests__/app-spec-smoke.test.ts` and `src/runtime/__tests__/release-proof-matrix.test.ts`; other hits were fixture-path strings, fixture docs, or older internal plans. No shipped CLI/runtime entrypoint imported either module.
+  - Evidence: `src/benchmarks/fixtures.ts` was inspected and does not import either module; it remains the runtime-needed benchmark CLI fixture loader and was left unchanged.
 
 Run:
 
@@ -2906,7 +2909,13 @@ Expected:
 - If only tests, benchmarks, or internal plans import them, move them out of `src/runtime`.
 - If shipped CLI commands import them, keep a tiny runtime entrypoint and move fixture data to `internal/fixtures`.
 
-- [ ] **Step 2: Move non-shipping proof fixtures**
+- [x] **Step 2: Move non-shipping proof fixtures**
+
+  - Evidence: moved `src/runtime/app-spec-smoke.ts` to `internal/fixtures/app-spec-smoke/runtime.ts` and `src/runtime/release-proof-matrix.ts` to `internal/fixtures/release-proof-matrix/runtime.ts`.
+  - Evidence: updated `src/runtime/__tests__/app-spec-smoke.test.ts` and `src/runtime/__tests__/release-proof-matrix.test.ts` to import the internal fixture runtimes.
+  - Evidence: removed the temporary `src/runtime/app-spec-smoke.ts` and `src/runtime/release-proof-matrix.ts` allowlist entries from `scripts/reduction-guardrails.mjs`.
+  - Evidence: added a reduction-guardrail assertion that both shipping runtime fixture paths stay absent. Red/green: `pnpm vitest run src/runtime/__tests__/reduction-guardrails.test.ts --reporter=dot` first failed with `expected true to be false` for `src/runtime/app-spec-smoke.ts`; after the move it passed with 1 file, 2 tests.
+  - Evidence: `test ! -e src/runtime/app-spec-smoke.ts && test ! -e src/runtime/release-proof-matrix.ts && ...` printed `no shipping runtime fixture files or imports`.
 
 Preferred locations:
 
@@ -2916,6 +2925,11 @@ Preferred locations:
 Update tests to import from the new internal fixture path.
 
 - [ ] **Step 3: Run tests**
+
+  - Evidence: `pnpm vitest run src/runtime/__tests__/app-spec-smoke.test.ts src/runtime/__tests__/release-proof-matrix.test.ts --reporter=dot` passed: 2 files, 14 tests passed, 1 skipped.
+  - Evidence: `pnpm lint:reductions` passed.
+  - Evidence: `pnpm lint:deps` ran and failed with exit code 10 on existing non-Task-10 dependency-cruiser issues: `src/tools/task-queue.ts -> src/runtime/task-transition.ts`, `src/tools/post-user-question.ts -> src/runtime/owner-input-store.ts`, and existing core/persistence/session circular dependency reports. No failure referenced `app-spec-smoke`, `release-proof-matrix`, or the new internal fixture runtime imports.
+  - Evidence: `pnpm typecheck` ran and failed with exit code 2 on existing `openQuestions` type errors across `src/runtime/intake.ts`, `src/runtime/orchestrator.ts`, `src/runtime/run-automation.ts`, and related tests. No failure referenced the moved internal fixture runtime paths or rootDir/import issues.
 
 Run:
 

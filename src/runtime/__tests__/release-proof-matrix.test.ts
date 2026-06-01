@@ -7,7 +7,7 @@ import {
   RELEASE_PROOF_MATRIX,
   proofFor,
   validateReleaseProofScenario,
-} from '../release-proof-matrix.js'
+} from '../../../internal/fixtures/release-proof-matrix/runtime.js'
 
 describe('release proof matrix', () => {
   it('covers the required 0.9 hardening project shapes', () => {

@@ -14,8 +14,6 @@ const allowedWordPaths = [
   /^internal\//,
   /^examples\//,
   /^src\/runtime\/(?:.*\/)?__tests__\//,
-  /^src\/runtime\/release-proof-matrix\.ts$/,
-  /^src\/runtime\/app-spec-smoke\.ts$/,
 ]
 
 const forbiddenTaskShapes = [
