@@ -213,29 +213,104 @@ context, memory, and Git policy are grounded in evidence.
 
 **Primary source:** `internal/specs/2026-05-29-guildhall-0-10-structural-domain-intelligence.md`
 
-- [x] Draft and persist a structural map without mutating target repo config.
-  Drafts live under the target project's `.guildhall/structural-map/drafts/`
-  and accepted routing truth is written to
-  `.guildhall/structural-map/accepted.json`; discovery does not create
+### Status
+
+Foundation slice complete, feature not complete. The branch currently has the
+first structural-map runtime primitive, persistence location, deterministic
+owner-review machine, focused context-slice helper, and one cross-project
+handoff test path. It does **not** yet have full domain inference, UI review,
+agent packet integration, coordinator assignment, or remote authority support.
+
+### Completed Foundation
+
+- [x] Create structural-map records under
+  `.guildhall/structural-map/drafts/<map-id>.json`, accepted map at
+  `.guildhall/structural-map/accepted.json`, and transition receipts under
+  `.guildhall/structural-map/receipts/<map-id>.jsonl`.
+- [x] Avoid target repo registration side effects: discovery does not create
   `guildhall.yaml`.
-- [x] Keep project/workspace/monorepo/package/domain/executable/Git authority
-  concepts separate in the runtime model. The runtime now records structural
-  nodes by kind, package dependency edges, executable-unit nodes, Git authority
-  roots, and ignored nested Git roots with reasons.
-- [x] Use the structural map to improve context manifests and omission audits.
-  Focused context slices now name the task's primary domain, package,
-  executable units, Git authority root, handles for on-demand retrieval, and
-  omitted unrelated packages with auditable reasons.
-- [x] Add owner review/correction flow before the map becomes routing truth.
-  Structural maps use the deterministic state-machine primitive:
-  `draft -> owner_review -> accepted`, or
-  `owner_review -> correction_requested -> owner_review -> accepted`, with
-  transition receipts and owner correction records.
-- [x] Shape cross-project domain requests from accepted structural maps. A
-  consumer coordinator can identify a provider-owned domain and publish a
-  provider request through the project graph while the provider coordinator
-  imports, plans, delivers, and negotiates revisions from its own project
-  context.
+- [x] Add a deterministic structural-map review state machine:
+  `draft -> owner_review -> accepted`,
+  `owner_review -> correction_requested -> owner_review -> accepted`, and
+  `* -> superseded` where allowed.
+- [x] Add initial runtime model nodes for project, workspace, monorepo,
+  package, domain group, cross-cutting domain, executable unit, and Git
+  authority root.
+- [x] Detect pnpm workspace package nodes, package dependency edges,
+  package-local executable units, root executable units, and vendored
+  dependency Git metadata.
+- [x] Add a focused structural context-slice helper with routing authority,
+  handles, executable units, and omitted unrelated package reasons.
+- [x] Add cross-project request shaping from accepted consumer/provider maps
+  into the project graph, preserving the rule that projects publish requests
+  and never write into each other's project state.
+- [x] Prove the foundation path with tests for draft persistence, review,
+  correction, acceptance, context slicing, provider import, provider delivery,
+  consumer verification, and return-for-revision.
+
+### Remaining Work Ledger
+
+**Remaining: 17 items. Next item: 1.**
+
+1. [ ] Replace the current pnpm-only discovery core with a provider interface
+   for package/workspace discovery. After this: implement JS/npm/yarn/bun
+   providers.
+2. [ ] Add JS package-manager providers for npm, yarn, bun, and package.json
+   workspaces, including lockfile/source evidence where cheap. After this:
+   add non-JS fixtures.
+3. [ ] Add non-JS structural fixtures and minimal detectors for Python, Rust,
+   PHP/Composer, .NET solution/project files, and docs-only repos. After this:
+   add module/class architecture inference.
+4. [ ] Add module/class architecture inference for app folders, namespaces,
+   routes, services, migrations, jobs, commands, and tests when packages do
+   not describe domains. After this: expand cross-cutting concern inference.
+5. [ ] Expand cross-cutting concern inference beyond node-copy reduction:
+   parser parity, design-system reuse, auth/session security, migrations,
+   accessibility, observability, release packaging, and owner-defined custom
+   domains. After this: add evidence/conflict scoring.
+6. [ ] Add structural evidence scoring, freshness, conflicts, and owner
+   questions per node/edge instead of coarse confidence labels. After this:
+   add refresh/diff behavior.
+7. [ ] Add structural-map refresh/diff support so manifest/source/Git changes
+   mark only affected map areas stale and ask review questions only where
+   routing, memory, commands, or Git authority changes. After this: wire maps
+   into task routing.
+8. [ ] Use accepted structural maps in actual task routing and coordinator
+   assignment, including domain coordinators and cross-cutting domain
+   activation. After this: wire maps into context-builder.
+9. [ ] Integrate structural slices into `buildContext`/agent packets for spec,
+   worker, reviewer, and gate-checker roles with role-specific budget tiers.
+   After this: add omitted-context audit persistence.
+10. [ ] Persist context-debug/omitted-context records with structural handles
+    and reasons, and expose enough data for agents to retrieve deferred
+    context on demand. After this: wire memory scopes.
+11. [ ] Connect structural map scopes to memory selection/promotion so
+    repo-global, domain, package, executable-unit, cross-cutting, and
+    task-specific memories do not compete as flat project memory. After this:
+    add owner review UI.
+12. [ ] Build the owner review/correction UI for detected Git roots, ignored
+    roots, package graph, domain groups, cross-cutting domains, executable
+    units, confidence, conflicts, and questions. After this: add UI actions.
+13. [ ] Add UI actions for accept, rename, merge, split, mark cross-cutting,
+    mark package-only, ignore with reason, and defer decision. After this:
+    add coordinator communication records.
+14. [ ] Add explicit coordinator communication records for structural domain
+    requests: consumer request packet, provider intake packet, negotiated
+    delivery plan, delivery receipt, consumer return packet, and final
+    acceptance summary with each coordinator's own project context. After this:
+    add project graph visualization/query.
+15. [ ] Add project-graph queries/views that include other local projects,
+    local authority roots, provider-owned domains, dependency edges, delivery
+    channels, and unresolved requests. After this: add delivery-channel
+    abstraction.
+16. [ ] Generalize delivery channels beyond npm/dev tags to package-manager
+    coordinates, local path artifacts, docs/spec artifacts, patches, releases,
+    MCP artifact IDs, and future remote authority refs without overfitting to
+    Looma/Knit. After this: add remote authority extension points.
+17. [ ] Add remote authority extension points for future Jira/Linear/GitHub
+    issue truth sources while keeping 0.10 execution local and request-based.
+    After this: run full milestone verification and decide whether to merge
+    into `0.10.0` or keep slicing.
 
 ## Milestone 4: External Task Authority
 

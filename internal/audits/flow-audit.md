@@ -105,6 +105,12 @@ babysit setup/import/provider/release states across multiple pages.
   across project boundaries. Focused structural tests cover draft, correction,
   acceptance, context slices, provider request import, delivery, consumer
   verification, and return-for-revision.
+- [ ] Continue structural/domain intelligence from the remaining-work ledger
+  in `internal/plans/2026-05-31-guildhall-0-10-implementation-tracker.md`.
+  The feature is explicitly not complete after the foundation slice. Current
+  remaining count: 17 items. Next item: replace the pnpm-only discovery core
+  with a provider interface for package/workspace discovery, then add
+  JS/npm/yarn/bun providers.
 - [x] Specify the 0.10 bounded-chat pivot for intake and New request flows.
   Plan: `internal/plans/2026-05-31-guildhall-0-10-bounded-chat.md`.
   The accepted direction is a two-role flow: a conversation agent handles the
