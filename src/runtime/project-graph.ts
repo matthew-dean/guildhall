@@ -1,8 +1,7 @@
 import fs from 'node:fs'
-import fsp from 'node:fs/promises'
 import path from 'node:path'
 import { guildhallHomeDir, listWorkspaces } from '@guildhall/config'
-import { atomicWriteText } from '@guildhall/sessions'
+import { writeJsonFile, writeJsonLinesFile } from '@guildhall/persistence'
 
 import { defineStateMachine, transition, type TransitionReceipt } from './state-machine.js'
 
@@ -242,7 +241,7 @@ export function writeLocalProjectGraphDraft(input: {
     projects,
     edges: current.edges,
   }
-  writeJson(path.join(projectGraphRegistryDir(), 'registry.json'), registry)
+  writeJsonFile(path.join(projectGraphRegistryDir(), 'registry.json'), registry)
   const graph: ProjectGraph = {
     id: 'local',
     version: 1,
@@ -251,7 +250,7 @@ export function writeLocalProjectGraphDraft(input: {
     edges: registry.edges,
     evidence: ['source:workspace-registry'],
   }
-  writeJson(path.join(projectGraphRegistryDir(), 'graphs', 'local.json'), graph)
+  writeJsonFile(path.join(projectGraphRegistryDir(), 'graphs', 'local.json'), graph)
   return graph
 }
 
@@ -504,8 +503,7 @@ function applyProjectDependencyEdgeTransition(
 async function writeProjectDependencyEdge(edge: ProjectDependencyEdge): Promise<void> {
   writeJson(path.join(projectGraphRegistryDir(), 'edges', `${edge.id}.json`), edge)
   const receiptPath = path.join(projectGraphRegistryDir(), 'receipts', `${edge.id}.jsonl`)
-  await fsp.mkdir(path.dirname(receiptPath), { recursive: true })
-  await fsp.writeFile(receiptPath, edge.transitionReceipts.map(receipt => JSON.stringify(receipt)).join('\n') + '\n', 'utf8')
+  await writeJsonLinesFile(receiptPath, edge.transitionReceipts)
 }
 
 function readProjectDependencyEdge(edgeId: string): ProjectDependencyEdge {
@@ -631,8 +629,7 @@ function updateRegistryForEdge(edge: ProjectDependencyEdge, now: string): void {
 }
 
 function writeJson(filePath: string, value: unknown): void {
-  fs.mkdirSync(path.dirname(filePath), { recursive: true })
-  atomicWriteText(filePath, JSON.stringify(value, null, 2) + '\n')
+  writeJsonFile(filePath, value)
 }
 
 function assertProviderAuthority(edge: ProjectDependencyEdge, projectPath: string): void {
