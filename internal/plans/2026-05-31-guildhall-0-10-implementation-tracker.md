@@ -250,7 +250,7 @@ agent packet integration, coordinator assignment, or remote authority support.
 
 ### Remaining Work Ledger
 
-**Remaining: 4 items. Next item: 14.**
+**Remaining: 3 items. Next item: 15.**
 
 1. [x] Replace the current pnpm-only discovery core with a provider interface
    for package/workspace discovery. After this: implement JS/npm/yarn/bun
@@ -351,11 +351,17 @@ agent packet integration, coordinator assignment, or remote authority support.
     Overview posts owner requests for accepting, renaming, merging, splitting,
     marking cross-cutting/package-only, ignoring, and deferring decisions, then
     refreshes the local review summary.
-14. [ ] Add explicit coordinator communication records for structural domain
+14. [x] Add explicit coordinator communication records for structural domain
     requests: consumer request packet, provider intake packet, negotiated
     delivery plan, delivery receipt, consumer return packet, and final
     acceptance summary with each coordinator's own project context. After this:
     add project graph visualization/query.
+    Completed in `feature/0.10-structural-domain-intelligence`: project
+    dependency edges now carry typed coordinator communication records, the
+    neutral exchange persists
+    `.guildhall-home/project-graph/exchange/coordinator-communications/<edge-id>.jsonl`,
+    and each lifecycle record includes the speaking coordinator's own project
+    context rather than granting any coordinator cross-project write authority.
 15. [ ] Add project-graph queries/views that include other local projects,
     local authority roots, provider-owned domains, dependency edges, delivery
     channels, and unresolved requests. After this: add delivery-channel

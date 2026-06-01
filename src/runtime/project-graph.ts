@@ -109,10 +109,37 @@ export interface ProjectDependencyEdge {
     acceptedAt: string
     consumerProof: string[]
   }
+  communicationRecords: CoordinatorCommunicationRecord[]
   transitionReceipts: ProjectDependencyEdgeTransitionReceipt[]
   evidenceRefs: string[]
   createdAt: string
   updatedAt: string
+}
+
+export interface ProjectCoordinatorContext {
+  projectId: string
+  coordinatorId: string
+  activeTaskId?: string
+  summary: string
+  evidenceRefs: string[]
+}
+
+export interface CoordinatorCommunicationRecord {
+  id: string
+  kind:
+    | 'consumer_request'
+    | 'provider_intake'
+    | 'negotiated_delivery_plan'
+    | 'delivery_receipt'
+    | 'consumer_return'
+    | 'final_acceptance'
+  edgeId: string
+  fromProject: ProjectGraphNodeRef
+  toProject: ProjectGraphNodeRef
+  coordinatorContext: ProjectCoordinatorContext
+  payload: Record<string, unknown>
+  recordedBy: string
+  recordedAt: string
 }
 
 export interface DeliveryReceipt {
@@ -143,6 +170,7 @@ export interface CreateProjectDependencyRequestInput {
   rationale: string
   expectedDelivery?: ProjectDependencyEdge['expectedDelivery']
   requestedBy: string
+  consumerCoordinatorContext?: ProjectCoordinatorContext
   now?: string
 }
 
@@ -281,6 +309,7 @@ export async function createProjectDependencyRequest(
     expectedDelivery: input.expectedDelivery,
     deliveryReceipts: [],
     returnPackets: [],
+    communicationRecords: [],
     transitionReceipts: [],
     evidenceRefs: [`project:${input.consumerProject.id}`, `project:${input.providerProject.id}`],
     createdAt: now,
@@ -289,6 +318,20 @@ export async function createProjectDependencyRequest(
   applyProjectDependencyEdgeTransition(edge, {
     event: 'submit',
     actor: input.requestedBy,
+    now,
+  })
+  addCoordinatorCommunicationRecord(edge, {
+    kind: 'consumer_request',
+    fromProject: edge.consumer,
+    toProject: edge.provider,
+    coordinatorContext: input.consumerCoordinatorContext ?? defaultCoordinatorContext(edge.consumer, input.requestedBy, edge.rationale),
+    payload: {
+      consumerNeed: edge.consumerNeed,
+      rationale: edge.rationale,
+      expectedDelivery: edge.expectedDelivery,
+      domain: edge.domain,
+    },
+    recordedBy: input.requestedBy,
     now,
   })
   await writeProjectDependencyEdge(edge)
@@ -304,6 +347,7 @@ export async function importProjectDependencyRequestForProvider(input: {
   importedBy: string
   domain?: ProjectGraphNodeRef
   providerTaskRef?: string
+  providerCoordinatorContext?: ProjectCoordinatorContext
   now?: string
 }): Promise<ProjectDependencyEdge> {
   const now = input.now ?? new Date().toISOString()
@@ -314,6 +358,19 @@ export async function importProjectDependencyRequestForProvider(input: {
   applyProjectDependencyEdgeTransition(edge, {
     event: 'accept_for_shaping',
     actor: input.importedBy,
+    now,
+  })
+  addCoordinatorCommunicationRecord(edge, {
+    kind: 'provider_intake',
+    fromProject: edge.provider,
+    toProject: edge.consumer,
+    coordinatorContext: input.providerCoordinatorContext ?? defaultCoordinatorContext(edge.provider, input.importedBy, 'Provider accepted the request for shaping.'),
+    payload: {
+      providerTaskRef: edge.providerTaskRef,
+      domain: edge.domain,
+      consumerNeed: edge.consumerNeed,
+    },
+    recordedBy: input.importedBy,
     now,
   })
   await writeProjectDependencyEdge(edge)
@@ -327,6 +384,7 @@ export async function commitProjectDependencyDeliveryPlan(input: {
   providerProjectPath: string
   plannedBy: string
   deliveryExpectation: NonNullable<ProjectDependencyEdge['expectedDelivery']>
+  providerCoordinatorContext?: ProjectCoordinatorContext
   now?: string
 }): Promise<ProjectDependencyEdge> {
   const now = input.now ?? new Date().toISOString()
@@ -336,6 +394,18 @@ export async function commitProjectDependencyDeliveryPlan(input: {
   applyProjectDependencyEdgeTransition(edge, {
     event: 'commit_delivery_plan',
     actor: input.plannedBy,
+    now,
+  })
+  addCoordinatorCommunicationRecord(edge, {
+    kind: 'negotiated_delivery_plan',
+    fromProject: edge.provider,
+    toProject: edge.consumer,
+    coordinatorContext: input.providerCoordinatorContext ?? defaultCoordinatorContext(edge.provider, input.plannedBy, 'Provider committed a delivery plan.'),
+    payload: {
+      expectedDelivery: edge.expectedDelivery,
+      providerTaskRef: edge.providerTaskRef,
+    },
+    recordedBy: input.plannedBy,
     now,
   })
   await writeProjectDependencyEdge(edge)
@@ -349,6 +419,7 @@ export async function deliverProjectDependency(input: {
   providerProjectPath: string
   deliveredBy: string
   deliveryReceipt: DeliveryReceipt
+  providerCoordinatorContext?: ProjectCoordinatorContext
   now?: string
 }): Promise<ProjectDependencyEdge> {
   const now = input.now ?? new Date().toISOString()
@@ -359,6 +430,17 @@ export async function deliverProjectDependency(input: {
     event: 'deliver',
     actor: input.deliveredBy,
     evidenceRefs: [`delivery:${input.deliveryReceipt.id}`, ...edge.evidenceRefs],
+    now,
+  })
+  addCoordinatorCommunicationRecord(edge, {
+    kind: 'delivery_receipt',
+    fromProject: edge.provider,
+    toProject: edge.consumer,
+    coordinatorContext: input.providerCoordinatorContext ?? defaultCoordinatorContext(edge.provider, input.deliveredBy, 'Provider delivered an artifact for consumer review.'),
+    payload: {
+      deliveryReceipt: input.deliveryReceipt,
+    },
+    recordedBy: input.deliveredBy,
     now,
   })
   await writeProjectDependencyEdge(edge)
@@ -399,6 +481,7 @@ export async function requestProjectDependencyRevision(input: {
   consumerProjectPath: string
   returnedBy: string
   returnPacket: ConsumerReturnPacket
+  consumerCoordinatorContext?: ProjectCoordinatorContext
   now?: string
 }): Promise<ProjectDependencyEdge> {
   const now = input.now ?? new Date().toISOString()
@@ -414,6 +497,17 @@ export async function requestProjectDependencyRevision(input: {
     event: 'request_revision',
     actor: input.returnedBy,
     evidenceRefs: packet.evidenceRefs,
+    now,
+  })
+  addCoordinatorCommunicationRecord(edge, {
+    kind: 'consumer_return',
+    fromProject: edge.consumer,
+    toProject: edge.provider,
+    coordinatorContext: input.consumerCoordinatorContext ?? defaultCoordinatorContext(edge.consumer, input.returnedBy, packet.requestedCorrection),
+    payload: {
+      returnPacket: packet,
+    },
+    recordedBy: input.returnedBy,
     now,
   })
   await writeProjectDependencyEdge(edge)
@@ -457,6 +551,7 @@ export async function acceptProjectDependencyDelivery(input: {
   consumerProjectPath: string
   acceptedBy: string
   consumerProof: string[]
+  consumerCoordinatorContext?: ProjectCoordinatorContext
   now?: string
 }): Promise<ProjectDependencyEdge> {
   const now = input.now ?? new Date().toISOString()
@@ -471,6 +566,18 @@ export async function acceptProjectDependencyDelivery(input: {
     event: 'accept_delivery',
     actor: input.acceptedBy,
     evidenceRefs: input.consumerProof,
+    now,
+  })
+  addCoordinatorCommunicationRecord(edge, {
+    kind: 'final_acceptance',
+    fromProject: edge.consumer,
+    toProject: edge.provider,
+    coordinatorContext: input.consumerCoordinatorContext ?? defaultCoordinatorContext(edge.consumer, input.acceptedBy, 'Consumer accepted the delivered result.'),
+    payload: {
+      consumerAcceptance: edge.consumerAcceptance,
+      latestDeliveryReceipt: edge.deliveryReceipts.at(-1),
+    },
+    recordedBy: input.acceptedBy,
     now,
   })
   await writeProjectDependencyEdge(edge)
@@ -504,6 +611,10 @@ async function writeProjectDependencyEdge(edge: ProjectDependencyEdge): Promise<
   writeJson(path.join(projectGraphRegistryDir(), 'edges', `${edge.id}.json`), edge)
   const receiptPath = path.join(projectGraphRegistryDir(), 'receipts', `${edge.id}.jsonl`)
   await writeJsonLinesFile(receiptPath, edge.transitionReceipts)
+  await writeJsonLinesFile(
+    path.join(projectGraphRegistryDir(), 'exchange', 'coordinator-communications', `${edge.id}.jsonl`),
+    edge.communicationRecords,
+  )
 }
 
 function readProjectDependencyEdge(edgeId: string): ProjectDependencyEdge {
@@ -512,6 +623,7 @@ function readProjectDependencyEdge(edgeId: string): ProjectDependencyEdge {
   const edge = JSON.parse(fs.readFileSync(filePath, 'utf8')) as ProjectDependencyEdge
   edge.deliveryReceipts ??= []
   edge.returnPackets ??= []
+  edge.communicationRecords ??= []
   edge.transitionReceipts ??= []
   return edge
 }
@@ -591,6 +703,41 @@ async function writeConsumerReturnPacket(edge: ProjectDependencyEdge, packet: Co
     providerProject: edge.provider,
     ...packet,
   })
+}
+
+function addCoordinatorCommunicationRecord(edge: ProjectDependencyEdge, input: {
+  kind: CoordinatorCommunicationRecord['kind']
+  fromProject: ProjectGraphNodeRef
+  toProject: ProjectGraphNodeRef
+  coordinatorContext: ProjectCoordinatorContext
+  payload: Record<string, unknown>
+  recordedBy: string
+  now: string
+}): void {
+  edge.communicationRecords.push({
+    id: `comm-${edge.id}-${edge.communicationRecords.length + 1}`,
+    kind: input.kind,
+    edgeId: edge.id,
+    fromProject: input.fromProject,
+    toProject: input.toProject,
+    coordinatorContext: input.coordinatorContext,
+    payload: input.payload,
+    recordedBy: input.recordedBy,
+    recordedAt: input.now,
+  })
+}
+
+function defaultCoordinatorContext(
+  project: ProjectGraphNodeRef,
+  coordinatorId: string,
+  summary: string,
+): ProjectCoordinatorContext {
+  return {
+    projectId: project.id,
+    coordinatorId,
+    summary,
+    evidenceRefs: [`project:${project.id}`],
+  }
 }
 
 function updateRegistryForEdge(edge: ProjectDependencyEdge, now: string): void {

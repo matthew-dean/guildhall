@@ -108,11 +108,10 @@ babysit setup/import/provider/release states across multiple pages.
 - [ ] Continue structural/domain intelligence from the remaining-work ledger
   in `internal/plans/2026-05-31-guildhall-0-10-implementation-tracker.md`.
   The feature is explicitly not complete after the foundation slice.
-  Remaining count after the structural map action slice: 4 items. Next item:
-  add explicit coordinator communication records for structural domain
-  requests: consumer request packet, provider intake packet, negotiated
-  delivery plan, delivery receipt, consumer return packet, and final
-  acceptance summary with each coordinator's own project context.
+  Remaining count after the coordinator communication record slice: 3 items.
+  Next item: add project-graph queries/views that include other local
+  projects, local authority roots, provider-owned domains, dependency edges,
+  delivery channels, and unresolved requests.
 - [x] Specify the 0.10 bounded-chat pivot for intake and New request flows.
   Plan: `internal/plans/2026-05-31-guildhall-0-10-bounded-chat.md`.
   The accepted direction is a two-role flow: a conversation agent handles the

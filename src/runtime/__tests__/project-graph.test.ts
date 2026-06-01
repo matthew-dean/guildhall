@@ -309,4 +309,174 @@ describe('local project graph', () => {
       state: 'resolved',
     }))
   })
+
+  it('records coordinator communication packets with each project coordinator context', async () => {
+    bootstrapWorkspace(consumerProject, { id: 'knit', name: 'Knit' })
+    bootstrapWorkspace(providerProject, { id: 'looma', name: 'Looma' })
+    const edge = await createProjectDependencyRequest({
+      consumerProject: { id: 'knit', path: consumerProject, label: 'Knit' },
+      providerProject: { id: 'looma', path: providerProject, label: 'Looma' },
+      domain: { id: 'domain:editor', label: 'Editor' },
+      consumerNeed: 'Knit needs inline editor comments from Looma.',
+      rationale: 'The editor domain is provider-owned by Looma.',
+      requestedBy: 'coordinator:knit',
+      expectedDelivery: {
+        format: 'Svelte editor annotation adapter',
+        channel: 'npm dev tag',
+        consumerVerificationPlan: ['Run Knit editor integration tests.'],
+      },
+      consumerCoordinatorContext: {
+        projectId: 'knit',
+        coordinatorId: 'coordinator:knit',
+        activeTaskId: 'task-knit-editor',
+        summary: 'Knit is consuming the editor API in its comment UI.',
+        evidenceRefs: ['task:task-knit-editor', 'domain:editor-comments'],
+      },
+      now: '2026-06-01T12:00:00.000Z',
+    })
+    await importProjectDependencyRequestForProvider({
+      edgeId: edge.id,
+      providerProjectPath: providerProject,
+      importedBy: 'coordinator:looma',
+      providerTaskRef: 'task-looma-adapter',
+      providerCoordinatorContext: {
+        projectId: 'looma',
+        coordinatorId: 'coordinator:looma',
+        activeTaskId: 'task-looma-adapter',
+        summary: 'Looma owns the editor package and can shape the adapter.',
+        evidenceRefs: ['package:@looma/editor'],
+      },
+      now: '2026-06-01T12:01:00.000Z',
+    })
+    await commitProjectDependencyDeliveryPlan({
+      edgeId: edge.id,
+      providerProjectPath: providerProject,
+      plannedBy: 'coordinator:looma',
+      deliveryExpectation: {
+        format: 'Svelte editor annotation adapter',
+        channel: 'npm dev tag',
+        providerProofPlan: ['Run Looma adapter tests.'],
+        consumerVerificationPlan: ['Run Knit editor integration tests.'],
+      },
+      providerCoordinatorContext: {
+        projectId: 'looma',
+        coordinatorId: 'coordinator:looma',
+        summary: 'The adapter can ship behind a dev tag.',
+        evidenceRefs: ['task:task-looma-adapter'],
+      },
+      now: '2026-06-01T12:02:00.000Z',
+    })
+    await deliverProjectDependency({
+      edgeId: edge.id,
+      providerProjectPath: providerProject,
+      deliveredBy: 'coordinator:looma',
+      deliveryReceipt: {
+        id: 'delivery-1',
+        format: 'framework-neutral core API',
+        channel: 'npm dev tag',
+        coordinates: '@looma/editor@0.0.0-dev.20260601',
+        providerProof: ['pnpm --filter @looma/editor test'],
+      },
+      providerCoordinatorContext: {
+        projectId: 'looma',
+        coordinatorId: 'coordinator:looma',
+        summary: 'Published the first delivery for Knit to consume.',
+        evidenceRefs: ['delivery:delivery-1'],
+      },
+      now: '2026-06-01T12:03:00.000Z',
+    })
+    await beginProjectDependencyConsumerReview({
+      edgeId: edge.id,
+      consumerProjectPath: consumerProject,
+      reviewedBy: 'coordinator:knit',
+      verificationContext: 'Knit editor integration task',
+      now: '2026-06-01T12:04:00.000Z',
+    })
+    await requestProjectDependencyRevision({
+      edgeId: edge.id,
+      consumerProjectPath: consumerProject,
+      returnedBy: 'coordinator:knit',
+      returnPacket: {
+        deliveryReceiptId: 'delivery-1',
+        mismatchKind: 'format',
+        expected: 'Svelte editor annotation adapter',
+        received: 'framework-neutral core API',
+        failedVerification: ['Knit adapter import failed.'],
+        evidenceRefs: ['task:knit-editor-integration'],
+        requestedCorrection: 'Expose the Svelte adapter accepted in the delivery plan.',
+      },
+      consumerCoordinatorContext: {
+        projectId: 'knit',
+        coordinatorId: 'coordinator:knit',
+        summary: 'Knit could not consume the delivered format.',
+        evidenceRefs: ['verification:knit-adapter-import'],
+      },
+      now: '2026-06-01T12:05:00.000Z',
+    })
+    await reviseProjectDependencyPlan({
+      edgeId: edge.id,
+      providerProjectPath: providerProject,
+      revisedBy: 'coordinator:looma',
+      deliveryExpectation: {
+        format: 'Svelte editor annotation adapter',
+        channel: 'npm dev tag',
+        providerProofPlan: ['Run adapter tests.'],
+        consumerVerificationPlan: ['Run Knit editor integration tests.'],
+      },
+      now: '2026-06-01T12:06:00.000Z',
+    })
+    await deliverProjectDependency({
+      edgeId: edge.id,
+      providerProjectPath: providerProject,
+      deliveredBy: 'coordinator:looma',
+      deliveryReceipt: {
+        id: 'delivery-2',
+        format: 'Svelte editor annotation adapter',
+        channel: 'npm dev tag',
+        coordinates: '@looma/editor@0.0.0-dev.20260601.2',
+        providerProof: ['pnpm --filter @looma/editor test'],
+      },
+      now: '2026-06-01T12:07:00.000Z',
+    })
+    await beginProjectDependencyConsumerReview({
+      edgeId: edge.id,
+      consumerProjectPath: consumerProject,
+      reviewedBy: 'coordinator:knit',
+      verificationContext: 'Knit editor integration task',
+      now: '2026-06-01T12:08:00.000Z',
+    })
+    const accepted = await acceptProjectDependencyDelivery({
+      edgeId: edge.id,
+      consumerProjectPath: consumerProject,
+      acceptedBy: 'coordinator:knit',
+      consumerProof: ['pnpm --filter knit test'],
+      consumerCoordinatorContext: {
+        projectId: 'knit',
+        coordinatorId: 'coordinator:knit',
+        summary: 'Knit consumed the corrected adapter successfully.',
+        evidenceRefs: ['proof:pnpm-filter-knit-test'],
+      },
+      now: '2026-06-01T12:09:00.000Z',
+    })
+
+    expect(accepted.communicationRecords.map(record => record.kind)).toEqual(expect.arrayContaining([
+      'consumer_request',
+      'provider_intake',
+      'negotiated_delivery_plan',
+      'delivery_receipt',
+      'consumer_return',
+      'final_acceptance',
+    ]))
+    expect(accepted.communicationRecords.find(record => record.kind === 'consumer_request')?.coordinatorContext).toMatchObject({
+      projectId: 'knit',
+      activeTaskId: 'task-knit-editor',
+    })
+    expect(accepted.communicationRecords.find(record => record.kind === 'provider_intake')?.coordinatorContext).toMatchObject({
+      projectId: 'looma',
+      activeTaskId: 'task-looma-adapter',
+    })
+    const communicationPath = path.join(systemDir, 'project-graph', 'exchange', 'coordinator-communications', `${edge.id}.jsonl`)
+    const communicationLines = (await fsp.readFile(communicationPath, 'utf8')).trim().split('\n').map(line => JSON.parse(line))
+    expect(communicationLines.map(record => record.kind)).toEqual(accepted.communicationRecords.map(record => record.kind))
+  })
 })
