@@ -213,11 +213,29 @@ context, memory, and Git policy are grounded in evidence.
 
 **Primary source:** `internal/specs/2026-05-29-guildhall-0-10-structural-domain-intelligence.md`
 
-- [ ] Draft and persist a structural map without mutating target repo config.
-- [ ] Keep project/workspace/monorepo/package/domain/executable/Git authority
-  concepts separate in the runtime model.
-- [ ] Use the structural map to improve context manifests and omission audits.
-- [ ] Add owner review/correction flow before the map becomes routing truth.
+- [x] Draft and persist a structural map without mutating target repo config.
+  Drafts live under the target project's `.guildhall/structural-map/drafts/`
+  and accepted routing truth is written to
+  `.guildhall/structural-map/accepted.json`; discovery does not create
+  `guildhall.yaml`.
+- [x] Keep project/workspace/monorepo/package/domain/executable/Git authority
+  concepts separate in the runtime model. The runtime now records structural
+  nodes by kind, package dependency edges, executable-unit nodes, Git authority
+  roots, and ignored nested Git roots with reasons.
+- [x] Use the structural map to improve context manifests and omission audits.
+  Focused context slices now name the task's primary domain, package,
+  executable units, Git authority root, handles for on-demand retrieval, and
+  omitted unrelated packages with auditable reasons.
+- [x] Add owner review/correction flow before the map becomes routing truth.
+  Structural maps use the deterministic state-machine primitive:
+  `draft -> owner_review -> accepted`, or
+  `owner_review -> correction_requested -> owner_review -> accepted`, with
+  transition receipts and owner correction records.
+- [x] Shape cross-project domain requests from accepted structural maps. A
+  consumer coordinator can identify a provider-owned domain and publish a
+  provider request through the project graph while the provider coordinator
+  imports, plans, delivers, and negotiates revisions from its own project
+  context.
 
 ## Milestone 4: External Task Authority
 

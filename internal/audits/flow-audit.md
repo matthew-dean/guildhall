@@ -93,6 +93,18 @@ babysit setup/import/provider/release states across multiple pages.
   authority-preserving flow through `guildhall graph ...`. Focused tests cover
   the full consumer/provider loop and prove consumer code cannot create
   provider-local mirrors. `pnpm build` passes.
+- [x] Start structural/domain intelligence on
+  `feature/0.10-structural-domain-intelligence`. Added structural-map drafting
+  that persists under `.guildhall/structural-map/` without creating
+  `guildhall.yaml`, separates package/domain/executable/Git authority nodes,
+  detects ignored vendored Git metadata, and requires deterministic
+  owner-review transitions before a map becomes routing truth. Added context
+  slices with structural handles and omission reasons, plus cross-project
+  request shaping that uses accepted consumer/provider maps to publish
+  provider-owned domain work through the project graph instead of writing
+  across project boundaries. Focused structural tests cover draft, correction,
+  acceptance, context slices, provider request import, delivery, consumer
+  verification, and return-for-revision.
 - [x] Specify the 0.10 bounded-chat pivot for intake and New request flows.
   Plan: `internal/plans/2026-05-31-guildhall-0-10-bounded-chat.md`.
   The accepted direction is a two-role flow: a conversation agent handles the
