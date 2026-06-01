@@ -154,6 +154,12 @@ babysit setup/import/provider/release states across multiple pages.
   major section cards, but local-project rows, domain detail sections, and
   dependency requests now render as rows/dividers instead of nested utility
   cards inside cards.
+- [x] Make assignment scale beyond the current local project set. Remaining
+  count: 0 items. Next item: merge decision once the active bounded-chat
+  worktree on `0.10.0` is clean enough to receive this branch. The settings
+  graph no longer dumps managed project names or calls unrelated projects
+  "related"; it summarizes the managed-project index and opens a searchable
+  assignment picker only when the owner chooses `Assign to project`.
 - [x] Specify the 0.10 bounded-chat pivot for intake and New request flows.
   Plan: `internal/plans/2026-05-31-guildhall-0-10-bounded-chat.md`.
   The accepted direction is a two-role flow: a conversation agent handles the

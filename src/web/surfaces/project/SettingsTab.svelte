@@ -14,6 +14,7 @@
   import Button from '../../lib/Button.svelte'
   import Card from '../../lib/Card.svelte'
   import Input from '../../lib/Input.svelte'
+  import Modal from '../../lib/Modal.svelte'
   import Select from '../../lib/Select.svelte'
   import Textarea from '../../lib/Textarea.svelte'
   import Markdown from '../../lib/Markdown.svelte'
@@ -312,6 +313,8 @@
   let projectGraphError = $state<string | null>(null)
   let projectGraphBusy = $state<string | null>(null)
   let selectedProjectGraphDomainId = $state<string | null>(null)
+  let assignmentPickerResponsibilityId = $state<string | null>(null)
+  let assignmentPickerQuery = $state('')
   let domainAuthoritySelections = $state<Record<string, string>>({})
   let reintakeStatus = $state<ReintakeStatus | null>(null)
   let reintakeDraft = $state<ReintakeDraft | null>(null)
@@ -1173,6 +1176,38 @@
       }))
   }
 
+  function assignmentPickerResponsibility() {
+    if (!assignmentPickerResponsibilityId) return null
+    return (projectGraph?.domainResponsibilities ?? []).find(item => item.id === assignmentPickerResponsibilityId) ?? null
+  }
+
+  function openAssignmentPicker(responsibility: NonNullable<ProjectGraphView['domainResponsibilities']>[number]) {
+    assignmentPickerResponsibilityId = responsibility.id
+    assignmentPickerQuery = ''
+  }
+
+  function closeAssignmentPicker() {
+    assignmentPickerResponsibilityId = null
+    assignmentPickerQuery = ''
+  }
+
+  function assignmentPickerTargets() {
+    const responsibility = assignmentPickerResponsibility()
+    if (!responsibility) return []
+    if (assignmentPickerQuery.trim().length === 0) return []
+    const query = assignmentPickerQuery.trim().toLowerCase()
+    return graphAssignmentTargets(responsibility)
+      .filter(target => !query || target.label.toLowerCase().includes(query) || target.id.toLowerCase().includes(query))
+      .slice(0, 8)
+  }
+
+  async function chooseAssignmentTarget(projectId: string) {
+    const responsibility = assignmentPickerResponsibility()
+    if (!responsibility) return
+    await assignDomainResponsibilityTo(responsibility, projectId)
+    closeAssignmentPicker()
+  }
+
   function setDomainAuthoritySelection(domainId: string, providerProjectId: string) {
     domainAuthoritySelections = {
       ...domainAuthoritySelections,
@@ -1329,16 +1364,17 @@
     return 'related'
   }
 
-  function projectRowsForRole(role: string) {
-    return (projectGraph?.localProjects ?? []).filter(item => item.role === role)
-  }
-
   function connectedProjectRows() {
     return (projectGraph?.localProjects ?? []).filter(item => item.role === 'consumer' || item.role === 'provider')
   }
 
-  function relatedProjectRows() {
-    return (projectGraph?.localProjects ?? []).filter(item => item.role === 'related')
+  function localProjectCount() {
+    return projectGraph?.localProjects?.length ?? 0
+  }
+
+  function localProjectIndexLabel() {
+    const count = localProjectCount()
+    return `${count} ${count === 1 ? 'project' : 'projects'} in the local index`
   }
 
   function requestWaitingOn(edge: NonNullable<ProjectGraphView['dependencyEdges']>[number]): string {
@@ -2231,8 +2267,8 @@
         <FrameCard class="graph-card">
           {#snippet header()}
             <SectionHeader
-              title="Local projects"
-              description="Registered projects are visible to the graph, but related projects are only available for manual assignment."
+              title="Managed projects"
+              description="Guildhall can search this local project index when you assign a domain."
               headingTag="h3"
               density="dense"
             />
@@ -2242,30 +2278,11 @@
           {:else if (projectGraph.localProjects?.length ?? 0) === 0}
             <p class="muted">No local projects registered yet.</p>
           {:else}
-            <div class="project-chip-list">
-              {#each projectRowsForRole('current') as localProject (localProject.id)}
-                <div class="project-chip-row project-chip-row-current">
-                  <strong>{localProject.label}</strong>
-                  <span class="muted">Current project</span>
-                </div>
-              {/each}
+            <div class="project-index-summary">
+              <strong>{localProjectIndexLabel()}</strong>
+              <span class="muted">Current project: {projectGraph.currentProject?.label ?? project.detail?.name ?? 'this project'}</span>
               {#if connectedProjectRows().length > 0}
-                <div class="project-group-label">Connected by requests</div>
-                {#each connectedProjectRows() as localProject (localProject.id)}
-                  <div class="project-chip-row">
-                    <strong>{localProject.label}</strong>
-                    <span class="muted">{localProject.role === 'provider' ? 'Provider on a request' : 'Consumer on a request'}</span>
-                  </div>
-                {/each}
-              {/if}
-              {#if relatedProjectRows().length > 0}
-                <div class="project-group-label">Available for manual assignment</div>
-                {#each relatedProjectRows() as localProject (localProject.id)}
-                  <div class="project-chip-row">
-                    <strong>{localProject.label}</strong>
-                    <span class="muted">Related local project</span>
-                  </div>
-                {/each}
+                <span class="muted">{connectedProjectRows().length} connected by open requests</span>
               {/if}
             </div>
           {/if}
@@ -2299,24 +2316,57 @@
                   <p class="muted">Currently assigned to {assignableResponsibility.responsibleProjectLabel}.</p>
                 {/if}
                 {#if graphAssignmentTargets(assignableResponsibility).length > 0}
-                  <Row wrap>
-                    {#each graphAssignmentTargets(assignableResponsibility) as target (target.id)}
-                      <Button
-                        variant="secondary"
-                        size="sm"
-                        disabled={projectGraphBusy === `assign-responsibility:${assignableResponsibility.id}`}
-                        onclick={() => assignDomainResponsibilityTo(assignableResponsibility, target.id)}
-                      >
-                        Assign to {target.label}
-                      </Button>
-                    {/each}
-                  </Row>
+                  <Button
+                    variant="secondary"
+                    size="sm"
+                    className="assign-project-button"
+                    disabled={projectGraphBusy === `assign-responsibility:${assignableResponsibility.id}`}
+                    onclick={() => openAssignmentPicker(assignableResponsibility)}
+                  >
+                    Assign to project
+                  </Button>
                 {/if}
               </section>
             {/if}
           </div>
         </FrameCard>
       {/if}
+
+      {@const pickerResponsibility = assignmentPickerResponsibility()}
+      <Modal
+        open={Boolean(pickerResponsibility)}
+        title={`Assign ${pickerResponsibility?.domainLabel ?? 'domain'}`}
+        size="md"
+        onClose={closeAssignmentPicker}
+      >
+        <div class="assignment-picker">
+          <p>Search Guildhall’s managed local projects and choose who should provide this reusable capability.</p>
+          <Input
+            type="search"
+            ariaLabel="Find project"
+            placeholder="Search projects"
+            bind:value={assignmentPickerQuery}
+          />
+          {#if assignmentPickerQuery.trim().length === 0}
+            <p class="muted">Start typing to search the local project index.</p>
+          {:else if assignmentPickerTargets().length === 0}
+            <p class="muted">No matching projects.</p>
+          {:else}
+            <div class="assignment-picker-list">
+              {#each assignmentPickerTargets() as target (target.id)}
+                <button
+                  type="button"
+                  class="assignment-picker-row"
+                  disabled={projectGraphBusy === `assign-responsibility:${pickerResponsibility?.id}`}
+                  onclick={() => chooseAssignmentTarget(target.id)}
+                >
+                  <strong>{target.label}</strong>
+                </button>
+              {/each}
+            </div>
+          {/if}
+        </div>
+      </Modal>
 
       <FrameCard class="graph-card graph-requests-card">
         {#snippet header()}
@@ -4020,7 +4070,6 @@
   }
 
   .domain-assignment-list,
-  .project-chip-list,
   .graph-request-list {
     display: grid;
     gap: var(--gh-space-2);
@@ -4075,6 +4124,10 @@
     padding-inline-start: var(--gh-space-3);
   }
 
+  :global(.assign-project-button) {
+    justify-self: start;
+  }
+
   .domain-detail p {
     margin: 0;
     color: var(--text-muted);
@@ -4082,30 +4135,48 @@
     line-height: var(--lh-body);
   }
 
-  .project-chip-row {
-    border-block-start: 1px solid var(--border-muted);
-    display: flex;
-    justify-content: space-between;
-    gap: var(--gh-space-2);
-    align-items: center;
-    padding-block: var(--gh-space-2);
+  .assignment-picker {
+    display: grid;
+    gap: var(--gh-space-3);
   }
 
-  .project-chip-row:first-child,
-  .project-group-label + .project-chip-row {
-    border-block-start: 0;
-  }
-
-  .project-chip-row-current {
-    border-inline-start: 2px solid var(--accent);
-    padding-inline-start: var(--gh-space-2);
-  }
-
-  .project-group-label {
+  .assignment-picker p {
+    margin: 0;
     color: var(--text-muted);
     font-size: var(--fs-1);
-    font-weight: 700;
-    margin-block-start: var(--gh-space-2);
+    line-height: var(--lh-body);
+  }
+
+  .assignment-picker-list {
+    border-block-start: 1px solid var(--border-muted);
+    display: grid;
+    max-height: min(42vh, 24rem);
+    overflow: auto;
+  }
+
+  .assignment-picker-row {
+    appearance: none;
+    background: transparent;
+    border: 0;
+    border-block-end: 1px solid var(--border-muted);
+    color: inherit;
+    cursor: pointer;
+    font: inherit;
+    padding: var(--gh-space-3) 0;
+    text-align: left;
+  }
+
+  .assignment-picker-row:hover,
+  .assignment-picker-row:focus-visible {
+    color: var(--accent);
+    outline: none;
+  }
+
+  .project-index-summary {
+    border-inline-start: 2px solid var(--accent);
+    display: grid;
+    gap: var(--gh-space-2);
+    padding-inline-start: var(--gh-space-3);
   }
 
   .graph-request {

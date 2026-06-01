@@ -390,6 +390,10 @@ values, product taste, and consumer verification.
    dependency requests no longer render as utility-panel cards inside graph
    cards. Added a UI regression check that `.graph-card` does not contain
    nested `.utility-panel` elements.
+10. [x] Replace raw managed-project dumps with a scalable assignment picker:
+    the graph summarizes the managed-project index, stops calling unmanaged
+    semantic relationships "related", and only reveals matching project names
+    inside a search picker after `Assign to project`.
 
 1. [x] Replace the current pnpm-only discovery core with a provider interface
    for package/workspace discovery. After this: implement JS/npm/yarn/bun
