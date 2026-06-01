@@ -549,4 +549,85 @@ describe('local project graph', () => {
       waitingOn: 'provider',
     }))
   })
+
+  it('keeps delivery channels ecosystem-neutral instead of overfitting to npm dev tags', async () => {
+    bootstrapWorkspace(consumerProject, { id: 'harness', name: 'Narrative Harness' })
+    bootstrapWorkspace(providerProject, { id: 'guildhall', name: 'Guildhall' })
+    const edge = await createProjectDependencyRequest({
+      consumerProject: { id: 'harness', path: consumerProject, label: 'Narrative Harness' },
+      providerProject: { id: 'guildhall', path: providerProject, label: 'Guildhall' },
+      consumerNeed: 'Harness needs a spec artifact from Guildhall.',
+      rationale: 'Guildhall owns the project workflow model.',
+      requestedBy: 'coordinator:harness',
+      expectedDelivery: {
+        format: 'workflow spec artifact',
+        channel: 'mcp artifact',
+        deliveryChannel: {
+          kind: 'mcp_artifact',
+          label: 'Guildhall artifact',
+          coordinates: 'guildhall://project/artifacts/flow-audit',
+        },
+        consumerVerificationPlan: ['Open the artifact and verify the workflow section.'],
+      },
+      now: '2026-06-01T12:00:00.000Z',
+    })
+    await importProjectDependencyRequestForProvider({
+      edgeId: edge.id,
+      providerProjectPath: providerProject,
+      importedBy: 'coordinator:guildhall',
+      now: '2026-06-01T12:01:00.000Z',
+    })
+    await commitProjectDependencyDeliveryPlan({
+      edgeId: edge.id,
+      providerProjectPath: providerProject,
+      plannedBy: 'coordinator:guildhall',
+      deliveryExpectation: {
+        format: 'workflow spec artifact',
+        channel: 'mcp artifact',
+        deliveryChannel: {
+          kind: 'mcp_artifact',
+          label: 'Guildhall artifact',
+          coordinates: 'guildhall://project/artifacts/flow-audit',
+        },
+        providerProofPlan: ['Run docs artifact validation.'],
+        consumerVerificationPlan: ['Open the artifact and verify the workflow section.'],
+      },
+      now: '2026-06-01T12:02:00.000Z',
+    })
+    await deliverProjectDependency({
+      edgeId: edge.id,
+      providerProjectPath: providerProject,
+      deliveredBy: 'coordinator:guildhall',
+      deliveryReceipt: {
+        id: 'delivery-1',
+        format: 'workflow spec artifact',
+        channel: 'local path artifact',
+        coordinates: 'internal/specs/workflow.md',
+        deliveryChannel: {
+          kind: 'local_path_artifact',
+          label: 'Checked-in spec',
+          coordinates: 'internal/specs/workflow.md',
+          path: 'internal/specs/workflow.md',
+        },
+        providerProof: ['pnpm docs:check'],
+      },
+      now: '2026-06-01T12:03:00.000Z',
+    })
+
+    const view = queryProjectGraphView({
+      projectId: 'harness',
+      projectPath: consumerProject,
+    })
+
+    expect(view.deliveryChannels).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        kind: 'mcp_artifact',
+        coordinates: 'guildhall://project/artifacts/flow-audit',
+      }),
+      expect.objectContaining({
+        kind: 'local_path_artifact',
+        coordinates: 'internal/specs/workflow.md',
+      }),
+    ]))
+  })
 })

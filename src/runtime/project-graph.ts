@@ -82,6 +82,8 @@ export interface ProjectGraphView {
   }>
   deliveryChannels: Array<{
     edgeId: string
+    kind: DeliveryChannelKind
+    label: string
     channel: string
     format: string
     coordinates?: string
@@ -122,6 +124,26 @@ export type ProjectDependencyEdgeEvent =
 
 export type ProjectDependencyEdgeTransitionReceipt = TransitionReceipt<ProjectDependencyEdgeState, ProjectDependencyEdgeEvent>
 
+export type DeliveryChannelKind =
+  | 'package_manager'
+  | 'local_path_artifact'
+  | 'docs_spec_artifact'
+  | 'patch'
+  | 'release'
+  | 'mcp_artifact'
+  | 'remote_authority_ref'
+
+export interface DeliveryChannelDescriptor {
+  kind: DeliveryChannelKind
+  label: string
+  coordinates: string
+  ecosystem?: string
+  path?: string
+  url?: string
+  artifactId?: string
+  authorityRef?: string
+}
+
 export interface ProjectDependencyEdge {
   id: string
   stateMachine: {
@@ -137,6 +159,7 @@ export interface ProjectDependencyEdge {
   expectedDelivery?: {
     format: string
     channel: string
+    deliveryChannel?: DeliveryChannelDescriptor
     providerProofPlan?: string[]
     consumerVerificationPlan: string[]
   }
@@ -191,6 +214,7 @@ export interface DeliveryReceipt {
   format: string
   channel: string
   coordinates: string
+  deliveryChannel?: DeliveryChannelDescriptor
   providerProof: string[]
 }
 
@@ -761,6 +785,7 @@ function deliveryChannelsForEdge(edge: ProjectDependencyEdge): ProjectGraphView[
   const planned = edge.expectedDelivery
     ? [{
         edgeId: edge.id,
+        ...deliveryChannelView(edge.expectedDelivery.deliveryChannel, edge.expectedDelivery.channel),
         channel: edge.expectedDelivery.channel,
         format: edge.expectedDelivery.format,
         state: edge.stateMachine.state,
@@ -768,12 +793,43 @@ function deliveryChannelsForEdge(edge: ProjectDependencyEdge): ProjectGraphView[
     : []
   const delivered = edge.deliveryReceipts.map(receipt => ({
     edgeId: edge.id,
+    ...deliveryChannelView(receipt.deliveryChannel, receipt.channel, receipt.coordinates),
     channel: receipt.channel,
     format: receipt.format,
     coordinates: receipt.coordinates,
     state: edge.stateMachine.state,
   }))
   return [...planned, ...delivered]
+}
+
+function deliveryChannelView(
+  descriptor: DeliveryChannelDescriptor | undefined,
+  channel: string,
+  fallbackCoordinates?: string,
+): Pick<ProjectGraphView['deliveryChannels'][number], 'kind' | 'label' | 'coordinates'> {
+  if (descriptor) {
+    return {
+      kind: descriptor.kind,
+      label: descriptor.label,
+      coordinates: descriptor.coordinates,
+    }
+  }
+  return {
+    kind: inferDeliveryChannelKind(channel),
+    label: channel,
+    coordinates: fallbackCoordinates,
+  }
+}
+
+function inferDeliveryChannelKind(channel: string): DeliveryChannelKind {
+  const normalized = channel.toLowerCase()
+  if (/npm|pnpm|yarn|bun|package/.test(normalized)) return 'package_manager'
+  if (/mcp|artifact id/.test(normalized)) return 'mcp_artifact'
+  if (/path|file|local/.test(normalized)) return 'local_path_artifact'
+  if (/doc|spec/.test(normalized)) return 'docs_spec_artifact'
+  if (/patch|diff/.test(normalized)) return 'patch'
+  if (/release|tag/.test(normalized)) return 'release'
+  return 'remote_authority_ref'
 }
 
 async function writeProviderRequestPacket(

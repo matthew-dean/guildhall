@@ -250,7 +250,7 @@ agent packet integration, coordinator assignment, or remote authority support.
 
 ### Remaining Work Ledger
 
-**Remaining: 2 items. Next item: 16.**
+**Remaining: 1 item. Next item: 17.**
 
 1. [x] Replace the current pnpm-only discovery core with a provider interface
    for package/workspace discovery. After this: implement JS/npm/yarn/bun
@@ -371,10 +371,16 @@ agent packet integration, coordinator assignment, or remote authority support.
     projects, provider authority roots/domains, dependency edges, delivery
     channels, and unresolved requests; `/api/project/project-graph` serves the
     scoped view for the selected project.
-16. [ ] Generalize delivery channels beyond npm/dev tags to package-manager
+16. [x] Generalize delivery channels beyond npm/dev tags to package-manager
     coordinates, local path artifacts, docs/spec artifacts, patches, releases,
     MCP artifact IDs, and future remote authority refs without overfitting to
     Looma/Knit. After this: add remote authority extension points.
+    Completed in `feature/0.10-structural-domain-intelligence`: dependency
+    plans and delivery receipts now accept ecosystem-neutral delivery channel
+    descriptors covering package-manager coordinates, local path artifacts,
+    docs/spec artifacts, patches, releases, MCP artifact IDs, and future
+    remote authority refs; the project-graph view preserves descriptor kind,
+    label, and coordinates while keeping legacy string channels compatible.
 17. [ ] Add remote authority extension points for future Jira/Linear/GitHub
     issue truth sources while keeping 0.10 execution local and request-based.
     After this: run full milestone verification and decide whether to merge
