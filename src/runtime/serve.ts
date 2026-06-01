@@ -862,7 +862,7 @@ function projectCheckInSummaryFromState(
   const projectChats = chats.filter(session => session.objective.kind === 'project_check_in' || session.objective.kind === 'project_intake')
   const activeCount =
     intakes.filter(intake => intake.status === 'active').length +
-    projectChats.filter(chat => chat.status === 'waiting_for_user' || chat.status === 'coordinator_review').length
+    projectChats.filter(chat => chat.status === 'waiting_for_owner' || chat.status === 'coordinator_review').length
   const completedCount =
     intakes.filter(intake => intake.status === 'complete').length +
     projectChats.filter(chat => chat.status === 'fulfilled').length
@@ -4341,7 +4341,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
       const memoryDir = getProjectStateDir(project.path)
       const existingChats = listBoundedChatSessions(memoryDir)
         .filter(session => session.objective.kind === 'project_check_in' || session.objective.kind === 'project_intake')
-      const activeChat = existingChats.find(session => session.status === 'waiting_for_user' || session.status === 'coordinator_review')
+      const activeChat = existingChats.find(session => session.status === 'waiting_for_owner' || session.status === 'coordinator_review')
       if (activeChat) {
         const boundedChat = await resumeProjectCheckInBoundedChat({
           memoryDir,

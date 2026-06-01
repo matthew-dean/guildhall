@@ -833,7 +833,8 @@ git commit -m "refactor: convert work hierarchy away from parent status"
 - Modify: `src/web/surfaces/project/structure/*`
 - Modify tests that assert `openQuestions`
 
-- [ ] **Step 1: Write owner-input and bounded-chat state-machine tests**
+- [x] **Step 1: Write owner-input and bounded-chat state-machine tests**
+  - Evidence: Added `src/runtime/__tests__/bounded-chat-machine.test.ts` and `src/runtime/__tests__/owner-input.test.ts`; `pnpm vitest run src/runtime/__tests__/bounded-chat-machine.test.ts src/runtime/__tests__/owner-input.test.ts src/runtime/__tests__/bounded-chat.test.ts --reporter=dot` passed: 3 files, 23 tests.
 
 Create `src/runtime/__tests__/owner-input.test.ts`:
 
@@ -1102,7 +1103,8 @@ pnpm vitest run src/runtime/__tests__/task-question-migration.test.ts --reporter
 Expected: FAIL because `task-question-migration.ts`, `owner-input-store.ts`, and
 `bounded-chat-machine.ts` do not exist.
 
-- [ ] **Step 4: Implement owner-input request records**
+- [x] **Step 4: Implement owner-input request records**
+  - Evidence: Added `src/runtime/owner-input.ts` with source, target, objective, request status, deterministic source-key helpers, and request receipt shape.
 
 Create `src/runtime/owner-input.ts` with these exported types:
 
@@ -1152,7 +1154,8 @@ Rules:
 - A source that asks the same owner decision twice must reuse the same request
   and bounded-chat session unless it deliberately creates a new `questionId`.
 
-- [ ] **Step 5: Implement bounded-chat lifecycle with `state-machine.ts`**
+- [x] **Step 5: Implement bounded-chat lifecycle with `state-machine.ts`**
+  - Evidence: Added `src/runtime/bounded-chat-machine.ts`, moved normal bounded-chat writes to `waiting_for_owner` vocabulary, appended transition receipts to sessions, and verified `pnpm vitest run src/runtime/__tests__/bounded-chat-machine.test.ts src/runtime/__tests__/owner-input.test.ts src/runtime/__tests__/bounded-chat.test.ts src/runtime/__tests__/thread.test.ts src/runtime/__tests__/serve-intake.test.ts --reporter=dot` passed: 5 files, 103 tests.
 
 Create `src/runtime/bounded-chat-machine.ts`:
 
@@ -1258,7 +1261,8 @@ Then modify `src/runtime/bounded-chat.ts` so normal mutation paths:
 - preserve legacy sessions only through migration/read compatibility, not direct
   write paths.
 
-- [ ] **Step 6: Implement owner-input create-or-link store**
+- [x] **Step 6: Implement owner-input create-or-link store**
+  - Evidence: Added `src/runtime/owner-input-store.ts` with deterministic create-or-link behavior, `.guildhall/owner-input/` persistence, `listOwnerInputRequests`, `listOwnerInputRequestsSync`, and `findOwnerInputRequestBySource`; `pnpm typecheck` passed.
 
 Create `src/runtime/owner-input-store.ts`:
 

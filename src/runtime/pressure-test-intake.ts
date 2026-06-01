@@ -302,7 +302,7 @@ export function summarizeProjectCheckIn(memoryDir: string): ProjectCheckInSummar
     .filter(session => session.objective.kind === 'project_check_in' || session.objective.kind === 'project_intake')
   const activeCount =
     intakes.filter(intake => intake.status === 'active').length +
-    chats.filter(chat => chat.status === 'waiting_for_user' || chat.status === 'coordinator_review').length
+    chats.filter(chat => chat.status === 'waiting_for_owner' || chat.status === 'coordinator_review').length
   const completedCount =
     intakes.filter(intake => intake.status === 'complete').length +
     chats.filter(chat => chat.status === 'fulfilled').length

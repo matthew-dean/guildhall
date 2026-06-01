@@ -1046,7 +1046,7 @@ function boundedChatTurns(projectPath: string, sessions: BoundedChatSession[]): 
       })
       continue
     }
-    if (session.status !== 'waiting_for_user') continue
+    if (session.status !== 'waiting_for_owner') continue
     const active = session.subObjectives.find(item => item.id === session.activeSubObjectiveId && item.status === 'active')
     if (!active) continue
     turns.push({

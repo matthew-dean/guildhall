@@ -224,7 +224,7 @@ describe('buildThread', () => {
             successCriteria: ['Capture the near-term project direction.'],
             startedAt: '2026-05-31T00:00:00.000Z',
           },
-          status: 'waiting_for_user',
+          status: 'waiting_for_owner',
           activeSubObjectiveId: 'project-direction-priority',
           subObjectives: [{
             id: 'project-direction-priority',
@@ -319,7 +319,7 @@ describe('buildThread', () => {
             successCriteria: ['Classify the request and shape the next action.'],
             startedAt: '2026-05-31T00:00:00.000Z',
           },
-          status: 'waiting_for_user',
+          status: 'waiting_for_owner',
           activeSubObjectiveId: 'request-scope',
           subObjectives: [{
             id: 'request-scope',
@@ -416,7 +416,7 @@ describe('buildThread', () => {
             successCriteria: ['Classify the request and shape the next action.'],
             startedAt: '2026-05-31T00:00:00.000Z',
           },
-          status: 'waiting_for_user',
+          status: 'waiting_for_owner',
           activeSubObjectiveId: 'request-scope',
           subObjectives: [{
             id: 'request-scope',

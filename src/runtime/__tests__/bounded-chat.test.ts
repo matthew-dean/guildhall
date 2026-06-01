@@ -35,7 +35,7 @@ describe('bounded chat runtime contract', () => {
       },
     })
 
-    expect(session.status).toBe('waiting_for_user')
+    expect(session.status).toBe('waiting_for_owner')
     const prompt = await getNextBoundedChatPrompt({ memoryDir, sessionId: session.id })
     expect(prompt).toEqual({
       kind: 'ask_user',
@@ -119,7 +119,7 @@ describe('bounded chat runtime contract', () => {
       },
     })
 
-    expect(reopened.status).toBe('waiting_for_user')
+    expect(reopened.status).toBe('waiting_for_owner')
     expect(reopened.subObjectives[0]).toMatchObject({
       id: 'request-shape',
       followUpDepth: 1,
@@ -304,7 +304,7 @@ describe('project check-in bounded chat adapter', () => {
     })
 
     expect(session.objective.kind).toBe('project_check_in')
-    expect(session.status).toBe('waiting_for_user')
+    expect(session.status).toBe('waiting_for_owner')
     expect(session.subObjectives[0]).toMatchObject({
       id: 'project-direction-priority',
       prompt: 'For the next few Narrative Harness tasks, should Guildhall bias toward reviewer-lane MVPs, author-facing editor UX, story-memory/schema foundations, or generation/evaluation loops?',
@@ -336,7 +336,7 @@ describe('project check-in bounded chat adapter', () => {
       response: 'Probably reviewer stuff, but only if it helps us know whether a novel is actually good.',
     })
 
-    expect(updated.status).toBe('waiting_for_user')
+    expect(updated.status).toBe('waiting_for_owner')
     expect(updated.subObjectives[0]).toMatchObject({
       id: 'project-direction-priority',
       followUpDepth: 1,
@@ -365,7 +365,7 @@ describe('project check-in bounded chat adapter', () => {
       response: 'Reviewer-lane MVPs first, especially author voice and coherence reviewers. Save editor UX for later.',
     })
 
-    expect(afterDirection.status).toBe('waiting_for_user')
+    expect(afterDirection.status).toBe('waiting_for_owner')
     expect(afterDirection.subObjectives.map(item => item.id)).toContain('visual-direction-mode')
     expect(afterDirection.activeSubObjectiveId).toBe('visual-direction-mode')
     const next = afterDirection.subObjectives.find(item => item.id === 'visual-direction-mode')
@@ -482,7 +482,7 @@ describe('project check-in bounded chat adapter', () => {
       response: "I don't understand the nature of the question.",
     })
 
-    expect(updated.status).toBe('waiting_for_user')
+    expect(updated.status).toBe('waiting_for_owner')
     expect(updated.activeSubObjectiveId).toBe('project-direction-priority')
     expect(updated.subObjectives[0]).toMatchObject({
       id: 'project-direction-priority',
@@ -526,7 +526,7 @@ describe('project check-in bounded chat adapter', () => {
     })
 
     expect(resumed.id).toBe(started.id)
-    expect(resumed.status).toBe('waiting_for_user')
+    expect(resumed.status).toBe('waiting_for_owner')
     expect(resumed.activeSubObjectiveId).toBe('visual-direction-mode')
     expect(resumed.subObjectives.find(item => item.id === 'visual-direction-mode')).toMatchObject({
       status: 'active',

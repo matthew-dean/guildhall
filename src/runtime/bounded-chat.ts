@@ -1,9 +1,16 @@
 import fs from 'node:fs'
 import fsp from 'node:fs/promises'
 import path from 'node:path'
+import { createHash } from 'node:crypto'
 import { z } from 'zod'
 import { atomicWriteText } from '@guildhall/sessions'
 import { readCachedJson } from './file-read-cache.js'
+import {
+  applyBoundedChatTransition,
+  type BoundedChatMachineEvent,
+  type BoundedChatMachineStatus,
+  type BoundedChatTransitionReceipt,
+} from './bounded-chat-machine.js'
 
 const BoundedChatObjectiveKind = z.enum([
   'project_intake',
@@ -16,15 +23,32 @@ const BoundedChatObjectiveKind = z.enum([
 ])
 export type BoundedChatObjectiveKind = z.infer<typeof BoundedChatObjectiveKind>
 
-const BoundedChatStatus = z.enum([
+const BoundedChatStatusValue = z.enum([
   'active',
-  'waiting_for_user',
+  'waiting_for_owner',
   'coordinator_review',
   'fulfilled',
   'blocked',
   'cancelled',
 ])
+const BoundedChatStatus = z.preprocess(
+  value => value === 'waiting_for_user' ? 'waiting_for_owner' : value,
+  BoundedChatStatusValue,
+)
 export type BoundedChatStatus = z.infer<typeof BoundedChatStatus>
+
+const BoundedChatTransitionReceiptRecord: z.ZodType<BoundedChatTransitionReceipt> = z.object({
+  machineId: z.string(),
+  machineVersion: z.number().int().positive(),
+  commandId: z.string().optional(),
+  entityId: z.string(),
+  from: z.enum(['active', 'waiting_for_owner', 'coordinator_review', 'fulfilled', 'blocked', 'cancelled']),
+  event: z.enum(['activate', 'wait_for_owner', 'submit_owner_response', 'request_coordinator_review', 'fulfill', 'block', 'cancel']),
+  to: z.enum(['active', 'waiting_for_owner', 'coordinator_review', 'fulfilled', 'blocked', 'cancelled']),
+  actor: z.string(),
+  evidenceRefs: z.array(z.string()),
+  createdAt: z.string(),
+})
 
 const BoundedChatTurn = z.object({
   role: z.enum(['user', 'assistant', 'coordinator']),
@@ -107,6 +131,7 @@ const BoundedChatSession = z.object({
   }),
   pendingActions: z.array(z.string()).default([]),
   appliedActionIds: z.array(z.string()).default([]),
+  transitionReceipts: z.array(BoundedChatTransitionReceiptRecord).default([]),
   plannerState: z.object({
     projectCheckIn: z.object({
       projectName: z.string(),
@@ -194,6 +219,7 @@ const CreateBoundedChatSessionInput = z.object({
     label: z.string(),
     successCriteria: z.array(z.string()).default([]),
   }),
+  now: z.string().optional(),
   initialSubObjective: z.object({
     id: z.string(),
     objective: z.string(),
@@ -209,6 +235,8 @@ const SubmitUserResponseInput = z.object({
   subObjectiveId: z.string(),
   response: z.string(),
   selectedChoiceIds: z.array(z.string()).default([]),
+  commandId: z.string().optional(),
+  now: z.string().optional(),
 })
 
 const ApplyCoordinatorActionInput = z.object({
@@ -250,16 +278,32 @@ export type BoundedChatPromptResult =
 
 export async function createBoundedChatSession(rawInput: z.input<typeof CreateBoundedChatSessionInput>): Promise<BoundedChatSession> {
   const input = CreateBoundedChatSessionInput.parse(rawInput)
-  const now = new Date().toISOString()
+  const now = input.now ?? new Date().toISOString()
+  const id = buildSessionId(input.projectId, input.objective.kind, input.source, now)
+  const initialTransition = applyBoundedChatTransition({
+    sessionId: id,
+    currentStatus: 'active',
+    event: 'wait_for_owner',
+    commandId: `create:${id}:wait-for-owner`,
+    priorReceipts: [],
+    actor: 'system:bounded-chat',
+    evidenceRefs: [`source:${input.source}`],
+    now,
+    context: { activeSubObjectiveId: input.initialSubObjective.id },
+  })
+  if (initialTransition.kind !== 'applied') {
+    const reason = initialTransition.kind === 'rejected' ? initialTransition.reason : 'already_applied'
+    throw new Error(`bounded chat initial transition failed: ${reason}`)
+  }
   const session: BoundedChatSession = BoundedChatSession.parse({
-    id: buildSessionId(input.projectId, input.objective.kind, now),
+    id,
     projectId: input.projectId,
     source: input.source,
     objective: {
       ...input.objective,
       startedAt: now,
     },
-    status: 'waiting_for_user',
+    status: initialTransition.nextState,
     activeSubObjectiveId: input.initialSubObjective.id,
     subObjectives: [{
       ...input.initialSubObjective,
@@ -278,6 +322,7 @@ export async function createBoundedChatSession(rawInput: z.input<typeof CreateBo
     },
     pendingActions: [],
     appliedActionIds: [],
+    transitionReceipts: [initialTransition.receipt],
     createdAt: now,
     updatedAt: now,
   })
@@ -317,7 +362,7 @@ export async function getNextBoundedChatPrompt(rawInput: z.input<typeof GetNextP
       message: 'Guildhall is reviewing the latest reply before it asks anything else.',
     }
   }
-  if (session.status === 'waiting_for_user' && active) {
+  if (session.status === 'waiting_for_owner' && active) {
     return {
       kind: 'ask_user',
       sessionId: session.id,
@@ -336,17 +381,36 @@ export async function submitBoundedChatUserResponse(
   const input = SubmitUserResponseInput.parse(rawInput)
   const session = await loadBoundedChatSession({ memoryDir: input.memoryDir, sessionId: input.sessionId })
   const active = getActiveSubObjective(session)
-  if (session.status !== 'waiting_for_user' || !active || active.id !== input.subObjectiveId) {
+  if (session.status !== 'waiting_for_owner' || !active || active.id !== input.subObjectiveId) {
     throw new Error(`sub-objective ${input.subObjectiveId} is not waiting for a user response`)
   }
+  const now = input.now ?? new Date().toISOString()
   active.localTurns.push(BoundedChatTurn.parse({
     role: 'user',
     content: input.response,
     selectedChoiceIds: input.selectedChoiceIds,
   }))
+  const transitionResult = applyBoundedChatTransition({
+    sessionId: session.id,
+    currentStatus: session.status,
+    event: 'submit_owner_response',
+    commandId: input.commandId ?? `owner-response:${input.subObjectiveId}:${active.localTurns.length}:${shortHash(input.response)}`,
+    priorReceipts: session.transitionReceipts,
+    actor: 'owner',
+    evidenceRefs: [`bounded-chat:${session.id}:sub-objective:${input.subObjectiveId}`],
+    now,
+    context: {
+      activeSubObjectiveId: active.id,
+      ownerResponsePresent: input.response.trim().length > 0,
+    },
+  })
+  if (transitionResult.kind === 'rejected') {
+    throw new Error(`bounded chat transition rejected: ${transitionResult.reason}`)
+  }
+  if (transitionResult.kind === 'applied') session.transitionReceipts.push(transitionResult.receipt)
   active.status = 'answered'
-  session.status = 'coordinator_review'
-  session.updatedAt = new Date().toISOString()
+  session.status = transitionResult.kind === 'already_applied' ? transitionResult.currentState : transitionResult.nextState
+  session.updatedAt = now
   await saveBoundedChatSession(input.memoryDir, session)
   return session
 }
@@ -360,6 +424,26 @@ export async function applyBoundedChatCoordinatorAction(
     throw new Error(`stale bounded chat session ${session.id}`)
   }
   if (session.appliedActionIds.includes(input.action.actionId)) return session
+  const now = new Date().toISOString()
+  const transitionEvent = eventForCoordinatorAction(input.action)
+  const transitionResult = applyBoundedChatTransition({
+    sessionId: session.id,
+    currentStatus: session.status,
+    event: transitionEvent,
+    commandId: input.action.actionId,
+    priorReceipts: session.transitionReceipts,
+    actor: 'coordinator',
+    evidenceRefs: [`bounded-chat:${session.id}:action:${input.action.actionId}`],
+    now,
+    context: {
+      activeSubObjectiveId: session.activeSubObjectiveId,
+      closureSummary: closureSummaryForCoordinatorAction(input.action),
+    },
+  })
+  if (transitionResult.kind === 'rejected') {
+    throw new Error(`bounded chat transition rejected: ${transitionResult.reason}`)
+  }
+  if (transitionResult.kind === 'applied') session.transitionReceipts.push(transitionResult.receipt)
 
   switch (input.action.type) {
     case 'ask_follow_up': {
@@ -370,7 +454,7 @@ export async function applyBoundedChatCoordinatorAction(
       subObjective.choices = input.action.choices
       subObjective.followUpDepth += 1
       subObjective.status = 'active'
-      session.status = 'waiting_for_user'
+      session.status = transitionResult.kind === 'already_applied' ? transitionResult.currentState : transitionResult.nextState
       break
     }
     case 'discard_response': {
@@ -385,7 +469,7 @@ export async function applyBoundedChatCoordinatorAction(
       })
       subObjective.prompt = input.action.replacementPrompt
       subObjective.status = 'active'
-      session.status = 'waiting_for_user'
+      session.status = transitionResult.kind === 'already_applied' ? transitionResult.currentState : transitionResult.nextState
       break
     }
     case 'close_session': {
@@ -414,7 +498,7 @@ export async function applyBoundedChatCoordinatorAction(
         }
       }
       active.status = 'answered'
-      session.status = input.action.outcome
+      session.status = transitionResult.kind === 'already_applied' ? transitionResult.currentState : transitionResult.nextState
       session.activeSubObjectiveId = active.id
       session.closure = {
         outcome: input.action.outcome,
@@ -422,7 +506,7 @@ export async function applyBoundedChatCoordinatorAction(
         settingUpdates: input.action.settingUpdates,
         taskDrafts: input.action.taskDrafts,
         evidence: input.action.evidence,
-        closedAt: new Date().toISOString(),
+        closedAt: now,
       }
       break
     }
@@ -430,7 +514,7 @@ export async function applyBoundedChatCoordinatorAction(
       const active = getActiveSubObjective(session)
       if (!active) throw new Error(`bounded chat session ${session.id} has no active sub-objective`)
       active.status = 'blocked'
-      session.status = 'blocked'
+      session.status = transitionResult.kind === 'already_applied' ? transitionResult.currentState : transitionResult.nextState
       session.closure = {
         outcome: 'blocked',
         summary: input.action.reason,
@@ -439,14 +523,14 @@ export async function applyBoundedChatCoordinatorAction(
         evidence: [],
         nextActionLabel: input.action.nextActionLabel,
         nextActionHref: input.action.nextActionHref,
-        closedAt: new Date().toISOString(),
+        closedAt: now,
       }
       break
     }
   }
 
   session.appliedActionIds.push(input.action.actionId)
-  session.updatedAt = new Date().toISOString()
+  session.updatedAt = now
   await saveBoundedChatSession(input.memoryDir, session)
   return session
 }
@@ -487,10 +571,10 @@ function boundedChatDir(memoryDir: string): string {
   return path.join(memoryDir, 'bounded-chat')
 }
 
-function buildSessionId(projectId: string, objectiveKind: BoundedChatObjectiveKind, now: string): string {
+function buildSessionId(projectId: string, objectiveKind: BoundedChatObjectiveKind, source: string, now: string): string {
   const slug = projectId.replace(/[^a-zA-Z0-9-]/g, '-').toLowerCase()
   const stamp = now.replace(/[:.]/g, '-')
-  return `bc-${slug}-${objectiveKind}-${stamp}`
+  return `bc-${slug}-${objectiveKind}-${shortHash(source)}-${stamp}`
 }
 
 function getActiveSubObjective(session: BoundedChatSession): BoundedChatSubObjective | undefined {
@@ -519,4 +603,31 @@ function latestUserTurn(subObjective: BoundedChatSubObjective): BoundedChatTurn 
     if (turn?.role === 'user') return turn
   }
   return undefined
+}
+
+function eventForCoordinatorAction(action: BoundedChatCoordinatorAction): BoundedChatMachineEvent {
+  switch (action.type) {
+    case 'ask_follow_up':
+    case 'discard_response':
+      return 'wait_for_owner'
+    case 'close_session':
+      return action.outcome === 'cancelled' ? 'cancel' : 'fulfill'
+    case 'block_session':
+      return 'block'
+  }
+}
+
+function closureSummaryForCoordinatorAction(action: BoundedChatCoordinatorAction): string | null {
+  switch (action.type) {
+    case 'close_session':
+      return action.summary
+    case 'block_session':
+      return action.reason
+    default:
+      return null
+  }
+}
+
+function shortHash(value: string): string {
+  return createHash('sha256').update(value).digest('hex').slice(0, 10)
 }

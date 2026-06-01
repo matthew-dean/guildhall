@@ -384,7 +384,7 @@ describe('POST /api/project/request', () => {
       }
     }
     expect(answered.boundedChat).toMatchObject({
-      status: 'waiting_for_user',
+      status: 'waiting_for_owner',
       activeSubObjectiveId: 'request-scope',
     })
     expect(answered.boundedChat?.acceptedState?.discardedResponses?.[0]?.reason).toBe('confused')
@@ -469,7 +469,7 @@ describe('project check-in bounded chat endpoints', () => {
         subObjectives?: Array<{ prompt?: string; followUpDepth?: number }>
       }
     }
-    expect(answered.boundedChat?.status).toBe('waiting_for_user')
+    expect(answered.boundedChat?.status).toBe('waiting_for_owner')
     expect(answered.boundedChat?.subObjectives?.[0]).toMatchObject({
       followUpDepth: 1,
       prompt: 'Should reviewer-lane MVPs judge internal story coherence, reader engagement, author voice preservation, or all three?',
