@@ -9,7 +9,7 @@
 <script lang="ts">
   import ActionBar from '../lib/ActionBar.svelte'
   import Button from '../lib/Button.svelte'
-  import Card from '../lib/Card.svelte'
+  import FrameCard from '../../../packages/ui/src/components/FrameCard.svelte'
   import { onEvent } from '../lib/events.js'
   import { nav, path } from '../lib/nav.svelte.js'
   import { projectActionHref, projectFetch } from '../lib/project-routes.js'
@@ -190,70 +190,74 @@
 
 {#if loaded && source}
   <div class="next-wrap">
-    <Card tone={tone} variant="callout" railStrength="strong" frosted className="next-card">
-    <div class="row">
-      <div class="text">
-        <div class="eyebrow">Do this next</div>
-        <div class="verb">{source.verb}</div>
-        {#if source.why}
-          <div class="why">{source.why}</div>
-        {/if}
-      </div>
-      <ActionBar>
-        <Button variant="primary" onclick={() => go(source.href)}>
-          {source.button} →
-        </Button>
-        {#if moreCount > 0}
-          <Button variant="secondary" size="sm" onclick={() => go(projectActionHref('/overview/inbox'))}>
-            {source.moreLabel}
+    <FrameCard tone={tone} padding="compact" density="compact" class="next-card">
+      <div class="row">
+        <div class="text">
+          <div class="eyebrow">Do this next</div>
+          <div class="verb">{source.verb}</div>
+          {#if source.why}
+            <div class="why">{source.why}</div>
+          {/if}
+        </div>
+        <ActionBar>
+          <Button variant="primary" onclick={() => go(source.href)}>
+            {source.button} →
           </Button>
-        {/if}
-      </ActionBar>
-    </div>
-    </Card>
+          {#if moreCount > 0}
+            <Button variant="secondary" size="sm" onclick={() => go(projectActionHref('/overview/inbox'))}>
+              {source.moreLabel}
+            </Button>
+          {/if}
+        </ActionBar>
+      </div>
+    </FrameCard>
   </div>
 {/if}
 
 <style>
   .next-wrap {
-    margin-block: var(--s-3) var(--s-4);
+    margin-block: var(--gh-space-3) var(--gh-space-4);
   }
 
   .next-wrap :global(.next-card) {
-    gap: var(--s-3);
+    gap: var(--gh-space-3);
   }
 
   .row {
     display: flex;
     align-items: center;
-    gap: var(--s-3);
+    gap: var(--gh-space-3);
     flex-wrap: wrap;
     min-block-size: 3.75rem;
   }
+
   .text {
     flex: 1 1 30rem;
     min-width: 18rem;
     display: grid;
     align-content: center;
   }
+
   .eyebrow {
-    font-size: var(--fs-1);
-    font-weight: 700;
+    font-size: var(--gh-type-size-eyebrow);
+    font-weight: var(--gh-type-weight-strong);
     text-transform: uppercase;
     letter-spacing: 0.06em;
     color: var(--text-muted);
   }
+
   .verb {
-    font-size: var(--fs-3);
-    font-weight: 700;
-    margin-top: 2px;
+    font-size: var(--gh-type-size-panel-title);
+    font-weight: var(--gh-type-weight-emphasis);
+    margin-top: var(--gh-space-1);
     color: var(--text);
   }
+
   .why {
-    margin-top: 4px;
-    font-size: var(--fs-1);
+    margin-top: var(--gh-space-1);
+    font-size: var(--gh-type-size-meta);
     color: var(--text-muted);
-    line-height: var(--lh-body);
+    line-height: var(--gh-type-line-height-body);
   }
 
   .next-wrap :global(.action-bar) {

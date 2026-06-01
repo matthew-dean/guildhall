@@ -2582,6 +2582,17 @@ For each touched surface:
     package component implementation files. The scanner, tokens, constitution,
     and audit are in place; the named surface conversion remains for the UI
     surface/component owner.
+  - Evidence: Worker E converted the first narrow batch:
+    `src/web/surfaces/DoThisNext.svelte`,
+    `packages/ui/src/components/AlertBand.svelte`,
+    `packages/ui/src/components/FrameCard.svelte`, and
+    `packages/ui/src/components/StatusPill.svelte`. `DoThisNext` now composes
+    `FrameCard` instead of the local `Card` primitive, and the touched files use
+    `--gh-*` spacing, control line-height, notice accent width, and named type
+    role tokens. Post-slice `pnpm lint:design` no longer reports any of these
+    touched files.
+  - Remaining: Step 8 stays open because the whole-repo audit still reports
+    unmanaged token/component debt in untouched surfaces.
 
 - [ ] **Step 9: Run the audit and focused UI tests**
 
@@ -2601,6 +2612,100 @@ Expected: PASS, with the design audit no longer flagging touched surfaces.
     Worker A scope. It reports existing raw/legacy styling and duplicate
     primitive debt across `src/web/lib/*`, `src/web/surfaces/*`, and the named
     Task 7 surfaces.
+  - Evidence: Worker E ran
+    `pnpm vitest run scripts/design-token-audit.test.ts --reporter=dot`
+    (passed, 2 tests),
+    `pnpm vitest run src/web/surfaces/__tests__/DoThisNext.svelte.test.ts --reporter=dot`
+    (passed, 6 tests), and
+    `pnpm --filter @guildhall/ui typecheck` (passed).
+  - Blocked: Worker E reran `pnpm lint:design`; it still exits 1. Touched files
+    are clean, but the remaining audit failures are:
+
+```text
+369 src/web/surfaces/project/ThreadTab.svelte
+145 src/web/surfaces/project/SettingsTab.svelte
+119 src/web/surfaces/ProjectView.svelte
+118 src/web/surfaces/project/WorkspaceImportTab.svelte
+117 src/web/surfaces/ProjectsHome.svelte
+93 src/web/lib/AgentQuestion.svelte
+89 src/web/surfaces/project/CoordinatorsTab.svelte
+84 src/web/surfaces/SetupWizard.svelte
+83 src/web/surfaces/project/ProjectOverviewTab.svelte
+71 src/web/surfaces/project/WorkTab.svelte
+66 src/web/surfaces/TaskDrawer.svelte
+60 src/web/surfaces/project/InboxTab.svelte
+60 src/web/surfaces/drawer/JourneyTab.svelte
+56 src/web/surfaces/project/WorkTreePreview.svelte
+56 src/web/surfaces/drawer/SpecTab.svelte
+54 src/web/surfaces/ProvidersPage.svelte
+53 src/web/lib/ProjectCard.svelte
+48 src/web/surfaces/drawer/CurrentTab.svelte
+47 src/web/surfaces/FleetNeedsYou.svelte
+41 src/web/surfaces/drawer/ExpertsTab.svelte
+39 src/web/lib/Markdown.svelte
+37 src/web/surfaces/Header.svelte
+32 src/web/lib/TaskCard.svelte
+30 src/web/surfaces/project/FactsTab.svelte
+29 src/web/surfaces/project/PlannerTab.svelte
+28 src/web/surfaces/drawer/ProvenanceTab.svelte
+27 src/web/surfaces/project/ProjectProvidersSection.svelte
+26 src/web/surfaces/project/ReleaseTab.svelte
+25 src/web/surfaces/project/TimelineTab.svelte
+25 src/web/surfaces/drawer/SpecFillChecklist.svelte
+24 src/web/surfaces/drawer/TranscriptTab.svelte
+22 src/web/lib/ProviderPicker.svelte
+21 src/web/lib/ProgressFeed.svelte
+20 src/web/lib/NoticeBand.svelte
+19 src/web/surfaces/drawer/OverviewTab.svelte
+19 src/web/surfaces/drawer/HistoryTab.svelte
+19 src/web/lib/layout/AppShell.svelte
+19 src/web/lib/SideDrawer.svelte
+19 src/web/lib/Modal.svelte
+18 src/web/surfaces/drawer/WhyStuck.svelte
+17 src/web/lib/Help.svelte
+16 src/web/surfaces/project/ProjectAttachFlow.svelte
+16 src/web/surfaces/IntakeModal.svelte
+15 src/web/lib/StatusButton.svelte
+15 src/web/lib/PageHeader.svelte
+14 src/web/lib/Chip.svelte
+14 packages/ui/src/components/HeroBand.svelte
+13 src/web/lib/WorkMixChart.svelte
+13 src/web/lib/UtilityPanel.svelte
+13 src/web/lib/Button.svelte
+12 src/web/surfaces/drawer/SuggestionCard.svelte
+12 src/web/lib/Card.svelte
+11 src/web/lib/layout/ProjectsShell.svelte
+11 src/web/lib/WizardStepper.svelte
+11 src/web/lib/DefinitionList.svelte
+10 src/web/lib/Tooltip.svelte
+10 src/web/lib/ToastHost.svelte
+9 src/web/surfaces/drawer/ResolveEscalationModal.svelte
+9 src/web/lib/Tabs.svelte
+9 src/web/lib/StateSummary.svelte
+9 src/web/lib/StaleServerBanner.svelte
+9 src/web/lib/AlignedActionList.svelte
+8 src/web/lib/StatusLine.svelte
+8 src/web/lib/LogViewer.svelte
+7 src/web/lib/SegmentedControl.svelte
+7 src/web/lib/OverviewTaskRow.svelte
+6 src/web/lib/Textarea.svelte
+6 src/web/lib/Select.svelte
+6 src/web/lib/Input.svelte
+4 src/web/lib/StatusLight.svelte
+4 src/web/lib/Section.svelte
+4 src/web/lib/InteractionCardLayout.svelte
+4 src/web/lib/Field.svelte
+4 packages/ui/src/components/AnnotatedScreenshot.svelte
+3 packages/ui/src/components/GuildDiagram.svelte
+2 src/web/lib/IdentifierChip.svelte
+2 src/web/lib/Byline.svelte
+1 src/web/lib/StatusDot.svelte
+1 src/web/lib/Icon.svelte
+1 src/web/lib/CardList.svelte
+1 src/web/lib/ActionBar.svelte
+1 src/web/App.svelte
+1 packages/ui/src/components/NoticeBand.svelte
+```
 
 Commit:
 

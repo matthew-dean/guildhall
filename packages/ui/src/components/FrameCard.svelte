@@ -65,7 +65,7 @@
     background: var(--frame-bg);
     color: var(--gh-color-text-primary);
     container-type: inline-size;
-    box-shadow: var(--frame-shadow);
+    box-shadow: var(--gh-elevation-frame, var(--frame-shadow));
     position: relative;
     overflow: clip;
     backdrop-filter: var(--glass-blur, blur(18px) saturate(135%));
@@ -89,9 +89,8 @@
 
   .gh-frame-card:focus-within {
     border-color: var(--gh-color-border-focus);
-    box-shadow:
-      0 0 0 var(--gh-layout-focus-ring-width) color-mix(in srgb, var(--gh-color-border-focus) 35%, transparent),
-      inset 0 0 0 var(--gh-layout-rule-default) color-mix(in srgb, var(--gh-color-border-focus) 40%, transparent);
+    outline: var(--gh-layout-focus-ring-width) solid color-mix(in srgb, var(--gh-color-border-focus) 35%, transparent);
+    outline-offset: 0;
   }
 
   .gh-frame-card::after {
@@ -108,7 +107,7 @@
   .gh-frame-card-footer {
     min-inline-size: 0;
     position: relative;
-    z-index: 1;
+    z-index: var(--gh-layer-surface-content, 1);
   }
 
   .gh-frame-card-footer {
@@ -119,7 +118,7 @@
   .gh-frame-card-body {
     min-inline-size: 0;
     position: relative;
-    z-index: 1;
+    z-index: var(--gh-layer-surface-content, 1);
   }
 
   .gh-frame-card.density-compact {

@@ -29,13 +29,13 @@
     border-radius: var(--gh-radius-full);
     font-size: var(--gh-type-size-1);
     font-weight: var(--gh-type-weight-strong);
-    line-height: 1;
+    line-height: var(--gh-type-line-height-control);
     white-space: nowrap;
   }
 
   .gh-status-pill.mode-display {
     min-block-size: var(--gh-control-height-tall);
-    padding-inline: calc(var(--gh-control-padding-inline) + var(--gh-space-1));
+    padding-inline: var(--gh-space-4);
   }
 
   .gh-status-pill.density-comfortable {
