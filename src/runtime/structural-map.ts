@@ -50,6 +50,7 @@ export interface StructuralMapNode {
   domainId?: string
   role?: 'top_level_authority' | 'child_authority' | 'vendored_generated_root' | 'domain_folder_only'
   command?: string
+  packageManager?: 'pnpm' | 'npm' | 'yarn' | 'bun'
   scripts?: Record<string, string>
   dependencyNames?: string[]
   evidence: EvidenceRef[]
@@ -188,7 +189,13 @@ export const structuralMapReviewMachine = defineStateMachine<
 })
 
 export function defaultStructuralDiscoveryProviders(): StructuralDiscoveryProvider[] {
-  return [pnpmStructuralDiscoveryProvider]
+  return [
+    pnpmStructuralDiscoveryProvider,
+    npmStructuralDiscoveryProvider,
+    yarnStructuralDiscoveryProvider,
+    bunStructuralDiscoveryProvider,
+    packageJsonWorkspacesStructuralDiscoveryProvider,
+  ]
 }
 
 export const pnpmStructuralDiscoveryProvider: StructuralDiscoveryProvider = {
@@ -209,7 +216,7 @@ export const pnpmStructuralDiscoveryProvider: StructuralDiscoveryProvider = {
     if (workspacePatterns.length === 0) {
       return { nodes: [], edges: [], evidenceRefs: [] }
     }
-    const packageNodes = await discoverPnpmWorkspacePackages(projectRoot, workspacePatterns)
+    const packageNodes = await discoverWorkspacePackageNodes(projectRoot, workspacePatterns, 'pnpm')
     return {
       nodes: [
         {
@@ -226,6 +233,101 @@ export const pnpmStructuralDiscoveryProvider: StructuralDiscoveryProvider = {
       evidenceRefs: ['manifest:pnpm-workspace.yaml'],
     }
   },
+}
+
+export const npmStructuralDiscoveryProvider = createPackageJsonWorkspaceProvider({
+  id: 'npm-workspaces',
+  label: 'npm workspaces',
+  workspaceNodeId: 'workspace:npm',
+  packageManager: 'npm',
+  lockFiles: ['package-lock.json', 'npm-shrinkwrap.json'],
+})
+
+export const yarnStructuralDiscoveryProvider = createPackageJsonWorkspaceProvider({
+  id: 'yarn-workspaces',
+  label: 'yarn workspaces',
+  workspaceNodeId: 'workspace:yarn',
+  packageManager: 'yarn',
+  lockFiles: ['yarn.lock'],
+})
+
+export const bunStructuralDiscoveryProvider = createPackageJsonWorkspaceProvider({
+  id: 'bun-workspaces',
+  label: 'bun workspaces',
+  workspaceNodeId: 'workspace:bun',
+  packageManager: 'bun',
+  lockFiles: ['bun.lock', 'bun.lockb'],
+})
+
+export const packageJsonWorkspacesStructuralDiscoveryProvider: StructuralDiscoveryProvider = {
+  id: 'package-json-workspaces',
+  label: 'package.json workspaces',
+  detect({ projectRoot }) {
+    const patterns = readPackageJsonWorkspacePatterns(projectRoot)
+    const detected = patterns.length > 0 && !hasAnyLockFile(projectRoot, [
+      'pnpm-workspace.yaml',
+      'package-lock.json',
+      'npm-shrinkwrap.json',
+      'yarn.lock',
+      'bun.lock',
+      'bun.lockb',
+    ])
+    return {
+      detected,
+      evidence: detected
+        ? evidence('manifest', 'package.json#workspaces', 'high')
+        : evidence('manifest', 'package.json#workspaces', patterns.length > 0 ? 'medium' : 'low'),
+    }
+  },
+  async discover({ projectRoot }) {
+    const patterns = readPackageJsonWorkspacePatterns(projectRoot)
+    const packageNodes = await discoverWorkspacePackageNodes(projectRoot, patterns, 'npm')
+    return packageJsonWorkspaceResult({
+      workspaceNodeId: 'workspace:package-json',
+      label: 'package.json workspaces',
+      packageNodes,
+    })
+  },
+}
+
+function createPackageJsonWorkspaceProvider(input: {
+  id: string
+  label: string
+  workspaceNodeId: string
+  packageManager: 'npm' | 'yarn' | 'bun'
+  lockFiles: string[]
+}): StructuralDiscoveryProvider {
+  return {
+    id: input.id,
+    label: input.label,
+    detect({ projectRoot }) {
+      const patterns = readPackageJsonWorkspacePatterns(projectRoot)
+      const detected = patterns.length > 0 && hasAnyLockFile(projectRoot, input.lockFiles)
+      return {
+        detected,
+        evidence: detected
+          ? [
+              ...evidence('manifest', 'package.json#workspaces', 'high'),
+              ...input.lockFiles
+                .filter(lockFile => fs.existsSync(path.join(projectRoot, lockFile)))
+                .flatMap(lockFile => evidence('manifest', lockFile, 'high')),
+            ]
+          : evidence('manifest', 'package.json#workspaces', patterns.length > 0 ? 'medium' : 'low'),
+      }
+    },
+    async discover({ projectRoot }) {
+      const packageNodes = await discoverWorkspacePackageNodes(
+        projectRoot,
+        readPackageJsonWorkspacePatterns(projectRoot),
+        input.packageManager,
+      )
+      return packageJsonWorkspaceResult({
+        workspaceNodeId: input.workspaceNodeId,
+        label: input.label,
+        packageNodes,
+      })
+    },
+  }
 }
 
 export async function draftStructuralMap(input: {
@@ -603,7 +705,11 @@ async function runStructuralDiscoveryProviders(
   return results
 }
 
-async function discoverPnpmWorkspacePackages(projectRoot: string, patterns: string[]): Promise<StructuralMapNode[]> {
+async function discoverWorkspacePackageNodes(
+  projectRoot: string,
+  patterns: string[],
+  packageManager: 'pnpm' | 'npm' | 'yarn' | 'bun',
+): Promise<StructuralMapNode[]> {
   const packageDirs = new Set<string>()
   for (const pattern of patterns) {
     if (pattern.endsWith('/*')) {
@@ -630,6 +736,7 @@ async function discoverPnpmWorkspacePackages(projectRoot: string, patterns: stri
       relativePath,
       packageName: manifest.name,
       packageId,
+      packageManager,
       scripts: manifest.scripts ?? {},
       dependencyNames: Object.keys({
         ...manifest.dependencies,
@@ -641,6 +748,28 @@ async function discoverPnpmWorkspacePackages(projectRoot: string, patterns: stri
     })
   }
   return packages
+}
+
+function packageJsonWorkspaceResult(input: {
+  workspaceNodeId: string
+  label: string
+  packageNodes: StructuralMapNode[]
+}): StructuralDiscoveryResult {
+  return {
+    nodes: [
+      {
+        id: input.workspaceNodeId,
+        kind: 'workspace',
+        label: input.label,
+        relativePath: '.',
+        evidence: evidence('manifest', 'package.json#workspaces', 'high'),
+        confidence: 'high',
+      },
+      ...input.packageNodes,
+    ],
+    edges: [],
+    evidenceRefs: ['manifest:package.json#workspaces'],
+  }
 }
 
 function domainNodesForPackage(pkg: StructuralMapNode): StructuralMapNode[] {
@@ -671,7 +800,7 @@ function executableUnitsForPackage(pkg: StructuralMapNode): StructuralMapNode[] 
     relativePath,
     packageId,
     domainId: `domain:${packageId.split('-').at(-1) ?? packageId}`,
-    command: `pnpm --filter ${pkg.packageName} ${script}`,
+    command: packageScriptCommand(pkg.packageManager ?? 'pnpm', pkg.packageName ?? pkg.packageId, script),
     evidence: evidence('script', `${relativePath}/package.json#scripts.${script}`, 'high'),
     confidence: 'high' as const,
   }))
@@ -735,9 +864,21 @@ function readPnpmWorkspacePatterns(filePath: string): string[] {
   return Array.isArray(parsed?.packages) ? parsed.packages : []
 }
 
+function readPackageJsonWorkspacePatterns(projectRoot: string): string[] {
+  const manifest = readJsonIfExists(path.join(projectRoot, 'package.json')) as PackageJson | undefined
+  const workspaces = (manifest as PackageJson & { workspaces?: string[] | { packages?: string[] } } | undefined)?.workspaces
+  if (Array.isArray(workspaces)) return workspaces
+  if (workspaces && typeof workspaces === 'object' && Array.isArray(workspaces.packages)) return workspaces.packages
+  return []
+}
+
 function readJsonIfExists(filePath: string): unknown {
   if (!fs.existsSync(filePath)) return undefined
   return JSON.parse(fs.readFileSync(filePath, 'utf8'))
+}
+
+function hasAnyLockFile(projectRoot: string, lockFiles: string[]): boolean {
+  return lockFiles.some(lockFile => fs.existsSync(path.join(projectRoot, lockFile)))
 }
 
 function hasNodeCopyEvidence(projectRoot: string, manifest: PackageJson | undefined): boolean {
@@ -778,6 +919,25 @@ function uniqueStrings(values: string[]): string[] {
 
 function evidence(kind: EvidenceRef['kind'], ref: string, confidence: StructuralConfidence): EvidenceRef[] {
   return [{ kind, ref, confidence }]
+}
+
+function packageScriptCommand(
+  packageManager: 'pnpm' | 'npm' | 'yarn' | 'bun',
+  packageName: string | undefined,
+  script: string,
+): string {
+  const workspace = packageName ?? 'workspace'
+  switch (packageManager) {
+    case 'npm':
+      return `npm --workspace ${workspace} run ${script}`
+    case 'yarn':
+      return `yarn workspace ${workspace} ${script}`
+    case 'bun':
+      return `bun --filter ${workspace} run ${script}`
+    case 'pnpm':
+    default:
+      return `pnpm --filter ${workspace} ${script}`
+  }
 }
 
 function slugify(value: string): string {

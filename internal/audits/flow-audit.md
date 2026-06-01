@@ -108,9 +108,9 @@ babysit setup/import/provider/release states across multiple pages.
 - [ ] Continue structural/domain intelligence from the remaining-work ledger
   in `internal/plans/2026-05-31-guildhall-0-10-implementation-tracker.md`.
   The feature is explicitly not complete after the foundation slice.
-  Remaining count after the provider-seam slice: 16 items. Next item: add
-  JS package-manager providers for npm, yarn, bun, and package.json
-  workspaces.
+  Remaining count after the JS package-manager provider slice: 15 items. Next
+  item: add non-JS structural fixtures and minimal detectors for Python, Rust,
+  PHP/Composer, .NET solution/project files, and docs-only repos.
 - [x] Specify the 0.10 bounded-chat pivot for intake and New request flows.
   Plan: `internal/plans/2026-05-31-guildhall-0-10-bounded-chat.md`.
   The accepted direction is a two-role flow: a conversation agent handles the

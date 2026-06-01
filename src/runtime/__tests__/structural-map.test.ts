@@ -48,6 +48,65 @@ afterEach(async () => {
 })
 
 describe('structural map drafting', () => {
+  it.each([
+    {
+      name: 'npm',
+      lockFile: 'package-lock.json',
+      workspaceId: 'workspace:npm',
+      evidenceRef: 'provider:npm-workspaces',
+      command: 'npm --workspace @fixture/core run test',
+    },
+    {
+      name: 'yarn',
+      lockFile: 'yarn.lock',
+      workspaceId: 'workspace:yarn',
+      evidenceRef: 'provider:yarn-workspaces',
+      command: 'yarn workspace @fixture/core test',
+    },
+    {
+      name: 'bun',
+      lockFile: 'bun.lock',
+      workspaceId: 'workspace:bun',
+      evidenceRef: 'provider:bun-workspaces',
+      command: 'bun --filter @fixture/core run test',
+    },
+    {
+      name: 'package-json',
+      lockFile: undefined,
+      workspaceId: 'workspace:package-json',
+      evidenceRef: 'provider:package-json-workspaces',
+      command: 'npm --workspace @fixture/core run test',
+    },
+  ])('discovers $name package.json workspaces without pnpm metadata', async ({ lockFile, workspaceId, evidenceRef, command }) => {
+    await writePackageJsonWorkspaceFixture(projectRoot, { lockFile })
+
+    const draft = await draftStructuralMap({
+      projectId: 'fixture',
+      projectRoot,
+      now: '2026-06-01T12:00:00.000Z',
+    })
+
+    expect(draft.nodes).toEqual(expect.arrayContaining([
+      expect.objectContaining({ id: workspaceId, kind: 'workspace' }),
+      expect.objectContaining({
+        id: 'package:fixture-core',
+        kind: 'package',
+        packageName: '@fixture/core',
+      }),
+      expect.objectContaining({
+        id: 'exec:fixture-core:test',
+        command,
+      }),
+    ]))
+    expect(draft.edges).toContainEqual(expect.objectContaining({
+      from: 'package:fixture-core',
+      to: 'package:fixture-shared',
+      kind: 'package_depends_on',
+    }))
+    expect(draft.evidenceRefs).toEqual(expect.arrayContaining([evidenceRef, 'manifest:package.json#workspaces']))
+    expect(draft.nodes).not.toContainEqual(expect.objectContaining({ id: 'workspace:pnpm' }))
+  })
+
   it('runs structural discovery providers so package managers can be added without changing the draft core', async () => {
     const customProvider: StructuralDiscoveryProvider = {
       id: 'fixture-provider',
@@ -451,6 +510,31 @@ async function writeRepoFixture(root: string, input: {
     }, null, 2)}\n`)
     await fsp.writeFile(path.join(root, pkg.dir, 'src', 'index.ts'), `export const name = ${JSON.stringify(pkg.name)}\n`)
   }
+}
+
+async function writePackageJsonWorkspaceFixture(root: string, input: {
+  lockFile?: string
+}): Promise<void> {
+  await fsp.writeFile(path.join(root, 'package.json'), `${JSON.stringify({
+    name: '@fixture/root',
+    private: true,
+    workspaces: ['packages/*'],
+    scripts: { test: 'vitest run' },
+  }, null, 2)}\n`)
+  if (input.lockFile) {
+    await fsp.writeFile(path.join(root, input.lockFile), '')
+  }
+  await fsp.mkdir(path.join(root, 'packages', 'core', 'src'), { recursive: true })
+  await fsp.writeFile(path.join(root, 'packages', 'core', 'package.json'), `${JSON.stringify({
+    name: '@fixture/core',
+    scripts: { test: 'vitest run packages/core' },
+    dependencies: { '@fixture/shared': 'workspace:*' },
+  }, null, 2)}\n`)
+  await fsp.mkdir(path.join(root, 'packages', 'shared', 'src'), { recursive: true })
+  await fsp.writeFile(path.join(root, 'packages', 'shared', 'package.json'), `${JSON.stringify({
+    name: '@fixture/shared',
+    scripts: { test: 'vitest run packages/shared' },
+  }, null, 2)}\n`)
 }
 
 async function acceptFreshMap(projectRoot: string, projectId: string) {
