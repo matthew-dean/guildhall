@@ -1,9 +1,10 @@
 import fs from 'node:fs'
 import path from 'node:path'
-import { guildhallHomeDir, listWorkspaces } from '@guildhall/config'
+import { guildhallHomeDir, listWorkspaces, readWorkspaceConfig } from '@guildhall/config'
 import { writeJsonFile, writeJsonLinesFile } from '@guildhall/persistence'
 
 import { defineStateMachine, transition, type TransitionReceipt } from './state-machine.js'
+import { resolveWorkspaceProjectPaths } from './git-story-policy.js'
 
 export type ProjectGraphNodeType =
   | 'local_guildhall_project'
@@ -40,12 +41,32 @@ export interface ProjectGraphRegistry {
   updatedAt: string
   projects: Array<ProjectGraphNode & { type: 'local_guildhall_project'; path: string }>
   domainAuthorities?: ProjectDomainAuthority[]
+  domainResponsibilities?: ProjectDomainResponsibility[]
   edges: ProjectGraphEdgeSummary[]
 }
 
 export interface ProjectDomainAuthority {
   domain: ProjectGraphNodeRef
   providerProject: ProjectGraphNodeRef & { path: string }
+  assignedBy: string
+  assignedAt: string
+  evidenceRefs: string[]
+}
+
+export type ProjectDomainResponsibilityFacet =
+  | 'provider_capability'
+  | 'shared_contract'
+  | 'consumer_configuration'
+  | 'consumer_verification'
+
+export type ProjectDomainResponsibilityAuthority = 'provider' | 'shared' | 'consumer'
+
+export interface ProjectDomainResponsibility {
+  id: string
+  domain: ProjectGraphNodeRef
+  facet: ProjectDomainResponsibilityFacet
+  authority: ProjectDomainResponsibilityAuthority
+  responsibleProject: ProjectGraphNodeRef & { path: string }
   assignedBy: string
   assignedAt: string
   evidenceRefs: string[]
@@ -82,6 +103,7 @@ export interface ProjectGraphView {
     assigned?: boolean
   }>
   domainAuthorities: ProjectDomainAuthority[]
+  domainResponsibilities: ProjectDomainResponsibilityView[]
   dependencyEdges: Array<{
     id: string
     state: ProjectDependencyEdgeState
@@ -125,6 +147,21 @@ export interface ProjectGraphDomainNode extends ProjectGraphNodeRef {
   coordinatorName?: string
   authorityProjectId?: string
   authorityProjectLabel?: string
+}
+
+export interface ProjectDomainResponsibilityView {
+  id: string
+  domainId: string
+  domainLabel: string
+  facet: ProjectDomainResponsibilityFacet
+  facetLabel: string
+  description: string
+  authority: ProjectDomainResponsibilityAuthority
+  responsibleProjectId: string
+  responsibleProjectLabel: string
+  responsibleProjectPath: string
+  assignable: boolean
+  assigned: boolean
 }
 
 export interface ProjectGraphStructuralDomainInput extends ProjectGraphNodeRef {
@@ -361,6 +398,38 @@ export function projectGraphRegistryDir(): string {
   return path.join(guildhallHomeDir(), 'project-graph')
 }
 
+function discoverLocalGraphProjects(now: string): Array<ProjectGraphNode & { type: 'local_guildhall_project'; path: string }> {
+  const projects = new Map<string, ProjectGraphNode & { type: 'local_guildhall_project'; path: string }>()
+  for (const workspace of listWorkspaces().filter(item => item.path)) {
+    projects.set(workspace.id, {
+      id: `local-project:${workspace.id}`,
+      type: 'local_guildhall_project',
+      label: workspace.name,
+      path: workspace.path,
+      pathFingerprint: pathFingerprint(workspace.path),
+      lastSeenAt: now,
+    })
+    try {
+      const config = readWorkspaceConfig(workspace.path)
+      if (config.kind !== 'workspace' || (config.projects?.length ?? 0) === 0) continue
+      for (const child of resolveWorkspaceProjectPaths(workspace.path, config)) {
+        projects.set(child.id, {
+          id: `local-project:${child.id}`,
+          type: 'local_guildhall_project',
+          label: child.label ?? titleCase(child.id),
+          path: child.path,
+          pathFingerprint: pathFingerprint(child.path),
+          lastSeenAt: now,
+        })
+      }
+    } catch {
+      // Registered projects may be missing or partially initialized; keep the
+      // parent graph node rather than failing the whole graph.
+    }
+  }
+  return [...projects.values()]
+}
+
 export function readProjectGraphRegistry(): ProjectGraphRegistry {
   const filePath = path.join(projectGraphRegistryDir(), 'registry.json')
   if (!fs.existsSync(filePath)) {
@@ -368,6 +437,7 @@ export function readProjectGraphRegistry(): ProjectGraphRegistry {
   }
   const registry = JSON.parse(fs.readFileSync(filePath, 'utf8')) as ProjectGraphRegistry
   registry.domainAuthorities ??= []
+  registry.domainResponsibilities ??= []
   registry.edges ??= []
   registry.projects ??= []
   return registry
@@ -377,16 +447,7 @@ export function writeLocalProjectGraphDraft(input: {
   now?: string
 } = {}): ProjectGraph {
   const now = input.now ?? new Date().toISOString()
-  const projects = listWorkspaces()
-    .filter(workspace => workspace.path)
-    .map(workspace => ({
-      id: `local-project:${workspace.id}`,
-      type: 'local_guildhall_project' as const,
-      label: workspace.name,
-      path: workspace.path,
-      pathFingerprint: pathFingerprint(workspace.path),
-      lastSeenAt: now,
-    }))
+  const projects = discoverLocalGraphProjects(now)
     .sort((left, right) => left.id.localeCompare(right.id))
   const current = readProjectGraphRegistry()
   const registry: ProjectGraphRegistry = {
@@ -394,6 +455,7 @@ export function writeLocalProjectGraphDraft(input: {
     updatedAt: now,
     projects,
     domainAuthorities: current.domainAuthorities ?? [],
+    domainResponsibilities: current.domainResponsibilities ?? [],
     edges: current.edges,
   }
   writeJsonFile(path.join(projectGraphRegistryDir(), 'registry.json'), registry)
@@ -416,26 +478,11 @@ export function queryProjectGraphView(input: {
   coordinators?: readonly ProjectGraphCoordinatorInput[]
 }): ProjectGraphView {
   const registry = readProjectGraphRegistry()
-  const workspaceProjects = listWorkspaces()
-    .filter(workspace => workspace.path)
-    .map(workspace => ({
-      id: workspace.id,
-      type: 'local_guildhall_project' as const,
-      label: workspace.name,
-      path: workspace.path,
-      pathFingerprint: pathFingerprint(workspace.path),
-      lastSeenAt: registry.updatedAt || new Date(0).toISOString(),
-    }))
+  const workspaceProjects = discoverLocalGraphProjects(registry.updatedAt || new Date(0).toISOString())
   const registryProjectsById = new Map(registry.projects.map(project => [project.id.replace(/^local-project:/, ''), project]))
   for (const workspace of workspaceProjects) {
-    if (!registryProjectsById.has(workspace.id)) registryProjectsById.set(workspace.id, {
-      id: `local-project:${workspace.id}`,
-      type: 'local_guildhall_project',
-      label: workspace.label,
-      path: workspace.path,
-      pathFingerprint: workspace.pathFingerprint,
-      lastSeenAt: workspace.lastSeenAt,
-    })
+    const id = workspace.id.replace(/^local-project:/, '')
+    if (!registryProjectsById.has(id)) registryProjectsById.set(id, workspace)
   }
   const edges = readProjectDependencyEdges()
     .filter(edge => edge.consumer.id === input.projectId || edge.provider.id === input.projectId)
@@ -471,6 +518,19 @@ export function queryProjectGraphView(input: {
     structuralDomains: input.structuralDomains ?? [],
     coordinators: input.coordinators ?? [],
     domainAuthorities: assignedAuthorities,
+    domainResponsibilities: registry.domainResponsibilities ?? [],
+  })
+  const currentProject = {
+    id: input.projectId,
+    label: registryProjectsById.get(input.projectId)?.label ?? input.projectId,
+    path: input.projectPath,
+  }
+  const localProjectsById = new Map(localProjects.map(project => [project.id, project]))
+  const domainResponsibilities = projectGraphDomainResponsibilities({
+    domains: structuralDomains,
+    assignments: registry.domainResponsibilities ?? [],
+    currentProject,
+    localProjectsById,
   })
 
   return {
@@ -503,6 +563,7 @@ export function queryProjectGraphView(input: {
       })),
     ],
     domainAuthorities: assignedAuthorities,
+    domainResponsibilities,
     dependencyEdges: edges.map(edge => ({
       id: edge.id,
       state: edge.stateMachine.state,
@@ -571,9 +632,61 @@ export async function assignProjectDomainAuthority(input: {
     updatedAt: now,
     projects: [...projectsById.values()].sort((left, right) => left.id.localeCompare(right.id)),
     domainAuthorities: authorities,
+    domainResponsibilities: registry.domainResponsibilities ?? [],
+    edges: registry.edges ?? [],
   } satisfies ProjectGraphRegistry)
   writeJson(path.join(projectGraphRegistryDir(), 'domain-authorities', `${slugify(input.domain.id)}.json`), authority)
   return authority
+}
+
+export async function assignProjectDomainResponsibility(input: {
+  domain: ProjectGraphNodeRef
+  facet: ProjectDomainResponsibilityFacet
+  responsibleProject: ProjectGraphNodeRef & { path: string }
+  assignedBy: string
+  evidenceRefs?: string[]
+  now?: string
+}): Promise<ProjectDomainResponsibility> {
+  const now = input.now ?? new Date().toISOString()
+  const registry = readProjectGraphRegistry()
+  const facetMeta = responsibilityFacetMeta(input.facet)
+  const responsibility: ProjectDomainResponsibility = {
+    id: domainResponsibilityId(input.domain.id, input.facet),
+    domain: input.domain,
+    facet: input.facet,
+    authority: facetMeta.authority,
+    responsibleProject: input.responsibleProject,
+    assignedBy: input.assignedBy,
+    assignedAt: now,
+    evidenceRefs: input.evidenceRefs ?? [`domain:${input.domain.id}`, `facet:${input.facet}`, `project:${input.responsibleProject.id}`],
+  }
+  const projectsById = new Map(registry.projects.map(project => [project.id, project]))
+  projectsById.set(`local-project:${input.responsibleProject.id}`, {
+    id: `local-project:${input.responsibleProject.id}`,
+    type: 'local_guildhall_project',
+    label: input.responsibleProject.label,
+    path: input.responsibleProject.path,
+    pathFingerprint: pathFingerprint(input.responsibleProject.path),
+    lastSeenAt: now,
+  })
+  const responsibilities = [
+    ...(registry.domainResponsibilities ?? []).filter(item => item.id !== responsibility.id),
+    responsibility,
+  ].sort((left, right) => left.id.localeCompare(right.id))
+  writeJson(path.join(projectGraphRegistryDir(), 'registry.json'), {
+    ...registry,
+    version: 1,
+    updatedAt: now,
+    projects: [...projectsById.values()].sort((left, right) => left.id.localeCompare(right.id)),
+    domainAuthorities: registry.domainAuthorities ?? [],
+    domainResponsibilities: responsibilities,
+    edges: registry.edges ?? [],
+  } satisfies ProjectGraphRegistry)
+  writeJson(
+    path.join(projectGraphRegistryDir(), 'domain-responsibilities', `${slugify(responsibility.id)}.json`),
+    responsibility,
+  )
+  return responsibility
 }
 
 export async function createProjectDependencyRequest(
@@ -1141,6 +1254,7 @@ function updateRegistryForEdge(edge: ProjectDependencyEdge, now: string): void {
     updatedAt: now,
     projects: [...projectsById.values()].sort((left, right) => left.id.localeCompare(right.id)),
     domainAuthorities: registry.domainAuthorities ?? [],
+    domainResponsibilities: registry.domainResponsibilities ?? [],
     edges,
   } satisfies ProjectGraphRegistry)
 }
@@ -1149,6 +1263,7 @@ function projectGraphDomains(input: {
   structuralDomains: readonly ProjectGraphStructuralDomainInput[]
   coordinators: readonly ProjectGraphCoordinatorInput[]
   domainAuthorities: readonly ProjectDomainAuthority[]
+  domainResponsibilities: readonly ProjectDomainResponsibility[]
 }): ProjectGraphDomainNode[] {
   const byId = new Map<string, ProjectGraphDomainNode>()
   for (const domain of input.structuralDomains) {
@@ -1180,7 +1295,98 @@ function projectGraphDomains(input: {
       authorityProjectLabel: existing?.authorityProjectLabel,
     })
   }
+  for (const responsibility of input.domainResponsibilities) {
+    if (byId.has(responsibility.domain.id)) continue
+    byId.set(responsibility.domain.id, {
+      id: responsibility.domain.id,
+      label: responsibility.domain.label,
+      path: responsibility.domain.path,
+      kind: 'coordinator_domain',
+    })
+  }
   return [...byId.values()].sort((left, right) => left.label.localeCompare(right.label))
+}
+
+const responsibilityFacetOrder: ProjectDomainResponsibilityFacet[] = [
+  'provider_capability',
+  'shared_contract',
+  'consumer_configuration',
+  'consumer_verification',
+]
+
+function responsibilityFacetMeta(facet: ProjectDomainResponsibilityFacet): {
+  label: string
+  description: string
+  authority: ProjectDomainResponsibilityAuthority
+  assignable: boolean
+} {
+  switch (facet) {
+    case 'provider_capability':
+      return {
+        label: 'Provider capability',
+        description: 'What another project must make possible, such as reusable components or APIs.',
+        authority: 'provider',
+        assignable: true,
+      }
+    case 'shared_contract':
+      return {
+        label: 'Shared contract',
+        description: 'The boundary both projects agree to, such as token names, config schema, package version, or component API.',
+        authority: 'shared',
+        assignable: true,
+      }
+    case 'consumer_configuration':
+      return {
+        label: 'Consumer configuration',
+        description: 'Local product choices such as token values, taste, density, typography, and composition.',
+        authority: 'consumer',
+        assignable: false,
+      }
+    case 'consumer_verification':
+      return {
+        label: 'Consumer verification',
+        description: 'Local proof that the delivered capability works in this product context.',
+        authority: 'consumer',
+        assignable: false,
+      }
+  }
+}
+
+function domainResponsibilityId(domainId: string, facet: ProjectDomainResponsibilityFacet): string {
+  return `${domainId}:${facet}`
+}
+
+function projectGraphDomainResponsibilities(input: {
+  domains: readonly ProjectGraphDomainNode[]
+  assignments: readonly ProjectDomainResponsibility[]
+  currentProject: ProjectGraphNodeRef & { path: string }
+  localProjectsById: Map<string, ProjectGraphView['localProjects'][number]>
+}): ProjectDomainResponsibilityView[] {
+  const assignmentById = new Map(input.assignments.map(item => [item.id, item]))
+  const out: ProjectDomainResponsibilityView[] = []
+  for (const domain of input.domains) {
+    for (const facet of responsibilityFacetOrder) {
+      const meta = responsibilityFacetMeta(facet)
+      const assigned = assignmentById.get(domainResponsibilityId(domain.id, facet))
+      const responsibleProject = assigned?.responsibleProject ?? input.currentProject
+      const localProject = input.localProjectsById.get(responsibleProject.id)
+      out.push({
+        id: domainResponsibilityId(domain.id, facet),
+        domainId: domain.id,
+        domainLabel: domain.label,
+        facet,
+        facetLabel: meta.label,
+        description: meta.description,
+        authority: assigned?.authority ?? meta.authority,
+        responsibleProjectId: responsibleProject.id,
+        responsibleProjectLabel: localProject?.label ?? responsibleProject.label,
+        responsibleProjectPath: localProject?.path ?? responsibleProject.path,
+        assignable: meta.assignable,
+        assigned: Boolean(assigned),
+      })
+    }
+  }
+  return out
 }
 
 function titleCase(value: string): string {

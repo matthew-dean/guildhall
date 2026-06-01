@@ -162,6 +162,7 @@ import {
 import {
   acceptProjectDependencyDelivery,
   assignProjectDomainAuthority,
+  assignProjectDomainResponsibility,
   beginProjectDependencyConsumerReview,
   commitProjectDependencyDeliveryPlan,
   deliverProjectDependency,
@@ -172,6 +173,7 @@ import {
   type ConsumerReturnPacket,
   type DeliveryReceipt,
   type ProjectDependencyEdge,
+  type ProjectDomainResponsibilityFacet,
   type ProjectGraphNodeRef,
 } from './project-graph.js'
 import {
@@ -2715,6 +2717,47 @@ export function buildServeApp(opts: ServeOptions = {}): {
       })
       return c.json({
         domainAuthority,
+        projectGraph: queryProjectGraphView({
+          projectId: project.id,
+          projectPath: project.path,
+          structuralDomains: structuralDomainsForProjectGraph(project.path),
+          coordinators: project.config?.coordinators ?? [],
+        }),
+      })
+    } catch (err) {
+      return c.json({ error: err instanceof Error ? err.message : String(err) }, 500)
+    }
+  })
+
+  app.post('/api/project/project-graph/domain-responsibility', async c => {
+    try {
+      const body = await c.req.json().catch(() => ({})) as {
+        domainId?: unknown
+        domainLabel?: unknown
+        facet?: unknown
+        responsibleProjectId?: unknown
+      }
+      const domainId = typeof body.domainId === 'string' ? body.domainId.trim() : ''
+      const domainLabel = typeof body.domainLabel === 'string' && body.domainLabel.trim()
+        ? body.domainLabel.trim()
+        : domainId.replace(/^domain:/, '')
+      const facet = parseProjectDomainResponsibilityFacet(body.facet)
+      const responsibleProjectId = typeof body.responsibleProjectId === 'string' ? body.responsibleProjectId.trim() : ''
+      if (!domainId) return c.json({ error: 'domainId is required.' }, 400)
+      if (!facet) return c.json({ error: 'facet is required.' }, 400)
+      if (!responsibleProjectId) return c.json({ error: 'responsibleProjectId is required.' }, 400)
+
+      const responsibleProject = resolveLocalProjectRefForGraph(responsibleProjectId, project)
+      if (!responsibleProject) return c.json({ error: `Local project not found: ${responsibleProjectId}` }, 404)
+      const domainResponsibility = await assignProjectDomainResponsibility({
+        domain: { id: domainId, label: domainLabel },
+        facet,
+        responsibleProject,
+        assignedBy: 'owner',
+        evidenceRefs: [`project:${project.id}`, domainId, `facet:${facet}`],
+      })
+      return c.json({
+        domainResponsibility,
         projectGraph: queryProjectGraphView({
           projectId: project.id,
           projectPath: project.path,
@@ -8957,13 +9000,48 @@ function resolveLocalProjectRefForGraph(
       path: currentProject.path,
     }
   }
-  const workspace = listWorkspaces().find(candidate => candidate.id === projectId)
-  if (!workspace?.path) return null
-  return {
-    id: workspace.id,
-    label: workspace.name,
-    path: workspace.path,
+  for (const workspace of listWorkspaces().filter(candidate => candidate.path)) {
+    if (workspace.id === projectId) {
+      return {
+        id: workspace.id,
+        label: workspace.name,
+        path: workspace.path,
+      }
+    }
+    try {
+      const config = readWorkspaceConfig(workspace.path)
+      if (config.kind !== 'workspace') continue
+      const child = resolveWorkspaceProjectPaths(workspace.path, config).find(candidate => candidate.id === projectId)
+      if (child) {
+        return {
+          id: child.id,
+          label: child.label ?? titleCaseGraphLabel(child.id),
+          path: child.path,
+        }
+      }
+    } catch {
+      // Ignore partially initialized registry entries while resolving local graph targets.
+    }
   }
+  return null
+}
+
+function parseProjectDomainResponsibilityFacet(value: unknown): ProjectDomainResponsibilityFacet | null {
+  if (
+    value === 'provider_capability' ||
+    value === 'shared_contract' ||
+    value === 'consumer_configuration' ||
+    value === 'consumer_verification'
+  ) return value
+  return null
+}
+
+function titleCaseGraphLabel(value: string): string {
+  return value
+    .split(/[-_\s]+/)
+    .filter(Boolean)
+    .map(part => part.slice(0, 1).toUpperCase() + part.slice(1))
+    .join(' ') || value
 }
 
 function structuralDomainsForProjectGraph(projectRoot: string): Array<{

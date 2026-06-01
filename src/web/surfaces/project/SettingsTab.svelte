@@ -312,6 +312,7 @@
   let projectGraphError = $state<string | null>(null)
   let projectGraphBusy = $state<string | null>(null)
   let domainAuthoritySelections = $state<Record<string, string>>({})
+  let domainResponsibilitySelections = $state<Record<string, string>>({})
   let reintakeStatus = $state<ReintakeStatus | null>(null)
   let reintakeDraft = $state<ReintakeDraft | null>(null)
   let reintakeBusy = $state<null | 'rerun' | 'apply'>(null)
@@ -557,6 +558,20 @@
       providerProject?: { id?: string; label?: string; path?: string }
       assignedAt?: string
       assignedBy?: string
+    }>
+    domainResponsibilities?: Array<{
+      id: string
+      domainId: string
+      domainLabel: string
+      facet: 'provider_capability' | 'shared_contract' | 'consumer_configuration' | 'consumer_verification' | string
+      facetLabel: string
+      description: string
+      authority: 'provider' | 'shared' | 'consumer' | string
+      responsibleProjectId: string
+      responsibleProjectLabel: string
+      responsibleProjectPath?: string
+      assignable?: boolean
+      assigned?: boolean
     }>
     structuralDomains?: Array<{
       id?: string
@@ -1067,6 +1082,13 @@
         if (domainId && providerId) nextSelections[domainId] = providerId
       }
       domainAuthoritySelections = nextSelections
+      const nextResponsibilitySelections = { ...domainResponsibilitySelections }
+      for (const responsibility of projectGraph?.domainResponsibilities ?? []) {
+        if (responsibility.assignable && responsibility.id && responsibility.responsibleProjectId) {
+          nextResponsibilitySelections[responsibility.id] = responsibility.responsibleProjectId
+        }
+      }
+      domainResponsibilitySelections = nextResponsibilitySelections
     } catch (err) {
       projectGraphError = err instanceof Error ? err.message : String(err)
     }
@@ -1121,6 +1143,38 @@
     return `Handled by ${authority.providerProject.label ?? authority.providerProject.id}`
   }
 
+  function responsibilitiesForDomain(domainId?: string) {
+    if (!domainId) return []
+    return (projectGraph?.domainResponsibilities ?? []).filter(item => item.domainId === domainId)
+  }
+
+  function selectedResponsibleProject(responsibility: NonNullable<ProjectGraphView['domainResponsibilities']>[number]): string {
+    return domainResponsibilitySelections[responsibility.id] ?? responsibility.responsibleProjectId
+  }
+
+  function setDomainResponsibilitySelection(responsibilityId: string, projectId: string) {
+    domainResponsibilitySelections = {
+      ...domainResponsibilitySelections,
+      [responsibilityId]: projectId,
+    }
+  }
+
+  function responsibilityTone(responsibility: NonNullable<ProjectGraphView['domainResponsibilities']>[number]): 'neutral' | 'accent' {
+    return responsibility.authority === 'consumer' ? 'accent' : 'neutral'
+  }
+
+  function responsibilityOwnerLabel(responsibility: NonNullable<ProjectGraphView['domainResponsibilities']>[number]): string {
+    if (responsibility.authority === 'consumer') return `Stays with ${responsibility.responsibleProjectLabel}`
+    if (responsibility.assigned) return `Handled by ${responsibility.responsibleProjectLabel}`
+    return `Currently ${responsibility.responsibleProjectLabel}`
+  }
+
+  function responsibilityAssignLabel(responsibility: NonNullable<ProjectGraphView['domainResponsibilities']>[number]): string {
+    if (responsibility.facet === 'provider_capability') return 'Assign capability'
+    if (responsibility.facet === 'shared_contract') return 'Assign contract'
+    return 'Assign'
+  }
+
   function setDomainAuthoritySelection(domainId: string, providerProjectId: string) {
     domainAuthoritySelections = {
       ...domainAuthoritySelections,
@@ -1141,6 +1195,36 @@
           domainId: domain.id,
           domainLabel: domain.label ?? domain.id.replace(/^domain:/, ''),
           providerProjectId,
+        }),
+      })
+      const j = await r.json().catch(() => ({})) as { projectGraph?: ProjectGraphView; error?: string }
+      if (!r.ok || j.error) {
+        projectGraphError = j.error ?? `HTTP ${r.status}`
+        return
+      }
+      projectGraph = j.projectGraph ?? projectGraph
+      projectGraphError = null
+      await loadProjectGraph()
+    } catch (err) {
+      projectGraphError = err instanceof Error ? err.message : String(err)
+    } finally {
+      projectGraphBusy = null
+    }
+  }
+
+  async function assignDomainResponsibility(responsibility: NonNullable<ProjectGraphView['domainResponsibilities']>[number]) {
+    const responsibleProjectId = selectedResponsibleProject(responsibility)
+    if (!responsibleProjectId) return
+    projectGraphBusy = `assign-responsibility:${responsibility.id}`
+    try {
+      const r = await projectFetch('/api/project/project-graph/domain-responsibility', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          domainId: responsibility.domainId,
+          domainLabel: responsibility.domainLabel,
+          facet: responsibility.facet,
+          responsibleProjectId,
         }),
       })
       const j = await r.json().catch(() => ({})) as { projectGraph?: ProjectGraphView; error?: string }
@@ -2116,7 +2200,7 @@
           {#snippet header()}
             <SectionHeader
               title="Domain responsibilities"
-              description="Detected domains start in this project. Assign one only when another local project should take responsibility for delivery in that domain."
+              description="Assign provider capabilities and shared contracts without moving product configuration or consumer verification out of this project."
               headingTag="h3"
               density="dense"
             />
@@ -2132,24 +2216,40 @@
                   <div class="domain-assignment-copy">
                     <strong>{domain.label}</strong>
                     <span class="muted">{domainSourceLabel(domain)}</span>
+                  </div>
+                  {#if responsibilitiesForDomain(domain.id).length > 0}
+                    <div class="responsibility-facet-list">
+                      {#each responsibilitiesForDomain(domain.id) as responsibility (responsibility.id)}
+                        <UtilityPanel as="div" className="responsibility-facet" tone={responsibilityTone(responsibility)} dense>
+                          <div class="responsibility-facet-copy">
+                            <strong>{responsibility.facetLabel}</strong>
+                            <span class="muted">{responsibility.description}</span>
+                            <span class="muted">{responsibilityOwnerLabel(responsibility)}</span>
+                          </div>
+                          {#if responsibility.assignable}
+                            <div class="domain-assignment-controls">
+                              <Select
+                                ariaLabel={`Responsible project for ${domain.label} ${responsibility.facetLabel}`}
+                                value={selectedResponsibleProject(responsibility)}
+                                options={graphProjectOptions()}
+                                onchange={(value) => setDomainResponsibilitySelection(responsibility.id, value)}
+                              />
+                              <Button
+                                variant="secondary"
+                                size="sm"
+                                disabled={projectGraphBusy === `assign-responsibility:${responsibility.id}`}
+                                onclick={() => assignDomainResponsibility(responsibility)}
+                              >
+                                {responsibilityAssignLabel(responsibility)}
+                              </Button>
+                            </div>
+                          {/if}
+                        </UtilityPanel>
+                      {/each}
+                    </div>
+                  {:else}
                     <span class="muted">{domainResponsibilityLabel(domain)}</span>
-                  </div>
-                  <div class="domain-assignment-controls">
-                    <Select
-                      ariaLabel={`Responsible project for ${domain.label}`}
-                      value={assignedProviderForDomain(domain.id) ?? ''}
-                      options={graphProjectOptions()}
-                      onchange={(value) => setDomainAuthoritySelection(domain.id, value)}
-                    />
-                    <Button
-                      variant="secondary"
-                      size="sm"
-                      disabled={projectGraphBusy === `assign:${domain.id}`}
-                      onclick={() => assignDomainAuthority(domain)}
-                    >
-                      Assign
-                    </Button>
-                  </div>
+                  {/if}
                 </UtilityPanel>
               {/each}
             </div>
@@ -3921,6 +4021,21 @@
   .domain-assignment-controls {
     display: grid;
     gap: var(--gh-space-2);
+  }
+
+  .responsibility-facet-list {
+    display: grid;
+    gap: var(--gh-space-2);
+  }
+
+  :global(.responsibility-facet) {
+    display: grid;
+    gap: var(--gh-space-2);
+  }
+
+  .responsibility-facet-copy {
+    display: grid;
+    gap: var(--gh-space-1);
   }
 
   :global(.project-chip-row) {

@@ -336,6 +336,51 @@ waiting on whom for each dependency request.
    src/web/surfaces/project/__tests__/SettingsTab.svelte.test.ts` passed with
    83 tests; `pnpm build` passed.
 
+### Project Graph Responsibility Facets And Child Projects
+
+**Remaining: 0 items. Next item: merge decision once the active bounded-chat worktree on `0.10.0` is clean enough to receive this branch.**
+
+Live walkthrough finding: Narrative Harness can technically assign a whole
+domain such as `Product` or `Specs` to `Looma + Knit`, but that is the wrong
+level of authority. The graph needs to show first-class child projects such as
+`Looma` and `Knit`, and domain responsibilities need leaf facets so a consumer
+can request provider capability from another project without giving away local
+product/configuration authority. For example, Looma can own reusable component
+capability and the shared theme contract, while Narrative Harness owns token
+values, product taste, and consumer verification.
+
+1. [x] Add failing runtime tests that expand registered workspace child
+   projects into selectable local graph nodes without making the workspace
+   council the only provider target.
+2. [x] Add failing runtime tests for domain responsibility facets:
+   `provider_capability`, `shared_contract`, `consumer_configuration`, and
+   `consumer_verification`, including Narrative Harness + Looma-style
+   ownership boundaries.
+3. [x] Implement child-project graph expansion from `guildhall.yaml` workspace
+   `projects`, preserving project-local paths and current/related/connected
+   roles.
+4. [x] Implement persistent responsibility-facet assignment records in the
+   local project graph registry, with project-scoped assignment helpers and
+   scoped graph views.
+5. [x] Expose responsibility facets in the Settings graph API and UI so the
+   owner can assign provider capability/shared contract without assigning
+   consumer configuration or verification away from the current project.
+6. [x] Add focused Settings UI tests for child project visibility and facet
+   wording/actions.
+7. [x] Run focused graph/API/UI verification, refresh the live browser
+   walkthrough on Narrative Harness, update this ledger/audit, commit, and
+   push.
+   Evidence: `pnpm typecheck` passed; `pnpm vitest run
+   src/runtime/__tests__/project-graph.test.ts
+   src/runtime/__tests__/serve-settings.test.ts
+   src/web/surfaces/project/__tests__/SettingsTab.svelte.test.ts` passed with
+   86 tests; `pnpm build` passed; `pnpm dev:install` refreshed the installed
+   app; service restart returned `/api/stale-server` with `stale:false`; live
+   browser walkthrough on
+   `http://localhost:7777/projects/narrative-harness/settings/graph` confirmed
+   provider/shared/consumer facets, standalone `Looma` and `Knit` child-project
+   options, and local consumer configuration/verification labels.
+
 1. [x] Replace the current pnpm-only discovery core with a provider interface
    for package/workspace discovery. After this: implement JS/npm/yarn/bun
    providers. Completed in `feature/0.10-structural-domain-intelligence`:

@@ -129,6 +129,18 @@ babysit setup/import/provider/release states across multiple pages.
   local projects, and shows waiting-on plus this-project role labels on request
   cards. Verification: `pnpm typecheck` passed; focused graph/API/UI tests
   passed with 83 tests; `pnpm build` passed.
+- [x] Add project graph responsibility facets and workspace child-project
+  provider targets. Remaining count: 0 items. Next item: merge decision once
+  the active bounded-chat worktree on `0.10.0` is clean enough to receive this
+  branch. Runtime/API/UI implementation now expands workspace child projects
+  such as `Looma`, persists responsibility facets, and keeps consumer
+  configuration plus consumer verification assigned to the current project by
+  default. Verification: `pnpm typecheck` passed; focused graph/API/UI tests
+  passed with 86 tests; `pnpm build` passed; `pnpm dev:install` refreshed the
+  installed app; `/api/stale-server` returned `stale:false`; live Narrative
+  Harness walkthrough confirmed standalone `Looma` appears as a provider
+  capability option without moving token values/product configuration out of
+  Narrative Harness.
 - [x] Specify the 0.10 bounded-chat pivot for intake and New request flows.
   Plan: `internal/plans/2026-05-31-guildhall-0-10-bounded-chat.md`.
   The accepted direction is a two-role flow: a conversation agent handles the

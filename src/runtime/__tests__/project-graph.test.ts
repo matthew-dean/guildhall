@@ -3,11 +3,12 @@ import fsp from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
-import { bootstrapWorkspace, registerWorkspace } from '@guildhall/config'
+import { bootstrapWorkspace, registerWorkspace, writeWorkspaceConfig } from '@guildhall/config'
 
 import {
   acceptProjectDependencyDelivery,
   assignProjectDomainAuthority,
+  assignProjectDomainResponsibility,
   beginProjectDependencyConsumerReview,
   commitProjectDependencyDeliveryPlan,
   createProjectDependencyRequest,
@@ -24,12 +25,14 @@ let previousConfigDir: string | undefined
 let systemDir: string
 let consumerProject: string
 let providerProject: string
+let workspaceProject: string
 
 beforeEach(async () => {
   previousConfigDir = process.env.GUILDHALL_CONFIG_DIR
   systemDir = await fsp.mkdtemp(path.join(os.tmpdir(), 'guildhall-project-graph-system-'))
   consumerProject = await fsp.mkdtemp(path.join(os.tmpdir(), 'guildhall-project-graph-consumer-'))
   providerProject = await fsp.mkdtemp(path.join(os.tmpdir(), 'guildhall-project-graph-provider-'))
+  workspaceProject = await fsp.mkdtemp(path.join(os.tmpdir(), 'guildhall-project-graph-workspace-'))
   process.env.GUILDHALL_CONFIG_DIR = systemDir
 })
 
@@ -39,6 +42,7 @@ afterEach(async () => {
   await fsp.rm(systemDir, { recursive: true, force: true })
   await fsp.rm(consumerProject, { recursive: true, force: true })
   await fsp.rm(providerProject, { recursive: true, force: true })
+  await fsp.rm(workspaceProject, { recursive: true, force: true })
 })
 
 describe('local project graph', () => {
@@ -143,6 +147,97 @@ describe('local project graph', () => {
     ]))
     expect(view.domainAuthorities).toEqual([])
     expect(view.authorityRoots).toEqual([])
+  })
+
+  it('expands registered workspace child projects into first-class provider targets', async () => {
+    bootstrapWorkspace(consumerProject, { name: 'Narrative Harness' })
+    await fsp.mkdir(path.join(workspaceProject, 'looma'), { recursive: true })
+    await fsp.mkdir(path.join(workspaceProject, 'knit'), { recursive: true })
+    writeWorkspaceConfig(workspaceProject, {
+      name: 'Looma + Knit',
+      id: 'looma-knit',
+      kind: 'workspace',
+      projects: [
+        { id: 'looma', label: 'Looma', type: 'library', path: 'looma', coordinator: 'looma' },
+        { id: 'knit', label: 'Knit', type: 'app', path: 'knit', coordinator: 'knit' },
+      ],
+    } as Parameters<typeof writeWorkspaceConfig>[1])
+    registerWorkspace({ id: 'narrative-harness', path: consumerProject, name: 'Narrative Harness', tags: [] })
+    registerWorkspace({ id: 'looma-knit', path: workspaceProject, name: 'Looma + Knit', tags: [] })
+
+    const view = queryProjectGraphView({
+      projectId: 'narrative-harness',
+      projectPath: consumerProject,
+      structuralDomains: [
+        { id: 'domain:ui-foundation', label: 'UI foundation', kind: 'domain_group' },
+      ],
+    })
+
+    expect(view.localProjects).toEqual(expect.arrayContaining([
+      expect.objectContaining({ id: 'narrative-harness', role: 'current' }),
+      expect.objectContaining({ id: 'looma-knit', role: 'related', path: workspaceProject }),
+      expect.objectContaining({ id: 'looma', label: 'Looma', role: 'related', path: path.join(workspaceProject, 'looma') }),
+      expect.objectContaining({ id: 'knit', label: 'Knit', role: 'related', path: path.join(workspaceProject, 'knit') }),
+    ]))
+  })
+
+  it('models domain responsibility facets without assigning consumer configuration away', async () => {
+    bootstrapWorkspace(consumerProject, { name: 'Narrative Harness' })
+    bootstrapWorkspace(providerProject, { name: 'Looma' })
+    registerWorkspace({ id: 'narrative-harness', path: consumerProject, name: 'Narrative Harness', tags: [] })
+    registerWorkspace({ id: 'looma', path: providerProject, name: 'Looma', tags: [] })
+
+    await assignProjectDomainResponsibility({
+      domain: { id: 'domain:ui-foundation', label: 'UI foundation' },
+      facet: 'provider_capability',
+      responsibleProject: { id: 'looma', label: 'Looma', path: providerProject },
+      assignedBy: 'owner',
+      now: '2026-06-01T12:30:00.000Z',
+    })
+    await assignProjectDomainResponsibility({
+      domain: { id: 'domain:ui-foundation', label: 'UI foundation' },
+      facet: 'shared_contract',
+      responsibleProject: { id: 'looma', label: 'Looma', path: providerProject },
+      assignedBy: 'owner',
+      now: '2026-06-01T12:31:00.000Z',
+    })
+
+    const view = queryProjectGraphView({
+      projectId: 'narrative-harness',
+      projectPath: consumerProject,
+      structuralDomains: [
+        { id: 'domain:ui-foundation', label: 'UI foundation', kind: 'domain_group' },
+      ],
+    })
+
+    expect(view.domainResponsibilities).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        domainId: 'domain:ui-foundation',
+        facet: 'provider_capability',
+        responsibleProjectId: 'looma',
+        authority: 'provider',
+      }),
+      expect.objectContaining({
+        domainId: 'domain:ui-foundation',
+        facet: 'shared_contract',
+        responsibleProjectId: 'looma',
+        authority: 'shared',
+      }),
+      expect.objectContaining({
+        domainId: 'domain:ui-foundation',
+        facet: 'consumer_configuration',
+        responsibleProjectId: 'narrative-harness',
+        authority: 'consumer',
+        assignable: false,
+      }),
+      expect.objectContaining({
+        domainId: 'domain:ui-foundation',
+        facet: 'consumer_verification',
+        responsibleProjectId: 'narrative-harness',
+        authority: 'consumer',
+        assignable: false,
+      }),
+    ]))
   })
 
   it('publishes a provider request through the neutral exchange and writes only the consumer mirror', async () => {

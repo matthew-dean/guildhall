@@ -2820,6 +2820,70 @@ describe('GET /api/project — bootstrap status', () => {
     }
   })
 
+  it('serves child project graph targets and assigns domain responsibility facets', async () => {
+    const workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), 'guildhall-serve-settings-workspace-provider-'))
+    try {
+      await fs.mkdir(path.join(workspaceDir, 'looma'), { recursive: true })
+      await fs.mkdir(path.join(workspaceDir, 'knit'), { recursive: true })
+      writeWorkspaceConfig(workspaceDir, {
+        name: 'Looma + Knit',
+        id: 'looma-knit',
+        kind: 'workspace',
+        projects: [
+          { id: 'looma', label: 'Looma', type: 'library', path: 'looma', coordinator: 'looma' },
+          { id: 'knit', label: 'Knit', type: 'app', path: 'knit', coordinator: 'knit' },
+        ],
+      } as Parameters<typeof writeWorkspaceConfig>[1])
+      registerWorkspace({ id: 'looma-knit', path: workspaceDir, name: 'Looma + Knit', tags: [] })
+
+      const { app } = buildServeApp({ projectPath: tmpDir })
+      const graph = await app.fetch(new Request(scoped('/api/project/project-graph')))
+      expect(graph.status).toBe(200)
+      const graphBody = (await graph.json()) as {
+        projectGraph?: {
+          localProjects?: Array<{ id?: string; role?: string; path?: string }>
+          domainResponsibilities?: Array<{ facet?: string; responsibleProjectId?: string; assignable?: boolean }>
+        }
+      }
+      expect(graphBody.projectGraph?.localProjects).toEqual(expect.arrayContaining([
+        expect.objectContaining({ id: 'looma-knit', role: 'related', path: workspaceDir }),
+        expect.objectContaining({ id: 'looma', role: 'related', path: path.join(workspaceDir, 'looma') }),
+        expect.objectContaining({ id: 'knit', role: 'related', path: path.join(workspaceDir, 'knit') }),
+      ]))
+
+      const assign = await app.fetch(new Request(scoped('/api/project/project-graph/domain-responsibility'), {
+        method: 'POST',
+        body: JSON.stringify({
+          domainId: 'domain:ui-foundation',
+          domainLabel: 'UI foundation',
+          facet: 'provider_capability',
+          responsibleProjectId: 'looma',
+        }),
+      }))
+      expect(assign.status).toBe(200)
+      const assignBody = (await assign.json()) as {
+        projectGraph?: {
+          domainResponsibilities?: Array<{ domainId?: string; facet?: string; responsibleProjectId?: string; assignable?: boolean }>
+        }
+      }
+      expect(assignBody.projectGraph?.domainResponsibilities).toEqual(expect.arrayContaining([
+        expect.objectContaining({
+          domainId: 'domain:ui-foundation',
+          facet: 'provider_capability',
+          responsibleProjectId: 'looma',
+        }),
+        expect.objectContaining({
+          domainId: 'domain:ui-foundation',
+          facet: 'consumer_configuration',
+          responsibleProjectId: PROJECT_ID,
+          assignable: false,
+        }),
+      ]))
+    } finally {
+      await fs.rm(workspaceDir, { recursive: true, force: true })
+    }
+  })
+
   it('assigns domain authority and drives provider/consumer request actions through owning project endpoints', async () => {
     const providerDir = await fs.mkdtemp(path.join(os.tmpdir(), 'guildhall-serve-settings-provider-'))
     try {
