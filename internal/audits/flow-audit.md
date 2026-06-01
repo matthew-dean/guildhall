@@ -148,6 +148,12 @@ babysit setup/import/provider/release states across multiple pages.
   It shows domains first, lets the owner click into a domain, and keeps
   "Assign to project" actions inside the focused detail panel while local
   product configuration and verification read as plain context.
+- [x] Flatten the project graph layout after live visual feedback. Remaining
+  count: 0 items. Next item: merge decision once the active bounded-chat
+  worktree on `0.10.0` is clean enough to receive this branch. The graph keeps
+  major section cards, but local-project rows, domain detail sections, and
+  dependency requests now render as rows/dividers instead of nested utility
+  cards inside cards.
 - [x] Specify the 0.10 bounded-chat pivot for intake and New request flows.
   Plan: `internal/plans/2026-05-31-guildhall-0-10-bounded-chat.md`.
   The accepted direction is a two-role flow: a conversation agent handles the

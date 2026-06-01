@@ -299,7 +299,7 @@ describe('SettingsTab', () => {
     })
     vi.stubGlobal('fetch', fetchMock)
 
-    render(SettingsTab, { subView: 'graph' })
+    const { container } = render(SettingsTab, { subView: 'graph' })
 
     await screen.findByRole('heading', { name: 'Project graph' })
     expect(screen.getByRole('heading', { name: 'Domains' })).toBeInTheDocument()
@@ -317,6 +317,7 @@ describe('SettingsTab', () => {
     expect(screen.getByText('Reusable editor components and APIs.')).toBeInTheDocument()
     expect(screen.getByText('Token values, product taste, and editor composition stay local.')).toBeInTheDocument()
     expect(screen.queryByText('Shared contract')).not.toBeInTheDocument()
+    expect(container.querySelector('.graph-card .utility-panel')).toBeNull()
 
     await userEvent.click(screen.getByRole('button', { name: 'Assign to Looma' }))
     await waitFor(() => expect(fetchMock.mock.calls.some(([input]) => String(input).includes('/domain-responsibility'))).toBe(true))

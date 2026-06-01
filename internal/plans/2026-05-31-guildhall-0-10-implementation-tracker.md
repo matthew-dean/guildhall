@@ -385,6 +385,11 @@ values, product taste, and consumer verification.
    detail panel, remove select-box-plus-assign controls from the main graph,
    and keep consumer-side responsibility text as plain local context. Focused
    UI test passes.
+9. [x] Flatten nested card treatments in the Settings project graph: major
+   sections remain framed, but local-project rows, domain detail sections, and
+   dependency requests no longer render as utility-panel cards inside graph
+   cards. Added a UI regression check that `.graph-card` does not contain
+   nested `.utility-panel` elements.
 
 1. [x] Replace the current pnpm-only discovery core with a provider interface
    for package/workspace discovery. After this: implement JS/npm/yarn/bun

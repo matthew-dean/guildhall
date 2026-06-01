@@ -2244,27 +2244,27 @@
           {:else}
             <div class="project-chip-list">
               {#each projectRowsForRole('current') as localProject (localProject.id)}
-                <UtilityPanel as="div" className="project-chip-row" tone="accent" dense>
+                <div class="project-chip-row project-chip-row-current">
                   <strong>{localProject.label}</strong>
                   <span class="muted">Current project</span>
-                </UtilityPanel>
+                </div>
               {/each}
               {#if connectedProjectRows().length > 0}
                 <div class="project-group-label">Connected by requests</div>
                 {#each connectedProjectRows() as localProject (localProject.id)}
-                  <UtilityPanel as="div" className="project-chip-row" tone="neutral" dense>
+                  <div class="project-chip-row">
                     <strong>{localProject.label}</strong>
                     <span class="muted">{localProject.role === 'provider' ? 'Provider on a request' : 'Consumer on a request'}</span>
-                  </UtilityPanel>
+                  </div>
                 {/each}
               {/if}
               {#if relatedProjectRows().length > 0}
                 <div class="project-group-label">Available for manual assignment</div>
                 {#each relatedProjectRows() as localProject (localProject.id)}
-                  <UtilityPanel as="div" className="project-chip-row" tone="neutral" dense>
+                  <div class="project-chip-row">
                     <strong>{localProject.label}</strong>
                     <span class="muted">Related local project</span>
-                  </UtilityPanel>
+                  </div>
                 {/each}
               {/if}
             </div>
@@ -2285,14 +2285,14 @@
             />
           {/snippet}
           <div class="domain-detail">
-            <UtilityPanel as="section" className="domain-detail-section" tone="accent" dense>
+            <section class="domain-detail-section domain-detail-section-local">
               <strong>Stays in {project.detail?.name ?? 'this project'}</strong>
               {#each localResponsibilitiesForDomain(domain?.id) as responsibility (responsibility.id)}
                 <p>{responsibility.description}</p>
               {/each}
-            </UtilityPanel>
+            </section>
             {#if assignableResponsibility}
-              <UtilityPanel as="section" className="domain-detail-section" tone="neutral" dense>
+              <section class="domain-detail-section">
                 <strong>Can be assigned</strong>
                 <p>{assignableResponsibility.description}</p>
                 {#if assignableResponsibility.assigned && assignableResponsibility.responsibleProjectId !== project.detail?.id}
@@ -2312,7 +2312,7 @@
                     {/each}
                   </Row>
                 {/if}
-              </UtilityPanel>
+              </section>
             {/if}
           </div>
         </FrameCard>
@@ -2336,7 +2336,7 @@
             {#each projectGraph.dependencyEdges ?? [] as edge (edge.id)}
               {@const role = edgeRole(edge)}
               {@const actions = projectGraphActionsForEdge(edge)}
-              <UtilityPanel as="section" className="graph-request" tone={role === 'inbound' ? 'accent' : 'neutral'}>
+              <section class:graph-request-inbound={role === 'inbound'} class="graph-request">
                 <div class="graph-request-head">
                   <div>
                     <strong>{role === 'inbound' ? 'Inbound' : role === 'outgoing' ? 'Outgoing' : 'Related'} request</strong>
@@ -2371,7 +2371,7 @@
                     {/each}
                   </Row>
                 {/if}
-              </UtilityPanel>
+              </section>
             {/each}
           </div>
         {/if}
@@ -4055,12 +4055,24 @@
 
   .domain-detail {
     display: grid;
-    gap: var(--gh-space-2);
+    gap: var(--gh-space-3);
   }
 
-  :global(.domain-detail-section) {
+  .domain-detail-section {
+    border-block-start: 1px solid var(--border-muted);
     display: grid;
     gap: var(--gh-space-2);
+    padding-block-start: var(--gh-space-3);
+  }
+
+  .domain-detail-section:first-child {
+    border-block-start: 0;
+    padding-block-start: 0;
+  }
+
+  .domain-detail-section-local {
+    border-inline-start: 2px solid var(--accent);
+    padding-inline-start: var(--gh-space-3);
   }
 
   .domain-detail p {
@@ -4070,11 +4082,23 @@
     line-height: var(--lh-body);
   }
 
-  :global(.project-chip-row) {
+  .project-chip-row {
+    border-block-start: 1px solid var(--border-muted);
     display: flex;
     justify-content: space-between;
     gap: var(--gh-space-2);
     align-items: center;
+    padding-block: var(--gh-space-2);
+  }
+
+  .project-chip-row:first-child,
+  .project-group-label + .project-chip-row {
+    border-block-start: 0;
+  }
+
+  .project-chip-row-current {
+    border-inline-start: 2px solid var(--accent);
+    padding-inline-start: var(--gh-space-2);
   }
 
   .project-group-label {
@@ -4084,9 +4108,21 @@
     margin-block-start: var(--gh-space-2);
   }
 
-  :global(.graph-request) {
+  .graph-request {
+    border-block-start: 1px solid var(--border-muted);
     display: grid;
     gap: var(--gh-space-3);
+    padding-block-start: var(--gh-space-3);
+  }
+
+  .graph-request:first-child {
+    border-block-start: 0;
+    padding-block-start: 0;
+  }
+
+  .graph-request-inbound {
+    border-inline-start: 2px solid var(--accent);
+    padding-inline-start: var(--gh-space-3);
   }
 
   .graph-request-head {
