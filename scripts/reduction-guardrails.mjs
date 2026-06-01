@@ -38,6 +38,26 @@ const forbiddenTaskShapes = [
     message: 'Bounded chat sessions must project as bounded_chat/owner_input turns, not pressure_test_question.',
   },
   {
+    path: /^src\/core\/task\.ts$/,
+    pattern: /\bopenQuestions\s*:\s*z\.array/,
+    message: 'The normal Task schema must not include openQuestions. Use OwnerInputRequest plus bounded-chat.',
+  },
+  {
+    path: /^src\/runtime\/request-intake\.ts$/,
+    pattern: /\bopenQuestion\b/,
+    message: 'Request intake must return owner-input descriptors, not embedded task-local openQuestion state.',
+  },
+  {
+    path: /^src\/runtime\/structural-map\.ts$/,
+    pattern: /^\s*ownerQuestions\s*:/m,
+    message: 'Structural maps must store ownerInputRequestIds, not durable ownerQuestions arrays.',
+  },
+  {
+    path: /^src\/runtime\/intake\.ts$/,
+    pattern: /\bopenQuestionsOverride\b|\.openQuestions\s*=/,
+    message: 'Intake must create owner-input requests instead of writing task.openQuestions.',
+  },
+  {
     path: /^src\/runtime\/inbox\.ts$/,
     pattern: /\b(project_check_in|pressure_test_pending|agent_question_pending|brief_approval|spec_approval|open_escalation)\b/,
     message: 'InboxItem must stay alert-owned. Route conversations, approvals, and escalations through Thread/owner-input.',

@@ -1,6 +1,6 @@
 import fs from 'node:fs/promises'
 import path from 'node:path'
-import { TaskQueue, type AgentQuestion, type RequestIntake, type Task, type TaskRequest, type TaskStatus } from '@guildhall/core'
+import { TaskQueue, type RequestIntake, type Task, type TaskRequest, type TaskStatus } from '@guildhall/core'
 import { atomicWriteText } from '@guildhall/sessions'
 import {
   appendExploringTranscript,
@@ -13,7 +13,7 @@ import {
   inspectPressureTestEvidence,
   type PressureTestIntake,
 } from './pressure-test-intake.js'
-import { analyzeRequestIntake } from './request-intake.js'
+import { analyzeRequestIntake, type RequestIntakeOwnerInput } from './request-intake.js'
 import { routeRequest, type RouteRequestResult, type RoutedAction } from './request-routing.js'
 import {
   extractAcceptanceCriteriaFromSpec,
@@ -21,6 +21,7 @@ import {
 } from './spec-quality.js'
 import { applyTaskShaping } from './task-decomposition.js'
 import { transitionTaskStatus } from './task-transition.js'
+import { createOwnerInputRequest } from './owner-input-store.js'
 
 // ---------------------------------------------------------------------------
 // FR-12: exploratory task intake.
@@ -79,8 +80,8 @@ export interface IntakeInput {
   request?: TaskRequest
   /** Optional precomputed intake state when another flow already resolved routing questions. */
   requestIntakeOverride?: RequestIntake
-  /** Optional explicit open questions. Use `[]` to suppress inferred questions. */
-  openQuestionsOverride?: AgentQuestion[] | undefined
+  /** Optional explicit owner-input descriptor. Use `null` to suppress inferred owner input. */
+  ownerInputOverride?: RequestIntakeOwnerInput | null | undefined
 }
 
 export interface IntakeResult {
@@ -107,9 +108,9 @@ export async function createExploringTask(input: IntakeInput): Promise<IntakeRes
     createdAt: now,
   })
   const requestIntake = input.requestIntakeOverride ?? requestIntakeAnalysis.requestIntake
-  const openQuestions = input.openQuestionsOverride ?? (
-    requestIntakeAnalysis.openQuestion ? [requestIntakeAnalysis.openQuestion] : undefined
-  )
+  const ownerInput = input.ownerInputOverride !== undefined
+    ? input.ownerInputOverride
+    : requestIntakeAnalysis.ownerInput
 
   const task: Task = {
     id,
@@ -133,7 +134,6 @@ export async function createExploringTask(input: IntakeInput): Promise<IntakeRes
     origination: 'human',
     ...(input.request ? { request: input.request } : {}),
     requestIntake,
-    ...(openQuestions ? { openQuestions } : {}),
     createdAt: now,
     updatedAt: now,
   }
@@ -141,6 +141,25 @@ export async function createExploringTask(input: IntakeInput): Promise<IntakeRes
   queue.tasks.push(task)
   queue.lastUpdated = now
   await writeQueue(input.memoryDir, queue)
+
+  if (ownerInput) {
+    await createOwnerInputRequest({
+      projectRoot: projectRootFromMemoryDir(input.memoryDir),
+      projectId: path.basename(input.projectPath) || id,
+      commandId: `request-intake:${id}:${ownerInputSourceId(ownerInput)}`,
+      now,
+      actor: 'request-intake',
+      source: ownerInput.source.kind === 'request_intake'
+        ? { ...ownerInput.source, intakeId: id }
+        : ownerInput.source,
+      target: ownerInput.target,
+      prompt: ownerInput.prompt,
+      helperText: ownerInput.helperText,
+      choices: ownerInput.choices,
+      objective: ownerInput.objective,
+      sessionSource: `request-intake:${id}`,
+    })
+  }
 
   const appendResult = await appendExploringTranscript({
     memoryDir: input.memoryDir,
@@ -153,6 +172,18 @@ export async function createExploringTask(input: IntakeInput): Promise<IntakeRes
   }
 
   return { taskId: id, transcriptPath: appendResult.path }
+}
+
+function projectRootFromMemoryDir(memoryDir: string): string {
+  return path.basename(memoryDir) === '.guildhall'
+    ? path.dirname(memoryDir)
+    : path.dirname(memoryDir)
+}
+
+function ownerInputSourceId(ownerInput: RequestIntakeOwnerInput): string {
+  const source = ownerInput.source
+  if (source.kind === 'request_intake') return `${source.kind}:${source.questionId ?? source.intakeId}`
+  return `${source.kind}:owner-input`
 }
 
 export interface RoutedRequestResult {
@@ -660,17 +691,6 @@ export async function reframeTask(input: ReframeTaskInput): Promise<ReframeTaskR
       : 'Asked Guildhall to reframe this task from current project memory.',
     timestamp: now,
   })
-
-  const questions = Array.isArray(task.openQuestions) ? [...task.openQuestions] : []
-  task.openQuestions = questions.map(question => (
-    question.answeredAt
-      ? question
-      : {
-          ...question,
-          answeredAt: now,
-          answer: 'Superseded by a task reframe request.',
-        }
-  ))
 
   if (Array.isArray(task.escalations)) {
     task.escalations = task.escalations.map(escalation => (

@@ -71,6 +71,7 @@ export const OwnerInputObjective = z.object({
     'project_check_in',
     'new_request',
     'task_shaping',
+    'structural_review',
     'setting_update',
     'recovery_decision',
     'capability_decision',

@@ -227,19 +227,12 @@ export type Escalation = z.infer<typeof Escalation>
 // approval — a task may have an approved brief before its spec is final, or
 // may skip the brief entirely for purely infrastructural work.
 // ---------------------------------------------------------------------------
-// Agent → user questions (FR-mini, ADHD-UX directive)
+// Legacy agent → user question parser.
 //
-// Every prompt an agent puts to the user MUST classify into ONE of four
-// kinds. No free prose. The UI renders each kind with a single deterministic
-// affordance: tap-to-confirm, yes/no, multiple choice with "Other...", or a
-// long-text reply. This kills the "is the agent asking me or telling me?"
-// confusion that emerges when an agent writes a paragraph that contains a
-// question buried inside.
-//
-// Producers (spec agent, coordinator, importer, etc.) emit AgentQuestion
-// values into `task.openQuestions`. The drawer renders any open questions
-// ABOVE the brief / spec / acceptance cards, since they are blocking by
-// definition. Answers are appended via POST /api/project/task/:id/answer.
+// `task.openQuestions` was the pre-0.10 way to persist owner questions on a
+// task. Normal task state must now route owner input through OwnerInputRequest
+// records linked to bounded-chat sessions. Keep this schema for migrations and
+// old-record readers only; do not add it back to the normal Task schema.
 // ---------------------------------------------------------------------------
 
 const AgentQuestionBase = {
@@ -838,12 +831,6 @@ export const Task = z.object({
   // technical spec; approved by the human independently of spec approval.
   productBrief: ProductBrief.optional(),
 
-  // Open agent → user questions. See AgentQuestion above. Any question with
-  // `answeredAt` undefined is "open" and renders at the top of the drawer
-  // until the user answers. Producers MUST classify into one of the four
-  // kinds — no free prose questions.
-  openQuestions: z.array(AgentQuestion).optional(),
-
   // Scope boundaries — what this task explicitly will NOT do
   outOfScope: z.array(z.string()).default([]),
 
@@ -1075,11 +1062,19 @@ export const Task = z.object({
   updatedAt: z.string(),
   completedAt: z.string().optional(),
 })
-export type Task = z.infer<typeof Task>
+type ParsedTask = z.infer<typeof Task>
+export type Task = ParsedTask & {
+  /**
+   * @deprecated Legacy pre-0.10 raw field. The normal Task schema no longer
+   * accepts or writes task-local owner questions; use OwnerInputRequest records
+   * linked to bounded-chat sessions instead.
+   */
+  openQuestions?: AgentQuestion[]
+}
 
 export const TaskQueue = z.object({
   version: z.number().default(1),
   lastUpdated: z.string(),
   tasks: z.array(Task),
 })
-export type TaskQueue = z.infer<typeof TaskQueue>
+export type TaskQueue = Omit<z.infer<typeof TaskQueue>, 'tasks'> & { tasks: Task[] }

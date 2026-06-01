@@ -141,7 +141,7 @@ export async function answerNewRequestBoundedChat(input: {
       createdAt: new Date().toISOString(),
     },
     requestIntakeOverride: resolvedIntake,
-    openQuestionsOverride: [],
+    ownerInputOverride: null,
   })
 
   const closed = await applyBoundedChatCoordinatorAction({
@@ -181,17 +181,14 @@ function deriveInitialPrompt(
   helperText?: string
   choices?: string[]
 } {
-  const question = analysis.openQuestion
+  const question = analysis.ownerInput
   if (question) {
-    if (question.kind !== 'choice' && question.kind !== 'text') {
-      throw new Error(`New request bounded chat expected a choice/text question, received ${question.kind}.`)
-    }
     return {
       id: 'request-scope',
       objective: 'Clarify request scope',
       prompt: question.prompt,
-      helperText: question.description,
-      choices: question.kind === 'choice' ? question.choices : undefined,
+      helperText: question.helperText,
+      choices: question.choices,
     }
   }
 

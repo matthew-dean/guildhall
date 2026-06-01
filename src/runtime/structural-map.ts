@@ -6,6 +6,7 @@ import { writeJsonFile, writeJsonLinesFile } from '@guildhall/persistence'
 
 import { defineStateMachine, transition, type TransitionReceipt } from './state-machine.js'
 import type { CreateProjectDependencyRequestInput, ProjectGraphNodeRef } from './project-graph.js'
+import { createOwnerInputRequest, listOwnerInputRequestsSync } from './owner-input-store.js'
 
 export type StructuralMapState =
   | 'draft'
@@ -154,7 +155,7 @@ export interface StructuralMapDraft {
   nodes: StructuralMapNode[]
   edges: StructuralMapEdge[]
   ignoredGitRoots: IgnoredGitRoot[]
-  ownerQuestions: OwnerQuestion[]
+  ownerInputRequestIds: string[]
   correctionRequests: StructuralMapCorrectionRequest[]
   transitionReceipts: StructuralMapTransitionReceipt[]
   evidenceRefs: string[]
@@ -274,7 +275,7 @@ export const structuralMapReviewMachine = defineStateMachine<
   states: {
     draft: {
       on: {
-        submit_for_review: { to: 'owner_review', require: ['ownerQuestions'] },
+        submit_for_review: { to: 'owner_review', require: ['ownerInputRequestIds'] },
         supersede: { to: 'superseded' },
       },
     },
@@ -804,14 +805,23 @@ export async function draftStructuralMap(input: {
   const ignoredGitRoots = await discoverIgnoredGitRoots(projectRoot)
   const finalNodes = uniqueNodes(nodes)
   const finalEdges = uniqueEdges(edges)
+  const draftId = `structural-map-${Date.parse(now).toString(36)}`
   const ownerQuestions: OwnerQuestion[] = [{
     id: 'confirm-domain-routing',
     reason: 'owner_review_required_before_routing_truth',
     prompt: 'Review the proposed domains, package graph, executable units, and Git authority before Guildhall uses this map for routing.',
     targetIds: finalNodes.filter(node => node.kind === 'domain_group' || node.kind === 'cross_cutting_domain').map(node => node.id),
   }, ...conflictOwnerQuestions(finalNodes, finalEdges)]
+  const ownerInputRequestIds = await createStructuralOwnerInputRequests({
+    projectRoot,
+    projectId: input.projectId,
+    mapId: draftId,
+    questions: ownerQuestions,
+    now,
+    actor: 'structural-map',
+  })
   const draft: StructuralMapDraft = {
-    id: `structural-map-${Date.parse(now).toString(36)}`,
+    id: draftId,
     version: 1,
     projectId: input.projectId,
     projectRoot,
@@ -824,7 +834,7 @@ export async function draftStructuralMap(input: {
     nodes: finalNodes,
     edges: finalEdges,
     ignoredGitRoots,
-    ownerQuestions,
+    ownerInputRequestIds,
     correctionRequests: [],
     transitionReceipts: [],
     evidenceRefs: uniqueStrings(['manifest:package.json', ...providerEvidence]),
@@ -925,6 +935,7 @@ export function readAcceptedStructuralMap(projectRoot: string): StructuralMapDra
   const filePath = path.join(structuralMapDir(projectRoot), 'accepted.json')
   if (!fs.existsSync(filePath)) return null
   const map = JSON.parse(fs.readFileSync(filePath, 'utf8')) as StructuralMapDraft
+  map.ownerInputRequestIds ??= []
   map.correctionRequests ??= []
   map.transitionReceipts ??= []
   return map
@@ -951,10 +962,18 @@ export async function refreshStructuralMap(input: {
   })
   const changes = diffStructuralMaps(previous, nextMap)
   const reviewQuestions = refreshReviewQuestions(changes)
-  nextMap.ownerQuestions = [
-    ...nextMap.ownerQuestions,
-    ...reviewQuestions,
-  ]
+  const reviewOwnerInputRequestIds = await createStructuralOwnerInputRequests({
+    projectRoot: input.projectRoot,
+    projectId: input.projectId,
+    mapId: nextMap.id,
+    questions: reviewQuestions,
+    now,
+    actor: input.actor,
+  })
+  nextMap.ownerInputRequestIds = uniqueStrings([
+    ...nextMap.ownerInputRequestIds,
+    ...reviewOwnerInputRequestIds,
+  ])
   await writeStructuralMap(input.projectRoot, nextMap)
   const result: StructuralMapRefreshResult = {
     id: `refresh-${Date.parse(now).toString(36)}`,
@@ -993,12 +1012,7 @@ export function summarizeStructuralMapForReview(map: StructuralMapDraft): Struct
   const domains = nodesByKind('domain_group').map(summaryNode)
   const crossCuttingDomains = nodesByKind('cross_cutting_domain').map(summaryNode)
   const executableUnits = nodesByKind('executable_unit').map(summaryNode)
-  const questions = map.ownerQuestions.map(question => ({
-    id: question.id,
-    prompt: question.prompt,
-    reason: question.reason,
-    targetIds: question.targetIds,
-  }))
+  const questions = structuralOwnerInputQuestions(map)
 
   return {
     id: map.id,
@@ -1266,9 +1280,85 @@ function readStructuralMap(projectRoot: string, mapId: string): StructuralMapDra
   const filePath = path.join(structuralMapDir(projectRoot), 'drafts', `${mapId}.json`)
   if (!fs.existsSync(filePath)) throw new Error(`Structural map ${mapId} not found`)
   const map = JSON.parse(fs.readFileSync(filePath, 'utf8')) as StructuralMapDraft
+  map.ownerInputRequestIds ??= []
   map.correctionRequests ??= []
   map.transitionReceipts ??= []
   return map
+}
+
+async function createStructuralOwnerInputRequests(input: {
+  projectRoot: string
+  projectId: string
+  mapId: string
+  questions: OwnerQuestion[]
+  now: string
+  actor: string
+}): Promise<string[]> {
+  const ids: string[] = []
+  for (const question of input.questions) {
+    const result = await createOwnerInputRequest({
+      projectRoot: input.projectRoot,
+      projectId: input.projectId,
+      commandId: `structural-map:${input.mapId}:${question.id}`,
+      now: input.now,
+      actor: input.actor,
+      source: { kind: 'structural_map', mapId: input.mapId, questionId: question.id },
+      target: { kind: 'project_structure', href: '/settings/structure' },
+      prompt: question.prompt,
+      helperText: [
+        `Reason: ${question.reason}`,
+        question.targetIds.length ? `Targets: ${question.targetIds.join(', ')}` : '',
+      ].filter(Boolean).join('\n'),
+      objective: {
+        kind: 'structural_review',
+        label: `Review structural map ${input.mapId}`,
+        successCriteria: ['Owner resolves the linked structural-map review request.'],
+      },
+      sessionSource: `structural-map:${input.mapId}:${question.id}`,
+    })
+    ids.push(result.request.id)
+  }
+  return uniqueStrings(ids)
+}
+
+function structuralOwnerInputQuestions(map: StructuralMapDraft): StructuralMapReviewSummaryQuestion[] {
+  const requests = listOwnerInputRequestsSync(map.projectRoot)
+  const byId = new Map(requests.map(request => [request.id, request]))
+  const linked = map.ownerInputRequestIds
+    .map(id => byId.get(id))
+    .filter((request): request is NonNullable<typeof request> => Boolean(request))
+    .map(request => ({
+      id: request.source.kind === 'structural_map' && request.source.questionId
+        ? request.source.questionId
+        : request.id,
+      prompt: request.prompt,
+      reason: request.objective.kind === 'structural_review'
+        ? request.objective.label
+        : request.sourceKey,
+      targetIds: [],
+    }))
+
+  if (linked.length > 0) return linked
+
+  const legacyQuestions = (map as unknown as { ownerQuestions?: OwnerQuestion[] }).ownerQuestions
+  return Array.isArray(legacyQuestions)
+    ? legacyQuestions.map(question => ({
+        id: question.id,
+        prompt: question.prompt,
+        reason: question.reason,
+        targetIds: question.targetIds,
+      }))
+    : []
+}
+
+function structuralOwnerInputRequestIdsExcept(map: StructuralMapDraft, questionId: string): string[] {
+  const requests = listOwnerInputRequestsSync(map.projectRoot)
+  const byId = new Map(requests.map(request => [request.id, request]))
+  return map.ownerInputRequestIds.filter(id => {
+    const request = byId.get(id)
+    if (!request) return id !== questionId
+    return !(request.source.kind === 'structural_map' && request.source.questionId === questionId)
+  })
 }
 
 interface PackageJson {
@@ -2021,7 +2111,7 @@ function applyOwnerReviewActionToMap(map: StructuralMapDraft, action: Exclude<St
       break
     }
     case 'defer_decision': {
-      map.ownerQuestions = map.ownerQuestions.filter(question => question.id !== action.questionId)
+      map.ownerInputRequestIds = structuralOwnerInputRequestIdsExcept(map, action.questionId)
       map.evidenceRefs = uniqueStrings([...map.evidenceRefs, `owner-deferred:${action.questionId}`])
       break
     }

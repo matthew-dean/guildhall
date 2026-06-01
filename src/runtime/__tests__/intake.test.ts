@@ -12,6 +12,7 @@ import {
 import { TaskQueue } from '@guildhall/core'
 import { raiseEscalation } from '@guildhall/tools'
 import { getProjectStateDir, getProjectTranscriptPath } from '@guildhall/sessions'
+import { listOwnerInputRequests } from '../owner-input-store.js'
 
 // ---------------------------------------------------------------------------
 // FR-12 exploratory task intake
@@ -93,7 +94,7 @@ describe('createExploringTask', () => {
   })
 
   it('attaches an automatic pressure-test summary to small tasks', async () => {
-    await createExploringTask({
+    const result = await createExploringTask({
       memoryDir,
       ask: 'Update the README install command.',
       domain: 'docs',
@@ -215,7 +216,7 @@ describe('createExploringTask', () => {
   })
 
   it('classifies ambiguous policy requests and asks whether the user wants spec or implementation', async () => {
-    await createExploringTask({
+    const result = await createExploringTask({
       memoryDir,
       ask: 'We should have a system-wide policy of how much FLL charges on overhead for maintenance fees etc.',
       domain: 'policy',
@@ -244,9 +245,12 @@ describe('createExploringTask', () => {
       'implementation',
       'verification',
     ])
-    expect(task.openQuestions?.[0]).toMatchObject({
-      kind: 'choice',
-      subject: 'Policy request scope',
+    expect(task.openQuestions ?? []).toEqual([])
+    const ownerInputRequests = await listOwnerInputRequests(tmpDir)
+    expect(ownerInputRequests).toHaveLength(1)
+    expect(ownerInputRequests[0]).toMatchObject({
+      source: { kind: 'request_intake', intakeId: result.taskId, questionId: 'policy-request-scope' },
+      objective: { kind: 'new_request', label: 'Clarify policy request scope' },
       prompt: expect.stringContaining('draft the FLL overhead policy first'),
       choices: [
         'Draft the policy/spec first',

@@ -1,4 +1,5 @@
-import type { AgentQuestion, PressureTestSummary, RequestIntake } from '@guildhall/core'
+import type { PressureTestSummary, RequestIntake } from '@guildhall/core'
+import type { OwnerInputObjective, OwnerInputSource, OwnerInputTarget } from './owner-input.js'
 
 export interface AnalyzeRequestIntakeInput {
   ask: string
@@ -8,7 +9,16 @@ export interface AnalyzeRequestIntakeInput {
 
 export interface RequestIntakeAnalysis {
   requestIntake: RequestIntake
-  openQuestion?: AgentQuestion
+  ownerInput?: RequestIntakeOwnerInput
+}
+
+export interface RequestIntakeOwnerInput {
+  source: OwnerInputSource
+  target: OwnerInputTarget
+  prompt: string
+  helperText?: string
+  choices?: string[]
+  objective: OwnerInputObjective
 }
 
 const SPEC_WORDS = /\b(policy|spec|plan|document|decide|decision|define|set|standard|guideline|strategy)\b/i
@@ -73,19 +83,25 @@ export function analyzeRequestIntake(input: AnalyzeRequestIntakeInput): RequestI
         createdAt,
         createdBy: 'request-intake',
       },
-      openQuestion: {
-        id: `q-request-scope-${createdAt.replace(/[^0-9A-Za-z]/g, '').slice(0, 14)}`,
-        kind: 'choice',
-        askedBy: 'coordinator-agent',
-        askedAt: createdAt,
-        subject: 'Policy request scope',
-        description: 'This request could be a policy/spec task, a parent feature plan, or direct implementation work.',
+      ownerInput: {
+        source: {
+          kind: 'request_intake',
+          intakeId: `request-scope-${createdAt.replace(/[^0-9A-Za-z]/g, '').slice(0, 14)}`,
+          questionId: 'policy-request-scope',
+        },
+        target: { kind: 'thread' },
         prompt: 'Should Guildhall draft the FLL overhead policy first, or also turn it into linked implementation work?',
+        helperText: 'This request could be a policy/spec task, a parent feature plan, or direct implementation work.',
         choices: [
           'Draft the policy/spec first',
           'Draft the policy and create linked implementation tasks',
           'Apply the policy now',
         ],
+        objective: {
+          kind: 'new_request',
+          label: 'Clarify policy request scope',
+          successCriteria: ['Owner chooses whether this is spec-only, linked planning, or implementation now.'],
+        },
       },
     }
   }

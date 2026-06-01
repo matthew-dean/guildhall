@@ -1342,7 +1342,7 @@ Add built-in project migration:
 }
 ```
 
-- [ ] **Step 9: Convert source-specific owner questions into owner-input refs**
+- [x] **Step 9: Convert source-specific owner questions into owner-input refs**
 
 Update source models so they create or link `OwnerInputRequest` records instead
 of owning local question state:
@@ -1367,6 +1367,27 @@ of owning local question state:
 Focused tests must assert that these source records contain refs to
 owner-input/bounded-chat sessions rather than embedded question arrays.
 
+Evidence, 2026-06-01 coordinator slice:
+
+- `src/runtime/structural-map.ts` now stores `ownerInputRequestIds` on
+  structural maps instead of a durable `ownerQuestions` array.
+- Structural map drafting and refresh create linked `OwnerInputRequest` records
+  with `source.kind === 'structural_map'`; review summaries resolve prompts
+  from those linked records.
+- `structuralMapReviewMachine` now requires `ownerInputRequestIds` before
+  `submit_for_review`.
+- `src/runtime/request-intake.ts` now returns a `RequestIntakeOwnerInput`
+  descriptor instead of `openQuestion?: AgentQuestion`.
+- `src/runtime/intake.ts` creates/links the request-intake owner-input record
+  after creating the task and no longer writes `task.openQuestions` for new
+  tasks.
+- Existing owner-input tests cover `project_graph` and `capability_request`
+  source keys so those sources have a shared request/session substrate when
+  they need owner decisions, without adding prompt/answer arrays to their own
+  state.
+- Evidence command: `pnpm vitest run src/runtime/__tests__/intake.test.ts src/runtime/__tests__/structural-map.test.ts src/runtime/__tests__/owner-input.test.ts src/runtime/__tests__/bounded-chat-machine.test.ts src/runtime/__tests__/task-question-migration.test.ts --reporter=dot`
+  passed 5 files / 74 tests.
+
 - [x] **Step 10: Replace question writer path**
 
 Change `src/tools/post-user-question.ts` from a task mutator into one of these:
@@ -1390,13 +1411,24 @@ Evidence, 2026-06-01 coordinator slice:
   passed with 15 tests.
 - Evidence command: `pnpm typecheck` passed.
 
-- [ ] **Step 11: Remove normal `openQuestions` schema**
+- [x] **Step 11: Remove normal `openQuestions` schema**
 
 Modify `src/core/task.ts`:
 
 - Delete `openQuestions: z.array(AgentQuestion).optional()`.
 - Keep `AgentQuestion` type only if bounded-chat migration or old transcript readers still need to parse old records outside normal task parsing.
 - Update `src/web/lib/types.ts` after UI payloads stop including `openQuestions`.
+
+Evidence, 2026-06-01 coordinator slice:
+
+- Deleted `openQuestions: z.array(AgentQuestion).optional()` from the normal
+  `Task` Zod schema in `src/core/task.ts`.
+- Kept the `AgentQuestion` parser and a deprecated TypeScript-only
+  compatibility field for migration/old-record readers, while normal parsed
+  task records no longer accept `openQuestions`.
+- Added a reduction guardrail that fails if `openQuestions: z.array(...)`
+  returns to the normal task schema.
+- Evidence command: `pnpm typecheck` passed.
 
 - [ ] **Step 12: Remove UI and Inbox question paths**
 
@@ -1447,8 +1479,14 @@ Partial evidence, 2026-06-01 coordinator slice:
 
 - `scripts/reduction-guardrails.mjs` now fails if `boundedChatTurns` emits
   `kind: 'pressure_test_question'`.
-- The remaining inbox, structural-map, and app-surface projection guardrails
-  are still open.
+- `scripts/reduction-guardrails.mjs` now fails if `src/runtime/inbox.ts` or
+  `src/web/lib/inbox-item-key.ts` reintroduces conversation-owned inbox kinds.
+- `scripts/reduction-guardrails.mjs` now fails if `src/runtime/structural-map.ts`
+  reintroduces a durable `ownerQuestions:` field, or if `src/runtime/intake.ts`
+  writes `task.openQuestions`.
+- The app-surface projection guardrail is still open; `ThreadTab`/TaskDrawer
+  still need the remaining UI cleanup from Step 12.
+- Evidence command: `pnpm lint:reductions` passed.
 
 - [ ] **Step 14: Run focused tests**
 
@@ -1463,6 +1501,15 @@ Expected: PASS with:
 - no tests asserting task-local `openQuestions`;
 - no bounded-chat fixture projected as `pressure_test_question`;
 - source-specific owner decisions linked through `OwnerInputRequest`.
+
+Partial evidence, 2026-06-01 coordinator slice:
+
+- `pnpm vitest run src/runtime/__tests__/reduction-guardrails.test.ts src/runtime/__tests__/intake.test.ts src/runtime/__tests__/structural-map.test.ts src/runtime/__tests__/owner-input.test.ts src/runtime/__tests__/bounded-chat-machine.test.ts src/runtime/__tests__/task-question-migration.test.ts src/runtime/__tests__/thread.test.ts src/runtime/__tests__/inbox.test.ts src/runtime/__tests__/serve-intake.test.ts --reporter=dot`
+  passed 9 files / 188 tests.
+- `pnpm typecheck` passed.
+- Remaining open: the full Step 14 command still includes
+  `ThreadTab.svelte.test.ts` and `TaskDrawer.svelte.test.ts`, which should run
+  after Step 12 removes the remaining UI question-card paths.
 
 Commit:
 
