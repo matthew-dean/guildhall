@@ -35,6 +35,7 @@
     "test:ui": "pnpm build && playwright test",
     "test:ui:install": "playwright install chromium",
     "lint:deps": "depcruise src",
+    "lint:design": "node scripts/design-token-audit.mjs",
     "lint:reductions": "node scripts/reduction-guardrails.mjs",
     "clean": "rm -rf dist",
     "release": "node scripts/publish.mjs",

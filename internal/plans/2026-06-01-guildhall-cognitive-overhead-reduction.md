@@ -2098,7 +2098,7 @@ for:
 `packages/ui/src/component-constitution.ts` should be a machine-readable subset
 of this constitution, not a competing policy.
 
-- [ ] **Step 1: Write the failing scanner test**
+- [x] **Step 1: Write the failing scanner test**
 
 Create `scripts/design-token-audit.test.ts`:
 
@@ -2172,7 +2172,11 @@ describe('design token audit', () => {
 })
 ```
 
-- [ ] **Step 2: Run the test and confirm red**
+  - Evidence: Added `scripts/design-token-audit.test.ts` with fixtures for raw
+    typography, raw spacing/radius, legacy token families, duplicate primitives,
+    and permitted canonical role-token usage.
+
+- [x] **Step 2: Run the test and confirm red**
 
 Run:
 
@@ -2182,7 +2186,11 @@ pnpm vitest run scripts/design-token-audit.test.ts --reporter=dot
 
 Expected: FAIL because `scripts/design-token-audit.mjs` does not exist.
 
-- [ ] **Step 3: Add the design-token audit script**
+  - Evidence: `pnpm vitest run scripts/design-token-audit.test.ts --reporter=dot`
+    exited 1 before the script existed with `MODULE_NOT_FOUND` for
+    `scripts/design-token-audit.mjs`.
+
+- [x] **Step 3: Add the design-token audit script**
 
 Create `scripts/design-token-audit.mjs`:
 
@@ -2291,7 +2299,11 @@ if (failures.length) {
 }
 ```
 
-- [ ] **Step 4: Add package script**
+  - Evidence: Created `scripts/design-token-audit.mjs`; reran
+    `pnpm vitest run scripts/design-token-audit.test.ts --reporter=dot` and it
+    passed with 2 tests.
+
+- [x] **Step 4: Add package script**
 
 Add to `package.json` scripts:
 
@@ -2299,7 +2311,10 @@ Add to `package.json` scripts:
 "lint:design": "node scripts/design-token-audit.mjs"
 ```
 
-- [ ] **Step 5: Create the component constitution**
+  - Evidence: Added `lint:design` to `package.json`; `pnpm lint:design` now runs
+    the scanner and reports the existing Step 8 surface/lib debt.
+
+- [x] **Step 5: Create the component constitution**
 
 Create `packages/ui/src/component-constitution.ts`:
 
@@ -2387,7 +2402,12 @@ export const componentContracts: ComponentContract[] = [
 ]
 ```
 
-- [ ] **Step 6: Add named typography and role tokens**
+  - Evidence: Created `packages/ui/src/component-constitution.ts` with tone,
+    density, padding, mode, emphasis, size, text, spacing, radius, component
+    contract, accessibility, protection, replacement, and explicit-exception
+    records; `pnpm --filter @guildhall/ui build` passed.
+
+- [x] **Step 6: Add named typography and role tokens**
 
 Update the package token source and generated `packages/ui/src/styles.css` so components can use roles instead of arbitrary scale picks:
 
@@ -2417,7 +2437,11 @@ Rules:
 - No negative letter spacing.
 - No `font-size` based on viewport width in app surfaces.
 
-- [ ] **Step 7: Write the governance audit**
+  - Evidence: Added named role tokens in `packages/ui/src/token-definitions.js`
+    and regenerated `packages/ui/src/styles.css`; `pnpm --filter @guildhall/ui build`
+    passed.
+
+- [x] **Step 7: Write the governance audit**
 
 Create `internal/audits/2026-06-01-ui-component-token-governance.md` with this structure:
 
@@ -2482,6 +2506,12 @@ Every primitive must name its variant axes and keep them bounded. New variants r
 - Fold local card, notice, status-row, and pill classes into canonical primitives as surfaces are touched.
 ```
 
+  - Evidence: Created
+    `internal/audits/2026-06-01-ui-component-token-governance.md` with the
+    governing constitution link, current signals, ownership map, typography,
+    spacing/radius, variant-budget, deletion-list, scanner, and open-exception
+    sections.
+
 - [ ] **Step 8: Convert the first surfaces**
 
 Start with the surfaces that showed obvious drift:
@@ -2507,6 +2537,11 @@ For each touched surface:
 - replace raw local padding/gap/radius with `--gh-*` tokens;
 - replace local status/card/notice classes with canonical primitives when a primitive exists.
 
+  - Deferred: Worker A scope for this slice excludes these Svelte surfaces and
+    package component implementation files. The scanner, tokens, constitution,
+    and audit are in place; the named surface conversion remains for the UI
+    surface/component owner.
+
 - [ ] **Step 9: Run the audit and focused UI tests**
 
 Run:
@@ -2518,6 +2553,13 @@ pnpm vitest run src/web/surfaces/project/__tests__/SettingsTab.svelte.test.ts sr
 ```
 
 Expected: PASS, with the design audit no longer flagging touched surfaces.
+
+  - Evidence: `pnpm vitest run scripts/design-token-audit.test.ts --reporter=dot`
+    passed with 2 tests.
+  - Deferred: `pnpm lint:design` currently exits 1 because Step 8 is not in
+    Worker A scope. It reports existing raw/legacy styling and duplicate
+    primitive debt across `src/web/lib/*`, `src/web/surfaces/*`, and the named
+    Task 7 surfaces.
 
 Commit:
 
