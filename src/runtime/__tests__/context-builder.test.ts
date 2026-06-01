@@ -5,6 +5,11 @@ import os from 'node:os'
 import { execFile } from 'node:child_process'
 import { promisify } from 'node:util'
 import { buildContext, resolveLikelyTaskFiles } from '../context-builder.js'
+import {
+  acceptStructuralMap,
+  draftStructuralMap,
+  submitStructuralMapForReview,
+} from '../structural-map.js'
 import type { Task } from '@guildhall/core'
 import { writeCheckpoint } from '@guildhall/tools'
 import { proposeProjectSkill, activateProjectSkillProposal } from '@guildhall/skills'
@@ -164,6 +169,60 @@ describe('buildContext — task summary', () => {
     expect(ctx.taskSummary).toContain('frontend/.env: PUBLIC_SUPABASE_URL, PUBLIC_SUPABASE_ANON_KEY, SUPABASE_SERVICE_ROLE_KEY')
     expect(ctx.taskSummary).not.toContain('anon-secret')
     expect(ctx.taskSummary).not.toContain('service-secret')
+  })
+
+  it.each([
+    { status: 'exploring' as const, role: 'spec' },
+    { status: 'in_progress' as const, role: 'worker' },
+    { status: 'review' as const, role: 'reviewer' },
+    { status: 'gate_check' as const, role: 'gate_checker' },
+  ])('injects accepted structural map slices into $role agent packets', async ({ status, role }) => {
+    const project = path.join(tmpDir, 'project')
+    const memoryDir = path.join(project, '.guildhall')
+    await fs.mkdir(path.join(project, 'packages', 'core', 'src'), { recursive: true })
+    await fs.writeFile(path.join(project, 'package.json'), `${JSON.stringify({
+      name: '@fixture/root',
+      private: true,
+      scripts: { test: 'vitest run' },
+      packageManager: 'pnpm@10.0.0',
+    }, null, 2)}\n`)
+    await fs.writeFile(path.join(project, 'pnpm-workspace.yaml'), 'packages:\n  - packages/*\n')
+    await fs.writeFile(path.join(project, 'packages', 'core', 'package.json'), `${JSON.stringify({
+      name: '@fixture/core',
+      scripts: { test: 'vitest run packages/core' },
+    }, null, 2)}\n`)
+    await fs.writeFile(path.join(project, 'packages', 'core', 'src', 'index.ts'), 'export const core = true\n')
+    const draft = await draftStructuralMap({
+      projectId: 'fixture',
+      projectRoot: project,
+      now: '2026-06-01T12:00:00.000Z',
+    })
+    await submitStructuralMapForReview({
+      projectRoot: project,
+      mapId: draft.id,
+      actor: 'coordinator:fixture',
+      now: '2026-06-01T12:01:00.000Z',
+    })
+    await acceptStructuralMap({
+      projectRoot: project,
+      mapId: draft.id,
+      actor: 'owner',
+      now: '2026-06-01T12:02:00.000Z',
+    })
+
+    const ctx = await buildContext({
+      ...baseTask,
+      status,
+      projectPath: project,
+      domain: 'core',
+      title: 'Fix core runtime',
+      description: 'Update packages/core/src/index.ts',
+    }, memoryDir)
+
+    expect(ctx.structuralMapContext).toContain(`Role: ${role}`)
+    expect(ctx.structuralMapContext).toContain('Primary domain: domain:core')
+    expect(ctx.structuralMapContext).toContain('Executable units: exec:fixture-core:test')
+    expect(ctx.formatted).toContain('## Structural Map Slice')
   })
 
   it('keeps only the summary portion of long spec markdown in the task summary', async () => {

@@ -7,6 +7,11 @@ import { buildContext } from '../context-builder.js'
 import { buildEffectiveMemoryPacket } from '../effective-memory-packet.js'
 import { recordMemoryObservation } from '../memory-store.js'
 import { writeContextDebugRecord } from '../context-observability.js'
+import {
+  acceptStructuralMap,
+  draftStructuralMap,
+  submitStructuralMapForReview,
+} from '../structural-map.js'
 import type { Task } from '@guildhall/core'
 
 let tmpDir: string
@@ -61,6 +66,105 @@ afterEach(async () => {
 })
 
 describe('effective memory packet', () => {
+  it('selects memory by accepted structural scope ids before flat project memory', async () => {
+    const projectRoot = path.dirname(memoryDir)
+    await fs.writeFile(path.join(projectRoot, 'package.json'), `${JSON.stringify({
+      name: '@fixture/root',
+      private: true,
+      packageManager: 'pnpm@10.0.0',
+    }, null, 2)}\n`)
+    await fs.writeFile(path.join(projectRoot, 'pnpm-workspace.yaml'), 'packages:\n  - packages/*\n')
+    await fs.mkdir(path.join(projectRoot, 'packages', 'core'), { recursive: true })
+    await fs.writeFile(path.join(projectRoot, 'packages', 'core', 'package.json'), `${JSON.stringify({
+      name: '@fixture/core',
+      scripts: { test: 'vitest run packages/core' },
+    }, null, 2)}\n`)
+    await fs.mkdir(path.join(projectRoot, 'packages', 'docs'), { recursive: true })
+    await fs.writeFile(path.join(projectRoot, 'packages', 'docs', 'package.json'), `${JSON.stringify({
+      name: '@fixture/docs',
+      scripts: { build: 'vitepress build docs' },
+    }, null, 2)}\n`)
+    const draft = await draftStructuralMap({
+      projectId: 'fixture',
+      projectRoot,
+      now: '2026-06-01T12:00:00.000Z',
+    })
+    await submitStructuralMapForReview({
+      projectRoot,
+      mapId: draft.id,
+      actor: 'coordinator:fixture',
+      now: '2026-06-01T12:01:00.000Z',
+    })
+    await acceptStructuralMap({
+      projectRoot,
+      mapId: draft.id,
+      actor: 'owner',
+      now: '2026-06-01T12:02:00.000Z',
+    })
+    await recordMemoryObservation({
+      memoryDir,
+      record: {
+        id: 'core-domain-rule',
+        scope: 'project',
+        type: 'codebase_knowledge',
+        status: 'active',
+        summary: 'Core runtime tests are the right proof path.',
+        content: 'Use focused core runtime tests before wider checks.',
+        tags: ['runtime'],
+        domains: [],
+        structuralScopes: ['domain:core', 'package:fixture-core'],
+        taskKinds: [],
+        fileAreas: [],
+        confidence: 'high',
+        risk: 'low',
+        freshness: 'fresh',
+        evidenceRefs: [],
+        createdAt: '2026-06-01T12:00:00.000Z',
+        updatedAt: '2026-06-01T12:00:00.000Z',
+        source: 'test',
+      },
+    })
+    await recordMemoryObservation({
+      memoryDir,
+      record: {
+        id: 'docs-domain-rule',
+        scope: 'project',
+        type: 'codebase_knowledge',
+        status: 'active',
+        summary: 'Docs builds prove content package changes.',
+        content: 'Use docs build for docs package work.',
+        tags: ['runtime'],
+        domains: [],
+        structuralScopes: ['package:fixture-docs'],
+        taskKinds: [],
+        fileAreas: [],
+        confidence: 'high',
+        risk: 'low',
+        freshness: 'fresh',
+        evidenceRefs: [],
+        createdAt: '2026-06-01T12:00:00.000Z',
+        updatedAt: '2026-06-01T12:00:00.000Z',
+        source: 'test',
+      },
+    })
+
+    const packet = await buildEffectiveMemoryPacket({
+      memoryDir,
+      task: task({
+        title: 'Fix core runtime behavior',
+        description: 'Update packages/core/src/index.ts and run runtime proof.',
+        domain: 'runtime',
+      }),
+    })
+
+    expect(packet.included.map(record => record.id)).toContain('core-domain-rule')
+    expect(packet.included.map(record => record.id)).not.toContain('docs-domain-rule')
+    expect(packet.withheld).toContainEqual(expect.objectContaining({
+      id: 'docs-domain-rule',
+      reason: 'structural-scope:mismatch',
+    }))
+  })
+
   it('includes active matching memory and withholds proposed or risky memory with evidence refs', async () => {
     await recordMemoryObservation({
       memoryDir,

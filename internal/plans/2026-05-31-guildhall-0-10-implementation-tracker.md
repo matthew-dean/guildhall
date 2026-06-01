@@ -174,27 +174,37 @@ provider/consumer dependency edges.
 
 **Primary source:** `internal/specs/2026-06-01-guildhall-0-10-state-machines-project-graph.md`
 
-- [ ] Add a small generic state-machine runtime with legal transitions,
+- [x] Add a small generic state-machine runtime with legal transitions,
   guards, required evidence, terminal states, and append-only transition
   receipts. The pure transition result must be only `applied` or `rejected`;
   idempotency-key replay belongs in command handling, not in the state-machine
-  result or transition table.
-- [ ] Migrate one small existing lifecycle, preferably capability requests, so
+  result or transition table. First implementation landed in
+  `src/runtime/state-machine.ts` with focused tests.
+- [x] Migrate one small existing lifecycle, preferably capability requests, so
   the primitive is proven outside the new project-graph feature without
-  rewriting the full task lifecycle.
-- [ ] Draft and persist a local project graph that can include other local
+  rewriting the full task lifecycle. Capability request approve, deny, block,
+  and revoke now route through a machine and append transition receipts.
+- [x] Draft and persist a local project graph that can include other local
   Guildhall projects, domains, packages, executable units, external authority
-  references, and delivery channels.
-- [ ] Add a project dependency edge state machine where provider completion is
+  references, and delivery channels. Initial user-level registry and local
+  graph snapshot are persisted under `~/.guildhall/project-graph/`.
+- [x] Add a project dependency edge state machine where provider completion is
   not enough; the edge resolves only after consumer verification, an explicit
-  alternate outcome, or closure/deferment.
-- [ ] Add coordinator negotiation packets so consumer and provider coordinators
+  alternate outcome, or closure/deferment. Edge helpers now cover provider
+  import, shaping, delivery, consumer review, consumer return, revised plan,
+  redelivery, and final acceptance.
+- [x] Add coordinator negotiation packets so consumer and provider coordinators
   talk through the neutral graph exchange while each reasons from its own
   project context. Do not build a blended cross-project prompt or let one
-  coordinator impersonate another project's authority.
-- [ ] Prove request, provider shaping, delivery receipt, consumer verification,
+  coordinator impersonate another project's authority. The implementation
+  writes provider requests and consumer returns to the neutral exchange, and
+  writes project-local mirrors only from the matching provider/consumer
+  authority helper.
+- [x] Prove request, provider shaping, delivery receipt, consumer verification,
   consumer return, redelivery, and final acceptance with local fixtures such as
-  Looma/Knit while keeping the model provider-neutral.
+  Looma/Knit while keeping the model provider-neutral. Runtime tests use
+  local Knit/Looma fixtures while asserting provider/consumer authority rather
+  than product-specific behavior.
 
 ## Milestone 3: Structural And Domain Intelligence
 
@@ -203,11 +213,327 @@ context, memory, and Git policy are grounded in evidence.
 
 **Primary source:** `internal/specs/2026-05-29-guildhall-0-10-structural-domain-intelligence.md`
 
-- [ ] Draft and persist a structural map without mutating target repo config.
-- [ ] Keep project/workspace/monorepo/package/domain/executable/Git authority
-  concepts separate in the runtime model.
-- [ ] Use the structural map to improve context manifests and omission audits.
-- [ ] Add owner review/correction flow before the map becomes routing truth.
+### Status
+
+Foundation slice complete, feature not complete. The branch currently has the
+first structural-map runtime primitive, persistence location, deterministic
+owner-review machine, focused context-slice helper, and one cross-project
+handoff test path. It does **not** yet have full domain inference, UI review,
+agent packet integration, coordinator assignment, or remote authority support.
+
+### Completed Foundation
+
+- [x] Create structural-map records under
+  `.guildhall/structural-map/drafts/<map-id>.json`, accepted map at
+  `.guildhall/structural-map/accepted.json`, and transition receipts under
+  `.guildhall/structural-map/receipts/<map-id>.jsonl`.
+- [x] Avoid target repo registration side effects: discovery does not create
+  `guildhall.yaml`.
+- [x] Add a deterministic structural-map review state machine:
+  `draft -> owner_review -> accepted`,
+  `owner_review -> correction_requested -> owner_review -> accepted`, and
+  `* -> superseded` where allowed.
+- [x] Add initial runtime model nodes for project, workspace, monorepo,
+  package, domain group, cross-cutting domain, executable unit, and Git
+  authority root.
+- [x] Detect pnpm workspace package nodes, package dependency edges,
+  package-local executable units, root executable units, and vendored
+  dependency Git metadata.
+- [x] Add a focused structural context-slice helper with routing authority,
+  handles, executable units, and omitted unrelated package reasons.
+- [x] Add cross-project request shaping from accepted consumer/provider maps
+  into the project graph, preserving the rule that projects publish requests
+  and never write into each other's project state.
+- [x] Prove the foundation path with tests for draft persistence, review,
+  correction, acceptance, context slicing, provider import, provider delivery,
+  consumer verification, and return-for-revision.
+
+### Remaining Work Ledger
+
+**Remaining: 0 items. Next item: merge decision once the active bounded-chat worktree on `0.10.0` is clean enough to receive this branch.**
+
+Verification on `feature/0.10-structural-domain-intelligence`: `pnpm
+typecheck` passed; `pnpm vitest run src/runtime/__tests__/project-graph.test.ts
+src/runtime/__tests__/serve-settings.test.ts
+src/web/surfaces/project/__tests__/SettingsTab.svelte.test.ts` passed with 82
+tests; `pnpm vitest run src/runtime/__tests__/structural-map.test.ts
+src/runtime/__tests__/context-builder.test.ts
+src/runtime/__tests__/effective-memory-packet.test.ts` passed with 89 tests;
+`pnpm build` passed. Full `pnpm test` remains blocked by bounded-chat UI tests
+outside this branch's changed files:
+`src/web/surfaces/__tests__/ProjectView.svelte.test.ts` and
+`src/web/surfaces/project/__tests__/ThreadTab.svelte.test.ts`.
+
+18. [x] Persist explicit project-domain authority assignments in the local
+    project graph. After this: expose project-graph actions through the project
+    API.
+    Completed in `feature/0.10-structural-domain-intelligence`: the global
+    local project graph now records domain authority assignments separately
+    from dependency requests, preserves those assignments in scoped graph views,
+    and never writes provider project state during assignment.
+19. [x] Add project API actions for assigning domain authority and moving
+    provider/consumer requests through the state machine from each owning
+    project context. After this: surface the graph in settings.
+    Completed in `feature/0.10-structural-domain-intelligence`: the project
+    API supports domain authority assignment plus provider accept/plan/deliver
+    and consumer review/return/accept actions, each scoped through the current
+    project path and the existing authority checks.
+20. [x] Add a settings graph surface that shows structural domains, lets the
+    owner assign each domain to a local project, and displays inbound/outgoing
+    dependency requests. After this: add request action controls.
+    Completed in `feature/0.10-structural-domain-intelligence`: Settings now
+    has a Project graph section with structural-domain assignment controls,
+    local project visibility, and inbound/outgoing request cards.
+21. [x] Add request action controls for provider intake/planning/delivery and
+    consumer review/return/acceptance, always scoped to the current project
+    authority. After this: prove the flow with tests.
+    Completed in `feature/0.10-structural-domain-intelligence`: request cards
+    expose only the actions valid for the current project role and edge state.
+22. [x] Add runtime/API/UI tests for the full cross-project domain lifecycle:
+    assign domain, create request, provider sees inbound request, provider
+    accepts/plans/delivers, consumer verifies/returns, provider redelivers, and
+    consumer accepts. After this: rerun verification, update this ledger, commit
+    and push.
+    Evidence: `pnpm vitest run src/runtime/__tests__/project-graph.test.ts
+    src/runtime/__tests__/serve-settings.test.ts
+    src/web/surfaces/project/__tests__/SettingsTab.svelte.test.ts` passed with
+    82 tests.
+23. [x] Make the project graph itself list detected structural domains and
+    local coordinator domains, while keeping separately registered local
+    projects unassigned until the owner explicitly assigns authority. This is
+    the monorepo boundary rule: domains/coordinators detected inside the
+    ingested project graph are automatic graph nodes; external sibling projects
+    are selectable but are not auto-assigned.
+    Evidence: focused graph/API/UI tests now pass with 83 tests.
+
+### Project Graph UX Walkthrough Fix Plan
+
+**Remaining: 0 items. Next item: merge decision once the active bounded-chat worktree on `0.10.0` is clean enough to receive this branch.**
+
+Walkthrough finding: the underlying graph now has the right boundary model, but
+the UI still asks the owner to infer too much. A user needs to see which domains
+were detected in this project, which project is responsible for each domain,
+which nearby projects are merely available for manual assignment, and who is
+waiting on whom for each dependency request.
+
+1. [x] Rename and reframe the domain panel around responsibilities, not vague
+   ownership. Show each domain as detected in this project, explicitly assigned
+   elsewhere, explicitly assigned here, or not externally assigned.
+2. [x] Separate local project rows so the current project, connected projects,
+   and unrelated registered projects are visually and textually distinct.
+   Related external projects should read as available for manual assignment,
+   not implied owners.
+3. [x] Make dependency request cards show waiting-on provider/consumer in plain
+   language, plus the current project's role on that request.
+4. [x] Add focused Settings UI tests for the clarified walkthrough language:
+   detected domain, unassigned external responsibility, related project
+   available for assignment, and waiting-on text.
+5. [x] Rerun focused graph/API/UI verification, update this fix plan, commit,
+   and push.
+   Evidence: `pnpm typecheck` passed; `pnpm vitest run
+   src/runtime/__tests__/project-graph.test.ts
+   src/runtime/__tests__/serve-settings.test.ts
+   src/web/surfaces/project/__tests__/SettingsTab.svelte.test.ts` passed with
+   83 tests; `pnpm build` passed.
+
+### Project Graph Responsibility Facets And Child Projects
+
+**Remaining: 0 items. Next item: merge decision once the active bounded-chat worktree on `0.10.0` is clean enough to receive this branch.**
+
+Live walkthrough finding: Narrative Harness can technically assign a whole
+domain such as `Product` or `Specs` to `Looma + Knit`, but that is the wrong
+level of authority. The graph needs to show first-class child projects such as
+`Looma` and `Knit`, and domain responsibilities need leaf facets so a consumer
+can request provider capability from another project without giving away local
+product/configuration authority. For example, Looma can own reusable component
+capability and the shared theme contract, while Narrative Harness owns token
+values, product taste, and consumer verification.
+
+1. [x] Add failing runtime tests that expand registered workspace child
+   projects into selectable local graph nodes without making the workspace
+   council the only provider target.
+2. [x] Add failing runtime tests for domain responsibility facets:
+   `provider_capability`, `shared_contract`, `consumer_configuration`, and
+   `consumer_verification`, including Narrative Harness + Looma-style
+   ownership boundaries.
+3. [x] Implement child-project graph expansion from `guildhall.yaml` workspace
+   `projects`, preserving project-local paths and current/related/connected
+   roles.
+4. [x] Implement persistent responsibility-facet assignment records in the
+   local project graph registry, with project-scoped assignment helpers and
+   scoped graph views.
+5. [x] Expose responsibility facets in the Settings graph API while keeping
+   the owner-facing Settings graph focused on domains first, not internal
+   responsibility machinery.
+6. [x] Add focused Settings UI tests for child project visibility and facet
+   wording/actions.
+7. [x] Run focused graph/API/UI verification, refresh the live browser
+   walkthrough on Narrative Harness, update this ledger/audit, commit, and
+   push.
+   Evidence: `pnpm typecheck` passed; `pnpm vitest run
+   src/runtime/__tests__/project-graph.test.ts
+   src/runtime/__tests__/serve-settings.test.ts
+   src/web/surfaces/project/__tests__/SettingsTab.svelte.test.ts` passed with
+   86 tests; `pnpm build` passed; `pnpm dev:install` refreshed the installed
+   app; service restart returned `/api/stale-server` with `stale:false`; live
+   browser walkthrough on
+   `http://localhost:7777/projects/narrative-harness/settings/graph` confirmed
+   provider/shared/consumer facets, standalone `Looma` and `Knit` child-project
+   options, and local consumer configuration/verification labels.
+8. [x] Simplify the Settings project-graph UI after live walkthrough feedback:
+   show domains as clickable graph nodes, move assignment into a focused domain
+   detail panel, remove select-box-plus-assign controls from the main graph,
+   and keep consumer-side responsibility text as plain local context. Focused
+   UI test passes.
+9. [x] Flatten nested card treatments in the Settings project graph: major
+   sections remain framed, but local-project rows, domain detail sections, and
+   dependency requests no longer render as utility-panel cards inside graph
+   cards. Added a UI regression check that `.graph-card` does not contain
+   nested `.utility-panel` elements.
+10. [x] Replace raw managed-project dumps with a scalable assignment picker:
+    the graph summarizes the managed-project index, stops calling unmanaged
+    semantic relationships "related", and only reveals matching project names
+    inside a search picker after `Assign to project`.
+
+1. [x] Replace the current pnpm-only discovery core with a provider interface
+   for package/workspace discovery. After this: implement JS/npm/yarn/bun
+   providers. Completed in `feature/0.10-structural-domain-intelligence`:
+   `draftStructuralMap` now accepts structural discovery providers, default
+   pnpm workspace discovery is behind `pnpmStructuralDiscoveryProvider`, and
+   provider evidence is recorded on drafts.
+2. [x] Add JS package-manager providers for npm, yarn, bun, and package.json
+   workspaces, including lockfile/source evidence where cheap. After this:
+   add non-JS fixtures. Completed in
+   `feature/0.10-structural-domain-intelligence`: default structural
+   discovery now includes npm, yarn, bun, and package.json workspace providers,
+   detects lockfile/workspace evidence, and emits package-manager-specific
+   executable commands.
+3. [x] Add non-JS structural fixtures and minimal detectors for Python, Rust,
+   PHP/Composer, .NET solution/project files, and docs-only repos. After this:
+   add module/class architecture inference. Completed in
+   `feature/0.10-structural-domain-intelligence`: default discovery now
+   includes minimal providers for `pyproject.toml`, Cargo workspaces,
+   Composer projects, `.sln`/`.csproj` solutions, and docs-only repositories,
+   each with focused fixture coverage and evidence refs.
+4. [x] Add module/class architecture inference for app folders, namespaces,
+   routes, services, migrations, jobs, commands, and tests when packages do
+   not describe domains. After this: expand cross-cutting concern inference.
+   Completed in `feature/0.10-structural-domain-intelligence`: default
+   discovery now includes a module-architecture provider that clusters
+   conventional services, controllers, routes, migrations, tests, jobs, and
+   commands into evidence-backed domain groups without treating them as
+   packages.
+5. [x] Expand cross-cutting concern inference beyond node-copy reduction:
+   parser parity, design-system reuse, auth/session security, migrations,
+   accessibility, observability, release packaging, and owner-defined custom
+   domains. After this: add evidence/conflict scoring. Completed in
+   `feature/0.10-structural-domain-intelligence`: cross-cutting inference now
+   covers those common concerns, preserves node-copy reduction, and reads
+   owner-defined cross-cutting domains from
+   `.guildhall/structural-domains.json`.
+6. [x] Add structural evidence scoring, freshness, conflicts, and owner
+   questions per node/edge instead of coarse confidence labels. After this:
+   add refresh/diff behavior. Completed in
+   `feature/0.10-structural-domain-intelligence`: final map nodes and edges
+   now carry evidence scores and freshness, duplicate structural IDs merge
+   evidence instead of overwriting, label conflicts are preserved, and conflict
+   owner questions are generated.
+7. [x] Add structural-map refresh/diff support so manifest/source/Git changes
+   mark only affected map areas stale and ask review questions only where
+   routing, memory, commands, or Git authority changes. After this: wire maps
+   into task routing. Completed in
+   `feature/0.10-structural-domain-intelligence`: `refreshStructuralMap`
+   redrafts current structure, diffs it against a prior map, classifies review
+   impact, writes `.guildhall/structural-map/refreshes/<refresh-id>.json`, and
+   creates targeted review questions for changed routing/command/Git/memory
+   areas.
+8. [x] Use accepted structural maps in actual task routing and coordinator
+   assignment, including domain coordinators and cross-cutting domain
+   activation. After this: wire maps into context-builder. Completed in
+   `feature/0.10-structural-domain-intelligence`: `routeTaskWithStructuralMap`
+   now requires an accepted map and returns primary domain, coordinator,
+   package nodes, executable units, Git authority root, activated
+   cross-cutting domains, and route reasons.
+9. [x] Integrate structural slices into `buildContext`/agent packets for spec,
+   worker, reviewer, and gate-checker roles with role-specific budget tiers.
+   After this: add omitted-context audit persistence. Completed in
+   `feature/0.10-structural-domain-intelligence`: `buildContext` now loads an
+   accepted structural map when present, injects a structural map section into
+   formatted context, exposes `structuralMapContext`, and renders role-specific
+   budget tiers for spec, worker, reviewer, and gate-checker packets.
+10. [x] Persist context-debug/omitted-context records with structural handles
+    and reasons, and expose enough data for agents to retrieve deferred
+    context on demand. After this: wire memory scopes. Completed in
+    `feature/0.10-structural-domain-intelligence`: `BuiltContext` carries
+    structural omissions, context debug records persist omitted handles with
+    reasons/confidence/retrieval hints, and context snapshots render deferred
+    structural handles explicitly.
+11. [x] Connect structural map scopes to memory selection/promotion so
+    repo-global, domain, package, executable-unit, cross-cutting, and
+    task-specific memories do not compete as flat project memory. After this:
+    add owner review UI. Completed in
+    `feature/0.10-structural-domain-intelligence`: memory records now support
+    `structuralScopes`, effective memory derives task route scope ids from the
+    accepted structural map, and structurally mismatched memory is withheld
+    instead of included through generic tag overlap.
+12. [x] Build the owner review/correction UI for detected Git roots, ignored
+    roots, package graph, domain groups, cross-cutting domains, executable
+    units, confidence, conflicts, and questions. After this: add UI actions.
+    Completed in `feature/0.10-structural-domain-intelligence`: `/api/project`
+    now includes an accepted structural-map review summary and Project
+    Overview renders the owner-visible map state, counts, Git roots, ignored
+    roots, packages, domains, cross-cutting domains, executable units,
+    conflicts, and owner questions without granting cross-project write
+    authority.
+13. [x] Add UI actions for accept, rename, merge, split, mark cross-cutting,
+    mark package-only, ignore with reason, and defer decision. After this:
+    add coordinator communication records.
+    Completed in `feature/0.10-structural-domain-intelligence`: structural
+    map review actions now run through deterministic transition primitives and
+    a project-owned `/api/project/structural-map/action` endpoint; Project
+    Overview posts owner requests for accepting, renaming, merging, splitting,
+    marking cross-cutting/package-only, ignoring, and deferring decisions, then
+    refreshes the local review summary.
+14. [x] Add explicit coordinator communication records for structural domain
+    requests: consumer request packet, provider intake packet, negotiated
+    delivery plan, delivery receipt, consumer return packet, and final
+    acceptance summary with each coordinator's own project context. After this:
+    add project graph visualization/query.
+    Completed in `feature/0.10-structural-domain-intelligence`: project
+    dependency edges now carry typed coordinator communication records, the
+    neutral exchange persists
+    `.guildhall-home/project-graph/exchange/coordinator-communications/<edge-id>.jsonl`,
+    and each lifecycle record includes the speaking coordinator's own project
+    context rather than granting any coordinator cross-project write authority.
+15. [x] Add project-graph queries/views that include other local projects,
+    local authority roots, provider-owned domains, dependency edges, delivery
+    channels, and unresolved requests. After this: add delivery-channel
+    abstraction.
+    Completed in `feature/0.10-structural-domain-intelligence`:
+    `queryProjectGraphView` projects the current local project, related local
+    projects, provider authority roots/domains, dependency edges, delivery
+    channels, and unresolved requests; `/api/project/project-graph` serves the
+    scoped view for the selected project.
+16. [x] Generalize delivery channels beyond npm/dev tags to package-manager
+    coordinates, local path artifacts, docs/spec artifacts, patches, releases,
+    MCP artifact IDs, and future remote authority refs without overfitting to
+    Looma/Knit. After this: add remote authority extension points.
+    Completed in `feature/0.10-structural-domain-intelligence`: dependency
+    plans and delivery receipts now accept ecosystem-neutral delivery channel
+    descriptors covering package-manager coordinates, local path artifacts,
+    docs/spec artifacts, patches, releases, MCP artifact IDs, and future
+    remote authority refs; the project-graph view preserves descriptor kind,
+    label, and coordinates while keeping legacy string channels compatible.
+17. [x] Add remote authority extension points for future Jira/Linear/GitHub
+    issue truth sources while keeping 0.10 execution local and request-based.
+    After this: run full milestone verification and decide whether to merge
+    into `0.10.0` or keep slicing.
+    Completed in `feature/0.10-structural-domain-intelligence`: dependency
+    edges can carry local-only remote authority refs for Jira, Linear, GitHub
+    Issues, and generic future systems; scoped project-graph views expose those
+    refs with `executionMode: local_request_reference`, preserving the 0.10
+    rule that local projects negotiate requests instead of letting remote
+    systems or other projects write into project state.
 
 ## Milestone 4: External Task Authority
 

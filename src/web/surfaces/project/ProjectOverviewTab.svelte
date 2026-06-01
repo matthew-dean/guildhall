@@ -20,7 +20,7 @@
   import { summarizeEvent } from '../../lib/events.js'
   import { friendlyTaskId } from '../../lib/identifier-labels.js'
   import { nav, path } from '../../lib/nav.svelte.js'
-  import { currentProjectHref, currentTaskHref, projectActionHref } from '../../lib/project-routes.js'
+  import { currentProjectHref, currentTaskHref, projectActionHref, projectFetch } from '../../lib/project-routes.js'
   import { inboxItemKey, type InboxItem } from '../../lib/inbox-item-key.js'
   import type { EventEnvelope, ProjectDetail, Task } from '../../lib/types.js'
   import { hasCurrentGitUnavailableStory, type ProjectActivityLine } from '../../lib/project-activity.js'
@@ -49,6 +49,15 @@
 
   type Tone = 'neutral' | 'ok' | 'warn' | 'danger' | 'accent' | 'running'
   type NextActionKind = 'navigate' | 'migration'
+  type StructuralMapAction =
+    | { kind: 'accept' }
+    | { kind: 'rename_node'; nodeId: string; label: string }
+    | { kind: 'merge_nodes'; sourceNodeId: string; targetNodeId: string; label?: string }
+    | { kind: 'split_node'; nodeId: string; newNodeId: string; label: string }
+    | { kind: 'mark_cross_cutting'; nodeId: string }
+    | { kind: 'mark_package_only'; nodeId: string }
+    | { kind: 'ignore_node'; nodeId: string; reason: string }
+    | { kind: 'defer_decision'; questionId: string; reason?: string }
 
   interface BlockedRow {
     task: Task
@@ -65,12 +74,17 @@
     href: string
   }
 
+  let localStructuralMapReview = $state<ProjectDetail['structuralMapReview'] | null>(null)
+  let structuralMapActionError = $state<string | null>(null)
+  let structuralMapActionBusy = $state(false)
+
   const tasks = $derived(detail.tasks ?? [])
   const displayPath = $derived(formatUserPath(detail.path))
   const running = $derived(detail.run?.status === 'running')
   const actionableInbox = $derived(inboxItems.filter(item => item.severity !== 'low').slice(0, 3))
   const runtime = $derived(detail.runtime ?? null)
   const memoryHealth = $derived(detail.memoryHealth ?? null)
+  const structuralMapReview = $derived(localStructuralMapReview ?? detail.structuralMapReview ?? null)
   const primaryProofPaths = $derived.by(() => {
     return tasks
       .flatMap(task => (task.proofPaths ?? []).map(proofPath => ({ task, proofPath })))
@@ -312,6 +326,21 @@
     }
   }
 
+  const structuralMapMetricRows = $derived.by(() => {
+    const counts = structuralMapReview?.counts
+    if (!counts) return []
+    return [
+      countLabel(counts.packages ?? 0, 'package'),
+      countLabel(counts.domains ?? 0, 'domain'),
+      countLabel(counts.crossCuttingDomains ?? 0, 'cross-cutting'),
+      countLabel(counts.executableUnits ?? 0, 'command'),
+      countLabel(counts.gitRoots ?? 0, 'Git root'),
+      countLabel(counts.ignoredGitRoots ?? 0, 'ignored root'),
+      countLabel(counts.conflicts ?? 0, 'conflict'),
+      countLabel(counts.questions ?? 0, 'question'),
+    ]
+  })
+
   const blockedRows = $derived.by(() => {
     return tasks
       .filter(task => task.status === 'blocked' || activeEscalations(task).length > 0 || (Boolean(task.blockReason) && !isRunnableStatus(task.status)))
@@ -534,6 +563,53 @@
     nav(projectActionHref(href, activeProjectId), { backgroundPath: path.value })
   }
 
+  async function applyStructuralMapAction(action: StructuralMapAction): Promise<void> {
+    if (!structuralMapReview?.id || structuralMapActionBusy) return
+    structuralMapActionBusy = true
+    structuralMapActionError = null
+    try {
+      const res = await projectFetch('/api/project/structural-map/action', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ mapId: structuralMapReview.id, action }),
+      }, activeProjectId)
+      const body = await res.json().catch(() => ({})) as {
+        structuralMapReview?: ProjectDetail['structuralMapReview']
+        error?: string
+      }
+      if (!res.ok) throw new Error(body.error ?? 'Could not update the project map.')
+      localStructuralMapReview = body.structuralMapReview ?? null
+    } catch (err) {
+      structuralMapActionError = err instanceof Error ? err.message : String(err)
+    } finally {
+      structuralMapActionBusy = false
+    }
+  }
+
+  function promptStructuralRename(nodeId: string, currentLabel: string): void {
+    const label = window.prompt('Rename structural item', currentLabel)?.trim()
+    if (!label || label === currentLabel) return
+    void applyStructuralMapAction({ kind: 'rename_node', nodeId, label })
+  }
+
+  function promptStructuralSplit(nodeId: string, currentLabel: string): void {
+    const label = window.prompt('New structural item label', currentLabel)?.trim()
+    if (!label) return
+    void applyStructuralMapAction({ kind: 'split_node', nodeId, newNodeId: `domain:${label.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '')}`, label })
+  }
+
+  function promptStructuralIgnore(nodeId: string): void {
+    const reason = window.prompt('Reason to ignore this structural item')?.trim()
+    if (!reason) return
+    void applyStructuralMapAction({ kind: 'ignore_node', nodeId, reason })
+  }
+
+  function promptStructuralMerge(sourceNodeId: string): void {
+    const targetNodeId = window.prompt('Merge into structural item id')?.trim()
+    if (!targetNodeId || targetNodeId === sourceNodeId) return
+    void applyStructuralMapAction({ kind: 'merge_nodes', sourceNodeId, targetNodeId })
+  }
+
   function proofRank(status: string | undefined): number {
     switch (status) {
       case 'blocked': return 0
@@ -564,6 +640,21 @@
     if (mode === 'runtime-backed') return 'Podman runtime mode'
     if (mode === 'host-run') return 'Compatibility mode'
     return 'Runtime mode unknown'
+  }
+
+  function countLabel(value: number, singular: string): string {
+    return `${value} ${value === 1 ? singular : `${singular}s`}`
+  }
+
+  function structuralStateLabel(value: string | undefined): string {
+    switch (value) {
+      case 'accepted': return 'Accepted'
+      case 'owner_review': return 'Owner review'
+      case 'correction_requested': return 'Correction requested'
+      case 'draft': return 'Draft'
+      case 'superseded': return 'Superseded'
+      default: return 'Unknown'
+    }
   }
 </script>
 
@@ -753,6 +844,123 @@
         </UtilityPanel>
       </div>
     </Card>
+
+    {#if structuralMapReview}
+      <Card title="Project map" titleTag="h2" className="overview-card">
+        <div class="structural-map-review">
+          <div class="map-review-head">
+            <Chip label={structuralStateLabel(structuralMapReview.state)} tone={structuralMapReview.state === 'accepted' ? 'ok' : structuralMapReview.state === 'correction_requested' ? 'warn' : 'neutral'} />
+            {#if structuralMapReview.generatedAt}
+              <span>Mapped {formatDate(structuralMapReview.generatedAt)}</span>
+            {/if}
+          </div>
+          <div class="map-action-bar">
+            {#if structuralMapReview.state !== 'accepted'}
+              <Button variant="secondary" size="sm" onclick={() => void applyStructuralMapAction({ kind: 'accept' })} disabled={structuralMapActionBusy}>
+                <Icon name="check" size={14} />
+                Accept map
+              </Button>
+            {/if}
+            {#if (structuralMapReview.domains ?? [])[0]}
+              <Button variant="ghost" size="sm" onclick={() => promptStructuralRename((structuralMapReview.domains ?? [])[0].id, (structuralMapReview.domains ?? [])[0].label)} disabled={structuralMapActionBusy}>
+                Rename
+              </Button>
+              <Button variant="ghost" size="sm" onclick={() => promptStructuralMerge((structuralMapReview.domains ?? [])[0].id)} disabled={structuralMapActionBusy}>
+                Merge
+              </Button>
+              <Button variant="ghost" size="sm" onclick={() => promptStructuralSplit((structuralMapReview.domains ?? [])[0].id, (structuralMapReview.domains ?? [])[0].label)} disabled={structuralMapActionBusy}>
+                Split
+              </Button>
+              <Button variant="ghost" size="sm" onclick={() => void applyStructuralMapAction({ kind: 'mark_cross_cutting', nodeId: (structuralMapReview.domains ?? [])[0].id })} disabled={structuralMapActionBusy}>
+                Cross-cutting
+              </Button>
+              <Button variant="ghost" size="sm" onclick={() => promptStructuralIgnore((structuralMapReview.domains ?? [])[0].id)} disabled={structuralMapActionBusy}>
+                Ignore
+              </Button>
+            {/if}
+            {#if (structuralMapReview.packages ?? [])[0]}
+              <Button variant="ghost" size="sm" onclick={() => void applyStructuralMapAction({ kind: 'mark_package_only', nodeId: (structuralMapReview.packages ?? [])[0].id })} disabled={structuralMapActionBusy}>
+                Package-only
+              </Button>
+            {/if}
+            {#if (structuralMapReview.questions ?? [])[0]}
+              <Button variant="ghost" size="sm" onclick={() => void applyStructuralMapAction({ kind: 'defer_decision', questionId: (structuralMapReview.questions ?? [])[0].id })} disabled={structuralMapActionBusy}>
+                Defer
+              </Button>
+            {/if}
+          </div>
+          {#if structuralMapActionError}
+            <p class="map-action-error">{structuralMapActionError}</p>
+          {/if}
+
+          <div class="map-metrics" aria-label="Project map counts">
+            {#each structuralMapMetricRows as metric (metric)}
+              <span>{metric}</span>
+            {/each}
+          </div>
+
+          <div class="map-review-sections">
+            {#if (structuralMapReview.domains ?? []).length > 0 || (structuralMapReview.crossCuttingDomains ?? []).length > 0}
+              <div class="map-review-section">
+                <strong>Domains</strong>
+                <div class="map-token-list">
+                  {#each [...(structuralMapReview.domains ?? []), ...(structuralMapReview.crossCuttingDomains ?? [])] as item (item.id)}
+                    <span>{item.label}</span>
+                  {/each}
+                </div>
+              </div>
+            {/if}
+
+            {#if (structuralMapReview.packages ?? []).length > 0}
+              <div class="map-review-section">
+                <strong>Packages</strong>
+                <div class="map-token-list">
+                  {#each (structuralMapReview.packages ?? []).slice(0, 4) as item (item.id)}
+                    <span>{item.label}</span>
+                  {/each}
+                </div>
+              </div>
+            {/if}
+
+            {#if (structuralMapReview.executableUnits ?? []).length > 0}
+              <div class="map-review-section">
+                <strong>Executable units</strong>
+                <div class="map-token-list">
+                  {#each (structuralMapReview.executableUnits ?? []).slice(0, 3) as item (item.id)}
+                    <span>{item.command ?? item.label}</span>
+                  {/each}
+                </div>
+              </div>
+            {/if}
+
+            {#if (structuralMapReview.gitRoots ?? []).length > 0 || (structuralMapReview.ignoredGitRoots ?? []).length > 0}
+              <div class="map-review-section">
+                <strong>Git authority</strong>
+                <div class="map-token-list">
+                  {#each [...(structuralMapReview.gitRoots ?? []), ...(structuralMapReview.ignoredGitRoots ?? [])] as item (item.id)}
+                    <span>{item.path ?? item.label}</span>
+                  {/each}
+                </div>
+              </div>
+            {/if}
+
+            {#if (structuralMapReview.conflicts ?? []).length > 0}
+              <div class="map-review-section map-review-warning">
+                <strong>Conflicts</strong>
+                <span>{(structuralMapReview.conflicts ?? []).map(item => item.message).filter(Boolean).join(' ')}</span>
+              </div>
+            {/if}
+
+            {#if (structuralMapReview.questions ?? []).length > 0}
+              <div class="map-review-section map-review-warning">
+                <strong>Questions</strong>
+                <span>{(structuralMapReview.questions ?? []).map(item => item.prompt).filter(Boolean).join(' ')}</span>
+              </div>
+            {/if}
+          </div>
+        </div>
+      </Card>
+    {/if}
 
     <Card title="Primary proof paths" titleTag="h2" className="overview-card">
       {#if primaryProofPaths.length === 0}
@@ -1003,6 +1211,75 @@
   }
   :global(.run-plan-row) {
     grid-template-columns: auto minmax(0, 1fr) auto;
+  }
+  .structural-map-review,
+  .map-review-sections {
+    display: grid;
+    gap: var(--s-3);
+    min-width: 0;
+  }
+  .map-review-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: var(--s-2);
+    color: var(--text-muted);
+    font-size: var(--fs-1);
+  }
+  .map-metrics {
+    display: flex;
+    flex-wrap: wrap;
+    gap: var(--s-1);
+  }
+  .map-action-bar {
+    display: flex;
+    flex-wrap: wrap;
+    gap: var(--s-1);
+  }
+  .map-action-error {
+    margin: 0;
+    color: var(--danger);
+    font-size: var(--fs-1);
+    line-height: var(--lh-body);
+  }
+  .map-metrics span {
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    padding: 0.2rem 0.45rem;
+    color: var(--text-muted);
+    font-size: var(--fs-0);
+    font-weight: 700;
+  }
+  .map-review-section {
+    display: grid;
+    gap: var(--s-1);
+    min-width: 0;
+    padding-top: var(--s-2);
+    border-top: 1px solid var(--border);
+  }
+  .map-review-section strong {
+    color: var(--text);
+    font-size: var(--fs-1);
+  }
+  .map-review-section span,
+  .map-token-list span {
+    color: var(--text-muted);
+    font-size: var(--fs-1);
+    line-height: var(--lh-body);
+    overflow-wrap: anywhere;
+  }
+  .map-token-list {
+    display: flex;
+    flex-wrap: wrap;
+    gap: var(--s-1);
+  }
+  .map-token-list span {
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    padding: 0.15rem 0.4rem;
+  }
+  .map-review-warning span {
+    color: var(--text);
   }
   .event-row {
     display: grid;

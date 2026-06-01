@@ -3,6 +3,7 @@ import fsp from 'node:fs/promises'
 import path from 'node:path'
 import { z } from 'zod'
 import { atomicWriteText } from '@guildhall/sessions'
+import { applyCapabilityRequestTransition } from './capability-request-machine.js'
 
 export const CapabilityMount = z.object({
   hostPath: z.string(),
@@ -28,6 +29,26 @@ export const CapabilityGrant = z.object({
 })
 export type CapabilityGrant = z.infer<typeof CapabilityGrant>
 
+export const CapabilityRequestStatus = z.enum(['pending', 'approved', 'denied', 'blocked', 'revoked'])
+export type CapabilityRequestStatus = z.infer<typeof CapabilityRequestStatus>
+
+export const CapabilityRequestTransitionEvent = z.enum(['approve', 'deny', 'block', 'revoke'])
+export type CapabilityRequestTransitionEvent = z.infer<typeof CapabilityRequestTransitionEvent>
+
+export const CapabilityRequestTransitionReceipt = z.object({
+  machineId: z.literal('capability-request'),
+  machineVersion: z.number(),
+  commandId: z.string().optional(),
+  entityId: z.string(),
+  from: CapabilityRequestStatus,
+  event: CapabilityRequestTransitionEvent,
+  to: CapabilityRequestStatus,
+  actor: z.string(),
+  evidenceRefs: z.array(z.string()),
+  createdAt: z.string(),
+})
+export type CapabilityRequestTransitionReceipt = z.infer<typeof CapabilityRequestTransitionReceipt>
+
 export const CapabilityRequest = z.object({
   id: z.string(),
   taskId: z.string(),
@@ -37,12 +58,13 @@ export const CapabilityRequest = z.object({
   duration: z.string().default('this task'),
   fallback: z.string().optional(),
   mount: CapabilityMount,
-  status: z.enum(['pending', 'approved', 'denied', 'blocked', 'revoked']),
+  status: CapabilityRequestStatus,
   requestedAt: z.string(),
   decidedAt: z.string().optional(),
   decidedBy: z.string().optional(),
   blockedReason: z.string().optional(),
   grant: CapabilityGrant.optional(),
+  transitionReceipts: z.array(CapabilityRequestTransitionReceipt).default([]),
 })
 export type CapabilityRequest = z.infer<typeof CapabilityRequest>
 
@@ -68,6 +90,7 @@ export async function createCapabilityRequest(input: {
     mount: input.mount,
     status: 'pending',
     requestedAt: now,
+    transitionReceipts: [],
   }
   await saveCapabilityRequest(input.memoryDir, request)
   return request
@@ -80,9 +103,18 @@ export async function approveCapabilityRequest(input: {
 }): Promise<CapabilityRequest> {
   const request = listCapabilityRequests(input.memoryDir).find(candidate => candidate.id === input.requestId)
   if (!request) throw new Error(`Capability request ${input.requestId} not found`)
-  request.status = 'approved'
+  const now = new Date().toISOString()
+  const receipt = applyCapabilityRequestTransition({
+    request,
+    event: 'approve',
+    actor: input.approvedBy,
+    evidenceRefs: [`capability-request:${request.id}`],
+    now,
+  })
+  request.status = receipt.to
+  request.transitionReceipts.push(receipt)
   request.decidedBy = input.approvedBy
-  request.decidedAt = new Date().toISOString()
+  request.decidedAt = now
   const grantId = `grant-${request.id.replace(/^cap-/, '')}`
   request.grant = {
     id: grantId,
@@ -93,7 +125,7 @@ export async function approveCapabilityRequest(input: {
     duration: request.duration,
     status: 'active',
     evidence: `Granted ${request.mount.access} mount from ${request.mount.hostPath} to /mnt/guildhall-grants/${grantId}.`,
-    grantedAt: request.decidedAt,
+    grantedAt: now,
     grantedBy: input.approvedBy,
   }
   await saveCapabilityRequest(input.memoryDir, request)

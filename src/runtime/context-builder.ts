@@ -38,6 +38,13 @@ import { buildProofPathContext, ProofPath } from './proof-paths.js'
 import type { CompletionHandoff as CompletionHandoffType } from './completion-handoff.js'
 import type { ProofPath as ProofPathType } from './proof-paths.js'
 import { buildEffectiveMemoryPacket, type EffectiveMemoryPacket } from './effective-memory-packet.js'
+import {
+  buildStructuralContextSlice,
+  readAcceptedStructuralMap,
+  renderStructuralAgentPacket,
+  type StructuralAgentRole,
+  type StructuralContextSlice,
+} from './structural-map.js'
 
 // ---------------------------------------------------------------------------
 // Just-in-time context builder
@@ -821,6 +828,8 @@ export interface BuiltContext {
   completionHandoff?: string
   effectiveMemory?: string
   effectiveMemoryPacket?: EffectiveMemoryPacket
+  structuralMapContext?: string
+  structuralMapOmitted?: StructuralContextSlice['omitted']
   /** Concatenated string ready to prepend to an agent message */
   formatted: string
 }
@@ -1141,6 +1150,23 @@ export async function buildContext(
     rendered: '',
   }))
   const effectiveMemory = effectiveMemoryPacket.rendered
+  const structuralMap = readAcceptedStructuralMap(projectRoot)
+  const structuralRole = structuralAgentRoleForTask(task)
+  const structuralTask = {
+    id: task.id,
+    title: task.title,
+    files: resolveLikelyTaskFiles(task),
+    text: `${task.description}\n${task.spec ?? ''}`,
+  }
+  const structuralMapSlice = structuralMap ? buildStructuralContextSlice(structuralMap, structuralTask) : null
+  const structuralMapContext = structuralMap
+    ? renderStructuralAgentPacket({
+        map: structuralMap,
+        task: structuralTask,
+        role: structuralRole,
+      })
+    : ''
+  const structuralMapOmitted = structuralMapSlice?.omitted ?? []
 
   const taskSummary = [
     `## Current Task: ${task.id}`,
@@ -1199,6 +1225,8 @@ export async function buildContext(
     '',
     taskSummary,
     '',
+    structuralMapContext,
+    '',
     personaPrompt,
     '',
     workerModePrompt,
@@ -1255,8 +1283,17 @@ export async function buildContext(
     completionHandoff: completionHandoffContext,
     effectiveMemory,
     effectiveMemoryPacket,
+    structuralMapContext,
+    structuralMapOmitted,
     formatted,
   }
+}
+
+function structuralAgentRoleForTask(task: Task): StructuralAgentRole {
+  if (task.status === 'exploring') return 'spec'
+  if (task.status === 'review') return 'reviewer'
+  if (task.status === 'gate_check') return 'gate_checker'
+  return 'worker'
 }
 
 function parseProofPaths(value: unknown): ProofPathType[] {

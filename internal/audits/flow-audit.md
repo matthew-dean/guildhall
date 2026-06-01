@@ -91,6 +91,89 @@ babysit setup/import/provider/release states across multiple pages.
   implementation should also migrate one small existing lifecycle, preferably
   capability requests, to prove the primitive outside the project-graph feature
   while leaving broad task-status cleanup for 0.11.0.
+- [x] Start the 0.10 state-machine/project-graph implementation in
+  `feature/0.10-state-machine-project-graph`. Added the generic
+  state-machine primitive, migrated capability request decisions through a
+  capability request machine with transition receipts, and added an initial
+  local project graph registry plus project dependency edge machine. The first
+  provider request path writes the neutral exchange and consumer outgoing
+  mirror only; it intentionally does not write provider-local mirrors or tasks.
+  Focused runtime tests and `pnpm build` pass in the worktree.
+- [x] Complete the first 0.10 state-machine/project-graph feature path in
+  `feature/0.10-state-machine-project-graph`. The graph runtime now supports
+  provider-authorized request import, delivery planning, delivery receipts,
+  consumer review, structured consumer returns, revised provider plans,
+  redelivery, and consumer acceptance. CLI fallback commands expose the same
+  authority-preserving flow through `guildhall graph ...`. Focused tests cover
+  the full consumer/provider loop and prove consumer code cannot create
+  provider-local mirrors. `pnpm build` passes.
+- [x] Start structural/domain intelligence on
+  `feature/0.10-structural-domain-intelligence`. Added structural-map drafting
+  that persists under `.guildhall/structural-map/` without creating
+  `guildhall.yaml`, separates package/domain/executable/Git authority nodes,
+  detects ignored vendored Git metadata, and requires deterministic
+  owner-review transitions before a map becomes routing truth. Added context
+  slices with structural handles and omission reasons, plus cross-project
+  request shaping that uses accepted consumer/provider maps to publish
+  provider-owned domain work through the project graph instead of writing
+  across project boundaries. Focused structural tests cover draft, correction,
+  acceptance, context slices, provider request import, delivery, consumer
+  verification, and return-for-revision.
+- [x] Continue structural/domain intelligence from the remaining-work ledger
+  in `internal/plans/2026-05-31-guildhall-0-10-implementation-tracker.md`.
+  The remaining-work ledger was reopened for the complete project graph product
+  loop. Remaining count after graph API/UI/tests: 0 items. Next item: merge
+  decision once the active bounded-chat worktree on `0.10.0` is clean enough
+  to receive this branch. Implemented explicit domain authority
+  assignments, project-scoped graph action endpoints, the Settings Project
+  graph surface, inbound/outgoing request controls, and tests for assignment,
+  provider intake/planning/delivery, consumer review/return, provider
+  redelivery, and consumer acceptance. Verification: `pnpm typecheck` passed;
+  focused graph/API/UI tests passed with 82 tests; structural/context tests
+  passed with 89 tests; `pnpm build` passed.
+- [x] Tighten the project graph boundary for monorepos vs external local
+  projects. Detected structural domains and local coordinator domains now live
+  on the graph itself. Registered sibling projects are visible as related local
+  projects, but they are not auto-assigned as authority unless the user assigns
+  that domain. Focused graph/API/UI tests pass with 83 tests.
+- [x] Clarify the owner-facing project graph walkthrough. Remaining count: 0
+  items. Next item: merge decision once the active bounded-chat worktree on
+  `0.10.0` is clean enough to receive this branch. The Settings graph surface
+  now distinguishes detected domains from assigned responsibility, separates current/connected/related
+  local projects, and shows waiting-on plus this-project role labels on request
+  cards. Verification: `pnpm typecheck` passed; focused graph/API/UI tests
+  passed with 83 tests; `pnpm build` passed.
+- [x] Add project graph responsibility facets and workspace child-project
+  provider targets. Remaining count: 0 items. Next item: merge decision once
+  the active bounded-chat worktree on `0.10.0` is clean enough to receive this
+  branch. Runtime/API/UI implementation now expands workspace child projects
+  such as `Looma`, persists responsibility facets, and keeps consumer
+  configuration plus consumer verification assigned to the current project by
+  default. Verification: `pnpm typecheck` passed; focused graph/API/UI tests
+  passed with 86 tests; `pnpm build` passed; `pnpm dev:install` refreshed the
+  installed app; `/api/stale-server` returned `stale:false`; live Narrative
+  Harness walkthrough confirmed standalone `Looma` appears as a provider
+  capability option without moving token values/product configuration out of
+  Narrative Harness.
+- [x] Simplify the owner-facing project graph after live walkthrough feedback.
+  Remaining count: 0 items. Next item: merge decision once the active
+  bounded-chat worktree on `0.10.0` is clean enough to receive this branch.
+  The graph no longer exposes every responsibility facet as a select-box row.
+  It shows domains first, lets the owner click into a domain, and keeps
+  "Assign to project" actions inside the focused detail panel while local
+  product configuration and verification read as plain context.
+- [x] Flatten the project graph layout after live visual feedback. Remaining
+  count: 0 items. Next item: merge decision once the active bounded-chat
+  worktree on `0.10.0` is clean enough to receive this branch. The graph keeps
+  major section cards, but local-project rows, domain detail sections, and
+  dependency requests now render as rows/dividers instead of nested utility
+  cards inside cards.
+- [x] Make assignment scale beyond the current local project set. Remaining
+  count: 0 items. Next item: merge decision once the active bounded-chat
+  worktree on `0.10.0` is clean enough to receive this branch. The settings
+  graph no longer dumps managed project names or calls unrelated projects
+  "related"; it summarizes the managed-project index and opens a searchable
+  assignment picker only when the owner chooses `Assign to project`.
 - [x] Specify the 0.10 bounded-chat pivot for intake and New request flows.
   Plan: `internal/plans/2026-05-31-guildhall-0-10-bounded-chat.md`.
   The accepted direction is a two-role flow: a conversation agent handles the

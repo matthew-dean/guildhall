@@ -14,6 +14,7 @@
   import Button from '../../lib/Button.svelte'
   import Card from '../../lib/Card.svelte'
   import Input from '../../lib/Input.svelte'
+  import Modal from '../../lib/Modal.svelte'
   import Select from '../../lib/Select.svelte'
   import Textarea from '../../lib/Textarea.svelte'
   import Markdown from '../../lib/Markdown.svelte'
@@ -36,13 +37,14 @@
     onMigrate?: () => void | Promise<void>
   }
   let { subView = null, onMigrate }: Props = $props()
-  type SettingSection = 'ready' | 'providers' | 'facts' | 'coordinators' | 'learning' | 'reintake' | 'advanced'
-  const KNOWN_SECTIONS = new Set<SettingSection>(['ready', 'providers', 'facts', 'coordinators', 'learning', 'reintake', 'advanced'])
+  type SettingSection = 'ready' | 'providers' | 'facts' | 'coordinators' | 'graph' | 'learning' | 'reintake' | 'advanced'
+  const KNOWN_SECTIONS = new Set<SettingSection>(['ready', 'providers', 'facts', 'coordinators', 'graph', 'learning', 'reintake', 'advanced'])
   const section = $derived(KNOWN_SECTIONS.has(subView as SettingSection) ? subView as SettingSection : 'ready')
   const settingsSections: Array<{ id: SettingSection; label: string }> = [
     { id: 'ready', label: 'Ready' },
     { id: 'providers', label: 'Providers' },
     { id: 'coordinators', label: 'Coordinators' },
+    { id: 'graph', label: 'Project graph' },
     { id: 'facts', label: 'Facts' },
     { id: 'learning', label: 'Memory' },
     { id: 'reintake', label: 'Re-intake' },
@@ -307,6 +309,13 @@
   let learning = $state<LearningSnapshot | null>(null)
   let learningError = $state<string | null>(null)
   let learningBusy = $state<string | null>(null)
+  let projectGraph = $state<ProjectGraphView | null>(null)
+  let projectGraphError = $state<string | null>(null)
+  let projectGraphBusy = $state<string | null>(null)
+  let selectedProjectGraphDomainId = $state<string | null>(null)
+  let assignmentPickerResponsibilityId = $state<string | null>(null)
+  let assignmentPickerQuery = $state('')
+  let domainAuthoritySelections = $state<Record<string, string>>({})
   let reintakeStatus = $state<ReintakeStatus | null>(null)
   let reintakeDraft = $state<ReintakeDraft | null>(null)
   let reintakeBusy = $state<null | 'rerun' | 'apply'>(null)
@@ -518,10 +527,12 @@
     void loadWorktreeIncludes()
     void loadRuntimeSetup()
     void loadCapabilityGrants()
+    void loadProjectGraph()
   })
 
   $effect(() => {
     if (section === 'reintake') void loadReintakeDraft()
+    if (section === 'graph') void loadProjectGraph()
   })
 
   async function loadCapabilityGrants() {
@@ -541,6 +552,57 @@
       capabilityRequests = []
       activeCapabilityGrants = []
     }
+  }
+  interface ProjectGraphView {
+    currentProject?: { id?: string; label?: string; path?: string }
+    localProjects?: Array<{ id: string; label: string; path?: string; role?: string }>
+    domainAuthorities?: Array<{
+      domain?: { id?: string; label?: string }
+      providerProject?: { id?: string; label?: string; path?: string }
+      assignedAt?: string
+      assignedBy?: string
+    }>
+    domainResponsibilities?: Array<{
+      id: string
+      domainId: string
+      domainLabel: string
+      facet: 'provider_capability' | 'shared_contract' | 'consumer_configuration' | 'consumer_verification' | string
+      facetLabel: string
+      description: string
+      authority: 'provider' | 'shared' | 'consumer' | string
+      responsibleProjectId: string
+      responsibleProjectLabel: string
+      responsibleProjectPath?: string
+      assignable?: boolean
+      assigned?: boolean
+    }>
+    structuralDomains?: Array<{
+      id?: string
+      label?: string
+      path?: string
+      kind?: 'structural_domain' | 'cross_cutting_domain' | 'coordinator_domain' | string
+      coordinatorId?: string
+      coordinatorName?: string
+      authorityProjectId?: string
+      authorityProjectLabel?: string
+    }>
+    dependencyEdges?: Array<{
+      id: string
+      state: string
+      consumerProjectId?: string
+      consumerProjectLabel?: string
+      providerProjectId?: string
+      providerProjectLabel?: string
+      domainId?: string
+      domainLabel?: string
+      consumerNeed?: string
+      expectedDelivery?: { format?: string; channel?: string; consumerVerificationPlan?: string[] }
+      latestDeliveryReceipt?: { id?: string; format?: string; channel?: string; coordinates?: string; providerProof?: string[] }
+      latestReturnPacket?: { requestedCorrection?: string; mismatchKind?: string }
+      unresolved?: boolean
+      updatedAt?: string
+    }>
+    unresolvedRequests?: Array<{ edgeId?: string; waitingOn?: string; state?: string; summary?: string }>
   }
 
   async function revokeCapabilityGrant(grant: CapabilityGrant) {
@@ -1004,6 +1066,328 @@
     } finally {
       learningBusy = null
     }
+  }
+
+  async function loadProjectGraph() {
+    try {
+      const r = await projectFetch('/api/project/project-graph', { cache: 'no-store' })
+      const j = await r.json().catch(() => ({})) as { projectGraph?: ProjectGraphView; error?: string }
+      if (!r.ok || j.error) {
+        projectGraphError = j.error ?? `HTTP ${r.status}`
+        return
+      }
+      projectGraph = j.projectGraph ?? null
+      projectGraphError = null
+      const nextSelections = { ...domainAuthoritySelections }
+      for (const authority of projectGraph?.domainAuthorities ?? []) {
+        const domainId = authority.domain?.id
+        const providerId = authority.providerProject?.id
+        if (domainId && providerId) nextSelections[domainId] = providerId
+      }
+      domainAuthoritySelections = nextSelections
+    } catch (err) {
+      projectGraphError = err instanceof Error ? err.message : String(err)
+    }
+  }
+
+  function graphProjectOptions() {
+    return (projectGraph?.localProjects ?? [])
+      .filter(item => item.id && item.path)
+      .map(item => ({
+        value: item.id,
+        label: `${item.label}${item.role === 'current' ? ' (this project)' : ''}`,
+      }))
+  }
+
+  function structuralDomainsForGraph() {
+    const seen = new Set<string>()
+    const nodes = (projectGraph?.structuralDomains?.length ?? 0) > 0
+      ? projectGraph?.structuralDomains ?? []
+      : [
+          ...(project.detail?.structuralMapReview?.domains ?? []),
+          ...(project.detail?.structuralMapReview?.crossCuttingDomains ?? []),
+        ]
+    return nodes.filter((node) => {
+      if (!node.id || seen.has(node.id)) return false
+      seen.add(node.id)
+      return true
+    })
+  }
+
+  function assignedProviderForDomain(domainId?: string): string | undefined {
+    if (!domainId) return undefined
+    return domainAuthoritySelections[domainId] ??
+      projectGraph?.domainAuthorities?.find(item => item.domain?.id === domainId)?.providerProject?.id ??
+      project.detail?.id
+  }
+
+  function domainAuthorityFor(domainId?: string) {
+    if (!domainId) return null
+    return projectGraph?.domainAuthorities?.find(item => item.domain?.id === domainId) ?? null
+  }
+
+  function domainSourceLabel(domain: { kind?: string; coordinatorName?: string; coordinatorId?: string }): string {
+    if (domain.kind === 'cross_cutting_domain') return 'Detected cross-cutting domain'
+    if (domain.coordinatorName || domain.coordinatorId) return `Detected here - routed by ${domain.coordinatorName ?? domain.coordinatorId}`
+    return 'Detected in this project'
+  }
+
+  function domainResponsibilityLabel(domain: { id?: string }): string {
+    const authority = domainAuthorityFor(domain.id)
+    if (!authority?.providerProject?.id) return 'No external assignment'
+    if (authority.providerProject.id === project.detail?.id) return 'Handled by this project'
+    return `Handled by ${authority.providerProject.label ?? authority.providerProject.id}`
+  }
+
+  function responsibilitiesForDomain(domainId?: string) {
+    if (!domainId) return []
+    return (projectGraph?.domainResponsibilities ?? []).filter(item => item.domainId === domainId)
+  }
+
+  function selectedGraphDomain() {
+    if (!selectedProjectGraphDomainId) return null
+    return structuralDomainsForGraph().find(item => item.id === selectedProjectGraphDomainId) ?? null
+  }
+
+  function primaryAssignableResponsibility(domainId?: string) {
+    const assignable = responsibilitiesForDomain(domainId).filter(item => item.assignable)
+    return assignable.find(item => item.facet === 'provider_capability') ?? assignable[0] ?? null
+  }
+
+  function localResponsibilitiesForDomain(domainId?: string) {
+    return responsibilitiesForDomain(domainId).filter(item => !item.assignable)
+  }
+
+  function domainGraphSummary(domain: { id?: string }): string {
+    const responsibility = primaryAssignableResponsibility(domain.id)
+    if (!responsibility) return domainResponsibilityLabel(domain)
+    if (responsibility.assigned && responsibility.responsibleProjectId !== project.detail?.id) {
+      return `Assigned to ${responsibility.responsibleProjectLabel}`
+    }
+    return 'Available to assign'
+  }
+
+  function graphAssignmentTargets(responsibility: NonNullable<ProjectGraphView['domainResponsibilities']>[number]) {
+    return (projectGraph?.localProjects ?? [])
+      .filter(item => item.id && item.path && item.id !== responsibility.responsibleProjectId)
+      .map(item => ({
+        id: item.id,
+        label: item.id === project.detail?.id ? 'this project' : item.label,
+      }))
+  }
+
+  function assignmentPickerResponsibility() {
+    if (!assignmentPickerResponsibilityId) return null
+    return (projectGraph?.domainResponsibilities ?? []).find(item => item.id === assignmentPickerResponsibilityId) ?? null
+  }
+
+  function openAssignmentPicker(responsibility: NonNullable<ProjectGraphView['domainResponsibilities']>[number]) {
+    assignmentPickerResponsibilityId = responsibility.id
+    assignmentPickerQuery = ''
+  }
+
+  function closeAssignmentPicker() {
+    assignmentPickerResponsibilityId = null
+    assignmentPickerQuery = ''
+  }
+
+  function assignmentPickerTargets() {
+    const responsibility = assignmentPickerResponsibility()
+    if (!responsibility) return []
+    if (assignmentPickerQuery.trim().length === 0) return []
+    const query = assignmentPickerQuery.trim().toLowerCase()
+    return graphAssignmentTargets(responsibility)
+      .filter(target => !query || target.label.toLowerCase().includes(query) || target.id.toLowerCase().includes(query))
+      .slice(0, 8)
+  }
+
+  async function chooseAssignmentTarget(projectId: string) {
+    const responsibility = assignmentPickerResponsibility()
+    if (!responsibility) return
+    await assignDomainResponsibilityTo(responsibility, projectId)
+    closeAssignmentPicker()
+  }
+
+  function setDomainAuthoritySelection(domainId: string, providerProjectId: string) {
+    domainAuthoritySelections = {
+      ...domainAuthoritySelections,
+      [domainId]: providerProjectId,
+    }
+  }
+
+  async function assignDomainAuthority(domain: { id?: string; label?: string }) {
+    if (!domain.id) return
+    const providerProjectId = assignedProviderForDomain(domain.id)
+    if (!providerProjectId) return
+    projectGraphBusy = `assign:${domain.id}`
+    try {
+      const r = await projectFetch('/api/project/project-graph/domain-authority', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          domainId: domain.id,
+          domainLabel: domain.label ?? domain.id.replace(/^domain:/, ''),
+          providerProjectId,
+        }),
+      })
+      const j = await r.json().catch(() => ({})) as { projectGraph?: ProjectGraphView; error?: string }
+      if (!r.ok || j.error) {
+        projectGraphError = j.error ?? `HTTP ${r.status}`
+        return
+      }
+      projectGraph = j.projectGraph ?? projectGraph
+      projectGraphError = null
+      await loadProjectGraph()
+    } catch (err) {
+      projectGraphError = err instanceof Error ? err.message : String(err)
+    } finally {
+      projectGraphBusy = null
+    }
+  }
+
+  async function assignDomainResponsibilityTo(responsibility: NonNullable<ProjectGraphView['domainResponsibilities']>[number], responsibleProjectId: string) {
+    if (!responsibleProjectId) return
+    projectGraphBusy = `assign-responsibility:${responsibility.id}`
+    try {
+      const r = await projectFetch('/api/project/project-graph/domain-responsibility', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          domainId: responsibility.domainId,
+          domainLabel: responsibility.domainLabel,
+          facet: responsibility.facet,
+          responsibleProjectId,
+        }),
+      })
+      const j = await r.json().catch(() => ({})) as { projectGraph?: ProjectGraphView; error?: string }
+      if (!r.ok || j.error) {
+        projectGraphError = j.error ?? `HTTP ${r.status}`
+        return
+      }
+      projectGraph = j.projectGraph ?? projectGraph
+      projectGraphError = null
+      await loadProjectGraph()
+    } catch (err) {
+      projectGraphError = err instanceof Error ? err.message : String(err)
+    } finally {
+      projectGraphBusy = null
+    }
+  }
+
+  async function runProjectGraphRequestAction(edgeId: string, action: string) {
+    projectGraphBusy = `${action}:${edgeId}`
+    try {
+      const r = await projectFetch(`/api/project/project-graph/requests/${encodeURIComponent(edgeId)}/${action}`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify(defaultGraphActionPayload(action)),
+      })
+      const j = await r.json().catch(() => ({})) as { projectGraph?: ProjectGraphView; error?: string }
+      if (!r.ok || j.error) {
+        projectGraphError = j.error ?? `HTTP ${r.status}`
+        return
+      }
+      projectGraph = j.projectGraph ?? projectGraph
+      projectGraphError = null
+      await loadProjectGraph()
+    } catch (err) {
+      projectGraphError = err instanceof Error ? err.message : String(err)
+    } finally {
+      projectGraphBusy = null
+    }
+  }
+
+  function defaultGraphActionPayload(action: string): Record<string, unknown> {
+    switch (action) {
+      case 'provider-plan':
+        return {
+          format: 'Project graph delivery',
+          channel: 'local project graph',
+          providerProofPlan: ['Run provider-owned checks before delivery.'],
+          consumerVerificationPlan: ['Verify the delivered result in the consumer project.'],
+        }
+      case 'provider-deliver':
+        return {
+          format: 'Project graph delivery',
+          channel: 'local project graph',
+          coordinates: 'local project graph receipt',
+          providerProof: ['Provider recorded delivery through its own project context.'],
+        }
+      case 'consumer-review':
+        return { verificationContext: 'Consumer is verifying the delivery against the negotiated format.' }
+      case 'consumer-return':
+        return {
+          mismatchKind: 'format',
+          expected: 'Delivery should match the negotiated format.',
+          received: 'Consumer could not use the delivered format.',
+          failedVerification: ['Consumer verification failed.'],
+          requestedCorrection: 'Redeliver in the negotiated format.',
+        }
+      case 'consumer-accept':
+        return { consumerProof: ['Consumer verified the delivery.'] }
+      default:
+        return {}
+    }
+  }
+
+  function projectGraphActionLabel(action: string): string {
+    switch (action) {
+      case 'provider-accept': return 'Accept request'
+      case 'provider-plan': return 'Commit plan'
+      case 'provider-deliver': return 'Record delivery'
+      case 'consumer-review': return 'Start review'
+      case 'consumer-return': return 'Return for revision'
+      case 'consumer-accept': return 'Accept delivery'
+      default: return action
+    }
+  }
+
+  function projectGraphActionsForEdge(edge: NonNullable<ProjectGraphView['dependencyEdges']>[number]) {
+    const currentId = project.detail?.id
+    const provider = edge.providerProjectId === currentId
+    const consumer = edge.consumerProjectId === currentId
+    if (provider) {
+      if (edge.state === 'submitted') return ['provider-accept']
+      if (edge.state === 'provider_shaping' || edge.state === 'revision_requested') return ['provider-plan']
+      if (edge.state === 'provider_working') return ['provider-deliver']
+    }
+    if (consumer) {
+      if (edge.state === 'delivered') return ['consumer-review']
+      if (edge.state === 'consumer_reviewing') return ['consumer-return', 'consumer-accept']
+    }
+    return []
+  }
+
+  function edgeRole(edge: NonNullable<ProjectGraphView['dependencyEdges']>[number]): 'inbound' | 'outgoing' | 'related' {
+    if (edge.providerProjectId === project.detail?.id) return 'inbound'
+    if (edge.consumerProjectId === project.detail?.id) return 'outgoing'
+    return 'related'
+  }
+
+  function connectedProjectRows() {
+    return (projectGraph?.localProjects ?? []).filter(item => item.role === 'consumer' || item.role === 'provider')
+  }
+
+  function localProjectCount() {
+    return projectGraph?.localProjects?.length ?? 0
+  }
+
+  function localProjectIndexLabel() {
+    const count = localProjectCount()
+    return `${count} ${count === 1 ? 'project' : 'projects'} in the local index`
+  }
+
+  function requestWaitingOn(edge: NonNullable<ProjectGraphView['dependencyEdges']>[number]): string {
+    if (!edge.unresolved) return 'Resolved'
+    if (edge.state === 'delivered' || edge.state === 'consumer_reviewing') return 'Waiting on consumer'
+    return 'Waiting on provider'
+  }
+
+  function requestRoleLabel(edge: NonNullable<ProjectGraphView['dependencyEdges']>[number]): string {
+    const role = edgeRole(edge)
+    if (role === 'inbound') return 'This project is provider'
+    if (role === 'outgoing') return 'This project is consumer'
+    return 'Related request'
   }
 
   const coordinators = $derived(project.detail?.config?.coordinators ?? [])
@@ -1822,6 +2206,226 @@
           </div>
         </FrameCard>
       {/if}
+    {:else if section === 'graph'}
+      <SectionHeader
+        eyebrow="Settings"
+        title="Project graph"
+        description="See the domains detected in this project, the local projects Guildhall knows about, and the dependency requests moving between project coordinators."
+        headingTag="h2"
+        density="compact"
+      >
+        {#snippet meta()}
+          <StatusPill
+            label={`${projectGraph?.dependencyEdges?.filter(edge => edge.unresolved).length ?? 0} open`}
+            tone={(projectGraph?.dependencyEdges?.some(edge => edge.unresolved) ?? false) ? 'warn' : 'ok'}
+          />
+        {/snippet}
+      </SectionHeader>
+
+      {#if projectGraphError}
+        <NoticeBand tone="danger" role="alert" label="Project graph" title="Could not load project graph" density="compact">
+          <p>{projectGraphError}</p>
+        </NoticeBand>
+      {/if}
+
+      <div class="graph-grid">
+        <FrameCard class="graph-card">
+          {#snippet header()}
+            <SectionHeader
+              title="Domains"
+              description="Click a domain to see where its work belongs."
+              headingTag="h3"
+              density="dense"
+            />
+          {/snippet}
+          {#if structuralDomainsForGraph().length === 0}
+            <p class="muted">Accept a structural map before assigning domain responsibilities.</p>
+          {:else if graphProjectOptions().length === 0}
+            <p class="muted">Register another local project before assigning domains across projects.</p>
+          {:else}
+            <div class="domain-assignment-list">
+              {#each structuralDomainsForGraph() as domain (domain.id)}
+                <button
+                  type="button"
+                  class:active={selectedProjectGraphDomainId === domain.id}
+                  class="domain-graph-node"
+                  aria-label={`Open ${domain.label} domain`}
+                  aria-pressed={selectedProjectGraphDomainId === domain.id}
+                  onclick={() => selectedProjectGraphDomainId = domain.id ?? null}
+                >
+                  <div class="domain-assignment-copy">
+                    <strong>{domain.label}</strong>
+                    <span class="muted">{domainSourceLabel(domain)}</span>
+                  </div>
+                  <StatusPill label={domainGraphSummary(domain)} tone={primaryAssignableResponsibility(domain.id)?.assigned ? 'ok' : 'neutral'} />
+                </button>
+              {/each}
+            </div>
+          {/if}
+        </FrameCard>
+
+        <FrameCard class="graph-card">
+          {#snippet header()}
+            <SectionHeader
+              title="Managed projects"
+              description="Guildhall can search this local project index when you assign a domain."
+              headingTag="h3"
+              density="dense"
+            />
+          {/snippet}
+          {#if !projectGraph}
+            <p class="muted">Loading project graph…</p>
+          {:else if (projectGraph.localProjects?.length ?? 0) === 0}
+            <p class="muted">No local projects registered yet.</p>
+          {:else}
+            <div class="project-index-summary">
+              <strong>{localProjectIndexLabel()}</strong>
+              <span class="muted">Current project: {projectGraph.currentProject?.label ?? project.detail?.name ?? 'this project'}</span>
+              {#if connectedProjectRows().length > 0}
+                <span class="muted">{connectedProjectRows().length} connected by open requests</span>
+              {/if}
+            </div>
+          {/if}
+        </FrameCard>
+      </div>
+
+      {#if selectedGraphDomain()}
+        {@const domain = selectedGraphDomain()}
+        {@const assignableResponsibility = primaryAssignableResponsibility(domain?.id)}
+        <FrameCard class="graph-card">
+          {#snippet header()}
+            <SectionHeader
+              title={domain?.label ?? 'Domain'}
+              description="Keep local product decisions here. Assign reusable work only when another project should provide it."
+              headingTag="h3"
+              density="dense"
+            />
+          {/snippet}
+          <div class="domain-detail">
+            <section class="domain-detail-section domain-detail-section-local">
+              <strong>Stays in {project.detail?.name ?? 'this project'}</strong>
+              {#each localResponsibilitiesForDomain(domain?.id) as responsibility (responsibility.id)}
+                <p>{responsibility.description}</p>
+              {/each}
+            </section>
+            {#if assignableResponsibility}
+              <section class="domain-detail-section">
+                <strong>Can be assigned</strong>
+                <p>{assignableResponsibility.description}</p>
+                {#if assignableResponsibility.assigned && assignableResponsibility.responsibleProjectId !== project.detail?.id}
+                  <p class="muted">Currently assigned to {assignableResponsibility.responsibleProjectLabel}.</p>
+                {/if}
+                {#if graphAssignmentTargets(assignableResponsibility).length > 0}
+                  <Button
+                    variant="secondary"
+                    size="sm"
+                    className="assign-project-button"
+                    disabled={projectGraphBusy === `assign-responsibility:${assignableResponsibility.id}`}
+                    onclick={() => openAssignmentPicker(assignableResponsibility)}
+                  >
+                    Assign to project
+                  </Button>
+                {/if}
+              </section>
+            {/if}
+          </div>
+        </FrameCard>
+      {/if}
+
+      {@const pickerResponsibility = assignmentPickerResponsibility()}
+      <Modal
+        open={Boolean(pickerResponsibility)}
+        title={`Assign ${pickerResponsibility?.domainLabel ?? 'domain'}`}
+        size="md"
+        onClose={closeAssignmentPicker}
+      >
+        <div class="assignment-picker">
+          <p>Search Guildhall’s managed local projects and choose who should provide this reusable capability.</p>
+          <Input
+            type="search"
+            ariaLabel="Find project"
+            placeholder="Search projects"
+            bind:value={assignmentPickerQuery}
+          />
+          {#if assignmentPickerQuery.trim().length === 0}
+            <p class="muted">Start typing to search the local project index.</p>
+          {:else if assignmentPickerTargets().length === 0}
+            <p class="muted">No matching projects.</p>
+          {:else}
+            <div class="assignment-picker-list">
+              {#each assignmentPickerTargets() as target (target.id)}
+                <button
+                  type="button"
+                  class="assignment-picker-row"
+                  disabled={projectGraphBusy === `assign-responsibility:${pickerResponsibility?.id}`}
+                  onclick={() => chooseAssignmentTarget(target.id)}
+                >
+                  <strong>{target.label}</strong>
+                </button>
+              {/each}
+            </div>
+          {/if}
+        </div>
+      </Modal>
+
+      <FrameCard class="graph-card graph-requests-card">
+        {#snippet header()}
+            <SectionHeader
+              title="Dependency requests"
+              description="Requests move through provider delivery and consumer verification. Each card shows this project's role and who needs to act next."
+            headingTag="h3"
+            density="dense"
+          />
+        {/snippet}
+        {#if !projectGraph}
+          <p class="muted">Loading dependency requests…</p>
+        {:else if (projectGraph.dependencyEdges?.length ?? 0) === 0}
+          <p class="muted">No project-to-project requests yet.</p>
+        {:else}
+          <div class="graph-request-list">
+            {#each projectGraph.dependencyEdges ?? [] as edge (edge.id)}
+              {@const role = edgeRole(edge)}
+              {@const actions = projectGraphActionsForEdge(edge)}
+              <section class:graph-request-inbound={role === 'inbound'} class="graph-request">
+                <div class="graph-request-head">
+                  <div>
+                    <strong>{role === 'inbound' ? 'Inbound' : role === 'outgoing' ? 'Outgoing' : 'Related'} request</strong>
+                    <p>{edge.consumerNeed}</p>
+                  </div>
+                  <div class="request-status-stack">
+                    <StatusPill label={requestWaitingOn(edge)} tone={edge.unresolved ? 'warn' : 'ok'} />
+                    <span class="muted">{requestRoleLabel(edge)}</span>
+                  </div>
+                </div>
+                <DefinitionList
+                  rows={[
+                    ['State', edge.state.replaceAll('_', ' ')],
+                    ['Domain', edge.domainLabel ?? edge.domainId ?? 'none'],
+                    ['Consumer', edge.consumerProjectLabel ?? edge.consumerProjectId ?? 'unknown'],
+                    ['Provider', edge.providerProjectLabel ?? edge.providerProjectId ?? 'unknown'],
+                    ['Delivery', edge.expectedDelivery ? `${edge.expectedDelivery.format ?? 'delivery'} via ${edge.expectedDelivery.channel ?? 'unspecified channel'}` : 'not planned'],
+                    ['Latest return', edge.latestReturnPacket?.requestedCorrection ?? null],
+                  ]}
+                />
+                {#if actions.length > 0}
+                  <Row justify="end" wrap>
+                    {#each actions as action (action)}
+                      <Button
+                        variant={action === 'consumer-return' ? 'secondary' : 'agent'}
+                        size="sm"
+                        disabled={projectGraphBusy === `${action}:${edge.id}`}
+                        onclick={() => runProjectGraphRequestAction(edge.id, action)}
+                      >
+                        {projectGraphActionLabel(action)}
+                      </Button>
+                    {/each}
+                  </Row>
+                {/if}
+              </section>
+            {/each}
+          </div>
+        {/if}
+      </FrameCard>
     {:else if section === 'learning'}
       <SectionHeader
         eyebrow="Settings"
@@ -3450,6 +4054,163 @@
     gap: var(--gh-space-1);
   }
 
+  .graph-grid {
+    display: grid;
+    gap: var(--gh-space-3);
+  }
+
+  :global(.graph-card) {
+    margin-block-end: var(--gh-space-3);
+  }
+
+  .domain-assignment-list,
+  .graph-request-list {
+    display: grid;
+    gap: var(--gh-space-2);
+  }
+
+  .domain-assignment-copy {
+    display: grid;
+    gap: var(--gh-space-1);
+  }
+
+  .domain-graph-node {
+    appearance: none;
+    border: 1px solid var(--border-muted);
+    background: var(--surface);
+    border-radius: var(--gh-radius-2);
+    color: inherit;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: var(--gh-space-3);
+    padding: var(--gh-space-3);
+    text-align: left;
+    width: 100%;
+  }
+
+  .domain-graph-node:hover,
+  .domain-graph-node.active {
+    border-color: var(--border-strong);
+    background: var(--surface-raised);
+  }
+
+  .domain-detail {
+    display: grid;
+    gap: var(--gh-space-3);
+  }
+
+  .domain-detail-section {
+    border-block-start: 1px solid var(--border-muted);
+    display: grid;
+    gap: var(--gh-space-2);
+    padding-block-start: var(--gh-space-3);
+  }
+
+  .domain-detail-section:first-child {
+    border-block-start: 0;
+    padding-block-start: 0;
+  }
+
+  .domain-detail-section-local {
+    border-inline-start: 2px solid var(--accent);
+    padding-inline-start: var(--gh-space-3);
+  }
+
+  :global(.assign-project-button) {
+    justify-self: start;
+  }
+
+  .domain-detail p {
+    margin: 0;
+    color: var(--text-muted);
+    font-size: var(--fs-1);
+    line-height: var(--lh-body);
+  }
+
+  .assignment-picker {
+    display: grid;
+    gap: var(--gh-space-3);
+  }
+
+  .assignment-picker p {
+    margin: 0;
+    color: var(--text-muted);
+    font-size: var(--fs-1);
+    line-height: var(--lh-body);
+  }
+
+  .assignment-picker-list {
+    border-block-start: 1px solid var(--border-muted);
+    display: grid;
+    max-height: min(42vh, 24rem);
+    overflow: auto;
+  }
+
+  .assignment-picker-row {
+    appearance: none;
+    background: transparent;
+    border: 0;
+    border-block-end: 1px solid var(--border-muted);
+    color: inherit;
+    cursor: pointer;
+    font: inherit;
+    padding: var(--gh-space-3) 0;
+    text-align: left;
+  }
+
+  .assignment-picker-row:hover,
+  .assignment-picker-row:focus-visible {
+    color: var(--accent);
+    outline: none;
+  }
+
+  .project-index-summary {
+    border-inline-start: 2px solid var(--accent);
+    display: grid;
+    gap: var(--gh-space-2);
+    padding-inline-start: var(--gh-space-3);
+  }
+
+  .graph-request {
+    border-block-start: 1px solid var(--border-muted);
+    display: grid;
+    gap: var(--gh-space-3);
+    padding-block-start: var(--gh-space-3);
+  }
+
+  .graph-request:first-child {
+    border-block-start: 0;
+    padding-block-start: 0;
+  }
+
+  .graph-request-inbound {
+    border-inline-start: 2px solid var(--accent);
+    padding-inline-start: var(--gh-space-3);
+  }
+
+  .graph-request-head {
+    display: flex;
+    justify-content: space-between;
+    gap: var(--gh-space-3);
+    align-items: flex-start;
+  }
+
+  .request-status-stack {
+    display: grid;
+    justify-items: end;
+    gap: var(--gh-space-1);
+    min-width: max-content;
+  }
+
+  .graph-request-head p {
+    margin: var(--gh-space-1) 0 0;
+    color: var(--text-muted);
+    font-size: var(--fs-1);
+    line-height: var(--lh-body);
+  }
+
   @container (min-width: 42rem) {
     .check-row {
       grid-template-columns: minmax(0, 1fr) minmax(16rem, auto);
@@ -3471,6 +4232,10 @@
 
     .map-list-grid {
       grid-template-columns: repeat(2, minmax(0, 1fr));
+    }
+
+    .graph-grid {
+      grid-template-columns: minmax(0, 1.4fr) minmax(18rem, 0.8fr);
     }
 
   }

@@ -281,6 +281,7 @@ describe('Guildhall CLI surface', () => {
       'review-calibration',
       'model-bakeoff',
       'benchmarks',
+      'graph',
       'mcp',
       'bridge',
     ])
@@ -307,6 +308,11 @@ describe('Guildhall CLI surface', () => {
     expect(help).toContain('guildhall review-calibration draft-case')
     expect(help).toContain('guildhall review-calibration validate-planning')
     expect(help).toContain('guildhall review-calibration validate-sizing')
+    expect(help).toContain('guildhall graph request publish')
+    expect(help).toContain('guildhall graph request import')
+    expect(help).toContain('guildhall graph deliver')
+    expect(help).toContain('guildhall graph delivery accept')
+    expect(help).toContain('guildhall graph delivery return')
   })
 
   it('validates and records the review calibration corpus through persistence', async () => {

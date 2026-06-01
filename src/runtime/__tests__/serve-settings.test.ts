@@ -17,6 +17,8 @@ import { proposeProjectSkill } from '@guildhall/skills'
 import { getProjectLocalHistoryDir, getProjectTranscriptPath } from '@guildhall/sessions'
 import { buildServeApp } from '../serve.js'
 import { persistLearningCandidates } from '../learning.js'
+import { acceptStructuralMap, draftStructuralMap, submitStructuralMapForReview } from '../structural-map.js'
+import { createProjectDependencyRequest } from '../project-graph.js'
 import type { LearningCandidate } from '../policy.js'
 
 const execFileP = promisify(execFile)
@@ -2642,4 +2644,395 @@ describe('GET /api/project — bootstrap status', () => {
     expect(inboxRes.headers.get('cache-control')).toBe('no-store, no-cache, must-revalidate')
     expect(inboxRes.headers.get('pragma')).toBe('no-cache')
   })
+
+  it('includes a structural map review summary for owner review', async () => {
+    await fs.mkdir(path.join(tmpDir, 'packages', 'core'), { recursive: true })
+    await fs.mkdir(path.join(tmpDir, 'packages', 'editor'), { recursive: true })
+    await fs.writeFile(
+      path.join(tmpDir, 'package.json'),
+      JSON.stringify({
+        name: 'settings-test',
+        private: true,
+        workspaces: ['packages/*'],
+      }, null, 2),
+      'utf8',
+    )
+    await fs.writeFile(
+      path.join(tmpDir, 'packages', 'core', 'package.json'),
+      JSON.stringify({
+        name: '@settings/core',
+        scripts: { test: 'vitest run' },
+      }, null, 2),
+      'utf8',
+    )
+    await fs.writeFile(
+      path.join(tmpDir, 'packages', 'editor', 'package.json'),
+      JSON.stringify({
+        name: '@settings/editor',
+        dependencies: { '@settings/core': 'workspace:*' },
+      }, null, 2),
+      'utf8',
+    )
+    const draft = await draftStructuralMap({
+      projectId: PROJECT_ID,
+      projectRoot: tmpDir,
+      now: '2026-06-01T12:00:00.000Z',
+    })
+    const review = await submitStructuralMapForReview({
+      projectRoot: tmpDir,
+      mapId: draft.id,
+      actor: 'coordinator',
+      now: '2026-06-01T12:01:00.000Z',
+    })
+    await acceptStructuralMap({
+      projectRoot: tmpDir,
+      mapId: review.id,
+      actor: 'owner',
+      now: '2026-06-01T12:02:00.000Z',
+    })
+
+    const { app } = buildServeApp({ projectPath: tmpDir })
+    const res = await app.fetch(new Request(scoped('/api/project')))
+    expect(res.status).toBe(200)
+    const body = (await res.json()) as {
+      structuralMapReview?: {
+        state?: string
+        counts?: Record<string, number>
+        packages?: Array<{ id: string; label: string }>
+        domains?: Array<{ id: string; label: string }>
+        executableUnits?: Array<{ id: string; command?: string }>
+        gitRoots?: Array<{ path: string }>
+        questions?: Array<{ id: string; prompt: string }>
+      }
+    }
+
+    expect(body.structuralMapReview?.state).toBe('accepted')
+    expect(body.structuralMapReview?.counts?.packages).toBe(2)
+    expect(body.structuralMapReview?.packages?.map(item => item.label)).toEqual(expect.arrayContaining(['@settings/core', '@settings/editor']))
+    expect(body.structuralMapReview?.domains?.some(item => item.id.startsWith('domain:'))).toBe(true)
+    expect(body.structuralMapReview?.executableUnits?.some(item => item.command === 'npm --workspace @settings/core run test')).toBe(true)
+    expect(body.structuralMapReview?.gitRoots?.[0]?.path).toBe('.')
+    expect(body.structuralMapReview?.questions?.length).toBeGreaterThan(0)
+
+    const graphRes = await app.fetch(new Request(scoped('/api/project/project-graph')))
+    expect(graphRes.status).toBe(200)
+    const graphBody = (await graphRes.json()) as {
+      projectGraph?: { structuralDomains?: Array<{ id?: string; label?: string; kind?: string }> }
+    }
+    expect(graphBody.projectGraph?.structuralDomains?.some(item => item.id?.startsWith('domain:'))).toBe(true)
+    expect(graphBody.projectGraph?.structuralDomains?.every(item => item.kind === 'structural_domain')).toBe(true)
+  })
+
+  it('applies structural map review actions through the owning project endpoint', async () => {
+    await fs.mkdir(path.join(tmpDir, 'packages', 'core'), { recursive: true })
+    await fs.writeFile(
+      path.join(tmpDir, 'package.json'),
+      JSON.stringify({
+        name: 'settings-test',
+        private: true,
+        workspaces: ['packages/*'],
+      }, null, 2),
+      'utf8',
+    )
+    await fs.writeFile(
+      path.join(tmpDir, 'packages', 'core', 'package.json'),
+      JSON.stringify({ name: '@settings/core' }, null, 2),
+      'utf8',
+    )
+    const draft = await draftStructuralMap({
+      projectId: PROJECT_ID,
+      projectRoot: tmpDir,
+      now: '2026-06-01T12:10:00.000Z',
+    })
+    const review = await submitStructuralMapForReview({
+      projectRoot: tmpDir,
+      mapId: draft.id,
+      actor: 'coordinator',
+      now: '2026-06-01T12:11:00.000Z',
+    })
+
+    const { app } = buildServeApp({ projectPath: tmpDir })
+    const rename = await app.fetch(new Request(scoped('/api/project/structural-map/action'), {
+      method: 'POST',
+      body: JSON.stringify({
+        mapId: review.id,
+        action: { kind: 'rename_node', nodeId: 'domain:core', label: 'Core runtime' },
+      }),
+    }))
+    expect(rename.status).toBe(200)
+    const renameBody = (await rename.json()) as { structuralMapReview?: { domains?: Array<{ label?: string }> } }
+    expect(renameBody.structuralMapReview?.domains?.map(item => item.label)).toContain('Core runtime')
+
+    const accept = await app.fetch(new Request(scoped('/api/project/structural-map/action'), {
+      method: 'POST',
+      body: JSON.stringify({
+        mapId: review.id,
+        action: { kind: 'accept' },
+      }),
+    }))
+    expect(accept.status).toBe(200)
+    const acceptBody = (await accept.json()) as { structuralMapReview?: { state?: string } }
+    expect(acceptBody.structuralMapReview?.state).toBe('accepted')
+  })
+
+  it('serves the scoped local project graph view for the selected project', async () => {
+    const providerDir = await fs.mkdtemp(path.join(os.tmpdir(), 'guildhall-serve-settings-provider-'))
+    try {
+      bootstrapWorkspace(providerDir, { name: 'Looma' })
+      await createProjectDependencyRequest({
+        consumerProject: { id: PROJECT_ID, path: tmpDir, label: 'Settings Test' },
+        providerProject: { id: 'looma', path: providerDir, label: 'Looma' },
+        domain: { id: 'domain:editor', label: 'Editor' },
+        consumerNeed: 'Settings Test needs an editor adapter.',
+        rationale: 'The editor domain is provider-owned by Looma.',
+        requestedBy: 'coordinator:settings-test',
+        expectedDelivery: {
+          format: 'Svelte editor adapter',
+          channel: 'npm dev tag',
+          consumerVerificationPlan: ['Run settings-test editor integration.'],
+        },
+        now: '2026-06-01T12:20:00.000Z',
+      })
+
+      const { app } = buildServeApp({ projectPath: tmpDir })
+      const res = await app.fetch(new Request(scoped('/api/project/project-graph')))
+      expect(res.status).toBe(200)
+      const body = (await res.json()) as {
+        projectGraph?: {
+          localProjects?: Array<{ id?: string; role?: string }>
+          authorityRoots?: Array<{ projectId?: string; domainId?: string }>
+          unresolvedRequests?: Array<{ waitingOn?: string }>
+        }
+      }
+      expect(body.projectGraph?.localProjects).toEqual(expect.arrayContaining([
+        expect.objectContaining({ id: PROJECT_ID, role: 'current' }),
+        expect.objectContaining({ id: 'looma', role: 'provider' }),
+      ]))
+      expect(body.projectGraph?.authorityRoots).toContainEqual(expect.objectContaining({
+        projectId: 'looma',
+        domainId: 'domain:editor',
+      }))
+      expect(body.projectGraph?.unresolvedRequests).toContainEqual(expect.objectContaining({
+        waitingOn: 'provider',
+      }))
+    } finally {
+      await fs.rm(providerDir, { recursive: true, force: true })
+    }
+  })
+
+  it('serves child project graph targets and assigns domain responsibility facets', async () => {
+    const workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), 'guildhall-serve-settings-workspace-provider-'))
+    try {
+      await fs.mkdir(path.join(workspaceDir, 'looma'), { recursive: true })
+      await fs.mkdir(path.join(workspaceDir, 'knit'), { recursive: true })
+      writeWorkspaceConfig(workspaceDir, {
+        name: 'Looma + Knit',
+        id: 'looma-knit',
+        kind: 'workspace',
+        projects: [
+          { id: 'looma', label: 'Looma', type: 'library', path: 'looma', coordinator: 'looma' },
+          { id: 'knit', label: 'Knit', type: 'app', path: 'knit', coordinator: 'knit' },
+        ],
+      } as Parameters<typeof writeWorkspaceConfig>[1])
+      registerWorkspace({ id: 'looma-knit', path: workspaceDir, name: 'Looma + Knit', tags: [] })
+
+      const { app } = buildServeApp({ projectPath: tmpDir })
+      const graph = await app.fetch(new Request(scoped('/api/project/project-graph')))
+      expect(graph.status).toBe(200)
+      const graphBody = (await graph.json()) as {
+        projectGraph?: {
+          localProjects?: Array<{ id?: string; role?: string; path?: string }>
+          domainResponsibilities?: Array<{ facet?: string; responsibleProjectId?: string; assignable?: boolean }>
+        }
+      }
+      expect(graphBody.projectGraph?.localProjects).toEqual(expect.arrayContaining([
+        expect.objectContaining({ id: 'looma-knit', role: 'related', path: workspaceDir }),
+        expect.objectContaining({ id: 'looma', role: 'related', path: path.join(workspaceDir, 'looma') }),
+        expect.objectContaining({ id: 'knit', role: 'related', path: path.join(workspaceDir, 'knit') }),
+      ]))
+
+      const assign = await app.fetch(new Request(scoped('/api/project/project-graph/domain-responsibility'), {
+        method: 'POST',
+        body: JSON.stringify({
+          domainId: 'domain:ui-foundation',
+          domainLabel: 'UI foundation',
+          facet: 'provider_capability',
+          responsibleProjectId: 'looma',
+        }),
+      }))
+      expect(assign.status).toBe(200)
+      const assignBody = (await assign.json()) as {
+        projectGraph?: {
+          domainResponsibilities?: Array<{ domainId?: string; facet?: string; responsibleProjectId?: string; assignable?: boolean }>
+        }
+      }
+      expect(assignBody.projectGraph?.domainResponsibilities).toEqual(expect.arrayContaining([
+        expect.objectContaining({
+          domainId: 'domain:ui-foundation',
+          facet: 'provider_capability',
+          responsibleProjectId: 'looma',
+        }),
+        expect.objectContaining({
+          domainId: 'domain:ui-foundation',
+          facet: 'consumer_configuration',
+          responsibleProjectId: PROJECT_ID,
+          assignable: false,
+        }),
+      ]))
+    } finally {
+      await fs.rm(workspaceDir, { recursive: true, force: true })
+    }
+  })
+
+  it('assigns domain authority and drives provider/consumer request actions through owning project endpoints', async () => {
+    const providerDir = await fs.mkdtemp(path.join(os.tmpdir(), 'guildhall-serve-settings-provider-'))
+    try {
+      bootstrapWorkspace(providerDir, { name: 'Looma' })
+      registerWorkspace({ id: 'looma', path: providerDir, name: 'Looma', tags: [] })
+
+      const consumerApp = buildServeApp({ projectPath: tmpDir }).app
+      const assign = await consumerApp.fetch(new Request(scoped('/api/project/project-graph/domain-authority'), {
+        method: 'POST',
+        body: JSON.stringify({
+          domainId: 'domain:editor',
+          domainLabel: 'Editor',
+          providerProjectId: 'looma',
+        }),
+      }))
+      expect(assign.status).toBe(200)
+      const assignBody = (await assign.json()) as {
+        projectGraph?: { domainAuthorities?: Array<{ domain?: { id?: string }; providerProject?: { id?: string } }> }
+      }
+      expect(assignBody.projectGraph?.domainAuthorities).toContainEqual(expect.objectContaining({
+        domain: expect.objectContaining({ id: 'domain:editor' }),
+        providerProject: expect.objectContaining({ id: 'looma' }),
+      }))
+
+      const edge = await createProjectDependencyRequest({
+        consumerProject: { id: PROJECT_ID, path: tmpDir, label: 'Settings Test' },
+        providerProject: { id: 'looma', path: providerDir, label: 'Looma' },
+        domain: { id: 'domain:editor', label: 'Editor' },
+        consumerNeed: 'Settings Test needs a portable editor control.',
+        rationale: 'The editor domain is provider-owned by Looma.',
+        requestedBy: 'coordinator:settings-test',
+        expectedDelivery: {
+          format: 'portable editor package',
+          channel: 'local path artifact',
+          consumerVerificationPlan: ['Run Settings Test editor integration.'],
+        },
+        now: '2026-06-01T12:30:00.000Z',
+      })
+
+      const providerApp = buildServeApp({ projectPath: providerDir }).app
+      const providerGraph = await providerApp.fetch(new Request(`http://localhost/api/project/project-graph?projectId=looma`))
+      expect(providerGraph.status).toBe(200)
+      const providerBody = (await providerGraph.json()) as {
+        projectGraph?: { dependencyEdges?: Array<{ id?: string; state?: string; consumerProjectId?: string }> }
+      }
+      expect(providerBody.projectGraph?.dependencyEdges).toContainEqual(expect.objectContaining({
+        id: edge.id,
+        state: 'submitted',
+        consumerProjectId: PROJECT_ID,
+      }))
+
+      const providerAccept = await providerApp.fetch(new Request(`http://localhost/api/project/project-graph/requests/${edge.id}/provider-accept?projectId=looma`, {
+        method: 'POST',
+        body: JSON.stringify({ providerTaskRef: 'task-editor-control' }),
+      }))
+      expect(providerAccept.status).toBe(200)
+      expect(await readJsonState(providerAccept)).toEqual(expect.objectContaining({ edgeState: 'provider_shaping' }))
+
+      const providerPlan = await providerApp.fetch(new Request(`http://localhost/api/project/project-graph/requests/${edge.id}/provider-plan?projectId=looma`, {
+        method: 'POST',
+        body: JSON.stringify({
+          format: 'portable editor package',
+          channel: 'local path artifact',
+          providerProofPlan: ['pnpm test editor'],
+          consumerVerificationPlan: ['pnpm test settings-editor'],
+        }),
+      }))
+      expect(providerPlan.status).toBe(200)
+      expect(await readJsonState(providerPlan)).toEqual(expect.objectContaining({ edgeState: 'provider_working' }))
+
+      const providerDeliver = await providerApp.fetch(new Request(`http://localhost/api/project/project-graph/requests/${edge.id}/provider-deliver?projectId=looma`, {
+        method: 'POST',
+        body: JSON.stringify({
+          id: 'delivery-1',
+          format: 'portable editor package',
+          channel: 'local path artifact',
+          coordinates: `${providerDir}/dist/editor.tgz`,
+          providerProof: ['pnpm test editor passed'],
+        }),
+      }))
+      expect(providerDeliver.status).toBe(200)
+      expect(await readJsonState(providerDeliver)).toEqual(expect.objectContaining({ edgeState: 'delivered' }))
+
+      const consumerReview = await consumerApp.fetch(new Request(scoped(`/api/project/project-graph/requests/${edge.id}/consumer-review`), {
+        method: 'POST',
+        body: JSON.stringify({ verificationContext: 'Settings Test tried the editor package.' }),
+      }))
+      expect(consumerReview.status).toBe(200)
+      expect(await readJsonState(consumerReview)).toEqual(expect.objectContaining({ edgeState: 'consumer_reviewing' }))
+
+      const consumerReturn = await consumerApp.fetch(new Request(scoped(`/api/project/project-graph/requests/${edge.id}/consumer-return`), {
+        method: 'POST',
+        body: JSON.stringify({
+          deliveryReceiptId: 'delivery-1',
+          mismatchKind: 'format',
+          expected: 'tarball package',
+          received: 'folder path',
+          failedVerification: ['install failed'],
+          requestedCorrection: 'Publish a tarball package.',
+        }),
+      }))
+      expect(consumerReturn.status).toBe(200)
+      expect(await readJsonState(consumerReturn)).toEqual(expect.objectContaining({ edgeState: 'revision_requested' }))
+
+      const providerRevise = await providerApp.fetch(new Request(`http://localhost/api/project/project-graph/requests/${edge.id}/provider-plan?projectId=looma`, {
+        method: 'POST',
+        body: JSON.stringify({
+          format: 'tarball package',
+          channel: 'local path artifact',
+          consumerVerificationPlan: ['install tarball'],
+        }),
+      }))
+      expect(providerRevise.status).toBe(200)
+      expect(await readJsonState(providerRevise)).toEqual(expect.objectContaining({ edgeState: 'provider_working' }))
+
+      const providerRedeliver = await providerApp.fetch(new Request(`http://localhost/api/project/project-graph/requests/${edge.id}/provider-deliver?projectId=looma`, {
+        method: 'POST',
+        body: JSON.stringify({
+          id: 'delivery-2',
+          format: 'tarball package',
+          channel: 'local path artifact',
+          coordinates: `${providerDir}/dist/editor-2.tgz`,
+          providerProof: ['tarball created'],
+        }),
+      }))
+      expect(providerRedeliver.status).toBe(200)
+      expect(await readJsonState(providerRedeliver)).toEqual(expect.objectContaining({ edgeState: 'delivered' }))
+
+      const consumerReviewAgain = await consumerApp.fetch(new Request(scoped(`/api/project/project-graph/requests/${edge.id}/consumer-review`), {
+        method: 'POST',
+        body: JSON.stringify({ verificationContext: 'Settings Test installed the tarball.' }),
+      }))
+      expect(consumerReviewAgain.status).toBe(200)
+
+      const consumerAccept = await consumerApp.fetch(new Request(scoped(`/api/project/project-graph/requests/${edge.id}/consumer-accept`), {
+        method: 'POST',
+        body: JSON.stringify({ consumerProof: ['install tarball passed'] }),
+      }))
+      expect(consumerAccept.status).toBe(200)
+      expect(await readJsonState(consumerAccept)).toEqual(expect.objectContaining({ edgeState: 'resolved' }))
+    } finally {
+      await fs.rm(providerDir, { recursive: true, force: true })
+    }
+  })
 })
+
+async function readJsonState(response: Response): Promise<{ edgeState?: string }> {
+  const body = (await response.json()) as {
+    edge?: { stateMachine?: { state?: string } }
+  }
+  return { edgeState: body.edge?.stateMachine?.state }
+}

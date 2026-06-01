@@ -901,6 +901,50 @@ export interface BootstrapStatus {
   steps?: BootstrapStep[]
 }
 
+export interface StructuralMapReviewSummaryNode {
+  id: string
+  label: string
+  path?: string
+  command?: string
+  confidence?: 'low' | 'medium' | 'high' | 'conflict' | string
+  evidenceScore?: number
+  freshness?: 'fresh' | 'recent' | 'stale' | 'unknown' | string
+}
+
+export interface StructuralMapReviewSummary {
+  id?: string
+  state?: 'draft' | 'owner_review' | 'correction_requested' | 'accepted' | 'superseded' | string
+  generatedAt?: string
+  counts?: {
+    gitRoots?: number
+    ignoredGitRoots?: number
+    packages?: number
+    domains?: number
+    crossCuttingDomains?: number
+    executableUnits?: number
+    conflicts?: number
+    questions?: number
+  }
+  gitRoots?: StructuralMapReviewSummaryNode[]
+  ignoredGitRoots?: StructuralMapReviewSummaryNode[]
+  packages?: StructuralMapReviewSummaryNode[]
+  domains?: StructuralMapReviewSummaryNode[]
+  crossCuttingDomains?: StructuralMapReviewSummaryNode[]
+  executableUnits?: StructuralMapReviewSummaryNode[]
+  conflicts?: Array<{
+    id?: string
+    message?: string
+    severity?: 'low' | 'medium' | 'high' | string
+    targetId?: string
+  }>
+  questions?: Array<{
+    id?: string
+    prompt?: string
+    reason?: string
+    targetIds?: string[]
+  }>
+}
+
 export interface ProjectInbox {
   items?: Array<{
     kind?: string
@@ -939,6 +983,7 @@ export interface ProjectDetail {
   providerStatus?: ProviderStatus | null
   runtime?: ProjectRuntimeSummary | null
   memoryHealth?: ProjectMemoryHealth | null
+  structuralMapReview?: StructuralMapReviewSummary | null
   gitStory?: GitStorySummary | null
   startReadiness?: StartReadiness | null
   bootstrapStatus?: BootstrapStatus

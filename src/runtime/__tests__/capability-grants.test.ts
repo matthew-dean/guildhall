@@ -169,4 +169,107 @@ describe('capability grants', () => {
     expect(listActiveCapabilityGrants(memoryDir)).toEqual([])
     expect(capabilityGrantMounts(memoryDir)).toEqual([])
   })
+
+  it('rejects capability lifecycle decisions that are not legal from the current status', async () => {
+    const projectRoot = await mkdtemp(path.join(tmpdir(), 'guildhall-capability-project-'))
+    const memoryDir = getProjectStateDir(projectRoot)
+    const deniedRequest = await createCapabilityRequest({
+      memoryDir,
+      taskId: 'task-denied',
+      kind: 'mount_directory',
+      requestedBy: 'worker-agent',
+      reason: 'Need a folder that should stay unavailable.',
+      mount: {
+        hostPath: '/Users/matthew/private',
+        containerPath: '/mnt/requested/private',
+        access: 'read-only',
+      },
+    })
+    const pendingRequest = await createCapabilityRequest({
+      memoryDir,
+      taskId: 'task-pending',
+      kind: 'mount_directory',
+      requestedBy: 'worker-agent',
+      reason: 'Need a fixture folder.',
+      mount: {
+        hostPath: '/Users/matthew/git/oss/fixtures',
+        containerPath: '/mnt/requested/fixtures',
+        access: 'read-only',
+      },
+    })
+
+    const denied = await denyCapabilityRequest({
+      memoryDir,
+      projectRoot,
+      requestId: deniedRequest.id,
+      deniedBy: 'owner',
+    })
+
+    await expect(approveMountDirectoryRequest({
+      memoryDir,
+      projectRoot,
+      requestId: denied.id,
+      approvedBy: 'owner',
+    })).rejects.toThrow(/Capability request .* cannot approve from denied/)
+
+    await expect(revokeCapabilityGrant({
+      memoryDir,
+      projectRoot,
+      requestId: pendingRequest.id,
+      revokedBy: 'owner',
+    })).rejects.toThrow(/Capability request .* cannot revoke from pending/)
+  })
+
+  it('records deterministic transition receipts for capability lifecycle decisions', async () => {
+    const projectRoot = await mkdtemp(path.join(tmpdir(), 'guildhall-capability-project-'))
+    const memoryDir = getProjectStateDir(projectRoot)
+    const request = await createCapabilityRequest({
+      memoryDir,
+      taskId: 'task-blocked-then-approved',
+      kind: 'mount_directory',
+      requestedBy: 'worker-agent',
+      reason: 'Need a repo that must be cloned first.',
+      mount: {
+        hostPath: '/Users/matthew/git/private/repo',
+        containerPath: '/mnt/requested/private-repo',
+        access: 'read-only',
+      },
+    })
+
+    const blocked = await markCapabilityRequestBlocked({
+      memoryDir,
+      projectRoot,
+      requestId: request.id,
+      blockedBy: 'owner',
+      reason: 'Clone the repo first.',
+    })
+    const approved = await approveMountDirectoryRequest({
+      memoryDir,
+      projectRoot,
+      requestId: request.id,
+      approvedBy: 'owner',
+    })
+
+    expect(blocked.transitionReceipts).toHaveLength(1)
+    expect(approved.transitionReceipts).toEqual([
+      expect.objectContaining({
+        machineId: 'capability-request',
+        machineVersion: 1,
+        entityId: request.id,
+        from: 'pending',
+        event: 'block',
+        to: 'blocked',
+        actor: 'owner',
+      }),
+      expect.objectContaining({
+        machineId: 'capability-request',
+        machineVersion: 1,
+        entityId: request.id,
+        from: 'blocked',
+        event: 'approve',
+        to: 'approved',
+        actor: 'owner',
+      }),
+    ])
+  })
 })

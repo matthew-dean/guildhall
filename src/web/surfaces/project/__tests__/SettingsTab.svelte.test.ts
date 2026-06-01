@@ -171,6 +171,169 @@ describe('SettingsTab', () => {
     expect(path.value).toBe('/projects/looma-knit/settings/providers')
   })
 
+  it('surfaces project graph domain assignment and inbound request actions', async () => {
+    project.detail = {
+      ...project.detail,
+      structuralMapReview: {
+        id: 'map-1',
+        state: 'accepted',
+        domains: [{ id: 'domain:editor', label: 'Editor' }],
+      },
+    }
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = new URL(String(input), 'http://localhost')
+      if (url.pathname === '/api/setup/status') return json({ initialized: true, name: 'Looma + Knit', id: 'looma-knit' })
+      if (url.pathname === '/api/config/levers') return json({ levers: [] })
+      if (url.pathname === '/api/project/design-system') return json({ designSystem: null })
+      if (url.pathname === '/api/project/codebase-map/status') return json(codebaseMapStatus())
+      if (url.pathname === '/api/setup/providers') return json(providersPayload())
+      if (url.pathname === '/api/project/bootstrap/status') {
+        return json({ configured: true, needed: false, status: null, bootstrap: { commands: [], successGates: [], timeoutMs: 0 } })
+      }
+      if (url.pathname === '/api/project/project-graph' && init?.method !== 'POST') {
+        return json({
+          projectGraph: {
+            currentProject: { id: 'looma-knit', label: 'Looma + Knit', path: '/workspace/looma-knit' },
+            localProjects: [
+              { id: 'looma-knit', label: 'Looma + Knit', role: 'current', path: '/workspace/looma-knit' },
+              { id: 'looma', label: 'Looma', role: 'related', path: '/workspace/looma-knit/looma' },
+            ],
+            structuralDomains: [
+              {
+                id: 'domain:editor',
+                label: 'Editor',
+                kind: 'structural_domain',
+                coordinatorId: 'editor-coordinator',
+                coordinatorName: 'Editor coordinator',
+              },
+            ],
+            domainResponsibilities: [
+              {
+                id: 'domain:editor:provider_capability',
+                domainId: 'domain:editor',
+                domainLabel: 'Editor',
+                facet: 'provider_capability',
+                facetLabel: 'Provider capability',
+                description: 'Reusable editor components and APIs.',
+                authority: 'provider',
+                responsibleProjectId: 'looma-knit',
+                responsibleProjectLabel: 'Looma + Knit',
+                responsibleProjectPath: '/workspace/looma-knit',
+                assignable: true,
+                assigned: false,
+              },
+              {
+                id: 'domain:editor:shared_contract',
+                domainId: 'domain:editor',
+                domainLabel: 'Editor',
+                facet: 'shared_contract',
+                facetLabel: 'Shared contract',
+                description: 'Component API, config schema, and package boundary.',
+                authority: 'shared',
+                responsibleProjectId: 'looma-knit',
+                responsibleProjectLabel: 'Looma + Knit',
+                responsibleProjectPath: '/workspace/looma-knit',
+                assignable: true,
+                assigned: false,
+              },
+              {
+                id: 'domain:editor:consumer_configuration',
+                domainId: 'domain:editor',
+                domainLabel: 'Editor',
+                facet: 'consumer_configuration',
+                facetLabel: 'Consumer configuration',
+                description: 'Token values, product taste, and editor composition stay local.',
+                authority: 'consumer',
+                responsibleProjectId: 'looma-knit',
+                responsibleProjectLabel: 'Looma + Knit',
+                responsibleProjectPath: '/workspace/looma-knit',
+                assignable: false,
+                assigned: false,
+              },
+              {
+                id: 'domain:editor:consumer_verification',
+                domainId: 'domain:editor',
+                domainLabel: 'Editor',
+                facet: 'consumer_verification',
+                facetLabel: 'Consumer verification',
+                description: 'Looma + Knit verifies the delivered capability in its product context.',
+                authority: 'consumer',
+                responsibleProjectId: 'looma-knit',
+                responsibleProjectLabel: 'Looma + Knit',
+                responsibleProjectPath: '/workspace/looma-knit',
+                assignable: false,
+                assigned: false,
+              },
+            ],
+            domainAuthorities: [],
+            dependencyEdges: [{
+              id: 'edge-knit-looma',
+              state: 'submitted',
+              consumerProjectId: 'knit',
+              consumerProjectLabel: 'Knit',
+              providerProjectId: 'looma-knit',
+              providerProjectLabel: 'Looma + Knit',
+              domainId: 'domain:editor',
+              domainLabel: 'Editor',
+              consumerNeed: 'Knit needs the Looma editor.',
+              unresolved: true,
+            }],
+          },
+        })
+      }
+      if (url.pathname === '/api/project/project-graph/domain-responsibility') {
+        expect(init?.method).toBe('POST')
+        const body = JSON.parse(String(init?.body ?? '{}'))
+        expect(body).toEqual(expect.objectContaining({
+          domainId: 'domain:editor',
+          facet: 'provider_capability',
+          responsibleProjectId: 'looma',
+        }))
+        return json({ projectGraph: { localProjects: [], domainResponsibilities: [] } })
+      }
+      if (url.pathname === '/api/project/project-graph/requests/edge-knit-looma/provider-accept') {
+        expect(init?.method).toBe('POST')
+        return json({ projectGraph: { localProjects: [], dependencyEdges: [] } })
+      }
+      return json({})
+    })
+    vi.stubGlobal('fetch', fetchMock)
+
+    const { container } = render(SettingsTab, { subView: 'graph' })
+
+    await screen.findByRole('heading', { name: 'Project graph' })
+    expect(screen.getByRole('heading', { name: 'Domains' })).toBeInTheDocument()
+    expect(screen.getByText('Detected here - routed by Editor coordinator')).toBeInTheDocument()
+    expect(screen.queryByText('Provider capability')).not.toBeInTheDocument()
+    expect(screen.queryByRole('combobox', { name: /responsible project/i })).not.toBeInTheDocument()
+    expect(screen.getByText('Available to assign')).toBeInTheDocument()
+    expect(screen.getByText('2 projects in the local index')).toBeInTheDocument()
+    expect(screen.queryByText('Related local project')).not.toBeInTheDocument()
+    expect(screen.queryByText('Available for manual assignment')).not.toBeInTheDocument()
+    expect(screen.queryByText('Commerce project')).not.toBeInTheDocument()
+    expect(screen.getByText('Knit needs the Looma editor.')).toBeInTheDocument()
+    expect(screen.getByText('Waiting on provider')).toBeInTheDocument()
+    expect(screen.getByText('This project is provider')).toBeInTheDocument()
+
+    await userEvent.click(screen.getByRole('button', { name: /open editor domain/i }))
+    expect(screen.getByRole('heading', { name: 'Editor' })).toBeInTheDocument()
+    expect(screen.getByText('Reusable editor components and APIs.')).toBeInTheDocument()
+    expect(screen.getByText('Token values, product taste, and editor composition stay local.')).toBeInTheDocument()
+    expect(screen.queryByText('Shared contract')).not.toBeInTheDocument()
+    expect(container.querySelector('.graph-card .utility-panel')).toBeNull()
+    expect(screen.queryByRole('button', { name: 'Assign to Looma' })).not.toBeInTheDocument()
+
+    expect(screen.getAllByRole('button', { name: 'Assign to project' })).toHaveLength(1)
+    await userEvent.click(screen.getByRole('button', { name: 'Assign to project' }))
+    await screen.findByRole('dialog', { name: 'Assign Editor' })
+    await userEvent.type(screen.getByRole('searchbox', { name: 'Find project' }), 'loo')
+    await userEvent.click(screen.getByRole('button', { name: 'Looma' }))
+    await waitFor(() => expect(fetchMock.mock.calls.some(([input]) => String(input).includes('/domain-responsibility'))).toBe(true))
+
+    await userEvent.click(screen.getByRole('button', { name: 'Accept request' }))
+    await waitFor(() => expect(fetchMock.mock.calls.some(([input]) => String(input).includes('/provider-accept'))).toBe(true))
+  })
+
   it('surfaces bootstrap run failures without marking the project ready', async () => {
     const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
       const url = new URL(String(input), 'http://localhost')

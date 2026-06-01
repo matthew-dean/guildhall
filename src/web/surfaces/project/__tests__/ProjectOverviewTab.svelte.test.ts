@@ -1,12 +1,21 @@
 // @vitest-environment happy-dom
 import '@testing-library/jest-dom/vitest'
-import { cleanup, render, screen } from '@testing-library/svelte'
-import { afterEach, describe, expect, it } from 'vitest'
+import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/svelte'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import ProjectOverviewTab from '../ProjectOverviewTab.svelte'
+
+function json(data: unknown, init: ResponseInit = {}): Response {
+  return new Response(JSON.stringify(data), {
+    status: 200,
+    headers: { 'content-type': 'application/json' },
+    ...init,
+  })
+}
 
 describe('ProjectOverviewTab', () => {
   afterEach(() => {
     cleanup()
+    vi.restoreAllMocks()
   })
 
   it('renders same-task escalation inbox items with distinct escalation ids', () => {
@@ -434,5 +443,143 @@ describe('ProjectOverviewTab', () => {
     expect(screen.getAllByText(/3 active/).length).toBeGreaterThan(0)
     expect(screen.getByText('Primary proof paths')).toBeInTheDocument()
     expect(screen.getByText('Verify runtime card')).toBeInTheDocument()
+  })
+
+  it('surfaces structural map review facts for owner inspection', () => {
+    render(ProjectOverviewTab, {
+      detail: {
+        id: 'guildhall',
+        name: 'Guildhall',
+        path: '/Users/matthew/git/oss/guildhall',
+        tasks: [],
+        structuralMapReview: {
+          state: 'accepted',
+          generatedAt: '2026-06-01T12:00:00.000Z',
+          counts: {
+            packages: 2,
+            domains: 1,
+            crossCuttingDomains: 1,
+            executableUnits: 1,
+            gitRoots: 1,
+            ignoredGitRoots: 1,
+            conflicts: 1,
+            questions: 1,
+          },
+          gitRoots: [{ id: 'git:root', label: 'Project root', path: '.', confidence: 'high' }],
+          ignoredGitRoots: [{ id: 'git:ignored-vendor', label: 'Vendor fixture', path: 'vendor/fixture', confidence: 'low' }],
+          packages: [
+            { id: 'package:guildhall-core', label: '@guildhall/core', path: 'packages/core', confidence: 'high' },
+            { id: 'package:guildhall-web', label: '@guildhall/web', path: 'src/web', confidence: 'medium' },
+          ],
+          domains: [{ id: 'domain:runtime', label: 'Runtime', confidence: 'high' }],
+          crossCuttingDomains: [{ id: 'cross-cutting:design-system-reuse', label: 'Design-system reuse', confidence: 'medium' }],
+          executableUnits: [{ id: 'exec:guildhall-core:test', label: 'test', command: 'pnpm --filter @guildhall/core test', confidence: 'high' }],
+          conflicts: [{ id: 'conflict-domain-runtime', message: 'Runtime appears in package and path evidence.', severity: 'medium' }],
+          questions: [{ id: 'question-runtime-owner', prompt: 'Should runtime own provider routing?' }],
+        },
+      },
+      inboxLoaded: true,
+      inboxItems: [],
+      projectTicker: {
+        label: 'Not running',
+        actorLabel: 'Guildhall',
+        message: 'Project is waiting.',
+        tone: 'idle',
+        pulse: false,
+      },
+      activeProjectId: 'guildhall',
+    })
+
+    expect(screen.getByRole('heading', { name: 'Project map' })).toBeInTheDocument()
+    expect(screen.getByText('Accepted')).toBeInTheDocument()
+    expect(screen.getByText('2 packages')).toBeInTheDocument()
+    expect(screen.getByText('Runtime')).toBeInTheDocument()
+    expect(screen.getByText('Design-system reuse')).toBeInTheDocument()
+    expect(screen.getByText('@guildhall/core')).toBeInTheDocument()
+    expect(screen.getByText('pnpm --filter @guildhall/core test')).toBeInTheDocument()
+    expect(screen.getByText('vendor/fixture')).toBeInTheDocument()
+    expect(screen.getByText('Runtime appears in package and path evidence.')).toBeInTheDocument()
+    expect(screen.getByText('Should runtime own provider routing?')).toBeInTheDocument()
+  })
+
+  it('posts structural map owner actions and updates the review state', async () => {
+    const fetchMock = vi.spyOn(globalThis, 'fetch').mockResolvedValue(json({
+      structuralMapReview: {
+        id: 'structural-map-1',
+        state: 'accepted',
+        generatedAt: '2026-06-01T12:00:00.000Z',
+        counts: {
+          packages: 1,
+          domains: 1,
+          crossCuttingDomains: 0,
+          executableUnits: 0,
+          gitRoots: 1,
+          ignoredGitRoots: 0,
+          conflicts: 0,
+          questions: 0,
+        },
+        gitRoots: [{ id: 'git:root', label: 'Project root', path: '.', confidence: 'high' }],
+        packages: [{ id: 'package:guildhall-core', label: '@guildhall/core', path: 'packages/core', confidence: 'high' }],
+        domains: [{ id: 'domain:runtime', label: 'Runtime', confidence: 'high' }],
+        crossCuttingDomains: [],
+        executableUnits: [],
+        ignoredGitRoots: [],
+        conflicts: [],
+        questions: [],
+      },
+    }))
+
+    render(ProjectOverviewTab, {
+      detail: {
+        id: 'guildhall',
+        name: 'Guildhall',
+        path: '/Users/matthew/git/oss/guildhall',
+        tasks: [],
+        structuralMapReview: {
+          id: 'structural-map-1',
+          state: 'owner_review',
+          generatedAt: '2026-06-01T12:00:00.000Z',
+          counts: {
+            packages: 1,
+            domains: 1,
+            crossCuttingDomains: 0,
+            executableUnits: 0,
+            gitRoots: 1,
+            ignoredGitRoots: 0,
+            conflicts: 0,
+            questions: 1,
+          },
+          gitRoots: [{ id: 'git:root', label: 'Project root', path: '.', confidence: 'high' }],
+          packages: [{ id: 'package:guildhall-core', label: '@guildhall/core', path: 'packages/core', confidence: 'high' }],
+          domains: [{ id: 'domain:runtime', label: 'Runtime', confidence: 'high' }],
+          crossCuttingDomains: [],
+          executableUnits: [],
+          ignoredGitRoots: [],
+          conflicts: [],
+          questions: [{ id: 'confirm-domain-routing', prompt: 'Review routing.' }],
+        },
+      },
+      inboxLoaded: true,
+      inboxItems: [],
+      projectTicker: {
+        label: 'Not running',
+        actorLabel: 'Guildhall',
+        message: 'Project is waiting.',
+        tone: 'idle',
+        pulse: false,
+      },
+      activeProjectId: 'guildhall',
+    })
+
+    await fireEvent.click(screen.getByRole('button', { name: /accept map/i }))
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      '/api/project/structural-map/action?projectId=guildhall',
+      expect.objectContaining({
+        method: 'POST',
+        body: JSON.stringify({ mapId: 'structural-map-1', action: { kind: 'accept' }, projectId: 'guildhall' }),
+      }),
+    )
+    await waitFor(() => expect(screen.getByText('Accepted')).toBeInTheDocument())
   })
 })

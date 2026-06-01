@@ -6,6 +6,7 @@ const repoRoot = path.resolve(__dirname, '../../..')
 
 const approvedWriteModules = new Set([
   'src/persistence/file-backed.ts',
+  'src/persistence/json-files.ts',
   'src/sessions/atomic.ts',
   'src/sessions/storage.ts',
   'src/sessions/task-state-store.ts',
