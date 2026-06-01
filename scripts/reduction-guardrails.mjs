@@ -34,6 +34,11 @@ const forbiddenTaskShapes = [
     pattern: /legacyParentTaskId|parentGoalId/,
     message: 'Web hierarchy must not infer containment from parentGoalId after migration.',
   },
+  {
+    path: /^src\/runtime\/thread\.ts$/,
+    pattern: /function boundedChatTurns[\s\S]*?kind:\s*['"]pressure_test_question['"]/,
+    message: 'Bounded chat sessions must project as bounded_chat/owner_input turns, not pressure_test_question.',
+  },
 ]
 
 function walk(dir) {

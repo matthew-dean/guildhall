@@ -279,10 +279,27 @@ export interface PressureTestQuestionTurn extends TurnBase {
   answerEndpoint: string
 }
 
+export interface BoundedChatTurn extends TurnBase {
+  kind: 'bounded_chat'
+  sessionId: string
+  subObjectiveId: string
+  targetTitle: string
+  domainTitle: string
+  question: {
+    id: string
+    prompt: string
+    why: string
+    choices?: string[] | undefined
+    evidence: string[]
+  }
+  answerEndpoint: string
+}
+
 export type ThreadTurn =
   | SetupStepTurn
   | RequestTurn
   | PressureTestQuestionTurn
+  | BoundedChatTurn
   | BriefTurn
   | AgentQuestionTurn
   | SpecReviewTurn
@@ -951,6 +968,7 @@ function setupContextSummary(
 function phaseForTurn(turn: ThreadTurn): TurnPhase {
   if (turn.kind === 'request') return turn.status === 'done' ? 'done' : 'intake'
   if (turn.kind === 'pressure_test_question') return 'intake'
+  if (turn.kind === 'bounded_chat') return 'intake'
   if (turn.kind === 'review_feedback') return turn.phase
   if (turn.status === 'done') return 'done'
   switch (turn.kind) {
@@ -1050,11 +1068,11 @@ function boundedChatTurns(projectPath: string, sessions: BoundedChatSession[]): 
     const active = session.subObjectives.find(item => item.id === session.activeSubObjectiveId && item.status === 'active')
     if (!active) continue
     turns.push({
-      kind: 'pressure_test_question',
+      kind: 'bounded_chat',
       id: `bounded-chat:${session.id}:${active.id}`,
-      intakeId: session.id,
+      sessionId: session.id,
+      subObjectiveId: active.id,
       targetTitle: session.projectId.replace(/-/g, ' ').replace(/\b\w/g, letter => letter.toUpperCase()),
-      domainId: 'bounded-chat',
       domainTitle: session.objective.kind === 'new_request' ? 'New request' : 'Project check-in',
       question: {
         id: active.id,

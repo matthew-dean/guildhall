@@ -75,6 +75,81 @@ describe('buildThread', () => {
     }
   })
 
+  it('projects active bounded chat as bounded_chat, not pressure_test_question', async () => {
+    const projectPath = await mkdtemp(path.join(tmpdir(), 'guildhall-thread-'))
+    try {
+      const snapshot: ProjectSnapshot = {
+        projectPath,
+        config: {
+          id: 'demo',
+          name: 'Demo',
+          bootstrap: { verifiedAt: new Date().toISOString() },
+          coordinators: [{ id: 'frontend', name: 'Frontend' }],
+        },
+        bootstrapVerified: true,
+        hasProvider: true,
+        hasDirection: true,
+        workspaceImportReviewed: true,
+        taskCount: 0,
+        wizardState: emptyWizardsState(),
+      }
+
+      const thread = buildThread({
+        projectPath,
+        snapshot,
+        boundedChatSessions: [{
+          id: 'bc-demo-new-request',
+          projectId: 'demo',
+          source: 'owner-input:task:task-1:q1',
+          objective: {
+            kind: 'new_request',
+            label: 'Clarify task request',
+            successCriteria: ['Owner answers the linked bounded chat.'],
+            startedAt: '2026-06-01T12:00:00.000Z',
+          },
+          status: 'waiting_for_owner',
+          activeSubObjectiveId: 'q1',
+          subObjectives: [{
+            id: 'q1',
+            objective: 'Clarify task request',
+            prompt: 'Which behavior should Guildhall implement?',
+            choices: ['A', 'B'],
+            followUpDepth: 0,
+            localTurns: [],
+            status: 'active',
+          }],
+          acceptedState: {
+            facts: [],
+            decisions: [],
+            leverUpdates: [],
+            settingUpdates: [],
+            taskDrafts: [],
+            unresolvedForks: [],
+            discardedResponses: [],
+          },
+          pendingActions: [],
+          appliedActionIds: [],
+          transitionReceipts: [],
+          createdAt: '2026-06-01T12:00:00.000Z',
+          updatedAt: '2026-06-01T12:00:00.000Z',
+        }],
+        pressureTestIntakes: [],
+      })
+
+      expect(thread.turns).toContainEqual(expect.objectContaining({
+        kind: 'bounded_chat',
+        sessionId: 'bc-demo-new-request',
+        status: 'active',
+      }))
+      expect(thread.turns).not.toContainEqual(expect.objectContaining({
+        id: 'bounded-chat:bc-demo-new-request:q1',
+        kind: 'pressure_test_question',
+      }))
+    } finally {
+      await rm(projectPath, { recursive: true, force: true })
+    }
+  })
+
   it('projects planned project check-in questions as project direction turns', async () => {
     const projectPath = await mkdtemp(path.join(tmpdir(), 'guildhall-thread-'))
     try {
@@ -282,7 +357,9 @@ describe('buildThread', () => {
       const question = thread.turns.find(turn => turn.id === 'bounded-chat:bc-narrative-project-check-in:project-direction-priority')
 
       expect(question).toMatchObject({
-        kind: 'pressure_test_question',
+        kind: 'bounded_chat',
+        sessionId: 'bc-narrative-project-check-in',
+        subObjectiveId: 'project-direction-priority',
         targetTitle: 'Narrative Harness',
         domainTitle: 'Project check-in',
         answerEndpoint: '/api/project/bounded-chat/bc-narrative-project-check-in/answer',
@@ -381,7 +458,9 @@ describe('buildThread', () => {
       const question = thread.turns.find(turn => turn.id === 'bounded-chat:bc-request-clarify:request-scope')
 
       expect(question).toMatchObject({
-        kind: 'pressure_test_question',
+        kind: 'bounded_chat',
+        sessionId: 'bc-request-clarify',
+        subObjectiveId: 'request-scope',
         targetTitle: 'Narrative Harness',
         domainTitle: 'New request',
         answerEndpoint: '/api/project/bounded-chat/bc-request-clarify/answer',

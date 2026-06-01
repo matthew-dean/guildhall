@@ -1403,6 +1403,20 @@ expect(thread.turns).not.toContainEqual(expect.objectContaining({ kind: 'pressur
   `src/web/surfaces/project/structure/*` may show linked status and navigation,
   but they must not render independent question cards or mutate answers.
 
+Partial evidence, 2026-06-01 coordinator slice:
+
+- `src/runtime/thread.ts` now emits active bounded-chat sessions as
+  `kind: 'bounded_chat'` with `sessionId` and `subObjectiveId`.
+- `src/web/surfaces/project/ThreadTab.svelte` accepts `bounded_chat` as the
+  owner-input question branch instead of relying on the pressure-test turn
+  shape.
+- `src/runtime/__tests__/thread.test.ts` includes an active bounded-chat
+  fixture asserting `bounded_chat` is present and the matching
+  `pressure_test_question` turn is absent.
+- Evidence command: `pnpm vitest run src/runtime/__tests__/thread.test.ts --reporter=dot`
+  passed with 60 tests.
+- Evidence command: `pnpm typecheck` passed.
+
 - [ ] **Step 13: Add projection guardrails**
 
 Add or extend `scripts/reduction-guardrails.mjs` so it fails when:
@@ -1414,6 +1428,13 @@ Add or extend `scripts/reduction-guardrails.mjs` so it fails when:
   after owner-input refs are introduced;
 - app surfaces introduce local answer/question card branches for source-specific
   owner decisions instead of linking to Thread.
+
+Partial evidence, 2026-06-01 coordinator slice:
+
+- `scripts/reduction-guardrails.mjs` now fails if `boundedChatTurns` emits
+  `kind: 'pressure_test_question'`.
+- The remaining inbox, structural-map, and app-surface projection guardrails
+  are still open.
 
 - [ ] **Step 14: Run focused tests**
 

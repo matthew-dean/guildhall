@@ -267,6 +267,23 @@
     }
     answerEndpoint: string
   }
+  interface BoundedChatTurn {
+    kind: 'bounded_chat'
+    id: string; at: string; persona: TurnPersona; status: TurnStatus; phase: TurnPhase
+    sessionId: string
+    subObjectiveId: string
+    targetTitle: string
+    domainTitle: string
+    question: {
+      id: string
+      prompt: string
+      why: string
+      choices?: string[]
+      evidence: string[]
+    }
+    answerEndpoint: string
+  }
+  type OwnerInputQuestionTurn = PressureTestQuestionTurn | BoundedChatTurn
   type Turn =
     | SetupStepTurn
     | BriefTurn
@@ -278,6 +295,7 @@
     | InFlightTurn
     | RequestTurn
     | PressureTestQuestionTurn
+    | BoundedChatTurn
 
   type ThreadChain = {
     id: string
@@ -956,7 +974,7 @@
     if (needsRecovery(t)) return 'Needs recovery'
     if (guildhallShaping(t)) return 'Guildhall shaping'
     if (t.kind === 'setup_step') return t.status === 'done' || t.skippable ? null : 'Needs you'
-    if (t.kind === 'pressure_test_question') return t.status === 'done' ? null : 'Needs you'
+    if (t.kind === 'pressure_test_question' || t.kind === 'bounded_chat') return t.status === 'done' ? null : 'Needs you'
     if (t.kind === 'escalation') {
       if (t.status === 'done') return null
       return escalationUserGuidance({
@@ -1088,7 +1106,7 @@
     return cleaned || rawRequest
   }
 
-  function pressureQuestionPrompt(turn: PressureTestQuestionTurn): string {
+  function pressureQuestionPrompt(turn: OwnerInputQuestionTurn): string {
     const target = cleanPressureTargetTitle(turn.targetTitle)
     const prompt = turn.question.prompt.trim()
     if (/^What outcome would make this project successful\?$/i.test(prompt)) {
@@ -1101,16 +1119,16 @@
     return prompt
   }
 
-  function pressureQuestionWhy(turn: PressureTestQuestionTurn): string {
+  function pressureQuestionWhy(turn: OwnerInputQuestionTurn): string {
     if (/Workers need to know which outcome defines success before splitting tasks\./i.test(turn.question.why)) {
       return 'A sentence is enough. Mention the outcome or constraint Guildhall should optimize for.'
     }
     return turn.question.why
   }
 
-  function pressureQuestionMeta(turn: PressureTestQuestionTurn): string {
-    const index = activePressureQuestions.findIndex(candidate => candidate.id === turn.id)
-    const count = activePressureQuestions.length
+  function pressureQuestionMeta(turn: OwnerInputQuestionTurn): string {
+    const index = activeOwnerInputQuestions.findIndex(candidate => candidate.id === turn.id)
+    const count = activeOwnerInputQuestions.length
     const title = cleanPressureTargetTitle(turn.targetTitle)
     if (count > 1 && index >= 0) return `${index + 1} of ${count} · ${title} · ${turn.domainTitle}`
     return `${title} · ${turn.domainTitle}`
@@ -1135,22 +1153,22 @@
 
   const currentTurns = $derived.by(() => {
     const seenQuestionTasks = new Set<string>()
-    let seenPressureQuestion = false
-    const hasActivePressureQuestion = turns.some(
-      turn => turn.kind === 'pressure_test_question' && turn.status === 'active',
+    let seenOwnerInputQuestion = false
+    const hasActiveOwnerInputQuestion = turns.some(
+      turn => (turn.kind === 'pressure_test_question' || turn.kind === 'bounded_chat') && turn.status === 'active',
     )
     return turns.filter(turn => {
       if (turn.phase === 'done') return false
       if (
-        hasActivePressureQuestion &&
+        hasActiveOwnerInputQuestion &&
         turn.kind === 'setup_step' &&
         turn.stepId === 'firstTask'
       ) {
         return false
       }
-      if (turn.kind === 'pressure_test_question' && turn.status === 'active') {
-        if (seenPressureQuestion) return false
-        seenPressureQuestion = true
+      if ((turn.kind === 'pressure_test_question' || turn.kind === 'bounded_chat') && turn.status === 'active') {
+        if (seenOwnerInputQuestion) return false
+        seenOwnerInputQuestion = true
       }
       if (turn.kind === 'agent_question' && turn.status === 'active') {
         if (seenQuestionTasks.has(turn.taskId)) return false
@@ -1163,12 +1181,12 @@
   const visibleList = $derived(threadChains.map(chain => chain.latestTurn))
   const compactListView = $derived(compactThreadMode && compactPane === 'list')
   const compactDetailView = $derived(compactThreadMode && compactPane === 'detail')
-  const activePressureQuestions = $derived(
-    turns.filter((turn): turn is PressureTestQuestionTurn =>
-      turn.kind === 'pressure_test_question' && turn.status === 'active',
+  const activeOwnerInputQuestions = $derived(
+    turns.filter((turn): turn is OwnerInputQuestionTurn =>
+      (turn.kind === 'pressure_test_question' || turn.kind === 'bounded_chat') && turn.status === 'active',
     ),
   )
-  const hiddenPressureQuestionCount = $derived(Math.max(0, activePressureQuestions.length - 1))
+  const hiddenPressureQuestionCount = $derived(Math.max(0, activeOwnerInputQuestions.length - 1))
   const operationSummary = $derived.by(() => {
     let needsYou = 0
     let working = 0
@@ -1193,6 +1211,7 @@
   function threadChainKey(turn: Turn): string {
     if (turn.kind === 'setup_step') return 'setup'
     if (turn.kind === 'pressure_test_question') return `intake:${turn.intakeId}`
+    if (turn.kind === 'bounded_chat') return `bounded-chat:${turn.sessionId}`
     if (turn.kind === 'request') {
       if (turn.taskId) return `task:${turn.taskId}`
       return `intake:${turn.requestId}`
@@ -2180,7 +2199,7 @@
     }
   }
 
-  async function answerPressureTestQuestion(turn: PressureTestQuestionTurn, answerOverride?: string): Promise<void> {
+  async function answerPressureTestQuestion(turn: OwnerInputQuestionTurn, answerOverride?: string): Promise<void> {
     const answer = (answerOverride ?? pressureTestAnswers[turn.id] ?? '').trim()
     if (!answer) return
     busyTurnId = turn.id
@@ -2267,6 +2286,7 @@
     if (turn.kind === 'setup_step') return turn.title
     if (turn.kind === 'request') return turn.title
     if (turn.kind === 'pressure_test_question') return turn.targetTitle
+    if (turn.kind === 'bounded_chat') return turn.targetTitle
     if ('taskTitle' in turn) return displayTaskTitle(turn)
     return 'Thread'
   }
@@ -2275,6 +2295,7 @@
     if (turn.kind === 'setup_step') return turn.why
     if (turn.kind === 'request') return turn.routingSummary
     if (turn.kind === 'pressure_test_question') return pressureQuestionWhy(turn)
+    if (turn.kind === 'bounded_chat') return pressureQuestionWhy(turn)
     if (turn.kind === 'history_note') return turn.summary
     if (turn.kind === 'agent_question') {
       const question = visibleQuestionsForCard(questionsForTurn(turn))[0]
@@ -2473,10 +2494,10 @@
     compactPane = 'list'
   }
 
-  type DockedTurn = AgentQuestionTurn | PressureTestQuestionTurn | BriefTurn | SpecReviewTurn | InFlightTurn
+  type DockedTurn = AgentQuestionTurn | OwnerInputQuestionTurn | BriefTurn | SpecReviewTurn | InFlightTurn
 
   function isDockableTurn(turn: Turn): turn is DockedTurn {
-    if (turn.kind === 'agent_question' || turn.kind === 'pressure_test_question') {
+    if (turn.kind === 'agent_question' || turn.kind === 'pressure_test_question' || turn.kind === 'bounded_chat') {
       return turn.status === 'active'
     }
     return (turn.kind === 'brief_approval' || turn.kind === 'spec_review' || turn.kind === 'inflight') && turn.status !== 'done'
@@ -2547,7 +2568,7 @@
     }
     | {
       kind: 'pressure_test'
-      turn: PressureTestQuestionTurn
+      turn: OwnerInputQuestionTurn
       title: string
       description: string
       placeholder: string
@@ -2643,7 +2664,7 @@
         }
       }
       if (
-        turn.kind === 'pressure_test_question' &&
+        (turn.kind === 'pressure_test_question' || turn.kind === 'bounded_chat') &&
         turn.status === 'active' &&
         !(turn.question.choices?.length)
       ) {
@@ -3167,7 +3188,7 @@
                 </div>
                 <StateSummary label="Request saved" description={t.routingSummary} tone="ok" />
 
-              {:else if t.kind === 'pressure_test_question'}
+              {:else if t.kind === 'pressure_test_question' || t.kind === 'bounded_chat'}
                 <div class="question-card-heading">
                   <div class="question-card-meta">{pressureQuestionMeta(t)}</div>
                   <h3 class="prompt"><Markdown source={pressureQuestionPrompt(t)} inline /></h3>
@@ -4258,7 +4279,7 @@
                               </Button>
                             {/if}
                           </UtilityPanel>
-                        {:else if activeDockTurn.kind === 'pressure_test_question'}
+                        {:else if activeDockTurn.kind === 'pressure_test_question' || activeDockTurn.kind === 'bounded_chat'}
                           <div class="thread-active-question">
                             <strong>{pressureQuestionMeta(activeDockTurn)}</strong>
                             <Markdown source={pressureQuestionPrompt(activeDockTurn)} />
