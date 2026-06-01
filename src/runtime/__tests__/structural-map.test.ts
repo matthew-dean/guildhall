@@ -6,6 +6,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 
 import {
   acceptStructuralMap,
+  applyStructuralMapReviewAction,
   applyStructuralMapCorrection,
   buildStructuralContextSlice,
   draftStructuralMap,
@@ -228,6 +229,101 @@ describe('structural map drafting', () => {
       kind: 'owner',
       ref: 'owner:looma-knit-editor-contract',
     }))
+  })
+
+  it('applies owner review actions without treating correction as an opaque state bucket', async () => {
+    await writePackageJsonWorkspaceFixture(projectRoot, {})
+    const draft = await draftStructuralMap({
+      projectId: 'fixture',
+      projectRoot,
+      now: '2026-06-01T12:00:00.000Z',
+    })
+    const review = await submitStructuralMapForReview({
+      projectRoot,
+      mapId: draft.id,
+      actor: 'coordinator',
+      now: '2026-06-01T12:01:00.000Z',
+    })
+
+    let changed = await applyStructuralMapReviewAction({
+      projectRoot,
+      mapId: review.id,
+      actor: 'owner',
+      action: { kind: 'rename_node', nodeId: 'domain:core', label: 'Core runtime' },
+      now: '2026-06-01T12:02:00.000Z',
+    })
+    expect(changed.stateMachine.state).toBe('owner_review')
+    expect(changed.nodes).toContainEqual(expect.objectContaining({ id: 'domain:core', label: 'Core runtime', confidence: 'high' }))
+
+    changed = await applyStructuralMapReviewAction({
+      projectRoot,
+      mapId: review.id,
+      actor: 'owner',
+      action: { kind: 'merge_nodes', sourceNodeId: 'domain:shared', targetNodeId: 'domain:core', label: 'Runtime platform' },
+      now: '2026-06-01T12:03:00.000Z',
+    })
+    expect(changed.nodes).not.toContainEqual(expect.objectContaining({ id: 'domain:shared' }))
+    expect(changed.nodes).toContainEqual(expect.objectContaining({ id: 'domain:core', label: 'Runtime platform' }))
+    expect(changed.edges.some(edge => edge.from === 'domain:shared' || edge.to === 'domain:shared')).toBe(false)
+
+    changed = await applyStructuralMapReviewAction({
+      projectRoot,
+      mapId: review.id,
+      actor: 'owner',
+      action: { kind: 'split_node', nodeId: 'domain:core', newNodeId: 'domain:editor', label: 'Editor' },
+      now: '2026-06-01T12:04:00.000Z',
+    })
+    expect(changed.nodes).toContainEqual(expect.objectContaining({ id: 'domain:editor', label: 'Editor', kind: 'domain_group' }))
+
+    changed = await applyStructuralMapReviewAction({
+      projectRoot,
+      mapId: review.id,
+      actor: 'owner',
+      action: { kind: 'mark_cross_cutting', nodeId: 'domain:editor' },
+      now: '2026-06-01T12:05:00.000Z',
+    })
+    expect(changed.nodes).toContainEqual(expect.objectContaining({ id: 'domain:editor', kind: 'cross_cutting_domain' }))
+
+    changed = await applyStructuralMapReviewAction({
+      projectRoot,
+      mapId: review.id,
+      actor: 'owner',
+      action: { kind: 'mark_package_only', nodeId: 'package:fixture-core' },
+      now: '2026-06-01T12:06:00.000Z',
+    })
+    expect(changed.edges).not.toContainEqual(expect.objectContaining({ from: 'package:fixture-core', kind: 'package_belongs_to_domain' }))
+
+    changed = await applyStructuralMapReviewAction({
+      projectRoot,
+      mapId: review.id,
+      actor: 'owner',
+      action: { kind: 'ignore_node', nodeId: 'domain:editor', reason: 'Generated example domain.' },
+      now: '2026-06-01T12:07:00.000Z',
+    })
+    expect(changed.nodes).not.toContainEqual(expect.objectContaining({ id: 'domain:editor' }))
+
+    changed = await applyStructuralMapReviewAction({
+      projectRoot,
+      mapId: review.id,
+      actor: 'owner',
+      action: { kind: 'defer_decision', questionId: 'confirm-domain-routing', reason: 'Good enough for current routing.' },
+      now: '2026-06-01T12:08:00.000Z',
+    })
+    expect(changed.ownerQuestions).not.toContainEqual(expect.objectContaining({ id: 'confirm-domain-routing' }))
+
+    changed = await applyStructuralMapReviewAction({
+      projectRoot,
+      mapId: review.id,
+      actor: 'owner',
+      action: { kind: 'accept' },
+      now: '2026-06-01T12:09:00.000Z',
+    })
+    expect(changed.stateMachine.state).toBe('accepted')
+    expect(changed.transitionReceipts.map(receipt => receipt.event)).toEqual(expect.arrayContaining([
+      'request_correction',
+      'apply_correction',
+      'accept',
+    ]))
   })
 
   it('scores evidence freshness and raises owner questions for conflicting structural evidence', async () => {

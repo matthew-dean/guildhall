@@ -159,7 +159,12 @@ import {
   listExternalAgentLinks,
   recordExternalAgentLink,
 } from './external-agent-links.js'
-import { readStructuralMapReviewSummary } from './structural-map.js'
+import {
+  applyStructuralMapReviewAction,
+  readStructuralMapReviewSummary,
+  summarizeStructuralMapForReview,
+  type StructuralMapReviewAction,
+} from './structural-map.js'
 import { loadEffectiveDesignTaste } from './design-taste.js'
 import {
   approveMetaIntake,
@@ -2626,6 +2631,29 @@ export function buildServeApp(opts: ServeOptions = {}): {
         recentEvents: recent,
         ...(bootstrapStatus ? { bootstrapStatus } : {}),
       })
+    } catch (err) {
+      return c.json({ error: err instanceof Error ? err.message : String(err) }, 500)
+    }
+  })
+
+  app.post('/api/project/structural-map/action', async c => {
+    try {
+      const body = await c.req.json().catch(() => ({})) as {
+        mapId?: unknown
+        action?: unknown
+      }
+      if (typeof body.mapId !== 'string' || body.mapId.trim() === '') {
+        return c.json({ error: 'mapId is required.' }, 400)
+      }
+      const action = parseStructuralMapReviewAction(body.action)
+      if (!action) return c.json({ error: 'Valid structural map action is required.' }, 400)
+      const map = await applyStructuralMapReviewAction({
+        projectRoot: project.path,
+        mapId: body.mapId,
+        actor: 'owner',
+        action,
+      })
+      return c.json({ structuralMapReview: summarizeStructuralMapForReview(map) })
     } catch (err) {
       return c.json({ error: err instanceof Error ? err.message : String(err) }, 500)
     }
@@ -8730,6 +8758,35 @@ export async function runServe(opts: ServeOptions = {}): Promise<void> {
 // bundle (dist/cli.js) and when running the TS sources via vitest (where
 // dist/web/ is still the build output we expect to exist).
 // ---------------------------------------------------------------------------
+
+function parseStructuralMapReviewAction(value: unknown): StructuralMapReviewAction | null {
+  if (!value || typeof value !== 'object') return null
+  const action = value as Record<string, unknown>
+  const kind = typeof action.kind === 'string' ? action.kind : ''
+  const str = (key: string) => typeof action[key] === 'string' ? String(action[key]) : ''
+  switch (kind) {
+    case 'accept':
+      return { kind }
+    case 'rename_node':
+      return str('nodeId') && str('label') ? { kind, nodeId: str('nodeId'), label: str('label') } : null
+    case 'merge_nodes':
+      return str('sourceNodeId') && str('targetNodeId')
+        ? { kind, sourceNodeId: str('sourceNodeId'), targetNodeId: str('targetNodeId'), ...(str('label') ? { label: str('label') } : {}) }
+        : null
+    case 'split_node':
+      return str('nodeId') && str('newNodeId') && str('label') ? { kind, nodeId: str('nodeId'), newNodeId: str('newNodeId'), label: str('label') } : null
+    case 'mark_cross_cutting':
+      return str('nodeId') ? { kind, nodeId: str('nodeId') } : null
+    case 'mark_package_only':
+      return str('nodeId') ? { kind, nodeId: str('nodeId') } : null
+    case 'ignore_node':
+      return str('nodeId') && str('reason') ? { kind, nodeId: str('nodeId'), reason: str('reason') } : null
+    case 'defer_decision':
+      return str('questionId') ? { kind, questionId: str('questionId'), ...(str('reason') ? { reason: str('reason') } : {}) } : null
+    default:
+      return null
+  }
+}
 
 const WEB_DIR = (() => {
   const here = dirname(fileURLToPath(import.meta.url))

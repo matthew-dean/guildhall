@@ -250,7 +250,7 @@ agent packet integration, coordinator assignment, or remote authority support.
 
 ### Remaining Work Ledger
 
-**Remaining: 5 items. Next item: 13.**
+**Remaining: 4 items. Next item: 14.**
 
 1. [x] Replace the current pnpm-only discovery core with a provider interface
    for package/workspace discovery. After this: implement JS/npm/yarn/bun
@@ -342,9 +342,15 @@ agent packet integration, coordinator assignment, or remote authority support.
     roots, packages, domains, cross-cutting domains, executable units,
     conflicts, and owner questions without granting cross-project write
     authority.
-13. [ ] Add UI actions for accept, rename, merge, split, mark cross-cutting,
+13. [x] Add UI actions for accept, rename, merge, split, mark cross-cutting,
     mark package-only, ignore with reason, and defer decision. After this:
     add coordinator communication records.
+    Completed in `feature/0.10-structural-domain-intelligence`: structural
+    map review actions now run through deterministic transition primitives and
+    a project-owned `/api/project/structural-map/action` endpoint; Project
+    Overview posts owner requests for accepting, renaming, merging, splitting,
+    marking cross-cutting/package-only, ignoring, and deferring decisions, then
+    refreshes the local review summary.
 14. [ ] Add explicit coordinator communication records for structural domain
     requests: consumer request packet, provider intake packet, negotiated
     delivery plan, delivery receipt, consumer return packet, and final

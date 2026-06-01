@@ -2713,4 +2713,56 @@ describe('GET /api/project — bootstrap status', () => {
     expect(body.structuralMapReview?.gitRoots?.[0]?.path).toBe('.')
     expect(body.structuralMapReview?.questions?.length).toBeGreaterThan(0)
   })
+
+  it('applies structural map review actions through the owning project endpoint', async () => {
+    await fs.mkdir(path.join(tmpDir, 'packages', 'core'), { recursive: true })
+    await fs.writeFile(
+      path.join(tmpDir, 'package.json'),
+      JSON.stringify({
+        name: 'settings-test',
+        private: true,
+        workspaces: ['packages/*'],
+      }, null, 2),
+      'utf8',
+    )
+    await fs.writeFile(
+      path.join(tmpDir, 'packages', 'core', 'package.json'),
+      JSON.stringify({ name: '@settings/core' }, null, 2),
+      'utf8',
+    )
+    const draft = await draftStructuralMap({
+      projectId: PROJECT_ID,
+      projectRoot: tmpDir,
+      now: '2026-06-01T12:10:00.000Z',
+    })
+    const review = await submitStructuralMapForReview({
+      projectRoot: tmpDir,
+      mapId: draft.id,
+      actor: 'coordinator',
+      now: '2026-06-01T12:11:00.000Z',
+    })
+
+    const { app } = buildServeApp({ projectPath: tmpDir })
+    const rename = await app.fetch(new Request(scoped('/api/project/structural-map/action'), {
+      method: 'POST',
+      body: JSON.stringify({
+        mapId: review.id,
+        action: { kind: 'rename_node', nodeId: 'domain:core', label: 'Core runtime' },
+      }),
+    }))
+    expect(rename.status).toBe(200)
+    const renameBody = (await rename.json()) as { structuralMapReview?: { domains?: Array<{ label?: string }> } }
+    expect(renameBody.structuralMapReview?.domains?.map(item => item.label)).toContain('Core runtime')
+
+    const accept = await app.fetch(new Request(scoped('/api/project/structural-map/action'), {
+      method: 'POST',
+      body: JSON.stringify({
+        mapId: review.id,
+        action: { kind: 'accept' },
+      }),
+    }))
+    expect(accept.status).toBe(200)
+    const acceptBody = (await accept.json()) as { structuralMapReview?: { state?: string } }
+    expect(acceptBody.structuralMapReview?.state).toBe('accepted')
+  })
 })

@@ -20,7 +20,7 @@
   import { summarizeEvent } from '../../lib/events.js'
   import { friendlyTaskId } from '../../lib/identifier-labels.js'
   import { nav, path } from '../../lib/nav.svelte.js'
-  import { currentProjectHref, currentTaskHref, projectActionHref } from '../../lib/project-routes.js'
+  import { currentProjectHref, currentTaskHref, projectActionHref, projectFetch } from '../../lib/project-routes.js'
   import { inboxItemKey, type InboxItem } from '../../lib/inbox-item-key.js'
   import type { EventEnvelope, ProjectDetail, Task } from '../../lib/types.js'
   import { hasCurrentGitUnavailableStory, type ProjectActivityLine } from '../../lib/project-activity.js'
@@ -49,6 +49,15 @@
 
   type Tone = 'neutral' | 'ok' | 'warn' | 'danger' | 'accent' | 'running'
   type NextActionKind = 'navigate' | 'migration'
+  type StructuralMapAction =
+    | { kind: 'accept' }
+    | { kind: 'rename_node'; nodeId: string; label: string }
+    | { kind: 'merge_nodes'; sourceNodeId: string; targetNodeId: string; label?: string }
+    | { kind: 'split_node'; nodeId: string; newNodeId: string; label: string }
+    | { kind: 'mark_cross_cutting'; nodeId: string }
+    | { kind: 'mark_package_only'; nodeId: string }
+    | { kind: 'ignore_node'; nodeId: string; reason: string }
+    | { kind: 'defer_decision'; questionId: string; reason?: string }
 
   interface BlockedRow {
     task: Task
@@ -65,13 +74,17 @@
     href: string
   }
 
+  let localStructuralMapReview = $state<ProjectDetail['structuralMapReview'] | null>(null)
+  let structuralMapActionError = $state<string | null>(null)
+  let structuralMapActionBusy = $state(false)
+
   const tasks = $derived(detail.tasks ?? [])
   const displayPath = $derived(formatUserPath(detail.path))
   const running = $derived(detail.run?.status === 'running')
   const actionableInbox = $derived(inboxItems.filter(item => item.severity !== 'low').slice(0, 3))
   const runtime = $derived(detail.runtime ?? null)
   const memoryHealth = $derived(detail.memoryHealth ?? null)
-  const structuralMapReview = $derived(detail.structuralMapReview ?? null)
+  const structuralMapReview = $derived(localStructuralMapReview ?? detail.structuralMapReview ?? null)
   const primaryProofPaths = $derived.by(() => {
     return tasks
       .flatMap(task => (task.proofPaths ?? []).map(proofPath => ({ task, proofPath })))
@@ -550,6 +563,53 @@
     nav(projectActionHref(href, activeProjectId), { backgroundPath: path.value })
   }
 
+  async function applyStructuralMapAction(action: StructuralMapAction): Promise<void> {
+    if (!structuralMapReview?.id || structuralMapActionBusy) return
+    structuralMapActionBusy = true
+    structuralMapActionError = null
+    try {
+      const res = await projectFetch('/api/project/structural-map/action', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ mapId: structuralMapReview.id, action }),
+      }, activeProjectId)
+      const body = await res.json().catch(() => ({})) as {
+        structuralMapReview?: ProjectDetail['structuralMapReview']
+        error?: string
+      }
+      if (!res.ok) throw new Error(body.error ?? 'Could not update the project map.')
+      localStructuralMapReview = body.structuralMapReview ?? null
+    } catch (err) {
+      structuralMapActionError = err instanceof Error ? err.message : String(err)
+    } finally {
+      structuralMapActionBusy = false
+    }
+  }
+
+  function promptStructuralRename(nodeId: string, currentLabel: string): void {
+    const label = window.prompt('Rename structural item', currentLabel)?.trim()
+    if (!label || label === currentLabel) return
+    void applyStructuralMapAction({ kind: 'rename_node', nodeId, label })
+  }
+
+  function promptStructuralSplit(nodeId: string, currentLabel: string): void {
+    const label = window.prompt('New structural item label', currentLabel)?.trim()
+    if (!label) return
+    void applyStructuralMapAction({ kind: 'split_node', nodeId, newNodeId: `domain:${label.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '')}`, label })
+  }
+
+  function promptStructuralIgnore(nodeId: string): void {
+    const reason = window.prompt('Reason to ignore this structural item')?.trim()
+    if (!reason) return
+    void applyStructuralMapAction({ kind: 'ignore_node', nodeId, reason })
+  }
+
+  function promptStructuralMerge(sourceNodeId: string): void {
+    const targetNodeId = window.prompt('Merge into structural item id')?.trim()
+    if (!targetNodeId || targetNodeId === sourceNodeId) return
+    void applyStructuralMapAction({ kind: 'merge_nodes', sourceNodeId, targetNodeId })
+  }
+
   function proofRank(status: string | undefined): number {
     switch (status) {
       case 'blocked': return 0
@@ -794,6 +854,44 @@
               <span>Mapped {formatDate(structuralMapReview.generatedAt)}</span>
             {/if}
           </div>
+          <div class="map-action-bar">
+            {#if structuralMapReview.state !== 'accepted'}
+              <Button variant="secondary" size="sm" onclick={() => void applyStructuralMapAction({ kind: 'accept' })} disabled={structuralMapActionBusy}>
+                <Icon name="check" size={14} />
+                Accept map
+              </Button>
+            {/if}
+            {#if (structuralMapReview.domains ?? [])[0]}
+              <Button variant="ghost" size="sm" onclick={() => promptStructuralRename((structuralMapReview.domains ?? [])[0].id, (structuralMapReview.domains ?? [])[0].label)} disabled={structuralMapActionBusy}>
+                Rename
+              </Button>
+              <Button variant="ghost" size="sm" onclick={() => promptStructuralMerge((structuralMapReview.domains ?? [])[0].id)} disabled={structuralMapActionBusy}>
+                Merge
+              </Button>
+              <Button variant="ghost" size="sm" onclick={() => promptStructuralSplit((structuralMapReview.domains ?? [])[0].id, (structuralMapReview.domains ?? [])[0].label)} disabled={structuralMapActionBusy}>
+                Split
+              </Button>
+              <Button variant="ghost" size="sm" onclick={() => void applyStructuralMapAction({ kind: 'mark_cross_cutting', nodeId: (structuralMapReview.domains ?? [])[0].id })} disabled={structuralMapActionBusy}>
+                Cross-cutting
+              </Button>
+              <Button variant="ghost" size="sm" onclick={() => promptStructuralIgnore((structuralMapReview.domains ?? [])[0].id)} disabled={structuralMapActionBusy}>
+                Ignore
+              </Button>
+            {/if}
+            {#if (structuralMapReview.packages ?? [])[0]}
+              <Button variant="ghost" size="sm" onclick={() => void applyStructuralMapAction({ kind: 'mark_package_only', nodeId: (structuralMapReview.packages ?? [])[0].id })} disabled={structuralMapActionBusy}>
+                Package-only
+              </Button>
+            {/if}
+            {#if (structuralMapReview.questions ?? [])[0]}
+              <Button variant="ghost" size="sm" onclick={() => void applyStructuralMapAction({ kind: 'defer_decision', questionId: (structuralMapReview.questions ?? [])[0].id })} disabled={structuralMapActionBusy}>
+                Defer
+              </Button>
+            {/if}
+          </div>
+          {#if structuralMapActionError}
+            <p class="map-action-error">{structuralMapActionError}</p>
+          {/if}
 
           <div class="map-metrics" aria-label="Project map counts">
             {#each structuralMapMetricRows as metric (metric)}
@@ -1126,6 +1224,17 @@
     display: flex;
     flex-wrap: wrap;
     gap: var(--s-1);
+  }
+  .map-action-bar {
+    display: flex;
+    flex-wrap: wrap;
+    gap: var(--s-1);
+  }
+  .map-action-error {
+    margin: 0;
+    color: var(--danger);
+    font-size: var(--fs-1);
+    line-height: var(--lh-body);
   }
   .map-metrics span {
     border: 1px solid var(--border);

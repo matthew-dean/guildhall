@@ -128,6 +128,16 @@ export type StructuralMapCorrectionChange =
   | { kind: 'rename_node'; nodeId: string; label: string }
   | { kind: 'ignore_node'; nodeId: string; reason: string }
 
+export type StructuralMapReviewAction =
+  | { kind: 'accept' }
+  | { kind: 'rename_node'; nodeId: string; label: string }
+  | { kind: 'merge_nodes'; sourceNodeId: string; targetNodeId: string; label?: string }
+  | { kind: 'split_node'; nodeId: string; newNodeId: string; label: string }
+  | { kind: 'mark_cross_cutting'; nodeId: string }
+  | { kind: 'mark_package_only'; nodeId: string }
+  | { kind: 'ignore_node'; nodeId: string; reason: string }
+  | { kind: 'defer_decision'; questionId: string; reason?: string }
+
 export type StructuralMapTransitionReceipt = TransitionReceipt<StructuralMapState, StructuralMapEvent>
 
 export interface StructuralMapDraft {
@@ -1013,6 +1023,47 @@ export function summarizeStructuralMapForReview(map: StructuralMapDraft): Struct
   }
 }
 
+export async function applyStructuralMapReviewAction(input: {
+  projectRoot: string
+  mapId: string
+  actor: string
+  action: StructuralMapReviewAction
+  now?: string
+}): Promise<StructuralMapDraft> {
+  if (input.action.kind === 'accept') {
+    return acceptStructuralMap({
+      projectRoot: input.projectRoot,
+      mapId: input.mapId,
+      actor: input.actor,
+      now: input.now,
+    })
+  }
+
+  const correctionRequestId = `owner-action-${Date.parse(input.now ?? new Date().toISOString()).toString(36)}-${input.action.kind}`
+  await requestStructuralMapCorrection({
+    projectRoot: input.projectRoot,
+    mapId: input.mapId,
+    actor: input.actor,
+    request: {
+      id: correctionRequestId,
+      targetId: structuralMapActionTarget(input.action),
+      requestedChange: input.action.kind,
+      reason: structuralMapActionReason(input.action),
+    },
+    now: input.now,
+  })
+
+  const map = readStructuralMap(input.projectRoot, input.mapId)
+  applyOwnerReviewActionToMap(map, input.action, correctionRequestId)
+  await writeStructuralMap(input.projectRoot, map)
+  return applyStructuralTransition(input.projectRoot, input.mapId, {
+    event: 'apply_correction',
+    actor: input.actor,
+    evidenceRefs: [`owner-correction:${correctionRequestId}`],
+    now: input.now,
+  })
+}
+
 export function buildStructuralContextSlice(map: StructuralMapDraft, task: {
   id: string
   title: string
@@ -1849,6 +1900,18 @@ function uniqueStrings(values: string[]): string[] {
   return [...new Set(values)].sort()
 }
 
+function uniqueEvidence(values: EvidenceRef[]): EvidenceRef[] {
+  const seen = new Set<string>()
+  const result: EvidenceRef[] = []
+  for (const value of values) {
+    const key = `${value.kind}:${value.ref}:${value.confidence}`
+    if (seen.has(key)) continue
+    seen.add(key)
+    result.push(value)
+  }
+  return result
+}
+
 function evidence(kind: EvidenceRef['kind'], ref: string, confidence: StructuralConfidence): EvidenceRef[] {
   return [{ kind, ref, confidence }]
 }
@@ -1893,6 +1956,93 @@ function summaryNode(node: StructuralMapNode): StructuralMapReviewSummaryNode {
     confidence: node.confidence,
     evidenceScore: node.evidenceScore,
     freshness: node.freshness,
+  }
+}
+
+function applyOwnerReviewActionToMap(map: StructuralMapDraft, action: Exclude<StructuralMapReviewAction, { kind: 'accept' }>, evidenceRef: string): void {
+  switch (action.kind) {
+    case 'rename_node': {
+      const node = requireStructuralNode(map, action.nodeId)
+      node.label = action.label
+      node.evidence.push(...evidence('owner', evidenceRef, 'high'))
+      node.confidence = 'high'
+      break
+    }
+    case 'merge_nodes': {
+      const source = requireStructuralNode(map, action.sourceNodeId)
+      const target = requireStructuralNode(map, action.targetNodeId)
+      if (action.label) target.label = action.label
+      target.evidence = uniqueEvidence([...target.evidence, ...source.evidence, ...evidence('owner', evidenceRef, 'high')])
+      target.confidence = 'high'
+      map.edges = map.edges
+        .map(edge => ({
+          ...edge,
+          from: edge.from === source.id ? target.id : edge.from,
+          to: edge.to === source.id ? target.id : edge.to,
+        }))
+        .filter(edge => edge.from !== edge.to)
+      map.nodes = map.nodes.filter(node => node.id !== source.id)
+      break
+    }
+    case 'split_node': {
+      const node = requireStructuralNode(map, action.nodeId)
+      if (map.nodes.some(candidate => candidate.id === action.newNodeId)) throw new Error(`Structural map node ${action.newNodeId} already exists`)
+      map.nodes.push({
+        ...node,
+        id: action.newNodeId,
+        label: action.label,
+        packageName: undefined,
+        packageId: undefined,
+        evidence: uniqueEvidence([...node.evidence, ...evidence('owner', evidenceRef, 'high')]),
+        confidence: 'high',
+      })
+      break
+    }
+    case 'mark_cross_cutting': {
+      const node = requireStructuralNode(map, action.nodeId)
+      node.kind = 'cross_cutting_domain'
+      node.evidence.push(...evidence('owner', evidenceRef, 'high'))
+      node.confidence = 'high'
+      break
+    }
+    case 'mark_package_only': {
+      requireStructuralNode(map, action.nodeId)
+      map.edges = map.edges.filter(edge => !(edge.from === action.nodeId && edge.kind === 'package_belongs_to_domain'))
+      break
+    }
+    case 'ignore_node': {
+      requireStructuralNode(map, action.nodeId)
+      map.nodes = map.nodes.filter(node => node.id !== action.nodeId)
+      map.edges = map.edges.filter(edge => edge.from !== action.nodeId && edge.to !== action.nodeId)
+      break
+    }
+    case 'defer_decision': {
+      map.ownerQuestions = map.ownerQuestions.filter(question => question.id !== action.questionId)
+      map.evidenceRefs = uniqueStrings([...map.evidenceRefs, `owner-deferred:${action.questionId}`])
+      break
+    }
+  }
+}
+
+function requireStructuralNode(map: StructuralMapDraft, nodeId: string): StructuralMapNode {
+  const node = map.nodes.find(candidate => candidate.id === nodeId)
+  if (!node) throw new Error(`Structural map node ${nodeId} not found`)
+  return node
+}
+
+function structuralMapActionTarget(action: Exclude<StructuralMapReviewAction, { kind: 'accept' }>): string {
+  switch (action.kind) {
+    case 'merge_nodes': return `${action.sourceNodeId}->${action.targetNodeId}`
+    case 'defer_decision': return action.questionId
+    default: return action.nodeId
+  }
+}
+
+function structuralMapActionReason(action: Exclude<StructuralMapReviewAction, { kind: 'accept' }>): string {
+  switch (action.kind) {
+    case 'ignore_node': return action.reason
+    case 'defer_decision': return action.reason ?? 'Owner deferred this structural decision.'
+    default: return 'Owner corrected the structural map.'
   }
 }
 
