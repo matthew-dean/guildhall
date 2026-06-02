@@ -22,17 +22,6 @@ import { applyTaskTransition, type TaskTransitionReceipt } from './task-transiti
 export type LandingStrategy = ProjectLevers['landing_strategy']['position']
 
 export function resolveLandingStrategy(project: ProjectLevers): LandingStrategy {
-  const legacy = project.merge_policy?.position
-  if (legacy) {
-    switch (legacy) {
-      case 'ff_only_local':
-        return 'cherry_pick_local'
-      case 'ff_only_with_push':
-        return 'cherry_pick_with_push'
-      case 'manual_pr':
-        return 'manual_pr'
-    }
-  }
   return project.landing_strategy.position
 }
 

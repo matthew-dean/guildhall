@@ -1070,6 +1070,7 @@ export type ProjectView =
   | 'inbox'
   | 'work'
   | 'planner'
+  | 'structure'
   | 'timeline'
   | 'release'
   | 'settings'

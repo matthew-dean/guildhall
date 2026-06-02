@@ -1726,7 +1726,7 @@ git commit -m "refactor: narrow needs-you to alert-owned items"
 - Modify: `src/levers/storage.ts`
 - Modify: `src/runtime/migrations.ts`
 
-- [ ] **Step 1: Write structure test**
+- [x] **Step 1: Write structure test**
 
 Create `src/web/surfaces/project/settings/__tests__/SettingsTab.structure.test.ts`:
 
@@ -1757,7 +1757,7 @@ pnpm vitest run src/web/surfaces/project/settings/__tests__/SettingsTab.structur
 
 Expected: FAIL because the current file is 4,258 lines and owns all specialist types.
 
-- [ ] **Step 2: Define Settings IA**
+- [x] **Step 2: Define Settings IA**
 
 Change `SettingsTab.svelte` sections to:
 
@@ -1784,7 +1784,7 @@ Remove Settings sections:
   readiness warning or link, but it cannot own graph data, assignment picker
   state, request actions, or graph rendering.
 
-- [ ] **Step 3: Extract typed settings store**
+- [x] **Step 3: Extract typed settings store**
 
 Create `settings-store.svelte.ts` with one loader per concern:
 
@@ -1825,7 +1825,7 @@ export function createSettingsStore(projectFetch: typeof import('../../../lib/pr
 
 Use the existing endpoint names shown in the store snippet unless a task also changes the corresponding route and updates the same test in that commit.
 
-- [ ] **Step 4: Extract project graph into a project-structure surface**
+- [x] **Step 4: Extract project graph into a project-structure surface**
 
 Move the newly merged graph UI out of `SettingsTab.svelte` before continuing to
 shrink the rest of Settings:
@@ -1860,7 +1860,7 @@ expect(settingsSource).not.toMatch(/assignmentPicker/)
 The Settings route may keep one compact readiness notice that links to the
 project-structure surface when structural graph review blocks work.
 
-- [ ] **Step 5: Add lever operating profiles**
+- [x] **Step 5: Add lever operating profiles**
 
 Create `src/levers/profiles.ts`:
 
@@ -1916,7 +1916,7 @@ export const OPERATING_PROFILES: OperatingProfile[] = [
 
 Create tests that assert every profile only references known lever names and valid positions.
 
-- [ ] **Step 6: Build `OperatingProfilePanel`**
+- [x] **Step 6: Build `OperatingProfilePanel`**
 
 Panel behavior:
 
@@ -1925,7 +1925,7 @@ Panel behavior:
 - Shows raw lever editor only inside `DeveloperToolsPanel`, not the default Settings path.
 - Provides one "Reset project overrides" action.
 
-- [ ] **Step 7: Remove deprecated `merge_policy`**
+- [x] **Step 7: Remove deprecated `merge_policy`**
 
 Add migration `0.10.0/merge-policy-to-landing-strategy`:
 
@@ -1936,7 +1936,7 @@ Add migration `0.10.0/merge-policy-to-landing-strategy`:
 
 Then remove `merge_policy` from `src/levers/schema.ts` and `src/levers/storage.ts`.
 
-- [ ] **Step 8: Move remaining specialist panels**
+- [x] **Step 8: Move remaining specialist panels**
 
 Move logic out of Settings:
 
@@ -1955,6 +1955,14 @@ pnpm vitest run src/web/surfaces/project/settings/__tests__/SettingsTab.structur
 ```
 
 Expected: PASS, with `SettingsTab.svelte` under 400 lines.
+
+Evidence on 2026-06-01:
+
+- Red confirmed first: `pnpm vitest run src/web/surfaces/project/settings/__tests__/SettingsTab.structure.test.ts --reporter=dot` failed with `4263` lines before extraction.
+- Green structure guard after extraction: `SettingsTab.svelte` is `184` lines.
+- PASS: `pnpm vitest run src/web/surfaces/project/settings/__tests__/SettingsTab.structure.test.ts src/web/surfaces/project/structure/__tests__/ProjectStructurePanel.svelte.test.ts src/levers/__tests__/profiles.test.ts src/levers/__tests__/storage.test.ts src/runtime/__tests__/migrations.test.ts src/web/surfaces/project/__tests__/SettingsTab.svelte.test.ts --reporter=dot` (`6` files, `34` tests).
+- PASS: `pnpm typecheck`.
+- CONCERN: the exact Step 9 command was run and failed only in `src/runtime/__tests__/serve-settings.test.ts` (`4` failures) where required migration/start-readiness behavior from the broader branch preempts owner-input/run-active expectations. Worker H did not edit Task 9 owner-input/start-readiness tests.
 
 Commit:
 

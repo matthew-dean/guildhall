@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import fs from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
+import { parse as parseYaml } from 'yaml'
 import { FileBackedGuildhallPersistence } from '@guildhall/persistence'
 import { getProjectRuntimeCommandEvidencePath } from '@guildhall/sessions'
 import {
@@ -117,6 +118,42 @@ describe('applyProjectMigrations', () => {
     expect(result.applied.some(item => item.id === '0.8.0/project-state-layout')).toBe(true)
     const ledger = await readProjectMigrationLedger(projectRoot)
     expect(ledger.records.some(record => record.id === '0.8.0/project-state-layout')).toBe(true)
+  })
+
+  it('applies required merge_policy conversion into landing_strategy', async () => {
+    const settingsPath = path.join(projectRoot, '.guildhall', 'agent-settings.yaml')
+    await fs.mkdir(path.dirname(settingsPath), { recursive: true })
+    await fs.writeFile(settingsPath, [
+      'version: 1',
+      'project:',
+      '  merge_policy:',
+      '    position: ff_only_local',
+      '    rationale: legacy local-only landing',
+      '    setAt: "2026-05-31T00:00:00.000Z"',
+      '    setBy: user-direct',
+      'domains:',
+      '  default: {}',
+      '  overrides: {}',
+      '',
+    ].join('\n'), 'utf8')
+
+    const before = await getProjectMigrationStatus({ projectRoot })
+    expect(before.blocked.some(item => item.id === '0.10.0/merge-policy-to-landing-strategy')).toBe(true)
+
+    const result = await applyProjectMigrations({
+      projectRoot,
+      includePrompt: true,
+      only: ['0.10.0/merge-policy-to-landing-strategy'],
+    })
+
+    expect(result.applied.some(item => item.id === '0.10.0/merge-policy-to-landing-strategy')).toBe(true)
+    const updated = parseYaml(await fs.readFile(settingsPath, 'utf8')) as Record<string, any>
+    expect(updated.project.merge_policy).toBeUndefined()
+    expect(updated.project.landing_strategy).toMatchObject({
+      position: 'cherry_pick_local',
+      rationale: 'legacy local-only landing',
+      setBy: 'user-direct',
+    })
   })
 
   it('seeds missing project-state files when applying the required layout migration', async () => {

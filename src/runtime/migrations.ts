@@ -1,5 +1,6 @@
 import fs from 'node:fs/promises'
 import path from 'node:path'
+import { parse as parseYaml, stringify as stringifyYaml } from 'yaml'
 import {
   migrateProjectProvidersToGlobal,
   readProjectConfig,
@@ -119,6 +120,74 @@ async function seedMissingProjectStateFiles(projectRoot: string): Promise<string
     }
   }
   return seeded
+}
+
+function agentSettingsPath(projectRoot: string): string {
+  return path.join(projectRoot, '.guildhall', 'agent-settings.yaml')
+}
+
+function mapLegacyMergePolicyPosition(value: unknown): string | null {
+  switch (value) {
+    case 'ff_only_local':
+      return 'cherry_pick_local'
+    case 'ff_only_with_push':
+      return 'cherry_pick_with_push'
+    case 'manual_pr':
+      return 'manual_pr'
+    default:
+      return null
+  }
+}
+
+async function readAgentSettingsWithMergePolicy(projectRoot: string): Promise<{
+  settings: Record<string, unknown>
+  project: Record<string, unknown>
+  file: string
+} | null> {
+  const file = agentSettingsPath(projectRoot)
+  let raw: string
+  try {
+    raw = await fs.readFile(file, 'utf8')
+  } catch (err) {
+    if ((err as { code?: string }).code === 'ENOENT') return null
+    throw err
+  }
+  const parsed = parseYaml(raw)
+  if (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed)) return null
+  const settings = parsed as Record<string, unknown>
+  const project = settings.project
+  if (project === null || typeof project !== 'object' || Array.isArray(project)) return null
+  if (!Object.prototype.hasOwnProperty.call(project, 'merge_policy')) return null
+  return { settings, project: project as Record<string, unknown>, file }
+}
+
+async function migrateMergePolicyToLandingStrategy(projectRoot: string): Promise<string[]> {
+  const legacySettings = await readAgentSettingsWithMergePolicy(projectRoot)
+  if (!legacySettings) return []
+
+  const { settings, project, file } = legacySettings
+  const legacy = project.merge_policy
+  if (
+    project.landing_strategy === undefined &&
+    legacy !== null &&
+    typeof legacy === 'object' &&
+    !Array.isArray(legacy)
+  ) {
+    const legacyRecord = legacy as Record<string, unknown>
+    const position = mapLegacyMergePolicyPosition(legacyRecord.position)
+    if (!position) {
+      throw new Error('Cannot convert project.merge_policy: unsupported position.')
+    }
+    project.landing_strategy = {
+      ...legacyRecord,
+      position,
+    }
+  } else if (project.landing_strategy === undefined) {
+    throw new Error('Cannot convert project.merge_policy: missing legacy entry details.')
+  }
+  delete project.merge_policy
+  await fs.writeFile(file, stringifyYaml(settings, { lineWidth: 100 }), 'utf8')
+  return ['.guildhall/agent-settings.yaml']
 }
 
 export async function readProjectMigrationLedger(projectRoot: string): Promise<ProjectMigrationLedger> {
@@ -287,6 +356,31 @@ const BUILT_IN_PROJECT_MIGRATIONS: ProjectMigrationDefinition[] = [
       return {
         summary: `Moved ${result.changedTasks.length} task question record${result.changedTasks.length === 1 ? '' : 's'} into owner-input bounded chat.`,
         affectedPaths: result.affectedPaths,
+      }
+    },
+  },
+  {
+    id: '0.10.0/merge-policy-to-landing-strategy',
+    title: 'Convert merge policy to landing strategy',
+    introducedIn: '0.10.0',
+    scope: 'project',
+    safety: 'prompt',
+    requirement: 'required',
+    summary: 'Rewrites deprecated project.merge_policy lever settings into landing_strategy and removes the old key.',
+    async detect(projectRoot) {
+      const legacySettings = await readAgentSettingsWithMergePolicy(projectRoot)
+      return {
+        needed: legacySettings !== null,
+        affectedPaths: legacySettings ? ['.guildhall/agent-settings.yaml'] : [],
+      }
+    },
+    async apply(projectRoot) {
+      const affectedPaths = await migrateMergePolicyToLandingStrategy(projectRoot)
+      return {
+        summary: affectedPaths.length > 0
+          ? 'Converted merge_policy to landing_strategy.'
+          : 'No deprecated merge_policy setting was present.',
+        affectedPaths,
       }
     },
   },

@@ -29,6 +29,7 @@
   import TimelineTab from './project/TimelineTab.svelte'
   import ReleaseTab from './project/ReleaseTab.svelte'
   import SettingsTab from './project/SettingsTab.svelte'
+  import ProjectStructurePanel from './project/structure/ProjectStructurePanel.svelte'
   import DoThisNext from './DoThisNext.svelte'
   import IntakeModal from './IntakeModal.svelte'
   import { project } from '../lib/project.svelte.js'
@@ -358,6 +359,7 @@
         { id: 'board', label: 'Board', path: currentProjectHref('/work?view=board', activeProjectId) },
       ],
     },
+    { id: 'structure', label: 'Structure', icon: 'package', suffix: '/structure' },
     { id: 'timeline', label: 'Timeline', icon: 'clock', suffix: '/timeline' },
     {
       id: 'release',
@@ -1434,6 +1436,8 @@
             <WorkTab {detail} mode="board" />
           {:else if currentView === 'facts'}
             <FactsTab />
+          {:else if currentView === 'structure'}
+            <ProjectStructurePanel />
           {:else if currentView === 'timeline'}
             <TimelineTab {detail} />
           {:else if currentView === 'release'}

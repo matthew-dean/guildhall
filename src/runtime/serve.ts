@@ -7304,7 +7304,6 @@ export function buildServeApp(opts: ServeOptions = {}): {
     })
     const defaults = makeDefaultSettings()
     const project = Object.entries(settings.project)
-      .filter(([name]) => name !== 'merge_policy')
       .map(([name, entry]) => ({
         scope: 'project' as const,
         name,
