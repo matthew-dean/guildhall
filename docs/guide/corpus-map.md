@@ -217,6 +217,25 @@ drafted Guildhall design-system state, proof expectations, and recommendations
 that point work toward reuse, small system extensions, or clearer guidance
 before local styles pile up.
 
+For larger UI projects, refresh can also produce a **Design Governance** packet.
+That packet looks for the kinds of drift that make agent-built interfaces feel
+stitched together:
+
+- multiple token families serving the same role;
+- raw font sizes, weights, spacing, radii, shadows, z-index, or colors in
+  surface code;
+- variant vocabulary drift such as two names for the same tone or density;
+- duplicate local card, notice, chip, status-row, or button-like primitives;
+- route components that own too many unrelated jobs;
+- component libraries that lack contracts for variants, usage, accessibility,
+  and replacement paths.
+
+Workers and reviewers receive that packet when a UI task needs it. The packet
+names the token authority, component authority, duplicate primitive families,
+variant risks, and reviewer checks. Agents then use it as project contract
+context: specs name the contract or delta, workers avoid adding local one-offs,
+and reviewers can ask for revision when the diff ignores the governed surface.
+
 This helps agents avoid the pattern where every screen invents its own button,
 card, badge, spacing, or color treatment. It also keeps the system from
 becoming ceremony for small projects. A thin or absent design system is not an

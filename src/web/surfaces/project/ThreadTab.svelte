@@ -37,6 +37,7 @@
   import StatusLine from '../../lib/StatusLine.svelte'
   import StateSummary from '../../lib/StateSummary.svelte'
   import Help from '../../lib/Help.svelte'
+  import CardListItem from '../../lib/CardListItem.svelte'
   import { friendlyStewardName } from '../../lib/display.js'
   import InteractionCardLayout from '../../lib/InteractionCardLayout.svelte'
   import UtilityPanel from '../../lib/UtilityPanel.svelte'
@@ -2865,10 +2866,12 @@
               {#each threadChains as chain (chain.id)}
                 {@const indexTurn = chain.currentTurn ?? chain.latestTurn}
                 {@const indexChip = turnIndexChip(indexTurn)}
-                <button
-                  type="button"
-                  class="thread-index-row"
-                  class:active={selectedTurnId === chain.id}
+                <CardListItem
+                  as="button"
+                  className="thread-index-row"
+                  tone={selectedTurnId === chain.id ? 'accent' : 'neutral'}
+                  railTone={selectedTurnId === chain.id ? 'accent' : null}
+                  selected={selectedTurnId === chain.id}
                   onclick={() => focusTurn(chain.id)}
                 >
                   <div class="thread-index-row-chips">
@@ -2883,7 +2886,7 @@
                     {/if}
                   </div>
                   <p>{turnIndexSummary(indexTurn)}</p>
-                </button>
+                </CardListItem>
               {/each}
             </div>
           </aside>
@@ -4741,50 +4744,17 @@
     min-height: 0;
     height: 100%;
     overflow: auto;
-    padding: 0;
+    padding: var(--gh-space-2);
     border-right: 1px solid color-mix(in srgb, var(--border) 92%, transparent);
   }
   .thread-index-list {
     display: flex;
     flex-direction: column;
-    gap: 0;
+    gap: var(--gh-space-2);
   }
-  .thread-index-row {
-    display: grid;
-    gap: var(--gh-space-1);
+  :global(.thread-index-row) {
     width: 100%;
-    padding: var(--gh-space-3) var(--gh-space-3);
-    border: 0;
-    border-bottom: 1px solid color-mix(in srgb, var(--border) 92%, transparent);
-    border-left: 3px solid transparent;
-    border-radius: 0;
-    background: transparent;
     color: var(--text);
-    cursor: pointer;
-    text-align: left;
-    font: inherit;
-    transition:
-      border-color 120ms ease,
-      background-color 120ms ease,
-      box-shadow 120ms ease;
-  }
-  .thread-index-row:first-child {
-    border-top: 1px solid color-mix(in srgb, var(--border) 92%, transparent);
-  }
-  .thread-index-row:hover {
-    border-color: color-mix(in srgb, var(--accent) 22%, var(--border));
-    background: color-mix(in srgb, var(--accent) 7%, transparent);
-  }
-  .thread-index-row.active {
-    border-left-color: color-mix(in srgb, var(--accent) 66%, transparent);
-    border-color: color-mix(in srgb, var(--accent) 38%, var(--border));
-    background:
-      linear-gradient(180deg, color-mix(in srgb, var(--accent) 10%, transparent), color-mix(in srgb, var(--accent) 4%, transparent)),
-      color-mix(in srgb, var(--accent) 8%, transparent);
-    box-shadow:
-      inset 0 0 0 1px color-mix(in srgb, var(--accent) 32%, transparent),
-      inset 0 1px 0 color-mix(in srgb, white 12%, transparent),
-      0 16px 28px -24px color-mix(in srgb, var(--accent) 55%, transparent);
   }
   .thread-index-row-top {
     display: flex;
@@ -4830,7 +4800,7 @@
     padding: 0 0.2rem;
     font-size: var(--gh-type-size-caption);
   }
-  .thread-index-row p {
+  :global(.thread-index-row) p {
     margin: 0;
     color: var(--thread-color-soft);
     font-size: var(--gh-type-size-meta);
@@ -5074,33 +5044,15 @@
       top: auto;
       max-height: none;
       overflow: visible;
-      padding: 0;
+      padding: var(--gh-space-2) var(--app-shell-page-padding-inline) var(--gh-space-3);
     }
     .thread.thread-compact-list .thread-index-list {
-      gap: 0;
-    }
-    .thread.thread-compact-list .thread-index-row {
-      padding: var(--gh-space-3) var(--app-shell-page-padding-inline);
-      border-inline: 0;
-      border-radius: 0;
-      border-top: 0;
-      border-bottom: 1px solid color-mix(in srgb, var(--border) 92%, transparent);
-      background: transparent;
-      box-shadow: none;
-    }
-    .thread.thread-compact-list .thread-index-row:hover {
-      border-color: color-mix(in srgb, var(--accent) 22%, var(--border));
-      background: color-mix(in srgb, var(--accent) 7%, transparent);
-    }
-    .thread.thread-compact-list .thread-index-row.active {
-      border-color: color-mix(in srgb, var(--accent) 28%, var(--border));
-      background: color-mix(in srgb, var(--accent) 9%, transparent);
-      box-shadow: inset 3px 0 0 color-mix(in srgb, var(--accent) 56%, transparent);
+      gap: var(--gh-space-2);
     }
     .thread.thread-compact-list .thread-index-row-top strong {
       font-size: var(--gh-type-size-body);
     }
-    .thread.thread-compact-list .thread-index-row p {
+    .thread.thread-compact-list .thread-index-list p {
       -webkit-line-clamp: 1;
       font-size: var(--gh-type-size-meta);
     }

@@ -2301,6 +2301,27 @@ describe('ThreadTab', () => {
     expect(screen.getByRole('button', { name: /knit: compact mailbox cleanup/i })).toBeTruthy()
   })
 
+  it('renders compact thread rows through the shared card-list surface', async () => {
+    installViewportMatchMedia(640)
+    installFetchFakes([
+      importedDraftTurn({
+        id: 'draft-compact-card',
+        taskId: 'task-compact-card',
+        taskTitle: 'Knit: compact card spacing',
+        importedDraft: false,
+        taskStatus: 'exploring',
+        phase: 'inflight',
+        summary: 'Guildhall has started shaping this task, but the brief is not ready yet.',
+      }),
+    ], 'draft-compact-card')
+
+    render(ThreadTab)
+
+    const row = await screen.findByRole('button', { name: /knit: compact card spacing/i })
+    expect(row.className).toContain('card-list-item')
+    expect(row.className).toContain('utility-panel')
+  })
+
   it('shows a top chip for thread rows even when owner and fallback status chips would otherwise be suppressed', async () => {
     installFetchFakes([
       workerTurn({

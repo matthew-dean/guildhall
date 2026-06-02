@@ -168,6 +168,24 @@ babysit setup/import/provider/release states across multiple pages.
   input; Settings should only report readiness blockers. Corpus refresh may
   propose likely surfaces and drift findings, but owner/coordinator approval
   decides what becomes durable graph state.
+- [x] Update public How Guildhall works docs and harden the first agent
+  contract-governance tests. Public guide pages now explain Structure,
+  structural map, project graph, provider/consumer requests, explicit task
+  hierarchy, owner-input sessions, state-machine receipts, contract surfaces,
+  and design-governance packets in reader-facing language. Spec, worker, and
+  reviewer prompts now treat `## Design Governance` packets as project contract
+  input: the spec agent adjusts the blueprint and names contract deltas, the
+  worker changes implementation choices before local UI work, and the reviewer
+  records `Contract / governance fit` as a load-bearing verdict line. This is
+  guardrail hardening, not completion of the full contract-surface runtime
+  feature. Evidence: the prompt tests failed red with 3 failures before the
+  prompt contract existed, then passed after the prompt changes. Verification
+  passed: `pnpm vitest run src/agents/__tests__/guildhall-agent.test.ts
+  src/corpus-map/__tests__/design-governance-diagnostics.test.ts --reporter=dot`
+  (73 tests), `pnpm vitest run
+  src/web/surfaces/project/__tests__/ThreadTab.svelte.test.ts --reporter=dot`
+  (68 tests), `pnpm typecheck`, `pnpm docs:check-copy`,
+  `pnpm docs:check-help-sync`, and `pnpm docs:build`.
 - [x] Specify the 0.10 state-machine substrate and local project graph pivot.
   Spec:
   `internal/specs/2026-06-01-guildhall-0-10-state-machines-project-graph.md`.

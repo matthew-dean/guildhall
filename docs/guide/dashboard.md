@@ -37,6 +37,13 @@ hold the whole run in your head.
   runtime setup, and provider mismatches explain themselves before you press
   Start. The shell points at the exact question, task, or setting that unblocks
   the project.
+- **Thread, Needs You, Structure, and Settings have separate jobs**: Thread is
+  the conversation, Needs You is the alert queue, Structure shows repo and
+  project-graph decisions, and Settings stays focused on readiness and
+  configuration.
+- **Project graph is visible**: Structure can show detected domains, related
+  local projects, assigned responsibility, and provider/consumer requests so
+  cross-project work does not hide inside one task card.
 - **File-backed, not hidden**: the shared project plan lives in `./guildhall.yaml`,
   compact shared Guildhall state lives in committed `./.guildhall/` files,
   and local/private overrides live in
@@ -54,6 +61,8 @@ hold the whole run in your head.
 - **Pressure-test broad asks**: a release or feature request can become a
   one-question-at-a-time intake instead of a giant vague task. Answers,
   assumptions, and deferrals stay attached to the project.
+- **Review project structure**: inspect the structural map, project graph,
+  contract-surface questions, and graph-routed provider work from Structure.
 - **Inspect the run**: read the queue, open the drawer, follow the transcript,
   and decide whether Guildhall is making useful progress.
 - **Judge current work closure**: keep reviewer verdicts, closure checks, and

@@ -44,12 +44,18 @@ correct task-local work just because you can imagine a broader renovation.
    did the worker reuse or extend the named abstraction, helper, package, or
    area convention when it applied? If they ignored a relevant map entry and
    created a parallel solution, require revision.
-9. Check abstraction fit when the diff introduces or changes a durable
+9. If the injected context includes a "## Design Governance" block, treat it as
+   a load-bearing project contract for UI/design-system work. Check whether the
+   diff reused the packet's token authority, component authority, variant
+   vocabulary, and duplicate-primitive guidance. If the task changes that
+   surface without naming a contract delta, or adds a local one-off where the
+   packet names a governed primitive, require revision.
+10. Check abstraction fit when the diff introduces or changes a durable
    contract: schema, API route, MCP resource, persistence record, event type,
    or public packet. A shape can be too narrow, too generic, or right-sized.
    Prefer a generic shell with typed domain payloads when the external concept
    is broad but the stored data needs domain meaning.
-10. If the injected context includes "## Proof Paths" or "## Completion Handoff",
+11. If the injected context includes "## Proof Paths" or "## Completion Handoff",
    review the proof as a first-class contract. Require revision when a
    task-scoped proof path is missing, required evidence has no passed record, or
    the handoff claims manual/provider proof that has not actually been recorded.
@@ -75,6 +81,8 @@ Write a review note with this exact structure:
 ...
 
 **Corpus fit:** yes / no / n-a — [whether the diff reused the mapped abstraction or why no mapped abstraction applied]
+
+**Contract / governance fit:** yes / no / n-a — [when "## Design Governance" or another surface contract packet is present, whether the diff followed it or recorded the required contract delta]
 
 **Abstraction fit:** right-sized / too narrow / too generic / n-a — [for schemas, API routes, MCP resources, persistence records, event types, or public packets, explain why the semantic category will scale without erasing useful domain meaning]
 

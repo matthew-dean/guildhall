@@ -15,17 +15,20 @@ nouns it keeps politely placing on the table.
 Each run pulls from a few kinds of state:
 
 1. **Project state**: the registered project, `./guildhall.yaml`, provider setup,
-   local commands, memory files, and current task queue.
-2. **Planning state**: project goals, task blueprints, open questions,
+   required migrations, local commands, memory files, and current task queue.
+2. **Planning state**: project goals, task blueprints, owner-input sessions,
    acceptance criteria, out-of-scope boundaries, and change orders.
-3. **Codebase orientation**: the [Corpus Map](./corpus-map) and likely target files that point
+3. **Structure state**: the structural map, project graph, domain ownership,
+   related local projects, provider/consumer requests, and any shared surface
+   contracts that shape the work.
+4. **Codebase orientation**: the [Corpus Map](./corpus-map) and likely target files that point
    helpers toward existing modules, helpers, components, design tokens, tests,
-   and conventions.
-4. **Execution state**: active worktree, checkpoint, previous attempts,
+   conventions, and governance packets.
+5. **Execution state**: active worktree, checkpoint, previous attempts,
    verification output, and unresolved reviewer feedback.
-5. **Inspection state**: reviewer rubrics, guild specialists, gate results,
-   current work closure, and your decisions.
-6. **Learning state**: project habits and cross-project preferences that can be
+6. **Inspection state**: reviewer rubrics, guild specialists, gate results,
+   current work closure, contract-fit checks, and your decisions.
+7. **Learning state**: project habits and cross-project preferences that can be
    accepted, ignored, or scoped.
 
 ## The guild
@@ -75,6 +78,41 @@ For example:
 That is the middle path between "just chat with an agent" and "please enjoy
 this mandatory process cathedral."
 
+## Structure, ownership, and contracts
+
+Guildhall now keeps more of the project shape in one place instead of asking
+each screen or agent to invent its own view.
+
+The **structural map** describes what is in the repo: packages, domains,
+executable units, authority roots, and cross-cutting concerns. It is the local
+map of the codebase and project materials.
+
+The **project graph** describes who owns what and how work moves between
+projects or domains. A graph can include the current project, related local
+Guildhall projects, domains, packages, external references, and delivery
+channels. When one project needs work from another, Guildhall treats that as a
+provider/consumer request. The provider shapes and delivers the work; the
+consumer still reviews it in its own project before the edge is resolved.
+
+The next layer is a **contract surface**: a reusable surface such as a component
+API, public endpoint, event stream, state machine, MCP resource, schema, design
+system, or domain capability. Individual specs can touch one part of that
+surface, but Guildhall needs to reason about the whole thing too. A Button spec
+should fit the component API contract. An endpoint spec should fit the API
+contract. A design-system change should fit the token and variant contract.
+
+That is why contract review packets matter. When a task touches a durable
+surface, the packet can show sibling specs, existing rules, known decisions,
+affected consumers, proposed changes, and proof obligations. The first practical
+version of this is already visible in design-governance packets: agents see the
+token authority, component authority, duplicate primitive families, variant
+risks, and reviewer checks before they add another local card, button, chip, or
+style rule.
+
+The owner-facing home for this kind of review is **Structure**, with discussion
+routed back to Thread when your judgment is needed. Settings stays focused on
+configuration and readiness.
+
 ## Making good output more likely
 
 Good output usually comes from a chain of smaller wins:
@@ -111,6 +149,11 @@ release work, and verification. Those can be linked without being crammed into
 one task. You should be able to see why Guildhall asked a question, split the
 work, or kept it together.
 
+Work hierarchy is now explicit. Containing work is linked to child work through
+task hierarchy links; it is not smuggled in as a fake task status. Old projects
+that still have legacy state get a required migration before Guildhall keeps
+running, so the visible queue matches the model the agents use.
+
 ## Feedback loops
 
 Guildhall asks for feedback where it changes the outcome.
@@ -118,6 +161,11 @@ Guildhall asks for feedback where it changes the outcome.
 Your feedback belongs on product calls, risk calls, taste calls, and release
 judgment. If the answer changes what the product is, who it serves, or whether
 you are comfortable shipping it, Guildhall asks.
+
+Those questions now flow through owner-input sessions instead of one-off cards
+spread across every page. Thread owns the conversation. Needs You owns alerts.
+Overview, Work, Structure, and Settings can point to the same decision, but
+they do not each invent a separate question model.
 
 Reviewer feedback belongs where another lens catches a class of mistake:
 architecture fit, product flow, accessibility, security, test coverage,
@@ -133,6 +181,12 @@ Command feedback belongs where commands can prove something: tests, typechecks,
 builds, lint, browser checks, and release scripts. Guildhall records those
 outcomes so the next run does not have to rediscover whether a claim was
 actually verified.
+
+Lifecycle changes follow the same rule. Newer Guildhall flows use explicit
+state machines and receipts: an agent proposes an event, the runtime checks
+whether that event is legal, and the receipt records what happened. That keeps
+"done", "blocked", "waiting", and "resolved" from becoming loose words that
+mean different things on different screens.
 
 ## How Guildhall learns
 
@@ -180,6 +234,8 @@ The system records:
 - what reviewers found
 - what gates ran
 - what decisions changed the plan
+- what state-machine events and receipts changed lifecycle state
+- what project-graph or contract-surface decision affected the work
 - what settings or learned behaviors affected execution
 
 This matters because good work is not only “the diff looks okay today.” Good
@@ -206,11 +262,19 @@ shared code before anyone edits:
 
 - helpers, services, schemas, and packages for backend/runtime work
 - components, design tokens, and interaction patterns for UI work
+- project-graph ownership, domain responsibilities, and provider/consumer edges
+- contract packets for shared APIs, schemas, events, state machines, MCP
+  resources, and design-system surfaces
 - tests and fixtures that show the intended contract
 - docs and decisions that explain why the system has its current shape
 
 If the same idea appears twice, it may be time for a small abstraction. If it
 is still a one-off, the project does not need a brand-new framework-shaped hat.
+
+The important part is that agents use this context to change what they do.
+Spec agents name the existing contract or the contract delta. Workers adjust
+the implementation before adding a local one-off. Reviewers can reject work
+that ignored a mapped abstraction or governance packet.
 
 Two pages cover the most important pieces:
 
