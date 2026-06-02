@@ -386,15 +386,15 @@
     gap: var(--gh-space-1);
   }
   .check-label {
-    font-size: var(--fs-3);
-    font-weight: 600;
-    line-height: var(--lh-tight);
+    font-size: var(--gh-type-size-panel-title);
+    font-weight: var(--gh-type-weight-strong);
+    line-height: var(--gh-type-line-height-tight);
   }
   .check-detail,
   .muted {
     color: var(--text-muted);
-    font-size: var(--fs-2);
-    line-height: var(--lh-body);
+    font-size: var(--gh-type-size-body);
+    line-height: var(--gh-type-line-height-body);
   }
   .check-actions,
   .button-row {
@@ -405,7 +405,7 @@
   }
   .row-error {
     color: var(--danger);
-    font-size: var(--fs-1);
+    font-size: var(--gh-type-size-meta);
   }
   .panel-head {
     display: flex;
@@ -423,8 +423,8 @@
   .panel-head p,
   .grant-copy p {
     color: var(--text-muted);
-    font-size: var(--fs-2);
-    line-height: var(--lh-body);
+    font-size: var(--gh-type-size-body);
+    line-height: var(--gh-type-line-height-body);
   }
   .fact-grid {
     display: grid;
@@ -438,8 +438,8 @@
   }
   .fact-grid dt {
     color: var(--text-muted);
-    font-size: var(--fs-1);
-    font-weight: 700;
+    font-size: var(--gh-type-size-meta);
+    font-weight: var(--gh-type-weight-emphasis);
     text-transform: uppercase;
   }
   .fact-grid dd {
@@ -466,11 +466,11 @@
     gap: var(--gh-space-2);
     align-items: center;
     color: var(--text-muted);
-    font-size: var(--fs-1);
+    font-size: var(--gh-type-size-meta);
   }
   .workspace-project-name {
     color: var(--text);
-    font-weight: 700;
+    font-weight: var(--gh-type-weight-emphasis);
   }
   .workspace-project-path {
     font-family: var(--font-mono);

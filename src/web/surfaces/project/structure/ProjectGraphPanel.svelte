@@ -238,8 +238,8 @@
 <style>
   .muted {
     color: var(--text-muted);
-    font-size: var(--fs-2);
-    line-height: var(--lh-body);
+    font-size: var(--gh-type-size-body);
+    line-height: var(--gh-type-line-height-body);
   }
   .graph-grid,
   .domain-assignment-list,
@@ -295,8 +295,8 @@
   .graph-request-head p {
     margin: 0;
     color: var(--text-muted);
-    font-size: var(--fs-1);
-    line-height: var(--lh-body);
+    font-size: var(--gh-type-size-meta);
+    line-height: var(--gh-type-line-height-body);
   }
   :global(.assign-project-button) {
     justify-self: start;

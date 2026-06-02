@@ -145,9 +145,9 @@
   }
   .settings-section-picker-label {
     color: var(--text-muted);
-    font-size: var(--fs-1);
-    font-weight: 700;
-    line-height: var(--lh-tight);
+    font-size: var(--gh-type-size-meta);
+    font-weight: var(--gh-type-weight-emphasis);
+    line-height: var(--gh-type-line-height-tight);
     text-transform: uppercase;
   }
   :global(.settings-section-card) {
@@ -164,9 +164,9 @@
     justify-content: center;
     min-inline-size: 0;
     min-block-size: 38px;
-    font-size: var(--fs-1);
-    font-weight: 650;
-    line-height: var(--lh-tight);
+    font-size: var(--gh-type-size-meta);
+    font-weight: var(--gh-type-weight-strong);
+    line-height: var(--gh-type-line-height-tight);
     color: var(--text-muted);
     box-shadow: none;
   }

@@ -144,8 +144,8 @@
   }
   .field > span:first-child {
     color: var(--text-muted);
-    font-size: var(--fs-2);
-    line-height: var(--lh-body);
+    font-size: var(--gh-type-size-body);
+    line-height: var(--gh-type-line-height-body);
   }
   .candidate-list {
     display: flex;
@@ -153,7 +153,7 @@
     gap: var(--gh-space-2);
   }
   .status {
-    font-size: var(--fs-1);
+    font-size: var(--gh-type-size-meta);
     color: var(--accent-2);
   }
   .status.error {

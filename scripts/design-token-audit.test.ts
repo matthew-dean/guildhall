@@ -1,5 +1,5 @@
 import { execFileSync } from 'node:child_process'
-import { mkdirSync, mkdtempSync, writeFileSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { describe, expect, it } from 'vitest'
@@ -123,5 +123,24 @@ describe('design token audit', () => {
     expect(stderr).toContain('over baseline')
     expect(stderr).toContain('legacy token family: var(--fs-2)')
     expect(stderr).toContain('raw font-size: font-size: var(--fs-2);')
+  })
+
+  it('keeps the small settings and structure panels on canonical token families', () => {
+    const convertedSurfaces = [
+      'src/web/surfaces/project/SettingsTab.svelte',
+      'src/web/surfaces/project/settings/DeveloperToolsPanel.svelte',
+      'src/web/surfaces/project/settings/OperatingProfilePanel.svelte',
+      'src/web/surfaces/project/settings/SettingsCoordinatorsPanel.svelte',
+      'src/web/surfaces/project/settings/SettingsIdentityPanel.svelte',
+      'src/web/surfaces/project/settings/SettingsReadyPanel.svelte',
+      'src/web/surfaces/project/structure/ProjectGraphPanel.svelte',
+      'src/web/surfaces/project/structure/StructuralMapReviewPanel.svelte',
+    ]
+
+    for (const surface of convertedSurfaces) {
+      const source = readFileSync(path.join(process.cwd(), surface), 'utf8')
+      expect(source, surface).not.toMatch(/var\(--(?:fs|lh|s|r)-/)
+      expect(source, surface).not.toMatch(/font-weight:\s*[0-9]/)
+    }
   })
 })

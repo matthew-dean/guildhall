@@ -95,8 +95,8 @@
   .muted,
   .mini-list {
     color: var(--text-muted);
-    font-size: var(--fs-2);
-    line-height: var(--lh-body);
+    font-size: var(--gh-type-size-body);
+    line-height: var(--gh-type-line-height-body);
   }
   .structure-list {
     display: grid;
@@ -109,7 +109,7 @@
   :global(.structure-row) span {
     color: var(--text-muted);
     font-family: var(--font-mono);
-    font-size: var(--fs-1);
+    font-size: var(--gh-type-size-meta);
   }
   .mini-list {
     margin: 0;

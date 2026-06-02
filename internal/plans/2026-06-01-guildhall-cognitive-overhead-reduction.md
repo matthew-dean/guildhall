@@ -2693,7 +2693,7 @@ Every primitive must name its variant axes and keep them bounded. New variants r
     spacing/radius, variant-budget, deletion-list, scanner, and open-exception
     sections.
 
-- [ ] **Step 8: Convert the first surfaces**
+- [x] **Step 8: Convert the first surfaces**
 
 Start with the surfaces that showed obvious drift:
 
@@ -2731,14 +2731,37 @@ For each touched surface:
     `--gh-*` spacing, control line-height, notice accent width, and named type
     role tokens. Post-slice `pnpm lint:design` no longer reports any of these
     touched files.
-  - Remaining: Step 8 stays open because the whole-repo audit still reports
+  - Historical remaining note: Step 8 stayed open at that point because the whole-repo audit still reported
     unmanaged token/component debt in untouched surfaces.
   - Evidence: Worker L added the governed debt baseline
-    `internal/audits/2026-06-01-design-token-baseline.json`. The first-surface
-    conversion remains open, but existing debt is now tracked as a per-file
+    `internal/audits/2026-06-01-design-token-baseline.json`. At that point the
+    first-surface conversion remained open, but existing debt was tracked as a per-file
     signature budget instead of an unbounded lint failure.
+  - Evidence: Worker N converted the non-Task-4 surface slice:
+    `src/web/surfaces/project/SettingsTab.svelte`,
+    `src/web/surfaces/project/settings/*.svelte`,
+    `src/web/surfaces/project/structure/*.svelte`,
+    `src/web/surfaces/project/ThreadTab.svelte`, and
+    `src/web/surfaces/project/WorkspaceImportTab.svelte`. The pass replaced
+    legacy `--fs-*`, `--lh-*`, `--s-*`, and `--r-*` references with canonical
+    `--gh-*` role/layout tokens, replaced raw font weights with
+    `--gh-type-weight-*`, and normalized flagged local gap/radius/padding
+    values to canonical spacing/radius roles. Worker N did not touch Worker
+    M/Bohr-owned Task 4 files: `FleetNeedsYou.svelte`,
+    `DoThisNext.svelte`, or `ProjectView.svelte`.
+  - Evidence: Worker N regenerated
+    `internal/audits/2026-06-01-design-token-baseline.json` with
+    `node scripts/design-token-audit.mjs --write-baseline`. The baseline no
+    longer contains entries for `SettingsTab.svelte`, `settings/*.svelte`, or
+    `structure/*.svelte`; `ThreadTab.svelte` now retains only raw line-height,
+    composer-padding, shadow, and z-index exceptions; `WorkspaceImportTab.svelte`
+    now retains only one raw shadow exception.
+  - Remaining: Step 8 is closed for the non-Task-4 surfaces in Worker N scope.
+    Any remaining Task 4 surface conversion belongs with Worker M/Bohr's active
+    edits, and whole-repo debt outside this slice remains governed by the
+    design-token baseline.
 
-- [ ] **Step 9: Run the audit and focused UI tests**
+- [x] **Step 9: Run the audit and focused UI tests**
 
 Run:
 
@@ -2759,13 +2782,13 @@ Expected: PASS, with the design audit no longer flagging touched surfaces.
   - Evidence: Worker L ran
     `pnpm vitest run scripts/design-token-audit.test.ts --reporter=dot`
     (passed, 4 tests) and `pnpm lint:design` (passed).
-  - Remaining: Step 9's focused Svelte UI tests were not rerun in Worker L scope
+  - Historical remaining note: Step 9's focused Svelte UI tests were not rerun in Worker L scope
     because this slice changed only the audit mechanics and internal evidence,
     not Task 4 or Task 7 UI surfaces.
   - Historical note: earlier Worker A/E runs saw `pnpm lint:design` exit 1
     before the baseline gate existed. That broad failure is now represented by
     the committed baseline rather than blocking the hard gate.
-  - Deferred: Step 8 surface burn-down still remains for the UI
+  - Historical deferred note: Step 8 surface burn-down still remained for the UI
     surface/component owner. The current pass means "no new or increased
     audited debt," not "all surfaces are converted."
   - Previous evidence: `pnpm vitest run scripts/design-token-audit.test.ts --reporter=dot`
@@ -2780,8 +2803,17 @@ Expected: PASS, with the design audit no longer flagging touched surfaces.
     `pnpm vitest run src/web/surfaces/__tests__/DoThisNext.svelte.test.ts --reporter=dot`
     (passed, 6 tests), and
     `pnpm --filter @guildhall/ui typecheck` (passed).
-  - Blocked: Worker E reran `pnpm lint:design`; it still exits 1. Touched files
-    are clean, but the remaining audit failures are:
+  - Evidence: Worker N ran `pnpm lint:design` after regenerating the baseline;
+    it passed.
+  - Evidence: Worker N ran `pnpm docs:extract-help` to generate
+    `src/web/generated/help-topics.json` in the fresh worktree before focused
+    UI tests; it wrote 38 help topics and left no tracked docs/generated diff.
+  - Evidence: Worker N ran
+    `pnpm vitest run scripts/design-token-audit.test.ts src/web/surfaces/project/__tests__/SettingsTab.svelte.test.ts src/web/surfaces/project/structure/__tests__/ProjectStructurePanel.svelte.test.ts src/web/surfaces/project/__tests__/ThreadTab.svelte.test.ts src/web/surfaces/project/__tests__/WorkspaceImportTab.svelte.test.ts --reporter=dot`;
+    it passed with 5 files and 93 tests.
+  - Evidence: Worker N ran `pnpm typecheck:ui`; it passed.
+  - Historical blocked note: Worker E reran `pnpm lint:design`; it still exited
+    1 at that point. Touched files were clean, but the remaining audit failures were:
 
 ```text
 369 src/web/surfaces/project/ThreadTab.svelte

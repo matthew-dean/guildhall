@@ -138,8 +138,8 @@
   :global(.override-row) span {
     margin: 0;
     color: var(--text-muted);
-    font-size: var(--fs-2);
-    line-height: var(--lh-body);
+    font-size: var(--gh-type-size-body);
+    line-height: var(--gh-type-line-height-body);
   }
   @container (min-width: 52rem) {
     .profile-grid {

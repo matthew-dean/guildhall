@@ -382,8 +382,8 @@
   .lever-current,
   .mini-list {
     color: var(--text-muted);
-    font-size: var(--fs-2);
-    line-height: var(--lh-body);
+    font-size: var(--gh-type-size-body);
+    line-height: var(--gh-type-line-height-body);
   }
   .lever-scope,
   .lever-list,
@@ -405,7 +405,7 @@
   }
   .lever-scope-head span {
     color: var(--text-muted);
-    font-size: var(--fs-1);
+    font-size: var(--gh-type-size-meta);
   }
   :global(.lever-card) {
     display: grid;
@@ -431,7 +431,7 @@
   }
   .fact-grid span {
     color: var(--text-muted);
-    font-size: var(--fs-1);
+    font-size: var(--gh-type-size-meta);
     text-transform: uppercase;
   }
   .mini-list {
