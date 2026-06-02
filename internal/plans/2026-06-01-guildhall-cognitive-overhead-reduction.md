@@ -2158,32 +2158,27 @@ In `src/runtime/design-feedback.ts`:
 
 - Rename `LoomaImprovement` to `DesignSystemImprovement`.
 - Replace `loomaImprovements` store field with `designSystemImprovements`.
-- Replace `discoverLoomaDevelopmentHook` with:
-
-```ts
-export async function discoverDesignSystemDevelopmentTargets(input: {
-  globalConfig?: Partial<GlobalConfigType>
-  env?: NodeJS.ProcessEnv
-} = {}): Promise<DesignSystemDevelopmentTargetStatus[]> {
-  // Read configured targets from global config and environment.
-  // Validate each target by id, path, git worktree status, and optional package markers.
-}
-```
-
-- Environment support should be generic:
-  - `GUILDHALL_DESIGN_SYSTEM_PATH`
-  - `GUILDHALL_DESIGN_SYSTEM_ID`
+- Remove the local design-system development-target hook entirely. Design
+  feedback should not discover or validate machine-local design-system
+  checkouts; reusable findings should become portable
+  `DesignSystemCandidate`/`DesignSystemImprovement` records, and any provider-
+  owned follow-up should route through project graph/domain authority and the
+  provider coordinator exchange.
+- Delete support for `experimental.designSystemDevelopment.targets[]` and
+  design-system path environment overrides. Those were a dev-mode shortcut for
+  building Looma locally; the front-facing product model is now domain/capability
+  ownership between first-class projects.
 
 Evidence, 2026-06-01 coordinator slice:
 
 - `src/runtime/design-feedback.ts` now exports
-  `DesignSystemImprovement`, `designSystemImprovements`, and
-  `discoverDesignSystemDevelopmentTargets`.
-- `src/config/schemas.ts` now supports generic
-  `experimental.designSystemDevelopment.targets[]` records with optional
-  package markers.
-- `src/runtime/serve.ts`, `src/mcp-server/project-reader.ts`, and
-  `src/web/surfaces/project/SettingsTab.svelte` consume the generic field names.
+  `DesignSystemImprovement` and `designSystemImprovements`.
+- 2026-06-02 amendment: `discoverDesignSystemDevelopmentTargets`,
+  `DesignSystemDevelopmentTargetStatus`, `experimental.designSystemDevelopment`,
+  and the design-feedback API `designSystemDevelopmentTargets` payload were
+  removed. API tests assert the legacy payload field is absent. Reusable design
+  feedback now remains a portable candidate/improvement record until a project
+  graph capability/domain route hands it to another project's coordinator.
 
 - [x] **Step 6: Move sample config out of runtime**
 

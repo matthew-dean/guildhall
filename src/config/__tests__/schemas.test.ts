@@ -390,8 +390,8 @@ describe('GlobalConfig', () => {
     expect(config.maxProviderConcurrency).toBe(200)
   })
 
-  it('parses experimental local design-system development targets without making them required', () => {
-    expect(GlobalConfig.parse({}).experimental).toBeUndefined()
+  it('does not preserve obsolete local design-system development target config', () => {
+    expect((GlobalConfig.parse({}) as { experimental?: unknown }).experimental).toBeUndefined()
 
     const config = GlobalConfig.parse({
       experimental: {
@@ -407,13 +407,7 @@ describe('GlobalConfig', () => {
       },
     })
 
-    expect(config.experimental?.designSystemDevelopment?.targets[0]).toEqual({
-      id: 'foundation',
-      enabled: true,
-      path: '/Users/matthew/git/oss/design-system',
-      writeThrough: 'queue',
-      packageMarkers: ['@example/foundation'],
-    })
+    expect((config as { experimental?: unknown }).experimental).toBeUndefined()
   })
 
   it('validates servePort range', () => {

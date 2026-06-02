@@ -7,7 +7,6 @@ import {
   captureOwnerDesignFeedback,
   DESIGN_FEEDBACK_FILE,
   classifyDesignFinding,
-  discoverDesignSystemDevelopmentTargets,
   recordDesignFinding,
   readDesignFeedbackStore,
   routeDesignFinding,
@@ -203,87 +202,6 @@ describe('design feedback loop', () => {
       expect(store.decisionPackets[0]?.id).toBe(packet.id)
     } finally {
       await fs.rm(memoryDir, { recursive: true, force: true })
-    }
-  })
-})
-
-describe('discoverDesignSystemDevelopmentTargets', () => {
-  it('stays inactive when local design-system development is not configured', async () => {
-    const [status] = await discoverDesignSystemDevelopmentTargets({ globalConfig: {} })
-
-    expect(status).toMatchObject({
-      id: 'design-system',
-      enabled: false,
-      status: 'inactive',
-      reason: expect.stringContaining('not configured'),
-    })
-  })
-
-  it('stays inactive when the configured path is not a valid design-system target', async () => {
-    const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'guildhall-not-design-system-'))
-    try {
-      const [status] = await discoverDesignSystemDevelopmentTargets({
-        globalConfig: {
-          experimental: {
-            designSystemDevelopment: {
-              targets: [{
-                id: 'foundation',
-                enabled: true,
-                path: dir,
-                writeThrough: 'queue',
-                packageMarkers: [],
-              }],
-            },
-          },
-        },
-      })
-
-      expect(status).toMatchObject({
-        enabled: true,
-        status: 'inactive',
-        path: dir,
-      })
-      expect(status?.reason).toContain('not a Git worktree')
-    } finally {
-      await fs.rm(dir, { recursive: true, force: true })
-    }
-  })
-
-  it('activates only for an explicitly configured valid design-system checkout', async () => {
-    const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'guildhall-design-system-target-'))
-    try {
-      await fs.mkdir(path.join(dir, '.git'))
-      await fs.writeFile(
-        path.join(dir, 'package.json'),
-        JSON.stringify({ name: 'foundation-monorepo', private: true }, null, 2),
-        'utf-8',
-      )
-
-      const [status] = await discoverDesignSystemDevelopmentTargets({
-        globalConfig: {
-          experimental: {
-            designSystemDevelopment: {
-              targets: [{
-                id: 'foundation',
-                enabled: true,
-                path: dir,
-                writeThrough: 'queue',
-                packageMarkers: [],
-              }],
-            },
-          },
-        },
-      })
-
-      expect(status).toMatchObject({
-        id: 'foundation',
-        enabled: true,
-        status: 'active',
-        path: dir,
-        writeThrough: 'queue',
-      })
-    } finally {
-      await fs.rm(dir, { recursive: true, force: true })
     }
   })
 })

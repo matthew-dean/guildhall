@@ -2,7 +2,7 @@ import { describe, expect, it, beforeEach, afterEach } from 'vitest'
 import fs from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
-import { bootstrapWorkspace, updateGlobalConfig } from '@guildhall/config'
+import { bootstrapWorkspace } from '@guildhall/config'
 import { buildServeApp } from '../serve.js'
 
 let tmpDir: string
@@ -34,7 +34,7 @@ function projectUrl(route: string): string {
 }
 
 describe('design feedback API', () => {
-  it('reports an inactive design-system target when no local checkout is configured', async () => {
+  it('reports design feedback without machine-local development target status', async () => {
     const { app } = buildServeApp({ projectPath: tmpDir })
 
     const res = await app.fetch(new Request(projectUrl('/api/project/design-feedback')))
@@ -42,13 +42,10 @@ describe('design feedback API', () => {
     expect(res.status).toBe(200)
     const body = await res.json() as {
       feedback?: { findings?: unknown[] }
-      designSystemDevelopmentTargets?: Array<{ status?: string; reason?: string }>
+      designSystemDevelopmentTargets?: unknown
     }
     expect(body.feedback?.findings).toEqual([])
-    expect(body.designSystemDevelopmentTargets?.[0]).toMatchObject({
-      status: 'inactive',
-      reason: expect.stringContaining('not configured'),
-    })
+    expect(body.designSystemDevelopmentTargets).toBeUndefined()
   })
 
   it('records and routes reusable design-system findings without requiring a local target', async () => {
@@ -74,11 +71,11 @@ describe('design feedback API', () => {
         candidate?: { targetDesignSystem?: string }
         designSystemImprovement?: { targetPackage?: string }
       }
-      designSystemDevelopmentTargets?: Array<{ status?: string }>
+      designSystemDevelopmentTargets?: unknown
     }
     expect(body.routed?.candidate?.targetDesignSystem).toBe('foundation')
     expect(body.routed?.designSystemImprovement?.targetPackage).toBe('core')
-    expect(body.designSystemDevelopmentTargets?.[0]?.status).toBe('inactive')
+    expect(body.designSystemDevelopmentTargets).toBeUndefined()
   })
 
   it('captures owner feedback and builds a design decision packet', async () => {
@@ -128,43 +125,4 @@ describe('design feedback API', () => {
     expect(packetBody.feedback?.decisionPackets).toHaveLength(1)
   })
 
-  it('reports an active design-system target when experimental config points at a checkout', async () => {
-    const targetPath = await fs.mkdtemp(path.join(os.tmpdir(), 'guildhall-serve-design-system-'))
-    try {
-      await fs.mkdir(path.join(targetPath, '.git'))
-      await fs.writeFile(
-        path.join(targetPath, 'package.json'),
-        JSON.stringify({ name: 'foundation-monorepo' }, null, 2),
-        'utf-8',
-      )
-      updateGlobalConfig({
-        experimental: {
-          designSystemDevelopment: {
-            targets: [{
-              id: 'foundation',
-              enabled: true,
-              path: targetPath,
-              writeThrough: 'queue',
-              packageMarkers: [],
-            }],
-          },
-        },
-      })
-      const { app } = buildServeApp({ projectPath: tmpDir })
-
-      const res = await app.fetch(new Request(projectUrl('/api/project/design-feedback')))
-
-      expect(res.status).toBe(200)
-      const body = await res.json() as {
-        designSystemDevelopmentTargets?: Array<{ status?: string; path?: string; writeThrough?: string }>
-      }
-      expect(body.designSystemDevelopmentTargets?.[0]).toMatchObject({
-        status: 'active',
-        path: targetPath,
-        writeThrough: 'queue',
-      })
-    } finally {
-      await fs.rm(targetPath, { recursive: true, force: true })
-    }
-  })
 })

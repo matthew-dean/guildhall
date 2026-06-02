@@ -709,7 +709,7 @@ Expected: PASS.
 
 ---
 
-## Task 6: Generalize Design-System Development and Preview Hooks
+## Task 6: Remove Local Design-System Development Hooks; Keep Design Feedback General
 
 **Files:**
 - Modify: `src/runtime/design-feedback.ts`
@@ -724,8 +724,12 @@ Expected: PASS.
 
 Add tests asserting:
 
-- a configured design-system hook named `acme-kit` works without `LOOMA_PATH`
-- no Settings API response says `Looma` unless a Looma hook is configured
+- design-feedback API responses do not expose machine-local design-system
+  development target status
+- reusable design findings still become portable `DesignSystemCandidate` and
+  `DesignSystemImprovement` records without requiring a checkout path
+- legacy global config under `experimental.designSystemDevelopment` is not
+  preserved as parsed product state
 - Storybook discovery returns adapter id `storybook` under `previewAdapters`, not as the generic design proof
 - a Swift/Xcode fixture with no Storybook returns no web preview and suggests command/review proof instead
 
@@ -735,22 +739,16 @@ Run: `pnpm vitest run src/runtime/__tests__/serve-design-feedback.test.ts src/ru
 
 Expected: FAIL because Looma is still first-class in generic surfaces.
 
-- [ ] **Step 3: Implement generic hook config**
+- [ ] **Step 3: Delete local development-target plumbing**
 
-Add config shape:
-
-```ts
-experimental:
-  designSystemDevelopment:
-    systems:
-      - id: acme-kit
-        label: Acme Kit
-        path: ../acme-kit
-        packageNamePattern: "^@acme-kit/"
-        writeThrough: queue
-```
-
-Keep legacy `looma` config as a migration alias that maps into `systems`.
+Remove `discoverDesignSystemDevelopmentTargets`,
+`DesignSystemDevelopmentTargetStatus`, the
+`experimental.designSystemDevelopment` global config schema, and the
+`designSystemDevelopmentTargets` API payload. Do not replace this with a more
+generic local checkout hook. Design feedback's durable output is the portable
+finding/candidate/improvement store; when another project owns the reusable
+capability, Guildhall should route follow-up through project graph/domain
+authority and the provider coordinator exchange.
 
 - [ ] **Step 4: Run green tests**
 

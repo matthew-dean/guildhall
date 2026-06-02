@@ -1,8 +1,6 @@
 import fsp from 'node:fs/promises'
-import { existsSync, statSync } from 'node:fs'
 import path from 'node:path'
 import { z } from 'zod'
-import { GlobalConfig, readGlobalConfig, type GlobalConfig as GlobalConfigType } from '@guildhall/config'
 
 export const DESIGN_FEEDBACK_FILE = 'design-feedback.json'
 
@@ -172,16 +170,6 @@ export interface RouteDesignFindingResult {
   candidate?: DesignSystemCandidate
   designSystemImprovement?: DesignSystemImprovement
 }
-
-export const DesignSystemDevelopmentTargetStatus = z.object({
-  id: z.string().min(1),
-  enabled: z.boolean(),
-  status: z.enum(['active', 'inactive']),
-  reason: z.string(),
-  path: z.string().optional(),
-  writeThrough: z.enum(['off', 'queue']).optional(),
-})
-export type DesignSystemDevelopmentTargetStatus = z.infer<typeof DesignSystemDevelopmentTargetStatus>
 
 export async function readDesignFeedbackStore(memoryDir: string): Promise<DesignFeedbackStore> {
   const file = path.join(memoryDir, DESIGN_FEEDBACK_FILE)
@@ -440,117 +428,6 @@ function slugTimestamp(value: string): string {
   return value.replace(/[^A-Za-z0-9]+/g, '-').replace(/^-|-$/g, '')
 }
 
-interface DesignSystemDevelopmentTargetConfig {
-  id: string
-  enabled?: boolean
-  path?: string
-  writeThrough?: 'off' | 'queue'
-  packageMarkers?: string[]
-}
-
-export async function discoverDesignSystemDevelopmentTargets(input: {
-  globalConfig?: Partial<GlobalConfigType>
-  env?: NodeJS.ProcessEnv
-} = {}): Promise<DesignSystemDevelopmentTargetStatus[]> {
-  const env = input.env ?? process.env
-  const config = input.globalConfig ? GlobalConfig.parse(input.globalConfig) : readGlobalConfig()
-  const targets = configuredDesignSystemDevelopmentTargets(config, env)
-
-  if (targets.length === 0) {
-    return [{
-      id: 'design-system',
-      enabled: false,
-      status: 'inactive',
-      reason: 'Local design-system development target is not configured.',
-    }]
-  }
-
-  return Promise.all(targets.map(target => validateDesignSystemDevelopmentTarget(target)))
-}
-
-async function validateDesignSystemDevelopmentTarget(
-  target: DesignSystemDevelopmentTargetConfig,
-): Promise<DesignSystemDevelopmentTargetStatus> {
-  const enabled = target.enabled === true || Boolean(target.path)
-  const writeThrough = target.writeThrough ?? 'queue'
-  if (!enabled) {
-    return {
-      id: target.id,
-      enabled: false,
-      status: 'inactive',
-      reason: 'Local design-system development target is not enabled.',
-    }
-  }
-  if (!target.path) {
-    return {
-      id: target.id,
-      enabled: true,
-      status: 'inactive',
-      reason: 'Local design-system development target is enabled, but no path is configured.',
-    }
-  }
-
-  const gitCheck = await isGitWorktree(target.path)
-  if (!gitCheck.ok) {
-    return {
-      id: target.id,
-      enabled: true,
-      status: 'inactive',
-      path: target.path,
-      writeThrough,
-      reason: gitCheck.reason,
-    }
-  }
-  if (!await looksLikeDesignSystemTarget(target.path, target)) {
-    return {
-      id: target.id,
-      enabled: true,
-      status: 'inactive',
-      path: target.path,
-      writeThrough,
-      reason: 'Configured path is a Git worktree, but does not match the design-system target markers.',
-    }
-  }
-  return {
-    id: target.id,
-    enabled: true,
-    status: 'active',
-    path: target.path,
-    writeThrough,
-    reason: 'Local design-system development target is active.',
-  }
-}
-
-function configuredDesignSystemDevelopmentTargets(
-  config: GlobalConfigType,
-  env: NodeJS.ProcessEnv,
-): DesignSystemDevelopmentTargetConfig[] {
-  const development = config.experimental?.designSystemDevelopment as {
-    targets?: DesignSystemDevelopmentTargetConfig[]
-  } | undefined
-  const targets = Array.isArray(development?.targets)
-    ? development.targets
-      .filter((target): target is DesignSystemDevelopmentTargetConfig => typeof target?.id === 'string' && target.id.trim().length > 0)
-      .map(target => ({
-        ...target,
-        id: target.id.trim(),
-        path: target.path?.trim(),
-        packageMarkers: target.packageMarkers?.filter(Boolean),
-      }))
-    : []
-  const envPath = env['GUILDHALL_DESIGN_SYSTEM_PATH']?.trim()
-  if (envPath) {
-    targets.push({
-      id: env['GUILDHALL_DESIGN_SYSTEM_ID']?.trim() || 'design-system',
-      enabled: true,
-      path: envPath,
-      writeThrough: 'queue',
-      packageMarkers: [],
-    })
-  }
-  return dedupeTargets(targets)
-}
-
 async function writeDesignFeedbackStore(memoryDir: string, store: DesignFeedbackStore): Promise<void> {
   await fsp.mkdir(memoryDir, { recursive: true })
   const file = path.join(memoryDir, DESIGN_FEEDBACK_FILE)
@@ -578,52 +455,4 @@ function normalizeDesignSystemTargetPackage(finding: DesignFinding): DesignSyste
   if (/rubric|review/.test(text)) return 'rubric'
   if (/layout|grid|stack|cluster/.test(text)) return 'layout'
   return 'core'
-}
-
-async function isGitWorktree(dir: string): Promise<{ ok: true } | { ok: false; reason: string }> {
-  try {
-    const stat = await fsp.stat(dir)
-    if (!stat.isDirectory()) return { ok: false, reason: 'Configured design-system target path is not a directory.' }
-  } catch {
-    return { ok: false, reason: 'Configured design-system target path does not exist.' }
-  }
-  const gitPath = path.join(dir, '.git')
-  if (!existsSync(gitPath)) return { ok: false, reason: 'Configured design-system target path is not a Git worktree.' }
-  try {
-    const stat = statSync(gitPath)
-    if (stat.isDirectory() || stat.isFile()) return { ok: true }
-  } catch {
-    // handled below
-  }
-  return { ok: false, reason: 'Configured design-system target path is not a Git worktree.' }
-}
-
-async function looksLikeDesignSystemTarget(dir: string, target: DesignSystemDevelopmentTargetConfig): Promise<boolean> {
-  try {
-    const parsed = JSON.parse(await fsp.readFile(path.join(dir, 'package.json'), 'utf-8')) as {
-      name?: unknown
-      dependencies?: Record<string, unknown>
-      devDependencies?: Record<string, unknown>
-      scripts?: Record<string, unknown>
-    }
-    const markers = target.packageMarkers ?? []
-    if (markers.length === 0) return true
-    const text = [
-      typeof parsed.name === 'string' ? parsed.name : '',
-      ...Object.keys(parsed.dependencies ?? {}),
-      ...Object.keys(parsed.devDependencies ?? {}),
-      ...Object.values(parsed.scripts ?? {}).filter((script): script is string => typeof script === 'string'),
-    ].join('\n')
-    return markers.some(marker => text.includes(marker))
-  } catch {
-    return false
-  }
-}
-
-function dedupeTargets(targets: DesignSystemDevelopmentTargetConfig[]): DesignSystemDevelopmentTargetConfig[] {
-  const byId = new Map<string, DesignSystemDevelopmentTargetConfig>()
-  for (const target of targets) {
-    byId.set(target.id, target)
-  }
-  return [...byId.values()]
 }

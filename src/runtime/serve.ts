@@ -148,7 +148,6 @@ import { buildDesignSystemProfile } from './design-system-discovery.js'
 import {
   buildDesignDecisionPacket,
   captureOwnerDesignFeedback,
-  discoverDesignSystemDevelopmentTargets,
   readDesignFeedbackStore,
   recordDesignFinding,
   routeDesignFinding,
@@ -7553,10 +7552,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
       if (project.initializationNeeded) return c.json({ initializationNeeded: true })
       const memoryDir = getProjectStateDir(project.path)
       const feedback = await readDesignFeedbackStore(memoryDir)
-      const designSystemDevelopmentTargets = await discoverDesignSystemDevelopmentTargets({
-        globalConfig: readGlobalConfig(),
-      })
-      return c.json({ feedback, designSystemDevelopmentTargets })
+      return c.json({ feedback })
     } catch (err) {
       return c.json({ error: String(err) }, 500)
     }
@@ -7573,10 +7569,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
       })
       const routed = await routeDesignFinding({ memoryDir, findingId: finding.id })
       const feedback = await readDesignFeedbackStore(memoryDir)
-      const designSystemDevelopmentTargets = await discoverDesignSystemDevelopmentTargets({
-        globalConfig: readGlobalConfig(),
-      })
-      return c.json({ ok: true, routed, feedback, designSystemDevelopmentTargets })
+      return c.json({ ok: true, routed, feedback })
     } catch (err) {
       return c.json({ error: String(err) }, 400)
     }
@@ -7592,10 +7585,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
         feedback: body as never,
       })
       const feedback = await readDesignFeedbackStore(memoryDir)
-      const designSystemDevelopmentTargets = await discoverDesignSystemDevelopmentTargets({
-        globalConfig: readGlobalConfig(),
-      })
-      return c.json({ ok: true, ownerFeedback, feedback, designSystemDevelopmentTargets })
+      return c.json({ ok: true, ownerFeedback, feedback })
     } catch (err) {
       return c.json({ error: String(err) }, 400)
     }
@@ -7614,10 +7604,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
         ...(feedbackIds ? { feedbackIds } : {}),
       })
       const feedback = await readDesignFeedbackStore(memoryDir)
-      const designSystemDevelopmentTargets = await discoverDesignSystemDevelopmentTargets({
-        globalConfig: readGlobalConfig(),
-      })
-      return c.json({ ok: true, packet, feedback, designSystemDevelopmentTargets })
+      return c.json({ ok: true, packet, feedback })
     } catch (err) {
       return c.json({ error: String(err) }, 400)
     }

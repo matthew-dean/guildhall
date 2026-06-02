@@ -101,6 +101,11 @@ babysit setup/import/provider/release states across multiple pages.
   blockers, not local answer cards. The work graph importer now uses a generic
   domain adapter and configured domain-route normalization instead of
   Looma/Knit/Dialog/Drawer branches in generic runtime code.
+  Design feedback amendment, 2026-06-02: removed the local
+  design-system-development target hook and global config/API status for
+  machine-local design-system checkouts. Reusable design findings remain
+  portable candidate/improvement records until project graph/domain authority
+  routes provider-owned follow-up to another coordinator.
   Verification run on the final tree: `pnpm typecheck`; `pnpm test` (`303`
   files passed, `1` skipped; `3561` tests passed, `3` skipped);
   `pnpm lint:deps` (`0` errors, existing `56` no-orphans warnings);
