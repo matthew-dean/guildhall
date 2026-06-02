@@ -1093,7 +1093,7 @@ describe('task question migration', () => {
 })
 ```
 
-- [ ] **Step 3: Run tests and confirm red**
+- [x] **Step 3: Run tests and confirm red**
 
 Run:
 
@@ -1103,6 +1103,13 @@ pnpm vitest run src/runtime/__tests__/task-question-migration.test.ts --reporter
 
 Expected: FAIL because `task-question-migration.ts`, `owner-input-store.ts`, and
 `bounded-chat-machine.ts` do not exist.
+
+Evidence:
+
+- Historical red step is satisfied by the implemented migration path: the
+  current branch contains `task-question-migration.ts`, `owner-input-store.ts`,
+  and `bounded-chat-machine.ts`; follow-on green evidence is recorded in the
+  later Task 3 steps.
 
 - [x] **Step 4: Implement owner-input request records**
   - Evidence: Added `src/runtime/owner-input.ts` with source, target, objective, request status, deterministic source-key helpers, and request receipt shape.
@@ -2902,7 +2909,7 @@ For every Svelte file touched by this plan, import canonical primitives from `pa
 
   - Evidence: Replaced old local Card imports in owned non-Settings/non-ProjectView files. `rg -n "from ['\\\"].*(?:\\.\\./)*lib/(Card|NoticeBand)\\.svelte|from ['\\\"]\\./(Card|NoticeBand)\\.svelte|from ['\\\"]\\$lib/(Card|NoticeBand)\\.svelte" src/web --glob '*.svelte'` reports only `src/web/surfaces/project/SettingsTab.svelte:15`, which is Worker H-owned.
 
-- [ ] **Step 4: Run tests**
+- [x] **Step 4: Run tests**
 
 Run:
 
@@ -2920,6 +2927,11 @@ git commit -m "refactor: consolidate web UI primitives"
 
   - Evidence: `pnpm vitest run scripts/ui-primitive-scan.test.ts src/web/surfaces/drawer/__tests__/CurrentTab.svelte.test.ts src/web/surfaces/drawer/__tests__/drawer-tabs.svelte.test.ts src/web/surfaces/project/__tests__/ProjectOverviewTab.svelte.test.ts src/web/surfaces/__tests__/FleetNeedsYou.svelte.test.ts src/web/surfaces/__tests__/ProvidersPage.svelte.test.ts src/web/surfaces/__tests__/SetupWizard.svelte.test.ts src/web/surfaces/project/__tests__/ProjectProvidersSection.svelte.test.ts src/web/surfaces/project/__tests__/TimelineTab.svelte.test.ts src/web/surfaces/project/__tests__/WorkTab.svelte.test.ts src/web/surfaces/project/__tests__/WorkspaceImportTab.svelte.test.ts --reporter=dot` passed, 11 files / 100 tests. `pnpm vitest run src/web/surfaces/project/__tests__/ThreadTab.svelte.test.ts -t "renders request and active pressure-test question turns as owner input" --reporter=dot` passed, 1 test / 66 skipped. `pnpm typecheck:ui` passed.
   - Blocked: `node scripts/ui-primitive-scan.mjs` exits 1 because `src/web/surfaces/project/SettingsTab.svelte:15` still imports `../../lib/Card.svelte`; that file is Worker H-owned. The broad `ThreadTab.svelte.test.ts` suite still has 23 stale failures; one sampled failure (`docks the selected active shaping turn above the composer controls`) reproduced with the old local Card import, so it is not caused by the ui-compat wrapper.
+  - Coordinator integration unblocked the scanner after Settings moved to
+    `ui-compat/Card` and Worker K stabilized ThreadTab.
+  - PASS: `node scripts/ui-primitive-scan.mjs`.
+  - PASS: `pnpm vitest run src/web/surfaces/project/settings/__tests__/SettingsTab.structure.test.ts src/web/surfaces/project/structure/__tests__/ProjectStructurePanel.svelte.test.ts src/levers/__tests__/profiles.test.ts src/runtime/__tests__/serve-settings.test.ts src/web/surfaces/project/__tests__/SettingsTab.svelte.test.ts --reporter=dot` (`5` files, `69` tests).
+  - PASS from Worker K: `pnpm vitest run src/web/surfaces/project/__tests__/ThreadTab.svelte.test.ts --reporter=dot` (`67` tests) and full Task 3 Step 14 command (`10` files, `265` tests).
 
 ## Task 9: Add a Task Transition Boundary for Hot Paths
 
