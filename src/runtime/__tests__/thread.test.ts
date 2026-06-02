@@ -479,6 +479,102 @@ describe('buildThread', () => {
     }
   })
 
+  it.each([
+    ['task_shaping', 'Task shaping'],
+    ['structural_review', 'Structural review'],
+    ['setting_update', 'Settings update'],
+    ['recovery_decision', 'Recovery decision'],
+    ['capability_decision', 'Capability decision'],
+  ] as const)('projects waiting bounded-chat owner input for %s through Thread', async (kind, label) => {
+    const projectPath = await mkdtemp(path.join(tmpdir(), 'guildhall-thread-'))
+    try {
+      const snapshot: ProjectSnapshot = {
+        projectPath,
+        config: {
+          id: 'narrative-harness',
+          name: 'Narrative Harness',
+          bootstrap: { verifiedAt: new Date().toISOString() },
+          coordinators: [{ id: 'harness', name: 'Harness' }],
+        },
+        bootstrapVerified: true,
+        hasProvider: true,
+        hasDirection: true,
+        workspaceImportReviewed: true,
+        taskCount: 0,
+        wizardState: emptyWizardsState(),
+      }
+
+      const thread = buildThread({
+        projectPath,
+        snapshot,
+        boundedChatSessions: [{
+          id: `bc-${kind}`,
+          projectId: 'narrative-harness',
+          source: `owner-input:${kind}`,
+          objective: {
+            kind,
+            label,
+            successCriteria: ['Owner answers the linked Thread session.'],
+            startedAt: '2026-06-01T00:00:00.000Z',
+          },
+          status: 'waiting_for_owner',
+          activeSubObjectiveId: 'owner-choice',
+          subObjectives: [{
+            id: 'owner-choice',
+            rootQuestionId: 'owner-choice',
+            objective: label,
+            prompt: `How should Guildhall handle ${label}?`,
+            helperText: 'This answer unblocks the owner-input session.',
+            choices: ['Continue', 'Pause'],
+            followUpDepth: 0,
+            localTurns: [],
+            status: 'active',
+          }],
+          acceptedState: {
+            facts: [{ fact: `${label} has source context.`, sourceSubObjectiveId: 'owner-choice' }],
+            decisions: [],
+            leverUpdates: [],
+            settingUpdates: [],
+            taskDrafts: [],
+            unresolvedForks: [],
+            discardedResponses: [],
+          },
+          pendingActions: [],
+          appliedActionIds: [],
+          transitionReceipts: [],
+          createdAt: '2026-06-01T00:00:00.000Z',
+          updatedAt: '2026-06-01T00:05:00.000Z',
+        }],
+        pressureTestIntakes: [],
+        projectCheckInSummary: {
+          needed: false,
+          label: 'Project questions',
+          title: 'Project questions answered',
+          detail: 'Guildhall has already recorded project-level answers for this workspace.',
+          actionHref: '/thread',
+          totalCount: 1,
+          activeCount: 0,
+          completedCount: 1,
+        },
+      })
+
+      const turn = thread.turns.find(item => item.id === `bounded-chat:bc-${kind}:owner-choice`)
+      expect(turn).toMatchObject({
+        kind: 'bounded_chat',
+        sessionId: `bc-${kind}`,
+        domainTitle: label,
+        actionHref: `/thread?thread=bc-${kind}`,
+        question: {
+          prompt: `How should Guildhall handle ${label}?`,
+          evidence: [`${label} has source context.`],
+        },
+      })
+      expect(thread.activeTurnId).toBe(`bounded-chat:bc-${kind}:owner-choice`)
+    } finally {
+      await rm(projectPath, { recursive: true, force: true })
+    }
+  })
+
   it('prefers preloaded thread state over re-reading current disk projections', async () => {
     const projectPath = await mkdtemp(path.join(tmpdir(), 'guildhall-thread-'))
     try {

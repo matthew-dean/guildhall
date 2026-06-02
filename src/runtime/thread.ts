@@ -285,6 +285,7 @@ export interface BoundedChatTurn extends TurnBase {
   subObjectiveId: string
   targetTitle: string
   domainTitle: string
+  actionHref: string
   question: {
     id: string
     prompt: string
@@ -393,6 +394,7 @@ function isHumanOwnedActiveTurn(turn: ThreadTurn): boolean {
     case 'spec_review':
     case 'escalation':
     case 'pressure_test_question':
+    case 'bounded_chat':
       return true
     case 'inflight':
       return Boolean(turn.importedDraft)
@@ -1041,10 +1043,8 @@ function pressureTestTurns(projectPath: string, intakes: PressureTestIntake[]): 
 
 function boundedChatTurns(projectPath: string, sessions: BoundedChatSession[]): ThreadTurn[] {
   void projectPath
-  const relevantSessions = sessions
-    .filter(session => session.objective.kind === 'project_check_in' || session.objective.kind === 'new_request')
   const turns: ThreadTurn[] = []
-  for (const session of relevantSessions) {
+  for (const session of sessions) {
     if ((session.status === 'fulfilled' || session.status === 'blocked' || session.status === 'cancelled') && session.closure) {
       turns.push({
         kind: 'request',
@@ -1073,7 +1073,8 @@ function boundedChatTurns(projectPath: string, sessions: BoundedChatSession[]): 
       sessionId: session.id,
       subObjectiveId: active.id,
       targetTitle: session.projectId.replace(/-/g, ' ').replace(/\b\w/g, letter => letter.toUpperCase()),
-      domainTitle: session.objective.kind === 'new_request' ? 'New request' : 'Project check-in',
+      domainTitle: boundedChatDomainTitle(session),
+      actionHref: boundedChatActionHref(session.id),
       question: {
         id: active.id,
         prompt: active.prompt,
@@ -1089,6 +1090,21 @@ function boundedChatTurns(projectPath: string, sessions: BoundedChatSession[]): 
     })
   }
   return turns
+}
+
+function boundedChatActionHref(sessionId: string): string {
+  return `/thread?thread=${encodeURIComponent(sessionId)}`
+}
+
+function boundedChatDomainTitle(session: BoundedChatSession): string {
+  switch (session.objective.kind) {
+    case 'new_request':
+      return 'New request'
+    case 'project_check_in':
+      return 'Project check-in'
+    default:
+      return session.objective.label
+  }
 }
 
 function taskRequestTurn(task: Task, taskId: string, taskStatus: string, createdAt: string): RequestTurn | null {

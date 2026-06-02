@@ -21,7 +21,7 @@
   import Tooltip from '../lib/Tooltip.svelte'
   import ProjectOverviewTab from './project/ProjectOverviewTab.svelte'
   import ThreadTab from './project/ThreadTab.svelte'
-  import InboxTab from './project/InboxTab.svelte'
+  import NeedsYouTab from './project/NeedsYouTab.svelte'
   import WorkTab from './project/WorkTab.svelte'
   import WorkspaceImportTab from './project/WorkspaceImportTab.svelte'
   import ProjectAttachFlow from './project/ProjectAttachFlow.svelte'
@@ -1404,7 +1404,7 @@
             {#if currentView === 'thread'}
               <ThreadTab projectId={activeProjectId} />
             {:else if currentView === 'inbox'}
-              <InboxTab items={inboxItems} history={inboxHistory} loaded={inboxLoaded} error={inboxError} refresh={loadInbox} />
+              <NeedsYouTab items={inboxItems} history={inboxHistory} loaded={inboxLoaded} error={inboxError} refresh={loadInbox} />
             {:else}
               <div class="page-centered page-centered-inline">
                 <p class="muted">Loading project...</p>
@@ -1412,7 +1412,7 @@
             {/if}
           {:else if currentView === 'overview'}
             {#if currentSub === 'inbox'}
-              <InboxTab items={inboxItems} history={inboxHistory} loaded={inboxLoaded} error={inboxError} refresh={loadInbox} />
+              <NeedsYouTab items={inboxItems} history={inboxHistory} loaded={inboxLoaded} error={inboxError} refresh={loadInbox} />
             {:else}
               <ProjectOverviewTab
                 {detail}
@@ -1427,7 +1427,7 @@
           {:else if currentView === 'thread'}
             <ThreadTab projectId={activeProjectId} />
           {:else if currentView === 'inbox'}
-            <InboxTab items={inboxItems} history={inboxHistory} loaded={inboxLoaded} error={inboxError} refresh={loadInbox} />
+            <NeedsYouTab items={inboxItems} history={inboxHistory} loaded={inboxLoaded} error={inboxError} refresh={loadInbox} />
           {:else if currentView === 'workspace-import'}
             <WorkspaceImportTab />
           {:else if currentView === 'work'}

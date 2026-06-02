@@ -113,6 +113,54 @@ describe('DoThisNext', () => {
     })
   })
 
+  it('chooses a waiting Thread turn when Needs You only has optional cleanup', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (input: RequestInfo | URL) => {
+        const url = String(input)
+        if (url === '/api/project/inbox?projectId=looma-knit') {
+          return json({
+            items: [{
+              kind: 'lever_questions',
+              severity: 'low',
+              title: 'Review project policies',
+              detail: 'Optional defaults are still in effect.',
+              actionHref: '/settings/advanced',
+            }],
+          })
+        }
+        if (url === '/api/project/thread?projectId=looma-knit') {
+          return json({
+            activeTurnId: 'bounded-chat:bc-task-shaping:q-1',
+            turns: [{
+              id: 'bounded-chat:bc-task-shaping:q-1',
+              kind: 'bounded_chat',
+              status: 'active',
+              sessionId: 'bc-task-shaping',
+              domainTitle: 'Task shaping',
+              targetTitle: 'Narrative Harness',
+              actionHref: '/thread?thread=bc-task-shaping',
+              question: {
+                prompt: 'Which implementation direction should Guildhall use?',
+                why: 'This answer unblocks task shaping.',
+              },
+            }],
+          })
+        }
+        return json({})
+      }),
+    )
+
+    render(DoThisNext)
+
+    await screen.findByText('Answer in Thread')
+    expect(screen.getByText('Which implementation direction should Guildhall use?')).toBeTruthy()
+
+    await userEvent.click(screen.getByRole('button', { name: /open thread/i }))
+
+    expect(path.href).toBe('/projects/looma-knit/thread?thread=bc-task-shaping')
+  })
+
   it('frames project understanding advisories as a discovery update', async () => {
     vi.stubGlobal(
       'fetch',

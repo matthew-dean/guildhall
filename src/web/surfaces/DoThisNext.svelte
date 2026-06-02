@@ -23,7 +23,22 @@
     actionHref?: string
   }
   let items = $state<InboxItem[]>([])
+  let threadTurn = $state<ThreadTurn | null>(null)
   let loaded = $state(false)
+
+  interface ThreadTurn {
+    id: string
+    kind: string
+    status: 'done' | 'active' | 'pending'
+    actionHref?: string
+    sessionId?: string
+    domainTitle?: string
+    targetTitle?: string
+    question?: {
+      prompt?: string
+      why?: string
+    }
+  }
 
   async function load(): Promise<void> {
     try {
@@ -31,6 +46,15 @@
       if (inboxRes.ok) {
         const j = (await inboxRes.json()) as { items?: InboxItem[] }
         items = j.items ?? []
+      }
+      if (!items.some(item => item.severity !== 'low')) {
+        const threadRes = await projectFetch('/api/project/thread')
+        if (threadRes.ok) {
+          const j = (await threadRes.json()) as { activeTurnId?: string | null; turns?: ThreadTurn[] }
+          threadTurn = (j.turns ?? []).find(turn => turn.id === j.activeTurnId && turn.status === 'active') ?? null
+        }
+      } else {
+        threadTurn = null
       }
     } catch {
       /* keep prior */
@@ -170,7 +194,17 @@
               moreHref: projectActionHref('/overview/inbox'),
             }
           })()
-        : null,
+        : threadTurn
+          ? {
+              verb: 'Answer in Thread',
+              why: threadTurn.question?.prompt ?? threadTurn.domainTitle ?? 'Guildhall is waiting for your answer in Thread.',
+              button: 'Open Thread',
+              href: projectActionHref(threadTurn.actionHref ?? (threadTurn.sessionId ? `/thread?thread=${threadTurn.sessionId}` : '/thread')),
+              severity: 'medium',
+              moreLabel: moreButtonLabel,
+              moreHref: projectActionHref('/overview/inbox'),
+            }
+          : null,
   )
   const tone = $derived<'default' | 'warn'>(
     source?.severity === 'high'

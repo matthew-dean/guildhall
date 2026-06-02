@@ -1640,7 +1640,7 @@ Evidence:
   inbox kinds in `src/runtime/inbox.ts` and `src/web/lib/inbox-item-key.ts`.
 - `pnpm lint:reductions` passed.
 
-- [ ] **Step 3: Move conversation routing to Thread**
+- [x] **Step 3: Move conversation routing to Thread**
 
 In `src/runtime/thread.ts`:
 
@@ -1651,7 +1651,7 @@ In `src/runtime/thread.ts`:
 - Do not synthesize thread turns from each source's local question shape. The
   linked bounded-chat session is the projection source.
 
-Partial evidence:
+Evidence:
 
 - `src/runtime/serve.ts` now builds owner-input start blockers from
   `.guildhall/owner-input` via `listOwnerInputRequestsSync`, rather than
@@ -1661,12 +1661,15 @@ Partial evidence:
 - Worker K overlap: Thread's active dock now preserves owner-input recovery,
   source-note, checklist, brief/spec decision, git-story, and live activity
   context while the shared composer owns thread replies.
-- Remaining work: finish source-specific conversion so project check-in, task
-  shaping, approvals, escalations, structural-map review, project-graph review,
-  capability decisions, and recovery decisions all project from linked
-  owner-input/bounded-chat sessions.
+- Worker M expanded bounded-chat Thread projection to all current
+  owner-input objective kinds and added `/thread?thread=<boundedChatSessionId>`
+  action hrefs for owner-input routing.
+- Evidence:
+  `pnpm vitest run src/runtime/__tests__/inbox.test.ts src/runtime/__tests__/thread.test.ts src/runtime/__tests__/serve-settings.test.ts src/web/surfaces/__tests__/DoThisNext.svelte.test.ts src/web/surfaces/__tests__/FleetNeedsYou.svelte.test.ts src/web/surfaces/project/__tests__/InboxTab.svelte.test.ts src/web/surfaces/__tests__/ProjectView.svelte.test.ts --reporter=dot`
+  passed 7 files / 210 tests.
+- Evidence: `pnpm typecheck` passed.
 
-- [ ] **Step 4: Reduce UI duplication**
+- [x] **Step 4: Reduce UI duplication**
 
 - `DoThisNext.svelte` should choose between:
   - top alert item from Needs You, or
@@ -1674,7 +1677,7 @@ Partial evidence:
 - `FleetNeedsYou.svelte` should fetch one canonical fleet attention summary endpoint. It should not locally synthesize inbox groups and then replace them with project inbox results.
 - `InboxTab.svelte` should become `NeedsYouTab.svelte` or a narrow alert/history component.
 
-Partial evidence:
+Evidence:
 
 - Removed conversation-kind branches and synthetic project check-in/escalation
   rows from `DoThisNext.svelte`, `FleetNeedsYou.svelte`,
@@ -1685,8 +1688,15 @@ Partial evidence:
 - Evidence command:
   `pnpm vitest run src/runtime/__tests__/inbox.test.ts src/runtime/__tests__/thread.test.ts src/web/surfaces/__tests__/DoThisNext.svelte.test.ts src/web/surfaces/__tests__/FleetNeedsYou.svelte.test.ts src/web/surfaces/project/__tests__/InboxTab.svelte.test.ts src/web/surfaces/__tests__/ProjectView.svelte.test.ts src/web/surfaces/project/__tests__/ProjectOverviewTab.svelte.test.ts src/web/surfaces/project/__tests__/WorkTab.svelte.test.ts --reporter=dot`
   passed 8 files / 177 tests.
-- Remaining work: rename/split `InboxTab.svelte` into a dedicated Needs You
-  alert surface and make fleet attention read one canonical summary endpoint.
+- Worker M added `NeedsYouTab.svelte` as a low-churn alias for the narrowed
+  alert/history surface, taught `DoThisNext.svelte` to fall through from
+  alert-owned Needs You items to the active Thread turn, and changed
+  `FleetNeedsYou.svelte` to read `/api/fleet/attention` instead of
+  synthesizing per-project groups locally.
+- Evidence:
+  `pnpm vitest run src/runtime/__tests__/inbox.test.ts src/runtime/__tests__/thread.test.ts src/runtime/__tests__/serve-settings.test.ts src/web/surfaces/__tests__/DoThisNext.svelte.test.ts src/web/surfaces/__tests__/FleetNeedsYou.svelte.test.ts src/web/surfaces/project/__tests__/InboxTab.svelte.test.ts src/web/surfaces/__tests__/ProjectView.svelte.test.ts --reporter=dot`
+  passed 7 files / 210 tests.
+- Evidence: `pnpm lint:reductions` passed.
 
 - [x] **Step 5: Run tests**
 

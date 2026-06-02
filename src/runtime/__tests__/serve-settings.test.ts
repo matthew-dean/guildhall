@@ -1128,10 +1128,15 @@ describe('POST /api/project/start', () => {
       startReadiness?: { canStart?: boolean; code?: string; actionHref?: string; message?: string }
     }
 
+    const requests = await fs.readdir(path.join(tmpDir, '.guildhall', 'owner-input'))
+    const request = JSON.parse(
+      await fs.readFile(path.join(tmpDir, '.guildhall', 'owner-input', requests[0]!), 'utf8'),
+    ) as { boundedChatSessionId: string }
+
     expect(projectBody.startReadiness).toMatchObject({
       canStart: false,
       code: 'owner_input_required',
-      actionHref: '/thread',
+      actionHref: `/thread?thread=${request.boundedChatSessionId}`,
     })
     expect(projectBody.startReadiness?.message).toContain('Clarify Question task needs your answer')
   })
@@ -1209,10 +1214,15 @@ describe('POST /api/project/start', () => {
       startReadiness?: { canStart?: boolean; code?: string; actionHref?: string; message?: string }
     }
 
+    const requests = await fs.readdir(path.join(tmpDir, '.guildhall', 'owner-input'))
+    const request = JSON.parse(
+      await fs.readFile(path.join(tmpDir, '.guildhall', 'owner-input', requests[0]!), 'utf8'),
+    ) as { boundedChatSessionId: string }
+
     expect(projectBody.startReadiness).toMatchObject({
       canStart: false,
       code: 'owner_input_required',
-      actionHref: '/thread',
+      actionHref: `/thread?thread=${request.boundedChatSessionId}`,
     })
     expect(projectBody.startReadiness?.message).toContain('Choose recovery path for Current blocked task')
   })
@@ -1297,9 +1307,14 @@ describe('POST /api/project/start', () => {
 
     expect(res.status).toBe(409)
     const body = (await res.json()) as { code?: string; actionHref?: string; error?: string }
+    const requests = await fs.readdir(path.join(tmpDir, '.guildhall', 'owner-input'))
+    const request = JSON.parse(
+      await fs.readFile(path.join(tmpDir, '.guildhall', 'owner-input', requests[0]!), 'utf8'),
+    ) as { boundedChatSessionId: string }
+
     expect(body).toMatchObject({
       code: 'owner_input_required',
-      actionHref: '/thread',
+      actionHref: `/thread?thread=${request.boundedChatSessionId}`,
     })
     expect(body.error).toContain('Clarify Needs answer first needs your answer')
   })

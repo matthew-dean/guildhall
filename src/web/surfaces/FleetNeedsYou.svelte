@@ -6,9 +6,8 @@
   import ProjectsShell from '../lib/layout/ProjectsShell.svelte'
   import { nav } from '../lib/nav.svelte.js'
   import { projectHref } from '../lib/project-routes.js'
-  import { getCachedService, setCachedService } from '../lib/service-cache.js'
   import { inboxItemKey, type InboxItem } from '../lib/inbox-item-key.js'
-  import type { ServiceDetail, ServiceProjectSummary } from '../lib/types.js'
+  import type { ServiceProjectSummary } from '../lib/types.js'
 
   type ProjectInboxGroup = {
     project: ServiceProjectSummary
@@ -16,10 +15,13 @@
     error: string | null
   }
 
-  const cachedService = getCachedService()
-  let loading = $state(cachedService == null)
+  interface FleetAttentionSummary {
+    groups?: ProjectInboxGroup[]
+  }
+
+  let loading = $state(true)
   let error = $state<string | null>(null)
-  let groups = $state<ProjectInboxGroup[]>(cachedService ? groupsFromServiceSummary(cachedService) : [])
+  let groups = $state<ProjectInboxGroup[]>([])
   const REQUEST_TIMEOUT_MS = 5000
   const LOAD_WATCHDOG_MS = 6500
 
@@ -41,33 +43,6 @@
       case 'spec_fill_pending': return item.taskId === 'task-workspace-import' ? 'Review import' : 'Open checklist'
       default: return 'Open'
     }
-  }
-
-  function groupsFromServiceSummary(service: ServiceDetail): ProjectInboxGroup[] {
-    return (service.projects ?? []).flatMap(project => {
-      const counts = project.taskCounts
-      if (!counts) return []
-      const items: InboxItem[] = []
-      if (counts.draftReview > 0) {
-        items.push({
-          kind: 'import_draft_queue',
-          severity: 'medium',
-          title: `${counts.draftReview} draft ${counts.draftReview === 1 ? 'brief' : 'briefs'}`,
-          detail: 'Review drafted task briefs before Guildhall starts implementation.',
-          actionHref: '/overview/inbox',
-        } as InboxItem)
-      }
-      if (project.providerStatus?.warnings?.[0]) {
-        items.push({
-          kind: 'bootstrap_missing',
-          severity: 'high',
-          title: 'Provider warning',
-          detail: project.providerStatus.warnings[0].message,
-          actionHref: '/providers',
-        } as InboxItem)
-      }
-      return items.length > 0 ? [{ project, items, error: null }] : []
-    })
   }
 
   async function fetchJsonWithTimeout<T>(url: string): Promise<T> {
@@ -116,30 +91,9 @@
     loading = true
     groups = []
     try {
-      const service = await fetchJsonWithTimeout<ServiceDetail>('/api/service')
-      setCachedService(service)
-      const projects = service.projects ?? []
+      const attention = await fetchJsonWithTimeout<FleetAttentionSummary>('/api/fleet/attention')
       error = null
-      const nextGroups = await Promise.all(projects.map(async project => {
-        try {
-          const body = await fetchJsonWithTimeout<{ items?: InboxItem[] }>(
-            `/api/project/inbox?projectId=${encodeURIComponent(project.id)}`,
-          )
-          const nextGroup = {
-            project,
-            items: (body.items ?? []).filter(item => item.severity !== 'low'),
-            error: null,
-          } satisfies ProjectInboxGroup
-          return nextGroup.items.length > 0 ? nextGroup : null
-        } catch (err) {
-          return {
-            project,
-            items: [],
-            error: requestErrorMessage(err),
-          } satisfies ProjectInboxGroup
-        }
-      }))
-      groups = nextGroups.filter((group): group is ProjectInboxGroup => group !== null)
+      groups = (attention.groups ?? []).filter(group => group.items.length > 0 || group.error)
     } catch (err) {
       error = requestErrorMessage(err)
       groups = []

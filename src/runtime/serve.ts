@@ -2345,6 +2345,59 @@ export function buildServeApp(opts: ServeOptions = {}): {
     })
   })
 
+  app.get('/api/fleet/attention', async c => {
+    const registeredProjects = getRegisteredProjects()
+    const groups = await Promise.all(registeredProjects.map(async (entry) => {
+      const resolved = resolveProject(entry.path)
+      const projectSummary = summarizeProject(resolved)
+      if (resolved.initializationNeeded) {
+        return { project: projectSummary, items: [], error: null, topWaitingThread: null }
+      }
+      try {
+        const inbox = await buildProjectInboxSnapshot({
+          projectPath: entry.path,
+          initializationNeeded: resolved.initializationNeeded,
+          coordinatorCount: resolved.config?.coordinators?.length ?? 0,
+        })
+        const state = await loadThreadProjectionState(entry.path)
+        const thread = buildThread({
+          projectPath: entry.path,
+          snapshot: state.snapshot,
+          tasks: state.tasks as never,
+          boundedChatSessions: state.boundedChatSessions,
+          pressureTestIntakes: state.pressureTestIntakes,
+          projectCheckInSummary: state.projectCheckInSummary,
+          runStatus: supervisor.get(resolved.id)?.status ?? 'stopped',
+          recentEvents: supervisor.recent(resolved.id, undefined, entry.path),
+        })
+        const topWaitingThread = thread.turns.find(turn => turn.id === thread.activeTurnId && turn.status === 'active') ?? null
+        return {
+          project: projectSummary,
+          items: inbox.items.filter(item => item.severity !== 'low'),
+          error: null,
+          topWaitingThread,
+        }
+      } catch (err) {
+        return {
+          project: projectSummary,
+          items: [],
+          error: err instanceof Error ? err.message : String(err),
+          topWaitingThread: null,
+        }
+      }
+    }))
+    const visibleGroups = groups.filter(group => group.items.length > 0 || group.error || group.topWaitingThread)
+    const topWaitingThread = visibleGroups
+      .map(group => group.topWaitingThread ? { project: group.project, turn: group.topWaitingThread } : null)
+      .find((entry): entry is NonNullable<typeof entry> => entry !== null) ?? null
+    return c.json({
+      groups: visibleGroups,
+      totalItems: visibleGroups.reduce((sum, group) => sum + group.items.length, 0),
+      projectCount: visibleGroups.filter(group => group.items.length > 0 || group.topWaitingThread).length,
+      topWaitingThread,
+    })
+  })
+
   app.post('/api/service/select-project', async c => {
     return c.json({
       error: 'Guildhall no longer has a service-wide selected project. Open /projects/:projectId or pass projectId to project APIs.',
@@ -3946,18 +3999,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
   }
 
   function ownerInputActionHref(request: ReturnType<typeof listOwnerInputRequestsSync>[number]): string {
-    switch (request.target.kind) {
-      case 'work_item':
-      case 'task':
-        return `/task/${encodeURIComponent(request.target.taskId)}?tab=current`
-      case 'project_structure':
-        return request.target.href
-      case 'structure':
-      case 'settings':
-        return request.target.href ?? '/thread'
-      case 'thread':
-        return '/thread'
-    }
+    return `/thread?thread=${encodeURIComponent(request.boundedChatSessionId)}`
   }
 
   app.post('/api/project/task/:id/start', async c => {
