@@ -2303,7 +2303,15 @@
     }
     if (turn.kind === 'brief_approval') return 'Review the drafted brief and either approve it or send corrections.'
     if (turn.kind === 'spec_review') return turn.taskId === 'task-meta-intake' ? 'Review the proposed split and starter structure.' : 'Review the spec draft before Guildhall moves it forward.'
-    if (turn.kind === 'escalation') return turn.summary
+    if (turn.kind === 'escalation') {
+      const guidance = escalationUserGuidance({
+        summary: turn.summary,
+        details: turn.details,
+        reason: turn.escalationReason,
+        agentId: turn.escalationAgentId,
+      })
+      return guidance.title
+    }
     if (turn.kind === 'review_feedback') return turn.summary
     if (turn.kind === 'inflight') return taskStateDescription(turn)
     return ''
@@ -2436,7 +2444,7 @@
     if (turn.kind === 'brief_approval') return null
     if (turn.kind === 'spec_review') return null
     if (turn.kind === 'inflight' && (turn.importedDraft || turn.taskStatus === 'exploring' || turn.taskStatus === 'import_draft')) {
-      return null
+      return taskStateDescription(turn)
     }
     const summary = turnIndexSummary(turn).trim()
     return summary.length ? summary : null
@@ -4183,8 +4191,75 @@
                         </div>
 
                         {#if activeDockTurn.kind === 'inflight'}
+                          {#if turnLiveAgent(activeDockTurn)}
+                            {@const live = turnLiveAgent(activeDockTurn)}
+                            <StatusLine
+                              label={liveAgentMessage(live)}
+                              tone={liveAgentTone(live)}
+                              pulse
+                              loud
+                            />
+                          {/if}
+
+                          {#if gitStoryVisible(activeDockTurn) && activeDockTurn.gitStory}
+                            <div class="git-story-callout" aria-label="Git story">
+                              <div class="git-story-main">
+                                <Chip label={gitStoryLabel(activeDockTurn.gitStory)} tone={gitStoryTone(activeDockTurn.gitStory)} />
+                                <span>{gitStorySummary(activeDockTurn.gitStory)}</span>
+                              </div>
+                              {#if activeDockTurn.gitStory.nextAction}
+                                <span class="git-story-next">{activeDockTurn.gitStory.nextAction}</span>
+                              {/if}
+                            </div>
+                          {/if}
+
                           {#if dockSourceSummary(activeDockTurn)}
                             <p class="thread-active-summary">{dockSourceSummary(activeDockTurn)}</p>
+                          {/if}
+
+                          {#if activeDockTurn.taskDescription || activeDockTurn.sourceNote}
+                            <details class="thread-disclosure task-context-disclosure">
+                              <summary>
+                                <span>Starting point and source notes</span>
+                                {#if activeDockTurn.sourceNote?.references?.length}
+                                  <Chip label={badgeCountLabel(activeDockTurn.sourceNote.references.length)} tone="neutral" />
+                                {/if}
+                              </summary>
+                              <UtilityPanel className="task-context" tone="neutral">
+                                {#if activeDockTurn.taskDescription}
+                                  <div class="field">
+                                    <span class="field-label">Starting point</span>
+                                    <Markdown source={activeDockTurn.taskDescription} />
+                                  </div>
+                                {/if}
+                                {#if activeDockTurn.sourceNote?.references?.length}
+                                  <div class="field">
+                                    <span class="field-label">Imported from</span>
+                                    <div class="source-list">
+                                      {#each activeDockTurn.sourceNote.references as ref (ref)}
+                                        <button
+                                          type="button"
+                                          class="source-ref"
+                                          title="Open source note"
+                                          aria-label={`Open source note ${ref}`}
+                                          disabled={sourcePreviewLoadingRef === ref}
+                                          onclick={() => void openSourceNote(ref)}
+                                        >
+                                          <span>Open source note</span>
+                                          <code>{sourceDisplayName(ref)}</code>
+                                          {#if sourceDisplayHint(ref) !== sourceDisplayName(ref)}
+                                            <small>{sourceDisplayHint(ref)}</small>
+                                          {/if}
+                                        </button>
+                                      {/each}
+                                    </div>
+                                    {#if sourcePreviewError}
+                                      <p class="error">{sourcePreviewError}</p>
+                                    {/if}
+                                  </div>
+                                {/if}
+                              </UtilityPanel>
+                            </details>
                           {/if}
 
                           {#if dockChecklistSummary(activeDockTurn)}
@@ -4204,10 +4279,78 @@
                             </UtilityPanel>
                           {/if}
 
+                          {#if activeDockTurn.checklist}
+                            <details class="thread-disclosure checklist-disclosure" open={!hasIncompleteTaskChecklist(activeDockTurn)}>
+                              <summary>
+                                <span>{hasIncompleteTaskChecklist(activeDockTurn) ? 'Brief checklist' : activeDockTurn.checklist.title}</span>
+                                <Chip label={`${activeDockTurn.checklist.doneCount} of ${activeDockTurn.checklist.totalSteps}`} tone={hasIncompleteTaskChecklist(activeDockTurn) ? 'warn' : 'neutral'} />
+                              </summary>
+                              <UtilityPanel className="live-checklist" tone={hasIncompleteTaskChecklist(activeDockTurn) ? 'warn' : 'neutral'}>
+                                <div class="live-checklist-steps">
+                                  {#each activeDockTurn.checklist.steps as step (step.id)}
+                                    <div class="live-step" class:done={step.status === 'done'} class:active={step.status === 'active'}>
+                                      <StatusLight
+                                        tone={checklistStepTone(activeDockTurn, step)}
+                                        pulse={step.status === 'active' && Boolean(turnLiveAgent(activeDockTurn))}
+                                      />
+                                      <div class="live-step-copy">
+                                        <strong>{step.title}</strong>
+                                        <span>{step.why}</span>
+                                      </div>
+                                      <span class="live-step-state">
+                                        {checklistStepLabel(activeDockTurn, step)}
+                                      </span>
+                                    </div>
+                                  {/each}
+                                </div>
+                              </UtilityPanel>
+                            </details>
+                          {/if}
+
+                          {#if activeDockTurn.activity?.length}
+                            <UtilityPanel className="live-activity" tone="neutral" ariaLabel="Recent agent activity">
+                              {#each activeDockTurn.activity.slice(0, 3) as item, index (`${item.at ?? 'event'}:${item.label}:${index}`)}
+                                <StatusLine
+                                  label={item.label}
+                                  detail={item.detail}
+                                  time={activityElapsed(item.at)}
+                                  tone={item.tone}
+                                  pulse={item.tone === 'running'}
+                                />
+                              {/each}
+                              {#if activeDockTurn.activity.length > 3}
+                                <details class="thread-disclosure activity-disclosure">
+                                  <summary>Show {activeDockTurn.activity.length - 3} earlier update{activeDockTurn.activity.length - 3 === 1 ? '' : 's'}</summary>
+                                  <div class="activity-extra">
+                                    {#each activeDockTurn.activity.slice(3) as item, index (`${item.at ?? 'event'}:${item.label}:extra:${index}`)}
+                                      <StatusLine
+                                        label={item.label}
+                                        detail={item.detail}
+                                        time={activityElapsed(item.at)}
+                                        tone={item.tone}
+                                        pulse={item.tone === 'running'}
+                                      />
+                                    {/each}
+                                  </div>
+                                </details>
+                              {/if}
+                            </UtilityPanel>
+                          {/if}
+
                           <Row justify="end" gap="2" wrap>
                             <Button variant="secondary" onclick={() => nav(currentTaskHref(activeDockTurn.taskId))}>
-                              Details...
+                              {needsRecovery(activeDockTurn) ? 'Inspect recovery' : 'Details...'}
                             </Button>
+                            {#if needsRecovery(activeDockTurn) && !turnLiveAgent(activeDockTurn)}
+                              <Button variant="ghost" disabled={busyTurnId === activeDockTurn.id} onclick={() => (replyTurnId = activeDockTurn.id)}>
+                                Add recovery note
+                              </Button>
+                            {/if}
+                            {#if activeDockTurn.taskStatus === 'ready' && !turnLiveAgent(activeDockTurn) && !hasIncompleteTaskChecklist(activeDockTurn)}
+                              <Button variant="secondary" disabled={busyTurnId === activeDockTurn.id} onclick={() => markTaskDone(activeDockTurn)}>
+                                Mark done...
+                              </Button>
+                            {/if}
                             {#if activeDockTurn.taskStatus === 'import_draft'}
                               <Button variant="agent" disabled={busyTurnId === activeDockTurn.id} onclick={() => shapeDraft(activeDockTurn)}>
                                 <Icon name="sparkles" size={14} />
@@ -4218,14 +4361,16 @@
                                 <Icon name="sparkles" size={14} />
                                 {startTaskLabel(activeDockTurn)}
                               </Button>
+                            {:else if projectRunBlocksTaskStart(activeDockTurn)}
+                              <Button variant="secondary" disabled>Already queued</Button>
                             {:else if canStartTaskTurn(activeDockTurn)}
                               <Button
                                 variant="agent"
-                                disabled={projectRunBlocksTaskStart(activeDockTurn) || runBusy || busyTurnId === activeDockTurn.id}
+                                disabled={runBusy || busyTurnId === activeDockTurn.id}
                                 onclick={() => startTaskRun(activeDockTurn.taskId)}
                               >
                                 <Icon name="sparkles" size={14} />
-                                {projectRunBlocksTaskStart(activeDockTurn) ? 'Already queued' : startTaskLabel(activeDockTurn)}
+                                {startTaskLabel(activeDockTurn)}
                               </Button>
                             {/if}
                           </Row>
@@ -4309,8 +4454,17 @@
                           </div>
                         {:else if activeDockTurn.kind === 'brief_approval'}
                           {@const blockedByQuestions = hasOpenQuestionsForTask(activeDockTurn.taskId)}
+                          {@const briefScope = briefScopeForReaders(activeDockTurn.brief, activeDockTurn.taskTitle)}
+                          {@const briefDoneWhen = briefDoneWhenForReaders(activeDockTurn.brief)}
                           <div class="thread-active-review">
-                            <p>{briefScopeForReaders(activeDockTurn.brief, activeDockTurn.taskTitle)}</p>
+                            <div class="field"><span class="field-label">Scope</span>
+                              <Markdown source={briefScope} />
+                            </div>
+                            {#if briefDoneWhen}
+                              <div class="field"><span class="field-label">Done when</span>
+                                <Markdown source={briefDoneWhen} />
+                              </div>
+                            {/if}
                           </div>
                           <Row justify="end" gap="2" wrap>
                             <Button variant="secondary" disabled={busyTurnId === activeDockTurn.id} onclick={() => openBriefPreview(activeDockTurn)}>
@@ -4318,6 +4472,9 @@
                             </Button>
                             <Button variant="ghost" disabled={busyTurnId === activeDockTurn.id} onclick={() => nav(currentTaskHref(activeDockTurn.taskId))}>
                               Details...
+                            </Button>
+                            <Button variant="secondary" disabled={busyTurnId === activeDockTurn.id} onclick={() => (replyTurnId = activeDockTurn.id)}>
+                              No, change it
                             </Button>
                             <Button
                               variant="primary"
@@ -4343,6 +4500,9 @@
                             </Button>
                             <Button variant="ghost" disabled={busyTurnId === activeDockTurn.id} onclick={() => nav(currentTaskHref(activeDockTurn.taskId))}>
                               Details...
+                            </Button>
+                            <Button variant="secondary" disabled={busyTurnId === activeDockTurn.id} onclick={() => (replyTurnId = activeDockTurn.id)}>
+                              {activeDockTurn.taskId === 'task-meta-intake' ? 'Change the split' : 'Request changes'}
                             </Button>
                             <Button
                               variant="primary"

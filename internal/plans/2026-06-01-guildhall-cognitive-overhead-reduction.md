@@ -1513,7 +1513,7 @@ Evidence, 2026-06-01 Worker G slice:
   cleanup on TaskDrawer/CurrentTab local answer paths.
 - Evidence command: `pnpm lint:reductions` passed after cleanup.
 
-- [ ] **Step 14: Run focused tests**
+- [x] **Step 14: Run focused tests**
 
 Run:
 
@@ -1551,6 +1551,20 @@ Evidence, 2026-06-01 Worker G slice:
   - `pnpm vitest run src/web/surfaces/drawer/__tests__/CurrentTab.svelte.test.ts src/web/surfaces/__tests__/TaskDrawer.svelte.test.ts --reporter=dot`
   - `pnpm vitest run src/web/surfaces/project/__tests__/ProjectOverviewTab.svelte.test.ts --reporter=dot`
   - `pnpm typecheck`
+
+Evidence, 2026-06-01 Worker K slice:
+
+- Stabilized `src/web/surfaces/project/__tests__/ThreadTab.svelte.test.ts`
+  after the active dock/composer model replaced the old local note buttons and
+  mini task-card expectations. Important source-note, checklist, git-story,
+  live activity, recovery, and brief/spec decision context remains available in
+  Thread's active dock instead of being dropped.
+- `pnpm vitest run src/web/surfaces/project/__tests__/ThreadTab.svelte.test.ts --reporter=dot`
+  passed 1 file / 67 tests.
+- Full Step 14 command passed 10 files / 265 tests:
+  `pnpm vitest run src/runtime/__tests__/owner-input.test.ts src/runtime/__tests__/bounded-chat-machine.test.ts src/runtime/__tests__/task-question-migration.test.ts src/runtime/__tests__/thread.test.ts src/runtime/__tests__/inbox.test.ts src/runtime/__tests__/serve-intake.test.ts src/runtime/__tests__/structural-map.test.ts src/runtime/__tests__/project-graph.test.ts src/runtime/__tests__/capability-request-machine.test.ts src/web/surfaces/project/__tests__/ThreadTab.svelte.test.ts src/web/surfaces/__tests__/TaskDrawer.svelte.test.ts --reporter=dot`
+- `pnpm lint:reductions` passed.
+- `pnpm typecheck:ui` passed.
 
 Commit:
 
@@ -1637,6 +1651,9 @@ Partial evidence:
   looking for thread-owned rows inside `buildInbox`.
 - Worker G overlap: Task drawer and Project Overview source-specific owner
   prompts now route to Thread instead of posting local answer/defer mutations.
+- Worker K overlap: Thread's active dock now preserves owner-input recovery,
+  source-note, checklist, brief/spec decision, git-story, and live activity
+  context while the shared composer owns thread replies.
 - Remaining work: finish source-specific conversion so project check-in, task
   shaping, approvals, escalations, structural-map review, project-graph review,
   capability decisions, and recovery decisions all project from linked

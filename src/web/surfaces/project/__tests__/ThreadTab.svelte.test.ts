@@ -583,7 +583,7 @@ describe('ThreadTab', () => {
 
     render(ThreadTab)
 
-    await selectedThread().findByRole('button', { name: /add optional note/i })
+    await threadComposer().findByPlaceholderText('Add a note for Guildhall…')
     expect(selectedThread().getByText('Work is paused. Start Guildhall when you want it to continue.')).toBeTruthy()
     expect(scrollIntoView).not.toHaveBeenCalled()
   })
@@ -657,8 +657,7 @@ describe('ThreadTab', () => {
     await selectedThread().findByRole('button', { name: 'Request changes' })
     await userEvent.click(selectedThread().getByRole('button', { name: 'Request changes' }))
 
-    expect(selectedThread().getByText('Use the shared composer below to send your change request.')).toBeTruthy()
-    expect(screen.getByPlaceholderText('Correct the spec or ask Guildhall to revisit it…')).toBeTruthy()
+    expect(threadComposer().getByPlaceholderText('Correct the spec or ask Guildhall to revisit it…')).toBeTruthy()
   })
 
   it('renders prior task-chain items as timeline events instead of repeating the task title as a mini task card', async () => {
@@ -1086,9 +1085,8 @@ describe('ThreadTab', () => {
       expect(calls.some(call => call.url.includes('/shape-draft') && call.url.includes('projectId=looma-knit'))).toBe(true)
     })
 
-    await userEvent.click(screen.getByRole('button', { name: /add optional note/i }))
-    await userEvent.type(screen.getByPlaceholderText('Add a note for Guildhall…'), 'Keep drag handles out of scope.')
-    await userEvent.click(screen.getByRole('button', { name: /send note|send/i }))
+    await userEvent.type(threadComposer().getByPlaceholderText('Add a note for Guildhall…'), 'Keep drag handles out of scope.')
+    await userEvent.click(threadComposer().getByRole('button', { name: /send/i }))
     await waitFor(() => {
       expect(
         calls.some(
@@ -1170,16 +1168,15 @@ describe('ThreadTab', () => {
     const needsBriefChip = selectedThread().getByText('Needs brief')
     expect(needsBriefChip).toBeTruthy()
     expect(needsBriefChip.classList.contains('tone-agent-attention')).toBe(true)
-    expect(selectedThread().getByText('Brief checklist')).toBeTruthy()
+    expect(selectedThread().getAllByText('Brief checklist').length).toBeGreaterThan(0)
     expect(screen.queryByText('No upstream')).toBeNull()
     expect(screen.queryByText(/has no upstream branch/)).toBeNull()
     expect(screen.queryByText('Guildhall next')).toBeNull()
     expect(screen.queryByRole('button', { name: 'Start work' })).toBeNull()
     expect(screen.queryByRole('button', { name: 'Finish task brief...' })).toBeNull()
-    const noteButton = screen.getByRole('button', { name: 'Add optional note' })
     const startButton = screen.getByRole('button', { name: 'Start' })
     expect(startButton.classList.contains('v-agent')).toBe(true)
-    expect(noteButton.compareDocumentPosition(startButton) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+    expect(threadComposer().getByPlaceholderText('Add a note for Guildhall…')).toBeTruthy()
   })
 
   it('makes a one-field brief blocker start Guildhall cleanup instead of opening a user form', async () => {
@@ -1254,7 +1251,7 @@ describe('ThreadTab', () => {
     render(ThreadTab)
 
     await screen.findByRole('button', { name: /draft task brief/i })
-    expect(selectedThread().getByText('Brief checklist')).toBeTruthy()
+    expect(selectedThread().getAllByText('Brief checklist').length).toBeGreaterThan(0)
     expect(screen.queryByText('No upstream')).toBeNull()
     expect(screen.queryByText(/has no upstream branch/)).toBeNull()
     expect(screen.queryByText(/Set an upstream branch/)).toBeNull()
@@ -1316,7 +1313,7 @@ describe('ThreadTab', () => {
 
     render(ThreadTab)
 
-    await screen.findByText('Spec revision queued')
+    await screen.findByRole('button', { name: 'Already queued' })
     expect(screen.queryByRole('button', { name: /continue drafting spec/i })).toBeNull()
     expect(screen.getByRole('button', { name: 'Already queued' }).hasAttribute('disabled')).toBe(true)
   })
@@ -1403,12 +1400,12 @@ describe('ThreadTab', () => {
     render(ThreadTab)
 
     await screen.findByRole('button', { name: /Knit draft 1/i })
-    expect(selectedThread().getByText('Imported note 9 needs a task brief.')).toBeTruthy()
+    expect(screen.getByRole('button', { name: /Knit draft 9/i })).toBeTruthy()
     expect(screen.queryByLabelText(/Compact .* operations/)).toBeNull()
     expect(screen.queryByText(/compact rows/i)).toBeNull()
   })
 
-  it('renders completed turns in Archive without an extra Done section', async () => {
+  it('keeps completed-only threads out of the active mailbox without an extra Done section', async () => {
     const completedTurns = Array.from({ length: 8 }, (_, index) =>
       workerTurn({
         id: `done-compact-${index}`,
@@ -1431,8 +1428,7 @@ describe('ThreadTab', () => {
 
     render(ThreadTab)
 
-    await userEvent.click(await screen.findByRole('tab', { name: /archive/i }))
-    await screen.findByText('Finished task 1')
+    await screen.findByText('No open questions, queued work, blockers, or active requests right now.')
     expect(screen.queryByLabelText(/Compact .* operations/)).toBeNull()
     expect(screen.queryByRole('button', { name: /^Done/i })).toBeNull()
   })
@@ -1491,7 +1487,7 @@ describe('ThreadTab', () => {
 
     render(ThreadTab)
 
-    expect(await screen.findByText('Gate checks are queued. Start Guildhall when you want it to continue.')).toBeTruthy()
+    expect((await screen.findAllByText('Gate checks are queued. Start Guildhall when you want it to continue.')).length).toBeGreaterThan(0)
   })
 
   it('summarizes and prioritizes high-volume thread operations', async () => {
@@ -1575,7 +1571,7 @@ describe('ThreadTab', () => {
 
     render(ThreadTab)
     await screen.findAllByText('Needs recovery')
-    expect(screen.getByText('Guildhall found context but did not save the next draft.')).toBeTruthy()
+    expect(screen.getAllByText('Guildhall found context but did not save the next draft.').length).toBeGreaterThan(0)
     expect(screen.getByText(/transcript may contain useful observations/i)).toBeTruthy()
     expect(screen.queryByText('Worker is stuck')).toBeNull()
   })
@@ -1617,12 +1613,12 @@ describe('ThreadTab', () => {
 
     render(ThreadTab)
 
-    await selectedThread().findByText('Needs you')
+    await selectedThread().findAllByText('Needs you')
     expect(screen.getAllByText('Queued').length).toBeGreaterThanOrEqual(1)
     expect(screen.queryByText('Guildhall next')).toBeNull()
     expect(screen.queryByText('Blueprint')).toBeNull()
     expect(screen.queryByText('Build')).toBeNull()
-    expect(screen.getAllByRole('button', { name: /add optional note/i }).length).toBeGreaterThanOrEqual(1)
+    expect(threadComposer().getByPlaceholderText('Add a note for Guildhall…')).toBeTruthy()
   })
 
   it('keeps the thread rail focused on the current open turn instead of a newer done milestone', async () => {
@@ -1705,9 +1701,9 @@ describe('ThreadTab', () => {
     await userEvent.click(floatingRow)
 
     await selectedThread().findByText('Starting point and source notes')
-    expect(selectedThread().getByText('Brief checklist')).toBeTruthy()
-    expect(selectedThread().getByRole('button', { name: /continue drafting spec/i })).toBeTruthy()
-    expect(selectedThread().getByRole('button', { name: /add optional note/i })).toBeTruthy()
+    expect(selectedThread().getAllByText('Brief checklist').length).toBeGreaterThan(0)
+    expect(selectedThread().getByRole('button', { name: /continue shaping brief/i })).toBeTruthy()
+    expect(threadComposer().getByPlaceholderText('Add a note for Guildhall…')).toBeTruthy()
   })
 
   it('submits each task question answer directly without a second submit step', async () => {
@@ -2028,7 +2024,7 @@ describe('ThreadTab', () => {
     )
 
     render(ThreadTab)
-    await selectedThread().findByText('Repo inspection')
+    await selectedThread().findAllByText('Repo inspection')
     const splitProposalButton = screen.getAllByRole('button', { name: /create split proposal/i })[0]!
     expect(splitProposalButton.classList.contains('v-agent')).toBe(true)
     await userEvent.click(splitProposalButton)
@@ -2096,7 +2092,7 @@ describe('ThreadTab', () => {
 
     render(ThreadTab)
     expect((await screen.findAllByText('Needs recovery')).length).toBeGreaterThan(0)
-    expect(screen.getByText(/Guildhall made partial progress/i)).toBeTruthy()
+    expect(screen.getAllByText(/Guildhall made partial progress/i).length).toBeGreaterThan(0)
     expect(screen.getByRole('button', { name: 'Inspect recovery' })).toBeTruthy()
     expect(screen.getByRole('button', { name: 'Add recovery note' })).toBeTruthy()
     const resumeWorkButton = screen.getByRole('button', { name: 'Resume work' })
@@ -2240,7 +2236,7 @@ describe('ThreadTab', () => {
 
     await selectedThread().findByText('Starting point and source notes')
     expect(selectedThread().getByText(/Guildhall has started shaping this task/)).toBeTruthy()
-    expect(selectedThread().getByText('Brief checklist')).toBeTruthy()
+    expect(selectedThread().getAllByText('Brief checklist').length).toBeGreaterThan(0)
     expect(selectedThread().getByText('Readable title')).toBeTruthy()
     expect(selectedThread().getByText('Acceptance criteria')).toBeTruthy()
     expect(selectedThread().getByRole('button', { name: /details\.\.\./i })).toBeTruthy()
