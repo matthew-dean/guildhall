@@ -205,6 +205,7 @@ describe('ProjectOverviewTab', () => {
 
     expect(screen.getByText('Run the required Guildhall migration before creating or running work.')).toBeInTheDocument()
     expect(screen.getByText('The next run is blocked until the required migration is applied.')).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Migrate project' }).querySelector('svg')).toBeInTheDocument()
     expect(screen.queryByText('No tasks yet. Create a request when you are ready.')).not.toBeInTheDocument()
   })
 

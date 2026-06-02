@@ -540,7 +540,20 @@ describe('ProjectView', () => {
             skipped: [],
             failed: [],
           },
-          status: { pending: [], blocked: [], applied: [{ id: '0.8.0/project-state-layout' }] },
+          status: {
+            pending: [],
+            blocked: [
+              {
+                id: '0.10.0/task-open-questions-to-bounded-chat',
+                title: 'Move task questions into owner-input bounded chat',
+                safety: 'prompt',
+                requirement: 'required',
+                summary: 'Moves old task-local questions into owner input.',
+                affectedPaths: ['.guildhall/TASKS.json'],
+              },
+            ],
+            applied: [{ id: '0.8.0/project-state-layout' }],
+          },
         })
       }
       return json({})
@@ -566,6 +579,8 @@ describe('ProjectView', () => {
         expect.objectContaining({ method: 'POST' }),
       )
     })
+    expect(await screen.findByText('Migration applied.')).toBeInTheDocument()
+    expect(screen.getByText('Move task questions into owner-input bounded chat')).toBeInTheDocument()
   })
 
   it('does not present stable done-only projects as paused or needing setup attention', async () => {

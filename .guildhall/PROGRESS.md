@@ -264,3 +264,8 @@ source: Codex live Looma + Knit re-intake audit 2026-05-31
 Implemented Task 9 minimal task transition boundary in commit ceacfd4d. Added src/runtime/task-transition.ts backed by state-machine.ts, focused task-transition tests, routed deterministic hot paths through the boundary, updated Task 9 plan evidence, and verified with focused vitest suite: 384 tests passed. pnpm typecheck is currently blocked by concurrent Inbox/attention/serve type errors outside Worker B scope.
 
 source: codex-worker-b
+## 2026-06-01T23:26:45.952Z MCP evidence for task-10
+
+Committed Task 10 fixture quarantine: moved app-spec-smoke and release-proof-matrix runtime modules from src/runtime to internal/fixtures, updated tests, added a guard against restoring those shipping runtime paths, and recorded test/lint evidence in internal/plans/2026-06-01-guildhall-cognitive-overhead-reduction.md.
+
+source: codex-worker-c

@@ -38,6 +38,8 @@
     | 'ellipsis'
     | 'help-circle'
     | 'sparkles'
+    | 'refresh-cw'
+    | 'list-todo'
     | 'arrow-up'
     | 'arrow-right'
 </script>
@@ -75,6 +77,8 @@
   import Ellipsis from 'lucide-svelte/icons/ellipsis'
   import HelpCircle from 'lucide-svelte/icons/circle-help'
   import Sparkles from 'lucide-svelte/icons/sparkles'
+  import RefreshCw from 'lucide-svelte/icons/refresh-cw'
+  import ListTodo from 'lucide-svelte/icons/list-todo'
   import ArrowUp from 'lucide-svelte/icons/arrow-up'
   import ArrowRight from 'lucide-svelte/icons/arrow-right'
 
@@ -121,6 +125,8 @@
   {:else if name === 'ellipsis'}<Ellipsis {size} {strokeWidth} />
   {:else if name === 'help-circle'}<HelpCircle {size} {strokeWidth} />
   {:else if name === 'sparkles'}<Sparkles {size} {strokeWidth} />
+  {:else if name === 'refresh-cw'}<RefreshCw {size} {strokeWidth} />
+  {:else if name === 'list-todo'}<ListTodo {size} {strokeWidth} />
   {:else if name === 'arrow-up'}<ArrowUp {size} {strokeWidth} />
   {:else if name === 'arrow-right'}<ArrowRight {size} {strokeWidth} />
   {/if}

@@ -710,6 +710,9 @@
             go(nextAction.href)
           }}
         >
+          {#if nextAction.action === 'migration'}
+            <Icon name="refresh-cw" size={16} />
+          {/if}
           {nextAction.button}
         </Button>
       </div>

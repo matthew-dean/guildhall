@@ -1478,6 +1478,15 @@
       <p>
         Guildhall needs to update this project before it can run. Review the file changes first so there are no surprise Git writes.
       </p>
+      {#if migrationAppliedMessage && primaryRequiredMigration}
+        <NoticeBand
+          tone="ok"
+          role="status"
+          density="compact"
+          label="Migration applied"
+          title={migrationAppliedMessage}
+        />
+      {/if}
       {#if migrationStatusLoading}
         <p class="muted">Checking migrations...</p>
       {:else if migrationError}

@@ -57,6 +57,24 @@ babysit setup/import/provider/release states across multiple pages.
 
 ## Current Follow-Ups
 
+- [x] Fix the required-migration action affordance and apply feedback. The live
+  Narrative Harness modal applied `0.10.0/task-hierarchy-links`, but the next
+  blocker immediately replaced the card, making the click look inert; migration
+  action icons also depend on shared `refresh-cw` / inbox icon registry support.
+  Closure evidence, 2026-06-02: added `refresh-cw` and `list-todo` to the shared
+  icon registry, rendered the Overview and modal migration actions with
+  `refresh-cw`, and kept the success notice visible when another required
+  migration remains. Red/green coverage:
+  `src/web/lib/__tests__/Icon.svelte.test.ts`,
+  `src/web/surfaces/__tests__/ProjectView.svelte.test.ts`, and
+  `src/web/surfaces/project/__tests__/ProjectOverviewTab.svelte.test.ts`.
+  Verification: focused Vitest suites, `pnpm typecheck`, `pnpm lint:design`,
+  `pnpm build`, `pnpm dev:install`, service restart, `stale:false`, and browser
+  proof against `http://localhost:7777/projects/narrative-harness` showed both
+  visible `Migrate project` buttons plus `Apply required migration` rendering
+  `lucide-refresh-cw` SVGs. The live migration API shows
+  `0.10.0/task-hierarchy-links` applied at `2026-06-02T19:05:29.512Z`; the
+  remaining blocker is `0.10.0/task-open-questions-to-bounded-chat`.
 - [x] Reduce Guildhall cognitive overhead with hard conversions and clearer
   abstraction boundaries. Plan:
   `internal/plans/2026-06-01-guildhall-cognitive-overhead-reduction.md`.
