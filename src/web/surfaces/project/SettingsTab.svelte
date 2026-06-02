@@ -3,7 +3,7 @@
   import { untrack } from 'svelte'
   import NoticeBand from '../../../../packages/ui/src/components/NoticeBand.svelte'
   import Button from '../../lib/Button.svelte'
-  import Card from '../../lib/Card.svelte'
+  import Card from '../../lib/ui-compat/Card.svelte'
   import Select from '../../lib/Select.svelte'
   import Stack from '../../lib/Stack.svelte'
   import { nav } from '../../lib/nav.svelte.js'

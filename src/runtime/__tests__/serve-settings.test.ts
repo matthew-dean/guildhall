@@ -11,6 +11,7 @@ import {
   registerWorkspace,
   writeProjectConfig,
   writeWorkspaceConfig,
+  type ResolvedConfig,
 } from '@guildhall/config'
 import { defaultAgentSettingsPath, loadLeverSettings, makeDefaultSettings } from '@guildhall/levers'
 import { proposeProjectSkill } from '@guildhall/skills'
@@ -19,6 +20,8 @@ import { buildServeApp } from '../serve.js'
 import { persistLearningCandidates } from '../learning.js'
 import { acceptStructuralMap, draftStructuralMap, submitStructuralMapForReview } from '../structural-map.js'
 import { createProjectDependencyRequest } from '../project-graph.js'
+import { createOwnerInputRequest } from '../owner-input-store.js'
+import { OrchestratorSupervisor } from '../serve-supervisor.js'
 import type { LearningCandidate } from '../policy.js'
 
 const execFileP = promisify(execFile)
@@ -45,6 +48,36 @@ async function readTasks(tmpPath: string): Promise<Array<Record<string, any>>> {
     | Array<Record<string, any>>
     | { tasks?: Array<Record<string, any>> }
   return Array.isArray(raw) ? raw : raw.tasks ?? []
+}
+
+async function seedThreadOwnerInput(input: {
+  taskId: string
+  questionId: string
+  prompt: string
+  label: string
+  kind?: 'task_shaping' | 'recovery_decision'
+  choices?: string[]
+  now: string
+}): Promise<void> {
+  await createOwnerInputRequest({
+    projectRoot: tmpDir,
+    projectId: PROJECT_ID,
+    commandId: `serve-settings:${input.taskId}:${input.questionId}`,
+    now: input.now,
+    actor: 'test:serve-settings',
+    source: input.kind === 'recovery_decision'
+      ? { kind: 'recovery_decision', taskId: input.taskId, questionId: input.questionId }
+      : { kind: 'task', taskId: input.taskId, questionId: input.questionId },
+    target: { kind: 'thread' },
+    prompt: input.prompt,
+    ...(input.choices ? { choices: input.choices } : {}),
+    objective: {
+      kind: input.kind ?? 'task_shaping',
+      label: input.label,
+      successCriteria: ['Owner answers the linked Thread session.'],
+    },
+    sessionSource: `test:serve-settings:${input.taskId}:${input.questionId}`,
+  })
 }
 
 beforeEach(async () => {
@@ -1024,7 +1057,7 @@ describe('POST /api/project/start', () => {
     expect(projectBody.startReadiness?.message).toContain('clearer brief')
   })
 
-  it('points owner-input Start blockers at the pending question instead of a separate escalation', async () => {
+  it('points owner-input Start blockers at the linked Thread session', async () => {
     const now = new Date().toISOString()
     await fs.writeFile(
       path.join(tmpDir, '.guildhall', 'TASKS.json'),
@@ -1065,14 +1098,7 @@ describe('POST /api/project/start', () => {
             outOfScope: [],
             dependsOn: [],
             notes: [],
-            openQuestions: [{
-              id: 'q-1',
-              askedBy: 'spec-agent',
-              askedAt: now,
-              kind: 'choice',
-              prompt: 'Which API shape should this component use?',
-              choices: ['Stencil component', 'Vanilla web component'],
-            }],
+            openQuestions: [],
             escalations: [],
             agentIssues: [],
             gateResults: [],
@@ -1087,6 +1113,14 @@ describe('POST /api/project/start', () => {
       }, null, 2),
       'utf8',
     )
+    await seedThreadOwnerInput({
+      taskId: 'task-question',
+      questionId: 'q-1',
+      now,
+      label: 'Clarify Question task',
+      prompt: 'Which API shape should this component use?',
+      choices: ['Stencil component', 'Vanilla web component'],
+    })
 
     const { app } = buildServeApp({ projectPath: tmpDir })
     const projectRes = await app.fetch(new Request(scoped('/api/project')))
@@ -1097,9 +1131,9 @@ describe('POST /api/project/start', () => {
     expect(projectBody.startReadiness).toMatchObject({
       canStart: false,
       code: 'owner_input_required',
-      actionHref: '/task/task-question?tab=current',
+      actionHref: '/thread',
     })
-    expect(projectBody.startReadiness?.message).toContain('1 question needs your answer')
+    expect(projectBody.startReadiness?.message).toContain('Clarify Question task needs your answer')
   })
 
   it('points recovery-only Start blockers at the newest blocked task instead of stale historical blockers', async () => {
@@ -1159,6 +1193,15 @@ describe('POST /api/project/start', () => {
       }, null, 2),
       'utf8',
     )
+    await seedThreadOwnerInput({
+      taskId: 'task-current',
+      questionId: 'esc-current',
+      now: newer,
+      kind: 'recovery_decision',
+      label: 'Choose recovery path for Current blocked task',
+      prompt: 'How should Guildhall recover the current blocked task?',
+      choices: ['Retry with more context', 'Shelve it for now'],
+    })
 
     const { app } = buildServeApp({ projectPath: tmpDir })
     const projectRes = await app.fetch(new Request(scoped('/api/project')))
@@ -1169,9 +1212,9 @@ describe('POST /api/project/start', () => {
     expect(projectBody.startReadiness).toMatchObject({
       canStart: false,
       code: 'owner_input_required',
-      actionHref: '/task/task-current',
+      actionHref: '/thread',
     })
-    expect(projectBody.startReadiness?.message).toContain('Choose a recovery path')
+    expect(projectBody.startReadiness?.message).toContain('Choose recovery path for Current blocked task')
   })
 
   it('rejects focused task starts while project-level owner input is still blocking Start', async () => {
@@ -1193,14 +1236,7 @@ describe('POST /api/project/start', () => {
             outOfScope: [],
             dependsOn: [],
             notes: [],
-            openQuestions: [{
-              id: 'q-1',
-              askedBy: 'spec-agent',
-              askedAt: now,
-              kind: 'choice',
-              prompt: 'Which implementation direction should Guildhall use?',
-              choices: ['Option A', 'Option B'],
-            }],
+            openQuestions: [],
             escalations: [],
             agentIssues: [],
             gateResults: [],
@@ -1241,6 +1277,14 @@ describe('POST /api/project/start', () => {
       }, null, 2),
       'utf8',
     )
+    await seedThreadOwnerInput({
+      taskId: 'task-needs-answer',
+      questionId: 'q-1',
+      now,
+      label: 'Clarify Needs answer first',
+      prompt: 'Which implementation direction should Guildhall use?',
+      choices: ['Option A', 'Option B'],
+    })
 
     const { app } = buildServeApp({ projectPath: tmpDir })
     const res = await app.fetch(
@@ -1255,9 +1299,9 @@ describe('POST /api/project/start', () => {
     const body = (await res.json()) as { code?: string; actionHref?: string; error?: string }
     expect(body).toMatchObject({
       code: 'owner_input_required',
-      actionHref: '/task/task-needs-answer?tab=current',
+      actionHref: '/thread',
     })
-    expect(body.error).toContain('1 question needs your answer')
+    expect(body.error).toContain('Clarify Needs answer first needs your answer')
   })
 
   it('rejects fanout without worktree isolation with a clear error', async () => {
@@ -1291,7 +1335,16 @@ describe('POST /api/project/start', () => {
   })
 
   it('rejects targeted task starts while a project run is already active', async () => {
-    const { app, supervisor } = buildServeApp({ projectPath: tmpDir })
+    const supervisor = new OrchestratorSupervisor({
+      resolveConfig: () => ({ workspaceId: PROJECT_ID, projectPath: tmpDir } as ResolvedConfig),
+      runOrchestrator: async (_config, opts) => {
+        await new Promise<void>((resolve) => {
+          opts?.abortSignal?.addEventListener('abort', () => resolve(), { once: true })
+        })
+        return { ticks: 1, stopReason: 'stop_requested', stopMessage: 'Stop requested.' }
+      },
+    })
+    const { app } = buildServeApp({ projectPath: tmpDir, supervisor })
     supervisor.start({
       workspaceId: PROJECT_ID,
       workspacePath: tmpDir,
@@ -1300,6 +1353,7 @@ describe('POST /api/project/start', () => {
     const res = await app.fetch(
       new Request(scoped('/api/project/start'), {
         method: 'POST',
+        headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ taskId: 'task-a', mode: 'continuous' }),
       }),
     )

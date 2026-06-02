@@ -1946,7 +1946,7 @@ Move logic out of Settings:
 - Project graph/structural-map review -> project-structure surface. Do not
   recreate this as a hidden developer section.
 
-- [ ] **Step 9: Run tests**
+- [x] **Step 9: Run tests**
 
 Run:
 
@@ -1962,7 +1962,9 @@ Evidence on 2026-06-01:
 - Green structure guard after extraction: `SettingsTab.svelte` is `184` lines.
 - PASS: `pnpm vitest run src/web/surfaces/project/settings/__tests__/SettingsTab.structure.test.ts src/web/surfaces/project/structure/__tests__/ProjectStructurePanel.svelte.test.ts src/levers/__tests__/profiles.test.ts src/levers/__tests__/storage.test.ts src/runtime/__tests__/migrations.test.ts src/web/surfaces/project/__tests__/SettingsTab.svelte.test.ts --reporter=dot` (`6` files, `34` tests).
 - PASS: `pnpm typecheck`.
-- CONCERN: the exact Step 9 command was run and failed only in `src/runtime/__tests__/serve-settings.test.ts` (`4` failures) where required migration/start-readiness behavior from the broader branch preempts owner-input/run-active expectations. Worker H did not edit Task 9 owner-input/start-readiness tests.
+- Coordinator integration repaired the branch-level `serve-settings` fixture drift by seeding linked owner-input requests instead of legacy task-local `openQuestions`, and by injecting a deterministic test supervisor for the already-running branch.
+- PASS: `pnpm vitest run src/web/surfaces/project/settings/__tests__/SettingsTab.structure.test.ts src/web/surfaces/project/structure/__tests__/ProjectStructurePanel.svelte.test.ts src/levers/__tests__/profiles.test.ts src/runtime/__tests__/serve-settings.test.ts src/web/surfaces/project/__tests__/SettingsTab.svelte.test.ts --reporter=dot` (`5` files, `69` tests).
+- PASS: `node scripts/ui-primitive-scan.mjs`, `pnpm lint:deps`, `pnpm lint:reductions`, and `pnpm typecheck`.
 
 Commit:
 

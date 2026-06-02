@@ -378,6 +378,8 @@ export interface ServeOptions {
   pickProjectFolder?: () => Promise<string | null>
   /** Optional project-runtime supervisor override for tests. */
   runtimeSupervisor?: ProjectRuntimeSupervisor
+  /** Optional orchestrator supervisor override for tests. */
+  supervisor?: OrchestratorSupervisor
   /** Optional runtime backend setup detector override for tests. */
   runtimeBackendSetup?: RuntimeBackendSetupDetector
   /** Optional runtime dev-server manager override for tests. */
@@ -2078,7 +2080,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
     },
   })
 
-  const supervisor = new OrchestratorSupervisor()
+  const supervisor = opts.supervisor ?? new OrchestratorSupervisor()
   const runtimeSupervisor = opts.runtimeSupervisor ?? new ProjectRuntimeSupervisor()
   const runtimeBackendSetup = opts.runtimeBackendSetup ?? detectRuntimeBackendSetup
   const devServerManager = opts.devServerManager ?? new DevServerManager({ runtimeSupervisor })

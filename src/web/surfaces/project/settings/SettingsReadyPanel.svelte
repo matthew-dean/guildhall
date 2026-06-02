@@ -6,7 +6,7 @@
   import StatusPill from '../../../../../packages/ui/src/components/StatusPill.svelte'
   import Byline from '../../../lib/Byline.svelte'
   import Button from '../../../lib/Button.svelte'
-  import Card from '../../../lib/Card.svelte'
+  import Card from '../../../lib/ui-compat/Card.svelte'
   import DefinitionList from '../../../lib/DefinitionList.svelte'
   import Icon from '../../../lib/Icon.svelte'
   import LogViewer from '../../../lib/LogViewer.svelte'
