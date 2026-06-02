@@ -108,6 +108,14 @@ This scanner is an advisory hardening gate. It identifies likely entropy; it
 does not replace the constitution or the reviewer obligation to decide whether
 to extend a primitive, create a temporary wrapper, or delete a duplicate.
 
+The current repo-wide historical debt is recorded in
+`internal/audits/2026-06-01-design-token-baseline.json`. The baseline is a
+budget, not an approval: existing signatures are allowed only up to their
+committed per-file counts, and `pnpm lint:design` fails when a file introduces a
+new signature or increases an old signature count. Rebuild the baseline only
+when intentionally accepting a reviewed burn-down checkpoint with evidence in
+this audit or the Task 7 plan.
+
 ## Open Exceptions
 
 | Owner | Violation | Removal condition |

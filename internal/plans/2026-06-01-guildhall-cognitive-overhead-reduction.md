@@ -2723,6 +2723,10 @@ For each touched surface:
     touched files.
   - Remaining: Step 8 stays open because the whole-repo audit still reports
     unmanaged token/component debt in untouched surfaces.
+  - Evidence: Worker L added the governed debt baseline
+    `internal/audits/2026-06-01-design-token-baseline.json`. The first-surface
+    conversion remains open, but existing debt is now tracked as a per-file
+    signature budget instead of an unbounded lint failure.
 
 - [ ] **Step 9: Run the audit and focused UI tests**
 
@@ -2736,10 +2740,28 @@ pnpm vitest run src/web/surfaces/project/__tests__/SettingsTab.svelte.test.ts sr
 
 Expected: PASS, with the design audit no longer flagging touched surfaces.
 
-  - Evidence: `pnpm vitest run scripts/design-token-audit.test.ts --reporter=dot`
-    passed with 2 tests.
-  - Deferred: `pnpm lint:design` currently exits 1 because Step 8 is not in
-    Worker A scope. It reports existing raw/legacy styling and duplicate
+  - Evidence: Worker L updated `scripts/design-token-audit.mjs` so
+    `pnpm lint:design` compares current raw typography, legacy token, duplicate
+    primitive, and local style signatures against
+    `internal/audits/2026-06-01-design-token-baseline.json`. Existing debt is
+    allowed only up to the committed per-file counts; new signatures or count
+    increases fail the command.
+  - Evidence: Worker L ran
+    `pnpm vitest run scripts/design-token-audit.test.ts --reporter=dot`
+    (passed, 4 tests) and `pnpm lint:design` (passed).
+  - Remaining: Step 9's focused Svelte UI tests were not rerun in Worker L scope
+    because this slice changed only the audit mechanics and internal evidence,
+    not Task 4 or Task 7 UI surfaces.
+  - Historical note: earlier Worker A/E runs saw `pnpm lint:design` exit 1
+    before the baseline gate existed. That broad failure is now represented by
+    the committed baseline rather than blocking the hard gate.
+  - Deferred: Step 8 surface burn-down still remains for the UI
+    surface/component owner. The current pass means "no new or increased
+    audited debt," not "all surfaces are converted."
+  - Previous evidence: `pnpm vitest run scripts/design-token-audit.test.ts --reporter=dot`
+    passed with 2 tests before the baseline mechanics were added.
+  - Previous deferred status: `pnpm lint:design` exited 1 because Step 8 was not
+    in Worker A scope. It reported existing raw/legacy styling and duplicate
     primitive debt across `src/web/lib/*`, `src/web/surfaces/*`, and the named
     Task 7 surfaces.
   - Evidence: Worker E ran

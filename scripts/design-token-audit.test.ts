@@ -26,6 +26,12 @@ function run(root: string): string {
   }
 }
 
+function writeBaseline(root: string, baseline: unknown): void {
+  const baselinePath = path.join(root, 'internal/audits/2026-06-01-design-token-baseline.json')
+  mkdirSync(path.dirname(baselinePath), { recursive: true })
+  writeFileSync(baselinePath, `${JSON.stringify(baseline, null, 2)}\n`)
+}
+
 describe('design token audit', () => {
   it('rejects raw typography, legacy app token families, and local component lookalikes', () => {
     const root = repo({
@@ -68,5 +74,54 @@ describe('design token audit', () => {
     })
 
     expect(run(root)).toBe('')
+  })
+
+  it('permits historical design debt covered by the baseline', () => {
+    const root = repo({
+      'src/web/surfaces/Legacy.svelte': `
+        <style>
+          .title { font-size: var(--fs-2); }
+        </style>
+      `,
+    })
+    writeBaseline(root, {
+      version: 1,
+      generatedBy: 'scripts/design-token-audit.mjs',
+      violations: {
+        'src/web/surfaces/Legacy.svelte': {
+          'legacy token family: var(--fs-2)': 1,
+          'raw font-size: font-size: var(--fs-2);': 1,
+        },
+      },
+    })
+
+    expect(run(root)).toBe('')
+  })
+
+  it('rejects new design debt above the committed baseline budget', () => {
+    const root = repo({
+      'src/web/surfaces/Legacy.svelte': `
+        <style>
+          .title { font-size: var(--fs-2); }
+          .subtitle { font-size: var(--fs-2); }
+        </style>
+      `,
+    })
+    writeBaseline(root, {
+      version: 1,
+      generatedBy: 'scripts/design-token-audit.mjs',
+      violations: {
+        'src/web/surfaces/Legacy.svelte': {
+          'legacy token family: var(--fs-2)': 1,
+          'raw font-size: font-size: var(--fs-2);': 1,
+        },
+      },
+    })
+
+    const stderr = run(root)
+
+    expect(stderr).toContain('over baseline')
+    expect(stderr).toContain('legacy token family: var(--fs-2)')
+    expect(stderr).toContain('raw font-size: font-size: var(--fs-2);')
   })
 })
