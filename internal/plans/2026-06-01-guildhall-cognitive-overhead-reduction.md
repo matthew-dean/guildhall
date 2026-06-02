@@ -16,6 +16,7 @@
 - `internal/plans/2026-05-31-guildhall-0-10-bounded-chat.md`
 - `internal/plans/2026-05-31-guildhall-0-10-threads-needs-you-transition.md`
 - `internal/specs/2026-06-01-guildhall-0-10-state-machines-project-graph.md`
+- `internal/specs/2026-06-02-guildhall-contract-surfaces-project-graph.md`
 - `internal/specs/2026-05-27-guildhall-0-9-flexible-work-hierarchy-and-work-list.md`
 - `internal/plans/2026-05-31-guildhall-generalization-overfitting-hardening.md`
 - `internal/constitutions/design-system-governance.md`
@@ -3534,6 +3535,71 @@ packet gives UI reviewers concrete checks before they approve future work.
   - `pnpm typecheck` passed (`tsgo -p tsconfig.json --noEmit` and
     `@guildhall/ui` `tsc -p tsconfig.json --noEmit` completed successfully).
 
+## Task 13: Future Feature - Contract Surfaces and Surface Review Packets
+
+**Status:** future feature, specified but not implemented in this reduction
+cutover.
+
+**Spec:** `internal/specs/2026-06-02-guildhall-contract-surfaces-project-graph.md`
+
+**Why:** Individual specs should inform and update, or be updated by, the
+central contract for the domain/capability they touch. Component libraries,
+APIs, event contracts, state machines, MCP resources, schemas, and design
+systems should not be reasoned about one isolated task at a time. Guildhall's
+project graph already models authority, ownership, consumers, provider edges,
+and delivery receipts; contract surfaces should extend that graph instead of
+creating a second "spec graph" subsystem.
+
+**Architecture direction:**
+
+- Add `contract_surface` as a project graph node/facet, not as a standalone
+  subsystem.
+- Treat individual structured specs as contract deltas when they touch durable
+  surfaces.
+- Generate a surface review packet during spec approval with sibling specs,
+  invariants, known decisions, proposed changes, consumers, and proof
+  obligations.
+- Route accepted/rejected/amended deltas through the shared state-machine
+  substrate with append-only receipts.
+- Keep owner-facing contract review in Structure and Thread/owner input, not
+  Settings.
+- Let corpus refresh propose likely surfaces and drift findings, but require
+  owner/coordinator approval before proposals become durable graph state.
+
+**Agent checklist discipline:** implementers must use the checklist in
+`internal/specs/2026-06-02-guildhall-contract-surfaces-project-graph.md` and
+update that spec in the same commit as each completed step. Do not keep a
+private parallel checklist. Checked items require an `Evidence:` bullet.
+
+- [x] **Step 0: Write the contract-surface internal spec**
+
+  - Evidence: added
+    `internal/specs/2026-06-02-guildhall-contract-surfaces-project-graph.md`
+    with project-graph integration, state-machine receipt model,
+    structured-spec delta shape, surface review packet shape, corpus-refresh
+    proposal behavior, Structure UI placement, and implementation checklist.
+
+- [ ] **Step 1: Implement the contract-surface runtime model and state machine**
+
+  Follow spec implementation Steps 1 and 2. Do not add lifecycle status helpers
+  outside `src/runtime/state-machine.ts`.
+
+- [ ] **Step 2: Extend project graph and spec approval**
+
+  Follow spec implementation Steps 3 and 4. Contract surfaces must remain graph
+  nodes/facets and structured specs must record explicit deltas when they change
+  durable surfaces.
+
+- [ ] **Step 3: Add corpus-refresh proposal and managed-agent context**
+
+  Follow spec implementation Steps 5 and 7. Refresh may propose surfaces and
+  drift findings, but cannot silently mutate durable graph state.
+
+- [ ] **Step 4: Add Structure UI projection and live proof**
+
+  Follow spec implementation Steps 6, 8, 9, and 10. Structure owns review
+  projection; Thread owns discussion; Settings only reports readiness blockers.
+
 ## Rollout Order
 
 1. Guardrails.
@@ -3548,6 +3614,7 @@ packet gives UI reviewers concrete checks before they approve future work.
 10. Lab/proof fixture quarantine.
 11. Installed-app verification and `artifact:flow-audit` update.
 12. Future corpus-refresh design-governance diagnostics.
+13. Future contract-surface graph nodes and surface review packets.
 
 This order keeps hard persisted-state migrations ahead of UI deletion. It also makes Settings smaller before deeper design-system hook cleanup, so the worst owner-facing cognitive overhead improves before every internal cleanup is perfect.
 
@@ -3591,3 +3658,7 @@ The reduction is complete when:
 - `--gh-*` is the canonical token family; old `--fs-*`, `--s-*`, and `--r-*` app scales are removed or only exist as temporary aliases during the migration task.
 - Touched web surfaces use canonical UI primitives or temporary compatibility wrappers.
 - The installed app proves the flow against the active test project with `stale:false`.
+- Contract-surface work, when implemented, represents central contracts as
+  project graph nodes/facets; individual specs update those contracts through
+  explicit deltas, review packets, and state-machine receipts rather than
+  through hidden prose or another graph subsystem.

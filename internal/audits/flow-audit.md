@@ -135,6 +135,21 @@ babysit setup/import/provider/release states across multiple pages.
   wrappers and local CSS as touched surfaces move onto governed primitives; and
   expand corpus-refresh design-governance diagnostics from Task 12 into
   reviewer/worker context.
+- [ ] Add contract surfaces and surface review packets as a project-graph
+  extension. Spec:
+  `internal/specs/2026-06-02-guildhall-contract-surfaces-project-graph.md`.
+  The accepted direction is that individual specs should inform and update, or
+  be updated by, a central contract for the domain/capability they touch.
+  Component libraries, APIs, event contracts, state machines, MCP resources,
+  schemas, design systems, and other durable capability surfaces should be
+  reviewed against sibling specs, invariants, known decisions, affected
+  consumers, and proof obligations. This belongs in the existing
+  authority-aware project graph as `contract_surface` nodes/facets with
+  state-machine receipts, not as a separate spec graph. Structure should own the
+  owner-facing surface review projection and link discussion to Thread/owner
+  input; Settings should only report readiness blockers. Corpus refresh may
+  propose likely surfaces and drift findings, but owner/coordinator approval
+  decides what becomes durable graph state.
 - [x] Specify the 0.10 state-machine substrate and local project graph pivot.
   Spec:
   `internal/specs/2026-06-01-guildhall-0-10-state-machines-project-graph.md`.
