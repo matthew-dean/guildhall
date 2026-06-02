@@ -3281,6 +3281,10 @@ git commit -m "refactor: quarantine release proof fixtures outside runtime"
   - Evidence: `pnpm typecheck` passed on the final tree.
   - Evidence: `pnpm test` passed on the final tree: `303` files passed, `1`
     skipped; `3561` tests passed, `3` skipped.
+  - Evidence: post-closure refresh initially exposed a Vitest resolver gap for
+    the `@guildhall/levers/profiles` subpath in browser tests; added the
+    matching `vitest.config.ts` alias, then reran the exact failed suites:
+    `47` tests passed.
   - Evidence: `pnpm lint:deps` exited `0` with `0` errors and the existing
     `56` no-orphans warnings; the temporary browser-to-runtime relative import
     was replaced with the explicit browser-safe `@guildhall/levers/profiles`

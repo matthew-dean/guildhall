@@ -106,6 +106,9 @@ babysit setup/import/provider/release states across multiple pages.
   `pnpm lint:deps` (`0` errors, existing `56` no-orphans warnings);
   `pnpm lint:reductions`; `pnpm lint:design`; `pnpm build`; and
   `pnpm dev:install`.
+  Post-closure refresh found and fixed the missing Vitest alias for the
+  browser-safe `@guildhall/levers/profiles` subpath; the exact failed web
+  suites then passed (`47` tests) before the full suite passed again.
   Live proof: installed service was restarted with `guildhall stop` and
   `guildhall start`; `curl -s http://localhost:7777/api/stale-server` returned
   `"stale":false`. Browser proof against

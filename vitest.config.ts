@@ -26,6 +26,10 @@ export default defineConfig({
         find: '@guildhall/runtime/task-transition',
         replacement: resolve(__dirname, 'src/runtime/task-transition.ts'),
       },
+      {
+        find: '@guildhall/levers/profiles',
+        replacement: resolve(__dirname, 'src/levers/profiles.ts'),
+      },
       ...[
         'agents',
         'backend-host',
