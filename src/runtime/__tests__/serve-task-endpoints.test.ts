@@ -1381,14 +1381,6 @@ describe('POST /api/project/task/:id/reframe-task', () => {
       },
       spec: '## Summary\nOld schematic-style spec.',
       acceptanceCriteria: [{ id: 'AC-8', description: 'Provide authoritative verification evidence.', verifiedBy: 'review' }],
-      openQuestions: [{
-        kind: 'choice',
-        id: 'q-old',
-        askedBy: 'worker-agent',
-        askedAt: new Date().toISOString(),
-        prompt: 'Choose recovery path.',
-        choices: ['retry', 'resolve'],
-      }],
       escalations: [{
         id: 'esc-old',
         taskId: 'task-1',
@@ -1422,8 +1414,6 @@ describe('POST /api/project/task/:id/reframe-task', () => {
     expect(task.productBrief).toBeUndefined()
     expect(task.spec).toBeUndefined()
     expect(task.acceptanceCriteria).toEqual([])
-    expect(task.openQuestions[0]?.answeredAt).toBeTruthy()
-    expect(task.openQuestions[0]?.answer).toMatch(/Superseded by a task reframe/i)
     expect(task.escalations[0]?.resolvedAt).toBeTruthy()
     expect(task.notes.some((note: Record<string, unknown>) => /reframe/i.test(String(note.content ?? '')))).toBe(true)
     const transcript = (await readExploringTranscript({ memoryDir, taskId: 'task-1' })).content ?? ''
@@ -1654,7 +1644,7 @@ describe('POST /api/project/task/:id/add-acceptance', () => {
 })
 
 describe('POST /api/project/task/:id/stage-answer', () => {
-  it('persists a draft answer on the question without marking it answered', async () => {
+  it('requires task question migration before mutating legacy question drafts', async () => {
     await seedTask('task-1', {
       status: 'spec_review',
       openQuestions: [
@@ -1677,15 +1667,12 @@ describe('POST /api/project/task/:id/stage-answer', () => {
         body: JSON.stringify({ questionId: 'q-1', answer: 'A' }),
       }),
     )
-    expect(res.status).toBe(200)
-
-    const raw = await fs.readFile(path.join(memoryDir, 'TASKS.json'), 'utf8')
-    const q = JSON.parse(raw)
-    expect(q.tasks[0].openQuestions[0].draftAnswer).toBe('A')
-    expect(q.tasks[0].openQuestions[0].answeredAt).toBeUndefined()
+    expect(res.status).toBe(409)
+    const body = (await res.json()) as Record<string, any>
+    expect(body.code).toBe('required_migration_pending')
   })
 
-  it('clears the persisted draft answer after final submission', async () => {
+  it('requires task question migration before answering legacy question drafts', async () => {
     await seedTask('task-1', {
       status: 'exploring',
       openQuestions: [
@@ -1709,12 +1696,9 @@ describe('POST /api/project/task/:id/stage-answer', () => {
         body: JSON.stringify({ answers: [{ questionId: 'q-1', answer: 'A' }] }),
       }),
     )
-    expect(res.status).toBe(200)
-
-    const raw = await fs.readFile(path.join(memoryDir, 'TASKS.json'), 'utf8')
-    const q = JSON.parse(raw)
-    expect(q.tasks[0].openQuestions[0].draftAnswer).toBeUndefined()
-    expect(q.tasks[0].openQuestions[0].answer).toBe('A')
+    expect(res.status).toBe(409)
+    const body = (await res.json()) as Record<string, any>
+    expect(body.code).toBe('required_migration_pending')
   })
 })
 

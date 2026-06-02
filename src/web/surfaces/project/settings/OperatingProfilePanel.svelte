@@ -8,7 +8,7 @@
   import Row from '../../../lib/Row.svelte'
   import Stack from '../../../lib/Stack.svelte'
   import UtilityPanel from '../../../lib/UtilityPanel.svelte'
-  import { OPERATING_PROFILES, type OperatingProfile } from '@guildhall/levers'
+  import { OPERATING_PROFILES, type OperatingProfile } from '@guildhall/levers/profiles'
   import type { Lever } from './types.js'
   import type { SettingsStore } from './settings-store.svelte.js'
 

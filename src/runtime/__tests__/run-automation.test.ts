@@ -25,7 +25,7 @@ const VALID_SPEC = [
 ].join('\n')
 
 describe('run automation policy', () => {
-  it('fully automated runs resolve owner questions and spec approval in runtime policy', async () => {
+  it('fully automated runs approve scoped specs in runtime policy', async () => {
     const memoryDir = await fs.mkdtemp(path.join(os.tmpdir(), 'guildhall-run-automation-'))
     await fs.mkdir(path.join(memoryDir, 'transcripts', 'exploring'), { recursive: true })
     await fs.writeFile(path.join(memoryDir, 'TASKS.json'), JSON.stringify({
@@ -35,14 +35,6 @@ describe('run automation policy', () => {
         task({
           id: 'task-root',
           status: 'exploring',
-          openQuestions: [{
-            kind: 'choice',
-            id: 'q-1',
-            askedBy: 'spec-agent',
-            askedAt: '2026-05-29T10:00:00.000Z',
-            prompt: 'Which path?',
-            choices: ['Small local app', 'Hosted app'],
-          }],
         }),
         task({
           id: 'task-child',
@@ -67,11 +59,9 @@ describe('run automation policy', () => {
 
     expect(result.changed).toBe(true)
     expect(result.resolutions.map(resolution => resolution.kind)).toEqual([
-      'answer_questions',
       'approve_spec',
     ])
     const queue = JSON.parse(await fs.readFile(path.join(memoryDir, 'TASKS.json'), 'utf8'))
-    expect(queue.tasks.find((candidate: { id: string }) => candidate.id === 'task-root').openQuestions[0].answeredAt).toBeTruthy()
     expect(queue.tasks.find((candidate: { id: string }) => candidate.id === 'task-child').status).toBe('ready')
   })
 

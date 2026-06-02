@@ -57,7 +57,7 @@ babysit setup/import/provider/release states across multiple pages.
 
 ## Current Follow-Ups
 
-- [ ] Reduce Guildhall cognitive overhead with hard conversions and clearer
+- [x] Reduce Guildhall cognitive overhead with hard conversions and clearer
   abstraction boundaries. Plan:
   `internal/plans/2026-06-01-guildhall-cognitive-overhead-reduction.md`.
   The accepted direction is to use required conversion scripts for wrong
@@ -85,6 +85,48 @@ babysit setup/import/provider/release states across multiple pages.
   duplicate primitive, surface-ownership, missing-contract, and exception
   findings, then render a compact design-governance packet plus owner-approved
   learning proposals for worker/reviewer context.
+  Closure evidence, 2026-06-02: the first reduction cutover is implemented and
+  the plan checklist is complete through installed-app verification. Required
+  conversions exist for `0.10.0/task-hierarchy-links` and
+  `0.10.0/task-open-questions-to-bounded-chat`; old `parent` status and
+  task-local question state now block normal project work until converted
+  instead of silently flowing through runtime/UI paths. Bounded owner input uses
+  `OwnerInputRequest` records linked to bounded-chat sessions; orchestrator
+  fallback questions create owner-input records and preserve waiting state from
+  that store instead of treating `openQuestions` as the durable model. Settings
+  is a 184-line shell and opens to readiness with only Ready, Providers,
+  Coordinators, Identity, Profile, and Developer sections. Structure owns the
+  structural-map/project-graph review surface and points discussion back to
+  Threads. Needs You projects alerts such as required migrations and triage
+  blockers, not local answer cards. The work graph importer now uses a generic
+  domain adapter and configured domain-route normalization instead of
+  Looma/Knit/Dialog/Drawer branches in generic runtime code.
+  Verification run on the final tree: `pnpm typecheck`; `pnpm test` (`303`
+  files passed, `1` skipped; `3561` tests passed, `3` skipped);
+  `pnpm lint:deps` (`0` errors, existing `56` no-orphans warnings);
+  `pnpm lint:reductions`; `pnpm lint:design`; `pnpm build`; and
+  `pnpm dev:install`.
+  Live proof: installed service was restarted with `guildhall stop` and
+  `guildhall start`; `curl -s http://localhost:7777/api/stale-server` returned
+  `"stale":false`. Browser proof against
+  `http://localhost:7777/projects/narrative-harness` showed Settings reduced to
+  the readiness/configuration sections, Structure owning structural map/project
+  graph with "Thread owns the discussion," Work showing the hierarchy migration
+  blocker with no visible "Parent task" copy, and Needs You showing required
+  migration/triage alerts. Narrative Harness remains intentionally
+  pre-migration, so live converted owner-input sessions were not created in
+  that checkout; the live proof is the required migration block, while
+  converted owner-input/thread/inbox behavior is covered by the green focused
+  and full test suites.
+  Remaining reduction candidates after this cutover: remove the transitional
+  `Task['openQuestions']` type surface once all migrations and old-record
+  readers are no longer needed; apply project migrations to old checked-out
+  projects when the owner chooses; clean up the existing no-orphans warning
+  baseline; keep `pressure_test_question` only for the explicit pressure-test
+  domain, never as a bounded-chat wrapper; continue retiring UI compatibility
+  wrappers and local CSS as touched surfaces move onto governed primitives; and
+  expand corpus-refresh design-governance diagnostics from Task 12 into
+  reviewer/worker context.
 - [x] Specify the 0.10 state-machine substrate and local project graph pivot.
   Spec:
   `internal/specs/2026-06-01-guildhall-0-10-state-machines-project-graph.md`.

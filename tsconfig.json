@@ -29,6 +29,7 @@
       "@guildhall/guilds": ["./src/guilds/index.ts"],
       "@guildhall/hooks": ["./src/hooks/index.ts"],
       "@guildhall/levers": ["./src/levers/index.ts"],
+      "@guildhall/levers/profiles": ["./src/levers/profiles.ts"],
       "@guildhall/mcp": ["./src/mcp/index.ts"],
       "@guildhall/mcp-server": ["./src/mcp-server/index.ts"],
       "@guildhall/persistence": ["./src/persistence/index.ts"],

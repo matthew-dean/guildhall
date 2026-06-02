@@ -180,6 +180,10 @@ import {
   parseCoordinatorDraft,
 } from './meta-intake.js'
 import {
+  createOwnerInputRequest,
+  waitingOwnerInputTaskIdsSync,
+} from './owner-input-store.js'
+import {
   deterministicReview,
   applyDeterministicVerdict,
   recordLlmVerdict,
@@ -2177,6 +2181,7 @@ export class Orchestrator {
   ): NonNullable<Extract<TickOutcome, { kind: 'idle' }>['summary']> {
     const scopedIds = scopeTaskId ? new Set(workSubtreeIds(queue.tasks, scopeTaskId)) : null
     const tasks = scopedIds ? queue.tasks.filter(task => scopedIds.has(task.id)) : queue.tasks
+    const waitingOwnerInputTaskIds = this.waitingOwnerInputTaskIds(queue)
     const counts = {
       total: tasks.length,
       actionable: 0,
@@ -2208,7 +2213,10 @@ export class Orchestrator {
         counts.dependencyBlocked += 1
         continue
       }
-      if (task.status === 'exploring' && taskHasUnansweredOpenQuestion(task)) {
+      if (
+        waitingOwnerInputTaskIds.has(task.id) ||
+        (task.status === 'exploring' && taskHasUnansweredOpenQuestion(task))
+      ) {
         counts.waitingOnUser += 1
         continue
       }
@@ -2283,6 +2291,14 @@ export class Orchestrator {
     }
   }
 
+  private waitingOwnerInputTaskIds(queue: TaskQueue): Set<string> {
+    const taskIds = new Set(queue.tasks.map(task => task.id))
+    return new Set(
+      [...waitingOwnerInputTaskIdsSync(this.opts.config.projectPath)]
+        .filter(taskId => taskIds.has(taskId)),
+    )
+  }
+
   /**
    * Single orchestrator step. Reads the queue, picks 1..N actionable tasks
    * per the `concurrent_task_dispatch` lever, and dispatches each through
@@ -2314,6 +2330,7 @@ export class Orchestrator {
       provider: this.opts.providerName ?? 'none',
       dispatchCapacity: capacity,
     })
+    const ownerInputBlockedTaskIds = this.waitingOwnerInputTaskIds(queueBefore)
     const picks = pickNextTasks({
       queue: queueBefore,
       capacity,
@@ -2325,6 +2342,7 @@ export class Orchestrator {
       },
       ...(this.opts.domainFilter ? { domainFilter: this.opts.domainFilter } : {}),
       ...(opts.preferredTaskId ? { preferredTaskId: opts.preferredTaskId } : {}),
+      excludeIds: ownerInputBlockedTaskIds,
     })
 
     // Structural-reliability hard precondition: refuse to dispatch if the
@@ -4560,7 +4578,7 @@ export class Orchestrator {
         afterStatus,
         transitioned,
         revisionCount,
-        ...(taskHasUnansweredUserQuestion(taskAfter) ? { waitingOnUser: true } : {}),
+        ...(taskHasUnansweredUserQuestion(taskAfter) || fallbackQuestionPosted ? { waitingOnUser: true } : {}),
       }
       })
     } finally {
@@ -7906,6 +7924,7 @@ export class Orchestrator {
       typeof task.productBrief.userJob === 'string' &&
       task.productBrief.userJob.trim().length > 0
     const hasOpenQuestion = taskHasUnansweredVisibleQuestion(task)
+    const hasWaitingOwnerInput = this.waitingOwnerInputTaskIds(queue).has(task.id)
     const hasDirtyWorktree =
       input.beforeStatus === 'in_progress' &&
       typeof task.worktreePath === 'string' &&
@@ -7915,7 +7934,8 @@ export class Orchestrator {
       input.beforeStatus === 'exploring' &&
       task.status === 'exploring' &&
       hasSpec &&
-      !hasOpenQuestion
+      !hasOpenQuestion &&
+      !hasWaitingOwnerInput
     ) {
       task.status = 'spec_review'
       task.updatedAt = this.now()
@@ -7925,7 +7945,7 @@ export class Orchestrator {
 
     const transitioned = task.status !== input.beforeStatus
     const durableExploringProgress =
-      input.beforeStatus === 'exploring' && (hasSpec || hasBrief || hasOpenQuestion)
+      input.beforeStatus === 'exploring' && (hasSpec || hasBrief || hasOpenQuestion || hasWaitingOwnerInput)
     const durableWorkerProgress =
       input.beforeStatus === 'in_progress' &&
       task.status === 'in_progress' &&
@@ -7951,6 +7971,7 @@ export class Orchestrator {
       afterStatus: task.status,
       transitioned,
       revisionCount: task.revisionCount,
+      ...(hasOpenQuestion || hasWaitingOwnerInput ? { waitingOnUser: true } : {}),
     }
   }
 
@@ -8877,31 +8898,55 @@ export class Orchestrator {
       )
     ) {
       const now = this.now()
+      const questionDrafts = missingDrafts.length > 0 ? missingDrafts : drafts
+      const questionStamp = Date.now().toString(36)
+      const questionRecords = questionDrafts.map((draft, index) => {
+        const questionId = `q-fallback-${task.id}-${questionStamp}-${index}`
+        return draft.kind === 'choice'
+          ? {
+              kind: 'choice' as const,
+              id: questionId,
+              askedBy: 'spec-agent',
+              askedAt: now,
+              prompt: draft.prompt,
+              ...(draft.subject ? { subject: draft.subject } : {}),
+              ...(draft.description ? { description: draft.description } : {}),
+              choices: draft.choices,
+              ...(draft.selectionMode ? { selectionMode: draft.selectionMode } : {}),
+            }
+          : {
+              kind: 'text' as const,
+              id: questionId,
+              askedBy: 'spec-agent',
+              askedAt: now,
+              prompt: draft.prompt,
+              ...(draft.subject ? { subject: draft.subject } : {}),
+              ...(draft.description ? { description: draft.description } : {}),
+            }
+      })
+      for (const question of questionRecords) {
+        await createOwnerInputRequest({
+          projectRoot: this.opts.config.projectPath,
+          projectId: this.opts.config.workspaceId,
+          commandId: `orchestrator:fallback-question:${task.id}:${question.id}`,
+          now,
+          actor: 'spec-agent',
+          source: { kind: 'task', taskId: task.id, questionId: question.id },
+          target: { kind: 'thread' },
+          prompt: question.prompt,
+          ...(question.kind === 'choice' ? { choices: question.choices } : {}),
+          ...(question.description ? { helperText: question.description } : {}),
+          objective: {
+            kind: 'task_shaping',
+            label: `Clarify ${task.title}`,
+            successCriteria: ['Owner answers the linked bounded-chat session.'],
+          },
+          sessionSource: `orchestrator:fallback-question:${task.id}:${question.id}`,
+        })
+      }
       task.openQuestions = [
         ...(task.openQuestions ?? []),
-        ...(missingDrafts.length > 0 ? missingDrafts : drafts).map((draft, index) =>
-          draft.kind === 'choice'
-            ? {
-                kind: 'choice' as const,
-                id: `q-fallback-${task.id}-${Date.now().toString(36)}-${index}`,
-                askedBy: 'spec-agent',
-                askedAt: now,
-                prompt: draft.prompt,
-                ...(draft.subject ? { subject: draft.subject } : {}),
-                ...(draft.description ? { description: draft.description } : {}),
-                choices: draft.choices,
-                ...(draft.selectionMode ? { selectionMode: draft.selectionMode } : {}),
-              }
-            : {
-                kind: 'text' as const,
-                id: `q-fallback-${task.id}-${Date.now().toString(36)}-${index}`,
-                askedBy: 'spec-agent',
-                askedAt: now,
-                prompt: draft.prompt,
-                ...(draft.subject ? { subject: draft.subject } : {}),
-                ...(draft.description ? { description: draft.description } : {}),
-              },
-        ),
+        ...questionRecords,
       ]
       task.updatedAt = now
       queue.lastUpdated = now
@@ -9697,7 +9742,7 @@ function resolvedScopeDecisionTexts(task: Task): string[] {
 }
 
 function answeredQuestionDecisionTexts(task: Task): string[] {
-  return (task.openQuestions ?? [])
+  const questionDecisions = (task.openQuestions ?? [])
     .filter((question) => question.answeredAt && typeof question.answer === 'string' && question.answer.trim())
     .filter((question) => {
       const prompt = 'prompt' in question && typeof question.prompt === 'string' ? question.prompt.trim() : ''
@@ -9711,6 +9756,25 @@ function answeredQuestionDecisionTexts(task: Task): string[] {
         : 'Owner decision'
       return `${prompt}: ${answer}`
     })
+  return [
+    ...questionDecisions,
+    ...preservedAnsweredQuestionDecisionTexts(task),
+  ]
+}
+
+function preservedAnsweredQuestionDecisionTexts(task: Task): string[] {
+  const out: string[] = []
+  for (const note of task.notes ?? []) {
+    if (note.agentId !== 'migration:0.10.0/task-open-questions-to-bounded-chat') continue
+    const match = (note.content ?? '').match(/Question:\s*([\s\S]*?)\nAnswer:\s*([\s\S]*)$/)
+    const prompt = normalizeFallbackWhitespace(match?.[1] ?? '')
+    const answer = normalizeFallbackWhitespace(match?.[2] ?? '')
+    if (!answer) continue
+    if (isQuestionListPrompt(prompt) || isOperationalFallbackPrompt(prompt)) continue
+    if (answer.length >= 24 || /[.!?]$/.test(answer)) out.push(answer)
+    else out.push(prompt ? `${prompt.replace(/\?$/, '')}: ${answer}` : answer)
+  }
+  return out
 }
 
 function formatRecoverySpecSourceIntent(source: string | undefined): string {

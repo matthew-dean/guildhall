@@ -477,7 +477,8 @@ function questionAnswer(task: Task, includes: string): string | undefined {
     const prompt = 'prompt' in q && typeof q.prompt === 'string' ? q.prompt : ''
     return prompt.toLowerCase().includes(needle) && typeof q.answer === 'string' && q.answer.trim().length > 0
   })
-  return found && typeof found.answer === 'string' ? found.answer.trim() : undefined
+  if (found && typeof found.answer === 'string') return found.answer.trim()
+  return preservedQuestionAnswer(task, includes)
 }
 
 function selectedDomainsFromAnswers(task: Task): string[] {
@@ -493,7 +494,29 @@ function selectedDomainsFromAnswers(task: Task): string[] {
     const supported = parsed.filter(id => FALLBACK_SYNTH_DOMAIN_IDS.has(id))
     if (supported.length > 0) return [...new Set(supported)]
   }
+  const preservedDomainAnswer = preservedQuestionAnswer(task, 'coordinator domains') ??
+    preservedQuestionAnswer(task, 'project areas') ??
+    preservedQuestionAnswer(task, 'review lanes')
+  if (preservedDomainAnswer) {
+    const parsed = splitDomainAnswer(preservedDomainAnswer)
+    const supported = parsed.filter(id => FALLBACK_SYNTH_DOMAIN_IDS.has(id))
+    if (supported.length > 0) return [...new Set(supported)]
+  }
   return ['converter-core', 'extension-ui', 'testing-qa', 'docs']
+}
+
+function preservedQuestionAnswer(task: Task, includes: string): string | undefined {
+  const needle = includes.toLowerCase()
+  for (const note of task.notes ?? []) {
+    if (note.agentId !== 'migration:0.10.0/task-open-questions-to-bounded-chat') continue
+    const content = note.content ?? ''
+    const match = content.match(/Question:\s*([\s\S]*?)\nAnswer:\s*([\s\S]*)$/)
+    if (!match) continue
+    const question = match[1]?.trim() ?? ''
+    const answer = match[2]?.trim() ?? ''
+    if (question.toLowerCase().includes(needle) && answer) return answer
+  }
+  return undefined
 }
 
 function coordinatorTemplate(id: string, task: Task): DraftCoordinator {

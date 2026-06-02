@@ -7,6 +7,7 @@ import { getProjectStateDir } from '@guildhall/sessions'
 import { buildServeApp } from '../serve.js'
 import { createMetaIntakeTask, META_INTAKE_TASK_ID } from '../meta-intake.js'
 import type { TaskQueue } from '@guildhall/core'
+import { migrateTaskQuestionsToBoundedChat } from '../task-question-migration.js'
 
 // ---------------------------------------------------------------------------
 // Integration tests for the browser-driven meta-intake approval flow.
@@ -247,6 +248,12 @@ describe('POST /api/project/meta-intake/synthesize', () => {
       JSON.stringify({ scripts: { build: 'tsc -b', test: 'vitest' } }, null, 2),
       'utf-8',
     )
+    await migrateTaskQuestionsToBoundedChat({
+      projectRoot: tmpDir,
+      projectId,
+      apply: true,
+      now: '2026-01-01T00:02:00.000Z',
+    })
 
     const { app } = buildServeApp({ projectPath: tmpDir })
     const res = await app.fetch(

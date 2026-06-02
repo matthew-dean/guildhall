@@ -892,7 +892,7 @@ tasks:
     ])
     expect(alertDialog.proofPaths).toEqual(
       expect.arrayContaining([
-        expect.objectContaining({ kind: 'command', command: expect.stringContaining('@looma/core') }),
+        expect.objectContaining({ kind: 'command', command: 'pnpm test -- alert-dialog' }),
       ]),
     )
 

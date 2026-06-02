@@ -135,6 +135,15 @@ export function listOwnerInputRequestsSync(projectRoot: string): OwnerInputReque
     .sort((left, right) => left.createdAt.localeCompare(right.createdAt) || left.id.localeCompare(right.id))
 }
 
+export function waitingOwnerInputTaskIdsSync(projectRoot: string): Set<string> {
+  return new Set(
+    listOwnerInputRequestsSync(projectRoot)
+      .filter((request): request is OwnerInputRequestRecord & { source: { kind: 'task'; taskId: string } } =>
+        request.status === 'waiting_for_owner' && request.source.kind === 'task')
+      .map(request => request.source.taskId),
+  )
+}
+
 async function writeOwnerInputRequest(memoryDir: string, request: OwnerInputRequestRecord): Promise<void> {
   const filePath = path.join(ownerInputDir(memoryDir), `${request.id}.json`)
   await fsp.mkdir(path.dirname(filePath), { recursive: true })

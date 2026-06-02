@@ -3276,7 +3276,21 @@ git commit -m "refactor: quarantine release proof fixtures outside runtime"
 **Files:**
 - Modify: `internal/audits/flow-audit.md`
 
-- [ ] **Step 1: Full verification**
+- [x] **Step 1: Full verification**
+
+  - Evidence: `pnpm typecheck` passed on the final tree.
+  - Evidence: `pnpm test` passed on the final tree: `303` files passed, `1`
+    skipped; `3561` tests passed, `3` skipped.
+  - Evidence: `pnpm lint:deps` exited `0` with `0` errors and the existing
+    `56` no-orphans warnings; the temporary browser-to-runtime relative import
+    was replaced with the explicit browser-safe `@guildhall/levers/profiles`
+    subpath before this pass.
+  - Evidence: `pnpm lint:reductions` passed.
+  - Evidence: `pnpm lint:design` passed.
+  - Evidence: `pnpm build` passed and produced `dist/cli.js`,
+    `dist/web/app.js`, `dist/web/app.css`, and `dist/release-manifest.json`.
+  - Evidence: `pnpm dev:install` passed and installed the current branch
+    artifact at `/Users/matthew/.local/bin/guildhall`.
 
 Run:
 
@@ -3300,7 +3314,36 @@ Expected:
 - Build passes.
 - Dev install succeeds.
 
-- [ ] **Step 2: Live service proof**
+- [x] **Step 2: Live service proof**
+
+  - Evidence: restarted the installed service with `guildhall stop` and
+    `guildhall start`.
+  - Evidence: `curl -s http://localhost:7777/api/stale-server` returned
+    `"stale":false` for
+    `/Users/matthew/.guildhall/app/0.9.1/app/dist/cli.js`.
+  - Evidence: opened
+    `http://localhost:7777/projects/narrative-harness` in the in-app browser.
+    Settings opened to `Ready to start?` and exposed only `Ready`,
+    `Providers`, `Coordinators`, `Identity`, `Profile`, and `Developer`.
+  - Evidence: the Settings snapshot did not expose the old cockpit nouns
+    `Learning`, `Re-intake`, `Design feedback`, or `Project graph`; raw
+    behavior levers remain developer-facing rather than owner-default.
+  - Evidence: the Overview/Needs You snapshot showed required-migration and
+    triage alerts, including `0.10.0/task-hierarchy-links` and
+    `0.10.0/task-open-questions-to-bounded-chat`, not local answer cards.
+  - Evidence: the Structure tab owned `Structural map` and `Project graph` and
+    stated `Thread owns the discussion`; it provided an `Open Threads` action
+    instead of embedding question state locally.
+  - Evidence: the Work tab showed the required hierarchy migration blocker and
+    no visible `Parent task` copy.
+  - Evidence: Narrative Harness is intentionally still pre-migration, so live
+    converted owner-input sessions were not created in that checkout. The live
+    proof is the required migration block; converted owner-input/bounded-chat
+    behavior is covered by the green owner-input, thread, inbox, orchestrator,
+    migration, and settings tests.
+  - Evidence: starting work is blocked by the required migration on this old
+    queue, so the live app cannot dispatch unrelated ready work before the
+    hierarchy conversion runs.
 
 Restart the installed service, then verify freshness:
 
@@ -3332,7 +3375,11 @@ Browser proof checklist:
 - Starting a containing work item does not dispatch unrelated ready work.
 - Required migrations appear when an old queue has old shapes.
 
-- [ ] **Step 3: Update `artifact:flow-audit`**
+- [x] **Step 3: Update `artifact:flow-audit`**
+
+  - Evidence: updated `internal/audits/flow-audit.md` Current Follow-Ups with
+    the plan path, migration evidence, verification commands, live browser
+    proof, and remaining reduction candidates.
 
 Update `internal/audits/flow-audit.md` under Current Follow-Ups with:
 

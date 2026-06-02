@@ -774,6 +774,33 @@ function uniqueTaskId(existingIds: Set<string>, suggested: string): string {
   throw new Error(`Cannot allocate unique id for ${suggested}`)
 }
 
+function normalizeImportedTaskDomain(
+  domain: string,
+  coordinatorProjectPaths?: Record<string, string>,
+): string {
+  const trimmed = domain.trim()
+  if (!trimmed || !coordinatorProjectPaths) return domain
+  if (Object.hasOwn(coordinatorProjectPaths, trimmed)) return trimmed
+
+  const normalizedDomain = normalizeDomainRouteKey(trimmed)
+  const matchedKey = Object.keys(coordinatorProjectPaths)
+    .sort((left, right) => right.length - left.length)
+    .find((key) => {
+      const normalizedKey = normalizeDomainRouteKey(key)
+      return normalizedDomain === normalizedKey || normalizedDomain.startsWith(`${normalizedKey} `)
+    })
+  return matchedKey ?? domain
+}
+
+function normalizeDomainRouteKey(value: string): string {
+  return value
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+}
+
 async function evidenceSourcesForParsedTasks(
   projectPath: string,
   tasks: readonly ParsedTask[],
@@ -984,11 +1011,12 @@ export async function approveWorkspaceImport(
   let tasksAdded = 0
   for (const [index, t] of materializedTasks.entries()) {
     const id = allocatedTaskIds[index] ?? t.id
+    const domain = normalizeImportedTaskDomain(t.domain, input.coordinatorProjectPaths)
     const taskProjectPath =
-      input.coordinatorProjectPaths?.[t.domain] ??
+      input.coordinatorProjectPaths?.[domain] ??
       resolveTaskProjectPath({
         workspaceProjectPath: input.projectPath,
-        domain: t.domain,
+        domain,
       })
     const normalizedDescription = normalizeImportedDescriptionForTask(
       t.description,
@@ -1003,7 +1031,7 @@ export async function approveWorkspaceImport(
       id,
       title: t.title,
       description: normalizedDescription,
-      domain: t.domain,
+      domain,
       projectPath: taskProjectPath,
       // Import approval means "yes, keep this as a candidate draft", not
       // "this already has a complete task brief/spec." Imported notes become
