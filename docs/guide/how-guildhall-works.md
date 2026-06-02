@@ -12,24 +12,17 @@ start with [Start here](./quick-start). Come back when you want to know why
 Guildhall cares about blueprints, gates, context packets, and all the other
 nouns it keeps politely placing on the table.
 
-Each run pulls from a few kinds of state:
+The quick version: Guildhall keeps three things visible.
 
-1. **Project state**: the registered project, `./guildhall.yaml`, provider setup,
-   required migrations, local commands, memory files, and current task queue.
-2. **Planning state**: project goals, task blueprints, owner-input sessions,
-   acceptance criteria, out-of-scope boundaries, and change orders.
-3. **Structure state**: the structural map, project graph, domain ownership,
-   related local projects, provider/consumer requests, and any shared surface
-   contracts that shape the work.
-4. **Codebase orientation**: the [Corpus Map](./corpus-map) and likely target files that point
-   helpers toward existing modules, helpers, components, design tokens, tests,
-   conventions, and governance packets.
-5. **Execution state**: active worktree, checkpoint, previous attempts,
-   verification output, and unresolved reviewer feedback.
-6. **Inspection state**: reviewer rubrics, guild specialists, gate results,
-   current work closure, contract-fit checks, and your decisions.
-7. **Learning state**: project habits and cross-project preferences that can be
-   accepted, ignored, or scoped.
+- **What are we trying to do?** The task blueprint, owner decisions,
+  acceptance criteria, and boundaries.
+- **Where does this work belong?** The repo structure, project graph, likely
+  files, shared contracts, and existing abstractions.
+- **Can we trust the result?** Checkpoints, review notes, gate results,
+  receipts, and closure state.
+
+That is most of the product. The details underneath are there so the app can
+make better calls without asking you to keep a mental corkboard.
 
 ## The guild
 
@@ -80,38 +73,31 @@ this mandatory process cathedral."
 
 ## Structure, ownership, and contracts
 
-Guildhall now keeps more of the project shape in one place instead of asking
-each screen or agent to invent its own view.
+Structure is Guildhall's map room.
 
-The **structural map** describes what is in the repo: packages, domains,
-executable units, authority roots, and cross-cutting concerns. It is the local
-map of the codebase and project materials.
+The **structural map** says what is in the repo: packages, domains, runnable
+units, Git roots, and cross-cutting areas.
 
-The **project graph** describes who owns what and how work moves between
-projects or domains. A graph can include the current project, related local
-Guildhall projects, domains, packages, external references, and delivery
-channels. When one project needs work from another, Guildhall treats that as a
-provider/consumer request. The provider shapes and delivers the work; the
-consumer still reviews it in its own project before the edge is resolved.
+The **project graph** says who owns what. That matters when the current project
+needs work from another local project or provider-owned domain. Guildhall can
+track that as a provider/consumer request: the provider delivers, the consumer
+checks the result, and the edge is not resolved until the consumer accepts it.
 
-The next layer is a **contract surface**: a reusable surface such as a component
-API, public endpoint, event stream, state machine, MCP resource, schema, design
-system, or domain capability. Individual specs can touch one part of that
-surface, but Guildhall needs to reason about the whole thing too. A Button spec
-should fit the component API contract. An endpoint spec should fit the API
-contract. A design-system change should fit the token and variant contract.
+The **contract surface** is the shared shape a task has to fit. For a component
+library, that might be prop names and variant rules. For an API, it might be
+endpoint names, errors, auth, and versioning. For a design system, it is tokens,
+primitive components, and when each variant is allowed.
 
-That is why contract review packets matter. When a task touches a durable
-surface, the packet can show sibling specs, existing rules, known decisions,
-affected consumers, proposed changes, and proof obligations. The first practical
-version of this is already visible in design-governance packets: agents see the
-token authority, component authority, duplicate primitive families, variant
-risks, and reviewer checks before they add another local card, button, chip, or
-style rule.
+So when a spec touches a durable surface, Guildhall can show a contract packet:
+what rules already exist, what sibling specs depend on them, what the current
+task wants to change, and what proof should exist before reviewers accept it.
+The first everyday version is design governance: before an agent adds another
+local card, chip, button, or style rule, it sees which tokens and components
+already own that job.
 
-The owner-facing home for this kind of review is **Structure**, with discussion
-routed back to Thread when your judgment is needed. Settings stays focused on
-configuration and readiness.
+You see this work in **Structure**. If Guildhall needs your judgment, the
+conversation happens in Thread. Settings stays boring on purpose: readiness,
+providers, identity, profiles, and the knobs you actually asked to see.
 
 ## Making good output more likely
 
