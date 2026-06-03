@@ -652,6 +652,72 @@ describe('ThreadTab', () => {
     expect(selectedThread().queryByText('Guildhall is cleaning up task intake.')).toBeNull()
   })
 
+  it('opens a routed bounded-chat prompt directly on compact Thread even when many threads exist', async () => {
+    installViewportMatchMedia(640)
+    installBrowserFakes('/projects/looma-knit/thread?thread=bc-new-thread-1')
+    const manyDrafts = Array.from({ length: 14 }, (_, index) =>
+      importedDraftTurn({
+        id: `draft-hidden-${index}`,
+        taskId: `task-hidden-${index}`,
+        taskTitle: `Knit backlog item ${index + 1}`,
+        taskDescription: `Old imported note ${index + 1} should stay in the thread list.`,
+      }),
+    )
+    installFetchFakes([
+      ...manyDrafts,
+      boundedChatTurn({
+        question: {
+          id: 'request-scope',
+          prompt: 'What should Guildhall shape first for Looma + Knit?',
+          why: 'This answer starts the bounded setup conversation.',
+          evidence: [],
+        },
+      }),
+    ], 'draft-hidden-0')
+
+    render(ThreadTab)
+
+    const selected = await screen.findByRole('region', { name: 'Selected thread' })
+    expect(within(selected).getByText('What should Guildhall shape first for Looma + Knit?')).toBeTruthy()
+    expect(within(selected).getByPlaceholderText('Answer with a sentence or short paragraph. Include constraints or success measures if they matter.')).toBeTruthy()
+    expect(document.querySelector('.thread-compact-detail')).toBeTruthy()
+  })
+
+  it('renders first-spec setup with fresh setup copy and no impossible age', async () => {
+    installFetchFakes([
+      setupTurn({
+        id: 'setup:firstTask',
+        stepId: 'firstTask',
+        at: '1970-01-01T00:00:00.000Z',
+        title: 'Name this project',
+        why: 'Guildhall needs a stable project identity before it can manage work.',
+        affordance: 'inline-text',
+        actionLabel: 'Start shaping',
+        submitEndpoint: '/api/project/intake',
+        placeholder: 'Describe the product idea or first outcome',
+        currentValue: '',
+      }),
+      pressureTestQuestionTurn({
+        id: 'pressure-test:pti-commerce-old-setup:old-success-question',
+        intakeId: 'pti-commerce-old-setup',
+        targetTitle: 'Commerce Project project setup',
+        question: {
+          id: 'old-success-question',
+          prompt: 'What outcome would make this old pressure test successful?',
+          why: 'This stale question predates first-spec setup.',
+          evidence: [],
+        },
+      }),
+    ], 'setup:firstTask')
+
+    render(ThreadTab)
+
+    await selectedThread().findByPlaceholderText('Describe the product idea or first outcome')
+    expect(selectedThread().getByText('Shape the first spec')).toBeTruthy()
+    expect(selectedThread().queryByText('Name this project')).toBeNull()
+    expect(screen.queryByText(/\b20\d{3}d\b/)).toBeNull()
+  })
+
   it('renders bounded-chat turns with the dedicated conversation panel instead of the old question card', async () => {
     installFetchFakes([
       boundedChatTurn({

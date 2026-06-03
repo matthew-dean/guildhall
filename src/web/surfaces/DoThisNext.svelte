@@ -13,6 +13,7 @@
   import { onEvent } from '../lib/events.js'
   import { nav, path } from '../lib/nav.svelte.js'
   import { projectActionHref, projectFetch } from '../lib/project-routes.js'
+  import type { ProjectActionModel } from '../lib/types.js'
 
   interface InboxItem {
     kind: string
@@ -24,6 +25,7 @@
   }
   let items = $state<InboxItem[]>([])
   let threadTurn = $state<ThreadTurn | null>(null)
+  let actionModel = $state<ProjectActionModel | null>(null)
   let loaded = $state(false)
 
   interface ThreadTurn {
@@ -42,6 +44,18 @@
 
   async function load(): Promise<void> {
     try {
+      const projectRes = await projectFetch('/api/project')
+      if (projectRes.ok) {
+        const projectJson = (await projectRes.json()) as { actionModel?: ProjectActionModel | null }
+        actionModel = projectJson.actionModel ?? null
+        if (actionModel?.primaryAction) {
+          items = []
+          threadTurn = null
+          return
+        }
+      } else {
+        actionModel = null
+      }
       const inboxRes = await projectFetch('/api/project/inbox')
       if (inboxRes.ok) {
         const j = (await inboxRes.json()) as { items?: InboxItem[] }
@@ -165,6 +179,21 @@
     moreHref: string
   }
 
+  const modelPrimary = $derived(actionModel?.primaryAction ?? null)
+  const modelSecondaryActions = $derived(actionModel?.secondaryActions ?? [])
+  const modelSource = $derived<TopSource | null>(
+    modelPrimary
+      ? {
+          verb: modelPrimary.label ?? 'Open project action',
+          why: modelPrimary.detail ?? '',
+          button: modelPrimary.buttonLabel ?? 'Open',
+          href: projectActionHref(modelPrimary.href ?? '/overview'),
+          severity: modelPrimary.tone === 'danger' ? 'high' : modelPrimary.tone === 'warn' ? 'medium' : 'low',
+          moreLabel: modelSecondaryActions.length === 1 ? '1 more in Inbox ›' : `${modelSecondaryActions.length} more in Inbox ›`,
+          moreHref: projectActionHref('/overview/inbox'),
+        }
+      : null,
+  )
   const prescribedItems = $derived.by(() => items.map(item => ({ item, prescription: prescribe(item) })))
   const visibleItems = $derived.by(() =>
     prescribedItems.filter(({ prescription }) => routeOnly(projectActionHref(prescription.href)) !== path.value),
@@ -180,7 +209,7 @@
     }
     return moreItems.length === 1 ? '1 more in Inbox ›' : `${moreItems.length} more in Inbox ›`
   })
-  const source = $derived<TopSource | null>(
+  const fallbackSource = $derived<TopSource | null>(
     actionableItems[0]
         ? (() => {
             const top = actionableItems[0]!
@@ -206,6 +235,7 @@
             }
           : null,
   )
+  const source = $derived(modelSource ?? fallbackSource)
   const tone = $derived<'default' | 'warn'>(
     source?.severity === 'high'
       ? 'warn'
@@ -213,7 +243,7 @@
         ? 'warn'
         : 'default',
   )
-  const moreCount = $derived(visibleItems.length - 1)
+  const moreCount = $derived(modelSource ? modelSecondaryActions.length : visibleItems.length - 1)
 
   function go(href: string) {
     const next = projectActionHref(href)

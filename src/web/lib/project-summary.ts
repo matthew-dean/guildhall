@@ -183,6 +183,13 @@ function completedLabel(project: ServiceProjectSummary, counts: ProjectCardSumma
 }
 
 function nextLabel(project: ServiceProjectSummary, counts: ProjectCardSummary['counts']): string | null {
+  const primary = project.actionModel?.primaryAction
+  if (primary) {
+    return primary.detail ?? primary.label
+  }
+  if (project.actionModel?.runControl?.startEnabled === false) {
+    return project.actionModel.runControl.disabledReason ?? project.actionModel.runControl.label
+  }
   if (project.startReadiness?.canStart === false) {
     if (project.startReadiness.code === 'required_migration_pending') return 'Run required migration'
     if (project.startReadiness.code === 'owner_input_required') return project.startReadiness.message ?? 'Answer project blocker'
@@ -301,7 +308,10 @@ export function summarizeProjectCard(
   const running = project.run?.status === 'running'
   const initializationNeeded = Boolean(project.initializationNeeded)
   const maturityState = maturity(project, counts)
-  const startBlocked = project.startReadiness?.canStart === false
+  const runControl = project.actionModel?.runControl ?? null
+  const startBlocked = runControl
+    ? !running && runControl.startEnabled === false
+    : project.startReadiness?.canStart === false
   const projectCheckIn = startBlocked ? undefined : project.projectCheckIn
   const gitStory = project.gitStory &&
     project.gitStory.state &&
@@ -367,17 +377,21 @@ export function summarizeProjectCard(
         ? 'Stop'
         : startBlocked
           ? null
+        : runControl?.label && runControl.label !== 'Start work'
+          ? runControl.label
         : counts.active > 0
           ? 'Resume'
           : counts.total === 0
             ? 'Start intake'
             : null,
     canOpen: true,
-    canStart: !running &&
-      !initializationNeeded &&
-      !startBlocked &&
-      (counts.active > 0 || counts.total === 0) &&
-      !(counts.draftReview > 0 && counts.active === 0),
+    canStart: runControl
+      ? !running && !initializationNeeded && runControl.startEnabled
+      : !running &&
+        !initializationNeeded &&
+        !startBlocked &&
+        (counts.active > 0 || counts.total === 0) &&
+        !(counts.draftReview > 0 && counts.active === 0),
     canStop: running,
     gitStory,
   }

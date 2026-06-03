@@ -780,6 +780,51 @@ describe('ProjectView', () => {
     expect(topbar).not.toHaveTextContent('Start work')
   })
 
+  it('uses the shared action model to block Start during first-spec setup', async () => {
+    const setupDetail = detail({
+      startReadiness: { canStart: true },
+      tasks: [],
+      actionModel: {
+        primaryAction: {
+          source: 'owner_input',
+          label: 'Answer in Thread',
+          detail: 'Guildhall needs setup direction before it creates work.',
+          buttonLabel: 'Open Thread',
+          href: '/thread',
+          tone: 'warn',
+        },
+        secondaryActions: [],
+        runControl: {
+          label: 'Waiting on setup',
+          startEnabled: false,
+          disabledReason: 'Guildhall needs setup direction before it creates work.',
+          href: '/thread',
+        },
+        ownerInput: {
+          active: true,
+          label: 'Answer in Thread',
+          detail: 'Guildhall needs setup direction before it creates work.',
+          href: '/thread',
+        },
+        setup: {
+          state: 'blocked',
+          freshIntakeNeeded: false,
+          href: '/thread',
+          detail: 'Guildhall needs setup direction before it creates work.',
+        },
+      },
+    })
+    installFetchFakes(setupDetail)
+    await renderProjectView('overview', null, 'looma-knit', setupDetail)
+
+    const topbar = document.querySelector('header.topbar')
+    expect(topbar).not.toBeNull()
+    expect(topbar).toHaveTextContent('Waiting on setup')
+    const start = screen.getByRole('button', { name: /guildhall needs setup direction/i })
+    expect(start).toBeDisabled()
+    expect(screen.queryByRole('button', { name: /start work/i })).not.toBeInTheDocument()
+  })
+
   it('collapses topbar labels before the project toolbar wraps', async () => {
     installViewportMatchMedia(680)
 

@@ -291,3 +291,14 @@ browser proof on Narrative Harness Thread and Structure showed no raw
 Structure. Screenshots captured under `docs/assets/ui-audit/0-10-0/`.
 
 source: codex:0.10-readiness-integration
+## 2026-06-03T13:23:51.852Z MCP evidence for 0.10.0/readiness-integration
+
+Task drawer/release integrity slice landed in isolated worktree feature/flow-audit-task-drawer-integrity. Regression coverage added for Narrative Harness canned split suppression, Font Something incomplete spec-review approval qualification, and Fair Labor License completed-task unresolved escalation hygiene. Verification passed: pnpm vitest run src/web/surfaces/__tests__/TaskDrawer.svelte.test.ts src/web/surfaces/project/__tests__/ReleaseTab.svelte.test.ts --reporter=dot (57 tests) and pnpm typecheck.
+
+source: worker:flow-audit-task-drawer-integrity
+
+## 2026-06-03T13:32:45.000Z MCP evidence for 0.10.0/readiness-integration
+
+Merged the remaining 2026-06-03 flow-audit worktree fixes into the main worktree: shared project action model and cached service/project payload reuse, bounded-chat focus routing, task drawer integrity checks, and 0.10 project graph/structure clarity. Verification passed after merge: focused Vitest suites for action model, DoThisNext, ProjectOverviewTab, ProjectView, project-summary, TaskDrawer, ReleaseTab, ProjectStructurePanel, SettingsTab structure, Thread runtime, and ThreadTab; `pnpm typecheck`; `git diff --check`; `pnpm build`; `pnpm dev:install`; service restart; and `/api/stale-server` returned `stale:false` on pid `6339`.
+
+source: codex:flow-audit-merged-integration

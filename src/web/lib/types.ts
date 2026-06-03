@@ -916,6 +916,45 @@ export interface StartReadiness {
   actionHref?: string
 }
 
+export type ProjectActionSource = 'owner_input' | 'start_readiness' | 'task' | 'inbox' | 'thread' | 'none'
+export type ProjectActionTone = 'neutral' | 'accent' | 'warn' | 'danger' | 'running'
+
+export interface ProjectAction {
+  source?: ProjectActionSource | string
+  label?: string
+  detail?: string
+  content?: string
+  buttonLabel?: string
+  href?: string
+  tone?: ProjectActionTone | string
+  code?: string
+  taskId?: string
+  inboxKind?: string
+}
+
+export interface ProjectActionModel {
+  primaryAction?: ProjectAction | null
+  secondaryActions?: ProjectAction[]
+  runControl?: {
+    label?: string
+    startEnabled?: boolean
+    disabledReason?: string
+    href?: string
+  }
+  ownerInput?: {
+    active?: boolean
+    label?: string
+    detail?: string
+    href?: string
+  }
+  setup?: {
+    state?: 'ready' | 'blocked' | 'fresh_intake_needed' | string
+    freshIntakeNeeded?: boolean
+    href?: string
+    detail?: string
+  }
+}
+
 export interface ProjectMigrationStatusItem {
   id: string
   title: string
@@ -1037,6 +1076,7 @@ export interface ProjectDetail {
   structuralMapReview?: StructuralMapReviewSummary | null
   gitStory?: GitStorySummary | null
   startReadiness?: StartReadiness | null
+  actionModel?: ProjectActionModel | null
   bootstrapStatus?: BootstrapStatus
   recentEvents?: EventEnvelope[]
   error?: string
@@ -1074,6 +1114,7 @@ export interface ServiceProjectSummary {
   providerStatus?: ProviderStatus | null
   gitStory?: GitStorySummary | null
   startReadiness?: StartReadiness | null
+  actionModel?: ProjectActionModel | null
   projectCheckIn?: {
     needed?: boolean
     label?: string

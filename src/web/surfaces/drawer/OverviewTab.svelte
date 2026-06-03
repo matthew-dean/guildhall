@@ -11,6 +11,7 @@
   import { currentTaskHref } from '../../lib/project-routes.js'
   import { roleLabel } from '../../lib/escalation-labels.js'
   import { readableTaskDescription } from '../../lib/task-display.js'
+  import { projectDerivedRecommendedChildren } from '../../lib/task-drawer-integrity.js'
   import type { Task } from '../../lib/types.js'
 
   interface Props {
@@ -33,7 +34,7 @@
   const reviewPlan = $derived(task.reviewPlan ?? null)
   const requestIntake = $derived(task.requestIntake ?? null)
   const latestCheckpoint = $derived(task.latestCheckpoint ?? null)
-  const recommendedChildren = $derived(sizePlan?.recommendedChildren ?? [])
+  const recommendedChildren = $derived(projectDerivedRecommendedChildren(task))
   const taskDescription = $derived(readableTaskDescription(task.description, task.title) || '(no description)')
   const createdChildren = $derived(recommendedChildren.filter((child) => child.createdTaskId))
   const containingWorkId = $derived(task.hierarchy?.parentId ?? null)

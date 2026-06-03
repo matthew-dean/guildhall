@@ -35,6 +35,7 @@
   import { activeEscalations } from '../lib/escalation.js'
   import { escalationPrimaryAction, escalationUserGuidance } from '../lib/escalation-labels.js'
   import { readableTaskDescription } from '../lib/task-display.js'
+  import { unresolvedCompletionEscalations } from '../lib/task-drawer-integrity.js'
 
   type RuntimeDevServerStatus = 'starting' | 'running' | 'stopped' | 'failed' | 'stale'
   interface RuntimeDevServer {
@@ -533,7 +534,9 @@
   const isShelved = $derived(task?.status === 'shelved')
   const isWorkspaceImportTask = $derived(task?.id === 'task-workspace-import')
   const openEscalations = $derived(task ? activeEscalations(task) : [])
-  const firstOpenEscalation = $derived(openEscalations[0] ?? null)
+  const completionEscalations = $derived(task ? unresolvedCompletionEscalations(task) : [])
+  const hasCompletionEscalationHygieneWarning = $derived(completionEscalations.length > 0)
+  const firstOpenEscalation = $derived(hasCompletionEscalationHygieneWarning ? null : (openEscalations[0] ?? null))
   const projectStartBlocker = $derived(
     project.detail?.startReadiness?.canStart === false
       ? project.detail.startReadiness
@@ -577,6 +580,15 @@
         eyebrow: 'Containing work',
         title: 'Work happens in the nested work below.',
         detail: 'Open Overview to move through the linked work.',
+      }
+    }
+    if (hasCompletionEscalationHygieneWarning) {
+      const firstEscalation = completionEscalations[0]
+      return {
+        tone: 'warn',
+        eyebrow: 'Completion hygiene',
+        title: 'This task is marked done but still has unresolved escalation history.',
+        detail: firstEscalation?.summary ?? 'Review the unresolved escalation before treating the completion as clean.',
       }
     }
     if (task.terminalSummary?.headline) {

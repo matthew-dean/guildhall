@@ -1591,6 +1591,80 @@ describe('buildThread', () => {
       expect(activeSetup.why).toMatch(/rough idea into a product brief/i)
       expect(activeSetup.actionLabel).toBe('Start shaping')
       expect(activeSetup.placeholder).toBe('Describe the product idea or first outcome')
+      expect(Date.parse(activeSetup.at)).toBeGreaterThan(Date.parse('2026-01-01T00:00:00.000Z'))
+    } finally {
+      await rm(projectPath, { recursive: true, force: true })
+    }
+  })
+
+  it('keeps fresh first-spec setup ahead of stale pressure-test questions', async () => {
+    const projectPath = await mkdtemp(path.join(tmpdir(), 'guildhall-thread-'))
+    try {
+      await mkdir(path.join(projectPath, '.guildhall'), { recursive: true })
+      await writeFile(
+        path.join(projectPath, '.guildhall', 'TASKS.json'),
+        JSON.stringify({ tasks: [] }),
+      )
+      const snapshot: ProjectSnapshot = {
+        projectPath,
+        config: {
+          id: 'commerce-project',
+          name: 'Commerce Project',
+          bootstrap: { verifiedAt: '2026-06-03T06:00:00.000Z' },
+          coordinators: [{ id: 'project-implementation', name: 'Project Implementation' }],
+        },
+        bootstrapVerified: true,
+        hasProvider: true,
+        hasDirection: true,
+        workspaceImportReviewed: true,
+        taskCount: 0,
+        wizardState: emptyWizardsState(),
+      }
+
+      const thread = buildThread({
+        projectPath,
+        snapshot,
+        pressureTestIntakes: [{
+          id: 'pti-commerce-old-setup',
+          rawRequest: 'Pressure-test Commerce Project project setup.',
+          target: { type: 'project', id: 'commerce-project', title: 'Commerce Project project setup' },
+          status: 'active',
+          activeDomainId: 'product-goals',
+          pendingQuestion: {
+            id: 'old-success-question',
+            domainId: 'product-goals',
+            prompt: 'What outcome would make this old pressure test successful?',
+            why: 'This stale question predates the first-spec setup path.',
+            evidence: ['internal/old-audit.md'],
+            askedAt: '2026-05-01T00:00:00.000Z',
+          },
+          domains: [{
+            id: 'product-goals',
+            title: 'Product goals',
+            whyItMatters: 'This stale question predates the first-spec setup path.',
+            status: 'active',
+            knownFacts: [],
+            openUnknowns: [],
+            askedQuestions: [],
+            followUpCandidates: [],
+            closeoutAsked: false,
+          }],
+          outputs: { assumptions: [], decisions: [], languageMapCandidates: [], taskSplitCandidates: [] },
+          createdAt: '2026-05-01T00:00:00.000Z',
+          updatedAt: '2026-05-01T00:00:00.000Z',
+        }],
+      })
+
+      expect(thread.activeTurnId).toBe('setup:firstTask')
+      expect(thread.turns.find(turn => turn.id === 'setup:firstTask')).toMatchObject({
+        kind: 'setup_step',
+        status: 'active',
+        title: 'Shape the first spec',
+      })
+      expect(thread.turns.find(turn => turn.id === 'pressure-test:pti-commerce-old-setup:old-success-question')).toMatchObject({
+        kind: 'pressure_test_question',
+        status: 'pending',
+      })
     } finally {
       await rm(projectPath, { recursive: true, force: true })
     }

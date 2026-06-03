@@ -63,6 +63,7 @@
         highlights: project.highlights,
         run: project.run,
         startReadiness: project.startReadiness,
+        actionModel: project.actionModel,
         providerStatus: project.providerStatus,
         gitStory: project.gitStory,
         projectCheckIn: project.projectCheckIn,

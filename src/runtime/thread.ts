@@ -437,6 +437,19 @@ function isHumanOwnedActiveTurn(turn: ThreadTurn): boolean {
   }
 }
 
+function isStaleSetupPressureQuestion(turn: PressureTestQuestionTurn): boolean {
+  return /\bsetup\b/i.test([
+    turn.targetTitle,
+    turn.domainTitle,
+    turn.question.prompt,
+    turn.question.why,
+  ].join(' '))
+}
+
+function hasActiveBoundedChatTurn(turns: ThreadTurn[]): boolean {
+  return turns.some(turn => turn.kind === 'bounded_chat' && turn.status === 'active')
+}
+
 function hasSpecDraftContent(task: Pick<Task, 'spec' | 'acceptanceCriteria'>): boolean {
   return (
     typeof task.spec === 'string' &&
@@ -963,6 +976,17 @@ function setupCurrentValue(stepId: string, snap: ProjectSnapshot, projectPath: s
   } catch {
     return guessedProjectDirection(projectPath)
   }
+}
+
+function setupStepTimestamp(stepId: string, status: TurnStatus, snap: ProjectSnapshot): string {
+  if (stepId === 'firstTask' && status !== 'done') {
+    const bootstrapAt = snap.config?.bootstrap?.verifiedAt
+    if (typeof bootstrapAt === 'string' && Number.isFinite(Date.parse(bootstrapAt))) {
+      return bootstrapAt
+    }
+    return new Date().toISOString()
+  }
+  return new Date(0).toISOString()
 }
 
 function taskCountSummary(tasks: Task[]): string {
@@ -1646,9 +1670,9 @@ export function buildThread(opts: BuildThreadOptions): Thread {
     activeSetupStepId === 'routing' &&
     (metaIntakeDraftReady || (metaIntakeInProgress && !setupStillBlockingMetaIntake))
   let activeAssigned = false
-  // Synthetic timestamps so setup steps order-deterministically before any
-  // real task turns. Using epoch=0 + minute offsets keeps sort stable.
-  const setupBase = new Date(0).toISOString()
+  // Most setup steps use synthetic timestamps so they sort before real task
+  // history. Fresh first-spec setup is user-facing active work, so it gets a
+  // real timestamp instead of rendering as decades old.
   for (const step of onboardProgress.steps) {
     const status: TurnStatus =
       step.status === 'done'
@@ -1670,7 +1694,7 @@ export function buildThread(opts: BuildThreadOptions): Thread {
     turns.push({
       kind: 'setup_step',
       id: `setup:${step.id}`,
-      at: setupBase,
+      at: setupStepTimestamp(step.id, status, snap),
       persona: 'intake',
       status,
       phase: status === 'done' ? 'done' : 'setup',
@@ -2279,6 +2303,23 @@ export function buildThread(opts: BuildThreadOptions): Thread {
   if (hasHumanOwnedActiveTurn) {
     for (const turn of turns) {
       if (isGuildhallQueuedTurn(turn)) {
+        turn.status = 'pending'
+      }
+    }
+  }
+
+  const activeFirstTaskSetup = turns.find(
+    (turn) => turn.kind === 'setup_step' && turn.stepId === 'firstTask' && turn.status === 'active',
+  )
+  if (activeFirstTaskSetup) {
+    const activePressureQuestions = turns.filter(
+      (turn): turn is PressureTestQuestionTurn => turn.kind === 'pressure_test_question' && turn.status === 'active',
+    )
+    const staleSetupPressureQuestions = activePressureQuestions.filter(isStaleSetupPressureQuestion)
+    if (hasActiveBoundedChatTurn(turns) || (activePressureQuestions.length > 0 && staleSetupPressureQuestions.length === 0)) {
+      activeFirstTaskSetup.status = 'pending'
+    } else {
+      for (const turn of staleSetupPressureQuestions) {
         turn.status = 'pending'
       }
     }

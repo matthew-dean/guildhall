@@ -19,6 +19,7 @@
   import { briefDoneWhenForReaders, briefScopeForReaders } from '../../lib/brief-display.js'
   import { parseReviewerSummarySections, type ReviewerAdvisoryScores } from '../../lib/reviewer-summary.js'
   import { readableTaskDescription } from '../../lib/task-display.js'
+  import { specApprovalNeedsStructuredBrief } from '../../lib/task-drawer-integrity.js'
   import WhyStuck from './WhyStuck.svelte'
   import SpecFillChecklist from './SpecFillChecklist.svelte'
   import SuggestionCard from './SuggestionCard.svelte'
@@ -101,6 +102,7 @@
   )
   const exploring = $derived(task.status === 'exploring')
   const specApprovalPending = $derived(task.status === 'spec_review' && specText.length > 0)
+  const specApprovalNeedsBrief = $derived(specApprovalPending && specApprovalNeedsStructuredBrief(task))
   const needsAcceptance = $derived(exploring && briefApproved && acceptance.length === 0)
 
   // Agent-suggested tasks the user hasn't said "yes" to yet get the
@@ -459,14 +461,19 @@
   {#if specApprovalPending}
     <Card tone="warn">
       {#snippet actions()}
-        <Chip label="Awaiting your approval" tone="warn" />
+        <Chip label={specApprovalNeedsBrief ? 'Brief incomplete' : 'Awaiting your approval'} tone="warn" />
       {/snippet}
       <Stack gap="2">
-        <h3>Spec draft awaiting approval</h3>
-        <p class="lede">Review the draft on this page, then approve it when it matches what you want.</p>
-        <Row justify="end">
-          <Button variant="primary" disabled={busy} onclick={onApproveSpec}>Approve spec</Button>
-        </Row>
+        {#if specApprovalNeedsBrief}
+          <h3>Spec needs brief details first</h3>
+          <p class="lede">Add the missing success target and structured acceptance criteria before approval can mean the task is ready.</p>
+        {:else}
+          <h3>Spec draft awaiting approval</h3>
+          <p class="lede">Review the draft on this page, then approve it when it matches what you want.</p>
+          <Row justify="end">
+            <Button variant="primary" disabled={busy} onclick={onApproveSpec}>Approve spec</Button>
+          </Row>
+        {/if}
       </Stack>
     </Card>
   {/if}

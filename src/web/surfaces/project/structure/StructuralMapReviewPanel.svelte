@@ -10,13 +10,22 @@
   import { nav } from '../../../lib/nav.svelte.js'
   import { project } from '../../../lib/project.svelte.js'
   import { projectActionHref } from '../../../lib/project-routes.js'
+  import type { ProjectGraphStore } from './project-graph-store.svelte.js'
+
+  interface Props {
+    store?: ProjectGraphStore
+  }
+
+  let { store }: Props = $props()
 
   const review = $derived(project.detail?.structuralMapReview ?? null)
   const domains = $derived([...(review?.domains ?? []), ...(review?.crossCuttingDomains ?? [])])
+  const graphDomainCount = $derived(store?.structuralDomains().length ?? 0)
   const conflicts = $derived(review?.conflicts ?? [])
   const ignoredGitRoots = $derived(review?.ignoredGitRoots ?? [])
   const state = $derived(review?.state ?? 'missing')
   const stateTone = $derived(state === 'accepted' ? 'ok' : state === 'draft' ? 'warn' : 'neutral')
+  const legacyStateLabel = $derived(state === 'missing' ? 'legacy map missing' : state)
 </script>
 
 <SectionHeader
@@ -27,8 +36,10 @@
   density="compact"
 >
   {#snippet meta()}
-    <StatusPill label={state} tone={stateTone} />
-    <StatusPill label={`${domains.length} domain${domains.length === 1 ? '' : 's'}`} tone={domains.length > 0 ? 'ok' : 'neutral'} />
+    <StatusPill label={legacyStateLabel} tone={stateTone} />
+    {#if review}
+      <StatusPill label={`${domains.length} legacy map domain${domains.length === 1 ? '' : 's'}`} tone={domains.length > 0 ? 'ok' : 'neutral'} />
+    {/if}
   {/snippet}
 </SectionHeader>
 
@@ -38,8 +49,12 @@
   {/snippet}
 
   {#if !review}
-    <NoticeBand tone="neutral" role="note" label="Structural map" title="No map yet" density="compact">
-      <p>Run structural intake or answer the current Thread prompt before assigning project responsibilities.</p>
+    <NoticeBand tone="neutral" role="note" label="Legacy structural map" title="Legacy structural map missing" density="compact">
+      <p>
+        {graphDomainCount > 0
+          ? 'Project graph domains are still available below.'
+          : 'Run structural intake or answer the current Thread prompt before assigning project responsibilities.'}
+      </p>
       {#snippet actions()}
         <Button variant="secondary" size="sm" onclick={() => nav(projectActionHref('/thread'))}>Open Threads</Button>
       {/snippet}

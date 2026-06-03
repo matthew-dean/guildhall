@@ -27,6 +27,43 @@ describe('DoThisNext', () => {
     cleanup()
   })
 
+  it('renders the shared project action model instead of recomputing from inbox', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (input: RequestInfo | URL) => {
+        expect(String(input)).toBe('/api/project?projectId=looma-knit')
+        return json({
+          actionModel: {
+            primaryAction: {
+              source: 'task',
+              label: 'Clean up the Stripe checkout brief',
+              detail: 'Finish the active brief cleanup before reconciling stale discovery.',
+              buttonLabel: 'Open Work',
+              href: '/work',
+              tone: 'warn',
+            },
+            secondaryActions: [{
+              source: 'inbox',
+              label: 'Review project discovery update',
+              detail: 'Review the reconciliation later.',
+              buttonLabel: 'Review update',
+              href: '/workspace-import?mode=reconcile',
+              tone: 'warn',
+            }],
+          },
+        })
+      }),
+    )
+
+    render(DoThisNext)
+
+    await screen.findByText('Clean up the Stripe checkout brief')
+    expect(screen.getByText('Finish the active brief cleanup before reconciling stale discovery.')).toBeTruthy()
+    expect(screen.getByRole('button', { name: /open work/i })).toBeTruthy()
+    expect(screen.getByRole('button', { name: /1 more in inbox/i })).toBeTruthy()
+    expect(screen.queryByText('Review project discovery update')).toBeNull()
+  })
+
   it('prescribes the highest-priority non-current action and keeps project routing', async () => {
     const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
       const url = String(input)

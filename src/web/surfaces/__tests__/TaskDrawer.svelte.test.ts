@@ -295,6 +295,58 @@ describe('TaskDrawer', () => {
     )
   })
 
+  it('suppresses canned split recommendations that do not match the project task', async () => {
+    const payload = drawerPayload({
+      threadTurns: [],
+      task: {
+        ...drawerPayload().task,
+        id: 'hosting-policy-boundary-checks',
+        title: 'Hosting policy boundary checks',
+        description: 'Verify the Narrative Harness hosting policy boundary before implementation.',
+        status: 'spec_review',
+        domain: 'policy',
+        spec: '## Summary\nCheck where the narrative editor hosting policy allows hosted processing and where it must stop.',
+        sizePlan: {
+          taskId: 'hosting-policy-boundary-checks',
+          score: 5,
+          band: 'large',
+          action: 'split_recommended',
+          recommendedChildren: [
+            {
+              title: 'Billing settings workflow',
+              reason: 'Draft the billing settings screens.',
+              suggestedDomain: 'frontend',
+            },
+            {
+              title: 'Admin subscription API contract',
+              reason: 'Define the subscription admin endpoints.',
+              suggestedDomain: 'backend',
+            },
+          ],
+        },
+      },
+    })
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input)
+      if (url.startsWith('/api/project/task/hosting-policy-boundary-checks')) return json(payload)
+      if (url.startsWith('/api/project')) return json(projectDetail())
+      return json({})
+    })
+    vi.stubGlobal('fetch', fetchMock)
+
+    render(TaskDrawer, {
+      taskId: 'hosting-policy-boundary-checks',
+      projectId: 'looma-knit',
+      onClose: vi.fn(),
+    })
+
+    await screen.findByText('Work hierarchy')
+    expect(screen.getByText('Hosting policy boundary checks')).toBeInTheDocument()
+    expect(document.body.textContent).not.toMatch(/billing settings workflow/i)
+    expect(document.body.textContent).not.toMatch(/admin subscription api contract/i)
+    expect(screen.queryByText('Recommended nested work')).not.toBeInTheDocument()
+  })
+
   it('offers a clear action when split-required child tasks have not been created yet', async () => {
     const user = userEvent.setup()
     const payload = drawerPayload({
@@ -1340,6 +1392,45 @@ describe('TaskDrawer', () => {
     expect(screen.getByRole('button', { name: /copy link/i })).toBeTruthy()
   })
 
+  it('warns when a completed task still carries unresolved escalations', async () => {
+    const payload = drawerPayload({ threadTurns: [] })
+    payload.task.status = 'done'
+    payload.task.completedAt = '2026-06-03T12:00:00.000Z'
+    payload.task.terminalSummary = {
+      headline: 'Stripe implementation completed.',
+      detail: 'Implementation landed.',
+    }
+    payload.task.escalations = [
+      {
+        id: 'esc-stripe-live',
+        reason: 'human_judgment_required',
+        summary: 'Stripe live verification still needs dashboard setup.',
+        details: 'Waiting on live Stripe dashboard credentials and webhook verification.',
+        agentId: 'worker-agent',
+        raisedAt: '2026-06-03T11:00:00.000Z',
+      },
+    ]
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input)
+      if (url.startsWith('/api/project/task/task-link-editor')) return json(payload)
+      if (url.startsWith('/api/project')) return json(projectDetail())
+      return json({})
+    })
+    vi.stubGlobal('fetch', fetchMock)
+
+    render(TaskDrawer, {
+      taskId: 'task-link-editor',
+      projectId: 'looma-knit',
+      onClose: vi.fn(),
+    })
+
+    await screen.findByText('Completion hygiene')
+    expect(screen.getByText('This task is marked done but still has unresolved escalation history.')).toBeInTheDocument()
+    expect(screen.getByText(/Stripe live verification still needs dashboard setup/)).toBeInTheDocument()
+    expect(screen.queryByText('Stripe implementation completed.')).toBeNull()
+    expect(screen.queryByRole('button', { name: /^i handled this\.\.\.$/i })).toBeNull()
+  })
+
   it('approves a task spec with an optional note from the drawer footer flow', async () => {
     openDrawerOn('spec')
     const payload = drawerPayload({
@@ -1422,6 +1513,61 @@ describe('TaskDrawer', () => {
     await waitFor(() => {
       expect(fetchMock.mock.calls.some(([input]) => String(input).includes('/approve-spec'))).toBe(true)
     })
+  })
+
+  it('does not offer unqualified spec approval when the structured brief is incomplete', async () => {
+    openDrawerOn('spec')
+    const payload = drawerPayload()
+    payload.task.status = 'spec_review'
+    payload.task.spec = '## Summary\nReview the Font Something variable-font specimen flow.'
+    payload.task.acceptanceCriteria = []
+    payload.task.productBrief = {
+      approvedAt: now,
+      userJob: 'Review the specimen flow.',
+    }
+    payload.threadTurns = []
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input)
+      if (url.startsWith('/api/project/task/task-link-editor/wizards')) {
+        return json({
+          wizards: [
+            {
+              id: 'spec-fill',
+              totalSteps: 4,
+              doneCount: 2,
+              complete: false,
+              activeStepId: 'success',
+              steps: [
+                { id: 'title', title: 'Readable title', why: 'Give this work a name.', status: 'done', skippable: false },
+                { id: 'description', title: 'Starting point', why: 'Name the starting evidence.', status: 'done', skippable: false },
+                { id: 'success', title: 'Success target', why: 'State the target.', status: 'pending', skippable: false },
+                { id: 'acceptance', title: 'Acceptance criteria', why: 'Add checks.', status: 'pending', skippable: false },
+              ],
+            },
+          ],
+        })
+      }
+      if (url.startsWith('/api/project/task/task-link-editor/approve-spec')) {
+        throw new Error('Incomplete spec-review tasks must not expose unqualified approval')
+      }
+      if (url.startsWith('/api/project/task/task-link-editor')) return json(payload)
+      if (url.startsWith('/api/project')) return json(projectDetail())
+      return json({})
+    })
+    vi.stubGlobal('fetch', fetchMock)
+
+    render(TaskDrawer, {
+      taskId: 'task-link-editor',
+      projectId: 'looma-knit',
+      onClose: vi.fn(),
+    })
+
+    await screen.findByText('Task brief checklist')
+    expect(screen.getByText('Success target')).toBeInTheDocument()
+    expect(screen.getByText('Acceptance criteria')).toBeInTheDocument()
+    expect(screen.getByText('Spec needs brief details first')).toBeInTheDocument()
+    expect(screen.getByText(/Add the missing success target and structured acceptance criteria before approval/)).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: /^approve spec$/i })).toBeNull()
   })
 
   it('routes workspace-import approval to the import review surface', async () => {

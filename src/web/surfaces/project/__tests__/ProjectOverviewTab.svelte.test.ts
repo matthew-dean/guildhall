@@ -18,6 +18,71 @@ describe('ProjectOverviewTab', () => {
     vi.restoreAllMocks()
   })
 
+  it('renders the shared primary project action instead of choosing a local inbox winner', () => {
+    render(ProjectOverviewTab, {
+      detail: {
+        id: 'fair-labor-license',
+        name: 'Fair Labor License',
+        path: '/Users/matthew/git/oss/fair-labor-license',
+        tasks: [
+          {
+            id: 'task-stripe-brief',
+            title: 'Clean up the Stripe checkout brief',
+            status: 'ready',
+          },
+        ],
+        startReadiness: { canStart: true },
+        actionModel: {
+          primaryAction: {
+            source: 'task',
+            label: 'Clean up the Stripe checkout brief',
+            detail: 'Finish the active brief cleanup before reconciling stale discovery.',
+            buttonLabel: 'Open Work',
+            href: '/work',
+            tone: 'warn',
+          },
+          secondaryActions: [{
+            source: 'inbox',
+            label: 'Review project discovery update',
+            detail: 'Review the reconciliation later.',
+            buttonLabel: 'Review update',
+            href: '/workspace-import?mode=reconcile',
+            tone: 'warn',
+          }],
+          runControl: {
+            label: 'Start work',
+            startEnabled: true,
+          },
+          ownerInput: { active: false },
+          setup: { state: 'ready', freshIntakeNeeded: false },
+        },
+      },
+      inboxLoaded: true,
+      inboxItems: [
+        {
+          kind: 'project_understanding',
+          severity: 'high',
+          title: 'Review project discovery update',
+          detail: 'Review the reconciliation later.',
+          actionHref: '/workspace-import?mode=reconcile',
+        },
+      ],
+      projectTicker: {
+        label: 'Not running',
+        actorLabel: 'Guildhall',
+        message: 'Project is waiting for owner action.',
+        tone: 'idle',
+        pulse: false,
+      },
+      activeProjectId: 'fair-labor-license',
+    })
+
+    expect(screen.getByRole('heading', { name: 'Clean up the Stripe checkout brief' })).toBeInTheDocument()
+    expect(screen.getByText('Finish the active brief cleanup before reconciling stale discovery.')).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: /open work/i })).toBeInTheDocument()
+    expect(screen.queryByRole('heading', { name: 'Review project discovery update' })).not.toBeInTheDocument()
+  })
+
   it('renders same-task alert inbox items with distinct action hrefs', () => {
     render(ProjectOverviewTab, {
       detail: {

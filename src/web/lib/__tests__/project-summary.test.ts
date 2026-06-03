@@ -146,6 +146,56 @@ describe('summarizeProjects', () => {
     })
   })
 
+  it('uses the cached project action model for card next steps and start gating', () => {
+    const service: ServiceDetail = {
+      projects: [
+        {
+          id: 'commerce',
+          name: 'Commerce Project',
+          path: '/work/commerce',
+          taskCounts: { total: 0, active: 0, draftReview: 0, blocked: 0, done: 0, shelved: 0 },
+          run: { status: 'stopped' },
+          startReadiness: { canStart: true },
+          actionModel: {
+            primaryAction: {
+              source: 'owner_input',
+              label: 'Answer in Thread',
+              detail: 'Shape the first spec before Guildhall creates work.',
+              buttonLabel: 'Open Thread',
+              href: '/thread',
+              tone: 'warn',
+            },
+            secondaryActions: [],
+            runControl: {
+              label: 'Waiting on setup',
+              startEnabled: false,
+              disabledReason: 'Shape the first spec before Guildhall creates work.',
+              href: '/thread',
+            },
+            ownerInput: {
+              active: true,
+              label: 'Answer in Thread',
+              detail: 'Shape the first spec before Guildhall creates work.',
+              href: '/thread',
+            },
+            setup: {
+              state: 'blocked',
+              freshIntakeNeeded: false,
+              href: '/thread',
+              detail: 'Shape the first spec before Guildhall creates work.',
+            },
+          },
+        },
+      ],
+    }
+
+    expect(summarizeProjects(service)[0]).toMatchObject({
+      nextLabel: 'Shape the first spec before Guildhall creates work.',
+      runActionLabel: null,
+      canStart: false,
+    })
+  })
+
   it('normalizes Windows user-profile project paths for display', () => {
     const service: ServiceDetail = {
       projects: [

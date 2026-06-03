@@ -238,6 +238,26 @@
   })
 
   const nextAction = $derived.by(() => {
+    const shared = detail.actionModel?.primaryAction
+    if (shared) {
+      return {
+        label: shared.label ?? 'Open project action',
+        detail: shared.detail ?? '',
+        content: shared.content,
+        button: shared.buttonLabel ?? 'Open',
+        href: shared.href ?? '/overview',
+        tone: shared.tone === 'danger'
+          ? 'danger' as Tone
+          : shared.tone === 'warn'
+            ? 'warn' as Tone
+            : shared.tone === 'running'
+              ? 'running' as Tone
+              : shared.tone === 'accent'
+                ? 'accent' as Tone
+                : 'neutral' as Tone,
+        action: shared.code === 'required_migration_pending' ? 'migration' as NextActionKind : 'navigate' as NextActionKind,
+      }
+    }
     if (detail.startReadiness?.code === 'required_migration_pending') {
       return {
         label: 'Required migration',

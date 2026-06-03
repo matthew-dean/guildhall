@@ -54,6 +54,23 @@
   user is actively testing, not the Guildhall repo root, unless the work is
   specifically about first-run initialization.
 
+## Summary-state and next-action ownership
+
+- Any derived project summary, readiness, next-action, owner-input,
+  release/blocker, inbox, or "what should I do now?" state must be computed in a
+  shared runtime utility or API builder, cached with the project snapshot, and
+  reused by every surface that displays the same concept.
+- Product views must render the shared result. They must not re-rank inbox
+  items, reinterpret `startReadiness`, synthesize competing "Do this next"
+  labels, infer owner-input state from raw thread/task data, or duplicate
+  release/blocker math locally when another view needs the same answer.
+- If a view needs a new presentation of the same state, extend the shared
+  summary/action model with explicit fields for that presentation instead of
+  adding bespoke business logic inside the view.
+- If two surfaces disagree about the next action, readiness, owner input,
+  release blocker, or task-summary status, treat that as a runtime summary-model
+  bug first and a copy/layout bug second.
+
 ## Design-system constitution
 
 - Treat design-system integrity as a first-class product and agent responsibility.

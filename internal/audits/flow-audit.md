@@ -57,6 +57,87 @@ babysit setup/import/provider/release states across multiple pages.
 
 ## Current Follow-Ups
 
+- [x] Harden the 0.10 multi-project flow from the 2026-06-03 installed-app
+  audit. Verification baseline: `pnpm build`, `pnpm dev:install`,
+  `guildhall stop`, LaunchAgent restart, `/api/stale-server` `stale:false`
+  with pid `56925`, and read-only subagent/browser/API passes across Fair
+  Labor License, Font Something, Narrative Harness, Commerce Project, and
+  Looma + Knit. The 0.10 owner-input contract is working best on Looma + Knit:
+  `startReadiness.canStart:false`, `owner_input_required`, and the AlertDialog
+  bounded-chat session is reachable at the action href with an answer composer.
+  The remaining failure is focus: the selected bounded-chat prompt can still be
+  buried behind the huge Thread list, so action hrefs must open the selected
+  bounded-chat detail as the dominant state with the prompt and composer
+  immediately visible. Mixed runnable/shaping projects expose a broader
+  next-action arbitration problem. Fair Labor License can start and has clean
+  git state, but `Do this next` prefers project discovery reconciliation while
+  the clearest safe work is Stripe brief cleanup; the UI also needs to
+  distinguish "Guildhall can continue shaping" from "release/live payment
+  verification still waits on Stripe/OAuth setup." Font Something has import
+  drafts, project check-in, discovery reconciliation, and spec review all
+  competing for the crown; Overview, Work, Thread, and task drawers must
+  converge on one recommended safe owner action, and spec approval must not
+  look unqualified while the brief checklist still reports missing success
+  target or acceptance criteria. Narrative Harness is startable, but Work and
+  Settings still say `Answer in Thread` when the Thread API has no active
+  question/session and Overview says no owner action is blocking; task drawers
+  also leaked unrelated billing/admin split suggestions into a hosting-policy
+  spec. Commerce Project is the fresh-intake regression: zero current tasks,
+  active setup/project questions, dirty git, and pending migrations still show
+  an enabled `Start work`, old pressure-test questions obscure first-spec
+  setup, `setup:firstTask` renders as `Name this project` with an impossible
+  `20607d` age, and stale run history says `No actionable tasks remain: 2 done`
+  beside the current setup path. Cross-cutting fixes from this audit: suppress
+  stale `Answer in Thread` banners unless a live bounded-chat/question exists;
+  make Start name or route to the exact next task/action it will take and block
+  fresh-intake projects behind setup; reconcile current empty task state with
+  old run events; keep completed tasks from retaining unresolved escalations
+  without a supersede receipt; keep old recovery/history chatter out of active
+  owner-input paths; explain Structure's legacy structural-map state separately
+  from the new 0.10 project graph domains; and update New thread/request copy
+  so bounded-chat/new-request language is consistent with the 0.10 model. This
+  must be fixed by centralizing summary and next-action derivation in shared
+  runtime utilities that are cached with the project snapshot and consumed by
+  Overview, Thread, Work, Settings, Release, Projects Home, and task drawers.
+  Views must render that shared action model; they must not independently rank
+  inbox items, reinterpret readiness, infer owner-input state, or synthesize
+  their own competing "next" result from raw task/thread/release data.
+  Closure evidence, 2026-06-03: four isolated worktree slices were merged into
+  the main worktree. The shared `buildProjectActionModel` runtime utility now
+  ships on `/api/project` and `/api/service`, drives `DoThisNext`, Project
+  Overview, Project Home summaries, and ProjectView run controls, and blocks
+  fresh-intake zero-task setup even when raw readiness is permissive. Thread
+  action hrefs now open selected bounded-chat detail/composer in compact mode;
+  first-spec setup no longer inherits stale pressure-test ordering, copy, or
+  impossible ages. Task drawers now suppress unrelated split recommendations,
+  qualify spec approval when success targets/acceptance criteria are missing,
+  and treat completed tasks with unresolved escalations as completion hygiene
+  instead of live recovery. Structure now distinguishes the legacy structural
+  map from 0.10 project graph domains and explains empty dependency graphs with
+  current-project context. Verification after merge:
+  `pnpm vitest run src/runtime/__tests__/project-action-model.test.ts
+  src/web/surfaces/__tests__/DoThisNext.svelte.test.ts
+  src/web/surfaces/project/__tests__/ProjectOverviewTab.svelte.test.ts
+  src/web/surfaces/__tests__/ProjectView.svelte.test.ts --reporter=dot`
+  (`68` tests);
+  `pnpm vitest run src/web/surfaces/__tests__/TaskDrawer.svelte.test.ts
+  src/web/surfaces/project/__tests__/ReleaseTab.svelte.test.ts --reporter=dot`
+  (`57` tests);
+  `pnpm vitest run
+  src/web/surfaces/project/structure/__tests__/ProjectStructurePanel.svelte.test.ts
+  src/web/surfaces/project/settings/__tests__/SettingsTab.structure.test.ts
+  src/web/surfaces/project/__tests__/SettingsTab.svelte.test.ts --reporter=dot`
+  (`12` tests);
+  `pnpm vitest run src/runtime/__tests__/thread.test.ts
+  src/web/surfaces/project/__tests__/ThreadTab.svelte.test.ts --reporter=dot`
+  (`150` tests);
+  `pnpm vitest run src/web/lib/__tests__/project-summary.test.ts
+  src/runtime/__tests__/project-action-model.test.ts
+  src/web/surfaces/__tests__/ProjectView.svelte.test.ts --reporter=dot`
+  (`56` tests); `pnpm typecheck`; `git diff --check`; `pnpm build`;
+  `pnpm dev:install`; service restart via `guildhall stop` and LaunchAgent
+  kickstart; and `/api/stale-server` returned `stale:false` on pid `6339`
+  with process start `2026-06-03T13:34:25.263Z`.
 - [x] Fix the required-migration action affordance and apply feedback. The live
   Narrative Harness modal applied `0.10.0/task-hierarchy-links`, but the next
   blocker immediately replaced the card, making the click look inert; migration

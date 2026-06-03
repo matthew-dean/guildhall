@@ -1303,6 +1303,7 @@
     if (routed && selectedTurnId !== routed) {
       selectedTurnId = routed
       detailShouldStickToBottom = true
+      if (compactThreadMode) compactPane = 'detail'
     } else if (!selectedTurnId || !threadChains.some(chain => chain.id === selectedTurnId)) {
       selectedTurnId = nextSelection
       detailShouldStickToBottom = true
@@ -2442,8 +2443,30 @@
     return `${Math.floor(hours / 24)}d`
   }
 
+  function turnRelativeTime(turn: Turn): string | null {
+    if (turn.kind === 'setup_step') {
+      const parsed = Date.parse(turn.at)
+      if (Number.isFinite(parsed) && parsed < Date.parse('2020-01-01T00:00:00.000Z')) {
+        return null
+      }
+    }
+    return compactRelativeTime(turn.at)
+  }
+
+  function setupStepTitle(turn: SetupStepTurn): string {
+    if (turn.stepId === 'firstTask') return 'Shape the first spec'
+    return turn.title
+  }
+
+  function setupStepWhy(turn: SetupStepTurn): string {
+    if (turn.stepId === 'firstTask') {
+      return 'Turn a rough idea into a product brief, focused questions, and the first buildable spec before implementation work starts.'
+    }
+    return turn.why
+  }
+
   function turnIndexTitle(turn: Turn): string {
-    if (turn.kind === 'setup_step') return turn.title
+    if (turn.kind === 'setup_step') return setupStepTitle(turn)
     if (turn.kind === 'request') return turn.title
     if (turn.kind === 'pressure_test_question') return turn.targetTitle
     if (turn.kind === 'bounded_chat') return turn.targetTitle
@@ -2452,7 +2475,7 @@
   }
 
   function turnIndexSummary(turn: Turn): string {
-    if (turn.kind === 'setup_step') return turn.why
+    if (turn.kind === 'setup_step') return setupStepWhy(turn)
     if (turn.kind === 'request') return turn.routingSummary
     if (turn.kind === 'pressure_test_question') return pressureQuestionWhy(turn)
     if (turn.kind === 'bounded_chat') return pressureQuestionWhy(turn)
@@ -2940,7 +2963,7 @@
           kind: 'pressure_test',
           turn,
           title: 'Reply in thread',
-          description: 'Answer this intake question here to keep the thread moving without opening a separate card form.',
+          description: 'Guildhall needs your answer before it can continue.',
           placeholder: 'Answer with a sentence or short paragraph. Include constraints or success measures if they matter.',
           submitLabel: 'Send',
         }
@@ -3140,8 +3163,8 @@
                   </div>
                   <div class="thread-index-row-top">
                     <strong>{turnIndexTitle(chain.latestTurn)}</strong>
-                    {#if compactRelativeTime(chain.latestTurn.at)}
-                      <span class="thread-index-time">{compactRelativeTime(chain.latestTurn.at)}</span>
+                    {#if turnRelativeTime(chain.latestTurn)}
+                      <span class="thread-index-time">{turnRelativeTime(chain.latestTurn)}</span>
                     {/if}
                   </div>
                   <p>{turnIndexSummary(indexTurn)}</p>
@@ -3215,8 +3238,8 @@
               <div class="thread-chat-bubble thread-chat-bubble-agent">
                 <div class="thread-chat-bubble-head">
                   <strong>Guildhall</strong>
-                  {#if compactRelativeTime(t.at)}
-                    <span>{compactRelativeTime(t.at)}</span>
+                  {#if turnRelativeTime(t)}
+                    <span>{turnRelativeTime(t)}</span>
                   {/if}
                 </div>
                 <p>{historyQuestionPrompt(t)}</p>
@@ -3237,8 +3260,8 @@
               >
                 <div class="thread-event-head">
                   <strong>{historyEventLabel(t) ?? 'Update'}</strong>
-                  {#if compactRelativeTime(t.at)}
-                    <span>{compactRelativeTime(t.at)}</span>
+                  {#if turnRelativeTime(t)}
+                    <span>{turnRelativeTime(t)}</span>
                   {/if}
                 </div>
                 {#if historyEventNeedsSummary(t)}
@@ -3402,12 +3425,12 @@
                   </div>
                 {:else if t.kind === 'setup_step'}
                   <div class="setup-title">
-                    <h3 class="prompt"><Markdown source={t.title} inline /></h3>
+                    <h3 class="prompt"><Markdown source={setupStepTitle(t)} inline /></h3>
                     {#if t.skippable}
                       <Chip label="optional" tone="neutral" />
                     {/if}
                   </div>
-                  <p class="why">{t.why}</p>
+                  <p class="why">{setupStepWhy(t)}</p>
                   {#if t.status === 'active'}
                     {#if t.contextSummary}
                       <UtilityPanel className="setup-context" tone="neutral" ariaLabel="What Guildhall knows right now">

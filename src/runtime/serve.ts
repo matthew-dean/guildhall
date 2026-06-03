@@ -275,6 +275,7 @@ import {
   type RuntimeBackendSetupDetector,
 } from './runtime-backend-setup.js'
 import { buildThread } from './thread.js'
+import { buildProjectActionModel, type ProjectActionModel } from './project-action-model.js'
 import { NodeGitDriver } from './git-driver.js'
 import {
   inspectGitStory,
@@ -484,6 +485,7 @@ interface ServiceProjectSummary {
     error?: string
   }
   projectCheckIn?: ReturnType<typeof summarizeProjectCheckIn> | null
+  actionModel?: ProjectActionModel | null
 }
 
 function humanizeGeneratedProjectName(name: string): string {
@@ -2297,6 +2299,31 @@ export function buildServeApp(opts: ServeOptions = {}): {
           taskCounts = summarizeTaskCounts(tasks)
           taskActivity = summarizeTaskActivity(tasks)
           const gitStory = await buildProjectGitStorySummary(entry.path, tasks as Array<Record<string, unknown>>).catch(() => undefined)
+          const inbox = await buildProjectInboxSnapshot({
+            projectPath: entry.path,
+            initializationNeeded: resolved.initializationNeeded,
+            coordinatorCount: resolved.config?.coordinators?.length ?? 0,
+          }).catch(() => null)
+          const thread = await (async () => {
+            const state = await loadThreadProjectionState(entry.path)
+            return buildThread({
+              projectPath: entry.path,
+              snapshot: state.snapshot,
+              tasks: state.tasks as never,
+              boundedChatSessions: state.boundedChatSessions,
+              pressureTestIntakes: state.pressureTestIntakes,
+              projectCheckInSummary: state.projectCheckInSummary,
+              runStatus: run?.status ?? 'stopped',
+              recentEvents: supervisor.recent(resolved.id, undefined, entry.path),
+            })
+          })().catch(() => null)
+          const actionModel = buildProjectActionModel({
+            startReadiness,
+            inbox,
+            tasks: tasks as never,
+            thread,
+            runStatus: run?.status ?? 'stopped',
+          })
           highlights = {
             activeTaskTitle: latestTaskTitleByStatus(tasks, ['in_progress', 'review', 'gate_check', 'exploring']),
             blockedTaskTitle: latestTaskTitleByStatus(tasks, ['blocked']),
@@ -2311,6 +2338,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
             ...(gitStory ? { gitStory } : {}),
             ...(providerStatus ? { providerStatus } : {}),
             ...(startReadiness ? { startReadiness } : {}),
+            actionModel,
             ...(migrationSummary ? { migrationSummary } : {}),
             projectCheckIn,
             ...(run
@@ -2718,6 +2746,24 @@ export function buildServeApp(opts: ServeOptions = {}): {
         initializationNeeded: project.initializationNeeded,
         coordinatorCount: project.config?.coordinators?.length ?? 0,
       })
+      const threadState = await loadThreadProjectionState(project.path)
+      const thread = buildThread({
+        projectPath: project.path,
+        snapshot: threadState.snapshot,
+        tasks: threadState.tasks as never,
+        boundedChatSessions: threadState.boundedChatSessions,
+        pressureTestIntakes: threadState.pressureTestIntakes,
+        projectCheckInSummary: threadState.projectCheckInSummary,
+        runStatus: run?.status ?? 'stopped',
+        recentEvents: recent,
+      })
+      const actionModel = buildProjectActionModel({
+        startReadiness,
+        inbox,
+        tasks: tasks as never,
+        thread,
+        runStatus: run?.status ?? 'stopped',
+      })
       return c.json({
         initializationNeeded: false,
         id: project.id,
@@ -2744,6 +2790,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
         ...(structuralMapReview ? { structuralMapReview } : {}),
         gitStory,
         startReadiness,
+        actionModel,
         recentEvents: recent,
         ...(bootstrapStatus ? { bootstrapStatus } : {}),
       })

@@ -43,6 +43,18 @@ function installProjectState() {
   }
 }
 
+function installProjectGraph(projectGraph: Record<string, unknown>) {
+  const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+    const url = new URL(String(input), 'http://localhost')
+    if (url.pathname === '/api/project/project-graph') {
+      return json({ projectGraph })
+    }
+    return json({})
+  })
+  vi.stubGlobal('fetch', fetchMock)
+  return fetchMock
+}
+
 describe('ProjectStructurePanel', () => {
   beforeEach(() => {
     installProjectState()
@@ -61,6 +73,81 @@ describe('ProjectStructurePanel', () => {
     expect(settingsSource).not.toMatch(/ProjectGraphView/)
     expect(settingsSource).not.toContain('/api/project/project-graph')
     expect(settingsSource).not.toMatch(/assignmentPicker/)
+  })
+
+  it('distinguishes a missing legacy structural map from project graph domains', async () => {
+    project.detail = {
+      ...project.detail!,
+      structuralMapReview: null,
+    }
+    installProjectGraph({
+      currentProject: { id: 'font-something', label: 'Font Something', path: '/workspace/font-something' },
+      localProjects: [
+        { id: 'font-something', label: 'Font Something', role: 'current', path: '/workspace/font-something' },
+      ],
+      structuralDomains: [
+        {
+          id: 'domain:app',
+          label: 'App',
+          kind: 'coordinator_domain',
+          coordinatorName: 'App coordinator',
+        },
+        {
+          id: 'domain:docs',
+          label: 'Docs',
+          kind: 'coordinator_domain',
+          coordinatorName: 'Docs coordinator',
+        },
+        {
+          id: 'domain:model',
+          label: 'Model',
+          kind: 'coordinator_domain',
+          coordinatorName: 'Model coordinator',
+        },
+      ],
+      domainResponsibilities: [],
+      dependencyEdges: [],
+      contractSurfaces: [],
+    })
+
+    render(ProjectStructurePanel)
+
+    await screen.findByRole('button', { name: /open app domain/i })
+    expect(screen.getByText('Legacy structural map missing')).toBeInTheDocument()
+    expect(await screen.findByText('Project graph domains are still available below.')).toBeInTheDocument()
+    expect(screen.queryByText(/^0 domains$/)).not.toBeInTheDocument()
+    expect(screen.getByRole('button', { name: /open app domain/i })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: /open docs domain/i })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: /open model domain/i })).toBeInTheDocument()
+  })
+
+  it('explains empty dependency graph states in terms of the current project shape', async () => {
+    installProjectGraph({
+      currentProject: { id: 'fair-labor-license', label: 'Fair Labor License', path: '/workspace/fair-labor-license' },
+      localProjects: [
+        { id: 'fair-labor-license', label: 'Fair Labor License', role: 'current', path: '/workspace/fair-labor-license' },
+        { id: 'license-commerce', label: 'License Commerce', role: 'related', path: '/workspace/license-commerce' },
+      ],
+      structuralDomains: [
+        {
+          id: 'domain:licensing',
+          label: 'Licensing',
+          kind: 'coordinator_domain',
+          coordinatorName: 'Licensing coordinator',
+        },
+      ],
+      domainResponsibilities: [],
+      dependencyEdges: [],
+      contractSurfaces: [],
+    })
+
+    render(ProjectStructurePanel)
+
+    expect(await screen.findByText('Current project: Fair Labor License')).toBeInTheDocument()
+    expect(screen.getByText('1 related local project')).toBeInTheDocument()
+    expect(screen.getByText('1 project graph domain')).toBeInTheDocument()
+    expect(screen.getByText('No dependency requests or contracts are active yet.')).toBeInTheDocument()
+    expect(screen.getByText('Use this graph to see who owns each domain now; request edges will appear here when one project asks another to provide or verify a contract.')).toBeInTheDocument()
   })
 
   it('surfaces project graph domain assignment and inbound request actions', async () => {

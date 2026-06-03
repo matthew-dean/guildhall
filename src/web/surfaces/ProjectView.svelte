@@ -584,6 +584,7 @@
   const runMode = $derived(detail?.run?.mode === 'one_task' ? 'one_task' : 'continuous')
   const providerStatus = $derived(detail?.providerStatus ?? detail?.run?.providerStatus ?? null)
   const startReadiness = $derived(detail?.startReadiness ?? null)
+  const actionRunControl = $derived(detail?.actionModel?.runControl ?? null)
   const providerIndicator = $derived(buildProviderIndicator(providerStatus, runStatus))
   const providerHeaderLabel = $derived(providerIndicator?.summaryLabel ?? null)
   const providerDecisionText = $derived(
@@ -892,7 +893,9 @@
   )
 
   const startDisabledReason = $derived(
-    requiredMigrationBlocked
+    actionRunControl?.startEnabled === false
+      ? actionRunControl.disabledReason ?? 'Finish setup before starting'
+      : requiredMigrationBlocked
       ? startReadiness?.message ?? 'Run the required Guildhall migration before starting this project'
       : !startReadiness?.canStart
       ? startReadiness?.message ?? 'Finish setup before starting'
@@ -919,7 +922,9 @@
     runStatus === 'running' || runStatus === 'stopping' || (!allTerminalStart && startDisabledReason !== 'No tasks to start'),
   )
   const runButtonIdleLabel = $derived(
-    requiredMigrationBlocked
+    actionRunControl?.label && actionRunControl.startEnabled === false
+      ? actionRunControl.label
+    : requiredMigrationBlocked
       ? 'Migrate'
     : startReadiness?.code === 'owner_input_required'
       ? /question|answer/i.test(startReadiness.message ?? '')

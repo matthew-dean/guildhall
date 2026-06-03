@@ -23,12 +23,18 @@
 
   const graph = $derived(store.projectGraph)
   const pickerResponsibility = $derived(store.assignmentPickerResponsibility())
+  const relatedLocalProjectCount = $derived((graph?.localProjects ?? []).filter(item => item.role !== 'current').length)
+  const graphDomainCount = $derived(store.structuralDomains().length)
 
   function surfaceScopeLabel(scopedReason: string): string {
     if (scopedReason === 'owner') return 'Owned here'
     if (scopedReason === 'consumer') return 'Consumed here'
     if (scopedReason === 'domain') return 'Domain match'
     return scopedReason
+  }
+
+  function countLabel(count: number, singular: string, plural = `${singular}s`): string {
+    return `${count} ${count === 1 ? singular : plural}`
   }
 </script>
 
@@ -58,10 +64,10 @@
     {#snippet header()}
       <SectionHeader title="Domains" description="Click a domain to see where its work belongs." headingTag="h3" density="dense" />
     {/snippet}
-    {#if store.structuralDomains().length === 0}
+    {#if !graph}
+      <p class="muted">Loading project graph domains...</p>
+    {:else if store.structuralDomains().length === 0}
       <p class="muted">Accept a structural map before assigning domain responsibilities.</p>
-    {:else if store.graphProjectOptions().length === 0}
-      <p class="muted">Register another local project before assigning domains across projects.</p>
     {:else}
       <div class="domain-assignment-list">
         {#each store.structuralDomains() as domain (domain.id)}
@@ -96,6 +102,8 @@
       <div class="project-index-summary">
         <strong>{store.localProjectIndexLabel()}</strong>
         <span class="muted">Current project: {graph.currentProject?.label ?? project.detail?.name ?? 'this project'}</span>
+        <span class="muted">{countLabel(relatedLocalProjectCount, 'related local project')}</span>
+        <span class="muted">{countLabel(graphDomainCount, 'project graph domain')}</span>
         {#if store.connectedProjectRows().length > 0}
           <span class="muted">{store.connectedProjectRows().length} connected by open requests</span>
         {/if}
@@ -237,7 +245,10 @@
   {#if !graph}
     <p class="muted">Loading dependency requests...</p>
   {:else if (graph.dependencyEdges?.length ?? 0) === 0}
-    <p class="muted">No project-to-project requests yet.</p>
+    <div class="empty-graph-state">
+      <strong>No dependency requests or contracts are active yet.</strong>
+      <p>Use this graph to see who owns each domain now; request edges will appear here when one project asks another to provide or verify a contract.</p>
+    </div>
   {:else}
     <div class="graph-request-list">
       {#each graph.dependencyEdges ?? [] as edge (edge.id)}
@@ -373,6 +384,16 @@
     display: grid;
     gap: var(--gh-space-2);
     padding-inline-start: var(--gh-space-3);
+  }
+  .empty-graph-state {
+    display: grid;
+    gap: var(--gh-space-2);
+  }
+  .empty-graph-state p {
+    margin: 0;
+    color: var(--text-muted);
+    font-size: var(--gh-type-size-body);
+    line-height: var(--gh-type-line-height-body);
   }
   .graph-request {
     border-block-start: 1px solid var(--border-muted);
