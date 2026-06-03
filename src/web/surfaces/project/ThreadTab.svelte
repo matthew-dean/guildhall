@@ -20,7 +20,7 @@
 <script lang="ts">
   import { onMount, onDestroy } from 'svelte'
   import { fly } from 'svelte/transition'
-  import Card from '../../lib/Card.svelte'
+  import Card from '../../lib/ui-compat/Card.svelte'
   import Chip from '../../lib/Chip.svelte'
   import Button from '../../lib/Button.svelte'
   import Icon from '../../lib/Icon.svelte'
@@ -37,22 +37,25 @@
   import StatusLine from '../../lib/StatusLine.svelte'
   import StateSummary from '../../lib/StateSummary.svelte'
   import Help from '../../lib/Help.svelte'
+  import CardListItem from '../../lib/CardListItem.svelte'
+  import ResolveEscalationModal from '../drawer/ResolveEscalationModal.svelte'
   import { friendlyStewardName } from '../../lib/display.js'
   import InteractionCardLayout from '../../lib/InteractionCardLayout.svelte'
   import UtilityPanel from '../../lib/UtilityPanel.svelte'
   import { onEvent } from '../../lib/events.js'
   import { escalationPrimaryAction, escalationUserGuidance } from '../../lib/escalation-labels.js'
   import { briefDoneWhenForReaders, briefScopeForReaders } from '../../lib/brief-display.js'
-  import { nav } from '../../lib/nav.svelte.js'
+  import { nav, path } from '../../lib/nav.svelte.js'
   import { currentProjectHref, currentTaskHref, projectActionHref, projectFetch } from '../../lib/project-routes.js'
   import {
     hasIncompleteTaskChecklist,
     isImportedDraftShaping,
     isQueuedSpecRevision as isQueuedSpecRevisionTurn,
     needsRecovery as taskNeedsRecovery,
+    needsWorkerHandoffSpecCleanup,
   } from '../../lib/task-state.js'
   import { project } from '../../lib/project.svelte.js'
-  import type { GitStorySnapshot, ProjectRuntimeSummary } from '../../lib/types.js'
+  import type { Escalation, GitStorySnapshot, ProjectRuntimeSummary } from '../../lib/types.js'
   import { toast } from '../../lib/toast.svelte.js'
 
   interface Props {
@@ -66,6 +69,7 @@
   type TurnPersona = 'intake' | 'spec' | 'worker' | 'reviewer' | 'coord' | 'system'
   type TurnStatus = 'done' | 'active' | 'pending'
   type TurnPhase = 'setup' | 'intake' | 'spec' | 'ready' | 'inflight' | 'blocked' | 'done'
+  type RequestStage = 'new_request' | 'task_brief_cleanup'
   type ConstructionMode = 'survey' | 'blueprint' | 'frame' | 'build' | 'inspect' | 'change_order' | 'punch_list'
   type SetupAffordance = 'link' | 'inline-text' | 'inline-textarea' | 'inline-button' | 'inline-choice'
   type RuntimeDevServerStatus = 'starting' | 'running' | 'stopped' | 'failed' | 'stale'
@@ -223,6 +227,7 @@
     constructionMode?: ConstructionMode | undefined
     gitStory?: GitStorySnapshot | undefined
     requestKind?: 'task_spec' | 'project_question' | 'settings_proposal' | 'persona_practice_proposal' | 'repair_triage' | 'clarification' | undefined
+    requestStage?: RequestStage | undefined
     routingSummary?: string | undefined
     taskDescription?: string | undefined
     sourceNote?: { description?: string | undefined; references: string[] } | undefined
@@ -249,6 +254,7 @@
     taskId?: string
     rawRequest: string
     title: string
+    requestStage?: RequestStage | undefined
     routingSummary: string
   }
   interface PressureTestQuestionTurn {
@@ -267,6 +273,23 @@
     }
     answerEndpoint: string
   }
+  interface BoundedChatTurn {
+    kind: 'bounded_chat'
+    id: string; at: string; persona: TurnPersona; status: TurnStatus; phase: TurnPhase
+    sessionId: string
+    subObjectiveId: string
+    targetTitle: string
+    domainTitle: string
+    question: {
+      id: string
+      prompt: string
+      why: string
+      choices?: string[]
+      evidence: string[]
+    }
+    answerEndpoint: string
+  }
+  type OwnerInputQuestionTurn = PressureTestQuestionTurn | BoundedChatTurn
   type Turn =
     | SetupStepTurn
     | BriefTurn
@@ -278,6 +301,7 @@
     | InFlightTurn
     | RequestTurn
     | PressureTestQuestionTurn
+    | BoundedChatTurn
 
   type ThreadChain = {
     id: string
@@ -286,6 +310,10 @@
     activeTurn: Turn | null
     currentTurn: Turn | null
   }
+  type HistoryRenderItem =
+    | { kind: 'single'; id: string; turn: Turn }
+    | { kind: 'cluster'; id: string; key: string; label: string; turns: ReviewFeedbackTurn[] }
+  type TaskReplyTurn = BriefTurn | SpecReviewTurn | InFlightTurn | EscalationTurn
 
   let turns = $state<Turn[]>([])
   let threadLoadRequestId = 0
@@ -301,6 +329,7 @@
   let replyDrafts = $state<Record<string, string>>({})
   let replyErrors = $state<Record<string, string>>({})
   let sentReplies = $state<Record<string, boolean>>({})
+  let escalationModal = $state<{ turn: EscalationTurn; mode: 'retry' | 'resolve' } | null>(null)
   let footerQuestionDrafts = $state<Record<string, string>>({})
   let contextTurnId = $state<string | null>(null)
   let contextDrafts = $state<Record<string, string>>({})
@@ -956,7 +985,7 @@
     if (needsRecovery(t)) return 'Needs recovery'
     if (guildhallShaping(t)) return 'Guildhall shaping'
     if (t.kind === 'setup_step') return t.status === 'done' || t.skippable ? null : 'Needs you'
-    if (t.kind === 'pressure_test_question') return t.status === 'done' ? null : 'Needs you'
+    if (t.kind === 'pressure_test_question' || t.kind === 'bounded_chat') return t.status === 'done' ? null : 'Needs you'
     if (t.kind === 'escalation') {
       if (t.status === 'done') return null
       return escalationUserGuidance({
@@ -979,7 +1008,7 @@
       if (t.taskStatus === 'in_progress' && !turnLiveAgent(t)) {
         return runStatus === 'running' ? 'Queued for Guildhall' : null
       }
-      if (t.taskStatus === 'ready' && hasIncompleteTaskChecklist(t)) {
+      if (needsWorkerHandoffSpecCleanup(t)) {
         return 'Needs brief'
       }
       if (
@@ -1088,7 +1117,7 @@
     return cleaned || rawRequest
   }
 
-  function pressureQuestionPrompt(turn: PressureTestQuestionTurn): string {
+  function pressureQuestionPrompt(turn: OwnerInputQuestionTurn): string {
     const target = cleanPressureTargetTitle(turn.targetTitle)
     const prompt = turn.question.prompt.trim()
     if (/^What outcome would make this project successful\?$/i.test(prompt)) {
@@ -1101,16 +1130,16 @@
     return prompt
   }
 
-  function pressureQuestionWhy(turn: PressureTestQuestionTurn): string {
+  function pressureQuestionWhy(turn: OwnerInputQuestionTurn): string {
     if (/Workers need to know which outcome defines success before splitting tasks\./i.test(turn.question.why)) {
       return 'A sentence is enough. Mention the outcome or constraint Guildhall should optimize for.'
     }
     return turn.question.why
   }
 
-  function pressureQuestionMeta(turn: PressureTestQuestionTurn): string {
-    const index = activePressureQuestions.findIndex(candidate => candidate.id === turn.id)
-    const count = activePressureQuestions.length
+  function pressureQuestionMeta(turn: OwnerInputQuestionTurn): string {
+    const index = activeOwnerInputQuestions.findIndex(candidate => candidate.id === turn.id)
+    const count = activeOwnerInputQuestions.length
     const title = cleanPressureTargetTitle(turn.targetTitle)
     if (count > 1 && index >= 0) return `${index + 1} of ${count} · ${title} · ${turn.domainTitle}`
     return `${title} · ${turn.domainTitle}`
@@ -1135,22 +1164,22 @@
 
   const currentTurns = $derived.by(() => {
     const seenQuestionTasks = new Set<string>()
-    let seenPressureQuestion = false
-    const hasActivePressureQuestion = turns.some(
-      turn => turn.kind === 'pressure_test_question' && turn.status === 'active',
+    let seenOwnerInputQuestion = false
+    const hasActiveOwnerInputQuestion = turns.some(
+      turn => (turn.kind === 'pressure_test_question' || turn.kind === 'bounded_chat') && turn.status === 'active',
     )
     return turns.filter(turn => {
       if (turn.phase === 'done') return false
       if (
-        hasActivePressureQuestion &&
+        hasActiveOwnerInputQuestion &&
         turn.kind === 'setup_step' &&
         turn.stepId === 'firstTask'
       ) {
         return false
       }
-      if (turn.kind === 'pressure_test_question' && turn.status === 'active') {
-        if (seenPressureQuestion) return false
-        seenPressureQuestion = true
+      if ((turn.kind === 'pressure_test_question' || turn.kind === 'bounded_chat') && turn.status === 'active') {
+        if (seenOwnerInputQuestion) return false
+        seenOwnerInputQuestion = true
       }
       if (turn.kind === 'agent_question' && turn.status === 'active') {
         if (seenQuestionTasks.has(turn.taskId)) return false
@@ -1163,12 +1192,12 @@
   const visibleList = $derived(threadChains.map(chain => chain.latestTurn))
   const compactListView = $derived(compactThreadMode && compactPane === 'list')
   const compactDetailView = $derived(compactThreadMode && compactPane === 'detail')
-  const activePressureQuestions = $derived(
-    turns.filter((turn): turn is PressureTestQuestionTurn =>
-      turn.kind === 'pressure_test_question' && turn.status === 'active',
+  const activeOwnerInputQuestions = $derived(
+    turns.filter((turn): turn is OwnerInputQuestionTurn =>
+      (turn.kind === 'pressure_test_question' || turn.kind === 'bounded_chat') && turn.status === 'active',
     ),
   )
-  const hiddenPressureQuestionCount = $derived(Math.max(0, activePressureQuestions.length - 1))
+  const hiddenPressureQuestionCount = $derived(Math.max(0, activeOwnerInputQuestions.length - 1))
   const operationSummary = $derived.by(() => {
     let needsYou = 0
     let working = 0
@@ -1193,12 +1222,37 @@
   function threadChainKey(turn: Turn): string {
     if (turn.kind === 'setup_step') return 'setup'
     if (turn.kind === 'pressure_test_question') return `intake:${turn.intakeId}`
+    if (turn.kind === 'bounded_chat') return `bounded-chat:${turn.sessionId}`
     if (turn.kind === 'request') {
       if (turn.taskId) return `task:${turn.taskId}`
       return `intake:${turn.requestId}`
     }
     if ('taskId' in turn) return `task:${turn.taskId}`
     return turn.id
+  }
+
+  function threadRouteParamFromHref(href: string): string | null {
+    const query = href.split('#')[0]?.split('?')[1] ?? ''
+    if (!query) return null
+    const value = new URLSearchParams(query).get('thread')?.trim()
+    return value || null
+  }
+
+  function routeThreadChainId(chains: ThreadChain[]): string | null {
+    const param = threadRouteParamFromHref(path.href)
+    if (!param) return null
+    if (chains.some(chain => chain.id === param)) return param
+    const boundedChatId = param.startsWith('bounded-chat:') ? param : `bounded-chat:${param}`
+    if (chains.some(chain => chain.id === boundedChatId)) return boundedChatId
+    return null
+  }
+
+  function hrefForThreadChain(chainId: string): string {
+    const basePath = path.value || location.pathname
+    const routeId = chainId.startsWith('bounded-chat:') ? chainId.slice('bounded-chat:'.length) : chainId
+    const query = new URLSearchParams()
+    query.set('thread', routeId)
+    return `${basePath}?${query.toString()}`
   }
 
   function setCapabilityPathDraft(requestId: string, value: string): void {
@@ -1241,11 +1295,16 @@
       if (compactThreadMode) compactPane = 'list'
       return
     }
+    const routed = routeThreadChainId(threadChains)
     const preferred = activeTurnId
       ? threadChains.find(chain => chain.turns.some(turn => turn.id === activeTurnId))?.id ?? threadChains[0]?.id ?? null
       : threadChains[0]?.id ?? null
-    if (!selectedTurnId || !threadChains.some(chain => chain.id === selectedTurnId)) {
-      selectedTurnId = preferred
+    const nextSelection = routed ?? preferred
+    if (routed && selectedTurnId !== routed) {
+      selectedTurnId = routed
+      detailShouldStickToBottom = true
+    } else if (!selectedTurnId || !threadChains.some(chain => chain.id === selectedTurnId)) {
+      selectedTurnId = nextSelection
       detailShouldStickToBottom = true
     }
     if (!compactThreadMode) {
@@ -1437,7 +1496,7 @@
     }
   }
 
-  async function sendTaskReply(turn: BriefTurn | SpecReviewTurn | InFlightTurn): Promise<void> {
+  async function sendTaskReply(turn: TaskReplyTurn): Promise<void> {
     const message = (replyDrafts[turn.id] ?? '').trim()
     if (!message) return
     busyTurnId = turn.id
@@ -1447,7 +1506,7 @@
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({
           message,
-          ...(turn.kind === 'inflight' ? { preserveStatus: true } : {}),
+          ...(turn.kind === 'inflight' || turn.kind === 'escalation' ? { preserveStatus: true } : {}),
         }),
       })
       const j = await r.json().catch(() => ({})) as { error?: string }
@@ -1514,6 +1573,9 @@
   }
 
   function briefFixDescription(turn: InFlightTurn): string {
+    if (missingChecklistSteps(turn).length === 0 && needsWorkerHandoffSpecCleanup(turn)) {
+      return 'The starter checklist is complete, but Guildhall still needs a full product brief and spec handoff before a worker can start.'
+    }
     switch (missingBriefFieldKind(turn)) {
       case 'success':
         return 'Guildhall needs to turn the source notes into a success target before implementation.'
@@ -1528,9 +1590,9 @@
 
   function briefFixButtonLabel(turn: InFlightTurn): string {
     switch (missingBriefFieldKind(turn)) {
-      case 'success': return 'Start'
-      case 'acceptance': return 'Start'
-      default: return 'Start'
+      case 'success': return 'Clean up brief'
+      case 'acceptance': return 'Clean up brief'
+      default: return 'Clean up brief'
     }
   }
 
@@ -1819,9 +1881,11 @@
     if (live?.name === 'gate-checker-agent') return 'Gates'
     switch (turn.taskStatus) {
       case 'import_draft': return 'Needs task brief'
-      case 'exploring': return turn.importedDraft ? 'Task brief in progress' : isQueuedSpecRevision(turn) ? 'Spec revision queued' : 'Intake'
+      case 'exploring':
+        if (turn.requestStage === 'task_brief_cleanup') return 'Brief cleanup'
+        return turn.importedDraft ? 'Task brief in progress' : isQueuedSpecRevision(turn) ? 'Spec revision queued' : 'Intake'
       case 'ready':
-        if (hasIncompleteTaskChecklist(turn)) return 'Needs task brief'
+        if (needsWorkerHandoffSpecCleanup(turn)) return 'Needs task brief'
         if (runStatus === 'running' || runStatus === 'stopping') return 'Queued for Guildhall'
         return 'Ready'
       case 'gate_check': return 'Gates'
@@ -1846,6 +1910,9 @@
       if (turn.requestKind === 'project_question') {
         return 'Guildhall is inspecting the project to answer this question now.'
       }
+      if (turn.requestStage === 'task_brief_cleanup') {
+        return 'Guildhall is cleaning up this task brief now.'
+      }
       if (turn.importedDraft) {
         return 'Guildhall is turning this imported note into a task brief now.'
       }
@@ -1854,7 +1921,7 @@
         : 'Guildhall is drafting this now.'
     }
     if (turn.taskStatus === 'ready' && !live) {
-      if (hasIncompleteTaskChecklist(turn)) {
+      if (needsWorkerHandoffSpecCleanup(turn)) {
         return briefFixDescription(turn)
       }
       return runStatus === 'running'
@@ -1870,6 +1937,9 @@
     if (turn.taskStatus === 'exploring' && !live) {
       if (turn.requestKind === 'project_question') {
         return 'Queued as a project question. Guildhall can inspect files and summarize the answer without turning this into implementation work.'
+      }
+      if (turn.requestStage === 'task_brief_cleanup') {
+        return 'Guildhall queued this task for brief cleanup. The checklist shows what still needs to be clarified before implementation.'
       }
       return turn.taskId === 'task-workspace-import'
         ? 'Guildhall already drafted part of this import review. Review it if you want, or press Start to let Guildhall keep turning your project notes into candidate tasks.'
@@ -1904,8 +1974,8 @@
     if (turn.importedDraft && (turn.taskStatus === 'import_draft' || turn.taskStatus === 'exploring')) {
       return 'Guildhall is reorienting this imported note into a runnable task brief.'
     }
-    if (turn.checklist && hasIncompleteTaskChecklist(turn)) {
-      return 'Guildhall is completing the brief checklist before it lets a worker start.'
+    if (needsWorkerHandoffSpecCleanup(turn)) {
+      return 'Guildhall is completing the handoff brief before it lets a worker start.'
     }
     if (turn.requestKind === 'project_question') {
       return 'Guildhall is treating this as a project question, not implementation work.'
@@ -1913,9 +1983,31 @@
     return null
   }
 
+  function taskBriefNeedsCleanup(turn: InFlightTurn): boolean {
+    return (
+      needsWorkerHandoffSpecCleanup(turn) ||
+      (
+        hasIncompleteTaskChecklist(turn) &&
+        (
+          turn.importedDraft ||
+          turn.taskStatus === 'import_draft' ||
+          turn.taskStatus === 'exploring'
+        )
+      )
+    )
+  }
+
+  function checklistTitleForTurn(turn: InFlightTurn): string {
+    return taskBriefNeedsCleanup(turn) ? 'Brief checklist' : turn.checklist?.title ?? 'Checklist'
+  }
+
+  function checklistToneForTurn(turn: InFlightTurn): 'warn' | 'neutral' {
+    return taskBriefNeedsCleanup(turn) ? 'warn' : 'neutral'
+  }
+
   function gitStoryVisible(turn: Turn): boolean {
     if (!('gitStory' in turn) || !turn.gitStory?.state) return false
-    if (turn.kind === 'inflight' && hasIncompleteTaskChecklist(turn)) return false
+    if (turn.kind === 'inflight' && taskBriefNeedsCleanup(turn)) return false
     const state = normalizedGitStoryState(turn.gitStory)
     return state !== 'clean' && state !== 'merged' && state !== 'unknown'
   }
@@ -1998,12 +2090,13 @@
     if (metaIntakeChecklistComplete(turn)) return 'Create split proposal'
     switch (turn.taskStatus) {
       case 'ready':
-        if (hasIncompleteTaskChecklist(turn)) return 'Start'
+        if (needsWorkerHandoffSpecCleanup(turn)) return briefFixButtonLabel(turn)
         if (runStatus === 'running' || runStatus === 'stopping') return 'Already queued'
         return 'Start work'
       case 'import_draft': return 'Draft task brief'
       case 'exploring':
         if (turn.taskId === 'task-meta-intake') return 'Let Guildhall keep setting this up'
+        if (turn.requestStage === 'task_brief_cleanup') return 'Clean up brief'
         if (turn.importedDraft || hasIncompleteTaskChecklist(turn)) return 'Continue shaping brief'
         return isQueuedSpecRevision(turn) ? 'Revise spec' : 'Continue drafting spec'
       case 'review': return 'Resume review'
@@ -2028,7 +2121,7 @@
   function taskStateTone(turn: InFlightTurn): 'neutral' | 'ok' | 'warn' | 'danger' | 'accent' | 'running' | 'agent' | 'agent-attention' {
     if (needsRecovery(turn)) return 'warn'
     if (turnLiveAgent(turn)) return 'running'
-    if (turn.taskStatus === 'ready' && hasIncompleteTaskChecklist(turn)) return 'agent-attention'
+    if (needsWorkerHandoffSpecCleanup(turn)) return 'agent-attention'
     switch (turn.taskStatus) {
       case 'ready': return 'agent'
       case 'import_draft': return 'agent-attention'
@@ -2062,10 +2155,44 @@
     return 'Missing'
   }
 
-  async function startTaskRun(taskId?: string): Promise<void> {
+  async function startTaskRun(target?: string | InFlightTurn): Promise<void> {
+    const taskId = typeof target === 'string' ? target : target?.taskId
+    const turn = typeof target === 'object'
+      ? target
+      : turns.find((candidate): candidate is InFlightTurn =>
+        candidate.kind === 'inflight' && candidate.taskId === taskId,
+      )
+    const cleanupTurn = turn && needsWorkerHandoffSpecCleanup(turn) ? turn : null
     runBusy = true
     runError = null
+    if (cleanupTurn) busyTurnId = cleanupTurn.id
     try {
+      if (cleanupTurn) {
+        const continueRes = await scopedProjectFetch(`/api/project/task/${encodeURIComponent(cleanupTurn.taskId)}/continue`, {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({
+            action: 'brief_cleanup',
+            mode: 'checklist',
+            instruction:
+              'Complete this task for worker handoff: preserve the useful starting point, write a full product brief and spec handoff, and add concrete acceptance criteria before implementation.',
+          }),
+        })
+        const continueBody = await continueRes.json().catch(() => ({})) as {
+          error?: string
+          continuation?: { status?: string }
+        }
+        if (!continueRes.ok || continueBody.error) {
+          runError = continueBody.error ?? `Brief cleanup failed (HTTP ${continueRes.status})`
+          return
+        }
+        if (continueBody.continuation?.status === 'queued') {
+          toast.info('Brief cleanup is queued for Guildhall.')
+        }
+        await load()
+        await refreshProject()
+        return
+      }
       const res = await scopedProjectFetch('/api/project/start', {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
@@ -2091,6 +2218,7 @@
       runError = err instanceof Error ? err.message : String(err)
     } finally {
       runBusy = false
+      if (cleanupTurn) busyTurnId = null
     }
   }
 
@@ -2171,6 +2299,57 @@
     }
   }
 
+  function isActionableEscalation(turn: EscalationTurn): boolean {
+    return turn.status !== 'done' && turn.phase === 'blocked'
+  }
+
+  function escalationRecordForTurn(turn: EscalationTurn): Escalation {
+    return {
+      id: turn.escalationId,
+      reason: turn.escalationReason,
+      summary: turn.summary,
+      details: turn.details,
+      agentId: turn.escalationAgentId,
+    }
+  }
+
+  const escalationModalRecord = $derived(
+    escalationModal ? escalationRecordForTurn(escalationModal.turn) : null,
+  )
+
+  function openEscalationResolution(turn: EscalationTurn, mode: 'retry' | 'resolve'): void {
+    escalationModal = { turn, mode }
+  }
+
+  async function submitEscalationResolution(args: { resolution: string; nextStatus: string }): Promise<void> {
+    const current = escalationModal
+    if (!current) return
+    busyTurnId = current.turn.id
+    try {
+      const res = await scopedProjectFetch(`/api/project/task/${encodeURIComponent(current.turn.taskId)}/resolve-escalation`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          escalationId: current.turn.escalationId,
+          resolution: args.resolution,
+          nextStatus: args.nextStatus,
+        }),
+      })
+      const body = await res.json().catch(() => ({})) as { error?: string }
+      if (!res.ok || body.error) {
+        replyErrors = { ...replyErrors, [current.turn.id]: body.error ?? `HTTP ${res.status}` }
+        toast.error(body.error ?? `HTTP ${res.status}`)
+        return
+      }
+      escalationModal = null
+      toast.success(current.mode === 'retry' ? 'Recovery action saved.' : 'Blocker marked resolved.')
+      await load()
+      await refreshProject()
+    } finally {
+      busyTurnId = null
+    }
+  }
+
   function setPressureTestAnswer(turnId: string, value: string): void {
     pressureTestAnswers = { ...pressureTestAnswers, [turnId]: value }
     if (pressureTestErrors[turnId]) {
@@ -2180,7 +2359,7 @@
     }
   }
 
-  async function answerPressureTestQuestion(turn: PressureTestQuestionTurn, answerOverride?: string): Promise<void> {
+  async function answerPressureTestQuestion(turn: OwnerInputQuestionTurn, answerOverride?: string): Promise<void> {
     const answer = (answerOverride ?? pressureTestAnswers[turn.id] ?? '').trim()
     if (!answer) return
     busyTurnId = turn.id
@@ -2267,6 +2446,7 @@
     if (turn.kind === 'setup_step') return turn.title
     if (turn.kind === 'request') return turn.title
     if (turn.kind === 'pressure_test_question') return turn.targetTitle
+    if (turn.kind === 'bounded_chat') return turn.targetTitle
     if ('taskTitle' in turn) return displayTaskTitle(turn)
     return 'Thread'
   }
@@ -2275,6 +2455,7 @@
     if (turn.kind === 'setup_step') return turn.why
     if (turn.kind === 'request') return turn.routingSummary
     if (turn.kind === 'pressure_test_question') return pressureQuestionWhy(turn)
+    if (turn.kind === 'bounded_chat') return pressureQuestionWhy(turn)
     if (turn.kind === 'history_note') return turn.summary
     if (turn.kind === 'agent_question') {
       const question = visibleQuestionsForCard(questionsForTurn(turn))[0]
@@ -2282,10 +2463,26 @@
     }
     if (turn.kind === 'brief_approval') return 'Review the drafted brief and either approve it or send corrections.'
     if (turn.kind === 'spec_review') return turn.taskId === 'task-meta-intake' ? 'Review the proposed split and starter structure.' : 'Review the spec draft before Guildhall moves it forward.'
-    if (turn.kind === 'escalation') return turn.summary
+    if (turn.kind === 'escalation') {
+      const guidance = escalationUserGuidance({
+        summary: turn.summary,
+        details: turn.details,
+        reason: turn.escalationReason,
+        agentId: turn.escalationAgentId,
+      })
+      return guidance.title
+    }
     if (turn.kind === 'review_feedback') return turn.summary
     if (turn.kind === 'inflight') return taskStateDescription(turn)
     return ''
+  }
+
+  function requestHeading(turn: RequestTurn): string {
+    return turn.requestStage === 'task_brief_cleanup' ? 'Task brief cleanup' : 'New thread'
+  }
+
+  function requestStateLabel(turn: RequestTurn): string {
+    return turn.requestStage === 'task_brief_cleanup' ? 'Cleanup queued' : 'Request saved'
   }
 
   function isHistoricalTaskEvent(turn: Turn): boolean {
@@ -2320,7 +2517,7 @@
           return 'Task shaping update'
         }
         if (turn.taskStatus === 'in_progress') return 'Work update'
-        if (turn.taskStatus === 'ready') return 'Ready for work'
+        if (turn.taskStatus === 'ready') return needsWorkerHandoffSpecCleanup(turn) ? 'Needs brief cleanup' : 'Ready for work'
         return 'Task update'
       default:
         return null
@@ -2358,6 +2555,9 @@
           return 'Guildhall reshaped the request into concrete task requirements and acceptance checks.'
         }
         if (turn.taskStatus === 'ready') {
+          if (needsWorkerHandoffSpecCleanup(turn)) {
+            return 'Guildhall saved the starter notes, but the worker handoff still needs a full brief and acceptance checks.'
+          }
           return 'Guildhall finished shaping this work and left it ready to start.'
         }
         if (turn.taskStatus === 'in_progress') {
@@ -2373,6 +2573,55 @@
     if (turn.kind === 'brief_approval' && turn.status === 'done') return false
     if (turn.kind === 'history_note' && turn.category === 'request') return false
     return historyEventSummary(turn).trim().length > 0
+  }
+
+  function historyReviewClusterKey(turn: Turn): string | null {
+    if (turn.kind !== 'review_feedback' || !isHistoricalTaskEvent(turn)) return null
+    return `${turn.taskId}:review_feedback`
+  }
+
+  function buildHistoryRenderItems(sourceTurns: Turn[]): HistoryRenderItem[] {
+    const items: HistoryRenderItem[] = []
+    let pending: Extract<HistoryRenderItem, { kind: 'cluster' }> | null = null
+
+    const flushPending = () => {
+      if (!pending) return
+      if (pending.turns.length === 1) {
+        items.push({ kind: 'single', id: pending.turns[0].id, turn: pending.turns[0] })
+      } else {
+        items.push(pending)
+      }
+      pending = null
+    }
+
+    for (const turn of sourceTurns) {
+      const key = historyReviewClusterKey(turn)
+      if (!key || turn.kind !== 'review_feedback') {
+        flushPending()
+        items.push({ kind: 'single', id: turn.id, turn })
+        continue
+      }
+      if (pending?.key === key) {
+        pending.turns.push(turn)
+        continue
+      }
+      flushPending()
+      pending = {
+        kind: 'cluster',
+        id: `history-cluster:${key}:${turn.id}`,
+        key,
+        label: historyEventLabel(turn) ?? 'Update',
+        turns: [turn],
+      }
+    }
+
+    flushPending()
+    return items
+  }
+
+  function reviewFeedbackHistoryEntryLabel(turn: ReviewFeedbackTurn, index: number): string {
+    if (turn.revisionCount) return `Pass ${turn.revisionCount}`
+    return `Note ${index + 1}`
   }
 
   function historyQuestionPrompt(turn: AgentQuestionTurn): string {
@@ -2401,11 +2650,21 @@
     if (turn.kind === 'spec_review') {
       return turn.taskId === 'task-meta-intake' ? 'Review the proposed split' : 'Review the spec draft'
     }
+    if (turn.kind === 'escalation') {
+      const guidance = escalationUserGuidance({
+        summary: turn.summary,
+        details: turn.details,
+        reason: turn.escalationReason,
+        agentId: turn.escalationAgentId,
+      })
+      return guidance.actionOwner === 'guildhall' ? 'Guildhall can continue' : 'Needs recovery'
+    }
     if (turn.kind === 'inflight') {
+      if (turn.requestStage === 'task_brief_cleanup') return 'Brief cleanup'
       if (turn.importedDraft || turn.taskStatus === 'exploring' || turn.taskStatus === 'import_draft') {
         return 'Continue shaping brief'
       }
-      if (turn.taskStatus === 'ready') return 'Ready for work'
+      if (turn.taskStatus === 'ready') return needsWorkerHandoffSpecCleanup(turn) ? 'Needs brief cleanup' : 'Ready for work'
       if (turn.taskStatus === 'in_progress') return 'Work in progress'
     }
     return turnIndexTitle(turn)
@@ -2414,8 +2673,16 @@
   function activeDockSummary(turn: Turn): string | null {
     if (turn.kind === 'brief_approval') return null
     if (turn.kind === 'spec_review') return null
+    if (turn.kind === 'escalation') {
+      return escalationUserGuidance({
+        summary: turn.summary,
+        details: turn.details,
+        reason: turn.escalationReason,
+        agentId: turn.escalationAgentId,
+      }).title
+    }
     if (turn.kind === 'inflight' && (turn.importedDraft || turn.taskStatus === 'exploring' || turn.taskStatus === 'import_draft')) {
-      return null
+      return taskStateDescription(turn)
     }
     const summary = turnIndexSummary(turn).trim()
     return summary.length ? summary : null
@@ -2441,7 +2708,11 @@
     const missingCount = checklist.steps.filter(step => step.status !== 'done' && step.status !== 'skipped').length
     return {
       complete: `${checklist.doneCount} of ${checklist.totalSteps} complete`,
-      missing: missingCount === 0 ? 'Nothing missing' : `${missingCount} item${missingCount === 1 ? '' : 's'} still missing`,
+      missing: missingCount === 0
+        ? needsWorkerHandoffSpecCleanup(turn)
+          ? 'Handoff still needs cleanup'
+          : 'Nothing missing'
+        : `${missingCount} item${missingCount === 1 ? '' : 's'} still missing`,
     }
   }
 
@@ -2462,6 +2733,7 @@
   function focusTurn(turnId: string): void {
     selectedTurnId = turnId
     detailShouldStickToBottom = true
+    path.replace(hrefForThreadChain(turnId), path.state)
     if (compactThreadMode) compactPane = 'detail'
     queueMicrotask(() => {
       scrollDetailToBottom('smooth')
@@ -2473,10 +2745,11 @@
     compactPane = 'list'
   }
 
-  type DockedTurn = AgentQuestionTurn | PressureTestQuestionTurn | BriefTurn | SpecReviewTurn | InFlightTurn
+  type DockedTurn = AgentQuestionTurn | OwnerInputQuestionTurn | BriefTurn | SpecReviewTurn | InFlightTurn | EscalationTurn
 
   function isDockableTurn(turn: Turn): turn is DockedTurn {
-    if (turn.kind === 'agent_question' || turn.kind === 'pressure_test_question') {
+    if (turn.kind === 'escalation') return isActionableEscalation(turn)
+    if (turn.kind === 'agent_question' || turn.kind === 'pressure_test_question' || turn.kind === 'bounded_chat') {
       return turn.status === 'active'
     }
     return (turn.kind === 'brief_approval' || turn.kind === 'spec_review' || turn.kind === 'inflight') && turn.status !== 'done'
@@ -2505,6 +2778,7 @@
     if (!activeDockTurn) return selectedChain.turns
     return selectedChain.turns.filter(turn => turn.id !== activeDockTurn.id)
   })
+  const historyRenderItems = $derived(buildHistoryRenderItems(historyTurns))
 
   const footerCandidates = $derived.by(() => {
     if (!selectedChain) return []
@@ -2522,7 +2796,7 @@
   type FooterComposer =
     | {
       kind: 'task_reply'
-      turn: BriefTurn | SpecReviewTurn | InFlightTurn
+      turn: TaskReplyTurn
       title: string
       description: string
       placeholder: string
@@ -2547,7 +2821,7 @@
     }
     | {
       kind: 'pressure_test'
-      turn: PressureTestQuestionTurn
+      turn: OwnerInputQuestionTurn
       title: string
       description: string
       placeholder: string
@@ -2560,7 +2834,7 @@
       description: string
     }
 
-  function footerReplyDetails(turn: BriefTurn | SpecReviewTurn | InFlightTurn): Omit<Extract<FooterComposer, { kind: 'task_reply' }>, 'kind' | 'turn'> {
+  function footerReplyDetails(turn: TaskReplyTurn): Omit<Extract<FooterComposer, { kind: 'task_reply' }>, 'kind' | 'turn'> {
     if (turn.kind === 'brief_approval') {
       return {
         title: 'Request changes to the brief',
@@ -2574,6 +2848,14 @@
         title: turn.taskId === 'task-meta-intake' ? 'Change the proposed split' : 'Request changes to the spec',
         description: 'Keep the thread moving, but redirect the current draft before Guildhall treats it as approved.',
         placeholder: 'Correct the spec or ask Guildhall to revisit it…',
+        submitLabel: 'Send',
+      }
+    }
+    if (turn.kind === 'escalation') {
+      return {
+        title: 'Add recovery guidance',
+        description: 'Add context for Guildhall without closing this blocker.',
+        placeholder: 'Add recovery guidance for Guildhall...',
         submitLabel: 'Send',
       }
     }
@@ -2612,10 +2894,10 @@
     }
 
     if (replyTurnId) {
-      const turn = chainTurns.find((candidate): candidate is BriefTurn | SpecReviewTurn | InFlightTurn =>
-        (candidate.kind === 'brief_approval' || candidate.kind === 'spec_review' || candidate.kind === 'inflight') &&
+      const turn = chainTurns.find((candidate): candidate is TaskReplyTurn =>
+        (candidate.kind === 'brief_approval' || candidate.kind === 'spec_review' || candidate.kind === 'inflight' || candidate.kind === 'escalation') &&
         candidate.id === replyTurnId &&
-        candidate.status === 'active',
+        (candidate.kind === 'escalation' ? candidate.status !== 'done' : candidate.status === 'active'),
       )
       if (turn) {
         return {
@@ -2627,6 +2909,13 @@
     }
 
     for (const turn of footerCandidates) {
+      if (turn.kind === 'escalation' && isActionableEscalation(turn)) {
+        return {
+          kind: 'task_reply',
+          turn,
+          ...footerReplyDetails(turn),
+        }
+      }
       if (turn.kind === 'agent_question' && turn.status === 'active') {
         const question = visibleQuestionsForCard(questionsForTurn(turn))
           .find(candidate => candidate.kind === 'text' && !(staged[candidate.id] ?? '').trim())
@@ -2643,7 +2932,7 @@
         }
       }
       if (
-        turn.kind === 'pressure_test_question' &&
+        (turn.kind === 'pressure_test_question' || turn.kind === 'bounded_chat') &&
         turn.status === 'active' &&
         !(turn.question.choices?.length)
       ) {
@@ -2836,10 +3125,12 @@
               {#each threadChains as chain (chain.id)}
                 {@const indexTurn = chain.currentTurn ?? chain.latestTurn}
                 {@const indexChip = turnIndexChip(indexTurn)}
-                <button
-                  type="button"
-                  class="thread-index-row"
-                  class:active={selectedTurnId === chain.id}
+                <CardListItem
+                  as="button"
+                  className="thread-index-row"
+                  tone={selectedTurnId === chain.id ? 'accent' : 'neutral'}
+                  railTone={selectedTurnId === chain.id ? 'accent' : null}
+                  selected={selectedTurnId === chain.id}
                   onclick={() => focusTurn(chain.id)}
                 >
                   <div class="thread-index-row-chips">
@@ -2854,7 +3145,7 @@
                     {/if}
                   </div>
                   <p>{turnIndexSummary(indexTurn)}</p>
-                </button>
+                </CardListItem>
               {/each}
             </div>
           </aside>
@@ -2871,8 +3162,49 @@
           >
             <div class="thread-detail-scroll-wrap">
               <div class="thread-detail-scroll" aria-label="Thread history">
-                <Stack gap="3" class="thread-list">
-                  {#each historyTurns as t (t.id)}
+                <div class="thread-detail-flow">
+                  <div class="thread-list">
+                    <Stack gap="3">
+                      {#each historyRenderItems as historyItem (historyItem.id)}
+        {#if historyItem.kind === 'cluster'}
+          {@const latest = historyItem.turns[0]}
+          {@const earlierReviewTurns = historyItem.turns.slice(1)}
+          {#if latest}
+            <div
+              class="thread-history-item"
+              data-turn-id={historyItem.id}
+            >
+              <div class="thread-event thread-event-milestone">
+                <div class="thread-event-head">
+                  <strong>{historyItem.label}</strong>
+                  {#if compactRelativeTime(latest.at)}
+                    <span>{compactRelativeTime(latest.at)}</span>
+                  {/if}
+                </div>
+                {#if historyEventNeedsSummary(latest)}
+                  <p>{historyEventSummary(latest)}</p>
+                {/if}
+                <details class="thread-history-cluster">
+                  <summary>Show {earlierReviewTurns.length} earlier reviewer note{earlierReviewTurns.length === 1 ? '' : 's'}</summary>
+                  <div class="thread-history-cluster-list">
+                    {#each earlierReviewTurns as reviewTurn, index (reviewTurn.id)}
+                      <div class="thread-history-cluster-item">
+                        <div class="thread-history-cluster-head">
+                          <strong>{reviewFeedbackHistoryEntryLabel(reviewTurn, index)}</strong>
+                          {#if compactRelativeTime(reviewTurn.at)}
+                            <span>{compactRelativeTime(reviewTurn.at)}</span>
+                          {/if}
+                        </div>
+                        <p>{historyEventSummary(reviewTurn)}</p>
+                      </div>
+                    {/each}
+                  </div>
+                </details>
+              </div>
+            </div>
+          {/if}
+        {:else}
+          {@const t = historyItem.turn}
         {#if isHistoricalTaskEvent(t)}
           <div
             class="thread-history-item"
@@ -3160,12 +3492,12 @@
                   {/if}
 
               {:else if t.kind === 'request'}
-                <h3 class="prompt">New thread</h3>
+                <h3 class="prompt">{requestHeading(t)}</h3>
                 <div class="field">
                   <span class="field-label">Request</span>
                   <Markdown source={requestSummary(t.rawRequest)} />
                 </div>
-                <StateSummary label="Request saved" description={t.routingSummary} tone="ok" />
+                <StateSummary label={requestStateLabel(t)} description={t.routingSummary} tone="ok" />
 
               {:else if t.kind === 'pressure_test_question'}
                 <div class="question-card-heading">
@@ -3233,6 +3565,75 @@
                     {/if}
                   </Stack>
                 {/if}
+
+              {:else if t.kind === 'bounded_chat'}
+                <UtilityPanel className="bounded-chat-panel" tone="neutral">
+                  <div class="thread-active-question">
+                    <strong>{pressureQuestionMeta(t)}</strong>
+                    <Markdown source={pressureQuestionPrompt(t)} />
+                    <p class="why">{pressureQuestionWhy(t)}</p>
+                    {#if hiddenPressureQuestionCount > 0}
+                      <p class="next-question-note">
+                        {hiddenPressureQuestionCount} more question{hiddenPressureQuestionCount === 1 ? '' : 's'} will appear after this answer.
+                      </p>
+                    {/if}
+                    {#if t.question.evidence.length}
+                      <div class="field">
+                        <span class="field-label">Evidence</span>
+                        <ul class="bullet">
+                          {#each t.question.evidence as item}
+                            <li><Markdown source={item} inline /></li>
+                          {/each}
+                        </ul>
+                      </div>
+                    {/if}
+                    {#if t.status !== 'done'}
+                      <Stack gap="2">
+                        {#if t.question.choices?.length}
+                          <div class="pressure-choice-list" aria-label="Answer choices">
+                            {#each t.question.choices as choice}
+                              <Button
+                                variant="secondary"
+                                disabled={busyTurnId === t.id}
+                                onclick={() => answerPressureTestQuestion(t, choice)}
+                              >
+                                {choice}
+                              </Button>
+                            {/each}
+                          </div>
+                        {:else}
+                          {#if isFooterPressureTurn(t.id)}
+                            <p class="next-question-note">Reply using the shared composer below.</p>
+                          {:else}
+                            <Textarea
+                              value={pressureTestAnswers[t.id] ?? ''}
+                              rows={4}
+                              placeholder="Answer with a sentence or short paragraph. Include constraints or success measures if they matter."
+                              disabled={busyTurnId === t.id}
+                              oninput={(v) => setPressureTestAnswer(t.id, v)}
+                            />
+                            <Row justify="end" gap="2">
+                              <Button
+                                variant="primary"
+                                disabled={busyTurnId === t.id || !(pressureTestAnswers[t.id] ?? '').trim()}
+                                onclick={() => answerPressureTestQuestion(t)}
+                              >
+                                {busyTurnId === t.id
+                                  ? 'Submitting...'
+                                  : hiddenPressureQuestionCount > 0
+                                    ? 'Submit and continue'
+                                    : 'Submit answer'}
+                              </Button>
+                            </Row>
+                          {/if}
+                        {/if}
+                        {#if pressureTestErrors[t.id]}
+                          <p class="error">{pressureTestErrors[t.id]}</p>
+                        {/if}
+                      </Stack>
+                    {/if}
+                  </div>
+                </UtilityPanel>
 
               {:else if t.kind === 'brief_approval'}
                 {@const briefScope = briefScopeForReaders(t.brief, t.taskTitle)}
@@ -3676,13 +4077,21 @@
                     {/if}
                   </UtilityPanel>
                 {/if}
-                {#if t.status === 'active'}
-                  <Row justify="end" gap="2">
-                    <Button variant={guidance.actionOwner === 'guildhall' ? 'secondary' : 'primary'} onclick={() => nav(currentTaskHref(t.taskId))}>Details...</Button>
+                {#if isActionableEscalation(t)}
+                  <Row justify="end" gap="2" wrap>
+                    <Button variant="secondary" disabled={busyTurnId === t.id} onclick={() => nav(currentTaskHref(t.taskId))}>Details...</Button>
                     {#if guidance.actionOwner === 'guildhall'}
                       <Button variant="agent" disabled={busyTurnId === t.id || runBusy} onclick={() => resolveEscalationAndResume(t)}>
                         <Icon name="sparkles" size={14} />
                         {recoveryAction.label}
+                      </Button>
+                    {:else}
+                      <Button variant="agent" disabled={busyTurnId === t.id} onclick={() => openEscalationResolution(t, 'retry')}>
+                        <Icon name="sparkles" size={14} />
+                        {recoveryAction.label}
+                      </Button>
+                      <Button variant="secondary" disabled={busyTurnId === t.id} onclick={() => openEscalationResolution(t, 'resolve')}>
+                        I handled this...
                       </Button>
                     {/if}
                   </Row>
@@ -3712,10 +4121,10 @@
                 </UtilityPanel>
               {:else if t.kind === 'inflight'}
                 <StateSummary
-                  label={t.taskStatus === 'ready' && hasIncompleteTaskChecklist(t) ? briefFixTitle(t) : taskStateLabel(t)}
+                  label={needsWorkerHandoffSpecCleanup(t) ? briefFixTitle(t) : taskStateLabel(t)}
                   description={taskStateDescription(t)}
                   tone={taskStateTone(t)}
-                  showLabel={!isQueuedForGuildhall(t)}
+                  showLabel={!isQueuedForGuildhall(t) || t.requestStage === 'task_brief_cleanup'}
                 />
                 {#if behindTheScenesNote(t)}
                   <StateSummary
@@ -3724,7 +4133,7 @@
                     tone="neutral"
                   />
                 {/if}
-                {#if t.taskStatus === 'ready' && hasIncompleteTaskChecklist(t) && replyTurnId !== t.id}
+                {#if needsWorkerHandoffSpecCleanup(t) && replyTurnId !== t.id}
                   {#if briefFixTurnId === t.id}
                     {@const draft = briefFixDrafts[t.id] ?? { successTarget: '', acceptanceCriterion: '' }}
                     <UtilityPanel className="brief-fix-panel" tone="accent">
@@ -3881,10 +4290,10 @@
                 {#if t.checklist}
                   <details class="thread-disclosure checklist-disclosure" open={!hasIncompleteTaskChecklist(t)}>
                     <summary>
-                      <span>{hasIncompleteTaskChecklist(t) ? 'Brief checklist' : t.checklist.title}</span>
-                      <Chip label={`${t.checklist.doneCount} of ${t.checklist.totalSteps}`} tone={hasIncompleteTaskChecklist(t) ? 'warn' : 'neutral'} />
+                      <span>{checklistTitleForTurn(t)}</span>
+                      <Chip label={`${t.checklist.doneCount} of ${t.checklist.totalSteps}`} tone={checklistToneForTurn(t)} />
                     </summary>
-                    <UtilityPanel className="live-checklist" tone={hasIncompleteTaskChecklist(t) ? 'warn' : 'neutral'}>
+                    <UtilityPanel className="live-checklist" tone={checklistToneForTurn(t)}>
                     <div class="live-checklist-steps">
                       {#each t.checklist.steps as step (step.id)}
                         <div class="live-step" class:done={step.status === 'done'} class:active={step.status === 'active'}>
@@ -3936,9 +4345,9 @@
                       {/if}
                     </Stack>
                   {/if}
-              {:else if !(t.taskStatus === 'ready' && hasIncompleteTaskChecklist(t))}
+              {:else if !needsWorkerHandoffSpecCleanup(t)}
                   <Row justify="end" gap="2">
-                    {#if t.taskStatus === 'ready' && !turnLiveAgent(t) && !hasIncompleteTaskChecklist(t)}
+                    {#if t.taskStatus === 'ready' && !turnLiveAgent(t) && !needsWorkerHandoffSpecCleanup(t)}
                       <Button variant="secondary" disabled={busyTurnId === t.id} onclick={() => markTaskDone(t)}>
                         Mark done...
                       </Button>
@@ -4032,7 +4441,7 @@
                       <Button variant={t.taskStatus === 'exploring' ? 'human' : 'secondary'} onclick={() => nav(currentTaskHref(t.taskId))}>
                         Details...
                       </Button>
-                      {#if t.taskStatus === 'ready' && hasIncompleteTaskChecklist(t)}
+                      {#if needsWorkerHandoffSpecCleanup(t)}
                         <Button variant="ghost" disabled={busyTurnId === t.id} onclick={() => (replyTurnId = t.id)}>
                           Add optional note
                         </Button>
@@ -4116,8 +4525,10 @@
             </Card>
           </div>
         {/if}
-                  {/each}
-                </Stack>
+        {/if}
+                      {/each}
+                    </Stack>
+                  </div>
 
                 {#if caughtUp}
                   <p class="muted caught-up">
@@ -4135,16 +4546,14 @@
                   </p>
                 {/if}
 
-                {#if activeDockTurn || footerComposer}
-                  <div class="thread-footer" aria-label="Thread footer">
-                    {#if activeDockTurn}
-                      <div
-                        class="thread-active-dock"
-                        aria-label="Active thread dock"
-                        data-turn-id={activeDockTurn.id}
-                      >
-                        <Card tone={tone(activeDockTurn)} frosted>
-                          <div class="thread-active-dock-body">
+                {#if activeDockTurn}
+                  <div
+                    class="thread-active-dock"
+                    aria-label="Active thread dock"
+                    data-turn-id={activeDockTurn.id}
+                  >
+                    <Card tone={tone(activeDockTurn)} frosted>
+                      <div class="thread-active-dock-body">
                         <div class="thread-active-dock-head">
                           <div class="thread-active-dock-copy">
                             <strong>{activeDockTitle(activeDockTurn)}</strong>
@@ -4162,15 +4571,82 @@
                         </div>
 
                         {#if activeDockTurn.kind === 'inflight'}
+                          {#if turnLiveAgent(activeDockTurn)}
+                            {@const live = turnLiveAgent(activeDockTurn)}
+                            <StatusLine
+                              label={liveAgentMessage(live)}
+                              tone={liveAgentTone(live)}
+                              pulse
+                              loud
+                            />
+                          {/if}
+
+                          {#if gitStoryVisible(activeDockTurn) && activeDockTurn.gitStory}
+                            <div class="git-story-callout" aria-label="Git story">
+                              <div class="git-story-main">
+                                <Chip label={gitStoryLabel(activeDockTurn.gitStory)} tone={gitStoryTone(activeDockTurn.gitStory)} />
+                                <span>{gitStorySummary(activeDockTurn.gitStory)}</span>
+                              </div>
+                              {#if activeDockTurn.gitStory.nextAction}
+                                <span class="git-story-next">{activeDockTurn.gitStory.nextAction}</span>
+                              {/if}
+                            </div>
+                          {/if}
+
                           {#if dockSourceSummary(activeDockTurn)}
                             <p class="thread-active-summary">{dockSourceSummary(activeDockTurn)}</p>
                           {/if}
 
+                          {#if activeDockTurn.taskDescription || activeDockTurn.sourceNote}
+                            <details class="thread-disclosure task-context-disclosure">
+                              <summary>
+                                <span>Starting point and source notes</span>
+                                {#if activeDockTurn.sourceNote?.references?.length}
+                                  <Chip label={badgeCountLabel(activeDockTurn.sourceNote.references.length)} tone="neutral" />
+                                {/if}
+                              </summary>
+                              <UtilityPanel className="task-context" tone="neutral">
+                                {#if activeDockTurn.taskDescription}
+                                  <div class="field">
+                                    <span class="field-label">Starting point</span>
+                                    <Markdown source={activeDockTurn.taskDescription} />
+                                  </div>
+                                {/if}
+                                {#if activeDockTurn.sourceNote?.references?.length}
+                                  <div class="field">
+                                    <span class="field-label">Imported from</span>
+                                    <div class="source-list">
+                                      {#each activeDockTurn.sourceNote.references as ref (ref)}
+                                        <button
+                                          type="button"
+                                          class="source-ref"
+                                          title="Open source note"
+                                          aria-label={`Open source note ${ref}`}
+                                          disabled={sourcePreviewLoadingRef === ref}
+                                          onclick={() => void openSourceNote(ref)}
+                                        >
+                                          <span>Open source note</span>
+                                          <code>{sourceDisplayName(ref)}</code>
+                                          {#if sourceDisplayHint(ref) !== sourceDisplayName(ref)}
+                                            <small>{sourceDisplayHint(ref)}</small>
+                                          {/if}
+                                        </button>
+                                      {/each}
+                                    </div>
+                                    {#if sourcePreviewError}
+                                      <p class="error">{sourcePreviewError}</p>
+                                    {/if}
+                                  </div>
+                                {/if}
+                              </UtilityPanel>
+                            </details>
+                          {/if}
+
                           {#if dockChecklistSummary(activeDockTurn)}
                             {@const checklistSummary = dockChecklistSummary(activeDockTurn)}
-                            <UtilityPanel className="thread-active-checklist" tone={hasIncompleteTaskChecklist(activeDockTurn) ? 'warn' : 'neutral'}>
+                            <UtilityPanel className="thread-active-checklist" tone={checklistToneForTurn(activeDockTurn)}>
                               <div class="thread-active-checklist-head">
-                                <strong>{hasIncompleteTaskChecklist(activeDockTurn) ? 'Brief checklist' : activeDockTurn.checklist?.title}</strong>
+                                <strong>{checklistTitleForTurn(activeDockTurn)}</strong>
                               </div>
                               <div class="thread-active-checklist-lines">
                                 <div class="thread-active-checklist-line">
@@ -4183,10 +4659,78 @@
                             </UtilityPanel>
                           {/if}
 
+                          {#if activeDockTurn.checklist}
+                            <details class="thread-disclosure checklist-disclosure" open={!hasIncompleteTaskChecklist(activeDockTurn)}>
+                              <summary>
+                                <span>{checklistTitleForTurn(activeDockTurn)}</span>
+                                <Chip label={`${activeDockTurn.checklist.doneCount} of ${activeDockTurn.checklist.totalSteps}`} tone={checklistToneForTurn(activeDockTurn)} />
+                              </summary>
+                              <UtilityPanel className="live-checklist" tone={checklistToneForTurn(activeDockTurn)}>
+                                <div class="live-checklist-steps">
+                                  {#each activeDockTurn.checklist.steps as step (step.id)}
+                                    <div class="live-step" class:done={step.status === 'done'} class:active={step.status === 'active'}>
+                                      <StatusLight
+                                        tone={checklistStepTone(activeDockTurn, step)}
+                                        pulse={step.status === 'active' && Boolean(turnLiveAgent(activeDockTurn))}
+                                      />
+                                      <div class="live-step-copy">
+                                        <strong>{step.title}</strong>
+                                        <span>{step.why}</span>
+                                      </div>
+                                      <span class="live-step-state">
+                                        {checklistStepLabel(activeDockTurn, step)}
+                                      </span>
+                                    </div>
+                                  {/each}
+                                </div>
+                              </UtilityPanel>
+                            </details>
+                          {/if}
+
+                          {#if activeDockTurn.activity?.length}
+                            <UtilityPanel className="live-activity" tone="neutral" ariaLabel="Recent agent activity">
+                              {#each activeDockTurn.activity.slice(0, 3) as item, index (`${item.at ?? 'event'}:${item.label}:${index}`)}
+                                <StatusLine
+                                  label={item.label}
+                                  detail={item.detail}
+                                  time={activityElapsed(item.at)}
+                                  tone={item.tone}
+                                  pulse={item.tone === 'running'}
+                                />
+                              {/each}
+                              {#if activeDockTurn.activity.length > 3}
+                                <details class="thread-disclosure activity-disclosure">
+                                  <summary>Show {activeDockTurn.activity.length - 3} earlier update{activeDockTurn.activity.length - 3 === 1 ? '' : 's'}</summary>
+                                  <div class="activity-extra">
+                                    {#each activeDockTurn.activity.slice(3) as item, index (`${item.at ?? 'event'}:${item.label}:extra:${index}`)}
+                                      <StatusLine
+                                        label={item.label}
+                                        detail={item.detail}
+                                        time={activityElapsed(item.at)}
+                                        tone={item.tone}
+                                        pulse={item.tone === 'running'}
+                                      />
+                                    {/each}
+                                  </div>
+                                </details>
+                              {/if}
+                            </UtilityPanel>
+                          {/if}
+
                           <Row justify="end" gap="2" wrap>
                             <Button variant="secondary" onclick={() => nav(currentTaskHref(activeDockTurn.taskId))}>
-                              Details...
+                              {needsRecovery(activeDockTurn) ? 'Inspect recovery' : 'Details...'}
                             </Button>
+                            {#if needsRecovery(activeDockTurn) && !turnLiveAgent(activeDockTurn)}
+                              <Button variant="ghost" disabled={busyTurnId === activeDockTurn.id} onclick={() => (replyTurnId = activeDockTurn.id)}>
+                                Add recovery note
+                              </Button>
+                            {/if}
+                            {#if activeDockTurn.taskStatus === 'ready' && !turnLiveAgent(activeDockTurn) && !needsWorkerHandoffSpecCleanup(activeDockTurn)}
+                              <Button variant="secondary" disabled={busyTurnId === activeDockTurn.id} onclick={() => markTaskDone(activeDockTurn)}>
+                                Mark done...
+                              </Button>
+                            {/if}
                             {#if activeDockTurn.taskStatus === 'import_draft'}
                               <Button variant="agent" disabled={busyTurnId === activeDockTurn.id} onclick={() => shapeDraft(activeDockTurn)}>
                                 <Icon name="sparkles" size={14} />
@@ -4197,20 +4741,76 @@
                                 <Icon name="sparkles" size={14} />
                                 {startTaskLabel(activeDockTurn)}
                               </Button>
+                            {:else if projectRunBlocksTaskStart(activeDockTurn)}
+                              <Button variant="secondary" disabled>Already queued</Button>
                             {:else if canStartTaskTurn(activeDockTurn)}
                               <Button
                                 variant="agent"
-                                disabled={projectRunBlocksTaskStart(activeDockTurn) || runBusy || busyTurnId === activeDockTurn.id}
+                                disabled={runBusy || busyTurnId === activeDockTurn.id}
                                 onclick={() => startTaskRun(activeDockTurn.taskId)}
                               >
                                 <Icon name="sparkles" size={14} />
-                                {projectRunBlocksTaskStart(activeDockTurn) ? 'Already queued' : startTaskLabel(activeDockTurn)}
+                                {startTaskLabel(activeDockTurn)}
                               </Button>
                             {/if}
                           </Row>
                           {#if runError && canStartTaskTurn(activeDockTurn)}
                             <p class="error">{runError}</p>
                           {/if}
+                        {:else if activeDockTurn.kind === 'escalation'}
+                          {@const guidance = escalationUserGuidance({ summary: activeDockTurn.summary, details: activeDockTurn.details, reason: activeDockTurn.escalationReason, agentId: activeDockTurn.escalationAgentId })}
+                          {@const recoveryAction = escalationPrimaryAction({ reason: activeDockTurn.escalationReason, agentId: activeDockTurn.escalationAgentId, summary: activeDockTurn.summary, details: activeDockTurn.details })}
+                          <p class="detail">{guidance.detail}</p>
+                          <p class="detail">{guidance.nextStep}</p>
+                          {#if guidance.technicalNote}
+                            <p class="detail"><strong>Technical note:</strong> {guidance.technicalNote}</p>
+                          {/if}
+                          {#if activeDockTurn.activity?.length}
+                            <UtilityPanel className="live-activity" tone="neutral" ariaLabel="Recent agent activity">
+                              {#each activeDockTurn.activity.slice(0, 3) as item, index (`${item.at ?? 'event'}:${item.label}:${index}`)}
+                                <StatusLine
+                                  label={item.label}
+                                  detail={item.detail}
+                                  time={activityElapsed(item.at)}
+                                  tone={item.tone}
+                                  pulse={item.tone === 'running'}
+                                />
+                              {/each}
+                              {#if activeDockTurn.activity.length > 3}
+                                <details class="thread-disclosure activity-disclosure">
+                                  <summary>Show {activeDockTurn.activity.length - 3} earlier update{activeDockTurn.activity.length - 3 === 1 ? '' : 's'}</summary>
+                                  <div class="activity-extra">
+                                    {#each activeDockTurn.activity.slice(3) as item, index (`${item.at ?? 'event'}:${item.label}:extra:${index}`)}
+                                      <StatusLine
+                                        label={item.label}
+                                        detail={item.detail}
+                                        time={activityElapsed(item.at)}
+                                        tone={item.tone}
+                                        pulse={item.tone === 'running'}
+                                      />
+                                    {/each}
+                                  </div>
+                                </details>
+                              {/if}
+                            </UtilityPanel>
+                          {/if}
+                          <Row justify="end" gap="2" wrap>
+                            <Button variant="secondary" disabled={busyTurnId === activeDockTurn.id} onclick={() => nav(currentTaskHref(activeDockTurn.taskId))}>Details...</Button>
+                            {#if guidance.actionOwner === 'guildhall'}
+                              <Button variant="agent" disabled={busyTurnId === activeDockTurn.id || runBusy} onclick={() => resolveEscalationAndResume(activeDockTurn)}>
+                                <Icon name="sparkles" size={14} />
+                                {recoveryAction.label}
+                              </Button>
+                            {:else}
+                              <Button variant="agent" disabled={busyTurnId === activeDockTurn.id} onclick={() => openEscalationResolution(activeDockTurn, 'retry')}>
+                                <Icon name="sparkles" size={14} />
+                                {recoveryAction.label}
+                              </Button>
+                              <Button variant="secondary" disabled={busyTurnId === activeDockTurn.id} onclick={() => openEscalationResolution(activeDockTurn, 'resolve')}>
+                                I handled this...
+                              </Button>
+                            {/if}
+                          </Row>
                         {:else if activeDockTurn.kind === 'agent_question'}
                           {@const dockQuestions = visibleQuestionsForCard(questionsForTurn(activeDockTurn))}
                           <div class="thread-active-question">
@@ -4282,14 +4882,54 @@
                                   >
                                     {choice}
                                   </Button>
-                                {/each}
-                              </div>
-                            {/if}
-                          </div>
+                              {/each}
+                            </div>
+                          {/if}
+                        </div>
+                        {:else if activeDockTurn.kind === 'bounded_chat'}
+                          <UtilityPanel className="bounded-chat-panel" tone="neutral">
+                            <div class="thread-active-question">
+                              <strong>{pressureQuestionMeta(activeDockTurn)}</strong>
+                              <Markdown source={pressureQuestionPrompt(activeDockTurn)} />
+                              <p class="why">{pressureQuestionWhy(activeDockTurn)}</p>
+                              {#if activeDockTurn.question.evidence.length}
+                                <div class="field">
+                                  <span class="field-label">Evidence</span>
+                                  <ul class="bullet">
+                                    {#each activeDockTurn.question.evidence as item}
+                                      <li><Markdown source={item} inline /></li>
+                                    {/each}
+                                  </ul>
+                                </div>
+                              {/if}
+                              {#if activeDockTurn.question.choices?.length}
+                                <div class="pressure-choice-list" aria-label="Answer choices">
+                                  {#each activeDockTurn.question.choices as choice}
+                                    <Button
+                                      variant="secondary"
+                                      disabled={busyTurnId === activeDockTurn.id}
+                                      onclick={() => answerPressureTestQuestion(activeDockTurn, choice)}
+                                    >
+                                      {choice}
+                                    </Button>
+                                  {/each}
+                                </div>
+                              {/if}
+                            </div>
+                          </UtilityPanel>
                         {:else if activeDockTurn.kind === 'brief_approval'}
                           {@const blockedByQuestions = hasOpenQuestionsForTask(activeDockTurn.taskId)}
+                          {@const briefScope = briefScopeForReaders(activeDockTurn.brief, activeDockTurn.taskTitle)}
+                          {@const briefDoneWhen = briefDoneWhenForReaders(activeDockTurn.brief)}
                           <div class="thread-active-review">
-                            <p>{briefScopeForReaders(activeDockTurn.brief, activeDockTurn.taskTitle)}</p>
+                            <div class="field"><span class="field-label">Scope</span>
+                              <Markdown source={briefScope} />
+                            </div>
+                            {#if briefDoneWhen}
+                              <div class="field"><span class="field-label">Done when</span>
+                                <Markdown source={briefDoneWhen} />
+                              </div>
+                            {/if}
                           </div>
                           <Row justify="end" gap="2" wrap>
                             <Button variant="secondary" disabled={busyTurnId === activeDockTurn.id} onclick={() => openBriefPreview(activeDockTurn)}>
@@ -4297,6 +4937,9 @@
                             </Button>
                             <Button variant="ghost" disabled={busyTurnId === activeDockTurn.id} onclick={() => nav(currentTaskHref(activeDockTurn.taskId))}>
                               Details...
+                            </Button>
+                            <Button variant="secondary" disabled={busyTurnId === activeDockTurn.id} onclick={() => (replyTurnId = activeDockTurn.id)}>
+                              No, change it
                             </Button>
                             <Button
                               variant="primary"
@@ -4323,6 +4966,9 @@
                             <Button variant="ghost" disabled={busyTurnId === activeDockTurn.id} onclick={() => nav(currentTaskHref(activeDockTurn.taskId))}>
                               Details...
                             </Button>
+                            <Button variant="secondary" disabled={busyTurnId === activeDockTurn.id} onclick={() => (replyTurnId = activeDockTurn.id)}>
+                              {activeDockTurn.taskId === 'task-meta-intake' ? 'Change the split' : 'Request changes'}
+                            </Button>
                             <Button
                               variant="primary"
                               disabled={busyTurnId === activeDockTurn.id || blockedByQuestions || missingSpec}
@@ -4333,14 +4979,15 @@
                           </Row>
                         {/if}
 
-                          </div>
-                        </Card>
                       </div>
-                    {/if}
+                    </Card>
+                  </div>
+                {/if}
 
-                    {#if footerComposer}
-                      <div class="thread-composer-shell" aria-label="Thread composer" class:thread-composer-working={footerComposer.kind === 'working'}>
-                        {#if footerComposer.kind === 'working'}
+                {#if footerComposer}
+                  <div class="thread-footer" aria-label="Thread footer">
+                    <div class="thread-composer-shell" aria-label="Thread composer" class:thread-composer-working={footerComposer.kind === 'working'}>
+                      {#if footerComposer.kind === 'working'}
                           <div class="thread-composer-head">
                             <div class="thread-composer-copy">
                               <strong>{footerComposer.title}</strong>
@@ -4404,6 +5051,7 @@
                                   variant={footerComposer.kind === 'question_context' ? 'agent' : 'primary'}
                                   size="sm"
                                   iconOnly
+                                  rounded
                                   ariaLabel={busyTurnId === (footerComposer.kind === 'agent_question_text' ? undefined : footerComposer.turn.id) ? 'Sending' : 'Send'}
                                   title="Send"
                                   disabled={
@@ -4421,7 +5069,6 @@
                                     else if (footerComposer.kind === 'agent_question_text') void answerFooterQuestion(footerComposer.turn, footerComposer.question)
                                     else void answerPressureTestQuestion(footerComposer.turn)
                                   }}
-                                  className="thread-composer-send"
                                 >
                                   <Icon name="arrow-up" size={14} />
                                 </Button>
@@ -4437,11 +5084,11 @@
                               <p class="error">{pressureTestErrors[footerComposer.turn.id]}</p>
                             {/if}
                           </div>
-                        {/if}
-                      </div>
-                    {/if}
+                      {/if}
+                    </div>
                   </div>
                 {/if}
+                </div>
               </div>
             </div>
           </section>
@@ -4452,6 +5099,15 @@
   {/if}
 
 </div>
+
+<ResolveEscalationModal
+  open={escalationModal !== null}
+  escalation={escalationModalRecord}
+  mode={escalationModal?.mode ?? 'resolve'}
+  busy={Boolean(escalationModal && busyTurnId === escalationModal.turn.id)}
+  onClose={() => (escalationModal = null)}
+  onSubmit={submitEscalationResolution}
+/>
 
 <Modal
   open={Boolean(sourcePreview)}
@@ -4506,10 +5162,10 @@
 
 <style>
   .thread {
-    --thread-fs-meta: var(--fs-0);
-    --thread-fs-body: var(--fs-1);
-    --thread-fs-title: var(--fs-2);
-    --thread-fs-display: var(--fs-4);
+    --thread-fs-meta: var(--gh-type-size-caption);
+    --thread-fs-body: var(--gh-type-size-meta);
+    --thread-fs-title: var(--gh-type-size-body);
+    --thread-fs-display: var(--gh-type-size-section-title);
     --thread-color-strong: color-mix(in srgb, var(--text) 84%, var(--text-soft));
     --thread-color-body: color-mix(in srgb, var(--text) 86%, var(--text-soft));
     --thread-color-soft: color-mix(in srgb, var(--text-soft) 90%, var(--text-muted));
@@ -4528,14 +5184,14 @@
     min-height: 0;
     display: flex;
     flex-direction: column;
-    gap: var(--s-3);
+    gap: var(--gh-space-3);
     overflow: hidden;
   }
-  .lede { margin: 0; color: var(--thread-color-muted); font-size: var(--thread-fs-body); }
+  .lede { margin: 0; color: var(--thread-color-muted); font-size: var(--gh-type-size-meta); }
   .handoff-copy {
     display: flex;
     flex-direction: column;
-    gap: var(--s-1);
+    gap: var(--gh-space-1);
     max-width: 44rem;
   }
   .handoff-copy span {
@@ -4560,100 +5216,67 @@
     min-height: 0;
     height: 100%;
     overflow: auto;
-    padding: 0;
+    padding: var(--gh-space-2);
     border-right: 1px solid color-mix(in srgb, var(--border) 92%, transparent);
   }
   .thread-index-list {
     display: flex;
     flex-direction: column;
-    gap: 0;
+    gap: var(--gh-space-2);
   }
-  .thread-index-row {
-    display: grid;
-    gap: calc(var(--s-1) - 2px);
+  :global(.thread-index-row) {
     width: 100%;
-    padding: var(--s-3) var(--s-3);
-    border: 0;
-    border-bottom: 1px solid color-mix(in srgb, var(--border) 92%, transparent);
-    border-left: 3px solid transparent;
-    border-radius: 0;
-    background: transparent;
     color: var(--text);
-    cursor: pointer;
-    text-align: left;
-    font: inherit;
-    transition:
-      border-color 120ms ease,
-      background-color 120ms ease,
-      box-shadow 120ms ease;
-  }
-  .thread-index-row:first-child {
-    border-top: 1px solid color-mix(in srgb, var(--border) 92%, transparent);
-  }
-  .thread-index-row:hover {
-    border-color: color-mix(in srgb, var(--accent) 22%, var(--border));
-    background: color-mix(in srgb, var(--accent) 7%, transparent);
-  }
-  .thread-index-row.active {
-    border-left-color: color-mix(in srgb, var(--accent) 66%, transparent);
-    border-color: color-mix(in srgb, var(--accent) 38%, var(--border));
-    background:
-      linear-gradient(180deg, color-mix(in srgb, var(--accent) 10%, transparent), color-mix(in srgb, var(--accent) 4%, transparent)),
-      color-mix(in srgb, var(--accent) 8%, transparent);
-    box-shadow:
-      inset 0 0 0 1px color-mix(in srgb, var(--accent) 32%, transparent),
-      inset 0 1px 0 color-mix(in srgb, white 12%, transparent),
-      0 16px 28px -24px color-mix(in srgb, var(--accent) 55%, transparent);
   }
   .thread-index-row-top {
     display: flex;
     align-items: baseline;
     justify-content: space-between;
-    gap: var(--s-2);
+    gap: var(--gh-space-2);
   }
   .thread-index-row-top strong {
     min-width: 0;
     color: var(--thread-color-strong);
-    font-size: var(--thread-fs-title);
-    line-height: var(--lh-tight);
-    font-weight: 650;
+    font-size: var(--gh-type-size-body);
+    line-height: var(--gh-type-line-height-tight);
+    font-weight: var(--gh-type-weight-strong);
   }
   .thread-index-time {
     flex: none;
     color: var(--thread-color-muted);
-    font-size: var(--thread-fs-meta);
-    font-weight: 600;
+    font-size: var(--gh-type-size-caption);
+    font-weight: var(--gh-type-weight-strong);
   }
   .thread-index-row-chips {
     display: flex;
     align-items: center;
-    gap: var(--s-1);
+    gap: var(--gh-space-1);
     flex-wrap: wrap;
     min-height: 1rem;
     margin-bottom: 2px;
   }
   .thread :global(.chip) {
-    font-size: var(--thread-fs-meta);
+    font-size: var(--gh-type-size-caption);
     letter-spacing: 0.04em;
   }
   .thread :global(.chip-count) {
-    font-size: var(--thread-fs-meta);
+    font-size: var(--gh-type-size-caption);
   }
   .thread-index-row-chips :global(.chip) {
-    font-size: var(--thread-fs-meta);
+    font-size: var(--gh-type-size-caption);
     padding: 0 0.35rem;
   }
   .thread-index-row-chips :global(.chip-count) {
     min-width: 1rem;
     height: 1rem;
     padding: 0 0.2rem;
-    font-size: var(--thread-fs-meta);
+    font-size: var(--gh-type-size-caption);
   }
-  .thread-index-row p {
+  :global(.thread-index-row) p {
     margin: 0;
     color: var(--thread-color-soft);
-    font-size: var(--thread-fs-body);
-    line-height: var(--lh-body);
+    font-size: var(--gh-type-size-meta);
+    line-height: var(--gh-type-line-height-body);
     display: -webkit-box;
     -webkit-line-clamp: 1;
     -webkit-box-orient: vertical;
@@ -4663,13 +5286,13 @@
     position: relative;
     display: flex;
     flex-direction: column;
-    gap: var(--s-2);
+    gap: var(--gh-space-2);
     min-height: 0;
     height: 100%;
     overflow: auto;
     scrollbar-gutter: stable;
-    padding-left: var(--s-4);
-    padding-right: var(--s-4);
+    padding-left: var(--gh-space-4);
+    padding-right: var(--gh-space-4);
   }
   .thread-detail-scroll-wrap {
     flex: 1;
@@ -4680,23 +5303,31 @@
   .thread-detail-scroll {
     display: flex;
     flex-direction: column;
-    gap: var(--s-3);
+    gap: var(--gh-space-3);
+    min-height: 100%;
+    padding-top: var(--gh-space-1);
+  }
+  .thread-detail-flow {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    gap: var(--gh-space-3);
     min-height: 100%;
   }
   .thread-detail-header {
     display: grid;
-    gap: 4px;
-    padding: var(--s-2) 0 var(--s-1);
+    gap: var(--gh-space-1);
+    padding: var(--gh-space-2) 0 var(--gh-space-1);
   }
   .thread-detail-header strong {
-    font-size: var(--thread-fs-display);
-    line-height: var(--lh-tight);
+    font-size: var(--gh-type-size-section-title);
+    line-height: var(--gh-type-line-height-tight);
   }
   .thread-detail-header p {
     margin: 0;
     color: var(--thread-color-muted);
-    font-size: var(--thread-fs-body);
-    line-height: var(--lh-body);
+    font-size: var(--gh-type-size-meta);
+    line-height: var(--gh-type-line-height-body);
   }
   .thread-list {
     margin-top: auto;
@@ -4709,26 +5340,16 @@
     position: relative;
     z-index: 1;
     display: grid;
-    gap: var(--s-2);
-    padding: var(--s-2);
-    border: 1px solid color-mix(in srgb, var(--glass-border-strong) 60%, var(--border));
-    border-radius: calc(var(--r-2) + var(--s-1));
-    background:
-      linear-gradient(180deg, color-mix(in srgb, var(--accent) 6%, transparent), transparent 30%),
-      color-mix(in srgb, var(--glass-bg-strong) 92%, var(--bg-raised));
-    box-shadow: var(--glass-shadow), var(--glass-etch);
-    backdrop-filter: saturate(1.15) var(--glass-blur);
-    -webkit-backdrop-filter: saturate(1.15) var(--glass-blur);
+    gap: var(--gh-space-2);
   }
   .thread-footer {
     position: sticky;
     bottom: 0;
     z-index: 2;
     display: grid;
-    gap: var(--s-2);
-    padding-top: var(--s-1);
-    padding-bottom: var(--s-1);
-    margin-top: auto;
+    gap: var(--gh-space-2);
+    padding-top: var(--gh-space-1);
+    padding-bottom: var(--gh-space-1);
     background: linear-gradient(180deg, transparent 0%, color-mix(in srgb, var(--bg-base) 88%, transparent) 18%, var(--bg-base) 100%);
   }
   .thread-active-dock {
@@ -4737,63 +5358,63 @@
     padding-inline: 0;
   }
   .thread-active-dock :global(.card) {
-    padding: var(--s-3);
+    padding: var(--gh-space-3);
   }
   .thread-active-dock-body {
     display: grid;
-    gap: var(--s-3);
+    gap: var(--gh-space-3);
   }
   .thread-active-dock-head {
     display: flex;
     align-items: flex-start;
     justify-content: space-between;
-    gap: var(--s-2);
+    gap: var(--gh-space-2);
   }
   .thread-active-dock-copy {
     min-width: 0;
     display: grid;
-    gap: 2px;
+    gap: var(--gh-space-1);
   }
   .thread-active-dock-copy strong {
     color: var(--thread-color-strong);
-    font-size: var(--thread-fs-body);
-    line-height: var(--lh-tight);
-    font-weight: 650;
+    font-size: var(--gh-type-size-meta);
+    line-height: var(--gh-type-line-height-tight);
+    font-weight: var(--gh-type-weight-strong);
   }
   .thread-active-dock-copy p {
     margin: 0;
     color: var(--thread-color-muted);
-    font-size: var(--thread-fs-meta);
-    line-height: var(--lh-body);
+    font-size: var(--gh-type-size-caption);
+    line-height: var(--gh-type-line-height-body);
   }
   .thread-active-dock-chips {
     display: flex;
     align-items: center;
-    gap: var(--s-1);
+    gap: var(--gh-space-1);
     flex-wrap: wrap;
   }
   .thread-active-checklist {
     display: grid;
-    gap: var(--s-2);
+    gap: var(--gh-space-2);
   }
   .thread-active-checklist-head {
     display: flex;
     align-items: center;
     justify-content: space-between;
-    gap: var(--s-2);
+    gap: var(--gh-space-2);
   }
   .thread-active-checklist-lines {
     display: grid;
-    gap: var(--s-1);
+    gap: var(--gh-space-1);
   }
   .thread-active-checklist-line {
     display: flex;
     align-items: center;
     justify-content: space-between;
-    gap: var(--s-2);
+    gap: var(--gh-space-2);
     color: var(--thread-color-muted);
-    font-size: var(--thread-fs-body);
-    line-height: var(--lh-body);
+    font-size: var(--gh-type-size-meta);
+    line-height: var(--gh-type-line-height-body);
   }
   .thread-active-checklist-line.is-complete {
     color: var(--text-soft);
@@ -4801,56 +5422,54 @@
   .thread-active-question,
   .thread-active-review {
     display: grid;
-    gap: var(--s-1);
+    gap: var(--gh-space-1);
   }
   .thread-active-summary {
     margin: 0;
     color: var(--thread-color-body);
-    font-size: var(--thread-fs-body);
-    line-height: var(--lh-body);
+    font-size: var(--gh-type-size-meta);
+    line-height: var(--gh-type-line-height-body);
   }
   .thread-active-question-block {
     display: grid;
-    gap: var(--s-2);
-  }
-  .thread-composer-working {
-    border-color: color-mix(in srgb, var(--accent-2) 34%, var(--border));
+    gap: var(--gh-space-2);
   }
   .thread-composer-head {
     display: grid;
-    gap: 2px;
+    gap: var(--gh-space-1);
   }
   .thread-composer-copy {
     min-width: 0;
     display: flex;
     flex-direction: column;
-    gap: 2px;
+    gap: var(--gh-space-1);
   }
   .thread-composer-copy strong {
     color: var(--thread-color-strong);
-    font-size: var(--thread-fs-meta);
-    line-height: var(--lh-tight);
+    font-size: var(--gh-type-size-caption);
+    line-height: var(--gh-type-line-height-tight);
   }
   .thread-composer-copy p {
     margin: 0;
     color: var(--thread-color-muted);
-    font-size: var(--thread-fs-meta);
-    line-height: var(--lh-body);
+    font-size: var(--gh-type-size-caption);
+    line-height: var(--gh-type-line-height-body);
   }
   .thread-composer-frame {
-    --thread-composer-action-inset: var(--s-2);
+    --thread-composer-action-inset: var(--gh-space-2);
     --thread-composer-action-size: 32px;
     display: grid;
-    gap: var(--s-1);
+    gap: var(--gh-space-1);
   }
   .thread-composer-input-shell {
     position: relative;
   }
   .thread-composer-input-shell :global(.textarea) {
+    display: block;
     min-height: 74px;
     padding-right: calc(var(--thread-composer-action-inset) + var(--thread-composer-action-size) + var(--control-pad-x));
     padding-bottom: calc(var(--thread-composer-action-inset) + var(--thread-composer-action-size) + var(--control-pad-y));
-    font-size: var(--fs-1);
+    font-size: var(--gh-type-size-meta);
   }
   .thread-composer-actions {
     position: absolute;
@@ -4858,15 +5477,7 @@
     bottom: var(--thread-composer-action-inset);
     display: flex;
     align-items: center;
-    gap: var(--s-1);
-  }
-  .thread-composer-send {
-    width: 32px;
-    min-width: 32px;
-    height: 32px;
-    min-height: 32px;
-    padding: 0;
-    border-radius: 999px;
+    gap: var(--gh-space-1);
   }
   @media (max-width: 1100px) {
     .thread-columns {
@@ -4893,35 +5504,17 @@
       top: auto;
       max-height: none;
       overflow: visible;
-      padding: 0;
+      padding: var(--gh-space-2) var(--app-shell-page-padding-inline, var(--gh-space-2)) var(--gh-space-3);
     }
     .thread.thread-compact-list .thread-index-list {
-      gap: 0;
-    }
-    .thread.thread-compact-list .thread-index-row {
-      padding: var(--s-3) var(--app-shell-page-padding-inline);
-      border-inline: 0;
-      border-radius: 0;
-      border-top: 0;
-      border-bottom: 1px solid color-mix(in srgb, var(--border) 92%, transparent);
-      background: transparent;
-      box-shadow: none;
-    }
-    .thread.thread-compact-list .thread-index-row:hover {
-      border-color: color-mix(in srgb, var(--accent) 22%, var(--border));
-      background: color-mix(in srgb, var(--accent) 7%, transparent);
-    }
-    .thread.thread-compact-list .thread-index-row.active {
-      border-color: color-mix(in srgb, var(--accent) 28%, var(--border));
-      background: color-mix(in srgb, var(--accent) 9%, transparent);
-      box-shadow: inset 3px 0 0 color-mix(in srgb, var(--accent) 56%, transparent);
+      gap: var(--gh-space-2);
     }
     .thread.thread-compact-list .thread-index-row-top strong {
-      font-size: var(--thread-fs-title);
+      font-size: var(--gh-type-size-body);
     }
-    .thread.thread-compact-list .thread-index-row p {
+    .thread.thread-compact-list .thread-index-list p {
       -webkit-line-clamp: 1;
-      font-size: var(--thread-fs-body);
+      font-size: var(--gh-type-size-meta);
     }
     .thread.thread-compact-detail {
       padding-top: 0;
@@ -4949,22 +5542,22 @@
     }
   }
   .turn :global(.card) {
-    padding: var(--s-3);
+    padding: var(--gh-space-3);
   }
   .thread-history-item {
     display: grid;
-    gap: var(--s-2);
+    gap: var(--gh-space-2);
   }
   .thread-history-item-question {
-    gap: var(--s-3);
+    gap: var(--gh-space-3);
   }
   .thread-chat-bubble {
     max-width: min(42rem, 74%);
     display: grid;
-    gap: var(--s-1);
-    padding: var(--s-2) var(--s-3);
+    gap: var(--gh-space-1);
+    padding: var(--gh-space-2) var(--gh-space-3);
     border: 1px solid color-mix(in srgb, var(--glass-border-strong) 40%, var(--border));
-    border-radius: 1.35rem;
+    border-radius: var(--gh-radius-full);
     box-shadow:
       var(--glass-shadow),
       inset 0 1px 0 color-mix(in srgb, white 8%, transparent);
@@ -4989,32 +5582,32 @@
     display: flex;
     align-items: baseline;
     justify-content: space-between;
-    gap: var(--s-2);
+    gap: var(--gh-space-2);
   }
   .thread-chat-bubble-head strong {
     color: var(--thread-color-strong);
-    font-size: var(--thread-fs-meta);
-    line-height: var(--lh-tight);
-    font-weight: 650;
+    font-size: var(--gh-type-size-caption);
+    line-height: var(--gh-type-line-height-tight);
+    font-weight: var(--gh-type-weight-strong);
   }
   .thread-chat-bubble-head span {
     color: var(--thread-color-muted);
-    font-size: var(--thread-fs-meta);
-    font-weight: 600;
+    font-size: var(--gh-type-size-caption);
+    font-weight: var(--gh-type-weight-strong);
   }
   .thread-chat-bubble p {
     margin: 0;
     color: var(--thread-color-body);
-    font-size: var(--thread-fs-body);
-    line-height: var(--lh-body);
+    font-size: var(--gh-type-size-meta);
+    line-height: var(--gh-type-line-height-body);
   }
   .thread-event {
     --thread-event-accent: color-mix(in srgb, var(--accent-warn) 72%, transparent);
     --thread-event-title: color-mix(in srgb, var(--text) 78%, var(--text-soft));
     --thread-event-copy: color-mix(in srgb, var(--text) 88%, var(--text-muted));
     display: grid;
-    gap: calc(var(--s-1) + 2px);
-    padding: var(--s-1) 0 var(--s-2) var(--s-3);
+    gap: var(--gh-space-2);
+    padding: var(--gh-space-1) 0 var(--gh-space-2) var(--gh-space-3);
     border: 0;
     background: none;
     box-shadow: none;
@@ -5027,7 +5620,7 @@
     top: 0.1rem;
     bottom: 0.15rem;
     width: 2px;
-    border-radius: 999px;
+    border-radius: var(--gh-radius-full);
     background: var(--thread-event-accent);
     box-shadow: 0 0 18px color-mix(in srgb, var(--thread-event-accent) 18%, transparent);
   }
@@ -5052,40 +5645,40 @@
     display: flex;
     align-items: baseline;
     justify-content: space-between;
-    gap: var(--s-2);
+    gap: var(--gh-space-2);
   }
   .thread-event-head strong {
-    font-size: var(--thread-fs-body);
-    line-height: var(--lh-tight);
+    font-size: var(--gh-type-size-meta);
+    line-height: var(--gh-type-line-height-tight);
     color: var(--thread-event-title);
-    font-weight: 650;
+    font-weight: var(--gh-type-weight-strong);
   }
   .thread-event-head span {
     color: var(--thread-color-muted);
-    font-size: var(--thread-fs-meta);
-    font-weight: 600;
+    font-size: var(--gh-type-size-caption);
+    font-weight: var(--gh-type-weight-strong);
   }
   .thread-event p {
     margin: 0;
     color: var(--thread-event-copy);
-    font-size: var(--thread-fs-body);
-    line-height: var(--lh-body);
+    font-size: var(--gh-type-size-meta);
+    line-height: var(--gh-type-line-height-body);
   }
   .thread-event-links {
     display: flex;
     flex-wrap: wrap;
-    gap: var(--s-1);
+    gap: var(--gh-space-1);
   }
   .thread-event-link {
     display: inline-flex;
     align-items: center;
-    gap: var(--s-1);
+    gap: var(--gh-space-1);
     padding: 0.35rem 0.6rem;
     border: 1px solid color-mix(in srgb, var(--glass-border-strong) 32%, var(--border));
-    border-radius: 999px;
+    border-radius: var(--gh-radius-full);
     background: color-mix(in srgb, var(--bg-raised) 72%, transparent);
     color: var(--thread-color-muted);
-    font-size: var(--thread-fs-meta);
+    font-size: var(--gh-type-size-caption);
     line-height: 1;
     transition:
       border-color 140ms ease,
@@ -5103,72 +5696,72 @@
   }
   .thread-history-cluster {
     display: grid;
-    gap: var(--s-2);
+    gap: var(--gh-space-2);
   }
   .thread-history-cluster summary {
     cursor: pointer;
     color: var(--text-muted);
-    font-size: var(--fs-0);
+    font-size: var(--gh-type-size-caption);
   }
   .thread-document-preview {
     display: grid;
-    gap: var(--s-3);
+    gap: var(--gh-space-3);
   }
   .thread-document-preview-head {
     display: grid;
-    gap: 2px;
+    gap: var(--gh-space-1);
   }
   .thread-document-preview-head strong {
-    font-size: var(--fs-1);
-    line-height: var(--lh-tight);
+    font-size: var(--gh-type-size-meta);
+    line-height: var(--gh-type-line-height-tight);
   }
   .thread-history-cluster-list {
     display: grid;
-    gap: var(--s-2);
-    padding-top: var(--s-1);
+    gap: var(--gh-space-2);
+    padding-top: var(--gh-space-1);
   }
   .thread-history-cluster-item {
     display: grid;
-    gap: 2px;
+    gap: var(--gh-space-1);
   }
   .thread-history-cluster-head {
     display: flex;
     align-items: baseline;
     justify-content: space-between;
-    gap: var(--s-2);
+    gap: var(--gh-space-2);
   }
   .thread-history-cluster-head strong {
-    font-size: var(--fs-0);
-    line-height: var(--lh-tight);
+    font-size: var(--gh-type-size-caption);
+    line-height: var(--gh-type-line-height-tight);
   }
   .thread-history-cluster-head span {
     color: var(--text-soft);
-    font-size: var(--fs-0);
+    font-size: var(--gh-type-size-caption);
   }
   .thread-history-cluster-item p {
     margin: 0;
     color: var(--text-muted);
-    font-size: var(--fs-0);
-    line-height: var(--lh-body);
+    font-size: var(--gh-type-size-caption);
+    line-height: var(--gh-type-line-height-body);
   }
   .meta {
     display: flex;
     flex-direction: column;
     align-items: flex-start;
-    gap: 2px;
+    gap: var(--gh-space-1);
     min-width: 0;
     color: var(--text-muted);
   }
   .persona {
     color: var(--text-muted);
-    font-size: var(--fs-0);
-    font-weight: 500;
-    line-height: var(--lh-tight);
+    font-size: var(--gh-type-size-caption);
+    font-weight: var(--gh-type-weight-medium);
+    line-height: var(--gh-type-line-height-tight);
   }
   .archive-time {
     color: var(--text-soft);
-    font-size: var(--fs-0);
-    line-height: var(--lh-tight);
+    font-size: var(--gh-type-size-caption);
+    line-height: var(--gh-type-line-height-tight);
   }
   .task-chip {
     display: inline-flex;
@@ -5177,14 +5770,14 @@
     border: 1px solid transparent;
     background: transparent;
     color: var(--text);
-    padding: 1px var(--s-1);
-    margin: -1px calc(-1 * var(--s-1));
-    border-radius: var(--r-1);
+    padding: 0 var(--gh-space-1);
+    margin: -1px calc(-1 * var(--gh-space-1));
+    border-radius: var(--gh-radius-1);
     cursor: pointer;
     font: inherit;
-    font-size: var(--fs-2);
-    font-weight: 550;
-    line-height: var(--lh-tight);
+    font-size: var(--gh-type-size-body);
+    font-weight: var(--gh-type-weight-medium);
+    line-height: var(--gh-type-line-height-tight);
     text-align: left;
   }
   .task-chip:hover {
@@ -5199,28 +5792,28 @@
     overflow-wrap: anywhere;
     text-align: left;
   }
-  .prompt { margin: 0; font-size: var(--fs-3); font-weight: 550; line-height: var(--lh-tight); }
+  .prompt { margin: 0; font-size: var(--gh-type-size-panel-title); font-weight: var(--gh-type-weight-medium); line-height: var(--gh-type-line-height-tight); }
   .question-card-heading {
     display: grid;
-    gap: var(--s-1);
+    gap: var(--gh-space-1);
   }
   .question-card-meta {
     color: var(--text-muted);
-    font-size: var(--fs-1);
-    font-weight: 750;
+    font-size: var(--gh-type-size-meta);
+    font-weight: var(--gh-type-weight-emphasis);
     letter-spacing: 0;
     text-transform: uppercase;
   }
   .setup-title {
     display: flex;
     align-items: center;
-    gap: var(--s-2);
+    gap: var(--gh-space-2);
     flex-wrap: wrap;
   }
   .prompt-row {
     display: flex;
     align-items: center;
-    gap: var(--s-1);
+    gap: var(--gh-space-1);
   }
   .prompt :global(.md),
   :global(.coord) :global(.coord-title) :global(.md),
@@ -5230,38 +5823,38 @@
     font-size: inherit;
     line-height: inherit;
   }
-  .why { margin: 0; color: var(--text-muted); font-size: var(--fs-2); line-height: var(--lh-body); }
+  .why { margin: 0; color: var(--text-muted); font-size: var(--gh-type-size-body); line-height: var(--gh-type-line-height-body); }
   .next-question-note {
     margin: 0;
     color: var(--text-soft);
-    font-size: var(--fs-1);
-    line-height: var(--lh-body);
+    font-size: var(--gh-type-size-meta);
+    line-height: var(--gh-type-line-height-body);
   }
   .pressure-choice-list {
     display: flex;
     align-items: stretch;
-    gap: var(--s-2);
+    gap: var(--gh-space-2);
     flex-wrap: wrap;
   }
   .git-story-callout {
     display: flex;
     align-items: center;
     justify-content: space-between;
-    gap: var(--s-2);
+    gap: var(--gh-space-2);
     flex-wrap: wrap;
-    padding: var(--s-2);
+    padding: var(--gh-space-2);
     border: 1px solid color-mix(in srgb, var(--warning) 32%, var(--border));
-    border-radius: var(--r-1);
+    border-radius: var(--gh-radius-1);
     background: color-mix(in srgb, var(--warning) 8%, var(--bg));
     color: var(--text-muted);
-    font-size: var(--fs-1);
-    line-height: var(--lh-normal);
+    font-size: var(--gh-type-size-meta);
+    line-height: var(--gh-type-line-height-body);
   }
   .git-story-main {
     min-width: 0;
     display: inline-flex;
     align-items: center;
-    gap: var(--s-2);
+    gap: var(--gh-space-2);
     flex-wrap: wrap;
   }
   .git-story-main span:last-child {
@@ -5269,58 +5862,58 @@
   }
   .git-story-next {
     color: var(--text);
-    font-weight: 650;
+    font-weight: var(--gh-type-weight-strong);
   }
   :global(.runtime-state-row) {
-    gap: var(--s-2);
+    gap: var(--gh-space-2);
   }
   :global(.setup-context) {
     display: grid;
-    gap: var(--s-2);
+    gap: var(--gh-space-2);
     color: var(--text-muted);
-    font-size: var(--fs-1);
-    line-height: var(--lh-body);
+    font-size: var(--gh-type-size-meta);
+    line-height: var(--gh-type-line-height-body);
   }
   :global(.setup-context) strong {
     color: var(--text);
-    font-size: var(--fs-1);
-    font-weight: 700;
+    font-size: var(--gh-type-size-meta);
+    font-weight: var(--gh-type-weight-emphasis);
   }
   :global(.setup-context) p {
     margin: 0;
   }
   :global(.setup-context) ul {
     display: grid;
-    gap: var(--s-1);
+    gap: var(--gh-space-1);
     margin: 0;
-    padding-inline-start: var(--s-4);
+    padding-inline-start: var(--gh-space-4);
   }
   .gating-row {
     display: flex;
     align-items: center;
     justify-content: space-between;
-    gap: var(--s-2);
+    gap: var(--gh-space-2);
     flex-wrap: wrap;
   }
-  .detail { margin: 0; color: var(--text-muted); font-size: var(--fs-1); }
-  .field { display: flex; flex-direction: column; gap: var(--s-1); }
+  .detail { margin: 0; color: var(--text-muted); font-size: var(--gh-type-size-meta); }
+  .field { display: flex; flex-direction: column; gap: var(--gh-space-1); }
   .field :global(.md) {
-    font-size: var(--fs-2);
-    font-weight: 400;
+    font-size: var(--gh-type-size-body);
+    font-weight: var(--gh-type-weight-body);
   }
   .field-label {
-    font-size: var(--fs-1);
+    font-size: var(--gh-type-size-meta);
     color: var(--text-muted);
-    font-weight: 500;
+    font-weight: var(--gh-type-weight-medium);
   }
   :global(.task-context) {
     display: flex;
     flex-direction: column;
-    gap: var(--s-2);
+    gap: var(--gh-space-2);
   }
   .thread-disclosure {
     border: 1px solid var(--border);
-    border-radius: var(--r-1);
+    border-radius: var(--gh-radius-1);
     background: color-mix(in srgb, var(--bg) 78%, transparent);
   }
   .thread-disclosure > summary {
@@ -5328,12 +5921,12 @@
     display: flex;
     align-items: center;
     justify-content: space-between;
-    gap: var(--s-2);
-    padding: var(--s-1) var(--s-2);
+    gap: var(--gh-space-2);
+    padding: var(--gh-space-1) var(--gh-space-2);
     color: var(--text-muted);
     cursor: pointer;
-    font-size: var(--fs-1);
-    font-weight: 650;
+    font-size: var(--gh-type-size-meta);
+    font-weight: var(--gh-type-weight-strong);
     list-style-position: inside;
   }
   .thread-disclosure > summary:hover {
@@ -5345,36 +5938,36 @@
   }
   .task-context-disclosure :global(.task-context) {
     border: 0;
-    border-radius: 0 0 var(--r-1) var(--r-1);
+    border-radius: 0 0 var(--gh-radius-1) var(--gh-radius-1);
     background: transparent;
     box-shadow: none;
-    padding: var(--s-2);
+    padding: var(--gh-space-2);
   }
   .source-list {
     display: grid;
     grid-template-columns: repeat(auto-fit, minmax(min(100%, 180px), 1fr));
-    gap: var(--s-2);
+    gap: var(--gh-space-2);
   }
   .source-ref {
     appearance: none;
     display: inline-flex;
     flex-direction: column;
     align-items: flex-start;
-    gap: 2px;
+    gap: var(--gh-space-1);
     max-width: 100%;
     border: 1px solid color-mix(in srgb, var(--accent-2) 46%, var(--border));
-    border-radius: var(--r-1);
+    border-radius: var(--gh-radius-1);
     background: color-mix(in srgb, var(--accent-2) 8%, transparent);
     color: var(--text);
     cursor: pointer;
     font: inherit;
-    padding: var(--s-1) var(--s-2);
+    padding: var(--gh-space-1) var(--gh-space-2);
     text-align: left;
   }
   .source-ref span {
     color: var(--accent-2);
-    font-size: var(--fs-1);
-    font-weight: 700;
+    font-size: var(--gh-type-size-meta);
+    font-weight: var(--gh-type-weight-emphasis);
     line-height: 1;
   }
   .source-ref code {
@@ -5389,8 +5982,8 @@
   .source-ref small {
     max-width: 100%;
     color: var(--text-muted);
-    font-size: var(--fs-0);
-    line-height: var(--lh-tight);
+    font-size: var(--gh-type-size-caption);
+    line-height: var(--gh-type-line-height-tight);
     overflow-wrap: anywhere;
   }
   .source-ref:disabled {
@@ -5409,7 +6002,7 @@
     display: flex;
     align-items: center;
     justify-content: space-between;
-    gap: var(--s-2);
+    gap: var(--gh-space-2);
     flex-wrap: wrap;
   }
   :global(.question-context-actions) :global(.btn) {
@@ -5423,27 +6016,27 @@
     flex: 1;
     display: flex;
     flex-direction: column;
-    gap: 2px;
+    gap: var(--gh-space-1);
     color: var(--text);
-    font-size: var(--fs-1);
-    line-height: var(--lh-tight);
+    font-size: var(--gh-type-size-meta);
+    line-height: var(--gh-type-line-height-tight);
   }
   .question-context-copy span {
     color: var(--text-muted);
-    font-size: var(--fs-0);
+    font-size: var(--gh-type-size-caption);
   }
   .source-preview {
     display: flex;
     flex-direction: column;
-    gap: var(--s-3);
+    gap: var(--gh-space-3);
   }
   .source-preview-path {
     display: flex;
     flex-direction: column;
-    gap: var(--s-1);
+    gap: var(--gh-space-1);
     color: var(--text-muted);
-    font-size: var(--fs-1);
-    font-weight: 600;
+    font-size: var(--gh-type-size-meta);
+    font-weight: var(--gh-type-weight-strong);
     text-transform: uppercase;
   }
   .source-preview-path code {
@@ -5455,21 +6048,21 @@
   .source-preview-warning {
     margin: 0;
     color: var(--warn);
-    font-size: var(--fs-1);
+    font-size: var(--gh-type-size-meta);
   }
-  :global(.source-preview-body) { padding: var(--s-3); }
+  :global(.source-preview-body) { padding: var(--gh-space-3); }
   .question-stack {
     display: flex;
     flex-direction: column;
-    gap: var(--s-2);
+    gap: var(--gh-space-2);
   }
   .question-inline {
     display: flex;
     flex-direction: column;
-    gap: var(--s-2);
-    padding: var(--s-2);
+    gap: var(--gh-space-2);
+    padding: var(--gh-space-2);
     border: 1px solid var(--glass-inset-border);
-    border-radius: var(--r-3);
+    border-radius: var(--gh-radius-3);
     background:
       radial-gradient(circle at 90% 10%, color-mix(in srgb, var(--accent) 7%, transparent), transparent 30%),
       var(--glass-inset-bg);
@@ -5478,82 +6071,82 @@
   .question-more-note {
     margin: 0;
     color: var(--text-muted);
-    font-size: var(--fs-1);
-    line-height: var(--lh-body);
+    font-size: var(--gh-type-size-meta);
+    line-height: var(--gh-type-line-height-body);
   }
   .setup-form {
     display: grid;
     grid-template-columns: minmax(0, 1fr) auto;
-    gap: var(--s-2);
+    gap: var(--gh-space-2);
     align-items: start;
   }
   :global(.answer-panel) {
-    padding: var(--s-2);
+    padding: var(--gh-space-2);
   }
-  .answer { margin: 0; font-size: var(--fs-2); }
-  .bullet { padding-left: var(--s-4); margin: 0; font-size: var(--fs-2); }
-  :global(.spec-preview-panel) { padding: var(--s-2); }
+  .answer { margin: 0; font-size: var(--gh-type-size-body); }
+  .bullet { padding-left: var(--gh-space-4); margin: 0; font-size: var(--gh-type-size-body); }
+  :global(.spec-preview-panel) { padding: var(--gh-space-2); }
   .spec-preview { max-height: 240px; overflow: auto; }
   .coord-list {
     display: flex;
     flex-direction: column;
-    gap: var(--s-2);
+    gap: var(--gh-space-2);
   }
   .decision-question {
     color: var(--text);
-    font-weight: 600;
+    font-weight: var(--gh-type-weight-strong);
   }
   .draft-summary-list {
     display: flex;
     flex-direction: column;
-    gap: var(--s-2);
+    gap: var(--gh-space-2);
   }
   :global(.draft-summary-item) {
     display: flex;
     align-items: center;
-    gap: var(--s-2);
-    font-size: var(--fs-2);
+    gap: var(--gh-space-2);
+    font-size: var(--gh-type-size-body);
   }
   .draft-details {
     border: 1px solid var(--border);
-    border-radius: var(--r-2);
+    border-radius: var(--gh-radius-2);
     background: var(--bg);
-    padding: var(--s-2) var(--s-3);
+    padding: var(--gh-space-2) var(--gh-space-3);
   }
   .draft-details summary {
     cursor: pointer;
     color: var(--text-muted);
-    font-size: var(--fs-1);
-    font-weight: 600;
+    font-size: var(--gh-type-size-meta);
+    font-weight: var(--gh-type-weight-strong);
   }
   .draft-details[open] summary {
-    margin-bottom: var(--s-2);
+    margin-bottom: var(--gh-space-2);
   }
   :global(.coord) {
     display: flex;
     flex-direction: column;
-    gap: var(--s-1);
-    font-size: var(--fs-2);
-    line-height: var(--lh-body);
+    gap: var(--gh-space-1);
+    font-size: var(--gh-type-size-body);
+    line-height: var(--gh-type-line-height-body);
   }
   :global(.coord) :global(.coord-mandate) {
     margin: 0;
     color: var(--text);
   }
   :global(.coord) :global(.coord-concerns) {
-    font-size: var(--fs-1);
+    font-size: var(--gh-type-size-meta);
     color: var(--text-muted);
-    line-height: var(--lh-body);
+    line-height: var(--gh-type-line-height-body);
   }
   :global(.live-checklist) {
     display: flex;
     flex-direction: column;
-    gap: var(--s-2);
+    gap: var(--gh-space-2);
   }
   :global(.live-activity) {
     display: flex;
     flex-direction: column;
-    gap: var(--s-1);
+    gap: var(--gh-space-1);
   }
   :global(.live-activity) :global(.status-detail) {
     display: -webkit-box;
@@ -5566,41 +6159,41 @@
   }
   .activity-disclosure > summary {
     min-height: auto;
-    padding: var(--s-1);
+    padding: var(--gh-space-1);
   }
   .activity-extra {
     display: grid;
-    gap: var(--s-1);
-    padding: var(--s-1);
+    gap: var(--gh-space-1);
+    padding: var(--gh-space-1);
   }
   :global(.review-feedback) {
     display: grid;
-    gap: var(--s-2);
+    gap: var(--gh-space-2);
   }
   .review-feedback-meta {
     margin: 0;
     color: var(--text);
-    font-size: var(--fs-1);
-    font-weight: 600;
+    font-size: var(--gh-type-size-meta);
+    font-weight: var(--gh-type-weight-strong);
   }
   .review-feedback-note {
     margin: 0;
     color: var(--text-muted);
-    font-size: var(--fs-2);
-    line-height: var(--lh-body);
+    font-size: var(--gh-type-size-body);
+    line-height: var(--gh-type-line-height-body);
   }
   :global(.dev-server-row),
   :global(.capability-request-row) {
     display: grid;
     grid-template-columns: minmax(0, 1fr) auto;
     align-items: start;
-    gap: var(--s-3);
+    gap: var(--gh-space-3);
   }
   .dev-server-main,
   .capability-request-main {
     min-width: 0;
     display: grid;
-    gap: var(--s-1);
+    gap: var(--gh-space-1);
   }
   .dev-server-main p,
   .capability-request-main p {
@@ -5608,55 +6201,55 @@
     overflow-wrap: anywhere;
   }
   .compact-field {
-    margin-top: var(--s-1);
+    margin-top: var(--gh-space-1);
   }
   .dev-server-logs {
-    margin: var(--s-2) 0 0;
+    margin: var(--gh-space-2) 0 0;
     max-height: 12rem;
     overflow: auto;
     white-space: pre-wrap;
     overflow-wrap: anywhere;
-    font-size: var(--fs-1);
+    font-size: var(--gh-type-size-meta);
   }
   :global(.brief-fix-panel) {
     display: grid;
-    gap: var(--s-2);
+    gap: var(--gh-space-2);
   }
   .brief-fix-intro {
     margin: 0;
     color: var(--text);
-    font-size: var(--fs-2);
-    line-height: var(--lh-body);
+    font-size: var(--gh-type-size-body);
+    line-height: var(--gh-type-line-height-body);
   }
   .brief-fix-field {
     display: grid;
-    gap: var(--s-1);
+    gap: var(--gh-space-1);
     color: var(--text);
-    font-size: var(--fs-1);
-    font-weight: 700;
+    font-size: var(--gh-type-size-meta);
+    font-weight: var(--gh-type-weight-emphasis);
   }
   .live-checklist-head,
   .live-step {
     display: flex;
     align-items: center;
-    gap: var(--s-2);
+    gap: var(--gh-space-2);
   }
   .live-checklist-head {
     justify-content: space-between;
     color: var(--text);
-    font-size: var(--fs-2);
+    font-size: var(--gh-type-size-body);
   }
   .live-checklist-head span,
   .live-step-state {
     color: var(--text-muted);
-    font-size: var(--fs-1);
-    font-weight: 700;
+    font-size: var(--gh-type-size-meta);
+    font-weight: var(--gh-type-weight-emphasis);
     text-transform: uppercase;
   }
   .live-checklist-steps {
     display: flex;
     flex-direction: column;
-    gap: var(--s-2);
+    gap: var(--gh-space-2);
   }
   .live-step {
     min-height: 44px;
@@ -5666,14 +6259,14 @@
     flex: 1;
     display: flex;
     flex-direction: column;
-    gap: 2px;
+    gap: var(--gh-space-1);
     color: var(--text);
-    font-size: var(--fs-2);
-    line-height: var(--lh-body);
+    font-size: var(--gh-type-size-body);
+    line-height: var(--gh-type-line-height-body);
   }
   .live-step-copy span {
     color: var(--text-muted);
-    font-size: var(--fs-1);
+    font-size: var(--gh-type-size-meta);
   }
   .live-step.done .live-step-copy {
     color: var(--text-muted);
@@ -5688,36 +6281,33 @@
     border-color: color-mix(in srgb, var(--accent) 30%, var(--border));
   }
   .muted { color: var(--text-muted); }
-  .caught-up { text-align: center; padding: var(--s-3); }
+  .caught-up { text-align: center; padding: var(--gh-space-3); }
   .section-footer {
     display: flex;
     align-items: center;
     justify-content: flex-end;
-    gap: var(--s-3);
-    padding: var(--s-2) var(--s-3);
+    gap: var(--gh-space-3);
+    padding: var(--gh-space-2) var(--gh-space-3);
     background: var(--bg-raised-2);
     border: 1px dashed var(--border);
-    border-radius: var(--r-2);
+    border-radius: var(--gh-radius-2);
   }
   .gating {
     color: var(--warn, #d0a146);
-    font-size: var(--fs-1);
+    font-size: var(--gh-type-size-meta);
     margin: 0;
   }
   .section-status {
-    font-size: var(--fs-1);
+    font-size: var(--gh-type-size-meta);
     color: var(--text-muted);
     margin-right: auto;
   }
   .error {
     color: var(--danger);
-    font-size: var(--fs-1);
+    font-size: var(--gh-type-size-meta);
     margin: 0;
   }
   @media (max-width: 640px) {
-    .thread-composer-shell {
-      padding: var(--s-2);
-    }
     .thread-composer-head {
       flex-direction: column;
     }

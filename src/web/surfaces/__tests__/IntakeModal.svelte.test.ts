@@ -16,6 +16,7 @@ function json(data: unknown): Response {
 
 function installBrowserFakes() {
   window.history.replaceState({}, '', '/projects/looma-knit/thread')
+  path.href = '/projects/looma-knit/thread'
   path.value = '/projects/looma-knit/thread'
   project.detail = {
     id: 'looma-knit',
@@ -88,6 +89,7 @@ describe('IntakeModal', () => {
     expect(created.mock.calls[0]?.[0]).toMatchObject({
       detail: { boundedChatId: 'bc-new-thread-1' },
     })
+    expect(path.href).toBe('/projects/looma-knit/thread?thread=bc-new-thread-1')
     expect(path.value).toBe('/projects/looma-knit/thread')
     window.removeEventListener('guildhall:request-created', created)
     expect(fetchMock).toHaveBeenCalledWith(

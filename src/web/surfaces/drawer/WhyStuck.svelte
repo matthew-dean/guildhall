@@ -6,7 +6,7 @@
     · Overflow: details collapsed behind a <details> toggle.
 -->
 <script lang="ts">
-  import Card from '../../lib/Card.svelte'
+  import Card from '../../lib/ui-compat/Card.svelte'
   import Stack from '../../lib/Stack.svelte'
   import Row from '../../lib/Row.svelte'
   import Button from '../../lib/Button.svelte'

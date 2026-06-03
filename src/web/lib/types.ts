@@ -49,6 +49,25 @@ export interface StructuredSpecCompletionBoundary {
   whatMustBeSplitOrBlocked?: string
 }
 
+export interface StructuredSpecContractSurfaceDelta {
+  surfaceId?: string
+  proposedSurfaceLabel?: string
+  relation: 'consumes' | 'extends' | 'amends' | 'deprecates' | 'replaces' | string
+  summary: string
+  invariantRefs?: string[]
+  proposedInvariants?: Array<{
+    id?: string
+    label: string
+    rule: string
+    reason: string
+    proofObligations?: string[]
+  }>
+  breakingChange?: boolean
+  affectedConsumerRefs?: string[]
+  proofObligations: string[]
+  migrationNotes?: string
+}
+
 export interface StructuredSpec {
   whatThisIs?: string
   problemContext?: string
@@ -56,6 +75,7 @@ export interface StructuredSpec {
   nonGoals?: string[]
   proposedDesign?: string
   keyDecisions?: string[]
+  contractSurfaceDeltas?: StructuredSpecContractSurfaceDelta[]
   acceptanceCriteria?: string[]
   verification?: string[]
   completionBoundary?: StructuredSpecCompletionBoundary
@@ -392,6 +412,7 @@ export interface Task {
   openQuestions?: AgentQuestion[]
   spec?: string
   structuredSpec?: StructuredSpec
+  contractSurfaceReviewPackets?: ContractSurfaceReviewPacket[]
   acceptanceCriteria?: AcceptanceCriterion[]
   gateResults?: GateResult[]
   reviewVerdicts?: ReviewVerdict[]
@@ -467,6 +488,9 @@ export interface Task {
     depth?: number
     path?: string[]
   }
+  businessEnvelope?: {
+    goalId?: string
+  }
   completionBoundary?: {
     summary?: string
     requiredChildPolicy?: 'all_required_done' | 'selected_children_done' | 'manual_handoff' | string
@@ -491,9 +515,30 @@ export interface Task {
     assignedTo?: string | null
     updatedAt?: string
   }
-  parentGoalId?: string
   permissionMode?: string
   dependsOn?: string[]
+}
+
+export interface ContractSurfaceReviewPacket {
+  id: string
+  surface: {
+    id: string
+    label: string
+    kind: string
+    authority: string
+    scope: string
+    owningProject: { id: string; label: string; path?: string }
+    domain?: { id: string; label: string; path?: string }
+  }
+  currentSpecRef: string
+  knownConsumers: Array<{ id: string; label: string; path?: string }>
+  existingInvariants: Array<{ id: string; label: string; rule: string; proofObligations?: string[] }>
+  existingDecisions: Array<{ id: string; summary: string; decidedAt: string; decidedBy: string; evidenceRefs?: string[] }>
+  siblingSpecRefs: string[]
+  driftFindings: string[]
+  currentDelta: StructuredSpecContractSurfaceDelta
+  proofObligations: string[]
+  reviewFocus: string[]
 }
 
 export interface ContextSectionStat {
@@ -587,6 +632,11 @@ export interface TaskTurnChecklist {
   steps: TaskTurnChecklistStep[]
 }
 
+export interface TaskTurnWorkerHandoff {
+  ready: boolean
+  cleanupNeeded: boolean
+}
+
 export interface TaskThreadTurnBase {
   id: string
   at: string
@@ -656,6 +706,7 @@ export interface TaskThreadInFlightTurn extends TaskThreadTurnBase {
   liveAgent?: TaskTurnLiveAgent
   activity?: TaskTurnLiveActivity[]
   checklist?: TaskTurnChecklist
+  workerHandoff?: TaskTurnWorkerHandoff
 }
 
 export type TaskThreadTurn =
@@ -1068,6 +1119,7 @@ export type ProjectView =
   | 'inbox'
   | 'work'
   | 'planner'
+  | 'structure'
   | 'timeline'
   | 'release'
   | 'settings'

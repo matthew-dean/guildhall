@@ -6,6 +6,10 @@ interface TaskStateLike {
   liveAgent?: unknown
   activity?: TaskTurnLiveActivity[]
   checklist?: unknown
+  workerHandoff?: {
+    ready?: unknown
+    cleanupNeeded?: unknown
+  }
   phase?: string
 }
 
@@ -61,6 +65,18 @@ export function hasIncompleteTaskChecklist(turn: Pick<TaskStateLike, 'checklist'
   return Number.isFinite(doneCount) && Number.isFinite(totalSteps) && totalSteps > 0 && doneCount < totalSteps
 }
 
+type WorkerHandoffTurnLike = Pick<TaskStateLike, 'taskStatus' | 'checklist' | 'workerHandoff'>
+
+function needsWorkerHandoffTurnCleanup(
+  turn: Pick<TaskStateLike, 'taskStatus' | 'checklist' | 'workerHandoff'>,
+): boolean {
+  if (turn.taskStatus !== 'ready') return false
+  if (hasIncompleteTaskChecklist(turn)) return true
+  const handoff = turn.workerHandoff
+  if (!handoff || typeof handoff !== 'object') return false
+  return handoff.cleanupNeeded === true || handoff.ready === false
+}
+
 export function hasApprovedProductBrief(task: Pick<TaskSpecLike, 'productBrief'>): boolean {
   return Boolean(
     task.productBrief &&
@@ -99,7 +115,10 @@ export function isCompleteForWorkerHandoff(task: TaskSpecLike): boolean {
   return hasApprovedProductBrief(task) && hasCompleteProductBrief(task) && hasSpecDraftContent(task)
 }
 
-export function needsWorkerHandoffSpecCleanup(task: Pick<Task, 'status'> & TaskSpecLike): boolean {
+export function needsWorkerHandoffSpecCleanup(task: (Pick<Task, 'status'> & TaskSpecLike) | WorkerHandoffTurnLike): boolean {
+  if ('taskStatus' in task || 'workerHandoff' in task || 'checklist' in task) {
+    return needsWorkerHandoffTurnCleanup(task as WorkerHandoffTurnLike)
+  }
   return task.status === 'ready' && !isCompleteForWorkerHandoff(task)
 }
 

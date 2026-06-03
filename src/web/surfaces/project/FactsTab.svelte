@@ -5,7 +5,7 @@
   place to modify.
 -->
 <script lang="ts">
-  import Card from '../../lib/Card.svelte'
+  import Card from '../../lib/ui-compat/Card.svelte'
   import Stack from '../../lib/Stack.svelte'
   import UtilityPanel from '../../lib/UtilityPanel.svelte'
   import { formatUserPath } from '../../lib/display-path.js'

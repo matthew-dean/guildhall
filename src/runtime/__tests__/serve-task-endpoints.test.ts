@@ -1,8 +1,8 @@
-import { describe, it, expect, beforeEach, afterEach } from 'vitest'
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import fs from 'node:fs/promises'
 import path from 'node:path'
 import os from 'node:os'
-import { bootstrapWorkspace, writeWorkspaceConfig } from '@guildhall/config'
+import { bootstrapWorkspace, setProvider, updateProjectConfig, writeWorkspaceConfig } from '@guildhall/config'
 import {
   getProjectContextDebugLedgerPath,
   getProjectRecentEventsPath,
@@ -10,6 +10,7 @@ import {
 } from '@guildhall/sessions'
 import { readExploringTranscript, writeCheckpoint } from '@guildhall/tools'
 import { buildServeApp, filterEventsForTask } from '../serve.js'
+import { OrchestratorSupervisor } from '../serve-supervisor.js'
 import { createReviewAuditStore } from '../review-audit-store.js'
 import { FileBackedGuildhallPersistence } from '@guildhall/persistence'
 
@@ -55,15 +56,67 @@ async function seedTask(id: string, overrides: Record<string, any> = {}): Promis
   await fs.writeFile(tasksPath, JSON.stringify(queue, null, 2), 'utf8')
 }
 
+async function seedTasks(tasks: Array<Record<string, any>>): Promise<void> {
+  const now = new Date().toISOString()
+  const tasksPath = path.join(memoryDir, 'TASKS.json')
+  const queue = {
+    version: 1,
+    lastUpdated: now,
+    tasks: tasks.map((task, index) => ({
+      id: `task-${index + 1}`,
+      title: `Seeded task ${index + 1}`,
+      description: 'A test task',
+      domain: 'looma',
+      projectPath: tmpDir,
+      status: 'ready',
+      priority: 'normal',
+      revisionCount: 0,
+      remediationAttempts: 0,
+      origination: 'human',
+      createdAt: now,
+      updatedAt: now,
+      ...task,
+    })),
+  }
+  await fs.writeFile(tasksPath, JSON.stringify(queue, null, 2), 'utf8')
+}
+
+function createTrackingSupervisor(): {
+  supervisor: OrchestratorSupervisor
+  starts: Array<{ preferredTaskId?: string; stopAfterOneTask?: boolean }>
+} {
+  const starts: Array<{ preferredTaskId?: string; stopAfterOneTask?: boolean }> = []
+  const supervisor = new OrchestratorSupervisor({
+    resolveConfig: () => ({ workspaceId: projectId, projectPath: tmpDir } as any),
+    runOrchestrator: async (_config, opts) => {
+      starts.push({
+        ...(opts?.preferredTaskId ? { preferredTaskId: opts.preferredTaskId } : {}),
+        ...(opts?.stopAfterOneTask ? { stopAfterOneTask: true } : {}),
+      })
+      await new Promise<void>((resolve) => {
+        if (opts?.abortSignal?.aborted) {
+          resolve()
+          return
+        }
+        opts?.abortSignal?.addEventListener('abort', () => resolve(), { once: true })
+      })
+      return { ticks: 1, stopReason: 'stop_requested', stopMessage: 'Stop requested.' }
+    },
+  })
+  return { supervisor, starts }
+}
+
 beforeEach(async () => {
   tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'guildhall-serve-tasks-'))
   process.env.GUILDHALL_DATA_DIR = path.join(tmpDir, '.guildhall-data')
+  process.env.GUILDHALL_CONFIG_DIR = path.join(tmpDir, '.guildhall-config')
   projectId = bootstrapWorkspace(tmpDir, { name: 'Task Endpoints Test' }).id ?? path.basename(tmpDir)
   memoryDir = getProjectStateDir(tmpDir)
 })
 
 afterEach(async () => {
   delete process.env.GUILDHALL_DATA_DIR
+  delete process.env.GUILDHALL_CONFIG_DIR
   await fs.rm(tmpDir, { recursive: true, force: true })
 })
 
@@ -1127,7 +1180,7 @@ describe('POST /api/project/task/:id/create-split-children', () => {
   it('materializes stored split-required recommendations into child tasks', async () => {
     await seedTask('task-1', {
       status: 'spec_review',
-      parentGoalId: 'goal-task-1',
+      businessEnvelope: { goalId: 'goal-task-1' },
       sizePlan: {
         taskId: 'task-1',
         score: 8,
@@ -1170,12 +1223,19 @@ describe('POST /api/project/task/:id/create-split-children', () => {
 
     const raw = JSON.parse(await fs.readFile(path.join(memoryDir, 'TASKS.json'), 'utf8')) as Record<string, any>
     expect(raw.tasks).toHaveLength(3)
-    expect(raw.tasks[0].status).toBe('parent')
+    expect(raw.tasks[0].status).toBe('ready')
+    expect(raw.tasks[0].hierarchy.childIds).toEqual(body.createdTaskIds)
+    expect(raw.tasks[0].taskReadiness.recommendation).toBe('split')
     expect(raw.tasks[0].sizePlan.recommendedChildren.map((child: Record<string, unknown>) => child.createdTaskId)).toEqual(body.createdTaskIds)
     expect(raw.tasks[1]).toMatchObject({
       id: 'task-1-split-implement-the-billing-settings-workflow',
       status: 'exploring',
-      parentGoalId: 'goal-task-1',
+      businessEnvelope: { goalId: 'goal-task-1' },
+      hierarchy: {
+        parentId: 'task-1',
+        order: 0,
+        childIds: [],
+      },
       origination: 'system',
       proposedBy: 'task-sizing',
     })
@@ -1374,14 +1434,6 @@ describe('POST /api/project/task/:id/reframe-task', () => {
       },
       spec: '## Summary\nOld schematic-style spec.',
       acceptanceCriteria: [{ id: 'AC-8', description: 'Provide authoritative verification evidence.', verifiedBy: 'review' }],
-      openQuestions: [{
-        kind: 'choice',
-        id: 'q-old',
-        askedBy: 'worker-agent',
-        askedAt: new Date().toISOString(),
-        prompt: 'Choose recovery path.',
-        choices: ['retry', 'resolve'],
-      }],
       escalations: [{
         id: 'esc-old',
         taskId: 'task-1',
@@ -1415,8 +1467,6 @@ describe('POST /api/project/task/:id/reframe-task', () => {
     expect(task.productBrief).toBeUndefined()
     expect(task.spec).toBeUndefined()
     expect(task.acceptanceCriteria).toEqual([])
-    expect(task.openQuestions[0]?.answeredAt).toBeTruthy()
-    expect(task.openQuestions[0]?.answer).toMatch(/Superseded by a task reframe/i)
     expect(task.escalations[0]?.resolvedAt).toBeTruthy()
     expect(task.notes.some((note: Record<string, unknown>) => /reframe/i.test(String(note.content ?? '')))).toBe(true)
     const transcript = (await readExploringTranscript({ memoryDir, taskId: 'task-1' })).content ?? ''
@@ -1450,6 +1500,69 @@ describe('POST /api/project/task/:id/reframe-task', () => {
 })
 
 describe('POST /api/project/task/:id/enrich-task', () => {
+  it('converts legacy partial task readiness records before brief cleanup enrichment', async () => {
+    await seedTasks([
+      {
+        id: 'task-1',
+        status: 'ready',
+        title: 'Ready task with an incomplete brief',
+        productBrief: { approvedAt: new Date().toISOString(), userJob: 'Understand policy overhead.' },
+        spec: '## Summary\nDraft overhead policy.',
+        acceptanceCriteria: [{ id: 'ac-1', description: 'Policy has a concrete check.', verifiedBy: 'review' }],
+        taskReadiness: { recommendation: 'ready' },
+        notes: [],
+      },
+      {
+        id: 'task-legacy-sibling',
+        status: 'ready',
+        title: 'Sibling carrying old split readiness',
+        taskReadiness: { recommendation: 'split' },
+        notes: [],
+      },
+    ])
+    const { app } = buildServeApp({ projectPath: tmpDir })
+
+    const res = await app.fetch(
+      new Request(projectUrl('/api/project/task/task-1/enrich-task'), {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          mode: 'checklist',
+          instruction: 'Complete this task for worker handoff.',
+        }),
+      }),
+    )
+
+    const body = await res.json() as Record<string, any>
+    expect(res.status, JSON.stringify(body)).toBe(200)
+    expect(body).toMatchObject({ ok: true, status: 'exploring' })
+
+    const raw = JSON.parse(
+      await fs.readFile(path.join(memoryDir, 'TASKS.json'), 'utf8'),
+    ) as { tasks: Array<Record<string, any>> }
+    expect(raw.tasks[0]!.taskReadiness).toMatchObject({
+      taskKind: expect.any(String),
+      recommendation: 'ready',
+      summary: expect.any(String),
+      definitionOfDone: {
+        items: expect.any(Array),
+        evidenceRequired: expect.any(Array),
+      },
+      contextBudget: {
+        risk: expect.any(String),
+        fitsInOneWorkerBrief: expect.any(Boolean),
+      },
+      assessedAt: expect.any(String),
+    })
+    expect(raw.tasks[1]!.taskReadiness).toMatchObject({
+      taskKind: expect.any(String),
+      recommendation: 'split',
+      contextBudget: {
+        fitsInOneWorkerBrief: false,
+      },
+    })
+  })
+
   it('reopens a blocked task for split enrichment without deleting the existing spec', async () => {
     await seedTask('task-1', {
       status: 'blocked',
@@ -1504,6 +1617,120 @@ describe('POST /api/project/task/:id/enrich-task', () => {
     expect(transcript).toContain('Enrich this task')
     expect(transcript).toContain('containing work with smaller linked nested work')
     expect(transcript).toContain('Split Google OAuth setup')
+  })
+})
+
+describe('POST /api/project/task/:id/continue', () => {
+  it('continues brief cleanup through continuous coordination without one-task start semantics', async () => {
+    setProvider('anthropic-api', { apiKey: 'sk-ant-test' })
+    updateProjectConfig(tmpDir, { preferredProvider: 'anthropic-api', allowPaidProviderFallback: true })
+    await seedTask('task-1', {
+      status: 'ready',
+      assignedTo: null,
+      title: 'Ready task with an incomplete brief',
+      productBrief: { approvedAt: new Date().toISOString(), userJob: 'Understand policy overhead.' },
+      spec: '## Summary\nDraft overhead policy.',
+      acceptanceCriteria: [{ id: 'ac-1', description: 'Policy has a concrete check.', verifiedBy: 'review' }],
+      notes: [],
+    })
+    const { supervisor, starts } = createTrackingSupervisor()
+    const { app } = buildServeApp({ projectPath: tmpDir, supervisor })
+
+    try {
+      const res = await app.fetch(
+        new Request(projectUrl('/api/project/task/task-1/continue'), {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({
+            action: 'brief_cleanup',
+            mode: 'checklist',
+            instruction: 'Complete this task for worker handoff.',
+          }),
+        }),
+      )
+      const body = await res.json() as Record<string, any>
+
+      expect(res.status, JSON.stringify(body)).toBe(200)
+      expect(body).toMatchObject({
+        ok: true,
+        taskId: 'task-1',
+        action: 'brief_cleanup',
+        status: 'exploring',
+        continuation: {
+          status: 'started',
+          runStatus: 'running',
+          mode: 'continuous',
+        },
+      })
+      await vi.waitFor(() => {
+        expect(starts).toEqual([{ preferredTaskId: 'task-1' }])
+      })
+      expect(supervisor.get(projectId)?.mode).toBe('continuous')
+
+      const queue = JSON.parse(
+        await fs.readFile(path.join(memoryDir, 'TASKS.json'), 'utf8'),
+      ) as { tasks: Array<Record<string, any>> }
+      expect(queue.tasks[0]).toMatchObject({
+        id: 'task-1',
+        status: 'exploring',
+        assignedTo: 'spec-agent',
+      })
+      const transcript = (await readExploringTranscript({ memoryDir, taskId: 'task-1' })).content ?? ''
+      expect(transcript).toContain('Complete this task for worker handoff.')
+    } finally {
+      await supervisor.stopAll({ reason: 'test-teardown' }).catch(() => {})
+    }
+  })
+
+  it('queues brief cleanup continuation instead of rejecting when the project is already running', async () => {
+    await seedTask('task-1', {
+      status: 'ready',
+      assignedTo: null,
+      title: 'Queued cleanup task',
+      productBrief: { approvedAt: new Date().toISOString(), userJob: 'Understand policy overhead.' },
+      spec: '## Summary\nDraft overhead policy.',
+      acceptanceCriteria: [{ id: 'ac-1', description: 'Policy has a concrete check.', verifiedBy: 'review' }],
+      notes: [],
+    })
+    const { supervisor, starts } = createTrackingSupervisor()
+    const { app } = buildServeApp({ projectPath: tmpDir, supervisor })
+
+    try {
+      supervisor.start({ workspaceId: projectId, workspacePath: tmpDir })
+      await vi.waitFor(() => expect(supervisor.get(projectId)?.status).toBe('running'))
+      await vi.waitFor(() => expect(starts).toHaveLength(1))
+      starts.length = 0
+      const startSpy = vi.spyOn(supervisor, 'start')
+
+      const res = await app.fetch(
+        new Request(projectUrl('/api/project/task/task-1/continue'), {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({
+            action: 'brief_cleanup',
+            mode: 'checklist',
+            instruction: 'Complete this task for worker handoff.',
+          }),
+        }),
+      )
+      const body = await res.json() as Record<string, any>
+
+      expect(res.status, JSON.stringify(body)).toBe(200)
+      expect(body).toMatchObject({
+        ok: true,
+        taskId: 'task-1',
+        action: 'brief_cleanup',
+        status: 'exploring',
+        continuation: {
+          status: 'queued',
+          runStatus: 'running',
+        },
+      })
+      expect(startSpy).not.toHaveBeenCalled()
+      expect(starts).toEqual([])
+    } finally {
+      await supervisor.stopAll({ reason: 'test-teardown' }).catch(() => {})
+    }
   })
 })
 
@@ -1647,7 +1874,7 @@ describe('POST /api/project/task/:id/add-acceptance', () => {
 })
 
 describe('POST /api/project/task/:id/stage-answer', () => {
-  it('persists a draft answer on the question without marking it answered', async () => {
+  it('requires task question migration before mutating legacy question drafts', async () => {
     await seedTask('task-1', {
       status: 'spec_review',
       openQuestions: [
@@ -1670,15 +1897,12 @@ describe('POST /api/project/task/:id/stage-answer', () => {
         body: JSON.stringify({ questionId: 'q-1', answer: 'A' }),
       }),
     )
-    expect(res.status).toBe(200)
-
-    const raw = await fs.readFile(path.join(memoryDir, 'TASKS.json'), 'utf8')
-    const q = JSON.parse(raw)
-    expect(q.tasks[0].openQuestions[0].draftAnswer).toBe('A')
-    expect(q.tasks[0].openQuestions[0].answeredAt).toBeUndefined()
+    expect(res.status).toBe(409)
+    const body = (await res.json()) as Record<string, any>
+    expect(body.code).toBe('required_migration_pending')
   })
 
-  it('clears the persisted draft answer after final submission', async () => {
+  it('requires task question migration before answering legacy question drafts', async () => {
     await seedTask('task-1', {
       status: 'exploring',
       openQuestions: [
@@ -1702,12 +1926,9 @@ describe('POST /api/project/task/:id/stage-answer', () => {
         body: JSON.stringify({ answers: [{ questionId: 'q-1', answer: 'A' }] }),
       }),
     )
-    expect(res.status).toBe(200)
-
-    const raw = await fs.readFile(path.join(memoryDir, 'TASKS.json'), 'utf8')
-    const q = JSON.parse(raw)
-    expect(q.tasks[0].openQuestions[0].draftAnswer).toBeUndefined()
-    expect(q.tasks[0].openQuestions[0].answer).toBe('A')
+    expect(res.status).toBe(409)
+    const body = (await res.json()) as Record<string, any>
+    expect(body.code).toBe('required_migration_pending')
   })
 })
 

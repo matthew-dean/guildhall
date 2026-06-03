@@ -1,0 +1,111 @@
+import { mkdir, mkdtemp, readFile, writeFile } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
+import path from 'node:path'
+import { describe, expect, it } from 'vitest'
+import { listOwnerInputRequests } from '../owner-input-store.js'
+import { migrateTaskQuestionsToBoundedChat } from '../task-question-migration.js'
+
+const now = '2026-06-01T12:00:00.000Z'
+
+describe('task question migration', () => {
+  it('moves unanswered task questions into owner-input linked bounded chat and removes openQuestions', async () => {
+    const root = await projectWithTasks([{
+      id: 'task-1',
+      title: 'Clarify billing policy',
+      description: 'Needs owner direction.',
+      domain: 'product',
+      projectPath: '/repo/demo',
+      status: 'exploring',
+      priority: 'normal',
+      notes: [],
+      dependsOn: [],
+      openQuestions: [{
+        id: 'q1',
+        kind: 'choice',
+        prompt: 'Which policy should Guildhall follow?',
+        choices: ['A', 'B'],
+        askedBy: 'spec-agent',
+        askedAt: now,
+      }],
+    }])
+
+    const result = await migrateTaskQuestionsToBoundedChat({ projectRoot: root, projectId: 'demo', apply: true, now })
+    expect(result.changedTasks).toEqual(['task-1'])
+    expect(result.createdOwnerInputRequests).toHaveLength(1)
+    expect(result.createdSessions).toHaveLength(1)
+
+    const queue = JSON.parse(await readFile(path.join(root, '.guildhall', 'TASKS.json'), 'utf8'))
+    expect(queue.tasks[0].openQuestions).toBeUndefined()
+
+    const requests = await listOwnerInputRequests(root)
+    expect(requests).toHaveLength(1)
+    expect(requests[0]).toMatchObject({
+      source: { kind: 'task', taskId: 'task-1', questionId: 'q1' },
+      boundedChatSessionId: result.createdSessions[0],
+      status: 'waiting_for_owner',
+    })
+
+    const session = JSON.parse(await readFile(
+      path.join(root, '.guildhall', 'bounded-chat', `${result.createdSessions[0]}.json`),
+      'utf8',
+    ))
+    expect(session.objective.kind).toBe('task_shaping')
+    expect(session.source).toBe('migration:0.10.0/task-open-questions-to-bounded-chat:task-1:q1')
+    expect(session.subObjectives[0].prompt).toBe('Which policy should Guildhall follow?')
+    expect(session.subObjectives[0].choices).toEqual(['A', 'B'])
+    expect(session.transitionReceipts).toEqual(expect.arrayContaining([
+      expect.objectContaining({ machineId: 'bounded-chat', event: 'wait_for_owner', to: 'waiting_for_owner' }),
+    ]))
+  })
+
+  it('preserves answered questions as task notes and is idempotent', async () => {
+    const root = await projectWithTasks([{
+      id: 'task-1',
+      title: 'Answered task',
+      description: 'Already answered.',
+      domain: 'product',
+      projectPath: '/repo/demo',
+      status: 'exploring',
+      priority: 'normal',
+      notes: [],
+      dependsOn: [],
+      openQuestions: [{
+        id: 'q1',
+        kind: 'text',
+        prompt: 'Which policy?',
+        answer: 'Use policy A.',
+        answeredAt: now,
+        askedBy: 'spec-agent',
+        askedAt: now,
+      }],
+    }])
+
+    const first = await migrateTaskQuestionsToBoundedChat({ projectRoot: root, projectId: 'demo', apply: true, now })
+    const second = await migrateTaskQuestionsToBoundedChat({ projectRoot: root, projectId: 'demo', apply: true, now })
+
+    expect(first.changedTasks).toEqual(['task-1'])
+    expect(first.createdOwnerInputRequests).toEqual([])
+    expect(first.createdSessions).toEqual([])
+    expect(second.changedTasks).toEqual([])
+
+    const queue = JSON.parse(await readFile(path.join(root, '.guildhall', 'TASKS.json'), 'utf8'))
+    expect(queue.tasks[0].openQuestions).toBeUndefined()
+    expect(queue.tasks[0].notes).toEqual([
+      expect.objectContaining({
+        agentId: 'migration:0.10.0/task-open-questions-to-bounded-chat',
+        content: expect.stringContaining('Use policy A.'),
+      }),
+    ])
+  })
+})
+
+async function projectWithTasks(tasks: unknown[]): Promise<string> {
+  const root = await mkdtemp(path.join(tmpdir(), 'guildhall-questions-'))
+  await mkdir(path.join(root, '.guildhall'), { recursive: true })
+  await writeFile(path.join(root, '.guildhall', 'TASKS.json'), JSON.stringify({
+    version: 1,
+    lastUpdated: now,
+    tasks,
+  }, null, 2))
+  return root
+}

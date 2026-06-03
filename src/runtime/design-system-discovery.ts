@@ -63,8 +63,7 @@ export async function buildDesignSystemProfile(input: {
   ])
 
   const libraries = detectLibraries(packageInfo)
-  const primarySystem = libraries.find(library => library.id === 'looma')?.id
-    ?? libraries.find(library => library.role === 'foundation')?.id
+  const primarySystem = libraries.find(library => library.role === 'foundation')?.id
     ?? 'portable'
   const guildhallDesignSystem = summarizeGuildhallDesignSystem(designSystem)
   const componentIntents = [
@@ -121,7 +120,7 @@ async function readPackageInfo(projectPath: string): Promise<PackageInfo> {
 function detectLibraries(info: PackageInfo): DesignSystemLibrary[] {
   const packages = new Set([...Object.keys(info.dependencies), ...Object.keys(info.devDependencies)])
   const libraries: DesignSystemLibrary[] = []
-  addLibrary(libraries, packages, 'looma', 'Looma', /^@looma\//, 'foundation')
+  addScopedFoundationLibraries(libraries, packages)
   addLibrary(libraries, packages, 'radix', 'Radix', /^@radix-ui\//, 'primitive')
   addLibrary(libraries, packages, 'mui', 'MUI', /^@mui\//, 'foundation')
   addLibrary(libraries, packages, 'chakra', 'Chakra UI', /^@chakra-ui\//, 'foundation')
@@ -189,12 +188,11 @@ function recommendations(input: {
   tokenFiles: string[]
 }): string[] {
   const out: string[] = []
-  if (input.primarySystem === 'looma') {
-    out.push('Looma is available as the project design-system foundation; map reusable findings to portable candidates first, then Looma improvements when useful.')
-  } else if (input.primarySystem === 'portable') {
+  if (input.primarySystem === 'portable') {
     out.push('No known design-system foundation was detected; use the portable Guildhall proof contract until the project adopts one.')
   } else {
-    out.push(`Detected ${input.primarySystem} as the likely design-system foundation; map it into the portable proof contract before review.`)
+    const label = input.libraries.find(library => library.id === input.primarySystem)?.label ?? input.primarySystem
+    out.push(`${label} is available as the project design-system foundation; map reusable findings to portable candidates first, then target-system improvements when useful.`)
   }
   if (input.preview.adapter === 'none') {
     out.push('No component preview surface was found; create portable stories or integrate an existing catalog before broad UI work.')
@@ -227,6 +225,29 @@ async function walk(root: string, dir: string, visit: (relativePath: string) => 
   }
 }
 
+function addScopedFoundationLibraries(libraries: DesignSystemLibrary[], packages: Set<string>): void {
+  const ignoredScopes = new Set(['radix-ui', 'storybook', 'pandacss'])
+  const byScope = new Map<string, string[]>()
+  for (const name of packages) {
+    const match = name.match(/^@([^/]+)\/([^/]+)$/)
+    if (!match) continue
+    const [, scope, packageName] = match
+    if (!scope || !packageName || ignoredScopes.has(scope)) continue
+    if (!/\b(tokens?|theme|core|ui|components?|layout|design-system)\b/i.test(packageName)) continue
+    const current = byScope.get(scope) ?? []
+    current.push(name)
+    byScope.set(scope, current)
+  }
+  for (const [scope, matched] of byScope) {
+    libraries.push({
+      id: scope,
+      label: humanizePackageScope(scope),
+      packages: matched.sort(),
+      role: 'foundation',
+    })
+  }
+}
+
 function addLibrary(
   libraries: DesignSystemLibrary[],
   packages: Set<string>,
@@ -238,6 +259,15 @@ function addLibrary(
   const matched = [...packages].filter(name => pattern.test(name)).sort()
   if (matched.length === 0) return
   libraries.push({ id, label, packages: matched, role })
+}
+
+function humanizePackageScope(scope: string): string {
+  return scope
+    .replace(/^@/, '')
+    .split(/[-_]+/)
+    .filter(Boolean)
+    .map(part => part.charAt(0).toUpperCase() + part.slice(1))
+    .join(' ')
 }
 
 function stringRecord(input: Record<string, unknown> | undefined): Record<string, string> {

@@ -148,7 +148,6 @@ import { buildDesignSystemProfile } from './design-system-discovery.js'
 import {
   buildDesignDecisionPacket,
   captureOwnerDesignFeedback,
-  discoverLoomaDevelopmentHook,
   readDesignFeedbackStore,
   recordDesignFinding,
   routeDesignFinding,
@@ -240,8 +239,8 @@ import {
   buildInboxBlockers,
   detectRepoAnchors,
   isAttentionOwnedInboxItem,
-  isThreadOwnedInboxItem,
 } from './inbox.js'
+import { listOwnerInputRequestsSync } from './owner-input-store.js'
 import {
   buildProjectMigrationAdvisories,
   buildProjectUnderstandingAdvisories,
@@ -378,6 +377,8 @@ export interface ServeOptions {
   pickProjectFolder?: () => Promise<string | null>
   /** Optional project-runtime supervisor override for tests. */
   runtimeSupervisor?: ProjectRuntimeSupervisor
+  /** Optional orchestrator supervisor override for tests. */
+  supervisor?: OrchestratorSupervisor
   /** Optional runtime backend setup detector override for tests. */
   runtimeBackendSetup?: RuntimeBackendSetupDetector
   /** Optional runtime dev-server manager override for tests. */
@@ -862,7 +863,7 @@ function projectCheckInSummaryFromState(
   const projectChats = chats.filter(session => session.objective.kind === 'project_check_in' || session.objective.kind === 'project_intake')
   const activeCount =
     intakes.filter(intake => intake.status === 'active').length +
-    projectChats.filter(chat => chat.status === 'waiting_for_user' || chat.status === 'coordinator_review').length
+    projectChats.filter(chat => chat.status === 'waiting_for_owner' || chat.status === 'coordinator_review').length
   const completedCount =
     intakes.filter(intake => intake.status === 'complete').length +
     projectChats.filter(chat => chat.status === 'fulfilled').length
@@ -884,6 +885,23 @@ function projectCheckInSummaryFromState(
     totalCount: intakes.length,
     activeCount,
     completedCount,
+  }
+}
+
+function newRequestRoutingSummary(kind: string): string {
+  switch (kind) {
+    case 'project_question':
+      return 'Guildhall saved this as a project question.'
+    case 'settings_proposal':
+      return 'Guildhall is shaping this settings change before it writes project state.'
+    case 'persona_practice_proposal':
+      return 'Guildhall is shaping this practice proposal before it changes reviewer behavior.'
+    case 'repair_triage':
+      return 'Guildhall is triaging this repair request before it creates runnable work.'
+    case 'clarification':
+      return 'Guildhall needs one clearer outcome before it creates work.'
+    default:
+      return 'Guildhall is shaping this request into a task brief.'
   }
 }
 
@@ -2078,7 +2096,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
     },
   })
 
-  const supervisor = new OrchestratorSupervisor()
+  const supervisor = opts.supervisor ?? new OrchestratorSupervisor()
   const runtimeSupervisor = opts.runtimeSupervisor ?? new ProjectRuntimeSupervisor()
   const runtimeBackendSetup = opts.runtimeBackendSetup ?? detectRuntimeBackendSetup
   const devServerManager = opts.devServerManager ?? new DevServerManager({ runtimeSupervisor })
@@ -2340,6 +2358,59 @@ export function buildServeApp(opts: ServeOptions = {}): {
       pid: process.pid,
       defaultProviderStatus: buildGlobalDefaultProviderStatus(),
       projects,
+    })
+  })
+
+  app.get('/api/fleet/attention', async c => {
+    const registeredProjects = getRegisteredProjects()
+    const groups = await Promise.all(registeredProjects.map(async (entry) => {
+      const resolved = resolveProject(entry.path)
+      const projectSummary = summarizeProject(resolved)
+      if (resolved.initializationNeeded) {
+        return { project: projectSummary, items: [], error: null, topWaitingThread: null }
+      }
+      try {
+        const inbox = await buildProjectInboxSnapshot({
+          projectPath: entry.path,
+          initializationNeeded: resolved.initializationNeeded,
+          coordinatorCount: resolved.config?.coordinators?.length ?? 0,
+        })
+        const state = await loadThreadProjectionState(entry.path)
+        const thread = buildThread({
+          projectPath: entry.path,
+          snapshot: state.snapshot,
+          tasks: state.tasks as never,
+          boundedChatSessions: state.boundedChatSessions,
+          pressureTestIntakes: state.pressureTestIntakes,
+          projectCheckInSummary: state.projectCheckInSummary,
+          runStatus: supervisor.get(resolved.id)?.status ?? 'stopped',
+          recentEvents: supervisor.recent(resolved.id, undefined, entry.path),
+        })
+        const topWaitingThread = thread.turns.find(turn => turn.id === thread.activeTurnId && turn.status === 'active') ?? null
+        return {
+          project: projectSummary,
+          items: inbox.items.filter(item => item.severity !== 'low'),
+          error: null,
+          topWaitingThread,
+        }
+      } catch (err) {
+        return {
+          project: projectSummary,
+          items: [],
+          error: err instanceof Error ? err.message : String(err),
+          topWaitingThread: null,
+        }
+      }
+    }))
+    const visibleGroups = groups.filter(group => group.items.length > 0 || group.error || group.topWaitingThread)
+    const topWaitingThread = visibleGroups
+      .map(group => group.topWaitingThread ? { project: group.project, turn: group.topWaitingThread } : null)
+      .find((entry): entry is NonNullable<typeof entry> => entry !== null) ?? null
+    return c.json({
+      groups: visibleGroups,
+      totalItems: visibleGroups.reduce((sum, group) => sum + group.items.length, 0),
+      projectCount: visibleGroups.filter(group => group.items.length > 0 || group.topWaitingThread).length,
+      topWaitingThread,
     })
   })
 
@@ -3928,30 +3999,23 @@ export function buildServeApp(opts: ServeOptions = {}): {
     message: string
     actionHref: string
   } | null {
-    const ownerItems = buildInbox({ projectPath }).filter(item => item.severity !== 'low' && isThreadOwnedInboxItem(item))
-    const first = ownerItems[0]
-    if (!first) return null
-    const firstQuestion = ownerItems.find(item =>
-      item.kind === 'pressure_test_pending' || item.kind === 'agent_question_pending',
-    )
-    const questionCount = ownerItems.filter(item =>
-      item.kind === 'pressure_test_pending' || item.kind === 'agent_question_pending',
-    ).length
-    const actionItem = questionCount > 0 && firstQuestion ? firstQuestion : first
-    const action =
-      questionCount > 0
-        ? `${questionCount} ${questionCount === 1 ? 'question needs' : 'questions need'} your answer before Guildhall can continue`
-        : first.kind === 'brief_approval'
-          ? 'Review the waiting task brief before Guildhall can continue'
-          : first.kind === 'spec_approval'
-            ? 'Review the waiting spec before Guildhall can continue'
-            : 'Choose a recovery path for the blocked task'
+    const waiting = listOwnerInputRequestsSync(projectPath)
+      .filter(request => request.status === 'waiting_for_owner')
+    if (waiting.length === 0) return null
+    const first = waiting[0]!
     return {
       canStart: false,
       code: 'owner_input_required',
-      message: action,
-      actionHref: actionItem.actionHref ?? '/thread',
+      message:
+        waiting.length === 1
+          ? `${first.objective.label} needs your answer before Guildhall can continue`
+          : `${waiting.length} owner decisions need your answer before Guildhall can continue`,
+      actionHref: ownerInputActionHref(first),
     }
+  }
+
+  function ownerInputActionHref(request: ReturnType<typeof listOwnerInputRequestsSync>[number]): string {
+    return `/thread?thread=${encodeURIComponent(request.boundedChatSessionId)}`
   }
 
   app.post('/api/project/task/:id/start', async c => {
@@ -4305,7 +4369,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
         })
         return c.json(result)
       }
-      if (firstAction?.kind === 'task_spec') {
+      if (firstAction) {
         const boundedChat = await createNewRequestBoundedChat({
           memoryDir: getProjectStateDir(project.path),
           projectId: project.id,
@@ -4315,7 +4379,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
           workspacePath: project.path,
           ...(body.title ? { title: body.title } : {}),
           routedRequestKind: firstAction.kind,
-          routingSummary: 'Routed to Task Intake',
+          routingSummary: newRequestRoutingSummary(firstAction.kind),
         })
         return c.json({ boundedChat })
       }
@@ -4341,7 +4405,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
       const memoryDir = getProjectStateDir(project.path)
       const existingChats = listBoundedChatSessions(memoryDir)
         .filter(session => session.objective.kind === 'project_check_in' || session.objective.kind === 'project_intake')
-      const activeChat = existingChats.find(session => session.status === 'waiting_for_user' || session.status === 'coordinator_review')
+      const activeChat = existingChats.find(session => session.status === 'waiting_for_owner' || session.status === 'coordinator_review')
       if (activeChat) {
         const boundedChat = await resumeProjectCheckInBoundedChat({
           memoryDir,
@@ -6463,6 +6527,114 @@ export function buildServeApp(opts: ServeOptions = {}): {
     }
   })
 
+  app.post('/api/project/task/:id/continue', async c => {
+    try {
+      if (project.initializationNeeded) return c.json({ error: 'not initialized' }, 400)
+      const id = c.req.param('id')
+      const body = await c.req.json().catch(() => ({})) as {
+        action?: 'brief_cleanup'
+        instruction?: string
+        mode?: 'split' | 'checklist' | 'general'
+      }
+      const action = body.action ?? 'brief_cleanup'
+      if (action !== 'brief_cleanup') {
+        return c.json({ error: 'unknown continuation action' }, 400)
+      }
+
+      const memoryDir = getProjectStateDir(project.path)
+      const tasksPath = join(memoryDir, 'TASKS.json')
+      const tasks = await readTasksFileNormalized(tasksPath).catch(() => [])
+      if (!tasks.some(task => task.id === id)) {
+        return c.json({ error: 'task not found' }, 404)
+      }
+
+      const result = await enrichTask({
+        memoryDir,
+        taskId: id,
+        mode: body.mode ?? 'checklist',
+        instruction:
+          body.instruction ??
+          'Complete this task for worker handoff: preserve the useful starting point, write a full product brief and spec handoff, and add concrete acceptance criteria before implementation.',
+      })
+      if (!result.success) return c.json({ error: result.error ?? 'continuation failed' }, 400)
+
+      const existingRun = supervisor.get(project.id)
+      if (existingRun && (existingRun.status === 'running' || existingRun.status === 'stopping')) {
+        return c.json({
+          ok: true,
+          taskId: id,
+          action,
+          status: result.newStatus,
+          continuation: {
+            status: 'queued',
+            runStatus: existingRun.status,
+            mode: existingRun.mode,
+          },
+        })
+      }
+
+      const url = new URL(c.req.url)
+      url.pathname = '/api/project/start'
+      const startRes = await app.fetch(
+        new Request(url, {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ mode: 'continuous', taskId: id }),
+        }),
+        c.env,
+      )
+      const startBody = await startRes.json().catch(() => ({})) as Record<string, unknown>
+      if (!startRes.ok || startBody.error) {
+        if (startBody.code === 'run_already_active') {
+          const run = supervisor.get(project.id)
+          return c.json({
+            ok: true,
+            taskId: id,
+            action,
+            status: result.newStatus,
+            continuation: {
+              status: 'queued',
+              runStatus: run?.status ?? startBody.status ?? 'running',
+              ...(run?.mode ? { mode: run.mode } : {}),
+            },
+          })
+        }
+        return c.json(
+          {
+            error: typeof startBody.error === 'string' ? startBody.error : `Continuation failed (HTTP ${startRes.status})`,
+            ...(typeof startBody.code === 'string' ? { code: startBody.code } : {}),
+            ...(typeof startBody.actionHref === 'string' ? { actionHref: startBody.actionHref } : {}),
+            taskId: id,
+            action,
+            status: result.newStatus,
+            continuation: {
+              status: 'blocked',
+              runStatus: supervisor.get(project.id)?.status ?? 'stopped',
+            },
+          },
+          startRes.status === 409 ? 409 : startRes.status === 400 ? 400 : 500,
+        )
+      }
+
+      return c.json({
+        ok: true,
+        taskId: id,
+        action,
+        status: result.newStatus,
+        continuation: {
+          status: 'started',
+          runStatus: typeof startBody.status === 'string' ? startBody.status : supervisor.get(project.id)?.status ?? 'running',
+          mode: typeof startBody.mode === 'string' ? startBody.mode : 'continuous',
+          ...(typeof startBody.startedAt === 'string' ? { startedAt: startBody.startedAt } : {}),
+          ...(typeof startBody.provider === 'string' ? { provider: startBody.provider } : {}),
+          ...(startBody.providerStatus ? { providerStatus: startBody.providerStatus } : {}),
+        },
+      })
+    } catch (err) {
+      return c.json({ error: err instanceof Error ? err.message : String(err) }, 500)
+    }
+  })
+
   // POST /api/project/task/:id/:action — human overrides on a task.
   //   hold               → blocked      (any non-terminal task; reversible)
   //   resume-hold        → previous status from hold record
@@ -7300,7 +7472,6 @@ export function buildServeApp(opts: ServeOptions = {}): {
     })
     const defaults = makeDefaultSettings()
     const project = Object.entries(settings.project)
-      .filter(([name]) => name !== 'merge_policy')
       .map(([name, entry]) => ({
         scope: 'project' as const,
         name,
@@ -7506,10 +7677,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
       if (project.initializationNeeded) return c.json({ initializationNeeded: true })
       const memoryDir = getProjectStateDir(project.path)
       const feedback = await readDesignFeedbackStore(memoryDir)
-      const loomaHook = await discoverLoomaDevelopmentHook({
-        globalConfig: readGlobalConfig(),
-      })
-      return c.json({ feedback, loomaHook })
+      return c.json({ feedback })
     } catch (err) {
       return c.json({ error: String(err) }, 500)
     }
@@ -7526,10 +7694,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
       })
       const routed = await routeDesignFinding({ memoryDir, findingId: finding.id })
       const feedback = await readDesignFeedbackStore(memoryDir)
-      const loomaHook = await discoverLoomaDevelopmentHook({
-        globalConfig: readGlobalConfig(),
-      })
-      return c.json({ ok: true, routed, feedback, loomaHook })
+      return c.json({ ok: true, routed, feedback })
     } catch (err) {
       return c.json({ error: String(err) }, 400)
     }
@@ -7545,10 +7710,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
         feedback: body as never,
       })
       const feedback = await readDesignFeedbackStore(memoryDir)
-      const loomaHook = await discoverLoomaDevelopmentHook({
-        globalConfig: readGlobalConfig(),
-      })
-      return c.json({ ok: true, ownerFeedback, feedback, loomaHook })
+      return c.json({ ok: true, ownerFeedback, feedback })
     } catch (err) {
       return c.json({ error: String(err) }, 400)
     }
@@ -7567,10 +7729,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
         ...(feedbackIds ? { feedbackIds } : {}),
       })
       const feedback = await readDesignFeedbackStore(memoryDir)
-      const loomaHook = await discoverLoomaDevelopmentHook({
-        globalConfig: readGlobalConfig(),
-      })
-      return c.json({ ok: true, packet, feedback, loomaHook })
+      return c.json({ ok: true, packet, feedback })
     } catch (err) {
       return c.json({ error: String(err) }, 400)
     }

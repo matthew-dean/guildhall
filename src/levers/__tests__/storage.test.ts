@@ -2,6 +2,7 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest'
 import { promises as fs } from 'node:fs'
 import { join } from 'node:path'
 import os from 'node:os'
+import { stringify as stringifyYaml } from 'yaml'
 
 import {
   AGENT_SETTINGS_FILENAME,
@@ -80,6 +81,26 @@ describe('loadLeverSettings', () => {
     await saveLeverSettings({ path: settingsPath, settings: seeded })
     const reloaded = await loadLeverSettings({ path: settingsPath })
     expect(reloaded).toEqual(seeded)
+  })
+
+  it('loads legacy merge_policy as landing_strategy without exposing the old key', async () => {
+    const legacy = makeDefaultSettings() as any
+    delete legacy.project.landing_strategy
+    legacy.project.merge_policy = {
+      position: 'ff_only_with_push',
+      rationale: 'legacy auto-push policy',
+      setAt: '2026-05-31T00:00:00.000Z',
+      setBy: 'user-direct',
+    }
+
+    await fs.mkdir(join(tmpDir, '.guildhall'), { recursive: true })
+    await fs.writeFile(settingsPath, stringifyYaml(legacy), 'utf8')
+
+    const loaded = await loadLeverSettings({ path: settingsPath })
+
+    expect(loaded.project.landing_strategy.position).toBe('cherry_pick_with_push')
+    expect(loaded.project.landing_strategy.rationale).toBe('legacy auto-push policy')
+    expect('merge_policy' in loaded.project).toBe(false)
   })
 
   it('preserves parameterized positions (fanout) through YAML round-trip', async () => {

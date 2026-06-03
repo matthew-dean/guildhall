@@ -1,5 +1,5 @@
 import { z } from 'zod'
-import { EvidenceRef } from '@guildhall/persistence'
+import { EvidenceRef } from './evidence.js'
 
 const LEGACY_TIMESTAMP = '1970-01-01T00:00:00.000Z'
 

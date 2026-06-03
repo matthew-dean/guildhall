@@ -68,8 +68,8 @@ function mkRail(overrides: Partial<Guardrail> & { id: string; description: strin
 // ---------------------------------------------------------------------------
 
 describe('evaluateEnvelope — no-goal escalation', () => {
-  it('strict: no parent goal → reject', () => {
-    const task = mkTask({ parentGoalId: undefined })
+  it('strict: no goal envelope → reject', () => {
+    const task = mkTask({ businessEnvelope: undefined })
     const out = evaluateEnvelope({ task, goal: undefined, strictness: 'strict' })
     expect(out.kind).toBe('reject')
     if (out.kind === 'reject') {
@@ -77,14 +77,14 @@ describe('evaluateEnvelope — no-goal escalation', () => {
     }
   })
 
-  it('advisory: no parent goal → escalate (uncategorized signal)', () => {
-    const task = mkTask({ parentGoalId: undefined })
+  it('advisory: no goal envelope → escalate (uncategorized signal)', () => {
+    const task = mkTask({ businessEnvelope: undefined })
     const out = evaluateEnvelope({ task, goal: undefined, strictness: 'advisory' })
     expect(out.kind).toBe('escalate')
   })
 
-  it('off: no parent goal → escalate (uncategorized signal, still surfaced per FR-23)', () => {
-    const task = mkTask({ parentGoalId: undefined })
+  it('off: no goal envelope → escalate (uncategorized signal, still surfaced per FR-23)', () => {
+    const task = mkTask({ businessEnvelope: undefined })
     const out = evaluateEnvelope({ task, goal: undefined, strictness: 'off' })
     expect(out.kind).toBe('escalate')
   })
@@ -92,7 +92,7 @@ describe('evaluateEnvelope — no-goal escalation', () => {
 
 describe('evaluateEnvelope — off strictness', () => {
   it('within when a goal exists, regardless of guardrail violations', () => {
-    const task = mkTask({ parentGoalId: 'g-1', description: 'Add a public API change' })
+    const task = mkTask({ businessEnvelope: { goalId: 'g-1' }, description: 'Add a public API change' })
     const goal = mkGoal({
       guardrails: [mkRail({ id: 'r1', kind: 'exclude', description: 'No public API changes allowed' })],
     })
@@ -103,7 +103,7 @@ describe('evaluateEnvelope — off strictness', () => {
 
 describe('evaluateEnvelope — strict strictness', () => {
   it('within when no guardrails violated', () => {
-    const task = mkTask({ parentGoalId: 'g-1', description: 'refactor helper utility' })
+    const task = mkTask({ businessEnvelope: { goalId: 'g-1' }, description: 'refactor helper utility' })
     const goal = mkGoal({
       guardrails: [mkRail({ id: 'r1', kind: 'exclude', description: 'No database migrations' })],
     })
@@ -112,7 +112,7 @@ describe('evaluateEnvelope — strict strictness', () => {
 
   it('reject when an exclude guardrail is tripped by the task text', () => {
     const task = mkTask({
-      parentGoalId: 'g-1',
+      businessEnvelope: { goalId: 'g-1' },
       description: 'Add a new database migration for users table',
     })
     const goal = mkGoal({
@@ -127,7 +127,7 @@ describe('evaluateEnvelope — strict strictness', () => {
   })
 
   it('reject when an include guardrail is missing required keywords', () => {
-    const task = mkTask({ parentGoalId: 'g-1', description: 'Add a loader module' })
+    const task = mkTask({ businessEnvelope: { goalId: 'g-1' }, description: 'Add a loader module' })
     const goal = mkGoal({
       guardrails: [mkRail({ id: 'r1', kind: 'include', description: 'Must include typescript strict mode' })],
     })
@@ -137,7 +137,7 @@ describe('evaluateEnvelope — strict strictness', () => {
 
   it('aggregates multiple violations', () => {
     const task = mkTask({
-      parentGoalId: 'g-1',
+      businessEnvelope: { goalId: 'g-1' },
       description: 'Add database migration and mutate production secrets',
     })
     const goal = mkGoal({
@@ -157,7 +157,7 @@ describe('evaluateEnvelope — strict strictness', () => {
 describe('evaluateEnvelope — advisory strictness', () => {
   it('advisory when guardrails are violated (does not block)', () => {
     const task = mkTask({
-      parentGoalId: 'g-1',
+      businessEnvelope: { goalId: 'g-1' },
       description: 'Add database migration for users',
     })
     const goal = mkGoal({
@@ -172,7 +172,7 @@ describe('evaluateEnvelope — advisory strictness', () => {
   })
 
   it('within when no guardrails are violated', () => {
-    const task = mkTask({ parentGoalId: 'g-1' })
+    const task = mkTask({ businessEnvelope: { goalId: 'g-1' } })
     const goal = mkGoal({
       guardrails: [mkRail({ id: 'r1', kind: 'exclude', description: 'No nukes' })],
     })
@@ -199,7 +199,7 @@ describe('guardrailApplies (tag filtering)', () => {
 
   it('evaluator honors domain filtering so a non-matching guardrail cannot violate', () => {
     const task = mkTask({
-      parentGoalId: 'g-1',
+      businessEnvelope: { goalId: 'g-1' },
       domain: 'backend',
       description: 'Add database migration',
     })
@@ -233,7 +233,7 @@ describe('findMatch (tokenizer)', () => {
 describe('collectViolations', () => {
   it('matches against note content and acceptance-criterion descriptions', () => {
     const task = mkTask({
-      parentGoalId: 'g-1',
+      businessEnvelope: { goalId: 'g-1' },
       description: 'safe refactor',
       notes: [
         {
@@ -262,7 +262,7 @@ describe('collectViolations', () => {
 
   it('skips guardrails that do not apply to the task domain', () => {
     const task = mkTask({
-      parentGoalId: 'g-1',
+      businessEnvelope: { goalId: 'g-1' },
       domain: 'backend',
       description: 'introduce migration',
     })
@@ -336,24 +336,24 @@ describe('GOALS.json storage', () => {
     expect(findGoal(book, undefined)).toBeUndefined()
   })
 
-  it('loadGoalForTask pulls the task\'s goal by parentGoalId', async () => {
+  it('loadGoalForTask pulls the task\'s goal by businessEnvelope.goalId', async () => {
     await saveGoalBook(memDir, GoalBook.parse({
       version: 1,
       lastUpdated: '2026-04-20T00:00:00Z',
       goals: [mkGoal({ id: 'g-42' })],
     }))
-    const task = mkTask({ parentGoalId: 'g-42' })
+    const task = mkTask({ businessEnvelope: { goalId: 'g-42' } })
     const goal = await loadGoalForTask(memDir, task)
     expect(goal?.id).toBe('g-42')
   })
 
-  it('loadGoalForTask returns undefined for a task with no parentGoalId', async () => {
+  it('loadGoalForTask returns undefined for a task with no businessEnvelope.goalId', async () => {
     await saveGoalBook(memDir, GoalBook.parse({
       version: 1,
       lastUpdated: '2026-04-20T00:00:00Z',
       goals: [mkGoal()],
     }))
-    const goal = await loadGoalForTask(memDir, mkTask({ parentGoalId: undefined }))
+    const goal = await loadGoalForTask(memDir, mkTask({ businessEnvelope: undefined }))
     expect(goal).toBeUndefined()
   })
 
@@ -363,7 +363,7 @@ describe('GOALS.json storage', () => {
       lastUpdated: '2026-04-20T00:00:00Z',
       goals: [mkGoal({ id: 'g-known' })],
     }))
-    const goal = await loadGoalForTask(memDir, mkTask({ parentGoalId: 'g-unknown' }))
+    const goal = await loadGoalForTask(memDir, mkTask({ businessEnvelope: { goalId: 'g-unknown' } }))
     expect(goal).toBeUndefined()
   })
 })

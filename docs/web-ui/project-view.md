@@ -22,10 +22,13 @@ decision live in one place.
   attention items, health, blocked work, recent activity, and Git Story signals
   without making you inspect every view first.
 - **Thread**: the request and decision view. Setup prompts, New Request
-  routing, pressure-test questions, spec approvals, live worker trouble, and
-  “you need to answer this now” all gather here.
+  routing, bounded follow-up conversations, spec approvals, live worker
+  trouble, and “you need to answer this now” all gather here.
 - **Work**: the queue and movement view. This is where you check whether the
   project is actually moving.
+- **Structure**: the map room. Structural maps, project graph responsibilities,
+  provider/consumer requests, and shared contract surfaces live here instead
+  of hiding in Settings.
 - **Closure**: the current-work verdict view. It tells you whether the work
   Guildhall is tracking now is actually closed, including unresolved Git
   stories. It is not a version or milestone picker yet.
@@ -44,6 +47,10 @@ decision live in one place.
 - Let you drill into transcripts and provenance without leaving the shell
 
 ![Guildhall v0.9.0 Work view showing task hierarchy, blocked work, and queue health.](../assets/ui-audit/0-9-0/work.webp)
+
+![Guildhall Thread view showing task cleanup, project questions, and bounded owner-input conversations.](../assets/ui-audit/0-10-0/thread.png)
+
+![Guildhall Structure view showing structural map, project graph, and contract surfaces.](../assets/ui-audit/0-10-0/structure.png)
 
 ![Guildhall v0.9.0 Settings Ready view showing local runtime readiness.](../assets/ui-audit/0-9-0/settings-runtime.webp)
 
@@ -70,14 +77,34 @@ also tell you what it needs and where to answer.
 
 ## Thread as the intake view
 
-Thread is where New Request routing and Pressure-Test Intake show up. A broad
-release or feature ask becomes a **New request** card, then a sequence of
-**Pressure-test question** cards. Each question is answered in place, one at a
-time, with evidence and the reason Guildhall is asking.
+Thread is where New Request routing, bounded owner-input sessions, and
+Pressure-Test Intake show up. A broad release or feature ask can become a
+focused conversation; a task-like ask waits to create work until the missing
+briefing question is answered; and a pure project question can resolve as a
+conversation receipt without pretending it was implementation work.
+
+Each question is answered in place, one at a time, with evidence and the reason
+Guildhall is asking. Other views can point you back to the same conversation,
+but they should not invent their own parallel question cards.
 
 Those answers are not trapped in the transcript. They update persisted intake
 state so the eventual spec can name assumptions, decisions, deferrals, and the
 domains that were actually covered.
+
+## Structure as the map room
+
+Structure keeps durable project shape visible without turning Settings into a
+junk drawer. The structural map shows packages, domains, executable units, Git
+authority, and review questions. The project graph shows which local project
+or domain owns a responsibility, which provider/consumer requests are moving,
+and which side still needs to verify delivery.
+
+Contract surfaces live here too. A contract surface is the shared shape a task
+must fit: component APIs, route or event schemas, design-system token and
+variant rules, provider boundaries, or other durable conventions. When a spec
+touches one of those surfaces, Guildhall can attach a surface review packet so
+workers and reviewers see the sibling specs, invariants, decisions, and proof
+obligations before changing the shape.
 
 ## Re-intake stale project state
 

@@ -30,8 +30,10 @@ The 0.9.0 trust and completeness proposal is
 `internal/plans/2026-05-27-guildhall-0-9-trust-and-completeness-proposal.md`.
 The late 0.9.0 internal benchmark and Hermes comparison lane is
 `internal/plans/2026-05-27-guildhall-0-9-benchmarks-and-hermes-comparison.md`.
-The proposed 0.10.0 OpenRouter support plan is
-`internal/plans/2026-05-28-guildhall-0-10-openrouter-support.md`.
+The 0.11.0 implementation tracker is
+`internal/plans/2026-06-02-guildhall-0-11-implementation-tracker.md`.
+The proposed 0.11.0 OpenRouter support plan is
+`internal/plans/2026-05-28-guildhall-0-11-openrouter-support.md`.
 The proposed 0.10.0 external agent memory bridge spec is
 `internal/specs/2026-05-28-guildhall-0-10-agent-memory-bridge.md`.
 The proposed 0.10.0 structural/domain intelligence spec is

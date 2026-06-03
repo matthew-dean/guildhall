@@ -68,6 +68,82 @@ export interface CorpusDesignSystemSummary {
   recommendations: string[]
 }
 
+export type DesignGovernanceDiagnosticSeverity = 'info' | 'warn' | 'blocker'
+
+export type DesignGovernanceDiagnosticKind =
+  | 'token_family_split'
+  | 'raw_visual_values'
+  | 'variant_vocabulary_sprawl'
+  | 'duplicate_primitive_family'
+  | 'surface_ownership_sprawl'
+  | 'missing_component_contract'
+  | 'unreviewed_design_exception'
+
+export type DesignGovernanceReviewerRole =
+  | 'design'
+  | 'accessibility'
+  | 'product'
+  | 'maintainability'
+
+export interface DesignGovernanceDiagnostic {
+  id: string
+  severity: DesignGovernanceDiagnosticSeverity
+  kind: DesignGovernanceDiagnosticKind
+  summary: string
+  evidence: Array<{ path: string; line?: number; excerpt?: string }>
+  recommendation: string
+  appliesToReviewerRoles: DesignGovernanceReviewerRole[]
+}
+
+export type DesignGovernanceLearningProposalKind =
+  | 'project_design_system_memory_update'
+  | 'component_contract_addition'
+  | 'corpus_map_override'
+  | 'guildhall_product_learning'
+
+export interface DesignGovernanceLearningProposal {
+  id: string
+  kind: DesignGovernanceLearningProposalKind
+  diagnosticKinds: DesignGovernanceDiagnosticKind[]
+  summary: string
+  evidence: Array<{ path: string; line?: number; excerpt?: string }>
+  ownerApprovalRequired: true
+}
+
+export interface CorpusDesignGovernanceSummary {
+  generatedAt: string
+  canonicalDesignSystemAuthority?: string
+  tokenAuthority?: string
+  componentAuthorityPaths: string[]
+  knownDuplicatePrimitiveFamilies: string[]
+  variantVocabularyRisks: string[]
+  requiredReviewerChecks: string[]
+  learningProposals: DesignGovernanceLearningProposal[]
+  diagnostics: DesignGovernanceDiagnostic[]
+}
+
+export type CorpusContractSurfaceProposalKind =
+  | 'component_api'
+  | 'http_api'
+  | 'event_api'
+  | 'mcp_api'
+  | 'schema'
+  | 'state_machine'
+  | 'design_system'
+  | 'domain_capability'
+  | 'documentation'
+  | 'other'
+
+export interface CorpusContractSurfaceProposal {
+  id: string
+  label: string
+  kind: CorpusContractSurfaceProposalKind
+  summary: string
+  evidence: Array<{ path: string; excerpt?: string }>
+  repeatedPatterns: string[]
+  ownerApprovalRequired: true
+}
+
 export type CorpusSemanticKind = 'documentation' | 'code' | 'mixed' | 'unknown'
 
 export interface CorpusSemanticArea {
@@ -141,6 +217,8 @@ export interface CodebaseMap {
   areas: CorpusArea[]
   abstractions: CorpusAbstraction[]
   designSystem?: CorpusDesignSystemSummary
+  designGovernance?: CorpusDesignGovernanceSummary
+  contractSurfaceProposals?: CorpusContractSurfaceProposal[]
   semantic?: CorpusSemanticSummary
   verification: { commands: string[] }
   overrides?: CorpusOverrides

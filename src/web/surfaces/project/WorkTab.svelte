@@ -5,7 +5,7 @@
 -->
 <script lang="ts">
   import Button from '../../lib/Button.svelte'
-  import Card from '../../lib/Card.svelte'
+  import Card from '../../lib/ui-compat/Card.svelte'
   import CardList from '../../lib/CardList.svelte'
   import CardListItem from '../../lib/CardListItem.svelte'
   import Chip from '../../lib/Chip.svelte'
@@ -69,11 +69,9 @@
     const items = detail.inbox?.items ?? []
     const priority = [
       'required_migration',
-      'open_escalation',
-      'agent_question_pending',
-      'pressure_test_pending',
       'setup_pending',
-      'project_check_in',
+      'workspace_import_pending',
+      'import_draft_queue',
     ]
     for (const kind of priority) {
       const match = items.find(item => item.kind === kind)
@@ -431,12 +429,8 @@
             <Button variant="primary" size="sm" onclick={() => nav(currentProjectHref(setupInboxItem?.actionHref ?? '/setup'))}>
               {setupInboxItem?.kind === 'required_migration'
                 ? 'Migrate project'
-                : setupInboxItem?.kind === 'project_check_in'
-                ? 'Start check-in'
-                : setupInboxItem?.kind === 'pressure_test_pending' || setupInboxItem?.kind === 'agent_question_pending'
-                  ? 'Answer question'
-                  : setupInboxItem?.kind === 'open_escalation'
-                    ? 'Review recovery'
+                : setupInboxItem?.kind === 'workspace_import_pending' || setupInboxItem?.kind === 'import_draft_queue'
+                  ? 'Review import'
                   : 'Open setup'}
             </Button>
           </UtilityPanel>
@@ -516,13 +510,13 @@
     display: inline-flex;
     align-items: center;
     justify-content: flex-end;
-    gap: var(--s-2);
+    gap: var(--gh-space-2);
     min-width: 0;
   }
   .show-picker {
     display: inline-flex;
     align-items: center;
-    gap: var(--s-2);
+    gap: var(--gh-space-2);
     white-space: nowrap;
   }
   .show-picker label {
@@ -554,7 +548,7 @@
     display: flex;
     flex-wrap: wrap;
     justify-content: flex-end;
-    gap: var(--s-2);
+    gap: var(--gh-space-2);
     min-width: 0;
   }
   :global(.setup-empty) {
@@ -601,22 +595,22 @@
   }
   :global(.work-list-stack) {
     --work-list-columns:
-      minmax(280px, 1fr)
-      minmax(172px, max-content)
-      minmax(112px, 132px)
-      minmax(92px, max-content)
-      minmax(116px, max-content)
-      44px;
+      minmax(220px, 1fr)
+      minmax(160px, max-content)
+      minmax(92px, 112px)
+      minmax(84px, max-content)
+      minmax(108px, max-content)
+      32px;
     display: grid;
     grid-template-columns: var(--work-list-columns);
-    gap: var(--s-2);
+    gap: var(--gh-space-2);
   }
   .list-column-head {
     display: grid;
     grid-column: 1 / -1;
     grid-template-columns: subgrid;
     align-items: center;
-    gap: var(--s-3);
+    gap: var(--gh-space-2);
     padding: 0 var(--s-3);
   }
   .list-column-head button {
@@ -647,7 +641,7 @@
     grid-column: 1 / -1;
     grid-template-columns: subgrid;
     align-items: center;
-    gap: var(--s-3);
+    gap: var(--gh-space-2);
     width: 100%;
     border-radius: var(--r-2);
     color: inherit;
@@ -775,7 +769,7 @@
     .list-column-head {
       display: flex;
       flex-wrap: wrap;
-      gap: var(--s-2);
+      gap: var(--gh-space-2);
       padding: 0;
     }
     :global(.work-list-row) .task-title {

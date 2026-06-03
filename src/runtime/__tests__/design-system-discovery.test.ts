@@ -8,8 +8,8 @@ import { DESIGN_STORIES_FILE } from '../design-preview.js'
 import { buildDesignSystemProfile } from '../design-system-discovery.js'
 
 describe('buildDesignSystemProfile', () => {
-  it('detects Looma packages, Storybook, token files, and drafted Guildhall design system', async () => {
-    const projectPath = await fs.mkdtemp(path.join(os.tmpdir(), 'guildhall-ds-discovery-looma-'))
+  it('detects scoped foundation packages, Storybook, token files, and drafted Guildhall design system', async () => {
+    const projectPath = await fs.mkdtemp(path.join(os.tmpdir(), 'guildhall-ds-discovery-foundation-'))
     const memoryDir = path.join(projectPath, '.guildhall')
     try {
       await fs.mkdir(path.join(projectPath, '.storybook'), { recursive: true })
@@ -20,8 +20,8 @@ describe('buildDesignSystemProfile', () => {
         JSON.stringify({
           scripts: { storybook: 'storybook dev -p 6006' },
           dependencies: {
-            '@looma/core': '0.1.0',
-            '@looma/tokens': '0.1.0',
+            '@foundation/core': '0.1.0',
+            '@foundation/tokens': '0.1.0',
             '@radix-ui/react-dialog': '^1.0.0',
           },
           devDependencies: { '@storybook/sveltekit': '^8.0.0' },
@@ -51,8 +51,8 @@ describe('buildDesignSystemProfile', () => {
 
       const profile = await buildDesignSystemProfile({ projectPath, memoryDir })
 
-      expect(profile.primarySystem).toBe('looma')
-      expect(profile.libraries.map(library => library.id)).toEqual(expect.arrayContaining(['looma', 'radix']))
+      expect(profile.primarySystem).toBe('foundation')
+      expect(profile.libraries.map(library => library.id)).toEqual(expect.arrayContaining(['foundation', 'radix']))
       expect(profile.preview.adapter).toBe('storybook')
       expect(profile.tokenFiles).toContain('src/tokens.css')
       expect(profile.guildhallDesignSystem).toMatchObject({
@@ -60,9 +60,9 @@ describe('buildDesignSystemProfile', () => {
         approved: true,
         revision: 2,
       })
-      expect(profile.proofContract.targetDesignSystem).toBe('looma')
+      expect(profile.proofContract.targetDesignSystem).toBe('foundation')
       expect(profile.proofContract.componentIntents).toContain('Segmented filter')
-      expect(profile.recommendations.join('\n')).toContain('Looma')
+      expect(profile.recommendations.join('\n')).toContain('Foundation')
     } finally {
       await fs.rm(projectPath, { recursive: true, force: true })
     }

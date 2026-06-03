@@ -3,22 +3,20 @@ import { describe, expect, it } from 'vitest'
 import { inboxItemKey, type InboxItem } from '../inbox-item-key.js'
 
 describe('inboxItemKey', () => {
-  it('stays unique for escalation items that share the same title', () => {
+  it('stays unique for task-backed alert items that share the same title', () => {
     const a = inboxItemKey({
-      kind: 'open_escalation',
-      escalationId: 'esc-task-003-1',
+      kind: 'spec_fill_pending',
       taskId: 'task-003',
       title: 'Integrate Looma editor table primitives into Knit',
-      detail: 'Spec author stopped after hitting its turn limit.',
-      actionHref: '/task/task-003',
+      detail: 'Optional cleanup: add acceptance criteria.',
+      actionHref: '/task/task-003?tab=spec',
     })
     const b = inboxItemKey({
-      kind: 'open_escalation',
-      escalationId: 'esc-task-004-1',
+      kind: 'spec_fill_pending',
       taskId: 'task-004',
       title: 'Integrate Looma editor table primitives into Knit',
-      detail: 'Spec author stopped after hitting its turn limit.',
-      actionHref: '/task/task-004',
+      detail: 'Optional cleanup: add acceptance criteria.',
+      actionHref: '/task/task-004?tab=spec',
     })
 
     expect(a).not.toBe(b)

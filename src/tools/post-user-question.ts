@@ -4,10 +4,10 @@
  * Distinct from the synchronous `ask-user-question` tool (interaction.ts)
  * which only works when a live interactive prompt callback is wired in. In
  * the orchestrator's typical agent runs that callback is absent, so any
- * agent that needs human judgment posts a *structured* question record onto
- * `task.openQuestions` and yields. The Thread surface renders the question
- * with a deterministic affordance (confirm / yesno / choice / text) and the
- * user's answer flows back via POST /api/project/task/:id/answer-question.
+ * agent that needs human judgment creates an owner-input request linked to a
+ * bounded-chat session and yields. The Thread surface renders the linked
+ * bounded chat with the deterministic affordance, and the answer flows back
+ * through the owner-input session instead of mutating task-local state.
  *
  * Producers (spec agent, intake, coordinator) MUST classify each question
  * into ONE of the four kinds — no free prose. Multiple choice is the
@@ -21,9 +21,10 @@
 import { defineTool } from '@guildhall/engine'
 import { z } from 'zod'
 import fs from 'node:fs/promises'
+import path from 'node:path'
 import { TaskQueue } from '@guildhall/core'
-import { randomUUID } from 'node:crypto'
-import { atomicWriteText } from '@guildhall/sessions'
+import { createHash } from 'node:crypto'
+import { createOwnerInputRequest } from '@guildhall/runtime/owner-input-store'
 
 const TASKS_PATH_SCHEMA = z.string().describe('Absolute path to the TASKS.json file')
 
@@ -82,6 +83,21 @@ function questionSignature(question: {
     : ''
   const selectionMode = question.selectionMode ?? ''
   return [question.kind ?? '', body, choices, selectionMode].join('::')
+}
+
+function shortHash(value: string): string {
+  return createHash('sha256').update(value).digest('hex').slice(0, 12)
+}
+
+function projectRootFromTasksPath(tasksPath: string): string {
+  const taskDir = path.dirname(tasksPath)
+  return path.basename(taskDir) === '.guildhall'
+    ? path.dirname(taskDir)
+    : taskDir
+}
+
+function projectIdFromRoot(projectRoot: string): string {
+  return path.basename(projectRoot).trim() || 'project'
 }
 
 interface InferredQuestion {
@@ -423,73 +439,35 @@ export async function postUserQuestion(
     if (!task) return { success: false, error: `Task ${input.taskId} not found` }
 
     const now = new Date().toISOString()
-    const id = `q-${now.replace(/[-:.TZ]/g, '').slice(0, 14)}-${randomUUID().slice(0, 8)}`
+    const signature = questionSignature({
+      kind: input.kind,
+      prompt: input.kind === 'confirm' ? undefined : input.body,
+      restatement: input.kind === 'confirm' ? input.body : undefined,
+      choices: input.choices,
+      selectionMode: input.selectionMode,
+    })
+    const id = `q-${shortHash(`${input.taskId}:${signature}`)}`
 
-    const question =
-      input.kind === 'confirm'
-        ? {
-            kind: 'confirm' as const,
-            id,
-            askedBy: input.askedBy,
-            askedAt: now,
-            restatement: input.body,
-            ...(input.subject ? { subject: input.subject } : {}),
-            ...(input.description ? { description: input.description } : {}),
-          }
-        : input.kind === 'yesno'
-          ? {
-              kind: 'yesno' as const,
-              id,
-              askedBy: input.askedBy,
-              askedAt: now,
-              prompt: input.body,
-              ...(input.subject ? { subject: input.subject } : {}),
-              ...(input.description ? { description: input.description } : {}),
-            }
-          : input.kind === 'choice'
-            ? {
-                kind: 'choice' as const,
-                id,
-                askedBy: input.askedBy,
-                askedAt: now,
-                prompt: input.body,
-                ...(input.subject ? { subject: input.subject } : {}),
-                ...(input.description ? { description: input.description } : {}),
-                choices: input.choices!,
-                ...(input.selectionMode ? { selectionMode: input.selectionMode } : {}),
-              }
-            : {
-                kind: 'text' as const,
-                id,
-                askedBy: input.askedBy,
-                askedAt: now,
-                prompt: input.body,
-                ...(input.subject ? { subject: input.subject } : {}),
-                ...(input.description ? { description: input.description } : {}),
-              }
-
-    const existing = task.openQuestions ?? []
-    const existingOpenDuplicate = existing.find((item) => {
-      if (!item || typeof item !== 'object') return false
-      const answeredAt = 'answeredAt' in item ? item.answeredAt : undefined
-      if (typeof answeredAt === 'string' && answeredAt) return false
-      return questionSignature(item as {
-        kind?: string
-        prompt?: string
-        restatement?: string
-        choices?: string[]
-        selectionMode?: string
-      }) === questionSignature(question)
-    }) as { id?: string } | undefined
-    if (existingOpenDuplicate?.id) {
-      return { success: true, questionId: existingOpenDuplicate.id }
-    }
-    task.openQuestions = [...existing, question]
-    task.updatedAt = now
-    queue.lastUpdated = now
-
-    atomicWriteText(input.tasksPath, JSON.stringify(queue, null, 2) + '\n')
-    return { success: true, questionId: id }
+    const projectRoot = projectRootFromTasksPath(input.tasksPath)
+    const result = await createOwnerInputRequest({
+      projectRoot,
+      projectId: projectIdFromRoot(projectRoot),
+      commandId: `post-user-question:${input.taskId}:${id}`,
+      now,
+      actor: input.askedBy,
+      source: { kind: 'task', taskId: input.taskId, questionId: id },
+      target: { kind: 'thread' },
+      prompt: input.body,
+      helperText: input.description,
+      choices: input.kind === 'choice' ? input.choices : undefined,
+      objective: {
+        kind: 'task_shaping',
+        label: task.title ? `Clarify ${task.title}` : `Clarify ${input.taskId}`,
+        successCriteria: ['Owner answers the linked bounded-chat session.'],
+      },
+      sessionSource: `post-user-question:${input.taskId}:${id}`,
+    })
+    return { success: true, questionId: result.request.id }
   } catch (err) {
     return { success: false, error: String(err) }
   }

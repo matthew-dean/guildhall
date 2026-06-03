@@ -375,13 +375,14 @@ evidence. If Looma is chosen, Guildhall gets a first-party system it can reason
 about deeply. If another library is already better for the project, Guildhall
 should map that system into the same design proof contract.
 
-#### Looma Feedback Loop
+#### Design Feedback Routing
 
-If Guildhall uses Looma as a preferred foundation, Guildhall should also become
-one of Looma's pressure systems. Design review findings should not disappear
-into a single app's task history when they reveal a reusable gap in the design
-system. They should be classified, retained, and routed into Looma improvement
-work when they are broadly useful.
+Design review findings should not disappear into a single app's task history
+when they reveal a reusable gap in a design system, component library, or
+domain capability. They should be classified, retained, and then either kept as
+project-local design decisions or routed through the same project graph and
+domain/capability exchange that Guildhall uses for other provider-owned work.
+Looma is one possible provider project, not a special dev mode.
 
 The loop should work like this:
 
@@ -395,15 +396,19 @@ The loop should work like this:
    - **Token-system gap:** the issue needs a new or better semantic lever.
    - **Taste guidance gap:** the issue needs better guidance, rubric language,
      examples, or palettes.
-   - **Looma defect:** Looma already claims to handle this but does not.
+   - **Design-system defect:** the responsible design system already claims to
+     handle this but does not.
 4. Project-specific findings become project design decisions.
-5. Reusable findings become Looma candidate improvements with evidence.
-6. Accepted Looma improvements update Looma's tokens, primitives, recipes,
-   Storybook state matrix, docs, or rubrics.
-7. Future Guildhall runs start from the improved foundation.
+5. Reusable findings become design-system candidate improvements with evidence.
+6. If another project owns the relevant capability, Guildhall creates or
+   updates the project graph request to that provider coordinator and tracks the
+   provider plan/delivery/consumer verification receipts.
+7. Accepted design-system improvements update the provider project's tokens,
+   primitives, recipes, catalogs, docs, or rubrics.
+8. Future Guildhall runs start from the improved foundation.
 
 That makes the improvement path explicit: Guildhall improves apps, and repeated
-app evidence improves the design system that future apps inherit.
+app evidence improves the systems that future apps inherit.
 
 Implementation objects:
 
@@ -414,10 +419,11 @@ Implementation objects:
 - **DesignDecision:** a project-owned decision that workers and reviewers must
   honor for the current app.
 - **DesignSystemCandidate:** a reusable improvement proposal that can target
-  Looma or another detected design system.
-- **LoomaImprovement:** a specialized candidate for Looma with target package
-  (`tokens`, `core`, `layout`, adapter, docs, Storybook), evidence links,
-  expected API/token shape, and verification expectations.
+  any detected or graph-owned design system.
+- **DesignSystemImprovement:** a reusable candidate with target package
+  (`tokens`, `core`, `layout`, adapter, docs, Storybook/rubric), evidence
+  links, expected API/token shape, and verification expectations. It remains a
+  portable record until a project graph edge routes it to the provider project.
 
 Classification should happen after every design proof pass, not as a manual
 extra step. Guildhall can ask the owner when the scope is ambiguous, but the
@@ -426,95 +432,35 @@ default behavior should be automatic triage:
 - A palette miss for Pantry Pulse's food/domestic mood is likely a project
   design decision.
 - A segmented filter whose selected state is repeatedly unclear is likely a
-  Looma recipe or primitive improvement.
+  recipe or primitive improvement in the responsible design system.
 - A radius complaint across several generated apps is likely a token-lever gap.
 - A confusing toggle/button choice is likely a component interaction semantics
   rubric and pattern-catalog improvement.
-- A documented Looma component state that fails in Storybook is likely a Looma
-  defect.
+- A documented component state that fails in the provider project's catalog is
+  likely a design-system defect.
 
 Guildhall should expose this gently. The owner does not need a big new dashboard
 for every design-system thought. In normal project work, they should see:
 
 - the local design decision that affects the current app;
-- a compact note when a reusable Looma follow-up was filed;
+- a compact note when a reusable provider-owned follow-up was filed;
 - a link from the design proof packet to the reusable finding;
-- a project setting that controls whether Guildhall may create Looma follow-up
-  tasks automatically or should queue them for approval.
+- project graph status when the finding has been handed to another coordinator.
 
-For 0.9, the minimum viable version is not cross-repo automation. It is the
-schema, persistence, classification, UI/API visibility, and a recorded Pantry
-Pulse proof where at least one reusable design finding is separated from local
-project decisions. Cross-repo Looma issue/PR automation can follow once Looma
-has a public GitHub home and package/license story.
+For 0.9, the minimum viable version is the schema, persistence,
+classification, UI/API visibility, and a recorded Pantry Pulse proof where at
+least one reusable design finding is separated from local project decisions.
+For 0.10, provider-owned reusable design feedback should travel through the
+project graph exchange rather than through a machine-local development hook:
+domain assignment, provider request, delivery plan, delivery receipt, and
+consumer verification/return evidence.
 
-#### Local Looma Development Hook
-
-The Looma feedback loop must be a hook, not a product dependency. Most
-Guildhall users will not have Looma checked out beside their project, and
-Guildhall must not fail, degrade, or show confusing setup work because a local
-Looma repo is missing.
-
-Default behavior for every user:
-
-- Guildhall records reusable design-system findings as portable
-  `DesignSystemCandidate` records.
-- If the active project uses Looma packages, Guildhall may label the candidate
-  as Looma-targeted based on package evidence, but it still records a portable
-  candidate first.
-- If no local Looma development project is configured, Guildhall shows the
-  candidate as queued/exportable evidence, not as a failed task.
-- Generated app work continues normally; the app should receive its local
-  design decision or local patch regardless of whether Looma can be improved.
-
-Local Guildhall development behavior:
-
-- A local Looma write-through hook activates only when explicitly configured,
-  for example through a development setting such as
-  `designSystemDevelopment.looma.path`, a workspace coordinator project path, or
-  a recognized `LOOMA_PATH` environment variable.
-- The hook must verify the path exists, is a Git worktree, and looks like Looma
-  before creating any Looma improvement task.
-- If the path is absent or invalid, the hook returns an inactive status with a
-  plain explanation and keeps the portable candidate.
-- The hook may create local Guildhall tasks, candidate artifacts, or eventually
-  GitHub issues/PRs for Looma only after the owner/dev setting allows it.
-- Tests must cover both cases: no Looma checkout available, and configured
-  local Looma checkout available.
-
-This keeps the loop useful for Guildhall's own development without making Looma
-a hidden prerequisite for everyone else. The portable candidate is the product
-contract. The local Looma hook is an acceleration path for this repository and
-for users who deliberately opt into Looma development.
-
-Recommended config shape:
-
-```yaml
-# ~/.guildhall/config.yaml
-experimental:
-  designSystemDevelopment:
-    looma:
-      enabled: true
-      path: /Users/matthew/git/oss/looma-knit/looma
-      writeThrough: queue
-```
-
-Semantics:
-
-- `experimental` marks the whole feature family as nonessential, local, and
-  safe to ignore when missing.
-- `designSystemDevelopment` is for improving a design system repo, not for
-  deciding which design system a product uses.
-- `looma.path` is machine-local and should not live in a shared project file.
-- `writeThrough: queue` means Guildhall may create local candidate tasks or
-  artifacts for Looma, but should not push branches, open PRs, or mutate Looma
-  automatically without a later explicit mode.
-- Cross-repo Looma work that is delegated to another Codex run should create an
-  `ExternalAgentLink` record. That record connects the Guildhall task, provider,
-  external agent id, target project path, and status so the handoff is visible
-  to the app and MCP instead of living only in chat.
-- `LOOMA_PATH` may remain a dev/test override, but config should be the durable
-  source of truth for normal local development.
+There should be no design-feedback `designSystemDevelopment` local checkout
+config, no design-feedback `LOOMA_PATH`-style override, and no design-feedback
+API field that reports inactive local development targets. If a real
+Looma/Knit/Guildhall workspace is registered, it should be represented as
+first-class projects and graph edges, the same way any other shared design
+system or capability provider would be.
 
 Project-level config should stay separate:
 

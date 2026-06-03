@@ -259,3 +259,35 @@ source: codex:bounded-chat-project-check-in-adapter
 Live installed-app audit for Looma + Knit (`projectId=looma-knit`) verified `/api/stale-server` as `stale:false`, opened `/projects/looma-knit/settings/reintake`, found no existing draft, refreshed re-intake via the project API after the section page exposed only a 404 state, and got draft `reintake-20260531T15381` with 14 sources scanned but 0 groups/0 reframes/0 creates/0 archives. The top recovery item `task-import-gh97p0` was reframed through the UI, then the remaining 36 stale imported blockers were reframed through the same `/api/project/task/:id/reframe-task` action endpoint. API readiness moved to `canStart:true`; a one-task start returned HTTP 200 and ran `task-import-1y7kmp6`, then stopped after one tick with `agent-error` because the spec agent timed out after 120000ms of inactivity and left all 39 tasks in `exploring`. Flow finding: re-intake cleanup cleared the owner blocker, but the Re-intake section lacks an obvious start/refresh affordance when no draft exists, and Looma + Knit is now runnable but not yet trustworthy for forward progress because the spec-agent durable-progress timeout remains.
 
 source: Codex live Looma + Knit re-intake audit 2026-05-31
+## 2026-06-01T23:12:15.694Z MCP evidence for task-9
+
+Implemented Task 9 minimal task transition boundary in commit ceacfd4d. Added src/runtime/task-transition.ts backed by state-machine.ts, focused task-transition tests, routed deterministic hot paths through the boundary, updated Task 9 plan evidence, and verified with focused vitest suite: 384 tests passed. pnpm typecheck is currently blocked by concurrent Inbox/attention/serve type errors outside Worker B scope.
+
+source: codex-worker-b
+## 2026-06-01T23:26:45.952Z MCP evidence for task-10
+
+Committed Task 10 fixture quarantine: moved app-spec-smoke and release-proof-matrix runtime modules from src/runtime to internal/fixtures, updated tests, added a guard against restoring those shipping runtime paths, and recorded test/lint evidence in internal/plans/2026-06-01-guildhall-cognitive-overhead-reduction.md.
+
+source: codex-worker-c
+## 2026-06-03T12:38:14.507Z MCP evidence for 0.10.0/task-open-questions-to-bounded-chat
+
+Completed Milestone 1 bounded-chat owner-facing readiness slice: New request now opens bounded-chat sessions for all non-pressure-test routes, pure project questions close as conversation receipts without task drafts, task-like asks create tasks only after owner shaping, and Thread renders bounded-chat state through a dedicated conversation panel instead of the legacy question-card branch. Verification: focused bounded-chat/thread/request/serve/UI suites passed with 251 tests; pnpm typecheck:ui and pnpm lint:design passed; pnpm typecheck still fails on unrelated contract-surface schema/type drift in src/runtime/context-builder.ts and src/runtime/intake.ts.
+
+source: codex:bounded-chat-completion
+
+## 2026-06-03T12:46:00.000Z MCP evidence for 0.10.0/readiness-integration
+
+Completed the 0.10 readiness integration pass. Milestone 1 bounded Thread
+conversation behavior, Milestone 4 external task authority packet/write gating,
+Milestone 5 external-agent memory bridge MCP/CLI exposure, Milestone 6 contract
+surface packets/corpus/Structure/context, and Milestone 7 docs/screenshots/live
+proof are now integrated on `feature/cognitive-overhead-reduction`.
+Verification: `pnpm typecheck` passed; focused combined Vitest suite passed
+with 360 tests; `pnpm lint:design` passed; `node scripts/reduction-guardrails.mjs`
+passed; `pnpm build` passed; `git diff --check` passed; `pnpm dev:install`
+completed; service restart reported `/api/stale-server` as `stale:false`; live
+browser proof on Narrative Harness Thread and Structure showed no raw
+`invalid_type` / `taskReadiness` schema JSON and placed contract surfaces in
+Structure. Screenshots captured under `docs/assets/ui-audit/0-10-0/`.
+
+source: codex:0.10-readiness-integration

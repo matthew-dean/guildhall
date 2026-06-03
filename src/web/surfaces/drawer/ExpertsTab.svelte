@@ -5,7 +5,7 @@
 -->
 <script lang="ts">
   import Stack from '../../lib/Stack.svelte'
-  import Card from '../../lib/Card.svelte'
+  import Card from '../../lib/ui-compat/Card.svelte'
   import Chip from '../../lib/Chip.svelte'
   import Markdown from '../../lib/Markdown.svelte'
   import type { ReviewVerdict, GateResult } from '../../lib/types.js'

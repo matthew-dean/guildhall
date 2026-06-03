@@ -17,21 +17,11 @@ import type { Task, TaskQueue, TaskStatus } from '@guildhall/core'
 import type { ProjectLevers } from '@guildhall/levers'
 import type { GitDriver } from './git-driver.js'
 import { attemptRemoteSync } from './local-only-mode.js'
+import { applyTaskTransition, type TaskTransitionReceipt } from './task-transition.js'
 
 export type LandingStrategy = ProjectLevers['landing_strategy']['position']
 
 export function resolveLandingStrategy(project: ProjectLevers): LandingStrategy {
-  const legacy = project.merge_policy?.position
-  if (legacy) {
-    switch (legacy) {
-      case 'ff_only_local':
-        return 'cherry_pick_local'
-      case 'ff_only_with_push':
-        return 'cherry_pick_with_push'
-      case 'manual_pr':
-        return 'manual_pr'
-    }
-  }
   return project.landing_strategy.position
 }
 
@@ -72,6 +62,7 @@ export interface DispatchMergeResult {
    *     also produced)
    */
   newStatus: TaskStatus
+  transitionReceipt?: TaskTransitionReceipt
   /**
    * When non-null, the caller must append this task to the queue (a FR-25
    * fixup task parented to the failing merge's goal).
@@ -130,6 +121,13 @@ export async function dispatchMerge(
           detail: push.detail ?? 'push failed before PR creation',
         },
         newStatus: 'pending_pr',
+        transitionReceipt: landingTransitionReceipt({
+          task,
+          event: 'await_pull_request',
+          actor: 'merge-dispatcher',
+          evidenceRefs: ['task:landing:pending-pr'],
+          now,
+        }),
         degradedToLocal: true,
       }
     }
@@ -147,6 +145,13 @@ export async function dispatchMerge(
         ...(pr.detail ? { detail: pr.detail } : {}),
       },
       newStatus: 'pending_pr',
+      transitionReceipt: landingTransitionReceipt({
+        task,
+        event: 'await_pull_request',
+        actor: 'merge-dispatcher',
+        evidenceRefs: ['task:landing:pending-pr'],
+        now,
+      }),
     }
   }
 
@@ -169,6 +174,13 @@ export async function dispatchMerge(
         },
         // Conflict blocks the task — a fixup is queued separately.
         newStatus: 'blocked',
+        transitionReceipt: landingTransitionReceipt({
+          task,
+          event: 'landing_failed',
+          actor: 'merge-dispatcher',
+          evidenceRefs: ['task:landing:conflict'],
+          now,
+        }),
         fixupTask: fixup,
       }
     }
@@ -179,6 +191,13 @@ export async function dispatchMerge(
           detail: merge.detail ?? 'cherry-pick failed; no conflict recorded',
       },
       newStatus: 'blocked',
+      transitionReceipt: landingTransitionReceipt({
+        task,
+        event: 'landing_failed',
+        actor: 'merge-dispatcher',
+        evidenceRefs: ['task:landing:failed'],
+        now,
+      }),
     }
   }
 
@@ -225,6 +244,25 @@ export async function dispatchMerge(
   }
 }
 
+function landingTransitionReceipt(input: {
+  task: Task
+  event: 'await_pull_request' | 'landing_failed'
+  actor: string
+  evidenceRefs: string[]
+  now: string
+}): TaskTransitionReceipt {
+  const result = applyTaskTransition(input)
+  if (result.kind === 'rejected') {
+    throw new Error(
+      `Task ${input.task.id} cannot ${input.event.replaceAll('_', ' ')} from ${input.task.status}: ${result.reason}`,
+    )
+  }
+  return {
+    ...result.receipt,
+    machineId: 'task-lifecycle',
+  }
+}
+
 // ---------------------------------------------------------------------------
 // Fixup task helper
 // ---------------------------------------------------------------------------
@@ -260,7 +298,7 @@ function buildFixupTask(opts: {
     escalations: [],
     agentIssues: [],
     origination: 'system',
-    ...(parent.parentGoalId ? { parentGoalId: parent.parentGoalId } : {}),
+    ...(parent.businessEnvelope ? { businessEnvelope: parent.businessEnvelope } : {}),
     createdAt: opts.now,
     updatedAt: opts.now,
   }
@@ -285,13 +323,21 @@ export function shelveSupersededFixupTasks(
   for (const task of queue.tasks) {
     if (!task.id.startsWith(`${parentTaskId}-fixup-`)) continue
     if (task.status === 'done' || task.status === 'shelved') continue
-    task.status = 'shelved'
+    const transitionResult = applyTaskTransition({
+      task,
+      event: 'shelve',
+      actor: 'merge-dispatcher',
+      evidenceRefs: [`task:${parentTaskId}:landed`],
+      now,
+    })
+    if (transitionResult.kind !== 'applied') continue
+    task.status = transitionResult.nextState
     task.assignedTo = null
     task.blockReason = undefined
     task.shelveReason = {
       code: 'duplicate',
       detail:
-        `Superseded because parent task ${parentTaskId} landed successfully after the fixup was created.`,
+        `Superseded because source task ${parentTaskId} landed successfully after the fixup was created.`,
       rejectedBy: 'system:merge-dispatcher',
       rejectedAt: now,
       source: 'proposal_policy',

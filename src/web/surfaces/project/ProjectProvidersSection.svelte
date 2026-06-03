@@ -9,7 +9,7 @@
 -->
 <script lang="ts">
   import Button from '../../lib/Button.svelte'
-  import Card from '../../lib/Card.svelte'
+  import Card from '../../lib/ui-compat/Card.svelte'
   import CardList from '../../lib/CardList.svelte'
   import CardListItem from '../../lib/CardListItem.svelte'
   import Chip from '../../lib/Chip.svelte'

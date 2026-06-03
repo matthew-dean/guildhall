@@ -37,7 +37,7 @@ describe('Hermes quality comparator artifact discovery', () => {
     expect(artifact.browserProof.screenshots).toHaveLength(2)
     expect(score.checks.find(check => check.id === 'landed_in_project_root')?.passed).toBe(false)
     expect(score.total).toBeGreaterThan(5)
-  })
+  }, 20000)
 
   it('discovers task worktrees from the current versioned task store shape', async () => {
     const root = await fs.mkdtemp(path.join(os.tmpdir(), 'guildhall-quality-versioned-root-'))

@@ -37,6 +37,14 @@ import {
   installAgentBridgeInstructions,
   type AgentBridgeTarget,
 } from './agent-bridge-install.js'
+import {
+  importExternalMemoryBridgeRecord,
+  listExternalMemoryBridgeRecords,
+  rejectExternalMemoryBridgeRecord,
+  reviewExternalMemoryBridgeRecord,
+  type ExternalMemoryBridgeRecordInput,
+  type ExternalMemoryBridgeReviewStatus,
+} from './external-agent-memory-bridge.js'
 import { runInit } from './init.js'
 import { runServe } from './serve.js'
 import {
@@ -237,7 +245,7 @@ export function parseArgs(rawArgs: string[]): {
   getFlag: (flag: string) => string | undefined
   positionals: string[]
 } {
-  const valueFlags = new Set(['--port', '--service-state', '--domain', '--max-ticks', '--cases', '--task', '--lane', '--finding', '--action', '--missed-by', '--migration', '--fixture-set', '--subset', '--automation', '--output-dir', '--output', '--project', '--model', '--provider', '--hermes-root', '--from-file', '--proof', '--title', '--edge', '--receipt', '--evidence', '--format', '--channel'])
+  const valueFlags = new Set(['--port', '--service-state', '--domain', '--max-ticks', '--cases', '--task', '--lane', '--finding', '--action', '--missed-by', '--migration', '--fixture-set', '--subset', '--automation', '--output-dir', '--output', '--project', '--model', '--provider', '--hermes-root', '--from-file', '--proof', '--title', '--edge', '--receipt', '--evidence', '--format', '--channel', '--status', '--id', '--reviewer', '--reason', '--memory-status'])
   function getFlag(flag: string): string | undefined {
     const idx = rawArgs.indexOf(flag)
     return idx !== -1 ? rawArgs[idx + 1] : undefined
@@ -350,6 +358,10 @@ export function resolveServiceLifecycleIntent(
 //   guildhall graph delivery accept --edge <edge-id> --project <consumer-path> --proof <proof>
 //   guildhall graph delivery return --edge <edge-id> --project <consumer-path> --evidence <return.json>
 //   guildhall mcp serve [path]          — serve Guildhall project context over MCP stdio
+//   guildhall agent memory import --from-file <record.json> [--project <path>] [--json]
+//   guildhall agent memory list [--status imported|reviewed|rejected] [--project <path>] [--json]
+//   guildhall agent memory review --id <id> --reviewer <name> [--project <path>] [--json]
+//   guildhall agent memory reject --id <id> --reviewer <name> --reason <text> [--project <path>] [--json]
 //   guildhall bridge install [--target codex|claude|all] [--yes|--no-configure-mcp] [id|path]
 //                                      — install agent instructions for Guildhall MCP
 // ---------------------------------------------------------------------------
@@ -373,6 +385,7 @@ export const SHIPPED_CLI_COMMANDS = [
   'model-bakeoff',
   'benchmarks',
   'graph',
+  'agent',
   'mcp',
   'bridge',
 ] as const
@@ -389,7 +402,7 @@ function getFlag(flag: string): string | undefined {
 // another flag — otherwise boolean flags like `--no-browser` would eat the
 // following positional by mistake.
 function positionals(): string[] {
-  const valueFlags = new Set(['--port', '--domain', '--max-ticks', '--service-state', '--target', '--cases', '--task', '--lane', '--finding', '--action', '--missed-by', '--migration', '--fixture-set', '--subset', '--automation', '--output-dir', '--output', '--project', '--model', '--provider', '--hermes-root', '--from-file', '--proof', '--title', '--edge', '--receipt', '--evidence', '--format', '--channel'])
+  const valueFlags = new Set(['--port', '--domain', '--max-ticks', '--service-state', '--target', '--cases', '--task', '--lane', '--finding', '--action', '--missed-by', '--migration', '--fixture-set', '--subset', '--automation', '--output-dir', '--output', '--project', '--model', '--provider', '--hermes-root', '--from-file', '--proof', '--title', '--edge', '--receipt', '--evidence', '--format', '--channel', '--status', '--id', '--reviewer', '--reason', '--memory-status'])
   const result: string[] = []
   for (let i = 0; i < args.length; i++) {
     const a = args[i]
@@ -521,6 +534,20 @@ Usage:
                                   Accept a delivery from consumer project authority
   guildhall graph delivery return --edge <edge-id> --project <consumer-path> --evidence <return.json>
                                   Return a delivery with structured consumer verification evidence
+  guildhall agent memory import --from-file <record.json>
+                                  Import an external-agent memory bridge record for review
+    --project <path>              Project to update (default: current directory)
+    --json                        Print compact JSON for agent clients
+  guildhall agent memory list
+                                  List external-agent memory bridge records
+    --status <status>             imported, reviewed, or rejected
+    --project <path>              Project to read (default: current directory)
+    --json                        Print compact JSON for agent clients
+  guildhall agent memory review --id <id> --reviewer <name>
+                                  Promote one bridge record into ordinary memory
+    --memory-status <status>      active, proposed, or observed (default: active)
+  guildhall agent memory reject --id <id> --reviewer <name> --reason <text>
+                                  Reject one bridge record without promoting it
   guildhall mcp serve [project-path]
                                   Serve Guildhall project context over MCP stdio
   guildhall bridge install [--target codex|claude|all] [--yes|--no-configure-mcp] [id|path]
@@ -557,6 +584,8 @@ Examples:
   guildhall graph draft
   guildhall graph request import --edge edge-knit-looma --project /Users/me/git/looma
   guildhall graph deliver --edge edge-knit-looma --project /Users/me/git/looma --receipt delivery.json
+  guildhall agent memory list --status imported --json
+  guildhall agent memory review --id codex-summary --reviewer owner
   guildhall mcp serve .
   guildhall bridge install --target all --yes .
 `.trim()
@@ -1805,6 +1834,102 @@ function printGraphEdgeResult(prefix: string, edge: ProjectDependencyEdge): void
   console.log(`[guildhall] ${prefix}: ${edge.id} is ${edge.stateMachine.state}`)
 }
 
+export async function runAgentMemoryBridgeCommand(
+  rawArgs: string[],
+  opts: { cwd?: string; now?: string } = {},
+): Promise<string> {
+  const parsed = parseArgs(rawArgs)
+  const namespace = parsed.positionals[0]
+  const action = parsed.positionals[1] ?? 'list'
+  if (namespace !== 'memory' || !['import', 'list', 'review', 'reject'].includes(action)) {
+    throw new Error('Usage: guildhall agent memory <import|list|review|reject> [--project <path>] [--json]')
+  }
+
+  const projectPath = resolveAgentMemoryProjectPath(parsed, opts.cwd ?? process.cwd())
+  const memoryDir = getProjectStateDir(projectPath)
+  const json = rawArgs.includes('--json') || parsed.getFlag('--format') === 'json'
+
+  if (action === 'import') {
+    const fromFile = parsed.getFlag('--from-file')
+    if (!fromFile) throw new Error('Usage: guildhall agent memory import --from-file <record.json> [--project <path>] [--json]')
+    const record = readJsonFile<ExternalMemoryBridgeRecordInput>(fromFile)
+    const saved = await importExternalMemoryBridgeRecord({ memoryDir, record })
+    return formatAgentMemoryBridgeResult(saved, json, `Imported external memory bridge record ${saved.id} (${saved.reviewStatus}).`)
+  }
+
+  if (action === 'list') {
+    const reviewStatus = parsed.getFlag('--status') as ExternalMemoryBridgeReviewStatus | undefined
+    const store = await listExternalMemoryBridgeRecords({
+      memoryDir,
+      ...(reviewStatus ? { reviewStatus } : {}),
+    })
+    if (json) return JSON.stringify(store, null, 2)
+    if (store.records.length === 0) return '[guildhall] No external memory bridge records.'
+    return [
+      `[guildhall] External memory bridge records: ${store.records.length}`,
+      ...store.records.map((record) => `[guildhall] ${record.id}: ${record.reviewStatus} ${record.provider} ${record.scope}/${record.type} - ${record.summary}`),
+    ].join('\n')
+  }
+
+  const id = parsed.getFlag('--id')
+  const reviewer = parsed.getFlag('--reviewer')
+  if (!id || !reviewer) {
+    throw new Error(`Usage: guildhall agent memory ${action} --id <id> --reviewer <name> [--project <path>] [--json]`)
+  }
+
+  if (action === 'review') {
+    const memoryStatus = parsed.getFlag('--memory-status') as 'active' | 'proposed' | 'observed' | undefined
+    const saved = await reviewExternalMemoryBridgeRecord({
+      memoryDir,
+      id,
+      reviewer,
+      ...(opts.now ? { now: opts.now } : {}),
+      ...(memoryStatus ? { memoryStatus } : {}),
+    })
+    return formatAgentMemoryBridgeResult(saved, json, `Reviewed external memory bridge record ${saved.id}; promoted to ordinary memory.`)
+  }
+
+  const rejectionReason = parsed.getFlag('--reason')
+  if (!rejectionReason) {
+    throw new Error('Usage: guildhall agent memory reject --id <id> --reviewer <name> --reason <text> [--project <path>] [--json]')
+  }
+  const saved = await rejectExternalMemoryBridgeRecord({
+    memoryDir,
+    id,
+    reviewer,
+    rejectionReason,
+    ...(opts.now ? { now: opts.now } : {}),
+  })
+  return formatAgentMemoryBridgeResult(saved, json, `Rejected external memory bridge record ${saved.id}; it was not promoted.`)
+}
+
+async function cmdAgent() {
+  try {
+    console.log(await runAgentMemoryBridgeCommand(args))
+  } catch (err) {
+    console.error(`[guildhall] ${err instanceof Error ? err.message : String(err)}`)
+    process.exit(1)
+  }
+}
+
+function resolveAgentMemoryProjectPath(
+  parsed: ReturnType<typeof parseArgs>,
+  cwd: string,
+): string {
+  const explicit = parsed.getFlag('--project') ?? parsed.positionals[2]
+  if (!explicit) return cwd
+  const entry = findWorkspace(explicit)
+  return resolve(expandPath(entry?.path ?? explicit))
+}
+
+function formatAgentMemoryBridgeResult(
+  value: unknown,
+  json: boolean,
+  message: string,
+): string {
+  return json ? JSON.stringify(value, null, 2) : `[guildhall] ${message}`
+}
+
 async function cmdBridge() {
   const pos = positionals()
   const subcommand = pos[0] ?? 'install'
@@ -1917,6 +2042,7 @@ async function main() {
     case 'model-bakeoff': return cmdModelBakeoff()
     case 'benchmarks': return cmdBenchmarks()
     case 'graph': return cmdGraph()
+    case 'agent': return cmdAgent()
     case 'mcp': return cmdMcp()
     case 'bridge': return cmdBridge()
     default:

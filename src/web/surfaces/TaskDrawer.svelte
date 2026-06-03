@@ -25,7 +25,7 @@
   import ExpertsTab from './drawer/ExpertsTab.svelte'
   import ProvenanceTab from './drawer/ProvenanceTab.svelte'
   import ResolveEscalationModal from './drawer/ResolveEscalationModal.svelte'
-  import type { DrawerPayload, DrawerTab, Escalation } from '../lib/types.js'
+  import type { DrawerPayload, DrawerTab, Escalation, Task } from '../lib/types.js'
   import { onEvent, eventTaskId } from '../lib/events.js'
   import { currentProjectHref, currentTaskHref, projectFetch } from '../lib/project-routes.js'
   import { project } from '../lib/project.svelte.js'
@@ -272,27 +272,8 @@
     }
   }
 
-  async function answerQuestion(questionId: string, answer: string): Promise<void> {
-    busy = true
-    try {
-      const res = await drawerFetch(`/api/project/task/${encodeURIComponent(taskId)}/answer-questions`, {
-        method: 'POST',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({
-          answers: [{ questionId, answer }],
-        }),
-      })
-      if (!res.ok) {
-        const b = await res.json().catch(() => ({}))
-        error = b.error ?? `HTTP ${res.status}`
-        return
-      }
-      await load()
-    } catch (err) {
-      error = friendlyFetchError(err)
-    } finally {
-      busy = false
-    }
+  function openThreadFromDrawer(): void {
+    nav(drawerProjectHref('/thread'))
   }
 
   function handleApproveSpec() {
@@ -523,11 +504,19 @@
   }
 
   const isTerminalRunTask = $derived(isTerminalRunStatus(task?.status))
-  const isParentTask = $derived(task?.status === 'parent')
+  function readinessRecommendation(value: Task | undefined): string | null {
+    const recommendation = value?.taskReadiness?.recommendation
+    return typeof recommendation === 'string' ? recommendation : null
+  }
+
+  const isContainingWorkTask = $derived(Boolean(
+    (task?.hierarchy?.childIds?.length ?? 0) > 0 ||
+    readinessRecommendation(task) === 'split',
+  ))
   const canReframeTask = $derived(Boolean(
     task &&
     !isTerminalRunTask &&
-    !isParentTask &&
+    !isContainingWorkTask &&
     task.status !== 'in_progress' &&
     task.status !== 'review' &&
     task.status !== 'gate_check',
@@ -539,8 +528,8 @@
   ))
   const canReworkTask = $derived(canSplitTask)
   const isHeld = $derived(task?.status === 'blocked' && Boolean(task?.hold))
-  const canHold = $derived(task && !isTerminalRunTask && !isParentTask && task.status !== 'blocked')
-  const canShelve = $derived(task && !isParentTask && task.status !== 'done' && task.status !== 'pending_pr')
+  const canHold = $derived(task && !isTerminalRunTask && !isContainingWorkTask && task.status !== 'blocked')
+  const canShelve = $derived(task && !isContainingWorkTask && task.status !== 'done' && task.status !== 'pending_pr')
   const isShelved = $derived(task?.status === 'shelved')
   const isWorkspaceImportTask = $derived(task?.id === 'task-workspace-import')
   const openEscalations = $derived(task ? activeEscalations(task) : [])
@@ -551,7 +540,7 @@
       : null,
   )
   const projectStartBlockerMessage = $derived(projectStartBlocker?.message ?? null)
-  const canRunTaskDirectly = $derived(!projectStartBlocker && !hasCurrentTurns && !isTerminalRunTask && !isParentTask && !firstOpenEscalation)
+  const canRunTaskDirectly = $derived(!projectStartBlocker && !hasCurrentTurns && !isTerminalRunTask && !isContainingWorkTask && !firstOpenEscalation)
   const canResumeHold = $derived(!projectStartBlocker && isHeld && !firstOpenEscalation)
   const firstOpenEscalationAction = $derived(escalationPrimaryAction(firstOpenEscalation))
   const firstOpenEscalationGuidance = $derived(escalationUserGuidance(firstOpenEscalation))
@@ -582,7 +571,7 @@
         : 'Resume it when you want Guildhall to continue from the saved stage.',
       }
     }
-    if (task.status === 'parent') {
+    if (isContainingWorkTask) {
       return {
         tone: 'info',
         eyebrow: 'Containing work',
@@ -932,7 +921,7 @@
           onOpenSpecTab={() => (activeTab = 'spec')}
           onOpenEscalationAction={handleOpenEscalationAction}
           onRunEscalationAction={handleRunEscalationById}
-          onAnswerQuestion={answerQuestion}
+          onOpenThread={openThreadFromDrawer}
         />
       {:else if activeTab === 'overview'}
         <OverviewTab

@@ -1,6 +1,6 @@
 <script lang="ts">
   import ActionBar from '../../lib/ActionBar.svelte'
-  import Card from '../../lib/Card.svelte'
+  import Card from '../../lib/ui-compat/Card.svelte'
   import Row from '../../lib/Row.svelte'
   import Stack from '../../lib/Stack.svelte'
   import Button from '../../lib/Button.svelte'
@@ -1680,39 +1680,39 @@
   .wrap {
     display: flex;
     flex-direction: column;
-    gap: var(--s-5);
+    gap: var(--gh-space-5);
   }
   .head {
     display: flex;
     flex-direction: column;
-    gap: var(--s-3);
+    gap: var(--gh-space-3);
   }
   .head h2 {
     margin: 0;
-    font-size: var(--fs-4);
-    font-weight: 700;
-    line-height: var(--lh-tight);
+    font-size: var(--gh-type-size-section-title);
+    font-weight: var(--gh-type-weight-emphasis);
+    line-height: var(--gh-type-line-height-tight);
   }
   .sub {
     margin: 0;
     color: var(--text-muted);
-    font-size: var(--fs-2);
-    line-height: var(--lh-body);
+    font-size: var(--gh-type-size-body);
+    line-height: var(--gh-type-line-height-body);
     max-width: 72ch;
   }
-  .muted { color: var(--text-muted); font-size: var(--fs-1); }
+  .muted { color: var(--text-muted); font-size: var(--gh-type-size-meta); }
   .section-intro {
     display: flex;
     flex-direction: column;
-    gap: var(--s-3);
+    gap: var(--gh-space-3);
   }
   .section-kicker {
     display: flex;
     align-items: center;
-    gap: var(--s-2);
+    gap: var(--gh-space-2);
     color: var(--text-muted);
-    font-size: var(--fs-1);
-    font-weight: 600;
+    font-size: var(--gh-type-size-meta);
+    font-weight: var(--gh-type-weight-strong);
     text-transform: uppercase;
     letter-spacing: 0.04em;
   }
@@ -1723,38 +1723,38 @@
   .section-copy {
     margin: 0;
     color: var(--text-muted);
-    font-size: var(--fs-2);
-    line-height: var(--lh-body);
+    font-size: var(--gh-type-size-body);
+    line-height: var(--gh-type-line-height-body);
     max-width: 72ch;
   }
   .detail-label {
     color: var(--text-muted);
-    font-size: var(--fs-0);
+    font-size: var(--gh-type-size-caption);
     text-transform: uppercase;
     letter-spacing: 0.05em;
-    font-weight: 700;
-    margin-bottom: var(--s-1);
+    font-weight: var(--gh-type-weight-emphasis);
+    margin-bottom: var(--gh-space-1);
   }
   .detail-copy {
     margin: 0;
     color: var(--text);
-    font-size: var(--fs-1);
-    line-height: var(--lh-body);
+    font-size: var(--gh-type-size-meta);
+    line-height: var(--gh-type-line-height-body);
   }
   .detail-list {
     margin: 0;
-    padding-left: 1.1rem;
+    padding-left: var(--gh-space-4);
     color: var(--text);
-    font-size: var(--fs-1);
-    line-height: var(--lh-body);
+    font-size: var(--gh-type-size-meta);
+    line-height: var(--gh-type-line-height-body);
   }
   .detail-source {
     width: 100%;
     display: grid;
-    gap: var(--s-1);
-    padding: var(--s-3);
+    gap: var(--gh-space-1);
+    padding: var(--gh-space-3);
     border: 1px solid var(--border);
-    border-radius: var(--r-1);
+    border-radius: var(--gh-radius-1);
     background: var(--bg-raised);
     color: var(--text);
     font: inherit;
@@ -1766,70 +1766,70 @@
     background: color-mix(in srgb, var(--accent) 8%, var(--bg-raised));
   }
   .detail-source-title {
-    font-weight: 700;
+    font-weight: var(--gh-type-weight-emphasis);
   }
   .detail-source-path,
   .detail-source-summary {
     color: var(--text-muted);
-    font-size: var(--fs-1);
-    line-height: var(--lh-body);
+    font-size: var(--gh-type-size-meta);
+    line-height: var(--gh-type-line-height-body);
   }
   .detail-code {
     color: var(--text-muted);
-    font-size: var(--fs-1);
-    line-height: var(--lh-body);
+    font-size: var(--gh-type-size-meta);
+    line-height: var(--gh-type-line-height-body);
     word-break: break-word;
   }
   .detail-block {
     display: flex;
     flex-direction: column;
-    gap: var(--s-2);
+    gap: var(--gh-space-2);
   }
   .metric-row {
     display: flex;
-    gap: var(--s-2);
+    gap: var(--gh-space-2);
     flex-wrap: wrap;
     align-items: center;
   }
   .learned-note {
-    margin: var(--s-2) 0 0;
+    margin: var(--gh-space-2) 0 0;
     color: var(--accent-2);
-    font-size: var(--fs-1);
+    font-size: var(--gh-type-size-meta);
   }
   .source-summary {
     list-style: none;
     padding: 0;
-    margin: var(--s-4) 0 0;
+    margin: var(--gh-space-4) 0 0;
     display: flex;
     flex-direction: column;
-    gap: var(--s-4);
+    gap: var(--gh-space-4);
   }
   .source-summary li {
     display: grid;
     grid-template-columns: minmax(240px, 320px) minmax(0, 1fr);
-    gap: var(--s-4);
-    padding: var(--s-3) var(--s-4);
+    gap: var(--gh-space-4);
+    padding: var(--gh-space-3) var(--gh-space-4);
     border: 1px solid var(--border);
-    border-radius: var(--r-1);
+    border-radius: var(--gh-radius-1);
     background: var(--bg-raised);
     align-items: flex-start;
   }
   .summary-main {
     display: flex;
     flex-direction: column;
-    gap: var(--s-2);
+    gap: var(--gh-space-2);
     min-width: 0;
   }
   .summary-title-row {
     display: flex;
     align-items: center;
-    gap: var(--s-2);
+    gap: var(--gh-space-2);
     flex-wrap: wrap;
   }
   .summary-side {
     display: flex;
     flex-direction: column;
-    gap: var(--s-2);
+    gap: var(--gh-space-2);
     align-items: flex-start;
     text-align: left;
     min-width: 0;
@@ -1837,15 +1837,15 @@
   }
   .summary-label {
     color: var(--text-muted);
-    font-size: var(--fs-0);
+    font-size: var(--gh-type-size-caption);
     text-transform: uppercase;
     letter-spacing: 0.05em;
-    font-weight: 700;
+    font-weight: var(--gh-type-weight-emphasis);
   }
   .summary-preview {
     color: var(--text);
-    font-size: var(--fs-2);
-    line-height: var(--lh-body);
+    font-size: var(--gh-type-size-body);
+    line-height: var(--gh-type-line-height-body);
   }
   .inspect-task {
     appearance: none;
@@ -1860,7 +1860,7 @@
   .inspect-task {
     flex: 1;
     min-width: 0;
-    border-radius: var(--r-1);
+    border-radius: var(--gh-radius-1);
     transition: background-color 140ms ease, box-shadow 140ms ease;
   }
   .inspect-task:hover {
@@ -1871,28 +1871,28 @@
     box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--accent) 45%, transparent);
   }
   .source-summary.nested {
-    margin-top: var(--s-2);
+    margin-top: var(--gh-space-2);
   }
   .secondary-summary {
-    margin-top: var(--s-4);
+    margin-top: var(--gh-space-4);
   }
   .secondary-summary.reference-only {
     margin-top: 0;
   }
   .secondary-help {
-    margin: var(--s-3) 0;
+    margin: var(--gh-space-3) 0;
     color: var(--text-muted);
-    font-size: var(--fs-2);
-    line-height: var(--lh-body);
+    font-size: var(--gh-type-size-body);
+    line-height: var(--gh-type-line-height-body);
     max-width: 72ch;
   }
   .bulk-row {
     display: flex;
     align-items: center;
     justify-content: space-between;
-    gap: var(--s-3);
+    gap: var(--gh-space-3);
     flex-wrap: wrap;
-    margin-block: var(--s-3);
+    margin-block: var(--gh-space-3);
   }
   .bulk-row .secondary-help {
     margin: 0;
@@ -1900,14 +1900,14 @@
   }
   .bulk-label {
     color: var(--text-muted);
-    font-size: var(--fs-2);
+    font-size: var(--gh-type-size-body);
   }
   .individual-source-list {
-    margin-block-start: var(--s-3);
+    margin-block-start: var(--gh-space-3);
     border-top: 1px solid var(--border);
-    padding-block-start: var(--s-3);
+    padding-block-start: var(--gh-space-3);
     display: grid;
-    gap: var(--s-3);
+    gap: var(--gh-space-3);
   }
   .card-main {
     flex: 1;
@@ -1921,14 +1921,14 @@
   }
   .source-title-row {
     display: flex;
-    gap: var(--s-3);
+    gap: var(--gh-space-3);
     align-items: center;
     flex-wrap: wrap;
   }
   .kind-label {
     color: var(--accent-2);
-    font-size: var(--fs-0);
-    font-weight: 700;
+    font-size: var(--gh-type-size-caption);
+    font-weight: var(--gh-type-weight-emphasis);
     text-transform: uppercase;
     letter-spacing: 0.05em;
   }
@@ -1936,22 +1936,22 @@
     color: var(--text-muted);
   }
   .source-path {
-    font-size: var(--fs-1);
+    font-size: var(--gh-type-size-meta);
     color: var(--text-muted);
-    line-height: var(--lh-body);
+    line-height: var(--gh-type-line-height-body);
     max-width: 64ch;
   }
   .source-summary-copy {
     margin: 0;
     color: var(--text-muted);
-    font-size: var(--fs-2);
-    line-height: var(--lh-body);
+    font-size: var(--gh-type-size-body);
+    line-height: var(--gh-type-line-height-body);
     max-width: 72ch;
   }
   .source-check {
     display: inline-flex;
     align-items: start;
-    padding-top: 2px;
+    padding-top: var(--gh-space-1);
   }
   .source-check input {
     width: 18px;
@@ -1961,15 +1961,15 @@
   .items {
     list-style: none;
     padding: 0;
-    margin: var(--s-4) 0 0;
+    margin: var(--gh-space-4) 0 0;
     display: flex;
     flex-direction: column;
-    gap: var(--s-4);
+    gap: var(--gh-space-4);
   }
   .items li {
-    padding: var(--s-3) var(--s-4);
+    padding: var(--gh-space-3) var(--gh-space-4);
     border: 1px solid var(--border);
-    border-radius: var(--r-1);
+    border-radius: var(--gh-radius-1);
     background: var(--bg-raised);
   }
   .items li.selected {
@@ -1978,14 +1978,14 @@
   }
   .items.compact {
     margin-top: 0;
-    gap: var(--s-2);
+    gap: var(--gh-space-2);
   }
   .items.compact li {
-    padding: var(--s-2) var(--s-3);
+    padding: var(--gh-space-2) var(--gh-space-3);
   }
   .task-row {
     display: flex;
-    gap: var(--s-2);
+    gap: var(--gh-space-2);
     align-items: flex-start;
     cursor: pointer;
   }
@@ -1994,18 +1994,18 @@
     min-width: 0;
   }
   .item-title {
-    font-weight: 600;
-    font-size: var(--fs-2);
+    font-weight: var(--gh-type-weight-strong);
+    font-size: var(--gh-type-size-body);
     display: flex;
     align-items: center;
-    gap: var(--s-2);
+    gap: var(--gh-space-2);
     flex-wrap: wrap;
   }
   .item-sub {
     margin-top: 6px;
     color: var(--text);
-    font-size: var(--fs-1);
-    line-height: var(--lh-body);
+    font-size: var(--gh-type-size-meta);
+    line-height: var(--gh-type-line-height-body);
   }
   @media (max-width: 920px) {
     .source-summary li {

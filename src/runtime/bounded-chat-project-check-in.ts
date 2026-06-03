@@ -236,7 +236,7 @@ export async function resumeProjectCheckInBoundedChat(input: {
     .find(session =>
       session.projectId === input.projectId &&
       session.objective.kind === 'project_check_in' &&
-      (session.status === 'waiting_for_user' || session.status === 'coordinator_review'),
+      (session.status === 'waiting_for_owner' || session.status === 'coordinator_review'),
     )
   if (active) return active
   return createProjectCheckInBoundedChat(input)

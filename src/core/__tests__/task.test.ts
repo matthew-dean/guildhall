@@ -3,7 +3,7 @@ import { AcceptanceCriteria, Task, TaskQueue, TaskStatus } from '../task.js'
 
 describe('TaskStatus', () => {
   it('accepts all valid statuses', () => {
-    const statuses = ['import_draft', 'exploring', 'spec_review', 'parent', 'ready', 'in_progress', 'review', 'gate_check', 'done', 'blocked']
+    const statuses = ['import_draft', 'exploring', 'spec_review', 'ready', 'in_progress', 'review', 'gate_check', 'pending_pr', 'done', 'shelved', 'blocked']
     for (const s of statuses) {
       expect(TaskStatus.parse(s)).toBe(s)
     }

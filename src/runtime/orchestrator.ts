@@ -78,6 +78,7 @@ import {
   type ProjectLevers,
 } from '@guildhall/levers'
 import { buildContext, resolveLikelyTaskFiles } from './context-builder.js'
+import { applyTaskTransition, transitionTaskStatus, type TaskTransitionEvent } from './task-transition.js'
 import { recordTaskReflection } from './learning.js'
 import {
   modelForAgentName,
@@ -178,6 +179,10 @@ import {
   META_INTAKE_TASK_ID,
   parseCoordinatorDraft,
 } from './meta-intake.js'
+import {
+  createOwnerInputRequest,
+  waitingOwnerInputTaskIdsSync,
+} from './owner-input-store.js'
 import {
   deterministicReview,
   applyDeterministicVerdict,
@@ -1151,6 +1156,23 @@ const ONE_TASK_STOP_STATUSES: ReadonlySet<TaskStatus> = new Set<TaskStatus>([
 ])
 const EXPLORING_NO_PROGRESS_ESCALATION_AFTER = 3
 const WORKER_NO_PROGRESS_ESCALATION_AFTER = 5
+
+function recoveryEventForStatus(status: TaskStatus): TaskTransitionEvent {
+  switch (status) {
+    case 'exploring':
+      return 'recover_to_exploring'
+    case 'spec_review':
+      return 'recover_to_spec_review'
+    case 'ready':
+      return 'recover_to_ready'
+    case 'in_progress':
+      return 'recover_to_in_progress'
+    case 'review':
+      return 'recover_to_review'
+    default:
+      throw new Error(`No task recovery transition exists for status ${status}`)
+  }
+}
 
 function looksLikePlaintextUserQuestion(text: string): boolean {
   const trimmed = text.trim()
@@ -2159,6 +2181,7 @@ export class Orchestrator {
   ): NonNullable<Extract<TickOutcome, { kind: 'idle' }>['summary']> {
     const scopedIds = scopeTaskId ? new Set(workSubtreeIds(queue.tasks, scopeTaskId)) : null
     const tasks = scopedIds ? queue.tasks.filter(task => scopedIds.has(task.id)) : queue.tasks
+    const waitingOwnerInputTaskIds = this.waitingOwnerInputTaskIds(queue)
     const counts = {
       total: tasks.length,
       actionable: 0,
@@ -2190,7 +2213,10 @@ export class Orchestrator {
         counts.dependencyBlocked += 1
         continue
       }
-      if (task.status === 'exploring' && taskHasUnansweredOpenQuestion(task)) {
+      if (
+        waitingOwnerInputTaskIds.has(task.id) ||
+        (task.status === 'exploring' && taskHasUnansweredOpenQuestion(task))
+      ) {
         counts.waitingOnUser += 1
         continue
       }
@@ -2265,6 +2291,14 @@ export class Orchestrator {
     }
   }
 
+  private waitingOwnerInputTaskIds(queue: TaskQueue): Set<string> {
+    const taskIds = new Set(queue.tasks.map(task => task.id))
+    return new Set(
+      [...waitingOwnerInputTaskIdsSync(this.opts.config.projectPath)]
+        .filter(taskId => taskIds.has(taskId)),
+    )
+  }
+
   /**
    * Single orchestrator step. Reads the queue, picks 1..N actionable tasks
    * per the `concurrent_task_dispatch` lever, and dispatches each through
@@ -2296,6 +2330,7 @@ export class Orchestrator {
       provider: this.opts.providerName ?? 'none',
       dispatchCapacity: capacity,
     })
+    const ownerInputBlockedTaskIds = this.waitingOwnerInputTaskIds(queueBefore)
     const picks = pickNextTasks({
       queue: queueBefore,
       capacity,
@@ -2307,6 +2342,7 @@ export class Orchestrator {
       },
       ...(this.opts.domainFilter ? { domainFilter: this.opts.domainFilter } : {}),
       ...(opts.preferredTaskId ? { preferredTaskId: opts.preferredTaskId } : {}),
+      excludeIds: ownerInputBlockedTaskIds,
     })
 
     // Structural-reliability hard precondition: refuse to dispatch if the
@@ -2617,7 +2653,13 @@ export class Orchestrator {
             const queuedTask = queue.tasks.find((candidate) => candidate.id === task.id)
             const now = this.now()
             if (queuedTask) {
-              queuedTask.status = 'blocked'
+              transitionTaskStatus({
+                task: queuedTask,
+                event: 'block',
+                actor: 'orchestrator-worktree-setup',
+                evidenceRefs: ['task:worktree-setup:dirty-checkout'],
+                now,
+              })
               queuedTask.assignedTo = null
               queuedTask.blockReason =
                 `Guildhall could not start work because the target repo is dirty: ${message}. ` +
@@ -2734,7 +2776,13 @@ export class Orchestrator {
         const queuedTask = queue.tasks.find((candidate) => candidate.id === task.id)
         const now = this.now()
         if (queuedTask) {
-          queuedTask.status = 'blocked'
+          transitionTaskStatus({
+            task: queuedTask,
+            event: 'block',
+            actor: 'orchestrator-worktree-setup',
+            evidenceRefs: ['task:worktree-setup:create-failed'],
+            now,
+          })
           queuedTask.assignedTo = null
           queuedTask.blockReason =
             `Guildhall could not create a task worktree: ${message}. ` +
@@ -2860,7 +2908,13 @@ export class Orchestrator {
           const queuedTask = queue.tasks.find((candidate) => candidate.id === task.id)
           const now = this.now()
           if (queuedTask) {
-            queuedTask.status = 'blocked'
+            transitionTaskStatus({
+              task: queuedTask,
+              event: 'block',
+              actor: 'orchestrator-worktree-bootstrap',
+              evidenceRefs: ['task:worktree-bootstrap:failed'],
+              now,
+            })
             queuedTask.assignedTo = null
             queuedTask.blockReason =
               `Guildhall could not start work because task setup failed: ${msg}. ` +
@@ -3901,7 +3955,13 @@ export class Orchestrator {
           (hasDirtyLikelyTargetProgress || hasDirtyWorktreeAfter || hasCheckpointScopedVerifiedProgress)
         if (canAutoPromoteReviewFromCheckpointHandoff || canAutoPromoteReviewFromFreshHandoff) {
           ensureReviewerOwnership(taskAfter)
-          taskAfter.status = 'review'
+          transitionTaskStatus({
+            task: taskAfter,
+            event: 'request_review',
+            actor: 'worker-handoff-recovery',
+            evidenceRefs: ['task:review-proof-packet'],
+            now: this.now(),
+          })
           taskAfter.updatedAt = this.now()
           queueAfter.lastUpdated = taskAfter.updatedAt
           await this.writeQueue(queueAfter)
@@ -4108,7 +4168,13 @@ export class Orchestrator {
           newest.resolution =
             'Superseded because the worker correctly identified a stale review checkpoint after a durable review handoff. Guildhall preserved the review lane instead of blocking the task.'
           newest.resolvedBy = 'orchestrator'
-          taskAfter.status = 'review'
+          transitionTaskStatus({
+            task: taskAfter,
+            event: 'request_review',
+            actor: 'stale-review-checkpoint-recovery',
+            evidenceRefs: ['task:review-proof-packet'],
+            now,
+          })
           ensureReviewerOwnership(taskAfter)
           taskAfter.blockReason = undefined
           taskAfter.updatedAt = now
@@ -4146,7 +4212,23 @@ export class Orchestrator {
           newest.resolution =
             'Superseded because the blocker describes a self-authored verification failure in files the worker already touched. Guildhall kept the task in the worker repair lane.'
           newest.resolvedBy = 'orchestrator'
-          taskAfter.status = 'in_progress'
+          if (taskAfter.status === 'blocked') {
+            transitionTaskStatus({
+              task: taskAfter,
+              event: 'recover_to_in_progress',
+              actor: 'self-authored-verification-recovery',
+              evidenceRefs: ['task:worker-owned-verification'],
+              now,
+            })
+          } else if (taskAfter.status !== 'in_progress') {
+            transitionTaskStatus({
+              task: taskAfter,
+              event: 'revise',
+              actor: 'self-authored-verification-recovery',
+              evidenceRefs: ['task:worker-owned-verification'],
+              now,
+            })
+          }
           ensureWorkerOwnership(taskAfter)
           taskAfter.blockReason = undefined
           const classification = classifyAgentFailure({
@@ -4221,7 +4303,13 @@ export class Orchestrator {
       if (afterStatus === 'done' && beforeStatus !== 'done') {
         const autoCommit = await this.maybeAutoCommitCompletedTaskWork(taskAfter)
         if (!autoCommit.ok) {
-          taskAfter.status = 'blocked'
+          transitionTaskStatus({
+            task: taskAfter,
+            event: 'landing_failed',
+            actor: 'orchestrator-landing',
+            evidenceRefs: ['task:landing:auto-commit-failed'],
+            now: this.now(),
+          })
           taskAfter.assignedTo = null
           taskAfter.blockReason =
             `Guildhall could not auto-commit completed work: ${autoCommit.detail ?? 'unknown git error'}.`
@@ -4303,7 +4391,13 @@ export class Orchestrator {
                 detail: 'worktree isolation disabled — shared-checkout work checkpointed to task branch',
               }
             } else {
-              taskAfter.status = 'blocked'
+              transitionTaskStatus({
+                task: taskAfter,
+                event: 'landing_failed',
+                actor: 'orchestrator-landing',
+                evidenceRefs: ['task:landing:checkpoint-failed'],
+                now: this.now(),
+              })
               taskAfter.assignedTo = null
               taskAfter.blockReason =
                 'Guildhall completed the task work but could not checkpoint shared-checkout edits into a task branch. Resolve the repo state and resume the task before treating it as done.'
@@ -4383,7 +4477,9 @@ export class Orchestrator {
             now: this.now(),
           })
           taskAfter.mergeRecord = mergeOutcome.record
-          taskAfter.status = mergeOutcome.newStatus
+          if (mergeOutcome.transitionReceipt) {
+            taskAfter.status = mergeOutcome.transitionReceipt.to
+          }
           if (mergeOutcome.fixupTask) {
             appendFixupTask(queueAfter, mergeOutcome.fixupTask, this.now())
           }
@@ -4482,7 +4578,7 @@ export class Orchestrator {
         afterStatus,
         transitioned,
         revisionCount,
-        ...(taskHasUnansweredUserQuestion(taskAfter) ? { waitingOnUser: true } : {}),
+        ...(taskHasUnansweredUserQuestion(taskAfter) || fallbackQuestionPosted ? { waitingOnUser: true } : {}),
       }
       })
     } finally {
@@ -5258,7 +5354,47 @@ export class Orchestrator {
         })
       }
 
-      target.status = 'in_progress'
+      const transitionResult = applyTaskTransition({
+        task: target,
+        event: 'start_worker',
+        actor: 'task-claimer',
+        evidenceRefs: ['task:ready-claim'],
+        now: this.now(),
+      })
+      if (transitionResult.kind === 'rejected') {
+        target.notes.push({
+          agentId: 'task-claimer',
+          role: 'orchestrator',
+          content:
+            `Ready claim rejected by task lifecycle boundary: ${transitionResult.reason}. ` +
+            'Leave the task out of worker execution until its hierarchy/readiness state is corrected.',
+          timestamp: this.now(),
+        })
+        target.updatedAt = this.now()
+        queue.lastUpdated = this.now()
+        await this.writeQueue(queue)
+
+        await this.logTickProgress({
+          task: target,
+          agent: 'task-claimer',
+          beforeStatus,
+          afterStatus: target.status,
+          transitioned: false,
+          note: `task transition rejected: ${transitionResult.reason}`,
+        })
+
+        return {
+          kind: 'processed',
+          taskId: target.id,
+          agent: 'task-claimer',
+          beforeStatus,
+          afterStatus: target.status,
+          transitioned: false,
+          revisionCount: target.revisionCount,
+        }
+      }
+
+      target.status = transitionResult.nextState
       target.assignedTo = 'worker-agent'
       target.notes.push({
         agentId: 'task-claimer',
@@ -5696,7 +5832,13 @@ export class Orchestrator {
           revisionCount: task.revisionCount,
         } as TickOutcome
       }
-      current.status = 'gate_check'
+      transitionTaskStatus({
+        task: current,
+        event: 'start_gate_check',
+        actor: 'lean-command-review',
+        evidenceRefs: ['task:lean-command-review'],
+        now: this.now(),
+      })
       current.assignedTo = 'gate-checker-agent'
       current.updatedAt = this.now()
       queue.lastUpdated = current.updatedAt
@@ -5817,7 +5959,13 @@ export class Orchestrator {
 
       if (!summary.allPassed && !scopedFailuresExempted) {
         const failed = results.filter((result) => !result.passed)
-        current.status = 'in_progress'
+        transitionTaskStatus({
+          task: current,
+          event: 'revise',
+          actor: 'acceptance-command-gates',
+          evidenceRefs: failed.map((result) => `gate:${result.gateId}`),
+          now,
+        })
         ensureWorkerOwnership(current)
         current.revisionCount += 1
         current.notes.push({
@@ -5851,12 +5999,25 @@ export class Orchestrator {
       }
 
       if (current.acceptanceCriteria.length > 0 && current.acceptanceCriteria.every((criterion) => criterion.met)) {
-        current.status = 'done'
+        transitionTaskStatus({
+          task: current,
+          event: 'complete',
+          actor: 'acceptance-command-gates',
+          evidenceRefs: results.map((result) => `gate:${result.gateId}`),
+          now,
+          requiredEvidencePresent: results.length > 0,
+        })
         current.assignedTo = undefined
         current.completedAt = now
         const autoCommit = await this.maybeAutoCommitCompletedTaskWork(current)
         if (!autoCommit.ok) {
-          current.status = 'blocked'
+          transitionTaskStatus({
+            task: current,
+            event: 'landing_failed',
+            actor: 'acceptance-command-gates',
+            evidenceRefs: ['task:landing:auto-commit-failed'],
+            now,
+          })
           current.assignedTo = null
           current.blockReason =
             `Guildhall could not auto-commit completed work: ${autoCommit.detail ?? 'unknown git error'}.`
@@ -5893,7 +6054,9 @@ export class Orchestrator {
               now: this.now(),
             })
             current.mergeRecord = mergeOutcome.record
-            current.status = mergeOutcome.newStatus
+            if (mergeOutcome.transitionReceipt) {
+              current.status = mergeOutcome.transitionReceipt.to
+            }
             if (mergeOutcome.fixupTask) appendFixupTask(queue, mergeOutcome.fixupTask, this.now())
             if (mergeOutcome.newStatus === 'done') shelveSupersededFixupTasks(queue, current.id, this.now())
           } else if (!current.mergeRecord) {
@@ -6014,7 +6177,13 @@ export class Orchestrator {
         content: feedback,
         timestamp: this.now(),
       })
-      t.status = 'in_progress'
+      transitionTaskStatus({
+        task: t,
+        event: 'revise',
+        actor: 'guild-gate-runner',
+        evidenceRefs: failed.map((result) => `gate:${result.gateId}`),
+        now: this.now(),
+      })
       ensureWorkerOwnership(t)
       t.revisionCount += 1
       t.updatedAt = this.now()
@@ -6096,7 +6265,13 @@ export class Orchestrator {
           : s,
       )
       t.handoffStep = idx + 1
-      t.status = 'in_progress'
+      transitionTaskStatus({
+        task: t,
+        event: 'revise',
+        actor: 'handoff-orchestrator',
+        evidenceRefs: ['task:handoff-step'],
+        now,
+      })
       ensureWorkerOwnership(t)
       t.updatedAt = now
       queue.lastUpdated = now
@@ -6322,7 +6497,13 @@ export class Orchestrator {
           }
           t.reviewVerdicts.push(adjudicatedVerdict)
         }
-        t.status = 'gate_check'
+        transitionTaskStatus({
+          task: t,
+          event: 'start_gate_check',
+          actor: 'reviewer-fanout',
+          evidenceRefs: verdicts.map((verdict) => `reviewer-fanout:${verdict.guildSlug}`),
+          now,
+        })
         t.updatedAt = now
         queue.lastUpdated = now
         await this.writeQueue(queue)
@@ -6351,7 +6532,13 @@ export class Orchestrator {
         content: aggregate.combinedFeedback,
         timestamp: now,
       })
-      t.status = 'in_progress'
+      transitionTaskStatus({
+        task: t,
+        event: 'revise',
+        actor: 'reviewer-fanout',
+        evidenceRefs: aggregate.dissenting.map((verdict) => `reviewer-fanout:${verdict.guildSlug}`),
+        now,
+      })
       ensureWorkerOwnership(t)
       t.revisionCount += 1
       ensureRetryWindow(t)
@@ -6562,7 +6749,13 @@ export class Orchestrator {
       content: scopedFeedback,
       timestamp: input.now,
     })
-    input.task.status = 'in_progress'
+    transitionTaskStatus({
+      task: input.task,
+      event: 'revise',
+      actor: coordinatorId,
+      evidenceRefs: dissenterSlugs.map((slug) => `reviewer-fanout:${slug}`),
+      now: input.now,
+    })
     ensureWorkerOwnership(input.task)
     input.task.revisionCount += 1
     input.task.updatedAt = input.now
@@ -6981,7 +7174,13 @@ export class Orchestrator {
       } else if (isRecoverableStaleReviewCheckpointBlocker(task)) {
         resolveRecoverableStaleReviewCheckpointEscalations(task, now)
         if (activeEscalations(task).length > 0) continue
-        task.status = 'review'
+        transitionTaskStatus({
+          task,
+          event: 'recover_to_review',
+          actor: 'orchestrator-recovery',
+          evidenceRefs: ['task:recovery:stale-review-checkpoint'],
+          now,
+        })
         task.assignedTo = 'reviewer-agent'
         task.blockReason = undefined
         task.notes.push({
@@ -7054,7 +7253,13 @@ export class Orchestrator {
           'Superseded after reviewer availability failures stopped counting as substantive rejection.',
         )
         if (activeEscalations(task).length > 0) continue
-        task.status = 'review'
+        transitionTaskStatus({
+          task,
+          event: 'recover_to_review',
+          actor: 'orchestrator-recovery',
+          evidenceRefs: ['task:recovery:infra-only-max-revisions'],
+          now,
+        })
         task.assignedTo = 'reviewer-agent'
         task.blockReason = undefined
         task.notes.push({
@@ -7086,7 +7291,13 @@ export class Orchestrator {
       } else {
         continue
       }
-      task.status = recoveryStatus
+      transitionTaskStatus({
+        task,
+        event: recoveryEventForStatus(recoveryStatus),
+        actor: 'orchestrator-recovery',
+        evidenceRefs: [`task:recovery:${recoveryStatus}`],
+        now,
+      })
       task.assignedTo = recoveryAssignee
       task.blockReason = undefined
       task.notes.push({
@@ -7190,7 +7401,13 @@ export class Orchestrator {
       if (task.mergeRecord) continue
       if (!task.worktreePath?.trim()) continue
       if (!task.branchName?.trim() || !task.baseBranch?.trim()) {
-        task.status = 'blocked'
+        transitionTaskStatus({
+          task,
+          event: 'landing_failed',
+          actor: 'landing-reconciliation',
+          evidenceRefs: ['task:landing:missing-branch-metadata'],
+          now: this.now(),
+        })
         task.assignedTo = null
         task.blockReason =
           'Guildhall found completed work in a task worktree, but branch metadata is missing, so it cannot safely land the work.'
@@ -7202,7 +7419,13 @@ export class Orchestrator {
 
       const autoCommit = await this.maybeAutoCommitCompletedTaskWork(task)
       if (!autoCommit.ok) {
-        task.status = 'blocked'
+        transitionTaskStatus({
+          task,
+          event: 'landing_failed',
+          actor: 'landing-reconciliation',
+          evidenceRefs: ['task:landing:auto-commit-failed'],
+          now: this.now(),
+        })
         task.assignedTo = null
         task.blockReason =
           `Guildhall found completed work in a task worktree, but could not commit it before landing: ${autoCommit.detail ?? 'unknown git error'}.`
@@ -7233,7 +7456,9 @@ export class Orchestrator {
         now: this.now(),
       })
       task.mergeRecord = mergeOutcome.record
-      task.status = mergeOutcome.newStatus
+      if (mergeOutcome.transitionReceipt) {
+        task.status = mergeOutcome.transitionReceipt.to
+      }
       if (mergeOutcome.fixupTask) appendFixupTask(queue, mergeOutcome.fixupTask, this.now())
       if (mergeOutcome.newStatus === 'done') shelveSupersededFixupTasks(queue, task.id, this.now())
       task.updatedAt = this.now()
@@ -7266,7 +7491,14 @@ export class Orchestrator {
       if (!pr.ok || pr.state?.toUpperCase() !== 'MERGED') continue
 
       const previous = task.mergeRecord
-      task.status = 'done'
+      transitionTaskStatus({
+        task,
+        event: 'complete',
+        actor: 'pending-pr-reconciliation',
+        evidenceRefs: ['task:pr-merged'],
+        now: this.now(),
+        requiredEvidencePresent: true,
+      })
       task.assignedTo = null
       task.mergeRecord = {
         fromBranch: previous?.fromBranch ?? branch,
@@ -7692,6 +7924,7 @@ export class Orchestrator {
       typeof task.productBrief.userJob === 'string' &&
       task.productBrief.userJob.trim().length > 0
     const hasOpenQuestion = taskHasUnansweredVisibleQuestion(task)
+    const hasWaitingOwnerInput = this.waitingOwnerInputTaskIds(queue).has(task.id)
     const hasDirtyWorktree =
       input.beforeStatus === 'in_progress' &&
       typeof task.worktreePath === 'string' &&
@@ -7701,7 +7934,8 @@ export class Orchestrator {
       input.beforeStatus === 'exploring' &&
       task.status === 'exploring' &&
       hasSpec &&
-      !hasOpenQuestion
+      !hasOpenQuestion &&
+      !hasWaitingOwnerInput
     ) {
       task.status = 'spec_review'
       task.updatedAt = this.now()
@@ -7711,7 +7945,7 @@ export class Orchestrator {
 
     const transitioned = task.status !== input.beforeStatus
     const durableExploringProgress =
-      input.beforeStatus === 'exploring' && (hasSpec || hasBrief || hasOpenQuestion)
+      input.beforeStatus === 'exploring' && (hasSpec || hasBrief || hasOpenQuestion || hasWaitingOwnerInput)
     const durableWorkerProgress =
       input.beforeStatus === 'in_progress' &&
       task.status === 'in_progress' &&
@@ -7737,6 +7971,7 @@ export class Orchestrator {
       afterStatus: task.status,
       transitioned,
       revisionCount: task.revisionCount,
+      ...(hasOpenQuestion || hasWaitingOwnerInput ? { waitingOnUser: true } : {}),
     }
   }
 
@@ -8010,7 +8245,13 @@ export class Orchestrator {
           afterStatus = queuedTask?.status ?? task.status
           return
         }
-        queuedTask.status = 'blocked'
+        transitionTaskStatus({
+          task: queuedTask,
+          event: 'block',
+          actor: 'empty-assistant-recovery',
+          evidenceRefs: ['task:worker-recovery-checkpoint'],
+          now,
+        })
         queuedTask.assignedTo = null
         queuedTask.blockReason = blockReason
         queuedTask.updatedAt = now
@@ -8657,31 +8898,55 @@ export class Orchestrator {
       )
     ) {
       const now = this.now()
+      const questionDrafts = missingDrafts.length > 0 ? missingDrafts : drafts
+      const questionStamp = Date.now().toString(36)
+      const questionRecords = questionDrafts.map((draft, index) => {
+        const questionId = `q-fallback-${task.id}-${questionStamp}-${index}`
+        return draft.kind === 'choice'
+          ? {
+              kind: 'choice' as const,
+              id: questionId,
+              askedBy: 'spec-agent',
+              askedAt: now,
+              prompt: draft.prompt,
+              ...(draft.subject ? { subject: draft.subject } : {}),
+              ...(draft.description ? { description: draft.description } : {}),
+              choices: draft.choices,
+              ...(draft.selectionMode ? { selectionMode: draft.selectionMode } : {}),
+            }
+          : {
+              kind: 'text' as const,
+              id: questionId,
+              askedBy: 'spec-agent',
+              askedAt: now,
+              prompt: draft.prompt,
+              ...(draft.subject ? { subject: draft.subject } : {}),
+              ...(draft.description ? { description: draft.description } : {}),
+            }
+      })
+      for (const question of questionRecords) {
+        await createOwnerInputRequest({
+          projectRoot: this.opts.config.projectPath,
+          projectId: this.opts.config.workspaceId,
+          commandId: `orchestrator:fallback-question:${task.id}:${question.id}`,
+          now,
+          actor: 'spec-agent',
+          source: { kind: 'task', taskId: task.id, questionId: question.id },
+          target: { kind: 'thread' },
+          prompt: question.prompt,
+          ...(question.kind === 'choice' ? { choices: question.choices } : {}),
+          ...(question.description ? { helperText: question.description } : {}),
+          objective: {
+            kind: 'task_shaping',
+            label: `Clarify ${task.title}`,
+            successCriteria: ['Owner answers the linked bounded-chat session.'],
+          },
+          sessionSource: `orchestrator:fallback-question:${task.id}:${question.id}`,
+        })
+      }
       task.openQuestions = [
         ...(task.openQuestions ?? []),
-        ...(missingDrafts.length > 0 ? missingDrafts : drafts).map((draft, index) =>
-          draft.kind === 'choice'
-            ? {
-                kind: 'choice' as const,
-                id: `q-fallback-${task.id}-${Date.now().toString(36)}-${index}`,
-                askedBy: 'spec-agent',
-                askedAt: now,
-                prompt: draft.prompt,
-                ...(draft.subject ? { subject: draft.subject } : {}),
-                ...(draft.description ? { description: draft.description } : {}),
-                choices: draft.choices,
-                ...(draft.selectionMode ? { selectionMode: draft.selectionMode } : {}),
-              }
-            : {
-                kind: 'text' as const,
-                id: `q-fallback-${task.id}-${Date.now().toString(36)}-${index}`,
-                askedBy: 'spec-agent',
-                askedAt: now,
-                prompt: draft.prompt,
-                ...(draft.subject ? { subject: draft.subject } : {}),
-                ...(draft.description ? { description: draft.description } : {}),
-              },
-        ),
+        ...questionRecords,
       ]
       task.updatedAt = now
       queue.lastUpdated = now
@@ -9477,7 +9742,7 @@ function resolvedScopeDecisionTexts(task: Task): string[] {
 }
 
 function answeredQuestionDecisionTexts(task: Task): string[] {
-  return (task.openQuestions ?? [])
+  const questionDecisions = (task.openQuestions ?? [])
     .filter((question) => question.answeredAt && typeof question.answer === 'string' && question.answer.trim())
     .filter((question) => {
       const prompt = 'prompt' in question && typeof question.prompt === 'string' ? question.prompt.trim() : ''
@@ -9491,6 +9756,25 @@ function answeredQuestionDecisionTexts(task: Task): string[] {
         : 'Owner decision'
       return `${prompt}: ${answer}`
     })
+  return [
+    ...questionDecisions,
+    ...preservedAnsweredQuestionDecisionTexts(task),
+  ]
+}
+
+function preservedAnsweredQuestionDecisionTexts(task: Task): string[] {
+  const out: string[] = []
+  for (const note of task.notes ?? []) {
+    if (note.agentId !== 'migration:0.10.0/task-open-questions-to-bounded-chat') continue
+    const match = (note.content ?? '').match(/Question:\s*([\s\S]*?)\nAnswer:\s*([\s\S]*)$/)
+    const prompt = normalizeFallbackWhitespace(match?.[1] ?? '')
+    const answer = normalizeFallbackWhitespace(match?.[2] ?? '')
+    if (!answer) continue
+    if (isQuestionListPrompt(prompt) || isOperationalFallbackPrompt(prompt)) continue
+    if (answer.length >= 24 || /[.!?]$/.test(answer)) out.push(answer)
+    else out.push(prompt ? `${prompt.replace(/\?$/, '')}: ${answer}` : answer)
+  }
+  return out
 }
 
 function formatRecoverySpecSourceIntent(source: string | undefined): string {

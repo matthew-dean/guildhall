@@ -1,4 +1,5 @@
 export * from './build.js'
+export * from './design-governance-diagnostics.js'
 export * from './discovery.js'
 export * from './query.js'
 export * from './semantic.js'

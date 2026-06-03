@@ -456,6 +456,55 @@ describe('buildContext — task summary', () => {
     expect(ctx.formatted).toContain('Corpus fit required')
   })
 
+  it.each([
+    ['in_progress', 'worker'],
+    ['review', 'reviewer'],
+  ] as const)('injects compact contract-surface packets into %s context', async (status, role) => {
+    const ctx = await buildContext({
+      ...baseTask,
+      status,
+      title: 'Update command menu item API',
+      description: 'Change the command menu component API without drifting prop names.',
+      contractSurfaceReviewPackets: [{
+        id: 'surface-review:task-001:component-api.command-menu',
+        surface: {
+          id: 'component-api.command-menu',
+          label: 'Command menu component API',
+          kind: 'component_api',
+          authority: 'shared',
+          scope: 'project',
+          owningProject: { id: 'fixture-app', label: 'Fixture App' },
+        },
+        currentSpecRef: 'task:task-001',
+        knownConsumers: [{ id: 'palette-panel', label: 'Palette panel' }],
+        existingInvariants: [{
+          id: 'stable-item-shape',
+          label: 'Stable item shape',
+          rule: 'Command menu items expose one stable action/item shape.',
+          proofObligations: ['Run component API tests.'],
+        }],
+        existingDecisions: [],
+        siblingSpecRefs: ['task:task-older'],
+        driftFindings: ['Sibling specs use commandAction and menuAction for the same item field.'],
+        currentDelta: {
+          surfaceId: 'component-api.command-menu',
+          relation: 'amends',
+          summary: 'Standardizes command item action naming.',
+          proofObligations: ['Add a component API fixture.'],
+        },
+        proofObligations: ['Add a component API fixture.'],
+        reviewFocus: ['Does the change preserve the command item vocabulary?'],
+      }],
+    }, tmpDir)
+
+    expect(ctx.contractSurfacePackets).toContain('## Contract Surface Packets')
+    expect(ctx.contractSurfacePackets).toContain('Command menu component API')
+    expect(ctx.contractSurfacePackets).toContain('Stable item shape')
+    expect(ctx.contractSurfacePackets).toContain('Sibling specs use commandAction')
+    expect(ctx.formatted).toContain('## Contract Surface Packets')
+    expect(ctx.formatted).toContain(role === 'worker' ? 'Add a component API fixture.' : 'Does the change preserve')
+  })
+
   it('proves the corpus map changes worker context toward existing abstractions', async () => {
     const withoutMap = await buildContext(baseTask, tmpDir)
     expect(withoutMap.corpusMap).toBe('')
@@ -1302,8 +1351,8 @@ describe('buildContext — FR-23 business envelope injection', () => {
     await fs.writeFile(path.join(tmpDir, 'GOALS.json'), content, 'utf-8')
   }
 
-  it('injects goal summary when task has a parentGoalId resolving to an active goal', async () => {
-    const task: Task = { ...baseTask, parentGoalId: 'g-1' }
+  it('injects goal summary when task has a businessEnvelope.goalId resolving to an active goal', async () => {
+    const task: Task = { ...baseTask, businessEnvelope: { goalId: 'g-1' } }
     await writeGoals(JSON.stringify({
       version: 1,
       lastUpdated: '2026-04-20T00:00:00Z',
@@ -1328,14 +1377,14 @@ describe('buildContext — FR-23 business envelope injection', () => {
     expect(ctx.formatted).toContain('Business Envelope (FR-23)')
   })
 
-  it('leaves envelope empty when task has no parentGoalId', async () => {
+  it('leaves envelope empty when task has no businessEnvelope.goalId', async () => {
     const ctx = await buildContext(baseTask, tmpDir)
     expect(ctx.envelope).toBe('')
     expect(ctx.formatted).not.toContain('Business Envelope')
   })
 
-  it('leaves envelope empty when parentGoalId points at a missing goal', async () => {
-    const task: Task = { ...baseTask, parentGoalId: 'g-missing' }
+  it('leaves envelope empty when businessEnvelope.goalId points at a missing goal', async () => {
+    const task: Task = { ...baseTask, businessEnvelope: { goalId: 'g-missing' } }
     await writeGoals(JSON.stringify({
       version: 1,
       lastUpdated: '2026-04-20T00:00:00Z',
@@ -1346,7 +1395,7 @@ describe('buildContext — FR-23 business envelope injection', () => {
   })
 
   it('renders goal with no guardrails (success condition only)', async () => {
-    const task: Task = { ...baseTask, parentGoalId: 'g-1' }
+    const task: Task = { ...baseTask, businessEnvelope: { goalId: 'g-1' } }
     await writeGoals(JSON.stringify({
       version: 1,
       lastUpdated: '2026-04-20T00:00:00Z',

@@ -11,7 +11,9 @@ import {
   buildEffectiveMemoryPacket,
   buildDesignIntentSurrogate,
   buildDesignSystemCatalog,
+  importExternalMemoryBridgeRecord,
   listCapabilityRequests,
+  listExternalMemoryBridgeRecords,
   listMemoryRecords,
   readGlobalLearning,
   readDesignFeedbackStore,
@@ -20,8 +22,12 @@ import {
   readProjectLearning,
   readProjectRuntimeState,
   recordMemoryObservation,
+  rejectExternalMemoryBridgeRecord,
+  reviewExternalMemoryBridgeRecord,
   updateMemoryStatus,
   type ContextDebugRecord,
+  type ExternalMemoryBridgeRecordInput,
+  type ExternalMemoryBridgeReviewStatus,
   type MemoryQuery,
   type MemoryRecordInput,
   type MemoryStatus,
@@ -138,6 +144,12 @@ export async function buildGuildhallResourceIndex(
       description: 'Current capability request state.',
       mimeType: 'text/markdown',
     },
+    {
+      uri: 'guildhall://project/external-agent-memory-bridge',
+      name: 'External agent memory bridge',
+      description: 'Reviewable external-agent memory exchange records.',
+      mimeType: 'text/markdown',
+    },
   ]
 }
 
@@ -184,7 +196,36 @@ export async function readGuildhallResource(
   if (parsed.kind === 'capabilityRequests') {
     return renderCapabilityRequests(ctx)
   }
+  if (parsed.kind === 'externalAgentMemoryBridge') {
+    return renderExternalAgentMemoryBridge(ctx)
+  }
   return '# Unknown\n'
+}
+
+async function renderExternalAgentMemoryBridge(ctx: GuildhallMcpContext): Promise<string> {
+  const store = await listExternalMemoryBridgeRecords({ memoryDir: ctx.projectStateDir })
+  if (store.records.length === 0) {
+    return '# External Agent Memory Bridge\n\nNo external memory bridge records.\n'
+  }
+  const counts = countBy(store.records, (record) => record.reviewStatus)
+  return trimForMcp(redactForMcp([
+    '# External Agent Memory Bridge',
+    '',
+    `- Records: ${store.records.length}`,
+    `- Imported: ${counts.imported ?? 0}`,
+    `- Reviewed: ${counts.reviewed ?? 0}`,
+    `- Rejected: ${counts.rejected ?? 0}`,
+    '',
+    '## Records',
+    '',
+    ...store.records.slice(0, 30).map((record) =>
+      `- ${record.id}: ${record.reviewStatus} ${record.provider} ${record.scope}/${record.type} (${record.confidence}/${record.risk}) - ${record.summary}`,
+    ),
+    store.records.length > 30 ? `- [truncated ${store.records.length - 30} more records]` : '',
+    '',
+    'Imported records are reviewable bridge records only. They enter ordinary effective memory through explicit review.',
+    '',
+  ].filter(Boolean).join('\n')))
 }
 
 async function renderCapabilityRequests(ctx: GuildhallMcpContext): Promise<string> {
@@ -347,7 +388,7 @@ async function renderFeedback(ctx: GuildhallMcpContext): Promise<string> {
     '',
     `- Project decisions: ${design.decisions.length}`,
     `- Reusable candidates: ${design.candidates.length}`,
-    `- Looma follow-ups: ${design.loomaImprovements.length}`,
+    `- Design-system follow-ups: ${design.designSystemImprovements.length}`,
     '',
   ].filter(Boolean).join('\n')))
 }
@@ -402,7 +443,7 @@ async function renderDesign(ctx: GuildhallMcpContext): Promise<string> {
     `- Decision packets: ${feedback.decisionPackets.length}`,
     `- Project decisions: ${feedback.decisions.length}`,
     `- Reusable candidates: ${feedback.candidates.length}`,
-    `- Looma follow-ups: ${feedback.loomaImprovements.length}`,
+    `- Design-system follow-ups: ${feedback.designSystemImprovements.length}`,
     latestPacket ? `- Latest packet: ${latestPacket.id} - ${latestPacket.summary}` : '- Latest packet: none',
     '',
   ].filter(Boolean).join('\n')))
@@ -654,6 +695,59 @@ export async function readMcpEffectiveContext(ctx: GuildhallMcpContext, input: {
     packet.evidenceRefs.length > 20 ? `- [truncated ${packet.evidenceRefs.length - 20} more evidence refs]` : '',
     '',
   ].filter(Boolean).join('\n')))
+}
+
+export async function listMcpExternalMemoryBridgeRecords(ctx: GuildhallMcpContext, input?: {
+  reviewStatus?: ExternalMemoryBridgeReviewStatus
+}): Promise<string> {
+  const store = await listExternalMemoryBridgeRecords({
+    memoryDir: ctx.projectStateDir,
+    ...(input?.reviewStatus ? { reviewStatus: input.reviewStatus } : {}),
+  })
+  return trimForMcp(redactForMcp(JSON.stringify(store, null, 2)))
+}
+
+export async function importMcpExternalMemoryBridgeRecord(
+  ctx: GuildhallMcpContext,
+  record: ExternalMemoryBridgeRecordInput,
+): Promise<string> {
+  const saved = await importExternalMemoryBridgeRecord({
+    memoryDir: ctx.projectStateDir,
+    record,
+  })
+  return trimForMcp(redactForMcp(JSON.stringify(saved, null, 2)))
+}
+
+export async function reviewMcpExternalMemoryBridgeRecord(ctx: GuildhallMcpContext, input: {
+  id: string
+  reviewer: string
+  updatedAt?: string
+  memoryStatus?: 'active' | 'proposed' | 'observed'
+}): Promise<string> {
+  const saved = await reviewExternalMemoryBridgeRecord({
+    memoryDir: ctx.projectStateDir,
+    id: input.id,
+    reviewer: input.reviewer,
+    ...(input.updatedAt ? { now: input.updatedAt } : {}),
+    ...(input.memoryStatus ? { memoryStatus: input.memoryStatus } : {}),
+  })
+  return trimForMcp(redactForMcp(JSON.stringify(saved, null, 2)))
+}
+
+export async function rejectMcpExternalMemoryBridgeRecord(ctx: GuildhallMcpContext, input: {
+  id: string
+  reviewer: string
+  rejectionReason: string
+  updatedAt?: string
+}): Promise<string> {
+  const saved = await rejectExternalMemoryBridgeRecord({
+    memoryDir: ctx.projectStateDir,
+    id: input.id,
+    reviewer: input.reviewer,
+    rejectionReason: input.rejectionReason,
+    ...(input.updatedAt ? { now: input.updatedAt } : {}),
+  })
+  return trimForMcp(redactForMcp(JSON.stringify(saved, null, 2)))
 }
 
 async function readTasks(

@@ -34,8 +34,10 @@ function readyTaskCompleteForWorker(): Task {
     ...baseTask(),
     productBrief: {
       userJob: 'Add link controls.',
+      whyItMattersNow: 'Editors need to correct links without leaving the writing flow.',
       successMetric: 'Links can be edited inline.',
       antiPatterns: [],
+      nonGoals: ['Do not redesign the editor toolbar.'],
       approvedAt: now,
     },
     spec: '## Summary\nAdd link controls.',
@@ -53,7 +55,7 @@ function handlers() {
     onOpenEscalationAction: vi.fn(),
     onRunEscalationAction: vi.fn(),
     onResolveEscalation: vi.fn(async () => {}),
-    onAnswerQuestion: vi.fn(async () => {}),
+    onOpenThread: vi.fn(),
   }
 }
 
@@ -111,7 +113,7 @@ describe('CurrentTab', () => {
     expect(briefCleanupChip.classList.contains('tone-agent-attention')).toBe(true)
     expect(screen.getByText(/marked ready, but its brief\/spec is not complete enough/i)).toBeTruthy()
     const viewButton = screen.getByRole('button', { name: /view brief/i })
-    const startButton = screen.getByRole('button', { name: 'Start' })
+    const startButton = screen.getByRole('button', { name: 'Clean up brief' })
     expect(startButton.classList.contains('v-agent')).toBe(true)
     expect(viewButton.compareDocumentPosition(startButton) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
     await userEvent.click(startButton)
@@ -121,7 +123,7 @@ describe('CurrentTab', () => {
     expect(screen.queryByText('Nothing is waiting')).toBeNull()
   })
 
-  it('answers task-scoped questions inline', async () => {
+  it('routes task-scoped questions to Thread instead of answering inline', async () => {
     const props = renderCurrent([
       {
         id: 'turn-question',
@@ -143,9 +145,11 @@ describe('CurrentTab', () => {
       },
     ])
 
-    await userEvent.click(screen.getByText(/url input only/i))
+    expect(screen.getByText('Question waiting in Thread')).toBeTruthy()
+    expect(screen.queryByRole('button', { name: /url input only/i })).toBeNull()
+    await userEvent.click(screen.getByRole('button', { name: /open thread/i }))
 
-    expect(props.onAnswerQuestion).toHaveBeenCalledWith('q-link-scope', 'URL input only')
+    expect(props.onOpenThread).toHaveBeenCalledOnce()
   })
 
   it('keeps brief approval actions available in the current task card', async () => {
@@ -448,7 +452,7 @@ describe('CurrentTab', () => {
     expect(screen.getByText('Guildhall needs to turn the source notes into an outcome and acceptance checks before implementation.')).toBeTruthy()
     expect(screen.getAllByText('Missing').length).toBeGreaterThanOrEqual(1)
     expect(screen.queryByRole('button', { name: /start work/i })).toBeNull()
-    const startButton = screen.getByRole('button', { name: 'Start' })
+    const startButton = screen.getByRole('button', { name: 'Clean up brief' })
     expect(startButton.classList.contains('v-agent')).toBe(true)
     await userEvent.click(startButton)
 
@@ -487,7 +491,7 @@ describe('CurrentTab', () => {
     expect(screen.getByText('Needs brief cleanup')).toBeTruthy()
     expect(screen.getByText('Brief cleanup needed')).toBeTruthy()
     expect(screen.getByText('Guildhall needs to turn the source notes into concrete acceptance checks before implementation.')).toBeTruthy()
-    await userEvent.click(screen.getByRole('button', { name: 'Start' }))
+    await userEvent.click(screen.getByRole('button', { name: 'Clean up brief' }))
 
     expect(props.onRunTask).toHaveBeenCalledOnce()
   })

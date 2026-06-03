@@ -1,4 +1,10 @@
 import { z } from 'zod'
+import {
+  EvidenceRef as CoreEvidenceRef,
+  PersistenceRef as CorePersistenceRef,
+  type EvidenceRef as CoreEvidenceRefRecord,
+  type PersistenceRef as CorePersistenceRefRecord,
+} from '@guildhall/core'
 
 export const PersistenceScope = z.enum([
   'shared_project',
@@ -25,19 +31,11 @@ export const PersistencePlacement = z.object({
 })
 export type PersistencePlacement = z.infer<typeof PersistencePlacement>
 
-export const PersistenceRef = z.object({
-  scope: PersistenceScope,
-  collection: z.string().min(1),
-  id: z.string().min(1),
-  path: z.string().min(1),
-})
-export type PersistenceRef = z.infer<typeof PersistenceRef>
+export const PersistenceRef = CorePersistenceRef
+export type PersistenceRef = CorePersistenceRefRecord
 
-export const EvidenceRef = PersistenceRef.extend({
-  hash: z.string().optional(),
-  contentType: z.string().optional(),
-})
-export type EvidenceRef = z.infer<typeof EvidenceRef>
+export const EvidenceRef = CoreEvidenceRef
+export type EvidenceRef = CoreEvidenceRefRecord
 
 export const PersistedRecord = z.object({
   schema: z.object({

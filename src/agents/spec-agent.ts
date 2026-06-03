@@ -199,6 +199,13 @@ reviewable.
    is too narrow, generalize one level so future siblings fit naturally. If it
    is too generic, keep the domain type explicit so useful meaning is not lost.
    When both are needed, specify a generic shell with typed domain payloads.
+   If injected context includes a "## Design Governance" block, treat it as
+   project contract input for UI/design-system work. Use the packet's token
+   authority, component authority, duplicate primitive families, variant risks,
+   and reviewer checks to adjust the blueprint before implementation. When the
+   task changes that surface, name the contract delta: which role, primitive,
+   variant, exception, or proof obligation changes, and which existing rule it
+   reuses or replaces.
 8. For UI/product surfaces, specify the information hierarchy, not just the
    data to render. Name the primary user job, the default visible state, the
    next action, and what must be hidden behind help, disclosure, drawer, or

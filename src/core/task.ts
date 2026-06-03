@@ -1,14 +1,13 @@
 import { z } from 'zod'
 import { TaskSizePlan, WorkUnitAnalysis } from './task-sizing.js'
-import { StructuredSpec } from './structured-spec.js'
+import { StructuredSpec, StructuredSpecContractSurfaceDelta } from './structured-spec.js'
 import { CompletionHandoff, ProofPath } from './task-proof.js'
 
 // ---------------------------------------------------------------------------
 // Task status lifecycle (FR-01)
 //    proposed ─┐
-// import_draft ┼→ exploring → spec_review ┬→ ready → in_progress → review → gate_check → done
-//                                      └→ parent (split container; child tasks hold the runnable work)
-//              │                                                     ↘ blocked
+// import_draft ┼→ exploring → spec_review → ready → in_progress → review → gate_check → done
+//              │                                                   ↘ blocked
 //              └─────────────────────────→ shelved (worker pre-rejection, FR-22)
 //
 // Origination:
@@ -24,7 +23,6 @@ const TaskStatusValue = z.enum([
   'import_draft',  // Workspace-imported draft that still needs shaping before normal intake begins
   'exploring',     // Conversational intake — Spec Agent is building the spec with the user (FR-12)
   'spec_review',   // Spec drafted; awaiting human or coordinator approval
-  'parent',        // Split container; linked child tasks carry the runnable work
   'ready',         // Spec approved, ready for a worker to pick up
   'in_progress',   // Assigned to a worker agent
   'review',        // Worker done, awaiting reviewer agent
@@ -62,6 +60,66 @@ export type PreRejectionCode = z.infer<typeof PreRejectionCode>
 
 export const TaskPriority = z.enum(['critical', 'high', 'normal', 'low'])
 export type TaskPriority = z.infer<typeof TaskPriority>
+
+const ContractSurfaceKind = z.enum([
+  'component_api',
+  'http_api',
+  'event_api',
+  'mcp_api',
+  'schema',
+  'state_machine',
+  'design_system',
+  'domain_capability',
+  'documentation',
+  'other',
+])
+
+export const ContractSurfaceReviewPacket = z.object({
+  id: z.string(),
+  surface: z.object({
+    id: z.string(),
+    label: z.string(),
+    kind: ContractSurfaceKind,
+    authority: z.enum(['provider', 'shared', 'consumer']),
+    scope: z.enum(['project', 'workspace', 'external_reference']),
+    owningProject: z.object({
+      id: z.string(),
+      label: z.string(),
+      path: z.string().optional(),
+    }),
+    domain: z.object({
+      id: z.string(),
+      label: z.string(),
+      path: z.string().optional(),
+    }).optional(),
+  }),
+  currentSpecRef: z.string(),
+  knownConsumers: z.array(z.object({
+    id: z.string(),
+    label: z.string(),
+    path: z.string().optional(),
+  })).default([]),
+  existingInvariants: z.array(z.object({
+    id: z.string(),
+    label: z.string(),
+    rule: z.string(),
+    proofObligations: z.array(z.string()).default([]),
+  })).default([]),
+  existingDecisions: z.array(z.object({
+    id: z.string(),
+    summary: z.string(),
+    decidedAt: z.string(),
+    decidedBy: z.string(),
+    evidenceRefs: z.array(z.string()).default([]),
+    invariantRefs: z.array(z.string()).optional(),
+  })).default([]),
+  siblingSpecRefs: z.array(z.string()).default([]),
+  driftFindings: z.array(z.string()).default([]),
+  currentDelta: StructuredSpecContractSurfaceDelta,
+  proofObligations: z.array(z.string()).default([]),
+  reviewFocus: z.array(z.string()).default([]),
+})
+export type ContractSurfaceReviewPacket = z.infer<typeof ContractSurfaceReviewPacket>
 
 export const TaskHold = z.object({
   previousStatus: TaskStatus,
@@ -229,19 +287,12 @@ export type Escalation = z.infer<typeof Escalation>
 // approval — a task may have an approved brief before its spec is final, or
 // may skip the brief entirely for purely infrastructural work.
 // ---------------------------------------------------------------------------
-// Agent → user questions (FR-mini, ADHD-UX directive)
+// Legacy agent → user question parser.
 //
-// Every prompt an agent puts to the user MUST classify into ONE of four
-// kinds. No free prose. The UI renders each kind with a single deterministic
-// affordance: tap-to-confirm, yes/no, multiple choice with "Other...", or a
-// long-text reply. This kills the "is the agent asking me or telling me?"
-// confusion that emerges when an agent writes a paragraph that contains a
-// question buried inside.
-//
-// Producers (spec agent, coordinator, importer, etc.) emit AgentQuestion
-// values into `task.openQuestions`. The drawer renders any open questions
-// ABOVE the brief / spec / acceptance cards, since they are blocking by
-// definition. Answers are appended via POST /api/project/task/:id/answer.
+// `task.openQuestions` was the pre-0.10 way to persist owner questions on a
+// task. Normal task state must now route owner input through OwnerInputRequest
+// records linked to bounded-chat sessions. Keep this schema for migrations and
+// old-record readers only; do not add it back to the normal Task schema.
 // ---------------------------------------------------------------------------
 
 const AgentQuestionBase = {
@@ -578,6 +629,11 @@ export const WorkCompletionBoundary = z.object({
 })
 export type WorkCompletionBoundary = z.infer<typeof WorkCompletionBoundary>
 
+export const BusinessEnvelope = z.object({
+  goalId: z.string(),
+})
+export type BusinessEnvelope = z.infer<typeof BusinessEnvelope>
+
 export const TaskKind = z.enum([
   'implementation',
   'research',
@@ -828,18 +884,13 @@ export const Task = z.object({
   // Set by Spec Agent before implementation begins
   spec: z.string().optional(),
   structuredSpec: StructuredSpec.optional(),
+  contractSurfaceReviewPackets: z.array(ContractSurfaceReviewPacket).optional(),
   acceptanceCriteria: z.array(AcceptanceCriteria).default([]),
 
   // Product brief: the *why* layer of a task — user job, success metric,
   // anti-patterns, rollout plan. Authored by the Spec Agent alongside the
   // technical spec; approved by the human independently of spec approval.
   productBrief: ProductBrief.optional(),
-
-  // Open agent → user questions. See AgentQuestion above. Any question with
-  // `answeredAt` undefined is "open" and renders at the top of the drawer
-  // until the user answers. Producers MUST classify into one of the four
-  // kinds — no free prose questions.
-  openQuestions: z.array(AgentQuestion).optional(),
 
   // Scope boundaries — what this task explicitly will NOT do
   outOfScope: z.array(z.string()).default([]),
@@ -929,8 +980,11 @@ export const Task = z.object({
   origination: TaskOrigination.default('human'),
   proposedBy: z.string().optional(),          // agent id that proposed the task
   proposalRationale: z.string().optional(),   // why the proposing agent thinks this is worth doing
-  parentGoalId: z.string().optional(),        // FR-23 business envelope — tasks carry a goalId
+  businessEnvelope: BusinessEnvelope.optional(),
   workKind: WorkKind.optional(),
+  // Work containment is represented by hierarchy links, never by task status.
+  // Required migration 0.10.0/task-hierarchy-links converts old status: parent
+  // records before normal runtime paths parse task queues.
   hierarchy: WorkHierarchy.optional(),
   completionBoundary: WorkCompletionBoundary.optional(),
   taskKind: TaskKind.optional(),
@@ -1069,11 +1123,19 @@ export const Task = z.object({
   updatedAt: z.string(),
   completedAt: z.string().optional(),
 })
-export type Task = z.infer<typeof Task>
+type ParsedTask = z.infer<typeof Task>
+export type Task = ParsedTask & {
+  /**
+   * @deprecated Legacy pre-0.10 raw field. The normal Task schema no longer
+   * accepts or writes task-local owner questions; use OwnerInputRequest records
+   * linked to bounded-chat sessions instead.
+   */
+  openQuestions?: AgentQuestion[]
+}
 
 export const TaskQueue = z.object({
   version: z.number().default(1),
   lastUpdated: z.string(),
   tasks: z.array(Task),
 })
-export type TaskQueue = z.infer<typeof TaskQueue>
+export type TaskQueue = Omit<z.infer<typeof TaskQueue>, 'tasks'> & { tasks: Task[] }

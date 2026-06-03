@@ -12,21 +12,17 @@ start with [Start here](./quick-start). Come back when you want to know why
 Guildhall cares about blueprints, gates, context packets, and all the other
 nouns it keeps politely placing on the table.
 
-Each run pulls from a few kinds of state:
+The quick version: Guildhall keeps three things visible.
 
-1. **Project state**: the registered project, `./guildhall.yaml`, provider setup,
-   local commands, memory files, and current task queue.
-2. **Planning state**: project goals, task blueprints, open questions,
-   acceptance criteria, out-of-scope boundaries, and change orders.
-3. **Codebase orientation**: the [Corpus Map](./corpus-map) and likely target files that point
-   helpers toward existing modules, helpers, components, design tokens, tests,
-   and conventions.
-4. **Execution state**: active worktree, checkpoint, previous attempts,
-   verification output, and unresolved reviewer feedback.
-5. **Inspection state**: reviewer rubrics, guild specialists, gate results,
-   current work closure, and your decisions.
-6. **Learning state**: project habits and cross-project preferences that can be
-   accepted, ignored, or scoped.
+- **What are we trying to do?** The task blueprint, owner decisions,
+  acceptance criteria, and boundaries.
+- **Where does this work belong?** The repo structure, project graph, likely
+  files, shared contracts, and existing abstractions.
+- **Can we trust the result?** Checkpoints, review notes, gate results,
+  receipts, and closure state.
+
+That is most of the product. The details underneath are there so the app can
+make better calls without asking you to keep a mental corkboard.
 
 ## The guild
 
@@ -75,6 +71,34 @@ For example:
 That is the middle path between "just chat with an agent" and "please enjoy
 this mandatory process cathedral."
 
+## Structure, ownership, and contracts
+
+Structure is Guildhall's map room.
+
+The **structural map** says what is in the repo: packages, domains, runnable
+units, Git roots, and cross-cutting areas.
+
+The **project graph** says who owns what. That matters when the current project
+needs work from another local project or provider-owned domain. Guildhall can
+track that as a provider/consumer request: the provider delivers, the consumer
+checks the result, and the edge is not resolved until the consumer accepts it.
+
+The **contract surface** is the shared shape a task has to fit. For a component
+library, that might be prop names and variant rules. For an API, it might be
+endpoint names, errors, auth, and versioning. For a design system, it is tokens,
+primitive components, and when each variant is allowed.
+
+So when a spec touches a durable surface, Guildhall can show a contract packet:
+what rules already exist, what sibling specs depend on them, what the current
+task wants to change, and what proof should exist before reviewers accept it.
+The first everyday version is design governance: before an agent adds another
+local card, chip, button, or style rule, it sees which tokens and components
+already own that job.
+
+You see this work in **Structure**. If Guildhall needs your judgment, the
+conversation happens in Thread. Settings stays boring on purpose: readiness,
+providers, identity, profiles, and the knobs you actually asked to see.
+
 ## Making good output more likely
 
 Good output usually comes from a chain of smaller wins:
@@ -111,6 +135,11 @@ release work, and verification. Those can be linked without being crammed into
 one task. You should be able to see why Guildhall asked a question, split the
 work, or kept it together.
 
+Work hierarchy is now explicit. Containing work is linked to child work through
+task hierarchy links; it is not smuggled in as a fake task status. Old projects
+that still have legacy state get a required migration before Guildhall keeps
+running, so the visible queue matches the model the agents use.
+
 ## Feedback loops
 
 Guildhall asks for feedback where it changes the outcome.
@@ -118,6 +147,11 @@ Guildhall asks for feedback where it changes the outcome.
 Your feedback belongs on product calls, risk calls, taste calls, and release
 judgment. If the answer changes what the product is, who it serves, or whether
 you are comfortable shipping it, Guildhall asks.
+
+Those questions now flow through owner-input sessions instead of one-off cards
+spread across every page. Thread owns the conversation. Needs You owns alerts.
+Overview, Work, Structure, and Settings can point to the same decision, but
+they do not each invent a separate question model.
 
 Reviewer feedback belongs where another lens catches a class of mistake:
 architecture fit, product flow, accessibility, security, test coverage,
@@ -133,6 +167,12 @@ Command feedback belongs where commands can prove something: tests, typechecks,
 builds, lint, browser checks, and release scripts. Guildhall records those
 outcomes so the next run does not have to rediscover whether a claim was
 actually verified.
+
+Lifecycle changes follow the same rule. Newer Guildhall flows use explicit
+state machines and receipts: an agent proposes an event, the runtime checks
+whether that event is legal, and the receipt records what happened. That keeps
+"done", "blocked", "waiting", and "resolved" from becoming loose words that
+mean different things on different screens.
 
 ## How Guildhall learns
 
@@ -180,6 +220,8 @@ The system records:
 - what reviewers found
 - what gates ran
 - what decisions changed the plan
+- what state-machine events and receipts changed lifecycle state
+- what project-graph or contract-surface decision affected the work
 - what settings or learned behaviors affected execution
 
 This matters because good work is not only “the diff looks okay today.” Good
@@ -206,11 +248,19 @@ shared code before anyone edits:
 
 - helpers, services, schemas, and packages for backend/runtime work
 - components, design tokens, and interaction patterns for UI work
+- project-graph ownership, domain responsibilities, and provider/consumer edges
+- contract packets for shared APIs, schemas, events, state machines, MCP
+  resources, and design-system surfaces
 - tests and fixtures that show the intended contract
 - docs and decisions that explain why the system has its current shape
 
 If the same idea appears twice, it may be time for a small abstraction. If it
 is still a one-off, the project does not need a brand-new framework-shaped hat.
+
+The important part is that agents use this context to change what they do.
+Spec agents name the existing contract or the contract delta. Workers adjust
+the implementation before adding a local one-off. Reviewers can reject work
+that ignored a mapped abstraction or governance packet.
 
 Two pages cover the most important pieces:
 

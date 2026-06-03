@@ -10,7 +10,7 @@
   } from 'lucide-svelte'
   import ActionBar from './ActionBar.svelte'
   import Button from './Button.svelte'
-  import Card from './Card.svelte'
+  import Card from './ui-compat/Card.svelte'
   import Chip from './Chip.svelte'
   import Tooltip from './Tooltip.svelte'
   import { avatarToneForRole } from './avatar-palette.js'

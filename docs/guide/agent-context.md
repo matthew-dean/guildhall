@@ -38,8 +38,11 @@ A typical worker or reviewer prompt can include these blocks:
 | Active worktree | Dirty files to resume before broad exploration. |
 | Likely target files | Files inferred from spec text, commands, notes, and checkpoints. |
 | [Corpus Map](./corpus-map) | Compact codebase orientation, existing abstractions, design-system maturity, and read-next pointers. |
+| Project structure | Structural map, project graph, domain ownership, related projects, and provider/consumer edges when they affect the task. |
 | Business envelope | Parent goal, success condition, and guardrails. |
 | Design system | Approved or draft UI primitives, tokens, copy voice, and accessibility baseline. |
+| Design governance | Token authority, component authority, duplicate primitive families, variant risks, and reviewer checks for UI/design-system work. |
+| Contract surface packets | Shared component/API/schema/design-system rules, sibling specs, proposed deltas, and proof obligations when a task touches a durable surface. |
 | Review rubrics | The inspection criteria selected for this task. |
 | Review packet | Changed files, self-critique, and verification evidence for review/gate stages. |
 | Relevant memory | Matching sections from `MEMORY.md`, capped to stay useful. |
@@ -64,6 +67,12 @@ design system is absent, thin, emerging, or established before inventing new
 controls or styling rules. The map is a starting point, not a replacement for
 reading source files.
 
+When the context includes design-governance or contract-surface guidance, the
+spec agent uses it to shape the blueprint. A spec should name the existing
+contract it is using, or the contract delta it is proposing, instead of leaving
+the worker to decide whether a new local component, schema, event, or route is
+really a shared surface change.
+
 ### Coordinator
 
 The coordinator focuses on coherence: whether a task is ready, whether a
@@ -84,6 +93,10 @@ The worker receives the strongest operational packet:
 - revision feedback
 - selected review rubrics
 - [Corpus Map](./corpus-map) guidance
+- project-graph or contract-surface guidance when relevant
+- surface review packets when the accepted spec changes a durable component,
+  API, schema, event, provider, or design-system surface
+- design-governance packet when UI or design-system work is involved
 - design-system summary when relevant
 - verification expectations
 
@@ -92,6 +105,10 @@ package, design token, component, area, or file pattern it is extending. If no
 abstraction fits, it explains whether the change stays local or becomes a
 small shared primitive because the same idea is now appearing
 in multiple places.
+
+If a governance packet names a token authority, component authority, duplicate
+primitive family, or variant risk, the worker changes the implementation plan
+from that packet before adding local styling or one-off components.
 
 After the worker changes files and hands the task forward, the orchestrator
 refreshes the [Corpus Map](./corpus-map) from the touched-file evidence it has. That keeps the
@@ -110,6 +127,11 @@ solution, that is a review defect.
 For UI work, the reviewer also checks whether the worker reused approved
 tokens and primitives, or whether the design-system summary indicates a
 legitimate gap that deserves a small shared addition.
+
+When a design-governance packet is present, it becomes a review contract. The
+reviewer can ask for revision if the diff ignores the named token/component
+authority, adds a new variant without updating the component contract, or
+creates another local primitive where the packet already named a governed one.
 
 For design-system work, review context should include the local control catalog
 and, when the catalog is thin, a small outside reference set. The reviewer is

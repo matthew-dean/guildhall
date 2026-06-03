@@ -25,12 +25,24 @@ import {
   importProjectDependencyRequestForProvider,
   requestProjectDependencyRevision,
 } from '../project-graph.js'
+import { listOwnerInputRequests } from '../owner-input-store.js'
 
 let previousConfigDir: string | undefined
 let systemDir: string
 let projectRoot: string
 let consumerRoot: string
 let providerRoot: string
+
+async function structuralOwnerQuestionIds(root: string, requestIds: readonly string[]): Promise<string[]> {
+  const requests = await listOwnerInputRequests(root)
+  const byId = new Map(requests.map(request => [request.id, request]))
+  return requestIds
+    .map(id => byId.get(id))
+    .filter((request): request is NonNullable<typeof request> => Boolean(request))
+    .map(request => request.source.kind === 'structural_map' && request.source.questionId
+      ? request.source.questionId
+      : request.id)
+}
 
 beforeEach(async () => {
   previousConfigDir = process.env.GUILDHALL_CONFIG_DIR
@@ -309,7 +321,7 @@ describe('structural map drafting', () => {
       action: { kind: 'defer_decision', questionId: 'confirm-domain-routing', reason: 'Good enough for current routing.' },
       now: '2026-06-01T12:08:00.000Z',
     })
-    expect(changed.ownerQuestions).not.toContainEqual(expect.objectContaining({ id: 'confirm-domain-routing' }))
+    await expect(structuralOwnerQuestionIds(projectRoot, changed.ownerInputRequestIds)).resolves.not.toContain('confirm-domain-routing')
 
     changed = await applyStructuralMapReviewAction({
       projectRoot,
@@ -355,10 +367,7 @@ describe('structural map drafting', () => {
       })],
     }))
     expect(draft.edges.every(edge => typeof edge.evidenceScore === 'number' && edge.freshness)).toBe(true)
-    expect(draft.ownerQuestions).toContainEqual(expect.objectContaining({
-      id: 'resolve-conflict-cross-cutting-parser-parity',
-      reason: 'conflicting_structural_evidence',
-    }))
+    await expect(structuralOwnerQuestionIds(projectRoot, draft.ownerInputRequestIds)).resolves.toContain('resolve-conflict-cross-cutting-parser-parity')
   })
 
   it('refreshes an accepted structural map with targeted diffs and review questions', async () => {
@@ -541,10 +550,7 @@ describe('structural map drafting', () => {
       to: 'package:example-parser',
       kind: 'package_depends_on',
     }))
-    expect(draft.ownerQuestions).toContainEqual(expect.objectContaining({
-      id: 'confirm-domain-routing',
-      reason: 'owner_review_required_before_routing_truth',
-    }))
+    await expect(structuralOwnerQuestionIds(projectRoot, draft.ownerInputRequestIds)).resolves.toContain('confirm-domain-routing')
     expect(fs.existsSync(path.join(projectRoot, 'guildhall.yaml'))).toBe(false)
     expect(fs.existsSync(path.join(projectRoot, '.guildhall', 'structural-map', 'drafts', `${draft.id}.json`))).toBe(true)
   })

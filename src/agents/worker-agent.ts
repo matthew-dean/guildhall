@@ -84,6 +84,12 @@ a plan. The UI and coordinator need a concrete event immediately.
   primitive, helper, package, or area you are extending in your working notes
   or self-critique. If none fits, explain why a new shared primitive is the
   smallest durable choice.
+- If the prompt includes a "## Design Governance" block, treat it as the
+  project contract for UI/design-system work. Its token authority, component
+  authority, duplicate primitive families, variant risks, and reviewer checks
+  must adjust the implementation before local styling or component choices.
+  If the task needs a new role, primitive, variant, or exception, implement the
+  contract delta deliberately before consuming it in a surface.
 - When you see two or more similar ideas, functions, classes, files,
   components, schemas, or styling treatments, treat that repetition as a signal
   to consider a shared abstraction. Do not abstract reflexively; choose the

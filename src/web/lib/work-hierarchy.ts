@@ -17,20 +17,9 @@ function taskTitle(task: Task): string {
   return task.title?.trim() || task.id
 }
 
-function legacyParentTaskId(task: Task): string | null {
-  const raw = task.parentGoalId?.trim()
-  if (!raw?.startsWith('goal-task-')) return null
-  return raw.replace(/^goal-/, '')
-}
-
 function parentIdForTask(task: Task, tasksById: Map<string, Task>): string | null {
   const explicit = task.hierarchy?.parentId?.trim()
   if (explicit && tasksById.has(explicit)) return explicit
-  const legacy = legacyParentTaskId(task)
-  if (!legacy || legacy === task.id) return null
-  if (tasksById.has(legacy)) return legacy
-  const withoutTaskPrefix = legacy.replace(/^task-/, '')
-  if (withoutTaskPrefix !== task.id && tasksById.has(withoutTaskPrefix)) return withoutTaskPrefix
   return null
 }
 

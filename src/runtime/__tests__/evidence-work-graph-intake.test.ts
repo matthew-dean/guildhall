@@ -101,8 +101,8 @@ describe('evidence-to-work-graph intake', () => {
 
     expect(integrationTask).toMatchObject({
       title: 'Integrate AlertDialog into Knit destructive confirmation flow',
-      targetArea: 'knit',
-      consumerSurface: 'destructive confirmation flow',
+      targetArea: 'Knit destructive confirmation flow',
+      consumerSurface: 'Knit destructive confirmation flow',
       dependsOn: [componentTask?.id],
     })
   })
@@ -157,7 +157,7 @@ describe('evidence-to-work-graph intake', () => {
     expect(dashboard).toMatchObject({
       targetArea: 'Admin settings page',
       dependsOn: expect.arrayContaining([worker?.id, exportApi?.id]),
-      consumerSurface: 'Compliance dashboard',
+      consumerSurface: 'Admin settings page',
     })
   })
 

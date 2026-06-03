@@ -286,7 +286,7 @@ describe('POST /api/project/request', () => {
       request: {
         kind: 'task_spec',
         raw: ask,
-        routingSummary: 'Routed to Task Intake',
+        routingSummary: 'Guildhall is shaping this request into a task brief.',
       },
       requestIntake: {
         intent: 'ambiguous_spec_or_implementation',
@@ -343,7 +343,7 @@ describe('POST /api/project/request', () => {
       request: {
         kind: 'task_spec',
         raw: ask,
-        routingSummary: 'Routed to Task Intake',
+        routingSummary: 'Guildhall is shaping this request into a task brief.',
       },
       requestIntake: {
         intent: 'implementation',
@@ -384,7 +384,7 @@ describe('POST /api/project/request', () => {
       }
     }
     expect(answered.boundedChat).toMatchObject({
-      status: 'waiting_for_user',
+      status: 'waiting_for_owner',
       activeSubObjectiveId: 'request-scope',
     })
     expect(answered.boundedChat?.acceptedState?.discardedResponses?.[0]?.reason).toBe('confused')
@@ -393,7 +393,7 @@ describe('POST /api/project/request', () => {
     expect(queue.tasks).toEqual([])
   })
 
-  it('keeps project questions visible as routed project-question requests', async () => {
+  it('keeps project questions as bounded-chat conversation threads instead of task requests', async () => {
     const { app } = buildServeApp({ projectPath: tmpDir })
     const res = await app.fetch(new Request(projectUrl('/api/project/request'), {
       method: 'POST',
@@ -403,21 +403,47 @@ describe('POST /api/project/request', () => {
 
     expect(res.status).toBe(200)
     const body = await res.json() as {
-      routedActions?: Array<{ kind?: string; safety?: string; intakeTarget?: { nextStep?: string } }>
-      taskId?: string
+      boundedChat?: {
+        id?: string
+        objective?: { label?: string }
+        plannerState?: { newRequest?: { routedRequestKind?: string; routingSummary?: string } }
+        subObjectives?: Array<{ id?: string; prompt?: string }>
+      }
     }
-    expect(body.routedActions?.[0]).toMatchObject({
-      kind: 'project_question',
-      safety: 'read-only',
-      intakeTarget: { nextStep: 'answer-question' },
+    expect(body.boundedChat).toMatchObject({
+      objective: { label: 'Answer a project question' },
+      plannerState: {
+        newRequest: {
+          routedRequestKind: 'project_question',
+          routingSummary: 'Guildhall saved this as a project question.',
+        },
+      },
+      subObjectives: [{
+        id: 'project-question-context',
+        prompt: 'Guildhall can answer this in Thread. Is there a source, task, or recent blocker it should use first?',
+      }],
     })
-    expect(body.taskId).toMatch(/^task-/)
+
+    const answer = await app.fetch(new Request(projectUrl(`/api/project/bounded-chat/${encodeURIComponent(body.boundedChat?.id ?? '')}/answer`), {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        subObjectiveId: 'project-question-context',
+        response: 'Use the release task evidence.',
+      }),
+    }))
+    expect(answer.status).toBe(200)
+    const answered = await answer.json() as {
+      boundedChat?: { status?: string; closure?: { summary?: string }; acceptedState?: { taskDrafts?: string[] } }
+    }
+    expect(answered.boundedChat).toMatchObject({
+      status: 'fulfilled',
+      closure: { summary: 'Guildhall kept this as a project question thread.' },
+      acceptedState: { taskDrafts: [] },
+    })
+
     const queue = await readQueue()
-    expect(queue.tasks[0]?.request).toMatchObject({
-      kind: 'project_question',
-      raw: 'What commands should I run before release?',
-      routingSummary: 'Routed to Project Question',
-    })
+    expect(queue.tasks).toEqual([])
   })
 })
 
@@ -469,7 +495,7 @@ describe('project check-in bounded chat endpoints', () => {
         subObjectives?: Array<{ prompt?: string; followUpDepth?: number }>
       }
     }
-    expect(answered.boundedChat?.status).toBe('waiting_for_user')
+    expect(answered.boundedChat?.status).toBe('waiting_for_owner')
     expect(answered.boundedChat?.subObjectives?.[0]).toMatchObject({
       followUpDepth: 1,
       prompt: 'Should reviewer-lane MVPs judge internal story coherence, reader engagement, author voice preservation, or all three?',

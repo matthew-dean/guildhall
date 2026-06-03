@@ -35,6 +35,7 @@ import {
   getProjectTaskLocalHistoryDir,
   getProjectTranscriptPath,
 } from '@guildhall/sessions'
+import { createOwnerInputRequest, listOwnerInputRequests } from '../owner-input-store.js'
 
 // ---------------------------------------------------------------------------
 // Orchestrator feedback-loop tests
@@ -206,6 +207,45 @@ async function writeQueue(tasks: Task[]): Promise<void> {
 async function readQueue(): Promise<TaskQueue> {
   const raw = await fs.readFile(tasksPath, 'utf-8')
   return JSON.parse(raw)
+}
+
+async function seedTaskOwnerInput(input: {
+  taskId: string
+  questionId?: string
+  prompt: string
+  choices?: string[]
+}): Promise<void> {
+  await createOwnerInputRequest({
+    projectRoot: tmpDir,
+    projectId: 'test-ws',
+    commandId: `test-owner-input:${input.taskId}:${input.questionId ?? 'q-1'}`,
+    now: '2026-05-02T00:00:00.000Z',
+    actor: 'test',
+    source: {
+      kind: 'task',
+      taskId: input.taskId,
+      questionId: input.questionId ?? 'q-1',
+    },
+    target: { kind: 'thread' },
+    prompt: input.prompt,
+    ...(input.choices ? { choices: input.choices } : {}),
+    objective: {
+      kind: 'task_shaping',
+      label: `Clarify ${input.taskId}`,
+      successCriteria: ['Owner answers the linked bounded-chat session.'],
+    },
+  })
+}
+
+function preservedQuestionNote(prompt: string, answer: string): Task['notes'][number] {
+  return {
+    agentId: 'migration:0.10.0/task-open-questions-to-bounded-chat',
+    role: 'coordinator',
+    content:
+      'Preserved answered owner question during 0.10.0/task-open-questions-to-bounded-chat migration.\n\n' +
+      `Question: ${prompt}\nAnswer: ${answer}`,
+    timestamp: '2026-05-19T22:26:12.323Z',
+  }
 }
 
 function queueOf(tasks: Task[]): TaskQueue {
@@ -835,17 +875,12 @@ describe('Orchestrator.tick — idle handling', () => {
       mkTask({
         id: 'a',
         status: 'exploring',
-        openQuestions: [
-          {
-            kind: 'text',
-            id: 'q-1',
-            askedBy: 'spec-agent',
-            askedAt: '2026-05-02T00:00:00Z',
-            prompt: 'Clarify the target flow',
-          },
-        ],
       }),
     ])
+    await seedTaskOwnerInput({
+      taskId: 'a',
+      prompt: 'Clarify the target flow',
+    })
     const orch = new Orchestrator({
       config: baseConfig(),
       agents: agentSet(),
@@ -1454,7 +1489,7 @@ describe('Orchestrator.tick — routing', () => {
     const task = queue.tasks[0]!
     expect(task.openQuestions).toHaveLength(3)
     expect(task.openQuestions?.map((q) => ('prompt' in q ? q.prompt : ''))).toEqual([
-      '1) **Test level target (pick one)**',
+      'Test level target (pick one)',
       'Coverage posture (pick one)',
       'If first-turn data is still insufficient (pick one)',
     ])
@@ -1499,7 +1534,6 @@ describe('Orchestrator.tick — routing', () => {
 
   it('drops stale starter-task focus questions once a drafted spec reaches spec_review', async () => {
     await writeQueue([mkTask({ id: 'a', status: 'exploring' })])
-    const askedAt = '2026-05-11T20:24:31.428Z'
     const updatedAt = '2026-05-11T20:24:50.064Z'
     const spec = stubAgent('spec-agent', async () => {
       await mutateTask('a', {
@@ -1513,15 +1547,6 @@ describe('Orchestrator.tick — routing', () => {
             met: false,
           },
         ],
-        openQuestions: [{
-          kind: 'choice',
-          id: 'q-stale',
-          askedBy: 'spec-agent',
-          askedAt,
-          prompt: 'What should this first starter task focus on?',
-          choices: ['Onboarding', 'Bootstrap'],
-          selectionMode: 'single',
-        }],
         updatedAt,
         notes: [{
           agentId: 'spec-agent',
@@ -1920,31 +1945,15 @@ describe('Orchestrator.tick — routing', () => {
           authoredBy: 'spec-agent',
           authoredAt: '2026-05-25T06:59:09.130Z',
         },
-        openQuestions: [
-          {
-            id: 'q-fake-batch',
-            kind: 'choice',
-            askedBy: 'spec-agent',
-            askedAt: '2026-05-18T19:50:01.167Z',
-            answeredAt: '2026-05-19T22:26:12.323Z',
-            answer: 'Answer the concrete questions directly.',
-            prompt: "I've drafted the product brief and posted three focused questions:",
-            choices: ['Scope', 'Turn into options', 'Drag-handle'],
-            selectionMode: 'single',
-          },
-          {
-            id: 'q-scope',
-            kind: 'choice',
-            askedBy: 'spec-agent',
-            askedAt: '2026-05-18T19:49:46.995Z',
-            answeredAt: '2026-05-19T22:26:12.323Z',
-            answer: 'Drag-handle is out of scope for this task. Treat drag-and-drop reordering as a separate follow-up task.',
-            prompt: 'Should drag-and-drop reordering be in scope?',
-            choices: ['Include drag-handle', 'Separate task'],
-            selectionMode: 'single',
-          },
-        ],
         notes: [
+          preservedQuestionNote(
+            "I've drafted the product brief and posted three focused questions:",
+            'Answer the concrete questions directly.',
+          ),
+          preservedQuestionNote(
+            'Should drag-and-drop reordering be in scope?',
+            'Drag-handle is out of scope for this task. Treat drag-and-drop reordering as a separate follow-up task.',
+          ),
           {
             agentId: 'system',
             role: 'system',
@@ -2050,6 +2059,15 @@ describe('Orchestrator.tick — routing', () => {
       choices: ['localhost and bare root domains', 'malformed hosts and unexpected dots'],
     })
     expect(task.escalations ?? []).toHaveLength(0)
+
+    const ownerInputRequests = await listOwnerInputRequests(tmpDir)
+    expect(ownerInputRequests).toHaveLength(1)
+    expect(ownerInputRequests[0]).toMatchObject({
+      source: { kind: 'task', taskId: 'a' },
+      prompt: 'Which host shape matters most first?',
+      choices: ['localhost and bare root domains', 'malformed hosts and unexpected dots'],
+      status: 'waiting_for_owner',
+    })
   })
 
   it('parses markdown-headed questions that use A/B/C option lines into multiple structured cards', async () => {
@@ -8281,17 +8299,12 @@ describe('Orchestrator.run — full loops', () => {
         id: 'question',
         status: 'exploring',
         domain: 'looma',
-        openQuestions: [
-          {
-            kind: 'text',
-            id: 'q-1',
-            askedBy: 'spec-agent',
-            askedAt: '2026-05-02T00:00:00Z',
-            prompt: 'Which environment should I target?',
-          },
-        ],
       }),
     ])
+    await seedTaskOwnerInput({
+      taskId: 'question',
+      prompt: 'Which environment should I target?',
+    })
 
     const mutateCurrentTask = (next: TaskStatus) => async (prompt: string) => {
       const match = prompt.match(/\*\*Current task ID \(for task tools\):\*\* ([^\n]+)/)

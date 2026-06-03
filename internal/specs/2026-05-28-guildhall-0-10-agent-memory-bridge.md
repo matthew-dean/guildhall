@@ -311,6 +311,22 @@ what happened.
   completion evidence.
 - Add live bridge smoke test using a small external Codex task.
 
+### First Bounded Memory-Exchange Slice
+
+- [x] Add a provider-neutral external memory bridge record with explicit
+  scope/type, freshness, confidence/risk, and required evidence refs.
+- [x] Persist explicit import/export and link-style bridge records in
+  `.guildhall/external-agent-memory-bridge.json`.
+- [x] Keep imported external memory reviewable before it shapes local execution
+  by requiring an explicit review step before promotion into ordinary effective
+  memory.
+- [x] Expose the bridge through MCP/CLI/UI flows after the runtime contract has
+  enough release-proof coverage. The bounded 0.10 record path exposes reviewable
+  bridge records through MCP and CLI: clients can list/import/review/reject
+  records, and only review promotes a record into ordinary effective memory.
+  UI exposure is intentionally left to the broader external-session/task-surface
+  work instead of adding a small one-off Settings surface for this slice.
+
 ## Open Questions
 
 - Should Guildhall create a task automatically when an external session has no

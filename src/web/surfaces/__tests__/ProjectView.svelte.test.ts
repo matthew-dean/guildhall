@@ -20,12 +20,15 @@ function task(overrides: Record<string, unknown> = {}) {
     priority: 'high',
     productBrief: {
       userJob: 'Let editors create links without leaving the writing flow.',
+      whyItMattersNow: 'Editors lose context when link creation leaves the document surface.',
+      successMetric: 'Editors can create and remove links from the toolbar without opening another view.',
+      nonGoals: ['Do not replace the full document editor.'],
       approvedAt: now,
     },
     spec: 'Build the link editor controls inside the existing editor toolbar.',
     acceptanceCriteria: [
-      { description: 'URL and display text controls are present.' },
-      { description: 'The editor can remove an existing link.' },
+      { id: 'ac-url-display', description: 'URL and display text controls are present.', verifiedBy: 'review' },
+      { id: 'ac-remove-link', description: 'The editor can remove an existing link.', verifiedBy: 'review' },
     ],
     openQuestions: [],
     escalations: [],
@@ -537,7 +540,20 @@ describe('ProjectView', () => {
             skipped: [],
             failed: [],
           },
-          status: { pending: [], blocked: [], applied: [{ id: '0.8.0/project-state-layout' }] },
+          status: {
+            pending: [],
+            blocked: [
+              {
+                id: '0.10.0/task-open-questions-to-bounded-chat',
+                title: 'Move task questions into owner-input bounded chat',
+                safety: 'prompt',
+                requirement: 'required',
+                summary: 'Moves old task-local questions into owner input.',
+                affectedPaths: ['.guildhall/TASKS.json'],
+              },
+            ],
+            applied: [{ id: '0.8.0/project-state-layout' }],
+          },
         })
       }
       return json({})
@@ -563,6 +579,8 @@ describe('ProjectView', () => {
         expect.objectContaining({ method: 'POST' }),
       )
     })
+    expect(await screen.findByText('Migration applied.')).toBeInTheDocument()
+    expect(screen.getByText('Move task questions into owner-input bounded chat')).toBeInTheDocument()
   })
 
   it('does not present stable done-only projects as paused or needing setup attention', async () => {
@@ -729,6 +747,37 @@ describe('ProjectView', () => {
 
     expect(screen.getByRole('button', { name: /choose a recovery path/i })).toHaveTextContent('Needs recovery')
     expect(screen.queryByRole('button', { name: /waiting on answer/i })).not.toBeInTheDocument()
+  })
+
+  it('labels brief-cleanup start blockers as review actions in the top bar', async () => {
+    const cleanupDetail = detail({
+      startReadiness: {
+        canStart: false,
+        code: 'no_unattended_progress',
+        message: '1 task needs a clearer brief and acceptance criteria before Guildhall can build unattended.',
+        actionHref: '/thread',
+      },
+      tasks: [
+        task({
+          id: 'task-needs-brief',
+          title: 'Set FLL overhead charge policy',
+          status: 'ready',
+          productBrief: {
+            approvedAt: '2026-06-02T12:00:00.000Z',
+            userJob: '',
+          },
+          acceptanceCriteria: [],
+          spec: '',
+        }),
+      ],
+    })
+    installFetchFakes(cleanupDetail)
+    await renderProjectView('overview', null, 'looma-knit', cleanupDetail)
+
+    const topbar = document.querySelector('header.topbar')
+    expect(topbar).not.toBeNull()
+    expect(topbar).toHaveTextContent('Review brief')
+    expect(topbar).not.toHaveTextContent('Start work')
   })
 
   it('collapses topbar labels before the project toolbar wraps', async () => {

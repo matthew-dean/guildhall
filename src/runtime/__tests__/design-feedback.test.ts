@@ -7,7 +7,6 @@ import {
   captureOwnerDesignFeedback,
   DESIGN_FEEDBACK_FILE,
   classifyDesignFinding,
-  discoverLoomaDevelopmentHook,
   recordDesignFinding,
   readDesignFeedbackStore,
   routeDesignFinding,
@@ -43,8 +42,8 @@ describe('design feedback loop', () => {
     }
   })
 
-  it('routes reusable Looma findings into portable candidates and Looma improvements', async () => {
-    const memoryDir = await fs.mkdtemp(path.join(os.tmpdir(), 'guildhall-design-feedback-looma-'))
+  it('routes reusable design-system findings into target-system improvements', async () => {
+    const memoryDir = await fs.mkdtemp(path.join(os.tmpdir(), 'guildhall-design-feedback-target-'))
     try {
       const finding = await recordDesignFinding({
         memoryDir,
@@ -54,7 +53,7 @@ describe('design feedback loop', () => {
           source: { kind: 'owner-feedback', artifactId: 'pantry-filter.default', selector: '[data-filter]' },
           severity: 'high',
           dimension: 'interaction-semantics',
-          designSystem: 'looma',
+          designSystem: 'foundation',
           targetPackage: 'core',
           evidenceRefs: [{ kind: 'story', ref: 'pantry-filter.default', summary: 'Portable story' }],
           suggestedClassification: 'reusable-pattern',
@@ -65,10 +64,11 @@ describe('design feedback loop', () => {
 
       expect(routed.decision).toBeUndefined()
       expect(routed.candidate).toMatchObject({
-        targetDesignSystem: 'looma',
+        targetDesignSystem: 'foundation',
         classification: 'reusable-pattern',
       })
-      expect(routed.loomaImprovement).toMatchObject({
+      expect(routed.designSystemImprovement).toMatchObject({
+        targetDesignSystem: 'foundation',
         targetPackage: 'core',
         findingIds: ['finding-segmented-filter'],
       })
@@ -86,9 +86,9 @@ describe('design feedback loop', () => {
     })).toBe('token-system-gap')
 
     expect(classifyDesignFinding({
-      summary: 'Documented Looma switch focus state fails in Storybook.',
+      summary: 'Documented switch focus state fails in Storybook.',
       dimension: 'state',
-      designSystem: 'looma',
+      designSystem: 'foundation',
       sourceKind: 'automated-visual-check',
     })).toBe('design-system-defect')
   })
@@ -202,81 +202,6 @@ describe('design feedback loop', () => {
       expect(store.decisionPackets[0]?.id).toBe(packet.id)
     } finally {
       await fs.rm(memoryDir, { recursive: true, force: true })
-    }
-  })
-})
-
-describe('discoverLoomaDevelopmentHook', () => {
-  it('stays inactive when experimental Looma development is not configured', async () => {
-    const status = await discoverLoomaDevelopmentHook({ globalConfig: {} })
-
-    expect(status).toMatchObject({
-      enabled: false,
-      status: 'inactive',
-      reason: expect.stringContaining('not configured'),
-    })
-  })
-
-  it('stays inactive when the configured path is not a valid Looma checkout', async () => {
-    const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'guildhall-not-looma-'))
-    try {
-      const status = await discoverLoomaDevelopmentHook({
-        globalConfig: {
-          experimental: {
-            designSystemDevelopment: {
-              looma: {
-                enabled: true,
-                path: dir,
-                writeThrough: 'queue',
-              },
-            },
-          },
-        },
-      })
-
-      expect(status).toMatchObject({
-        enabled: true,
-        status: 'inactive',
-        path: dir,
-      })
-      expect(status.reason).toContain('not a Git worktree')
-    } finally {
-      await fs.rm(dir, { recursive: true, force: true })
-    }
-  })
-
-  it('activates only for an explicitly configured valid Looma checkout', async () => {
-    const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'guildhall-looma-hook-'))
-    try {
-      await fs.mkdir(path.join(dir, '.git'))
-      await fs.writeFile(
-        path.join(dir, 'package.json'),
-        JSON.stringify({ name: 'looma-monorepo', private: true }, null, 2),
-        'utf-8',
-      )
-
-      const status = await discoverLoomaDevelopmentHook({
-        globalConfig: {
-          experimental: {
-            designSystemDevelopment: {
-              looma: {
-                enabled: true,
-                path: dir,
-                writeThrough: 'queue',
-              },
-            },
-          },
-        },
-      })
-
-      expect(status).toMatchObject({
-        enabled: true,
-        status: 'active',
-        path: dir,
-        writeThrough: 'queue',
-      })
-    } finally {
-      await fs.rm(dir, { recursive: true, force: true })
     }
   })
 })

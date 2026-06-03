@@ -105,6 +105,7 @@ function normalizeLegacySettings(raw: unknown): unknown {
       }
     }
   }
+  delete project.merge_policy
 
   return { ...settings, project }
 }

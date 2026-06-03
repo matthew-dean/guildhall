@@ -3,6 +3,10 @@ import { z } from 'zod'
 import fs from 'node:fs/promises'
 import path from 'node:path'
 import {
+  applyTaskTransition,
+  type TaskTransitionEvent,
+} from '@guildhall/runtime/task-transition'
+import {
   AcceptanceCriteria,
   GateResult,
   Task,
@@ -197,9 +201,29 @@ export async function updateTask(
       }
     }
 
-    if (input.title !== undefined) task.title = input.title
     const explicitStatus = nextStatus
-    if (explicitStatus) task.status = explicitStatus
+    const statusTransition = explicitStatus && explicitStatus !== task.status
+      ? applyTaskTransition({
+        task,
+        event: eventForExplicitStatus(task.status, explicitStatus),
+        actor: currentAgentId || 'update-task',
+        evidenceRefs: [`update-task:status:${task.status}->${explicitStatus}`],
+        now: new Date().toISOString(),
+        requiredEvidencePresent: explicitStatus === 'done' ? updateIncludesCompletionEvidence(input, task) : undefined,
+      })
+      : null
+    if (statusTransition?.kind === 'rejected') {
+      return {
+        success: false,
+        taskId,
+        error:
+          `Task ${taskId} cannot ${eventForExplicitStatus(task.status, explicitStatus!).replaceAll('_', ' ')} ` +
+          `from ${task.status}: ${statusTransition.reason}`,
+      }
+    }
+
+    if (input.title !== undefined) task.title = input.title
+    if (statusTransition?.kind === 'applied') task.status = statusTransition.nextState
     if (input.assignedTo !== undefined) {
       if ((input.assignedTo ?? '').trim() === '') delete task.assignedTo
       else task.assignedTo = input.assignedTo
@@ -262,9 +286,6 @@ export async function updateTask(
         riskLanes: inferSizingRiskLanes(task),
         createdAt: sizePlanCreatedAt,
       })
-      if ((task.sizePlan.action === 'split_recommended' || task.sizePlan.action === 'split_required') && !task.parentGoalId) {
-        task.parentGoalId = `goal-${task.id}`
-      }
       if (task.sizePlan.action === 'split_required' && task.status === 'ready') {
         materializeRequiredSplitChildren(queue, task, sizePlanCreatedAt)
       }
@@ -285,17 +306,17 @@ export function materializeRequiredSplitChildren(
   timestamp: string,
 ): void {
   if (parent.sizePlan?.action !== 'split_required') return
-  if (!parent.parentGoalId) parent.parentGoalId = `goal-${parent.id}`
   const recommendations = parent.sizePlan.recommendedChildren ?? []
   if (recommendations.length === 0) return
 
+  const existingChildIds = new Set(parent.hierarchy?.childIds ?? [])
   const planned = recommendations.map((recommendation, index) => {
     const existingById = recommendation.createdTaskId
       ? queue.tasks.find((task) => task.id === recommendation.createdTaskId)
       : undefined
     const existingByTitle = queue.tasks.find((task) =>
       task.id !== parent.id &&
-      task.parentGoalId === parent.parentGoalId &&
+      task.hierarchy?.parentId === parent.id &&
       normalizeTaskTitle(task.title) === normalizeTaskTitle(recommendation.title),
     )
     const task = existingById ?? existingByTitle ?? createSplitChildTask({
@@ -309,6 +330,13 @@ export function materializeRequiredSplitChildren(
     })
     if (!queue.tasks.some((candidate) => candidate.id === task.id)) queue.tasks.push(task)
     recommendation.createdTaskId = task.id
+    task.hierarchy = {
+      ...(task.hierarchy ?? {}),
+      parentId: parent.id,
+      order: index,
+      childIds: task.hierarchy?.childIds ?? [],
+    }
+    existingChildIds.add(task.id)
     return { recommendation, task }
   })
 
@@ -322,7 +350,44 @@ export function materializeRequiredSplitChildren(
       .filter((dependency, index, all) => dependency !== task.id && all.indexOf(dependency) === index)
     task.updatedAt = timestamp
   }
-  parent.status = 'parent'
+  parent.hierarchy = {
+    ...(parent.hierarchy ?? {}),
+    order: parent.hierarchy?.order ?? 0,
+    childIds: [...existingChildIds],
+  }
+  parent.taskReadiness = {
+    taskKind: parent.taskReadiness?.taskKind ?? parent.taskKind ?? 'implementation',
+    recommendation: 'split',
+    summary: 'Split-required work is represented by linked child tasks.',
+    dimensions: parent.taskReadiness?.dimensions ?? [],
+    definitionOfDone: parent.taskReadiness?.definitionOfDone ?? {
+      items: ['All required child tasks are done or explicitly deferred.'],
+      evidenceRequired: ['Linked child task outcomes are recorded before the containing work is closed.'],
+      updatedAt: timestamp,
+      createdBy: 'task-sizing',
+    },
+    blockerPlans: parent.taskReadiness?.blockerPlans ?? [],
+    contextBudget: parent.taskReadiness?.contextBudget ?? {
+      estimatedTokens: 0,
+      risk: 'medium',
+      fitsInOneWorkerBrief: false,
+      reasons: ['This work was split into linked child tasks.'],
+    },
+    assessedAt: parent.taskReadiness?.assessedAt ?? timestamp,
+    assessedBy: parent.taskReadiness?.assessedBy ?? 'task-sizing',
+  }
+  if (!['blocked', 'review', 'gate_check', 'done', 'shelved'].includes(parent.status)) {
+    if (parent.status !== 'ready') {
+      const transitionResult = applyTaskTransition({
+        task: parent,
+        event: 'mark_ready',
+        actor: 'task-sizing',
+        evidenceRefs: ['task:split-children-materialized'],
+        now: timestamp,
+      })
+      if (transitionResult.kind === 'applied') parent.status = transitionResult.nextState
+    }
+  }
   delete parent.assignedTo
 
   const notePrefix = 'Split required: created linked child tasks'
@@ -352,7 +417,7 @@ function createSplitChildTask(input: {
     description: [
       input.reason,
       '',
-      `Split from parent task ${input.parent.id}: ${input.parent.title}.`,
+      `Split from containing work ${input.parent.id}: ${input.parent.title}.`,
     ].join('\n'),
     domain: input.suggestedDomain ?? input.parent.domain,
     projectPath: input.parent.projectPath,
@@ -377,7 +442,7 @@ function createSplitChildTask(input: {
     origination: 'system',
     proposedBy: 'task-sizing',
     proposalRationale: input.reason,
-    parentGoalId: input.parent.parentGoalId,
+    businessEnvelope: input.parent.businessEnvelope,
     createdAt: input.timestamp,
     updatedAt: input.timestamp,
   })
@@ -423,7 +488,6 @@ function normalizeAssignmentForStatus(
       task.assignedTo = 'gate-checker-agent'
       return
     case 'ready':
-    case 'parent':
     case 'spec_review':
     case 'exploring':
     case 'proposed':
@@ -434,6 +498,50 @@ function normalizeAssignmentForStatus(
       if (opts.explicitStatus) delete task.assignedTo
       return
   }
+}
+
+function eventForExplicitStatus(from: z.infer<typeof TaskStatus>, to: z.infer<typeof TaskStatus>): TaskTransitionEvent {
+  switch (to) {
+    case 'import_draft':
+      return 'mark_import_draft'
+    case 'exploring':
+      return from === 'import_draft' ? 'start_intake' : 'recover_to_exploring'
+    case 'spec_review':
+      return from === 'blocked' ? 'recover_to_spec_review' : 'mark_spec_review'
+    case 'ready':
+      return from === 'blocked' ? 'recover_to_ready' : 'mark_ready'
+    case 'in_progress':
+      if (from === 'review' || from === 'gate_check') return 'revise'
+      if (from === 'blocked') return 'recover_to_in_progress'
+      return 'start_worker'
+    case 'review':
+      return from === 'blocked' ? 'recover_to_review' : 'request_review'
+    case 'gate_check':
+      return 'start_gate_check'
+    case 'pending_pr':
+      return 'await_pull_request'
+    case 'done':
+      return 'complete'
+    case 'blocked':
+      return 'block'
+    case 'shelved':
+      return 'shelve'
+    case 'proposed':
+      return 'recover_to_exploring'
+  }
+}
+
+function updateIncludesCompletionEvidence(input: UpdateTaskInput, task: z.infer<typeof Task>): boolean {
+  if (input.completedAt?.trim()) return true
+  if (input.gateResults?.some((result) => result.type === 'hard' && result.passed)) return true
+  if (Array.isArray(input.acceptanceCriteria)) {
+    for (const criterion of input.acceptanceCriteria) {
+      const parsed = AcceptanceCriteria.safeParse(criterion)
+      if (parsed.success && parsed.data.met === true) return true
+    }
+  }
+  if (task.gateResults.some((result) => result.type === 'hard' && result.passed)) return true
+  return task.acceptanceCriteria.length > 0 && task.acceptanceCriteria.every((criterion) => criterion.met === true)
 }
 
 function hasTaskMutation(input: UpdateTaskInput): boolean {

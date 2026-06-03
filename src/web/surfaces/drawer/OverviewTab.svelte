@@ -1,5 +1,5 @@
 <script lang="ts">
-  import Card from '../../lib/Card.svelte'
+  import Card from '../../lib/ui-compat/Card.svelte'
   import Chip from '../../lib/Chip.svelte'
   import Button from '../../lib/Button.svelte'
   import Icon from '../../lib/Icon.svelte'
@@ -36,9 +36,9 @@
   const recommendedChildren = $derived(sizePlan?.recommendedChildren ?? [])
   const taskDescription = $derived(readableTaskDescription(task.description, task.title) || '(no description)')
   const createdChildren = $derived(recommendedChildren.filter((child) => child.createdTaskId))
-  const parentTaskId = $derived(taskIdFromParentGoal(task.parentGoalId))
-  const containingWorkId = $derived(task.hierarchy?.parentId ?? parentTaskId)
+  const containingWorkId = $derived(task.hierarchy?.parentId ?? null)
   const nestedWorkIds = $derived(task.hierarchy?.childIds ?? [])
+  const goalEnvelopeId = $derived(task.businessEnvelope?.goalId ?? null)
   const needsSplitAction = $derived(
     sizePlan?.action === 'split_required' &&
     recommendedChildren.length > 0 &&
@@ -83,14 +83,8 @@
     return tone === 'accent' ? 'agent' : tone
   }
 
-  function parentGoalLabel(goalId: string): string {
+  function goalLabel(goalId: string): string {
     return goalId.replace(/^goal-/, '').replace(/^task-/, '').replace(/[-_]+/g, ' ')
-  }
-
-  function taskIdFromParentGoal(goalId: string | undefined): string | null {
-    const raw = goalId?.trim()
-    if (!raw?.startsWith('goal-task-')) return null
-    return raw.replace(/^goal-/, '')
   }
 
   function navigateTask(event: MouseEvent, nextTaskId: string | undefined): void {
@@ -129,24 +123,26 @@
           <span>{containingWorkId === task.id ? 'Hierarchy role' : 'Containing work'}</span>
           {#if containingWorkId !== task.id}
             <a href={currentTaskHref(containingWorkId, projectId)} onclick={(event) => navigateTask(event, containingWorkId)}>
-              {task.parentGoalId ? parentGoalLabel(task.parentGoalId) : containingWorkId}
+              {containingWorkId}
             </a>
           {:else}
             <strong>Containing work</strong>
           {/if}
         </div>
-      {:else if nestedWorkIds.length > 0 || task.status === 'parent'}
+      {:else if nestedWorkIds.length > 0}
         <div class="hierarchy-row">
           <span>Hierarchy role</span>
           <strong>Containing work</strong>
         </div>
-      {:else if task.parentGoalId}
-        <div class="hierarchy-row">
-          <span>Containing goal</span>
-          <strong>{parentGoalLabel(task.parentGoalId)}</strong>
-        </div>
       {:else}
         <p class="muted">No containing work recorded.</p>
+      {/if}
+
+      {#if goalEnvelopeId}
+        <div class="hierarchy-row">
+          <span>Goal envelope</span>
+          <strong>{goalLabel(goalEnvelopeId)}</strong>
+        </div>
       {/if}
 
       {#if dependsOn.length > 0}

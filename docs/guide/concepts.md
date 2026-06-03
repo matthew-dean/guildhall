@@ -4,7 +4,8 @@ title: Core concepts
 
 # Core concepts
 
-A quick tour of the vocabulary. Each term links to a deeper page.
+A quick tour of the vocabulary. This is a glossary, not a homework assignment:
+skim the nouns you bumped into, then follow the deeper links when one matters.
 
 ## Agent harness
 
@@ -33,8 +34,9 @@ review → gate_check → done` (terminal: `done`, `shelved`, `blocked`). See
 [Task lifecycle](./task-lifecycle).
 
 Guildhall also sizes tasks. Tiny and small work can usually move as one unit;
-large work gets split recommendations; epic work becomes a parent-sized task
-with linked child tasks.
+large work gets split recommendations; epic work becomes containing work with
+linked child tasks. The hierarchy is a link between tasks, not a special
+"parent" status.
 
 ## Request shape
 
@@ -76,7 +78,37 @@ pile of drafts.
 
 ## Domain
 
-A named slice of the project (e.g. `ui`, `backend`, `infra`) owned by one coordinator. Every task declares a domain. Tasks never cross domains silently — cross-domain work becomes an explicit handoff.
+A named slice of the project, such as `ui`, `backend`, or `infra`. Every task
+declares a domain. Work that crosses domains becomes an explicit handoff
+instead of a quiet surprise.
+
+## Structure
+
+The project view where Guildhall shows the structural map and project graph.
+Structure is where you inspect repo domains, local project relationships,
+provider/consumer requests, and shared contract questions. If a Structure item
+needs your judgment, the discussion routes back to Thread.
+
+## Project graph
+
+The ownership map across projects, domains, packages, external references, and
+delivery channels. It lets Guildhall say "this project needs something from
+that provider-owned domain" without silently stuffing the work into the wrong
+project.
+
+## Contract surface
+
+A shared surface individual specs need to fit. Examples include a component
+API, endpoint family, event stream, schema, state machine, MCP resource, design
+system, or domain capability. A task can change one part of the surface, but
+Guildhall still checks whether the change fits the larger contract.
+
+## Owner input
+
+A linked decision session for your judgment. Thread owns the conversation;
+Needs You owns the alert that something is waiting; Overview, Work, Structure,
+and Settings can link to the same decision without creating duplicate question
+cards.
 
 ## Coordinator
 
@@ -125,11 +157,16 @@ The punch list separates shipping blockers from nice-to-have finish work.
 
 ## Lever
 
-A named decision point — e.g. `merge_policy`, `reviewer_mode`, `worktree_isolation` — with enumerated positions and full provenance (*who set it, when, why*). Every behavioral variation is a lever, not a hardcoded default. Onboarding can infer initial lever positions from the meta-intake conversation, but approved values still land in plain YAML with rationale. See [Levers](../levers/) and [Onboarding and levers](./onboarding-and-levers).
+A named decision point, such as `merge_policy`, `reviewer_mode`, or
+`worktree_isolation`. Levers keep behavioral choices in plain YAML with a
+rationale, instead of hiding them as hardcoded defaults. See
+[Levers](../levers/) and [Onboarding and levers](./onboarding-and-levers).
 
 ## Hard gate / soft gate
 
-**Hard gates** are deterministic checks a task must pass before it can complete (lint, typecheck, test, custom shell). **Soft gates** are rubric items scored by a reviewer. Together they form the completeness bar.
+**Hard gates** are deterministic checks a task must pass before it can
+complete: lint, typecheck, tests, custom shell commands. **Soft gates** are
+rubric items scored by a reviewer. Together they form the completeness bar.
 
 ## Business envelope
 

@@ -21,7 +21,7 @@
   import Tooltip from '../lib/Tooltip.svelte'
   import ProjectOverviewTab from './project/ProjectOverviewTab.svelte'
   import ThreadTab from './project/ThreadTab.svelte'
-  import InboxTab from './project/InboxTab.svelte'
+  import NeedsYouTab from './project/NeedsYouTab.svelte'
   import WorkTab from './project/WorkTab.svelte'
   import WorkspaceImportTab from './project/WorkspaceImportTab.svelte'
   import ProjectAttachFlow from './project/ProjectAttachFlow.svelte'
@@ -29,6 +29,7 @@
   import TimelineTab from './project/TimelineTab.svelte'
   import ReleaseTab from './project/ReleaseTab.svelte'
   import SettingsTab from './project/SettingsTab.svelte'
+  import ProjectStructurePanel from './project/structure/ProjectStructurePanel.svelte'
   import DoThisNext from './DoThisNext.svelte'
   import IntakeModal from './IntakeModal.svelte'
   import { project } from '../lib/project.svelte.js'
@@ -358,6 +359,7 @@
         { id: 'board', label: 'Board', path: currentProjectHref('/work?view=board', activeProjectId) },
       ],
     },
+    { id: 'structure', label: 'Structure', icon: 'package', suffix: '/structure' },
     { id: 'timeline', label: 'Timeline', icon: 'clock', suffix: '/timeline' },
     {
       id: 'release',
@@ -927,6 +929,8 @@
           : /review|approve/i.test(startReadiness.message ?? '')
             ? 'Review needed'
             : 'Needs input'
+    : startReadiness?.canStart === false
+      ? startReadinessActionLabel(startReadiness.message)
       : 'Start work',
   )
   const showAdvanceOneTaskAction = $derived(
@@ -935,6 +939,7 @@
 
   function startReadinessActionLabel(message: string | undefined): string {
     if (/question|answer/i.test(message ?? '')) return 'Answer question'
+    if (/draft/i.test(message ?? '')) return 'Review drafts'
     if (/spec/i.test(message ?? '')) return 'Review spec'
     if (/brief/i.test(message ?? '')) return 'Review brief'
     if (/recover|blocked|escalation/i.test(message ?? '')) return 'Review recovery'
@@ -1402,7 +1407,7 @@
             {#if currentView === 'thread'}
               <ThreadTab projectId={activeProjectId} />
             {:else if currentView === 'inbox'}
-              <InboxTab items={inboxItems} history={inboxHistory} loaded={inboxLoaded} error={inboxError} refresh={loadInbox} />
+              <NeedsYouTab items={inboxItems} history={inboxHistory} loaded={inboxLoaded} error={inboxError} refresh={loadInbox} />
             {:else}
               <div class="page-centered page-centered-inline">
                 <p class="muted">Loading project...</p>
@@ -1410,7 +1415,7 @@
             {/if}
           {:else if currentView === 'overview'}
             {#if currentSub === 'inbox'}
-              <InboxTab items={inboxItems} history={inboxHistory} loaded={inboxLoaded} error={inboxError} refresh={loadInbox} />
+              <NeedsYouTab items={inboxItems} history={inboxHistory} loaded={inboxLoaded} error={inboxError} refresh={loadInbox} />
             {:else}
               <ProjectOverviewTab
                 {detail}
@@ -1425,7 +1430,7 @@
           {:else if currentView === 'thread'}
             <ThreadTab projectId={activeProjectId} />
           {:else if currentView === 'inbox'}
-            <InboxTab items={inboxItems} history={inboxHistory} loaded={inboxLoaded} error={inboxError} refresh={loadInbox} />
+            <NeedsYouTab items={inboxItems} history={inboxHistory} loaded={inboxLoaded} error={inboxError} refresh={loadInbox} />
           {:else if currentView === 'workspace-import'}
             <WorkspaceImportTab />
           {:else if currentView === 'work'}
@@ -1434,6 +1439,8 @@
             <WorkTab {detail} mode="board" />
           {:else if currentView === 'facts'}
             <FactsTab />
+          {:else if currentView === 'structure'}
+            <ProjectStructurePanel />
           {:else if currentView === 'timeline'}
             <TimelineTab {detail} />
           {:else if currentView === 'release'}
@@ -1474,6 +1481,15 @@
       <p>
         Guildhall needs to update this project before it can run. Review the file changes first so there are no surprise Git writes.
       </p>
+      {#if migrationAppliedMessage && primaryRequiredMigration}
+        <NoticeBand
+          tone="ok"
+          role="status"
+          density="compact"
+          label="Migration applied"
+          title={migrationAppliedMessage}
+        />
+      {/if}
       {#if migrationStatusLoading}
         <p class="muted">Checking migrations...</p>
       {:else if migrationError}

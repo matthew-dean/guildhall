@@ -32,6 +32,7 @@ export type ParsedGuildhallUri =
   | { kind: 'codebaseKnowledge' }
   | { kind: 'runtime' }
   | { kind: 'capabilityRequests' }
+  | { kind: 'externalAgentMemoryBridge' }
 
 export function projectUri(): string {
   return 'guildhall://project'
@@ -75,6 +76,9 @@ export function parseGuildhallUri(uri: string): ParsedGuildhallUri {
   if (parts.length === 1 && parts[0] === 'runtime') return { kind: 'runtime' }
   if (parts.length === 1 && parts[0] === 'capability-requests') {
     return { kind: 'capabilityRequests' }
+  }
+  if (parts.length === 1 && parts[0] === 'external-agent-memory-bridge') {
+    return { kind: 'externalAgentMemoryBridge' }
   }
   throw new Error(`Invalid Guildhall MCP URI: ${uri}`)
 }

@@ -1,4 +1,5 @@
 // @vitest-environment happy-dom
+import { readFileSync } from 'node:fs'
 import '@testing-library/jest-dom/vitest'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { cleanup, fireEvent, render, screen, within } from '@testing-library/svelte'
@@ -139,17 +140,6 @@ describe('WorkTab', () => {
           inbox: {
             items: [
               {
-                kind: 'pressure_test_pending',
-                severity: 'medium',
-                title: 'Saved search labels',
-                detail: 'Which labels should be saved first?',
-                actionHref: '/thread',
-                status: 'open',
-                id: 'pressure-test:labels',
-                createdAt: '2026-05-19T10:01:00.000Z',
-                updatedAt: '2026-05-19T10:01:00.000Z',
-              },
-              {
                 kind: 'required_migration',
                 severity: 'high',
                 title: 'Required migration: Project state layout',
@@ -173,27 +163,28 @@ describe('WorkTab', () => {
     expect(screen.queryByText(/No tasks yet.*New request/i)).not.toBeInTheDocument()
   })
 
-  it('does not show an empty new-request prompt when a zero-task project has a pending question', async () => {
+  it('does not show an empty new-request prompt when a zero-task project has setup work', async () => {
     render(WorkTab, {
       props: {
         detail: {
           ...detail([]),
           startReadiness: {
             canStart: false,
-            code: 'owner_input_required',
-            message: '1 question needs your answer before Guildhall can continue',
-            actionHref: '/thread',
+            code: 'setup_pending',
+            message: 'Finish project setup first.',
+            actionHref: '/setup',
           },
           inbox: {
             items: [
               {
-                kind: 'pressure_test_pending',
+                kind: 'setup_pending',
                 severity: 'medium',
-                title: 'Saved search labels',
-                detail: 'Which labels should be saved first?',
-                actionHref: '/thread',
+                stepId: 'direction',
+                title: 'Add project direction',
+                detail: 'Finish project setup first.',
+                actionHref: '/setup',
                 status: 'open',
-                id: 'pressure-test:labels',
+                id: 'setup:direction',
                 createdAt: '2026-05-19T10:00:00.000Z',
                 updatedAt: '2026-05-19T10:00:00.000Z',
               },
@@ -205,8 +196,8 @@ describe('WorkTab', () => {
       },
     })
 
-    expect(screen.getByText('Which labels should be saved first?')).toBeInTheDocument()
-    expect(screen.getByRole('button', { name: /answer question/i })).toBeInTheDocument()
+    expect(screen.getByText('Finish project setup first.')).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: /open setup/i })).toBeInTheDocument()
     expect(screen.queryByText(/No tasks yet.*New request/i)).not.toBeInTheDocument()
   })
 
@@ -220,7 +211,7 @@ describe('WorkTab', () => {
           task({
             id: 'feature-root',
             title: 'Interface design system',
-            status: 'parent',
+            status: 'ready',
             description: 'Build the interface design system.',
             hierarchy: { childIds: ['task-button'], order: 0 },
           }),
@@ -261,7 +252,7 @@ describe('WorkTab', () => {
           task({
             id: 'feature-root',
             title: 'Interface design system',
-            status: 'parent',
+            status: 'ready',
             description: 'Build the interface design system.',
             hierarchy: { childIds: ['task-button'], order: 0 },
           }),
@@ -392,14 +383,14 @@ describe('WorkTab', () => {
           task({
             id: 'app-spec',
             title: 'Pantry Pulse app spec',
-            status: 'parent',
+            status: 'ready',
             workKind: 'app_spec',
             hierarchy: { childIds: ['feature-inventory'], order: 0 },
           }),
           task({
             id: 'feature-inventory',
             title: 'Inventory tracking feature',
-            status: 'parent',
+            status: 'ready',
             workKind: 'feature_spec',
             hierarchy: { parentId: 'app-spec', childIds: ['task-build-inventory'], order: 0 },
           }),
@@ -432,7 +423,13 @@ describe('WorkTab', () => {
             title: 'Ready work',
             status: 'ready',
             spec: '## Summary\n\nBuild the ready work.',
-            productBrief: { userJob: 'Use the ready work.', successMetric: 'Ready work functions.', approvedAt: '2026-05-23T12:00:00.000Z' },
+            productBrief: {
+              userJob: 'Use the ready work.',
+              whyItMattersNow: 'Ready work is queued for the current run.',
+              successMetric: 'Ready work functions.',
+              nonGoals: ['Do not change adjacent contracts.'],
+              approvedAt: '2026-05-23T12:00:00.000Z',
+            },
             acceptanceCriteria: [{ description: 'Ready work functions.' }],
           }),
           task({ id: 'task-import', title: 'Imported note', status: 'import_draft' }),
@@ -489,7 +486,13 @@ describe('WorkTab', () => {
             status: 'ready',
             description: 'Implement the approved path.',
             spec: '## Summary\n\nImplement the approved path.',
-            productBrief: { userJob: 'Use the approved flow.', successMetric: 'Flow works.', approvedAt: '2026-05-23T12:00:00.000Z' },
+            productBrief: {
+              userJob: 'Use the approved flow.',
+              whyItMattersNow: 'The flow is release-blocking.',
+              successMetric: 'Flow works.',
+              nonGoals: ['Do not redesign adjacent flows.'],
+              approvedAt: '2026-05-23T12:00:00.000Z',
+            },
             acceptanceCriteria: [{ description: 'The approved flow works.' }],
           }),
           task({
@@ -515,6 +518,19 @@ describe('WorkTab', () => {
     expect(await screen.findByText('1 ready to start')).toBeTruthy()
     expect(screen.getByText('2 need brief cleanup')).toBeTruthy()
     expect(screen.queryByText('3 ready for worker')).toBeNull()
+  })
+
+  it('keeps the wide work-list grid inside the clipped card at side-by-side widths', () => {
+    const source = readFileSync('src/web/surfaces/project/WorkTab.svelte', 'utf8')
+    const stackBlock = source.match(/:global\(\.work-list-stack\)\s*\{([\s\S]*?)\n\s*\}/)?.[1] ?? ''
+    const headBlock = source.match(/\.list-column-head\s*\{([\s\S]*?)\n\s*\}/)?.[1] ?? ''
+    const rowBlock = source.match(/:global\(\.work-list-row\)\s*\{([\s\S]*?)\n\s*\}/)?.[1] ?? ''
+
+    expect(stackBlock).toContain('minmax(220px, 1fr)')
+    expect(stackBlock).toContain('minmax(108px, max-content)')
+    expect(stackBlock).not.toContain('minmax(280px, 1fr)')
+    expect(headBlock).toContain('gap: var(--gh-space-2)')
+    expect(rowBlock).toContain('gap: var(--gh-space-2)')
   })
 
   it('routes imported-draft review and view-mode controls through project-scoped links', async () => {
@@ -558,9 +574,15 @@ describe('WorkTab', () => {
             id: 'task-board',
             title: 'Board task',
             status: 'ready',
-            productBrief: { approvedAt: '2026-05-19T10:00:00.000Z' },
+            productBrief: {
+              userJob: 'Use the board task.',
+              whyItMattersNow: 'The board task is the next runnable item.',
+              successMetric: 'It appears as the next focus.',
+              nonGoals: ['Do not change board layout.'],
+              approvedAt: '2026-05-19T10:00:00.000Z',
+            },
             spec: 'Build the board task.',
-            acceptanceCriteria: ['Shows on the board.'],
+            acceptanceCriteria: [{ description: 'Shows on the board.' }],
           }),
         ]),
       },

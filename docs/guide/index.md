@@ -36,7 +36,7 @@ Setting up your first project? Start with [Start here](./quick-start).
 
 ## How it works
 
-- [How the work loop works](./how-guildhall-works) — the system model: survey, blueprint, context, workers, reviewers, gates, and memory.
+- [How the work loop works](./how-guildhall-works) — the system model: survey, blueprint, structure, project graph, contracts, workers, reviewers, gates, and memory.
 - [How Guildhall builds](./how-guildhall-builds) — the construction model behind planning, implementation, review, and release.
 - [Ways to work](./ways-to-work) — whole-project work, feature-at-a-time requests, focused starts, setup lanes, and decision work.
 - [Research-backed design](./research-backed-design) — the research and practice ideas behind smaller tasks, bounded questions, visible uncertainty, and audit trails.

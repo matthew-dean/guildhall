@@ -82,8 +82,6 @@ export function attentionIdForInboxItem(item: InboxItem): string {
   if (item.kind === 'project_understanding') return 'project-understanding:intake-reconcile'
   if (item.kind === 'workspace_import_pending') return 'workspace-import:review'
   if (item.kind === 'bootstrap_missing') return 'bootstrap:readiness'
-  if (item.kind === 'agent_question_pending' && item.taskId) return `question:${item.taskId}`
-  if (item.kind === 'open_escalation' && item.escalationId) return `escalation:${item.escalationId}`
   const taskId = 'taskId' in item ? item.taskId : undefined
   if (taskId) return `${item.kind}:${taskId}`
   return `${item.kind}:${stableSlug(`${item.actionHref ?? ''}:${item.title}`)}`

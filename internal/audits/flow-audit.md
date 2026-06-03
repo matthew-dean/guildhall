@@ -57,7 +57,174 @@ babysit setup/import/provider/release states across multiple pages.
 
 ## Current Follow-Ups
 
-- [ ] Reduce Guildhall cognitive overhead with hard conversions and clearer
+- [x] Fix the required-migration action affordance and apply feedback. The live
+  Narrative Harness modal applied `0.10.0/task-hierarchy-links`, but the next
+  blocker immediately replaced the card, making the click look inert; migration
+  action icons also depend on shared `refresh-cw` / inbox icon registry support.
+  Closure evidence, 2026-06-02: added `refresh-cw` and `list-todo` to the shared
+  icon registry, rendered the Overview and modal migration actions with
+  `refresh-cw`, and kept the success notice visible when another required
+  migration remains. Red/green coverage:
+  `src/web/lib/__tests__/Icon.svelte.test.ts`,
+  `src/web/surfaces/__tests__/ProjectView.svelte.test.ts`, and
+  `src/web/surfaces/project/__tests__/ProjectOverviewTab.svelte.test.ts`.
+  Verification: focused Vitest suites, `pnpm typecheck`, `pnpm lint:design`,
+  `pnpm build`, `pnpm dev:install`, service restart, `stale:false`, and browser
+  proof against `http://localhost:7777/projects/narrative-harness` showed both
+  visible `Migrate project` buttons plus `Apply required migration` rendering
+  `lucide-refresh-cw` SVGs. The live migration API shows
+  `0.10.0/task-hierarchy-links` applied at `2026-06-02T19:05:29.512Z`; the
+  remaining blocker is `0.10.0/task-open-questions-to-bounded-chat`.
+- [x] Restore compact mobile Thread rows to the shared card-list surface. The
+  Fair Labor License thread list at mobile width was visually collapsed into
+  edge-to-edge rows because the compact list used plain row button styling and
+  later lost its outer gutter when the shell padding token was unavailable.
+  Closure evidence, 2026-06-02: compact thread index rows now render through
+  `CardListItem`/`UtilityPanel`; the compact-list CSS keeps row spacing and
+  gives the shell padding token a `var(--gh-space-2)` fallback so the shared
+  card padding/radius/background remain visible on mobile. Red/green coverage:
+  `src/web/surfaces/project/__tests__/ThreadTab.svelte.test.ts` now checks the
+  shared `card-list-item`/`utility-panel` row contract and the padding fallback.
+  Verification: `pnpm vitest run
+  src/web/surfaces/project/__tests__/ThreadTab.svelte.test.ts --reporter=dot`
+  (`73` tests), `pnpm typecheck`, `pnpm lint:design`, `pnpm build`,
+  `pnpm dev:install`, service restart, and `stale:false`. Browser proof against
+  `http://localhost:7777/projects/fair-labor-license/thread` at `640x900`
+  showed `thread-compact-list`, `.thread-index` padding `8px 8px 12px`,
+  list gap `8px`, and rows at `x=8` with class
+  `utility-panel ... card-list-item thread-index-row`, `12px` row padding, and
+  `6px` border radius.
+- [x] Keep pending blocked Thread escalations actionable from the selected
+  thread detail. Fair Labor License's pending external-setup blockers were
+  labeled "Needs you" and the detail copy told the user to choose a recovery
+  action, but Thread only rendered action buttons for `active` escalation turns,
+  so `pending`/`blocked` escalation cards had no decision controls and no
+  composer. Closure evidence, 2026-06-02: pending blocked escalations now use
+  the same recovery decision surface as other escalation cards: `Details...`,
+  reason-aware `Resume task`/retry/rework action, `I handled this...`, and the
+  shared Thread composer for non-resolving recovery guidance. Composer notes use
+  the existing task `/resume` endpoint with `preserveStatus` so adding guidance
+  does not silently clear the blocker. Red/green coverage:
+  `src/web/surfaces/project/__tests__/ThreadTab.svelte.test.ts` reproduces a
+  pending `human_judgment_required` OAuth escalation, verifies the action modal
+  opens, and verifies the composer sends a preserved-status recovery note.
+  Verification: `pnpm vitest run
+  src/web/surfaces/project/__tests__/ThreadTab.svelte.test.ts -t "pending
+  blocked escalations" --reporter=dot`; full ThreadTab suite (`73` tests);
+  `pnpm typecheck`; `pnpm lint:design`; `pnpm build`; `pnpm dev:install`;
+  service restart; and `stale:false`. Browser proof against
+  `http://localhost:7777/projects/fair-labor-license/thread` showed the selected
+  Google OAuth recovery thread with `Details...`, `Resume task`,
+  `I handled this...`, `Send`, and composer placeholder
+  `Add recovery guidance for Guildhall...`.
+- [x] Keep selected recovery cards in scrollable Thread flow while only the
+  composer stays sticky. Fair Labor License's selected "Needs you" recovery
+  card should be an ordinary scrollable card above the composer, not a second
+  sticky footer item. The previous fix put `.thread-active-dock` inside
+  `.thread-footer`, so the card inherited the footer's sticky behavior even
+  though the card itself was `position: relative`. Closure evidence,
+  2026-06-02: `.thread-detail-flow` is back as a column flex stack,
+  `.thread-list` is a real DOM wrapper (not a class attached to `Stack`, which
+  does not forward it) and keeps `margin-top: auto`, actionable escalation
+  turns render as `.thread-active-dock` inside the scrollable flow, and
+  `.thread-footer` is only rendered around the composer. Red/green coverage:
+  `src/web/surfaces/project/__tests__/ThreadTab.svelte.test.ts -t "pending
+  blocked escalations"` first failed because the footer still contained
+  `Needs recovery`, then passed with `Needs recovery`, `Resume task`, and
+  `I handled this...` inside the active dock while the footer only contains the
+  composer. The source-contract test `-t "only the composer footer is sticky"`
+  also covers the DOM order and absence of absolute/fixed positioning.
+  Verification: full ThreadTab suite
+  (`73` tests), `pnpm typecheck`, `pnpm lint:design`, `git diff --check`,
+  `pnpm build`, `pnpm dev:install`, service restart, and `stale:false`.
+  Browser proof against
+  `http://localhost:7777/projects/fair-labor-license/thread` showed the Google
+  OAuth recovery card as a child of `.thread-detail-flow`, not
+  `.thread-footer`; `footerContainsDock: false`, `footerContainsComposer:
+  true`, `Resume task` present in the dock and absent from the footer,
+  `.thread-active-dock` position `relative`, and footer position `sticky`.
+  Follow-up closure evidence, 2026-06-02: the scrollable Thread detail now has
+  `padding-top: var(--gh-space-1)` to match the sticky footer's existing bottom
+  inset. Source-contract coverage checks `.thread-detail-scroll` top padding
+  and `.thread-footer` bottom padding together; live FLL proof showed
+  `scrollPaddingTop: 4px`, `footerPaddingBottom: 4px`, and footer position
+  `sticky`.
+- [x] Move the Thread composer send-button circle into the shared Button
+  primitive. Fair Labor License's composer send action was still trying to
+  become circular through a local `.thread-composer-send` class, but that shape
+  was being applied across a child component boundary instead of through
+  Button's own contract. Closure evidence, 2026-06-02: `Button` now accepts a
+  `rounded` boolean and owns rounded icon-only geometry; the Thread composer
+  passes `iconOnly rounded` and no longer carries local width/height/padding/
+  radius rules for the send action. Red/green coverage:
+  `src/web/lib/__tests__/Button.css-contract.test.ts -t "rounded icon-only"`
+  and `src/web/surfaces/project/__tests__/ThreadTab.svelte.test.ts -t "shared
+  rounded button"` both failed before the shared prop existed, then passed.
+  Verification: full Button visual contract suite (`5` tests), full ThreadTab
+  suite (`73` tests), `pnpm typecheck`, `pnpm lint:design`, `git diff --check`,
+  `pnpm build`, `pnpm dev:install`, service restart, and `stale:false`.
+  Browser proof against
+  `http://localhost:7777/projects/fair-labor-license/thread` showed the live
+  composer send button with class `btn v-primary s-sm icon-only rounded`, size
+  `32x32`, `border-radius: 999px`, zero button padding, and 8px right/bottom
+  inset from the input shell. Follow-up closure evidence, 2026-06-02: the
+  composer textarea is explicitly block-level so the input shell and textbox
+  share the same height; browser proof showed symmetrical 9px shell-to-textbox
+  inset on all sides and the send button exactly 8px from the textbox bottom
+  and right edges. The Thread source-contract test now locks that the composer
+  textbox and send action use the same inset grid. Follow-up frame cleanup,
+  2026-06-02: the sticky footer was composer-only in the DOM, but
+  `.thread-composer-shell` still looked like a card because it owned padding,
+  border, radius, background, shadow, and blur. The wrapper is now unframed,
+  leaving the textarea as the only bordered input surface. Red/green coverage:
+  `src/web/surfaces/project/__tests__/ThreadTab.svelte.test.ts -t "sticky
+  composer wrapper"` failed on the shell frame styles, then passed; live FLL
+  proof showed the composer wrapper with `padding: 0px`, no border/radius,
+  transparent background, no shadow, and no backdrop blur while
+  `footerContainsDock: false`.
+- [x] Collapse repeated historical review feedback into one history-detail
+  event. Fair Labor License's thread history was rendering each completed
+  reviewer note as a separate "Review feedback" event header, which made noisy
+  review churn look like a stack of peer cards instead of historical detail.
+  Closure evidence, 2026-06-02: `ThreadTab` now groups adjacent historical
+  `review_feedback` turns for the same task into one event, shows the newest
+  reviewer summary inline, and puts earlier passes behind the existing
+  `thread-history-cluster` disclosure as `Pass N` entries. Single review notes
+  still render as before. Red/green coverage:
+  `src/web/surfaces/project/__tests__/ThreadTab.svelte.test.ts -t "clusters
+  repeated historical review feedback"` first failed with three repeated
+  `Review feedback` headers, then passed with one header and `Show 2 earlier
+  reviewer notes`. Verification: full ThreadTab suite (`74` tests),
+  `pnpm typecheck`, `pnpm lint:design`, `git diff --check`, `pnpm build`,
+  `pnpm dev:install`, service restart, and `stale:false`. Browser proof against
+  `http://localhost:7777/projects/fair-labor-license/thread`, selecting
+  `Set FLL overhead charge policy`, showed `reviewHeadCount: 1`, event heads
+  `Review feedback` and `Recovery history`, disclosure
+  `Show 7 earlier reviewer notes`, pass labels `Pass 7` through `Pass 1`, and
+  the disclosure closed by default with visible text only showing the newest
+  review summary plus the disclosure label.
+- [x] Keep Overview blocked-work chips as compact categories, not task-title
+  dependency labels. Fair Labor License's blocked OAuth/setup rows had clean
+  `dependsOn` task IDs, but `ProjectOverviewTab` resolved those IDs to task
+  titles and passed the joined titles directly into `OverviewTaskRow.chipLabel`,
+  producing giant chips such as `Create Google OAuth provider credentials,
+  Create Apple OAuth provider credentials` and `Add OAuth providers — Google
+  and Apple sign-in`. Closure evidence, 2026-06-02: the Overview blocked-row
+  mapper now infers a short blocker category (`Provider settings`,
+  `Dependencies`, `Git story closure`, `Project readiness / bootstrap`,
+  `Missing prerequisite`, or `Needs triage`) before binding `chipLabel`, and the
+  local class name was moved from dependency-list to blocked-work-list to match
+  the product semantics. Red/green coverage:
+  `src/web/surfaces/project/__tests__/ProjectOverviewTab.svelte.test.ts -t
+  "blocked-work chips" --reporter=dot` first failed with the long dependency
+  labels, then passed with three `Provider settings` chips. Verification: full
+  ProjectOverviewTab suite (`14` tests), `pnpm typecheck`, `pnpm lint:design`,
+  `git diff --check`, `pnpm build`, `pnpm dev:install`, service restart, and
+  `stale:false`. Browser proof against
+  `http://localhost:7777/projects/fair-labor-license/overview` showed the four
+  live blocked-work chips all rendering `Provider settings`, `longChipCount: 0`,
+  and no dependency-title chip labels.
+- [x] Reduce Guildhall cognitive overhead with hard conversions and clearer
   abstraction boundaries. Plan:
   `internal/plans/2026-06-01-guildhall-cognitive-overhead-reduction.md`.
   The accepted direction is to use required conversion scripts for wrong
@@ -70,7 +237,104 @@ babysit setup/import/provider/release states across multiple pages.
   adds component/token governance for duplicated bespoke UI, unmanaged font
   sizes, font weights, spacing, radius, and variant sprawl, and moves
   Looma/Knit/Dialog/Drawer knowledge out of generic runtime modules into
-  adapters, fixtures, or deletion.
+  adapters, fixtures, or deletion. Refreshed after merge commit `d508302f`:
+  the new generic state-machine substrate, structural map, and project graph
+  are product-core concepts to keep, but their owner-facing graph/structure
+  review must not remain embedded in Settings. Project graph state, assignment
+  picker behavior, graph request actions, and structural-map review belong in a
+  focused project-structure surface with Thread/bounded chat owning any
+  discussion. Design-system cleanup is now governed by the internal constitution
+  `internal/constitutions/design-system-governance.md`, which treats token roles,
+  component contracts, variant budgets, surface ownership, and deletion criteria
+  as implementation law rather than optional style advice. Task 12 now adds the
+  first corpus digestion/refresh diagnostic slice for those risks: indexed UI
+  projects can surface token-family split, raw visual values, variant drift,
+  duplicate primitive, surface-ownership, missing-contract, and exception
+  findings, then render a compact design-governance packet plus owner-approved
+  learning proposals for worker/reviewer context.
+  Closure evidence, 2026-06-02: the first reduction cutover is implemented and
+  the plan checklist is complete through installed-app verification. Required
+  conversions exist for `0.10.0/task-hierarchy-links` and
+  `0.10.0/task-open-questions-to-bounded-chat`; old `parent` status and
+  task-local question state now block normal project work until converted
+  instead of silently flowing through runtime/UI paths. Bounded owner input uses
+  `OwnerInputRequest` records linked to bounded-chat sessions; orchestrator
+  fallback questions create owner-input records and preserve waiting state from
+  that store instead of treating `openQuestions` as the durable model. Settings
+  is a 184-line shell and opens to readiness with only Ready, Providers,
+  Coordinators, Identity, Profile, and Developer sections. Structure owns the
+  structural-map/project-graph review surface and points discussion back to
+  Threads. Needs You projects alerts such as required migrations and triage
+  blockers, not local answer cards. The work graph importer now uses a generic
+  domain adapter and configured domain-route normalization instead of
+  Looma/Knit/Dialog/Drawer branches in generic runtime code.
+  Design feedback amendment, 2026-06-02: removed the local
+  design-system-development target hook and global config/API status for
+  machine-local design-system checkouts. Reusable design findings remain
+  portable candidate/improvement records until project graph/domain authority
+  routes provider-owned follow-up to another coordinator.
+  Verification run on the final tree: `pnpm typecheck`; `pnpm test` (`303`
+  files passed, `1` skipped; `3561` tests passed, `3` skipped);
+  `pnpm lint:deps` (`0` errors, existing `56` no-orphans warnings);
+  `pnpm lint:reductions`; `pnpm lint:design`; `pnpm build`; and
+  `pnpm dev:install`.
+  Post-closure refresh found and fixed the missing Vitest alias for the
+  browser-safe `@guildhall/levers/profiles` subpath; the exact failed web
+  suites then passed (`47` tests) before the full suite passed again.
+  Live proof: installed service was restarted with `guildhall stop` and
+  `guildhall start`; `curl -s http://localhost:7777/api/stale-server` returned
+  `"stale":false`. Browser proof against
+  `http://localhost:7777/projects/narrative-harness` showed Settings reduced to
+  the readiness/configuration sections, Structure owning structural map/project
+  graph with "Thread owns the discussion," Work showing the hierarchy migration
+  blocker with no visible "Parent task" copy, and Needs You showing required
+  migration/triage alerts. Narrative Harness remains intentionally
+  pre-migration, so live converted owner-input sessions were not created in
+  that checkout; the live proof is the required migration block, while
+  converted owner-input/thread/inbox behavior is covered by the green focused
+  and full test suites.
+  Remaining reduction candidates after this cutover: remove the transitional
+  `Task['openQuestions']` type surface once all migrations and old-record
+  readers are no longer needed; apply project migrations to old checked-out
+  projects when the owner chooses; clean up the existing no-orphans warning
+  baseline; keep `pressure_test_question` only for the explicit pressure-test
+  domain, never as a bounded-chat wrapper; continue retiring UI compatibility
+  wrappers and local CSS as touched surfaces move onto governed primitives; and
+  expand corpus-refresh design-governance diagnostics from Task 12 into
+  reviewer/worker context.
+- [ ] Add contract surfaces and surface review packets as a project-graph
+  extension. Spec:
+  `internal/specs/2026-06-02-guildhall-contract-surfaces-project-graph.md`.
+  The accepted direction is that individual specs should inform and update, or
+  be updated by, a central contract for the domain/capability they touch.
+  Component libraries, APIs, event contracts, state machines, MCP resources,
+  schemas, design systems, and other durable capability surfaces should be
+  reviewed against sibling specs, invariants, known decisions, affected
+  consumers, and proof obligations. This belongs in the existing
+  authority-aware project graph as `contract_surface` nodes/facets with
+  state-machine receipts, not as a separate spec graph. Structure should own the
+  owner-facing surface review projection and link discussion to Thread/owner
+  input; Settings should only report readiness blockers. Corpus refresh may
+  propose likely surfaces and drift findings, but owner/coordinator approval
+  decides what becomes durable graph state.
+- [x] Update public How Guildhall works docs and harden the first agent
+  contract-governance tests. Public guide pages now explain Structure,
+  structural map, project graph, provider/consumer requests, explicit task
+  hierarchy, owner-input sessions, state-machine receipts, contract surfaces,
+  and design-governance packets in reader-facing language. Spec, worker, and
+  reviewer prompts now treat `## Design Governance` packets as project contract
+  input: the spec agent adjusts the blueprint and names contract deltas, the
+  worker changes implementation choices before local UI work, and the reviewer
+  records `Contract / governance fit` as a load-bearing verdict line. This is
+  guardrail hardening, not completion of the full contract-surface runtime
+  feature. Evidence: the prompt tests failed red with 3 failures before the
+  prompt contract existed, then passed after the prompt changes. Verification
+  passed: `pnpm vitest run src/agents/__tests__/guildhall-agent.test.ts
+  src/corpus-map/__tests__/design-governance-diagnostics.test.ts --reporter=dot`
+  (73 tests), `pnpm vitest run
+  src/web/surfaces/project/__tests__/ThreadTab.svelte.test.ts --reporter=dot`
+  (68 tests), `pnpm typecheck`, `pnpm docs:check-copy`,
+  `pnpm docs:check-help-sync`, and `pnpm docs:build`.
 - [x] Specify the 0.10 state-machine substrate and local project graph pivot.
   Spec:
   `internal/specs/2026-06-01-guildhall-0-10-state-machines-project-graph.md`.
@@ -209,11 +473,19 @@ babysit setup/import/provider/release states across multiple pages.
   with `openQuestions`. The answer path creates the shaped task only after the
   owner clarifies scope, suppresses the stale follow-up question card on the
   created task, records the accepted clarification in bounded-chat state, and
-  projects both active and completed New request turns in Thread. Current
-  limitation: direct task-like requests now also route through bounded chat,
-  the modal now routes directly into `Threads` after creation, but a dedicated
-  thread-list selection/resume model and pure project-question conversation
-  threads are still pending.
+  projects both active and completed New request turns in Thread. Completion
+  evidence, 2026-06-03: direct task-like asks, settings/practice/repair/
+  clarification routes, and pure project-question asks now all create
+  `new_request` bounded-chat sessions instead of immediate task cards.
+  Project-question sessions close as conversation receipts without task drafts;
+  task-like sessions create work only after the owner answers. Thread route
+  selection already preserves `/thread?thread=<boundedChatId>`, and bounded
+  chat now renders through a dedicated conversation panel instead of the old
+  question-card branch. Verification: focused bounded-chat, Thread,
+  serve-intake, serve-settings, ThreadTab, and IntakeModal suites passed
+  together with 251 tests; `pnpm typecheck:ui` and `pnpm lint:design` passed.
+  `pnpm typecheck` still fails on unrelated contract-surface schema/type drift
+  in `src/runtime/context-builder.ts` and `src/runtime/intake.ts`.
 - [x] Narrow `Needs you` to alert-owned items while `Threads` absorbs the
   conversation-shaped attention flow.
   Runtime inbox classification now explicitly marks project check-in,
@@ -402,10 +674,10 @@ babysit setup/import/provider/release states across multiple pages.
   up, durable closure receipt, blocked receipt, idempotent action replay, and
   stale-write rejection. Project check-in now starts through bounded chat and
   answers through `/api/project/bounded-chat/:id/answer`, with Thread projecting
-  the active session through the existing question card so the flow is already
-  usable before the dedicated bounded-chat UI lands. Next bounded-chat step:
-  move deeper intake/New request onto the same contract and replace the
-  pressure-test-specific projection with a real bounded-chat surface.
+  active and fulfilled sessions through bounded-chat turns. Follow-up
+  completion, 2026-06-03: New request bounded chat now covers non-pressure-test
+  routes, pure project questions close without task drafts, and Thread uses a
+  dedicated bounded-chat conversation panel wherever bounded-chat state exists.
   2026-05-31 trust-blocker fix pass closed the UI/state regressions from that
   audit while preserving the real autonomous-progress blocker. Re-intake now
   has a direct repair route from Settings, an actionable first-run empty state,
@@ -6623,6 +6895,14 @@ local 0.7 release-candidate build at `http://localhost:7777/projects/narrative-h
     work-view Playwright test passed; installed app reports `"stale": false`;
     browser proof measured identical left offsets for the first six Narrative
     Harness List rows across every data column.
+    Follow-up clipping fix, 2026-06-02: the List view grid now uses narrower
+    side-by-side tracks and shared `--gh-space-2` gaps so the `Updated` and
+    `Revs` columns stay inside clipped cards at narrow desktop widths. Evidence:
+    focused and full WorkTab tests passed; `pnpm typecheck`, `pnpm lint:design`,
+    `git diff --check`, `pnpm build`, and `pnpm dev:install` passed; installed
+    app reports `"stale": false`; live Fair Labor License proof at viewport
+    921x776 measured the clipped card at right=897 and the header/first row at
+    right=880, with timestamp and revision cells fully visible.
   - [x] Added the 0.9.0 evidence-to-work-graph intake spec and first pure
     planner seam for the Looma + Knit trust failure class. The planner now
     extracts deliverable units from structured source evidence, preserves
@@ -6668,12 +6948,12 @@ local 0.7 release-candidate build at `http://localhost:7777/projects/narrative-h
   - [ ] Add the follow-on global scheduler that fairly spends the provider
     budget across all turned-on projects instead of requiring each project to
     be manually started and budgeted in isolation.
-  - [ ] Add and browser-proof the 0.10.0 OpenRouter provider setup path. The
+  - [ ] Add and browser-proof the 0.11.0 OpenRouter provider setup path. The
     implementation plan lives at
-    `internal/plans/2026-05-28-guildhall-0-10-openrouter-support.md` and should
+    `internal/plans/2026-05-28-guildhall-0-11-openrouter-support.md` and should
     treat OpenRouter as guided setup with model-lane presets, attribution,
     privacy/cost routing, and listing-readiness proof rather than a generic
-    OpenAI-compatible URL field.
+    OpenAI-compatible URL field. This is no longer a 0.10.0 release blocker.
   - [ ] Add the 0.10.0 structural/domain intelligence intake lane. The spec
     lives at
     `internal/specs/2026-05-29-guildhall-0-10-structural-domain-intelligence.md`
@@ -6716,3 +6996,124 @@ Remaining efficiency fat: both fixtures still spent one `resolve_automation_bloc
 Verification: focused orchestrator regression tests for `.guildhall` git-diff exclusions, piped git-diff gates, worktree command gates, and command-gated worktree landing passed; `pnpm build` passed; live artifact-local benchmark passed 2/2.
 
 source: codex:artifact-local-command-gate-landing-proof
+
+## 2026-06-02T21:15:00.000Z MCP evidence for artifact:flow-audit
+
+Closed the Fair Labor License start-readiness projection bug where a task could
+show a complete starter checklist and a green `Start work` affordance while the
+runtime correctly blocked unattended work because the stricter worker handoff
+brief/spec contract was incomplete.
+
+- [x] Thread/runtime projection now carries explicit `workerHandoff` readiness,
+  so a `ready` task with a 4/4 starter checklist can still surface as needing
+  brief cleanup before worker start.
+- [x] Thread and Current drawer cards render worker-handoff cleanup as
+  `Needs brief cleanup` / `Needs brief`. Thread cleanup now routes through the
+  task continuation contract instead of disguising cleanup as generic project
+  start.
+- [x] Overview and the project top bar stop presenting handoff-incomplete
+  ready tasks as worker-ready. Overview buckets them with shaped work, labels
+  rows `Needs brief`, and uses brief-cleanup copy in the next-run list.
+- [x] Added regressions for complete-checklist-but-incomplete-handoff turns,
+  overview handoff cleanup rows, and brief-cleanup start blocker topbar copy.
+
+Evidence: `pnpm vitest run
+src/web/surfaces/project/__tests__/ProjectOverviewTab.svelte.test.ts
+src/web/surfaces/__tests__/ProjectView.svelte.test.ts` passed with 54 tests;
+`pnpm vitest run src/web/surfaces/project/__tests__/ThreadTab.svelte.test.ts
+src/runtime/__tests__/thread.test.ts` passed with 140 tests; `pnpm vitest run
+src/web/surfaces/drawer/__tests__/CurrentTab.svelte.test.ts` passed with 21
+tests; `pnpm typecheck` passed.
+
+Follow-up closure evidence, 2026-06-02: live Thread click testing found the
+render-only proof was insufficient. The Fair Labor License Thread card for
+`task-006` rendered `Needs brief cleanup`, `4 of 4 complete`, and `Clean up
+brief`, but clicking it still surfaced a raw Zod validation array because
+`/api/project/task/:id/enrich-task` parsed the whole queue before it could
+repair legacy partial `taskReadiness` / `productBrief` records. Runtime intake
+now normalizes legacy task-queue shape at the read boundary before strict
+`TaskQueue.parse`, keeps the core schema strict, and prevents migrated partial
+briefs from carrying approval forward as final worker handoff. Regression
+coverage: `POST /api/project/task/:id/enrich-task` accepts old compact
+readiness records and writes full readiness metadata before reopening the task.
+Verification: `pnpm vitest run
+src/runtime/__tests__/serve-task-endpoints.test.ts
+src/web/surfaces/project/__tests__/ThreadTab.svelte.test.ts` passed with 142
+tests, `pnpm typecheck` passed, `pnpm dev:install` rebuilt the installed app,
+service restart reported `/api/stale-server` as `stale:false`, and browser
+proof on `http://localhost:7777/projects/fair-labor-license/thread` clicked the
+live `Set FLL overhead charge policy` `Clean up brief` button. The rendered
+Thread changed to `Routed to Task Intake`, no raw `invalid_type` /
+`taskReadiness` / `Required` error appeared, `/api/project` showed `task-006`
+as `exploring` with normalized readiness fields, and the induced run stopped
+with zero token usage.
+
+Second follow-up closure evidence, 2026-06-02: live Thread review found the
+post-cleanup projection still leaked internal routing and failed to show what
+Thread was doing for the reopened task. `task-006` had been reopened to
+`exploring`, but the saved request card fell back to `Routed to Task Intake`,
+the cleanup request existed only as backend notes, and stale reviewer feedback
+could still claim the current lifecycle phase. Thread now treats brief cleanup
+as a first-class request stage: saved requests become history, enrichment notes
+project as a visible `Brief cleanup requested` milestone, stale review notes
+stay historical while a task is back in cleanup, partial legacy product briefs
+no longer suppress the current cleanup card, and the selected task card says
+`Brief cleanup` / `Cleanup queued` / `Clean up brief` instead of pretending the
+request left Thread.
+
+Verification: `pnpm vitest run src/runtime/__tests__/thread.test.ts
+src/web/surfaces/project/__tests__/ThreadTab.svelte.test.ts` passed with 143
+tests; `pnpm typecheck` passed; `pnpm dev:install` rebuilt the installed app;
+service restart reported `/api/stale-server` as `stale:false`; live API proof
+for `fair-labor-license` showed `request:task-006:brief-cleanup` plus
+`inflight:task-006` with `requestStage: task_brief_cleanup`; browser proof on
+`http://localhost:7777/projects/fair-labor-license/thread` selected `Set FLL
+overhead charge policy` and showed `Brief cleanup requested`, `Task brief
+cleanup`, `Cleanup queued`, the active `Brief cleanup` card, and no `Routed to
+Task Intake` copy.
+
+Third follow-up closure evidence, 2026-06-02: approved behavior-contract pass
+removed the remaining "Clean up brief secretly means Start work" coupling in
+Thread. Guildhall now exposes `/api/project/task/:id/continue` for
+`brief_cleanup` continuations. The endpoint enriches the task brief, returns a
+queued continuation if the coordinator is already running, and otherwise wakes
+continuous coordination with the task as the preferred focus; it does not use
+one-task scoped-start semantics. Thread's `Clean up brief` button now posts
+that continuation payload directly and returns after refreshing, so the UI no
+longer calls `/api/project/task/:id/enrich-task` and then falls through into
+`/api/project/start`.
+
+Verification: focused continuation tests first failed against the old behavior,
+then `pnpm vitest run
+src/runtime/__tests__/serve-task-endpoints.test.ts
+src/web/surfaces/project/__tests__/ThreadTab.svelte.test.ts` passed with 145
+tests; `pnpm typecheck` passed; `pnpm dev:install` rebuilt the installed app;
+service restart reported `/api/stale-server` as `stale:false`. Live browser
+proof on `http://localhost:7777/projects/fair-labor-license/thread` clicked the
+visible `Clean up brief` action on the selected Stripe cleanup card; the page
+returned to queued cleanup language (`Queued for Guildhall`) without
+`invalid_type`, `taskReadiness`, `Required`, `run_already_active`, or `Routed
+to Task Intake`. Live API proof showed `task-stripe-integration` and
+`task-006` as `requestStage: task_brief_cleanup`, and the induced run was
+recorded as `mode: continuous` before stopping on idle.
+
+source: codex:fll-start-readiness-worker-handoff-cleanup
+
+2026-06-03T12:46:00Z - Completed the 0.10 readiness integration pass across
+bounded Thread conversations, external task authority, external-agent memory
+bridge, contract surfaces, docs, screenshots, and installed-app proof.
+OpenRouter remains deferred to 0.11.0. Integrated verification passed:
+`pnpm typecheck`; focused combined Vitest suite for bounded chat, Thread,
+external authority, memory bridge, MCP/CLI bridge exposure, contract surfaces,
+corpus proposals, context packets, and Structure projection passed with 360
+tests; `pnpm lint:design`; `node scripts/reduction-guardrails.mjs`; `pnpm
+build`; `git diff --check`. Installed-app proof passed: `pnpm dev:install`
+completed, service restart reported `/api/stale-server` as `stale:false`, live
+browser proof on `http://localhost:7777/projects/narrative-harness/thread`
+showed project-question and brief-cleanup routing without raw schema JSON, and
+live browser proof on
+`http://localhost:7777/projects/narrative-harness/structure` showed Structural
+map, Project graph, and Contract surfaces in Structure. Fresh screenshots were
+captured under `docs/assets/ui-audit/0-10-0/`.
+
+source: codex:0.10-readiness-integration

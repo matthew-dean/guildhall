@@ -2,6 +2,16 @@
 
 **Status:** Proposed 0.10.0 target-feature spec
 
+**First runtime slice status, 2026-06-02:**
+
+- [x] Add provider-neutral `ExternalIssueRef` identity and `ExternalTaskMirror`
+  records for local execution truth.
+- [x] Add inspectable stale/conflict sync state for changed provider fields and
+  stale proposed writes.
+- [x] Shape execution packets from external issue truth plus repo-local context.
+- [x] Record evidence-backed proposed writes and approval/rejection decisions
+  before any connector execution.
+
 Guildhall should be able to work inside a project whose real planning and
 status authority already lives somewhere else. Jira is the concrete fixture
 for this spec through `/Users/matthew/git/work/linkcore`, but the model must
