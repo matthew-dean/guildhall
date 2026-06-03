@@ -589,6 +589,11 @@ export interface TaskTurnChecklist {
   steps: TaskTurnChecklistStep[]
 }
 
+export interface TaskTurnWorkerHandoff {
+  ready: boolean
+  cleanupNeeded: boolean
+}
+
 export interface TaskThreadTurnBase {
   id: string
   at: string
@@ -658,6 +663,7 @@ export interface TaskThreadInFlightTurn extends TaskThreadTurnBase {
   liveAgent?: TaskTurnLiveAgent
   activity?: TaskTurnLiveActivity[]
   checklist?: TaskTurnChecklist
+  workerHandoff?: TaskTurnWorkerHandoff
 }
 
 export type TaskThreadTurn =

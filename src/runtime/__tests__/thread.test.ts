@@ -876,7 +876,7 @@ describe('buildThread', () => {
     }
   })
 
-  it('projects routed task requests as request turns until the task is complete', async () => {
+  it('records routed task requests as history once the task state owns current work', async () => {
     const projectPath = await mkdtemp(path.join(tmpdir(), 'guildhall-thread-'))
     try {
       await mkdir(path.join(projectPath, '.guildhall'), { recursive: true })
@@ -896,7 +896,7 @@ describe('buildThread', () => {
                 raw: 'What commands should I run before release?',
                 kind: 'project_question',
                 title: 'What commands should I run before release?',
-                routingSummary: 'Routed to Project Question',
+                routingSummary: 'Guildhall saved this as a project question.',
                 createdAt: '2026-05-23T00:00:00.000Z',
               },
               createdAt: '2026-05-23T00:00:00.000Z',
@@ -925,9 +925,10 @@ describe('buildThread', () => {
       const thread = buildThread({ projectPath, snapshot, recentEvents: [] })
       expect(thread.turns.find(t => t.id === 'request:request-question')).toMatchObject({
         kind: 'request',
-        status: 'pending',
-        phase: 'intake',
-        routingSummary: 'Routed to Project Question',
+        status: 'done',
+        phase: 'done',
+        requestStage: 'new_request',
+        routingSummary: 'Guildhall saved this as a project question.',
       })
       expect(thread.turns.find(t => t.id === 'inflight:task-1')).toMatchObject({
         kind: 'inflight',
@@ -935,6 +936,107 @@ describe('buildThread', () => {
         checklist: undefined,
         summary: expect.stringContaining('answer this question'),
       })
+    } finally {
+      await rm(projectPath, { recursive: true, force: true })
+    }
+  })
+
+  it('projects brief cleanup requests as task-thread cleanup work instead of task-intake routing', async () => {
+    const projectPath = await mkdtemp(path.join(tmpdir(), 'guildhall-thread-'))
+    try {
+      await mkdir(path.join(projectPath, '.guildhall'), { recursive: true })
+      await writeFile(
+        path.join(projectPath, '.guildhall', 'TASKS.json'),
+        JSON.stringify({
+          tasks: [
+            {
+              id: 'task-fll-overhead-policy',
+              title: 'Set FLL overhead charge policy',
+              description: 'We should have a system-wide policy of how much FLL charges on overhead for maintenance fees etc.',
+              domain: 'policy',
+              projectPath,
+              status: 'exploring',
+              request: {
+                id: 'request-fll-overhead-policy',
+                raw: 'We should have a system-wide policy of how much FLL charges on overhead for maintenance fees etc.',
+                kind: 'task_spec',
+                title: 'Set FLL overhead charge policy',
+                routingSummary: 'Routed to Task Intake',
+                createdAt: '2026-06-02T23:40:00.000Z',
+              },
+              productBrief: {
+                userJob: 'Verify whether the FLL overhead charge policy is already done.',
+                whyItMattersNow: 'The remaining work should be narrowed before worker execution.',
+                successMetric: 'The remaining work is described clearly enough to approve.',
+                authoredBy: 'spec-agent',
+              },
+              notes: [
+                {
+                  role: 'reviewer',
+                  agentId: 'reviewer-agent',
+                  content: 'Let me start by reading the current task state and the changed files to evaluate the work.',
+                  timestamp: '2026-05-25T22:03:07.794Z',
+                },
+                {
+                  role: 'human',
+                  content: 'Asked Guildhall to enrich this task (checklist).',
+                  timestamp: '2026-06-02T23:41:00.000Z',
+                },
+                {
+                  role: 'system',
+                  content: 'Enrichment requested from ready. Guildhall will add the missing structure before continuing.',
+                  timestamp: '2026-06-02T23:41:00.000Z',
+                },
+              ],
+              createdAt: '2026-06-02T23:40:00.000Z',
+              updatedAt: '2026-06-02T23:41:00.000Z',
+            },
+          ],
+        }),
+      )
+
+      const snapshot: ProjectSnapshot = {
+        projectPath,
+        config: {
+          id: 'fair-labor-license',
+          name: 'Fair Labor License',
+          bootstrap: { verifiedAt: new Date().toISOString() },
+          coordinators: [{ id: 'policy', name: 'Policy' }],
+        },
+        bootstrapVerified: true,
+        hasProvider: true,
+        hasDirection: true,
+        workspaceImportReviewed: true,
+        taskCount: 1,
+        wizardState: emptyWizardsState(),
+      }
+
+      const thread = buildThread({ projectPath, snapshot, recentEvents: [] })
+      expect(thread.turns.find(t => t.id === 'request:request-fll-overhead-policy')).toMatchObject({
+        kind: 'request',
+        status: 'done',
+        phase: 'done',
+        requestStage: 'task_brief_cleanup',
+        routingSummary: 'Guildhall saved this cleanup request and queued the task brief in Thread.',
+      })
+      expect(thread.turns.find(t => t.id === 'request:task-fll-overhead-policy:brief-cleanup')).toMatchObject({
+        kind: 'history_note',
+        label: 'Brief cleanup requested',
+        summary: 'Guildhall was asked to clean up this task brief before worker execution.',
+      })
+      expect(thread.turns.find(t => t.kind === 'review_feedback')).toMatchObject({
+        kind: 'review_feedback',
+        phase: 'done',
+      })
+      expect(thread.turns.find(t => t.id === 'inflight:task-fll-overhead-policy')).toMatchObject({
+        kind: 'inflight',
+        status: 'active',
+        taskStatus: 'exploring',
+        requestStage: 'task_brief_cleanup',
+        routingSummary: 'Guildhall saved this cleanup request and queued the task brief in Thread.',
+        summary: 'Guildhall queued task brief cleanup before worker handoff.',
+      })
+      expect(thread.activeTurnId).toBe('inflight:task-fll-overhead-policy')
     } finally {
       await rm(projectPath, { recursive: true, force: true })
     }
@@ -1378,6 +1480,10 @@ describe('buildThread', () => {
       expect(queuedTask.status).toBe('pending')
       expect(queuedTask.summary).toContain('brief or acceptance criteria still need cleanup')
       expect(queuedTask.checklist?.totalSteps).toBeGreaterThan(0)
+      expect(queuedTask.workerHandoff).toMatchObject({
+        ready: false,
+        cleanupNeeded: true,
+      })
     } finally {
       await rm(projectPath, { recursive: true, force: true })
     }

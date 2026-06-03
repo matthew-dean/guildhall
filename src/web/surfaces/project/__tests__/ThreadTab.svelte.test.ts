@@ -1,4 +1,5 @@
 // @vitest-environment happy-dom
+import { readFileSync } from 'node:fs'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { cleanup, render, screen, waitFor, within } from '@testing-library/svelte'
 import userEvent from '@testing-library/user-event'
@@ -294,6 +295,7 @@ interface RequestTurnForTest {
   requestId: string
   title: string
   rawRequest: string
+  requestStage?: 'new_request' | 'task_brief_cleanup'
   routingSummary: string
 }
 
@@ -433,6 +435,12 @@ function installFetchFakes(
     }
     if (url.startsWith('/api/project/task/') && url.includes('/update-brief')) {
       return json({ ok: true })
+    }
+    if (url.startsWith('/api/project/task/') && url.includes('/continue')) {
+      return json({ ok: true, status: 'exploring', continuation: { status: 'started', runStatus: 'running' } })
+    }
+    if (url.startsWith('/api/project/task/') && url.includes('/enrich-task')) {
+      return json({ ok: true, status: 'exploring' })
     }
     if (url.startsWith('/api/project/task/') && url.includes('/resume')) {
       return json({ ok: true })
@@ -575,6 +583,66 @@ describe('ThreadTab', () => {
     expect(scrollIntoView).not.toHaveBeenCalled()
   })
 
+  it('selects the current cleanup work instead of the saved request routing event', async () => {
+    installFetchFakes([
+      requestTurn({
+        id: 'request:fll-overhead-policy',
+        status: 'done',
+        phase: 'done',
+        requestId: 'fll-overhead-policy',
+        taskId: 'task-fll-overhead-policy',
+        title: 'Set FLL overhead charge policy',
+        rawRequest: 'We should have a system-wide policy of how much FLL charges on overhead for maintenance fees etc.',
+        requestStage: 'task_brief_cleanup',
+        routingSummary: 'Guildhall saved this cleanup request and queued the task brief in Thread.',
+      }),
+      {
+        kind: 'history_note',
+        id: 'request:task-fll-overhead-policy:brief-cleanup',
+        at: now,
+        persona: 'intake',
+        status: 'done',
+        phase: 'done',
+        taskId: 'task-fll-overhead-policy',
+        taskTitle: 'Set FLL overhead charge policy',
+        constructionMode: 'blueprint',
+        category: 'request',
+        label: 'Brief cleanup requested',
+        summary: 'Guildhall was asked to clean up this task brief before worker execution.',
+      },
+      importedDraftTurn({
+        id: 'turn-fll-overhead-cleanup',
+        taskId: 'task-fll-overhead-policy',
+        taskTitle: 'Set FLL overhead charge policy',
+        taskStatus: 'exploring',
+        importedDraft: false,
+        requestStage: 'task_brief_cleanup',
+        phase: 'intake',
+        summary: 'Guildhall queued task brief cleanup before worker handoff.',
+        checklist: {
+          title: 'Task brief checklist',
+          doneCount: 2,
+          totalSteps: 4,
+          steps: [
+            { id: 'title', title: 'Readable title', why: 'Give this work a name someone can recognize later.', status: 'done' },
+            { id: 'description', title: 'Starting point', why: 'Say what Guildhall should inspect or use as the starting evidence.', status: 'done' },
+            { id: 'success', title: 'Success target', why: 'State what should be true when this work is finished.', status: 'active' },
+            { id: 'criteria', title: 'Acceptance criteria', why: 'Add the concrete checks Guildhall should use before calling the work done.', status: 'pending' },
+          ],
+        },
+      }),
+    ], 'turn-fll-overhead-cleanup')
+
+    render(ThreadTab)
+
+    await selectedThread().findByText('Brief cleanup')
+    expect(screen.queryByText('Routed to Task Intake')).toBeNull()
+    expect(selectedThread().queryByText('New thread')).toBeNull()
+    expect(threadHistory().getByText('Brief cleanup requested')).toBeTruthy()
+    expect(selectedThread().getByText(/Guildhall queued this task for brief cleanup/)).toBeTruthy()
+    expect(selectedThread().getByRole('button', { name: /clean up brief/i })).toBeTruthy()
+  })
+
   it('does not move the viewport when a new active thread turn appears', async () => {
     const scrollIntoView = Element.prototype.scrollIntoView as ReturnType<typeof vi.fn>
     installFetchFakes([
@@ -677,6 +745,47 @@ describe('ThreadTab', () => {
     expect(threadHistory().queryByText(/^Guildhall$/)).toBeNull()
     expect(threadHistory().queryByText(/^Completed /)).toBeNull()
     expect(threadHistory().queryByRole('button', { name: /knit: add link editor controls/i })).toBeNull()
+  })
+
+  it('clusters repeated historical review feedback without repeating the event header', async () => {
+    installFetchFakes([
+      reviewFeedbackTurn({
+        id: 'review-link-controls-1',
+        at: '2026-05-17T15:00:00.000Z',
+        status: 'done',
+        phase: 'done',
+        revisionCount: 1,
+        summary: 'First reviewer pass.',
+        feedback: 'First reviewer pass.',
+      }),
+      reviewFeedbackTurn({
+        id: 'review-link-controls-2',
+        at: '2026-05-18T15:00:00.000Z',
+        status: 'done',
+        phase: 'done',
+        revisionCount: 2,
+        summary: 'Second reviewer pass.',
+        feedback: 'Second reviewer pass.',
+      }),
+      reviewFeedbackTurn({
+        id: 'review-link-controls-3',
+        at: '2026-05-19T15:00:00.000Z',
+        status: 'done',
+        phase: 'done',
+        revisionCount: 3,
+        summary: 'Latest reviewer pass.',
+        feedback: 'Latest reviewer pass.',
+      }),
+      specReviewTurn('task-link-controls'),
+    ], 'task:task-link-controls')
+
+    render(ThreadTab)
+
+    await threadHistory().findByText('Latest reviewer pass.')
+    expect(threadHistory().getAllByText('Review feedback')).toHaveLength(1)
+    expect(threadHistory().getByText('First reviewer pass.')).toBeTruthy()
+    expect(threadHistory().getByText('Second reviewer pass.')).toBeTruthy()
+    expect(threadHistory().getByText('Show 2 earlier reviewer notes')).toBeTruthy()
   })
 
   it('renders answered historical questions as left/right chat bubbles instead of dark task cards', async () => {
@@ -1164,7 +1273,7 @@ describe('ThreadTab', () => {
 
     render(ThreadTab)
 
-    await screen.findByRole('button', { name: 'Start' })
+    await screen.findByRole('button', { name: 'Clean up brief' })
     const needsBriefChip = selectedThread().getByText('Needs brief')
     expect(needsBriefChip).toBeTruthy()
     expect(needsBriefChip.classList.contains('tone-agent-attention')).toBe(true)
@@ -1174,9 +1283,57 @@ describe('ThreadTab', () => {
     expect(screen.queryByText('Guildhall next')).toBeNull()
     expect(screen.queryByRole('button', { name: 'Start work' })).toBeNull()
     expect(screen.queryByRole('button', { name: 'Finish task brief...' })).toBeNull()
-    const startButton = screen.getByRole('button', { name: 'Start' })
+    const startButton = screen.getByRole('button', { name: 'Clean up brief' })
     expect(startButton.classList.contains('v-agent')).toBe(true)
     expect(threadComposer().getByPlaceholderText('Add a note for Guildhall…')).toBeTruthy()
+  })
+
+  it('keeps ready tasks with complete checklists but incomplete worker handoff out of start actions', async () => {
+    const { calls } = installFetchFakes([
+      importedDraftTurn({
+        id: 'turn-ready-handoff-incomplete',
+        taskId: 'task-ready-handoff-incomplete',
+        taskTitle: 'Set FLL overhead charge policy',
+        taskStatus: 'ready',
+        importedDraft: false,
+        phase: 'inflight',
+        summary: 'Queued, but the task brief or acceptance criteria still need cleanup before a worker should treat this as approved.',
+        workerHandoff: {
+          ready: false,
+          cleanupNeeded: true,
+        },
+        checklist: {
+          title: 'Task brief checklist',
+          doneCount: 4,
+          totalSteps: 4,
+          steps: [
+            { id: 'title', title: 'Readable title', why: 'Give this work a name someone can recognize later.', status: 'done' },
+            { id: 'description', title: 'Starting point', why: 'Say what Guildhall should inspect or use as the starting evidence.', status: 'done' },
+            { id: 'brief', title: 'Success target', why: 'State what should be true when this work is finished.', status: 'done' },
+            { id: 'acceptance', title: 'Acceptance criteria', why: 'Add the concrete checks Guildhall should use before calling the work done.', status: 'done' },
+          ],
+        },
+      }),
+    ], 'turn-ready-handoff-incomplete')
+
+    render(ThreadTab)
+
+    await screen.findAllByText('The starter checklist is complete, but Guildhall still needs a full product brief and spec handoff before a worker can start.')
+    const needsBriefChip = selectedThread().getByText('Needs brief')
+    expect(needsBriefChip).toBeTruthy()
+    expect(needsBriefChip.classList.contains('tone-agent-attention')).toBe(true)
+    expect(selectedThread().getByText('Handoff still needs cleanup')).toBeTruthy()
+    await userEvent.click(screen.getByRole('button', { name: 'Clean up brief' }))
+    expect(screen.queryByRole('button', { name: 'Start work' })).toBeNull()
+    await waitFor(() => {
+      const continueCall = calls.find(c => c.url.includes('/api/project/task/task-ready-handoff-incomplete/continue'))
+      expect(continueCall?.body).toMatchObject({
+        action: 'brief_cleanup',
+        mode: 'checklist',
+      })
+      expect(calls.some(c => c.url.includes('/api/project/task/task-ready-handoff-incomplete/enrich-task'))).toBe(false)
+      expect(calls.some(c => c.url.includes('/api/project/start'))).toBe(false)
+    })
   })
 
   it('makes a one-field brief blocker start Guildhall cleanup instead of opening a user form', async () => {
@@ -1210,10 +1367,10 @@ describe('ThreadTab', () => {
 
     render(ThreadTab)
 
-    await screen.findByRole('button', { name: 'Start' })
+    await screen.findByRole('button', { name: 'Clean up brief' })
     expect(screen.queryByText('No upstream')).toBeNull()
     expect(screen.queryByText(/has no upstream branch/)).toBeNull()
-    const startButton = screen.getByRole('button', { name: 'Start' })
+    const startButton = screen.getByRole('button', { name: 'Clean up brief' })
     expect(startButton.classList.contains('v-agent')).toBe(true)
     await userEvent.click(startButton)
     expect(screen.queryByText('What should be true when this is done?')).toBeNull()
@@ -1283,14 +1440,17 @@ describe('ThreadTab', () => {
 
     render(ThreadTab)
 
-    await userEvent.click(await screen.findByRole('button', { name: 'Start' }))
+    await userEvent.click(await screen.findByRole('button', { name: 'Clean up brief' }))
 
     await waitFor(() => {
-      const call = calls.find(c => c.url.includes('/api/project/start'))
-      expect(call?.body).toMatchObject({
-        taskId: 'task-ready-incomplete',
-        mode: 'continuous',
+      const continueCall = calls.find(c => c.url.includes('/api/project/task/task-ready-incomplete/continue'))
+      expect(continueCall?.body).toMatchObject({
+        action: 'brief_cleanup',
+        mode: 'checklist',
+        instruction: expect.stringContaining('Complete this task for worker handoff'),
       })
+      expect(calls.some(c => c.url.includes('/api/project/task/task-ready-incomplete/enrich-task'))).toBe(false)
+      expect(calls.some(c => c.url.includes('/api/project/start'))).toBe(false)
     })
   })
 
@@ -1599,6 +1759,54 @@ describe('ThreadTab', () => {
     await waitFor(() => {
       expect(calls.some(call => call.url.includes('/task/task-link-controls/resolve-escalation'))).toBe(true)
       expect(calls.some(call => call.url.startsWith('/api/project/start') && call.body?.taskId === 'task-link-controls')).toBe(true)
+    })
+  })
+
+  it('keeps pending blocked escalations actionable from the selected thread detail', async () => {
+    const { calls } = installFetchFakes(
+      [
+        escalationTurn({
+          id: 'esc-oauth-google',
+          status: 'pending',
+          taskId: 'task-oauth-google-provider-credentials',
+          taskTitle: 'Create Google OAuth provider credentials',
+          escalationReason: 'human_judgment_required',
+          escalationAgentId: 'worker-agent',
+          summary: 'Google OAuth credentials must be created outside the repo.',
+          details: 'Guildhall cannot create or verify Google Cloud OAuth credentials without owner access to the Google Cloud project.',
+        }),
+      ],
+      null,
+    )
+
+    render(ThreadTab)
+
+    await screen.findByText('Needs recovery')
+    const footer = within(screen.getByLabelText('Thread footer'))
+    const dock = activeThreadDock()
+    const listElement = document.querySelector('.thread-list') as HTMLElement | null
+
+    expect(dock.getByText('Needs recovery')).toBeTruthy()
+    expect(dock.getByRole('button', { name: 'Resume task' })).toBeTruthy()
+    expect(dock.getByRole('button', { name: /^I handled this/i })).toBeTruthy()
+    expect(footer.queryByText('Needs recovery')).toBeNull()
+    expect(footer.getByPlaceholderText(/Add recovery guidance/i)).toBeTruthy()
+    expect(listElement ? within(listElement).queryByText('Needs recovery') : null).toBeNull()
+
+    await userEvent.click(dock.getByRole('button', { name: 'Resume task' }))
+    expect(await screen.findByRole('dialog', { name: 'Resume task' })).toBeTruthy()
+    await userEvent.click(screen.getByRole('button', { name: 'Cancel' }))
+
+    const composer = threadComposer().getByPlaceholderText(/Add recovery guidance/i)
+    await userEvent.type(composer, 'I created the Google OAuth client ID; use the Supabase callback URL.')
+    await userEvent.click(threadComposer().getByRole('button', { name: 'Send' }))
+
+    await waitFor(() => {
+      const resumeCall = calls.find(call => call.url.includes('/task/task-oauth-google-provider-credentials/resume'))
+      expect(resumeCall?.body).toMatchObject({
+        message: 'I created the Google OAuth client ID; use the Supabase callback URL.',
+        preserveStatus: true,
+      })
     })
   })
 
@@ -2320,6 +2528,84 @@ describe('ThreadTab', () => {
     const row = await screen.findByRole('button', { name: /knit: compact card spacing/i })
     expect(row.className).toContain('card-list-item')
     expect(row.className).toContain('utility-panel')
+  })
+
+  it('keeps compact thread list gutters when shell padding is unavailable', () => {
+    const source = readFileSync('src/web/surfaces/project/ThreadTab.svelte', 'utf8')
+
+    expect(source).toContain('var(--app-shell-page-padding-inline, var(--gh-space-2))')
+  })
+
+  it('keeps selected thread cards in scrollable flow while only the composer footer is sticky', () => {
+    const source = readFileSync('src/web/surfaces/project/ThreadTab.svelte', 'utf8')
+    const scrollBlock = source.match(/\.thread-detail-scroll\s*\{([\s\S]*?)\n\s*\}/)?.[1] ?? ''
+    const flowBlock = source.match(/\.thread-detail-flow\s*\{([\s\S]*?)\n\s*\}/)?.[1] ?? ''
+    const dockBlock = source.match(/\.thread-active-dock\s*\{([\s\S]*?)\n\s*\}/)?.[1] ?? ''
+    const footerBlock = source.match(/\.thread-footer\s*\{([\s\S]*?)\n\s*\}/)?.[1] ?? ''
+    const dockMarkupIndex = source.indexOf('<div\n                    class="thread-active-dock"')
+    const footerMarkupIndex = source.indexOf('<div class="thread-footer" aria-label="Thread footer">')
+
+    expect(source).toContain('<div class="thread-detail-flow">')
+    expect(source).toContain('<div class="thread-list">')
+    expect(source).not.toContain('<Stack gap="3" class="thread-list">')
+    expect(source).not.toContain('<div class="thread-footer" aria-label="Thread footer">\n                    {#if activeDockTurn}')
+    expect(dockMarkupIndex).toBeGreaterThan(-1)
+    expect(footerMarkupIndex).toBeGreaterThan(-1)
+    expect(dockMarkupIndex).toBeLessThan(footerMarkupIndex)
+    expect(flowBlock).toContain('display: flex')
+    expect(flowBlock).toContain('flex-direction: column')
+    expect(flowBlock).toContain('min-height: 100%')
+    expect(source).toMatch(/\.thread-list\s*{[^}]*margin-top:\s*auto/s)
+    expect(scrollBlock).toContain('padding-top: var(--gh-space-1)')
+    expect(footerBlock).toContain('position: sticky')
+    expect(footerBlock).toContain('bottom: 0')
+    expect(footerBlock).toContain('padding-bottom: var(--gh-space-1)')
+    expect(dockBlock).not.toMatch(/position:\s*(absolute|fixed)/)
+    expect(footerBlock).not.toMatch(/position:\s*(absolute|fixed)/)
+  })
+
+  it('keeps the sticky composer wrapper unframed instead of making the footer hold a card', () => {
+    const source = readFileSync('src/web/surfaces/project/ThreadTab.svelte', 'utf8')
+    const composerShellBlock = source.match(/\.thread-composer-shell\s*\{([\s\S]*?)\n\s*\}/)?.[1] ?? ''
+    const composerWorkingBlock = source.match(/\.thread-composer-working\s*\{([\s\S]*?)\n\s*\}/)?.[1] ?? ''
+
+    expect(composerShellBlock).toContain('display: grid')
+    expect(composerShellBlock).toContain('gap: var(--gh-space-2)')
+    expect(source).not.toMatch(/\.thread-composer-shell\s*\{[^}]*\bpadding\s*:/s)
+    expect(composerShellBlock).not.toMatch(/\bpadding\s*:/)
+    expect(composerShellBlock).not.toMatch(/\bborder\s*:/)
+    expect(composerShellBlock).not.toMatch(/\bborder-radius\s*:/)
+    expect(composerShellBlock).not.toMatch(/\bbackground\s*:/)
+    expect(composerShellBlock).not.toMatch(/\bbox-shadow\s*:/)
+    expect(composerShellBlock).not.toMatch(/\bbackdrop-filter\s*:/)
+    expect(composerWorkingBlock).not.toMatch(/\bborder-color\s*:/)
+  })
+
+  it('uses the shared rounded button contract for the composer send action', () => {
+    const source = readFileSync('src/web/surfaces/project/ThreadTab.svelte', 'utf8')
+
+    const composerSendButton = source.match(/<Button[\s\S]*?ariaLabel=\{busyTurnId[\s\S]*?<\/Button>/)?.[0] ?? ''
+    const composerSendClass = source.match(/\.thread-composer-send\s*\{([\s\S]*?)\n\s*\}/)?.[1] ?? ''
+
+    expect(composerSendButton).toContain('iconOnly')
+    expect(composerSendButton).toContain('rounded')
+    expect(composerSendButton).not.toContain('className="thread-composer-send"')
+    expect(composerSendClass).not.toMatch(/\b(width|min-width|height|min-height|padding|border-radius)\s*:/)
+  })
+
+  it('keeps the composer textbox and send action on the same inset grid', () => {
+    const source = readFileSync('src/web/surfaces/project/ThreadTab.svelte', 'utf8')
+    const frameBlock = source.match(/\.thread-composer-frame\s*\{([\s\S]*?)\n\s*\}/)?.[1] ?? ''
+    const textareaBlock = source.match(/\.thread-composer-input-shell\s+:global\(\.textarea\)\s*\{([\s\S]*?)\n\s*\}/)?.[1] ?? ''
+    const actionsBlock = source.match(/\.thread-composer-actions\s*\{([\s\S]*?)\n\s*\}/)?.[1] ?? ''
+
+    expect(frameBlock).toContain('--thread-composer-action-inset: var(--gh-space-2)')
+    expect(frameBlock).toContain('--thread-composer-action-size: 32px')
+    expect(textareaBlock).toContain('display: block')
+    expect(textareaBlock).toContain('padding-right: calc(var(--thread-composer-action-inset) + var(--thread-composer-action-size) + var(--control-pad-x))')
+    expect(textareaBlock).toContain('padding-bottom: calc(var(--thread-composer-action-inset) + var(--thread-composer-action-size) + var(--control-pad-y))')
+    expect(actionsBlock).toContain('right: var(--thread-composer-action-inset)')
+    expect(actionsBlock).toContain('bottom: var(--thread-composer-action-inset)')
   })
 
   it('shows a top chip for thread rows even when owner and fallback status chips would otherwise be suppressed', async () => {

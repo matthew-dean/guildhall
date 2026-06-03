@@ -22,6 +22,7 @@ import {
 import { applyTaskShaping } from './task-decomposition.js'
 import { transitionTaskStatus } from './task-transition.js'
 import { createOwnerInputRequest } from './owner-input-store.js'
+import { normalizeLegacyTaskQueueShape } from './task-queue-compat.js'
 
 // ---------------------------------------------------------------------------
 // FR-12: exploratory task intake.
@@ -46,10 +47,11 @@ async function readQueue(memoryDir: string): Promise<TaskQueue> {
   const raw = await fs.readFile(tasksPathFor(memoryDir), 'utf-8')
   // The bootstrap seeds TASKS.json as a bare `[]` for legacy reasons, so be
   // permissive on intake: if we see a bare array, promote it to a full queue.
-  const parsed = JSON.parse(raw)
-  const queue = Array.isArray(parsed)
-    ? { version: 1, lastUpdated: new Date().toISOString(), tasks: parsed }
-    : TaskQueue.parse(parsed)
+  const now = new Date().toISOString()
+  const parsed = normalizeLegacyTaskQueueShape(JSON.parse(raw), now)
+  const queue = TaskQueue.parse(Array.isArray(parsed)
+    ? { version: 1, lastUpdated: now, tasks: parsed }
+    : parsed)
   for (const task of queue.tasks) normalizeImportedDraftTask(task)
   return queue
 }

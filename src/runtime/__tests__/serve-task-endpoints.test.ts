@@ -1,8 +1,8 @@
-import { describe, it, expect, beforeEach, afterEach } from 'vitest'
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import fs from 'node:fs/promises'
 import path from 'node:path'
 import os from 'node:os'
-import { bootstrapWorkspace, writeWorkspaceConfig } from '@guildhall/config'
+import { bootstrapWorkspace, setProvider, updateProjectConfig, writeWorkspaceConfig } from '@guildhall/config'
 import {
   getProjectContextDebugLedgerPath,
   getProjectRecentEventsPath,
@@ -10,6 +10,7 @@ import {
 } from '@guildhall/sessions'
 import { readExploringTranscript, writeCheckpoint } from '@guildhall/tools'
 import { buildServeApp, filterEventsForTask } from '../serve.js'
+import { OrchestratorSupervisor } from '../serve-supervisor.js'
 import { createReviewAuditStore } from '../review-audit-store.js'
 import { FileBackedGuildhallPersistence } from '@guildhall/persistence'
 
@@ -55,15 +56,67 @@ async function seedTask(id: string, overrides: Record<string, any> = {}): Promis
   await fs.writeFile(tasksPath, JSON.stringify(queue, null, 2), 'utf8')
 }
 
+async function seedTasks(tasks: Array<Record<string, any>>): Promise<void> {
+  const now = new Date().toISOString()
+  const tasksPath = path.join(memoryDir, 'TASKS.json')
+  const queue = {
+    version: 1,
+    lastUpdated: now,
+    tasks: tasks.map((task, index) => ({
+      id: `task-${index + 1}`,
+      title: `Seeded task ${index + 1}`,
+      description: 'A test task',
+      domain: 'looma',
+      projectPath: tmpDir,
+      status: 'ready',
+      priority: 'normal',
+      revisionCount: 0,
+      remediationAttempts: 0,
+      origination: 'human',
+      createdAt: now,
+      updatedAt: now,
+      ...task,
+    })),
+  }
+  await fs.writeFile(tasksPath, JSON.stringify(queue, null, 2), 'utf8')
+}
+
+function createTrackingSupervisor(): {
+  supervisor: OrchestratorSupervisor
+  starts: Array<{ preferredTaskId?: string; stopAfterOneTask?: boolean }>
+} {
+  const starts: Array<{ preferredTaskId?: string; stopAfterOneTask?: boolean }> = []
+  const supervisor = new OrchestratorSupervisor({
+    resolveConfig: () => ({ workspaceId: projectId, projectPath: tmpDir } as any),
+    runOrchestrator: async (_config, opts) => {
+      starts.push({
+        ...(opts?.preferredTaskId ? { preferredTaskId: opts.preferredTaskId } : {}),
+        ...(opts?.stopAfterOneTask ? { stopAfterOneTask: true } : {}),
+      })
+      await new Promise<void>((resolve) => {
+        if (opts?.abortSignal?.aborted) {
+          resolve()
+          return
+        }
+        opts?.abortSignal?.addEventListener('abort', () => resolve(), { once: true })
+      })
+      return { ticks: 1, stopReason: 'stop_requested', stopMessage: 'Stop requested.' }
+    },
+  })
+  return { supervisor, starts }
+}
+
 beforeEach(async () => {
   tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'guildhall-serve-tasks-'))
   process.env.GUILDHALL_DATA_DIR = path.join(tmpDir, '.guildhall-data')
+  process.env.GUILDHALL_CONFIG_DIR = path.join(tmpDir, '.guildhall-config')
   projectId = bootstrapWorkspace(tmpDir, { name: 'Task Endpoints Test' }).id ?? path.basename(tmpDir)
   memoryDir = getProjectStateDir(tmpDir)
 })
 
 afterEach(async () => {
   delete process.env.GUILDHALL_DATA_DIR
+  delete process.env.GUILDHALL_CONFIG_DIR
   await fs.rm(tmpDir, { recursive: true, force: true })
 })
 
@@ -1447,6 +1500,69 @@ describe('POST /api/project/task/:id/reframe-task', () => {
 })
 
 describe('POST /api/project/task/:id/enrich-task', () => {
+  it('converts legacy partial task readiness records before brief cleanup enrichment', async () => {
+    await seedTasks([
+      {
+        id: 'task-1',
+        status: 'ready',
+        title: 'Ready task with an incomplete brief',
+        productBrief: { approvedAt: new Date().toISOString(), userJob: 'Understand policy overhead.' },
+        spec: '## Summary\nDraft overhead policy.',
+        acceptanceCriteria: [{ id: 'ac-1', description: 'Policy has a concrete check.', verifiedBy: 'review' }],
+        taskReadiness: { recommendation: 'ready' },
+        notes: [],
+      },
+      {
+        id: 'task-legacy-sibling',
+        status: 'ready',
+        title: 'Sibling carrying old split readiness',
+        taskReadiness: { recommendation: 'split' },
+        notes: [],
+      },
+    ])
+    const { app } = buildServeApp({ projectPath: tmpDir })
+
+    const res = await app.fetch(
+      new Request(projectUrl('/api/project/task/task-1/enrich-task'), {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          mode: 'checklist',
+          instruction: 'Complete this task for worker handoff.',
+        }),
+      }),
+    )
+
+    const body = await res.json() as Record<string, any>
+    expect(res.status, JSON.stringify(body)).toBe(200)
+    expect(body).toMatchObject({ ok: true, status: 'exploring' })
+
+    const raw = JSON.parse(
+      await fs.readFile(path.join(memoryDir, 'TASKS.json'), 'utf8'),
+    ) as { tasks: Array<Record<string, any>> }
+    expect(raw.tasks[0]!.taskReadiness).toMatchObject({
+      taskKind: expect.any(String),
+      recommendation: 'ready',
+      summary: expect.any(String),
+      definitionOfDone: {
+        items: expect.any(Array),
+        evidenceRequired: expect.any(Array),
+      },
+      contextBudget: {
+        risk: expect.any(String),
+        fitsInOneWorkerBrief: expect.any(Boolean),
+      },
+      assessedAt: expect.any(String),
+    })
+    expect(raw.tasks[1]!.taskReadiness).toMatchObject({
+      taskKind: expect.any(String),
+      recommendation: 'split',
+      contextBudget: {
+        fitsInOneWorkerBrief: false,
+      },
+    })
+  })
+
   it('reopens a blocked task for split enrichment without deleting the existing spec', async () => {
     await seedTask('task-1', {
       status: 'blocked',
@@ -1501,6 +1617,120 @@ describe('POST /api/project/task/:id/enrich-task', () => {
     expect(transcript).toContain('Enrich this task')
     expect(transcript).toContain('containing work with smaller linked nested work')
     expect(transcript).toContain('Split Google OAuth setup')
+  })
+})
+
+describe('POST /api/project/task/:id/continue', () => {
+  it('continues brief cleanup through continuous coordination without one-task start semantics', async () => {
+    setProvider('anthropic-api', { apiKey: 'sk-ant-test' })
+    updateProjectConfig(tmpDir, { preferredProvider: 'anthropic-api', allowPaidProviderFallback: true })
+    await seedTask('task-1', {
+      status: 'ready',
+      assignedTo: null,
+      title: 'Ready task with an incomplete brief',
+      productBrief: { approvedAt: new Date().toISOString(), userJob: 'Understand policy overhead.' },
+      spec: '## Summary\nDraft overhead policy.',
+      acceptanceCriteria: [{ id: 'ac-1', description: 'Policy has a concrete check.', verifiedBy: 'review' }],
+      notes: [],
+    })
+    const { supervisor, starts } = createTrackingSupervisor()
+    const { app } = buildServeApp({ projectPath: tmpDir, supervisor })
+
+    try {
+      const res = await app.fetch(
+        new Request(projectUrl('/api/project/task/task-1/continue'), {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({
+            action: 'brief_cleanup',
+            mode: 'checklist',
+            instruction: 'Complete this task for worker handoff.',
+          }),
+        }),
+      )
+      const body = await res.json() as Record<string, any>
+
+      expect(res.status, JSON.stringify(body)).toBe(200)
+      expect(body).toMatchObject({
+        ok: true,
+        taskId: 'task-1',
+        action: 'brief_cleanup',
+        status: 'exploring',
+        continuation: {
+          status: 'started',
+          runStatus: 'running',
+          mode: 'continuous',
+        },
+      })
+      await vi.waitFor(() => {
+        expect(starts).toEqual([{ preferredTaskId: 'task-1' }])
+      })
+      expect(supervisor.get(projectId)?.mode).toBe('continuous')
+
+      const queue = JSON.parse(
+        await fs.readFile(path.join(memoryDir, 'TASKS.json'), 'utf8'),
+      ) as { tasks: Array<Record<string, any>> }
+      expect(queue.tasks[0]).toMatchObject({
+        id: 'task-1',
+        status: 'exploring',
+        assignedTo: 'spec-agent',
+      })
+      const transcript = (await readExploringTranscript({ memoryDir, taskId: 'task-1' })).content ?? ''
+      expect(transcript).toContain('Complete this task for worker handoff.')
+    } finally {
+      await supervisor.stopAll({ reason: 'test-teardown' }).catch(() => {})
+    }
+  })
+
+  it('queues brief cleanup continuation instead of rejecting when the project is already running', async () => {
+    await seedTask('task-1', {
+      status: 'ready',
+      assignedTo: null,
+      title: 'Queued cleanup task',
+      productBrief: { approvedAt: new Date().toISOString(), userJob: 'Understand policy overhead.' },
+      spec: '## Summary\nDraft overhead policy.',
+      acceptanceCriteria: [{ id: 'ac-1', description: 'Policy has a concrete check.', verifiedBy: 'review' }],
+      notes: [],
+    })
+    const { supervisor, starts } = createTrackingSupervisor()
+    const { app } = buildServeApp({ projectPath: tmpDir, supervisor })
+
+    try {
+      supervisor.start({ workspaceId: projectId, workspacePath: tmpDir })
+      await vi.waitFor(() => expect(supervisor.get(projectId)?.status).toBe('running'))
+      await vi.waitFor(() => expect(starts).toHaveLength(1))
+      starts.length = 0
+      const startSpy = vi.spyOn(supervisor, 'start')
+
+      const res = await app.fetch(
+        new Request(projectUrl('/api/project/task/task-1/continue'), {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({
+            action: 'brief_cleanup',
+            mode: 'checklist',
+            instruction: 'Complete this task for worker handoff.',
+          }),
+        }),
+      )
+      const body = await res.json() as Record<string, any>
+
+      expect(res.status, JSON.stringify(body)).toBe(200)
+      expect(body).toMatchObject({
+        ok: true,
+        taskId: 'task-1',
+        action: 'brief_cleanup',
+        status: 'exploring',
+        continuation: {
+          status: 'queued',
+          runStatus: 'running',
+        },
+      })
+      expect(startSpy).not.toHaveBeenCalled()
+      expect(starts).toEqual([])
+    } finally {
+      await supervisor.stopAll({ reason: 'test-teardown' }).catch(() => {})
+    }
   })
 })
 

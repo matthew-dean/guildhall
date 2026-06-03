@@ -6510,6 +6510,114 @@ export function buildServeApp(opts: ServeOptions = {}): {
     }
   })
 
+  app.post('/api/project/task/:id/continue', async c => {
+    try {
+      if (project.initializationNeeded) return c.json({ error: 'not initialized' }, 400)
+      const id = c.req.param('id')
+      const body = await c.req.json().catch(() => ({})) as {
+        action?: 'brief_cleanup'
+        instruction?: string
+        mode?: 'split' | 'checklist' | 'general'
+      }
+      const action = body.action ?? 'brief_cleanup'
+      if (action !== 'brief_cleanup') {
+        return c.json({ error: 'unknown continuation action' }, 400)
+      }
+
+      const memoryDir = getProjectStateDir(project.path)
+      const tasksPath = join(memoryDir, 'TASKS.json')
+      const tasks = await readTasksFileNormalized(tasksPath).catch(() => [])
+      if (!tasks.some(task => task.id === id)) {
+        return c.json({ error: 'task not found' }, 404)
+      }
+
+      const result = await enrichTask({
+        memoryDir,
+        taskId: id,
+        mode: body.mode ?? 'checklist',
+        instruction:
+          body.instruction ??
+          'Complete this task for worker handoff: preserve the useful starting point, write a full product brief and spec handoff, and add concrete acceptance criteria before implementation.',
+      })
+      if (!result.success) return c.json({ error: result.error ?? 'continuation failed' }, 400)
+
+      const existingRun = supervisor.get(project.id)
+      if (existingRun && (existingRun.status === 'running' || existingRun.status === 'stopping')) {
+        return c.json({
+          ok: true,
+          taskId: id,
+          action,
+          status: result.newStatus,
+          continuation: {
+            status: 'queued',
+            runStatus: existingRun.status,
+            mode: existingRun.mode,
+          },
+        })
+      }
+
+      const url = new URL(c.req.url)
+      url.pathname = '/api/project/start'
+      const startRes = await app.fetch(
+        new Request(url, {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ mode: 'continuous', taskId: id }),
+        }),
+        c.env,
+      )
+      const startBody = await startRes.json().catch(() => ({})) as Record<string, unknown>
+      if (!startRes.ok || startBody.error) {
+        if (startBody.code === 'run_already_active') {
+          const run = supervisor.get(project.id)
+          return c.json({
+            ok: true,
+            taskId: id,
+            action,
+            status: result.newStatus,
+            continuation: {
+              status: 'queued',
+              runStatus: run?.status ?? startBody.status ?? 'running',
+              ...(run?.mode ? { mode: run.mode } : {}),
+            },
+          })
+        }
+        return c.json(
+          {
+            error: typeof startBody.error === 'string' ? startBody.error : `Continuation failed (HTTP ${startRes.status})`,
+            ...(typeof startBody.code === 'string' ? { code: startBody.code } : {}),
+            ...(typeof startBody.actionHref === 'string' ? { actionHref: startBody.actionHref } : {}),
+            taskId: id,
+            action,
+            status: result.newStatus,
+            continuation: {
+              status: 'blocked',
+              runStatus: supervisor.get(project.id)?.status ?? 'stopped',
+            },
+          },
+          startRes.status === 409 ? 409 : startRes.status === 400 ? 400 : 500,
+        )
+      }
+
+      return c.json({
+        ok: true,
+        taskId: id,
+        action,
+        status: result.newStatus,
+        continuation: {
+          status: 'started',
+          runStatus: typeof startBody.status === 'string' ? startBody.status : supervisor.get(project.id)?.status ?? 'running',
+          mode: typeof startBody.mode === 'string' ? startBody.mode : 'continuous',
+          ...(typeof startBody.startedAt === 'string' ? { startedAt: startBody.startedAt } : {}),
+          ...(typeof startBody.provider === 'string' ? { provider: startBody.provider } : {}),
+          ...(startBody.providerStatus ? { providerStatus: startBody.providerStatus } : {}),
+        },
+      })
+    } catch (err) {
+      return c.json({ error: err instanceof Error ? err.message : String(err) }, 500)
+    }
+  })
+
   // POST /api/project/task/:id/:action — human overrides on a task.
   //   hold               → blocked      (any non-terminal task; reversible)
   //   resume-hold        → previous status from hold record

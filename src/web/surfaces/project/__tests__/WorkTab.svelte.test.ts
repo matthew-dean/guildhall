@@ -1,4 +1,5 @@
 // @vitest-environment happy-dom
+import { readFileSync } from 'node:fs'
 import '@testing-library/jest-dom/vitest'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { cleanup, fireEvent, render, screen, within } from '@testing-library/svelte'
@@ -517,6 +518,19 @@ describe('WorkTab', () => {
     expect(await screen.findByText('1 ready to start')).toBeTruthy()
     expect(screen.getByText('2 need brief cleanup')).toBeTruthy()
     expect(screen.queryByText('3 ready for worker')).toBeNull()
+  })
+
+  it('keeps the wide work-list grid inside the clipped card at side-by-side widths', () => {
+    const source = readFileSync('src/web/surfaces/project/WorkTab.svelte', 'utf8')
+    const stackBlock = source.match(/:global\(\.work-list-stack\)\s*\{([\s\S]*?)\n\s*\}/)?.[1] ?? ''
+    const headBlock = source.match(/\.list-column-head\s*\{([\s\S]*?)\n\s*\}/)?.[1] ?? ''
+    const rowBlock = source.match(/:global\(\.work-list-row\)\s*\{([\s\S]*?)\n\s*\}/)?.[1] ?? ''
+
+    expect(stackBlock).toContain('minmax(220px, 1fr)')
+    expect(stackBlock).toContain('minmax(108px, max-content)')
+    expect(stackBlock).not.toContain('minmax(280px, 1fr)')
+    expect(headBlock).toContain('gap: var(--gh-space-2)')
+    expect(rowBlock).toContain('gap: var(--gh-space-2)')
   })
 
   it('routes imported-draft review and view-mode controls through project-scoped links', async () => {

@@ -113,7 +113,7 @@ describe('CurrentTab', () => {
     expect(briefCleanupChip.classList.contains('tone-agent-attention')).toBe(true)
     expect(screen.getByText(/marked ready, but its brief\/spec is not complete enough/i)).toBeTruthy()
     const viewButton = screen.getByRole('button', { name: /view brief/i })
-    const startButton = screen.getByRole('button', { name: 'Start' })
+    const startButton = screen.getByRole('button', { name: 'Clean up brief' })
     expect(startButton.classList.contains('v-agent')).toBe(true)
     expect(viewButton.compareDocumentPosition(startButton) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
     await userEvent.click(startButton)
@@ -452,7 +452,7 @@ describe('CurrentTab', () => {
     expect(screen.getByText('Guildhall needs to turn the source notes into an outcome and acceptance checks before implementation.')).toBeTruthy()
     expect(screen.getAllByText('Missing').length).toBeGreaterThanOrEqual(1)
     expect(screen.queryByRole('button', { name: /start work/i })).toBeNull()
-    const startButton = screen.getByRole('button', { name: 'Start' })
+    const startButton = screen.getByRole('button', { name: 'Clean up brief' })
     expect(startButton.classList.contains('v-agent')).toBe(true)
     await userEvent.click(startButton)
 
@@ -491,7 +491,7 @@ describe('CurrentTab', () => {
     expect(screen.getByText('Needs brief cleanup')).toBeTruthy()
     expect(screen.getByText('Brief cleanup needed')).toBeTruthy()
     expect(screen.getByText('Guildhall needs to turn the source notes into concrete acceptance checks before implementation.')).toBeTruthy()
-    await userEvent.click(screen.getByRole('button', { name: 'Start' }))
+    await userEvent.click(screen.getByRole('button', { name: 'Clean up brief' }))
 
     expect(props.onRunTask).toHaveBeenCalledOnce()
   })

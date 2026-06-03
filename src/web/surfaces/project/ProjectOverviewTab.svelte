@@ -26,6 +26,7 @@
   import { hasCurrentGitUnavailableStory, type ProjectActivityLine } from '../../lib/project-activity.js'
   import { isGitUnavailableMessage } from '../../lib/runtime-message.js'
   import { activeEscalations } from '../../lib/escalation.js'
+  import { needsWorkerHandoffSpecCleanup } from '../../lib/task-state.js'
 
   interface Props {
     detail: ProjectDetail
@@ -61,7 +62,7 @@
   interface BlockedRow {
     task: Task
     reason: string
-    dependency: string
+    category: string
     href: string
   }
 
@@ -93,11 +94,12 @@
 
   const counts = $derived.by(() => {
     const count = (statuses: string[]) => tasks.filter(task => statuses.includes(task.status ?? '')).length
+    const briefCleanup = tasks.filter(needsOverviewBriefCleanup).length
     return {
       total: tasks.length,
-      shaping: count(['import_draft', 'exploring']),
+      shaping: count(['import_draft', 'exploring']) + briefCleanup,
       approval: count(['spec_review']),
-      ready: count(['ready']),
+      ready: tasks.filter(task => task.status === 'ready' && !needsOverviewBriefCleanup(task)).length,
       working: count(['in_progress', 'review', 'gate_check']),
       blocked: count(['blocked']),
       done: count(['done', 'pending_pr']),
@@ -342,7 +344,7 @@
       .map(task => ({
         task,
         reason: blockerReason(task),
-        dependency: inferDependency(task),
+        category: inferBlockerCategory(task),
         href: currentTaskHref(task.id, activeProjectId),
       }))
       .slice(0, 4)
@@ -350,6 +352,14 @@
 
   function isRunnableStatus(status: string | undefined): boolean {
     return status === 'ready' || status === 'in_progress' || status === 'review' || status === 'gate_check'
+  }
+
+  function needsOverviewBriefCleanup(task: Task): boolean {
+    return needsWorkerHandoffSpecCleanup(task)
+  }
+
+  function overviewTaskStatusLabel(task: Task): string {
+    return needsOverviewBriefCleanup(task) ? 'Needs brief' : friendlyStatus(task.status)
   }
 
   const runBlocker = $derived.by(() => {
@@ -372,21 +382,29 @@
 
   const runPlanRows = $derived.by(() => {
     const rows: RunPlanRow[] = []
-    const addTasks = (wanted: string[], tone: Tone, detail: (task: Task) => string, limit: number) => {
+    const addTasks = (wanted: string[], tone: Tone | ((task: Task) => Tone), detail: (task: Task) => string, limit: number) => {
       for (const task of sortedTasks(wanted)) {
         if (rows.length >= limit) return
+        const rowTone = typeof tone === 'function' ? tone(task) : tone
         rows.push({
           task,
           label: task.title ?? friendlyTaskId(task.id),
           detail: detail(task),
-          tone,
+          tone: rowTone,
           href: currentTaskHref(task.id, activeProjectId),
         })
       }
     }
 
     addTasks(['in_progress', 'review', 'gate_check'], running ? 'running' : 'accent', task => `${friendlyStatus(task.status)}: ${statusDetail(task)}`, 4)
-    addTasks(['ready'], 'accent', task => `${friendlyStatus(task.status)}: ready for the next worker slot.`, 4)
+    addTasks(
+      ['ready'],
+      task => needsOverviewBriefCleanup(task) ? 'warn' : 'accent',
+      task => needsOverviewBriefCleanup(task)
+        ? 'Needs brief cleanup: finish the handoff before a worker can start.'
+        : `${friendlyStatus(task.status)}: ready for the next worker slot.`,
+      4,
+    )
     addTasks(['spec_review', 'import_draft'], 'warn', task => `${friendlyStatus(task.status)}: needs review before it can move.`, 4)
     addTasks(['exploring'], 'neutral', task => `${friendlyStatus(task.status)}: still being shaped.`, 4)
 
@@ -501,28 +519,26 @@
     return withoutCodePrefix
   }
 
-  function inferDependency(task: Task): string {
-    const explicit = (task.dependsOn ?? [])
-      .map(id => tasks.find(candidate => candidate.id === id))
-      .filter((candidate): candidate is Task => Boolean(candidate))
-    if (explicit.length > 0) return explicit.map(taskLabel).join(', ')
-
+  function inferBlockerCategory(task: Task): string {
     const reason = blockerReason(task)
-    const haystack = `${reason} ${task.description ?? ''}`.toLowerCase()
-    const referenced = tasks.find(candidate => {
+    const haystack = `${task.title ?? ''} ${reason} ${task.description ?? ''}`.toLowerCase()
+
+    const inbox = inboxItems.find(item => item.taskId === task.id || item.title === task.title)
+
+    if (/provider|oauth|api key|model|fallback|stripe|supabase auth/.test(haystack)) return 'Provider settings'
+    if (/git|branch|commit|push|dirty|merge/.test(haystack)) return 'Git story closure'
+    if (/bootstrap|readiness|database|migration|db\b/.test(haystack)) return 'Project readiness / bootstrap'
+    if ((task.dependsOn ?? []).length > 0 || referencesAnotherTask(task, haystack)) return 'Dependencies'
+    if (inbox?.missingSteps?.length) return 'Missing prerequisite'
+    return 'Needs triage'
+  }
+
+  function referencesAnotherTask(task: Task, haystack: string): boolean {
+    return tasks.some(candidate => {
       if (candidate.id === task.id) return false
       const title = candidate.title?.trim().toLowerCase()
       return haystack.includes(candidate.id.toLowerCase()) || (title && title.length > 8 && haystack.includes(title))
     })
-    if (referenced) return taskLabel(referenced)
-
-    const inbox = inboxItems.find(item => item.taskId === task.id || item.title === task.title)
-    if (inbox?.missingSteps?.length) return inbox.missingSteps[0] ?? 'Missing prerequisite'
-
-    if (/bootstrap|readiness|setup|supabase|database|migration|db\b/i.test(reason)) return 'Project readiness / bootstrap'
-    if (/provider|model|api key|fallback/i.test(reason)) return 'Provider settings'
-    if (/git|branch|commit|push|dirty|merge/i.test(reason)) return 'Git story closure'
-    return 'Needs triage'
   }
 
   function startReadinessLabel(code: string | undefined): string {
@@ -538,6 +554,7 @@
   }
 
   function toneForTask(task: Task): Tone {
+    if (needsOverviewBriefCleanup(task)) return 'warn'
     switch (task.status) {
       case 'blocked': return 'danger'
       case 'review':
@@ -683,7 +700,7 @@
             <OverviewTaskRow
               title={task.title ?? friendlyTaskId(task.id)}
               detail={friendlyDomain(task.domain) || statusDetail(task)}
-              chipLabel={friendlyStatus(task.status)}
+              chipLabel={overviewTaskStatusLabel(task)}
               chipTone={toneForTask(task) === 'danger' ? 'danger' : toneForTask(task) === 'warn' ? 'warn' : toneForTask(task) === 'running' ? 'ok' : 'neutral'}
               onclick={() => go(currentTaskHref(task.id, activeProjectId))}
             />
@@ -757,13 +774,13 @@
       {#if blockedRows.length === 0}
         <p class="muted">No blocked tasks are visible right now.</p>
       {:else}
-        <div class="dependency-list">
+        <div class="blocked-work-list">
           {#each blockedRows as row (row.task.id)}
             <OverviewTaskRow
               title={taskLabel(row.task)}
               detail={row.reason}
-              chipLabel={row.dependency}
-              chipTone={row.dependency === 'Needs triage' ? 'danger' : 'warn'}
+              chipLabel={row.category}
+              chipTone={row.category === 'Needs triage' ? 'danger' : 'warn'}
               onclick={() => go(row.href)}
             />
           {/each}
@@ -1131,7 +1148,7 @@
   .signal-list,
   .proof-path-list,
   .event-list,
-  .dependency-list,
+  .blocked-work-list,
   .run-plan-list {
     display: grid;
     gap: var(--s-2);
@@ -1182,7 +1199,7 @@
     overflow-wrap: anywhere;
   }
   .motion-list :global(.overview-task-row),
-  .dependency-list :global(.overview-task-row) {
+  .blocked-work-list :global(.overview-task-row) {
     min-height: 0;
   }
   :global(.run-blocker) span,

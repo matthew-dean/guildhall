@@ -75,6 +75,155 @@ babysit setup/import/provider/release states across multiple pages.
   `lucide-refresh-cw` SVGs. The live migration API shows
   `0.10.0/task-hierarchy-links` applied at `2026-06-02T19:05:29.512Z`; the
   remaining blocker is `0.10.0/task-open-questions-to-bounded-chat`.
+- [x] Restore compact mobile Thread rows to the shared card-list surface. The
+  Fair Labor License thread list at mobile width was visually collapsed into
+  edge-to-edge rows because the compact list used plain row button styling and
+  later lost its outer gutter when the shell padding token was unavailable.
+  Closure evidence, 2026-06-02: compact thread index rows now render through
+  `CardListItem`/`UtilityPanel`; the compact-list CSS keeps row spacing and
+  gives the shell padding token a `var(--gh-space-2)` fallback so the shared
+  card padding/radius/background remain visible on mobile. Red/green coverage:
+  `src/web/surfaces/project/__tests__/ThreadTab.svelte.test.ts` now checks the
+  shared `card-list-item`/`utility-panel` row contract and the padding fallback.
+  Verification: `pnpm vitest run
+  src/web/surfaces/project/__tests__/ThreadTab.svelte.test.ts --reporter=dot`
+  (`73` tests), `pnpm typecheck`, `pnpm lint:design`, `pnpm build`,
+  `pnpm dev:install`, service restart, and `stale:false`. Browser proof against
+  `http://localhost:7777/projects/fair-labor-license/thread` at `640x900`
+  showed `thread-compact-list`, `.thread-index` padding `8px 8px 12px`,
+  list gap `8px`, and rows at `x=8` with class
+  `utility-panel ... card-list-item thread-index-row`, `12px` row padding, and
+  `6px` border radius.
+- [x] Keep pending blocked Thread escalations actionable from the selected
+  thread detail. Fair Labor License's pending external-setup blockers were
+  labeled "Needs you" and the detail copy told the user to choose a recovery
+  action, but Thread only rendered action buttons for `active` escalation turns,
+  so `pending`/`blocked` escalation cards had no decision controls and no
+  composer. Closure evidence, 2026-06-02: pending blocked escalations now use
+  the same recovery decision surface as other escalation cards: `Details...`,
+  reason-aware `Resume task`/retry/rework action, `I handled this...`, and the
+  shared Thread composer for non-resolving recovery guidance. Composer notes use
+  the existing task `/resume` endpoint with `preserveStatus` so adding guidance
+  does not silently clear the blocker. Red/green coverage:
+  `src/web/surfaces/project/__tests__/ThreadTab.svelte.test.ts` reproduces a
+  pending `human_judgment_required` OAuth escalation, verifies the action modal
+  opens, and verifies the composer sends a preserved-status recovery note.
+  Verification: `pnpm vitest run
+  src/web/surfaces/project/__tests__/ThreadTab.svelte.test.ts -t "pending
+  blocked escalations" --reporter=dot`; full ThreadTab suite (`73` tests);
+  `pnpm typecheck`; `pnpm lint:design`; `pnpm build`; `pnpm dev:install`;
+  service restart; and `stale:false`. Browser proof against
+  `http://localhost:7777/projects/fair-labor-license/thread` showed the selected
+  Google OAuth recovery thread with `Details...`, `Resume task`,
+  `I handled this...`, `Send`, and composer placeholder
+  `Add recovery guidance for Guildhall...`.
+- [x] Keep selected recovery cards in scrollable Thread flow while only the
+  composer stays sticky. Fair Labor License's selected "Needs you" recovery
+  card should be an ordinary scrollable card above the composer, not a second
+  sticky footer item. The previous fix put `.thread-active-dock` inside
+  `.thread-footer`, so the card inherited the footer's sticky behavior even
+  though the card itself was `position: relative`. Closure evidence,
+  2026-06-02: `.thread-detail-flow` is back as a column flex stack,
+  `.thread-list` is a real DOM wrapper (not a class attached to `Stack`, which
+  does not forward it) and keeps `margin-top: auto`, actionable escalation
+  turns render as `.thread-active-dock` inside the scrollable flow, and
+  `.thread-footer` is only rendered around the composer. Red/green coverage:
+  `src/web/surfaces/project/__tests__/ThreadTab.svelte.test.ts -t "pending
+  blocked escalations"` first failed because the footer still contained
+  `Needs recovery`, then passed with `Needs recovery`, `Resume task`, and
+  `I handled this...` inside the active dock while the footer only contains the
+  composer. The source-contract test `-t "only the composer footer is sticky"`
+  also covers the DOM order and absence of absolute/fixed positioning.
+  Verification: full ThreadTab suite
+  (`73` tests), `pnpm typecheck`, `pnpm lint:design`, `git diff --check`,
+  `pnpm build`, `pnpm dev:install`, service restart, and `stale:false`.
+  Browser proof against
+  `http://localhost:7777/projects/fair-labor-license/thread` showed the Google
+  OAuth recovery card as a child of `.thread-detail-flow`, not
+  `.thread-footer`; `footerContainsDock: false`, `footerContainsComposer:
+  true`, `Resume task` present in the dock and absent from the footer,
+  `.thread-active-dock` position `relative`, and footer position `sticky`.
+  Follow-up closure evidence, 2026-06-02: the scrollable Thread detail now has
+  `padding-top: var(--gh-space-1)` to match the sticky footer's existing bottom
+  inset. Source-contract coverage checks `.thread-detail-scroll` top padding
+  and `.thread-footer` bottom padding together; live FLL proof showed
+  `scrollPaddingTop: 4px`, `footerPaddingBottom: 4px`, and footer position
+  `sticky`.
+- [x] Move the Thread composer send-button circle into the shared Button
+  primitive. Fair Labor License's composer send action was still trying to
+  become circular through a local `.thread-composer-send` class, but that shape
+  was being applied across a child component boundary instead of through
+  Button's own contract. Closure evidence, 2026-06-02: `Button` now accepts a
+  `rounded` boolean and owns rounded icon-only geometry; the Thread composer
+  passes `iconOnly rounded` and no longer carries local width/height/padding/
+  radius rules for the send action. Red/green coverage:
+  `src/web/lib/__tests__/Button.css-contract.test.ts -t "rounded icon-only"`
+  and `src/web/surfaces/project/__tests__/ThreadTab.svelte.test.ts -t "shared
+  rounded button"` both failed before the shared prop existed, then passed.
+  Verification: full Button visual contract suite (`5` tests), full ThreadTab
+  suite (`73` tests), `pnpm typecheck`, `pnpm lint:design`, `git diff --check`,
+  `pnpm build`, `pnpm dev:install`, service restart, and `stale:false`.
+  Browser proof against
+  `http://localhost:7777/projects/fair-labor-license/thread` showed the live
+  composer send button with class `btn v-primary s-sm icon-only rounded`, size
+  `32x32`, `border-radius: 999px`, zero button padding, and 8px right/bottom
+  inset from the input shell. Follow-up closure evidence, 2026-06-02: the
+  composer textarea is explicitly block-level so the input shell and textbox
+  share the same height; browser proof showed symmetrical 9px shell-to-textbox
+  inset on all sides and the send button exactly 8px from the textbox bottom
+  and right edges. The Thread source-contract test now locks that the composer
+  textbox and send action use the same inset grid. Follow-up frame cleanup,
+  2026-06-02: the sticky footer was composer-only in the DOM, but
+  `.thread-composer-shell` still looked like a card because it owned padding,
+  border, radius, background, shadow, and blur. The wrapper is now unframed,
+  leaving the textarea as the only bordered input surface. Red/green coverage:
+  `src/web/surfaces/project/__tests__/ThreadTab.svelte.test.ts -t "sticky
+  composer wrapper"` failed on the shell frame styles, then passed; live FLL
+  proof showed the composer wrapper with `padding: 0px`, no border/radius,
+  transparent background, no shadow, and no backdrop blur while
+  `footerContainsDock: false`.
+- [x] Collapse repeated historical review feedback into one history-detail
+  event. Fair Labor License's thread history was rendering each completed
+  reviewer note as a separate "Review feedback" event header, which made noisy
+  review churn look like a stack of peer cards instead of historical detail.
+  Closure evidence, 2026-06-02: `ThreadTab` now groups adjacent historical
+  `review_feedback` turns for the same task into one event, shows the newest
+  reviewer summary inline, and puts earlier passes behind the existing
+  `thread-history-cluster` disclosure as `Pass N` entries. Single review notes
+  still render as before. Red/green coverage:
+  `src/web/surfaces/project/__tests__/ThreadTab.svelte.test.ts -t "clusters
+  repeated historical review feedback"` first failed with three repeated
+  `Review feedback` headers, then passed with one header and `Show 2 earlier
+  reviewer notes`. Verification: full ThreadTab suite (`74` tests),
+  `pnpm typecheck`, `pnpm lint:design`, `git diff --check`, `pnpm build`,
+  `pnpm dev:install`, service restart, and `stale:false`. Browser proof against
+  `http://localhost:7777/projects/fair-labor-license/thread`, selecting
+  `Set FLL overhead charge policy`, showed `reviewHeadCount: 1`, event heads
+  `Review feedback` and `Recovery history`, disclosure
+  `Show 7 earlier reviewer notes`, pass labels `Pass 7` through `Pass 1`, and
+  the disclosure closed by default with visible text only showing the newest
+  review summary plus the disclosure label.
+- [x] Keep Overview blocked-work chips as compact categories, not task-title
+  dependency labels. Fair Labor License's blocked OAuth/setup rows had clean
+  `dependsOn` task IDs, but `ProjectOverviewTab` resolved those IDs to task
+  titles and passed the joined titles directly into `OverviewTaskRow.chipLabel`,
+  producing giant chips such as `Create Google OAuth provider credentials,
+  Create Apple OAuth provider credentials` and `Add OAuth providers — Google
+  and Apple sign-in`. Closure evidence, 2026-06-02: the Overview blocked-row
+  mapper now infers a short blocker category (`Provider settings`,
+  `Dependencies`, `Git story closure`, `Project readiness / bootstrap`,
+  `Missing prerequisite`, or `Needs triage`) before binding `chipLabel`, and the
+  local class name was moved from dependency-list to blocked-work-list to match
+  the product semantics. Red/green coverage:
+  `src/web/surfaces/project/__tests__/ProjectOverviewTab.svelte.test.ts -t
+  "blocked-work chips" --reporter=dot` first failed with the long dependency
+  labels, then passed with three `Provider settings` chips. Verification: full
+  ProjectOverviewTab suite (`14` tests), `pnpm typecheck`, `pnpm lint:design`,
+  `git diff --check`, `pnpm build`, `pnpm dev:install`, service restart, and
+  `stale:false`. Browser proof against
+  `http://localhost:7777/projects/fair-labor-license/overview` showed the four
+  live blocked-work chips all rendering `Provider settings`, `longChipCount: 0`,
+  and no dependency-title chip labels.
 - [x] Reduce Guildhall cognitive overhead with hard conversions and clearer
   abstraction boundaries. Plan:
   `internal/plans/2026-06-01-guildhall-cognitive-overhead-reduction.md`.
@@ -6738,6 +6887,14 @@ local 0.7 release-candidate build at `http://localhost:7777/projects/narrative-h
     work-view Playwright test passed; installed app reports `"stale": false`;
     browser proof measured identical left offsets for the first six Narrative
     Harness List rows across every data column.
+    Follow-up clipping fix, 2026-06-02: the List view grid now uses narrower
+    side-by-side tracks and shared `--gh-space-2` gaps so the `Updated` and
+    `Revs` columns stay inside clipped cards at narrow desktop widths. Evidence:
+    focused and full WorkTab tests passed; `pnpm typecheck`, `pnpm lint:design`,
+    `git diff --check`, `pnpm build`, and `pnpm dev:install` passed; installed
+    app reports `"stale": false`; live Fair Labor License proof at viewport
+    921x776 measured the clipped card at right=897 and the header/first row at
+    right=880, with timestamp and revision cells fully visible.
   - [x] Added the 0.9.0 evidence-to-work-graph intake spec and first pure
     planner seam for the Looma + Knit trust failure class. The planner now
     extracts deliverable units from structured source evidence, preserves
@@ -6831,3 +6988,105 @@ Remaining efficiency fat: both fixtures still spent one `resolve_automation_bloc
 Verification: focused orchestrator regression tests for `.guildhall` git-diff exclusions, piped git-diff gates, worktree command gates, and command-gated worktree landing passed; `pnpm build` passed; live artifact-local benchmark passed 2/2.
 
 source: codex:artifact-local-command-gate-landing-proof
+
+## 2026-06-02T21:15:00.000Z MCP evidence for artifact:flow-audit
+
+Closed the Fair Labor License start-readiness projection bug where a task could
+show a complete starter checklist and a green `Start work` affordance while the
+runtime correctly blocked unattended work because the stricter worker handoff
+brief/spec contract was incomplete.
+
+- [x] Thread/runtime projection now carries explicit `workerHandoff` readiness,
+  so a `ready` task with a 4/4 starter checklist can still surface as needing
+  brief cleanup before worker start.
+- [x] Thread and Current drawer cards render worker-handoff cleanup as
+  `Needs brief cleanup` / `Needs brief`. Thread cleanup now routes through the
+  task continuation contract instead of disguising cleanup as generic project
+  start.
+- [x] Overview and the project top bar stop presenting handoff-incomplete
+  ready tasks as worker-ready. Overview buckets them with shaped work, labels
+  rows `Needs brief`, and uses brief-cleanup copy in the next-run list.
+- [x] Added regressions for complete-checklist-but-incomplete-handoff turns,
+  overview handoff cleanup rows, and brief-cleanup start blocker topbar copy.
+
+Evidence: `pnpm vitest run
+src/web/surfaces/project/__tests__/ProjectOverviewTab.svelte.test.ts
+src/web/surfaces/__tests__/ProjectView.svelte.test.ts` passed with 54 tests;
+`pnpm vitest run src/web/surfaces/project/__tests__/ThreadTab.svelte.test.ts
+src/runtime/__tests__/thread.test.ts` passed with 140 tests; `pnpm vitest run
+src/web/surfaces/drawer/__tests__/CurrentTab.svelte.test.ts` passed with 21
+tests; `pnpm typecheck` passed.
+
+Follow-up closure evidence, 2026-06-02: live Thread click testing found the
+render-only proof was insufficient. The Fair Labor License Thread card for
+`task-006` rendered `Needs brief cleanup`, `4 of 4 complete`, and `Clean up
+brief`, but clicking it still surfaced a raw Zod validation array because
+`/api/project/task/:id/enrich-task` parsed the whole queue before it could
+repair legacy partial `taskReadiness` / `productBrief` records. Runtime intake
+now normalizes legacy task-queue shape at the read boundary before strict
+`TaskQueue.parse`, keeps the core schema strict, and prevents migrated partial
+briefs from carrying approval forward as final worker handoff. Regression
+coverage: `POST /api/project/task/:id/enrich-task` accepts old compact
+readiness records and writes full readiness metadata before reopening the task.
+Verification: `pnpm vitest run
+src/runtime/__tests__/serve-task-endpoints.test.ts
+src/web/surfaces/project/__tests__/ThreadTab.svelte.test.ts` passed with 142
+tests, `pnpm typecheck` passed, `pnpm dev:install` rebuilt the installed app,
+service restart reported `/api/stale-server` as `stale:false`, and browser
+proof on `http://localhost:7777/projects/fair-labor-license/thread` clicked the
+live `Set FLL overhead charge policy` `Clean up brief` button. The rendered
+Thread changed to `Routed to Task Intake`, no raw `invalid_type` /
+`taskReadiness` / `Required` error appeared, `/api/project` showed `task-006`
+as `exploring` with normalized readiness fields, and the induced run stopped
+with zero token usage.
+
+Second follow-up closure evidence, 2026-06-02: live Thread review found the
+post-cleanup projection still leaked internal routing and failed to show what
+Thread was doing for the reopened task. `task-006` had been reopened to
+`exploring`, but the saved request card fell back to `Routed to Task Intake`,
+the cleanup request existed only as backend notes, and stale reviewer feedback
+could still claim the current lifecycle phase. Thread now treats brief cleanup
+as a first-class request stage: saved requests become history, enrichment notes
+project as a visible `Brief cleanup requested` milestone, stale review notes
+stay historical while a task is back in cleanup, partial legacy product briefs
+no longer suppress the current cleanup card, and the selected task card says
+`Brief cleanup` / `Cleanup queued` / `Clean up brief` instead of pretending the
+request left Thread.
+
+Verification: `pnpm vitest run src/runtime/__tests__/thread.test.ts
+src/web/surfaces/project/__tests__/ThreadTab.svelte.test.ts` passed with 143
+tests; `pnpm typecheck` passed; `pnpm dev:install` rebuilt the installed app;
+service restart reported `/api/stale-server` as `stale:false`; live API proof
+for `fair-labor-license` showed `request:task-006:brief-cleanup` plus
+`inflight:task-006` with `requestStage: task_brief_cleanup`; browser proof on
+`http://localhost:7777/projects/fair-labor-license/thread` selected `Set FLL
+overhead charge policy` and showed `Brief cleanup requested`, `Task brief
+cleanup`, `Cleanup queued`, the active `Brief cleanup` card, and no `Routed to
+Task Intake` copy.
+
+Third follow-up closure evidence, 2026-06-02: approved behavior-contract pass
+removed the remaining "Clean up brief secretly means Start work" coupling in
+Thread. Guildhall now exposes `/api/project/task/:id/continue` for
+`brief_cleanup` continuations. The endpoint enriches the task brief, returns a
+queued continuation if the coordinator is already running, and otherwise wakes
+continuous coordination with the task as the preferred focus; it does not use
+one-task scoped-start semantics. Thread's `Clean up brief` button now posts
+that continuation payload directly and returns after refreshing, so the UI no
+longer calls `/api/project/task/:id/enrich-task` and then falls through into
+`/api/project/start`.
+
+Verification: focused continuation tests first failed against the old behavior,
+then `pnpm vitest run
+src/runtime/__tests__/serve-task-endpoints.test.ts
+src/web/surfaces/project/__tests__/ThreadTab.svelte.test.ts` passed with 145
+tests; `pnpm typecheck` passed; `pnpm dev:install` rebuilt the installed app;
+service restart reported `/api/stale-server` as `stale:false`. Live browser
+proof on `http://localhost:7777/projects/fair-labor-license/thread` clicked the
+visible `Clean up brief` action on the selected Stripe cleanup card; the page
+returned to queued cleanup language (`Queued for Guildhall`) without
+`invalid_type`, `taskReadiness`, `Required`, `run_already_active`, or `Routed
+to Task Intake`. Live API proof showed `task-stripe-integration` and
+`task-006` as `requestStage: task_brief_cleanup`, and the induced run was
+recorded as `mode: continuous` before stopping on idle.
+
+source: codex:fll-start-readiness-worker-handoff-cleanup

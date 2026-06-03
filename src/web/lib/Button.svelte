@@ -14,6 +14,7 @@
     size?: Size
     disabled?: boolean
     iconOnly?: boolean
+    rounded?: boolean
     type?: 'button' | 'submit'
     ariaLabel?: string
     pressed?: boolean
@@ -28,6 +29,7 @@
     size = 'md',
     disabled = false,
     iconOnly = false,
+    rounded = false,
     type = 'button',
     ariaLabel,
     pressed,
@@ -41,7 +43,7 @@
 
 {#snippet buttonElement()}
   <button
-    class={`btn v-${variant} s-${size} ${iconOnly ? 'icon-only' : ''} ${className}`.trim()}
+    class={`btn v-${variant} s-${size} ${iconOnly ? 'icon-only' : ''} ${rounded ? 'rounded' : ''} ${className}`.trim()}
     {type}
     {disabled}
     {onclick}
@@ -185,5 +187,19 @@
   .s-sm.icon-only {
     width: 28px;
     min-width: 28px;
+  }
+  .rounded.icon-only {
+    width: var(--control-h);
+    min-width: var(--control-h);
+    height: var(--control-h);
+    min-height: var(--control-h);
+    padding: 0;
+    border-radius: var(--gh-radius-full);
+  }
+  .s-sm.rounded.icon-only {
+    width: 32px;
+    min-width: 32px;
+    height: 32px;
+    min-height: 32px;
   }
 </style>

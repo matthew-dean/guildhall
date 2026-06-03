@@ -749,6 +749,37 @@ describe('ProjectView', () => {
     expect(screen.queryByRole('button', { name: /waiting on answer/i })).not.toBeInTheDocument()
   })
 
+  it('labels brief-cleanup start blockers as review actions in the top bar', async () => {
+    const cleanupDetail = detail({
+      startReadiness: {
+        canStart: false,
+        code: 'no_unattended_progress',
+        message: '1 task needs a clearer brief and acceptance criteria before Guildhall can build unattended.',
+        actionHref: '/thread',
+      },
+      tasks: [
+        task({
+          id: 'task-needs-brief',
+          title: 'Set FLL overhead charge policy',
+          status: 'ready',
+          productBrief: {
+            approvedAt: '2026-06-02T12:00:00.000Z',
+            userJob: '',
+          },
+          acceptanceCriteria: [],
+          spec: '',
+        }),
+      ],
+    })
+    installFetchFakes(cleanupDetail)
+    await renderProjectView('overview', null, 'looma-knit', cleanupDetail)
+
+    const topbar = document.querySelector('header.topbar')
+    expect(topbar).not.toBeNull()
+    expect(topbar).toHaveTextContent('Review brief')
+    expect(topbar).not.toHaveTextContent('Start work')
+  })
+
   it('collapses topbar labels before the project toolbar wraps', async () => {
     installViewportMatchMedia(680)
 

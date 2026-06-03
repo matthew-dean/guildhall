@@ -48,6 +48,7 @@ import { userFacingText } from './user-facing-text.js'
 export type TurnPersona = 'intake' | 'spec' | 'worker' | 'reviewer' | 'coord' | 'system'
 export type TurnStatus = 'done' | 'active' | 'pending'
 export type TurnPhase = 'setup' | 'intake' | 'spec' | 'ready' | 'inflight' | 'blocked' | 'done'
+export type RequestStage = 'new_request' | 'task_brief_cleanup'
 export type SetupAffordance =
   | 'link'
   | 'inline-text'
@@ -224,6 +225,7 @@ export interface InFlightTurn extends TurnBase {
   constructionMode: ConstructionMode
   gitStory?: GitStorySnapshot | undefined
   requestKind?: TaskRequest['kind'] | undefined
+  requestStage?: RequestStage | undefined
   routingSummary?: string | undefined
   taskDescription?: string | undefined
   sourceNote?: TaskSourceNote | undefined
@@ -252,6 +254,10 @@ export interface InFlightTurn extends TurnBase {
       status: 'done' | 'active' | 'pending' | 'skipped'
     }>
   } | undefined
+  workerHandoff?: {
+    ready: boolean
+    cleanupNeeded: boolean
+  } | undefined
 }
 
 export interface RequestTurn extends TurnBase {
@@ -260,6 +266,7 @@ export interface RequestTurn extends TurnBase {
   taskId?: string | undefined
   rawRequest: string
   title: string
+  requestStage: RequestStage
   routingSummary: string
 }
 
@@ -367,6 +374,33 @@ function tasksArray(raw: unknown): Task[] {
     return (raw as { tasks: Task[] }).tasks
   }
   return []
+}
+
+function requestStageForTask(task: Task, taskStatus: string): RequestStage {
+  if (taskStatus !== 'exploring') return 'new_request'
+  const notes = Array.isArray(task.notes)
+    ? (task.notes as Array<Record<string, unknown>>)
+    : []
+  return notes.some((note) => {
+    const content = typeof note.content === 'string' ? note.content.trim() : ''
+    return (
+      content.startsWith('Asked Guildhall to enrich this task') ||
+      content.startsWith('Enrichment requested from ')
+    )
+  })
+    ? 'task_brief_cleanup'
+    : 'new_request'
+}
+
+function requestRoutingSummary(request: TaskRequest, stage: RequestStage): string {
+  const explicit = typeof request.routingSummary === 'string'
+    ? request.routingSummary.trim()
+    : ''
+  if (explicit && explicit !== 'Routed to Task Intake') return explicit
+  if (stage === 'task_brief_cleanup') {
+    return 'Guildhall saved this cleanup request and queued the task brief in Thread.'
+  }
+  return 'Guildhall saved this request and is shaping it into a task brief.'
 }
 
 function isGuildhallQueuedTurn(turn: ThreadTurn): boolean {
@@ -565,6 +599,23 @@ function latestReframeRequest(notes: Array<Record<string, unknown>>): { at: stri
     return {
       at: noteTimestamp(note, new Date().toISOString()),
       summary: truncateSummary(reason),
+    }
+  }
+  return null
+}
+
+function latestBriefCleanupRequest(notes: Array<Record<string, unknown>>): { at: string; summary: string } | null {
+  for (let index = notes.length - 1; index >= 0; index -= 1) {
+    const note = notes[index]
+    if (!note) continue
+    const content = noteContent(note)
+    if (!/^Asked Guildhall to enrich this task\b/i.test(content)) continue
+    const instruction = content.match(/Note:\s*(.+)$/i)?.[1]?.trim()
+    return {
+      at: noteTimestamp(note, new Date().toISOString()),
+      summary: instruction
+        ? truncateSummary(instruction)
+        : 'Guildhall was asked to clean up this task brief before worker execution.',
     }
   }
   return null
@@ -1003,6 +1054,7 @@ function pressureTestTurns(projectPath: string, intakes: PressureTestIntake[]): 
       requestId: intake.id,
       rawRequest: intake.rawRequest,
       title: intake.target.title,
+      requestStage: 'new_request',
       routingSummary: 'Routed to Pressure-Test Intake',
       at: intake.createdAt,
       persona: 'intake',
@@ -1056,6 +1108,7 @@ function boundedChatTurns(projectPath: string, sessions: BoundedChatSession[]): 
           : session.objective.kind === 'new_request'
             ? 'New request complete'
             : `${session.objective.label} complete`,
+        requestStage: 'new_request',
         routingSummary: session.closure.summary,
         at: session.closure.closedAt,
         persona: 'intake',
@@ -1107,7 +1160,13 @@ function boundedChatDomainTitle(session: BoundedChatSession): string {
   }
 }
 
-function taskRequestTurn(task: Task, taskId: string, taskStatus: string, createdAt: string): RequestTurn | null {
+function taskRequestTurn(
+  task: Task,
+  taskId: string,
+  taskStatus: string,
+  createdAt: string,
+  requestStage: RequestStage,
+): RequestTurn | null {
   const request = task.request
   if (!request || typeof request !== 'object') return null
   const requestId = typeof request.id === 'string' && request.id.trim()
@@ -1117,10 +1176,8 @@ function taskRequestTurn(task: Task, taskId: string, taskStatus: string, created
   const title = typeof request.title === 'string' && request.title.trim()
     ? request.title.trim()
     : displayTaskTitle(task)
-  const routingSummary = typeof request.routingSummary === 'string' && request.routingSummary.trim()
-    ? request.routingSummary.trim()
-    : 'Routed to Task Intake'
-  const terminal = taskStatus === 'done' || taskStatus === 'shelved'
+  const routingSummary = requestRoutingSummary(request, requestStage)
+  const pending = taskStatus === 'proposed'
   return {
     kind: 'request',
     id: `request:${requestId}`,
@@ -1128,11 +1185,12 @@ function taskRequestTurn(task: Task, taskId: string, taskStatus: string, created
     taskId,
     rawRequest,
     title,
+    requestStage,
     routingSummary,
     at: typeof request.createdAt === 'string' ? request.createdAt : createdAt,
     persona: 'intake',
-    status: terminal ? 'done' : 'pending',
-    phase: terminal ? 'done' : 'intake',
+    status: pending ? 'pending' : 'done',
+    phase: pending ? 'intake' : 'done',
   }
 }
 
@@ -1658,12 +1716,13 @@ export function buildThread(opts: BuildThreadOptions): Thread {
     const taskDescription = cleanTaskDescription(t)
     const sourceNote = sourceNoteForTask(t)
     const taskStatus = typeof t.status === 'string' ? t.status : ''
+    const requestStage = requestStageForTask(t, taskStatus)
     const requestKind = t.request?.kind
-    const routingSummary = t.request?.routingSummary
+    const routingSummary = t.request ? requestRoutingSummary(t.request, requestStage) : undefined
     const constructionMode = constructionModeForTask(t)
     const createdAt =
       typeof t.createdAt === 'string' ? t.createdAt : new Date().toISOString()
-    const requestTurn = taskRequestTurn(t, taskId, taskStatus, createdAt)
+    const requestTurn = taskRequestTurn(t, taskId, taskStatus, createdAt, requestStage)
     if (requestTurn) turns.push(requestTurn)
 
     const openQs = visibleQuestions<Record<string, unknown>>(t)
@@ -1764,6 +1823,24 @@ export function buildThread(opts: BuildThreadOptions): Thread {
         category: 'request',
         label: 'Asked Guildhall to reframe this task',
         summary: reframeRequest.summary,
+      })
+    }
+
+    const briefCleanupRequest = latestBriefCleanupRequest(notes)
+    if (briefCleanupRequest) {
+      turns.push({
+        kind: 'history_note',
+        id: `request:${taskId}:brief-cleanup`,
+        at: briefCleanupRequest.at,
+        persona: 'intake',
+        status: 'done',
+        phase: 'done',
+        taskId,
+        taskTitle,
+        constructionMode,
+        category: 'request',
+        label: 'Brief cleanup requested',
+        summary: briefCleanupRequest.summary,
       })
     }
 
@@ -1909,6 +1986,7 @@ export function buildThread(opts: BuildThreadOptions): Thread {
       const at = typeof note.timestamp === 'string' ? note.timestamp : createdAt
       const reviewAt = Date.parse(at)
       const latestDangerAt = latestDangerActivityAt(liveActivity.get(taskId))
+      const reviewFeedbackCanDriveCurrentWork = taskStatus === 'in_progress' || taskStatus === 'review'
       const failureHasMovedPastReview =
         taskStatus === 'in_progress' &&
         latestDangerAt != null &&
@@ -1920,9 +1998,8 @@ export function buildThread(opts: BuildThreadOptions): Thread {
         at,
         persona: 'reviewer',
         status: 'done',
-        phase: isLatestReviewFeedback &&
-          taskStatus !== 'done' &&
-          taskStatus !== 'shelved' &&
+        phase: reviewFeedbackCanDriveCurrentWork &&
+          isLatestReviewFeedback &&
           !failureHasMovedPastReview
           ? 'inflight'
           : 'done',
@@ -1936,7 +2013,7 @@ export function buildThread(opts: BuildThreadOptions): Thread {
     }
 
     const hasUnansweredQuestions = openQs.some(q => !q.answeredAt)
-    const hasActiveBriefTurn = !!brief && !approvedAt && taskStatus === 'exploring'
+    const hasActiveBriefTurn = hasReviewableProductBrief(brief) && !approvedAt && taskStatus === 'exploring'
     const importedDraft = taskStatus === 'import_draft' || shouldUseImportDraftState(t)
     if (importedDraft && taskId !== leadingImportDraftId) {
       continue
@@ -2018,7 +2095,9 @@ export function buildThread(opts: BuildThreadOptions): Thread {
               ? `Imported draft needs a task brief. ${importDraftTasks.length - 1} more drafts are queued behind it.`
               : 'Imported draft needs a task brief.'
           : taskStatus === 'exploring'
-              ? importedDraft
+              ? requestStage === 'task_brief_cleanup'
+                ? 'Guildhall queued task brief cleanup before worker handoff.'
+              : importedDraft
                 ? importDraftTasks.length > 1
                   ? `Imported draft has a task brief in progress. ${importDraftTasks.length - 1} more drafts are queued behind it.`
                   : 'Imported draft has a task brief in progress.'
@@ -2047,6 +2126,7 @@ export function buildThread(opts: BuildThreadOptions): Thread {
         taskTitle,
         constructionMode,
         requestKind,
+        requestStage,
         routingSummary,
         taskDescription,
         sourceNote,
@@ -2063,6 +2143,13 @@ export function buildThread(opts: BuildThreadOptions): Thread {
           taskId !== 'task-workspace-import' &&
           (!importedDraft || Boolean(liveAgent))
             ? specFillChecklist(opts.projectPath, t)
+            : undefined,
+        workerHandoff:
+          taskStatus === 'ready'
+            ? {
+                ready: !needsSpecFill,
+                cleanupNeeded: needsSpecFill,
+              }
             : undefined,
       })
     }

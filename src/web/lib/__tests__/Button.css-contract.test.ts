@@ -13,6 +13,18 @@ describe('Button visual contract', () => {
 
     expect(smallBlock).not.toMatch(/font-size\s*:/)
   })
+
+  it('owns rounded icon-only button geometry in the shared button primitive', () => {
+    const roundedIconBlock = buttonSource.match(/\.rounded\.icon-only\s*\{([\s\S]*?)\n\s*\}/)?.[1] ?? ''
+    const smallRoundedIconBlock = buttonSource.match(/\.s-sm\.rounded\.icon-only\s*\{([\s\S]*?)\n\s*\}/)?.[1] ?? ''
+
+    expect(buttonSource).toContain('rounded?: boolean')
+    expect(buttonSource).toContain("${rounded ? 'rounded' : ''}")
+    expect(roundedIconBlock).toContain('border-radius: var(--gh-radius-full)')
+    expect(roundedIconBlock).toContain('padding: 0')
+    expect(smallRoundedIconBlock).toContain('width: 32px')
+    expect(smallRoundedIconBlock).toContain('height: 32px')
+  })
 })
 
 describe('Chip visual contract', () => {

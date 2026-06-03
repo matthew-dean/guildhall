@@ -177,6 +177,52 @@ describe('ProjectOverviewTab', () => {
     expect(screen.queryByRole('heading', { name: 'Review project discovery update' })).not.toBeInTheDocument()
   })
 
+  it('treats ready tasks with incomplete worker handoffs as brief cleanup on the dashboard', () => {
+    render(ProjectOverviewTab, {
+      detail: {
+        id: 'fair-labor-license',
+        name: 'Fair Labor License',
+        path: '/Users/matthew/git/oss/fair-labor-license',
+        startReadiness: {
+          canStart: false,
+          code: 'no_unattended_progress',
+          message: '1 task needs a clearer brief and acceptance criteria before Guildhall can build unattended.',
+          actionHref: '/thread',
+        },
+        tasks: [
+          {
+            id: 'task-006',
+            title: 'Set FLL overhead charge policy',
+            status: 'ready',
+            domain: 'frontend',
+            productBrief: {
+              approvedAt: '2026-06-02T12:00:00.000Z',
+              userJob: '',
+            },
+            acceptanceCriteria: [],
+            spec: '',
+          },
+        ],
+      },
+      inboxLoaded: true,
+      inboxItems: [],
+      projectTicker: {
+        label: 'Not running',
+        actorLabel: 'Guildhall',
+        message: 'Project is waiting for owner action.',
+        tone: 'idle',
+        pulse: false,
+      },
+      activeProjectId: 'fair-labor-license',
+    })
+
+    expect(screen.getByText('1 Being shaped')).toBeInTheDocument()
+    expect(screen.queryByText('1 Ready')).not.toBeInTheDocument()
+    expect(screen.getAllByText('Needs brief').length).toBeGreaterThan(0)
+    expect(screen.getByText('Needs brief cleanup: finish the handoff before a worker can start.')).toBeInTheDocument()
+    expect(screen.queryByText(/ready for the next worker slot/i)).not.toBeInTheDocument()
+  })
+
   it('does not invite new work when a migration blocks an empty project', () => {
     render(ProjectOverviewTab, {
       detail: {
@@ -238,7 +284,64 @@ describe('ProjectOverviewTab', () => {
 
     expect(screen.getByText('Needs triage')).toBeInTheDocument()
     expect(screen.queryByText(/^Status$/i)).not.toBeInTheDocument()
-    expect(container.querySelector('.dependency-list .overview-task-row')).toBeTruthy()
+    expect(container.querySelector('.blocked-work-list .overview-task-row')).toBeTruthy()
+  })
+
+  it('keeps blocked-work chips as compact categories instead of dependency task titles', () => {
+    const { container } = render(ProjectOverviewTab, {
+      detail: {
+        id: 'fair-labor-license',
+        name: 'Fair Labor License',
+        path: '/Users/matthew/git/oss/fair-labor-license',
+        tasks: [
+          {
+            id: 'task-006-split-implement-invite-email-delivery',
+            title: 'Add OAuth providers — Google and Apple sign-in',
+            status: 'done',
+          },
+          {
+            id: 'task-oauth-google-provider-credentials',
+            title: 'Create Google OAuth provider credentials',
+            status: 'blocked',
+            blockReason: 'Waiting on Google Cloud OAuth client setup outside the repo.',
+            dependsOn: ['task-006-split-implement-invite-email-delivery'],
+          },
+          {
+            id: 'task-oauth-apple-provider-credentials',
+            title: 'Create Apple OAuth provider credentials',
+            status: 'blocked',
+            blockReason: 'Waiting on Apple Developer Sign in with Apple setup outside the repo.',
+            dependsOn: ['task-006-split-implement-invite-email-delivery'],
+          },
+          {
+            id: 'task-oauth-supabase-provider-configuration',
+            title: 'Configure Supabase Google and Apple auth providers',
+            status: 'blocked',
+            blockReason: 'Waiting on Google and Apple provider credentials, plus permission or owner action to update Supabase Auth provider settings.',
+            dependsOn: [
+              'task-oauth-google-provider-credentials',
+              'task-oauth-apple-provider-credentials',
+            ],
+          },
+        ],
+      },
+      inboxLoaded: true,
+      inboxItems: [],
+      projectTicker: {
+        label: 'Not running',
+        actorLabel: 'Guildhall',
+        message: 'Project is waiting for owner action.',
+        tone: 'idle',
+        pulse: false,
+      },
+      activeProjectId: 'fair-labor-license',
+    })
+
+    const chipLabels = Array.from(container.querySelectorAll('.blocked-work-list .chip')).map(chip => chip.textContent?.trim() ?? '')
+
+    expect(chipLabels).toEqual(['Provider settings', 'Provider settings', 'Provider settings'])
+    expect(chipLabels).not.toContain('Add OAuth providers — Google and Apple sign-in')
+    expect(chipLabels).not.toContain('Create Google OAuth provider credentials, Create Apple OAuth provider credentials')
   })
 
   it('uses the shared overview task row for moving and blocked task cards', () => {
@@ -275,7 +378,7 @@ describe('ProjectOverviewTab', () => {
     })
 
     expect(container.querySelector('.motion-list .overview-task-row')).toBeTruthy()
-    expect(container.querySelector('.dependency-list .overview-task-row')).toBeTruthy()
+    expect(container.querySelector('.blocked-work-list .overview-task-row')).toBeTruthy()
     expect(screen.getAllByText('In progress').length).toBeGreaterThan(0)
     expect(screen.getByText('Needs triage')).toBeInTheDocument()
   })
