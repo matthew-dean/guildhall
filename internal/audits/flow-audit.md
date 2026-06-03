@@ -57,6 +57,28 @@ babysit setup/import/provider/release states across multiple pages.
 
 ## Current Follow-Ups
 
+- [x] Keep Thread task-detail drawers non-destructive. The live Narrative
+  Harness Thread page let `Details...` open the task drawer, but closing the
+  drawer landed on Overview because Thread opened `/projects/:id/task/:taskId`
+  without a drawer `backgroundPath`; the router then used its direct-task URL
+  fallback. Closure evidence, 2026-06-03: Thread task-detail buttons now share
+  `openTaskDetails`, which passes the current Thread URL as `backgroundPath`
+  when opening the drawer. Regression coverage first failed with `path.state`
+  as `{}`, then passed with `{ backgroundPath: '/projects/looma-knit/thread' }`.
+  Verification: `pnpm vitest run
+  src/web/surfaces/project/__tests__/ThreadTab.svelte.test.ts -t "opens task
+  details with Thread as the drawer background route" --reporter=dot`; affected
+  Thread/router/TaskDrawer suites (`134` tests); `pnpm typecheck`; `pnpm
+  build`; `git diff --check`; `pnpm dev:install`; direct `scripts/install.sh`
+  after the first installed bundle hash lagged the built artifact;
+  installed CLI/web hashes matched the worktree build; `/api/stale-server`
+  returned `stale:false`; and live browser proof on
+  `http://localhost:7777/projects/narrative-harness/thread` clicked
+  `Details...`, opened `/projects/narrative-harness/task/coherence-reviewer-mvp`,
+  closed the drawer, and returned to the exact Thread URL with the drawer
+  removed and Overview not active. Remaining unrelated gate: `pnpm lint:design`
+  still fails on pre-existing typography/token debt in `Chip`, `Eyebrow`, and
+  `ThreadTab` style blocks.
 - [x] Bring Thread status chips back under the canonical `Chip` contract. The
   live Narrative Harness Thread page showed `Guildhall can continue` and `Needs
   brief` as bespoke status treatments, including one wrapped chip. Closure
