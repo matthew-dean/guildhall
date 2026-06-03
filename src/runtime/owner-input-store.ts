@@ -17,6 +17,16 @@ import {
   ownerInputSourceKey,
   type OwnerInputRequest as OwnerInputRequestRecord,
 } from './owner-input.js'
+import { normalizeStructuredOwnerQuestion } from './owner-question-normalizer.js'
+
+const OwnerQuestionInput = z.object({
+  kind: z.string().optional(),
+  prompt: z.string(),
+  subject: z.string().optional(),
+  description: z.string().optional(),
+  choices: z.array(z.string()).optional(),
+  selectionMode: z.string().optional(),
+})
 
 const CreateOwnerInputRequestInput = z.object({
   projectRoot: z.string(),
@@ -26,7 +36,8 @@ const CreateOwnerInputRequestInput = z.object({
   actor: z.string(),
   source: OwnerInputSource,
   target: OwnerInputTarget,
-  prompt: z.string(),
+  question: OwnerQuestionInput.optional(),
+  prompt: z.string().optional(),
   helperText: z.string().optional(),
   choices: z.array(z.string()).optional(),
   objective: OwnerInputObjective,
@@ -45,6 +56,16 @@ export async function createOwnerInputRequest(
   rawInput: CreateOwnerInputRequestInput,
 ): Promise<CreateOwnerInputRequestResult> {
   const input = CreateOwnerInputRequestInput.parse(rawInput)
+  const rawQuestion = input.question ?? (input.prompt
+    ? { prompt: input.prompt, description: input.helperText, choices: input.choices }
+    : null)
+  if (!rawQuestion) {
+    throw new Error('owner-input requires a structured question')
+  }
+  const normalizedQuestion = normalizeStructuredOwnerQuestion(rawQuestion)
+  if (!normalizedQuestion) {
+    throw new Error('owner-input prompt is agent narration, not an answerable user question')
+  }
   const memoryDir = projectMemoryDir(input.projectRoot)
   await fsp.mkdir(ownerInputDir(memoryDir), { recursive: true })
 
@@ -72,9 +93,9 @@ export async function createOwnerInputRequest(
         ? input.source.questionId
         : `owner-input-${shortHash(sourceKey)}`,
       objective: input.objective.label,
-      prompt: input.prompt,
-      helperText: input.helperText,
-      choices: input.choices,
+      prompt: normalizedQuestion.prompt,
+      helperText: normalizedQuestion.description,
+      choices: normalizedQuestion.choices,
     },
   })
 
@@ -84,8 +105,8 @@ export async function createOwnerInputRequest(
     source: input.source,
     sourceKey,
     target: input.target,
-    prompt: input.prompt,
-    choices: input.choices,
+    prompt: normalizedQuestion.prompt,
+    choices: normalizedQuestion.choices,
     objective: input.objective,
     status: 'waiting_for_owner',
     boundedChatSessionId: session.id,

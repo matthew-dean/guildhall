@@ -11,6 +11,7 @@ import {
   registerContractSurface,
   type ContractSurface,
   type RegisterContractSurfaceInput,
+  type SurfaceReviewPacket,
 } from './contract-surfaces.js'
 
 export type ProjectGraphNodeType =
@@ -108,6 +109,28 @@ export interface ProjectGraphContractSurfaceSummary {
   updatedAt: string
 }
 
+export interface ProjectGraphSurfaceReviewPacketSummary {
+  id: string
+  surfaceId: string
+  currentSpecRef: string
+  knownConsumers: string[]
+  existingInvariants: Array<{
+    id: string
+    label: string
+    rule: string
+  }>
+  existingDecisions: Array<{
+    id: string
+    summary: string
+    decidedAt: string
+  }>
+  siblingSpecRefs: string[]
+  driftFindings: string[]
+  currentDeltaSummary: string
+  proofObligations: string[]
+  reviewFocus: string[]
+}
+
 export interface ProjectGraphView {
   currentProject: {
     id: string
@@ -168,6 +191,7 @@ export interface ProjectGraphView {
   }>
   contractSurfaces: Array<ProjectGraphContractSurfaceSummary & {
     scopedReason: 'owner' | 'consumer' | 'domain'
+    reviewPackets: ProjectGraphSurfaceReviewPacketSummary[]
   }>
 }
 
@@ -509,6 +533,7 @@ export function queryProjectGraphView(input: {
   projectPath: string
   structuralDomains?: readonly ProjectGraphStructuralDomainInput[]
   coordinators?: readonly ProjectGraphCoordinatorInput[]
+  surfaceReviewPackets?: readonly SurfaceReviewPacket[]
 }): ProjectGraphView {
   const registry = readProjectGraphRegistry()
   const workspaceProjects = discoverLocalGraphProjects(registry.updatedAt || new Date(0).toISOString())
@@ -569,6 +594,7 @@ export function queryProjectGraphView(input: {
     surfaces: readContractSurfaces(),
     projectId: input.projectId,
     domainIds: new Set(structuralDomains.map(domain => domain.id)),
+    surfaceReviewPackets: input.surfaceReviewPackets ?? [],
   })
 
   return {
@@ -1485,6 +1511,7 @@ function scopedContractSurfaces(input: {
   surfaces: readonly ContractSurface[]
   projectId: string
   domainIds: ReadonlySet<string>
+  surfaceReviewPackets: readonly SurfaceReviewPacket[]
 }): ProjectGraphView['contractSurfaces'] {
   const out: ProjectGraphView['contractSurfaces'] = []
   for (const surface of input.surfaces) {
@@ -1493,9 +1520,36 @@ function scopedContractSurfaces(input: {
     out.push({
       ...contractSurfaceSummary(surface),
       scopedReason,
+      reviewPackets: input.surfaceReviewPackets
+        .filter(packet => packet.surface.id === surface.id)
+        .map(surfaceReviewPacketSummary),
     })
   }
   return out.sort((left, right) => left.label.localeCompare(right.label))
+}
+
+function surfaceReviewPacketSummary(packet: SurfaceReviewPacket): ProjectGraphSurfaceReviewPacketSummary {
+  return {
+    id: packet.id,
+    surfaceId: packet.surface.id,
+    currentSpecRef: packet.currentSpecRef,
+    knownConsumers: packet.knownConsumers.map(consumer => consumer.label),
+    existingInvariants: packet.existingInvariants.map(invariant => ({
+      id: invariant.id,
+      label: invariant.label,
+      rule: invariant.rule,
+    })),
+    existingDecisions: packet.existingDecisions.map(decision => ({
+      id: decision.id,
+      summary: decision.summary,
+      decidedAt: decision.decidedAt,
+    })),
+    siblingSpecRefs: [...packet.siblingSpecRefs],
+    driftFindings: [...packet.driftFindings],
+    currentDeltaSummary: packet.currentDelta.summary,
+    proofObligations: [...packet.proofObligations],
+    reviewFocus: [...packet.reviewFocus],
+  }
 }
 
 function contractSurfaceScopedReason(

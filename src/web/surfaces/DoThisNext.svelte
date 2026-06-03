@@ -9,6 +9,7 @@
 <script lang="ts">
   import ActionBar from '../lib/ActionBar.svelte'
   import Button from '../lib/Button.svelte'
+  import Eyebrow from '../lib/Eyebrow.svelte'
   import FrameCard from '../../../packages/ui/src/components/FrameCard.svelte'
   import { onEvent } from '../lib/events.js'
   import { nav, path } from '../lib/nav.svelte.js'
@@ -257,7 +258,7 @@
     <FrameCard tone={tone} padding="compact" density="compact" class="next-card">
       <div class="row">
         <div class="text">
-          <div class="eyebrow">Do this next</div>
+          <Eyebrow as="div">Do this next</Eyebrow>
           <div class="verb">{source.verb}</div>
           {#if source.why}
             <div class="why">{source.why}</div>
@@ -300,14 +301,6 @@
     min-width: 18rem;
     display: grid;
     align-content: center;
-  }
-
-  .eyebrow {
-    font-size: var(--gh-type-size-eyebrow);
-    font-weight: var(--gh-type-weight-strong);
-    text-transform: uppercase;
-    letter-spacing: 0.06em;
-    color: var(--text-muted);
   }
 
   .verb {

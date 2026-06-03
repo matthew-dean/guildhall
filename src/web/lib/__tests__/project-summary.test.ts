@@ -1,9 +1,99 @@
 import { describe, expect, it } from 'vitest'
 
-import { summarizeProjects } from '../project-summary.js'
+import { createProjectSummaryCache, summarizeProjects } from '../project-summary.js'
 import type { ServiceDetail } from '../types.js'
 
 describe('summarizeProjects', () => {
+  it('reuses unchanged project card summaries across material project refreshes', () => {
+    const cache = createProjectSummaryCache()
+    const service: ServiceDetail = {
+      projects: [
+        {
+          id: 'looma',
+          name: 'Looma',
+          path: '/work/looma',
+          taskCounts: { total: 3, active: 1, draftReview: 0, blocked: 0, done: 2, shelved: 0 },
+          highlights: { activeTaskTitle: 'Build editor chrome' },
+          run: { status: 'stopped' },
+        },
+        {
+          id: 'knit',
+          name: 'Knit',
+          path: '/work/knit',
+          taskCounts: { total: 4, active: 0, draftReview: 0, blocked: 0, done: 4, shelved: 0 },
+          highlights: { recentCompletedTaskTitle: 'Ship project palette' },
+          run: { status: 'stopped' },
+        },
+      ],
+    }
+
+    const initial = cache.summarize(service)
+    const refreshed = cache.summarize({
+      ...service,
+      projects: [
+        {
+          ...service.projects[0]!,
+          taskCounts: { total: 3, active: 2, draftReview: 0, blocked: 0, done: 1, shelved: 0 },
+          highlights: { activeTaskTitle: 'Build editor toolbar' },
+        },
+        structuredClone(service.projects[1]!),
+      ],
+    })
+
+    expect(refreshed[0]).not.toBe(initial[0])
+    expect(refreshed[0]).toMatchObject({
+      id: 'looma',
+      counts: { active: 2 },
+      recentLabel: 'Working on: Build editor toolbar',
+    })
+    expect(refreshed[1]).toBe(initial[1])
+  })
+
+  it('updates project summaries when their default-provider signature changes', () => {
+    const cache = createProjectSummaryCache()
+    const service: ServiceDetail = {
+      defaultProviderStatus: {
+        preferredProvider: 'openai-api',
+        preferredProviderLabel: 'OpenAI-compatible API',
+        activeModel: 'gpt-5.3-codex',
+        models: { worker: 'gpt-5.3-codex' },
+      },
+      projects: [
+        {
+          id: 'narrative-harness',
+          name: 'Narrative Harness',
+          path: '/work/narrative-harness',
+          taskCounts: { total: 2, active: 1, draftReview: 0, blocked: 0, done: 1, shelved: 0 },
+          run: { status: 'stopped' },
+          providerStatus: {
+            preferredProvider: 'openai-api',
+            preferredProviderLabel: 'OpenAI-compatible API',
+            activeModel: 'gpt-5.3-codex',
+            models: { worker: 'gpt-5.3-codex' },
+          },
+        },
+      ],
+    }
+
+    const initial = cache.summarize(service)
+    const refreshed = cache.summarize({
+      ...service,
+      defaultProviderStatus: {
+        preferredProvider: 'anthropic-api',
+        preferredProviderLabel: 'Anthropic API',
+        activeModel: 'claude-4.5-sonnet',
+        models: { worker: 'claude-4.5-sonnet' },
+      },
+      projects: [structuredClone(service.projects[0]!)],
+    })
+
+    expect(refreshed[0]).not.toBe(initial[0])
+    expect(refreshed[0]?.provider).toMatchObject({
+      label: 'OpenAI-compatible API',
+      tone: 'neutral',
+    })
+  })
+
   it('shapes service payloads into card-friendly summaries', () => {
     const service: ServiceDetail = {
       projects: [

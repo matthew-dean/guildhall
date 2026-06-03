@@ -97,6 +97,40 @@ describe('task question migration', () => {
       }),
     ])
   })
+
+  it('migrates fallback narration as the actual embedded question plus helper context', async () => {
+    const root = await projectWithTasks([{
+      id: 'task-alert',
+      title: 'AlertDialog',
+      description: 'Needs owner direction.',
+      domain: 'product',
+      projectPath: '/repo/demo',
+      status: 'exploring',
+      priority: 'normal',
+      notes: [],
+      dependsOn: [],
+      openQuestions: [{
+        id: 'q1',
+        kind: 'text',
+        prompt: 'I have enough context. The roadmap lists AlertDialog as missing (P0 gap). The existing `ui-dialog` uses `<dialog>`.\n\nThe key question I need to ask before drafting: what variants does the user need? Let me write the product brief first, then ask.',
+        askedBy: 'spec-agent',
+        askedAt: now,
+      }],
+    }])
+
+    const result = await migrateTaskQuestionsToBoundedChat({ projectRoot: root, projectId: 'demo', apply: true, now })
+    const requests = await listOwnerInputRequests(root)
+    const session = JSON.parse(await readFile(
+      path.join(root, '.guildhall', 'bounded-chat', `${result.createdSessions[0]}.json`),
+      'utf8',
+    ))
+
+    expect(requests[0]?.prompt).toBe('What variants does AlertDialog need?')
+    expect(session.subObjectives[0]).toMatchObject({
+      prompt: 'What variants does AlertDialog need?',
+      helperText: 'The roadmap lists AlertDialog as missing (P0 gap). The existing `ui-dialog` uses `<dialog>`.',
+    })
+  })
 })
 
 async function projectWithTasks(tasks: unknown[]): Promise<string> {

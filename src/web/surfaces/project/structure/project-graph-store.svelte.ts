@@ -45,6 +45,29 @@ export interface ProjectGraphContractSurface {
   decisionCount: number
   updatedAt: string
   scopedReason: 'owner' | 'consumer' | 'domain' | string
+  reviewPackets?: ProjectGraphSurfaceReviewPacket[]
+}
+
+export interface ProjectGraphSurfaceReviewPacket {
+  id: string
+  surfaceId: string
+  currentSpecRef: string
+  knownConsumers?: string[]
+  existingInvariants?: Array<{
+    id: string
+    label: string
+    rule: string
+  }>
+  existingDecisions?: Array<{
+    id: string
+    summary: string
+    decidedAt: string
+  }>
+  siblingSpecRefs?: string[]
+  driftFindings?: string[]
+  currentDeltaSummary: string
+  proofObligations?: string[]
+  reviewFocus?: string[]
 }
 
 export interface ProjectGraphResponsibility {

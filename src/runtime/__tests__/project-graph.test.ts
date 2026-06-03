@@ -914,4 +914,99 @@ describe('local project graph', () => {
       scopedReason: 'consumer',
     }))
   })
+
+  it('projects surface review packets with invariants, decisions, and proof obligations', async () => {
+    bootstrapWorkspace(providerProject, { name: 'Guildhall' })
+    registerWorkspace({ id: 'guildhall', path: providerProject, name: 'Guildhall', tags: [] })
+
+    await registerProjectGraphContractSurface({
+      id: 'guildhall.structure-review',
+      label: 'Structure review packets',
+      kind: 'domain_capability',
+      owningProject: { id: 'guildhall', label: 'Guildhall', path: providerProject },
+      domain: { id: 'domain:structure', label: 'Structure' },
+      authority: 'shared',
+      scope: 'project',
+      sourceRefs: [{ kind: 'structured_spec', artifactId: 'contract-surfaces', summary: 'Contract surfaces spec.' }],
+      consumerRefs: [{ id: 'thread', label: 'Thread' }],
+      invariants: [{
+        id: 'structure-owns-review-projection',
+        label: 'Structure owns review projection',
+        rule: 'Structure renders packet context; Thread owns the discussion.',
+        proofObligations: ['Structure UI packet rendering test.'],
+      }],
+      decisions: [{
+        id: 'decision-2026-06-03-structure-thread-split',
+        summary: 'Keep owner-facing packet context in Structure and discussion in Thread.',
+        decidedAt: '2026-06-03T10:00:00.000Z',
+        decidedBy: 'owner',
+        evidenceRefs: ['artifact:flow-audit'],
+      }],
+      createdBy: 'coordinator:guildhall',
+      now: '2026-06-03T12:00:00.000Z',
+    })
+
+    const view = queryProjectGraphView({
+      projectId: 'guildhall',
+      projectPath: providerProject,
+      surfaceReviewPackets: [{
+        id: 'surface-review:task-123:guildhall.structure-review',
+        surface: {
+          id: 'guildhall.structure-review',
+          label: 'Structure review packets',
+          kind: 'domain_capability',
+          authority: 'shared',
+          scope: 'project',
+          owningProject: { id: 'guildhall', label: 'Guildhall', path: providerProject },
+          domain: { id: 'domain:structure', label: 'Structure' },
+        },
+        currentSpecRef: 'task:task-123',
+        knownConsumers: [{ id: 'thread', label: 'Thread' }],
+        existingInvariants: [{
+          id: 'structure-owns-review-projection',
+          label: 'Structure owns review projection',
+          rule: 'Structure renders packet context; Thread owns the discussion.',
+          proofObligations: ['Structure UI packet rendering test.'],
+        }],
+        existingDecisions: [{
+          id: 'decision-2026-06-03-structure-thread-split',
+          summary: 'Keep owner-facing packet context in Structure and discussion in Thread.',
+          decidedAt: '2026-06-03T10:00:00.000Z',
+          decidedBy: 'owner',
+          evidenceRefs: ['artifact:flow-audit'],
+        }],
+        siblingSpecRefs: ['task:task-077'],
+        driftFindings: ['Settings still mentions contract review readiness only.'],
+        currentDelta: {
+          surfaceId: 'guildhall.structure-review',
+          relation: 'extends',
+          summary: 'Adds owner-facing packet projection to Structure.',
+          proofObligations: ['Render packet content in Structure.'],
+        },
+        proofObligations: ['Render packet content in Structure.'],
+        reviewFocus: ['Does this preserve Thread as the discussion surface?'],
+      }],
+    })
+
+    expect(view.contractSurfaces).toContainEqual(expect.objectContaining({
+      id: 'guildhall.structure-review',
+      reviewPackets: [expect.objectContaining({
+        id: 'surface-review:task-123:guildhall.structure-review',
+        currentSpecRef: 'task:task-123',
+        knownConsumers: ['Thread'],
+        existingInvariants: [expect.objectContaining({
+          label: 'Structure owns review projection',
+          rule: 'Structure renders packet context; Thread owns the discussion.',
+        })],
+        existingDecisions: [expect.objectContaining({
+          summary: 'Keep owner-facing packet context in Structure and discussion in Thread.',
+        })],
+        siblingSpecRefs: ['task:task-077'],
+        driftFindings: ['Settings still mentions contract review readiness only.'],
+        currentDeltaSummary: 'Adds owner-facing packet projection to Structure.',
+        proofObligations: ['Render packet content in Structure.'],
+        reviewFocus: ['Does this preserve Thread as the discussion surface?'],
+      })],
+    }))
+  })
 })

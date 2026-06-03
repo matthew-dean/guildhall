@@ -625,7 +625,8 @@ describe('ThreadTab', () => {
     await screen.findByText('New thread')
     expect(screen.queryByLabelText('Thread operations summary')).toBeNull()
     expect(selectedThread().getByText('0.8.0 should prioritize pressure-test intake.')).toBeTruthy()
-    expect(selectedThread().getByText(/Guildhall 0\.8\.0 · Product goals/)).toBeTruthy()
+    expect(selectedThread().getByText('Question')).toBeTruthy()
+    expect(selectedThread().queryByText(/Guildhall 0\.8\.0 · Product goals/)).toBeNull()
     expect(selectedThread().getByText('What should Guildhall 0.8.0 accomplish?')).toBeTruthy()
     expect(selectedThread().getByText('This decides the release slice.')).toBeTruthy()
     expect(selectedThread().getByText('internal/plans/guildhall-0-8.md: release goals')).toBeTruthy()
@@ -718,7 +719,7 @@ describe('ThreadTab', () => {
     expect(screen.queryByText(/\b20\d{3}d\b/)).toBeNull()
   })
 
-  it('renders bounded-chat turns with the dedicated conversation panel instead of the old question card', async () => {
+  it('renders bounded-chat turns as a flat question section instead of a nested card', async () => {
     installFetchFakes([
       boundedChatTurn({
         domainTitle: 'Project question',
@@ -735,10 +736,12 @@ describe('ThreadTab', () => {
     render(ThreadTab)
 
     await selectedThread().findByText('Guildhall can answer this in Thread. Is there a source, task, or recent blocker it should use first?')
-    const panel = document.querySelector('.bounded-chat-panel')
-    expect(panel).toBeTruthy()
-    expect(within(panel as HTMLElement).getByText(/Project question/)).toBeTruthy()
-    expect(document.querySelector('.bounded-chat-panel .question-card-heading')).toBeNull()
+    const question = document.querySelector('.thread-active-question-flat')
+    expect(question).toBeTruthy()
+    expect(within(question as HTMLElement).getByText('Question')).toBeTruthy()
+    expect(within(question as HTMLElement).queryByText(/Project question/)).toBeNull()
+    expect(document.querySelector('.thread-active-dock .bounded-chat-panel')).toBeNull()
+    expect(document.querySelector('.thread-active-question-flat .question-card-heading')).toBeNull()
   })
 
   it('selects the current cleanup work instead of the saved request routing event', async () => {
@@ -2722,6 +2725,23 @@ describe('ThreadTab', () => {
     expect(footerBlock).not.toMatch(/position:\s*(absolute|fixed)/)
   })
 
+  it('keeps the active Thread dock to one framed card with unboxed inner sections', () => {
+    const source = readFileSync('src/web/surfaces/project/ThreadTab.svelte', 'utf8')
+    const dockMarkupIndex = source.indexOf('<div\n                    class="thread-active-dock"')
+    const footerMarkupIndex = source.indexOf('<div class="thread-footer" aria-label="Thread footer">')
+    const dockMarkup = source.slice(dockMarkupIndex, footerMarkupIndex)
+    const sectionBlock = source.match(/\.thread-active-section\s*\{([\s\S]*?)\n\s*\}/)?.[1] ?? ''
+
+    expect(dockMarkupIndex).toBeGreaterThan(-1)
+    expect(footerMarkupIndex).toBeGreaterThan(dockMarkupIndex)
+    expect(dockMarkup).not.toContain('<UtilityPanel')
+    expect(dockMarkup).toContain('thread-active-section')
+    expect(sectionBlock).toContain('border-top:')
+    expect(sectionBlock).not.toMatch(/\bbackground\s*:/)
+    expect(sectionBlock).not.toMatch(/\bborder-radius\s*:/)
+    expect(sectionBlock).not.toMatch(/\bbox-shadow\s*:/)
+  })
+
   it('keeps the sticky composer wrapper unframed instead of making the footer hold a card', () => {
     const source = readFileSync('src/web/surfaces/project/ThreadTab.svelte', 'utf8')
     const composerShellBlock = source.match(/\.thread-composer-shell\s*\{([\s\S]*?)\n\s*\}/)?.[1] ?? ''
@@ -2784,17 +2804,31 @@ describe('ThreadTab', () => {
     expect((row.firstElementChild as HTMLElement | null)?.className).toContain('thread-index-row-chips')
   })
 
-  it('keeps thread-list titles and chips on compact typography roles', () => {
+  it('keeps thread-list titles readable while chips stay compact and single-line', () => {
     const source = readFileSync('src/web/surfaces/project/ThreadTab.svelte', 'utf8')
     const threadBlock = source.match(/\.thread\s*\{([\s\S]*?)\n\s*\}/)?.[1] ?? ''
+    const rowPanelBlock = source.match(/:global\(\.thread-index-row\.utility-panel\)\s*\{([\s\S]*?)\n\s*\}/)?.[1] ?? ''
     const titleBlock = source.match(/\.thread-index-row-top strong\s*\{([\s\S]*?)\n\s*\}/)?.[1] ?? ''
     const summaryBlock = source.match(/:global\(\.thread-index-row\) p\s*\{([\s\S]*?)\n\s*\}/)?.[1] ?? ''
+    const chipRowBlock = source.match(/\.thread-index-row-chips\s*\{([\s\S]*?)\n\s*\}/)?.[1] ?? ''
 
     expect(source).toContain('<Chip label={indexChip.label} tone={indexChip.tone} size="compact" />')
     expect(threadBlock).not.toContain('--thread-list-title-size')
     expect(threadBlock).not.toContain('--thread-list-summary-size')
-    expect(titleBlock).toContain('font-size: var(--gh-type-size-meta)')
-    expect(summaryBlock).toContain('font-size: var(--gh-type-size-caption)')
+    expect(threadBlock).toContain('--thread-fs-meta: var(--fs-1)')
+    expect(threadBlock).toContain('--thread-fs-body: var(--fs-2)')
+    expect(threadBlock).toContain('--thread-fs-title: var(--fs-2)')
+    expect(threadBlock).toContain('--thread-lh-meta: 1.25')
+    expect(threadBlock).toContain('--thread-lh-body: 1.4')
+    expect(threadBlock).toContain('--thread-lh-title: var(--thread-lh-body)')
+    expect(rowPanelBlock).toContain('gap: var(--s-1)')
+    expect(titleBlock).toContain('font-size: var(--thread-fs-title)')
+    expect(titleBlock).toContain('line-height: var(--thread-lh-title)')
+    expect(summaryBlock).toContain('font-size: var(--thread-fs-body)')
+    expect(summaryBlock).toContain('line-height: var(--thread-lh-body)')
+    expect(chipRowBlock).toContain('flex-wrap: nowrap')
+    expect(chipRowBlock).toContain('overflow: hidden')
+    expect(chipRowBlock).toContain('margin-bottom: 0')
     expect(source).not.toMatch(/\.thread\s+:global\(\.chip\)/)
     expect(source).not.toMatch(/\.thread-index-row-chips\s+:global\(\.chip\)/)
   })

@@ -138,6 +138,67 @@ babysit setup/import/provider/release states across multiple pages.
   `pnpm dev:install`; service restart via `guildhall stop` and LaunchAgent
   kickstart; and `/api/stale-server` returned `stale:false` on pid `6339`
   with process start `2026-06-03T13:34:25.263Z`.
+- [x] Stop bounded-chat owner-input migration from preserving agent planning as
+  the question. Live Looma + Knit testing found `Clarify AlertDialog` rendering
+  the spec agent's scratch text (`I have enough context... The key question I
+  need to ask... Let me write the product brief first, then ask.`) as the
+  active owner question. Root cause: a legacy task-local fallback question was
+  copied verbatim by `0.10.0/task-open-questions-to-bounded-chat`; the durable
+  owner-input/bounded-chat creation boundary did not re-normalize or reject
+  agent narration. Closure evidence, 2026-06-03: durable owner-input creation
+  now accepts a structured `question` payload and normalizes only that explicit
+  data before persistence; it does not mine a question out of agent reasoning
+  prose. Legacy prose recovery is isolated to migration/fallback cleanup, where
+  old malformed prompts may be converted into a structured question object or
+  preserved as notes instead of fake owner-input blockers. Looma + Knit state
+  was repaired in `.guildhall/owner-input`,
+  `.guildhall/bounded-chat`, `.guildhall/attention.json`, and the one archived
+  product brief with the same narration smell. `/api/project/thread` for
+  `looma-knit` now reports the active prompt as `What variants does AlertDialog
+  need?` with zero bad-text hits; project-wide `.guildhall` scan found no
+  remaining active owner-input/task/bounded-chat hits, only append-only
+  progress-log history. Verification:
+  `pnpm vitest run src/runtime/__tests__/owner-input.test.ts
+  src/runtime/__tests__/task-question-migration.test.ts
+  src/runtime/__tests__/orchestrator.test.ts
+  src/runtime/__tests__/serve-meta-intake.test.ts
+  src/runtime/__tests__/thread.test.ts
+  src/runtime/__tests__/intake.test.ts src/runtime/__tests__/structural-map.test.ts
+  src/runtime/__tests__/orchestrator.test.ts src/runtime/__tests__/thread.test.ts
+  --reporter=dot` (`448` tests); `pnpm typecheck`; `git diff --check`.
+- [x] Repair Thread question-card typography and chip wrapping after the
+  Looma + Knit owner-input cleanup. The first visual pass over-corrected by
+  mixing near-neutral text colors, shrinking too many labels, keeping the
+  active question inside a nested card, and leaving status chips able to break
+  across lines. Closure evidence, 2026-06-03: Thread now uses the normal
+  app text scale instead of local near-neutral mixes; Thread row/dock titles and
+  the active question prompt measure `13px`, secondary summaries/meta/timestamps
+  measure `12px`, chips measure `12px`, chip rows are `nowrap` with clipped
+  overflow, and the active bounded-chat question renders as a flat section
+  instead of a `bounded-chat-panel` nested inside the Thread card. Follow-up
+  flattened active Thread dock internals so task context, checklist/activity,
+  and question-context guidance render as plain sections rather than nested
+  `UtilityPanel` boxes. Live proof on
+  `http://localhost:7777/projects/looma-knit/thread` after rebuild/install and
+  service restart measured row title `13px`, row summary/body copy `13px`, row
+  time `12px`, dock title `13px`, dock summary/body copy `13px`, question meta
+  `12px`, question prompt `13px`, first chip `11px` with
+  `white-space:nowrap` and unchanged `4px` side padding, Thread list row gap
+  `4px`, and chip row `flex-wrap:nowrap`. Line-height is now unitless and
+  role-consistent inside Thread: visible `13px` title/body/question/composer
+  text measures `18.2px` (`1.4`), `12px` meta/time text measures `15px`
+  (`1.25`), and `11px` chips measure `13.2px` (`1.2`). The old ambiguous
+  `Looma Knit · Clarify AlertDialog` active-question byline was replaced with
+  the shared atomic `Eyebrow` component: live proof measured an amber `Question`
+  eyebrow at `11px`, `font-weight:800`, uppercase, followed by the actual
+  prompt heading and muted explanatory body copy. The active dock had `0`
+  nested `.utility-panel`s and `0` nested `.card`s, while the question section
+  had transparent background, `0px` radius, and no shadow.
+  Verification:
+  `pnpm vitest run src/web/lib/__tests__/Button.css-contract.test.ts
+  src/web/surfaces/project/__tests__/ThreadTab.svelte.test.ts --reporter=dot`;
+  `pnpm typecheck`; `pnpm build`; installed bundle hash matched `dist`;
+  `/api/stale-server` returned `stale:false`.
 - [x] Fix the required-migration action affordance and apply feedback. The live
   Narrative Harness modal applied `0.10.0/task-hierarchy-links`, but the next
   blocker immediately replaced the card, making the click look inert; migration

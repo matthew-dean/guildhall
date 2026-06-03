@@ -56,9 +56,10 @@
 
 <style>
   .chip {
+    --chip-font-size: var(--gh-type-size-caption);
     display: inline-block;
     box-sizing: border-box;
-    font-size: var(--gh-type-size-caption);
+    font-size: var(--chip-font-size);
     font-weight: var(--gh-type-weight-emphasis);
     text-transform: uppercase;
     letter-spacing: 0.05em;
@@ -66,9 +67,10 @@
     border: 1px solid var(--chip-neutral-border);
     border-radius: var(--gh-radius-full);
     line-height: var(--gh-type-line-height-control);
+    white-space: nowrap;
   }
   .size-compact {
-    font-size: var(--gh-type-size-caption);
+    font-size: var(--chip-font-size);
     padding: 0 var(--gh-space-1);
     letter-spacing: 0.04em;
   }
@@ -84,7 +86,7 @@
     border-radius: var(--gh-radius-full);
     text-transform: none;
     letter-spacing: 0;
-    font-size: var(--gh-type-size-caption);
+    font-size: var(--chip-font-size);
     font-weight: var(--gh-type-weight-emphasis);
     font-variant-numeric: tabular-nums;
     line-height: var(--gh-type-line-height-control);

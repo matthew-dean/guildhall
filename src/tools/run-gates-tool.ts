@@ -105,25 +105,6 @@ async function persistGateResultsForCurrentTask(input: {
     const task = queue.tasks.find((candidate) => candidate['id'] === taskId)
     if (!task) return false
 
-    const resultIds = new Set(input.results.map((result) => result.gateId))
-    const existing = Array.isArray(task['gateResults']) ? task['gateResults'] : []
-    task['gateResults'] = [
-      ...existing.filter((entry) => {
-        if (!entry || typeof entry !== 'object') return true
-        const gateId = typeof (entry as Record<string, unknown>)['gateId'] === 'string'
-          ? (entry as Record<string, unknown>)['gateId'] as string
-          : ''
-        const type = typeof (entry as Record<string, unknown>)['type'] === 'string'
-          ? (entry as Record<string, unknown>)['type'] as string
-          : ''
-        return !(type === 'hard' && resultIds.has(gateId))
-      }),
-      ...input.results,
-    ]
-    const now = new Date().toISOString()
-    task['updatedAt'] = now
-    queue.lastUpdated = now
-    await fs.writeFile(tasksPath, JSON.stringify(queue, null, 2), 'utf8')
     const projectRoot = inferProjectRootFromMemoryDir(path.dirname(tasksPath))
     await Promise.all(input.results.map((result) =>
       appendTaskEvidence(projectRoot, taskId, {

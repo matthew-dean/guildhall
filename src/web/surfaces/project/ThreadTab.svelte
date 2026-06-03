@@ -38,6 +38,7 @@
   import StateSummary from '../../lib/StateSummary.svelte'
   import Help from '../../lib/Help.svelte'
   import CardListItem from '../../lib/CardListItem.svelte'
+  import Eyebrow from '../../lib/Eyebrow.svelte'
   import ResolveEscalationModal from '../drawer/ResolveEscalationModal.svelte'
   import { friendlyStewardName } from '../../lib/display.js'
   import InteractionCardLayout from '../../lib/InteractionCardLayout.svelte'
@@ -1143,6 +1144,13 @@
     const title = cleanPressureTargetTitle(turn.targetTitle)
     if (count > 1 && index >= 0) return `${index + 1} of ${count} · ${title} · ${turn.domainTitle}`
     return `${title} · ${turn.domainTitle}`
+  }
+
+  function pressureQuestionLabel(turn: OwnerInputQuestionTurn): string {
+    const index = activeOwnerInputQuestions.findIndex(candidate => candidate.id === turn.id)
+    const count = activeOwnerInputQuestions.length
+    if (count > 1 && index >= 0) return `Question ${index + 1} of ${count}`
+    return 'Question'
   }
 
   function liveAgentTone(agent: LiveAgent | undefined): 'neutral' | 'ok' | 'warn' | 'danger' | 'accent' | 'running' {
@@ -3590,73 +3598,75 @@
                 {/if}
 
               {:else if t.kind === 'bounded_chat'}
-                <UtilityPanel className="bounded-chat-panel" tone="neutral">
-                  <div class="thread-active-question">
-                    <strong>{pressureQuestionMeta(t)}</strong>
+                <div class="thread-active-question thread-active-question-flat">
+                  <Eyebrow as="div" tone="warn" className="thread-active-question-kicker">
+                    {pressureQuestionLabel(t)}
+                  </Eyebrow>
+                  <div class="thread-active-question-prompt" role="heading" aria-level="3">
                     <Markdown source={pressureQuestionPrompt(t)} />
-                    <p class="why">{pressureQuestionWhy(t)}</p>
-                    {#if hiddenPressureQuestionCount > 0}
-                      <p class="next-question-note">
-                        {hiddenPressureQuestionCount} more question{hiddenPressureQuestionCount === 1 ? '' : 's'} will appear after this answer.
-                      </p>
-                    {/if}
-                    {#if t.question.evidence.length}
-                      <div class="field">
-                        <span class="field-label">Evidence</span>
-                        <ul class="bullet">
-                          {#each t.question.evidence as item}
-                            <li><Markdown source={item} inline /></li>
-                          {/each}
-                        </ul>
-                      </div>
-                    {/if}
-                    {#if t.status !== 'done'}
-                      <Stack gap="2">
-                        {#if t.question.choices?.length}
-                          <div class="pressure-choice-list" aria-label="Answer choices">
-                            {#each t.question.choices as choice}
-                              <Button
-                                variant="secondary"
-                                disabled={busyTurnId === t.id}
-                                onclick={() => answerPressureTestQuestion(t, choice)}
-                              >
-                                {choice}
-                              </Button>
-                            {/each}
-                          </div>
-                        {:else}
-                          {#if isFooterPressureTurn(t.id)}
-                            <p class="next-question-note">Reply using the shared composer below.</p>
-                          {:else}
-                            <Textarea
-                              value={pressureTestAnswers[t.id] ?? ''}
-                              rows={4}
-                              placeholder="Answer with a sentence or short paragraph. Include constraints or success measures if they matter."
-                              disabled={busyTurnId === t.id}
-                              oninput={(v) => setPressureTestAnswer(t.id, v)}
-                            />
-                            <Row justify="end" gap="2">
-                              <Button
-                                variant="primary"
-                                disabled={busyTurnId === t.id || !(pressureTestAnswers[t.id] ?? '').trim()}
-                                onclick={() => answerPressureTestQuestion(t)}
-                              >
-                                {busyTurnId === t.id
-                                  ? 'Submitting...'
-                                  : hiddenPressureQuestionCount > 0
-                                    ? 'Submit and continue'
-                                    : 'Submit answer'}
-                              </Button>
-                            </Row>
-                          {/if}
-                        {/if}
-                        {#if pressureTestErrors[t.id]}
-                          <p class="error">{pressureTestErrors[t.id]}</p>
-                        {/if}
-                      </Stack>
-                    {/if}
                   </div>
-                </UtilityPanel>
+                  <p class="why">{pressureQuestionWhy(t)}</p>
+                  {#if hiddenPressureQuestionCount > 0}
+                    <p class="next-question-note">
+                      {hiddenPressureQuestionCount} more question{hiddenPressureQuestionCount === 1 ? '' : 's'} will appear after this answer.
+                    </p>
+                  {/if}
+                  {#if t.question.evidence.length}
+                    <div class="field">
+                      <span class="field-label">Evidence</span>
+                      <ul class="bullet">
+                        {#each t.question.evidence as item}
+                          <li><Markdown source={item} inline /></li>
+                        {/each}
+                      </ul>
+                    </div>
+                  {/if}
+                  {#if t.status !== 'done'}
+                    <Stack gap="2">
+                      {#if t.question.choices?.length}
+                        <div class="pressure-choice-list" aria-label="Answer choices">
+                          {#each t.question.choices as choice}
+                            <Button
+                              variant="secondary"
+                              disabled={busyTurnId === t.id}
+                              onclick={() => answerPressureTestQuestion(t, choice)}
+                            >
+                              {choice}
+                            </Button>
+                          {/each}
+                        </div>
+                      {:else}
+                        {#if isFooterPressureTurn(t.id)}
+                          <p class="next-question-note">Reply using the shared composer below.</p>
+                        {:else}
+                          <Textarea
+                            value={pressureTestAnswers[t.id] ?? ''}
+                            rows={4}
+                            placeholder="Answer with a sentence or short paragraph. Include constraints or success measures if they matter."
+                            disabled={busyTurnId === t.id}
+                            oninput={(v) => setPressureTestAnswer(t.id, v)}
+                          />
+                          <Row justify="end" gap="2">
+                            <Button
+                              variant="primary"
+                              disabled={busyTurnId === t.id || !(pressureTestAnswers[t.id] ?? '').trim()}
+                              onclick={() => answerPressureTestQuestion(t)}
+                            >
+                              {busyTurnId === t.id
+                                ? 'Submitting...'
+                                : hiddenPressureQuestionCount > 0
+                                  ? 'Submit and continue'
+                                  : 'Submit answer'}
+                            </Button>
+                          </Row>
+                        {/if}
+                      {/if}
+                      {#if pressureTestErrors[t.id]}
+                        <p class="error">{pressureTestErrors[t.id]}</p>
+                      {/if}
+                    </Stack>
+                  {/if}
+                </div>
 
               {:else if t.kind === 'brief_approval'}
                 {@const briefScope = briefScopeForReaders(t.brief, t.taskTitle)}
@@ -4628,7 +4638,7 @@
                                   <Chip label={badgeCountLabel(activeDockTurn.sourceNote.references.length)} tone="neutral" />
                                 {/if}
                               </summary>
-                              <UtilityPanel className="task-context" tone="neutral">
+                              <div class="thread-active-section task-context">
                                 {#if activeDockTurn.taskDescription}
                                   <div class="field">
                                     <span class="field-label">Starting point</span>
@@ -4661,13 +4671,13 @@
                                     {/if}
                                   </div>
                                 {/if}
-                              </UtilityPanel>
+                              </div>
                             </details>
                           {/if}
 
                           {#if dockChecklistSummary(activeDockTurn)}
                             {@const checklistSummary = dockChecklistSummary(activeDockTurn)}
-                            <UtilityPanel className="thread-active-checklist" tone={checklistToneForTurn(activeDockTurn)}>
+                            <div class={`thread-active-section thread-active-checklist tone-${checklistToneForTurn(activeDockTurn)}`}>
                               <div class="thread-active-checklist-head">
                                 <strong>{checklistTitleForTurn(activeDockTurn)}</strong>
                               </div>
@@ -4679,7 +4689,7 @@
                                   <span>{checklistSummary.missing}</span>
                                 </div>
                               </div>
-                            </UtilityPanel>
+                            </div>
                           {/if}
 
                           {#if activeDockTurn.checklist}
@@ -4688,7 +4698,7 @@
                                 <span>{checklistTitleForTurn(activeDockTurn)}</span>
                                 <Chip label={`${activeDockTurn.checklist.doneCount} of ${activeDockTurn.checklist.totalSteps}`} tone={checklistToneForTurn(activeDockTurn)} />
                               </summary>
-                              <UtilityPanel className="live-checklist" tone={checklistToneForTurn(activeDockTurn)}>
+                              <div class={`thread-active-section live-checklist tone-${checklistToneForTurn(activeDockTurn)}`}>
                                 <div class="live-checklist-steps">
                                   {#each activeDockTurn.checklist.steps as step (step.id)}
                                     <div class="live-step" class:done={step.status === 'done'} class:active={step.status === 'active'}>
@@ -4706,12 +4716,12 @@
                                     </div>
                                   {/each}
                                 </div>
-                              </UtilityPanel>
+                              </div>
                             </details>
                           {/if}
 
                           {#if activeDockTurn.activity?.length}
-                            <UtilityPanel className="live-activity" tone="neutral" ariaLabel="Recent agent activity">
+                            <div class="thread-active-section live-activity" aria-label="Recent agent activity">
                               {#each activeDockTurn.activity.slice(0, 3) as item, index (`${item.at ?? 'event'}:${item.label}:${index}`)}
                                 <StatusLine
                                   label={item.label}
@@ -4737,7 +4747,7 @@
                                   </div>
                                 </details>
                               {/if}
-                            </UtilityPanel>
+                            </div>
                           {/if}
 
                           <Row justify="end" gap="2" wrap>
@@ -4789,7 +4799,7 @@
                             <p class="detail"><strong>Technical note:</strong> {guidance.technicalNote}</p>
                           {/if}
                           {#if activeDockTurn.activity?.length}
-                            <UtilityPanel className="live-activity" tone="neutral" ariaLabel="Recent agent activity">
+                            <div class="thread-active-section live-activity" aria-label="Recent agent activity">
                               {#each activeDockTurn.activity.slice(0, 3) as item, index (`${item.at ?? 'event'}:${item.label}:${index}`)}
                                 <StatusLine
                                   label={item.label}
@@ -4815,7 +4825,7 @@
                                   </div>
                                 </details>
                               {/if}
-                            </UtilityPanel>
+                            </div>
                           {/if}
                           <Row justify="end" gap="2" wrap>
                             <Button variant="secondary" disabled={busyTurnId === activeDockTurn.id} onclick={() => nav(currentTaskHref(activeDockTurn.taskId))}>Details...</Button>
@@ -4860,7 +4870,7 @@
                           {#if replyErrors[activeDockTurn.id]}
                             <p class="error">{replyErrors[activeDockTurn.id]}</p>
                           {/if}
-                          <UtilityPanel className="question-context-actions" tone="neutral">
+                          <div class="thread-active-section question-context-actions">
                             {#if contextTurnId === activeDockTurn.id}
                               <div class="question-context-copy">
                                 <strong>Reply using the shared composer below.</strong>
@@ -4880,11 +4890,15 @@
                                 Ask Guildhall to explain
                               </Button>
                             {/if}
-                          </UtilityPanel>
+                          </div>
                         {:else if activeDockTurn.kind === 'pressure_test_question'}
                           <div class="thread-active-question">
-                            <strong>{pressureQuestionMeta(activeDockTurn)}</strong>
-                            <Markdown source={pressureQuestionPrompt(activeDockTurn)} />
+                            <Eyebrow as="div" tone="warn" className="thread-active-question-kicker">
+                              {pressureQuestionLabel(activeDockTurn)}
+                            </Eyebrow>
+                            <div class="thread-active-question-prompt" role="heading" aria-level="3">
+                              <Markdown source={pressureQuestionPrompt(activeDockTurn)} />
+                            </div>
                             {#if activeDockTurn.question.evidence.length}
                               <div class="field">
                                 <span class="field-label">Evidence</span>
@@ -4910,36 +4924,38 @@
                           {/if}
                         </div>
                         {:else if activeDockTurn.kind === 'bounded_chat'}
-                          <UtilityPanel className="bounded-chat-panel" tone="neutral">
-                            <div class="thread-active-question">
-                              <strong>{pressureQuestionMeta(activeDockTurn)}</strong>
+                          <div class="thread-active-question thread-active-question-flat">
+                            <Eyebrow as="div" tone="warn" className="thread-active-question-kicker">
+                              {pressureQuestionLabel(activeDockTurn)}
+                            </Eyebrow>
+                            <div class="thread-active-question-prompt" role="heading" aria-level="3">
                               <Markdown source={pressureQuestionPrompt(activeDockTurn)} />
-                              <p class="why">{pressureQuestionWhy(activeDockTurn)}</p>
-                              {#if activeDockTurn.question.evidence.length}
-                                <div class="field">
-                                  <span class="field-label">Evidence</span>
-                                  <ul class="bullet">
-                                    {#each activeDockTurn.question.evidence as item}
-                                      <li><Markdown source={item} inline /></li>
-                                    {/each}
-                                  </ul>
-                                </div>
-                              {/if}
-                              {#if activeDockTurn.question.choices?.length}
-                                <div class="pressure-choice-list" aria-label="Answer choices">
-                                  {#each activeDockTurn.question.choices as choice}
-                                    <Button
-                                      variant="secondary"
-                                      disabled={busyTurnId === activeDockTurn.id}
-                                      onclick={() => answerPressureTestQuestion(activeDockTurn, choice)}
-                                    >
-                                      {choice}
-                                    </Button>
-                                  {/each}
-                                </div>
-                              {/if}
                             </div>
-                          </UtilityPanel>
+                            <p class="why">{pressureQuestionWhy(activeDockTurn)}</p>
+                            {#if activeDockTurn.question.evidence.length}
+                              <div class="field">
+                                <span class="field-label">Evidence</span>
+                                <ul class="bullet">
+                                  {#each activeDockTurn.question.evidence as item}
+                                    <li><Markdown source={item} inline /></li>
+                                  {/each}
+                                </ul>
+                              </div>
+                            {/if}
+                            {#if activeDockTurn.question.choices?.length}
+                              <div class="pressure-choice-list" aria-label="Answer choices">
+                                {#each activeDockTurn.question.choices as choice}
+                                  <Button
+                                    variant="secondary"
+                                    disabled={busyTurnId === activeDockTurn.id}
+                                    onclick={() => answerPressureTestQuestion(activeDockTurn, choice)}
+                                  >
+                                    {choice}
+                                  </Button>
+                                {/each}
+                              </div>
+                            {/if}
+                          </div>
                         {:else if activeDockTurn.kind === 'brief_approval'}
                           {@const blockedByQuestions = hasOpenQuestionsForTask(activeDockTurn.taskId)}
                           {@const briefScope = briefScopeForReaders(activeDockTurn.brief, activeDockTurn.taskTitle)}
@@ -5185,13 +5201,16 @@
 
 <style>
   .thread {
-    --thread-fs-meta: var(--gh-type-size-caption);
-    --thread-fs-body: var(--gh-type-size-meta);
-    --thread-fs-title: var(--gh-type-size-body);
-    --thread-fs-display: var(--gh-type-size-section-title);
-    --thread-color-strong: color-mix(in srgb, var(--text) 84%, var(--text-soft));
-    --thread-color-body: color-mix(in srgb, var(--text) 86%, var(--text-soft));
-    --thread-color-soft: color-mix(in srgb, var(--text-soft) 90%, var(--text-muted));
+    --thread-fs-meta: var(--fs-1);
+    --thread-fs-body: var(--fs-2);
+    --thread-fs-title: var(--fs-2);
+    --thread-fs-display: var(--gh-type-size-page-title);
+    --thread-lh-meta: 1.25;
+    --thread-lh-body: 1.4;
+    --thread-lh-title: var(--thread-lh-body);
+    --thread-color-strong: var(--text);
+    --thread-color-body: var(--text);
+    --thread-color-soft: var(--text-muted);
     --thread-color-muted: var(--text-muted);
     width: 100%;
     margin: 0;
@@ -5251,6 +5270,9 @@
     width: 100%;
     color: var(--text);
   }
+  :global(.thread-index-row.utility-panel) {
+    gap: var(--s-1);
+  }
   .thread-index-row-top {
     display: flex;
     align-items: baseline;
@@ -5260,29 +5282,31 @@
   .thread-index-row-top strong {
     min-width: 0;
     color: var(--thread-color-strong);
-    font-size: var(--gh-type-size-meta);
-    line-height: var(--gh-type-line-height-tight);
+    font-size: var(--thread-fs-title);
+    line-height: var(--thread-lh-title);
     font-weight: var(--gh-type-weight-strong);
   }
   .thread-index-time {
     flex: none;
     color: var(--thread-color-muted);
-    font-size: var(--gh-type-size-caption);
+    font-size: var(--thread-fs-meta);
+    line-height: var(--thread-lh-meta);
     font-weight: var(--gh-type-weight-strong);
   }
   .thread-index-row-chips {
     display: flex;
     align-items: center;
     gap: var(--gh-space-1);
-    flex-wrap: wrap;
+    flex-wrap: nowrap;
+    overflow: hidden;
     min-height: 1rem;
-    margin-bottom: 2px;
+    margin-bottom: 0;
   }
   :global(.thread-index-row) p {
     margin: 0;
     color: var(--thread-color-soft);
-    font-size: var(--gh-type-size-caption);
-    line-height: var(--gh-type-line-height-body);
+    font-size: var(--thread-fs-body);
+    line-height: var(--thread-lh-body);
     display: -webkit-box;
     -webkit-line-clamp: 1;
     -webkit-box-orient: vertical;
@@ -5383,25 +5407,32 @@
   }
   .thread-active-dock-copy strong {
     color: var(--thread-color-strong);
-    font-size: var(--gh-type-size-meta);
-    line-height: var(--gh-type-line-height-tight);
+    font-size: var(--thread-fs-title);
+    line-height: var(--thread-lh-title);
     font-weight: var(--gh-type-weight-strong);
   }
   .thread-active-dock-copy p {
     margin: 0;
     color: var(--thread-color-muted);
-    font-size: var(--gh-type-size-caption);
-    line-height: var(--gh-type-line-height-body);
+    font-size: var(--thread-fs-body);
+    line-height: var(--thread-lh-body);
   }
   .thread-active-dock-chips {
     display: flex;
     align-items: center;
     gap: var(--gh-space-1);
-    flex-wrap: wrap;
+    flex-wrap: nowrap;
+    flex: none;
   }
-  .thread-active-checklist {
+  .thread-active-section {
     display: grid;
     gap: var(--gh-space-2);
+    min-width: 0;
+    padding-top: var(--gh-space-2);
+    border-top: 1px solid color-mix(in srgb, var(--border) 64%, transparent);
+  }
+  .thread-active-checklist {
+    color: var(--thread-color-body);
   }
   .thread-active-checklist-head {
     display: flex;
@@ -5420,7 +5451,7 @@
     gap: var(--gh-space-2);
     color: var(--thread-color-muted);
     font-size: var(--gh-type-size-meta);
-    line-height: var(--gh-type-line-height-body);
+    line-height: var(--thread-lh-meta);
   }
   .thread-active-checklist-line.is-complete {
     color: var(--text-soft);
@@ -5428,13 +5459,32 @@
   .thread-active-question,
   .thread-active-review {
     display: grid;
-    gap: var(--gh-space-1);
+    gap: var(--gh-space-2);
+  }
+  .thread-active-question-flat {
+    padding-top: var(--gh-space-1);
+    border-top: 1px solid color-mix(in srgb, var(--border) 64%, transparent);
+  }
+  .thread-active-question-kicker {
+    justify-self: start;
+  }
+  .thread-active-question-prompt {
+    color: var(--thread-color-strong);
+    font-size: var(--thread-fs-title);
+    line-height: var(--thread-lh-title);
+    font-weight: var(--gh-type-weight-strong);
+  }
+  .thread-active-question-prompt :global(.md) {
+    color: inherit;
+    font-size: inherit;
+    line-height: inherit;
+    font-weight: inherit;
   }
   .thread-active-summary {
     margin: 0;
     color: var(--thread-color-body);
-    font-size: var(--gh-type-size-meta);
-    line-height: var(--gh-type-line-height-body);
+    font-size: var(--thread-fs-body);
+    line-height: var(--thread-lh-body);
   }
   .thread-active-question-block {
     display: grid;
@@ -5452,14 +5502,14 @@
   }
   .thread-composer-copy strong {
     color: var(--thread-color-strong);
-    font-size: var(--gh-type-size-caption);
-    line-height: var(--gh-type-line-height-tight);
+    font-size: var(--thread-fs-body);
+    line-height: var(--thread-lh-body);
   }
   .thread-composer-copy p {
     margin: 0;
     color: var(--thread-color-muted);
-    font-size: var(--gh-type-size-caption);
-    line-height: var(--gh-type-line-height-body);
+    font-size: var(--thread-fs-body);
+    line-height: var(--thread-lh-body);
   }
   .thread-composer-frame {
     --thread-composer-action-inset: var(--gh-space-2);
@@ -5516,11 +5566,11 @@
       gap: var(--gh-space-2);
     }
     .thread.thread-compact-list .thread-index-row-top strong {
-      font-size: var(--gh-type-size-meta);
+      font-size: var(--thread-fs-title);
     }
     .thread.thread-compact-list .thread-index-list p {
       -webkit-line-clamp: 1;
-      font-size: var(--gh-type-size-caption);
+      font-size: var(--thread-fs-body);
     }
     .thread.thread-compact-detail {
       padding-top: 0;
@@ -5829,12 +5879,12 @@
     font-size: inherit;
     line-height: inherit;
   }
-  .why { margin: 0; color: var(--text-muted); font-size: var(--gh-type-size-body); line-height: var(--gh-type-line-height-body); }
+  .why { margin: 0; color: var(--thread-color-soft); font-size: var(--thread-fs-body); line-height: var(--thread-lh-body); }
   .next-question-note {
     margin: 0;
-    color: var(--text-soft);
-    font-size: var(--gh-type-size-meta);
-    line-height: var(--gh-type-line-height-body);
+    color: var(--thread-color-soft);
+    font-size: var(--thread-fs-body);
+    line-height: var(--thread-lh-body);
   }
   .pressure-choice-list {
     display: flex;

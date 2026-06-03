@@ -158,6 +158,7 @@ import {
   listExternalAgentLinks,
   recordExternalAgentLink,
 } from './external-agent-links.js'
+import type { SurfaceReviewPacket } from './contract-surfaces.js'
 import {
   acceptProjectDependencyDelivery,
   assignProjectDomainAuthority,
@@ -856,6 +857,34 @@ async function readTasksFileNormalized(
   await atomicWriteText(tasksPath, JSON.stringify(rewritten, null, 2))
   normalizedTasksCache.set(tasksPath, { raw: rewritten, tasks: tasks.map(task => ({ ...task })) })
   return tasks
+}
+
+function surfaceReviewPacketsFromTask(task: Record<string, unknown>): SurfaceReviewPacket[] {
+  const packets = task.contractSurfaceReviewPackets
+  if (!Array.isArray(packets)) return []
+  return packets.filter(isSurfaceReviewPacket)
+}
+
+function isSurfaceReviewPacket(value: unknown): value is SurfaceReviewPacket {
+  if (!value || typeof value !== 'object') return false
+  const packet = value as Record<string, unknown>
+  const surface = packet.surface
+  const currentDelta = packet.currentDelta
+  return typeof packet.id === 'string' &&
+    typeof packet.currentSpecRef === 'string' &&
+    !!surface &&
+    typeof surface === 'object' &&
+    typeof (surface as Record<string, unknown>).id === 'string' &&
+    !!currentDelta &&
+    typeof currentDelta === 'object' &&
+    typeof (currentDelta as Record<string, unknown>).summary === 'string' &&
+    Array.isArray(packet.knownConsumers) &&
+    Array.isArray(packet.existingInvariants) &&
+    Array.isArray(packet.existingDecisions) &&
+    Array.isArray(packet.siblingSpecRefs) &&
+    Array.isArray(packet.driftFindings) &&
+    Array.isArray(packet.proofObligations) &&
+    Array.isArray(packet.reviewFocus)
 }
 
 function projectCheckInSummaryFromState(
@@ -2824,12 +2853,14 @@ export function buildServeApp(opts: ServeOptions = {}): {
 
   app.get('/api/project/project-graph', async c => {
     try {
+      const tasks = await readTasksFileNormalized(join(getProjectStateDir(project.path), 'TASKS.json')).catch(() => [])
       return c.json({
         projectGraph: queryProjectGraphView({
           projectId: project.id,
           projectPath: project.path,
           structuralDomains: structuralDomainsForProjectGraph(project.path),
           coordinators: project.config?.coordinators ?? [],
+          surfaceReviewPackets: tasks.flatMap(surfaceReviewPacketsFromTask),
         }),
       })
     } catch (err) {

@@ -2,6 +2,7 @@ import fs from 'node:fs/promises'
 import path from 'node:path'
 import { atomicWriteText } from '@guildhall/sessions'
 import { createOwnerInputRequest } from './owner-input-store.js'
+import { normalizeLegacyOwnerQuestion } from './owner-question-normalizer.js'
 
 export interface TaskQuestionMigrationInput {
   projectRoot: string
@@ -88,6 +89,15 @@ export async function migrateTaskQuestionsToBoundedChat(
         const prompt = typeof question.prompt === 'string' && question.prompt.trim()
           ? question.prompt.trim()
           : `Owner input needed for ${taskTitle(task, id)}.`
+        const normalizedQuestion = normalizeLegacyOwnerQuestion({
+          kind: typeof question.kind === 'string' ? question.kind : undefined,
+          prompt,
+          choices: stringArray(question.choices),
+        })
+        if (!normalizedQuestion) {
+          preserveInvalidQuestion(task, now, prompt)
+          continue
+        }
         const result = await createOwnerInputRequest({
           projectRoot: input.projectRoot,
           projectId: input.projectId,
@@ -96,8 +106,7 @@ export async function migrateTaskQuestionsToBoundedChat(
           actor: MIGRATION_AGENT_ID,
           source: { kind: 'task', taskId: id, questionId },
           target: { kind: 'thread' },
-          prompt,
-          choices: stringArray(question.choices),
+          question: normalizedQuestion,
           objective: {
             kind: 'task_shaping',
             label: `Clarify ${taskTitle(task, id)}`,
@@ -138,6 +147,25 @@ export async function migrateTaskQuestionsToBoundedChat(
     createdSessions,
     affectedPaths,
   }
+}
+
+function preserveInvalidQuestion(task: RawTask, now: string, prompt: string): void {
+  const content = `Skipped malformed owner question during ${MIGRATION_ID} migration because the prompt was agent narration, not an answerable question.\n\nPrompt: ${prompt}`
+  const notes = Array.isArray(task.notes) ? [...task.notes] : []
+  const alreadyPreserved = notes.some(note =>
+    note && typeof note === 'object' &&
+    (note as { agentId?: unknown }).agentId === MIGRATION_AGENT_ID &&
+    typeof (note as { content?: unknown }).content === 'string' &&
+    (note as { content: string }).content.includes(prompt))
+  if (!alreadyPreserved) {
+    notes.push({
+      agentId: MIGRATION_AGENT_ID,
+      role: 'coordinator',
+      content,
+      timestamp: now,
+    })
+  }
+  task.notes = notes
 }
 
 function parseQueue(parsed: unknown): QueueShape {

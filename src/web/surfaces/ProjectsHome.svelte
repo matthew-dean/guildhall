@@ -12,7 +12,7 @@
   import UtilityPanel from '../lib/UtilityPanel.svelte'
   import WorkMixChart from '../lib/WorkMixChart.svelte'
   import { avatarToneForRole } from '../lib/avatar-palette.js'
-  import { summarizeProjects, type ProjectCardSummary } from '../lib/project-summary.js'
+  import { createProjectSummaryCache, type ProjectCardSummary } from '../lib/project-summary.js'
   import { projectHref } from '../lib/project-routes.js'
   import { setCachedService } from '../lib/service-cache.js'
   import type { ServiceDetail } from '../lib/types.js'
@@ -32,6 +32,7 @@
 
   const SERVICE_REFRESH_MIN_INTERVAL_MS = 1500
   const SERVICE_REFRESH_POLL_MS = 30000
+  const projectSummaryCache = createProjectSummaryCache()
 
   function isMeaningfulProjectListEvent(type: string): boolean {
     return (
@@ -223,7 +224,7 @@
     return () => document.removeEventListener('visibilitychange', onVisibilityChange)
   })
 
-  const cards = $derived(summarizeProjects(service))
+  const cards = $derived(projectSummaryCache.summarize(service))
   const overview = $derived({
     total: cards.length,
     running: cards.filter(card => card.canStop || optimisticRuns[card.id]).length,

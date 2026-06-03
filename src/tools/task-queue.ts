@@ -9,6 +9,7 @@ import {
 import {
   AcceptanceCriteria,
   GateResult,
+  type TaskEvidenceEvent,
   Task,
   TaskQueue,
   TaskStatus,
@@ -18,7 +19,7 @@ import {
   parseAcceptanceCriteriaFromSpec,
   renderStructuredSpecMarkdown,
 } from '@guildhall/core'
-import { atomicWriteText } from '@guildhall/sessions'
+import { appendTaskEvidence, atomicWriteText, inferProjectRootFromMemoryDir } from '@guildhall/sessions'
 
 const TASKS_PATH_SCHEMA = z.string().describe('Absolute path to the TASKS.json file')
 
@@ -269,13 +270,13 @@ export async function updateTask(
     if (input.workUnitAnalysis !== undefined) {
       task.workUnitAnalysis = WorkUnitAnalysis.parse(input.workUnitAnalysis)
     }
-    if (input.gateResults !== undefined && input.gateResults.length > 0) {
-      task.gateResults = z.array(GateResult).parse(input.gateResults)
-    }
+    const gateEvidence = input.gateResults !== undefined && input.gateResults.length > 0
+      ? z.array(GateResult).parse(input.gateResults)
+      : []
     if (input.completedAt !== undefined && input.completedAt.trim() !== '') task.completedAt = input.completedAt
-    if (input.note) {
-      task.notes.push({ ...input.note, timestamp: new Date().toISOString() })
-    }
+    const noteEvidence = input.note
+      ? { ...input.note, timestamp: new Date().toISOString() }
+      : null
     const shouldRefreshSizePlan =
       (nextSpec !== undefined && nextSpec.trim() !== '') ||
       input.workUnitAnalysis !== undefined
@@ -294,9 +295,45 @@ export async function updateTask(
     queue.lastUpdated = new Date().toISOString()
 
     atomicWriteText(input.tasksPath, JSON.stringify(queue, null, 2) + '\n')
+    await appendUpdateTaskEvidence({
+      tasksPath: input.tasksPath,
+      taskId,
+      note: noteEvidence,
+      gateResults: gateEvidence,
+    })
     return { success: true, taskId }
   } catch (err) {
     return { success: false, error: String(err) }
+  }
+}
+
+async function appendUpdateTaskEvidence(input: {
+  tasksPath: string
+  taskId: string
+  note: { agentId: string; role: string; content: string; timestamp: string } | null
+  gateResults: Array<z.infer<typeof GateResult>>
+}): Promise<void> {
+  if (!input.note && input.gateResults.length === 0) return
+  const projectRoot = inferProjectRootFromMemoryDir(path.dirname(input.tasksPath))
+  const events: Array<Omit<TaskEvidenceEvent, 'taskId'>> = []
+  if (input.note) {
+    events.push({
+      id: `${input.taskId}-note-${input.note.timestamp.replace(/[^0-9A-Za-z]/g, '')}`,
+      kind: 'note',
+      recordedAt: input.note.timestamp,
+      payload: input.note,
+    })
+  }
+  for (const result of input.gateResults) {
+    events.push({
+      id: `${input.taskId}-gate-${result.gateId}-${result.checkedAt.replace(/[^0-9A-Za-z]/g, '')}`,
+      kind: 'gate_result',
+      recordedAt: result.checkedAt,
+      payload: result,
+    })
+  }
+  for (const event of events) {
+    await appendTaskEvidence(projectRoot, input.taskId, event)
   }
 }
 

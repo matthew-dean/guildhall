@@ -156,9 +156,11 @@ export async function createExploringTask(input: IntakeInput): Promise<IntakeRes
         ? { ...ownerInput.source, intakeId: id }
         : ownerInput.source,
       target: ownerInput.target,
-      prompt: ownerInput.prompt,
-      helperText: ownerInput.helperText,
-      choices: ownerInput.choices,
+      question: {
+        prompt: ownerInput.prompt,
+        ...(ownerInput.helperText ? { description: ownerInput.helperText } : {}),
+        ...(ownerInput.choices ? { choices: ownerInput.choices } : {}),
+      },
       objective: ownerInput.objective,
       sessionSource: `request-intake:${id}`,
     })

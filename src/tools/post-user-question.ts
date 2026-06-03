@@ -457,9 +457,13 @@ export async function postUserQuestion(
       actor: input.askedBy,
       source: { kind: 'task', taskId: input.taskId, questionId: id },
       target: { kind: 'thread' },
-      prompt: input.body,
-      helperText: input.description,
-      choices: input.kind === 'choice' ? input.choices : undefined,
+      question: {
+        kind: input.kind,
+        prompt: input.body,
+        ...(input.description ? { description: input.description } : {}),
+        ...(input.kind === 'choice' ? { choices: input.choices } : {}),
+        ...(input.selectionMode ? { selectionMode: input.selectionMode } : {}),
+      },
       objective: {
         kind: 'task_shaping',
         label: task.title ? `Clarify ${task.title}` : `Clarify ${input.taskId}`,

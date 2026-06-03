@@ -1304,11 +1304,14 @@ async function createStructuralOwnerInputRequests(input: {
       actor: input.actor,
       source: { kind: 'structural_map', mapId: input.mapId, questionId: question.id },
       target: { kind: 'project_structure', href: '/settings/structure' },
-      prompt: question.prompt,
-      helperText: [
-        `Reason: ${question.reason}`,
-        question.targetIds.length ? `Targets: ${question.targetIds.join(', ')}` : '',
-      ].filter(Boolean).join('\n'),
+      question: {
+        kind: 'text',
+        prompt: question.prompt,
+        description: [
+          `Reason: ${question.reason}`,
+          question.targetIds.length ? `Targets: ${question.targetIds.join(', ')}` : '',
+        ].filter(Boolean).join('\n'),
+      },
       objective: {
         kind: 'structural_review',
         label: `Review structural map ${input.mapId}`,

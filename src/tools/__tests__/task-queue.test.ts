@@ -10,6 +10,7 @@ import {
   updateTaskTool,
   addTaskTool,
 } from '../task-queue.js'
+import { readTaskEvidence } from '@guildhall/sessions'
 
 // ---------------------------------------------------------------------------
 // Tests for task queue tools — these are safety-critical (gate logic depends
@@ -145,9 +146,16 @@ describe('updateTask', () => {
       note: { agentId: 'spec-agent', role: 'spec', content: 'Spec complete.' },
     })
     const raw = JSON.parse(await fs.readFile(tasksPath, 'utf-8'))
-    expect(raw.tasks[0].notes).toHaveLength(1)
-    expect(raw.tasks[0].notes[0].content).toBe('Spec complete.')
-    expect(raw.tasks[0].notes[0].timestamp).toBeDefined()
+    expect(raw.tasks[0].notes).toEqual([])
+
+    const evidence = await readTaskEvidence(tmpDir, 'task-001', { kind: 'note' })
+    expect(evidence).toHaveLength(1)
+    expect(evidence[0]?.payload).toMatchObject({
+      agentId: 'spec-agent',
+      role: 'spec',
+      content: 'Spec complete.',
+    })
+    expect((evidence[0]?.payload as { timestamp?: string }).timestamp).toBeDefined()
   })
 
   it('updates the task spec and acceptance criteria', async () => {
@@ -700,7 +708,10 @@ describe('updateTask', () => {
     })
 
     const raw = JSON.parse(await fs.readFile(tasksPath, 'utf-8'))
-    expect(raw.tasks[0].gateResults).toEqual([
+    expect(raw.tasks[0].gateResults).toEqual([])
+
+    const evidence = await readTaskEvidence(tmpDir, 'task-001', { kind: 'gate_result' })
+    expect(evidence.map((event) => event.payload)).toEqual([
       {
         gateId: 'test',
         type: 'hard',
@@ -756,7 +767,9 @@ describe('updateTask', () => {
         met: false,
       },
     ])
-    expect(raw.tasks[0].gateResults).toEqual([
+    expect(raw.tasks[0].gateResults).toEqual([])
+    const evidence = await readTaskEvidence(tmpDir, 'task-001', { kind: 'gate_result' })
+    expect(evidence.map((event) => event.payload)).toEqual([
       {
         gateId: 'test',
         type: 'hard',
@@ -870,7 +883,13 @@ describe('engine tool wrappers', () => {
     expect(result.metadata?.taskId).toBe('task-001')
     const raw = JSON.parse(await fs.readFile(tasksPath, 'utf-8'))
     expect(raw.tasks[0].status).toBe('review')
-    expect(raw.tasks[0].notes[0].content).toBe('Self-critique complete')
+    expect(raw.tasks[0].notes).toEqual([])
+    const evidence = await readTaskEvidence(tmpDir, 'task-001', { kind: 'note' })
+    expect(evidence[0]?.payload).toMatchObject({
+      agentId: 'worker-agent',
+      role: 'worker',
+      content: 'Self-critique complete',
+    })
   })
 
   it('addTaskTool adds via engine interface', async () => {

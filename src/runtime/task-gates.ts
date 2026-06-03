@@ -37,7 +37,13 @@ function detectProjectGateCommands(
   fallbackPackageManager: PackageManager = 'none',
 ): string[] {
   const hypothesis = detectBootstrapHypothesis(projectPath)
-  if (hypothesis.successGates.length > 0) return [...hypothesis.successGates]
+  if (hypothesis.successGates.length > 0) {
+    return applyWorkspaceNodePackageManagerFallback(
+      projectPath,
+      hypothesis.successGates,
+      fallbackPackageManager,
+    )
+  }
 
   const detectedPackageManager = detectPackageManager(projectPath)
   const packageManager = detectedPackageManager === 'none'
@@ -48,6 +54,19 @@ function detectProjectGateCommands(
   return ordered
     .filter((gate) => gate.available && gate.command.trim().length > 0)
     .map((gate) => gate.command)
+}
+
+function applyWorkspaceNodePackageManagerFallback(
+  projectPath: string,
+  commands: readonly string[],
+  fallbackPackageManager: PackageManager,
+): string[] {
+  if (fallbackPackageManager === 'none') return [...commands]
+  if (!fs.existsSync(path.join(projectPath, 'package.json'))) return [...commands]
+  if (detectPackageManager(projectPath) !== 'none') return [...commands]
+  return commands.map((command) =>
+    normalizeCommand(command).replace(/^(?:npm|yarn|bun|pnpm)(?=\s)/, fallbackPackageManager),
+  )
 }
 
 type GateCommandKind = 'typecheck' | 'build' | 'test' | 'lint' | 'other'
@@ -146,6 +165,15 @@ function rewriteWorkspaceScopedBootstrapCommandForTask(
 }
 
 function installCommandForProject(projectPath: string, fallbackPackageManager: PackageManager): string[] {
+  const hypothesis = detectBootstrapHypothesis(projectPath)
+  if (hypothesis.commands.length > 0) {
+    return applyWorkspaceNodePackageManagerFallback(
+      projectPath,
+      hypothesis.commands,
+      fallbackPackageManager,
+    )
+  }
+
   const detected = detectPackageManager(projectPath)
   const packageManager = detected === 'none' ? fallbackPackageManager : detected
   return packageManager === 'none' ? [] : [`${packageManager} install`]

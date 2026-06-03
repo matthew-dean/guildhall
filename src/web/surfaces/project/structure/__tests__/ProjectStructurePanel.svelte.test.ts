@@ -229,6 +229,27 @@ describe('ProjectStructurePanel', () => {
               decisionCount: 1,
               updatedAt: '2026-06-02T12:00:00.000Z',
               scopedReason: 'owner',
+              reviewPackets: [{
+                id: 'surface-review:task-123:component-api.command-menu',
+                surfaceId: 'component-api.command-menu',
+                currentSpecRef: 'task:task-123',
+                knownConsumers: ['Thread', 'Work'],
+                existingInvariants: [{
+                  id: 'command-actions-use-items',
+                  label: 'Command actions use items',
+                  rule: 'Command actions use the shared item vocabulary instead of local action names.',
+                }],
+                existingDecisions: [{
+                  id: 'decision-command-menu-items',
+                  summary: 'Use item-based composition for command menus.',
+                  decidedAt: '2026-06-02T10:00:00.000Z',
+                }],
+                siblingSpecRefs: ['task:task-077'],
+                driftFindings: ['Two specs name command actions differently.'],
+                currentDeltaSummary: 'Adds an owner-facing surface packet projection.',
+                proofObligations: ['Render review packets in Structure.'],
+                reviewFocus: ['Does this preserve Thread as the discussion surface?'],
+              }],
             }],
           },
         })
@@ -269,6 +290,15 @@ describe('ProjectStructurePanel', () => {
     expect(screen.getByText('2 invariants')).toBeInTheDocument()
     expect(screen.getByText('3 consumers')).toBeInTheDocument()
     expect(screen.getByText('Owned here')).toBeInTheDocument()
+    expect(screen.getByRole('heading', { name: 'Surface review packet' })).toBeInTheDocument()
+    expect(screen.getByText('task:task-123')).toBeInTheDocument()
+    expect(screen.getByText('Command actions use items')).toBeInTheDocument()
+    expect(screen.getByText('Command actions use the shared item vocabulary instead of local action names.')).toBeInTheDocument()
+    expect(screen.getByText('Use item-based composition for command menus.')).toBeInTheDocument()
+    expect(screen.getByText('Adds an owner-facing surface packet projection.')).toBeInTheDocument()
+    expect(screen.getByText('Render review packets in Structure.')).toBeInTheDocument()
+    expect(screen.getByText('Does this preserve Thread as the discussion surface?')).toBeInTheDocument()
+    expect(screen.getByRole('link', { name: 'Open Threads' })).toHaveAttribute('href', '/projects/looma-knit/thread')
 
     await userEvent.click(screen.getByRole('button', { name: /open editor domain/i }))
     expect(screen.getByRole('heading', { name: 'Editor' })).toBeInTheDocument()

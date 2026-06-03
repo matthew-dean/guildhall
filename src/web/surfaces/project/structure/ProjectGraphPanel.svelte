@@ -9,6 +9,7 @@
   import Modal from '../../../lib/Modal.svelte'
   import Row from '../../../lib/Row.svelte'
   import { project } from '../../../lib/project.svelte.js'
+  import { projectActionHref } from '../../../lib/project-routes.js'
   import type { ProjectGraphStore } from './project-graph-store.svelte.js'
 
   interface Props {
@@ -148,6 +149,69 @@
               ['Consumers', `${surface.consumerCount} ${surface.consumerCount === 1 ? 'consumer' : 'consumers'}`],
             ]}
           />
+          {#if (surface.reviewPackets?.length ?? 0) > 0}
+            <div class="surface-review-packet-list">
+              {#each surface.reviewPackets ?? [] as packet (packet.id)}
+                <section class="surface-review-packet">
+                  <div class="surface-review-packet-head">
+                    <div>
+                      <h4>Surface review packet</h4>
+                      <p class="muted">{packet.currentSpecRef}</p>
+                    </div>
+                    <a class="thread-link" href={projectActionHref('/thread')}>Open Threads</a>
+                  </div>
+                  <DefinitionList
+                    items={[
+                      ['Current delta', packet.currentDeltaSummary],
+                      ['Known consumers', packet.knownConsumers?.join(', ') || 'None recorded'],
+                      ['Sibling specs', packet.siblingSpecRefs?.join(', ') || null],
+                      ['Drift', packet.driftFindings?.join('; ') || null],
+                    ]}
+                  />
+                  {#if (packet.existingInvariants?.length ?? 0) > 0}
+                    <div class="surface-review-section">
+                      <strong>Existing invariants</strong>
+                      <ul>
+                        {#each packet.existingInvariants ?? [] as invariant (invariant.id)}
+                          <li><span>{invariant.label}</span><p>{invariant.rule}</p></li>
+                        {/each}
+                      </ul>
+                    </div>
+                  {/if}
+                  {#if (packet.existingDecisions?.length ?? 0) > 0}
+                    <div class="surface-review-section">
+                      <strong>Decisions</strong>
+                      <ul>
+                        {#each packet.existingDecisions ?? [] as decision (decision.id)}
+                          <li><span>{decision.summary}</span></li>
+                        {/each}
+                      </ul>
+                    </div>
+                  {/if}
+                  {#if (packet.proofObligations?.length ?? 0) > 0}
+                    <div class="surface-review-section">
+                      <strong>Proof obligations</strong>
+                      <ul>
+                        {#each packet.proofObligations ?? [] as obligation (obligation)}
+                          <li><span>{obligation}</span></li>
+                        {/each}
+                      </ul>
+                    </div>
+                  {/if}
+                  {#if (packet.reviewFocus?.length ?? 0) > 0}
+                    <div class="surface-review-section">
+                      <strong>Review focus</strong>
+                      <ul>
+                        {#each packet.reviewFocus ?? [] as focus (focus)}
+                          <li><span>{focus}</span></li>
+                        {/each}
+                      </ul>
+                    </div>
+                  {/if}
+                </section>
+              {/each}
+            </div>
+          {/if}
         </section>
       {/each}
     </div>
@@ -424,6 +488,56 @@
     align-items: start;
     justify-content: space-between;
     gap: var(--gh-space-3);
+  }
+  .surface-review-packet-list {
+    border-block-start: 1px solid var(--border-muted);
+    display: grid;
+    gap: var(--gh-space-3);
+    padding-block-start: var(--gh-space-3);
+  }
+  .surface-review-packet {
+    border-inline-start: 2px solid var(--accent);
+    display: grid;
+    gap: var(--gh-space-2);
+    padding-inline-start: var(--gh-space-3);
+  }
+  .surface-review-packet-head {
+    align-items: start;
+    display: flex;
+    gap: var(--gh-space-3);
+    justify-content: space-between;
+  }
+  .surface-review-packet-head h4 {
+    font-size: var(--gh-type-size-body);
+    line-height: var(--gh-type-line-height-body);
+    margin: 0;
+  }
+  .thread-link {
+    color: var(--link);
+    font-size: var(--gh-type-size-meta);
+    line-height: var(--gh-type-line-height-body);
+    white-space: nowrap;
+  }
+  .surface-review-section {
+    display: grid;
+    gap: var(--gh-space-1);
+  }
+  .surface-review-section ul {
+    display: grid;
+    gap: var(--gh-space-1);
+    list-style: none;
+    margin: 0;
+    padding: 0;
+  }
+  .surface-review-section li {
+    display: grid;
+    gap: var(--gh-space-1);
+  }
+  .surface-review-section p {
+    color: var(--text-muted);
+    font-size: var(--gh-type-size-meta);
+    line-height: var(--gh-type-line-height-body);
+    margin: 0;
   }
   .graph-request-head {
     display: flex;

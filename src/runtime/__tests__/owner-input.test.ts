@@ -18,8 +18,11 @@ describe('owner input requests', () => {
       actor: 'migration',
       source: { kind: 'task', taskId: 'task-1', questionId: 'q1' },
       target: { kind: 'thread' },
-      prompt: 'Which billing policy should Guildhall follow?',
-      choices: ['A', 'B'],
+      question: {
+        kind: 'choice',
+        prompt: 'Which billing policy should Guildhall follow?',
+        choices: ['A', 'B'],
+      },
       objective: {
         kind: 'task_shaping',
         label: 'Clarify billing policy',
@@ -35,8 +38,11 @@ describe('owner input requests', () => {
       actor: 'migration',
       source: { kind: 'task', taskId: 'task-1', questionId: 'q1' },
       target: { kind: 'thread' },
-      prompt: 'Which billing policy should Guildhall follow?',
-      choices: ['A', 'B'],
+      question: {
+        kind: 'choice',
+        prompt: 'Which billing policy should Guildhall follow?',
+        choices: ['A', 'B'],
+      },
       objective: {
         kind: 'task_shaping',
         label: 'Clarify billing policy',
@@ -71,6 +77,55 @@ describe('owner input requests', () => {
     })
   })
 
+  it('persists structured owner questions without prose recovery heuristics', async () => {
+    const root = await mkdtemp(path.join(tmpdir(), 'guildhall-owner-input-structured-'))
+    const result = await createOwnerInputRequest({
+      projectRoot: root,
+      projectId: 'demo',
+      commandId: 'task-question:task-alert:q1',
+      now,
+      actor: 'spec-agent',
+      source: { kind: 'task', taskId: 'task-alert', questionId: 'q1' },
+      target: { kind: 'thread' },
+      question: {
+        kind: 'text',
+        prompt: 'What variants does AlertDialog need?',
+        subject: 'AlertDialog variants',
+        description: 'The roadmap lists AlertDialog as missing (P0 gap). The existing `ui-dialog` uses `<dialog>`.',
+      },
+      objective: {
+        kind: 'task_shaping',
+        label: 'Clarify AlertDialog',
+        successCriteria: ['Owner answers the linked bounded chat.'],
+      },
+    })
+
+    expect(result.request.prompt).toBe('What variants does AlertDialog need?')
+    expect(result.session.subObjectives[0]).toMatchObject({
+      prompt: 'What variants does AlertDialog need?',
+      helperText: 'The roadmap lists AlertDialog as missing (P0 gap). The existing `ui-dialog` uses `<dialog>`.',
+    })
+  })
+
+  it('rejects agent planning narration instead of extracting a fake question at creation time', async () => {
+    const root = await mkdtemp(path.join(tmpdir(), 'guildhall-owner-input-invalid-'))
+    await expect(createOwnerInputRequest({
+      projectRoot: root,
+      projectId: 'demo',
+      commandId: 'task-question:task-alert:q1',
+      now,
+      actor: 'spec-agent',
+      source: { kind: 'task', taskId: 'task-alert', questionId: 'q1' },
+      target: { kind: 'thread' },
+      prompt: 'I have enough context. The roadmap lists AlertDialog as missing (P0 gap).\n\nThe key question I need to ask before drafting: what variants does the user need? Let me write the product brief first, then ask.',
+      objective: {
+        kind: 'task_shaping',
+        label: 'Clarify AlertDialog',
+        successCriteria: ['Owner answers the linked bounded chat.'],
+      },
+    })).rejects.toThrow(/not an answerable user question/)
+  })
+
   it.each([
     [{ kind: 'structural_map', mapId: 'draft', questionId: 'confirm-domain-routing' }],
     [{ kind: 'project_graph', edgeId: 'edge-1', questionId: 'assign-authority' }],
@@ -89,7 +144,7 @@ describe('owner input requests', () => {
       actor: 'test',
       source,
       target: { kind: 'thread' },
-      prompt: 'Owner decision needed.',
+      question: { prompt: 'What should Guildhall do next?' },
       objective: {
         kind: 'task_shaping',
         label: 'Owner decision',

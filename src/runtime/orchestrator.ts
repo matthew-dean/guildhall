@@ -8933,9 +8933,12 @@ export class Orchestrator {
           actor: 'spec-agent',
           source: { kind: 'task', taskId: task.id, questionId: question.id },
           target: { kind: 'thread' },
-          prompt: question.prompt,
-          ...(question.kind === 'choice' ? { choices: question.choices } : {}),
-          ...(question.description ? { helperText: question.description } : {}),
+          question: {
+            kind: question.kind,
+            prompt: question.prompt,
+            ...(question.kind === 'choice' ? { choices: question.choices } : {}),
+            ...(question.description ? { description: question.description } : {}),
+          },
           objective: {
             kind: 'task_shaping',
             label: `Clarify ${task.title}`,

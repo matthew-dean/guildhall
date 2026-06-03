@@ -1,0 +1,10 @@
+{
+  "name": "generalization-node-web",
+  "private": true,
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "build": "vite build",
+    "test": "vitest run",
+    "lint": "eslint ."
+  }
+}

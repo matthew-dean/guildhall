@@ -54,6 +54,15 @@ export interface ProjectCardSummary {
   } | null
 }
 
+export interface ProjectSummaryCache {
+  summarize(service: ServiceDetail | null | undefined): ProjectCardSummary[]
+}
+
+interface CachedProjectCardSummary {
+  signature: string
+  summary: ProjectCardSummary
+}
+
 function emptyTaskActivity(): ProjectCardSummary['taskActivity'] {
   return {
     windowLabel: 'Last 30 days',
@@ -394,6 +403,57 @@ export function summarizeProjectCard(
         !(counts.draftReview > 0 && counts.active === 0),
     canStop: running,
     gitStory,
+  }
+}
+
+function projectSummarySignature(
+  project: ServiceProjectSummary,
+  defaultProviderStatus?: ProviderStatus | null,
+): string {
+  return JSON.stringify({
+    defaultProviderIdentity: providerIdentity(defaultProviderStatus),
+    id: project.id,
+    path: project.path,
+    name: project.name,
+    summary: project.summary,
+    tags: project.tags,
+    taskCounts: project.taskCounts,
+    taskActivity: project.taskActivity,
+    highlights: project.highlights,
+    run: project.run,
+    initializationNeeded: project.initializationNeeded,
+    startReadiness: project.startReadiness,
+    actionModel: project.actionModel,
+    providerStatus: project.providerStatus,
+    gitStory: project.gitStory,
+    projectCheckIn: project.projectCheckIn,
+  })
+}
+
+export function createProjectSummaryCache(): ProjectSummaryCache {
+  let summariesByProjectId = new Map<string, CachedProjectCardSummary>()
+
+  return {
+    summarize(service: ServiceDetail | null | undefined): ProjectCardSummary[] {
+      const defaultProviderStatus = service?.defaultProviderStatus ?? null
+      const nextSummariesByProjectId = new Map<string, CachedProjectCardSummary>()
+      const summaries = (service?.projects ?? []).map((project) => {
+        const signature = projectSummarySignature(project, defaultProviderStatus)
+        const cached = summariesByProjectId.get(project.id)
+        if (cached?.signature === signature) {
+          nextSummariesByProjectId.set(project.id, cached)
+          return cached.summary
+        }
+        const next = {
+          signature,
+          summary: summarizeProjectCard(project, defaultProviderStatus),
+        }
+        nextSummariesByProjectId.set(project.id, next)
+        return next.summary
+      })
+      summariesByProjectId = nextSummariesByProjectId
+      return summaries
+    },
   }
 }
 
