@@ -122,6 +122,28 @@ export interface CorpusDesignGovernanceSummary {
   diagnostics: DesignGovernanceDiagnostic[]
 }
 
+export type CorpusContractSurfaceProposalKind =
+  | 'component_api'
+  | 'http_api'
+  | 'event_api'
+  | 'mcp_api'
+  | 'schema'
+  | 'state_machine'
+  | 'design_system'
+  | 'domain_capability'
+  | 'documentation'
+  | 'other'
+
+export interface CorpusContractSurfaceProposal {
+  id: string
+  label: string
+  kind: CorpusContractSurfaceProposalKind
+  summary: string
+  evidence: Array<{ path: string; excerpt?: string }>
+  repeatedPatterns: string[]
+  ownerApprovalRequired: true
+}
+
 export type CorpusSemanticKind = 'documentation' | 'code' | 'mixed' | 'unknown'
 
 export interface CorpusSemanticArea {
@@ -196,6 +218,7 @@ export interface CodebaseMap {
   abstractions: CorpusAbstraction[]
   designSystem?: CorpusDesignSystemSummary
   designGovernance?: CorpusDesignGovernanceSummary
+  contractSurfaceProposals?: CorpusContractSurfaceProposal[]
   semantic?: CorpusSemanticSummary
   verification: { commands: string[] }
   overrides?: CorpusOverrides

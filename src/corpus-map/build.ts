@@ -24,6 +24,8 @@ import type {
   CodebaseMap,
   CorpusAbstraction,
   CorpusArea,
+  CorpusContractSurfaceProposal,
+  CorpusContractSurfaceProposalKind,
   CorpusDesignGovernanceSummary,
   CorpusDesignSystemSummary,
   CorpusFileEntry,
@@ -57,6 +59,7 @@ export async function buildCodebaseMap(input: BuildCodebaseMapInput): Promise<Co
     designGovernance,
     now,
   })
+  map.contractSurfaceProposals = await buildContractSurfaceProposals(projectRoot, entries)
   return input.semanticIndexer
     ? enrichCodebaseMapSemantics(map, input.semanticIndexer, now)
     : map
@@ -116,6 +119,7 @@ export async function refreshCodebaseMap(input: RefreshCodebaseMapInput): Promis
         designGovernance: refreshedDesignGovernance,
         now,
       })
+      map.contractSurfaceProposals = await buildContractSurfaceProposals(projectRoot, files)
       if (input.semanticIndexer) {
         map = await enrichCodebaseMapSemantics(map, input.semanticIndexer, now)
       }
@@ -184,6 +188,83 @@ function synthesizeMap(input: {
     ...(overrides ? { overrides } : {}),
   }
   return map
+}
+
+async function buildContractSurfaceProposals(
+  projectRoot: string,
+  files: Record<string, CorpusFileEntry>,
+): Promise<CorpusContractSurfaceProposal[]> {
+  const groups = new Map<string, Array<{
+    label: string
+    kind: CorpusContractSurfaceProposalKind
+    path: string
+    invariants: string[]
+  }>>()
+  for (const entry of Object.values(files)) {
+    if (entry.kind !== 'doc') continue
+    if (!/(^|\/)(specs?|docs|internal)\//.test(entry.path)) continue
+    const content = await fs.readFile(path.join(projectRoot, entry.path), 'utf-8').catch(() => '')
+    const match = parseContractSurfaceHint(content)
+    if (!match) continue
+    const key = slugId(match.label)
+    const bucket = groups.get(key) ?? []
+    bucket.push({ ...match, path: entry.path })
+    groups.set(key, bucket)
+  }
+
+  return [...groups.entries()]
+    .flatMap(([key, entries]) => {
+      const uniquePaths = unique(entries.map(entry => entry.path))
+      if (uniquePaths.length < 2) return []
+      const repeatedPatterns = unique(entries.flatMap(entry => entry.invariants))
+      if (repeatedPatterns.length === 0) return []
+      const first = entries[0]!
+      return [{
+        id: `corpus-contract-surface:${key}`,
+        label: first.label,
+        kind: first.kind,
+        summary: `${first.label} appears across ${uniquePaths.length} specs or docs with repeated contract language.`,
+        evidence: uniquePaths.map((evidencePath) => {
+          const entry = entries.find(candidate => candidate.path === evidencePath)
+          return { path: evidencePath, excerpt: entry?.invariants[0] }
+        }),
+        repeatedPatterns,
+        ownerApprovalRequired: true as const,
+      }]
+    })
+    .sort((left, right) => left.label.localeCompare(right.label))
+}
+
+function parseContractSurfaceHint(content: string): {
+  label: string
+  kind: CorpusContractSurfaceProposalKind
+  invariants: string[]
+} | null {
+  const label = content.match(/^\s*Contract Surface\s*:\s*(.+)$/im)?.[1]?.trim()
+  if (!label) return null
+  const kind = normalizeContractSurfaceKind(content.match(/^\s*Surface Kind\s*:\s*(.+)$/im)?.[1])
+  const invariants = [...content.matchAll(/^\s*Invariant\s*:\s*(.+)$/gim)]
+    .map(match => match[1]?.trim())
+    .filter((value): value is string => Boolean(value))
+  return { label, kind, invariants }
+}
+
+function normalizeContractSurfaceKind(value: string | undefined): CorpusContractSurfaceProposalKind {
+  const normalized = value?.trim().toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_+|_+$/g, '')
+  switch (normalized) {
+    case 'component_api':
+    case 'http_api':
+    case 'event_api':
+    case 'mcp_api':
+    case 'schema':
+    case 'state_machine':
+    case 'design_system':
+    case 'domain_capability':
+    case 'documentation':
+      return normalized
+    default:
+      return 'other'
+  }
 }
 
 function summarizeProject(files: CorpusFileEntry[]): string {
@@ -519,4 +600,8 @@ function titleize(value: string): string {
 
 function unique(values: string[]): string[] {
   return [...new Set(values.filter(Boolean))]
+}
+
+function slugId(value: string): string {
+  return value.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '') || 'surface'
 }

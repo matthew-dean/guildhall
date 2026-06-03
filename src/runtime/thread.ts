@@ -1105,7 +1105,9 @@ function boundedChatTurns(projectPath: string, sessions: BoundedChatSession[]): 
         rawRequest: session.acceptedState.decisions.map(item => item.decision).join('\n'),
         title: session.objective.kind === 'project_check_in'
           ? 'Project check-in complete'
-          : session.objective.kind === 'new_request'
+          : isProjectQuestionBoundedChat(session)
+            ? 'Project question complete'
+            : session.objective.kind === 'new_request'
             ? 'New request complete'
             : `${session.objective.label} complete`,
         requestStage: 'new_request',
@@ -1150,6 +1152,7 @@ function boundedChatActionHref(sessionId: string): string {
 }
 
 function boundedChatDomainTitle(session: BoundedChatSession): string {
+  if (isProjectQuestionBoundedChat(session)) return 'Project question'
   switch (session.objective.kind) {
     case 'new_request':
       return 'New request'
@@ -1158,6 +1161,11 @@ function boundedChatDomainTitle(session: BoundedChatSession): string {
     default:
       return session.objective.label
   }
+}
+
+function isProjectQuestionBoundedChat(session: BoundedChatSession): boolean {
+  return session.objective.kind === 'new_request' &&
+    session.plannerState?.newRequest?.routedRequestKind === 'project_question'
 }
 
 function taskRequestTurn(

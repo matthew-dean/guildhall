@@ -23,6 +23,13 @@
 
   const graph = $derived(store.projectGraph)
   const pickerResponsibility = $derived(store.assignmentPickerResponsibility())
+
+  function surfaceScopeLabel(scopedReason: string): string {
+    if (scopedReason === 'owner') return 'Owned here'
+    if (scopedReason === 'consumer') return 'Consumed here'
+    if (scopedReason === 'domain') return 'Domain match'
+    return scopedReason
+  }
 </script>
 
 <SectionHeader
@@ -96,6 +103,48 @@
     {/if}
   </FrameCard>
 </div>
+
+<FrameCard class="graph-card graph-contract-surfaces-card">
+  {#snippet header()}
+    <SectionHeader
+      title="Contract surfaces"
+      description="Review durable component, API, schema, and design-system contracts connected to this project."
+      headingTag="h3"
+      density="dense"
+    />
+  {/snippet}
+  {#if !graph}
+    <p class="muted">Loading contract surfaces...</p>
+  {:else if (graph.contractSurfaces?.length ?? 0) === 0}
+    <p class="muted">No contract surfaces are scoped to this project yet.</p>
+  {:else}
+    <div class="contract-surface-list">
+      {#each graph.contractSurfaces ?? [] as surface (surface.id)}
+        <section class="contract-surface-row">
+          <div class="contract-surface-head">
+            <div>
+              <strong>{surface.label}</strong>
+              <p class="muted">{surface.domainLabel ?? surface.owningProjectLabel}</p>
+            </div>
+            <div class="request-status-stack">
+              <StatusPill label={surface.state.replaceAll('_', ' ')} tone={surface.state === 'accepted' ? 'ok' : 'warn'} />
+              <span class="muted">{surfaceScopeLabel(surface.scopedReason)}</span>
+            </div>
+          </div>
+          <DefinitionList
+            items={[
+              ['Kind', surface.kind.replaceAll('_', ' ')],
+              ['Authority', surface.authority],
+              ['Scope', surface.scope.replaceAll('_', ' ')],
+              ['Invariants', `${surface.invariantCount} ${surface.invariantCount === 1 ? 'invariant' : 'invariants'}`],
+              ['Consumers', `${surface.consumerCount} ${surface.consumerCount === 1 ? 'consumer' : 'consumers'}`],
+            ]}
+          />
+        </section>
+      {/each}
+    </div>
+  {/if}
+</FrameCard>
 
 {#if store.selectedDomain()}
   {@const domain = store.selectedDomain()}
@@ -244,6 +293,7 @@
   .graph-grid,
   .domain-assignment-list,
   .graph-request-list,
+  .contract-surface-list,
   .domain-detail,
   .assignment-picker {
     display: grid;
@@ -337,6 +387,22 @@
   .graph-request-inbound {
     border-inline-start: 2px solid var(--accent);
     padding-inline-start: var(--gh-space-3);
+  }
+  .contract-surface-row {
+    border-block-start: 1px solid var(--border-muted);
+    display: grid;
+    gap: var(--gh-space-2);
+    padding-block-start: var(--gh-space-3);
+  }
+  .contract-surface-row:first-child {
+    border-block-start: 0;
+    padding-block-start: 0;
+  }
+  .contract-surface-head {
+    display: flex;
+    align-items: start;
+    justify-content: space-between;
+    gap: var(--gh-space-3);
   }
   .graph-request-head {
     display: flex;

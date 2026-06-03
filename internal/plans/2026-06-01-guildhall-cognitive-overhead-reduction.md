@@ -3590,25 +3590,47 @@ private parallel checklist. Checked items require an `Evidence:` bullet.
     `pnpm vitest run src/runtime/__tests__/contract-surfaces.test.ts src/runtime/__tests__/project-graph.test.ts src/core/__tests__/structured-spec.test.ts --reporter=dot`
     (`17` tests) and `pnpm typecheck`.
 
-- [ ] **Step 2: Extend project graph and spec approval**
+- [x] **Step 2: Extend project graph and spec approval**
 
   Follow spec implementation Steps 3 and 4. Contract surfaces must remain graph
   nodes/facets and structured specs must record explicit deltas when they change
   durable surfaces.
 
-  - Progress: project graph node/view/storage support and explicit structured
-    spec deltas are implemented and tested. Spec approval wiring is still
-    pending, so this combined step remains unchecked.
+  - Evidence: project graph node/view/storage support and explicit structured
+    spec deltas are implemented and tested; spec approval now generates
+    task-local `contractSurfaceReviewPackets` from
+    `structuredSpec.contractSurfaceDeltas`, including sibling task refs,
+    invariants, decisions, and proof obligations. Verification:
+    `pnpm vitest run src/runtime/__tests__/contract-surfaces.test.ts src/runtime/__tests__/project-graph.test.ts src/core/__tests__/structured-spec.test.ts src/runtime/__tests__/intake.test.ts src/corpus-map/__tests__/corpus-map.test.ts src/runtime/__tests__/context-builder.test.ts src/web/surfaces/project/structure/__tests__/ProjectStructurePanel.svelte.test.ts --reporter=dot`
+    (`141` tests) and `pnpm typecheck`.
 
-- [ ] **Step 3: Add corpus-refresh proposal and managed-agent context**
+- [x] **Step 3: Add corpus-refresh proposal and managed-agent context**
 
   Follow spec implementation Steps 5 and 7. Refresh may propose surfaces and
   drift findings, but cannot silently mutate durable graph state.
 
-- [ ] **Step 4: Add Structure UI projection and live proof**
+  - Evidence: Corpus Map refresh emits owner-approval-required
+    `contractSurfaceProposals` for repeated cross-spec surface/invariant
+    patterns without applying them to durable graph state. `buildContext`
+    injects compact surface packets into worker/reviewer/gate context only when
+    relevant packets are attached to the task. Focused corpus/context tests are
+    included in the verification command above.
+
+- [x] **Step 4: Add Structure UI projection and live proof**
 
   Follow spec implementation Steps 6, 8, 9, and 10. Structure owns review
   projection; Thread owns discussion; Settings only reports readiness blockers.
+
+  - Progress: Structure now projects scoped project-graph contract surfaces in
+    the existing project graph panel and non-overfit fixtures cover
+    design-system, component API, and schema/event surfaces. This step remains
+    unchecked until installed-app refresh, `stale:false`, browser proof against
+    the active project, and the flow-audit evidence update are complete.
+  - Evidence: `pnpm dev:install` completed, service restart reported
+    `/api/stale-server` as `stale:false`, browser proof on
+    `http://localhost:7777/projects/narrative-harness/structure` showed the
+    Structure-owned contract-surface placement with no raw schema JSON leak,
+    and the final 0.10 proof entry was added to `internal/audits/flow-audit.md`.
 
 ## Rollout Order
 

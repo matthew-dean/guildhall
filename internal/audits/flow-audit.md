@@ -473,11 +473,19 @@ babysit setup/import/provider/release states across multiple pages.
   with `openQuestions`. The answer path creates the shaped task only after the
   owner clarifies scope, suppresses the stale follow-up question card on the
   created task, records the accepted clarification in bounded-chat state, and
-  projects both active and completed New request turns in Thread. Current
-  limitation: direct task-like requests now also route through bounded chat,
-  the modal now routes directly into `Threads` after creation, but a dedicated
-  thread-list selection/resume model and pure project-question conversation
-  threads are still pending.
+  projects both active and completed New request turns in Thread. Completion
+  evidence, 2026-06-03: direct task-like asks, settings/practice/repair/
+  clarification routes, and pure project-question asks now all create
+  `new_request` bounded-chat sessions instead of immediate task cards.
+  Project-question sessions close as conversation receipts without task drafts;
+  task-like sessions create work only after the owner answers. Thread route
+  selection already preserves `/thread?thread=<boundedChatId>`, and bounded
+  chat now renders through a dedicated conversation panel instead of the old
+  question-card branch. Verification: focused bounded-chat, Thread,
+  serve-intake, serve-settings, ThreadTab, and IntakeModal suites passed
+  together with 251 tests; `pnpm typecheck:ui` and `pnpm lint:design` passed.
+  `pnpm typecheck` still fails on unrelated contract-surface schema/type drift
+  in `src/runtime/context-builder.ts` and `src/runtime/intake.ts`.
 - [x] Narrow `Needs you` to alert-owned items while `Threads` absorbs the
   conversation-shaped attention flow.
   Runtime inbox classification now explicitly marks project check-in,
@@ -666,10 +674,10 @@ babysit setup/import/provider/release states across multiple pages.
   up, durable closure receipt, blocked receipt, idempotent action replay, and
   stale-write rejection. Project check-in now starts through bounded chat and
   answers through `/api/project/bounded-chat/:id/answer`, with Thread projecting
-  the active session through the existing question card so the flow is already
-  usable before the dedicated bounded-chat UI lands. Next bounded-chat step:
-  move deeper intake/New request onto the same contract and replace the
-  pressure-test-specific projection with a real bounded-chat surface.
+  active and fulfilled sessions through bounded-chat turns. Follow-up
+  completion, 2026-06-03: New request bounded chat now covers non-pressure-test
+  routes, pure project questions close without task drafts, and Thread uses a
+  dedicated bounded-chat conversation panel wherever bounded-chat state exists.
   2026-05-31 trust-blocker fix pass closed the UI/state regressions from that
   audit while preserving the real autonomous-progress blocker. Re-intake now
   has a direct repair route from Settings, an actionable first-run empty state,
@@ -7090,3 +7098,22 @@ to Task Intake`. Live API proof showed `task-stripe-integration` and
 recorded as `mode: continuous` before stopping on idle.
 
 source: codex:fll-start-readiness-worker-handoff-cleanup
+
+2026-06-03T12:46:00Z - Completed the 0.10 readiness integration pass across
+bounded Thread conversations, external task authority, external-agent memory
+bridge, contract surfaces, docs, screenshots, and installed-app proof.
+OpenRouter remains deferred to 0.11.0. Integrated verification passed:
+`pnpm typecheck`; focused combined Vitest suite for bounded chat, Thread,
+external authority, memory bridge, MCP/CLI bridge exposure, contract surfaces,
+corpus proposals, context packets, and Structure projection passed with 360
+tests; `pnpm lint:design`; `node scripts/reduction-guardrails.mjs`; `pnpm
+build`; `git diff --check`. Installed-app proof passed: `pnpm dev:install`
+completed, service restart reported `/api/stale-server` as `stale:false`, live
+browser proof on `http://localhost:7777/projects/narrative-harness/thread`
+showed project-question and brief-cleanup routing without raw schema JSON, and
+live browser proof on
+`http://localhost:7777/projects/narrative-harness/structure` showed Structural
+map, Project graph, and Contract surfaces in Structure. Fresh screenshots were
+captured under `docs/assets/ui-audit/0-10-0/`.
+
+source: codex:0.10-readiness-integration

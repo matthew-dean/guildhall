@@ -456,6 +456,55 @@ describe('buildContext — task summary', () => {
     expect(ctx.formatted).toContain('Corpus fit required')
   })
 
+  it.each([
+    ['in_progress', 'worker'],
+    ['review', 'reviewer'],
+  ] as const)('injects compact contract-surface packets into %s context', async (status, role) => {
+    const ctx = await buildContext({
+      ...baseTask,
+      status,
+      title: 'Update command menu item API',
+      description: 'Change the command menu component API without drifting prop names.',
+      contractSurfaceReviewPackets: [{
+        id: 'surface-review:task-001:component-api.command-menu',
+        surface: {
+          id: 'component-api.command-menu',
+          label: 'Command menu component API',
+          kind: 'component_api',
+          authority: 'shared',
+          scope: 'project',
+          owningProject: { id: 'fixture-app', label: 'Fixture App' },
+        },
+        currentSpecRef: 'task:task-001',
+        knownConsumers: [{ id: 'palette-panel', label: 'Palette panel' }],
+        existingInvariants: [{
+          id: 'stable-item-shape',
+          label: 'Stable item shape',
+          rule: 'Command menu items expose one stable action/item shape.',
+          proofObligations: ['Run component API tests.'],
+        }],
+        existingDecisions: [],
+        siblingSpecRefs: ['task:task-older'],
+        driftFindings: ['Sibling specs use commandAction and menuAction for the same item field.'],
+        currentDelta: {
+          surfaceId: 'component-api.command-menu',
+          relation: 'amends',
+          summary: 'Standardizes command item action naming.',
+          proofObligations: ['Add a component API fixture.'],
+        },
+        proofObligations: ['Add a component API fixture.'],
+        reviewFocus: ['Does the change preserve the command item vocabulary?'],
+      }],
+    }, tmpDir)
+
+    expect(ctx.contractSurfacePackets).toContain('## Contract Surface Packets')
+    expect(ctx.contractSurfacePackets).toContain('Command menu component API')
+    expect(ctx.contractSurfacePackets).toContain('Stable item shape')
+    expect(ctx.contractSurfacePackets).toContain('Sibling specs use commandAction')
+    expect(ctx.formatted).toContain('## Contract Surface Packets')
+    expect(ctx.formatted).toContain(role === 'worker' ? 'Add a component API fixture.' : 'Does the change preserve')
+  })
+
   it('proves the corpus map changes worker context toward existing abstractions', async () => {
     const withoutMap = await buildContext(baseTask, tmpDir)
     expect(withoutMap.corpusMap).toBe('')

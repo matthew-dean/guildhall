@@ -479,6 +479,93 @@ describe('buildThread', () => {
     }
   })
 
+  it('projects a pure project-question bounded chat as a conversation thread, not task intake', async () => {
+    const projectPath = await mkdtemp(path.join(tmpdir(), 'guildhall-thread-'))
+    try {
+      await mkdir(path.join(projectPath, '.guildhall', 'bounded-chat'), { recursive: true })
+      await writeFile(
+        path.join(projectPath, '.guildhall', 'bounded-chat', 'bc-project-question.json'),
+        JSON.stringify({
+          id: 'bc-project-question',
+          projectId: 'fair-labor-license',
+          source: 'thread:new-request',
+          objective: {
+            kind: 'new_request',
+            label: 'Answer a project question',
+            successCriteria: ['Answer the project question in Thread without creating task work.'],
+            startedAt: '2026-05-31T00:00:00.000Z',
+          },
+          status: 'waiting_for_owner',
+          activeSubObjectiveId: 'project-question-context',
+          subObjectives: [{
+            id: 'project-question-context',
+            objective: 'Gather project-question context',
+            prompt: 'Guildhall can answer this in Thread. Is there a source, task, or recent blocker it should use first?',
+            helperText: 'This stays a project conversation unless you ask Guildhall to turn it into work.',
+            choices: ['Use current blocker evidence', 'Use project docs', 'No extra context'],
+            followUpDepth: 0,
+            localTurns: [],
+            status: 'active',
+          }],
+          acceptedState: {
+            facts: [],
+            decisions: [],
+            leverUpdates: [],
+            settingUpdates: [],
+            taskDrafts: [],
+            unresolvedForks: [],
+            discardedResponses: [],
+          },
+          pendingActions: [],
+          appliedActionIds: [],
+          plannerState: {
+            newRequest: {
+              ask: 'Why is this project still blocked on useAuth.ts?',
+              domain: 'frontend',
+              projectPath,
+              routedRequestKind: 'project_question',
+              routingSummary: 'Guildhall saved this as a project question.',
+            },
+          },
+          createdAt: '2026-05-31T00:00:00.000Z',
+          updatedAt: '2026-05-31T00:00:00.000Z',
+        }),
+      )
+
+      const snapshot: ProjectSnapshot = {
+        projectPath,
+        config: {
+          id: 'fair-labor-license',
+          name: 'Fair Labor License',
+          bootstrap: { verifiedAt: new Date().toISOString() },
+          coordinators: [{ id: 'frontend', name: 'Frontend' }],
+        },
+        bootstrapVerified: true,
+        hasProvider: true,
+        hasDirection: true,
+        workspaceImportReviewed: true,
+        taskCount: 0,
+        wizardState: emptyWizardsState(),
+      }
+
+      const thread = buildThread({ projectPath, snapshot })
+      const turn = thread.turns.find(item => item.id === 'bounded-chat:bc-project-question:project-question-context')
+
+      expect(turn).toMatchObject({
+        kind: 'bounded_chat',
+        domainTitle: 'Project question',
+        question: {
+          prompt: 'Guildhall can answer this in Thread. Is there a source, task, or recent blocker it should use first?',
+          why: 'This stays a project conversation unless you ask Guildhall to turn it into work.',
+        },
+      })
+      expect(JSON.stringify(thread.turns)).not.toContain('Task Intake')
+      expect(thread.activeTurnId).toBe('bounded-chat:bc-project-question:project-question-context')
+    } finally {
+      await rm(projectPath, { recursive: true, force: true })
+    }
+  })
+
   it.each([
     ['task_shaping', 'Task shaping'],
     ['structural_review', 'Structural review'],
@@ -870,6 +957,106 @@ describe('buildThread', () => {
         phase: 'done',
         title: 'New request complete',
         routingSummary: 'Guildhall shaped the new request into runnable work.',
+      })
+    } finally {
+      await rm(projectPath, { recursive: true, force: true })
+    }
+  })
+
+  it('projects a completed bounded-chat project question as a done conversation receipt', async () => {
+    const projectPath = await mkdtemp(path.join(tmpdir(), 'guildhall-thread-'))
+    try {
+      await mkdir(path.join(projectPath, '.guildhall', 'bounded-chat'), { recursive: true })
+      await writeFile(
+        path.join(projectPath, '.guildhall', 'bounded-chat', 'bc-project-question-done.json'),
+        JSON.stringify({
+          id: 'bc-project-question-done',
+          projectId: 'fair-labor-license',
+          source: 'thread:new-request',
+          objective: {
+            kind: 'new_request',
+            label: 'Answer a project question',
+            successCriteria: ['Answer the project question in Thread without creating task work.'],
+            startedAt: '2026-05-31T00:00:00.000Z',
+          },
+          status: 'fulfilled',
+          activeSubObjectiveId: 'project-question-context',
+          subObjectives: [{
+            id: 'project-question-context',
+            objective: 'Gather project-question context',
+            prompt: 'Guildhall can answer this in Thread. Is there a source, task, or recent blocker it should use first?',
+            helperText: 'This stays a project conversation unless you ask Guildhall to turn it into work.',
+            followUpDepth: 0,
+            localTurns: [{
+              role: 'user',
+              content: 'Use current blocker evidence.',
+              selectedChoiceIds: [],
+            }],
+            status: 'answered',
+          }],
+          acceptedState: {
+            facts: [],
+            decisions: [{
+              decision: 'Use current blocker evidence.',
+              sourceSubObjectiveId: 'project-question-context',
+            }],
+            leverUpdates: [],
+            settingUpdates: [],
+            taskDrafts: [],
+            unresolvedForks: [],
+            discardedResponses: [],
+          },
+          pendingActions: [],
+          appliedActionIds: ['close-1'],
+          plannerState: {
+            newRequest: {
+              ask: 'Why is this project still blocked on useAuth.ts?',
+              domain: 'frontend',
+              projectPath,
+              routedRequestKind: 'project_question',
+              routingSummary: 'Guildhall saved this as a project question.',
+            },
+          },
+          closure: {
+            outcome: 'fulfilled',
+            summary: 'Guildhall kept this as a project question thread.',
+            settingUpdates: [],
+            taskDrafts: [],
+            evidence: [],
+            closedAt: '2026-05-31T00:10:00.000Z',
+          },
+          createdAt: '2026-05-31T00:00:00.000Z',
+          updatedAt: '2026-05-31T00:10:00.000Z',
+        }),
+      )
+
+      const snapshot: ProjectSnapshot = {
+        projectPath,
+        config: {
+          id: 'fair-labor-license',
+          name: 'Fair Labor License',
+          bootstrap: { verifiedAt: new Date().toISOString() },
+          coordinators: [{ id: 'frontend', name: 'Frontend' }],
+        },
+        bootstrapVerified: true,
+        hasProvider: true,
+        hasDirection: true,
+        workspaceImportReviewed: true,
+        taskCount: 0,
+        wizardState: emptyWizardsState(),
+      }
+
+      const thread = buildThread({ projectPath, snapshot })
+      const turn = thread.turns.find(item => item.id === 'bounded-chat-done:bc-project-question-done')
+
+      expect(turn).toMatchObject({
+        kind: 'request',
+        status: 'done',
+        title: 'Project question complete',
+        routingSummary: 'Guildhall kept this as a project question thread.',
+      })
+      expect(turn).not.toMatchObject({
+        title: 'New request complete',
       })
     } finally {
       await rm(projectPath, { recursive: true, force: true })

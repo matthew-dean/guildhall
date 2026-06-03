@@ -23,6 +23,7 @@ import { applyTaskShaping } from './task-decomposition.js'
 import { transitionTaskStatus } from './task-transition.js'
 import { createOwnerInputRequest } from './owner-input-store.js'
 import { normalizeLegacyTaskQueueShape } from './task-queue-compat.js'
+import { buildSurfaceReviewPacketsForStructuredSpec } from './contract-surfaces.js'
 
 // ---------------------------------------------------------------------------
 // FR-12: exploratory task intake.
@@ -345,6 +346,20 @@ export async function approveSpec(input: ApproveSpecInput): Promise<ApproveSpecR
   }
 
   const now = new Date().toISOString()
+  const surfaceReviewPackets = buildSurfaceReviewPacketsForStructuredSpec({
+    structuredSpec: task.structuredSpec,
+    currentSpecRef: `task:${task.id}`,
+    siblingSpecRefsBySurfaceId: siblingSpecRefsBySurfaceId(queue, task.id),
+  })
+  if (surfaceReviewPackets.length > 0) {
+    task.contractSurfaceReviewPackets = surfaceReviewPackets
+    task.notes.push({
+      agentId: 'contract-surface',
+      role: 'blueprint-review',
+      content: `Generated ${surfaceReviewPackets.length} contract-surface review packet${surfaceReviewPackets.length === 1 ? '' : 's'} from structured spec deltas during approval.`,
+      timestamp: now,
+    })
+  }
   applyTaskShaping(task, { now, recordNote: false })
   if (task.sizePlan?.action === 'split_required' && !shouldKeepFixedSpecRunnable(task)) {
     materializeRequiredSplitChildren(queue, task, now)
@@ -394,6 +409,19 @@ export async function approveSpec(input: ApproveSpecInput): Promise<ApproveSpecR
   })
 
   return { success: true, newStatus: task.status }
+}
+
+function siblingSpecRefsBySurfaceId(queue: TaskQueue, currentTaskId: string): Record<string, string[]> {
+  const refs: Record<string, string[]> = {}
+  for (const candidate of queue.tasks) {
+    if (candidate.id === currentTaskId) continue
+    for (const delta of candidate.structuredSpec?.contractSurfaceDeltas ?? []) {
+      if (!delta.surfaceId) continue
+      refs[delta.surfaceId] ??= []
+      refs[delta.surfaceId]!.push(`task:${candidate.id}`)
+    }
+  }
+  return refs
 }
 
 function backfillAcceptanceCriteriaFromSpec(task: Task): void {

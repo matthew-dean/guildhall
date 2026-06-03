@@ -42,6 +42,7 @@ A typical worker or reviewer prompt can include these blocks:
 | Business envelope | Parent goal, success condition, and guardrails. |
 | Design system | Approved or draft UI primitives, tokens, copy voice, and accessibility baseline. |
 | Design governance | Token authority, component authority, duplicate primitive families, variant risks, and reviewer checks for UI/design-system work. |
+| Contract surface packets | Shared component/API/schema/design-system rules, sibling specs, proposed deltas, and proof obligations when a task touches a durable surface. |
 | Review rubrics | The inspection criteria selected for this task. |
 | Review packet | Changed files, self-critique, and verification evidence for review/gate stages. |
 | Relevant memory | Matching sections from `MEMORY.md`, capped to stay useful. |
@@ -93,6 +94,8 @@ The worker receives the strongest operational packet:
 - selected review rubrics
 - [Corpus Map](./corpus-map) guidance
 - project-graph or contract-surface guidance when relevant
+- surface review packets when the accepted spec changes a durable component,
+  API, schema, event, provider, or design-system surface
 - design-governance packet when UI or design-system work is involved
 - design-system summary when relevant
 - verification expectations

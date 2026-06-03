@@ -3499,7 +3499,7 @@
                 </div>
                 <StateSummary label={requestStateLabel(t)} description={t.routingSummary} tone="ok" />
 
-              {:else if t.kind === 'pressure_test_question' || t.kind === 'bounded_chat'}
+              {:else if t.kind === 'pressure_test_question'}
                 <div class="question-card-heading">
                   <div class="question-card-meta">{pressureQuestionMeta(t)}</div>
                   <h3 class="prompt"><Markdown source={pressureQuestionPrompt(t)} inline /></h3>
@@ -3565,6 +3565,75 @@
                     {/if}
                   </Stack>
                 {/if}
+
+              {:else if t.kind === 'bounded_chat'}
+                <UtilityPanel className="bounded-chat-panel" tone="neutral">
+                  <div class="thread-active-question">
+                    <strong>{pressureQuestionMeta(t)}</strong>
+                    <Markdown source={pressureQuestionPrompt(t)} />
+                    <p class="why">{pressureQuestionWhy(t)}</p>
+                    {#if hiddenPressureQuestionCount > 0}
+                      <p class="next-question-note">
+                        {hiddenPressureQuestionCount} more question{hiddenPressureQuestionCount === 1 ? '' : 's'} will appear after this answer.
+                      </p>
+                    {/if}
+                    {#if t.question.evidence.length}
+                      <div class="field">
+                        <span class="field-label">Evidence</span>
+                        <ul class="bullet">
+                          {#each t.question.evidence as item}
+                            <li><Markdown source={item} inline /></li>
+                          {/each}
+                        </ul>
+                      </div>
+                    {/if}
+                    {#if t.status !== 'done'}
+                      <Stack gap="2">
+                        {#if t.question.choices?.length}
+                          <div class="pressure-choice-list" aria-label="Answer choices">
+                            {#each t.question.choices as choice}
+                              <Button
+                                variant="secondary"
+                                disabled={busyTurnId === t.id}
+                                onclick={() => answerPressureTestQuestion(t, choice)}
+                              >
+                                {choice}
+                              </Button>
+                            {/each}
+                          </div>
+                        {:else}
+                          {#if isFooterPressureTurn(t.id)}
+                            <p class="next-question-note">Reply using the shared composer below.</p>
+                          {:else}
+                            <Textarea
+                              value={pressureTestAnswers[t.id] ?? ''}
+                              rows={4}
+                              placeholder="Answer with a sentence or short paragraph. Include constraints or success measures if they matter."
+                              disabled={busyTurnId === t.id}
+                              oninput={(v) => setPressureTestAnswer(t.id, v)}
+                            />
+                            <Row justify="end" gap="2">
+                              <Button
+                                variant="primary"
+                                disabled={busyTurnId === t.id || !(pressureTestAnswers[t.id] ?? '').trim()}
+                                onclick={() => answerPressureTestQuestion(t)}
+                              >
+                                {busyTurnId === t.id
+                                  ? 'Submitting...'
+                                  : hiddenPressureQuestionCount > 0
+                                    ? 'Submit and continue'
+                                    : 'Submit answer'}
+                              </Button>
+                            </Row>
+                          {/if}
+                        {/if}
+                        {#if pressureTestErrors[t.id]}
+                          <p class="error">{pressureTestErrors[t.id]}</p>
+                        {/if}
+                      </Stack>
+                    {/if}
+                  </div>
+                </UtilityPanel>
 
               {:else if t.kind === 'brief_approval'}
                 {@const briefScope = briefScopeForReaders(t.brief, t.taskTitle)}
@@ -4789,7 +4858,7 @@
                               </Button>
                             {/if}
                           </UtilityPanel>
-                        {:else if activeDockTurn.kind === 'pressure_test_question' || activeDockTurn.kind === 'bounded_chat'}
+                        {:else if activeDockTurn.kind === 'pressure_test_question'}
                           <div class="thread-active-question">
                             <strong>{pressureQuestionMeta(activeDockTurn)}</strong>
                             <Markdown source={pressureQuestionPrompt(activeDockTurn)} />
@@ -4813,10 +4882,41 @@
                                   >
                                     {choice}
                                   </Button>
-                                {/each}
-                              </div>
-                            {/if}
-                          </div>
+                              {/each}
+                            </div>
+                          {/if}
+                        </div>
+                        {:else if activeDockTurn.kind === 'bounded_chat'}
+                          <UtilityPanel className="bounded-chat-panel" tone="neutral">
+                            <div class="thread-active-question">
+                              <strong>{pressureQuestionMeta(activeDockTurn)}</strong>
+                              <Markdown source={pressureQuestionPrompt(activeDockTurn)} />
+                              <p class="why">{pressureQuestionWhy(activeDockTurn)}</p>
+                              {#if activeDockTurn.question.evidence.length}
+                                <div class="field">
+                                  <span class="field-label">Evidence</span>
+                                  <ul class="bullet">
+                                    {#each activeDockTurn.question.evidence as item}
+                                      <li><Markdown source={item} inline /></li>
+                                    {/each}
+                                  </ul>
+                                </div>
+                              {/if}
+                              {#if activeDockTurn.question.choices?.length}
+                                <div class="pressure-choice-list" aria-label="Answer choices">
+                                  {#each activeDockTurn.question.choices as choice}
+                                    <Button
+                                      variant="secondary"
+                                      disabled={busyTurnId === activeDockTurn.id}
+                                      onclick={() => answerPressureTestQuestion(activeDockTurn, choice)}
+                                    >
+                                      {choice}
+                                    </Button>
+                                  {/each}
+                                </div>
+                              {/if}
+                            </div>
+                          </UtilityPanel>
                         {:else if activeDockTurn.kind === 'brief_approval'}
                           {@const blockedByQuestions = hasOpenQuestionsForTask(activeDockTurn.taskId)}
                           {@const briefScope = briefScopeForReaders(activeDockTurn.brief, activeDockTurn.taskTitle)}

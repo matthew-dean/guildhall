@@ -9,6 +9,7 @@ import {
   createBugReportTask,
   parseStackTraceTopFile,
 } from '../intake.js'
+import { registerContractSurface } from '../contract-surfaces.js'
 import { TaskQueue } from '@guildhall/core'
 import { raiseEscalation } from '@guildhall/tools'
 import { getProjectStateDir, getProjectTranscriptPath } from '@guildhall/sessions'
@@ -353,6 +354,75 @@ describe('approveSpec', () => {
     expect(updated.tasks[0]!.blockerPlans?.length).toBeGreaterThan(0)
     expect(updated.tasks[0]!.contextBudget?.fitsInOneWorkerBrief).toBe(true)
     expect(updated.tasks[0]!.decomposition?.action).toBe('keep')
+  })
+
+  it('generates contract-surface review packets from structured spec deltas during approval', async () => {
+    await registerContractSurface({
+      id: 'design-system.tokens-and-variants',
+      label: 'Design tokens and variants',
+      kind: 'design_system',
+      owningProject: { id: 'fixture-app', label: 'Fixture App', path: tmpDir },
+      authority: 'shared',
+      scope: 'project',
+      sourceRefs: [{ kind: 'design_tokens', path: '.guildhall/design-system.yaml', summary: 'Approved token authority.' }],
+      consumerRefs: [{ id: 'settings-panel', label: 'Settings panel' }],
+      invariants: [{
+        id: 'approved-variant-axis',
+        label: 'Approved variant axis',
+        rule: 'Interactive controls use approved variant axes instead of local synonyms.',
+        proofObligations: ['Run component API tests for variant names.'],
+      }],
+      decisions: [],
+      createdBy: 'test',
+      now: '2026-06-02T12:00:00.000Z',
+    })
+    const queue = await readQueue()
+    const task = queue.tasks[0]!
+    task.structuredSpec = {
+      whatThisIs: 'A design-system variant update.',
+      problemContext: 'Two panels need the same low-emphasis action treatment.',
+      goals: ['Extend the shared variant vocabulary.'],
+      nonGoals: ['Do not add local button classes.'],
+      proposedDesign: 'Add the variant through the shared button primitive.',
+      keyDecisions: ['Keep styling owned by the design system.'],
+      contractSurfaceDeltas: [{
+        surfaceId: 'design-system.tokens-and-variants',
+        relation: 'amends',
+        summary: 'Adds a subdued action variant to the shared control vocabulary.',
+        invariantRefs: ['approved-variant-axis'],
+        proofObligations: ['Add a Button variant contract test.'],
+      }],
+      acceptanceCriteria: [{ scenario: 'Variant is used', expectation: 'The shared primitive owns it', verificationMode: 'automated' }],
+      verification: ['pnpm vitest run src/web/lib/__tests__/Button.css-contract.test.ts'],
+      completionBoundary: {
+        productOutcome: 'Design-system consumers share one variant vocabulary.',
+        whatGuildhallCanCompleteInCode: 'Update the shared primitive and tests.',
+        externalDependencies: 'None.',
+        ownerOnlySetup: 'None.',
+        verificationEnvironment: 'Local unit tests.',
+        whatCountsAsDone: 'The variant contract is tested.',
+        whatMustBeSplitOrBlocked: 'Nothing.',
+      },
+    }
+    await fs.writeFile(tasksPath, JSON.stringify(queue, null, 2), 'utf-8')
+
+    const result = await approveSpec({ memoryDir, taskId: task.id })
+
+    expect(result.success).toBe(true)
+    const updated = await readQueue()
+    expect(updated.tasks[0]?.contractSurfaceReviewPackets).toHaveLength(1)
+    expect(updated.tasks[0]?.contractSurfaceReviewPackets?.[0]).toMatchObject({
+      surface: {
+        id: 'design-system.tokens-and-variants',
+        label: 'Design tokens and variants',
+      },
+      currentSpecRef: 'task:task-001',
+      currentDelta: {
+        summary: 'Adds a subdued action variant to the shared control vocabulary.',
+      },
+    })
+    expect(updated.tasks[0]?.contractSurfaceReviewPackets?.[0]?.proofObligations).toContain('Add a Button variant contract test.')
+    expect(updated.tasks[0]?.notes.at(-1)?.content).toContain('Generated 1 contract-surface review packet')
   })
 
   it('approves specs where Completion Boundary is the final section', async () => {

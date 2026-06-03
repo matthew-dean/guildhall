@@ -104,8 +104,11 @@ in a deliberate sequence rather than as disconnected spikes.
 - [x] Create a canonical 0.10.0 implementation tracker.
 - [x] Link the tracker from `internal/README.md`.
 - [x] Record the active bounded-chat implementation start in `artifact:flow-audit`.
-- [ ] Keep this tracker updated as each 0.10 lane moves from proposed to active
+- [x] Keep this tracker updated as each 0.10 lane moves from proposed to active
   to browser-proven.
+  Final 0.10 readiness pass updated the remaining bounded-chat, external task
+  authority, external-agent memory bridge, contract-surface, docs, screenshot,
+  and browser-proof ledgers. OpenRouter remains explicitly deferred to 0.11.0.
 
 ## Milestone 1: Bounded Chat
 
@@ -130,46 +133,55 @@ path needed to prove the pattern in a browser.
 - [x] Add bounded-chat types and storage.
 - [x] Add bounded-chat session state transitions and action validation.
 - [x] Add idempotent application for coordinator actions and closure receipts.
-- [ ] Route deep intake through bounded chat before tackling the broader owner-
+- [x] Route deep intake through bounded chat before tackling the broader owner-
   input replacement map.
-  Project check-in now starts and answers through bounded chat, with Thread
-  projection reusing the existing question-card surface while the dedicated
-  bounded-chat UI is still pending. Focused proof now covers multi-question
-  exhaustion, confused-answer discard handling, resume-later behavior,
-  persisted decision writes, and a completed Thread turn once the session
-  closes.
-- [ ] Route New request through bounded chat once runtime + intake contract are
+  Project check-in now starts, resumes, answers, and closes through bounded
+  chat, and Thread projects both active and fulfilled sessions as bounded-chat
+  turns/receipts instead of the setup card. The dedicated bounded-chat panel
+  now replaces the old question-card rendering wherever bounded-chat state
+  exists. Focused proof covers multi-question exhaustion, confused-answer
+  discard handling, resume-later behavior, persisted decision writes, completed
+  Thread receipts, and the dedicated bounded-chat UI branch.
+- [x] Route New request through bounded chat once runtime + intake contract are
   stable.
-  Backend default is now widened for task-like asks: ordinary Task Intake and
-  ambiguous policy/spec asks both create a `new_request` bounded-chat session
-  instead of immediately creating exploring tasks. The task is only created
-  after the owner answers the shaping prompt, and Thread continues to project
-  active/done turns for the session. The modal now routes straight into
-  `Threads` after creation, includes the bounded-chat id in its app event, and
-  preserves that id in the route as `/thread?thread=<boundedChatId>` so the
-  newly created bounded-chat thread is selected. Pure project-question
-  conversation threads are still a follow-up slice.
-- [ ] Add route-backed bounded-chat UI and notification projection only after
+  Backend default now creates a `new_request` bounded-chat session for every
+  non-pressure-test New request route: ordinary task shaping, ambiguous
+  policy/spec asks, settings/practice/repair/clarification routes, and pure
+  project-question conversations. Task-like requests create exploring task
+  drafts only after the owner answers the shaping prompt. Pure project
+  questions close as conversation receipts with no task draft. The modal routes
+  straight into `Threads`, includes the bounded-chat id in its app event, and
+  preserves that id in `/thread?thread=<boundedChatId>` so the new conversation
+  is selected.
+- [x] Add route-backed bounded-chat UI and notification projection only after
   the backend/session contract is stable.
   The first `Threads + Needs you` transition slice is now in place: runtime
   inbox classification explicitly keeps approvals/questions/escalations
   thread-owned, `/api/project/inbox` only returns alert-owned items, the rail
   now says `Threads`, and `Needs you` renders as a compact alert/history view
-  that points active conversations back to Threads. Dedicated route-backed
-  bounded-chat task intake is still pending. The current `Threads` shell now
+  that points active conversations back to Threads. The current `Threads` shell
   has the first real navigation model behind it: wide layouts keep list +
   detail side by side, compact layouts switch to a `project nav -> thread list
   -> thread detail` stack, the top-left control becomes `Threads` instead of a
   hamburger while a compact detail is selected, and thread content no longer
   waits on runtime/dev-server/capability side fetches before rendering. The
-  newest bounded-chat route slice lets `/thread?thread=<boundedChatId>` select
-  the linked bounded-chat chain even when another turn is globally active, and
-  row selection now keeps Thread URLs route-backed. The latest runtime pass
-  also split `/api/project/thread` into a fast core payload plus best-effort
-  `/api/project/thread/extras` hydration for per-task git story data, moved
-  thread snapshot/session loading onto async cached reads, and taught
-  `buildSnapshotAsync` to use `.guildhall/tasks/index.json` for hot-path task
-  counts instead of reparsing `TASKS.json` just to count current tasks.
+  bounded-chat route slice lets `/thread?thread=<boundedChatId>` select the
+  linked bounded-chat chain even when another turn is globally active, and row
+  selection keeps Thread URLs route-backed. The latest UI projection adds a
+  dedicated bounded-chat conversation panel for task intake and project
+  questions so bounded-chat state no longer renders through the legacy
+  question-card branch. Focused verification:
+  `pnpm vitest run src/runtime/__tests__/bounded-chat.test.ts
+  src/runtime/__tests__/thread.test.ts
+  src/runtime/__tests__/request-routing.test.ts
+  src/runtime/__tests__/serve-intake.test.ts
+  src/runtime/__tests__/serve-settings.test.ts
+  src/web/surfaces/project/__tests__/ThreadTab.svelte.test.ts
+  src/web/surfaces/__tests__/IntakeModal.svelte.test.ts --reporter=dot`
+  passed with 251 tests; `pnpm typecheck:ui` and `pnpm lint:design` passed.
+  `pnpm typecheck` was rerun, but the branch still has unrelated
+  contract-surface schema/type drift in `src/runtime/context-builder.ts` and
+  `src/runtime/intake.ts`.
 
 ## Milestone 2: State Machines And Local Project Graph
 
@@ -559,11 +571,22 @@ Issues style planning authority.
   shaped source snapshot, records field-level `syncState`, marks harmless
   external drift as `stale`, and marks authority-sensitive changes or stale
   proposed writes as `conflict` without mutating external systems.
-- [ ] Shape execution packets from external issue truth plus repo-local context.
-- [ ] Gate external writes behind explicit policy and evidence-backed proposals.
-  The runtime records policy and evidence-backed proposed writes, but connector
-  write execution, approval UI, and packet shaping remain future Milestone 4
-  slices.
+- [x] Shape execution packets from external issue truth plus repo-local context.
+  `buildExternalTaskExecutionPacket` now produces a deterministic,
+  provider-neutral packet from an `ExternalTaskMirror` plus repo-local task,
+  structural, route, policy, PR/review, and proof refs. Packets expose readiness
+  as `ready`, `recheck_required`, or `blocked_by_external_conflict` from the
+  mirror's stale/conflict state and keep context manifest buckets sorted and
+  inspectable.
+- [x] Gate external writes behind explicit policy and evidence-backed proposals.
+  `recordExternalWriteProposal`, `approveExternalWriteProposal`, and
+  `rejectExternalWriteProposal` record proposal/decision receipts, require
+  evidence refs, honor read-only/allowed-field policy, and move approved writes
+  only to `pending` connector execution state without mutating provider truth.
+  Focused verification:
+  `pnpm vitest run src/runtime/__tests__/external-task-authority.test.ts --reporter=dot`
+  passed with 8 tests. `pnpm typecheck` was rerun, but the branch still has
+  unrelated contract-surface/intake/serve type errors outside Milestone 4.
 
 ## Milestone 5: Agent Memory Bridge
 
@@ -580,11 +603,25 @@ chat into ambient truth.
 - [x] Expose memory exchange through explicit import/export or link flows.
   The runtime now persists `.guildhall/external-agent-memory-bridge.json` and
   exposes import, export, list, link-style source refs, review, and reject
-  helpers. MCP/CLI/UI exposure remains future work.
+  helpers. The 0.10 exposure path now includes MCP and CLI record flows:
+  `guildhall://project/external-agent-memory-bridge`,
+  `guildhall.list_external_memory_bridge_records`,
+  `guildhall.import_external_memory_bridge_record`,
+  `guildhall.review_external_memory_bridge_record`,
+  `guildhall.reject_external_memory_bridge_record`, and
+  `guildhall agent memory <import|list|review|reject>`. UI exposure remains
+  deferred to the broader external-session/task-surface work rather than being
+  added to Settings for this bounded memory-record slice.
 - [x] Keep external-agent memory reviewable before it shapes local execution.
   Imported bridge records stay in the bridge store only; `reviewExternalMemoryBridgeRecord`
   is the explicit promotion step into ordinary memory, where the existing
   effective-memory rules decide whether it enters execution context.
+  Focused verification: `pnpm vitest run
+  src/runtime/__tests__/external-agent-memory-bridge.test.ts
+  src/runtime/__tests__/cli.test.ts src/mcp-server/__tests__/server.test.ts
+  --reporter=dot` passed with 30 tests. `pnpm typecheck` was rerun, but the
+  branch still has unrelated contract-surface/intake/serve type errors outside
+  Milestone 5.
 
 ## Milestone 6: Contract Surfaces And Surface Review Packets
 
@@ -609,15 +646,30 @@ design-system vocabulary.
   project-graph contract-surface test in
   `src/runtime/__tests__/project-graph.test.ts`, included in the focused Vitest
   command above.
-- [ ] Generate surface review packets during spec approval from sibling specs,
+- [x] Generate surface review packets during spec approval from sibling specs,
   known decisions, changed rules, and unresolved obligations.
-  Progress: the compact `SurfaceReviewPacket` data structure and markdown
-  renderer are in place, but spec approval and reviewer-context wiring remain
-  pending.
-- [ ] Let corpus refresh propose contract-surface updates from repeated
+  Spec approval now reads `structuredSpec.contractSurfaceDeltas`, generates
+  task-local `contractSurfaceReviewPackets` from durable surface records, and
+  carries sibling task refs, decisions, invariants, and proof obligations into
+  the packet artifact. Evidence: `pnpm vitest run src/runtime/__tests__/contract-surfaces.test.ts src/runtime/__tests__/project-graph.test.ts src/core/__tests__/structured-spec.test.ts src/runtime/__tests__/intake.test.ts src/corpus-map/__tests__/corpus-map.test.ts src/runtime/__tests__/context-builder.test.ts src/web/surfaces/project/structure/__tests__/ProjectStructurePanel.svelte.test.ts --reporter=dot`
+  (`141` tests) and `pnpm typecheck`.
+- [x] Let corpus refresh propose contract-surface updates from repeated
   cross-spec patterns without applying them automatically.
-- [ ] Project contract surfaces into Structure and feed relevant packets into
+  Corpus Map refresh now emits `contractSurfaceProposals` only after repeated
+  `Contract Surface` / invariant language appears across multiple indexed spec
+  or doc files; proposals carry evidence and `ownerApprovalRequired: true` and
+  do not mutate durable project-graph surface state. Evidence: focused corpus
+  fixture in `src/corpus-map/__tests__/corpus-map.test.ts`, included in the
+  focused Vitest command above.
+- [x] Project contract surfaces into Structure and feed relevant packets into
   worker/reviewer context.
+  Structure now renders scoped project-graph contract surfaces in the existing
+  Structure graph panel, while context builder injects compact packet markdown
+  for `in_progress`, `review`, and `gate_check` tasks only when packets are
+  attached to the task. Evidence: focused Structure/context fixtures in
+  `src/web/surfaces/project/structure/__tests__/ProjectStructurePanel.svelte.test.ts`
+  and `src/runtime/__tests__/context-builder.test.ts`, included in the focused
+  Vitest command above.
 
 ## Deferred To 0.11: OpenRouter Guided Setup
 
@@ -636,8 +688,23 @@ clear routing, attribution, and recommendation evidence.
 **Purpose:** Prove 0.10 behavior end to end and keep public/internal docs in
 sync with what actually shipped.
 
-- [ ] Update public docs only for behavior that is implemented and proven.
-- [ ] Capture fresh screenshots for every changed owner-facing surface.
-- [ ] Keep internal plans/specs aligned with what the code now does.
-- [ ] Run browser proof for bounded chat, then for the later 0.10 lanes that
+- [x] Update public docs only for behavior that is implemented and proven.
+  Root public docs now describe bounded Thread conversations, Structure-owned
+  contract surfaces, contract-surface packets in context, and MCP/CLI external
+  memory bridge review. Frozen version snapshots were left alone.
+- [x] Capture fresh screenshots for every changed owner-facing surface.
+  Captured installed-app Thread and Structure screenshots under
+  `docs/assets/ui-audit/0-10-0/` after dev install and service restart.
+- [x] Keep internal plans/specs aligned with what the code now does.
+  Milestone 1, 4, 5, and 6 checklists now reflect the completed implementation
+  slices, and the 0.11 OpenRouter deferral remains separate from the 0.10
+  readiness boundary.
+- [x] Run browser proof for bounded chat, then for the later 0.10 lanes that
   add new owner-facing surfaces.
+  Installed-app proof: `pnpm dev:install` completed, service restart reported
+  `/api/stale-server` as `stale:false`, browser proof loaded
+  `http://localhost:7777/projects/narrative-harness/thread` and confirmed no
+  raw `invalid_type` / `taskReadiness` / schema JSON leak while Thread showed
+  project-question and brief-cleanup routing, and browser proof loaded
+  `http://localhost:7777/projects/narrative-harness/structure` with Structure
+  showing structural map, project graph, and contract-surface placement.

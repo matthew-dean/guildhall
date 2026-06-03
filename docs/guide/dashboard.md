@@ -36,7 +36,8 @@ Inside a project, the shell keeps the main rooms separate:
 
 - **Thread** is the conversation.
 - **Needs You** is the alert queue.
-- **Structure** is the repo map, project graph, and shared-contract view.
+- **Structure** is the repo map, project graph, provider/consumer handoff view,
+  and shared-contract view.
 - **Settings** is readiness, providers, identity, profiles, and configuration.
 
 That split keeps the UI from turning every useful signal into another task
@@ -60,7 +61,8 @@ not a secret second database.
   one-question-at-a-time intake instead of a giant vague task. Answers,
   assumptions, and deferrals stay attached to the project.
 - **Review project structure**: inspect the structural map, project graph,
-  shared contract questions, and provider work from Structure.
+  shared contract surfaces, provider work, and consumer verification from
+  Structure.
 - **Inspect the run**: read the queue, open the drawer, follow the transcript,
   and decide whether Guildhall is making useful progress.
 - **Judge current work closure**: keep reviewer verdicts, closure checks, and

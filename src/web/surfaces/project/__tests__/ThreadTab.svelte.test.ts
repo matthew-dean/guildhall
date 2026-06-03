@@ -652,6 +652,29 @@ describe('ThreadTab', () => {
     expect(selectedThread().queryByText('Guildhall is cleaning up task intake.')).toBeNull()
   })
 
+  it('renders bounded-chat turns with the dedicated conversation panel instead of the old question card', async () => {
+    installFetchFakes([
+      boundedChatTurn({
+        domainTitle: 'Project question',
+        question: {
+          id: 'project-question-context',
+          prompt: 'Guildhall can answer this in Thread. Is there a source, task, or recent blocker it should use first?',
+          why: 'This stays a project conversation unless you ask Guildhall to turn it into work.',
+          choices: ['Use current blocker evidence', 'Use project docs', 'No extra context'],
+          evidence: [],
+        },
+      }),
+    ], 'bounded-chat:bc-new-thread-1:request-scope')
+
+    render(ThreadTab)
+
+    await selectedThread().findByText('Guildhall can answer this in Thread. Is there a source, task, or recent blocker it should use first?')
+    const panel = document.querySelector('.bounded-chat-panel')
+    expect(panel).toBeTruthy()
+    expect(within(panel as HTMLElement).getByText(/Project question/)).toBeTruthy()
+    expect(document.querySelector('.bounded-chat-panel .question-card-heading')).toBeNull()
+  })
+
   it('selects the current cleanup work instead of the saved request routing event', async () => {
     installFetchFakes([
       requestTurn({

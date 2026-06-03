@@ -45,6 +45,7 @@ import {
   type StructuralAgentRole,
   type StructuralContextSlice,
 } from './structural-map.js'
+import { renderSurfaceReviewPacketsMarkdown } from './contract-surfaces.js'
 
 // ---------------------------------------------------------------------------
 // Just-in-time context builder
@@ -830,6 +831,7 @@ export interface BuiltContext {
   effectiveMemoryPacket?: EffectiveMemoryPacket
   structuralMapContext?: string
   structuralMapOmitted?: StructuralContextSlice['omitted']
+  contractSurfacePackets?: string
   /** Concatenated string ready to prepend to an agent message */
   formatted: string
 }
@@ -1167,6 +1169,9 @@ export async function buildContext(
       })
     : ''
   const structuralMapOmitted = structuralMapSlice?.omitted ?? []
+  const contractSurfacePackets = task.status === 'in_progress' || task.status === 'review' || task.status === 'gate_check'
+    ? renderSurfaceReviewPacketsMarkdown(task.contractSurfaceReviewPackets ?? [])
+    : ''
 
   const taskSummary = [
     `## Current Task: ${task.id}`,
@@ -1239,6 +1244,8 @@ export async function buildContext(
     '',
     reviewPacket ? `## Review Packet\n${reviewPacket}` : '',
     '',
+    contractSurfacePackets,
+    '',
     corpusMap,
     '',
     languageMap,
@@ -1285,6 +1292,7 @@ export async function buildContext(
     effectiveMemoryPacket,
     structuralMapContext,
     structuralMapOmitted,
+    contractSurfacePackets,
     formatted,
   }
 }

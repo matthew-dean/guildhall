@@ -888,6 +888,23 @@ function projectCheckInSummaryFromState(
   }
 }
 
+function newRequestRoutingSummary(kind: string): string {
+  switch (kind) {
+    case 'project_question':
+      return 'Guildhall saved this as a project question.'
+    case 'settings_proposal':
+      return 'Guildhall is shaping this settings change before it writes project state.'
+    case 'persona_practice_proposal':
+      return 'Guildhall is shaping this practice proposal before it changes reviewer behavior.'
+    case 'repair_triage':
+      return 'Guildhall is triaging this repair request before it creates runnable work.'
+    case 'clarification':
+      return 'Guildhall needs one clearer outcome before it creates work.'
+    default:
+      return 'Guildhall is shaping this request into a task brief.'
+  }
+}
+
 async function loadThreadProjectionState(projectPath: string) {
   const memoryDir = getProjectStateDir(projectPath)
   const [snapshot, tasks, boundedChatSessions, pressureTestIntakes] = await Promise.all([
@@ -4352,7 +4369,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
         })
         return c.json(result)
       }
-      if (firstAction?.kind === 'task_spec') {
+      if (firstAction) {
         const boundedChat = await createNewRequestBoundedChat({
           memoryDir: getProjectStateDir(project.path),
           projectId: project.id,
@@ -4362,7 +4379,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
           workspacePath: project.path,
           ...(body.title ? { title: body.title } : {}),
           routedRequestKind: firstAction.kind,
-          routingSummary: 'Routed to Task Intake',
+          routingSummary: newRequestRoutingSummary(firstAction.kind),
         })
         return c.json({ boundedChat })
       }

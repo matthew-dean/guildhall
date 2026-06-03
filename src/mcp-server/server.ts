@@ -8,11 +8,15 @@ import {
 } from './evidence.js'
 import {
   buildGuildhallResourceIndex,
+  importMcpExternalMemoryBridgeRecord,
+  listMcpExternalMemoryBridgeRecords,
   listMcpMemory,
   readGuildhallResource,
   readMcpEffectiveContext,
   readMcpMemory,
   recordMcpMemoryObservation,
+  rejectMcpExternalMemoryBridgeRecord,
+  reviewMcpExternalMemoryBridgeRecord,
   updateMcpMemoryStatus,
 } from './project-reader.js'
 import type { GuildhallMcpContext } from './types.js'
@@ -30,6 +34,41 @@ const memoryScope = z.enum(['project', 'user_global', 'guildhall_product'])
 const confidence = z.enum(['low', 'medium', 'high'])
 const risk = z.enum(['low', 'medium', 'high'])
 const freshness = z.enum(['fresh', 'recent', 'stale'])
+const externalMemoryBridgeProvider = z.enum(['codex', 'codex-subagent', 'claude-code', 'other-mcp-client'])
+const externalMemoryBridgeExchange = z.enum(['import', 'link'])
+const externalMemoryBridgeReviewStatus = z.enum(['imported', 'reviewed', 'rejected'])
+const externalMemoryBridgeRecordInput = z.object({
+  id: z.string(),
+  provider: externalMemoryBridgeProvider,
+  externalAgentId: z.string().optional(),
+  externalSessionId: z.string().optional(),
+  exchange: externalMemoryBridgeExchange,
+  sourceRef: z.string().optional(),
+  scope: memoryScope,
+  type: memoryType,
+  summary: z.string(),
+  content: z.string().optional(),
+  tags: z.array(z.string()).default([]),
+  domains: z.array(z.string()).default([]),
+  structuralScopes: z.array(z.string()).default([]),
+  taskKinds: z.array(z.string()).default([]),
+  fileAreas: z.array(z.string()).default([]),
+  confidence: confidence.default('medium'),
+  risk: risk.default('low'),
+  freshness,
+  evidenceRefs: z.array(z.object({
+    kind: z.string(),
+    summary: z.string(),
+    ref: z.string().optional(),
+    path: z.string().optional(),
+  })),
+  reviewStatus: externalMemoryBridgeReviewStatus.default('imported'),
+  reviewer: z.string().optional(),
+  reviewedAt: z.string().optional(),
+  rejectionReason: z.string().optional(),
+  createdAt: z.string().optional(),
+  updatedAt: z.string().optional(),
+})
 
 export function buildGuildhallMcpManifest() {
   return {
@@ -47,6 +86,7 @@ export function buildGuildhallMcpManifest() {
       { uri: 'guildhall://project/codebase-knowledge', name: 'Guildhall codebase knowledge' },
       { uri: 'guildhall://project/runtime', name: 'Guildhall runtime' },
       { uri: 'guildhall://project/capability-requests', name: 'Guildhall capability requests' },
+      { uri: 'guildhall://project/external-agent-memory-bridge', name: 'External agent memory bridge' },
     ],
     resourceTemplates: [
       { uriTemplate: 'guildhall://project/tasks/{taskId}', name: 'Guildhall task' },
@@ -62,6 +102,10 @@ export function buildGuildhallMcpManifest() {
       { name: 'guildhall.record_memory_observation' },
       { name: 'guildhall.update_memory_status' },
       { name: 'guildhall.read_effective_context' },
+      { name: 'guildhall.list_external_memory_bridge_records' },
+      { name: 'guildhall.import_external_memory_bridge_record' },
+      { name: 'guildhall.review_external_memory_bridge_record' },
+      { name: 'guildhall.reject_external_memory_bridge_record' },
     ],
   }
 }
@@ -248,6 +292,62 @@ export async function createGuildhallMcpServer(ctx: GuildhallMcpContext): Promis
     },
     async (input) => ({
       content: [{ type: 'text', text: await readMcpEffectiveContext(ctx, input) }],
+    }),
+  )
+
+  server.registerTool(
+    'guildhall.list_external_memory_bridge_records',
+    {
+      description: 'List reviewable external-agent memory bridge records.',
+      inputSchema: {
+        reviewStatus: externalMemoryBridgeReviewStatus.optional(),
+      },
+    },
+    async (input) => ({
+      content: [{ type: 'text', text: await listMcpExternalMemoryBridgeRecords(ctx, input) }],
+    }),
+  )
+
+  server.registerTool(
+    'guildhall.import_external_memory_bridge_record',
+    {
+      description: 'Import an external-agent memory bridge record for explicit review.',
+      inputSchema: externalMemoryBridgeRecordInput.shape,
+    },
+    async (input) => ({
+      content: [{ type: 'text', text: await importMcpExternalMemoryBridgeRecord(ctx, input) }],
+    }),
+  )
+
+  server.registerTool(
+    'guildhall.review_external_memory_bridge_record',
+    {
+      description: 'Review and promote one external-agent memory bridge record into ordinary memory.',
+      inputSchema: {
+        id: z.string(),
+        reviewer: z.string(),
+        updatedAt: z.string().optional(),
+        memoryStatus: z.enum(['active', 'proposed', 'observed']).default('active'),
+      },
+    },
+    async (input) => ({
+      content: [{ type: 'text', text: await reviewMcpExternalMemoryBridgeRecord(ctx, input) }],
+    }),
+  )
+
+  server.registerTool(
+    'guildhall.reject_external_memory_bridge_record',
+    {
+      description: 'Reject one external-agent memory bridge record without promoting it.',
+      inputSchema: {
+        id: z.string(),
+        reviewer: z.string(),
+        rejectionReason: z.string(),
+        updatedAt: z.string().optional(),
+      },
+    },
+    async (input) => ({
+      content: [{ type: 'text', text: await rejectMcpExternalMemoryBridgeRecord(ctx, input) }],
     }),
   )
 

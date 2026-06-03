@@ -9,6 +9,8 @@ import {
 import { createExploringTask } from './intake.js'
 import { analyzeRequestIntake } from './request-intake.js'
 
+type NewRequestKind = 'task_spec' | 'project_question' | 'settings_proposal' | 'persona_practice_proposal' | 'repair_triage' | 'clarification'
+
 export async function createNewRequestBoundedChat(input: {
   memoryDir: string
   projectId: string
@@ -17,24 +19,21 @@ export async function createNewRequestBoundedChat(input: {
   projectPath: string
   workspacePath?: string
   title?: string
-  routedRequestKind: 'task_spec' | 'project_question' | 'settings_proposal' | 'persona_practice_proposal' | 'repair_triage' | 'clarification'
+  routedRequestKind: NewRequestKind
   routingSummary: string
 }): Promise<BoundedChatSession> {
   const analysis = analyzeRequestIntake({
     ask: input.ask,
     title: input.title,
   })
-  const prompt = deriveInitialPrompt(analysis)
+  const prompt = deriveInitialPrompt(analysis, input.routedRequestKind)
+  const objective = objectiveForRequestKind(input.routedRequestKind)
 
   const session = await createBoundedChatSession({
     memoryDir: input.memoryDir,
     projectId: input.projectId,
     source: 'thread:new-request',
-    objective: {
-      kind: 'new_request',
-      label: 'Shape a new request',
-      successCriteria: ['Classify the request and shape the next action.'],
-    },
+    objective,
     initialSubObjective: {
       id: prompt.id,
       objective: prompt.objective,
@@ -115,6 +114,31 @@ export async function answerNewRequestBoundedChat(input: {
     throw new Error('New request planner state is missing.')
   }
 
+  if (plannerState.routedRequestKind === 'project_question') {
+    const closed = await applyBoundedChatCoordinatorAction({
+      memoryDir: input.memoryDir,
+      sessionId: reviewed.id,
+      expectedUpdatedAt: reviewed.updatedAt,
+      action: {
+        actionId: `close-${reviewed.id}-${input.subObjectiveId}`,
+        type: 'close_session',
+        outcome: 'fulfilled',
+        summary: 'Guildhall kept this as a project question thread.',
+        decisions: [cleaned],
+        taskDrafts: [],
+        facts: [],
+        settingUpdates: [],
+        evidence: [],
+      },
+    })
+    closed.plannerState = {
+      ...closed.plannerState,
+      newRequest: plannerState,
+    }
+    await saveBoundedChatSession(input.memoryDir, closed)
+    return closed
+  }
+
   const analysis = analyzeRequestIntake({
     ask: plannerState.ask,
     title: plannerState.title,
@@ -174,6 +198,7 @@ function isConfusedAnswer(answer: string): boolean {
 
 function deriveInitialPrompt(
   analysis: ReturnType<typeof analyzeRequestIntake>,
+  routedRequestKind: NewRequestKind,
 ): {
   id: string
   objective: string
@@ -181,6 +206,16 @@ function deriveInitialPrompt(
   helperText?: string
   choices?: string[]
 } {
+  if (routedRequestKind === 'project_question') {
+    return {
+      id: 'project-question-context',
+      objective: 'Gather project-question context',
+      prompt: 'Guildhall can answer this in Thread. Is there a source, task, or recent blocker it should use first?',
+      helperText: 'This stays a project conversation unless you ask Guildhall to turn it into work.',
+      choices: ['Use current blocker evidence', 'Use project docs', 'No extra context'],
+    }
+  }
+
   const question = analysis.ownerInput
   if (question) {
     return {
@@ -197,5 +232,24 @@ function deriveInitialPrompt(
     objective: 'Shape task requirements',
     prompt: 'Before Guildhall shapes this into work, what requirements, acceptance criteria, test expectations, or deliverables matter most?',
     helperText: 'This can include scope boundaries, proof expectations, UX constraints, rollout boundaries, or anything else that would change what “done” means.',
+  }
+}
+
+function objectiveForRequestKind(kind: NewRequestKind): {
+  kind: 'new_request'
+  label: string
+  successCriteria: string[]
+} {
+  if (kind === 'project_question') {
+    return {
+      kind: 'new_request',
+      label: 'Answer a project question',
+      successCriteria: ['Answer the project question in Thread without creating task work.'],
+    }
+  }
+  return {
+    kind: 'new_request',
+    label: 'Shape a new request',
+    successCriteria: ['Classify the request and shape the next action.'],
   }
 }

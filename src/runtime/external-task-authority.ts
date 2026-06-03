@@ -127,10 +127,41 @@ export interface ExternalTaskMirrorSourceSnapshot {
 }
 
 export interface ProposedExternalWrite {
+  id?: string
   field: ExternalWriteField | string
   value: unknown
   evidenceRefs: string[]
   proposedAt: string
+  proposedBy?: string
+  reason?: string
+  approvalStatus?: ExternalWriteProposalStatus
+  policyDecision?: ExternalWritePolicyDecision
+  decidedAt?: string
+  decidedBy?: string
+  rejectionReason?: string
+  decisionEvidenceRefs?: string[]
+}
+
+export type ExternalWriteProposalStatus = 'pending_approval' | 'approved' | 'rejected'
+export type ExternalWritePolicyDecision =
+  | 'requires_explicit_approval'
+  | 'rejected_by_policy'
+  | 'approved_for_connector_execution'
+
+export interface ExternalWriteApprovalRecord {
+  proposalId: string
+  field: ExternalWriteField | string
+  value: unknown
+  evidenceRefs: string[]
+  proposedAt: string
+  proposedBy: string
+  status: ExternalWriteProposalStatus
+  policyMode: ExternalAuthorityPolicy['mode']
+  policyDecision: ExternalWritePolicyDecision
+  reason: string
+  decidedAt?: string
+  decidedBy?: string
+  decisionEvidenceRefs?: string[]
 }
 
 export type ExternalTaskSyncDirection = 'external_to_local' | 'local_to_external' | 'bidirectional'
@@ -193,9 +224,114 @@ export interface ExternalTaskMirror {
   proofPathRefs: string[]
   memoryCandidateRefs: string[]
   proposedExternalWrites: ProposedExternalWrite[]
+  externalWriteApprovals: ExternalWriteApprovalRecord[]
   transitionReceipts: ExternalTaskMirrorTransitionReceipt[]
   createdAt: string
   updatedAt: string
+}
+
+export type ExternalTaskExecutionReadiness = 'ready' | 'recheck_required' | 'blocked_by_external_conflict'
+
+export interface ExternalTaskExecutionPacket {
+  id: string
+  shapedAt: string
+  providerNeutral: true
+  mirrorId: string
+  localTaskId: string
+  projectPath: string
+  readiness: ExternalTaskExecutionReadiness
+  externalIssue: {
+    identity: string
+    provider: ExternalTaskProvider
+    cloudOrWorkspaceId?: string
+    projectKey?: string
+    issueKey?: string
+    stableId?: string
+    url: string
+    issueType?: string
+    title: string
+    status?: ExternalIssueRef['status']
+    priority?: string
+    sprint?: string
+    assignee?: ExternalIssuePersonRef
+    reporter?: ExternalIssuePersonRef
+    parentRef?: ExternalIssueRelationshipRef
+    relationships: {
+      childRefs: ExternalIssueRelationshipRef[]
+      linkedRefs: ExternalIssueRelationshipRef[]
+    }
+    labels: string[]
+    components: string[]
+    updatedAt?: string
+    version: string
+  }
+  localContext: {
+    localStatus?: string
+    domain?: string
+    activeBranch?: string
+    activeWorktree?: string
+    acceptedOutcome?: string
+    definitionOfDone: string[]
+    blockerState?: string
+    structuralContext?: string
+    contextHandles: string[]
+    policyConstraints: string[]
+    proofPathRefs: string[]
+    prRefs: Array<{ url: string; title?: string; state?: string }>
+    reviewThreadRefs: Array<{ id: string; summary: string }>
+  }
+  contextRoute?: ExternalTaskContextRoute
+  contextBudget?: ExternalTaskContextBudget
+  contextManifest: ExternalTaskPacketContextManifest
+  authority: {
+    policy: ExternalAuthorityPolicy
+    pendingProposals: ProposedExternalWrite[]
+    approvedProposals: ProposedExternalWrite[]
+    rejectedProposals: ProposedExternalWrite[]
+  }
+  syncWarnings: ExternalTaskExecutionPacketWarning[]
+  evidenceRefs: string[]
+  commentRefs: string[]
+  prRefs: string[]
+  proofPathRefs: string[]
+  memoryCandidateRefs: string[]
+}
+
+export interface ExternalTaskPacketContextManifest {
+  alwaysIncluded: string[]
+  summarized: string[]
+  handleOnly: string[]
+  omitted: Array<{ ref: string; reason: string }>
+}
+
+export interface ExternalTaskExecutionPacketWarning {
+  kind: 'stale' | 'conflict'
+  field: string
+  reason: string
+  sourceVersion: string
+  targetVersion: string
+}
+
+export interface ExternalTaskExecutionPacketLocalTask {
+  id?: string
+  title?: string
+  status?: string
+  acceptedOutcome?: string
+  definitionOfDone?: string[]
+  blockerState?: string
+  branchName?: string
+  worktreePath?: string
+}
+
+export interface ExternalTaskExecutionPacketRepoContext {
+  activeBranch?: string
+  activeWorktree?: string
+  structuralContext?: string
+  contextHandles?: string[]
+  policyConstraints?: string[]
+  proofPathRefs?: string[]
+  prRefs?: Array<{ url: string; title?: string; state?: string }>
+  reviewThreadRefs?: Array<{ id: string; summary: string }>
 }
 
 export const externalTaskMirrorMachine = defineStateMachine<
@@ -315,6 +451,7 @@ export function createExternalTaskMirror(input: {
     proofPathRefs: [],
     memoryCandidateRefs: [],
     proposedExternalWrites: [],
+    externalWriteApprovals: [],
     transitionReceipts: [],
     createdAt: now,
     updatedAt: now,
@@ -373,6 +510,220 @@ export function updateExternalTaskMirrorLocalStatus(
     next.updatedAt = now
   }
   return next
+}
+
+export function buildExternalTaskExecutionPacket(
+  mirror: ExternalTaskMirror,
+  input: {
+    shapedAt?: string
+    localTask?: ExternalTaskExecutionPacketLocalTask
+    repoContext?: ExternalTaskExecutionPacketRepoContext
+  } = {},
+): ExternalTaskExecutionPacket {
+  const shapedAt = input.shapedAt ?? mirror.updatedAt
+  const externalRef = mirror.externalRef
+  const version = externalVersion(externalRef)
+  const pendingProposals = mirror.proposedExternalWrites
+    .filter(write => (write.approvalStatus ?? 'pending_approval') === 'pending_approval')
+    .map(normalizeProposedWriteForPacket)
+  const approvedProposals = mirror.proposedExternalWrites
+    .filter(write => write.approvalStatus === 'approved')
+    .map(normalizeProposedWriteForPacket)
+  const rejectedProposals = mirror.proposedExternalWrites
+    .filter(write => write.approvalStatus === 'rejected')
+    .map(normalizeProposedWriteForPacket)
+  const syncWarnings = mirror.syncState
+    .filter(isPacketWarningSyncState)
+    .map((item): ExternalTaskExecutionPacketWarning => ({
+      kind: item.status,
+      field: item.field,
+      reason: item.reason,
+      sourceVersion: item.sourceVersion,
+      targetVersion: item.targetVersion,
+    }))
+    .sort(comparePacketWarnings)
+
+  return {
+    id: `external-task-packet:${mirror.id}:${mirror.lastExternalVersion}:${mirror.lastLocalVersion}`,
+    shapedAt,
+    providerNeutral: true,
+    mirrorId: mirror.id,
+    localTaskId: mirror.localTaskId,
+    projectPath: mirror.projectPath,
+    readiness: executionReadinessForMirror(mirror),
+    externalIssue: {
+      identity: externalIssueIdentity(externalRef),
+      provider: externalRef.provider,
+      cloudOrWorkspaceId: externalRef.cloudOrWorkspaceId,
+      projectKey: externalRef.projectKey,
+      issueKey: externalRef.issueKey,
+      stableId: externalRef.stableId,
+      url: externalRef.url,
+      issueType: externalRef.issueType,
+      title: externalRef.title,
+      status: externalRef.status,
+      priority: externalRef.priority,
+      sprint: externalRef.sprint,
+      assignee: externalRef.assignee,
+      reporter: externalRef.reporter,
+      parentRef: externalRef.parentRef,
+      relationships: {
+        childRefs: normalizeRelationshipRefs(externalRef.childRefs),
+        linkedRefs: normalizeRelationshipRefs(externalRef.linkedRefs),
+      },
+      labels: sorted(externalRef.labels) ?? [],
+      components: sorted(externalRef.components) ?? [],
+      updatedAt: externalRef.updatedAt,
+      version,
+    },
+    localContext: {
+      localStatus: input.localTask?.status ?? mirror.mirrorStatus,
+      domain: mirror.domain ?? mirror.contextRoute?.domain,
+      activeBranch: input.repoContext?.activeBranch ?? input.localTask?.branchName,
+      activeWorktree: input.repoContext?.activeWorktree ?? input.localTask?.worktreePath,
+      acceptedOutcome: input.localTask?.acceptedOutcome,
+      definitionOfDone: sorted(input.localTask?.definitionOfDone) ?? [],
+      blockerState: input.localTask?.blockerState,
+      structuralContext: input.repoContext?.structuralContext,
+      contextHandles: sorted([
+        ...(mirror.contextRoute?.handles ?? []),
+        ...(input.repoContext?.contextHandles ?? []),
+      ]) ?? [],
+      policyConstraints: sorted(input.repoContext?.policyConstraints) ?? [],
+      proofPathRefs: sorted([
+        ...mirror.proofPathRefs,
+        ...(input.repoContext?.proofPathRefs ?? []),
+      ]) ?? [],
+      prRefs: normalizePrRefs([
+        ...mirror.prRefs.map(url => ({ url })),
+        ...(input.repoContext?.prRefs ?? []),
+      ]),
+      reviewThreadRefs: normalizeReviewThreadRefs(input.repoContext?.reviewThreadRefs),
+    },
+    contextRoute: mirror.contextRoute,
+    contextBudget: mirror.contextBudget,
+    contextManifest: normalizePacketContextManifest(mirror.contextManifest),
+    authority: {
+      policy: {
+        mode: mirror.authorityPolicy.mode,
+        allowedWrites: sortedExternalWriteFields(mirror.authorityPolicy.allowedWrites),
+      },
+      pendingProposals,
+      approvedProposals,
+      rejectedProposals,
+    },
+    syncWarnings,
+    evidenceRefs: sorted(mirror.evidenceRefs) ?? [],
+    commentRefs: sorted(mirror.commentRefs) ?? [],
+    prRefs: sorted(mirror.prRefs) ?? [],
+    proofPathRefs: sorted(mirror.proofPathRefs) ?? [],
+    memoryCandidateRefs: sorted(mirror.memoryCandidateRefs) ?? [],
+  }
+}
+
+export function recordExternalWriteProposal(
+  mirror: ExternalTaskMirror,
+  input: {
+    id: string
+    field: ExternalWriteField | string
+    value: unknown
+    reason?: string
+    evidenceRefs: string[]
+    proposedBy: string
+    now?: string
+  },
+): ExternalTaskMirror {
+  const next = cloneMirror(mirror)
+  const now = input.now ?? new Date().toISOString()
+  const evidenceRefs = sorted(input.evidenceRefs) ?? []
+  const policyRejection = externalWritePolicyRejection(next.authorityPolicy, input.field, evidenceRefs)
+  const approvalStatus: ExternalWriteProposalStatus = policyRejection ? 'rejected' : 'pending_approval'
+  const policyDecision: ExternalWritePolicyDecision = policyRejection
+    ? 'rejected_by_policy'
+    : 'requires_explicit_approval'
+  const reason = input.reason ?? defaultExternalWriteProposalReason(policyRejection)
+  const proposedWrite: ProposedExternalWrite = {
+    id: input.id,
+    field: input.field,
+    value: input.value,
+    evidenceRefs,
+    proposedAt: now,
+    proposedBy: input.proposedBy,
+    reason,
+    approvalStatus,
+    policyDecision,
+    ...(policyRejection ? { rejectionReason: policyRejection } : {}),
+  }
+
+  next.proposedExternalWrites = [
+    ...next.proposedExternalWrites.filter(write => write.id !== input.id),
+    proposedWrite,
+  ]
+  next.externalWriteApprovals = [
+    ...approvalRecords(next).filter(record => record.proposalId !== input.id),
+    {
+      proposalId: input.id,
+      field: input.field,
+      value: input.value,
+      evidenceRefs,
+      proposedAt: now,
+      proposedBy: input.proposedBy,
+      status: approvalStatus,
+      policyMode: next.authorityPolicy.mode,
+      policyDecision,
+      reason,
+    },
+  ]
+  next.syncState = upsertLocalExternalWriteSyncState(next.syncState, {
+    field: input.field,
+    sourceVersion: next.lastLocalVersion,
+    targetVersion: next.lastExternalVersion,
+    status: approvalStatus === 'rejected' ? 'manual_required' : 'manual_required',
+    reason: approvalStatus === 'rejected' ? `external_write_rejected:${policyRejection}` : 'external_write_waiting_for_approval',
+    proposedWrite,
+    now,
+  })
+  next.updatedAt = now
+  return next
+}
+
+export function approveExternalWriteProposal(
+  mirror: ExternalTaskMirror,
+  input: {
+    proposalId: string
+    approvedBy: string
+    evidenceRefs?: string[]
+    now?: string
+  },
+): ExternalTaskMirror {
+  return decideExternalWriteProposal(mirror, {
+    proposalId: input.proposalId,
+    status: 'approved',
+    decidedBy: input.approvedBy,
+    decisionEvidenceRefs: input.evidenceRefs,
+    now: input.now,
+    reason: 'external_write_approved_waiting_for_connector',
+  })
+}
+
+export function rejectExternalWriteProposal(
+  mirror: ExternalTaskMirror,
+  input: {
+    proposalId: string
+    rejectedBy: string
+    reason: string
+    evidenceRefs?: string[]
+    now?: string
+  },
+): ExternalTaskMirror {
+  return decideExternalWriteProposal(mirror, {
+    proposalId: input.proposalId,
+    status: 'rejected',
+    decidedBy: input.rejectedBy,
+    decisionEvidenceRefs: input.evidenceRefs,
+    now: input.now,
+    reason: input.reason,
+  })
 }
 
 export function refreshExternalTaskMirror(
@@ -458,6 +809,196 @@ export function refreshExternalTaskMirror(
     next.updatedAt = now
   }
   return next
+}
+
+function executionReadinessForMirror(mirror: ExternalTaskMirror): ExternalTaskExecutionReadiness {
+  if (mirror.conflictState || mirror.mirrorStatus === 'conflict') return 'blocked_by_external_conflict'
+  if (mirror.staleState || mirror.mirrorStatus === 'stale') return 'recheck_required'
+  return 'ready'
+}
+
+function normalizePacketContextManifest(manifest: Record<string, unknown> | undefined): ExternalTaskPacketContextManifest {
+  return {
+    alwaysIncluded: normalizeStringList(manifest?.alwaysIncluded),
+    summarized: normalizeStringList(manifest?.summarized),
+    handleOnly: normalizeStringList(manifest?.handleOnly),
+    omitted: normalizeOmittedManifest(manifest?.omitted),
+  }
+}
+
+function normalizeStringList(value: unknown): string[] {
+  if (!Array.isArray(value)) return []
+  return sorted(value.filter((item): item is string => typeof item === 'string' && item.trim().length > 0).map(item => item.trim())) ?? []
+}
+
+function normalizeOmittedManifest(value: unknown): Array<{ ref: string; reason: string }> {
+  if (!Array.isArray(value)) return []
+  return value
+    .flatMap((item): Array<{ ref: string; reason: string }> => {
+      if (!item || typeof item !== 'object') return []
+      const record = item as Record<string, unknown>
+      const ref = typeof record.ref === 'string' ? record.ref.trim() : ''
+      const reason = typeof record.reason === 'string' ? record.reason.trim() : ''
+      return ref && reason ? [{ ref, reason }] : []
+    })
+    .sort((left, right) => compareStrings(`${left.ref}:${left.reason}`, `${right.ref}:${right.reason}`))
+}
+
+function normalizeRelationshipRefs(value: ExternalIssueRelationshipRef[] | undefined): ExternalIssueRelationshipRef[] {
+  return [...(value ?? [])].sort((left, right) => compareStrings(issueRelationshipIdentity(left), issueRelationshipIdentity(right)))
+}
+
+function normalizePrRefs(value: Array<{ url: string; title?: string; state?: string }>): Array<{ url: string; title?: string; state?: string }> {
+  return value
+    .filter(ref => ref.url.trim().length > 0)
+    .map(ref => ({
+      url: ref.url,
+      ...(ref.title ? { title: ref.title } : {}),
+      ...(ref.state ? { state: ref.state } : {}),
+    }))
+    .sort((left, right) => compareStrings(left.url, right.url))
+}
+
+function normalizeReviewThreadRefs(value: Array<{ id: string; summary: string }> | undefined): Array<{ id: string; summary: string }> {
+  return [...(value ?? [])]
+    .filter(ref => ref.id.trim().length > 0 && ref.summary.trim().length > 0)
+    .sort((left, right) => compareStrings(left.id, right.id))
+}
+
+function normalizeProposedWriteForPacket(write: ProposedExternalWrite): ProposedExternalWrite {
+  return {
+    ...write,
+    evidenceRefs: sorted(write.evidenceRefs) ?? [],
+    ...(write.decisionEvidenceRefs ? { decisionEvidenceRefs: sorted(write.decisionEvidenceRefs) ?? [] } : {}),
+  }
+}
+
+function isPacketWarningSyncState(
+  item: ExternalTaskSyncState,
+): item is ExternalTaskSyncState & { status: 'stale' | 'conflict' } {
+  return item.status === 'stale' || item.status === 'conflict'
+}
+
+function comparePacketWarnings(left: ExternalTaskExecutionPacketWarning, right: ExternalTaskExecutionPacketWarning): number {
+  return compareStrings(
+    `${left.kind}:${left.field}:${left.reason}`,
+    `${right.kind}:${right.field}:${right.reason}`,
+  )
+}
+
+function externalWritePolicyRejection(
+  policy: ExternalAuthorityPolicy,
+  field: ExternalWriteField | string,
+  evidenceRefs: string[],
+): string | null {
+  if (evidenceRefs.length === 0) return 'missing_evidence'
+  if (policy.mode === 'read_only') return 'policy_read_only'
+  if (!policy.allowedWrites.includes(field as ExternalWriteField)) return 'write_not_allowed_by_policy'
+  return null
+}
+
+function defaultExternalWriteProposalReason(rejection: string | null): string {
+  if (rejection === 'missing_evidence') return 'External write proposal rejected because it has no local evidence references.'
+  if (rejection === 'policy_read_only') return 'External write proposal rejected because the mirror is read-only.'
+  if (rejection === 'write_not_allowed_by_policy') return 'External write proposal rejected because the field is not allowed by project policy.'
+  return 'External write proposal is waiting for explicit approval.'
+}
+
+function approvalRecords(mirror: ExternalTaskMirror): ExternalWriteApprovalRecord[] {
+  return mirror.externalWriteApprovals ?? []
+}
+
+function decideExternalWriteProposal(
+  mirror: ExternalTaskMirror,
+  input: {
+    proposalId: string
+    status: Extract<ExternalWriteProposalStatus, 'approved' | 'rejected'>
+    decidedBy: string
+    decisionEvidenceRefs?: string[]
+    now?: string
+    reason: string
+  },
+): ExternalTaskMirror {
+  const next = cloneMirror(mirror)
+  const now = input.now ?? new Date().toISOString()
+  const proposal = next.proposedExternalWrites.find(write => write.id === input.proposalId)
+  if (!proposal) throw new Error(`External write proposal ${input.proposalId} does not exist`)
+  if (proposal.approvalStatus === 'rejected' && input.status === 'approved') {
+    throw new Error(`External write proposal ${input.proposalId} was rejected and cannot be approved`)
+  }
+  const decisionEvidenceRefs = sorted(input.decisionEvidenceRefs) ?? []
+  const decidedProposal: ProposedExternalWrite = {
+    ...proposal,
+    approvalStatus: input.status,
+    policyDecision: input.status === 'approved'
+      ? 'approved_for_connector_execution'
+      : proposal.policyDecision ?? 'requires_explicit_approval',
+    decidedAt: now,
+    decidedBy: input.decidedBy,
+    decisionEvidenceRefs,
+    ...(input.status === 'rejected' ? { rejectionReason: input.reason } : {}),
+  }
+  next.proposedExternalWrites = next.proposedExternalWrites.map(write =>
+    write.id === input.proposalId ? decidedProposal : write,
+  )
+  next.externalWriteApprovals = [
+    ...approvalRecords(next),
+    {
+      proposalId: input.proposalId,
+      field: proposal.field,
+      value: proposal.value,
+      evidenceRefs: sorted(proposal.evidenceRefs) ?? [],
+      proposedAt: proposal.proposedAt,
+      proposedBy: proposal.proposedBy ?? 'unknown',
+      status: input.status,
+      policyMode: next.authorityPolicy.mode,
+      policyDecision: input.status === 'approved'
+        ? 'approved_for_connector_execution'
+        : proposal.policyDecision ?? 'requires_explicit_approval',
+      reason: input.reason,
+      decidedAt: now,
+      decidedBy: input.decidedBy,
+      decisionEvidenceRefs,
+    },
+  ]
+  next.syncState = upsertLocalExternalWriteSyncState(next.syncState, {
+    field: proposal.field,
+    sourceVersion: next.lastLocalVersion,
+    targetVersion: next.lastExternalVersion,
+    status: input.status === 'approved' ? 'pending' : 'manual_required',
+    reason: input.status === 'approved' ? 'external_write_approved_waiting_for_connector' : 'external_write_rejected',
+    proposedWrite: decidedProposal,
+    now,
+  })
+  next.updatedAt = now
+  return next
+}
+
+function upsertLocalExternalWriteSyncState(
+  syncState: ExternalTaskSyncState[],
+  input: {
+    field: ExternalWriteField | string
+    sourceVersion: string
+    targetVersion: string
+    status: ExternalTaskSyncStatus
+    reason: string
+    proposedWrite: ProposedExternalWrite
+    now: string
+  },
+): ExternalTaskSyncState[] {
+  return [
+    ...syncState.filter(item => item.direction !== 'local_to_external' || item.field !== input.field),
+    {
+      direction: 'local_to_external',
+      field: input.field,
+      sourceVersion: input.sourceVersion,
+      targetVersion: input.targetVersion,
+      status: input.status,
+      reason: input.reason,
+      lastAttemptAt: input.now,
+      proposedWrite: input.proposedWrite,
+    },
+  ]
 }
 
 function classifyExternalChanges(input: {
@@ -559,7 +1100,15 @@ function comparableSnapshotFields(): Array<keyof ExternalTaskMirrorSourceSnapsho
 }
 
 function sorted(value: string[] | undefined): string[] | undefined {
-  return value ? [...value].sort() : undefined
+  return value ? [...value].sort(compareStrings) : undefined
+}
+
+function sortedExternalWriteFields(value: ExternalWriteField[]): ExternalWriteField[] {
+  return [...value].sort(compareStrings) as ExternalWriteField[]
+}
+
+function compareStrings(left: string, right: string): number {
+  return left.localeCompare(right)
 }
 
 function sameValue(left: unknown, right: unknown): boolean {

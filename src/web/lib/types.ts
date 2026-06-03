@@ -49,6 +49,25 @@ export interface StructuredSpecCompletionBoundary {
   whatMustBeSplitOrBlocked?: string
 }
 
+export interface StructuredSpecContractSurfaceDelta {
+  surfaceId?: string
+  proposedSurfaceLabel?: string
+  relation: 'consumes' | 'extends' | 'amends' | 'deprecates' | 'replaces' | string
+  summary: string
+  invariantRefs?: string[]
+  proposedInvariants?: Array<{
+    id?: string
+    label: string
+    rule: string
+    reason: string
+    proofObligations?: string[]
+  }>
+  breakingChange?: boolean
+  affectedConsumerRefs?: string[]
+  proofObligations: string[]
+  migrationNotes?: string
+}
+
 export interface StructuredSpec {
   whatThisIs?: string
   problemContext?: string
@@ -56,6 +75,7 @@ export interface StructuredSpec {
   nonGoals?: string[]
   proposedDesign?: string
   keyDecisions?: string[]
+  contractSurfaceDeltas?: StructuredSpecContractSurfaceDelta[]
   acceptanceCriteria?: string[]
   verification?: string[]
   completionBoundary?: StructuredSpecCompletionBoundary
@@ -392,6 +412,7 @@ export interface Task {
   openQuestions?: AgentQuestion[]
   spec?: string
   structuredSpec?: StructuredSpec
+  contractSurfaceReviewPackets?: ContractSurfaceReviewPacket[]
   acceptanceCriteria?: AcceptanceCriterion[]
   gateResults?: GateResult[]
   reviewVerdicts?: ReviewVerdict[]
@@ -496,6 +517,28 @@ export interface Task {
   }
   permissionMode?: string
   dependsOn?: string[]
+}
+
+export interface ContractSurfaceReviewPacket {
+  id: string
+  surface: {
+    id: string
+    label: string
+    kind: string
+    authority: string
+    scope: string
+    owningProject: { id: string; label: string; path?: string }
+    domain?: { id: string; label: string; path?: string }
+  }
+  currentSpecRef: string
+  knownConsumers: Array<{ id: string; label: string; path?: string }>
+  existingInvariants: Array<{ id: string; label: string; rule: string; proofObligations?: string[] }>
+  existingDecisions: Array<{ id: string; summary: string; decidedAt: string; decidedBy: string; evidenceRefs?: string[] }>
+  siblingSpecRefs: string[]
+  driftFindings: string[]
+  currentDelta: StructuredSpecContractSurfaceDelta
+  proofObligations: string[]
+  reviewFocus: string[]
 }
 
 export interface ContextSectionStat {

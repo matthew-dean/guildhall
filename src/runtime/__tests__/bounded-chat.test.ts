@@ -14,6 +14,10 @@ import {
   createProjectCheckInBoundedChat,
   resumeProjectCheckInBoundedChat,
 } from '../bounded-chat-project-check-in.js'
+import {
+  answerNewRequestBoundedChat,
+  createNewRequestBoundedChat,
+} from '../bounded-chat-new-request.js'
 
 describe('bounded chat runtime contract', () => {
   it('creates a session and returns the first user prompt', async () => {
@@ -286,6 +290,40 @@ describe('bounded chat runtime contract', () => {
     const loaded = await loadBoundedChatSession({ memoryDir, sessionId: session.id })
     expect(loaded.updatedAt).toBe(afterResponse.updatedAt)
     expect(loaded.status).toBe('coordinator_review')
+  })
+})
+
+describe('new request bounded chat adapter', () => {
+  it('closes pure project-question requests without creating task drafts', async () => {
+    const memoryDir = await mkdtemp(path.join(tmpdir(), 'guildhall-bounded-chat-'))
+    const session = await createNewRequestBoundedChat({
+      memoryDir,
+      projectId: 'guildhall',
+      ask: 'Why is this project still blocked on useAuth.ts?',
+      domain: 'frontend',
+      projectPath: '/repo/guildhall',
+      routedRequestKind: 'project_question',
+      routingSummary: 'Guildhall saved this as a project question.',
+    })
+
+    const closed = await answerNewRequestBoundedChat({
+      memoryDir,
+      sessionId: session.id,
+      subObjectiveId: session.subObjectives[0]!.id,
+      response: 'Answer in Thread using the current blocked-task evidence.',
+    })
+
+    expect(closed.status).toBe('fulfilled')
+    expect(closed.acceptedState.taskDrafts).toEqual([])
+    expect(closed.acceptedState.decisions).toEqual([{
+      decision: 'Answer in Thread using the current blocked-task evidence.',
+      sourceSubObjectiveId: session.subObjectives[0]!.id,
+    }])
+    expect(closed.closure).toMatchObject({
+      outcome: 'fulfilled',
+      summary: 'Guildhall kept this as a project question thread.',
+      taskDrafts: [],
+    })
   })
 })
 

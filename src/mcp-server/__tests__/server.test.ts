@@ -1,4 +1,4 @@
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
@@ -8,10 +8,14 @@ import {
   buildGuildhallMcpManifest,
   createMcpCapabilityRequest,
   listMcpCapabilityRequests,
+  importMcpExternalMemoryBridgeRecord,
+  listMcpExternalMemoryBridgeRecords,
   listMcpMemory,
   readMcpEffectiveContext,
   readMcpMemory,
   recordMcpMemoryObservation,
+  rejectMcpExternalMemoryBridgeRecord,
+  reviewMcpExternalMemoryBridgeRecord,
   updateMcpMemoryStatus,
 } from '../index.js'
 
@@ -134,6 +138,81 @@ describe('Guildhall MCP tools', () => {
       rmSync(root, { recursive: true, force: true })
     }
   })
+
+  it('imports, reviews, and rejects external memory bridge records explicitly', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'guildhall-mcp-external-memory-'))
+    try {
+      mkdirSync(join(root, '.guildhall'), { recursive: true })
+      const ctx = {
+        projectRoot: root,
+        projectStateDir: join(root, '.guildhall'),
+        runtime: { kind: 'host' as const },
+      }
+      const imported = await importMcpExternalMemoryBridgeRecord(ctx, {
+        id: 'mcp-bridge-record',
+        provider: 'codex',
+        exchange: 'import',
+        scope: 'project',
+        type: 'codebase_knowledge',
+        summary: 'MCP bridge records require explicit review.',
+        content: 'MCP-imported external memory must stay out of execution context until reviewed.',
+        confidence: 'high',
+        risk: 'low',
+        freshness: 'fresh',
+        evidenceRefs: [{
+          kind: 'external-summary',
+          ref: 'codex://session-mcp#summary',
+          summary: 'External session summary.',
+        }],
+        createdAt: '2026-06-03T12:00:00.000Z',
+        updatedAt: '2026-06-03T12:00:00.000Z',
+      })
+      expect(imported).toContain('"reviewStatus": "imported"')
+      expect(existsSync(join(root, '.guildhall', 'memory-store.json'))).toBe(false)
+
+      const listed = await listMcpExternalMemoryBridgeRecords(ctx, { reviewStatus: 'imported' })
+      expect(listed).toContain('"id": "mcp-bridge-record"')
+
+      const reviewed = await reviewMcpExternalMemoryBridgeRecord(ctx, {
+        id: 'mcp-bridge-record',
+        reviewer: 'owner',
+        updatedAt: '2026-06-03T12:05:00.000Z',
+      })
+      expect(reviewed).toContain('"reviewStatus": "reviewed"')
+      expect(readFileSync(join(root, '.guildhall', 'memory-store.json'), 'utf8')).toContain('external-mcp-bridge-record')
+
+      await importMcpExternalMemoryBridgeRecord(ctx, {
+        id: 'mcp-rejected-record',
+        provider: 'claude-code',
+        exchange: 'link',
+        sourceRef: 'claude://session-mcp-rejected#summary',
+        scope: 'project',
+        type: 'project_fact',
+        summary: 'Rejected MCP bridge records stay inert.',
+        confidence: 'medium',
+        risk: 'medium',
+        freshness: 'recent',
+        evidenceRefs: [{
+          kind: 'external-link',
+          ref: 'claude://session-mcp-rejected#summary',
+          summary: 'External session link.',
+        }],
+        createdAt: '2026-06-03T12:00:00.000Z',
+        updatedAt: '2026-06-03T12:00:00.000Z',
+      })
+      const rejected = await rejectMcpExternalMemoryBridgeRecord(ctx, {
+        id: 'mcp-rejected-record',
+        reviewer: 'owner',
+        rejectionReason: 'Outdated source summary.',
+        updatedAt: '2026-06-03T12:10:00.000Z',
+      })
+      expect(rejected).toContain('"reviewStatus": "rejected"')
+      expect(rejected).toContain('"rejectionReason": "Outdated source summary."')
+      expect(readFileSync(join(root, '.guildhall', 'memory-store.json'), 'utf8')).not.toContain('external-mcp-rejected-record')
+    } finally {
+      rmSync(root, { recursive: true, force: true })
+    }
+  })
 })
 
 describe('Guildhall MCP server manifest', () => {
@@ -145,6 +224,7 @@ describe('Guildhall MCP server manifest', () => {
     expect(manifest.resources.map((resource) => resource.uri)).toContain('guildhall://project/design')
     expect(manifest.resources.map((resource) => resource.uri)).toContain('guildhall://project/context')
     expect(manifest.resources.map((resource) => resource.uri)).toContain('guildhall://project/codebase-knowledge')
+    expect(manifest.resources.map((resource) => resource.uri)).toContain('guildhall://project/external-agent-memory-bridge')
     expect(manifest.resourceTemplates.map((resource) => resource.uriTemplate)).toContain('guildhall://project/tasks/{taskId}')
     expect(manifest.tools.map((tool) => tool.name)).toEqual([
       'guildhall.read_artifact',
@@ -156,6 +236,10 @@ describe('Guildhall MCP server manifest', () => {
       'guildhall.record_memory_observation',
       'guildhall.update_memory_status',
       'guildhall.read_effective_context',
+      'guildhall.list_external_memory_bridge_records',
+      'guildhall.import_external_memory_bridge_record',
+      'guildhall.review_external_memory_bridge_record',
+      'guildhall.reject_external_memory_bridge_record',
     ])
   })
 })

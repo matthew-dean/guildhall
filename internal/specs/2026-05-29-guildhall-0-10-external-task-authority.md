@@ -8,8 +8,9 @@
   records for local execution truth.
 - [x] Add inspectable stale/conflict sync state for changed provider fields and
   stale proposed writes.
-- [ ] Shape execution packets from external issue truth plus repo-local context.
-- [ ] Execute or approve provider writes through connectors.
+- [x] Shape execution packets from external issue truth plus repo-local context.
+- [x] Record evidence-backed proposed writes and approval/rejection decisions
+  before any connector execution.
 
 Guildhall should be able to work inside a project whose real planning and
 status authority already lives somewhere else. Jira is the concrete fixture

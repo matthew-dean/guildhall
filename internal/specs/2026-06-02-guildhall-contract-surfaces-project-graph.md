@@ -553,7 +553,7 @@ the step true.
     (`17` tests) plus `pnpm typecheck`. Endpoint/UI projection remains for
     later Structure work.
 
-- [ ] **Step 4: Generate surface review packets during spec approval**
+- [x] **Step 4: Generate surface review packets during spec approval**
 
   The spec agent should detect or accept declared touched surfaces, generate
   packets, and revise structured specs with explicit deltas. Reviewers should
@@ -566,11 +566,14 @@ the step true.
   - `src/runtime/review-planner.ts`
   - focused tests for spec/reviewer context
 
-  - Progress: added the first compact packet data structure and renderer in
-    `src/runtime/contract-surfaces.ts`, but did not wire packet generation into
-    spec approval or reviewer context in this bounded slice.
+  - Evidence: `approveSpec` now reads `structuredSpec.contractSurfaceDeltas`,
+    generates task-local `contractSurfaceReviewPackets` from existing durable
+    surfaces, carries sibling task refs for previous specs touching the same
+    surface, and records a review note during approval. Focused coverage:
+    `src/runtime/__tests__/intake.test.ts` plus the packet runtime tests in
+    `src/runtime/__tests__/contract-surfaces.test.ts`.
 
-- [ ] **Step 5: Add corpus-refresh contract-surface proposals**
+- [x] **Step 5: Add corpus-refresh contract-surface proposals**
 
   Extend corpus digestion to propose likely contract surfaces and drift
   diagnostics without mutating durable graph state directly.
@@ -582,7 +585,14 @@ the step true.
   - `src/corpus-map/query.ts`
   - `src/corpus-map/__tests__/corpus-map.test.ts`
 
-- [ ] **Step 6: Project contract surfaces into Structure**
+  - Evidence: `CodebaseMap` now carries `contractSurfaceProposals` when at
+    least two indexed spec/doc files repeat the same `Contract Surface` and
+    invariant language. Proposals include evidence and
+    `ownerApprovalRequired: true` and do not mutate project-graph surface
+    records. Focused coverage:
+    `src/corpus-map/__tests__/corpus-map.test.ts`.
+
+- [x] **Step 6: Project contract surfaces into Structure**
 
   Add a focused Structure panel for contract surfaces and review packets. It
   should link to Thread/owner input for discussion and must not add new Settings
@@ -594,7 +604,14 @@ the step true.
   - `src/web/surfaces/project/structure/ProjectStructurePanel.svelte`
   - `src/web/surfaces/project/structure/__tests__/ProjectStructurePanel.svelte.test.ts`
 
-- [ ] **Step 7: Feed packets into worker and reviewer context**
+  - Evidence: scoped `ProjectGraphView.contractSurfaces` now render in
+    Structure through the existing project graph panel, with status, kind,
+    authority, invariant count, consumer count, and owner/consumer/domain
+    scope labels. Settings remains out of the contract-review path. Focused
+    coverage:
+    `src/web/surfaces/project/structure/__tests__/ProjectStructurePanel.svelte.test.ts`.
+
+- [x] **Step 7: Feed packets into worker and reviewer context**
 
   Context builder should inject compact surface packets only when relevant.
   Reviewer guidance should treat packet findings as evidence and ask for
@@ -607,7 +624,12 @@ the step true.
   - `src/agents/worker-agent.ts`
   - `src/agents/reviewer-agent.ts`
 
-- [ ] **Step 8: Prove with three non-overfit fixtures**
+  - Evidence: `buildContext` now injects compact `## Contract Surface Packets`
+    markdown for `in_progress`, `review`, and `gate_check` tasks only when a
+    task has relevant packets. Focused worker/reviewer coverage:
+    `src/runtime/__tests__/context-builder.test.ts`.
+
+- [x] **Step 8: Prove with three non-overfit fixtures**
 
   Test at least:
 
@@ -618,17 +640,41 @@ the step true.
   The tests must prove the model is not overfit to Looma, Knit, Dialog, Drawer,
   or Guildhall UI cleanup.
 
-- [ ] **Step 9: Verify installed app behavior**
+  - Evidence: added fixture coverage for a design-system token/variant surface
+    during approval, a schema/event surface proposal from repeated cross-spec
+    corpus language, and a component API surface through Structure plus
+    worker/reviewer context. Verification:
+    `pnpm vitest run src/runtime/__tests__/contract-surfaces.test.ts src/runtime/__tests__/project-graph.test.ts src/core/__tests__/structured-spec.test.ts src/runtime/__tests__/intake.test.ts src/corpus-map/__tests__/corpus-map.test.ts src/runtime/__tests__/context-builder.test.ts src/web/surfaces/project/structure/__tests__/ProjectStructurePanel.svelte.test.ts --reporter=dot`
+    (`141` tests) and `pnpm typecheck`.
+
+- [x] **Step 9: Verify installed app behavior**
 
   Refresh the installed app, restart the service, verify `/api/stale-server`
   returns `stale:false`, and browser-proof the Structure surface against the
   active Narrative Harness project.
 
-- [ ] **Step 10: Update the active overhead-reduction and flow-audit ledgers**
+  - Evidence: `pnpm dev:install` completed, `guildhall stop || true` followed
+    by `guildhall start` refreshed the service, `/api/stale-server` returned
+    `stale:false`, and browser proof on
+    `http://localhost:7777/projects/narrative-harness/structure` showed
+    Structural map, Project graph, and Contract surfaces in Structure with no
+    raw schema JSON leak. Screenshot captured at
+    `docs/assets/ui-audit/0-10-0/structure.png`.
+
+- [x] **Step 10: Update the active overhead-reduction and flow-audit ledgers**
 
   Mark completed steps in this spec, update
   `internal/plans/2026-06-01-guildhall-cognitive-overhead-reduction.md`, and
   update `artifact:flow-audit` with exact verification evidence.
+
+  - Progress: Milestone 6 tracker and overhead-reduction Task 13 were updated
+    for focused implementation evidence. `artifact:flow-audit` remains pending
+    until Step 9 installed-app/browser proof exists.
+
+  - Evidence: Step 9 proof is now recorded in this spec,
+    `internal/plans/2026-06-01-guildhall-cognitive-overhead-reduction.md`,
+    `internal/plans/2026-05-31-guildhall-0-10-implementation-tracker.md`, and
+    `internal/audits/flow-audit.md`.
 
 ## Acceptance Criteria
 

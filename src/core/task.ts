@@ -1,6 +1,6 @@
 import { z } from 'zod'
 import { TaskSizePlan, WorkUnitAnalysis } from './task-sizing.js'
-import { StructuredSpec } from './structured-spec.js'
+import { StructuredSpec, StructuredSpecContractSurfaceDelta } from './structured-spec.js'
 import { CompletionHandoff, ProofPath } from './task-proof.js'
 
 // ---------------------------------------------------------------------------
@@ -60,6 +60,66 @@ export type PreRejectionCode = z.infer<typeof PreRejectionCode>
 
 export const TaskPriority = z.enum(['critical', 'high', 'normal', 'low'])
 export type TaskPriority = z.infer<typeof TaskPriority>
+
+const ContractSurfaceKind = z.enum([
+  'component_api',
+  'http_api',
+  'event_api',
+  'mcp_api',
+  'schema',
+  'state_machine',
+  'design_system',
+  'domain_capability',
+  'documentation',
+  'other',
+])
+
+export const ContractSurfaceReviewPacket = z.object({
+  id: z.string(),
+  surface: z.object({
+    id: z.string(),
+    label: z.string(),
+    kind: ContractSurfaceKind,
+    authority: z.enum(['provider', 'shared', 'consumer']),
+    scope: z.enum(['project', 'workspace', 'external_reference']),
+    owningProject: z.object({
+      id: z.string(),
+      label: z.string(),
+      path: z.string().optional(),
+    }),
+    domain: z.object({
+      id: z.string(),
+      label: z.string(),
+      path: z.string().optional(),
+    }).optional(),
+  }),
+  currentSpecRef: z.string(),
+  knownConsumers: z.array(z.object({
+    id: z.string(),
+    label: z.string(),
+    path: z.string().optional(),
+  })).default([]),
+  existingInvariants: z.array(z.object({
+    id: z.string(),
+    label: z.string(),
+    rule: z.string(),
+    proofObligations: z.array(z.string()).default([]),
+  })).default([]),
+  existingDecisions: z.array(z.object({
+    id: z.string(),
+    summary: z.string(),
+    decidedAt: z.string(),
+    decidedBy: z.string(),
+    evidenceRefs: z.array(z.string()).default([]),
+    invariantRefs: z.array(z.string()).optional(),
+  })).default([]),
+  siblingSpecRefs: z.array(z.string()).default([]),
+  driftFindings: z.array(z.string()).default([]),
+  currentDelta: StructuredSpecContractSurfaceDelta,
+  proofObligations: z.array(z.string()).default([]),
+  reviewFocus: z.array(z.string()).default([]),
+})
+export type ContractSurfaceReviewPacket = z.infer<typeof ContractSurfaceReviewPacket>
 
 export const TaskHold = z.object({
   previousStatus: TaskStatus,
@@ -824,6 +884,7 @@ export const Task = z.object({
   // Set by Spec Agent before implementation begins
   spec: z.string().optional(),
   structuredSpec: StructuredSpec.optional(),
+  contractSurfaceReviewPackets: z.array(ContractSurfaceReviewPacket).optional(),
   acceptanceCriteria: z.array(AcceptanceCriteria).default([]),
 
   // Product brief: the *why* layer of a task — user job, success metric,

@@ -25,6 +25,26 @@ export interface ProjectGraphView {
   }>
   dependencyEdges?: ProjectGraphEdge[]
   unresolvedRequests?: Array<{ edgeId?: string; waitingOn?: string; state?: string; summary?: string }>
+  contractSurfaces?: ProjectGraphContractSurface[]
+}
+
+export interface ProjectGraphContractSurface {
+  id: string
+  nodeId: string
+  label: string
+  kind: string
+  authority: string
+  scope: string
+  state: string
+  owningProjectId: string
+  owningProjectLabel: string
+  domainId?: string
+  domainLabel?: string
+  consumerCount: number
+  invariantCount: number
+  decisionCount: number
+  updatedAt: string
+  scopedReason: 'owner' | 'consumer' | 'domain' | string
 }
 
 export interface ProjectGraphResponsibility {

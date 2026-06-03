@@ -125,6 +125,24 @@ describe('ProjectStructurePanel', () => {
               consumerNeed: 'Knit needs the Looma editor.',
               unresolved: true,
             }],
+            contractSurfaces: [{
+              id: 'component-api.command-menu',
+              nodeId: 'contract-surface:component-api.command-menu',
+              label: 'Command menu component API',
+              kind: 'component_api',
+              authority: 'shared',
+              scope: 'project',
+              state: 'accepted',
+              owningProjectId: 'looma-knit',
+              owningProjectLabel: 'Looma + Knit',
+              domainId: 'domain:editor',
+              domainLabel: 'Editor',
+              consumerCount: 3,
+              invariantCount: 2,
+              decisionCount: 1,
+              updatedAt: '2026-06-02T12:00:00.000Z',
+              scopedReason: 'owner',
+            }],
           },
         })
       }
@@ -158,6 +176,12 @@ describe('ProjectStructurePanel', () => {
     expect(screen.getByText('Knit needs the Looma editor.')).toBeInTheDocument()
     expect(screen.getByText('Waiting on provider')).toBeInTheDocument()
     expect(screen.getByText('This project is provider')).toBeInTheDocument()
+    expect(screen.getByRole('heading', { name: 'Contract surfaces' })).toBeInTheDocument()
+    expect(screen.getByText('Command menu component API')).toBeInTheDocument()
+    expect(screen.getByText('component api')).toBeInTheDocument()
+    expect(screen.getByText('2 invariants')).toBeInTheDocument()
+    expect(screen.getByText('3 consumers')).toBeInTheDocument()
+    expect(screen.getByText('Owned here')).toBeInTheDocument()
 
     await userEvent.click(screen.getByRole('button', { name: /open editor domain/i }))
     expect(screen.getByRole('heading', { name: 'Editor' })).toBeInTheDocument()

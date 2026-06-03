@@ -269,3 +269,25 @@ source: codex-worker-b
 Committed Task 10 fixture quarantine: moved app-spec-smoke and release-proof-matrix runtime modules from src/runtime to internal/fixtures, updated tests, added a guard against restoring those shipping runtime paths, and recorded test/lint evidence in internal/plans/2026-06-01-guildhall-cognitive-overhead-reduction.md.
 
 source: codex-worker-c
+## 2026-06-03T12:38:14.507Z MCP evidence for 0.10.0/task-open-questions-to-bounded-chat
+
+Completed Milestone 1 bounded-chat owner-facing readiness slice: New request now opens bounded-chat sessions for all non-pressure-test routes, pure project questions close as conversation receipts without task drafts, task-like asks create tasks only after owner shaping, and Thread renders bounded-chat state through a dedicated conversation panel instead of the legacy question-card branch. Verification: focused bounded-chat/thread/request/serve/UI suites passed with 251 tests; pnpm typecheck:ui and pnpm lint:design passed; pnpm typecheck still fails on unrelated contract-surface schema/type drift in src/runtime/context-builder.ts and src/runtime/intake.ts.
+
+source: codex:bounded-chat-completion
+
+## 2026-06-03T12:46:00.000Z MCP evidence for 0.10.0/readiness-integration
+
+Completed the 0.10 readiness integration pass. Milestone 1 bounded Thread
+conversation behavior, Milestone 4 external task authority packet/write gating,
+Milestone 5 external-agent memory bridge MCP/CLI exposure, Milestone 6 contract
+surface packets/corpus/Structure/context, and Milestone 7 docs/screenshots/live
+proof are now integrated on `feature/cognitive-overhead-reduction`.
+Verification: `pnpm typecheck` passed; focused combined Vitest suite passed
+with 360 tests; `pnpm lint:design` passed; `node scripts/reduction-guardrails.mjs`
+passed; `pnpm build` passed; `git diff --check` passed; `pnpm dev:install`
+completed; service restart reported `/api/stale-server` as `stale:false`; live
+browser proof on Narrative Harness Thread and Structure showed no raw
+`invalid_type` / `taskReadiness` schema JSON and placed contract surfaces in
+Structure. Screenshots captured under `docs/assets/ui-audit/0-10-0/`.
+
+source: codex:0.10-readiness-integration

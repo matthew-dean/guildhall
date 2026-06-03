@@ -2,7 +2,7 @@ import fs from 'node:fs'
 import path from 'node:path'
 import { guildhallHomeDir } from '@guildhall/config'
 import { writeJsonFile, writeJsonLinesFile } from '@guildhall/persistence'
-import type { StructuredSpecContractSurfaceDelta } from '@guildhall/core'
+import type { StructuredSpec, StructuredSpecContractSurfaceDelta } from '@guildhall/core'
 
 import {
   transitionContractSurface,
@@ -119,6 +119,39 @@ export interface SurfaceReviewPacket {
   currentDelta: StructuredSpecContractSurfaceDelta
   proofObligations: string[]
   reviewFocus: string[]
+}
+
+export function buildSurfaceReviewPacketsForStructuredSpec(input: {
+  structuredSpec?: StructuredSpec
+  currentSpecRef: string
+  siblingSpecRefsBySurfaceId?: Record<string, string[]>
+  driftFindingsBySurfaceId?: Record<string, string[]>
+}): SurfaceReviewPacket[] {
+  const deltas = input.structuredSpec?.contractSurfaceDeltas ?? []
+  return deltas.flatMap((delta) => {
+    if (!delta.surfaceId) return []
+    const surface = readContractSurface(delta.surfaceId, { optional: true })
+    if (!surface) return []
+    return buildSurfaceReviewPacket({
+      surface,
+      currentSpecRef: input.currentSpecRef,
+      delta,
+      siblingSpecRefs: input.siblingSpecRefsBySurfaceId?.[delta.surfaceId] ?? [],
+      driftFindings: input.driftFindingsBySurfaceId?.[delta.surfaceId] ?? [],
+    })
+  })
+}
+
+export function renderSurfaceReviewPacketsMarkdown(packets: readonly SurfaceReviewPacket[]): string {
+  if (packets.length === 0) return ''
+  return [
+    '## Contract Surface Packets',
+    '',
+    ...packets.flatMap((packet) => [
+      renderSurfaceReviewPacketMarkdown(packet),
+      '',
+    ]),
+  ].join('\n').trim()
 }
 
 export function contractSurfaceStoreDir(): string {

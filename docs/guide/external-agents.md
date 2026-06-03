@@ -21,6 +21,7 @@ digging through raw files. Instead of asking an outside agent to guess which
 - current task queue and individual task records
 - registered artifact IDs, including audit checklists
 - project memory, decisions, and capability requests
+- external-agent memory bridge records waiting for review
 - runtime state, local-history health, codebase knowledge, learning
   suggestions, feedback packets, and design context
 - tools for reading artifacts, appending task evidence, and requesting missing
@@ -106,6 +107,7 @@ guildhall://project/local-history
 guildhall://project/codebase-knowledge
 guildhall://project/runtime
 guildhall://project/capability-requests
+guildhall://project/external-agent-memory-bridge
 ```
 
 It also exposes a small tool set:
@@ -120,12 +122,33 @@ guildhall.read_memory
 guildhall.record_memory_observation
 guildhall.update_memory_status
 guildhall.read_effective_context
+guildhall.list_external_memory_bridge_records
+guildhall.import_external_memory_bridge_record
+guildhall.review_external_memory_bridge_record
+guildhall.reject_external_memory_bridge_record
 ```
 
 That lets an outside agent answer questions like "what did Guildhall decide
 about this task?", "which checklist is active?", "what does Guildhall remember
 for this project?", "is the runtime healthy?", or "what evidence marked this
 work done?" without treating internal storage files as its public API.
+
+## Bring back useful outside-agent memory
+
+Outside agents can leave useful context, but Guildhall does not treat raw
+chat as project truth. External-agent memory enters through a small review
+bridge:
+
+```sh
+guildhall agent memory import --from-file memory-record.json --project .
+guildhall agent memory list --status imported --project .
+guildhall agent memory review --id codex-summary --reviewer matthew --project .
+guildhall agent memory reject --id stale-note --reviewer matthew --reason "Superseded" --project .
+```
+
+Importing a bridge record stores it for review. Reviewing it is the promotion
+step into ordinary project memory. Rejecting it keeps the paper trail without
+letting that note shape future agent context.
 
 ## When to use it
 
