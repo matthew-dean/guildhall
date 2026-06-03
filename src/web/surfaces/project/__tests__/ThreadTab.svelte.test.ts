@@ -2717,7 +2717,7 @@ describe('ThreadTab', () => {
     expect(scrollBlock).toContain('padding-top: var(--gh-space-1)')
     expect(footerBlock).toContain('position: sticky')
     expect(footerBlock).toContain('bottom: 0')
-    expect(footerBlock).toContain('padding-bottom: var(--gh-space-1)')
+    expect(footerBlock).toContain('padding-bottom: calc(var(--gh-space-4) + env(safe-area-inset-bottom, 0px))')
     expect(dockBlock).not.toMatch(/position:\s*(absolute|fixed)/)
     expect(footerBlock).not.toMatch(/position:\s*(absolute|fixed)/)
   })

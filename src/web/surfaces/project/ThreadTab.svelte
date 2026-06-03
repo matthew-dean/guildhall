@@ -5372,7 +5372,7 @@
     display: grid;
     gap: var(--gh-space-2);
     padding-top: var(--gh-space-1);
-    padding-bottom: var(--gh-space-1);
+    padding-bottom: calc(var(--gh-space-4) + env(safe-area-inset-bottom, 0px));
     background: linear-gradient(180deg, transparent 0%, color-mix(in srgb, var(--bg-base) 88%, transparent) 18%, var(--bg-base) 100%);
   }
   .thread-active-dock {
