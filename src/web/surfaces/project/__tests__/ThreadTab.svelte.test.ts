@@ -320,6 +320,28 @@ interface PressureTestQuestionTurnForTest {
   answerEndpoint: string
 }
 
+interface BoundedChatTurnForTest {
+  kind: 'bounded_chat'
+  id: string
+  at: string
+  persona: 'intake'
+  status: 'done' | 'active' | 'pending'
+  phase: 'intake'
+  sessionId: string
+  subObjectiveId: string
+  targetTitle: string
+  domainTitle: string
+  actionHref: string
+  question: {
+    id: string
+    prompt: string
+    why: string
+    choices?: string[]
+    evidence: string[]
+  }
+  answerEndpoint: string
+}
+
 function requestTurn(overrides: Partial<RequestTurnForTest> = {}): RequestTurnForTest {
   return {
     kind: 'request',
@@ -361,9 +383,37 @@ function pressureTestQuestionTurn(
   }
 }
 
+function boundedChatTurn(
+  overrides: Partial<BoundedChatTurnForTest> = {},
+): BoundedChatTurnForTest {
+  return {
+    kind: 'bounded_chat',
+    id: 'bounded-chat:bc-new-thread-1:request-scope',
+    at: now,
+    persona: 'intake',
+    status: 'active',
+    phase: 'intake',
+    sessionId: 'bc-new-thread-1',
+    subObjectiveId: 'request-scope',
+    targetTitle: 'Looma + Knit',
+    domainTitle: 'New request',
+    actionHref: '/thread?thread=bc-new-thread-1',
+    question: {
+      id: 'request-scope',
+      prompt: 'Should Guildhall shape this as a task or keep it as a project question?',
+      why: 'This decides whether Guildhall creates work or answers in Thread.',
+      choices: ['Shape a task', 'Answer in Thread'],
+      evidence: [],
+    },
+    answerEndpoint: '/api/project/bounded-chat/bc-new-thread-1/answer',
+    ...overrides,
+  }
+}
+
 function installBrowserFakes(url = '/projects/looma-knit/thread') {
   window.history.replaceState({}, '', url)
-  path.value = url
+  path.href = url
+  path.value = url.split('?')[0]?.split('#')[0] ?? url
   project.detail = {
     id: 'looma-knit',
     name: 'Looma + Knit',
@@ -581,6 +631,25 @@ describe('ThreadTab', () => {
     expect(selectedThread().getByText('internal/plans/guildhall-0-8.md: release goals')).toBeTruthy()
     expect(screen.getAllByText('Needs you').length).toBeGreaterThan(0)
     expect(scrollIntoView).not.toHaveBeenCalled()
+  })
+
+  it('selects a bounded-chat thread from the route query', async () => {
+    installBrowserFakes('/projects/looma-knit/thread?thread=bc-new-thread-1')
+    installFetchFakes([
+      workerTurn({
+        id: 'worker-cleanup',
+        taskId: 'task-cleanup',
+        taskTitle: 'Clean up task intake',
+        at: '2026-05-19T15:10:00.000Z',
+        summary: 'Guildhall is cleaning up task intake.',
+      }),
+      boundedChatTurn(),
+    ], 'worker-cleanup')
+
+    render(ThreadTab)
+
+    await selectedThread().findByText('Should Guildhall shape this as a task or keep it as a project question?')
+    expect(selectedThread().queryByText('Guildhall is cleaning up task intake.')).toBeNull()
   })
 
   it('selects the current cleanup work instead of the saved request routing event', async () => {

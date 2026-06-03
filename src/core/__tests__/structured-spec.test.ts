@@ -20,6 +20,21 @@ describe('StructuredSpec', () => {
       keyDecisions: [
         'Use the current selection model as the menu anchor.',
       ],
+      contractSurfaceDeltas: [
+        {
+          proposedSurfaceLabel: 'Editor action component API',
+          relation: 'extends',
+          summary: 'Extends the editor action surface with a block menu entry point.',
+          proposedInvariants: [
+            {
+              label: 'Selection actions share one entry point',
+              rule: 'Block selection actions use the existing editor action entry point.',
+              reason: 'Avoid a second action menu contract.',
+            },
+          ],
+          proofObligations: ['Review the editor action component contract.'],
+        },
+      ],
       acceptanceCriteria: [
         {
           scenario: 'Given a selected block, when the menu opens',
@@ -54,6 +69,10 @@ describe('StructuredSpec', () => {
     expect(markdown).toContain('## Goals')
     expect(markdown).toContain('## User-facing behavior')
     expect(markdown).toContain('## Component / API Shape')
+    expect(markdown).toContain('## Contract Surface Deltas')
+    expect(markdown).toContain('- Surface: Editor action component API')
+    expect(markdown).toContain('Relation: extends')
+    expect(markdown).toContain('Proof obligations: Review the editor action component contract.')
     expect(markdown).toContain('## Risks / Open Questions')
     expect(markdown).toContain('## Completion Boundary')
     expect(markdown).toContain('1. Scenario: Given a selected block, when the menu opens')

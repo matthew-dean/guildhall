@@ -100,11 +100,12 @@
       })
       const j = await res.json()
       if (j.error) return (error = 'Request failed: ' + j.error)
+      const boundedChatId = typeof j?.boundedChat?.id === 'string' ? j.boundedChat.id : null
       requestClose()
       notifyRequestCreated({
-        boundedChatId: typeof j?.boundedChat?.id === 'string' ? j.boundedChat.id : null,
+        boundedChatId,
       })
-      nav(currentProjectHref('/thread'))
+      nav(currentProjectHref(boundedChatId ? `/thread?thread=${encodeURIComponent(boundedChatId)}` : '/thread'))
       setTimeout(() => void project.refresh(), 400)
     } finally {
       busy = false

@@ -493,7 +493,7 @@ commit as the completed work. Every checked step must include an `Evidence:`
 bullet with the command, test, receipt, browser proof, or commit note that made
 the step true.
 
-- [ ] **Step 1: Add contract-surface runtime model**
+- [x] **Step 1: Add contract-surface runtime model**
 
   Create the `ContractSurface`, `SurfaceInvariant`, `SurfaceDecision`,
   `StructuredSpecContractSurfaceDelta`, and `SurfaceReviewPacket` types. Keep
@@ -506,7 +506,14 @@ the step true.
   - `src/core/structured-spec.ts`
   - `src/core/__tests__/structured-spec.test.ts`
 
-- [ ] **Step 2: Add the contract-surface state machine and receipts**
+  - Evidence: added `src/runtime/contract-surfaces.ts` with source-linked
+    `ContractSurface`, invariant/decision, and `SurfaceReviewPacket` records;
+    added optional `StructuredSpec.contractSurfaceDeltas` in
+    `src/core/structured-spec.ts`; verified with
+    `pnpm vitest run src/runtime/__tests__/contract-surfaces.test.ts src/runtime/__tests__/project-graph.test.ts src/core/__tests__/structured-spec.test.ts --reporter=dot`
+    (`17` tests) and `pnpm typecheck`.
+
+- [x] **Step 2: Add the contract-surface state machine and receipts**
 
   Use `src/runtime/state-machine.ts`. Do not invent lifecycle status helpers.
   Persist append-only receipts and test legal/rejected transitions.
@@ -516,7 +523,15 @@ the step true.
   - `src/runtime/contract-surface-machine.ts`
   - `src/runtime/__tests__/contract-surface-machine.test.ts`
 
-- [ ] **Step 3: Extend project graph nodes, view, and storage**
+  - Evidence: added `src/runtime/contract-surface-machine.ts` using the shared
+    `src/runtime/state-machine.ts` primitive and persisted append-only
+    transition receipts under the project-graph store; verified legal accepted
+    surface flow and rejected delta acceptance in
+    `src/runtime/__tests__/contract-surfaces.test.ts` with
+    `pnpm vitest run src/runtime/__tests__/contract-surfaces.test.ts src/runtime/__tests__/project-graph.test.ts src/core/__tests__/structured-spec.test.ts --reporter=dot`
+    (`17` tests) and `pnpm typecheck`.
+
+- [x] **Step 3: Extend project graph nodes, view, and storage**
 
   Add `contract_surface` graph nodes plus minimal surface edges/facets. Querying
   the project graph should return surfaces scoped to the selected project and
@@ -530,6 +545,14 @@ the step true.
   - `src/runtime/__tests__/serve-settings.test.ts` or a focused graph endpoint
     test
 
+  - Evidence: added `contract_surface` project graph node support, registry
+    summaries, graph draft nodes, scoped `ProjectGraphView.contractSurfaces`,
+    and `registerProjectGraphContractSurface`; verified with
+    `src/runtime/__tests__/project-graph.test.ts` and the focused command
+    `pnpm vitest run src/runtime/__tests__/contract-surfaces.test.ts src/runtime/__tests__/project-graph.test.ts src/core/__tests__/structured-spec.test.ts --reporter=dot`
+    (`17` tests) plus `pnpm typecheck`. Endpoint/UI projection remains for
+    later Structure work.
+
 - [ ] **Step 4: Generate surface review packets during spec approval**
 
   The spec agent should detect or accept declared touched surfaces, generate
@@ -542,6 +565,10 @@ the step true.
   - `src/agents/reviewer-agent.ts`
   - `src/runtime/review-planner.ts`
   - focused tests for spec/reviewer context
+
+  - Progress: added the first compact packet data structure and renderer in
+    `src/runtime/contract-surfaces.ts`, but did not wire packet generation into
+    spec approval or reviewer context in this bounded slice.
 
 - [ ] **Step 5: Add corpus-refresh contract-surface proposals**
 

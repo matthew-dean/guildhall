@@ -45,7 +45,7 @@
   import { onEvent } from '../../lib/events.js'
   import { escalationPrimaryAction, escalationUserGuidance } from '../../lib/escalation-labels.js'
   import { briefDoneWhenForReaders, briefScopeForReaders } from '../../lib/brief-display.js'
-  import { nav } from '../../lib/nav.svelte.js'
+  import { nav, path } from '../../lib/nav.svelte.js'
   import { currentProjectHref, currentTaskHref, projectActionHref, projectFetch } from '../../lib/project-routes.js'
   import {
     hasIncompleteTaskChecklist,
@@ -1231,6 +1231,30 @@
     return turn.id
   }
 
+  function threadRouteParamFromHref(href: string): string | null {
+    const query = href.split('#')[0]?.split('?')[1] ?? ''
+    if (!query) return null
+    const value = new URLSearchParams(query).get('thread')?.trim()
+    return value || null
+  }
+
+  function routeThreadChainId(chains: ThreadChain[]): string | null {
+    const param = threadRouteParamFromHref(path.href)
+    if (!param) return null
+    if (chains.some(chain => chain.id === param)) return param
+    const boundedChatId = param.startsWith('bounded-chat:') ? param : `bounded-chat:${param}`
+    if (chains.some(chain => chain.id === boundedChatId)) return boundedChatId
+    return null
+  }
+
+  function hrefForThreadChain(chainId: string): string {
+    const basePath = path.value || location.pathname
+    const routeId = chainId.startsWith('bounded-chat:') ? chainId.slice('bounded-chat:'.length) : chainId
+    const query = new URLSearchParams()
+    query.set('thread', routeId)
+    return `${basePath}?${query.toString()}`
+  }
+
   function setCapabilityPathDraft(requestId: string, value: string): void {
     capabilityPathDrafts = { ...capabilityPathDrafts, [requestId]: value }
   }
@@ -1271,11 +1295,16 @@
       if (compactThreadMode) compactPane = 'list'
       return
     }
+    const routed = routeThreadChainId(threadChains)
     const preferred = activeTurnId
       ? threadChains.find(chain => chain.turns.some(turn => turn.id === activeTurnId))?.id ?? threadChains[0]?.id ?? null
       : threadChains[0]?.id ?? null
-    if (!selectedTurnId || !threadChains.some(chain => chain.id === selectedTurnId)) {
-      selectedTurnId = preferred
+    const nextSelection = routed ?? preferred
+    if (routed && selectedTurnId !== routed) {
+      selectedTurnId = routed
+      detailShouldStickToBottom = true
+    } else if (!selectedTurnId || !threadChains.some(chain => chain.id === selectedTurnId)) {
+      selectedTurnId = nextSelection
       detailShouldStickToBottom = true
     }
     if (!compactThreadMode) {
@@ -2704,6 +2733,7 @@
   function focusTurn(turnId: string): void {
     selectedTurnId = turnId
     detailShouldStickToBottom = true
+    path.replace(hrefForThreadChain(turnId), path.state)
     if (compactThreadMode) compactPane = 'detail'
     queueMicrotask(() => {
       scrollDetailToBottom('smooth')

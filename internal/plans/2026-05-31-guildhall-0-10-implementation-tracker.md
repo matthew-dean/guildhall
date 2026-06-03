@@ -145,9 +145,10 @@ path needed to prove the pattern in a browser.
   instead of immediately creating exploring tasks. The task is only created
   after the owner answers the shaping prompt, and Thread continues to project
   active/done turns for the session. The modal now routes straight into
-  `Threads` after creation and includes the bounded-chat id in its app event,
-  but a dedicated thread-list selection model and pure project-question
-  conversation threads are still follow-up slices.
+  `Threads` after creation, includes the bounded-chat id in its app event, and
+  preserves that id in the route as `/thread?thread=<boundedChatId>` so the
+  newly created bounded-chat thread is selected. Pure project-question
+  conversation threads are still a follow-up slice.
 - [ ] Add route-backed bounded-chat UI and notification projection only after
   the backend/session contract is stable.
   The first `Threads + Needs you` transition slice is now in place: runtime
@@ -161,12 +162,14 @@ path needed to prove the pattern in a browser.
   -> thread detail` stack, the top-left control becomes `Threads` instead of a
   hamburger while a compact detail is selected, and thread content no longer
   waits on runtime/dev-server/capability side fetches before rendering. The
-  latest runtime pass also split `/api/project/thread` into a fast core payload
-  plus best-effort `/api/project/thread/extras` hydration for per-task git
-  story data, moved thread snapshot/session loading onto async cached reads,
-  and taught `buildSnapshotAsync` to use `.guildhall/tasks/index.json` for
-  hot-path task counts instead of reparsing `TASKS.json` just to count current
-  tasks.
+  newest bounded-chat route slice lets `/thread?thread=<boundedChatId>` select
+  the linked bounded-chat chain even when another turn is globally active, and
+  row selection now keeps Thread URLs route-backed. The latest runtime pass
+  also split `/api/project/thread` into a fast core payload plus best-effort
+  `/api/project/thread/extras` hydration for per-task git story data, moved
+  thread snapshot/session loading onto async cached reads, and taught
+  `buildSnapshotAsync` to use `.guildhall/tasks/index.json` for hot-path task
+  counts instead of reparsing `TASKS.json` just to count current tasks.
 
 ## Milestone 2: State Machines And Local Project Graph
 
@@ -544,10 +547,23 @@ Issues style planning authority.
 
 **Primary source:** `internal/specs/2026-05-29-guildhall-0-10-external-task-authority.md`
 
-- [ ] Add provider-neutral external issue refs and local execution mirrors.
-- [ ] Keep stale/conflict state inspectable instead of silently overwriting.
+- [x] Add provider-neutral external issue refs and local execution mirrors.
+  First bounded runtime slice landed in
+  `src/runtime/external-task-authority.ts`: Jira, Linear, GitHub Issues, Azure
+  DevOps, Asana, and custom refs share one `ExternalIssueRef` identity model,
+  and `ExternalTaskMirror` keeps local task id, authority policy, context route,
+  context budget, source snapshot, local proof/evidence refs, proposed external
+  writes, and state-machine receipts separate from provider planning truth.
+- [x] Keep stale/conflict state inspectable instead of silently overwriting.
+  `refreshExternalTaskMirror` now compares a fresh provider ref with the
+  shaped source snapshot, records field-level `syncState`, marks harmless
+  external drift as `stale`, and marks authority-sensitive changes or stale
+  proposed writes as `conflict` without mutating external systems.
 - [ ] Shape execution packets from external issue truth plus repo-local context.
 - [ ] Gate external writes behind explicit policy and evidence-backed proposals.
+  The runtime records policy and evidence-backed proposed writes, but connector
+  write execution, approval UI, and packet shaping remain future Milestone 4
+  slices.
 
 ## Milestone 5: Agent Memory Bridge
 
@@ -556,9 +572,19 @@ chat into ambient truth.
 
 **Primary source:** `internal/specs/2026-05-28-guildhall-0-10-agent-memory-bridge.md`
 
-- [ ] Define bridge records, freshness/evidence requirements, and scope rules.
-- [ ] Expose memory exchange through explicit import/export or link flows.
-- [ ] Keep external-agent memory reviewable before it shapes local execution.
+- [x] Define bridge records, freshness/evidence requirements, and scope rules.
+  First bounded runtime slice landed in
+  `src/runtime/external-agent-memory-bridge.ts`: provider-neutral bridge
+  records now validate explicit scope/type, freshness, confidence/risk, and at
+  least one evidence ref before import.
+- [x] Expose memory exchange through explicit import/export or link flows.
+  The runtime now persists `.guildhall/external-agent-memory-bridge.json` and
+  exposes import, export, list, link-style source refs, review, and reject
+  helpers. MCP/CLI/UI exposure remains future work.
+- [x] Keep external-agent memory reviewable before it shapes local execution.
+  Imported bridge records stay in the bridge store only; `reviewExternalMemoryBridgeRecord`
+  is the explicit promotion step into ordinary memory, where the existing
+  effective-memory rules decide whether it enters execution context.
 
 ## Milestone 6: Contract Surfaces And Surface Review Packets
 
@@ -569,11 +595,25 @@ design-system vocabulary.
 
 **Primary source:** `internal/specs/2026-06-02-guildhall-contract-surfaces-project-graph.md`
 
-- [ ] Add contract-surface runtime records and state-machine receipts.
-- [ ] Represent contract surfaces as project-graph nodes/facets with evidence,
+- [x] Add contract-surface runtime records and state-machine receipts.
+  Runtime model, optional structured-spec deltas, surface state machine, and
+  append-only receipt persistence landed in `src/runtime/contract-surfaces.ts`,
+  `src/runtime/contract-surface-machine.ts`, and `src/core/structured-spec.ts`.
+  Evidence: `pnpm vitest run src/runtime/__tests__/contract-surfaces.test.ts src/runtime/__tests__/project-graph.test.ts src/core/__tests__/structured-spec.test.ts --reporter=dot`
+  (`17` tests) and `pnpm typecheck`.
+- [x] Represent contract surfaces as project-graph nodes/facets with evidence,
   owning project authority, invariants, decisions, and proof obligations.
+  Contract surfaces now register through the existing project graph store,
+  appear as `contract_surface` nodes in graph drafts, and project scoped surface
+  summaries through `ProjectGraphView.contractSurfaces`. Evidence: focused
+  project-graph contract-surface test in
+  `src/runtime/__tests__/project-graph.test.ts`, included in the focused Vitest
+  command above.
 - [ ] Generate surface review packets during spec approval from sibling specs,
   known decisions, changed rules, and unresolved obligations.
+  Progress: the compact `SurfaceReviewPacket` data structure and markdown
+  renderer are in place, but spec approval and reviewer-context wiring remain
+  pending.
 - [ ] Let corpus refresh propose contract-surface updates from repeated
   cross-spec patterns without applying them automatically.
 - [ ] Project contract surfaces into Structure and feed relevant packets into

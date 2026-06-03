@@ -3579,16 +3579,26 @@ private parallel checklist. Checked items require an `Evidence:` bullet.
     structured-spec delta shape, surface review packet shape, corpus-refresh
     proposal behavior, Structure UI placement, and implementation checklist.
 
-- [ ] **Step 1: Implement the contract-surface runtime model and state machine**
+- [x] **Step 1: Implement the contract-surface runtime model and state machine**
 
   Follow spec implementation Steps 1 and 2. Do not add lifecycle status helpers
   outside `src/runtime/state-machine.ts`.
+
+  - Evidence: added `src/runtime/contract-surfaces.ts`,
+    `src/runtime/contract-surface-machine.ts`, and optional
+    `StructuredSpec.contractSurfaceDeltas`; verified with
+    `pnpm vitest run src/runtime/__tests__/contract-surfaces.test.ts src/runtime/__tests__/project-graph.test.ts src/core/__tests__/structured-spec.test.ts --reporter=dot`
+    (`17` tests) and `pnpm typecheck`.
 
 - [ ] **Step 2: Extend project graph and spec approval**
 
   Follow spec implementation Steps 3 and 4. Contract surfaces must remain graph
   nodes/facets and structured specs must record explicit deltas when they change
   durable surfaces.
+
+  - Progress: project graph node/view/storage support and explicit structured
+    spec deltas are implemented and tested. Spec approval wiring is still
+    pending, so this combined step remains unchecked.
 
 - [ ] **Step 3: Add corpus-refresh proposal and managed-agent context**
 

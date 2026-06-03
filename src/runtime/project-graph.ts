@@ -5,6 +5,13 @@ import { writeJsonFile, writeJsonLinesFile } from '@guildhall/persistence'
 
 import { defineStateMachine, transition, type TransitionReceipt } from './state-machine.js'
 import { resolveWorkspaceProjectPaths } from './git-story-policy.js'
+import {
+  contractSurfaceNodeId,
+  readContractSurfaces,
+  registerContractSurface,
+  type ContractSurface,
+  type RegisterContractSurfaceInput,
+} from './contract-surfaces.js'
 
 export type ProjectGraphNodeType =
   | 'local_guildhall_project'
@@ -14,6 +21,7 @@ export type ProjectGraphNodeType =
   | 'executable_unit'
   | 'external_authority'
   | 'delivery_channel'
+  | 'contract_surface'
 
 export interface ProjectGraphNodeRef {
   id: string
@@ -42,6 +50,7 @@ export interface ProjectGraphRegistry {
   projects: Array<ProjectGraphNode & { type: 'local_guildhall_project'; path: string }>
   domainAuthorities?: ProjectDomainAuthority[]
   domainResponsibilities?: ProjectDomainResponsibility[]
+  contractSurfaces?: ProjectGraphContractSurfaceSummary[]
   edges: ProjectGraphEdgeSummary[]
 }
 
@@ -79,6 +88,24 @@ export interface ProjectGraph {
   nodes: ProjectGraphNode[]
   edges: ProjectGraphEdgeSummary[]
   evidence: string[]
+}
+
+export interface ProjectGraphContractSurfaceSummary {
+  id: string
+  nodeId: string
+  label: string
+  kind: ContractSurface['kind']
+  authority: ContractSurface['authority']
+  scope: ContractSurface['scope']
+  state: ContractSurface['stateMachine']['state']
+  owningProjectId: string
+  owningProjectLabel: string
+  domainId?: string
+  domainLabel?: string
+  consumerCount: number
+  invariantCount: number
+  decisionCount: number
+  updatedAt: string
 }
 
 export interface ProjectGraphView {
@@ -138,6 +165,9 @@ export interface ProjectGraphView {
   remoteAuthorityRefs: Array<RemoteAuthorityRef & {
     edgeId: string
     executionMode: 'local_request_reference'
+  }>
+  contractSurfaces: Array<ProjectGraphContractSurfaceSummary & {
+    scopedReason: 'owner' | 'consumer' | 'domain'
   }>
 }
 
@@ -438,6 +468,7 @@ export function readProjectGraphRegistry(): ProjectGraphRegistry {
   const registry = JSON.parse(fs.readFileSync(filePath, 'utf8')) as ProjectGraphRegistry
   registry.domainAuthorities ??= []
   registry.domainResponsibilities ??= []
+  registry.contractSurfaces ??= []
   registry.edges ??= []
   registry.projects ??= []
   return registry
@@ -456,14 +487,16 @@ export function writeLocalProjectGraphDraft(input: {
     projects,
     domainAuthorities: current.domainAuthorities ?? [],
     domainResponsibilities: current.domainResponsibilities ?? [],
+    contractSurfaces: readContractSurfaces().map(contractSurfaceSummary),
     edges: current.edges,
   }
+  const contractSurfaceNodes = readContractSurfaces().map(contractSurfaceGraphNode)
   writeJsonFile(path.join(projectGraphRegistryDir(), 'registry.json'), registry)
   const graph: ProjectGraph = {
     id: 'local',
     version: 1,
     generatedAt: now,
-    nodes: projects,
+    nodes: [...projects, ...contractSurfaceNodes].sort((left, right) => left.id.localeCompare(right.id)),
     edges: registry.edges,
     evidence: ['source:workspace-registry'],
   }
@@ -532,6 +565,11 @@ export function queryProjectGraphView(input: {
     currentProject,
     localProjectsById,
   })
+  const contractSurfaces = scopedContractSurfaces({
+    surfaces: readContractSurfaces(),
+    projectId: input.projectId,
+    domainIds: new Set(structuralDomains.map(domain => domain.id)),
+  })
 
   return {
     currentProject: {
@@ -594,7 +632,29 @@ export function queryProjectGraphView(input: {
       edgeId: edge.id,
       executionMode: 'local_request_reference' as const,
     }))),
+    contractSurfaces,
   }
+}
+
+export async function registerProjectGraphContractSurface(
+  input: RegisterContractSurfaceInput,
+): Promise<ContractSurface> {
+  const surface = await registerContractSurface(input)
+  const registry = readProjectGraphRegistry()
+  const summaries = [
+    ...(registry.contractSurfaces ?? []).filter(item => item.id !== surface.id),
+    contractSurfaceSummary(surface),
+  ].sort((left, right) => left.label.localeCompare(right.label))
+  writeJson(path.join(projectGraphRegistryDir(), 'registry.json'), {
+    ...registry,
+    version: 1,
+    updatedAt: surface.updatedAt,
+    domainAuthorities: registry.domainAuthorities ?? [],
+    domainResponsibilities: registry.domainResponsibilities ?? [],
+    contractSurfaces: summaries,
+    edges: registry.edges ?? [],
+  } satisfies ProjectGraphRegistry)
+  return surface
 }
 
 export async function assignProjectDomainAuthority(input: {
@@ -633,6 +693,7 @@ export async function assignProjectDomainAuthority(input: {
     projects: [...projectsById.values()].sort((left, right) => left.id.localeCompare(right.id)),
     domainAuthorities: authorities,
     domainResponsibilities: registry.domainResponsibilities ?? [],
+    contractSurfaces: registry.contractSurfaces ?? [],
     edges: registry.edges ?? [],
   } satisfies ProjectGraphRegistry)
   writeJson(path.join(projectGraphRegistryDir(), 'domain-authorities', `${slugify(input.domain.id)}.json`), authority)
@@ -680,6 +741,7 @@ export async function assignProjectDomainResponsibility(input: {
     projects: [...projectsById.values()].sort((left, right) => left.id.localeCompare(right.id)),
     domainAuthorities: registry.domainAuthorities ?? [],
     domainResponsibilities: responsibilities,
+    contractSurfaces: registry.contractSurfaces ?? [],
     edges: registry.edges ?? [],
   } satisfies ProjectGraphRegistry)
   writeJson(
@@ -1255,6 +1317,7 @@ function updateRegistryForEdge(edge: ProjectDependencyEdge, now: string): void {
     projects: [...projectsById.values()].sort((left, right) => left.id.localeCompare(right.id)),
     domainAuthorities: registry.domainAuthorities ?? [],
     domainResponsibilities: registry.domainResponsibilities ?? [],
+    contractSurfaces: registry.contractSurfaces ?? [],
     edges,
   } satisfies ProjectGraphRegistry)
 }
@@ -1387,6 +1450,63 @@ function projectGraphDomainResponsibilities(input: {
     }
   }
   return out
+}
+
+function contractSurfaceGraphNode(surface: ContractSurface): ProjectGraphNode {
+  return {
+    id: contractSurfaceNodeId(surface.id),
+    type: 'contract_surface',
+    label: surface.label,
+    lastSeenAt: surface.updatedAt,
+  }
+}
+
+function contractSurfaceSummary(surface: ContractSurface): ProjectGraphContractSurfaceSummary {
+  return {
+    id: surface.id,
+    nodeId: contractSurfaceNodeId(surface.id),
+    label: surface.label,
+    kind: surface.kind,
+    authority: surface.authority,
+    scope: surface.scope,
+    state: surface.stateMachine.state,
+    owningProjectId: surface.owningProject.id,
+    owningProjectLabel: surface.owningProject.label,
+    domainId: surface.domain?.id,
+    domainLabel: surface.domain?.label,
+    consumerCount: surface.consumerRefs.length,
+    invariantCount: surface.invariants.length,
+    decisionCount: surface.decisions.length,
+    updatedAt: surface.updatedAt,
+  }
+}
+
+function scopedContractSurfaces(input: {
+  surfaces: readonly ContractSurface[]
+  projectId: string
+  domainIds: ReadonlySet<string>
+}): ProjectGraphView['contractSurfaces'] {
+  const out: ProjectGraphView['contractSurfaces'] = []
+  for (const surface of input.surfaces) {
+    const scopedReason = contractSurfaceScopedReason(surface, input.projectId, input.domainIds)
+    if (!scopedReason) continue
+    out.push({
+      ...contractSurfaceSummary(surface),
+      scopedReason,
+    })
+  }
+  return out.sort((left, right) => left.label.localeCompare(right.label))
+}
+
+function contractSurfaceScopedReason(
+  surface: ContractSurface,
+  projectId: string,
+  domainIds: ReadonlySet<string>,
+): ProjectGraphView['contractSurfaces'][number]['scopedReason'] | undefined {
+  if (surface.owningProject.id === projectId) return 'owner'
+  if (surface.consumerRefs.some(consumer => consumer.id === projectId)) return 'consumer'
+  if (surface.domain?.id && domainIds.has(surface.domain.id)) return 'domain'
+  return undefined
 }
 
 function titleCase(value: string): string {

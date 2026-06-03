@@ -57,6 +57,26 @@ export const StructuredSpecCompletionBoundary = z.object({
 }).strict()
 export type StructuredSpecCompletionBoundary = z.infer<typeof StructuredSpecCompletionBoundary>
 
+export const StructuredSpecContractSurfaceDelta = z.object({
+  surfaceId: cleanedString('Contract surface delta surfaceId').optional(),
+  proposedSurfaceLabel: cleanedString('Contract surface delta proposedSurfaceLabel').optional(),
+  relation: z.enum(['consumes', 'extends', 'amends', 'deprecates', 'replaces']),
+  summary: cleanedString('Contract surface delta summary'),
+  invariantRefs: z.array(z.string()).optional(),
+  proposedInvariants: z.array(z.object({
+    id: cleanedString('Contract surface delta proposed invariant id').optional(),
+    label: cleanedString('Contract surface delta proposed invariant label'),
+    rule: cleanedString('Contract surface delta proposed invariant rule'),
+    reason: cleanedString('Contract surface delta proposed invariant reason'),
+    proofObligations: z.array(z.string()).optional(),
+  }).strict()).optional(),
+  breakingChange: z.boolean().optional(),
+  affectedConsumerRefs: z.array(z.string()).optional(),
+  proofObligations: cleanedStringList('Contract surface delta proofObligations'),
+  migrationNotes: cleanedString('Contract surface delta migrationNotes').optional(),
+}).strict()
+export type StructuredSpecContractSurfaceDelta = z.infer<typeof StructuredSpecContractSurfaceDelta>
+
 export const StructuredSpec = z.object({
   whatThisIs: cleanedString('whatThisIs'),
   problemContext: cleanedString('problemContext'),
@@ -64,6 +84,7 @@ export const StructuredSpec = z.object({
   nonGoals: cleanedStringList('nonGoals'),
   proposedDesign: cleanedString('proposedDesign'),
   keyDecisions: cleanedStringList('keyDecisions'),
+  contractSurfaceDeltas: z.array(StructuredSpecContractSurfaceDelta).optional(),
   acceptanceCriteria: z.array(StructuredAcceptanceCriterion)
     .refine((values) => values.length > 0, { message: 'acceptanceCriteria must include at least one item.' }),
   verification: cleanedStringList('verification'),
@@ -101,6 +122,24 @@ function renderAcceptanceCriteria(items: StructuredAcceptanceCriterion[]): strin
   })
 }
 
+function renderContractSurfaceDeltas(items: StructuredSpecContractSurfaceDelta[]): string[] {
+  return items.flatMap((item) => {
+    const surface = item.surfaceId ?? item.proposedSurfaceLabel ?? 'Unspecified surface'
+    const lines = [
+      `- Surface: ${surface}`,
+      `  Relation: ${item.relation}`,
+      `  Summary: ${item.summary}`,
+      `  Proof obligations: ${item.proofObligations.join('; ')}`,
+    ]
+    if (item.invariantRefs?.length) lines.push(`  Existing invariants: ${item.invariantRefs.join(', ')}`)
+    for (const proposed of item.proposedInvariants ?? []) {
+      lines.push(`  Proposed invariant: ${proposed.label} - ${proposed.rule}`)
+    }
+    if (item.migrationNotes) lines.push(`  Migration notes: ${item.migrationNotes}`)
+    return lines
+  })
+}
+
 function appendSection(parts: string[], title: string, body: string[]): void {
   if (body.length === 0) return
   parts.push(`## ${title}`, ...body, '')
@@ -118,6 +157,7 @@ export function renderStructuredSpecMarkdown(spec: StructuredSpec): string {
   if (spec.componentApiShape) appendSection(parts, 'Component / API Shape', [spec.componentApiShape])
   if (spec.dataModelSchemaChanges) appendSection(parts, 'Data Model / Schema Changes', [spec.dataModelSchemaChanges])
   appendSection(parts, 'Key Decisions', renderBulletList(spec.keyDecisions))
+  if (spec.contractSurfaceDeltas?.length) appendSection(parts, 'Contract Surface Deltas', renderContractSurfaceDeltas(spec.contractSurfaceDeltas))
   appendSection(parts, 'Acceptance Criteria', renderAcceptanceCriteria(spec.acceptanceCriteria))
   appendSection(parts, 'Verification', renderBulletList(spec.verification))
   if (spec.migrationRollout) appendSection(parts, 'Migration / Rollout', [spec.migrationRollout])

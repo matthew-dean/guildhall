@@ -16,6 +16,7 @@ import {
   importProjectDependencyRequestForProvider,
   queryProjectGraphView,
   readProjectGraphRegistry,
+  registerProjectGraphContractSurface,
   requestProjectDependencyRevision,
   reviseProjectDependencyPlan,
   writeLocalProjectGraphDraft,
@@ -854,5 +855,63 @@ describe('local project graph', () => {
       }),
     ]))
     expect(fs.existsSync(path.join(providerProject, '.guildhall', 'project-graph', 'incoming-requests', `${edge.id}.json`))).toBe(false)
+  })
+
+  it('projects contract-surface nodes and scoped surface facets through the project graph view', async () => {
+    bootstrapWorkspace(consumerProject, { name: 'Narrative Harness' })
+    bootstrapWorkspace(providerProject, { name: 'Guildhall' })
+    registerWorkspace({ id: 'narrative-harness', path: consumerProject, name: 'Narrative Harness', tags: [] })
+    registerWorkspace({ id: 'guildhall', path: providerProject, name: 'Guildhall', tags: [] })
+
+    await registerProjectGraphContractSurface({
+      id: 'guildhall.owner-input',
+      label: 'Owner input',
+      kind: 'domain_capability',
+      owningProject: { id: 'guildhall', label: 'Guildhall', path: providerProject },
+      domain: { id: 'domain:owner-input', label: 'Owner input' },
+      authority: 'shared',
+      scope: 'workspace',
+      sourceRefs: [{ kind: 'structured_spec', artifactId: 'bounded-chat', summary: 'Bounded chat owner-input spec.' }],
+      consumerRefs: [{ id: 'narrative-harness', label: 'Narrative Harness', path: consumerProject }],
+      invariants: [
+        {
+          id: 'one-decision-one-session',
+          label: 'One decision, one session',
+          rule: 'One owner decision links to one bounded-chat session.',
+          proofObligations: ['Owner-input store idempotency test.'],
+        },
+      ],
+      decisions: [],
+      createdBy: 'coordinator:guildhall',
+      now: '2026-06-02T12:00:00.000Z',
+    })
+
+    const graph = writeLocalProjectGraphDraft({ now: '2026-06-02T12:01:00.000Z' })
+    expect(graph.nodes).toContainEqual(expect.objectContaining({
+      id: 'contract-surface:guildhall.owner-input',
+      type: 'contract_surface',
+      label: 'Owner input',
+    }))
+
+    const view = queryProjectGraphView({
+      projectId: 'narrative-harness',
+      projectPath: consumerProject,
+      structuralDomains: [
+        { id: 'domain:owner-input', label: 'Owner input', kind: 'cross_cutting_domain' },
+      ],
+    })
+
+    expect(view.contractSurfaces).toContainEqual(expect.objectContaining({
+      id: 'guildhall.owner-input',
+      label: 'Owner input',
+      nodeId: 'contract-surface:guildhall.owner-input',
+      owningProjectId: 'guildhall',
+      authority: 'shared',
+      domainId: 'domain:owner-input',
+      consumerCount: 1,
+      invariantCount: 1,
+      state: 'proposed',
+      scopedReason: 'consumer',
+    }))
   })
 })

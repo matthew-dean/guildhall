@@ -86,6 +86,57 @@ export type {
   ExternalAgentLinksStore as ExternalAgentLinksStoreType,
 } from './external-agent-links.js'
 export {
+  EXTERNAL_AGENT_MEMORY_BRIDGE_FILE,
+  ExternalMemoryBridgeExchange,
+  ExternalMemoryBridgeProvider,
+  ExternalMemoryBridgeRecord,
+  ExternalMemoryBridgeReviewStatus,
+  ExternalMemoryBridgeStore,
+  exportExternalMemoryBridgeRecords,
+  externalMemoryBridgePath,
+  importExternalMemoryBridgeRecord,
+  listExternalMemoryBridgeRecords,
+  rejectExternalMemoryBridgeRecord,
+  reviewExternalMemoryBridgeRecord,
+} from './external-agent-memory-bridge.js'
+export type {
+  ExternalMemoryBridgeExchange as ExternalMemoryBridgeExchangeType,
+  ExternalMemoryBridgeProvider as ExternalMemoryBridgeProviderType,
+  ExternalMemoryBridgeRecord as ExternalMemoryBridgeRecordType,
+  ExternalMemoryBridgeRecordInput,
+  ExternalMemoryBridgeReviewStatus as ExternalMemoryBridgeReviewStatusType,
+  ExternalMemoryBridgeStore as ExternalMemoryBridgeStoreType,
+} from './external-agent-memory-bridge.js'
+export {
+  createExternalTaskMirror,
+  externalIssueIdentity,
+  externalTaskMirrorMachine,
+  refreshExternalTaskMirror,
+  updateExternalTaskMirrorLocalStatus,
+} from './external-task-authority.js'
+export type {
+  ExternalAuthorityPolicy,
+  ExternalIssuePersonRef,
+  ExternalIssueRef,
+  ExternalIssueRelationshipRef,
+  ExternalStatusCategory,
+  ExternalTaskConflictState,
+  ExternalTaskContextBudget,
+  ExternalTaskContextRoute,
+  ExternalTaskMirror,
+  ExternalTaskMirrorEvent,
+  ExternalTaskMirrorSourceSnapshot,
+  ExternalTaskMirrorStatus,
+  ExternalTaskMirrorTransitionReceipt,
+  ExternalTaskProvider,
+  ExternalTaskStaleState,
+  ExternalTaskSyncDirection,
+  ExternalTaskSyncState,
+  ExternalTaskSyncStatus,
+  ExternalWriteField,
+  ProposedExternalWrite,
+} from './external-task-authority.js'
+export {
   DESIGN_TASTE_FILE,
   DesignTaste,
   DesignTasteLayer,
@@ -465,6 +516,8 @@ export * from './request-intake.js'
 export * from './pressure-test-intake.js'
 export * from './commit-story.js'
 export * from './state-machine.js'
+export * from './contract-surface-machine.js'
+export * from './contract-surfaces.js'
 export * from './project-graph.js'
 export * from './structural-map.js'
 export * from './language-map.js'
