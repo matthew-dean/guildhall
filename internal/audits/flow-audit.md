@@ -6940,12 +6940,12 @@ local 0.7 release-candidate build at `http://localhost:7777/projects/narrative-h
   - [ ] Add the follow-on global scheduler that fairly spends the provider
     budget across all turned-on projects instead of requiring each project to
     be manually started and budgeted in isolation.
-  - [ ] Add and browser-proof the 0.10.0 OpenRouter provider setup path. The
+  - [ ] Add and browser-proof the 0.11.0 OpenRouter provider setup path. The
     implementation plan lives at
-    `internal/plans/2026-05-28-guildhall-0-10-openrouter-support.md` and should
+    `internal/plans/2026-05-28-guildhall-0-11-openrouter-support.md` and should
     treat OpenRouter as guided setup with model-lane presets, attribution,
     privacy/cost routing, and listing-readiness proof rather than a generic
-    OpenAI-compatible URL field.
+    OpenAI-compatible URL field. This is no longer a 0.10.0 release blocker.
   - [ ] Add the 0.10.0 structural/domain intelligence intake lane. The spec
     lives at
     `internal/specs/2026-05-29-guildhall-0-10-structural-domain-intelligence.md`

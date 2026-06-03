@@ -1,4 +1,4 @@
-# Guildhall 0.10.0 OpenRouter Support Implementation Plan
+# Guildhall 0.11.0 OpenRouter Support Implementation Plan
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
@@ -10,7 +10,7 @@
 
 ---
 
-## Why This Belongs In 0.10.0
+## Why This Belongs In 0.11.0
 
 Guildhall already has the beginnings of a strong provider story: normalized
 OpenAI-compatible request handling, role/model policy, cached-token telemetry,
@@ -18,7 +18,7 @@ structured-output request options, provider concurrency, and model bakeoff
 reports. OpenRouter should build on that work rather than become a one-off
 endpoint field.
 
-The 0.10.0 product goal is:
+The 0.11.0 product goal is:
 
 > A new user can paste an OpenRouter key, choose a Guildhall-recommended setup,
 > understand the cost/privacy/quality tradeoff, and run tool-heavy Guildhall
@@ -136,7 +136,7 @@ minimum Guildhall implementation should therefore prepare both:
   Guildhall.
 
 If OpenRouter has a separate human-reviewed agent harness page by the time
-0.10.0 ships, the listing packet should be enough to submit without rewriting
+0.11.0 ships, the listing packet should be enough to submit without rewriting
 the feature.
 
 ## Files And Responsibilities
@@ -531,7 +531,7 @@ the feature.
 
 ## Release Acceptance
 
-0.10.0 OpenRouter support is ready when:
+0.11.0 OpenRouter support is ready when:
 
 - `openrouter-api` is a named provider path, not just a custom URL example.
 - OpenRouter attribution headers are sent only for OpenRouter requests.

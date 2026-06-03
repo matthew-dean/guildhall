@@ -2,11 +2,11 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this tracker task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Ship Guildhall 0.10.0 as an owner-trustworthy operating-map release where focused bounded chats replace transcript drift, repo structure is understood before routing work, external planning systems can remain authoritative while Guildhall executes locally, outside-agent memory exchange becomes intentional, and hosted-provider setup is guided instead of generic.
+**Goal:** Ship Guildhall 0.10.0 as an owner-trustworthy operating-map release where focused bounded chats replace transcript drift, repo structure is understood before routing work, external planning systems can remain authoritative while Guildhall executes locally, and outside-agent memory exchange becomes intentional.
 
-**Architecture:** Land the owner-facing interaction contract first with bounded chat, add a small deterministic state-machine substrate before introducing new lifecycle-heavy flows, then give the runtime a stronger model of repo structure, local project graphs, and authority boundaries before layering external task sync, external memory exchange, and provider setup guidance on top. Keep each lane independently testable, but make bounded state, context shaping, explicit transitions, and auditable evidence the common substrate.
+**Architecture:** Land the owner-facing interaction contract first with bounded chat, add a small deterministic state-machine substrate before introducing new lifecycle-heavy flows, then give the runtime a stronger model of repo structure, local project graphs, and authority boundaries before layering external task sync and external memory exchange on top. Keep each lane independently testable, but make bounded state, context shaping, explicit transitions, and auditable evidence the common substrate.
 
-**Tech Stack:** TypeScript/Node, Svelte, Vitest, Playwright, Guildhall runtime/session stores, local host app + browser UI, MCP/server surfaces, external issue connectors, provider configuration flows, docs/versioning scripts.
+**Tech Stack:** TypeScript/Node, Svelte, Vitest, Playwright, Guildhall runtime/session stores, local host app + browser UI, MCP/server surfaces, external issue connectors, docs/versioning scripts.
 
 ---
 
@@ -17,7 +17,6 @@
 - `internal/specs/2026-05-29-guildhall-0-10-external-task-authority.md`
 - `internal/specs/2026-06-01-guildhall-0-10-state-machines-project-graph.md`
 - `internal/specs/2026-05-28-guildhall-0-10-agent-memory-bridge.md`
-- `internal/plans/2026-05-28-guildhall-0-10-openrouter-support.md`
 - `internal/audits/flow-audit.md`
 
 ## Release Thesis
@@ -32,9 +31,10 @@ useful durable record. That interaction model becomes the front door for intake,
 New request, and later owner-input recovery.
 
 Under that surface, 0.10.0 should deepen Guildhall's operating map. Repo
-structure, domain routing, Git authority, external planning authority, and
-memory scope should be explicit enough that future work is grounded in audited
-context instead of transcript archaeology or stale local assumptions.
+structure, domain routing, Git authority, external planning authority, contract
+surfaces, and memory scope should be explicit enough that future work is
+grounded in audited context instead of transcript archaeology or stale local
+assumptions.
 
 The release is ready only when:
 
@@ -53,10 +53,12 @@ The release is ready only when:
   execution truth without pretending Guildhall owns planning truth;
 - the agent memory bridge keeps external-agent memory exchange structured,
   bounded, and evidence-backed;
-- OpenRouter setup is guided as a named provider path with attribution,
-  routing, and recommendation evidence rather than a generic hosted URL field;
 - every changed owner-facing surface has matching docs and browser proof before
   the release is called ready.
+
+OpenRouter guided provider setup has been moved to 0.11.0. Keep the 0.10
+release boundary focused on operating-map behavior, authority boundaries,
+owner-input coherence, and contract/memory structure.
 
 ## Priority Order
 
@@ -65,7 +67,7 @@ The release is ready only when:
 3. Structural/domain intelligence and auditable context shaping.
 4. External task authority and local execution mirrors.
 5. External agent memory bridge.
-6. OpenRouter guided provider setup and listing readiness.
+6. Contract surfaces and surface review packets.
 7. Cross-lane docs, screenshots, and release proof.
 
 ## Cross-Cutting Rules
@@ -558,16 +560,36 @@ chat into ambient truth.
 - [ ] Expose memory exchange through explicit import/export or link flows.
 - [ ] Keep external-agent memory reviewable before it shapes local execution.
 
-## Milestone 6: OpenRouter Guided Setup
+## Milestone 6: Contract Surfaces And Surface Review Packets
+
+**Purpose:** Let specs for one domain or capability update and be checked
+against a central contract surface so sibling specs do not drift into
+inconsistent prop names, API shapes, composition rules, provider boundaries, or
+design-system vocabulary.
+
+**Primary source:** `internal/specs/2026-06-02-guildhall-contract-surfaces-project-graph.md`
+
+- [ ] Add contract-surface runtime records and state-machine receipts.
+- [ ] Represent contract surfaces as project-graph nodes/facets with evidence,
+  owning project authority, invariants, decisions, and proof obligations.
+- [ ] Generate surface review packets during spec approval from sibling specs,
+  known decisions, changed rules, and unresolved obligations.
+- [ ] Let corpus refresh propose contract-surface updates from repeated
+  cross-spec patterns without applying them automatically.
+- [ ] Project contract surfaces into Structure and feed relevant packets into
+  worker/reviewer context.
+
+## Deferred To 0.11: OpenRouter Guided Setup
 
 **Purpose:** Offer OpenRouter as a trustworthy hosted-provider setup path with
 clear routing, attribution, and recommendation evidence.
 
-**Primary source:** `internal/plans/2026-05-28-guildhall-0-10-openrouter-support.md`
+**Primary source:** `internal/plans/2026-05-28-guildhall-0-11-openrouter-support.md`
 
-- [ ] Add named OpenRouter provider profile and request extras.
-- [ ] Add role-aware presets and recommendation evidence thresholds.
-- [ ] Add guided provider UI, browser proof, and listing-readiness packet.
+- [ ] Add named OpenRouter provider profile and request extras in 0.11.0.
+- [ ] Add role-aware presets and recommendation evidence thresholds in 0.11.0.
+- [ ] Add guided provider UI, browser proof, and listing-readiness packet in
+  0.11.0.
 
 ## Milestone 7: Docs, Screenshots, And Release Proof
 
