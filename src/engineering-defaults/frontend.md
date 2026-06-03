@@ -6,10 +6,24 @@ For Guildhall product surfaces, pair these baseline rules with
 user-facing hierarchy for headings, chips, counts, card anatomy, and guided
 journey screens.
 
-## Type scale
-- Define `--fs-0` through `--fs-5` on `:root`. Use these tokens everywhere.
-- No inline `style="font-size: ..."`. No hardcoded `px`/`rem` font sizes in components.
-- Define one body line-height (`--lh-body`, ~1.5) and one tighter heading line-height (`--lh-tight`, ~1.2).
+## Typography roles
+- Use the shared text-role classes and `--gh-type-*` tokens from
+  `packages/ui/src/text-role-definitions.js` and `src/web/tokens.css`.
+- Do not define new `--fs-*` or `--lh-*` scales. Do not hardcode `px`/`rem`
+  font sizes, raw line heights, or numeric font weights in product surfaces.
+- Choose typography by semantic role before CSS: `display-title`, `page-title`,
+  `section-title`, `panel-title`, `body`, `body-strong`, `row-title`,
+  `row-title-current`, `meta`, `caption`, `eyebrow`, `history`, `action`,
+  `state`, or `code`.
+- `row-title` is for ordinary scan targets. `row-title-current` is for selected,
+  current, or focused rows. Do not make every row title primary just because it
+  is clickable.
+- Weights have jobs: body for prose, medium for structured labels and ordinary
+  row titles, strong for selected/current titles and controls, and emphasis only
+  for rare urgent states or important numeric/status callouts.
+- If a surface needs a new text role, token, or component variant, record the
+  token or variant budget first: distinct communication need, reuse boundary,
+  and what existing role or variant it replaces.
 - Use the product system UI font stack from `src/web/tokens.css`. Do not
   introduce `ui-rounded` or rounded display fonts; they have caused visually
   off-center CSS ellipses in compact Guildhall controls.
@@ -30,9 +44,9 @@ journey screens.
 - No raw hex/rgb in components. Add a token if the palette lacks it.
 - Never signal state by color alone. Pair with icon, label, or shape.
 - Do not make every primary line `--text-strong` or heavy bold. Reserve the
-  brightest text for active states, titles, selected values, and important
-  confirmations; use `--text-readable` / `--text-soft` for explanatory body
-  copy and nested surfaces.
+  brightest text for page/section titles, selected/current values, focused rows,
+  primary actions, and important confirmations; use body/secondary/muted roles
+  for ordinary rows, explanatory copy, helper labels, and nested surfaces.
 - Glass is a surface treatment, not a layout change. Use `--glass-bg`,
   `--glass-border`, and `--glass-reflect-*` over existing radii, padding, and
   control sizes instead of inventing larger "glass" cards.

@@ -648,8 +648,8 @@
   .detail-copy {
     margin: 0;
     color: var(--text-muted);
-    font-size: var(--fs-2);
-    line-height: var(--lh-body);
+    font-size: var(--gh-type-size-body);
+    line-height: var(--gh-type-line-height-body);
   }
   .recovery-meta {
     display: flex;
@@ -659,8 +659,8 @@
   .more > summary {
     cursor: pointer;
     color: var(--text-muted);
-    font-size: var(--fs-1);
-    font-weight: 700;
+    font-size: var(--gh-type-size-meta);
+    font-weight: var(--gh-type-weight-strong);
     letter-spacing: 0.05em;
     list-style: none;
     text-transform: uppercase;
@@ -699,14 +699,14 @@
   }
   .external-step-copy strong {
     color: var(--text);
-    font-size: var(--fs-2);
-    line-height: var(--lh-tight);
+    font-size: var(--gh-type-size-body);
+    line-height: var(--gh-type-line-height-tight);
   }
   .external-step-copy span,
   .external-step-owner {
     color: var(--text-muted);
-    font-size: var(--fs-1);
-    line-height: var(--lh-body);
+    font-size: var(--gh-type-size-meta);
+    line-height: var(--gh-type-line-height-body);
   }
   .external-step-owner {
     white-space: nowrap;
@@ -714,10 +714,10 @@
   .section-label {
     margin: 0;
     color: var(--text-muted);
-    font-size: var(--fs-0);
-    font-weight: 800;
+    font-size: var(--gh-type-size-caption);
+    font-weight: var(--gh-type-weight-strong);
     letter-spacing: 0.05em;
-    line-height: 1;
+    line-height: var(--gh-type-line-height-control);
     text-transform: uppercase;
   }
   .live-activity {
@@ -734,7 +734,7 @@
     justify-content: space-between;
     gap: var(--s-3);
     color: var(--text-muted);
-    font-size: var(--fs-1);
+    font-size: var(--gh-type-size-meta);
   }
   .live-checklist-steps {
     display: grid;
@@ -759,18 +759,18 @@
     min-width: 0;
   }
   .live-step-copy strong {
-    font-size: var(--fs-2);
-    line-height: var(--lh-tight);
+    font-size: var(--gh-type-size-body);
+    line-height: var(--gh-type-line-height-tight);
   }
   .live-step-copy span,
   .live-step-state {
     color: var(--text-muted);
-    font-size: var(--fs-1);
-    line-height: var(--lh-body);
+    font-size: var(--gh-type-size-meta);
+    line-height: var(--gh-type-line-height-body);
   }
   .error {
     margin: 0;
     color: var(--danger);
-    font-size: var(--fs-1);
+    font-size: var(--gh-type-size-meta);
   }
 </style>

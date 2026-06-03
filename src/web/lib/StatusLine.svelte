@@ -48,8 +48,8 @@
     align-items: center;
     gap: var(--s-2);
     color: var(--text-muted);
-    font-size: var(--fs-1);
-    line-height: var(--lh-tight);
+    font-size: var(--gh-type-size-meta);
+    line-height: var(--gh-type-line-height-tight);
     min-height: var(--control-h);
   }
   .status-line.loud {
@@ -72,7 +72,7 @@
   }
   .status-detail {
     color: inherit;
-    line-height: var(--lh-body);
+    line-height: var(--gh-type-line-height-body);
     overflow-wrap: anywhere;
   }
   .status-time {

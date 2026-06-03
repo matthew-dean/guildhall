@@ -1,3 +1,5 @@
+import textRoleDefinitions from './text-role-definitions.js'
+
 export type ComponentTone = 'neutral' | 'info' | 'ok' | 'warn' | 'danger' | 'accent'
 export type ComponentDensity = 'dense' | 'compact' | 'comfortable'
 export type ComponentPadding = 'compact' | 'default' | 'roomy'
@@ -6,14 +8,20 @@ export type ComponentEmphasis = 'quiet' | 'default' | 'strong'
 export type ComponentSize = 'sm' | 'md' | 'icon'
 
 export type TextRole =
+  | 'display-title'
   | 'page-title'
   | 'section-title'
   | 'panel-title'
   | 'body'
   | 'body-strong'
+  | 'row-title'
+  | 'row-title-current'
   | 'meta'
   | 'caption'
   | 'eyebrow'
+  | 'history'
+  | 'action'
+  | 'state'
   | 'code'
 
 export type SpacingRole =
@@ -31,6 +39,9 @@ export interface RoleTokenSet {
   readonly size?: string
   readonly weight?: string
   readonly lineHeight?: string
+  readonly color?: string
+  readonly letterSpacing?: string
+  readonly textTransform?: string
   readonly space?: string
   readonly radius?: string
 }
@@ -65,53 +76,7 @@ export const deprecatedVariantAliases = {
   default: 'neutral',
 } as const
 
-export const textRoleTokens: Record<TextRole, RoleTokenSet> = {
-  'page-title': {
-    size: '--gh-type-size-page-title',
-    weight: '--gh-type-weight-strong',
-    lineHeight: '--gh-type-line-height-tight',
-  },
-  'section-title': {
-    size: '--gh-type-size-section-title',
-    weight: '--gh-type-weight-strong',
-    lineHeight: '--gh-type-line-height-tight',
-  },
-  'panel-title': {
-    size: '--gh-type-size-panel-title',
-    weight: '--gh-type-weight-strong',
-    lineHeight: '--gh-type-line-height-tight',
-  },
-  body: {
-    size: '--gh-type-size-body',
-    weight: '--gh-type-weight-body',
-    lineHeight: '--gh-type-line-height-body',
-  },
-  'body-strong': {
-    size: '--gh-type-size-body',
-    weight: '--gh-type-weight-strong',
-    lineHeight: '--gh-type-line-height-body',
-  },
-  meta: {
-    size: '--gh-type-size-meta',
-    weight: '--gh-type-weight-body',
-    lineHeight: '--gh-type-line-height-body',
-  },
-  caption: {
-    size: '--gh-type-size-caption',
-    weight: '--gh-type-weight-body',
-    lineHeight: '--gh-type-line-height-body',
-  },
-  eyebrow: {
-    size: '--gh-type-size-eyebrow',
-    weight: '--gh-type-weight-strong',
-    lineHeight: '--gh-type-line-height-tight',
-  },
-  code: {
-    size: '--gh-type-size-code',
-    weight: '--gh-type-weight-body',
-    lineHeight: '--gh-type-line-height-body',
-  },
-}
+export const textRoleTokens = textRoleDefinitions as Record<TextRole, RoleTokenSet>
 
 export const spacingRoleTokens: Record<SpacingRole, RoleTokenSet> = {
   'cluster-tight': { space: '--gh-space-2' },

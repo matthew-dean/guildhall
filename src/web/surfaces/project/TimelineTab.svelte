@@ -148,18 +148,18 @@
 <style>
   .muted {
     color: var(--text-muted);
-    font-size: var(--fs-2);
+    font-size: var(--gh-type-size-body);
   }
   .compact {
     margin: 0 0 var(--s-3);
-    font-size: var(--fs-1);
+    font-size: var(--gh-type-size-meta);
   }
   .feed {
     display: flex;
     flex-direction: column;
     gap: var(--s-1);
     font-family: 'SF Mono', monospace;
-    font-size: var(--fs-1);
+    font-size: var(--gh-type-size-meta);
     max-height: 70vh;
     overflow-y: auto;
   }
@@ -170,7 +170,7 @@
   .raw-trace {
     margin: 0 0 var(--s-3);
     color: var(--text-muted);
-    font-size: var(--fs-1);
+    font-size: var(--gh-type-size-meta);
   }
   .raw-trace summary {
     cursor: pointer;
@@ -184,8 +184,8 @@
     border-radius: var(--r-2);
     background: color-mix(in oklab, var(--warn) 10%, transparent);
     color: var(--text);
-    font-size: var(--fs-1);
-    line-height: var(--lh-body);
+    font-size: var(--gh-type-size-meta);
+    line-height: var(--gh-type-line-height-body);
   }
   .recovery-summary span {
     color: var(--text-muted);
@@ -193,7 +193,7 @@
   .ev {
     display: flex;
     gap: var(--s-2);
-    line-height: var(--lh-body);
+    line-height: var(--gh-type-line-height-body);
     color: var(--text);
   }
   .ev .ts {

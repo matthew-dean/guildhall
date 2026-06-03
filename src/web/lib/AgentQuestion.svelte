@@ -419,15 +419,15 @@
     gap: var(--s-2);
   }
   .meta {
-    font-size: var(--fs-0);
-    font-weight: 700;
+    font-size: var(--gh-type-size-caption);
+    font-weight: var(--gh-type-weight-strong);
     color: var(--text-muted);
     text-transform: uppercase;
     letter-spacing: 0.04em;
   }
   .question-kind {
-    font-size: var(--fs-0);
-    font-weight: 600;
+    font-size: var(--gh-type-size-caption);
+    font-weight: var(--gh-type-weight-strong);
     color: var(--text-muted);
     text-transform: uppercase;
     letter-spacing: 0.04em;
@@ -435,9 +435,9 @@
   }
   .prompt {
     margin: 0;
-    font-size: var(--fs-1);
-    font-weight: 400;
-    line-height: 1.42;
+    font-size: var(--gh-type-size-meta);
+    font-weight: var(--gh-type-weight-body);
+    line-height: var(--gh-type-line-height-body);
     color: var(--text-readable);
   }
   .prompt-disclosure {
@@ -469,8 +469,8 @@
   }
   .prompt-more {
     color: var(--accent);
-    font-size: var(--fs-0);
-    font-weight: 750;
+    font-size: var(--gh-type-size-caption);
+    font-weight: var(--gh-type-weight-strong);
     text-transform: uppercase;
     letter-spacing: 0.04em;
     white-space: nowrap;
@@ -486,15 +486,15 @@
   }
   .question-subject {
     color: var(--text-muted);
-    font-size: var(--fs-0);
-    font-weight: 750;
+    font-size: var(--gh-type-size-caption);
+    font-weight: var(--gh-type-weight-strong);
     letter-spacing: 0.04em;
     text-transform: uppercase;
   }
   .question-description {
     color: var(--text-soft);
-    font-size: var(--fs-0);
-    line-height: var(--lh-body);
+    font-size: var(--gh-type-size-caption);
+    line-height: var(--gh-type-line-height-body);
   }
   .question-description :global(.md),
   .question-callout-text :global(.md) {
@@ -512,16 +512,16 @@
   }
   .question-callout-label {
     color: var(--accent);
-    font-size: var(--fs-0);
-    font-weight: 800;
+    font-size: var(--gh-type-size-caption);
+    font-weight: var(--gh-type-weight-strong);
     letter-spacing: 0.04em;
     text-transform: uppercase;
   }
   .question-callout-text {
     color: var(--text-strong);
-    font-size: var(--fs-1);
-    font-weight: 650;
-    line-height: 1.35;
+    font-size: var(--gh-type-size-meta);
+    font-weight: var(--gh-type-weight-strong);
+    line-height: var(--gh-type-line-height-body);
   }
   .evidence-list {
     display: grid;
@@ -529,8 +529,8 @@
     margin: var(--s-1) 0 0;
     padding-inline-start: var(--s-4);
     color: var(--text-readable);
-    font-size: var(--fs-1);
-    line-height: var(--lh-body);
+    font-size: var(--gh-type-size-meta);
+    line-height: var(--gh-type-line-height-body);
   }
   .evidence-list li {
     overflow-wrap: anywhere;
@@ -554,8 +554,8 @@
     border-radius: var(--r-2);
     padding: var(--s-2);
     font: inherit;
-    font-size: var(--fs-1);
-    font-weight: 400;
+    font-size: var(--gh-type-size-meta);
+    font-weight: var(--gh-type-weight-body);
     cursor: pointer;
     display: grid;
     grid-template-columns: 18px minmax(0, 1fr);
@@ -589,9 +589,9 @@
     align-items: center;
     justify-content: center;
     color: var(--accent);
-    font-size: var(--fs-0);
-    font-weight: 800;
-    line-height: 1;
+    font-size: var(--gh-type-size-caption);
+    font-weight: var(--gh-type-weight-strong);
+    line-height: var(--gh-type-line-height-control);
     margin-top: 0;
     position: relative;
   }
@@ -615,9 +615,9 @@
     height: auto;
     border-radius: 0;
     background: none;
-    font-size: 12px;
-    line-height: 1;
-    font-weight: 800;
+    font-size: var(--gh-type-size-meta);
+    line-height: var(--gh-type-line-height-control);
+    font-weight: var(--gh-type-weight-strong);
   }
   .choice-copy {
     min-width: 0;
@@ -626,15 +626,15 @@
     gap: 2px;
   }
   .choice-title {
-    font-weight: 550;
-    line-height: 1.3;
+    font-weight: var(--gh-type-weight-medium);
+    line-height: var(--gh-type-line-height-body);
     text-transform: none;
     overflow-wrap: anywhere;
   }
   .choice-title :global(strong),
   .choice-detail :global(strong),
   .prompt :global(strong) {
-    font-weight: 700;
+    font-weight: var(--gh-type-weight-strong);
   }
   .choice-title :global(.md),
   .choice-detail :global(.md),
@@ -645,8 +645,8 @@
   }
   .choice-detail {
     color: var(--text-soft);
-    font-size: var(--fs-0);
-    line-height: var(--lh-body);
+    font-size: var(--gh-type-size-caption);
+    line-height: var(--gh-type-line-height-body);
     overflow-wrap: anywhere;
   }
   .choice:disabled { opacity: 0.5; cursor: default; }
@@ -683,9 +683,9 @@
     justify-content: center;
     background: color-mix(in srgb, var(--accent) 16%, var(--bg));
     color: var(--accent);
-    font-size: 12px;
-    font-weight: 800;
-    line-height: 1;
+    font-size: var(--gh-type-size-meta);
+    font-weight: var(--gh-type-weight-strong);
+    line-height: var(--gh-type-line-height-control);
     margin-top: 1px;
   }
 </style>

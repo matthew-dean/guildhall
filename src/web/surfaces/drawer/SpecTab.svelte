@@ -501,34 +501,34 @@
 
 <style>
   p {
-    font-size: var(--fs-2);
-    line-height: var(--lh-body);
+    font-size: var(--gh-type-size-body);
+    line-height: var(--gh-type-line-height-body);
   }
   .muted {
     color: var(--text-muted);
   }
   .hint {
-    font-size: var(--fs-1);
+    font-size: var(--gh-type-size-meta);
     color: var(--text-muted);
   }
   .bullet {
     padding-left: var(--s-4);
-    font-size: var(--fs-2);
-    line-height: var(--lh-body);
+    font-size: var(--gh-type-size-body);
+    line-height: var(--gh-type-line-height-body);
   }
   .bullet li {
     margin: var(--s-1) 0;
   }
   .lede {
     color: var(--text-muted);
-    font-size: var(--fs-1);
-    line-height: var(--lh-body);
+    font-size: var(--gh-type-size-meta);
+    line-height: var(--gh-type-line-height-body);
     margin: 0;
   }
   .checkpoint-line {
     color: var(--text-muted);
-    font-size: var(--fs-1);
-    line-height: var(--lh-body);
+    font-size: var(--gh-type-size-meta);
+    line-height: var(--gh-type-line-height-body);
     margin: 0;
   }
   .review-plan-summary {
@@ -544,13 +544,13 @@
   }
   .review-plan-summary strong {
     color: var(--text);
-    font-size: var(--fs-3);
-    line-height: var(--lh-tight);
+    font-size: var(--gh-type-size-panel-title);
+    line-height: var(--gh-type-line-height-tight);
   }
   .review-plan-summary span {
     color: var(--text-muted);
-    font-size: var(--fs-1);
-    line-height: var(--lh-body);
+    font-size: var(--gh-type-size-meta);
+    line-height: var(--gh-type-line-height-body);
   }
   .review-plan-lanes {
     display: flex;
@@ -560,8 +560,8 @@
   .review-plan-more > summary {
     cursor: pointer;
     color: var(--text-muted);
-    font-size: var(--fs-1);
-    font-weight: 700;
+    font-size: var(--gh-type-size-meta);
+    font-weight: var(--gh-type-weight-strong);
     letter-spacing: 0.05em;
     list-style: none;
     text-transform: uppercase;
@@ -581,8 +581,8 @@
     margin: 0;
     padding-left: var(--s-4);
     color: var(--text-muted);
-    font-size: var(--fs-1);
-    line-height: var(--lh-body);
+    font-size: var(--gh-type-size-meta);
+    line-height: var(--gh-type-line-height-body);
   }
   .review-plan-list span {
     color: var(--text-soft);
@@ -600,8 +600,8 @@
   }
   .review-score-name {
     color: var(--text);
-    font-size: var(--fs-1);
-    line-height: var(--lh-body);
+    font-size: var(--gh-type-size-meta);
+    line-height: var(--gh-type-line-height-body);
   }
   .review-score-chips {
     display: flex;
@@ -610,8 +610,8 @@
   }
   .explainer {
     color: var(--text);
-    font-size: var(--fs-1);
-    line-height: var(--lh-body);
+    font-size: var(--gh-type-size-meta);
+    line-height: var(--gh-type-line-height-body);
     margin: 0 0 var(--s-1) 0;
     padding: var(--s-2) var(--s-3);
     background: var(--bg-raised-2);

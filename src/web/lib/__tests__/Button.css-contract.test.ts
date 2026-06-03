@@ -44,12 +44,14 @@ describe('Chip visual contract', () => {
     expect(chipSource).toContain('border-color: var(--chip-agent-attention-border)')
   })
 
-  it('uses translucent white text on automation chips so their fills participate in the color', () => {
+  it('keeps automation chips quieter than action buttons', () => {
     const agentBlock = chipSource.match(/\.tone-agent\s*\{([\s\S]*?)\n\s*\}/)?.[1] ?? ''
     const agentAttentionBlock = chipSource.match(/\.tone-agent-attention\s*\{([\s\S]*?)\n\s*\}/)?.[1] ?? ''
 
-    expect(agentBlock).toContain('color: var(--chip-status-on-dark-fg)')
-    expect(agentAttentionBlock).toContain('color: var(--chip-status-on-dark-fg)')
+    expect(agentBlock).toContain('color: var(--chip-agent-fg)')
+    expect(agentAttentionBlock).toContain('color: var(--chip-agent-attention-fg)')
+    expect(agentBlock).not.toContain('var(--chip-status-on-dark-fg)')
+    expect(agentAttentionBlock).not.toContain('var(--chip-status-on-dark-fg)')
   })
 
   it('owns compact chip sizing in the shared primitive instead of surface overrides', () => {

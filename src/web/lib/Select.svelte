@@ -55,8 +55,8 @@
     border-radius: var(--r-1);
     padding: var(--control-pad-y) var(--control-pad-x);
     font-family: inherit;
-    font-size: var(--fs-2);
-    line-height: var(--lh-tight);
+    font-size: var(--gh-type-size-body);
+    line-height: var(--gh-type-line-height-tight);
     min-height: var(--control-h);
     cursor: pointer;
   }

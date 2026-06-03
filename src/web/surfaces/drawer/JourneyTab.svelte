@@ -516,8 +516,8 @@
   .intro,
   p {
     color: var(--text-muted);
-    font-size: var(--fs-2);
-    line-height: var(--lh-body);
+    font-size: var(--gh-type-size-body);
+    line-height: var(--gh-type-line-height-body);
   }
   .journey {
     list-style: none;
@@ -541,8 +541,8 @@
     place-items: center;
     background: var(--accent-soft);
     color: var(--accent);
-    font-weight: 800;
-    font-size: var(--fs-1);
+    font-weight: var(--gh-type-weight-strong);
+    font-size: var(--gh-type-size-meta);
   }
   .step-body {
     background: var(--bg);
@@ -561,12 +561,12 @@
   }
   header strong {
     color: var(--text);
-    font-size: var(--fs-2);
+    font-size: var(--gh-type-size-body);
   }
   time,
   .muted {
     color: var(--text-muted);
-    font-size: var(--fs-0);
+    font-size: var(--gh-type-size-caption);
   }
   .chips {
     display: flex;
@@ -581,7 +581,7 @@
   h4 {
     margin: 0;
     color: var(--text);
-    font-size: var(--fs-0);
+    font-size: var(--gh-type-size-caption);
     text-transform: uppercase;
     letter-spacing: 0.05em;
   }
@@ -589,8 +589,8 @@
     margin: 0;
     padding-left: 1.1rem;
     color: var(--text);
-    font-size: var(--fs-1);
-    line-height: var(--lh-body);
+    font-size: var(--gh-type-size-meta);
+    line-height: var(--gh-type-line-height-body);
     overflow-wrap: anywhere;
   }
   .proof-record {
@@ -601,8 +601,8 @@
     margin: 0;
     padding-left: 1.1rem;
     color: var(--text);
-    font-size: var(--fs-1);
-    line-height: var(--lh-body);
+    font-size: var(--gh-type-size-meta);
+    line-height: var(--gh-type-line-height-body);
     display: flex;
     flex-direction: column;
     gap: var(--s-1);
@@ -618,7 +618,7 @@
   .proof-list small {
     color: var(--text-muted);
     font-family: var(--font-mono);
-    font-size: var(--fs-0);
+    font-size: var(--gh-type-size-caption);
   }
   .proof-list a {
     color: var(--accent);
@@ -653,7 +653,7 @@
   }
   .file-preview header strong,
   .file-preview header span {
-    font-size: var(--fs-0);
+    font-size: var(--gh-type-size-caption);
   }
   .file-preview header span {
     color: var(--text-muted);
@@ -666,8 +666,8 @@
     padding: var(--s-3);
     color: var(--text);
     background: var(--bg);
-    font-size: var(--fs-0);
-    line-height: 1.55;
+    font-size: var(--gh-type-size-caption);
+    line-height: var(--gh-type-line-height-body);
   }
   .file-preview code {
     font-family: var(--font-mono);
@@ -722,14 +722,14 @@
   }
   .error {
     color: var(--danger);
-    font-size: var(--fs-0);
+    font-size: var(--gh-type-size-caption);
   }
   .mini-record {
     display: flex;
     align-items: center;
     gap: var(--s-2);
     color: var(--text-muted);
-    font-size: var(--fs-1);
+    font-size: var(--gh-type-size-meta);
   }
   @media (max-width: 760px) {
     .files-modal {

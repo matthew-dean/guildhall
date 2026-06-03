@@ -43,18 +43,18 @@
     grid-template-columns: max-content 1fr;
     gap: var(--s-1) var(--s-3);
   }
-  .s-sm { font-size: var(--fs-1); }
-  .s-md { font-size: var(--fs-2); }
+  .s-sm { font-size: var(--gh-type-size-meta); }
+  .s-md { font-size: var(--gh-type-size-body); }
   dt {
     color: var(--text-muted);
     text-transform: uppercase;
     letter-spacing: 0.05em;
-    font-weight: 700;
-    font-size: var(--fs-1);
+    font-weight: var(--gh-type-weight-strong);
+    font-size: var(--gh-type-size-meta);
   }
   dd {
     color: var(--text);
-    line-height: var(--lh-body);
+    line-height: var(--gh-type-line-height-body);
     margin: 0;
   }
 </style>

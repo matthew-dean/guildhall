@@ -639,20 +639,20 @@
   .summary-label,
   .muted {
     color: var(--text-muted);
-    font-size: var(--fs-2);
-    line-height: var(--lh-body);
+    font-size: var(--gh-type-size-body);
+    line-height: var(--gh-type-line-height-body);
   }
 
   .summary-stat strong {
-    font-size: var(--fs-4);
-    line-height: var(--lh-tight);
+    font-size: var(--gh-type-size-section-title);
+    line-height: var(--gh-type-line-height-tight);
   }
 
   .dirty-detail {
     margin: var(--gh-space-3) 0 0;
     color: var(--text-muted);
-    font-size: var(--fs-2);
-    line-height: var(--lh-body);
+    font-size: var(--gh-type-size-body);
+    line-height: var(--gh-type-line-height-body);
   }
 
   .git-story-detail {
@@ -660,7 +660,7 @@
     gap: var(--gh-space-2);
     margin: var(--gh-space-3) 0 0;
     color: var(--text);
-    font-size: var(--fs-2);
+    font-size: var(--gh-type-size-body);
   }
 
   .git-story-detail ul {
@@ -724,15 +724,15 @@
 
   .crit-label {
     color: var(--text);
-    font-size: var(--fs-3);
-    font-weight: 600;
-    line-height: var(--lh-tight);
+    font-size: var(--gh-type-size-panel-title);
+    font-weight: var(--gh-type-weight-strong);
+    line-height: var(--gh-type-line-height-tight);
   }
 
   .crit-detail {
     color: var(--text-muted);
-    font-size: var(--fs-2);
-    line-height: var(--lh-body);
+    font-size: var(--gh-type-size-body);
+    line-height: var(--gh-type-line-height-body);
   }
 
   .crit-items {
@@ -777,7 +777,7 @@
   .tally {
     width: 100%;
     border-collapse: collapse;
-    font-size: var(--fs-2);
+    font-size: var(--gh-type-size-body);
   }
 
   .tally td {

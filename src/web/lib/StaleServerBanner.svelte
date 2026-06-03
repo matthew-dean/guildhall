@@ -98,8 +98,8 @@
   .hint {
     min-width: 0;
     color: inherit;
-    font-size: var(--fs-1);
-    line-height: var(--lh-tight);
+    font-size: var(--gh-type-size-meta);
+    line-height: var(--gh-type-line-height-tight);
   }
   .hint[open] {
     padding-top: 2px;

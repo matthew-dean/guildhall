@@ -2,16 +2,37 @@ import { mkdirSync, readFileSync, writeFileSync, copyFileSync, existsSync, readd
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import tokenDefinitions from '../src/token-definitions.js'
+import textRoleDefinitions, { textRoleOrder } from '../src/text-role-definitions.js'
 
 const __dirname = dirname(fileURLToPath(import.meta.url))
 const packageRoot = resolve(__dirname, '..')
 const srcStylesPath = resolve(packageRoot, 'src/styles.css')
 const srcTokenDefinitionsPath = resolve(packageRoot, 'src/token-definitions.js')
+const srcTextRoleDefinitionsPath = resolve(packageRoot, 'src/text-role-definitions.js')
 const srcComponentsDir = resolve(packageRoot, 'src/components')
 const distDir = resolve(packageRoot, 'dist')
 const distStylesPath = resolve(distDir, 'styles.css')
 const distTokenDefinitionsPath = resolve(distDir, 'token-definitions.js')
+const distTextRoleDefinitionsPath = resolve(distDir, 'text-role-definitions.js')
 const distComponentsDir = resolve(distDir, 'components')
+
+function renderTextRoleClasses() {
+  const blocks = []
+  for (const role of textRoleOrder) {
+    const tokens = textRoleDefinitions[role]
+    blocks.push([
+      `.gh-text-${role} {`,
+      `  font-size: var(${tokens.size});`,
+      `  font-weight: var(${tokens.weight});`,
+      `  line-height: var(${tokens.lineHeight});`,
+      `  color: var(${tokens.color});`,
+      tokens.letterSpacing ? `  letter-spacing: ${tokens.letterSpacing};` : '  letter-spacing: 0;',
+      tokens.textTransform ? `  text-transform: ${tokens.textTransform};` : null,
+      '}',
+    ].filter(Boolean).join('\n'))
+  }
+  return blocks.join('\n\n')
+}
 
 function renderStyles(tokens) {
   const darkDeclarations = []
@@ -44,6 +65,8 @@ function renderStyles(tokens) {
     '.gh-theme-dark {',
     '  color-scheme: dark;',
     '}',
+    '',
+    renderTextRoleClasses(),
     '',
   ].join('\n')
 }
@@ -81,4 +104,5 @@ writeIfChanged(srcStylesPath, css)
 mkdirSync(distDir, { recursive: true })
 writeIfChanged(distStylesPath, css)
 copyFileSync(srcTokenDefinitionsPath, distTokenDefinitionsPath)
+copyFileSync(srcTextRoleDefinitionsPath, distTextRoleDefinitionsPath)
 copySvelteComponents(srcComponentsDir, distComponentsDir)

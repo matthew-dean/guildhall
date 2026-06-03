@@ -76,8 +76,8 @@
   }
   .gh-page-head-title {
     margin: 0;
-    font-size: var(--fs-3);
-    font-weight: 600;
+    font-size: var(--gh-type-size-panel-title);
+    font-weight: var(--gh-type-weight-strong);
     color: var(--text);
     justify-self: center;
     text-align: center;
@@ -96,7 +96,7 @@
     padding: 6px var(--s-2);
     border-radius: var(--r-1);
     font: inherit;
-    font-size: var(--fs-1);
+    font-size: var(--gh-type-size-meta);
   }
   .gh-page-head-btn:hover {
     color: var(--text);

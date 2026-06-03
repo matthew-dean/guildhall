@@ -78,8 +78,8 @@
 
 <style>
   p {
-    font-size: var(--fs-2);
-    line-height: var(--lh-body);
+    font-size: var(--gh-type-size-body);
+    line-height: var(--gh-type-line-height-body);
   }
   .muted {
     color: var(--text-muted);
@@ -97,11 +97,11 @@
     display: flex;
     align-items: center;
     gap: var(--s-2);
-    font-size: var(--fs-0);
+    font-size: var(--gh-type-size-caption);
     color: var(--text-muted);
     text-transform: uppercase;
     letter-spacing: 0.05em;
-    font-weight: 700;
+    font-weight: var(--gh-type-weight-strong);
   }
   header .id {
     color: var(--text);
@@ -114,10 +114,10 @@
     border: 1px solid var(--border);
     border-radius: var(--r-1);
     padding: var(--s-2);
-    font-size: var(--fs-0);
+    font-size: var(--gh-type-size-caption);
     font-family: 'SF Mono', monospace;
     white-space: pre-wrap;
     color: var(--text);
-    line-height: var(--lh-body);
+    line-height: var(--gh-type-line-height-body);
   }
 </style>

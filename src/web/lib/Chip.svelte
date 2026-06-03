@@ -59,7 +59,7 @@
     display: inline-block;
     box-sizing: border-box;
     font-size: var(--gh-type-size-caption);
-    font-weight: var(--gh-type-weight-emphasis);
+    font-weight: var(--gh-type-weight-medium);
     text-transform: uppercase;
     letter-spacing: 0.05em;
     padding: 0 var(--gh-space-2);
@@ -85,7 +85,7 @@
     text-transform: none;
     letter-spacing: 0;
     font-size: var(--gh-type-size-caption);
-    font-weight: var(--gh-type-weight-emphasis);
+    font-weight: var(--gh-type-weight-strong);
     font-variant-numeric: tabular-nums;
     line-height: var(--gh-type-line-height-control);
   }
@@ -113,11 +113,13 @@
     background: var(--chip-warn-bg);
     color: var(--chip-warn-fg);
     border-color: var(--chip-warn-border);
+    font-weight: var(--gh-type-weight-strong);
   }
   .tone-danger {
     background: var(--chip-danger-bg);
     color: var(--chip-danger-fg);
     border-color: var(--chip-danger-border);
+    font-weight: var(--gh-type-weight-strong);
   }
   .tone-accent {
     background: var(--chip-accent-bg);
@@ -125,13 +127,14 @@
     border-color: var(--chip-accent-border);
   }
   .tone-agent {
-    background: color-mix(in srgb, var(--accent-2) 68%, var(--bg-base));
-    color: var(--chip-status-on-dark-fg);
+    background: var(--chip-agent-bg);
+    color: var(--chip-agent-fg);
     border-color: var(--chip-agent-border);
   }
   .tone-agent-attention {
-    background: color-mix(in srgb, var(--accent-2) 62%, var(--chip-warn-bg) 28%);
-    color: var(--chip-status-on-dark-fg);
+    background: var(--chip-agent-attention-bg);
+    color: var(--chip-agent-attention-fg);
     border-color: var(--chip-agent-attention-border);
+    font-weight: var(--gh-type-weight-strong);
   }
 </style>

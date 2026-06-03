@@ -57,6 +57,39 @@ babysit setup/import/provider/release states across multiple pages.
 
 ## Current Follow-Ups
 
+- [x] Normalize Guildhall typography around one semantic role system and carry
+  that rule into agent conformance. The live Thread complaint is the forcing
+  function: chips, thread-list row titles, timestamps, labels, and buttons had
+  too many bespoke sizes, line heights, weights, and bright foreground choices.
+  Implementation target: replace the old `--fs-*` / `--lh-*` split with
+  generated `--gh-type-*` role classes, reserve primary text for selected/current
+  states and true headings without making ordinary rows feel dead, keep rare
+  emphasis weight rare, and require spec/worker/reviewer/design-lens agents to
+  name semantic text hierarchy plus any token or variant budget before adding
+  new visual vocabulary. Closure evidence, 2026-06-03: added
+  `packages/ui/src/text-role-definitions.js`, generated `.gh-text-*` role
+  classes, moved app body/text/chip/thread typography onto `--gh-type-*` and
+  `--gh-color-text-*`, removed app-local `--fs-*` / `--lh-*`, demoted ordinary
+  Thread row titles to secondary/medium while keeping selected/current rows
+  primary/strong, and removed casual `emphasis` / hardcoded white text from
+  product source. Agent conformance now requires spec, worker, reviewer, corpus
+  diagnostics, and design-lens rechecks to name semantic text hierarchy plus any
+  token or variant budget. Verification: source audits found no raw type
+  metrics or numeric weights in `src/web` / `packages/ui/src`; `node
+  packages/ui/scripts/generate-styles.mjs --check`; focused Vitest suite
+  covering Button CSS contract, design-token audit, design-governance packets,
+  ThreadTab, agent prompts, and design-lens review (`170` tests); full
+  `pnpm vitest run --reporter=dot` (`3625` passed, `3` skipped);
+  `pnpm typecheck`; `pnpm --filter @guildhall/ui typecheck`;
+  `pnpm lint:design`; `pnpm build`; `git diff --check`; `pnpm dev:install`;
+  direct `scripts/install.sh` artifact install after the first installed bundle
+  hash lagged the built artifact; `guildhall stop`; `guildhall start`; and
+  `/api/stale-server` returned `stale:false` on pid `72468`. Browser proof on
+  `http://localhost:7777/projects/narrative-harness/thread` after a cache-busted
+  reload showed no restart banner, `--gh-color-text-body: #ded6e6`, chip
+  `11px` / weight `500`, selected thread title primary `#f3edf6` / `12px` /
+  weight `600`, unselected title secondary `#c7b9d1` / `12px` / weight `500`,
+  and composer bottom gap `52px`.
 - [x] Harden the 0.10 multi-project flow from the 2026-06-03 installed-app
   audit. Verification baseline: `pnpm build`, `pnpm dev:install`,
   `guildhall stop`, LaunchAgent restart, `/api/stale-server` `stale:false`

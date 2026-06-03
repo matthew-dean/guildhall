@@ -17,6 +17,10 @@ notice treatment, and status language across project surfaces.
 - `src/web/tokens.css` owns old app-local `--fs-*`, `--s-*`, `--r-*`, and
   `--lh-*` scales while `packages/ui/src/styles.css` owns generated `--gh-*`
   scales.
+- Typography needs a hierarchy pass, not only token renaming. Row titles,
+  selected/current text, status chips, action labels, history/done states, and
+  prose need distinct semantic roles so emphasis is not expressed by making
+  every local surface bright and bold.
 - App surfaces still use raw font weights such as `600`, `650`, `700`, and
   `800`.
 - Some surfaces use viewport-based type sizing with `clamp(...)`.
@@ -43,13 +47,23 @@ notice treatment, and status language across project surfaces.
 
 - Use text roles, not raw font-size values.
 - `body` is the default.
-- `body-strong` is for labels inside dense operational UI.
+- `row-title` is for ordinary unselected object titles in lists. It should scan
+  clearly without looking selected.
+- `row-title-current` is for selected/current object titles only.
+- `body-strong` is for labels inside dense operational UI, not a substitute for
+  selected/current state.
+- `history` is for completed, archived, stale, unavailable, or past-tense text.
 - `eyebrow` is uppercase or compact metadata only.
+- `action` is for control labels.
+- `state` is for short status words/counts paired with an explicit tone.
 - `panel-title` is the largest title allowed inside cards or panels.
 - `page-title` is only for top-level pages.
 - Strong weight is `--gh-type-weight-strong`.
 - Emphasis weight is rare and must be named by a component contract.
 - Letter spacing defaults to `0`; negative letter spacing is not allowed.
+- Primary text color is reserved for selected/current objects, real headings,
+  active focus, and action-priority labels. Ordinary row titles should use the
+  secondary text role, not near-white primary.
 
 ## Spacing and Radius Rules
 

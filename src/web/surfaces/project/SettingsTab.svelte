@@ -146,7 +146,7 @@
   .settings-section-picker-label {
     color: var(--text-muted);
     font-size: var(--gh-type-size-meta);
-    font-weight: var(--gh-type-weight-emphasis);
+    font-weight: var(--gh-type-weight-medium);
     line-height: var(--gh-type-line-height-tight);
     text-transform: uppercase;
   }

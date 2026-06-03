@@ -328,7 +328,7 @@
   .hierarchy-row span,
   .child-list span {
     color: var(--text-muted);
-    font-size: var(--fs-2);
+    font-size: var(--gh-type-size-body);
   }
   .hierarchy-row {
     display: flex;
@@ -339,7 +339,7 @@
   h4 {
     margin: 0 0 var(--s-2);
     color: var(--text);
-    font-size: var(--fs-1);
+    font-size: var(--gh-type-size-meta);
     letter-spacing: 0.08em;
     text-transform: uppercase;
   }
@@ -353,7 +353,7 @@
   }
   .split-callout span {
     color: var(--text-muted);
-    font-size: var(--fs-2);
+    font-size: var(--gh-type-size-body);
   }
   .split-actions {
     display: flex;
@@ -379,7 +379,7 @@
   }
   .factor-list {
     color: var(--text-muted);
-    font-size: var(--fs-2);
+    font-size: var(--gh-type-size-body);
   }
   .lane-list {
     display: flex;

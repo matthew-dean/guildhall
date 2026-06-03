@@ -521,8 +521,8 @@
   }
   .show-picker label {
     color: var(--text-muted);
-    font-size: var(--fs-0);
-    font-weight: 800;
+    font-size: var(--gh-type-size-caption);
+    font-weight: var(--gh-type-weight-strong);
     text-transform: uppercase;
     letter-spacing: 0.05em;
   }
@@ -539,9 +539,9 @@
   .work-list-count {
     flex: 0 0 auto;
     color: var(--text-muted);
-    font-size: var(--fs-1);
-    font-weight: 700;
-    line-height: var(--lh-tight);
+    font-size: var(--gh-type-size-meta);
+    font-weight: var(--gh-type-weight-strong);
+    line-height: var(--gh-type-line-height-tight);
     white-space: nowrap;
   }
   .work-summary {
@@ -575,23 +575,23 @@
   }
   .draft-queue-label {
     margin: 0;
-    font-size: var(--fs-0);
-    font-weight: 700;
+    font-size: var(--gh-type-size-caption);
+    font-weight: var(--gh-type-weight-strong);
     text-transform: uppercase;
     color: var(--text-muted);
     letter-spacing: 0.04em;
   }
   .draft-queue-title {
-    font-size: var(--fs-2);
-    font-weight: 700;
+    font-size: var(--gh-type-size-body);
+    font-weight: var(--gh-type-weight-strong);
     color: var(--text);
-    line-height: var(--lh-tight);
+    line-height: var(--gh-type-line-height-tight);
   }
   .draft-queue-detail {
     margin: 0;
     color: var(--text-muted);
-    font-size: var(--fs-1);
-    line-height: var(--lh-body);
+    font-size: var(--gh-type-size-meta);
+    line-height: var(--gh-type-line-height-body);
   }
   :global(.work-list-stack) {
     --work-list-columns:
@@ -620,10 +620,10 @@
     background: transparent;
     color: var(--text-muted);
     font: inherit;
-    font-size: var(--fs-0);
-    font-weight: 800;
+    font-size: var(--gh-type-size-caption);
+    font-weight: var(--gh-type-weight-strong);
     letter-spacing: 0.05em;
-    line-height: var(--lh-tight);
+    line-height: var(--gh-type-line-height-tight);
     text-align: left;
     text-transform: uppercase;
     cursor: pointer;
@@ -661,26 +661,26 @@
   :global(.work-list-row) .task-title {
     display: -webkit-box;
     overflow: hidden;
-    font-size: var(--fs-2);
-    font-weight: 700;
+    font-size: var(--gh-type-size-body);
+    font-weight: var(--gh-type-weight-strong);
     color: var(--text);
-    line-height: var(--lh-tight);
+    line-height: var(--gh-type-line-height-tight);
     -webkit-line-clamp: 1;
     -webkit-box-orient: vertical;
   }
   :global(.work-list-row) .task-subcopy {
     display: -webkit-box;
     overflow: hidden;
-    font-size: var(--fs-1);
+    font-size: var(--gh-type-size-meta);
     color: var(--text-muted);
-    line-height: var(--lh-body);
+    line-height: var(--gh-type-line-height-body);
     -webkit-line-clamp: 2;
     -webkit-box-orient: vertical;
   }
   :global(.work-list-row) .task-breadcrumb {
     color: var(--text-muted);
-    font-size: var(--fs-0);
-    line-height: var(--lh-tight);
+    font-size: var(--gh-type-size-caption);
+    line-height: var(--gh-type-line-height-tight);
   }
   :global(.work-list-row) .row-status,
   :global(.work-list-row) .row-domain,
@@ -697,7 +697,7 @@
   }
   :global(.work-list-row) .row-domain {
     color: var(--text-muted);
-    font-size: var(--fs-1);
+    font-size: var(--gh-type-size-meta);
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
@@ -705,8 +705,8 @@
   :global(.work-list-row) .row-updated,
   :global(.work-list-row) .row-revisions {
     color: var(--text-muted);
-    font-size: var(--fs-0);
-    line-height: var(--lh-tight);
+    font-size: var(--gh-type-size-caption);
+    line-height: var(--gh-type-line-height-tight);
     text-align: right;
     white-space: nowrap;
   }
@@ -722,10 +722,10 @@
   .progress-more > summary {
     cursor: pointer;
     color: var(--text-muted);
-    font-size: var(--fs-1);
+    font-size: var(--gh-type-size-meta);
     text-transform: uppercase;
     letter-spacing: 0.05em;
-    font-weight: 700;
+    font-weight: var(--gh-type-weight-strong);
     list-style: none;
     padding: var(--s-2) 0;
   }
@@ -740,7 +740,7 @@
   }
   .muted {
     color: var(--text-muted);
-    font-size: var(--fs-2);
+    font-size: var(--gh-type-size-body);
   }
 
   @media (max-width: 860px) {
@@ -773,7 +773,7 @@
       padding: 0;
     }
     :global(.work-list-row) .task-title {
-      font-size: var(--fs-1);
+      font-size: var(--gh-type-size-meta);
     }
     :global(.work-list-row) .task-subcopy {
       -webkit-line-clamp: 3;

@@ -244,8 +244,8 @@
     pointer-events: none;
   }
   h2 {
-    font-size: var(--fs-4);
-    font-weight: 700;
+    font-size: var(--gh-type-size-section-title);
+    font-weight: var(--gh-type-weight-strong);
   }
   .field {
     display: flex;
@@ -254,11 +254,11 @@
   }
   .field > span:first-child {
     color: var(--text-muted);
-    font-size: var(--fs-1);
+    font-size: var(--gh-type-size-meta);
   }
   .error {
     color: var(--danger);
-    font-size: var(--fs-2);
+    font-size: var(--gh-type-size-body);
   }
 
   @keyframes intake-backdrop-in {

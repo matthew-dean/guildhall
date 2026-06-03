@@ -5185,13 +5185,9 @@
 
 <style>
   .thread {
-    --thread-fs-meta: var(--gh-type-size-caption);
-    --thread-fs-body: var(--gh-type-size-meta);
-    --thread-fs-title: var(--gh-type-size-body);
-    --thread-fs-display: var(--gh-type-size-section-title);
-    --thread-color-strong: color-mix(in srgb, var(--text) 84%, var(--text-soft));
-    --thread-color-body: color-mix(in srgb, var(--text) 86%, var(--text-soft));
-    --thread-color-soft: color-mix(in srgb, var(--text-soft) 90%, var(--text-muted));
+    --thread-color-strong: var(--gh-color-text-primary);
+    --thread-color-body: var(--gh-color-text-body);
+    --thread-color-soft: var(--gh-color-text-secondary);
     --thread-color-muted: var(--text-muted);
     width: 100%;
     margin: 0;
@@ -5247,10 +5243,7 @@
     flex-direction: column;
     gap: var(--gh-space-2);
   }
-  :global(.thread-index-row) {
-    width: 100%;
-    color: var(--text);
-  }
+  :global(.thread-index-row) { width: 100%; color: var(--gh-color-text-body); }
   .thread-index-row-top {
     display: flex;
     align-items: baseline;
@@ -5259,16 +5252,20 @@
   }
   .thread-index-row-top strong {
     min-width: 0;
-    color: var(--thread-color-strong);
+    color: var(--gh-color-text-secondary);
     font-size: var(--gh-type-size-meta);
     line-height: var(--gh-type-line-height-tight);
+    font-weight: var(--gh-type-weight-medium);
+  }
+  :global(.thread-index-row.is-selected) .thread-index-row-top strong {
+    color: var(--gh-color-text-primary);
     font-weight: var(--gh-type-weight-strong);
   }
   .thread-index-time {
     flex: none;
     color: var(--thread-color-muted);
     font-size: var(--gh-type-size-caption);
-    font-weight: var(--gh-type-weight-strong);
+    font-weight: var(--gh-type-weight-medium);
   }
   .thread-index-row-chips {
     display: flex;
@@ -5382,7 +5379,7 @@
     gap: var(--gh-space-1);
   }
   .thread-active-dock-copy strong {
-    color: var(--thread-color-strong);
+    color: var(--gh-color-text-primary);
     font-size: var(--gh-type-size-meta);
     line-height: var(--gh-type-line-height-tight);
     font-weight: var(--gh-type-weight-strong);
@@ -5422,9 +5419,7 @@
     font-size: var(--gh-type-size-meta);
     line-height: var(--gh-type-line-height-body);
   }
-  .thread-active-checklist-line.is-complete {
-    color: var(--text-soft);
-  }
+  .thread-active-checklist-line.is-complete { color: var(--gh-color-text-disabled); }
   .thread-active-question,
   .thread-active-review {
     display: grid;
@@ -5599,7 +5594,7 @@
   .thread-chat-bubble-head span {
     color: var(--thread-color-muted);
     font-size: var(--gh-type-size-caption);
-    font-weight: var(--gh-type-weight-strong);
+    font-weight: var(--gh-type-weight-medium);
   }
   .thread-chat-bubble p {
     margin: 0;
@@ -5662,7 +5657,7 @@
   .thread-event-head span {
     color: var(--thread-color-muted);
     font-size: var(--gh-type-size-caption);
-    font-weight: var(--gh-type-weight-strong);
+    font-weight: var(--gh-type-weight-medium);
   }
   .thread-event p {
     margin: 0;
@@ -5685,7 +5680,7 @@
     background: color-mix(in srgb, var(--bg-raised) 72%, transparent);
     color: var(--thread-color-muted);
     font-size: var(--gh-type-size-caption);
-    line-height: 1;
+    line-height: var(--gh-type-line-height-control);
     transition:
       border-color 140ms ease,
       background-color 140ms ease,
@@ -5806,7 +5801,7 @@
   .question-card-meta {
     color: var(--text-muted);
     font-size: var(--gh-type-size-meta);
-    font-weight: var(--gh-type-weight-emphasis);
+    font-weight: var(--gh-type-weight-medium);
     letter-spacing: 0;
     text-transform: uppercase;
   }
@@ -5867,7 +5862,7 @@
     overflow-wrap: anywhere;
   }
   .git-story-next {
-    color: var(--text);
+    color: var(--gh-color-text-body);
     font-weight: var(--gh-type-weight-strong);
   }
   :global(.runtime-state-row) {
@@ -5883,7 +5878,7 @@
   :global(.setup-context) strong {
     color: var(--text);
     font-size: var(--gh-type-size-meta);
-    font-weight: var(--gh-type-weight-emphasis);
+    font-weight: var(--gh-type-weight-medium);
   }
   :global(.setup-context) p {
     margin: 0;
@@ -5932,7 +5927,7 @@
     color: var(--text-muted);
     cursor: pointer;
     font-size: var(--gh-type-size-meta);
-    font-weight: var(--gh-type-weight-strong);
+    font-weight: var(--gh-type-weight-medium);
     list-style-position: inside;
   }
   .thread-disclosure > summary:hover {
@@ -5973,8 +5968,8 @@
   .source-ref span {
     color: var(--accent-2);
     font-size: var(--gh-type-size-meta);
-    font-weight: var(--gh-type-weight-emphasis);
-    line-height: 1;
+    font-weight: var(--gh-type-weight-strong);
+    line-height: var(--gh-type-line-height-control);
   }
   .source-ref code {
     max-width: 100%;
@@ -6232,7 +6227,7 @@
     gap: var(--gh-space-1);
     color: var(--text);
     font-size: var(--gh-type-size-meta);
-    font-weight: var(--gh-type-weight-emphasis);
+    font-weight: var(--gh-type-weight-strong);
   }
   .live-checklist-head,
   .live-step {
@@ -6249,7 +6244,7 @@
   .live-step-state {
     color: var(--text-muted);
     font-size: var(--gh-type-size-meta);
-    font-weight: var(--gh-type-weight-emphasis);
+    font-weight: var(--gh-type-weight-medium);
     text-transform: uppercase;
   }
   .live-checklist-steps {
@@ -6274,8 +6269,14 @@
     color: var(--text-muted);
     font-size: var(--gh-type-size-meta);
   }
-  .live-step.done .live-step-copy {
-    color: var(--text-muted);
+  .live-step.done .live-step-copy { color: var(--gh-color-text-disabled); }
+  .live-step.done .live-step-copy strong {
+    color: var(--gh-color-text-disabled);
+    font-weight: var(--gh-type-weight-medium);
+  }
+  .live-step.active .live-step-copy strong {
+    color: var(--gh-color-text-primary);
+    font-weight: var(--gh-type-weight-strong);
   }
   .live-step.active .live-step-state {
     color: var(--warn);

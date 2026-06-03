@@ -99,19 +99,19 @@
     gap: var(--s-3);
   }
   .meta {
-    font-size: var(--fs-1);
+    font-size: var(--gh-type-size-meta);
     color: var(--text-muted);
   }
   .title {
     margin: 0;
-    font-size: var(--fs-4);
-    font-weight: 700;
+    font-size: var(--gh-type-size-section-title);
+    font-weight: var(--gh-type-weight-strong);
     color: var(--text);
-    line-height: var(--lh-tight);
+    line-height: var(--gh-type-line-height-tight);
   }
   .body {
     color: var(--text);
-    font-size: var(--fs-2);
-    line-height: var(--lh-body);
+    font-size: var(--gh-type-size-body);
+    line-height: var(--gh-type-line-height-body);
   }
 </style>

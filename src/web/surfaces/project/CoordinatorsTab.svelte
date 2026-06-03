@@ -247,13 +247,13 @@
   }
   .intro h2 {
     margin: 0;
-    font-size: var(--fs-4);
-    font-weight: 700;
+    font-size: var(--gh-type-size-section-title);
+    font-weight: var(--gh-type-weight-strong);
   }
   .intro-copy {
     margin: 0;
-    font-size: var(--fs-1);
-    line-height: var(--lh-body);
+    font-size: var(--gh-type-size-meta);
+    line-height: var(--gh-type-line-height-body);
     color: var(--text-muted);
     max-width: 72ch;
   }
@@ -264,7 +264,7 @@
     margin: 0;
     padding: 0;
     list-style: none;
-    font-size: var(--fs-1);
+    font-size: var(--gh-type-size-meta);
     color: var(--text-muted);
   }
   .linkbtn {
@@ -274,15 +274,15 @@
     font: inherit;
     color: var(--accent);
     cursor: pointer;
-    font-size: var(--fs-1);
-    font-weight: 600;
+    font-size: var(--gh-type-size-meta);
+    font-weight: var(--gh-type-weight-strong);
   }
   .linkbtn:hover {
     text-decoration: underline;
   }
   .muted {
     color: var(--text-muted);
-    font-size: var(--fs-2);
+    font-size: var(--gh-type-size-body);
   }
   .board {
     display: grid;
@@ -303,7 +303,7 @@
   }
   .lane-tasks-head h3 {
     margin: 0;
-    font-size: var(--fs-3);
+    font-size: var(--gh-type-size-panel-title);
   }
   .detail-shell {
     display: grid;
@@ -340,8 +340,8 @@
   .detail-copy {
     margin: 0;
     color: var(--text);
-    line-height: var(--lh-body);
-    font-size: var(--fs-1);
+    line-height: var(--gh-type-line-height-body);
+    font-size: var(--gh-type-size-meta);
   }
   .detail-grid {
     display: grid;
@@ -364,15 +364,15 @@
     gap: 4px;
   }
   .policy-title {
-    font-size: var(--fs-1);
-    font-weight: 700;
+    font-size: var(--gh-type-size-meta);
+    font-weight: var(--gh-type-weight-strong);
     color: var(--text);
   }
   .policy-copy {
     margin: 0;
     color: var(--text-muted);
-    font-size: var(--fs-1);
-    line-height: var(--lh-body);
+    font-size: var(--gh-type-size-meta);
+    line-height: var(--gh-type-line-height-body);
   }
   .policy-bullets {
     margin: 0;
@@ -381,14 +381,14 @@
     flex-direction: column;
     gap: 4px;
     color: var(--text);
-    font-size: var(--fs-1);
-    line-height: var(--lh-body);
+    font-size: var(--gh-type-size-meta);
+    line-height: var(--gh-type-line-height-body);
   }
   .detail-empty {
     margin: 0;
     color: var(--text-muted);
-    font-size: var(--fs-1);
-    line-height: var(--lh-body);
+    font-size: var(--gh-type-size-meta);
+    line-height: var(--gh-type-line-height-body);
   }
   .stats-list {
     display: grid;
@@ -401,16 +401,16 @@
   }
   .stats-list dt {
     margin: 0;
-    font-size: var(--fs-0);
+    font-size: var(--gh-type-size-caption);
     text-transform: uppercase;
     letter-spacing: 0.05em;
-    font-weight: 700;
+    font-weight: var(--gh-type-weight-strong);
     color: var(--text-muted);
   }
   .stats-list dd {
     margin: 4px 0 0 0;
-    font-size: var(--fs-2);
-    font-weight: 600;
+    font-size: var(--gh-type-size-body);
+    font-weight: var(--gh-type-weight-strong);
     color: var(--text);
   }
   .col {
@@ -425,8 +425,8 @@
     gap: 6px;
   }
   .name {
-    font-size: var(--fs-2);
-    font-weight: 600;
+    font-size: var(--gh-type-size-body);
+    font-weight: var(--gh-type-weight-strong);
     color: var(--text);
   }
   .meta-row {
@@ -435,15 +435,15 @@
     gap: 8px;
   }
   .mini {
-    font-size: var(--fs-0);
+    font-size: var(--gh-type-size-caption);
     color: var(--text-muted);
     text-transform: uppercase;
     letter-spacing: 0.05em;
-    font-weight: 700;
+    font-weight: var(--gh-type-weight-strong);
   }
   .spark {
     font-family: 'SF Mono', monospace;
-    font-size: var(--fs-2);
+    font-size: var(--gh-type-size-body);
     color: var(--accent-2);
     letter-spacing: 0.1em;
   }
@@ -453,20 +453,20 @@
     gap: 4px;
   }
   .label {
-    font-size: var(--fs-0);
+    font-size: var(--gh-type-size-caption);
     color: var(--text-muted);
     text-transform: uppercase;
     letter-spacing: 0.05em;
-    font-weight: 700;
+    font-weight: var(--gh-type-weight-strong);
   }
   .mandate {
-    font-size: var(--fs-1);
+    font-size: var(--gh-type-size-meta);
     color: var(--text);
-    line-height: var(--lh-body);
+    line-height: var(--gh-type-line-height-body);
   }
   .empty {
     color: var(--text-muted);
-    font-size: var(--fs-1);
+    font-size: var(--gh-type-size-meta);
     padding: var(--s-3) 0;
     text-align: center;
     border: 1px dashed var(--border);
@@ -478,7 +478,7 @@
     gap: var(--s-2);
   }
   .more-note {
-    font-size: var(--fs-0);
+    font-size: var(--gh-type-size-caption);
     color: var(--text-muted);
   }
   @media (max-width: 1100px) {

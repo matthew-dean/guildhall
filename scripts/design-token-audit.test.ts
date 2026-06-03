@@ -143,4 +143,32 @@ describe('design token audit', () => {
       expect(source, surface).not.toMatch(/font-weight:\s*[0-9]/)
     }
   })
+
+  it('keeps typography semantics in one generated role system', () => {
+    const tokenDefinitions = readFileSync(path.join(process.cwd(), 'packages/ui/src/token-definitions.js'), 'utf8')
+    const componentConstitution = readFileSync(path.join(process.cwd(), 'packages/ui/src/component-constitution.ts'), 'utf8')
+    const generatedStyles = readFileSync(path.join(process.cwd(), 'packages/ui/src/styles.css'), 'utf8')
+    const appTokens = readFileSync(path.join(process.cwd(), 'src/web/tokens.css'), 'utf8')
+
+    expect(tokenDefinitions).toContain("name: 'color.text.body'")
+    expect(tokenDefinitions).toContain("name: 'color.text.disabled'")
+
+    for (const role of ['row-title', 'row-title-current', 'history', 'action', 'state']) {
+      expect(componentConstitution, role).toContain(`'${role}'`)
+      expect(generatedStyles, role).toContain(`.gh-text-${role}`)
+    }
+
+    for (const className of ['.gh-text-body', '.gh-text-row-title', '.gh-text-row-title-current', '.gh-text-history']) {
+      const classIndex = generatedStyles.indexOf(className)
+      expect(classIndex, className).toBeGreaterThanOrEqual(0)
+      const block = generatedStyles.slice(classIndex, generatedStyles.indexOf('}', classIndex))
+      expect(block, className).toContain('font-size: var(--gh-type-size-')
+      expect(block, className).toContain('font-weight: var(--gh-type-weight-')
+      expect(block, className).toContain('line-height: var(--gh-type-line-height-')
+      expect(block, className).toContain('color: var(--gh-color-text-')
+    }
+
+    expect(appTokens).not.toMatch(/--fs-/)
+    expect(appTokens).not.toMatch(/--lh-/)
+  })
 })

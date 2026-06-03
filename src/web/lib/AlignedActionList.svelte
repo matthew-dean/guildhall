@@ -40,10 +40,10 @@
   .aligned-list-head {
     align-items: center;
     color: var(--text-muted);
-    font-size: var(--fs-0);
-    font-weight: 800;
+    font-size: var(--gh-type-size-caption);
+    font-weight: var(--gh-type-weight-strong);
     letter-spacing: 0.05em;
-    line-height: var(--lh-tight);
+    line-height: var(--gh-type-line-height-tight);
     text-transform: uppercase;
   }
   .aligned-list-head span {

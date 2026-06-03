@@ -97,8 +97,8 @@
 
   .gh-side-drawer-head h3 {
     margin: 0;
-    font-size: var(--fs-4);
-    line-height: var(--lh-tight);
+    font-size: var(--gh-type-size-section-title);
+    line-height: var(--gh-type-line-height-tight);
   }
 
   .gh-side-drawer-body {
