@@ -221,10 +221,10 @@
     display: flex;
     align-items: center;
     gap: var(--s-2);
-    font-size: var(--fs-0);
+    font-size: var(--gh-type-size-caption);
     text-transform: uppercase;
     letter-spacing: 0.05em;
-    font-weight: 700;
+    font-weight: var(--gh-type-weight-strong);
     color: var(--text-muted);
   }
   .tc-status {
@@ -253,7 +253,7 @@
     background: rgba(124, 109, 240, 0.15);
   }
   .chip-loud {
-    font-weight: 800;
+    font-weight: var(--gh-type-weight-strong);
     box-shadow: 0 0 0 1px var(--danger);
   }
   .tc-queued {
@@ -268,21 +268,21 @@
   }
   .tc-title {
     color: var(--text);
-    font-size: var(--fs-2);
-    line-height: var(--lh-body);
-    font-weight: 600;
+    font-size: var(--gh-type-size-body);
+    line-height: var(--gh-type-line-height-body);
+    font-weight: var(--gh-type-weight-strong);
   }
   .tc-meta {
-    font-size: var(--fs-0);
+    font-size: var(--gh-type-size-caption);
     color: var(--text-muted);
     display: flex;
     gap: var(--s-2);
     align-items: center;
   }
   .tc-summary {
-    font-size: var(--fs-1);
+    font-size: var(--gh-type-size-meta);
     color: color-mix(in srgb, var(--text) 78%, var(--text-muted));
-    line-height: var(--lh-body);
+    line-height: var(--gh-type-line-height-body);
     display: grid;
     gap: 2px;
     overflow: hidden;
@@ -295,10 +295,10 @@
     word-break: break-word;
   }
   .tc-summary-label {
-    font-size: var(--fs-0);
+    font-size: var(--gh-type-size-caption);
     text-transform: uppercase;
     letter-spacing: 0.05em;
-    font-weight: 700;
+    font-weight: var(--gh-type-weight-strong);
     color: var(--text-dim);
   }
   :global(.task-card.st-done) .tc-title,

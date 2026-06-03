@@ -56,7 +56,7 @@
   const reviewerGroupCount = $derived(reviewPlan?.requiredRecipes?.length ?? 0)
   const dependsOn = $derived(task.dependsOn ?? [])
 
-  type ChipTone = 'neutral' | 'ok' | 'warn' | 'danger' | 'accent' | 'running' | 'agent' | 'agent-attention'
+  type ChipTone = 'neutral' | 'ok' | 'warn' | 'danger' | 'accent' | 'running'
 
   function token(value: string | undefined): string {
     if (!value) return 'Unknown'
@@ -70,13 +70,13 @@
   function sizeTone(action: string | undefined): ChipTone {
     if (action === 'split_required') return 'danger'
     if (action === 'split_recommended' || action === 'ask_clarifying_question') return 'warn'
-    if (action === 'proceed_with_warning') return 'agent-attention'
+    if (action === 'proceed_with_warning') return 'warn'
     return 'neutral'
   }
 
   function statusTone(status: string | undefined): ChipTone {
     const tone = labelForIdentifier('status', status).tone
-    return tone === 'accent' ? 'agent' : tone
+    return tone === 'accent' ? 'ok' : tone
   }
 
   function priorityTone(priority: string | undefined): ChipTone {
@@ -236,7 +236,7 @@
           <Chip label={token(sizePlan.band)} tone={sizeTone(sizePlan.action)} />
           <Chip label={token(sizePlan.action)} tone={sizeTone(sizePlan.action)} />
           {#if sizePlan.score}<Chip label={`Score ${sizePlan.score}`} tone="neutral" />{/if}
-          {#if sizePlan.reviewBudgetHint}<Chip label={`${token(sizePlan.reviewBudgetHint)} review`} tone="agent" />{/if}
+          {#if sizePlan.reviewBudgetHint}<Chip label={`${token(sizePlan.reviewBudgetHint)} review`} tone="ok" />{/if}
         </Row>
         {#if sizePlan.reasons?.length}
           <p class="muted">{sizePlan.reasons[0]}</p>
@@ -257,7 +257,7 @@
       <Stack gap="3">
         <Row wrap gap="2">
           {#if requestIntake.intent}<Chip label={token(requestIntake.intent)} tone="neutral" />{/if}
-          {#if requestIntake.recommendedNextAction}<Chip label={token(requestIntake.recommendedNextAction)} tone="agent" />{/if}
+          {#if requestIntake.recommendedNextAction}<Chip label={token(requestIntake.recommendedNextAction)} tone="ok" />{/if}
         </Row>
         {#if requestIntake.ambiguity}
           <p class="muted">{requestIntake.ambiguity}</p>
@@ -300,7 +300,7 @@
     <Card title="Review plan">
       <Stack gap="3">
         <Row wrap gap="2">
-          {#if reviewPlan.effort}<Chip label={`${token(reviewPlan.effort)} review`} tone="agent" />{/if}
+          {#if reviewPlan.effort}<Chip label={`${token(reviewPlan.effort)} review`} tone="ok" />{/if}
           {#if reviewPlan.depth}<Chip label={`${token(reviewPlan.depth)} depth`} tone="neutral" />{/if}
           <Chip label={`${reviewerGroupCount} reviewer group${reviewerGroupCount === 1 ? '' : 's'}`} tone="neutral" />
           <Chip label={`${reviewLaneCount} lane${reviewLaneCount === 1 ? '' : 's'}`} tone="neutral" />
@@ -328,7 +328,7 @@
   .hierarchy-row span,
   .child-list span {
     color: var(--text-muted);
-    font-size: var(--fs-2);
+    font-size: var(--gh-type-size-body);
   }
   .hierarchy-row {
     display: flex;
@@ -339,7 +339,7 @@
   h4 {
     margin: 0 0 var(--s-2);
     color: var(--text);
-    font-size: var(--fs-1);
+    font-size: var(--gh-type-size-meta);
     letter-spacing: 0.08em;
     text-transform: uppercase;
   }
@@ -353,7 +353,7 @@
   }
   .split-callout span {
     color: var(--text-muted);
-    font-size: var(--fs-2);
+    font-size: var(--gh-type-size-body);
   }
   .split-actions {
     display: flex;
@@ -379,7 +379,7 @@
   }
   .factor-list {
     color: var(--text-muted);
-    font-size: var(--fs-2);
+    font-size: var(--gh-type-size-body);
   }
   .lane-list {
     display: flex;

@@ -29,10 +29,17 @@ describe('Button visual contract', () => {
 })
 
 describe('Chip visual contract', () => {
-  it('documents automation-state chip tones separately from action buttons and human decisions', () => {
-    expect(chipSource).toContain('agent: passive Guildhall automation state')
-    expect(chipSource).toContain('agent-attention: Guildhall-owned state that needs a handoff')
+  it('keeps chip tones canonical and labels single-line', () => {
+    const defaultBlock = chipSource.match(/\.chip\s*\{([\s\S]*?)\n\s*\}/)?.[1] ?? ''
+
+    expect(chipSource).not.toMatch(/agent-attention|tone-agent|chip-agent/)
+    expect(defaultBlock).toContain('white-space: nowrap')
+  })
+
+  it('documents canonical chip tones separately from action buttons', () => {
+    expect(chipSource).toContain('ok/running: healthy, available, queued, or Guildhall-owned continuation')
     expect(chipSource).toContain('warn: human decision or risk state')
+    expect(chipSource).toContain('accent: current-step emphasis')
   })
 
   it('gives every chip a readable border instead of relying on fill contrast alone', () => {
@@ -41,16 +48,6 @@ describe('Chip visual contract', () => {
     expect(chipSource).toContain('border-color: var(--chip-warn-border)')
     expect(chipSource).toContain('border-color: var(--chip-danger-border)')
     expect(chipSource).toContain('border-color: var(--chip-accent-border)')
-    expect(chipSource).toContain('border-color: var(--chip-agent-border)')
-    expect(chipSource).toContain('border-color: var(--chip-agent-attention-border)')
-  })
-
-  it('uses translucent white text on automation chips so their fills participate in the color', () => {
-    const agentBlock = chipSource.match(/\.tone-agent\s*\{([\s\S]*?)\n\s*\}/)?.[1] ?? ''
-    const agentAttentionBlock = chipSource.match(/\.tone-agent-attention\s*\{([\s\S]*?)\n\s*\}/)?.[1] ?? ''
-
-    expect(agentBlock).toContain('color: var(--chip-status-on-dark-fg)')
-    expect(agentAttentionBlock).toContain('color: var(--chip-status-on-dark-fg)')
   })
 
   it('owns compact chip sizing in the shared primitive instead of surface overrides', () => {

@@ -439,7 +439,7 @@
   .fact-grid dt {
     color: var(--text-muted);
     font-size: var(--gh-type-size-meta);
-    font-weight: var(--gh-type-weight-emphasis);
+    font-weight: var(--gh-type-weight-medium);
     text-transform: uppercase;
   }
   .fact-grid dd {
@@ -470,7 +470,7 @@
   }
   .workspace-project-name {
     color: var(--text);
-    font-weight: var(--gh-type-weight-emphasis);
+    font-weight: var(--gh-type-weight-strong);
   }
   .workspace-project-path {
     font-family: var(--font-mono);

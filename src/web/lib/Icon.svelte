@@ -137,7 +137,7 @@
     display: inline-flex;
     align-items: center;
     justify-content: center;
-    line-height: 0;
+    line-height: var(--gh-type-line-height-none);
     flex-shrink: 0;
   }
   .ic.spin :global(svg) {

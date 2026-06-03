@@ -13,8 +13,6 @@
     | 'danger'
     | 'accent'
     | 'running'
-    | 'agent'
-    | 'agent-attention'
 
   interface Props {
     title: string
@@ -78,8 +76,8 @@
 
   :global(.overview-task-row) span {
     color: var(--text-muted);
-    font-size: var(--fs-1);
-    line-height: var(--lh-body);
+    font-size: var(--gh-type-size-meta);
+    line-height: var(--gh-type-line-height-body);
   }
 
   @media (max-width: 640px) {

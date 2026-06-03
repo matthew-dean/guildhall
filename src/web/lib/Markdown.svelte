@@ -129,8 +129,8 @@
 
 <style>
   .md {
-    font-size: var(--fs-2);
-    line-height: var(--lh-body);
+    font-size: var(--gh-type-size-body);
+    line-height: var(--gh-type-line-height-body);
     color: var(--text);
   }
   .md-inline {
@@ -142,8 +142,8 @@
   .md :global(h4),
   .md :global(h5),
   .md :global(h6) {
-    line-height: var(--lh-tight);
-    font-weight: 600;
+    line-height: var(--gh-type-line-height-tight);
+    font-weight: var(--gh-type-weight-strong);
     margin-top: var(--s-3);
     margin-bottom: var(--s-2);
   }
@@ -155,12 +155,12 @@
   .md :global(h6):first-child {
     margin-top: 0;
   }
-  .md :global(h1) { font-size: var(--fs-4); }
-  .md :global(h2) { font-size: var(--fs-3); }
-  .md :global(h3) { font-size: var(--fs-2); text-transform: uppercase; letter-spacing: 0.05em; color: var(--text-muted); }
+  .md :global(h1) { font-size: var(--gh-type-size-section-title); }
+  .md :global(h2) { font-size: var(--gh-type-size-panel-title); }
+  .md :global(h3) { font-size: var(--gh-type-size-body); text-transform: uppercase; letter-spacing: 0.05em; color: var(--text-muted); }
   .md :global(h4),
   .md :global(h5),
-  .md :global(h6) { font-size: var(--fs-1); text-transform: uppercase; letter-spacing: 0.05em; color: var(--text-muted); }
+  .md :global(h6) { font-size: var(--gh-type-size-meta); text-transform: uppercase; letter-spacing: 0.05em; color: var(--text-muted); }
 
   .md :global(p) {
     margin: 0 0 var(--s-2);
@@ -181,7 +181,7 @@
   }
   .md :global(code) {
     font-family: 'SF Mono', ui-monospace, monospace;
-    font-size: 0.9em;
+    font-size: var(--gh-type-size-code);
     background: var(--bg);
     border: 1px solid var(--border);
     border-radius: var(--r-1);
@@ -204,7 +204,7 @@
     color: var(--accent);
     text-decoration: underline dotted;
   }
-  .md :global(strong) { font-weight: 700; }
+  .md :global(strong) { font-weight: var(--gh-type-weight-strong); }
   .md :global(em) { font-style: italic; }
   .md :global(blockquote) {
     border-left: 3px solid var(--border);
@@ -219,7 +219,7 @@
   }
   .md :global(table) {
     border-collapse: collapse;
-    font-size: var(--fs-1);
+    font-size: var(--gh-type-size-meta);
   }
   .md :global(th),
   .md :global(td) {
@@ -229,6 +229,6 @@
   }
   .md-empty {
     color: var(--text-muted);
-    font-size: var(--fs-1);
+    font-size: var(--gh-type-size-meta);
   }
 </style>

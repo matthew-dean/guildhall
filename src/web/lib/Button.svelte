@@ -71,11 +71,11 @@
     gap: var(--s-2);
     border: 1px solid transparent;
     border-radius: var(--r-1);
-    font-weight: 600;
-    font-size: var(--fs-2);
+    font-weight: var(--gh-type-weight-strong);
+    font-size: var(--gh-type-size-body);
     font-family: inherit;
     cursor: pointer;
-    line-height: 1;
+    line-height: var(--gh-type-line-height-control);
     min-height: var(--control-h);
     white-space: nowrap;
     transition:
@@ -101,7 +101,7 @@
     background:
       linear-gradient(180deg, color-mix(in srgb, white 18%, transparent), transparent 48%),
       linear-gradient(100deg, var(--light-violet-warm), var(--accent) 64%, color-mix(in srgb, var(--accent) 88%, black));
-    color: white;
+    color: var(--gh-color-text-primary);
     border-color: color-mix(in srgb, var(--accent) 65%, white 18%);
     box-shadow:
       var(--light-emitted-accent),
@@ -111,7 +111,7 @@
     background:
       linear-gradient(180deg, color-mix(in srgb, white 18%, transparent), transparent 48%),
       linear-gradient(100deg, var(--light-violet-warm), var(--accent) 64%, color-mix(in srgb, var(--accent) 88%, black));
-    color: white;
+    color: var(--gh-color-text-primary);
     border-color: color-mix(in srgb, var(--accent) 65%, white 18%);
     box-shadow:
       var(--light-emitted-accent),
@@ -155,7 +155,7 @@
     background:
       linear-gradient(180deg, color-mix(in srgb, white 16%, transparent), transparent 48%),
       var(--danger);
-    color: white;
+    color: var(--gh-color-text-primary);
     border-color: color-mix(in srgb, var(--danger) 70%, white 14%);
     box-shadow:
       0 0 16px color-mix(in srgb, var(--danger) 28%, transparent),

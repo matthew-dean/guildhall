@@ -185,23 +185,23 @@
     flex-direction: column;
     gap: var(--s-1);
   }
-  .head h2 { margin: 0; font-size: var(--fs-4); font-weight: 700; }
-  .sub { margin: 0; color: var(--text-muted); font-size: var(--fs-1); }
-  .muted { color: var(--text-muted); font-size: var(--fs-2); }
+  .head h2 { margin: 0; font-size: var(--gh-type-size-section-title); font-weight: var(--gh-type-weight-strong); }
+  .sub { margin: 0; color: var(--text-muted); font-size: var(--gh-type-size-meta); }
+  .muted { color: var(--text-muted); font-size: var(--gh-type-size-body); }
   .kv {
     display: grid;
     grid-template-columns: max-content 1fr;
     gap: 4px var(--s-3);
     margin: 0;
-    font-size: var(--fs-2);
+    font-size: var(--gh-type-size-body);
   }
   .kv dt { color: var(--text-muted); }
   .kv dd { margin: 0; color: var(--text); }
   .edit-link {
-    font-size: var(--fs-1);
+    font-size: var(--gh-type-size-meta);
     color: var(--accent);
     text-decoration: none;
-    font-weight: 600;
+    font-weight: var(--gh-type-weight-strong);
   }
   .edit-link:hover { text-decoration: underline; }
   .gate-grid {
@@ -213,17 +213,17 @@
     gap: var(--s-1);
   }
   :global(.gate.tone-warn) { opacity: 0.78; }
-  .gate-name { font-weight: 700; font-size: var(--fs-1); text-transform: uppercase; letter-spacing: 0.05em; }
-  .gate-cmd { font-size: var(--fs-1); color: var(--text-muted); margin-top: 2px; }
-  .gate-why { font-size: var(--fs-1); color: var(--warn); margin-top: 4px; }
+  .gate-name { font-weight: var(--gh-type-weight-strong); font-size: var(--gh-type-size-meta); text-transform: uppercase; letter-spacing: 0.05em; }
+  .gate-cmd { font-size: var(--gh-type-size-meta); color: var(--text-muted); margin-top: 2px; }
+  .gate-why { font-size: var(--gh-type-size-meta); color: var(--warn); margin-top: 4px; }
   .coord-list { list-style: none; padding: 0; margin: 0; display: flex; flex-direction: column; gap: 2px; }
-  code { font-family: 'SF Mono', monospace; font-size: var(--fs-1); }
+  code { font-family: 'SF Mono', monospace; font-size: var(--gh-type-size-meta); }
   :global(.summary-panel) {
     padding: var(--s-2);
   }
   .summary {
     margin: 0;
-    font-size: var(--fs-1);
+    font-size: var(--gh-type-size-meta);
     white-space: pre-wrap;
   }
 </style>

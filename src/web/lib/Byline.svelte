@@ -32,7 +32,7 @@
 
 <style>
   .byline {
-    font-size: var(--fs-1);
+    font-size: var(--gh-type-size-meta);
     color: var(--text-muted);
   }
 </style>

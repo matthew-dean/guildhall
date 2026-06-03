@@ -250,7 +250,7 @@
 
   .gh-guild-link-label {
     fill: var(--gh-color-text-muted);
-    font-size: 2.6px;
+    font-size: var(--gh-type-size-diagram-label);
     text-anchor: middle;
   }
 
@@ -289,7 +289,7 @@
 
   .gh-guild-node-label {
     fill: var(--gh-color-text-primary);
-    font-size: 3px;
+    font-size: var(--gh-type-size-diagram-label);
     text-anchor: middle;
   }
 

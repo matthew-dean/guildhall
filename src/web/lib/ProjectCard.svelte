@@ -390,9 +390,9 @@
   }
   h3 {
     margin: 0;
-    font-size: var(--fs-4);
-    font-weight: 700;
-    line-height: var(--lh-tight);
+    font-size: var(--gh-type-size-section-title);
+    font-weight: var(--gh-type-weight-strong);
+    line-height: var(--gh-type-line-height-tight);
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
@@ -416,7 +416,7 @@
   .path {
     margin: var(--s-1) 0 0;
     color: var(--text-muted);
-    font-size: var(--fs-0);
+    font-size: var(--gh-type-size-caption);
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
@@ -541,13 +541,13 @@
   }
   .activity {
     margin: 0;
-    font-size: var(--fs-0);
-    line-height: var(--lh-body);
+    font-size: var(--gh-type-size-caption);
+    line-height: var(--gh-type-line-height-body);
     display: flex;
     align-items: center;
     gap: var(--s-2);
     color: var(--text);
-    font-weight: 700;
+    font-weight: var(--gh-type-weight-strong);
   }
   .activity :global(svg) {
     color: var(--accent-2);
@@ -587,8 +587,8 @@
     border-radius: 999px;
     background: color-mix(in srgb, var(--avatar-color) 24%, var(--bg-raised));
     color: color-mix(in srgb, var(--avatar-color) 88%, white);
-    font-size: 0.62rem;
-    font-weight: 800;
+    font-size: var(--gh-type-size-caption);
+    font-weight: var(--gh-type-weight-strong);
     flex: none;
   }
   .project-guild-label {
@@ -597,8 +597,8 @@
     text-overflow: ellipsis;
     white-space: nowrap;
     color: var(--text-muted);
-    font-size: 0.68rem;
-    font-weight: 700;
+    font-size: var(--gh-type-size-caption);
+    font-weight: var(--gh-type-weight-strong);
     letter-spacing: 0;
   }
   .project-guild-member-active {
@@ -644,12 +644,12 @@
     gap: 0.35rem;
     padding: 0.16rem 0.34rem;
     border-radius: 999px;
-    font-size: var(--fs-0);
-    font-weight: 700;
-    line-height: 1;
+    font-size: var(--gh-type-size-caption);
+    font-weight: var(--gh-type-weight-strong);
+    line-height: var(--gh-type-line-height-control);
   }
   .metric strong {
-    font-size: var(--fs-1);
+    font-size: var(--gh-type-size-meta);
   }
   .tone-running {
     background: rgba(78, 204, 163, 0.15);

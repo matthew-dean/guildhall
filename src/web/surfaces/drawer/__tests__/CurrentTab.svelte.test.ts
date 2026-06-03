@@ -110,7 +110,7 @@ describe('CurrentTab', () => {
     expect(screen.getByText('Needs brief cleanup')).toBeTruthy()
     const briefCleanupChip = screen.getByText('Brief cleanup needed')
     expect(briefCleanupChip).toBeTruthy()
-    expect(briefCleanupChip.classList.contains('tone-agent-attention')).toBe(true)
+    expect(briefCleanupChip.classList.contains('tone-warn')).toBe(true)
     expect(screen.getByText(/marked ready, but its brief\/spec is not complete enough/i)).toBeTruthy()
     const viewButton = screen.getByRole('button', { name: /view brief/i })
     const startButton = screen.getByRole('button', { name: 'Clean up brief' })
@@ -517,7 +517,7 @@ describe('CurrentTab', () => {
 
     const queuedChip = screen.getByText('Queued for Guildhall')
     expect(queuedChip).toBeTruthy()
-    expect(queuedChip.classList.contains('tone-agent')).toBe(true)
+    expect(queuedChip.classList.contains('tone-ok')).toBe(true)
     expect(screen.getByRole('button', { name: /already queued/i })).toHaveProperty('disabled', true)
     expect(screen.queryByRole('button', { name: /start work/i })).toBeNull()
   })

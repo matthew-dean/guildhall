@@ -1622,13 +1622,13 @@
     border: none;
     color: var(--text-muted);
     font: inherit;
-    font-size: var(--fs-2);
-    font-weight: 600;
+    font-size: var(--gh-type-size-body);
+    font-weight: var(--gh-type-weight-strong);
     cursor: pointer;
     width: 100%;
     text-align: left;
     border-radius: 0;
-    line-height: var(--lh-tight);
+    line-height: var(--gh-type-line-height-tight);
   }
   :global(.rail-tooltip) {
     display: block;
@@ -1675,7 +1675,7 @@
     border: none;
     color: var(--text-muted);
     font: inherit;
-    font-size: var(--fs-1);
+    font-size: var(--gh-type-size-meta);
     padding: var(--s-1) var(--s-3) var(--s-1) calc(var(--s-3) + 24px);
     cursor: pointer;
     border-radius: 0;
@@ -1683,7 +1683,7 @@
   .rail-sub:hover { color: var(--text); }
   .rail-sub.active {
     color: var(--accent-2);
-    font-weight: 700;
+    font-weight: var(--gh-type-weight-strong);
   }
 
   .main {
@@ -1777,8 +1777,8 @@
     padding-inline: 0;
   }
   .rail-project {
-    font-size: var(--fs-2);
-    font-weight: 700;
+    font-size: var(--gh-type-size-body);
+    font-weight: var(--gh-type-weight-strong);
     color: var(--text);
     text-transform: none;
     letter-spacing: 0;
@@ -1828,8 +1828,8 @@
     background: transparent;
     color: var(--text);
     font: inherit;
-    font-size: var(--fs-2);
-    font-weight: 600;
+    font-size: var(--gh-type-size-body);
+    font-weight: var(--gh-type-weight-strong);
     text-align: left;
     cursor: pointer;
   }
@@ -1849,7 +1849,7 @@
   .migration-modal p {
     margin: 0;
     color: var(--text-muted);
-    line-height: var(--lh-body);
+    line-height: var(--gh-type-line-height-body);
   }
   .migration-card {
     display: flex;
@@ -1863,8 +1863,8 @@
   .migration-card h4 {
     margin: 0;
     color: var(--text);
-    font-size: var(--fs-3);
-    line-height: var(--lh-tight);
+    font-size: var(--gh-type-size-panel-title);
+    line-height: var(--gh-type-line-height-tight);
   }
   .migration-paths {
     display: flex;
@@ -1877,7 +1877,7 @@
     border-radius: var(--r-1);
     background: color-mix(in srgb, var(--bg-base) 62%, transparent);
     color: var(--text);
-    font-size: var(--fs-1);
+    font-size: var(--gh-type-size-meta);
   }
 
   @media (max-width: 900px) {
@@ -1936,8 +1936,8 @@
   .project-ticker-actor {
     flex: none;
     color: var(--text);
-    font-size: var(--fs-0);
-    font-weight: 700;
+    font-size: var(--gh-type-size-caption);
+    font-weight: var(--gh-type-weight-strong);
     text-transform: uppercase;
     letter-spacing: 0.04em;
   }
@@ -1947,13 +1947,13 @@
     text-overflow: ellipsis;
     white-space: nowrap;
     color: var(--text-muted);
-    font-size: var(--fs-1);
-    line-height: var(--lh-body);
+    font-size: var(--gh-type-size-meta);
+    line-height: var(--gh-type-line-height-body);
   }
   .project-ticker-time {
     flex: none;
     color: var(--text-muted);
-    font-size: var(--fs-0);
+    font-size: var(--gh-type-size-caption);
     white-space: nowrap;
   }
   .ticker-active .project-ticker-actor,
@@ -1968,8 +1968,8 @@
   }
   .muted {
     color: var(--text-muted);
-    font-size: var(--fs-2);
-    line-height: var(--lh-body);
+    font-size: var(--gh-type-size-body);
+    line-height: var(--gh-type-line-height-body);
   }
 
   .rail.rail-collapsed:not(.rail-preview-open) .rail-label { display: none; }

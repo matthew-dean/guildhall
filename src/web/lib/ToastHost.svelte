@@ -58,9 +58,9 @@
     min-width: 0;
     margin: 0;
     color: inherit;
-    font-size: 13px;
-    font-weight: 700;
-    line-height: 1.3;
+    font-size: var(--gh-type-size-body);
+    font-weight: var(--gh-type-weight-strong);
+    line-height: var(--gh-type-line-height-body);
     overflow-wrap: anywhere;
   }
 

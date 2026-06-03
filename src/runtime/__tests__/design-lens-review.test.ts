@@ -48,6 +48,8 @@ describe('design lens review', () => {
         suggestedClassification: 'architecture-opportunity',
         classification: 'architecture-opportunity',
       })
+      expect(store.findings[0]?.summary).toContain('semantic text hierarchy')
+      expect(store.findings[0]?.summary).toContain('token or variant budget')
       expect(store.candidates[0]).toMatchObject({
         findingIds: ['design-lens-review-task-ui-combobox'],
         classification: 'architecture-opportunity',

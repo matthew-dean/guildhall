@@ -305,7 +305,7 @@
 
   .verb {
     font-size: var(--gh-type-size-panel-title);
-    font-weight: var(--gh-type-weight-emphasis);
+    font-weight: var(--gh-type-weight-strong);
     margin-top: var(--gh-space-1);
     color: var(--text);
   }

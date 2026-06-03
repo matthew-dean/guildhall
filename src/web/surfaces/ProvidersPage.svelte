@@ -466,15 +466,15 @@
   }
   .muted {
     color: var(--text-muted);
-    font-size: var(--fs-2);
-    line-height: var(--lh-body);
+    font-size: var(--gh-type-size-body);
+    line-height: var(--gh-type-line-height-body);
   }
   code {
     font-family: 'SF Mono', monospace;
     background: var(--bg-raised-2);
     padding: 0 4px;
     border-radius: var(--r-1);
-    font-size: var(--fs-1);
+    font-size: var(--gh-type-size-meta);
   }
 
   .row {
@@ -502,8 +502,8 @@
     min-width: 0;
   }
   .label {
-    font-size: var(--fs-2);
-    font-weight: 600;
+    font-size: var(--gh-type-size-body);
+    font-weight: var(--gh-type-weight-strong);
   }
   .row-actions {
     display: flex;
@@ -511,7 +511,7 @@
     flex-shrink: 0;
   }
   .row-detail {
-    font-size: var(--fs-1);
+    font-size: var(--gh-type-size-meta);
   }
   .row-edit {
     display: flex;
@@ -533,8 +533,8 @@
   }
   .mini-label {
     color: var(--text-muted);
-    font-size: var(--fs-1);
-    font-weight: 600;
+    font-size: var(--gh-type-size-meta);
+    font-weight: var(--gh-type-weight-strong);
   }
   .openai-edit {
     flex-wrap: wrap;
@@ -592,8 +592,8 @@
     border-radius: var(--r-2);
     color: var(--text);
     background: color-mix(in srgb, var(--warn) 14%, transparent);
-    font-size: var(--fs-1);
-    line-height: var(--lh-body);
+    font-size: var(--gh-type-size-meta);
+    line-height: var(--gh-type-line-height-body);
   }
   @media (max-width: 640px) {
     .model-row {
@@ -604,7 +604,7 @@
     }
   }
   .status {
-    font-size: var(--fs-1);
+    font-size: var(--gh-type-size-meta);
     color: var(--accent-2);
     padding: var(--s-2);
     border-radius: var(--r-1);

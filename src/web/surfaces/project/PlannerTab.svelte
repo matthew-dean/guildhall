@@ -137,20 +137,20 @@
     gap: var(--s-3);
   }
   .focus-label {
-    font-size: var(--fs-0);
+    font-size: var(--gh-type-size-caption);
     text-transform: uppercase;
     letter-spacing: 0.05em;
-    font-weight: 700;
+    font-weight: var(--gh-type-weight-strong);
     color: var(--text-muted);
   }
   .focus-title {
     color: var(--text);
-    font-weight: 700;
-    line-height: var(--lh-body);
+    font-weight: var(--gh-type-weight-strong);
+    line-height: var(--gh-type-line-height-body);
   }
   .blocked-count {
     color: var(--warn);
-    font-size: var(--fs-1);
+    font-size: var(--gh-type-size-meta);
     white-space: nowrap;
   }
   .planner-scroll {
@@ -177,10 +177,10 @@
   .col-head {
     display: flex;
     justify-content: space-between;
-    font-size: var(--fs-0);
+    font-size: var(--gh-type-size-caption);
     text-transform: uppercase;
     letter-spacing: 0.05em;
-    font-weight: 700;
+    font-weight: var(--gh-type-weight-strong);
     color: var(--text-muted);
   }
   .count {
@@ -188,7 +188,7 @@
   }
   .empty {
     color: var(--text-muted);
-    font-size: var(--fs-1);
+    font-size: var(--gh-type-size-meta);
     padding: var(--s-4) 0;
     text-align: center;
     border: 1px dashed var(--border);

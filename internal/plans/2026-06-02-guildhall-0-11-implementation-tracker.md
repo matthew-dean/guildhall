@@ -14,6 +14,7 @@ explicitly changes the release boundary.
 
 - `internal/plans/2026-05-28-guildhall-0-11-openrouter-support.md`
 - `internal/specs/2026-06-01-guildhall-0-10-state-machines-project-graph.md`
+- `internal/specs/2026-06-03-guildhall-0-11-deterministic-code-quality-signals.md`
 
 ## Milestone 1: OpenRouter Guided Setup
 
@@ -39,3 +40,22 @@ substrate has proven itself.
 - [ ] Route task lifecycle writes through explicit transition helpers and
   receipts.
 - [ ] Keep owner-facing labels separate from persisted lifecycle states.
+
+## Milestone 3: Deterministic Code Quality Signals
+
+**Purpose:** Reduce agent-authored wheel reinvention by turning size,
+complexity, duplication, abstraction-fitness, legacy-syntax, layout, dependency,
+dead-code, and design-system scans into normalized Guildhall findings.
+
+- [ ] Add a deterministic finding model and analyzer registry that can classify
+  findings as hard gates, review signals, or trend metrics.
+- [ ] Normalize existing `lint:design`, `lint:reductions`, and `lint:deps`
+  outputs into the shared finding shape.
+- [ ] Add web design/layout signals for banned raw styles, data-bound component
+  styling, suspicious flex-as-grid usage, local primitive duplication, and
+  package UI variant-budget violations.
+- [ ] Add complexity, duplication, and abstraction-fitness signals using
+  stack-appropriate analyzers such as ESLint, jscpd/CPD, Knip, dependency graph
+  metrics, Semgrep, or ast-grep.
+- [ ] Feed deterministic findings into task shaping, worker context, review
+  packets, run evidence, waiver receipts, and project trend summaries.

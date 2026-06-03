@@ -60,27 +60,27 @@
   .eyebrow {
     margin: 0;
     color: var(--text-muted);
-    font-size: var(--fs-0);
+    font-size: var(--gh-type-size-caption);
     text-transform: uppercase;
     letter-spacing: 0.05em;
-    font-weight: 700;
+    font-weight: var(--gh-type-weight-strong);
   }
   h1 {
     margin: 0;
-    font-size: clamp(1.6rem, 3vw, 2.3rem);
-    line-height: 1.1;
+    font-size: var(--gh-type-size-page-title);
+    line-height: var(--gh-type-line-height-tight);
   }
   .lede {
     margin: 0;
     color: var(--text-muted);
     max-width: 46rem;
-    font-size: var(--fs-3);
+    font-size: var(--gh-type-size-panel-title);
   }
   .path {
     margin: 0;
     color: var(--text-dim);
     font-family: var(--font-mono);
-    font-size: var(--fs-1);
+    font-size: var(--gh-type-size-meta);
     overflow-wrap: anywhere;
   }
   @media (max-width: 720px) {

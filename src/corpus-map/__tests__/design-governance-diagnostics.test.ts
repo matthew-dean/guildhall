@@ -91,6 +91,8 @@ describe('corpus design-governance diagnostics', () => {
     expect(packet).toContain('Learning proposals require owner approval:')
     expect(packet).toContain('Required reviewer checks:')
     expect(packet).toContain('Name the token/component roles reused or extended.')
+    expect(packet).toContain('Name the semantic text hierarchy role for every new text treatment.')
+    expect(packet).toContain('Justify every new token or variant as a distinct communication need, with a budget and removal path.')
     expect(packet).toContain('Reject local one-off styling when a governed primitive exists.')
     expect(packet).toContain('Reject new variant names unless a component contract changed.')
 
@@ -103,6 +105,7 @@ describe('corpus design-governance diagnostics', () => {
 
     expect(workerContext).toContain('## Design Governance')
     expect(workerContext).toContain('Known duplicate primitive families: FrameCard/Card, NoticeBand')
+    expect(workerContext).toContain('Name the semantic text hierarchy role for every new text treatment.')
     expect(workerContext).toContain('Reject new variant names unless a component contract changed.')
   })
 })

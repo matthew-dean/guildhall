@@ -786,7 +786,7 @@
     display: flex;
     align-items: center;
     gap: var(--s-2);
-    font-size: var(--fs-1);
+    font-size: var(--gh-type-size-meta);
     color: var(--text-muted);
   }
   .dot {
@@ -797,8 +797,8 @@
     align-items: center;
     justify-content: center;
     border: 1px solid var(--border);
-    font-size: var(--fs-1);
-    font-weight: 700;
+    font-size: var(--gh-type-size-meta);
+    font-weight: var(--gh-type-weight-strong);
   }
   .dot.active {
     border-color: var(--accent);
@@ -812,31 +812,31 @@
   .step-label {
     text-transform: uppercase;
     letter-spacing: 0.05em;
-    font-weight: 700;
+    font-weight: var(--gh-type-weight-strong);
     margin-right: var(--s-2);
   }
   .field {
     display: flex;
     flex-direction: column;
     gap: var(--s-1);
-    font-size: var(--fs-2);
+    font-size: var(--gh-type-size-body);
   }
   .field > span:first-child {
     color: var(--text-muted);
-    font-size: var(--fs-1);
+    font-size: var(--gh-type-size-meta);
   }
   .hint {
     color: var(--text-muted);
-    font-size: var(--fs-0);
+    font-size: var(--gh-type-size-caption);
   }
   .error {
     color: var(--danger);
-    font-size: var(--fs-1);
+    font-size: var(--gh-type-size-meta);
   }
   .muted {
     color: var(--text-muted);
-    font-size: var(--fs-2);
-    line-height: var(--lh-body);
+    font-size: var(--gh-type-size-body);
+    line-height: var(--gh-type-line-height-body);
   }
   .project-orientation {
     display: grid;
@@ -848,8 +848,8 @@
   }
   .project-orientation span {
     color: var(--text-muted);
-    font-size: var(--fs-0);
-    font-weight: 700;
+    font-size: var(--gh-type-size-caption);
+    font-weight: var(--gh-type-weight-strong);
     text-transform: uppercase;
     letter-spacing: 0.04em;
   }
@@ -863,14 +863,14 @@
     align-items: center;
     gap: var(--s-1);
     color: var(--text);
-    font-size: var(--fs-2);
+    font-size: var(--gh-type-size-body);
   }
   code {
     font-family: 'SF Mono', monospace;
     background: var(--bg-raised-2);
     padding: 0 4px;
     border-radius: var(--r-1);
-    font-size: var(--fs-1);
+    font-size: var(--gh-type-size-meta);
   }
   .coord-list {
     display: flex;
@@ -890,7 +890,7 @@
     border: 1px solid var(--border);
     border-radius: var(--r-2);
     background: var(--bg);
-    font-size: var(--fs-2);
+    font-size: var(--gh-type-size-body);
   }
   .draft-details {
     border: 1px solid var(--border);
@@ -901,8 +901,8 @@
   .draft-details summary {
     cursor: pointer;
     color: var(--text-muted);
-    font-size: var(--fs-1);
-    font-weight: 600;
+    font-size: var(--gh-type-size-meta);
+    font-weight: var(--gh-type-weight-strong);
   }
   .draft-details[open] summary {
     margin-bottom: var(--s-2);
@@ -915,8 +915,8 @@
     display: flex;
     flex-direction: column;
     gap: var(--s-1);
-    font-size: var(--fs-2);
-    line-height: var(--lh-body);
+    font-size: var(--gh-type-size-body);
+    line-height: var(--gh-type-line-height-body);
   }
   .coord-mandate {
     color: var(--text);
@@ -928,12 +928,12 @@
     line-height: inherit;
   }
   .coord-concerns {
-    font-size: var(--fs-1);
+    font-size: var(--gh-type-size-meta);
     color: var(--text-muted);
   }
   .status-line {
     color: var(--text);
-    font-size: var(--fs-2);
+    font-size: var(--gh-type-size-body);
   }
   .activity {
     padding: var(--s-2);
@@ -951,7 +951,7 @@
   }
   .local-config-prompt strong {
     color: var(--text);
-    font-size: var(--fs-2);
+    font-size: var(--gh-type-size-body);
   }
   .local-config-list {
     display: grid;
@@ -965,7 +965,7 @@
     border: 1px solid var(--border);
     border-radius: var(--r-1);
     color: var(--text);
-    font-size: var(--fs-1);
+    font-size: var(--gh-type-size-meta);
     font-family: var(--font-mono);
     cursor: pointer;
   }

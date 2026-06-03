@@ -169,18 +169,18 @@
     return turn.summary
   }
 
-  function taskStateTone(turn: TaskThreadInFlightTurn): 'neutral' | 'ok' | 'warn' | 'danger' | 'accent' | 'running' | 'agent' | 'agent-attention' {
+  function taskStateTone(turn: TaskThreadInFlightTurn): 'neutral' | 'ok' | 'warn' | 'danger' | 'accent' | 'running' {
     if (needsRecovery(turn)) return 'warn'
     if (briefShapingTimedOut(turn)) return 'warn'
     if (briefShapingPaused(turn)) return 'warn'
     if (turn.liveAgent) return 'running'
-    if (needsWorkerHandoffSpecCleanup(turn)) return 'agent-attention'
+    if (needsWorkerHandoffSpecCleanup(turn)) return 'warn'
     switch (turn.taskStatus) {
-      case 'ready': return 'agent'
-      case 'import_draft': return 'agent-attention'
-      case 'gate_check': return 'agent'
-      case 'review': return 'agent'
-      case 'exploring': return 'agent'
+      case 'ready': return 'ok'
+      case 'import_draft': return 'warn'
+      case 'gate_check': return 'ok'
+      case 'review': return 'ok'
+      case 'exploring': return 'accent'
       case 'in_progress': return 'neutral'
       default: return 'neutral'
     }
@@ -351,7 +351,7 @@
         <StateSummary
           label="Brief cleanup needed"
           description="Guildhall needs to turn the source notes into a usable task brief before implementation."
-          tone="agent-attention"
+          tone="warn"
         />
         <p class="detail-copy">
           The Work board sent you here because this task is marked ready, but its brief/spec is not complete enough for a worker yet. Clean up brief lets Guildhall finish the handoff before implementation.
@@ -648,8 +648,8 @@
   .detail-copy {
     margin: 0;
     color: var(--text-muted);
-    font-size: var(--fs-2);
-    line-height: var(--lh-body);
+    font-size: var(--gh-type-size-body);
+    line-height: var(--gh-type-line-height-body);
   }
   .recovery-meta {
     display: flex;
@@ -659,8 +659,8 @@
   .more > summary {
     cursor: pointer;
     color: var(--text-muted);
-    font-size: var(--fs-1);
-    font-weight: 700;
+    font-size: var(--gh-type-size-meta);
+    font-weight: var(--gh-type-weight-strong);
     letter-spacing: 0.05em;
     list-style: none;
     text-transform: uppercase;
@@ -699,14 +699,14 @@
   }
   .external-step-copy strong {
     color: var(--text);
-    font-size: var(--fs-2);
-    line-height: var(--lh-tight);
+    font-size: var(--gh-type-size-body);
+    line-height: var(--gh-type-line-height-tight);
   }
   .external-step-copy span,
   .external-step-owner {
     color: var(--text-muted);
-    font-size: var(--fs-1);
-    line-height: var(--lh-body);
+    font-size: var(--gh-type-size-meta);
+    line-height: var(--gh-type-line-height-body);
   }
   .external-step-owner {
     white-space: nowrap;
@@ -714,10 +714,10 @@
   .section-label {
     margin: 0;
     color: var(--text-muted);
-    font-size: var(--fs-0);
-    font-weight: 800;
+    font-size: var(--gh-type-size-caption);
+    font-weight: var(--gh-type-weight-strong);
     letter-spacing: 0.05em;
-    line-height: 1;
+    line-height: var(--gh-type-line-height-control);
     text-transform: uppercase;
   }
   .live-activity {
@@ -734,7 +734,7 @@
     justify-content: space-between;
     gap: var(--s-3);
     color: var(--text-muted);
-    font-size: var(--fs-1);
+    font-size: var(--gh-type-size-meta);
   }
   .live-checklist-steps {
     display: grid;
@@ -759,18 +759,18 @@
     min-width: 0;
   }
   .live-step-copy strong {
-    font-size: var(--fs-2);
-    line-height: var(--lh-tight);
+    font-size: var(--gh-type-size-body);
+    line-height: var(--gh-type-line-height-tight);
   }
   .live-step-copy span,
   .live-step-state {
     color: var(--text-muted);
-    font-size: var(--fs-1);
-    line-height: var(--lh-body);
+    font-size: var(--gh-type-size-meta);
+    line-height: var(--gh-type-line-height-body);
   }
   .error {
     margin: 0;
     color: var(--danger);
-    font-size: var(--fs-1);
+    font-size: var(--gh-type-size-meta);
   }
 </style>

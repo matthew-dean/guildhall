@@ -929,16 +929,16 @@
     return t.status === 'active' ? 'now' : 'next'
   }
 
-  function turnStatusChipTone(t: Turn): 'ok' | 'warn' | 'neutral' | 'accent' | 'agent' | 'agent-attention' {
+  function turnStatusChipTone(t: Turn): 'ok' | 'warn' | 'neutral' | 'accent' {
     if (t.status === 'done') return 'ok'
     if (needsRecovery(t)) return 'warn'
     if (t.kind === 'inflight' && t.taskId === 'task-meta-intake' && !turnLiveAgent(t)) {
       return 'warn'
     }
     if (t.kind === 'inflight' && t.importedDraft && (t.taskStatus === 'import_draft' || t.taskStatus === 'exploring') && !turnLiveAgent(t)) {
-      return 'agent-attention'
+      return 'warn'
     }
-    if (isQueuedForGuildhall(t)) return 'agent'
+    if (isQueuedForGuildhall(t)) return 'ok'
     if (t.kind === 'inflight' && t.status === 'active' && !turnLiveAgent(t)) return 'neutral'
     if (t.kind === 'spec_review' && t.status === 'active') return 'neutral'
     return t.status === 'active' ? 'neutral' : 'neutral'
@@ -1029,18 +1029,20 @@
     return null
   }
 
-  function ownershipTone(t: Turn): 'ok' | 'warn' | 'neutral' | 'accent' | 'running' | 'agent' | 'agent-attention' {
+  function ownershipTone(t: Turn): 'ok' | 'warn' | 'neutral' | 'accent' | 'running' {
     if (turnLiveAgent(t)) return 'running'
     const label = ownershipLabel(t)
     if (label === 'Needs you' || label === 'Needs recovery') return 'warn'
-    if (label === 'Needs brief') return 'agent-attention'
-    if (label === 'Queued' || label === 'Queued for Guildhall' || label === 'Guildhall shaping' || label === 'Guildhall can continue') return 'agent'
+    if (label === 'Needs brief') return 'warn'
+    if (label === 'Guildhall can continue') return 'ok'
+    if (label === 'Queued' || label === 'Queued for Guildhall') return 'ok'
+    if (label === 'Guildhall shaping') return 'accent'
     return 'neutral'
   }
 
   function turnIndexChip(
     turn: Turn,
-  ): { label: string; tone: 'ok' | 'warn' | 'neutral' | 'accent' | 'running' | 'agent' | 'agent-attention' } | null {
+  ): { label: string; tone: 'ok' | 'warn' | 'neutral' | 'accent' | 'running' } | null {
     const owner = ownershipLabel(turn)
     if (owner) {
       return { label: owner, tone: ownershipTone(turn) }
@@ -1049,7 +1051,7 @@
       return { label: turnStatusChipLabel(turn), tone: turnStatusChipTone(turn) }
     }
     if (turn.kind === 'inflight' && turn.status !== 'done') {
-      return { label: taskStateLabel(turn), tone: tone(turn) === 'warn' ? 'warn' : 'agent' }
+      return { label: taskStateLabel(turn), tone: tone(turn) === 'warn' ? 'warn' : 'ok' }
     }
     return null
   }
@@ -2127,16 +2129,16 @@
     }
   }
 
-  function taskStateTone(turn: InFlightTurn): 'neutral' | 'ok' | 'warn' | 'danger' | 'accent' | 'running' | 'agent' | 'agent-attention' {
+  function taskStateTone(turn: InFlightTurn): 'neutral' | 'ok' | 'warn' | 'danger' | 'accent' | 'running' {
     if (needsRecovery(turn)) return 'warn'
     if (turnLiveAgent(turn)) return 'running'
-    if (needsWorkerHandoffSpecCleanup(turn)) return 'agent-attention'
+    if (needsWorkerHandoffSpecCleanup(turn)) return 'warn'
     switch (turn.taskStatus) {
-      case 'ready': return 'agent'
-      case 'import_draft': return 'agent-attention'
-      case 'gate_check': return 'agent'
-      case 'review': return 'agent'
-      case 'exploring': return 'agent'
+      case 'ready': return 'ok'
+      case 'import_draft': return 'warn'
+      case 'gate_check': return 'ok'
+      case 'review': return 'ok'
+      case 'exploring': return 'accent'
       case 'in_progress': return 'neutral'
       default: return 'neutral'
     }
@@ -5208,10 +5210,10 @@
     --thread-lh-meta: 1.25;
     --thread-lh-body: 1.4;
     --thread-lh-title: var(--thread-lh-body);
-    --thread-color-strong: var(--text);
-    --thread-color-body: var(--text);
-    --thread-color-soft: var(--text-muted);
-    --thread-color-muted: var(--text-muted);
+    --thread-color-strong: var(--gh-color-text-primary);
+    --thread-color-body: var(--gh-color-text-body);
+    --thread-color-soft: var(--gh-color-text-secondary);
+    --thread-color-muted: var(--gh-color-text-secondary);
     width: 100%;
     margin: 0;
     flex: 1 1 auto;
@@ -5268,7 +5270,7 @@
   }
   :global(.thread-index-row) {
     width: 100%;
-    color: var(--text);
+    color: var(--thread-color-body);
   }
   :global(.thread-index-row.utility-panel) {
     gap: var(--s-1);
@@ -5285,6 +5287,9 @@
     font-size: var(--thread-fs-title);
     line-height: var(--thread-lh-title);
     font-weight: var(--gh-type-weight-strong);
+  }
+  :global(.thread-index-row.is-selected) .thread-index-row-top strong {
+    color: var(--thread-color-strong);
   }
   .thread-index-time {
     flex: none;
@@ -5453,9 +5458,7 @@
     font-size: var(--gh-type-size-meta);
     line-height: var(--thread-lh-meta);
   }
-  .thread-active-checklist-line.is-complete {
-    color: var(--text-soft);
-  }
+  .thread-active-checklist-line.is-complete { color: var(--gh-color-text-disabled); }
   .thread-active-question,
   .thread-active-review {
     display: grid;
@@ -5649,7 +5652,7 @@
   .thread-chat-bubble-head span {
     color: var(--thread-color-muted);
     font-size: var(--gh-type-size-caption);
-    font-weight: var(--gh-type-weight-strong);
+    font-weight: var(--gh-type-weight-medium);
   }
   .thread-chat-bubble p {
     margin: 0;
@@ -5712,7 +5715,7 @@
   .thread-event-head span {
     color: var(--thread-color-muted);
     font-size: var(--gh-type-size-caption);
-    font-weight: var(--gh-type-weight-strong);
+    font-weight: var(--gh-type-weight-medium);
   }
   .thread-event p {
     margin: 0;
@@ -5735,7 +5738,7 @@
     background: color-mix(in srgb, var(--bg-raised) 72%, transparent);
     color: var(--thread-color-muted);
     font-size: var(--gh-type-size-caption);
-    line-height: 1;
+    line-height: var(--gh-type-line-height-control);
     transition:
       border-color 140ms ease,
       background-color 140ms ease,
@@ -5856,7 +5859,7 @@
   .question-card-meta {
     color: var(--text-muted);
     font-size: var(--gh-type-size-meta);
-    font-weight: var(--gh-type-weight-emphasis);
+    font-weight: var(--gh-type-weight-medium);
     letter-spacing: 0;
     text-transform: uppercase;
   }
@@ -5917,7 +5920,7 @@
     overflow-wrap: anywhere;
   }
   .git-story-next {
-    color: var(--text);
+    color: var(--gh-color-text-body);
     font-weight: var(--gh-type-weight-strong);
   }
   :global(.runtime-state-row) {
@@ -5933,7 +5936,7 @@
   :global(.setup-context) strong {
     color: var(--text);
     font-size: var(--gh-type-size-meta);
-    font-weight: var(--gh-type-weight-emphasis);
+    font-weight: var(--gh-type-weight-medium);
   }
   :global(.setup-context) p {
     margin: 0;
@@ -5982,7 +5985,7 @@
     color: var(--text-muted);
     cursor: pointer;
     font-size: var(--gh-type-size-meta);
-    font-weight: var(--gh-type-weight-strong);
+    font-weight: var(--gh-type-weight-medium);
     list-style-position: inside;
   }
   .thread-disclosure > summary:hover {
@@ -6023,8 +6026,8 @@
   .source-ref span {
     color: var(--accent-2);
     font-size: var(--gh-type-size-meta);
-    font-weight: var(--gh-type-weight-emphasis);
-    line-height: 1;
+    font-weight: var(--gh-type-weight-strong);
+    line-height: var(--gh-type-line-height-control);
   }
   .source-ref code {
     max-width: 100%;
@@ -6282,7 +6285,7 @@
     gap: var(--gh-space-1);
     color: var(--text);
     font-size: var(--gh-type-size-meta);
-    font-weight: var(--gh-type-weight-emphasis);
+    font-weight: var(--gh-type-weight-strong);
   }
   .live-checklist-head,
   .live-step {
@@ -6299,7 +6302,7 @@
   .live-step-state {
     color: var(--text-muted);
     font-size: var(--gh-type-size-meta);
-    font-weight: var(--gh-type-weight-emphasis);
+    font-weight: var(--gh-type-weight-medium);
     text-transform: uppercase;
   }
   .live-checklist-steps {
@@ -6324,8 +6327,14 @@
     color: var(--text-muted);
     font-size: var(--gh-type-size-meta);
   }
-  .live-step.done .live-step-copy {
-    color: var(--text-muted);
+  .live-step.done .live-step-copy { color: var(--gh-color-text-disabled); }
+  .live-step.done .live-step-copy strong {
+    color: var(--gh-color-text-disabled);
+    font-weight: var(--gh-type-weight-medium);
+  }
+  .live-step.active .live-step-copy strong {
+    color: var(--gh-color-text-primary);
+    font-weight: var(--gh-type-weight-strong);
   }
   .live-step.active .live-step-state {
     color: var(--warn);

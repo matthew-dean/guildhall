@@ -168,7 +168,7 @@
     border-radius: 999px;
     font-size: var(--gh-type-size-2);
     font-weight: var(--gh-type-weight-strong);
-    line-height: 1;
+    line-height: var(--gh-type-line-height-control);
   }
 
   .gh-annotated-marker {

@@ -44,8 +44,8 @@ app tokens during migration, but it must stop owning independent `--fs-*`,
 
 | Token area | Canonical roles | Budget | Not allowed in surfaces |
 | --- | --- | --- | --- |
-| Color | canvas, sunken, raised, elevated, neutral, info, ok, warn, danger, accent | Semantic role only; no local hue families | Hardcoded hex/rgb/hsl, near-duplicate palette names, local semantic colors |
-| Type size | caption, meta, body, body-strong, panel-title, section-title, page-title, display-title, code | Role token only | Raw px/rem sizes, `clamp(...)`, viewport-scaled text, old `--fs-*` in new code |
+| Color | canvas, sunken, raised, elevated, neutral, info, ok, warn, danger, accent, primary text, body text, secondary text, muted text, disabled/history text | Semantic role only; no local hue families | Hardcoded hex/rgb/hsl, near-duplicate palette names, local semantic colors |
+| Type size | caption, meta, body, row-title, row-title-current, body-strong, panel-title, section-title, page-title, display-title, action, state, history, code | Role token only | Raw px/rem sizes, `clamp(...)`, viewport-scaled text, old `--fs-*` in new code |
 | Type weight | body, medium, strong, emphasis | Four named weights max | Raw `600`, `650`, `700`, `800`; local bolding without a role |
 | Line height | tight, body, relaxed, control | Role token only | Raw `1`, `1.2`, `1.5`, `1.72` outside token/component internals |
 | Spacing | `--gh-space-*`, component padding tokens, control padding tokens | 4px grid plus named component exceptions | Local `2px`, `3px`, `7px`, arbitrary rem padding/gaps |
@@ -57,14 +57,20 @@ app tokens during migration, but it must stop owning independent `--fs-*`,
 
 | Role | Use | Max container | Weight |
 | --- | --- | --- | --- |
+| `display-title` | Deliberate public/display hero title | Public docs or focused display primitive only | strong |
 | `page-title` | Top-level project/page title | Page header only | strong |
 | `section-title` | Major surface band or route section | Page section, not inside cards | strong |
 | `panel-title` | Card, drawer, modal, settings panel, graph detail panel | Framed panel | strong |
 | `body` | Default UI copy | Everywhere | body |
 | `body-strong` | Short dense label or table key | Operational panels, rows, forms | strong |
+| `row-title` | Ordinary object or thread title in lists | Rows and compact list items | medium |
+| `row-title-current` | Selected/current object title | Selected rows, current task/thread/project | strong |
 | `meta` | Supporting path/date/source/count text | Rows, bylines, captions | body or medium |
 | `caption` | Very compact helper text | Chips, legends, dense rows | body |
 | `eyebrow` | Short category label | Headers only | strong |
+| `history` | Completed, archived, stale, unavailable, or past-tense text | History, done states, disabled affordances | body |
+| `action` | Button/control label metrics | Controls only | strong |
+| `state` | Short status word or count, paired with explicit tone | Chips, pills, status labels | medium by default |
 | `code` | Commands, ids, paths | Inline code and command blocks | body |
 
 Rules:
@@ -73,10 +79,43 @@ Rules:
   panel.
 - `display-title` is reserved for public docs or deliberate hero surfaces; it is
   not a dashboard heading.
+- `primary` text color is reserved for selected/current objects, true headings,
+  active focus, and action-priority labels. Do not use it as the default row
+  title color.
+- Ordinary row titles use `row-title`: readable, confident, and medium-weight,
+  but not as loud as selected/current text.
+- Completed, archived, stale, and already-handled items use `history` instead
+  of staying bold/bright.
+- Status color communicates state only when paired with explicit text. It does
+  not substitute for hierarchy.
 - Letter spacing defaults to `0`. Positive letter spacing is allowed only for
   the `eyebrow` role. Negative letter spacing is not allowed.
 - Global `h1`-`h4` styles may provide reset defaults only. Product surfaces must
   choose explicit text roles through primitives or role classes.
+
+## Text Color Semantics
+
+| Color role | Communicates | Use |
+| --- | --- | --- |
+| `primary` | Selected/current/focused or true title | Current thread/task/project, active nav, page/panel headings, high-priority action labels |
+| `body` | Normal readable content | Prose, markdown, form values, ordinary descriptions |
+| `secondary` | Important but not current | Unselected row titles, summaries, non-current labels that still need to scan |
+| `muted` | Context and metadata | Timestamps, source paths, bylines, disclosure labels, helper copy |
+| `disabled` | Done, archived, stale, unavailable | Completed checklist items, history rows, disabled explanations |
+
+Color should carry importance before weight does. When everything is bright,
+nothing is selected. When everything is bold, nothing is urgent.
+
+## Weight Semantics
+
+- `body` (`400`) is the default for prose and user-authored text.
+- `medium` (`500`) is the default for structured UI labels and ordinary row
+  titles.
+- `strong` (`600`) is for headings, selected/current row titles, and controls.
+- `emphasis` (`700`) is rare: urgent state labels, numeric badges, and
+  destructive confirmation. It is not the default way to make text readable.
+- `800`, `750`, `650`, and local numeric weights are not part of the product
+  hierarchy.
 
 ## Variant Vocabulary
 

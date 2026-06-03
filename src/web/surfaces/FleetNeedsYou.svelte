@@ -203,13 +203,13 @@
   }
   h1 {
     margin: 0;
-    font-size: clamp(1.25rem, 1.8vw, 1.65rem);
-    line-height: var(--lh-tight);
+    font-size: var(--gh-type-size-page-title);
+    line-height: var(--gh-type-line-height-tight);
   }
   .lede {
     margin: var(--s-1) 0 0;
     color: var(--text-muted);
-    font-size: var(--fs-0);
+    font-size: var(--gh-type-size-caption);
   }
   .notice,
   .empty,
@@ -239,7 +239,7 @@
   .summary {
     padding: var(--s-2) var(--s-3);
     color: var(--text-muted);
-    font-size: var(--fs-1);
+    font-size: var(--gh-type-size-meta);
   }
   .summary span {
     display: inline-flex;
@@ -263,13 +263,13 @@
   }
   .group-head h2 {
     margin: 0;
-    font-size: var(--fs-3);
-    line-height: var(--lh-tight);
+    font-size: var(--gh-type-size-panel-title);
+    line-height: var(--gh-type-line-height-tight);
   }
   .group-head p {
     margin: var(--s-1) 0 0;
     color: var(--text-muted);
-    font-size: var(--fs-1);
+    font-size: var(--gh-type-size-meta);
   }
   .items {
     list-style: none;
@@ -322,19 +322,19 @@
   }
   .item-body strong {
     color: var(--text);
-    font-weight: 650;
+    font-weight: var(--gh-type-weight-strong);
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
   }
   .item-body span {
     color: var(--text-muted);
-    font-size: var(--fs-1);
+    font-size: var(--gh-type-size-meta);
     display: -webkit-box;
     -webkit-line-clamp: 2;
     -webkit-box-orient: vertical;
     overflow: hidden;
-    line-height: var(--lh-body);
+    line-height: var(--gh-type-line-height-body);
   }
   .item-verb {
     display: inline-flex;
@@ -346,8 +346,8 @@
     border-radius: var(--r-1);
     background: color-mix(in srgb, var(--accent) 12%, transparent);
     color: var(--text);
-    font-size: var(--fs-1);
-    font-weight: 700;
+    font-size: var(--gh-type-size-meta);
+    font-weight: var(--gh-type-weight-strong);
     white-space: nowrap;
   }
   :global(.group-actions .btn) {

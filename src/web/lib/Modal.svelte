@@ -146,15 +146,15 @@
   }
   .gh-modal-head h3 {
     margin: 0;
-    font-size: var(--fs-3);
-    font-weight: 600;
+    font-size: var(--gh-type-size-panel-title);
+    font-weight: var(--gh-type-weight-strong);
   }
   .gh-modal-x {
     background: transparent;
     border: none;
     color: var(--text-muted);
     cursor: pointer;
-    font-size: var(--fs-3);
+    font-size: var(--gh-type-size-panel-title);
     padding: var(--s-1) var(--s-2);
     border-radius: 6px;
   }

@@ -1690,7 +1690,7 @@
   .head h2 {
     margin: 0;
     font-size: var(--gh-type-size-section-title);
-    font-weight: var(--gh-type-weight-emphasis);
+    font-weight: var(--gh-type-weight-strong);
     line-height: var(--gh-type-line-height-tight);
   }
   .sub {
@@ -1732,7 +1732,7 @@
     font-size: var(--gh-type-size-caption);
     text-transform: uppercase;
     letter-spacing: 0.05em;
-    font-weight: var(--gh-type-weight-emphasis);
+    font-weight: var(--gh-type-weight-medium);
     margin-bottom: var(--gh-space-1);
   }
   .detail-copy {
@@ -1766,7 +1766,7 @@
     background: color-mix(in srgb, var(--accent) 8%, var(--bg-raised));
   }
   .detail-source-title {
-    font-weight: var(--gh-type-weight-emphasis);
+    font-weight: var(--gh-type-weight-strong);
   }
   .detail-source-path,
   .detail-source-summary {
@@ -1840,7 +1840,7 @@
     font-size: var(--gh-type-size-caption);
     text-transform: uppercase;
     letter-spacing: 0.05em;
-    font-weight: var(--gh-type-weight-emphasis);
+    font-weight: var(--gh-type-weight-medium);
   }
   .summary-preview {
     color: var(--text);
@@ -1928,7 +1928,7 @@
   .kind-label {
     color: var(--accent-2);
     font-size: var(--gh-type-size-caption);
-    font-weight: var(--gh-type-weight-emphasis);
+    font-weight: var(--gh-type-weight-strong);
     text-transform: uppercase;
     letter-spacing: 0.05em;
   }

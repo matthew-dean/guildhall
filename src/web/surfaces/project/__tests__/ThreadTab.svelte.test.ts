@@ -1437,7 +1437,7 @@ describe('ThreadTab', () => {
     await screen.findByRole('button', { name: 'Clean up brief' })
     const needsBriefChip = selectedThread().getByText('Needs brief')
     expect(needsBriefChip).toBeTruthy()
-    expect(needsBriefChip.classList.contains('tone-agent-attention')).toBe(true)
+    expect(needsBriefChip.classList.contains('tone-warn')).toBe(true)
     expect(selectedThread().getAllByText('Brief checklist').length).toBeGreaterThan(0)
     expect(screen.queryByText('No upstream')).toBeNull()
     expect(screen.queryByText(/has no upstream branch/)).toBeNull()
@@ -1482,7 +1482,7 @@ describe('ThreadTab', () => {
     await screen.findAllByText('The starter checklist is complete, but Guildhall still needs a full product brief and spec handoff before a worker can start.')
     const needsBriefChip = selectedThread().getByText('Needs brief')
     expect(needsBriefChip).toBeTruthy()
-    expect(needsBriefChip.classList.contains('tone-agent-attention')).toBe(true)
+    expect(needsBriefChip.classList.contains('tone-warn')).toBe(true)
     expect(selectedThread().getByText('Handoff still needs cleanup')).toBeTruthy()
     await userEvent.click(screen.getByRole('button', { name: 'Clean up brief' }))
     expect(screen.queryByRole('button', { name: 'Start work' })).toBeNull()
@@ -2831,6 +2831,14 @@ describe('ThreadTab', () => {
     expect(chipRowBlock).toContain('margin-bottom: 0')
     expect(source).not.toMatch(/\.thread\s+:global\(\.chip\)/)
     expect(source).not.toMatch(/\.thread-index-row-chips\s+:global\(\.chip\)/)
+  })
+
+  it('routes Thread ownership chips through canonical chip tones', () => {
+    const source = readFileSync('src/web/surfaces/project/ThreadTab.svelte', 'utf8')
+
+    expect(source).toContain("if (label === 'Needs brief') return 'warn'")
+    expect(source).toContain("'Guildhall can continue') return 'ok'")
+    expect(source).not.toMatch(/agent-attention|tone=\"agent|tone='agent'|return 'agent'/)
   })
 
   it('renders thread content before runtime side-loaders finish', async () => {

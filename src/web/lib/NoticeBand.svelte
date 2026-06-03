@@ -85,8 +85,8 @@
   .notice-band-actions :global(a) {
     color: inherit;
     text-decoration: underline;
-    font-size: var(--fs-2);
-    font-weight: 600;
+    font-size: var(--gh-type-size-body);
+    font-weight: var(--gh-type-weight-strong);
   }
   .notice-band-actions :global(button) {
     background: transparent;

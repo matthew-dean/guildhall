@@ -57,6 +57,61 @@ babysit setup/import/provider/release states across multiple pages.
 
 ## Current Follow-Ups
 
+- [x] Bring Thread status chips back under the canonical `Chip` contract. The
+  live Narrative Harness Thread page showed `Guildhall can continue` and `Needs
+  brief` as bespoke status treatments, including one wrapped chip. Closure
+  evidence, 2026-06-03: removed the `agent` / `agent-attention` chip tones and
+  `--chip-agent-*` tokens, mapped Thread/Work/drawer status labels back to the
+  canonical `ok`, `warn`, `accent`, `running`, and `neutral` tone budget, and
+  made the shared `.chip` geometry single-line with overflow ellipsis. Contract
+  tests now assert chip tones stay canonical and Thread ownership labels route
+  through `ok` / `warn` instead of inventing agent tones. Verification: source
+  sweep found no chip `tone-agent`, `agent-attention`, or `chip-agent` usage
+  outside tests/unrelated agent concepts; focused chip suite
+  `pnpm vitest run src/web/lib/__tests__/Button.css-contract.test.ts
+  src/web/surfaces/project/__tests__/ThreadTab.svelte.test.ts -t "chip"
+  --reporter=dot` (`9` tests); affected UI suites covering Button, Thread,
+  Current drawer, and Work (`129` tests); `pnpm typecheck`; `pnpm lint:design`;
+  `pnpm build`; `git diff --check`; `pnpm dev:install`; installed CSS/CLI
+  hashes matched the worktree build; `/api/stale-server` returned
+  `stale:false`; and browser computed-style proof on
+  `http://localhost:7777/projects/narrative-harness/thread` showed `Needs
+  brief` as `.tone-warn`, `Guildhall can continue` as `.tone-ok`,
+  `white-space: nowrap`, no wrapping, and no `tone-agent` / `agent-attention`
+  classes.
+- [x] Normalize Guildhall typography around one semantic role system and carry
+  that rule into agent conformance. The live Thread complaint is the forcing
+  function: chips, thread-list row titles, timestamps, labels, and buttons had
+  too many bespoke sizes, line heights, weights, and bright foreground choices.
+  Implementation target: replace the old `--fs-*` / `--lh-*` split with
+  generated `--gh-type-*` role classes, reserve primary text for selected/current
+  states and true headings without making ordinary rows feel dead, keep rare
+  emphasis weight rare, and require spec/worker/reviewer/design-lens agents to
+  name semantic text hierarchy plus any token or variant budget before adding
+  new visual vocabulary. Closure evidence, 2026-06-03: added
+  `packages/ui/src/text-role-definitions.js`, generated `.gh-text-*` role
+  classes, moved app body/text/chip/thread typography onto `--gh-type-*` and
+  `--gh-color-text-*`, removed app-local `--fs-*` / `--lh-*`, demoted ordinary
+  Thread row titles to secondary/medium while keeping selected/current rows
+  primary/strong, and removed casual `emphasis` / hardcoded white text from
+  product source. Agent conformance now requires spec, worker, reviewer, corpus
+  diagnostics, and design-lens rechecks to name semantic text hierarchy plus any
+  token or variant budget. Verification: source audits found no raw type
+  metrics or numeric weights in `src/web` / `packages/ui/src`; `node
+  packages/ui/scripts/generate-styles.mjs --check`; focused Vitest suite
+  covering Button CSS contract, design-token audit, design-governance packets,
+  ThreadTab, agent prompts, and design-lens review (`170` tests); full
+  `pnpm vitest run --reporter=dot` (`3625` passed, `3` skipped);
+  `pnpm typecheck`; `pnpm --filter @guildhall/ui typecheck`;
+  `pnpm lint:design`; `pnpm build`; `git diff --check`; `pnpm dev:install`;
+  direct `scripts/install.sh` artifact install after the first installed bundle
+  hash lagged the built artifact; `guildhall stop`; `guildhall start`; and
+  `/api/stale-server` returned `stale:false` on pid `72468`. Browser proof on
+  `http://localhost:7777/projects/narrative-harness/thread` after a cache-busted
+  reload showed no restart banner, `--gh-color-text-body: #ded6e6`, chip
+  `11px` / weight `500`, selected thread title primary `#f3edf6` / `12px` /
+  weight `600`, unselected title secondary `#c7b9d1` / `12px` / weight `500`,
+  and composer bottom gap `52px`.
 - [x] Harden the 0.10 multi-project flow from the 2026-06-03 installed-app
   audit. Verification baseline: `pnpm build`, `pnpm dev:install`,
   `guildhall stop`, LaunchAgent restart, `/api/stale-server` `stale:false`
@@ -6663,7 +6718,7 @@ local 0.7 release-candidate build at `http://localhost:7777/projects/narrative-h
     without becoming as loud as buttons. Passive Guildhall states such as
     `Queued`, `Queued for Guildhall`, and `Guildhall shaping` use a quieter
     agent tone; Guildhall-owned handoff states such as `Brief cleanup needed`
-    use `agent-attention`; user decisions, approvals, and recovery risks remain
+    use the canonical `warn` chip tone; user decisions, approvals, and recovery risks remain
     warning/human-attention states.
   - [x] Overview blocked-work rows no longer render a large red status panel
     inside each row. The task title and reason stay primary, and the blocker

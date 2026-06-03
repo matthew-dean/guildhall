@@ -193,15 +193,15 @@
     gap: var(--s-2);
     align-items: center;
     flex-wrap: wrap;
-    font-size: var(--fs-0);
+    font-size: var(--gh-type-size-caption);
     text-transform: uppercase;
     letter-spacing: 0.05em;
     color: var(--text-muted);
-    font-weight: 700;
+    font-weight: var(--gh-type-weight-strong);
   }
   p {
-    font-size: var(--fs-2);
-    line-height: var(--lh-body);
+    font-size: var(--gh-type-size-body);
+    line-height: var(--gh-type-line-height-body);
   }
   .debug-record {
     display: grid;
@@ -221,14 +221,14 @@
   }
   .debug-head h4 {
     margin: 0;
-    font-size: var(--fs-2);
+    font-size: var(--gh-type-size-body);
   }
   .debug-head h4 span,
   .debug-head p,
   .counts,
   .path {
     color: var(--text-muted);
-    font-size: var(--fs-1);
+    font-size: var(--gh-type-size-meta);
   }
   .counts {
     display: flex;
@@ -237,7 +237,7 @@
   }
   h5 {
     margin: 0 0 var(--s-1);
-    font-size: var(--fs-1);
+    font-size: var(--gh-type-size-meta);
     text-transform: uppercase;
     letter-spacing: 0.05em;
     color: var(--text-muted);
@@ -266,8 +266,8 @@
     border: 1px solid var(--border);
     border-radius: var(--r-2);
     padding: var(--s-3);
-    font-size: var(--fs-1);
-    line-height: var(--lh-body);
+    font-size: var(--gh-type-size-meta);
+    line-height: var(--gh-type-line-height-body);
     max-height: 14rem;
     overflow: auto;
   }

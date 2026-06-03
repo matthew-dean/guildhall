@@ -428,6 +428,8 @@ describe('agent factories', () => {
     expect(prompt).toContain('project contract')
     expect(prompt).toContain('contract delta')
     expect(prompt).toContain('adjust the blueprint')
+    expect(prompt).toContain('semantic text hierarchy')
+    expect(prompt).toContain('token or variant budget')
   })
 
   it('createSpecAgent includes the pressure-test intake operating contract', () => {
@@ -519,6 +521,8 @@ describe('agent factories', () => {
     expect(prompt).toContain('project contract')
     expect(prompt).toContain('must adjust the implementation')
     expect(prompt).toContain('contract delta')
+    expect(prompt).toContain('semantic text hierarchy')
+    expect(prompt).toContain('token or variant budget')
   })
 
   it('createWorkerAgent treats shell verification as durable progress', async () => {
@@ -610,6 +614,8 @@ describe('agent factories', () => {
     expect(prompt).toContain('**Contract / governance fit:**')
     expect(prompt).toContain('require revision')
     expect(prompt).toContain('contract delta')
+    expect(prompt).toContain('semantic text hierarchy')
+    expect(prompt).toContain('token or variant budget')
   })
 
   it('createReviewerAgent requires semantic request-fit review for specs', () => {

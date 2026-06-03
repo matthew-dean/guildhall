@@ -88,12 +88,13 @@ function buildDesignLensFinding(
   now: string,
 ): Omit<DesignFinding, 'classification'> {
   const classification = classifyTaskForDesignLens(taskText)
+  const hierarchyLine = ' Recheck the semantic text hierarchy too: primary/current, body, secondary, muted, history, action, state, and code should map to named roles. If the active work needs a new text role, token, or component variant, require a token or variant budget before the surface consumes it.'
   const architectureLine = classification === 'architecture-opportunity'
     ? ' Check whether the stronger move is an owner-visible dependency or architecture pivot, including bespoke-to-library or library-to-bespoke. If the current shape is style sprawl, prefer elevating the need into shared UI primitives, shared layout controls, or clearer design-system prop semantics.'
     : ''
   return {
     id: findingId,
-    summary: `Recheck active work "${task.title}" with the current design lens before it advances. Preserve the accepted intent, fill design blind spots, and confirm the control, layout, and design-system choices are still strong. Do not let the task add new style sprawl in product surfaces when the stronger move is to extend or extract shared UI semantics.${architectureLine}`,
+    summary: `Recheck active work "${task.title}" with the current design lens before it advances. Preserve the accepted intent, fill design blind spots, and confirm the control, layout, and design-system choices are still strong. Do not let the task add new style sprawl in product surfaces when the stronger move is to extend or extract shared UI semantics.${hierarchyLine}${architectureLine}`,
     source: {
       kind: 'design-lens-review',
       artifactId: `task:${task.id}`,

@@ -213,13 +213,13 @@
     align-items: baseline;
     flex-wrap: wrap;
   }
-  .muted { color: var(--text-muted); font-size: var(--fs-1); }
+  .muted { color: var(--text-muted); font-size: var(--gh-type-size-meta); }
   .toggle {
     background: none;
     border: none;
     color: var(--text-muted);
     font: inherit;
-    font-size: var(--fs-1);
+    font-size: var(--gh-type-size-meta);
     text-decoration: underline;
     cursor: pointer;
   }
@@ -264,21 +264,21 @@
     flex: 1;
   }
   .title {
-    font-size: var(--fs-2);
-    font-weight: 600;
+    font-size: var(--gh-type-size-body);
+    font-weight: var(--gh-type-weight-strong);
   }
   .step.tone-ok .title { color: var(--text-muted); text-decoration: line-through; }
   .why {
-    font-size: var(--fs-1);
+    font-size: var(--gh-type-size-meta);
     color: var(--text-muted);
-    line-height: var(--lh-body);
+    line-height: var(--gh-type-line-height-body);
   }
   .linky {
     background: none;
     border: none;
     color: var(--text-muted);
     font: inherit;
-    font-size: var(--fs-1);
+    font-size: var(--gh-type-size-meta);
     text-decoration: underline;
     cursor: pointer;
     padding: 0 0 0 var(--s-1);

@@ -14,6 +14,8 @@ import type {
 
 const REQUIRED_REVIEWER_CHECKS = [
   'Name the token/component roles reused or extended.',
+  'Name the semantic text hierarchy role for every new text treatment.',
+  'Justify every new token or variant as a distinct communication need, with a budget and removal path.',
   'Reject local one-off styling when a governed primitive exists.',
   'Reject new variant names unless a component contract changed.',
 ]

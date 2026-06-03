@@ -242,7 +242,7 @@
     return needsBreakdownReview(task) ? 'warn' : statusTone(task.status)
   }
 
-  function statusTone(status: string | undefined): 'accent' | 'ok' | 'warn' | 'danger' | 'neutral' | 'agent' {
+  function statusTone(status: string | undefined): 'accent' | 'ok' | 'warn' | 'danger' | 'neutral' {
     switch (status) {
       case 'done':
       case 'pending_pr':
@@ -252,7 +252,7 @@
       case 'ready':
       case 'review':
       case 'gate_check':
-        return 'agent'
+        return 'ok'
       case 'spec_review':
         return 'warn'
       case 'in_progress':
@@ -357,8 +357,8 @@
   .panel-label {
     margin: 0 0 var(--s-1);
     color: var(--text-muted);
-    font-size: var(--fs-0);
-    font-weight: 800;
+    font-size: var(--gh-type-size-caption);
+    font-weight: var(--gh-type-weight-strong);
     text-transform: uppercase;
     letter-spacing: 0.05em;
   }
@@ -399,13 +399,13 @@
     display: -webkit-box;
     overflow: hidden;
     color: var(--text);
-    line-height: var(--lh-tight);
+    line-height: var(--gh-type-line-height-tight);
     -webkit-line-clamp: 2;
     -webkit-box-orient: vertical;
   }
   .column-head span {
     color: var(--text-muted);
-    font-size: var(--fs-0);
+    font-size: var(--gh-type-size-caption);
   }
   .column-items {
     display: flex;
@@ -443,7 +443,7 @@
     display: -webkit-box;
     overflow: hidden;
     color: var(--text);
-    line-height: var(--lh-tight);
+    line-height: var(--gh-type-line-height-tight);
     -webkit-line-clamp: 2;
     -webkit-box-orient: vertical;
   }
@@ -451,8 +451,8 @@
     display: -webkit-box;
     overflow: hidden;
     color: var(--text-muted);
-    font-size: var(--fs-0);
-    line-height: var(--lh-body);
+    font-size: var(--gh-type-size-caption);
+    line-height: var(--gh-type-line-height-body);
     -webkit-line-clamp: 2;
     -webkit-box-orient: vertical;
   }
@@ -470,8 +470,8 @@
     border: 1px dashed var(--border);
     border-radius: var(--r-2);
     color: var(--text-muted);
-    font-size: var(--fs-1);
-    line-height: var(--lh-body);
+    font-size: var(--gh-type-size-meta);
+    line-height: var(--gh-type-line-height-body);
   }
   .node-packet {
     flex: 0 0 270px;
@@ -480,9 +480,9 @@
   .details-context {
     margin: 0 0 var(--s-2);
     color: var(--text);
-    font-size: var(--fs-1);
-    font-weight: 700;
-    line-height: var(--lh-tight);
+    font-size: var(--gh-type-size-meta);
+    font-weight: var(--gh-type-weight-strong);
+    line-height: var(--gh-type-line-height-tight);
   }
   .node-packet dl {
     display: grid;
@@ -491,16 +491,16 @@
   }
   .node-packet dt {
     color: var(--text-muted);
-    font-size: var(--fs-0);
-    font-weight: 800;
+    font-size: var(--gh-type-size-caption);
+    font-weight: var(--gh-type-weight-strong);
     text-transform: uppercase;
     letter-spacing: 0.05em;
   }
   .node-packet dd {
     margin: 0;
     color: var(--text);
-    font-size: var(--fs-1);
-    line-height: var(--lh-body);
+    font-size: var(--gh-type-size-meta);
+    line-height: var(--gh-type-line-height-body);
   }
 
   @media (max-width: 980px) {

@@ -107,7 +107,7 @@
     cursor: pointer;
     padding: 2px;
     border-radius: 50%;
-    line-height: 0;
+    line-height: var(--gh-type-line-height-none);
   }
   .gh-help-btn:hover,
   .gh-help-btn:focus-visible {
@@ -126,13 +126,13 @@
   .gh-help-summary {
     margin: 0 0 var(--s-3);
     color: var(--text);
-    font-size: var(--fs-2);
-    line-height: var(--lh-body);
+    font-size: var(--gh-type-size-body);
+    line-height: var(--gh-type-line-height-body);
     white-space: pre-wrap;
   }
   .gh-help-link {
     margin: 0;
-    font-size: var(--fs-1);
+    font-size: var(--gh-type-size-meta);
   }
   .gh-help-link a {
     color: var(--accent);
@@ -144,7 +144,7 @@
   .gh-help-missing {
     margin: 0;
     color: var(--warn);
-    font-size: var(--fs-2);
+    font-size: var(--gh-type-size-body);
   }
   .gh-help-close {
     background: var(--bg-raised-2);
@@ -153,7 +153,7 @@
     border-radius: 6px;
     padding: 4px 10px;
     cursor: pointer;
-    font-size: var(--fs-2);
+    font-size: var(--gh-type-size-body);
   }
   .gh-help-close:hover {
     background: var(--bg-elevated);

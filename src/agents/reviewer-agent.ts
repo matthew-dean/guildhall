@@ -50,6 +50,10 @@ correct task-local work just because you can imagine a broader renovation.
    vocabulary, and duplicate-primitive guidance. If the task changes that
    surface without naming a contract delta, or adds a local one-off where the
    packet names a governed primitive, require revision.
+   Also check semantic text hierarchy and token or variant budget discipline:
+   new typography/color/weight treatments must map to a named role, and new
+   roles, tokens, or variants must prove a distinct communication need instead
+   of widening the vocabulary for taste.
 10. Check abstraction fit when the diff introduces or changes a durable
    contract: schema, API route, MCP resource, persistence record, event type,
    or public packet. A shape can be too narrow, too generic, or right-sized.
@@ -83,6 +87,8 @@ Write a review note with this exact structure:
 **Corpus fit:** yes / no / n-a — [whether the diff reused the mapped abstraction or why no mapped abstraction applied]
 
 **Contract / governance fit:** yes / no / n-a — [when "## Design Governance" or another surface contract packet is present, whether the diff followed it or recorded the required contract delta]
+
+**Design hierarchy fit:** yes / no / n-a — [for UI work, whether text treatments follow a semantic text hierarchy and any new token or variant budget is justified]
 
 **Abstraction fit:** right-sized / too narrow / too generic / n-a — [for schemas, API routes, MCP resources, persistence records, event types, or public packets, explain why the semantic category will scale without erasing useful domain meaning]
 
