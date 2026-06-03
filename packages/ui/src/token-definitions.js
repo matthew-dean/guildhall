@@ -38,7 +38,7 @@ const tokenDefinitions = [
   { category: 'typography', name: 'type.size.4', cssVariable: '--gh-type-size-4', value: '17px', description: 'Section heading size' },
   { category: 'typography', name: 'type.size.5', cssVariable: '--gh-type-size-5', value: '22px', description: 'Page heading size' },
   { category: 'typography', name: 'type.size.6', cssVariable: '--gh-type-size-6', value: '28px', description: 'Display heading size' },
-  { category: 'typography', name: 'type.size.caption', cssVariable: '--gh-type-size-caption', value: 'var(--gh-type-size-1)', description: 'Caption text role size' },
+  { category: 'typography', name: 'type.size.caption', cssVariable: '--gh-type-size-caption', value: 'var(--gh-type-size-0)', description: 'Caption text role size' },
   { category: 'typography', name: 'type.size.eyebrow', cssVariable: '--gh-type-size-eyebrow', value: 'var(--gh-type-size-1)', description: 'Eyebrow text role size' },
   { category: 'typography', name: 'type.size.meta', cssVariable: '--gh-type-size-meta', value: 'var(--gh-type-size-1)', description: 'Metadata text role size' },
   { category: 'typography', name: 'type.size.body', cssVariable: '--gh-type-size-body', value: 'var(--gh-type-size-2)', description: 'Default body text role size' },
@@ -72,6 +72,7 @@ const tokenDefinitions = [
   { category: 'layout', name: 'layout.frame.padding.compact', cssVariable: '--gh-layout-frame-padding-compact', value: '12px', description: 'Compact frame interior padding' },
   { category: 'layout', name: 'layout.frame.padding.default', cssVariable: '--gh-layout-frame-padding-default', value: '16px', description: 'Default frame interior padding' },
   { category: 'layout', name: 'layout.frame.padding.roomy', cssVariable: '--gh-layout-frame-padding-roomy', value: '24px', description: 'Roomy frame interior padding' },
+  { category: 'layout', name: 'layout.stickyFooter.paddingBottom', cssVariable: '--gh-layout-sticky-footer-padding-bottom', value: 'calc(var(--gh-space-4) + env(safe-area-inset-bottom, 0px))', description: 'Bottom breathing room for sticky footers' },
 ]
 
 export default tokenDefinitions

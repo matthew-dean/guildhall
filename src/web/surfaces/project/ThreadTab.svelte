@@ -3158,7 +3158,7 @@
                 >
                   <div class="thread-index-row-chips">
                     {#if indexChip}
-                      <Chip label={indexChip.label} tone={indexChip.tone} />
+                      <Chip label={indexChip.label} tone={indexChip.tone} size="compact" />
                     {/if}
                   </div>
                   <div class="thread-index-row-top">
@@ -5260,7 +5260,7 @@
   .thread-index-row-top strong {
     min-width: 0;
     color: var(--thread-color-strong);
-    font-size: var(--gh-type-size-body);
+    font-size: var(--gh-type-size-meta);
     line-height: var(--gh-type-line-height-tight);
     font-weight: var(--gh-type-weight-strong);
   }
@@ -5278,27 +5278,10 @@
     min-height: 1rem;
     margin-bottom: 2px;
   }
-  .thread :global(.chip) {
-    font-size: var(--gh-type-size-caption);
-    letter-spacing: 0.04em;
-  }
-  .thread :global(.chip-count) {
-    font-size: var(--gh-type-size-caption);
-  }
-  .thread-index-row-chips :global(.chip) {
-    font-size: var(--gh-type-size-caption);
-    padding: 0 0.35rem;
-  }
-  .thread-index-row-chips :global(.chip-count) {
-    min-width: 1rem;
-    height: 1rem;
-    padding: 0 0.2rem;
-    font-size: var(--gh-type-size-caption);
-  }
   :global(.thread-index-row) p {
     margin: 0;
     color: var(--thread-color-soft);
-    font-size: var(--gh-type-size-meta);
+    font-size: var(--gh-type-size-caption);
     line-height: var(--gh-type-line-height-body);
     display: -webkit-box;
     -webkit-line-clamp: 1;
@@ -5372,7 +5355,7 @@
     display: grid;
     gap: var(--gh-space-2);
     padding-top: var(--gh-space-1);
-    padding-bottom: calc(var(--gh-space-4) + env(safe-area-inset-bottom, 0px));
+    padding-bottom: var(--gh-layout-sticky-footer-padding-bottom);
     background: linear-gradient(180deg, transparent 0%, color-mix(in srgb, var(--bg-base) 88%, transparent) 18%, var(--bg-base) 100%);
   }
   .thread-active-dock {
@@ -5533,11 +5516,11 @@
       gap: var(--gh-space-2);
     }
     .thread.thread-compact-list .thread-index-row-top strong {
-      font-size: var(--gh-type-size-body);
+      font-size: var(--gh-type-size-meta);
     }
     .thread.thread-compact-list .thread-index-list p {
       -webkit-line-clamp: 1;
-      font-size: var(--gh-type-size-meta);
+      font-size: var(--gh-type-size-caption);
     }
     .thread.thread-compact-detail {
       padding-top: 0;

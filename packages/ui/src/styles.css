@@ -40,7 +40,7 @@
   --gh-type-size-4: 17px;
   --gh-type-size-5: 22px;
   --gh-type-size-6: 28px;
-  --gh-type-size-caption: var(--gh-type-size-1);
+  --gh-type-size-caption: var(--gh-type-size-0);
   --gh-type-size-eyebrow: var(--gh-type-size-1);
   --gh-type-size-meta: var(--gh-type-size-1);
   --gh-type-size-body: var(--gh-type-size-2);
@@ -74,6 +74,7 @@
   --gh-layout-frame-padding-compact: 12px;
   --gh-layout-frame-padding-default: 16px;
   --gh-layout-frame-padding-roomy: 24px;
+  --gh-layout-sticky-footer-padding-bottom: calc(var(--gh-space-4) + env(safe-area-inset-bottom, 0px));
 }
 
 :root[data-gh-theme="light"],

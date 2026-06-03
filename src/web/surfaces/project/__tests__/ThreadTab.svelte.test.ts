@@ -2717,7 +2717,7 @@ describe('ThreadTab', () => {
     expect(scrollBlock).toContain('padding-top: var(--gh-space-1)')
     expect(footerBlock).toContain('position: sticky')
     expect(footerBlock).toContain('bottom: 0')
-    expect(footerBlock).toContain('padding-bottom: calc(var(--gh-space-4) + env(safe-area-inset-bottom, 0px))')
+    expect(footerBlock).toContain('padding-bottom: var(--gh-layout-sticky-footer-padding-bottom)')
     expect(dockBlock).not.toMatch(/position:\s*(absolute|fixed)/)
     expect(footerBlock).not.toMatch(/position:\s*(absolute|fixed)/)
   })
@@ -2782,6 +2782,21 @@ describe('ThreadTab', () => {
     const row = await screen.findByRole('button', { name: /knit: shape the toolbar api/i })
     expect(within(row).getByText('Paused')).toBeTruthy()
     expect((row.firstElementChild as HTMLElement | null)?.className).toContain('thread-index-row-chips')
+  })
+
+  it('keeps thread-list titles and chips on compact typography roles', () => {
+    const source = readFileSync('src/web/surfaces/project/ThreadTab.svelte', 'utf8')
+    const threadBlock = source.match(/\.thread\s*\{([\s\S]*?)\n\s*\}/)?.[1] ?? ''
+    const titleBlock = source.match(/\.thread-index-row-top strong\s*\{([\s\S]*?)\n\s*\}/)?.[1] ?? ''
+    const summaryBlock = source.match(/:global\(\.thread-index-row\) p\s*\{([\s\S]*?)\n\s*\}/)?.[1] ?? ''
+
+    expect(source).toContain('<Chip label={indexChip.label} tone={indexChip.tone} size="compact" />')
+    expect(threadBlock).not.toContain('--thread-list-title-size')
+    expect(threadBlock).not.toContain('--thread-list-summary-size')
+    expect(titleBlock).toContain('font-size: var(--gh-type-size-meta)')
+    expect(summaryBlock).toContain('font-size: var(--gh-type-size-caption)')
+    expect(source).not.toMatch(/\.thread\s+:global\(\.chip\)/)
+    expect(source).not.toMatch(/\.thread-index-row-chips\s+:global\(\.chip\)/)
   })
 
   it('renders thread content before runtime side-loaders finish', async () => {

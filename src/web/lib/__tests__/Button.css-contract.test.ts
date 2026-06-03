@@ -51,4 +51,16 @@ describe('Chip visual contract', () => {
     expect(agentBlock).toContain('color: var(--chip-status-on-dark-fg)')
     expect(agentAttentionBlock).toContain('color: var(--chip-status-on-dark-fg)')
   })
+
+  it('owns compact chip sizing in the shared primitive instead of surface overrides', () => {
+    const defaultBlock = chipSource.match(/\.chip\s*\{([\s\S]*?)\n\s*\}/)?.[1] ?? ''
+    const compactBlock = chipSource.match(/\.size-compact\s*\{([\s\S]*?)\n\s*\}/)?.[1] ?? ''
+
+    expect(chipSource).toContain("size?: 'default' | 'compact'")
+    expect(defaultBlock).toContain('font-size: var(--gh-type-size-caption)')
+    expect(defaultBlock).toContain('line-height: var(--gh-type-line-height-control)')
+    expect(defaultBlock).not.toMatch(/font-size:\s*var\(--fs-/)
+    expect(compactBlock).toContain('padding: 0 var(--gh-space-1)')
+    expect(compactBlock).not.toMatch(/\bpx\b/)
+  })
 })

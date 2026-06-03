@@ -30,17 +30,18 @@
   interface Props {
     label: string
     tone?: Tone
+    size?: 'default' | 'compact'
     title?: string
   }
 
-  let { label, tone = 'neutral', title }: Props = $props()
+  let { label, tone = 'neutral', size = 'default', title }: Props = $props()
 
   const countLike = $derived(/^\d+\+?$/.test(label.trim()))
   const tooltipText = $derived(title ?? label)
 </script>
 
 {#snippet chipElement()}
-  <span class="chip tone-{tone}" class:chip-count={countLike} aria-label={tooltipText}>
+  <span class="chip tone-{tone} size-{size}" class:chip-count={countLike} aria-label={tooltipText}>
     {#if countLike}
       <span class="count-glyph">{label}</span>
     {:else}
@@ -57,35 +58,45 @@
   .chip {
     display: inline-block;
     box-sizing: border-box;
-    font-size: var(--fs-0);
-    font-weight: 700;
+    font-size: var(--gh-type-size-caption);
+    font-weight: var(--gh-type-weight-emphasis);
     text-transform: uppercase;
     letter-spacing: 0.05em;
-    padding: 2px var(--s-2);
+    padding: 0 var(--gh-space-2);
     border: 1px solid var(--chip-neutral-border);
-    border-radius: 10px;
-    line-height: var(--lh-tight);
+    border-radius: var(--gh-radius-full);
+    line-height: var(--gh-type-line-height-control);
+  }
+  .size-compact {
+    font-size: var(--gh-type-size-caption);
+    padding: 0 var(--gh-space-1);
+    letter-spacing: 0.04em;
   }
   .chip-count {
     display: inline-grid;
     align-items: center;
     justify-content: center;
     place-items: center;
-    min-width: 1.15rem;
-    height: 1.15rem;
-    padding: 0 0.3rem;
+    min-width: var(--gh-space-4);
+    height: var(--gh-space-4);
+    padding: 0 calc(var(--gh-space-1) * 0.75);
     box-sizing: border-box;
-    border-radius: 999px;
+    border-radius: var(--gh-radius-full);
     text-transform: none;
     letter-spacing: 0;
-    font-size: var(--fs-0);
-    font-weight: 800;
+    font-size: var(--gh-type-size-caption);
+    font-weight: var(--gh-type-weight-emphasis);
     font-variant-numeric: tabular-nums;
-    line-height: 1;
+    line-height: var(--gh-type-line-height-control);
+  }
+  .chip-count.size-compact {
+    min-width: var(--gh-space-4);
+    height: var(--gh-space-4);
+    padding: 0 calc(var(--gh-space-1) / 2);
   }
   .count-glyph {
     display: block;
-    line-height: 1;
+    line-height: var(--gh-type-line-height-control);
   }
   .tone-neutral {
     background: var(--chip-neutral-bg);
