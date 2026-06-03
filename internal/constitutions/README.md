@@ -8,4 +8,3 @@ that should keep the rule from becoming aspirational prose.
 Constitutions are not public product docs. Public documentation can explain the
 resulting behavior, but the operating law for agents and implementation plans
 belongs here unless a future release deliberately promotes it.
-
