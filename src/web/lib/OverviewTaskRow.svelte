@@ -13,8 +13,6 @@
     | 'danger'
     | 'accent'
     | 'running'
-    | 'agent'
-    | 'agent-attention'
 
   interface Props {
     title: string

@@ -928,16 +928,16 @@
     return t.status === 'active' ? 'now' : 'next'
   }
 
-  function turnStatusChipTone(t: Turn): 'ok' | 'warn' | 'neutral' | 'accent' | 'agent' | 'agent-attention' {
+  function turnStatusChipTone(t: Turn): 'ok' | 'warn' | 'neutral' | 'accent' {
     if (t.status === 'done') return 'ok'
     if (needsRecovery(t)) return 'warn'
     if (t.kind === 'inflight' && t.taskId === 'task-meta-intake' && !turnLiveAgent(t)) {
       return 'warn'
     }
     if (t.kind === 'inflight' && t.importedDraft && (t.taskStatus === 'import_draft' || t.taskStatus === 'exploring') && !turnLiveAgent(t)) {
-      return 'agent-attention'
+      return 'warn'
     }
-    if (isQueuedForGuildhall(t)) return 'agent'
+    if (isQueuedForGuildhall(t)) return 'ok'
     if (t.kind === 'inflight' && t.status === 'active' && !turnLiveAgent(t)) return 'neutral'
     if (t.kind === 'spec_review' && t.status === 'active') return 'neutral'
     return t.status === 'active' ? 'neutral' : 'neutral'
@@ -1028,18 +1028,20 @@
     return null
   }
 
-  function ownershipTone(t: Turn): 'ok' | 'warn' | 'neutral' | 'accent' | 'running' | 'agent' | 'agent-attention' {
+  function ownershipTone(t: Turn): 'ok' | 'warn' | 'neutral' | 'accent' | 'running' {
     if (turnLiveAgent(t)) return 'running'
     const label = ownershipLabel(t)
     if (label === 'Needs you' || label === 'Needs recovery') return 'warn'
-    if (label === 'Needs brief') return 'agent-attention'
-    if (label === 'Queued' || label === 'Queued for Guildhall' || label === 'Guildhall shaping' || label === 'Guildhall can continue') return 'agent'
+    if (label === 'Needs brief') return 'warn'
+    if (label === 'Guildhall can continue') return 'ok'
+    if (label === 'Queued' || label === 'Queued for Guildhall') return 'ok'
+    if (label === 'Guildhall shaping') return 'accent'
     return 'neutral'
   }
 
   function turnIndexChip(
     turn: Turn,
-  ): { label: string; tone: 'ok' | 'warn' | 'neutral' | 'accent' | 'running' | 'agent' | 'agent-attention' } | null {
+  ): { label: string; tone: 'ok' | 'warn' | 'neutral' | 'accent' | 'running' } | null {
     const owner = ownershipLabel(turn)
     if (owner) {
       return { label: owner, tone: ownershipTone(turn) }
@@ -1048,7 +1050,7 @@
       return { label: turnStatusChipLabel(turn), tone: turnStatusChipTone(turn) }
     }
     if (turn.kind === 'inflight' && turn.status !== 'done') {
-      return { label: taskStateLabel(turn), tone: tone(turn) === 'warn' ? 'warn' : 'agent' }
+      return { label: taskStateLabel(turn), tone: tone(turn) === 'warn' ? 'warn' : 'ok' }
     }
     return null
   }
@@ -2119,16 +2121,16 @@
     }
   }
 
-  function taskStateTone(turn: InFlightTurn): 'neutral' | 'ok' | 'warn' | 'danger' | 'accent' | 'running' | 'agent' | 'agent-attention' {
+  function taskStateTone(turn: InFlightTurn): 'neutral' | 'ok' | 'warn' | 'danger' | 'accent' | 'running' {
     if (needsRecovery(turn)) return 'warn'
     if (turnLiveAgent(turn)) return 'running'
-    if (needsWorkerHandoffSpecCleanup(turn)) return 'agent-attention'
+    if (needsWorkerHandoffSpecCleanup(turn)) return 'warn'
     switch (turn.taskStatus) {
-      case 'ready': return 'agent'
-      case 'import_draft': return 'agent-attention'
-      case 'gate_check': return 'agent'
-      case 'review': return 'agent'
-      case 'exploring': return 'agent'
+      case 'ready': return 'ok'
+      case 'import_draft': return 'warn'
+      case 'gate_check': return 'ok'
+      case 'review': return 'ok'
+      case 'exploring': return 'accent'
       case 'in_progress': return 'neutral'
       default: return 'neutral'
     }

@@ -242,7 +242,7 @@
     return needsBreakdownReview(task) ? 'warn' : statusTone(task.status)
   }
 
-  function statusTone(status: string | undefined): 'accent' | 'ok' | 'warn' | 'danger' | 'neutral' | 'agent' {
+  function statusTone(status: string | undefined): 'accent' | 'ok' | 'warn' | 'danger' | 'neutral' {
     switch (status) {
       case 'done':
       case 'pending_pr':
@@ -252,7 +252,7 @@
       case 'ready':
       case 'review':
       case 'gate_check':
-        return 'agent'
+        return 'ok'
       case 'spec_review':
         return 'warn'
       case 'in_progress':

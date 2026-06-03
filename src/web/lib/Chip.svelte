@@ -12,19 +12,14 @@
     | 'danger'
     | 'accent'
     | 'running'
-    | 'agent'
-    | 'agent-attention'
 
   /*
    * Chip tone taxonomy:
-   * - agent: passive Guildhall automation state. Use for queued/running/shaping
-   *   information where Guildhall is or will be the actor, but the chip is not
-   *   itself a call to action.
-   * - agent-attention: Guildhall-owned state that needs a handoff before it can
-   *   proceed, such as brief cleanup needed. It shares the automation hue, but
-   *   remains quieter than an agent button so the button still wins.
+   * - ok/running: healthy, available, queued, or Guildhall-owned continuation.
    * - warn: human decision or risk state. Use when the user must answer,
-   *   approve, triage, or handle a real blocker.
+   *   approve, triage, handle a blocker, or when Guildhall needs cleanup before
+   *   work can safely continue.
+   * - accent: current-step emphasis that is not itself a success or warning.
    */
 
   interface Props {
@@ -58,6 +53,10 @@
   .chip {
     display: inline-block;
     box-sizing: border-box;
+    max-width: 100%;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
     font-size: var(--gh-type-size-caption);
     font-weight: var(--gh-type-weight-medium);
     text-transform: uppercase;
@@ -125,16 +124,5 @@
     background: var(--chip-accent-bg);
     color: var(--chip-accent-fg);
     border-color: var(--chip-accent-border);
-  }
-  .tone-agent {
-    background: var(--chip-agent-bg);
-    color: var(--chip-agent-fg);
-    border-color: var(--chip-agent-border);
-  }
-  .tone-agent-attention {
-    background: var(--chip-agent-attention-bg);
-    color: var(--chip-agent-attention-fg);
-    border-color: var(--chip-agent-attention-border);
-    font-weight: var(--gh-type-weight-strong);
   }
 </style>

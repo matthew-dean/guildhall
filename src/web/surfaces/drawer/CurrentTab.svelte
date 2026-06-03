@@ -169,18 +169,18 @@
     return turn.summary
   }
 
-  function taskStateTone(turn: TaskThreadInFlightTurn): 'neutral' | 'ok' | 'warn' | 'danger' | 'accent' | 'running' | 'agent' | 'agent-attention' {
+  function taskStateTone(turn: TaskThreadInFlightTurn): 'neutral' | 'ok' | 'warn' | 'danger' | 'accent' | 'running' {
     if (needsRecovery(turn)) return 'warn'
     if (briefShapingTimedOut(turn)) return 'warn'
     if (briefShapingPaused(turn)) return 'warn'
     if (turn.liveAgent) return 'running'
-    if (needsWorkerHandoffSpecCleanup(turn)) return 'agent-attention'
+    if (needsWorkerHandoffSpecCleanup(turn)) return 'warn'
     switch (turn.taskStatus) {
-      case 'ready': return 'agent'
-      case 'import_draft': return 'agent-attention'
-      case 'gate_check': return 'agent'
-      case 'review': return 'agent'
-      case 'exploring': return 'agent'
+      case 'ready': return 'ok'
+      case 'import_draft': return 'warn'
+      case 'gate_check': return 'ok'
+      case 'review': return 'ok'
+      case 'exploring': return 'accent'
       case 'in_progress': return 'neutral'
       default: return 'neutral'
     }
@@ -351,7 +351,7 @@
         <StateSummary
           label="Brief cleanup needed"
           description="Guildhall needs to turn the source notes into a usable task brief before implementation."
-          tone="agent-attention"
+          tone="warn"
         />
         <p class="detail-copy">
           The Work board sent you here because this task is marked ready, but its brief/spec is not complete enough for a worker yet. Clean up brief lets Guildhall finish the handoff before implementation.

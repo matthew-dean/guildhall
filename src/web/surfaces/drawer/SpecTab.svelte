@@ -239,7 +239,7 @@
           </div>
           <Chip
             label={reviewPlanRecipeCount === 1 ? '1 reviewer group' : `${reviewPlanRecipeCount} reviewer groups`}
-            tone="agent"
+            tone="ok"
           />
         </div>
         {#if reviewPlanLanes.length > 0}

@@ -246,14 +246,14 @@
     }
   }
 
-  function effectiveStatusTone(task: Task): 'accent' | 'ok' | 'warn' | 'danger' | 'neutral' | 'agent' | 'agent-attention' {
+  function effectiveStatusTone(task: Task): 'accent' | 'ok' | 'warn' | 'danger' | 'neutral' {
     switch (effectiveStatus(task)) {
       case 'paused': return 'neutral'
       case 'review_waiting':
       case 'gates_waiting':
-        return 'agent'
+        return 'ok'
       case 'needs_spec_cleanup':
-        return 'agent-attention'
+        return 'warn'
       default:
         return statusTone(task.status)
     }
@@ -273,9 +273,7 @@
   }
 
   function listItemTone(task: Task): 'accent' | 'ok' | 'warn' | 'danger' | 'neutral' {
-    const tone = effectiveStatusTone(task)
-    if (tone === 'agent' || tone === 'agent-attention') return 'accent'
-    return tone
+    return effectiveStatusTone(task)
   }
 
   function formatUpdatedAt(value: string | undefined): string {
@@ -371,7 +369,7 @@
         <div class="work-list-count">{visibleTasks.length} shown · {taskCounts.total} total</div>
         <div class="work-summary">
           {#if taskCounts.agentActive > 0}
-            <Chip label={countLabel(taskCounts.agentActive, 'Guildhall working', 'Guildhall working')} tone="agent" />
+            <Chip label={countLabel(taskCounts.agentActive, 'Guildhall working', 'Guildhall working')} tone="running" />
           {/if}
           {#if taskCounts.paused > 0}
             <Chip label={countLabel(taskCounts.paused, 'paused task')} tone="neutral" />
@@ -383,13 +381,13 @@
             <Chip label={countLabel(taskCounts.gatesWaiting, 'gates waiting', 'gates waiting')} tone="warn" />
           {/if}
           {#if taskCounts.shaping > 0}
-            <Chip label={countLabel(taskCounts.shaping, 'being shaped', 'being shaped')} tone="agent" />
+            <Chip label={countLabel(taskCounts.shaping, 'being shaped', 'being shaped')} tone="accent" />
           {/if}
           {#if taskCounts.readyForWorker > 0}
-            <Chip label={countLabel(taskCounts.readyForWorker, 'ready to start', 'ready to start')} tone="agent" />
+            <Chip label={countLabel(taskCounts.readyForWorker, 'ready to start', 'ready to start')} tone="ok" />
           {/if}
           {#if taskCounts.needsSpecCleanup > 0}
-            <Chip label={countLabel(taskCounts.needsSpecCleanup, 'need brief cleanup', 'need brief cleanup')} tone="agent-attention" />
+            <Chip label={countLabel(taskCounts.needsSpecCleanup, 'need brief cleanup', 'need brief cleanup')} tone="warn" />
           {/if}
           {#if taskCounts.awaitingApproval > 0}
             <Chip label={`${taskCounts.awaitingApproval} awaiting approval`} tone="warn" />

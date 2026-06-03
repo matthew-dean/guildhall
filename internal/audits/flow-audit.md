@@ -57,6 +57,28 @@ babysit setup/import/provider/release states across multiple pages.
 
 ## Current Follow-Ups
 
+- [x] Bring Thread status chips back under the canonical `Chip` contract. The
+  live Narrative Harness Thread page showed `Guildhall can continue` and `Needs
+  brief` as bespoke status treatments, including one wrapped chip. Closure
+  evidence, 2026-06-03: removed the `agent` / `agent-attention` chip tones and
+  `--chip-agent-*` tokens, mapped Thread/Work/drawer status labels back to the
+  canonical `ok`, `warn`, `accent`, `running`, and `neutral` tone budget, and
+  made the shared `.chip` geometry single-line with overflow ellipsis. Contract
+  tests now assert chip tones stay canonical and Thread ownership labels route
+  through `ok` / `warn` instead of inventing agent tones. Verification: source
+  sweep found no chip `tone-agent`, `agent-attention`, or `chip-agent` usage
+  outside tests/unrelated agent concepts; focused chip suite
+  `pnpm vitest run src/web/lib/__tests__/Button.css-contract.test.ts
+  src/web/surfaces/project/__tests__/ThreadTab.svelte.test.ts -t "chip"
+  --reporter=dot` (`9` tests); affected UI suites covering Button, Thread,
+  Current drawer, and Work (`129` tests); `pnpm typecheck`; `pnpm lint:design`;
+  `pnpm build`; `git diff --check`; `pnpm dev:install`; installed CSS/CLI
+  hashes matched the worktree build; `/api/stale-server` returned
+  `stale:false`; and browser computed-style proof on
+  `http://localhost:7777/projects/narrative-harness/thread` showed `Needs
+  brief` as `.tone-warn`, `Guildhall can continue` as `.tone-ok`,
+  `white-space: nowrap`, no wrapping, and no `tone-agent` / `agent-attention`
+  classes.
 - [x] Normalize Guildhall typography around one semantic role system and carry
   that rule into agent conformance. The live Thread complaint is the forcing
   function: chips, thread-list row titles, timestamps, labels, and buttons had
@@ -6635,7 +6657,7 @@ local 0.7 release-candidate build at `http://localhost:7777/projects/narrative-h
     without becoming as loud as buttons. Passive Guildhall states such as
     `Queued`, `Queued for Guildhall`, and `Guildhall shaping` use a quieter
     agent tone; Guildhall-owned handoff states such as `Brief cleanup needed`
-    use `agent-attention`; user decisions, approvals, and recovery risks remain
+    use the canonical `warn` chip tone; user decisions, approvals, and recovery risks remain
     warning/human-attention states.
   - [x] Overview blocked-work rows no longer render a large red status panel
     inside each row. The task title and reason stay primary, and the blocker

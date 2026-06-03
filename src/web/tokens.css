@@ -120,12 +120,6 @@
   --chip-accent-bg: #584ab0;
   --chip-accent-fg: var(--gh-color-text-primary);
   --chip-accent-border: color-mix(in srgb, var(--chip-accent-bg) 74%, white 18%);
-  --chip-agent-fg: var(--accent-2);
-  --chip-agent-bg: color-mix(in srgb, var(--accent-2) 14%, transparent);
-  --chip-agent-border: color-mix(in srgb, var(--accent-2) 34%, var(--border));
-  --chip-agent-attention-fg: color-mix(in srgb, var(--accent-2) 82%, var(--warn) 18%);
-  --chip-agent-attention-bg: color-mix(in srgb, var(--accent-2) 18%, var(--warn) 8%);
-  --chip-agent-attention-border: color-mix(in srgb, var(--accent-2) 38%, var(--warn) 18%);
 
   /* status stripes — saturated 3px left borders for cards/rows.
      Kept as solid colors (not tints) so the stripe remains legible on
