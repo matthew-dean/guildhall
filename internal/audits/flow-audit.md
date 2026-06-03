@@ -7314,3 +7314,33 @@ map, Project graph, and Contract surfaces in Structure. Fresh screenshots were
 captured under `docs/assets/ui-audit/0-10-0/`.
 
 source: codex:0.10-readiness-integration
+
+2026-06-03T20:50:00Z - Replaced the API-shaped Structure surface with a
+user-facing project-structure feature. Structure now opens with a graphical
+project chart, human-readable work areas, explicit boundary/assignment
+guidance, contract actions, and project handoffs. The old project-index section,
+bespoke domain selection cards, `Available to assign` pseudo-chip, missing-map
+card, and button-like domain mega-card interaction are removed from the primary
+surface. `localProjects` now means graph-connected projects only, while
+`localProjectIndex` preserves the full assignable registry for assignment
+search.
+
+Verification: `pnpm vitest run src/runtime/__tests__/project-graph.test.ts
+src/runtime/__tests__/serve-settings.test.ts
+src/web/surfaces/project/structure/__tests__/ProjectStructurePanel.svelte.test.ts
+--reporter=dot` passed with 76 tests; `pnpm typecheck` passed; `pnpm build`
+passed; `pnpm dev:install` rebuilt the installed app; service restart served a
+bundle containing the new `What Guildhall understands about...` Structure copy
+and no old `Managed projects` or `Project graph` panel title strings. Live
+browser proof on `/projects/narrative-harness/structure` showed the chart,
+five work areas, `Contracts`, `Project handoffs`, `Scan for contracts`, and
+`Declare contract`, with no `Searchable project index`, `Available to assign`,
+`Legacy structural map missing`, or `.domain-graph-node`. Cross-project browser
+sampling also passed for `/projects/fair-labor-license/structure`,
+`/projects/t-minus-t/structure`, `/projects/font-something/structure`, and
+`/projects/commerce-project/structure`; all loaded the new headings and chart
+without the old strings. `looma-knit` and `jess` resolved through attached /
+not-initialized states in this service instance, so they were not counted as
+rendered Structure proof.
+
+source: codex:structure-user-facing-redesign

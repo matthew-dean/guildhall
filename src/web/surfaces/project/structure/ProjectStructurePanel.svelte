@@ -9,6 +9,6 @@
 </script>
 
 <Stack gap="5">
-  <StructuralMapReviewPanel store={graphStore} />
   <ProjectGraphPanel store={graphStore} />
+  <StructuralMapReviewPanel />
 </Stack>

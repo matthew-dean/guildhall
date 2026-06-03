@@ -2911,13 +2911,18 @@ describe('GET /api/project — bootstrap status', () => {
       const graphBody = (await graph.json()) as {
         projectGraph?: {
           localProjects?: Array<{ id?: string; role?: string; path?: string }>
+          localProjectIndex?: Array<{ id?: string; role?: string; path?: string }>
           domainResponsibilities?: Array<{ facet?: string; responsibleProjectId?: string; assignable?: boolean }>
         }
       }
-      expect(graphBody.projectGraph?.localProjects).toEqual(expect.arrayContaining([
-        expect.objectContaining({ id: 'looma-knit', role: 'related', path: workspaceDir }),
-        expect.objectContaining({ id: 'looma', role: 'related', path: path.join(workspaceDir, 'looma') }),
-        expect.objectContaining({ id: 'knit', role: 'related', path: path.join(workspaceDir, 'knit') }),
+      expect(graphBody.projectGraph?.localProjects).not.toEqual(expect.arrayContaining([
+        expect.objectContaining({ id: 'looma', path: path.join(workspaceDir, 'looma') }),
+        expect.objectContaining({ id: 'knit', path: path.join(workspaceDir, 'knit') }),
+      ]))
+      expect(graphBody.projectGraph?.localProjectIndex).toEqual(expect.arrayContaining([
+        expect.objectContaining({ id: 'looma-knit', role: 'indexed', path: workspaceDir }),
+        expect.objectContaining({ id: 'looma', role: 'indexed', path: path.join(workspaceDir, 'looma') }),
+        expect.objectContaining({ id: 'knit', role: 'indexed', path: path.join(workspaceDir, 'knit') }),
       ]))
 
       const assign = await app.fetch(new Request(scoped('/api/project/project-graph/domain-responsibility'), {

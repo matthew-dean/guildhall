@@ -10,56 +10,33 @@
   import { nav } from '../../../lib/nav.svelte.js'
   import { project } from '../../../lib/project.svelte.js'
   import { projectActionHref } from '../../../lib/project-routes.js'
-  import type { ProjectGraphStore } from './project-graph-store.svelte.js'
-
-  interface Props {
-    store?: ProjectGraphStore
-  }
-
-  let { store }: Props = $props()
 
   const review = $derived(project.detail?.structuralMapReview ?? null)
   const domains = $derived([...(review?.domains ?? []), ...(review?.crossCuttingDomains ?? [])])
-  const graphDomainCount = $derived(store?.structuralDomains().length ?? 0)
   const conflicts = $derived(review?.conflicts ?? [])
   const ignoredGitRoots = $derived(review?.ignoredGitRoots ?? [])
-  const state = $derived(review?.state ?? 'missing')
+  const state = $derived(review?.state ?? 'draft')
   const stateTone = $derived(state === 'accepted' ? 'ok' : state === 'draft' ? 'warn' : 'neutral')
-  const legacyStateLabel = $derived(state === 'missing' ? 'legacy map missing' : state)
 </script>
 
-<SectionHeader
-  eyebrow="Structure"
-  title="Structural map"
-  description="Review the package, domain, executable, and Git authority map before it becomes routing truth."
-  headingTag="h2"
-  density="compact"
->
-  {#snippet meta()}
-    <StatusPill label={legacyStateLabel} tone={stateTone} />
-    {#if review}
+{#if review}
+  <SectionHeader
+    eyebrow="Legacy map"
+    title="Structural map review"
+    description="Older structural-map records are shown here when they still have review state, conflicts, or Git-root notes. Structure above is the current user-facing map."
+    headingTag="h2"
+    density="compact"
+  >
+    {#snippet meta()}
+      <StatusPill label={state} tone={stateTone} />
       <StatusPill label={`${domains.length} legacy map domain${domains.length === 1 ? '' : 's'}`} tone={domains.length > 0 ? 'ok' : 'neutral'} />
-    {/if}
-  {/snippet}
-</SectionHeader>
+    {/snippet}
+  </SectionHeader>
 
-<FrameCard class="structure-card" density="compact">
-  {#snippet header()}
-    <SectionHeader title="Review status" description="Thread owns the discussion. This panel keeps the detected map visible." headingTag="h3" density="dense" />
-  {/snippet}
-
-  {#if !review}
-    <NoticeBand tone="neutral" role="note" label="Legacy structural map" title="Legacy structural map missing" density="compact">
-      <p>
-        {graphDomainCount > 0
-          ? 'Project graph domains are still available below.'
-          : 'Run structural intake or answer the current Thread prompt before assigning project responsibilities.'}
-      </p>
-      {#snippet actions()}
-        <Button variant="secondary" size="sm" onclick={() => nav(projectActionHref('/thread'))}>Open Threads</Button>
-      {/snippet}
-    </NoticeBand>
-  {:else}
+  <FrameCard class="structure-card" density="compact">
+    {#snippet header()}
+      <SectionHeader title="Review status" description="This legacy map is retained for audit and correction history." headingTag="h3" density="dense" />
+    {/snippet}
     <Stack gap="3">
       <Row justify="between" align="center" gap="3" wrap>
         <p class="muted">
@@ -103,8 +80,8 @@
         </NoticeBand>
       {/if}
     </Stack>
-  {/if}
-</FrameCard>
+  </FrameCard>
+{/if}
 
 <style>
   .muted,

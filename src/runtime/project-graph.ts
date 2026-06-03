@@ -141,7 +141,13 @@ export interface ProjectGraphView {
     id: string
     label: string
     path: string
-    role: 'current' | 'consumer' | 'provider' | 'related'
+    role: 'current' | 'consumer' | 'provider'
+  }>
+  localProjectIndex: Array<{
+    id: string
+    label: string
+    path: string
+    role: 'current' | 'indexed'
   }>
   structuralDomains: ProjectGraphDomainNode[]
   authorityRoots: Array<{
@@ -560,16 +566,12 @@ export function queryProjectGraphView(input: {
       role,
     }
   })
-  for (const [id, project] of registryProjectsById.entries()) {
-    if (!projectRoles.has(id)) {
-      localProjects.push({
-        id,
-        label: project.label,
-        path: project.path,
-        role: id === input.projectId ? 'current' : 'related',
-      })
-    }
-  }
+  const localProjectIndex = [...registryProjectsById.entries()].map(([id, project]) => ({
+    id,
+    label: project.label,
+    path: project.path,
+    role: id === input.projectId ? 'current' as const : 'indexed' as const,
+  }))
   const assignedAuthorities = (registry.domainAuthorities ?? [])
     .sort((left, right) => left.domain.label.localeCompare(right.domain.label))
   const structuralDomains = projectGraphDomains({
@@ -583,7 +585,10 @@ export function queryProjectGraphView(input: {
     label: registryProjectsById.get(input.projectId)?.label ?? input.projectId,
     path: input.projectPath,
   }
-  const localProjectsById = new Map(localProjects.map(project => [project.id, project]))
+  const localProjectsById = new Map([...localProjectIndex, ...localProjects].map(project => [project.id, {
+    label: project.label,
+    path: project.path,
+  }]))
   const domainResponsibilities = projectGraphDomainResponsibilities({
     domains: structuralDomains,
     assignments: registry.domainResponsibilities ?? [],
@@ -603,6 +608,9 @@ export function queryProjectGraphView(input: {
       path: input.projectPath,
       label: registryProjectsById.get(input.projectId)?.label,
     },
+    localProjectIndex: localProjectIndex.sort((left, right) =>
+      left.role === 'current' ? -1 : right.role === 'current' ? 1 : left.label.localeCompare(right.label),
+    ),
     localProjects: localProjects.sort((left, right) =>
       left.role === 'current' ? -1 : right.role === 'current' ? 1 : left.label.localeCompare(right.label),
     ),
@@ -1449,7 +1457,7 @@ function projectGraphDomainResponsibilities(input: {
   domains: readonly ProjectGraphDomainNode[]
   assignments: readonly ProjectDomainResponsibility[]
   currentProject: ProjectGraphNodeRef & { path: string }
-  localProjectsById: Map<string, ProjectGraphView['localProjects'][number]>
+  localProjectsById: Map<string, { label: string; path: string }>
 }): ProjectDomainResponsibilityView[] {
   const assignmentById = new Map(input.assignments.map(item => [item.id, item]))
   const out: ProjectDomainResponsibilityView[] = []

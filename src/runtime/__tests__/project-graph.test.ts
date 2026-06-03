@@ -129,9 +129,12 @@ describe('local project graph', () => {
       ],
     })
 
-    expect(view.localProjects).toEqual(expect.arrayContaining([
+    expect(view.localProjects).toEqual([
       expect.objectContaining({ id: 'harness', role: 'current' }),
-      expect.objectContaining({ id: 'looma', role: 'related' }),
+    ])
+    expect(view.localProjectIndex).toEqual(expect.arrayContaining([
+      expect.objectContaining({ id: 'harness', role: 'current' }),
+      expect.objectContaining({ id: 'looma', role: 'indexed' }),
     ]))
     expect(view.structuralDomains).toEqual(expect.arrayContaining([
       expect.objectContaining({
@@ -174,11 +177,14 @@ describe('local project graph', () => {
       ],
     })
 
-    expect(view.localProjects).toEqual(expect.arrayContaining([
+    expect(view.localProjects).toEqual([
       expect.objectContaining({ id: 'narrative-harness', role: 'current' }),
-      expect.objectContaining({ id: 'looma-knit', role: 'related', path: workspaceProject }),
-      expect.objectContaining({ id: 'looma', label: 'Looma', role: 'related', path: path.join(workspaceProject, 'looma') }),
-      expect.objectContaining({ id: 'knit', label: 'Knit', role: 'related', path: path.join(workspaceProject, 'knit') }),
+    ])
+    expect(view.localProjectIndex).toEqual(expect.arrayContaining([
+      expect.objectContaining({ id: 'narrative-harness', role: 'current' }),
+      expect.objectContaining({ id: 'looma-knit', role: 'indexed', path: workspaceProject }),
+      expect.objectContaining({ id: 'looma', label: 'Looma', role: 'indexed', path: path.join(workspaceProject, 'looma') }),
+      expect.objectContaining({ id: 'knit', label: 'Knit', role: 'indexed', path: path.join(workspaceProject, 'knit') }),
     ]))
   })
 
