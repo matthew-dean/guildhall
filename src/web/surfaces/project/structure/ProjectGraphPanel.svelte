@@ -10,13 +10,14 @@
   import Row from '../../../lib/Row.svelte'
   import { project } from '../../../lib/project.svelte.js'
   import { projectActionHref } from '../../../lib/project-routes.js'
-  import type { ProjectGraphStore } from './project-graph-store.svelte.js'
+  import type { ProjectGraphResponsibility, ProjectGraphStore } from './project-graph-store.svelte.js'
 
   interface Props {
     store: ProjectGraphStore
   }
 
   let { store }: Props = $props()
+  let contractDialog = $state<null | 'scan' | 'declare'>(null)
 
   $effect(() => {
     void store.load()
@@ -24,8 +25,79 @@
 
   const graph = $derived(store.projectGraph)
   const pickerResponsibility = $derived(store.assignmentPickerResponsibility())
-  const relatedLocalProjectCount = $derived((graph?.localProjects ?? []).filter(item => item.role !== 'current').length)
-  const graphDomainCount = $derived(store.structuralDomains().length)
+  const workAreas = $derived(store.structuralDomains())
+  const connectedProjects = $derived(store.connectedProjectRows())
+  const assignableResponsibilities = $derived((graph?.domainResponsibilities ?? []).filter(item => item.assignable))
+  const localResponsibilities = $derived((graph?.domainResponsibilities ?? []).filter(item => !item.assignable))
+  const openHandoffs = $derived(graph?.dependencyEdges?.filter(edge => edge.unresolved).length ?? 0)
+
+  function countLabel(count: number, singular: string, plural = `${singular}s`): string {
+    return `${count} ${count === 1 ? singular : plural}`
+  }
+
+  function cleanLabel(value: string | undefined): string {
+    return (value ?? 'Work area')
+      .replace(/^domain:/, '')
+      .replaceAll(/[-_]/g, ' ')
+      .replace(/\b\w/g, match => match.toUpperCase())
+  }
+
+  function areaTitle(domain: { id?: string; label?: string; coordinatorId?: string; coordinatorName?: string; path?: string }): string {
+    const key = `${domain.id ?? ''} ${domain.label ?? ''} ${domain.coordinatorId ?? ''} ${domain.coordinatorName ?? ''} ${domain.path ?? ''}`.toLowerCase()
+    if (key.includes('coherence')) return 'Story coherence and reviewer quality'
+    if (key.includes('harness')) return 'Harness workflow and runtime'
+    if (key.includes('spec')) return 'Specs and contracts'
+    if (key.includes('product')) return 'Product direction'
+    if (key.includes('meta')) return 'Project planning and Guildhall memory'
+    if (key.includes('editor')) return 'Editor workflow and interface'
+    if (key.includes('licens')) return 'Licensing and policy'
+    if (key.includes('model')) return 'Model behavior and evaluation'
+    if (key.includes('docs')) return 'Documentation and knowledge'
+    if (key.includes('app')) return 'Application experience'
+    return cleanLabel(domain.label ?? domain.id)
+  }
+
+  function areaDescription(domain: { id?: string; label?: string; coordinatorId?: string; coordinatorName?: string; path?: string }): string {
+    const key = `${domain.id ?? ''} ${domain.label ?? ''} ${domain.coordinatorId ?? ''} ${domain.coordinatorName ?? ''} ${domain.path ?? ''}`.toLowerCase()
+    if (key.includes('coherence')) return 'Preserves voice, continuity, character behavior, and scene logic across writing changes.'
+    if (key.includes('harness')) return 'Keeps the project harness, prototype loop, and runtime workflow understandable.'
+    if (key.includes('spec')) return 'Turns project intent into durable specs, acceptance criteria, and contract records.'
+    if (key.includes('product')) return 'Owns product direction, user value, and what the project should become.'
+    if (key.includes('meta')) return 'Keeps Guildhall state, planning notes, and project memory coherent.'
+    if (key.includes('editor')) return 'Shapes the editing experience, interaction model, and reusable editor capabilities.'
+    if (key.includes('licens')) return 'Tracks license rules, policy boundaries, and commercial obligations.'
+    if (key.includes('model')) return 'Tracks model behavior, quality checks, and evaluation boundaries.'
+    if (key.includes('docs')) return 'Keeps documentation and knowledge surfaces aligned with the project.'
+    if (key.includes('app')) return 'Shapes the user-facing application experience.'
+    return 'A work area Guildhall detected from project structure, coordinator routing, or project graph records.'
+  }
+
+  function internalLabel(domain: { label?: string; coordinatorName?: string; coordinatorId?: string; path?: string }): string {
+    const parts = [
+      domain.label,
+      domain.coordinatorName ?? domain.coordinatorId,
+      domain.path,
+    ].filter(Boolean)
+    return parts.join(' - ')
+  }
+
+  function localResponsibilityText(domainId?: string): string {
+    const local = localResponsibilities.filter(item => item.domainId === domainId)
+    if (local.length === 0) return `${project.detail?.name ?? 'This project'} owns the project-specific decisions and verification for this area.`
+    return local.map(item => item.description).join(' ')
+  }
+
+  function primaryAssignable(domainId?: string): ProjectGraphResponsibility | null {
+    return store.primaryAssignableResponsibility(domainId)
+  }
+
+  function assignmentSummary(responsibility: ProjectGraphResponsibility | null): string {
+    if (!responsibility) return 'No reusable capability is recorded for this area yet.'
+    if (responsibility.assigned && responsibility.responsibleProjectId !== project.detail?.id) {
+      return `Assigned to ${responsibility.responsibleProjectLabel}.`
+    }
+    return responsibility.description
+  }
 
   function surfaceScopeLabel(scopedReason: string): string {
     if (scopedReason === 'owner') return 'Owned here'
@@ -34,98 +106,159 @@
     return scopedReason
   }
 
-  function countLabel(count: number, singular: string, plural = `${singular}s`): string {
-    return `${count} ${count === 1 ? singular : plural}`
+  function handoffTitle(edge: { consumerProjectLabel?: string; providerProjectLabel?: string }): string {
+    const consumer = edge.consumerProjectLabel ?? 'Consumer project'
+    const provider = edge.providerProjectLabel ?? 'Provider project'
+    if (edge.providerProjectLabel === project.detail?.name) return `${consumer} is asking this project for work`
+    if (edge.consumerProjectLabel === project.detail?.name) return `${project.detail?.name} is waiting on ${provider}`
+    return `${consumer} needs ${provider}`
   }
 </script>
 
 <SectionHeader
   eyebrow="Structure"
-  title="Project graph"
-  description="See detected domains, local projects, and dependency requests moving between project coordinators."
+  title="Structure"
+  description={`What Guildhall understands about ${project.detail?.name ?? 'this project'}: work areas, boundaries, contracts, and project handoffs.`}
   headingTag="h2"
   density="compact"
->
-  {#snippet meta()}
-    <StatusPill
-      label={`${graph?.dependencyEdges?.filter(edge => edge.unresolved).length ?? 0} open`}
-      tone={(graph?.dependencyEdges?.some(edge => edge.unresolved) ?? false) ? 'warn' : 'ok'}
-    />
-  {/snippet}
-</SectionHeader>
+/>
 
 {#if store.error}
-  <NoticeBand tone="danger" role="alert" label="Project graph" title="Could not load project graph" density="compact">
+  <NoticeBand tone="danger" role="alert" label="Structure" title="Could not load project structure" density="compact">
     <p>{store.error}</p>
   </NoticeBand>
 {/if}
 
-<div class="graph-grid">
-  <FrameCard class="graph-card">
-    {#snippet header()}
-      <SectionHeader title="Domains" description="Click a domain to see where its work belongs." headingTag="h3" density="dense" />
-    {/snippet}
+<section class="structure-chart" aria-label="Project structure chart">
+  <div class="chart-project-node">
+    <span>Project</span>
+    <strong>{graph?.currentProject?.label ?? project.detail?.name ?? 'This project'}</strong>
+  </div>
+  <div class="chart-ring" aria-label="Work areas">
     {#if !graph}
-      <p class="muted">Loading project graph domains...</p>
-    {:else if store.structuralDomains().length === 0}
-      <p class="muted">Accept a structural map before assigning domain responsibilities.</p>
+      <span class="muted">Loading project shape...</span>
+    {:else if workAreas.length === 0}
+      <span class="muted">No work areas recorded yet.</span>
     {:else}
-      <div class="domain-assignment-list">
-        {#each store.structuralDomains() as domain (domain.id)}
-          <button
-            type="button"
-            class:active={store.selectedDomainId === domain.id}
-            class="domain-graph-node"
-            aria-label={`Open ${domain.label} domain`}
-            aria-pressed={store.selectedDomainId === domain.id}
-            onclick={() => store.setSelectedDomainId(domain.id ?? null)}
-          >
-            <div class="domain-assignment-copy">
-              <strong>{domain.label}</strong>
-              <span class="muted">{store.domainSourceLabel(domain)}</span>
-            </div>
-            <StatusPill label={store.domainGraphSummary(domain)} tone={store.primaryAssignableResponsibility(domain.id)?.assigned ? 'ok' : 'neutral'} />
-          </button>
-        {/each}
-      </div>
+      {#each workAreas as domain (domain.id)}
+        <span class="chart-work-area">{areaTitle(domain)}</span>
+      {/each}
     {/if}
-  </FrameCard>
+  </div>
+  <div class="chart-summary" aria-label="Boundary summary">
+    <span>{countLabel(workAreas.length, 'work area')}</span>
+    <span>{countLabel(graph?.contractSurfaces?.length ?? 0, 'contract')}</span>
+    <span>{countLabel(openHandoffs, 'active handoff')}</span>
+    <span>{connectedProjects.length > 0 ? countLabel(connectedProjects.length, 'connected project') : 'No connected external projects'}</span>
+  </div>
+</section>
 
-  <FrameCard class="graph-card">
-    {#snippet header()}
-      <SectionHeader title="Managed projects" description="Guildhall can search this local project index when you assign a domain." headingTag="h3" density="dense" />
-    {/snippet}
-    {#if !graph}
-      <p class="muted">Loading project graph...</p>
-    {:else if (graph.localProjects?.length ?? 0) === 0}
-      <p class="muted">No local projects registered yet.</p>
-    {:else}
-      <div class="project-index-summary">
-        <strong>{store.localProjectIndexLabel()}</strong>
-        <span class="muted">Current project: {graph.currentProject?.label ?? project.detail?.name ?? 'this project'}</span>
-        <span class="muted">{countLabel(relatedLocalProjectCount, 'related local project')}</span>
-        <span class="muted">{countLabel(graphDomainCount, 'project graph domain')}</span>
-        {#if store.connectedProjectRows().length > 0}
-          <span class="muted">{store.connectedProjectRows().length} connected by open requests</span>
-        {/if}
-      </div>
-    {/if}
-  </FrameCard>
-</div>
-
-<FrameCard class="graph-card graph-contract-surfaces-card">
+<FrameCard class="structure-section work-areas-section">
   {#snippet header()}
     <SectionHeader
-      title="Contract surfaces"
-      description="Review durable component, API, schema, and design-system contracts connected to this project."
+      title="Work areas"
+      description="Human-readable areas Guildhall uses to route work. Internal labels are shown only as metadata."
       headingTag="h3"
       density="dense"
     />
   {/snippet}
+
   {#if !graph}
-    <p class="muted">Loading contract surfaces...</p>
+    <p class="muted">Loading work areas...</p>
+  {:else if workAreas.length === 0}
+    <p class="muted">No work areas are recorded yet.</p>
+  {:else}
+    <div class="work-area-list" aria-label="Work areas">
+      {#each workAreas as domain (domain.id)}
+        {@const assignable = primaryAssignable(domain.id)}
+        <section class="work-area-row" aria-label={`${areaTitle(domain)} work area`}>
+          <div class="work-area-main">
+            <strong>{areaTitle(domain)}</strong>
+            <p>{areaDescription(domain)}</p>
+            <span class="metadata">{internalLabel(domain)}</span>
+          </div>
+          <div class="work-area-owned">
+            <span class="column-label">Owned here</span>
+            <p>{localResponsibilityText(domain.id)}</p>
+          </div>
+          <div class="work-area-assignment">
+            <span class="column-label">Reusable work</span>
+            <p>{assignmentSummary(assignable)}</p>
+            {#if assignable && store.graphAssignmentTargets(assignable).length > 0}
+              <Button
+                variant="secondary"
+                size="sm"
+                ariaLabel={`Assign ${areaTitle(domain)}`}
+                disabled={store.busy === `assign-responsibility:${assignable.id}`}
+                onclick={() => store.openAssignmentPicker(assignable)}
+              >
+                Assign
+              </Button>
+            {/if}
+          </div>
+        </section>
+      {/each}
+    </div>
+  {/if}
+</FrameCard>
+
+<FrameCard class="structure-section">
+  {#snippet header()}
+    <SectionHeader
+      title="Boundaries and assignments"
+      description="What stays inside this project, what can move, and which projects are actually connected."
+      headingTag="h3"
+      density="dense"
+    />
+  {/snippet}
+
+  <div class="boundary-grid">
+    <section>
+      <strong>Owned by {project.detail?.name ?? 'this project'}</strong>
+      <p class="muted">Project-specific taste, acceptance criteria, configuration, and verification stay here unless a real handoff says otherwise.</p>
+    </section>
+    <section>
+      <strong>Can move</strong>
+      <p class="muted">{assignableResponsibilities.length > 0 ? `${countLabel(assignableResponsibilities.length, 'reusable capability')} can be assigned through the row actions above.` : 'No reusable capabilities are recorded yet.'}</p>
+    </section>
+    <section>
+      <strong>Connected projects</strong>
+      {#if connectedProjects.length === 0}
+        <p class="muted">No other project is connected to this graph yet.</p>
+      {:else}
+        <ul class="plain-list">
+          {#each connectedProjects as item (item.id)}
+            <li>{item.label}</li>
+          {/each}
+        </ul>
+      {/if}
+    </section>
+  </div>
+</FrameCard>
+
+<FrameCard class="structure-section contracts-section">
+  {#snippet header()}
+    <SectionHeader
+      title="Contracts"
+      description="APIs, schemas, components, review packets, or other boundaries Guildhall should preserve across work."
+      headingTag="h3"
+      density="dense"
+    />
+  {/snippet}
+
+  {#if !graph}
+    <p class="muted">Loading contracts...</p>
   {:else if (graph.contractSurfaces?.length ?? 0) === 0}
-    <p class="muted">No contract surfaces are scoped to this project yet.</p>
+    <div class="empty-action-state">
+      <div>
+        <strong>No contracts are tracked yet.</strong>
+        <p>Contracts make important boundaries durable so Guildhall can preserve them across future work.</p>
+      </div>
+      <Row gap="2" wrap>
+        <Button variant="secondary" size="sm" onclick={() => { contractDialog = 'scan' }}>Scan for contracts</Button>
+        <Button variant="secondary" size="sm" onclick={() => { contractDialog = 'declare' }}>Declare contract</Button>
+      </Row>
+    </div>
   {:else}
     <div class="contract-surface-list">
       {#each graph.contractSurfaces ?? [] as surface (surface.id)}
@@ -166,48 +299,14 @@
                       ['Known consumers', packet.knownConsumers?.join(', ') || 'None recorded'],
                       ['Sibling specs', packet.siblingSpecRefs?.join(', ') || null],
                       ['Drift', packet.driftFindings?.join('; ') || null],
+                      ...(packet.existingInvariants?.flatMap((invariant) => [
+                        ['Invariant', invariant.label],
+                        ['Rule', invariant.rule],
+                      ]) ?? []),
+                      ...(packet.existingDecisions?.map((decision) => ['Decision', decision.summary]) ?? []),
+                      ...(packet.proofObligations?.map((proof) => ['Proof needed', proof]) ?? []),
                     ]}
                   />
-                  {#if (packet.existingInvariants?.length ?? 0) > 0}
-                    <div class="surface-review-section">
-                      <strong>Existing invariants</strong>
-                      <ul>
-                        {#each packet.existingInvariants ?? [] as invariant (invariant.id)}
-                          <li><span>{invariant.label}</span><p>{invariant.rule}</p></li>
-                        {/each}
-                      </ul>
-                    </div>
-                  {/if}
-                  {#if (packet.existingDecisions?.length ?? 0) > 0}
-                    <div class="surface-review-section">
-                      <strong>Decisions</strong>
-                      <ul>
-                        {#each packet.existingDecisions ?? [] as decision (decision.id)}
-                          <li><span>{decision.summary}</span></li>
-                        {/each}
-                      </ul>
-                    </div>
-                  {/if}
-                  {#if (packet.proofObligations?.length ?? 0) > 0}
-                    <div class="surface-review-section">
-                      <strong>Proof obligations</strong>
-                      <ul>
-                        {#each packet.proofObligations ?? [] as obligation (obligation)}
-                          <li><span>{obligation}</span></li>
-                        {/each}
-                      </ul>
-                    </div>
-                  {/if}
-                  {#if (packet.reviewFocus?.length ?? 0) > 0}
-                    <div class="surface-review-section">
-                      <strong>Review focus</strong>
-                      <ul>
-                        {#each packet.reviewFocus ?? [] as focus (focus)}
-                          <li><span>{focus}</span></li>
-                        {/each}
-                      </ul>
-                    </div>
-                  {/if}
                 </section>
               {/each}
             </div>
@@ -218,66 +317,40 @@
   {/if}
 </FrameCard>
 
-{#if store.selectedDomain()}
-  {@const domain = store.selectedDomain()}
-  {@const assignableResponsibility = store.primaryAssignableResponsibility(domain?.id)}
-  <FrameCard class="graph-card">
-    {#snippet header()}
-      <SectionHeader
-        title={domain?.label ?? 'Domain'}
-        description="Keep local product decisions here. Assign reusable work only when another project should provide it."
-        headingTag="h3"
-        density="dense"
-      />
-    {/snippet}
-    <div class="domain-detail">
-      <section class="domain-detail-section domain-detail-section-local">
-        <strong>Stays in {project.detail?.name ?? 'this project'}</strong>
-        {#each store.localResponsibilitiesForDomain(domain?.id) as responsibility (responsibility.id)}
-          <p>{responsibility.description}</p>
-        {/each}
-      </section>
-      {#if assignableResponsibility}
-        <section class="domain-detail-section">
-          <strong>Can be assigned</strong>
-          <p>{assignableResponsibility.description}</p>
-          {#if assignableResponsibility.assigned && assignableResponsibility.responsibleProjectId !== project.detail?.id}
-            <p class="muted">Currently assigned to {assignableResponsibility.responsibleProjectLabel}.</p>
-          {/if}
-          {#if store.graphAssignmentTargets(assignableResponsibility).length > 0}
-            <Button
-              variant="secondary"
-              size="sm"
-              className="assign-project-button"
-              disabled={store.busy === `assign-responsibility:${assignableResponsibility.id}`}
-              onclick={() => store.openAssignmentPicker(assignableResponsibility)}
-            >
-              Assign to project
-            </Button>
-          {/if}
-        </section>
-      {/if}
-    </div>
-  </FrameCard>
-{/if}
+<Modal
+  open={Boolean(contractDialog)}
+  title={contractDialog === 'scan' ? 'Scan for contracts' : 'Declare contract'}
+  size="md"
+  onClose={() => { contractDialog = null }}
+>
+  <div class="contract-dialog">
+    {#if contractDialog === 'scan'}
+      <p>Guildhall should inspect the project for APIs, schemas, components, review packets, and other durable boundaries worth tracking as contracts.</p>
+      <p class="muted">This first implementation exposes the action and explanation. The follow-up runtime command should turn this into a real contract-discovery request.</p>
+    {:else}
+      <p>Declare a contract when you already know a boundary Guildhall should preserve, such as a component API, schema, design-system primitive, or review packet.</p>
+      <p class="muted">The follow-up runtime command should create a contract record from this flow.</p>
+    {/if}
+  </div>
+</Modal>
 
 <Modal
   open={Boolean(pickerResponsibility)}
-  title={`Assign ${pickerResponsibility?.domainLabel ?? 'domain'}`}
+  title={`Assign ${pickerResponsibility?.domainLabel ?? 'work'}`}
   size="md"
   onClose={store.closeAssignmentPicker}
 >
   <div class="assignment-picker">
-    <p>Search Guildhall’s managed local projects and choose who should provide this reusable capability.</p>
+    <p>Choose the project that should provide this reusable capability. This project still owns its local requirements and verification.</p>
     <Input
       type="search"
-      ariaLabel="Find project"
+      ariaLabel="Find provider project"
       placeholder="Search projects"
       value={store.assignmentPickerQuery}
       oninput={store.setAssignmentPickerQuery}
     />
     {#if store.assignmentPickerQuery.trim().length === 0}
-      <p class="muted">Start typing to search the local project index.</p>
+      <p class="muted">Start typing to search available provider projects.</p>
     {:else if store.assignmentPickerTargets().length === 0}
       <p class="muted">No matching projects.</p>
     {:else}
@@ -297,21 +370,21 @@
   </div>
 </Modal>
 
-<FrameCard class="graph-card graph-requests-card">
+<FrameCard class="structure-section handoffs-section">
   {#snippet header()}
     <SectionHeader
-      title="Dependency requests"
-      description="Requests move through provider delivery and consumer verification."
+      title="Project handoffs"
+      description="Provider or consumer work crossing a project boundary."
       headingTag="h3"
       density="dense"
     />
   {/snippet}
   {#if !graph}
-    <p class="muted">Loading dependency requests...</p>
+    <p class="muted">Loading project handoffs...</p>
   {:else if (graph.dependencyEdges?.length ?? 0) === 0}
     <div class="empty-graph-state">
-      <strong>No dependency requests or contracts are active yet.</strong>
-      <p>Use this graph to see who owns each domain now; request edges will appear here when one project asks another to provide or verify a contract.</p>
+      <strong>No active handoffs.</strong>
+      <p>{project.detail?.name ?? 'This project'} is not waiting on another project, and no other project is waiting on it.</p>
     </div>
   {:else}
     <div class="graph-request-list">
@@ -321,7 +394,7 @@
         <section class:graph-request-inbound={role === 'inbound'} class="graph-request">
           <div class="graph-request-head">
             <div>
-              <strong>{role === 'inbound' ? 'Inbound' : role === 'outgoing' ? 'Outgoing' : 'Related'} request</strong>
+              <strong>{handoffTitle(edge)}</strong>
               <p>{edge.consumerNeed}</p>
             </div>
             <div class="request-status-stack">
@@ -332,7 +405,7 @@
           <DefinitionList
             items={[
               ['State', edge.state.replaceAll('_', ' ')],
-              ['Domain', edge.domainLabel ?? edge.domainId ?? 'none'],
+              ['Work area', edge.domainLabel ?? edge.domainId ?? 'none'],
               ['Consumer', edge.consumerProjectLabel ?? edge.consumerProjectId ?? 'unknown'],
               ['Provider', edge.providerProjectLabel ?? edge.providerProjectId ?? 'unknown'],
               ['Delivery', edge.expectedDelivery ? `${edge.expectedDelivery.format ?? 'delivery'} via ${edge.expectedDelivery.channel ?? 'unspecified channel'}` : 'not planned'],
@@ -360,78 +433,128 @@
 </FrameCard>
 
 <style>
-  .muted {
+  .muted,
+  .metadata,
+  .column-label {
     color: var(--text-muted);
-    font-size: var(--gh-type-size-body);
+    font-size: var(--gh-type-size-meta);
     line-height: var(--gh-type-line-height-body);
   }
-  .graph-grid,
-  .domain-assignment-list,
-  .graph-request-list,
-  .contract-surface-list,
-  .domain-detail,
-  .assignment-picker {
+
+  .structure-chart {
+    border: 1px solid var(--border-muted);
+    border-radius: var(--gh-radius-2);
     display: grid;
-    gap: var(--gh-space-3);
+    gap: var(--gh-space-4);
+    padding: var(--gh-space-4);
+    background:
+      linear-gradient(180deg, color-mix(in srgb, white 3%, transparent), transparent),
+      var(--surface);
   }
-  :global(.graph-card) {
-    margin-block-end: var(--gh-space-3);
-  }
-  .domain-assignment-copy {
+
+  .chart-project-node {
+    border: 1px solid var(--border-strong);
+    border-radius: var(--gh-radius-2);
     display: grid;
     gap: var(--gh-space-1);
+    justify-self: center;
+    max-width: 28rem;
+    padding: var(--gh-space-3) var(--gh-space-4);
+    text-align: center;
   }
-  .domain-graph-node {
-    appearance: none;
-    border: 1px solid var(--border-muted);
-    background: var(--surface);
-    border-radius: var(--gh-radius-2);
-    color: inherit;
-    cursor: pointer;
+
+  .chart-project-node span {
+    color: var(--text-muted);
+    font-size: var(--gh-type-size-meta);
+    text-transform: uppercase;
+  }
+
+  .chart-ring,
+  .chart-summary {
     display: flex;
-    align-items: center;
-    justify-content: space-between;
+    flex-wrap: wrap;
+    gap: var(--gh-space-2);
+    justify-content: center;
+  }
+
+  .chart-work-area,
+  .chart-summary span {
+    border: 1px solid var(--border-muted);
+    border-radius: var(--gh-radius-full);
+    color: var(--text);
+    font-size: var(--gh-type-size-meta);
+    padding: var(--gh-space-2) var(--gh-space-3);
+  }
+
+  .chart-summary span {
+    color: var(--text-muted);
+  }
+
+  :global(.structure-section) {
+    margin-block-end: var(--gh-space-3);
+  }
+
+  .work-area-list,
+  .boundary-grid,
+  .graph-request-list,
+  .contract-surface-list,
+  .assignment-picker,
+  .contract-dialog {
+    display: grid;
     gap: var(--gh-space-3);
-    padding: var(--gh-space-3);
-    text-align: left;
-    width: 100%;
   }
-  .domain-graph-node:hover,
-  .domain-graph-node.active {
-    border-color: var(--border-strong);
-    background: var(--surface-raised);
-  }
-  .domain-detail-section {
+
+  .work-area-row {
     border-block-start: 1px solid var(--border-muted);
     display: grid;
-    gap: var(--gh-space-2);
+    gap: var(--gh-space-3);
     padding-block-start: var(--gh-space-3);
   }
-  .domain-detail-section:first-child {
+
+  .work-area-row:first-child {
     border-block-start: 0;
     padding-block-start: 0;
   }
-  .domain-detail-section-local {
-    border-inline-start: 2px solid var(--accent);
-    padding-inline-start: var(--gh-space-3);
+
+  .work-area-main,
+  .work-area-owned,
+  .work-area-assignment,
+  .empty-action-state,
+  .empty-graph-state {
+    display: grid;
+    gap: var(--gh-space-2);
   }
-  .domain-detail p,
+
+  .work-area-main p,
+  .work-area-owned p,
+  .work-area-assignment p,
+  .empty-action-state p,
+  .empty-graph-state p,
   .assignment-picker p,
+  .contract-dialog p,
   .graph-request-head p {
     margin: 0;
     color: var(--text-muted);
     font-size: var(--gh-type-size-meta);
     line-height: var(--gh-type-line-height-body);
   }
-  :global(.assign-project-button) {
-    justify-self: start;
+
+  .column-label {
+    text-transform: uppercase;
   }
+
+  .plain-list {
+    margin: 0;
+    padding-inline-start: var(--gh-space-4);
+  }
+
   .assignment-picker-list {
     border-block-start: 1px solid var(--border-muted);
     display: grid;
     max-height: min(42vh, 24rem);
     overflow: auto;
   }
+
   .assignment-picker-row {
     appearance: none;
     background: transparent;
@@ -443,117 +566,72 @@
     padding: var(--gh-space-3) 0;
     text-align: left;
   }
-  .project-index-summary {
-    border-inline-start: 2px solid var(--accent);
-    display: grid;
-    gap: var(--gh-space-2);
-    padding-inline-start: var(--gh-space-3);
-  }
-  .empty-graph-state {
-    display: grid;
-    gap: var(--gh-space-2);
-  }
-  .empty-graph-state p {
-    margin: 0;
-    color: var(--text-muted);
-    font-size: var(--gh-type-size-body);
-    line-height: var(--gh-type-line-height-body);
-  }
+
+  .contract-surface-row,
   .graph-request {
     border-block-start: 1px solid var(--border-muted);
     display: grid;
     gap: var(--gh-space-3);
     padding-block-start: var(--gh-space-3);
   }
+
+  .contract-surface-row:first-child,
   .graph-request:first-child {
     border-block-start: 0;
     padding-block-start: 0;
   }
+
+  .contract-surface-head,
+  .surface-review-packet-head,
+  .graph-request-head {
+    display: flex;
+    align-items: start;
+    justify-content: space-between;
+    gap: var(--gh-space-3);
+  }
+
+  .surface-review-packet-list {
+    display: grid;
+    gap: var(--gh-space-3);
+  }
+
+  .surface-review-packet {
+    border-block-start: 1px solid var(--border-muted);
+    display: grid;
+    gap: var(--gh-space-3);
+    padding-block-start: var(--gh-space-3);
+  }
+
+  .surface-review-packet h4 {
+    margin: 0;
+  }
+
+  .thread-link {
+    color: var(--link);
+    font-size: var(--gh-type-size-meta);
+    font-weight: var(--gh-type-weight-strong);
+    text-decoration: none;
+  }
+
+  .request-status-stack {
+    display: grid;
+    gap: var(--gh-space-1);
+    justify-items: end;
+  }
+
   .graph-request-inbound {
     border-inline-start: 2px solid var(--accent);
     padding-inline-start: var(--gh-space-3);
   }
-  .contract-surface-row {
-    border-block-start: 1px solid var(--border-muted);
-    display: grid;
-    gap: var(--gh-space-2);
-    padding-block-start: var(--gh-space-3);
-  }
-  .contract-surface-row:first-child {
-    border-block-start: 0;
-    padding-block-start: 0;
-  }
-  .contract-surface-head {
-    display: flex;
-    align-items: start;
-    justify-content: space-between;
-    gap: var(--gh-space-3);
-  }
-  .surface-review-packet-list {
-    border-block-start: 1px solid var(--border-muted);
-    display: grid;
-    gap: var(--gh-space-3);
-    padding-block-start: var(--gh-space-3);
-  }
-  .surface-review-packet {
-    border-inline-start: 2px solid var(--accent);
-    display: grid;
-    gap: var(--gh-space-2);
-    padding-inline-start: var(--gh-space-3);
-  }
-  .surface-review-packet-head {
-    align-items: start;
-    display: flex;
-    gap: var(--gh-space-3);
-    justify-content: space-between;
-  }
-  .surface-review-packet-head h4 {
-    font-size: var(--gh-type-size-body);
-    line-height: var(--gh-type-line-height-body);
-    margin: 0;
-  }
-  .thread-link {
-    color: var(--link);
-    font-size: var(--gh-type-size-meta);
-    line-height: var(--gh-type-line-height-body);
-    white-space: nowrap;
-  }
-  .surface-review-section {
-    display: grid;
-    gap: var(--gh-space-1);
-  }
-  .surface-review-section ul {
-    display: grid;
-    gap: var(--gh-space-1);
-    list-style: none;
-    margin: 0;
-    padding: 0;
-  }
-  .surface-review-section li {
-    display: grid;
-    gap: var(--gh-space-1);
-  }
-  .surface-review-section p {
-    color: var(--text-muted);
-    font-size: var(--gh-type-size-meta);
-    line-height: var(--gh-type-line-height-body);
-    margin: 0;
-  }
-  .graph-request-head {
-    display: flex;
-    justify-content: space-between;
-    gap: var(--gh-space-3);
-    align-items: flex-start;
-  }
-  .request-status-stack {
-    display: grid;
-    justify-items: end;
-    gap: var(--gh-space-1);
-    min-width: max-content;
-  }
-  @container (min-width: 42rem) {
-    .graph-grid {
-      grid-template-columns: minmax(0, 1.4fr) minmax(18rem, 0.8fr);
+
+  @media (min-width: 880px) {
+    .work-area-row {
+      grid-template-columns: minmax(0, 1.2fr) minmax(0, 1fr) minmax(0, 1fr);
+      align-items: start;
+    }
+
+    .boundary-grid {
+      grid-template-columns: repeat(3, minmax(0, 1fr));
     }
   }
 </style>

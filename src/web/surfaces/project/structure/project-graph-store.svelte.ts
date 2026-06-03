@@ -6,6 +6,7 @@ type ProjectFetch = typeof projectFetchImpl
 export interface ProjectGraphView {
   currentProject?: { id?: string; label?: string; path?: string }
   localProjects?: Array<{ id: string; label: string; path?: string; role?: string }>
+  localProjectIndex?: Array<{ id: string; label: string; path?: string; role?: 'current' | 'indexed' | string }>
   domainAuthorities?: Array<{
     domain?: { id?: string; label?: string }
     providerProject?: { id?: string; label?: string; path?: string }
@@ -204,7 +205,7 @@ export function createProjectGraphStore(projectFetch: ProjectFetch) {
   }
 
   function graphAssignmentTargets(responsibility: ProjectGraphResponsibility) {
-    return (projectGraph?.localProjects ?? [])
+    return (projectGraph?.localProjectIndex ?? projectGraph?.localProjects ?? [])
       .filter(item => item.id && item.path && item.id !== responsibility.responsibleProjectId)
       .map(item => ({
         id: item.id,
@@ -372,7 +373,7 @@ export function createProjectGraphStore(projectFetch: ProjectFetch) {
   }
 
   function localProjectIndexLabel(): string {
-    const count = projectGraph?.localProjects?.length ?? 0
+    const count = (projectGraph?.localProjectIndex ?? projectGraph?.localProjects ?? []).length
     return `${count} ${count === 1 ? 'project' : 'projects'} in the local index`
   }
 

@@ -75,7 +75,7 @@ describe('ProjectStructurePanel', () => {
     expect(settingsSource).not.toMatch(/assignmentPicker/)
   })
 
-  it('distinguishes a missing legacy structural map from project graph domains', async () => {
+  it('uses the user-facing structure chart instead of a missing legacy map card', async () => {
     project.detail = {
       ...project.detail!,
       structuralMapReview: null,
@@ -112,21 +112,24 @@ describe('ProjectStructurePanel', () => {
 
     render(ProjectStructurePanel)
 
-    await screen.findByRole('button', { name: /open app domain/i })
-    expect(screen.getByText('Legacy structural map missing')).toBeInTheDocument()
-    expect(await screen.findByText('Project graph domains are still available below.')).toBeInTheDocument()
+    expect(await screen.findByLabelText('Project structure chart')).toBeInTheDocument()
+    expect(screen.queryByText('Legacy structural map missing')).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Open Threads' })).not.toBeInTheDocument()
     expect(screen.queryByText(/^0 domains$/)).not.toBeInTheDocument()
-    expect(screen.getByRole('button', { name: /open app domain/i })).toBeInTheDocument()
-    expect(screen.getByRole('button', { name: /open docs domain/i })).toBeInTheDocument()
-    expect(screen.getByRole('button', { name: /open model domain/i })).toBeInTheDocument()
+    expect(await screen.findAllByText('Application experience')).not.toHaveLength(0)
+    expect(screen.getAllByText('Documentation and knowledge')).not.toHaveLength(0)
+    expect(screen.getAllByText('Model behavior and evaluation')).not.toHaveLength(0)
   })
 
-  it('explains empty dependency graph states in terms of the current project shape', async () => {
+  it('explains empty contracts and handoffs without exposing the project index as a section', async () => {
     installProjectGraph({
       currentProject: { id: 'fair-labor-license', label: 'Fair Labor License', path: '/workspace/fair-labor-license' },
       localProjects: [
         { id: 'fair-labor-license', label: 'Fair Labor License', role: 'current', path: '/workspace/fair-labor-license' },
-        { id: 'license-commerce', label: 'License Commerce', role: 'related', path: '/workspace/license-commerce' },
+      ],
+      localProjectIndex: [
+        { id: 'fair-labor-license', label: 'Fair Labor License', role: 'current', path: '/workspace/fair-labor-license' },
+        { id: 'license-commerce', label: 'License Commerce', role: 'indexed', path: '/workspace/license-commerce' },
       ],
       structuralDomains: [
         {
@@ -143,11 +146,14 @@ describe('ProjectStructurePanel', () => {
 
     render(ProjectStructurePanel)
 
-    expect(await screen.findByText('Current project: Fair Labor License')).toBeInTheDocument()
-    expect(screen.getByText('1 related local project')).toBeInTheDocument()
-    expect(screen.getByText('1 project graph domain')).toBeInTheDocument()
-    expect(screen.getByText('No dependency requests or contracts are active yet.')).toBeInTheDocument()
-    expect(screen.getByText('Use this graph to see who owns each domain now; request edges will appear here when one project asks another to provide or verify a contract.')).toBeInTheDocument()
+    expect(await screen.findByLabelText('Project structure chart')).toBeInTheDocument()
+    expect(screen.queryByRole('heading', { name: 'Searchable project index' })).not.toBeInTheDocument()
+    expect(screen.queryByText('1 related local project')).not.toBeInTheDocument()
+    expect(await screen.findAllByText('Licensing and policy')).not.toHaveLength(0)
+    expect(screen.getByText('No contracts are tracked yet.')).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Scan for contracts' })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Declare contract' })).toBeInTheDocument()
+    expect(screen.getByText('No active handoffs.')).toBeInTheDocument()
   })
 
   it('surfaces project graph domain assignment and inbound request actions', async () => {
@@ -159,7 +165,10 @@ describe('ProjectStructurePanel', () => {
             currentProject: { id: 'looma-knit', label: 'Looma + Knit', path: '/workspace/looma-knit' },
             localProjects: [
               { id: 'looma-knit', label: 'Looma + Knit', role: 'current', path: '/workspace/looma-knit' },
-              { id: 'looma', label: 'Looma', role: 'related', path: '/workspace/looma-knit/looma' },
+            ],
+            localProjectIndex: [
+              { id: 'looma-knit', label: 'Looma + Knit', role: 'current', path: '/workspace/looma-knit' },
+              { id: 'looma', label: 'Looma', role: 'indexed', path: '/workspace/looma-knit/looma' },
             ],
             structuralDomains: [
               {
@@ -272,24 +281,26 @@ describe('ProjectStructurePanel', () => {
     })
     vi.stubGlobal('fetch', fetchMock)
 
-    const { container } = render(ProjectStructurePanel)
+    render(ProjectStructurePanel)
 
-    await screen.findByRole('heading', { name: 'Project graph' })
-    await screen.findByText('Detected here - routed by Editor coordinator')
-    expect(screen.getByRole('heading', { name: 'Structural map' })).toBeInTheDocument()
-    expect(screen.getByRole('heading', { name: 'Domains' })).toBeInTheDocument()
-    expect(screen.getByText('Detected here - routed by Editor coordinator')).toBeInTheDocument()
-    expect(screen.getByText('Available to assign')).toBeInTheDocument()
-    expect(screen.getByText('2 projects in the local index')).toBeInTheDocument()
+    await screen.findByRole('heading', { name: 'Structure' })
+    await screen.findByText('Editor - Editor coordinator')
+    expect(screen.getByRole('heading', { name: 'Structural map review' })).toBeInTheDocument()
+    expect(screen.getByRole('heading', { name: 'Work areas' })).toBeInTheDocument()
+    expect(screen.getAllByText('Editor workflow and interface')).not.toHaveLength(0)
+    expect(screen.getByText('Editor - Editor coordinator')).toBeInTheDocument()
+    expect(screen.queryByText('Available to assign')).not.toBeInTheDocument()
+    expect(screen.queryByText('2 projects in the local index')).not.toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Assign Editor workflow and interface' })).toBeInTheDocument()
     expect(screen.getByText('Knit needs the Looma editor.')).toBeInTheDocument()
     expect(screen.getByText('Waiting on provider')).toBeInTheDocument()
     expect(screen.getByText('This project is provider')).toBeInTheDocument()
-    expect(screen.getByRole('heading', { name: 'Contract surfaces' })).toBeInTheDocument()
+    expect(screen.getByRole('heading', { name: 'Contracts' })).toBeInTheDocument()
     expect(screen.getByText('Command menu component API')).toBeInTheDocument()
     expect(screen.getByText('component api')).toBeInTheDocument()
     expect(screen.getByText('2 invariants')).toBeInTheDocument()
     expect(screen.getByText('3 consumers')).toBeInTheDocument()
-    expect(screen.getByText('Owned here')).toBeInTheDocument()
+    expect(screen.getAllByText('Owned here')).not.toHaveLength(0)
     expect(screen.getByRole('heading', { name: 'Surface review packet' })).toBeInTheDocument()
     expect(screen.getByText('task:task-123')).toBeInTheDocument()
     expect(screen.getByText('Command actions use items')).toBeInTheDocument()
@@ -297,18 +308,13 @@ describe('ProjectStructurePanel', () => {
     expect(screen.getByText('Use item-based composition for command menus.')).toBeInTheDocument()
     expect(screen.getByText('Adds an owner-facing surface packet projection.')).toBeInTheDocument()
     expect(screen.getByText('Render review packets in Structure.')).toBeInTheDocument()
-    expect(screen.getByText('Does this preserve Thread as the discussion surface?')).toBeInTheDocument()
     expect(screen.getByRole('link', { name: 'Open Threads' })).toHaveAttribute('href', '/projects/looma-knit/thread')
 
-    await userEvent.click(screen.getByRole('button', { name: /open editor domain/i }))
-    expect(screen.getByRole('heading', { name: 'Editor' })).toBeInTheDocument()
-    expect(screen.getByText('Reusable editor components and APIs.')).toBeInTheDocument()
     expect(screen.getByText('Token values, product taste, and editor composition stay local.')).toBeInTheDocument()
-    expect(container.querySelector('.graph-card .utility-panel')).toBeNull()
 
-    await userEvent.click(screen.getByRole('button', { name: 'Assign to project' }))
+    await userEvent.click(screen.getByRole('button', { name: 'Assign Editor workflow and interface' }))
     await screen.findByRole('dialog', { name: 'Assign Editor' })
-    await userEvent.type(screen.getByRole('searchbox', { name: 'Find project' }), 'loo')
+    await userEvent.type(screen.getByRole('searchbox', { name: 'Find provider project' }), 'loo')
     await userEvent.click(screen.getByRole('button', { name: 'Looma' }))
     await waitFor(() => expect(fetchMock.mock.calls.some(([input]) => String(input).includes('/domain-responsibility'))).toBe(true))
 
