@@ -50,6 +50,15 @@ const projectSurfaceRoutes = [
     },
   },
   {
+    name: 'release criteria',
+    path: '/projects/looma-knit/release/criteria',
+    assertions: async (page) => {
+      await expect(page.getByRole('heading', { name: 'Closure checks' })).toBeVisible()
+      await expect(page.getByRole('heading', { name: 'Criteria' })).toBeVisible()
+      await expect(page.getByRole('heading', { name: 'Task-state tally' })).toBeVisible()
+    },
+  },
+  {
     name: 'project setup',
     path: '/projects/tiny-demo/setup',
     assertions: async (page) => {
