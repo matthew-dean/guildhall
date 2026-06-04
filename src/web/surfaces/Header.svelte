@@ -126,7 +126,7 @@
     {/if}
     <button type="button" class="brand" onclick={goHome} aria-label="Projects home">
       <span class="brand-mark" aria-hidden="true">
-        <img src="/icons/genfavicon-64.png" alt="" />
+        <span class="brand-glyph">G</span>
       </span>
       <span class="brand-word">Guildhall</span>
     </button>
@@ -219,6 +219,13 @@
     width: 24px;
     height: 24px;
     border-radius: 8px;
+    background:
+      linear-gradient(180deg, color-mix(in srgb, white 12%, transparent), color-mix(in srgb, white 3%, transparent)),
+      color-mix(in srgb, var(--accent) 66%, black 18%);
+    box-shadow:
+      inset 0 1px 0 color-mix(in srgb, white 30%, transparent),
+      inset 0 -1px 0 color-mix(in srgb, black 18%, transparent),
+      0 0 18px color-mix(in srgb, var(--accent) 34%, transparent);
     isolation: isolate;
   }
   .brand-mark::before {
@@ -235,18 +242,22 @@
   .brand-mark::after {
     content: "";
     position: absolute;
-    inset: 2px;
-    border-radius: 7px;
+    inset: 5px 7px 6px;
+    border: 2px solid color-mix(in srgb, white 78%, transparent);
+    border-top-width: 4px;
+    border-bottom: 0;
+    border-radius: 5px 5px 2px 2px;
     box-shadow:
-      inset 0 1px 0 color-mix(in srgb, white 26%, transparent),
-      0 0 18px color-mix(in srgb, var(--accent) 34%, transparent);
+      0 -4px 0 -2px color-mix(in srgb, white 70%, transparent),
+      inset 0 1px 0 color-mix(in srgb, white 26%, transparent);
     pointer-events: none;
   }
-  .brand-mark img {
-    display: block;
-    width: 22px;
-    height: 22px;
-    border-radius: 7px;
+
+  .brand-glyph {
+    color: var(--gh-color-text-primary);
+    font-size: 0;
+    line-height: 1;
+    pointer-events: none;
   }
   .brand-word {
     display: inline-flex;

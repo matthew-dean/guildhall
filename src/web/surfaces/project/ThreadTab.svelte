@@ -2899,6 +2899,14 @@
     return `${currentTaskHref(taskId)}?tab=${tab}`
   }
 
+  function taskDetailsBackgroundPath(): string {
+    return path.href?.trim() || path.value?.trim() || currentProjectHref('/thread', explicitProjectId)
+  }
+
+  function openTaskDetails(taskId: string): void {
+    nav(currentTaskHref(taskId, explicitProjectId), { backgroundPath: taskDetailsBackgroundPath() })
+  }
+
   function dockSourceSummary(turn: InFlightTurn): string | null {
     const references = turn.sourceNote?.references?.length ?? 0
     if (turn.taskDescription && references > 0) {
@@ -3592,7 +3600,7 @@
                       type="button"
                       class="task-chip"
                       title={taskTitle}
-                      onclick={() => nav(currentTaskHref(t.taskId))}
+                      onclick={() => openTaskDetails(t.taskId)}
                     >
                       <span class="task-chip-text">{taskTitle}</span>
                     </button>
@@ -4421,7 +4429,7 @@
                     {/if}
                   {:else}
                   <Row justify="end" gap="2">
-                    <Button variant="secondary" disabled={busyTurnId === t.id} onclick={() => nav(currentTaskHref(t.taskId))}>
+                    <Button variant="secondary" disabled={busyTurnId === t.id} onclick={() => openTaskDetails(t.taskId)}>
                       Details...
                     </Button>
                     <Button variant="secondary" disabled={busyTurnId === t.id} onclick={() => (replyTurnId = t.id)}>
@@ -4479,7 +4487,7 @@
                 {/if}
                 {#if isActionableEscalation(t)}
                   <Row justify="end" gap="2" wrap>
-                    <Button variant="secondary" disabled={busyTurnId === t.id} onclick={() => nav(currentTaskHref(t.taskId))}>Details...</Button>
+                    <Button variant="secondary" disabled={busyTurnId === t.id} onclick={() => openTaskDetails(t.taskId)}>Details...</Button>
                     {#if guidance.actionOwner === 'guildhall'}
                       <Button variant="agent" disabled={busyTurnId === t.id || runBusy} onclick={() => resolveEscalationAndResume(t)}>
                         <Icon name="sparkles" size={14} />
@@ -4513,7 +4521,7 @@
                     <Button
                       variant="secondary"
                       size="sm"
-                      onclick={() => nav(currentTaskHref(t.taskId))}
+                      onclick={() => openTaskDetails(t.taskId)}
                     >
                       Details...
                     </Button>
@@ -4647,7 +4655,7 @@
                 {/if}
                 {#if t.taskId !== 'task-meta-intake' && t.taskStatus === 'exploring' && !turnLiveAgent(t) && !isQueuedSpecRevision(t)}
                   <Row justify="end" gap="2" wrap>
-                    <Button variant="secondary" onclick={() => nav(currentTaskHref(t.taskId))}>
+                    <Button variant="secondary" onclick={() => openTaskDetails(t.taskId)}>
                       Details...
                     </Button>
                     <Button variant="ghost" disabled={busyTurnId === t.id} onclick={() => (replyTurnId = t.id)}>
@@ -4758,7 +4766,7 @@
                       </Button>
                     {/if}
                     {#if needsRecovery(t) && !turnLiveAgent(t)}
-                      <Button variant="secondary" disabled={busyTurnId === t.id} onclick={() => nav(currentTaskHref(t.taskId))}>
+                      <Button variant="secondary" disabled={busyTurnId === t.id} onclick={() => openTaskDetails(t.taskId)}>
                         Inspect recovery
                       </Button>
                       <Button variant="ghost" disabled={busyTurnId === t.id} onclick={() => (replyTurnId = t.id)}>
@@ -4773,7 +4781,7 @@
                         </Button>
                       {/if}
                     {:else if t.importedDraft && (t.taskStatus === 'import_draft' || t.taskStatus === 'exploring') && !turnLiveAgent(t)}
-                      <Button variant="secondary" disabled={busyTurnId === t.id} onclick={() => nav(currentTaskHref(t.taskId))}>
+                      <Button variant="secondary" disabled={busyTurnId === t.id} onclick={() => openTaskDetails(t.taskId)}>
                         Details...
                       </Button>
                       <Button variant="ghost" disabled={busyTurnId === t.id} onclick={() => (replyTurnId = t.id)}>
@@ -4831,7 +4839,7 @@
                         {/if}
                       {/if}
                     {:else if isQueuedSpecRevision(t)}
-                      <Button variant="secondary" onclick={() => nav(currentTaskHref(t.taskId))}>
+                      <Button variant="secondary" onclick={() => openTaskDetails(t.taskId)}>
                         Open details
                       </Button>
                       {#if projectRunBlocksTaskStart(t)}
@@ -4843,7 +4851,7 @@
                         </Button>
                       {/if}
                     {:else}
-                      <Button variant={t.taskStatus === 'exploring' ? 'human' : 'secondary'} onclick={() => nav(currentTaskHref(t.taskId))}>
+                      <Button variant={t.taskStatus === 'exploring' ? 'human' : 'secondary'} onclick={() => openTaskDetails(t.taskId)}>
                         Details...
                       </Button>
                       {#if needsWorkerHandoffSpecCleanup(t)}
@@ -5128,7 +5136,7 @@
                           {/if}
 
                           <Row justify="end" gap="2" wrap>
-                            <Button variant="secondary" onclick={() => nav(currentTaskHref(activeDockTurn.taskId))}>
+                            <Button variant="secondary" onclick={() => openTaskDetails(activeDockTurn.taskId)}>
                               {needsRecovery(activeDockTurn) ? 'Inspect recovery' : 'Details...'}
                             </Button>
                             {#if needsRecovery(activeDockTurn) && !turnLiveAgent(activeDockTurn)}
@@ -5205,7 +5213,7 @@
                             </div>
                           {/if}
                           <Row justify="end" gap="2" wrap>
-                            <Button variant="secondary" disabled={busyTurnId === activeDockTurn.id} onclick={() => nav(currentTaskHref(activeDockTurn.taskId))}>Details...</Button>
+                            <Button variant="secondary" disabled={busyTurnId === activeDockTurn.id} onclick={() => openTaskDetails(activeDockTurn.taskId)}>Details...</Button>
                             {#if guidance.actionOwner === 'guildhall'}
                               <Button variant="agent" disabled={busyTurnId === activeDockTurn.id || runBusy} onclick={() => resolveEscalationAndResume(activeDockTurn)}>
                                 <Icon name="sparkles" size={14} />
@@ -5459,7 +5467,7 @@
                             {/if}
                           </div>
                           <Row justify="end" gap="2" wrap>
-                            <Button variant="ghost" disabled={busyTurnId === activeDockTurn.id} onclick={() => nav(currentTaskHref(activeDockTurn.taskId))}>
+                            <Button variant="ghost" disabled={busyTurnId === activeDockTurn.id} onclick={() => openTaskDetails(activeDockTurn.taskId)}>
                               Details...
                             </Button>
                             <Button
@@ -5479,7 +5487,7 @@
                             </p>
                           </div>
                           <Row justify="end" gap="2" wrap>
-                            <Button variant="ghost" disabled={busyTurnId === activeDockTurn.id} onclick={() => nav(currentTaskHref(activeDockTurn.taskId))}>
+                            <Button variant="ghost" disabled={busyTurnId === activeDockTurn.id} onclick={() => openTaskDetails(activeDockTurn.taskId)}>
                               Details...
                             </Button>
                             <Button

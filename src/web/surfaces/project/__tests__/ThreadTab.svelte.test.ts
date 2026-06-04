@@ -2786,6 +2786,28 @@ describe('ThreadTab', () => {
     expect(path.value).toContain('/thread')
   })
 
+  it('opens task details with Thread as the drawer background route', async () => {
+    installFetchFakes([
+      importedDraftTurn({
+        id: 'draft-details-background',
+        taskId: 'task-details-background',
+        taskTitle: 'Open details without leaving Thread',
+        importedDraft: false,
+        taskStatus: 'exploring',
+        phase: 'inflight',
+        summary: 'Guildhall is shaping this task.',
+      }),
+    ], 'draft-details-background')
+
+    render(ThreadTab)
+
+    const detailsButton = await selectedThread().findByRole('button', { name: /details\.\.\./i })
+    await userEvent.click(detailsButton)
+
+    expect(path.value).toBe('/projects/looma-knit/task/task-details-background')
+    expect(path.state).toEqual({ backgroundPath: '/projects/looma-knit/thread' })
+  })
+
   it('renders brief approvals as human-facing task briefs and hides operational receipt text', async () => {
     installFetchFakes([
       briefTurn({
