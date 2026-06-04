@@ -747,7 +747,7 @@
     align-items: center;
     background: transparent;
     border: 0;
-    border-radius: var(--r-1);
+    border-radius: var(--gh-radius-1);
     color: var(--text-muted);
     cursor: pointer;
     display: inline-flex;
@@ -785,7 +785,7 @@
       linear-gradient(180deg, color-mix(in srgb, white 6%, transparent), color-mix(in srgb, white 1.5%, transparent)),
       color-mix(in srgb, var(--bg-raised) 94%, black 6%);
     border: 1px solid var(--border-strong);
-    border-radius: var(--r-2);
+    border-radius: var(--gh-radius-2);
     box-shadow:
       0 16px 34px color-mix(in srgb, black 34%, transparent),
       inset 0 1px 0 color-mix(in srgb, white 7%, transparent);
@@ -816,7 +816,7 @@
     gap: var(--gh-space-1);
     font: inherit;
     padding: var(--gh-space-2);
-    border-radius: var(--r-1);
+    border-radius: var(--gh-radius-1);
     text-align: left;
   }
 

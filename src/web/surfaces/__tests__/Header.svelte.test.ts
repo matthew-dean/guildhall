@@ -58,7 +58,7 @@ describe('Header', () => {
 
     expect(screen.getByRole('button', { name: /projects home/i })).toHaveTextContent('Guildhall')
     expect(document.querySelector('.brand-mark img')).not.toBeInTheDocument()
-    expect(document.querySelector('.brand-glyph')).toHaveTextContent('G')
+    expect(document.querySelector('.brand-glyph')).toBeInTheDocument()
     expect(screen.getByText('Looma knit')).toBeInTheDocument()
     await screen.findByText('v0.5.1')
 

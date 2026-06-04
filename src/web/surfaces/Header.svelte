@@ -126,7 +126,7 @@
     {/if}
     <button type="button" class="brand" onclick={goHome} aria-label="Projects home">
       <span class="brand-mark" aria-hidden="true">
-        <span class="brand-glyph">G</span>
+        <span class="brand-glyph"></span>
       </span>
       <span class="brand-word">Guildhall</span>
     </button>

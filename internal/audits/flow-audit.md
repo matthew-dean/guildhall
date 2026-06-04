@@ -8525,3 +8525,19 @@ src/web/surfaces/project/structure/__tests__/ProjectStructurePanel.svelte.test.t
 `git diff --check`.
 
 source: codex:jess-structure-remove-pre-release-legacy-framing
+
+2026-06-04T17:46:36Z - Repaired the app-header brand mark after the in-app
+browser rendered `/icons/genfavicon-64.png` as a broken image. The route served
+the PNG with `200 OK`, but the in-app browser reported the loaded header image
+as `complete: true` with `naturalWidth: 0`, so the issue was image decode/render
+rather than a bad path. The header brand mark no longer depends on an `<img>`;
+it is now a small CSS-rendered mark inside the existing `Projects home` brand
+button, and the regression test asserts the header does not reintroduce a
+brand image element.
+
+Verification: Commands passed:
+`pnpm vitest run src/web/surfaces/__tests__/Header.svelte.test.ts
+--reporter=dot` (`6` tests), `pnpm typecheck`, `pnpm build`, and
+`git diff --check`.
+
+source: codex:header-css-brand-mark

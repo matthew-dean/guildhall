@@ -134,7 +134,9 @@ describe('design token audit', () => {
       'src/web/surfaces/project/settings/SettingsIdentityPanel.svelte',
       'src/web/surfaces/project/settings/SettingsReadyPanel.svelte',
       'src/web/surfaces/project/structure/ProjectGraphPanel.svelte',
-      'src/web/surfaces/project/structure/StructuralMapReviewPanel.svelte',
+      'src/web/surfaces/project/structure/ProjectStructurePanel.svelte',
+      'src/web/surfaces/project/structure/SetupAuditPanel.svelte',
+      'src/web/surfaces/project/structure/StructureHelpTip.svelte',
     ]
 
     for (const surface of convertedSurfaces) {

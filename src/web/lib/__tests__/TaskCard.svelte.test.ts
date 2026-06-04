@@ -69,7 +69,7 @@ describe('TaskCard', () => {
       coordinatorRunning: true,
     })
 
-    expect(screen.getByText('In progress')).toBeInTheDocument()
+    expect(screen.getByText('Working')).toBeInTheDocument()
     expect(screen.getByText('Next:')).toBeInTheDocument()
     expect(screen.getByText(/Replace the missing component import/)).toBeInTheDocument()
   })
