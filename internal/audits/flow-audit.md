@@ -55,8 +55,48 @@ routing to the right review surface, unified action-queue counts, and
 exception-based questions ("this looks stale; exclude it?") over making users
 babysit setup/import/provider/release states across multiple pages.
 
+## User Test Coverage Matrix
+
+Use this matrix before starting a broad audit. The follow-up log below records
+specific incidents; this matrix records the shape of a complete user test.
+
+| Area | Routes / surfaces | User jobs to prove | Evidence |
+| --- | --- | --- | --- |
+| Fleet home | `/projects`, header/nav | See registered projects, model/provider health, work mix, needs-you count, attach project, refresh without stale loading. | Browser route text plus `/api/service` project count and `stale:false`. |
+| Global needs-you | `/needs-you` | See project-grouped action items, refresh, open the right project/thread/setup surface. | Browser route text plus one item action route per item kind. |
+| Global providers | `/providers` | Load without `projectId`, inspect configured providers/models, change machine defaults without project setup leakage. | Browser route text plus `/api/providers` and `/api/models` returning 200 without project id. |
+| Project shell | `/projects/:id` and every project tab | Header shows the selected project, run/connect state, next action, and rail tabs consistently across refreshes. | Browser route text for every registered project and `/api/project?projectId=:id`. |
+| Overview | `/projects/:id`, `/projects/:id/overview/inbox` | Summarize project facts, current work, blockers, provider/runtime/readiness, graph summary, and owner actions without making the user infer where to go. | Browser text plus `/api/project/inbox`. |
+| Thread | `/projects/:id/thread`, selected thread query params | Answer owner input, review specs/briefs, inspect task details, ask follow-ups, and preserve Thread as the drawer background route. | Browser action proof plus `/api/project/thread`. |
+| Work | `/projects/:id/work?view=list|board|columns`, `/workspace-import` | Filter queued/planning/open/blocked work, open task drawers, review imported drafts, and avoid empty-state confusion. | Browser route text across filters plus task drawer open/close proof. |
+| Structure | `/projects/:id/structure` | Read project map, work areas, contracts, setup audit state, project handoffs, help tips, and capability assignment modal. | Browser route text plus `/api/project/project-graph`. |
+| Settings | `/projects/:id/settings`, `/settings/providers`, `/settings/ready`, `/settings/coordinators`, `/settings/identity`, `/settings/profile`, `/settings/advanced`, `/settings/learning` | Inspect readiness, provider selection, coordinator routing, identity, operating profile, developer tools, and learning state without dumping internals by default. | Browser route text plus settings endpoints where available. |
+| Release | `/projects/:id/release`, `/release/criteria` | Understand whether current work can close, which checks block it, and where to act next. | Browser route text plus `/api/project/release-readiness`. |
+| Timeline / coordinators | `/projects/:id/timeline`, coordinator surfaces | Review recent activity, agent/coordinator status, and route to relevant settings or work. | Browser route text and recent-events API fields. |
+| Setup / initialization | `/setup`, `/projects/:id/setup`, first-run attach/init | Complete identity, providers, project direction, repo scan, import/recovery, and clean onboarding for at least one fresh project. | Fresh-project browser loop; state reset must be explicit and reversible. |
+| Cross-project state | Multi-project fleet, project graph handoffs | Confirm unrelated projects do not leak into a project as "related work" unless a real dependency/handoff exists. | Browser Structure/Overview text plus project graph dependency edges. |
+
+Project coverage should include at least one project in each state: clean
+initialized project, owner-input blocked project, blocked/recovery-heavy
+project, project with dirty worktree blockers, project with accepted structural
+map/contracts, project with no runnable work, and a freshly reset onboarding
+project. On 2026-06-04 the live registered set was Looma + Knit, t-minus-t,
+Fair Labor License, Font something, Narrative Harness, Commerce project, and
+Jess.
+
 ## Current Follow-Ups
 
+- [ ] Fix project shell identity on Looma + Knit Thread. Live proof on
+  2026-06-04 after `pnpm dev:install`, service restart, and
+  `/api/stale-server` `stale:false`: `/api/project?projectId=looma-knit`
+  returned `name: "Looma + Knit"`, and `/api/project/thread?projectId=looma-knit`
+  returned 210 turns with active turn `inflight:task-import-1y7kmp6`. Browser
+  proof on `http://localhost:7777/projects/looma-knit/thread` loaded the Thread
+  content after about 2 seconds, including `Block menu / block side menu` and
+  `Coordinator review is queued`, but the project shell still rendered the
+  header as generic `Project` instead of `Looma + Knit`. Treat this as a shared
+  project-shell identity bug; the same route should not lose the selected
+  project name while the Overview and Structure routes render it correctly.
 - [x] Collapse the Jess setup thread detail to the current setup step instead
   of replaying every setup-guide step as duplicate cards, and stop leaking raw
   structural-review owner-input internals into the Jess thread list. Live Jess
