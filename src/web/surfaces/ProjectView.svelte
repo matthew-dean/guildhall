@@ -93,8 +93,14 @@
   let inboxLoadQueued = false
   let latestTickerEvent = $state<EventEnvelope | null>(null)
   let tickerNow = $state(Date.now())
+  const detail = $derived.by(() => {
+    const current = project.detail
+    if (!current) return null
+    if (!activeProjectId || !current.id || current.id === activeProjectId) return current
+    return null
+  })
   const projectDisplayName = $derived(
-    project.detail?.name?.trim() || humanizeProjectName(project.detail?.id ?? 'Project'),
+    detail?.name?.trim() || humanizeProjectName(detail?.id ?? activeProjectId ?? 'Project'),
   )
   const pageMode = $derived<'document' | 'surface-fill'>(
     currentView === 'thread' ? 'surface-fill' : 'document',
@@ -562,7 +568,6 @@
     )
   }
 
-  const detail = $derived(project.detail)
   $effect(() => {
     latestTickerEvent = (detail?.recentEvents ?? []).reduce<EventEnvelope | null>(
       (current, candidate) => pickLatestEvent(current, candidate),
@@ -586,6 +591,7 @@
   const availabilityPaused = $derived(availabilityStatus === 'paused')
   const providerStatus = $derived(detail?.providerStatus ?? detail?.run?.providerStatus ?? null)
   const startReadiness = $derived(detail?.startReadiness ?? null)
+  const primaryAction = $derived(detail?.actionModel?.primaryAction ?? null)
   const actionRunControl = $derived(detail?.actionModel?.runControl ?? null)
   const providerIndicator = $derived(buildProviderIndicator(providerStatus, runStatus))
   const providerHeaderLabel = $derived(providerIndicator?.summaryLabel ?? null)
@@ -785,7 +791,7 @@
   })
   const runStopActionHref = $derived.by(() => {
     if (runStopSummary?.stopReason === 'awaiting_human') {
-      return projectActionHref(startReadiness?.actionHref ?? '/overview/inbox', activeProjectId)
+      return projectActionHref(primaryAction?.href ?? startReadiness?.actionHref ?? '/overview/inbox', activeProjectId)
     }
     if (runStopSummary?.stopReason === 'required_migration_pending') {
       return projectActionHref(startReadiness?.actionHref ?? '/migrations', activeProjectId)
@@ -797,7 +803,7 @@
   })
   const runStopActionLabel = $derived(
     runStopSummary?.stopReason === 'awaiting_human'
-      ? startReadinessActionLabel(startReadiness?.message)
+      ? primaryAction?.buttonLabel ?? startReadinessActionLabel(startReadiness?.message)
       : runStopSummary?.stopReason === 'required_migration_pending'
         ? 'Migrate project'
       : runStopSummary?.stopReason === 'blocked_only'
@@ -814,6 +820,7 @@
   )
   const startReadinessNoticeHref = $derived.by(() => {
     if (!startReadiness || startReadiness.canStart || allTerminalStart || requiredMigrationBlocked) return null
+    if (primaryAction?.href) return projectActionHref(primaryAction.href, activeProjectId)
     if (startReadiness.actionHref) return projectActionHref(startReadiness.actionHref, activeProjectId)
     if (metaIntakePending) return currentProjectHref('/setup', activeProjectId)
     if (blockers.bootstrap) return currentProjectHref('/settings/ready', activeProjectId)
@@ -821,6 +828,7 @@
   })
   const startReadinessNoticeLabel = $derived.by(() => {
     if (!startReadinessNoticeHref) return null
+    if (primaryAction?.buttonLabel) return primaryAction.buttonLabel
     if (metaIntakePending) return 'Open project setup'
     if (startReadiness?.code === 'import_drafts_waiting') return 'Review drafts'
     if (blockers.bootstrap) return 'Open readiness checks'

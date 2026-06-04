@@ -132,6 +132,19 @@ describe('GET /api/project/release-readiness', () => {
     expect(body.unapprovedSpecs).toEqual([])
   })
 
+  it('returns a plain release-readiness load error when task state cannot be read', async () => {
+    await fs.writeFile(tasksPath, '{ broken json', 'utf-8')
+    const { app } = buildServeApp({ projectPath: tmpDir })
+
+    const res = await app.fetch(new Request(projectUrl('/api/project/release-readiness')))
+    const body = await res.json() as any
+
+    expect(res.status).toBe(500)
+    expect(body.error).toBe('Could not load release readiness for this project.')
+    expect(body.detail).toMatch(/TASKS\.json/)
+    expect(body.detail).not.toMatch(/SyntaxError/)
+  })
+
   it('surfaces unapproved briefs and specs in spec_review', async () => {
     await seed([
       makeTask({
@@ -139,8 +152,9 @@ describe('GET /api/project/release-readiness', () => {
         title: 'Brief-needs-approval',
         productBrief: {
           userJob: 'x',
+          whyItMattersNow: 'because this task is ready for an owner approval decision',
           successMetric: 'y',
-          antiPatterns: [],
+          nonGoals: ['Do not expand the release scope.'],
         },
       }),
       makeTask({
@@ -158,6 +172,76 @@ describe('GET /api/project/release-readiness', () => {
     expect(body.unapprovedSpecs.map((b: any) => b.id)).toEqual(['task-2'])
     expect(body.totals.humanBlockingCount).toBe(2)
     expect(body.totals.blockingCount).toBeGreaterThan(2)
+  })
+
+  it('separates incomplete briefs from approval-ready briefs', async () => {
+    await seed([
+      makeTask({
+        id: 'task-incomplete',
+        title: 'Needs brief cleanup',
+        status: 'proposed',
+        productBrief: {
+          userJob: 'x',
+          successMetric: 'y',
+          antiPatterns: [],
+        },
+      }),
+      makeTask({
+        id: 'task-unapproved',
+        title: 'Ready for brief approval',
+        status: 'proposed',
+        productBrief: {
+          userJob: 'x',
+          whyItMattersNow: 'because this can close a real user gap',
+          successMetric: 'y',
+          nonGoals: ['Do not widen scope.'],
+        },
+      }),
+    ])
+    const { app } = buildServeApp({ projectPath: tmpDir })
+    await approveDesignSystem(app)
+    await commitAndPush('settle brief fixtures')
+
+    const res = await app.fetch(new Request(projectUrl('/api/project/release-readiness')))
+    const body = await res.json() as any
+
+    expect(body.incompleteBriefs).toEqual([
+      {
+        id: 'task-incomplete',
+        title: 'Needs brief cleanup',
+        reason: 'Task brief needs user job, why it matters now, success metric, and at least one non-goal before approval.',
+      },
+    ])
+    expect(body.unapprovedBriefs.map((b: any) => b.id)).toEqual(['task-unapproved'])
+    expect(body.totals.incompleteBriefBlockingCount).toBe(1)
+    expect(body.totals.humanBlockingCount).toBe(2)
+  })
+
+  it('keeps external setup blockers owner-facing in release readiness', async () => {
+    await seed([
+      makeTask({
+        id: 'task-oauth',
+        title: 'Connect OAuth provider',
+        status: 'blocked',
+        blockReason: 'OAuth client secrets need external setup before Guildhall can verify this work.',
+      }),
+    ])
+    const { app } = buildServeApp({ projectPath: tmpDir })
+    await approveDesignSystem(app)
+    await commitAndPush('settle external setup blocker')
+
+    const res = await app.fetch(new Request(projectUrl('/api/project/release-readiness')))
+    const body = await res.json() as any
+
+    expect(body.ready).toBe(false)
+    expect(body.blockedByAgent).toEqual([
+      {
+        id: 'task-oauth',
+        title: 'Connect OAuth provider',
+        reason: 'OAuth client secrets need external setup before Guildhall can verify this work.',
+      },
+    ])
+    expect(body.totals.humanBlockingCount).toBe(1)
   })
 
   it('does not count terminal or reserved workspace-import briefs as human blockers', async () => {

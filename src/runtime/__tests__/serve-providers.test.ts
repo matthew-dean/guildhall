@@ -13,7 +13,7 @@ vi.mock('node:os', async (importOriginal) => {
   return { ...actual, homedir: () => TMP_HOME }
 })
 
-const { bootstrapWorkspace, setProvider, readGlobalProviders, globalProvidersPath, readWorkspaceConfig, readGlobalConfig, updateGlobalConfig, resolveModelsForProvider, updateProjectConfig, registerWorkspace } =
+const { bootstrapWorkspace, setProvider, readGlobalProviders, globalProvidersPath, readWorkspaceConfig, readProjectConfig, readGlobalConfig, updateGlobalConfig, resolveModelsForProvider, updateProjectConfig, registerWorkspace } =
   await import('@guildhall/config')
 const { buildServeApp } = await import('../serve.js')
 const { clearProviderClientPool } = await import('../provider-client-pool.js')
@@ -339,6 +339,22 @@ describe('POST /api/setup/providers/config', () => {
       const raw = await fs.readFile(projectCfgPath, 'utf8')
       expect(raw).not.toMatch(/preferredProvider:\s*anthropic-api/)
     }
+  })
+
+  it('writes a project provider preference only to the scoped project when requested', async () => {
+    updateGlobalConfig({ ...readGlobalConfig(), preferredProvider: 'codex' })
+    const { app } = buildServeApp({ projectPath: tmpProject })
+    const res = await app.fetch(
+      new Request(scoped('/api/setup/providers/config'), {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ scope: 'project', preferredProvider: 'anthropic-api' }),
+      }),
+    )
+    expect(res.status).toBe(200)
+    expect(readGlobalConfig().preferredProvider).toBe('codex')
+    expect(readProjectConfig(tmpProject).preferredProvider).toBe('anthropic-api')
+    expect(readWorkspaceConfig(tmpProject)).not.toHaveProperty('preferredProvider')
   })
 
   it('writes an OpenAI-compatible base URL to the global store and preserves the key', async () => {
@@ -710,6 +726,65 @@ describe('POST /api/providers/disconnect', () => {
       }),
     )
     expect(res.status).toBe(400)
+  })
+})
+
+describe('POST /api/providers/test', () => {
+  it('surfaces a missing-provider failure without requiring a project id', async () => {
+    const { app } = buildServeApp({})
+    const res = await app.fetch(
+      new Request('http://localhost/api/providers/test', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ provider: 'openai-api' }),
+      }),
+    )
+    expect(res.status).toBe(200)
+    const body = (await res.json()) as { ok?: boolean; error?: string }
+    expect(body.ok).toBe(false)
+    expect(body.error).toMatch(/OpenAI-compatible API key missing/)
+  })
+
+  it('marks a local OpenAI-compatible provider verified after a successful test', async () => {
+    setProvider('llama-cpp', { url: 'http://localhost:1234/v1' })
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (input: string | Request | URL) => {
+        const url = String(input)
+        if (url.endsWith('/models')) {
+          return new Response(JSON.stringify({ data: [{ id: 'qwen-test' }] }), {
+            status: 200,
+            headers: { 'content-type': 'application/json' },
+          })
+        }
+        if (url.endsWith('/chat/completions')) {
+          const encoder = new TextEncoder()
+          return new Response(
+            new ReadableStream<Uint8Array>({
+              start(controller) {
+                controller.enqueue(encoder.encode(dataFrame({ choices: [{ delta: { content: 'OK' } }] })))
+                controller.enqueue(encoder.encode('data: [DONE]\n\n'))
+                controller.close()
+              },
+            }),
+            { status: 200, headers: { 'content-type': 'text/event-stream' } },
+          )
+        }
+        return new Response('not found', { status: 404 })
+      }),
+    )
+    const { app } = buildServeApp({})
+    const res = await app.fetch(
+      new Request('http://localhost/api/providers/test', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ provider: 'llama-cpp' }),
+      }),
+    )
+    expect(res.status).toBe(200)
+    const body = (await res.json()) as { ok?: boolean; sample?: string }
+    expect(body).toMatchObject({ ok: true, sample: 'OK' })
+    expect(readGlobalProviders().providers['llama-cpp']?.verifiedAt).toBeTruthy()
   })
 })
 

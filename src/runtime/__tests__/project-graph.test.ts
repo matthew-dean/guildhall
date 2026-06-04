@@ -156,6 +156,59 @@ describe('local project graph', () => {
     expect(view.authorityRoots).toEqual([])
   })
 
+  it('does not project unrelated domain authority assignments as related work', async () => {
+    bootstrapWorkspace(consumerProject, { name: 'Narrative Harness' })
+    bootstrapWorkspace(providerProject, { name: 'Guildhall' })
+    registerWorkspace({ id: 'narrative-harness', path: consumerProject, name: 'Narrative Harness', tags: [] })
+    registerWorkspace({ id: 'guildhall', path: providerProject, name: 'Guildhall', tags: [] })
+    registerWorkspace({ id: 'jess', path: workspaceProject, name: 'Jess', tags: [] })
+
+    await assignProjectDomainAuthority({
+      domain: { id: 'domain:jess-css', label: 'Jess CSS' },
+      providerProject: { id: 'jess', label: 'Jess', path: workspaceProject },
+      assignedBy: 'owner',
+      now: '2026-06-01T12:05:00.000Z',
+    })
+    await assignProjectDomainAuthority({
+      domain: { id: 'domain:workflow', label: 'Workflow' },
+      providerProject: { id: 'guildhall', label: 'Guildhall', path: providerProject },
+      assignedBy: 'owner',
+      now: '2026-06-01T12:06:00.000Z',
+    })
+
+    const view = queryProjectGraphView({
+      projectId: 'narrative-harness',
+      projectPath: consumerProject,
+      structuralDomains: [
+        { id: 'domain:workflow', label: 'Workflow', kind: 'cross_cutting_domain' },
+      ],
+    })
+
+    expect(view.localProjects).toEqual(expect.arrayContaining([
+      expect.objectContaining({ id: 'narrative-harness', role: 'current' }),
+      expect.objectContaining({ id: 'guildhall', role: 'provider' }),
+    ]))
+    expect(view.localProjects).not.toEqual(expect.arrayContaining([
+      expect.objectContaining({ id: 'jess' }),
+    ]))
+    expect(view.localProjectIndex).toEqual(expect.arrayContaining([
+      expect.objectContaining({ id: 'jess', role: 'indexed' }),
+    ]))
+    expect(view.domainAuthorities).toEqual([
+      expect.objectContaining({
+        domain: expect.objectContaining({ id: 'domain:workflow' }),
+        providerProject: expect.objectContaining({ id: 'guildhall' }),
+      }),
+    ])
+    expect(view.authorityRoots).toEqual([
+      expect.objectContaining({
+        projectId: 'guildhall',
+        domainId: 'domain:workflow',
+        assigned: true,
+      }),
+    ])
+  })
+
   it('preserves coordinator domain labels without guessing capitalization', async () => {
     bootstrapWorkspace(consumerProject, { name: 'Jess' })
     registerWorkspace({ id: 'jess', path: consumerProject, name: 'Jess', tags: [] })

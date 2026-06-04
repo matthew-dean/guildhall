@@ -46,6 +46,7 @@ export interface ProjectCardSummary {
   canOpen: boolean
   canStart: boolean
   canStop: boolean
+  needsAttention: boolean
   gitStory?: {
     state?: string
     label: string
@@ -96,6 +97,19 @@ function readinessStage(project: ServiceProjectSummary): string | null {
   }
 }
 
+function actionModelStage(project: ServiceProjectSummary): string | null {
+  const actionModel = project.actionModel
+  if (!actionModel) return null
+  if (actionModel.ownerInput?.active) return 'Needs you'
+  const code = actionModel.primaryAction?.code ?? project.startReadiness?.code
+  if (code === 'all_terminal') return 'Complete'
+  if (code === 'required_migration_pending') return 'Needs migration'
+  if (code === 'no_provider' || code === 'no_loaded_model' || code === 'model_unavailable' || code === 'provider_unavailable') {
+    return 'Needs provider'
+  }
+  return null
+}
+
 function readinessMaturity(project: ServiceProjectSummary): Pick<ProjectCardSummary, 'maturityLabel' | 'maturityDescription'> | null {
   const readiness = project.startReadiness
   if (!readiness || readiness.canStart !== false) return null
@@ -120,8 +134,10 @@ function readinessMaturity(project: ServiceProjectSummary): Pick<ProjectCardSumm
 function stageLabel(project: ServiceProjectSummary, counts: ProjectCardSummary['counts']): string {
   const runStatus = project.run?.status ?? 'stopped'
   if (project.initializationNeeded) return 'Needs setup'
+  const actionStage = actionModelStage(project)
+  if (actionStage) return actionStage
   const readiness = readinessStage(project)
-  if (readiness && readiness !== 'Complete') return readiness
+  if (readiness) return readiness
   if (project.projectCheckIn?.needed) return project.projectCheckIn.label ?? 'Project questions'
   if (runStatus === 'error') return 'Needs attention'
   if (runStatus === 'stopping') return 'Stopping'
@@ -223,6 +239,20 @@ function nextLabel(project: ServiceProjectSummary, counts: ProjectCardSummary['c
   }
   if (counts.done > 0) return 'No immediate next task detected'
   return 'Run intake or add the first task'
+}
+
+function projectNeedsAttention(
+  project: ServiceProjectSummary,
+  counts: ProjectCardSummary['counts'],
+  projectCheckIn: ServiceProjectSummary['projectCheckIn'] | undefined,
+  provider: ProjectCardSummary['provider'] | null,
+): boolean {
+  const code = project.actionModel?.primaryAction?.code ?? project.startReadiness?.code
+  if (code === 'all_terminal') return false
+  if (project.actionModel?.ownerInput?.active) return true
+  if (project.actionModel?.primaryAction?.tone === 'danger' || project.actionModel?.primaryAction?.tone === 'warn') return true
+  if (project.actionModel?.runControl?.startEnabled === false && code !== 'all_terminal') return true
+  return Boolean(counts.blocked > 0 || counts.draftReview > 0 || projectCheckIn?.needed || provider?.tone === 'warn')
 }
 
 function maturity(project: ServiceProjectSummary, counts: ProjectCardSummary['counts']): Pick<ProjectCardSummary, 'maturityLabel' | 'maturityDescription'> {
@@ -348,6 +378,7 @@ export function summarizeProjectCard(
         tone: providerWarning ? 'warn' as const : 'neutral' as const,
       }
     : null
+  const needsAttention = projectNeedsAttention(project, counts, projectCheckIn, provider)
   return {
     id: project.id,
     name: humanizeProjectName(project.name?.trim() || project.id),
@@ -402,6 +433,7 @@ export function summarizeProjectCard(
         (counts.active > 0 || counts.total === 0) &&
         !(counts.draftReview > 0 && counts.active === 0),
     canStop: running || (!initializationNeeded && !running && runControl?.startEnabled === true && runControl.label === 'Pause'),
+    needsAttention,
     gitStory,
   }
 }

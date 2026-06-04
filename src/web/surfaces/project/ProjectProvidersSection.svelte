@@ -108,7 +108,7 @@
       const r = await projectFetch('/api/setup/providers/config', {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ preferredProvider: preferred }),
+        body: JSON.stringify({ scope: 'project', preferredProvider: preferred }),
       })
       const j = await r.json()
       if (j.error) return flash(j.error, true)

@@ -31,6 +31,7 @@
       description: string
     }
     openEscalations: ReleaseItem[]
+    incompleteBriefs?: ReleaseItem[]
     unapprovedBriefs: ReleaseItem[]
     unapprovedSpecs: ReleaseItem[]
     shelvedUnclaimed: ReleaseItem[]
@@ -135,6 +136,12 @@
             label: 'Open escalations',
             items: data.openEscalations,
             clearLabel: 'No open escalations.',
+          },
+          {
+            key: 'incomplete-briefs',
+            label: 'Incomplete briefs',
+            items: data.incompleteBriefs ?? [],
+            clearLabel: 'No incomplete briefs.',
           },
           {
             key: 'briefs',

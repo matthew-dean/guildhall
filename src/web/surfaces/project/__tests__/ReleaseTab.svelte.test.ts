@@ -14,6 +14,7 @@ function json(data: unknown): Response {
 
 const readyPayload = {
   openEscalations: [],
+  incompleteBriefs: [],
   unapprovedBriefs: [],
   unapprovedSpecs: [],
   shelvedUnclaimed: [],
@@ -103,6 +104,48 @@ describe('ReleaseTab', () => {
     await waitFor(() => {
       expect(fetch).toHaveBeenCalledWith('/api/project/release-readiness')
     })
+  })
+
+  it('renders incomplete task briefs as a separate owner action', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () =>
+        json({
+          ...readyPayload,
+          incompleteBriefs: [
+            {
+              id: 'task-incomplete',
+              title: 'Needs brief cleanup',
+              reason: 'Task brief needs user job, why it matters now, success metric, and at least one non-goal before approval.',
+            },
+          ],
+          unapprovedBriefs: [
+            {
+              id: 'task-unapproved',
+              title: 'Ready for brief approval',
+            },
+          ],
+          statusCounts: { proposed: 2 },
+          totals: {
+            blockingCount: 4,
+            humanBlockingCount: 2,
+            incompleteBriefBlockingCount: 1,
+            unfinishedCount: 2,
+            tasks: 2,
+            done: 0,
+          },
+        }),
+      ),
+    )
+
+    render(ReleaseTab, { props: { subView: 'criteria' } })
+
+    expect(await screen.findByText('Closure checks')).toBeTruthy()
+    expect(screen.getByText('Incomplete briefs')).toBeTruthy()
+    expect(screen.getByText('Needs brief cleanup')).toBeTruthy()
+    expect(screen.getByText('Task brief needs user job, why it matters now, success metric, and at least one non-goal before approval.')).toBeTruthy()
+    expect(screen.getByText('Unapproved briefs')).toBeTruthy()
+    expect(screen.getByText('Ready for brief approval')).toBeTruthy()
   })
 
   it('uses the current project route when loading closure checks', async () => {

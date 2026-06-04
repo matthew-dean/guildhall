@@ -307,3 +307,8 @@ source: codex:flow-audit-merged-integration
 Tightened ProjectView rail preview behavior so hover expansion no longer shifts the item under the pointer: nav item icons now keep the same left anchor across collapsed/preview/expanded rail states, collapsed preview keeps the rail header compact, and active rail subnav stays hidden during preview so rows below do not move. Added a focused ProjectView regression assertion that preview does not mount .rail-subs. Verification: git diff --check passed for ProjectView and its test; focused Vitest collection is currently blocked by an unrelated deleted src/web/surfaces/project/structure/StructuralMapReviewPanel.svelte import in the dirty worktree.
 
 source: codex:rail-preview-stability
+## 2026-06-04T18:38:54.647Z MCP evidence for flow-audit
+
+Fixed ProjectView shell identity for direct Thread and drawer-backed Thread routes. Verified ProjectView suite (42 tests), focused ThreadTab drawer background test, pnpm typecheck, pnpm build, dev install/restart with stale:false, Looma + Knit API detail/thread probes, and fallback Playwright DOM proof showing rail/header title 'Looma + Knit' on /projects/looma-knit/thread.
+
+source: codex delegated lane 019e93cf-c572-7112-905c-63f1f13a29a9

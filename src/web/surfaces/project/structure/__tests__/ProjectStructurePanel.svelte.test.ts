@@ -195,6 +195,12 @@ describe('ProjectStructurePanel', () => {
   })
 
   it('explains empty contracts and handoffs without exposing the project index as a section', async () => {
+    project.detail = {
+      ...project.detail!,
+      id: 'fair-labor-license',
+      name: 'Fair Labor License',
+      path: '/workspace/fair-labor-license',
+    }
     const fetchMock = installProjectGraph({
       currentProject: { id: 'fair-labor-license', label: 'Fair Labor License', path: '/workspace/fair-labor-license' },
       localProjects: [
@@ -227,6 +233,64 @@ describe('ProjectStructurePanel', () => {
     expect(screen.queryByRole('button', { name: 'Scan for contracts' })).not.toBeInTheDocument()
     expect(screen.queryByRole('button', { name: 'Declare contract' })).not.toBeInTheDocument()
     expect(screen.getByText('No active handoffs.')).toBeInTheDocument()
+    expect(screen.getByText('Fair Labor License is not waiting on another project, and no other project is waiting on it.')).toBeInTheDocument()
+    expect(screen.getByText('No connected external projects')).toBeInTheDocument()
+    expect(screen.queryByText('License Commerce')).not.toBeInTheDocument()
+  })
+
+  it('shows real project handoffs without leaking unrelated indexed projects', async () => {
+    project.detail = {
+      ...project.detail!,
+      id: 'narrative-harness',
+      name: 'Narrative Harness',
+      path: '/workspace/narrative-harness',
+    }
+    const fetchMock = installProjectGraph({
+      currentProject: { id: 'narrative-harness', label: 'Narrative Harness', path: '/workspace/narrative-harness' },
+      localProjects: [
+        { id: 'narrative-harness', label: 'Narrative Harness', role: 'current', path: '/workspace/narrative-harness' },
+        { id: 'guildhall', label: 'Guildhall', role: 'provider', path: '/workspace/guildhall' },
+      ],
+      localProjectIndex: [
+        { id: 'narrative-harness', label: 'Narrative Harness', role: 'current', path: '/workspace/narrative-harness' },
+        { id: 'guildhall', label: 'Guildhall', role: 'indexed', path: '/workspace/guildhall' },
+        { id: 'jess', label: 'Jess', role: 'indexed', path: '/workspace/jess' },
+      ],
+      structuralDomains: [
+        {
+          id: 'domain:workflow',
+          label: 'Workflow',
+          kind: 'cross_cutting_domain',
+        },
+      ],
+      domainResponsibilities: [],
+      dependencyEdges: [{
+        id: 'edge-harness-guildhall',
+        state: 'provider_working',
+        consumerProjectId: 'narrative-harness',
+        consumerProjectLabel: 'Narrative Harness',
+        providerProjectId: 'guildhall',
+        providerProjectLabel: 'Guildhall',
+        domainId: 'domain:workflow',
+        domainLabel: 'Workflow',
+        consumerNeed: 'Narrative Harness needs a workflow packet from Guildhall.',
+        expectedDelivery: { format: 'workflow packet', channel: 'artifact' },
+        unresolved: true,
+      }],
+      contractSurfaces: [],
+    })
+
+    render(ProjectStructurePanel)
+
+    expect(await screen.findByRole('heading', { name: 'Project map' })).toBeInTheDocument()
+    await waitFor(() => expect(fetchMock).toHaveBeenCalled())
+    expect(screen.getByText('1 connected project')).toBeInTheDocument()
+    expect(screen.getByText('1 active handoff')).toBeInTheDocument()
+    expect(screen.getByText('Narrative Harness is waiting on Guildhall')).toBeInTheDocument()
+    expect(screen.getByText('Narrative Harness needs a workflow packet from Guildhall.')).toBeInTheDocument()
+    expect(screen.getByText('This project is consumer')).toBeInTheDocument()
+    expect(screen.getByText('workflow packet via artifact')).toBeInTheDocument()
+    expect(screen.queryByText('Jess')).not.toBeInTheDocument()
   })
 
   it('explains obscure structure terms with clickable help icons', async () => {
@@ -564,5 +628,52 @@ describe('ProjectStructurePanel', () => {
     await userEvent.click(document.body)
     expect(screen.queryByLabelText('Matching capabilities')).not.toBeInTheDocument()
     expect(screen.getByRole('button', { name: 'Show capabilities' })).toHaveAttribute('aria-expanded', 'false')
+  })
+
+  it('offers monorepo child projects as capability assignment targets without showing them as connected work', async () => {
+    const fetchMock = installProjectGraph({
+      currentProject: { id: 'jess', label: 'Jess', path: '/workspace/jess' },
+      localProjects: [
+        { id: 'jess', label: 'Jess', role: 'current', path: '/workspace/jess' },
+      ],
+      localProjectIndex: [
+        { id: 'jess', label: 'Jess', role: 'current', path: '/workspace/jess' },
+        { id: 'docs-content', label: 'Docs Content', role: 'indexed', path: '/workspace/jess/packages/docs-content' },
+        { id: 'patch-css', label: 'Patch CSS', role: 'indexed', path: '/workspace/jess/packages/patch-css' },
+      ],
+      structuralDomains: [
+        { id: 'domain:docs-less', label: 'docs-less', kind: 'structural_domain', path: 'packages/docs-less' },
+      ],
+      domainResponsibilities: [{
+        id: 'domain:docs-less:provider_capability',
+        domainId: 'domain:docs-less',
+        domainLabel: 'docs-less',
+        facet: 'provider_capability',
+        facetLabel: 'Provider capability',
+        description: 'Reusable Less evaluation behavior.',
+        authority: 'provider',
+        responsibleProjectId: 'jess',
+        responsibleProjectLabel: 'Jess',
+        responsibleProjectPath: '/workspace/jess',
+        assignable: true,
+        assigned: false,
+      }],
+      dependencyEdges: [],
+      contractSurfaces: [],
+    })
+
+    render(ProjectStructurePanel)
+
+    expect(await screen.findByRole('heading', { name: 'Project map' })).toBeInTheDocument()
+    await waitFor(() => expect(fetchMock).toHaveBeenCalled())
+    expect(screen.getByText('No connected external projects')).toBeInTheDocument()
+    expect(screen.queryByText('Docs Content')).not.toBeInTheDocument()
+    expect(screen.queryByText('Patch CSS')).not.toBeInTheDocument()
+
+    await userEvent.click(screen.getByRole('button', { name: 'Link capability' }))
+    await userEvent.click(screen.getByRole('button', { name: 'Show capabilities' }))
+    await userEvent.click(screen.getByRole('button', { name: /docs-less - Provider capability/ }))
+    expect(screen.getByRole('option', { name: 'Docs Content' })).toBeInTheDocument()
+    expect(screen.getByRole('option', { name: 'Patch CSS' })).toBeInTheDocument()
   })
 })

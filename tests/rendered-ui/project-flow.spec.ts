@@ -1,5 +1,71 @@
 import { expect, test } from '@playwright/test'
 
+const projectSurfaceRoutes = [
+  {
+    name: 'global needs-you',
+    path: '/needs-you',
+    assertions: async (page) => {
+      await expect(page.getByRole('heading', { name: 'Needs you' })).toBeVisible()
+      await expect(page.getByRole('region', { name: 'Needs-you summary' })).toBeVisible()
+    },
+  },
+  {
+    name: 'global providers',
+    path: '/providers',
+    assertions: async (page) => {
+      await expect(page.getByRole('heading', { name: 'Providers', exact: true }).first()).toBeVisible()
+      await expect(page.getByRole('heading', { name: 'Global model defaults' })).toBeVisible()
+    },
+  },
+  {
+    name: 'overview inbox',
+    path: '/projects/looma-knit/overview/inbox',
+    assertions: async (page) => {
+      await expect(page.getByRole('heading', { name: 'Needs you' })).toBeVisible()
+      await expect(page.getByRole('complementary', { name: 'Project navigation' })).toBeVisible()
+    },
+  },
+  {
+    name: 'workspace import',
+    path: '/projects/font-something/workspace-import',
+    assertions: async (page) => {
+      await expect(page.getByRole('heading', { name: 'Review existing project work' })).toBeVisible()
+    },
+  },
+  {
+    name: 'structure',
+    path: '/projects/looma-knit/structure',
+    assertions: async (page) => {
+      await expect(page.getByRole('heading', { name: 'Structure' })).toBeVisible()
+      await expect(page.getByRole('region', { name: 'Project map' })).toBeVisible()
+    },
+  },
+  {
+    name: 'release',
+    path: '/projects/fair-labor-license/release',
+    assertions: async (page) => {
+      await expect(page.getByRole('heading', { name: 'Current work closure' })).toBeVisible()
+      await expect(page.getByText('Tasks done')).toBeVisible()
+      await expect(page.getByText('Total closure blockers')).toBeVisible()
+    },
+  },
+  {
+    name: 'project setup',
+    path: '/projects/tiny-demo/setup',
+    assertions: async (page) => {
+      await expect(page.getByText('Identity')).toBeVisible()
+      await expect(page.getByRole('heading', { name: 'How should agents call an LLM?' })).toBeVisible()
+    },
+  },
+]
+
+for (const surface of projectSurfaceRoutes) {
+  test(`${surface.name} route loads as part of the user-test matrix`, async ({ page }) => {
+    await page.goto(surface.path)
+    await surface.assertions(page)
+  })
+}
+
 test('projects home scrolls at mobile size and opens explicit project routes', async ({ page }) => {
   await page.setViewportSize({ width: 390, height: 560 })
   await page.goto('/projects')
@@ -154,22 +220,43 @@ test('work view switcher swaps between columns list and board surfaces', async (
   await expect(page.getByRole('combobox', { name: 'Show', exact: true })).toBeVisible()
 })
 
-test('advanced settings exposes design taste and interactable catalog state', async ({ page }) => {
+test('developer settings exposes migrations levers and design feedback state', async ({ page }) => {
   await page.setViewportSize({ width: 1280, height: 900 })
   await page.goto('/projects/looma-knit/settings/advanced')
 
-  await expect(page.getByRole('heading', { name: 'Advanced settings' })).toBeVisible()
-  await expect(page.getByRole('heading', { name: 'Design system', exact: true })).toBeVisible()
-  await expect(page.getByText('Taste memory')).toBeVisible()
-  await expect(page.getByText('warm-functional-polish', { exact: true })).toBeVisible()
-  await expect(page.getByText('segmented-control-or-tabs', { exact: true })).toBeVisible()
-  await expect(page.getByText('Catalog', { exact: true })).toBeVisible()
-  await expect(page.getByText(/guildhall-portable · 1 item/)).toBeVisible()
-  await expect(page.getByText('Guildhall portable stories are available as the interactable catalog')).toBeVisible()
-  await expect(page.getByText('Intent preview', { exact: true })).toBeVisible()
-  await expect(page.getByText('web · real-web-preview', { exact: true })).toBeVisible()
-  await expect(page.getByText('Native proof', { exact: true })).toBeVisible()
-  await expect(page.getByText('not required', { exact: true })).toBeVisible()
+  await expect(page.getByRole('heading', { name: 'Developer tools' })).toBeVisible()
+  await expect(page.getByRole('heading', { name: 'Project migrations' })).toBeVisible()
+  await expect(page.getByRole('heading', { name: 'Raw behavior levers' })).toBeVisible()
+  await expect(page.getByRole('heading', { name: 'Design feedback' })).toBeVisible()
   await expect(page.getByText('Owner feedback', { exact: true })).toBeVisible()
   await expect(page.getByText('Decision packets', { exact: true })).toBeVisible()
+})
+
+test('settings subroutes keep focused panels in the project shell', async ({ page }) => {
+  const settingsRoutes = [
+    ['/projects/looma-knit/settings/ready', 'Ready to start?'],
+    ['/projects/looma-knit/settings/providers', 'Project provider'],
+    ['/projects/looma-knit/settings/coordinators', 'Coordinators'],
+    ['/projects/looma-knit/settings/identity', 'Project identity'],
+    ['/projects/looma-knit/settings/profile', 'Operating profile'],
+    ['/projects/looma-knit/settings/advanced', 'Developer tools'],
+  ] as const
+
+  for (const [path, heading] of settingsRoutes) {
+    await page.goto(path)
+    await expect(page.getByRole('navigation', { name: 'Settings sections' })).toBeVisible()
+    await expect(page.getByRole('heading', { name: heading })).toBeVisible()
+  }
+})
+
+test('task drawer direct route renders tabs and closes to the overview background', async ({ page }) => {
+  await page.goto('/projects/looma-knit/task/looma-knit-task-1?tab=spec')
+
+  await expect(page.getByRole('complementary', { name: 'Task drawer' })).toBeVisible()
+  await expect(page.getByRole('heading', { name: 'Block menu / block side menu' })).toBeVisible()
+  await expect(page.getByRole('button', { name: 'Spec' })).toBeVisible()
+
+  await page.getByRole('button', { name: 'Close', exact: true }).click()
+  await expect(page).toHaveURL(/\/projects\/looma-knit\/overview$/)
+  await expect(page.getByRole('region', { name: 'Project overview' })).toBeVisible()
 })

@@ -149,10 +149,17 @@ function taskLabel(task: ProjectActionTask): string {
 
 function startReadinessButtonLabel(readiness: ProjectActionStartReadiness): string {
   if (readiness.code === 'required_migration_pending') return 'Migrate project'
+  if (isProviderReadinessCode(readiness.code)) return 'Choose provider'
   if (readiness.code === 'owner_input_required') {
     return /question|answer/i.test(readiness.message ?? '') ? 'Open Thread' : 'Open item'
   }
   if (readiness.code === 'import_drafts_waiting') return 'Review drafts'
+  if (readiness.code === 'no_unattended_progress') {
+    const message = readiness.message ?? ''
+    if (/brief/i.test(message)) return 'Review brief'
+    if (/spec|review|approve/i.test(message)) return 'Review spec'
+    return 'Open Work'
+  }
   return 'Open item'
 }
 
@@ -161,6 +168,7 @@ function runControlLabel(readiness: ProjectActionStartReadiness | null | undefin
   if (!readiness || readiness.canStart) return 'Resume'
   const message = readiness.message ?? ''
   if (readiness.code === 'required_migration_pending') return 'Migrate'
+  if (isProviderReadinessCode(readiness.code)) return 'Needs provider'
   if (readiness.code === 'all_terminal') return 'No runnable tasks'
   if (/question|answer/i.test(message)) return 'Waiting on answer'
   if (/recover|blocked|escalation/i.test(message)) return 'Needs recovery'
@@ -169,6 +177,29 @@ function runControlLabel(readiness: ProjectActionStartReadiness | null | undefin
   if (/review|approve/i.test(message)) return 'Review needed'
   if (readiness.code === 'owner_input_required') return 'Needs input'
   return 'Start blocked'
+}
+
+function isProviderReadinessCode(code: string | undefined): boolean {
+  return code === 'no_provider' ||
+    code === 'no_loaded_model' ||
+    code === 'model_unavailable' ||
+    code === 'provider_unavailable'
+}
+
+function startReadinessActionLabel(readiness: ProjectActionStartReadiness): string {
+  if (readiness.code === 'required_migration_pending') return 'Required migration'
+  if (readiness.code === 'import_drafts_waiting') return 'Review imported drafts'
+  if (isProviderReadinessCode(readiness.code)) return 'Provider unavailable'
+  if (readiness.code === 'no_unattended_progress') {
+    const message = readiness.message ?? ''
+    if (/brief/i.test(message)) return 'Needs brief cleanup'
+    if (/spec|review|approve/i.test(message)) return 'Review draft'
+    return 'Nothing ready to run'
+  }
+  if (readiness.code === 'bootstrap_blocked') return 'Readiness blocked'
+  if (readiness.code === 'invalid_lever_combo') return 'Settings blocked'
+  if (readiness.code === 'runtime_too_old') return 'Update Guildhall'
+  return readiness.message ?? 'Start is blocked'
 }
 
 function activeThreadTurn(thread: ProjectActionThread | null | undefined): ProjectActionThreadTurn | null {
@@ -261,10 +292,12 @@ function bestTaskAction(tasks: ProjectActionTask[], running: boolean): ProjectAc
 }
 
 function startReadinessAction(readiness: ProjectActionStartReadiness): ProjectAction {
+  const label = readiness.code === 'owner_input_required' ? 'Answer in Thread' : startReadinessActionLabel(readiness)
+  const detail = readiness.message && readiness.message !== label ? readiness.message : undefined
   return {
     source: readiness.code === 'owner_input_required' ? 'owner_input' : 'start_readiness',
-    label: readiness.code === 'owner_input_required' ? 'Answer in Thread' : readiness.message ?? 'Start is blocked',
-    detail: readiness.code === 'owner_input_required' ? readiness.message : undefined,
+    label,
+    detail,
     buttonLabel: startReadinessButtonLabel(readiness),
     href: readiness.actionHref ?? '/overview',
     tone: readiness.code === 'required_migration_pending' ? 'danger' : 'warn',
@@ -318,7 +351,7 @@ export function buildProjectActionModel(input: BuildProjectActionModelInput): Pr
   const taskAction = bestTaskAction(tasks, running)
   const candidates: ProjectAction[] = []
 
-  if (startReadiness && !startReadiness.canStart) {
+  if (startReadiness && !startReadiness.canStart && startReadiness.code !== 'all_terminal') {
     candidates.push(
       startReadiness.code === 'owner_input_required' && ownerInput.href
         ? {

@@ -566,13 +566,18 @@ export function queryProjectGraphView(input: {
     domainResponsibilities: registry.domainResponsibilities ?? [],
   })
   const structuralDomainIds = new Set(structuralDomains.map(domain => domain.id))
+  const scopedAuthorities = assignedAuthorities.filter(authority =>
+    authority.providerProject.id === input.projectId ||
+    structuralDomainIds.has(authority.domain.id) ||
+    authority.evidenceRefs.includes(`project:${input.projectId}`),
+  )
   const currentProject = {
     id: input.projectId,
     label: registryProjectsById.get(input.projectId)?.label ?? input.projectId,
     path: input.projectPath,
   }
   for (const authority of assignedAuthorities) {
-    if (structuralDomainIds.has(authority.domain.id) && authority.providerProject.id !== input.projectId) {
+    if (scopedAuthorities.includes(authority) && authority.providerProject.id !== input.projectId) {
       projectRoles.set(authority.providerProject.id, 'provider')
     }
   }
@@ -630,7 +635,7 @@ export function queryProjectGraphView(input: {
     ),
     structuralDomains,
     authorityRoots: [
-      ...assignedAuthorities.map(authority => ({
+      ...scopedAuthorities.map(authority => ({
         projectId: authority.providerProject.id,
         domainId: authority.domain.id,
         label: authority.domain.label,
@@ -648,7 +653,7 @@ export function queryProjectGraphView(input: {
         edgeId: edge.id,
       })),
     ],
-    domainAuthorities: assignedAuthorities,
+    domainAuthorities: scopedAuthorities,
     domainResponsibilities,
     dependencyEdges: edges.map(edge => ({
       id: edge.id,

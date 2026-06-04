@@ -159,6 +159,7 @@ describe('summarizeProjects', () => {
         canOpen: true,
         canStart: false,
         canStop: true,
+        needsAttention: true,
       },
     ])
   })
@@ -193,6 +194,7 @@ describe('summarizeProjects', () => {
       runActionLabel: 'Start intake',
       canStart: true,
       canStop: false,
+      needsAttention: false,
     })
     expect(summarizeProjects(service)[0]?.taskActivity).toMatchObject({
       windowLabel: 'Last 30 days',
@@ -283,7 +285,92 @@ describe('summarizeProjects', () => {
       nextLabel: 'Shape the first spec before Guildhall creates work.',
       runActionLabel: null,
       canStart: false,
+      needsAttention: true,
     })
+  })
+
+  it('lets the shared action model decide fleet attention for owner-input and terminal states', () => {
+    const service: ServiceDetail = {
+      projects: [
+        {
+          id: 'commerce',
+          name: 'Commerce',
+          path: '/work/commerce',
+          taskCounts: { total: 0, active: 0, draftReview: 0, blocked: 0, done: 0, shelved: 0 },
+          run: { status: 'stopped' },
+          startReadiness: { canStart: true },
+          actionModel: {
+            primaryAction: {
+              source: 'owner_input',
+              label: 'Answer in Thread',
+              detail: 'Shape the first spec before Guildhall creates work.',
+              buttonLabel: 'Open Thread',
+              href: '/thread',
+              tone: 'warn',
+            },
+            secondaryActions: [],
+            runControl: {
+              label: 'Waiting on setup',
+              startEnabled: false,
+              disabledReason: 'Shape the first spec before Guildhall creates work.',
+              href: '/thread',
+            },
+            ownerInput: {
+              active: true,
+              label: 'Answer in Thread',
+              detail: 'Shape the first spec before Guildhall creates work.',
+              href: '/thread',
+            },
+            setup: {
+              state: 'blocked',
+              freshIntakeNeeded: false,
+              href: '/thread',
+              detail: 'Shape the first spec before Guildhall creates work.',
+            },
+          },
+        },
+        {
+          id: 'finished',
+          name: 'Finished',
+          path: '/work/finished',
+          taskCounts: { total: 2, active: 0, draftReview: 0, blocked: 0, done: 2, shelved: 0 },
+          run: { status: 'stopped' },
+          startReadiness: {
+            canStart: false,
+            code: 'all_terminal',
+            message: 'All tasks are already finished.',
+          },
+          actionModel: {
+            primaryAction: null,
+            secondaryActions: [],
+            runControl: {
+              label: 'No runnable tasks',
+              startEnabled: false,
+              disabledReason: 'All tasks are already finished.',
+            },
+            ownerInput: { active: false },
+            setup: { state: 'ready', freshIntakeNeeded: false },
+          },
+        },
+      ],
+    }
+
+    expect(summarizeProjects(service)).toMatchObject([
+      {
+        id: 'commerce',
+        statusLabel: 'Needs you',
+        nextLabel: 'Shape the first spec before Guildhall creates work.',
+        canStart: false,
+        needsAttention: true,
+      },
+      {
+        id: 'finished',
+        statusLabel: 'Complete',
+        nextLabel: 'All tasks are already finished.',
+        canStart: false,
+        needsAttention: false,
+      },
+    ])
   })
 
   it('normalizes Windows user-profile project paths for display', () => {

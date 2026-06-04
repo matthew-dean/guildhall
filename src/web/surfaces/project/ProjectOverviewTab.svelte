@@ -494,11 +494,12 @@
   }
 
   const runBlocker = $derived.by(() => {
+    const shared = detail.actionModel?.primaryAction
     if (detail.startReadiness?.canStart === false) {
       return {
-        label: startReadinessLabel(detail.startReadiness.code),
-        detail: detail.startReadiness.message ?? 'Guildhall needs one thing resolved before Start can move work.',
-        href: detail.startReadiness.actionHref ?? currentProjectHref('/overview', activeProjectId),
+        label: shared?.label ?? startReadinessLabel(detail.startReadiness.code),
+        detail: shared?.detail ?? detail.startReadiness.message ?? 'Guildhall needs one thing resolved before Start can move work.',
+        href: shared?.href ?? detail.startReadiness.actionHref ?? currentProjectHref('/overview', activeProjectId),
       }
     }
     if (detail.providerStatus?.fallback) {

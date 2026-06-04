@@ -2,6 +2,125 @@ import { describe, expect, it } from 'vitest'
 import { buildProjectActionModel } from '../project-action-model.js'
 
 describe('buildProjectActionModel', () => {
+  it('normalizes risky start blockers into terse shared actions', () => {
+    const importDrafts = buildProjectActionModel({
+      startReadiness: {
+        canStart: false,
+        code: 'import_drafts_waiting',
+        message: 'Review 2 imported drafts before starting Guildhall. Start with "API cleanup".',
+        actionHref: '/task/task-api-cleanup',
+      },
+      tasks: [{ id: 'task-api-cleanup', title: 'API cleanup', status: 'import_draft' }],
+      thread: { turns: [], activeTurnId: null },
+      runStatus: 'stopped',
+    })
+    expect(importDrafts.primaryAction).toMatchObject({
+      source: 'start_readiness',
+      label: 'Review imported drafts',
+      detail: 'Review 2 imported drafts before starting Guildhall. Start with "API cleanup".',
+      buttonLabel: 'Review drafts',
+      href: '/task/task-api-cleanup',
+      tone: 'warn',
+    })
+    expect(importDrafts.runControl).toMatchObject({
+      label: 'Review drafts',
+      startEnabled: false,
+    })
+
+    const briefCleanup = buildProjectActionModel({
+      startReadiness: {
+        canStart: false,
+        code: 'no_unattended_progress',
+        message: 'One task needs a clearer brief and acceptance criteria before Guildhall can build unattended.',
+        actionHref: '/work',
+      },
+      tasks: [{
+        id: 'task-brief',
+        title: 'Clean up the brief',
+        status: 'ready',
+        productBrief: { approvedAt: '2026-06-04T10:00:00.000Z', userJob: '' },
+        spec: '',
+        acceptanceCriteria: [],
+      }],
+      thread: { turns: [], activeTurnId: null },
+      runStatus: 'stopped',
+    })
+    expect(briefCleanup.primaryAction).toMatchObject({
+      source: 'start_readiness',
+      label: 'Needs brief cleanup',
+      detail: 'One task needs a clearer brief and acceptance criteria before Guildhall can build unattended.',
+      buttonLabel: 'Review brief',
+      href: '/work',
+      tone: 'warn',
+    })
+    expect(briefCleanup.secondaryActions[0]).toMatchObject({
+      source: 'task',
+      label: 'Clean up the brief',
+      buttonLabel: 'Open Work',
+    })
+
+    const provider = buildProjectActionModel({
+      startReadiness: {
+        canStart: false,
+        code: 'no_provider',
+        message: 'No provider configured. Open Providers to choose one before starting Guildhall.',
+        actionHref: '/providers',
+      },
+      tasks: [{ id: 'task-ready', title: 'Ready work', status: 'ready' }],
+      thread: { turns: [], activeTurnId: null },
+      runStatus: 'stopped',
+    })
+    expect(provider.primaryAction).toMatchObject({
+      source: 'start_readiness',
+      label: 'Provider unavailable',
+      detail: 'No provider configured. Open Providers to choose one before starting Guildhall.',
+      buttonLabel: 'Choose provider',
+      href: '/providers',
+      tone: 'warn',
+    })
+    expect(provider.runControl).toMatchObject({
+      label: 'Needs provider',
+      startEnabled: false,
+    })
+
+    const migration = buildProjectActionModel({
+      startReadiness: {
+        canStart: false,
+        code: 'required_migration_pending',
+        message: 'Run the required Guildhall migration before starting this project.',
+        actionHref: '/migrations',
+      },
+      tasks: [],
+      thread: { turns: [], activeTurnId: null },
+      runStatus: 'stopped',
+    })
+    expect(migration.primaryAction).toMatchObject({
+      source: 'start_readiness',
+      label: 'Required migration',
+      detail: 'Run the required Guildhall migration before starting this project.',
+      buttonLabel: 'Migrate project',
+      href: '/migrations',
+      tone: 'danger',
+    })
+
+    const terminal = buildProjectActionModel({
+      startReadiness: {
+        canStart: false,
+        code: 'all_terminal',
+        message: 'All tasks are already finished.',
+      },
+      tasks: [{ id: 'task-done', title: 'Done task', status: 'done' }],
+      thread: { turns: [], activeTurnId: null },
+      runStatus: 'stopped',
+    })
+    expect(terminal.primaryAction).toBeNull()
+    expect(terminal.runControl).toMatchObject({
+      label: 'No runnable tasks',
+      startEnabled: false,
+      disabledReason: 'All tasks are already finished.',
+    })
+  })
+
   it('keeps active brief cleanup ahead of project discovery reconciliation', () => {
     const model = buildProjectActionModel({
       startReadiness: { canStart: true },

@@ -236,8 +236,8 @@
     shelved: cards.reduce((sum, card) => sum + card.counts.shelved, 0),
   })
   const readyTaskCount = $derived(Math.max(0, overview.taskTotal - overview.active - overview.blocked - overview.drafts - overview.done - overview.shelved))
-  const needsYouCount = $derived(cards.filter(card => card.counts.blocked > 0 || card.counts.draftReview > 0 || card.projectCheckIn?.needed || card.provider?.tone === 'warn').length)
-  const firstNeedsYouProject = $derived(cards.find(card => card.counts.blocked > 0 || card.counts.draftReview > 0 || card.projectCheckIn?.needed || card.provider?.tone === 'warn') ?? null)
+  const needsYouCount = $derived(cards.filter(card => card.needsAttention).length)
+  const firstNeedsYouProject = $derived(cards.find(card => card.needsAttention) ?? null)
   const selectedProject = $derived(cards.find(card => card.id === selectedProjectId) ?? null)
   const dashboardTotal = $derived(Math.max(1, overview.taskTotal))
   const defaultProviderStatus = $derived(service?.defaultProviderStatus ?? null)

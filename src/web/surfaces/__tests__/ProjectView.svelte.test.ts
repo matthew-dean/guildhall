@@ -300,6 +300,16 @@ async function renderProjectView(
   await waitFor(() => expect(screen.getAllByText(initialDetail.name ?? 'Project').length).toBeGreaterThan(0))
 }
 
+async function renderProjectViewWithoutInitialDetail(
+  view: ProjectViewName,
+  sub: string | null = null,
+  projectId: string | null = 'looma-knit',
+) {
+  project.detail = null
+  project.error = null
+  render(ProjectView, { initialView: view, initialSub: sub, projectId })
+}
+
 function installMobileBrowserFakes() {
   let changeHandler: ((event: MediaQueryListEvent) => void) | null = null
   Object.defineProperty(window, 'matchMedia', {
@@ -376,6 +386,31 @@ describe('ProjectView', () => {
       expect.stringContaining('/api/project/task/task-link-editor/answer-questions'),
       expect.objectContaining({ method: 'POST' }),
     )
+  })
+
+  it('keeps the selected project identity in the shell while direct Thread routes load detail', async () => {
+    await renderProjectViewWithoutInitialDetail('thread', null, 'looma-knit')
+
+    expect(screen.getByText('Looma knit')).toBeInTheDocument()
+    expect(screen.queryByText('Project')).not.toBeInTheDocument()
+
+    await waitFor(() => {
+      expect(screen.getByText('Looma + Knit')).toBeInTheDocument()
+    })
+  })
+
+  it('does not let stale project detail rename a drawer-backed Thread route while detail refreshes', async () => {
+    project.detail = detail({ id: 'jess', name: 'Jess', path: '/workspace/jess' })
+    project.error = null
+
+    render(ProjectView, { initialView: 'thread', projectId: 'looma-knit' })
+
+    expect(screen.getByText('Looma knit')).toBeInTheDocument()
+    expect(screen.queryByText('Jess')).not.toBeInTheDocument()
+
+    await waitFor(() => {
+      expect(screen.getByText('Looma + Knit')).toBeInTheDocument()
+    })
   })
 
   it.each([
@@ -787,6 +822,46 @@ describe('ProjectView', () => {
     expect(topbar).not.toBeNull()
     expect(topbar).toHaveTextContent('Review brief')
     expect(topbar).not.toHaveTextContent('Resume')
+  })
+
+  it('uses the shared action model for provider blocker banner actions', async () => {
+    const providerDetail = detail({
+      startReadiness: {
+        canStart: false,
+        code: 'no_provider',
+        message: 'No provider configured. Open Providers to choose one before starting Guildhall.',
+        actionHref: '/providers',
+      },
+      actionModel: {
+        primaryAction: {
+          source: 'start_readiness',
+          label: 'Provider unavailable',
+          detail: 'No provider configured. Open Providers to choose one before starting Guildhall.',
+          buttonLabel: 'Choose provider',
+          href: '/providers',
+          tone: 'warn',
+          code: 'no_provider',
+        },
+        secondaryActions: [],
+        runControl: {
+          label: 'Needs provider',
+          startEnabled: false,
+          disabledReason: 'No provider configured. Open Providers to choose one before starting Guildhall.',
+          href: '/providers',
+        },
+        ownerInput: { active: false },
+        setup: { state: 'ready', freshIntakeNeeded: false },
+      },
+    })
+    installFetchFakes(providerDetail)
+    await renderProjectView('overview', null, 'looma-knit', providerDetail)
+
+    const topbar = document.querySelector('header.topbar')
+    expect(topbar).not.toBeNull()
+    expect(topbar).toHaveTextContent('Needs provider')
+    expect(screen.getByRole('link', { name: /choose provider/i })).toHaveAttribute('href', '/providers')
+    expect(screen.queryByRole('link', { name: /open next action/i })).not.toBeInTheDocument()
+    expect(screen.getAllByText('Provider unavailable').length).toBeGreaterThan(0)
   })
 
   it('uses the shared action model to block Resume during first-spec setup', async () => {

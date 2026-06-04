@@ -109,6 +109,41 @@ describe('App shell', () => {
     })
   })
 
+  it('hard-refreshes the global providers route without adding a project id', async () => {
+    const seen: string[] = []
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input)
+      seen.push(url)
+      if (url.startsWith('/api/version')) return json({ version: '0.5.1' })
+      if (url.startsWith('/api/stale-server')) return json({ stale: false })
+      if (url === '/api/models') return json(modelsPayload)
+      if (url === '/api/providers') {
+        return json({
+          preferredProvider: 'openai-api',
+          providers: {
+            'openai-api': {
+              label: 'Remote OpenAI-compatible',
+              detail: 'Stored in ~/.guildhall/providers.yaml',
+              detected: true,
+              verifiedAt: null,
+              baseUrl: 'https://example.test/v1',
+            },
+          },
+        })
+      }
+      return json({ projects: [] })
+    })
+    vi.stubGlobal('fetch', fetchMock)
+
+    render(App)
+
+    await screen.findByText('Remote OpenAI-compatible')
+    expect(document.querySelector('.route-document-scroll')).toBeTruthy()
+    expect(seen).toContain('/api/providers')
+    expect(seen).toContain('/api/models')
+    expect(seen.filter(url => url.includes('projectId'))).toEqual([])
+  })
+
   it('wraps project-scoped fetch calls without overwriting explicit project ids', async () => {
     window.history.replaceState({}, '', '/projects/looma-knit/thread')
     path.value = '/projects/looma-knit/thread'

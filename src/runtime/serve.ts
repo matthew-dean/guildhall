@@ -7947,9 +7947,14 @@ export function buildServeApp(opts: ServeOptions = {}): {
       const tasksPath = join(memoryDir, 'TASKS.json')
       const rawTasks: Array<Record<string, unknown>> = (() => {
         if (!existsSync(tasksPath)) return []
-        const raw = JSON.parse(readFileSync(tasksPath, 'utf8')) as
-          | { tasks?: Array<Record<string, unknown>> }
-          | Array<Record<string, unknown>>
+        let raw: { tasks?: Array<Record<string, unknown>> } | Array<Record<string, unknown>>
+        try {
+          raw = JSON.parse(readFileSync(tasksPath, 'utf8')) as
+            | { tasks?: Array<Record<string, unknown>> }
+            | Array<Record<string, unknown>>
+        } catch {
+          throw new Error('Could not read .guildhall/TASKS.json. Fix the saved task state file, then reload closure checks.')
+        }
         return Array.isArray(raw) ? raw : raw.tasks ?? []
       })()
       const tasks = await Promise.all(rawTasks.map((task) => buildEffectiveTask(project.path, task as Task)))
@@ -7962,6 +7967,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
           notReadyReason: `Guildhall has one more question for ${activePressureTest.target.title}. Answer it before judging whether the current work can close.`,
           statusCounts: {},
           openEscalations: [],
+          incompleteBriefs: [],
           unapprovedBriefs: [],
           unapprovedSpecs: [],
           shelvedUnclaimed: [],
@@ -8005,6 +8011,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
 
       const statusCounts: Record<string, number> = {}
       const openEscalations: Array<{ taskId: string; taskTitle: string; escalationId: string; reason: string; summary: string }> = []
+      const incompleteBriefs: Array<{ id: string; title: string; reason: string }> = []
       const unapprovedBriefs: Array<{ id: string; title: string }> = []
       const unapprovedSpecs: Array<{ id: string; title: string }> = []
       const shelvedUnclaimed: Array<{ id: string; title: string; detail?: string }> = []
@@ -8021,9 +8028,17 @@ export function buildServeApp(opts: ServeOptions = {}): {
         const brief = (t as { productBrief?: { approvedAt?: string } }).productBrief
         const terminal = terminalStatuses.has(status)
         const reservedImportTask = id === WORKSPACE_IMPORT_TASK_ID
-        const approvalPendingStatus = status === 'proposed'
+        const approvalPendingStatus = status === 'proposed' || status === 'ready'
         if (brief && !brief.approvedAt && approvalPendingStatus && !terminal && !reservedImportTask) {
-          unapprovedBriefs.push({ id, title })
+          if (hasCompleteProductBriefRecord(t)) {
+            unapprovedBriefs.push({ id, title })
+          } else {
+            incompleteBriefs.push({
+              id,
+              title,
+              reason: 'Task brief needs user job, why it matters now, success metric, and at least one non-goal before approval.',
+            })
+          }
         }
         if (status === 'spec_review') unapprovedSpecs.push({ id, title })
         if (status === 'shelved') {
@@ -8047,6 +8062,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
 
       const humanBlockingCount =
         openEscalations.length
+        + incompleteBriefs.length
         + unapprovedBriefs.length
         + unapprovedSpecs.length
         + blockedByAgent.length
@@ -8066,6 +8082,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
         ...(tasks.length === 0 ? { notReadyReason: 'No tasks in this project yet.' } : {}),
         statusCounts,
         openEscalations,
+        incompleteBriefs,
         unapprovedBriefs,
         unapprovedSpecs,
         shelvedUnclaimed,
@@ -8077,6 +8094,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
           tasks: tasks.length,
           blockingCount,
           humanBlockingCount,
+          incompleteBriefBlockingCount: incompleteBriefs.length,
           unfinishedCount,
           designSystemBlockingCount,
           dirtyCheckoutBlockingCount,
@@ -8085,7 +8103,10 @@ export function buildServeApp(opts: ServeOptions = {}): {
         },
       })
     } catch (err) {
-      return c.json({ error: String(err) }, 500)
+      return c.json({
+        error: 'Could not load release readiness for this project.',
+        detail: err instanceof Error ? err.message : String(err),
+      }, 500)
     }
   })
 
@@ -8377,6 +8398,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
   async function handleProviderConfig(c: Context) {
     try {
       const body = (await c.req.json().catch(() => ({}))) as {
+        scope?: 'global' | 'project'
         provider?: string
         preferredProvider?: string
         anthropicApiKey?: string
@@ -8416,10 +8438,17 @@ export function buildServeApp(opts: ServeOptions = {}): {
         if (!(allowed as readonly string[]).includes(body.preferredProvider)) {
           return c.json({ error: `Unknown provider "${body.preferredProvider}"` }, 400)
         }
-        updateGlobalConfig({
-          ...readGlobalConfig(),
-          preferredProvider: body.preferredProvider as (typeof allowed)[number],
-        })
+        if (body.scope === 'project') {
+          updateProjectConfig(currentProjectPath(), {
+            preferredProvider: body.preferredProvider as (typeof allowed)[number],
+          })
+          refreshProject()
+        } else {
+          updateGlobalConfig({
+            ...readGlobalConfig(),
+            preferredProvider: body.preferredProvider as (typeof allowed)[number],
+          })
+        }
       }
       if (
         maxConcurrency != null &&
