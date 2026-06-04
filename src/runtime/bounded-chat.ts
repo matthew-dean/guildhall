@@ -65,6 +65,7 @@ const BoundedChatSubObjective = z.object({
   prompt: z.string(),
   helperText: z.string().optional(),
   choices: z.array(z.string()).optional(),
+  selectionMode: z.enum(['single', 'multiple']).optional(),
   followUpDepth: z.number().int().min(0).default(0),
   localTurns: z.array(BoundedChatTurn).default([]),
   status: z.enum(['active', 'answered', 'discarded', 'blocked']),
@@ -173,6 +174,7 @@ const AskFollowUpAction = z.object({
   prompt: z.string(),
   helperText: z.string().optional(),
   choices: z.array(z.string()).optional(),
+  selectionMode: z.enum(['single', 'multiple']).optional(),
 })
 
 const CloseSessionAction = z.object({
@@ -227,6 +229,7 @@ const CreateBoundedChatSessionInput = z.object({
     prompt: z.string(),
     helperText: z.string().optional(),
     choices: z.array(z.string()).optional(),
+    selectionMode: z.enum(['single', 'multiple']).optional(),
   }),
 })
 
@@ -259,6 +262,7 @@ export type BoundedChatPromptResult =
     subObjectiveId: string
     prompt: string
     choices?: string[]
+    selectionMode?: 'single' | 'multiple'
     helperText?: string
   }
   | {
@@ -371,6 +375,7 @@ export async function getNextBoundedChatPrompt(rawInput: z.input<typeof GetNextP
       prompt: active.prompt,
       choices: active.choices,
       helperText: active.helperText,
+      selectionMode: active.selectionMode,
     }
   }
   throw new Error(`bounded chat session ${session.id} has no visible prompt`)
@@ -453,6 +458,7 @@ export async function applyBoundedChatCoordinatorAction(
       subObjective.prompt = input.action.prompt
       subObjective.helperText = input.action.helperText
       subObjective.choices = input.action.choices
+      subObjective.selectionMode = input.action.selectionMode
       subObjective.followUpDepth += 1
       subObjective.status = 'active'
       session.status = transitionResult.kind === 'already_applied' ? transitionResult.currentState : transitionResult.nextState

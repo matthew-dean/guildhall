@@ -13,6 +13,8 @@ import { buildServeApp, filterEventsForTask } from '../serve.js'
 import { OrchestratorSupervisor } from '../serve-supervisor.js'
 import { createReviewAuditStore } from '../review-audit-store.js'
 import { FileBackedGuildhallPersistence } from '@guildhall/persistence'
+import { loadBoundedChatSession } from '../bounded-chat.js'
+import { createOwnerInputRequest, listOwnerInputRequests } from '../owner-input-store.js'
 
 // Integration tests for the v0.2 UI endpoints:
 //   GET  /api/project/task/:id        — per-task detail powering the drawer
@@ -1418,6 +1420,56 @@ describe('POST /api/project/task/:id/resume', () => {
       }),
     )
     expect(res.status).toBe(400)
+  })
+})
+
+describe('POST /api/project/bounded-chat/:id/answer', () => {
+  it('accepts generic owner-input task shaping answers instead of rendering a dead Thread composer', async () => {
+    const ownerInput = await createOwnerInputRequest({
+      projectRoot: tmpDir,
+      projectId,
+      commandId: 'test:alert-dialog-variants',
+      now: '2026-06-03T12:00:00.000Z',
+      actor: 'test',
+      source: { kind: 'task', taskId: 'task-alert-dialog', questionId: 'variants' },
+      target: { kind: 'thread' },
+      objective: {
+        kind: 'task_shaping',
+        label: 'Clarify AlertDialog',
+        successCriteria: ['Owner answers the linked bounded-chat session.'],
+      },
+      question: {
+        kind: 'text',
+        prompt: 'What variants does AlertDialog need?',
+        description: 'Guildhall needs one clear answer before it shapes future work.',
+      },
+    })
+    const session = ownerInput.session
+    const { app } = buildServeApp({ projectPath: tmpDir })
+
+    const res = await app.fetch(
+      new Request(projectUrl(`/api/project/bounded-chat/${session.id}/answer`), {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          questionId: 'variants',
+          answer: 'AlertDialog should be a constant destructive-confirmation pattern, not a variant matrix.',
+        }),
+      }),
+    )
+
+    expect(res.status).toBe(200)
+    const body = await res.json() as Record<string, any>
+    expect(body.boundedChat?.status).toBe('coordinator_review')
+    const saved = await loadBoundedChatSession({ memoryDir, sessionId: session.id })
+    expect(saved.status).toBe('coordinator_review')
+    expect(saved.subObjectives[0]?.localTurns.at(-1)?.content).toContain('constant destructive-confirmation')
+    const requests = await listOwnerInputRequests(tmpDir)
+    expect(requests[0]).toMatchObject({
+      id: ownerInput.request.id,
+      status: 'coordinator_review',
+      boundedChatSessionId: session.id,
+    })
   })
 })
 

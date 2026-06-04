@@ -7,6 +7,7 @@
 <script lang="ts">
   import type { Snippet } from 'svelte'
   import Icon from './Icon.svelte'
+  import { portal } from './portal.js'
 
   interface Props {
     open: boolean
@@ -59,33 +60,39 @@
 <svelte:window onkeydown={handleKey} />
 
 {#if visible}
-  <div class:closing class="gh-modal-scrim" role="presentation" onclick={requestClose}></div>
-  <div
-    class="gh-modal size-{size}"
-    class:closing
-    role="dialog"
-    aria-modal="true"
-    aria-label={title}
-  >
-    <header class="gh-modal-head">
-      <h3>{title}</h3>
-      <button
-        type="button"
-        class="gh-modal-x"
-        aria-label="Close"
-        onclick={requestClose}
-      ><Icon name="x" size={16} /></button>
-    </header>
-    <div class="gh-modal-body">
-      {#if children}{@render children()}{/if}
+  <div class="gh-modal-portal" use:portal>
+    <div class:closing class="gh-modal-scrim" role="presentation" onclick={requestClose}></div>
+    <div
+      class="gh-modal size-{size}"
+      class:closing
+      role="dialog"
+      aria-modal="true"
+      aria-label={title}
+    >
+      <header class="gh-modal-head">
+        <h3>{title}</h3>
+        <button
+          type="button"
+          class="gh-modal-x"
+          aria-label="Close"
+          onclick={requestClose}
+        ><Icon name="x" size={16} /></button>
+      </header>
+      <div class="gh-modal-body">
+        {#if children}{@render children()}{/if}
+      </div>
+      {#if footer}
+        <footer class="gh-modal-foot">{@render footer()}</footer>
+      {/if}
     </div>
-    {#if footer}
-      <footer class="gh-modal-foot">{@render footer()}</footer>
-    {/if}
   </div>
 {/if}
 
 <style>
+  .gh-modal-portal {
+    display: contents;
+  }
+
   .gh-modal-scrim {
     position: fixed;
     inset: 0;

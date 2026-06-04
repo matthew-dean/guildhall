@@ -55,8 +55,9 @@
     needsRecovery as taskNeedsRecovery,
     needsWorkerHandoffSpecCleanup,
   } from '../../lib/task-state.js'
+  import { taskStagePresentation } from '../../lib/task-presentation.js'
   import { project } from '../../lib/project.svelte.js'
-  import type { Escalation, GitStorySnapshot, ProjectRuntimeSummary } from '../../lib/types.js'
+  import type { Escalation, GitStorySnapshot, ProjectRuntimeSummary, TaskRoutingContext } from '../../lib/types.js'
   import { toast } from '../../lib/toast.svelte.js'
 
   interface Props {
@@ -270,6 +271,7 @@
       prompt: string
       why: string
       choices?: string[]
+      selectionMode?: 'single' | 'multiple' | undefined
       evidence: string[]
     }
     answerEndpoint: string
@@ -286,11 +288,17 @@
       prompt: string
       why: string
       choices?: string[]
+      selectionMode?: 'single' | 'multiple' | undefined
       evidence: string[]
     }
     answerEndpoint: string
   }
   type OwnerInputQuestionTurn = PressureTestQuestionTurn | BoundedChatTurn
+  type StructuralReviewTargets = {
+    domains: string[]
+    crossCutting: string[]
+    other: string[]
+  }
   type Turn =
     | SetupStepTurn
     | BriefTurn
@@ -337,6 +345,7 @@
   let contextErrors = $state<Record<string, string>>({})
   let pressureTestAnswers = $state<Record<string, string>>({})
   let pressureTestErrors = $state<Record<string, string>>({})
+  let pressureTestSelections = $state<Record<string, string[]>>({})
   let devServers = $state<RuntimeDevServer[]>([])
   let threadRuntime = $state<ProjectRuntimeSummary | null>(null)
   let devServerBusyId = $state<string | null>(null)
@@ -357,6 +366,7 @@
   let sourcePreviewRequestId = 0
   let documentPreview = $state<{
     kind: 'brief' | 'spec'
+    turnId: string
     taskId: string
     taskTitle: string
     title: string
@@ -380,6 +390,7 @@
   let runError = $state<string | null>(null)
   const startReadiness = $derived(project.detail?.startReadiness ?? null)
   const runStatus = $derived(project.detail?.run?.status ?? 'stopped')
+  const availabilityStatus = $derived(project.detail?.availability?.status ?? 'active')
   const projectRuntime = $derived((threadRuntime ?? project.detail?.runtime ?? null) as ProjectRuntimeSummary | null)
   const allTerminalReadinessMessage = $derived(
     startReadiness?.code === 'all_terminal'
@@ -450,6 +461,11 @@
   }
 
   function openBriefPreview(turn: BriefTurn): void {
+    if (replyErrors[turn.id]) {
+      const next = { ...replyErrors }
+      delete next[turn.id]
+      replyErrors = next
+    }
     const sections = [
       `## Scope\n${briefScopeForReaders(turn.brief, turn.taskTitle)}`,
     ]
@@ -460,21 +476,75 @@
     }
     documentPreview = {
       kind: 'brief',
+      turnId: turn.id,
       taskId: turn.taskId,
       taskTitle: turn.taskTitle,
-      title: 'Brief',
+      title: 'Approve brief',
       content: sections.join('\n\n'),
     }
   }
 
   function openSpecPreview(turn: SpecReviewTurn): void {
+    if (replyErrors[turn.id]) {
+      const next = { ...replyErrors }
+      delete next[turn.id]
+      replyErrors = next
+    }
     documentPreview = {
       kind: 'spec',
+      turnId: turn.id,
       taskId: turn.taskId,
       taskTitle: turn.taskTitle,
-      title: 'Spec',
+      title: turn.taskId === 'task-meta-intake' ? 'Approve split' : 'Approve spec',
       content: turn.spec.trim() || '_No spec saved yet._',
     }
+  }
+
+  function documentPreviewTurn(): BriefTurn | SpecReviewTurn | null {
+    if (!documentPreview) return null
+    const turn = turns.find(candidate => candidate.id === documentPreview?.turnId)
+    if (documentPreview.kind === 'brief' && turn?.kind === 'brief_approval') return turn
+    if (documentPreview.kind === 'spec' && turn?.kind === 'spec_review') return turn
+    return null
+  }
+
+  function documentPreviewChangeLabel(turn: BriefTurn | SpecReviewTurn): string {
+    if (turn.kind === 'brief_approval') return 'No, change it'
+    return turn.taskId === 'task-meta-intake' ? 'Change the split' : 'Request changes'
+  }
+
+  function documentPreviewApproveLabel(turn: BriefTurn | SpecReviewTurn): string {
+    if (turn.kind === 'brief_approval') return "Yes, that's right"
+    return turn.taskId === 'task-meta-intake' ? 'Yes, use this split' : 'Approve spec'
+  }
+
+  function documentPreviewApproveDisabled(turn: BriefTurn | SpecReviewTurn): boolean {
+    if (busyTurnId === turn.id) return true
+    const blockedByQuestions = hasOpenQuestionsForTask(turn.taskId)
+    if (turn.kind === 'brief_approval') return blockedByQuestions
+    const missingSpec = turn.taskId !== 'task-meta-intake' && turn.spec.trim().length === 0
+    return blockedByQuestions || missingSpec
+  }
+
+  function requestDocumentPreviewChanges(): void {
+    const turn = documentPreviewTurn()
+    if (!turn) return
+    selectedTurnId = threadChainKey(turn)
+    replyTurnId = turn.id
+    documentPreview = null
+    queueMicrotask(() => scrollDetailToBottom('smooth'))
+  }
+
+  async function approveDocumentPreview(): Promise<void> {
+    const turn = documentPreviewTurn()
+    if (!turn) return
+    if (turn.kind === 'brief_approval') {
+      const ok = await approveBrief(turn)
+      if (ok) documentPreview = null
+      return
+    }
+    const ok = await approveSpec(turn)
+    if (ok) documentPreview = null
   }
 
   function preserveTaskExtras(nextTurns: Turn[], priorTurns: Turn[]): Turn[] {
@@ -886,6 +956,23 @@
     return t.taskTitle
   }
 
+  function routingContextForTask(taskId: string | undefined): TaskRoutingContext | null {
+    if (!taskId) return null
+    const context = project.detail?.taskRoutingContexts?.[taskId] ?? null
+    return context?.status === 'matched' ? context : null
+  }
+
+  function routingContextBadge(context: TaskRoutingContext | null): string | null {
+    if (!context) return null
+    const area = context.likelyArea?.label ?? context.primaryDomain?.label
+    if (!area) return null
+    return area
+  }
+
+  function openRoutingCorrection(turnId: string): void {
+    replyTurnId = turnId
+  }
+
   function isQueuedSpecRevision(turn: InFlightTurn): boolean {
     return isQueuedSpecRevisionTurn(turn)
   }
@@ -898,12 +985,17 @@
     return turn.kind === 'inflight' && isImportedDraftShaping(turn)
   }
 
-  function tone(t: Turn): 'ok' | 'warn' | 'neutral' | 'accent' {
+  type ThreadRailTone = 'ok' | 'warn' | 'neutral' | 'accent'
+
+  function tone(t: Turn): ThreadRailTone {
     if (t.status === 'done') return 'ok'
     if (needsRecovery(t)) return 'warn'
     const owner = ownershipLabel(t)
     if (owner === 'Needs you' || owner === 'Needs brief') return 'warn'
-    if (owner === 'Queued' || owner === 'Guildhall working' || owner === 'Guildhall shaping') return 'accent'
+    if (
+      owner === 'Queued' ||
+      owner === 'Working'
+    ) return 'ok'
     if (t.status === 'active') return 'warn'
     return 'neutral'
   }
@@ -961,7 +1053,7 @@
   function showConstructionModeChip(t: Turn): boolean {
     if (t.kind === 'inflight' && t.requestKind === 'project_question') return false
     const owner = ownershipLabel(t)
-    if (owner && owner !== 'Guildhall shaping') return false
+    if (owner && owner !== 'Working') return false
     return t.status !== 'done' && Boolean(constructionModeLabel(t)) && !isQueuedForGuildhall(t)
   }
 
@@ -982,9 +1074,9 @@
   }
 
   function ownershipLabel(t: Turn): string | null {
-    if (turnLiveAgent(t)) return 'Guildhall working'
+    if (turnLiveAgent(t)) return 'Working'
     if (needsRecovery(t)) return 'Needs recovery'
-    if (guildhallShaping(t)) return 'Guildhall shaping'
+    if (guildhallShaping(t)) return runStatus === 'running' || runStatus === 'stopping' ? 'Queued' : 'Paused'
     if (t.kind === 'setup_step') return t.status === 'done' || t.skippable ? null : 'Needs you'
     if (t.kind === 'pressure_test_question' || t.kind === 'bounded_chat') return t.status === 'done' ? null : 'Needs you'
     if (t.kind === 'escalation') {
@@ -995,7 +1087,7 @@
         reason: t.escalationReason,
         agentId: t.escalationAgentId,
       }).actionOwner === 'guildhall'
-        ? 'Guildhall can continue'
+        ? runStatus === 'running' || runStatus === 'stopping' ? 'Queued' : 'Paused'
         : 'Needs you'
     }
     if (t.kind === 'agent_question' || t.kind === 'brief_approval' || t.kind === 'spec_review') {
@@ -1007,7 +1099,7 @@
         return 'Needs you'
       }
       if (t.taskStatus === 'in_progress' && !turnLiveAgent(t)) {
-        return runStatus === 'running' ? 'Queued for Guildhall' : null
+        return runStatus === 'running' ? 'Queued' : null
       }
       if (needsWorkerHandoffSpecCleanup(t)) {
         return 'Needs brief'
@@ -1022,9 +1114,9 @@
           t.taskStatus === 'exploring'
         )
       ) {
-        return 'Queued for Guildhall'
+        return 'Queued'
       }
-      if (canStartTaskTurn(t)) return 'Queued'
+      if (canStartTaskTurn(t)) return runStatus === 'running' || runStatus === 'stopping' ? 'Queued' : 'Paused'
     }
     return null
   }
@@ -1034,24 +1126,29 @@
     const label = ownershipLabel(t)
     if (label === 'Needs you' || label === 'Needs recovery') return 'warn'
     if (label === 'Needs brief') return 'warn'
-    if (label === 'Guildhall can continue') return 'ok'
-    if (label === 'Queued' || label === 'Queued for Guildhall') return 'ok'
-    if (label === 'Guildhall shaping') return 'accent'
+    if (label === 'Queued' || label === 'Working') return 'running'
     return 'neutral'
+  }
+
+  function ownershipRailTone(t: Turn): ThreadRailTone | null {
+    const tone = ownershipTone(t)
+    if (tone === 'running') return 'ok'
+    if (ownershipLabel(t) === 'Paused') return 'ok'
+    return tone === 'neutral' ? null : tone
   }
 
   function turnIndexChip(
     turn: Turn,
   ): { label: string; tone: 'ok' | 'warn' | 'neutral' | 'accent' | 'running' } | null {
+    if (turn.kind === 'inflight' && turn.status !== 'done') {
+      return { label: taskStateLabel(turn), tone: taskStateTone(turn) }
+    }
     const owner = ownershipLabel(turn)
     if (owner) {
       return { label: owner, tone: ownershipTone(turn) }
     }
     if (showStatusChip(turn)) {
       return { label: turnStatusChipLabel(turn), tone: turnStatusChipTone(turn) }
-    }
-    if (turn.kind === 'inflight' && turn.status !== 'done') {
-      return { label: taskStateLabel(turn), tone: tone(turn) === 'warn' ? 'warn' : 'ok' }
     }
     return null
   }
@@ -1134,10 +1231,55 @@
   }
 
   function pressureQuestionWhy(turn: OwnerInputQuestionTurn): string {
+    if (isMultipleOwnerChoice(turn)) {
+      return 'Select every item that applies. Guildhall will treat the selected items as the setup plan.'
+    }
+    if (isStructuralReviewTurn(turn)) {
+      return 'Guildhall has already inferred these project areas. Review them for obvious mistakes before they become the routing map for future work.'
+    }
     if (/Workers need to know which outcome defines success before splitting tasks\./i.test(turn.question.why)) {
       return 'A sentence is enough. Mention the outcome or constraint Guildhall should optimize for.'
     }
     return turn.question.why
+  }
+
+  function isStructuralReviewTurn(turn: OwnerInputQuestionTurn): boolean {
+    if (turn.kind !== 'bounded_chat') return false
+    return turn.domainTitle === 'Structural review' ||
+      /^Review structural map\b/i.test(turn.domainTitle) ||
+      /^Reason:\s*owner_review_required_before_routing_truth\b/i.test(turn.question.why)
+  }
+
+  function humanizeStructuralTarget(value: string): string {
+    return value.trim()
+      .replace(/^domain:/, '')
+      .replace(/^cross-cutting:/, '')
+      .replace(/[-_]+/g, ' ')
+  }
+
+  function structuralReviewTargets(turn: OwnerInputQuestionTurn): StructuralReviewTargets {
+    if (!isStructuralReviewTurn(turn)) return { domains: [], crossCutting: [], other: [] }
+    const targetsMatch = turn.question.why.match(/^Targets:\s*(.+)$/im)
+    if (!targetsMatch) return { domains: [], crossCutting: [], other: [] }
+    const out: StructuralReviewTargets = { domains: [], crossCutting: [], other: [] }
+    const seen = new Set<string>()
+    for (const rawTarget of (targetsMatch[1] ?? '').split(',')) {
+      const target = rawTarget.trim()
+      if (!target || seen.has(target)) continue
+      seen.add(target)
+      if (target.startsWith('domain:')) {
+        out.domains.push(humanizeStructuralTarget(target))
+      } else if (target.startsWith('cross-cutting:')) {
+        out.crossCutting.push(humanizeStructuralTarget(target))
+      } else {
+        out.other.push(humanizeStructuralTarget(target))
+      }
+    }
+    return out
+  }
+
+  function structuralReviewTargetCount(targets: StructuralReviewTargets): number {
+    return targets.domains.length + targets.crossCutting.length + targets.other.length
   }
 
   function pressureQuestionMeta(turn: OwnerInputQuestionTurn): string {
@@ -1219,11 +1361,11 @@
     for (const turn of currentTurns) {
       const owner = ownershipLabel(turn)
       if (owner === 'Needs you' || owner === 'Needs brief') needsYou += 1
-      if (owner === 'Guildhall shaping') shaping += 1
+      if (owner === 'Working') shaping += 1
       if (owner === 'Needs recovery') recovery += 1
       if (turnLiveAgent(turn)) working += 1
       if (turn.kind === 'escalation') blocked += 1
-      if (owner === 'Queued' || owner === 'Queued for Guildhall') queued += 1
+      if (owner === 'Queued') queued += 1
       if (turn.kind === 'inflight' && turn.importedDraft) drafts += 1
     }
     return { needsYou, working, shaping, recovery, blocked, queued, drafts }
@@ -1425,9 +1567,9 @@
     const owner = ownershipLabel(t)
     if (owner === 'Needs you' || owner === 'Needs recovery' || owner === 'Needs brief') return 0
     if (turnLiveAgent(t)) return 1
-    if (owner === 'Guildhall shaping') return 2
+    if (owner === 'Working') return 2
     if (t.kind === 'escalation' || t.phase === 'blocked') return 3
-    if (owner === 'Queued' || owner === 'Queued for Guildhall') return 4
+    if (owner === 'Queued') return 4
     if (t.kind === 'inflight' && t.importedDraft) return 4
     if (t.status === 'active') return 5
     if (t.status === 'pending') return 6
@@ -1475,17 +1617,23 @@
   })
 
   // ---- Brief approve / reply ---------------------------------------------
-  async function approveBrief(turn: BriefTurn): Promise<void> {
+  async function approveBrief(turn: BriefTurn): Promise<boolean> {
     busyTurnId = turn.id
     try {
-      await scopedProjectFetch(`/api/project/task/${encodeURIComponent(turn.taskId)}/approve-brief`, { method: 'POST' })
+      const r = await scopedProjectFetch(`/api/project/task/${encodeURIComponent(turn.taskId)}/approve-brief`, { method: 'POST' })
+      const j = await r.json().catch(() => ({})) as { error?: string }
+      if (!r.ok || j.error) {
+        replyErrors = { ...replyErrors, [turn.id]: j.error ?? `HTTP ${r.status}` }
+        return false
+      }
       await load()
       await refreshProject()
       await load()
+      return true
     } finally { busyTurnId = null }
   }
 
-  async function approveSpec(turn: SpecReviewTurn): Promise<void> {
+  async function approveSpec(turn: SpecReviewTurn): Promise<boolean> {
     busyTurnId = turn.id
     try {
       const endpoint = turn.taskId === 'task-meta-intake'
@@ -1493,8 +1641,16 @@
         : turn.taskId === 'task-workspace-import'
           ? '/api/project/workspace-import/approve'
         : `/api/project/task/${encodeURIComponent(turn.taskId)}/approve-spec`
-      await scopedProjectFetch(endpoint, { method: 'POST' })
+      const r = await scopedProjectFetch(endpoint, { method: 'POST' })
+      const j = await r.json().catch(() => ({})) as { error?: string }
+      if (!r.ok || j.error) {
+        replyErrors = { ...replyErrors, [turn.id]: j.error ?? `HTTP ${r.status}` }
+        return false
+      }
       await load()
+      await refreshProject()
+      await load()
+      return true
     } finally { busyTurnId = null }
   }
 
@@ -1576,10 +1732,10 @@
 
   function briefFixTitle(turn: InFlightTurn): string {
     switch (missingBriefFieldKind(turn)) {
-      case 'success': return 'Brief cleanup needed'
-      case 'acceptance': return 'Brief cleanup needed'
-      case 'both': return 'Brief cleanup needed'
-      default: return 'Brief cleanup needed'
+      case 'success': return 'Needs brief'
+      case 'acceptance': return 'Needs brief'
+      case 'both': return 'Needs brief'
+      default: return 'Needs brief'
     }
   }
 
@@ -1880,30 +2036,10 @@
   }
 
   function taskStateLabel(turn: InFlightTurn): string {
-    const live = turnLiveAgent(turn)
-    if (turn.status === 'done' || turn.taskStatus === 'done') return 'Done'
-    if (needsRecovery(turn)) return 'Needs recovery'
-    if (turn.requestKind === 'project_question') return 'Project question'
-    if (live?.name === 'spec-agent') return turn.importedDraft ? 'Shaping draft' : 'Drafting'
-    if (turn.taskId === 'task-meta-intake' && !live) return 'Project setup'
-    if (live?.name.startsWith('coordinator-')) return 'Ready'
-    if (live?.name === 'worker-agent') return 'In flight'
-    if (live?.name === 'reviewer-agent') return 'Review'
-    if (live?.name === 'gate-checker-agent') return 'Gates'
-    switch (turn.taskStatus) {
-      case 'import_draft': return 'Needs task brief'
-      case 'exploring':
-        if (turn.requestStage === 'task_brief_cleanup') return 'Brief cleanup'
-        return turn.importedDraft ? 'Task brief in progress' : isQueuedSpecRevision(turn) ? 'Spec revision queued' : 'Intake'
-      case 'ready':
-        if (needsWorkerHandoffSpecCleanup(turn)) return 'Needs task brief'
-        if (runStatus === 'running' || runStatus === 'stopping') return 'Queued for Guildhall'
-        return 'Ready'
-      case 'gate_check': return 'Gates'
-      case 'review': return 'Review'
-      case 'in_progress': return live ? 'In flight' : 'Paused'
-      default: return canStartTaskTurn(turn) ? 'Queued' : 'In flight'
-    }
+    return taskStagePresentation(
+      { ...turn, liveAgent: turnLiveAgent(turn) },
+      { runStatus, availabilityStatus },
+    ).label
   }
 
   function taskStateDescription(turn: InFlightTurn): string {
@@ -1937,7 +2073,7 @@
       }
       return runStatus === 'running'
         ? 'Approved and queued. Guildhall is running and can pick this up.'
-        : 'Approved and queued. Start Guildhall when you want it to pick this up.'
+        : 'Approved and queued. Resume Guildhall when you want it to pick this up.'
     }
     if (turn.taskId === 'task-meta-intake' && !live) {
       return turn.summary
@@ -1953,27 +2089,27 @@
         return 'Guildhall queued this task for brief cleanup. The checklist shows what still needs to be clarified before implementation.'
       }
       return turn.taskId === 'task-workspace-import'
-        ? 'Guildhall already drafted part of this import review. Review it if you want, or press Start to let Guildhall keep turning your project notes into candidate tasks.'
+        ? 'Guildhall already drafted part of this import review. Review it if you want, or resume Guildhall to keep turning your project notes into candidate tasks.'
         : turn.importedDraft
           ? 'Guildhall is shaping the task brief for this imported note. You can add context, but you do not need to babysit the draft.'
           : isQueuedSpecRevision(turn)
-            ? 'Guildhall already has the draft spec plus your latest answers. Press Start when you want Guildhall to revise it.'
+            ? 'Guildhall already has the draft spec plus your latest answers. Coordinator review is queued.'
             : 'Guildhall has started shaping this task, but the brief is not ready yet. The checklist shows what is still missing.'
     }
     if (turn.taskStatus === 'in_progress' && !live) {
       return runStatus === 'running'
         ? 'Work is paused between worker passes. Guildhall is running and can resume it.'
-        : 'Work is paused. Start Guildhall when you want it to continue.'
+        : 'Work is paused. Resume Guildhall when you want it to continue.'
     }
     if (turn.taskStatus === 'review' && !live) {
       return runStatus === 'running'
         ? 'Review is queued. Guildhall is running and can pick this up.'
-        : 'Review is queued. Start Guildhall when you want it to continue.'
+        : 'Review is queued. Resume Guildhall when you want it to continue.'
     }
     if (turn.taskStatus === 'gate_check' && !live) {
       return runStatus === 'running'
         ? 'Gate checks are queued. Guildhall is running and can pick this up.'
-        : 'Gate checks are queued. Start Guildhall when you want it to continue.'
+        : 'Gate checks are queued. Resume Guildhall when you want it to continue.'
     }
     return turn.summary
   }
@@ -2103,7 +2239,7 @@
       case 'ready':
         if (needsWorkerHandoffSpecCleanup(turn)) return briefFixButtonLabel(turn)
         if (runStatus === 'running' || runStatus === 'stopping') return 'Already queued'
-        return 'Start work'
+        return 'Resume work'
       case 'import_draft': return 'Draft task brief'
       case 'exploring':
         if (turn.taskId === 'task-meta-intake') return 'Let Guildhall keep setting this up'
@@ -2130,18 +2266,10 @@
   }
 
   function taskStateTone(turn: InFlightTurn): 'neutral' | 'ok' | 'warn' | 'danger' | 'accent' | 'running' {
-    if (needsRecovery(turn)) return 'warn'
-    if (turnLiveAgent(turn)) return 'running'
-    if (needsWorkerHandoffSpecCleanup(turn)) return 'warn'
-    switch (turn.taskStatus) {
-      case 'ready': return 'ok'
-      case 'import_draft': return 'warn'
-      case 'gate_check': return 'ok'
-      case 'review': return 'ok'
-      case 'exploring': return 'accent'
-      case 'in_progress': return 'neutral'
-      default: return 'neutral'
-    }
+    return taskStagePresentation(
+      { ...turn, liveAgent: turnLiveAgent(turn) },
+      { runStatus, availabilityStatus },
+    ).tone
   }
 
   function checklistStepTone(
@@ -2220,7 +2348,7 @@
           await refreshProject()
           return
         }
-        runError = body.error ?? `Start failed (HTTP ${res.status})`
+        runError = body.error ?? `Resume failed (HTTP ${res.status})`
         return
       }
       await load()
@@ -2370,6 +2498,48 @@
     }
   }
 
+  function isMultipleOwnerChoice(turn: OwnerInputQuestionTurn): boolean {
+    return turn.question.selectionMode === 'multiple'
+  }
+
+  function selectedPressureChoices(turnId: string): string[] {
+    return pressureTestSelections[turnId] ?? []
+  }
+
+  function togglePressureChoice(turnId: string, choice: string): void {
+    const current = selectedPressureChoices(turnId)
+    pressureTestSelections = {
+      ...pressureTestSelections,
+      [turnId]: current.includes(choice)
+        ? current.filter(item => item !== choice)
+        : [...current, choice],
+    }
+    if (pressureTestErrors[turnId]) {
+      const next = { ...pressureTestErrors }
+      delete next[turnId]
+      pressureTestErrors = next
+    }
+  }
+
+  function submitSelectedPressureChoices(turn: OwnerInputQuestionTurn): void {
+    const selected = selectedPressureChoices(turn.id)
+    if (selected.length === 0) return
+    void answerPressureTestQuestion(turn, selected.join(', '))
+  }
+
+  function selectedChoiceSubmitLabel(turn: OwnerInputQuestionTurn): string {
+    return busyTurnId === turn.id ? 'Submitting...' : 'Submit selected'
+  }
+
+  function acceptStructuralReview(turn: OwnerInputQuestionTurn): void {
+    void answerPressureTestQuestion(turn, 'Use this structural map for routing.')
+  }
+
+  function revealStructuralReviewCorrection(turn: OwnerInputQuestionTurn): void {
+    setPressureTestAnswer(turn.id, '')
+    queueMicrotask(() => scrollDetailToBottom('smooth'))
+  }
+
   async function answerPressureTestQuestion(turn: OwnerInputQuestionTurn, answerOverride?: string): Promise<void> {
     const answer = (answerOverride ?? pressureTestAnswers[turn.id] ?? '').trim()
     if (!answer) return
@@ -2391,6 +2561,9 @@
       const nextAnswers = { ...pressureTestAnswers }
       delete nextAnswers[turn.id]
       pressureTestAnswers = nextAnswers
+      const nextSelections = { ...pressureTestSelections }
+      delete nextSelections[turn.id]
+      pressureTestSelections = nextSelections
       const nextErrors = { ...pressureTestErrors }
       delete nextErrors[turn.id]
       pressureTestErrors = nextErrors
@@ -2479,7 +2652,7 @@
     if (turn.kind === 'setup_step') return setupStepTitle(turn)
     if (turn.kind === 'request') return turn.title
     if (turn.kind === 'pressure_test_question') return turn.targetTitle
-    if (turn.kind === 'bounded_chat') return turn.targetTitle
+    if (turn.kind === 'bounded_chat') return isStructuralReviewTurn(turn) ? 'Review structural map' : turn.targetTitle
     if ('taskTitle' in turn) return displayTaskTitle(turn)
     return 'Thread'
   }
@@ -2488,7 +2661,7 @@
     if (turn.kind === 'setup_step') return setupStepWhy(turn)
     if (turn.kind === 'request') return turn.routingSummary
     if (turn.kind === 'pressure_test_question') return pressureQuestionWhy(turn)
-    if (turn.kind === 'bounded_chat') return pressureQuestionWhy(turn)
+    if (turn.kind === 'bounded_chat') return isStructuralReviewTurn(turn) ? pressureQuestionPrompt(turn) : pressureQuestionWhy(turn)
     if (turn.kind === 'history_note') return turn.summary
     if (turn.kind === 'agent_question') {
       const question = visibleQuestionsForCard(questionsForTurn(turn))[0]
@@ -2550,7 +2723,7 @@
           return 'Task shaping update'
         }
         if (turn.taskStatus === 'in_progress') return 'Work update'
-        if (turn.taskStatus === 'ready') return needsWorkerHandoffSpecCleanup(turn) ? 'Needs brief cleanup' : 'Ready for work'
+        if (turn.taskStatus === 'ready') return needsWorkerHandoffSpecCleanup(turn) ? 'Needs brief' : 'Ready for work'
         return 'Task update'
       default:
         return null
@@ -2591,7 +2764,7 @@
           if (needsWorkerHandoffSpecCleanup(turn)) {
             return 'Guildhall saved the starter notes, but the worker handoff still needs a full brief and acceptance checks.'
           }
-          return 'Guildhall finished shaping this work and left it ready to start.'
+          return 'Guildhall finished shaping this work and left it ready for a worker.'
         }
         if (turn.taskStatus === 'in_progress') {
           return turn.summary || 'Guildhall advanced this thread into active work.'
@@ -2690,14 +2863,14 @@
         reason: turn.escalationReason,
         agentId: turn.escalationAgentId,
       })
-      return guidance.actionOwner === 'guildhall' ? 'Guildhall can continue' : 'Needs recovery'
+      return guidance.actionOwner === 'guildhall' ? 'Queued' : 'Needs recovery'
     }
     if (turn.kind === 'inflight') {
       if (turn.requestStage === 'task_brief_cleanup') return 'Brief cleanup'
       if (turn.importedDraft || turn.taskStatus === 'exploring' || turn.taskStatus === 'import_draft') {
         return 'Continue shaping brief'
       }
-      if (turn.taskStatus === 'ready') return needsWorkerHandoffSpecCleanup(turn) ? 'Needs brief cleanup' : 'Ready for work'
+      if (turn.taskStatus === 'ready') return needsWorkerHandoffSpecCleanup(turn) ? 'Needs brief' : 'Ready for work'
       if (turn.taskStatus === 'in_progress') return 'Work in progress'
     }
     return turnIndexTitle(turn)
@@ -2706,6 +2879,7 @@
   function activeDockSummary(turn: Turn): string | null {
     if (turn.kind === 'brief_approval') return null
     if (turn.kind === 'spec_review') return null
+    if ((turn.kind === 'pressure_test_question' || turn.kind === 'bounded_chat') && isStructuralReviewTurn(turn)) return null
     if (turn.kind === 'escalation') {
       return escalationUserGuidance({
         summary: turn.summary,
@@ -2808,6 +2982,10 @@
 
   const historyTurns = $derived.by(() => {
     if (!selectedChain) return []
+    if (selectedChain.id === 'setup') {
+      const currentSetup = selectedChain.currentTurn ?? selectedChain.activeTurn ?? selectedChain.latestTurn
+      return currentSetup ? [currentSetup] : []
+    }
     if (!activeDockTurn) return selectedChain.turns
     return selectedChain.turns.filter(turn => turn.id !== activeDockTurn.id)
   })
@@ -3025,6 +3203,20 @@
     return footerComposer?.kind === 'agent_question_text' && footerComposer.question.id === questionId
   }
 
+  function submitFooterComposer(): void {
+    if (!footerComposer || footerComposer.kind === 'working') return
+    if (footerComposer.kind === 'task_reply') void sendTaskReply(footerComposer.turn)
+    else if (footerComposer.kind === 'question_context') void askQuestionContext(footerComposer.turn)
+    else if (footerComposer.kind === 'agent_question_text') void answerFooterQuestion(footerComposer.turn, footerComposer.question)
+    else void answerPressureTestQuestion(footerComposer.turn)
+  }
+
+  function onFooterComposerKeydown(event: KeyboardEvent): void {
+    if (event.key !== 'Enter' || event.shiftKey || event.metaKey || event.ctrlKey || event.altKey) return
+    event.preventDefault()
+    submitFooterComposer()
+  }
+
   // True if the task has at least one un-answered agent_question turn.
   // Used to gate brief / spec approval — the user shouldn't approve a
   // brief while the agent still has live clarifying questions on the
@@ -3042,6 +3234,58 @@
   class:thread-compact-list={compactListView}
   class:thread-compact-detail={compactDetailView}
 >
+  {#snippet taskRoutingContext(context: TaskRoutingContext | null, turnId: string)}
+    {#if context}
+      <div class="routing-context" aria-label="Task routing context">
+        <div class="routing-context-head">
+          <div>
+            <span class="field-label">Guildhall will start with</span>
+            <strong>{context.likelyArea?.label ?? context.primaryDomain?.label ?? 'Accepted project context'}</strong>
+          </div>
+          <Button variant="ghost" size="sm" onclick={() => openRoutingCorrection(turnId)}>
+            Change this context
+          </Button>
+        </div>
+        <dl class="routing-context-facts">
+          {#if context.likelyArea?.path}
+            <div>
+              <dt>Likely area</dt>
+              <dd>{context.likelyArea.path}</dd>
+            </div>
+          {/if}
+          {#if context.primaryDomain?.label}
+            <div>
+              <dt>Related work area</dt>
+              <dd>{context.primaryDomain.label}</dd>
+            </div>
+          {/if}
+          {#if (context.checks?.length ?? 0) > 0}
+            <div>
+              <dt>Likely checks</dt>
+              <dd>{context.checks?.map(check => check.command ?? check.label ?? check.id).filter(Boolean).join(', ')}</dd>
+            </div>
+          {/if}
+          {#if (context.crossCuttingDomains?.length ?? 0) > 0}
+            <div>
+              <dt>Also watch</dt>
+              <dd>{context.crossCuttingDomains?.map(domain => domain.label ?? domain.id).filter(Boolean).join(', ')}</dd>
+            </div>
+          {/if}
+        </dl>
+        {#if (context.reasons?.length ?? 0) > 0}
+          <div class="routing-context-reasons">
+            <span class="field-label">Why</span>
+            <ul>
+              {#each context.reasons ?? [] as reason}
+                <li>{reason}</li>
+              {/each}
+            </ul>
+          </div>
+        {/if}
+      </div>
+    {/if}
+  {/snippet}
+
   {#if importHandoff}
     <Card tone="accent">
       <Row justify="between" align="center" gap="3" wrap>
@@ -3162,7 +3406,7 @@
                   as="button"
                   className="thread-index-row"
                   tone={selectedTurnId === chain.id ? 'accent' : 'neutral'}
-                  railTone={selectedTurnId === chain.id ? 'accent' : null}
+                  railTone={ownershipRailTone(indexTurn)}
                   selected={selectedTurnId === chain.id}
                   onclick={() => focusTurn(chain.id)}
                 >
@@ -3558,15 +3802,38 @@
                     {#if t.question.choices?.length}
                       <div class="pressure-choice-list" aria-label="Answer choices">
                         {#each t.question.choices as choice}
-                          <Button
-                            variant="secondary"
+                          <button
+                            type="button"
+                            class="pressure-choice-card"
+                            class:multi={isMultipleOwnerChoice(t)}
+                            class:selected={selectedPressureChoices(t.id).includes(choice)}
+                            aria-pressed={isMultipleOwnerChoice(t) ? selectedPressureChoices(t.id).includes(choice) : undefined}
                             disabled={busyTurnId === t.id}
-                            onclick={() => answerPressureTestQuestion(t, choice)}
+                            onclick={() => isMultipleOwnerChoice(t) ? togglePressureChoice(t.id, choice) : answerPressureTestQuestion(t, choice)}
                           >
-                            {choice}
-                          </Button>
+                            {#if isMultipleOwnerChoice(t)}
+                              <span class="pressure-choice-check" aria-hidden="true"></span>
+                            {/if}
+                            <span class="pressure-choice-copy">{choice}</span>
+                            {#if !isMultipleOwnerChoice(t)}
+                              <span class="pressure-choice-arrow" aria-hidden="true">
+                                <Icon name="arrow-right" size={16} />
+                              </span>
+                            {/if}
+                          </button>
                         {/each}
                       </div>
+                      {#if isMultipleOwnerChoice(t)}
+                        <Row justify="end" gap="2">
+                          <Button
+                            variant="primary"
+                            disabled={busyTurnId === t.id || selectedPressureChoices(t.id).length === 0}
+                            onclick={() => submitSelectedPressureChoices(t)}
+                          >
+                            {selectedChoiceSubmitLabel(t)}
+                          </Button>
+                        </Row>
+                      {/if}
                     {:else}
                       {#if isFooterPressureTurn(t.id)}
                         <p class="next-question-note">Reply using the shared composer below.</p>
@@ -3600,6 +3867,7 @@
                 {/if}
 
               {:else if t.kind === 'bounded_chat'}
+                {@const reviewTargets = structuralReviewTargets(t)}
                 <div class="thread-active-question thread-active-question-flat">
                   <Eyebrow as="div" tone="warn" className="thread-active-question-kicker">
                     {pressureQuestionLabel(t)}
@@ -3608,6 +3876,67 @@
                     <Markdown source={pressureQuestionPrompt(t)} />
                   </div>
                   <p class="why">{pressureQuestionWhy(t)}</p>
+                  {#if isStructuralReviewTurn(t) && structuralReviewTargetCount(reviewTargets) > 0}
+                    <div class="structural-review-summary" aria-label="Proposed structural map">
+                      <div class="structural-review-summary-head">
+                        <strong>Already found</strong>
+                        <span>{structuralReviewTargetCount(reviewTargets)} proposed area{structuralReviewTargetCount(reviewTargets) === 1 ? '' : 's'}</span>
+                      </div>
+                      <div class="structural-review-groups">
+                        {#if reviewTargets.domains.length > 0}
+                          <section class="structural-review-group">
+                            <h4>Domains</h4>
+                            <ul class="checked-list">
+                              {#each reviewTargets.domains as item}
+                                <li><Icon name="check" size={14} />{item}</li>
+                              {/each}
+                            </ul>
+                          </section>
+                        {/if}
+                        {#if reviewTargets.crossCutting.length > 0}
+                          <section class="structural-review-group">
+                            <h4>Cross-cutting areas</h4>
+                            <ul class="checked-list">
+                              {#each reviewTargets.crossCutting as item}
+                                <li><Icon name="check" size={14} />{item}</li>
+                              {/each}
+                            </ul>
+                          </section>
+                        {/if}
+                        {#if reviewTargets.other.length > 0}
+                          <section class="structural-review-group">
+                            <h4>Other targets</h4>
+                            <ul class="checked-list">
+                              {#each reviewTargets.other as item}
+                                <li><Icon name="check" size={14} />{item}</li>
+                              {/each}
+                            </ul>
+                          </section>
+                        {/if}
+                      </div>
+                    </div>
+                  {/if}
+                  {#if isStructuralReviewTurn(t)}
+                    <div class="structural-review-actions">
+                      <p>Use the map if these areas look good enough. Reply only if something is missing, duplicated, or assigned to the wrong kind of area.</p>
+                      <Row justify="end" gap="2" wrap>
+                        <Button
+                          variant="ghost"
+                          disabled={busyTurnId === t.id}
+                          onclick={() => revealStructuralReviewCorrection(t)}
+                        >
+                          Something looks wrong
+                        </Button>
+                        <Button
+                          variant="primary"
+                          disabled={busyTurnId === t.id}
+                          onclick={() => acceptStructuralReview(t)}
+                        >
+                          {busyTurnId === t.id ? 'Using map...' : 'Use this map'}
+                        </Button>
+                      </Row>
+                    </div>
+                  {/if}
                   {#if hiddenPressureQuestionCount > 0}
                     <p class="next-question-note">
                       {hiddenPressureQuestionCount} more question{hiddenPressureQuestionCount === 1 ? '' : 's'} will appear after this answer.
@@ -3628,17 +3957,48 @@
                       {#if t.question.choices?.length}
                         <div class="pressure-choice-list" aria-label="Answer choices">
                           {#each t.question.choices as choice}
-                            <Button
-                              variant="secondary"
+                            <button
+                              type="button"
+                              class="pressure-choice-card"
+                              class:multi={isMultipleOwnerChoice(t)}
+                              class:selected={selectedPressureChoices(t.id).includes(choice)}
+                              aria-pressed={isMultipleOwnerChoice(t) ? selectedPressureChoices(t.id).includes(choice) : undefined}
                               disabled={busyTurnId === t.id}
-                              onclick={() => answerPressureTestQuestion(t, choice)}
+                              onclick={() => isMultipleOwnerChoice(t) ? togglePressureChoice(t.id, choice) : answerPressureTestQuestion(t, choice)}
                             >
-                              {choice}
-                            </Button>
+                              {#if isMultipleOwnerChoice(t)}
+                                <span class="pressure-choice-check" aria-hidden="true"></span>
+                              {/if}
+                              <span class="pressure-choice-copy">{choice}</span>
+                              {#if !isMultipleOwnerChoice(t)}
+                                <span class="pressure-choice-arrow" aria-hidden="true">
+                                  <Icon name="arrow-right" size={16} />
+                                </span>
+                              {/if}
+                            </button>
                           {/each}
                         </div>
+                        {#if isMultipleOwnerChoice(t)}
+                          <Row justify="end" gap="2">
+                            <Button
+                              variant="primary"
+                              disabled={busyTurnId === t.id || selectedPressureChoices(t.id).length === 0}
+                              onclick={() => submitSelectedPressureChoices(t)}
+                            >
+                              {selectedChoiceSubmitLabel(t)}
+                            </Button>
+                          </Row>
+                        {/if}
                       {:else}
-                        {#if isFooterPressureTurn(t.id)}
+                        {#if isStructuralReviewTurn(t)}
+                          {#if pressureTestAnswers[t.id]}
+                            <UtilityPanel className="answer-panel" tone="neutral" dense>
+                              <div class="answer"><Markdown source={pressureTestAnswers[t.id]} inline /></div>
+                            </UtilityPanel>
+                          {:else}
+                            <p class="next-question-note">Use the shared composer below to describe what should change.</p>
+                          {/if}
+                        {:else if isFooterPressureTurn(t.id)}
                           <p class="next-question-note">Reply using the shared composer below.</p>
                         {:else}
                           <Textarea
@@ -3771,15 +4131,20 @@
                   {@const questions = questionsForTurn(t)}
                   {@const visibleQuestions = visibleQuestionsForCard(questions)}
                   {@const hiddenQuestions = hiddenQuestionCountForCard(questions)}
-                  {#if t.taskDescription || t.sourceNote}
+                  {@const routingContext = routingContextForTask(t.taskId)}
+                  {#if t.taskDescription || t.sourceNote || routingContext}
                     <details class="thread-disclosure task-context-disclosure">
                       <summary>
-                        <span>Starting point and source notes</span>
+                        <span>{routingContext ? 'Starting context' : 'Starting point and source notes'}</span>
                         {#if t.sourceNote?.references?.length}
                           <Chip label={badgeCountLabel(t.sourceNote.references.length)} tone="neutral" />
                         {/if}
+                        {#if routingContextBadge(routingContext)}
+                          <span class="context-summary-label">{routingContextBadge(routingContext)}</span>
+                        {/if}
                       </summary>
                       <UtilityPanel className="task-context" tone="neutral">
+                      {@render taskRoutingContext(routingContext, t.id)}
                       {#if t.taskDescription}
                         <div class="field">
                           <span class="field-label">Starting point</span>
@@ -4076,7 +4441,7 @@
               {:else if t.kind === 'escalation'}
                 {@const guidance = escalationUserGuidance({ summary: t.summary, details: t.details, reason: t.escalationReason, agentId: t.escalationAgentId })}
                 {@const recoveryAction = escalationPrimaryAction({ reason: t.escalationReason, agentId: t.escalationAgentId, summary: t.summary, details: t.details })}
-                <h3 class="prompt">{guidance.actionOwner === 'guildhall' ? 'Guildhall can continue' : 'Needs recovery'}</h3>
+                <h3 class="prompt">{guidance.actionOwner === 'guildhall' ? 'Queued' : 'Needs recovery'}</h3>
                 <p class="why">{guidance.title}</p>
                 <p class="detail">{guidance.detail}</p>
                 <p class="detail">{guidance.nextStep}</p>
@@ -4231,15 +4596,20 @@
                     </Row>
                   {/if}
                 {/if}
-                {#if t.taskDescription || t.sourceNote}
+                {@const routingContext = routingContextForTask(t.taskId)}
+                {#if t.taskDescription || t.sourceNote || routingContext}
                   <details class="thread-disclosure task-context-disclosure">
                     <summary>
-                      <span>Starting point and source notes</span>
+                      <span>{routingContext ? 'Starting context' : 'Starting point and source notes'}</span>
                       {#if t.sourceNote?.references?.length}
                         <Chip label={badgeCountLabel(t.sourceNote.references.length)} tone="neutral" />
                       {/if}
+                      {#if routingContextBadge(routingContext)}
+                        <span class="context-summary-label">{routingContextBadge(routingContext)}</span>
+                      {/if}
                     </summary>
                     <UtilityPanel className="task-context" tone="neutral">
+                    {@render taskRoutingContext(routingContext, t.id)}
                     {#if t.taskDescription}
                       <div class="field">
                         <span class="field-label">Starting point</span>
@@ -4632,15 +5002,20 @@
                             <p class="thread-active-summary">{dockSourceSummary(activeDockTurn)}</p>
                           {/if}
 
-                          {#if activeDockTurn.taskDescription || activeDockTurn.sourceNote}
+                          {@const activeRoutingContext = routingContextForTask(activeDockTurn.taskId)}
+                          {#if activeDockTurn.taskDescription || activeDockTurn.sourceNote || activeRoutingContext}
                             <details class="thread-disclosure task-context-disclosure">
                               <summary>
-                                <span>Starting point and source notes</span>
+                                <span>{activeRoutingContext ? 'Starting context' : 'Starting point and source notes'}</span>
                                 {#if activeDockTurn.sourceNote?.references?.length}
                                   <Chip label={badgeCountLabel(activeDockTurn.sourceNote.references.length)} tone="neutral" />
                                 {/if}
+                                {#if routingContextBadge(activeRoutingContext)}
+                                  <span class="context-summary-label">{routingContextBadge(activeRoutingContext)}</span>
+                                {/if}
                               </summary>
                               <div class="thread-active-section task-context">
+                                {@render taskRoutingContext(activeRoutingContext, activeDockTurn.id)}
                                 {#if activeDockTurn.taskDescription}
                                   <div class="field">
                                     <span class="field-label">Starting point</span>
@@ -4856,13 +5231,17 @@
                                 {#if question.kind === 'choice' && question.choices?.length}
                                   <div class="pressure-choice-list" aria-label="Answer choices">
                                     {#each question.choices as choice}
-                                      <Button
-                                        variant="secondary"
+                                      <button
+                                        type="button"
+                                        class="pressure-choice-card"
                                         disabled={busyTaskId === activeDockTurn.taskId}
                                         onclick={() => answerQuestion({ ...activeDockTurn, question }, choice)}
                                       >
-                                        {choice}
-                                      </Button>
+                                        <span class="pressure-choice-copy">{choice}</span>
+                                        <span class="pressure-choice-arrow" aria-hidden="true">
+                                          <Icon name="arrow-right" size={16} />
+                                        </span>
+                                      </button>
                                     {/each}
                                   </div>
                                 {/if}
@@ -4914,18 +5293,42 @@
                             {#if activeDockTurn.question.choices?.length}
                               <div class="pressure-choice-list" aria-label="Answer choices">
                                 {#each activeDockTurn.question.choices as choice}
-                                  <Button
-                                    variant="secondary"
+                                  <button
+                                    type="button"
+                                    class="pressure-choice-card"
+                                    class:multi={isMultipleOwnerChoice(activeDockTurn)}
+                                    class:selected={selectedPressureChoices(activeDockTurn.id).includes(choice)}
+                                    aria-pressed={isMultipleOwnerChoice(activeDockTurn) ? selectedPressureChoices(activeDockTurn.id).includes(choice) : undefined}
                                     disabled={busyTurnId === activeDockTurn.id}
-                                    onclick={() => answerPressureTestQuestion(activeDockTurn, choice)}
+                                    onclick={() => isMultipleOwnerChoice(activeDockTurn) ? togglePressureChoice(activeDockTurn.id, choice) : answerPressureTestQuestion(activeDockTurn, choice)}
                                   >
-                                    {choice}
-                                  </Button>
+                                    {#if isMultipleOwnerChoice(activeDockTurn)}
+                                      <span class="pressure-choice-check" aria-hidden="true"></span>
+                                    {/if}
+                                    <span class="pressure-choice-copy">{choice}</span>
+                                    {#if !isMultipleOwnerChoice(activeDockTurn)}
+                                      <span class="pressure-choice-arrow" aria-hidden="true">
+                                        <Icon name="arrow-right" size={16} />
+                                      </span>
+                                    {/if}
+                                  </button>
                               {/each}
                             </div>
+                            {#if isMultipleOwnerChoice(activeDockTurn)}
+                              <Row justify="end" gap="2">
+                                <Button
+                                  variant="primary"
+                                  disabled={busyTurnId === activeDockTurn.id || selectedPressureChoices(activeDockTurn.id).length === 0}
+                                  onclick={() => submitSelectedPressureChoices(activeDockTurn)}
+                                >
+                                  {selectedChoiceSubmitLabel(activeDockTurn)}
+                                </Button>
+                              </Row>
+                            {/if}
                           {/if}
                         </div>
                         {:else if activeDockTurn.kind === 'bounded_chat'}
+                          {@const dockReviewTargets = structuralReviewTargets(activeDockTurn)}
                           <div class="thread-active-question thread-active-question-flat">
                             <Eyebrow as="div" tone="warn" className="thread-active-question-kicker">
                               {pressureQuestionLabel(activeDockTurn)}
@@ -4934,6 +5337,67 @@
                               <Markdown source={pressureQuestionPrompt(activeDockTurn)} />
                             </div>
                             <p class="why">{pressureQuestionWhy(activeDockTurn)}</p>
+                            {#if isStructuralReviewTurn(activeDockTurn) && structuralReviewTargetCount(dockReviewTargets) > 0}
+                              <div class="structural-review-summary" aria-label="Proposed structural map">
+                                <div class="structural-review-summary-head">
+                                  <strong>Already found</strong>
+                                  <span>{structuralReviewTargetCount(dockReviewTargets)} proposed area{structuralReviewTargetCount(dockReviewTargets) === 1 ? '' : 's'}</span>
+                                </div>
+                                <div class="structural-review-groups">
+                                  {#if dockReviewTargets.domains.length > 0}
+                                    <section class="structural-review-group">
+                                      <h4>Domains</h4>
+                                      <ul class="checked-list">
+                                        {#each dockReviewTargets.domains as item}
+                                          <li><Icon name="check" size={14} />{item}</li>
+                                        {/each}
+                                      </ul>
+                                    </section>
+                                  {/if}
+                                  {#if dockReviewTargets.crossCutting.length > 0}
+                                    <section class="structural-review-group">
+                                      <h4>Cross-cutting areas</h4>
+                                      <ul class="checked-list">
+                                        {#each dockReviewTargets.crossCutting as item}
+                                          <li><Icon name="check" size={14} />{item}</li>
+                                        {/each}
+                                      </ul>
+                                    </section>
+                                  {/if}
+                                  {#if dockReviewTargets.other.length > 0}
+                                    <section class="structural-review-group">
+                                      <h4>Other targets</h4>
+                                      <ul class="checked-list">
+                                        {#each dockReviewTargets.other as item}
+                                          <li><Icon name="check" size={14} />{item}</li>
+                                        {/each}
+                                      </ul>
+                                    </section>
+                                  {/if}
+                                </div>
+                              </div>
+                            {/if}
+                            {#if isStructuralReviewTurn(activeDockTurn)}
+                              <div class="structural-review-actions">
+                                <p>Use the map if these areas look good enough. Reply only if something is missing, duplicated, or assigned to the wrong kind of area.</p>
+                                <Row justify="end" gap="2" wrap>
+                                  <Button
+                                    variant="ghost"
+                                    disabled={busyTurnId === activeDockTurn.id}
+                                    onclick={() => revealStructuralReviewCorrection(activeDockTurn)}
+                                  >
+                                    Something looks wrong
+                                  </Button>
+                                  <Button
+                                    variant="primary"
+                                    disabled={busyTurnId === activeDockTurn.id}
+                                    onclick={() => acceptStructuralReview(activeDockTurn)}
+                                  >
+                                    {busyTurnId === activeDockTurn.id ? 'Using map...' : 'Use this map'}
+                                  </Button>
+                                </Row>
+                              </div>
+                            {/if}
                             {#if activeDockTurn.question.evidence.length}
                               <div class="field">
                                 <span class="field-label">Evidence</span>
@@ -4947,19 +5411,41 @@
                             {#if activeDockTurn.question.choices?.length}
                               <div class="pressure-choice-list" aria-label="Answer choices">
                                 {#each activeDockTurn.question.choices as choice}
-                                  <Button
-                                    variant="secondary"
+                                  <button
+                                    type="button"
+                                    class="pressure-choice-card"
+                                    class:multi={isMultipleOwnerChoice(activeDockTurn)}
+                                    class:selected={selectedPressureChoices(activeDockTurn.id).includes(choice)}
+                                    aria-pressed={isMultipleOwnerChoice(activeDockTurn) ? selectedPressureChoices(activeDockTurn.id).includes(choice) : undefined}
                                     disabled={busyTurnId === activeDockTurn.id}
-                                    onclick={() => answerPressureTestQuestion(activeDockTurn, choice)}
+                                    onclick={() => isMultipleOwnerChoice(activeDockTurn) ? togglePressureChoice(activeDockTurn.id, choice) : answerPressureTestQuestion(activeDockTurn, choice)}
                                   >
-                                    {choice}
-                                  </Button>
+                                    {#if isMultipleOwnerChoice(activeDockTurn)}
+                                      <span class="pressure-choice-check" aria-hidden="true"></span>
+                                    {/if}
+                                    <span class="pressure-choice-copy">{choice}</span>
+                                    {#if !isMultipleOwnerChoice(activeDockTurn)}
+                                      <span class="pressure-choice-arrow" aria-hidden="true">
+                                        <Icon name="arrow-right" size={16} />
+                                      </span>
+                                    {/if}
+                                  </button>
                                 {/each}
                               </div>
+                              {#if isMultipleOwnerChoice(activeDockTurn)}
+                                <Row justify="end" gap="2">
+                                  <Button
+                                    variant="primary"
+                                    disabled={busyTurnId === activeDockTurn.id || selectedPressureChoices(activeDockTurn.id).length === 0}
+                                    onclick={() => submitSelectedPressureChoices(activeDockTurn)}
+                                  >
+                                    {selectedChoiceSubmitLabel(activeDockTurn)}
+                                  </Button>
+                                </Row>
+                              {/if}
                             {/if}
                           </div>
                         {:else if activeDockTurn.kind === 'brief_approval'}
-                          {@const blockedByQuestions = hasOpenQuestionsForTask(activeDockTurn.taskId)}
                           {@const briefScope = briefScopeForReaders(activeDockTurn.brief, activeDockTurn.taskTitle)}
                           {@const briefDoneWhen = briefDoneWhenForReaders(activeDockTurn.brief)}
                           <div class="thread-active-review">
@@ -4973,26 +5459,18 @@
                             {/if}
                           </div>
                           <Row justify="end" gap="2" wrap>
-                            <Button variant="secondary" disabled={busyTurnId === activeDockTurn.id} onclick={() => openBriefPreview(activeDockTurn)}>
-                              View brief
-                            </Button>
                             <Button variant="ghost" disabled={busyTurnId === activeDockTurn.id} onclick={() => nav(currentTaskHref(activeDockTurn.taskId))}>
                               Details...
                             </Button>
-                            <Button variant="secondary" disabled={busyTurnId === activeDockTurn.id} onclick={() => (replyTurnId = activeDockTurn.id)}>
-                              No, change it
-                            </Button>
                             <Button
                               variant="primary"
-                              disabled={busyTurnId === activeDockTurn.id || blockedByQuestions}
-                              onclick={() => approveBrief(activeDockTurn)}
+                              disabled={busyTurnId === activeDockTurn.id}
+                              onclick={() => openBriefPreview(activeDockTurn)}
                             >
-                              Yes, that's right
+                              View brief
                             </Button>
                           </Row>
                         {:else if activeDockTurn.kind === 'spec_review'}
-                          {@const missingSpec = activeDockTurn.taskId !== 'task-meta-intake' && activeDockTurn.spec.trim().length === 0}
-                          {@const blockedByQuestions = hasOpenQuestionsForTask(activeDockTurn.taskId)}
                           <div class="thread-active-review">
                             <p class="thread-active-summary">
                               {activeDockTurn.taskId === 'task-meta-intake'
@@ -5001,21 +5479,15 @@
                             </p>
                           </div>
                           <Row justify="end" gap="2" wrap>
-                            <Button variant="secondary" disabled={busyTurnId === activeDockTurn.id} onclick={() => openSpecPreview(activeDockTurn)}>
-                              View spec
-                            </Button>
                             <Button variant="ghost" disabled={busyTurnId === activeDockTurn.id} onclick={() => nav(currentTaskHref(activeDockTurn.taskId))}>
                               Details...
                             </Button>
-                            <Button variant="secondary" disabled={busyTurnId === activeDockTurn.id} onclick={() => (replyTurnId = activeDockTurn.id)}>
-                              {activeDockTurn.taskId === 'task-meta-intake' ? 'Change the split' : 'Request changes'}
-                            </Button>
                             <Button
                               variant="primary"
-                              disabled={busyTurnId === activeDockTurn.id || blockedByQuestions || missingSpec}
-                              onclick={() => approveSpec(activeDockTurn)}
+                              disabled={busyTurnId === activeDockTurn.id}
+                              onclick={() => openSpecPreview(activeDockTurn)}
                             >
-                              {activeDockTurn.taskId === 'task-meta-intake' ? 'Yes, use this split' : 'Approve spec'}
+                              View spec
                             </Button>
                           </Row>
                         {/if}
@@ -5073,6 +5545,7 @@
                                   else if (footerComposer.kind === 'agent_question_text') setFooterQuestionDraft(footerComposer.question.id, value)
                                   else setPressureTestAnswer(footerComposer.turn.id, value)
                                 }}
+                                onkeydown={onFooterComposerKeydown}
                               />
                               <div class="thread-composer-actions">
                                 {#if footerComposer.kind === 'question_context'}
@@ -5104,12 +5577,7 @@
                                           ? busyTaskId === footerComposer.turn.taskId || !(footerQuestionDrafts[footerComposer.question.id] ?? '').trim()
                                           : busyTurnId === footerComposer.turn.id || !(pressureTestAnswers[footerComposer.turn.id] ?? '').trim()
                                   }
-                                  onclick={() => {
-                                    if (footerComposer.kind === 'task_reply') void sendTaskReply(footerComposer.turn)
-                                    else if (footerComposer.kind === 'question_context') void askQuestionContext(footerComposer.turn)
-                                    else if (footerComposer.kind === 'agent_question_text') void answerFooterQuestion(footerComposer.turn, footerComposer.question)
-                                    else void answerPressureTestQuestion(footerComposer.turn)
-                                  }}
+                                  onclick={submitFooterComposer}
                                 >
                                   <Icon name="arrow-up" size={14} />
                                 </Button>
@@ -5191,14 +5659,38 @@
     documentPreview = null
   }}
 >
-  {#if documentPreview}
-    <div class="thread-document-preview">
-      <header class="thread-document-preview-head">
-        <strong>{documentPreview.taskTitle}</strong>
-      </header>
-      <Markdown source={documentPreview.content} />
-    </div>
-  {/if}
+  {#snippet children()}
+    {#if documentPreview}
+      {@const previewTurn = documentPreviewTurn()}
+      <div class="thread-document-preview">
+        <header class="thread-document-preview-head">
+          <strong>{documentPreview.taskTitle}</strong>
+        </header>
+        <Markdown source={documentPreview.content} />
+        {#if previewTurn && replyErrors[previewTurn.id]}
+          <p class="error">{replyErrors[previewTurn.id]}</p>
+        {/if}
+      </div>
+    {/if}
+  {/snippet}
+  {#snippet footer()}
+    {@const previewTurn = documentPreviewTurn()}
+    {#if previewTurn}
+      <Button variant="ghost" disabled={busyTurnId === previewTurn.id} onclick={() => { documentPreview = null }}>
+        Cancel
+      </Button>
+      <Button variant="secondary" disabled={busyTurnId === previewTurn.id} onclick={requestDocumentPreviewChanges}>
+        {documentPreviewChangeLabel(previewTurn)}
+      </Button>
+      <Button
+        variant="primary"
+        disabled={documentPreviewApproveDisabled(previewTurn)}
+        onclick={approveDocumentPreview}
+      >
+        {documentPreviewApproveLabel(previewTurn)}
+      </Button>
+    {/if}
+  {/snippet}
 </Modal>
 
 <style>
@@ -5526,9 +6018,14 @@
   .thread-composer-input-shell :global(.textarea) {
     display: block;
     min-height: 74px;
+    background: var(--bg-raised);
+    border-color: color-mix(in srgb, var(--border) 72%, white 18%);
     padding-right: calc(var(--thread-composer-action-inset) + var(--thread-composer-action-size) + var(--control-pad-x));
     padding-bottom: calc(var(--thread-composer-action-inset) + var(--thread-composer-action-size) + var(--control-pad-y));
     font-size: var(--gh-type-size-meta);
+  }
+  .thread-composer-input-shell :global(.textarea:focus) {
+    border-color: color-mix(in srgb, var(--accent) 52%, white 20%);
   }
   .thread-composer-actions {
     position: absolute;
@@ -5889,11 +6386,144 @@
     font-size: var(--thread-fs-body);
     line-height: var(--thread-lh-body);
   }
-  .pressure-choice-list {
+  .structural-review-summary {
+    display: grid;
+    gap: var(--gh-space-3);
+    padding: var(--gh-space-3);
+    border: 1px solid var(--border-muted);
+    border-radius: var(--gh-radius-2);
+    background: color-mix(in srgb, var(--bg-raised-2) 86%, transparent);
+  }
+  .structural-review-summary-head {
     display: flex;
-    align-items: stretch;
-    gap: var(--gh-space-2);
+    align-items: baseline;
+    justify-content: space-between;
+    gap: var(--gh-space-3);
     flex-wrap: wrap;
+  }
+  .structural-review-summary-head span {
+    color: var(--thread-color-soft);
+    font-size: var(--thread-fs-meta);
+  }
+  .structural-review-groups {
+    display: grid;
+    gap: var(--gh-space-3);
+  }
+  .structural-review-group {
+    display: grid;
+    gap: var(--gh-space-2);
+  }
+  .structural-review-group h4 {
+    margin: 0;
+    color: var(--thread-color-soft);
+    font-size: var(--thread-fs-meta);
+    font-weight: var(--gh-type-weight-strong);
+  }
+  .checked-list {
+    display: grid;
+    gap: var(--gh-space-2);
+    list-style: none;
+    margin: 0;
+    padding: 0;
+  }
+  .checked-list li {
+    display: flex;
+    align-items: center;
+    gap: var(--gh-space-2);
+    color: var(--text);
+    font-size: var(--thread-fs-body);
+    line-height: var(--thread-lh-body);
+  }
+  .checked-list li :global(.ic) {
+    color: var(--gh-color-feedback-ok);
+    flex: 0 0 auto;
+  }
+  .structural-review-actions {
+    display: grid;
+    gap: var(--gh-space-2);
+    padding-block-start: var(--gh-space-1);
+  }
+  .structural-review-actions p {
+    margin: 0;
+    color: var(--thread-color-soft);
+    font-size: var(--thread-fs-body);
+    line-height: var(--thread-lh-body);
+  }
+  .pressure-choice-list {
+    display: grid;
+    gap: var(--gh-space-2);
+  }
+  .pressure-choice-card {
+    width: 100%;
+    min-height: 44px;
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    align-items: center;
+    gap: var(--gh-space-3);
+    padding: var(--gh-space-2) var(--gh-space-3);
+    border: 1px solid var(--border-strong);
+    border-radius: var(--gh-radius-1);
+    background:
+      linear-gradient(135deg, color-mix(in srgb, var(--accent) 8%, transparent), transparent 54%),
+      var(--bg-raised-2);
+    color: var(--text);
+    box-shadow: var(--glass-etch);
+    font: inherit;
+    font-size: var(--gh-type-size-body);
+    font-weight: var(--gh-type-weight-strong);
+    line-height: var(--gh-type-line-height-tight);
+    text-align: left;
+    cursor: pointer;
+  }
+  .pressure-choice-card.multi {
+    grid-template-columns: auto minmax(0, 1fr);
+  }
+  .pressure-choice-card:hover,
+  .pressure-choice-card:focus-visible {
+    border-color: var(--accent);
+    background:
+      linear-gradient(135deg, color-mix(in srgb, var(--accent) 14%, transparent), transparent 58%),
+      var(--bg-raised-2);
+  }
+  .pressure-choice-card:focus-visible {
+    outline: 2px solid color-mix(in srgb, var(--accent) 44%, transparent);
+    outline-offset: 2px;
+  }
+  .pressure-choice-card:disabled {
+    cursor: wait;
+    opacity: 0.65;
+  }
+  .pressure-choice-card.selected {
+    border-color: var(--accent);
+    background:
+      linear-gradient(135deg, color-mix(in srgb, var(--accent) 16%, transparent), transparent 58%),
+      var(--bg-raised-2);
+  }
+  .pressure-choice-check {
+    width: 18px;
+    height: 18px;
+    display: inline-block;
+    border: 1px solid color-mix(in srgb, var(--accent) 42%, var(--border));
+    border-radius: var(--gh-radius-1);
+    background: color-mix(in srgb, var(--bg) 88%, transparent);
+  }
+  .pressure-choice-card.selected .pressure-choice-check {
+    background: var(--accent);
+    box-shadow: inset 0 0 0 3px var(--bg-raised-2);
+  }
+  .pressure-choice-copy {
+    min-width: 0;
+    overflow-wrap: anywhere;
+  }
+  .pressure-choice-arrow {
+    width: 26px;
+    height: 26px;
+    display: inline-grid;
+    place-items: center;
+    border: 1px solid color-mix(in srgb, var(--accent) 38%, var(--border));
+    border-radius: 999px;
+    color: var(--accent);
+    background: color-mix(in srgb, var(--accent) 10%, transparent);
   }
   .git-story-callout {
     display: flex;
@@ -5964,6 +6594,66 @@
     font-size: var(--gh-type-size-meta);
     color: var(--text-muted);
     font-weight: var(--gh-type-weight-medium);
+  }
+  .context-summary-label {
+    margin-inline-start: auto;
+    color: var(--text-muted);
+    font-size: var(--gh-type-size-meta);
+  }
+  .routing-context {
+    display: grid;
+    gap: var(--gh-space-2);
+    padding: var(--gh-space-2);
+    border: 1px solid var(--border-muted);
+    border-radius: var(--gh-radius-1);
+    background: color-mix(in srgb, var(--accent) 5%, transparent);
+  }
+  .routing-context-head {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: var(--gh-space-2);
+  }
+  .routing-context-head > div {
+    display: grid;
+    gap: 2px;
+    min-width: 0;
+  }
+  .routing-context-head strong {
+    color: var(--text);
+    font-size: var(--gh-type-size-body);
+    line-height: var(--gh-type-line-height-body);
+    word-break: break-word;
+  }
+  .routing-context-facts {
+    display: grid;
+    gap: var(--gh-space-1);
+    margin: 0;
+  }
+  .routing-context-facts > div {
+    display: grid;
+    grid-template-columns: minmax(96px, 0.32fr) minmax(0, 1fr);
+    gap: var(--gh-space-2);
+  }
+  .routing-context-facts dt {
+    color: var(--text-muted);
+    font-size: var(--gh-type-size-meta);
+  }
+  .routing-context-facts dd {
+    margin: 0;
+    color: var(--text);
+    font-size: var(--gh-type-size-meta);
+    word-break: break-word;
+  }
+  .routing-context-reasons {
+    display: grid;
+    gap: var(--gh-space-1);
+  }
+  .routing-context-reasons ul {
+    margin: 0;
+    padding-inline-start: var(--gh-space-4);
+    color: var(--text-muted);
+    font-size: var(--gh-type-size-meta);
   }
   :global(.task-context) {
     display: flex;

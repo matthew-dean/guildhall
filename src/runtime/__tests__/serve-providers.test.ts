@@ -89,6 +89,65 @@ async function writeCodexCred(): Promise<void> {
 }
 
 describe('GET /api/setup/providers', () => {
+  it('serves machine-scoped provider settings without a project id for the global providers page', async () => {
+    setProvider('openai-api', {
+      apiKey: 'sk-openai-global',
+      baseUrl: 'https://api.deepinfra.com/v1/openai',
+    })
+    const { app } = buildServeApp({})
+    const res = await app.fetch(new Request('http://localhost/api/providers'))
+    expect(res.status).toBe(200)
+    const body = (await res.json()) as {
+      providers: Record<string, { detected: boolean; baseUrl?: string | null }>
+    }
+    expect(body.providers['openai-api']!.detected).toBe(true)
+    expect(body.providers['openai-api']!.baseUrl).toBe('https://api.deepinfra.com/v1/openai')
+  })
+
+  it('writes machine-scoped provider settings without a project id for the global providers page', async () => {
+    const { app } = buildServeApp({})
+    const res = await app.fetch(
+      new Request('http://localhost/api/providers/config', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ provider: 'anthropic-api', anthropicApiKey: 'sk-ant-global' }),
+      }),
+    )
+    expect(res.status).toBe(200)
+    expect(readGlobalProviders().providers['anthropic-api']?.apiKey).toBe('sk-ant-global')
+  })
+
+  it('serves machine-scoped model defaults without a project id for the global providers page', async () => {
+    const { app } = buildServeApp({})
+    const res = await app.fetch(new Request('http://localhost/api/models'))
+    expect(res.status).toBe(200)
+    const body = (await res.json()) as {
+      globalModels?: Record<string, string>
+      effectiveModels?: Record<string, string>
+      behaviorProfiles?: Array<{ id: string }>
+    }
+    expect(body.globalModels).toBeTruthy()
+    expect(body.effectiveModels).toEqual(body.globalModels)
+    expect(body.behaviorProfiles?.map(profile => profile.id)).toEqual(['precise', 'balanced', 'exploratory'])
+  })
+
+  it('writes machine-scoped model defaults without a project id for the global providers page', async () => {
+    const { app } = buildServeApp({})
+    const res = await app.fetch(
+      new Request('http://localhost/api/models', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          scope: 'global',
+          role: 'worker',
+          model: 'qwen/qwen3.6-35b-a3b',
+        }),
+      }),
+    )
+    expect(res.status).toBe(200)
+    expect(resolveModelsForProvider(readGlobalConfig().models).worker).toBe('qwen/qwen3.6-35b-a3b')
+  })
+
   it('reports service metadata without a current selected project when the service starts at the fleet level', async () => {
     registerWorkspace({ id: 'provider-test', name: 'Provider Test', path: tmpProject, tags: [] })
     const { app } = buildServeApp({})

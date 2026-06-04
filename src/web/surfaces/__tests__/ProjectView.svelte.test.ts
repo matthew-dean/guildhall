@@ -80,6 +80,7 @@ function detail(overrides: Partial<ProjectDetail> = {}): ProjectDetail {
       },
     },
     startReadiness: { canStart: true, message: 'Ready' },
+    availability: { status: 'active', pausedAt: null, resumedAt: null },
     providerStatus: {
       fallback: true,
       health: {
@@ -112,6 +113,13 @@ function detail(overrides: Partial<ProjectDetail> = {}): ProjectDetail {
     ],
     ...overrides,
   }
+}
+
+function pausedDetail(overrides: Partial<ProjectDetail> = {}): ProjectDetail {
+  return detail({
+    availability: { status: 'paused', pausedAt: now, resumedAt: null },
+    ...overrides,
+  })
 }
 
 function json(data: unknown, status = 200): Response {
@@ -384,7 +392,7 @@ describe('ProjectView', () => {
     await renderProjectView(view)
 
     expect(screen.getAllByText(expectedText).length).toBeGreaterThan(0)
-    expect(screen.getByRole('button', { name: /Start work|Stop/ })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: /Resume|Pause/ })).toBeInTheDocument()
     expect(screen.queryByRole('button', { name: /notifications need you/i })).not.toBeInTheDocument()
   })
 
@@ -678,12 +686,13 @@ describe('ProjectView', () => {
 
   it('starts a continuous run and keeps the project id in the mutating request body', async () => {
     const user = userEvent.setup()
-    const fetchMock = installFetchFakes()
+    const projectPayload = pausedDetail()
+    const fetchMock = installFetchFakes(projectPayload)
 
-    await renderProjectView('thread')
-    const startButton = screen.getByRole('button', { name: /^start work$/i })
+    await renderProjectView('thread', null, 'looma-knit', projectPayload)
+    const startButton = screen.getByRole('button', { name: /^resume$/i })
     expect(startButton.classList.contains('v-agent')).toBe(true)
-    expect(startButton).toHaveTextContent(/^Start work$/)
+    expect(startButton).toHaveTextContent(/^Resume$/)
     expect(startButton).not.toHaveTextContent(/task/i)
     await user.click(startButton)
 
@@ -725,7 +734,7 @@ describe('ProjectView', () => {
     expect(topbar).not.toBeNull()
     expect(topbar).toHaveTextContent('Projects')
     expect(topbar).toHaveTextContent('New thread')
-    expect(topbar).toHaveTextContent('Start work')
+    expect(topbar).toHaveTextContent('Resume')
     expect(topbar).not.toHaveTextContent('Open Thread')
     expect(topbar).not.toHaveTextContent('Runtime')
     expect(topbar).not.toHaveTextContent('Needs you')
@@ -777,10 +786,10 @@ describe('ProjectView', () => {
     const topbar = document.querySelector('header.topbar')
     expect(topbar).not.toBeNull()
     expect(topbar).toHaveTextContent('Review brief')
-    expect(topbar).not.toHaveTextContent('Start work')
+    expect(topbar).not.toHaveTextContent('Resume')
   })
 
-  it('uses the shared action model to block Start during first-spec setup', async () => {
+  it('uses the shared action model to block Resume during first-spec setup', async () => {
     const setupDetail = detail({
       startReadiness: { canStart: true },
       tasks: [],
@@ -822,7 +831,7 @@ describe('ProjectView', () => {
     expect(topbar).toHaveTextContent('Waiting on setup')
     const start = screen.getByRole('button', { name: /guildhall needs setup direction/i })
     expect(start).toBeDisabled()
-    expect(screen.queryByRole('button', { name: /start work/i })).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: /^resume$/i })).not.toBeInTheDocument()
   })
 
   it('collapses topbar labels before the project toolbar wraps', async () => {
@@ -836,7 +845,7 @@ describe('ProjectView', () => {
       expect(topbar).not.toHaveTextContent('Projects')
     })
     expect(topbar).not.toHaveTextContent('New thread')
-    expect(topbar).not.toHaveTextContent('Start work')
+    expect(topbar).not.toHaveTextContent('Resume')
     expect(topbar).not.toHaveTextContent('Needs you')
   })
 
@@ -854,7 +863,7 @@ describe('ProjectView', () => {
     expect(screen.getByRole('button', { name: 'New thread' })).toBeInTheDocument()
   })
 
-  it('labels a running one-task pass as Stop 1 and stops the scoped project run', async () => {
+  it('labels a running one-task pass as Pause 1 and pauses the scoped project run', async () => {
     const user = userEvent.setup()
     const running = detail({
       run: { status: 'running', mode: 'one_task' },
@@ -874,16 +883,16 @@ describe('ProjectView', () => {
     vi.stubGlobal('fetch', fetchMock)
 
     await renderProjectView('thread', null, 'looma-knit', running)
-    expect(screen.getByRole('button', { name: /stop one-step run/i })).toHaveTextContent('Stop 1')
-    await user.click(screen.getByRole('button', { name: /stop one-step run/i }))
+    expect(screen.getByRole('button', { name: /pause one-step run/i })).toHaveTextContent('Pause 1')
+    await user.click(screen.getByRole('button', { name: /pause one-step run/i }))
 
     await waitFor(() => {
       expect(fetchMock.mock.calls.some(([input]) => String(input).startsWith('/api/project/stop'))).toBe(true)
     })
-    expect(screen.getByRole('button', { name: /stopping/i })).toBeDisabled()
+    expect(screen.getByRole('button', { name: /pausing/i })).toBeDisabled()
   })
 
-  it('acknowledges stop immediately while the project run is stopping', async () => {
+  it('acknowledges pause immediately while the project run is stopping', async () => {
     const user = userEvent.setup()
     const running = detail({
       run: { status: 'running', mode: 'continuous' },
@@ -902,15 +911,15 @@ describe('ProjectView', () => {
     vi.stubGlobal('fetch', fetchMock)
 
     await renderProjectView('thread', null, 'looma-knit', running)
-    await user.click(screen.getByRole('button', { name: /^stop$/i }))
+    await user.click(screen.getByRole('button', { name: /^pause$/i }))
 
-    await screen.findByRole('button', { name: /stopping/i })
-    expect(screen.getByRole('button', { name: /stopping/i })).toBeDisabled()
+    await screen.findByRole('button', { name: /pausing/i })
+    expect(screen.getByRole('button', { name: /pausing/i })).toBeDisabled()
   })
 
   it('surfaces provider start failures with a direct Providers action', async () => {
     const user = userEvent.setup()
-    const providerReady = detail({ providerStatus: null })
+    const providerReady = pausedDetail({ providerStatus: null })
     const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
       const url = new URL(String(input), 'http://localhost')
       if (url.pathname === '/api/project') return json(providerReady)
@@ -924,7 +933,7 @@ describe('ProjectView', () => {
     vi.stubGlobal('fetch', fetchMock)
 
     await renderProjectView('thread', null, 'looma-knit', providerReady)
-    await user.click(screen.getByRole('button', { name: /^start work$/i }))
+    await user.click(screen.getByRole('button', { name: /^resume$/i }))
 
     await screen.findByText('Provider is not configured.')
     await user.click(screen.getByRole('link', { name: /open project providers/i }))
@@ -1067,6 +1076,7 @@ describe('ProjectView', () => {
 
       await vi.advanceTimersByTimeAsync(1)
       expect(shell).toHaveClass('rail-preview-open')
+      expect(document.querySelector('.rail-subs')).toBeNull()
 
       shell?.dispatchEvent(new FocusEvent('focusin', { bubbles: true }))
       expect(shell).toHaveClass('rail-preview-open')

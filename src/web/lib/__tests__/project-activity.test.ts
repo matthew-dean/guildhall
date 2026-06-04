@@ -163,7 +163,7 @@ describe('buildProjectTicker', () => {
     ).toMatchObject({
       tone: 'idle',
       actorLabel: 'Paused',
-      message: '1 task paused until Guildhall starts',
+      message: '1 task paused until you resume Guildhall',
     })
 
     expect(
@@ -245,7 +245,7 @@ describe('buildProjectTicker', () => {
     ).toMatchObject({
       tone: 'idle',
       actorLabel: 'Paused',
-      message: '2 tasks paused until Guildhall starts',
+      message: '2 tasks paused until you resume Guildhall',
     })
 
     expect(
@@ -262,8 +262,8 @@ describe('buildProjectTicker', () => {
       ),
     ).toMatchObject({
       tone: 'warn',
-      actorLabel: 'Needs task briefs',
-      label: 'Drafts',
+      actorLabel: 'Needs brief',
+      label: 'Needs brief',
       message: '2 imported drafts need task briefs',
     })
 
@@ -424,8 +424,8 @@ describe('buildProjectTicker', () => {
       ),
     ).toMatchObject({
       tone: 'warn',
-      actorLabel: 'Needs task briefs',
-      label: 'Drafts',
+      actorLabel: 'Needs brief',
+      label: 'Needs brief',
       message: '1 imported draft needs task briefs',
     })
   })
@@ -493,7 +493,7 @@ describe('buildProjectCardTicker', () => {
     ).toEqual({
       tone: 'warn',
       pulse: false,
-      label: 'Needs task briefs',
+      label: 'Needs brief',
       message: '2 imported drafts waiting',
     })
 

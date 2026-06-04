@@ -64,14 +64,14 @@
 
   async function load() {
     try {
-      const r = await fetch('/api/setup/providers')
+      const r = await fetch('/api/providers')
       const j = await r.json()
       if (j.error) {
         loadError = j.error
         return
       }
       const nextProviders = j.providers as Record<string, ProviderMeta>
-      const modelRes = await fetch('/api/config/models')
+      const modelRes = await fetch('/api/models')
       const modelJson = await modelRes.json().catch(() => ({}))
       if (!modelRes.ok || modelJson.error) {
         modelsError = modelJson.error ?? `Model settings failed to load (HTTP ${modelRes.status})`
@@ -123,7 +123,7 @@
       body.provider = key
       const concurrency = maxConcurrency[key]?.trim()
       if (concurrency) body.maxConcurrency = Number(concurrency)
-      const r = await fetch('/api/setup/providers/config', {
+      const r = await fetch('/api/providers/config', {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify(body),
@@ -144,7 +144,7 @@
     if (!value) return flash('Enter a concurrency limit first', true)
     saving = `${key}:concurrency`
     try {
-      const r = await fetch('/api/setup/providers/config', {
+      const r = await fetch('/api/providers/config', {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ provider: key, maxConcurrency: Number(value) }),
@@ -199,7 +199,7 @@
   async function saveGlobalModel(role: string, model: string) {
     saving = role
     try {
-      const r = await fetch('/api/config/models', {
+      const r = await fetch('/api/models', {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ scope: 'global', role, model }),
@@ -216,7 +216,7 @@
   async function saveGlobalBehavior(role: string, behaviorProfile: string) {
     saving = `${role}:behavior`
     try {
-      const r = await fetch('/api/config/models', {
+      const r = await fetch('/api/models', {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ scope: 'global', role, behaviorProfile }),

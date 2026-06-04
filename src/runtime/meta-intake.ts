@@ -13,6 +13,16 @@ import {
   PROJECT_LEVER_NAMES,
   DOMAIN_LEVER_NAMES,
 } from '@guildhall/levers'
+import {
+  draftStructuralMap,
+  submitStructuralMapForReview,
+  acceptStructuralMap,
+  summarizeStructuralMapForReview,
+} from './structural-map.js'
+import {
+  registerProjectGraphContractSurface,
+  writeLocalProjectGraphDraft,
+} from './project-graph.js'
 
 // ---------------------------------------------------------------------------
 // FR-14: routing bootstrapping via meta-intake.
@@ -443,17 +453,6 @@ function normalizeConcerns(value: unknown): DraftCoordinator['concerns'] {
 
 function titleizeDomain(id: string): string {
   return id
-    .replace(/[-_]+/g, ' ')
-    .split(' ')
-    .filter(Boolean)
-    .map(part => {
-      const lower = part.toLowerCase()
-      if (['ui', 'api', 'cli', 'qa', 'dts', 'js', 'ts', 'vscode'].includes(lower)) {
-        return lower === 'vscode' ? 'VS Code' : lower.toUpperCase()
-      }
-      return lower.charAt(0).toUpperCase() + lower.slice(1)
-    })
-    .join(' ')
 }
 
 function slugifyDomain(value: string): string {
@@ -503,6 +502,72 @@ function selectedDomainsFromAnswers(task: Task): string[] {
     if (supported.length > 0) return [...new Set(supported)]
   }
   return ['converter-core', 'extension-ui', 'testing-qa', 'docs']
+}
+
+interface PackageArea {
+  id: string
+  name: string
+  label: string
+  relativePath: string
+}
+
+async function inferPackageAreas(workspacePath: string): Promise<PackageArea[]> {
+  const packagesDir = path.join(workspacePath, 'packages')
+  let entries: Array<import('node:fs').Dirent> = []
+  try {
+    entries = await fs.readdir(packagesDir, { withFileTypes: true })
+  } catch {
+    return []
+  }
+  const areas: PackageArea[] = []
+  for (const entry of entries) {
+    if (!entry.isDirectory()) continue
+    const relativePath = path.posix.join('packages', entry.name)
+    const packageJsonPath = path.join(workspacePath, relativePath, 'package.json')
+    try {
+      const parsed = JSON.parse(await fs.readFile(packageJsonPath, 'utf-8')) as { name?: unknown }
+      const packageName = typeof parsed.name === 'string' && parsed.name.trim()
+        ? parsed.name.trim()
+        : entry.name
+      const id = slugifyDomain(packageName.replace(/^@[^/]+\//, ''))
+      if (!id) continue
+      areas.push({
+        id,
+        name: packageName,
+        label: packageName,
+        relativePath,
+      })
+    } catch {
+      // A folder without a package manifest is not a package-level routing area.
+    }
+  }
+  return areas.sort((left, right) => left.relativePath.localeCompare(right.relativePath))
+}
+
+async function fallbackDraftsForMetaIntake(task: Task, workspacePath: string): Promise<DraftCoordinator[]> {
+  const areas = await inferPackageAreas(workspacePath)
+  if (areas.length > 0) {
+    return areas.map(area => ({
+      id: area.id,
+      domain: area.id,
+      name: area.label,
+      path: area.relativePath,
+      mandate: `Protect the ${area.label} package so future tasks preserve its public contracts, tests, and role in this monorepo.`,
+      concerns: [
+        {
+          id: 'package-contract',
+          description: `${area.label} keeps its package boundary, exports, and internal responsibilities understandable.`,
+          reviewQuestions: [
+            `Does this preserve the intended contract of ${area.label}?`,
+            `Are package-local tests or downstream consumers updated when ${area.label} changes?`,
+          ],
+        },
+      ],
+      autonomousDecisions: ['Approve small, tested fixes that stay inside this package boundary.'],
+      escalationTriggers: ['The change crosses package boundaries, changes public exports, or weakens package-level tests without a clear spec.'],
+    }))
+  }
+  return selectedDomainsFromAnswers(task).map(domain => coordinatorTemplate(domain, task))
 }
 
 function preservedQuestionAnswer(task: Task, includes: string): string | undefined {
@@ -676,8 +741,7 @@ export async function synthesizeMetaIntakeDraft(
   const existing = parseCoordinatorDraft(task.spec ?? '')
   if (existing && existing.length > 0) return { success: true, drafts: existing }
 
-  const domains = selectedDomainsFromAnswers(task)
-  const drafts = domains.map(domain => coordinatorTemplate(domain, task))
+  const drafts = await fallbackDraftsForMetaIntake(task, input.workspacePath)
   if (drafts.length === 0) return { success: false, error: 'Could not infer any coordinator roles from saved answers.' }
 
   const scripts = await packageScripts(input.workspacePath)
@@ -713,6 +777,72 @@ export async function synthesizeMetaIntakeDraft(
   task.updatedAt = now
   queue.lastUpdated = now
   await writeQueue(input.memoryDir, queue)
+  try {
+    const structuralDraft = await draftStructuralMap({
+      projectId: readWorkspaceConfig(input.workspacePath).id ?? path.basename(input.workspacePath),
+      projectRoot: input.workspacePath,
+      now,
+    })
+    const review = await submitStructuralMapForReview({
+      projectRoot: input.workspacePath,
+      mapId: structuralDraft.id,
+      actor: 'meta-intake-synthesis',
+      now,
+    })
+    const accepted = await acceptStructuralMap({
+      projectRoot: input.workspacePath,
+      mapId: review.id,
+      actor: 'meta-intake-synthesis',
+      now,
+    })
+    const projectConfig = readWorkspaceConfig(input.workspacePath)
+    const summary = summarizeStructuralMapForReview(accepted)
+    for (const pkg of summary.packages) {
+      await registerProjectGraphContractSurface({
+        id: `${projectConfig.id ?? path.basename(input.workspacePath)}.${pkg.id.replace(/^package:/, '')}`,
+        label: `${pkg.label} package contract`,
+        kind: 'domain_capability',
+        owningProject: {
+          id: projectConfig.id ?? path.basename(input.workspacePath),
+          label: projectConfig.name ?? projectConfig.id ?? path.basename(input.workspacePath),
+          path: input.workspacePath,
+        },
+        domain: {
+          id: `domain:${pkg.id.replace(/^package:/, '')}`,
+          label: pkg.label,
+          ...(pkg.path ? { path: pkg.path } : {}),
+        },
+        authority: 'shared',
+        scope: 'project',
+        sourceRefs: [{
+          kind: 'structural_map',
+          path: pkg.path,
+          nodeId: pkg.id,
+          summary: `Package boundary inferred during setup from ${pkg.path ?? pkg.label}.`,
+        }],
+        consumerRefs: [],
+        invariants: [{
+          id: 'package-boundary-stays-explicit',
+          label: 'Package boundary stays explicit',
+          rule: `${pkg.label} changes preserve or deliberately update the package-level contract.`,
+          proofObligations: ['Run the package-relevant gates named in the task spec or bootstrap config.'],
+        }],
+        decisions: [],
+        createdBy: 'meta-intake-synthesis',
+        now,
+      })
+    }
+    writeLocalProjectGraphDraft({ now })
+  } catch (err) {
+    task.notes ??= []
+    task.notes.push({
+      agentId: 'meta-intake-synthesis',
+      role: 'system',
+      timestamp: now,
+      content: `Meta-intake fallback drafted coordinator YAML, but Structure graph synthesis failed: ${err instanceof Error ? err.message : String(err)}`,
+    })
+    await writeQueue(input.memoryDir, queue)
+  }
   await appendExploringTranscript({
     memoryDir: input.memoryDir,
     taskId: META_INTAKE_TASK_ID,

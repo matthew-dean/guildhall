@@ -316,8 +316,8 @@ export function buildProjectTicker(
     return {
       tone: 'warn',
       pulse: false,
-      actorLabel: 'Needs task briefs',
-      label: 'Drafts',
+      actorLabel: 'Needs brief',
+      label: 'Needs brief',
       message: `${importDrafts} imported ${pluralize(importDrafts, 'draft')} ${importDrafts === 1 ? 'needs' : 'need'} task briefs`,
       timeLabel: null,
     }
@@ -328,7 +328,7 @@ export function buildProjectTicker(
       pulse: false,
       actorLabel: 'Paused',
       label: 'Paused',
-      message: `${active} ${pluralize(active, 'task')} paused until Guildhall starts`,
+      message: `${active} ${pluralize(active, 'task')} paused until you resume Guildhall`,
       timeLabel: null,
     }
   }
@@ -396,7 +396,7 @@ export function buildProjectCardTicker(project: ServiceProjectSummary): ProjectA
     return {
       tone: 'warn',
       pulse: false,
-      label: 'Needs task briefs',
+      label: 'Needs brief',
       message: `${counts.draftReview} imported ${pluralize(counts.draftReview, 'draft')} waiting`,
     }
   }

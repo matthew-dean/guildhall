@@ -102,6 +102,7 @@ export const OwnerInputRequest = z.object({
   target: OwnerInputTarget,
   prompt: z.string(),
   choices: z.array(z.string()).optional(),
+  selectionMode: z.enum(['single', 'multiple']).optional(),
   objective: OwnerInputObjective,
   status: OwnerInputRequestStatus,
   boundedChatSessionId: z.string(),

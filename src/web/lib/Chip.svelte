@@ -15,11 +15,12 @@
 
   /*
    * Chip tone taxonomy:
-   * - ok/running: healthy, available, queued, or Guildhall-owned continuation.
+   * - ok: healthy, available, accepted, or completed state.
+   * - running: Guildhall/agent-owned active, queued, or current-step state.
    * - warn: human decision or risk state. Use when the user must answer,
    *   approve, triage, handle a blocker, or when Guildhall needs cleanup before
    *   work can safely continue.
-   * - accent: current-step emphasis that is not itself a success or warning.
+   * - accent: human/primary emphasis that is not itself a success or warning.
    */
 
   interface Props {

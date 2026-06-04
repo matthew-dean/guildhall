@@ -89,10 +89,12 @@ export async function migrateTaskQuestionsToBoundedChat(
         const prompt = typeof question.prompt === 'string' && question.prompt.trim()
           ? question.prompt.trim()
           : `Owner input needed for ${taskTitle(task, id)}.`
+        const choices = stringArray(question.choices) ?? []
         const normalizedQuestion = normalizeLegacyOwnerQuestion({
           kind: typeof question.kind === 'string' ? question.kind : undefined,
           prompt,
-          choices: stringArray(question.choices),
+          choices,
+          selectionMode: selectionModeForLegacyTaskQuestion(id, prompt, choices, question),
         })
         if (!normalizedQuestion) {
           preserveInvalidQuestion(task, now, prompt)
@@ -147,6 +149,24 @@ export async function migrateTaskQuestionsToBoundedChat(
     createdSessions,
     affectedPaths,
   }
+}
+
+function selectionModeForLegacyTaskQuestion(
+  taskId: string,
+  prompt: string,
+  choices: string[],
+  question: Record<string, unknown>,
+): 'single' | 'multiple' | undefined {
+  if (question.selectionMode === 'single' || question.selectionMode === 'multiple') return question.selectionMode
+  if (
+    taskId === 'task-meta-intake' &&
+    /meta-intake task\s+—\s+i need to:?/i.test(prompt) &&
+    choices.length > 1 &&
+    choices.every(choice => /\b(infer|bootstrap|draft|verify|verification|task|tasks|routing|lever)\b/i.test(choice))
+  ) {
+    return 'multiple'
+  }
+  return undefined
 }
 
 function preserveInvalidQuestion(task: RawTask, now: string, prompt: string): void {

@@ -57,6 +57,26 @@ const postUserQuestionInputSchema = z.object({
     .enum(['single', 'multiple'])
     .optional()
     .describe('For kind=choice: single means pick one; multiple means pick all that apply.'),
+  assumptionIfNotAsked: z
+    .string()
+    .optional()
+    .describe('The concrete assumption Guildhall would make to keep working unattended if it did not ask.'),
+  confidenceIfProceeding: z
+    .enum(['low', 'medium', 'high'])
+    .optional()
+    .describe('Agent confidence in assumptionIfNotAsked if Guildhall proceeds without asking.'),
+  impactIfWrong: z
+    .enum(['low', 'medium', 'high'])
+    .optional()
+    .describe('Expected product/user cost if assumptionIfNotAsked is wrong after normal git/worktree containment.'),
+  gitContainment: z
+    .enum(['atomic_commit', 'feature_branch', 'worktree', 'not_applicable'])
+    .optional()
+    .describe('How Guildhall will keep proceeding safely inspectable and undoable if it does not ask.'),
+  blockingReason: z
+    .string()
+    .optional()
+    .describe('Why the agent cannot proceed unattended with an assumption for this decision.'),
 })
 
 export type PostUserQuestionInput = z.input<typeof postUserQuestionInputSchema>
@@ -189,6 +209,51 @@ function validateQuestionShape(input: {
   }
   if (input.kind === 'choice' && input.body && isEvidenceSummaryPrompt(input.body)) {
     return 'choice question prompt is research narration, not a user question; ask the decision directly and put notes in description'
+  }
+  return null
+}
+
+function validateAutonomyBoundary(input: {
+  kind?: string
+  assumptionIfNotAsked?: string
+  confidenceIfProceeding?: 'low' | 'medium' | 'high'
+  impactIfWrong?: 'low' | 'medium' | 'high'
+  gitContainment?: 'atomic_commit' | 'feature_branch' | 'worktree' | 'not_applicable'
+  blockingReason?: string
+}): string | null {
+  const hasAutonomyFields = Boolean(
+    input.assumptionIfNotAsked?.trim()
+    || input.confidenceIfProceeding
+    || input.impactIfWrong
+    || input.gitContainment
+    || input.blockingReason?.trim(),
+  )
+  if (!hasAutonomyFields) return null
+
+  if (!input.assumptionIfNotAsked?.trim()) {
+    return 'owner questions must name assumptionIfNotAsked so Guildhall can prefer unattended work when the assumption is good enough'
+  }
+  if (!input.confidenceIfProceeding) {
+    return 'owner questions must include confidenceIfProceeding so Guildhall can ask only when confidence is too low or the downside is too high'
+  }
+  if (!input.impactIfWrong) {
+    return 'owner questions must include impactIfWrong after git/worktree containment so Guildhall can avoid interrupting for containable assumptions'
+  }
+  if (!input.gitContainment) {
+    return 'owner questions must include gitContainment so Guildhall reasons about branch/worktree/atomic-commit safety before interrupting'
+  }
+  if (!input.blockingReason?.trim()) {
+    return 'owner questions must include blockingReason explaining why this cannot proceed unattended'
+  }
+
+  if (input.confidenceIfProceeding === 'high' && input.impactIfWrong !== 'high') {
+    return 'do not ask the owner for high-confidence assumptions that git/worktree containment can make safe; record the assumption and continue unattended'
+  }
+  if (input.confidenceIfProceeding === 'medium' && input.impactIfWrong === 'low') {
+    return 'do not ask the owner for medium-confidence, low-impact assumptions after git/worktree containment; record the assumption and continue unattended'
+  }
+  if (input.kind === 'confirm' && input.confidenceIfProceeding !== 'low' && input.impactIfWrong !== 'high') {
+    return 'do not use confirm as a conservative approval gate; proceed with the recorded assumption unless confidence is low or the impact is high'
   }
   return null
 }
@@ -378,7 +443,7 @@ function inferQuestionsFromAssistantText(text: string): InferredQuestion[] {
 }
 
 function resolveQuestionPayload(
-  input: Pick<PostUserQuestionInput, 'kind' | 'body' | 'prompt' | 'restatement' | 'subject' | 'description' | 'choices' | 'selectionMode'>,
+  input: Pick<PostUserQuestionInput, 'kind' | 'body' | 'prompt' | 'restatement' | 'subject' | 'description' | 'choices' | 'selectionMode' | 'assumptionIfNotAsked' | 'confidenceIfProceeding' | 'impactIfWrong' | 'gitContainment' | 'blockingReason'>,
   metadata: Record<string, unknown>,
 ): InferredQuestion | { error: string } {
   const resolvedBody = input.body
@@ -394,7 +459,8 @@ function resolveQuestionPayload(
       ...(input.selectionMode ? { selectionMode: input.selectionMode } : {}),
     }
     const validationError = validateQuestionShape(payload)
-    return validationError ? { error: validationError } : payload
+    const autonomyError = validateAutonomyBoundary(input)
+    return validationError || autonomyError ? { error: validationError ?? autonomyError! } : payload
   }
 
   const bucketKey = 'inferred_post_user_questions'
@@ -429,6 +495,8 @@ export async function postUserQuestion(
     choices: input.choices,
   })
   if (validationError) return { success: false, error: validationError }
+  const autonomyError = validateAutonomyBoundary(input)
+  if (autonomyError) return { success: false, error: autonomyError }
   if (!input.tasksPath?.trim()) return { success: false, error: 'Missing tasksPath' }
   if (!input.taskId?.trim()) return { success: false, error: 'Missing taskId' }
   if (!input.askedBy?.trim()) return { success: false, error: 'Missing askedBy' }
@@ -480,7 +548,7 @@ export async function postUserQuestion(
 export const postUserQuestionTool = defineTool({
   name: 'post-user-question',
   description:
-    "Post an asynchronous structured question to the user on this task. Use this whenever you need human judgment to proceed — the question lands in the user's Thread feed with a kind-specific affordance, and you should yield (end your turn) so the orchestrator can resume you when an answer arrives. PREFER `kind: 'choice'` whenever the answer space is small and discrete (it always degrades to Other... free-text). For choice questions, set `selectionMode: 'multiple'` when more than one answer may apply; otherwise set `selectionMode: 'single'` or omit it. Use `confirm` to restate intent before committing. Use `yesno` only for genuinely binary calls. Use `text` sparingly — usually a multiple choice with the question phrased as the prompt is better. `body`/`prompt` must be only the exact answerable question or restatement, not setup prose. Put a short topic in `subject` and the source fact, why it matters, and what happens next in `description`. NEVER write prompts like \"The key question I need to ask is...\". NEVER bury questions in productBrief.userJob — that field is for what you think the user wants, not for asking them.",
+    "Post an asynchronous structured question to the user on this task. Guildhall is built for unattended work: before calling this tool, decide the concrete `assumptionIfNotAsked`, your `confidenceIfProceeding`, the `gitContainment` strategy, the `impactIfWrong` after that containment, and the `blockingReason`. Normal work should be made safe through worktrees, feature branches, and atomic commits; do not ask merely because the agent is not 100% sure. If confidence is medium/high and the remaining contained impact is low/medium, do not ask — record the assumption in the task/spec and continue. Ask only for low-confidence owner-only decisions, high-impact product calls that remain high-impact after git containment, external credentials/setup, or choices where being wrong would still create expensive rework. The question lands in the user's Thread feed with a kind-specific affordance, and you should yield (end your turn) so the orchestrator can resume you when an answer arrives. PREFER `kind: 'choice'` whenever the answer space is small and discrete (it always degrades to Other... free-text). For choice questions, set `selectionMode: 'multiple'` when more than one answer may apply; otherwise set `selectionMode: 'single'` or omit it. Use `confirm` only for high-impact intent restatements, not routine approval gates. Use `yesno` only for genuinely binary calls. Use `text` sparingly — usually a multiple choice with the question phrased as the prompt is better. `body`/`prompt` must be only the exact answerable question or restatement, not setup prose. Put a short topic in `subject` and the source fact, why it matters, and what happens next in `description`. NEVER write prompts like \"The key question I need to ask is...\". NEVER bury questions in productBrief.userJob — that field is for what you think the user wants, not for asking them.",
   inputSchema: postUserQuestionInputSchema,
   jsonSchema: {
     type: 'object',
@@ -505,6 +573,29 @@ export const postUserQuestionTool = defineTool({
         type: 'string',
         enum: ['single', 'multiple'],
         description: 'For choice questions: pick one or pick all that apply.',
+      },
+      assumptionIfNotAsked: {
+        type: 'string',
+        description: 'The concrete assumption Guildhall would make to continue unattended if it did not ask.',
+      },
+      confidenceIfProceeding: {
+        type: 'string',
+        enum: ['low', 'medium', 'high'],
+        description: 'Agent confidence in assumptionIfNotAsked if Guildhall proceeds without asking.',
+      },
+      impactIfWrong: {
+        type: 'string',
+        enum: ['low', 'medium', 'high'],
+        description: 'Expected product/user cost if assumptionIfNotAsked is wrong after normal git/worktree containment.',
+      },
+      gitContainment: {
+        type: 'string',
+        enum: ['atomic_commit', 'feature_branch', 'worktree', 'not_applicable'],
+        description: 'How Guildhall will keep proceeding inspectable and undoable if it does not ask.',
+      },
+      blockingReason: {
+        type: 'string',
+        description: 'Why this cannot safely proceed unattended with the assumption.',
       },
     },
   },

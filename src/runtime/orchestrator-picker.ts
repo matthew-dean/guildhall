@@ -30,7 +30,7 @@ export function taskHasUnansweredOpenQuestion(task: Task): boolean {
   return hasUnansweredOpenQuestion(task)
 }
 
-function holdsDraftedSpecReviewForManualApproval(task: Task): boolean {
+export function specReviewRequiresOwnerApproval(task: Pick<Task, 'id'>): boolean {
   return task.id === META_INTAKE_TASK_ID || task.id === WORKSPACE_IMPORT_TASK_ID
 }
 
@@ -129,7 +129,7 @@ export function pickNextTask(
     task.status === status &&
     finishabilityAllowsDispatch(task) &&
     !isContainingWorkTask(task) &&
-    !(task.status === 'spec_review' && Boolean(task.spec?.trim()) && holdsDraftedSpecReviewForManualApproval(task)) &&
+    !(task.status === 'spec_review' && Boolean(task.spec?.trim()) && specReviewRequiresOwnerApproval(task)) &&
     !((task.status === 'exploring' || task.status === 'spec_review') && hasUnansweredOpenQuestion(task)) &&
     matchesLane(task) &&
     task.priority === priorityLevel &&

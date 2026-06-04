@@ -57,6 +57,142 @@ babysit setup/import/provider/release states across multiple pages.
 
 ## Current Follow-Ups
 
+- [x] Collapse the Jess setup thread detail to the current setup step instead
+  of replaying every setup-guide step as duplicate cards, and stop leaking raw
+  structural-review owner-input internals into the Jess thread list. Live Jess
+  proof on 2026-06-03 showed `/projects/jess/thread?thread=setup` selecting the
+  setup chain while the detail pane repeated `Setup guide` for active, pending,
+  and completed setup steps (`Give the project direction`,
+  `Run project check-in`, `Review existing work`, and Dec 31 completed
+  synthetic steps). The neighboring structural-review row also rendered as
+  `Jess` with raw `Reason: owner_review_required_before_routing_truth` and a
+  giant `Targets:` id list. Fix: keep the setup chain as one thread, but filter
+  setup-chain history to the current setup turn before rendering the generic
+  card list; display persisted structural-review bounded chats as
+  `Review structural map` with the actual review prompt; and write new
+  structural-map owner-input helper text as human copy instead of reason/target
+  dumps. Verification:
+  `pnpm vitest run src/web/surfaces/project/__tests__/ThreadTab.svelte.test.ts
+  --reporter=dot` (`94` tests); focused structural-map/thread regressions;
+  `pnpm typecheck`; `pnpm build`;
+  `pnpm dev:install`; `guildhall stop`; `guildhall start`;
+  `/api/stale-server` returned `stale:false`. Browser proof on
+  `http://localhost:7777/projects/jess/thread?thread=setup` showed the thread
+  list rows `Review existing project work`, `Shape the first spec`, and
+  `Review structural map`; selected setup detail text `Setup guide Needs you
+  Shape the first spec ... Open setup`; one `.thread-detail .setup-title`; one
+  `Setup guide` label; zero `Completed` setup cards; and zero visible
+  `owner_review_required_before_routing_truth` or `cross-cutting:accessibility`
+  raw target text.
+- [x] Make multi-select owner-input submission visibly acknowledge the click.
+  Live Jess report on 2026-06-03: after clicking `Submit selected`, the button
+  became disabled but looked frozen while the bounded-chat answer request was
+  still in flight. Fix: every multi-select owner-input render path now changes
+  the disabled submit button label to `Submitting...` while `busyTurnId` owns
+  the request. Verification: focused held-request regression
+  `pnpm vitest run src/web/surfaces/project/__tests__/ThreadTab.svelte.test.ts
+  -t "multiple owner-input|progress while submitting" --reporter=dot`; full
+  ThreadTab suite (`95` tests); `pnpm typecheck`; `pnpm build`;
+  `pnpm dev:install`; `guildhall stop`; `guildhall start`; `/api/stale-server`
+  returned `stale:false`.
+- [x] Re-test Jess monorepo onboarding from a clean Guildhall state until
+  Structure shows a useful project graph and contract graph for the monorepo
+  folders. Live failure report, 2026-06-03: Jess had generated
+  `.guildhall/` state plus `guildhall.yaml`, but the browser landed on Ready
+  with no actionable work, one blocked task, pending migrations, and no visible
+  project/contract graph setup result. Test loop: delete only Jess's
+  Guildhall-generated files, restart from the in-app browser, fix each proven
+  setup/import/deep-intake or badly communicated state, reinstall/restart the
+  local Guildhall app as needed, and repeat until the clean onboarding path
+  produces graph coverage for the Jess monorepo folders. Closure evidence,
+  2026-06-03: clean browser setup for `/Users/matthew/git/oss/jess` advanced
+  through identity/provider/launch, reproduced meta-intake stopping in
+  `exploring` with no draft after the saved repo scan, then recovered through
+  the new `Finish from repo scan` setup action. The recovery synthesized a
+  reviewable setup draft with 26 repo slices from `packages/*`, approval landed
+  `task-meta-intake` as `done`, and Structure loaded 42 work areas plus 26
+  contracts. Live API proof: `/api/project?projectId=jess` returned
+  `initializationNeeded:false`, structural map `accepted`, 26 packages, 19
+  domains, 3 cross-cutting domains, 227 commands, and `task-meta-intake`
+  `done`; `/api/project/project-graph?projectId=jess` returned 42 structural
+  domains and 26 contract surfaces. Verification: focused red/green meta-intake
+  synthesis regression including the noisy fallback open-question migration
+  blocker; focused SetupWizard recovery regression for stopped/no-draft setup;
+  affected suites
+  `pnpm vitest run src/runtime/__tests__/serve-meta-intake.test.ts src/runtime/__tests__/meta-intake.test.ts src/runtime/__tests__/project-graph.test.ts src/runtime/__tests__/structural-map.test.ts src/web/surfaces/__tests__/SetupWizard.svelte.test.ts src/web/surfaces/project/structure/__tests__/ProjectStructurePanel.svelte.test.ts --reporter=dot`;
+  `pnpm typecheck`; `pnpm build`; `pnpm dev:install`; restarted service with
+  `/api/stale-server` returning `stale:false`.
+- [x] Restore scrollability for standalone document routes without weakening
+  fixed project layouts. The live Jess setup provider step could overflow below
+  the viewport because `/setup` rendered directly under the root app viewport,
+  whose router container intentionally hides overflow for fixed-layout project
+  surfaces. Audit result: `/projects` and `/needs-you` already use
+  `ProjectsShell` with a scrollable body; project routes use `ProjectShell`,
+  where document pages scroll through `.app-shell-page` and fixed
+  `surface-fill` pages keep scrollable panels inside their direct children;
+  drawers and modals already own their panel scroll areas. The only top-level
+  document routes missing a scroll owner were `/setup` and `/providers`.
+  Closure evidence, 2026-06-03: wrapped those two routes in
+  `.route-document-scroll` in `Router.svelte`, leaving project routes
+  unwrapped; added an App-shell regression test that proves setup/providers get
+  the document scroll surface while project layouts do not. Verification:
+  focused red/green test
+  `pnpm vitest run src/web/__tests__/App.svelte.test.ts -t "standalone document routes" --reporter=dot`;
+  nearby UI suites
+  `pnpm vitest run src/web/__tests__/App.svelte.test.ts src/web/surfaces/__tests__/SetupWizard.svelte.test.ts src/web/surfaces/__tests__/ProvidersPage.svelte.test.ts src/web/surfaces/__tests__/ProjectView.svelte.test.ts --reporter=dot`
+  (`55` tests); `pnpm typecheck`; `pnpm build`; `pnpm dev:install`;
+  `git diff --check`; restarted service at `http://localhost:7777` with
+  `/api/stale-server` returning `stale:false`. Browser proof on
+  `http://localhost:7777/projects/jess/setup?step=2` showed
+  `.route-document-scroll` with `overflow-y:auto`, client height `679`,
+  scroll height `793`, and a real wheel scroll moved `scrollTop` to `114.5`.
+  Browser proof on `/providers` showed the same document wrapper contract, and
+  `/projects/jess/thread` had no document wrapper; its uninitialized
+  `surface-fill` slot was not clipped (`626` client height / `626` scroll
+  height). Remaining unrelated gate: `pnpm lint:design` currently fails on
+  pre-existing typography/token findings in `Chip`, `Eyebrow`, `ThreadTab`,
+  and related tests.
+- [x] Keep `/providers` refresh-safe by removing project-scoped setup/intake
+  dependencies from the global page. Follow-up live proof on 2026-06-03 showed
+  that refreshing `/providers` could render
+  `projectId is required for project-scoped requests.` even after the document
+  route became scrollable. Root cause: the global Providers page was still
+  loading machine-wide provider and model settings through project-scoped
+  `/api/setup/providers` and `/api/config/models` endpoints, so a hard refresh
+  on a route with no project id looked like a setup/intake failure. Fix:
+  added machine-scoped `/api/providers`, `/api/providers/config`, and
+  `/api/models` endpoints; moved only `ProvidersPage.svelte` to those endpoints;
+  left project setup/settings on the explicit query-string paths
+  `/api/setup/providers?projectId=...` and `/api/config/models?projectId=...`.
+  Verification: red/green machine-scoped API tests in
+  `src/runtime/__tests__/serve-providers.test.ts`; full provider/setup UI slice
+  `pnpm vitest run src/runtime/__tests__/serve-providers.test.ts src/web/surfaces/__tests__/ProvidersPage.svelte.test.ts src/web/surfaces/__tests__/SetupWizard.svelte.test.ts src/web/surfaces/project/__tests__/ProjectProvidersSection.svelte.test.ts src/web/__tests__/App.svelte.test.ts --reporter=dot`
+  (`67` tests); `pnpm typecheck`; `pnpm build`; `pnpm dev:install`;
+  `git diff --check`; restarted service with `/api/stale-server`
+  `stale:false`. Live API proof: `/api/providers` and `/api/models` returned
+  `200` without a project, while `/api/setup/providers` still returned `400`
+  without `projectId`. Browser reload proof on `http://localhost:7777/providers`
+  showed provider rows, Global model defaults, no load error, no restart banner,
+  and no `projectId is required for project-scoped requests.` text.
+- [x] Treat restart-interrupted setup meta-intake as a retryable setup
+  interruption instead of a human recovery wall. Jess live proof on
+  2026-06-03 showed meta-intake starting, then recording
+  `Request aborted.`, `Stop requested; canceling the active model call.`, and an
+  escalation with `Spec agent kept researching after Guildhall asked for durable
+  progress.` The setup page then told the user `The setup task needs a recovery
+  decision before Guildhall can continue`, even though the actionable path was
+  to rerun the reserved setup intake after the server/model interruption. Fix:
+  carry `blockReason` through `/api/project/meta-intake/draft`, classify only
+  `task-meta-intake` durable-progress/aborted-call blockers as recoverable
+  setup interruptions, show `Setup was interrupted` with `Resume setup`, and
+  have that button call `/api/project/meta-intake/rerun` before restarting the
+  coordinator. Ordinary blocked setup tasks still route to explicit recovery.
+  Verification: focused Svelte regression
+  `pnpm vitest run src/web/surfaces/__tests__/SetupWizard.svelte.test.ts`
+  (`11` tests) passed. Remaining unrelated gate: the endpoint regression could
+  not run in this dirty worktree because `src/runtime/project-graph.ts` is
+  currently unmerged and fails transform with duplicate
+  `assignedAuthorities`, `structuralDomains`, and `currentProject` declarations.
 - [x] Bring Thread status chips back under the canonical `Chip` contract. The
   live Narrative Harness Thread page showed `Guildhall can continue` and `Needs
   brief` as bespoke status treatments, including one wrapped chip. Closure
@@ -7344,3 +7480,1027 @@ not-initialized states in this service instance, so they were not counted as
 rendered Structure proof.
 
 source: codex:structure-user-facing-redesign
+2026-06-03T17:40:00Z - Closed the Thread review-card split-action trap found
+on root-level brief/spec review cards. Active Thread brief/spec cards now use
+one primary root action (`View brief` / `View spec`), and the document modal is
+the decision surface (`Approve brief`, `Approve spec`, or `Approve split`) with
+change-request and approval actions in the modal footer. This removes the
+awkward flow where the user opened a document, backed out, then clicked a
+separate root-level approval button. The same awkward root-level sibling action
+pattern existed for active brief approvals and active spec reviews; historical
+inline review cards remain direct decision cards because they do not pair a
+root-level preview action with a separate modal.
+
+Verification: focused ThreadTab tests first failed against the old root-level
+approval buttons, then `pnpm vitest run
+src/web/surfaces/project/__tests__/ThreadTab.svelte.test.ts --reporter=dot`
+passed with 87 tests; `pnpm typecheck` passed; `pnpm build` passed.
+
+source: codex:thread-review-modal-decision-flow
+
+2026-06-03T17:47:00Z - Fixed the follow-on recovery-brief approval trap found
+on Looma/Knit. Recovery had already saved a concrete spec and acceptance
+criteria for `Block menu / block side menu`, but the task was still persisted
+as `exploring` with an unapproved `coordinator-recovery` product brief. Thread
+therefore asked the owner to approve a brief whose only real message was
+"allow Guildhall to make this into project work." `buildThread` now treats a
+saved spec draft with parsed acceptance criteria as the useful review surface:
+the stale brief may remain as historical context, but it cannot be the active
+human gate, and Thread projects the spec review instead.
+
+Verification: added a regression for an exploring recovery task with an
+unapproved recovery brief plus real spec/ACs. It failed against the old active
+`brief_approval` projection, then `pnpm vitest run
+src/runtime/__tests__/thread.test.ts src/web/surfaces/project/__tests__/ThreadTab.svelte.test.ts
+--reporter=dot` passed with 157 tests.
+
+source: codex:recovery-brief-approval-trap
+
+2026-06-03T18:00:00Z - Tightened the owner-question autonomy boundary so
+Guildhall stops treating uncertainty as permission to interrupt. The
+`post-user-question` tool now exposes structured fields for the assumption the
+agent would make, confidence if proceeding, git containment strategy, remaining
+impact if wrong after containment, and the blocking reason. When an agent says
+it has a high-confidence assumption whose remaining contained impact is not
+high, or a medium-confidence assumption with low remaining impact, the tool
+rejects the question and tells the agent to record the assumption and continue
+unattended. This explicitly bakes in Guildhall's expected git/worktree/atomic
+commit safety model rather than relying on vague "reversibility" language.
+
+Verification: `pnpm vitest run
+src/tools/__tests__/post-user-question.test.ts --reporter=dot` passed with 17
+tests, including regressions for high-confidence contained questions being
+rejected and low-confidence high-impact decisions still being allowed.
+`pnpm typecheck` passed.
+
+source: codex:owner-question-confidence-git-containment
+
+2026-06-03T18:07:00Z - Repaired persisted owner-input states created before
+the stricter question boundary. Added a project migration,
+`0.10.0/owner-input-state-repair`, that detects waiting owner-input records
+whose prompt is agent narration/evidence summary, plus low-risk planning-note
+questions that Guildhall should handle with an atomic-commit assumption instead
+of interrupting. The migration cancels the linked owner-input and bounded-chat
+sessions with receipts, appends task state-repair notes recording the reason or
+assumption, and leaves real owner answers untouched. Also narrowed the shared
+project action model so stale active setup steps do not crown "Answer in
+Thread" once a project already has tasks and can start.
+
+Live repair applied to T-minus-T: four stale owner-input records were
+cancelled; the malformed converter evidence summary and "I already posted the
+question" narration no longer block Start, and the harmless planning-note
+questions now record the contained assumption to use `.cursor/plan.md`.
+Looma/Knit did not need this migration after the earlier AlertDialog answer
+and spec-review repair.
+
+Verification: `pnpm vitest run
+src/runtime/__tests__/project-action-model.test.ts
+src/runtime/__tests__/owner-input-state-repair.test.ts
+src/tools/__tests__/post-user-question.test.ts --reporter=dot` passed with 24
+tests; `pnpm typecheck` passed; `pnpm build` and `pnpm dev:install` passed;
+service restarted with `/api/stale-server` reporting `stale:false`. Live
+service proof for `t-minus-t` shows
+`0.10.0/owner-input-state-repair` applied, `ownerInput.active: false`, Start
+enabled, and the primary action restored to the real planning-note task.
+
+source: codex:owner-input-state-repair
+
+2026-06-03T18:23:00Z - Corrected the follow-on spec-review ownership bug in
+Thread. The previous recovery-brief fix suppressed the fake brief approval but
+still promoted `exploring + saved spec draft` into an owner-facing `View spec`
+gate, effectively asking the user to do coordinator/reviewer validation after
+the real owner questions had already been answered. Root policy: once
+Guildhall asks owner-only questions and records answers, the user is done;
+preserving those answers into a spec and validating that the spec is faithful is
+Guildhall's coordinator/reviewer job. `specReviewRequiresOwnerApproval` is now
+the shared runtime predicate used by both the orchestrator picker and Thread:
+normal task spec drafts are internal Guildhall review/continuation work, while
+reserved bootstrap/import approvals stay explicitly owner-held. Thread falls
+through to an `inflight` spec turn for normal drafts and the visible card copy
+now says coordinator review is queued instead of "Press Start when you want".
+
+Live Looma + Knit proof after build/install/restart: `/api/stale-server`
+reported `stale:false`; `/api/project/thread?projectId=looma-knit` returned
+active turn `inflight:task-import-1y7kmp6` with `phase: spec` and summary
+`Guildhall has your answers and a spec draft. Coordinator review is next.` The
+in-app browser at `/projects/looma-knit/thread` showed no `NEEDS YOU`, no
+`View spec`, no `Approve spec`, and the Block menu card said `Coordinator
+review is queued.`
+
+Verification: `pnpm vitest run src/runtime/__tests__/thread.test.ts
+src/runtime/__tests__/orchestrator.test.ts --reporter=dot` passed with 359
+tests; `pnpm typecheck` passed; `pnpm build && pnpm dev:install` passed.
+
+source: codex:answered-owner-questions-end-user-role
+
+2026-06-03T18:30:00Z - Closed the Thread document-modal action test gap.
+Live testing found two more failures on the same spec-review surface: clicking
+`View spec` then `Approve spec` could silently leave the active review card in
+place, and `Request changes` in the modal could appear to do nothing. Root
+causes: ThreadTab tests only asserted that buttons existed or that an endpoint
+URL was called; the fetch fake never modeled thread state changing after
+approval, and `approveSpec` did not check `response.ok`, so a server-side
+rejection such as "task is not in spec_review" closed the modal and reloaded
+the unchanged card with no visible error. The modal approval path now keeps the
+modal open and shows the server error on failure, closes only after a
+successful approve, refreshes both Thread and project state, and `Request
+changes` focuses the relevant task thread before opening the shared correction
+composer.
+
+Added UI regressions in `ThreadTab.svelte.test.ts` for: approving a valid task
+spec from the modal advances out of the spec-review card into the queued/ready
+work state; approve-spec failures remain visible instead of silently no-oping;
+and modal `Request changes` opens the shared spec correction composer. The
+test fetch harness now supports stateful Thread responses after approve-spec so
+future button tests must prove the post-action UI, not just endpoint calls.
+
+Verification: focused modal tests passed; full
+`src/web/surfaces/project/__tests__/ThreadTab.svelte.test.ts` passed with 89
+tests; combined `pnpm vitest run src/runtime/__tests__/thread.test.ts
+src/runtime/__tests__/orchestrator.test.ts
+src/web/surfaces/project/__tests__/ThreadTab.svelte.test.ts --reporter=dot`
+passed with 448 tests; `pnpm typecheck`, `pnpm build`, and `pnpm dev:install`
+passed; service restarted with `/api/stale-server` reporting `stale:false`.
+
+source: codex:thread-document-modal-actions-tested
+
+2026-06-03T18:51:00Z - Centralized owner-facing task stage presentation across
+project surfaces. Work list rows were showing `Intake` for Looma/Knit tasks
+whose raw lifecycle status was still `exploring`, even when the task already
+had a saved spec draft and the Thread view correctly projected it as queued
+spec/coordinator work. Root cause: Work, Overview, and WorkTreePreview mapped
+raw `task.status` through `friendlyStatus`, while Thread used its own local
+turn/ownership logic. Added `src/web/lib/task-presentation.ts` as the shared
+task-stage presentation utility and routed Work, Thread in-flight state
+labels/tones, Thread list in-flight chips, Project Overview task labels, and
+WorkTreePreview chips through it. The fallback identifier label for
+`exploring` also now says
+`Guildhall shaping`, so historical progress copy does not leak the old
+first-stage `Intake` wording. `exploring` is no longer displayed as first-stage
+`Intake` for owner-facing task surfaces; early shaping work says
+`Guildhall shaping`, and
+`exploring + saved spec draft/no open owner questions` says
+`Spec revision queued`.
+
+Verification: `pnpm vitest run
+src/web/lib/__tests__/identifier-labels.test.ts
+src/web/lib/__tests__/task-presentation.test.ts
+src/web/surfaces/project/__tests__/WorkTab.svelte.test.ts
+src/web/surfaces/project/__tests__/ThreadTab.svelte.test.ts
+src/web/surfaces/project/__tests__/ProjectOverviewTab.svelte.test.ts
+--reporter=dot` passed with 131 tests; `pnpm typecheck` passed; `pnpm build`
+and `pnpm dev:install` passed; service restarted with `/api/stale-server`
+reporting `stale:false`.
+
+source: codex:centralized-task-stage-presentation
+
+2026-06-03T19:09:00Z - Narrowed the Work surface default from "all open
+backlog" to the execution queue. The Work list/board/columns default now uses
+`Queued work`: tasks with a complete worker handoff in `ready`, plus
+`in_progress`, `review`, and `gate_check`. Shaping/spec/import/proposed work
+is still available through the explicit `Planning` filter for list and columns
+inspection. This keeps Looma/Knit's current spec/shaping backlog out of the
+default Work queue while still making it available on demand. Empty queue states
+now say there is no queued work yet and offer a direct switch to Planning when
+shaping work exists. Columns now use the same complete-worker-handoff threshold
+as the list so incomplete `ready` tasks do not appear queued in one Work view
+and pre-work in another.
+Work summary chips now summarize the selected filter, so the default empty
+queue no longer advertises shaping/spec/import counts as if they were queued
+execution work; those chips appear when Planning/Open/All intentionally expose
+that slice.
+
+Verification: `pnpm vitest run
+src/web/lib/__tests__/identifier-labels.test.ts
+src/web/lib/__tests__/task-presentation.test.ts
+src/web/surfaces/project/__tests__/WorkTab.svelte.test.ts
+src/web/surfaces/project/__tests__/ThreadTab.svelte.test.ts
+src/web/surfaces/project/__tests__/ProjectOverviewTab.svelte.test.ts
+--reporter=dot` passed with 132 tests; `pnpm typecheck` passed.
+
+source: codex:work-default-execution-queue
+
+2026-06-03T20:16:00Z - Reworked the project Overview/Structure information
+hierarchy for the 0.10 project graph direction. Overview now starts with a
+dense "Everything Guildhall knows" summary band: compact cards for work,
+structure, project graph/contracts, runtime/memory, proof, and recent history.
+The graph card reads the shared `/api/project/project-graph` summary instead
+of inventing local graph math, and routes to Structure for drill-in. This makes
+Overview act like the organized project knowledge map rather than a stack of
+large half-width lists.
+
+Structure now has friendly graph navigation anchors for Domains, Contracts,
+and Dependency requests. Follow-up correction: the local project index is not
+part of the project graph. `/api/project/project-graph` now returns connected
+projects in `localProjects` and the searchable assignment index in
+`localProjectIndex`, so a project such as Narrative Harness does not claim all
+registered Guildhall projects as graph nodes.
+
+Verification: `pnpm vitest run
+src/runtime/__tests__/project-graph.test.ts
+src/runtime/__tests__/serve-settings.test.ts
+src/web/surfaces/project/__tests__/ProjectOverviewTab.svelte.test.ts
+src/web/surfaces/project/structure/__tests__/ProjectStructurePanel.svelte.test.ts
+--reporter=dot` passed with 93 tests; `pnpm typecheck` passed; `pnpm build`
+passed; `pnpm dev:install` passed. Browser smoke on the local service at
+`http://127.0.0.1:7777/projects/narrative-harness/overview` showed the
+Overview knowledge band with `Project graph 0 connected projects` and no
+`7 other managed projects` / `7 other indexed projects` graph claim. Browser
+DOM proof after the design-system follow-up showed 0 bespoke `.knowledge-card`
+elements, 6 shared `.card-list-item.knowledge-summary-item` elements, and 6
+`.utility-panel.card-list-item.knowledge-summary-item` elements, so the
+Overview summary band now composes the shared interactive card primitive instead
+of carrying a custom selectable-card pattern. Browser
+smoke on `/projects/narrative-harness/structure` showed Domains / Contracts /
+Dependency requests graph navigation, a separate `Searchable project index`,
+`7 other indexed projects`, the explicit "not part of this project graph until
+a request or responsibility connects them" explanation, `No other project is
+connected to this graph yet`, and no `related local project` / `related work`
+wording.
+
+source: codex:overview-structure-knowledge-map
+
+2026-06-03T20:38:00Z - Removed the misleading missing structural-map branch
+from the Structure surface. Projects without a legacy `structuralMapReview`
+now lead directly with Project graph instead of showing `Legacy structural map
+missing`, `map not reviewed`, or an `Open Threads` action that has no
+structure-specific review target. The legacy structural-map panel is still
+available when an actual review record exists, but it is labeled as a retained
+legacy map review rather than the primary Structure surface.
+
+Structure graph navigation now uses shared `Button` controls, and domain graph
+rows compose shared `CardListItem` / `UtilityPanel` interactive styling instead
+of custom border/background/hover card buttons. Overview also falls back to
+project-graph facts for its Structure summary, so Narrative Harness reports
+`Structure 5 graph domains` rather than `Map not reviewed`.
+
+Verification: `pnpm vitest run
+src/web/surfaces/project/structure/__tests__/ProjectStructurePanel.svelte.test.ts
+src/web/surfaces/project/__tests__/ProjectOverviewTab.svelte.test.ts
+--reporter=dot` passed with 21 tests; `pnpm typecheck` passed; `pnpm build`
+and `pnpm dev:install` passed; service restarted with `/api/stale-server`
+reporting `stale:false`. Browser proof on
+`/projects/narrative-harness/structure` showed no `Legacy structural map
+missing`, no `Map not reviewed`, no `Open Threads` action, 5 shared
+`.card-list-item.domain-graph-node` rows, 0 custom domain buttons, and graph
+nav buttons for Domains, Contracts, and Dependency requests. Browser proof on
+Overview showed `Structure 5 graph domains` and no `Map not reviewed`.
+
+source: codex:structure-graph-primary-no-missing-map-card
+
+2026-06-03T19:25:00Z - Aligned queued/Guildhall-owned chip semantics with the
+existing action color system. The app already treats `Button variant="agent"`
+as the green Guildhall/LLM-owned action color (`Start work`, task resume,
+bootstrap/resume actions) and `primary`/`human` as the purple human-primary
+action color. `Queued`, `Queued for Guildhall`, `Spec revision queued`,
+`Guildhall shaping`, and `Guildhall can continue` now use the green
+`running` chip tone because they mean Guildhall owns the next move, not that
+the item is complete or merely healthy. The shared Chip taxonomy now reserves
+`ok` for healthy/available/accepted/completed states, `running` for
+Guildhall/agent-owned active/queued/current-step states, and `accent` for
+human-primary emphasis. Drawer, Thread, Work, and the shared task-stage
+presenter now agree on that tone.
+
+Verification: `pnpm vitest run
+src/web/lib/__tests__/task-presentation.test.ts
+src/web/lib/__tests__/Button.css-contract.test.ts
+src/web/surfaces/project/__tests__/WorkTab.svelte.test.ts
+src/web/surfaces/project/__tests__/ThreadTab.svelte.test.ts
+src/web/surfaces/drawer/__tests__/CurrentTab.svelte.test.ts
+src/web/surfaces/__tests__/ProjectView.svelte.test.ts
+src/web/surfaces/__tests__/ProjectsHome.svelte.test.ts --reporter=dot`
+passed with 202 tests; `pnpm typecheck` passed.
+
+source: codex:queued-guildhall-owned-agent-tone
+
+2026-06-03T19:41:00Z - Extended the same ownership color semantics to Thread
+mini-cards. Thread list rows no longer use selected-state purple as the left
+rail for every selected card. The row rail now derives from the same ownership
+presentation used by the chip: Guildhall-owned next moves (`Queued`,
+`Queued for Guildhall`, `Guildhall shaping`, `Guildhall can continue`, live
+Guildhall work) get the green agent rail; owner-held actions (`Needs you`,
+`Needs brief`, recovery that needs the owner) get the human/warning rail; neutral
+history stays unrailed. Active detail cards also treat Guildhall-owned turns as
+green instead of purple so the list and detail hierarchy agree.
+
+Verification: added a ThreadTab regression proving a selected human-owned row
+has `rail-warn` instead of `rail-accent` while a Guildhall-owned queued row has
+`rail-ok`; `pnpm vitest run
+src/web/surfaces/project/__tests__/ThreadTab.svelte.test.ts --reporter=dot`
+passed with 91 tests. The focused status/button suite passed with 112 tests,
+and `pnpm typecheck` passed.
+
+source: codex:thread-mini-card-ownership-rails
+
+2026-06-03T20:03:54Z - Reframed project run controls around availability
+instead of a manual start/stop gate. Guildhall now persists a project-level
+`availability.status` policy separately from the current orchestrator
+`run.status`: default `active` projects expose `Pause` even when no run process
+is currently ticking, while explicit `paused` projects expose `Resume`.
+Running projects still present `Pause`, one-task passes present `Pause 1`, and
+the stopping transition is exposed to users as `Pausing...` / `Pausing`.
+Projects Home, ProjectView, Thread, Work, task drawers, and the shared project
+action model all read the same availability/run-control state instead of
+locally treating every stopped run as a paused project. Pause writes the
+availability policy and stops any current run; Resume clears the policy when
+the run starts.
+
+Thread, Work, and drawer stage chips now distinguish available Guildhall-owned
+work from explicitly paused Guildhall-owned work. `Guildhall shaping`,
+`Spec revision queued`, and `Queued for Guildhall` are available/active
+Guildhall-owned states; paused projects can still show paused work copy and
+paused drawer/work labels without implying the owner has a new decision to
+make. That keeps pre-work shaping in Thread while making the project-level
+Pause / Resume state explicit.
+
+Verification: `pnpm vitest run
+src/runtime/__tests__/project-availability.test.ts
+src/runtime/__tests__/project-action-model.test.ts
+src/web/lib/__tests__/task-presentation.test.ts
+src/web/lib/__tests__/project-summary.test.ts --reporter=dot` passed with 26
+tests; `pnpm vitest run
+src/web/surfaces/__tests__/ProjectView.svelte.test.ts
+src/web/surfaces/__tests__/ProjectsHome.svelte.test.ts --reporter=dot` passed
+with 58 tests; `pnpm vitest run
+src/web/surfaces/drawer/__tests__/CurrentTab.svelte.test.ts --reporter=dot`
+passed with 21 tests; `pnpm vitest run
+src/web/surfaces/project/__tests__/ThreadTab.svelte.test.ts
+src/web/surfaces/project/__tests__/WorkTab.svelte.test.ts --reporter=dot`
+passed with 111 tests. `pnpm typecheck`, `pnpm build`, `pnpm dev:install`,
+and `guildhall stop && guildhall start` passed. Live proof on
+`http://localhost:7777/projects/looma-knit/thread?thread=task%3Atask-import-1aessks&proof=availability-pause`:
+`/api/stale-server` returned `stale:false`; `/api/project?projectId=looma-knit`
+returned `availability.status:"active"` with `actionModel.runControl.label:"Pause"`;
+the browser DOM showed one `Pause` control and no `Start work`, `Stop work`, or
+`Shaping paused` copy.
+
+Known test gap: the full `src/web/surfaces/__tests__/TaskDrawer.svelte.test.ts`
+suite still hangs in this environment, both alone and when paired with
+CurrentTab. The smaller CurrentTab coverage passes; TaskDrawer needs a separate
+harness/timer cleanup before it can be counted as reliable availability proof.
+
+Earlier focused coverage: `pnpm vitest run
+src/runtime/__tests__/project-action-model.test.ts
+src/web/lib/__tests__/task-presentation.test.ts
+src/web/lib/__tests__/project-summary.test.ts
+src/web/surfaces/__tests__/ProjectView.svelte.test.ts
+src/web/surfaces/__tests__/ProjectsHome.svelte.test.ts
+src/web/surfaces/project/__tests__/ThreadTab.svelte.test.ts
+src/web/surfaces/drawer/__tests__/CurrentTab.svelte.test.ts
+src/web/surfaces/project/__tests__/WorkTab.svelte.test.ts --reporter=dot`
+passed with 215 tests.
+
+source: codex:project-availability-resume-pause
+
+2026-06-03T20:42:20Z - Corrected the project-run vocabulary regression from
+the availability refactor. Guildhall's old `Start` / `Stop` semantics now map
+directly to `Resume` / `Pause`: a stopped project with runnable work is
+resumable, not pausable, and only an actual running/stopping project exposes
+`Pause`. Removed the UI shortcut that treated `availability.status:"active"`
+as active processing. Thread, Work, drawers, and the shared task-stage
+presenter now use active-processing chips only when `run.status` is
+`running`/`stopping`; stopped work shows paused/resumable labels such as
+`Shaping paused`, `Spec revision paused`, or `Ready` instead of implying every
+task is currently being shaped. The running Pause control now uses the shared
+danger button variant, while stopped work keeps the green Guildhall-owned
+`Resume` action. Also softened the Thread composer textarea treatment so it
+keeps the shared input contract while reading as enabled rather than disabled.
+
+Verification: red tests first caught stopped work rendering `Pause`, stopped
+availability rendering `Guildhall shaping`, and the topbar showing `Pause`.
+After the fix, `pnpm vitest run
+src/runtime/__tests__/project-action-model.test.ts
+src/web/lib/__tests__/task-presentation.test.ts
+src/web/surfaces/__tests__/ProjectView.svelte.test.ts
+src/web/lib/__tests__/project-summary.test.ts
+src/web/surfaces/project/__tests__/ThreadTab.svelte.test.ts
+src/web/surfaces/project/__tests__/WorkTab.svelte.test.ts
+src/web/surfaces/drawer/__tests__/CurrentTab.svelte.test.ts --reporter=dot`
+passed with 198 tests. `pnpm typecheck`, `pnpm build`, and `git diff --check`
+passed. `pnpm dev:install` rebuilt and packaged successfully but failed at the
+LaunchAgent install edge with `Could not find service "io.guildhall.agent"`;
+the packaged artifact was copied into the installed app payload manually, then
+`guildhall stop && guildhall start` restarted the service. Live proof:
+`/api/stale-server` returned `stale:false`; `/api/project?projectId=looma-knit`
+returned `run:null` and `actionModel.runControl.label:"Resume"`; the in-app
+browser topbar showed `Resume`, no `Pause` or `Start work`, Thread chips showed
+`Shaping paused` / `Spec revision paused`, and the composer textarea reported
+`disabled:false`, `opacity:1`, and `cursor:text`.
+
+source: codex:resume-pause-old-start-stop-semantics
+
+2026-06-03T21:54:30Z - Tightened Thread/Work/status chip vocabulary so chips
+are statuses instead of tiny descriptions. The shared task presentation path,
+identifier labels, Current drawer, Task drawer, Thread list/detail, Work list,
+Planner, Overview, project activity, and project summary now collapse
+Guildhall-owned and pre-work states to short labels such as `Queued`,
+`Working`, `Paused`, `Ready`, `Review`, `Gates`, `Needs brief`, and `Needs
+you`. Descriptive phrases such as `Guildhall shaping`, `Queued for Guildhall`,
+`Spec revision queued`, `Spec revision paused`, `Shaping paused`, `Guildhall
+working`, `Brief cleanup needed`, and `Needs task briefs` were removed from
+chip/status sources. Longer explanations remain in body copy where they are
+actual descriptions, not status badges.
+
+Verification: `pnpm vitest run
+src/web/lib/__tests__/task-presentation.test.ts
+src/web/lib/__tests__/identifier-labels.test.ts
+src/web/lib/__tests__/project-summary.test.ts
+src/web/lib/__tests__/project-activity.test.ts
+src/web/surfaces/drawer/__tests__/CurrentTab.svelte.test.ts
+src/web/surfaces/project/__tests__/ThreadTab.svelte.test.ts
+src/web/surfaces/project/__tests__/WorkTab.svelte.test.ts
+src/web/surfaces/project/__tests__/ProjectOverviewTab.svelte.test.ts
+--reporter=dot` passed with 186 tests. Product-code search for the old
+chip/status phrases now only finds negative regression assertions or unrelated
+test titles. `pnpm typecheck` and `pnpm build` passed. `pnpm dev:install`
+completed cleanly, then `guildhall stop && guildhall start` restarted the
+installed service. Live proof on
+`http://localhost:7777/projects/looma-knit/thread?thread=task%3Atask-import-1aessks&proof=short-status-chips-2`:
+`/api/stale-server` returned `stale:false`; `/api/project?projectId=looma-knit`
+returned `runStatus:null` and `runControl.label:"Resume"`; the selected active
+dock chips were `Paused`, `2`, and `2 of 4`; page text contained none of the
+old descriptive chip phrases.
+
+source: codex:short-status-chip-vocabulary
+
+2026-06-04T00:52:00Z - Fixed the setup step-3 completion state exposed by the
+Jess onboarding run. A project whose meta-intake draft is already `approved`
+now renders `Setup is complete` with `Review structure` and `Open overview`
+actions instead of showing stale bootstrap/recovery controls such as
+`Setup was interrupted`, `Finish from repo scan`, or `Start meta-intake`.
+
+Verification: red-first `pnpm vitest run
+src/web/surfaces/__tests__/SetupWizard.svelte.test.ts -t "shows setup
+completion" --reporter=dot` failed on the stale `You're ready to bootstrap`
+card, then passed after the fix. Full
+`src/web/surfaces/__tests__/SetupWizard.svelte.test.ts` passed with 12 tests.
+`pnpm typecheck`, `pnpm build`, and `pnpm dev:install` passed; `guildhall stop
+&& guildhall start` restarted the installed service. Live proof:
+`/api/stale-server` returned `stale:false`;
+`/api/project/meta-intake/draft?projectId=jess` returned `status:"approved"`
+with 26 drafts; the in-app browser at `/projects/jess/setup?step=3` showed
+`Setup is complete`, `Review structure`, and `Open overview` with no
+interrupted/start controls.
+
+source: codex:jess-setup-complete-state
+
+2026-06-04T01:12:00Z - Fixed the Jess Structure graph labels after live
+onboarding exposed meaningless repeated `Documentation and knowledge` nodes and
+technical acronym casing such as `Css`, `Js`, `Scss`, and `Vscode`. Structure
+chart nodes now render source folder basenames when a path exists, otherwise
+they show the stored label exactly as provided. The UI deliberately does not
+guess acronym capitalization from dash-cased ids. Each chart node also shows the
+detected source path and links to the corresponding work-area row.
+
+Verification: red-first tests caught `Css Parser`, `Plugin Js`, and `Vscode
+Extension` from project-graph label derivation and caught Structure chart docs
+nodes collapsing to `Documentation and knowledge`. After the fix,
+`pnpm vitest run src/runtime/__tests__/project-graph.test.ts
+src/runtime/__tests__/structural-map.test.ts
+src/web/surfaces/project/structure/__tests__/ProjectStructurePanel.svelte.test.ts
+--reporter=dot` passed with 40 tests. `pnpm typecheck`, `pnpm build`, and
+`pnpm dev:install` passed; `guildhall stop && guildhall start` restarted the
+installed service. Live proof: `/api/stale-server` returned `stale:false`; the
+in-app browser at `/projects/jess/structure` showed chart links such as
+`docs-content packages/docs-content`, `patch-css packages/patch-css`,
+`css-parser packages/css-parser`, `jess-plugin-js packages/jess-plugin-js`,
+`jess-plugin-scss packages/jess-plugin-scss`, and `vscode packages/vscode`,
+with no `Documentation and knowledge` chart labels.
+
+source: codex:jess-structure-label-specificity
+
+2026-06-04T01:28:00Z - Removed the over-surfaced cross-project assignment
+framing from Jess Structure. The page no longer presents each folder/work area
+as `Owned here` versus `Reusable work`, no longer repeats row-level `Assign`
+actions, and no longer claims `84 reusable capabilitys` can move. Cross-project
+capability linking remains supported as the edge case it is: one small
+`Link capability` action opens a modal where the user can search for a real
+capability and then search for a provider project. Work-area rows now stay about
+this project: area title plus source path/coordinator metadata. The legacy map
+panel follows the same no-guessing display rule, preferring a source-path
+basename over stale persisted labels such as `Css`, `Js`, or `Scss`.
+
+Verification: red-first Structure regression caught the visible `Reusable work`
+column and row assignment action, then passed after moving the flow behind the
+single modal. A second regression covers stale `Css` labels with
+`packages/patch-css` paths so the page shows `patch-css` instead of trying to
+repair capitalization. Affected tests passed:
+`pnpm vitest run src/runtime/__tests__/project-graph.test.ts
+src/runtime/__tests__/structural-map.test.ts
+src/web/surfaces/project/structure/__tests__/ProjectStructurePanel.svelte.test.ts
+--reporter=dot` (`40` tests). `pnpm typecheck`, `pnpm build`,
+`pnpm dev:install`, `guildhall stop && guildhall start`, and `git diff --check`
+passed. Live proof: `/api/stale-server` returned `stale:false`;
+`/api/project/project-graph?projectId=jess` returned `42` domains and `26`
+contract surfaces; the in-app browser at `/projects/jess/structure` showed
+`42 work areas`, `26 contracts`, `patch-css`, `jess-plugin-js`,
+`jess-plugin-scss`, and `vscode`, with no `Reusable work`, `Owned here`,
+`Can move`, `Boundaries and assignments`, `Available to assign`,
+`84 reusable`, or `reusable capabilitys` text. The browser also verified that
+the chart and work-area rows did not show standalone stale `Css`, `Js`, or
+`Scss` labels. Modal behavior is covered by the component regression; direct
+browser activation of the modal timed out in the in-app browser harness before
+any assignment was made.
+
+source: codex:jess-structure-assignment-framing
+
+2026-06-04T01:38:00Z - Made the Jess Structure page explain obscure project-map
+terms instead of expecting the user to know Guildhall internals. Added a
+Structure-local circled-question help affordance that opens a short modal and
+uses the existing tooltip behavior on hover/focus. The page now exposes one
+help icon each for `Structure`, `Work areas`, `Contracts`, `Project handoffs`,
+`Structural map review`, `Review status`, and the Git-root note. The Git-root
+card was renamed from `Ignored vendored Git roots` to `Ignored dependency
+folders`, with help copy explaining that `node_modules` was skipped so
+installed packages do not become fake work areas. A first browser pass caught a
+bad row-level help implementation that repeated `Tracked here` across every
+contract; that was removed and folded into the single `Contracts` explanation.
+
+Verification: Structure regression
+`pnpm vitest run src/runtime/__tests__/project-graph.test.ts
+src/runtime/__tests__/structural-map.test.ts
+src/web/surfaces/project/structure/__tests__/ProjectStructurePanel.svelte.test.ts
+--reporter=dot` passed with `41` tests. `pnpm typecheck`, `pnpm build`,
+`pnpm dev:install`, `guildhall stop && guildhall start`, and `git diff --check`
+passed. Live proof: `/api/stale-server` returned `stale:false`; the in-app
+browser at `/projects/jess/structure` showed `Ignored dependency folders` and
+`node_modules`, did not show `Ignored vendored Git roots`, and exposed exactly
+one help button for each of `Structure`, `Work areas`, `Contracts`,
+`Project handoffs`, `Structural map review`, `Review status`, and
+`Ignored dependency folders`, with zero repeated `Tracked here` help buttons.
+
+source: codex:jess-structure-help-affordances
+
+2026-06-04T01:49:00Z - Collapsed the Jess Structure page so it no longer
+renders the same package/work-area inventory three times. The old chart,
+`Work areas` section, standalone `Contracts` section, and legacy map domain
+list have been replaced by one `Project map` surface: a single selectable list
+of folders/work areas with summary counts, plus a details pane for the selected
+area. Contracts, contract review packets, capability-linking context, and
+contract actions now live in that detail pane instead of repeating a tiny
+variant of the same package list. The legacy review panel now keeps audit
+status, conflicts, and ignored dependency folders only; it does not list the
+domains again.
+
+Verification: Structure regression updated for the collapsed hierarchy and
+passed with the affected runtime graph tests:
+`pnpm vitest run src/runtime/__tests__/project-graph.test.ts
+src/runtime/__tests__/structural-map.test.ts
+src/web/surfaces/project/structure/__tests__/ProjectStructurePanel.svelte.test.ts
+--reporter=dot` (`41` tests). `pnpm typecheck`, `pnpm build`,
+`pnpm dev:install`, `guildhall stop && guildhall start`, and `git diff --check`
+passed. Live proof: `/api/stale-server` returned `stale:false`; the in-app
+browser at `/projects/jess/structure` showed `Project map`, `42 work areas`,
+`26 contracts`, selected-area details, package-contract detail content, and
+`Capability linking`; it had zero standalone `Work areas` headings, zero
+standalone `Contracts` headings, no `Structural domains` legacy region, and no
+`Ignored vendored Git roots` text.
+
+source: codex:jess-structure-collapsed-map
+
+2026-06-04T01:56:00Z - Restored owner-input multiple-choice answers to the
+task-card-style immediate action rows. Pressure-test, bounded-chat, and
+thread-dock choice prompts now render each answer as a full-width compact card
+button with the answer text on the left and a right-facing arrow on the right,
+instead of generic secondary button chips. The answer click handlers and busy
+disabled states are unchanged.
+
+Verification: Focused ThreadTab regression
+`pnpm vitest run src/web/surfaces/project/__tests__/ThreadTab.svelte.test.ts
+-t "pressure-test choices" --reporter=dot` passed. `pnpm typecheck`,
+`pnpm build`, `pnpm dev:install`, and `guildhall stop && guildhall start`
+passed. Live proof: `/api/stale-server` returned `stale:false`; the in-app
+browser opened Jess's pending answer thread and found `4`
+`.pressure-choice-card` buttons, `4` `.pressure-choice-arrow` affordances,
+grid layout on the first choice button, and the expected choices:
+`Infer the project's internal routing slices (coordinator domains)`,
+`Infer lever positions from project evidence`,
+`Bootstrap verification (try install + gates)`, and `Draft starter tasks`.
+
+source: codex:jess-thread-choice-card-arrows
+
+2026-06-04T02:03:00Z - Removed the selected-work-area mechanism from the
+Structure `Project map` and moved cross-project capability linking behind one
+modal action. Work areas now render as plain project-local rows, not clickable
+selected controls, and the page no longer shows `Selected work area` as an
+assignment gateway. `Link capability` is a top-level secondary action in the
+Project map card and opens a modal with the shared `Input` and `Select`
+primitives: search capabilities, choose a capability combobox, choose a
+provider-project combobox, then assign. The custom assignment-picker row/list
+UI was removed. Structure help icons now use a shared ghost rounded icon button
+and no longer wrap hover tooltip behavior; the explanation surface is the modal
+opened from click/focus.
+
+Verification: Structure regression covers the plain work-area list, absence of
+`Selected work area`, absence of direct assign-row buttons, modal search and
+combobox assignment flow, and the `/domain-responsibility` POST. Affected tests
+passed:
+`pnpm vitest run src/runtime/__tests__/project-graph.test.ts
+src/runtime/__tests__/structural-map.test.ts
+src/web/surfaces/project/structure/__tests__/ProjectStructurePanel.svelte.test.ts
+--reporter=dot` (`41` tests). `pnpm typecheck`, `pnpm build`,
+`pnpm dev:install`, `guildhall stop && guildhall start`, and
+`git diff --check` passed. Live proof: `/api/stale-server` returned
+`stale:false`; the in-app browser at `/projects/jess/structure` showed
+`Project map`, `42 work areas`, `26 contracts`, a top-level `Link capability`
+button, `0` work-area-row buttons, `42` plain `.work-area-row` nodes, no
+`Selected work area` text, no Structure tooltip wrapper nodes, and shared
+rounded ghost icon-button classes for the first Structure help buttons. The
+browser harness timed out on physical activation of the `Link capability`
+button, so modal internals are covered by the component regression rather than
+the live click proof.
+
+source: codex:jess-structure-modal-capability-linking
+
+2026-06-04T02:14:00Z - Fixed owner-input questions that are not actually
+mutually exclusive. The Jess meta-intake prompt `This is a meta-intake task —
+I need to:` lists setup phases that can all apply, so it should not render as
+immediate single-choice arrow actions. Bounded-chat sub-objectives and
+owner-input records now preserve `selectionMode`, task-question migration marks
+the legacy meta-intake setup-step list as `multiple`, and thread projection
+repairs already-persisted legacy sessions with that shape. Thread UI now keeps
+single-choice owner questions as immediate arrow rows, but renders
+multiple-choice owner questions as selectable checklist rows with a `Submit
+selected` button and copy that says `Select every item that applies`.
+
+Verification: Runtime regression covers owner-input `selectionMode: multiple`
+persisting into the linked bounded-chat session. ThreadTab regression covers
+multi-select rendering, no arrow affordances, disabled `Submit selected` before
+selection, and combined-answer submission after selecting multiple choices.
+Focused tests passed:
+`pnpm vitest run src/runtime/__tests__/owner-input.test.ts
+src/runtime/__tests__/thread.test.ts
+src/web/surfaces/project/__tests__/ThreadTab.svelte.test.ts -t
+"multiple|pressure-test choices|owner-input selection" --reporter=dot`.
+`pnpm vitest run src/runtime/__tests__/serve-meta-intake.test.ts -t
+"meta-intake" --reporter=dot`, `pnpm typecheck`, `pnpm build`,
+`pnpm dev:install`, `guildhall stop && guildhall start`, and
+`git diff --check` passed. Live proof: `/api/stale-server` returned
+`stale:false`; the in-app browser on the Jess thread showed the meta-intake
+prompt with `Select every item that applies`, `4` multi choice rows, `4`
+check affordances, `0` arrow affordances, `Submit selected`, and all four setup
+choices: routing slices, lever positions, bootstrap verification, and starter
+tasks.
+
+source: codex:jess-meta-intake-multiple-choice
+
+2026-06-04T02:43:00Z - Reworked the Jess Structure `Project map` IA so it is
+one plain local project map instead of a two-column framed card competing with
+its own controls. The map now renders as a normal section with a compact
+summary, explicit action row, and table-like folder rows. Contract surfaces are
+shown inline under their matching folder as plain metadata facts; raw
+contract-state labels such as `proposed`, `Owned here`, and reusable-work
+framing no longer appear in the map. Cross-project capability linking remains
+available only through the `Link capability` modal with search plus capability
+and provider-project comboboxes. The section itself is not a button/card
+interaction target; only the help buttons and explicit actions are interactive.
+
+Verification: Structure regression covers the non-frame-card Project map,
+absence of the old `.project-map-layout`, exact folder labels/paths, absence of
+raw `proposed` text, absence of `Selected work area` and row-level Assign
+controls, clickable help icons, contract facts, and the `Link capability`
+modal assignment flow. Focused tests passed:
+`pnpm vitest run
+src/web/surfaces/project/structure/__tests__/ProjectStructurePanel.svelte.test.ts
+--reporter=dot` (`6` tests). `pnpm typecheck`, `pnpm build`,
+`pnpm dev:install`, and `guildhall stop && guildhall start` passed. Live proof:
+`/api/stale-server` returned `stale:false`; the in-app browser at
+`/projects/jess/structure` showed `.project-map-section` as a `SECTION` with
+no `gh-frame-card` class, `0` `.project-map-layout` nodes, `0` visible
+`proposed` labels, `0` proposed status/chip nodes, `28` work-area rows,
+summary text `28 work areas 26 contracts 0 active handoffs No connected
+external projects`, and only five interactive descendants inside the map:
+Project map help, `Link capability`, `Scan for contracts`, `Declare contract`,
+and Contracts help. The `Link capability` modal opened in the live browser and
+exposed the search input plus `Capability` and `Provider project` comboboxes.
+
+source: codex:jess-project-map-ia-cleanup
+
+2026-06-04T02:52:00Z - Reworked the Jess structural-review Thread question so
+it no longer repeats raw setup transport text. The owner-review question now
+keeps the actual decision prompt once, replaces the duplicated
+`Reason: owner_review_required_before_routing_truth` / `Targets:` dump with a
+plain explanation, and renders the proposed map as an already-found checklist
+grouped by `Domains` and `Cross-cutting areas`. Display labels strip only the
+known `domain:` and `cross-cutting:` prefixes and preserve the remaining text
+as written; there is no title-case guessing or acronym rewriting.
+
+Verification: Focused Thread regression covers structural-review bounded chat
+with no raw reason id, no raw target prefixes, grouped `Domains` and
+`Cross-cutting areas`, and the already-found proposed-area count:
+`pnpm vitest run
+src/web/surfaces/project/__tests__/ThreadTab.svelte.test.ts -t
+"structural-review bounded chat" --reporter=dot`. `pnpm typecheck`,
+`pnpm build`, `pnpm dev:install`, `guildhall stop && guildhall start`, and
+`git diff --check` passed. Live proof: `/api/stale-server` returned
+`stale:false`; the in-app browser at the Jess structural-review thread had no
+`owner_review_required_before_routing_truth`, no `cross-cutting:` prefixes, no
+`domain:` prefixes, exactly one selected-card copy of the review prompt, one
+plain explanation, and one `Proposed structural map` block with
+`Already found 22 proposed areas`, `Domains`, `Cross-cutting areas`, and
+`22` check icons.
+
+source: codex:jess-structural-review-thread-summary
+
+2026-06-04T06:05:00Z - Clarified the action on the Jess structural-review
+Thread card. The already-found checklist now explains why it is shown:
+use the map if the areas look good enough, and reply only if something is
+missing, duplicated, or assigned to the wrong kind of area. The card provides a
+primary `Use this map` button that answers the bounded-chat review directly
+with `Use this structural map for routing.`, plus a secondary
+`Something looks wrong` action that moves the user toward the existing thread
+composer for corrections.
+
+Verification: Focused Thread regression now covers the visible action copy,
+the `Something looks wrong` and `Use this map` actions, and the exact bounded
+chat answer payload:
+`pnpm vitest run
+src/web/surfaces/project/__tests__/ThreadTab.svelte.test.ts -t
+"structural-review bounded chat" --reporter=dot`. `pnpm typecheck`,
+`pnpm build`, `pnpm dev:install`, `guildhall stop && guildhall start`, and
+`git diff --check` passed. Live proof: `/api/stale-server` returned
+`stale:false`; the in-app browser at the Jess structural-review thread had no
+raw review reason or raw target prefixes, `Already found 22 proposed areas`,
+one action explanation, one `Something looks wrong` button, and one
+`Use this map` button.
+
+source: codex:jess-structural-review-explicit-action
+
+2026-06-04T06:31:18Z - Shifted Jess ingestion value from visible taxonomy to
+task-start context. Added an implementation plan at
+`internal/plans/2026-06-03-project-intake-context-and-structure-simplification.md`
+and implemented a shared runtime adapter,
+`src/runtime/structural-task-context.ts`, that translates the accepted
+structural map into user-facing task routing context: likely area, related work
+area, likely checks, and plain reasons. `/api/project` now returns
+`taskRoutingContexts` keyed by task id so UI surfaces render the same context
+the runtime can hand to agents. Thread task-start disclosures now show
+`Starting context` only for confident matches, with a `Change this context`
+action that reuses the existing correction flow. Structure copy now frames the
+map as task-start maintenance, collapses review-boundary details behind
+disclosures, and no longer repeats `No contracts recorded` on every area.
+
+Verification: Added runtime coverage for matched, unmatched, and setup-task
+routing context, including a regression that setup/import tasks do not claim
+normal routing context. Added Thread UI coverage for matched routing context.
+Focused tests passed:
+`pnpm vitest run src/runtime/__tests__/structural-task-context.test.ts
+src/web/surfaces/project/__tests__/ThreadTab.svelte.test.ts
+src/web/surfaces/project/structure/__tests__/ProjectStructurePanel.svelte.test.ts
+--reporter=dot` (`105` tests). `pnpm typecheck`, `pnpm build`,
+`pnpm dev:install`, `guildhall stop && guildhall start`, and
+`git diff --check` passed. Live proof: after restart,
+`/api/project?projectId=jess` returned `2` task routing contexts and `0`
+matched contexts; `task-workspace-import` and `task-meta-intake` both returned
+`status: unavailable`, summary `Project setup tasks do not use structural
+routing context.`, and `0` checks. This fixed the first live proof, where
+`task-meta-intake` had incorrectly matched `Compat` and inherited `227` likely
+checks. In-app browser proof at `/projects/jess/structure` showed the new
+task-start copy, `28` work-area rows, `25` collapsed review-boundary
+disclosures, `0` visible `No contracts recorded` repetitions, and one
+`Link capability` action.
+
+source: codex:jess-intake-context-routing
+
+2026-06-04T15:31:56Z - Made a stronger Structure pass focused on reducing the
+remaining duplicated setup-review surface and fixing help affordances. Inline
+`SectionHeader` metadata now sits next to heading text instead of in a
+far-right grid column. Structure help buttons no longer open modals:
+`StructureHelpTip` renders a transparent circular question button that toggles
+an anchored `role="tooltip"` and closes on a second click or Escape. The
+legacy structural-map review card was collapsed into one `Setup audit`
+section, with review state/status and ignored dependency folders retained as
+audit details instead of a second structure map plus separate review-status
+card.
+
+Verification: Focused Structure tests now assert tooltip open/close behavior,
+absence of help dialogs, the new `Setup audit` affordance, and the absence of
+the old `Structural map review` / `Review status` headings:
+`pnpm vitest run
+src/web/surfaces/project/structure/__tests__/ProjectStructurePanel.svelte.test.ts
+--reporter=dot` (`6` tests). `pnpm typecheck`, `pnpm build`,
+`pnpm dev:install`, `guildhall stop && guildhall start`, and
+`git diff --check` passed. Live browser proof at `/projects/jess/structure`
+showed `0` dialogs, `6` structure help buttons, `0` visible tooltips before
+interaction, `Setup audit` present, old `Structural map review` and
+`Review status` headings absent, headings reduced to `Structure`,
+`Project map`, `Project handoffs`, `Setup audit`, and
+`Ignored dependency folders`, and the first help button positioned `4px` after
+the `Structure` heading instead of floating at the card edge. Browser-control
+click dispatch timed out in the extension, so live click proof is covered by
+the Svelte UI test rather than a second browser interaction.
+
+source: codex:jess-structure-tooltip-and-audit-collapse
+
+2026-06-04T15:48:00Z - Fixed Structure help tooltip dismissal semantics.
+The Structure page is not using an external standard tooltip library for these
+question-mark explanations. Guildhall has a local hover/focus `Tooltip`
+primitive, but Structure help uses a local click-toggle tooltip because the
+copy is explanatory. `StructureHelpTip` now registers a document click listener
+only while open and dismisses when the user clicks outside the help wrapper,
+while preserving click-to-toggle and Escape-to-close behavior.
+
+Verification: Focused Structure regression now clicks a help button, verifies
+`aria-expanded="true"` and `role="tooltip"`, clicks `document.body`, verifies
+the tooltip is removed and `aria-expanded="false"`, then verifies the same
+button still closes on a second direct click. Commands passed:
+`pnpm vitest run
+src/web/surfaces/project/structure/__tests__/ProjectStructurePanel.svelte.test.ts
+--reporter=dot` (`6` tests), `pnpm typecheck`, `pnpm build`,
+`pnpm dev:install`, `guildhall stop && guildhall start`, and
+`git diff --check`. Live DOM proof at `/projects/jess/structure` showed
+`6` help buttons, `0` dialogs, `0` tooltips before interaction, first help
+button `aria-expanded="false"`, and `Setup audit` present.
+
+source: codex:jess-structure-tooltip-outside-dismiss
+
+2026-06-04T16:00:15Z - Fixed the Structure `Link capability` picker so it no
+longer opens a native select full of repeated internal responsibility
+descriptions. The modal now frames linking as a rare cross-project ownership
+case, requires search before showing long generated assignment lists, caps the
+visible choices, labels options as concise `area - responsibility` pairs, and
+shows the selected assignment's meaning/current owner below the control instead
+of stuffing that explanation into every option label.
+
+Verification: Added a regression with 16 generated assignable responsibilities
+that asserts the assignment select is disabled until search, shows
+`Search to narrow 16 possible assignments before choosing one.`, and never
+renders the generic `What another project must make possible...` sentence as an
+option label. Commands passed:
+`pnpm vitest run
+src/web/surfaces/project/structure/__tests__/ProjectStructurePanel.svelte.test.ts
+--reporter=dot` (`7` tests), `pnpm typecheck`, `pnpm build`,
+`pnpm dev:install`, `guildhall stop && guildhall start`, and
+`git diff --check`. Live server proof at `/api/stale-server` returned
+`stale:false`. Live DOM proof at `/projects/jess/structure` showed the updated
+Jess Structure page with one `Link capability` action and no
+`What another project must make possible...` text in the visible page body.
+The in-app browser input channel timed out on click dispatch in both the
+existing and a fresh tab, so modal activation proof is covered by the focused
+Svelte interaction/regression test.
+
+source: codex:jess-structure-capability-picker-search-gate
+
+2026-06-04T16:03:44Z - Collapsed the Structure `Link capability` modal's
+duplicated `Find capability` + `Choose capability` flow into one capability
+search/selection control. The modal now has a single `Capability` search field;
+matching assignments render directly as compact result buttons, and selecting a
+result reveals the assignment explanation plus the provider-project select.
+This removes the fake two-step distinction between searching for and choosing
+the same thing.
+
+Verification: Focused Structure coverage now asserts the modal has no separate
+`Find capability` label, no `Area or contract` combobox, one `Capability`
+searchbox, hidden results before the search gate, and compact result buttons
+after typing. Commands passed:
+`pnpm vitest run
+src/web/surfaces/project/structure/__tests__/ProjectStructurePanel.svelte.test.ts
+--reporter=dot` (`7` tests), `pnpm typecheck`, `pnpm build`,
+`pnpm dev:install`, `guildhall stop && guildhall start`, and
+`git diff --check`. Live server proof at `/api/stale-server` returned
+`stale:false`.
+
+source: codex:jess-structure-capability-single-control
+
+2026-06-04T16:15:05Z - Adjusted the Structure capability picker to behave like
+a real combobox instead of a search-gated list. The `Capability` field now has
+an explicit dropdown button that opens the option list before typing; typing in
+the field opens and narrows the same list; Escape closes it; choosing a result
+closes the list and keeps the selected assignment preview/provider-project
+selection flow. The picker still caps long generated lists to the first 25
+matches, but it no longer requires search before showing available options.
+
+Verification: Focused Structure coverage now asserts the dropdown button is
+visible, opens matching capabilities without search, keeps the old repeated
+internal description out of result labels, and narrows through the same
+`Capability` search field. Commands passed:
+`pnpm vitest run
+src/web/surfaces/project/structure/__tests__/ProjectStructurePanel.svelte.test.ts
+--reporter=dot` (`7` tests), `pnpm typecheck`, `pnpm build`,
+`pnpm dev:install`, `guildhall stop && guildhall start`, and
+`git diff --check`. Live server proof at `/api/stale-server` returned
+`stale:false`.
+
+source: codex:jess-structure-capability-dropdown-button
+
+2026-06-04T16:18:52Z - Neutralized Guildhall foreground text tokens so muted,
+secondary, body, primary, and disabled text no longer use the old pink/lavender
+ramp. Updated the canonical UI token definitions and regenerated package CSS.
+Neutral/default eyebrows now inherit neutral muted/secondary text. Amber remains
+reserved for explicit warning/attention tone, such as the current `Do this next`
+owner-input strip, instead of appearing as an ordinary subtitle color.
+
+Verification: Added a visual contract test that pins neutral text token values
+and forbids the previous pink/lavender foreground hex values from returning.
+Commands passed:
+`pnpm vitest run src/web/lib/__tests__/Button.css-contract.test.ts
+--reporter=dot` (`10` tests), `pnpm typecheck`, `pnpm build`,
+`pnpm dev:install`, `guildhall stop && guildhall start`, and
+`git diff --check`. A repository scan over `packages/ui` and `src/web` found no
+old foreground hex values. Live server proof at `/api/stale-server` returned
+`stale:false`. Live browser proof on `/projects/jess/structure` showed
+neutral token values (`#f4f4f5`, `#e4e4e7`, `#c7c7cf`, `#a1a1aa`,
+`#73737d`) and computed Structure eyebrow/description/muted text colors of
+`rgb(199, 199, 207)` and `rgb(161, 161, 170)`.
+
+source: codex:neutral-foreground-text-tokens
+
+2026-06-04T16:27:24Z - Reworked the Structure `Link capability` dropdown so
+opening the capability list does not inject a large scroll region into the
+modal body. The picker now has one transparent caret button beside the search
+input; the caret rotates while open; the matching capabilities render in an
+anchored dropdown panel outside the field label; rows use selectable-list
+button treatment with hover, focus, and selected states. Moving the panel out
+of the labeled field also fixes the accessible names for capability options.
+
+Verification: Focused Structure coverage asserts the transparent dropdown
+button opens the panel before search, narrows results from the same field,
+closes on selection and outside click, and exposes row names as the actual
+capability labels. Commands passed:
+`pnpm vitest run
+src/web/surfaces/project/structure/__tests__/ProjectStructurePanel.svelte.test.ts
+--reporter=dot` (`7` tests), `pnpm typecheck`, `pnpm build`, and
+`git diff --check`.
+
+source: codex:jess-structure-capability-overlay-dropdown
+
+2026-06-04T17:26:28Z - Removed the Structure page's placeholder contract
+actions. `Scan for contracts` and `Declare contract` only opened explanatory
+modals that said a future runtime command should exist, so they looked like
+real work controls while giving the user nothing to do. The Project map now
+shows the `Link capability` action only when a real linkable capability exists;
+otherwise the first screen stays a readable project summary with row-level
+contract details.
+
+Verification: Focused Structure coverage now asserts the placeholder contract
+buttons are absent while the empty-contracts state remains visible. Commands
+passed:
+`pnpm vitest run
+src/web/surfaces/project/structure/__tests__/ProjectStructurePanel.svelte.test.ts
+--reporter=dot` (`7` tests), `pnpm typecheck`, `pnpm build`, and
+`git diff --check`.
+
+source: codex:jess-structure-remove-placeholder-contract-actions
+
+2026-06-04T17:29:25Z - Removed the `legacy areas` status pill from the Jess
+Structure setup-audit panel. The count described old structural-map review
+records by storage origin, which was not meaningful to a project owner and
+duplicated the current Project map. The setup audit now keeps only the review
+state pill and describes itself as setup review evidence for history and
+corrections.
+
+Verification: Focused Structure coverage now asserts `legacy area(s)` is not
+rendered on the page. Commands passed:
+`pnpm vitest run
+src/web/surfaces/project/structure/__tests__/ProjectStructurePanel.svelte.test.ts
+--reporter=dot` (`7` tests), `pnpm typecheck`, `pnpm build`, and
+`git diff --check`.
+
+source: codex:jess-structure-remove-legacy-area-copy
+
+2026-06-04T17:34:03Z - Fixed Structure overlay stacking by adding a shared
+Svelte `portal` action and moving overlays to top-level DOM ownership. The
+base `Modal` now portals its rendered layer to `document.body`, and the
+Structure `Link capability` dropdown is no longer an absolutely positioned
+child of the modal body. It now portals to `document.body`, uses viewport-fixed
+coordinates anchored to the capability field, listens for resize/scroll
+repositioning, and treats both the field and portaled panel as inside clicks.
+This prevents the dropdown from being clipped or covered by the modal footer.
+
+Verification: Focused Structure coverage now asserts the capability dropdown
+panel is parented by `document.body`, opens before search, narrows from the
+same field, and closes on outside click. Commands passed:
+`pnpm vitest run
+src/web/surfaces/project/structure/__tests__/ProjectStructurePanel.svelte.test.ts
+--reporter=dot` (`7` tests),
+`pnpm vitest run src/web/surfaces/__tests__/TaskDrawer.svelte.test.ts
+src/web/surfaces/project/structure/__tests__/ProjectStructurePanel.svelte.test.ts
+--reporter=dot` (`51` tests), `pnpm typecheck`, `pnpm build`, and
+`git diff --check`. After `pnpm dev:install && guildhall stop && guildhall
+start`, `/api/stale-server` returned `stale:false`. A live Chromium check on
+`/projects/jess/structure` opened the `Link capability` modal and dropdown,
+then confirmed the dropdown panel parent was `document.body`, `position: fixed`,
+`z-index: 155`, above the modal's `z-index: 150`, with the hit-tested top
+element in the overlapped region being a capability row rather than the modal
+footer.
+
+source: codex:jess-structure-portal-overlays
+
+2026-06-04T17:39:35Z - Removed the remaining current-code framing that treated
+pre-release setup map state as a `legacy` concept. The Structure-side audit
+component is now named `SetupAuditPanel` instead of
+`StructuralMapReviewPanel`, its conflict tooltip refers to outdated setup
+findings rather than stale/legacy decisions, and the Structure regression test
+now names the old repeated setup-review UI as setup-review cards rather than
+legacy cards. Negative assertions remain only to prevent `legacy area(s)` or
+`legacy structural map` from returning to the page.
+
+Verification: Current Structure source now contains no `legacy structural`,
+`legacy area`, `legacy cards`, `old structural`, or `old review` wording except
+the negative regression assertions. Commands passed:
+`pnpm vitest run
+src/web/surfaces/project/structure/__tests__/ProjectStructurePanel.svelte.test.ts
+--reporter=dot` (`7` tests), `pnpm typecheck`, `pnpm build`, and
+`git diff --check`.
+
+source: codex:jess-structure-remove-pre-release-legacy-framing

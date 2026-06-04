@@ -428,8 +428,8 @@ describe('TaskDrawer', () => {
       onClose: vi.fn(),
     })
 
-    await screen.findByRole('button', { name: /start only this work item/i })
-    await userEvent.click(screen.getByRole('button', { name: /start only this work item/i }))
+    await screen.findByRole('button', { name: /resume only this work item/i })
+    await userEvent.click(screen.getByRole('button', { name: /resume only this work item/i }))
 
     expect(fetchMock.mock.calls.some(([input]) =>
       String(input).includes('/api/project/task/task-link-editor/start?projectId=looma-knit'),
@@ -668,7 +668,7 @@ describe('TaskDrawer', () => {
       onClose: vi.fn(),
     })
 
-    await screen.findByRole('heading', { name: 'Shaping paused' })
+    await screen.findByRole('heading', { name: 'Paused' })
     expect(screen.getByText(/Guildhall stopped before writing the missing acceptance criteria/i)).toBeInTheDocument()
     expect(screen.getByRole('button', { name: /try shaping brief again/i })).toBeInTheDocument()
   })
@@ -732,7 +732,7 @@ describe('TaskDrawer', () => {
     await screen.findByText('Work hierarchy')
     expect(screen.getAllByText('Work happens in the nested work below.').length).toBeGreaterThan(0)
     expect(document.body.textContent).not.toMatch(/parent task/i)
-    expect(screen.queryByRole('button', { name: 'Start only this work item' })).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Resume only this work item' })).not.toBeInTheDocument()
     expect(screen.queryByText(/This task is the parent/i)).not.toBeInTheDocument()
     expect(screen.getByText('Nested work')).toBeInTheDocument()
     expect(screen.getByRole('link', { name: 'Draft the FLL overhead charge policy' })).toHaveAttribute(
@@ -780,7 +780,7 @@ describe('TaskDrawer', () => {
     })
 
     await screen.findByText('Knit: add link editor controls')
-    expect(screen.queryByRole('button', { name: 'Start only this work item' })).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Resume only this work item' })).not.toBeInTheDocument()
     expect(screen.getByText('Choose a recovery path for the blocked task')).toBeInTheDocument()
   })
 
@@ -1189,7 +1189,7 @@ describe('TaskDrawer', () => {
     })
 
     await screen.findByText('Knit: add link editor controls')
-    await userEvent.click(screen.getByRole('button', { name: /start only this work item/i }))
+    await userEvent.click(screen.getByRole('button', { name: /resume only this work item/i }))
     await userEvent.click(screen.getByText('More task actions'))
     expect(screen.getByRole('button', { name: /reframe task/i })).toBeTruthy()
     expect(screen.getByRole('button', { name: /pause and keep in queue/i })).toBeTruthy()

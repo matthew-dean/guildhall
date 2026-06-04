@@ -34,8 +34,16 @@ function detail(tasks: Task[]): ProjectDetail {
     name: 'Looma + Knit',
     path: '/repo/looma-knit',
     run: { status: 'stopped', mode: 'continuous' },
+    availability: { status: 'active', pausedAt: null, resumedAt: null },
     tasks,
     config: { coordinators: [{ id: 'knit', domain: 'knit' }] },
+  } as ProjectDetail
+}
+
+function pausedDetail(tasks: Task[]): ProjectDetail {
+  return {
+    ...detail(tasks),
+    availability: { status: 'paused', pausedAt: '2026-05-19T10:00:00.000Z', resumedAt: null },
   } as ProjectDetail
 }
 
@@ -100,7 +108,7 @@ describe('WorkTab', () => {
       },
     })
 
-    await screen.findByText('2 shown · 3 total')
+    await screen.findByText('1 shown · 3 total')
     await userEvent.selectOptions(screen.getByRole('combobox', { name: /^show$/i }), 'all')
     await userEvent.click(screen.getByRole('button', { name: /^task$/i }))
     expect(screen.getAllByRole('button', { name: /open task/i })[0]?.textContent).toContain('Alpha task')
@@ -211,14 +219,14 @@ describe('WorkTab', () => {
           task({
             id: 'feature-root',
             title: 'Interface design system',
-            status: 'ready',
+            status: 'in_progress',
             description: 'Build the interface design system.',
             hierarchy: { childIds: ['task-button'], order: 0 },
           }),
           task({
             id: 'task-button',
             title: 'Button primitive',
-            status: 'ready',
+            status: 'in_progress',
             description: 'Ship the reusable button primitive.',
             hierarchy: { parentId: 'feature-root', childIds: [], order: 0 },
           }),
@@ -252,14 +260,14 @@ describe('WorkTab', () => {
           task({
             id: 'feature-root',
             title: 'Interface design system',
-            status: 'ready',
+            status: 'in_progress',
             description: 'Build the interface design system.',
             hierarchy: { childIds: ['task-button'], order: 0 },
           }),
           task({
             id: 'task-button',
             title: 'Button primitive',
-            status: 'ready',
+            status: 'in_progress',
             description: 'Ship the reusable button primitive.',
             hierarchy: { parentId: 'feature-root', childIds: [], order: 0 },
           }),
@@ -342,6 +350,7 @@ describe('WorkTab', () => {
     })
 
     const columns = await screen.findByLabelText('Work hierarchy columns')
+    await userEvent.selectOptions(screen.getByRole('combobox', { name: /^show$/i }), 'planning')
     expect(within(columns).getByText('Review breakdown')).toBeTruthy()
     expect(within(columns).queryByText('Ready')).toBeNull()
 
@@ -357,7 +366,20 @@ describe('WorkTab', () => {
     render(WorkTab, {
       props: {
         detail: detail([
-          task({ id: 'task-ready', title: 'Ready feature work', status: 'ready' }),
+          task({
+            id: 'task-ready',
+            title: 'Ready feature work',
+            status: 'ready',
+            spec: '## Summary\n\nBuild the ready feature work.',
+            productBrief: {
+              userJob: 'Use the ready feature.',
+              whyItMattersNow: 'It is next in the execution queue.',
+              successMetric: 'Ready feature works.',
+              nonGoals: ['Do not change adjacent features.'],
+              approvedAt: '2026-05-19T10:00:00.000Z',
+            },
+            acceptanceCriteria: [{ description: 'Ready feature works.' }],
+          }),
           task({ id: 'task-done', title: 'Completed feature proof', status: 'done' }),
           task({ id: 'task-shelved', title: 'Shelved idea', status: 'shelved' }),
         ]),
@@ -405,6 +427,8 @@ describe('WorkTab', () => {
       },
     })
 
+    await userEvent.selectOptions(screen.getByRole('combobox', { name: /^show$/i }), 'open')
+
     await screen.findByText('Pantry Pulse app spec')
     expect(screen.getAllByText('1 nested work item').length).toBeGreaterThanOrEqual(1)
     expect(screen.getByText('Pantry Pulse app spec / Inventory tracking feature')).toBeTruthy()
@@ -437,20 +461,63 @@ describe('WorkTab', () => {
       },
     })
 
-    expect(await screen.findByText('1 Guildhall working')).toBeTruthy()
-    expect(screen.getByText('1 being shaped')).toBeTruthy()
-    expect(screen.getByText('1 ready to start')).toBeTruthy()
-    expect(screen.getByText('1 import draft')).toBeTruthy()
+    expect(await screen.findByText('1 Working')).toBeTruthy()
+    expect(screen.getByText('1 Ready')).toBeTruthy()
+    expect(screen.queryByText('1 being shaped')).toBeNull()
+    expect(screen.queryByText('1 import draft')).toBeNull()
     expect(document.body.textContent).not.toContain('agent-active')
     expect(document.body.textContent).not.toContain('ready for worker')
     expect(document.body.textContent).not.toContain('2 active')
     expect(document.body.textContent).not.toContain('1 imported drafts')
+
+    await userEvent.selectOptions(screen.getByRole('combobox', { name: /^show$/i }), 'planning')
+
+    expect(screen.getByText('Queued')).toBeTruthy()
+    expect(screen.getByText('1 import draft')).toBeTruthy()
+  })
+
+  it('defaults to queued execution work and shows shaping/spec work only when Planning is selected', async () => {
+    render(WorkTab, {
+      props: {
+        detail: detail([
+          task({
+            id: 'task-import-1y7kmp6',
+            title: 'Block menu / block side menu',
+            status: 'exploring',
+            spec: '## Summary\n\nBuild the block menu.',
+            acceptanceCriteria: [{ description: 'The block menu can be opened.' }],
+            openQuestions: [],
+          }),
+          task({
+            id: 'task-import-1aessks',
+            title: 'Floating toolbar',
+            status: 'exploring',
+          }),
+        ]),
+      },
+    })
+
+    expect(await screen.findByText('0 shown · 2 total')).toBeTruthy()
+    expect(screen.getByText('No queued work yet.')).toBeTruthy()
+    expect(screen.getByText(/Use Planning to inspect intake and spec work/i)).toBeTruthy()
+    expect(screen.getByRole('button', { name: /show planning/i })).toBeTruthy()
+    expect(screen.getByRole('option', { name: /^planning$/i })).toBeTruthy()
+    expect(screen.queryByText('Block menu / block side menu')).toBeNull()
+    expect(screen.queryByText('Spec revision queued')).toBeNull()
+    expect(screen.queryByText('Guildhall shaping')).toBeNull()
+    expect(document.body.textContent).not.toContain('Intake')
+
+    await userEvent.selectOptions(screen.getByRole('combobox', { name: /^show$/i }), 'planning')
+
+    expect(await screen.findByText('2 shown · 2 total')).toBeTruthy()
+    expect(screen.getByText('Block menu / block side menu')).toBeTruthy()
+    expect(screen.getAllByText('Paused').length).toBeGreaterThanOrEqual(2)
   })
 
   it('labels inactive in-progress work as paused when no project run is active', async () => {
     render(WorkTab, {
       props: {
-        detail: detail([
+        detail: pausedDetail([
           task({ id: 'task-build', title: 'Build contracts', status: 'in_progress' }),
         ]),
       },
@@ -465,14 +532,13 @@ describe('WorkTab', () => {
   it('keeps stopped gate checks labeled as gate work instead of paused work', async () => {
     render(WorkTab, {
       props: {
-        detail: detail([
+        detail: pausedDetail([
           task({ id: 'task-gates', title: 'Implement minimal harness orchestration skeleton', status: 'gate_check' }),
         ]),
       },
     })
 
-    expect(await screen.findByText('1 gates waiting')).toBeTruthy()
-    expect(screen.getByText('Gates waiting')).toBeTruthy()
+    expect(await screen.findByText('Gates')).toBeTruthy()
     expect(screen.queryByText('Paused')).toBeNull()
   })
 
@@ -515,8 +581,12 @@ describe('WorkTab', () => {
       },
     })
 
-    expect(await screen.findByText('1 ready to start')).toBeTruthy()
-    expect(screen.getByText('2 need brief cleanup')).toBeTruthy()
+    expect(await screen.findByText('1 Ready')).toBeTruthy()
+    expect(screen.queryByText('2 Needs brief')).toBeNull()
+
+    await userEvent.selectOptions(screen.getByRole('combobox', { name: /^show$/i }), 'planning')
+
+    expect(screen.getByText('2 Needs brief')).toBeTruthy()
     expect(screen.queryByText('3 ready for worker')).toBeNull()
   })
 
@@ -553,6 +623,7 @@ describe('WorkTab', () => {
       },
     })
 
+    await userEvent.selectOptions(screen.getByRole('combobox', { name: /^show$/i }), 'planning')
     await screen.findByText('Imported draft queue')
     expect(screen.getByText(/1 more drafts are queued behind it/)).toBeTruthy()
     await userEvent.click(screen.getByRole('button', { name: /draft task brief/i }))

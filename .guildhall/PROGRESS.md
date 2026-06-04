@@ -302,3 +302,8 @@ source: worker:flow-audit-task-drawer-integrity
 Merged the remaining 2026-06-03 flow-audit worktree fixes into the main worktree: shared project action model and cached service/project payload reuse, bounded-chat focus routing, task drawer integrity checks, and 0.10 project graph/structure clarity. Verification passed after merge: focused Vitest suites for action model, DoThisNext, ProjectOverviewTab, ProjectView, project-summary, TaskDrawer, ReleaseTab, ProjectStructurePanel, SettingsTab structure, Thread runtime, and ThreadTab; `pnpm typecheck`; `git diff --check`; `pnpm build`; `pnpm dev:install`; service restart; and `/api/stale-server` returned `stale:false` on pid `6339`.
 
 source: codex:flow-audit-merged-integration
+## 2026-06-04T17:39:03.509Z MCP evidence for artifact:flow-audit
+
+Tightened ProjectView rail preview behavior so hover expansion no longer shifts the item under the pointer: nav item icons now keep the same left anchor across collapsed/preview/expanded rail states, collapsed preview keeps the rail header compact, and active rail subnav stays hidden during preview so rows below do not move. Added a focused ProjectView regression assertion that preview does not mount .rail-subs. Verification: git diff --check passed for ProjectView and its test; focused Vitest collection is currently blocked by an unrelated deleted src/web/surfaces/project/structure/StructuralMapReviewPanel.svelte import in the dirty worktree.
+
+source: codex:rail-preview-stability

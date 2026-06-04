@@ -7,6 +7,7 @@ const here = dirname(fileURLToPath(import.meta.url))
 const buttonSource = readFileSync(resolve(here, '../Button.svelte'), 'utf8')
 const chipSource = readFileSync(resolve(here, '../Chip.svelte'), 'utf8')
 const eyebrowSource = readFileSync(resolve(here, '../Eyebrow.svelte'), 'utf8')
+const tokenDefinitionsSource = readFileSync(resolve(here, '../../../../packages/ui/src/token-definitions.js'), 'utf8')
 
 describe('Button visual contract', () => {
   it('keeps small and medium buttons on the same font-size token', () => {
@@ -37,9 +38,10 @@ describe('Chip visual contract', () => {
   })
 
   it('documents canonical chip tones separately from action buttons', () => {
-    expect(chipSource).toContain('ok/running: healthy, available, queued, or Guildhall-owned continuation')
+    expect(chipSource).toContain('ok: healthy, available, accepted, or completed state')
+    expect(chipSource).toContain('running: Guildhall/agent-owned active, queued, or current-step state')
     expect(chipSource).toContain('warn: human decision or risk state')
-    expect(chipSource).toContain('accent: current-step emphasis')
+    expect(chipSource).toContain('accent: human/primary emphasis')
   })
 
   it('gives every chip a readable border instead of relying on fill contrast alone', () => {
@@ -77,6 +79,7 @@ describe('Eyebrow visual contract', () => {
     const baseBlock = eyebrowSource.match(/\.eyebrow\s*\{([\s\S]*?)\n\s*\}/)?.[1] ?? ''
 
     expect(eyebrowSource).toContain("type Tone = 'neutral' | 'warn' | 'accent'")
+    expect(baseBlock).toContain('color: var(--text-muted)')
     expect(baseBlock).toContain('font-size: var(--fs-0)')
     expect(baseBlock).toContain('font-weight: 800')
     expect(baseBlock).toContain('line-height: 1.25')
@@ -88,5 +91,17 @@ describe('Eyebrow visual contract', () => {
     const warnBlock = eyebrowSource.match(/\.tone-warn\s*\{([\s\S]*?)\n\s*\}/)?.[1] ?? ''
 
     expect(warnBlock).toContain('color: var(--warn)')
+  })
+})
+
+describe('Text token visual contract', () => {
+  it('keeps foreground text neutral instead of pink or lavender', () => {
+    expect(tokenDefinitionsSource).toContain("color.text.primary', cssVariable: '--gh-color-text-primary', value: { dark: '#f4f4f5', light: '#242428' }")
+    expect(tokenDefinitionsSource).toContain("color.text.body', cssVariable: '--gh-color-text-body', value: { dark: '#e4e4e7', light: '#3f3f46' }")
+    expect(tokenDefinitionsSource).toContain("color.text.secondary', cssVariable: '--gh-color-text-secondary', value: { dark: '#c7c7cf', light: '#5f5f67' }")
+    expect(tokenDefinitionsSource).toContain("color.text.muted', cssVariable: '--gh-color-text-muted', value: { dark: '#a1a1aa', light: '#71717a' }")
+    expect(tokenDefinitionsSource).toContain("color.text.disabled', cssVariable: '--gh-color-text-disabled', value: { dark: '#73737d', light: '#9a9aa2' }")
+
+    expect(tokenDefinitionsSource).not.toMatch(/#(?:f3edf6|ded6e6|c7b9d1|a395ae|7d7286|261d2d|3d3346|5f526c|7a6f84|9a8fa4)\b/i)
   })
 })

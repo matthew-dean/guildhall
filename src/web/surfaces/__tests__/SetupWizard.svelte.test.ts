@@ -180,6 +180,43 @@ describe('SetupWizard', () => {
     })
   })
 
+  it('shows setup completion instead of launch recovery after meta-intake is approved', async () => {
+    installBrowserFakes('/projects/font-improvement/setup?step=3')
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input)
+      if (url.startsWith('/api/setup/defaults')) {
+        return json({ suggestedName: 'Font Improvement', suggestedId: 'font-improvement' })
+      }
+      if (url.startsWith('/api/setup/status')) {
+        return json({
+          initialized: true,
+          providerConfigured: true,
+          name: 'Font Improvement',
+          id: 'font-improvement',
+          path: '/repo/font-improvement',
+        })
+      }
+      if (url.startsWith('/api/project/meta-intake/draft')) {
+        return json({ status: 'approved', taskExists: true, taskStatus: 'done' })
+      }
+      if (url.startsWith('/api/project')) {
+        return json({
+          run: { status: 'stopped', mode: 'continuous' },
+          tasks: [{ id: 'task-meta-intake', status: 'done', updatedAt: '2026-05-19T15:00:00.000Z', spec: 'draft' }],
+        })
+      }
+      return json({})
+    })
+    vi.stubGlobal('fetch', fetchMock)
+
+    render(SetupWizard, { projectId: 'font-improvement' })
+
+    await screen.findByText('Setup is complete')
+    expect(screen.queryByText('Setup was interrupted')).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: /start meta-intake/i })).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: /finish from repo scan/i })).not.toBeInTheDocument()
+  })
+
   it('saves provider configuration globally while preserving project-scoped setup navigation', async () => {
     installBrowserFakes('/projects/font-improvement/setup?step=2')
     const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
@@ -237,7 +274,7 @@ describe('SetupWizard', () => {
     expect(window.location.search).toBe('?step=3')
   })
 
-  it('shows stopped meta-intake activity and resumes the coordinator in place', async () => {
+  it('finishes stopped meta-intake from the saved repo scan when no draft was saved', async () => {
     installBrowserFakes('/projects/font-improvement/setup?step=3')
     const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
       const url = String(input)
@@ -257,10 +294,13 @@ describe('SetupWizard', () => {
         expect(url).toContain('projectId=font-improvement')
         return json({ status: 'in-progress', taskExists: true, taskStatus: 'exploring' })
       }
-      if (url.startsWith('/api/project/start')) {
+      if (url.startsWith('/api/project/meta-intake/synthesize')) {
         expect(url).toContain('projectId=font-improvement')
         expect(init?.method).toBe('POST')
-        return json({ ok: true })
+        return json({
+          ok: true,
+          drafts: [{ id: 'core', domain: 'core', name: 'Core', path: 'packages/core' }],
+        })
       }
       if (url.startsWith('/api/project')) {
         expect(url).toContain('projectId=font-improvement')
@@ -282,14 +322,86 @@ describe('SetupWizard', () => {
 
     render(SetupWizard, { projectId: 'font-improvement' })
     await screen.findByText('Meta-intake agent is working')
-    await screen.findByText('Coordinator paused')
+    await screen.findByText('Setup was interrupted')
 
-    await userEvent.click(screen.getByRole('button', { name: /resume/i }))
-    expect(await screen.findByText('Coordinator restarted. Watching for the next setup update.')).toBeInTheDocument()
+    await userEvent.click(screen.getByRole('button', { name: /finish from repo scan/i }))
+    expect(await screen.findByText('Guildhall inferred 1 repo slice')).toBeInTheDocument()
 
     await waitFor(() => {
-      expect(fetchMock.mock.calls.some(([input]) => String(input).startsWith('/api/project/start'))).toBe(true)
+      expect(fetchMock.mock.calls.some(([input]) => String(input).startsWith('/api/project/meta-intake/synthesize'))).toBe(true)
     })
+  })
+
+  it('synthesizes a setup draft from the saved repo scan before rerunning interrupted meta-intake', async () => {
+    installBrowserFakes('/projects/font-improvement/setup?step=3')
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input)
+      if (url.startsWith('/api/setup/defaults')) {
+        return json({ suggestedName: 'Font Improvement', suggestedId: 'font-improvement' })
+      }
+      if (url.startsWith('/api/setup/status')) {
+        return json({
+          initialized: true,
+          providerConfigured: true,
+          name: 'Font Improvement',
+          id: 'font-improvement',
+          path: '/repo/font-improvement',
+        })
+      }
+      if (url.startsWith('/api/project/meta-intake/draft')) {
+        expect(url).toContain('projectId=font-improvement')
+        return json({
+          status: 'in-progress',
+          taskExists: true,
+          taskStatus: 'blocked',
+          blockReason: 'Spec agent kept researching after Guildhall asked for durable progress.',
+        })
+      }
+      if (url.startsWith('/api/project/meta-intake/synthesize')) {
+        expect(url).toContain('projectId=font-improvement')
+        expect(init?.method).toBe('POST')
+        return json({
+          ok: true,
+          drafts: [
+            { id: 'core', domain: 'core', name: 'Core', path: 'packages/core' },
+          ],
+        })
+      }
+      if (url.startsWith('/api/project/start')) {
+        expect(url).toContain('projectId=font-improvement')
+        expect(init?.method).toBe('POST')
+        return json({ ok: true })
+      }
+      if (url.startsWith('/api/project')) {
+        expect(url).toContain('projectId=font-improvement')
+        return json({
+          run: { status: 'stopped', mode: 'continuous' },
+          tasks: [
+            {
+              id: 'task-meta-intake',
+              status: 'blocked',
+              updatedAt: '2026-05-19T15:00:00.000Z',
+              spec: '',
+              blockReason: 'Spec agent kept researching after Guildhall asked for durable progress.',
+            },
+          ],
+        })
+      }
+      return json({})
+    })
+    vi.stubGlobal('fetch', fetchMock)
+
+    render(SetupWizard, { projectId: 'font-improvement' })
+    await screen.findByText('Setup was interrupted')
+    expect(screen.getByText(/Use the saved repo scan to finish setup/)).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: /open recovery/i })).not.toBeInTheDocument()
+
+    await userEvent.click(screen.getByRole('button', { name: /finish from repo scan/i }))
+
+    await waitFor(() => {
+      expect(fetchMock.mock.calls.some(([input]) => String(input).startsWith('/api/project/meta-intake/synthesize'))).toBe(true)
+    })
+    expect(await screen.findByText('Guildhall inferred 1 repo slice')).toBeInTheDocument()
   })
 
   it('validates identity before mutating setup state', async () => {
@@ -357,6 +469,44 @@ describe('SetupWizard', () => {
     await waitFor(() => {
       expect(window.alert).toHaveBeenCalledWith('Save failed: provider rejected key')
     })
+    expect(window.location.search).toBe('?step=2')
+  })
+
+  it('shows a retryable provider save error when the service refresh drops the request', async () => {
+    installBrowserFakes('/projects/font-improvement/setup?step=2')
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input)
+      if (url.startsWith('/api/setup/defaults')) {
+        return json({ suggestedName: 'Font Improvement', suggestedId: 'font-improvement' })
+      }
+      if (url.startsWith('/api/setup/status')) {
+        return json({
+          initialized: true,
+          providerConfigured: false,
+          name: 'Font Improvement',
+          id: 'font-improvement',
+          path: '/repo/font-improvement',
+        })
+      }
+      if (url.startsWith('/api/setup/providers/config')) {
+        throw new TypeError('fetch failed')
+      }
+      if (url.startsWith('/api/setup/providers')) {
+        return json({
+          preferredProvider: 'codex',
+          providers: { codex: { label: 'Codex', detail: 'Local CLI session', detected: true } },
+        })
+      }
+      return json({})
+    })
+    vi.stubGlobal('fetch', fetchMock)
+
+    render(SetupWizard, { projectId: 'font-improvement' })
+    await screen.findByText('How should agents call an LLM?')
+    await userEvent.click(screen.getByRole('button', { name: /save and continue/i }))
+
+    expect(await screen.findByRole('alert')).toHaveTextContent(/Could not save provider settings/)
+    expect(screen.getByText(/refreshing or restarting/)).toBeInTheDocument()
     expect(window.location.search).toBe('?step=2')
   })
 

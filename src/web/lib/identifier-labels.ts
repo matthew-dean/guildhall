@@ -26,13 +26,13 @@ const DOMAIN_LABELS: Record<string, IdentifierLabel> = {
 
 const STATUS_LABELS: Record<string, IdentifierLabel> = {
   proposed: { label: 'Backlog', tone: 'neutral' },
-  import_draft: { label: 'Needs task brief', tone: 'accent' },
-  exploring: { label: 'Intake', tone: 'accent' },
+  import_draft: { label: 'Needs brief', tone: 'accent' },
+  exploring: { label: 'Queued', tone: 'accent' },
   spec_review: { label: 'Awaiting approval', tone: 'warn' },
   parent: { label: 'Containing work', tone: 'neutral' },
   pending: { label: 'Ready', tone: 'neutral' },
   ready: { label: 'Ready', tone: 'neutral' },
-  in_progress: { label: 'In progress', tone: 'accent' },
+  in_progress: { label: 'Working', tone: 'accent' },
   review: { label: 'In review', tone: 'accent' },
   gate_check: { label: 'Checking gates', tone: 'accent' },
   pending_pr: { label: 'Pending PR', tone: 'warn' },

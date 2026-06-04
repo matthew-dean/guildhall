@@ -663,3 +663,14 @@ export type {
   LeverInferences,
   MergeLeverInferencesResult,
 } from './meta-intake.js'
+export {
+  summarizeStructuralTaskContext,
+  summarizeStructuralTaskContexts,
+  unavailableStructuralTaskContext,
+} from './structural-task-context.js'
+export type {
+  StructuralTaskContext,
+  StructuralTaskContextCheck,
+  StructuralTaskContextRef,
+  StructuralTaskContextTask,
+} from './structural-task-context.js'

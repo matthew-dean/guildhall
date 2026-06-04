@@ -155,7 +155,7 @@ describe('summarizeProjects', () => {
           message: 'Restructure project service shell',
         },
         actionLabel: 'Open project',
-        runActionLabel: 'Stop',
+        runActionLabel: 'Pause',
         canOpen: true,
         canStart: false,
         canStop: true,
@@ -490,8 +490,8 @@ describe('summarizeProjects', () => {
     }
 
     expect(summarizeProjects(service)[0]).toMatchObject({
-      statusLabel: 'Needs task briefs',
-      stageLabel: 'Needs task briefs',
+      statusLabel: 'Needs brief',
+      stageLabel: 'Needs brief',
       activityLabel: '75 imported drafts need task briefs.',
       maturityLabel: 'Mixed',
       maturityDescription: 'The project has a mix of completed, queued, and planning work; inspect details for the next meaningful step.',
@@ -499,7 +499,7 @@ describe('summarizeProjects', () => {
       ticker: {
         tone: 'warn',
         pulse: false,
-        label: 'Needs task briefs',
+        label: 'Needs brief',
         message: '75 imported drafts waiting',
       },
       canStart: false,

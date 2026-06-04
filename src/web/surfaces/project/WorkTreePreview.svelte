@@ -2,10 +2,11 @@
   import Button from '../../lib/Button.svelte'
   import Chip from '../../lib/Chip.svelte'
   import Icon from '../../lib/Icon.svelte'
-  import { friendlyStatus } from '../../lib/display.js'
   import { friendlyTaskId } from '../../lib/identifier-labels.js'
   import { nav, path } from '../../lib/nav.svelte.js'
   import { currentTaskHref } from '../../lib/project-routes.js'
+  import { isCompleteForWorkerHandoff, needsWorkerHandoffSpecCleanup } from '../../lib/task-state.js'
+  import { taskStagePresentation, type TaskPresentationTone } from '../../lib/task-presentation.js'
   import { buildWorkHierarchy } from '../../lib/work-hierarchy.js'
   import type { Task } from '../../lib/types.js'
 
@@ -14,8 +15,9 @@
     filter?: Filter
   }
 
-  type Filter = 'open' | 'all' | 'runnable' | 'blocked' | 'needs-you'
+  type Filter = 'queued' | 'planning' | 'open' | 'all' | 'blocked' | 'needs-you'
   type PacketSelection = { kind: 'task'; taskId: string }
+  type ChipTone = 'accent' | 'ok' | 'warn' | 'danger' | 'neutral' | 'running'
 
   interface ColumnItem {
     kind: 'task'
@@ -25,7 +27,7 @@
     detail: string
     status?: string
     statusLabel: string
-    statusTone: ReturnType<typeof statusTone>
+    statusTone: ChipTone
     childCount: number
     rollup: ReturnType<typeof rollupFor>
   }
@@ -166,15 +168,27 @@
   }
 
   function isActionableTask(task: Task): boolean {
-    return ['ready', 'blocked', 'spec_review', 'review', 'gate_check', 'in_progress'].includes(task.status ?? '')
+    return isQueuedWorkTask(task) || task.status === 'blocked'
+  }
+
+  function isQueuedWorkTask(task: Task): boolean {
+    if (task.status === 'ready') return isCompleteForWorkerHandoff(task)
+    return ['review', 'gate_check', 'in_progress'].includes(task.status ?? '')
+  }
+
+  function isPlanningTask(task: Task): boolean {
+    if (task.status === 'ready') return needsWorkerHandoffSpecCleanup(task)
+    return ['proposed', 'import_draft', 'exploring', 'spec_review'].includes(task.status ?? '')
   }
 
   function matchesFilter(task: Task): boolean {
     if (filter === 'all') return true
+    if (filter === 'queued') return isQueuedWorkTask(task)
+    if (filter === 'planning') return isPlanningTask(task)
     if (filter === 'open') return !['done', 'pending_pr', 'shelved'].includes(task.status ?? '')
     if (filter === 'blocked') return task.status === 'blocked'
     if (filter === 'needs-you') return hasOpenQuestion(task)
-    return ['ready', 'spec_review', 'review', 'gate_check'].includes(task.status ?? '')
+    return false
   }
 
   function matchesFilterOrDescendant(task: Task): boolean {
@@ -235,31 +249,15 @@
   }
 
   function taskStatusLabel(task: Task): string {
-    return needsBreakdownReview(task) ? 'Review breakdown' : friendlyStatus(task.status)
+    return needsBreakdownReview(task) ? 'Review breakdown' : taskStagePresentation(task).label
   }
 
-  function taskStatusTone(task: Task): ReturnType<typeof statusTone> {
-    return needsBreakdownReview(task) ? 'warn' : statusTone(task.status)
+  function taskStatusTone(task: Task): ChipTone {
+    return needsBreakdownReview(task) ? 'warn' : chipTone(taskStagePresentation(task).tone)
   }
 
-  function statusTone(status: string | undefined): 'accent' | 'ok' | 'warn' | 'danger' | 'neutral' {
-    switch (status) {
-      case 'done':
-      case 'pending_pr':
-        return 'ok'
-      case 'blocked':
-        return 'danger'
-      case 'ready':
-      case 'review':
-      case 'gate_check':
-        return 'ok'
-      case 'spec_review':
-        return 'warn'
-      case 'in_progress':
-        return 'accent'
-      default:
-        return 'neutral'
-    }
+  function chipTone(tone: TaskPresentationTone): ChipTone {
+    return tone
   }
 
   function selectItem(item: ColumnItem, depth: number): void {

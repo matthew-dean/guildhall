@@ -53,6 +53,7 @@ describe('App shell', () => {
       const url = String(input)
       if (url.startsWith('/api/version')) return json({ version: '0.5.1' })
       if (url.startsWith('/api/stale-server')) return json({ stale: false })
+      if (url.startsWith('/api/models')) return json(modelsPayload)
       if (url.startsWith('/api/config/models')) return json(modelsPayload)
       if (url.startsWith('/api/project/task/task-123')) {
         return json({
@@ -81,7 +82,7 @@ describe('App shell', () => {
           inbox: { items: [], blockers: { bootstrap: false, workspaceImport: false } },
         })
       }
-      if (url.startsWith('/api/setup/providers')) {
+      if (url.startsWith('/api/providers')) {
         return json({
           preferredProvider: 'codex',
           providers: {
@@ -116,6 +117,7 @@ describe('App shell', () => {
       seen.push(String(input))
       if (String(input).startsWith('/api/version')) return json({ version: '0.5.1' })
       if (String(input).startsWith('/api/stale-server')) return json({ stale: false })
+      if (String(input).startsWith('/api/models')) return json(modelsPayload)
       if (String(input).startsWith('/api/config/models')) return json(modelsPayload)
       if (String(input).startsWith('/api/project')) {
         return json({
@@ -141,5 +143,64 @@ describe('App shell', () => {
 
     expect(seen).toContain('/api/project?projectId=looma-knit')
     expect(seen).toContain('/api/project?projectId=fair-labor-license')
+  })
+
+  it('gives standalone document routes their own scroll surface without wrapping fixed project layouts', async () => {
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input)
+      if (url.startsWith('/api/version')) return json({ version: '0.5.1' })
+      if (url.startsWith('/api/stale-server')) return json({ stale: false })
+      if (url.startsWith('/api/models')) return json(modelsPayload)
+      if (url.startsWith('/api/config/models')) return json(modelsPayload)
+      if (url.startsWith('/api/setup/defaults')) {
+        return json({ suggestedName: 'Jess', suggestedId: 'jess', path: '/Users/matthew/git/oss/jess' })
+      }
+      if (url.startsWith('/api/setup/status')) {
+        return json({
+          initialized: true,
+          providerConfigured: false,
+          name: 'Jess',
+          id: 'jess',
+          path: '/Users/matthew/git/oss/jess',
+        })
+      }
+      if (url.startsWith('/api/providers')) {
+        return json({
+          preferredProvider: 'openai-api',
+          providers: {
+            codex: { label: 'Codex', detail: 'Local CLI session', detected: true },
+            'openai-api': { label: 'Remote OpenAI-compatible', detail: 'Key based', detected: true, baseUrl: '' },
+          },
+        })
+      }
+      if (url.startsWith('/api/project')) {
+        return json({
+          id: 'looma-knit',
+          name: 'Looma + Knit',
+          path: '/repo/looma-knit',
+          run: { status: 'stopped', mode: 'continuous' },
+          tasks: [],
+          inbox: { items: [], blockers: { bootstrap: false, workspaceImport: false } },
+        })
+      }
+      return json({ projects: [] })
+    })
+    vi.stubGlobal('fetch', fetchMock)
+
+    window.history.replaceState({}, '', '/projects/jess/setup?step=2')
+    path.value = '/projects/jess/setup?step=2'
+    const { unmount } = render(App)
+    await screen.findByText('How should agents call an LLM?')
+    expect(document.querySelector('.route-document-scroll')).toBeTruthy()
+    unmount()
+    cleanup()
+
+    window.history.replaceState({}, '', '/projects/looma-knit/thread')
+    path.value = '/projects/looma-knit/thread'
+    render(App)
+    await waitFor(() => {
+      expect(screen.getAllByText('Looma + Knit').length).toBeGreaterThan(0)
+    })
+    expect(document.querySelector('.route-document-scroll')).toBeNull()
   })
 })

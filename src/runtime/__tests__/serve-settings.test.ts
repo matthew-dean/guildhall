@@ -2916,8 +2916,9 @@ describe('GET /api/project — bootstrap status', () => {
         }
       }
       expect(graphBody.projectGraph?.localProjects).not.toEqual(expect.arrayContaining([
-        expect.objectContaining({ id: 'looma', path: path.join(workspaceDir, 'looma') }),
-        expect.objectContaining({ id: 'knit', path: path.join(workspaceDir, 'knit') }),
+        expect.objectContaining({ id: 'looma-knit' }),
+        expect.objectContaining({ id: 'looma' }),
+        expect.objectContaining({ id: 'knit' }),
       ]))
       expect(graphBody.projectGraph?.localProjectIndex).toEqual(expect.arrayContaining([
         expect.objectContaining({ id: 'looma-knit', role: 'indexed', path: workspaceDir }),

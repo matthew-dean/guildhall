@@ -107,6 +107,41 @@ describe('owner input requests', () => {
     })
   })
 
+  it('preserves multiple-choice owner-input selection mode in the linked bounded chat', async () => {
+    const root = await mkdtemp(path.join(tmpdir(), 'guildhall-owner-input-multiple-'))
+    const result = await createOwnerInputRequest({
+      projectRoot: root,
+      projectId: 'demo',
+      commandId: 'task-question:task-meta-intake:q1',
+      now,
+      actor: 'migration',
+      source: { kind: 'task', taskId: 'task-meta-intake', questionId: 'q1' },
+      target: { kind: 'thread' },
+      question: {
+        kind: 'choice',
+        prompt: 'This is a meta-intake task — I need to:',
+        choices: [
+          'Infer the project routing slices',
+          'Bootstrap verification',
+          'Draft starter tasks',
+        ],
+        selectionMode: 'multiple',
+      },
+      objective: {
+        kind: 'task_shaping',
+        label: 'Clarify setup',
+        successCriteria: ['Owner chooses every setup step that applies.'],
+      },
+    })
+
+    expect(result.request.selectionMode).toBe('multiple')
+    const sessions = listBoundedChatSessions(path.join(root, '.guildhall'))
+    expect(sessions[0]?.subObjectives[0]).toMatchObject({
+      prompt: 'This is a meta-intake task — I need to:',
+      selectionMode: 'multiple',
+    })
+  })
+
   it('rejects agent planning narration instead of extracting a fake question at creation time', async () => {
     const root = await mkdtemp(path.join(tmpdir(), 'guildhall-owner-input-invalid-'))
     await expect(createOwnerInputRequest({

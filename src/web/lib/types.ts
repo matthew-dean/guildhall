@@ -589,6 +589,7 @@ export interface ContextDebugRecord {
 export interface DrawerPayload {
   task: Task
   runStatus?: string
+  availability?: ProjectAvailability | null
   recentEvents?: unknown[]
   contextDebug?: ContextDebugRecord[]
   threadTurns?: TaskThreadTurn[]
@@ -916,6 +917,13 @@ export interface StartReadiness {
   actionHref?: string
 }
 
+export interface ProjectAvailability {
+  status: 'active' | 'paused' | string
+  pausedAt?: string | null
+  resumedAt?: string | null
+  reason?: string
+}
+
 export type ProjectActionSource = 'owner_input' | 'start_readiness' | 'task' | 'inbox' | 'thread' | 'none'
 export type ProjectActionTone = 'neutral' | 'accent' | 'warn' | 'danger' | 'running'
 
@@ -1070,16 +1078,40 @@ export interface ProjectDetail {
   tasks?: Task[]
   inbox?: ProjectInbox
   run?: ProjectRun | null
+  availability?: ProjectAvailability | null
   providerStatus?: ProviderStatus | null
   runtime?: ProjectRuntimeSummary | null
   memoryHealth?: ProjectMemoryHealth | null
   structuralMapReview?: StructuralMapReviewSummary | null
+  taskRoutingContexts?: Record<string, TaskRoutingContext>
   gitStory?: GitStorySummary | null
   startReadiness?: StartReadiness | null
   actionModel?: ProjectActionModel | null
   bootstrapStatus?: BootstrapStatus
   recentEvents?: EventEnvelope[]
   error?: string
+}
+
+export interface TaskRoutingContextRef {
+  id?: string
+  label?: string
+  path?: string
+}
+
+export interface TaskRoutingContextCheck extends TaskRoutingContextRef {
+  command?: string
+}
+
+export interface TaskRoutingContext {
+  taskId?: string
+  status?: 'matched' | 'unmatched' | 'unavailable' | string
+  summary?: string
+  likelyArea?: TaskRoutingContextRef
+  primaryDomain?: TaskRoutingContextRef
+  crossCuttingDomains?: TaskRoutingContextRef[]
+  checks?: TaskRoutingContextCheck[]
+  reasons?: string[]
+  omittedCount?: number
 }
 
 export interface ServiceProjectSummary {
@@ -1111,6 +1143,7 @@ export interface ServiceProjectSummary {
     }>
   }
   run?: ProjectRun | null
+  availability?: ProjectAvailability | null
   providerStatus?: ProviderStatus | null
   gitStory?: GitStorySummary | null
   startReadiness?: StartReadiness | null

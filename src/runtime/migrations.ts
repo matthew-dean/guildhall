@@ -13,6 +13,7 @@ import { migrateLegacyMemoryToLocalHistory } from './memory-migration.js'
 import { migrateTaskQuestionsToBoundedChat } from './task-question-migration.js'
 import { migrateTaskHierarchyState } from './task-hierarchy-migration.js'
 import { migrateTaskState } from './task-state-migration.js'
+import { repairOwnerInputState } from './owner-input-state-repair.js'
 import { recordGuildhallRuntimeWrite } from './runtime-compatibility.js'
 import { readProjectRuntimeState } from './project-runtime-store.js'
 import {
@@ -355,6 +356,34 @@ const BUILT_IN_PROJECT_MIGRATIONS: ProjectMigrationDefinition[] = [
       })
       return {
         summary: `Moved ${result.changedTasks.length} task question record${result.changedTasks.length === 1 ? '' : 's'} into owner-input bounded chat.`,
+        affectedPaths: result.affectedPaths,
+      }
+    },
+  },
+  {
+    id: '0.10.0/owner-input-state-repair',
+    title: 'Repair stale owner-input bounded-chat state',
+    introducedIn: '0.10.0',
+    scope: 'project',
+    safety: 'prompt',
+    requirement: 'required',
+    summary: 'Cancels malformed or containable owner-input questions created by older task-question migrations.',
+    async detect(projectRoot) {
+      const result = await repairOwnerInputState({ projectRoot, apply: false })
+      return {
+        needed: result.cancelledInvalid.length > 0 ||
+          result.resolvedByAssumption.length > 0 ||
+          result.cancelledDuplicates.length > 0,
+        affectedPaths: result.affectedPaths,
+      }
+    },
+    async apply(projectRoot) {
+      const result = await repairOwnerInputState({ projectRoot, apply: true })
+      const repaired = result.cancelledInvalid.length +
+        result.resolvedByAssumption.length +
+        result.cancelledDuplicates.length
+      return {
+        summary: `Repaired ${repaired} owner-input record${repaired === 1 ? '' : 's'} that should not block unattended work.`,
         affectedPaths: result.affectedPaths,
       }
     },

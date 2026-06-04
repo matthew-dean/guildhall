@@ -132,7 +132,7 @@
       const response = await fetch(`/api/project/start?projectId=${encodeURIComponent(projectId)}`, { method: 'POST' })
       if (!response.ok) {
         const payload = await response.json().catch(() => ({}))
-        throw new Error(payload?.error ?? `Unable to start project (${response.status})`)
+        throw new Error(payload?.error ?? `Unable to resume project (${response.status})`)
       }
       await refresh()
     } catch (err) {
@@ -154,7 +154,7 @@
       const response = await fetch(`/api/project/stop?projectId=${encodeURIComponent(projectId)}`, { method: 'POST' })
       if (!response.ok) {
         const payload = await response.json().catch(() => ({}))
-        throw new Error(payload?.error ?? `Unable to stop project (${response.status})`)
+        throw new Error(payload?.error ?? `Unable to pause project (${response.status})`)
       }
       await refresh()
     } catch (err) {

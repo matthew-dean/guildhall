@@ -87,6 +87,42 @@ describe('buildProjectActionModel', () => {
     })
   })
 
+  it('labels stopped project work as resumable and only active runs as pausable', () => {
+    const active = buildProjectActionModel({
+      startReadiness: { canStart: true },
+      tasks: [{ id: 'task-ready', title: 'Ready task', status: 'ready' }],
+      thread: { turns: [], activeTurnId: null },
+      runStatus: 'stopped',
+    })
+    expect(active.runControl).toMatchObject({
+      label: 'Resume',
+      startEnabled: true,
+    })
+
+    const paused = buildProjectActionModel({
+      startReadiness: { canStart: true },
+      tasks: [{ id: 'task-ready', title: 'Ready task', status: 'ready' }],
+      thread: { turns: [], activeTurnId: null },
+      runStatus: 'stopped',
+      availability: { status: 'paused' },
+    })
+    expect(paused.runControl).toMatchObject({
+      label: 'Resume',
+      startEnabled: true,
+    })
+
+    const running = buildProjectActionModel({
+      startReadiness: { canStart: true },
+      tasks: [{ id: 'task-ready', title: 'Ready task', status: 'ready' }],
+      thread: { turns: [], activeTurnId: null },
+      runStatus: 'running',
+    })
+    expect(running.runControl).toMatchObject({
+      label: 'Pause',
+      startEnabled: true,
+    })
+  })
+
   it('does not show stale Answer in Thread when no live owner-input turn exists', () => {
     const model = buildProjectActionModel({
       startReadiness: { canStart: true },
@@ -119,7 +155,7 @@ describe('buildProjectActionModel', () => {
     expect(model.primaryAction?.label).not.toMatch(/answer/i)
   })
 
-  it('blocks Start work for active setup questions even when raw readiness is permissive and the project has zero tasks', () => {
+  it('blocks Resume for active setup questions even when raw readiness is permissive and the project has zero tasks', () => {
     const model = buildProjectActionModel({
       startReadiness: { canStart: true },
       inbox: { items: [] },
@@ -148,8 +184,46 @@ describe('buildProjectActionModel', () => {
       label: 'Waiting on setup',
     })
     expect(model.primaryAction).toMatchObject({
-      source: 'owner_input',
+      source: 'thread',
       href: '/thread?thread=bc-commerce-setup',
     })
+  })
+
+  it('ignores stale setup-step thread actions once the project already has tasks and can start', () => {
+    const model = buildProjectActionModel({
+      startReadiness: { canStart: true },
+      inbox: { items: [] },
+      tasks: [{
+        id: 'task-planning-note',
+        title: 'Add planning note',
+        status: 'exploring',
+        description: 'Add a harmless note to the planning backlog.',
+        updatedAt: '2026-06-03T18:00:00.000Z',
+      }],
+      thread: {
+        activeTurnId: 'setup:firstTask',
+        turns: [{
+          id: 'setup:firstTask',
+          kind: 'setup_step',
+          status: 'active',
+          title: 'Shape the first spec',
+          why: 'Turn a rough idea into a product brief, focused questions, and the first buildable spec before implementation work starts.',
+          actionHref: '/thread',
+        }],
+      },
+      runStatus: 'stopped',
+    })
+
+    expect(model.ownerInput.active).toBe(false)
+    expect(model.runControl).toMatchObject({
+      label: 'Resume',
+      startEnabled: true,
+    })
+    expect(model.primaryAction).toMatchObject({
+      source: 'task',
+      label: 'Add planning note',
+      buttonLabel: 'Open Work',
+    })
+    expect(model.primaryAction?.label).not.toMatch(/answer/i)
   })
 })

@@ -94,10 +94,10 @@ function installFetchFakes() {
     const url = String(input)
     const body = init?.body ? JSON.parse(String(init.body)) as Record<string, unknown> : undefined
     calls.push({ url, init, body })
-    if (url === '/api/setup/providers') return json(providersPayload)
-    if (url === '/api/config/models' && init?.method === 'POST') return json({ ok: true })
-    if (url === '/api/config/models') return json(modelsPayload)
-    if (url === '/api/setup/providers/config') return json({ ok: true })
+    if (url === '/api/providers') return json(providersPayload)
+    if (url === '/api/models' && init?.method === 'POST') return json({ ok: true })
+    if (url === '/api/models') return json(modelsPayload)
+    if (url === '/api/providers/config') return json({ ok: true })
     if (url === '/api/providers/test') return json({ ok: true, sample: 'ready' })
     if (url === '/api/providers/disconnect') return json({ ok: true, note: 'Removed provider' })
     return json({})
@@ -134,7 +134,7 @@ describe('ProvidersPage', () => {
     await userEvent.type(screen.getByPlaceholderText('sk-ant-...'), ' sk-ant-test ')
     await userEvent.click(screen.getAllByRole('button', { name: /^save$/i })[0]!)
     await waitFor(() => {
-      expect(calls.some(call => call.url === '/api/setup/providers/config' && call.body?.anthropicApiKey === 'sk-ant-test')).toBe(true)
+      expect(calls.some(call => call.url === '/api/providers/config' && call.body?.anthropicApiKey === 'sk-ant-test')).toBe(true)
     })
 
     await userEvent.click(screen.getAllByRole('button', { name: /^test$/i })[0]!)
@@ -161,7 +161,7 @@ describe('ProvidersPage', () => {
       expect(
         calls.some(
           call =>
-            call.url === '/api/config/models' &&
+            call.url === '/api/models' &&
             call.init?.method === 'POST' &&
             call.body?.scope === 'global' &&
             call.body?.role === 'spec' &&
@@ -176,7 +176,7 @@ describe('ProvidersPage', () => {
       expect(
         calls.some(
           call =>
-            call.url === '/api/config/models' &&
+            call.url === '/api/models' &&
             call.init?.method === 'POST' &&
             call.body?.scope === 'global' &&
             call.body?.role === 'spec' &&

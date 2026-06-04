@@ -79,6 +79,10 @@ export interface ProjectRunControlModel {
   href?: string
 }
 
+export interface ProjectAvailabilityModel {
+  status?: 'active' | 'paused' | string
+}
+
 export interface ProjectOwnerInputModel {
   active: boolean
   label?: string
@@ -107,6 +111,7 @@ export interface BuildProjectActionModelInput {
   tasks?: ProjectActionTask[]
   thread?: ProjectActionThread | null
   runStatus?: string | null
+  availability?: ProjectAvailabilityModel | null
 }
 
 function hasApprovedProductBrief(task: ProjectActionTask): boolean {
@@ -152,8 +157,8 @@ function startReadinessButtonLabel(readiness: ProjectActionStartReadiness): stri
 }
 
 function runControlLabel(readiness: ProjectActionStartReadiness | null | undefined, running: boolean): string {
-  if (running) return 'Stop run'
-  if (!readiness || readiness.canStart) return 'Start work'
+  if (running) return 'Pause'
+  if (!readiness || readiness.canStart) return 'Resume'
   const message = readiness.message ?? ''
   if (readiness.code === 'required_migration_pending') return 'Migrate'
   if (readiness.code === 'all_terminal') return 'No runnable tasks'
@@ -184,7 +189,7 @@ function ownerInputFrom(readiness: ProjectActionStartReadiness | null | undefine
       href: readiness.actionHref ?? (turn ? threadHref(turn) : '/thread'),
     }
   }
-  if (!turn || !['bounded_chat', 'agent_question', 'pressure_test_question', 'setup_step'].includes(turn.kind ?? '')) {
+  if (!turn || !['bounded_chat', 'agent_question', 'pressure_test_question'].includes(turn.kind ?? '')) {
     return { active: false }
   }
   return {
@@ -246,7 +251,7 @@ function bestTaskAction(tasks: ProjectActionTask[], running: boolean): ProjectAc
     source: 'task',
     label: taskLabel(task),
     detail: cleanup
-      ? 'Needs brief cleanup: finish the handoff before a worker can start.'
+      ? 'Needs brief: finish the handoff before a worker can start.'
       : task.description,
     buttonLabel: task.status === 'spec_review' ? 'Review in Thread' : 'Open Work',
     href: task.status === 'spec_review' ? '/thread' : '/work',
@@ -302,6 +307,7 @@ export function buildProjectActionModel(input: BuildProjectActionModelInput): Pr
   const startReadiness = input.startReadiness ?? null
   const tasks = input.tasks ?? []
   const running = input.runStatus === 'running'
+  const availabilityPaused = input.availability?.status === 'paused'
   const activeTurn = activeThreadTurn(input.thread)
   const ownerInput = ownerInputFrom(startReadiness, activeTurn)
   const setup = setupModel(startReadiness, tasks, activeTurn)
@@ -336,7 +342,9 @@ export function buildProjectActionModel(input: BuildProjectActionModelInput): Pr
   }
   if (taskAction) candidates.push(taskAction)
   candidates.push(...inboxActions)
-  if (activeTurn && !ownerInput.active) candidates.push(threadAction(activeTurn))
+  if (activeTurn && !ownerInput.active && (activeTurn.kind !== 'setup_step' || tasks.length === 0)) {
+    candidates.push(threadAction(activeTurn))
+  }
   if (ownerInput.active && startReadiness?.canStart !== false && ownerInput.href && !setupBlocksStart) {
     candidates.unshift({
       source: 'owner_input',
@@ -360,7 +368,7 @@ export function buildProjectActionModel(input: BuildProjectActionModelInput): Pr
     secondaryActions,
     runControl: {
       label: setupBlocksStart && !running ? 'Waiting on setup' : runControlLabel(startReadiness, running),
-      startEnabled: running || (startReadiness?.canStart !== false && !setupBlocksStart),
+      startEnabled: running || availabilityPaused || (startReadiness?.canStart !== false && !setupBlocksStart),
       disabledReason,
       href: startReadiness?.actionHref ?? setup.href,
     },

@@ -132,6 +132,9 @@ describe('local project graph', () => {
     expect(view.localProjects).toEqual([
       expect.objectContaining({ id: 'harness', role: 'current' }),
     ])
+    expect(view.localProjects).not.toEqual(expect.arrayContaining([
+      expect.objectContaining({ id: 'looma' }),
+    ]))
     expect(view.localProjectIndex).toEqual(expect.arrayContaining([
       expect.objectContaining({ id: 'harness', role: 'current' }),
       expect.objectContaining({ id: 'looma', role: 'indexed' }),
@@ -151,6 +154,27 @@ describe('local project graph', () => {
     ]))
     expect(view.domainAuthorities).toEqual([])
     expect(view.authorityRoots).toEqual([])
+  })
+
+  it('preserves coordinator domain labels without guessing capitalization', async () => {
+    bootstrapWorkspace(consumerProject, { name: 'Jess' })
+    registerWorkspace({ id: 'jess', path: consumerProject, name: 'Jess', tags: [] })
+
+    const view = queryProjectGraphView({
+      projectId: 'jess',
+      projectPath: consumerProject,
+      coordinators: [
+        { id: 'css-parser', name: 'CSS Parser coordinator', domain: 'css-parser' },
+        { id: 'plugin-js', name: 'Plugin JS coordinator', domain: 'plugin-js' },
+        { id: 'vscode-extension', name: 'VS Code Extension coordinator', domain: 'vscode-extension' },
+      ],
+    })
+
+    expect(view.structuralDomains).toEqual(expect.arrayContaining([
+      expect.objectContaining({ id: 'domain:css-parser', label: 'css-parser' }),
+      expect.objectContaining({ id: 'domain:plugin-js', label: 'plugin-js' }),
+      expect.objectContaining({ id: 'domain:vscode-extension', label: 'vscode-extension' }),
+    ]))
   })
 
   it('expands registered workspace child projects into first-class provider targets', async () => {
@@ -180,6 +204,11 @@ describe('local project graph', () => {
     expect(view.localProjects).toEqual([
       expect.objectContaining({ id: 'narrative-harness', role: 'current' }),
     ])
+    expect(view.localProjects).not.toEqual(expect.arrayContaining([
+      expect.objectContaining({ id: 'looma-knit' }),
+      expect.objectContaining({ id: 'looma' }),
+      expect.objectContaining({ id: 'knit' }),
+    ]))
     expect(view.localProjectIndex).toEqual(expect.arrayContaining([
       expect.objectContaining({ id: 'narrative-harness', role: 'current' }),
       expect.objectContaining({ id: 'looma-knit', role: 'indexed', path: workspaceProject }),

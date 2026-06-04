@@ -4,7 +4,7 @@
       mobile hides the rail until the hamburger opens a full-screen menu):
       primary nav entries + accordion sub-nav + Settings pinned as a utility
       to the bottom.
-    · Top bar (slim): workspace name chip + run-status chip + Start work/Stop
+    · Top bar (slim): workspace name chip + run-status chip + Resume/Pause
       + New thread. No tab strip.
     · Main: the active view component (sub-paths pass a `subView` prop to
       surfaces that support it).
@@ -82,7 +82,7 @@
   const RAIL_PREFERENCE_KEY = 'guildhall:project-rail'
 
   // Inbox blockers drive disabled-state on top-bar actions so hard blockers
-  // (e.g. bootstrap not verified) can't be bypassed by pressing Start work.
+  // (e.g. bootstrap not verified) can't be bypassed by pressing Resume.
   interface Blockers { bootstrap: boolean; workspaceImport: boolean }
   let blockers = $state<Blockers>({ bootstrap: false, workspaceImport: false })
   let inboxItems = $state<InboxItem[]>([])
@@ -426,9 +426,9 @@
       if (!res.ok) {
         try {
           const body = (await res.json()) as { error?: string; code?: string }
-          runError = body.error ?? `Start failed (HTTP ${res.status})`
+          runError = body.error ?? `Resume failed (HTTP ${res.status})`
         } catch {
-          runError = `Start failed (HTTP ${res.status})`
+          runError = `Resume failed (HTTP ${res.status})`
         }
         optimisticRunStatus = null
         return
@@ -456,9 +456,9 @@
       if (!res.ok) {
         try {
           const body = (await res.json()) as { error?: string }
-          runError = body.error ?? `Stop failed (HTTP ${res.status})`
+          runError = body.error ?? `Pause failed (HTTP ${res.status})`
         } catch {
-          runError = `Stop failed (HTTP ${res.status})`
+          runError = `Pause failed (HTTP ${res.status})`
         }
         optimisticRunStatus = null
         return
@@ -582,6 +582,8 @@
     if (optimisticRunStatus === 'stopping' && actualRunStatus !== 'running') optimisticRunStatus = null
   })
   const runMode = $derived(detail?.run?.mode === 'one_task' ? 'one_task' : 'continuous')
+  const availabilityStatus = $derived(detail?.availability?.status ?? 'active')
+  const availabilityPaused = $derived(availabilityStatus === 'paused')
   const providerStatus = $derived(detail?.providerStatus ?? detail?.run?.providerStatus ?? null)
   const startReadiness = $derived(detail?.startReadiness ?? null)
   const actionRunControl = $derived(detail?.actionModel?.runControl ?? null)
@@ -919,7 +921,13 @@
         : null,
   )
   const showRunButton = $derived(
-    runStatus === 'running' || runStatus === 'stopping' || (!allTerminalStart && startDisabledReason !== 'No tasks to start'),
+    runStatus === 'running' ||
+      runStatus === 'stopping' ||
+      (!allTerminalStart && (!availabilityPaused || startDisabledReason !== 'No tasks to start')),
+  )
+  const runControlPauses = $derived(
+    runStatus === 'running' ||
+      runStatus === 'stopping',
   )
   const runButtonIdleLabel = $derived(
     actionRunControl?.label && actionRunControl.startEnabled === false
@@ -936,7 +944,7 @@
             : 'Needs input'
     : startReadiness?.canStart === false
       ? startReadinessActionLabel(startReadiness.message)
-      : 'Start work',
+      : actionRunControl?.label ?? 'Resume',
   )
   const showAdvanceOneTaskAction = $derived(
     !allTerminalStart,
@@ -1224,33 +1232,33 @@
           {/if}
           {#if detail && showRunButton}
             <Button
-              variant={runStatus === 'running' || runStatus === 'stopping' ? 'danger' : requiredMigrationBlocked ? 'human' : 'agent'}
+              variant={runControlPauses ? 'danger' : requiredMigrationBlocked ? 'human' : 'agent'}
               size="sm"
               iconOnly={topbarLabelsCollapsed}
-              disabled={busy || migrationApplyBusy || runStatus === 'stopping' || (runStatus !== 'running' && startDisabledReason !== null && !requiredMigrationBlocked)}
-              onclick={runStatus === 'running' ? stop : requiredMigrationBlocked ? () => { void openMigrationModal() } : () => start('continuous')}
+              disabled={busy || migrationApplyBusy || runStatus === 'stopping' || (!runControlPauses && startDisabledReason !== null && !requiredMigrationBlocked)}
+              onclick={runControlPauses ? stop : requiredMigrationBlocked ? () => { void openMigrationModal() } : () => start('continuous')}
               ariaLabel={
                 runStatus === 'stopping'
-                  ? 'Stopping'
-                  : runStatus === 'running'
-                  ? (runMode === 'one_task' ? 'Stop one-step run' : 'Stop')
+                  ? 'Pausing'
+                  : runControlPauses
+                  ? (runMode === 'one_task' ? 'Pause one-step run' : 'Pause')
                   : requiredMigrationBlocked
                   ? 'Migrate project'
-                  : (startDisabledReason ?? 'Start work')
+                  : (startDisabledReason ?? 'Resume')
               }
               title={
                 runStatus === 'stopping'
-                  ? 'Stopping Guildhall'
-                  : runStatus === 'running'
-                  ? (runMode === 'one_task' ? 'Stop the current one-step run' : 'Stop Guildhall')
+                  ? 'Pausing Guildhall'
+                : runControlPauses
+                  ? (runMode === 'one_task' ? 'Pause the current one-step run' : 'Pause Guildhall')
                   : requiredMigrationBlocked
                   ? 'Migrate project'
-                  : (startDisabledReason ?? 'Let Guildhall advance this project')
+                  : (startDisabledReason ?? 'Let Guildhall continue this project')
               }
             >
-              <Icon name={runStatus === 'running' || runStatus === 'stopping' ? 'square' : requiredMigrationBlocked ? 'refresh-cw' : 'sparkles'} size={16} />
+              <Icon name={runControlPauses ? 'pause' : requiredMigrationBlocked ? 'refresh-cw' : 'sparkles'} size={16} />
               {#if !topbarLabelsCollapsed}
-                {runStatus === 'stopping' ? 'Stopping...' : runStatus === 'running' ? (runMode === 'one_task' ? 'Stop 1' : 'Stop') : runButtonIdleLabel}
+                {runStatus === 'stopping' ? 'Pausing...' : runControlPauses ? (runMode === 'one_task' ? 'Pause 1' : 'Pause') : runButtonIdleLabel}
               {/if}
             </Button>
           {/if}
@@ -1617,7 +1625,7 @@
     display: flex;
     align-items: center;
     gap: var(--s-2);
-    padding: var(--s-2) var(--s-3);
+    padding: var(--s-2) var(--s-3) var(--s-2) calc((56px - 18px) / 2);
     background: transparent;
     border: none;
     color: var(--text-muted);
@@ -1757,24 +1765,21 @@
     display: none;
     margin-left: auto;
   }
-  .rail.rail-collapsed:not(.rail-preview-open) .rail-head {
+  .rail.rail-collapsed .rail-head {
     padding-inline: calc((56px - 30px) / 2);
   }
-  .rail.rail-collapsed:not(.rail-preview-open) .rail-head-top {
-    justify-content: center;
-  }
-  .rail.rail-collapsed:not(.rail-preview-open) .rail-head-actions {
+  .rail.rail-collapsed .rail-head-actions {
     margin-left: 0;
   }
-  .rail.rail-collapsed:not(.rail-preview-open) .rail-project,
-  .rail.rail-collapsed:not(.rail-preview-open) .rail-status,
+  .rail.rail-collapsed .rail-project,
+  .rail.rail-collapsed .rail-status,
+  .rail.rail-collapsed.rail-preview-open .rail-subs,
   .rail.rail-collapsed:not(.rail-preview-open) .rail-label,
   .rail.rail-collapsed:not(.rail-preview-open) .rail-subs {
     display: none;
   }
   .rail.rail-collapsed:not(.rail-preview-open) .rail-item {
-    justify-content: center;
-    padding-inline: 0;
+    padding-right: 0;
   }
   .rail-project {
     font-size: var(--gh-type-size-body);

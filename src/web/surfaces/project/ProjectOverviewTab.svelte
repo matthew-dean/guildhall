@@ -27,6 +27,8 @@
   import { isGitUnavailableMessage } from '../../lib/runtime-message.js'
   import { activeEscalations } from '../../lib/escalation.js'
   import { needsWorkerHandoffSpecCleanup } from '../../lib/task-state.js'
+  import { taskStagePresentation } from '../../lib/task-presentation.js'
+  import type { ProjectGraphView } from './structure/project-graph-store.svelte.js'
 
   interface Props {
     detail: ProjectDetail
@@ -77,6 +79,35 @@
   let localStructuralMapReview = $state<ProjectDetail['structuralMapReview'] | null>(null)
   let structuralMapActionError = $state<string | null>(null)
   let structuralMapActionBusy = $state(false)
+  let projectGraphSummary = $state<ProjectGraphView | null>(null)
+  let projectGraphSummaryError = $state<string | null>(null)
+
+  $effect(() => {
+    activeProjectId
+    let cancelled = false
+    async function loadProjectGraphSummary(): Promise<void> {
+      try {
+        const res = await projectFetch('/api/project/project-graph', { cache: 'no-store' }, activeProjectId)
+        const body = await res.json().catch(() => ({})) as { projectGraph?: ProjectGraphView; error?: string }
+        if (cancelled) return
+        if (!res.ok || body.error) {
+          projectGraphSummaryError = body.error ?? `HTTP ${res.status}`
+          projectGraphSummary = null
+          return
+        }
+        projectGraphSummary = body.projectGraph ?? null
+        projectGraphSummaryError = null
+      } catch (err) {
+        if (cancelled) return
+        projectGraphSummaryError = err instanceof Error ? err.message : String(err)
+        projectGraphSummary = null
+      }
+    }
+    void loadProjectGraphSummary()
+    return () => {
+      cancelled = true
+    }
+  })
 
   const tasks = $derived(detail.tasks ?? [])
   const displayPath = $derived(formatUserPath(detail.path))
@@ -85,6 +116,20 @@
   const runtime = $derived(detail.runtime ?? null)
   const memoryHealth = $derived(detail.memoryHealth ?? null)
   const structuralMapReview = $derived(localStructuralMapReview ?? detail.structuralMapReview ?? null)
+  const graphFacts = $derived.by(() => {
+    const graph = projectGraphSummary
+    const openRequests = graph?.dependencyEdges?.filter(edge => edge.unresolved).length ?? 0
+    const connectedProjects = graph?.localProjects?.filter(item => item.role !== 'current').length ?? 0
+    const contractSurfaces = graph?.contractSurfaces?.length ?? 0
+    const graphDomains = graph?.structuralDomains?.length ?? 0
+    return {
+      loaded: Boolean(graph),
+      openRequests,
+      connectedProjects,
+      contractSurfaces,
+      graphDomains,
+    }
+  })
   const primaryProofPaths = $derived.by(() => {
     return tasks
       .flatMap(task => (task.proofPaths ?? []).map(proofPath => ({ task, proofPath })))
@@ -237,6 +282,72 @@
     return items.slice(0, 4)
   })
 
+  const knowledgeCards = $derived.by(() => {
+    const activeCount = counts.working + counts.ready + counts.approval + counts.shaping
+    const mapDomainCount = (structuralMapReview?.counts?.domains ?? 0) + (structuralMapReview?.counts?.crossCuttingDomains ?? 0)
+    const graphDetail = projectGraphSummaryError
+      ? 'Project graph summary could not load.'
+      : graphFacts.loaded
+        ? [
+            countLabel(graphFacts.graphDomains, 'graph domain'),
+            countLabel(graphFacts.contractSurfaces, 'contract surface'),
+            countLabel(graphFacts.openRequests, 'open dependency request'),
+          ].join(' · ')
+        : 'Loading project graph and contract facts.'
+    return [
+      {
+        label: 'Work',
+        title: `${counts.total} total ${counts.total === 1 ? 'task' : 'tasks'}`,
+        detail: `${activeCount} active or shaping · ${counts.done} completed · ${counts.blocked} blocked.`,
+        href: currentProjectHref('/work', activeProjectId),
+        tone: counts.blocked > 0 ? 'warn' as Tone : activeCount > 0 ? 'accent' as Tone : 'neutral' as Tone,
+      },
+      {
+        label: 'Structure',
+        title: structuralMapReview
+          ? structuralStateLabel(structuralMapReview.state)
+          : graphFacts.loaded
+            ? countLabel(graphFacts.graphDomains, 'graph domain')
+            : 'Structure facts',
+        detail: structuralMapReview
+          ? `${countLabel(mapDomainCount, 'domain')} · ${countLabel(structuralMapReview.counts?.packages ?? 0, 'package')} · ${countLabel(structuralMapReview.counts?.executableUnits ?? 0, 'command')}.`
+          : graphFacts.loaded
+            ? `${countLabel(graphFacts.contractSurfaces, 'contract surface')} · ${countLabel(graphFacts.openRequests, 'open dependency request')}.`
+            : 'Loading project graph domains, contracts, and dependency requests.',
+        href: currentProjectHref('/structure', activeProjectId),
+        tone: structuralMapReview?.state === 'accepted' || graphFacts.loaded ? 'ok' as Tone : 'neutral' as Tone,
+      },
+      {
+        label: 'Project graph',
+        title: graphFacts.loaded ? `${countLabel(graphFacts.connectedProjects, 'connected project')}` : 'Graph facts',
+        detail: graphDetail,
+        href: currentProjectHref('/structure', activeProjectId),
+        tone: graphFacts.openRequests > 0 ? 'warn' as Tone : graphFacts.loaded ? 'ok' as Tone : 'neutral' as Tone,
+      },
+      {
+        label: 'Runtime',
+        title: runtimeHealthLabel(runtime?.status, runtime?.health?.status),
+        detail: `${runtimeModeLabel(runtime?.migration?.mode)} · ${(memoryHealth?.active ?? 0)} active memories · ${(memoryHealth?.proposed ?? 0)} proposed.`,
+        href: currentProjectHref('/settings/ready', activeProjectId),
+        tone: runtimeTone(runtime?.status, runtime?.health?.status),
+      },
+      {
+        label: 'Proof',
+        title: primaryProofPaths.length > 0 ? `${countLabel(primaryProofPaths.length, 'tracked proof path')}` : 'No proof paths yet',
+        detail: primaryProofPaths[0]?.proofPath.title ?? 'Proof paths appear here once Guildhall has planned verification.',
+        href: currentProjectHref('/work', activeProjectId),
+        tone: primaryProofPaths.some(item => item.proofPath.status === 'blocked') ? 'warn' as Tone : primaryProofPaths.some(item => item.proofPath.status === 'verified') ? 'ok' as Tone : 'neutral' as Tone,
+      },
+      {
+        label: 'History',
+        title: recentEvents.length > 0 ? `${countLabel(recentEvents.length, 'recent change')}` : 'No recent changes',
+        detail: recentEvents[0]?.label ?? 'Timeline will fill in as Guildhall runs, reviews, and records decisions.',
+        href: currentProjectHref('/timeline', activeProjectId),
+        tone: 'neutral' as Tone,
+      },
+    ]
+  })
+
   const nextAction = $derived.by(() => {
     const shared = detail.actionModel?.primaryAction
     if (shared) {
@@ -379,7 +490,7 @@
   }
 
   function overviewTaskStatusLabel(task: Task): string {
-    return needsOverviewBriefCleanup(task) ? 'Needs brief' : friendlyStatus(task.status)
+    return needsOverviewBriefCleanup(task) ? 'Needs brief' : taskPresentation(task).label
   }
 
   const runBlocker = $derived.by(() => {
@@ -416,17 +527,17 @@
       }
     }
 
-    addTasks(['in_progress', 'review', 'gate_check'], running ? 'running' : 'accent', task => `${friendlyStatus(task.status)}: ${statusDetail(task)}`, 4)
+    addTasks(['in_progress', 'review', 'gate_check'], running ? 'running' : 'accent', task => `${taskPresentation(task).label}: ${statusDetail(task)}`, 4)
     addTasks(
       ['ready'],
       task => needsOverviewBriefCleanup(task) ? 'warn' : 'accent',
       task => needsOverviewBriefCleanup(task)
-        ? 'Needs brief cleanup: finish the handoff before a worker can start.'
-        : `${friendlyStatus(task.status)}: ready for the next worker slot.`,
+        ? 'Needs brief: finish the handoff before a worker can start.'
+        : `${taskPresentation(task).label}: available for the next worker slot.`,
       4,
     )
-    addTasks(['spec_review', 'import_draft'], 'warn', task => `${friendlyStatus(task.status)}: needs review before it can move.`, 4)
-    addTasks(['exploring'], 'neutral', task => `${friendlyStatus(task.status)}: still being shaped.`, 4)
+    addTasks(['spec_review', 'import_draft'], 'warn', task => `${taskPresentation(task).label}: needs review before it can move.`, 4)
+    addTasks(['exploring'], 'neutral', task => `${taskPresentation(task).label}: awaiting the next Guildhall pass.`, 4)
 
     if (!rows.length && blockedRows.length > 0) {
       rows.push({
@@ -476,7 +587,11 @@
     if (task.blockReason) return friendlyBlockerText(task.blockReason)
     if (task.latestCheckpoint?.nextPlannedAction) return friendlyBlockerText(task.latestCheckpoint.nextPlannedAction)
     if (task.description) return task.description
-    return friendlyStatus(task.status)
+    return taskPresentation(task).label
+  }
+
+  function taskPresentation(task: Task) {
+    return taskStagePresentation(task, { runStatus: detail.run?.status })
   }
 
   function taskLabel(task: Task): string {
@@ -708,6 +823,21 @@
         <small>{projectTicker.timeLabel}</small>
       {/if}
     </UtilityPanel>
+  </section>
+
+  <section class="knowledge-band" aria-label="Everything Guildhall knows about this project">
+    {#each knowledgeCards as card (card.label)}
+      <CardListItem
+        as="button"
+        className="knowledge-summary-item"
+        tone={card.tone === 'danger' ? 'danger' : card.tone === 'warn' ? 'warn' : card.tone === 'ok' || card.tone === 'running' ? 'ok' : card.tone === 'accent' ? 'accent' : 'neutral'}
+        onclick={() => go(card.href)}
+      >
+        <Chip label={card.label} tone={card.tone === 'danger' ? 'danger' : card.tone === 'warn' ? 'warn' : card.tone === 'ok' || card.tone === 'running' ? 'ok' : card.tone === 'accent' ? 'accent' : 'neutral'} />
+        <strong>{card.title}</strong>
+        <p>{card.detail}</p>
+      </CardListItem>
+    {/each}
   </section>
 
   <section class="overview-grid overview-grid-main">
@@ -1135,6 +1265,30 @@
   :global(.overview-card) {
     min-width: 0;
   }
+  .knowledge-band {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: var(--s-3);
+  }
+  :global(.knowledge-summary-item) {
+    display: grid;
+    align-content: start;
+    gap: var(--s-2);
+    min-height: 8.2rem;
+  }
+  :global(.knowledge-summary-item) strong {
+    color: var(--text);
+    font-size: var(--gh-type-size-body);
+    line-height: var(--gh-type-line-height-body);
+    overflow-wrap: anywhere;
+  }
+  :global(.knowledge-summary-item) p {
+    margin: 0;
+    color: var(--text-muted);
+    font-size: var(--gh-type-size-meta);
+    line-height: var(--gh-type-line-height-body);
+    overflow-wrap: anywhere;
+  }
   :global(.action-row),
   :global(.health-row),
   :global(.signal-row),
@@ -1365,6 +1519,9 @@
     .overview-grid-main {
       grid-template-columns: 1fr;
     }
+    .knowledge-band {
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+    }
     .overview {
       padding: var(--s-4);
     }
@@ -1374,6 +1531,9 @@
     .overview {
       padding: var(--s-3);
       gap: var(--s-3);
+    }
+    .knowledge-band {
+      grid-template-columns: 1fr;
     }
     :global(.live-card) {
       grid-template-columns: auto minmax(0, 1fr);

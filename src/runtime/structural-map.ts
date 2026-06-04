@@ -1307,14 +1307,11 @@ async function createStructuralOwnerInputRequests(input: {
       question: {
         kind: 'text',
         prompt: question.prompt,
-        description: [
-          `Reason: ${question.reason}`,
-          question.targetIds.length ? `Targets: ${question.targetIds.join(', ')}` : '',
-        ].filter(Boolean).join('\n'),
+        description: structuralOwnerQuestionDescription(question),
       },
       objective: {
         kind: 'structural_review',
-        label: `Review structural map ${input.mapId}`,
+        label: 'Structural review',
         successCriteria: ['Owner resolves the linked structural-map review request.'],
       },
       sessionSource: `structural-map:${input.mapId}:${question.id}`,
@@ -1322,6 +1319,13 @@ async function createStructuralOwnerInputRequests(input: {
     ids.push(result.request.id)
   }
   return uniqueStrings(ids)
+}
+
+function structuralOwnerQuestionDescription(question: OwnerQuestion): string {
+  if (question.reason === 'owner_review_required_before_routing_truth') {
+    return 'Guildhall found a proposed project structure. Review it before routing uses these domains, packages, executable units, and Git roots.'
+  }
+  return 'Guildhall found structural-map evidence that needs a decision before it uses the map for routing.'
 }
 
 function structuralOwnerInputQuestions(map: StructuralMapDraft): StructuralMapReviewSummaryQuestion[] {
@@ -2149,5 +2153,5 @@ function labelFromPath(value: string): string {
 }
 
 function titleCase(value: string): string {
-  return value.split(/[-_]/g).map(part => `${part.slice(0, 1).toUpperCase()}${part.slice(1)}`).join(' ')
+  return value
 }

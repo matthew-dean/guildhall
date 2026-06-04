@@ -52,6 +52,7 @@
     specReady?: boolean
     drafts?: DraftCoordinator[]
     taskStatus?: string | null
+    blockReason?: string | null
   }
   interface LaunchActivity {
     taskId: string
@@ -60,6 +61,7 @@
     runStatus: string
     updatedAt: string | null
     specLength: number
+    blockReason: string | null
   }
   interface WorktreeIncludeCandidate {
     path: string
@@ -85,6 +87,7 @@
   let busy = $state(false)
   let loaded = $state(false)
   let setupLoadError = $state<string | null>(null)
+  let providerSaveError = $state<string | null>(null)
 
   let providers = $state<Record<string, ProviderMeta> | null>(null)
   let selectedProvider = $state<string | null>(null)
@@ -98,6 +101,7 @@
   let approving = $state(false)
   let approvalError = $state<string | null>(null)
   let launchActivity = $state<LaunchActivity | null>(null)
+  let setupComplete = $state(false)
   let resumeNotice = $state<string | null>(null)
   let worktreeIncludeCandidates = $state<WorktreeIncludeCandidate[]>([])
   let selectedWorktreeIncludes = $state<string[]>([])
@@ -108,8 +112,27 @@
 
   const launchStopped = $derived(Boolean(bootstrapLive && launchActivity && launchActivity.runStatus !== 'running'))
   const launchBlocked = $derived(launchActivity?.taskStatus === 'blocked')
+  const launchCanFinishFromRepoScan = $derived(
+    Boolean(
+      launchStopped &&
+        launchActivity?.taskId === 'task-meta-intake' &&
+        launchActivity.specLength === 0 &&
+        (launchActivity.outputStatus === 'in-progress' || launchActivity.outputStatus === 'spec-but-no-fence'),
+    ),
+  )
+  const launchRecoverableInterruption = $derived(
+    Boolean(
+      launchCanFinishFromRepoScan ||
+        (launchBlocked &&
+        launchActivity?.taskId === 'task-meta-intake' &&
+        launchActivity.blockReason &&
+        /durable progress|kept researching|request aborted|stop requested/i.test(launchActivity.blockReason)),
+    ),
+  )
   const launchStatusLabel = $derived(
-    launchBlocked
+    launchRecoverableInterruption
+      ? 'Setup was interrupted'
+      : launchBlocked
       ? 'Meta-intake is blocked'
       : launchStopped
       ? 'Coordinator paused'
@@ -261,6 +284,7 @@
 
   async function saveProvider() {
     if (!selectedProvider) return
+    providerSaveError = null
     busy = true
     try {
       const body: Record<string, unknown> = { preferredProvider: selectedProvider }
@@ -284,6 +308,11 @@
       history.replaceState({}, '', setupHref(3))
       void hydrateWorktreeIncludes()
       void hydrateLaunchState()
+    } catch (err) {
+      providerSaveError =
+        err instanceof Error
+          ? `Could not save provider settings. Guildhall may be refreshing or restarting; try again in a moment. (${err.message})`
+          : 'Could not save provider settings. Guildhall may be refreshing or restarting; try again in a moment.'
     } finally {
       busy = false
     }
@@ -295,6 +324,7 @@
 
   async function startBootstrap() {
     bootstrapBusy = true
+    setupComplete = false
     try {
       const savedIncludes = await saveSelectedWorktreeIncludes()
       if (!savedIncludes) {
@@ -378,6 +408,28 @@
     bootstrapLive = true
     resumeNotice = 'Resume requested. Guildhall is restarting the coordinator now.'
     try {
+      if (launchRecoverableInterruption) {
+        resumeNotice = 'Guildhall is finishing a setup draft from the repo scan it already saved.'
+        const synthesized = await setupFetch('/api/project/meta-intake/synthesize', { method: 'POST' })
+        if (synthesized.ok) {
+          const body = await synthesized.json().catch(() => ({})) as { drafts?: DraftCoordinator[] }
+          if (body.drafts && body.drafts.length > 0) {
+            approvalDrafts = body.drafts
+            bootstrapLive = false
+            resumeNotice = 'Guildhall built a setup draft from the saved repo scan. Review it before continuing.'
+            return
+          }
+        } else {
+          const body = await synthesized.json().catch(() => ({})) as { error?: string }
+          resumeNotice = body.error ?? 'Could not finish from the saved repo scan. Guildhall is trying that setup step again.'
+        }
+        const rerun = await setupFetch('/api/project/meta-intake/rerun', { method: 'POST' })
+        if (!rerun.ok) {
+          const body = await rerun.json().catch(() => ({})) as { error?: string }
+          resumeNotice = body.error ?? 'Could not restart the setup step. Open recovery for details.'
+          return
+        }
+      }
       const resumed = await ensureCoordinatorRunning()
       await refreshLaunchActivity()
       if (resumed) {
@@ -399,7 +451,7 @@
       const projectDetail = await projectRes.json()
       const draftInfo = draft ?? ((await draftRes?.json()) as MetaIntakeDraft | undefined)
       const task = (projectDetail?.tasks ?? []).find((t: { id?: string }) => t.id === 'task-meta-intake') as
-        | { id?: string; status?: string; updatedAt?: string; spec?: string }
+        | { id?: string; status?: string; updatedAt?: string; spec?: string; blockReason?: string | null }
         | undefined
       launchActivity = {
         taskId: task?.id ?? 'task-meta-intake',
@@ -408,6 +460,7 @@
         runStatus: projectDetail?.run?.status ?? 'stopped',
         updatedAt: task?.updatedAt ?? null,
         specLength: typeof task?.spec === 'string' ? task.spec.length : 0,
+        blockReason: task?.blockReason ?? draftInfo?.blockReason ?? null,
       }
     } catch {
       /* keep prior activity */
@@ -473,16 +526,19 @@
       const j = (await r.json()) as MetaIntakeDraft
       await refreshLaunchActivity(j)
       if (j.status === 'draft-ready' && j.drafts && j.drafts.length > 0) {
+        setupComplete = false
         approvalDrafts = j.drafts
         bootstrapLive = false
         return
       }
       if (j.status === 'approved') {
+        setupComplete = true
         bootstrapLive = false
         approvalDrafts = null
         return
       }
       if (j.taskExists && (j.status === 'in-progress' || j.status === 'spec-but-no-fence')) {
+        setupComplete = false
         bootstrapLive = true
         approvalDrafts = null
         const resumed = await ensureCoordinatorRunning()
@@ -600,6 +656,9 @@
               onLlamaUrlChange={v => (llamaUrl = v)}
             />
           {/if}
+          {#if providerSaveError}
+            <p class="error" role="alert">{providerSaveError}</p>
+          {/if}
         </Stack>
       </Card>
       <Row justify="end" gap="2">
@@ -613,9 +672,26 @@
           ← Back
         </Button>
         <Button variant="primary" disabled={busy || !selectedProvider} onclick={saveProvider}>
-          Save and continue →
+          {busy ? 'Saving...' : 'Save and continue →'}
         </Button>
       </Row>
+    {:else if setupComplete}
+      <Card title="Setup is complete">
+        <Stack gap="3">
+          <p class="muted">
+            Guildhall has saved this project’s structure and starter contract map. You can review the
+            graph or keep working from the overview.
+          </p>
+          <Row gap="2">
+            <Button variant="primary" onclick={() => nav(currentProjectHref('/structure'))}>
+              Review structure
+            </Button>
+            <Button variant="secondary" onclick={skipToDashboard}>
+              Open overview
+            </Button>
+          </Row>
+        </Stack>
+      </Card>
     {:else}
       <Card title="You're ready to bootstrap.">
         <Stack gap="3">
@@ -674,19 +750,21 @@
             </Row>
             {#if launchStopped}
               <p class="muted">
-                {launchBlocked
+                {launchRecoverableInterruption
+                  ? 'Setup stopped before the agent saved a draft. Use the saved repo scan to finish setup.'
+                  : launchBlocked
                   ? 'The setup task needs a recovery decision before Guildhall can continue.'
                   : 'The task is saved. Resume the coordinator to continue meta-intake.'}
               </p>
               <Row justify="start">
-                {#if launchBlocked && launchActivity?.taskId}
+                {#if launchBlocked && !launchRecoverableInterruption && launchActivity?.taskId}
                   <Button variant="primary" onclick={() => nav(currentProjectHref(`/task/${launchActivity?.taskId}`))}>
                     Open recovery
                   </Button>
                 {:else}
                   <Button variant="agent" disabled={bootstrapBusy} onclick={resumeBootstrap}>
                     <Icon name="sparkles" size={14} />
-                    {bootstrapBusy ? 'Resuming...' : 'Resume'}
+                    {bootstrapBusy ? 'Resuming...' : launchRecoverableInterruption ? 'Finish from repo scan' : 'Resume'}
                   </Button>
                 {/if}
               </Row>

@@ -18,6 +18,7 @@
     | 'circle'
     | 'check-circle-2'
     | 'play'
+    | 'pause'
     | 'square'
     | 'plus'
     | 'rotate-ccw'
@@ -57,6 +58,7 @@
   import Circle from 'lucide-svelte/icons/circle'
   import CheckCircle2 from 'lucide-svelte/icons/check-circle-2'
   import Play from 'lucide-svelte/icons/play'
+  import Pause from 'lucide-svelte/icons/pause'
   import Square from 'lucide-svelte/icons/square'
   import Plus from 'lucide-svelte/icons/plus'
   import RotateCcw from 'lucide-svelte/icons/rotate-ccw'
@@ -105,6 +107,7 @@
   {:else if name === 'circle'}<Circle {size} {strokeWidth} />
   {:else if name === 'check-circle-2'}<CheckCircle2 {size} {strokeWidth} />
   {:else if name === 'play'}<Play {size} {strokeWidth} />
+  {:else if name === 'pause'}<Pause {size} {strokeWidth} />
   {:else if name === 'square'}<Square {size} {strokeWidth} />
   {:else if name === 'plus'}<Plus {size} {strokeWidth} />
   {:else if name === 'rotate-ccw'}<RotateCcw {size} {strokeWidth} />

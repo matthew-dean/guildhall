@@ -14,13 +14,14 @@
   import SegmentedControl from '../../lib/SegmentedControl.svelte'
   import TaskCard from '../../lib/TaskCard.svelte'
   import UtilityPanel from '../../lib/UtilityPanel.svelte'
-  import { friendlyDomain, friendlyPriority, friendlyStatus } from '../../lib/display.js'
+  import { friendlyDomain, friendlyPriority } from '../../lib/display.js'
   import { friendlyTaskId } from '../../lib/identifier-labels.js'
   import { nav, path } from '../../lib/nav.svelte.js'
   import { currentProjectHref, currentTaskHref, projectFetch } from '../../lib/project-routes.js'
   import { buildWorkSurface } from '../../lib/project-data.js'
   import { friendlyRuntimeMessage } from '../../lib/runtime-message.js'
-  import { effectiveWorkStatus, isCompleteForWorkerHandoff, needsWorkerHandoffSpecCleanup } from '../../lib/task-state.js'
+  import { isCompleteForWorkerHandoff, needsWorkerHandoffSpecCleanup } from '../../lib/task-state.js'
+  import { taskStagePresentation, type TaskPresentationTone } from '../../lib/task-presentation.js'
   import { buildWorkHierarchy, nestedWorkCountLabel, workKindLabel } from '../../lib/work-hierarchy.js'
   import type { ProjectDetail, Task } from '../../lib/types.js'
   import PlannerTab from './PlannerTab.svelte'
@@ -34,7 +35,7 @@
   type SortKey = 'title' | 'status' | 'area' | 'priority' | 'updated' | 'revisions'
   type SortDir = 'asc' | 'desc'
   type WorkView = 'columns' | 'list' | 'board'
-  type WorkFilter = 'open' | 'all' | 'runnable' | 'blocked' | 'needs-you'
+  type WorkFilter = 'queued' | 'planning' | 'open' | 'all' | 'blocked' | 'needs-you'
 
   const STATUS_SORT_ORDER: Record<string, number> = {
     proposed: 0,
@@ -84,7 +85,7 @@
   let sortKey = $state<SortKey>('updated')
   let sortDir = $state<SortDir>('desc')
   let routeWorkView = $state<WorkView>('list')
-  let workFilter = $state<WorkFilter>('open')
+  let workFilter = $state<WorkFilter>('queued')
 
   const viewOptions = [
     { value: 'columns', label: 'Columns' },
@@ -93,9 +94,10 @@
   ]
 
   const workFilterOptions = [
+    { value: 'queued', label: 'Queued work' },
+    { value: 'planning', label: 'Planning' },
     { value: 'open', label: 'Open' },
     { value: 'all', label: 'All' },
-    { value: 'runnable', label: 'Runnable' },
     { value: 'blocked', label: 'Blocked' },
     { value: 'needs-you', label: 'Needs you' },
   ]
@@ -104,22 +106,30 @@
   const activeWorkView = $derived<WorkView>(routeWorkView)
   const hierarchy = $derived(buildWorkHierarchy(tasks))
   const visibleTasks = $derived(tasks.filter(matchesWorkFilter))
+  const showsPlanningArtifacts = $derived(['planning', 'open', 'all'].includes(workFilter))
+  const visibleImportDraftCount = $derived(showsPlanningArtifacts ? importDraftCount : 0)
   const boardDetail = $derived({
     ...detail,
     tasks: visibleTasks,
   } as ProjectDetail)
 
   const taskCounts = $derived.by(() => {
-    const all = tasks
+    const all = visibleTasks
     const running = detail.run?.status === 'running'
     const readyTasks = all.filter(task => task.status === 'ready')
+    const stageCounts = all.reduce<Record<string, number>>((counts, task) => {
+      const key = taskPresentation(task).key
+      counts[key] = (counts[key] ?? 0) + 1
+      return counts
+    }, {})
     return {
-      total: all.length,
+      total: tasks.length,
       agentActive: all.filter(task => running && ['in_progress', 'review', 'gate_check'].includes(task.status ?? '')).length,
-      paused: all.filter(task => !running && task.status === 'in_progress').length,
-      reviewWaiting: all.filter(task => !running && task.status === 'review').length,
-      gatesWaiting: all.filter(task => !running && task.status === 'gate_check').length,
-      shaping: all.filter(task => task.status === 'exploring').length,
+      paused: stageCounts.paused ?? 0,
+      reviewWaiting: stageCounts.review_waiting ?? 0,
+      gatesWaiting: stageCounts.gates_waiting ?? 0,
+      shaping: stageCounts.guildhall_shaping ?? 0,
+      specRevisionQueued: stageCounts.spec_revision_queued ?? 0,
       readyForWorker: readyTasks.filter(isCompleteForWorkerHandoff).length,
       needsSpecCleanup: readyTasks.filter(needsWorkerHandoffSpecCleanup).length,
       awaitingApproval: all.filter(task => task.status === 'spec_review').length,
@@ -202,64 +212,75 @@
     }
   }
 
-  function statusTone(status: string | undefined): 'accent' | 'ok' | 'warn' | 'danger' | 'neutral' {
-    switch (status) {
-      case 'done':
-        return 'ok'
-      case 'blocked':
-        return 'danger'
-      case 'shelved':
-      case 'pending_pr':
-        return 'warn'
-      case 'in_progress':
-      case 'review':
-      case 'gate_check':
-        return 'accent'
-      default:
-        return 'neutral'
-    }
-  }
-
-  function effectiveStatus(task: Task): string | undefined {
-    return effectiveWorkStatus(task, detail.run?.status === 'running')
-  }
-
   function hasOpenQuestion(task: Task): boolean {
     return Boolean(task.openQuestions?.some(question => !question.answeredAt && !question.answer))
   }
 
+  function isQueuedWorkTask(task: Task): boolean {
+    if (task.status === 'ready') return isCompleteForWorkerHandoff(task)
+    return ['in_progress', 'review', 'gate_check'].includes(task.status ?? '')
+  }
+
+  function isPlanningTask(task: Task): boolean {
+    if (task.status === 'ready') return needsWorkerHandoffSpecCleanup(task)
+    return ['proposed', 'import_draft', 'exploring', 'spec_review'].includes(task.status ?? '')
+  }
+
+  function emptyFilterTitle(): string {
+    if (workFilter === 'queued') return 'No queued work yet.'
+    if (workFilter === 'planning') return 'No planning work.'
+    if (workFilter === 'blocked') return 'No blocked work.'
+    if (workFilter === 'needs-you') return 'Nothing needs you.'
+    return 'No matching work.'
+  }
+
+  function emptyFilterDetail(): string {
+    if (workFilter === 'queued') return 'Guildhall is still shaping this project. Use Planning to inspect intake and spec work.'
+    if (workFilter === 'planning') return 'Planning, intake, and spec items will appear here when Guildhall is shaping them.'
+    if (workFilter === 'blocked') return 'Blocked work will appear here once a task cannot continue.'
+    if (workFilter === 'needs-you') return 'Questions and owner-held work will appear here when Guildhall needs input.'
+    return 'Adjust the filter to inspect a different slice of the project.'
+  }
+
+  function emptyFilterAction(): { label: string; filter: WorkFilter } | null {
+    if (workFilter === 'queued' && tasks.some(isPlanningTask)) return { label: 'Show planning', filter: 'planning' }
+    if (workFilter !== 'queued') return { label: 'Show queued work', filter: 'queued' }
+    return null
+  }
+
   function matchesWorkFilter(task: Task): boolean {
     if (workFilter === 'all') return true
+    if (workFilter === 'queued') return isQueuedWorkTask(task)
+    if (workFilter === 'planning') return isPlanningTask(task)
     if (workFilter === 'open') return !['done', 'pending_pr', 'shelved'].includes(task.status ?? '')
     if (workFilter === 'blocked') return task.status === 'blocked'
     if (workFilter === 'needs-you') return hasOpenQuestion(task)
-    return ['ready', 'spec_review', 'review', 'gate_check'].includes(task.status ?? '')
+    return false
+  }
+
+  function taskPresentation(task: Task) {
+    return taskStagePresentation(task, {
+      runStatus: detail.run?.status,
+      availabilityStatus: detail.availability?.status ?? 'active',
+    })
+  }
+
+  type ChipTone = 'accent' | 'ok' | 'warn' | 'danger' | 'neutral' | 'running'
+  type CardTone = 'accent' | 'ok' | 'warn' | 'danger' | 'neutral'
+
+  function chipTone(tone: TaskPresentationTone): ChipTone {
+    return tone
   }
 
   function effectiveStatusLabel(task: Task): string {
-    switch (effectiveStatus(task)) {
-      case 'paused': return 'Paused'
-      case 'review_waiting': return 'Review waiting'
-      case 'gates_waiting': return 'Gates waiting'
-      case 'needs_spec_cleanup': return 'Needs brief cleanup'
-      default: return friendlyStatus(task.status)
-    }
+    return taskPresentation(task).label
   }
 
-  function effectiveStatusTone(task: Task): 'accent' | 'ok' | 'warn' | 'danger' | 'neutral' {
-    switch (effectiveStatus(task)) {
-      case 'paused': return 'neutral'
-      case 'review_waiting':
-      case 'gates_waiting':
-        return 'ok'
-      case 'needs_spec_cleanup':
-        return 'warn'
-      default:
-        return statusTone(task.status)
-    }
+  function effectiveStatusTone(task: Task): ChipTone {
+    return chipTone(taskPresentation(task).tone)
   }
 
-  function priorityTone(priority: string | undefined): 'accent' | 'ok' | 'warn' | 'danger' | 'neutral' {
+  function priorityTone(priority: string | undefined): CardTone {
     switch (priority) {
       case 'critical':
         return 'danger'
@@ -272,8 +293,9 @@
     }
   }
 
-  function listItemTone(task: Task): 'accent' | 'ok' | 'warn' | 'danger' | 'neutral' {
-    return effectiveStatusTone(task)
+  function listItemTone(task: Task): CardTone {
+    const tone = effectiveStatusTone(task)
+    return tone === 'running' ? 'accent' : tone
   }
 
   function formatUpdatedAt(value: string | undefined): string {
@@ -369,39 +391,42 @@
         <div class="work-list-count">{visibleTasks.length} shown · {taskCounts.total} total</div>
         <div class="work-summary">
           {#if taskCounts.agentActive > 0}
-            <Chip label={countLabel(taskCounts.agentActive, 'Guildhall working', 'Guildhall working')} tone="running" />
+            <Chip label={countLabel(taskCounts.agentActive, 'Working', 'Working')} tone="running" />
           {/if}
           {#if taskCounts.paused > 0}
             <Chip label={countLabel(taskCounts.paused, 'paused task')} tone="neutral" />
           {/if}
           {#if taskCounts.reviewWaiting > 0}
-            <Chip label={countLabel(taskCounts.reviewWaiting, 'review waiting', 'review waiting')} tone="warn" />
+            <Chip label={countLabel(taskCounts.reviewWaiting, 'Review', 'Review')} tone="warn" />
           {/if}
           {#if taskCounts.gatesWaiting > 0}
-            <Chip label={countLabel(taskCounts.gatesWaiting, 'gates waiting', 'gates waiting')} tone="warn" />
+            <Chip label={countLabel(taskCounts.gatesWaiting, 'Gates', 'Gates')} tone="warn" />
           {/if}
           {#if taskCounts.shaping > 0}
-            <Chip label={countLabel(taskCounts.shaping, 'being shaped', 'being shaped')} tone="accent" />
+            <Chip label={countLabel(taskCounts.shaping, 'Queued', 'Queued')} tone="running" />
+          {/if}
+          {#if taskCounts.specRevisionQueued > 0}
+            <Chip label={countLabel(taskCounts.specRevisionQueued, 'Queued', 'Queued')} tone="running" />
           {/if}
           {#if taskCounts.readyForWorker > 0}
-            <Chip label={countLabel(taskCounts.readyForWorker, 'ready to start', 'ready to start')} tone="ok" />
+            <Chip label={countLabel(taskCounts.readyForWorker, 'Ready', 'Ready')} tone="ok" />
           {/if}
           {#if taskCounts.needsSpecCleanup > 0}
-            <Chip label={countLabel(taskCounts.needsSpecCleanup, 'need brief cleanup', 'need brief cleanup')} tone="warn" />
+            <Chip label={countLabel(taskCounts.needsSpecCleanup, 'Needs brief', 'Needs brief')} tone="warn" />
           {/if}
           {#if taskCounts.awaitingApproval > 0}
-            <Chip label={`${taskCounts.awaitingApproval} awaiting approval`} tone="warn" />
+            <Chip label={countLabel(taskCounts.awaitingApproval, 'Review', 'Review')} tone="warn" />
           {/if}
           {#if taskCounts.done > 0}
             <Chip label={`${taskCounts.done} done`} tone="ok" />
           {/if}
-          {#if importDraftCount > 0}
-            <Chip label={countLabel(importDraftCount, 'import draft')} tone="neutral" />
+          {#if visibleImportDraftCount > 0}
+            <Chip label={countLabel(visibleImportDraftCount, 'import draft')} tone="neutral" />
           {/if}
         </div>
       </div>
 
-      {#if importDraftCount > 0 && nextImportDraft}
+      {#if visibleImportDraftCount > 0 && nextImportDraft}
         <UtilityPanel as="div" className="draft-queue-card" tone="neutral">
           <div class="draft-queue-copy">
             <p class="draft-queue-label">Imported draft queue</p>
@@ -435,6 +460,19 @@
         {:else}
           <p class="muted">No tasks yet — <strong>New thread</strong> to begin.</p>
         {/if}
+      {:else if visibleTasks.length === 0}
+        <UtilityPanel as="div" className="work-empty-filter" tone="neutral">
+          <div>
+            <strong>{emptyFilterTitle()}</strong>
+            <p class="muted">{emptyFilterDetail()}</p>
+          </div>
+          {@const action = emptyFilterAction()}
+          {#if action}
+            <Button variant="secondary" size="sm" onclick={() => { workFilter = action.filter }}>
+              {action.label}
+            </Button>
+          {/if}
+        </UtilityPanel>
       {:else}
         <CardList className="work-list-stack">
           <div class="list-column-head" aria-label="Sort work list">

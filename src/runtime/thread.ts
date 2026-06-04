@@ -40,6 +40,7 @@ import { listBoundedChatSessions, type BoundedChatSession } from './bounded-chat
 import { getProjectStateDir } from '@guildhall/sessions'
 import type { GitStorySnapshot } from './git-story.js'
 import { userFacingText } from './user-facing-text.js'
+import { specReviewRequiresOwnerApproval } from './orchestrator-picker.js'
 
 // ---------------------------------------------------------------------------
 // Turn shape
@@ -281,6 +282,7 @@ export interface PressureTestQuestionTurn extends TurnBase {
     prompt: string
     why: string
     choices?: string[] | undefined
+    selectionMode?: 'single' | 'multiple' | undefined
     evidence: string[]
   }
   answerEndpoint: string
@@ -298,6 +300,7 @@ export interface BoundedChatTurn extends TurnBase {
     prompt: string
     why: string
     choices?: string[] | undefined
+    selectionMode?: 'single' | 'multiple' | undefined
     evidence: string[]
   }
   answerEndpoint: string
@@ -506,9 +509,8 @@ function taskNeedsSpecFill(task: Pick<Task, 'spec' | 'acceptanceCriteria' | 'pro
 
 function isQueuedSpecRevision(task: Task): boolean {
   return (
-    task.status === 'exploring' &&
-    hasSpecDraftContent(task) &&
-    hasApprovedProductBrief(task)
+    (task.status === 'exploring' || task.status === 'spec_review') &&
+    hasSpecDraftContent(task)
   )
 }
 
@@ -1159,6 +1161,7 @@ function boundedChatTurns(projectPath: string, sessions: BoundedChatSession[]): 
         prompt: active.prompt,
         why: active.helperText ?? 'Guildhall needs one clear answer before it shapes future work.',
         choices: active.choices,
+        selectionMode: active.selectionMode ?? inferredLegacyBoundedChatSelectionMode(active),
         evidence: session.acceptedState.facts.map(fact => fact.fact),
       },
       answerEndpoint: `/api/project/bounded-chat/${encodeURIComponent(session.id)}/answer`,
@@ -1169,6 +1172,20 @@ function boundedChatTurns(projectPath: string, sessions: BoundedChatSession[]): 
     })
   }
   return turns
+}
+
+function inferredLegacyBoundedChatSelectionMode(
+  active: Pick<BoundedChatSession['subObjectives'][number], 'prompt' | 'choices'>,
+): 'multiple' | undefined {
+  const choices = active.choices ?? []
+  if (
+    /meta-intake task\s+—\s+i need to:?/i.test(active.prompt) &&
+    choices.length > 1 &&
+    choices.every(choice => /\b(infer|bootstrap|draft|verify|verification|task|tasks|routing|lever)\b/i.test(choice))
+  ) {
+    return 'multiple'
+  }
+  return undefined
 }
 
 function boundedChatActionHref(sessionId: string): string {
@@ -1182,6 +1199,8 @@ function boundedChatDomainTitle(session: BoundedChatSession): string {
       return 'New request'
     case 'project_check_in':
       return 'Project check-in'
+    case 'structural_review':
+      return 'Structural review'
     default:
       return session.objective.label
   }
@@ -1921,8 +1940,9 @@ export function buildThread(opts: BuildThreadOptions): Thread {
       | undefined
     const approvedAt = brief && typeof brief === 'object' ? brief.approvedAt ?? null : null
     const liveAgent = liveAgents.get(taskId)
+    const hasSpecDraft = hasSpecDraftContent(t)
     if (hasReviewableProductBrief(brief) && unansweredQuestions.length === 0) {
-      const briefStillNeedsHuman = !approvedAt && taskStatus === 'exploring'
+      const briefStillNeedsHuman = !approvedAt && taskStatus === 'exploring' && !hasSpecDraft
       const status: TurnStatus = !briefStillNeedsHuman
         ? 'done'
         : !activeAssigned
@@ -2045,14 +2065,17 @@ export function buildThread(opts: BuildThreadOptions): Thread {
     }
 
     const hasUnansweredQuestions = openQs.some(q => !q.answeredAt)
-    const hasActiveBriefTurn = hasReviewableProductBrief(brief) && !approvedAt && taskStatus === 'exploring'
+    const hasActiveBriefTurn = hasReviewableProductBrief(brief) && !approvedAt && taskStatus === 'exploring' && !hasSpecDraft
     const importedDraft = taskStatus === 'import_draft' || shouldUseImportDraftState(t)
     if (importedDraft && taskId !== leadingImportDraftId) {
       continue
     }
 
     // Spec review
-    if (taskStatus === 'spec_review' && !hasUnansweredQuestions) {
+    const shouldSurfaceSpecReview =
+      (taskStatus === 'spec_review' || (taskStatus === 'exploring' && hasSpecDraft)) &&
+      specReviewRequiresOwnerApproval(t)
+    if (shouldSurfaceSpecReview && !hasUnansweredQuestions) {
       const status: TurnStatus = hasUnansweredQuestions
         ? 'pending'
         : !activeAssigned
@@ -2089,7 +2112,7 @@ export function buildThread(opts: BuildThreadOptions): Thread {
     }
 
     if (
-      ['import_draft', 'exploring', 'in_progress', 'gate_check', 'review', 'ready'].includes(taskStatus) &&
+      ['import_draft', 'exploring', 'spec_review', 'in_progress', 'gate_check', 'review', 'ready'].includes(taskStatus) &&
       !hasUnansweredQuestions &&
       !hasActiveBriefTurn
     ) {
@@ -2136,7 +2159,7 @@ export function buildThread(opts: BuildThreadOptions): Thread {
               : requestKind === 'project_question'
                 ? 'Guildhall can inspect the project and answer this question without treating it as implementation work.'
               : queuedSpecRevision
-                ? 'Guildhall has your latest answers and a spec draft. The next step is for Guildhall to revise the spec.'
+                ? 'Guildhall has your answers and a spec draft. Coordinator review is next.'
               : 'The spec author is shaping this task.'
             : taskStatus === 'ready'
               ? needsSpecFill

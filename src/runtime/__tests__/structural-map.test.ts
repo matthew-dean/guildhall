@@ -198,13 +198,13 @@ describe('structural map drafting', () => {
       expect.objectContaining({
         id: 'domain:billing',
         kind: 'domain_group',
-        label: 'Billing',
+        label: 'billing',
         confidence: 'high',
       }),
       expect.objectContaining({
         id: 'domain:inventory',
         kind: 'domain_group',
-        label: 'Inventory',
+        label: 'inventory',
         confidence: 'medium',
       }),
     ]))
@@ -528,7 +528,7 @@ describe('structural map drafting', () => {
       expect.objectContaining({
         id: 'domain:core',
         kind: 'domain_group',
-        label: 'Core',
+        label: 'core',
       }),
       expect.objectContaining({
         id: 'cross-cutting:node-copy-reduction',
@@ -761,7 +761,7 @@ describe('structural context and project graph handoffs', () => {
     expect(request.providerProject.path).toBe(providerRoot)
     expect(request.domain).toEqual(expect.objectContaining({
       id: 'domain:editor',
-      label: 'Editor',
+      label: 'editor',
     }))
 
     const edge = await createProjectDependencyRequest(request)

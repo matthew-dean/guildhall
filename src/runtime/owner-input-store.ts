@@ -96,6 +96,7 @@ export async function createOwnerInputRequest(
       prompt: normalizedQuestion.prompt,
       helperText: normalizedQuestion.description,
       choices: normalizedQuestion.choices,
+      selectionMode: normalizedQuestion.selectionMode === 'multiple' ? 'multiple' : 'single',
     },
   })
 
@@ -107,6 +108,7 @@ export async function createOwnerInputRequest(
     target: input.target,
     prompt: normalizedQuestion.prompt,
     choices: normalizedQuestion.choices,
+    selectionMode: normalizedQuestion.selectionMode,
     objective: input.objective,
     status: 'waiting_for_owner',
     boundedChatSessionId: session.id,
@@ -163,6 +165,41 @@ export function waitingOwnerInputTaskIdsSync(projectRoot: string): Set<string> {
         request.status === 'waiting_for_owner' && request.source.kind === 'task')
       .map(request => request.source.taskId),
   )
+}
+
+export async function markOwnerInputRequestForBoundedChatReview(input: {
+  projectRoot: string
+  boundedChatSessionId: string
+  now?: string
+  actor?: string
+}): Promise<OwnerInputRequestRecord | null> {
+  const requests = await listOwnerInputRequests(input.projectRoot)
+  const request = requests.find(item => item.boundedChatSessionId === input.boundedChatSessionId)
+  if (!request) return null
+  if (request.status !== 'waiting_for_owner') return request
+  const now = input.now ?? new Date().toISOString()
+  const next = OwnerInputRequest.parse({
+    ...request,
+    status: 'coordinator_review',
+    updatedAt: now,
+    receipts: [
+      ...request.receipts,
+      {
+        machineId: 'owner-input',
+        machineVersion: 1,
+        commandId: `owner-response:${input.boundedChatSessionId}`,
+        entityId: request.id,
+        from: request.status,
+        event: 'submit_owner_response',
+        to: 'coordinator_review',
+        actor: input.actor ?? 'owner',
+        evidenceRefs: [`bounded-chat:${input.boundedChatSessionId}`],
+        createdAt: now,
+      },
+    ],
+  })
+  await writeOwnerInputRequest(projectMemoryDir(input.projectRoot), next)
+  return next
 }
 
 async function writeOwnerInputRequest(memoryDir: string, request: OwnerInputRequestRecord): Promise<void> {

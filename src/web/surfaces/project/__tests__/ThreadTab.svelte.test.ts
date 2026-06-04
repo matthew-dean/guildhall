@@ -315,6 +315,7 @@ interface PressureTestQuestionTurnForTest {
     prompt: string
     why: string
     choices?: string[]
+    selectionMode?: 'single' | 'multiple'
     evidence: string[]
   }
   answerEndpoint: string
@@ -337,6 +338,7 @@ interface BoundedChatTurnForTest {
     prompt: string
     why: string
     choices?: string[]
+    selectionMode?: 'single' | 'multiple'
     evidence: string[]
   }
   answerEndpoint: string
@@ -440,10 +442,17 @@ function installFetchFakes(
   activeTurnId: string | null,
   options: {
     answerQuestionsResponse?: Response
+    approveSpecResponse?: Response
+    onApproveSpec?: (taskId: string) => void
     sourceNoteResponse?: Response | (() => Response | Promise<Response>)
     capabilityRequests?: unknown[]
     runtime?: unknown
+    projectRunStatus?: string
+    projectAvailability?: { status: string; pausedAt?: string | null; resumedAt?: string | null }
     caughtUp?: boolean
+    threadState?: () => { turns: unknown[]; activeTurnId: string | null; caughtUp?: boolean }
+    onSetupSubmit?: (url: string, body: Record<string, unknown> | undefined) => void
+    boundedChatAnswerResponse?: Response | (() => Response | Promise<Response>)
   } = {},
 ) {
   const calls: Array<{ url: string; init?: RequestInit; body?: Record<string, unknown> }> = []
@@ -452,6 +461,8 @@ function installFetchFakes(
     const body = init?.body ? JSON.parse(String(init.body)) as Record<string, unknown> : undefined
     calls.push({ url, init, body })
     if (url.startsWith('/api/project/thread')) {
+      const state = options.threadState?.()
+      if (state) return json({ turns: state.turns, activeTurnId: state.activeTurnId, caughtUp: state.caughtUp ?? false })
       return json({ turns, activeTurnId, caughtUp: options.caughtUp ?? false })
     }
     if (url.startsWith('/api/project/source-note')) {
@@ -498,6 +509,12 @@ function installFetchFakes(
     if (url.startsWith('/api/project/task/') && url.includes('/stage-answer')) {
       return json({ ok: true })
     }
+    if (url.startsWith('/api/project/task/') && url.includes('/approve-spec')) {
+      if (options.approveSpecResponse) return options.approveSpecResponse
+      const taskId = decodeURIComponent(url.split('/api/project/task/')[1]?.split('/approve-spec')[0] ?? '')
+      options.onApproveSpec?.(taskId)
+      return json({ ok: true, status: 'ready' })
+    }
     if (url.startsWith('/api/project/task/') && url.includes('/answer-questions')) {
       if (options.answerQuestionsResponse) return options.answerQuestionsResponse
       return json({ ok: true })
@@ -505,15 +522,28 @@ function installFetchFakes(
     if (url.startsWith('/api/project/pressure-test/') && url.includes('/answer')) {
       return json({ intake: { id: 'pti-guildhall-0-8-0', pendingQuestion: null } })
     }
+    if (url.startsWith('/api/project/bounded-chat/') && url.includes('/answer')) {
+      if (options.boundedChatAnswerResponse) {
+        return typeof options.boundedChatAnswerResponse === 'function'
+          ? options.boundedChatAnswerResponse()
+          : options.boundedChatAnswerResponse
+      }
+      return json({ boundedChat: { id: 'bc-new-thread-1', status: 'coordinator_review' } })
+    }
     if (url.startsWith('/api/project/meta-intake/synthesize')) return json({ ok: true })
-    if (url.startsWith('/api/setup/')) return json({ ok: true })
+    if (url.startsWith('/api/setup/')) {
+      options.onSetupSubmit?.(url, body)
+      return json({ ok: true })
+    }
     if (url.startsWith('/api/project')) {
       return json({
         id: 'looma-knit',
         name: 'Looma + Knit',
         path: '/repo/looma-knit',
-        run: { status: 'running', mode: 'continuous' },
+        run: { status: options.projectRunStatus ?? 'running', mode: 'continuous' },
+        availability: options.projectAvailability ?? { status: 'active', pausedAt: null, resumedAt: null },
         ...(options.runtime ? { runtime: options.runtime } : {}),
+        ...(project.detail?.taskRoutingContexts ? { taskRoutingContexts: project.detail.taskRoutingContexts } : {}),
         tasks: [],
       })
     }
@@ -521,6 +551,14 @@ function installFetchFakes(
   })
   vi.stubGlobal('fetch', fetchMock)
   return { calls, fetchMock }
+}
+
+function markProjectPaused() {
+  project.detail = {
+    ...(project.detail as any),
+    run: { status: 'stopped', mode: 'continuous' },
+    availability: { status: 'paused', pausedAt: now, resumedAt: null },
+  }
 }
 
 describe('ThreadTab', () => {
@@ -615,7 +653,7 @@ describe('ThreadTab', () => {
 
   it('renders request and active pressure-test question turns as owner input', async () => {
     const scrollIntoView = Element.prototype.scrollIntoView as ReturnType<typeof vi.fn>
-    installFetchFakes([
+    const { calls } = installFetchFakes([
       requestTurn(),
       pressureTestQuestionTurn(),
     ], 'pressure-test:pti-guildhall-0-8-0:product-goals-q-1')
@@ -719,8 +757,72 @@ describe('ThreadTab', () => {
     expect(screen.queryByText(/\b20\d{3}d\b/)).toBeNull()
   })
 
-  it('renders bounded-chat turns as a flat question section instead of a nested card', async () => {
+  it('renders only the current setup step inside the setup thread', async () => {
+    installBrowserFakes('/projects/looma-knit/thread?thread=setup')
     installFetchFakes([
+      setupTurn({
+        id: 'setup:identity',
+        stepId: 'identity',
+        at: '1970-01-01T00:00:00.000Z',
+        status: 'done',
+        phase: 'done',
+        title: 'Name this project',
+        why: 'Guildhall needs a workspace id and human name.',
+      }),
+      setupTurn({
+        id: 'setup:direction',
+        stepId: 'direction',
+        at: '2026-05-19T15:02:00.000Z',
+        status: 'active',
+        phase: 'setup',
+        title: 'Give the project direction',
+        why: 'Start with a short brief you can edit.',
+        skippable: true,
+        affordance: 'inline-textarea',
+        actionLabel: 'Save',
+        submitEndpoint: '/api/setup/direction',
+        currentValue: '',
+        placeholder: 'What should Guildhall know?',
+      }),
+      setupTurn({
+        id: 'setup:project-check-in',
+        stepId: 'projectCheckIn',
+        at: '1970-01-01T00:03:00.000Z',
+        status: 'pending',
+        phase: 'setup',
+        title: 'Run project check-in',
+        why: 'Guildhall has not generated the first project questions yet.',
+        skippable: true,
+        affordance: 'inline-button',
+        actionLabel: 'Start project check-in',
+      }),
+      setupTurn({
+        id: 'setup:import',
+        stepId: 'import',
+        at: '1970-01-01T00:04:00.000Z',
+        status: 'pending',
+        phase: 'setup',
+        title: 'Review existing work',
+        why: 'Turn the real work hiding in notes into backlog tasks.',
+        skippable: true,
+        affordance: 'link',
+        actionLabel: 'Open setup',
+      }),
+    ], 'setup:direction')
+
+    render(ThreadTab)
+
+    await screen.findByPlaceholderText('What should Guildhall know?')
+    const detail = within(document.querySelector('.thread-detail') as HTMLElement)
+    expect(detail.getByText('Give the project direction')).toBeTruthy()
+    expect(detail.queryByText('Name this project')).toBeNull()
+    expect(detail.queryByText('Run project check-in')).toBeNull()
+    expect(detail.queryByText('Review existing work')).toBeNull()
+    expect(document.querySelectorAll('.setup-title')).toHaveLength(1)
+  })
+
+  it('renders bounded-chat turns as a flat question section instead of a nested card', async () => {
+    const { calls } = installFetchFakes([
       boundedChatTurn({
         domainTitle: 'Project question',
         question: {
@@ -742,6 +844,65 @@ describe('ThreadTab', () => {
     expect(within(question as HTMLElement).queryByText(/Project question/)).toBeNull()
     expect(document.querySelector('.thread-active-dock .bounded-chat-panel')).toBeNull()
     expect(document.querySelector('.thread-active-question-flat .question-card-heading')).toBeNull()
+  })
+
+  it('submits bounded-chat text answers through the shared composer', async () => {
+    const { calls } = installFetchFakes([
+      boundedChatTurn({
+        domainTitle: 'Project question',
+        question: {
+          id: 'project-question-context',
+          prompt: 'What source should Guildhall use before it answers this in Thread?',
+          why: 'This stays a project conversation unless you ask Guildhall to turn it into work.',
+          evidence: [],
+        },
+      }),
+    ], 'bounded-chat:bc-new-thread-1:request-scope')
+
+    render(ThreadTab)
+
+    const composer = threadComposer()
+    const input = await composer.findByPlaceholderText(/answer with a sentence/i)
+    await userEvent.type(input, 'Use the current blocker evidence.')
+    await userEvent.click(composer.getByRole('button', { name: /^send$/i }))
+
+    await waitFor(() => {
+      expect(calls.some(call =>
+        call.url.includes('/api/project/bounded-chat/bc-new-thread-1/answer') &&
+        call.body?.questionId === 'project-question-context' &&
+        call.body?.answer === 'Use the current blocker evidence.',
+      )).toBe(true)
+    })
+    expect(screen.queryByText(/bounded chat objective is not supported/i)).toBeNull()
+  })
+
+  it('sends the shared composer with Enter and preserves newlines with Shift+Enter', async () => {
+    const user = userEvent.setup()
+    const { calls } = installFetchFakes([
+      boundedChatTurn({
+        question: {
+          id: 'project-question-context',
+          prompt: 'What source should Guildhall use before it answers this in Thread?',
+          why: 'This stays a project conversation unless you ask Guildhall to turn it into work.',
+          evidence: [],
+        },
+      }),
+    ], 'bounded-chat:bc-new-thread-1:request-scope')
+
+    render(ThreadTab)
+
+    const input = await threadComposer().findByPlaceholderText(/answer with a sentence/i)
+    await user.type(input, 'First line{Shift>}{Enter}{/Shift}Second line')
+    expect((input as HTMLTextAreaElement).value).toBe('First line\nSecond line')
+
+    await user.keyboard('{Enter}')
+
+    await waitFor(() => {
+      expect(calls.some(call =>
+        call.url.includes('/api/project/bounded-chat/bc-new-thread-1/answer') &&
+        call.body?.answer === 'First line\nSecond line',
+      )).toBe(true)
+    })
   })
 
   it('selects the current cleanup work instead of the saved request routing event', async () => {
@@ -796,7 +957,7 @@ describe('ThreadTab', () => {
 
     render(ThreadTab)
 
-    await selectedThread().findByText('Brief cleanup')
+    expect((await selectedThread().findAllByText('Brief cleanup')).length).toBeGreaterThan(0)
     expect(screen.queryByText('Routed to Task Intake')).toBeNull()
     expect(selectedThread().queryByText('New thread')).toBeNull()
     expect(threadHistory().getByText('Brief cleanup requested')).toBeTruthy()
@@ -813,7 +974,7 @@ describe('ThreadTab', () => {
     render(ThreadTab)
 
     await threadComposer().findByPlaceholderText('Add a note for Guildhall…')
-    expect(selectedThread().getByText('Work is paused. Start Guildhall when you want it to continue.')).toBeTruthy()
+    expect(selectedThread().getByText('Work is paused. Resume Guildhall when you want it to continue.')).toBeTruthy()
     expect(scrollIntoView).not.toHaveBeenCalled()
   })
 
@@ -883,8 +1044,10 @@ describe('ThreadTab', () => {
 
     render(ThreadTab)
 
-    await selectedThread().findByRole('button', { name: 'Request changes' })
-    await userEvent.click(selectedThread().getByRole('button', { name: 'Request changes' }))
+    await selectedThread().findByRole('button', { name: 'View spec' })
+    await userEvent.click(selectedThread().getByRole('button', { name: 'View spec' }))
+    const dialog = await screen.findByRole('dialog', { name: /approve spec/i })
+    await userEvent.click(within(dialog).getByRole('button', { name: 'Request changes' }))
 
     expect(threadComposer().getByPlaceholderText('Correct the spec or ask Guildhall to revisit it…')).toBeTruthy()
   })
@@ -901,7 +1064,7 @@ describe('ThreadTab', () => {
 
     render(ThreadTab)
 
-    await selectedThread().findByRole('button', { name: 'Request changes' })
+    await selectedThread().findByRole('button', { name: 'View spec' })
     expect(threadHistory().getByText('Brief finalized')).toBeTruthy()
     expect(threadHistory().queryByText(/^Guildhall$/)).toBeNull()
     expect(threadHistory().queryByText(/^Completed /)).toBeNull()
@@ -987,7 +1150,7 @@ describe('ThreadTab', () => {
     expect(threadHistory().queryByText('Question answered')).toBeNull()
   })
 
-  it('renders pressure-test choices as direct answer buttons', async () => {
+  it('renders pressure-test choices as immediate task-card answer buttons', async () => {
     const { calls } = installFetchFakes([
       pressureTestQuestionTurn({
         id: 'pressure-test:pti-narrative-harness:project-direction-priority',
@@ -1011,10 +1174,12 @@ describe('ThreadTab', () => {
     ], 'pressure-test:pti-narrative-harness:project-direction-priority')
 
     render(ThreadTab)
-    await screen.findByRole('button', { name: 'Reviewer-lane MVPs' })
+    const firstChoice = await screen.findByRole('button', { name: 'Reviewer-lane MVPs' })
     expect(screen.queryByPlaceholderText('Answer with a sentence or short paragraph. Include constraints or success measures if they matter.')).toBeNull()
+    expect(firstChoice.classList.contains('pressure-choice-card')).toBe(true)
+    expect(firstChoice.querySelector('.pressure-choice-arrow')).toBeTruthy()
 
-    await userEvent.click(screen.getByRole('button', { name: 'Reviewer-lane MVPs' }))
+    await userEvent.click(firstChoice)
 
     await waitFor(() => {
       expect(calls.some(call => (
@@ -1023,6 +1188,142 @@ describe('ThreadTab', () => {
         call.body?.answer === 'Reviewer-lane MVPs'
       ))).toBe(true)
     })
+  })
+
+  it('renders multiple owner-input choices as selected checklist rows before submitting', async () => {
+    const { calls } = installFetchFakes([
+      boundedChatTurn({
+        id: 'bounded-chat:bc-jess-setup:setup-steps',
+        sessionId: 'bc-jess-setup',
+        subObjectiveId: 'setup-steps',
+        targetTitle: 'Jess',
+        domainTitle: 'Setup',
+        question: {
+          id: 'setup-steps',
+          prompt: 'This is a meta-intake task — I need to:',
+          why: 'Jess needs these setup steps before Guildhall shapes future work.',
+          choices: [
+            "Infer the project's internal routing slices (coordinator domains)",
+            'Infer lever positions from project evidence',
+            'Bootstrap verification (try install + gates)',
+            'Draft starter tasks',
+          ],
+          selectionMode: 'multiple',
+          evidence: [],
+        },
+        answerEndpoint: '/api/project/bounded-chat/bc-jess-setup/answer',
+      }),
+    ], 'bounded-chat:bc-jess-setup:setup-steps')
+
+    render(ThreadTab)
+    const routing = await screen.findByRole('button', { name: /internal routing slices/i })
+    const bootstrap = screen.getByRole('button', { name: /Bootstrap verification/i })
+
+    expect(screen.getAllByText('Select every item that applies. Guildhall will treat the selected items as the setup plan.').length).toBeGreaterThan(0)
+    expect(routing.classList.contains('multi')).toBe(true)
+    expect(routing.querySelector('.pressure-choice-arrow')).toBeNull()
+    expect((screen.getByRole('button', { name: 'Submit selected' }) as HTMLButtonElement).disabled).toBe(true)
+
+    await userEvent.click(routing)
+    await userEvent.click(bootstrap)
+    expect(routing.getAttribute('aria-pressed')).toBe('true')
+
+    await userEvent.click(screen.getByRole('button', { name: 'Submit selected' }))
+
+    await waitFor(() => {
+      expect(calls.some(call => (
+        call.url.includes('/api/project/bounded-chat/bc-jess-setup/answer') &&
+        call.body?.questionId === 'setup-steps' &&
+        call.body?.answer === "Infer the project's internal routing slices (coordinator domains), Bootstrap verification (try install + gates)"
+      ))).toBe(true)
+    })
+  })
+
+  it('shows progress while submitting multiple owner-input choices', async () => {
+    let resolveAnswer: ((response: Response) => void) | null = null
+    installFetchFakes([
+      boundedChatTurn({
+        id: 'bounded-chat:bc-jess-setup:setup-steps',
+        sessionId: 'bc-jess-setup',
+        subObjectiveId: 'setup-steps',
+        targetTitle: 'Jess',
+        domainTitle: 'Setup',
+        question: {
+          id: 'setup-steps',
+          prompt: 'This is a meta-intake task — I need to:',
+          why: 'Jess needs these setup steps before Guildhall shapes future work.',
+          choices: [
+            'Bootstrap verification (try install + gates)',
+            'Draft starter tasks',
+          ],
+          selectionMode: 'multiple',
+          evidence: [],
+        },
+        answerEndpoint: '/api/project/bounded-chat/bc-jess-setup/answer',
+      }),
+    ], 'bounded-chat:bc-jess-setup:setup-steps', {
+      boundedChatAnswerResponse: () => new Promise<Response>(resolve => {
+        resolveAnswer = resolve
+      }),
+    })
+
+    render(ThreadTab)
+    await userEvent.click(await screen.findByRole('button', { name: /Bootstrap verification/i }))
+    await userEvent.click(screen.getByRole('button', { name: 'Submit selected' }))
+
+    const submitting = await screen.findByRole('button', { name: 'Submitting...' })
+    expect((submitting as HTMLButtonElement).disabled).toBe(true)
+    expect(screen.queryByRole('button', { name: 'Submit selected' })).toBeNull()
+
+    resolveAnswer?.(json({ boundedChat: { id: 'bc-jess-setup', status: 'coordinator_review' } }))
+    await waitFor(() => expect(screen.queryByRole('button', { name: 'Submitting...' })).toBeNull())
+  })
+
+  it('renders structural-review bounded chat without raw reason and target ids', async () => {
+    const { calls } = installFetchFakes([
+      boundedChatTurn({
+        id: 'bounded-chat:bc-jess-structural-review:owner-input-1',
+        sessionId: 'bc-jess-structural-review',
+        subObjectiveId: 'owner-input-1',
+        targetTitle: 'Jess',
+        domainTitle: 'Review structural map structural-map-mpyrvqjg',
+        question: {
+          id: 'owner-input-1',
+          prompt: 'Review the proposed domains, package graph, executable units, and Git authority before Guildhall uses this map for routing.',
+          why: 'Reason: owner_review_required_before_routing_truth\nTargets: cross-cutting:accessibility, cross-cutting:parser-parity, domain:css, domain:less, domain:plugin',
+          evidence: [],
+        },
+        answerEndpoint: '/api/project/bounded-chat/bc-jess-structural-review/answer',
+      }),
+    ], 'bounded-chat:bc-jess-structural-review:owner-input-1')
+
+    render(ThreadTab)
+
+    const row = await screen.findByRole('button', { name: /Review structural map/i })
+    expect(within(row).getByText('Review structural map')).toBeTruthy()
+    expect(within(row).getByText(/Review the proposed domains/i)).toBeTruthy()
+    expect(screen.queryByText(/owner_review_required_before_routing_truth/)).toBeNull()
+    expect(screen.queryByText(/cross-cutting:accessibility/)).toBeNull()
+    expect(screen.queryByText(/domain:css/)).toBeNull()
+    expect(selectedThread().getByText(/Guildhall has already inferred these project areas/i)).toBeTruthy()
+    const proposedMap = screen.getByLabelText('Proposed structural map')
+    expect(within(proposedMap).getByText('Already found')).toBeTruthy()
+    expect(within(proposedMap).getByText('5 proposed areas')).toBeTruthy()
+    expect(within(proposedMap).getByRole('heading', { name: 'Domains' })).toBeTruthy()
+    expect(within(proposedMap).getByText('css')).toBeTruthy()
+    expect(within(proposedMap).getByText('less')).toBeTruthy()
+    expect(within(proposedMap).getByText('plugin')).toBeTruthy()
+    expect(within(proposedMap).getByRole('heading', { name: 'Cross-cutting areas' })).toBeTruthy()
+    expect(within(proposedMap).getByText('accessibility')).toBeTruthy()
+    expect(within(proposedMap).getByText('parser parity')).toBeTruthy()
+    expect(selectedThread().getByText(/Use the map if these areas look good enough/i)).toBeTruthy()
+    expect(screen.getByRole('button', { name: 'Something looks wrong' })).toBeTruthy()
+    await userEvent.click(screen.getByRole('button', { name: 'Use this map' }))
+    await waitFor(() => expect(calls.some(call => (
+      call.url.includes('/api/project/bounded-chat/bc-jess-structural-review/answer') &&
+      call.body?.questionId === 'owner-input-1' &&
+      call.body?.answer === 'Use this structural map for routing.'
+    ))).toBe(true))
   })
 
   it('keeps bulky task context and older activity behind progressive disclosure', async () => {
@@ -1055,6 +1356,38 @@ describe('ThreadTab', () => {
     expect(screen.getByText('Started shell')).toBeTruthy()
     const activitySummary = screen.getByText(/Show \d+ earlier update/)
     expect(activitySummary.closest('details')?.open).toBe(false)
+  })
+
+  it('shows matched routing context where the user starts a task', async () => {
+    project.detail = {
+      ...(project.detail as any),
+      taskRoutingContexts: {
+        'task-link-controls': {
+          taskId: 'task-link-controls',
+          status: 'matched',
+          summary: 'Guildhall will start with Editor UI and 1 likely check.',
+          likelyArea: { id: 'package:editor-ui', label: 'Editor UI', path: 'packages/editor-ui' },
+          primaryDomain: { id: 'domain:editor', label: 'Editor workflow' },
+          checks: [{ id: 'exec:editor-ui:test', label: 'editor ui test', command: 'pnpm --filter editor-ui test' }],
+          reasons: ['Matched files under packages/editor-ui.', 'Uses the Editor workflow work area.'],
+          omittedCount: 4,
+        },
+      },
+    }
+    installFetchFakes([
+      workerTurn({
+        taskDescription: 'Build URL input, display text, open-in-new-tab, and remove link controls.',
+        sourceNote: { references: ['docs/roadmap.md'] },
+      }),
+    ], 'worker-link-controls')
+
+    render(ThreadTab)
+
+    await screen.findByText('Starting context')
+    expect(screen.getAllByText('Editor UI').length).toBeGreaterThan(0)
+    expect(screen.getByText('packages/editor-ui')).toBeTruthy()
+    expect(screen.getByText('pnpm --filter editor-ui test')).toBeTruthy()
+    expect(screen.getByRole('button', { name: 'Change this context' })).toBeTruthy()
   })
 
   it('clears the first spec shaping input after the idea is submitted', async () => {
@@ -1183,11 +1516,16 @@ describe('ThreadTab', () => {
   })
 
   it('submits direction, coordinator, and bootstrap setup affordances without leaving Thread', async () => {
-    const { calls } = installFetchFakes(
-      [
+    let activeSetupStep: 'direction' | 'coordinator' | 'bootstrap' = 'direction'
+    const setupTurnsForState = () => {
+      const directionDone = activeSetupStep !== 'direction'
+      const coordinatorDone = activeSetupStep === 'bootstrap'
+      return [
         setupTurn({
           id: 'setup-direction',
           stepId: 'direction',
+          status: directionDone ? 'done' : 'active',
+          phase: directionDone ? 'done' : 'setup',
           title: 'Describe the project',
           affordance: 'inline-textarea',
           actionLabel: 'Save direction',
@@ -1198,6 +1536,8 @@ describe('ThreadTab', () => {
         setupTurn({
           id: 'setup-coordinator',
           stepId: 'coordinator',
+          status: directionDone && !coordinatorDone ? 'active' : coordinatorDone ? 'done' : 'pending',
+          phase: coordinatorDone ? 'done' : 'setup',
           title: 'Choose a coordinator',
           affordance: 'inline-choice',
           actionLabel: 'Add coordinator',
@@ -1210,23 +1550,36 @@ describe('ThreadTab', () => {
         setupTurn({
           id: 'setup-bootstrap',
           stepId: 'bootstrap',
+          status: activeSetupStep === 'bootstrap' ? 'active' : 'pending',
+          phase: 'setup',
           title: 'Run setup checks',
           affordance: 'inline-button',
           actionLabel: 'Run checks',
           submitEndpoint: '/api/setup/bootstrap',
         }),
-      ],
-      'setup-direction',
-    )
+      ]
+    }
+    const { calls } = installFetchFakes(setupTurnsForState(), 'setup-direction', {
+      threadState: () => ({
+        turns: setupTurnsForState(),
+        activeTurnId: `setup-${activeSetupStep}`,
+      }),
+      onSetupSubmit: (url) => {
+        if (url.includes('/direction')) activeSetupStep = 'coordinator'
+        else if (url.includes('/coordinator')) activeSetupStep = 'bootstrap'
+      },
+    })
 
+    markProjectPaused()
     render(ThreadTab)
     await screen.findByPlaceholderText('What should Guildhall know?')
 
     await userEvent.type(screen.getByPlaceholderText('What should Guildhall know?'), 'Knit owns the editor UI.')
     await userEvent.click(screen.getByRole('button', { name: /save direction/i }))
+    await screen.findByRole('combobox')
     await userEvent.selectOptions(screen.getByRole('combobox'), 'project-manager')
     await userEvent.click(screen.getByRole('button', { name: /add coordinator/i }))
-    const runChecksButton = screen.getByRole('button', { name: /run checks/i })
+    const runChecksButton = await screen.findByRole('button', { name: /run checks/i })
     expect(runChecksButton.classList.contains('v-agent')).toBe(true)
     await userEvent.click(runChecksButton)
 
@@ -1253,6 +1606,7 @@ describe('ThreadTab', () => {
       'setup-direction',
     )
 
+    markProjectPaused()
     render(ThreadTab)
     await screen.findByRole('button', { name: /open setup/i })
     await userEvent.click(screen.getByRole('button', { name: /open setup/i }))
@@ -1278,6 +1632,7 @@ describe('ThreadTab', () => {
       'other-turn',
     )
 
+    markProjectPaused()
     render(ThreadTab)
     await screen.findByRole('button', { name: /start project check-in/i })
     const startCheckInButton = screen.getByRole('button', { name: /start project check-in/i })
@@ -1435,14 +1790,16 @@ describe('ThreadTab', () => {
     render(ThreadTab)
 
     await screen.findByRole('button', { name: 'Clean up brief' })
-    const needsBriefChip = selectedThread().getByText('Needs brief')
+    const needsBriefChip = selectedThread()
+      .getAllByText('Needs brief')
+      .find(node => node.classList.contains('chip'))
     expect(needsBriefChip).toBeTruthy()
-    expect(needsBriefChip.classList.contains('tone-warn')).toBe(true)
+    expect(needsBriefChip?.classList.contains('tone-warn')).toBe(true)
     expect(selectedThread().getAllByText('Brief checklist').length).toBeGreaterThan(0)
     expect(screen.queryByText('No upstream')).toBeNull()
     expect(screen.queryByText(/has no upstream branch/)).toBeNull()
     expect(screen.queryByText('Guildhall next')).toBeNull()
-    expect(screen.queryByRole('button', { name: 'Start work' })).toBeNull()
+    expect(screen.queryByRole('button', { name: 'Resume work' })).toBeNull()
     expect(screen.queryByRole('button', { name: 'Finish task brief...' })).toBeNull()
     const startButton = screen.getByRole('button', { name: 'Clean up brief' })
     expect(startButton.classList.contains('v-agent')).toBe(true)
@@ -1480,12 +1837,14 @@ describe('ThreadTab', () => {
     render(ThreadTab)
 
     await screen.findAllByText('The starter checklist is complete, but Guildhall still needs a full product brief and spec handoff before a worker can start.')
-    const needsBriefChip = selectedThread().getByText('Needs brief')
+    const needsBriefChip = selectedThread()
+      .getAllByText('Needs brief')
+      .find(node => node.classList.contains('chip'))
     expect(needsBriefChip).toBeTruthy()
-    expect(needsBriefChip.classList.contains('tone-warn')).toBe(true)
+    expect(needsBriefChip?.classList.contains('tone-warn')).toBe(true)
     expect(selectedThread().getByText('Handoff still needs cleanup')).toBeTruthy()
     await userEvent.click(screen.getByRole('button', { name: 'Clean up brief' }))
-    expect(screen.queryByRole('button', { name: 'Start work' })).toBeNull()
+    expect(screen.queryByRole('button', { name: 'Resume work' })).toBeNull()
     await waitFor(() => {
       const continueCall = calls.find(c => c.url.includes('/api/project/task/task-ready-handoff-incomplete/continue'))
       expect(continueCall?.body).toMatchObject({
@@ -1779,8 +2138,10 @@ describe('ThreadTab', () => {
         }),
       ],
       'stopped-worker',
+      { projectRunStatus: 'stopped', projectAvailability: { status: 'paused', pausedAt: now, resumedAt: null } },
     )
 
+    markProjectPaused()
     render(ThreadTab)
 
     expect(screen.queryByText(/No activity for 129m/)).toBeNull()
@@ -1808,7 +2169,7 @@ describe('ThreadTab', () => {
 
     render(ThreadTab)
 
-    expect((await screen.findAllByText('Gate checks are queued. Start Guildhall when you want it to continue.')).length).toBeGreaterThan(0)
+    expect((await screen.findAllByText('Gate checks are queued. Resume Guildhall when you want it to continue.')).length).toBeGreaterThan(0)
   })
 
   it('summarizes and prioritizes high-volume thread operations', async () => {
@@ -1871,11 +2232,12 @@ describe('ThreadTab', () => {
         }),
       ],
       'worker-link-controls',
+      { projectRunStatus: 'stopped', projectAvailability: { status: 'paused', pausedAt: now, resumedAt: null } },
     )
 
     render(ThreadTab)
 
-    expect((await screen.findAllByText('Paused')).length).toBeGreaterThan(0)
+    expect((await screen.findAllByText('Work is paused. Resume Guildhall when you want it to continue.')).length).toBeGreaterThan(0)
     expect(screen.queryByText(/^queued$/i, { selector: '.chip' })).toBeNull()
   })
 
@@ -1971,7 +2333,7 @@ describe('ThreadTab', () => {
     })
   })
 
-  it('keeps queued task cards focused on owner state instead of competing stage chips', async () => {
+  it('keeps queued task cards focused on shared stage chips instead of construction chips', async () => {
     installFetchFakes(
       [
         importedDraftTurn({ id: 'draft-stage', taskId: 'task-draft-stage', constructionMode: 'blueprint' }),
@@ -1983,11 +2345,37 @@ describe('ThreadTab', () => {
     render(ThreadTab)
 
     await selectedThread().findAllByText('Needs you')
-    expect(screen.getAllByText('Queued').length).toBeGreaterThanOrEqual(1)
+    expect(screen.getAllByText('Ready').length).toBeGreaterThanOrEqual(1)
     expect(screen.queryByText('Guildhall next')).toBeNull()
     expect(screen.queryByText('Blueprint')).toBeNull()
     expect(screen.queryByText('Build')).toBeNull()
     expect(threadComposer().getByPlaceholderText('Add a note for Guildhall…')).toBeTruthy()
+  })
+
+  it('uses the shared spec revision stage chip for exploring spec turns', async () => {
+    installFetchFakes(
+      [
+        importedDraftTurn({
+          id: 'inflight-task-import-1y7kmp6',
+          taskId: 'task-import-1y7kmp6',
+          taskTitle: 'Block menu / block side menu',
+          taskStatus: 'exploring',
+          importedDraft: false,
+          phase: 'spec',
+          constructionMode: 'blueprint',
+          summary: 'Guildhall has your answers and a spec draft. Coordinator review is next.',
+          checklist: undefined,
+        }),
+      ],
+      'inflight-task-import-1y7kmp6',
+    )
+
+    render(ThreadTab)
+
+    const blockMenuRow = await screen.findByRole('button', { name: /Block menu \/ block side menu/i })
+    await within(blockMenuRow).findByText('Paused')
+    expect(within(blockMenuRow).queryByText('Queued')).toBeNull()
+    expect(screen.queryByText('Intake')).toBeNull()
   })
 
   it('keeps the thread rail focused on the current open turn instead of a newer done milestone', async () => {
@@ -2019,7 +2407,7 @@ describe('ThreadTab', () => {
     render(ThreadTab)
 
     const floatingRow = await screen.findByRole('button', { name: /Floating toolbar/i })
-    await within(floatingRow).findByText('Queued')
+    await within(floatingRow).findByText('Paused')
     expect(within(floatingRow).queryByText('done', { selector: '.chip' })).toBeNull()
     expect(within(floatingRow).getByText(/brief is not ready yet/i)).toBeTruthy()
   })
@@ -2221,13 +2609,10 @@ describe('ThreadTab', () => {
     expect(screen.queryByText('Import complete.')).toBeNull()
   })
 
-  it('approves briefs and spec reviews through the inline thread card', async () => {
+  it('approves active briefs from the document modal', async () => {
     const { calls } = installFetchFakes(
       [
         briefTurn(),
-        specReviewTurn('task-link-controls'),
-        specReviewTurn('task-meta-intake'),
-        specReviewTurn('task-workspace-import'),
       ],
       'brief-link-controls',
     )
@@ -2235,24 +2620,36 @@ describe('ThreadTab', () => {
     render(ThreadTab)
     await screen.findByText('Edit links inline.')
 
-    await userEvent.click(selectedThread().getByRole('button', { name: /yes, that's right/i }))
-    await userEvent.click(selectedThread().getByRole('button', { name: /approve spec/i }))
-
-    await openThreadRow(/review the proposed split and starter structure/i)
-    await userEvent.click(selectedThread().getByRole('button', { name: /yes, use this split/i }))
-
-    await openThreadRow(/review the spec draft before guildhall moves it forward/i)
-    await userEvent.click(selectedThread().getByRole('button', { name: /approve spec/i }))
+    await userEvent.click(selectedThread().getByRole('button', { name: /view brief/i }))
+    const dialog = await screen.findByRole('dialog', { name: /approve brief/i })
+    await userEvent.click(within(dialog).getByRole('button', { name: /yes, that's right/i }))
 
     await waitFor(() => {
       expect(calls.some(call => call.url.includes('/task/task-link-controls/approve-brief'))).toBe(true)
-      expect(calls.some(call => call.url.includes('/task/task-link-controls/approve-spec'))).toBe(true)
-      expect(calls.some(call => call.url.includes('/meta-intake/approve'))).toBe(true)
-      expect(calls.some(call => call.url.includes('/workspace-import/approve'))).toBe(true)
     })
   })
 
-  it('keeps pending spec drafts approvable when the card is visible inline', async () => {
+  it('approves meta-intake splits from the document modal', async () => {
+    const { calls } = installFetchFakes(
+      [
+        specReviewTurn('task-meta-intake'),
+      ],
+      'spec-task-meta-intake',
+    )
+
+    render(ThreadTab)
+    await screen.findByRole('button', { name: /view spec/i })
+
+    await userEvent.click(screen.getByRole('button', { name: /view spec/i }))
+    const dialog = await screen.findByRole('dialog', { name: /approve split/i })
+    await userEvent.click(within(dialog).getByRole('button', { name: /yes, use this split/i }))
+
+    await waitFor(() => {
+      expect(calls.some(call => call.url.includes('/meta-intake/approve'))).toBe(true)
+    })
+  })
+
+  it('keeps pending spec drafts approvable from the document modal', async () => {
     const { calls } = installFetchFakes(
       [
         specReviewTurn('task-link-controls', {
@@ -2266,59 +2663,125 @@ describe('ThreadTab', () => {
     )
 
     render(ThreadTab)
-    await screen.findByRole('button', { name: /approve spec/i })
+    await screen.findByRole('button', { name: /view spec/i })
 
-    await userEvent.click(screen.getByRole('button', { name: /approve spec/i }))
+    await userEvent.click(screen.getByRole('button', { name: /view spec/i }))
+    const dialog = await screen.findByRole('dialog', { name: /approve spec/i })
+    await userEvent.click(within(dialog).getByRole('button', { name: /approve spec/i }))
 
     await waitFor(() => {
       expect(calls.some(call => call.url.includes('/task/task-link-controls/approve-spec'))).toBe(true)
     })
   })
 
-  it('uses the shared secondary-left and primary-right brief decision buttons', async () => {
+  it('advances the thread out of spec review after approving a valid task spec from the modal', async () => {
+    let approved = false
+    const specTurn = specReviewTurn('task-link-controls')
+    const readyTurn = {
+      kind: 'inflight',
+      id: 'inflight-task-link-controls',
+      at: now,
+      persona: 'worker',
+      status: 'active',
+      phase: 'ready',
+      taskId: 'task-link-controls',
+      taskTitle: 'Knit: add link editor controls',
+      constructionMode: 'blueprint',
+      taskStatus: 'ready',
+      summary: 'Approved and queued for work.',
+      workerHandoff: { ready: true, cleanupNeeded: false },
+    }
+    const { calls } = installFetchFakes([specTurn], 'spec-task-link-controls', {
+      onApproveSpec: () => { approved = true },
+      threadState: () => approved
+        ? { turns: [readyTurn], activeTurnId: 'inflight-task-link-controls' }
+        : { turns: [specTurn], activeTurnId: 'spec-task-link-controls' },
+    })
+
+    render(ThreadTab)
+
+    await screen.findByRole('button', { name: /view spec/i })
+    await userEvent.click(screen.getByRole('button', { name: /view spec/i }))
+    const dialog = await screen.findByRole('dialog', { name: /approve spec/i })
+    await userEvent.click(within(dialog).getByRole('button', { name: /approve spec/i }))
+
+    await waitFor(() => {
+      expect(calls.some(call => call.url.includes('/task/task-link-controls/approve-spec'))).toBe(true)
+      expect(screen.queryByRole('dialog', { name: /approve spec/i })).toBeNull()
+      expect(screen.queryByRole('button', { name: /view spec/i })).toBeNull()
+      expect(screen.getByText('Ready for work')).toBeTruthy()
+      expect(screen.getByRole('button', { name: /already queued/i })).toBeTruthy()
+    })
+  })
+
+  it('shows approve-spec failures instead of silently leaving the review card unchanged', async () => {
+    installFetchFakes([specReviewTurn('task-link-controls')], 'spec-task-link-controls', {
+      approveSpecResponse: json({ error: 'Task is not in spec_review status.' }, { status: 400 }),
+    })
+
+    render(ThreadTab)
+
+    await screen.findByRole('button', { name: /view spec/i })
+    await userEvent.click(screen.getByRole('button', { name: /view spec/i }))
+    const dialog = await screen.findByRole('dialog', { name: /approve spec/i })
+    await userEvent.click(within(dialog).getByRole('button', { name: /approve spec/i }))
+
+    await waitFor(() => {
+      const stillOpenDialog = screen.getByRole('dialog', { name: /approve spec/i })
+      expect(within(stillOpenDialog).getByText('Task is not in spec_review status.')).toBeTruthy()
+      expect(screen.getByRole('button', { name: /view spec/i })).toBeTruthy()
+    })
+  })
+
+  it('uses View brief as the active brief primary action and moves approval into the modal', async () => {
     installFetchFakes([briefTurn()], 'brief-link-controls')
 
     render(ThreadTab)
     await screen.findByText('Edit links inline.')
 
     const viewBriefButton = screen.getByRole('button', { name: /view brief/i })
-    const yesButton = screen.getByRole('button', { name: /yes, that's right/i })
 
-    expect(viewBriefButton.classList.contains('v-secondary')).toBe(true)
-    expect(yesButton.classList.contains('v-primary')).toBe(true)
-    expect(viewBriefButton.compareDocumentPosition(yesButton) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+    expect(viewBriefButton.classList.contains('v-primary')).toBe(true)
+    expect(screen.queryByRole('button', { name: /yes, that's right/i })).toBeNull()
+
+    await userEvent.click(viewBriefButton)
+    const dialog = await screen.findByRole('dialog', { name: /approve brief/i })
+    expect(within(dialog).getByRole('button', { name: /yes, that's right/i }).classList.contains('v-primary')).toBe(true)
   })
 
-  it('opens a thread-owned spec modal and keeps Details separate', async () => {
+  it('uses View spec as the active spec primary action and moves approval into the modal', async () => {
     installFetchFakes([
       specReviewTurn('task-link-controls'),
     ], 'spec-task-link-controls')
 
     render(ThreadTab)
 
-    await screen.findByRole('button', { name: /approve spec/i })
-    expect(screen.getByRole('button', { name: /view spec/i })).toBeTruthy()
+    await screen.findByRole('button', { name: /view spec/i })
+    expect(screen.getByRole('button', { name: /view spec/i }).classList.contains('v-primary')).toBe(true)
+    expect(screen.queryByRole('button', { name: /approve spec/i })).toBeNull()
     expect(screen.getByRole('button', { name: /details\.\.\./i })).toBeTruthy()
 
     await userEvent.click(screen.getByRole('button', { name: /view spec/i }))
-    await screen.findByRole('dialog', { name: 'Spec' })
-    expect(screen.getByText('Build the focused link editor controls.')).toBeTruthy()
+    const dialog = await screen.findByRole('dialog', { name: /approve spec/i })
+    expect(within(dialog).getByText('Build the focused link editor controls.')).toBeTruthy()
+    expect(within(dialog).getByRole('button', { name: /approve spec/i }).classList.contains('v-primary')).toBe(true)
+    expect(within(dialog).getByRole('button', { name: /request changes/i })).toBeTruthy()
     expect(path.value).toContain('/thread')
   })
 
-  it('opens a thread-owned brief modal and keeps Details separate', async () => {
+  it('opens a thread-owned brief modal from the root card and keeps Details separate', async () => {
     installFetchFakes([
       briefTurn(),
     ], 'brief-link-controls')
 
     render(ThreadTab)
 
-    await screen.findByRole('button', { name: /yes, that's right/i })
+    await screen.findByRole('button', { name: /view brief/i })
     expect(screen.getByRole('button', { name: /view brief/i })).toBeTruthy()
     expect(screen.getByRole('button', { name: /details\.\.\./i })).toBeTruthy()
 
     await userEvent.click(screen.getByRole('button', { name: /view brief/i }))
-    const dialog = await screen.findByRole('dialog', { name: 'Brief' })
+    const dialog = await screen.findByRole('dialog', { name: /approve brief/i })
     expect(within(dialog).getByText('Edit links inline.')).toBeTruthy()
     expect(path.value).toContain('/thread')
   })
@@ -2506,7 +2969,11 @@ describe('ThreadTab', () => {
     })
   })
 
-  it('counts exploring imported drafts as Guildhall shaping after drafting starts', async () => {
+  it('labels exploring imported drafts with a status chip while the project is running', async () => {
+    project.detail = {
+      ...(project.detail as any),
+      run: { status: 'running', mode: 'continuous' },
+    }
     installFetchFakes(
       [
         importedDraftTurn({
@@ -2518,7 +2985,8 @@ describe('ThreadTab', () => {
     )
 
     render(ThreadTab)
-    expect((await screen.findAllByText('Guildhall shaping')).length).toBeGreaterThan(0)
+    expect((await screen.findAllByText('Queued')).length).toBeGreaterThan(0)
+    expect(screen.queryByText('Guildhall shaping')).toBeNull()
     expect(screen.queryByLabelText('Thread operations summary')).toBeNull()
   })
 
@@ -2780,6 +3248,8 @@ describe('ThreadTab', () => {
     expect(frameBlock).toContain('--thread-composer-action-inset: var(--gh-space-2)')
     expect(frameBlock).toContain('--thread-composer-action-size: 32px')
     expect(textareaBlock).toContain('display: block')
+    expect(textareaBlock).toContain('background: var(--bg-raised)')
+    expect(textareaBlock).toContain('border-color: color-mix(in srgb, var(--border) 72%, white 18%)')
     expect(textareaBlock).toContain('padding-right: calc(var(--thread-composer-action-inset) + var(--thread-composer-action-size) + var(--control-pad-x))')
     expect(textareaBlock).toContain('padding-bottom: calc(var(--thread-composer-action-inset) + var(--thread-composer-action-size) + var(--control-pad-y))')
     expect(actionsBlock).toContain('right: var(--thread-composer-action-inset)')
@@ -2795,13 +3265,41 @@ describe('ThreadTab', () => {
         taskStatus: 'in_progress',
         summary: 'Guildhall paused while this task was in progress.',
       }),
-    ], 'task:task-chip-state')
+    ], 'task:task-chip-state', {
+      projectRunStatus: 'stopped',
+      projectAvailability: { status: 'paused', pausedAt: now, resumedAt: null },
+    })
 
+    markProjectPaused()
     render(ThreadTab)
 
     const row = await screen.findByRole('button', { name: /knit: shape the toolbar api/i })
     expect(within(row).getByText('Paused')).toBeTruthy()
     expect((row.firstElementChild as HTMLElement | null)?.className).toContain('thread-index-row-chips')
+  })
+
+  it('uses ownership, not selection, for thread mini-card rails', async () => {
+    installFetchFakes([
+      questionTurn('q-owner-choice', 'owner-choice', 'Which variant should Guildhall build?', ['Compact', 'Full']),
+      workerTurn({
+        id: 'queued-guildhall-card',
+        taskId: 'task-queued-guildhall-card',
+        taskTitle: 'Knit: queued Guildhall task',
+        taskStatus: 'ready',
+        summary: 'Guildhall can start this queued task.',
+        liveAgent: undefined,
+      }),
+    ], 'q-owner-choice')
+
+    render(ThreadTab)
+
+    const humanRow = await screen.findByRole('button', { name: /which variant should guildhall build/i })
+    const guildhallRow = await screen.findByRole('button', { name: /knit: queued guildhall task/i })
+
+    expect(humanRow.className).toContain('rail-warn')
+    expect(humanRow.className).not.toContain('rail-accent')
+    expect(guildhallRow.className).toContain('rail-ok')
+    expect(within(guildhallRow).getByText('Ready')).toBeTruthy()
   })
 
   it('keeps thread-list titles readable while chips stay compact and single-line', () => {
@@ -2837,7 +3335,7 @@ describe('ThreadTab', () => {
     const source = readFileSync('src/web/surfaces/project/ThreadTab.svelte', 'utf8')
 
     expect(source).toContain("if (label === 'Needs brief') return 'warn'")
-    expect(source).toContain("'Guildhall can continue') return 'ok'")
+    expect(source).toContain("if (label === 'Queued' || label === 'Working') return 'running'")
     expect(source).not.toMatch(/agent-attention|tone=\"agent|tone='agent'|return 'agent'/)
   })
 

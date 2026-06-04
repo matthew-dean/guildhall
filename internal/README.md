@@ -34,6 +34,8 @@ The 0.11.0 implementation tracker is
 `internal/plans/2026-06-02-guildhall-0-11-implementation-tracker.md`.
 The proposed 0.11.0 OpenRouter support plan is
 `internal/plans/2026-05-28-guildhall-0-11-openrouter-support.md`.
+The proposed 0.11.0 deterministic code-quality implementation plan is
+`internal/plans/2026-06-03-guildhall-0-11-deterministic-code-quality-implementation-plan.md`.
 The proposed 0.11.0 deterministic code-quality signal spec is
 `internal/specs/2026-06-03-guildhall-0-11-deterministic-code-quality-signals.md`.
 The proposed 0.10.0 external agent memory bridge spec is

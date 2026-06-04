@@ -331,7 +331,7 @@ describe('ProjectsHome', () => {
     expect(screen.getByLabelText('Reviewer: 1 blocked and 1 done task in Fair Labor License.').classList.contains('avatar-tone-reviewer')).toBe(true)
   })
 
-  it('starts and stops projects with project ids in the endpoint', async () => {
+  it('resumes and pauses projects with project ids in the endpoint', async () => {
     const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
       const url = String(input)
       if (url.startsWith('/api/project/start')) {
@@ -354,7 +354,7 @@ describe('ProjectsHome', () => {
     const startButton = screen.getByRole('button', { name: /^resume$/i })
     expect(startButton.classList.contains('v-agent')).toBe(true)
     await userEvent.click(startButton)
-    await userEvent.click(screen.getAllByRole('button', { name: /stop/i })[0]!)
+    await userEvent.click(screen.getAllByRole('button', { name: /pause/i })[0]!)
 
     await waitFor(() => {
       expect(fetchMock.mock.calls.some(([input]) => String(input).startsWith('/api/project/start'))).toBe(true)
@@ -407,14 +407,14 @@ describe('ProjectsHome', () => {
     expect(getCachedService()).toBe(cachedAfterInitialLoad)
   })
 
-  it('surfaces start and stop failures on the projects page', async () => {
+  it('surfaces resume and pause failures on the projects page', async () => {
     const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
       const url = String(input)
       if (url.startsWith('/api/project/start')) {
         return json({ error: 'model unavailable' }, { status: 409 })
       }
       if (url.startsWith('/api/project/stop')) {
-        return json({ error: 'stop failed' }, { status: 500 })
+        return json({ error: 'pause failed' }, { status: 500 })
       }
       return json(servicePayload)
     })
@@ -425,8 +425,8 @@ describe('ProjectsHome', () => {
 
     await userEvent.click(screen.getByRole('button', { name: /^resume$/i }))
     await screen.findByText('model unavailable')
-    await userEvent.click(screen.getByRole('button', { name: /stop/i }))
-    await screen.findByText('stop failed')
+    await userEvent.click(screen.getByRole('button', { name: /pause/i }))
+    await screen.findByText('pause failed')
   })
 
   it('handles cancelled attach without navigating away from the projects list', async () => {

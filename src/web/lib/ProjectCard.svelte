@@ -6,7 +6,6 @@
     FolderOpen,
     PauseCircle,
     Sparkles,
-    Square,
   } from 'lucide-svelte'
   import ActionBar from './ActionBar.svelte'
   import Button from './Button.svelte'
@@ -334,9 +333,9 @@
           {summary.runActionLabel}
         </Button>
       {:else if effectiveRunning}
-        <Button variant="danger" size="sm" disabled={busy} title={`Stop Guildhall on ${summary.name}`} onclick={() => onStop?.(summary.id)}>
-          <Square size={13} />
-          Stop
+        <Button variant="secondary" size="sm" disabled={busy} title={`Pause Guildhall on ${summary.name}`} onclick={() => onStop?.(summary.id)}>
+          <PauseCircle size={14} />
+          Pause
         </Button>
       {/if}
     </ActionBar>

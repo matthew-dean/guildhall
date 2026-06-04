@@ -222,8 +222,70 @@ describe('postUserQuestionTool', () => {
         description: { type: 'string' },
         choices: { type: 'array' },
         selectionMode: { type: 'string' },
+        assumptionIfNotAsked: { type: 'string' },
+        confidenceIfProceeding: { type: 'string' },
+        impactIfWrong: { type: 'string' },
+        gitContainment: { type: 'string' },
+        blockingReason: { type: 'string' },
       },
     })
+  })
+
+  it('rejects high-confidence contained questions so agents proceed with assumptions', async () => {
+    const metadata: Record<string, unknown> = {
+      tasks_path: tasksPath,
+      current_task_id: 'task-001',
+      current_agent_id: 'spec-agent',
+    }
+
+    const result = await postUserQuestionTool.execute(
+      {
+        kind: 'choice',
+        body: 'Which AlertDialog variant set should Guildhall implement?',
+        choices: ['Need-driven default only', 'Separate warning/destructive variants'],
+        selectionMode: 'single',
+        assumptionIfNotAsked: 'Implement a need-driven default AlertDialog with options exposed only when a use case proves them necessary.',
+        confidenceIfProceeding: 'high',
+        impactIfWrong: 'medium',
+        gitContainment: 'worktree',
+        blockingReason: 'The owner may prefer more variants.',
+      },
+      { cwd: '/tmp', metadata },
+    )
+
+    expect(result.is_error).toBe(true)
+    expect(result.output).toContain('git/worktree containment')
+    expect(result.output).toContain('continue unattended')
+    expect(await ownerInputCount()).toBe(0)
+    expect(await taskHasOpenQuestions()).toBe(false)
+  })
+
+  it('allows low-confidence high-impact owner decisions after git containment reasoning', async () => {
+    const metadata: Record<string, unknown> = {
+      tasks_path: tasksPath,
+      current_task_id: 'task-001',
+      current_agent_id: 'spec-agent',
+    }
+
+    const result = await postUserQuestionTool.execute(
+      {
+        kind: 'choice',
+        body: 'Which migration policy should Guildhall apply to existing project state?',
+        choices: ['Migrate automatically on first open', 'Require an explicit owner migration command'],
+        selectionMode: 'single',
+        assumptionIfNotAsked: 'Migrate automatically on first open.',
+        confidenceIfProceeding: 'low',
+        impactIfWrong: 'high',
+        gitContainment: 'feature_branch',
+        blockingReason: 'A wrong migration policy can rewrite persisted owner project state and surprise existing workflows even if the code branch is undoable.',
+      },
+      { cwd: '/tmp', metadata },
+    )
+
+    expect(result.is_error).toBe(false)
+    expect(await ownerInputCount()).toBe(1)
+    expect(await ownerInputPrompts()).toEqual(['Which migration policy should Guildhall apply to existing project state?'])
+    expect(await taskHasOpenQuestions()).toBe(false)
   })
 
   it('limits inferred questions from assistant prose to the top three', async () => {

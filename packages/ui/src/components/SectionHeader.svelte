@@ -92,6 +92,13 @@
     min-inline-size: 0;
   }
 
+  .gh-section-header.meta-inline .gh-section-header-title-row {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: var(--gh-space-1) var(--gh-space-2);
+  }
+
   .gh-section-header-eyebrow {
     margin: 0;
     color: var(--gh-color-text-secondary);
@@ -188,7 +195,7 @@
       align-items: end;
     }
 
-    .gh-section-header.align-start .gh-section-header-title-row {
+    .gh-section-header.align-start:not(.meta-inline) .gh-section-header-title-row {
       grid-template-columns: minmax(0, 1fr) auto;
       align-items: center;
     }

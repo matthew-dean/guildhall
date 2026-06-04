@@ -2587,6 +2587,82 @@ describe('buildThread', () => {
     }
   })
 
+  it('does not ask for recovery brief approval when a concrete spec is already saved', async () => {
+    const projectPath = await mkdtemp(path.join(tmpdir(), 'guildhall-thread-'))
+    try {
+      await mkdir(path.join(projectPath, '.guildhall'), { recursive: true })
+      const now = new Date().toISOString()
+      await writeFile(
+        path.join(projectPath, '.guildhall', 'TASKS.json'),
+        JSON.stringify({
+          tasks: [
+            {
+              id: 'task-block-menu',
+              title: 'Block menu / block side menu',
+              description: 'looma/docs/editor-roadmap.md: - **Block menu / block side menu**',
+              status: 'exploring',
+              createdAt: now,
+              updatedAt: now,
+              productBrief: {
+                userJob: 'I want Block menu / block side menu turned into concrete project work using the evidence and owner decisions already recorded.',
+                whyItMattersNow: 'Block menu / block side menu has a reviewable spec, acceptance criteria, and a clear completion boundary before implementation starts.',
+                successMetric: 'Block menu / block side menu has a reviewable spec, acceptance criteria, and a clear completion boundary before implementation starts.',
+                antiPatterns: [
+                  'Do not preserve stale recovery-loop wording as the task brief.',
+                  'Do not ask the owner to re-answer decisions already recorded on the task.',
+                ],
+                authoredBy: 'coordinator-recovery',
+                authoredAt: now,
+              },
+              spec: '## Summary\nBuild the block menu from recorded owner decisions.\n\n## Acceptance Criteria\n1. The block menu appears in the editor.\n2. Drag-and-drop remains out of scope.',
+              acceptanceCriteria: [
+                { id: 'ac-1', description: 'The block menu appears in the editor.', verifiedBy: 'review', met: false },
+                { id: 'ac-2', description: 'Drag-and-drop remains out of scope.', verifiedBy: 'review', met: false },
+              ],
+              notes: [
+                {
+                  agentId: 'coordinator-recovery',
+                  role: 'system',
+                  content: 'Guildhall wrote a deterministic recovery spec seed from the current task evidence before redispatching the spec lane, so the task has durable progress instead of returning to a read-only shaping loop.',
+                  timestamp: now,
+                },
+              ],
+              openQuestions: [],
+            },
+          ],
+        }),
+      )
+      const snapshot: ProjectSnapshot = {
+        projectPath,
+        config: {
+          id: 'demo',
+          name: 'Demo',
+          bootstrap: { verifiedAt: now },
+          coordinators: [{ id: 'looma', name: 'Looma' }],
+        },
+        bootstrapVerified: true,
+        hasProvider: true,
+        hasDirection: true,
+        workspaceImportReviewed: true,
+        taskCount: 1,
+        wizardState: emptyWizardsState(),
+      }
+
+      const thread = buildThread({ projectPath, snapshot, recentEvents: [] })
+
+      expect(thread.turns.find((turn) => turn.id === 'brief:task-block-menu' && turn.status !== 'done')).toBeUndefined()
+      expect(thread.turns.find((turn) => turn.id === 'spec:task-block-menu')).toBeUndefined()
+      expect(thread.activeTurnId).toBe('inflight:task-block-menu')
+      expect(thread.turns.find((turn) => turn.id === 'inflight:task-block-menu')).toMatchObject({
+        kind: 'inflight',
+        status: 'active',
+        phase: 'spec',
+      })
+    } finally {
+      await rm(projectPath, { recursive: true, force: true })
+    }
+  })
+
   it('surfaces source and request milestones, preserves answered questions, and collapses repetitive recovery churn', async () => {
     const projectPath = await mkdtemp(path.join(tmpdir(), 'guildhall-thread-'))
     try {
@@ -2859,7 +2935,8 @@ describe('buildThread', () => {
       expect(inflight.phase).toBe('spec')
       expect(inflight.checklist).toBeUndefined()
       expect(inflight.taskTitle).toMatch(/^Starter task spec: Wire up the existing auth page scaffolding/)
-      expect(inflight.summary).toMatch(/latest answers and a spec draft/i)
+      expect(inflight.summary).toMatch(/answers and a spec draft/i)
+      expect(inflight.summary).toMatch(/coordinator review/i)
     } finally {
       await rm(projectPath, { recursive: true, force: true })
     }
@@ -2997,10 +3074,15 @@ coordinators:
         recentEvents: [],
       })
 
-      expect(thread.activeTurnId).toBe('spec:task-003')
       expect(thread.turns.find(turn => turn.id === 'q:task-003:q-1')).toBeUndefined()
-      const specTurn = thread.turns.find(turn => turn.id === 'spec:task-003')
-      expect(specTurn?.status).toBe('active')
+      expect(thread.turns.find(turn => turn.id === 'spec:task-003')).toBeUndefined()
+      expect(thread.activeTurnId).toBe('inflight:task-003')
+      const internalTurn = thread.turns.find(turn => turn.id === 'inflight:task-003')
+      expect(internalTurn).toMatchObject({
+        kind: 'inflight',
+        status: 'active',
+        phase: 'spec',
+      })
     } finally {
       await rm(projectPath, { recursive: true, force: true })
     }

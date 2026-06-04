@@ -5,7 +5,8 @@
 **Audience:** Guildhall runtime, review, and UI-governance implementation work
 **Related:** `internal/constitutions/design-system-governance.md`,
 `internal/audits/2026-06-01-ui-component-token-governance.md`,
-`internal/plans/2026-06-02-guildhall-0-11-implementation-tracker.md`
+`internal/plans/2026-06-02-guildhall-0-11-implementation-tracker.md`,
+`internal/plans/2026-06-03-guildhall-0-11-deterministic-code-quality-implementation-plan.md`
 
 ## Problem
 
@@ -65,6 +66,347 @@ Guildhall already has three useful seeds:
 
 0.11 should turn these into a broader analyzer registry rather than one more
 pile of bespoke scripts.
+
+## Guidelines Before Tools
+
+A tool finding is worthless until Guildhall knows which guideline it is trying
+to protect. A copy/paste detector by itself only says "these tokens are
+similar." It does not know whether similarity is dangerous shared knowledge,
+healthy independent duplication, a fixture, generated code, or a deliberate
+local fork that should stay local.
+
+0.11 should therefore encode guideline cards before analyzer cards.
+
+```ts
+type QualityGuideline = {
+  id: string
+  principle: string
+  why: string
+  goodWhen: string[]
+  badWhen: string[]
+  deterministicSignals: string[]
+  likelyTools: string[]
+  defaultOutcome: 'hard-gate' | 'review-signal' | 'trend'
+}
+```
+
+The guideline decides what the signal means. The tool only supplies evidence.
+
+## Durable Quality Guidelines
+
+### Guideline 1: One Reason To Change Beats One Shape To Share
+
+**Principle:** Code should be grouped by the reason it changes, not merely by
+the fact that it currently looks alike.
+
+**Why:** A shared abstraction couples every caller to one future. That is good
+when callers represent the same domain rule, policy, or visual role. It is bad
+when two features only happen to have the same shape today but will change for
+different business, product, platform, or UX reasons.
+
+**Good guideline:** Duplicate code is welcome when the duplicated blocks serve
+different reasons to change, are still discovering their shape, are cheaper to
+read locally than to route through a weak abstraction, or are separated by a
+boundary where coupling would be worse than repetition.
+
+**Bad guideline:** Copy/paste is not welcome when it duplicates business rules,
+state transitions, validation policy, design-system roles, security checks,
+serialization formats, generated protocol handling, or owner-facing copy that
+must stay consistent.
+
+**Signals worth surfacing:**
+
+- duplicated blocks where both copies import the same domain types;
+- duplicated conditions over the same state-machine or task fields;
+- duplicated CSS declarations that create the same visual role;
+- duplicated copy strings in product surfaces;
+- duplicated code across unrelated directories where the surrounding imports
+  and state fields suggest the same reason to change;
+- duplication with divergence: copies that started identical and now differ by
+  small branches or magic values.
+
+**Review question:** "Do these copies change for the same reason?" If yes,
+extract. If no, leave them duplicated and, if needed, document the divergence.
+
+### Guideline 2: Abstractions Need A Contract, Not Just Callers
+
+**Principle:** An abstraction is justified when it names a stable domain
+contract, reduces cognitive load, or protects a boundary. It is not justified
+because two snippets are similar.
+
+**Why:** Premature abstractions move complexity into indirection. The first
+wrong abstraction often looks tidy, then every new caller adds options,
+conditionals, or naming lies until the abstraction becomes harder to change
+than the duplication it replaced.
+
+**Good guideline:** Extract when there is a stable name, a clear owner, at least
+two callers with the same reason to change, a contract that can be tested, and
+no widening of variant/option axes beyond the owned job.
+
+**Bad guideline:** Do not extract into `utils`, `helpers`, `common`, `shared`,
+`base`, or broad UI primitives unless the abstraction can say what it owns and
+what it refuses to own.
+
+**Signals worth surfacing:**
+
+- new exported helper/component with one production caller;
+- shared module names like `utils`, `helpers`, `common`, `shared`, `base`, or
+  `misc`;
+- helpers whose names describe implementation mechanics instead of domain jobs;
+- primitive props named `variant`, `kind`, or `mode` without a governed value
+  budget;
+- abstractions whose caller count rises alongside branch count;
+- abstractions that import from the feature layers they claim to generalize.
+
+**Review question:** "What invariant does this abstraction protect?" If the
+answer is "less code," send it back.
+
+### Guideline 3: Namespaces Should Explain Ownership
+
+**Principle:** Packages, modules, files, and components should make ownership
+obvious from the import site.
+
+**Why:** Good names reduce the amount of code a reader must load. Go's package
+naming guidance is especially useful here: a package name gives context to its
+exported names and helps maintainers decide what belongs. Python's "explicit is
+better than implicit" and "namespaces are one honking great idea" point in the
+same direction: names should reveal responsibility instead of hiding it behind
+generic buckets.
+
+**Good guideline:** Prefer domain nouns and product roles over generic buckets.
+The import should read like a sentence about the domain: `projectGraph`,
+`ownerInput`, `boundedChat`, `FrameCard`, `NoticeBand`.
+
+**Bad guideline:** Avoid generic ownership names when they accumulate unrelated
+concepts or force import aliases to become readable.
+
+**Signals worth surfacing:**
+
+- directories or packages named `utils`, `helpers`, `common`, `shared`, `base`,
+  `models`, or `types` with many unrelated exports;
+- import aliases used to rescue unclear names;
+- modules with high fan-in and mixed outgoing dependencies;
+- files exporting many unrelated nouns;
+- barrel files that create cycles or hide boundary crossings.
+
+**Review question:** "Could a reader predict what belongs here without opening
+the file?"
+
+### Guideline 4: Boundaries Should Be Directional
+
+**Principle:** Dependencies should point from specific product surfaces toward
+shared contracts, not from shared code back into features.
+
+**Why:** Directional boundaries keep reuse honest. A runtime core that imports a
+surface, a shared component that imports a feature store, or a data model that
+imports UI copy has stopped being shared infrastructure and become a knot.
+
+**Good guideline:** Use explicit module layers, public entry points, and
+state-machine transition helpers. A lower-level package may define contracts; a
+higher-level surface may compose them.
+
+**Bad guideline:** Do not let convenience imports, barrel files, or relative
+cross-module imports erase ownership.
+
+**Signals worth surfacing:**
+
+- dependency cycles;
+- cross-module relative imports;
+- shared packages importing feature or surface paths;
+- data modules importing UI components or browser-only code;
+- runtime modules importing sample-project vocabulary;
+- task/state writes that bypass transition helpers.
+
+**Review question:** "Did this dependency make the lower layer know about the
+higher layer?"
+
+### Guideline 5: Types And State Should Make Invalid States Hard
+
+**Principle:** Prefer explicit types, schemas, and state-machine transitions to
+loose data and convention.
+
+**Why:** Rust's API guidance is crisp here: choose argument types that rule out
+bad inputs when practical. TypeScript's `any` guidance says the same thing from
+the other direction: `any` is an escape hatch from the type system. Guildhall's
+runtime should use schema validation, explicit state transitions, and typed
+owner-input contracts so agents cannot invent parallel state.
+
+**Good guideline:** Use schemas at IO boundaries, `unknown` before narrowing
+when data shape is unknown, discriminated unions for state, and transition
+helpers for lifecycle changes.
+
+**Bad guideline:** Do not use `any`, untyped JSON, stringly typed state,
+boolean clusters, or direct status writes to dodge modeling work.
+
+**Signals worth surfacing:**
+
+- explicit `any`;
+- unchecked `JSON.parse`;
+- object types with broad index signatures in core paths;
+- boolean clusters that represent one lifecycle state;
+- direct writes to guarded state fields;
+- switch/default branches that silently accept unknown state.
+
+**Review question:** "Can this code represent a state Guildhall does not know
+how to handle?"
+
+### Guideline 6: UI Surfaces Compose Roles
+
+**Principle:** Product/data-bound components compose design-system roles. They
+do not invent visual language.
+
+**Why:** A component-local style may be scoped, but scoped does not mean
+governed. Svelte's local style model prevents accidental global leakage; it does
+not decide whether a data-bound component should own typography, spacing,
+color, density, or layout semantics.
+
+**Good guideline:** Put visual authority in package UI primitives and tokens.
+Use surface CSS only for route-level layout glue and integration constraints.
+
+**Bad guideline:** Do not create new font sizes, weights, colors, card
+treatments, notices, pills, field/value rows, or action rows inside data-bound
+components.
+
+**Signals worth surfacing:**
+
+- raw CSS values in product surfaces;
+- component-local style blocks in data-bound components;
+- repeated local DOM/CSS signatures for canonical primitive jobs;
+- new design-token aliases outside token-definition files;
+- component variants outside the governed vocabulary.
+
+**Review question:** "Is this a product fact, a layout fact, or a design-system
+fact?"
+
+### Guideline 7: Layout Should Match Geometry
+
+**Principle:** Grid-shaped layout should use CSS grid. Flex is reserved for
+flowing/wrapped item groups and small one-dimensional alignment.
+
+**Why:** Grid expresses rows, columns, tracks, and areas directly. Using flex
+for a grid-shaped layout hides structure in width hacks, wrapping behavior, and
+child-level exceptions. That makes responsive changes harder and encourages
+card stacks masquerading as layout.
+
+**Good guideline:** Use grid for dashboards, repeated columns, equal tracks,
+form/detail layouts, two-axis placement, and page/surface structure. Use flex
+for inline controls, icon/text alignment, chip rows, wrapped tag clouds, and
+flowing item groups where row and column gaps matter.
+
+**Bad guideline:** Do not use flex to fake a grid, and do not use nested cards
+as page layout.
+
+**Signals worth surfacing:**
+
+- `display: flex` plus fixed/equal child widths;
+- `display: flex` plus wrapping and multi-column panel semantics;
+- repeated child classes that define column widths;
+- nested card-like frames;
+- page sections styled as floating cards;
+- grid-shaped DOM with no grid parent.
+
+**Review question:** "Is this arranging a line of things or defining a
+two-dimensional surface?"
+
+### Guideline 8: Complexity Should Have A Domain Name
+
+**Principle:** Complex code is acceptable when it is localized around a named
+domain concept and protected by tests. It is not acceptable when complexity is
+spread through view glue or unnamed helpers.
+
+**Why:** Some domain logic is genuinely complex. The problem is not every branch
+or every long function; the problem is complexity without ownership. A state
+machine, parser, planner, or graph builder can be complex because it owns a
+complex job. A surface component reinterpreting readiness, owner input, and task
+status locally is complex because ownership leaked.
+
+**Good guideline:** Keep complex logic in runtime utilities, parsers, state
+machines, reducers, and tested domain modules with stable names.
+
+**Bad guideline:** Do not hide branching in UI surfaces, command handlers, or
+generic helpers with no domain contract.
+
+**Signals worth surfacing:**
+
+- high cyclomatic/cognitive complexity in surface or command files;
+- nested conditionals over shared runtime state;
+- repeated local derivations of project readiness or next action;
+- complex functions with no focused tests;
+- complex files that import many unrelated modules.
+
+**Review question:** "Does this complexity live where the product concept is
+owned?"
+
+## Ecosystem Lenses
+
+These are not separate constitutions. They are language-specific evidence for
+the guidelines above.
+
+| Ecosystem | Best-practice pressure | Why it matters | Guildhall signal direction |
+| --- | --- | --- | --- |
+| Go | Short, clear package names; avoid uninformative names like `util`, `common`, and `helper`; package names provide context at import sites. | Go imports are read constantly as `pkg.Name`, so weak package names weaken every caller and make ownership fuzzy. | Flag generic package names, import aliases that rescue unclear names, large mixed-purpose packages, and cross-boundary imports. |
+| Python | Explicit beats implicit, flat beats nested, readability counts, and namespaces are valuable. | Python code leans on readable names and simple module structure because many guarantees are convention-backed rather than compiler-backed. | Flag deep nesting, magic dynamic access, broad modules with unrelated exports, and implicit control/data flow. |
+| Rust | Use types to rule out invalid inputs; use generics to minimize assumptions; decide whether traits are objects or bounds. | Rust's strengths come from contracts made explicit in types. Abstractions are powerful, but the wrong trait/generic shape adds API complexity. | Flag loose primitive/string inputs in core paths, avoidable runtime validation, trait/object abstractions with one implementation, and unnecessary generic bounds. |
+| TypeScript | Prefer ES modules for organization; avoid `any`; use `unknown` plus narrowing when shape is not known. | TypeScript is most useful when it preserves type evidence across module boundaries instead of letting escape hatches erase it. | Flag explicit `any`, unchecked JSON, namespace wrappers in module files, direct broad casts, and untyped boundary data. |
+| Java | One top-level class per source file, no wildcard imports, package structure is explicit and conventional. | Java favors predictable file/package shape so tooling and readers can find ownership quickly. | Flag wildcard imports, multiple top-level production classes, package cycles, and classes that mix unrelated responsibilities. |
+| Svelte/UI | Component-scoped CSS prevents leakage, but scoped styling is not design-system governance. | Scoped styles solve selector collision, not product consistency. Data-bound components can still become local design systems. | Flag raw styles, local primitive duplication, data-bound style blocks, and grid-shaped layout implemented with flex. |
+
+## Duplication Decision Rule
+
+Copy/paste is welcome when all of these are true:
+
+- the copies have different reasons to change;
+- the duplicated block is small enough to understand locally;
+- no business rule, validation rule, security rule, lifecycle transition,
+  design-system role, protocol shape, or owner-facing promise needs to stay
+  identical;
+- extracting would require weak names, broad options, or caller-specific
+  branches;
+- the code is still in discovery and the right abstraction has not shown
+  itself.
+
+Copy/paste should be challenged when any of these are true:
+
+- the copies encode the same product rule or state transition;
+- a bug fix would almost certainly need to land in every copy;
+- the same visual role appears in more than two product surfaces;
+- the copies are already diverging by flags, magic values, or special cases;
+- the duplicated code crosses a boundary where a shared contract should exist;
+- the copies appear in generated output and hand-authored code, suggesting a
+  missing generator or fixture boundary.
+
+Copy/paste should be blocked when the duplicated code is a known governed
+contract: state-machine transitions, schema validation, permission/security
+checks, design-system primitives, package UI variant definitions, release
+criteria, artifact formats, or public protocol handling.
+
+This gives copy/paste detectors a job: not "find duplicates," but "find
+duplicates whose surrounding evidence suggests a shared reason to change."
+
+## Abstraction Decision Rule
+
+An abstraction is welcome when it has:
+
+- a stable domain name;
+- two or more production callers with the same reason to change;
+- a small public surface;
+- a clear owner and replacement target;
+- focused tests;
+- fewer decisions for future callers than the duplicated code had.
+
+An abstraction should be challenged when it has:
+
+- one production caller;
+- generic names;
+- caller-specific branches;
+- more than three variant axes;
+- unclear ownership;
+- low fan-in but high dependency reach;
+- comments explaining how to use it because the name and types do not.
+
+An abstraction should be blocked in governed UI/runtime areas when it creates a
+second design system, bypasses a state-machine boundary, hides owner-input
+state, or weakens a typed/schema boundary.
 
 ## Signal Families
 
@@ -143,11 +485,11 @@ selectors, repeated review text, and parallel implementations that drift.
 - Trend metric for duplicate percentage on new code and duplicated UI
   treatments per surface.
 
-**Important nuance:** duplication is not always a mandate to extract. If two
-domains have the same shape today but separate reasons to change tomorrow, the
-right answer may be to keep them separate and document the divergence. The
-review packet should ask that question directly instead of yelling "DRY" like a
-broken smoke alarm.
+**Important nuance:** duplication is not always a mandate to extract. Guideline
+1 decides whether copy/paste is welcome. If two blocks have different reasons
+to change, keep the duplication. If they encode the same business rule,
+state-machine transition, validation policy, or visual role, extract or route
+through the existing owner.
 
 ### 4. Abstraction Fitness
 
@@ -182,7 +524,8 @@ and design-system variants that multiply choice.
 say "this abstraction has one caller" or "this component now has five variant
 axes." It cannot prove the abstraction is wrong. The reviewer should decide
 whether the abstraction expresses a stable domain concept, removes real
-complexity, or merely gives the agent a new place to hide uncertainty.
+complexity, protects a boundary, or merely gives the agent a new place to hide
+uncertainty.
 
 ### 5. Deprecated, Legacy, or Banned Syntax
 
@@ -213,8 +556,9 @@ accidental old patterns, and unapproved local escape hatches.
 
 ### 6. Layout Semantics
 
-**What this protects:** flex everywhere, grid nowhere, card stacks used as page
-layout, and layout decisions embedded inside data-bound components.
+**What this protects:** layout technique mismatch: flex used for grid-shaped
+structure, card stacks used as page layout, and layout decisions embedded
+inside data-bound components.
 
 **Useful tools:**
 
@@ -232,16 +576,16 @@ layout, and layout decisions embedded inside data-bound components.
   compatibility layers.
 - Hard gate raw visual styling inside data-bound components when a package UI
   primitive exists for the role.
-- Review signal for `display: flex` used with wrapping, equal-width children,
-  multi-column panels, dashboard grids, or repeated rows where grid is likely
-  the clearer layout primitive.
-- Trend metric for flex/grid ratio by surface, plus local CSS count in
-  data-bound components.
+- Review signal for `display: flex` used in multi-column panels, dashboard
+  grids, repeated rows, equal-track layouts, or any other grid-shaped structure.
+- Trend metric for suspicious layout-pattern count by surface, plus local CSS
+  count in data-bound components.
 
-**Important nuance:** flex is not bad. Flex is good for one-dimensional control
-alignment, inline action rows, icon/text buttons, chips, and compact toolbars.
-The signal should be "flex used for a columnar or two-dimensional layout" rather
-than "flex exists."
+**Important nuance:** grid-shaped layout should use CSS grid. Flex is the
+exception, not the peer default: it fits wrapped or flowing item groups where
+row and column gaps matter, and small one-dimensional control alignment such as
+icon/text buttons, chips, and compact toolbars. The signal should be "flex used
+for a grid-shaped structure" rather than "flex exists."
 
 ### 7. Design-System Separation
 
@@ -292,6 +636,7 @@ a common finding model and let projects opt into tools by stack.
 ```ts
 type DeterministicFinding = {
   id: string
+  guidelineId: string
   tool: string
   family:
     | 'size'
@@ -310,6 +655,7 @@ type DeterministicFinding = {
   line?: number
   subject?: string
   message: string
+  reviewQuestion?: string
   evidence: Record<string, unknown>
   suggestedAction?: string
   waiver?: {
@@ -321,8 +667,10 @@ type DeterministicFinding = {
 ```
 
 Every analyzer should emit this shape or an intermediate format that can be
-normalized into it. The important field is `scope`: a repo with historical debt
-should block new drift without pretending the whole old codebase is clean.
+normalized into it. The important fields are `guidelineId` and `scope`:
+`guidelineId` ties the finding back to the policy it protects, while `scope`
+keeps a repo with historical debt from pretending the whole old codebase is
+clean.
 
 ## 0.11 Product Behavior
 
@@ -382,6 +730,8 @@ known.
 ### Milestone A: Analyzer Registry
 
 - Add `src/runtime/deterministic-findings.ts`.
+- Add a guideline registry for the durable quality guidelines above. Analyzer
+  configuration should point at guideline ids, not only tool names.
 - Add a config schema for project analyzer capabilities and scopes.
 - Normalize existing `lint:design`, `lint:reductions`, and `lint:deps` outputs
   into the shared finding shape.
@@ -401,7 +751,9 @@ known.
 ### Milestone C: Complexity, Duplication, and Abstraction Fitness
 
 - Add ESLint or equivalent JS/TS complexity checks, scoped to new/touched code.
-- Add jscpd or PMD CPD duplication reports, normalized into Guildhall findings.
+- Add jscpd or PMD CPD duplication reports, normalized into Guildhall findings
+  that ask whether the copies share a reason to change before recommending
+  extraction.
 - Add Knip or dependency-graph-derived dead-code and low-fan-in abstraction
   signals.
 - Add package UI variant-budget checks tied to the design-system constitution.
@@ -432,7 +784,8 @@ Start with these as review signals:
 - Cognitive complexity over threshold.
 - Component line count over threshold.
 - Duplicated blocks under the hard-gate threshold.
-- `display: flex` in multi-column or wrapping layouts.
+- `display: flex` in multi-column, dashboard, repeated-row, or equal-track
+  layouts where CSS grid should own the structure.
 - Shared exports with one caller.
 - New helpers under `utils`, `shared`, `common`, `base`, or `misc`.
 - New style blocks in data-bound components even when they only use tokens.
@@ -443,12 +796,43 @@ Start with these as trend metrics:
 - Largest touched components.
 - Average callers per shared export.
 - Local CSS lines by component role.
-- Flex/grid ratio by surface.
+- Suspicious grid-shaped-flex pattern count by surface.
 - Design-system baseline burn-down.
 - Waiver count and age.
 
 ## Source Notes
 
+- Go's package naming guidance explains that a package name provides context for
+  exports and helps maintainers decide what belongs:
+  https://go.dev/blog/package-names
+- Google's Go style decisions explicitly warn against uninformative package
+  names such as `util`, `utility`, `common`, `helper`, and `model`:
+  https://google.github.io/styleguide/go/decisions.html
+- PEP 20 provides Python's durable readability and organization aphorisms:
+  explicit over implicit, simple over complex, flat over nested, readability
+  counts, and namespaces are valuable:
+  https://peps.python.org/pep-0020/
+- Rust API Guidelines emphasize type-level validity, minimizing assumptions with
+  generics, and making trait-object decisions deliberately:
+  https://rust-lang.github.io/api-guidelines/dependability.html
+  https://rust-lang.github.io/api-guidelines/flexibility.html
+- TypeScript's handbook recommends modules for new projects and notes that an
+  extra namespace layer is unnecessary in module files:
+  https://www.typescriptlang.org/docs/handbook/namespaces-and-modules.html
+- typescript-eslint documents `any` as a dangerous escape hatch and recommends
+  safer alternatives such as `unknown` when the shape is not known:
+  https://typescript-eslint.io/rules/no-explicit-any/
+- Google's Java Style Guide defines enforceable structure conventions such as
+  one top-level class per source file and no wildcard imports:
+  https://google.github.io/styleguide/javaguide.html
+- Svelte component CSS is scoped by default, which prevents leakage but does not
+  decide whether component-local styling is a governed design-system decision:
+  https://svelte.dev/docs/svelte/scoped-styles
+- Sandi Metz's "The Wrong Abstraction" and Kent C. Dodds' AHA Programming are
+  useful framing for preferring duplication while the right abstraction has not
+  emerged:
+  https://sandimetz.com/blog/2016/1/20/the-wrong-abstraction
+  https://kentcdodds.com/blog/aha-programming
 - ESLint documents `complexity` as a cyclomatic-complexity threshold rule and
   offers `max` plus classic/modified variants:
   https://eslint.org/docs/latest/rules/complexity

@@ -557,6 +557,39 @@ export function queryProjectGraphView(input: {
     if (edge.consumer.id !== input.projectId && !projectRoles.has(edge.consumer.id)) projectRoles.set(edge.consumer.id, 'consumer')
     if (edge.provider.id !== input.projectId && !projectRoles.has(edge.provider.id)) projectRoles.set(edge.provider.id, 'provider')
   }
+  const assignedAuthorities = (registry.domainAuthorities ?? [])
+    .sort((left, right) => left.domain.label.localeCompare(right.domain.label))
+  const structuralDomains = projectGraphDomains({
+    structuralDomains: input.structuralDomains ?? [],
+    coordinators: input.coordinators ?? [],
+    domainAuthorities: assignedAuthorities,
+    domainResponsibilities: registry.domainResponsibilities ?? [],
+  })
+  const structuralDomainIds = new Set(structuralDomains.map(domain => domain.id))
+  const currentProject = {
+    id: input.projectId,
+    label: registryProjectsById.get(input.projectId)?.label ?? input.projectId,
+    path: input.projectPath,
+  }
+  for (const authority of assignedAuthorities) {
+    if (structuralDomainIds.has(authority.domain.id) && authority.providerProject.id !== input.projectId) {
+      projectRoles.set(authority.providerProject.id, 'provider')
+    }
+  }
+  for (const responsibility of registry.domainResponsibilities ?? []) {
+    if (structuralDomainIds.has(responsibility.domain.id) && responsibility.responsibleProject.id !== input.projectId) {
+      projectRoles.set(responsibility.responsibleProject.id, responsibility.authority === 'consumer' ? 'consumer' : 'provider')
+    }
+  }
+  const contractSurfaces = scopedContractSurfaces({
+    surfaces: readContractSurfaces(),
+    projectId: input.projectId,
+    domainIds: structuralDomainIds,
+    surfaceReviewPackets: input.surfaceReviewPackets ?? [],
+  })
+  for (const surface of contractSurfaces) {
+    if (surface.owningProjectId !== input.projectId) projectRoles.set(surface.owningProjectId, 'provider')
+  }
   const localProjects = [...projectRoles.entries()].map(([id, role]) => {
     const project = registryProjectsById.get(id)
     return {
@@ -572,19 +605,6 @@ export function queryProjectGraphView(input: {
     path: project.path,
     role: id === input.projectId ? 'current' as const : 'indexed' as const,
   }))
-  const assignedAuthorities = (registry.domainAuthorities ?? [])
-    .sort((left, right) => left.domain.label.localeCompare(right.domain.label))
-  const structuralDomains = projectGraphDomains({
-    structuralDomains: input.structuralDomains ?? [],
-    coordinators: input.coordinators ?? [],
-    domainAuthorities: assignedAuthorities,
-    domainResponsibilities: registry.domainResponsibilities ?? [],
-  })
-  const currentProject = {
-    id: input.projectId,
-    label: registryProjectsById.get(input.projectId)?.label ?? input.projectId,
-    path: input.projectPath,
-  }
   const localProjectsById = new Map([...localProjectIndex, ...localProjects].map(project => [project.id, {
     label: project.label,
     path: project.path,
@@ -595,12 +615,6 @@ export function queryProjectGraphView(input: {
     currentProject,
     localProjectsById,
   })
-  const contractSurfaces = scopedContractSurfaces({
-    surfaces: readContractSurfaces(),
-    projectId: input.projectId,
-    domainIds: new Set(structuralDomains.map(domain => domain.id)),
-    surfaceReviewPackets: input.surfaceReviewPackets ?? [],
-  })
 
   return {
     currentProject: {
@@ -608,10 +622,10 @@ export function queryProjectGraphView(input: {
       path: input.projectPath,
       label: registryProjectsById.get(input.projectId)?.label,
     },
-    localProjectIndex: localProjectIndex.sort((left, right) =>
+    localProjects: localProjects.sort((left, right) =>
       left.role === 'current' ? -1 : right.role === 'current' ? 1 : left.label.localeCompare(right.label),
     ),
-    localProjects: localProjects.sort((left, right) =>
+    localProjectIndex: localProjectIndex.sort((left, right) =>
       left.role === 'current' ? -1 : right.role === 'current' ? 1 : left.label.localeCompare(right.label),
     ),
     structuralDomains,
@@ -1572,12 +1586,7 @@ function contractSurfaceScopedReason(
 }
 
 function titleCase(value: string): string {
-  return value
-    .replace(/^domain:/, '')
-    .split(/[-_\s]+/)
-    .filter(Boolean)
-    .map(part => part.slice(0, 1).toUpperCase() + part.slice(1))
-    .join(' ') || value
+  return value.replace(/^domain:/, '')
 }
 
 function writeJson(filePath: string, value: unknown): void {

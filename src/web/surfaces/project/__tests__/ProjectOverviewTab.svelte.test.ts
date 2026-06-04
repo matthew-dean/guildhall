@@ -1,7 +1,7 @@
 // @vitest-environment happy-dom
 import '@testing-library/jest-dom/vitest'
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/svelte'
-import { afterEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import ProjectOverviewTab from '../ProjectOverviewTab.svelte'
 
 function json(data: unknown, init: ResponseInit = {}): Response {
@@ -13,9 +13,20 @@ function json(data: unknown, init: ResponseInit = {}): Response {
 }
 
 describe('ProjectOverviewTab', () => {
+  beforeEach(() => {
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
+      const url = new URL(String(input), 'http://localhost')
+      if (url.pathname === '/api/project/project-graph') {
+        return json({ projectGraph: { localProjects: [], structuralDomains: [], dependencyEdges: [], contractSurfaces: [] } })
+      }
+      return json({})
+    }))
+  })
+
   afterEach(() => {
     cleanup()
     vi.restoreAllMocks()
+    vi.unstubAllGlobals()
   })
 
   it('renders the shared primary project action instead of choosing a local inbox winner', () => {
@@ -50,7 +61,7 @@ describe('ProjectOverviewTab', () => {
             tone: 'warn',
           }],
           runControl: {
-            label: 'Start work',
+            label: 'Resume',
             startEnabled: true,
           },
           ownerInput: { active: false },
@@ -284,7 +295,7 @@ describe('ProjectOverviewTab', () => {
     expect(screen.getByText('1 Being shaped')).toBeInTheDocument()
     expect(screen.queryByText('1 Ready')).not.toBeInTheDocument()
     expect(screen.getAllByText('Needs brief').length).toBeGreaterThan(0)
-    expect(screen.getByText('Needs brief cleanup: finish the handoff before a worker can start.')).toBeInTheDocument()
+    expect(screen.getByText('Needs brief: finish the handoff before a worker can start.')).toBeInTheDocument()
     expect(screen.queryByText(/ready for the next worker slot/i)).not.toBeInTheDocument()
   })
 
@@ -444,7 +455,7 @@ describe('ProjectOverviewTab', () => {
 
     expect(container.querySelector('.motion-list .overview-task-row')).toBeTruthy()
     expect(container.querySelector('.blocked-work-list .overview-task-row')).toBeTruthy()
-    expect(screen.getAllByText('In progress').length).toBeGreaterThan(0)
+    expect(screen.getAllByText('Paused').length).toBeGreaterThan(0)
     expect(screen.getByText('Needs triage')).toBeInTheDocument()
   })
 
@@ -557,7 +568,32 @@ describe('ProjectOverviewTab', () => {
     expect(text.indexOf('Moving now')).toBeLessThan(text.indexOf('Work mix'))
   })
 
-  it('surfaces runtime health, memory health, and primary proof paths', () => {
+  it('surfaces runtime health, memory health, graph facts, and primary proof paths', async () => {
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
+      const url = new URL(String(input), 'http://localhost')
+      if (url.pathname === '/api/project/project-graph') {
+        return json({
+          projectGraph: {
+            currentProject: { id: 'guildhall', label: 'Guildhall' },
+            localProjects: [
+              { id: 'guildhall', label: 'Guildhall', role: 'current' },
+              { id: 'narrative-harness', label: 'Narrative Harness', role: 'index' },
+            ],
+            structuralDomains: [
+              { id: 'domain:runtime', label: 'Runtime' },
+              { id: 'domain:overview', label: 'Overview' },
+            ],
+            dependencyEdges: [{ id: 'edge-1', unresolved: true }],
+            contractSurfaces: [
+              { id: 'surface:overview', label: 'Overview summary model' },
+              { id: 'surface:project-graph', label: 'Project graph API' },
+            ],
+          },
+        })
+      }
+      return json({})
+    }))
+
     render(ProjectOverviewTab, {
       detail: {
         id: 'guildhall',
@@ -605,8 +641,71 @@ describe('ProjectOverviewTab', () => {
     expect(screen.getAllByText(/Compatibility mode/).length).toBeGreaterThan(0)
     expect(screen.getAllByText('Memory health').length).toBeGreaterThan(0)
     expect(screen.getAllByText(/3 active/).length).toBeGreaterThan(0)
+    expect(screen.getAllByRole('button', { name: /Project graph/i }).length).toBeGreaterThan(0)
     expect(screen.getByText('Primary proof paths')).toBeInTheDocument()
-    expect(screen.getByText('Verify runtime card')).toBeInTheDocument()
+    expect(screen.getAllByText('Verify runtime card').length).toBeGreaterThan(0)
+    await waitFor(() => {
+      expect(screen.getByRole('button', { name: /Structure 2 graph domains/i })).toBeInTheDocument()
+      expect(screen.queryByText('Map not reviewed')).not.toBeInTheDocument()
+      expect(screen.getByText('1 connected project')).toBeInTheDocument()
+      expect(screen.getByText('2 graph domains · 2 contract surfaces · 1 open dependency request')).toBeInTheDocument()
+    })
+  })
+
+  it('condenses project knowledge into one-third overview cards', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => json({
+      projectGraph: {
+        currentProject: { id: 'narrative-harness', label: 'Narrative Harness' },
+        localProjects: [{ id: 'narrative-harness', label: 'Narrative Harness', role: 'current' }],
+        localProjectIndex: [
+          { id: 'narrative-harness', label: 'Narrative Harness', role: 'current' },
+          { id: 'guildhall', label: 'Guildhall', role: 'indexed' },
+        ],
+        structuralDomains: [{ id: 'domain:story-memory', label: 'Story memory' }],
+        dependencyEdges: [],
+        contractSurfaces: [{ id: 'surface:story-context', label: 'Story context contract' }],
+      },
+    })))
+
+    const { container } = render(ProjectOverviewTab, {
+      detail: {
+        id: 'narrative-harness',
+        name: 'Narrative Harness',
+        path: '/Users/matthew/git/oss/narrative-harness',
+        runtime: { status: 'running', health: { status: 'healthy' }, migration: { mode: 'host-run' } },
+        memoryHealth: { active: 4, proposed: 1 },
+        tasks: [
+          { id: 'task-active', title: 'Reviewer lane MVP', status: 'in_progress' },
+          { id: 'task-done', title: 'Draft context schema', status: 'done' },
+        ],
+        structuralMapReview: {
+          state: 'accepted',
+          counts: { domains: 1, crossCuttingDomains: 1, packages: 2, executableUnits: 3 },
+        },
+      },
+      inboxLoaded: true,
+      inboxItems: [],
+      projectTicker: {
+        label: 'Live',
+        actorLabel: 'Guildhall',
+        message: 'Project is running.',
+        tone: 'active',
+        pulse: true,
+      },
+      activeProjectId: 'narrative-harness',
+    })
+
+    expect(container.querySelectorAll('.card-list-item.knowledge-summary-item')).toHaveLength(6)
+    expect(container.querySelectorAll('.knowledge-card')).toHaveLength(0)
+    expect(screen.getByRole('button', { name: /Work 2 total tasks/i })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: /Structure Accepted/i })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: /Runtime Runtime healthy/i })).toBeInTheDocument()
+    expect(screen.getByText('Compatibility mode · 4 active memories · 1 proposed.')).toBeInTheDocument()
+    expect(screen.getByText('2 domains · 2 packages · 3 commands.')).toBeInTheDocument()
+    await waitFor(() => {
+      expect(screen.getByRole('button', { name: /Project graph 0 connected projects/i })).toBeInTheDocument()
+      expect(screen.getByText('1 graph domain · 1 contract surface · 0 open dependency requests')).toBeInTheDocument()
+    })
   })
 
   it('surfaces structural map review facts for owner inspection', () => {
@@ -655,9 +754,9 @@ describe('ProjectOverviewTab', () => {
     })
 
     expect(screen.getByRole('heading', { name: 'Project map' })).toBeInTheDocument()
-    expect(screen.getByText('Accepted')).toBeInTheDocument()
+    expect(screen.getAllByText('Accepted').length).toBeGreaterThan(0)
     expect(screen.getByText('2 packages')).toBeInTheDocument()
-    expect(screen.getByText('Runtime')).toBeInTheDocument()
+    expect(screen.getAllByText('Runtime').length).toBeGreaterThan(0)
     expect(screen.getByText('Design-system reuse')).toBeInTheDocument()
     expect(screen.getByText('@guildhall/core')).toBeInTheDocument()
     expect(screen.getByText('pnpm --filter @guildhall/core test')).toBeInTheDocument()
@@ -669,31 +768,37 @@ describe('ProjectOverviewTab', () => {
   })
 
   it('posts structural map owner actions and updates the review state', async () => {
-    const fetchMock = vi.spyOn(globalThis, 'fetch').mockResolvedValue(json({
-      structuralMapReview: {
-        id: 'structural-map-1',
-        state: 'accepted',
-        generatedAt: '2026-06-01T12:00:00.000Z',
-        counts: {
-          packages: 1,
-          domains: 1,
-          crossCuttingDomains: 0,
-          executableUnits: 0,
-          gitRoots: 1,
-          ignoredGitRoots: 0,
-          conflicts: 0,
-          questions: 0,
+    const fetchMock = vi.spyOn(globalThis, 'fetch').mockImplementation(async (input: RequestInfo | URL) => {
+      const url = new URL(String(input), 'http://localhost')
+      if (url.pathname === '/api/project/project-graph') {
+        return json({ projectGraph: { localProjects: [], structuralDomains: [], dependencyEdges: [], contractSurfaces: [] } })
+      }
+      return json({
+        structuralMapReview: {
+          id: 'structural-map-1',
+          state: 'accepted',
+          generatedAt: '2026-06-01T12:00:00.000Z',
+          counts: {
+            packages: 1,
+            domains: 1,
+            crossCuttingDomains: 0,
+            executableUnits: 0,
+            gitRoots: 1,
+            ignoredGitRoots: 0,
+            conflicts: 0,
+            questions: 0,
+          },
+          gitRoots: [{ id: 'git:root', label: 'Project root', path: '.', confidence: 'high' }],
+          packages: [{ id: 'package:guildhall-core', label: '@guildhall/core', path: 'packages/core', confidence: 'high' }],
+          domains: [{ id: 'domain:runtime', label: 'Runtime', confidence: 'high' }],
+          crossCuttingDomains: [],
+          executableUnits: [],
+          ignoredGitRoots: [],
+          conflicts: [],
+          questions: [],
         },
-        gitRoots: [{ id: 'git:root', label: 'Project root', path: '.', confidence: 'high' }],
-        packages: [{ id: 'package:guildhall-core', label: '@guildhall/core', path: 'packages/core', confidence: 'high' }],
-        domains: [{ id: 'domain:runtime', label: 'Runtime', confidence: 'high' }],
-        crossCuttingDomains: [],
-        executableUnits: [],
-        ignoredGitRoots: [],
-        conflicts: [],
-        questions: [],
-      },
-    }))
+      })
+    })
 
     render(ProjectOverviewTab, {
       detail: {
@@ -746,6 +851,6 @@ describe('ProjectOverviewTab', () => {
         body: JSON.stringify({ mapId: 'structural-map-1', action: { kind: 'accept' }, projectId: 'guildhall' }),
       }),
     )
-    await waitFor(() => expect(screen.getByText('Accepted')).toBeInTheDocument())
+    await waitFor(() => expect(screen.getAllByText('Accepted').length).toBeGreaterThan(0))
   })
 })

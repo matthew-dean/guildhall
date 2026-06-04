@@ -45,7 +45,21 @@
     <TaskDrawer taskId={route.drawerTaskId} projectId={route.projectId} onClose={closeDrawer} />
   {/if}
 {:else if route.kind === 'setup'}
-  <SetupWizard projectId={route.projectId} />
+  <div class="route-document-scroll">
+    <SetupWizard projectId={route.projectId} />
+  </div>
 {:else if route.kind === 'providers'}
-  <ProvidersPage />
+  <div class="route-document-scroll">
+    <ProvidersPage />
+  </div>
 {/if}
+
+<style>
+  .route-document-scroll {
+    block-size: 100%;
+    min-block-size: 0;
+    overflow-y: auto;
+    overflow-x: hidden;
+    overflow-anchor: auto;
+  }
+</style>

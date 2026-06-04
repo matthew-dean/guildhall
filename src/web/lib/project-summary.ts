@@ -127,7 +127,7 @@ function stageLabel(project: ServiceProjectSummary, counts: ProjectCardSummary['
   if (runStatus === 'stopping') return 'Stopping'
   if (runStatus === 'running') return 'Running'
   if (counts.blocked > 0) return 'Needs attention'
-  if (counts.draftReview > 0 && counts.active === 0) return 'Needs task briefs'
+  if (counts.draftReview > 0 && counts.active === 0) return 'Needs brief'
   if (counts.active > 0) return 'Paused'
   if (counts.total === 0) return 'Ready'
   if (counts.done > 0 && counts.active === 0 && counts.blocked === 0) return 'Stable'
@@ -383,10 +383,10 @@ export function summarizeProjectCard(
     runActionLabel: initializationNeeded
       ? null
       : running
-        ? 'Stop'
+        ? 'Pause'
         : startBlocked
           ? null
-        : runControl?.label && runControl.label !== 'Start work'
+        : runControl?.label && runControl.label !== 'Resume'
           ? runControl.label
         : counts.active > 0
           ? 'Resume'
@@ -395,13 +395,13 @@ export function summarizeProjectCard(
             : null,
     canOpen: true,
     canStart: runControl
-      ? !running && !initializationNeeded && runControl.startEnabled
+      ? !running && !initializationNeeded && runControl.startEnabled && runControl.label !== 'Pause'
       : !running &&
         !initializationNeeded &&
         !startBlocked &&
         (counts.active > 0 || counts.total === 0) &&
         !(counts.draftReview > 0 && counts.active === 0),
-    canStop: running,
+    canStop: running || (!initializationNeeded && !running && runControl?.startEnabled === true && runControl.label === 'Pause'),
     gitStory,
   }
 }

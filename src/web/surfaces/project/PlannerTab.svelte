@@ -100,13 +100,13 @@
                   displayStatusLabel={isDependencyBlocked(t)
                     ? 'Waiting'
                     : statusOf(t) === 'needs_spec_cleanup'
-                      ? 'Needs brief cleanup'
+                      ? 'Needs brief'
                       : statusOf(t) === 'paused'
                         ? 'Paused'
                         : statusOf(t) === 'review_waiting'
-                          ? 'Review waiting'
+                          ? 'Review'
                           : statusOf(t) === 'gates_waiting'
-                            ? 'Gates waiting'
+                            ? 'Gates'
                             : undefined}
                   displayStatusTone={isDependencyBlocked(t) || ['needs_spec_cleanup', 'review_waiting', 'gates_waiting'].includes(statusOf(t)) ? 'warn' : statusOf(t) === 'paused' ? 'neutral' : undefined}
                   displayStatusIcon={isDependencyBlocked(t) || ['needs_spec_cleanup', 'review_waiting', 'gates_waiting'].includes(statusOf(t)) ? 'alert-triangle' : undefined}

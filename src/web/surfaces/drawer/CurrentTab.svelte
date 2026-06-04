@@ -37,6 +37,7 @@
     runBusy?: boolean
     runError?: string | null
     runStatus?: string
+    availabilityStatus?: string | null
     projectStartBlockerMessage?: string | null
     onApproveBrief: () => void
     onApproveSpec: () => void
@@ -55,6 +56,7 @@
     runBusy = false,
     runError = null,
     runStatus = 'stopped',
+    availabilityStatus = 'active',
     projectStartBlockerMessage = null,
     onApproveBrief,
     onApproveSpec,
@@ -93,24 +95,26 @@
 
   function taskStateLabel(turn: TaskThreadInFlightTurn): string {
     if (needsRecovery(turn)) return 'Needs recovery'
-    if (briefShapingTimedOut(turn)) return 'Shaping timed out'
-    if (briefShapingPaused(turn)) return 'Shaping paused'
-    if (turn.liveAgent?.name === 'spec-agent') return turn.importedDraft ? 'Shaping draft' : 'Drafting'
-    if (turn.liveAgent?.name?.startsWith('coordinator-')) return 'Ready'
-    if (turn.liveAgent?.name === 'worker-agent') return 'In flight'
+    if (briefShapingTimedOut(turn)) return 'Blocked'
+    if (briefShapingPaused(turn)) return 'Paused'
+    if (turn.liveAgent?.name === 'spec-agent') return 'Working'
+    if (turn.liveAgent?.name?.startsWith('coordinator-')) return 'Working'
+    if (turn.liveAgent?.name === 'worker-agent') return 'Working'
     if (turn.liveAgent?.name === 'reviewer-agent') return 'Review'
     if (turn.liveAgent?.name === 'gate-checker-agent') return 'Gates'
     switch (turn.taskStatus) {
-      case 'import_draft': return 'Needs task brief'
-      case 'exploring': return isImportedDraftShaping(turn) ? 'Guildhall shaping' : isQueuedSpecRevision(turn) ? 'Spec revision queued' : 'Intake'
+      case 'import_draft': return 'Needs brief'
+      case 'exploring':
+        if (!isProjectRunActive()) return 'Paused'
+        return 'Queued'
       case 'ready':
-        if (needsWorkerHandoffSpecCleanup(turn)) return 'Needs task brief'
-        if (isProjectRunActive()) return 'Queued for Guildhall'
+        if (needsWorkerHandoffSpecCleanup(turn)) return 'Needs brief'
+        if (isProjectRunActive()) return 'Queued'
         return 'Ready'
       case 'gate_check': return 'Gates'
       case 'review': return 'Review'
-      case 'in_progress': return turn.liveAgent ? 'In flight' : 'Paused'
-      default: return canRunTask(turn) ? 'Queued' : 'In flight'
+      case 'in_progress': return turn.liveAgent ? 'Working' : 'Paused'
+      default: return canRunTask(turn) ? 'Queued' : 'Working'
     }
   }
 
@@ -144,27 +148,32 @@
       if (isProjectRunActive()) {
         return 'Approved and queued. Guildhall is already running for this project, so this task will stay in the queue until the coordinator picks it.'
       }
-      return 'Approved and queued. Start only this work item when you want Guildhall to pick it up.'
+      return 'Approved and queued. Resume only this work item when you want Guildhall to pick it up.'
     }
     if (turn.taskStatus === 'import_draft' && !turn.liveAgent) {
       return 'Imported from your project notes, but not ready for a worker yet. Next step: turn this note into a task brief with scope, evidence, and acceptance criteria.'
     }
     if (turn.taskStatus === 'exploring' && !turn.liveAgent) {
+      if (!isProjectRunActive()) {
+        return isQueuedSpecRevision(turn)
+          ? 'Guildhall already has the draft spec plus your latest answers. Coordinator review is paused until Guildhall resumes.'
+          : 'Shaping is paused. Resume Guildhall when you want it to keep preparing this task.'
+      }
       if (isQueuedSpecRevision(turn)) {
-        return 'Guildhall already has the draft spec plus your latest answers. Start Guildhall when you want it to revise the spec.'
+        return 'Guildhall already has the draft spec plus your latest answers. Coordinator review is queued.'
       }
       return turn.importedDraft
         ? 'Guildhall is shaping the task brief for this imported note. You can add context, but you do not need to babysit the draft.'
         : 'Guildhall has started shaping this task, but the brief is not ready yet. The checklist below shows what is still missing.'
     }
     if (turn.taskStatus === 'in_progress' && !turn.liveAgent) {
-      return 'Work is paused. Start Guildhall when you want it to continue.'
+      return 'Work is paused. Resume Guildhall when you want it to continue.'
     }
     if (turn.taskStatus === 'review' && !turn.liveAgent) {
-      return 'Review is queued. Start Guildhall when you want it to continue.'
+      return 'Review is queued. Resume Guildhall when you want it to continue.'
     }
     if (turn.taskStatus === 'gate_check' && !turn.liveAgent) {
-      return 'Gate checks are queued. Start Guildhall when you want it to continue.'
+      return 'Gate checks are queued. Resume Guildhall when you want it to continue.'
     }
     return turn.summary
   }
@@ -176,13 +185,13 @@
     if (turn.liveAgent) return 'running'
     if (needsWorkerHandoffSpecCleanup(turn)) return 'warn'
     switch (turn.taskStatus) {
-      case 'ready': return 'ok'
+      case 'ready': return isProjectRunActive() ? 'running' : 'ok'
       case 'import_draft': return 'warn'
       case 'gate_check': return 'ok'
       case 'review': return 'ok'
-      case 'exploring': return 'accent'
+      case 'exploring': return 'running'
       case 'in_progress': return 'neutral'
-      default: return 'neutral'
+      default: return canRunTask(turn) ? 'running' : 'neutral'
     }
   }
 
@@ -245,7 +254,7 @@
     if (projectStartBlockerMessage) return 'Project blocked'
     if (briefShapingTimedOut(turn) || briefShapingPaused(turn)) return 'Try shaping brief again'
     switch (turn.taskStatus) {
-      case 'ready': return needsWorkerHandoffSpecCleanup(turn) ? briefFixButtonLabel(turn) : 'Start only this work item'
+      case 'ready': return needsWorkerHandoffSpecCleanup(turn) ? briefFixButtonLabel(turn) : 'Resume only this work item'
       case 'import_draft': return 'Draft task brief'
       case 'exploring':
         if (turn.importedDraft || hasIncompleteTaskChecklist(turn)) return 'Continue shaping brief'
@@ -274,10 +283,10 @@
 
   function briefFixTitle(turn: TaskThreadInFlightTurn): string {
     switch (missingBriefFieldKind(turn)) {
-      case 'success': return 'Brief cleanup needed'
-      case 'acceptance': return 'Brief cleanup needed'
-      case 'both': return 'Brief cleanup needed'
-      default: return 'Brief cleanup needed'
+      case 'success': return 'Needs brief'
+      case 'acceptance': return 'Needs brief'
+      case 'both': return 'Needs brief'
+      default: return 'Needs brief'
     }
   }
 
@@ -307,8 +316,8 @@
 
   function cardTitleForTurn(turn: TaskThreadInFlightTurn): string {
     if (briefShapingTimedOut(turn)) return 'Shaping timed out'
-    if (briefShapingPaused(turn)) return 'Shaping paused'
-    if (needsWorkerHandoffSpecCleanup(turn)) return 'Needs brief cleanup'
+    if (briefShapingPaused(turn)) return 'Paused'
+    if (needsWorkerHandoffSpecCleanup(turn)) return 'Needs brief'
     return turn.liveAgent ? 'Live progress' : 'Task status'
   }
 
@@ -346,10 +355,10 @@
 
 <Stack gap="4">
   {#if relevantTurns.length === 0 && taskNeedsBriefCleanup}
-    <Card title="Needs brief cleanup" tone="warn">
+    <Card title="Needs brief" tone="warn">
       <Stack gap="3">
         <StateSummary
-          label="Brief cleanup needed"
+          label="Needs brief"
           description="Guildhall needs to turn the source notes into a usable task brief before implementation."
           tone="warn"
         />
@@ -444,7 +453,7 @@
         {@const reasonLabel = escalationReasonLabel(turn.escalationReason)}
         {@const ownerLabel = roleLabel(turn.escalationAgentId)}
         {@const externalChecklist = checklistForEscalation(turn)}
-        <Card title={guidance.actionOwner === 'guildhall' ? 'Guildhall can continue' : 'Recovery needed'} tone="warn">
+        <Card title={guidance.actionOwner === 'guildhall' ? 'Queued' : 'Recovery needed'} tone="warn">
           <Stack gap="3">
             <StateSummary
               label={guidance.actionOwner === 'guildhall' ? 'Guildhall action' : reasonLabel}

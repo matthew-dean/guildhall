@@ -5,7 +5,7 @@ type ProjectFetch = typeof projectFetchImpl
 
 export interface ProjectGraphView {
   currentProject?: { id?: string; label?: string; path?: string }
-  localProjects?: Array<{ id: string; label: string; path?: string; role?: string }>
+  localProjects?: Array<{ id: string; label: string; path?: string; role?: 'current' | 'consumer' | 'provider' | string }>
   localProjectIndex?: Array<{ id: string; label: string; path?: string; role?: 'current' | 'indexed' | string }>
   domainAuthorities?: Array<{
     domain?: { id?: string; label?: string }
@@ -150,7 +150,7 @@ export function createProjectGraphStore(projectFetch: ProjectFetch) {
   }
 
   function graphProjectOptions() {
-    return (projectGraph?.localProjects ?? [])
+    return (projectGraph?.localProjectIndex ?? projectGraph?.localProjects ?? [])
       .filter(item => item.id && item.path)
       .map(item => ({
         value: item.id,
@@ -406,6 +406,7 @@ export function createProjectGraphStore(projectFetch: ProjectFetch) {
     primaryAssignableResponsibility,
     localResponsibilitiesForDomain,
     graphAssignmentTargets,
+    assignDomainResponsibilityTo,
     assignmentPickerResponsibility,
     openAssignmentPicker,
     closeAssignmentPicker,

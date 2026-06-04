@@ -494,6 +494,7 @@
 
   const task = $derived(payload?.task)
   const runStatus = $derived(payload?.runStatus ?? project.detail?.run?.status ?? 'stopped')
+  const availabilityStatus = $derived(payload?.availability?.status ?? project.detail?.availability?.status ?? 'active')
   const hasCurrentTurns = $derived((payload?.threadTurns?.length ?? 0) > 0)
   const tabs = $derived(
     hasCurrentTurns
@@ -615,7 +616,7 @@
       const guidance = escalationUserGuidance(firstOpenEscalation)
       return {
         tone: guidance.actionOwner === 'guildhall' ? 'info' : 'warn',
-        eyebrow: guidance.actionOwner === 'guildhall' ? 'Guildhall can continue' : 'Needs recovery',
+        eyebrow: guidance.actionOwner === 'guildhall' ? 'Queued' : 'Needs recovery',
         title: guidance.title,
         detail: guidance.nextStep,
       }
@@ -925,6 +926,7 @@
           {runBusy}
           {runError}
           {runStatus}
+          {availabilityStatus}
           {projectStartBlockerMessage}
           onApproveBrief={() => post('approve-brief')}
           onApproveSpec={handleApproveSpec}
@@ -1003,12 +1005,12 @@
             {#if canRunTaskDirectly}
               {#if runStatus === 'running'}
                 <Button
-                  variant="danger"
+                  variant="secondary"
                   size="sm"
                   disabled={runBusy}
                   onclick={() => runProject('stop')}
                 >
-                  Stop run
+                  Pause run
                 </Button>
               {:else}
                 <Button
@@ -1018,7 +1020,7 @@
                   onclick={() => runProject('start', task.id)}
                 >
                   <Icon name="sparkles" size={14} />
-                  Start only this work item
+                  Resume only this work item
                 </Button>
               {/if}
             {/if}

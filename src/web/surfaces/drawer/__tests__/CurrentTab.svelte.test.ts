@@ -59,7 +59,7 @@ function handlers() {
   }
 }
 
-function renderCurrent(turns: TaskThreadTurn[], options: { runError?: string | null; runStatus?: string } = {}) {
+function renderCurrent(turns: TaskThreadTurn[], options: { runError?: string | null; runStatus?: string; availabilityStatus?: string | null } = {}) {
   const props = {
     task: baseTask(),
     turns,
@@ -67,6 +67,7 @@ function renderCurrent(turns: TaskThreadTurn[], options: { runError?: string | n
     runBusy: false,
     runError: options.runError ?? null,
     runStatus: options.runStatus ?? 'stopped',
+    availabilityStatus: options.availabilityStatus ?? 'paused',
     ...handlers(),
   }
   render(CurrentTab, props)
@@ -76,7 +77,7 @@ function renderCurrent(turns: TaskThreadTurn[], options: { runError?: string | n
 function renderCurrentWithTask(
   task: Task,
   turns: TaskThreadTurn[],
-  options: { runError?: string | null; runStatus?: string } = {},
+  options: { runError?: string | null; runStatus?: string; availabilityStatus?: string | null } = {},
 ) {
   const props = {
     task,
@@ -85,6 +86,7 @@ function renderCurrentWithTask(
     runBusy: false,
     runError: options.runError ?? null,
     runStatus: options.runStatus ?? 'stopped',
+    availabilityStatus: options.availabilityStatus ?? 'paused',
     ...handlers(),
   }
   render(CurrentTab, props)
@@ -107,10 +109,9 @@ describe('CurrentTab', () => {
   it('keeps task-level brief cleanup visible even when there is no active thread turn', async () => {
     const props = renderCurrentWithTask(readyTaskNeedingBriefCleanup(), [])
 
-    expect(screen.getByText('Needs brief cleanup')).toBeTruthy()
-    const briefCleanupChip = screen.getByText('Brief cleanup needed')
+    expect(screen.getAllByText('Needs brief').length).toBeGreaterThanOrEqual(1)
+    const briefCleanupChip = screen.getAllByText('Needs brief').find(node => node.classList.contains('tone-warn'))
     expect(briefCleanupChip).toBeTruthy()
-    expect(briefCleanupChip.classList.contains('tone-warn')).toBe(true)
     expect(screen.getByText(/marked ready, but its brief\/spec is not complete enough/i)).toBeTruthy()
     const viewButton = screen.getByRole('button', { name: /view brief/i })
     const startButton = screen.getByRole('button', { name: 'Clean up brief' })
@@ -238,7 +239,7 @@ describe('CurrentTab', () => {
       },
     ])
 
-    expect(screen.getByText('Needs task brief')).toBeTruthy()
+    expect(screen.getByText('Needs brief')).toBeTruthy()
     expect(screen.getByText(/Next step: turn this note into a task brief with scope, evidence, and acceptance criteria/)).toBeTruthy()
     await userEvent.click(screen.getByRole('button', { name: /draft task brief/i }))
 
@@ -264,8 +265,8 @@ describe('CurrentTab', () => {
       },
     ])
 
-    expect(screen.getByText('Guildhall shaping')).toBeTruthy()
-    expect(screen.getByText(/You can add context, but you do not need to babysit the draft/i)).toBeTruthy()
+    expect(screen.getByText('Paused')).toBeTruthy()
+    expect(screen.getByText(/Resume Guildhall when you want it to keep preparing this task/i)).toBeTruthy()
     expect(screen.queryByText('Task brief in progress')).toBeNull()
     expect(screen.queryByText(/Continue drafting the brief here when you are ready/i)).toBeNull()
     expect(screen.getByRole('button', { name: /continue shaping brief/i })).toBeTruthy()
@@ -350,7 +351,7 @@ describe('CurrentTab', () => {
       },
     ])
 
-    expect(screen.getByText('Guildhall can continue')).toBeTruthy()
+    expect(screen.getByText('Queued')).toBeTruthy()
     expect(screen.getByText('Guildhall needs to run one missing check.')).toBeTruthy()
     expect(screen.getByText(/not asking you to prove anything/i)).toBeTruthy()
     expect(screen.getByRole('button', { name: /Let Guildhall run the check/i })).toBeTruthy()
@@ -391,7 +392,7 @@ describe('CurrentTab', () => {
     expect(screen.getByText('Ready')).toBeTruthy()
     expect(screen.getByText('Implementation path')).toBeTruthy()
     expect(screen.getByText('Repo is dirty.')).toBeTruthy()
-    await userEvent.click(screen.getByRole('button', { name: /start only this work item/i }))
+    await userEvent.click(screen.getByRole('button', { name: /resume only this work item/i }))
 
     expect(props.onRunTask).toHaveBeenCalledOnce()
   })
@@ -414,12 +415,12 @@ describe('CurrentTab', () => {
 
     expect(screen.getByText('Task completed.')).toBeTruthy()
     expect(screen.queryByRole('button', { name: /run this task/i })).toBeNull()
-    expect(screen.queryByRole('button', { name: /start work/i })).toBeNull()
-    expect(screen.queryByRole('button', { name: /start only this work item/i })).toBeNull()
+    expect(screen.queryByRole('button', { name: /resume work/i })).toBeNull()
+    expect(screen.queryByRole('button', { name: /resume only this work item/i })).toBeNull()
     expect(props.onRunTask).not.toHaveBeenCalled()
   })
 
-  it('does not offer Start work for a ready task with an incomplete checklist', async () => {
+  it('does not offer Resume work for a ready task with an incomplete checklist', async () => {
     const props = renderCurrent([
       {
         id: 'turn-incomplete-ready',
@@ -447,11 +448,10 @@ describe('CurrentTab', () => {
       },
     ])
 
-    expect(screen.getByText('Needs brief cleanup')).toBeTruthy()
-    expect(screen.getByText('Brief cleanup needed')).toBeTruthy()
+    expect(screen.getAllByText('Needs brief').length).toBeGreaterThanOrEqual(1)
     expect(screen.getByText('Guildhall needs to turn the source notes into an outcome and acceptance checks before implementation.')).toBeTruthy()
     expect(screen.getAllByText('Missing').length).toBeGreaterThanOrEqual(1)
-    expect(screen.queryByRole('button', { name: /start work/i })).toBeNull()
+    expect(screen.queryByRole('button', { name: /resume work/i })).toBeNull()
     const startButton = screen.getByRole('button', { name: 'Clean up brief' })
     expect(startButton.classList.contains('v-agent')).toBe(true)
     await userEvent.click(startButton)
@@ -488,8 +488,7 @@ describe('CurrentTab', () => {
       },
     ])
 
-    expect(screen.getByText('Needs brief cleanup')).toBeTruthy()
-    expect(screen.getByText('Brief cleanup needed')).toBeTruthy()
+    expect(screen.getAllByText('Needs brief').length).toBeGreaterThanOrEqual(1)
     expect(screen.getByText('Guildhall needs to turn the source notes into concrete acceptance checks before implementation.')).toBeTruthy()
     await userEvent.click(screen.getByRole('button', { name: 'Clean up brief' }))
 
@@ -515,11 +514,11 @@ describe('CurrentTab', () => {
       { runStatus: 'running' },
     )
 
-    const queuedChip = screen.getByText('Queued for Guildhall')
+    const queuedChip = screen.getByText('Queued')
     expect(queuedChip).toBeTruthy()
-    expect(queuedChip.classList.contains('tone-ok')).toBe(true)
+    expect(queuedChip.classList.contains('tone-running')).toBe(true)
     expect(screen.getByRole('button', { name: /already queued/i })).toHaveProperty('disabled', true)
-    expect(screen.queryByRole('button', { name: /start work/i })).toBeNull()
+    expect(screen.queryByRole('button', { name: /resume work/i })).toBeNull()
   })
 
   it('identifies a live worker as in flight with recent activity', () => {
@@ -548,7 +547,7 @@ describe('CurrentTab', () => {
     ])
 
     expect(screen.getByText('Live progress')).toBeTruthy()
-    expect(screen.getByText('In flight')).toBeTruthy()
+    expect(screen.getByText('Working')).toBeTruthy()
     expect(screen.getByText('Activity log')).toBeTruthy()
     expect(screen.getByText('Started write checkpoint')).toBeTruthy()
   })
@@ -611,7 +610,7 @@ describe('CurrentTab', () => {
       },
     ])
 
-    expect(screen.getByText('In flight')).toBeTruthy()
+    expect(screen.getByText('Working')).toBeTruthy()
     expect(screen.getByText(/Local model is still loading or generating/i)).toBeTruthy()
   })
 
@@ -631,7 +630,7 @@ describe('CurrentTab', () => {
       },
     ])
 
-    expect(screen.getByText('Spec revision queued')).toBeTruthy()
+    expect(screen.getByText('Paused')).toBeTruthy()
     const reviseButton = screen.getByRole('button', { name: /revise spec/i })
     expect(reviseButton.classList.contains('v-agent')).toBe(true)
     await userEvent.click(reviseButton)

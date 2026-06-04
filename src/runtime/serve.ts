@@ -141,6 +141,7 @@ import {
   listBoundedChatSessions,
   listBoundedChatSessionsAsync,
   loadBoundedChatSession,
+  submitBoundedChatUserResponse,
 } from './bounded-chat.js'
 import { loadDesignSystem, saveDesignSystem } from './design-system-store.js'
 import { discoverDesignPreviewAdapter } from './design-preview.js'
@@ -179,10 +180,10 @@ import {
 import {
   applyStructuralMapReviewAction,
   readAcceptedStructuralMap,
-  readStructuralMapReviewSummary,
   summarizeStructuralMapForReview,
   type StructuralMapReviewAction,
 } from './structural-map.js'
+import { summarizeStructuralTaskContexts } from './structural-task-context.js'
 import { loadEffectiveDesignTaste } from './design-taste.js'
 import {
   approveMetaIntake,
@@ -241,7 +242,7 @@ import {
   detectRepoAnchors,
   isAttentionOwnedInboxItem,
 } from './inbox.js'
-import { listOwnerInputRequestsSync } from './owner-input-store.js'
+import { listOwnerInputRequestsSync, markOwnerInputRequestForBoundedChatReview } from './owner-input-store.js'
 import {
   buildProjectMigrationAdvisories,
   buildProjectUnderstandingAdvisories,
@@ -266,6 +267,11 @@ import {
 } from './project-runtime-command.js'
 import { listMemoryRecords } from './memory-store.js'
 import { readProjectRuntimeState } from './project-runtime-store.js'
+import {
+  pauseProjectAvailability,
+  readProjectAvailability,
+  resumeProjectAvailability,
+} from './project-availability.js'
 import {
   DevServerManager,
   type StartDevServerRequest,
@@ -2176,6 +2182,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
     if (
       c.req.path.startsWith('/api/project') &&
       !c.req.path.startsWith('/api/project/migrations') &&
+      c.req.path !== '/api/project/meta-intake/synthesize' &&
       c.req.method !== 'GET' &&
       c.req.method !== 'HEAD'
     ) {
@@ -2323,6 +2330,9 @@ export function buildServeApp(opts: ServeOptions = {}): {
         }
         let highlights: ServiceProjectSummary['highlights'] = undefined
         let taskActivity: ServiceProjectSummary['taskActivity'] = undefined
+        const availability = resolved.initializationNeeded
+          ? null
+          : await readProjectAvailability(entry.path).catch(() => null)
         try {
           const tasks = await readTasksFileNormalized(join(getProjectStateDir(entry.path), 'TASKS.json'))
           taskCounts = summarizeTaskCounts(tasks)
@@ -2352,6 +2362,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
             tasks: tasks as never,
             thread,
             runStatus: run?.status ?? 'stopped',
+            availability,
           })
           highlights = {
             activeTaskTitle: latestTaskTitleByStatus(tasks, ['in_progress', 'review', 'gate_check', 'exploring']),
@@ -2367,6 +2378,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
             ...(gitStory ? { gitStory } : {}),
             ...(providerStatus ? { providerStatus } : {}),
             ...(startReadiness ? { startReadiness } : {}),
+            ...(availability ? { availability } : {}),
             actionModel,
             ...(migrationSummary ? { migrationSummary } : {}),
             projectCheckIn,
@@ -2394,6 +2406,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
           ...(highlights ? { highlights } : {}),
           ...(providerStatus ? { providerStatus } : {}),
           ...(startReadiness ? { startReadiness } : {}),
+          ...(availability ? { availability } : {}),
           ...(migrationSummary ? { migrationSummary } : {}),
           projectCheckIn,
           ...(run
@@ -2761,15 +2774,28 @@ export function buildServeApp(opts: ServeOptions = {}): {
         runtimeProvider,
         allowPaidProviderFallback: runtimeProvider.allowPaidProviderFallback,
       })
-      const [runtime, memoryHealth] = await Promise.all([
+      const [runtime, memoryHealth, availability] = await Promise.all([
         readProjectRuntimeState(project.path),
         projectMemoryHealth(
           project.path,
           tasks
             .filter((task): task is { id: string } => typeof task.id === 'string'),
         ),
+        readProjectAvailability(project.path),
       ])
-      const structuralMapReview = readStructuralMapReviewSummary(project.path)
+      const acceptedStructuralMap = readAcceptedStructuralMap(project.path)
+      const structuralMapReview = acceptedStructuralMap ? summarizeStructuralMapForReview(acceptedStructuralMap) : null
+      const taskRoutingContexts = summarizeStructuralTaskContexts({
+        map: acceptedStructuralMap,
+        tasks: tasks
+          .filter((task): task is typeof task & { id: string } => typeof task.id === 'string')
+          .map(task => ({
+            id: task.id,
+            title: typeof task.title === 'string' ? task.title : task.id,
+            description: typeof task.description === 'string' ? task.description : undefined,
+            spec: typeof task.spec === 'string' ? task.spec : undefined,
+          })),
+      })
       const inbox = await buildProjectInboxSnapshot({
         projectPath: project.path,
         initializationNeeded: project.initializationNeeded,
@@ -2792,6 +2818,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
         tasks: tasks as never,
         thread,
         runStatus: run?.status ?? 'stopped',
+        availability,
       })
       return c.json({
         initializationNeeded: false,
@@ -2813,10 +2840,12 @@ export function buildServeApp(opts: ServeOptions = {}): {
               ...(run.providerStatus ? { providerStatus: run.providerStatus } : {}),
             }
           : null,
+        availability,
         providerStatus,
         runtime,
         memoryHealth,
         ...(structuralMapReview ? { structuralMapReview } : {}),
+        taskRoutingContexts,
         gitStory,
         startReadiness,
         actionModel,
@@ -3765,6 +3794,17 @@ export function buildServeApp(opts: ServeOptions = {}): {
     ]
   }
 
+  function isCompleteModelAssignment(assignment: Partial<ModelAssignmentConfig>): assignment is ModelAssignmentConfig {
+    return (
+      typeof assignment.spec === 'string' &&
+      typeof assignment.coordinator === 'string' &&
+      typeof assignment.worker === 'string' &&
+      typeof assignment.reviewer === 'string' &&
+      typeof assignment.gateChecker === 'string' &&
+      typeof assignment.contextIndexer === 'string'
+    )
+  }
+
   async function projectStartReadiness(input: {
     projectPath: string
     resolvedConfig: ReturnType<typeof resolveConfig>
@@ -4357,6 +4397,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
         providerOverride: effectiveProvider,
         modelAssignmentOverride: effectiveModels,
       })
+      await resumeProjectAvailability(project.path)
       return c.json({
         status: run.status,
         mode: run.mode,
@@ -4372,6 +4413,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
 
   app.post('/api/project/stop', async c => {
     try {
+      await pauseProjectAvailability(project.path, { reason: 'user_paused_project' })
       const stopped = await supervisor.stop(project.id, { waitMs: 1_000 })
       return c.json({ ok: true, status: stopped ? 'stopped' : 'stopping' })
     } catch (err) {
@@ -4559,7 +4601,17 @@ export function buildServeApp(opts: ServeOptions = {}): {
         })
         return c.json({ boundedChat })
       }
-      return c.json({ error: 'This bounded chat objective is not supported here yet.' }, 400)
+      const boundedChat = await submitBoundedChatUserResponse({
+        memoryDir: getProjectStateDir(project.path),
+        sessionId: session.id,
+        subObjectiveId,
+        response,
+      })
+      await markOwnerInputRequestForBoundedChatReview({
+        projectRoot: project.path,
+        boundedChatSessionId: session.id,
+      })
+      return c.json({ boundedChat })
     } catch (err) {
       return c.json({ error: err instanceof Error ? err.message : String(err) }, 500)
     }
@@ -4908,7 +4960,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
       const parsed = JSON.parse(raw) as { tasks?: Array<Record<string, unknown>> } | Array<Record<string, unknown>>
       const tasks = Array.isArray(parsed) ? parsed : parsed.tasks ?? []
       const task = tasks.find(t => (t as { id?: string }).id === META_INTAKE_TASK_ID) as
-        | { spec?: string; status?: string }
+        | { spec?: string; status?: string; blockReason?: string | null }
         | undefined
       if (!task) {
         return c.json({ status: 'no-task', taskExists: false, specReady: false, drafts: [] })
@@ -4920,6 +4972,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
           taskExists: true,
           specReady: false,
           taskStatus: task.status ?? null,
+          blockReason: task.blockReason ?? null,
           drafts: [],
         })
       }
@@ -4929,6 +4982,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
         taskExists: true,
         specReady: drafts.length > 0,
         taskStatus: task.status ?? null,
+        blockReason: task.blockReason ?? null,
         drafts,
       })
     } catch (err) {
@@ -6226,9 +6280,11 @@ export function buildServeApp(opts: ServeOptions = {}): {
         return turn.taskId === id
       })
       const runStatus = supervisor.get(project.id)?.status ?? 'stopped'
+      const availability = await readProjectAvailability(project.path)
       return c.json({
         task: await enrichTaskForServe(project.path, task as Record<string, unknown>),
         runStatus,
+        availability,
         recentEvents: recent,
         contextDebug,
         exploringTranscript,
@@ -8181,17 +8237,19 @@ export function buildServeApp(opts: ServeOptions = {}): {
   //   POST /api/providers/disconnect  revoke a stored credential
   // -------------------------------------------------------------------------
 
-  function describeProviders() {
+  function describeProviders(projectPath?: string) {
     // Run the legacy-config migration on every request. It is idempotent
     // and cheap (a single YAML read + Zod parse) and means users who
     // upgrade in-place never see stale credentials in their project file.
-    try {
-      migrateProjectProvidersToGlobal(currentProjectPath(), {
-        readProject: (p) => readProjectConfig(p),
-        writeProject: (p, patch) => updateProjectConfig(p, patch),
-      })
-    } catch {
-      /* best-effort — never let migration break the endpoint */
+    if (projectPath) {
+      try {
+        migrateProjectProvidersToGlobal(projectPath, {
+          readProject: (p) => readProjectConfig(p),
+          writeProject: (p, patch) => updateProjectConfig(p, patch),
+        })
+      } catch {
+        /* best-effort — never let migration break the endpoint */
+      }
     }
 
     const global = readGlobalProviders()
@@ -8211,6 +8269,84 @@ export function buildServeApp(opts: ServeOptions = {}): {
     }
   }
 
+  async function providersPayload(preferredProvider: string | null) {
+    const { global, creds, claudeCredPath, codexCredPath, claudeInstalled, codexInstalled } =
+      describeProviders()
+
+    const defaultLlamaUrl = 'http://localhost:1234/v1'
+    const configuredLlamaUrl = creds.llamaCppUrl ?? ''
+    const llamaUrl = configuredLlamaUrl || defaultLlamaUrl
+    const llamaReachable = llamaUrl.length > 0 ? await probeLlamaCpp(llamaUrl) : false
+    const configuredOpenAiBaseUrl = creds.openaiBaseUrl ?? ''
+
+    const v = (kind: ProviderKind) => global.providers[kind]?.verifiedAt ?? null
+    const maxConcurrency = (kind: ProviderKind) => global.providers[kind]?.maxConcurrency ?? null
+
+    return {
+      preferredProvider,
+      providers: {
+        'claude-oauth': {
+          label: providerLabelForSetupKey('claude-oauth'),
+          detected: claudeInstalled,
+          verifiedAt: v('claude-oauth'),
+          maxConcurrency: maxConcurrency('claude-oauth'),
+          detail: claudeInstalled
+            ? `Credentials detected at ${claudeCredPath}`
+            : 'Install Claude Code and run `claude auth login`.',
+        },
+        'codex': {
+          label: providerLabelForSetupKey('codex'),
+          detected: codexInstalled,
+          verifiedAt: v('codex-oauth'),
+          maxConcurrency: maxConcurrency('codex-oauth'),
+          detail: codexInstalled
+            ? `Credentials detected at ${codexCredPath}`
+            : 'Install the Codex CLI and run `codex auth login`.',
+        },
+        'llama-cpp': {
+          label: providerLabelForSetupKey('llama-cpp'),
+          detected: llamaReachable,
+          verifiedAt: v('llama-cpp'),
+          maxConcurrency: maxConcurrency('llama-cpp'),
+          url: llamaReachable ? llamaUrl : configuredLlamaUrl || null,
+          detail:
+            configuredLlamaUrl.length === 0 && !llamaReachable
+              ? `Not reachable at ${defaultLlamaUrl}. Start an OpenAI-compatible local server such as LM Studio or llama.cpp, or paste a server URL.`
+              : llamaReachable
+                ? `Reachable at ${llamaUrl}`
+                : `Not reachable at ${llamaUrl}. Start an OpenAI-compatible local server such as LM Studio or llama.cpp and click refresh.`,
+        },
+        'anthropic-api': {
+          label: providerLabelForSetupKey('anthropic-api'),
+          detected: Boolean(creds.anthropicApiKey),
+          verifiedAt: v('anthropic-api'),
+          maxConcurrency: maxConcurrency('anthropic-api'),
+          detail: global.providers['anthropic-api']?.apiKey
+            ? 'Stored in ~/.guildhall/providers.yaml'
+            : process.env.ANTHROPIC_API_KEY
+              ? 'Picked up from $ANTHROPIC_API_KEY'
+              : 'Paste an API key to enable.',
+        },
+        'openai-api': {
+          label: providerLabelForSetupKey('openai-api'),
+          detected: Boolean(creds.openaiApiKey),
+          verifiedAt: v('openai-api'),
+          maxConcurrency: maxConcurrency('openai-api'),
+          baseUrl: configuredOpenAiBaseUrl || null,
+          detail: global.providers['openai-api']?.apiKey
+            ? configuredOpenAiBaseUrl
+              ? `Stored in ~/.guildhall/providers.yaml · ${configuredOpenAiBaseUrl}`
+              : 'Stored in ~/.guildhall/providers.yaml · defaults to https://api.openai.com/v1'
+            : process.env.OPENAI_API_KEY
+              ? configuredOpenAiBaseUrl
+                ? `Picked up from $OPENAI_API_KEY · ${configuredOpenAiBaseUrl}`
+                : 'Picked up from $OPENAI_API_KEY · defaults to https://api.openai.com/v1'
+              : 'Paste an API key to enable. Leave base URL blank to use https://api.openai.com/v1.',
+        },
+      },
+    }
+  }
+
   async function probeLlamaCpp(url: string): Promise<boolean> {
     try {
       const res = await fetch(url + '/models', { signal: AbortSignal.timeout(800) })
@@ -8222,88 +8358,23 @@ export function buildServeApp(opts: ServeOptions = {}): {
 
   app.get('/api/setup/providers', async c => {
     try {
-      const { global, creds, claudeCredPath, codexCredPath, claudeInstalled, codexInstalled } =
-        describeProviders()
+      describeProviders(currentProjectPath())
       const stored = readProjectConfig(currentProjectPath())
-
-      const defaultLlamaUrl = 'http://localhost:1234/v1'
-      const configuredLlamaUrl = creds.llamaCppUrl ?? ''
-      const llamaUrl = configuredLlamaUrl || defaultLlamaUrl
-      const llamaReachable = llamaUrl.length > 0 ? await probeLlamaCpp(llamaUrl) : false
-      const configuredOpenAiBaseUrl = creds.openaiBaseUrl ?? ''
-
-      const v = (kind: ProviderKind) => global.providers[kind]?.verifiedAt ?? null
-      const maxConcurrency = (kind: ProviderKind) => global.providers[kind]?.maxConcurrency ?? null
-
-      return c.json({
-        preferredProvider: stored.preferredProvider ?? readGlobalConfig().preferredProvider ?? null,
-        providers: {
-          'claude-oauth': {
-            label: providerLabelForSetupKey('claude-oauth'),
-            detected: claudeInstalled,
-            verifiedAt: v('claude-oauth'),
-            maxConcurrency: maxConcurrency('claude-oauth'),
-            detail: claudeInstalled
-              ? `Credentials detected at ${claudeCredPath}`
-              : 'Install Claude Code and run `claude auth login`.',
-          },
-          'codex': {
-            label: providerLabelForSetupKey('codex'),
-            detected: codexInstalled,
-            verifiedAt: v('codex-oauth'),
-            maxConcurrency: maxConcurrency('codex-oauth'),
-            detail: codexInstalled
-              ? `Credentials detected at ${codexCredPath}`
-              : 'Install the Codex CLI and run `codex auth login`.',
-          },
-          'llama-cpp': {
-            label: providerLabelForSetupKey('llama-cpp'),
-            detected: llamaReachable,
-            verifiedAt: v('llama-cpp'),
-            maxConcurrency: maxConcurrency('llama-cpp'),
-            url: llamaReachable ? llamaUrl : configuredLlamaUrl || null,
-            detail:
-              configuredLlamaUrl.length === 0 && !llamaReachable
-                ? `Not reachable at ${defaultLlamaUrl}. Start an OpenAI-compatible local server such as LM Studio or llama.cpp, or paste a server URL.`
-                : llamaReachable
-                  ? `Reachable at ${llamaUrl}`
-                  : `Not reachable at ${llamaUrl}. Start an OpenAI-compatible local server such as LM Studio or llama.cpp and click refresh.`,
-          },
-          'anthropic-api': {
-            label: providerLabelForSetupKey('anthropic-api'),
-            detected: Boolean(creds.anthropicApiKey),
-            verifiedAt: v('anthropic-api'),
-            maxConcurrency: maxConcurrency('anthropic-api'),
-            detail: global.providers['anthropic-api']?.apiKey
-              ? 'Stored in ~/.guildhall/providers.yaml'
-              : process.env.ANTHROPIC_API_KEY
-                ? 'Picked up from $ANTHROPIC_API_KEY'
-                : 'Paste an API key to enable.',
-          },
-          'openai-api': {
-            label: providerLabelForSetupKey('openai-api'),
-            detected: Boolean(creds.openaiApiKey),
-            verifiedAt: v('openai-api'),
-            maxConcurrency: maxConcurrency('openai-api'),
-            baseUrl: configuredOpenAiBaseUrl || null,
-            detail: global.providers['openai-api']?.apiKey
-              ? configuredOpenAiBaseUrl
-                ? `Stored in ~/.guildhall/providers.yaml · ${configuredOpenAiBaseUrl}`
-                : 'Stored in ~/.guildhall/providers.yaml · defaults to https://api.openai.com/v1'
-              : process.env.OPENAI_API_KEY
-                ? configuredOpenAiBaseUrl
-                  ? `Picked up from $OPENAI_API_KEY · ${configuredOpenAiBaseUrl}`
-                  : 'Picked up from $OPENAI_API_KEY · defaults to https://api.openai.com/v1'
-                : 'Paste an API key to enable. Leave base URL blank to use https://api.openai.com/v1.',
-          },
-        },
-      })
+      return c.json(await providersPayload(stored.preferredProvider ?? readGlobalConfig().preferredProvider ?? null))
     } catch (err) {
       return c.json({ error: err instanceof Error ? err.message : String(err) }, 500)
     }
   })
 
-  app.post('/api/setup/providers/config', async c => {
+  app.get('/api/providers', async c => {
+    try {
+      return c.json(await providersPayload(readGlobalConfig().preferredProvider ?? null))
+    } catch (err) {
+      return c.json({ error: err instanceof Error ? err.message : String(err) }, 500)
+    }
+  })
+
+  async function handleProviderConfig(c: Context) {
     try {
       const body = (await c.req.json().catch(() => ({}))) as {
         provider?: string
@@ -8428,7 +8499,10 @@ export function buildServeApp(opts: ServeOptions = {}): {
     } catch (err) {
       return c.json({ error: err instanceof Error ? err.message : String(err) }, 500)
     }
-  })
+  }
+
+  app.post('/api/setup/providers/config', handleProviderConfig)
+  app.post('/api/providers/config', handleProviderConfig)
 
   function normalizeWorktreeIncludeLines(lines: unknown[]): string[] {
     const out: string[] = []
@@ -8755,62 +8829,146 @@ export function buildServeApp(opts: ServeOptions = {}): {
     }
   })
 
+  async function modelsPayload(options: { workspacePath?: string } = {}) {
+    const global = readGlobalConfig()
+    const workspacePath = options.workspacePath
+    const workspace = workspacePath ? readWorkspaceConfig(workspacePath) : null
+    const projectCfg = workspacePath ? readProjectConfig(workspacePath) : null
+    const preferredProvider = projectCfg?.preferredProvider ?? global.preferredProvider
+    const resolved = workspacePath ? resolveConfig({ workspacePath }) : null
+    const globalModels = resolveModelsForProvider(global.models, preferredProvider)
+    const projectModels = resolveModelsForProvider(workspace?.models, preferredProvider)
+    const effectiveModels = resolved?.models ?? globalModels
+    const globalBehavior = global.modelBehavior ?? {}
+    const projectBehavior = workspace?.modelBehavior ?? {}
+    const effectiveBehavior = resolved?.modelBehavior ?? globalBehavior
+    const creds = resolveGlobalCredentials()
+    const loadedModels = creds.llamaCppUrl
+      ? await loadedLlamaModelIds(creds.llamaCppUrl).catch(() => [])
+      : []
+    const missingModels = loadedModels.length > 0 && isCompleteModelAssignment(effectiveModels)
+      ? missingAssignedModels(effectiveModels, loadedModels)
+      : []
+    return {
+      globalModels,
+      ...(workspace ? { projectModels } : {}),
+      effectiveModels,
+      globalBehavior,
+      ...(workspace ? { projectBehavior } : {}),
+      effectiveBehavior,
+      behaviorProfiles: MODEL_BEHAVIOR_PROFILES,
+      loadedModels,
+      missingModels,
+      catalog: [
+        ...new Map(
+          [
+            ...loadedModels.map(id => ({
+              id,
+              provider: 'openai-compatible',
+              notes: 'Loaded on the configured local server',
+            })),
+            ...MODEL_CATALOG.map(m => ({
+              id: m.id,
+              provider: m.provider,
+              notes: m.notes ?? '',
+            })),
+            ...Object.values(globalModels).map(id => ({
+              id,
+              provider: 'openai-compatible',
+              notes: 'Global default',
+            })),
+            ...Object.values(projectModels).map(id => ({
+              id,
+              provider: 'openai-compatible',
+              notes: 'Project override',
+            })),
+          ].map(item => [item.id, item]),
+        ).values(),
+      ],
+    }
+  }
+
   app.get('/api/config/models', async c => {
     try {
-      const global = readGlobalConfig()
-      const workspacePath = currentProjectPath()
-      const workspace = readWorkspaceConfig(workspacePath)
-      const projectCfg = readProjectConfig(workspacePath)
-      const preferredProvider = projectCfg.preferredProvider ?? global.preferredProvider
-      const resolved = resolveConfig({ workspacePath })
-      const creds = resolveGlobalCredentials()
-      const loadedModels = creds.llamaCppUrl
-        ? await loadedLlamaModelIds(creds.llamaCppUrl).catch(() => [])
-        : []
-      const missingModels = loadedModels.length > 0
-        ? missingAssignedModels(resolved.models, loadedModels)
-        : []
-      return c.json({
-        globalModels: resolveModelsForProvider(global.models, preferredProvider),
-        projectModels: resolveModelsForProvider(workspace.models, preferredProvider),
-        effectiveModels: resolved.models,
-        globalBehavior: global.modelBehavior ?? {},
-        projectBehavior: workspace.modelBehavior ?? {},
-        effectiveBehavior: resolved.modelBehavior,
-        behaviorProfiles: MODEL_BEHAVIOR_PROFILES,
-        loadedModels,
-        missingModels,
-        catalog: [
-          ...new Map(
-            [
-              ...loadedModels.map(id => ({
-                id,
-                provider: 'openai-compatible',
-                notes: 'Loaded on the configured local server',
-              })),
-              ...MODEL_CATALOG.map(m => ({
-                id: m.id,
-                provider: m.provider,
-                notes: m.notes ?? '',
-              })),
-              ...Object.values(resolveModelsForProvider(global.models, preferredProvider)).map(id => ({
-                id,
-                provider: 'openai-compatible',
-                notes: 'Global default',
-              })),
-              ...Object.values(resolveModelsForProvider(workspace.models, preferredProvider)).map(id => ({
-                id,
-                provider: 'openai-compatible',
-                notes: 'Project override',
-              })),
-            ].map(item => [item.id, item]),
-          ).values(),
-        ],
-      })
+      return c.json(await modelsPayload({ workspacePath: currentProjectPath() }))
     } catch (err) {
       return c.json({ error: err instanceof Error ? err.message : String(err) }, 500)
     }
   })
+
+  app.get('/api/models', async c => {
+    try {
+      return c.json(await modelsPayload())
+    } catch (err) {
+      return c.json({ error: err instanceof Error ? err.message : String(err) }, 500)
+    }
+  })
+
+  async function handleGlobalModelsConfig(c: Context) {
+    try {
+      const body = (await c.req.json().catch(() => ({}))) as {
+        scope?: 'global' | 'project' | 'global-default'
+        role?: keyof ModelAssignmentConfig
+        model?: string
+        models?: Partial<ModelAssignmentConfig>
+        behaviorProfile?: ModelBehaviorProfile
+      }
+      if (body.scope !== 'global') return c.json({ error: 'Only global model defaults can be saved here.' }, 400)
+      const roles: Array<keyof ModelAssignmentConfig> = ['spec', 'coordinator', 'worker', 'reviewer', 'gateChecker', 'contextIndexer']
+      const behaviorIds = new Set(MODEL_BEHAVIOR_PROFILES.map(profile => profile.id))
+      const preferredProvider = readGlobalConfig().preferredProvider
+      const requestedModels = body.models && typeof body.models === 'object'
+        ? Object.entries(body.models).filter((entry): entry is [keyof ModelAssignmentConfig, string] => {
+            const [role, model] = entry
+            return roles.includes(role as keyof ModelAssignmentConfig) && typeof model === 'string'
+          })
+        : null
+      if (body.models && requestedModels?.length !== Object.keys(body.models).length) {
+        return c.json({ error: 'Unknown model role' }, 400)
+      }
+      if (!requestedModels && (!body.role || !roles.includes(body.role))) {
+        return c.json({ error: 'Unknown model role' }, 400)
+      }
+      const requestedBehavior = typeof body.behaviorProfile === 'string'
+        ? body.behaviorProfile.trim()
+        : undefined
+      if (requestedBehavior && !behaviorIds.has(requestedBehavior as ModelBehaviorProfile)) {
+        return c.json({ error: 'Unknown behavior profile' }, 400)
+      }
+      const hasSingleModel = typeof body.model === 'string'
+      const hasBehavior = requestedBehavior !== undefined
+      if (!requestedModels && !hasSingleModel && !hasBehavior) {
+        return c.json({ error: 'Missing "model" or behaviorProfile' }, 400)
+      }
+      const global = readGlobalConfig()
+      const nextModels = { ...resolveModelsForProvider(global.models, preferredProvider) }
+      if (requestedModels) {
+        for (const [role, model] of requestedModels) {
+          const trimmed = model.trim()
+          if (!trimmed) return c.json({ error: 'Missing "model"' }, 400)
+          nextModels[role] = trimmed
+        }
+      } else if (hasSingleModel) {
+        const model = body.model?.trim()
+        if (!model || !body.role) return c.json({ error: 'Missing "model"' }, 400)
+        nextModels[body.role] = model
+      }
+      updateGlobalConfig({
+        ...global,
+        ...(requestedModels || hasSingleModel
+          ? { models: writeModelsForProvider(global.models, preferredProvider, nextModels) }
+          : {}),
+        ...(requestedBehavior && body.role
+          ? { modelBehavior: { ...(global.modelBehavior ?? {}), [body.role]: requestedBehavior as ModelBehaviorProfile } }
+          : {}),
+      })
+      return c.json({ ok: true })
+    } catch (err) {
+      return c.json({ error: err instanceof Error ? err.message : String(err) }, 500)
+    }
+  }
+
+  app.post('/api/models', handleGlobalModelsConfig)
 
   app.post('/api/config/models', async c => {
     try {
