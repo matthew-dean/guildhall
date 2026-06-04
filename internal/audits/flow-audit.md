@@ -84,8 +84,99 @@ project. On 2026-06-04 the live registered set was Looma + Knit, t-minus-t,
 Fair Labor License, Font something, Narrative Harness, Commerce project, and
 Jess.
 
+## Living Test Plan Structure
+
+Keep this artifact shaped as a complete user-test plan, not only an incident
+log. The active sections should be:
+
+1. Purpose and principles: the Thread, wizard, journey, and screen-design
+   principles above.
+2. Environment and freshness contract: installed app path, service pid,
+   `/api/stale-server`, browser target, and API probe template.
+3. Project-state roster: live projects mapped to required states, with last
+   verified date and readiness summary.
+4. User-test matrix: one stable row per surface with route, user job, API
+   evidence, browser proof, automated coverage, status, and owner.
+5. Scenario scripts: onboarding, owner input, import, task shaping, task
+   drawer, run/pause, recovery, provider setup, and release closure.
+6. Automated coverage map: component/API/rendered-browser coverage by surface,
+   separated from live browser evidence.
+7. Current follow-ups: prioritized open checklist only.
+8. Incident archive: completed historical incidents grouped by theme, not mixed
+   into the active checklist.
+
+## 2026-06-04 Multi-Agent Audit Evidence
+
+Relaunch note: the first delegated batch failed because the model override used
+`gpt-5-codex`, which the account rejected with:
+`The 'gpt-5-codex' model is not supported when using Codex with a ChatGPT account.`
+The audit lanes were relaunched without a model override and completed with the
+default valid model selection.
+
+Freshness and service proof: `/api/stale-server` returned `stale:false`, pid
+`31712`, process start `2026-06-04T17:51:03.141Z`, matching boot/current build
+mtime `1780595436203`, and installed dist
+`/Users/matthew/.guildhall/app/0.9.1/app/dist/cli.js`. `/api/service` returned
+seven registered initialized projects. Direct HTTP returned `200` SPA shells for
+`/projects`, `/needs-you`, `/providers`, `/setup`, Narrative Harness project
+tabs, Looma + Knit Thread, and Jess setup. `/api/providers` and `/api/models`
+returned `200` without `projectId`.
+
+Live project-state roster from the API:
+
+| Project | API state on 2026-06-04 | Useful user-test role |
+| --- | --- | --- |
+| Looma + Knit | 39 tasks; imported task/spec-fill/project-understanding pressure; Thread has known shell identity issue. | High-volume Thread, Work filters, task drawer, project shell identity. |
+| t-minus-t | 2 tasks; blocked plus exploring. | Blocked/recovery-heavy project and no-large-backlog contrast. |
+| Fair Labor License | 17 tasks; completed baseline work plus active/blocked OAuth-style work. | Release readiness, completed-work history, blocked task routing. |
+| Font something | 6 tasks; active import/model tasks and spec drawer candidates. | Model-heavy specs, Work/Thread task drawer routes. |
+| Narrative Harness | 9 tasks; ready specs; 4 inbox items; Thread route produced browser-runtime hang in delegated audit. | Clean initialized project, ready work, heavy Thread performance/recovery. |
+| Commerce project | 0 tasks; setup pending/owner-input pressure; levers default item. | No-runnable-work and setup-blocked consistency. |
+| Jess | 2 tasks; setup/import owner actions; structural-review Thread candidate. | Owner-input, workspace import, accepted structure/contracts regression path. |
+
+Automated coverage summary from inspection-only audit: component/API coverage is
+strong for Thread, task drawers, inbox/action model, providers, setup, release,
+Structure, workspace import, and project summary/action utilities. Rendered
+browser coverage is still thin: the named browser plan exercises only a small
+set of scenarios and is mostly centered on Looma + Knit. A complete user test
+therefore needs fresh live browser proof per project state, not just fixture
+coverage.
+
 ## Current Follow-Ups
 
+- [ ] Distinguish in-app browser bridge failures from actual Guildhall route
+  lockups during live audits. Multi-agent proof on 2026-06-04: the service
+  stayed healthy (`stale:false`, `/api/service` and direct route HTTP returned
+  cleanly), but delegated Browser lanes hit `Page.navigate`, `Runtime.evaluate`,
+  `Page.getFrameTree`, and `about:blank` recovery failures. Future audits must
+  record API liveness, direct HTTP status, current URL, and DOM/screenshot proof
+  before classifying a hang as an app freeze. If API and direct HTTP are healthy
+  but Browser control is wedged, track the Browser bridge separately from the
+  product route.
+- [ ] Reproduce or disprove Narrative Harness Thread route hang. Interactive
+  audit lane on 2026-06-04 loaded
+  `http://localhost:7777/projects/narrative-harness` successfully with project
+  identity and overview sections, then navigating to
+  `/projects/narrative-harness/thread` timed out with `Page.navigate`. Recovery
+  showed the URL had changed to `/projects/narrative-harness/thread`, but
+  `Runtime.evaluate` timed out when reading the DOM. Treat as a live Thread
+  performance/runtime-hang suspect until manual/browser proof separates route
+  behavior from Browser bridge failure.
+- [ ] Verify setup-blocked start/readiness consistency. Global audit on
+  2026-06-04 reported Commerce project as setup/owner-input blocked while the
+  API summary still exposed a startable-looking state. Audit every surface that
+  shows `canStart`, run-control labels, setup state, and owner-input next
+  action; if the concepts disagree, fix the shared summary/action model rather
+  than patching individual views.
+- [ ] Complete browser-capable per-project replay targets from the multi-agent
+  audit. Required high-value targets: Jess structural-review owner input at
+  `/projects/jess/thread?thread=bc-jess-structural_review-8c11fc652d-2026-06-04T00-44-08-860Z`;
+  Jess `/workspace-import`; Commerce `/thread` setup pending; Looma + Knit
+  `/workspace-import?mode=reconcile` and task spec drawers such as
+  `/task/task-import-1l0mr2r?tab=spec`; Narrative Harness task spec drawers
+  `/task/coherence-reviewer-mvp?tab=spec`,
+  `/task/decision-trace-pipeline?tab=spec`, and `/task/task-009?tab=spec`;
+  Font something task routes including `/task/import-api-serving-mvp`.
 - [ ] Fix project shell identity on Looma + Knit Thread. Live proof on
   2026-06-04 after `pnpm dev:install`, service restart, and
   `/api/stale-server` `stale:false`: `/api/project?projectId=looma-knit`
