@@ -6329,8 +6329,38 @@ export function buildServeApp(opts: ServeOptions = {}): {
       })
       const runStatus = supervisor.get(project.id)?.status ?? 'stopped'
       const availability = await readProjectAvailability(project.path)
+      const relatedTaskIds = new Set<string>()
+      const rawTask = task as Record<string, unknown>
+      const hierarchy = rawTask.hierarchy as { parentId?: unknown; childIds?: unknown } | undefined
+      if (typeof hierarchy?.parentId === 'string') relatedTaskIds.add(hierarchy.parentId)
+      if (Array.isArray(hierarchy?.childIds)) {
+        for (const childId of hierarchy.childIds) {
+          if (typeof childId === 'string') relatedTaskIds.add(childId)
+        }
+      }
+      const dependsOn = Array.isArray(rawTask.dependsOn) ? rawTask.dependsOn : []
+      for (const dependency of dependsOn) {
+        if (typeof dependency === 'string') relatedTaskIds.add(dependency)
+      }
+      const sizePlan = rawTask.sizePlan as { recommendedChildren?: Array<{ createdTaskId?: unknown }> } | undefined
+      for (const child of sizePlan?.recommendedChildren ?? []) {
+        if (typeof child.createdTaskId === 'string') relatedTaskIds.add(child.createdTaskId)
+      }
+      for (const candidate of tasks as Array<Record<string, unknown>>) {
+        if (typeof candidate.id !== 'string' || candidate.id === id) continue
+        const candidateDependsOn = Array.isArray(candidate.dependsOn) ? candidate.dependsOn : []
+        if (candidateDependsOn.includes(id)) relatedTaskIds.add(candidate.id)
+      }
+      relatedTaskIds.delete(id)
+      const relatedTasks = await Promise.all(
+        [...relatedTaskIds]
+          .map(relatedId => tasks.find(candidate => (candidate as { id?: string }).id === relatedId))
+          .filter((candidate): candidate is Record<string, unknown> => Boolean(candidate))
+          .map(candidate => enrichTaskForServe(project.path, candidate)),
+      )
       return c.json({
-        task: await enrichTaskForServe(project.path, task as Record<string, unknown>),
+        task: await enrichTaskForServe(project.path, rawTask),
+        relatedTasks,
         runStatus,
         availability,
         recentEvents: recent,

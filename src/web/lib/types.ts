@@ -588,6 +588,7 @@ export interface ContextDebugRecord {
 
 export interface DrawerPayload {
   task: Task
+  relatedTasks?: Task[]
   runStatus?: string
   availability?: ProjectAvailability | null
   recentEvents?: unknown[]

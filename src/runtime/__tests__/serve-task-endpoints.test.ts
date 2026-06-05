@@ -135,6 +135,70 @@ describe('GET /api/project/task/:id', () => {
     expect(Array.isArray(body.contextDebug)).toBe(true)
   })
 
+  it('returns adjacent task links for hierarchy and dependency display', async () => {
+    await seedTasks([
+      {
+        id: 'task-parent',
+        title: 'Parent task',
+        hierarchy: { childIds: ['task-1'], order: 0 },
+      },
+      {
+        id: 'task-1',
+        title: 'Current task',
+        hierarchy: { parentId: 'task-parent', childIds: ['task-child'], order: 1 },
+        dependsOn: ['task-blocker'],
+        sizePlan: {
+          taskId: 'task-1',
+          score: 8,
+          band: 'epic',
+          action: 'split_required',
+          reviewBudgetHint: 'release_critical',
+          reasons: ['Task size score: 8.'],
+          factors: [],
+          recommendedChildren: [
+            {
+              title: 'Materialized child',
+              reason: 'Created during split.',
+              suggestedDomain: 'frontend',
+              dependsOn: [],
+              createdTaskId: 'task-child',
+            },
+          ],
+        },
+      },
+      {
+        id: 'task-child',
+        title: 'Child task',
+        hierarchy: { parentId: 'task-1', order: 0 },
+      },
+      {
+        id: 'task-blocker',
+        title: 'Blocking task',
+      },
+      {
+        id: 'task-dependent',
+        title: 'Dependent task',
+        dependsOn: ['task-1'],
+      },
+      {
+        id: 'task-unrelated',
+        title: 'Unrelated task',
+      },
+    ])
+
+    const { app } = buildServeApp({ projectPath: tmpDir })
+    const res = await app.fetch(new Request(projectUrl('/api/project/task/task-1')))
+    expect(res.status).toBe(200)
+    const body = (await res.json()) as Record<string, any>
+
+    expect(body.relatedTasks?.map((task: Record<string, any>) => task.id).sort()).toEqual([
+      'task-blocker',
+      'task-child',
+      'task-dependent',
+      'task-parent',
+    ])
+  })
+
   it('heals stale worker ownership for in_progress tasks when reading task detail', async () => {
     await seedTask('task-1', { assignedTo: null })
     const { app } = buildServeApp({ projectPath: tmpDir })

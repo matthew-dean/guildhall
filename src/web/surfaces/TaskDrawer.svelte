@@ -493,6 +493,13 @@
   }
 
   const task = $derived(payload?.task)
+  const taskLinkContext = $derived.by(() => {
+    const byId = new Map<string, Task>()
+    for (const candidate of [...(payload?.relatedTasks ?? []), ...(project.detail?.tasks ?? [])]) {
+      if (candidate?.id && candidate.id !== task?.id) byId.set(candidate.id, candidate)
+    }
+    return [...byId.values()]
+  })
   const runStatus = $derived(payload?.runStatus ?? project.detail?.run?.status ?? 'stopped')
   const availabilityStatus = $derived(payload?.availability?.status ?? project.detail?.availability?.status ?? 'active')
   const hasCurrentTurns = $derived((payload?.threadTurns?.length ?? 0) > 0)
@@ -573,14 +580,6 @@
         detail: task.hold?.reason
           ? `Reason: ${task.hold.reason}`
         : 'Resume it when you want work to continue from the saved stage.',
-      }
-    }
-    if (isContainingWorkTask) {
-      return {
-        tone: 'info',
-        eyebrow: 'Containing work',
-        title: 'Work happens in the nested work below.',
-        detail: 'Open Overview to move through the linked work.',
       }
     }
     if (hasCompletionEscalationHygieneWarning) {
@@ -940,6 +939,7 @@
       {:else if activeTab === 'overview'}
         <OverviewTab
           task={payload.task}
+          tasks={taskLinkContext}
           projectId={scopedProjectId()}
           onNavigateTask={navigateToRelatedTask}
           onCreateSplitChildren={handleCreateSplitChildren}

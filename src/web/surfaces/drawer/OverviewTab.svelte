@@ -16,6 +16,7 @@
 
   interface Props {
     task: Task
+    tasks?: Task[]
     projectId?: string | null
     onNavigateTask?: (taskId: string) => void
     onCreateSplitChildren?: () => void
@@ -24,6 +25,7 @@
 
   let {
     task,
+    tasks = [],
     projectId = null,
     onNavigateTask,
     onCreateSplitChildren,
@@ -37,6 +39,7 @@
   const recommendedChildren = $derived(projectDerivedRecommendedChildren(task))
   const taskDescription = $derived(readableTaskDescription(task.description, task.title) || '(no description)')
   const createdChildren = $derived(recommendedChildren.filter((child) => child.createdTaskId))
+  const taskById = $derived(new Map([task, ...tasks].filter((candidate): candidate is Task => Boolean(candidate?.id)).map(candidate => [candidate.id, candidate])))
   const containingWorkId = $derived(task.hierarchy?.parentId ?? null)
   const nestedWorkIds = $derived(task.hierarchy?.childIds ?? [])
   const goalEnvelopeId = $derived(task.businessEnvelope?.goalId ?? null)
@@ -52,9 +55,28 @@
   const splitNeeded = $derived(
     sizePlan?.action === 'split_required' || sizePlan?.action === 'split_recommended',
   )
+  const splitStillNeedsAction = $derived(
+    splitNeeded && createdChildren.length === 0,
+  )
   const reviewLaneCount = $derived(reviewPlan?.selectedLanes?.length ?? 0)
   const reviewerGroupCount = $derived(reviewPlan?.requiredRecipes?.length ?? 0)
-  const dependsOn = $derived(task.dependsOn ?? [])
+  const blockingTaskIds = $derived(task.dependsOn ?? [])
+  const blockedTaskIds = $derived(
+    tasks
+      .filter((candidate) => candidate.id !== task.id && (candidate.dependsOn ?? []).includes(task.id))
+      .map((candidate) => candidate.id),
+  )
+  const parentTrail = $derived.by(() => {
+    const trail: string[] = []
+    const seen = new Set<string>([task.id])
+    let next = containingWorkId
+    while (next && !seen.has(next)) {
+      trail.unshift(next)
+      seen.add(next)
+      next = taskById.get(next)?.hierarchy?.parentId ?? null
+    }
+    return trail
+  })
 
   type ChipTone = 'neutral' | 'ok' | 'warn' | 'danger' | 'accent' | 'running'
 
@@ -88,6 +110,10 @@
     return goalId.replace(/^goal-/, '').replace(/^task-/, '').replace(/[-_]+/g, ' ')
   }
 
+  function taskLabel(taskId: string): string {
+    return taskById.get(taskId)?.title?.trim() || taskId
+  }
+
   function navigateTask(event: MouseEvent, nextTaskId: string | undefined): void {
     if (!nextTaskId || !onNavigateTask) return
     event.preventDefault()
@@ -101,6 +127,7 @@
     ].filter((part): part is string => Boolean(part))
     return parts.join(' · ')
   }
+
 </script>
 
 <Stack gap="4">
@@ -117,26 +144,21 @@
     </Stack>
   </Card>
 
-  <Card title="Work hierarchy" tone={splitNeeded ? 'warn' : 'default'}>
+  <Card title="Task links" tone={splitStillNeedsAction ? 'warn' : 'default'}>
     <Stack gap="3">
-      {#if containingWorkId}
-        <div class="hierarchy-row">
-          <span>{containingWorkId === task.id ? 'Hierarchy role' : 'Containing work'}</span>
-          {#if containingWorkId !== task.id}
-            <a href={currentTaskHref(containingWorkId, projectId)} onclick={(event) => navigateTask(event, containingWorkId)}>
-              {containingWorkId}
-            </a>
-          {:else}
-            <strong>Containing work</strong>
-          {/if}
+      {#if parentTrail.length > 0}
+        <div>
+          <h4>Parent path</h4>
+          <ol class="breadcrumb-list">
+            {#each parentTrail as parentId (parentId)}
+              <li>
+                <a href={currentTaskHref(parentId, projectId)} onclick={(event) => navigateTask(event, parentId)}>
+                  {taskLabel(parentId)}
+                </a>
+              </li>
+            {/each}
+          </ol>
         </div>
-      {:else if nestedWorkIds.length > 0}
-        <div class="hierarchy-row">
-          <span>Hierarchy role</span>
-          <strong>Containing work</strong>
-        </div>
-      {:else}
-        <p class="muted">No containing work recorded.</p>
       {/if}
 
       {#if goalEnvelopeId}
@@ -146,14 +168,14 @@
         </div>
       {/if}
 
-      {#if dependsOn.length > 0}
+      {#if blockingTaskIds.length > 0}
         <div>
-          <h4>Depends on</h4>
+          <h4>Blocked by</h4>
           <ul class="link-list">
-            {#each dependsOn as dependency (dependency)}
+            {#each blockingTaskIds as dependency (dependency)}
               <li>
                 <a href={currentTaskHref(dependency, projectId)} onclick={(event) => navigateTask(event, dependency)}>
-                  {dependency}
+                  {taskLabel(dependency)}
                 </a>
               </li>
             {/each}
@@ -161,21 +183,32 @@
         </div>
       {/if}
 
-      {#if splitNeeded}
-        <div class="split-callout">
+      {#if blockedTaskIds.length > 0}
+        <div>
+          <h4>Blocks</h4>
+          <ul class="link-list">
+            {#each blockedTaskIds as dependentId (dependentId)}
+              <li>
+                <a href={currentTaskHref(dependentId, projectId)} onclick={(event) => navigateTask(event, dependentId)}>
+                  {taskLabel(dependentId)}
+                </a>
+              </li>
+            {/each}
+          </ul>
+        </div>
+      {/if}
+
+      {#if splitNeeded && createdChildren.length === 0}
+        <div class:split-callout-warning={splitStillNeedsAction} class="split-callout">
           <strong>
-            {#if createdChildren.length > 0}
-              Linked nested work
-            {:else if needsSplitAction}
+            {#if needsSplitAction}
               Split this task
             {:else}
               {sizePlan?.action === 'split_required' ? 'Split required' : 'Split recommended'}
             {/if}
           </strong>
           <span>
-            {#if createdChildren.length > 0}
-              Work happens in the nested work below.
-            {:else if needsSplitAction}
+            {#if needsSplitAction}
               Split it now: this stays as containing work and the nested work below is created.
             {:else}
               This is too large for one clean worker/review pass. Split it into containing work with nested work below before work starts.
@@ -194,12 +227,12 @@
 
       {#if nestedWorkIds.length > 0 && createdChildren.length === 0}
         <div>
-          <h4>Nested work</h4>
+          <h4>Child tasks</h4>
           <ul class="link-list">
             {#each nestedWorkIds as childId (childId)}
               <li>
                 <a href={currentTaskHref(childId, projectId)} onclick={(event) => navigateTask(event, childId)}>
-                  {childId}
+                  {taskLabel(childId)}
                 </a>
               </li>
             {/each}
@@ -209,7 +242,7 @@
 
       {#if recommendedChildren.length > 0}
         <div>
-          <h4>{createdChildren.length > 0 ? 'Nested work' : needsSplitAction ? 'Work to create' : 'Recommended nested work'}</h4>
+          <h4>{createdChildren.length > 0 ? 'Child tasks' : needsSplitAction ? 'Work to create' : 'Recommended child tasks'}</h4>
           <ul class="child-list">
             {#each recommendedChildren as child, index (`${child.title ?? 'child'}-${index}`)}
               <li>
@@ -227,6 +260,10 @@
             {/each}
           </ul>
         </div>
+      {/if}
+
+      {#if parentTrail.length === 0 && nestedWorkIds.length === 0 && blockingTaskIds.length === 0 && blockedTaskIds.length === 0 && recommendedChildren.length === 0}
+        <p class="muted">No linked tasks recorded.</p>
       {/if}
     </Stack>
   </Card>
@@ -349,8 +386,12 @@
     display: grid;
     gap: var(--s-1);
     padding: var(--s-3);
-    border: 1px solid color-mix(in srgb, var(--warn) 38%, transparent);
+    border: 1px solid var(--border);
     border-radius: var(--r-2);
+    background: color-mix(in srgb, var(--surface-2) 70%, transparent);
+  }
+  .split-callout-warning {
+    border-color: color-mix(in srgb, var(--warn) 38%, transparent);
     background: color-mix(in srgb, var(--warn) 10%, transparent);
   }
   .split-callout span {
@@ -364,10 +405,15 @@
     margin-top: var(--s-1);
   }
   .link-list,
+  .breadcrumb-list,
   .child-list,
   .factor-list {
     margin: 0;
     padding-left: var(--s-4);
+  }
+  .breadcrumb-list {
+    display: grid;
+    gap: var(--s-1);
   }
   .child-list {
     display: grid;

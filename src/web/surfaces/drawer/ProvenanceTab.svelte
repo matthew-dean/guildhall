@@ -33,7 +33,7 @@
     ['Completed at', task.completedAt ?? null],
     ['Goal envelope', task.businessEnvelope?.goalId ? labelForIdentifier('task', task.businessEnvelope.goalId).label : null],
     ['Permission mode', task.permissionMode ? labelForIdentifier('domain', task.permissionMode).label : null],
-    ['Depends on', task.dependsOn?.length ? task.dependsOn.map(id => friendlyTaskId(id)).join(', ') : null],
+    ['Blocked by', task.dependsOn?.length ? task.dependsOn.map(id => friendlyTaskId(id)).join(', ') : null],
   ])
 
   const mergeLines = $derived<Array<readonly [string, string | null]>>([

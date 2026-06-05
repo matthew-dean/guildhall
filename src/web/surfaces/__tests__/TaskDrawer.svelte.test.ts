@@ -299,7 +299,7 @@ describe('TaskDrawer', () => {
       onClose: vi.fn(),
     })
 
-    await screen.findByText('Work hierarchy')
+    await screen.findByText('Task links')
     expect(screen.getAllByText('Split this task').length).toBeGreaterThanOrEqual(1)
     expect(screen.getByText(/this stays as containing work and the nested work below is created/i)).toBeInTheDocument()
     expect(screen.getByRole('button', { name: 'Split this task' })).toBeInTheDocument()
@@ -372,7 +372,7 @@ describe('TaskDrawer', () => {
       onClose: vi.fn(),
     })
 
-    await screen.findByText('Work hierarchy')
+    await screen.findByText('Task links')
     expect(screen.getByText('ContextMenu')).toBeInTheDocument()
     expect(screen.getByText('ContextMenu component implementation')).toBeInTheDocument()
     expect(screen.getByText('ContextMenu Storybook proof')).toBeInTheDocument()
@@ -752,11 +752,37 @@ describe('TaskDrawer', () => {
           ],
         },
       },
+      relatedTasks: [
+        {
+          id: 'task-fll-overhead-policy-spec',
+          title: 'Draft the FLL overhead charge policy',
+          description: 'Draft the policy.',
+          status: 'exploring',
+          domain: 'product',
+          dependsOn: [],
+        },
+        {
+          id: 'task-fll-overhead-policy-implementation',
+          title: 'Apply the overhead charge policy',
+          description: 'Apply the policy.',
+          status: 'exploring',
+          domain: 'frontend',
+          dependsOn: ['task-fll-overhead-policy-spec'],
+        },
+        {
+          id: 'task-fll-release-check',
+          title: 'Release the FLL overhead workflow',
+          description: 'Release after implementation.',
+          status: 'ready',
+          domain: 'release',
+          dependsOn: ['task-link-editor'],
+        },
+      ],
     })
     const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
       const url = String(input)
       if (url.startsWith('/api/project/task/task-link-editor')) return json(payload)
-      if (url.startsWith('/api/project')) return json(projectDetail())
+      if (url.startsWith('/api/project')) return json({ ...projectDetail(), tasks: [payload.task, ...(payload.relatedTasks ?? [])] })
       return json({})
     })
     vi.stubGlobal('fetch', fetchMock)
@@ -767,15 +793,15 @@ describe('TaskDrawer', () => {
       onClose: vi.fn(),
     })
 
-    await screen.findByText('Work hierarchy')
-    expect(screen.getByText('Linked nested work')).toBeInTheDocument()
+    await screen.findByText('Task links')
+    expect(screen.queryByText('Linked nested work')).not.toBeInTheDocument()
     expect(screen.queryByText('Split required')).not.toBeInTheDocument()
     expect(screen.queryByText('Split recommended')).not.toBeInTheDocument()
-    expect(screen.getAllByText('Work happens in the nested work below.').length).toBeGreaterThan(0)
+    expect(screen.queryByText('Work happens in the nested work below.')).not.toBeInTheDocument()
     expect(document.body.textContent).not.toMatch(/parent task/i)
     expect(screen.queryByRole('button', { name: 'Resume only this work item' })).not.toBeInTheDocument()
     expect(screen.queryByText(/This task is the parent/i)).not.toBeInTheDocument()
-    expect(screen.getByText('Nested work')).toBeInTheDocument()
+    expect(screen.getByText('Child tasks')).toBeInTheDocument()
     expect(screen.getByRole('link', { name: 'Draft the FLL overhead charge policy' })).toHaveAttribute(
       'href',
       '/projects/looma-knit/task/task-fll-overhead-policy-spec',
@@ -783,6 +809,11 @@ describe('TaskDrawer', () => {
     expect(screen.getByRole('link', { name: 'Apply the overhead charge policy' })).toHaveAttribute(
       'href',
       '/projects/looma-knit/task/task-fll-overhead-policy-implementation',
+    )
+    await waitFor(() => expect(screen.getByText('Blocks')).toBeInTheDocument())
+    expect(screen.getByRole('link', { name: 'Release the FLL overhead workflow' })).toHaveAttribute(
+      'href',
+      '/projects/looma-knit/task/task-fll-release-check',
     )
   })
 
@@ -902,8 +933,8 @@ describe('TaskDrawer', () => {
       onClose: vi.fn(),
     })
 
-    await screen.findByText('Work hierarchy')
-    expect(screen.getByText('Containing work')).toBeInTheDocument()
+    await screen.findByText('Task links')
+    expect(screen.getByText('Parent path')).toBeInTheDocument()
     expect(screen.getByRole('link', { name: 'task-feature-spec' })).toHaveAttribute(
       'href',
       '/projects/looma-knit/task/task-feature-spec',
