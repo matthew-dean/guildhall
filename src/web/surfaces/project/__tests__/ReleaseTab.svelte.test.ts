@@ -181,6 +181,28 @@ describe('ReleaseTab', () => {
     expect(screen.getByText('No design-system guardrail is captured yet.')).toBeTruthy()
   })
 
+  it('prioritizes API not-ready reasons over generic design-system closure copy', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () =>
+        json({
+          ...readyPayload,
+          ready: false,
+          notReadyReason: 'Answer the pressure-test question before closing this work.',
+          designSystem: { drafted: false, approved: false, source: 'none' },
+          totals: { blockingCount: 0, tasks: 3, done: 3 },
+        }),
+      ),
+    )
+
+    render(ReleaseTab)
+
+    expect(await screen.findByText('Current work closure')).toBeTruthy()
+    expect(screen.getAllByText('Blocked')).toHaveLength(2)
+    expect(screen.getByText('Answer the pressure-test question before closing this work.')).toBeTruthy()
+    expect(screen.queryByText('No design-system guardrail is captured yet.')).toBeNull()
+  })
+
   it('shows repo-detected design systems as satisfied instead of not drafted', async () => {
     vi.stubGlobal(
       'fetch',

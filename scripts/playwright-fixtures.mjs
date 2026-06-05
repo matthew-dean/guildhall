@@ -1,19 +1,32 @@
 #!/usr/bin/env node
+import { execFile } from 'node:child_process'
 import { mkdir, rm, writeFile } from 'node:fs/promises'
 import { join, resolve } from 'node:path'
+import { promisify } from 'node:util'
 
 const root = resolve('.playwright-fixtures')
 const home = join(root, 'home')
 const guildhallHome = join(home, '.guildhall')
 const projectsRoot = join(root, 'projects')
+const projectGraphRoot = join(guildhallHome, 'project-graph')
 
 const now = '2026-05-18T00:00:00.000Z'
+const execFileAsync = promisify(execFile)
+
+function slugify(value) {
+  return value.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '') || 'fixture'
+}
 
 async function writeProject({
   id,
   name,
-  statuses,
+  statuses = [],
   withQuestion = false,
+  files = [],
+  initialized = true,
+  tasks: explicitTasks,
+  capabilityRequests = [],
+  dirtyGuildhallFile = false,
 }) {
   const projectPath = join(projectsRoot, id)
   const memoryDir = join(projectPath, 'memory')
@@ -21,26 +34,34 @@ async function writeProject({
   await mkdir(memoryDir, { recursive: true })
   await mkdir(projectStateDir, { recursive: true })
   await mkdir(join(memoryDir, 'exploring'), { recursive: true })
-  await writeFile(
-    join(projectPath, 'guildhall.yaml'),
-    [
-      `name: ${name}`,
-      `id: ${id}`,
-      'coordinators:',
-      '  - id: guildhall',
-      '    name: Guildhall',
-      '    domain: guildhall',
-      '    mandate: Owns the fixture project surface.',
-      '',
-    ].join('\n'),
-    'utf8',
-  )
+  if (initialized) {
+    await writeFile(
+      join(projectPath, 'guildhall.yaml'),
+      [
+        `name: ${name}`,
+        `id: ${id}`,
+        'coordinators:',
+        '  - id: guildhall',
+        '    name: Guildhall',
+        '    domain: guildhall',
+        '    mandate: Owns the fixture project surface.',
+        '',
+      ].join('\n'),
+      'utf8',
+    )
+  } else {
+    await writeFile(join(projectPath, 'README.md'), `# ${name}\n\nSetup is intentionally pending.\n`, 'utf8')
+  }
   if (id === 'looma-knit') {
     await writeFile(
       join(projectPath, 'package.json'),
       JSON.stringify({ dependencies: { svelte: '^5.0.0' } }, null, 2),
       'utf8',
     )
+  }
+  for (const file of files) {
+    await mkdir(join(projectPath, file.dir ?? ''), { recursive: true })
+    await writeFile(join(projectPath, file.path), file.content, 'utf8')
   }
   await writeFile(join(memoryDir, 'MEMORY.md'), `# ${name} Memory\n`, 'utf8')
   await writeFile(join(memoryDir, 'DECISIONS.md'), `# ${name} Decisions\n`, 'utf8')
@@ -57,7 +78,7 @@ async function writeProject({
     shelved: 'Archive duplicate planning note',
     spec_review: 'Block menu / block side menu',
   }
-  const tasks = statuses.map((status, index) => ({
+  const tasks = explicitTasks ?? statuses.map((status, index) => ({
     id: `${id}-task-${index + 1}`,
     title: index === 0 ? (statusTitle[status] ?? 'Fixture task') : `${statusTitle[status] ?? 'Fixture task'} ${index + 1}`,
     description: 'Rendered UI fixture task.',
@@ -98,6 +119,14 @@ async function writeProject({
       : {}),
   }))
   await writeFile(join(memoryDir, 'TASKS.json'), JSON.stringify(tasks, null, 2), 'utf8')
+  if (capabilityRequests.length > 0) {
+    await mkdir(join(memoryDir, 'capability-requests'), { recursive: true })
+    await mkdir(join(projectStateDir, 'capability-requests'), { recursive: true })
+    for (const request of capabilityRequests) {
+      await writeFile(join(memoryDir, 'capability-requests', `${request.id}.json`), JSON.stringify(request, null, 2), 'utf8')
+      await writeFile(join(projectStateDir, 'capability-requests', `${request.id}.json`), JSON.stringify(request, null, 2), 'utf8')
+    }
+  }
   if (id === 'looma-knit') {
     await writeFile(
       join(projectStateDir, 'design-taste.yaml'),
@@ -190,7 +219,157 @@ async function writeProject({
       'utf8',
     )
   }
+  if (dirtyGuildhallFile) {
+    await execFileAsync('git', ['init'], { cwd: projectPath })
+    await execFileAsync('git', ['config', 'user.email', 'fixture@example.test'], { cwd: projectPath })
+    await execFileAsync('git', ['config', 'user.name', 'Guildhall Fixture'], { cwd: projectPath })
+    await execFileAsync('git', ['add', '.'], { cwd: projectPath })
+    await execFileAsync('git', ['commit', '-m', 'seed fixture project'], { cwd: projectPath })
+    await writeFile(join(projectStateDir, 'release-note.md'), 'unlanded Guildhall-owned fixture note\n', 'utf8')
+  }
   return projectPath
+}
+
+function projectRef(id, label, projectPath) {
+  return {
+    id: `local-project:${id}`,
+    type: 'local_guildhall_project',
+    label,
+    path: projectPath,
+    pathFingerprint: resolve(projectPath).replace(/[^A-Za-z0-9]+/g, '-').replace(/^-|-$/g, '').toLowerCase(),
+    lastSeenAt: now,
+  }
+}
+
+async function writeProjectGraphFixtures(entries) {
+  const byId = new Map(entries.map(entry => [entry.id, entry]))
+  const consumer = byId.get('consumer-app')
+  const provider = byId.get('provider-library')
+  if (!consumer || !provider) return
+
+  await mkdir(join(projectGraphRoot, 'edges'), { recursive: true })
+  await mkdir(join(projectGraphRoot, 'contract-surfaces'), { recursive: true })
+  const edge = {
+    id: 'edge-consumer-provider-launch-window',
+    stateMachine: {
+      id: 'project-dependency-edge',
+      version: 1,
+      state: 'submitted',
+    },
+    consumer: { id: consumer.id, label: consumer.name, path: consumer.path },
+    provider: { id: provider.id, label: provider.name, path: provider.path },
+    domain: { id: 'domain:launch-window', label: 'Launch window' },
+    consumerNeed: 'Consumer App needs launch-window math from Provider Library.',
+    rationale: 'The consumer product should not duplicate provider-owned launch-window rules.',
+    expectedDelivery: {
+      format: 'versioned package API',
+      channel: 'local package',
+      deliveryChannel: {
+        kind: 'package_manager',
+        label: 'Provider package',
+        coordinates: '@fixture/provider-library#launch-window',
+      },
+      providerProofPlan: ['Provider unit coverage for window boundaries.'],
+      consumerVerificationPlan: ['Consumer integration fixture imports the provider API.'],
+    },
+    deliveryReceipts: [],
+    returnPackets: [],
+    communicationRecords: [{
+      id: 'comm-edge-consumer-provider-launch-window-1',
+      kind: 'consumer_request',
+      edgeId: 'edge-consumer-provider-launch-window',
+      fromProject: { id: consumer.id, label: consumer.name, path: consumer.path },
+      toProject: { id: provider.id, label: provider.name, path: provider.path },
+      coordinatorContext: {
+        projectId: consumer.id,
+        coordinatorId: 'guildhall',
+        summary: 'Consumer requested provider-owned launch-window behavior.',
+        evidenceRefs: ['fixture:project-graph'],
+      },
+      payload: {},
+      recordedBy: 'fixture',
+      recordedAt: now,
+    }],
+    transitionReceipts: [{
+      machineId: 'project-dependency-edge',
+      machineVersion: 1,
+      entityId: 'edge-consumer-provider-launch-window',
+      from: 'draft',
+      event: 'submit',
+      to: 'submitted',
+      actor: 'fixture',
+      evidenceRefs: ['fixture:project-graph'],
+      createdAt: now,
+    }],
+    evidenceRefs: [`project:${consumer.id}`, `project:${provider.id}`],
+    createdAt: now,
+    updatedAt: now,
+  }
+  const surface = {
+    id: 'surface.launch-window-math-crate',
+    label: 'Launch-window math crate API',
+    kind: 'component_api',
+    owningProject: { id: provider.id, label: provider.name, path: provider.path },
+    domain: { id: 'domain:launch-window', label: 'Launch window' },
+    authority: 'provider',
+    scope: 'workspace',
+    sourceRefs: [{
+      kind: 'project_graph',
+      path: 'fixtures/provider-library/src/launch-window.ts',
+      summary: 'Provider-owned launch-window API fixture.',
+    }],
+    consumerRefs: [{ id: consumer.id, label: consumer.name, path: consumer.path }],
+    invariants: [{
+      id: 'invariant.launch-window-boundaries',
+      label: 'Boundary math is provider-owned',
+      rule: 'Consumers import the provider API instead of copying launch-window calculations.',
+      proofObligations: ['Provider unit tests cover start/end boundaries.'],
+    }],
+    decisions: [],
+    stateMachine: { id: 'contract-surface', version: 1, state: 'proposed' },
+    transitionReceipts: [],
+    createdAt: now,
+    updatedAt: now,
+  }
+  const surfaceSummary = {
+    id: surface.id,
+    nodeId: `contract-surface:${surface.id}`,
+    label: surface.label,
+    kind: surface.kind,
+    authority: surface.authority,
+    scope: surface.scope,
+    state: surface.stateMachine.state,
+    owningProjectId: provider.id,
+    owningProjectLabel: provider.name,
+    domainId: surface.domain.id,
+    domainLabel: surface.domain.label,
+    consumerCount: surface.consumerRefs.length,
+    invariantCount: surface.invariants.length,
+    decisionCount: surface.decisions.length,
+    updatedAt: surface.updatedAt,
+  }
+  await writeFile(join(projectGraphRoot, 'edges', `${edge.id}.json`), JSON.stringify(edge, null, 2), 'utf8')
+  await writeFile(join(projectGraphRoot, 'contract-surfaces', `${slugify(surface.id)}.json`), JSON.stringify(surface, null, 2), 'utf8')
+  await writeFile(
+    join(projectGraphRoot, 'registry.json'),
+    JSON.stringify({
+      version: 1,
+      updatedAt: now,
+      projects: entries.map(entry => projectRef(entry.id, entry.name, entry.path)),
+      domainAuthorities: [],
+      domainResponsibilities: [],
+      contractSurfaces: [surfaceSummary],
+      edges: [{
+        id: edge.id,
+        type: 'requests_from',
+        state: edge.stateMachine.state,
+        consumerProjectId: consumer.id,
+        providerProjectId: provider.id,
+        updatedAt: now,
+      }],
+    }, null, 2),
+    'utf8',
+  )
 }
 
 await rm(root, { recursive: true, force: true })
@@ -228,6 +407,139 @@ const projects = [
     name: 'Linecraft',
     statuses: ['in_progress', 'review', 'done', 'done'],
   },
+  {
+    id: 'docs-compass',
+    name: 'Docs Compass',
+    statuses: ['ready', 'done'],
+    files: [
+      {
+        path: 'README.md',
+        content: '# Docs Compass\n\nA docs-only project with no runtime package.\n',
+      },
+      {
+        dir: 'docs',
+        path: 'docs/navigation.md',
+        content: '# Navigation\n\nInformation architecture notes.\n',
+      },
+    ],
+  },
+  {
+    id: 'pipeline-ops',
+    name: 'Pipeline Ops',
+    statuses: ['blocked', 'review', 'done'],
+    files: [
+      {
+        path: 'main.tf',
+        content: 'resource "null_resource" "release_gate" {}\n',
+      },
+    ],
+  },
+  {
+    id: 'mobile-kit',
+    name: 'Mobile Kit',
+    statuses: ['spec_review', 'review', 'done'],
+    files: [
+      {
+        path: 'Package.swift',
+        content: '// swift-tools-version: 5.10\nimport PackageDescription\n',
+      },
+    ],
+  },
+  {
+    id: 'api-broker',
+    name: 'API Broker',
+    statuses: ['in_progress', 'blocked', 'done'],
+    files: [
+      {
+        path: 'go.mod',
+        content: 'module example.com/api-broker\n\ngo 1.22\n',
+      },
+    ],
+  },
+  {
+    id: 'scratch-setup-pending',
+    name: 'Scratch Setup Pending',
+    initialized: false,
+  },
+  {
+    id: 'dirty-service',
+    name: 'Dirty Service',
+    statuses: ['done'],
+    dirtyGuildhallFile: true,
+  },
+  {
+    id: 'consumer-app',
+    name: 'Consumer App',
+    statuses: ['in_progress', 'done'],
+    files: [
+      {
+        dir: 'src',
+        path: 'src/app.ts',
+        content: 'export const consumer = true\n',
+      },
+    ],
+  },
+  {
+    id: 'provider-library',
+    name: 'Provider Library',
+    statuses: ['ready', 'done'],
+    files: [
+      {
+        dir: 'src',
+        path: 'src/launch-window.ts',
+        content: 'export function launchWindow() { return "provider-owned" }\n',
+      },
+    ],
+  },
+  {
+    id: 'capability-boundary',
+    name: 'Capability Boundary',
+    tasks: [{
+      id: 'capability-boundary-task-1',
+      title: 'Inspect sibling packet fixture',
+      description: 'Rendered UI fixture task with a capability boundary.',
+      domain: 'guildhall',
+      projectPath: join(projectsRoot, 'capability-boundary'),
+      status: 'exploring',
+      priority: 'normal',
+      spec: 'Fixture spec for capability request coverage.',
+      acceptanceCriteria: [],
+      outOfScope: [],
+      dependsOn: [],
+      notes: [],
+      gateResults: [],
+      reviewVerdicts: [],
+      adjudications: [],
+      revisionCount: 0,
+      remediationAttempts: 0,
+      escalations: [],
+      agentIssues: [],
+      origination: 'human',
+      openQuestions: [{
+        id: 'capability-boundary-question-1',
+        kind: 'choice',
+        prompt: 'Should Guildhall inspect the sibling fixture folder?',
+        choices: ['Approve the folder', 'Use the committed snapshot'],
+      }],
+    }],
+    capabilityRequests: [{
+      id: 'cap-capability-boundary-task-1-fixture',
+      taskId: 'capability-boundary-task-1',
+      kind: 'mount_directory',
+      requestedBy: 'runtime-command',
+      reason: 'Capability Boundary needs read access to ../fixtures/packets.',
+      duration: 'this task',
+      fallback: 'Use the committed packet snapshot.',
+      status: 'pending',
+      requestedAt: now,
+      mount: {
+        hostPath: join(root, 'fixtures', 'packets'),
+        containerPath: '/mnt/requested/packets',
+        access: 'read-write',
+      },
+      transitionReceipts: [],
+    }],
+  },
 ]
 
 const entries = []
@@ -241,6 +553,7 @@ for (const project of projects) {
     registeredAt: now,
   })
 }
+await writeProjectGraphFixtures(entries)
 
 await writeFile(
   join(guildhallHome, 'registry.yaml'),

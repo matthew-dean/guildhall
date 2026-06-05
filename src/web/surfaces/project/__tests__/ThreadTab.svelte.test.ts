@@ -634,6 +634,55 @@ describe('ThreadTab', () => {
     })
   })
 
+  it('keeps capability request decisions visible alongside an active bounded-chat thread', async () => {
+    const { calls } = installFetchFakes([
+      boundedChatTurn({
+        targetTitle: 'Approve fixture access',
+        question: {
+          id: 'request-scope',
+          prompt: 'Should Guildhall inspect the sibling fixture folder?',
+          why: 'The worker needs one folder decision before it can continue.',
+          choices: ['Approve the folder', 'Use the snapshot'],
+          evidence: [],
+        },
+      }),
+    ], 'bounded-chat:bc-new-thread-1:request-scope', {
+      capabilityRequests: [{
+        id: 'cap-fixture-alpha-1',
+        taskId: 'task-fixture-alpha',
+        kind: 'mount_directory',
+        requestedBy: 'runtime-command',
+        reason: 'Telemetry Bridge needs read access to ../fixtures/packets.',
+        duration: 'this task',
+        fallback: 'Use the committed packet snapshot.',
+        status: 'pending',
+        mount: {
+          hostPath: '/Users/matthew/git/fixtures/packets',
+          containerPath: '/mnt/requested/packets',
+          access: 'read-write',
+        },
+      }],
+    })
+
+    render(ThreadTab)
+
+    expect(await screen.findByText('Access requests')).toBeTruthy()
+    expect(screen.getByText('Telemetry Bridge needs read access to ../fixtures/packets.')).toBeTruthy()
+    expect(screen.getAllByText('Approve fixture access').length).toBeGreaterThan(0)
+    expect(screen.getByRole('button', { name: /approve read-only/i })).toBeTruthy()
+    expect(screen.getByRole('button', { name: /approve read-write/i })).toBeTruthy()
+    expect(screen.getByRole('button', { name: /use fallback/i })).toBeTruthy()
+    expect(selectedThread().getByText('Should Guildhall inspect the sibling fixture folder?')).toBeTruthy()
+
+    await userEvent.click(screen.getByRole('button', { name: /use fallback/i }))
+    await waitFor(() => {
+      expect(calls.some(call => call.url.includes('/api/project/capability-requests/cap-fixture-alpha-1/deny'))).toBe(true)
+    })
+    expect(calls.find(call => call.url.includes('/deny'))?.body).toMatchObject({
+      fallback: 'Use the committed packet snapshot.',
+    })
+  })
+
   it('does not render runtime state inside Threads', async () => {
     installFetchFakes([], null, {
       runtime: {

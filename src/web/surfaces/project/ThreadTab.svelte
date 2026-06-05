@@ -3294,6 +3294,52 @@
     {/if}
   {/snippet}
 
+  {#snippet capabilityRequestDecisions()}
+    {#if pendingCapabilityRequests.length > 0}
+      <Card title="Access requests" tone="warn" frosted>
+        <Stack gap="3">
+          {#each pendingCapabilityRequests as request (request.id)}
+            <UtilityPanel tone="warn">
+              <Stack gap="3">
+                <div class="field">
+                  <strong>Guildhall needs a decision before it can safely use this folder.</strong>
+                  <p class="muted">{request.reason}</p>
+                </div>
+
+                {#if request.mount}
+                  <Input
+                    value={capabilityPathDrafts[request.id] ?? request.mount.hostPath}
+                    oninput={(value) => setCapabilityPathDraft(request.id, value)}
+                  />
+                {/if}
+
+                {#if request.fallback}
+                  <Textarea
+                    rows={2}
+                    value={capabilityFallbackDrafts[request.id] ?? request.fallback}
+                    oninput={(value) => setCapabilityFallbackDraft(request.id, value)}
+                  />
+                {/if}
+
+                <Row justify="end" gap="2" wrap>
+                  <Button variant="secondary" onclick={() => void approveCapabilityRequest(request, 'read-only')}>
+                    Approve read-only
+                  </Button>
+                  <Button variant="primary" onclick={() => void approveCapabilityRequest(request, 'read-write')}>
+                    Approve read-write
+                  </Button>
+                  <Button variant="ghost" onclick={() => void denyCapabilityRequest(request)}>
+                    Use fallback
+                  </Button>
+                </Row>
+              </Stack>
+            </UtilityPanel>
+          {/each}
+        </Stack>
+      </Card>
+    {/if}
+  {/snippet}
+
   {#if importHandoff}
     <Card tone="accent">
       <Row justify="between" align="center" gap="3" wrap>
@@ -3343,52 +3389,11 @@
         </p>
       </Card>
 
-      {#if pendingCapabilityRequests.length > 0}
-        <Card title="Access requests" tone="warn" frosted>
-          <Stack gap="3">
-            {#each pendingCapabilityRequests as request (request.id)}
-              <UtilityPanel tone="warn">
-                <Stack gap="3">
-                  <div class="field">
-                    <strong>Guildhall needs a decision before it can safely use this folder.</strong>
-                    <p class="muted">{request.reason}</p>
-                  </div>
-
-                  {#if request.mount}
-                    <Input
-                      value={capabilityPathDrafts[request.id] ?? request.mount.hostPath}
-                      oninput={(value) => setCapabilityPathDraft(request.id, value)}
-                    />
-                  {/if}
-
-                  {#if request.fallback}
-                    <Textarea
-                      rows={2}
-                      value={capabilityFallbackDrafts[request.id] ?? request.fallback}
-                      oninput={(value) => setCapabilityFallbackDraft(request.id, value)}
-                    />
-                  {/if}
-
-                  <Row justify="end" gap="2" wrap>
-                    <Button variant="secondary" onclick={() => void approveCapabilityRequest(request, 'read-only')}>
-                      Approve read-only
-                    </Button>
-                    <Button variant="primary" onclick={() => void approveCapabilityRequest(request, 'read-write')}>
-                      Approve read-write
-                    </Button>
-                    <Button variant="ghost" onclick={() => void denyCapabilityRequest(request)}>
-                      Use fallback
-                    </Button>
-                  </Row>
-                </Stack>
-              </UtilityPanel>
-            {/each}
-          </Stack>
-        </Card>
-      {/if}
+      {@render capabilityRequestDecisions()}
     </Stack>
   {:else}
     <div class="thread-body">
+      {@render capabilityRequestDecisions()}
       {#if threadChains.length === 0}
         <Card title="Nothing current">
           <p class="muted">

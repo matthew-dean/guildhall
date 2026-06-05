@@ -161,6 +161,7 @@
   function surfaceMatchesWorkArea(
     surface: { domainId?: string; domainLabel?: string; label?: string },
     domain: { id?: string; label?: string; coordinatorId?: string; coordinatorName?: string; path?: string },
+    mode: 'exact' | 'relaxed' = 'exact',
   ): boolean {
     if (surface.domainId && domain.id && surface.domainId === domain.id) return true
     const areaCandidates = normalizedAreaKeys(domain)
@@ -169,10 +170,13 @@
       areaCandidates.some(areaKey =>
         surfaceKey === areaKey ||
         surfaceKey.endsWith(`/${areaKey}`) ||
-        areaKey.endsWith(surfaceKey) ||
-        areaKey.replace(/^jess-/, '') === surfaceKey,
+        (mode === 'relaxed' && hyphenSuffixMatches(areaKey, surfaceKey)),
       ),
     )
+  }
+
+  function hyphenSuffixMatches(areaKey: string, surfaceKey: string): boolean {
+    return areaKey.endsWith(`-${surfaceKey}`)
   }
 
   function normalizedAreaKeys(domain: { id?: string; label?: string; coordinatorId?: string; coordinatorName?: string; path?: string }): string[] {
@@ -216,8 +220,16 @@
       }
     }
     for (const surface of surfaces) {
-      for (const row of rows.values()) {
-        if (!row.domains.some(domain => surfaceMatchesWorkArea(surface, domain))) continue
+      let matchingRows = Array.from(rows.values()).filter(row =>
+        row.domains.some(domain => surfaceMatchesWorkArea(surface, domain, 'exact')),
+      )
+      if (matchingRows.length === 0) {
+        const relaxedRows = Array.from(rows.values()).filter(row =>
+          row.domains.some(domain => surfaceMatchesWorkArea(surface, domain, 'relaxed')),
+        )
+        if (relaxedRows.length === 1) matchingRows = relaxedRows
+      }
+      for (const row of matchingRows) {
         if (!row.contracts.some(contract => contract.id === surface.id)) row.contracts.push(surface)
       }
     }

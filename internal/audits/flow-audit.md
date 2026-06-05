@@ -89,15 +89,31 @@ before a release-gating audit.
 | Clean initialized project | Narrative Harness | 2026-06-04 | Ready specs and inbox items; Thread route has a live performance/bridge suspect. | `narrative-harness` | Reproduce Thread with Browser bridge and direct DOM proof. |
 | Owner-input blocked project | Jess | 2026-06-04 | Setup/import owner actions and structural-review bounded chat. | `looma-knit` question task | Add fixture owner-input route selection beyond migration gate. |
 | Blocked/recovery-heavy project | t-minus-t | 2026-06-04 | Small blocked/exploring contrast project. | `tiny-demo` | Live recovery script still needs route proof. |
-| Dirty worktree blockers | Commerce project | 2026-06-04 | Setup/owner-input blocked with blocker/readiness disagreement suspect. | None | Needs a deterministic fixture for dirty git/readiness blocker copy. |
+| Dirty worktree blockers | Commerce project | 2026-06-04 | Setup/owner-input blocked with blocker/readiness disagreement suspect. | `dirty-service` | Fixture proves dirty Guildhall-owned checkout release blocker; live Commerce replay still useful. |
 | Accepted structure/contracts | Jess | 2026-06-04 | Structural map accepted, 42 work areas and 26 contracts in live proof. | `looma-knit` package/design-state fixture | Rendered Structure route is covered; live Jess contract proof remains useful. |
-| No runnable work | Commerce project | 2026-06-04 | Zero current tasks plus setup pressure. | `fair-labor-license` mostly done tasks | Add fixture for setup-pending zero-task project. |
+| No runnable work | Commerce project | 2026-06-04 | Zero current tasks plus setup pressure. | `scratch-setup-pending` | Fixture proves attached-but-uninitialized routing; live Commerce setup pressure remains a replay target. |
 | Fresh onboarding | Reset Jess / new attach | 2026-06-03 | Clean setup path proven through saved repo scan recovery. | `/setup` document route | Keep live reset explicit and reversible; fixture only smokes route. |
 
 On 2026-06-04 the live registered set was Looma + Knit, t-minus-t, Fair Labor
 License, Font something, Narrative Harness, Commerce project, and Jess. Do not
 assume this roster is current after a service restart; refresh it for each live
 audit.
+
+Feature-shape coverage must not depend on Matthew's current registered
+projects. Fixture and live-test plans should keep at least one representative
+for each product capability shape below, with unfamiliar project names and
+non-JavaScript proof language where possible.
+
+| Feature shape | Fixture representative | Why it matters | Current state |
+| --- | --- | --- | --- |
+| Docs-only corpus | `docs-compass` | Proves Overview/Structure/Work can describe review-only projects without build or package assumptions. | Rendered route smoke added; deeper task/proof copy still pending. |
+| Infrastructure / IaC | `pipeline-ops` | Proves release criteria and readiness language do not assume app/browser workflows. | Rendered release-criteria smoke added. |
+| Native/mobile package | `mobile-kit` | Proves Work routing and task language survive Swift/package-style projects. | Rendered Work route smoke added. |
+| Service/library project | `api-broker` | Proves Thread and project shell behavior on non-UI service work. | Rendered Thread route smoke added. |
+| Provider/consumer capability | `consumer-app` + `provider-library` | Proves Structure, capability linking, and handoff labels work without Looma/Knit/Editor examples. | Rendered handoff fixture covers consumer/provider labels, active handoff copy, connected-project count, and contract count. |
+| Dirty or unreadable readiness | `dirty-service` / corrupt task-state fixture still proposed | Proves Fleet, Overview, Thread, and Release agree on blockers when shared action data is missing. | Rendered dirty-checkout release fixture added; corrupt-task API-error path remains unit-level. |
+| Setup-pending empty project | `scratch-setup-pending` | Proves zero-task projects route to setup/intake instead of looking startable by accident. | Rendered uninitialized project-shell fixture added. |
+| Capability boundary request | `capability-boundary` | Proves Thread keeps owner approval decisions visible alongside active project/thread state. | Rendered Thread fixture and focused component regression added. |
 
 ## Surface Matrix
 
@@ -111,15 +127,15 @@ browser proof or deterministic automated proof before a release readiness claim.
 | Global providers | `/providers` | Inspect configured providers/models and machine defaults without project setup leakage. | No selected project required. | `/api/providers`, `/api/providers/config`, `/api/models` return 200 without `projectId`. | Provider rows and model defaults after hard refresh. | Component tests cover machine-scoped endpoints; rendered UI covers route load. | Live provider secrets remain machine-specific. |
 | Project shell | `/projects/:id` and every project tab | Header, run/connect state, next action, and rail tabs stay tied to the selected project. | Every registered project state. | `/api/project?projectId=:id`, `/api/project/inbox`. | Project name in shell across tabs and refreshes. | Rendered UI covers shell open and rail pin layout. | Looma + Knit Thread identity fixed in code; live Browser bridge replay still needs a normal browser confirmation. |
 | Overview | `/projects/:id`, `/projects/:id/overview/inbox` | Summarize project facts, current work, blockers, provider/runtime/readiness, graph summary, and owner actions. | Ready, blocked, setup-pending, no-runnable-work. | `/api/project`, `/api/project/inbox`. | Overview region, next action, inbox drill-in. | Component tests cover action model, overview rows, blockers. Rendered UI covers Overview and inbox routes. | Setup/readiness consistency fixed in shared action model; live installed replay remains useful. |
-| Thread | `/projects/:id/thread`, `?thread=:id` | Answer owner input, review specs/briefs, inspect task details, ask follow-ups, preserve drawer background route. | Owner-input, migration-blocked, high-volume history, setup thread. | `/api/project/thread`, `/api/project/thread/extras`. | Thread list, selected detail, composer or gated action, drawer open/close. | Component tests are strong; rendered UI covers Looma migration gate and question path after migration. | Narrative Harness Thread live hang/bridge suspect remains open. |
+| Thread | `/projects/:id/thread`, `?thread=:id` | Answer owner input, review specs/briefs, inspect task details, ask follow-ups, preserve drawer background route, and decide capability requests. | Owner-input, migration-blocked, high-volume history, setup thread, pending capability request. | `/api/project/thread`, `/api/project/thread/extras`, `/api/project/capability-requests`. | Thread list, selected detail, composer or gated action, drawer open/close, Access requests card. | Component tests are strong; rendered UI covers Looma migration gate/question path and capability-boundary request decisions. | Narrative Harness Thread live hang/bridge suspect remains open. |
 | Work | `/projects/:id/work?view=list|board|columns`, `/workspace-import` | Filter work, switch list/board/columns, open task drawers, review imported drafts. | Import drafts, blocked tasks, ready specs, empty setup project. | `/api/project/progress`, workspace-import endpoints. | View switcher, task rows, drawer route, workspace import review. | Rendered UI covers view switcher and workspace-import route. Component tests cover filters/import routes. | Live import/reconcile replay remains open. |
-| Structure | `/projects/:id/structure` | Read project map, work areas, contracts, setup audit state, handoffs, help, assignment modal. | Accepted structural map/contracts; cross-project handoffs. | `/api/project/project-graph`. | Structure headings, domain/contract counts, assignment action availability. | Component/API tests cover project graph and structure panel; rendered UI covers route load. | Cross-project leakage fixed in shared graph projection; live browser replay remains useful. |
+| Structure | `/projects/:id/structure` | Read project map, work areas, contracts, setup audit state, handoffs, help, assignment modal. | Accepted structural map/contracts; cross-project handoffs. | `/api/project/project-graph`. | Structure headings, domain/contract counts, assignment action availability. | Component/API tests cover project graph and structure panel; rendered UI covers route load plus consumer/provider handoff fixtures. | Cross-project leakage fixed in shared graph projection; live browser replay remains useful. |
 | Settings | `/projects/:id/settings`, `/settings/ready`, `/settings/providers`, `/settings/coordinators`, `/settings/identity`, `/settings/profile`, `/settings/advanced` | Inspect readiness, providers, coordinators, identity, profile, and developer tools without default internals dump. | Ready, provider-missing, runtime setup, design feedback state. | Setup/config/runtime/capability/design endpoints where relevant. | Each settings subroute loads with focused heading and project shell. | Component tests cover settings shell and panels; rendered UI covers the settings subroute loop and Developer panel. | Provider boundary fixed in code; live provider/runtime states remain machine-specific. |
-| Release | `/projects/:id/release`, `/release/criteria` | Understand whether current work can close, what blocks it, and where to act next. | Done-heavy, blocked verification, release criteria. | `/api/project/release-readiness`. | Release summary renders `Current work closure`; checks subroute renders `Closure checks`. | Component tests cover ReleaseTab; rendered UI covers route load. | Incomplete-brief/API-error coverage added; installed Fair Labor License and Looma + Knit proof captured. |
-| Timeline / coordinators | `/projects/:id/timeline`, coordinator surfaces | Review recent activity, agent/coordinator status, and route to relevant settings or work. | Active run, paused run, recent events. | Recent-events/activity fields from project APIs. | Timeline/activity text and coordinator status. | Component coverage exists around project activity/status chips. | Rendered route smoke pending or route may need product decision. |
-| Setup / initialization | `/projects/:id/setup`, first-run attach/init | Complete identity, providers, direction, repo scan, import/recovery, and clean onboarding. | Fresh/reset onboarding; setup interrupted; setup pending. | `/api/setup/defaults`, `/api/setup/status`, meta-intake endpoints. | Step heading, provider step, launch/recovery action. | Component tests cover setup recovery and document scroll; rendered UI covers project setup route load. | Repeatable temp-project onboarding proof added; live reset must remain explicit and reversible. |
+| Release | `/projects/:id/release`, `/release/criteria` | Understand whether current work can close, what blocks it, and where to act next. | Done-heavy, blocked verification, dirty checkout, release criteria. | `/api/project/release-readiness`. | Release summary renders `Current work closure`; checks subroute renders `Closure checks`; dirty fixture renders project-local Guildhall cleanup blocker. | Component tests cover ReleaseTab; rendered UI covers route load and dirty-service blocker. | Incomplete-brief/API-error coverage added; installed Fair Labor License and Looma + Knit proof captured. |
+| Timeline / coordinators | `/projects/:id/timeline`, coordinator surfaces | Review recent activity, agent/coordinator status, and route to relevant settings or work. | Active run, paused run, recent events. | Recent-events/activity fields from project APIs. | Timeline/activity text and coordinator status. | Component coverage exists around project activity/status chips; rendered UI covers API Broker timeline route smoke. | Deeper live coordinator action replay still useful. |
+| Setup / initialization | `/projects/:id/setup`, first-run attach/init | Complete identity, providers, direction, repo scan, import/recovery, and clean onboarding. | Fresh/reset onboarding; setup interrupted; setup pending. | `/api/setup/defaults`, `/api/setup/status`, meta-intake endpoints. | Step heading, provider step, launch/recovery action, attached-but-uninitialized shell. | Component tests cover setup recovery and document scroll; rendered UI covers initialized setup route and setup-pending project shell. | Repeatable temp-project onboarding proof added; live reset must remain explicit and reversible. |
 | Task drawer | `/projects/:id/task/:taskId?tab=brief|spec|work|proof` | Review task context, specs, proof, actions, and close back to background route. | Spec review, blocked recovery, done history. | `/api/project/task/:id`, runtime/dev-server endpoints. | Drawer tabs, close behavior, action gating. | Component tests are strong; rendered UI covers direct task drawer route and Thread drawer background. | Live task spec drawer replay remains open. |
-| Cross-project state | Fleet plus Structure/Overview graph links | Confirm unrelated projects do not leak into a project as related work unless dependency/handoff exists. | Multi-project fleet and graph handoffs. | `/api/service`, `/api/project/project-graph`. | Structure/Overview dependency labels. | Runtime/API tests cover graph authority. | Needs live browser matrix once handoff project fixtures exist. |
+| Cross-project state | Fleet plus Structure/Overview graph links | Confirm unrelated projects do not leak into a project as related work unless dependency/handoff exists. | Multi-project fleet and graph handoffs. | `/api/service`, `/api/project/project-graph`. | Structure/Overview dependency labels. | Runtime/API tests cover graph authority; rendered UI covers consumer/provider handoff fixtures and absence of unrelated project leakage. | Live browser matrix still useful for real registered projects. |
 
 ## Scenario Scripts
 
@@ -134,7 +150,7 @@ against the live roster when doing a release-gating user test.
 | Task shaping/drawer | Open Work, open a task drawer, switch brief/spec/work/proof tabs, close. | Drawer preserves background route and gates actions with project readiness. | Component tests; rendered direct drawer smoke pending. | Narrative Harness task spec drawers and Font something task route. |
 | Run / pause | From project shell or Projects home, inspect Start/Resume/Pause label and click only when safe. | Label names exact next action or blocker; setup-pending projects do not look startable. | Component/action-model tests. | Commerce setup-blocked consistency and dirty worktree blockers. |
 | Recovery | Open a blocked/recovery thread or drawer and choose the recovery path. | The UI explains what happened, what Guildhall needs, and the next safe action. | Component tests for blocked Thread/drawer paths. | t-minus-t and Fair Labor License live recovery routes. |
-| Provider setup | Open `/providers` and project provider settings. | Global providers load without `projectId`; project providers stay project-scoped. | Component tests; rendered global route smoke pending. | Machine provider secrets and model lists. |
+| Provider setup | Open `/providers` and project provider settings. | Global providers load without `projectId`; project providers stay project-scoped. | Component tests plus rendered global route smoke. | Machine provider secrets and model lists. |
 | Release closure | Open `/projects/:id/release` and `/release/criteria`. | Blocking checks and closure actions are visible and route to the right work. | Component tests plus rendered route smoke. | Fair Labor License done-heavy release state. |
 | Fresh onboarding | Attach/reset a project, complete identity/providers/launch, recover from interrupted setup. | Setup reaches useful project graph/import state without hiding owner decisions. | Setup route/component smoke plus temp-project API scenario. | Requires explicit reset plan and reversible live state. |
 
@@ -142,9 +158,9 @@ against the live roster when doing a release-gating user test.
 
 | Coverage layer | Current coverage | Missing from automated matrix |
 | --- | --- | --- |
-| Runtime/API unit tests | Strong coverage for project action model, inbox, Thread projection, providers, setup, workspace import, project graph, release readiness, migrations, and task endpoints. | Dirty-git/readiness fixture and cross-project handoff browser fixture. |
-| Svelte/component tests | Strong coverage for Thread, ProjectView, Overview, Work, Settings, Structure, Release, Providers, Setup, TaskDrawer, ProjectsHome, Needs You. | A single route-level smoke table tying every major route to the user-test matrix. |
-| Rendered UI Playwright | Seventeen scenarios: Projects home mobile/desktop, legacy route fallback, Looma Thread migration/question path, rail pinning, Work view switcher, Developer settings, global Needs You, Providers, Overview inbox, Structure, workspace import, settings subroute loop, Release summary/checks routes, project setup, and direct task drawer route. | Dirty-git/readiness fixture, cross-project handoff browser fixture, and deeper route action replays. |
+| Runtime/API unit tests | Strong coverage for project action model, inbox, Thread projection, providers, setup, workspace import, project graph, release readiness, migrations, and task endpoints. | Corrupt task-state route replay and deeper live action replays. |
+| Svelte/component tests | Strong coverage for Thread, ProjectView, Overview, Work, Settings, Structure, Release, Providers, Setup, TaskDrawer, ProjectsHome, Needs You. | Remaining gaps are less about component mounting and more about live route/action replay. |
+| Rendered UI Playwright | Twenty-eight scenarios: Projects home mobile/desktop with fifteen project shapes, legacy route fallback, Looma Thread migration/question path, rail pinning, Work view switcher, Developer settings, global Needs You, Providers, Overview inbox, Structure, workspace import, settings subroute loop, Release summary/checks routes, project setup, setup-pending attached project, direct task drawer route, unfamiliar docs/infra/mobile/service route smokes, Timeline route smoke, dirty release blocker, provider/consumer handoffs, and capability-request Thread. | Deeper route action replays and live machine-specific states. |
 | Live installed browser proof | 2026-06-04 multi-agent proof plus follow-up proof covered service freshness, direct HTTP shells, provider APIs, selected live routes, provider boundary save on a throwaway registered project, and Release summary/checks routes. | Browser bridge/app-hang separation, Narrative Harness Thread, Commerce setup-blocked consistency, per-project replay targets. |
 
 ## Active Gaps
@@ -191,6 +207,33 @@ coverage.
 
 ## Current Follow-Ups
 
+- [x] Finish feature-shape generalization fixtures. The 2026-06-04
+  weak/medium coverage audit found that runtime smoke fixtures already cover
+  broad project types, but rendered UI tests were still overfit to familiar
+  registered projects. First pass added `docs-compass`, `pipeline-ops`,
+  `mobile-kit`, and `api-broker` to the Playwright roster, plus generic
+  Structure/capability tests for punctuation-heavy domains and ambiguous
+  prefixed work areas. Follow-up added `dirty-service`,
+  `scratch-setup-pending`, `consumer-app`/`provider-library`, and
+  `capability-boundary` so rendered UI tests now cover dirty release blockers,
+  attached-but-uninitialized routing, cross-project handoffs, contract counts,
+  absence of unrelated-project leakage, Timeline route smoke, and pending
+  capability requests visible inside Thread.
+  Verification: `pnpm exec vitest run
+  src/web/surfaces/project/structure/__tests__/ProjectStructurePanel.svelte.test.ts
+  --reporter=dot`, `pnpm exec vitest run
+  src/web/surfaces/project/__tests__/ReleaseTab.svelte.test.ts
+  --reporter=dot`, `pnpm exec vitest run
+  src/web/lib/__tests__/project-summary.test.ts --reporter=dot`,
+  `pnpm exec vitest run src/runtime/__tests__/generalization-smoke.test.ts
+  --reporter=dot`, `pnpm exec vitest run
+  src/web/surfaces/project/__tests__/ThreadTab.svelte.test.ts -t
+  "capability request decisions" --reporter=dot`, `pnpm build`, and
+  `pnpm exec playwright test tests/rendered-ui/project-flow.spec.ts -g
+  "setup-pending|dirty service|consumer handoff|provider handoff|capability
+  request|timeline" --reporter=line` all passed. Full rendered matrix
+  verification is `pnpm exec playwright test
+  tests/rendered-ui/project-flow.spec.ts --reporter=line`.
 - [ ] Enforce project-state storage boundaries and clean existing managed
   project `.guildhall` bloat. Live audit on 2026-06-04 showed the previous
   task-state split was not durably implemented: active writers still recreate

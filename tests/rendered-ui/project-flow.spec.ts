@@ -66,6 +66,111 @@ const projectSurfaceRoutes = [
       await expect(page.getByRole('heading', { name: 'How should agents call an LLM?' })).toBeVisible()
     },
   },
+  {
+    name: 'docs-only overview',
+    path: '/projects/docs-compass/overview',
+    assertions: async (page) => {
+      await expect(page.getByRole('heading', { name: 'Docs Compass' })).toBeVisible()
+      await expect(page.getByRole('region', { name: 'Project overview' })).toBeVisible()
+    },
+  },
+  {
+    name: 'docs-only structure',
+    path: '/projects/docs-compass/structure',
+    assertions: async (page) => {
+      await expect(page.getByRole('heading', { name: 'Structure' })).toBeVisible()
+      await expect(page.getByRole('region', { name: 'Project map' })).toBeVisible()
+      await expect(page.getByTitle('Docs Compass')).toBeVisible()
+    },
+  },
+  {
+    name: 'infra release criteria',
+    path: '/projects/pipeline-ops/release/criteria',
+    assertions: async (page) => {
+      await expect(page.getByRole('heading', { name: 'Closure checks' })).toBeVisible()
+      await expect(page.getByRole('heading', { name: 'Task-state tally' })).toBeVisible()
+      await expect(page.getByTitle('Pipeline Ops')).toBeVisible()
+    },
+  },
+  {
+    name: 'native mobile work',
+    path: '/projects/mobile-kit/work?view=columns',
+    assertions: async (page) => {
+      await expect(page.getByRole('toolbar', { name: 'Work view controls' })).toBeVisible()
+      await expect(page.getByRole('region', { name: 'Deliverable tree workbench' })).toBeVisible()
+      await expect(page.getByTitle('Mobile Kit')).toBeVisible()
+    },
+  },
+  {
+    name: 'service thread',
+    path: '/projects/api-broker/thread',
+    assertions: async (page) => {
+      await expect(page.getByRole('complementary', { name: 'Thread list' })).toBeVisible()
+      await expect(page.getByRole('region', { name: 'Selected thread' })).toBeVisible()
+      await expect(page.getByTitle('API Broker')).toBeVisible()
+    },
+  },
+  {
+    name: 'timeline',
+    path: '/projects/api-broker/timeline',
+    assertions: async (page) => {
+      await expect(page.getByRole('heading', { name: 'Coordinator timeline' })).toBeVisible()
+      await expect(page.getByTitle('API Broker')).toBeVisible()
+    },
+  },
+  {
+    name: 'setup-pending work',
+    path: '/projects/scratch-setup-pending/work',
+    assertions: async (page) => {
+      await expect(page.getByRole('heading', { name: 'scratch-setup-pending is attached, but not initialized yet' })).toBeVisible()
+      await expect(page.getByRole('button', { name: 'Initialize this project' })).toBeVisible()
+      await expect(page.getByText(/Setup is intentionally pending/)).toHaveCount(0)
+    },
+  },
+  {
+    name: 'dirty service release',
+    path: '/projects/dirty-service/release',
+    assertions: async (page) => {
+      await expect(page.getByRole('heading', { name: 'Current work closure' })).toBeVisible()
+      await expect(page.getByText(/project-local Guildhall .*files need cleanup/)).toBeVisible()
+      await expect(page.getByTitle('Dirty Service')).toBeVisible()
+    },
+  },
+  {
+    name: 'consumer handoff structure',
+    path: '/projects/consumer-app/structure',
+    assertions: async (page) => {
+      await expect(page.getByRole('heading', { name: 'Structure', exact: true })).toBeVisible()
+      await expect(page.getByText('Consumer App is waiting on Provider Library')).toBeVisible()
+      await expect(page.getByText('Consumer App needs launch-window math from Provider Library.')).toBeVisible()
+      await expect(page.getByText('This project is consumer')).toBeVisible()
+      await expect(page.getByText('1 contract')).toBeVisible()
+      await expect(page.getByText('Unrelated Indexed Project')).toHaveCount(0)
+    },
+  },
+  {
+    name: 'provider handoff structure',
+    path: '/projects/provider-library/structure',
+    assertions: async (page) => {
+      await expect(page.getByRole('heading', { name: 'Structure', exact: true })).toBeVisible()
+      await expect(page.getByText('Consumer App is asking this project for work')).toBeVisible()
+      await expect(page.getByText('This project is provider')).toBeVisible()
+      await expect(page.getByText('1 contract')).toBeVisible()
+    },
+  },
+  {
+    name: 'capability request thread',
+    path: '/projects/capability-boundary/thread',
+    assertions: async (page) => {
+      await expect(page.getByRole('complementary', { name: 'Thread list' })).toBeVisible()
+      await expect(page.getByRole('region', { name: 'Selected thread' })).toBeVisible()
+      await expect(page.getByText('Access requests')).toBeVisible()
+      await expect(page.getByText('Capability Boundary needs read access to ../fixtures/packets.')).toBeVisible()
+      await expect(page.getByRole('button', { name: 'Approve read-only' })).toBeVisible()
+      await expect(page.getByRole('button', { name: 'Approve read-write' })).toBeVisible()
+      await expect(page.getByRole('button', { name: 'Use fallback' })).toBeVisible()
+    },
+  },
 ]
 
 for (const surface of projectSurfaceRoutes) {
@@ -81,6 +186,7 @@ test('projects home scrolls at mobile size and opens explicit project routes', a
 
   await expect(page.getByRole('heading', { name: 'Projects & Workspaces' })).toBeVisible()
   await expect(page.getByText('Tiny demo')).toBeVisible()
+  await expect(page.getByText('Docs Compass')).toBeVisible()
 
   await page
     .locator('section.project-card')
@@ -110,7 +216,20 @@ test('projects home keeps project cards compact for scanability', async ({ page 
   expect(Math.max(...panelBoxes.map(box => box.right))).toBeGreaterThan(1380)
 
   const cards = page.locator('section.project-card')
-  await expect(cards).toHaveCount(6)
+  await expect(cards).toHaveCount(15)
+  for (const projectName of [
+    'Docs Compass',
+    'Pipeline Ops',
+    'Mobile Kit',
+    'API Broker',
+    'Scratch Setup Pending',
+    'Dirty Service',
+    'Consumer App',
+    'Provider Library',
+    'Capability Boundary',
+  ]) {
+    await expect(cards.filter({ has: page.getByRole('heading', { name: projectName }) })).toHaveCount(1)
+  }
 
   const boxes = await cards.evaluateAll((nodes) =>
     nodes.map((node) => {
@@ -120,15 +239,16 @@ test('projects home keeps project cards compact for scanability', async ({ page 
   )
   expect(Math.max(...boxes.map(box => box.height))).toBeLessThan(260)
   expect(new Set(boxes.map(box => Math.round(box.top))).size).toBeGreaterThan(1)
-  expect(Math.max(...boxes.map(box => box.top)) - Math.min(...boxes.map(box => box.top))).toBeLessThan(260)
 
   const rows = new Map<number, typeof boxes>()
   for (const box of boxes) {
     const top = Math.round(box.top)
     rows.set(top, [...(rows.get(top) ?? []), box])
   }
+  const singletonRows = Array.from(rows.values()).filter(row => row.length === 1)
+  expect(singletonRows.length).toBeLessThanOrEqual(1)
   for (const row of rows.values()) {
-    expect(row.length).toBeGreaterThan(1)
+    if (row.length === 1) continue
     expect(Math.min(...row.map(box => box.width))).toBeGreaterThan(420)
     expect(Math.max(...row.map(box => box.right))).toBeGreaterThan(1380)
   }
@@ -147,7 +267,7 @@ test('required migration blocks thread work until it is applied', async ({ page 
   await expect(page.getByRole('button', { name: 'Migrate project' }).first()).toBeVisible()
   await expect(page.getByText('Which controls belong in the link editor?')).toHaveCount(0)
 
-  for (let index = 0; index < 3; index += 1) {
+  for (let index = 0; index < 6; index += 1) {
     if (await page.getByText('Needs migration').count() === 0) break
     const visibleMigrateButton = page.locator('button').filter({ hasText: 'Migrate' }).first()
     const hasVisibleMigrate = await visibleMigrateButton.count() > 0
@@ -163,7 +283,7 @@ test('required migration blocks thread work until it is applied', async ({ page 
     await expect(page.getByText('Migration applied.')).toBeVisible()
     await page.getByRole('dialog', { name: 'Migrate project' }).getByRole('button', { name: 'Close' }).last().click()
   }
-  await page.getByRole('button', { name: /Block menu \/ block side menu/ }).click()
+  await page.getByRole('complementary', { name: 'Thread list' }).getByRole('button', { name: /Block menu \/ block side menu/ }).click()
   const composer = page.getByRole('region', { name: 'Selected thread' }).getByRole('textbox')
   if (await composer.count() > 0) {
     await expect(composer).toBeVisible()

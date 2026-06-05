@@ -370,6 +370,116 @@ describe('ProjectStructurePanel', () => {
     expect(screen.queryByRole('dialog', { name: 'Contracts' })).not.toBeInTheDocument()
   })
 
+  it('matches contract surfaces to unfamiliar prefixed areas only when the match is unambiguous', async () => {
+    project.detail = {
+      ...project.detail!,
+      id: 'orbital-ops',
+      name: 'Orbital Ops',
+      path: '/workspace/orbital-ops',
+      structuralMapReview: {
+        id: 'map-orbital',
+        state: 'accepted',
+        domains: [],
+      },
+    }
+    const fetchMock = installProjectGraph({
+      currentProject: { id: 'orbital-ops', label: 'Orbital Ops', path: '/workspace/orbital-ops' },
+      localProjects: [
+        { id: 'orbital-ops', label: 'Orbital Ops', role: 'current', path: '/workspace/orbital-ops' },
+      ],
+      structuralDomains: [
+        {
+          id: 'domain:pkg-data-plane',
+          label: 'pkg-data-plane',
+          kind: 'structural_domain',
+          path: 'crates/pkg-data-plane',
+        },
+        {
+          id: 'domain:ops-data-plane',
+          label: 'ops-data-plane',
+          kind: 'structural_domain',
+          path: 'infra/ops-data-plane',
+        },
+        {
+          id: 'domain:launch-window-math',
+          label: 'launch-window-math',
+          kind: 'structural_domain',
+          path: 'crates/launch-window-math',
+        },
+      ],
+      domainResponsibilities: [],
+      dependencyEdges: [],
+      contractSurfaces: [
+        {
+          id: 'contract:ops-data-plane',
+          nodeId: 'contract-surface:ops-data-plane',
+          label: 'Ops data-plane handoff schema',
+          kind: 'schema',
+          authority: 'shared',
+          scope: 'project',
+          state: 'accepted',
+          owningProjectId: 'orbital-ops',
+          owningProjectLabel: 'Orbital Ops',
+          domainId: 'domain:ops-data-plane',
+          domainLabel: 'data-plane',
+          consumerCount: 1,
+          invariantCount: 2,
+          decisionCount: 0,
+          updatedAt: '2026-06-04T12:00:00.000Z',
+          scopedReason: 'owner',
+          reviewPackets: [],
+        },
+        {
+          id: 'contract:ambiguous-data-plane',
+          nodeId: 'contract-surface:ambiguous-data-plane',
+          label: 'Ambiguous data-plane convention',
+          kind: 'domain_capability',
+          authority: 'shared',
+          scope: 'project',
+          state: 'proposed',
+          owningProjectId: 'orbital-ops',
+          owningProjectLabel: 'Orbital Ops',
+          domainLabel: 'data-plane',
+          consumerCount: 0,
+          invariantCount: 1,
+          decisionCount: 0,
+          updatedAt: '2026-06-04T12:00:00.000Z',
+          scopedReason: 'owner',
+          reviewPackets: [],
+        },
+        {
+          id: 'contract:launch-window-math',
+          nodeId: 'contract-surface:launch-window-math',
+          label: 'Launch-window math crate API',
+          kind: 'domain_capability',
+          authority: 'shared',
+          scope: 'project',
+          state: 'accepted',
+          owningProjectId: 'orbital-ops',
+          owningProjectLabel: 'Orbital Ops',
+          domainLabel: 'window-math',
+          consumerCount: 0,
+          invariantCount: 1,
+          decisionCount: 0,
+          updatedAt: '2026-06-04T12:00:00.000Z',
+          scopedReason: 'owner',
+          reviewPackets: [],
+        },
+      ],
+    })
+
+    render(ProjectStructurePanel)
+
+    expect(await screen.findByRole('heading', { name: 'Project map' })).toBeInTheDocument()
+    await waitFor(() => expect(fetchMock).toHaveBeenCalled())
+    expect(screen.getByText('3 contracts')).toBeInTheDocument()
+    expect(screen.getByLabelText('Contracts for ops-data-plane')).toHaveTextContent('Ops data-plane handoff schema')
+    expect(screen.getByLabelText('Contracts for ops-data-plane')).not.toHaveTextContent('Ambiguous data-plane convention')
+    expect(screen.queryByText('Ambiguous data-plane convention')).not.toBeInTheDocument()
+    expect(screen.getByLabelText('Contracts for launch-window-math')).toHaveTextContent('Launch-window math crate API')
+    expect(screen.queryByLabelText('Contracts for pkg-data-plane')).not.toBeInTheDocument()
+  })
+
   it('keeps cross-project capability linking behind one secondary modal', async () => {
     const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
       const url = new URL(String(input), 'http://localhost')
@@ -675,5 +785,109 @@ describe('ProjectStructurePanel', () => {
     await userEvent.click(screen.getByRole('button', { name: /docs-less - Provider capability/ }))
     expect(screen.getByRole('option', { name: 'Docs Content' })).toBeInTheDocument()
     expect(screen.getByRole('option', { name: 'Patch CSS' })).toBeInTheDocument()
+  })
+
+  it('links unfamiliar provider capabilities with punctuation-heavy domains and non-JS project labels', async () => {
+    project.detail = {
+      ...project.detail!,
+      id: 'signal-router',
+      name: 'Signal Router',
+      path: '/workspace/signal-router',
+      structuralMapReview: {
+        id: 'map-signal-router',
+        state: 'accepted',
+        domains: [{ id: 'domain:oauth-pkce', label: 'OAuth 2.1 / PKCE' }],
+      },
+    }
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = new URL(String(input), 'http://localhost')
+      if (url.pathname === '/api/project/project-graph' && init?.method !== 'POST') {
+        return json({
+          projectGraph: {
+            currentProject: { id: 'signal-router', label: 'Signal Router', path: '/workspace/signal-router' },
+            localProjects: [
+              { id: 'signal-router', label: 'Signal Router', role: 'current', path: '/workspace/signal-router' },
+            ],
+            localProjectIndex: [
+              { id: 'signal-router', label: 'Signal Router', role: 'current', path: '/workspace/signal-router' },
+              { id: 'policy-engine', label: 'Policy Engine', role: 'indexed', path: '/workspace/policy-engine' },
+              { id: 'telemetry-sink', label: 'Telemetry Sink', role: 'indexed', path: '/workspace/telemetry-sink' },
+            ],
+            structuralDomains: [
+              { id: 'domain:oauth-pkce', label: 'OAuth 2.1 / PKCE', kind: 'structural_domain', path: 'service/auth/pkce' },
+              { id: 'domain:slo-telemetry', label: 'SLO telemetry', kind: 'structural_domain', path: 'observability/slo' },
+              { id: 'domain:terraform-modules', label: 'Terraform modules', kind: 'structural_domain', path: 'infra/terraform' },
+            ],
+            domainResponsibilities: [{
+              id: 'domain:oauth-pkce:provider_capability',
+              domainId: 'domain:oauth-pkce',
+              domainLabel: 'OAuth 2.1 / PKCE',
+              facet: 'provider_capability',
+              facetLabel: 'Provider capability',
+              description: 'Token exchange boundary for native and service clients.',
+              authority: 'provider',
+              responsibleProjectId: 'signal-router',
+              responsibleProjectLabel: 'Signal Router',
+              responsibleProjectPath: '/workspace/signal-router',
+              assignable: true,
+              assigned: false,
+            }],
+            dependencyEdges: [],
+            contractSurfaces: [{
+              id: 'contract:oidc-callback',
+              nodeId: 'contract-surface:oidc-callback',
+              label: 'OIDC callback contract',
+              kind: 'api_boundary',
+              authority: 'shared',
+              scope: 'project',
+              state: 'accepted',
+              owningProjectId: 'signal-router',
+              owningProjectLabel: 'Signal Router',
+              domainId: 'domain:oauth-pkce',
+              domainLabel: 'OAuth 2.1 / PKCE',
+              consumerCount: 2,
+              invariantCount: 3,
+              decisionCount: 1,
+              updatedAt: '2026-06-04T12:00:00.000Z',
+              scopedReason: 'owner',
+              reviewPackets: [],
+            }],
+          },
+        })
+      }
+      if (url.pathname === '/api/project/project-graph/domain-responsibility') {
+        expect(init?.method).toBe('POST')
+        const body = JSON.parse(String(init?.body ?? '{}'))
+        expect(body).toEqual(expect.objectContaining({
+          domainId: 'domain:oauth-pkce',
+          facet: 'provider_capability',
+          responsibleProjectId: 'policy-engine',
+        }))
+        return json({ projectGraph: { localProjects: [], domainResponsibilities: [] } })
+      }
+      return json({})
+    })
+    vi.stubGlobal('fetch', fetchMock)
+
+    render(ProjectStructurePanel)
+
+    expect(await screen.findByRole('heading', { name: 'Project map' })).toBeInTheDocument()
+    expect(await screen.findByText('pkce')).toBeInTheDocument()
+    expect(screen.getByText('OIDC callback contract')).toBeInTheDocument()
+    expect(screen.queryByText('Looma')).not.toBeInTheDocument()
+    expect(screen.queryByText('Knit')).not.toBeInTheDocument()
+    expect(screen.queryByText('Jess')).not.toBeInTheDocument()
+    expect(screen.queryByText('Editor')).not.toBeInTheDocument()
+
+    await userEvent.click(screen.getByRole('button', { name: 'Link capability' }))
+    await userEvent.click(screen.getByRole('button', { name: 'Show capabilities' }))
+    expect(screen.getByRole('button', { name: /OAuth 2\.1 \/ PKCE - Provider capability/ })).toBeInTheDocument()
+    await userEvent.click(screen.getByRole('button', { name: /OAuth 2\.1 \/ PKCE - Provider capability/ }))
+    expect(screen.getByLabelText('Selected assignment')).toHaveTextContent('Token exchange boundary for native and service clients.')
+    expect(screen.getByRole('option', { name: 'Policy Engine' })).toBeInTheDocument()
+    expect(screen.getByRole('option', { name: 'Telemetry Sink' })).toBeInTheDocument()
+    await userEvent.selectOptions(screen.getByRole('combobox', { name: 'Provider project' }), 'policy-engine')
+    await userEvent.click(screen.getByRole('button', { name: 'Assign' }))
+    await waitFor(() => expect(fetchMock.mock.calls.some(([input]) => String(input).includes('/domain-responsibility'))).toBe(true))
   })
 })

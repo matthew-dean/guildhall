@@ -23,6 +23,8 @@
   }
 
   interface ReleasePayload {
+    ready?: boolean
+    notReadyReason?: string
     initializationNeeded?: boolean
     error?: string
     scope?: {
@@ -285,6 +287,13 @@
 
   const verdict = $derived.by(() => {
     if (!data) return { label: 'Loading', tone: 'neutral' as const, reason: '' }
+    if (data.ready === false && data.notReadyReason) {
+      return {
+        label: 'Blocked',
+        tone: 'warn' as const,
+        reason: data.notReadyReason,
+      }
+    }
     if (data.totals.tasks === 0) {
       return {
         label: 'Not yet',

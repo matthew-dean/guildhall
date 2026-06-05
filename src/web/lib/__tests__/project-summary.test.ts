@@ -373,6 +373,37 @@ describe('summarizeProjects', () => {
     ])
   })
 
+  it.each(['no_loaded_model', 'model_unavailable', 'provider_unavailable'] as const)(
+    'keeps %s start blockers provider-specific when the action model is missing',
+    (code) => {
+      const service: ServiceDetail = {
+        projects: [
+          {
+            id: 'telemetry-bridge',
+            name: 'Telemetry Bridge',
+            path: '/work/telemetry-bridge',
+            taskCounts: { total: 1, active: 1, draftReview: 0, blocked: 0, done: 0, shelved: 0 },
+            run: { status: 'stopped' },
+            startReadiness: {
+              canStart: false,
+              code,
+              message: 'Choose a model before Guildhall starts worker tasks.',
+            },
+          },
+        ],
+      }
+
+      expect(summarizeProjects(service)[0]).toMatchObject({
+        statusLabel: 'Needs provider',
+        stageLabel: 'Needs provider',
+        maturityLabel: 'Needs provider',
+        activityLabel: 'Choose a model before Guildhall starts worker tasks.',
+        canStart: false,
+        needsAttention: true,
+      })
+    },
+  )
+
   it('normalizes Windows user-profile project paths for display', () => {
     const service: ServiceDetail = {
       projects: [

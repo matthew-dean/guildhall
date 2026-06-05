@@ -90,6 +90,9 @@ function readinessStage(project: ServiceProjectSummary): string | null {
     case 'required_migration_pending': return 'Needs migration'
     case 'owner_input_required': return 'Needs you'
     case 'no_provider': return 'Needs provider'
+    case 'no_loaded_model': return 'Needs provider'
+    case 'model_unavailable': return 'Needs provider'
+    case 'provider_unavailable': return 'Needs provider'
     case 'invalid_lever_combo': return 'Settings blocked'
     case 'runtime_too_old': return 'Update Guildhall'
     case 'all_terminal': return 'Complete'
@@ -252,6 +255,7 @@ function projectNeedsAttention(
   if (project.actionModel?.ownerInput?.active) return true
   if (project.actionModel?.primaryAction?.tone === 'danger' || project.actionModel?.primaryAction?.tone === 'warn') return true
   if (project.actionModel?.runControl?.startEnabled === false && code !== 'all_terminal') return true
+  if (!project.actionModel && project.startReadiness?.canStart === false && code !== 'all_terminal') return true
   return Boolean(counts.blocked > 0 || counts.draftReview > 0 || projectCheckIn?.needed || provider?.tone === 'warn')
 }
 
