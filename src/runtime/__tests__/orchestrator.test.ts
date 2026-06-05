@@ -2685,7 +2685,7 @@ describe('Orchestrator.tick — routing', () => {
   })
 
   it('reports no-coordinator when spec_review needs a missing domain coordinator', async () => {
-    await writeQueue([mkTask({ id: 'a', status: 'spec_review', domain: 'ghost' })])
+    await writeQueue([mkTask({ id: 'a', status: 'spec_review', domain: 'ghost', spec: VALID_SPEC })])
     const orch = new Orchestrator({ config: baseConfig(), agents: agentSet() })
     const out = await orch.tick()
     expect(out.kind).toBe('no-coordinator')

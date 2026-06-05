@@ -395,6 +395,7 @@ export interface Task {
   title?: string
   description?: string
   status?: string
+  dependsOn?: string[]
   domain?: string
   priority?: string
   assignedTo?: string | null

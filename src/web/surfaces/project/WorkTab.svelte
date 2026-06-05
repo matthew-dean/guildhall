@@ -20,6 +20,7 @@
   import { currentProjectHref, currentTaskHref, projectFetch } from '../../lib/project-routes.js'
   import { buildWorkSurface } from '../../lib/project-data.js'
   import { friendlyRuntimeMessage } from '../../lib/runtime-message.js'
+  import { hasUnmetDependencies, unmetDependencyIds } from '../../lib/task-dependencies.js'
   import { isCompleteForWorkerHandoff, needsWorkerHandoffSpecCleanup } from '../../lib/task-state.js'
   import { taskStagePresentation, type TaskPresentationTone } from '../../lib/task-presentation.js'
   import { buildWorkHierarchy, nestedWorkCountLabel, workKindLabel } from '../../lib/work-hierarchy.js'
@@ -118,7 +119,7 @@
   const taskCounts = $derived.by(() => {
     const all = visibleTasks
     const running = detail.run?.status === 'running'
-    const readyTasks = all.filter(task => task.status === 'ready')
+    const readyTasks = all.filter(task => task.status === 'ready' && !hasUnmetDependencies(task, tasks))
     const stageCounts = all.reduce<Record<string, number>>((counts, task) => {
       const key = taskPresentation(task).key
       counts[key] = (counts[key] ?? 0) + 1
@@ -219,6 +220,7 @@
   }
 
   function isQueuedWorkTask(task: Task): boolean {
+    if (hasUnmetDependencies(task, tasks)) return false
     if (task.status === 'ready') return isCompleteForWorkerHandoff(task)
     return ['in_progress', 'review', 'gate_check'].includes(task.status ?? '')
   }
@@ -255,7 +257,7 @@
     if (workFilter === 'queued') return isQueuedWorkTask(task)
     if (workFilter === 'planning') return isPlanningTask(task)
     if (workFilter === 'open') return !['done', 'pending_pr', 'shelved'].includes(task.status ?? '')
-    if (workFilter === 'blocked') return task.status === 'blocked'
+    if (workFilter === 'blocked') return task.status === 'blocked' || hasUnmetDependencies(task, tasks)
     if (workFilter === 'needs-you') return hasOpenQuestion(task)
     return false
   }
@@ -271,6 +273,7 @@
     return taskStagePresentation(task, {
       runStatus: detail.run?.status,
       availabilityStatus: detail.availability?.status ?? 'active',
+      tasks,
     })
   }
 
@@ -323,6 +326,8 @@
     const node = hierarchy.byId.get(task.id)
     const childCount = node?.childIds.length ?? 0
     if (childCount > 0) return nestedWorkCountLabel(childCount)
+    const blockers = unmetDependencyIds(task, tasks)
+    if (blockers.length > 0) return `Blocked by ${blockers.map(friendlyTaskId).join(', ')}`
     if (task.workKind) return workKindLabel(task.workKind)
     if (task.blockReason) return friendlyRuntimeMessage(task.blockReason)
     if (task.terminalSummary?.headline) return task.terminalSummary.headline
@@ -380,7 +385,7 @@
 
   $effect(() => {
     const projectId = detail.id ?? null
-    const taskSignature = tasks.map(task => `${task.id}:${task.status ?? ''}`).join('|')
+    const taskSignature = tasks.map(task => `${task.id}:${task.status ?? ''}:${(task.dependsOn ?? []).join(',')}`).join('|')
     taskSignature
     if (projectId !== workFilterProjectId) {
       workFilterProjectId = projectId

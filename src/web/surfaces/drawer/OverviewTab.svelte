@@ -6,12 +6,13 @@
   import Markdown from '../../lib/Markdown.svelte'
   import Row from '../../lib/Row.svelte'
   import Stack from '../../lib/Stack.svelte'
-  import { friendlyDomain, friendlyPriority, friendlyStatus } from '../../lib/display.js'
+  import { friendlyDomain, friendlyPriority } from '../../lib/display.js'
   import { labelForIdentifier } from '../../lib/identifier-labels.js'
   import { currentTaskHref } from '../../lib/project-routes.js'
   import { roleLabel } from '../../lib/escalation-labels.js'
   import { readableTaskDescription } from '../../lib/task-display.js'
   import { projectDerivedRecommendedChildren } from '../../lib/task-drawer-integrity.js'
+  import { taskStagePresentation } from '../../lib/task-presentation.js'
   import type { Task } from '../../lib/types.js'
 
   interface Props {
@@ -40,6 +41,7 @@
   const taskDescription = $derived(readableTaskDescription(task.description, task.title) || '(no description)')
   const createdChildren = $derived(recommendedChildren.filter((child) => child.createdTaskId))
   const taskById = $derived(new Map([task, ...tasks].filter((candidate): candidate is Task => Boolean(candidate?.id)).map(candidate => [candidate.id, candidate])))
+  const statusPresentation = $derived(taskStagePresentation(task, { tasks: [task, ...tasks] }))
   const containingWorkId = $derived(task.hierarchy?.parentId ?? null)
   const nestedWorkIds = $derived(task.hierarchy?.childIds ?? [])
   const goalEnvelopeId = $derived(task.businessEnvelope?.goalId ?? null)
@@ -96,11 +98,6 @@
     return 'neutral'
   }
 
-  function statusTone(status: string | undefined): ChipTone {
-    const tone = labelForIdentifier('status', status).tone
-    return tone === 'accent' ? 'ok' : tone
-  }
-
   function priorityTone(priority: string | undefined): ChipTone {
     const tone = labelForIdentifier('priority', priority).tone
     return tone === 'accent' ? 'agent' : tone
@@ -135,7 +132,7 @@
     <Stack gap="3">
       <Markdown source={taskDescription} />
       <Row wrap gap="2">
-        <Chip label={friendlyStatus(task.status)} tone={statusTone(task.status)} />
+        <Chip label={statusPresentation.label} tone={statusPresentation.tone} />
         {#if task.domain}<Chip label={friendlyDomain(task.domain)} tone="neutral" />{/if}
         {#if task.priority}<Chip label={`Priority: ${friendlyPriority(task.priority)}`} tone={priorityTone(task.priority)} />{/if}
         {#if task.assignedTo}<Chip label={`Assigned: ${roleLabel(task.assignedTo)}`} tone="neutral" />{/if}

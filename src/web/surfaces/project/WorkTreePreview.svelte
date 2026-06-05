@@ -5,6 +5,7 @@
   import { friendlyTaskId } from '../../lib/identifier-labels.js'
   import { nav, path } from '../../lib/nav.svelte.js'
   import { currentTaskHref } from '../../lib/project-routes.js'
+  import { hasUnmetDependencies } from '../../lib/task-dependencies.js'
   import { isCompleteForWorkerHandoff, needsWorkerHandoffSpecCleanup } from '../../lib/task-state.js'
   import { taskStagePresentation, type TaskPresentationTone } from '../../lib/task-presentation.js'
   import { buildWorkHierarchy } from '../../lib/work-hierarchy.js'
@@ -157,7 +158,7 @@
     return {
       total: subject.length,
       done: subject.filter(item => ['done', 'pending_pr'].includes(item.status ?? '')).length,
-      blocked: subject.filter(item => item.status === 'blocked').length,
+      blocked: subject.filter(item => item.status === 'blocked' || hasUnmetDependencies(item, tasks)).length,
       needsYou: subject.filter(hasOpenQuestion).length,
       runnable: subject.filter(isActionableTask).length,
     }
@@ -168,10 +169,11 @@
   }
 
   function isActionableTask(task: Task): boolean {
-    return isQueuedWorkTask(task) || task.status === 'blocked'
+    return isQueuedWorkTask(task) || task.status === 'blocked' || hasUnmetDependencies(task, tasks)
   }
 
   function isQueuedWorkTask(task: Task): boolean {
+    if (hasUnmetDependencies(task, tasks)) return false
     if (task.status === 'ready') return isCompleteForWorkerHandoff(task)
     return ['review', 'gate_check', 'in_progress'].includes(task.status ?? '')
   }
@@ -186,7 +188,7 @@
     if (filter === 'queued') return isQueuedWorkTask(task)
     if (filter === 'planning') return isPlanningTask(task)
     if (filter === 'open') return !['done', 'pending_pr', 'shelved'].includes(task.status ?? '')
-    if (filter === 'blocked') return task.status === 'blocked'
+    if (filter === 'blocked') return task.status === 'blocked' || hasUnmetDependencies(task, tasks)
     if (filter === 'needs-you') return hasOpenQuestion(task)
     return false
   }
@@ -249,11 +251,13 @@
   }
 
   function taskStatusLabel(task: Task): string {
-    return needsBreakdownReview(task) ? 'Review breakdown' : taskStagePresentation(task).label
+    if (hasUnmetDependencies(task, tasks)) return taskStagePresentation(task, { tasks }).label
+    return needsBreakdownReview(task) ? 'Review breakdown' : taskStagePresentation(task, { tasks }).label
   }
 
   function taskStatusTone(task: Task): ChipTone {
-    return needsBreakdownReview(task) ? 'warn' : chipTone(taskStagePresentation(task).tone)
+    if (hasUnmetDependencies(task, tasks)) return chipTone(taskStagePresentation(task, { tasks }).tone)
+    return needsBreakdownReview(task) ? 'warn' : chipTone(taskStagePresentation(task, { tasks }).tone)
   }
 
   function chipTone(tone: TaskPresentationTone): ChipTone {

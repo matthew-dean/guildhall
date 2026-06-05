@@ -93,6 +93,10 @@ export function dependenciesSatisfied(queue: TaskQueue, task: Task): boolean {
   })
 }
 
+function taskById(queue: TaskQueue, taskId: string): Task | undefined {
+  return queue.tasks.find((candidate) => candidate.id === taskId)
+}
+
 /**
  * Highest-priority actionable task.
  *
@@ -125,6 +129,7 @@ export function pickNextTask(
     task: Task,
     status: TaskStatus,
     priorityLevel: (typeof priority)[number],
+    opts: { respectScope?: boolean } = {},
   ): boolean =>
     task.status === status &&
     finishabilityAllowsDispatch(task) &&
@@ -134,10 +139,28 @@ export function pickNextTask(
     matchesLane(task) &&
     task.priority === priorityLevel &&
     (!domain || task.domain === domain) &&
-    matchesScope(task) &&
+    (opts.respectScope === false || matchesScope(task)) &&
     dependenciesSatisfied(queue, task) &&
     !hasOpenEscalation(task) &&
     !isExcluded(task)
+
+  const firstRunnableBlocker = (task: Task, seen = new Set<string>([task.id])): Task | undefined => {
+    for (const dependencyId of task.dependsOn ?? []) {
+      const dependency = taskById(queue, dependencyId)
+      if (!dependency || dependency.status === 'done' || seen.has(dependency.id)) continue
+      seen.add(dependency.id)
+
+      const deeper = firstRunnableBlocker(dependency, seen)
+      if (deeper) return deeper
+
+      for (const status of [...activeStatuses, ...freshStatuses]) {
+        for (const p of priority) {
+          if (matchesStatusSlot(dependency, status, p, { respectScope: false })) return dependency
+        }
+      }
+    }
+    return undefined
+  }
 
   // FR-22: worker-shelved tasks pending `pre_rejection_policy` are serviced
   // first — they're cheap (no LLM) and keeping the board clear of unresolved
@@ -175,6 +198,8 @@ export function pickNextTask(
   if (preferredTaskId) {
     const preferred = queue.tasks.find((task) => task.id === preferredTaskId)
     if (preferred) {
+      const runnableBlocker = firstRunnableBlocker(preferred)
+      if (runnableBlocker) return runnableBlocker
       for (const status of [...activeStatuses, ...freshStatuses]) {
         for (const p of priority) {
           if (matchesStatusSlot(preferred, status, p)) return preferred

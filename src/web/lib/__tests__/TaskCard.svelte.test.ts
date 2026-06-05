@@ -74,6 +74,26 @@ describe('TaskCard', () => {
     expect(screen.getByText(/Replace the missing component import/)).toBeInTheDocument()
   })
 
+  it('shows a blocked chip when ready work has unmet dependencies', () => {
+    render(TaskCard, {
+      task: task({
+        status: 'ready',
+        dependsOn: ['task-menu-primitive'],
+      }),
+      relatedTasks: [
+        task({
+          id: 'task-menu-primitive',
+          title: 'Menu primitive',
+          status: 'ready',
+        }),
+      ],
+      coordinatorRunning: true,
+    })
+
+    expect(screen.getByText('Blocked')).toBeInTheDocument()
+    expect(screen.queryByText('Ready')).not.toBeInTheDocument()
+  })
+
   it('shows terminal outcomes and honors display overrides', async () => {
     render(TaskCard, {
       task: task({

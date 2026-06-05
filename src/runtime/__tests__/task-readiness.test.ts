@@ -207,6 +207,49 @@ describe('finishability helpers', () => {
 })
 
 describe('dispatch readiness guard', () => {
+  it('walks from a requested blocked task to the first runnable blocker', () => {
+    const component = task({
+      id: 'component',
+      title: 'Component implementation',
+      status: 'ready',
+      priority: 'low',
+    })
+    const story = task({
+      id: 'story',
+      title: 'Storybook story',
+      status: 'ready',
+      priority: 'critical',
+      dependsOn: ['component'],
+    })
+
+    expect(pickNextTask({ version: 1, lastUpdated: now, tasks: [story, component] }, undefined, undefined, undefined, 'story')?.id).toBe('component')
+  })
+
+  it('repeats blocker traversal until it reaches runnable prerequisite work', () => {
+    const primitive = task({
+      id: 'primitive',
+      title: 'Menu primitive',
+      status: 'ready',
+      priority: 'low',
+    })
+    const component = task({
+      id: 'component',
+      title: 'Component implementation',
+      status: 'ready',
+      priority: 'normal',
+      dependsOn: ['primitive'],
+    })
+    const story = task({
+      id: 'story',
+      title: 'Storybook story',
+      status: 'ready',
+      priority: 'critical',
+      dependsOn: ['component'],
+    })
+
+    expect(pickNextTask({ version: 1, lastUpdated: now, tasks: [story, component, primitive] }, undefined, undefined, undefined, 'story')?.id).toBe('primitive')
+  })
+
   it('does not dispatch ready tasks whose readiness recommendation is not ready', () => {
     const unready = task({
       id: 'unready',

@@ -7,6 +7,7 @@ import {
   needsRecovery,
   needsWorkerHandoffSpecCleanup,
 } from './task-state.js'
+import { hasUnmetDependencies, type TaskDependencyLite } from './task-dependencies.js'
 import type { AcceptanceCriterion, AgentQuestion, ProductBrief } from './types.js'
 
 export type TaskPresentationTone = 'accent' | 'ok' | 'warn' | 'danger' | 'neutral' | 'running'
@@ -24,6 +25,7 @@ interface TaskPresentationInput {
   taskTitle?: string
   status?: string
   taskStatus?: string
+  dependsOn?: string[]
   importedDraft?: boolean
   liveAgent?: { name?: string } | unknown
   activity?: Array<{ label: string; tone: 'neutral' | 'running' | 'ok' | 'warn' | 'danger' }>
@@ -44,6 +46,7 @@ interface TaskPresentationInput {
 export interface TaskPresentationOptions {
   runStatus?: string | null
   availabilityStatus?: string | null
+  tasks?: TaskDependencyLite[]
 }
 
 function taskId(input: TaskPresentationInput): string | undefined {
@@ -101,6 +104,9 @@ export function taskStagePresentation(
 
   if (input.status === 'done' || status === 'done') return { key: 'done', label: 'Done', tone: 'ok' }
   if (needsRecovery({ ...input, taskStatus: status })) return { key: 'needs_recovery', label: 'Needs recovery', tone: 'warn' }
+  if (hasUnmetDependencies({ id: taskId(input), status, dependsOn: input.dependsOn }, options.tasks)) {
+    return { key: 'dependency_blocked', label: 'Blocked', tone: 'danger' }
+  }
   if (agentName === 'spec-agent') {
     return { key: 'working', label: 'Working', tone: 'running' }
   }

@@ -88,6 +88,26 @@ describe('taskStagePresentation', () => {
     })
   })
 
+  it('presents queued work with unmet blockers as blocked', () => {
+    const stage = taskStagePresentation({
+      id: 'task-storybook-proof',
+      title: 'Storybook proof',
+      status: 'ready',
+      dependsOn: ['task-component-implementation'],
+    }, {
+      runStatus: 'running',
+      tasks: [
+        { id: 'task-component-implementation', status: 'ready' },
+      ],
+    })
+
+    expect(stage).toEqual({
+      label: 'Blocked',
+      tone: 'danger',
+      key: 'dependency_blocked',
+    })
+  })
+
   it('keeps genuinely early exploring work queued instead of calling it intake', () => {
     const stage = taskStagePresentation({
       id: 'task-import-1aessks',

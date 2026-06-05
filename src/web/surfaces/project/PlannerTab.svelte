@@ -3,6 +3,7 @@
 -->
 <script lang="ts">
   import TaskCard from '../../lib/TaskCard.svelte'
+  import { hasUnmetDependencies } from '../../lib/task-dependencies.js'
   import { effectiveWorkStatus } from '../../lib/task-state.js'
   import type { ProjectDetail, Task } from '../../lib/types.js'
 
@@ -37,14 +38,8 @@
     return status ?? ''
   }
 
-  const statusById = $derived(
-    new Map(tasks.map(task => [task.id, statusOf(task)])),
-  )
-
   function dependenciesSatisfied(task: Task): boolean {
-    const deps = task.dependsOn ?? []
-    if (deps.length === 0) return true
-    return deps.every(id => statusById.get(id) === 'done')
+    return !hasUnmetDependencies(task, tasks)
   }
 
   function isDependencyBlocked(task: Task): boolean {
@@ -96,9 +91,10 @@
               {#each stage.cards as t (t.id)}
                 <TaskCard
                   task={t}
+                  relatedTasks={tasks}
                   coordinatorRunning={running}
                   displayStatusLabel={isDependencyBlocked(t)
-                    ? 'Waiting'
+                    ? 'Blocked'
                     : statusOf(t) === 'needs_spec_cleanup'
                       ? 'Needs brief'
                       : statusOf(t) === 'paused'
@@ -108,7 +104,7 @@
                           : statusOf(t) === 'gates_waiting'
                             ? 'Gates'
                             : undefined}
-                  displayStatusTone={isDependencyBlocked(t) || ['needs_spec_cleanup', 'review_waiting', 'gates_waiting'].includes(statusOf(t)) ? 'warn' : statusOf(t) === 'paused' ? 'neutral' : undefined}
+                  displayStatusTone={isDependencyBlocked(t) ? 'danger' : ['needs_spec_cleanup', 'review_waiting', 'gates_waiting'].includes(statusOf(t)) ? 'warn' : statusOf(t) === 'paused' ? 'neutral' : undefined}
                   displayStatusIcon={isDependencyBlocked(t) || ['needs_spec_cleanup', 'review_waiting', 'gates_waiting'].includes(statusOf(t)) ? 'alert-triangle' : undefined}
                 />
               {/each}

@@ -12,6 +12,7 @@
   import StatusLight from './StatusLight.svelte'
   import { friendlyDomain, friendlyStatus } from './display.js'
   import { activeEscalations } from './escalation.js'
+  import { hasUnmetDependencies } from './task-dependencies.js'
   import type { TaskLite } from './types.js'
 
   const ACTIVE_STATUSES = new Set([
@@ -30,6 +31,7 @@
   interface Props {
     task: TaskLite
     coordinatorRunning?: boolean
+    relatedTasks?: TaskLite[]
     displayStatusLabel?: string
     displayStatusTone?: StatusTone
     displayStatusIcon?: IconName
@@ -38,13 +40,15 @@
   let {
     task,
     coordinatorRunning = false,
+    relatedTasks = [],
     displayStatusLabel,
     displayStatusTone,
     displayStatusIcon,
   }: Props = $props()
 
   const status = $derived(task.status ?? 'unknown')
-  const statusLabel = $derived(displayStatusLabel ?? friendlyStatus(status))
+  const dependencyBlocked = $derived(hasUnmetDependencies(task, relatedTasks))
+  const statusLabel = $derived(displayStatusLabel ?? (dependencyBlocked ? 'Blocked' : friendlyStatus(status)))
   const isQueued = $derived(ACTIVE_STATUSES.has(status))
   const isActive = $derived(isQueued && coordinatorRunning)
   const prio = $derived(task.priority && task.priority !== 'normal' ? task.priority : '')
@@ -106,6 +110,8 @@
     displayStatusTone ??
       (status === 'blocked'
         ? 'danger'
+        : dependencyBlocked
+          ? 'danger'
         : status === 'shelved'
           ? 'warn'
           : status === 'pending_pr'
@@ -118,7 +124,7 @@
   )
 
   const statusIcon = $derived<IconName>(
-    displayStatusIcon ?? (status === 'blocked'
+    displayStatusIcon ?? (status === 'blocked' || dependencyBlocked
       ? 'alert-triangle'
       : status === 'done'
         ? 'check-circle-2'
@@ -150,7 +156,7 @@
     `st-${status}`,
     `tone-${statusTone}`,
     isActive ? 'st-active' : '',
-    status === 'blocked' ? 'st-blocked-bold' : '',
+    status === 'blocked' || dependencyBlocked ? 'st-blocked-bold' : '',
   ].filter(Boolean).join(' ')}
   tone={statusTone === 'accent' ? 'accent' : statusTone === 'ok' ? 'ok' : statusTone === 'warn' ? 'warn' : statusTone === 'danger' ? 'danger' : 'neutral'}
   railTone={statusTone === 'accent' ? 'accent' : statusTone === 'ok' ? 'ok' : statusTone === 'warn' ? 'warn' : statusTone === 'danger' ? 'danger' : null}
