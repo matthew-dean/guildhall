@@ -164,7 +164,9 @@
       {#if splitNeeded}
         <div class="split-callout">
           <strong>
-            {#if needsSplitAction}
+            {#if createdChildren.length > 0}
+              Linked nested work
+            {:else if needsSplitAction}
               Split this task
             {:else}
               {sizePlan?.action === 'split_required' ? 'Split required' : 'Split recommended'}

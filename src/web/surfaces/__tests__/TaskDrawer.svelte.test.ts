@@ -768,6 +768,9 @@ describe('TaskDrawer', () => {
     })
 
     await screen.findByText('Work hierarchy')
+    expect(screen.getByText('Linked nested work')).toBeInTheDocument()
+    expect(screen.queryByText('Split required')).not.toBeInTheDocument()
+    expect(screen.queryByText('Split recommended')).not.toBeInTheDocument()
     expect(screen.getAllByText('Work happens in the nested work below.').length).toBeGreaterThan(0)
     expect(document.body.textContent).not.toMatch(/parent task/i)
     expect(screen.queryByRole('button', { name: 'Resume only this work item' })).not.toBeInTheDocument()
