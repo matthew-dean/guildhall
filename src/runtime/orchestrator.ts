@@ -93,6 +93,7 @@ import { taskHasUnansweredVisibleQuestion } from './question-visibility.js'
 import { buildPromptCacheKey } from './prompt-cache.js'
 import { resolveModelApiPolicy, type ModelApiRole } from './model-api-policy.js'
 import { repairStaleBlockersInQueue } from './stale-blocker-repair.js'
+import { buildEffectiveTask } from './effective-task.js'
 import {
   effectiveBootstrapGateCommands,
   normalizeAutomatedAcceptanceCriterionCommands,
@@ -2485,6 +2486,10 @@ export class Orchestrator {
    * so concurrent fanout dispatches serialize on the final write step.
    */
   async dispatchOne(task: Task, queueBefore: TaskQueue): Promise<TickOutcome> {
+    if (task.status === 'in_progress' || task.status === 'review' || task.status === 'gate_check') {
+      task = await this.hydrateEffectiveTaskForDispatch(task)
+    }
+
     // FR-21: proposals are decided by policy (the `task_origination` lever),
     // not by an LLM agent. Handle the transition inline.
     if (task.status === 'proposed') {
@@ -7054,6 +7059,15 @@ export class Orchestrator {
       return resolveFanoutCapacity(settings.project)
     } catch {
       return readProjectConfig(this.opts.config.projectPath).workerLaneConcurrency ?? 1
+    }
+  }
+
+  private async hydrateEffectiveTaskForDispatch(task: Task): Promise<Task> {
+    try {
+      const projectRoot = inferProjectRootFromMemoryDir(this.opts.config.memoryDir)
+      return await buildEffectiveTask(projectRoot, task) as unknown as Task
+    } catch {
+      return task
     }
   }
 

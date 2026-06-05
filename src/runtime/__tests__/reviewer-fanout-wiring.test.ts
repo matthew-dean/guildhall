@@ -23,7 +23,7 @@ import {
   makeDefaultSettings,
   saveLeverSettings,
 } from '@guildhall/levers'
-import { getProjectContextDebugSnapshotDir } from '@guildhall/sessions'
+import { appendTaskEvidence, getProjectContextDebugSnapshotDir } from '@guildhall/sessions'
 import type { ConversationMessage, UsageSnapshot } from '@guildhall/protocol'
 import { z } from 'zod'
 import { InMemoryGitDriver } from '../git-driver.js'
@@ -238,6 +238,55 @@ function memoryGitDriver() {
 }
 
 describe('Orchestrator — reviewer fan-out at review', () => {
+  it('hydrates evidence-store self-critique notes before building reviewer fan-out context', async () => {
+    await writeDesignSystem(minimalDS)
+    const task = mkTask({
+      id: 'task-evidence-note',
+      notes: [],
+    })
+    await writeQueue([task])
+    await appendTaskEvidence(tmpDir, task.id, {
+      id: 'task-evidence-note-self-critique',
+      kind: 'note',
+      recordedAt: '2026-06-05T12:45:00.000Z',
+      payload: {
+        agentId: 'worker-agent',
+        role: 'self-critique',
+        content:
+          '**Self-critique:** ContextMenu implementation is complete. Browser proof: /tmp/context-menu-storybook-proof.png. E2E proof: pnpm --filter @looma/core test:browser passed.',
+        timestamp: '2026-06-05T12:45:00.000Z',
+      },
+    })
+
+    let observedContext = ''
+    const runner: ReviewerFanoutRunner = async ({ builtContext, personas }) => {
+      observedContext = builtContext.formatted
+      return personas.map((persona): PersonaVerdict => ({
+        guildSlug: persona.slug,
+        guildName: persona.name,
+        verdict: 'approve',
+        reasoning: 'Evidence was present.',
+        revisionItems: [],
+        rawOutput: '**Verdict:** approve',
+      }))
+    }
+
+    const orch = new Orchestrator({
+      config: baseConfig(),
+      agents: agentSet(),
+      reviewerFanout: runner,
+      gitDriver: memoryGitDriver(),
+    })
+
+    await orch.tick()
+
+    expect(observedContext).toContain('ContextMenu implementation is complete')
+    expect(observedContext).toContain('test:browser passed')
+    const after = await readQueue()
+    expect(after.tasks[0]?.notes).toEqual([])
+    expect(after.tasks[0]?.status).toBe('gate_check')
+  })
+
   it('default fanout reviewers inspect files from the task projectPath', async () => {
     let observedCwd: string | null = null
     const cwdProbe = defineTool<Record<string, never>>({
