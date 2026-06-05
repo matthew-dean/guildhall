@@ -9349,6 +9349,40 @@ row columns `207.797px 21.2031px`, `overflow: hidden`, and live CSS containing
 
 source: codex:thread-index-title-3-line-clamp
 
+2026-06-05T05:06:31Z - Fixed the Overview task-title clamp regression after
+the Looma + Knit overview showed `Continue the Knit-to-Looma... while the` as
+a hard character cut instead of a CSS overflow clamp. Root cause had two
+layers: `OverviewTaskRow` let long titles wrap without owning a clamp, and
+`ProjectOverviewTab` passed raw imported task titles even when the title was
+already a 120-character compact form while `task.description` contained the
+full source sentence. `OverviewTaskRow` now keeps the full title text in the
+DOM and applies the three-line CSS clamp (`line-clamp: 3` plus the current
+WebKit fallback). `ProjectOverviewTab` now routes overview task labels through
+one helper that recovers the full title from source-prefixed descriptions only
+when the stored title is clearly compact/clipped, and the Moving now,
+priority-card, run-plan, and blocked-work paths share that helper.
+
+Verification: Added component coverage proving `OverviewTaskRow` keeps full
+title text and uses CSS clamp declarations instead of slicing the title. Added
+overview coverage for a compact 120-character imported title plus full
+description, asserting the full title renders in overview surfaces and the
+compact title does not. Commands passed: `pnpm vitest run
+src/web/lib/__tests__/OverviewTaskRow.svelte.test.ts
+src/web/surfaces/project/__tests__/ProjectOverviewTab.svelte.test.ts -t
+"full overview task titles|OverviewTaskRow" --reporter=dot`, `pnpm build`,
+and `pnpm dev:install`. After restarting the installed service,
+`/api/stale-server` returned `stale:false` for PID `22454` and installed dist
+`/Users/matthew/.guildhall/app/0.10.0/app/dist/cli.js`. Live browser proof on
+`/projects/looma-knit/overview?proof=overview-row-css-clamp-full-title-1780635940000`
+found the target overview row title as the full 168-character sentence
+`Continue the Knit-to-Looma promotion work from the now-complete first M6 queue
+into the next generic surfaces, while the primitive normalization wave
+continues in Knit.`, `exactCompactMatches: 0`, `estimatedLines: 3`,
+`overflow: hidden`, and the live CSS rule containing `display: -webkit-box;
+-webkit-line-clamp: 3; -webkit-box-orient: vertical`.
+
+source: codex:overview-task-title-css-clamp-full-content
+
 2026-06-05T03:09:55Z - Toned down repeated `Guildhall` mentions in Thread,
 task drawer, and recovery copy after a Looma + Knit screenshot showed the brand
 name stacking in task cards, recovery history, escalation guidance, and the

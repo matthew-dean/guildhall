@@ -265,6 +265,14 @@ ${reviewerFeedbackText}`
     }
     const rootedPath = path.resolve(root, nuxtWebPrefixed)
     if (existsSync(rootedPath)) return rootedPath
+    const firstSlash = nuxtWebPrefixed.indexOf('/')
+    if (firstSlash > 0) {
+      const deprojectedLegacySourcePath = nuxtWebPrefixed.slice(firstSlash + 1)
+      if (deprojectedLegacySourcePath) {
+        const legacyCandidate = path.resolve(root, deprojectedLegacySourcePath)
+        if (existsSync(legacyCandidate)) return legacyCandidate
+      }
+    }
     return (
       resolveRepoSuffixMatch(root, nuxtWebPrefixed) ??
       (deprojectedPath ? resolveRepoSuffixMatch(root, deprojectedPath) : null) ??

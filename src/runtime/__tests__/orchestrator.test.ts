@@ -2487,7 +2487,7 @@ describe('Orchestrator.tick — routing', () => {
         id: 'a',
         status: 'spec_review',
         domain: 'looma',
-        spec: 'draft spec',
+        spec: VALID_SPEC,
         assignedTo: 'worker-agent',
       }),
     ])
@@ -2504,6 +2504,111 @@ describe('Orchestrator.tick — routing', () => {
     const queue = await readQueue()
     expect(queue.tasks[0]!.status).toBe('ready')
     expect(queue.tasks[0]!.assignedTo).toBeNull()
+  })
+
+  it('repairs invalid spec_review blueprints deterministically instead of dispatching an agent', async () => {
+    await writeQueue([
+      mkTask({
+        id: 'a',
+        status: 'spec_review',
+        domain: 'looma',
+        title: 'ContextMenu',
+        productBrief: {
+          userJob: 'I want to verify whether ContextMenu is already done and capture the remaining delta.',
+          successMetric: 'The remaining ContextMenu work is clear enough to implement and review.',
+          antiPatterns: [],
+          approvedAt: '2026-05-26T00:00:00.000Z',
+        },
+        spec: [
+          '## Summary',
+          '',
+          'Implement ContextMenu.',
+          '',
+          '## Acceptance Criteria',
+          '1. ContextMenu works in the target surface.',
+        ].join('\n'),
+        acceptanceCriteria: [{
+          id: 'AC-1',
+          description: 'ContextMenu works in the target surface.',
+          verifiedBy: 'review',
+          met: false,
+        }],
+      }),
+    ])
+    const spec = stubAgent('spec-agent')
+    const coord = stubAgent('looma-coordinator', async () => {
+      throw new Error('coordinator should not review an invalid blueprint')
+    })
+    const orch = new Orchestrator({
+      config: baseConfig(),
+      agents: agentSet({ spec, coordinators: { looma: coord } }),
+    })
+
+    const out = await orch.tick()
+
+    expect(out.kind).toBe('processed')
+    if (out.kind === 'processed') {
+      expect(out.agent).toBe('coordinator-recovery')
+      expect(out.afterStatus).toBe('spec_review')
+    }
+    expect(spec.calls).toHaveLength(0)
+    expect(coord.calls).toHaveLength(0)
+    const queue = await readQueue()
+    expect(queue.tasks[0]!.status).toBe('spec_review')
+    expect(queue.tasks[0]!.spec).toContain('## Completion Boundary')
+    expect(queue.tasks[0]!.spec).toContain('ContextMenu')
+    expect(queue.tasks[0]!.notes.some(note =>
+      note.agentId === 'coordinator-recovery' &&
+      note.content.includes('repaired a malformed spec_review blueprint'),
+    )).toBe(true)
+  })
+
+  it('approves valid deterministically repaired spec_review blueprints without coordinator dispatch', async () => {
+    await writeQueue([
+      mkTask({
+        id: 'a',
+        status: 'spec_review',
+        domain: 'looma',
+        spec: VALID_SPEC,
+        productBrief: {
+          userJob: 'I want ContextMenu implemented from the repaired blueprint.',
+          successMetric: 'ContextMenu is ready for worker implementation.',
+          antiPatterns: [],
+          approvedAt: '2026-05-26T00:00:00.000Z',
+        },
+        acceptanceCriteria: [{
+          id: 'AC-1',
+          description: 'Thing is done.',
+          verifiedBy: 'review',
+          met: false,
+        }],
+        notes: [{
+          agentId: 'coordinator-recovery',
+          role: 'system',
+          content: 'Guildhall repaired a malformed spec_review blueprint deterministically before dispatch. Spec must include a Completion Boundary section.',
+          timestamp: '2026-05-26T00:00:00.000Z',
+        }],
+      }),
+    ])
+    const coord = stubAgent('looma-coordinator', async () => {
+      throw new Error('coordinator should not approve a deterministic repair')
+    })
+    const orch = new Orchestrator({
+      config: baseConfig(),
+      agents: agentSet({ coordinators: { looma: coord } }),
+    })
+
+    const out = await orch.tick()
+
+    expect(out.kind).toBe('processed')
+    if (out.kind === 'processed') {
+      expect(out.agent).toBe('blueprint-sanity-review')
+      expect(out.afterStatus).toBe('ready')
+    }
+    expect(coord.calls).toHaveLength(0)
+    const queue = await readQueue()
+    expect(queue.tasks[0]!.status).toBe('ready')
+    expect(queue.tasks[0]!.notes.at(-1)?.content).toContain('approve_blueprint')
   })
 
   it('still leaves the reserved meta-intake draft idle for manual approval and clears stale ownership', async () => {

@@ -9449,6 +9449,17 @@ export async function runServe(opts: ServeOptions = {}): Promise<void> {
       }
     }
   })
+  server.on('error', err => {
+    const code = typeof err === 'object' && err !== null && 'code' in err
+      ? String((err as { code?: unknown }).code ?? '')
+      : ''
+    if (code === 'EADDRINUSE') {
+      console.error(`[guildhall serve] Port ${port} is already in use; another Guildhall service is already running.`)
+      process.exit(0)
+    }
+    console.error(`[guildhall serve] Server error: ${err instanceof Error ? err.message : String(err)}`)
+    process.exit(1)
+  })
 
   // FR-28 / AC-19: cooperative shutdown. SIGINT (Ctrl+C) and SIGTERM both
   // drive the same path: stop every running supervisor (which writes the

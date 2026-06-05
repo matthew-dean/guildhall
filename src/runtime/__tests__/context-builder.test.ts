@@ -592,6 +592,32 @@ describe('buildContext — task summary', () => {
     expect(files).not.toContain(path.join(projectRoot, 'looma', 'docs', 'editor-roadmap.md'))
   })
 
+  it('strips stale imported project prefixes when the current worktree has the deprojected file', async () => {
+    const worktree = path.join(tmpDir, '.guildhall', 'worktrees', 'task-context-menu')
+    await fs.mkdir(path.join(worktree, 'docs'), { recursive: true })
+    await fs.writeFile(path.join(worktree, 'docs', 'component-roadmap.md'), '# Components\n', 'utf8')
+    const taskWithStaleImportedSource: Task = {
+      ...baseTask,
+      title: 'ContextMenu',
+      description: 'looma/docs/component-roadmap.md: - [ ] ContextMenu',
+      projectPath: path.join(tmpDir, 'looma-knit', 'looma'),
+      worktreePath: worktree,
+      spec: 'Build ContextMenu from looma/docs/component-roadmap.md.',
+      notes: [
+        {
+          agentId: 'workspace-importer',
+          role: 'importer',
+          content: 'Imported from: looma/docs/component-roadmap.md',
+          timestamp: '2026-05-19T00:00:00.000Z',
+        },
+      ],
+    }
+
+    const files = resolveLikelyTaskFiles(taskWithStaleImportedSource)
+    expect(files).toContain(path.join(worktree, 'docs', 'component-roadmap.md'))
+    expect(files).not.toContain(path.join(worktree, 'looma', 'docs', 'component-roadmap.md'))
+  })
+
   it('resolves Nuxt server hints under web/server when the task root is the app project', async () => {
     const worktree = path.join(tmpDir, '.guildhall', 'worktrees', 'task-invite')
     await fs.mkdir(path.join(worktree, 'web', 'server', 'api', 'workspaces'), { recursive: true })

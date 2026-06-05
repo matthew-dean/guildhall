@@ -366,6 +366,13 @@ function hasBlueprintSanityReview(task: Task): boolean {
   return task.notes.some((note) => note.role === 'blueprint-review')
 }
 
+function hasDeterministicSpecRepairNote(task: Task): boolean {
+  return task.notes.some((note) =>
+    note.agentId === 'coordinator-recovery' &&
+    /repaired a malformed spec_review blueprint deterministically/i.test(note.content ?? ''),
+  )
+}
+
 function hasUsableBlueprint(task: Task): boolean {
   return validateSpecCompletionBoundary(task).ok
 }
@@ -2547,6 +2554,12 @@ export class Orchestrator {
     if (task.status === 'spec_review') {
       await this.normalizeSpecReviewOwnership(task)
     }
+
+    const malformedSpecReviewRepair = await this.maybeRepairMalformedSpecReviewBlueprint(task)
+    if (malformedSpecReviewRepair) return malformedSpecReviewRepair
+
+    const repairedSpecReviewApproval = await this.maybeApproveDeterministicallyRepairedSpec(task)
+    if (repairedSpecReviewApproval) return repairedSpecReviewApproval
 
     const recoverySpecSeed = await this.maybeWriteExploringRecoverySpecSeed(task)
     if (recoverySpecSeed) return recoverySpecSeed
@@ -5262,6 +5275,19 @@ export class Orchestrator {
                 : "This task reached spec_review, but its spec field is empty. " +
                   "Write the implementation spec into the task spec via update-task before any coordinator or worker proceeds. " +
                   "Do not transition out of spec_review until the spec field is populated.",
+          }
+        }
+        if (task.id !== META_INTAKE_TASK_ID) {
+          const blueprintQuality = validateSpecCompletionBoundary(task)
+          if (!blueprintQuality.ok) {
+            return {
+              kind: 'agent',
+              agent: this.opts.agents.spec,
+              promptSuffix:
+                "This task reached spec_review, but deterministic blueprint validation says it is not ready for coordinator approval. " +
+                `Repair the saved spec before implementation. Missing/invalid items: ${blueprintQuality.errors.join(' ')} ` +
+                "Write a full implementation spec with a complete '## Completion Boundary' section via update-task, keep or improve acceptance criteria, and leave status as 'spec_review' for coordinator review.",
+            }
           }
         }
         const coord = this.opts.agents.coordinators[task.domain]
@@ -8014,6 +8040,185 @@ export class Orchestrator {
       transitioned,
       revisionCount: task.revisionCount,
       ...(hasOpenQuestion || hasWaitingOwnerInput ? { waitingOnUser: true } : {}),
+    }
+  }
+
+  private async maybeRepairMalformedSpecReviewBlueprint(task: Task): Promise<TickOutcome | null> {
+    if (task.status !== 'spec_review') return null
+    if (task.id === META_INTAKE_TASK_ID) return null
+    if (typeof task.spec !== 'string' || task.spec.trim().length === 0) return null
+    const blueprintQuality = validateSpecCompletionBoundary(task)
+    if (blueprintQuality.ok) return null
+
+    const now = this.now()
+    const queue = await this.readQueue()
+    const liveTask = queue.tasks.find((candidate) => candidate.id === task.id)
+    if (!liveTask || liveTask.status !== 'spec_review') return null
+    if (typeof liveTask.spec !== 'string' || liveTask.spec.trim().length === 0) return null
+    const liveQuality = validateSpecCompletionBoundary(liveTask)
+    if (liveQuality.ok) return null
+
+    const answeredDecisions = recoverySpecSeedDecisionTexts(liveTask)
+    const sourceIntent = formatRecoverySpecSourceIntent(liveTask.description || liveTask.title)
+    const decisionLines = answeredDecisions.length > 0
+      ? answeredDecisions.map((decision) => `- ${decision}`).join('\n')
+      : '- No unresolved owner decisions are recorded on the task.'
+    const outOfScope = answeredDecisions
+      .filter((decision) => /\bout of scope|separate|not in scope|do not|don't/i.test(decision))
+      .map((decision) => `- ${decision}`)
+    const priorSpecSummary = liveTask.spec
+      .split('\n')
+      .map((line) => line.trim())
+      .filter(Boolean)
+      .slice(0, 6)
+      .join(' ')
+    const spec = [
+      '## Summary',
+      `Build ${liveTask.title} from the current project evidence, preserving the source intent: ${sourceIntent}`,
+      '',
+      'Prior draft notes:',
+      priorSpecSummary ? `- ${priorSpecSummary}` : '- No usable prior draft details were available.',
+      '',
+      'Resolved owner decisions:',
+      decisionLines,
+      '',
+      '## Acceptance Criteria',
+      `1. Given the existing project conventions and source evidence, when ${liveTask.title} is implemented, then the feature appears in the appropriate repo surface without introducing a one-off parallel pattern.`,
+      `2. Given the resolved owner decisions above, when the task is reviewed, then the implementation honors each recorded scope choice and leaves explicitly separate work out of this task.`,
+      '3. Given the implementation is complete, when the relevant project checks or review proof run, then the commands, screenshots, or manual verification prove the behavior.',
+      '',
+      '## Out of Scope',
+      ...(outOfScope.length > 0 ? outOfScope : ['- Work not implied by the source evidence, prior draft, or resolved owner decisions.']),
+      '',
+      '## Open Questions',
+      '- None known from the current task record. If the coordinator finds a product decision still missing, send this task back to exploring with one focused question.',
+      '',
+      '## Completion Boundary',
+      `- Product outcome: A user can use ${liveTask.title} in the intended project surface.`,
+      '- What Guildhall can complete in code: the repo-local component, integration, tests, docs/story evidence, and proof artifacts required by the implementation.',
+      '- External dependencies: None known from the current task record.',
+      '- Owner-only setup: None known.',
+      '- Verification environment: The local project checkout and any existing app/demo/story surface named by the repo.',
+      '- What counts as done: The behavior is implemented, reviewed against the resolved scope decisions, and backed by recorded verification.',
+      '- What must be split or blocked: Any external setup, missing dependency, or newly discovered product decision that cannot be resolved from current evidence.',
+    ].join('\n')
+
+    liveTask.spec = spec
+    liveTask.acceptanceCriteria = parseAcceptanceCriteriaFromSpec(spec)
+    liveTask.productBrief ??= {
+      userJob: `I want ${liveTask.title} turned into concrete project work using the evidence and owner decisions already recorded.`,
+      successMetric: `${liveTask.title} has a reviewable spec, acceptance criteria, and a clear completion boundary before implementation starts.`,
+      antiPatterns: [
+        'Do not preserve stale recovery-loop wording as the task brief.',
+        'Do not ask the owner to re-answer decisions already recorded on the task.',
+      ],
+      authoredBy: 'coordinator-recovery',
+      authoredAt: now,
+    }
+    liveTask.assignedTo = null
+    liveTask.updatedAt = now
+    liveTask.notes.push({
+      agentId: 'coordinator-recovery',
+      role: 'system',
+      content:
+        `Guildhall repaired a malformed spec_review blueprint deterministically before dispatch. ${liveQuality.errors.join(' ')}`,
+      timestamp: now,
+    })
+    queue.lastUpdated = now
+    await this.writeQueue(queue)
+    await this.emitBackendEvent({
+      type: 'line_complete',
+      task_id: liveTask.id,
+      agent_name: 'coordinator-recovery',
+      message:
+        'Guildhall repaired the malformed spec draft so coordinator review can continue without another stalled spec-agent pass.',
+    })
+    return {
+      kind: 'processed',
+      taskId: liveTask.id,
+      agent: 'coordinator-recovery',
+      beforeStatus: 'spec_review',
+      afterStatus: 'spec_review',
+      transitioned: false,
+      revisionCount: liveTask.revisionCount,
+    }
+  }
+
+  private async maybeApproveDeterministicallyRepairedSpec(task: Task): Promise<TickOutcome | null> {
+    if (task.status !== 'spec_review') return null
+    if (task.id === META_INTAKE_TASK_ID) return null
+    if (!hasDeterministicSpecRepairNote(task)) return null
+    const blueprintQuality = validateSpecCompletionBoundary(task)
+    if (!blueprintQuality.ok) return null
+
+    const now = this.now()
+    const queue = await this.readQueue()
+    const liveTask = queue.tasks.find((candidate) => candidate.id === task.id)
+    if (!liveTask || liveTask.status !== 'spec_review') return null
+    if (!hasDeterministicSpecRepairNote(liveTask)) return null
+    const liveQuality = validateSpecCompletionBoundary(liveTask)
+    if (!liveQuality.ok) return null
+
+    if (!hasBlueprintSanityReview(liveTask)) {
+      liveTask.notes.push({
+        agentId: 'blueprint-sanity-review',
+        role: 'blueprint-review',
+        content: 'approve_blueprint: Deterministically repaired spec has a usable completion boundary. Worker may build against it.',
+        timestamp: now,
+      })
+    } else {
+      liveTask.notes.push({
+        agentId: 'blueprint-sanity-review',
+        role: 'blueprint-review',
+        content: 'approve_blueprint: Deterministically repaired spec revalidated with a usable completion boundary. Worker may build against it.',
+        timestamp: now,
+      })
+    }
+    const transitionResult = applyTaskTransition({
+      task: liveTask,
+      event: 'mark_ready',
+      actor: 'blueprint-sanity-review',
+      evidenceRefs: ['task:deterministic-spec-repair'],
+      now,
+    })
+    if (transitionResult.kind === 'rejected') {
+      liveTask.notes.push({
+        agentId: 'blueprint-sanity-review',
+        role: 'blueprint-review',
+        content: `deterministic spec repair could not be approved: ${transitionResult.reason}`,
+        timestamp: now,
+      })
+      liveTask.updatedAt = now
+      queue.lastUpdated = now
+      await this.writeQueue(queue)
+      return {
+        kind: 'agent-error',
+        taskId: liveTask.id,
+        agent: 'blueprint-sanity-review',
+        error: transitionResult.reason,
+      }
+    }
+
+    liveTask.status = transitionResult.nextState
+    liveTask.assignedTo = null
+    liveTask.updatedAt = now
+    queue.lastUpdated = now
+    await this.writeQueue(queue)
+    await this.emitBackendEvent({
+      type: 'line_complete',
+      task_id: liveTask.id,
+      agent_name: 'blueprint-sanity-review',
+      message:
+        'Guildhall approved the deterministically repaired spec so worker implementation can start.',
+    })
+    return {
+      kind: 'processed',
+      taskId: liveTask.id,
+      agent: 'blueprint-sanity-review',
+      beforeStatus: 'spec_review',
+      afterStatus: liveTask.status,
+      transitioned: true,
+      revisionCount: liveTask.revisionCount,
     }
   }
 
