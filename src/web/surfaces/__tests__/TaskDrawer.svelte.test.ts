@@ -240,7 +240,7 @@ describe('TaskDrawer', () => {
       'href',
       '/projects/looma-knit/overview',
     )
-    expect(screen.getByText('task-link-editor')).toBeInTheDocument()
+    expect(screen.getByText('T-001')).toBeInTheDocument()
     await screen.findByText('Review plan')
     expect(screen.getByText('Balanced review')).toBeInTheDocument()
     expect(screen.getByText('1 reviewer group')).toBeInTheDocument()
@@ -906,7 +906,7 @@ describe('TaskDrawer', () => {
     expect(history.state).toEqual({ backgroundPath: '/projects/looma-knit/overview' })
   })
 
-  it('shows hierarchy-native containing work in the drawer overview', async () => {
+  it('shows hierarchy-native containing work in the drawer breadcrumb without duplicating parent path', async () => {
     const payload = drawerPayload({
       threadTurns: [],
       task: {
@@ -918,11 +918,20 @@ describe('TaskDrawer', () => {
         },
         workKind: 'implementation',
       },
+      relatedTasks: [
+        {
+          ...drawerPayload().task,
+          id: 'task-feature-spec',
+          title: 'ContextMenu',
+          status: 'ready',
+          hierarchy: { childIds: ['task-link-editor'], order: 0 },
+        },
+      ],
     })
     const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
       const url = String(input)
       if (url.startsWith('/api/project/task/task-link-editor')) return json(payload)
-      if (url.startsWith('/api/project')) return json(projectDetail())
+      if (url.startsWith('/api/project')) return json({ ...projectDetail(), tasks: [payload.relatedTasks![0], payload.task] })
       return json({})
     })
     vi.stubGlobal('fetch', fetchMock)
@@ -934,11 +943,16 @@ describe('TaskDrawer', () => {
     })
 
     await screen.findByText('Task links')
-    expect(screen.getByText('Parent path')).toBeInTheDocument()
-    expect(screen.getByRole('link', { name: 'task-feature-spec' })).toHaveAttribute(
+    expect(screen.queryByText('Parent path')).not.toBeInTheDocument()
+    expect(screen.getByRole('link', { name: 'Looma + Knit' })).toHaveAttribute(
+      'href',
+      '/projects/looma-knit/overview',
+    )
+    expect(screen.getByRole('link', { name: 'T-001' })).toHaveAttribute(
       'href',
       '/projects/looma-knit/task/task-feature-spec',
     )
+    expect(screen.getByText('T-002')).toBeInTheDocument()
     expect(screen.queryByText('No parent goal recorded.')).not.toBeInTheDocument()
     expect(document.body.textContent).not.toMatch(/parent task/i)
   })

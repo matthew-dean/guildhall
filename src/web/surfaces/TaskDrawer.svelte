@@ -34,6 +34,8 @@
   import { toast } from '../lib/toast.svelte.js'
   import { activeEscalations } from '../lib/escalation.js'
   import { escalationPrimaryAction, escalationUserGuidance } from '../lib/escalation-labels.js'
+  import { taskDisplayKey } from '../lib/identifier-labels.js'
+  import { humanizeProjectName } from '../lib/project-name.js'
   import { readableTaskDescription } from '../lib/task-display.js'
   import { unresolvedCompletionEscalations } from '../lib/task-drawer-integrity.js'
 
@@ -493,12 +495,34 @@
   }
 
   const task = $derived(payload?.task)
+  const allTaskContext = $derived.by(() => {
+    const byId = new Map<string, Task>()
+    for (const candidate of [...(project.detail?.tasks ?? []), ...(payload?.relatedTasks ?? []), task]) {
+      if (candidate?.id && !byId.has(candidate.id)) byId.set(candidate.id, candidate)
+    }
+    return [...byId.values()]
+  })
   const taskLinkContext = $derived.by(() => {
     const byId = new Map<string, Task>()
     for (const candidate of [...(payload?.relatedTasks ?? []), ...(project.detail?.tasks ?? [])]) {
       if (candidate?.id && candidate.id !== task?.id) byId.set(candidate.id, candidate)
     }
     return [...byId.values()]
+  })
+  const breadcrumbTasks = $derived.by(() => {
+    if (!task) return []
+    const byId = new Map(allTaskContext.map(candidate => [candidate.id, candidate]))
+    const trail: Task[] = []
+    const seen = new Set<string>([task.id])
+    let next = task.hierarchy?.parentId?.trim()
+    while (next && !seen.has(next)) {
+      const parent = byId.get(next)
+      if (!parent) break
+      trail.unshift(parent)
+      seen.add(next)
+      next = parent.hierarchy?.parentId?.trim()
+    }
+    return [...trail, task]
   })
   const runStatus = $derived(payload?.runStatus ?? project.detail?.run?.status ?? 'stopped')
   const availabilityStatus = $derived(payload?.availability?.status ?? project.detail?.availability?.status ?? 'active')
@@ -662,7 +686,7 @@
     const name = project.detail?.name?.trim()
     if (name) return name
     const id = scopedProjectId()
-    return id ? id.replace(/[-_]+/g, ' ') : 'Project'
+    return humanizeProjectName(id)
   })
   const displayTaskDescription = $derived.by(() => {
     if (!task || typeof task.description !== 'string') return ''
@@ -842,8 +866,26 @@
     <div class="drawer-title-block">
       <nav class="drawer-breadcrumb" aria-label="Task breadcrumb">
         <a href={drawerProjectHref('/overview')}>{drawerProjectLabel}</a>
-        <span aria-hidden="true">/</span>
-        <span>{task?.id ?? taskId}</span>
+        {#each breadcrumbTasks as crumb, index (crumb.id)}
+          <span aria-hidden="true">/</span>
+          {#if index < breadcrumbTasks.length - 1}
+            <a
+              href={currentTaskHref(crumb.id, scopedProjectId())}
+              onclick={(event) => {
+                event.preventDefault()
+                navigateToRelatedTask(crumb.id)
+              }}
+            >
+              {taskDisplayKey(crumb, allTaskContext)}
+            </a>
+          {:else}
+            <span>{taskDisplayKey(crumb, allTaskContext)}</span>
+          {/if}
+        {/each}
+        {#if breadcrumbTasks.length === 0}
+          <span aria-hidden="true">/</span>
+          <span>{taskDisplayKey(taskId, allTaskContext)}</span>
+        {/if}
       </nav>
       <h3>{displayTaskTitle}</h3>
       {#if displayTaskDescription}

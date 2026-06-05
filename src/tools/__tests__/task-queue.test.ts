@@ -409,7 +409,13 @@ describe('updateTask', () => {
       createdBy: 'coordinator-test',
     }
 
-    await updateTask({ tasksPath, taskId: 'task-001', status: 'ready', workUnitAnalysis })
+    await updateTask({
+      tasksPath,
+      taskId: 'task-001',
+      status: 'ready',
+      workUnitAnalysis,
+      delivery: { driver: 'knit', provider: 'looma', supports: ['task-knit-context-actions'] },
+    })
     await updateTask({ tasksPath, taskId: 'task-001', status: 'ready', workUnitAnalysis })
 
     const raw = JSON.parse(await fs.readFile(tasksPath, 'utf-8'))
@@ -431,6 +437,14 @@ describe('updateTask', () => {
     expect(parent.sizePlan.recommendedChildren.map((child: { createdTaskId?: string }) => child.createdTaskId)).toEqual(
       children.map((task: { id: string }) => task.id),
     )
+    expect(children.find((task: { title: string }) => task.title === 'Component implementation')?.workKind).toBe('component')
+    expect(children.find((task: { title: string }) => task.title === 'Storybook story')?.workKind).toBe('story')
+    expect(children.every((task: { delivery?: { driver?: string; provider?: string; supports?: string[] } }) =>
+      task.delivery?.driver === 'knit' &&
+      task.delivery?.provider === 'looma' &&
+      task.delivery?.supports?.includes('task-001') &&
+      task.delivery?.supports?.includes('task-knit-context-actions'),
+    )).toBe(true)
     expect(children.find((task: { title: string }) => task.title === 'Storybook story')?.dependsOn).toEqual([
       'task-001-split-component-implementation',
     ])

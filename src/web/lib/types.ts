@@ -392,6 +392,7 @@ export interface GitStorySummary {
 
 export interface Task {
   id: string
+  displayKey?: string
   title?: string
   description?: string
   status?: string
@@ -473,6 +474,11 @@ export interface Task {
   workKind?:
     | 'app_spec'
     | 'feature_spec'
+    | 'feature'
+    | 'primitive'
+    | 'component'
+    | 'story'
+    | 'test'
     | 'implementation'
     | 'setup'
     | 'verification'
@@ -482,6 +488,11 @@ export interface Task {
     | 'cleanup'
     | 'learning'
     | string
+  delivery?: {
+    driver?: string
+    provider?: string
+    supports?: string[]
+  }
   hierarchy?: {
     parentId?: string
     childIds?: string[]

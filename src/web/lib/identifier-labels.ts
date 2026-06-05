@@ -1,5 +1,11 @@
 import type { Task } from './types.js'
 
+export interface TaskDisplayKeyInput {
+  id?: string
+  displayKey?: string
+  title?: string
+}
+
 export type IdentifierKind = 'agent' | 'domain' | 'status' | 'priority' | 'progress' | 'task' | 'run-reason'
 export type IdentifierTone = 'accent' | 'ok' | 'warn' | 'danger' | 'neutral'
 
@@ -86,6 +92,25 @@ export function friendlyTaskId(taskId: string | undefined): string {
   if (!raw) return 'Task'
   const suffix = raw.match(/(\d+)$/)?.[1]
   return suffix ? `Task ${Number.parseInt(suffix, 10)}` : titleize(raw)
+}
+
+export function taskDisplayKey(task: TaskDisplayKeyInput | string | undefined, tasks: TaskDisplayKeyInput[] = []): string {
+  const taskId = typeof task === 'string' ? task : task?.id
+  const explicit = typeof task === 'object' ? task?.displayKey?.trim() : undefined
+  if (explicit) return explicit
+  const normalizedId = taskId?.trim()
+  if (!normalizedId) return 'Task'
+  const existing = tasks.find(candidate => candidate.id === normalizedId)
+  const existingExplicit = existing?.displayKey?.trim()
+  if (existingExplicit) return existingExplicit
+  const index = tasks.findIndex(candidate => candidate.id === normalizedId)
+  if (index >= 0) return `T-${String(index + 1).padStart(3, '0')}`
+  const suffix = normalizedId.match(/(?:^|[-_])(?:task|t)[-_]?(\d+)$/i)?.[1] ?? normalizedId.match(/(\d+)$/)?.[1]
+  return suffix ? `T-${String(Number.parseInt(suffix, 10)).padStart(3, '0')}` : friendlyTaskId(normalizedId)
+}
+
+export function taskDisplayLabel(task: TaskDisplayKeyInput | string | undefined, tasks: TaskDisplayKeyInput[] = []): string {
+  return taskDisplayKey(task, tasks)
 }
 
 export function taskTitleMap(tasks: Task[]): Record<string, string> {

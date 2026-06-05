@@ -15,6 +15,7 @@ import {
   TaskStatus,
   WorkUnitAnalysis,
   StructuredSpec,
+  TaskDelivery,
   buildTaskSizePlan,
   parseAcceptanceCriteriaFromSpec,
   renderStructuredSpecMarkdown,
@@ -95,6 +96,7 @@ const updateTaskInputSchema = z.object({
   structuredSpec: StructuredSpec.optional(),
   acceptanceCriteria: z.array(AcceptanceCriteria).optional(),
   workUnitAnalysis: WorkUnitAnalysis.optional(),
+  delivery: TaskDelivery.optional(),
   gateResults: z.array(GateResult).optional(),
   completedAt: z.string().optional(),
 })
@@ -137,7 +139,7 @@ export async function updateTask(
         success: false,
         taskId,
         error:
-          'No task mutation provided. Set at least one of title, status, assignedTo, note, blockReason, humanJudgment, spec, structuredSpec, acceptanceCriteria, gateResults, or completedAt.',
+          'No task mutation provided. Set at least one of title, status, assignedTo, note, blockReason, humanJudgment, spec, structuredSpec, acceptanceCriteria, workUnitAnalysis, delivery, gateResults, or completedAt.',
       }
     }
     if (input.spec !== undefined && input.structuredSpec !== undefined) {
@@ -279,6 +281,9 @@ export async function updateTask(
     }
     if (input.workUnitAnalysis !== undefined) {
       task.workUnitAnalysis = WorkUnitAnalysis.parse(input.workUnitAnalysis)
+    }
+    if (input.delivery !== undefined) {
+      task.delivery = TaskDelivery.parse(input.delivery)
     }
     const gateEvidence = input.gateResults !== undefined && input.gateResults.length > 0
       ? z.array(GateResult).parse(input.gateResults)
@@ -476,6 +481,7 @@ function createSplitChildTask(input: {
   timestamp: string
 }): TaskRecord {
   const id = uniqueSplitChildTaskId(input.queue, input.parent.id, input.title, input.index)
+  const workKind = splitChildWorkKind(input.title)
   return Task.parse({
     id,
     title: input.title,
@@ -507,10 +513,27 @@ function createSplitChildTask(input: {
     origination: 'system',
     proposedBy: 'task-sizing',
     proposalRationale: input.reason,
+    workKind,
+    delivery: {
+      ...(input.parent.delivery ?? {}),
+      supports: [
+        input.parent.id,
+        ...(input.parent.delivery?.supports ?? []),
+      ].filter((supportId, index, all) => all.indexOf(supportId) === index),
+    },
     businessEnvelope: input.parent.businessEnvelope,
     createdAt: input.timestamp,
     updatedAt: input.timestamp,
   })
+}
+
+function splitChildWorkKind(title: string): TaskRecord['workKind'] {
+  const normalized = normalizeTaskTitle(title)
+  if (/\bprimitive\b|\bmenuitem\b|\bmenu item\b/.test(normalized)) return 'primitive'
+  if (/\bstorybook\b|\bstory\b/.test(normalized)) return 'story'
+  if (/\btest\b|\be2e\b|\bproof\b|\bverification\b/.test(normalized)) return 'test'
+  if (/\bcomponent\b|\bimplementation\b/.test(normalized)) return 'component'
+  return 'implementation'
 }
 
 function uniqueSplitChildTaskId(queue: TaskQueueRecord, parentId: string, title: string, index: number): string {
@@ -620,6 +643,7 @@ function hasTaskMutation(input: UpdateTaskInput): boolean {
     input.structuredSpec !== undefined ||
     input.acceptanceCriteria !== undefined ||
     input.workUnitAnalysis !== undefined ||
+    input.delivery !== undefined ||
     input.gateResults !== undefined ||
     input.completedAt !== undefined
 }

@@ -599,6 +599,11 @@ export type TaskRequest = z.infer<typeof TaskRequest>
 export const WorkKind = z.enum([
   'app_spec',
   'feature_spec',
+  'feature',
+  'primitive',
+  'component',
+  'story',
+  'test',
   'implementation',
   'setup',
   'verification',
@@ -609,6 +614,13 @@ export const WorkKind = z.enum([
   'learning',
 ])
 export type WorkKind = z.infer<typeof WorkKind>
+
+export const TaskDelivery = z.object({
+  driver: z.string().optional(),
+  provider: z.string().optional(),
+  supports: z.array(z.string()).default([]),
+})
+export type TaskDelivery = z.infer<typeof TaskDelivery>
 
 export const WorkHierarchy = z.object({
   parentId: z.string().optional(),
@@ -864,6 +876,7 @@ export type RequestIntake = z.infer<typeof RequestIntake>
 
 export const Task = z.object({
   id: z.string(),
+  displayKey: z.string().optional(),
   title: z.string(),
   description: z.string(),
 
@@ -980,6 +993,7 @@ export const Task = z.object({
   origination: TaskOrigination.default('human'),
   proposedBy: z.string().optional(),          // agent id that proposed the task
   proposalRationale: z.string().optional(),   // why the proposing agent thinks this is worth doing
+  delivery: TaskDelivery.optional(),
   businessEnvelope: BusinessEnvelope.optional(),
   workKind: WorkKind.optional(),
   // Work containment is represented by hierarchy links, never by task status.

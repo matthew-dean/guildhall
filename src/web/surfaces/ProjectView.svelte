@@ -37,6 +37,8 @@
   import { path, nav } from '../lib/nav.svelte.js'
   import { currentProjectHref, projectActionHref, projectFetch } from '../lib/project-routes.js'
   import { buildProjectTicker } from '../lib/project-activity.js'
+  import { dedupeProjectAttention } from '../lib/project-attention.js'
+  import { advancedStructureEnabled } from '../lib/feature-flags.js'
   import { buildProviderIndicator } from '../lib/provider-indicator.js'
   import { formatUserPath } from '../lib/display-path.js'
   import { humanizeProjectName } from '../lib/project-name.js'
@@ -45,6 +47,21 @@
   import type { InboxItem } from '../lib/inbox-item-key.js'
   import type { AlertBandTone } from '../../../packages/ui/src/components/types.js'
   import type { AgentQuestion, EventEnvelope, ProjectMigrationStatus, ProjectMigrationStatusItem, ProjectView, ProviderStatus, Task } from '../lib/types.js'
+
+  interface ShellAttentionNotice {
+    id: string
+    key?: string
+    code?: string | null
+    reason?: string | null
+    message: string
+    href?: string | null
+    priority: number
+    tone: AlertBandTone
+    role: 'alert' | 'status'
+    ariaLabel: string
+    actionHref?: string | null
+    actionLabel?: string | null
+  }
 
   interface Props {
     initialView?: ProjectView
@@ -344,6 +361,7 @@
 
   const coordinators = $derived(project.detail?.config?.coordinators ?? [])
   const needsMeta = $derived(coordinators.length === 0)
+  const showAdvancedStructure = advancedStructureEnabled()
 
   const entries = $derived<NavEntry[]>([
     {
@@ -355,7 +373,7 @@
         { id: 'overview', label: 'Overview', path: currentProjectHref('/overview', activeProjectId) },
         { id: 'inbox', label: 'Needs you', path: currentProjectHref('/overview/inbox', activeProjectId) },
         { id: 'facts', label: 'Facts', path: currentProjectHref('/facts', activeProjectId) },
-        { id: 'structure', label: 'Structure', path: currentProjectHref('/structure', activeProjectId) },
+        ...(showAdvancedStructure ? [{ id: 'structure', label: 'Structure', path: currentProjectHref('/structure', activeProjectId) }] : []),
       ],
     },
     { id: 'thread', label: 'Threads', icon: 'sparkles', suffix: '/thread' },
@@ -398,7 +416,7 @@
   }
 
   function sectionIsActive(id: NavSectionId) {
-    if (id === 'project') return currentView === 'overview' || currentView === 'facts' || currentView === 'structure'
+    if (id === 'project') return currentView === 'overview' || currentView === 'facts' || (showAdvancedStructure && currentView === 'structure')
     return currentView === id
   }
 
@@ -408,7 +426,7 @@
     if (sectionId === 'project') {
       if (currentView === 'overview') return currentSub === 'inbox' ? subId === 'inbox' : subId === 'overview'
       if (currentView === 'facts') return subId === 'facts'
-      if (currentView === 'structure') return subId === 'structure'
+      if (showAdvancedStructure && currentView === 'structure') return subId === 'structure'
     }
 
     if (sectionId === 'work' && currentView === 'work') {
@@ -862,6 +880,40 @@
     if (blockers.bootstrap) return 'Open readiness checks'
     return startReadinessActionLabel(startReadiness?.message)
   })
+  const shellAttentionNotices = $derived.by(() => {
+    if (!detail) return []
+    const notices: ShellAttentionNotice[] = []
+    if (startReadinessNoticeHref && startReadinessNoticeLabel && startReadiness?.message) {
+      notices.push({
+        id: 'start-readiness',
+        code: startReadiness.code,
+        message: startReadiness.message,
+        href: startReadinessNoticeHref,
+        priority: 10,
+        tone: 'attention',
+        role: 'alert',
+        ariaLabel: 'Needs you',
+        actionHref: startReadinessNoticeHref,
+        actionLabel: startReadinessNoticeLabel,
+      })
+    }
+    if (runStopSummaryText) {
+      const runStopTone = shellAlertTone(runStopSummarySeverity)
+      notices.push({
+        id: 'run-stop-summary',
+        reason: runStopSummary?.stopReason ?? null,
+        message: runStopSummaryText,
+        href: runStopActionHref,
+        priority: 20,
+        tone: runStopTone,
+        role: runStopTone === 'accent' ? 'status' : 'alert',
+        ariaLabel: runStopTone === 'danger' ? 'Blocked' : runStopTone === 'warn' ? 'Needs attention' : 'Status',
+        actionHref: runStopActionHref,
+        actionLabel: runStopActionLabel,
+      })
+    }
+    return dedupeProjectAttention(notices)
+  })
   const bootstrapFailureText = $derived.by(() => {
     const step = failedBootstrapStep
     if (!step) return null
@@ -994,13 +1046,6 @@
     if (/recover|blocked|escalation/i.test(message ?? '')) return 'Review recovery'
     return 'Open next action'
   }
-  const showRunStopSummaryNotice = $derived.by(() => {
-    if (!runStopSummaryText) return false
-    if (startReadiness?.code === 'owner_input_required' || startReadiness?.code === 'required_migration_pending') {
-      return false
-    }
-    return true
-  })
 </script>
 
 <svelte:document onclick={handleDocumentClick} />
@@ -1408,39 +1453,23 @@
             <strong>{allTerminalReadinessMessage}</strong>
           </AlertBand>
         {/if}
-        {#if detail && startReadinessNoticeHref && startReadinessNoticeLabel && startReadiness?.message}
+        {#each shellAttentionNotices as notice (notice.key ?? notice.id)}
           <AlertBand
-            tone="attention"
-            role="alert"
+            tone={notice.tone}
+            role={notice.role}
             density="compact"
-            ariaLabel="Needs you"
+            ariaLabel={notice.ariaLabel}
           >
-            <strong>{startReadiness.message}</strong>
+            <strong>{notice.message}</strong>
             {#snippet actions()}
-              <a href={startReadinessNoticeHref} onclick={(e) => { e.preventDefault(); nav(startReadinessNoticeHref) }}>
-                {startReadinessNoticeLabel}
-              </a>
-            {/snippet}
-          </AlertBand>
-        {/if}
-        {#if detail && showRunStopSummaryNotice}
-          {@const runStopTone = shellAlertTone(runStopSummarySeverity)}
-          <AlertBand
-            tone={runStopTone}
-            role={runStopTone === 'accent' ? 'status' : 'alert'}
-            density="compact"
-            ariaLabel={runStopTone === 'danger' ? 'Blocked' : runStopTone === 'warn' ? 'Needs attention' : 'Status'}
-          >
-            <strong>{runStopSummaryText}</strong>
-            {#snippet actions()}
-              {#if runStopActionHref && runStopActionLabel}
-                <a href={runStopActionHref} onclick={(e) => { e.preventDefault(); nav(runStopActionHref) }}>
-                  {runStopActionLabel}
+              {#if notice.actionHref && notice.actionLabel}
+                <a href={notice.actionHref} onclick={(e) => { e.preventDefault(); nav(notice.actionHref ?? currentProjectHref('/overview', activeProjectId)) }}>
+                  {notice.actionLabel}
                 </a>
               {/if}
             {/snippet}
           </AlertBand>
-        {/if}
+        {/each}
     {/snippet}
         {#if detail && showDoThisNext}
           <DoThisNext />
@@ -1483,8 +1512,18 @@
             <WorkTab {detail} mode="board" />
           {:else if currentView === 'facts'}
             <FactsTab />
-          {:else if currentView === 'structure'}
+          {:else if currentView === 'structure' && showAdvancedStructure}
             <ProjectStructurePanel />
+          {:else if currentView === 'structure'}
+            <ProjectOverviewTab
+              {detail}
+              {inboxItems}
+              {inboxLoaded}
+              {inboxError}
+              {projectTicker}
+              {activeProjectId}
+              onMigrate={openMigrationModal}
+            />
           {:else if currentView === 'timeline'}
             <TimelineTab {detail} />
           {:else if currentView === 'release'}

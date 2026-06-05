@@ -68,18 +68,6 @@
       .filter((candidate) => candidate.id !== task.id && (candidate.dependsOn ?? []).includes(task.id))
       .map((candidate) => candidate.id),
   )
-  const parentTrail = $derived.by(() => {
-    const trail: string[] = []
-    const seen = new Set<string>([task.id])
-    let next = containingWorkId
-    while (next && !seen.has(next)) {
-      trail.unshift(next)
-      seen.add(next)
-      next = taskById.get(next)?.hierarchy?.parentId ?? null
-    }
-    return trail
-  })
-
   type ChipTone = 'neutral' | 'ok' | 'warn' | 'danger' | 'accent' | 'running'
 
   function token(value: string | undefined): string {
@@ -143,21 +131,6 @@
 
   <Card title="Task links" tone={splitStillNeedsAction ? 'warn' : 'default'}>
     <Stack gap="3">
-      {#if parentTrail.length > 0}
-        <div>
-          <h4>Parent path</h4>
-          <ol class="breadcrumb-list">
-            {#each parentTrail as parentId (parentId)}
-              <li>
-                <a href={currentTaskHref(parentId, projectId)} onclick={(event) => navigateTask(event, parentId)}>
-                  {taskLabel(parentId)}
-                </a>
-              </li>
-            {/each}
-          </ol>
-        </div>
-      {/if}
-
       {#if goalEnvelopeId}
         <div class="hierarchy-row">
           <span>Goal envelope</span>
@@ -259,7 +232,7 @@
         </div>
       {/if}
 
-      {#if parentTrail.length === 0 && nestedWorkIds.length === 0 && blockingTaskIds.length === 0 && blockedTaskIds.length === 0 && recommendedChildren.length === 0}
+      {#if nestedWorkIds.length === 0 && blockingTaskIds.length === 0 && blockedTaskIds.length === 0 && recommendedChildren.length === 0}
         <p class="muted">No linked tasks recorded.</p>
       {/if}
     </Stack>
@@ -402,15 +375,10 @@
     margin-top: var(--s-1);
   }
   .link-list,
-  .breadcrumb-list,
   .child-list,
   .factor-list {
     margin: 0;
     padding-left: var(--s-4);
-  }
-  .breadcrumb-list {
-    display: grid;
-    gap: var(--s-1);
   }
   .child-list {
     display: grid;

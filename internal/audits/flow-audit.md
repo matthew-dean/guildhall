@@ -9383,6 +9383,40 @@ continues in Knit.`, `exactCompactMatches: 0`, `estimatedLines: 3`,
 
 source: codex:overview-task-title-css-clamp-full-content
 
+2026-06-05T13:24:02Z - Centralized shell attention dedupe after the Looma +
+Knit overview showed two top-shell alerts for the same stopped-state owner
+blocker: `Review 35 waiting specs before starting.` and `Waiting on input: 35
+awaiting approval.` Root cause: `ProjectView` rendered start-readiness and
+run-stop/idle-summary notices through separate local branches, so a
+`no_unattended_progress` spec-approval blocker and an `awaiting_human`
+approval-count summary could both describe the same required owner action.
+Added `src/web/lib/project-attention.ts` to normalize attention seeds into
+stable keys such as `owner:spec_approval`, `owner:draft_review`, and
+`owner:brief_cleanup`, then dedupe by key before rendering. `ProjectView` now
+builds one `shellAttentionNotices` list and renders that list instead of
+driving duplicate AlertBand branches for start readiness and run-stop summary.
+
+Verification: Added helper coverage proving `Review 35 waiting specs before
+starting.` and `Waiting on input: 35 awaiting approval.` normalize to the same
+`owner:spec_approval` key and dedupe to the higher-priority start-readiness
+notice. Added ProjectView coverage for the stopped-state shell stack where
+start readiness and idle summary both report spec approval; the shell renders
+one `Review 2 waiting specs before starting.` alert, no `Waiting on input: 2
+awaiting approval.` alert, and one `Review spec` action. Commands passed:
+`pnpm vitest run src/web/lib/__tests__/project-attention.test.ts
+src/web/surfaces/__tests__/ProjectView.svelte.test.ts -t
+"project-attention|dedupes shell attention" --reporter=dot`, `pnpm build`,
+and `pnpm dev:install`. Restarted the installed service and confirmed
+`/api/stale-server` returned `stale:false` for PID `20348` and installed dist
+`/Users/matthew/.guildhall/app/0.10.0/app/dist/cli.js`. Live browser check on
+`/projects/looma-knit/overview?proof=shell-attention-dedupe-1780665810000`
+showed the project had resumed/running state (`Coordinator Run started...`),
+so the stopped-state duplicate alerts were not present to inspect without
+mutating the user's run state; the live page also had no stale-server banner
+after the final restart.
+
+source: codex:shell-attention-dedupe-spec-approval
+
 2026-06-05T03:09:55Z - Toned down repeated `Guildhall` mentions in Thread,
 task drawer, and recovery copy after a Looma + Knit screenshot showed the brand
 name stacking in task cards, recovery history, escalation guidance, and the

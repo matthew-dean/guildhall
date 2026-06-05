@@ -525,6 +525,41 @@ describe('ProjectView', () => {
     expect(screen.getByText('Spec review pending')).toBeInTheDocument()
   })
 
+  it('dedupes shell attention when spec approval blocks both start readiness and idle summary', async () => {
+    const projectPayload = detail({
+      startReadiness: {
+        canStart: false,
+        code: 'no_unattended_progress',
+        message: 'Review 2 waiting specs before starting.',
+        actionHref: '/thread',
+      },
+      tasks: [
+        task({ id: 'task-spec-a', title: 'Spec A', status: 'spec_review' }),
+        task({ id: 'task-spec-b', title: 'Spec B', status: 'spec_review' }),
+      ],
+      run: {
+        status: 'stopped',
+        mode: 'continuous',
+        stopSummary: {
+          stopReason: 'awaiting_human',
+          stopMessage: 'Waiting on input.',
+          idleSummary: { counts: { awaitingApproval: 2 } },
+        },
+      },
+    } as Partial<ProjectDetail>)
+    installFetchFakes(projectPayload)
+
+    await renderProjectView('overview', null, 'looma-knit', projectPayload)
+
+    const alerts = screen.getAllByRole('alert')
+    const specAlerts = alerts.filter(alert => within(alert).queryByText('Review 2 waiting specs before starting.'))
+    const idleAlerts = alerts.filter(alert => within(alert).queryByText('Waiting on input: 2 awaiting approval.'))
+
+    expect(specAlerts).toHaveLength(1)
+    expect(idleAlerts).toHaveLength(0)
+    expect(within(specAlerts[0]!).getByRole('link', { name: /review spec/i })).toBeInTheDocument()
+  })
+
   it('surfaces required migrations as the primary setup action and can apply them intentionally', async () => {
     const user = userEvent.setup()
     const migrationBlocked = detail({
@@ -1154,7 +1189,7 @@ describe('ProjectView', () => {
       expect(within(rail).getByRole('button', { name: 'Overview' })).toBeInTheDocument()
       expect(within(rail).getByRole('button', { name: 'Needs you' })).toBeInTheDocument()
       expect(within(rail).getByRole('button', { name: 'Facts' })).toBeInTheDocument()
-      expect(within(rail).getByRole('button', { name: 'Structure' })).toBeInTheDocument()
+      expect(within(rail).queryByRole('button', { name: 'Structure' })).not.toBeInTheDocument()
 
       shell?.dispatchEvent(new FocusEvent('focusin', { bubbles: true }))
       expect(shell).toHaveClass('rail-preview-open')
@@ -1199,7 +1234,7 @@ describe('ProjectView', () => {
     expect(within(rail).queryByRole('button', { name: 'Project provider settings' })).not.toBeInTheDocument()
   })
 
-  it('groups project orientation under Project with Needs you, Facts, and Structure', async () => {
+  it('groups simple project orientation under Project without advanced Structure by default', async () => {
     await renderProjectView('overview')
     const rail = screen.getByRole('complementary', { name: 'Project navigation' })
 
@@ -1207,7 +1242,7 @@ describe('ProjectView', () => {
     expect(within(rail).getByRole('button', { name: 'Overview' })).toBeInTheDocument()
     expect(within(rail).getByRole('button', { name: 'Needs you' })).toBeInTheDocument()
     expect(within(rail).getByRole('button', { name: 'Facts' })).toBeInTheDocument()
-    expect(within(rail).getByRole('button', { name: 'Structure' })).toBeInTheDocument()
+    expect(within(rail).queryByRole('button', { name: 'Structure' })).not.toBeInTheDocument()
     expect(within(rail).getByRole('button', { name: 'Threads' })).toBeInTheDocument()
     expect(within(rail).getByRole('button', { name: 'Work' })).toBeInTheDocument()
     expect(within(rail).getByRole('button', { name: 'Timeline' })).toBeInTheDocument()
@@ -1222,7 +1257,7 @@ describe('ProjectView', () => {
     expect(within(rail).getByRole('button', { name: 'Overview' })).toBeInTheDocument()
     expect(within(rail).getByRole('button', { name: 'Needs you' })).toBeInTheDocument()
     expect(within(rail).getByRole('button', { name: 'Facts' })).toHaveClass('active')
-    expect(within(rail).getByRole('button', { name: 'Structure' })).toBeInTheDocument()
+    expect(within(rail).queryByRole('button', { name: 'Structure' })).not.toBeInTheDocument()
     expect(within(rail).queryByRole('button', { name: 'Queue' })).not.toBeInTheDocument()
   })
 
