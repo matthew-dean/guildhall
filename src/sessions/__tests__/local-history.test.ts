@@ -97,6 +97,31 @@ describe('local history layout', () => {
     expect(inferProjectRootFromMemoryDir(systemStateDir)).toBe(path.resolve(projectRoot))
   })
 
+  it('preserves conflicting legacy state in system storage instead of overwriting or dropping it', async () => {
+    const projectRoot = path.join(tmp, 'repo')
+    const legacyDir = getProjectSharedStateDir(projectRoot)
+    const systemStateDir = getProjectSystemStateDir(projectRoot)
+    await fs.mkdir(legacyDir, { recursive: true })
+    await fs.writeFile(path.join(systemStateDir, 'TASKS.json'), JSON.stringify({
+      version: 1,
+      tasks: [{ id: 'system-task', status: 'ready' }],
+    }), 'utf8')
+    await fs.writeFile(path.join(legacyDir, 'TASKS.json'), JSON.stringify({
+      version: 1,
+      tasks: [{ id: 'legacy-task', status: 'blocked' }],
+    }), 'utf8')
+
+    const result = await migrateProjectStateToSystem(projectRoot)
+    const systemEntries = await fs.readdir(systemStateDir)
+    const conflictEntry = systemEntries.find(entry => entry.startsWith('TASKS.json.migration-conflict-'))
+
+    expect(result.migrated).toBe(true)
+    await expect(fs.readFile(path.join(systemStateDir, 'TASKS.json'), 'utf8')).resolves.toContain('system-task')
+    expect(conflictEntry).toBeTruthy()
+    await expect(fs.readFile(path.join(systemStateDir, conflictEntry!), 'utf8')).resolves.toContain('legacy-task')
+    await expect(fs.stat(path.join(legacyDir, 'TASKS.json'))).rejects.toMatchObject({ code: 'ENOENT' })
+  })
+
   it('reports size and oldest transcript for local history health', async () => {
     const projectRoot = path.join(tmp, 'repo')
     const transcriptPath = getProjectTranscriptPath(projectRoot, 'exploring', 'task-1')

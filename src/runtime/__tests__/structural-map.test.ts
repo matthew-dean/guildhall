@@ -3,6 +3,7 @@ import fsp from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
+import { getProjectStateDir } from '@guildhall/sessions'
 
 import {
   acceptStructuralMap,
@@ -406,7 +407,8 @@ describe('structural map drafting', () => {
       id: 'review-changed-package-example-core',
     }))
     expect(refresh.staleNodeIds).toEqual(expect.arrayContaining(['package:example-editor', 'domain:editor', 'exec:example-editor:test']))
-    expect(fs.existsSync(path.join(projectRoot, '.guildhall', 'structural-map', 'refreshes', `${refresh.id}.json`))).toBe(true)
+    expect(fs.existsSync(path.join(getProjectStateDir(projectRoot), 'structural-map', 'refreshes', `${refresh.id}.json`))).toBe(true)
+    expect(fs.existsSync(path.join(projectRoot, '.guildhall', 'structural-map'))).toBe(false)
   })
 
   it('runs structural discovery providers so package managers can be added without changing the draft core', async () => {
@@ -552,7 +554,8 @@ describe('structural map drafting', () => {
     }))
     await expect(structuralOwnerQuestionIds(projectRoot, draft.ownerInputRequestIds)).resolves.toContain('confirm-domain-routing')
     expect(fs.existsSync(path.join(projectRoot, 'guildhall.yaml'))).toBe(false)
-    expect(fs.existsSync(path.join(projectRoot, '.guildhall', 'structural-map', 'drafts', `${draft.id}.json`))).toBe(true)
+    expect(fs.existsSync(path.join(getProjectStateDir(projectRoot), 'structural-map', 'drafts', `${draft.id}.json`))).toBe(true)
+    expect(fs.existsSync(path.join(projectRoot, '.guildhall', 'structural-map'))).toBe(false)
   })
 
   it('uses a deterministic review state machine before a map becomes routing truth', async () => {
@@ -621,7 +624,8 @@ describe('structural map drafting', () => {
       'apply_correction',
       'accept',
     ])
-    expect(fs.existsSync(path.join(projectRoot, '.guildhall', 'structural-map', 'accepted.json'))).toBe(true)
+    expect(fs.existsSync(path.join(getProjectStateDir(projectRoot), 'structural-map', 'accepted.json'))).toBe(true)
+    expect(fs.existsSync(path.join(projectRoot, '.guildhall', 'structural-map'))).toBe(false)
   })
 })
 

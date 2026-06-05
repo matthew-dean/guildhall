@@ -20,15 +20,18 @@ export interface ProjectStateMemoryPrototypeReport {
 
 export async function ingestProjectStateForMemoryPrototype(input: {
   projectRoot: string
+  stateDir?: string
+  stateLabel?: string
   memory: GuildhallMemory
 }): Promise<ProjectStateMemoryPrototypeReport> {
-  const stateDir = path.join(input.projectRoot, '.guildhall')
+  const stateDir = input.stateDir ?? path.join(input.projectRoot, '.guildhall')
+  const stateLabel = input.stateLabel ?? '.guildhall'
   const files = await collectProjectStateFiles(stateDir)
   const reports: ProjectStatePrototypeFileReport[] = []
   let eventsRecorded = 0
 
   for (const file of files) {
-    const relativePath = path.relative(input.projectRoot, file)
+    const relativePath = path.join(stateLabel, path.relative(stateDir, file))
     const bytes = (await fs.stat(file)).size
     const report = await summarizeProjectStateFile(file, relativePath, bytes)
     reports.push(report)
@@ -163,7 +166,7 @@ async function summarizeTasksJson(
       bytes,
       eventType: 'task_queue_summary',
       action: 'summarize',
-      summary: `Task queue is ${formatBytes(bytes)} but could not be parsed.`,
+      summary: `Task queue at ${relativePath} is ${formatBytes(bytes)} but could not be parsed.`,
     }
   }
   return {
@@ -171,11 +174,12 @@ async function summarizeTasksJson(
     bytes,
     eventType: 'task_queue_summary',
     action: 'summarize',
-    summary: `Task queue is ${formatBytes(bytes)} with active=${active}, blocked=${blocked}, terminal=${terminal}.`,
+    summary: `Task queue at ${relativePath} is ${formatBytes(bytes)} with active=${active}, blocked=${blocked}, terminal=${terminal}.`,
   }
 }
 
 function isRelevantProjectStateFile(file: string): boolean {
+  if (path.basename(file) === 'project-state.json') return false
   return /\.(json|jsonl|md|ya?ml)$/i.test(file)
 }
 

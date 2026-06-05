@@ -2,6 +2,7 @@ import fs from 'node:fs/promises'
 import { existsSync } from 'node:fs'
 import path from 'node:path'
 
+import { getProjectStateDir, getProjectSharedStateDir } from '@guildhall/sessions'
 import { createDeterministicGuildhallMemory } from './deterministic.js'
 import { ingestProjectStateForMemoryPrototype } from './project-state-ingest.js'
 
@@ -45,9 +46,15 @@ export async function runMemoryCorePrototype(
 
   const projectReports: MemoryCorePrototypeProjectReport[] = []
   for (const projectRoot of options.projectRoots ?? DEFAULT_PROJECT_ROOTS) {
-    if (!existsSync(path.join(projectRoot, '.guildhall'))) continue
+    const sharedStateDir = getProjectSharedStateDir(projectRoot)
+    const systemStateDir = getProjectStateDir(projectRoot)
+    const useSystemState = hasMeaningfulProjectStateFiles(systemStateDir)
+    const useSharedState = !useSystemState && hasMeaningfulProjectStateFiles(sharedStateDir)
+    if (!useSystemState && !useSharedState) continue
+    const stateDir = useSystemState ? systemStateDir : sharedStateDir
+    const stateLabel = useSystemState ? 'system-state' : '.guildhall'
     const memory = createDeterministicGuildhallMemory({ projectRoot, storageRoot })
-    const ingest = await ingestProjectStateForMemoryPrototype({ projectRoot, memory })
+    const ingest = await ingestProjectStateForMemoryPrototype({ projectRoot, stateDir, stateLabel, memory })
     const compaction = await memory.compact({
       scope: { kind: 'project', projectRoot },
       reason: 'prototype-after-project-state-ingest',
@@ -114,6 +121,18 @@ function renderReport(report: MemoryCorePrototypeReport): string {
     lines.push('')
   }
   return `${lines.join('\n').trimEnd()}\n`
+}
+
+function hasMeaningfulProjectStateFiles(stateDir: string): boolean {
+  return [
+    'TASKS.json',
+    'MEMORY.md',
+    'DECISIONS.md',
+    'PROGRESS.md',
+    'tasks',
+    'bounded-chat',
+    'owner-input',
+  ].some(entry => existsSync(path.join(stateDir, entry)))
 }
 
 if (import.meta.url === `file://${process.argv[1]}`) {

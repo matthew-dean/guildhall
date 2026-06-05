@@ -9,7 +9,7 @@ import type { Context } from 'hono'
 import { Hono } from 'hono'
 import { streamSSE } from 'hono/streaming'
 import { serve } from '@hono/node-server'
-import { atomicWriteText, getProjectStateDir, getProjectTranscriptPath, migrateProjectStateToSystem } from '@guildhall/sessions'
+import { atomicWriteText, getProjectStateDir, getProjectTranscriptPath, MIGRATED_PROJECT_STATE_ENTRIES, migrateProjectStateToSystem } from '@guildhall/sessions'
 import { readTaskWorkspaceStore } from './task-state-store.js'
 import {
   readWorkspaceConfig,
@@ -2139,6 +2139,15 @@ export function buildServeApp(opts: ServeOptions = {}): {
   const devServerManager = opts.devServerManager ?? new DevServerManager({ runtimeSupervisor })
   const app = new Hono()
   const currentProjectPath = () => currentProject().path
+  const migratedProjectStateRoots = new Set<string>()
+
+  const ensureProjectStateMigrated = async (projectRoot: string): Promise<void> => {
+    if (process.env.GUILDHALL_PROJECT_STATE_PLACEMENT === 'project') return
+    const resolvedRoot = resolve(projectRoot)
+    if (migratedProjectStateRoots.has(resolvedRoot)) return
+    await migrateProjectStateToSystem(resolvedRoot)
+    migratedProjectStateRoots.add(resolvedRoot)
+  }
 
   const bindProjectScope = async (
     c: Context,
@@ -2161,6 +2170,14 @@ export function buildServeApp(opts: ServeOptions = {}): {
     const resolvedPath = resolveProjectPathForRequest(c)
     if (!resolvedPath) {
       return c.json({ error: 'Unknown project id for this local Guildhall service.' }, 404)
+    }
+    try {
+      await ensureProjectStateMigrated(resolvedPath)
+    } catch (err) {
+      return c.json({
+        error: 'Project state migration failed before serving project state.',
+        detail: err instanceof Error ? err.message : String(err),
+      }, 500)
     }
     if (
       c.req.path.startsWith('/api/project') &&
@@ -8153,6 +8170,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
         .map(line => line.trim())
         .filter(Boolean)
         .map(line => line.replace(/^[ MADRCU?!]{1,2}\s+/, '').trim())
+        .filter(file => !isMigratedProjectLocalStateGitPath(file))
         .filter(Boolean)
       return { ownedCount: files.length, files: files.slice(0, 12) }
     } catch (err) {
@@ -8162,6 +8180,15 @@ export function buildServeApp(opts: ServeOptions = {}): {
         error: err instanceof Error ? err.message : String(err),
       }
     }
+  }
+
+  function isMigratedProjectLocalStateGitPath(file: string): boolean {
+    const normalized = file.replace(/^"|"$/g, '').replaceAll('\\', '/')
+    if (!normalized.startsWith('.guildhall/')) return false
+    const projectStatePath = normalized.slice('.guildhall/'.length)
+    return MIGRATED_PROJECT_STATE_ENTRIES.some(entry => (
+      projectStatePath === entry || projectStatePath.startsWith(`${entry}/`)
+    ))
   }
 
   // -------------------------------------------------------------------------

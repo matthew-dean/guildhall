@@ -6,6 +6,7 @@ import { bootstrapWorkspace, setProvider, updateProjectConfig, writeWorkspaceCon
 import {
   getProjectContextDebugLedgerPath,
   getProjectRecentEventsPath,
+  getProjectSharedStateDir,
   getProjectStateDir,
 } from '@guildhall/sessions'
 import { readExploringTranscript, writeCheckpoint } from '@guildhall/tools'
@@ -124,6 +125,52 @@ afterEach(async () => {
 })
 
 describe('GET /api/project/task/:id', () => {
+  it('migrates bulky legacy project-local state on startup and serves the task from system state', async () => {
+    const legacyDir = getProjectSharedStateDir(tmpDir)
+    await fs.mkdir(path.join(legacyDir, 'tasks'), { recursive: true })
+    await fs.writeFile(path.join(legacyDir, 'TASKS.json'), JSON.stringify({
+      version: 1,
+      lastUpdated: '2026-06-04T12:00:00.000Z',
+      tasks: [{
+        id: 'legacy-task',
+        title: 'Migrate giant local state',
+        description: 'A task that existed before system-state migration.',
+        domain: 'memory',
+        projectPath: tmpDir,
+        status: 'blocked',
+        priority: 'high',
+        revisionCount: 0,
+        remediationAttempts: 0,
+        origination: 'human',
+        createdAt: '2026-06-04T12:00:00.000Z',
+        updatedAt: '2026-06-04T12:00:00.000Z',
+      }],
+    }, null, 2), 'utf8')
+    await fs.writeFile(path.join(legacyDir, 'PROGRESS.md'), [
+      '# Progress',
+      '',
+      'This file used to grow in the project checkout.',
+      'x'.repeat(220_000),
+    ].join('\n'), 'utf8')
+    await fs.writeFile(path.join(legacyDir, 'artifacts.yaml'), 'artifacts: []\n', 'utf8')
+
+    const { app } = buildServeApp({ projectPath: tmpDir })
+    const res = await app.fetch(new Request(projectUrl('/api/project/task/legacy-task')))
+
+    expect(res.status).toBe(200)
+    const body = (await res.json()) as Record<string, any>
+    expect(body.task).toMatchObject({
+      id: 'legacy-task',
+      status: 'blocked',
+      title: 'Migrate giant local state',
+    })
+    await expect(fs.readFile(path.join(memoryDir, 'TASKS.json'), 'utf8')).resolves.toContain('legacy-task')
+    await expect(fs.stat(path.join(memoryDir, 'PROGRESS.md'))).resolves.toMatchObject({ size: expect.any(Number) })
+    await expect(fs.stat(path.join(legacyDir, 'TASKS.json'))).rejects.toMatchObject({ code: 'ENOENT' })
+    await expect(fs.stat(path.join(legacyDir, 'PROGRESS.md'))).rejects.toMatchObject({ code: 'ENOENT' })
+    await expect(fs.readFile(path.join(legacyDir, 'artifacts.yaml'), 'utf8')).resolves.toContain('artifacts')
+  })
+
   it('returns the task body + (empty) recent events for a seeded task', async () => {
     await seedTask('task-1')
     const { app } = buildServeApp({ projectPath: tmpDir })

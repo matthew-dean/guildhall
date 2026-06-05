@@ -3,6 +3,7 @@ import fsp from 'node:fs/promises'
 import path from 'node:path'
 import YAML from 'yaml'
 import { writeJsonFile, writeJsonLinesFile } from '@guildhall/persistence'
+import { getProjectStateDir } from '@guildhall/sessions'
 
 import { defineStateMachine, transition, type TransitionReceipt } from './state-machine.js'
 import type { CreateProjectDependencyRequestInput, ProjectGraphNodeRef } from './project-graph.js'
@@ -1268,7 +1269,7 @@ async function applyStructuralTransition(projectRoot: string, mapId: string, inp
 }
 
 function structuralMapDir(projectRoot: string): string {
-  return path.join(projectRoot, '.guildhall', 'structural-map')
+  return path.join(getProjectStateDir(projectRoot), 'structural-map')
 }
 
 async function writeStructuralMap(projectRoot: string, map: StructuralMapDraft): Promise<void> {

@@ -3,15 +3,18 @@ import fs from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
 
+import { getProjectStateDir } from '@guildhall/sessions'
 import { runMemoryCorePrototype } from '../prototype-runner.js'
 
 let tmp: string
 
 beforeEach(async () => {
   tmp = await fs.mkdtemp(path.join(os.tmpdir(), 'guildhall-memory-prototype-'))
+  process.env.GUILDHALL_DATA_DIR = path.join(tmp, 'data')
 })
 
 afterEach(async () => {
+  delete process.env.GUILDHALL_DATA_DIR
   await fs.rm(tmp, { recursive: true, force: true })
 })
 
@@ -49,5 +52,26 @@ describe('runMemoryCorePrototype', () => {
     expect(markdown).toContain('# Memory Core Prototype Report')
     expect(markdown).toContain(projectRoot)
     expect(markdown).toContain('Included packet summaries:')
+  })
+
+  it('runs against system-state project storage when repo-local .guildhall is absent', async () => {
+    const projectRoot = path.join(tmp, 'system-project')
+    const skippedRoot = path.join(tmp, 'not-guildhall')
+    const outputDir = path.join(tmp, 'out-system')
+    const stateDir = getProjectStateDir(projectRoot)
+    await fs.mkdir(skippedRoot, { recursive: true })
+    await fs.writeFile(path.join(stateDir, 'TASKS.json'), JSON.stringify({
+      version: 1,
+      tasks: [{ id: 'task-1', status: 'ready', title: 'Use system state' }],
+    }), 'utf8')
+
+    const report = await runMemoryCorePrototype({
+      projectRoots: [projectRoot, skippedRoot],
+      outputDir,
+    })
+
+    expect(report.projects).toHaveLength(1)
+    expect(report.projects[0]?.projectRoot).toBe(projectRoot)
+    expect(report.projects[0]?.largestFiles[0]?.relativePath).toBe('system-state/TASKS.json')
   })
 })

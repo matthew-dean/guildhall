@@ -25,7 +25,7 @@ export interface ProjectStateMigrationResult {
 const PROJECT_STATE_PLACEMENT_ENV = 'GUILDHALL_PROJECT_STATE_PLACEMENT'
 const PROJECT_LOCAL_STATE_PLACEMENT = 'project'
 const PROJECT_STATE_MANIFEST = 'project-state.json'
-const MIGRATED_PROJECT_STATE_ENTRIES = [
+export const MIGRATED_PROJECT_STATE_ENTRIES = [
   'TASKS.json',
   'MEMORY.md',
   'DECISIONS.md',
@@ -108,6 +108,11 @@ export async function migrateProjectStateToSystem(projectRoot: string): Promise<
     await fs.mkdir(dirname(destination), { recursive: true })
     if (!existsSync(destination)) {
       await fs.cp(source, destination, { recursive: true, force: false, preserveTimestamps: true })
+    } else if (await shouldReplaceExistingStateEntry(entry, source, destination)) {
+      await fs.rm(destination, { recursive: true, force: true })
+      await fs.cp(source, destination, { recursive: true, force: false, preserveTimestamps: true })
+    } else if (!await stateEntriesEquivalent(source, destination)) {
+      await preserveConflictingStateEntry(source, systemStateDir, entry)
     }
     await fs.rm(source, { recursive: true, force: true })
     movedEntries.push(entry)
@@ -220,6 +225,53 @@ export async function getProjectLocalHistoryHealth(
 
 export function localHistoryExists(projectRoot: string): boolean {
   return existsSync(getProjectLocalHistoryDir(projectRoot))
+}
+
+async function shouldReplaceExistingStateEntry(
+  entry: string,
+  source: string,
+  destination: string,
+): Promise<boolean> {
+  const [sourceStat, destinationStat] = await Promise.all([fs.stat(source), fs.stat(destination)])
+  if (!sourceStat.isFile() || !destinationStat.isFile()) return false
+  if (entry === 'TASKS.json') {
+    return await isEmptyTaskQueue(destination)
+  }
+  if (['MEMORY.md', 'DECISIONS.md', 'PROGRESS.md'].includes(entry)) {
+    const destinationText = await fs.readFile(destination, 'utf8').catch(() => '')
+    return /_Updated by GuildHall agents\.|_Progress log maintained by GuildHall agents\.|_Architecture decisions recorded by GuildHall agents\./.test(destinationText)
+      && sourceStat.size > destinationStat.size
+  }
+  return false
+}
+
+async function isEmptyTaskQueue(file: string): Promise<boolean> {
+  try {
+    const parsed = JSON.parse(await fs.readFile(file, 'utf8')) as unknown
+    if (Array.isArray(parsed)) return parsed.length === 0
+    if (parsed && typeof parsed === 'object' && Array.isArray((parsed as { tasks?: unknown }).tasks)) {
+      return ((parsed as { tasks: unknown[] }).tasks).length === 0
+    }
+  } catch {
+    return false
+  }
+  return false
+}
+
+async function stateEntriesEquivalent(source: string, destination: string): Promise<boolean> {
+  const [sourceStat, destinationStat] = await Promise.all([fs.stat(source), fs.stat(destination)])
+  if (sourceStat.isFile() && destinationStat.isFile()) {
+    if (sourceStat.size !== destinationStat.size) return false
+    return await fs.readFile(source, 'utf8').catch(() => null) === await fs.readFile(destination, 'utf8').catch(() => undefined)
+  }
+  if (sourceStat.isDirectory() && destinationStat.isDirectory()) return false
+  return false
+}
+
+async function preserveConflictingStateEntry(source: string, systemStateDir: string, entry: string): Promise<void> {
+  const conflictName = `${entry.replace(/[\\/]/g, '__')}.migration-conflict-${Date.now()}`
+  const conflictPath = join(systemStateDir, conflictName)
+  await fs.cp(source, conflictPath, { recursive: true, force: false, preserveTimestamps: true })
 }
 
 async function writeProjectStateManifest(stateDir: string, projectRoot: string): Promise<void> {
