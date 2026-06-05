@@ -56,10 +56,10 @@ Result:
   "archiveFiles": 500,
   "localHistoryFiles": 1010,
   "packetBytes": 2917,
-  "contextBytes": 3286,
-  "compactionMs": 747,
-  "ingestMs": 291,
-  "contextMs": 51
+  "contextBytes": 5878,
+  "compactionMs": 1053,
+  "ingestMs": 148,
+  "contextMs": 54
 }
 ```
 
@@ -69,7 +69,8 @@ Interpretation:
 - The live queue kept active, blocked, and shelved tasks visible.
 - Old terminal evidence moved to system-local task history.
 - The candidate packet stayed under 3KB.
-- The worker context stayed under 4KB for this fixture.
+- The worker context stayed under 6KB for this fixture after memory-core
+  candidates were wired into effective memory.
 - Runtime compaction, memory ingest, and context construction were all comfortably
   below their test ceilings on this machine.
 
@@ -92,13 +93,14 @@ Fixed by aligning memory ingest terminal statuses to `done`, `cancelled`, and
    but thousands may need batched archive indexes or SQLite/libSQL-backed
    storage.
 3. `buildContext` is bounded, but it still reads several files directly from the
-   state directory. The next memory slice should route `buildEffectiveMemoryPacket`
-   through `GuildhallMemory.buildCandidatePacket` so retrieval policy is shared.
+   state directory. `buildEffectiveMemoryPacket` now routes through
+   `GuildhallMemory.buildCandidatePacket`; the remaining risk is the other
+   direct raw-file sections.
 4. The test uses generous timing ceilings to avoid CI flakes. The logged metrics
    are the actual pressure signal.
 
 ## Next Engineering Move
 
 Keep this test in the normal focused memory suite and add a second fleet-scale
-test only after the single-project memory-core replacement path is wired into
-`buildEffectiveMemoryPacket`.
+test after the cleanup command and runtime maintenance extraction are covered by
+the same focused memory suite.

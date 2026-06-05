@@ -69,13 +69,16 @@ Replacement target:
   paths without recall loss.
 - Graph/fact extraction stays optional until it proves quality improvement.
 
+Status:
+
+- Done in this branch: `buildEffectiveMemoryPacket` now calls
+  `GuildhallMemory.buildCandidatePacket` first and preserves legacy
+  `memory-store.json` records as fallback.
+
 Next concrete slice:
 
-- Route `buildEffectiveMemoryPacket` through
-  `GuildhallMemory.buildCandidatePacket`.
-- Keep old file-backed packet logic as fallback behind one adapter.
-- Add tests that prove omitted bulky evidence gets an omission reason, not prompt
-  inclusion.
+- Continue moving the remaining raw `MEMORY.md`, `PROGRESS.md`, and
+  `DECISIONS.md` context sections behind the same memory-core retrieval policy.
 
 ### 2. Move Behind Module Boundary: Task State And Lifecycle Writes
 
@@ -118,9 +121,13 @@ Decision:
 - Thin aggressively.
 - Do not replace Hono; Hono is small and adequate.
 
+Status:
+
+- Done in this branch: project-state maintenance moved into
+  `runtime/project-state-maintenance.ts`.
+
 Next concrete slice:
 
-- Extract project-state maintenance into `runtime/project-maintenance.ts`.
 - Extract task endpoint handlers into `runtime/http/task-routes.ts`.
 - Extract service/project summary builders into `runtime/project-summary-api.ts`
   or reuse the existing shared summary utilities where already present.
@@ -210,17 +217,21 @@ Decision:
 
 - Delete/deprecate as durable memory.
 
+Status:
+
+- Done in this branch: `guildhall memory cleanup-project-local-state` reports
+  project-local generated backups/logs by default and deletes only with
+  `--apply`.
+
 Next concrete slice:
 
-- Add cleanup command with dry-run:
-  - remove project-local migration backups after confirming system-local copy;
-  - compact old archive shards;
-  - report remaining repo-local `.guildhall` bytes;
-  - never delete opt-in exported manifests.
+- Extend cleanup reporting with system-local-copy proof before deleting larger
+  classes of legacy files.
 
 ## Replacement Priority
 
-1. Memory packet backend: replace raw file memory with `GuildhallMemory`.
+1. Remaining raw context sections: move progress/decision/memory markdown reads
+   through `GuildhallMemory`.
 2. Task state write surface: boundary first, then lifecycle migration.
 3. `serve.ts`: thin route composition and move business logic out.
 4. `orchestrator.ts`: modularize policy/effects without swapping the product
@@ -240,11 +251,13 @@ Next concrete slice:
 
 ## Immediate Decision
 
-There is still useful work before opening the PR:
+The three pre-PR strengthening slices from this audit are now implemented:
 
-1. Wire `buildEffectiveMemoryPacket` to `GuildhallMemory`.
-2. Add cleanup dry-run command for old project-local backups/logs.
-3. Extract project-state maintenance from `serve.ts`.
+1. `buildEffectiveMemoryPacket` routes through `GuildhallMemory`.
+2. Cleanup dry-run command exists for old project-local backups/logs.
+3. Project-state maintenance is extracted from `serve.ts`.
 
-After those, the branch will tell a much cleaner story: system-local state,
-automatic compaction, bounded retrieval, and fewer direct raw-file memory paths.
+The branch now tells the intended story: system-local state, automatic
+compaction, bounded retrieval, cleanup tooling, and less runtime maintenance
+logic inside the HTTP server. The remaining architecture work is real, but it no
+longer blocks opening a reviewable PR.

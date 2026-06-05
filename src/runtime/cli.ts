@@ -16,6 +16,7 @@ import {
 } from './migrations.js'
 import { migrateTaskState } from './task-state-migration.js'
 import { compactProjectState } from './project-state-compaction.js'
+import { cleanupProjectLocalState } from './project-state-cleanup.js'
 import { projectRuntimeCompatibilityBlocker } from './runtime-compatibility.js'
 import {
   buildCalibrationCaseDraftFromEscapedMiss,
@@ -461,6 +462,8 @@ Usage:
                                   Compatibility alias for the 0.8.0 storage migration
   guildhall memory compact-project-state [path]
                                   Archive terminal tasks and move heartbeat progress local
+  guildhall memory cleanup-project-local-state [path]
+                                  Report generated repo-local Guildhall backups/logs
     --apply                      Write files. Without this, prints a dry run
     --delete-source              Remove migrated old memory/ files after copying
     --update-gitignore           Write/refresh Guildhall's managed .gitignore block
@@ -951,8 +954,8 @@ async function cmdCorpusMap() {
 async function cmdMemory() {
   const pos = positionals()
   const subcommand = pos[0] ?? 'migrate-0.8.0'
-  if (!['migrate-0.8.0', 'migrate-local-history', 'compact-project-state'].includes(subcommand)) {
-    console.error('[guildhall] Usage: guildhall memory <migrate-0.8.0|migrate-local-history|compact-project-state> [--apply] [id|path]')
+  if (!['migrate-0.8.0', 'migrate-local-history', 'compact-project-state', 'cleanup-project-local-state'].includes(subcommand)) {
+    console.error('[guildhall] Usage: guildhall memory <migrate-0.8.0|migrate-local-history|compact-project-state|cleanup-project-local-state> [--apply] [id|path]')
     process.exit(1)
   }
   const idOrPath = pos[1]
@@ -1014,6 +1017,29 @@ async function cmdMemory() {
     console.log(`[guildhall] Shared TASKS/PROGRESS bytes: ${result.bytesBefore} -> ${result.bytesAfter}`)
     if (dryRun) {
       console.log('[guildhall] Re-run with --apply to compact these files.')
+    }
+    return
+  }
+  if (subcommand === 'cleanup-project-local-state') {
+    const result = await cleanupProjectLocalState({ projectRoot: projectPath, apply: !dryRun })
+    console.log(`[guildhall] Project-local state cleanup ${dryRun ? 'dry run' : 'complete'}.`)
+    console.log(`[guildhall] Project: ${result.projectRoot}`)
+    console.log(`[guildhall] Shared state dir: ${result.sharedStateDir}`)
+    console.log(`[guildhall] Candidates: ${result.candidates.length}`)
+    console.log(`[guildhall] Bytes removable: ${result.bytesToRemove}`)
+    if (result.candidates.length > 0) {
+      for (const candidate of result.candidates.slice(0, 20)) {
+        console.log(`[guildhall] - ${candidate.relativePath} (${candidate.bytes} bytes, ${candidate.reason})`)
+      }
+      if (result.candidates.length > 20) {
+        console.log(`[guildhall] - ...and ${result.candidates.length - 20} more`)
+      }
+    }
+    if (dryRun) {
+      console.log('[guildhall] Re-run with --apply to remove these generated project-local files.')
+    } else {
+      console.log(`[guildhall] Removed: ${result.removed.length}`)
+      console.log(`[guildhall] Bytes removed: ${result.bytesRemoved}`)
     }
     return
   }

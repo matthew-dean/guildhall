@@ -1,5 +1,7 @@
 import type { Task } from '@guildhall/core'
 import { inferProjectRootFromMemoryDir } from '@guildhall/sessions'
+import { createDeterministicGuildhallMemory } from '../memory-core/deterministic.js'
+import type { MemoryCandidate, OmittedMemoryCandidate } from '../memory-core/types.js'
 import {
   listMemoryRecords,
   type MemoryEvidenceRef,
@@ -24,6 +26,7 @@ export interface EffectiveMemoryPacket {
 
 const MAX_MEMORY_RECORD_CHARS = 700
 const MAX_RENDERED_MEMORY_CHARS = 2600
+const MAX_MEMORY_CORE_PACKET_BYTES = 2_400
 
 export async function buildEffectiveMemoryPacket(input: {
   memoryDir: string
@@ -40,6 +43,15 @@ export async function buildEffectiveMemoryPacket(input: {
   const taskKinds = inferTaskKinds(queryText)
   const fileAreas = fileAreaHints(queryText)
   const structuralScopeIds = structuralScopesForTask(input.memoryDir, input.task, fileAreas)
+  const projectRoot = inferProjectRootFromMemoryDir(input.memoryDir)
+  const memory = createDeterministicGuildhallMemory({ projectRoot })
+  const memoryCorePacket = await memory.buildCandidatePacket({
+    scope: { kind: 'project', projectRoot },
+    intent: queryText,
+    maxBytes: MAX_MEMORY_CORE_PACKET_BYTES,
+  }).catch(() => null)
+  const memoryCoreIncluded = memoryCorePacket?.included.map(memoryCoreCandidateToRecord) ?? []
+  const memoryCoreWithheld = memoryCorePacket?.omitted.map(memoryCoreOmittedToWithheld) ?? []
   const all = await listMemoryRecords({ memoryDir: input.memoryDir })
   const relevant = all
     .filter((record) => isRelevant(record, {
@@ -49,13 +61,17 @@ export async function buildEffectiveMemoryPacket(input: {
       structuralScopeIds,
       text: queryText,
     }))
-  const included = relevant
+  const legacyIncluded = relevant
     .filter((record) => record.status === 'active' || record.status === 'used')
     .filter((record) => record.risk !== 'high')
     .filter((record) => structuralScopeMatches(record, structuralScopeIds))
     .slice(0, input.maxRecords ?? 8)
+  const included = dedupeIncluded([
+    ...memoryCoreIncluded,
+    ...legacyIncluded,
+  ]).slice(0, input.maxRecords ?? 8)
   const includedIds = new Set(included.map((record) => record.id))
-  const withheld = relevant
+  const legacyWithheld = relevant
     .filter((record) => !includedIds.has(record.id))
     .map((record) => ({
       id: record.id,
@@ -63,6 +79,10 @@ export async function buildEffectiveMemoryPacket(input: {
       reason: withheldReason(record, structuralScopeIds),
       summary: record.summary,
     }))
+  const withheld = dedupeWithheld([
+    ...memoryCoreWithheld.filter((record) => !includedIds.has(record.id)),
+    ...legacyWithheld,
+  ])
   const evidenceRefs = included.flatMap((record) => record.evidenceRefs)
   return {
     included,
@@ -70,6 +90,68 @@ export async function buildEffectiveMemoryPacket(input: {
     evidenceRefs,
     rendered: renderEffectiveMemory(included, withheld),
   }
+}
+
+function memoryCoreCandidateToRecord(candidate: MemoryCandidate): MemoryRecord {
+  return {
+    id: `memory-core:${candidate.id}`,
+    scope: 'project',
+    type: 'codebase_knowledge',
+    status: 'active',
+    summary: candidate.summary,
+    content: [
+      `source: memory-core (${candidate.reasonForInclusion})`,
+      clip(candidate.body, 180),
+    ].join('\n').trim(),
+    tags: [],
+    domains: [],
+    structuralScopes: [],
+    taskKinds: [],
+    fileAreas: candidate.sourceRefs.flatMap((ref) => ref.path ? fileAreaHints(ref.path) : []),
+    confidence: candidate.confidence,
+    risk: candidate.risk,
+    freshness: candidate.freshness,
+    evidenceRefs: candidate.sourceRefs.map((ref) => ({
+      kind: ref.kind,
+      summary: ref.summary,
+      ...(ref.ref ? { ref: ref.ref } : {}),
+      ...(ref.path ? { path: ref.path } : {}),
+    })),
+    createdAt: new Date().toISOString(),
+    updatedAt: new Date().toISOString(),
+    source: 'memory-core',
+  }
+}
+
+function memoryCoreOmittedToWithheld(candidate: OmittedMemoryCandidate): WithheldMemory {
+  return {
+    id: `memory-core:${candidate.id}`,
+    status: 'observed',
+    reason: candidate.reason,
+    summary: candidate.summary,
+  }
+}
+
+function dedupeIncluded(records: readonly MemoryRecord[]): MemoryRecord[] {
+  const seen = new Set<string>()
+  const out: MemoryRecord[] = []
+  for (const record of records) {
+    if (seen.has(record.id)) continue
+    seen.add(record.id)
+    out.push(record)
+  }
+  return out
+}
+
+function dedupeWithheld(records: readonly WithheldMemory[]): WithheldMemory[] {
+  const seen = new Set<string>()
+  const out: WithheldMemory[] = []
+  for (const record of records) {
+    if (seen.has(record.id)) continue
+    seen.add(record.id)
+    out.push(record)
+  }
+  return out
 }
 
 export function renderEffectiveMemory(

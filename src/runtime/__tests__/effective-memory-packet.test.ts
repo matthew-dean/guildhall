@@ -6,6 +6,7 @@ import path from 'node:path'
 import { buildContext } from '../context-builder.js'
 import { buildEffectiveMemoryPacket } from '../effective-memory-packet.js'
 import { recordMemoryObservation } from '../memory-store.js'
+import { createDeterministicGuildhallMemory } from '../../memory-core/deterministic.js'
 import { writeContextDebugRecord } from '../context-observability.js'
 import {
   acceptStructuralMap,
@@ -66,6 +67,38 @@ afterEach(async () => {
 })
 
 describe('effective memory packet', () => {
+  it('includes bounded GuildhallMemory candidates before legacy memory-store fallback', async () => {
+    const projectRoot = path.dirname(memoryDir)
+    const memory = createDeterministicGuildhallMemory({ projectRoot })
+    await memory.recordObservation({
+      scope: { kind: 'project', projectRoot },
+      summary: 'Runtime memory compaction keeps project state bounded.',
+      body: `Use GuildhallMemory candidate packets for runtime memory compaction. ${'raw detail '.repeat(300)}`,
+      confidence: 'high',
+      risk: 'low',
+      freshness: 'fresh',
+      tags: ['runtime', 'memory', 'compaction'],
+      sourceRefs: [{ kind: 'project_file', path: 'system-state/TASKS.json', summary: 'Task queue summary.' }],
+    })
+
+    const packet = await buildEffectiveMemoryPacket({
+      memoryDir,
+      task: task({
+        title: 'Wire runtime memory compaction packet',
+        description: 'Use memory compaction for src/runtime/effective-memory-packet.ts.',
+        domain: 'runtime',
+      }),
+    })
+
+    expect(packet.included.map(record => record.id)).toContainEqual(expect.stringMatching(/^memory-core:/))
+    expect(packet.rendered).toContain('Runtime memory compaction keeps project state bounded')
+    expect(packet.rendered).toContain('source: memory-core')
+    expect(packet.rendered).not.toContain('raw detail raw detail raw detail raw detail raw detail raw detail raw detail raw detail raw detail raw detail')
+    expect(packet.evidenceRefs).toEqual([
+      expect.objectContaining({ path: 'system-state/TASKS.json' }),
+    ])
+  })
+
   it('selects memory by accepted structural scope ids before flat project memory', async () => {
     const projectRoot = path.dirname(memoryDir)
     await fs.writeFile(path.join(projectRoot, 'package.json'), `${JSON.stringify({

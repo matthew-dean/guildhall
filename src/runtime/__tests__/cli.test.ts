@@ -304,6 +304,7 @@ describe('Guildhall CLI surface', () => {
     expect(help).not.toContain('guildhall approve-meta-intake')
     expect(help).toContain('guildhall task run-once')
     expect(help).toContain('guildhall memory migrate-0.8.0')
+    expect(help).toContain('guildhall memory cleanup-project-local-state')
     expect(help).toContain('guildhall migrate status')
     expect(help).toContain('guildhall migrate plan')
     expect(help).toContain('guildhall migrate apply')
