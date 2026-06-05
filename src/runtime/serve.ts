@@ -4126,10 +4126,16 @@ export function buildServeApp(opts: ServeOptions = {}): {
       code: 'owner_input_required',
       message:
         waiting.length === 1
-          ? `${first.objective.label} needs your answer before Guildhall can continue`
+          ? `${ownerInputObjectiveLabel(first.objective.label)} needs your answer before Guildhall can continue`
           : `${waiting.length} owner decisions need your answer before Guildhall can continue`,
       actionHref: ownerInputActionHref(first),
     }
+  }
+
+  function ownerInputObjectiveLabel(label: string): string {
+    const trimmed = label.trim()
+    if (/^review structural map\b/i.test(trimmed)) return 'Review the project map'
+    return trimmed || 'This decision'
   }
 
   function ownerInputActionHref(request: ReturnType<typeof listOwnerInputRequestsSync>[number]): string {

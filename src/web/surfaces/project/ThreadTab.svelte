@@ -2088,9 +2088,12 @@
       if (turn.requestStage === 'task_brief_cleanup') {
         return 'Guildhall queued this task for brief cleanup. The checklist shows what still needs to be clarified before implementation.'
       }
-      return turn.taskId === 'task-workspace-import'
-        ? 'Guildhall already drafted part of this import review. Review it if you want, or resume Guildhall to keep turning your project notes into candidate tasks.'
-        : turn.importedDraft
+      if (turn.taskId === 'task-workspace-import') {
+        return startReadiness?.code === 'owner_input_required' && startReadiness.canStart === false
+          ? 'Guildhall already drafted part of this import review. Review it if you want, but answer the current blocker before Guildhall continues shaping project notes.'
+          : 'Guildhall already drafted part of this import review. Review it if you want, or resume Guildhall to keep turning your project notes into candidate tasks.'
+      }
+      return turn.importedDraft
           ? 'Guildhall is shaping the task brief for this imported note. You can add context, but you do not need to babysit the draft.'
           : isQueuedSpecRevision(turn)
             ? 'Guildhall already has the draft spec plus your latest answers. Coordinator review is queued.'

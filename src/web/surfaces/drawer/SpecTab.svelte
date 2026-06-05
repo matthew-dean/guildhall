@@ -89,11 +89,20 @@
         /deterministic recovery spec seed/i.test(note.content ?? ''),
       ),
   )
+  const hasTaskLocalSpecification = $derived(
+    Boolean(brief) ||
+      specText.length > 0 ||
+      acceptance.length > 0,
+  )
+  const reviewPacketStatus = $derived(
+    ['review', 'gate_check', 'done', 'pending_pr', 'merged'].includes(task.status),
+  )
   const reviewPlanLanes = $derived(reviewPlan?.selectedLanes ?? [])
   const reviewPlanHiddenLaneCount = $derived(Math.max(0, reviewPlanLanes.length - 4))
   const reviewPlanRecipeCount = $derived(reviewPlan?.requiredRecipes?.length ?? 0)
   const hasReviewPacket = $derived(
     !hasRecoverySpecSeed &&
+      (hasTaskLocalSpecification || reviewPacketStatus) &&
       (
         latestReviewerSummary.length > 0 ||
         latestSelfCritique.length > 0 ||

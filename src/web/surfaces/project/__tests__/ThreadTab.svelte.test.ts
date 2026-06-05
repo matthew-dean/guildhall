@@ -448,6 +448,7 @@ function installFetchFakes(
     capabilityRequests?: unknown[]
     runtime?: unknown
     projectRunStatus?: string
+    startReadiness?: unknown
     projectAvailability?: { status: string; pausedAt?: string | null; resumedAt?: string | null }
     caughtUp?: boolean
     threadState?: () => { turns: unknown[]; activeTurnId: string | null; caughtUp?: boolean }
@@ -542,6 +543,7 @@ function installFetchFakes(
         path: '/repo/looma-knit',
         run: { status: options.projectRunStatus ?? 'running', mode: 'continuous' },
         availability: options.projectAvailability ?? { status: 'active', pausedAt: null, resumedAt: null },
+        startReadiness: options.startReadiness ?? { canStart: true },
         ...(options.runtime ? { runtime: options.runtime } : {}),
         ...(project.detail?.taskRoutingContexts ? { taskRoutingContexts: project.detail.taskRoutingContexts } : {}),
         tasks: [],
@@ -1012,6 +1014,41 @@ describe('ThreadTab', () => {
     expect(threadHistory().getByText('Brief cleanup requested')).toBeTruthy()
     expect(selectedThread().getByText(/Guildhall queued this task for brief cleanup/)).toBeTruthy()
     expect(selectedThread().getByRole('button', { name: /clean up brief/i })).toBeTruthy()
+  })
+
+  it('does not tell users to resume workspace import while owner input blocks the project', async () => {
+    project.detail = {
+      ...(project.detail as any),
+      startReadiness: {
+        canStart: false,
+        code: 'owner_input_required',
+        message: 'Review the project map needs your answer before Guildhall can continue',
+        actionHref: '/thread?thread=bc-jess-structural_review',
+      },
+    }
+    installFetchFakes([
+      importedDraftTurn({
+        id: 'workspace-import-review',
+        taskId: 'task-workspace-import',
+        taskTitle: 'Review existing project work',
+        taskStatus: 'exploring',
+        importedDraft: false,
+        summary: 'Review existing project work.',
+      }),
+    ], 'workspace-import-review', {
+      projectRunStatus: 'stopped',
+      startReadiness: {
+        canStart: false,
+        code: 'owner_input_required',
+        message: 'Review the project map needs your answer before Guildhall can continue',
+        actionHref: '/thread?thread=bc-jess-structural_review',
+      },
+    })
+
+    render(ThreadTab)
+
+    expect((await selectedThread().findAllByText(/answer the current blocker before Guildhall continues shaping project notes/i)).length).toBeGreaterThan(0)
+    expect(selectedThread().queryByText(/resume Guildhall to keep turning your project notes/i)).toBeNull()
   })
 
   it('does not move the viewport when a new active thread turn appears', async () => {

@@ -1141,6 +1141,40 @@ describe('POST /api/project/start', () => {
     expect(projectBody.startReadiness?.message).toContain('Clarify Question task needs your answer')
   })
 
+  it('uses a friendly structural-map label in owner-input Start blockers', async () => {
+    const now = new Date().toISOString()
+    await fs.writeFile(
+      path.join(tmpDir, '.guildhall', 'TASKS.json'),
+      JSON.stringify({
+        version: 1,
+        lastUpdated: now,
+        tasks: [],
+      }, null, 2),
+      'utf8',
+    )
+    await seedThreadOwnerInput({
+      taskId: 'structural-map-mpyrvqjg',
+      questionId: 'owner-input-1',
+      now,
+      label: 'Review structural map structural-map-mpyrvqjg',
+      prompt: 'Review the proposed domains before Guildhall uses this map for routing.',
+      choices: ['Use this map', 'Something looks wrong'],
+    })
+
+    const { app } = buildServeApp({ projectPath: tmpDir })
+    const projectRes = await app.fetch(new Request(scoped('/api/project')))
+    const projectBody = (await projectRes.json()) as {
+      startReadiness?: { canStart?: boolean; code?: string; message?: string }
+    }
+
+    expect(projectBody.startReadiness).toMatchObject({
+      canStart: false,
+      code: 'owner_input_required',
+      message: 'Review the project map needs your answer before Guildhall can continue',
+    })
+    expect(projectBody.startReadiness?.message).not.toContain('structural-map-mpyrvqjg')
+  })
+
   it('points recovery-only Start blockers at the newest blocked task instead of stale historical blockers', async () => {
     const older = '2026-05-19T10:00:00.000Z'
     const newer = '2026-05-19T12:00:00.000Z'

@@ -347,6 +347,43 @@ coverage.
   `/task/coherence-reviewer-mvp?tab=spec`,
   `/task/decision-trace-pipeline?tab=spec`, and `/task/task-009?tab=spec`;
   Font something task routes including `/task/import-api-serving-mvp`.
+- [x] Run a different-project weak/medium coverage replay and fix the new
+  leaks it surfaced. Fresh installed-app proof on 2026-06-04/05 used
+  `/api/stale-server` `stale:false` for installed dist
+  `/Users/matthew/.guildhall/app/0.10.0/app/dist/cli.js`, plus standalone
+  Playwright route proof across Jess, Looma + Knit, Font something,
+  t-minus-t, Fair Labor License, and Projects Home. Jess Thread and
+  workspace-import kept project identity and owner-input gating, but the first
+  pass still rendered `structural-map-mpyrvqjg` in owner-facing readiness copy
+  and told users they could "resume Guildhall" on the import card while the
+  project was blocked on the map answer. Fix: `/api/project` start-readiness
+  now sanitizes structural-map owner-input labels to `Review the project map`,
+  and Thread's workspace-import copy says to answer the current blocker before
+  Guildhall continues shaping project notes when owner input blocks the
+  project. Looma + Knit `/workspace-import?mode=reconcile` rendered the
+  reconcile review with project-specific counts and no cross-project leakage;
+  `/task/task-import-1l0mr2r?tab=spec` opened the requested ContextMenu drawer
+  tab and close routing remained safe, but the first pass showed a stale
+  Link Editor handoff packet on a ContextMenu task with no current spec/proof.
+  Fix: the Spec tab now hides review/handoff packets on active shaping tasks
+  unless the task has current task-local brief/spec/acceptance context or is in
+  a review/completion state. Font something direct task and Work routes,
+  t-minus-t Release, and Fair Labor License Release criteria all rendered with
+  the expected project identity and release markers; Commerce Projects Home
+  stayed fixed with `needs input`, no `ready` card label, and no Start/Resume
+  affordance. Verification:
+  `pnpm vitest run src/runtime/__tests__/serve-settings.test.ts -t
+  "owner-input Start blockers|friendly structural-map" --reporter=dot`;
+  `pnpm vitest run src/web/surfaces/project/__tests__/ThreadTab.svelte.test.ts
+  -t "workspace import while owner input blocks" --reporter=dot`;
+  `pnpm vitest run
+  src/web/surfaces/drawer/__tests__/drawer-tabs.svelte.test.ts -t
+  "stale handoff packets|current task-local spec context" --reporter=dot`;
+  `pnpm typecheck`; `pnpm build`; `pnpm build:macos-package -- --skip-build`;
+  installed from `artifacts/macos/guildhall-macos`; restarted service; live
+  Playwright confirmed zero raw structural-map ids, zero unsafe import-resume
+  copy, zero stale Link Editor packet/path on ContextMenu, and Commerce
+  `needs input` without `ready`.
 - [x] Fix project shell identity on Looma + Knit Thread. Live proof on
   2026-06-04 after `pnpm dev:install`, service restart, and
   `/api/stale-server` `stale:false`: `/api/project?projectId=looma-knit`

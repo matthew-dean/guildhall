@@ -321,6 +321,45 @@ describe('drawer task detail tabs', () => {
     expect(screen.getByText(/Build the block menu/)).toBeInTheDocument()
   })
 
+  it('does not show stale handoff packets on tasks with no current task-local spec context', () => {
+    render(SpecTab, {
+      task: task({
+        id: 'task-import-1l0mr2r',
+        title: 'ContextMenu',
+        status: 'in_progress',
+        description: 'Shape the ContextMenu API.',
+        productBrief: undefined,
+        spec: undefined,
+        acceptanceCriteria: [],
+        latestSelfCritique: 'Self-critique: changed /Users/matthew/.guildhall/worktrees/looma-knit/task-import-gs82f5/packages/editor/src/link-editor.ts.',
+        latestCheckpoint: {
+          step: 5,
+          agentId: 'worker-agent',
+          writtenAt: now,
+          filesTouched: [
+            '/Users/matthew/.guildhall/worktrees/looma-knit/task-import-gs82f5/packages/editor/src/link-editor.ts',
+          ],
+        },
+      }),
+      busy: false,
+      onApproveBrief: vi.fn(),
+      onApproveSpec: vi.fn(),
+      onPause: vi.fn(),
+      onShelve: vi.fn(),
+      onUnshelve: vi.fn(),
+      onResolveEscalation: vi.fn(),
+      onRunEscalationAction: vi.fn(),
+      onSendFollowUp: vi.fn(),
+      onAddAcceptance: vi.fn(),
+    })
+
+    expect(screen.queryByText('Latest handoff packet')).not.toBeInTheDocument()
+    expect(screen.queryByText(/task-import-gs82f5/)).not.toBeInTheDocument()
+    expect(screen.queryByText(/link-editor\.ts/)).not.toBeInTheDocument()
+    expect(screen.getByText('About')).toBeInTheDocument()
+    expect(screen.getByText('Shape the ContextMenu API.')).toBeInTheDocument()
+  })
+
   it('renders provenance, terminal outcome, shelve reason, and context health in one audit trail', () => {
     const contextDebug: ContextDebugRecord[] = [
       {
