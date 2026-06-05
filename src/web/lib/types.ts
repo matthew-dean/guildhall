@@ -1119,6 +1119,7 @@ export interface ServiceProjectSummary {
   path: string
   name: string
   initializationNeeded?: boolean
+  projectStatusLoading?: boolean
   tags?: string[]
   summary?: string | null
   taskCounts?: {

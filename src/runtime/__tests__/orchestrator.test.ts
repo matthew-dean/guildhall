@@ -1931,6 +1931,51 @@ describe('Orchestrator.tick — routing', () => {
     expect(task.blockReason).toContain('Spec shaping timed out')
   })
 
+  it('preserves an existing durable spec when the spec agent times out', async () => {
+    await writeQueue([
+      mkTask({
+        id: 'a',
+        status: 'exploring',
+        title: 'ContextMenu',
+        spec: [
+          '## ContextMenu — Looma Primitive',
+          '',
+          '### Summary',
+          'A right-click context menu that opens at the pointer position.',
+          '',
+          '## Completion Boundary',
+          '- The component appears in the appropriate docs or story surface.',
+        ].join('\n'),
+      }),
+    ])
+    const spec = {
+      name: 'spec-agent',
+      calls: [] as Array<{ prompt: string }>,
+      async generate(prompt: string) {
+        this.calls.push({ prompt })
+        throw new Error('spec-agent timed out after 120000ms of inactivity')
+      },
+    }
+    const orch = new Orchestrator({
+      config: baseConfig(),
+      agents: agentSet({ spec: spec as any }),
+    })
+
+    const out = await orch.tick()
+    expect(out.kind).toBe('processed')
+    if (out.kind === 'processed') {
+      expect(out.beforeStatus).toBe('exploring')
+      expect(out.afterStatus).toBe('spec_review')
+      expect(out.transitioned).toBe(true)
+    }
+
+    const queue = await readQueue()
+    const task = queue.tasks[0]!
+    expect(task.status).toBe('spec_review')
+    expect(task.blockReason ?? null).toBeNull()
+    expect(task.escalations ?? []).toHaveLength(0)
+  })
+
   it('writes a deterministic recovery spec seed before redispatching a reframed shaping task', async () => {
     await writeQueue([
       mkTask({

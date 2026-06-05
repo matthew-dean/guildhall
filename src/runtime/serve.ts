@@ -446,6 +446,7 @@ interface ServiceProjectSummary {
   path: string
   name: string
   initializationNeeded: boolean
+  projectStatusLoading?: boolean
   tags?: string[]
   summary?: string | null
   taskCounts?: {
@@ -1149,6 +1150,29 @@ function summarizeProject(project: ResolvedProject): ServiceProjectSummary {
     name: project.config?.name ?? project.id,
     initializationNeeded: project.initializationNeeded,
     tags: project.config?.tags ?? [],
+  }
+}
+
+function summarizeProjectShell(
+  project: ResolvedProject,
+  run?: ReturnType<OrchestratorSupervisor['list']>[number],
+): ServiceProjectSummary {
+  return {
+    ...summarizeProject(project),
+    summary: summarizeProjectText(project),
+    projectStatusLoading: true,
+    ...(run
+      ? {
+          run: {
+            status: run.status,
+            startedAt: run.startedAt,
+            stoppedAt: run.stoppedAt,
+            error: run.error,
+            stopSummary: run.stopSummary,
+            providerStatus: run.providerStatus,
+          },
+        }
+      : {}),
   }
 }
 
@@ -2287,6 +2311,19 @@ export function buildServeApp(opts: ServeOptions = {}): {
 
   app.get('/api/version', c => {
     return c.json({ version: readRuntimeVersion() })
+  })
+
+  app.get('/api/service/projects', c => {
+    const runsById = new Map(supervisor.list().map(run => [run.workspaceId, run]))
+    const projects = getRegisteredProjects().map((entry) => {
+      const resolved = resolveProject(entry.path)
+      return summarizeProjectShell(resolved, runsById.get(resolved.id))
+    })
+    return c.json({
+      pid: process.pid,
+      defaultProviderStatus: buildGlobalDefaultProviderStatus(),
+      projects,
+    })
   })
 
   app.get('/api/service', async c => {
@@ -3810,6 +3847,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
     resolvedConfig: ReturnType<typeof resolveConfig>
     runtimeProvider: ReturnType<typeof getRuntimeProviderConfig>
     allowPaidProviderFallback: boolean
+    allowTaskReadinessBlocker?: boolean
   }): Promise<{
     canStart: boolean
     code?: string
@@ -3830,8 +3868,10 @@ export function buildServeApp(opts: ServeOptions = {}): {
     const importDraftBlocker = await startBlockerForImportDrafts(input.projectPath)
     if (importDraftBlocker) return importDraftBlocker
 
-    const taskReadinessBlocker = await startBlockerForTaskReadiness(input.projectPath)
-    if (taskReadinessBlocker) return taskReadinessBlocker
+    if (input.allowTaskReadinessBlocker !== false) {
+      const taskReadinessBlocker = await startBlockerForTaskReadiness(input.projectPath)
+      if (taskReadinessBlocker) return taskReadinessBlocker
+    }
 
     const terminal = terminalStartState(input.projectPath)
     if (terminal) {
@@ -4218,6 +4258,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
         resolvedConfig,
         runtimeProvider,
         allowPaidProviderFallback: Boolean(projectCfg.allowPaidProviderFallback),
+        allowTaskReadinessBlocker: !body.taskId,
       })
       if (!startReadiness.canStart) {
         if (startReadiness.code === 'all_terminal') {

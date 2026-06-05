@@ -919,6 +919,47 @@ describe('POST /api/project/task/:id/mark-done', () => {
   })
 })
 
+describe('POST /api/project/task/:id/start', () => {
+  it('allows a scoped spec_review task start even when the project has waiting specs', async () => {
+    setProvider('anthropic-api', { apiKey: 'sk-ant-test' })
+    updateProjectConfig(tmpDir, { preferredProvider: 'anthropic-api', allowPaidProviderFallback: true })
+    await seedTasks([
+      {
+        id: 'task-context-menu',
+        title: 'ContextMenu',
+        status: 'spec_review',
+        spec: '## Summary\nImplement ContextMenu.\n\n## Acceptance Criteria\n1. ContextMenu works.',
+        acceptanceCriteria: [{ id: 'ac-1', description: 'ContextMenu works.', verifiedBy: 'review' }],
+      },
+      {
+        id: 'task-hover-card',
+        title: 'HoverCard',
+        status: 'spec_review',
+        spec: '## Summary\nImplement HoverCard.\n\n## Acceptance Criteria\n1. HoverCard works.',
+        acceptanceCriteria: [{ id: 'ac-2', description: 'HoverCard works.', verifiedBy: 'review' }],
+      },
+    ])
+    const { supervisor, starts } = createTrackingSupervisor()
+    const { app } = buildServeApp({ projectPath: tmpDir, supervisor })
+
+    const res = await app.fetch(
+      new Request(projectUrl('/api/project/task/task-context-menu/start'), {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ mode: 'one_task', scope: 'work_item' }),
+      }),
+    )
+
+    expect(res.status).toBe(200)
+    const body = (await res.json()) as Record<string, any>
+    expect(body.scope).toEqual({ type: 'work_item', taskId: 'task-context-menu' })
+    expect(starts.at(-1)).toMatchObject({
+      preferredTaskId: 'task-context-menu',
+      stopAfterOneTask: true,
+    })
+  })
+})
+
 describe('POST /api/project/task/:id/approve-spec', () => {
   it('transitions a spec_review task with a spec to ready and records the approvalNote', async () => {
     await seedTask('task-1', {

@@ -3454,6 +3454,7 @@ describe('ThreadTab', () => {
     const source = readFileSync('src/web/surfaces/project/ThreadTab.svelte', 'utf8')
     const threadBlock = source.match(/\.thread\s*\{([\s\S]*?)\n\s*\}/)?.[1] ?? ''
     const rowPanelBlock = source.match(/:global\(\.thread-index-row\.utility-panel\)\s*\{([\s\S]*?)\n\s*\}/)?.[1] ?? ''
+    const titleRowBlock = source.match(/\.thread-index-row-top\s*\{([\s\S]*?)\n\s*\}/)?.[1] ?? ''
     const titleBlock = source.match(/\.thread-index-row-top strong\s*\{([\s\S]*?)\n\s*\}/)?.[1] ?? ''
     const summaryBlock = source.match(/:global\(\.thread-index-row\) p\s*\{([\s\S]*?)\n\s*\}/)?.[1] ?? ''
     const chipRowBlock = source.match(/\.thread-index-row-chips\s*\{([\s\S]*?)\n\s*\}/)?.[1] ?? ''
@@ -3468,8 +3469,17 @@ describe('ThreadTab', () => {
     expect(threadBlock).toContain('--thread-lh-body: 1.4')
     expect(threadBlock).toContain('--thread-lh-title: var(--thread-lh-body)')
     expect(rowPanelBlock).toContain('gap: var(--s-1)')
+    expect(titleRowBlock).toContain('display: grid')
+    expect(titleRowBlock).toContain('grid-template-columns: minmax(0, 1fr) auto')
+    expect(titleRowBlock).toContain('align-items: start')
+    expect(titleRowBlock).not.toContain('justify-content: space-between')
     expect(titleBlock).toContain('font-size: var(--thread-fs-title)')
     expect(titleBlock).toContain('line-height: var(--thread-lh-title)')
+    expect(titleBlock).toContain('display: -webkit-box')
+    expect(titleBlock).toContain('line-clamp: 3')
+    expect(titleBlock).toContain('-webkit-line-clamp: 3')
+    expect(titleBlock).toContain('-webkit-box-orient: vertical')
+    expect(titleBlock).toContain('overflow: hidden')
     expect(summaryBlock).toContain('font-size: var(--thread-fs-body)')
     expect(summaryBlock).toContain('line-height: var(--thread-lh-body)')
     expect(chipRowBlock).toContain('flex-wrap: nowrap')

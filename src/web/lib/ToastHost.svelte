@@ -1,5 +1,6 @@
 <script lang="ts">
   import { CheckCircle2, Info, X, XCircle } from 'lucide-svelte'
+  import { fly } from 'svelte/transition'
   import { dismiss, getToasts, type ToastKind } from './toast.svelte.js'
 
   const toasts = $derived(getToasts())
@@ -15,7 +16,11 @@
   <div class="toast-host" role="region" aria-label="Notifications">
     {#each toasts as item (item.id)}
       {@const ToastIcon = iconFor(item.kind)}
-      <div class={`toast toast-${item.kind}`} role={item.kind === 'error' ? 'alert' : 'status'}>
+      <div
+        class={`toast toast-${item.kind}`}
+        role={item.kind === 'error' ? 'alert' : 'status'}
+        transition:fly={{ y: 8, opacity: 0.04, duration: 170 }}
+      >
         <ToastIcon size={18} aria-hidden="true" />
         <p>{item.message}</p>
         <button type="button" aria-label="Dismiss notification" onclick={() => dismiss(item.id)}>
@@ -45,7 +50,7 @@
     gap: 10px;
     min-height: 44px;
     padding: 10px 10px 10px 12px;
-    border: 1px solid var(--glass-border-strong);
+    border: 1px solid var(--glass-border);
     border-radius: 8px;
     color: var(--text);
     background:
@@ -87,7 +92,7 @@
   }
 
   .toast-success {
-    border-color: color-mix(in srgb, var(--ok) 45%, var(--glass-border-strong));
+    border-color: color-mix(in srgb, var(--ok) 24%, var(--glass-border));
   }
 
   .toast-success :global(svg:first-child) {
@@ -95,7 +100,7 @@
   }
 
   .toast-error {
-    border-color: color-mix(in srgb, var(--danger) 55%, var(--glass-border-strong));
+    border-color: color-mix(in srgb, var(--danger) 30%, var(--glass-border));
   }
 
   .toast-error :global(svg:first-child) {
@@ -104,7 +109,7 @@
 
   .toast-info,
   .toast-message {
-    border-color: color-mix(in srgb, var(--accent) 42%, var(--glass-border-strong));
+    border-color: color-mix(in srgb, var(--accent) 24%, var(--glass-border));
   }
 
   .toast-info :global(svg:first-child),

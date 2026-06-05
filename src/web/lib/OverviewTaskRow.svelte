@@ -67,6 +67,11 @@
     min-width: 0;
     max-width: 100%;
     color: var(--text);
+    display: -webkit-box;
+    line-clamp: 3;
+    -webkit-line-clamp: 3;
+    -webkit-box-orient: vertical;
+    overflow: hidden;
     overflow-wrap: anywhere;
   }
 

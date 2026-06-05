@@ -14,11 +14,12 @@
   import { avatarToneForRole } from '../lib/avatar-palette.js'
   import { createProjectSummaryCache, type ProjectCardSummary } from '../lib/project-summary.js'
   import { projectHref } from '../lib/project-routes.js'
-  import { setCachedService } from '../lib/service-cache.js'
+  import { getCachedService, setCachedService } from '../lib/service-cache.js'
   import type { ServiceDetail } from '../lib/types.js'
 
   let service = $state<ServiceDetail | null>(null)
   let loading = $state(true)
+  let statusHydrating = $state(false)
   let error = $state<string | null>(null)
   let busyId = $state<string | null>(null)
   let selectedProjectId = $state<string | null>(null)
@@ -68,6 +69,7 @@
         providerStatus: project.providerStatus,
         gitStory: project.gitStory,
         projectCheckIn: project.projectCheckIn,
+        projectStatusLoading: project.projectStatusLoading,
       })),
     })
   }
@@ -105,6 +107,40 @@
         void refresh(true)
       }
     }
+  }
+
+  async function loadProjectShell(): Promise<boolean> {
+    try {
+      const response = await fetch('/api/service/projects', { cache: 'no-store' })
+      const payload = (await response.json()) as ServiceDetail
+      const signature = servicePayloadSignature(payload)
+      if (signature !== lastServiceSignature || service == null) {
+        service = payload
+        lastServiceSignature = signature
+      }
+      error = null
+      loading = false
+      return true
+    } catch (err) {
+      error = requestErrorMessage(err)
+      loading = false
+      return false
+    }
+  }
+
+  async function initialLoad(): Promise<void> {
+    const cached = getCachedService()
+    if (cached) {
+      service = cached
+      lastServiceSignature = servicePayloadSignature(cached)
+      loading = false
+      void refresh(true)
+      return
+    }
+    statusHydrating = true
+    await loadProjectShell()
+    await refresh(true)
+    statusHydrating = false
   }
 
   function scheduleRefresh(): void {
@@ -187,7 +223,7 @@
   }
 
   $effect(() => {
-    void refresh()
+    void initialLoad()
   })
 
   $effect(() => {
@@ -248,6 +284,7 @@
     defaultProviderWarning?.message ??
       'Open model settings.',
   )
+  const showingPartialProjectStatus = $derived(statusHydrating || cards.some(card => card.statusLoading))
 
   function countLabel(count: number, singular: string, plural = `${singular}s`): string {
     return `${count} ${count === 1 ? singular : plural}`
@@ -357,6 +394,9 @@
       <p>Register or attach a project to start using the local service over your work.</p>
     </div>
   {:else}
+    {#if showingPartialProjectStatus}
+      <p class="loading-inline" role="status">Loading project status...</p>
+    {/if}
     <section class="floor" aria-label="Guild hall project overview">
       <div class="floor-head">
         <p class="floor-kicker">Guild hall</p>
@@ -710,6 +750,11 @@
     margin-top: 0;
     color: var(--text);
   }
+  .loading-inline {
+    margin: 0;
+    color: var(--text-muted);
+    font-size: var(--gh-type-size-meta);
+  }
   .floor {
     display: grid;
     grid-template-columns: auto auto minmax(0, 1fr);
@@ -1048,13 +1093,13 @@
     align-items: start;
   }
   .grid {
-    display: flex;
-    flex-wrap: wrap;
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(min(100%, 24rem), 1fr));
     gap: var(--s-2);
     align-items: stretch;
   }
   .grid :global(section.project-card) {
-    flex: 1 1 24rem;
+    width: 100%;
   }
   @media (max-width: 720px) {
     .hero {
@@ -1066,15 +1111,8 @@
       width: 100%;
       justify-content: center;
     }
-    .grid {
-      flex-direction: column;
-    }
     .projects-area {
       grid-template-columns: 1fr;
-    }
-    .grid :global(section.project-card) {
-      width: 100%;
-      flex-basis: auto;
     }
     .floor {
       grid-template-columns: 1fr;

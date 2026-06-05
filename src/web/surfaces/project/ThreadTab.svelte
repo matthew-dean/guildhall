@@ -5789,9 +5789,9 @@
     gap: var(--s-1);
   }
   .thread-index-row-top {
-    display: flex;
-    align-items: baseline;
-    justify-content: space-between;
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    align-items: start;
     gap: var(--gh-space-2);
   }
   .thread-index-row-top strong {
@@ -5800,6 +5800,11 @@
     font-size: var(--thread-fs-title);
     line-height: var(--thread-lh-title);
     font-weight: var(--gh-type-weight-strong);
+    display: -webkit-box;
+    line-clamp: 3;
+    -webkit-line-clamp: 3;
+    -webkit-box-orient: vertical;
+    overflow: hidden;
   }
   :global(.thread-index-row.is-selected) .thread-index-row-top strong {
     color: var(--thread-color-strong);

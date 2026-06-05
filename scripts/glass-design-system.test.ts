@@ -44,7 +44,14 @@ describe('Guildhall glass design system', () => {
     expect(toastHost).toContain('var(--glass-bg')
     expect(toastHost).toContain('backdrop-filter: var(--glass-blur)')
     expect(toastHost).toContain('-webkit-backdrop-filter: var(--glass-blur)')
+    expect(toastHost).toContain("import { fly } from 'svelte/transition'")
+    expect(toastHost).toContain('transition:fly={{ y: 8, opacity: 0.04, duration: 170 }}')
+    expect(toastHost).toContain('border: 1px solid var(--glass-border)')
+    expect(toastHost).toContain('color-mix(in srgb, var(--ok) 24%, var(--glass-border))')
+    expect(toastHost).toContain('color-mix(in srgb, var(--danger) 30%, var(--glass-border))')
+    expect(toastHost).toContain('color-mix(in srgb, var(--accent) 24%, var(--glass-border))')
     expect(toastHost).not.toContain('--glass-filter')
+    expect(toastHost).not.toContain('var(--glass-border-strong)')
   })
 
   it('documents the same glass language in VitePress and the UI design-token reference', () => {

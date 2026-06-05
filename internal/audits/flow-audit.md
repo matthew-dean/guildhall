@@ -9257,6 +9257,98 @@ inbox-row`, its status as `chip tone-warn size-default`, and `statusPills: 0`.
 
 source: codex:design-primitive-chip-row-enforcement
 
+2026-06-05T04:28:00Z - Softened toast glass borders and added motion after
+owner feedback that the borders still read too heavy and toasts should move
+into/out of place instead of appearing as static slabs. `ToastHost` now uses
+Svelte's `fly` transition with a small upward entrance (`y: 8`) and fade
+(`opacity: 0.04`, `duration: 170`) so removal gets the matching outro. Base
+toast borders now use `--glass-border` instead of `--glass-border-strong`, and
+success/error/info semantic border mixes are reduced to `24%`, `30%`, and
+`24%` respectively while keeping icon color as the stronger semantic signal.
+
+Verification: Added focused glass-design regression coverage for the toast
+transition, softened border token, and reduced semantic border mixes. Commands
+passed: `pnpm exec vitest run scripts/glass-design-system.test.ts`, `pnpm
+build`, `pnpm dev:install`, and a forced service freshness check. The first
+post-install `guildhall stop && guildhall start` reported a stale running
+service, so the launch agent state was inspected and the active service was
+confirmed fresh afterward with `/api/stale-server` returning `stale:false` for
+PID `54481` and installed dist
+`/Users/matthew/.guildhall/app/0.10.0/app/dist/cli.js`. Browser proof on
+`/projects/narrative-harness/task/author-voice-loop-mvp?proof=toast-motion-border-1780633620021`
+triggered the live toast path via `Copy link`; the Browser wrapper denied
+clipboard access, producing an error toast, and computed style showed
+`borderWidth: 1px`, softened danger border color, and
+`backdropFilter: blur(22px) saturate(1.18)`.
+
+source: codex:toast-soft-border-motion
+
+2026-06-05T04:39:00Z - Made Projects & Workspaces render progressively and
+switched project cards from flex wrapping to a real responsive grid. Root
+cause: the page waited on one heavy `/api/service` response before showing any
+project cards, while that endpoint performed per-project provider, migration,
+readiness, availability, task, git, inbox, thread, and action-model work. It
+also laid project cards out with flex wrapping (`flex: 1 1 24rem`) instead of
+CSS grid columns. Fix: added `/api/service/projects`, a lightweight registered
+project shell endpoint that returns identity, summary, tags, run state, and
+`projectStatusLoading: true` without expensive per-project status hydration.
+ProjectsHome now renders those shell cards immediately, shows
+`Loading project status...`, then hydrates from the full `/api/service`
+response in the background. Shell cards summarize honestly as `Loading` /
+`Loading project status...` so the UI does not momentarily claim zero-task
+projects are `Ready`. The project card container now uses
+`grid-template-columns: repeat(auto-fit, minmax(min(100%, 24rem), 1fr))`.
+
+Verification: Added frontend coverage for the responsive grid source contract
+and progressive rendering while `/api/service` remains unresolved. Added
+backend coverage proving `/api/service/projects` returns lightweight shells
+with `projectStatusLoading: true` and without expensive `migrationSummary`,
+`actionModel`, or `startReadiness` fields. Commands passed:
+`pnpm vitest run src/web/surfaces/__tests__/ProjectsHome.svelte.test.ts
+--reporter=dot` (`21` tests), `pnpm vitest run
+src/runtime/__tests__/serve-settings.test.ts -t
+"lightweight project shells|migration summary" --reporter=dot` (`2` focused
+tests), `pnpm build`, and `pnpm dev:install`. The normal restart path again
+left a stale service, so the LaunchAgent was restarted with `launchctl
+kickstart -k`; `/api/stale-server` then returned `stale:false` for installed
+dist `/Users/matthew/.guildhall/app/0.10.0/app/dist/cli.js`. Browser/API proof
+on `/?proof=projects-progressive-grid-1780634274207` showed
+`/api/service/projects` returning `7` shell projects in `43ms`; the page
+rendered `7` project cards while `loadingInline` was
+`Loading project status...`; computed `.grid` display was `grid` with columns
+`501px 501px`; after hydration, `loadingInline` became `null` and the first
+card showed real status/counts/chips while retaining the same grid columns.
+
+source: codex:projects-progressive-shell-grid
+
+2026-06-05T04:57:43Z - Clamped long Thread index titles to three lines after
+the Looma + Knit thread list showed a selected card hard-cutting a long
+file-path-heavy task title at the card edge. `.thread-index-row-top` now uses a
+two-column grid (`minmax(0, 1fr) auto`) so the title and timestamp have stable
+lanes, and the title uses the standard `line-clamp: 3` declaration plus the
+current WebKit clamp fallback (`display: -webkit-box`,
+`-webkit-line-clamp: 3`, `-webkit-box-orient: vertical`, `overflow: hidden`).
+
+Verification: Extended the existing ThreadTab source regression so the
+thread-list title row must remain grid-based and the title must keep the
+three-line clamp declarations. Commands passed: `pnpm vitest run
+src/web/surfaces/project/__tests__/ThreadTab.svelte.test.ts -t "thread-list
+titles readable" --reporter=dot`, `pnpm build`, and `pnpm dev:install` after
+one transient installer copy failure on the first attempt. The background
+service initially remained stale; killing the stale PID and letting the
+LaunchAgent restart produced `/api/stale-server` with `stale:false` for PID
+`1880` and installed dist
+`/Users/matthew/.guildhall/app/0.10.0/app/dist/cli.js`. Browser proof on
+`/projects/looma-knit/thread?proof=thread-title-clamp-1780635410000` found
+`39` thread-list titles; the target
+`Keep docs/component-roadmap.md, docs/editor-roadmap.md, and
+knit/docs/looma-migration-inventory.md synchronized as migra` rendered at
+`56.7px` with `line-height: 18.9px` (`3` estimated lines), row display `grid`,
+row columns `207.797px 21.2031px`, `overflow: hidden`, and live CSS containing
+`display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical`.
+
+source: codex:thread-index-title-3-line-clamp
+
 2026-06-05T03:09:55Z - Toned down repeated `Guildhall` mentions in Thread,
 task drawer, and recovery copy after a Looma + Knit screenshot showed the brand
 name stacking in task cards, recovery history, escalation guidance, and the
@@ -9325,3 +9417,38 @@ src/runtime/__tests__/project-action-model.test.ts
 src/runtime/__tests__/thread.test.ts --run` (`158` tests).
 
 source: codex:whole-app-brand-copy-audit
+
+2026-06-05T05:01:00Z - Retried Looma + Knit `ContextMenu`
+(`task-import-1l0mr2r`) end-to-end from the Thread screen after the owner
+reported that simple component tasks looked inert. Found and fixed three
+Guildhall runtime gaps before the task could even attempt implementation:
+spec-agent inactivity timeouts now preserve already-written durable specs
+instead of escalating as if no progress existed; structured specs tolerate and
+strip agent-written acceptance-criterion `id` fields; and explicit
+`/api/project/task/:id/start` scoped starts are no longer blocked by the
+aggregate `Review 36 waiting specs before starting` readiness gate.
+
+Live proof after reinstall: `/api/stale-server` returned `stale:false` for the
+installed 0.10.0 dist. Clicking the Thread task-level `Resume spec work`
+control for ContextMenu started `mode: "one_task"` instead of the earlier
+blocked/no-op behavior. Direct scoped endpoint proof also returned HTTP 200
+with `scope: { type: "work_item", taskId: "task-import-1l0mr2r" }`.
+
+Remaining blocker: the task still did not reach implementation. The scoped run
+stopped as `agent-error` after `coordinator-looma timed out after 120000ms of
+inactivity`. Final task state stayed `spec_review` with a spec and 3 acceptance
+criteria; recent notes show blueprint review rejected the recovery seed because
+it lacks a Completion Boundary, then coordinator/provider timeout
+classification repeated. Next audit slice should target coordinator
+spec-review timeout handling and why a buildable structured spec is not being
+written before the one-task run exits.
+
+Verification: `pnpm vitest run src/core/__tests__/structured-spec.test.ts
+--reporter=dot`, `pnpm vitest run src/runtime/__tests__/orchestrator.test.ts
+-t "spec-agent inactivity timeouts|existing durable spec" --reporter=dot`,
+`pnpm vitest run src/runtime/__tests__/serve-task-endpoints.test.ts -t
+"scoped spec_review task start" --reporter=dot`, focused affected service and
+Thread tests, `pnpm typecheck`, `git diff --check`, `pnpm build`, and
+`pnpm dev:install` all passed.
+
+source: codex:looma-contextmenu-scoped-start-blockers

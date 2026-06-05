@@ -3490,6 +3490,7 @@ export class Orchestrator {
           taskId: task.id,
           agentName: agent.name,
           beforeStatus,
+          interruption: 'turn_limit',
         })
         if (preserved) {
           return preserved
@@ -3536,6 +3537,15 @@ export class Orchestrator {
         beforeStatus === 'exploring' &&
         /timed out after \d+ms|exceeded \d+ms total turn budget/i.test(message)
       ) {
+        const preserved = await this.preserveDurableProgressAfterTurnLimit({
+          taskId: task.id,
+          agentName: agent.name,
+          beforeStatus,
+          interruption: 'timeout',
+        })
+        if (preserved) {
+          return preserved
+        }
         const summary = 'Spec shaping timed out before saving durable progress.'
         const escalation = await raiseEscalation({
           tasksPath,
@@ -7942,6 +7952,7 @@ export class Orchestrator {
     taskId: string
     agentName: string
     beforeStatus: TaskStatus
+    interruption?: 'turn_limit' | 'timeout'
   }): Promise<TickOutcome | null> {
     const queue = await this.readQueue()
     const task = queue.tasks.find((candidate) => candidate.id === input.taskId)
@@ -7989,7 +8000,9 @@ export class Orchestrator {
       message:
         durableWorkerProgress
           ? 'The model hit its turn limit after making real worktree edits, so Guildhall is preserving that code progress instead of escalating over it.'
-          : 'The model hit its turn limit after writing durable task state, so Guildhall is preserving that progress instead of escalating over it.',
+          : input.interruption === 'timeout'
+            ? 'The model timed out after writing durable task state, so Guildhall is preserving that progress instead of escalating over it.'
+            : 'The model hit its turn limit after writing durable task state, so Guildhall is preserving that progress instead of escalating over it.',
     })
 
     return {

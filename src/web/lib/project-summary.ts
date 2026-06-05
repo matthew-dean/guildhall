@@ -53,6 +53,7 @@ export interface ProjectCardSummary {
     title: string
     blockerCount: number
   } | null
+  statusLoading: boolean
 }
 
 export interface ProjectSummaryCache {
@@ -340,6 +341,7 @@ export function summarizeProjectCard(
   project: ServiceProjectSummary,
   defaultProviderStatus?: ProviderStatus | null,
 ): ProjectCardSummary {
+  const projectStatusLoading = Boolean(project.projectStatusLoading)
   const counts = {
     total: project.taskCounts?.total ?? 0,
     active: project.taskCounts?.active ?? 0,
@@ -383,6 +385,35 @@ export function summarizeProjectCard(
       }
     : null
   const needsAttention = projectNeedsAttention(project, counts, projectCheckIn, provider)
+  if (projectStatusLoading) {
+    return {
+      id: project.id,
+      name: humanizeProjectName(project.name?.trim() || project.id),
+      path: formatUserPath(project.path),
+      statusLabel: 'Loading',
+      tone: project.run?.status === 'running' ? 'active' : 'idle',
+      stageLabel: 'Loading',
+      activityLabel: 'Loading project status...',
+      recentLabel: null,
+      completedLabel: null,
+      nextLabel: null,
+      maturityLabel: 'Loading',
+      maturityDescription: 'Project status is still loading.',
+      blurb: project.summary ?? null,
+      tags: project.tags ?? [],
+      counts,
+      taskActivity: project.taskActivity ?? emptyTaskActivity(),
+      ticker: buildProjectCardTicker(project),
+      actionLabel: initializationNeeded ? 'Open setup' : 'Open project',
+      runActionLabel: null,
+      canOpen: true,
+      canStart: false,
+      canStop: false,
+      needsAttention: false,
+      gitStory: null,
+      statusLoading: true,
+    }
+  }
   return {
     id: project.id,
     name: humanizeProjectName(project.name?.trim() || project.id),
@@ -439,6 +470,7 @@ export function summarizeProjectCard(
     canStop: running || (!initializationNeeded && !running && runControl?.startEnabled === true && runControl.label === 'Pause'),
     needsAttention,
     gitStory,
+    statusLoading: false,
   }
 }
 
@@ -463,6 +495,7 @@ function projectSummarySignature(
     providerStatus: project.providerStatus,
     gitStory: project.gitStory,
     projectCheckIn: project.projectCheckIn,
+    projectStatusLoading: project.projectStatusLoading,
   })
 }
 

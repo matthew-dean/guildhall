@@ -35,6 +35,10 @@ export const StructuredAcceptanceCriterion = z.preprocess((value) => {
       verificationMode: 'review',
     }
   }
+  if (value && typeof value === 'object' && !Array.isArray(value) && 'id' in value) {
+    const { id: _id, ...criterion } = value as Record<string, unknown>
+    return criterion
+  }
   return value
 }, z.object({
   scenario: cleanedString('Acceptance criterion scenario'),

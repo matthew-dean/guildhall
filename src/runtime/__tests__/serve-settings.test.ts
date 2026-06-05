@@ -1656,6 +1656,25 @@ describe('GET /api/stale-server', () => {
 })
 
 describe('GET /api/service', () => {
+  it('serves lightweight project shells before expensive project status hydration', async () => {
+    registerWorkspace({ id: PROJECT_ID, name: 'Settings Test', path: tmpDir, tags: [] })
+    const { app } = buildServeApp({ projectPath: tmpDir })
+
+    const res = await app.fetch(new Request('http://localhost/api/service/projects'))
+    expect(res.status).toBe(200)
+    const body = (await res.json()) as { projects?: Array<Record<string, any>> }
+    const project = body.projects?.find(item => item.id === PROJECT_ID)
+    expect(project).toMatchObject({
+      id: PROJECT_ID,
+      name: 'Settings Test',
+      path: tmpDir,
+      projectStatusLoading: true,
+    })
+    expect(project?.migrationSummary).toBeUndefined()
+    expect(project?.actionModel).toBeUndefined()
+    expect(project?.startReadiness).toBeUndefined()
+  })
+
   it('includes migration summary counts for registered projects', async () => {
     registerWorkspace({ id: PROJECT_ID, name: 'Settings Test', path: tmpDir, tags: [] })
     await fs.mkdir(path.join(tmpDir, 'memory'), { recursive: true })

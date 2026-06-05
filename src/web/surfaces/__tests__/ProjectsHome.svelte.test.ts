@@ -2,6 +2,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { cleanup, render, screen, waitFor } from '@testing-library/svelte'
 import userEvent from '@testing-library/user-event'
+import { readFileSync } from 'node:fs'
 import ProjectsHome from '../ProjectsHome.svelte'
 import { path } from '../../lib/nav.svelte.js'
 import { getCachedService } from '../../lib/service-cache.js'
@@ -58,6 +59,44 @@ function installBrowserFakes() {
 }
 
 describe('ProjectsHome', () => {
+  it('uses a responsive grid for project cards instead of flex wrapping', () => {
+    const source = readFileSync('src/web/surfaces/ProjectsHome.svelte', 'utf-8')
+
+    expect(source).toContain('grid-template-columns: repeat(auto-fit, minmax(min(100%, 24rem), 1fr))')
+    expect(source).not.toContain('flex: 1 1 24rem')
+    expect(source).not.toContain('flex-wrap: wrap;\n    gap: var(--s-2);\n    align-items: stretch;')
+  })
+
+  it('renders registered project cards from the lightweight shell before full status finishes', async () => {
+    const fullService = new Promise<Response>(() => {})
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      if (String(input) === '/api/service/projects') {
+        return json({
+          pid: 1234,
+          projects: servicePayload.projects.map(project => ({
+            id: project.id,
+            path: project.path,
+            name: project.name,
+            summary: project.summary,
+            projectStatusLoading: true,
+            run: project.run,
+          })),
+        } satisfies ServiceDetail)
+      }
+      if (String(input) === '/api/service') return fullService
+      return json(servicePayload)
+    })
+    vi.stubGlobal('fetch', fetchMock)
+
+    render(ProjectsHome)
+
+    await screen.findByText('Looma knit')
+    expect(screen.getByText('Loading project status...')).toBeTruthy()
+    expect(screen.getAllByText('Loading').length).toBeGreaterThan(0)
+    expect(fetchMock.mock.calls.map(([input]) => String(input))).toContain('/api/service/projects')
+    expect(fetchMock.mock.calls.map(([input]) => String(input))).toContain('/api/service')
+  })
+
   beforeEach(() => {
     installBrowserFakes()
   })
@@ -449,16 +488,33 @@ describe('ProjectsHome', () => {
 
   it('does not rewrite the dashboard state when a background poll returns the same service snapshot', async () => {
     vi.useFakeTimers()
-    const fetchMock = vi.fn(async () => json(structuredClone(servicePayload)))
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      if (String(input) === '/api/service/projects') {
+        return json({
+          ...structuredClone(servicePayload),
+          projects: servicePayload.projects.map(project => ({
+            id: project.id,
+            path: project.path,
+            name: project.name,
+            summary: project.summary,
+            projectStatusLoading: true,
+            run: project.run,
+          })),
+        } satisfies ServiceDetail)
+      }
+      return json(structuredClone(servicePayload))
+    })
     vi.stubGlobal('fetch', fetchMock)
 
     render(ProjectsHome)
-    await screen.findByText('Looma knit')
+    for (let i = 0; i < 8; i += 1) await Promise.resolve()
+    expect(screen.getByText('Looma knit')).toBeTruthy()
+    expect(getCachedService()).not.toBeNull()
     const cachedAfterInitialLoad = getCachedService()
 
     await vi.advanceTimersByTimeAsync(30000)
 
-    await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(2))
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(3))
     expect(getCachedService()).toBe(cachedAfterInitialLoad)
   })
 

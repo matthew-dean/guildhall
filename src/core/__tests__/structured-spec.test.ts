@@ -6,6 +6,41 @@ import {
 } from '../structured-spec.js'
 
 describe('StructuredSpec', () => {
+  it('tolerates agent-written acceptance criterion ids without storing them in structured specs', () => {
+    const structured = StructuredSpec.parse({
+      whatThisIs: 'A block menu for selection actions inside the Looma editor.',
+      problemContext: 'The roadmap and answered shaping questions define the block menu scope and exclusions.',
+      goals: ['Give editors a focused block menu for the approved actions.'],
+      nonGoals: ['Do not add drag-and-drop reordering in this task.'],
+      proposedDesign: 'Extend the existing editor action surface instead of inventing a second menu system.',
+      keyDecisions: ['Use the current selection model as the menu anchor.'],
+      acceptanceCriteria: [
+        {
+          id: 'ac-context-menu-opens',
+          scenario: 'Given a selected block, when the menu opens',
+          expectation: 'Then the approved actions are available.',
+          verificationMode: 'review',
+        },
+      ],
+      verification: ['Review the menu behavior in the local editor shell.'],
+      completionBoundary: {
+        productOutcome: 'Editors can use the approved block menu locally.',
+        whatGuildhallCanCompleteInCode: 'The repo-local menu UI, behavior, and tests.',
+        externalDependencies: 'None.',
+        ownerOnlySetup: 'None.',
+        verificationEnvironment: 'Local editor shell plus repo tests.',
+        whatCountsAsDone: 'The block menu is reviewable and behaves as specified.',
+        whatMustBeSplitOrBlocked: 'Drag-handle work stays split into a follow-up task.',
+      },
+    })
+
+    expect(structured.acceptanceCriteria[0]).toEqual({
+      scenario: 'Given a selected block, when the menu opens',
+      expectation: 'Then the approved actions are available.',
+      verificationMode: 'review',
+    })
+  })
+
   it('renders a deterministic markdown spec from the structured payload', () => {
     const structured = StructuredSpec.parse({
       whatThisIs: 'A block menu for selection actions inside the Looma editor.',
