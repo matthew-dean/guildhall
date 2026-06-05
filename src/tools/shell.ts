@@ -201,6 +201,43 @@ function preflightInteractive(command: string): string | null {
   )
 }
 
+function metadataStringArray(metadata: Record<string, unknown> | undefined, key: string): string[] {
+  const raw = metadata?.[key]
+  return Array.isArray(raw)
+    ? raw.filter((value): value is string => typeof value === 'string' && value.trim().length > 0)
+    : []
+}
+
+function pnpmFilterPackage(command: string): string | null {
+  const match = /\bpnpm\s+(?:--filter|-F)\s+(@?[\w./-]+)/i.exec(command)
+  return match?.[1]?.trim() ?? null
+}
+
+function packageDirectoryFromFilter(filter: string): string | null {
+  const normalized = filter.replace(/^['"]|['"]$/g, '').replace(/^\.\//, '')
+  if (normalized.includes('/')) {
+    const last = normalized.split('/').filter(Boolean).at(-1)
+    return last ? `packages/${last}/` : null
+  }
+  return normalized ? `packages/${normalized}/` : null
+}
+
+function allowsFocusedSupplementalVerification(
+  command: string,
+  metadata: Record<string, unknown> | undefined,
+): boolean {
+  const lowered = command.toLowerCase()
+  if (/\b(e2e|browser|playwright)\b/.test(lowered)) return true
+  if (!/\b(test|vitest)\b/.test(lowered)) return false
+
+  const filter = pnpmFilterPackage(command)
+  const packageDir = filter ? packageDirectoryFromFilter(filter) : null
+  if (!packageDir) return false
+
+  const likelyTargets = metadataStringArray(metadata, 'current_task_likely_target_files')
+  return likelyTargets.some((target) => target.replaceAll(path.sep, '/').includes(packageDir))
+}
+
 function interactiveHint(command: string, output: string): string | null {
   if (looksLikeInteractiveScaffold(command.toLowerCase()) || looksLikePrompt(output)) {
     return (
@@ -468,7 +505,8 @@ export const shellTool = defineTool({
       authoritativeCommands &&
       authoritativeCommands.length > 0 &&
       requestedKind !== 'other' &&
-      !reconciled.usedAuthority
+      !reconciled.usedAuthority &&
+      !allowsFocusedSupplementalVerification(input.command, ctx.metadata)
     ) {
       return {
         output:

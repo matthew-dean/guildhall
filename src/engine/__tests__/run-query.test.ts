@@ -3988,6 +3988,92 @@ Uncertainties: none`,
     )).toBe(false)
   })
 
+  it('allows likely-target package support reads after a durable-progress nudge', async () => {
+    const registry = new ToolRegistry()
+    registry.register(
+      defineTool({
+        name: 'read-file',
+        description: '',
+        inputSchema: z.object({ filePath: z.string() }),
+        isReadOnly: () => true,
+        execute: async ({ filePath }) => ({
+          output: `contents of ${String(filePath)}`,
+          is_error: false,
+        }),
+      }),
+    )
+    const client = new ScriptedApiClient([
+      {
+        message: assistantToolUse(
+          'read-file',
+          { filePath: '/workspace/project/packages/core/src/components/ui-context-menu/ui-context-menu.tsx' },
+          'toolu_1',
+        ),
+      },
+      {
+        message: {
+          role: 'assistant',
+          content: [
+            {
+              type: 'tool_use',
+              id: 'toolu_2',
+              name: 'read-file',
+              input: { filePath: '/workspace/project/packages/core/package.json' },
+            },
+            {
+              type: 'tool_use',
+              id: 'toolu_3',
+              name: 'read-file',
+              input: { filePath: '/workspace/project/packages/core/test/setup.ts' },
+            },
+          ],
+        },
+      },
+      { message: assistantText('done') },
+    ])
+    const messages: ConversationMessage[] = [
+      { role: 'user', content: [{ type: 'text', text: 'go' }] },
+    ]
+
+    const events = await drain(
+      runQuery(
+        {
+          apiClient: client,
+          toolRegistry: registry,
+          permissionChecker: autoChecker(),
+          cwd: '/workspace/project',
+          model: 'test',
+          systemPrompt: '',
+          maxTokens: 256,
+          maxTurns: 5,
+          noProgressToolNames: ['shell', 'write-checkpoint'],
+          noProgressTurnNudge: 'Make concrete implementation progress now.',
+          noProgressTurnThreshold: 1,
+          noProgressTurnNudgeLimit: 1,
+          toolMetadata: {
+            current_agent_id: 'worker-agent',
+            current_task_likely_target_files: [
+              '/workspace/project/packages/core/src/components/ui-context-menu/ui-context-menu.tsx',
+            ],
+          },
+        },
+        messages,
+      ),
+    )
+
+    expect(events.filter((e) =>
+      e.type === 'tool_execution_completed' &&
+      e.tool_name === 'read-file',
+    )).toHaveLength(3)
+    expect(messages.some((message) =>
+      message.role === 'user' &&
+      message.content.some((block) =>
+        block.type === 'tool_result' &&
+        String(block.content).includes('Research budget exhausted for this intake turn'),
+      ),
+    )).toBe(false)
+  })
+
   it('demands an update-task self-critique tool call after handoff-checkpoint read drift', async () => {
     const registry = new ToolRegistry()
     registry.register(

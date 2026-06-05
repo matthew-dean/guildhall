@@ -29,7 +29,7 @@ import type {
   UsageSnapshot,
 } from '@guildhall/protocol'
 import { existsSync, readFileSync } from 'node:fs'
-import { dirname, join, resolve, sep } from 'node:path'
+import { dirname, isAbsolute, join, relative as relativePath, resolve, sep } from 'node:path'
 import {
   emptyUsage,
   isEffectivelyEmpty,
@@ -784,6 +784,55 @@ function isVerificationEvidenceSupportReadOnlyToolCall(
   )
 }
 
+function likelyTargetPackageRoots(cwd: string, likelyTargetFiles: readonly string[]): string[] {
+  const roots = new Set<string>()
+  for (const candidate of likelyTargetFiles) {
+    const trimmed = candidate.trim()
+    if (!trimmed) continue
+    const normalized = resolve(cwd, trimmed)
+    const parsed = normalized.split(sep).filter(Boolean)
+    const packagesIndex = parsed.findIndex((segment) => segment === 'packages')
+    if (packagesIndex >= 0 && parsed[packagesIndex + 1]) {
+      roots.add(`${normalized.startsWith(sep) ? sep : ''}${parsed.slice(0, packagesIndex + 2).join(sep)}`)
+      continue
+    }
+    const sourceBoundaryIndex = parsed.findIndex((segment) =>
+      segment === 'src' || segment === 'test' || segment === 'tests',
+    )
+    if (sourceBoundaryIndex > 0) {
+      roots.add(`${normalized.startsWith(sep) ? sep : ''}${parsed.slice(0, sourceBoundaryIndex).join(sep)}`)
+    }
+  }
+  return [...roots]
+}
+
+function isLikelyTargetPackageSupportReadOnlyToolCall(
+  cwd: string,
+  toolCall: ToolUseBlock,
+  likelyTargetFiles: readonly string[],
+): boolean {
+  if (toolCall.name !== 'read-file') return false
+  const filePath = String((toolCall.input as Record<string, unknown>)?.filePath ?? '').trim()
+  if (filePath.length === 0) return false
+  const normalizedInputPath = resolve(cwd, filePath)
+  const supportNames = new Set([
+    'package.json',
+    'tsconfig.json',
+    'vitest.config.ts',
+    'vitest.config.js',
+    'playwright.config.ts',
+    'playwright.config.js',
+  ])
+  return likelyTargetPackageRoots(cwd, likelyTargetFiles).some((root) => {
+    const relative = relativePath(root, normalizedInputPath)
+    if (!relative || relative === '..' || relative.startsWith(`..${sep}`) || isAbsolute(relative)) {
+      return false
+    }
+    if (supportNames.has(relative)) return true
+    return /^test[\/\\]setup\.[cm]?[jt]s$/i.test(relative)
+  })
+}
+
 function verificationEvidenceCompanionRoots(
   cwd: string,
   likelyTargetFiles: readonly string[],
@@ -1476,11 +1525,21 @@ export async function* runQuery(
     const preferredVerificationCommand = latestFailedVerificationCommand(context.toolMetadata)
     const isWorkerCheckpointLane =
       currentAgentId(context.toolMetadata) === 'worker-agent' && checkpointNextAction.length > 0
+    const workerLikelyTargetSupportReadOnlyAllowed =
+      currentAgentId(context.toolMetadata) === 'worker-agent' &&
+      likelyTargetFiles.length > 0 &&
+      noProgressToolTurns <= 2 &&
+      toolCalls.length > 0 &&
+      toolCalls.every((tc) =>
+        isLikelyTargetScopedReadOnlyToolCall(context.cwd, tc, likelyTargetFiles) ||
+        isLikelyTargetPackageSupportReadOnlyToolCall(context.cwd, tc, likelyTargetFiles),
+      )
     const shouldRefuseFurtherReadOnlyResearch =
       progressToolNames.size > 0 &&
       !hadProgressToolCall &&
       noProgressTurnNudges > 0 &&
       !isWorkerCheckpointLane &&
+      !workerLikelyTargetSupportReadOnlyAllowed &&
       toolCalls.length > 0 &&
       toolCalls.every((tc) => isReadOnlyToolCall(context, tc.name, tc.input))
     const checkpointVerificationReadFollowThroughActive =
@@ -1572,6 +1631,7 @@ export async function* runQuery(
       !verificationEvidenceLikelyTargetReadOnlyAllowed &&
       !uninspectedVerificationLikelyTargetReadOnlyAllowed &&
       !checkpointEditMissReadAllowed &&
+      !workerLikelyTargetSupportReadOnlyAllowed &&
       !handoffScopedLikelyTargetReadOnlyAllowed &&
       toolCalls.length > 0 &&
       toolCalls.every((tc) => isReadOnlyToolCall(context, tc.name, tc.input))
@@ -1585,6 +1645,7 @@ export async function* runQuery(
       !verificationEvidenceLikelyTargetReadOnlyAllowed &&
       !uninspectedVerificationLikelyTargetReadOnlyAllowed &&
       !checkpointEditMissReadAllowed &&
+      !workerLikelyTargetSupportReadOnlyAllowed &&
       !handoffScopedLikelyTargetReadOnlyAllowed
     const shouldRefuseNonAuthoritativeCheckpointShell =
       isWorkerCheckpointLane &&

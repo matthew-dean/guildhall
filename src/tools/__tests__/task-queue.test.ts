@@ -158,6 +158,25 @@ describe('updateTask', () => {
     expect((evidence[0]?.payload as { timestamp?: string }).timestamp).toBeDefined()
   })
 
+  it('accepts a stringified note object from model tool calls', async () => {
+    await updateTaskTool.execute({
+      tasksPath,
+      taskId: 'task-001',
+      note: JSON.stringify({
+        agentId: 'worker-agent',
+        role: 'self-critique',
+        content: '**Self-critique:** Review proof packet recorded.',
+      }),
+    }, ctx)
+
+    const evidence = await readTaskEvidence(tmpDir, 'task-001', { kind: 'note' })
+    expect(evidence.at(-1)?.payload).toMatchObject({
+      agentId: 'worker-agent',
+      role: 'self-critique',
+      content: '**Self-critique:** Review proof packet recorded.',
+    })
+  })
+
   it('updates the task spec and acceptance criteria', async () => {
     await updateTask({
       tasksPath,

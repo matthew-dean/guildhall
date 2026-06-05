@@ -67,19 +67,28 @@ export const readTasksTool = defineTool({
   },
 })
 
+const updateTaskNoteSchema = z.preprocess((value) => {
+  if (typeof value !== 'string') return value
+  const trimmed = value.trim()
+  if (!trimmed.startsWith('{')) return value
+  try {
+    return JSON.parse(trimmed)
+  } catch {
+    return value
+  }
+}, z.object({
+  agentId: z.string(),
+  role: z.string(),
+  content: z.string(),
+}))
+
 const updateTaskInputSchema = z.object({
   tasksPath: TASKS_PATH_SCHEMA,
   taskId: z.string().optional(),
   title: z.string().optional(),
   status: TaskStatus.optional(),
   assignedTo: z.string().nullable().optional(),
-  note: z
-    .object({
-      agentId: z.string(),
-      role: z.string(),
-      content: z.string(),
-    })
-    .optional(),
+  note: updateTaskNoteSchema.optional(),
   blockReason: z.string().optional(),
   humanJudgment: z.string().optional(),
   spec: z.string().optional(),
@@ -106,10 +115,11 @@ function inferMetadataTaskId(metadata: Record<string, unknown> = {}): string | n
 }
 
 export async function updateTask(
-  input: UpdateTaskInput,
+  rawInput: UpdateTaskInput,
   metadata: Record<string, unknown> = {},
 ): Promise<UpdateTaskResult> {
   try {
+    const input = updateTaskInputSchema.parse(rawInput)
     const raw = await fs.readFile(input.tasksPath, 'utf-8')
     const queue = TaskQueue.parse(JSON.parse(raw))
     const taskId = input.taskId ?? inferMetadataTaskId(metadata) ?? inferSingleActiveTaskId(queue)

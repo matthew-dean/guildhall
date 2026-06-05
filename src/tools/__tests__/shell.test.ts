@@ -86,6 +86,35 @@ function makeWorkspaceScriptPackage(): string {
   return root
 }
 
+function makeScopedWorkspaceScriptPackage(): string {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'guildhall-shell-scoped-workspace-'))
+  const core = path.join(root, 'packages', 'core')
+  fs.mkdirSync(core, { recursive: true })
+  fs.writeFileSync(
+    path.join(root, 'pnpm-workspace.yaml'),
+    "packages:\n  - 'packages/*'\n",
+  )
+  fs.writeFileSync(
+    path.join(root, 'package.json'),
+    JSON.stringify({ private: true, packageManager: 'pnpm@10.19.0' }, null, 2),
+  )
+  fs.writeFileSync(
+    path.join(core, 'package.json'),
+    JSON.stringify(
+      {
+        name: '@looma/core',
+        private: true,
+        scripts: {
+          test: "node -e \"console.log('core-test-ran')\"",
+        },
+      },
+      null,
+      2,
+    ),
+  )
+  return root
+}
+
 describe('runShellSync — success cases', () => {
   it('returns success=true for a command that exits 0', () => {
     const result = runShellSync({ command: 'echo hello', cwd: '/tmp', timeoutMs: 5000 })
@@ -499,6 +528,31 @@ describe('shellTool — engine-tool interface', () => {
       usedAuthoritativeCommand: false,
       blockedUnauthorizedVerificationCommand: true,
     })
+  })
+
+  it('allows focused package test commands as supplemental verification', async () => {
+    const cwd = makeScopedWorkspaceScriptPackage()
+    const result = await shellTool.execute(
+      { command: 'pnpm --filter @looma/core test', cwd, timeoutMs: 5000 },
+      {
+        cwd,
+        metadata: {
+          current_task_verification_commands: [
+            'pnpm lint',
+            'pnpm typecheck',
+          ],
+          current_task_likely_target_files: [
+            path.join(cwd, 'packages/core/src/components/ui-context-menu/ui-context-menu.tsx'),
+          ],
+        },
+      },
+    )
+    expect(result.is_error).toBe(false)
+    expect(result.output).toContain('core-test-ran')
+    expect(result.metadata).toMatchObject({
+      requestedCommand: 'pnpm --filter @looma/core test',
+    })
+    expect((result.metadata as Record<string, unknown>).blockedUnauthorizedVerificationCommand).toBeUndefined()
   })
 
   it('does not rewrite non-verification shell commands from authoritative gates', async () => {

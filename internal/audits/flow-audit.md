@@ -9486,3 +9486,40 @@ Thread tests, `pnpm typecheck`, `git diff --check`, `pnpm build`, and
 `pnpm dev:install` all passed.
 
 source: codex:looma-contextmenu-scoped-start-blockers
+
+2026-06-05T13:03:00Z - Continued the Looma + Knit `ContextMenu`
+(`task-import-1l0mr2r`) delivery run through implementation and browser proof.
+Fixed three Guildhall control-loop blockers that prevented the worker from
+getting to the requested end state: `update-task` now accepts a stringified
+`note` object when the model serializes `{ agentId, role, content }` as JSON;
+the shell guard now allows focused supplemental package/browser/e2e test
+commands when an older authoritative verification set exists; and the
+no-progress read budget now allows a worker to read likely-target package
+support files such as `package.json`, `vitest.config.ts`, and `test/setup.ts`
+while implementing a scoped recovery.
+
+Live proof after reinstall: `/api/stale-server` returned `stale:false`, the
+scoped one-task run added `packages/core/src/components/ui-context-menu/`,
+`packages/core/src/components/ui-context-menu/ui-context-menu.browser.test.ts`,
+`packages/core/vitest.browser.config.ts`, and a Storybook story for
+`Overlay/ContextMenu`. Manual verification in the task worktree passed:
+`pnpm --filter @looma/core test` (26/26 including ContextMenu browser tests),
+`pnpm --filter @looma/core test:browser` (Chromium browser provider, 3/3),
+`pnpm --filter @looma/core build`, and `pnpm --filter @looma/core typecheck`.
+Storybook screenshot proof was captured at
+`tmp/context-menu-storybook-proof.png`.
+
+Remaining blocker: the component reached the requested proof state, but
+Guildhall still blocked the task as `max_revisions_exceeded` after stale
+reviewer dissent kept claiming no self-critique/e2e/visual proof even after the
+worker had added browser tests and a Storybook proof path. The next slice should
+make reviewer fan-out ignore stale pre-proof dissent once newer worker evidence
+exists, or rerun reviewers against the latest diff/evidence before incrementing
+the revision cap.
+
+Verification: `pnpm vitest run src/engine/__tests__/run-query.test.ts
+src/tools/__tests__/shell.test.ts src/tools/__tests__/task-queue.test.ts`,
+`pnpm typecheck`, `pnpm build`, `pnpm dev:install`, and `git diff --check`
+passed.
+
+source: codex:looma-contextmenu-delivery-loop-unblockers
