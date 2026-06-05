@@ -193,4 +193,4 @@ function formatBytes(bytes: number): string {
   return `${bytes}B`
 }
 
-const TERMINAL_STATUSES = new Set(['done', 'shelved', 'cancelled', 'archived'])
+const TERMINAL_STATUSES = new Set(['done', 'cancelled', 'archived'])
