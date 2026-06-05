@@ -316,56 +316,73 @@ describe('TaskDrawer', () => {
     )
   })
 
-  it('suppresses canned split recommendations that do not match the project task', async () => {
+  it('offers a split action for recommended child work scoped to the current task', async () => {
+    const user = userEvent.setup()
     const payload = drawerPayload({
       threadTurns: [],
       task: {
         ...drawerPayload().task,
-        id: 'hosting-policy-boundary-checks',
-        title: 'Hosting policy boundary checks',
-        description: 'Verify the Narrative Harness hosting policy boundary before implementation.',
+        id: 'context-menu',
+        title: 'ContextMenu',
+        description: 'Implement the ContextMenu primitive and its documentation proof.',
         status: 'spec_review',
-        domain: 'policy',
-        spec: '## Summary\nCheck where the narrative editor hosting policy allows hosted processing and where it must stop.',
+        domain: 'frontend',
+        spec: '## Summary\nImplement ContextMenu with component implementation, Storybook proof, and API docs sync.',
         sizePlan: {
-          taskId: 'hosting-policy-boundary-checks',
+          taskId: 'context-menu',
           score: 5,
           band: 'large',
           action: 'split_recommended',
           recommendedChildren: [
             {
-              title: 'Billing settings workflow',
-              reason: 'Draft the billing settings screens.',
+              title: 'ContextMenu component implementation',
+              reason: 'Ship the ContextMenu primitive implementation.',
               suggestedDomain: 'frontend',
             },
             {
-              title: 'Admin subscription API contract',
-              reason: 'Define the subscription admin endpoints.',
-              suggestedDomain: 'backend',
+              title: 'ContextMenu Storybook proof',
+              reason: 'Add visual proof for ContextMenu.',
+              suggestedDomain: 'frontend',
             },
           ],
         },
       },
     })
-    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
       const url = String(input)
-      if (url.startsWith('/api/project/task/hosting-policy-boundary-checks')) return json(payload)
+      if (url.startsWith('/api/project/task/context-menu/create-split-children')) {
+        expect(init?.method).toBe('POST')
+        return json({
+          ok: true,
+          createdTaskIds: [
+            'context-menu-split-context-menu-component-implementation',
+            'context-menu-split-context-menu-storybook-proof',
+          ],
+        })
+      }
+      if (url.startsWith('/api/project/task/context-menu')) return json(payload)
       if (url.startsWith('/api/project')) return json(projectDetail())
       return json({})
     })
     vi.stubGlobal('fetch', fetchMock)
 
     render(TaskDrawer, {
-      taskId: 'hosting-policy-boundary-checks',
+      taskId: 'context-menu',
       projectId: 'looma-knit',
       onClose: vi.fn(),
     })
 
     await screen.findByText('Work hierarchy')
-    expect(screen.getByText('Hosting policy boundary checks')).toBeInTheDocument()
-    expect(document.body.textContent).not.toMatch(/billing settings workflow/i)
-    expect(document.body.textContent).not.toMatch(/admin subscription api contract/i)
-    expect(screen.queryByText('Recommended nested work')).not.toBeInTheDocument()
+    expect(screen.getByText('ContextMenu')).toBeInTheDocument()
+    expect(screen.getByText('ContextMenu component implementation')).toBeInTheDocument()
+    expect(screen.getByText('ContextMenu Storybook proof')).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Split this task' })).toBeInTheDocument()
+
+    await user.click(screen.getByRole('button', { name: 'Split this task' }))
+
+    expect(fetchMock.mock.calls.some(([input]) =>
+      String(input).includes('/api/project/task/context-menu/create-split-children?projectId=looma-knit'),
+    )).toBe(true)
   })
 
   it('offers a clear action when split-required child tasks have not been created yet', async () => {

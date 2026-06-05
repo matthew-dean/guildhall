@@ -1284,6 +1284,55 @@ describe('POST /api/project/task/:id/create-split-children', () => {
     })
     expect(raw.tasks[2].dependsOn).toEqual(['task-1-split-implement-the-billing-settings-workflow'])
   })
+
+  it('materializes stored split-recommended recommendations into child tasks', async () => {
+    await seedTask('task-1', {
+      status: 'spec_review',
+      sizePlan: {
+        taskId: 'task-1',
+        score: 5,
+        band: 'large',
+        action: 'split_recommended',
+        factors: [],
+        recommendedChildren: [
+          {
+            title: 'Component implementation',
+            reason: 'Ship the primitive implementation first.',
+            suggestedDomain: 'frontend',
+            dependsOn: [],
+          },
+          {
+            title: 'Storybook story',
+            reason: 'Add visual proof after the implementation exists.',
+            suggestedDomain: 'frontend',
+            dependsOn: ['Component implementation'],
+          },
+        ],
+        reviewBudgetHint: 'thorough',
+        reasons: ['Task size score: 5.'],
+        createdAt: '2026-06-05T12:00:00.000Z',
+        createdBy: 'task-sizing',
+      },
+    })
+    const { app } = buildServeApp({ projectPath: tmpDir })
+
+    const res = await app.fetch(
+      new Request(projectUrl('/api/project/task/task-1/create-split-children'), { method: 'POST' }),
+    )
+
+    expect(res.status).toBe(200)
+    const body = await res.json() as Record<string, any>
+    expect(body.createdTaskIds).toEqual([
+      'task-1-split-component-implementation',
+      'task-1-split-storybook-story',
+    ])
+
+    const raw = JSON.parse(await fs.readFile(path.join(memoryDir, 'TASKS.json'), 'utf8')) as Record<string, any>
+    expect(raw.tasks[0].status).toBe('ready')
+    expect(raw.tasks[0].hierarchy.childIds).toEqual(body.createdTaskIds)
+    expect(raw.tasks[0].taskReadiness.summary).toBe('Split-recommended work is represented by linked child tasks.')
+    expect(raw.tasks[2].dependsOn).toEqual(['task-1-split-component-implementation'])
+  })
 })
 
 describe('POST /api/project/task/:id/resume', () => {

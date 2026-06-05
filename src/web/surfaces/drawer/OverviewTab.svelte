@@ -41,7 +41,7 @@
   const nestedWorkIds = $derived(task.hierarchy?.childIds ?? [])
   const goalEnvelopeId = $derived(task.businessEnvelope?.goalId ?? null)
   const needsSplitAction = $derived(
-    sizePlan?.action === 'split_required' &&
+    (sizePlan?.action === 'split_required' || sizePlan?.action === 'split_recommended') &&
     recommendedChildren.length > 0 &&
     createdChildren.length === 0,
   )

@@ -4,7 +4,8 @@ import { TaskQueue, type RequestIntake, type Task, type TaskRequest, type TaskSt
 import { atomicWriteText } from '@guildhall/sessions'
 import {
   appendExploringTranscript,
-  materializeRequiredSplitChildren,
+  isMaterializableSplitAction,
+  materializeSplitChildren,
   resolveEscalation,
 } from '@guildhall/tools'
 import { normalizeImportedDraftTask, promoteImportDraftToExploring } from './import-drafts.js'
@@ -363,8 +364,8 @@ export async function approveSpec(input: ApproveSpecInput): Promise<ApproveSpecR
     })
   }
   applyTaskShaping(task, { now, recordNote: false })
-  if (task.sizePlan?.action === 'split_required' && !shouldKeepFixedSpecRunnable(task)) {
-    materializeRequiredSplitChildren(queue, task, now)
+  if (isMaterializableSplitAction(task.sizePlan?.action) && !shouldKeepFixedSpecRunnable(task)) {
+    materializeSplitChildren(queue, task, now)
   } else {
     if (task.sizePlan?.action === 'split_required' && shouldKeepFixedSpecRunnable(task)) {
       task.sizePlan = {
@@ -405,7 +406,7 @@ export async function approveSpec(input: ApproveSpecInput): Promise<ApproveSpecR
     role: 'system',
     content: input.approvalNote
       ? `Spec approved by human. Note: ${input.approvalNote}`
-      : task.sizePlan?.action === 'split_required'
+      : isMaterializableSplitAction(task.sizePlan?.action)
         ? 'Spec approved. Guildhall created the nested work and kept this item as the containing work.'
         : 'Spec approved by human. Task advanced to ready.',
   })

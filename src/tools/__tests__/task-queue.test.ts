@@ -367,6 +367,75 @@ describe('updateTask', () => {
     )
   })
 
+  it('materializes split-recommended work units into linked child tasks idempotently', async () => {
+    const workUnitAnalysis = {
+      summary: '4 independently deliverable work units: component implementation, Storybook story, contract README, and API docs sync.',
+      units: [
+        {
+          id: 'wu-1',
+          title: 'Component implementation',
+          deliverable: 'ContextMenu component implementation is available.',
+          rationale: 'The runtime component is the base deliverable.',
+          suggestedDomain: 'frontend',
+          dependsOn: [],
+        },
+        {
+          id: 'wu-2',
+          title: 'Storybook story',
+          deliverable: 'ContextMenu has a Storybook story.',
+          rationale: 'Visual proof can be reviewed separately.',
+          suggestedDomain: 'frontend',
+          dependsOn: ['wu-1'],
+        },
+        {
+          id: 'wu-3',
+          title: 'Contract README',
+          deliverable: 'ContextMenu has contract documentation.',
+          rationale: 'Consumer-facing contract text can be reviewed separately.',
+          suggestedDomain: 'docs',
+          dependsOn: ['wu-1'],
+        },
+        {
+          id: 'wu-4',
+          title: 'API docs sync',
+          deliverable: 'Public API docs include ContextMenu.',
+          rationale: 'Export and API documentation sync is independently checkable.',
+          suggestedDomain: 'docs',
+          dependsOn: ['wu-1'],
+        },
+      ],
+      proofOnlyItems: [],
+      createdAt: '2026-06-05T12:00:00.000Z',
+      createdBy: 'coordinator-test',
+    }
+
+    await updateTask({ tasksPath, taskId: 'task-001', status: 'ready', workUnitAnalysis })
+    await updateTask({ tasksPath, taskId: 'task-001', status: 'ready', workUnitAnalysis })
+
+    const raw = JSON.parse(await fs.readFile(tasksPath, 'utf-8'))
+    const parent = raw.tasks.find((task: { id: string }) => task.id === 'task-001')
+    const children = raw.tasks.filter((task: { id: string; hierarchy?: { parentId?: string } }) =>
+      task.id !== 'task-001' && task.hierarchy?.parentId === 'task-001',
+    )
+
+    expect(parent.sizePlan.action).toBe('split_recommended')
+    expect(parent.status).toBe('ready')
+    expect(parent.hierarchy.childIds).toEqual(children.map((task: { id: string }) => task.id))
+    expect(children.map((task: { title: string }) => task.title)).toEqual([
+      'Component implementation',
+      'Storybook story',
+      'Contract README',
+      'API docs sync',
+    ])
+    expect(raw.tasks).toHaveLength(5)
+    expect(parent.sizePlan.recommendedChildren.map((child: { createdTaskId?: string }) => child.createdTaskId)).toEqual(
+      children.map((task: { id: string }) => task.id),
+    )
+    expect(children.find((task: { title: string }) => task.title === 'Storybook story')?.dependsOn).toEqual([
+      'task-001-split-component-implementation',
+    ])
+  })
+
   it('keeps a split-required parent out of the ready worker queue', async () => {
     await updateTask({
       tasksPath,

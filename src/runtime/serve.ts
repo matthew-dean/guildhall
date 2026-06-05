@@ -72,7 +72,8 @@ import {
   readCheckpoint,
   readExploringTranscript,
   resolveEscalation,
-  materializeRequiredSplitChildren,
+  isMaterializableSplitAction,
+  materializeSplitChildren,
   updateDesignSystem,
 } from '@guildhall/tools'
 import { DesignSystem, summarizeDesignSystem, TaskQueue, type DesignSystem as DesignSystemRecord, type Task } from '@guildhall/core'
@@ -6970,18 +6971,19 @@ export function buildServeApp(opts: ServeOptions = {}): {
         const queue = TaskQueue.parse(JSON.parse(readFileSync(tasksPath, 'utf8')))
         const task = queue.tasks.find(t => t.id === id)
         if (!task) return c.json({ error: 'task not found' }, 404)
-        if (task.sizePlan?.action !== 'split_required') {
-          return c.json({ error: 'task does not require a split' }, 400)
+        const sizePlan = task.sizePlan
+        if (!sizePlan || !isMaterializableSplitAction(sizePlan.action)) {
+          return c.json({ error: 'task does not have split recommendations' }, 400)
         }
         const now = new Date().toISOString()
-        materializeRequiredSplitChildren(queue, task, now)
+        materializeSplitChildren(queue, task, now)
         task.updatedAt = now
         queue.lastUpdated = now
         atomicWriteText(tasksPath, JSON.stringify(queue, null, 2) + '\n')
         return c.json({
           ok: true,
           parentTaskId: task.id,
-          createdTaskIds: task.sizePlan.recommendedChildren
+          createdTaskIds: sizePlan.recommendedChildren
             .map(child => child.createdTaskId)
             .filter((createdTaskId): createdTaskId is string => Boolean(createdTaskId)),
         })

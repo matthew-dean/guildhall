@@ -297,8 +297,8 @@ export async function updateTask(
         riskLanes: inferSizingRiskLanes(task),
         createdAt: sizePlanCreatedAt,
       })
-      if (task.sizePlan.action === 'split_required' && task.status === 'ready') {
-        materializeRequiredSplitChildren(queue, task, sizePlanCreatedAt)
+      if (isMaterializableSplitAction(task.sizePlan.action) && task.status === 'ready') {
+        materializeSplitChildren(queue, task, sizePlanCreatedAt)
       }
     }
     task.updatedAt = new Date().toISOString()
@@ -347,14 +347,17 @@ async function appendUpdateTaskEvidence(input: {
   }
 }
 
-export function materializeRequiredSplitChildren(
+export function materializeSplitChildren(
   queue: TaskQueueRecord,
   parent: TaskRecord,
   timestamp: string,
 ): void {
-  if (parent.sizePlan?.action !== 'split_required') return
-  const recommendations = parent.sizePlan.recommendedChildren ?? []
+  const sizePlan = parent.sizePlan
+  if (!sizePlan || !isMaterializableSplitAction(sizePlan.action)) return
+  const recommendations = sizePlan.recommendedChildren ?? []
   if (recommendations.length === 0) return
+  const splitLabel = sizePlan.action === 'split_required' ? 'Split-required' : 'Split-recommended'
+  const splitNote = sizePlan.action === 'split_required' ? 'Split required' : 'Split recommended'
 
   const existingChildIds = new Set(parent.hierarchy?.childIds ?? [])
   const planned = recommendations.map((recommendation, index) => {
@@ -391,9 +394,18 @@ export function materializeRequiredSplitChildren(
     normalizeTaskTitle(recommendation.title),
     task.id,
   ]))
+  const workUnitIdToId = new Map<string, string>()
+  const workUnits = parent.workUnitAnalysis?.units ?? []
+  planned.forEach(({ recommendation, task }, index) => {
+    const matchingUnit =
+      workUnits[index]?.title === recommendation.title
+        ? workUnits[index]
+        : workUnits.find((unit) => normalizeTaskTitle(unit.title) === normalizeTaskTitle(recommendation.title))
+    if (matchingUnit?.id) workUnitIdToId.set(matchingUnit.id, task.id)
+  })
   for (const { recommendation, task } of planned) {
     task.dependsOn = (recommendation.dependsOn ?? [])
-      .map((dependency) => titleToId.get(normalizeTaskTitle(dependency)) ?? dependency)
+      .map((dependency) => workUnitIdToId.get(dependency) ?? titleToId.get(normalizeTaskTitle(dependency)) ?? dependency)
       .filter((dependency, index, all) => dependency !== task.id && all.indexOf(dependency) === index)
     task.updatedAt = timestamp
   }
@@ -405,7 +417,7 @@ export function materializeRequiredSplitChildren(
   parent.taskReadiness = {
     taskKind: parent.taskReadiness?.taskKind ?? parent.taskKind ?? 'implementation',
     recommendation: 'split',
-    summary: 'Split-required work is represented by linked child tasks.',
+    summary: `${splitLabel} work is represented by linked child tasks.`,
     dimensions: parent.taskReadiness?.dimensions ?? [],
     definitionOfDone: parent.taskReadiness?.definitionOfDone ?? {
       items: ['All required child tasks are done or explicitly deferred.'],
@@ -437,7 +449,7 @@ export function materializeRequiredSplitChildren(
   }
   delete parent.assignedTo
 
-  const notePrefix = 'Split required: created linked child tasks'
+  const notePrefix = `${splitNote}: created linked child tasks`
   if (!parent.notes.some((note) => note.agentId === 'task-sizing' && note.content.startsWith(notePrefix))) {
     parent.notes.push({
       agentId: 'task-sizing',
@@ -446,6 +458,12 @@ export function materializeRequiredSplitChildren(
       timestamp,
     })
   }
+}
+
+export const materializeRequiredSplitChildren = materializeSplitChildren
+
+export function isMaterializableSplitAction(action: string | undefined): boolean {
+  return action === 'split_required' || action === 'split_recommended'
 }
 
 function createSplitChildTask(input: {
@@ -477,7 +495,7 @@ function createSplitChildTask(input: {
       {
         agentId: 'task-sizing',
         role: 'coordinator',
-        content: `Created from split-required parent ${input.parent.id}. ${input.reason}`,
+        content: `Created from ${input.parent.sizePlan?.action === 'split_required' ? 'split-required' : 'split-recommended'} parent ${input.parent.id}. ${input.reason}`,
         timestamp: input.timestamp,
       },
     ],

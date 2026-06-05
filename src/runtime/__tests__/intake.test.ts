@@ -623,6 +623,60 @@ describe('approveSpec', () => {
     expect(updated.tasks[2]!.dependsOn).toEqual(['task-001-split-implement-the-billing-settings-workflow'])
   })
 
+  it('splits a split-recommended spec into containing work and child tasks when approved', async () => {
+    const queue = await readQueue()
+    const parent = queue.tasks[0]!
+    parent.sizePlan = {
+      taskId: 'task-001',
+      score: 5,
+      band: 'large',
+      action: 'split_recommended',
+      factors: [],
+      recommendedChildren: [
+        {
+          title: 'Component implementation',
+          reason: 'Ship the component implementation first.',
+          suggestedDomain: 'frontend',
+          dependsOn: [],
+        },
+        {
+          title: 'Storybook story',
+          reason: 'Add visual proof after the implementation exists.',
+          suggestedDomain: 'frontend',
+          dependsOn: ['Component implementation'],
+        },
+      ],
+      reviewBudgetHint: 'thorough',
+      reasons: ['Task size score: 5.'],
+      createdAt: '2026-06-05T12:00:00.000Z',
+      createdBy: 'task-sizing',
+    }
+    await fs.writeFile(tasksPath, JSON.stringify(queue, null, 2), 'utf-8')
+
+    const result = await approveSpec({ memoryDir, taskId: 'task-001' })
+
+    expect(result.success).toBe(true)
+    expect(result.newStatus).toBe('ready')
+    const updated = await readQueue()
+    expect(updated.tasks[0]!.status).toBe('ready')
+    expect(updated.tasks[0]!.taskReadiness?.recommendation).toBe('split')
+    expect(updated.tasks[0]!.hierarchy?.childIds).toEqual([
+      'task-001-split-component-implementation',
+      'task-001-split-storybook-story',
+    ])
+    expect(updated.tasks[1]).toMatchObject({
+      status: 'exploring',
+      hierarchy: {
+        parentId: 'task-001',
+        order: 0,
+        childIds: [],
+      },
+      origination: 'system',
+      proposedBy: 'task-sizing',
+    })
+    expect(updated.tasks[2]!.dependsOn).toEqual(['task-001-split-component-implementation'])
+  })
+
   it('backfills acceptance criteria from approved markdown specs before blueprint sanity', async () => {
     const queue = await readQueue()
     const task = queue.tasks[0]!
