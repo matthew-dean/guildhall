@@ -13,6 +13,8 @@ import {
 export interface ProjectStateCompactionOptions {
   projectRoot: string
   dryRun?: boolean
+  terminalTaskMinAgeMs?: number
+  now?: Date
 }
 
 export interface ProjectStateCompactionResult {
@@ -29,7 +31,8 @@ export interface ProjectStateCompactionResult {
   bytesAfter: number
 }
 
-const TERMINAL_STATUSES = new Set(['done', 'shelved', 'cancelled', 'archived'])
+const TERMINAL_STATUSES = new Set(['done', 'cancelled', 'archived'])
+const ALWAYS_VISIBLE_TASK_IDS = new Set(['task-workspace-import', 'task-meta-intake'])
 const BULKY_TASK_FIELDS = [
   'notes',
   'reviewVerdicts',
@@ -72,6 +75,28 @@ function taskId(task: unknown): string | null {
 function taskStatus(task: unknown): string | null {
   if (!isRecord(task) || typeof task.status !== 'string') return null
   return task.status
+}
+
+function taskTerminalTimestampMs(task: unknown): number | null {
+  if (!isRecord(task)) return null
+  for (const field of ['completedAt', 'cancelledAt', 'archivedAt', 'updatedAt']) {
+    const value = task[field]
+    if (typeof value !== 'string') continue
+    const parsed = Date.parse(value)
+    if (Number.isFinite(parsed)) return parsed
+  }
+  return null
+}
+
+function shouldArchiveTask(task: unknown, minAgeMs: number, now: Date): boolean {
+  const id = taskId(task)
+  if (id && ALWAYS_VISIBLE_TASK_IDS.has(id)) return false
+  const status = taskStatus(task)
+  if (!status || !TERMINAL_STATUSES.has(status)) return false
+  if (minAgeMs <= 0) return true
+  const terminalAt = taskTerminalTimestampMs(task)
+  if (terminalAt === null) return false
+  return now.getTime() - terminalAt >= minAgeMs
 }
 
 function queueTasks(parsed: unknown): unknown[] {
@@ -162,6 +187,8 @@ async function compactTasks(
   projectRoot: string,
   stateDir: string,
   dryRun: boolean,
+  terminalTaskMinAgeMs: number,
+  now: Date,
 ): Promise<{ active: number; archived: number; compactedArchives: number }> {
   const tasksPath = path.join(stateDir, 'TASKS.json')
   const parsed = await readJsonIfExists(tasksPath)
@@ -174,8 +201,7 @@ async function compactTasks(
 
   for (const task of tasks) {
     const id = taskId(task)
-    const status = taskStatus(task)
-    if (id && status && TERMINAL_STATUSES.has(status)) {
+    if (id && shouldArchiveTask(task, terminalTaskMinAgeMs, now)) {
       archivedTasks.push({ id, task })
     } else {
       activeTasks.push(task)
@@ -322,11 +348,13 @@ export async function compactProjectState(
   const stateDir = getProjectStateDir(projectRoot)
   const localHistoryDir = getProjectLocalHistoryDir(projectRoot)
   const dryRun = opts.dryRun ?? true
+  const terminalTaskMinAgeMs = opts.terminalTaskMinAgeMs ?? 0
+  const now = opts.now ?? new Date()
   const tasksPath = path.join(stateDir, 'TASKS.json')
   const progressPath = path.join(stateDir, 'PROGRESS.md')
   const codebaseMapPath = path.join(stateDir, 'codebase-map.yaml')
   const bytesBefore = await fileSize(tasksPath) + await fileSize(progressPath) + await fileSize(codebaseMapPath)
-  const tasks = await compactTasks(projectRoot, stateDir, dryRun)
+  const tasks = await compactTasks(projectRoot, stateDir, dryRun, terminalTaskMinAgeMs, now)
   const progressHeartbeatsMoved = await compactProgress(projectRoot, stateDir, dryRun)
   const codebaseMapCompacted = await compactCodebaseMap(projectRoot, stateDir, dryRun)
   const bytesAfter = dryRun

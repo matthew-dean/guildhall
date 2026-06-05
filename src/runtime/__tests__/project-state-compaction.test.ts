@@ -123,4 +123,45 @@ describe('compactProjectState', () => {
     )
     expect(fullCodebaseMap).toContain('file-299.ts')
   })
+
+  it('keeps fresh terminal and shelved tasks visible during automatic maintenance', async () => {
+    await fs.writeFile(path.join(stateDir, 'TASKS.json'), JSON.stringify({
+      version: 1,
+      lastUpdated: '2026-06-04T00:00:00.000Z',
+      tasks: [
+        {
+          id: 'old-done',
+          status: 'done',
+          title: 'Old completed task',
+          completedAt: '2026-01-01T00:00:00.000Z',
+        },
+        {
+          id: 'fresh-done',
+          status: 'done',
+          title: 'Fresh completed task',
+          completedAt: '2026-06-03T00:00:00.000Z',
+        },
+        {
+          id: 'old-shelved',
+          status: 'shelved',
+          title: 'Shelved but still visible',
+          updatedAt: '2026-01-01T00:00:00.000Z',
+        },
+      ],
+    }, null, 2), 'utf8')
+
+    const result = await compactProjectState({
+      projectRoot,
+      dryRun: false,
+      terminalTaskMinAgeMs: 7 * 24 * 60 * 60 * 1000,
+      now: new Date('2026-06-04T00:00:00.000Z'),
+    })
+
+    expect(result.archivedTasks).toBe(1)
+    const compactQueue = JSON.parse(await fs.readFile(path.join(stateDir, 'TASKS.json'), 'utf8')) as { tasks: Array<{ id: string }> }
+    expect(compactQueue.tasks.map(task => task.id)).toEqual(['fresh-done', 'old-shelved'])
+    await expect(fs.readFile(path.join(stateDir, 'tasks', 'archive', 'old-done.json'), 'utf8')).resolves.toContain('Old completed task')
+    await expect(fs.stat(path.join(stateDir, 'tasks', 'archive', 'fresh-done.json'))).rejects.toMatchObject({ code: 'ENOENT' })
+    await expect(fs.stat(path.join(stateDir, 'tasks', 'archive', 'old-shelved.json'))).rejects.toMatchObject({ code: 'ENOENT' })
+  })
 })

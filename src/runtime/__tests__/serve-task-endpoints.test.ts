@@ -8,6 +8,7 @@ import {
   getProjectRecentEventsPath,
   getProjectSharedStateDir,
   getProjectStateDir,
+  getProjectTaskLocalHistoryDir,
 } from '@guildhall/sessions'
 import { readExploringTranscript, writeCheckpoint } from '@guildhall/tools'
 import { buildServeApp, filterEventsForTask } from '../serve.js'
@@ -119,6 +120,7 @@ beforeEach(async () => {
 })
 
 afterEach(async () => {
+  vi.useRealTimers()
   delete process.env.GUILDHALL_DATA_DIR
   delete process.env.GUILDHALL_CONFIG_DIR
   await fs.rm(tmpDir, { recursive: true, force: true })
@@ -169,6 +171,89 @@ describe('GET /api/project/task/:id', () => {
     await expect(fs.stat(path.join(legacyDir, 'TASKS.json'))).rejects.toMatchObject({ code: 'ENOENT' })
     await expect(fs.stat(path.join(legacyDir, 'PROGRESS.md'))).rejects.toMatchObject({ code: 'ENOENT' })
     await expect(fs.readFile(path.join(legacyDir, 'artifacts.yaml'), 'utf8')).resolves.toContain('artifacts')
+  })
+
+  it('automatically compacts historical project state during normal project API maintenance', async () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(new Date('2026-06-04T00:00:00.000Z'))
+    await seedTasks([
+      {
+        id: 'task-active',
+        status: 'ready',
+        title: 'Active task remains in the live queue',
+      },
+      {
+        id: 'task-done',
+        status: 'done',
+        title: 'Historical task gets archived',
+        completedAt: '2026-01-01T00:00:00.000Z',
+        updatedAt: '2026-01-01T00:00:00.000Z',
+        notes: Array.from({ length: 60 }, (_, index) => ({ role: 'worker', content: `archived note ${index}` })),
+      },
+      {
+        id: 'task-shelved',
+        status: 'shelved',
+        title: 'Shelved task stays visible for release blockers',
+        notes: Array.from({ length: 60 }, (_, index) => ({ role: 'worker', content: `shelved note ${index}` })),
+      },
+    ])
+    await fs.writeFile(path.join(memoryDir, 'PROGRESS.md'), [
+      '# Progress',
+      '',
+      '### HEARTBEAT 2026-06-04',
+      'Noisy heartbeat update.',
+      '',
+      '### MILESTONE 2026-06-04',
+      'Useful milestone summary.',
+      '',
+    ].join('\n'), 'utf8')
+
+    const { app } = buildServeApp({ projectPath: tmpDir })
+    const res = await app.fetch(new Request(projectUrl('/api/project/task/task-active')))
+
+    expect(res.status).toBe(200)
+    const queue = JSON.parse(await fs.readFile(path.join(memoryDir, 'TASKS.json'), 'utf8')) as { tasks: Array<{ id: string; notes?: unknown[] }> }
+    expect(queue.tasks.map(task => task.id)).toEqual(['task-active', 'task-shelved'])
+    expect(queue.tasks.find(task => task.id === 'task-shelved')?.notes?.length).toBe(60)
+
+    const archived = await fs.readFile(path.join(memoryDir, 'tasks', 'archive', 'task-done.json'), 'utf8')
+    expect(archived).toContain('Historical task gets archived')
+    expect(archived).toContain('archivedEvidence')
+    expect(archived).not.toContain('archived note 0')
+    const fullEvidence = await fs.readFile(
+      path.join(getProjectTaskLocalHistoryDir(tmpDir, 'task-done'), 'archive-evidence.json'),
+      'utf8',
+    )
+    expect(fullEvidence).toContain('archived note 0')
+    expect(fullEvidence).toContain('archived note 59')
+    const progress = await fs.readFile(path.join(memoryDir, 'PROGRESS.md'), 'utf8')
+    expect(progress).toContain('MILESTONE')
+    expect(progress).not.toContain('HEARTBEAT')
+
+    await seedTasks([
+      {
+        id: 'task-active',
+        status: 'ready',
+        title: 'Active task remains in the live queue',
+      },
+      {
+        id: 'task-later-done',
+        status: 'done',
+        title: 'Later historical task waits for the cadence',
+        completedAt: '2026-01-01T00:00:00.000Z',
+      },
+    ])
+
+    await app.fetch(new Request(projectUrl('/api/project/task/task-active')))
+    const beforeIntervalQueue = JSON.parse(await fs.readFile(path.join(memoryDir, 'TASKS.json'), 'utf8')) as { tasks: Array<{ id: string }> }
+    expect(beforeIntervalQueue.tasks.map(task => task.id)).toEqual(['task-active', 'task-later-done'])
+
+    vi.advanceTimersByTime(10 * 60 * 1000)
+    await app.fetch(new Request(projectUrl('/api/project/task/task-active')))
+    const afterIntervalQueue = JSON.parse(await fs.readFile(path.join(memoryDir, 'TASKS.json'), 'utf8')) as { tasks: Array<{ id: string }> }
+    expect(afterIntervalQueue.tasks.map(task => task.id)).toEqual(['task-active'])
+    await expect(fs.readFile(path.join(memoryDir, 'tasks', 'archive', 'task-later-done.json'), 'utf8'))
+      .resolves.toContain('Later historical task waits for the cadence')
   })
 
   it('returns the task body + (empty) recent events for a seeded task', async () => {

@@ -326,6 +326,7 @@ import {
   readProjectReintakeDraft,
   writeProjectReintakeDraft,
 } from './project-reintake.js'
+import { compactProjectState } from './project-state-compaction.js'
 
 // ---------------------------------------------------------------------------
 // guildhall serve — local service over many projects
@@ -2140,13 +2141,29 @@ export function buildServeApp(opts: ServeOptions = {}): {
   const app = new Hono()
   const currentProjectPath = () => currentProject().path
   const migratedProjectStateRoots = new Set<string>()
+  const AUTOMATIC_PROJECT_STATE_COMPACTION_MIN_AGE_MS = 90 * 24 * 60 * 60 * 1000
+  const PROJECT_STATE_MAINTENANCE_INTERVAL_MS = 10 * 60 * 1000
+  const projectStateMaintenanceLastRun = new Map<string, number>()
 
-  const ensureProjectStateMigrated = async (projectRoot: string): Promise<void> => {
+  const ensureProjectStateMaintained = async (projectRoot: string): Promise<void> => {
     if (process.env.GUILDHALL_PROJECT_STATE_PLACEMENT === 'project') return
     const resolvedRoot = resolve(projectRoot)
-    if (migratedProjectStateRoots.has(resolvedRoot)) return
-    await migrateProjectStateToSystem(resolvedRoot)
-    migratedProjectStateRoots.add(resolvedRoot)
+    if (!migratedProjectStateRoots.has(resolvedRoot)) {
+      await migrateProjectStateToSystem(resolvedRoot)
+      migratedProjectStateRoots.add(resolvedRoot)
+    }
+    const lastMaintenanceRun = projectStateMaintenanceLastRun.get(resolvedRoot) ?? 0
+    const now = Date.now()
+    if (now - lastMaintenanceRun >= PROJECT_STATE_MAINTENANCE_INTERVAL_MS) {
+      await compactProjectState({
+        projectRoot: resolvedRoot,
+        dryRun: false,
+        terminalTaskMinAgeMs: AUTOMATIC_PROJECT_STATE_COMPACTION_MIN_AGE_MS,
+      }).catch((err) => {
+        console.warn(`[guildhall serve] project state compaction warning: ${err instanceof Error ? err.message : String(err)}`)
+      })
+      projectStateMaintenanceLastRun.set(resolvedRoot, now)
+    }
   }
 
   const bindProjectScope = async (
@@ -2172,10 +2189,10 @@ export function buildServeApp(opts: ServeOptions = {}): {
       return c.json({ error: 'Unknown project id for this local Guildhall service.' }, 404)
     }
     try {
-      await ensureProjectStateMigrated(resolvedPath)
+      await ensureProjectStateMaintained(resolvedPath)
     } catch (err) {
       return c.json({
-        error: 'Project state migration failed before serving project state.',
+        error: 'Project state maintenance failed before serving project state.',
         detail: err instanceof Error ? err.message : String(err),
       }, 500)
     }
