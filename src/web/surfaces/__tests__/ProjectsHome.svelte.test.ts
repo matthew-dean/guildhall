@@ -275,6 +275,61 @@ describe('ProjectsHome', () => {
     expect(screen.queryByRole('button', { name: /^resume$/i })).toBeNull()
   })
 
+  it('does not label zero-task owner-input projects as ready on the card', async () => {
+    const fetchMock = vi.fn(async () => json({
+      ...servicePayload,
+      projects: [
+        {
+          id: 'commerce',
+          path: '/repo/commerce',
+          name: 'Commerce',
+          taskCounts: { total: 0, active: 0, draftReview: 0, blocked: 0, done: 0, shelved: 0 },
+          run: { status: 'stopped', mode: 'continuous' },
+          startReadiness: { canStart: true },
+          actionModel: {
+            primaryAction: {
+              source: 'owner_input',
+              label: 'Answer in Thread',
+              detail: 'Shape the first spec before Guildhall creates work.',
+              buttonLabel: 'Open Thread',
+              href: '/thread',
+              tone: 'warn',
+            },
+            secondaryActions: [],
+            runControl: {
+              label: 'Waiting on setup',
+              startEnabled: false,
+              disabledReason: 'Shape the first spec before Guildhall creates work.',
+              href: '/thread',
+            },
+            ownerInput: {
+              active: true,
+              label: 'Answer in Thread',
+              detail: 'Shape the first spec before Guildhall creates work.',
+              href: '/thread',
+            },
+            setup: {
+              state: 'blocked',
+              freshIntakeNeeded: false,
+              href: '/thread',
+              detail: 'Shape the first spec before Guildhall creates work.',
+            },
+          },
+        },
+      ],
+    } satisfies ServiceDetail))
+    vi.stubGlobal('fetch', fetchMock)
+
+    render(ProjectsHome)
+    await screen.findByText('Commerce')
+
+    const card = screen.getByRole('button', { name: 'Project: Commerce' })
+    expect(card.textContent).toContain('needs input')
+    expect(card.textContent).not.toContain('ready')
+    expect(screen.queryByRole('button', { name: /start intake/i })).toBeNull()
+    expect(screen.queryByRole('button', { name: /^resume$/i })).toBeNull()
+  })
+
   it('summarizes the project floor and exposes card work mix visuals', async () => {
     const fetchMock = vi.fn(async () => json(servicePayload))
     vi.stubGlobal('fetch', fetchMock)

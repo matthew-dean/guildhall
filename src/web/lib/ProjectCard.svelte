@@ -94,6 +94,8 @@
           ? `${summary.counts.draftReview} drafts`
           : summary.counts.done > 0
             ? `${summary.counts.done} done`
+            : summary.needsAttention
+            ? 'needs input'
             : 'ready',
   )
   const openTitle = $derived(`Open ${summary.name} project`)

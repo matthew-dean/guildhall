@@ -91,7 +91,7 @@ before a release-gating audit.
 | Blocked/recovery-heavy project | t-minus-t | 2026-06-04 | Small blocked/exploring contrast project. | `tiny-demo` | Live recovery script still needs route proof. |
 | Dirty worktree blockers | Commerce project | 2026-06-04 | Setup/owner-input blocked with blocker/readiness disagreement suspect. | `dirty-service` | Fixture proves dirty Guildhall-owned checkout release blocker; live Commerce replay still useful. |
 | Accepted structure/contracts | Jess | 2026-06-04 | Structural map accepted, 42 work areas and 26 contracts in live proof. | `looma-knit` package/design-state fixture | Rendered Structure route is covered; live Jess contract proof remains useful. |
-| No runnable work | Commerce project | 2026-06-04 | Zero current tasks plus setup pressure. | `scratch-setup-pending` | Fixture proves attached-but-uninitialized routing; live Commerce setup pressure remains a replay target. |
+| No runnable work | Commerce project | 2026-06-04/05 | Zero current tasks plus setup pressure. | `scratch-setup-pending` | Fixture proves attached-but-uninitialized routing; live Commerce replay now proves no Start/Resume affordance. |
 | Fresh onboarding | Reset Jess / new attach | 2026-06-03 | Clean setup path proven through saved repo scan recovery. | `/setup` document route | Keep live reset explicit and reversible; fixture only smokes route. |
 
 On 2026-06-04 the live registered set was Looma + Knit, t-minus-t, Fair Labor
@@ -148,7 +148,7 @@ against the live roster when doing a release-gating user test.
 | Owner input in Thread | Open `/projects/:id/thread?thread=:id`, select active question, answer or choose an option. | Prompt, context, and composer/action are immediately visible; answer shows progress. | Partially covered through Looma fixture question after migration gate. | Jess structural-review and Commerce setup-pending threads. |
 | Workspace import review | Open `/projects/:id/workspace-import`, review draft rows, drill into a candidate. | Draft state and approve/dismiss/rerun choices are understandable and scoped to project. | Component tests plus rendered route smoke. | Jess and Looma + Knit import/reconcile routes. |
 | Task shaping/drawer | Open Work, open a task drawer, switch brief/spec/work/proof tabs, close. | Drawer preserves background route and gates actions with project readiness. | Component tests; rendered direct drawer smoke pending. | Narrative Harness task spec drawers and Font something task route. |
-| Run / pause | From project shell or Projects home, inspect Start/Resume/Pause label and click only when safe. | Label names exact next action or blocker; setup-pending projects do not look startable. | Component/action-model tests. | Commerce setup-blocked consistency and dirty worktree blockers. |
+| Run / pause | From project shell or Projects home, inspect Start/Resume/Pause label and click only when safe. | Label names exact next action or blocker; setup-pending projects do not look startable. | Component/action-model tests plus Commerce live/card regression. | Dirty worktree live replay. |
 | Recovery | Open a blocked/recovery thread or drawer and choose the recovery path. | The UI explains what happened, what Guildhall needs, and the next safe action. | Component tests for blocked Thread/drawer paths. | t-minus-t and Fair Labor License live recovery routes. |
 | Provider setup | Open `/providers` and project provider settings. | Global providers load without `projectId`; project providers stay project-scoped. | Component tests plus rendered global route smoke. | Machine provider secrets and model lists. |
 | Release closure | Open `/projects/:id/release` and `/release/criteria`. | Blocking checks and closure actions are visible and route to the right work. | Component tests plus rendered route smoke. | Fair Labor License done-heavy release state. |
@@ -161,7 +161,7 @@ against the live roster when doing a release-gating user test.
 | Runtime/API unit tests | Strong coverage for project action model, inbox, Thread projection, providers, setup, workspace import, project graph, release readiness, migrations, and task endpoints. | Corrupt task-state route replay and deeper live action replays. |
 | Svelte/component tests | Strong coverage for Thread, ProjectView, Overview, Work, Settings, Structure, Release, Providers, Setup, TaskDrawer, ProjectsHome, Needs You. | Remaining gaps are less about component mounting and more about live route/action replay. |
 | Rendered UI Playwright | Twenty-eight scenarios: Projects home mobile/desktop with fifteen project shapes, legacy route fallback, Looma Thread migration/question path, rail pinning, Work view switcher, Developer settings, global Needs You, Providers, Overview inbox, Structure, workspace import, settings subroute loop, Release summary/checks routes, project setup, setup-pending attached project, direct task drawer route, unfamiliar docs/infra/mobile/service route smokes, Timeline route smoke, dirty release blocker, provider/consumer handoffs, and capability-request Thread. | Deeper route action replays and live machine-specific states. |
-| Live installed browser proof | 2026-06-04 multi-agent proof plus follow-up proof covered service freshness, direct HTTP shells, provider APIs, selected live routes, provider boundary save on a throwaway registered project, Release summary/checks routes, and standalone Playwright proof for Narrative Harness Thread. | In-app Browser bridge/tab recovery, Commerce setup-blocked consistency, per-project replay targets. |
+| Live installed browser proof | 2026-06-04 multi-agent proof plus follow-up proof covered service freshness, direct HTTP shells, provider APIs, selected live routes, provider boundary save on a throwaway registered project, Release summary/checks routes, standalone Playwright proof for Narrative Harness Thread, and Commerce setup-blocked/card-label proof. | In-app Browser bridge/tab recovery and remaining per-project replay targets. |
 
 ## Active Gaps
 
@@ -319,6 +319,18 @@ coverage.
   owner-input setup projects count as `Needs you` while all-terminal projects
   do not. Project shell and Overview blocker links now prefer shared
   `primaryAction` labels/hrefs over local start-readiness fallbacks.
+  Follow-up live replay on 2026-06-04/05 proved the remaining Commerce surface:
+  `/api/project?projectId=commerce-project` still had raw
+  `startReadiness.canStart:true` with zero tasks, but
+  `/api/project/inbox?projectId=commerce-project` exposed
+  `setup_pending:thread-shape-the-first-spec`; standalone Playwright rendered
+  `/projects/commerce-project/thread` and `/overview` with no `Start` or
+  `Resume` buttons, visible `Shape the first spec`, and Thread/selected-thread
+  surfaces. Projects Home correctly showed `Needs you` and no Start/Resume, but
+  still leaked a small `ready` activity label on the Commerce card. Fix:
+  `ProjectCard` now renders zero-task attention states as `needs input` instead
+  of `ready`, with a ProjectsHome regression for owner-input projects whose raw
+  start readiness is permissive.
   Verification:
   `pnpm vitest run src/runtime/__tests__/project-action-model.test.ts src/web/lib/__tests__/project-summary.test.ts src/web/surfaces/__tests__/ProjectsHome.svelte.test.ts src/web/surfaces/__tests__/DoThisNext.svelte.test.ts src/web/surfaces/__tests__/ProjectView.svelte.test.ts --reporter=dot`
   (`89` tests);
