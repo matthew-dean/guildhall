@@ -363,6 +363,41 @@ describe('ProjectOverviewTab', () => {
     expect(container.querySelector('.blocked-work-list .overview-task-row')).toBeTruthy()
   })
 
+  it('recovers full overview task titles from descriptions when imported titles are compact', () => {
+    const compactTitle = 'Continue the Knit-to-Looma promotion work from the now-complete first M6 queue into the next generic surfaces, while the'
+    const fullTitle = 'Continue the Knit-to-Looma promotion work from the now-complete first M6 queue into the next generic surfaces, while the primitive normalization wave continues in Knit.'
+
+    render(ProjectOverviewTab, {
+      detail: {
+        id: 'looma-knit',
+        name: 'Looma + Knit',
+        path: '/Users/matthew/git/oss/looma-knit',
+        tasks: [
+          {
+            id: 'task-import-1v8sume',
+            title: compactTitle,
+            description: `looma/PROJECT_STATE.md: 3. ${fullTitle}`,
+            status: 'blocked',
+            blockReason: 'Spec shaping can be retried.',
+          },
+        ],
+      },
+      inboxLoaded: true,
+      inboxItems: [],
+      projectTicker: {
+        label: 'Not running',
+        actorLabel: 'Guildhall',
+        message: 'Project is waiting for owner action.',
+        tone: 'idle',
+        pulse: false,
+      },
+      activeProjectId: 'looma-knit',
+    })
+
+    expect(screen.getAllByText(fullTitle).length).toBeGreaterThanOrEqual(2)
+    expect(screen.queryAllByText(compactTitle)).toHaveLength(0)
+  })
+
   it('keeps blocked-work chips as compact categories instead of dependency task titles', () => {
     const { container } = render(ProjectOverviewTab, {
       detail: {

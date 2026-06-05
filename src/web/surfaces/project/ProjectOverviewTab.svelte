@@ -406,7 +406,7 @@
     }
     if (activeTask?.status === 'blocked') {
       return {
-        label: activeTask.title ?? friendlyTaskId(activeTask.id),
+        label: taskLabel(activeTask),
         detail: activeTask.blockReason ? friendlyBlockerText(activeTask.blockReason) : 'This task needs recovery or a decision.',
         button: 'Open task',
         href: currentTaskHref(activeTask.id, activeProjectId),
@@ -416,7 +416,7 @@
     }
     if (activeTask?.status === 'spec_review') {
       return {
-        label: activeTask.title ?? friendlyTaskId(activeTask.id),
+        label: taskLabel(activeTask),
         detail: 'A spec is ready for review.',
         button: 'Review in Thread',
         href: currentProjectHref('/thread', activeProjectId),
@@ -425,9 +425,11 @@
       }
     }
     if (activeTask) {
+      const label = taskLabel(activeTask)
+      const detailText = statusDetail(activeTask)
       return {
-        label: activeTask.title ?? friendlyTaskId(activeTask.id),
-        detail: statusDetail(activeTask),
+        label,
+        detail: detailText === label ? taskPresentation(activeTask).label : detailText,
         button: 'Open work',
         href: currentProjectHref('/work', activeProjectId),
         tone: running ? 'running' as Tone : 'accent' as Tone,
@@ -520,7 +522,7 @@
         const rowTone = typeof tone === 'function' ? tone(task) : tone
         rows.push({
           task,
-          label: task.title ?? friendlyTaskId(task.id),
+          label: taskLabel(task),
           detail: detail(task),
           tone: rowTone,
           href: currentTaskHref(task.id, activeProjectId),
@@ -543,7 +545,7 @@
     if (!rows.length && blockedRows.length > 0) {
       rows.push({
         task: blockedRows[0]?.task ?? null,
-        label: blockedRows[0]?.task.title ?? 'Resolve the blocker',
+        label: blockedRows[0]?.task ? taskLabel(blockedRows[0].task) : 'Resolve the blocker',
         detail: blockedRows[0]?.reason ?? 'A blocker needs attention before the next run is useful.',
         tone: 'warn',
         href: blockedRows[0]?.href ?? currentProjectHref('/work', activeProjectId),
@@ -596,7 +598,26 @@
   }
 
   function taskLabel(task: Task): string {
-    return task.title ?? friendlyTaskId(task.id)
+    const title = task.title?.trim() ?? ''
+    const description = task.description?.trim() ?? ''
+    if (title && description) {
+      const expanded = fullTitleFromDescription(title, description)
+      if (expanded) return expanded
+    }
+    return title || friendlyTaskId(task.id)
+  }
+
+  function fullTitleFromDescription(title: string, description: string): string | null {
+    const compactTitle = title.replace(/\.\.\.$/, '').trim()
+    const candidate = description
+      .replace(/^[^:\n]{1,180}:\s*/, '')
+      .replace(/^\d+[\).\s-]+/, '')
+      .trim()
+    if (!candidate || candidate.length <= title.length) return null
+    const titleLooksClipped = title.length >= 118 || title.endsWith('...')
+    if (!titleLooksClipped) return null
+    if (candidate.toLowerCase().startsWith(compactTitle.toLowerCase())) return candidate
+    return null
   }
 
   function sortedTasks(statuses: string[]): Task[] {
@@ -877,7 +898,7 @@
         <div class="motion-list">
           {#each movingTasks as task (task.id)}
             <OverviewTaskRow
-              title={task.title ?? friendlyTaskId(task.id)}
+              title={taskLabel(task)}
               detail={friendlyDomain(task.domain) || statusDetail(task)}
               chipLabel={overviewTaskStatusLabel(task)}
               chipTone={toneForTask(task) === 'danger' ? 'danger' : toneForTask(task) === 'warn' ? 'warn' : toneForTask(task) === 'running' ? 'ok' : 'neutral'}
