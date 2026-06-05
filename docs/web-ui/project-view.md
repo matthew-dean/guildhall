@@ -14,27 +14,33 @@ Once you open a project, Guildhall shifts from "service over projects" into
 "show me what is happening." Setup, active work, reviewer feedback, and your next
 decision live in one place.
 
-![Guildhall v0.9.0 project shell showing project health, current work, and navigation.](../assets/ui-audit/0-9-0/project-overview.webp)
+![Guildhall 0.10.0 project shell showing project health, current work, and navigation.](../assets/ui-audit/0-10-0/project-overview.png)
 
-## The views that matter most
+## The project rail
+
+The left rail has top-level sections for the main ways you move through a
+project. When you are in a section, its child links stay visible. When you move
+to a different section, that previous child list gets out of the way.
+
+**Project** keeps project understanding together:
 
 - **Overview**: the first stop. It pulls together the next action, work mix,
   attention items, health, blocked work, recent activity, and Git Story signals
   without making you inspect every view first.
-- **Thread**: the request and decision view. Setup prompts, New Request
-  routing, bounded follow-up conversations, spec approvals, live worker
-  trouble, and “you need to answer this now” all gather here.
-- **Work**: the queue and movement view. This is where you check whether the
-  project is actually moving.
+- **Needs you**: the alert view. If Guildhall needs an answer, approval, or
+  correction, this is the shortcut to the waiting item.
+- **Facts**: what Guildhall knows about the project: identity, environment,
+  gates, workspace discoveries, coordinators, routing context, and durable
+  project facts.
 - **Structure**: the map room. Structural maps, project graph responsibilities,
   provider/consumer requests, and shared contract surfaces live here instead
   of hiding in Settings.
-- **Closure**: the current-work verdict view. It tells you whether the work
-  Guildhall is tracking now is actually closed, including unresolved Git
-  stories. It is not a version or milestone picker yet.
-- **Settings**: setup and behavior. Ready checks, Providers, Coordinators,
-  Facts, Memory, Re-intake, Advanced settings, and the controls that decide how
-  much autonomy Guildhall gets.
+
+Threads, Work, Timeline, and Closure stay as top-level siblings because they are
+work modes, not project-orientation details. Work shows Queue and Board while
+you are in Work. Closure shows Summary and Checks while you are in Closure.
+Settings stays pinned at the bottom for Ready checks, Providers, Coordinators,
+Identity, Profile, Developer tools, and autonomy controls.
 
 ## What the shell is optimizing for
 
@@ -46,24 +52,24 @@ decision live in one place.
   waiting on a PR, or blocked by a conflict
 - Let you drill into transcripts and provenance without leaving the shell
 
-![Guildhall v0.9.0 Work view showing task hierarchy, blocked work, and queue health.](../assets/ui-audit/0-9-0/work.webp)
+![Guildhall 0.10.0 Work view showing task hierarchy, blocked work, and queue health.](../assets/ui-audit/0-10-0/work.png)
 
 ![Guildhall Thread view showing task cleanup, project questions, and bounded owner-input conversations.](../assets/ui-audit/0-10-0/thread.png)
 
+![Guildhall Facts view showing project identity, environment, gates, routing context, and durable facts.](../assets/ui-audit/0-10-0/facts.png)
+
 ![Guildhall Structure view showing structural map, project graph, and contract surfaces.](../assets/ui-audit/0-10-0/structure.png)
 
-![Guildhall v0.9.0 Settings Ready view showing local runtime readiness.](../assets/ui-audit/0-9-0/settings-runtime.webp)
-
-![Guildhall v0.9.0 Advanced settings showing memory, design, and runtime-adjacent project controls.](../assets/ui-audit/0-9-0/settings-advanced.webp)
+![Guildhall 0.10.0 Settings Ready view showing local runtime readiness.](../assets/ui-audit/0-10-0/settings-ready.png)
 
 ## Current strengths
 
 - Overview as a live project summary
-- Left-rail shell structure
+- Project rail with Overview, Needs you, Facts, and Structure grouped together
 - Task drawer inspection model
 - Closure, reviewer, and Git Story visibility
 - Sparse project controls with one primary Start or Stop path
-- Re-intake when old project state needs to be reconsidered
+- Re-intake from the project conversation when old project state needs to be reconsidered
 
 ## Start, stop, and blockers
 
@@ -77,7 +83,7 @@ also tell you what it needs and where to answer.
 
 ## Thread as the intake view
 
-Thread is where New Request routing, bounded owner-input sessions, and
+Threads is where New Request routing, bounded owner-input sessions, and
 Pressure-Test Intake show up. A broad release or feature ask can become a
 focused conversation; a task-like ask waits to create work until the missing
 briefing question is answered; and a pure project question can resolve as a
@@ -108,11 +114,11 @@ obligations before changing the shape.
 
 ## Re-intake stale project state
 
-Use **Settings -> Re-intake** when a project has old imported tasks, stale
-blockers, or cards that no longer match what the repo and docs say. Re-intake
-reads current evidence, compares it with accepted tasks and progress, and drafts
-a cleaner plan for review. Empty drafts cannot be applied, and applying a
-re-intake records why the project plan changed.
+Start re-intake from the project conversation when a project has old imported
+tasks, stale blockers, or cards that no longer match what the repo and docs say.
+Re-intake reads current evidence, compares it with accepted tasks and progress,
+and drafts a cleaner plan for review. Empty drafts cannot be applied, and
+applying a re-intake records why the project plan changed.
 
 ## Closure as the current-work view
 

@@ -44,7 +44,7 @@
   const completionHandoff = $derived(task.completionHandoff ?? null)
   const verdicts = $derived(task.reviewVerdicts ?? [])
   const gates = $derived(task.gateResults ?? [])
-  const taskDescription = $derived(readableTaskDescription(task.description, task.title) || 'Guildhall shaped the task from the saved brief and spec.')
+  const taskDescription = $derived(readableTaskDescription(task.description, task.title) || 'This task was shaped from the saved brief and spec.')
   const changedFiles = $derived(uniqueFiles([
     ...(checkpoint?.filesTouched ?? []),
     ...(task.gitStory?.samplePaths ?? []),

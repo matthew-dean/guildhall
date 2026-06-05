@@ -49,7 +49,7 @@ export function isImportedDraftShaping(turn: TaskStateLike): boolean {
 
 export function isQueuedSpecRevision(turn: TaskStateLike): boolean {
   return (
-    turn.taskStatus === 'exploring' &&
+    (turn.taskStatus === 'exploring' || turn.taskStatus === 'spec_review') &&
     !turn.importedDraft &&
     !turn.liveAgent &&
     !turn.checklist &&

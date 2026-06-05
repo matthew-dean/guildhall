@@ -27,7 +27,7 @@
 
   function requestErrorMessage(err: unknown): string {
     if (err instanceof TypeError && /fetch/i.test(err.message)) {
-      return 'Guildhall service did not answer that request. The service may have restarted; try again after it reconnects.'
+      return 'The local service did not answer that request. It may have restarted; try again after it reconnects.'
     }
     return err instanceof Error ? err.message : String(err)
   }
@@ -111,7 +111,7 @@
 
   setTimeout(() => {
     if (!loading || groups.length > 0) return
-    error = 'Guildhall could not finish loading the fleet inbox. Use Refresh to try again, or open a project directly.'
+    error = 'The fleet inbox could not finish loading. Use Refresh to try again, or open a project directly.'
     loading = false
   }, LOAD_WATCHDOG_MS)
 </script>

@@ -214,7 +214,7 @@ needed for bootstrap, tests, or local app startup. Guildhall may suggest likely
 filenames during setup, but it only copies paths listed here. Parent-directory
 paths are rejected, missing files are skipped, and symlinks are not copied.
 
-You can edit this list in **Settings → Advanced → Task worktree local files**.
+You can edit this list in **Settings → Developer → Task worktree local files**.
 
 ## `gitStory`
 

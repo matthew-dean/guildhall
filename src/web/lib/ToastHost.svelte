@@ -48,9 +48,14 @@
     border: 1px solid var(--glass-border-strong);
     border-radius: 8px;
     color: var(--text);
-    background: color-mix(in srgb, var(--surface-0) 94%, transparent);
-    box-shadow: var(--shadow-lg);
-    backdrop-filter: var(--glass-filter);
+    background:
+      var(--glass-reflect-violet),
+      var(--glass-reflect-mint),
+      linear-gradient(180deg, color-mix(in srgb, white 5%, transparent), color-mix(in srgb, white 1.5%, transparent)),
+      color-mix(in srgb, var(--glass-bg-strong) 86%, var(--glass-bg));
+    box-shadow: var(--glass-shadow), var(--glass-etch);
+    backdrop-filter: var(--glass-blur);
+    -webkit-backdrop-filter: var(--glass-blur);
     pointer-events: auto;
   }
 

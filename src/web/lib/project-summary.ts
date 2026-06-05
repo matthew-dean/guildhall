@@ -119,18 +119,18 @@ function readinessMaturity(project: ServiceProjectSummary): Pick<ProjectCardSumm
   if (readiness.code === 'required_migration_pending') {
     return {
       maturityLabel: 'Migrate',
-      maturityDescription: readiness.message ?? 'Run the required Guildhall migration before starting this project.',
+      maturityDescription: readiness.message ?? 'Run the required migration before starting this project.',
     }
   }
   if (readiness.code === 'owner_input_required') {
     return {
       maturityLabel: 'Needs you',
-      maturityDescription: readiness.message ?? 'Guildhall is waiting for a project decision before it can continue.',
+      maturityDescription: readiness.message ?? 'Waiting for a project decision before work can continue.',
     }
   }
   return {
     maturityLabel: readinessStage(project) ?? 'Blocked',
-    maturityDescription: readiness.message ?? 'Resolve this start blocker before Guildhall can move the project forward.',
+    maturityDescription: readiness.message ?? 'Resolve this start blocker before the project can move forward.',
   }
 }
 
@@ -265,31 +265,31 @@ function maturity(project: ServiceProjectSummary, counts: ProjectCardSummary['co
   if (project.projectCheckIn?.needed) {
     return {
       maturityLabel: 'Check-in',
-      maturityDescription: project.projectCheckIn.detail ?? 'Answer the first project questions so Guildhall can use current project context.',
+      maturityDescription: project.projectCheckIn.detail ?? 'Answer the first project questions so current project context can be used.',
     }
   }
   if (project.initializationNeeded) {
     return {
       maturityLabel: 'Setup',
-      maturityDescription: 'Guildhall still needs the basic project setup contract before it can reason about work reliably.',
+      maturityDescription: 'The basic project setup contract is still missing.',
     }
   }
   if (counts.total === 0) {
     return {
       maturityLabel: 'Intake',
-      maturityDescription: 'Guildhall has the project registered, but does not yet have a meaningful task map.',
+      maturityDescription: 'The project is registered, but does not yet have a meaningful task map.',
     }
   }
   if (counts.draftReview > 0 && counts.done === 0 && counts.active === 0) {
     return {
       maturityLabel: 'Blueprint',
-      maturityDescription: 'Guildhall is still turning notes or imported work into reviewed task briefs.',
+      maturityDescription: 'Notes or imported work are still becoming reviewed task briefs.',
     }
   }
   if (counts.blocked > 0) {
     return {
       maturityLabel: 'Inspect',
-      maturityDescription: 'Some work needs triage before Guildhall can treat the project as flowing cleanly.',
+      maturityDescription: 'Some work needs triage before the project is flowing cleanly.',
     }
   }
   if (counts.active > 0) {
@@ -303,7 +303,7 @@ function maturity(project: ServiceProjectSummary, counts: ProjectCardSummary['co
   if (counts.done > 0 && counts.done >= counts.total - counts.shelved) {
     return {
       maturityLabel: 'Stable',
-      maturityDescription: 'As far as Guildhall can tell, the current task set is complete or intentionally shelved.',
+      maturityDescription: 'The current task set appears complete or intentionally shelved.',
     }
   }
   return {
@@ -331,7 +331,7 @@ function gitStoryTitle(state: string, reason: string | undefined): string {
     return 'This checkout has uncommitted work. Review the diff, then commit it or mark it local-only/deferred.'
   }
   if (text.includes('fatal: not a git repository') || text.includes('spawn git enoent')) {
-    return 'Guildhall could not inspect this checkout with git.'
+    return 'This checkout could not be inspected with git.'
   }
   return reason ?? 'Git story needs closure.'
 }

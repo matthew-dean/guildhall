@@ -286,7 +286,7 @@ describe('POST /api/project/request', () => {
       request: {
         kind: 'task_spec',
         raw: ask,
-        routingSummary: 'Guildhall is shaping this request into a task brief.',
+        routingSummary: 'This request is being shaped into a task brief.',
       },
       requestIntake: {
         intent: 'ambiguous_spec_or_implementation',
@@ -343,7 +343,7 @@ describe('POST /api/project/request', () => {
       request: {
         kind: 'task_spec',
         raw: ask,
-        routingSummary: 'Guildhall is shaping this request into a task brief.',
+        routingSummary: 'This request is being shaped into a task brief.',
       },
       requestIntake: {
         intent: 'implementation',
@@ -415,7 +415,7 @@ describe('POST /api/project/request', () => {
       plannerState: {
         newRequest: {
           routedRequestKind: 'project_question',
-          routingSummary: 'Guildhall saved this as a project question.',
+          routingSummary: 'Saved as a project question.',
         },
       },
       subObjectives: [{

@@ -7431,6 +7431,82 @@ describe('Orchestrator.run — full loops', () => {
     expect(worker.calls[0]?.prompt).toContain('settings.vue type error')
   })
 
+  it('hands explicit task-owned bootstrap repair failures to the worker even when the task worktree is clean', async () => {
+    const subrepo = path.join(tmpDir, 'looma')
+    const worktree = path.join(tmpDir, '.guildhall', 'worktrees', 'looma-alert-dialog')
+    await fs.mkdir(path.join(subrepo, 'packages', 'looma', 'src'), { recursive: true })
+    await fs.mkdir(path.join(worktree, 'packages', 'looma', 'src'), { recursive: true })
+
+    const settings = makeDefaultSettings(new Date('2026-05-03T00:00:00Z'))
+    settings.project.worktree_isolation = {
+      position: 'per_task',
+      rationale: 'test',
+      setAt: '2026-05-03T00:00:00Z',
+      setBy: 'user-direct',
+    }
+    await saveLeverSettings({
+      path: path.join(memoryDir, AGENT_SETTINGS_FILENAME),
+      settings,
+    })
+
+    await writeQueue([
+      mkTask({
+        id: 'alert-dialog',
+        title: 'AlertDialog',
+        status: 'in_progress',
+        assignedTo: 'worker-agent',
+        domain: 'looma',
+        projectPath: subrepo,
+        worktreePath: worktree,
+        branchName: 'guildhall/task-alert-dialog',
+        baseBranch: 'main',
+        spec: [
+          VALID_SPEC,
+          '',
+          'The worker must also fix the task-local bootstrap failure before delivery.',
+        ].join('\n'),
+        notes: [{
+          agentId: 'human',
+          role: 'human',
+          content:
+            'Fix the task-local bootstrap failure that blocked the run: pnpm lint fails because packages/looma/src/extensions.ts cannot resolve @threadlabs/editor/extensions. Treat that as setup/implementation work inside this task branch, not as an owner decision.',
+          timestamp: '2026-05-03T00:00:00.000Z',
+        }],
+      }),
+    ])
+
+    const worker = stubAgent('worker-agent')
+    const orch = new Orchestrator({
+      config: baseConfig({
+        projectPath: tmpDir,
+        bootstrap: {
+          commands: ['node -e "process.exit(0)"'],
+          successGates: ['node -e "console.error(\'Cannot find module @threadlabs/editor/extensions\'); process.exit(1)"'],
+          timeoutMs: 30_000,
+          verifiedAt: '2026-05-03T00:00:00Z',
+        },
+      }),
+      agents: agentSet({ worker }),
+      gitDriver: new InMemoryGitDriver({ clean: true }),
+    })
+
+    const out = await orch.tick()
+    expect(out.kind).toBe('processed')
+    if (out.kind === 'processed') {
+      expect(out.beforeStatus).toBe('in_progress')
+      expect(out.afterStatus).toBe('in_progress')
+      expect(out.transitioned).toBe(false)
+    }
+
+    expect(worker.calls).toHaveLength(1)
+    const queue = await readQueue()
+    const task = queue.tasks.find((candidate) => candidate.id === 'alert-dialog')
+    expect(task?.status).toBe('in_progress')
+    expect(task?.blockReason ?? null).toBeNull()
+    expect(task?.notes.at(-1)?.role).toBe('bootstrap-verification')
+    expect(task?.notes.at(-1)?.content).toContain('task explicitly asks Guildhall to repair this bootstrap failure')
+  })
+
   it('does not touch git isolation for reserved intake tasks in a non-git workspace root', async () => {
     const settings = makeDefaultSettings(new Date('2026-05-03T00:00:00Z'))
     settings.project.worktree_isolation = {

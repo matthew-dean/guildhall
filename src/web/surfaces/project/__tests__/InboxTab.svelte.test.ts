@@ -3,6 +3,7 @@ import '@testing-library/jest-dom/vitest'
 import { cleanup, render, screen, waitFor } from '@testing-library/svelte'
 import userEvent from '@testing-library/user-event'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { readFileSync } from 'node:fs'
 import InboxTab from '../InboxTab.svelte'
 import { path } from '../../../lib/nav.svelte.js'
 
@@ -14,6 +15,23 @@ function json(data: unknown, status = 200): Response {
 }
 
 describe('InboxTab', () => {
+  it('renders inbox rows through the shared card-list item shell', () => {
+    const source = readFileSync('src/web/surfaces/project/InboxTab.svelte', 'utf-8')
+
+    expect(source).toContain("import CardList from '../../lib/CardList.svelte'")
+    expect(source).toContain("import CardListItem from '../../lib/CardListItem.svelte'")
+    expect(source).toContain('<CardList className="item-list">')
+    expect(source).toContain('<CardListItem className="inbox-row"')
+    expect(source).not.toContain('<UtilityPanel className="item-card"')
+    expect(source).not.toContain('.item-card {')
+    expect(source).toContain('grid-template-columns: auto minmax(0, 1fr) auto')
+    expect(source).toContain('.item-head {\n    display: contents;')
+    expect(source).toContain('.meta {\n    grid-column: 3;')
+    expect(source).toContain('.actions {\n    grid-column: 2;')
+    expect(source).toContain('justify-content: flex-start;')
+    expect(source).not.toContain('padding-left: calc(var(--s-2) + 16px);')
+  })
+
   beforeEach(() => {
     window.history.replaceState({}, '', '/projects/looma-knit/notifications')
     path.value = '/projects/looma-knit/notifications'

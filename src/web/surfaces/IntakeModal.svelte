@@ -161,11 +161,11 @@
         </label>
       {:else}
         <label class="field">
-          <span>What should Guildhall work through?</span>
+          <span>What should the next request cover?</span>
           <Textarea
             bind:value={ask}
             rows={5}
-            placeholder="Describe the request in plain language. Guildhall will ask follow-up questions before work starts."
+            placeholder="Describe the request in plain language. Follow-up questions may come before work starts."
           />
         </label>
         <label class="field">

@@ -38,6 +38,15 @@ describe('Guildhall glass design system', () => {
     expect(projectsHome).toContain('var(--glass-bg)')
   })
 
+  it('renders toasts with the shared glass background and blur tokens', () => {
+    const toastHost = read('src/web/lib/ToastHost.svelte')
+
+    expect(toastHost).toContain('var(--glass-bg')
+    expect(toastHost).toContain('backdrop-filter: var(--glass-blur)')
+    expect(toastHost).toContain('-webkit-backdrop-filter: var(--glass-blur)')
+    expect(toastHost).not.toContain('--glass-filter')
+  })
+
   it('documents the same glass language in VitePress and the UI design-token reference', () => {
     const docsCss = read('docs/.vitepress/theme/custom.css')
     const designTokens = read('docs/web-ui/design-tokens.md')

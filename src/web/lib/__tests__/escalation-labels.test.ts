@@ -68,7 +68,7 @@ describe('escalationRecoveryCopy', () => {
         details: 'Task remained in exploring with no saved spec.',
       }),
     ).toEqual({
-      headline: 'Guildhall found context but did not save the next draft.',
+      headline: 'Context was found, but the next draft was not saved.',
       detail: 'The transcript may contain useful observations. Retry from those notes or resolve the blocker after reviewing them.',
     })
   })
@@ -82,7 +82,7 @@ describe('escalationRecoveryCopy', () => {
       }),
     ).toEqual({
       headline: 'Spec shaping stopped before saving the next draft.',
-      detail: 'Guildhall can retry from the transcript notes or reframe the task if the request is too broad.',
+      detail: 'Retry from the transcript notes, or reframe the task if the request is too broad.',
     })
   })
 })
@@ -95,10 +95,10 @@ describe('escalationUserGuidance', () => {
       details: 'Coordinator scoped instructions require an AC-8 evidence block with the exact pnpm --dir frontend test result (timestamp + exit code) and concrete auth test specs.',
     })
 
-    expect(guidance.title).toBe('Guildhall needs to run one missing check.')
+    expect(guidance.title).toBe('One missing check needs to run.')
     expect(guidance.detail).toContain('auth')
     expect(guidance.detail).toContain('not asking you to prove anything')
-    expect(guidance.nextStep).toContain('Guildhall action')
+    expect(guidance.nextStep).toContain('recovery action')
     expect(guidance.actionOwner).toBe('guildhall')
     expect(`${guidance.title} ${guidance.detail} ${guidance.nextStep}`).not.toMatch(/\bAC-8\b/)
     expect(guidance.technicalNote).toBeUndefined()
@@ -107,7 +107,7 @@ describe('escalationUserGuidance', () => {
       summary: 'Cannot satisfy required AC-8 evidence command under current authoritative verification gate.',
       details: 'Coordinator scoped instructions require an AC-8 evidence block with the exact pnpm --dir frontend test result (timestamp + exit code) and concrete auth test specs.',
     })).toMatchObject({
-      label: 'Let Guildhall run the check',
+      label: 'Run the missing check',
       nextStatus: 'ready',
     })
   })
@@ -136,7 +136,7 @@ describe('escalationUserGuidance', () => {
       details: 'worker-agent timed out after 120000ms of inactivity',
     })
 
-    expect(guidance.title).toBe('Guildhall can retry the worker.')
+    expect(guidance.title).toBe('Worker execution can be retried.')
     expect(guidance.detail).toContain('not something you need to solve by hand')
     expect(guidance.nextStep).toContain('Retry worker')
     expect(guidance.actionOwner).toBe('guildhall')
@@ -159,7 +159,7 @@ describe('escalationUserGuidance', () => {
       details: 'Exceeded maximum turn limit (8)',
     })
 
-    expect(guidance.title).toBe('Guildhall can retry spec shaping.')
+    expect(guidance.title).toBe('Spec shaping can be retried.')
     expect(guidance.detail).toContain('not a project decision')
     expect(guidance.nextStep).toContain('Retry spec')
     expect(guidance.actionOwner).toBe('guildhall')
@@ -172,7 +172,7 @@ describe('escalationUserGuidance', () => {
       summary: 'Verification failed.',
     })
 
-    expect(guidance.title).toBe('Guildhall can retry the gates.')
+    expect(guidance.title).toBe('Gate checks can be retried.')
     expect(guidance.nextStep).toContain('Retry gates')
     expect(guidance.actionOwner).toBe('guildhall')
   })

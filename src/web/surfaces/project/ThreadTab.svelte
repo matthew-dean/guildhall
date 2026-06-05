@@ -1212,7 +1212,7 @@
     const pressureTarget = cleaned.match(/^Pressure-test\s+(.+)$/i)
     if (pressureTarget) {
       const target = cleanPressureTargetTitle(pressureTarget[1] ?? cleaned).replace(/[.?!]+$/, '')
-      return `Guildhall saved this as a pressure-test intake for ${target}.`
+      return `Saved as a pressure-test intake for ${target}.`
     }
     return cleaned || rawRequest
   }
@@ -1232,13 +1232,13 @@
 
   function pressureQuestionWhy(turn: OwnerInputQuestionTurn): string {
     if (isMultipleOwnerChoice(turn)) {
-      return 'Select every item that applies. Guildhall will treat the selected items as the setup plan.'
+      return 'Select every item that applies. The selected items become the setup plan.'
     }
     if (isStructuralReviewTurn(turn)) {
-      return 'Guildhall has already inferred these project areas. Review them for obvious mistakes before they become the routing map for future work.'
+      return 'These project areas were already inferred. Review them for obvious mistakes before they become the routing map for future work.'
     }
     if (/Workers need to know which outcome defines success before splitting tasks\./i.test(turn.question.why)) {
-      return 'A sentence is enough. Mention the outcome or constraint Guildhall should optimize for.'
+      return 'A sentence is enough. Mention the outcome or constraint to optimize for.'
     }
     return turn.question.why
   }
@@ -1741,17 +1741,17 @@
 
   function briefFixDescription(turn: InFlightTurn): string {
     if (missingChecklistSteps(turn).length === 0 && needsWorkerHandoffSpecCleanup(turn)) {
-      return 'The starter checklist is complete, but Guildhall still needs a full product brief and spec handoff before a worker can start.'
+      return 'The starter checklist is complete, but a full product brief and spec handoff are still needed before a worker can start.'
     }
     switch (missingBriefFieldKind(turn)) {
       case 'success':
-        return 'Guildhall needs to turn the source notes into a success target before implementation.'
+        return 'The source notes need a success target before implementation.'
       case 'acceptance':
-        return 'Guildhall needs to turn the source notes into concrete acceptance checks before implementation.'
+        return 'The source notes need concrete acceptance checks before implementation.'
       case 'both':
-        return 'Guildhall needs to turn the source notes into an outcome and acceptance checks before implementation.'
+        return 'The source notes need an outcome and acceptance checks before implementation.'
       default:
-        return `Guildhall needs to turn ${missingChecklistTitles(turn)} into a usable task brief before implementation.`
+        return `${missingChecklistTitles(turn)} must become a usable task brief before implementation.`
     }
   }
 
@@ -2045,7 +2045,7 @@
   function taskStateDescription(turn: InFlightTurn): string {
     const live = turnLiveAgent(turn)
     if (needsRecovery(turn)) {
-      return 'Guildhall made partial progress, then the agent failed. Review the durable worktree changes or restart from that recovery point.'
+      return 'Partial progress was saved, then the agent failed. Review the durable worktree changes or restart from that recovery point.'
     }
     if (
       live?.lastEventLabel === 'Waiting for the local model to respond.' &&
@@ -2055,25 +2055,25 @@
     }
     if (live?.name === 'spec-agent') {
       if (turn.requestKind === 'project_question') {
-        return 'Guildhall is inspecting the project to answer this question now.'
+        return 'The project is being inspected to answer this question now.'
       }
       if (turn.requestStage === 'task_brief_cleanup') {
-        return 'Guildhall is cleaning up this task brief now.'
+        return 'This task brief is being cleaned up now.'
       }
       if (turn.importedDraft) {
-        return 'Guildhall is turning this imported note into a task brief now.'
+        return 'This imported note is becoming a task brief now.'
       }
       return turn.taskId === 'task-workspace-import'
-        ? 'Guildhall is turning your existing project notes into candidate tasks now.'
-        : 'Guildhall is drafting this now.'
+        ? 'Your existing project notes are becoming candidate tasks now.'
+        : 'Drafting is in progress now.'
     }
     if (turn.taskStatus === 'ready' && !live) {
       if (needsWorkerHandoffSpecCleanup(turn)) {
         return briefFixDescription(turn)
       }
       return runStatus === 'running'
-        ? 'Approved and queued. Guildhall is running and can pick this up.'
-        : 'Approved and queued. Resume Guildhall when you want it to pick this up.'
+        ? 'Approved and queued. The current run can pick this up.'
+        : 'Approved and queued. Resume when you want this work picked up.'
     }
     if (turn.taskId === 'task-meta-intake' && !live) {
       return turn.summary
@@ -2083,52 +2083,52 @@
     }
     if (turn.taskStatus === 'exploring' && !live) {
       if (turn.requestKind === 'project_question') {
-        return 'Queued as a project question. Guildhall can inspect files and summarize the answer without turning this into implementation work.'
+        return 'Queued as a project question. Files can be inspected and summarized without turning this into implementation work.'
       }
       if (turn.requestStage === 'task_brief_cleanup') {
-        return 'Guildhall queued this task for brief cleanup. The checklist shows what still needs to be clarified before implementation.'
+        return 'Task brief cleanup is queued. The checklist shows what still needs to be clarified before implementation.'
       }
       if (turn.taskId === 'task-workspace-import') {
         return startReadiness?.code === 'owner_input_required' && startReadiness.canStart === false
-          ? 'Guildhall already drafted part of this import review. Review it if you want, but answer the current blocker before Guildhall continues shaping project notes.'
-          : 'Guildhall already drafted part of this import review. Review it if you want, or resume Guildhall to keep turning your project notes into candidate tasks.'
+          ? 'Part of this import review is already drafted. Review it if you want, but answer the current blocker before project notes can keep moving.'
+          : 'Part of this import review is already drafted. Review it if you want, or resume to keep turning your project notes into candidate tasks.'
       }
       return turn.importedDraft
-          ? 'Guildhall is shaping the task brief for this imported note. You can add context, but you do not need to babysit the draft.'
+          ? 'The task brief for this imported note is being shaped. You can add context, but you do not need to babysit the draft.'
           : isQueuedSpecRevision(turn)
-            ? 'Guildhall already has the draft spec plus your latest answers. Coordinator review is queued.'
-            : 'Guildhall has started shaping this task, but the brief is not ready yet. The checklist shows what is still missing.'
+            ? 'The draft spec and your latest answers are saved. Coordinator review is queued.'
+            : 'Task shaping has started, but the brief is not ready yet. The checklist shows what is still missing.'
     }
     if (turn.taskStatus === 'in_progress' && !live) {
       return runStatus === 'running'
-        ? 'Work is paused between worker passes. Guildhall is running and can resume it.'
-        : 'Work is paused. Resume Guildhall when you want it to continue.'
+        ? 'Work is paused between worker passes. The current run can resume it.'
+        : 'Work is paused. Resume when you want it to continue.'
     }
     if (turn.taskStatus === 'review' && !live) {
       return runStatus === 'running'
-        ? 'Review is queued. Guildhall is running and can pick this up.'
-        : 'Review is queued. Resume Guildhall when you want it to continue.'
+        ? 'Review is queued. The current run can pick this up.'
+        : 'Review is queued. Resume when you want it to continue.'
     }
     if (turn.taskStatus === 'gate_check' && !live) {
       return runStatus === 'running'
-        ? 'Gate checks are queued. Guildhall is running and can pick this up.'
-        : 'Gate checks are queued. Resume Guildhall when you want it to continue.'
+        ? 'Gate checks are queued. The current run can pick this up.'
+        : 'Gate checks are queued. Resume when you want them to continue.'
     }
     return turn.summary
   }
 
   function behindTheScenesNote(turn: InFlightTurn): string | null {
     if (turn.taskId === 'task-meta-intake' && turn.checklist) {
-      return 'Guildhall is splitting the project into starter lanes before worker tasks begin.'
+      return 'The project is being split into starter lanes before worker tasks begin.'
     }
     if (turn.importedDraft && (turn.taskStatus === 'import_draft' || turn.taskStatus === 'exploring')) {
-      return 'Guildhall is reorienting this imported note into a runnable task brief.'
+      return 'This imported note is being reoriented into a runnable task brief.'
     }
     if (needsWorkerHandoffSpecCleanup(turn)) {
-      return 'Guildhall is completing the handoff brief before it lets a worker start.'
+      return 'The handoff brief is being completed before a worker starts.'
     }
     if (turn.requestKind === 'project_question') {
-      return 'Guildhall is treating this as a project question, not implementation work.'
+      return 'This is being treated as a project question, not implementation work.'
     }
     return null
   }
@@ -2216,6 +2216,7 @@
       turn.taskStatus === 'ready' ||
       turn.taskStatus === 'import_draft' ||
       turn.taskStatus === 'exploring' ||
+      turn.taskStatus === 'spec_review' ||
       turn.taskStatus === 'in_progress' ||
       turn.taskStatus === 'review' ||
       turn.taskStatus === 'gate_check'
@@ -2245,10 +2246,11 @@
         return 'Resume work'
       case 'import_draft': return 'Draft task brief'
       case 'exploring':
-        if (turn.taskId === 'task-meta-intake') return 'Let Guildhall keep setting this up'
+        if (turn.taskId === 'task-meta-intake') return 'Keep setting this up'
         if (turn.requestStage === 'task_brief_cleanup') return 'Clean up brief'
         if (turn.importedDraft || hasIncompleteTaskChecklist(turn)) return 'Continue shaping brief'
         return isQueuedSpecRevision(turn) ? 'Revise spec' : 'Continue drafting spec'
+      case 'spec_review': return 'Resume spec work'
       case 'review': return 'Resume review'
       case 'gate_check': return 'Resume gates'
       case 'in_progress': return 'Resume work'
@@ -2329,24 +2331,27 @@
           return
         }
         if (continueBody.continuation?.status === 'queued') {
-          toast.info('Brief cleanup is queued for Guildhall.')
+          toast.info('Brief cleanup is queued.')
         }
         await load()
         await refreshProject()
         return
       }
-      const res = await scopedProjectFetch('/api/project/start', {
+      const endpoint = taskId
+        ? `/api/project/task/${encodeURIComponent(taskId)}/start`
+        : '/api/project/start'
+      const res = await scopedProjectFetch(endpoint, {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({
-          mode: 'continuous',
-          ...(taskId ? { taskId } : {}),
+          mode: taskId ? 'one_task' : 'continuous',
+          ...(taskId ? { scope: 'work_item' } : {}),
         }),
       })
       const body = await res.json().catch(() => ({})) as { code?: string; error?: string }
       if (!res.ok || body.error) {
         if (body.code === 'run_already_active') {
-          toast.info('Guildhall is already running. This task stays queued for the coordinator.')
+          toast.info('A run is already active. This task stays queued for the coordinator.')
           await load()
           await refreshProject()
           return
@@ -2432,7 +2437,7 @@
         toast.error(body.error ?? `HTTP ${res.status}`)
         return
       }
-      toast.success('Guildhall can continue this task.')
+      toast.success('This task can continue.')
       await load()
       await refreshProject()
       await startTaskRun(turn.taskId)
@@ -2668,10 +2673,10 @@
     if (turn.kind === 'history_note') return turn.summary
     if (turn.kind === 'agent_question') {
       const question = visibleQuestionsForCard(questionsForTurn(turn))[0]
-      return question?.restatement ?? question?.prompt ?? 'Guildhall needs an answer.'
+      return question?.restatement ?? question?.prompt ?? 'An answer is needed.'
     }
     if (turn.kind === 'brief_approval') return 'Review the drafted brief and either approve it or send corrections.'
-    if (turn.kind === 'spec_review') return turn.taskId === 'task-meta-intake' ? 'Review the proposed split and starter structure.' : 'Review the spec draft before Guildhall moves it forward.'
+    if (turn.kind === 'spec_review') return turn.taskId === 'task-meta-intake' ? 'Review the proposed split and starter structure.' : 'Review the spec draft before it moves forward.'
     if (turn.kind === 'escalation') {
       const guidance = escalationUserGuidance({
         summary: turn.summary,
@@ -2739,21 +2744,21 @@
         return turn.summary
       case 'brief_approval':
         return turn.status === 'done'
-          ? 'Guildhall locked the brief and carried this thread into spec drafting.'
-          : 'Guildhall drafted the brief and is waiting for a final decision.'
+          ? 'The brief was locked and this thread moved into spec drafting.'
+          : 'The brief is drafted and waiting for a final decision.'
       case 'spec_review':
         if (turn.taskId === 'task-meta-intake') {
           return turn.status === 'done'
             ? 'The proposed project split was accepted and can shape the next work.'
-            : 'Guildhall drafted a proposed project split and is waiting for approval.'
+            : 'A proposed project split is drafted and waiting for approval.'
         }
         return turn.status === 'done'
           ? 'The spec was approved and this thread can move into ready work.'
-          : 'Guildhall drafted a spec and is waiting for review.'
+          : 'A spec is drafted and waiting for review.'
       case 'agent_question': {
         const answered = [...questionsForTurn(turn)].reverse().find((question) => (question.answer ?? '').trim())
         return answered?.answer?.trim()
-          ?? 'You answered Guildhall’s clarifying question and the thread moved forward.'
+          ?? 'You answered the clarifying question and the thread moved forward.'
       }
       case 'review_feedback':
         return turn.summary
@@ -2761,18 +2766,18 @@
         return turn.details?.trim() || turn.summary
       case 'inflight':
         if (turn.importedDraft || turn.taskStatus === 'exploring' || turn.taskStatus === 'import_draft') {
-          return 'Guildhall reshaped the request into concrete task requirements and acceptance checks.'
+          return 'The request was reshaped into concrete task requirements and acceptance checks.'
         }
         if (turn.taskStatus === 'ready') {
           if (needsWorkerHandoffSpecCleanup(turn)) {
-            return 'Guildhall saved the starter notes, but the worker handoff still needs a full brief and acceptance checks.'
+            return 'The starter notes were saved, but the worker handoff still needs a full brief and acceptance checks.'
           }
-          return 'Guildhall finished shaping this work and left it ready for a worker.'
+          return 'This work is shaped and ready for a worker.'
         }
         if (turn.taskStatus === 'in_progress') {
-          return turn.summary || 'Guildhall advanced this thread into active work.'
+          return turn.summary || 'This thread moved into active work.'
         }
-        return turn.summary || 'Guildhall advanced this thread to the next stage.'
+        return turn.summary || 'This thread moved to the next stage.'
       default:
         return turnIndexSummary(turn)
     }
@@ -2837,13 +2842,13 @@
     const question = [...questionsForTurn(turn)].find(candidate =>
       Boolean((candidate.restatement ?? candidate.prompt ?? '').trim()),
     ) ?? turn.question
-    return (question.restatement ?? question.prompt ?? 'Guildhall asked a clarifying question.').trim()
+    return (question.restatement ?? question.prompt ?? 'A clarifying question is open.').trim()
   }
 
   function historyQuestionAnswer(turn: AgentQuestionTurn): string {
     const answered = [...questionsForTurn(turn)].reverse().find((question) => (question.answer ?? '').trim())
     return answered?.answer?.trim()
-      ?? 'You answered Guildhall’s clarifying question and the thread moved forward.'
+      ?? 'You answered the clarifying question and the thread moved forward.'
   }
 
   function showHistoricalMeta(turn: Turn): boolean {
@@ -3060,7 +3065,7 @@
     if (turn.kind === 'brief_approval') {
       return {
         title: 'Request changes to the brief',
-        description: 'Tell Guildhall what should change before this brief moves forward.',
+        description: 'Describe what should change before this brief moves forward.',
         placeholder: 'Correct the brief or add missing context…',
         submitLabel: 'Send',
       }
@@ -3068,23 +3073,23 @@
     if (turn.kind === 'spec_review') {
       return {
         title: turn.taskId === 'task-meta-intake' ? 'Change the proposed split' : 'Request changes to the spec',
-        description: 'Keep the thread moving, but redirect the current draft before Guildhall treats it as approved.',
-        placeholder: 'Correct the spec or ask Guildhall to revisit it…',
+        description: 'Keep the thread moving, but redirect the current draft before it is treated as approved.',
+        placeholder: 'Correct the spec or ask for another pass…',
         submitLabel: 'Send',
       }
     }
     if (turn.kind === 'escalation') {
       return {
         title: 'Add recovery guidance',
-        description: 'Add context for Guildhall without closing this blocker.',
-        placeholder: 'Add recovery guidance for Guildhall...',
+        description: 'Add context without closing this blocker.',
+        placeholder: 'Add recovery guidance...',
         submitLabel: 'Send',
       }
     }
     return {
       title: 'Add a thread note',
-      description: 'Give Guildhall a correction, constraint, or steering note for this active work.',
-      placeholder: 'Add a note for Guildhall…',
+      description: 'Give a correction, constraint, or steering note for this active work.',
+      placeholder: 'Add a note…',
       submitLabel: 'Send',
     }
   }
@@ -3107,9 +3112,9 @@
         return {
           kind: 'question_context',
           turn,
-          title: 'Ask Guildhall to explain first',
-          description: 'This keeps the question open while Guildhall explains its assumptions, project terms, or source evidence.',
-          placeholder: 'Ask what Guildhall means, what evidence it used, or what context is missing…',
+          title: 'Ask for an explanation first',
+          description: 'This keeps the question open while assumptions, project terms, or source evidence are explained.',
+          placeholder: 'Ask what this means, what evidence was used, or what context is missing…',
           submitLabel: 'Send',
         }
       }
@@ -3147,8 +3152,8 @@
             turn,
             question,
             title: 'Reply in thread',
-            description: 'Guildhall is waiting on a free-form answer before it can continue this thread.',
-            placeholder: 'Answer this question or redirect Guildhall…',
+            description: 'A free-form answer is needed before this thread can continue.',
+            placeholder: 'Answer this question or redirect the thread…',
             submitLabel: 'Send',
           }
         }
@@ -3162,7 +3167,7 @@
           kind: 'pressure_test',
           turn,
           title: 'Reply in thread',
-          description: 'Guildhall needs your answer before it can continue.',
+          description: 'Your answer is needed before this can continue.',
           placeholder: 'Answer with a sentence or short paragraph. Include constraints or success measures if they matter.',
           submitLabel: 'Send',
         }
@@ -3190,8 +3195,8 @@
       return {
         kind: 'working',
         turn: workingTurn,
-        title: live ? liveAgentMessage(live) : 'Guildhall is working',
-        description: live?.lastEventLabel ?? 'Guildhall is actively working in this thread.',
+        title: live ? liveAgentMessage(live) : 'Working',
+        description: live?.lastEventLabel ?? 'This thread is active now.',
       }
     }
 
@@ -3250,7 +3255,7 @@
       <div class="routing-context" aria-label="Task routing context">
         <div class="routing-context-head">
           <div>
-            <span class="field-label">Guildhall will start with</span>
+            <span class="field-label">Start with</span>
             <strong>{context.likelyArea?.label ?? context.primaryDomain?.label ?? 'Accepted project context'}</strong>
           </div>
           <Button variant="ghost" size="sm" onclick={() => openRoutingCorrection(turnId)}>
@@ -3305,7 +3310,7 @@
             <UtilityPanel tone="warn">
               <Stack gap="3">
                 <div class="field">
-                  <strong>Guildhall needs a decision before it can safely use this folder.</strong>
+                  <strong>A decision is needed before this folder can be used safely.</strong>
                   <p class="muted">{request.reason}</p>
                 </div>
 
@@ -3350,13 +3355,13 @@
           <strong>Import complete.</strong>
           {#if importHandoff.tasksAdded > 0}
             <span>
-              Guildhall created {importHandoff.tasksAdded} draft task{importHandoff.tasksAdded === 1 ? '' : 's'}
+              Created {importHandoff.tasksAdded} draft task{importHandoff.tasksAdded === 1 ? '' : 's'}
               from {importHandoff.sourceCount} selected source{importHandoff.sourceCount === 1 ? '' : 's'}.
               These drafts still need shaping before any worker starts.
             </span>
           {:else}
             <span>
-              Guildhall saved {importHandoff.sourceCount} selected source{importHandoff.sourceCount === 1 ? '' : 's'} as project context.
+              Saved {importHandoff.sourceCount} selected source{importHandoff.sourceCount === 1 ? '' : 's'} as project context.
               No draft tasks were created, so the next task can start from the recorded notes instead of a blank slate.
             </span>
           {/if}
@@ -3703,8 +3708,8 @@
                   <p class="why">{setupStepWhy(t)}</p>
                   {#if t.status === 'active'}
                     {#if t.contextSummary}
-                      <UtilityPanel className="setup-context" tone="neutral" ariaLabel="What Guildhall knows right now">
-                        <strong>What Guildhall knows right now</strong>
+                      <UtilityPanel className="setup-context" tone="neutral" ariaLabel="Current setup context">
+                        <strong>Current setup context</strong>
                         <p>{t.contextSummary.intro}</p>
                         <ul>
                           {#each t.contextSummary.facts as fact}
@@ -4050,7 +4055,7 @@
                 {@const briefScope = briefScopeForReaders(t.brief, t.taskTitle)}
                 {@const briefDoneWhen = briefDoneWhenForReaders(t.brief)}
                 <h3 class="prompt">Review this task brief</h3>
-                <p class="lede">Approve it to queue the work, or tell Guildhall what to change.</p>
+                <p class="lede">Approve it to queue the work, or say what should change.</p>
                 <div class="field"><span class="field-label">Scope</span>
                   <Markdown source={briefScope} />
                 </div>
@@ -4196,13 +4201,13 @@
                       </UtilityPanel>
                     </details>
                   {/if}
-                  <h3 class="prompt">{totalQuestions === 1 ? 'Before Guildhall continues' : `${totalQuestions} questions before Guildhall continues`}</h3>
+                  <h3 class="prompt">{totalQuestions === 1 ? 'Before work continues' : `${totalQuestions} questions before work continues`}</h3>
                   <UtilityPanel className="question-context-actions" tone="neutral">
                     {#if contextTurnId === t.id}
                       {#if isFooterContextTurn(t.id)}
                         <div class="question-context-copy">
                           <strong>Reply using the shared composer below.</strong>
-                          <span>Guildhall will keep this question open and explain the missing context first.</span>
+                          <span>This keeps the question open and explains the missing context first.</span>
                         </div>
                       {:else}
                         <Stack gap="2">
@@ -4241,10 +4246,10 @@
                     {:else}
                       <div class="question-context-copy">
                         <strong>Missing context is expected.</strong>
-                        <span>Ask Guildhall to explain project terms, source notes, or assumptions before you answer. This keeps the question open.</span>
+                        <span>Ask for project terms, source notes, or assumptions to be explained before you answer. This keeps the question open.</span>
                       </div>
                       <Button variant="human" size="sm" disabled={busyTurnId === t.id} onclick={() => (contextTurnId = t.id)}>
-                        Ask Guildhall to explain
+                        Ask for explanation
                       </Button>
                     {/if}
                   </UtilityPanel>
@@ -4340,21 +4345,21 @@
                   <h3 class="prompt">
                     {isMetaIntakeDraft
                       ? starterRoutingDraft
-                        ? `Guildhall proposed ${proposedCount || 0} starter ${proposedCount === 1 ? 'lane' : 'lanes'}`
-                        : `Guildhall inferred ${proposedCount || 0} ${proposedCount === 1 ? 'repo slice' : 'repo slices'}`
+                        ? `Proposed ${proposedCount || 0} starter ${proposedCount === 1 ? 'lane' : 'lanes'}`
+                        : `Inferred ${proposedCount || 0} ${proposedCount === 1 ? 'repo slice' : 'repo slices'}`
                       : 'Spec draft awaiting approval'}
                   </h3>
                 </div>
                 {#if isMetaIntakeDraft && t.draftCoordinators?.length}
                   <p class="why decision-question">
                     {starterRoutingDraft
-                      ? 'Guildhall found an empty project and proposed starter routing placeholders.'
-                      : 'Guildhall inferred this structure from the repo.'}
+                      ? 'An empty project was found, so starter routing placeholders were proposed.'
+                      : 'This structure was inferred from the repo.'}
                   </p>
                   <p class="why">
                     {starterRoutingDraft
                       ? 'Confirm only if these starter lanes are materially wrong; they give spec shaping a safe place to happen until real product code exists.'
-                      : 'Confirm it only if something here is materially wrong. Guildhall should handle the routing and review structure underneath.'}
+                      : 'Confirm it only if something here is materially wrong. The routing and review structure should be handled underneath.'}
                   </p>
                   <div class="draft-summary-list">
                     {#each t.draftCoordinators as d (d.id)}
@@ -4365,7 +4370,7 @@
                     {/each}
                   </div>
                   <details class="draft-details">
-                    <summary>{starterRoutingDraft ? 'See why Guildhall proposed this starter split' : 'See why Guildhall inferred this structure'}</summary>
+                    <summary>{starterRoutingDraft ? 'See why this starter split was proposed' : 'See why this structure was inferred'}</summary>
                     <div class="coord-list">
                       {#each t.draftCoordinators as d (d.id)}
                         <UtilityPanel className="coord" tone="neutral">
@@ -4554,7 +4559,7 @@
                     {@const draft = briefFixDrafts[t.id] ?? { successTarget: '', acceptanceCriterion: '' }}
                     <UtilityPanel className="brief-fix-panel" tone="accent">
                       <p class="brief-fix-intro">
-                        Fill {missingChecklistTitles(t)} here. Guildhall will use this to finish the task brief.
+                        Fill {missingChecklistTitles(t)} here to finish the task brief.
                       </p>
                       {#if showBriefSuccessField(t)}
                         <label class="brief-fix-field">
@@ -4570,7 +4575,7 @@
                       {/if}
                       {#if showBriefAcceptanceField(t)}
                         <label class="brief-fix-field">
-                          <span>How should Guildhall check it?</span>
+                          <span>How should this be checked?</span>
                           <Textarea
                             value={draft.acceptanceCriterion}
                             rows={3}
@@ -4932,7 +4937,7 @@
                     <UtilityPanel className="answer-panel" tone="neutral" dense>
                       <p class="answer">
                         Saved. {canStartTaskTurn(t)
-                          ? 'Guildhall will read it on the next Start.'
+                          ? 'This will be read on the next Start.'
                           : 'The agent will read it on the next run.'}
                       </p>
                     </UtilityPanel>
@@ -4954,11 +4959,11 @@
                 {#if caughtUp}
                   <p class="muted caught-up">
                     {#if operationSummary.needsYou > 0}
-                      Needs your input before Guildhall can continue.
+                      Needs your input before work can continue.
                     {:else if operationSummary.working > 0}
                       Agents are working.
                     {:else if operationSummary.queued > 0 || operationSummary.drafts > 0}
-                      Guildhall has queued work ready for the next run.
+                      Queued work is ready for the next run.
                     {:else if allTerminalReadinessMessage}
                       {allTerminalReadinessMessage}
                     {:else}
@@ -5271,12 +5276,12 @@
                             {#if contextTurnId === activeDockTurn.id}
                               <div class="question-context-copy">
                                 <strong>Reply using the shared composer below.</strong>
-                                <span>Guildhall will keep this question open and explain the missing context first.</span>
+                                <span>This keeps the question open and explains the missing context first.</span>
                               </div>
                             {:else}
                               <div class="question-context-copy">
                                 <strong>Missing context is expected.</strong>
-                                <span>Ask Guildhall to explain project terms, source notes, or assumptions before you answer. This keeps the question open.</span>
+                                <span>Ask for project terms, source notes, or assumptions to be explained before you answer. This keeps the question open.</span>
                               </div>
                               <Button
                                 variant="human"
@@ -5284,7 +5289,7 @@
                                 disabled={busyTurnId === activeDockTurn.id}
                                 onclick={() => (contextTurnId = activeDockTurn.id)}
                               >
-                                Ask Guildhall to explain
+                                Ask for explanation
                               </Button>
                             {/if}
                           </div>

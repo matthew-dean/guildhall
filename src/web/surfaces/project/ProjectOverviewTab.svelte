@@ -184,7 +184,7 @@
   const startBlocked = $derived(detail.startReadiness?.canStart === false)
   const emptyWorkMixLabel = $derived(
     requiredMigrationBlocked
-      ? 'Run the required Guildhall migration before creating or running work.'
+      ? 'Run the required migration before creating or running work.'
       : startBlocked
         ? 'Resolve the project blocker before adding more work.'
         : 'No tasks yet. Create a request when you are ready.',
@@ -207,7 +207,7 @@
     if (provider?.fallback) {
       items.push({
         label: 'Provider fallback',
-        detail: provider.decisions?.[0]?.message ?? 'Guildhall is using a fallback provider.',
+        detail: provider.decisions?.[0]?.message ?? 'A fallback provider is being used.',
         tone: 'warn',
         href: currentProjectHref('/settings/providers', activeProjectId),
       })
@@ -334,14 +334,14 @@
       {
         label: 'Proof',
         title: primaryProofPaths.length > 0 ? `${countLabel(primaryProofPaths.length, 'tracked proof path')}` : 'No proof paths yet',
-        detail: primaryProofPaths[0]?.proofPath.title ?? 'Proof paths appear here once Guildhall has planned verification.',
+        detail: primaryProofPaths[0]?.proofPath.title ?? 'Proof paths appear here once verification is planned.',
         href: currentProjectHref('/work', activeProjectId),
         tone: primaryProofPaths.some(item => item.proofPath.status === 'blocked') ? 'warn' as Tone : primaryProofPaths.some(item => item.proofPath.status === 'verified') ? 'ok' as Tone : 'neutral' as Tone,
       },
       {
         label: 'History',
         title: recentEvents.length > 0 ? `${countLabel(recentEvents.length, 'recent change')}` : 'No recent changes',
-        detail: recentEvents[0]?.label ?? 'Timeline will fill in as Guildhall runs, reviews, and records decisions.',
+        detail: recentEvents[0]?.label ?? 'Timeline will fill in as runs, reviews, and decisions are recorded.',
         href: currentProjectHref('/timeline', activeProjectId),
         tone: 'neutral' as Tone,
       },
@@ -372,7 +372,7 @@
     if (detail.startReadiness?.code === 'required_migration_pending') {
       return {
         label: 'Required migration',
-        detail: detail.startReadiness.message ?? 'Run the required Guildhall migration before Guildhall can update this project.',
+        detail: detail.startReadiness.message ?? 'Run the required migration before this project can update.',
         button: 'Migrate project',
         href: '/migrations',
         tone: 'danger' as Tone,
@@ -384,7 +384,7 @@
       const matchingInbox = inboxItems.find(item => item.severity !== 'low' && item.actionHref === href)
       return {
         label: detail.startReadiness.message ?? matchingInbox?.title ?? startReadinessLabel(detail.startReadiness.code),
-        detail: matchingInbox?.detail ?? 'Guildhall needs this resolved before Start can move work.',
+        detail: matchingInbox?.detail ?? 'Resolve this before Start can move work.',
         content: matchingInbox?.taskDescription,
         button: matchingInbox ? inboxActionLabel(matchingInbox) : 'Open item',
         href,
@@ -498,14 +498,14 @@
     if (detail.startReadiness?.canStart === false) {
       return {
         label: shared?.label ?? startReadinessLabel(detail.startReadiness.code),
-        detail: shared?.detail ?? detail.startReadiness.message ?? 'Guildhall needs one thing resolved before Start can move work.',
+        detail: shared?.detail ?? detail.startReadiness.message ?? 'Resolve one thing before Start can move work.',
         href: shared?.href ?? detail.startReadiness.actionHref ?? currentProjectHref('/overview', activeProjectId),
       }
     }
     if (detail.providerStatus?.fallback) {
       return {
         label: 'Provider fallback active',
-        detail: detail.providerStatus.decisions?.[0]?.message ?? 'Guildhall is using a fallback provider for this project.',
+        detail: detail.providerStatus.decisions?.[0]?.message ?? 'A fallback provider is being used for this project.',
         href: currentProjectHref('/settings/providers', activeProjectId),
       }
     }
@@ -538,7 +538,7 @@
       4,
     )
     addTasks(['spec_review', 'import_draft'], 'warn', task => `${taskPresentation(task).label}: needs review before it can move.`, 4)
-    addTasks(['exploring'], 'neutral', task => `${taskPresentation(task).label}: awaiting the next Guildhall pass.`, 4)
+    addTasks(['exploring'], 'neutral', task => `${taskPresentation(task).label}: awaiting the next pass.`, 4)
 
     if (!rows.length && blockedRows.length > 0) {
       rows.push({
@@ -623,35 +623,35 @@
     const text = value.trim()
     if (!text) return text
     if (/Model returned an empty assistant message|Model returned an empty reply/i.test(text)) {
-      return 'Guildhall got an empty model reply, so it kept the task state intact. Retry the run or switch providers if this keeps happening.'
+      return 'The model returned an empty reply, so task state stayed intact. Retry the run or switch providers if this keeps happening.'
     }
     if (/\bstopped\s*\(\s*Idle Limit\s*\)|\bIdle Limit\b/i.test(text)) {
-      return 'Guildhall stopped after reaching the idle limit. Start the run again when you are ready to continue.'
+      return 'The run stopped after reaching the idle limit. Start it again when you are ready to continue.'
     }
     if (/already have the question posted|posted (?:a |the )?(?:choice|freeform)?\s*question|wait for the user's answer|yield now|q-\d/i.test(text)) {
-      return 'Guildhall asked a question and is waiting for the answer.'
+      return 'A question is waiting for an answer.'
     }
     if (/research budget exhausted|hit the research budget|refusing more read-only tool calls|do not call more read-only tools now/i.test(text)) {
-      return 'Guildhall paused after gathering enough context. Open the task to choose the next step.'
+      return 'Work paused after gathering enough context. Open the task to choose the next step.'
     }
     if (/spec (?:author|agent|shaping).*(?:turn limit|maximum turn|timed out)|kept researching after guildhall asked for durable progress/i.test(text)) {
-      return 'Spec shaping stopped before Guildhall saved the next draft. Open the task to retry from the transcript or reframe the work.'
+      return 'Spec shaping stopped before the next draft was saved. Open the task to retry from the transcript or reframe the work.'
     }
     if (/\bAC-\d+\b/i.test(text) && /\bevidence\b/i.test(text)) {
-      return 'Guildhall needs to run or save one missing verification check before this task can finish.'
+      return 'One missing verification check needs to run or be saved before this task can finish.'
     }
     if (/authoritative verification|upstream workspace build failure|checkpoint-touched|task worktree/i.test(text)) {
       return 'The project build is failing outside this task. Decide whether to reframe the task, fix the wider build first, or retry after the build is healthy.'
     }
     if (/no visible progress|made no visible progress|no saved (?:spec|draft)|no durable (?:draft|update)/i.test(text)) {
-      return 'Guildhall found useful context but did not save the next draft. Decide whether to retry from those notes or reframe the task.'
+      return 'Useful context was found, but the next draft was not saved. Decide whether to retry from those notes or reframe the task.'
     }
     const withoutCodePrefix = text
       .replace(/^ERROR:\s*/i, '')
       .replace(/^[a-z][a-z0-9_]*:\s*/i, '')
       .trim()
     if (/^ERROR:\s*spec_ambiguous\b/i.test(text) || /^spec_ambiguous\b/i.test(text)) return withoutCodePrefix || 'The task brief is missing a concrete implementation path.'
-    if (/^ERROR:\s*human_judgment_required\b/i.test(text) || /^human_judgment_required\b/i.test(text)) return withoutCodePrefix || 'Guildhall needs a product or recovery decision before it can continue.'
+    if (/^ERROR:\s*human_judgment_required\b/i.test(text) || /^human_judgment_required\b/i.test(text)) return withoutCodePrefix || 'A product or recovery decision is needed before work can continue.'
     return withoutCodePrefix
   }
 
@@ -826,7 +826,7 @@
     </UtilityPanel>
   </section>
 
-  <section class="knowledge-band" aria-label="Everything Guildhall knows about this project">
+  <section class="knowledge-band" aria-label="Project knowledge summary">
     {#each knowledgeCards as card (card.label)}
       <CardListItem
         as="button"
@@ -841,26 +841,8 @@
     {/each}
   </section>
 
-  <section class="overview-grid overview-grid-main">
-    <Card title="Moving now" titleTag="h2" className="overview-card">
-      {#if movingTasks.length === 0}
-        <p class="muted">{running ? 'Guildhall is running, but no task is currently active.' : 'No task is moving right now.'}</p>
-      {:else}
-        <div class="motion-list">
-          {#each movingTasks as task (task.id)}
-            <OverviewTaskRow
-              title={task.title ?? friendlyTaskId(task.id)}
-              detail={friendlyDomain(task.domain) || statusDetail(task)}
-              chipLabel={overviewTaskStatusLabel(task)}
-              chipTone={toneForTask(task) === 'danger' ? 'danger' : toneForTask(task) === 'warn' ? 'warn' : toneForTask(task) === 'running' ? 'ok' : 'neutral'}
-              onclick={() => go(currentTaskHref(task.id, activeProjectId))}
-            />
-          {/each}
-        </div>
-      {/if}
-    </Card>
-
-    <Card title="Do this next" titleTag="h2" tone={nextAction.tone === 'danger' ? 'danger' : nextAction.tone === 'warn' ? 'warn' : nextAction.tone === 'running' ? 'ok' : 'accent'} variant="callout" railStrength="strong" className="overview-card">
+  <section class="overview-priority" aria-label="Priority action">
+    <Card title="Do this next" titleTag="h2" tone={nextAction.tone === 'danger' ? 'danger' : nextAction.tone === 'warn' ? 'warn' : nextAction.tone === 'running' ? 'ok' : 'accent'} variant="callout" railStrength="strong" className="overview-card overview-priority-card">
       <div class="next-action">
         <Chip label={nextAction.tone === 'running' ? 'Live' : nextAction.tone === 'warn' || nextAction.tone === 'danger' ? 'Needs attention' : 'Ready'} tone={nextAction.tone === 'danger' ? 'danger' : nextAction.tone === 'warn' ? 'warn' : nextAction.tone === 'running' ? 'ok' : 'neutral'} />
         <h2>{nextAction.label}</h2>
@@ -887,14 +869,23 @@
     </Card>
   </section>
 
-  <section class="overview-grid">
-    <Card title="Work mix" titleTag="h2" className="overview-card">
-      <WorkMixChart
-        ariaLabel={`Work mix: ${counts.total} tasks`}
-        {segments}
-        emptyLabel={emptyWorkMixLabel}
-        onLegendClick={() => go(currentProjectHref('/work', activeProjectId))}
-      />
+  <section class="overview-grid overview-grid-main">
+    <Card title="Moving now" titleTag="h2" className="overview-card">
+      {#if movingTasks.length === 0}
+        <p class="muted">{running ? 'The run is active, but no task is currently active.' : 'No task is moving right now.'}</p>
+      {:else}
+        <div class="motion-list">
+          {#each movingTasks as task (task.id)}
+            <OverviewTaskRow
+              title={task.title ?? friendlyTaskId(task.id)}
+              detail={friendlyDomain(task.domain) || statusDetail(task)}
+              chipLabel={overviewTaskStatusLabel(task)}
+              chipTone={toneForTask(task) === 'danger' ? 'danger' : toneForTask(task) === 'warn' ? 'warn' : toneForTask(task) === 'running' ? 'ok' : 'neutral'}
+              onclick={() => go(currentTaskHref(task.id, activeProjectId))}
+            />
+          {/each}
+        </div>
+      {/if}
     </Card>
 
     <Card title="Needs you" titleTag="h2" className="overview-card">
@@ -921,6 +912,15 @@
   </section>
 
   <section class="overview-grid">
+    <Card title="Work mix" titleTag="h2" className="overview-card">
+      <WorkMixChart
+        ariaLabel={`Work mix: ${counts.total} tasks`}
+        {segments}
+        emptyLabel={emptyWorkMixLabel}
+        onLegendClick={() => go(currentProjectHref('/work', activeProjectId))}
+      />
+    </Card>
+
     <Card title="Blocked work" titleTag="h2" className="overview-card">
       {#if blockedRows.length === 0}
         <p class="muted">No blocked tasks are visible right now.</p>
@@ -1263,6 +1263,9 @@
   .overview-grid-main {
     grid-template-columns: minmax(0, 1.35fr) minmax(280px, 0.75fr);
   }
+  .overview-priority {
+    min-width: 0;
+  }
   :global(.overview-card) {
     min-width: 0;
   }
@@ -1301,6 +1304,8 @@
   .next-action {
     display: grid;
     gap: var(--s-3);
+    justify-items: start;
+    max-width: 56rem;
   }
   .next-action h2 {
     margin: 0;

@@ -120,13 +120,13 @@
 
   function taskStateDescription(turn: TaskThreadInFlightTurn): string {
     if (needsRecovery(turn)) {
-      return 'Guildhall made partial progress, then the agent failed. Review the durable worktree changes or restart from that recovery point.'
+      return 'Partial progress was saved, then the agent failed. Review the durable worktree changes or restart from that recovery point.'
     }
     if (briefShapingTimedOut(turn)) {
-      return 'Guildhall stopped while shaping the brief before it could write the missing acceptance criteria. Try again from this task, or open the spec if you want to add the checks yourself.'
+      return 'Shaping stopped before the missing acceptance criteria were written. Try again from this task, or open the spec if you want to add the checks yourself.'
     }
     if (briefShapingPaused(turn)) {
-      return 'Guildhall stopped before writing the missing acceptance criteria. Try again from this task, or open the spec if you want to add the checks yourself.'
+      return 'The missing acceptance criteria were not written before the pause. Try again from this task, or open the spec if you want to add the checks yourself.'
     }
     if (
       turn.liveAgent?.lastEventLabel === 'Waiting for the local model to respond.' &&
@@ -135,8 +135,8 @@
       return 'Local model is still loading or generating.'
     }
     if (turn.liveAgent?.name === 'spec-agent') {
-      if (turn.importedDraft) return 'Guildhall is drafting the task brief for this imported note now.'
-      return 'Guildhall is drafting this now.'
+      if (turn.importedDraft) return 'The task brief for this imported note is being drafted now.'
+      return 'Drafting is in progress now.'
     }
     if (turn.taskStatus === 'ready' && !turn.liveAgent) {
       if (needsWorkerHandoffSpecCleanup(turn)) {
@@ -146,9 +146,9 @@
         return projectStartBlockerMessage
       }
       if (isProjectRunActive()) {
-        return 'Approved and queued. Guildhall is already running for this project, so this task will stay in the queue until the coordinator picks it.'
+        return 'Approved and queued. A run is already active for this project, so this task will stay in the queue until the coordinator picks it.'
       }
-      return 'Approved and queued. Resume only this work item when you want Guildhall to pick it up.'
+      return 'Approved and queued. Resume only this work item when you want it picked up.'
     }
     if (turn.taskStatus === 'import_draft' && !turn.liveAgent) {
       return 'Imported from your project notes, but not ready for a worker yet. Next step: turn this note into a task brief with scope, evidence, and acceptance criteria.'
@@ -156,24 +156,24 @@
     if (turn.taskStatus === 'exploring' && !turn.liveAgent) {
       if (!isProjectRunActive()) {
         return isQueuedSpecRevision(turn)
-          ? 'Guildhall already has the draft spec plus your latest answers. Coordinator review is paused until Guildhall resumes.'
-          : 'Shaping is paused. Resume Guildhall when you want it to keep preparing this task.'
+          ? 'The draft spec and your latest answers are saved. Coordinator review is paused until the run resumes.'
+          : 'Shaping is paused. Resume when you want this task to keep moving.'
       }
       if (isQueuedSpecRevision(turn)) {
-        return 'Guildhall already has the draft spec plus your latest answers. Coordinator review is queued.'
+        return 'The draft spec and your latest answers are saved. Coordinator review is queued.'
       }
       return turn.importedDraft
-        ? 'Guildhall is shaping the task brief for this imported note. You can add context, but you do not need to babysit the draft.'
-        : 'Guildhall has started shaping this task, but the brief is not ready yet. The checklist below shows what is still missing.'
+        ? 'The task brief for this imported note is being shaped. You can add context, but you do not need to babysit the draft.'
+        : 'Task shaping has started, but the brief is not ready yet. The checklist below shows what is still missing.'
     }
     if (turn.taskStatus === 'in_progress' && !turn.liveAgent) {
-      return 'Work is paused. Resume Guildhall when you want it to continue.'
+      return 'Work is paused. Resume when you want it to continue.'
     }
     if (turn.taskStatus === 'review' && !turn.liveAgent) {
-      return 'Review is queued. Resume Guildhall when you want it to continue.'
+      return 'Review is queued. Resume when you want it to continue.'
     }
     if (turn.taskStatus === 'gate_check' && !turn.liveAgent) {
-      return 'Gate checks are queued. Resume Guildhall when you want it to continue.'
+      return 'Gate checks are queued. Resume when you want them to continue.'
     }
     return turn.summary
   }
@@ -292,17 +292,17 @@
 
   function briefFixDescription(turn: TaskThreadInFlightTurn): string {
     if (missingChecklistSteps(turn).length === 0 && needsWorkerHandoffSpecCleanup(turn)) {
-      return 'The starter checklist is complete, but Guildhall still needs a full product brief and spec handoff before a worker can start.'
+      return 'The starter checklist is complete, but a full product brief and spec handoff are still needed before a worker can start.'
     }
     switch (missingBriefFieldKind(turn)) {
       case 'success':
-        return 'Guildhall needs to turn the source notes into a success target before implementation.'
+        return 'The source notes need a success target before implementation.'
       case 'acceptance':
-        return 'Guildhall needs to turn the source notes into concrete acceptance checks before implementation.'
+        return 'The source notes need concrete acceptance checks before implementation.'
       case 'both':
-        return 'Guildhall needs to turn the source notes into an outcome and acceptance checks before implementation.'
+        return 'The source notes need an outcome and acceptance checks before implementation.'
       default:
-        return 'Guildhall needs to turn the missing task-brief field into a usable task brief before implementation.'
+        return 'The missing task-brief field needs to become a usable task brief before implementation.'
     }
   }
 
@@ -359,11 +359,11 @@
       <Stack gap="3">
         <StateSummary
           label="Needs brief"
-          description="Guildhall needs to turn the source notes into a usable task brief before implementation."
+          description="The source notes need to become a usable task brief before implementation."
           tone="warn"
         />
         <p class="detail-copy">
-          The Work board sent you here because this task is marked ready, but its brief/spec is not complete enough for a worker yet. Clean up brief lets Guildhall finish the handoff before implementation.
+          The Work board sent you here because this task is marked ready, but its brief/spec is not complete enough for a worker yet. Clean up brief finishes the handoff before implementation.
         </p>
         <Row justify="end" gap="2">
           <Button variant="secondary" onclick={onOpenSpecTab}>View brief</Button>
@@ -393,7 +393,7 @@
               tone="accent"
             />
             <div class="question-link-preview">
-              <Markdown source={turn.question.prompt ?? turn.question.restatement ?? 'Guildhall needs one answer before it continues.'} />
+              <Markdown source={turn.question.prompt ?? turn.question.restatement ?? 'One answer is needed before this continues.'} />
             </div>
             <Row justify="end" gap="2">
               <Button variant="primary" disabled={busy} onclick={onOpenThread}>Open Thread</Button>
@@ -405,7 +405,7 @@
           <Stack gap="3">
             <StateSummary
               label="Approve brief"
-              description="Guildhall drafted the task brief and is waiting for your go-ahead before it moves on."
+              description="The task brief is drafted and waiting for your go-ahead before it moves on."
               tone="accent"
             />
             <Row justify="end" gap="2">
@@ -419,7 +419,7 @@
           <Stack gap="3">
             <StateSummary
               label="Approve spec"
-              description="Guildhall drafted the spec. Review it, then approve when it matches what you want."
+              description="The spec is drafted. Review it, then approve when it matches what you want."
               tone="warn"
             />
             {#if turn.spec}
@@ -456,7 +456,7 @@
         <Card title={guidance.actionOwner === 'guildhall' ? 'Queued' : 'Recovery needed'} tone="warn">
           <Stack gap="3">
             <StateSummary
-              label={guidance.actionOwner === 'guildhall' ? 'Guildhall action' : reasonLabel}
+              label={guidance.actionOwner === 'guildhall' ? 'Recovery action' : reasonLabel}
               description={guidance.actionOwner === 'guildhall' ? guidance.title : guidance.detail}
               tone={guidance.actionOwner === 'guildhall' ? 'accent' : 'warn'}
             />
@@ -470,8 +470,8 @@
               <p class="detail-copy">{guidance.nextStep}</p>
             {:else}
               <p class="detail-copy">
-                Guildhall stopped because this blocker changes what the task means or how it should continue.
-                The recommended next step is shown first; use the other action only if you already fixed the blocker outside Guildhall.
+                Work stopped because this blocker changes what the task means or how it should continue.
+                The recommended next step is shown first; use the other action only if you already fixed the blocker outside the app.
               </p>
               <p class="detail-copy"><strong>Most likely next step:</strong> {recoveryAction.label}</p>
             {/if}

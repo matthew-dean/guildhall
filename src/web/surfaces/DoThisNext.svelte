@@ -131,14 +131,14 @@
       case 'import_draft_queue':
         return {
           verb: 'Shape the imported drafts',
-          why: item.detail ?? 'Guildhall imported planning work that still needs a quick shaping pass.',
+          why: item.detail ?? 'Imported planning work still needs a quick shaping pass.',
           button: item.taskId === 'task-workspace-import' ? 'Open import review' : 'Draft task brief',
           href: item.actionHref ?? '/thread',
         }
       case 'workspace_import_pending':
         return {
           verb: 'Review existing project work',
-          why: item.detail ?? 'Guildhall found planning notes and possible tasks in this project.',
+          why: item.detail ?? 'Planning notes and possible tasks were found in this project.',
           button: 'Open review',
           href: item.actionHref ?? '/workspace-import',
         }
@@ -227,7 +227,7 @@
         : threadTurn
           ? {
               verb: 'Answer in Thread',
-              why: threadTurn.question?.prompt ?? threadTurn.domainTitle ?? 'Guildhall is waiting for your answer in Thread.',
+              why: threadTurn.question?.prompt ?? threadTurn.domainTitle ?? 'Thread is waiting for your answer.',
               button: 'Open Thread',
               href: projectActionHref(threadTurn.actionHref ?? (threadTurn.sessionId ? `/thread?thread=${threadTurn.sessionId}` : '/thread')),
               severity: 'medium',

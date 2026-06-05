@@ -12,9 +12,10 @@ are published separately under [Next](/next/guide/) so unreleased work can be
 documented without promising it to users who installed the current npm package.
 
 Historical release notes stay versioned with their docs snapshot. The current
-stable release is [Guildhall 0.9.0](./0.9.0); older snapshots remain available
+stable release is [Guildhall 0.10.0](./0.10.0); older snapshots remain available
 under [Versions](/versions/0.9.0/guide/quick-start).
 
+- [0.10.0](./0.10.0) — bounded owner-input conversations, a cleaner project rail, Structure as the project map room, local project graph handoffs, contract surfaces, and clearer current-work closure.
 - [0.9.0](./0.9.0) — runtime-backed execution, proof paths, completion handoffs, project re-intake, clearer next actions, memory lifecycle, MCP context resources, design-quality proof, and calibrated review.
 - [0.8.0](./0.8.0) — Pressure-Test Intake, Project Overview, cleaner project notes, Git Story Closure, Commit Story messages, and clearer provider defaults for the Next docs preview.
 - [0.7.0](./0.7.0) — project planning, scoped lever settings, [Corpus Map](../guide/corpus-map) integration, context-indexer model role, workspace import cleanup, and a calmer project shell.

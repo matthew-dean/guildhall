@@ -332,8 +332,10 @@
     return off
   })
 
+  type NavSectionId = ProjectView | 'project'
+
   interface NavEntry {
-    id: ProjectView
+    id: NavSectionId
     label: string
     icon: IconName
     suffix: string
@@ -345,13 +347,15 @@
 
   const entries = $derived<NavEntry[]>([
     {
-      id: 'overview',
-      label: 'Overview',
+      id: 'project',
+      label: 'Project',
       icon: 'activity',
       suffix: '/overview',
       subs: [
-        { id: 'summary', label: 'Summary', path: currentProjectHref('/overview', activeProjectId) },
+        { id: 'overview', label: 'Overview', path: currentProjectHref('/overview', activeProjectId) },
         { id: 'inbox', label: 'Needs you', path: currentProjectHref('/overview/inbox', activeProjectId) },
+        { id: 'facts', label: 'Facts', path: currentProjectHref('/facts', activeProjectId) },
+        { id: 'structure', label: 'Structure', path: currentProjectHref('/structure', activeProjectId) },
       ],
     },
     { id: 'thread', label: 'Threads', icon: 'sparkles', suffix: '/thread' },
@@ -365,7 +369,6 @@
         { id: 'board', label: 'Board', path: currentProjectHref('/work?view=board', activeProjectId) },
       ],
     },
-    { id: 'structure', label: 'Structure', icon: 'package', suffix: '/structure' },
     { id: 'timeline', label: 'Timeline', icon: 'clock', suffix: '/timeline' },
     {
       id: 'release',
@@ -392,6 +395,31 @@
   function go(href: string) {
     closeMobileRail()
     nav(href)
+  }
+
+  function sectionIsActive(id: NavSectionId) {
+    if (id === 'project') return currentView === 'overview' || currentView === 'facts' || currentView === 'structure'
+    return currentView === id
+  }
+
+  function railSubIsActive(sectionId: NavSectionId, subId: string, subPath: string) {
+    if (path.value === subPath) return true
+
+    if (sectionId === 'project') {
+      if (currentView === 'overview') return currentSub === 'inbox' ? subId === 'inbox' : subId === 'overview'
+      if (currentView === 'facts') return subId === 'facts'
+      if (currentView === 'structure') return subId === 'structure'
+    }
+
+    if (sectionId === 'work' && currentView === 'work') {
+      return path.href.includes('view=board') ? subId === 'board' : subId === 'queue'
+    }
+
+    if (sectionId === 'release' && currentView === 'release') {
+      return currentSub === 'criteria' ? subId === 'criteria' : subId === 'verdict'
+    }
+
+    return false
   }
 
   function handleTopbarBack(): void {
@@ -604,7 +632,7 @@
   const providerNoticeText = $derived(
     providerStatus?.fallback
       ? providerDecisionText ??
-        'Preferred provider is unavailable; Guildhall is using a fallback for this run.'
+        'Preferred provider is unavailable; this run is using a fallback.'
       : null,
   )
   const providerWarningText = $derived(
@@ -707,13 +735,13 @@
     if (startReadiness?.code === 'required_migration_pending') {
       return {
         stopReason: 'required_migration_pending',
-        stopMessage: startReadiness.message ?? 'Run the required Guildhall migration before starting this project.',
+        stopMessage: startReadiness.message ?? 'Run the required migration before starting this project.',
       }
     }
     if (startReadiness?.code === 'owner_input_required') {
       return {
         stopReason: 'awaiting_human',
-        stopMessage: startReadiness.message ?? 'Guildhall is waiting on your answer.',
+        stopMessage: startReadiness.message ?? 'Waiting on your answer.',
       }
     }
     if (currentStopSummary) return currentStopSummary
@@ -773,7 +801,7 @@
         return counts.awaitingApproval
           ? 'One task pass finished. Review the updated draft in Thread.'
           : counts.waitingOnUser
-            ? 'One task pass finished. Guildhall is waiting on your input.'
+            ? 'One task pass finished. Waiting on your input.'
             : counts.done
               ? `One task pass finished: ${counts.done} done.`
               : 'One task pass finished.'
@@ -906,7 +934,7 @@
     actionRunControl?.startEnabled === false
       ? actionRunControl.disabledReason ?? 'Finish setup before starting'
       : requiredMigrationBlocked
-      ? startReadiness?.message ?? 'Run the required Guildhall migration before starting this project'
+      ? startReadiness?.message ?? 'Run the required migration before starting this project'
       : !startReadiness?.canStart
       ? startReadiness?.message ?? 'Finish setup before starting'
       : activeCount === 0 && awaitingApprovalCount === 0 && taskList.length > 0
@@ -919,7 +947,7 @@
   )
   const newTaskDisabledReason = $derived(
     requiredMigrationBlocked
-      ? startReadiness?.message ?? 'Run the required Guildhall migration before creating a request'
+      ? startReadiness?.message ?? 'Run the required migration before creating a request'
       : needsMeta
       ? 'Finish project setup before creating a request'
       : blockers.bootstrap
@@ -1146,7 +1174,7 @@
       </div>
       <nav class="rail-nav">
         {#each entries as e (e.id)}
-          {@const active = currentView === e.id}
+          {@const active = sectionIsActive(e.id)}
           <Tooltip text={e.label} placement="right" className="rail-tooltip" disabled={railLabelsVisible}>
             <button
               type="button"
@@ -1164,12 +1192,7 @@
           {#if active && e.subs}
             <ul class="rail-subs">
               {#each e.subs as s (s.id)}
-                {@const subActive = path.value === s.path ||
-                  (e.id === 'overview' && ((currentSub === 'inbox' && s.id === 'inbox') || (!currentSub && s.id === 'summary'))) ||
-                  (e.id === 'settings' && currentSub === s.id) ||
-                  (e.id === 'release' && currentSub === s.id) ||
-                  (e.id === 'release' && !currentSub && s.id === 'verdict') ||
-                  (e.id === 'settings' && !currentSub && s.id === 'ready')}
+                {@const subActive = railSubIsActive(e.id, s.id, s.path)}
                 <li>
                   <button
                     type="button"
@@ -1256,12 +1279,12 @@
               }
               title={
                 runStatus === 'stopping'
-                  ? 'Pausing Guildhall'
+        ? 'Pausing the run'
                 : runControlPauses
-                  ? (runMode === 'one_task' ? 'Pause the current one-step run' : 'Pause Guildhall')
+                  ? (runMode === 'one_task' ? 'Pause the current one-step run' : 'Pause the run')
                   : requiredMigrationBlocked
                   ? 'Migrate project'
-                  : (startDisabledReason ?? 'Let Guildhall continue this project')
+                  : (startDisabledReason ?? 'Let the run continue this project')
               }
             >
               <Icon name={runControlPauses ? 'pause' : requiredMigrationBlocked ? 'refresh-cw' : 'sparkles'} size={16} />
@@ -1500,7 +1523,7 @@
   >
     <div class="migration-modal">
       <p>
-        Guildhall needs to update this project before it can run. Review the file changes first so there are no surprise Git writes.
+        This project needs an update before it can run. Review the file changes first so there are no surprise Git writes.
       </p>
       {#if migrationAppliedMessage && primaryRequiredMigration}
         <NoticeBand
@@ -1781,7 +1804,6 @@
   }
   .rail.rail-collapsed .rail-project,
   .rail.rail-collapsed .rail-status,
-  .rail.rail-collapsed.rail-preview-open .rail-subs,
   .rail.rail-collapsed:not(.rail-preview-open) .rail-label,
   .rail.rail-collapsed:not(.rail-preview-open) .rail-subs {
     display: none;

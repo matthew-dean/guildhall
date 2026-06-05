@@ -3,6 +3,7 @@ import '@testing-library/jest-dom/vitest'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { cleanup, render, screen, waitFor } from '@testing-library/svelte'
 import userEvent from '@testing-library/user-event'
+import { readFileSync } from 'node:fs'
 import TaskDrawer from '../TaskDrawer.svelte'
 import { path } from '../../lib/nav.svelte.js'
 import { project } from '../../lib/project.svelte.js'
@@ -101,6 +102,26 @@ function openDrawerOn(tab: 'overview' | 'current' | 'spec') {
 }
 
 describe('TaskDrawer', () => {
+  it('keeps the more task actions menu on one quiet menu-row presentation', () => {
+    const source = readFileSync('src/web/surfaces/TaskDrawer.svelte', 'utf-8')
+    const menuMarkup = source.match(/<div class="more-action-menu">[\s\S]*?<\/div>\n\s*{\/if}/)?.[0] ?? ''
+
+    expect(menuMarkup).toContain('class="more-action-button"')
+    expect(menuMarkup).not.toContain('variant="agent"')
+    expect(menuMarkup).not.toContain('variant="secondary"')
+    expect(menuMarkup).not.toContain('variant="danger"')
+    expect(menuMarkup).not.toContain('light-emitted')
+  })
+
+  it('keeps footer utility actions on one shared text-button presentation', () => {
+    const source = readFileSync('src/web/surfaces/TaskDrawer.svelte', 'utf-8')
+
+    expect(source).toContain('class="footer-utility-action more-actions-trigger"')
+    expect(source).toContain('class="footer-utility-action"')
+    expect(source).toContain('margin-right: var(--s-4)')
+    expect(source).not.toContain('<Button variant="ghost" size="sm" onclick={() => copyTaskLink(task.id)}>')
+  })
+
   beforeEach(() => {
     installBrowserFakes()
   })
@@ -280,9 +301,9 @@ describe('TaskDrawer', () => {
 
     await screen.findByText('Work hierarchy')
     expect(screen.getAllByText('Split this task').length).toBeGreaterThanOrEqual(1)
-    expect(screen.getByText(/Split it now: Guildhall will keep this as containing work and create the nested work below/i)).toBeInTheDocument()
+    expect(screen.getByText(/this stays as containing work and the nested work below is created/i)).toBeInTheDocument()
     expect(screen.getByRole('button', { name: 'Split this task' })).toBeInTheDocument()
-    expect(screen.getByText('Work Guildhall will create')).toBeInTheDocument()
+    expect(screen.getByText('Work to create')).toBeInTheDocument()
     expect(document.body.textContent).not.toContain('recommendations, not created child tasks yet')
     expect(document.body.textContent).not.toMatch(/parent task/i)
     expect(screen.getByText('Goal envelope')).toBeInTheDocument()
@@ -607,7 +628,7 @@ describe('TaskDrawer', () => {
     })
 
     await screen.findByRole('heading', { name: 'Shaping timed out' })
-    expect(screen.getByText(/Guildhall stopped while shaping the brief/i)).toBeInTheDocument()
+    expect(screen.getByText(/Shaping stopped before the missing acceptance criteria were written/i)).toBeInTheDocument()
     expect(screen.getByRole('button', { name: /try shaping brief again/i })).toBeInTheDocument()
   })
 
@@ -669,7 +690,7 @@ describe('TaskDrawer', () => {
     })
 
     await screen.findByRole('heading', { name: 'Paused' })
-    expect(screen.getByText(/Guildhall stopped before writing the missing acceptance criteria/i)).toBeInTheDocument()
+    expect(screen.getByText(/The missing acceptance criteria were not written before the pause/i)).toBeInTheDocument()
     expect(screen.getByRole('button', { name: /try shaping brief again/i })).toBeInTheDocument()
   })
 
@@ -1834,7 +1855,7 @@ describe('TaskDrawer', () => {
     expect(screen.queryByRole('button', { name: /resolve blocker/i })).toBeNull()
 
     await userEvent.click(screen.getByRole('button', { name: /^i handled this\.\.\.$/i }))
-    await screen.findByText('Use this when you handled the blocker yourself or want to tell Guildhall exactly where to continue.')
+    await screen.findByText('Use this when you handled the blocker yourself or want to say exactly where to continue.')
     await userEvent.type(
       screen.getByLabelText(/resolution note/i),
       'Use the existing shared button component and rerun checks.',
@@ -2004,7 +2025,7 @@ describe('TaskDrawer', () => {
     await user.click(screen.getByRole('button', { name: /^rework task\.\.\.$/i }))
     await screen.findByRole('dialog', { name: /^rework task$/i })
     await user.type(
-      screen.getByLabelText(/how should guildhall rework this/i),
+      screen.getByLabelText(/how should this be reworked/i),
       'Add an external setup checklist but preserve the current implementation spec.',
     )
     await user.click(screen.getByRole('button', { name: /^rework task$/i }))

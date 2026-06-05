@@ -71,4 +71,60 @@ describe('ui primitive scan', () => {
 
     expect(run(root)).toBe('')
   })
+
+  it('rejects local bespoke chip and status-pill styling outside shared chip primitives', () => {
+    const root = repo({
+      'src/web/surfaces/Foo.svelte': `
+        <span class="status-pill">Open</span>
+        <style>
+          .status-pill { border-radius: 999px; }
+        </style>
+      `,
+      'src/web/surfaces/Bar.svelte': `
+        <style>
+          .chip-danger { color: red; }
+        </style>
+      `,
+      'src/web/surfaces/Baz.svelte': `
+        <style>
+          .task-chip { border: 1px solid red; }
+        </style>
+      `,
+    })
+
+    const stderr = run(root)
+
+    expect(stderr).toContain('src/web/surfaces/Foo.svelte')
+    expect(stderr).toContain('src/web/surfaces/Bar.svelte')
+    expect(stderr).toContain('src/web/surfaces/Baz.svelte')
+  })
+
+  it('permits shared chip primitives, chip containers, and named legacy chip debt only', () => {
+    const root = repo({
+      'src/web/lib/Chip.svelte': `
+        <style>
+          .chip-count { border-radius: 999px; }
+        </style>
+      `,
+      'src/web/lib/IdentifierChip.svelte': `
+        <style>
+          .identifier-chip-danger .identifier-dot { background: red; }
+        </style>
+      `,
+      'src/web/surfaces/project/ThreadTab.svelte': `
+        <style>
+          .thread-index-row-chips { display: flex; }
+          .task-chip { border: 1px solid var(--border); }
+          .task-chip-text { overflow: hidden; }
+        </style>
+      `,
+      'src/web/surfaces/Good.svelte': `
+        <style>
+          .top-chips { display: flex; }
+        </style>
+      `,
+    })
+
+    expect(run(root)).toBe('')
+  })
 })

@@ -110,7 +110,7 @@ user needs a way to inspect, correct, and continue.
 - reframe before implementation, change orders after implementation starts;
 - reviewer findings, gate output, changed files, and context evidence attached
   to tasks;
-- Settings -> Memory suggestions that stay inspectable and reversible.
+- Memory suggestions that stay inspectable and reversible.
 
 ## Specs as design documents
 

@@ -61,10 +61,10 @@ different things:
 
 | Layer | Used for | Where to inspect |
 |---|---|---|
-| This project | Repo-specific commands, paths, facts, and workflow habits. | Settings -> Memory -> This project |
-| Across projects | Repeated user preferences that can apply beyond one repo. | Settings -> Memory -> Across projects |
-| Project playbooks | Repeatable project-local procedures that can enter worker context when a matching task appears. | Settings -> Memory -> Project playbooks |
-| Ideas for Guildhall | Product improvements for Guildhall itself. They do not change runtime behavior. | Settings -> Memory -> Ideas for Guildhall |
+| This project | Repo-specific commands, paths, facts, and workflow habits. | Project memory review |
+| Across projects | Repeated user preferences that can apply beyond one repo. | Cross-project preference review |
+| Project playbooks | Repeatable project-local procedures that can enter worker context when a matching task appears. | Project playbook review |
+| Ideas for Guildhall | Product improvements for Guildhall itself. They do not change runtime behavior. | Product ideas review |
 
 Project facts do not silently become global preferences. Product ideas do not
 silently change how Guildhall runs. If a behavior would increase autonomy or
@@ -85,8 +85,8 @@ only in the current project.
 
 ## Memory and habits
 
-Open **Settings -> Memory** inside a project to review what Guildhall wants to
-reuse.
+Open the memory review surfaces inside a project to review what Guildhall wants
+to reuse.
 
 Common actions:
 

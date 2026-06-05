@@ -35,6 +35,36 @@ describe('taskStagePresentation', () => {
     expect(stage.key).toBe('queued')
   })
 
+  it('recognizes spec_review component turns as queued spec work', () => {
+    const stage = taskStagePresentation({
+      kind: 'inflight',
+      taskId: 'task-import-combobox',
+      taskTitle: 'Combobox',
+      status: 'active',
+      taskStatus: 'spec_review',
+      phase: 'spec',
+      importedDraft: false,
+      checklist: undefined,
+    }, { runStatus: 'running' })
+
+    expect(stage.label).toBe('Queued')
+    expect(stage.key).toBe('queued')
+  })
+
+  it('recognizes raw spec_review component tasks as queued spec work', () => {
+    const stage = taskStagePresentation({
+      id: 'task-import-combobox',
+      title: 'Combobox',
+      status: 'spec_review',
+      spec: '## Summary\n\nBuild an accessible combobox.',
+      acceptanceCriteria: [{ description: 'The combobox supports keyboard navigation.' }],
+      openQuestions: [],
+    }, { runStatus: 'stopped' })
+
+    expect(stage.label).toBe('Paused')
+    expect(stage.key).toBe('paused')
+  })
+
   it('presents Guildhall-owned queued work with the agent/running tone', () => {
     const stage = taskStagePresentation({
       id: 'task-ready',

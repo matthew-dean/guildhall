@@ -28,7 +28,7 @@ into the wrong repo.
 ## Use the projects home to triage
 
 <picture class="gh-doc-picture">
-  <img src="../assets/ui-audit/0-9-0/projects.webp" alt="Guildhall v0.9.0 projects home with several registered local projects, work mix, attention, and launch controls." />
+  <img src="../assets/ui-audit/0-10-0/projects.png" alt="Guildhall 0.10.0 projects home with several registered local projects, work mix, attention, and launch controls." />
 </picture>
 
 The projects home answers:

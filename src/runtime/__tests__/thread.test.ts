@@ -1121,7 +1121,7 @@ describe('buildThread', () => {
         kind: 'inflight',
         requestKind: 'project_question',
         checklist: undefined,
-        summary: expect.stringContaining('answer this question'),
+        summary: expect.stringContaining('answered from project context'),
       })
     } finally {
       await rm(projectPath, { recursive: true, force: true })
@@ -1221,7 +1221,7 @@ describe('buildThread', () => {
         taskStatus: 'exploring',
         requestStage: 'task_brief_cleanup',
         routingSummary: 'Guildhall saved this cleanup request and queued the task brief in Thread.',
-        summary: 'Guildhall queued task brief cleanup before worker handoff.',
+        summary: 'Task brief cleanup is queued before worker handoff.',
       })
       expect(thread.activeTurnId).toBe('inflight:task-fll-overhead-policy')
     } finally {
@@ -1744,6 +1744,59 @@ describe('buildThread', () => {
       expect(queuedTask.workerHandoff).toMatchObject({
         ready: false,
         cleanupNeeded: true,
+      })
+    } finally {
+      await rm(projectPath, { recursive: true, force: true })
+    }
+  })
+
+  it('summarizes normal spec_review component tasks as queued coordinator review', async () => {
+    const projectPath = await mkdtemp(path.join(tmpdir(), 'guildhall-thread-'))
+    try {
+      await mkdir(path.join(projectPath, '.guildhall'), { recursive: true })
+      await writeFile(
+        path.join(projectPath, '.guildhall', 'TASKS.json'),
+        JSON.stringify({
+          tasks: [
+            {
+              id: 'task-combobox',
+              title: 'Combobox',
+              status: 'spec_review',
+              createdAt: '2026-06-04T00:00:00.000Z',
+              updatedAt: '2026-06-04T00:01:00.000Z',
+              spec: '## Summary\n\nBuild an accessible combobox.',
+              acceptanceCriteria: [{ description: 'The combobox supports keyboard navigation.' }],
+            },
+          ],
+        }),
+      )
+      const snapshot: ProjectSnapshot = {
+        projectPath,
+        config: {
+          id: 'demo',
+          name: 'Demo',
+          bootstrap: { verifiedAt: new Date().toISOString() },
+          coordinators: [{ id: 'frontend', name: 'Frontend' }],
+        },
+        bootstrapVerified: true,
+        hasProvider: true,
+        hasDirection: true,
+        workspaceImportReviewed: true,
+        taskCount: 1,
+        wizardState: emptyWizardsState(),
+      }
+
+      const thread = buildThread({
+        projectPath,
+        snapshot,
+        recentEvents: [],
+      })
+
+      expect(thread.turns.find(turn => turn.id === 'inflight:task-combobox')).toMatchObject({
+        kind: 'inflight',
+        taskStatus: 'spec_review',
+        phase: 'spec',
+        summary: 'Your answers and a spec draft are saved. Coordinator review is next.',
       })
     } finally {
       await rm(projectPath, { recursive: true, force: true })
@@ -2785,7 +2838,7 @@ describe('buildThread', () => {
       const answeredQuestionTurns = thread.turns.filter((turn) => turn.kind === 'agent_question' && turn.status === 'done')
       expect(answeredQuestionTurns).toHaveLength(2)
 
-      const reframeTurn = thread.turns.find((turn) => turn.kind === 'history_note' && turn.label === 'Asked Guildhall to reframe this task')
+      const reframeTurn = thread.turns.find((turn) => turn.kind === 'history_note' && turn.label === 'Asked to reframe this task')
       expect(reframeTurn).toBeTruthy()
       if (!reframeTurn || reframeTurn.kind !== 'history_note') throw new Error('expected reframe history note')
       expect(reframeTurn.summary).toContain('Final release-blocker cleanup')

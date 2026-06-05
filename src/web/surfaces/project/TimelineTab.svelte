@@ -101,7 +101,7 @@
     {#if hiddenEmptyModelCount > 0}
       <div class="recovery-summary" role="note">
         <strong>{hiddenEmptyModelCount} model-recovery event{hiddenEmptyModelCount === 1 ? '' : 's'} summarized</strong>
-        <span>Guildhall saw empty model replies during unattended work, kept task state intact, and recorded recovery guidance instead of repeating each raw failure here.</span>
+        <span>Empty model replies happened during unattended work. Task state stayed intact, and recovery guidance was recorded instead of repeating each raw failure here.</span>
       </div>
     {/if}
     {#if hiddenProviderHealthCount > 0}

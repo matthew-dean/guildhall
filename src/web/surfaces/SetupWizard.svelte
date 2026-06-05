@@ -311,8 +311,8 @@
     } catch (err) {
       providerSaveError =
         err instanceof Error
-          ? `Could not save provider settings. Guildhall may be refreshing or restarting; try again in a moment. (${err.message})`
-          : 'Could not save provider settings. Guildhall may be refreshing or restarting; try again in a moment.'
+          ? `Could not save provider settings. The service may be refreshing or restarting; try again in a moment. (${err.message})`
+          : 'Could not save provider settings. The service may be refreshing or restarting; try again in a moment.'
     } finally {
       busy = false
     }
@@ -406,22 +406,22 @@
   async function resumeBootstrap() {
     bootstrapBusy = true
     bootstrapLive = true
-    resumeNotice = 'Resume requested. Guildhall is restarting the coordinator now.'
+    resumeNotice = 'Resume requested. The coordinator is restarting now.'
     try {
       if (launchRecoverableInterruption) {
-        resumeNotice = 'Guildhall is finishing a setup draft from the repo scan it already saved.'
+        resumeNotice = 'Finishing a setup draft from the saved repo scan.'
         const synthesized = await setupFetch('/api/project/meta-intake/synthesize', { method: 'POST' })
         if (synthesized.ok) {
           const body = await synthesized.json().catch(() => ({})) as { drafts?: DraftCoordinator[] }
           if (body.drafts && body.drafts.length > 0) {
             approvalDrafts = body.drafts
             bootstrapLive = false
-            resumeNotice = 'Guildhall built a setup draft from the saved repo scan. Review it before continuing.'
+            resumeNotice = 'A setup draft was built from the saved repo scan. Review it before continuing.'
             return
           }
         } else {
           const body = await synthesized.json().catch(() => ({})) as { error?: string }
-          resumeNotice = body.error ?? 'Could not finish from the saved repo scan. Guildhall is trying that setup step again.'
+          resumeNotice = body.error ?? 'Could not finish from the saved repo scan. Trying that setup step again.'
         }
         const rerun = await setupFetch('/api/project/meta-intake/rerun', { method: 'POST' })
         if (!rerun.ok) {
@@ -580,7 +580,7 @@
       <Card title="Setup needs a project folder">
         <Stack gap="3">
           <p class="muted">
-            Open setup from a project in the Projects view so Guildhall knows which folder it is configuring.
+            Open setup from a project in the Projects view so the app knows which folder it is configuring.
           </p>
           <p class="error">{setupLoadError}</p>
         </Stack>
@@ -679,7 +679,7 @@
       <Card title="Setup is complete">
         <Stack gap="3">
           <p class="muted">
-            Guildhall has saved this project’s structure and starter contract map. You can review the
+            This project’s structure and starter contract map are saved. You can review the
             graph or keep working from the overview.
           </p>
           <Row gap="2">
@@ -696,7 +696,7 @@
       <Card title="You're ready to bootstrap.">
         <Stack gap="3">
           <p class="muted">
-            Guildhall has saved your identity and chosen provider. Next, meta-intake will scan the
+            Your identity and chosen provider are saved. Next, meta-intake will scan the
             codebase, infer the project structure, and draft starter tasks. It should only stop to
             ask you something if confidence is low and the consequence of being wrong is meaningful.
           </p>
@@ -705,7 +705,7 @@
               <div>
                 <strong>Local files for task worktrees</strong>
                 <p class="muted">
-                  Guildhall found local config filenames that agents may need for bootstrap or tests.
+                  Local config filenames that agents may need for bootstrap or tests were found.
                   Check only the files task worktrees are allowed to copy.
                 </p>
               </div>
@@ -753,7 +753,7 @@
                 {launchRecoverableInterruption
                   ? 'Setup stopped before the agent saved a draft. Use the saved repo scan to finish setup.'
                   : launchBlocked
-                  ? 'The setup task needs a recovery decision before Guildhall can continue.'
+                  ? 'The setup task needs a recovery decision before work can continue.'
                   : 'The task is saved. Resume the coordinator to continue meta-intake.'}
               </p>
               <Row justify="start">
@@ -793,17 +793,17 @@
         {@const proposedCount = approvalDrafts.length}
         {@const starterRoutingDraft = isStarterRoutingDraft(approvalDrafts)}
         <Card title={starterRoutingDraft
-          ? `Guildhall proposed ${proposedCount} starter ${proposedCount === 1 ? 'lane' : 'lanes'}`
-          : `Guildhall inferred ${proposedCount} ${proposedCount === 1 ? 'repo slice' : 'repo slices'}`}
+          ? `Proposed ${proposedCount} starter ${proposedCount === 1 ? 'lane' : 'lanes'}`
+          : `Inferred ${proposedCount} ${proposedCount === 1 ? 'repo slice' : 'repo slices'}`}
         >
           <Stack gap="3">
             <div class="section-title">
-              <strong>{starterRoutingDraft ? 'Guildhall found an empty project and proposed starter routing placeholders.' : 'Guildhall inferred this from the repo.'}</strong>
+              <strong>{starterRoutingDraft ? 'An empty project was found, so starter routing placeholders were proposed.' : 'This was inferred from the repo.'}</strong>
             </div>
             <p class="muted">
               {starterRoutingDraft
                 ? 'Confirm only if these starter lanes are materially wrong. They give spec shaping a safe place to happen until real product code exists.'
-                : 'Confirm it only if something here is materially wrong. Guildhall should handle the routing and review structure underneath.'}
+                : 'Confirm it only if something here is materially wrong. The routing and review structure should be handled underneath.'}
             </p>
             <div class="draft-summary-list">
               {#each approvalDrafts as d, i (i)}
@@ -814,7 +814,7 @@
               {/each}
             </div>
             <details class="draft-details">
-              <summary>{starterRoutingDraft ? 'See why Guildhall proposed this starter split' : 'See why Guildhall inferred this'}</summary>
+              <summary>{starterRoutingDraft ? 'See why this starter split was proposed' : 'See why this was inferred'}</summary>
               <div class="coord-list">
                 {#each approvalDrafts as d, i (i)}
                   <div class="coord">

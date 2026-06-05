@@ -335,7 +335,7 @@
 <SectionHeader
   eyebrow="Structure"
   title="Structure"
-  description={`What Guildhall uses when starting work in ${project.detail?.name ?? 'this project'}: likely areas, review boundaries, and rare project handoffs.`}
+  description={`Task-start context for ${project.detail?.name ?? 'this project'}: likely areas, review boundaries, and rare project handoffs.`}
   headingTag="h2"
   density="compact"
   metaPlacement="inline"
@@ -343,7 +343,7 @@
   {#snippet meta()}
     <StructureHelpTip
       label="Structure"
-      text="Structure is the maintenance view for Guildhall's task-start context. Most of its value should appear when a task starts; this page is for corrections, contracts, and handoffs."
+      text="Structure is the maintenance view for task-start context. Most of its value should appear when a task starts; this page is for corrections, contracts, and handoffs."
     />
   {/snippet}
 </SectionHeader>
@@ -357,7 +357,7 @@
 <section class="structure-section project-map-section" aria-label="Project map">
   <SectionHeader
     title="Project map"
-    description="The local areas Guildhall can use as starting context. Correct this only when future tasks would start in the wrong place."
+    description="The local areas used as starting context. Correct this only when future tasks would start in the wrong place."
     headingTag="h3"
     density="dense"
     metaPlacement="inline"
@@ -365,7 +365,7 @@
     {#snippet meta()}
       <StructureHelpTip
         label="Project map"
-        text="The project map is not meant to be a taxonomy assignment chore. Guildhall uses it to choose likely context and checks for tasks; edit it when that starting context would be wrong."
+        text="The project map is not meant to be a taxonomy assignment chore. It chooses likely context and checks for tasks; edit it when that starting context would be wrong."
       />
     {/snippet}
   </SectionHeader>
@@ -399,7 +399,7 @@
           <strong>Context and review boundaries</strong>
           <StructureHelpTip
             label="Contracts"
-            text="Contracts are boundaries Guildhall should preserve, such as package APIs, schemas, components, or review packets. Tracked here means this project owns the boundary; a consumer contract means another project depends on it."
+            text="Contracts are boundaries to preserve, such as package APIs, schemas, components, or review packets. Tracked here means this project owns the boundary; a consumer contract means another project depends on it."
           />
         </span>
       </div>
@@ -446,7 +446,7 @@
                                     <h4>Surface review packet</h4>
                                     <StructureHelpTip
                                       label="Surface review packet"
-                                      text="A surface review packet is the evidence Guildhall has about a contract for one task: what changed, which invariants already exist, and what proof reviewers should check."
+                                      text="A surface review packet is contract evidence for one task: what changed, which invariants already exist, and what proof reviewers should check."
                                     />
                                   </span>
                                   <p class="muted">{packet.currentSpecRef}</p>
@@ -496,7 +496,7 @@
   }}
 >
   <div class="assignment-picker">
-    <p>This is for the rare case where another registered Guildhall project owns a durable capability or contract. Most local areas should stay in this project.</p>
+    <p>This is for the rare case where another registered project owns a durable capability or contract. Most local areas should stay in this project.</p>
     <div class="capability-picker" bind:this={capabilityPickerElement}>
       <Field label="Capability">
         <div class="capability-combobox-control" bind:this={capabilityControlElement}>
@@ -620,7 +620,7 @@
       {#snippet meta()}
         <StructureHelpTip
           label="Project handoffs"
-          text="A project handoff is work that crosses a Guildhall project boundary. It appears here only when this project is waiting on another project, or another project is waiting on this one."
+          text="A project handoff is work that crosses a project boundary. It appears here only when this project is waiting on another project, or another project is waiting on this one."
         />
       {/snippet}
     </SectionHeader>

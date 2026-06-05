@@ -388,6 +388,7 @@ function requestStageForTask(task: Task, taskStatus: string): RequestStage {
     const content = typeof note.content === 'string' ? note.content.trim() : ''
     return (
       content.startsWith('Asked Guildhall to enrich this task') ||
+      content.startsWith('Asked to enrich this task') ||
       content.startsWith('Enrichment requested from ')
     )
   })
@@ -609,7 +610,7 @@ function latestReframeRequest(notes: Array<Record<string, unknown>>): { at: stri
     if (!note) continue
     if (noteRole(note) !== 'human') continue
     const content = noteContent(note)
-    if (!/^Asked Guildhall to reframe this task\./i.test(content)) continue
+    if (!/^Asked (?:Guildhall )?to reframe this task\./i.test(content)) continue
     const reason = content.match(/Reason:\s*(.+)$/i)?.[1]?.trim() ?? content
     return {
       at: noteTimestamp(note, new Date().toISOString()),
@@ -624,7 +625,7 @@ function latestBriefCleanupRequest(notes: Array<Record<string, unknown>>): { at:
     const note = notes[index]
     if (!note) continue
     const content = noteContent(note)
-    if (!/^Asked Guildhall to enrich this task\b/i.test(content)) continue
+    if (!/^Asked (?:Guildhall )?to enrich this task\b/i.test(content)) continue
     const instruction = content.match(/Note:\s*(.+)$/i)?.[1]?.trim()
     return {
       at: noteTimestamp(note, new Date().toISOString()),
@@ -645,13 +646,13 @@ function classifyRecoveryNote(note: Record<string, unknown>): { label: string; s
   if (role === 'recovery' && /stale .*claim/i.test(content)) {
     return {
       label: 'Cleared stale spec-agent claim',
-      summary: 'Guildhall cleared a stale active claim so this task could wait in the shaping queue honestly.',
+      summary: 'A stale active claim was cleared so this task could wait in the shaping queue honestly.',
     }
   }
   if ((role === 'system' || agentId === 'coordinator-recovery') && /deterministic recovery spec seed/i.test(content)) {
     return {
       label: 'Saved deterministic recovery spec seed',
-      summary: 'Guildhall preserved a durable recovery spec seed before retrying the spec lane.',
+      summary: 'A durable recovery spec seed was saved before retrying the spec lane.',
     }
   }
   if (role === 'bootstrap-failure') {
@@ -1854,8 +1855,8 @@ export function buildThread(opts: BuildThreadOptions): Thread {
         taskTitle,
         constructionMode,
         category: 'request',
-        label: 'Asked Guildhall to shape this task',
-        summary: 'Guildhall was asked to turn this imported draft into a concrete task before implementation.',
+        label: 'Asked to shape this task',
+        summary: 'This imported draft was sent through shaping before implementation.',
       })
     }
 
@@ -1872,7 +1873,7 @@ export function buildThread(opts: BuildThreadOptions): Thread {
         taskTitle,
         constructionMode,
         category: 'request',
-        label: 'Asked Guildhall to reframe this task',
+        label: 'Asked to reframe this task',
         summary: reframeRequest.summary,
       })
     }
@@ -2141,26 +2142,28 @@ export function buildThread(opts: BuildThreadOptions): Thread {
             : `${friendlyAgentName(effectiveLiveAgent.name)} is working on this now.`
           : taskId === META_INTAKE_TASK_ID
             ? providerSetupPending
-              ? 'Setup is waiting on provider configuration before Guildhall can inspect the repo.'
+              ? 'Setup is waiting on provider configuration before the repo can be inspected.'
               : bootstrapSetupPending
-                ? 'Setup checks still need to run before Guildhall can inspect the repo.'
-                : 'Guildhall has a partial setup draft here.'
+                ? 'Setup checks still need to run before the repo can be inspected.'
+                : 'A partial setup draft is saved here.'
           : taskStatus === 'import_draft'
             ? importDraftTasks.length > 1
               ? `Imported draft needs a task brief. ${importDraftTasks.length - 1} more drafts are queued behind it.`
               : 'Imported draft needs a task brief.'
           : taskStatus === 'exploring'
               ? requestStage === 'task_brief_cleanup'
-                ? 'Guildhall queued task brief cleanup before worker handoff.'
+                ? 'Task brief cleanup is queued before worker handoff.'
               : importedDraft
                 ? importDraftTasks.length > 1
                   ? `Imported draft has a task brief in progress. ${importDraftTasks.length - 1} more drafts are queued behind it.`
                   : 'Imported draft has a task brief in progress.'
               : requestKind === 'project_question'
-                ? 'Guildhall can inspect the project and answer this question without treating it as implementation work.'
+                ? 'This can be answered from project context without turning it into implementation work.'
               : queuedSpecRevision
-                ? 'Guildhall has your answers and a spec draft. Coordinator review is next.'
+                ? 'Your answers and a spec draft are saved. Coordinator review is next.'
               : 'The spec author is shaping this task.'
+            : queuedSpecRevision
+              ? 'Your answers and a spec draft are saved. Coordinator review is next.'
             : taskStatus === 'ready'
               ? needsSpecFill
                 ? 'Queued, but the task brief or acceptance criteria still need cleanup before a worker should treat this as approved.'

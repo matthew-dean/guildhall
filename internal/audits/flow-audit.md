@@ -207,6 +207,66 @@ coverage.
 
 ## Current Follow-Ups
 
+- [ ] Prove a Looma + Knit component can reach delivery through Guildhall UI
+  only. Live attempt on 2026-06-05 picked `ContextMenu` after `AlertDialog`
+  was found split across a blocked imported task and an older brief-cleanup
+  task with missing acceptance criteria. Guildhall UI did move `ContextMenu`
+  from Thread by pressing the selected task action, but delivery did not reach
+  worker implementation, screenshot proof, or e2e proof. Fixes landed during
+  this attempt: clean task worktree bootstrap failures are now handed to the
+  worker when the task explicitly says bootstrap repair is task-owned work, and
+  Thread selected-task start now posts to `/api/project/task/:id/start` with
+  `mode: "one_task"`/`scope: "work_item"` instead of starting a broad project
+  run. Live proof after reinstall showed `/api/stale-server` `stale:false` and
+  pressing the `ContextMenu` `Revise spec` action started a run with
+  `mode: "one_task"`. Remaining blocker: the one-task run stopped after one
+  tick with `stopAfterOneTask reached task task-import-1l0mr2r (escalated)`,
+  leaving `ContextMenu` blocked with
+  `human_judgment_required: Spec shaping timed out before saving durable
+  progress.` The UI also still rendered one-task activity copy as
+  `Working on 37 tasks`, so run-scope messaging needs a separate fix before the
+  proof reads honestly. No Looma/Knit files were directly edited by Codex for
+  this attempt.
+- [x] Repair Looma + Knit Work and Thread queue semantics for spec-lane tasks.
+  Live proof on 2026-06-04/05 showed `/api/project?projectId=looma-knit`
+  had `39` tasks (`28` `exploring`, `10` `spec_review`, `1` `blocked`) and
+  no execution-ready worker tasks, while Work defaulted to a misleading
+  `Queued work` empty state and Thread labeled normal component `spec_review`
+  turns as `Awaiting approval`. The owner-approval label was false for imported
+  component tasks: runtime Thread projection only treats meta-intake and
+  workspace import review as owner approval, while component `spec_review`
+  turns are queued spec-lane work. Fix: Work now labels the execution-ready
+  slice `Ready to run` and defaults to `Planning` when shaping/spec work exists
+  but no execution-ready work exists; shared task presentation now treats
+  normal `spec_review` + `phase: "spec"` turns without owner questions,
+  imported-draft state, live agents, or checklists as queued/paused spec work;
+  Thread start actions include `spec_review` and label the action
+  `Resume spec work`. Work raw-task rows now use the same queued-spec
+  presentation as Thread turns, so raw component `spec_review` tasks with draft
+  spec content do not fall back to `Awaiting approval`. Verification:
+  `pnpm vitest run src/runtime/__tests__/thread.test.ts
+  src/web/lib/__tests__/task-presentation.test.ts
+  src/web/surfaces/project/__tests__/ThreadTab.svelte.test.ts
+  src/web/surfaces/project/__tests__/WorkTab.svelte.test.ts --reporter=dot`
+  (`200` tests); `pnpm typecheck`; `pnpm build`; `git diff --check`;
+  `pnpm dev:install`; `guildhall stop && guildhall start`; `/api/stale-server`
+  returned `stale:false` for installed dist
+  `/Users/matthew/.guildhall/app/0.10.0/app/dist/cli.js`. Live API proof from
+  `/api/project/thread?projectId=looma-knit` showed component `spec_review`
+  rows such as Combobox, AlertDialog, Drawer / Sheet, HoverCard, and
+  ContextMenu with `phase: "spec"` and summary `Guildhall has your answers and
+  a spec draft. Coordinator review is next.` In-app Browser proof on
+  `/projects/looma-knit/work` rendered `38 shown · 39 total`, `Ready to run`,
+  `Planning`, zero `Queued work`, zero `No queued work yet`, zero
+  `AWAITING APPROVAL`, and paused row chips. In-app Browser proof on
+  `/projects/looma-knit/thread` rendered zero `Awaiting approval`, zero
+  `Waiting for worker activity`, `14` `Coordinator review is next` summaries,
+  paused task chips, and the project-level `Resume` action.
+  Earlier focused verification:
+  `pnpm vitest run src/web/lib/__tests__/task-presentation.test.ts
+  src/web/surfaces/project/__tests__/ThreadTab.svelte.test.ts
+  src/web/surfaces/project/__tests__/WorkTab.svelte.test.ts --reporter=dot`
+  (`128` tests); `pnpm typecheck`; `pnpm build`.
 - [x] Finish feature-shape generalization fixtures. The 2026-06-04
   weak/medium coverage audit found that runtime smoke fixtures already cover
   broad project types, but rendered UI tests were still overfit to familiar
@@ -9000,3 +9060,268 @@ Verification: Commands passed:
 `git diff --check`.
 
 source: codex:header-css-brand-mark
+
+2026-06-05T03:00:46Z - Removed the filled purple app-tile treatment from the
+app-header brand mark. The live docs screenshot on guildhall.cc exposed that
+the header mark had drifted into a purple rounded square with glow and a heavy
+white arch. The real header logo is `/icons/genfavicon-64.png`; it is restored
+as the image inside `.brand-mark`. The wrapper no longer paints its own
+background, box-shadow, or tile radius, so the real logo sits next to the
+`Guildhall` wordmark without the extra purple app-tile treatment.
+
+Verification: Focused Header coverage now asserts the real
+`/icons/genfavicon-64.png` image remains in the header and fails if
+`.brand-mark` reintroduces a filled tile background, box-shadow, or tile
+radius. App shell coverage now also asserts the 16px and 32px PNG favicon
+links alongside `/favicon.ico`, Apple touch icon, and the manifest. Commands passed:
+`pnpm exec vitest src/web/surfaces/__tests__/Header.svelte.test.ts --run`
+(`7` tests) and `pnpm build`. The compiled `dist/web/app.css` was inspected
+after build and contains the image-sized `.brand-mark` styles without the old
+filled purple tile declarations.
+
+source: codex:header-brand-mark-remove-purple-tile
+
+2026-06-05T02:37:41Z - Rebalanced the project Overview hierarchy so `Do this
+next` is no longer a narrow side card beside `Moving now`. The primary action
+now owns a full-width priority row immediately after the knowledge summary; the
+next row pairs `Moving now` with `Needs you`, and supporting context starts with
+`Work mix` plus `Blocked work`. The Overview knowledge summary buttons are now
+covered as route actions: Work and Proof route to Work, Structure and Project
+graph route to Structure, Runtime routes to readiness Settings, and History
+routes to Timeline.
+
+Verification: Focused Overview coverage added a red/green regression for the
+full-width priority row and explicit click coverage for the knowledge-summary
+route targets. Command passed:
+`pnpm vitest run src/web/surfaces/project/__tests__/ProjectOverviewTab.svelte.test.ts --reporter=dot`
+(`19` tests).
+
+source: codex:overview-priority-action-layout
+
+2026-06-05T02:59:00Z - Fixed toast glass styling after a live screenshot showed
+success/info toasts reading as flat bordered slabs. Root cause: `ToastHost`
+used the nonexistent `--glass-filter` variable, so the browser dropped the
+filter, and its fill came from an opaque surface mix instead of the shared
+glass background tokens. Toasts now use `--glass-reflect-*`, `--glass-bg`,
+`--glass-bg-strong`, `--glass-shadow`, `--glass-etch`, and `--glass-blur`
+with the WebKit backdrop-filter fallback while preserving their existing
+geometry and semantic success/error/info borders.
+
+Verification: Added a focused regression in `scripts/glass-design-system.test.ts`
+that requires toast glass background/blur tokens and rejects `--glass-filter`.
+Commands passed: `pnpm exec vitest run scripts/glass-design-system.test.ts`
+(`5` tests), `pnpm build`, `pnpm dev:install`, and `guildhall stop && guildhall
+start`. Freshness proof after restart: `/api/stale-server` returned
+`stale:false` for the installed app path. Served CSS proof from
+`http://127.0.0.1:7777/web/app.css` showed `.toast.svelte-*` using
+`color-mix(in srgb, var(--glass-bg-strong) 86%, var(--glass-bg))`,
+`backdrop-filter: var(--glass-blur)`, and `-webkit-backdrop-filter:
+var(--glass-blur)`, with no `--glass-filter` token present. Browser route
+loaded through loopback after an initial `localhost` extension block; DOM
+injection for a preview toast was not available through the current Browser
+evaluation surface, so the live proof is service freshness plus served CSS.
+
+source: codex:toast-glass-token-fix
+
+2026-06-05T03:14:00Z - Unified the task drawer `More task actions` menu
+after a live screenshot showed four competing presentations in one compact
+stack: purple Reframe, emitted mint Rework, gray Split, and filled red Shelve.
+Root cause: the menu mixed one raw custom `.more-action-button.agent` with
+full footer `Button` variants (`agent`, `secondary`, and `danger`), so action
+hierarchy styling leaked into a menu where every row should read as the same
+kind of choice. Fix: every menu item now renders as a native
+`.more-action-button` row on one glass menu panel. Rework/rerun can keep the
+sparkles icon without becoming a glowing CTA. Shelve uses a `.destructive`
+text/hover tint only, not a red slab.
+
+Verification: Added a focused TaskDrawer regression that rejects `agent`,
+`secondary`, and `danger` `Button` variants inside `.more-action-menu`.
+Commands passed: `pnpm vitest run src/web/surfaces/__tests__/TaskDrawer.svelte.test.ts
+-t "keeps the more task actions menu|can reframe a task|lets the user ask
+Guildhall to split|lets the user describe a generic task rework" --reporter=dot`
+(`4` tests), `pnpm build`, `pnpm dev:install`, and `guildhall stop &&
+guildhall start`. Freshness proof after restart: `/api/stale-server` returned
+`stale:false` for the installed app path. Served CSS proof from
+`/web/app.css` showed `.more-action-menu.svelte-*` using glass border,
+background, shadow, and `backdrop-filter: var(--glass-blur)`, with
+`.more-action-button.svelte-*` rows using transparent backgrounds and no row
+box-shadow. Browser proof on `http://127.0.0.1:7777/projects/narrative-harness`
+opened the task drawer menu and computed `menuBackdropFilter:
+blur(22px) saturate(1.18)`, transparent row background, and row box shadow
+`none`.
+
+source: codex:task-action-menu-single-lane
+
+2026-06-05T03:17:00Z - Unified the task drawer footer utility actions after
+the same visual-language mismatch showed up one level down: `More task actions`
+was a raw text trigger while adjacent `Copy link` was a ghost `Button`, so peer
+utilities in the footer inherited different control treatments. Fix: both
+footer utilities now render as native buttons with the shared
+`.footer-utility-action` class. The menu trigger keeps its
+`.more-actions-trigger` hook only for open-state behavior, not for a separate
+visual language. Workspace-import `Copy link` uses the same utility treatment.
+
+Verification: Added a focused TaskDrawer regression that requires
+`footer-utility-action` on the More trigger and Copy link, and rejects the old
+ghost Button copy-link markup. Commands passed:
+`pnpm vitest run src/web/surfaces/__tests__/TaskDrawer.svelte.test.ts -t
+"footer utility actions|More task actions|copy" --reporter=dot` (`2` tests),
+`pnpm vitest run src/web/surfaces/__tests__/TaskDrawer.svelte.test.ts
+--reporter=dot` (`46` tests), `pnpm build`, `pnpm dev:install`, and
+`guildhall stop && guildhall start`. Freshness proof after restart:
+`/api/stale-server` returned `stale:false` for the installed app path. Browser
+proof on `http://127.0.0.1:7777/projects/narrative-harness/task/author-voice-loop-mvp`
+showed `More task actions` and `Copy link` with the same transparent
+background, zero border, no box shadow, `12px` font size, `600` weight,
+`12px` line height, `4px 0px` padding, and muted text color.
+
+source: codex:task-footer-utility-single-lane
+
+2026-06-05T03:23:00Z - Increased separation between the task drawer footer
+utility actions after the shared text treatment made `More task actions` and
+`Copy link` read like one phrase. Fix: the `.more-actions` wrapper now adds
+`margin-right: var(--s-4)`, keeping the same text-button treatment while
+creating a visible group break before `Copy link`.
+
+Verification: Added the spacing expectation to the focused footer utility
+regression. Command passed:
+`pnpm vitest run src/web/surfaces/__tests__/TaskDrawer.svelte.test.ts -t
+"footer utility actions" --reporter=dot` (`1` test). `pnpm build`,
+`pnpm dev:install`, and `guildhall stop && guildhall start` passed. Freshness
+proof after restart: `/api/stale-server` returned `stale:false` for the
+installed app path. Browser proof on
+`http://127.0.0.1:7777/projects/narrative-harness/task/author-voice-loop-mvp`
+loaded the current CSS rule `.more-actions.svelte-* { position: relative;
+margin-right: var(--s-4); }` and measured a `24px` visual gap between `More
+task actions` and `Copy link`. A full TaskDrawer suite run still has unrelated
+copy expectation failures in the dirty worktree; this spacing regression and
+the build are green.
+
+source: codex:task-footer-utility-spacing
+
+2026-06-05T03:36:00Z - Reworked the project notifications card layout after
+the Narrative Harness inbox screenshot showed cards with a left-side content
+block, a far-right status/date stack, and actions orphaned back on the left.
+Root cause: each card's header owned the signal/content/meta grid, while the
+actions row was a separate sibling below it, so the card did not have one
+coherent layout model. Fix: the item card now owns a three-column grid: signal,
+main content, and a right-side meta/action rail. The item header uses
+`display: contents`, meta sits in the right rail's first row, actions sit in
+the right rail's second row, and the mobile breakpoint keeps the same content
+order while stacking meta and actions under the title.
+
+Verification: Added focused source regression coverage requiring the
+content-column plus right-rail structure. Commands passed:
+`pnpm vitest run src/web/surfaces/project/__tests__/InboxTab.svelte.test.ts -t
+"content column plus right-side meta|compact utility-panel|loads alert-owned"
+--reporter=dot` (`3` tests) and
+`pnpm vitest run src/web/surfaces/project/__tests__/InboxTab.svelte.test.ts
+--reporter=dot` (`9` tests). `pnpm build` first hit a transient post-build
+`chmod dist/cli.js ENOENT`, then a retry passed. `pnpm dev:install` and
+`guildhall stop && guildhall start` passed. Freshness proof after restart:
+`/api/stale-server` returned `stale:false` for installed dist
+`/Users/matthew/.guildhall/app/0.10.0/app/dist/cli.js`. Served CSS and Browser
+geometry proof on
+`/projects/narrative-harness/notifications?proof=inbox-card-layout-1780630319656`
+showed the first alert card using three columns
+`30.3828px 753.32px 120.297px`, with main content in column 2 and both meta
+and actions aligned in the right rail.
+
+source: codex:inbox-card-meta-action-rail
+
+2026-06-05T04:03:00Z - Corrected the overfit inbox-card fix after owner
+feedback called out the deeper design-system failure: moving a bespoke card
+layout into another local/shared dialect does not reduce patterns. Inbox rows
+now compose the existing `CardList` + `CardListItem` shell instead of local
+`UtilityPanel className="item-card"` chrome, and inbox status badges now use
+the canonical `Chip` primitive instead of local `.status-pill` styling.
+`TaskCard` also stopped defining local `chip-danger`, `chip-warn`, `chip-ok`,
+and `chip-accent` styles; its status label now renders through `Chip` while
+the icon remains row-specific. Added a hard `ui-primitive-scan` rule that
+rejects new local `status-pill`, `chip-*`, singular `*-chip`, and `*-chip-*`
+styling outside the shared chip primitives. The only remaining allowed
+exception is the named legacy Thread `.task-chip` / `.task-chip-text` debt,
+which is now explicit instead of invisible.
+
+Verification: Commands passed: `pnpm vitest run
+scripts/ui-primitive-scan.test.ts src/web/surfaces/project/__tests__/InboxTab.svelte.test.ts
+--reporter=dot` (`13` tests), `node scripts/ui-primitive-scan.mjs .`,
+`pnpm build`, `pnpm dev:install`, and `guildhall stop && guildhall start`.
+Freshness proof after restart: `/api/stale-server` returned `stale:false` for
+installed dist `/Users/matthew/.guildhall/app/0.10.0/app/dist/cli.js`.
+Browser proof on
+`/projects/narrative-harness/notifications?proof=design-primitive-enforcement-1780632106666`
+showed the first inbox row using
+`utility-panel tone-neutral rail-neutral rail-subtle is-dense card-list-item
+inbox-row`, its status as `chip tone-warn size-default`, and `statusPills: 0`.
+
+source: codex:design-primitive-chip-row-enforcement
+
+2026-06-05T03:09:55Z - Toned down repeated `Guildhall` mentions in Thread,
+task drawer, and recovery copy after a Looma + Knit screenshot showed the brand
+name stacking in task cards, recovery history, escalation guidance, and the
+recovery composer placeholder. Shared runtime Thread summaries now render
+subjectless owner-facing copy such as `Your answers and a spec draft are saved`
+and `A durable recovery spec seed was saved`; historical request labels now say
+`Asked to shape/reframe this task`; escalation cards use recovery/action names
+instead of repeatedly naming the app; and the Thread/task drawer paused and
+shaping descriptions use `Resume`, `the run`, or `this task` where the product
+subject is already obvious. The runtime parser remains backward-compatible with
+older persisted notes that still start with `Asked Guildhall...`.
+
+Verification: Focused red/green coverage first failed on the old spec-review
+and spec-retry wording, then passed after the copy update. Commands passed:
+`pnpm exec vitest src/runtime/__tests__/thread.test.ts --run --testNamePattern
+"summarizes normal spec_review|surfaces source and request milestones"`,
+`pnpm exec vitest src/web/lib/__tests__/escalation-labels.test.ts --run`,
+`pnpm exec vitest src/web/surfaces/project/__tests__/ThreadTab.svelte.test.ts
+--run --testNamePattern "brief cleanup|Work is paused|Gate checks are
+queued|missing check|partial progress|normal spec_review component work"`, and
+`pnpm exec vitest src/web/surfaces/drawer/__tests__/CurrentTab.svelte.test.ts
+src/web/surfaces/__tests__/TaskDrawer.svelte.test.ts --run --testNamePattern
+"imported draft shaping|partial progress|acceptance-criteria evidence|shaping
+timeout|read-budget shaping pause"`. Broader post-update verification passed:
+`pnpm exec vitest src/runtime/__tests__/thread.test.ts
+src/web/lib/__tests__/escalation-labels.test.ts --run` (`93` tests),
+`pnpm exec vitest src/web/surfaces/project/__tests__/ThreadTab.svelte.test.ts
+src/web/surfaces/drawer/__tests__/CurrentTab.svelte.test.ts
+src/web/surfaces/__tests__/TaskDrawer.svelte.test.ts --run` (`166` tests),
+and `git diff --check`.
+
+source: codex:thread-copy-brand-reduction
+
+2026-06-05T03:28:00Z - Broadened the brand-copy pass from Thread to the
+whole app shell and runtime-facing surfaces. The audit covered `src/web`
+surfaces/lib copy plus runtime messages that feed dashboard, intake, owner
+input, readiness, setup, workspace import, structure, release, and recovery
+views. Replaced repetitive generated guidance such as `Guildhall found...`,
+`Guildhall can...`, `before Guildhall can continue`, and `Ask Guildhall...`
+with subjectless or surface-specific language: `Found planning notes`,
+`Project context saved`, `before work can continue`, `Ask for explanation`,
+`The source notes need...`, `Run the missing check`, and similar. Kept the
+product name where it is doing real identity work: the wordmark/version,
+runtime upgrade/migration/setup text, local service errors, actor labels,
+settings/provider descriptions, source-reference provenance, and
+`Guildhall-owned` release cleanup semantics.
+
+Verification: Focused whole-app copy assertions now pass across the touched
+summary/runtime/surface areas. Commands passed:
+`pnpm exec vitest src/web/lib/__tests__/project-summary.test.ts
+src/web/lib/__tests__/project-activity.test.ts
+src/web/lib/__tests__/AgentQuestion.svelte.test.ts
+src/web/lib/__tests__/escalation-labels.test.ts --run` (`67` tests),
+`pnpm exec vitest src/web/surfaces/project/__tests__/ThreadTab.svelte.test.ts
+src/web/surfaces/drawer/__tests__/CurrentTab.svelte.test.ts
+src/web/surfaces/__tests__/TaskDrawer.svelte.test.ts --run` (`167` tests),
+`pnpm exec vitest src/web/surfaces/project/__tests__/ProjectOverviewTab.svelte.test.ts
+src/web/surfaces/project/__tests__/WorkTab.svelte.test.ts
+src/web/surfaces/project/__tests__/WorkspaceImportTab.svelte.test.ts
+src/web/surfaces/__tests__/ProjectView.svelte.test.ts
+src/web/surfaces/__tests__/DoThisNext.svelte.test.ts
+src/web/surfaces/__tests__/FleetNeedsYou.svelte.test.ts --run` (`107`
+tests), and `pnpm exec vitest src/runtime/__tests__/serve-settings.test.ts
+src/runtime/__tests__/serve-intake.test.ts
+src/runtime/__tests__/project-action-model.test.ts
+src/runtime/__tests__/thread.test.ts --run` (`158` tests).
+
+source: codex:whole-app-brand-copy-audit

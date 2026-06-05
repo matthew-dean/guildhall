@@ -1170,7 +1170,7 @@ describe('POST /api/project/start', () => {
     expect(projectBody.startReadiness).toMatchObject({
       canStart: false,
       code: 'owner_input_required',
-      message: 'Review the project map needs your answer before Guildhall can continue',
+      message: 'Review the project map needs your answer before work can continue',
     })
     expect(projectBody.startReadiness?.message).not.toContain('structural-map-mpyrvqjg')
   })
@@ -1410,7 +1410,7 @@ describe('POST /api/project/start', () => {
     const body = (await res.json()) as { code?: string; status?: string; error?: string }
     expect(body.code).toBe('run_already_active')
     expect(body.status).toBe('running')
-    expect(body.error).toContain('already running')
+    expect(body.error).toContain('run is already active')
 
     await supervisor.stop(PROJECT_ID, { waitMs: 1_000 })
   })
@@ -2582,7 +2582,7 @@ describe('GET /api/project/inbox — blockers', () => {
 
     expect(item).toMatchObject({
       title: 'Review project discovery update',
-      detail: 'Guildhall can now scan more planning docs and migrations. Review the reconciliation so it can update or dismiss stale imported work.',
+      detail: 'More planning docs and migrations can now be scanned. Review the reconciliation to update or dismiss stale imported work.',
       actionHref: '/workspace-import?mode=reconcile',
     })
     expect(`${item?.title ?? ''} ${item?.detail ?? ''}`).not.toMatch(/missing repo evidence/i)

@@ -108,10 +108,10 @@
   function displayPrompt(value: string | undefined): string {
     const prompt = value ?? ''
     if (/coordinator domains|project areas|review lanes/i.test(prompt)) {
-      return 'Guildhall inferred this structure from the repo. Confirm it only if it looks materially wrong.'
+      return 'This structure was inferred from the repo. Confirm it only if it looks materially wrong.'
     }
     if (/workspace importer scanned the repo/i.test(prompt) && /importable tasks/i.test(prompt)) {
-      return 'Guildhall found planning notes across several project documents. Which of these should become real tasks? Choose all that apply.'
+      return 'Planning notes were found across several project documents. Which of these should become real tasks? Choose all that apply.'
     }
     return prompt
   }
@@ -202,14 +202,14 @@
     {#if question.subject}
       <div class="question-subject">{question.subject}</div>
     {:else}
-      <div class="question-subject">Guildhall needs a clearer question</div>
+      <div class="question-subject">This needs a clearer question</div>
     {/if}
     <div class="question-description">
       <Markdown source={displayPrompt(question.prompt)} />
     </div>
     {#if question.choices.length}
       <div>
-        <strong>What Guildhall found</strong>
+        <strong>What was found</strong>
         <ul class="evidence-list">
           {#each question.choices as c (c)}
             <li><Markdown source={choiceLabel(c)} /></li>
@@ -219,7 +219,7 @@
     {/if}
     <div class="question-callout">
       <span class="question-callout-label">Question missing</span>
-      <div class="question-callout-text">Tell Guildhall what you want it to do next.</div>
+      <div class="question-callout-text">Say what should happen next.</div>
     </div>
   </div>
 {/snippet}

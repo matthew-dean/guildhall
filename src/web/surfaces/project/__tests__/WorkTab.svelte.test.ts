@@ -476,7 +476,7 @@ describe('WorkTab', () => {
     expect(screen.getByText('1 import draft')).toBeTruthy()
   })
 
-  it('defaults to queued execution work and shows shaping/spec work only when Planning is selected', async () => {
+  it('defaults to Planning when a project has shaping work but no execution-ready work', async () => {
     render(WorkTab, {
       props: {
         detail: detail([
@@ -497,21 +497,15 @@ describe('WorkTab', () => {
       },
     })
 
-    expect(await screen.findByText('0 shown · 2 total')).toBeTruthy()
-    expect(screen.getByText('No queued work yet.')).toBeTruthy()
-    expect(screen.getByText(/Use Planning to inspect intake and spec work/i)).toBeTruthy()
-    expect(screen.getByRole('button', { name: /show planning/i })).toBeTruthy()
-    expect(screen.getByRole('option', { name: /^planning$/i })).toBeTruthy()
-    expect(screen.queryByText('Block menu / block side menu')).toBeNull()
-    expect(screen.queryByText('Spec revision queued')).toBeNull()
-    expect(screen.queryByText('Guildhall shaping')).toBeNull()
-    expect(document.body.textContent).not.toContain('Intake')
-
-    await userEvent.selectOptions(screen.getByRole('combobox', { name: /^show$/i }), 'planning')
-
     expect(await screen.findByText('2 shown · 2 total')).toBeTruthy()
+    expect(screen.getByRole('option', { name: /^ready to run$/i })).toBeTruthy()
+    expect((screen.getByRole('combobox', { name: /^show$/i }) as HTMLSelectElement).value).toBe('planning')
+    expect(screen.queryByText('No work is ready to run yet.')).toBeNull()
+    expect(screen.queryByText('No queued work yet.')).toBeNull()
+    expect(screen.getByRole('option', { name: /^planning$/i })).toBeTruthy()
     expect(screen.getByText('Block menu / block side menu')).toBeTruthy()
     expect(screen.getAllByText('Paused').length).toBeGreaterThanOrEqual(2)
+    expect(document.body.textContent).not.toContain('Intake')
   })
 
   it('labels inactive in-progress work as paused when no project run is active', async () => {

@@ -620,7 +620,7 @@ describe('ThreadTab', () => {
     render(ThreadTab)
 
     await screen.findByText('Access requests')
-    expect(screen.getByText(/Guildhall needs a decision before it can safely use this folder/)).toBeTruthy()
+    expect(screen.getByText(/A decision is needed before this folder can be used safely/)).toBeTruthy()
     expect(screen.getByText(/Runtime command needs access to a sibling fixture folder/)).toBeTruthy()
     const pathInput = screen.getByDisplayValue('/Users/matthew/git/fixtures')
     await userEvent.clear(pathInput)
@@ -1012,7 +1012,7 @@ describe('ThreadTab', () => {
     expect(screen.queryByText('Routed to Task Intake')).toBeNull()
     expect(selectedThread().queryByText('New thread')).toBeNull()
     expect(threadHistory().getByText('Brief cleanup requested')).toBeTruthy()
-    expect(selectedThread().getByText(/Guildhall queued this task for brief cleanup/)).toBeTruthy()
+    expect(selectedThread().getByText(/Task brief cleanup is queued/)).toBeTruthy()
     expect(selectedThread().getByRole('button', { name: /clean up brief/i })).toBeTruthy()
   })
 
@@ -1022,7 +1022,7 @@ describe('ThreadTab', () => {
       startReadiness: {
         canStart: false,
         code: 'owner_input_required',
-        message: 'Review the project map needs your answer before Guildhall can continue',
+        message: 'Review the project map needs your answer before work can continue',
         actionHref: '/thread?thread=bc-jess-structural_review',
       },
     }
@@ -1040,14 +1040,14 @@ describe('ThreadTab', () => {
       startReadiness: {
         canStart: false,
         code: 'owner_input_required',
-        message: 'Review the project map needs your answer before Guildhall can continue',
+        message: 'Review the project map needs your answer before work can continue',
         actionHref: '/thread?thread=bc-jess-structural_review',
       },
     })
 
     render(ThreadTab)
 
-    expect((await selectedThread().findAllByText(/answer the current blocker before Guildhall continues shaping project notes/i)).length).toBeGreaterThan(0)
+    expect((await selectedThread().findAllByText(/answer the current blocker before project notes can keep moving/i)).length).toBeGreaterThan(0)
     expect(selectedThread().queryByText(/resume Guildhall to keep turning your project notes/i)).toBeNull()
   })
 
@@ -1059,8 +1059,8 @@ describe('ThreadTab', () => {
 
     render(ThreadTab)
 
-    await threadComposer().findByPlaceholderText('Add a note for Guildhall…')
-    expect(selectedThread().getByText('Work is paused. Resume Guildhall when you want it to continue.')).toBeTruthy()
+    await threadComposer().findByPlaceholderText('Add a note…')
+    expect(selectedThread().getByText('Work is paused. Resume when you want it to continue.')).toBeTruthy()
     expect(scrollIntoView).not.toHaveBeenCalled()
   })
 
@@ -1107,7 +1107,7 @@ describe('ThreadTab', () => {
 
     await screen.findByLabelText('Active thread dock')
     expect(threadComposer().getByText('Reply in thread')).toBeTruthy()
-    const composer = threadComposer().getByPlaceholderText('Answer this question or redirect Guildhall…')
+    const composer = threadComposer().getByPlaceholderText('Answer this question or redirect the thread…')
     await userEvent.type(composer, 'Keep the first pass narrowly focused on owner-facing intake.')
     await userEvent.click(threadComposer().getByRole('button', { name: 'Send' }))
 
@@ -1135,7 +1135,7 @@ describe('ThreadTab', () => {
     const dialog = await screen.findByRole('dialog', { name: /approve spec/i })
     await userEvent.click(within(dialog).getByRole('button', { name: 'Request changes' }))
 
-    expect(threadComposer().getByPlaceholderText('Correct the spec or ask Guildhall to revisit it…')).toBeTruthy()
+    expect(threadComposer().getByPlaceholderText('Correct the spec or ask for another pass…')).toBeTruthy()
   })
 
   it('renders prior task-chain items as timeline events instead of repeating the task title as a mini task card', async () => {
@@ -1305,7 +1305,7 @@ describe('ThreadTab', () => {
     const routing = await screen.findByRole('button', { name: /internal routing slices/i })
     const bootstrap = screen.getByRole('button', { name: /Bootstrap verification/i })
 
-    expect(screen.getAllByText('Select every item that applies. Guildhall will treat the selected items as the setup plan.').length).toBeGreaterThan(0)
+    expect(screen.getAllByText('Select every item that applies. The selected items become the setup plan.').length).toBeGreaterThan(0)
     expect(routing.classList.contains('multi')).toBe(true)
     expect(routing.querySelector('.pressure-choice-arrow')).toBeNull()
     expect((screen.getByRole('button', { name: 'Submit selected' }) as HTMLButtonElement).disabled).toBe(true)
@@ -1391,7 +1391,7 @@ describe('ThreadTab', () => {
     expect(screen.queryByText(/owner_review_required_before_routing_truth/)).toBeNull()
     expect(screen.queryByText(/cross-cutting:accessibility/)).toBeNull()
     expect(screen.queryByText(/domain:css/)).toBeNull()
-    expect(selectedThread().getByText(/Guildhall has already inferred these project areas/i)).toBeTruthy()
+    expect(selectedThread().getByText(/These project areas were already inferred/i)).toBeTruthy()
     const proposedMap = screen.getByLabelText('Proposed structural map')
     expect(within(proposedMap).getByText('Already found')).toBeTruthy()
     expect(within(proposedMap).getByText('5 proposed areas')).toBeTruthy()
@@ -1594,7 +1594,7 @@ describe('ThreadTab', () => {
 
     render(ThreadTab, { projectId: 'font-something' })
 
-    await screen.findByText('What Guildhall knows right now')
+    await screen.findByText('Current setup context')
     expect(screen.getByText(/current snapshot from local files/i)).toBeTruthy()
     expect(screen.getByText('Coordinator areas: Design.')).toBeTruthy()
     expect(screen.getByText(/saved direction is the durable plan input/i)).toBeTruthy()
@@ -1796,7 +1796,7 @@ describe('ThreadTab', () => {
       expect(calls.some(call => call.url.includes('/shape-draft') && call.url.includes('projectId=looma-knit'))).toBe(true)
     })
 
-    await userEvent.type(threadComposer().getByPlaceholderText('Add a note for Guildhall…'), 'Keep drag handles out of scope.')
+    await userEvent.type(threadComposer().getByPlaceholderText('Add a note…'), 'Keep drag handles out of scope.')
     await userEvent.click(threadComposer().getByRole('button', { name: /send/i }))
     await waitFor(() => {
       expect(
@@ -1889,7 +1889,7 @@ describe('ThreadTab', () => {
     expect(screen.queryByRole('button', { name: 'Finish task brief...' })).toBeNull()
     const startButton = screen.getByRole('button', { name: 'Clean up brief' })
     expect(startButton.classList.contains('v-agent')).toBe(true)
-    expect(threadComposer().getByPlaceholderText('Add a note for Guildhall…')).toBeTruthy()
+    expect(threadComposer().getByPlaceholderText('Add a note…')).toBeTruthy()
   })
 
   it('keeps ready tasks with complete checklists but incomplete worker handoff out of start actions', async () => {
@@ -1922,7 +1922,7 @@ describe('ThreadTab', () => {
 
     render(ThreadTab)
 
-    await screen.findAllByText('The starter checklist is complete, but Guildhall still needs a full product brief and spec handoff before a worker can start.')
+    await screen.findAllByText('The starter checklist is complete, but a full product brief and spec handoff are still needed before a worker can start.')
     const needsBriefChip = selectedThread()
       .getAllByText('Needs brief')
       .find(node => node.classList.contains('chip'))
@@ -2255,7 +2255,7 @@ describe('ThreadTab', () => {
 
     render(ThreadTab)
 
-    expect((await screen.findAllByText('Gate checks are queued. Resume Guildhall when you want it to continue.')).length).toBeGreaterThan(0)
+    expect((await screen.findAllByText('Gate checks are queued. Resume when you want them to continue.')).length).toBeGreaterThan(0)
   })
 
   it('summarizes and prioritizes high-volume thread operations', async () => {
@@ -2323,7 +2323,7 @@ describe('ThreadTab', () => {
 
     render(ThreadTab)
 
-    expect((await screen.findAllByText('Work is paused. Resume Guildhall when you want it to continue.')).length).toBeGreaterThan(0)
+    expect((await screen.findAllByText('Work is paused. Resume when you want it to continue.')).length).toBeGreaterThan(0)
     expect(screen.queryByText(/^queued$/i, { selector: '.chip' })).toBeNull()
   })
 
@@ -2340,7 +2340,7 @@ describe('ThreadTab', () => {
 
     render(ThreadTab)
     await screen.findAllByText('Needs recovery')
-    expect(screen.getAllByText('Guildhall found context but did not save the next draft.').length).toBeGreaterThan(0)
+    expect(screen.getAllByText('Context was found, but the next draft was not saved.').length).toBeGreaterThan(0)
     expect(screen.getByText(/transcript may contain useful observations/i)).toBeTruthy()
     expect(screen.queryByText('Worker is stuck')).toBeNull()
   })
@@ -2358,13 +2358,13 @@ describe('ThreadTab', () => {
     )
 
     render(ThreadTab)
-    await screen.findByRole('button', { name: /Let Guildhall run the check/i })
-    expect(selectedThread().getByText('Guildhall needs to run one missing check.')).toBeTruthy()
+    await screen.findByRole('button', { name: /Run the missing check/i })
+    expect(selectedThread().getByText('One missing check needs to run.')).toBeTruthy()
     expect(selectedThread().getByText(/not asking you to prove anything/i)).toBeTruthy()
-    expect(screen.getByRole('button', { name: /Let Guildhall run the check/i })).toBeTruthy()
+    expect(screen.getByRole('button', { name: /Run the missing check/i })).toBeTruthy()
     expect(screen.queryByText(/Technical note/i)).toBeNull()
     expect(document.body.textContent).not.toMatch(/\bAC-8\b/)
-    await userEvent.click(screen.getByRole('button', { name: /Let Guildhall run the check/i }))
+    await userEvent.click(screen.getByRole('button', { name: /Run the missing check/i }))
     await waitFor(() => {
       expect(calls.some(call => call.url.includes('/task/task-link-controls/resolve-escalation'))).toBe(true)
       expect(calls.some(call => call.url.startsWith('/api/project/start') && call.body?.taskId === 'task-link-controls')).toBe(true)
@@ -2435,7 +2435,7 @@ describe('ThreadTab', () => {
     expect(screen.queryByText('Guildhall next')).toBeNull()
     expect(screen.queryByText('Blueprint')).toBeNull()
     expect(screen.queryByText('Build')).toBeNull()
-    expect(threadComposer().getByPlaceholderText('Add a note for Guildhall…')).toBeTruthy()
+    expect(threadComposer().getByPlaceholderText('Add a note…')).toBeTruthy()
   })
 
   it('uses the shared spec revision stage chip for exploring spec turns', async () => {
@@ -2449,7 +2449,7 @@ describe('ThreadTab', () => {
           importedDraft: false,
           phase: 'spec',
           constructionMode: 'blueprint',
-          summary: 'Guildhall has your answers and a spec draft. Coordinator review is next.',
+          summary: 'Your answers and a spec draft are saved. Coordinator review is next.',
           checklist: undefined,
         }),
       ],
@@ -2546,7 +2546,7 @@ describe('ThreadTab', () => {
     await selectedThread().findByText('Starting point and source notes')
     expect(selectedThread().getAllByText('Brief checklist').length).toBeGreaterThan(0)
     expect(selectedThread().getByRole('button', { name: /continue shaping brief/i })).toBeTruthy()
-    expect(threadComposer().getByPlaceholderText('Add a note for Guildhall…')).toBeTruthy()
+    expect(threadComposer().getByPlaceholderText('Add a note…')).toBeTruthy()
   })
 
   it('submits each task question answer directly without a second submit step', async () => {
@@ -2656,12 +2656,12 @@ describe('ThreadTab', () => {
     await screen.findByLabelText('Active thread dock')
     await activeThreadDock().findByRole('button', { name: 'PROJECT_STATE.md' })
     expect(activeThreadDock().getByText('Missing context is expected.')).toBeTruthy()
-    expect(activeThreadDock().getByText(/Ask Guildhall to explain project terms, source notes, or assumptions before you answer/)).toBeTruthy()
+    expect(activeThreadDock().getByText(/Ask for project terms, source notes, or assumptions to be explained before you answer/)).toBeTruthy()
 
-    await userEvent.click(activeThreadDock().getByRole('button', { name: /ask guildhall to explain/i }))
-    await screen.findByText('Ask Guildhall to explain first')
+    await userEvent.click(activeThreadDock().getByRole('button', { name: /ask for explanation/i }))
+    await screen.findByText('Ask for an explanation first')
     await userEvent.type(
-      screen.getByPlaceholderText('Ask what Guildhall means, what evidence it used, or what context is missing…'),
+      screen.getByPlaceholderText('Ask what this means, what evidence was used, or what context is missing…'),
       'Which migration status are you asking about?',
     )
     await userEvent.click(screen.getAllByRole('button', { name: /^Send$/i }).at(-1)!)
@@ -2689,7 +2689,7 @@ describe('ThreadTab', () => {
 
     render(ThreadTab)
     await screen.findByText('Import complete.')
-    expect(screen.getByText(/Guildhall created 2 draft tasks from 3 selected sources/)).toBeTruthy()
+    expect(screen.getByText(/Created 2 draft tasks\s+from 3 selected sources/)).toBeTruthy()
 
     await userEvent.click(screen.getByRole('button', { name: /dismiss/i }))
     expect(screen.queryByText('Import complete.')).toBeNull()
@@ -2853,6 +2853,46 @@ describe('ThreadTab', () => {
     expect(within(dialog).getByRole('button', { name: /approve spec/i }).classList.contains('v-primary')).toBe(true)
     expect(within(dialog).getByRole('button', { name: /request changes/i })).toBeTruthy()
     expect(path.value).toContain('/thread')
+  })
+
+  it('renders normal spec_review component work as queued spec work instead of owner approval', async () => {
+    const { calls } = installFetchFakes([
+      {
+        kind: 'inflight',
+        id: 'inflight-task-combobox',
+        at: now,
+        persona: 'spec',
+        status: 'active',
+        phase: 'spec',
+        taskId: 'task-combobox',
+        taskTitle: 'Combobox',
+        constructionMode: 'blueprint',
+        taskStatus: 'spec_review',
+        importedDraft: false,
+        checklist: undefined,
+        summary: 'Your answers and a spec draft are saved. Coordinator review is next.',
+      },
+    ], 'inflight-task-combobox', {
+      projectRunStatus: 'stopped',
+      projectAvailability: { status: 'paused', pausedAt: now, resumedAt: null },
+    })
+
+    render(ThreadTab)
+
+    await screen.findByRole('button', { name: /combobox/i })
+    expect(screen.queryByText(/awaiting approval/i)).toBeNull()
+    expect(screen.getAllByText('Paused').length).toBeGreaterThan(0)
+    expect(screen.getAllByText(/Coordinator review is next/i).length).toBeGreaterThan(0)
+    await userEvent.click(screen.getByRole('button', { name: /resume spec work/i }))
+
+    await waitFor(() => {
+      const startCall = calls.find(call => call.url.includes('/api/project/task/task-combobox/start'))
+      expect(startCall?.body).toMatchObject({
+        mode: 'one_task',
+        scope: 'work_item',
+      })
+    })
+    expect(calls.some(call => call.url.includes('/api/project/start'))).toBe(false)
   })
 
   it('opens a thread-owned brief modal from the root card and keeps Details separate', async () => {
@@ -3032,7 +3072,7 @@ describe('ThreadTab', () => {
 
     render(ThreadTab)
     expect((await screen.findAllByText('Needs recovery')).length).toBeGreaterThan(0)
-    expect(screen.getAllByText(/Guildhall made partial progress/i).length).toBeGreaterThan(0)
+    expect(screen.getAllByText(/Partial progress was saved/i).length).toBeGreaterThan(0)
     expect(screen.getByRole('button', { name: 'Inspect recovery' })).toBeTruthy()
     expect(screen.getByRole('button', { name: 'Add recovery note' })).toBeTruthy()
     const resumeWorkButton = screen.getByRole('button', { name: 'Resume work' })
@@ -3138,7 +3178,7 @@ describe('ThreadTab', () => {
           caughtUp: false,
         })
       }
-      if (url.startsWith('/api/project/start')) {
+      if (url.startsWith('/api/project/task/') && url.includes('/start')) {
         return json({ error: 'Provider model is not loaded.' }, { status: 409 })
       }
       if (url.startsWith('/api/project')) return json({ id: 'looma-knit', run: { status: 'stopped' }, tasks: [] })
@@ -3180,7 +3220,7 @@ describe('ThreadTab', () => {
     render(ThreadTab)
 
     await selectedThread().findByText('Starting point and source notes')
-    expect(selectedThread().getByText(/Guildhall has started shaping this task/)).toBeTruthy()
+    expect(selectedThread().getByText(/Task shaping has started/)).toBeTruthy()
     expect(selectedThread().getAllByText('Brief checklist').length).toBeGreaterThan(0)
     expect(selectedThread().getByText('Readable title')).toBeTruthy()
     expect(selectedThread().getByText('Acceptance criteria')).toBeTruthy()

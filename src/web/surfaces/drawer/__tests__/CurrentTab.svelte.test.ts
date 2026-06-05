@@ -266,7 +266,7 @@ describe('CurrentTab', () => {
     ])
 
     expect(screen.getByText('Paused')).toBeTruthy()
-    expect(screen.getByText(/Resume Guildhall when you want it to keep preparing this task/i)).toBeTruthy()
+    expect(screen.getByText(/Resume when you want this task to keep moving/i)).toBeTruthy()
     expect(screen.queryByText('Task brief in progress')).toBeNull()
     expect(screen.queryByText(/Continue drafting the brief here when you are ready/i)).toBeNull()
     expect(screen.getByRole('button', { name: /continue shaping brief/i })).toBeTruthy()
@@ -293,7 +293,7 @@ describe('CurrentTab', () => {
     ])
 
     expect(screen.getByText('Needs recovery')).toBeTruthy()
-    expect(screen.getByText(/Guildhall made partial progress, then the agent failed/i)).toBeTruthy()
+    expect(screen.getByText(/Partial progress was saved, then the agent failed/i)).toBeTruthy()
     expect(screen.getByText('Write file src/components/LinkEditor.svelte')).toBeTruthy()
     expect(screen.queryByText('Queued')).toBeNull()
   })
@@ -333,7 +333,7 @@ describe('CurrentTab', () => {
     expect(props.onOpenSpecTab).toHaveBeenCalledOnce()
   })
 
-  it('turns acceptance-criteria evidence blockers into a concrete Guildhall action', async () => {
+  it('turns acceptance-criteria evidence blockers into a concrete recovery action', async () => {
     const props = renderCurrent([
       {
         id: 'turn-escalation',
@@ -352,11 +352,11 @@ describe('CurrentTab', () => {
     ])
 
     expect(screen.getByText('Queued')).toBeTruthy()
-    expect(screen.getByText('Guildhall needs to run one missing check.')).toBeTruthy()
+    expect(screen.getByText('One missing check needs to run.')).toBeTruthy()
     expect(screen.getByText(/not asking you to prove anything/i)).toBeTruthy()
-    expect(screen.getByRole('button', { name: /Let Guildhall run the check/i })).toBeTruthy()
+    expect(screen.getByRole('button', { name: /Run the missing check/i })).toBeTruthy()
     expect(screen.getByRole('button', { name: /View spec and evidence/i })).toBeTruthy()
-    await userEvent.click(screen.getByRole('button', { name: /Let Guildhall run the check/i }))
+    await userEvent.click(screen.getByRole('button', { name: /Run the missing check/i }))
     expect(props.onRunEscalationAction).toHaveBeenCalledWith('esc-1')
     expect(document.body.textContent).not.toMatch(/\bAC-8\b/)
   })
@@ -449,7 +449,7 @@ describe('CurrentTab', () => {
     ])
 
     expect(screen.getAllByText('Needs brief').length).toBeGreaterThanOrEqual(1)
-    expect(screen.getByText('Guildhall needs to turn the source notes into an outcome and acceptance checks before implementation.')).toBeTruthy()
+    expect(screen.getByText('The source notes need an outcome and acceptance checks before implementation.')).toBeTruthy()
     expect(screen.getAllByText('Missing').length).toBeGreaterThanOrEqual(1)
     expect(screen.queryByRole('button', { name: /resume work/i })).toBeNull()
     const startButton = screen.getByRole('button', { name: 'Clean up brief' })
@@ -489,7 +489,7 @@ describe('CurrentTab', () => {
     ])
 
     expect(screen.getAllByText('Needs brief').length).toBeGreaterThanOrEqual(1)
-    expect(screen.getByText('Guildhall needs to turn the source notes into concrete acceptance checks before implementation.')).toBeTruthy()
+    expect(screen.getByText('The source notes need concrete acceptance checks before implementation.')).toBeTruthy()
     await userEvent.click(screen.getByRole('button', { name: 'Clean up brief' }))
 
     expect(props.onRunTask).toHaveBeenCalledOnce()

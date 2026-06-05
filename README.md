@@ -98,7 +98,7 @@ current GitHub Release and verifies it against the matching `.sha256` asset.
 To install a specific release instead:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/matthew-dean/guildhall/main/scripts/install.sh | GUILDHALL_VERSION=0.9.1 sh
+curl -fsSL https://raw.githubusercontent.com/matthew-dean/guildhall/main/scripts/install.sh | GUILDHALL_VERSION=0.10.0 sh
 ```
 
 Also supported:

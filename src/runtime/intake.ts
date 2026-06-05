@@ -719,8 +719,8 @@ export async function reframeTask(input: ReframeTaskInput): Promise<ReframeTaskR
     agentId: 'human',
     role: 'human',
     content: reason
-      ? `Asked Guildhall to reframe this task. Reason: ${reason}`
-      : 'Asked Guildhall to reframe this task from current project memory.',
+      ? `Asked to reframe this task. Reason: ${reason}`
+      : 'Asked to reframe this task from current project memory.',
     timestamp: now,
   })
 
@@ -758,7 +758,7 @@ export async function reframeTask(input: ReframeTaskInput): Promise<ReframeTaskR
   notes.push({
     agentId: 'system',
     role: 'system',
-    content: `Reframe requested for "${oldTitle}" from ${oldStatus}. Guildhall will rebuild the task in plain language before continuing.`,
+    content: `Reframe requested for "${oldTitle}" from ${oldStatus}. The task will be rebuilt in plain language before continuing.`,
     timestamp: now,
   })
   await writeQueue(input.memoryDir, queue)
@@ -804,8 +804,8 @@ export async function enrichTask(input: EnrichTaskInput): Promise<ReframeTaskRes
     agentId: 'human',
     role: 'human',
     content: instruction
-      ? `Asked Guildhall to enrich this task (${mode}). Note: ${instruction}`
-      : `Asked Guildhall to enrich this task (${mode}).`,
+      ? `Asked to enrich this task (${mode}). Note: ${instruction}`
+      : `Asked to enrich this task (${mode}).`,
     timestamp: now,
   })
 
@@ -840,7 +840,7 @@ export async function enrichTask(input: EnrichTaskInput): Promise<ReframeTaskRes
   notes.push({
     agentId: 'system',
     role: 'system',
-    content: `Enrichment requested from ${oldStatus}. Guildhall will add the missing structure before continuing.`,
+    content: `Enrichment requested from ${oldStatus}. Missing structure will be added before continuing.`,
     timestamp: now,
   })
   await writeQueue(input.memoryDir, queue)

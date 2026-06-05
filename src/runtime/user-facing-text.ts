@@ -1,14 +1,14 @@
 const EMPTY_MODEL_REPLY =
-  'Guildhall got an empty model reply, so it kept the task state intact. Retry the run or switch providers if this keeps happening.'
+  'The model returned an empty reply, so task state stayed intact. Retry the run or switch providers if this keeps happening.'
 
 const IDLE_LIMIT =
-  'Guildhall stopped after reaching the idle limit. Start the run again when you are ready to continue.'
+  'The run stopped after reaching the idle limit. Start it again when you are ready to continue.'
 
 const WAITING_FOR_ANSWER =
-  'Guildhall asked a question and is waiting for the answer.'
+  'A question is waiting for the answer.'
 
 const RESEARCH_BUDGET =
-  'Guildhall paused after gathering enough context. Open the task to choose the next step.'
+  'Work paused after gathering enough context. Open the task to choose the next step.'
 
 export function isInternalAgentNarration(value: string | undefined | null): boolean {
   const text = (value ?? '').trim()
@@ -36,7 +36,7 @@ export function userFacingText(
     return WAITING_FOR_ANSWER
   }
   if (/key question I need to ask before drafting|let me write the product brief first,? then ask/i.test(text)) {
-    return 'Guildhall was still drafting the question and should continue shaping the task.'
+    return 'The question was still being drafted, so task shaping should continue.'
   }
   if (/research budget exhausted|hit the research budget|refusing more read-only tool calls|do not call more read-only tools now/i.test(text)) {
     return RESEARCH_BUDGET
@@ -49,7 +49,7 @@ export function userFacingText(
   }
   if (/^human_judgment_required\b/i.test(withoutErrorPrefix)) {
     return withoutErrorPrefix.replace(/^human_judgment_required\b:?\s*/i, '').trim() ||
-      'Guildhall needs a product or recovery decision before it can continue.'
+      'A product or recovery decision is needed before work can continue.'
   }
   if (withoutErrorPrefix !== text) {
     return withoutErrorPrefix || fallback

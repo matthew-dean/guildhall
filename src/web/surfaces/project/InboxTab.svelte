@@ -4,6 +4,9 @@
   tasks move down to the Work tab.
 -->
 <script lang="ts">
+  import CardList from '../../lib/CardList.svelte'
+  import CardListItem from '../../lib/CardListItem.svelte'
+  import Chip from '../../lib/Chip.svelte'
   import Icon, { type IconName } from '../../lib/Icon.svelte'
   import UtilityPanel from '../../lib/UtilityPanel.svelte'
   import { inboxItemKey, type InboxItem } from '../../lib/inbox-item-key.js'
@@ -197,11 +200,10 @@
     return item.status
   }
 
-  function statusClass(item: InboxItem): string {
-    if (!item.status || item.status === 'open') return item.severity === 'high' ? 'status-open-high' : 'status-open'
-    if (item.status === 'resolved') return 'status-resolved'
-    if (item.status === 'dismissed') return 'status-dismissed'
-    return 'status-neutral'
+  function statusTone(item: InboxItem): 'danger' | 'warn' | 'neutral' | 'ok' {
+    if (!item.status || item.status === 'open') return item.severity === 'high' ? 'danger' : 'warn'
+    if (item.status === 'resolved') return 'ok'
+    return 'neutral'
   }
 
   function itemTime(item: InboxItem): string {
@@ -252,11 +254,11 @@
           <h3 id="needs-you-alerts">Project alerts</h3>
           <span>{priorityItems.length}</span>
         </div>
-        <div class="item-list">
+        <CardList className="item-list">
           {#each priorityItems as item, i (inboxItemKey(item))}
             {@const handling = handlingIndex === items.indexOf(item)}
             {@const handler = AGENT_HANDLERS[item.kind]}
-            <UtilityPanel className="item-card" dense tone={toneFor(item)}>
+            <CardListItem className="inbox-row" dense tone={toneFor(item)} railTone={toneFor(item)}>
               <div class="item-head">
                 <span class="signal" aria-hidden="true">
                   <span class="dot dot-{item.severity}"></span>
@@ -282,7 +284,7 @@
                   </span>
                 </button>
                 <div class="meta">
-                  <span class={`status-pill ${statusClass(item)}`}>{statusLabel(item)}</span>
+                  <Chip label={statusLabel(item)} tone={statusTone(item)} />
                   <span class="time">{itemTime(item) || '—'}</span>
                 </div>
               </div>
@@ -312,9 +314,9 @@
                   </button>
                 {/if}
               </div>
-            </UtilityPanel>
+            </CardListItem>
           {/each}
-        </div>
+        </CardList>
       </section>
     {:else}
       <UtilityPanel tone="ok">
@@ -328,9 +330,9 @@
           <h3 id="needs-you-nudges">Optional nudges</h3>
           <span>{housekeepingItems.length}</span>
         </div>
-        <div class="item-list">
+        <CardList className="item-list">
           {#each housekeepingItems as item (inboxItemKey(item))}
-            <UtilityPanel className="item-card" dense tone="neutral">
+            <CardListItem className="inbox-row" dense tone="neutral">
               <div class="item-head">
                 <span class="signal" aria-hidden="true">
                   <span class="dot dot-{item.severity}"></span>
@@ -353,7 +355,7 @@
                   </span>
                 </button>
                 <div class="meta">
-                  <span class={`status-pill ${statusClass(item)}`}>{statusLabel(item)}</span>
+                  <Chip label={statusLabel(item)} tone={statusTone(item)} />
                   <span class="time">{itemTime(item) || '—'}</span>
                 </div>
               </div>
@@ -362,9 +364,9 @@
                   {actionVerb(item)} →
                 </button>
               </div>
-            </UtilityPanel>
+            </CardListItem>
           {/each}
-        </div>
+        </CardList>
       </section>
     {/if}
 
@@ -374,9 +376,9 @@
           <h3 id="needs-you-history">Recent history</h3>
           <span>{historyItems.length}</span>
         </div>
-        <div class="item-list">
+        <CardList className="item-list">
           {#each historyItems as item (inboxItemKey(item))}
-            <UtilityPanel className="item-card" dense tone={toneFor(item)}>
+            <CardListItem className="inbox-row" dense tone={toneFor(item)} railTone={toneFor(item)}>
               <div class="item-head">
                 <span class="signal" aria-hidden="true">
                   <span class="dot dot-{item.severity}"></span>
@@ -399,7 +401,7 @@
                   </span>
                 </button>
                 <div class="meta">
-                  <span class={`status-pill ${statusClass(item)}`}>{statusLabel(item)}</span>
+                  <Chip label={statusLabel(item)} tone={statusTone(item)} />
                   <span class="time">{itemTime(item) || '—'}</span>
                 </div>
               </div>
@@ -408,9 +410,9 @@
                   {actionVerb(item)} →
                 </button>
               </div>
-            </UtilityPanel>
+            </CardListItem>
           {/each}
-        </div>
+        </CardList>
       </section>
     {/if}
 
@@ -499,26 +501,26 @@
     color: var(--text-muted);
     font-size: var(--gh-type-size-meta);
   }
-  .item-list {
-    display: grid;
-    gap: var(--s-2);
-  }
-  .item-card {
-    min-width: 0;
-  }
-  .item-head {
-    display: grid;
+  :global(.inbox-row) {
     grid-template-columns: auto minmax(0, 1fr) auto;
-    gap: var(--s-2);
+    column-gap: var(--s-3);
+    row-gap: var(--s-2);
     align-items: start;
   }
+  .item-head {
+    display: contents;
+  }
   .signal {
+    grid-column: 1;
+    grid-row: 1 / span 2;
     display: inline-flex;
     align-items: center;
     gap: var(--s-2);
     padding-top: 2px;
   }
   .item-main {
+    grid-column: 2;
+    grid-row: 1;
     display: block;
     min-width: 0;
     background: transparent;
@@ -535,11 +537,15 @@
     color: var(--accent);
   }
   .actions {
+    grid-column: 2;
+    grid-row: 2;
     display: inline-flex;
     align-items: center;
     justify-content: flex-start;
     flex-wrap: wrap;
     gap: var(--s-2);
+    justify-self: start;
+    text-align: left;
   }
   .actions.handling {
     opacity: 0.7;
@@ -601,9 +607,12 @@
     gap: 2px;
   }
   .meta {
+    grid-column: 3;
+    grid-row: 1;
     display: grid;
     gap: var(--s-1);
     justify-items: end;
+    align-self: start;
   }
   .title {
     font-weight: var(--gh-type-weight-strong);
@@ -632,30 +641,6 @@
     text-transform: uppercase;
     letter-spacing: 0.04em;
   }
-  .status-pill {
-    border: 1px solid var(--border);
-    border-radius: 999px;
-    padding: 2px var(--s-2);
-    font-size: var(--gh-type-size-caption);
-    font-weight: var(--gh-type-weight-strong);
-    white-space: nowrap;
-  }
-  .status-open-high {
-    color: var(--danger);
-    border-color: color-mix(in srgb, var(--danger) 45%, var(--border));
-  }
-  .status-open {
-    color: var(--warn);
-    border-color: color-mix(in srgb, var(--warn) 45%, var(--border));
-  }
-  .status-resolved {
-    color: var(--ok);
-    border-color: color-mix(in srgb, var(--ok) 45%, var(--border));
-  }
-  .status-dismissed,
-  .status-neutral {
-    color: var(--text-muted);
-  }
   .time {
     color: var(--text-muted);
     font-size: var(--gh-type-size-meta);
@@ -665,17 +650,33 @@
     .threads-note {
       grid-template-columns: 1fr;
     }
-    .item-head {
+    :global(.inbox-row) {
       grid-template-columns: auto minmax(0, 1fr);
+    }
+    .item-head {
+      display: contents;
+    }
+    .signal {
+      grid-column: 1;
+      grid-row: 1;
+    }
+    .item-main {
+      grid-column: 2;
+      grid-row: 1;
     }
     .meta {
       grid-column: 2;
+      grid-row: 2;
       justify-items: start;
       grid-auto-flow: column;
       align-items: center;
     }
     .actions {
-      padding-left: calc(var(--s-2) + 16px);
+      grid-column: 2;
+      grid-row: 3;
+      justify-content: flex-start;
+      justify-self: start;
+      text-align: left;
     }
   }
 </style>

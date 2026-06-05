@@ -28,7 +28,7 @@
         </span>
         <p>
           {state === 'accepted'
-            ? 'The setup map was accepted. Guildhall keeps review evidence here only when it may explain or correct the current map.'
+            ? 'The setup map was accepted. Review evidence stays here only when it may explain or correct the current map.'
             : 'The setup map still needs owner review before it should be treated as routing truth.'}
         </p>
       </div>
@@ -73,7 +73,7 @@
                 <h3>Ignored dependency folders</h3>
                 <StructureHelpTip
                   label="Ignored dependency folders"
-                  text="Guildhall found nested dependency or vendored folders while mapping the repo and skipped them on purpose. For Jess, node_modules is ignored so installed packages do not become fake work areas."
+                  text="Nested dependency or vendored folders were skipped on purpose while mapping the repo. For Jess, node_modules is ignored so installed packages do not become fake work areas."
                 />
               </span>
               <ul class="mini-list">

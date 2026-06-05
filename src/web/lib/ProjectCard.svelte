@@ -39,7 +39,7 @@
 
   const displayStatusLabel = $derived(optimisticRunning ? 'Starting' : summary.statusLabel)
   const statusTitle = $derived(summary.projectCheckIn?.needed
-    ? summary.projectCheckIn.detail ?? 'Answer the first project questions so Guildhall can use current project context.'
+    ? summary.projectCheckIn.detail ?? 'Answer the first project questions so current project context can be used.'
     : `Project status: ${displayStatusLabel}`)
   const showMaturityChip = $derived(
     !summary.projectCheckIn?.needed &&
@@ -110,7 +110,7 @@
   }
 
   function activeTooltip(count = summary.counts.active): string {
-    return `${count} active ${taskNoun(count, 'task')}: work Guildhall can currently advance or is advancing.`
+    return `${count} active ${taskNoun(count, 'task')}: work that can currently advance or is advancing.`
   }
 
   function draftTooltip(count = summary.counts.draftReview): string {
@@ -130,7 +130,7 @@
   }
 
   function totalTooltip(count = summary.counts.total): string {
-    return `${count} total ${taskNoun(count, 'task')} tracked by Guildhall for this project.`
+    return `${count} total ${taskNoun(count, 'task')} tracked for this project.`
   }
 
   function guildMemberTooltip(member: { role: string; active: boolean }): string {

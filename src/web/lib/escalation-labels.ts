@@ -114,9 +114,9 @@ export function escalationUserGuidance(
   if (/\bAC-\d+\b/i.test(text) && /\bevidence\b/i.test(text)) {
     const area = inferEvidenceArea(text)
     return {
-      title: 'Guildhall needs to run one missing check.',
-      detail: `This is not asking you to prove anything. The ${area} task needs a saved frontend test result before Guildhall can mark it finished.`,
-      nextStep: 'Use the Guildhall action on this card. Guildhall will resume the task, run or refresh the relevant tests, save the result, and continue. Only add the result yourself if you already ran the check outside Guildhall.',
+      title: 'One missing check needs to run.',
+      detail: `This is not asking you to prove anything. The ${area} task needs a saved frontend test result before it can be marked finished.`,
+      nextStep: 'Use the recovery action on this card. The task will resume, run or refresh the relevant tests, save the result, and continue. Only add the result yourself if you already ran the check outside the app.',
       actionOwner: 'guildhall',
     }
   }
@@ -124,7 +124,7 @@ export function escalationUserGuidance(
   if (/authoritative verification|upstream workspace build failure|checkpoint-touched|task worktree/i.test(text)) {
     return {
       title: 'The project build is failing outside this task.',
-      detail: 'Guildhall tried to verify the task, but the failure appears to come from nearby workspace code rather than the focused files for this work.',
+      detail: 'The task was verified, but the failure appears to come from nearby workspace code rather than the focused files for this work.',
       nextStep: 'Decide how to handle that mismatch: use Reframe task if the task itself is unclear, fix the unrelated build first if it is real project debt, or retry gates after the build issue is addressed.',
       actionOwner: 'user',
     }
@@ -132,9 +132,9 @@ export function escalationUserGuidance(
 
   if (escalation?.reason === 'gate_hard_failure') {
     return {
-      title: 'Guildhall can retry the gates.',
-      detail: 'The task is waiting on automated verification. If the underlying issue has been addressed, Guildhall can close this blocker and run the gates again.',
-      nextStep: 'Use Retry gates to close this blocker and let Guildhall run the gate-check step again.',
+      title: 'Gate checks can be retried.',
+      detail: 'The task is waiting on automated verification. If the underlying issue has been addressed, this blocker can be closed and the gates can run again.',
+      nextStep: 'Use Retry gates to close this blocker and run the gate-check step again.',
       actionOwner: 'guildhall',
     }
   }
@@ -144,9 +144,9 @@ export function escalationUserGuidance(
     /timed out|turn limit|maximum turn|no visible progress|model provider|provider unavailable|local model/i.test(text)
   ) {
     return {
-      title: 'Guildhall can retry the worker.',
-      detail: 'The last worker attempt stalled before it finished useful work. This is a Guildhall recovery step, not something you need to solve by hand.',
-      nextStep: 'Use Retry worker to close this blocker and let Guildhall try again. Use Reframe task only if the task itself is wrong, too broad, or unclear.',
+      title: 'Worker execution can be retried.',
+      detail: 'The last worker attempt stalled before it finished useful work. This is an automatic recovery step, not something you need to solve by hand.',
+      nextStep: 'Use Retry worker to close this blocker and try again. Use Reframe task only if the task itself is wrong, too broad, or unclear.',
       actionOwner: 'guildhall',
     }
   }
@@ -156,9 +156,9 @@ export function escalationUserGuidance(
     /timed out|turn limit|maximum turn|kept researching|durable progress/i.test(text)
   ) {
     return {
-      title: 'Guildhall can retry spec shaping.',
+      title: 'Spec shaping can be retried.',
       detail: 'The spec lane stalled before saving the next useful draft. This is not a project decision you need to solve by hand.',
-      nextStep: 'Use Retry spec to close this blocker and let Guildhall shape the task again from the transcript. Use Reframe task if the task is too broad or pointed at the wrong work.',
+      nextStep: 'Use Retry spec to close this blocker and shape the task again from the transcript. Use Reframe task if the task is too broad or pointed at the wrong work.',
       actionOwner: 'guildhall',
     }
   }
@@ -168,7 +168,7 @@ export function escalationUserGuidance(
   return {
     title: hasSpecificRecovery ? recovery.headline : 'This task needs a recovery decision.',
     detail: hasSpecificRecovery ? recovery.detail : recovery.headline,
-    nextStep: 'Choose the action that matches what you know: resume Guildhall if it can continue, rework the spec if the brief is unclear, or mark it resolved only if you already handled the blocker outside Guildhall.',
+    nextStep: 'Choose the action that matches what you know: resume if the task can continue, rework the spec if the brief is unclear, or mark it resolved only if you already handled the blocker outside the app.',
     actionOwner: 'user',
     technicalNote: details && !hasInternalRecoveryLanguage(details) ? stripInternalAcceptanceIds(details) : undefined,
   }
@@ -184,7 +184,7 @@ export function escalationRecoveryCopy(
   const text = `${escalation?.summary ?? ''}\n${escalation?.details ?? ''}`
   if (/no visible progress|made no visible progress|no saved (?:spec|draft)|no durable (?:draft|update)/i.test(text)) {
     return {
-      headline: 'Guildhall found context but did not save the next draft.',
+      headline: 'Context was found, but the next draft was not saved.',
       detail: 'The transcript may contain useful observations. Retry from those notes or resolve the blocker after reviewing them.',
     }
   }
@@ -194,7 +194,7 @@ export function escalationRecoveryCopy(
   ) {
     return {
       headline: 'Spec shaping stopped before saving the next draft.',
-      detail: 'Guildhall can retry from the transcript notes or reframe the task if the request is too broad.',
+      detail: 'Retry from the transcript notes, or reframe the task if the request is too broad.',
     }
   }
   const role = roleLabel(escalation?.agentId)
@@ -219,9 +219,9 @@ export function escalationPrimaryAction(
   const text = `${escalation?.summary ?? ''}\n${escalation?.details ?? ''}`
   if (/\bAC-\d+\b/i.test(text) && /\bevidence\b/i.test(text)) {
     return {
-      label: 'Let Guildhall run the check',
+      label: 'Run the missing check',
       nextStatus: 'ready',
-      resolution: 'Resume the task so Guildhall can run the missing verification check, save the result, and continue.',
+      resolution: 'Resume the task so the missing verification check can run, save the result, and continue.',
     }
   }
   if (reason === 'gate_hard_failure') {

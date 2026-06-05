@@ -192,8 +192,8 @@ bounded on purpose: no full repo crawl, no surprise rewrite, and no expensive
 deep dive until the task reaches the moment where that lens matters.
 
 That keeps learning useful without making the product spooky. You can inspect
-what Guildhall wants to remember in **Settings -> Memory**, choose whether it
-applies here or everywhere, and ignore suggestions that were only true once.
+what Guildhall wants to remember in the memory review surfaces, choose whether
+it applies here or everywhere, and ignore suggestions that were only true once.
 
 Recovery uses the same trail. When a worker gets stuck, Guildhall can reread
 the right files, retry a bounded step, ask a sharper question, or turn the

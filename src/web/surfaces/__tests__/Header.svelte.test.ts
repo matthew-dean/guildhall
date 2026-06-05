@@ -5,6 +5,7 @@ import userEvent from '@testing-library/user-event'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import Header from '../Header.svelte'
+import headerSource from '../Header.svelte?raw'
 import { path } from '../../lib/nav.svelte.js'
 import { project } from '../../lib/project.svelte.js'
 
@@ -57,8 +58,8 @@ describe('Header', () => {
     render(Header)
 
     expect(screen.getByRole('button', { name: /projects home/i })).toHaveTextContent('Guildhall')
-    expect(document.querySelector('.brand-mark img')).not.toBeInTheDocument()
-    expect(document.querySelector('.brand-glyph')).toBeInTheDocument()
+    expect(document.querySelector('.brand-mark img')).toHaveAttribute('src', '/icons/genfavicon-64.png')
+    expect(document.querySelector('.brand-glyph')).not.toBeInTheDocument()
     expect(screen.getByText('Looma knit')).toBeInTheDocument()
     await screen.findByText('v0.5.1')
 
@@ -69,6 +70,16 @@ describe('Header', () => {
     expect(window.location.pathname).toBe('/')
 
     window.removeEventListener('guildhall:toggle-project-nav', toggleSpy)
+  })
+
+  it('keeps the real brand image without wrapping it in a filled app tile', () => {
+    const brandMarkBlock = headerSource.match(/\.brand-mark\s*\{(?<body>[^}]*)\}/s)?.groups?.body ?? ''
+
+    expect(headerSource).toContain('<img src="/icons/genfavicon-64.png" alt="" />')
+    expect(brandMarkBlock).not.toContain('background:')
+    expect(brandMarkBlock).not.toContain('box-shadow:')
+    expect(brandMarkBlock).not.toContain('border-radius:')
+    expect(headerSource).not.toContain('brand-glyph')
   })
 
   it('hides the project-nav hamburger while compact thread detail is active', async () => {

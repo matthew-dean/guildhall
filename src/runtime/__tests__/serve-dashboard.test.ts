@@ -8,6 +8,8 @@ describe('dashboardHtml', () => {
 
     expect(html).toContain('<title>Guildhall</title>')
     expect(html).toContain('<link rel="icon" href="/favicon.ico" sizes="any" />')
+    expect(html).toContain('<link rel="icon" type="image/png" sizes="32x32" href="/icons/genfavicon-32.png" />')
+    expect(html).toContain('<link rel="icon" type="image/png" sizes="16x16" href="/icons/genfavicon-16.png" />')
     expect(html).toContain('<link rel="apple-touch-icon" href="/apple-touch-icon.png" />')
     expect(html).toContain('<link rel="manifest" href="/site.webmanifest" />')
     expect(html).toContain('<div id="svelte-root"></div>')

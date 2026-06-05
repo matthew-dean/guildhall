@@ -86,6 +86,8 @@
   let sortDir = $state<SortDir>('desc')
   let routeWorkView = $state<WorkView>('list')
   let workFilter = $state<WorkFilter>('queued')
+  let workFilterUserSelected = $state(false)
+  let workFilterProjectId = $state<string | null>(null)
 
   const viewOptions = [
     { value: 'columns', label: 'Columns' },
@@ -94,7 +96,7 @@
   ]
 
   const workFilterOptions = [
-    { value: 'queued', label: 'Queued work' },
+    { value: 'queued', label: 'Ready to run' },
     { value: 'planning', label: 'Planning' },
     { value: 'open', label: 'Open' },
     { value: 'all', label: 'All' },
@@ -227,7 +229,7 @@
   }
 
   function emptyFilterTitle(): string {
-    if (workFilter === 'queued') return 'No queued work yet.'
+    if (workFilter === 'queued') return 'No work is ready to run yet.'
     if (workFilter === 'planning') return 'No planning work.'
     if (workFilter === 'blocked') return 'No blocked work.'
     if (workFilter === 'needs-you') return 'Nothing needs you.'
@@ -235,10 +237,10 @@
   }
 
   function emptyFilterDetail(): string {
-    if (workFilter === 'queued') return 'Guildhall is still shaping this project. Use Planning to inspect intake and spec work.'
-    if (workFilter === 'planning') return 'Planning, intake, and spec items will appear here when Guildhall is shaping them.'
+    if (workFilter === 'queued') return 'Planning and review work is still waiting. Use Planning to inspect intake and spec work.'
+    if (workFilter === 'planning') return 'Planning, intake, and spec items will appear here while they are being shaped.'
     if (workFilter === 'blocked') return 'Blocked work will appear here once a task cannot continue.'
-    if (workFilter === 'needs-you') return 'Questions and owner-held work will appear here when Guildhall needs input.'
+    if (workFilter === 'needs-you') return 'Questions and owner-held work will appear here when input is needed.'
     return 'Adjust the filter to inspect a different slice of the project.'
   }
 
@@ -256,6 +258,13 @@
     if (workFilter === 'blocked') return task.status === 'blocked'
     if (workFilter === 'needs-you') return hasOpenQuestion(task)
     return false
+  }
+
+  function defaultWorkFilterForTasks(): WorkFilter {
+    if (tasks.some(isQueuedWorkTask)) return 'queued'
+    if (tasks.some(isPlanningTask)) return 'planning'
+    if (tasks.some(task => task.status === 'blocked')) return 'blocked'
+    return 'queued'
   }
 
   function taskPresentation(task: Task) {
@@ -365,8 +374,22 @@
   }
 
   function onWorkFilterSelect(value: string): void {
+    workFilterUserSelected = true
     workFilter = value as WorkFilter
   }
+
+  $effect(() => {
+    const projectId = detail.id ?? null
+    const taskSignature = tasks.map(task => `${task.id}:${task.status ?? ''}`).join('|')
+    taskSignature
+    if (projectId !== workFilterProjectId) {
+      workFilterProjectId = projectId
+      workFilterUserSelected = false
+    }
+    if (!workFilterUserSelected) {
+      workFilter = defaultWorkFilterForTasks()
+    }
+  })
 </script>
 
 <div class="work-list-view">

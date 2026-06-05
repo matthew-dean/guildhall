@@ -181,7 +181,7 @@ describe('ProjectOverviewTab', () => {
           kind: 'project_understanding',
           severity: 'high',
           title: 'Review project discovery update',
-          detail: 'Guildhall can now scan more planning docs and migrations. Review the reconciliation so it can update or dismiss stale imported work.',
+          detail: 'More planning docs and migrations can now be scanned. Review the reconciliation to update or dismiss stale imported work.',
           actionHref: '/workspace-import?mode=reconcile',
         },
       ],
@@ -226,7 +226,7 @@ describe('ProjectOverviewTab', () => {
           kind: 'project_understanding',
           severity: 'high',
           title: 'Review project discovery update',
-          detail: 'Guildhall can now scan more planning docs and migrations.',
+          detail: 'More planning docs and migrations can now be scanned.',
           actionHref: '/workspace-import?mode=reconcile',
         },
         {
@@ -262,7 +262,7 @@ describe('ProjectOverviewTab', () => {
         startReadiness: {
           canStart: false,
           code: 'no_unattended_progress',
-          message: '1 task needs a clearer brief and acceptance criteria before Guildhall can build unattended.',
+          message: 'One task needs a clearer brief and acceptance criteria before unattended work can run.',
           actionHref: '/thread',
         },
         tasks: [
@@ -325,7 +325,7 @@ describe('ProjectOverviewTab', () => {
       activeProjectId: 'commerce-project',
     })
 
-    expect(screen.getByText('Run the required Guildhall migration before creating or running work.')).toBeInTheDocument()
+    expect(screen.getByText('Run the required migration before creating or running work.')).toBeInTheDocument()
     expect(screen.getByText('The next run is blocked until the required migration is applied.')).toBeInTheDocument()
     expect(screen.getByRole('button', { name: 'Migrate project' }).querySelector('svg')).toBeInTheDocument()
     expect(screen.queryByText('No tasks yet. Create a request when you are ready.')).not.toBeInTheDocument()
@@ -706,6 +706,122 @@ describe('ProjectOverviewTab', () => {
       expect(screen.getByRole('button', { name: /Project graph 0 connected projects/i })).toBeInTheDocument()
       expect(screen.getByText('1 graph domain · 1 contract surface · 0 open dependency requests')).toBeInTheDocument()
     })
+  })
+
+  it('puts the primary next action in a full-width priority row before secondary overview cards', () => {
+    const { container } = render(ProjectOverviewTab, {
+      detail: {
+        id: 'looma-knit',
+        name: 'Looma + Knit',
+        path: '/Users/matthew/git/oss/looma-knit',
+        tasks: [
+          { id: 'task-active', title: 'Finish reviewer routing', status: 'in_progress' },
+          { id: 'task-ready', title: 'Document next proof', status: 'ready' },
+        ],
+        actionModel: {
+          primaryAction: {
+            source: 'task',
+            label: 'Finish reviewer routing',
+            detail: 'Keep the active implementation moving before starting other work.',
+            buttonLabel: 'Open Work',
+            href: '/work',
+            tone: 'accent',
+          },
+          secondaryActions: [],
+          runControl: { label: 'Resume', startEnabled: true },
+          ownerInput: { active: false },
+          setup: { state: 'ready', freshIntakeNeeded: false },
+        },
+      },
+      inboxLoaded: true,
+      inboxItems: [],
+      projectTicker: {
+        label: 'Live',
+        actorLabel: 'Guildhall',
+        message: 'Project is running.',
+        tone: 'active',
+        pulse: true,
+      },
+      activeProjectId: 'looma-knit',
+    })
+
+    const priority = container.querySelector('.overview-priority')
+    expect(priority).toBeTruthy()
+    expect(priority?.querySelector('.next-action')).toBeTruthy()
+    expect(priority?.querySelector('.motion-list')).toBeFalsy()
+
+    const nextHeading = priority?.querySelector('.next-action h2')
+    expect(nextHeading).toHaveTextContent('Finish reviewer routing')
+
+    const firstGrid = container.querySelector('.overview-grid')
+    expect(firstGrid?.querySelector('.motion-list')).toBeTruthy()
+  })
+
+  it('routes knowledge summary sections to their logical project surfaces', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => json({
+      projectGraph: {
+        currentProject: { id: 'guildhall', label: 'Guildhall' },
+        localProjects: [{ id: 'guildhall', label: 'Guildhall', role: 'current' }],
+        structuralDomains: [{ id: 'domain:runtime', label: 'Runtime' }],
+        dependencyEdges: [],
+        contractSurfaces: [{ id: 'surface:overview', label: 'Overview summary model' }],
+      },
+    })))
+
+    window.history.replaceState({}, '', '/projects/guildhall/overview')
+    render(ProjectOverviewTab, {
+      detail: {
+        id: 'guildhall',
+        name: 'Guildhall',
+        path: '/Users/matthew/git/oss/guildhall',
+        runtime: { status: 'stopped', health: { status: 'healthy' }, migration: { mode: 'host-run' } },
+        memoryHealth: { active: 2, proposed: 0 },
+        tasks: [
+          {
+            id: 'task-proof',
+            title: 'Verify overview links',
+            status: 'ready',
+            proofPaths: [{ id: 'proof-route', title: 'Rendered route smoke', status: 'pending' }],
+          },
+        ],
+        structuralMapReview: {
+          state: 'accepted',
+          counts: { domains: 1, crossCuttingDomains: 0, packages: 1, executableUnits: 1 },
+        },
+        recentEvents: [{ type: 'task.updated', taskId: 'task-proof', createdAt: '2026-06-04T12:00:00.000Z' }],
+      },
+      inboxLoaded: true,
+      inboxItems: [],
+      projectTicker: {
+        label: 'Not running',
+        actorLabel: 'Guildhall',
+        message: 'Project is waiting.',
+        tone: 'idle',
+        pulse: false,
+      },
+      activeProjectId: 'guildhall',
+    })
+
+    await fireEvent.click(screen.getByRole('button', { name: /Work 1 total task/i }))
+    expect(window.location.pathname).toBe('/projects/guildhall/work')
+
+    await fireEvent.click(screen.getByRole('button', { name: /Structure Accepted/i }))
+    expect(window.location.pathname).toBe('/projects/guildhall/structure')
+
+    await waitFor(() => {
+      expect(screen.getByRole('button', { name: /Project graph 0 connected projects/i })).toBeInTheDocument()
+    })
+    await fireEvent.click(screen.getByRole('button', { name: /Project graph 0 connected projects/i }))
+    expect(window.location.pathname).toBe('/projects/guildhall/structure')
+
+    await fireEvent.click(screen.getByRole('button', { name: /Runtime Runtime stopped/i }))
+    expect(window.location.pathname).toBe('/projects/guildhall/settings/ready')
+
+    await fireEvent.click(screen.getByRole('button', { name: /Proof 1 tracked proof path/i }))
+    expect(window.location.pathname).toBe('/projects/guildhall/work')
+
+    await fireEvent.click(screen.getByRole('button', { name: /History 1 recent change/i }))
+    expect(window.location.pathname).toBe('/projects/guildhall/timeline')
   })
 
   it('surfaces structural map review facts for owner inspection', () => {

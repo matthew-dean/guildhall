@@ -133,8 +133,8 @@ describe('AgentQuestion', () => {
 
     expect(screen.getByText('Reply')).toBeInTheDocument()
     expect(screen.getByText('Question missing')).toBeInTheDocument()
-    expect(screen.getByText('Tell Guildhall what you want it to do next.')).toBeInTheDocument()
-    expect(screen.getByText('What Guildhall found')).toBeInTheDocument()
+    expect(screen.getByText('Say what should happen next.')).toBeInTheDocument()
+    expect(screen.getByText('What was found')).toBeInTheDocument()
     expect(screen.queryByRole('button', { name: /cursor\/plan\.md/ })).not.toBeInTheDocument()
 
     await user.type(screen.getByRole('textbox'), 'Use Python only and stop trying to continue the Rust slice.')
@@ -306,7 +306,7 @@ describe('AgentQuestion', () => {
     })
 
     expect(screen.getByText('Confirm only if needed')).toBeInTheDocument()
-    expect(screen.getByText('Guildhall inferred this structure from the repo. Confirm it only if it looks materially wrong.')).toBeInTheDocument()
+    expect(screen.getByText('This structure was inferred from the repo. Confirm it only if it looks materially wrong.')).toBeInTheDocument()
     expect(screen.getByText('looma')).toBeInTheDocument()
     expect(screen.getByText('component library')).toBeInTheDocument()
     expect(screen.getByText('Spec author')).toBeInTheDocument()
@@ -340,7 +340,7 @@ describe('AgentQuestion', () => {
       onAnswer: vi.fn(),
     })
 
-    expect(screen.getByText('Guildhall found planning notes across several project documents. Which of these should become real tasks? Choose all that apply.')).toBeInTheDocument()
+    expect(screen.getByText('Planning notes were found across several project documents. Which of these should become real tasks? Choose all that apply.')).toBeInTheDocument()
     expect(screen.getByText('Choose any')).toBeInTheDocument()
   })
 })

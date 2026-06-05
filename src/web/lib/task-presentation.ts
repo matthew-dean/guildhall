@@ -84,7 +84,7 @@ function specRevisionQueued(input: TaskPresentationInput): boolean {
     checklist: input.checklist,
     phase: input.phase,
   }) || (
-    taskStatus(input) === 'exploring' &&
+    (taskStatus(input) === 'exploring' || taskStatus(input) === 'spec_review') &&
     !input.importedDraft &&
     !input.liveAgent &&
     !hasOpenQuestion(input) &&
@@ -132,6 +132,13 @@ export function taskStagePresentation(
       return runIsActive(options)
         ? { key: 'queued', label: 'Queued', tone: 'running' }
         : { key: 'paused', label: 'Paused', tone: 'neutral' }
+    case 'spec_review':
+      if (specRevisionQueued(input)) {
+        return runIsActive(options)
+          ? { key: 'queued', label: 'Queued', tone: 'running' }
+          : { key: 'paused', label: 'Paused', tone: 'neutral' }
+      }
+      return { key: 'spec_review', label: friendlyStatus(status), tone: 'warn' }
     case 'ready':
       if (needsWorkerHandoffSpecCleanup({ ...input, taskStatus: status })) {
         return { key: 'needs_brief', label: 'Needs brief', tone: 'warn' }

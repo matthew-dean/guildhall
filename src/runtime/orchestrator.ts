@@ -1802,6 +1802,33 @@ function agentWallClockTimeoutMessage(agentName: string, timeoutMs: number): str
 
 type CheckpointResumeContext = NonNullable<Checkpoint['resumeContext']>
 
+function taskExplicitlyOwnsBootstrapRepair(task: Task): boolean {
+  const recentNotes = (task.notes ?? []).slice(-8).map((note) => note.content)
+  const haystack = [
+    task.title,
+    task.description ?? '',
+    task.spec ?? '',
+    task.blockReason ?? '',
+    ...recentNotes,
+  ].join('\n').toLowerCase()
+  const mentionsBootstrapFailure =
+    haystack.includes('bootstrap') ||
+    haystack.includes('setup failure') ||
+    haystack.includes('setup/implementation') ||
+    haystack.includes('success gate') ||
+    haystack.includes('pnpm lint')
+  if (!mentionsBootstrapFailure) return false
+  return (
+    haystack.includes('task-local bootstrap') ||
+    haystack.includes('task-local setup') ||
+    haystack.includes('inside this task') ||
+    haystack.includes('inside this task branch') ||
+    haystack.includes('not as an owner decision') ||
+    haystack.includes('not an owner decision') ||
+    haystack.includes('setup/implementation work')
+  )
+}
+
 function uniqueNonEmptyStrings(values: Iterable<string>): string[] {
   const seen = new Set<string>()
   const ordered: string[] = []
@@ -2823,8 +2850,8 @@ export class Orchestrator {
     // the project's bootstrap inside the worktree so the worker lands in a
     // testable state. Status is stored per-worktree under `<wt>/.guildhall/`
     // so the project's shared memory isn't trampled and the cache disappears
-    // naturally when the worktree is cleaned up. A failure here aborts the
-    // dispatch — better to surface it than hand the worker a broken tree.
+    // naturally when the worktree is cleaned up. Environment failures block,
+    // but task-owned repair failures are handed to the worker with evidence.
     const wtBootstrap = resolveEffectiveTaskBootstrapBlock({
       task,
       workspaceProjectPath: this.opts.config.projectPath,
@@ -2856,16 +2883,20 @@ export class Orchestrator {
           const failed = res.steps.find((s) => s.result === 'fail')
           const msg = `worktree bootstrap failed on ${failed?.kind ?? 'step'} \`${failed?.command ?? ''}\` (exit ${failed?.exitCode ?? '?'})`
           const dirtyTaskWorktree = !(await this.gitDriver.isClean(activeWorktreePath))
-          if (dirtyTaskWorktree) {
+          const queue = await this.readQueue()
+          const queuedTask = queue.tasks.find((candidate) => candidate.id === task.id)
+          const taskOwnsBootstrapRepair = taskExplicitlyOwnsBootstrapRepair(queuedTask ?? task)
+          if (dirtyTaskWorktree || taskOwnsBootstrapRepair) {
             const now = this.now()
             const output = String(failed?.output ?? '').trim()
             const clippedOutput = output.length > 1800 ? `${output.slice(0, 1800)}\n...` : output
+            const handoffReason = dirtyTaskWorktree
+              ? 'The task worktree already has edits, so Guildhall is handing the failing verification back to the worker instead of blocking setup.'
+              : 'The task explicitly asks Guildhall to repair this bootstrap failure, so Guildhall is handing the failing setup proof to the worker instead of blocking before dispatch.'
             const content = [
-              `${msg}. The task worktree already has edits, so Guildhall is handing the failing verification back to the worker instead of blocking setup.`,
+              `${msg}. ${handoffReason}`,
               clippedOutput ? `\nVerification output:\n${clippedOutput}` : '',
             ].filter(Boolean).join('\n')
-            const queue = await this.readQueue()
-            const queuedTask = queue.tasks.find((candidate) => candidate.id === task.id)
             if (queuedTask) {
               const alreadyLogged = queuedTask.notes.slice(-3).some((note) =>
                 note.role === 'bootstrap-verification' &&
@@ -2904,50 +2935,48 @@ export class Orchestrator {
               observedAt: now,
             })
           } else {
-          const queue = await this.readQueue()
-          const queuedTask = queue.tasks.find((candidate) => candidate.id === task.id)
-          const now = this.now()
-          if (queuedTask) {
-            transitionTaskStatus({
-              task: queuedTask,
-              event: 'block',
-              actor: 'orchestrator-worktree-bootstrap',
-              evidenceRefs: ['task:worktree-bootstrap:failed'],
-              now,
+            const now = this.now()
+            if (queuedTask) {
+              transitionTaskStatus({
+                task: queuedTask,
+                event: 'block',
+                actor: 'orchestrator-worktree-bootstrap',
+                evidenceRefs: ['task:worktree-bootstrap:failed'],
+                now,
+              })
+              queuedTask.assignedTo = null
+              queuedTask.blockReason =
+                `Guildhall could not start work because task setup failed: ${msg}. ` +
+                'Fix the task bootstrap command or project install state, then resume the task.'
+              queuedTask.notes.push({
+                agentId: 'coordinator',
+                role: 'bootstrap-failure',
+                content:
+                  `Blocked after repeated task setup failure. ${msg}. ` +
+                  'Guildhall stopped retrying until a human fixes the environment and resumes the task.',
+                timestamp: now,
+              })
+              queuedTask.updatedAt = now
+              queue.lastUpdated = now
+              await this.writeQueue(queue)
+            }
+            await this.logTickProgress({
+              task,
+              agent: agent.name,
+              beforeStatus,
+              afterStatus: 'blocked',
+              transitioned: true,
+              note: `error: ${msg}`,
             })
-            queuedTask.assignedTo = null
-            queuedTask.blockReason =
-              `Guildhall could not start work because task setup failed: ${msg}. ` +
-              'Fix the task bootstrap command or project install state, then resume the task.'
-            queuedTask.notes.push({
-              agentId: 'coordinator',
-              role: 'bootstrap-failure',
-              content:
-                `Blocked after repeated task setup failure. ${msg}. ` +
-                'Guildhall stopped retrying until a human fixes the environment and resumes the task.',
-              timestamp: now,
-            })
-            queuedTask.updatedAt = now
-            queue.lastUpdated = now
-            await this.writeQueue(queue)
-          }
-          await this.logTickProgress({
-            task,
-            agent: agent.name,
-            beforeStatus,
-            afterStatus: 'blocked',
-            transitioned: true,
-            note: `error: ${msg}`,
-          })
-          return {
-            kind: 'processed',
-            taskId: task.id,
-            agent: agent.name,
-            beforeStatus,
-            afterStatus: 'blocked',
-            transitioned: true,
-            revisionCount: task.revisionCount,
-          }
+            return {
+              kind: 'processed',
+              taskId: task.id,
+              agent: agent.name,
+              beforeStatus,
+              afterStatus: 'blocked',
+              transitioned: true,
+              revisionCount: task.revisionCount,
+            }
           }
         }
       }

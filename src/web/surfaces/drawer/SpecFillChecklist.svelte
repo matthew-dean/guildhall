@@ -121,7 +121,7 @@
       <div class="summary">
         <strong>Task brief checklist</strong>
         <span class="muted">
-          {wizard.doneCount} of {wizard.totalSteps} — finish this so Guildhall can review the task cleanly
+          {wizard.doneCount} of {wizard.totalSteps} — finish this so the task can be reviewed cleanly
         </span>
       </div>
       <button

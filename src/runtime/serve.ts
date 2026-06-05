@@ -914,10 +914,10 @@ function projectCheckInSummaryFromState(
         ? 'Project questions in progress'
         : 'Project questions answered',
     detail: needed
-      ? 'Guildhall has not generated the first project questions yet. Start the check-in pass so it can ask one clear question at a time.'
+      ? 'The first project questions have not been generated yet. Start the check-in pass so it can ask one clear question at a time.'
       : activeCount > 0
         ? 'Keep answering the current project questions in Thread.'
-        : 'Guildhall has already recorded project-level answers for this workspace.',
+        : 'Project-level answers are already recorded for this workspace.',
     actionHref: '/thread',
     totalCount: intakes.length,
     activeCount,
@@ -928,17 +928,17 @@ function projectCheckInSummaryFromState(
 function newRequestRoutingSummary(kind: string): string {
   switch (kind) {
     case 'project_question':
-      return 'Guildhall saved this as a project question.'
+      return 'Saved as a project question.'
     case 'settings_proposal':
-      return 'Guildhall is shaping this settings change before it writes project state.'
+      return 'This settings change is being shaped before project state changes.'
     case 'persona_practice_proposal':
-      return 'Guildhall is shaping this practice proposal before it changes reviewer behavior.'
+      return 'This practice proposal is being shaped before reviewer behavior changes.'
     case 'repair_triage':
-      return 'Guildhall is triaging this repair request before it creates runnable work.'
+      return 'This repair request is being triaged before it becomes runnable work.'
     case 'clarification':
-      return 'Guildhall needs one clearer outcome before it creates work.'
+      return 'One clearer outcome is needed before this becomes work.'
     default:
-      return 'Guildhall is shaping this request into a task brief.'
+      return 'This request is being shaped into a task brief.'
   }
 }
 
@@ -1254,7 +1254,7 @@ function releaseDesignSystemStatus(
       source: 'guildhall',
       label: approved ? `approved · rev ${ds.revision ?? 0}` : `draft · rev ${ds.revision ?? 0}`,
       reason: approved
-        ? 'Guildhall has an approved design guardrail for this project.'
+        ? 'This project has an approved design guardrail.'
         : 'A design guardrail is drafted but still needs approval.',
     }
   }
@@ -1566,7 +1566,7 @@ function isProviderCapacityEventMessage(value: string): boolean {
 function providerCapacityEventLabel(value: string): string {
   const retry = value.match(/retrying in ([\d.]+)s \(attempt (\d+) of (\d+)\)/i)
   if (retry) return `Provider busy; retrying in ${retry[1]}s (attempt ${retry[2]} of ${retry[3]}).`
-  if (/retryable provider throttle/i.test(value)) return 'Provider busy; Guildhall will resume this task later.'
+  if (/retryable provider throttle/i.test(value)) return 'Provider busy; this task can resume later.'
   if (/Agent .* failed on .*API error/i.test(value)) return 'Provider busy; this agent turn stopped.'
   if (/API error/i.test(value)) return 'Provider busy; request failed after retries.'
   return 'Provider busy; retry later.'
@@ -3591,7 +3591,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
       severity: 'warn',
       message:
         `${input.scope} model overrides are configured for ${configuredLabels}, but this project is set to use ${preferredLabel}. ` +
-        `Guildhall will use ${preferredLabel} defaults unless you switch providers or configure models for ${preferredLabel}.`,
+        `${preferredLabel} defaults will be used unless you switch providers or configure models for ${preferredLabel}.`,
     }
   }
 
@@ -3874,7 +3874,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
         code: 'no_provider',
         message:
           preflight.reason ??
-          'No provider configured. Open Providers to choose one before starting Guildhall.',
+          'No provider configured. Open Providers to choose one before starting.',
         actionHref: '/providers',
       }
     }
@@ -3896,7 +3896,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
           canStart: false,
           code: 'no_loaded_model',
           message:
-            'The configured local server is reachable, but Guildhall could not see a loaded model. To avoid surprise memory pressure from JIT loading, load the model you want on that server, then start again.',
+            'The configured local server is reachable, but no loaded model was visible. To avoid surprise memory pressure from JIT loading, load the model you want on that server, then start again.',
           actionHref: '/providers',
           loadedModels,
         }
@@ -3918,7 +3918,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
       code: 'model_unavailable',
       message:
         `The configured local server currently has ${loadedModels.join(', ')} loaded, but this project is configured for ${missingModels.join(', ')}. ` +
-        'Guildhall will not JIT-load missing models automatically; load the configured model on that server or choose a loaded model in Providers.',
+        'Missing models are not JIT-loaded automatically; load the configured model on that server or choose a loaded model in Providers.',
       actionHref: '/providers',
       loadedModels,
       missingModels,
@@ -4041,8 +4041,8 @@ export function buildServeApp(opts: ServeOptions = {}): {
       code: 'import_drafts_waiting',
       message:
         importDrafts.length === 1
-          ? `Review the imported draft "${title}" and turn it into a task brief before starting Guildhall.`
-          : `Review ${importDrafts.length} imported drafts before starting Guildhall. Start with "${title}".`,
+          ? `Review the imported draft "${title}" and turn it into a task brief before starting.`
+          : `Review ${importDrafts.length} imported drafts before starting. Start with "${title}".`,
       actionHref: id ? `/task/${encodeURIComponent(id)}` : '/notifications',
     }
   }
@@ -4092,8 +4092,8 @@ export function buildServeApp(opts: ServeOptions = {}): {
         code: 'no_unattended_progress',
         message:
           needsBriefCleanup === 1
-            ? 'One task needs a clearer brief and acceptance criteria before Guildhall can build unattended.'
-            : `${needsBriefCleanup} tasks need clearer briefs and acceptance criteria before Guildhall can build unattended.`,
+            ? 'One task needs a clearer brief and acceptance criteria before unattended work can run.'
+            : `${needsBriefCleanup} tasks need clearer briefs and acceptance criteria before unattended work can run.`,
         actionHref: '/work',
       }
     }
@@ -4103,8 +4103,8 @@ export function buildServeApp(opts: ServeOptions = {}): {
         code: 'no_unattended_progress',
         message:
           waitingForApproval === 1
-            ? 'Review the waiting spec before starting Guildhall.'
-            : `Review ${waitingForApproval} waiting specs before starting Guildhall.`,
+            ? 'Review the waiting spec before starting.'
+            : `Review ${waitingForApproval} waiting specs before starting.`,
         actionHref: '/thread',
       }
     }
@@ -4126,8 +4126,8 @@ export function buildServeApp(opts: ServeOptions = {}): {
       code: 'owner_input_required',
       message:
         waiting.length === 1
-          ? `${ownerInputObjectiveLabel(first.objective.label)} needs your answer before Guildhall can continue`
-          : `${waiting.length} owner decisions need your answer before Guildhall can continue`,
+          ? `${ownerInputObjectiveLabel(first.objective.label)} needs your answer before work can continue`
+          : `${waiting.length} owner decisions need your answer before work can continue`,
       actionHref: ownerInputActionHref(first),
     }
   }
@@ -4183,8 +4183,8 @@ export function buildServeApp(opts: ServeOptions = {}): {
         return c.json(
           {
             error: existingRun.status === 'running'
-              ? 'Guildhall is already running for this project. This task remains queued; stop the current run first if you need Guildhall to restart on this exact task.'
-              : 'Guildhall is stopping. Wait for it to stop before starting this specific task.',
+              ? 'A run is already active for this project. This task remains queued; stop the current run first if you need to restart on this exact task.'
+              : 'The run is stopping. Wait for it to stop before starting this specific task.',
             code: 'run_already_active',
             status: existingRun.status,
           },
@@ -4233,7 +4233,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
         }
         return c.json(
           {
-            error: startReadiness.message ?? 'Guildhall needs one thing resolved before it can start.',
+            error: startReadiness.message ?? 'One thing needs to be resolved before work can start.',
             code: startReadiness.code,
             actionHref: startReadiness.actionHref,
             loadedModels: startReadiness.loadedModels,
@@ -4277,7 +4277,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
             return c.json(
               {
                 error:
-                  'The configured local server is reachable, but Guildhall could not see a loaded model. To avoid surprise memory pressure from JIT loading, load the model you want on that server, then start again.',
+                  'The configured local server is reachable, but no loaded model was visible. To avoid surprise memory pressure from JIT loading, load the model you want on that server, then start again.',
                 code: 'no_loaded_model',
                 provider: 'llama-cpp',
               },
@@ -4294,13 +4294,13 @@ export function buildServeApp(opts: ServeOptions = {}): {
           effectiveProvider = paidFallback.providerName
           effectiveModels = defaultAssignmentForProvider(paidFallback.providerName) ?? resolvedConfig.models
           fallbackReason =
-            'Preferred local server had no loaded model available, so Guildhall switched to a paid fallback provider.'
+            'Preferred local server had no loaded model available, so the run switched to a paid fallback provider.'
           routingDecisions.push({
             code: 'preferred_provider_missing_loaded_model',
             severity: 'info',
             basis: 'availability',
             message:
-              'The preferred local server had no loaded model available, so Guildhall selected a fallback provider for this run.',
+              'The preferred local server had no loaded model available, so this run selected a fallback provider.',
           })
         }
         if (effectiveProvider === 'llama-cpp') {
@@ -4314,7 +4314,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
                 {
                   error:
                     `The configured local server currently has ${loadedModels.join(', ')} loaded, but this project is configured for ${missingModels.join(', ')}. ` +
-                    'Guildhall will not JIT-load missing models automatically; load the configured model on that server or choose a loaded model in Providers.',
+                    'Missing models are not JIT-loaded automatically; load the configured model on that server or choose a loaded model in Providers.',
                   code: 'model_unavailable',
                   provider: 'llama-cpp',
                   loadedModels,
@@ -4333,13 +4333,13 @@ export function buildServeApp(opts: ServeOptions = {}): {
             effectiveProvider = paidFallback.providerName
             effectiveModels = defaultAssignmentForProvider(paidFallback.providerName) ?? resolvedConfig.models
             fallbackReason =
-              'Preferred local server did not have the configured models loaded, so Guildhall switched to a paid fallback provider.'
+              'Preferred local server did not have the configured models loaded, so the run switched to a paid fallback provider.'
             routingDecisions.push({
               code: 'preferred_provider_missing_assigned_models',
               severity: 'info',
               basis: 'compatibility',
               message:
-                'The preferred local server did not have this project’s assigned models loaded, so Guildhall selected a fallback provider for this run.',
+                'The preferred local server did not have this project’s assigned models loaded, so this run selected a fallback provider.',
             })
           }
         }
@@ -4348,13 +4348,13 @@ export function buildServeApp(opts: ServeOptions = {}): {
         effectiveModels = defaultAssignmentForProvider(effectiveProvider) ?? effectiveModels
         if (effectiveProvider !== 'llama-cpp') {
           fallbackReason ??=
-            `Guildhall swapped to models that ${effectiveProvider} can actually serve for this run.`
+            `This run swapped to models that ${effectiveProvider} can actually serve.`
           routingDecisions.push({
             code: 'model_assignment_swapped_for_provider_compatibility',
             severity: 'info',
             basis: 'compatibility',
             message:
-              `Guildhall swapped to models that ${providerLabelForAnyKey(effectiveProvider)} can actually serve for this run.`,
+              `This run swapped to models that ${providerLabelForAnyKey(effectiveProvider)} can actually serve.`,
           })
         }
       }
@@ -4444,7 +4444,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
       const defaultDomain = coordinators[0]?.domain
       const domain = body.domain ?? defaultDomain
       if (!domain) {
-        return c.json({ error: 'Guildhall has not inferred repo structure here yet — run repo inspection first' }, 400)
+        return c.json({ error: 'Repo structure has not been inferred here yet - run repo inspection first' }, 400)
       }
       const result = await createExploringTask({
         memoryDir: getProjectStateDir(project.path),
@@ -4476,7 +4476,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
       const defaultDomain = coordinators[0]?.domain
       const domain = body.domain ?? defaultDomain
       if (!domain) {
-        return c.json({ error: 'Guildhall has not inferred repo structure here yet — run repo inspection first' }, 400)
+        return c.json({ error: 'Repo structure has not been inferred here yet - run repo inspection first' }, 400)
       }
       const routed = routeRequest({
         raw: body.ask,
@@ -4679,7 +4679,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
       }
       const coordinators = project.config?.coordinators ?? []
       if (coordinators.length === 0) {
-        return c.json({ error: 'Guildhall has not inferred repo structure here yet — run repo inspection first' }, 400)
+        return c.json({ error: 'Repo structure has not been inferred here yet - run repo inspection first' }, 400)
       }
       // Route by stack-trace top file when the reporter didn't pick a domain:
       // match the first frame's file path against each coordinator's `path`,

@@ -803,7 +803,7 @@
   <header class="head">
     <h2>Review existing project work</h2>
     <p class="sub">
-      Guildhall has already scanned the notes, roadmaps, and project docs it found here.
+      The notes, roadmaps, and project docs here have already been scanned.
       You are confirming what should be remembered as context and what should become backlog tasks.
     </p>
   </header>
@@ -825,7 +825,7 @@
           </div>
           <h3 class="section-title">Import review shelved</h3>
           <p class="section-copy">
-            Guildhall will leave this import out of the active queue. Re-read project notes if the docs changed or you want to review it again.
+            This import will stay out of the active queue. Re-read project notes if the docs changed or you want to review it again.
           </p>
         </div>
         <Row justify="end" gap="3" wrap>
@@ -839,7 +839,7 @@
   {:else if !data.detected}
     <Card>
       <Stack gap="4">
-        <p class="muted">Guildhall did not find any importable planning material yet.</p>
+        <p class="muted">No importable planning material was found yet.</p>
         <Row justify="end" gap="3" wrap>
           <Button variant="agent" onclick={rerun} disabled={busy !== null}>
             <Icon name="sparkles" size={14} />
@@ -858,15 +858,15 @@
           </div>
           {#if completedImport.tasksAdded > 0}
             <h3 class="section-title">
-              Guildhall created {completedImport.tasksAdded} draft task{completedImport.tasksAdded === 1 ? '' : 's'}.
+              Created {completedImport.tasksAdded} draft task{completedImport.tasksAdded === 1 ? '' : 's'}.
             </h3>
             <p class="section-copy">
               Nothing starts automatically. These new tasks are paused drafts until you shape them in Thread.
             </p>
           {:else}
-            <h3 class="section-title">Guildhall saved project context.</h3>
+            <h3 class="section-title">Project context saved.</h3>
             <p class="section-copy">
-              Guildhall did not infer draft tasks from this pass, but it recorded the sources and goals so the next task can start from real context.
+              This pass did not infer draft tasks, but it recorded the sources and goals so the next task can start from real context.
             </p>
           {/if}
         </div>
@@ -900,7 +900,7 @@
           </div>
           <h3 class="section-title">This project import has already been approved.</h3>
           <p class="section-copy">
-            Guildhall saved the project context and marked the import review done. Re-run only if the project notes changed or the import needs repair.
+            Project context was saved and the import review is done. Re-run only if the project notes changed or the import needs repair.
           </p>
           <div class="metric-row" aria-label="Completed import summary">
             {#if completedParsedTaskCount > 0}
@@ -959,14 +959,14 @@
               <span>Found</span>
             </div>
             <h3 class="section-title">
-              Guildhall found planning notes in {areaGroups.length} project part{areaGroups.length === 1 ? '' : 's'}
+              Found planning notes in {areaGroups.length} project part{areaGroups.length === 1 ? '' : 's'}
             </h3>
             <p class="section-copy">
               {#if hasTaskCandidates}
-                Confirm the parts first. Then Guildhall will walk you through the sources and the possible tasks,
+                Confirm the parts first. Then review the sources and possible tasks,
                 one slice at a time.
               {:else}
-                Confirm the parts first. Guildhall found planning notes and goals here, but it did not infer any draft tasks yet.
+                Confirm the parts first. Planning notes and goals were found here, but no draft tasks were inferred yet.
                 You can still review the sources and import the project context it found.
               {/if}
             </p>
@@ -1065,8 +1065,8 @@
             </div>
             <h3 class="section-title">Choose the parts for this pass</h3>
             <p class="section-copy">
-              Nothing is being imported yet. Select the parts you want Guildhall to review.
-              Next, Guildhall will walk through their notes one part at a time.
+              Nothing is being imported yet. Select the parts you want to review.
+              Next, you will walk through their notes one part at a time.
               Context-only parts can still be useful: they preserve goals, decisions, and framing even when they do not contain task candidates.
             </p>
             <div class="metric-row" aria-label="Part selection summary">
@@ -1120,7 +1120,7 @@
             <details class="secondary-summary" open={primaryAreas.length === 0}>
               <summary>Included project context</summary>
               <p class="secondary-help">
-                These parts contain goals, specs, or context rather than obvious task lists. Guildhall includes project docs by default so future work starts from the project’s actual direction. Exclude a part only when it is stale, noisy, or unrelated.
+                These parts contain goals, specs, or context rather than obvious task lists. Project docs are included by default so future work starts from the project’s actual direction. Exclude a part only when it is stale, noisy, or unrelated.
               </p>
               <div class="bulk-row">
                 <span class="bulk-label">{secondaryAreas.length} reference-only part{secondaryAreas.length === 1 ? '' : 's'} available</span>
@@ -1195,7 +1195,7 @@
             </div>
             <h3 class="section-title">{currentArea ? `Review notes in ${currentArea.label}` : 'Review notes'}</h3>
             <p class="section-copy">
-            These are the planning notes Guildhall found inside this part of the project.
+            These are the planning notes found inside this part of the project.
             Keep the notes you want to use in this pass, then move on.
             Reference notes become project context; task-bearing notes can also create draft tasks.
             </p>
@@ -1355,7 +1355,7 @@
             </div>
             <h3 class="section-title">{currentGroup ? `Review tasks from ${currentGroup.label}` : 'Review selected tasks'}</h3>
             <p class="section-copy">
-            Guildhall already turned these notes into draft tasks. Keep the ones that belong in this pass.
+            These notes already became draft tasks. Keep the ones that belong in this pass.
             </p>
             <div class="metric-row" aria-label="Task review summary">
               <Chip label={`Source ${Math.min(currentGroupIndex + 1, Math.max(selectedTaskGroups.length, 1))} of ${Math.max(selectedTaskGroups.length, 1)}`} tone="accent" />
@@ -1425,13 +1425,13 @@
             {#if selectedTasks.length > 0}
               <h3 class="section-title">Create {selectedTasks.length} draft task{selectedTasks.length === 1 ? '' : 's'}?</h3>
               <p class="section-copy">
-              Guildhall will create paused draft tasks from these notes. Nothing starts automatically.
+              Paused draft tasks will be created from these notes. Nothing starts automatically.
               Next, you will shape them in Thread before any worker begins.
               </p>
             {:else}
               <h3 class="section-title">Import the project notes and goals?</h3>
               <p class="section-copy">
-              Guildhall did not infer draft tasks from these sources, but it can still record the goals and notes it found so the project starts from honest context instead of an empty slate.
+              These sources did not produce draft tasks, but their goals and notes can still be recorded so the project starts from honest context instead of an empty slate.
               </p>
             {/if}
           </div>
@@ -1464,7 +1464,7 @@
                 </Card>
               {/each}
             {:else}
-              <Card title="What Guildhall will keep">
+              <Card title="What will be kept">
                 <Stack gap="3">
                   <div class="metric-row">
                     <Chip label={`${selectedAreaKeys.length} part${selectedAreaKeys.length === 1 ? '' : 's'}`} tone="accent" />
@@ -1474,7 +1474,7 @@
                     {/if}
                   </div>
                   <p class="detail-copy">
-                    This pass records the project context Guildhall found so later task shaping can build on it, even though this scan did not yield any draft task candidates yet.
+                    This pass records the project context that was found so later task shaping can build on it, even though this scan did not yield any draft task candidates yet.
                   </p>
                 </Stack>
               </Card>
@@ -1571,7 +1571,7 @@
             </div>
           {/if}
           <div class="detail-block">
-            <div class="detail-label">What Guildhall found here</div>
+            <div class="detail-label">What was found here</div>
             <div class="metric-row">
               {#if focusedSource.taskCount > 0}
                 <Chip label={`${focusedSource.taskCount} tasks`} tone="ok" />

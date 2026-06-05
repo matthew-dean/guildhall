@@ -329,7 +329,7 @@
       nextStatus: action.nextStatus,
     }))) return
     await project.refresh()
-    toast.success('Guildhall can continue this task.')
+    toast.success('This task can continue.')
     await runProject('start', taskId)
   }
 
@@ -358,7 +358,7 @@
     if (!(await post('shape-draft'))) return
     await project.refresh()
     await load()
-    toast.success('Draft handed to Guildhall. Starting now.')
+    toast.success('Draft handed off. Starting now.')
     await runProject('start', taskId)
   }
 
@@ -407,12 +407,12 @@
     reworkModal = {
       mode: 'general',
       title: 'Rework task',
-      intro: 'Use this when the task is still valuable, but Guildhall should transform how it is structured, saved, or handed back to agents.',
-      label: 'How should Guildhall rework this?',
+      intro: 'Use this when the task is still valuable, but its structure, saved state, or agent handoff should change.',
+      label: 'How should this be reworked?',
       placeholder: 'e.g. keep the implementation spec, but add an external setup checklist and split live verification into a separate task.',
       fallbackInstruction: 'Rework this task according to the current blocker and project context while preserving useful existing context.',
       submitLabel: 'Rework task',
-      success: 'Guildhall will rework this task.',
+      success: 'This task will be reworked.',
     }
   }
 
@@ -422,12 +422,12 @@
     reworkModal = {
       mode: 'split',
       title: 'Split task',
-      intro: 'Use this when one work item is hiding separate pieces of work, external setup, or decisions. Guildhall will keep the original as containing work and draft smaller nested work.',
+      intro: 'Use this when one work item is hiding separate pieces of work, external setup, or decisions. The original stays as containing work while smaller nested work is drafted.',
       label: 'What should be separated?',
       placeholder: 'Optional: e.g. split Google OAuth setup, Apple OAuth setup, and live sign-in verification.',
       fallbackInstruction: 'Split this work into smaller nested work before implementation.',
       submitLabel: 'Split task',
-      success: 'Guildhall will split this into smaller tasks.',
+      success: 'This will be split into smaller tasks.',
     }
   }
 
@@ -562,7 +562,7 @@
         eyebrow: 'Put aside',
         title: 'This task is out of the active queue.',
         detail: task.shelveReason?.detail
-          ?? 'Guildhall will not work on it again until you return it to the queue.',
+          ?? 'It will not be picked up again until you return it to the queue.',
       }
     }
     if (isHeld) {
@@ -572,7 +572,7 @@
         title: 'This task is out of the active queue for now.',
         detail: task.hold?.reason
           ? `Reason: ${task.hold.reason}`
-        : 'Resume it when you want Guildhall to continue from the saved stage.',
+        : 'Resume it when you want work to continue from the saved stage.',
       }
     }
     if (isContainingWorkTask) {
@@ -609,7 +609,7 @@
           : `This task is ${friendlyStatus(task.status)}.`,
         detail: task.completedAt
           ? `Completed at ${task.completedAt}.`
-          : 'Guildhall has no active next step for this task.',
+          : 'There is no active next step for this task.',
       }
     }
     if (firstOpenEscalation) {
@@ -626,8 +626,8 @@
         tone: 'info',
         eyebrow: 'Checkpoint saved',
         title: task.latestCheckpoint.nextPlannedAction
-          ? 'Guildhall saved where to resume.'
-          : 'Guildhall saved a recovery checkpoint.',
+          ? 'Resume point saved.'
+          : 'Recovery checkpoint saved.',
         detail: task.latestCheckpoint.nextPlannedAction
           ?? task.latestCheckpoint.intent
           ?? 'The next worker pass can resume from the latest checkpoint.',
@@ -774,7 +774,7 @@
             await runProject(action, nextTaskId, false)
             return
           }
-          toast.info('Guildhall is already running. This task stays queued for the coordinator.')
+          toast.info('A run is already active. This task stays queued for the coordinator.')
           return
         }
         runError = b.error ?? `${action === 'start' ? 'Start' : 'Stop'} failed (HTTP ${res.status})`
@@ -977,9 +977,13 @@
     <footer class="gh-drawer-foot">
       {#if isWorkspaceImportTask}
         <div class="footer-actions-left">
-          <Button variant="ghost" size="sm" onclick={() => copyTaskLink(task.id)}>
+          <button
+            type="button"
+            class="footer-utility-action"
+            onclick={() => copyTaskLink(task.id)}
+          >
             Copy link
-          </Button>
+          </button>
         </div>
         <div class="footer-actions-right">
           <Button
@@ -1029,7 +1033,7 @@
             <div class="more-actions" class:is-open={moreActionsOpen} bind:this={moreActionsEl}>
               <button
                 type="button"
-                class="more-actions-trigger"
+                class="footer-utility-action more-actions-trigger"
                 aria-haspopup="menu"
                 aria-expanded={moreActionsOpen}
                 onclick={() => (moreActionsOpen = !moreActionsOpen)}
@@ -1042,71 +1046,75 @@
                   <button
                     bind:this={reframeButtonEl}
                     type="button"
-                    class="more-action-button agent"
+                    class="more-action-button"
                     disabled={busy || runBusy}
                   >
                     Reframe task...
                   </button>
                 {/if}
                 {#if canReworkTask}
-                  <Button
-                    variant="agent"
-                    size="sm"
+                  <button
+                    type="button"
+                    class="more-action-button"
                     disabled={busy || runBusy}
                     onclick={handleOpenRework}
                   >
                     <Icon name="sparkles" size={14} />
                     Rework task...
-                  </Button>
+                  </button>
                 {/if}
                 {#if canSplitTask}
-                  <Button
-                    variant="secondary"
-                    size="sm"
+                  <button
+                    type="button"
+                    class="more-action-button"
                     disabled={busy || runBusy}
                     onclick={handleOpenSplit}
                   >
                     Split task...
-                  </Button>
+                  </button>
                 {/if}
                 {#if canHold}
                   {#if stageRerun}
-                    <Button
-                      variant="agent"
-                      size="sm"
+                    <button
+                      type="button"
+                      class="more-action-button"
                       disabled={busy || rerunStageBusy !== null}
                       onclick={() => rerunStage(stageRerun.stage)}
                     >
                       <Icon name="sparkles" size={14} />
                       {rerunStageBusy === stageRerun.stage ? 'Re-running...' : stageRerun.label}
-                    </Button>
+                    </button>
                   {/if}
-                  <Button
-                    variant="secondary"
-                    size="sm"
+                  <button
+                    type="button"
+                    class="more-action-button"
                     disabled={busy}
                     onclick={handleOpenHold}
                   >
                     Pause and keep in queue...
-                  </Button>
+                  </button>
                 {/if}
                 {#if !isShelved && canShelve}
-                  <Button
-                    variant="danger"
-                    size="sm"
+                  <button
+                    type="button"
+                    class="more-action-button destructive"
                     disabled={busy}
                     onclick={handleShelve}
                   >
                     Shelve task...
-                  </Button>
+                  </button>
                 {/if}
               </div>
               {/if}
             </div>
           {/if}
-          <Button variant="ghost" size="sm" onclick={() => copyTaskLink(task.id)}>
+          <button
+            type="button"
+            class="footer-utility-action"
+            onclick={() => copyTaskLink(task.id)}
+          >
             Copy link
-          </Button>
+          </button>
         </div>
         <div class="footer-actions-right">
           {#if firstOpenEscalation && !activeTabOwnsEscalationDecision}
@@ -1221,9 +1229,9 @@
   {#snippet children()}
     <Stack gap="3">
       <p class="modal-copy">
-        Use this when the task is still valid but should wait. Guildhall keeps
+        Use this when the task is still valid but should wait. The app keeps
         it in the queue, skips it for now, and lets you resume it later. It does
-        not stop a running Guildhall pass; use Stop first if Guildhall is
+        not stop a running pass; use Stop first if work is
         currently working.
       </p>
       <Field label="Why is this on hold?">
@@ -1253,7 +1261,7 @@
 >
   {#snippet children()}
     <p class="modal-copy">
-      Shelving removes this task from the active plan. Guildhall will not pick it
+      Shelving removes this task from the active plan. It will not be picked up
       up during normal runs unless you unshelve it later.
     </p>
   {/snippet}
@@ -1487,45 +1495,56 @@
   }
   .more-actions {
     position: relative;
+    margin-right: var(--s-4);
   }
-  .more-actions-trigger {
+  .footer-utility-action {
     appearance: none;
     border: 0;
     background: transparent;
-    padding: 0;
+    padding: var(--s-1) 0;
     cursor: pointer;
     color: var(--text-muted);
     font-size: var(--gh-type-size-meta);
     font-weight: var(--gh-type-weight-strong);
     font-family: inherit;
+    line-height: var(--gh-type-line-height-control);
   }
   .more-actions.is-open .more-actions-trigger,
-  .more-actions-trigger:hover,
-  .more-actions-trigger:focus-visible {
+  .footer-utility-action:hover,
+  .footer-utility-action:focus-visible {
     color: var(--text);
+    outline: none;
   }
   .more-action-menu {
     position: absolute;
     right: 0;
     bottom: calc(100% + var(--s-2));
     display: grid;
-    gap: var(--s-2);
-    min-width: 180px;
+    gap: var(--s-1);
+    min-width: 220px;
     padding: var(--s-2);
-    border: 1px solid var(--border);
+    border: 1px solid var(--glass-border);
     border-radius: var(--radius-md);
-    background: var(--bg-raised);
-    box-shadow: var(--shadow-lg);
+    background:
+      var(--glass-reflect-violet),
+      color-mix(in srgb, var(--glass-bg-strong) 92%, var(--bg-raised));
+    box-shadow: var(--glass-shadow), var(--glass-etch);
+    backdrop-filter: var(--glass-blur);
+    -webkit-backdrop-filter: var(--glass-blur);
     z-index: 20;
   }
   .more-action-button {
     display: inline-flex;
     align-items: center;
-    justify-content: center;
-    min-height: 28px;
+    justify-content: flex-start;
+    gap: var(--s-2);
+    width: 100%;
+    min-height: 34px;
     padding: 0 var(--s-3);
     border: 1px solid transparent;
     border-radius: var(--r-1);
+    color: var(--text);
+    background: transparent;
     font-family: inherit;
     font-size: var(--gh-type-size-meta);
     font-weight: var(--gh-type-weight-strong);
@@ -1533,19 +1552,24 @@
     cursor: pointer;
     white-space: nowrap;
   }
-  .more-action-button.agent {
-    color: var(--text);
-    border-color: rgba(139, 108, 255, 0.5);
-    background: rgba(139, 108, 255, 0.22);
-  }
   .more-action-button:hover:not(:disabled),
   .more-action-button:focus-visible {
-    border-color: var(--accent);
-    background: rgba(139, 108, 255, 0.32);
+    border-color: color-mix(in srgb, var(--glass-border-strong) 76%, var(--accent));
+    background: color-mix(in srgb, var(--glass-inset-bg-strong) 84%, var(--accent) 8%);
+    outline: none;
+  }
+  .more-action-button.destructive {
+    color: color-mix(in srgb, var(--danger) 78%, var(--text));
+  }
+  .more-action-button.destructive:hover:not(:disabled),
+  .more-action-button.destructive:focus-visible {
+    border-color: color-mix(in srgb, var(--danger) 42%, var(--glass-border));
+    background: color-mix(in srgb, var(--danger) 12%, var(--glass-inset-bg-strong));
   }
   .more-action-button:disabled {
+    color: var(--text-dim);
     cursor: not-allowed;
-    opacity: 0.55;
+    opacity: 0.72;
   }
   .error-stack {
     display: flex;

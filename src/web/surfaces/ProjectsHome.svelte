@@ -47,7 +47,7 @@
 
   function requestErrorMessage(err: unknown): string {
     if (err instanceof TypeError && /fetch/i.test(err.message)) {
-      return 'Guildhall service did not answer that request. The service may have restarted; this will clear on the next successful refresh.'
+      return 'The local service did not answer that request. It may have restarted; this will clear on the next successful refresh.'
     }
     return err instanceof Error ? err.message : String(err)
   }
@@ -335,7 +335,7 @@
           <span class="action-count"><span class="count-glyph">{needsYouCount > 99 ? '99+' : `${needsYouCount} project${needsYouCount === 1 ? '' : 's'}`}</span></span>
         {/if}
       </Button>
-      <Button variant="secondary" disabled={busyId === '__attach__'} title="Attach another local project to Guildhall" onclick={attachProject}>
+      <Button variant="secondary" disabled={busyId === '__attach__'} title="Attach another local project" onclick={attachProject}>
         <FolderPlus size={15} />
         {busyId === '__attach__' ? 'Attaching...' : 'Attach project'}
       </Button>
@@ -354,7 +354,7 @@
   {:else if cards.length === 0}
     <div class="empty">
       <h2>No projects yet</h2>
-      <p>Register or attach a project to start using Guildhall as a local service over your work.</p>
+      <p>Register or attach a project to start using the local service over your work.</p>
     </div>
   {:else}
     <section class="floor" aria-label="Guild hall project overview">

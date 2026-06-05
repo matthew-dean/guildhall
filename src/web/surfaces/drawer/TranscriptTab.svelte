@@ -53,7 +53,7 @@
     <p>
       This task is done, so Journey is the friendly summary. Transcript stays here as the source conversation
       {#if doneSummary?.retention?.compactedFullTranscript}
-        , and Guildhall has already reduced it into a done-task summary.
+        , and it has already been reduced into a done-task summary.
       {:else}
         when you need the original thread.
       {/if}

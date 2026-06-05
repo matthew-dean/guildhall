@@ -174,9 +174,9 @@
             {#if createdChildren.length > 0}
               Work happens in the nested work below.
             {:else if needsSplitAction}
-              Split it now: Guildhall will keep this as containing work and create the nested work below.
+              Split it now: this stays as containing work and the nested work below is created.
             {:else}
-              Guildhall has sized this as too large for one clean worker/review pass. Split it into containing work with nested work below before work starts.
+              This is too large for one clean worker/review pass. Split it into containing work with nested work below before work starts.
             {/if}
           </span>
           {#if canCreateSplitChildren}
@@ -207,7 +207,7 @@
 
       {#if recommendedChildren.length > 0}
         <div>
-          <h4>{createdChildren.length > 0 ? 'Nested work' : needsSplitAction ? 'Work Guildhall will create' : 'Recommended nested work'}</h4>
+          <h4>{createdChildren.length > 0 ? 'Nested work' : needsSplitAction ? 'Work to create' : 'Recommended nested work'}</h4>
           <ul class="child-list">
             {#each recommendedChildren as child, index (`${child.title ?? 'child'}-${index}`)}
               <li>

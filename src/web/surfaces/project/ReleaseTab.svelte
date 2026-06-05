@@ -198,7 +198,7 @@
   const checkoutInspectionError = $derived(
     dirtyCheckoutError
       ? /git status|fatal: not a git repository|spawn git enoent/i.test(dirtyCheckoutError)
-        ? 'Guildhall could not inspect this checkout with git. Check that the project path is a Git checkout and that git is available to Guildhall.'
+        ? 'This checkout could not be inspected with git. Check that the project path is a Git checkout and that git is available to the runtime.'
         : dirtyCheckoutError
       : '',
   )
@@ -219,8 +219,8 @@
   function gitBlockerCopy(blocker: GitStoryBlocker): { label: string; detail: string } {
     if (isGitInspectionFailure(blocker)) {
       return {
-        label: 'Guildhall could not inspect this checkout.',
-        detail: 'Check that this project path is a Git checkout and that git is available to the Guildhall runtime.',
+        label: 'Could not inspect this checkout.',
+        detail: 'Check that this project path is a Git checkout and that git is available to the runtime.',
       }
     }
     const haystack = `${blocker.state ?? ''}\n${blocker.reason ?? ''}\n${blocker.nextAction ?? ''}`.toLowerCase()
@@ -326,7 +326,7 @@
       return {
         label: 'Blocked',
         tone: 'warn' as const,
-        reason: 'Guildhall could not inspect the project checkout.',
+        reason: 'Could not inspect the project checkout.',
       }
     }
     if (gitStoryBlockers.length > 0) {
@@ -362,7 +362,7 @@
       : {
           title: 'Current work closure',
           description: data?.scope?.description
-            ?? 'A quick read on whether the work Guildhall is tracking now is closed enough to hand off, ship, or deliberately defer.',
+            ?? 'A quick read on whether the current work is closed enough to hand off, ship, or deliberately defer.',
         },
   )
 
@@ -382,7 +382,7 @@
     {#snippet actions()}
       <a class="notice-link" href={currentProjectHref('/setup')}>Open setup wizard</a>
     {/snippet}
-    <p>Complete the setup wizard before Guildhall can assess whether the current work is closed.</p>
+    <p>Complete the setup wizard before assessing whether the current work is closed.</p>
   </NoticeBand>
 {:else if error}
   <NoticeBand tone="danger" role="alert" label="Closure" title="Could not load closure checks">
@@ -552,7 +552,7 @@
             <div class="crit-summary crit-static">
               <span class="crit-copy">
                 <span class="crit-label">Design system</span>
-                <span class="crit-detail">How Guildhall knows which design rules apply here.</span>
+                <span class="crit-detail">How the applicable design rules are chosen.</span>
               </span>
               <StatusPill label={dsLabel().label} tone={dsLabel().tone} />
             </div>

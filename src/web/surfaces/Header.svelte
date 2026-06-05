@@ -126,7 +126,7 @@
     {/if}
     <button type="button" class="brand" onclick={goHome} aria-label="Projects home">
       <span class="brand-mark" aria-hidden="true">
-        <span class="brand-glyph"></span>
+        <img src="/icons/genfavicon-64.png" alt="" />
       </span>
       <span class="brand-word">Guildhall</span>
     </button>
@@ -218,45 +218,12 @@
     place-items: center;
     width: 24px;
     height: 24px;
-    border-radius: 8px;
-    background:
-      linear-gradient(180deg, color-mix(in srgb, white 12%, transparent), color-mix(in srgb, white 3%, transparent)),
-      color-mix(in srgb, var(--accent) 66%, black 18%);
-    box-shadow:
-      inset 0 1px 0 color-mix(in srgb, white 30%, transparent),
-      inset 0 -1px 0 color-mix(in srgb, black 18%, transparent),
-      0 0 18px color-mix(in srgb, var(--accent) 34%, transparent);
-    isolation: isolate;
   }
-  .brand-mark::before {
-    content: "";
-    position: absolute;
-    inset: -8px;
-    border-radius: 999px;
-    background:
-      radial-gradient(circle, color-mix(in srgb, var(--accent) 38%, transparent) 0%, transparent 66%);
-    filter: blur(7px);
-    opacity: 0.78;
-    z-index: -1;
-  }
-  .brand-mark::after {
-    content: "";
-    position: absolute;
-    inset: 5px 7px 6px;
-    border: 2px solid color-mix(in srgb, white 78%, transparent);
-    border-top-width: 4px;
-    border-bottom: 0;
-    border-radius: 5px 5px 2px 2px;
-    box-shadow:
-      0 -4px 0 -2px color-mix(in srgb, white 70%, transparent),
-      inset 0 1px 0 color-mix(in srgb, white 26%, transparent);
-    pointer-events: none;
-  }
-
-  .brand-glyph {
-    color: var(--gh-color-text-primary);
-    font-size: 0;
-    line-height: 1;
+  .brand-mark img {
+    display: block;
+    width: 24px;
+    height: 24px;
+    object-fit: contain;
     pointer-events: none;
   }
   .brand-word {
@@ -265,9 +232,6 @@
   .brand:hover {
     color: var(--light-violet-warm);
     text-shadow: 0 0 16px color-mix(in srgb, var(--accent) 20%, transparent);
-  }
-  .brand:hover .brand-mark::before {
-    opacity: 1;
   }
   :global(.project-menu) {
     display: none;

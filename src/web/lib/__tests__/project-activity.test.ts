@@ -163,7 +163,7 @@ describe('buildProjectTicker', () => {
     ).toMatchObject({
       tone: 'idle',
       actorLabel: 'Paused',
-      message: '1 task paused until you resume Guildhall',
+      message: '1 task paused until you resume',
     })
 
     expect(
@@ -197,7 +197,7 @@ describe('buildProjectTicker', () => {
     expect(buildProjectTicker({ initializationNeeded: true }, null, now)).toMatchObject({
       tone: 'warn',
       actorLabel: 'Setup',
-      message: 'Finish first-time Guildhall setup',
+      message: 'Finish first-time setup',
     })
 
     expect(
@@ -245,7 +245,7 @@ describe('buildProjectTicker', () => {
     ).toMatchObject({
       tone: 'idle',
       actorLabel: 'Paused',
-      message: '2 tasks paused until you resume Guildhall',
+      message: '2 tasks paused until you resume',
     })
 
     expect(
@@ -480,7 +480,7 @@ describe('buildProjectCardTicker', () => {
       tone: 'warn',
       pulse: false,
       label: 'Setup',
-      message: 'First-time Guildhall setup',
+      message: 'First-time setup',
     })
 
     expect(

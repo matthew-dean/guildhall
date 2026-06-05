@@ -214,7 +214,7 @@ export function buildProjectTicker(
       pulse: false,
       actorLabel: 'Setup',
       label: 'Setup',
-      message: 'Finish first-time Guildhall setup',
+      message: 'Finish first-time setup',
       timeLabel: null,
     }
   }
@@ -236,7 +236,7 @@ export function buildProjectTicker(
       pulse: false,
       actorLabel: 'Needs migration',
       label: 'Needs migration',
-      message: detail.startReadiness.message || 'Run the required Guildhall migration before starting this project.',
+      message: detail.startReadiness.message || 'Run the required migration before starting this project.',
       timeLabel: null,
     }
   }
@@ -247,7 +247,7 @@ export function buildProjectTicker(
       pulse: false,
       actorLabel: 'Run error',
       label: 'Error',
-      message: friendlyRuntimeMessage(detail.run.error ?? 'Guildhall run failed.'),
+      message: friendlyRuntimeMessage(detail.run.error ?? 'Run failed.'),
       timeLabel: null,
     }
   }
@@ -328,7 +328,7 @@ export function buildProjectTicker(
       pulse: false,
       actorLabel: 'Paused',
       label: 'Paused',
-      message: `${active} ${pluralize(active, 'task')} paused until you resume Guildhall`,
+      message: `${active} ${pluralize(active, 'task')} paused until you resume`,
       timeLabel: null,
     }
   }
@@ -354,14 +354,14 @@ export function hasCurrentGitUnavailableStory(detail: ProjectDetail | null | und
 export function buildProjectCardTicker(project: ServiceProjectSummary): ProjectActivityLine {
   const counts = project.taskCounts ?? { total: 0, active: 0, draftReview: 0, blocked: 0, done: 0, shelved: 0 }
   if (project.initializationNeeded) {
-    return { tone: 'warn', pulse: false, label: 'Setup', message: 'First-time Guildhall setup' }
+    return { tone: 'warn', pulse: false, label: 'Setup', message: 'First-time setup' }
   }
   if (project.startReadiness?.code === 'required_migration_pending') {
     return {
       tone: 'warn',
       pulse: false,
       label: 'Needs migration',
-      message: project.startReadiness.message ?? 'Run the required Guildhall migration before starting this project.',
+      message: project.startReadiness.message ?? 'Run the required migration before starting this project.',
     }
   }
   if (project.startReadiness?.code === 'owner_input_required') {
@@ -369,7 +369,7 @@ export function buildProjectCardTicker(project: ServiceProjectSummary): ProjectA
       tone: 'warn',
       pulse: false,
       label: 'Needs you',
-      message: project.startReadiness.message ?? 'Guildhall is waiting on your input.',
+      message: project.startReadiness.message ?? 'Waiting on your input.',
     }
   }
   if (project.run?.status === 'running') {

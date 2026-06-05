@@ -6,6 +6,7 @@
 <script lang="ts">
   import { nav, path } from './nav.svelte.js'
   import CardListItem from './CardListItem.svelte'
+  import Chip from './Chip.svelte'
   import { currentTaskHref } from './project-routes.js'
   import Icon, { type IconName } from './Icon.svelte'
   import StatusLight from './StatusLight.svelte'
@@ -123,7 +124,10 @@
         ? 'check-circle-2'
         : isActive
           ? 'loader'
-          : 'circle'),
+        : 'circle'),
+  )
+  const statusChipTone = $derived<'danger' | 'warn' | 'ok' | 'accent' | 'neutral'>(
+    statusTone,
   )
 
   function open() {
@@ -155,13 +159,13 @@
   onkeydown={onKey}
 >
   <div class="tc-head">
-    <span class="tc-status chip-{statusTone}" class:chip-loud={status === 'blocked'}>
+    <span class="tc-status">
       {#if isActive}
         <StatusLight pulse />
       {:else}
         <Icon name={statusIcon} size={12} />
       {/if}
-      <span>{statusLabel}</span>
+      <Chip label={statusLabel} tone={statusChipTone} size="compact" />
     </span>
     {#if isQueued && !coordinatorRunning}
       <span class="tc-queued" title="Queued — coordinator is stopped">paused</span>
@@ -230,31 +234,8 @@
   .tc-status {
     display: inline-flex;
     align-items: center;
-    gap: 4px;
-    padding: 1px 6px;
-    border-radius: 999px;
+    gap: var(--s-1);
     color: var(--text-muted);
-    background: rgba(136, 136, 153, 0.12);
-  }
-  .chip-danger {
-    color: var(--danger);
-    background: rgba(224, 82, 82, 0.15);
-  }
-  .chip-warn {
-    color: var(--warn);
-    background: rgba(212, 162, 60, 0.15);
-  }
-  .chip-ok {
-    color: var(--accent-2);
-    background: rgba(78, 204, 163, 0.15);
-  }
-  .chip-accent {
-    color: var(--accent);
-    background: rgba(124, 109, 240, 0.15);
-  }
-  .chip-loud {
-    font-weight: var(--gh-type-weight-strong);
-    box-shadow: 0 0 0 1px var(--danger);
   }
   .tc-queued {
     color: var(--warn);

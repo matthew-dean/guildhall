@@ -12,10 +12,10 @@ readiness play out. It keeps the current state visible so you do not have to
 hold the whole run in your head.
 
 <picture class="gh-doc-picture">
-  <img src="../assets/ui-audit/0-9-0/projects.webp" alt="Guildhall v0.9.0 projects home showing several local projects with status, activity, and start controls." />
+  <img src="../assets/ui-audit/0-10-0/projects.png" alt="Guildhall 0.10.0 projects home showing several local projects with status, activity, and start controls." />
 </picture>
 
-![Guildhall v0.9.0 work view with active tasks, hierarchy, and reviewer signals.](../assets/ui-audit/0-9-0/work.webp)
+![Guildhall 0.10.0 work view with active tasks, hierarchy, and reviewer signals.](../assets/ui-audit/0-10-0/work.png)
 
 ## What stays visible
 
@@ -32,18 +32,29 @@ anything risky, and get into the work without spelunking through files first.
 - **Start blockers**: migrations, unanswered questions, runtime setup, and
   provider mismatches explain themselves before you press **Start**.
 
-Inside a project, the shell keeps the main rooms separate:
+Inside a project, the rail keeps the main sections separate. A section's child
+links stay visible while you are in that section, then hide when you move
+somewhere else:
 
-- **Thread** is the conversation.
-- **Needs You** is the alert queue.
+- **Project** groups Overview, Needs you, Facts, and Structure.
+- **Overview** is the project summary.
+- **Needs you** is the alert view for waiting answers and approvals.
+- **Facts** is what Guildhall knows about identity, environment, gates, and
+  routing context.
 - **Structure** is the repo map, project graph, provider/consumer handoff view,
   and shared-contract view.
+- **Threads** is the project conversation.
+- **Work** is a top-level work mode; it shows Queue and Board while you are
+  working through tasks.
+- **Timeline** is the activity history.
+- **Closure** shows Summary and Checks while you are judging whether current
+  work is actually closed.
 - **Settings** is readiness, providers, identity, profiles, and configuration.
 
 That split keeps the UI from turning every useful signal into another task
 card. Cross-project work can live in the project graph. Owner decisions can
-stay linked to the same Thread session. Memory can be inspected in Settings
-without adding a new approval step to every task.
+stay linked to the same conversation. Memory stays inspectable and
+reversible without adding a new approval step to every task.
 
 Guildhall is file-backed too. The shared project plan lives in
 `./guildhall.yaml`, compact shared state lives in committed `./.guildhall/`
