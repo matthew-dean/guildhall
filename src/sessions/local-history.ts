@@ -33,7 +33,10 @@ export const MIGRATED_PROJECT_STATE_ENTRIES = [
   'GOALS.json',
   'workspace-goals.json',
   'learning.json',
+  'agent-settings.yaml',
+  'migrations.json',
   'memory-store.json',
+  'project-brief.md',
   'project-skills.json',
   'attention.json',
   'codebase-map.yaml',
@@ -49,11 +52,16 @@ export const MIGRATED_PROJECT_STATE_ENTRIES = [
   'external-agent-memory-bridge.json',
   'capability-requests.json',
   'capability-grants.json',
+  'persistence',
+  'pressure-test-intake',
+  'specs',
   'owner-input',
   'runtime',
+  'runtime.json',
   'events',
   'context-debug',
   'checkpoints',
+  '.session-epoch',
 ] as const
 
 function projectSlug(projectRoot: string): string {

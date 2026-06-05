@@ -7,7 +7,7 @@ import { confirm } from '@inquirer/prompts'
 import { runOrchestrator } from './orchestrator.js'
 import { runGuildhallTaskOnce, type RunOnceAutomationPolicy, type RunOnceProofMode } from './run-once.js'
 import { renderBakeoffMarkdown, runContextIndexerBakeoff, runModelBakeoff } from './model-bakeoff.js'
-import { migrateLegacyMemoryToLocalHistory } from './memory-migration.js'
+import { migrateLegacyMemoryToLocalHistory, updateGuildhallGitignorePolicyForProject } from './memory-migration.js'
 import {
   applyProjectMigrations,
   getProjectMigrationStatus,
@@ -63,7 +63,7 @@ import { exec, spawn } from 'node:child_process'
 import { platform } from 'node:os'
 import { buildSemanticIndexPrompt, refreshCodebaseMap, type CorpusSemanticIndexer } from '@guildhall/corpus-map'
 import { OpenAICompatibleClient } from '@guildhall/providers'
-import { getProjectStateDir } from '@guildhall/sessions'
+import { getProjectSharedStateDir, getProjectStateDir, MIGRATED_PROJECT_STATE_ENTRIES, migrateProjectStateToSystem } from '@guildhall/sessions'
 import { FileBackedGuildhallPersistence } from '@guildhall/persistence'
 import {
   runArtifactLocalBenchmark,
@@ -460,6 +460,8 @@ Usage:
                                   Bring a project onto the 0.8.0 storage layout
   guildhall memory migrate-local-history [path]
                                   Compatibility alias for the 0.8.0 storage migration
+  guildhall memory migrate-project-state [path]
+                                  Move repo-local .guildhall state into system storage
   guildhall memory compact-project-state [path]
                                   Archive terminal tasks and move heartbeat progress local
   guildhall memory cleanup-project-local-state [path]
@@ -567,6 +569,7 @@ Examples:
   guildhall serve
   guildhall corpus-map refresh --semantic .
   guildhall memory migrate-0.8.0 --apply --delete-source --update-gitignore .
+  guildhall memory migrate-project-state --apply --update-gitignore .
   guildhall memory compact-project-state --apply .
   guildhall migrate status .
   guildhall migrate plan --all
@@ -954,8 +957,8 @@ async function cmdCorpusMap() {
 async function cmdMemory() {
   const pos = positionals()
   const subcommand = pos[0] ?? 'migrate-0.8.0'
-  if (!['migrate-0.8.0', 'migrate-local-history', 'compact-project-state', 'cleanup-project-local-state'].includes(subcommand)) {
-    console.error('[guildhall] Usage: guildhall memory <migrate-0.8.0|migrate-local-history|compact-project-state|cleanup-project-local-state> [--apply] [id|path]')
+  if (!['migrate-0.8.0', 'migrate-local-history', 'migrate-project-state', 'compact-project-state', 'cleanup-project-local-state'].includes(subcommand)) {
+    console.error('[guildhall] Usage: guildhall memory <migrate-0.8.0|migrate-local-history|migrate-project-state|compact-project-state|cleanup-project-local-state> [--apply] [id|path]')
     process.exit(1)
   }
   const idOrPath = pos[1]
@@ -1000,6 +1003,55 @@ async function cmdMemory() {
       }
     } else {
       console.log('[guildhall] Re-run with --apply to perform this migration.')
+    }
+    return
+  }
+  if (subcommand === 'migrate-project-state') {
+    const sharedStateDir = getProjectSharedStateDir(projectPath)
+    const movableEntries = MIGRATED_PROJECT_STATE_ENTRIES.filter(entry => existsSync(join(sharedStateDir, entry)))
+    if (dryRun) {
+      console.log('[guildhall] Project-state migration dry run.')
+      console.log(`[guildhall] Project: ${projectPath}`)
+      console.log(`[guildhall] Shared state dir: ${sharedStateDir}`)
+      console.log(`[guildhall] Movable entries: ${movableEntries.length}`)
+      if (movableEntries.length > 0) {
+        for (const entry of movableEntries.slice(0, 20)) {
+          console.log(`[guildhall] - .guildhall/${entry}`)
+        }
+        if (movableEntries.length > 20) {
+          console.log(`[guildhall] - ...and ${movableEntries.length - 20} more`)
+        }
+      }
+      console.log('[guildhall] Re-run with --apply to move these entries.')
+      return
+    }
+    const migration = await migrateProjectStateToSystem(projectPath)
+    const gitignore = args.includes('--update-gitignore')
+      ? await updateGuildhallGitignorePolicyForProject(projectPath)
+      : null
+    console.log('[guildhall] Project-state migration complete.')
+    console.log(`[guildhall] Project: ${migration.projectRoot}`)
+    console.log(`[guildhall] Shared state dir: ${migration.sharedStateDir}`)
+    console.log(`[guildhall] System state dir: ${migration.systemStateDir}`)
+    console.log(`[guildhall] Entries moved: ${migration.movedEntries.length}`)
+    if (migration.movedEntries.length > 0) {
+      for (const entry of migration.movedEntries.slice(0, 20)) {
+        console.log(`[guildhall] - .guildhall/${entry}`)
+      }
+      if (migration.movedEntries.length > 20) {
+        console.log(`[guildhall] - ...and ${migration.movedEntries.length - 20} more`)
+      }
+    }
+    if (gitignore) {
+      console.log(`[guildhall] .gitignore updated: ${gitignore.gitignoreUpdated ? 'yes' : 'no'}`)
+      if (gitignore.gitignoreRoots.length > 0) {
+        console.log(`[guildhall] .gitignore roots: ${gitignore.gitignoreRoots.join(', ')}`)
+      }
+      if (gitignore.untrackedIgnoredFiles.length > 0) {
+        console.log(`[guildhall] Tracked ignored files removed from Git index: ${gitignore.untrackedIgnoredFiles.length}`)
+      }
+    } else {
+      console.log('[guildhall] .gitignore updated: no (--update-gitignore not provided)')
     }
     return
   }

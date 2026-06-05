@@ -49,6 +49,12 @@ export interface MemoryMigrationResult {
   compaction: ProjectStateCompactionResult | null
 }
 
+export interface GuildhallGitignorePolicyUpdateResult {
+  gitignoreUpdated: boolean
+  gitignoreRoots: string[]
+  untrackedIgnoredFiles: string[]
+}
+
 const LEGACY_MEMORY_GITIGNORE_PATTERNS = new Set([
   '/memory/exploring/',
   '/memory/transcripts/',
@@ -334,6 +340,19 @@ async function updateGitignores(projectRoot: string): Promise<string[]> {
     if (await updateGitignore(root)) updated.push(root)
   }
   return updated
+}
+
+export async function updateGuildhallGitignorePolicyForProject(
+  projectRoot: string,
+): Promise<GuildhallGitignorePolicyUpdateResult> {
+  const gitignoreRoots = await updateGitignores(path.resolve(projectRoot))
+  const rootsToClean = gitignoreRoots.length > 0 ? gitignoreRoots : gitignoreRootsForProjectOrWorkspace(projectRoot)
+  const untrackedIgnoredFiles = await stopTrackingIgnoredFiles(rootsToClean)
+  return {
+    gitignoreUpdated: gitignoreRoots.length > 0,
+    gitignoreRoots,
+    untrackedIgnoredFiles,
+  }
 }
 
 async function listTrackedIgnoredFiles(gitRoot: string): Promise<string[]> {

@@ -69,12 +69,20 @@ describe('local history layout', () => {
     const legacyDir = getProjectSharedStateDir(projectRoot)
     await fs.mkdir(path.join(legacyDir, 'tasks', 'archive'), { recursive: true })
     await fs.mkdir(path.join(legacyDir, 'structural-map'), { recursive: true })
+    await fs.mkdir(path.join(legacyDir, 'specs'), { recursive: true })
+    await fs.mkdir(path.join(legacyDir, 'persistence', 'records', 'review-plans'), { recursive: true })
     await fs.writeFile(path.join(legacyDir, 'TASKS.json'), '{"version":1,"tasks":[]}\n', 'utf8')
     await fs.writeFile(path.join(legacyDir, 'MEMORY.md'), '# Memory\n', 'utf8')
     await fs.writeFile(path.join(legacyDir, 'PROGRESS.md'), '# Progress\n', 'utf8')
     await fs.writeFile(path.join(legacyDir, 'DECISIONS.md'), '# Decisions\n', 'utf8')
+    await fs.writeFile(path.join(legacyDir, 'project-brief.md'), '# Brief\n', 'utf8')
+    await fs.writeFile(path.join(legacyDir, 'agent-settings.yaml'), 'agents: []\n', 'utf8')
+    await fs.writeFile(path.join(legacyDir, 'migrations.json'), '[]\n', 'utf8')
+    await fs.writeFile(path.join(legacyDir, 'runtime.json'), '{}\n', 'utf8')
     await fs.writeFile(path.join(legacyDir, 'tasks', 'archive', 'done.json'), '{"id":"done"}\n', 'utf8')
     await fs.writeFile(path.join(legacyDir, 'structural-map', 'accepted.json'), '{"version":1}\n', 'utf8')
+    await fs.writeFile(path.join(legacyDir, 'specs', 'request.md'), '# Spec\n', 'utf8')
+    await fs.writeFile(path.join(legacyDir, 'persistence', 'records', 'review-plans', 'task.json'), '{}\n', 'utf8')
     await fs.writeFile(path.join(legacyDir, 'artifacts.yaml'), 'artifacts: []\n', 'utf8')
 
     const result = await migrateProjectStateToSystem(projectRoot)
@@ -86,13 +94,23 @@ describe('local history layout', () => {
       'MEMORY.md',
       'PROGRESS.md',
       'DECISIONS.md',
+      'project-brief.md',
+      'agent-settings.yaml',
+      'migrations.json',
+      'runtime.json',
       'tasks',
       'structural-map',
+      'specs',
+      'persistence',
     ]))
     await expect(fs.readFile(path.join(systemStateDir, 'TASKS.json'), 'utf8')).resolves.toContain('"tasks"')
     await expect(fs.readFile(path.join(systemStateDir, 'tasks', 'archive', 'done.json'), 'utf8')).resolves.toContain('done')
+    await expect(fs.readFile(path.join(systemStateDir, 'specs', 'request.md'), 'utf8')).resolves.toContain('Spec')
+    await expect(fs.readFile(path.join(systemStateDir, 'persistence', 'records', 'review-plans', 'task.json'), 'utf8')).resolves.toContain('{}')
     await expect(fs.stat(path.join(legacyDir, 'TASKS.json'))).rejects.toMatchObject({ code: 'ENOENT' })
     await expect(fs.stat(path.join(legacyDir, 'tasks'))).rejects.toMatchObject({ code: 'ENOENT' })
+    await expect(fs.stat(path.join(legacyDir, 'specs'))).rejects.toMatchObject({ code: 'ENOENT' })
+    await expect(fs.stat(path.join(legacyDir, 'persistence'))).rejects.toMatchObject({ code: 'ENOENT' })
     await expect(fs.readFile(path.join(legacyDir, 'artifacts.yaml'), 'utf8')).resolves.toContain('artifacts')
     expect(inferProjectRootFromMemoryDir(systemStateDir)).toBe(path.resolve(projectRoot))
   })
