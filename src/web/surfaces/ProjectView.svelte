@@ -1715,7 +1715,7 @@
     color: var(--text-muted);
     font: inherit;
     font-size: var(--gh-type-size-meta);
-    padding: var(--s-1) var(--s-3) var(--s-1) calc(var(--s-3) + 24px);
+    padding: var(--s-1) var(--s-3) var(--s-1) calc((56px - 18px) / 2 + 18px + var(--s-2));
     cursor: pointer;
     border-radius: 0;
   }
@@ -2046,7 +2046,7 @@
       padding: var(--s-3) var(--s-4);
     }
     .rail.rail-mobile-open .rail-sub {
-      padding: var(--s-2) var(--s-4) var(--s-2) calc(var(--s-4) + 24px);
+      padding: var(--s-2) var(--s-4) var(--s-2) calc(var(--s-4) + 18px + var(--s-2));
     }
     .rail.rail-mobile-open .rail-nav {
       gap: var(--s-1);
