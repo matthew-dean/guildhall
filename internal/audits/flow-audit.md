@@ -161,7 +161,7 @@ against the live roster when doing a release-gating user test.
 | Runtime/API unit tests | Strong coverage for project action model, inbox, Thread projection, providers, setup, workspace import, project graph, release readiness, migrations, and task endpoints. | Corrupt task-state route replay and deeper live action replays. |
 | Svelte/component tests | Strong coverage for Thread, ProjectView, Overview, Work, Settings, Structure, Release, Providers, Setup, TaskDrawer, ProjectsHome, Needs You. | Remaining gaps are less about component mounting and more about live route/action replay. |
 | Rendered UI Playwright | Twenty-eight scenarios: Projects home mobile/desktop with fifteen project shapes, legacy route fallback, Looma Thread migration/question path, rail pinning, Work view switcher, Developer settings, global Needs You, Providers, Overview inbox, Structure, workspace import, settings subroute loop, Release summary/checks routes, project setup, setup-pending attached project, direct task drawer route, unfamiliar docs/infra/mobile/service route smokes, Timeline route smoke, dirty release blocker, provider/consumer handoffs, and capability-request Thread. | Deeper route action replays and live machine-specific states. |
-| Live installed browser proof | 2026-06-04 multi-agent proof plus follow-up proof covered service freshness, direct HTTP shells, provider APIs, selected live routes, provider boundary save on a throwaway registered project, and Release summary/checks routes. | Browser bridge/app-hang separation, Narrative Harness Thread, Commerce setup-blocked consistency, per-project replay targets. |
+| Live installed browser proof | 2026-06-04 multi-agent proof plus follow-up proof covered service freshness, direct HTTP shells, provider APIs, selected live routes, provider boundary save on a throwaway registered project, Release summary/checks routes, and standalone Playwright proof for Narrative Harness Thread. | In-app Browser bridge/tab recovery, Commerce setup-blocked consistency, per-project replay targets. |
 
 ## Active Gaps
 
@@ -283,16 +283,31 @@ coverage.
   record API liveness, direct HTTP status, current URL, and DOM/screenshot proof
   before classifying a hang as an app freeze. If API and direct HTTP are healthy
   but Browser control is wedged, track the Browser bridge separately from the
-  product route.
-- [ ] Reproduce or disprove Narrative Harness Thread route hang. Interactive
+  product route. Follow-up on 2026-06-04/05 reproduced the split: the selected
+  in-app Browser tab was stuck on a `data:` error page for `/providers` with
+  `ERR_NETWORK_IO_SUSPENDED`; a fresh in-app tab reached
+  `/projects/narrative-harness/thread` and showed the project shell connected
+  but stayed on `Loading...`; Browser page evaluation then failed while locator
+  text still worked. The same installed app rendered correctly in standalone
+  Playwright, so this remains a Browser bridge/tab-state recovery issue rather
+  than a confirmed Guildhall route lockup.
+- [x] Reproduce or disprove Narrative Harness Thread route hang. Interactive
   audit lane on 2026-06-04 loaded
   `http://localhost:7777/projects/narrative-harness` successfully with project
   identity and overview sections, then navigating to
   `/projects/narrative-harness/thread` timed out with `Page.navigate`. Recovery
   showed the URL had changed to `/projects/narrative-harness/thread`, but
-  `Runtime.evaluate` timed out when reading the DOM. Treat as a live Thread
-  performance/runtime-hang suspect until manual/browser proof separates route
-  behavior from Browser bridge failure.
+  `Runtime.evaluate` timed out when reading the DOM. Follow-up proof on
+  2026-06-04/05 separated the route from the bridge: `/api/stale-server`
+  returned `stale:false`; `/api/project?projectId=narrative-harness` returned
+  `name:"Narrative Harness"`, `initializationNeeded:false`, and `tasks:9`;
+  `/api/project/thread?projectId=narrative-harness` returned `200` with `23`
+  turns and active turn `inflight:coherence-reviewer-mvp`; direct route HTTP
+  returned `200` SPA shell; standalone Playwright rendered
+  `/projects/narrative-harness/thread` with one `Thread list`, one
+  `Selected thread`, the task title `Build first coherence reviewer MVP`, and
+  zero `Loading...` markers. In-app Browser still showed a bridge/tab-state
+  failure, tracked in the separate follow-up above.
 - [x] Verify setup-blocked start/readiness consistency. Global audit on
   2026-06-04 reported Commerce project as setup/owner-input blocked while the
   API summary still exposed a startable-looking state. Fix: shared
