@@ -3,7 +3,7 @@ import fs from 'node:fs'
 import fsp from 'node:fs/promises'
 import path from 'node:path'
 import { z } from 'zod'
-import { atomicWriteText } from '@guildhall/sessions'
+import { atomicWriteText, getProjectStateDir } from '@guildhall/sessions'
 import {
   createBoundedChatSession,
   loadBoundedChatSession,
@@ -209,7 +209,7 @@ async function writeOwnerInputRequest(memoryDir: string, request: OwnerInputRequ
 }
 
 function projectMemoryDir(projectRoot: string): string {
-  return path.join(projectRoot, '.guildhall')
+  return getProjectStateDir(projectRoot)
 }
 
 function ownerInputDir(memoryDir: string): string {

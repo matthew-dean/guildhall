@@ -4,6 +4,7 @@ import os from 'node:os'
 import path from 'node:path'
 import yaml from 'js-yaml'
 import { bootstrapWorkspace } from '@guildhall/config'
+import { getProjectStateDir } from '@guildhall/sessions'
 import { buildServeApp } from '../serve.js'
 import { DESIGN_TASTE_FILE } from '../design-taste.js'
 
@@ -45,7 +46,7 @@ describe('GET /api/project/design-taste', () => {
         },
       },
     }), 'utf-8')
-    await fs.writeFile(path.join(tmpDir, '.guildhall', DESIGN_TASTE_FILE), yaml.dump({
+    await fs.writeFile(path.join(getProjectStateDir(tmpDir), DESIGN_TASTE_FILE), yaml.dump({
       opinions: {
         visualDirection: {
           avoid: ['tiny-unexplained-controls'],

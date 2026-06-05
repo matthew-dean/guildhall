@@ -47,7 +47,7 @@ describe('project artifact registry', () => {
     expect(resolveArtifact(project, 'ui-flow-audit')?.id).toBe('flow-audit')
   })
 
-  it('allows artifacts.yaml to be tracked without making all .guildhall metadata private', () => {
+  it('keeps project-local Guildhall state ignored when ensuring artifacts.yaml exists', () => {
     const project = join(TMP, 'ignored')
     mkdirSync(project, { recursive: true })
     writeFileSync(join(project, '.gitignore'), 'node_modules\n', 'utf8')
@@ -55,10 +55,9 @@ describe('project artifact registry', () => {
     ensureArtifactRegistryTrackable(project)
 
     const entries = readFileSync(join(project, '.gitignore'), 'utf8').split(/\r?\n/).filter(Boolean)
-    expect(entries).toContain('!.guildhall/')
-    expect(entries).toContain('!.guildhall/**')
-    expect(entries).toContain('.guildhall/config.yaml')
-    expect(entries).not.toContain('.guildhall/*')
+    expect(entries).toContain('.guildhall/')
+    expect(entries).not.toContain('!.guildhall/')
+    expect(entries).not.toContain('!.guildhall/**')
   })
 
   it('returns an empty registry when a project has not adopted artifact IDs yet', () => {

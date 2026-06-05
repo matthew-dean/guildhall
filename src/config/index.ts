@@ -50,6 +50,8 @@ export {
   writeWorkspaceConfig,
   bootstrapWorkspace,
   resolveMemoryDir,
+  resolveSharedMemoryDir,
+  migrateWorkspaceMemoryDir,
   readAgentSettings,
   writeAgentSettings,
   updateAgentSettings,

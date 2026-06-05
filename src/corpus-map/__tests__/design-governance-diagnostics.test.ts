@@ -83,7 +83,7 @@ describe('corpus design-governance diagnostics', () => {
     const packet = renderDesignGovernancePacket(map)
 
     expect(packet).toContain('## Design Governance')
-    expect(packet).toContain('Canonical design-system authority: .guildhall/design-system.yaml')
+    expect(packet).toContain('Canonical design-system authority: state/design-system.yaml')
     expect(packet).toContain('Token authority: packages/ui/src/styles.css')
     expect(packet).toContain('Component authority: packages/ui/src/components/FrameCard.svelte, packages/ui/src/components/NoticeBand.svelte')
     expect(packet).toContain('Known duplicate primitive families: FrameCard/Card, NoticeBand')
@@ -120,7 +120,8 @@ function diagnostic(
 }
 
 async function writeGuildhallGovernanceFixture(root: string): Promise<void> {
-  await fs.mkdir(path.join(root, '.guildhall'), { recursive: true })
+  const stateDir = getProjectStateDir(root)
+  await fs.mkdir(stateDir, { recursive: true })
   await fs.mkdir(path.join(root, 'packages/ui/src/components'), { recursive: true })
   await fs.mkdir(path.join(root, 'src/web/lib'), { recursive: true })
   await fs.mkdir(path.join(root, 'src/web/surfaces/project'), { recursive: true })
@@ -130,7 +131,7 @@ async function writeGuildhallGovernanceFixture(root: string): Promise<void> {
     'utf-8',
   )
   await fs.writeFile(
-    path.join(root, '.guildhall/design-system.yaml'),
+    path.join(stateDir, 'design-system.yaml'),
     [
       'revision: 1',
       'tokens:',

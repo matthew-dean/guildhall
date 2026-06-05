@@ -9,8 +9,12 @@ import {
   getProjectLocalHistoryDir,
   getProjectLocalHistoryHealth,
   getProjectRecentEventsPath,
+  getProjectSharedStateDir,
   getProjectStateDir,
+  getProjectSystemStateDir,
   getProjectTranscriptPath,
+  inferProjectRootFromMemoryDir,
+  migrateProjectStateToSystem,
 } from '../local-history.js'
 
 let tmp: string
@@ -31,6 +35,8 @@ describe('local history layout', () => {
 
     const historyDir = getProjectLocalHistoryDir(projectRoot)
     const projectStateDir = getProjectStateDir(projectRoot)
+    const sharedStateDir = getProjectSharedStateDir(projectRoot)
+    const systemStateDir = getProjectSystemStateDir(projectRoot)
     const transcriptPath = getProjectTranscriptPath(projectRoot, 'exploring', 'task-1')
     const eventsPath = getProjectRecentEventsPath(projectRoot)
     const debugLedgerPath = getProjectContextDebugLedgerPath(projectRoot)
@@ -38,13 +44,57 @@ describe('local history layout', () => {
 
     expect(historyDir).toMatch(path.join(tmp, 'data', 'projects'))
     expect(historyDir).toContain('repo-')
-    expect(projectStateDir).toBe(path.join(projectRoot, '.guildhall'))
+    expect(projectStateDir).toBe(systemStateDir)
+    expect(sharedStateDir).toBe(path.join(projectRoot, '.guildhall'))
+    expect(systemStateDir).toBe(path.join(historyDir, 'state'))
     expect(transcriptPath).toBe(path.join(historyDir, 'transcripts', 'exploring', 'task-1.md'))
     expect(eventsPath).toBe(path.join(historyDir, 'events', 'recent-events.jsonl'))
     expect(debugLedgerPath).toBe(path.join(historyDir, 'context-debug', 'context-debug.jsonl'))
     expect(debugSnapshotDir).toBe(path.join(historyDir, 'context-debug', 'snapshots', 'task-1'))
     expect(transcriptPath).not.toContain(`${path.sep}memory${path.sep}`)
     expect(debugLedgerPath).not.toContain(`${path.sep}memory${path.sep}`)
+  })
+
+  it('can opt in to project-local state explicitly', () => {
+    const projectRoot = path.join(tmp, 'repo')
+    process.env.GUILDHALL_PROJECT_STATE_PLACEMENT = 'project'
+
+    expect(getProjectStateDir(projectRoot)).toBe(path.join(projectRoot, '.guildhall'))
+
+    delete process.env.GUILDHALL_PROJECT_STATE_PLACEMENT
+  })
+
+  it('migrates legacy project-local task and memory state into system storage', async () => {
+    const projectRoot = path.join(tmp, 'repo')
+    const legacyDir = getProjectSharedStateDir(projectRoot)
+    await fs.mkdir(path.join(legacyDir, 'tasks', 'archive'), { recursive: true })
+    await fs.mkdir(path.join(legacyDir, 'structural-map'), { recursive: true })
+    await fs.writeFile(path.join(legacyDir, 'TASKS.json'), '{"version":1,"tasks":[]}\n', 'utf8')
+    await fs.writeFile(path.join(legacyDir, 'MEMORY.md'), '# Memory\n', 'utf8')
+    await fs.writeFile(path.join(legacyDir, 'PROGRESS.md'), '# Progress\n', 'utf8')
+    await fs.writeFile(path.join(legacyDir, 'DECISIONS.md'), '# Decisions\n', 'utf8')
+    await fs.writeFile(path.join(legacyDir, 'tasks', 'archive', 'done.json'), '{"id":"done"}\n', 'utf8')
+    await fs.writeFile(path.join(legacyDir, 'structural-map', 'accepted.json'), '{"version":1}\n', 'utf8')
+    await fs.writeFile(path.join(legacyDir, 'artifacts.yaml'), 'artifacts: []\n', 'utf8')
+
+    const result = await migrateProjectStateToSystem(projectRoot)
+    const systemStateDir = getProjectSystemStateDir(projectRoot)
+
+    expect(result.migrated).toBe(true)
+    expect(result.movedEntries).toEqual(expect.arrayContaining([
+      'TASKS.json',
+      'MEMORY.md',
+      'PROGRESS.md',
+      'DECISIONS.md',
+      'tasks',
+      'structural-map',
+    ]))
+    await expect(fs.readFile(path.join(systemStateDir, 'TASKS.json'), 'utf8')).resolves.toContain('"tasks"')
+    await expect(fs.readFile(path.join(systemStateDir, 'tasks', 'archive', 'done.json'), 'utf8')).resolves.toContain('done')
+    await expect(fs.stat(path.join(legacyDir, 'TASKS.json'))).rejects.toMatchObject({ code: 'ENOENT' })
+    await expect(fs.stat(path.join(legacyDir, 'tasks'))).rejects.toMatchObject({ code: 'ENOENT' })
+    await expect(fs.readFile(path.join(legacyDir, 'artifacts.yaml'), 'utf8')).resolves.toContain('artifacts')
+    expect(inferProjectRootFromMemoryDir(systemStateDir)).toBe(path.resolve(projectRoot))
   })
 
   it('reports size and oldest transcript for local history health', async () => {

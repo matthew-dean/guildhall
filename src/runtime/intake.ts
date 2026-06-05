@@ -1,7 +1,7 @@
 import fs from 'node:fs/promises'
 import path from 'node:path'
 import { TaskQueue, type RequestIntake, type Task, type TaskRequest, type TaskStatus } from '@guildhall/core'
-import { atomicWriteText } from '@guildhall/sessions'
+import { atomicWriteText, inferProjectRootFromMemoryDir } from '@guildhall/sessions'
 import {
   appendExploringTranscript,
   materializeRequiredSplitChildren,
@@ -58,6 +58,7 @@ async function readQueue(memoryDir: string): Promise<TaskQueue> {
 }
 
 async function writeQueue(memoryDir: string, queue: TaskQueue): Promise<void> {
+  await fs.mkdir(memoryDir, { recursive: true })
   atomicWriteText(tasksPathFor(memoryDir), JSON.stringify(queue, null, 2) + '\n')
 }
 
@@ -180,9 +181,7 @@ export async function createExploringTask(input: IntakeInput): Promise<IntakeRes
 }
 
 function projectRootFromMemoryDir(memoryDir: string): string {
-  return path.basename(memoryDir) === '.guildhall'
-    ? path.dirname(memoryDir)
-    : path.dirname(memoryDir)
+  return inferProjectRootFromMemoryDir(memoryDir)
 }
 
 function ownerInputSourceId(ownerInput: RequestIntakeOwnerInput): string {

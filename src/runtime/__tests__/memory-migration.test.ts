@@ -140,10 +140,9 @@ describe('migrateLegacyMemoryToLocalHistory', () => {
     const gitignore = await fs.readFile(path.join(projectRoot, '.gitignore'), 'utf8')
     expect(gitignore).toContain('node_modules')
     expect(gitignore).toContain('# BEGIN Guildhall managed')
-    expect(gitignore).toContain('!.guildhall/**')
-    expect(gitignore).toContain('.guildhall/config.yaml')
-    expect(gitignore).toContain('.guildhall/codebase-map.yaml')
-    expect(gitignore).toContain('.guildhall/local/')
+    expect(gitignore).toContain('# Project-local Guildhall state stays out of git unless explicitly exported.')
+    expect(gitignore).toContain('.guildhall/')
+    expect(gitignore).not.toContain('!.guildhall/**')
     expect(gitignore).not.toContain('/memory/')
   })
 
@@ -179,10 +178,10 @@ describe('migrateLegacyMemoryToLocalHistory', () => {
     expect(result.gitignoreRoots.sort()).toEqual([knitRoot, loomaRoot].sort())
     await expect(fs.access(path.join(workspaceRoot, '.gitignore'))).rejects.toThrow()
     expect(await fs.readFile(path.join(loomaRoot, '.gitignore'), 'utf8')).toContain('dist')
-    expect(await fs.readFile(path.join(loomaRoot, '.gitignore'), 'utf8')).toContain('.guildhall/worktrees/')
-    expect(await fs.readFile(path.join(loomaRoot, '.gitignore'), 'utf8')).toContain('.guildhall/codebase-map.yaml')
-    expect(await fs.readFile(path.join(knitRoot, '.gitignore'), 'utf8')).toContain('.guildhall/worktrees/')
-    expect(await fs.readFile(path.join(knitRoot, '.gitignore'), 'utf8')).toContain('.guildhall/codebase-map.yaml')
+    expect(await fs.readFile(path.join(loomaRoot, '.gitignore'), 'utf8')).toContain('.guildhall/')
+    expect(await fs.readFile(path.join(loomaRoot, '.gitignore'), 'utf8')).not.toContain('!.guildhall/**')
+    expect(await fs.readFile(path.join(knitRoot, '.gitignore'), 'utf8')).toContain('.guildhall/')
+    expect(await fs.readFile(path.join(knitRoot, '.gitignore'), 'utf8')).not.toContain('!.guildhall/**')
   })
 
   it('stops tracking local Guildhall files that become ignored during migration', async () => {

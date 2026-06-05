@@ -6,25 +6,14 @@ import { tmpdir } from 'node:os'
 import { ensureProjectLocalStateIgnored, readProjectConfig, updateProjectConfig } from '../project-config.js'
 
 const TMP = join(tmpdir(), `guildhall-project-config-test-${process.pid}`)
-const EXTRA_LOCAL_IGNORES = [
-  '.guildhall/codebase-map.yaml',
-  '.guildhall/codebase-map.stale.json',
-  '.guildhall/codebase-map.history.jsonl',
-  '.guildhall/codebase-map/',
-  '.guildhall/external-agent-links.json',
-  '.guildhall/worktrees/',
-  '.guildhall/local/',
-  '.guildhall/cache/',
-  '.guildhall/tmp/',
-  '.guildhall/logs/',
-  '.guildhall/sessions/',
-  '.guildhall/transcripts/',
-  '.guildhall/context-debug/',
-  '.guildhall/events/',
-  '.guildhall/checkpoints/',
-  '.guildhall/dev-tools/',
-  '.guildhall/.session-epoch',
-]
+const MANAGED_BLOCK = [
+  '# BEGIN Guildhall managed',
+  '# Guildhall project exports are opt-in. Default project state is system-local.',
+  '# Project-local Guildhall state stays out of git unless explicitly exported.',
+  '.guildhall/',
+  '# END Guildhall managed',
+  '',
+].join('\n')
 
 describe('project config local state guard', () => {
   beforeEach(() => {
@@ -35,23 +24,13 @@ describe('project config local state guard', () => {
     if (existsSync(TMP)) rmSync(TMP, { recursive: true, force: true })
   })
 
-  it('creates .guildhall/ and ignores only local/private project state', () => {
+  it('creates .guildhall/ and ignores project-local state by default', () => {
     const project = join(TMP, 'fresh')
 
     ensureProjectLocalStateIgnored(project)
 
     expect(existsSync(join(project, '.guildhall'))).toBe(true)
-    expect(readFileSync(join(project, '.gitignore'), 'utf8')).toBe([
-      '# BEGIN Guildhall managed',
-      '# Shared Guildhall project state is trackable by default.',
-      '!.guildhall/',
-      '!.guildhall/**',
-      '# Local/private Guildhall state stays out of git.',
-      '.guildhall/config.yaml',
-      ...EXTRA_LOCAL_IGNORES,
-      '# END Guildhall managed',
-      '',
-    ].join('\n'))
+    expect(readFileSync(join(project, '.gitignore'), 'utf8')).toBe(MANAGED_BLOCK)
   })
 
   it('preserves existing .gitignore content and does not duplicate local/private entries', () => {
@@ -65,19 +44,11 @@ describe('project config local state guard', () => {
     expect(readFileSync(join(project, '.gitignore'), 'utf8')).toBe([
       'node_modules',
       '',
-      '# BEGIN Guildhall managed',
-      '# Shared Guildhall project state is trackable by default.',
-      '!.guildhall/',
-      '!.guildhall/**',
-      '# Local/private Guildhall state stays out of git.',
-      '.guildhall/config.yaml',
-      ...EXTRA_LOCAL_IGNORES,
-      '# END Guildhall managed',
-      '',
+      MANAGED_BLOCK,
     ].join('\n'))
   })
 
-  it('keeps old broad .guildhall ignores from hiding shared metadata', () => {
+  it('keeps old broad .guildhall ignores while adding the managed default block', () => {
     const project = join(TMP, 'already-ignored')
     mkdirSync(project, { recursive: true })
     writeFileSync(join(project, '.gitignore'), 'dist\n/.guildhall/\n', 'utf8')
@@ -88,19 +59,11 @@ describe('project config local state guard', () => {
       'dist',
       '/.guildhall/',
       '',
-      '# BEGIN Guildhall managed',
-      '# Shared Guildhall project state is trackable by default.',
-      '!.guildhall/',
-      '!.guildhall/**',
-      '# Local/private Guildhall state stays out of git.',
-      '.guildhall/config.yaml',
-      ...EXTRA_LOCAL_IGNORES,
-      '# END Guildhall managed',
-      '',
+      MANAGED_BLOCK,
     ].join('\n'))
   })
 
-  it('repairs older .guildhall/* ignores so shared yaml metadata can be committed', () => {
+  it('preserves older .guildhall/* ignores while adding the managed default block', () => {
     const project = join(TMP, 'old-shared-ignore')
     mkdirSync(project, { recursive: true })
     writeFileSync(join(project, '.gitignore'), '.guildhall/*\n', 'utf8')
@@ -110,15 +73,7 @@ describe('project config local state guard', () => {
     expect(readFileSync(join(project, '.gitignore'), 'utf8')).toBe([
       '.guildhall/*',
       '',
-      '# BEGIN Guildhall managed',
-      '# Shared Guildhall project state is trackable by default.',
-      '!.guildhall/',
-      '!.guildhall/**',
-      '# Local/private Guildhall state stays out of git.',
-      '.guildhall/config.yaml',
-      ...EXTRA_LOCAL_IGNORES,
-      '# END Guildhall managed',
-      '',
+      MANAGED_BLOCK,
     ].join('\n'))
   })
 
@@ -141,19 +96,11 @@ describe('project config local state guard', () => {
     expect(readFileSync(join(project, '.gitignore'), 'utf8')).toBe([
       'node_modules',
       '',
-      '# BEGIN Guildhall managed',
-      '# Shared Guildhall project state is trackable by default.',
-      '!.guildhall/',
-      '!.guildhall/**',
-      '# Local/private Guildhall state stays out of git.',
-      '.guildhall/config.yaml',
-      ...EXTRA_LOCAL_IGNORES,
-      '# END Guildhall managed',
-      '',
+      MANAGED_BLOCK,
     ].join('\n'))
   })
 
-  it('makes Git ignore co-located local state while leaving shared .guildhall state trackable', () => {
+  it('makes Git ignore co-located local state unless an explicit export policy is added', () => {
     const project = join(TMP, 'git-ignore-behavior')
     mkdirSync(project, { recursive: true })
     execFileSync('git', ['init', '-b', 'main'], { cwd: project, stdio: 'ignore' })
@@ -171,6 +118,8 @@ describe('project config local state guard', () => {
     writeFileSync(join(project, '.guildhall', 'context-debug', 'snapshot.md'), '# local\n', 'utf8')
 
     for (const ignored of [
+      '.guildhall/TASKS.json',
+      '.guildhall/agent-settings.yaml',
       '.guildhall/config.yaml',
       '.guildhall/codebase-map.yaml',
       '.guildhall/external-agent-links.json',
@@ -179,13 +128,6 @@ describe('project config local state guard', () => {
       '.guildhall/context-debug/snapshot.md',
     ]) {
       expect(spawnSync('git', ['check-ignore', '-q', ignored], { cwd: project }).status).toBe(0)
-    }
-
-    for (const trackable of [
-      '.guildhall/TASKS.json',
-      '.guildhall/agent-settings.yaml',
-    ]) {
-      expect(spawnSync('git', ['check-ignore', '-q', trackable], { cwd: project }).status).toBe(1)
     }
   })
 

@@ -4,7 +4,7 @@ import os from 'node:os'
 import path from 'node:path'
 import { parse as parseYaml } from 'yaml'
 import { FileBackedGuildhallPersistence } from '@guildhall/persistence'
-import { getProjectRuntimeCommandEvidencePath } from '@guildhall/sessions'
+import { getProjectRuntimeCommandEvidencePath, getProjectStateDir } from '@guildhall/sessions'
 import {
   applyProjectMigrations,
   getProjectMigrationStatus,
@@ -166,9 +166,9 @@ describe('applyProjectMigrations', () => {
       only: ['0.8.0/project-state-layout'],
     })
 
-    await expect(fs.readFile(path.join(projectRoot, '.guildhall', 'TASKS.json'), 'utf8')).resolves.toBe('[]\n')
-    await expect(fs.readFile(path.join(projectRoot, '.guildhall', 'DECISIONS.md'), 'utf8')).resolves.toContain('# Migration Test Decisions')
-    await expect(fs.readFile(path.join(projectRoot, '.guildhall', 'PROGRESS.md'), 'utf8')).resolves.toContain('# Migration Test Progress')
+    await expect(fs.readFile(path.join(getProjectStateDir(projectRoot), 'TASKS.json'), 'utf8')).resolves.toBe('[]\n')
+    await expect(fs.readFile(path.join(getProjectStateDir(projectRoot), 'DECISIONS.md'), 'utf8')).resolves.toContain('# Migration Test Decisions')
+    await expect(fs.readFile(path.join(getProjectStateDir(projectRoot), 'PROGRESS.md'), 'utf8')).resolves.toContain('# Migration Test Progress')
   })
 
   it('automatically migrates legacy runtime command JSONL into persistence', async () => {

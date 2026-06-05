@@ -8,6 +8,7 @@ import {
   bootstrapWorkspace,
   findWorkspaceRoot,
   resolveMemoryDir,
+  resolveSharedMemoryDir,
   FORGE_YAML_FILENAME,
   readAgentSettings,
   writeAgentSettings,
@@ -19,9 +20,12 @@ const TMP = join(tmpdir(), `forge-ws-test-${process.pid}`)
 describe('workspace-config', () => {
   beforeEach(() => {
     mkdirSync(TMP, { recursive: true })
+    process.env.GUILDHALL_DATA_DIR = join(TMP, 'data')
   })
 
   afterEach(() => {
+    delete process.env.GUILDHALL_DATA_DIR
+    delete process.env.GUILDHALL_PROJECT_STATE_PLACEMENT
     if (existsSync(TMP)) {
       rmSync(TMP, { recursive: true, force: true })
     }
@@ -59,19 +63,22 @@ describe('workspace-config', () => {
   // bootstrapWorkspace
   // -------------------------------------------------------------------------
   describe('bootstrapWorkspace', () => {
-    it('creates guildhall.yaml and shared .guildhall project-state files', () => {
+    it('creates guildhall.yaml and system project-state files by default', () => {
       const wsDir = join(TMP, 'bootstrap-test')
       const config = bootstrapWorkspace(wsDir, { name: 'Bootstrap Test' })
+      const memoryDir = resolveMemoryDir(wsDir)
 
       expect(config.name).toBe('Bootstrap Test')
       expect(config.id).toBe('bootstrap-test')
       expect(existsSync(join(wsDir, FORGE_YAML_FILENAME))).toBe(true)
       expect(existsSync(join(wsDir, '.guildhall'))).toBe(true)
       expect(readFileSync(join(wsDir, '.gitignore'), 'utf8')).toContain('.guildhall/')
-      expect(existsSync(join(wsDir, '.guildhall', 'TASKS.json'))).toBe(true)
-      expect(existsSync(join(wsDir, '.guildhall', 'MEMORY.md'))).toBe(true)
-      expect(existsSync(join(wsDir, '.guildhall', 'DECISIONS.md'))).toBe(true)
-      expect(existsSync(join(wsDir, '.guildhall', 'PROGRESS.md'))).toBe(true)
+      expect(memoryDir).toContain(join(TMP, 'data', 'projects'))
+      expect(existsSync(join(memoryDir, 'TASKS.json'))).toBe(true)
+      expect(existsSync(join(memoryDir, 'MEMORY.md'))).toBe(true)
+      expect(existsSync(join(memoryDir, 'DECISIONS.md'))).toBe(true)
+      expect(existsSync(join(memoryDir, 'PROGRESS.md'))).toBe(true)
+      expect(existsSync(join(wsDir, '.guildhall', 'TASKS.json'))).toBe(false)
       expect(existsSync(join(wsDir, 'memory'))).toBe(false)
     })
 
@@ -85,7 +92,7 @@ describe('workspace-config', () => {
     it('seeds TASKS.json as empty array', () => {
       const wsDir = join(TMP, 'tasks-seed')
       bootstrapWorkspace(wsDir, { name: 'Tasks Seed' })
-      const tasksRaw = readFileSync(join(wsDir, '.guildhall', 'TASKS.json'), 'utf8')
+      const tasksRaw = readFileSync(join(resolveMemoryDir(wsDir), 'TASKS.json'), 'utf8')
       expect(JSON.parse(tasksRaw)).toEqual([])
     })
 
@@ -93,6 +100,7 @@ describe('workspace-config', () => {
       const wsDir = join(TMP, 'exploring-seed')
       bootstrapWorkspace(wsDir, { name: 'Exploring Seed' })
       expect(existsSync(join(wsDir, '.guildhall', 'exploring'))).toBe(false)
+      expect(existsSync(join(resolveMemoryDir(wsDir), 'exploring'))).toBe(false)
       expect(existsSync(join(wsDir, 'memory'))).toBe(false)
     })
   })
@@ -194,7 +202,16 @@ describe('workspace-config', () => {
   // resolveMemoryDir
   // -------------------------------------------------------------------------
   describe('resolveMemoryDir', () => {
-    it('returns <workspacePath>/.guildhall', () => {
+    it('returns system project state by default and shared state explicitly', () => {
+      const memoryDir = resolveMemoryDir('/home/user/project')
+      expect(memoryDir).toContain(join(TMP, 'data', 'projects'))
+      expect(memoryDir).toContain('project-')
+      expect(memoryDir.endsWith(join('state'))).toBe(true)
+      expect(resolveSharedMemoryDir('/home/user/project')).toBe('/home/user/project/.guildhall')
+    })
+
+    it('returns project-local state only when explicitly opted in', () => {
+      process.env.GUILDHALL_PROJECT_STATE_PLACEMENT = 'project'
       expect(resolveMemoryDir('/home/user/project')).toBe('/home/user/project/.guildhall')
     })
   })

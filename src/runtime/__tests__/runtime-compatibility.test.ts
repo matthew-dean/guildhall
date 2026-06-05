@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import fs from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
+import { getProjectStateDir } from '@guildhall/sessions'
 import {
   compareVersions,
   projectRuntimeCompatibilityBlocker,
@@ -15,7 +16,7 @@ let projectRoot: string
 beforeEach(async () => {
   tmp = await fs.mkdtemp(path.join(os.tmpdir(), 'guildhall-runtime-compat-'))
   projectRoot = path.join(tmp, 'project')
-  await fs.mkdir(path.join(projectRoot, '.guildhall'), { recursive: true })
+  await fs.mkdir(getProjectStateDir(projectRoot), { recursive: true })
 })
 
 afterEach(async () => {
@@ -33,7 +34,7 @@ describe('compareVersions', () => {
 describe('projectRuntimeCompatibilityBlocker', () => {
   it('blocks when the project requires a newer Guildhall or unknown state feature', async () => {
     await fs.writeFile(
-      path.join(projectRoot, '.guildhall', 'runtime.json'),
+      path.join(getProjectStateDir(projectRoot), 'runtime.json'),
       JSON.stringify({
         version: 1,
         minGuildhallVersion: '2.0.0',
@@ -48,7 +49,7 @@ describe('projectRuntimeCompatibilityBlocker', () => {
     })
 
     await fs.writeFile(
-      path.join(projectRoot, '.guildhall', 'runtime.json'),
+      path.join(getProjectStateDir(projectRoot), 'runtime.json'),
       JSON.stringify({
         version: 1,
         minGuildhallVersion: '0.1.0',

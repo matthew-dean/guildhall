@@ -4,6 +4,7 @@ import path from 'node:path'
 
 import { describe, expect, it } from 'vitest'
 import { AGENT_SETTINGS_FILENAME, loadLeverSettings } from '@guildhall/levers'
+import { getProjectStateDir } from '@guildhall/sessions'
 
 import { runGuildhallTaskOnce } from '../run-once.js'
 
@@ -43,11 +44,11 @@ describe('runGuildhallTaskOnce', () => {
     expect(seen).toEqual([{ preferredTaskId: 'task-001', maxTicks: 80 }])
 
     const settings = await loadLeverSettings({
-      path: path.join(projectRoot, '.guildhall', AGENT_SETTINGS_FILENAME),
+      path: path.join(getProjectStateDir(projectRoot), AGENT_SETTINGS_FILENAME),
     })
     expect(settings.project.run_automation.position).toBe('fully_automated')
 
-    const queue = JSON.parse(await fs.readFile(path.join(projectRoot, '.guildhall', 'TASKS.json'), 'utf8'))
+    const queue = JSON.parse(await fs.readFile(path.join(getProjectStateDir(projectRoot), 'TASKS.json'), 'utf8'))
     expect(queue.tasks[0]).toMatchObject({
       id: 'task-001',
       title: 'Create a tiny app that says hello.',
@@ -81,7 +82,7 @@ describe('runGuildhallTaskOnce', () => {
       now: () => '2026-05-29T10:00:00.000Z',
     })
 
-    const queue = JSON.parse(await fs.readFile(path.join(projectRoot, '.guildhall', 'TASKS.json'), 'utf8'))
+    const queue = JSON.parse(await fs.readFile(path.join(getProjectStateDir(projectRoot), 'TASKS.json'), 'utf8'))
     expect(report.title).not.toBe('New request')
     expect(queue.tasks[0].title).toBe(report.title)
     expect(queue.tasks[0].title).not.toBe('New request')
@@ -113,7 +114,6 @@ describe('runGuildhallTaskOnce', () => {
 
 async function seedProject(): Promise<string> {
   const projectRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'guildhall-run-once-'))
-  await fs.mkdir(path.join(projectRoot, '.guildhall'), { recursive: true })
   await fs.writeFile(path.join(projectRoot, 'guildhall.yaml'), [
     'name: Run Once Test',
     'id: run-once-test',
@@ -123,7 +123,9 @@ async function seedProject(): Promise<string> {
     '    mandate: Build the app.',
     '',
   ].join('\n'), 'utf8')
-  await fs.writeFile(path.join(projectRoot, '.guildhall', 'TASKS.json'), JSON.stringify({
+  const stateDir = getProjectStateDir(projectRoot)
+  await fs.mkdir(stateDir, { recursive: true })
+  await fs.writeFile(path.join(stateDir, 'TASKS.json'), JSON.stringify({
     version: 1,
     lastUpdated: '2026-05-29T09:00:00.000Z',
     tasks: [],

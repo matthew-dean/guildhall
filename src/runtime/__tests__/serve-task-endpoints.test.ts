@@ -15,6 +15,7 @@ import { createReviewAuditStore } from '../review-audit-store.js'
 import { FileBackedGuildhallPersistence } from '@guildhall/persistence'
 import { loadBoundedChatSession } from '../bounded-chat.js'
 import { createOwnerInputRequest, listOwnerInputRequests } from '../owner-input-store.js'
+import { postUserQuestionTool } from '../../tools/post-user-question.js'
 
 // Integration tests for the v0.2 UI endpoints:
 //   GET  /api/project/task/:id        — per-task detail powering the drawer
@@ -1424,6 +1425,77 @@ describe('POST /api/project/task/:id/resume', () => {
 })
 
 describe('POST /api/project/bounded-chat/:id/answer', () => {
+  it('carries an agent-posted owner question through system state into Thread and back to owner-input review', async () => {
+    await seedTask('task-1', {
+      status: 'exploring',
+      title: 'Clarify storage migration policy',
+    })
+
+    const toolResult = await postUserQuestionTool.execute(
+      {
+        kind: 'choice',
+        body: 'Which storage migration policy should Guildhall use?',
+        choices: ['Migrate automatically on first open', 'Require explicit owner approval'],
+        selectionMode: 'single',
+      },
+      {
+        cwd: tmpDir,
+        metadata: {
+          tasks_path: path.join(memoryDir, 'TASKS.json'),
+          current_task_id: 'task-1',
+          current_agent_id: 'spec-agent',
+        },
+      },
+    )
+
+    expect(toolResult.is_error).toBe(false)
+    await expect(fs.access(path.join(tmpDir, '.guildhall', 'owner-input'))).rejects.toThrow()
+    await expect(fs.access(path.join(tmpDir, '.guildhall', 'bounded-chat'))).rejects.toThrow()
+
+    const { app } = buildServeApp({ projectPath: tmpDir })
+    const threadRes = await app.fetch(new Request(projectUrl('/api/project/thread')))
+    expect(threadRes.status).toBe(200)
+    const thread = await threadRes.json() as {
+      turns?: Array<{
+        kind?: string
+        sessionId?: string
+        subObjectiveId?: string
+        answerEndpoint?: string
+        question?: { prompt?: string; choices?: string[] }
+      }>
+    }
+    const turn = thread.turns?.find(item => item.kind === 'bounded_chat')
+    expect(turn).toMatchObject({
+      kind: 'bounded_chat',
+      question: {
+        prompt: 'Which storage migration policy should Guildhall use?',
+        choices: ['Migrate automatically on first open', 'Require explicit owner approval'],
+      },
+    })
+
+    const answerRes = await app.fetch(new Request(projectUrl(turn!.answerEndpoint!), {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        questionId: turn!.subObjectiveId,
+        answer: 'Migrate automatically on first open',
+      }),
+    }))
+
+    expect(answerRes.status).toBe(200)
+    const body = await answerRes.json() as Record<string, any>
+    expect(body.boundedChat?.status).toBe('coordinator_review')
+    const requests = await listOwnerInputRequests(tmpDir)
+    expect(requests).toHaveLength(1)
+    expect(requests[0]).toMatchObject({
+      status: 'coordinator_review',
+      prompt: 'Which storage migration policy should Guildhall use?',
+    })
+    const saved = await loadBoundedChatSession({ memoryDir, sessionId: turn!.sessionId! })
+    expect(saved.status).toBe('coordinator_review')
+    expect(saved.subObjectives[0]?.localTurns.at(-1)?.content).toBe('Migrate automatically on first open')
+  })
+
   it('accepts generic owner-input task shaping answers instead of rendering a dead Thread composer', async () => {
     const ownerInput = await createOwnerInputRequest({
       projectRoot: tmpDir,

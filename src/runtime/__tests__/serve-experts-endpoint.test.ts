@@ -4,6 +4,7 @@ import path from 'node:path'
 import os from 'node:os'
 import yaml from 'js-yaml'
 import { bootstrapWorkspace } from '@guildhall/config'
+import { getProjectStateDir } from '@guildhall/sessions'
 import { buildServeApp } from '../serve.js'
 
 // GET /api/project/task/:id/experts — surface applicable personas, their
@@ -18,6 +19,7 @@ async function seedTask(
   overrides: Record<string, any> = {},
 ): Promise<void> {
   const tasksPath = path.join(memoryDir, 'TASKS.json')
+  await fs.mkdir(memoryDir, { recursive: true })
   const queue = {
     version: 1,
     lastUpdated: new Date().toISOString(),
@@ -52,6 +54,7 @@ async function seedTask(
 }
 
 async function seedDesignSystem(): Promise<void> {
+  await fs.mkdir(memoryDir, { recursive: true })
   const ds = {
     version: 1,
     revision: 1,
@@ -90,7 +93,7 @@ async function seedDesignSystem(): Promise<void> {
 beforeEach(async () => {
   tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'guildhall-serve-experts-'))
   projectId = bootstrapWorkspace(tmpDir, { name: 'Experts Endpoint Test' }).id ?? path.basename(tmpDir)
-  memoryDir = path.join(tmpDir, '.guildhall')
+  memoryDir = getProjectStateDir(tmpDir)
 })
 
 afterEach(async () => {

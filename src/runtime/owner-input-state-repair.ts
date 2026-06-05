@@ -62,7 +62,7 @@ export async function repairOwnerInputState(
     return { cancelledInvalid, resolvedByAssumption, cancelledDuplicates, affectedPaths }
   }
 
-  const queueFile = path.join(input.projectRoot, TASKS_RELATIVE_PATH)
+  const queueFile = path.join(memoryDir, 'TASKS.json')
   const queue = await readQueue(queueFile)
   for (const decision of decisions) {
     await closeOwnerInput(memoryDir, decision, now)

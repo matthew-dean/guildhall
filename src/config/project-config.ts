@@ -15,30 +15,11 @@ import { GitStoryPolicy, ModelConfigInputSchema } from './schemas.js'
 export const PROJECT_CONFIG_DIRNAME = '.guildhall'
 export const PROJECT_CONFIG_FILENAME = 'config.yaml'
 export const SHARED_PROJECT_METADATA_GITIGNORE_ENTRIES = [
-  '# Shared Guildhall project state is trackable by default.',
-  `!${PROJECT_CONFIG_DIRNAME}/`,
-  `!${PROJECT_CONFIG_DIRNAME}/**`,
+  '# Guildhall project exports are opt-in. Default project state is system-local.',
 ] as const
 export const LOCAL_PROJECT_STATE_GITIGNORE_ENTRIES = [
-  '# Local/private Guildhall state stays out of git.',
-  `${PROJECT_CONFIG_DIRNAME}/${PROJECT_CONFIG_FILENAME}`,
-  `${PROJECT_CONFIG_DIRNAME}/codebase-map.yaml`,
-  `${PROJECT_CONFIG_DIRNAME}/codebase-map.stale.json`,
-  `${PROJECT_CONFIG_DIRNAME}/codebase-map.history.jsonl`,
-  `${PROJECT_CONFIG_DIRNAME}/codebase-map/`,
-  `${PROJECT_CONFIG_DIRNAME}/external-agent-links.json`,
-  `${PROJECT_CONFIG_DIRNAME}/worktrees/`,
-  `${PROJECT_CONFIG_DIRNAME}/local/`,
-  `${PROJECT_CONFIG_DIRNAME}/cache/`,
-  `${PROJECT_CONFIG_DIRNAME}/tmp/`,
-  `${PROJECT_CONFIG_DIRNAME}/logs/`,
-  `${PROJECT_CONFIG_DIRNAME}/sessions/`,
-  `${PROJECT_CONFIG_DIRNAME}/transcripts/`,
-  `${PROJECT_CONFIG_DIRNAME}/context-debug/`,
-  `${PROJECT_CONFIG_DIRNAME}/events/`,
-  `${PROJECT_CONFIG_DIRNAME}/checkpoints/`,
-  `${PROJECT_CONFIG_DIRNAME}/dev-tools/`,
-  `${PROJECT_CONFIG_DIRNAME}/.session-epoch`,
+  '# Project-local Guildhall state stays out of git unless explicitly exported.',
+  `${PROJECT_CONFIG_DIRNAME}/`,
 ] as const
 export const GUILDHALL_GITIGNORE_BEGIN = '# BEGIN Guildhall managed'
 export const GUILDHALL_GITIGNORE_END = '# END Guildhall managed'
@@ -62,6 +43,7 @@ function stripGuildhallManagedBlock(content: string): string {
 
 const LEGACY_GUILDHALL_POLICY_LINES = new Set([
   `!${PROJECT_CONFIG_DIRNAME}/`,
+  `!${PROJECT_CONFIG_DIRNAME}/**`,
   `!${PROJECT_CONFIG_DIRNAME}/*.yaml`,
   `${PROJECT_CONFIG_DIRNAME}/${PROJECT_CONFIG_FILENAME}`,
   `${PROJECT_CONFIG_DIRNAME}/codebase-map.yaml`,

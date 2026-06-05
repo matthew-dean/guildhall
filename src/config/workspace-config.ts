@@ -3,6 +3,7 @@ import { join, dirname, resolve } from 'node:path'
 import { load as yamlLoad, dump as yamlDump } from 'js-yaml'
 import { WorkspaceYamlConfig, AgentSettings, AGENT_OVERRIDES_FILENAME, slugify } from './schemas.js'
 import { ensureProjectLocalStateIgnored } from './project-config.js'
+import { getProjectSharedStateDir, getProjectStateDir, migrateProjectStateToSystem } from '@guildhall/sessions'
 import type { ZodError } from 'zod'
 
 // ---------------------------------------------------------------------------
@@ -105,7 +106,7 @@ export function bootstrapWorkspace(
 ): WorkspaceYamlConfig {
   const absPath = resolve(workspacePath)
   const configPath = join(absPath, FORGE_YAML_FILENAME)
-  const projectStatePath = join(absPath, MEMORY_DIR_NAME)
+  const projectStatePath = getProjectStateDir(absPath)
 
   // Don't overwrite existing config
   if (existsSync(configPath)) {
@@ -155,7 +156,15 @@ export function bootstrapWorkspace(
  * Always returns <workspacePath>/.guildhall (absolute).
  */
 export function resolveMemoryDir(workspacePath: string): string {
-  return join(resolve(workspacePath), MEMORY_DIR_NAME)
+  return getProjectStateDir(workspacePath)
+}
+
+export async function migrateWorkspaceMemoryDir(workspacePath: string) {
+  return migrateProjectStateToSystem(workspacePath)
+}
+
+export function resolveSharedMemoryDir(workspacePath: string): string {
+  return getProjectSharedStateDir(workspacePath)
 }
 
 // ---------------------------------------------------------------------------

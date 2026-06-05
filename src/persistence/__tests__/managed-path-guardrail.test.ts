@@ -11,6 +11,7 @@ const approvedWriteModules = new Set([
   'src/sessions/storage.ts',
   'src/sessions/task-state-store.ts',
   'src/sessions/local-history.ts',
+  'src/memory-core/storage.ts',
   'src/runtime/project-runtime-command.ts',
 ])
 
@@ -54,6 +55,7 @@ const approvedMigratingModules = new Set([
   'src/runtime/workspace-importer.ts',
   'src/runtime/worktree-manager.ts',
   'src/runtime/wizards.ts',
+  'src/memory-core/prototype-runner.ts',
   'src/tools/agent-settings.ts',
   'src/tools/agent-settings-tool.ts',
   'src/tools/checkpoint.ts',

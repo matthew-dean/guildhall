@@ -8,6 +8,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
 import { z } from 'zod'
+import { getProjectLocalHistoryDir, getProjectStateDir } from '@guildhall/sessions'
 
 import { PermissionChecker, PermissionMode, defaultPermissionSettings } from '../permissions.js'
 import { MaxTurnsExceededError, runQuery } from '../run-query.js'
@@ -18,6 +19,10 @@ import type { ConversationMessage, StreamEvent } from '@guildhall/protocol'
 
 function autoChecker() {
   return new PermissionChecker(defaultPermissionSettings(PermissionMode.FULL_AUTO))
+}
+
+function expectedProjectStatePath(...parts: string[]): string {
+  return join(getProjectStateDir('/workspace/project'), ...parts)
 }
 
 function assistantText(text: string): ConversationMessage {
@@ -1094,7 +1099,7 @@ describe('runQuery — unknown tool + invalid input', () => {
       expect(completed.is_error).toBe(false)
       expect(completed.output).toBe('updated')
     }
-    expect(observedTasksPath).toBe('/workspace/project/.guildhall/TASKS.json')
+    expect(observedTasksPath).toBe(expectedProjectStatePath('TASKS.json'))
   })
 
   it('blocks worker-style review handoff without implementation evidence', async () => {
@@ -2498,7 +2503,7 @@ Review proof packet:
         messages,
       ),
     )
-    expect(observedTasksPath).toBe('/workspace/project/.guildhall/TASKS.json')
+    expect(observedTasksPath).toBe(expectedProjectStatePath('TASKS.json'))
   })
 
   it('replaces invented absolute project paths for task-state tools', async () => {
@@ -2554,8 +2559,8 @@ Review proof packet:
       ),
     )
     const completed = events.find(e => e.type === 'tool_execution_completed')
-    expect(observedTasksPath).toBe('/workspace/project/.guildhall/TASKS.json')
-    expect(completed?.type === 'tool_execution_completed' ? completed.output : '').toBe('/workspace/project/.guildhall/PROGRESS.md')
+    expect(observedTasksPath).toBe(expectedProjectStatePath('TASKS.json'))
+    expect(completed?.type === 'tool_execution_completed' ? completed.output : '').toBe(expectedProjectStatePath('PROGRESS.md'))
   })
 
   it('hydrates project memoryDir for checkpoint tools', async () => {
@@ -2614,8 +2619,8 @@ Review proof packet:
       ),
     )
 
-    expect(observedTasksPath).toBe('/workspace/project/.guildhall/TASKS.json')
-    expect(observedMemoryDir).toContain('/projects/project-')
+    expect(observedTasksPath).toBe(expectedProjectStatePath('TASKS.json'))
+    expect(observedMemoryDir).toBe(getProjectLocalHistoryDir('/workspace/project'))
   })
 
   it('hydrates and normalizes log-decision tool input', async () => {
@@ -2682,7 +2687,7 @@ Review proof packet:
       ),
     )
 
-    expect(observedDecisionsPath).toBe('/workspace/project/.guildhall/DECISIONS.md')
+    expect(observedDecisionsPath).toBe(expectedProjectStatePath('DECISIONS.md'))
     expect(observedEntry).not.toBeNull()
     expect(observedEntry?.['decision']).toBe('Approve mobile real-device testing task as-is')
     expect(observedEntry?.['consequences']).toBe('Worker can continue with testing and fixes.')
@@ -2754,7 +2759,7 @@ Review proof packet:
       ),
     )
 
-    expect(observedProgressPath).toBe('/workspace/project/.guildhall/PROGRESS.md')
+    expect(observedProgressPath).toBe(expectedProjectStatePath('PROGRESS.md'))
     expect(observedEntry).toMatchObject({
       agentId: 'coordinator-knit',
       taskId: 'task-456',
@@ -2822,8 +2827,8 @@ Review proof packet:
     )
 
     expect(observedInput).toMatchObject({
-      tasksPath: '/workspace/project/.guildhall/TASKS.json',
-      progressPath: '/workspace/project/.guildhall/PROGRESS.md',
+      tasksPath: expectedProjectStatePath('TASKS.json'),
+      progressPath: expectedProjectStatePath('PROGRESS.md'),
       taskId: 'task-789',
       agentId: 'coordinator-knit',
       reason: 'decision_required',

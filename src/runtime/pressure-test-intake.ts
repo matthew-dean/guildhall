@@ -2,7 +2,7 @@ import fs from 'node:fs'
 import fsp from 'node:fs/promises'
 import path from 'node:path'
 import { z } from 'zod'
-import { atomicWriteText } from '@guildhall/sessions'
+import { atomicWriteText, inferProjectRootFromMemoryDir } from '@guildhall/sessions'
 import { readCachedJson } from './file-read-cache.js'
 import { listBoundedChatSessions } from './bounded-chat.js'
 import {
@@ -530,7 +530,7 @@ async function answerProjectQuestion(
 }
 
 async function loadProjectQuestionEvidenceFiles(memoryDir: string): Promise<ProjectQuestionEvidenceFile[]> {
-  const projectRoot = path.dirname(memoryDir)
+  const projectRoot = inferProjectRootFromMemoryDir(memoryDir)
   const candidates = [
     { file: path.join(memoryDir, 'project-brief.md'), source: 'project-brief.md' },
     { file: path.join(memoryDir, 'TASKS.json'), source: '.guildhall/TASKS.json' },

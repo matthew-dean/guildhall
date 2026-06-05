@@ -2,6 +2,7 @@ import { mkdir, mkdtemp, readFile, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { describe, expect, it } from 'vitest'
+import { getProjectStateDir } from '@guildhall/sessions'
 import { listOwnerInputRequests } from '../owner-input-store.js'
 import { migrateTaskQuestionsToBoundedChat } from '../task-question-migration.js'
 
@@ -34,7 +35,7 @@ describe('task question migration', () => {
     expect(result.createdOwnerInputRequests).toHaveLength(1)
     expect(result.createdSessions).toHaveLength(1)
 
-    const queue = JSON.parse(await readFile(path.join(root, '.guildhall', 'TASKS.json'), 'utf8'))
+    const queue = JSON.parse(await readFile(path.join(getProjectStateDir(root), 'TASKS.json'), 'utf8'))
     expect(queue.tasks[0].openQuestions).toBeUndefined()
 
     const requests = await listOwnerInputRequests(root)
@@ -46,7 +47,7 @@ describe('task question migration', () => {
     })
 
     const session = JSON.parse(await readFile(
-      path.join(root, '.guildhall', 'bounded-chat', `${result.createdSessions[0]}.json`),
+      path.join(getProjectStateDir(root), 'bounded-chat', `${result.createdSessions[0]}.json`),
       'utf8',
     ))
     expect(session.objective.kind).toBe('task_shaping')
@@ -88,7 +89,7 @@ describe('task question migration', () => {
     expect(first.createdSessions).toEqual([])
     expect(second.changedTasks).toEqual([])
 
-    const queue = JSON.parse(await readFile(path.join(root, '.guildhall', 'TASKS.json'), 'utf8'))
+    const queue = JSON.parse(await readFile(path.join(getProjectStateDir(root), 'TASKS.json'), 'utf8'))
     expect(queue.tasks[0].openQuestions).toBeUndefined()
     expect(queue.tasks[0].notes).toEqual([
       expect.objectContaining({
@@ -121,7 +122,7 @@ describe('task question migration', () => {
     const result = await migrateTaskQuestionsToBoundedChat({ projectRoot: root, projectId: 'demo', apply: true, now })
     const requests = await listOwnerInputRequests(root)
     const session = JSON.parse(await readFile(
-      path.join(root, '.guildhall', 'bounded-chat', `${result.createdSessions[0]}.json`),
+      path.join(getProjectStateDir(root), 'bounded-chat', `${result.createdSessions[0]}.json`),
       'utf8',
     ))
 
@@ -135,8 +136,9 @@ describe('task question migration', () => {
 
 async function projectWithTasks(tasks: unknown[]): Promise<string> {
   const root = await mkdtemp(path.join(tmpdir(), 'guildhall-questions-'))
-  await mkdir(path.join(root, '.guildhall'), { recursive: true })
-  await writeFile(path.join(root, '.guildhall', 'TASKS.json'), JSON.stringify({
+  const stateDir = getProjectStateDir(root)
+  await mkdir(stateDir, { recursive: true })
+  await writeFile(path.join(stateDir, 'TASKS.json'), JSON.stringify({
     version: 1,
     lastUpdated: now,
     tasks,

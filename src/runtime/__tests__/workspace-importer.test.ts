@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest'
 import fs from 'node:fs/promises'
 import path from 'node:path'
 import os from 'node:os'
-import { bootstrapWorkspace } from '@guildhall/config'
+import { bootstrapWorkspace, resolveMemoryDir } from '@guildhall/config'
 import { TaskQueue } from '@guildhall/core'
 import {
   createWorkspaceImportTask,
@@ -29,7 +29,7 @@ beforeEach(async () => {
   dataDir = path.join(os.tmpdir(), `guildhall-data-${path.basename(tmpDir)}`)
   process.env.GUILDHALL_DATA_DIR = dataDir
   bootstrapWorkspace(tmpDir, { name: 'Import Test' })
-  memoryDir = path.join(tmpDir, '.guildhall')
+  memoryDir = resolveMemoryDir(tmpDir)
 })
 
 afterEach(async () => {

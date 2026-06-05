@@ -2,6 +2,7 @@ import { mkdtemp } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { describe, expect, it } from 'vitest'
+import { getProjectStateDir } from '@guildhall/sessions'
 import { listBoundedChatSessions } from '../bounded-chat.js'
 import { createOwnerInputRequest, listOwnerInputRequests } from '../owner-input-store.js'
 
@@ -62,7 +63,7 @@ describe('owner input requests', () => {
       status: 'waiting_for_owner',
     })
 
-    const sessions = listBoundedChatSessions(path.join(root, '.guildhall'))
+    const sessions = listBoundedChatSessions(getProjectStateDir(root))
     expect(sessions).toHaveLength(1)
     expect(sessions[0]).toMatchObject({
       id: first.session.id,
@@ -135,7 +136,7 @@ describe('owner input requests', () => {
     })
 
     expect(result.request.selectionMode).toBe('multiple')
-    const sessions = listBoundedChatSessions(path.join(root, '.guildhall'))
+    const sessions = listBoundedChatSessions(getProjectStateDir(root))
     expect(sessions[0]?.subObjectives[0]).toMatchObject({
       prompt: 'This is a meta-intake task — I need to:',
       selectionMode: 'multiple',

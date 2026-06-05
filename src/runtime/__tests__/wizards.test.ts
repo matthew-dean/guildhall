@@ -8,7 +8,7 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest'
 import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { getProjectLocalHistoryDir } from '@guildhall/sessions'
+import { getProjectLocalHistoryDir, getProjectStateDir } from '@guildhall/sessions'
 import {
   onboardWizard,
   progressFor,
@@ -187,7 +187,7 @@ describe('buildSnapshot', () => {
     tmp = mkdtempSync(join(tmpdir(), 'wizards-test-'))
     dataDir = join(tmpdir(), `guildhall-data-${tmp.split('/').at(-1)}`)
     process.env.GUILDHALL_DATA_DIR = dataDir
-    mkdirSync(join(tmp, '.guildhall'), { recursive: true })
+    mkdirSync(getProjectStateDir(tmp), { recursive: true })
   })
   afterEach(() => {
     delete process.env.GUILDHALL_DATA_DIR
@@ -248,7 +248,7 @@ describe('buildSnapshot', () => {
   })
 
   it('hasDirection=true only when brief has substance (>40 chars)', () => {
-    writeFileSync(join(tmp, '.guildhall', 'project-brief.md'), 'short')
+    writeFileSync(join(getProjectStateDir(tmp), 'project-brief.md'), 'short')
     let snap = buildSnapshot({
       projectPath: tmp,
       readProviders: () => ({ providers: {} }),
@@ -257,7 +257,7 @@ describe('buildSnapshot', () => {
     expect(snap.hasDirection).toBe(false)
 
     writeFileSync(
-      join(tmp, '.guildhall', 'project-brief.md'),
+      join(getProjectStateDir(tmp), 'project-brief.md'),
       'We are building X so that users can do Y. Done looks like Z.',
     )
     snap = buildSnapshot({
@@ -297,7 +297,7 @@ describe('buildSnapshot', () => {
   })
 
   it('taskCount handles both array and {tasks:[]} shapes', () => {
-    writeFileSync(join(tmp, '.guildhall', 'TASKS.json'), JSON.stringify([
+    writeFileSync(join(getProjectStateDir(tmp), 'TASKS.json'), JSON.stringify([
       { id: 'a' },
       { id: 'b' },
       { id: 'task-meta-intake', domain: '_meta' },
@@ -310,7 +310,7 @@ describe('buildSnapshot', () => {
     expect(snap.taskCount).toBe(2)
 
     writeFileSync(
-      join(tmp, '.guildhall', 'TASKS.json'),
+      join(getProjectStateDir(tmp), 'TASKS.json'),
       JSON.stringify({
         tasks: [
           { id: 'a' },
@@ -329,9 +329,9 @@ describe('buildSnapshot', () => {
   })
 
   it('buildSnapshotAsync prefers tasks/index.json for task counts on the hot path', async () => {
-    mkdirSync(join(tmp, '.guildhall', 'tasks'), { recursive: true })
+    mkdirSync(join(getProjectStateDir(tmp), 'tasks'), { recursive: true })
     writeFileSync(
-      join(tmp, '.guildhall', 'tasks', 'index.json'),
+      join(getProjectStateDir(tmp), 'tasks', 'index.json'),
       JSON.stringify({
         version: 1,
         activeTaskIds: ['task-001', 'task-meta-intake', 'task-workspace-import', 'task-002'],
@@ -339,7 +339,7 @@ describe('buildSnapshot', () => {
         archivedCount: 1,
       }),
     )
-    writeFileSync(join(tmp, '.guildhall', 'TASKS.json'), '{not-json')
+    writeFileSync(join(getProjectStateDir(tmp), 'TASKS.json'), '{not-json')
 
     const snap = await buildSnapshotAsync({
       projectPath: tmp,
@@ -352,7 +352,7 @@ describe('buildSnapshot', () => {
 
   it('counts user-created starter tasks even when they are routed through the meta lane', () => {
     writeFileSync(
-      join(tmp, '.guildhall', 'TASKS.json'),
+      join(getProjectStateDir(tmp), 'TASKS.json'),
       JSON.stringify({
         tasks: [
           { id: 'task-meta-intake', domain: '_meta' },
@@ -377,7 +377,7 @@ describe('buildSnapshot', () => {
 
   it('reads wizards.yaml into snapshot.wizardState', () => {
     writeFileSync(
-      join(tmp, '.guildhall', 'wizards.yaml'),
+      join(getProjectStateDir(tmp), 'wizards.yaml'),
       'version: 1\nskipped:\n  onboard:\n    - direction\ncompletedAt: {}\n',
     )
     const snap = buildSnapshot({

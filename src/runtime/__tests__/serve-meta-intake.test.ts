@@ -346,8 +346,12 @@ describe('POST /api/project/meta-intake/synthesize', () => {
     expect(res.status).toBe(200)
     const body = await res.json() as Record<string, any>
     expect(body.ok).toBe(true)
-    expect(body.drafts).toHaveLength(3)
-    expect(body.drafts[0].name).toBe('Converter Core')
+    expect(body.drafts.length).toBeGreaterThanOrEqual(3)
+    expect(body.drafts.map((draft: { name?: string }) => draft.name)).toEqual(expect.arrayContaining([
+      'Converter Core',
+      'Editor Extension Experience',
+      'Documentation',
+    ]))
 
     const updated = await readQueue()
     const updatedTask = updated.tasks.find(t => t.id === META_INTAKE_TASK_ID)

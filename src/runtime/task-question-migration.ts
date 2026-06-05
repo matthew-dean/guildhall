@@ -1,6 +1,6 @@
 import fs from 'node:fs/promises'
 import path from 'node:path'
-import { atomicWriteText } from '@guildhall/sessions'
+import { atomicWriteText, getProjectStateDir } from '@guildhall/sessions'
 import { createOwnerInputRequest } from './owner-input-store.js'
 import { normalizeLegacyOwnerQuestion } from './owner-question-normalizer.js'
 
@@ -53,7 +53,7 @@ export async function migrateTaskQuestionsToBoundedChat(
   input: TaskQuestionMigrationInput,
 ): Promise<TaskQuestionMigrationResult> {
   const now = input.now ?? new Date().toISOString()
-  const file = path.join(input.projectRoot, TASKS_RELATIVE_PATH)
+  const file = path.join(getProjectStateDir(input.projectRoot), 'TASKS.json')
   let raw: string
   try {
     raw = await fs.readFile(file, 'utf8')

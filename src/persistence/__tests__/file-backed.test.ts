@@ -2,6 +2,7 @@ import fs from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
+import { getProjectStateDir } from '@guildhall/sessions'
 
 import { FileBackedGuildhallPersistence } from '../file-backed.js'
 import type { PersistencePlacement } from '../types.js'
@@ -59,7 +60,7 @@ describe('FileBackedGuildhallPersistence', () => {
       now,
     })
 
-    expect(record.ref.path).toContain(path.join(projectRoot, '.guildhall', 'persistence'))
+    expect(record.ref.path).toContain(path.join(getProjectStateDir(projectRoot), 'persistence'))
     expect(record.schema).toEqual({ name: 'review-plan', version: 1 })
     expect(record.provenance).toMatchObject({
       createdAt: '2026-05-25T12:00:00.000Z',

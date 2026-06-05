@@ -9,7 +9,7 @@ import type { Context } from 'hono'
 import { Hono } from 'hono'
 import { streamSSE } from 'hono/streaming'
 import { serve } from '@hono/node-server'
-import { atomicWriteText, getProjectStateDir, getProjectTranscriptPath } from '@guildhall/sessions'
+import { atomicWriteText, getProjectStateDir, getProjectTranscriptPath, migrateProjectStateToSystem } from '@guildhall/sessions'
 import { readTaskWorkspaceStore } from './task-state-store.js'
 import {
   readWorkspaceConfig,
@@ -9353,6 +9353,9 @@ export function buildServeApp(opts: ServeOptions = {}): {
 }
 
 export async function runServe(opts: ServeOptions = {}): Promise<void> {
+  await migrateProjectStateForServeStartup(opts).catch((err) => {
+    console.warn(`[guildhall serve] Project state migration warning: ${err instanceof Error ? err.message : String(err)}`)
+  })
   const { app, supervisor, projectPath } = buildServeApp(opts)
   const project = resolveProject(projectPath)
   const cfg = readProjectConfig(projectPath)
@@ -9438,6 +9441,20 @@ export async function runServe(opts: ServeOptions = {}): Promise<void> {
   }
   process.on('SIGINT', () => { void shutdown('SIGINT') })
   process.on('SIGTERM', () => { void shutdown('SIGTERM') })
+}
+
+async function migrateProjectStateForServeStartup(opts: ServeOptions): Promise<void> {
+  if (process.env.GUILDHALL_PROJECT_STATE_PLACEMENT === 'project') return
+  const roots = new Set<string>()
+  if (opts.projectPath) roots.add(resolve(opts.projectPath))
+  if (opts.preferredProjectPath) roots.add(resolve(opts.preferredProjectPath))
+  for (const workspace of listWorkspaces()) {
+    if (workspace.path) roots.add(resolve(workspace.path))
+  }
+  for (const root of roots) {
+    if (!existsSync(root)) continue
+    await migrateProjectStateToSystem(root)
+  }
 }
 
 // ---------------------------------------------------------------------------

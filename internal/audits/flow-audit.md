@@ -152,6 +152,16 @@ against the live roster when doing a release-gating user test.
 These are the current user-test-plan gaps. Keep this list short; move closed
 items into the incident archive below with the evidence intact.
 
+- [ ] Replace sprawling project-local memory/state with the new
+  `@guildhall/memory-core` boundary. Prototype branch
+  `feature/memory-core-prototype` proves deterministic system-local storage,
+  compaction, and bounded packet assembly for four live local project samples:
+  Fair Labor License 1,682,449 project-local bytes -> 9,337 memory bytes ->
+  2,609 packet bytes; Looma + Knit 2,717,512 -> 21,150 -> 3,462; Jess
+  1,193,145 -> 5,535 -> 2,984; Narrative Harness 396,220 -> 8,663 -> 3,359.
+  Spec: `internal/specs/2026-06-04-guildhall-memory-core.md`. Plan:
+  `internal/plans/2026-06-04-memory-core-refactor-plan.md`.
+
 ## 2026-06-04 Multi-Agent Audit Evidence
 
 Relaunch note: the first delegated batch failed because the model override used

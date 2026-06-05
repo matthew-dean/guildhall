@@ -6,7 +6,7 @@ import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js'
 import { build } from 'esbuild'
 import { describe, expect, it } from 'vitest'
 import { defaultProjectRuntimeState, recordMemoryObservation, writeProjectRuntimeState } from '@guildhall/runtime'
-import { getProjectContextDebugLedgerPath, getProjectLocalHistoryDir } from '@guildhall/sessions'
+import { getProjectContextDebugLedgerPath, getProjectLocalHistoryDir, getProjectStateDir } from '@guildhall/sessions'
 
 describe('guildhall mcp serve', () => {
   it('serves Guildhall resources over stdio', async () => {
@@ -37,9 +37,9 @@ describe('guildhall mcp serve', () => {
         },
         logLevel: 'silent',
       })
-      mkdirSync(join(root, '.guildhall'), { recursive: true })
+      mkdirSync(getProjectStateDir(root), { recursive: true })
       writeFileSync(join(root, 'guildhall.yaml'), 'name: Smoke\nid: smoke\n', 'utf8')
-      writeFileSync(join(root, '.guildhall', 'TASKS.json'), JSON.stringify({
+      writeFileSync(join(getProjectStateDir(root), 'TASKS.json'), JSON.stringify({
         tasks: [{
           id: 'task-001',
           title: 'Smoke MCP',
@@ -50,7 +50,7 @@ describe('guildhall mcp serve', () => {
         }],
       }), 'utf8')
       await recordMemoryObservation({
-        memoryDir: join(root, '.guildhall'),
+        memoryDir: getProjectStateDir(root),
         record: {
           id: 'stdio-memory',
           scope: 'project',

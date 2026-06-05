@@ -3,6 +3,7 @@ import path from 'node:path'
 import { load as yamlLoad } from 'js-yaml'
 import { TaskQueue, type Task, type TaskPriority } from '@guildhall/core'
 import { appendExploringTranscript } from '@guildhall/tools'
+import { inferProjectRootFromMemoryDir } from '@guildhall/sessions'
 import { loadLeverSettings, defaultAgentSettingsPath } from '@guildhall/levers'
 import {
   detectWorkspaceSignals,
@@ -42,7 +43,13 @@ function tasksPathFor(memoryDir: string): string {
 }
 
 async function readQueue(memoryDir: string): Promise<TaskQueue> {
-  const raw = await fs.readFile(tasksPathFor(memoryDir), 'utf-8')
+  let raw: string
+  try {
+    raw = await fs.readFile(tasksPathFor(memoryDir), 'utf-8')
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code !== 'ENOENT') throw err
+    raw = '[]'
+  }
   const parsed = JSON.parse(raw)
   const queue = Array.isArray(parsed)
     ? { version: 1, lastUpdated: new Date().toISOString(), tasks: parsed }
@@ -52,6 +59,7 @@ async function readQueue(memoryDir: string): Promise<TaskQueue> {
 }
 
 async function writeQueue(memoryDir: string, queue: TaskQueue): Promise<void> {
+  await fs.mkdir(memoryDir, { recursive: true })
   await fs.writeFile(tasksPathFor(memoryDir), JSON.stringify(queue, null, 2), 'utf-8')
 }
 
@@ -1220,7 +1228,7 @@ export interface MaybeSeedWorkspaceImportResult {
 async function resolveImportAutonomy(
   memoryDir: string,
 ): Promise<ImportAutonomyPosition> {
-  const workspacePath = path.dirname(memoryDir)
+  const workspacePath = inferProjectRootFromMemoryDir(memoryDir)
   const settingsPath = defaultAgentSettingsPath(workspacePath)
   try {
     const settings = await loadLeverSettings({ path: settingsPath })

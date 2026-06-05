@@ -25,6 +25,7 @@ import path from 'node:path'
 import { TaskQueue } from '@guildhall/core'
 import { createHash } from 'node:crypto'
 import { createOwnerInputRequest } from '@guildhall/runtime/owner-input-store'
+import { inferProjectRootFromMemoryDir } from '@guildhall/sessions'
 
 const TASKS_PATH_SCHEMA = z.string().describe('Absolute path to the TASKS.json file')
 
@@ -110,10 +111,7 @@ function shortHash(value: string): string {
 }
 
 function projectRootFromTasksPath(tasksPath: string): string {
-  const taskDir = path.dirname(tasksPath)
-  return path.basename(taskDir) === '.guildhall'
-    ? path.dirname(taskDir)
-    : taskDir
+  return inferProjectRootFromMemoryDir(path.dirname(tasksPath))
 }
 
 function projectIdFromRoot(projectRoot: string): string {

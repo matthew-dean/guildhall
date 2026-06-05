@@ -24,21 +24,27 @@ let dataDir: string
 let projectStateDir: string
 
 async function writeYaml(rel: string, value: unknown): Promise<void> {
-  const p = path.join(tmpDir, rel)
+  const p = fixturePath(rel)
   await fs.mkdir(path.dirname(p), { recursive: true })
   await fs.writeFile(p, stringifyYaml(value), 'utf8')
 }
 
 async function writeJson(rel: string, value: unknown): Promise<void> {
-  const p = path.join(tmpDir, rel)
+  const p = fixturePath(rel)
   await fs.mkdir(path.dirname(p), { recursive: true })
   await fs.writeFile(p, JSON.stringify(value, null, 2), 'utf8')
 }
 
 async function writeFile(rel: string, contents: string): Promise<void> {
-  const p = path.join(tmpDir, rel)
+  const p = fixturePath(rel)
   await fs.mkdir(path.dirname(p), { recursive: true })
   await fs.writeFile(p, contents, 'utf8')
+}
+
+function fixturePath(rel: string): string {
+  if (rel === '.guildhall') return projectStateDir
+  if (rel.startsWith('.guildhall/')) return path.join(projectStateDir, rel.slice('.guildhall/'.length))
+  return path.join(tmpDir, rel)
 }
 
 async function writeLocalHistoryJson(rel: string, value: unknown): Promise<void> {

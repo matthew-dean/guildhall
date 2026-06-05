@@ -6,6 +6,7 @@ import { execFile } from 'node:child_process'
 import { promisify } from 'node:util'
 import { bootstrapWorkspace, slugify } from '@guildhall/config'
 import type { Task, TaskQueue } from '@guildhall/core'
+import { getProjectStateDir } from '@guildhall/sessions'
 import { buildServeApp } from '../serve.js'
 
 // Integration tests for GET /api/project/release-readiness — the dashboard's
@@ -21,7 +22,7 @@ beforeEach(async () => {
   tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'guildhall-release-'))
   remoteDir = await fs.mkdtemp(path.join(os.tmpdir(), 'guildhall-release-remote-'))
   projectId = bootstrapWorkspace(tmpDir, { name: 'Release Test' }).id ?? path.basename(tmpDir)
-  tasksPath = path.join(tmpDir, '.guildhall', 'TASKS.json')
+  tasksPath = path.join(getProjectStateDir(tmpDir), 'TASKS.json')
   await execFileP('git', ['init', '-b', 'main'], { cwd: tmpDir })
   await execFileP('git', ['config', 'user.email', 'guildhall@example.test'], { cwd: tmpDir })
   await execFileP('git', ['config', 'user.name', 'Guildhall Test'], { cwd: tmpDir })
@@ -67,6 +68,7 @@ function makeTask(overrides: Partial<Task>): Task {
 
 async function seed(tasks: Task[]): Promise<void> {
   const queue: TaskQueue = { version: 1, lastUpdated: new Date().toISOString(), tasks }
+  await fs.mkdir(path.dirname(tasksPath), { recursive: true })
   await fs.writeFile(tasksPath, JSON.stringify(queue, null, 2), 'utf-8')
 }
 
@@ -98,7 +100,7 @@ async function approveDesignSystem(app: ReturnType<typeof buildServeApp>['app'])
 
 async function commitAndPush(message: string): Promise<void> {
   await execFileP('git', ['add', '-f', '--', 'guildhall.yaml', '.guildhall'], { cwd: tmpDir })
-  await execFileP('git', ['commit', '-m', message], { cwd: tmpDir })
+  await execFileP('git', ['commit', '--allow-empty', '-m', message], { cwd: tmpDir })
   await execFileP('git', ['push'], { cwd: tmpDir })
 }
 
@@ -317,14 +319,14 @@ describe('GET /api/project/release-readiness', () => {
     const { app } = buildServeApp({ projectPath: tmpDir })
     await approveDesignSystem(app)
     await commitAndPush('approve design system')
-    await fs.writeFile(path.join(tmpDir, '.guildhall', 'release-note.md'), 'unlanded Guildhall note\n', 'utf8')
+    await fs.writeFile(path.join(tmpDir, 'guildhall.yaml'), 'name: Release Test\nid: release-test\nnotes: unlanded\n', 'utf8')
 
     const res = await app.fetch(new Request(projectUrl('/api/project/release-readiness')))
     const body = await res.json() as any
 
     expect(body.ready).toBe(false)
     expect(body.dirtyCheckout.ownedCount).toBe(1)
-    expect(body.dirtyCheckout.files).toEqual(['.guildhall/release-note.md'])
+    expect(body.dirtyCheckout.files).toEqual(['guildhall.yaml'])
     expect(body.totals.dirtyCheckoutBlockingCount).toBe(1)
   })
 

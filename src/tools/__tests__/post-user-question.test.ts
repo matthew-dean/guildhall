@@ -5,14 +5,15 @@ import os from 'node:os'
 import { postUserQuestionTool } from '../post-user-question.js'
 import { listOwnerInputRequests } from '../../runtime/owner-input-store.js'
 import { listBoundedChatSessions } from '../../runtime/bounded-chat.js'
+import { getProjectStateDir } from '../../sessions/index.js'
 
 let tmpDir: string
 let tasksPath: string
 
 beforeEach(async () => {
   tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'guildhall-question-'))
-  await fs.mkdir(path.join(tmpDir, '.guildhall'), { recursive: true })
-  tasksPath = path.join(tmpDir, '.guildhall', 'TASKS.json')
+  await fs.mkdir(getProjectStateDir(tmpDir), { recursive: true })
+  tasksPath = path.join(getProjectStateDir(tmpDir), 'TASKS.json')
   await fs.writeFile(
     tasksPath,
     JSON.stringify({
@@ -63,12 +64,12 @@ async function ownerInputCount(): Promise<number> {
 }
 
 async function firstSessionPrompt(): Promise<string | undefined> {
-  const sessions = await listBoundedChatSessions(path.join(tmpDir, '.guildhall'))
+  const sessions = await listBoundedChatSessions(getProjectStateDir(tmpDir))
   return sessions[0]?.subObjectives[0]?.prompt
 }
 
 async function sessionQuestions(): Promise<Array<{ prompt?: string; choices?: string[]; helperText?: string }>> {
-  const sessions = await listBoundedChatSessions(path.join(tmpDir, '.guildhall'))
+  const sessions = await listBoundedChatSessions(getProjectStateDir(tmpDir))
   return sessions.map(session => ({
     prompt: session.subObjectives[0]?.prompt,
     choices: session.subObjectives[0]?.choices,

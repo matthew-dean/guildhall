@@ -2,6 +2,7 @@ import fs from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
+import { getProjectStateDir } from '@guildhall/sessions'
 
 import { FileBackedGuildhallPersistence } from '@guildhall/persistence'
 import { createReviewAuditStore } from '../review-audit-store.js'
@@ -55,7 +56,7 @@ describe('review audit store', () => {
       createdBy: 'coordinator:test',
     })
 
-    expect(saved.ref.path).toContain(path.join(projectRoot, '.guildhall', 'persistence'))
+    expect(saved.ref.path).toContain(path.join(getProjectStateDir(projectRoot), 'persistence'))
     expect(saved.payload.createdAt).toBe('2026-05-25T12:34:00.000Z')
     expect(saved.payload.selectedLanes).toEqual(['ux_comprehension', 'plan_completeness'])
     expect(saved.payload.requiredRecipes[0]?.calibrationRecipeIds).toEqual(['ux-zero-context-comprehension'])

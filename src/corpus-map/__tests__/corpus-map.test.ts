@@ -54,7 +54,7 @@ describe('corpus map', () => {
     expect(result.map.abstractions.map((abstraction) => abstraction.id)).toContain('button')
     expect(result.map.abstractions.map((abstraction) => abstraction.id)).toContain('design-system')
     expect(result.map.designSystem).toMatchObject({
-      sourcePath: '.guildhall/design-system.yaml',
+      sourcePath: 'state/design-system.yaml',
       approved: true,
       maturity: 'thin',
       tokenCounts: { color: 1, spacing: 1, typography: 0, radius: 0, shadow: 0 },
@@ -471,7 +471,8 @@ async function writeFixtureProject(root: string): Promise<void> {
   await fs.mkdir(path.join(root, 'src/web/surfaces/project'), { recursive: true })
   await fs.mkdir(path.join(root, 'src/runtime'), { recursive: true })
   await fs.mkdir(path.join(root, 'docs'), { recursive: true })
-  await fs.mkdir(path.join(root, '.guildhall'), { recursive: true })
+  const memoryDir = getProjectStateDir(root)
+  await fs.mkdir(memoryDir, { recursive: true })
   await fs.writeFile(
     path.join(root, 'package.json'),
     JSON.stringify({ name: 'fixture', scripts: { test: 'vitest' }, dependencies: { svelte: '5.0.0' } }, null, 2),
@@ -502,7 +503,7 @@ async function writeFixtureProject(root: string): Promise<void> {
     'utf-8',
   )
   await fs.writeFile(
-    path.join(root, '.guildhall/design-system.yaml'),
+    path.join(memoryDir, 'design-system.yaml'),
     [
       'revision: 1',
       'tokens:',

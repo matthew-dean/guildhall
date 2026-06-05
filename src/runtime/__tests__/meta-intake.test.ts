@@ -25,7 +25,7 @@ import {
   makeDefaultSettings,
   saveLeverSettings,
 } from '@guildhall/levers'
-import { getProjectTranscriptPath } from '@guildhall/sessions'
+import { getProjectStateDir, getProjectTranscriptPath } from '@guildhall/sessions'
 
 // ---------------------------------------------------------------------------
 // FR-14 coordinator bootstrapping via meta-intake
@@ -48,7 +48,7 @@ beforeEach(async () => {
   // Bootstrap a fresh workspace with no coordinators — this is the common
   // entry point for meta-intake.
   bootstrapWorkspace(tmpDir, { name: 'Meta Intake Test' })
-  memoryDir = path.join(tmpDir, '.guildhall')
+  memoryDir = getProjectStateDir(tmpDir)
 })
 
 afterEach(async () => {
