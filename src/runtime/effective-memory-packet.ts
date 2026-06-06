@@ -86,6 +86,7 @@ export async function buildEffectiveMemoryPacket(input: {
     maxBytes: 4096,
     substrate: memoryConfig?.substrate,
     semanticRecall: memoryConfig?.semanticRecall,
+    observationalMemory: memoryConfig?.observationalMemory,
   }).catch(() => undefined)
   const memoryCoreEvidenceRefs = (memoryCorePacket?.candidates ?? [])
     .flatMap(candidate => candidate.sourceRefs)

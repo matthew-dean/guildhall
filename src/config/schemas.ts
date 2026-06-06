@@ -70,6 +70,7 @@ const ProjectSkillsConfig = z.object({
 const MemoryConfig = z.object({
   substrate: z.enum(['mastra', 'deterministic']).default('mastra'),
   semanticRecall: z.boolean().default(false),
+  observationalMemory: z.boolean().default(false),
 }).default({})
 
 const BootstrapConfig = z.object({

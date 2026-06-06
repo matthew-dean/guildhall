@@ -115,6 +115,8 @@ export interface MemoryCandidatePacket {
     repoLocalWrites?: string[]
     features?: string[]
     semanticRecallEnabled?: boolean
+    observationalMemoryEnabled?: boolean
+    observationalProcessorReady?: boolean
   }
 }
 
@@ -131,6 +133,8 @@ export interface MastraMemoryCoreHealth {
   scope: MastraScopeIds
   packages: Record<string, string>
   warnings: string[]
+  observationalMemoryEnabled: boolean
+  observationalProcessorReady: boolean
 }
 
 export interface MastraMemoryCoreAdapter {

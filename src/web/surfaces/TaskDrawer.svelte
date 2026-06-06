@@ -969,6 +969,7 @@
           {runStatus}
           {availabilityStatus}
           {projectStartBlockerMessage}
+          contextDebug={payload.contextDebug ?? []}
           onApproveBrief={() => post('approve-brief')}
           onApproveSpec={handleApproveSpec}
           onRunTask={() => runProject('start', taskId)}

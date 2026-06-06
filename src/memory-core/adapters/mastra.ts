@@ -20,6 +20,7 @@ interface MastraMemoryLike {
     resourceId: string
     title: string
   }) => Promise<unknown>
+  createOMProcessor?: (messages: unknown[], instructions?: unknown) => Promise<unknown>
 }
 
 export async function createMastraMemoryCoreAdapter(input: {
@@ -27,6 +28,7 @@ export async function createMastraMemoryCoreAdapter(input: {
   scope: GuildhallMemoryScope
   readOnly?: boolean
   semanticRecall?: boolean
+  observationalMemory?: boolean
 }): Promise<MastraMemoryCoreAdapter> {
   const { Memory, LibSQLStore, versions } = loadMastraRuntime()
   const paths = resolveMemoryPaths({ projectRoot: input.projectRoot, scope: input.scope })
@@ -44,9 +46,25 @@ export async function createMastraMemoryCoreAdapter(input: {
       lastMessages: input.readOnly ? 10 : 20,
       readOnly: input.readOnly ?? false,
       semanticRecall: input.semanticRecall ?? false,
-      observationalMemory: false,
+      observationalMemory: input.observationalMemory ?? false,
     },
   })
+  const warnings: string[] = []
+  let observationalProcessorReady = false
+  if (input.observationalMemory) {
+    if (typeof memory.createOMProcessor === 'function') {
+      try {
+        await memory.createOMProcessor([], undefined)
+        observationalProcessorReady = true
+      } catch (err) {
+        warnings.push(
+          `Mastra observational memory processor unavailable: ${err instanceof Error ? err.message : String(err)}`,
+        )
+      }
+    } else {
+      warnings.push('Mastra observational memory processor unavailable: createOMProcessor missing')
+    }
+  }
   if (typeof memory.createThread === 'function') {
     await memory.createThread({
       id: scope.threadId,
@@ -63,10 +81,14 @@ export async function createMastraMemoryCoreAdapter(input: {
       'thread-resource-scope',
       input.readOnly ? 'read-only-mode' : 'write-mode',
       input.semanticRecall ? 'semantic-recall-enabled' : 'semantic-recall-disabled',
+      input.observationalMemory ? 'observational-memory-enabled' : 'observational-memory-disabled',
+      observationalProcessorReady ? 'observational-memory-processor' : 'observational-memory-processor-off',
     ],
     scope,
     packages: versions,
-    warnings: [],
+    warnings,
+    observationalMemoryEnabled: input.observationalMemory ?? false,
+    observationalProcessorReady,
   }
   return { health, memory, storage }
 }

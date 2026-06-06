@@ -58,6 +58,17 @@ export interface ContextDebugRecord {
     included: Array<{ id: string; type: string; scope: string }>
     withheld: Array<{ id: string; reason: string }>
     evidenceRefs: number
+    memoryCore?: {
+      adapter: 'mastra' | 'deterministic'
+      fallbackUsed: boolean
+      warnings: string[]
+      candidates: Array<{
+        id: string
+        kind: string
+        summary: string
+        sourceRefs: Array<{ uri: string; path?: string; sourceKind: string }>
+      }>
+    }
   }
   structuralMap?: {
     included: boolean
@@ -428,6 +439,25 @@ export async function writeContextDebugRecord(input: {
               reason: record.reason,
             })),
             evidenceRefs: input.ctx.effectiveMemoryPacket.evidenceRefs.length,
+            ...(input.ctx.effectiveMemoryPacket.memoryCorePacket
+              ? {
+                  memoryCore: {
+                    adapter: input.ctx.effectiveMemoryPacket.memoryCorePacket.health.adapter,
+                    fallbackUsed: input.ctx.effectiveMemoryPacket.memoryCorePacket.health.fallbackUsed,
+                    warnings: input.ctx.effectiveMemoryPacket.memoryCorePacket.health.warnings,
+                    candidates: input.ctx.effectiveMemoryPacket.memoryCorePacket.candidates.map(candidate => ({
+                      id: candidate.id,
+                      kind: candidate.kind,
+                      summary: candidate.summary,
+                      sourceRefs: candidate.sourceRefs.map(ref => ({
+                        uri: ref.uri,
+                        ...(ref.path ? { path: ref.path } : {}),
+                        sourceKind: ref.sourceKind,
+                      })),
+                    })),
+                  },
+                }
+              : {}),
           },
         }
       : {}),

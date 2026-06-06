@@ -1917,13 +1917,24 @@ follow-up here with its evidence instead of deleting it.
   `memory.substrate = "deterministic"` or
   `GUILDHALL_MEMORY_SUBSTRATE=deterministic`; semantic recall is wired but
   disabled by default through `memory.semanticRecall: false` /
-  `GUILDHALL_MEMORY_SEMANTIC_RECALL=0`. `/api/project` now exposes
-  `memoryHealth.memoryCore`, and Overview renders substrate, semantic on/off,
-  and repo-write status from that shared payload. Verified on 2026-06-06 with
-  focused memory/config/API/UI tests, `pnpm lint:data-layer`,
-  `pnpm lint:contracts`, `pnpm typecheck`, `pnpm build`, full
-  `pnpm test -- --run --reporter=dot`, and `pnpm memory:mastra:value-gate`
-  returning `adopt`.
+  `GUILDHALL_MEMORY_SEMANTIC_RECALL=0`. Observational Memory readiness is also
+  wired as explicit opt-in through `memory.observationalMemory` /
+  `GUILDHALL_MEMORY_OBSERVATIONAL`; default health reports compaction off.
+  `/api/project` now exposes `memoryHealth.memoryCore`, Overview renders
+  substrate, semantic on/off, compaction on/off/readiness, and repo-write status
+  from that shared payload, context debug carries memory-core candidates/source
+  refs, the Current task drawer shows a compact memory packet panel, and
+  orchestrator progress logging records meaningful task status/progress events
+  into system-local memory-core storage without creating project-local
+  `.guildhall` memory folders. Verified on 2026-06-06 with focused memory-core,
+  effective-memory, orchestrator progress-ingestion, Current task drawer, and
+  Overview/API tests plus `pnpm lint:data-layer`, `pnpm lint:contracts`,
+  `pnpm typecheck`, `pnpm build`, full `pnpm test -- --run --reporter=dot`
+  (324 files passed, 1 skipped; 3847 tests passed, 3 skipped), and
+  `pnpm memory:mastra:value-gate` returning `adopt`; after `pnpm dev:install`
+  and a service restart, `/api/stale-server` returned `stale:false` and the
+  browser showed "Mastra substrate · semantic off · compaction off · no repo
+  writes" on `/projects/looma-knit/overview`.
 - [x] Run a multi-agent 0.8 user-testing pass on the documented Narrative
   Harness project and repair the bounded regressions found live. The pass
   covered migration/runtime authority, workspace-intake depth, and

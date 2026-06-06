@@ -168,6 +168,24 @@ describe('memory-core', () => {
     expect(await fs.readdir(path.join(projectRoot, '.guildhall'))).toEqual([])
   })
 
+  it('prepares Mastra observational memory only when explicitly enabled', async () => {
+    const adapter = await createMastraMemoryCoreAdapter({
+      projectRoot,
+      scope: taskScope(),
+      readOnly: true,
+      observationalMemory: true,
+    })
+
+    expect(adapter.health.observationalMemoryEnabled).toBe(true)
+    expect(adapter.health.observationalProcessorReady).toBe(true)
+    expect(adapter.health.features).toEqual(expect.arrayContaining([
+      'observational-memory-enabled',
+      'observational-memory-processor',
+    ]))
+    expect(adapter.health.repoLocalWrites).toEqual([])
+    expect(await fs.readdir(path.join(projectRoot, '.guildhall'))).toEqual([])
+  })
+
   it('builds Mastra-normalized packets by default while keeping source refs and semantic recall disabled', async () => {
     await recordMemoryEvent({
       projectRoot,
@@ -202,6 +220,8 @@ describe('memory-core', () => {
       adapter: 'mastra',
       fallbackUsed: false,
       semanticRecallEnabled: false,
+      observationalMemoryEnabled: false,
+      observationalProcessorReady: false,
       repoLocalWrites: [],
     })
     expect(packet.health.features).toEqual(expect.arrayContaining([

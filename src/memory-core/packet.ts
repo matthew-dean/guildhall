@@ -10,6 +10,7 @@ export async function buildMemoryCoreCandidatePacket(input: {
   now?: () => Date
   substrate?: 'mastra' | 'deterministic'
   semanticRecall?: boolean
+  observationalMemory?: boolean
 }): Promise<MemoryCandidatePacket> {
   const substrate = configuredSubstrate(input.substrate)
   if (substrate === 'deterministic') {
@@ -25,6 +26,7 @@ export async function buildMemoryCoreCandidatePacket(input: {
       scope: input.scope,
       readOnly: true,
       semanticRecall: configuredSemanticRecall(input.semanticRecall),
+      observationalMemory: configuredObservationalMemory(input.observationalMemory),
     })
     const deterministic = await buildDeterministicCandidatePacket(input)
     const candidates = deterministic.candidates.map(normalizeMastraCandidate)
@@ -40,6 +42,8 @@ export async function buildMemoryCoreCandidatePacket(input: {
         repoLocalWrites: adapter.health.repoLocalWrites,
         features: adapter.health.features,
         semanticRecallEnabled: adapter.health.features.includes('semantic-recall-enabled'),
+        observationalMemoryEnabled: adapter.health.observationalMemoryEnabled,
+        observationalProcessorReady: adapter.health.observationalProcessorReady,
       },
     }
   } catch (err) {
@@ -74,6 +78,12 @@ function configuredSubstrate(configured?: 'mastra' | 'deterministic'): 'mastra' 
 function configuredSemanticRecall(configured?: boolean): boolean {
   if (process.env.GUILDHALL_MEMORY_SEMANTIC_RECALL === '1') return true
   if (process.env.GUILDHALL_MEMORY_SEMANTIC_RECALL === '0') return false
+  return configured ?? false
+}
+
+function configuredObservationalMemory(configured?: boolean): boolean {
+  if (process.env.GUILDHALL_MEMORY_OBSERVATIONAL === '1') return true
+  if (process.env.GUILDHALL_MEMORY_OBSERVATIONAL === '0') return false
   return configured ?? false
 }
 

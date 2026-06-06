@@ -28,6 +28,7 @@
     TaskThreadEscalationTurn,
     TaskThreadInFlightTurn,
     ExternalBlockerStep,
+    ContextDebugRecord,
   } from '../../lib/types.js'
 
   interface Props {
@@ -39,6 +40,7 @@
     runStatus?: string
     availabilityStatus?: string | null
     projectStartBlockerMessage?: string | null
+    contextDebug?: ContextDebugRecord[]
     onApproveBrief: () => void
     onApproveSpec: () => void
     onRunTask: () => void
@@ -58,6 +60,7 @@
     runStatus = 'stopped',
     availabilityStatus = 'active',
     projectStartBlockerMessage = null,
+    contextDebug = [],
     onApproveBrief,
     onApproveSpec,
     onRunTask,
@@ -80,6 +83,7 @@
   )
 
   const taskNeedsBriefCleanup = $derived(needsWorkerHandoffSpecCleanup(task))
+  const latestMemoryCore = $derived(contextDebug.find(record => record.memoryPacket?.memoryCore)?.memoryPacket?.memoryCore)
 
   function activityElapsed(iso: string | undefined): string | null {
     if (!iso) return null
@@ -351,9 +355,29 @@
     const match = (task.escalations ?? []).find(item => item.id === turn.escalationId)
     return match?.externalChecklist ?? []
   }
+
+  function memoryCoreSourceLabel(source: { uri?: string; path?: string } | undefined): string {
+    if (!source) return 'source unavailable'
+    return source.path ? `${source.uri ?? source.path} (${source.path})` : source.uri ?? 'source unavailable'
+  }
 </script>
 
 <Stack gap="4">
+  {#if latestMemoryCore && (latestMemoryCore.candidates?.length ?? 0) > 0}
+    <Card title="Memory packet" tone={latestMemoryCore.fallbackUsed ? 'warn' : 'default'}>
+      <Stack gap="3">
+        {#each latestMemoryCore.candidates.slice(0, 3) as candidate (candidate.id ?? candidate.summary)}
+          <section class="state-section" aria-label="Memory candidate">
+            <p class="section-label">{candidate.kind ?? 'memory'}</p>
+            <p class="detail-copy">{candidate.summary}</p>
+            {#if candidate.sourceRefs?.length}
+              <p class="detail-copy source-ref">{memoryCoreSourceLabel(candidate.sourceRefs[0])}</p>
+            {/if}
+          </section>
+        {/each}
+      </Stack>
+    </Card>
+  {/if}
   {#if relevantTurns.length === 0 && taskNeedsBriefCleanup}
     <Card title="Needs brief" tone="warn">
       <Stack gap="3">

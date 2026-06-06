@@ -113,6 +113,7 @@ import {
   evaluatePreRejection,
   type PreRejectionAction,
 } from './pre-rejection-policy.js'
+import { recordMemoryEvent, type GuildhallMemoryScope } from '@guildhall/memory-core'
 import { LivenessTracker, type StallFlag } from './liveness.js'
 import {
   tickOutcomeToBackendEvent,
@@ -9536,6 +9537,52 @@ export class Orchestrator {
     } catch {
       // PROGRESS.md unwriteable — non-fatal for the feedback loop itself
     }
+    try {
+      await recordMemoryEvent({
+        projectRoot: this.config.projectPath,
+        event: {
+          scope: this.memoryScopeForProgress(entry),
+          source: {
+            kind: 'progress',
+            ref: `PROGRESS.md#${entry.task.id}`,
+            path: '.guildhall/PROGRESS.md',
+            capturedAt: progressEntry.timestamp,
+          },
+          content: {
+            summary,
+            json: progressEntry,
+          },
+          metadata: {
+            projectId: this.projectMemoryId(),
+            taskId: entry.task.id,
+            agentRole: roleForAgentName(entry.agent),
+            status: entry.afterStatus,
+            retention: 'task_lifecycle',
+            risk: type === 'escalation' || type === 'blocked' ? 'medium' : 'low',
+          },
+        },
+        now: () => new Date(progressEntry.timestamp),
+      })
+    } catch {
+      // Memory-core ingestion is useful context, not a reason to stall the task loop.
+    }
+  }
+
+  private memoryScopeForProgress(entry: {
+    task: Task
+    agent: string
+  }): GuildhallMemoryScope {
+    return {
+      kind: 'task_thread',
+      projectId: this.projectMemoryId(),
+      taskId: entry.task.id,
+      agentRole: memoryAgentRole(entry.agent),
+      threadId: entry.task.id,
+    }
+  }
+
+  private projectMemoryId(): string {
+    return path.basename(this.config.projectPath) || this.config.workspaceId || 'project'
   }
 
   private classifyEntry(
@@ -10410,6 +10457,21 @@ function taskModeToPermissionMode(mode: TaskPermissionMode): PermissionMode {
     case 'full_auto': return PermissionMode.FULL_AUTO
     case 'default':   return PermissionMode.DEFAULT
   }
+}
+
+function memoryAgentRole(agentName: string): Extract<GuildhallMemoryScope, { kind: 'task_thread' }>['agentRole'] {
+  const role = roleForAgentName(agentName)
+  if (
+    role === 'spec' ||
+    role === 'coordinator' ||
+    role === 'worker' ||
+    role === 'reviewer' ||
+    role === 'gateChecker' ||
+    role === 'contextIndexer'
+  ) {
+    return role
+  }
+  return 'coordinator'
 }
 
 /**

@@ -130,6 +130,7 @@ export const ProjectGuildhallConfig = z.object({
   memory: z.object({
     substrate: z.enum(['mastra', 'deterministic']).default('mastra'),
     semanticRecall: z.boolean().default(false),
+    observationalMemory: z.boolean().default(false),
   }).default({}),
 
   /**

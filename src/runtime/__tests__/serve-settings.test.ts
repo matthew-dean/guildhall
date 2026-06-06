@@ -2792,6 +2792,8 @@ describe('GET /api/project — bootstrap status', () => {
           adapter?: string
           fallbackUsed?: boolean
           semanticRecallEnabled?: boolean
+          observationalMemoryEnabled?: boolean
+          observationalProcessorReady?: boolean
           repoLocalWrites?: string[]
         }
       }
@@ -2810,6 +2812,8 @@ describe('GET /api/project — bootstrap status', () => {
       adapter: 'mastra',
       fallbackUsed: false,
       semanticRecallEnabled: false,
+      observationalMemoryEnabled: false,
+      observationalProcessorReady: false,
       repoLocalWrites: [],
     })
   })

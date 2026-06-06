@@ -2,15 +2,18 @@
 
 ## Status
 
-Implemented, 2026-06-06. Semantic recall is wired but intentionally disabled by
-default until a later opt-in quality/latency gate.
+Implemented, 2026-06-06. Mastra-backed memory-core packets, system-local event
+storage, status/progress ingestion, task-drawer source drill-down, migration
+audit, and API/UI health are live. Semantic recall and resource-scoped
+Observational Memory are wired as explicit opt-ins and remain disabled by
+default until later quality/latency gates.
 
 Graphiti is retired. It was explored as a graph/fact-memory candidate and did
 not bear fruit for Guildhall's product needs. It should not remain as a deferred
 implementation path, fallback, or "maybe later" product option. The selected
-path is Mastra Memory and Observational Memory behind a Guildhall-owned
-memory-core API, with deterministic Guildhall summaries as the control and
-fallback.
+path is Mastra Memory behind a Guildhall-owned memory-core API, with explicit
+Observational Memory readiness behind the same boundary and deterministic
+Guildhall summaries as the control and fallback.
 
 This is an internal product and implementation spec. It is not public docs.
 
@@ -25,9 +28,9 @@ Mastra is useful because it gives Guildhall:
 - local embedded storage through `@mastra/libsql`;
 - explicit thread/resource scoping;
 - read-only memory mode for preview/routing/review contexts;
-- Observational Memory for observer/reflector compaction;
-- async observation/reflection buffering so long-running work can compact in
-  the background;
+- explicit Observational Memory processor readiness when the project opts in;
+- a future path for async observation/reflection buffering so long-running work
+  can compact in the background;
 - token-window status and buffering events that can support truthful UI;
 - optional semantic recall and retrieval modes that can be enabled only after a
   separate quality/latency gate.
@@ -207,6 +210,7 @@ Touched contracts:
 - `WorkspaceYamlConfig.memory`;
 - project-local `.guildhall/config.yaml` `memory` overrides;
 - `MemoryCandidatePacket.health`;
+- context-debug memory packet shape;
 - `guildhall://project/memory`;
 - `/api/project.memoryHealth.memoryCore`;
 - Overview memory-health presentation.
@@ -220,15 +224,20 @@ Contracts considered but not touched:
 
 Required follow-up:
 
-- none for schema migration;
+- owner-approved quality/latency gate before enabling semantic recall or
+  Observational Memory by default;
 - semantic recall remains disabled unless `memory.semanticRecall` or
-  `GUILDHALL_MEMORY_SEMANTIC_RECALL` explicitly enables it.
+  `GUILDHALL_MEMORY_SEMANTIC_RECALL` explicitly enables it;
+- Observational Memory remains disabled unless `memory.observationalMemory` or
+  `GUILDHALL_MEMORY_OBSERVATIONAL` explicitly enables it.
 
 Proof required:
 
 - config kill-switch test;
 - Mastra packet/default test;
 - deterministic fallback test;
+- context-debug memory-core source-ref test;
+- orchestrator progress-ingestion memory event test;
 - MCP memory render test;
 - project API test;
 - Overview render test.
@@ -236,7 +245,8 @@ Proof required:
 Proof provided:
 
 - focused Vitest coverage for project config, memory-core, effective memory
-  packet, MCP project-reader, `/api/project`, and ProjectOverviewTab.
+  packet, context debug, orchestrator progress ingestion, MCP project-reader,
+  `/api/project`, CurrentTab, and ProjectOverviewTab.
 
 Waivers:
 
@@ -253,6 +263,9 @@ Apply/revert behavior:
 - setting `memory.substrate = "deterministic"` or
   `GUILDHALL_MEMORY_SUBSTRATE=deterministic` disables Mastra without deleting
   recorded memory events;
+- setting `memory.observationalMemory = false` or
+  `GUILDHALL_MEMORY_OBSERVATIONAL=0` disables Observational Memory processor
+  requests without deleting memory events;
 - removing the config returns to the Mastra default.
 
 ## Schema Migration Decision
@@ -260,7 +273,10 @@ Apply/revert behavior:
 Persisted schema touched:
 
 - workspace/project config gains optional `memory.substrate` and
-  `memory.semanticRecall`.
+  `memory.semanticRecall`;
+- workspace/project config gains optional `memory.observationalMemory`;
+- system-local memory events may include task progress/status transition
+  entries recorded by runtime progress logging.
 
 Scope:
 
@@ -273,7 +289,8 @@ Change class:
 
 Existing data impact:
 
-- existing configs parse with `mastra` and `semanticRecall: false` defaults.
+- existing configs parse with `mastra`, `semanticRecall: false`, and
+  `observationalMemory: false` defaults.
 
 Migration id:
 
@@ -291,12 +308,15 @@ Compatibility reader:
 Fixtures/tests:
 
 - project-config kill-switch test;
-- effective-memory packet deterministic substrate test.
+- effective-memory packet deterministic substrate test;
+- memory-core observational opt-in test;
+- orchestrator progress-ingestion event test.
 
 Owner-facing plan text:
 
 - users can disable Mastra with `memory.substrate = "deterministic"`;
-- semantic recall stays off by default.
+- semantic recall stays off by default;
+- Observational Memory stays off by default until explicitly opted in.
 
 Rollback/revert behavior:
 
@@ -522,13 +542,16 @@ must throw a product error, not silently fall back to repo-local state.
 
 ## Event Ingestion
 
-Memory-core records compact events from these sources:
+Memory-core records compact events through the data layer. Implemented sources:
 
 - task status transitions;
 - worker/reviewer/gate summaries;
+- migration and cleanup reports;
+
+Planned sources that must use the same data-layer API when added:
+
 - owner questions and owner answers;
 - accepted external-agent evidence;
-- migration and cleanup reports;
 - stale-server/runtime proof;
 - selected artifact changes;
 - accepted delivery receipts.
@@ -544,9 +567,15 @@ source payload is too large, memory-core stores:
 
 ## Observational Compaction
 
-Mastra Observational Memory should be used for long-running task threads where
-raw message replay would bloat prompts. Guildhall should add custom observer and
-reflector instructions:
+Mastra Observational Memory is available behind the memory-core adapter as an
+explicit opt-in. The adapter can instantiate a Mastra observational processor
+against system-local libSQL and reports `observationalMemoryEnabled` plus
+`observationalProcessorReady` in health payloads. Default project behavior keeps
+it off until a later quality/latency gate proves the background compaction path.
+
+When that gate is opened, Guildhall should add custom observer and reflector
+instructions for long-running task threads where raw message replay would bloat
+prompts:
 
 Observer priorities:
 
@@ -684,7 +713,7 @@ Implemented 2026-06-06:
 Slice 4: compaction and packets.
 
 - add deterministic packet builder;
-- add Mastra observation/reflection orchestration for task threads;
+- add Mastra observational processor readiness for explicit opt-in projects;
 - normalize Mastra output into `MemoryCandidatePacket`;
 - prove source refs survive.
 
@@ -700,6 +729,10 @@ Implemented 2026-06-06:
 - `memory.substrate = "deterministic"` and
   `GUILDHALL_MEMORY_SUBSTRATE=deterministic` provide the kill switch; semantic
   recall remains disabled by default.
+- `memory.observationalMemory` and `GUILDHALL_MEMORY_OBSERVATIONAL` are wired.
+  When enabled, memory-core asks Mastra for an observational processor and
+  reports readiness; default packets expose `observationalMemoryEnabled: false`
+  and `observationalProcessorReady: false`.
 
 Slice 5: migration/audit.
 
@@ -740,10 +773,18 @@ Implemented 2026-06-06:
   Mastra/default memory-core packet builder instead of deterministic-only
   packets.
 - `/api/project` returns `memoryHealth.memoryCore` with adapter, fallback,
-  storage path, repo-local writes, semantic recall status, warnings, and
-  features.
+  storage path, repo-local writes, semantic recall status, observational
+  readiness, warnings, and features.
 - Overview memory health shows the memory-core substrate, semantic recall
-  on/off state, and repo-write status from the shared API payload.
+  on/off state, compaction on/off/readiness, and repo-write status from the
+  shared API payload.
+- Context debug records now include the memory-core packet's adapter, fallback
+  state, warnings, candidates, and source refs.
+- The Current task drawer shows the latest memory-core packet candidates and
+  their source refs as a compact task-detail memory panel.
+- Orchestrator progress logging mirrors meaningful task progress/status events
+  into system-local memory-core storage through `recordMemoryEvent`; it does not
+  write memory-core data under the project `.guildhall` directory.
 - Migration-modal progress was already fixed in the prior required-migration
   slice; no optimistic completion text remains in this spec's scope.
 
@@ -777,6 +818,11 @@ Implemented 2026-06-06:
   before claiming repo cleanup behavior.
 - Candidate packets stay under byte budgets and include source refs.
 - Forced Mastra failure returns deterministic packets and a visible warning.
+- Task status/progress events are recorded through memory-core system-local
+  storage without adding memory-core folders/files under project `.guildhall`.
+- Task details expose memory-core candidate source refs from context debug.
+- API/UI health reports semantic recall and Observational Memory readiness
+  separately, with both disabled by default.
 - UI/API status does not say migration or compaction is complete until the
   data-layer job is actually done.
 
@@ -798,18 +844,22 @@ Kill Mastra as default if:
 - resource/thread mapping contaminates tasks;
 - compaction makes packets smaller but less useful than deterministic baseline.
 
-## Open Questions
+## Closed Decisions And Deferred Gates
 
-1. Should project-level memory use Mastra resource scope, or should it stay as a
-   dedicated project thread until resource-scope behavior is proven?
-2. Which configured provider/model should observer and reflector use by
-   default when the user has not set a memory-specific model?
-3. Should accepted memory exports be a project setting, workspace setting, or
-   one-time owner action?
-4. How much raw source should the system-local store retain before retention
-   compacts it into source hashes and line/byte ranges?
-5. Should memory health warnings block task start, or only annotate context
-   packets unless source refs are missing?
+1. Project-level memory uses a dedicated project thread/resource mapping through
+   memory-core. Resource-scoped Observational Memory remains opt-in until proven
+   by a later gate.
+2. Observer/reflector model selection has no default background model behavior
+   in this release. Projects must explicitly enable Observational Memory before
+   the adapter requests an observational processor.
+3. Accepted memory exports are not automatic. Repo-local exports remain a
+   future owner action and must go through the storage/data layer.
+4. System-local event storage keeps compact summaries, hashes, source pointers,
+   and line/byte ranges where available. Large raw source retention remains a
+   future retention-policy decision.
+5. Memory health warnings annotate packets and UI. They should block task start
+   only when source refs are missing, repo-local writes are attempted, or a
+   required configured memory substrate is unavailable without fallback.
 
 ## Source Links
 

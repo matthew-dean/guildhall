@@ -279,7 +279,7 @@ describe('effective memory packet', () => {
 
   it('honors the project memory substrate kill switch', async () => {
     updateProjectConfig(path.dirname(memoryDir), {
-      memory: { substrate: 'deterministic', semanticRecall: false },
+      memory: { substrate: 'deterministic', semanticRecall: false, observationalMemory: false },
     })
     await recordMemoryEvent({
       projectRoot: path.dirname(memoryDir),
@@ -402,6 +402,33 @@ describe('effective memory packet', () => {
         source: 'test',
       },
     })
+    await recordMemoryEvent({
+      projectRoot: path.dirname(memoryDir),
+      event: {
+        scope: {
+          kind: 'task_thread',
+          projectId: path.basename(path.dirname(memoryDir)),
+          taskId: 'task-memory',
+          agentRole: 'worker',
+          threadId: 'task-memory',
+        },
+        source: {
+          kind: 'progress',
+          ref: 'PROGRESS.md#debug-memory-core',
+          path: '.guildhall/PROGRESS.md',
+          capturedAt: '2026-06-06T12:00:00.000Z',
+        },
+        content: {
+          summary: 'Memory-core candidate source refs should appear in task context debug.',
+        },
+        metadata: {
+          projectId: path.basename(path.dirname(memoryDir)),
+          taskId: 'task-memory',
+          retention: 'task_lifecycle',
+          risk: 'low',
+        },
+      },
+    })
     const ctx = await buildContext(task(), memoryDir)
 
     const debug = await writeContextDebugRecord({
@@ -417,6 +444,16 @@ describe('effective memory packet', () => {
     expect(debug.memoryPacket).toMatchObject({
       included: [{ id: 'used-memory', type: 'project_habit', scope: 'project' }],
       withheld: [],
+      memoryCore: {
+        adapter: 'mastra',
+        fallbackUsed: false,
+        candidates: [
+          expect.objectContaining({
+            summary: 'Memory-core candidate source refs should appear in task context debug.',
+            sourceRefs: [expect.objectContaining({ uri: 'PROGRESS.md#debug-memory-core' })],
+          }),
+        ],
+      },
     })
     expect(debug.sections.some((section) => section.key === 'effectiveMemory' && section.included)).toBe(true)
   })

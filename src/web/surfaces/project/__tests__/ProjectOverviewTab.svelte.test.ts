@@ -649,6 +649,8 @@ describe('ProjectOverviewTab', () => {
             adapter: 'mastra',
             fallbackUsed: false,
             semanticRecallEnabled: false,
+            observationalMemoryEnabled: false,
+            observationalProcessorReady: false,
             repoLocalWrites: [],
           },
         },
@@ -683,6 +685,7 @@ describe('ProjectOverviewTab', () => {
     expect(screen.getAllByText('Memory health').length).toBeGreaterThan(0)
     expect(screen.getAllByText(/Mastra substrate/).length).toBeGreaterThan(0)
     expect(screen.getAllByText(/semantic off/).length).toBeGreaterThan(0)
+    expect(screen.getAllByText(/compaction off/).length).toBeGreaterThan(0)
     expect(screen.getAllByText(/no repo writes/).length).toBeGreaterThan(0)
     expect(screen.getAllByText(/3 active/).length).toBeGreaterThan(0)
     expect(screen.getByText('Primary proof paths')).toBeInTheDocument()

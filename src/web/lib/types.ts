@@ -715,6 +715,17 @@ export interface ContextDebugRecord {
     included?: Array<{ id?: string; type?: string; scope?: string }>
     withheld?: Array<{ id?: string; reason?: string }>
     evidenceRefs?: number
+    memoryCore?: {
+      adapter?: 'mastra' | 'deterministic'
+      fallbackUsed?: boolean
+      warnings?: string[]
+      candidates?: Array<{
+        id?: string
+        kind?: string
+        summary?: string
+        sourceRefs?: Array<{ uri?: string; path?: string; sourceKind?: string }>
+      }>
+    }
   }
 }
 
@@ -953,6 +964,8 @@ export interface ProjectMemoryHealth {
     storagePath?: string
     repoLocalWrites?: string[]
     semanticRecallEnabled?: boolean
+    observationalMemoryEnabled?: boolean
+    observationalProcessorReady?: boolean
     warnings?: string[]
     features?: string[]
   }

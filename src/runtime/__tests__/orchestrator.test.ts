@@ -36,6 +36,7 @@ import {
   getProjectTranscriptPath,
 } from '@guildhall/sessions'
 import { createOwnerInputRequest, listOwnerInputRequests } from '../owner-input-store.js'
+import { readMemoryEvents } from '@guildhall/memory-core'
 
 // ---------------------------------------------------------------------------
 // Orchestrator feedback-loop tests
@@ -309,6 +310,52 @@ function agentSet(partial: Partial<OrchestratorAgentSet> = {}): OrchestratorAgen
 }
 
 describe('context debug records', () => {
+  it('records meaningful task progress through memory-core system-local storage', async () => {
+    const orch = new Orchestrator({
+      config: baseConfig(),
+      agents: agentSet(),
+      gitDriver: new InMemoryGitDriver(),
+    })
+    const task = mkTask({ id: 'task-memory-progress', status: 'review', title: 'Review memory progress' })
+
+    await (orch as any).logTickProgress({
+      task,
+      agent: 'worker-agent',
+      beforeStatus: 'in_progress',
+      afterStatus: 'review',
+      transitioned: true,
+    })
+
+    const events = await readMemoryEvents({
+      projectRoot: tmpDir,
+      scope: {
+        kind: 'task_thread',
+        projectId: path.basename(tmpDir),
+        taskId: 'task-memory-progress',
+        agentRole: 'worker',
+        threadId: 'task-memory-progress',
+      },
+    })
+    expect(events).toEqual([
+      expect.objectContaining({
+        source: expect.objectContaining({
+          kind: 'progress',
+          ref: 'PROGRESS.md#task-memory-progress',
+          path: '.guildhall/PROGRESS.md',
+        }),
+        content: expect.objectContaining({
+          summary: expect.stringContaining('Review memory progress'),
+        }),
+        metadata: expect.objectContaining({
+          retention: 'task_lifecycle',
+          status: 'review',
+          taskId: 'task-memory-progress',
+        }),
+      }),
+    ])
+    expect(await fs.readdir(memoryDir)).not.toContain('memory')
+  })
+
   it('writes a context record when dispatching a task', async () => {
     await writeQueue([
       mkTask({

@@ -2780,6 +2780,8 @@ export function buildServeApp(opts: ServeOptions = {}): {
       storagePath?: string
       repoLocalWrites: string[]
       semanticRecallEnabled: boolean
+      observationalMemoryEnabled: boolean
+      observationalProcessorReady: boolean
       warnings: string[]
       features: string[]
     }
@@ -2814,6 +2816,11 @@ export function buildServeApp(opts: ServeOptions = {}): {
       : process.env.GUILDHALL_MEMORY_SEMANTIC_RECALL === '0'
         ? false
         : memoryConfig?.semanticRecall ?? false
+    const observationalMemory = process.env.GUILDHALL_MEMORY_OBSERVATIONAL === '1'
+      ? true
+      : process.env.GUILDHALL_MEMORY_OBSERVATIONAL === '0'
+        ? false
+        : memoryConfig?.observationalMemory ?? false
     const memoryCore = memorySubstrate === 'deterministic'
       ? {
           adapter: 'deterministic' as const,
@@ -2821,20 +2828,25 @@ export function buildServeApp(opts: ServeOptions = {}): {
           storagePath: resolveMemoryPaths({ projectRoot: projectPath, scope: memoryCoreScope }).dbPath,
           repoLocalWrites: [],
           semanticRecallEnabled: false,
+          observationalMemoryEnabled: false,
+          observationalProcessorReady: false,
           warnings: [],
-          features: ['deterministic-events', 'semantic-recall-disabled'],
+          features: ['deterministic-events', 'semantic-recall-disabled', 'observational-memory-disabled'],
         }
       : await createMastraMemoryCoreAdapter({
           projectRoot: projectPath,
           scope: memoryCoreScope,
           readOnly: true,
           semanticRecall,
+          observationalMemory,
         }).then(adapter => ({
           adapter: 'mastra' as const,
           fallbackUsed: false,
           storagePath: adapter.health.storagePath,
           repoLocalWrites: adapter.health.repoLocalWrites,
           semanticRecallEnabled: semanticRecall,
+          observationalMemoryEnabled: adapter.health.observationalMemoryEnabled,
+          observationalProcessorReady: adapter.health.observationalProcessorReady,
           warnings: adapter.health.warnings,
           features: adapter.health.features,
         })).catch(err => {
@@ -2845,8 +2857,10 @@ export function buildServeApp(opts: ServeOptions = {}): {
             storagePath: paths.dbPath,
             repoLocalWrites: [],
             semanticRecallEnabled: false,
+            observationalMemoryEnabled: false,
+            observationalProcessorReady: false,
             warnings: [`Mastra memory-core unavailable; deterministic fallback used: ${err instanceof Error ? err.message : String(err)}`],
-            features: ['deterministic-events', 'semantic-recall-disabled'],
+            features: ['deterministic-events', 'semantic-recall-disabled', 'observational-memory-disabled'],
           }
         })
     return {

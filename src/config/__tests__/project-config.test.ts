@@ -206,12 +206,14 @@ describe('project config local state guard', () => {
 
     expect(readProjectConfig(project).memory?.substrate).toBe('mastra')
     expect(readProjectConfig(project).memory?.semanticRecall).toBe(false)
+    expect(readProjectConfig(project).memory?.observationalMemory).toBe(false)
 
-    updateProjectConfig(project, { memory: { substrate: 'deterministic', semanticRecall: true } })
+    updateProjectConfig(project, { memory: { substrate: 'deterministic', semanticRecall: true, observationalMemory: true } })
 
     expect(readProjectConfig(project).memory).toEqual({
       substrate: 'deterministic',
       semanticRecall: true,
+      observationalMemory: true,
     })
   })
 })

@@ -3,7 +3,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import { cleanup, render, screen } from '@testing-library/svelte'
 import userEvent from '@testing-library/user-event'
 import CurrentTab from '../CurrentTab.svelte'
-import type { Task, TaskThreadTurn } from '../../../lib/types.js'
+import type { ContextDebugRecord, Task, TaskThreadTurn } from '../../../lib/types.js'
 
 const now = '2026-05-19T15:00:00.000Z'
 
@@ -59,7 +59,7 @@ function handlers() {
   }
 }
 
-function renderCurrent(turns: TaskThreadTurn[], options: { runError?: string | null; runStatus?: string; availabilityStatus?: string | null } = {}) {
+function renderCurrent(turns: TaskThreadTurn[], options: { runError?: string | null; runStatus?: string; availabilityStatus?: string | null; contextDebug?: ContextDebugRecord[] } = {}) {
   const props = {
     task: baseTask(),
     turns,
@@ -68,6 +68,7 @@ function renderCurrent(turns: TaskThreadTurn[], options: { runError?: string | n
     runError: options.runError ?? null,
     runStatus: options.runStatus ?? 'stopped',
     availabilityStatus: options.availabilityStatus ?? 'paused',
+    contextDebug: options.contextDebug ?? [],
     ...handlers(),
   }
   render(CurrentTab, props)
@@ -77,7 +78,7 @@ function renderCurrent(turns: TaskThreadTurn[], options: { runError?: string | n
 function renderCurrentWithTask(
   task: Task,
   turns: TaskThreadTurn[],
-  options: { runError?: string | null; runStatus?: string; availabilityStatus?: string | null } = {},
+  options: { runError?: string | null; runStatus?: string; availabilityStatus?: string | null; contextDebug?: ContextDebugRecord[] } = {},
 ) {
   const props = {
     task,
@@ -87,6 +88,7 @@ function renderCurrentWithTask(
     runError: options.runError ?? null,
     runStatus: options.runStatus ?? 'stopped',
     availabilityStatus: options.availabilityStatus ?? 'paused',
+    contextDebug: options.contextDebug ?? [],
     ...handlers(),
   }
   render(CurrentTab, props)
@@ -104,6 +106,30 @@ describe('CurrentTab', () => {
 
     expect(screen.getByText('Nothing is waiting')).toBeTruthy()
     expect(screen.getByText('This task does not currently need a decision from you.')).toBeTruthy()
+  })
+
+  it('shows memory-core candidate source refs in the current task panel', () => {
+    renderCurrentWithTask(readyTaskCompleteForWorker(), [], {
+      contextDebug: [{
+        memoryPacket: {
+          memoryCore: {
+            adapter: 'mastra',
+            fallbackUsed: false,
+            warnings: [],
+            candidates: [{
+              id: 'candidate-1',
+              kind: 'observation',
+              summary: 'Memory-core candidate source refs should appear in task context debug.',
+              sourceRefs: [{ uri: 'PROGRESS.md#debug-memory-core', path: '.guildhall/PROGRESS.md', sourceKind: 'progress' }],
+            }],
+          },
+        },
+      }],
+    })
+
+    expect(screen.getByText('Memory packet')).toBeTruthy()
+    expect(screen.getByText('Memory-core candidate source refs should appear in task context debug.')).toBeTruthy()
+    expect(screen.getByText('PROGRESS.md#debug-memory-core (.guildhall/PROGRESS.md)')).toBeTruthy()
   })
 
   it('keeps task-level brief cleanup visible even when there is no active thread turn', async () => {
