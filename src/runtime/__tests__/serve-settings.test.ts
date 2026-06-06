@@ -2794,6 +2794,8 @@ describe('GET /api/project — bootstrap status', () => {
           semanticRecallEnabled?: boolean
           observationalMemoryEnabled?: boolean
           observationalProcessorReady?: boolean
+          compactionStatus?: string
+          semanticValidity?: string
           repoLocalWrites?: string[]
         }
       }
@@ -2814,6 +2816,8 @@ describe('GET /api/project — bootstrap status', () => {
       semanticRecallEnabled: false,
       observationalMemoryEnabled: false,
       observationalProcessorReady: false,
+      compactionStatus: 'active',
+      semanticValidity: 'valid',
       repoLocalWrites: [],
     })
   })

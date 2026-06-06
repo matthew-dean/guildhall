@@ -2782,6 +2782,8 @@ export function buildServeApp(opts: ServeOptions = {}): {
       semanticRecallEnabled: boolean
       observationalMemoryEnabled: boolean
       observationalProcessorReady: boolean
+      compactionStatus: 'active'
+      semanticValidity: 'valid'
       warnings: string[]
       features: string[]
     }
@@ -2830,6 +2832,8 @@ export function buildServeApp(opts: ServeOptions = {}): {
           semanticRecallEnabled: false,
           observationalMemoryEnabled: false,
           observationalProcessorReady: false,
+          compactionStatus: 'active' as const,
+          semanticValidity: 'valid' as const,
           warnings: [],
           features: ['deterministic-events', 'semantic-recall-disabled', 'observational-memory-disabled'],
         }
@@ -2847,6 +2851,8 @@ export function buildServeApp(opts: ServeOptions = {}): {
           semanticRecallEnabled: semanticRecall,
           observationalMemoryEnabled: adapter.health.observationalMemoryEnabled,
           observationalProcessorReady: adapter.health.observationalProcessorReady,
+          compactionStatus: 'active' as const,
+          semanticValidity: 'valid' as const,
           warnings: adapter.health.warnings,
           features: adapter.health.features,
         })).catch(err => {
@@ -2859,6 +2865,8 @@ export function buildServeApp(opts: ServeOptions = {}): {
             semanticRecallEnabled: false,
             observationalMemoryEnabled: false,
             observationalProcessorReady: false,
+            compactionStatus: 'active' as const,
+            semanticValidity: 'valid' as const,
             warnings: [`Mastra memory-core unavailable; deterministic fallback used: ${err instanceof Error ? err.message : String(err)}`],
             features: ['deterministic-events', 'semantic-recall-disabled', 'observational-memory-disabled'],
           }

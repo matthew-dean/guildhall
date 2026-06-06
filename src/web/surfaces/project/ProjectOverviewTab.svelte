@@ -751,12 +751,14 @@
   }
 
   function memoryCoreLabel(memoryCore: ProjectMemoryHealth['memoryCore'] | undefined): string {
-    if (!memoryCore) return 'Memory-core unknown'
-    const substrate = memoryCore.adapter === 'mastra' && !memoryCore.fallbackUsed ? 'Mastra substrate' : 'Deterministic fallback'
-    const recall = memoryCore.semanticRecallEnabled ? 'semantic on' : 'semantic off'
-    const compaction = memoryCore.observationalProcessorReady ? 'compaction ready' : memoryCore.observationalMemoryEnabled ? 'compaction pending' : 'compaction off'
-    const writes = (memoryCore.repoLocalWrites?.length ?? 0) === 0 ? 'no repo writes' : 'repo writes'
-    return `${substrate} · ${recall} · ${compaction} · ${writes}`
+    if (!memoryCore) return 'Memory status unavailable'
+    const storage = (memoryCore.repoLocalWrites?.length ?? 0) === 0 ? 'project repo protected' : 'repo write blocked'
+    const compaction = memoryCore.compactionStatus === 'active' ? 'auto-compacted' : 'compaction needs attention'
+    const semantics = memoryCore.semanticValidity === 'valid' ? 'semantically valid' : 'semantic check needs attention'
+    if (memoryCore.fallbackUsed || (memoryCore.warnings?.length ?? 0) > 0) {
+      return `Memory protected · ${compaction} · ${semantics} · fallback active · ${storage}`
+    }
+    return `Memory protected · ${compaction} · ${semantics} · source-backed · ${storage}`
   }
 
   function memoryCoreTone(memoryCore: ProjectMemoryHealth['memoryCore'] | undefined, health: ProjectMemoryHealth | null | undefined): Tone {

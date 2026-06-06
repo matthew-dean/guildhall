@@ -966,6 +966,8 @@ export interface ProjectMemoryHealth {
     semanticRecallEnabled?: boolean
     observationalMemoryEnabled?: boolean
     observationalProcessorReady?: boolean
+    compactionStatus?: 'active'
+    semanticValidity?: 'valid'
     warnings?: string[]
     features?: string[]
   }

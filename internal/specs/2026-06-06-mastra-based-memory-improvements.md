@@ -4,9 +4,10 @@
 
 Implemented, 2026-06-06. Mastra-backed memory-core packets, system-local event
 storage, status/progress ingestion, task-drawer source drill-down, migration
-audit, and API/UI health are live. Semantic recall and resource-scoped
-Observational Memory are wired as explicit opt-ins and remain disabled by
-default until later quality/latency gates.
+audit, and API/UI health are live. Product memory is always compacted,
+semantically valid, source-backed, and repo-protected. Mastra semantic-recall and
+resource-scoped Observational Memory engines are internal rollout gates, not
+user-facing optional concepts.
 
 Graphiti is retired. It was explored as a graph/fact-memory candidate and did
 not bear fruit for Guildhall's product needs. It should not remain as a deferred
@@ -29,11 +30,11 @@ Mastra is useful because it gives Guildhall:
 - explicit thread/resource scoping;
 - read-only memory mode for preview/routing/review contexts;
 - explicit Observational Memory processor readiness when the project opts in;
-- a future path for async observation/reflection buffering so long-running work
-  can compact in the background;
+- a future engine path for async observation/reflection buffering, while the
+  product contract still requires compacted memory on every path;
 - token-window status and buffering events that can support truthful UI;
-- optional semantic recall and retrieval modes that can be enabled only after a
-  separate quality/latency gate.
+- semantic recall and retrieval engines that can join the product path only
+  after a separate quality/latency gate proves they preserve semantic validity.
 
 Guildhall still owns:
 
@@ -225,7 +226,7 @@ Contracts considered but not touched:
 Required follow-up:
 
 - owner-approved quality/latency gate before enabling semantic recall or
-  Observational Memory by default;
+  Observational Memory engines in the default substrate path;
 - semantic recall remains disabled unless `memory.semanticRecall` or
   `GUILDHALL_MEMORY_SEMANTIC_RECALL` explicitly enables it;
 - Observational Memory remains disabled unless `memory.observationalMemory` or
@@ -315,8 +316,10 @@ Fixtures/tests:
 Owner-facing plan text:
 
 - users can disable Mastra with `memory.substrate = "deterministic"`;
-- semantic recall stays off by default;
-- Observational Memory stays off by default until explicitly opted in.
+- memory remains compacted and semantically valid on both Mastra and fallback
+  paths;
+- semantic recall and Observational Memory are internal engine rollout gates, not
+  owner-facing choices.
 
 Rollback/revert behavior:
 
@@ -456,10 +459,12 @@ User-global memory:
 - Mastra resource: `user:${userId}`
 - Mastra thread: `user:${userId}:guildhall`
 
-Resource-scoped Observational Memory remains off by default because Mastra marks
-resource scope experimental and async buffering is disabled there. Project-level
-memory can use project resource scope only after fixture tests prove it does
-not blur active tasks or slow startup.
+Resource-scoped Observational Memory remains gated because Mastra marks resource
+scope experimental and async buffering is disabled there. Project-level memory
+can use project resource scope only after fixture tests prove it does not blur
+active tasks or slow startup. This does not make compaction optional:
+deterministic event summaries and source-backed candidate packets remain the
+always-on compaction path.
 
 ## Mastra Configuration Policy
 
@@ -567,11 +572,14 @@ source payload is too large, memory-core stores:
 
 ## Observational Compaction
 
-Mastra Observational Memory is available behind the memory-core adapter as an
-explicit opt-in. The adapter can instantiate a Mastra observational processor
-against system-local libSQL and reports `observationalMemoryEnabled` plus
-`observationalProcessorReady` in health payloads. Default project behavior keeps
-it off until a later quality/latency gate proves the background compaction path.
+Memory-core always stores compact event summaries and builds source-backed,
+semantically checked candidate packets. Mastra Observational Memory is available
+behind the memory-core adapter as an internal engine gate. The adapter can
+instantiate a Mastra observational processor against system-local libSQL and
+reports `observationalMemoryEnabled` plus `observationalProcessorReady` in
+health payloads for diagnostics. Default project behavior keeps the product
+contract intact through deterministic compaction while a later quality/latency
+gate proves whether the Mastra background engine should join the default path.
 
 When that gate is opened, Guildhall should add custom observer and reflector
 instructions for long-running task threads where raw message replay would bloat
@@ -729,10 +737,10 @@ Implemented 2026-06-06:
 - `memory.substrate = "deterministic"` and
   `GUILDHALL_MEMORY_SUBSTRATE=deterministic` provide the kill switch; semantic
   recall remains disabled by default.
-- `memory.observationalMemory` and `GUILDHALL_MEMORY_OBSERVATIONAL` are wired.
-  When enabled, memory-core asks Mastra for an observational processor and
-  reports readiness; default packets expose `observationalMemoryEnabled: false`
-  and `observationalProcessorReady: false`.
+- `memory.observationalMemory` and `GUILDHALL_MEMORY_OBSERVATIONAL` are wired as
+  internal engine gates. When enabled, memory-core asks Mastra for an
+  observational processor and reports readiness; default packets continue to be
+  compacted through deterministic event summaries and source-backed candidates.
 
 Slice 5: migration/audit.
 
@@ -775,9 +783,9 @@ Implemented 2026-06-06:
 - `/api/project` returns `memoryHealth.memoryCore` with adapter, fallback,
   storage path, repo-local writes, semantic recall status, observational
   readiness, warnings, and features.
-- Overview memory health shows the memory-core substrate, semantic recall
-  on/off state, compaction on/off/readiness, and repo-write status from the
-  shared API payload.
+- Overview memory health shows the product guarantees: protected,
+  auto-compacted, semantically valid, source-backed memory with project repo
+  protection. Internal engine toggle state stays out of the owner-facing label.
 - Context debug records now include the memory-core packet's adapter, fallback
   state, warnings, candidates, and source refs.
 - The Current task drawer shows the latest memory-core packet candidates and
@@ -821,8 +829,9 @@ Implemented 2026-06-06:
 - Task status/progress events are recorded through memory-core system-local
   storage without adding memory-core folders/files under project `.guildhall`.
 - Task details expose memory-core candidate source refs from context debug.
-- API/UI health reports semantic recall and Observational Memory readiness
-  separately, with both disabled by default.
+- API health keeps semantic recall and Observational Memory readiness as
+  diagnostics, while UI reports the product guarantees: auto-compacted,
+  semantically valid, source-backed memory with project repo protection.
 - UI/API status does not say migration or compaction is complete until the
   data-layer job is actually done.
 
@@ -847,11 +856,11 @@ Kill Mastra as default if:
 ## Closed Decisions And Deferred Gates
 
 1. Project-level memory uses a dedicated project thread/resource mapping through
-   memory-core. Resource-scoped Observational Memory remains opt-in until proven
-   by a later gate.
+   memory-core. Resource-scoped Observational Memory remains an internal engine
+   gate until proven by later fixture evidence.
 2. Observer/reflector model selection has no default background model behavior
-   in this release. Projects must explicitly enable Observational Memory before
-   the adapter requests an observational processor.
+   in this release. Deterministic compaction remains the always-on product path
+   until the Mastra observational engine is proven.
 3. Accepted memory exports are not automatic. Repo-local exports remain a
    future owner action and must go through the storage/data layer.
 4. System-local event storage keeps compact summaries, hashes, source pointers,

@@ -1,6 +1,7 @@
 // @vitest-environment happy-dom
 import '@testing-library/jest-dom/vitest'
 import { cleanup, fireEvent, render, screen } from '@testing-library/svelte'
+import { readFileSync } from 'node:fs'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import ProjectOverviewTab from '../ProjectOverviewTab.svelte'
 
@@ -604,6 +605,9 @@ describe('ProjectOverviewTab', () => {
   })
 
   it('surfaces runtime health, memory health, and primary proof paths', async () => {
+    const source = readFileSync('src/web/surfaces/project/ProjectOverviewTab.svelte', 'utf-8')
+    expect(source).not.toMatch(/semantic (?:on|off)|compaction (?:on|off|ready|pending)|Mastra substrate/)
+
     vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
       const url = new URL(String(input), 'http://localhost')
       if (url.pathname === '/api/project/project-graph') {
@@ -651,6 +655,8 @@ describe('ProjectOverviewTab', () => {
             semanticRecallEnabled: false,
             observationalMemoryEnabled: false,
             observationalProcessorReady: false,
+            compactionStatus: 'active',
+            semanticValidity: 'valid',
             repoLocalWrites: [],
           },
         },
@@ -683,10 +689,11 @@ describe('ProjectOverviewTab', () => {
     expect(screen.getAllByText('Runtime stopped').length).toBeGreaterThan(0)
     expect(screen.getAllByText(/Compatibility mode/).length).toBeGreaterThan(0)
     expect(screen.getAllByText('Memory health').length).toBeGreaterThan(0)
-    expect(screen.getAllByText(/Mastra substrate/).length).toBeGreaterThan(0)
-    expect(screen.getAllByText(/semantic off/).length).toBeGreaterThan(0)
-    expect(screen.getAllByText(/compaction off/).length).toBeGreaterThan(0)
-    expect(screen.getAllByText(/no repo writes/).length).toBeGreaterThan(0)
+    expect(screen.getAllByText(/Memory protected/).length).toBeGreaterThan(0)
+    expect(screen.getAllByText(/auto-compacted/).length).toBeGreaterThan(0)
+    expect(screen.getAllByText(/semantically valid/).length).toBeGreaterThan(0)
+    expect(screen.getAllByText(/source-backed/).length).toBeGreaterThan(0)
+    expect(screen.getAllByText(/project repo protected/).length).toBeGreaterThan(0)
     expect(screen.getAllByText(/3 active/).length).toBeGreaterThan(0)
     expect(screen.getByText('Primary proof paths')).toBeInTheDocument()
     expect(screen.getAllByText('Verify runtime card').length).toBeGreaterThan(0)
