@@ -505,9 +505,17 @@ coverage.
   unavailable. Built-in migration
   `0.10.0/project-state-storage-boundary` owns this cleanup; no feature should
   write Guildhall state directly into project repos outside the storage layer.
-  Remaining gap: run the corrected storage-boundary migration across the
-  managed project roster and verify `.guildhall` is absent unless a project
-  explicitly opts into thin state.
+  2026-06-06 follow-up: corrected storage-boundary migration ran across the
+  managed project roster and verified `.guildhall` absent in
+  `fair-labor-license`, `looma-knit`, `jess`, `narrative-harness`,
+  `font-something`, `t-minus-t`, `commerce-project`, and `guildhall`. A stale
+  pre-fix `mcp serve` process rooted in Jess was the source of later
+  `runtime.json` timestamp rewrites; that process was stopped, and fresh
+  patched MCP/web route checks did not recreate repo-local `.guildhall` files.
+  Stale Guildhall process detection now parses sibling packaged Guildhall
+  processes, reports stale siblings through `/api/stale-server`, and service
+  startup terminates stale Guildhall processes started before the current
+  installed build mtime.
   Treat this as a writer-boundary, memory/context, and cleanup blocker, not a
   one-time compaction chore.
   2026-06-06 implementation slice:

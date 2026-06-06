@@ -269,6 +269,12 @@ import {
 } from './attention.js'
 import { projectRuntimeCompatibilityBlocker } from './runtime-compatibility.js'
 import { ProjectRuntimeSupervisor } from './project-runtime-supervisor.js'
+import {
+  findStaleGuildhallProcesses,
+  listGuildhallProcesses,
+  stopStaleGuildhallProcesses,
+  type GuildhallProcessInfo,
+} from './stale-guildhall-processes.js'
 import { createCapabilityRequest, listCapabilityRequests } from './capability-requests.js'
 import {
   approveMountDirectoryRequest,
@@ -2645,6 +2651,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
     currentBuildMtimeMs: number
     stale: boolean
     distPath: string | null
+    staleProcesses?: GuildhallProcessInfo[]
   } {
     let currentBuildMtimeMs = bootBuildMtimeMs
     try {
@@ -2661,6 +2668,18 @@ export function buildServeApp(opts: ServeOptions = {}): {
       currentBuildMtimeMs,
       stale: currentBuildMtimeMs > bootBuildMtimeMs,
       distPath: distEntryPath,
+    }
+  }
+
+  async function servedBundleFreshnessPayloadWithProcesses(): Promise<ReturnType<typeof servedBundleFreshnessPayload>> {
+    const payload = servedBundleFreshnessPayload()
+    const staleProcesses = findStaleGuildhallProcesses(await listGuildhallProcesses(), {
+      currentPid: process.pid,
+      currentBuildMtimeMs: payload.currentBuildMtimeMs,
+    })
+    return {
+      ...payload,
+      ...(staleProcesses.length > 0 ? { staleProcesses } : {}),
     }
   }
 
@@ -2754,8 +2773,8 @@ export function buildServeApp(opts: ServeOptions = {}): {
     return c.json(servedBundleFreshnessPayload())
   })
 
-  app.get('/api/stale-server', c => {
-    return c.json(servedBundleFreshnessPayload())
+  app.get('/api/stale-server', async c => {
+    return c.json(await servedBundleFreshnessPayloadWithProcesses())
   })
 
   app.get('/api/health', async c => {
@@ -9751,6 +9770,16 @@ export async function runServe(opts: ServeOptions = {}): Promise<void> {
     const distEntry = [join(here, 'cli.js'), join(here, '..', 'cli.js')].find(p => existsSync(p))
     if (distEntry) {
       const mtime = statSync(distEntry).mtimeMs
+      void stopStaleGuildhallProcesses({
+        currentPid: process.pid,
+        currentBuildMtimeMs: Math.floor(mtime),
+      }).then(result => {
+        if (result.stopped.length > 0) {
+          console.log(`[guildhall serve] Stopped ${result.stopped.length} stale Guildhall process${result.stopped.length === 1 ? '' : 'es'}.`)
+        }
+      }).catch(() => {
+        /* non-fatal */
+      })
       console.log(`[guildhall serve] Loaded build: ${new Date(mtime).toISOString()}  (${distEntry})`)
       console.log(`[guildhall serve] Rebuild → restart required (kill ${process.pid} + re-run).`)
     }
