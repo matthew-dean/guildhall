@@ -1,5 +1,10 @@
 import type { Task } from '@guildhall/core'
 import { inferProjectRootFromMemoryDir } from '@guildhall/sessions'
+import path from 'node:path'
+import {
+  buildDeterministicCandidatePacket,
+  type MemoryCandidatePacket,
+} from '@guildhall/memory-core'
 import {
   listMemoryRecords,
   type MemoryEvidenceRef,
@@ -19,6 +24,7 @@ export interface EffectiveMemoryPacket {
   included: MemoryRecord[]
   withheld: WithheldMemory[]
   evidenceRefs: MemoryEvidenceRef[]
+  memoryCorePacket?: MemoryCandidatePacket
   rendered: string
 }
 
@@ -39,6 +45,7 @@ export async function buildEffectiveMemoryPacket(input: {
   ].join('\n')
   const taskKinds = inferTaskKinds(queryText)
   const fileAreas = fileAreaHints(queryText)
+  const projectRoot = inferProjectRootFromMemoryDir(input.memoryDir)
   const structuralScopeIds = structuralScopesForTask(input.memoryDir, input.task, fileAreas)
   const all = await listMemoryRecords({ memoryDir: input.memoryDir })
   const relevant = all
@@ -64,19 +71,41 @@ export async function buildEffectiveMemoryPacket(input: {
       summary: record.summary,
     }))
   const evidenceRefs = included.flatMap((record) => record.evidenceRefs)
+  const memoryCorePacket = await buildDeterministicCandidatePacket({
+    projectRoot,
+    scope: {
+      kind: 'task_thread',
+      projectId: projectIdFor(projectRoot),
+      taskId: input.task.id,
+      agentRole: 'worker',
+      threadId: input.task.id,
+    },
+    purpose: 'next_worker_context',
+    maxBytes: 4096,
+  }).catch(() => undefined)
+  const memoryCoreEvidenceRefs = (memoryCorePacket?.candidates ?? [])
+    .flatMap(candidate => candidate.sourceRefs)
+    .map(ref => ({
+      kind: ref.sourceKind,
+      summary: ref.uri,
+      ref: ref.uri,
+      ...(ref.path ? { path: ref.path } : {}),
+    }))
   return {
     included,
     withheld,
-    evidenceRefs,
-    rendered: renderEffectiveMemory(included, withheld),
+    evidenceRefs: [...evidenceRefs, ...memoryCoreEvidenceRefs],
+    ...(memoryCorePacket ? { memoryCorePacket } : {}),
+    rendered: renderEffectiveMemory(included, withheld, memoryCorePacket),
   }
 }
 
 export function renderEffectiveMemory(
   included: readonly MemoryRecord[],
   withheld: readonly WithheldMemory[],
+  memoryCorePacket?: MemoryCandidatePacket,
 ): string {
-  if (included.length === 0 && withheld.length === 0) return ''
+  if (included.length === 0 && withheld.length === 0 && (memoryCorePacket?.candidates.length ?? 0) === 0) return ''
   const lines = ['## Effective Memory', '']
   if (included.length > 0) {
     for (const record of included) {
@@ -95,6 +124,16 @@ export function renderEffectiveMemory(
     lines.push('### Withheld Memory')
     for (const record of withheld) {
       lines.push(`- ${record.id}: ${record.reason}`)
+    }
+  }
+  if (memoryCorePacket && memoryCorePacket.candidates.length > 0) {
+    lines.push('', '## Memory-Core Candidate Packet')
+    lines.push(`- adapter: ${memoryCorePacket.health.adapter}${memoryCorePacket.health.fallbackUsed ? ' (fallback)' : ''}`)
+    for (const candidate of memoryCorePacket.candidates.slice(0, 6)) {
+      lines.push(`- ${candidate.summary}`)
+      for (const source of candidate.sourceRefs.slice(0, 2)) {
+        lines.push(`  - source: ${source.uri}${source.path ? ` (${source.path})` : ''}`)
+      }
     }
   }
   return clip(lines.join('\n').trim(), MAX_RENDERED_MEMORY_CHARS)
@@ -180,4 +219,8 @@ function clip(value: string, max: number): string {
   const text = value.trim()
   if (text.length <= max) return text
   return `${text.slice(0, max - 32).trimEnd()}\n[truncated ${text.length - max + 32} chars]`
+}
+
+function projectIdFor(projectRoot: string): string {
+  return path.basename(projectRoot) || 'project'
 }

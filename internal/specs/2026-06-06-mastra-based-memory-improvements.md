@@ -2,7 +2,7 @@
 
 ## Status
 
-Draft, 2026-06-06.
+Partially implemented, 2026-06-06.
 
 Graphiti is retired. It was explored as a graph/fact-memory candidate and did
 not bear fruit for Guildhall's product needs. It should not remain as a deferred
@@ -548,6 +548,18 @@ Slice 2: memory-core data access.
 - add failing tests proving no project-local writes happen without opt-in;
 - wire data-layer guardrails to memory-core paths.
 
+Implemented 2026-06-06:
+
+- `src/memory-core/` now exposes the Guildhall-owned memory-core boundary.
+- Scope mapping converts project/task/thread/user scopes to Mastra
+  resource/thread ids without cross-task sharing.
+- Memory events and audit reports write to system-local project data through
+  memory-core data access.
+- Deterministic candidate packets preserve source refs and expose fallback
+  health.
+- `scripts/data-layer-guardrails.mjs` recognizes memory-core data access as the
+  owned storage layer.
+
 Slice 3: Mastra adapter.
 
 - move value-gate runtime code from `scripts/` into
@@ -556,12 +568,28 @@ Slice 3: Mastra adapter.
 - preserve thread/resource mapping and source metadata;
 - expose health and fallback status.
 
+Implemented 2026-06-06:
+
+- `src/memory-core/adapters/mastra.ts` instantiates real Mastra `Memory` with
+  `LibSQLStore` at the system-local memory DB path.
+- Adapter health reports package versions, storage path, repo-local writes,
+  features, warnings, and normalized scope ids.
+- Read-only mode is supported for preview/routing/review-style consumers.
+
 Slice 4: compaction and packets.
 
 - add deterministic packet builder;
 - add Mastra observation/reflection orchestration for task threads;
 - normalize Mastra output into `MemoryCandidatePacket`;
 - prove source refs survive.
+
+Partially implemented 2026-06-06:
+
+- Deterministic packet builder is live and included in effective memory packets.
+- Runtime context builders can now render memory-core candidate packets without
+  replacing accepted legacy memory records.
+- Mastra Observational Memory orchestration remains the next implementation
+  step; semantic recall remains disabled.
 
 Slice 5: migration/audit.
 
@@ -576,6 +604,14 @@ Slice 6: runtime/API/UI integration.
 - MCP memory resource returns packet/audit previews;
 - project/task UI shows memory health and compaction progress;
 - migration apply modal blocks until data-layer work is complete.
+
+Partially implemented 2026-06-06:
+
+- `buildEffectiveMemoryPacket` includes memory-core deterministic packet
+  candidates and evidence refs.
+- `guildhall://project/memory` renders memory-core storage path, event path,
+  adapter/fallback status, repo-local write status, and candidate preview.
+- UI memory health and migration-modal progress remain open.
 
 Slice 7: semantic recall gate.
 

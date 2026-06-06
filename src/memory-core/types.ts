@@ -1,0 +1,147 @@
+export type GuildhallMemoryScope =
+  | {
+      kind: 'task_thread'
+      projectId: string
+      taskId: string
+      agentRole: 'spec' | 'coordinator' | 'worker' | 'reviewer' | 'gateChecker' | 'contextIndexer'
+      threadId: string
+      runId?: string
+    }
+  | {
+      kind: 'project'
+      projectId: string
+    }
+  | {
+      kind: 'user_global'
+      userId: string
+    }
+
+export type MemorySourceKind =
+  | 'task'
+  | 'progress'
+  | 'review'
+  | 'gate'
+  | 'tool'
+  | 'thread'
+  | 'artifact'
+  | 'external_agent'
+  | 'generated_map'
+
+export interface MemorySourceRef {
+  id: string
+  sourceKind: MemorySourceKind
+  uri: string
+  path?: string
+  lineStart?: number
+  lineEnd?: number
+  byteStart?: number
+  byteEnd?: number
+  hash?: string
+  capturedAt: string
+}
+
+export interface RecordMemoryEventInput {
+  scope: GuildhallMemoryScope
+  source: {
+    kind: MemorySourceKind
+    ref: string
+    path?: string
+    capturedAt: string
+  }
+  content: {
+    text?: string
+    json?: unknown
+    summary: string
+  }
+  metadata: {
+    projectId?: string
+    taskId?: string
+    agentRole?: string
+    status?: string
+    risk?: 'low' | 'medium' | 'high'
+    retention?: 'ephemeral' | 'debug' | 'task_lifecycle' | 'durable_memory'
+  }
+}
+
+export interface MemoryEvent extends RecordMemoryEventInput {
+  id: string
+  recordedAt: string
+  sourceRefs: MemorySourceRef[]
+}
+
+export interface MemoryWriteResult {
+  id: string
+  storagePath: string
+  repoLocalWrites: string[]
+}
+
+export interface MemoryPaths {
+  projectRoot: string
+  memoryDir: string
+  dbPath: string
+  eventsPath: string
+  auditDir: string
+}
+
+export interface MemoryCandidate {
+  id: string
+  kind: 'event' | 'observation' | 'reflection' | 'working_memory' | 'semantic_recall' | 'deterministic_summary'
+  summary: string
+  relevance: 'high' | 'medium' | 'low'
+  confidence: 'high' | 'medium' | 'low'
+  freshness: 'current' | 'possibly_stale' | 'stale'
+  sourceRefs: MemorySourceRef[]
+  reasonForInclusion: string
+  risks: string[]
+}
+
+export interface MemoryCandidatePacket {
+  scope: GuildhallMemoryScope
+  purpose: 'next_worker_context' | 'review_context' | 'gate_context' | 'owner_answer' | 'cleanup_audit' | 'handoff'
+  generatedAt: string
+  byteEstimate: number
+  candidates: MemoryCandidate[]
+  omitted: Array<{
+    reason: 'too_large' | 'low_relevance' | 'stale' | 'wrong_scope' | 'unsafe' | 'duplicate'
+    summary: string
+    sourceRefs: MemorySourceRef[]
+  }>
+  health: {
+    adapter: 'mastra' | 'deterministic'
+    fallbackUsed: boolean
+    warnings: string[]
+  }
+}
+
+export interface MastraScopeIds {
+  resourceId: string
+  threadId: string
+}
+
+export interface MastraMemoryCoreHealth {
+  adapter: 'mastra'
+  storagePath: string
+  repoLocalWrites: string[]
+  features: string[]
+  scope: MastraScopeIds
+  packages: Record<string, string>
+  warnings: string[]
+}
+
+export interface MastraMemoryCoreAdapter {
+  health: MastraMemoryCoreHealth
+  memory: unknown
+  storage: unknown
+}
+
+export interface MemoryAuditReport {
+  generatedAt: string
+  storagePath: string
+  repoLocalWrites: string[]
+  warnings: string[]
+}
+
+export interface MemoryAuditReportRef {
+  path: string
+  repoLocalWrites: string[]
+}

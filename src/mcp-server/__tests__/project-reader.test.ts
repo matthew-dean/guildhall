@@ -1,8 +1,9 @@
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { basename, join } from 'node:path'
 import { describe, expect, it } from 'vitest'
 import { saveCodebaseMap } from '@guildhall/corpus-map'
+import { recordMemoryEvent } from '@guildhall/memory-core'
 import {
   createCapabilityRequest,
   defaultProjectRuntimeState,
@@ -230,6 +231,33 @@ describe('Guildhall MCP project reader', () => {
           source: 'test',
         },
       })
+      await recordMemoryEvent({
+        projectRoot: root,
+        event: {
+          scope: {
+            kind: 'task_thread',
+            projectId: basename(root),
+            taskId: 'task-001',
+            agentRole: 'worker',
+            threadId: 'task-001',
+          },
+          source: {
+            kind: 'progress',
+            ref: 'PROGRESS.md#mcp-memory-core',
+            path: '.guildhall/PROGRESS.md',
+            capturedAt: '2026-06-06T12:00:00.000Z',
+          },
+          content: {
+            summary: 'Memory-core packet says MCP bridge proof should cite source refs.',
+          },
+          metadata: {
+            projectId: basename(root),
+            taskId: 'task-001',
+            retention: 'task_lifecycle',
+            risk: 'low',
+          },
+        },
+      })
       await writeProjectRuntimeState(root, {
         ...defaultProjectRuntimeState(root),
         status: 'running',
@@ -362,6 +390,9 @@ describe('Guildhall MCP project reader', () => {
       expect(artifact).toContain('Bridge')
 
       const memory = await readGuildhallResource(ctx, 'guildhall://project/memory')
+      expect(memory).toContain('## Memory-Core')
+      expect(memory).toContain('- Repo-local writes: none')
+      expect(memory).toContain('Memory-core packet says MCP bridge proof')
       expect(memory).toContain('mcp-bridge-pref')
       expect(memory).toContain('External agents should audit through MCP')
       expect(memory).not.toContain('ghp_123456789012345678901234567890123456')

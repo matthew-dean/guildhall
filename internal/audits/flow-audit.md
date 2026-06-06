@@ -483,6 +483,14 @@ coverage.
   substrate from first principles.
   Treat this as a writer-boundary, memory/context, and cleanup blocker, not a
   one-time compaction chore.
+  2026-06-06 implementation slice:
+  `src/memory-core/` now exists with typed scopes, system-local event/audit
+  writes, deterministic candidate packets, and a Mastra/libSQL adapter behind a
+  Guildhall-owned boundary. `buildEffectiveMemoryPacket` and
+  `guildhall://project/memory` now surface memory-core packet/status evidence.
+  Remaining work: Observational Memory orchestration, migration/audit command,
+  UI memory health, migration progress modal, semantic recall gate, and retiring
+  old project-local accepted-memory writers.
 - [ ] Distinguish in-app browser bridge failures from actual Guildhall route
   lockups during live audits. Multi-agent proof on 2026-06-04: the service
   stayed healthy (`stale:false`, `/api/service` and direct route HTTP returned

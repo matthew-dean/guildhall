@@ -4,6 +4,10 @@ import path from 'node:path'
 import { summarizeDesignSystem, type Task } from '@guildhall/core'
 import { loadCodebaseMap, loadCodebaseMapStaleState } from '@guildhall/corpus-map'
 import {
+  buildDeterministicCandidatePacket,
+  resolveMemoryPaths,
+} from '@guildhall/memory-core'
+import {
   getProjectContextDebugLedgerPath,
   getProjectLocalHistoryHealth,
 } from '@guildhall/sessions'
@@ -679,6 +683,30 @@ async function renderArtifact(ctx: GuildhallMcpContext, artifactId: string): Pro
 
 async function renderMemory(ctx: GuildhallMcpContext): Promise<string> {
   const records = await listMemoryRecords({ memoryDir: ctx.projectStateDir })
+  const tasks = await readTasks(ctx.projectStateDir)
+  const firstTask = tasks[0]
+  const memoryCoreScope = firstTask
+    ? {
+        kind: 'task_thread' as const,
+        projectId: path.basename(ctx.projectRoot) || 'project',
+        taskId: firstTask.id,
+        agentRole: 'worker' as const,
+        threadId: firstTask.id,
+      }
+    : {
+        kind: 'project' as const,
+        projectId: path.basename(ctx.projectRoot) || 'project',
+      }
+  const memoryCorePaths = resolveMemoryPaths({
+    projectRoot: ctx.projectRoot,
+    scope: memoryCoreScope,
+  })
+  const memoryCorePacket = await buildDeterministicCandidatePacket({
+    projectRoot: ctx.projectRoot,
+    scope: memoryCoreScope,
+    purpose: firstTask ? 'next_worker_context' : 'handoff',
+    maxBytes: 4096,
+  }).catch(() => null)
   const grouped = countBy(records, (record) => `${record.scope}/${record.status}`)
   const rawMemory = await readOptional(path.join(ctx.projectStateDir, 'MEMORY.md'), '')
   return trimForMcp(redactForMcp([
@@ -688,6 +716,18 @@ async function renderMemory(ctx: GuildhallMcpContext): Promise<string> {
     `- Project active: ${grouped['project/active'] ?? 0}`,
     `- Project proposed: ${(grouped['project/observed'] ?? 0) + (grouped['project/proposed'] ?? 0)}`,
     `- User-global active: ${grouped['user_global/active'] ?? 0}`,
+    '',
+    '## Memory-Core',
+    '',
+    `- Storage: ${memoryCorePaths.dbPath}`,
+    `- Events: ${memoryCorePaths.eventsPath}`,
+    `- Adapter: ${memoryCorePacket?.health.adapter ?? 'deterministic'}`,
+    `- Fallback used: ${memoryCorePacket?.health.fallbackUsed ?? true}`,
+    '- Repo-local writes: none',
+    `- Candidate preview: ${memoryCorePacket?.candidates.length ?? 0}`,
+    ...(memoryCorePacket?.candidates ?? []).slice(0, 5).map((candidate) =>
+      `  - ${candidate.summary}`,
+    ),
     '',
     '## Queryable Records',
     '',

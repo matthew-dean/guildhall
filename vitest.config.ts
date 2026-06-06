@@ -43,6 +43,7 @@ export default defineConfig({
         'guilds',
         'hooks',
         'levers',
+        'memory-core',
         'mcp',
         'protocol',
         'persistence',

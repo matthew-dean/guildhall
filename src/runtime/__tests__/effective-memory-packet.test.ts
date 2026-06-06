@@ -13,6 +13,7 @@ import {
   submitStructuralMapForReview,
 } from '../structural-map.js'
 import type { Task } from '@guildhall/core'
+import { recordMemoryEvent } from '@guildhall/memory-core'
 
 let tmpDir: string
 let memoryDir: string
@@ -227,6 +228,51 @@ describe('effective memory packet', () => {
     expect(packet.rendered).toContain('## Effective Memory')
     expect(packet.rendered).toContain('JourneyTab is the drawer surface')
     expect(packet.rendered).not.toContain('Replace Journey')
+  })
+
+  it('includes system-local memory-core candidates in the effective memory rendering', async () => {
+    await recordMemoryEvent({
+      projectRoot: path.dirname(memoryDir),
+      event: {
+        scope: {
+          kind: 'task_thread',
+          projectId: path.basename(path.dirname(memoryDir)),
+          taskId: 'task-memory',
+          agentRole: 'worker',
+          threadId: 'task-memory',
+        },
+        source: {
+          kind: 'progress',
+          ref: 'PROGRESS.md#memory-core',
+          path: '.guildhall/PROGRESS.md',
+          capturedAt: '2026-06-06T12:00:00.000Z',
+        },
+        content: {
+          summary: 'Memory-core says Journey proof should keep source drill-down.',
+        },
+        metadata: {
+          projectId: path.basename(path.dirname(memoryDir)),
+          taskId: 'task-memory',
+          retention: 'task_lifecycle',
+          risk: 'low',
+        },
+      },
+    })
+
+    const packet = await buildEffectiveMemoryPacket({
+      memoryDir,
+      task: task(),
+    })
+
+    expect(packet.memoryCorePacket?.health).toMatchObject({
+      adapter: 'deterministic',
+      fallbackUsed: true,
+    })
+    expect(packet.rendered).toContain('## Memory-Core Candidate Packet')
+    expect(packet.rendered).toContain('Memory-core says Journey proof')
+    expect(packet.evidenceRefs).toEqual([
+      expect.objectContaining({ ref: 'PROGRESS.md#memory-core' }),
+    ])
   })
 
   it('injects active memory into buildContext and keeps proposed memory inert', async () => {
