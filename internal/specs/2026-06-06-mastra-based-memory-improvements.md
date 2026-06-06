@@ -2,7 +2,8 @@
 
 ## Status
 
-Partially implemented, 2026-06-06.
+Implemented, 2026-06-06. Semantic recall is wired but intentionally disabled by
+default until a later opt-in quality/latency gate.
 
 Graphiti is retired. It was explored as a graph/fact-memory candidate and did
 not bear fruit for Guildhall's product needs. It should not remain as a deferred
