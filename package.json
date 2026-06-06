@@ -59,12 +59,16 @@
     "docs:build": "npm run docs:check-copy && npm run docs:extract-help && vitepress build docs",
     "docs:preview": "vitepress preview docs",
     "memory:migrate": "node scripts/migrations/0.8.0-project-state.mjs",
+    "memory:mastra:value-gate": "node scripts/prototype-mastra-memory-value-gate.mjs",
     "service:install": "node ./scripts/install-launch-agent.mjs",
     "service:uninstall": "node ./scripts/uninstall-launch-agent.mjs"
   },
   "dependencies": {
     "@hono/node-server": "^1.14.1",
     "@inquirer/prompts": "^7.4.0",
+    "@mastra/core": "^1.41.0",
+    "@mastra/libsql": "^1.12.1",
+    "@mastra/memory": "^1.20.2",
     "@modelcontextprotocol/sdk": "^1.19.0",
     "hono": "^4.7.7",
     "js-yaml": "^4.1.0",

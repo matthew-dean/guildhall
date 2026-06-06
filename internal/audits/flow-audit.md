@@ -455,15 +455,18 @@ coverage.
   repo-local state is off or very thin by default, with any Git-visible
   manifest/export owned by Guildhall as an explicit optional layer. Spike
   result: `internal/evals/2026-06-04-llm-memory-context-evaluation.md`
-  now recommends prototyping Zep/Graphiti first for project-aware temporal
-  memory, with LangGraph / LangMem-style memory kept as the context-assembly
-  reference if Graphiti retrieval needs a tighter next-agent packet builder.
-  Prototype evidence now exists in
-  `scripts/prototype-graphiti-project-memory.mjs` and
-  `artifacts/memory-context-eval/graphiti-prototype/report-quality-attempt.json`
-  (ignored): managed uv Python and Kuzu work locally, Graphiti ingestion works,
-  default Graphiti search is weak, and Graphiti entity summaries plus a
-  Guildhall-owned context-packet builder look promising.
+  now selects Mastra Memory / Observational Memory as the first memory
+  substrate path after the 2026-06-06 value gate. Prototype evidence now exists
+  in `scripts/prototype-mastra-memory-value-gate.mjs` and
+  `artifacts/memory-core-prototype/mastra-value-gate.json` (ignored): real
+  `@mastra/*` packages are installed, Mastra `Memory` instantiates with
+  system-local libSQL storage, thread/resource scope is proven, repo-local
+  writes stay empty, and the gate returns `decision: "adopt"` only when Mastra
+  candidate packets beat the deterministic baseline. Graphiti/Kuzu evidence
+  remains secondary in `scripts/prototype-graphiti-project-memory.mjs`; managed
+  uv Python and Kuzu work locally, but default Graphiti search was weak enough
+  to keep it behind Mastra unless a narrow fact/temporal relationship need
+  remains.
   Boundary clarified by owner: memory tooling is only substrate for scaling,
   storage, compaction, retrieval, fact extraction, and provenance. Guildhall
   must still reason from the active request and own what goes into context and
@@ -473,12 +476,13 @@ coverage.
   ranks both storage-sprawl surfaces and architecture/substrate surfaces as
   Keep, Thin, Replace, Kill, or Defer. Run that audit before treating any memory
   substrate decision as final.
-  Graphiti gate is now pass/fail: no hidden Kuzu FTS/index shim, no system
-  Python, no default user-installed graph service, better retrieval than the
-  deterministic Guildhall baseline, reliable provenance, bounded context size,
-  acceptable warm retrieval latency, and fallback to deterministic summaries on
-  failure. If those fail, stop Graphiti and use the baseline plus
-  LangGraph-style context assembly patterns.
+  Mastra gate is pass/fail: real dependency integration, system-local storage,
+  no repo-local writes, scoped thread/resource mapping, reliable provenance,
+  bounded context size, acceptable warm retrieval latency, deterministic
+  fallback, and better packet value than the deterministic Guildhall baseline.
+  If those fail in the production memory-core implementation, defer Mastra and
+  continue with the deterministic baseline while reassessing secondary
+  candidates.
   Treat this as a writer-boundary, memory/context, and cleanup blocker, not a
   one-time compaction chore.
 - [ ] Distinguish in-app browser bridge failures from actual Guildhall route

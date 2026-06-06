@@ -145,6 +145,37 @@ Kill conditions:
   deterministic baseline.
 - It starts acting as context authority instead of candidate evidence substrate.
 
+## Mastra Value Gate Result
+
+2026-06-06 result: **adopt Mastra as the first memory substrate path**.
+
+Command:
+
+```sh
+pnpm memory:mastra:value-gate -- --out artifacts/memory-core-prototype/mastra-value-gate.json --storage-root /tmp/guildhall-mastra-value-gate-cli
+```
+
+Evidence:
+
+- Real dependencies are installed and recorded by the report:
+  `@mastra/core@1.41.0`, `@mastra/libsql@1.12.1`, and
+  `@mastra/memory@1.20.2`.
+- The probe instantiates Mastra `Memory` with `LibSQLStore`, creates a scoped
+  thread, and stores the DB at
+  `/tmp/guildhall-mastra-value-gate-cli/memory/guildhall-mastra-memory.db`.
+- The report records `repoLocalWrites: []`.
+- The gate keeps Mastra substrate-only: Guildhall still owns context inclusion,
+  task truth, and adoption/defer decisions.
+- The comparison gate requires Mastra packets to beat deterministic baseline
+  packet score. If they do not, the same harness returns `decision: "defer"`.
+- The tested passing gate reported `decision: "adopt"` with:
+  `actuallyIntegrated`, `systemLocalStorage`, `substrateOnly`,
+  `sourceRefsPreserved`, `betterThanBaseline`, and `failureFallback` all true.
+
+This is not an optional plugin recommendation. The next implementation should
+move the selected memory substrate behind a Guildhall-owned memory-core API and
+keep deterministic Guildhall summaries as the fallback/control path.
+
 ## Fixture Evidence
 
 Generated evidence report:

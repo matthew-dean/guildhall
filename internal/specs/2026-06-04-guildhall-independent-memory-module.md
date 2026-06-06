@@ -301,11 +301,14 @@ prompt.
 
 ## Mastra Adapter Requirements
 
-The Mastra adapter must be optional and swappable.
+The Mastra adapter is the selected first substrate path after the value gate.
+It remains swappable only as a kill-switch/fallback property: if it misses a
+hard gate, Guildhall must be able to fall back to deterministic memory without
+rewriting product/runtime callers.
 
 Required behavior:
 
-- Use `@mastra/memory` with `@mastra/libsql` for the first local prototype.
+- Use `@mastra/memory` with `@mastra/libsql` for the first local substrate.
 - Store DB files under Guildhall system-local project data, not inside the repo.
 - Mastra Agent/runtime use is allowed inside this module if needed for
   Observational Memory or processors, but the integration must stay behind the
@@ -441,7 +444,13 @@ Dependency acceptance gate:
 
 ## First Prototype
 
-Build a prototype that:
+The first value-gate prototype exists as
+`scripts/prototype-mastra-memory-value-gate.mjs` and is runnable through
+`pnpm memory:mastra:value-gate`. It proves real Mastra/libSQL instantiation,
+system-local storage, scoped thread/resource mapping, no repo-local writes, and
+adopt/defer scoring against deterministic baseline packets.
+
+The next implementation should turn that prototype into `src/memory-core/`:
 
 1. Adds no project-local runtime state.
 2. Reads FLL and Looma bloated `.guildhall` fixtures without mutating them.

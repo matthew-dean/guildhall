@@ -60,29 +60,32 @@ Do not implement a custom Guildhall memory/context layer until the OSS memory/co
 
 The writer-boundary fix remains mandatory regardless of the spike result. The spike decides what sits behind that boundary.
 
-Spike result on 2026-06-04:
+Spike result on 2026-06-04, revised with the Mastra value gate on 2026-06-06:
 
 - Evaluation: `internal/evals/2026-06-04-llm-memory-context-evaluation.md`
-- Decision: prototype Zep/Graphiti first for project-aware temporal memory:
-  current facts, stale facts, resolved blockers, related tasks, decisions, and
-  evidence trails.
-- Secondary path: use LangGraph / LangMem-style memory as the context-assembly
-  reference and possible second prototype if Graphiti retrieval needs a tighter
-  next-agent packet builder.
+- Decision: adopt Mastra Memory / Observational Memory as the first memory
+  substrate path because the value gate now proves real TypeScript-native
+  Mastra integration, system-local libSQL storage, scoped thread/resource
+  mapping, no repo-local writes, source-ref preservation, deterministic
+  fallback, and a packet-quality win over the deterministic baseline.
+- Secondary path: keep Graphiti/Kuzu only as an optional fact-extraction or
+  temporal-graph spike if Mastra plus deterministic Guildhall summaries cannot
+  cover a narrow fact/temporal relationship need.
 - Storage policy: repo-local state stays off or very thin by default.
-- Prototype evidence: managed-uv Graphiti/Kuzu can ingest live FLL and
-  Looma/Knit fixture summaries without system Python or a separate database
-  service, but default Graphiti search is too weak for Guildhall's natural
-  quality questions. The next implementation must be a Guildhall
-  project-memory adapter over Graphiti entity summaries/facts, with explicit
-  retrieval and context-packet quality gates.
+- Prototype evidence: `pnpm memory:mastra:value-gate -- --out
+  artifacts/memory-core-prototype/mastra-value-gate.json` writes an ignored
+  report with `decision: "adopt"` and records `@mastra/core`,
+  `@mastra/libsql`, and `@mastra/memory` versions. The gate instantiates real
+  Mastra `Memory` against system-local libSQL storage and keeps all repo-local
+  writes empty.
 - Scope boundary: the selected memory system must not replace Guildhall's
   reasoning or top-level context policy. It can help with storage, compaction,
   retrieval, fact extraction, and provenance. Guildhall owns what context is
   included, what is omitted, and why it serves the active user request.
-- Graphiti risk gate: Kuzu FTS/index setup cannot remain a hidden shim. It must
-  be upstream-supported, explicitly owned by a tiny tested Guildhall adapter, or
-  treated as a disqualifier for Graphiti/Kuzu in the default product path.
+- Graphiti risk gate: if Graphiti work resumes, Kuzu FTS/index setup cannot
+  remain a hidden shim. It must be upstream-supported, explicitly owned by a
+  tiny tested Guildhall adapter, or treated as a disqualifier for Graphiti/Kuzu
+  in any product path.
 
 ## Storage Principles
 
@@ -253,8 +256,9 @@ Do not clean with ad hoc scripts unless the CLI path itself is being proven. If 
 
 ## Execution Order
 
-1. Turn the Graphiti probe into a Guildhall project-memory adapter with typed
-   compact episodes and a context-packet builder over entity summaries.
+1. Turn the Mastra value-gate prototype into the Guildhall memory-core substrate
+   with typed scopes, source refs, deterministic fallback, and system-local
+   storage by default.
 2. Run the architecture replacement audit and confirm Keep/Thin/Replace/Kill/Defer
    rankings for storage and memory/context substrate surfaces.
 3. Add pass/fail gates for Kuzu/index reliability, no-system-Python operation,

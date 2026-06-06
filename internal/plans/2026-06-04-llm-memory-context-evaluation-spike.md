@@ -252,15 +252,19 @@ Completed 2026-06-04.
 - Generated report: `artifacts/memory-context-eval/current/candidate-report.md`
   (ignored)
 
-Revised decision after product-quality review: prototype Zep/Graphiti first
-because it has the most promise for project-aware temporal memory: current
-facts, stale facts, resolved blockers, related tasks, decisions, and evidence
-trails. Keep LangGraph / LangMem-style memory as the context-assembly reference
-and possible second prototype if Graphiti retrieval needs a tighter packet
-builder. Keep repo-local state off or very thin by default regardless of the
-selected memory system.
+Revised decision after product-quality review and the 2026-06-06 Mastra value
+gate: adopt Mastra Memory / Observational Memory as the first memory substrate
+path. The value gate installs real `@mastra/*` packages, instantiates Mastra
+`Memory` with system-local libSQL storage, records no repo-local writes, and
+requires Mastra candidate packets to beat deterministic Guildhall baseline
+packets before returning `decision: "adopt"`. Keep Graphiti/Kuzu as a secondary
+fact-extraction or temporal-graph spike only if Mastra plus deterministic
+Guildhall summaries cannot cover a narrow fact/temporal relationship need.
+Keep repo-local state off or very thin by default regardless of the selected
+memory system.
 
-Prototype evidence added 2026-06-04:
+Graphiti prototype evidence added 2026-06-04, now secondary after the Mastra
+gate:
 
 - `scripts/prototype-graphiti-project-memory.mjs` runs Graphiti through
   `uv --managed-python --python 3.12` and does not depend on system Python.
