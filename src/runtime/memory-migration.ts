@@ -20,6 +20,7 @@ import {
   type WorkspaceYamlConfig,
 } from '@guildhall/config'
 import { compactProjectState, type ProjectStateCompactionResult } from './project-state-compaction.js'
+import { finalizeThinProjectStateManifest } from './thin-project-state-manifest.js'
 
 const execFileP = promisify(execFile)
 
@@ -76,6 +77,7 @@ const PROJECT_STATE_FILES = new Set([
   'wizards.yaml',
   'design-system.yaml',
   'codebase-map.yaml',
+  'artifacts.yaml',
   'codebase-map.overrides.yaml',
   'codebase-map.stale.json',
   'project-brief.md',
@@ -286,6 +288,14 @@ function workspaceBaseProjectPath(workspaceRoot: string, config: WorkspaceYamlCo
   return path.isAbsolute(expanded) ? path.resolve(expanded) : path.resolve(workspaceRoot, expanded)
 }
 
+function repoStateMode(projectRoot: string): 'off' | 'thin' {
+  try {
+    return readWorkspaceConfig(projectRoot).storage?.repoState === 'thin' ? 'thin' : 'off'
+  } catch {
+    return 'off'
+  }
+}
+
 function findContainingGitRoot(startDir: string, stopAt: string): string | null {
   let current = path.resolve(startDir)
   const stop = path.resolve(stopAt)
@@ -414,6 +424,9 @@ export async function migrateLegacyMemoryToLocalHistory(
       untrackedIgnoredFiles = await stopTrackingIgnoredFiles(gitignoreRoots)
     }
     compaction = await compactProjectState({ projectRoot, dryRun: false })
+    if (repoStateMode(projectRoot) === 'thin') {
+      await finalizeThinProjectStateManifest(projectRoot)
+    }
   }
 
   return {

@@ -1023,6 +1023,10 @@ async function cmdMemory() {
     console.log(`[guildhall] Project: ${result.projectRoot}`)
     console.log(`[guildhall] State dir: ${result.stateDir}`)
     console.log(`[guildhall] Local history: ${result.localHistoryDir}`)
+    console.log(`[guildhall] Repo state mode: ${result.repoStateMode}`)
+    if (result.evacuatedProjectStatePaths.length > 0) {
+      console.log(`[guildhall] Evacuated project-state paths: ${result.evacuatedProjectStatePaths.join(', ')}`)
+    }
     console.log(`[guildhall] Active tasks kept: ${result.activeTasksKept}`)
     console.log(`[guildhall] Active tasks sanitized: ${result.activeTasksSanitized}`)
     console.log(`[guildhall] Terminal tasks archived: ${result.archivedTasks}`)
@@ -1157,7 +1161,10 @@ async function cmdMigrate() {
       continue
     }
 
-    const status = await getProjectMigrationStatus({ projectRoot: projectPath })
+    const status = await getProjectMigrationStatus({
+      projectRoot: projectPath,
+      ...(onlyMigration ? { only: [onlyMigration] } : {}),
+    })
     printMigrationStatus(status, subcommand === 'plan' ? 'Migration plan' : 'Migration status', onlyMigration)
   }
 }

@@ -8,9 +8,10 @@ import {
   readWorkspaceConfig,
   updateProjectConfig,
 } from '@guildhall/config'
-import { getProjectStateDir } from '@guildhall/sessions'
+import { getProjectLocalHistoryDir, getProjectStateDir } from '@guildhall/sessions'
 import { installAgentBridgeInstructions } from './agent-bridge-install.js'
 import { migrateLegacyMemoryToLocalHistory } from './memory-migration.js'
+import { compactProjectState } from './project-state-compaction.js'
 import { migrateTaskQuestionsToBoundedChat } from './task-question-migration.js'
 import { migrateTaskHierarchyState } from './task-hierarchy-migration.js'
 import { migrateTaskState } from './task-state-migration.js'
@@ -21,6 +22,7 @@ import {
   hasLegacyRuntimeCommandEvidence,
   migrateLegacyRuntimeCommandEvidenceToPersistence,
 } from './project-runtime-command.js'
+import { finalizeThinProjectStateManifest } from './thin-project-state-manifest.js'
 
 export type MigrationScope = 'machine' | 'project' | 'workspace' | 'database'
 export type MigrationSafety = 'automatic' | 'prompt' | 'manual' | 'required'
@@ -83,49 +85,51 @@ export interface ApplyProjectMigrationsResult {
 }
 
 function ledgerPath(projectRoot: string): string {
-  return path.join(getProjectStateDir(projectRoot), 'migrations.json')
+  return path.join(getProjectLocalHistoryDir(projectRoot), 'migrations', 'migrations.json')
 }
 
-async function writeFileIfMissing(file: string, content: string): Promise<boolean> {
+function repoStateMode(projectRoot: string): 'off' | 'thin' {
   try {
-    await writeManagedTextFile(file, content, { flag: 'wx', encoding: 'utf8' })
-    return true
-  } catch (err) {
-    const code = (err as { code?: string }).code
-    if (code === 'EEXIST') return false
-    throw err
-  }
-}
-
-async function seedMissingProjectStateFiles(projectRoot: string): Promise<string[]> {
-  const stateDir = getProjectStateDir(projectRoot)
-  await fs.mkdir(stateDir, { recursive: true })
-  let projectName = 'Project'
-  try {
-    projectName = readWorkspaceConfig(projectRoot).name || projectName
+    return readWorkspaceConfig(projectRoot).storage?.repoState === 'thin' ? 'thin' : 'off'
   } catch {
-    // A missing or invalid config should not prevent the layout migration from
-    // creating the files later runtime paths require.
+    return 'off'
   }
-
-  const seeded: string[] = []
-  const files: Record<string, string> = {
-    'TASKS.json': '[]\n',
-    'MEMORY.md': `# ${projectName} Memory\n\n_Updated by GuildHall agents._\n`,
-    'DECISIONS.md': `# ${projectName} Decisions\n\n_Architecture decisions recorded by GuildHall agents._\n`,
-    'PROGRESS.md': `# ${projectName} Progress\n\n_Progress log maintained by GuildHall agents._\n`,
-  }
-
-  for (const [filename, content] of Object.entries(files)) {
-    if (await writeFileIfMissing(path.join(stateDir, filename), content)) {
-      seeded.push(`.guildhall/${filename}`)
-    }
-  }
-  return seeded
 }
 
 function agentSettingsPath(projectRoot: string): string {
   return path.join(projectRoot, '.guildhall', 'agent-settings.yaml')
+}
+
+async function projectStateEntries(projectRoot: string): Promise<string[]> {
+  try {
+    return await fs.readdir(getProjectStateDir(projectRoot))
+  } catch {
+    return []
+  }
+}
+
+async function detectProjectStateBoundaryCleanup(projectRoot: string): Promise<{
+  needed: boolean
+  affectedPaths: string[]
+}> {
+  const entries = await projectStateEntries(projectRoot)
+  if (entries.length === 0) return { needed: false, affectedPaths: [] }
+  const mode = repoStateMode(projectRoot)
+  if (mode === 'off') {
+    return {
+      needed: true,
+      affectedPaths: entries.map(entry => `.guildhall/${entry}`),
+    }
+  }
+  const needsThinManifest = !entries.includes('project-state-manifest.json')
+  const legacyEntries = entries.filter(entry => entry !== 'artifacts.yaml' && entry !== 'project-state-manifest.json')
+  return {
+    needed: needsThinManifest || legacyEntries.length > 0,
+    affectedPaths: [
+      ...(needsThinManifest ? ['.guildhall/project-state-manifest.json'] : []),
+      ...legacyEntries.map(entry => `.guildhall/${entry}`),
+    ],
+  }
 }
 
 function mapLegacyMergePolicyPosition(value: unknown): string | null {
@@ -274,10 +278,16 @@ const BUILT_IN_PROJECT_MIGRATIONS: ProjectMigrationDefinition[] = [
         deleteSource: true,
         updateGitignore: true,
       })
-      const seeded = await seedMissingProjectStateFiles(projectRoot)
       return {
-        summary: `Moved ${result.copied} legacy memory file${result.copied === 1 ? '' : 's'} into split project state.`,
-        affectedPaths: ['memory/', '.guildhall/', ...seeded, ...result.gitignoreRoots.map(root => path.relative(projectRoot, root) || '.')],
+        summary: repoStateMode(projectRoot) === 'thin'
+          ? `Moved ${result.copied} legacy memory file${result.copied === 1 ? '' : 's'} into system-local project history and wrote the thin repo manifest.`
+          : `Moved ${result.copied} legacy memory file${result.copied === 1 ? '' : 's'} into system-local project history and cleared repo-local Guildhall state.`,
+        affectedPaths: [
+          'memory/',
+          ...(result.compaction?.repoStateMode === 'thin' ? ['.guildhall/project-state-manifest.json'] : []),
+          ...(result.compaction?.evacuatedProjectStatePaths ?? []).map(item => `.guildhall/${item}`),
+          ...result.gitignoreRoots.map(root => path.relative(projectRoot, root) || '.'),
+        ],
       }
     },
   },
@@ -415,6 +425,33 @@ const BUILT_IN_PROJECT_MIGRATIONS: ProjectMigrationDefinition[] = [
     },
   },
   {
+    id: '0.10.0/project-state-storage-boundary',
+    title: 'Clear repo-local Guildhall state unless thin state is opted in',
+    introducedIn: '0.10.0',
+    scope: 'project',
+    safety: 'prompt',
+    requirement: 'required',
+    summary: 'Evacuates repo-local Guildhall state into system-local storage, or writes only the opted-in thin current-shape manifest.',
+    async detect(projectRoot) {
+      return detectProjectStateBoundaryCleanup(projectRoot)
+    },
+    async apply(projectRoot) {
+      const mode = repoStateMode(projectRoot)
+      const compaction = await compactProjectState({ projectRoot, dryRun: false })
+      if (mode === 'thin') {
+        const affectedPaths = await finalizeThinProjectStateManifest(projectRoot)
+        return {
+          summary: 'Wrote thin repo state with only the current active shape; historical Guildhall state remains system-local.',
+          affectedPaths,
+        }
+      }
+      return {
+        summary: `Evacuated ${compaction.evacuatedProjectStatePaths.length} repo-local Guildhall state entr${compaction.evacuatedProjectStatePaths.length === 1 ? 'y' : 'ies'} into system-local storage.`,
+        affectedPaths: compaction.evacuatedProjectStatePaths.map(entry => `.guildhall/${entry}`),
+      }
+    },
+  },
+  {
     id: '0.8.0/codex-agent-bridge',
     title: 'Install Codex Guildhall MCP bridge instructions',
     introducedIn: '0.8.0',
@@ -493,7 +530,18 @@ const BUILT_IN_PROJECT_MIGRATION_IDEMPOTENCE_TESTS: Record<string, string> = {
   '0.10.0/task-hierarchy-links': 'migrations.test.ts: task-hierarchy migration is idempotent',
   '0.10.0/merge-policy-to-landing-strategy': 'migrations.test.ts: landing-strategy migration is idempotent',
   '0.10.0/owner-input-state-repair': 'migrations.test.ts: owner-input state repair is idempotent',
+  '0.10.0/project-state-storage-boundary': 'migrations.test.ts: storage-boundary migration is idempotent',
 }
+
+const REPO_LOCAL_STATE_MIGRATIONS = new Set([
+  '0.8.0/project-state-layout',
+  '0.8.0/task-state-split',
+  '0.10.0/task-hierarchy-links',
+  '0.10.0/task-open-questions-to-bounded-chat',
+  '0.10.0/owner-input-state-repair',
+  '0.10.0/merge-policy-to-landing-strategy',
+  '0.8.0/codex-agent-bridge',
+])
 
 export function validateBuiltInProjectMigrationDefinitions(): { valid: boolean; errors: string[] } {
   const errors: string[] = []
@@ -537,14 +585,18 @@ function toStatusItem(
   }
 }
 
-export async function getProjectMigrationStatus(input: { projectRoot: string }): Promise<ProjectMigrationStatus> {
+export async function getProjectMigrationStatus(input: { projectRoot: string; only?: string[] }): Promise<ProjectMigrationStatus> {
   const ledger = await readProjectMigrationLedger(input.projectRoot)
   const appliedById = new Map(ledger.records.filter(r => r.status === 'applied').map(r => [r.id, r]))
+  const repoLocalStateBoundaryApplied = repoStateMode(input.projectRoot) === 'off' &&
+    appliedById.has('0.10.0/project-state-storage-boundary')
   const pending: ProjectMigrationStatusItem[] = []
   const applied: ProjectMigrationStatusItem[] = []
   const blocked: ProjectMigrationStatusItem[] = []
 
   for (const migration of BUILT_IN_PROJECT_MIGRATIONS) {
+    if (input.only && input.only.length > 0 && !input.only.includes(migration.id)) continue
+    if (repoLocalStateBoundaryApplied && REPO_LOCAL_STATE_MIGRATIONS.has(migration.id)) continue
     const appliedRecord = appliedById.get(migration.id)
     if (appliedRecord) {
       applied.push(toStatusItem(migration, appliedRecord.affectedPaths ?? [], appliedRecord))
@@ -593,6 +645,7 @@ export async function applyProjectMigrations(input: {
   const now = input.now ?? (() => new Date())
 
   for (const migration of BUILT_IN_PROJECT_MIGRATIONS) {
+    if (input.only && input.only.length > 0 && !input.only.includes(migration.id)) continue
     if (appliedById.has(migration.id)) continue
     const detected = await migration.detect(input.projectRoot)
     if (!detected.needed) continue

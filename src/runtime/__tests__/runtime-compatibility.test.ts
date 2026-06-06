@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import fs from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
+import { getProjectLocalHistoryDir } from '@guildhall/sessions'
 import {
   compareVersions,
   projectRuntimeCompatibilityBlocker,
@@ -60,7 +61,7 @@ describe('projectRuntimeCompatibilityBlocker', () => {
     expect(projectRuntimeCompatibilityBlocker({ projectRoot, currentVersion: '1.0.0' })?.message).toContain('future-state.v1')
   })
 
-  it('records runtime features for future compatibility checks', () => {
+  it('records runtime features for future compatibility checks', async () => {
     recordGuildhallRuntimeWrite(projectRoot, ['attention-records.v1'])
     recordGuildhallRuntimeWrite(projectRoot, ['project-migrations.v1'])
 
@@ -68,5 +69,7 @@ describe('projectRuntimeCompatibilityBlocker', () => {
       version: 1,
       requiredFeatures: ['attention-records.v1', 'project-migrations.v1'],
     })
+    await expect(fs.access(path.join(getProjectLocalHistoryDir(projectRoot), 'runtime', 'compatibility.json'))).resolves.toBeUndefined()
+    await expect(fs.access(path.join(projectRoot, '.guildhall', 'runtime.json'))).rejects.toThrow()
   })
 })

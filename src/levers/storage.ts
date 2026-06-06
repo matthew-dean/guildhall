@@ -15,6 +15,7 @@ import { promises as fs } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { parse as parseYaml, stringify as stringifyYaml } from 'yaml'
 import type { ZodIssue } from 'zod'
+import { getProjectLocalHistoryDir } from '@guildhall/sessions'
 
 import { makeDefaultSettings } from './defaults.js'
 import {
@@ -254,5 +255,5 @@ export function projectLever<K extends keyof ProjectLevers>(
  * Default path helper for a given project root.
  */
 export function defaultAgentSettingsPath(projectRoot: string): string {
-  return join(projectRoot, '.guildhall', AGENT_SETTINGS_FILENAME)
+  return join(getProjectLocalHistoryDir(projectRoot), 'project-state', AGENT_SETTINGS_FILENAME)
 }

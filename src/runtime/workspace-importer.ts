@@ -3,6 +3,7 @@ import fs from 'node:fs/promises'
 import path from 'node:path'
 import { load as yamlLoad } from 'js-yaml'
 import { TaskQueue, type Task, type TaskPriority } from '@guildhall/core'
+import { getProjectLocalHistoryDir } from '@guildhall/sessions'
 import { appendExploringTranscript } from '@guildhall/tools'
 import { loadLeverSettings, defaultAgentSettingsPath } from '@guildhall/levers'
 import {
@@ -39,6 +40,9 @@ export const WORKSPACE_IMPORT_TASK_ID = 'task-workspace-import'
 export const WORKSPACE_IMPORT_DOMAIN = '_workspace_import'
 
 function tasksPathFor(memoryDir: string): string {
+  if (path.basename(memoryDir) === '.guildhall') {
+    return path.join(getProjectLocalHistoryDir(path.dirname(memoryDir)), 'project-state', 'TASKS.json')
+  }
   return path.join(memoryDir, 'TASKS.json')
 }
 

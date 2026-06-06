@@ -251,7 +251,13 @@ Work id: `2026-06-06-project-state-boundary-cleanup`.
 
 Touched contracts:
 
+- `guildhall.yaml` storage policy gains `storage.repoState: off | thin`;
 - project-local `.guildhall/TASKS.json` cleanup shape;
+- project-local state evacuation behavior for projects that do not opt into
+  thin repo state;
+- system-local migration ledger placement;
+- system-local runtime compatibility marker placement;
+- explicit thin repo-state manifest shape for bare continuation;
 - project-local progress/codebase-map compaction reports;
 - `guildhall memory audit-project-state` and
   `guildhall memory clean-project-state` CLI output;
@@ -299,6 +305,14 @@ Proof provided:
   `/api/stale-server` returned `stale:false`, and the in-app browser rendered
   `/projects/jess/overview` and `/projects/looma-knit/overview` as connected
   overview pages after the cleanup.
+- 2026-06-06 correction: non-opt-in cleanup no longer writes a compact
+  repo-local mirror. `storage.repoState: off` evacuates the whole `.guildhall`
+  directory into machine-local history and removes it from the project
+  checkout. `storage.repoState: thin` is required before migration cleanup may
+  leave Git-visible state behind, and that state is only a bare continuation
+  packet: current artifact ids, compact active tasks, and open-escalation count.
+  Thin state carries no historical memory, progress log, runtime evidence, or
+  project-state evacuation references.
 
 Waivers:
 
@@ -310,8 +324,19 @@ Waivers:
 
 Persisted schema touched:
 
+- `guildhall.yaml` gains optional `storage.repoState`, defaulting to `off`;
 - project-local `.guildhall/TASKS.json` may replace forbidden runtime/evidence
-  arrays with compact `openEscalations` summaries;
+  arrays with compact `openEscalations` summaries only when
+  `storage.repoState: thin`;
+- project-local `.guildhall/project-state-manifest.json` may exist only when
+  `storage.repoState: thin`, and it contains current active shape sufficient
+  for bare continuation by another agent;
+- project-local `.guildhall` is removed after system-local evacuation when
+  `storage.repoState: off`;
+- project migration ledger records move from `.guildhall/migrations.json` to
+  system-local local-history storage;
+- runtime compatibility write markers move from `.guildhall/runtime.json` to
+  system-local local-history storage, with legacy read fallback;
 - local-history task evidence gains `project-state-boundary-evidence.json`.
 
 Scope:
@@ -326,25 +351,31 @@ Change class:
 
 Existing data impact:
 
-- active task records lose project-local runtime/evidence fields after cleanup;
-- full removed payload is preserved in local history;
-- terminal task archive behavior remains the existing compaction path.
+- opted-in thin-state projects lose project-local runtime/evidence fields after
+  cleanup, with full removed payload preserved in local history and only the
+  current active shape retained in the repo;
+- non-opt-in projects have their entire `.guildhall` directory evacuated to
+  local history and removed instead of rewritten;
+- terminal task archive behavior remains the existing compaction path only for
+  thin-state projects.
 
 Migration id:
 
-- `2026-06-06-project-state-boundary-cleanup`.
+- `2026-06-06-project-state-boundary-cleanup`;
+- built-in migration: `0.10.0/project-state-storage-boundary`.
 
 Safety:
 
 - dry-run is default for audit/legacy compact command;
-- apply mode reports before/after bytes, forbidden fields, and local-history
-  backup path;
+- apply mode reports repo-state mode, evacuated paths, before/after bytes,
+  forbidden fields, and local-history backup path;
 - unrelated project source files are not touched.
 
 Compatibility reader:
 
 - existing project readers still see task identity/status/spec fields in
-  `.guildhall/TASKS.json`;
+  `.guildhall/TASKS.json` only for projects that opt into thin repo state;
+- non-opt-in project readers must use system-local data after evacuation;
 - full drill-down evidence is available from local history.
 
 Fixtures/tests:

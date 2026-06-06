@@ -4,7 +4,7 @@ import os from 'node:os'
 import path from 'node:path'
 import { parse as parseYaml } from 'yaml'
 import { FileBackedGuildhallPersistence } from '@guildhall/persistence'
-import { getProjectRuntimeCommandEvidencePath } from '@guildhall/sessions'
+import { getProjectLocalHistoryDir, getProjectRuntimeCommandEvidencePath } from '@guildhall/sessions'
 import {
   applyProjectMigrations,
   getProjectMigrationStatus,
@@ -58,6 +58,8 @@ describe('project migration ledger', () => {
       version: 1,
       records: [{ id: '0.8.0/example', status: 'applied' }],
     })
+    await expect(fs.access(path.join(projectRoot, '.guildhall', 'migrations.json'))).rejects.toThrow()
+    await expect(fs.access(path.join(getProjectLocalHistoryDir(projectRoot), 'migrations', 'migrations.json'))).resolves.toBeUndefined()
   })
 })
 
@@ -65,6 +67,27 @@ describe('getProjectMigrationStatus', () => {
   it('reports pending built-in project migrations and hides applied ledger entries', async () => {
     await fs.mkdir(path.join(projectRoot, 'memory'), { recursive: true })
     await fs.writeFile(path.join(projectRoot, 'memory', 'MEMORY.md'), '# Legacy\n', 'utf8')
+    await fs.writeFile(path.join(projectRoot, 'memory', 'artifacts.yaml'), [
+      'version: 1',
+      'artifacts:',
+      '  - id: flow-audit',
+      '    path: internal/audits/flow-audit.md',
+      '',
+    ].join('\n'), 'utf8')
+    await fs.writeFile(path.join(projectRoot, 'memory', 'TASKS.json'), JSON.stringify({
+      version: 1,
+      tasks: [{
+        id: 'task-current',
+        title: 'Current work',
+        description: 'Resume me.',
+        domain: 'runtime',
+        projectPath: projectRoot,
+        status: 'ready',
+        spec: 'Current thin state includes the resumable task.',
+        acceptanceCriteria: [{ id: 'ac-1', description: 'Resume packet exists.', verifiedBy: 'review', met: false }],
+        notes: [{ content: 'old audit note should not export' }],
+      }],
+    }, null, 2), 'utf8')
 
     const before = await getProjectMigrationStatus({ projectRoot })
     expect(before.blocked.some(item => item.id === '0.8.0/project-state-layout')).toBe(true)
@@ -98,6 +121,27 @@ describe('applyProjectMigrations', () => {
     ].join('\n'), 'utf8')
     await fs.mkdir(path.join(projectRoot, 'memory'), { recursive: true })
     await fs.writeFile(path.join(projectRoot, 'memory', 'MEMORY.md'), '# Legacy\n', 'utf8')
+    await fs.writeFile(path.join(projectRoot, 'memory', 'artifacts.yaml'), [
+      'version: 1',
+      'artifacts:',
+      '  - id: flow-audit',
+      '    path: internal/audits/flow-audit.md',
+      '',
+    ].join('\n'), 'utf8')
+    await fs.writeFile(path.join(projectRoot, 'memory', 'TASKS.json'), JSON.stringify({
+      version: 1,
+      tasks: [{
+        id: 'task-current',
+        title: 'Current work',
+        description: 'Resume me.',
+        domain: 'runtime',
+        projectPath: projectRoot,
+        status: 'ready',
+        spec: 'Current thin state includes the resumable task.',
+        acceptanceCriteria: [{ id: 'ac-1', description: 'Resume packet exists.', verifiedBy: 'review', met: false }],
+        notes: [{ content: 'old audit note should not export' }],
+      }],
+    }, null, 2), 'utf8')
 
     const result = await applyProjectMigrations({ projectRoot, includePrompt: false })
 
@@ -156,7 +200,7 @@ describe('applyProjectMigrations', () => {
     })
   })
 
-  it('seeds missing project-state files when applying the required layout migration', async () => {
+  it('clears repo-local Guildhall state when applying the layout migration without thin opt-in', async () => {
     await fs.mkdir(path.join(projectRoot, 'memory'), { recursive: true })
     await fs.writeFile(path.join(projectRoot, 'memory', 'MEMORY.md'), '# Legacy\n', 'utf8')
 
@@ -166,9 +210,166 @@ describe('applyProjectMigrations', () => {
       only: ['0.8.0/project-state-layout'],
     })
 
-    await expect(fs.readFile(path.join(projectRoot, '.guildhall', 'TASKS.json'), 'utf8')).resolves.toBe('[]\n')
-    await expect(fs.readFile(path.join(projectRoot, '.guildhall', 'DECISIONS.md'), 'utf8')).resolves.toContain('# Migration Test Decisions')
-    await expect(fs.readFile(path.join(projectRoot, '.guildhall', 'PROGRESS.md'), 'utf8')).resolves.toContain('# Migration Test Progress')
+    await expect(fs.access(path.join(projectRoot, '.guildhall'))).rejects.toThrow()
+    await expect(fs.readFile(
+      path.join(getProjectLocalHistoryDir(projectRoot), 'project-state-evacuation', 'MEMORY.md'),
+      'utf8',
+    )).resolves.toContain('# Legacy')
+    await expect(fs.readFile(
+      path.join(getProjectLocalHistoryDir(projectRoot), 'migrations', 'migrations.json'),
+      'utf8',
+    )).resolves.toContain('0.8.0/project-state-layout')
+  })
+
+  it('writes only the current thin manifest when thin repo state is explicitly opted in', async () => {
+    await fs.writeFile(path.join(projectRoot, 'guildhall.yaml'), [
+      'name: Migration Test',
+      'id: migration-test',
+      'storage:',
+      '  repoState: thin',
+      '',
+    ].join('\n'), 'utf8')
+    await fs.mkdir(path.join(projectRoot, 'memory'), { recursive: true })
+    await fs.writeFile(path.join(projectRoot, 'memory', 'MEMORY.md'), '# Legacy\n', 'utf8')
+    await fs.writeFile(path.join(projectRoot, 'memory', 'artifacts.yaml'), [
+      'version: 1',
+      'artifacts:',
+      '  - id: flow-audit',
+      '    path: internal/audits/flow-audit.md',
+      '',
+    ].join('\n'), 'utf8')
+    await fs.writeFile(path.join(projectRoot, 'memory', 'TASKS.json'), JSON.stringify({
+      version: 1,
+      tasks: [{
+        id: 'task-current',
+        title: 'Current work',
+        description: 'Resume me.',
+        domain: 'runtime',
+        projectPath: projectRoot,
+        status: 'ready',
+        spec: 'Current thin state includes the resumable task.',
+        acceptanceCriteria: [{ id: 'ac-1', description: 'Resume packet exists.', verifiedBy: 'review', met: false }],
+        notes: [{ content: 'old audit note should not export' }],
+      }],
+    }, null, 2), 'utf8')
+
+    await applyProjectMigrations({
+      projectRoot,
+      includePrompt: true,
+      only: ['0.8.0/project-state-layout'],
+    })
+
+    const manifest = JSON.parse(await fs.readFile(path.join(projectRoot, '.guildhall', 'project-state-manifest.json'), 'utf8')) as Record<string, unknown>
+    expect(manifest).toMatchObject({
+      version: 1,
+      mode: 'thin',
+      projectId: 'migration-test',
+      projectName: 'Migration Test',
+      currentShape: {
+        artifacts: ['flow-audit'],
+        activeTasks: [expect.objectContaining({
+          id: 'task-current',
+          title: 'Current work',
+          status: 'ready',
+          spec: 'Current thin state includes the resumable task.',
+        })],
+      },
+      exports: {
+        artifactRegistry: {
+          path: '.guildhall/artifacts.yaml',
+          artifactIds: ['flow-audit'],
+        },
+      },
+    })
+    expect(JSON.stringify(manifest)).not.toContain('old audit note')
+    expect(JSON.stringify(manifest)).not.toContain('project-state-evacuation')
+    await expect(fs.access(path.join(projectRoot, '.guildhall', 'TASKS.json'))).rejects.toThrow()
+    await expect(fs.access(path.join(projectRoot, '.guildhall', 'MEMORY.md'))).rejects.toThrow()
+    await expect(fs.access(path.join(projectRoot, '.guildhall', 'DECISIONS.md'))).rejects.toThrow()
+    await expect(fs.access(path.join(projectRoot, '.guildhall', 'PROGRESS.md'))).rejects.toThrow()
+  })
+
+  it('evacuates stale repo-local Guildhall state through the storage-boundary migration', async () => {
+    await fs.mkdir(path.join(projectRoot, '.guildhall', 'tasks'), { recursive: true })
+    await fs.writeFile(path.join(projectRoot, '.guildhall', 'agent-settings.yaml'), 'version: 1\n', 'utf8')
+    await fs.writeFile(path.join(projectRoot, '.guildhall', 'TASKS.json'), JSON.stringify({
+      version: 1,
+      tasks: [{ id: 'task-stale', title: 'Stale state', status: 'ready', notes: [{ content: 'history' }] }],
+    }, null, 2), 'utf8')
+
+    const before = await getProjectMigrationStatus({ projectRoot })
+    expect(before.blocked.some(item => item.id === '0.10.0/project-state-storage-boundary')).toBe(true)
+
+    const result = await applyProjectMigrations({
+      projectRoot,
+      includePrompt: true,
+      only: ['0.10.0/project-state-storage-boundary'],
+    })
+
+    expect(result.applied.some(item => item.id === '0.10.0/project-state-storage-boundary')).toBe(true)
+    await expect(fs.access(path.join(projectRoot, '.guildhall'))).rejects.toThrow()
+    await expect(fs.readFile(
+      path.join(getProjectLocalHistoryDir(projectRoot), 'project-state-evacuation', 'TASKS.json'),
+      'utf8',
+    )).resolves.toContain('task-stale')
+
+    const after = await getProjectMigrationStatus({ projectRoot })
+    expect(after.blocked.some(item => item.id === '0.10.0/project-state-storage-boundary')).toBe(false)
+  })
+
+  it('rewrites stale thin repo state into only the current-shape manifest', async () => {
+    await fs.writeFile(path.join(projectRoot, 'guildhall.yaml'), [
+      'name: Migration Test',
+      'id: migration-test',
+      'storage:',
+      '  repoState: thin',
+      '',
+    ].join('\n'), 'utf8')
+    await fs.mkdir(path.join(projectRoot, '.guildhall'), { recursive: true })
+    await fs.writeFile(path.join(projectRoot, '.guildhall', 'artifacts.yaml'), [
+      'version: 1',
+      'artifacts:',
+      '  - id: flow-audit',
+      '    path: internal/audits/flow-audit.md',
+      '',
+    ].join('\n'), 'utf8')
+    await fs.writeFile(path.join(projectRoot, '.guildhall', 'TASKS.json'), JSON.stringify({
+      version: 1,
+      tasks: [{
+        id: 'task-thin',
+        title: 'Thin resumable work',
+        status: 'ready',
+        spec: 'Enough information to continue.',
+        notes: [{ content: 'not exported' }],
+      }],
+    }, null, 2), 'utf8')
+    await fs.writeFile(path.join(projectRoot, '.guildhall', 'MEMORY.md'), '# Old memory\n', 'utf8')
+
+    const result = await applyProjectMigrations({
+      projectRoot,
+      includePrompt: true,
+      only: ['0.10.0/project-state-storage-boundary'],
+    })
+
+    expect(result.applied.some(item => item.id === '0.10.0/project-state-storage-boundary')).toBe(true)
+    const manifest = JSON.parse(await fs.readFile(path.join(projectRoot, '.guildhall', 'project-state-manifest.json'), 'utf8')) as Record<string, unknown>
+    expect(manifest).toMatchObject({
+      mode: 'thin',
+      currentShape: {
+        artifacts: ['flow-audit'],
+        activeTasks: [expect.objectContaining({
+          id: 'task-thin',
+          title: 'Thin resumable work',
+          status: 'ready',
+          spec: 'Enough information to continue.',
+        })],
+      },
+    })
+    expect(JSON.stringify(manifest)).not.toContain('not exported')
+    expect(JSON.stringify(manifest)).not.toContain('Old memory')
+    await expect(fs.access(path.join(projectRoot, '.guildhall', 'artifacts.yaml'))).resolves.toBeUndefined()
+    await expect(fs.access(path.join(projectRoot, '.guildhall', 'TASKS.json'))).rejects.toThrow()
+    await expect(fs.access(path.join(projectRoot, '.guildhall', 'MEMORY.md'))).rejects.toThrow()
   })
 
   it('automatically migrates legacy runtime command JSONL into persistence', async () => {

@@ -494,8 +494,20 @@ coverage.
   Live proof after `pnpm dev:install`: `/api/stale-server` returned
   `stale:false`, and the in-app browser rendered connected overview pages for
   `/projects/jess/overview` and `/projects/looma-knit/overview`.
-  Remaining gap: migrate direct task writers to the shared boundary helper so
-  future writes cannot recreate forbidden project-local fields.
+  Correction after owner review: cleanup is allowed for non-opt-in projects,
+  but it must be migration cleanup, not a compact repo-local rewrite. The
+  corrected cleanup path now treats `storage.repoState: off` as
+  evacuate/remove the whole `.guildhall` directory after machine-local backup,
+  while `storage.repoState: thin` is the explicit opt-in for a tiny
+  Git-visible current-shape packet. Thin state is not history storage: it keeps
+  only current artifact ids, compact active task summaries, and open-escalation
+  count so another agent can bare-minimally continue if system-local state is
+  unavailable. Built-in migration
+  `0.10.0/project-state-storage-boundary` owns this cleanup; no feature should
+  write Guildhall state directly into project repos outside the storage layer.
+  Remaining gap: run the corrected storage-boundary migration across the
+  managed project roster and verify `.guildhall` is absent unless a project
+  explicitly opts into thin state.
   Treat this as a writer-boundary, memory/context, and cleanup blocker, not a
   one-time compaction chore.
   2026-06-06 implementation slice:

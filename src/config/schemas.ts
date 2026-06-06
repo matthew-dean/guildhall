@@ -73,6 +73,10 @@ const MemoryConfig = z.object({
   observationalMemory: z.boolean().default(false),
 }).default({})
 
+const ProjectStateStorageConfig = z.object({
+  repoState: z.enum(['off', 'thin']).default('off'),
+}).default({})
+
 const BootstrapConfig = z.object({
   commands: z.array(z.string()).default([]),
   successGates: z.array(z.string()).default([]),
@@ -258,6 +262,11 @@ export const WorkspaceYamlConfig = z.object({
   // Memory-core substrate selection. Mastra is the default persistent substrate;
   // deterministic keeps the data-layer event path available as the kill switch.
   memory: MemoryConfig.optional(),
+
+  // Repo-local Guildhall project state is opt-in. The default keeps runtime,
+  // task, memory, and evidence state system-local; `thin` allows compact
+  // Git-visible project-state manifests only.
+  storage: ProjectStateStorageConfig.optional(),
 
   // FR-24: runtime-resource isolation. Consumed when the project-scope lever
   // `runtime_isolation` is set to `slot_allocation`. All fields optional — the

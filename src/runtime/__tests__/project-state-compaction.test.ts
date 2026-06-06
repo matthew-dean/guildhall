@@ -28,8 +28,89 @@ afterEach(async () => {
   await fs.rm(tmp, { recursive: true, force: true })
 })
 
+async function optIntoThinRepoState(): Promise<void> {
+  await fs.writeFile(path.join(projectRoot, 'guildhall.yaml'), [
+    'name: Boundary Test',
+    'id: boundary-test',
+    'storage:',
+    '  repoState: thin',
+    '',
+  ].join('\n'), 'utf8')
+}
+
 describe('compactProjectState', () => {
+  it('evacuates and removes repo-local state when thin project state is not opted in', async () => {
+    await fs.writeFile(path.join(projectRoot, 'guildhall.yaml'), [
+      'name: Boundary Test',
+      'id: boundary-test',
+      'storage:',
+      '  repoState: off',
+      '',
+    ].join('\n'), 'utf8')
+    await fs.writeFile(path.join(stateDir, 'TASKS.json'), JSON.stringify({
+      version: 1,
+      tasks: [
+        {
+          id: 'task-active',
+          status: 'blocked',
+          title: 'Active but too bulky',
+          notes: ['must leave the repo when not opted in'],
+        },
+      ],
+    }, null, 2), 'utf8')
+    await fs.writeFile(path.join(stateDir, 'PROGRESS.md'), '# Progress\n\nOld repo-local progress.\n', 'utf8')
+    await fs.writeFile(path.join(stateDir, 'agent-settings.yaml'), 'version: 1\n', 'utf8')
+    await fs.writeFile(path.join(stateDir, 'TASKS.before-0.10.0-task-hierarchy-links.json'), '{"tasks":[]}\n', 'utf8')
+    await fs.writeFile(path.join(stateDir, 'config.yaml'), 'local: true\n', 'utf8')
+
+    const result = await compactProjectState({ projectRoot, dryRun: false })
+
+    expect(result.repoStateMode).toBe('off')
+    expect(result.evacuatedProjectStatePaths).toEqual(expect.arrayContaining([
+      'TASKS.json',
+      'PROGRESS.md',
+      'agent-settings.yaml',
+      'TASKS.before-0.10.0-task-hierarchy-links.json',
+      'config.yaml',
+    ]))
+    expect(result.forbiddenTaskFieldsBefore).toBe(1)
+    expect(result.forbiddenTaskFieldsAfter).toBe(0)
+    await expect(fs.stat(path.join(stateDir, 'TASKS.json'))).rejects.toThrow(/ENOENT/)
+    await expect(fs.stat(path.join(stateDir, 'PROGRESS.md'))).rejects.toThrow(/ENOENT/)
+    await expect(fs.stat(path.join(stateDir, 'agent-settings.yaml'))).rejects.toThrow(/ENOENT/)
+    await expect(fs.stat(path.join(stateDir, 'TASKS.before-0.10.0-task-hierarchy-links.json'))).rejects.toThrow(/ENOENT/)
+    await expect(fs.stat(stateDir)).rejects.toThrow(/ENOENT/)
+
+    const evacuatedTaskQueue = await fs.readFile(
+      path.join(getProjectLocalHistoryDir(projectRoot), 'project-state-evacuation', 'TASKS.json'),
+      'utf8',
+    )
+    expect(evacuatedTaskQueue).toContain('must leave the repo when not opted in')
+  })
+
+  it('allows repo-local apply cleanup when thin project state is explicitly opted in', async () => {
+    await optIntoThinRepoState()
+    await fs.writeFile(path.join(stateDir, 'TASKS.json'), JSON.stringify({
+      version: 1,
+      tasks: [
+        {
+          id: 'task-active',
+          status: 'blocked',
+          title: 'Active but too bulky',
+          notes: ['can be moved to local history after opt in'],
+        },
+      ],
+    }, null, 2), 'utf8')
+
+    const result = await compactProjectState({ projectRoot, dryRun: false })
+
+    expect(result.activeTasksSanitized).toBe(1)
+    const projectQueue = await fs.readFile(path.join(stateDir, 'TASKS.json'), 'utf8')
+    expect(projectQueue).not.toContain('can be moved to local history after opt in')
+  })
+
   it('archives terminal tasks into sharded project files and keeps TASKS.json active-only', async () => {
+    await optIntoThinRepoState()
     await fs.writeFile(path.join(stateDir, 'TASKS.json'), JSON.stringify({
       version: 1,
       lastUpdated: '2026-05-01T00:00:00.000Z',
@@ -125,6 +206,7 @@ describe('compactProjectState', () => {
   })
 
   it('sanitizes active task runtime and evidence fields while preserving removed evidence locally', async () => {
+    await optIntoThinRepoState()
     await fs.writeFile(path.join(stateDir, 'TASKS.json'), JSON.stringify({
       version: 1,
       tasks: [

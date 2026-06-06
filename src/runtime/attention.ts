@@ -1,6 +1,6 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
-import { getProjectStateDir } from '@guildhall/sessions'
+import { getProjectLocalHistoryDir } from '@guildhall/sessions'
 import { compareInboxItems, type InboxItem } from './inbox.js'
 import { getProjectMigrationStatus } from './migrations.js'
 import { recordGuildhallRuntimeWrite } from './runtime-compatibility.js'
@@ -43,11 +43,11 @@ const PROJECT_UNDERSTANDING_CAPABILITIES = [
 ] as const
 
 function attentionPath(projectPath: string): string {
-  return join(getProjectStateDir(projectPath), 'attention.json')
+  return join(getProjectLocalHistoryDir(projectPath), 'project-state', 'attention.json')
 }
 
 function reconciliationsPath(projectPath: string): string {
-  return join(getProjectStateDir(projectPath), 'reconciliations.json')
+  return join(getProjectLocalHistoryDir(projectPath), 'project-state', 'reconciliations.json')
 }
 
 function readStore(projectPath: string): AttentionStore {
@@ -137,7 +137,7 @@ function toOpenRecord(item: InboxItem, existing: AttentionRecord | undefined, no
 }
 
 function hasWorkspaceImportOutcome(projectPath: string): boolean {
-  return existsSync(join(getProjectStateDir(projectPath), 'workspace-goals.json'))
+  return existsSync(join(getProjectLocalHistoryDir(projectPath), 'project-state', 'workspace-goals.json'))
 }
 
 function readResolvedReconciliationCapabilities(projectPath: string): Set<string> {
