@@ -18,6 +18,7 @@ import { parse as parseYaml } from 'yaml'
 import type { Task } from '@guildhall/core'
 import { META_INTAKE_TASK_ID } from './meta-intake.js'
 import type { BootstrapStatus } from './bootstrap-runner.js'
+import { DELIVERY_SPINE_FILE } from './delivery-spine.js'
 import {
   buildSnapshot,
   buildTaskSnapshot,
@@ -38,6 +39,7 @@ export type InboxItem =
   | { kind: 'setup_pending'; severity: 'medium'; stepId: string; title: string; detail: string; actionHref: string }
   | { kind: 'workspace_import_pending'; severity: 'medium'; title: string; detail: string; signals: string[]; actionHref: string; dismissEndpoint: string }
   | { kind: 'import_draft_queue'; severity: 'medium'; taskId: string; title: string; detail: string; actionHref: string }
+  | { kind: 'contract_result_review'; severity: 'medium'; resultId: string; contractId: string; title: string; detail: string; actionHref: string; changeCount: number; reviewBuckets: string[]; warningCount: number; source: { system: 'delivery-spine'; id: string } }
   | { kind: 'lever_questions'; severity: 'low'; title: string; detail: string; defaultCount: number; actionHref: string }
   | { kind: 'spec_fill_pending'; severity: 'low'; taskId: string; title: string; detail: string; actionHref: string; missingSteps: string[] }
 
@@ -68,6 +70,7 @@ export const ATTENTION_OWNED_INBOX_KINDS = [
   'setup_pending',
   'workspace_import_pending',
   'import_draft_queue',
+  'contract_result_review',
   'lever_questions',
   'spec_fill_pending',
 ] as const satisfies readonly InboxItem['kind'][]
@@ -92,8 +95,9 @@ const KIND_ORDER: Record<InboxItem['kind'], number> = {
   setup_pending: 3,
   workspace_import_pending: 4,
   import_draft_queue: 5,
-  lever_questions: 6,
-  spec_fill_pending: 7,
+  contract_result_review: 6,
+  lever_questions: 7,
+  spec_fill_pending: 8,
 }
 
 const SEVERITY_ORDER: Record<InboxSeverity, number> = {
@@ -238,6 +242,55 @@ function tasksArray(raw: unknown): Task[] {
   return []
 }
 
+function contractResultReviewItems(projectPath: string): InboxItem[] {
+  const raw = readJsonSafe(join(getProjectStateDir(projectPath), DELIVERY_SPINE_FILE)) as {
+    validationEvidence?: unknown[]
+  } | null
+  const records = Array.isArray(raw?.validationEvidence) ? raw.validationEvidence : []
+  return records
+    .filter((record): record is Record<string, unknown> => Boolean(record && typeof record === 'object'))
+    .filter(record => {
+      const status = typeof record.status === 'string' ? record.status : ''
+      return status === 'pending_review' || status === 'auto_applicable'
+    })
+    .map(record => {
+      const resultId = typeof record.id === 'string' ? record.id : 'contract-result'
+      const contractId = typeof record.contractId === 'string' ? record.contractId : 'agent-contract'
+      const summary = record.summary && typeof record.summary === 'object'
+        ? record.summary as Record<string, unknown>
+        : {}
+      const changeCount = ['drivers', 'primitives', 'taskLinks', 'ownerQuestions']
+        .map(key => typeof summary[key] === 'number' ? summary[key] as number : 0)
+        .reduce((total, value) => total + value, 0)
+      const buckets = Array.isArray(record.reviewBuckets)
+        ? record.reviewBuckets
+          .map(bucket => bucket && typeof bucket === 'object' && typeof (bucket as { kind?: unknown }).kind === 'string'
+            ? (bucket as { kind: string }).kind
+            : '')
+          .filter(Boolean)
+        : []
+      const warningCount = Array.isArray(record.warnings) ? record.warnings.length : 0
+      const noun = contractId === 'project-primitive-setup'
+        ? 'primitive setup result'
+        : 'contract result'
+      const bucketText = buckets.length > 0 ? ` Buckets: ${buckets.join(', ')}.` : ''
+      const warningText = warningCount > 0 ? ` ${warningCount} warning${warningCount === 1 ? '' : 's'} need review.` : ''
+      return {
+        kind: 'contract_result_review',
+        severity: 'medium',
+        resultId,
+        contractId,
+        title: `Review ${noun}`,
+        detail: `${changeCount} proposed change${changeCount === 1 ? '' : 's'} are waiting for accept, merge, proof, or rejection.${bucketText}${warningText}`,
+        actionHref: '/overview/inbox',
+        changeCount,
+        reviewBuckets: buckets,
+        warningCount,
+        source: { system: 'delivery-spine', id: resultId },
+      }
+    })
+}
+
 export function buildInbox(opts: BuildInboxOptions): InboxItem[] {
   const { projectPath, snapshotOptions } = opts
   const items: InboxItem[] = []
@@ -375,6 +428,9 @@ export function buildInbox(opts: BuildInboxOptions): InboxItem[] {
       })
     }
   }
+
+  items.push(...contractResultReviewItems(projectPath))
+
   // Cap the number of spec-fill nudges we emit so a project with 40 open
   // tasks doesn't flood the inbox — DoThisNext only consumes the top one
   // anyway, and the per-task Spec tab shows full progress inline.

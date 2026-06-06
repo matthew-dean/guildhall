@@ -7,6 +7,8 @@ export type {
   TickOutcome,
 } from './orchestrator.js'
 export { buildContext } from './context-builder.js'
+export * from './delivery-spine.js'
+export * from './contract-governance.js'
 export { buildHookExecutor } from './hooks-loader.js'
 export type { BuildHookExecutorOptions } from './hooks-loader.js'
 export { buildDefaultCompactor } from './compactor-builder.js'

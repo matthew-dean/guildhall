@@ -16,8 +16,8 @@ The quick version: Guildhall keeps three things visible.
 
 - **What are we trying to do?** The task blueprint, owner decisions,
   acceptance criteria, and boundaries.
-- **Where does this work belong?** The repo structure, project graph, likely
-  files, shared contracts, and existing abstractions.
+- **Where does this work belong?** The active need, delivery package, task
+  blockers, likely files, primitives, and existing abstractions.
 - **Can we trust the result?** Checkpoints, review notes, gate results,
   receipts, and closure state.
 
@@ -71,33 +71,32 @@ For example:
 That is the middle path between "just chat with an agent" and "please enjoy
 this mandatory process cathedral."
 
-## Structure, ownership, and contracts
+## Shape, order, primitives, and proof
 
-Structure is Guildhall's map room.
+Guildhall's default work model is:
 
-The **structural map** says what is in the repo: packages, domains, runnable
-units, Git roots, and cross-cutting areas.
+```text
+Needs -> Delivery packages -> Tasks -> Dependencies -> Primitives -> Proof
+```
 
-The **project graph** says who owns what. That matters when the current project
-needs work from another local project or provider-owned domain. Guildhall can
-track that as a provider/consumer request: the provider delivers, the consumer
-checks the result, and the edge is not resolved until the consumer accepts it.
+The need says why the work matters. The delivery package says what is being
+shipped. Tasks are the pieces Guildhall can plan, run, review, and prove.
+Dependencies are execution order: what must happen before this task can run.
 
-The **contract surface** is the shared shape a task has to fit. For a component
-library, that might be prop names and variant rules. For an API, it might be
-endpoint names, errors, auth, and versioning. For a design system, it is tokens,
-primitive components, and when each variant is allowed.
+Primitives are the project pieces downstream work uses or must respect: UI
+components, design tokens, API clients, auth guards, data schemas, workflow
+rules, test harnesses, and similar foundations. A task can use primitives, and
+a task can prove primitives. Guildhall uses those links to give workers the
+right context and to keep proof gaps visible.
 
-So when a spec touches a durable surface, Guildhall can show a contract packet:
-what rules already exist, what sibling specs depend on them, what the current
-task wants to change, and what proof should exist before reviewers accept it.
-The first everyday version is design governance: before an agent adds another
-local card, chip, button, or style rule, it sees which tokens and components
-already own that job.
+That is the model you should see in the normal project experience: Overview,
+Work, Thread, and the task drawer should agree about the next work, blockers,
+primitive context, and proof state. The deeper project graph and capability
+exchange machinery still exists for real multi-project ownership or handoffs,
+but it is not the default way Guildhall explains ordinary local delivery.
 
-You see this work in **Structure**. If Guildhall needs your judgment, the
-conversation happens in Thread. Settings stays boring on purpose: readiness,
-providers, identity, profiles, and the knobs you actually asked to see.
+For the plain-language walkthrough, see
+[How Guildhall chooses work](./how-guildhall-chooses-work).
 
 ## Making good output more likely
 

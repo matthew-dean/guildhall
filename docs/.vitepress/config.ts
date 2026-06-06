@@ -103,6 +103,7 @@ const guideStartItems = [
 
 const guideWorksItems = [
   { text: 'How the work loop works', link: '/guide/how-guildhall-works' },
+  { text: 'How Guildhall chooses work', link: '/guide/how-guildhall-chooses-work' },
   { text: 'How Guildhall builds', link: '/guide/how-guildhall-builds' },
   { text: 'Research-backed design', link: '/guide/research-backed-design' },
   { text: 'Agent context', link: '/guide/agent-context' },

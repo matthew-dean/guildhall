@@ -25,6 +25,9 @@ export const TaskSplitRecommendation = z.object({
   reason: z.string(),
   dependsOn: z.array(z.string()).default([]),
   suggestedDomain: z.string().optional(),
+  usesPrimitives: z.array(z.string()).optional(),
+  provesPrimitives: z.array(z.string()).optional(),
+  proofKind: z.string().optional(),
   createdTaskId: z.string().optional(),
 })
 export type TaskSplitRecommendation = z.infer<typeof TaskSplitRecommendation>

@@ -15,6 +15,12 @@ import { createReviewAuditStore } from '../review-audit-store.js'
 import { FileBackedGuildhallPersistence } from '@guildhall/persistence'
 import { loadBoundedChatSession } from '../bounded-chat.js'
 import { createOwnerInputRequest, listOwnerInputRequests } from '../owner-input-store.js'
+import {
+  stageContractChangeSet,
+  validateProjectPrimitiveSetupResult,
+  writeProjectDeliveryModel,
+  emptyProjectDeliveryModel,
+} from '../delivery-spine.js'
 
 // Integration tests for the v0.2 UI endpoints:
 //   GET  /api/project/task/:id        — per-task detail powering the drawer
@@ -197,6 +203,57 @@ describe('GET /api/project/task/:id', () => {
       'task-dependent',
       'task-parent',
     ])
+  })
+
+  it('returns shared delivery-spine relationships and context packets for task detail', async () => {
+    await fs.writeFile(path.join(memoryDir, 'delivery-spine.json'), JSON.stringify({
+      version: 1,
+      updatedAt: '2026-06-05T12:00:00.000Z',
+      drivers: [
+        { id: 'knit', label: 'Knit', role: 'primary', paths: ['./apps/knit'] },
+        { id: 'looma', label: 'Looma', role: 'provider', paths: ['./packages/looma'] },
+      ],
+      primitives: [
+        {
+          id: 'menu-item',
+          label: 'MenuItem',
+          kind: 'ui_primitive',
+          provider: 'looma',
+          paths: ['./packages/looma/src/menu'],
+          invariants: ['Can render as button or link.'],
+          proof: ['storybook'],
+          status: 'needs_proof',
+        },
+      ],
+    }, null, 2), 'utf8')
+    await seedTasks([
+      {
+        id: 'task-component',
+        title: 'Component implementation',
+        status: 'done',
+        delivery: { driver: 'knit', provider: 'looma', usesPrimitives: ['menu-item'] },
+      },
+      {
+        id: 'task-storybook',
+        title: 'Storybook proof',
+        dependsOn: ['task-component'],
+        delivery: { driver: 'knit', provider: 'looma', provesPrimitives: ['menu-item'], proofKind: 'storybook' },
+      },
+    ])
+
+    const { app } = buildServeApp({ projectPath: tmpDir })
+    const detailRes = await app.fetch(new Request(projectUrl('/api/project/task/task-component')))
+    expect(detailRes.status).toBe(200)
+    const detail = (await detailRes.json()) as Record<string, any>
+    expect(detail.deliverySpine.contextPacket.deliveryIntent.driver.label).toBe('Knit')
+    expect(detail.deliverySpine.contextPacket.primitiveContext.direct.map((primitive: any) => primitive.id)).toEqual(['menu-item'])
+    expect(detail.deliverySpine.relationships.primitiveUse.blockers.map((primitive: any) => primitive.id)).toEqual(['menu-item'])
+
+    const projectRes = await app.fetch(new Request(projectUrl('/api/project')))
+    expect(projectRes.status).toBe(200)
+    const project = (await projectRes.json()) as Record<string, any>
+    expect(project.deliverySpine.queue.firstRunnable.task.id).toBe('task-storybook')
+    expect(project.deliverySpine.validation.valid).toBe(true)
   })
 
   it('heals stale worker ownership for in_progress tasks when reading task detail', async () => {
@@ -670,6 +727,130 @@ describe('GET /api/project/task/:id', () => {
   expect(body.task?.latestCheckpoint?.nextPlannedAction).toBe(
     'Resume from the latest self-critique and recorded verification evidence, then hand off to review.',
   )
+})
+
+describe('POST /api/project/delivery-spine/contract-results/:id/apply', () => {
+  it('applies a staged primitive setup result and removes it from the inbox', async () => {
+    await seedTask('task-context-menu', {
+      status: 'ready',
+      delivery: { driver: 'knit', provider: 'looma', supports: [] },
+    })
+    const taskQueue = JSON.parse(await fs.readFile(path.join(memoryDir, 'TASKS.json'), 'utf8')) as { tasks: any[] }
+    const baseModel = {
+      ...emptyProjectDeliveryModel('2026-06-05T12:00:00.000Z'),
+      drivers: [
+        { id: 'knit', label: 'Knit', role: 'primary' as const, paths: ['./apps/knit'], domains: [] },
+        { id: 'looma', label: 'Looma', role: 'provider' as const, paths: ['./packages/looma'], domains: [] },
+      ],
+    }
+    const validation = validateProjectPrimitiveSetupResult({
+      model: baseModel,
+      tasks: taskQueue.tasks,
+      result: {
+        primitives: [{
+          id: 'context-menu',
+          label: 'ContextMenu',
+          kind: 'ui_primitive',
+          provider: 'looma',
+          paths: ['./packages/looma/src/context-menu'],
+          invariants: ['ContextMenu composes menu primitives.'],
+          proof: ['storybook'],
+          status: 'needs_proof',
+        }],
+        taskLinks: [{ taskId: 'task-context-menu', usesPrimitives: ['context-menu'] }],
+      },
+      now: '2026-06-05T12:00:00.000Z',
+      actor: 'setup-agent',
+      applyPolicy: 'owner_review',
+    })
+    if (!validation.changeSet) throw new Error('expected changeSet')
+    await writeProjectDeliveryModel(tmpDir, stageContractChangeSet({
+      model: baseModel,
+      changeSet: validation.changeSet,
+      now: '2026-06-05T12:01:00.000Z',
+      actor: 'setup-agent',
+    }))
+
+    const { app } = buildServeApp({ projectPath: tmpDir })
+    const beforeInbox = await app.fetch(new Request(projectUrl('/api/project/inbox')))
+    const beforeBody = (await beforeInbox.json()) as { items?: Array<{ kind?: string; resultId?: string }> }
+    expect(beforeBody.items?.some(item => item.kind === 'contract_result_review' && item.resultId === validation.changeSet?.id)).toBe(true)
+
+    const res = await app.fetch(new Request(projectUrl(`/api/project/delivery-spine/contract-results/${validation.changeSet.id}/apply`), {
+      method: 'POST',
+      body: JSON.stringify({ ownerOverrideReason: 'Accepted from Needs you.' }),
+    }))
+    expect(res.status).toBe(200)
+    const body = (await res.json()) as { ok?: boolean; applied?: { id?: string } }
+    expect(body.ok).toBe(true)
+    expect(body.applied?.id).toBe(validation.changeSet.id)
+
+    const projectRes = await app.fetch(new Request(projectUrl('/api/project')))
+    const projectBody = (await projectRes.json()) as any
+    expect(projectBody.deliverySpine.model.primitives.map((primitive: any) => primitive.id)).toContain('context-menu')
+    const updatedQueue = JSON.parse(await fs.readFile(path.join(memoryDir, 'TASKS.json'), 'utf8')) as { tasks: any[] }
+    expect(updatedQueue.tasks.find(task => task.id === 'task-context-menu')?.delivery?.usesPrimitives).toEqual(['context-menu'])
+
+    const afterInbox = await app.fetch(new Request(projectUrl('/api/project/inbox')))
+    const afterBody = (await afterInbox.json()) as { items?: Array<{ kind?: string; resultId?: string }> }
+    expect(afterBody.items?.some(item => item.kind === 'contract_result_review' && item.resultId === validation.changeSet?.id)).toBe(false)
+  })
+
+  it('rejects a staged primitive setup result and records the reason', async () => {
+    await seedTask('task-context-menu', {
+      status: 'ready',
+      delivery: { driver: 'knit', provider: 'looma', supports: [] },
+    })
+    const taskQueue = JSON.parse(await fs.readFile(path.join(memoryDir, 'TASKS.json'), 'utf8')) as { tasks: any[] }
+    const baseModel = {
+      ...emptyProjectDeliveryModel('2026-06-05T12:00:00.000Z'),
+      drivers: [
+        { id: 'knit', label: 'Knit', role: 'primary' as const, paths: ['./apps/knit'], domains: [] },
+        { id: 'looma', label: 'Looma', role: 'provider' as const, paths: ['./packages/looma'], domains: [] },
+      ],
+    }
+    const validation = validateProjectPrimitiveSetupResult({
+      model: baseModel,
+      tasks: taskQueue.tasks,
+      result: {
+        primitives: [{
+          id: 'context-menu',
+          label: 'ContextMenu',
+          kind: 'ui_primitive',
+          provider: 'looma',
+          paths: ['./packages/looma/src/context-menu'],
+          invariants: ['ContextMenu composes menu primitives.'],
+          proof: ['storybook'],
+          status: 'needs_proof',
+        }],
+      },
+      now: '2026-06-05T12:00:00.000Z',
+      actor: 'setup-agent',
+      applyPolicy: 'owner_review',
+    })
+    if (!validation.changeSet) throw new Error('expected changeSet')
+    await writeProjectDeliveryModel(tmpDir, stageContractChangeSet({
+      model: baseModel,
+      changeSet: validation.changeSet,
+      now: '2026-06-05T12:01:00.000Z',
+      actor: 'setup-agent',
+    }))
+
+    const { app } = buildServeApp({ projectPath: tmpDir })
+    const res = await app.fetch(new Request(projectUrl(`/api/project/delivery-spine/contract-results/${validation.changeSet.id}/reject`), {
+      method: 'POST',
+      body: JSON.stringify({ reason: 'Duplicate primitive.' }),
+    }))
+    expect(res.status).toBe(200)
+    const body = (await res.json()) as { ok?: boolean; rejected?: { reason?: string } }
+    expect(body.ok).toBe(true)
+    expect(body.rejected?.reason).toBe('Duplicate primitive.')
+
+    const projectRes = await app.fetch(new Request(projectUrl('/api/project')))
+    const projectBody = (await projectRes.json()) as any
+    expect(projectBody.deliverySpine.model.primitives.map((primitive: any) => primitive.id)).not.toContain('context-menu')
+    expect(projectBody.deliverySpine.model.rejectedCandidates.at(-1).reason).toBe('Duplicate primitive.')
+  })
 })
 
 it('hides placeholder checkpoint next-action values in task detail responses', async () => {
@@ -1396,6 +1577,99 @@ describe('POST /api/project/task/:id/create-split-children', () => {
     expect(raw.tasks[0].hierarchy.childIds).toEqual(body.createdTaskIds)
     expect(raw.tasks[0].taskReadiness.summary).toBe('Split-recommended work is represented by linked child tasks.')
     expect(raw.tasks[2].dependsOn).toEqual(['task-1-split-component-implementation'])
+  })
+
+  it('materializes split children with validated delivery-spine metadata', async () => {
+    await writeProjectDeliveryModel(tmpDir, {
+      version: 1,
+      updatedAt: '2026-06-05T12:00:00.000Z',
+      drivers: [
+        { id: 'knit', label: 'Knit', role: 'primary', paths: ['./apps/knit'], domains: [] },
+        { id: 'looma', label: 'Looma', role: 'provider', paths: ['./packages/looma'], domains: [] },
+      ],
+      primitives: [
+        {
+          id: 'menu-item',
+          label: 'MenuItem',
+          kind: 'ui_primitive',
+          provider: 'looma',
+          paths: ['./packages/looma/src/menu'],
+          dependsOn: [],
+          invariants: ['Renders consistently as a button or link.'],
+          proof: ['storybook'],
+          status: 'needs_proof',
+          source: 'user',
+          evidence: [],
+          aliases: [],
+        },
+      ],
+      validationEvidence: [],
+      rejectedCandidates: [],
+    })
+    await seedTask('task-1', {
+      status: 'spec_review',
+      delivery: { driver: 'knit', provider: 'looma', usesPrimitives: ['menu-item'] },
+      sizePlan: {
+        taskId: 'task-1',
+        score: 5,
+        band: 'large',
+        action: 'split_recommended',
+        factors: [],
+        recommendedChildren: [
+          {
+            title: 'MenuItem implementation',
+            reason: 'Compose the MenuItem primitive in the ContextMenu component.',
+            suggestedDomain: 'frontend',
+            dependsOn: [],
+            usesPrimitives: ['menu-item'],
+          },
+          {
+            title: 'Storybook proof',
+            reason: 'Prove MenuItem states visually.',
+            suggestedDomain: 'frontend',
+            dependsOn: ['MenuItem implementation'],
+            provesPrimitives: ['menu-item'],
+            proofKind: 'storybook',
+          },
+        ],
+        reviewBudgetHint: 'thorough',
+        reasons: ['Task size score: 5.'],
+        createdAt: '2026-06-05T12:00:00.000Z',
+        createdBy: 'task-sizing',
+      },
+    })
+    const { app } = buildServeApp({ projectPath: tmpDir })
+
+    const res = await app.fetch(
+      new Request(projectUrl('/api/project/task/task-1/create-split-children'), { method: 'POST' }),
+    )
+
+    expect(res.status).toBe(200)
+    const body = await res.json() as Record<string, any>
+    expect(body.splitPlan.errors).toEqual([])
+    expect(body.splitPlan.children[1].delivery).toMatchObject({
+      driver: 'knit',
+      provider: 'looma',
+      supports: ['task-1'],
+      provesPrimitives: ['menu-item'],
+      proofKind: 'storybook',
+    })
+
+    const raw = JSON.parse(await fs.readFile(path.join(memoryDir, 'TASKS.json'), 'utf8')) as Record<string, any>
+    expect(raw.tasks[1].delivery).toMatchObject({
+      driver: 'knit',
+      provider: 'looma',
+      supports: ['task-1'],
+      usesPrimitives: ['menu-item'],
+    })
+    expect(raw.tasks[2].delivery).toMatchObject({
+      driver: 'knit',
+      provider: 'looma',
+      supports: ['task-1'],
+      provesPrimitives: ['menu-item'],
+      proofKind: 'storybook',
+    })
+    expect(raw.tasks[2].dependsOn).toEqual(['task-1-split-menuitem-implementation'])
   })
 })
 

@@ -225,10 +225,24 @@ describe('Guildhall MCP server manifest', () => {
     expect(manifest.resources.map((resource) => resource.uri)).toContain('guildhall://project/context')
     expect(manifest.resources.map((resource) => resource.uri)).toContain('guildhall://project/codebase-knowledge')
     expect(manifest.resources.map((resource) => resource.uri)).toContain('guildhall://project/external-agent-memory-bridge')
+    expect(manifest.resources.map((resource) => resource.uri)).toContain('guildhall://project/primitives')
+    expect(manifest.resources.map((resource) => resource.uri)).toContain('guildhall://project/agent-contracts')
     expect(manifest.resourceTemplates.map((resource) => resource.uriTemplate)).toContain('guildhall://project/tasks/{taskId}')
+    expect(manifest.resourceTemplates.map((resource) => resource.uriTemplate)).toContain('guildhall://project/task-context/{taskId}')
     expect(manifest.tools.map((tool) => tool.name)).toEqual([
       'guildhall.read_artifact',
       'guildhall.append_task_evidence',
+      'guildhall.validate_agent_contract',
+      'guildhall.validate_project_primitive_setup',
+      'guildhall.validate_finished_work_intake',
+      'guildhall.stage_agent_contract_result',
+      'guildhall.apply_agent_contract_result',
+      'guildhall.reject_agent_contract_result',
+      'guildhall.revert_agent_contract_result',
+      'guildhall.build_task_context_packet',
+      'guildhall.derive_task_relationships',
+      'guildhall.derive_queue_candidates',
+      'guildhall.plan_task_split',
       'guildhall.create_capability_request',
       'guildhall.list_capability_requests',
       'guildhall.list_memory',

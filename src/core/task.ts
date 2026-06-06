@@ -619,6 +619,9 @@ export const TaskDelivery = z.object({
   driver: z.string().optional(),
   provider: z.string().optional(),
   supports: z.array(z.string()).default([]),
+  usesPrimitives: z.array(z.string()).default([]),
+  provesPrimitives: z.array(z.string()).default([]),
+  proofKind: z.string().optional(),
 })
 export type TaskDelivery = z.infer<typeof TaskDelivery>
 

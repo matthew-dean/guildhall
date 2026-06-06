@@ -546,6 +546,7 @@ function installFetchFakes(
         startReadiness: options.startReadiness ?? { canStart: true },
         ...(options.runtime ? { runtime: options.runtime } : {}),
         ...(project.detail?.taskRoutingContexts ? { taskRoutingContexts: project.detail.taskRoutingContexts } : {}),
+        ...(project.detail?.deliverySpine ? { deliverySpine: project.detail.deliverySpine } : {}),
         tasks: [],
       })
     }
@@ -2367,7 +2368,11 @@ describe('ThreadTab', () => {
     await userEvent.click(screen.getByRole('button', { name: /Run the missing check/i }))
     await waitFor(() => {
       expect(calls.some(call => call.url.includes('/task/task-link-controls/resolve-escalation'))).toBe(true)
-      expect(calls.some(call => call.url.startsWith('/api/project/start') && call.body?.taskId === 'task-link-controls')).toBe(true)
+      expect(calls.some(call => (
+        call.url.startsWith('/api/project/task/task-link-controls/start') &&
+        call.body?.mode === 'one_task' &&
+        call.body?.scope === 'work_item'
+      ))).toBe(true)
     })
   })
 
@@ -3110,9 +3115,9 @@ describe('ThreadTab', () => {
 
     await waitFor(() => {
       expect(calls.some(call => (
-        call.url.startsWith('/api/project/start') &&
-        call.body?.taskId === 'task-link-controls' &&
-        call.body?.mode === 'continuous'
+        call.url.startsWith('/api/project/task/task-link-controls/start') &&
+        call.body?.mode === 'one_task' &&
+        call.body?.scope === 'work_item'
       ))).toBe(true)
     })
   })
@@ -3424,6 +3429,52 @@ describe('ThreadTab', () => {
     const row = await screen.findByRole('button', { name: /knit: shape the toolbar api/i })
     expect(within(row).getByText('Paused')).toBeTruthy()
     expect((row.firstElementChild as HTMLElement | null)?.className).toContain('thread-index-row-chips')
+  })
+
+  it('shows delivery context and correction affordance on the active worker dock', async () => {
+    project.detail = {
+      ...(project.detail as any),
+      deliverySpine: {
+        contextPacket: {
+          taskId: 'task-link-controls',
+          whyThisNow: 'Knit is driving link editor controls now because the menu primitive is the blocking provider work.',
+          deliveryIntent: {
+            driver: { id: 'knit', label: 'Knit' },
+            provider: { id: 'looma', label: 'Looma' },
+            supports: ['task-context-menu'],
+          },
+          primitiveContext: {
+            direct: [{ id: 'menu', label: 'Menu' }],
+            ancestors: [],
+            blockers: [{ id: 'menu-item', label: 'MenuItem' }],
+          },
+          proofContext: {
+            proofKind: 'storybook',
+            requiredProof: [{ primitiveId: 'menu-item', primitiveLabel: 'MenuItem', proof: 'storybook' }],
+          },
+          persona: { id: 'component-delivery', label: 'Component delivery', guardrails: [] },
+          correctionHooks: [{ field: 'delivery.usesPrimitives', label: 'Change used primitives', current: ['menu'] }],
+        },
+      },
+    }
+    installFetchFakes([
+      workerTurn({
+        id: 'worker-link-controls',
+        taskId: 'task-link-controls',
+        taskTitle: 'Knit: add link editor controls',
+        taskStatus: 'in_progress',
+        summary: 'Building link controls.',
+      }),
+    ], 'task:task-link-controls')
+
+    render(ThreadTab)
+
+    const dock = within(await screen.findByLabelText('Active thread dock'))
+    expect(await dock.findByText('Why this next')).toBeTruthy()
+    expect(dock.getByText(/Knit is driving link editor controls now/i)).toBeTruthy()
+    expect(dock.getByText('Primitive blockers: MenuItem')).toBeTruthy()
+    expect(dock.getByText('Proof expected: MenuItem')).toBeTruthy()
+    expect(dock.getByRole('button', { name: 'Correct delivery context' })).toBeTruthy()
   })
 
   it('uses ownership, not selection, for thread mini-card rails', async () => {

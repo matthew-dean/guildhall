@@ -45,6 +45,16 @@ describe('Guildhall MCP URI helpers', () => {
     expect(parseGuildhallUri('guildhall://project/local-history')).toEqual({ kind: 'localHistory' })
     expect(parseGuildhallUri('guildhall://project/codebase-knowledge')).toEqual({ kind: 'codebaseKnowledge' })
     expect(parseGuildhallUri('guildhall://project/runtime')).toEqual({ kind: 'runtime' })
+    expect(parseGuildhallUri('guildhall://project/drivers')).toEqual({ kind: 'drivers' })
+    expect(parseGuildhallUri('guildhall://project/primitives')).toEqual({ kind: 'primitives' })
+    expect(parseGuildhallUri('guildhall://project/task-context/task-001')).toEqual({
+      kind: 'taskContext',
+      taskId: 'task-001',
+    })
+    expect(parseGuildhallUri('guildhall://project/task-relationships/task-001')).toEqual({
+      kind: 'taskRelationships',
+      taskId: 'task-001',
+    })
   })
 
   it('rejects non-Guildhall URIs and path traversal segments', () => {
@@ -87,12 +97,37 @@ describe('Guildhall MCP project reader', () => {
           acceptanceCriteria: [],
           outOfScope: [],
           dependsOn: [],
+          delivery: {
+            driver: 'knit',
+            provider: 'looma',
+            usesPrimitives: ['menu-item'],
+          },
           revisionCount: 0,
           remediationAttempts: 0,
           escalations: [],
           agentIssues: [],
         }],
       }), 'utf8')
+      writeFileSync(join(root, '.guildhall', 'delivery-spine.json'), JSON.stringify({
+        version: 1,
+        updatedAt: '2026-06-05T12:00:00.000Z',
+        drivers: [
+          { id: 'knit', label: 'Knit', role: 'primary', paths: ['./apps/knit'] },
+          { id: 'looma', label: 'Looma', role: 'provider', paths: ['./packages/looma'] },
+        ],
+        primitives: [
+          {
+            id: 'menu-item',
+            label: 'MenuItem',
+            kind: 'ui_primitive',
+            provider: 'looma',
+            paths: ['./packages/looma/src/menu'],
+            invariants: ['Can render as button or link.'],
+            proof: ['storybook'],
+            status: 'needs_proof',
+          },
+        ],
+      }, null, 2), 'utf8')
       writeFileSync(join(root, '.guildhall', 'DECISIONS.md'), '# Decisions\n\n- Use MCP.\n', 'utf8')
       writeFileSync(join(root, '.guildhall', 'MEMORY.md'), '# Memory\n\n## Runtime\n\nProject fact. token: ghp_123456789012345678901234567890123456\n', 'utf8')
       writeFileSync(join(root, '.guildhall', 'design-system.yaml'), [
@@ -302,6 +337,10 @@ describe('Guildhall MCP project reader', () => {
       expect(resources.map((r) => r.uri)).toContain('guildhall://project/context')
       expect(resources.map((r) => r.uri)).toContain('guildhall://project/local-history')
       expect(resources.map((r) => r.uri)).toContain('guildhall://project/codebase-knowledge')
+      expect(resources.map((r) => r.uri)).toContain('guildhall://project/drivers')
+      expect(resources.map((r) => r.uri)).toContain('guildhall://project/primitives')
+      expect(resources.map((r) => r.uri)).toContain('guildhall://project/task-context/task-001')
+      expect(resources.map((r) => r.uri)).toContain('guildhall://project/task-relationships/task-001')
 
       const project = await readGuildhallResource(ctx, 'guildhall://project')
       expect(project).toContain('## Runtime Health')
@@ -376,6 +415,14 @@ describe('Guildhall MCP project reader', () => {
       expect(context).toContain('task-001 / worker-agent')
       expect(context).toContain('Memory packet: 1 included')
       expect(context).not.toContain('sk-123456789012345678901234')
+
+      const primitives = await readGuildhallResource(ctx, 'guildhall://project/primitives')
+      expect(primitives).toContain('MenuItem')
+      expect(primitives).toContain('Used by tasks: task-001')
+
+      const taskContext = await readGuildhallResource(ctx, 'guildhall://project/task-context/task-001')
+      expect(taskContext).toContain('Knit is driving this work')
+      expect(taskContext).toContain('MenuItem')
 
       const localHistory = await readGuildhallResource(ctx, 'guildhall://project/local-history')
       expect(localHistory).toContain('Local history is summarized only')

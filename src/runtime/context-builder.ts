@@ -4,6 +4,7 @@ import { execFile, execFileSync } from 'node:child_process'
 import path from 'node:path'
 import { promisify } from 'node:util'
 import type { Checkpoint, ConstructionMode, Task } from '@guildhall/core'
+import { TaskQueue } from '@guildhall/core'
 import { buildWorkerCorpusContext, loadCodebaseMap, refreshCodebaseMap } from '@guildhall/corpus-map'
 import {
   constructionModeForTask,
@@ -46,6 +47,11 @@ import {
   type StructuralContextSlice,
 } from './structural-map.js'
 import { renderSurfaceReviewPacketsMarkdown } from './contract-surfaces.js'
+import {
+  buildTaskContextPacket,
+  readProjectDeliveryModel,
+  type TaskContextPacket,
+} from './delivery-spine.js'
 
 // ---------------------------------------------------------------------------
 // Just-in-time context builder
@@ -840,6 +846,7 @@ export interface BuiltContext {
   structuralMapContext?: string
   structuralMapOmitted?: StructuralContextSlice['omitted']
   contractSurfacePackets?: string
+  deliverySpineContext?: string
   /** Concatenated string ready to prepend to an agent message */
   formatted: string
 }
@@ -1180,6 +1187,9 @@ export async function buildContext(
   const contractSurfacePackets = task.status === 'in_progress' || task.status === 'review' || task.status === 'gate_check'
     ? renderSurfaceReviewPacketsMarkdown(task.contractSurfaceReviewPackets ?? [])
     : ''
+  const deliverySpineContext = task.status === 'in_progress' || task.status === 'review' || task.status === 'gate_check'
+    ? await buildDeliverySpineWorkerContext({ projectRoot, memoryDir, task }).catch(() => '')
+    : ''
 
   const taskSummary = [
     `## Current Task: ${task.id}`,
@@ -1254,6 +1264,8 @@ export async function buildContext(
     '',
     contractSurfacePackets,
     '',
+    deliverySpineContext,
+    '',
     corpusMap,
     '',
     languageMap,
@@ -1301,8 +1313,95 @@ export async function buildContext(
     structuralMapContext,
     structuralMapOmitted,
     contractSurfacePackets,
+    deliverySpineContext,
     formatted,
   }
+}
+
+async function buildDeliverySpineWorkerContext(input: {
+  projectRoot: string
+  memoryDir: string
+  task: Task
+}): Promise<string> {
+  const queue = await readTaskQueueForContext(input.memoryDir)
+  const tasks = queue.tasks.some(candidate => candidate.id === input.task.id)
+    ? queue.tasks
+    : [...queue.tasks, input.task]
+  const model = await readProjectDeliveryModel(input.projectRoot)
+  if (!input.task.delivery && model.drivers.length === 0 && model.primitives.length === 0) return ''
+  const packet = buildTaskContextPacket({ model, tasks, taskId: input.task.id })
+  return renderDeliverySpineContext(packet)
+}
+
+async function readTaskQueueForContext(memoryDir: string): Promise<{ tasks: Task[] }> {
+  try {
+    const raw = await fs.readFile(path.join(memoryDir, 'TASKS.json'), 'utf-8')
+    const parsed = JSON.parse(raw)
+    return TaskQueue.parse(Array.isArray(parsed) ? { version: 1, tasks: parsed } : parsed)
+  } catch {
+    return { tasks: [] }
+  }
+}
+
+function renderDeliverySpineContext(packet: TaskContextPacket): string {
+  const lines: string[] = ['## Delivery Spine Context']
+  lines.push('')
+  if (packet.whyThisNow) {
+    lines.push('### Why this now')
+    lines.push(packet.whyThisNow)
+    lines.push('')
+  }
+  if (packet.persona) {
+    lines.push('### Delivery persona')
+    lines.push(`${packet.persona.label} (${packet.persona.id})`)
+    if (packet.persona.guardrails.length > 0) {
+      lines.push(...packet.persona.guardrails.map(guardrail => `- ${guardrail}`))
+    }
+    lines.push('')
+  }
+  const intent = packet.deliveryIntent
+  const intentLines = [
+    intent.driver ? `Driver: ${intent.driver.label}` : '',
+    intent.provider ? `Provider: ${intent.provider.label}` : '',
+    intent.containingPackage ? `Package: ${intent.containingPackage.title}` : '',
+    intent.supports.length > 0 ? `Supports: ${intent.supports.join(', ')}` : '',
+  ].filter(Boolean)
+  if (intentLines.length > 0) {
+    lines.push('### Delivery intent')
+    lines.push(...intentLines)
+    lines.push('')
+  }
+  const direct = packet.primitiveContext.direct.map(primitive => primitive.label)
+  const ancestors = packet.primitiveContext.ancestors.map(primitive => primitive.label)
+  const blockers = packet.primitiveContext.blockers.map(primitive => primitive.label)
+  if (direct.length > 0 || ancestors.length > 0 || blockers.length > 0) {
+    lines.push('### Primitive context')
+    if (direct.length > 0) lines.push(`Uses: ${direct.join(', ')}`)
+    if (ancestors.length > 0) lines.push(`Primitive ancestors: ${ancestors.join(' -> ')}`)
+    if (blockers.length > 0) lines.push(`Primitive blockers: ${blockers.join(', ')}`)
+    for (const invariant of packet.primitiveContext.invariants.slice(0, 12)) {
+      lines.push(`- ${invariant.primitiveLabel}: ${invariant.invariant}`)
+    }
+    lines.push('')
+  }
+  const proof = packet.proofContext
+  if (proof.proofKind || proof.requiredProof.length > 0 || proof.provesPrimitives.length > 0) {
+    lines.push('### Proof')
+    if (proof.proofKind) lines.push(`Proof kind: ${proof.proofKind}`)
+    if (proof.provesPrimitives.length > 0) {
+      lines.push(`This task proves: ${proof.provesPrimitives.map(primitive => primitive.label).join(', ')}`)
+    }
+    for (const obligation of proof.requiredProof.slice(0, 8)) {
+      lines.push(`- ${obligation.primitiveLabel}: ${obligation.proof}`)
+    }
+    if (proof.existingEvidence.length > 0) lines.push(`Existing evidence: ${proof.existingEvidence.join(', ')}`)
+    lines.push('')
+  }
+  if (packet.correctionHooks.length > 0) {
+    lines.push('### Correction hooks')
+    lines.push('If the driver, provider, primitive, blocker, or proof expectation is wrong, record the correction instead of silently following the wrong context.')
+  }
+  return lines.join('\n').trim()
 }
 
 function structuralAgentRoleForTask(task: Task): StructuralAgentRole {

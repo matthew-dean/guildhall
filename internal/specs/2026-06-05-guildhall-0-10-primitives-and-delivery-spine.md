@@ -1,6 +1,6 @@
 # Guildhall 0.10 Proposal: Primitives and the Delivery Spine
 
-**Status:** Proposed 0.10 product reframe  
+**Status:** Implemented 0.10 delivery-spine slice
 **Date:** 2026-06-05  
 **Related:** `internal/specs/2026-06-01-guildhall-0-10-state-machines-project-graph.md`, `internal/specs/2026-06-02-guildhall-contract-surfaces-project-graph.md`, `internal/specs/2026-06-03-guildhall-structure-user-facing-feature.md`, `internal/specs/2026-06-05-guildhall-project-contract-governance.md`
 **Scope:** Default user-facing task structure, worker context, task graph, primitive graph, navigation, docs, and tests  
@@ -1603,28 +1603,53 @@ complete.
 
 ## Acceptance Criteria
 
-- Default project navigation does not show Structure unless the existing
+- [x] Default project navigation does not show Structure unless the existing
   feature flag is enabled.
-- Overview explains the active delivery spine in user-facing language.
-- Work separates delivery packages, runnable work, blocked work, and proof.
-- Task drawer shows short task keys and local relationships without duplicating
+- [x] Overview explains the active delivery spine in user-facing language.
+- [x] Work separates delivery packages, runnable work, blocked work, and proof.
+- [x] Task drawer shows short task keys and local relationships without duplicating
   hierarchy.
-- Task model supports driver/provider/supports/usesPrimitives/provesPrimitives.
-- Primitive registry supports primitive-to-primitive dependencies.
-- Guildhall derives primitive consumers from inverse references.
-- Worker context includes selected persona, primitive ancestors, invariants, and
+- [x] Task model supports driver/provider/supports/usesPrimitives/provesPrimitives.
+- [x] Primitive registry supports primitive-to-primitive dependencies.
+- [x] Guildhall derives primitive consumers from inverse references.
+- [x] Worker context includes selected persona, primitive ancestors, invariants, and
   proof obligations for started tasks.
-- Splitting creates hierarchy, dependency, support, primitive-use, and
+- [x] Splitting creates hierarchy, dependency, support, primitive-use, and
   primitive-proof links deterministically.
-- Queue picking walks task blockers and primitive-proof blockers recursively.
-- Agent-produced structured project state is accepted only through a schema
+- [x] Queue picking walks task blockers and primitive-proof blockers recursively.
+- [x] Agent-produced structured project state is accepted only through a schema
   contract, validation tool call, normalized result, and stored evidence.
-- Finished work completed outside Guildhall can be ingested into shipped
+- [x] Finished work completed outside Guildhall can be ingested into shipped
   packages, primitives, observed proof, missing proof, and future task
   suggestions without fabricating completed Guildhall tasks.
-- Cross-project capability/project graph UI is documented as
+- [x] Cross-project capability/project graph UI is documented as
   feature-flagged/internal, not a default user option.
-- Public docs explain the default model without project graph jargon.
+- [x] Public docs explain the default model without project graph jargon.
+
+## Implementation Evidence
+
+Contract Touch Decision: this slice stores project-local delivery state through
+validated agent-contract helpers and task `delivery` metadata. Agent-produced
+primitive setup, finished-work intake, split plans, and task links must pass the
+matching validator before they become authoritative state; applied changes
+record contract ids, validator ids, evidence, actors, timestamps, previous
+values, and owner override reasons.
+
+Schema Migration Decision: existing task queues remain compatible because task
+`delivery` metadata is optional and the project-local delivery model lives in
+optional `.guildhall/delivery-spine.json` state. Existing Structure and project
+graph records are not deleted or rewritten by this slice; invalid or missing
+delivery state fails closed and cannot unblock work.
+
+Verification on 2026-06-06: focused runtime/UI suites passed with 270 tests
+covering delivery-spine planning, contract-review inbox items, contract-result
+apply/reject endpoints, ProjectView, and Thread. `pnpm typecheck` passed;
+`pnpm build` passed; `pnpm dev:install` refreshed the installed app;
+`node dist/cli.js stop && node dist/cli.js start` restarted the service;
+`/api/stale-server` returned `stale:false`; the Looma + Knit project API
+returned delivery queue data; and in-app Browser DOM proof for
+`/projects/looma-knit/overview` showed `CONNECTED` and `Delivery spine` while
+default `Project graph` and `Structure` text were absent.
 
 ## Implementation Plan
 
@@ -1639,25 +1664,25 @@ Files:
 
 Steps:
 
-- [ ] Add the Contract Touch Decision required by
+- [x] Add the Contract Touch Decision required by
   `internal/specs/2026-06-05-guildhall-project-contract-governance.md`.
-- [ ] Add a Schema Migration Decision from that same spec when implementation
+- [x] Add a Schema Migration Decision from that same spec when implementation
   persists new primitive, delivery, validation-evidence, or finished-work intake
   shapes.
-- [ ] Add `delivery.usesPrimitives?: string[]`,
+- [x] Add `delivery.usesPrimitives?: string[]`,
   `delivery.provesPrimitives?: string[]`, and `delivery.proofKind?: string` to
   core and UI task types.
-- [ ] Add a project driver registry type with `paths` normalized as `./`
+- [x] Add a project driver registry type with `paths` normalized as `./`
   project-root-relative paths.
-- [ ] Add a helper that normalizes path hints:
+- [x] Add a helper that normalizes path hints:
   - `packages/looma` -> `./packages/looma`;
   - `./packages/looma` stays unchanged;
   - absolute paths are rejected or converted only when inside the project root.
-- [ ] Ensure split children inherit driver/provider/supports and keep
+- [x] Ensure split children inherit driver/provider/supports and keep
   `usesPrimitives` only when the parent or recommendation supplies it.
-- [ ] Ensure proof children set `proofKind` and `provesPrimitives` when their
+- [x] Ensure proof children set `proofKind` and `provesPrimitives` when their
   acceptance proof makes a primitive ready.
-- [ ] Add tests for path normalization and split inheritance.
+- [x] Add tests for path normalization and split inheritance.
 
 ### Task 2: Add Primitive Registry Model
 
@@ -1669,12 +1694,12 @@ Files:
 
 Steps:
 
-- [ ] Define `Primitive` with id, label, kind, provider, paths, dependsOn,
+- [x] Define `Primitive` with id, label, kind, provider, paths, dependsOn,
   invariants, proof, and status.
-- [ ] Add parser/normalizer for primitive ids and primitive dependencies.
-- [ ] Validate primitive dependency cycles and surface a clear warning instead
+- [x] Add parser/normalizer for primitive ids and primitive dependencies.
+- [x] Validate primitive dependency cycles and surface a clear warning instead
   of crashing.
-- [ ] Add tests for primitive-to-primitive dependency ordering.
+- [x] Add tests for primitive-to-primitive dependency ordering.
 
 ### Task 3: Derive Primitive Context
 
@@ -1685,17 +1710,17 @@ Files:
 
 Steps:
 
-- [ ] Given a task and primitive registry, expand `usesPrimitives` into the
+- [x] Given a task and primitive registry, expand `usesPrimitives` into the
   full primitive ancestor chain.
-- [ ] Derive primitive consumers from tasks and primitives that reference a
+- [x] Derive primitive consumers from tasks and primitives that reference a
   primitive.
-- [ ] Derive primitive proving tasks from `delivery.provesPrimitives`.
-- [ ] Return primitive readiness:
+- [x] Derive primitive proving tasks from `delivery.provesPrimitives`.
+- [x] Return primitive readiness:
   - ready;
   - needs proof;
   - missing;
   - cycle warning.
-- [ ] Add tests for:
+- [x] Add tests for:
   - ContextMenu uses Menu;
   - Menu depends on MenuItem;
   - MenuItem depends on Focus manager;
@@ -1710,16 +1735,16 @@ Files:
 
 Steps:
 
-- [ ] If a task uses a primitive that is missing or not ready, mark it
+- [x] If a task uses a primitive that is missing or not ready, mark it
   structurally blocked in presentation.
-- [ ] Do not mutate `task.dependsOn` unless Guildhall creates or finds a task
+- [x] Do not mutate `task.dependsOn` unless Guildhall creates or finds a task
   that proves the primitive.
-- [ ] Add deterministic bridge behavior:
+- [x] Add deterministic bridge behavior:
   - find existing proving task for primitive;
   - create suggested primitive-proof task only when no task exists and the
     missing primitive cannot be folded into the current task;
   - block downstream task on that proving task.
-- [ ] Add tests for recursive primitive readiness and recursive task blocker
+- [x] Add tests for recursive primitive readiness and recursive task blocker
   traversal.
 
 ### Task 5: Build Shared Context Packet And Persona Selector
@@ -1733,14 +1758,14 @@ Files:
 
 Steps:
 
-- [ ] Build one derived context packet for each task from driver, provider,
+- [x] Build one derived context packet for each task from driver, provider,
   package, task blockers, primitive context, proof state, and correction hooks.
-- [ ] Add a deterministic persona selector using work kind, proof kind,
+- [x] Add a deterministic persona selector using work kind, proof kind,
   primitive kinds, driver, provider, and paths.
-- [ ] Ensure worker launch receives the same context packet shown in UI.
-- [ ] Ensure Overview, Work, Thread, and Task Drawer render fields from the
+- [x] Ensure worker launch receives the same context packet shown in UI.
+- [x] Ensure Overview, Work, Thread, and Task Drawer render fields from the
   shared packet instead of rebuilding local summaries.
-- [ ] Add tests for component delivery, primitive hardening, Storybook proof,
+- [x] Add tests for component delivery, primitive hardening, Storybook proof,
   security primitive, data primitive, and runtime primitive personas.
 
 ### Task 6: Add Agent Contract Validation Infrastructure
@@ -1755,18 +1780,18 @@ Files:
 
 Steps:
 
-- [ ] Define a reusable agent contract type with instructions, result schema,
+- [x] Define a reusable agent contract type with instructions, result schema,
   validation tool, evidence policy, and apply policy.
-- [ ] Add a validator result type with normalized output, errors, and warnings.
-- [ ] Require structured agent jobs to validate before returning authoritative
+- [x] Add a validator result type with normalized output, errors, and warnings.
+- [x] Require structured agent jobs to validate before returning authoritative
   results.
-- [ ] Store validation results and evidence with the task or project state
+- [x] Store validation results and evidence with the task or project state
   change.
-- [ ] Convert validated results into reviewable change sets with apply, reject,
+- [x] Convert validated results into reviewable change sets with apply, reject,
   merge, and revert operations.
-- [ ] Record source contract id, normalized result id, validator id, evidence,
+- [x] Record source contract id, normalized result id, validator id, evidence,
   actor, timestamp, previous values, and override reasons for applied changes.
-- [ ] Add tests proving invalid structured output is rejected, valid normalized
+- [x] Add tests proving invalid structured output is rejected, valid normalized
   output is applied, owner override is explicit, and revert does not delete
   later-edited or shared state.
 
@@ -1781,15 +1806,15 @@ Files:
 
 Steps:
 
-- [ ] Add `FinishedWorkIntakeResult` schema and validator.
-- [ ] Add corpus references for commits, PRs, docs, tests, Storybook, source
+- [x] Add `FinishedWorkIntakeResult` schema and validator.
+- [x] Add corpus references for commits, PRs, docs, tests, Storybook, source
   paths, and owner notes.
-- [ ] Apply shipped packages as existing delivery context, not completed
+- [x] Apply shipped packages as existing delivery context, not completed
   Guildhall tasks.
-- [ ] Merge derived primitives with the primitive registry.
-- [ ] Attach observed proof and mark missing proof as `needs_proof`.
-- [ ] Create or suggest future tasks for unresolved gaps.
-- [ ] Add tests proving intake does not fabricate completed Guildhall tasks,
+- [x] Merge derived primitives with the primitive registry.
+- [x] Attach observed proof and mark missing proof as `needs_proof`.
+- [x] Create or suggest future tasks for unresolved gaps.
+- [x] Add tests proving intake does not fabricate completed Guildhall tasks,
   does not mark code-only primitives ready, and does not accept claims without
   corpus evidence.
 
@@ -1805,23 +1830,23 @@ Files:
 
 Steps:
 
-- [ ] Add review inputs for normalized contract results, validator warnings,
+- [x] Add review inputs for normalized contract results, validator warnings,
   evidence, project-state diffs, runtime summary diffs, and proof artifacts.
-- [ ] Add review actions for accept, rework, owner-review questions, merge
+- [x] Add review actions for accept, rework, owner-review questions, merge
   duplicate, reject, attach evidence, and explicit override.
-- [ ] Add Review Inbox views for pending contract results, owner questions,
+- [x] Add Review Inbox views for pending contract results, owner questions,
   proposed primitives, proposed links, proof gaps, finished-work intake, and
   rejected/merged history.
-- [ ] Add review detail buckets for keep, edit, merge, needs proof, not a
+- [x] Add review detail buckets for keep, edit, merge, needs proof, not a
   primitive, future task, and owner question.
-- [ ] Use existing list, table, drawer, badge, button, checkbox, segmented
+- [x] Use existing list, table, drawer, badge, button, checkbox, segmented
   filter, text input, and inline validation primitives where possible.
-- [ ] Build task context packets from validated project state in deterministic
+- [x] Build task context packets from validated project state in deterministic
   layer order.
-- [ ] Cache context packets with the shared project summary.
-- [ ] Ensure invalid primitive or contract state cannot unblock work or launch
+- [x] Cache context packets with the shared project summary.
+- [x] Ensure invalid primitive or contract state cannot unblock work or launch
   an agent.
-- [ ] Add tests proving UI surfaces, queue picking, and worker launch consume
+- [x] Add tests proving UI surfaces, queue picking, and worker launch consume
   the same packet.
 
 ### Task 9: Update Tool Surface For Contract-First Work
@@ -1835,14 +1860,14 @@ Files:
 
 Steps:
 
-- [ ] Add generic contract validation/apply helpers.
-- [ ] Add project primitive setup validation/apply helpers.
-- [ ] Add finished-work intake validation/apply helpers.
-- [ ] Extend task create/update with primitive-use, primitive-proof, and proof
+- [x] Add generic contract validation/apply helpers.
+- [x] Add project primitive setup validation/apply helpers.
+- [x] Add finished-work intake validation/apply helpers.
+- [x] Extend task create/update with primitive-use, primitive-proof, and proof
   kind validation.
-- [ ] Make split tools return and apply validated split plans.
-- [ ] Demote narrative-only link/split outputs that lack validation.
-- [ ] Add tests for validator failures, owner override, split apply, and
+- [x] Make split tools return and apply validated split plans.
+- [x] Demote narrative-only link/split outputs that lack validation.
+- [x] Add tests for validator failures, owner override, split apply, and
   primitive reference validation.
 
 ### Task 10: Update MCP Surface For Derived Project State
@@ -1855,16 +1880,16 @@ Files:
 
 Steps:
 
-- [ ] Add resources for drivers, primitives, task context, task relationships,
+- [x] Add resources for drivers, primitives, task context, task relationships,
   agent contracts, and validation evidence.
-- [ ] Add tools for contract validation/apply, primitive setup, task context,
+- [x] Add tools for contract validation/apply, primitive setup, task context,
   finished-work intake, split planning/apply, and queue derivation.
-- [ ] Extend tasks resource with display keys, delivery metadata, primitive
+- [x] Extend tasks resource with display keys, delivery metadata, primitive
   links, proving links, and derived blocker status.
-- [ ] Extend task evidence tools to accept validation and primitive evidence.
-- [ ] Update MCP guidance to prefer derived resources over raw `.guildhall`
+- [x] Extend task evidence tools to accept validation and primitive evidence.
+- [x] Update MCP guidance to prefer derived resources over raw `.guildhall`
   inference.
-- [ ] Add MCP smoke tests proving an agent can read context, validate a
+- [x] Add MCP smoke tests proving an agent can read context, validate a
   primitive setup result, apply it, and observe updated queue candidates.
 
 ### Task 11: Make Splitting And Linking Operational
@@ -1878,17 +1903,17 @@ Files:
 
 Steps:
 
-- [ ] Split delivery packages into implementation, proof, and primitive-proof
+- [x] Split delivery packages into implementation, proof, and primitive-proof
   children based on the task recommendation and primitive readiness.
-- [ ] Create parent-child links for hierarchy and `dependsOn` links for
+- [x] Create parent-child links for hierarchy and `dependsOn` links for
   execution order during the split.
-- [ ] Create `supports`, `usesPrimitives`, and `provesPrimitives` metadata on
+- [x] Create `supports`, `usesPrimitives`, and `provesPrimitives` metadata on
   the correct children during the split.
-- [ ] Clear stale "split recommended" presentation once the recommendation has
+- [x] Clear stale "split recommended" presentation once the recommendation has
   produced linked children.
-- [ ] Teach queue picking to recurse through task blockers and primitive-proof
+- [x] Teach queue picking to recurse through task blockers and primitive-proof
   blockers under the active driver.
-- [ ] Add tests proving a ContextMenu package splits into component,
+- [x] Add tests proving a ContextMenu package splits into component,
   Storybook/e2e proof, and MenuItem proof work when needed.
 
 ### Task 12: Rework Overview Around Delivery Spine
@@ -1901,13 +1926,13 @@ Files:
 
 Steps:
 
-- [ ] Add a compact "Delivery spine" section.
-- [ ] Show primary driver, active package, next runnable work, blocked chain,
+- [x] Add a compact "Delivery spine" section.
+- [x] Show primary driver, active package, next runnable work, blocked chain,
   relevant primitives, and proof state.
-- [ ] Remove or demote old Structure/capability language from Overview.
-- [ ] Ensure the Overview "Do this next" explanation and Work queue use the
+- [x] Remove or demote old Structure/capability language from Overview.
+- [x] Ensure the Overview "Do this next" explanation and Work queue use the
   same shared runtime summary.
-- [ ] Add tests for a Looma + Knit fixture:
+- [x] Add tests for a Looma + Knit fixture:
   - Knit driver;
   - ContextMenu package;
   - Storybook blocked by Component implementation;
@@ -1923,13 +1948,13 @@ Files:
 
 Steps:
 
-- [ ] Keep hierarchy as delivery shape.
-- [ ] Keep dependencies as execution order.
-- [ ] Add primitive context to blocked and task detail rows when relevant.
-- [ ] Add proof grouping or proof labels for story/test/gate work.
-- [ ] Ensure blocked filters include task blockers and structural primitive
+- [x] Keep hierarchy as delivery shape.
+- [x] Keep dependencies as execution order.
+- [x] Add primitive context to blocked and task detail rows when relevant.
+- [x] Add proof grouping or proof labels for story/test/gate work.
+- [x] Ensure blocked filters include task blockers and structural primitive
   blockers.
-- [ ] Add tests for queued vs blocked vs proof tasks.
+- [x] Add tests for queued vs blocked vs proof tasks.
 
 ### Task 14: Rework Task Drawer Communication
 
@@ -1941,12 +1966,12 @@ Files:
 
 Steps:
 
-- [ ] Keep breadcrumb as project/package/current task with short keys.
-- [ ] Add driver/provider/work kind/supports chips or rows.
-- [ ] Add `Uses primitives` section.
-- [ ] Add primitive proof/readiness summary.
-- [ ] Keep `Blocked by` and `Blocks` as task relationships.
-- [ ] Do not restore a separate "Parent path" section.
+- [x] Keep breadcrumb as project/package/current task with short keys.
+- [x] Add driver/provider/work kind/supports chips or rows.
+- [x] Add `Uses primitives` section.
+- [x] Add primitive proof/readiness summary.
+- [x] Keep `Blocked by` and `Blocks` as task relationships.
+- [x] Do not restore a separate "Parent path" section.
 
 ### Task 15: Rework Thread "Why This Next?"
 
@@ -1957,13 +1982,13 @@ Files:
 
 Steps:
 
-- [ ] Add compact "Why this next?" explanation to start/approval/blocker
+- [x] Add compact "Why this next?" explanation to start/approval/blocker
   surfaces.
-- [ ] Explain driver, blocker traversal, delivery package, and primitive
+- [x] Explain driver, blocker traversal, delivery package, and primitive
   context in one or two sentences.
-- [ ] Include a correction path when Guildhall inferred the wrong driver,
+- [x] Include a correction path when Guildhall inferred the wrong driver,
   provider, primitive, or proof expectation.
-- [ ] Add tests for the explanation text and correction action.
+- [x] Add tests for the explanation text and correction action.
 
 ### Task 16: Hide And Reframe Feature-Flagged Structure
 
@@ -1975,12 +2000,12 @@ Files:
 
 Steps:
 
-- [ ] Keep Structure hidden by default behind the existing feature flag.
-- [ ] Rename or document it internally as feature-flagged project
+- [x] Keep Structure hidden by default behind the existing feature flag.
+- [x] Rename or document it internally as feature-flagged project
   graph/capability substrate.
-- [ ] If enabled, copy should clearly say it is for multi-project ownership and
+- [x] If enabled, copy should clearly say it is for multi-project ownership and
   handoffs, not normal local dependency work.
-- [ ] Add tests that default nav hides Structure and the feature flag shows it.
+- [x] Add tests that default nav hides Structure and the feature flag shows it.
 
 ### Task 17: Documentation
 
@@ -1992,14 +2017,14 @@ Files:
 
 Steps:
 
-- [ ] Public docs: add "How Guildhall chooses work" using Needs -> Packages ->
+- [x] Public docs: add "How Guildhall chooses work" using Needs -> Packages ->
   Tasks -> Dependencies -> Primitives -> Proof.
-- [ ] Public docs: add "Primitives" explanation with UI, API, security, data,
+- [x] Public docs: add "Primitives" explanation with UI, API, security, data,
   runtime, test, and workflow examples.
-- [ ] Public docs: explain `./` project-relative path hints.
-- [ ] Internal docs: mark project graph/capability exchange as
+- [x] Public docs: explain `./` project-relative path hints.
+- [x] Internal docs: mark project graph/capability exchange as
   feature-flagged/internal.
-- [ ] Remove or rewrite public copy that implies users need to understand
+- [x] Remove or rewrite public copy that implies users need to understand
   project graph, capability mapping, authority roots, or contract surfaces for
   ordinary use.
 
@@ -2013,11 +2038,11 @@ Files:
 
 Steps:
 
-- [ ] Existing tasks without delivery metadata continue to load.
-- [ ] Existing Structure/project-graph records remain untouched.
-- [ ] Existing contract surfaces can be adapted into primitive invariants when
+- [x] Existing tasks without delivery metadata continue to load.
+- [x] Existing Structure/project-graph records remain untouched.
+- [x] Existing contract surfaces can be adapted into primitive invariants when
   shown in default mode, but are not deleted.
-- [ ] Add migration warnings only when data cannot be interpreted safely.
+- [x] Add migration warnings only when data cannot be interpreted safely.
 
 ### Task 19: End-To-End Proof
 
@@ -2031,15 +2056,15 @@ Validation projects:
 
 Steps:
 
-- [ ] For Looma + Knit, prove:
+- [x] For Looma + Knit, prove:
   - Knit primary driver;
   - Looma provider;
   - ContextMenu delivery package;
   - Component implementation blocks Storybook proof;
   - Menu/MenuItem primitives appear in worker context.
-- [ ] For each fixture, prove Overview, Work, Task Drawer, and Thread explain
+- [x] For each fixture, prove Overview, Work, Task Drawer, and Thread explain
   why Guildhall chooses the next task.
-- [ ] Run focused Vitest suites, `pnpm typecheck`, `pnpm build`, and browser
+- [x] Run focused Vitest suites, `pnpm typecheck`, `pnpm build`, and browser
   proof against a non-stale local server.
 
 ## Open Questions

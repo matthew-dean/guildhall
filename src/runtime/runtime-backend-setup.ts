@@ -151,8 +151,8 @@ function action(id: RuntimeBackendSetupActionId, homebrewPath: string | null): R
         id,
         label: 'Install Podman',
         description: homebrewPath
-          ? 'Use Homebrew or the official Podman macOS installer, then retry detection.'
-          : 'Use the official Podman macOS installer, then retry detection.',
+          ? 'Use Homebrew or the official Podman macOS installer, then check local runtime setup again.'
+          : 'Use the official Podman macOS installer, then check local runtime setup again.',
         mutatesHost: false,
         requiresApproval: false,
         homebrewAvailable: Boolean(homebrewPath),
@@ -179,7 +179,7 @@ function action(id: RuntimeBackendSetupActionId, homebrewPath: string | null): R
     case 'retry-detection':
       return {
         id,
-        label: 'Retry',
+        label: 'Check again',
         description: 'Check local runtime setup again.',
         mutatesHost: false,
         requiresApproval: false,
@@ -256,7 +256,7 @@ export async function detectRuntimeBackendSetup(
       supportedHost: false,
       status: 'unsupported-platform',
       actions: ['retry-detection', 'use-host-run-compatibility'],
-      message: 'Guildhall 0.9 supports the local runtime setup flow on macOS. Use host-run compatibility on this host.',
+      message: 'Podman-backed local runtime setup is available on macOS. Guildhall can run on the host on this machine.',
       lastCheckedAt,
     })
   }
@@ -273,7 +273,7 @@ export async function detectRuntimeBackendSetup(
       status: 'missing',
       homebrewPath,
       actions: ['install-instructions', 'retry-detection', 'use-host-run-compatibility'],
-      message: 'Podman is not installed yet. Install it, then let Guildhall finish runtime setup.',
+      message: 'Podman is not installed yet. Install Podman to use the local runtime, or run on the host until Podman is ready.',
       lastCheckedAt,
     })
   }
@@ -289,7 +289,7 @@ export async function detectRuntimeBackendSetup(
       podmanVersion: version?.stdout.trim() || null,
       homebrewPath,
       actions: ['retry-detection', 'use-host-run-compatibility'],
-      message: 'Guildhall could not read the Podman machine state.',
+      message: 'Guildhall could not read the Podman machine state. Run on the host only until Podman can be checked again.',
       lastCheckedAt,
     })
   }
@@ -305,7 +305,7 @@ export async function detectRuntimeBackendSetup(
       homebrewPath,
       machine,
       actions: ['initialize-machine', 'retry-detection', 'use-host-run-compatibility'],
-      message: 'Podman is installed, but Guildhall still needs to create the local runtime machine.',
+      message: 'Podman is installed, but Guildhall still needs to create the local runtime machine before project work runs there.',
       lastCheckedAt,
     })
   }
@@ -320,7 +320,7 @@ export async function detectRuntimeBackendSetup(
       homebrewPath,
       machine,
       actions: ['start-machine', 'retry-detection', 'use-host-run-compatibility'],
-      message: 'Podman is installed, but the local runtime service is stopped.',
+      message: 'Podman is installed, but the local runtime service is stopped. Start it before project work runs there.',
       lastCheckedAt,
     })
   }
@@ -333,7 +333,7 @@ export async function detectRuntimeBackendSetup(
     podmanVersion: version?.stdout.trim() || null,
     homebrewPath,
     machine,
-    actions: ['retry-detection', 'use-host-run-compatibility'],
+    actions: [],
     message: 'The local runtime is ready. Guildhall will start project containers only when work needs them.',
     lastCheckedAt,
   })

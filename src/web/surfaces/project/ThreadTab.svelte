@@ -57,7 +57,7 @@
   } from '../../lib/task-state.js'
   import { taskStagePresentation } from '../../lib/task-presentation.js'
   import { project } from '../../lib/project.svelte.js'
-  import type { Escalation, GitStorySnapshot, ProjectRuntimeSummary, TaskRoutingContext } from '../../lib/types.js'
+  import type { Escalation, GitStorySnapshot, ProjectDetail, ProjectRuntimeSummary, TaskRoutingContext } from '../../lib/types.js'
   import { toast } from '../../lib/toast.svelte.js'
 
   interface Props {
@@ -2691,6 +2691,28 @@
     return ''
   }
 
+  function deliveryContextForTurn(turn: Turn): NonNullable<ProjectDetail['deliverySpine']>['contextPacket'] | null {
+    if (turn.kind !== 'inflight') return null
+    if (!('taskId' in turn) || !turn.taskId) return null
+    const packet = project.detail?.deliverySpine?.contextPacket
+    return packet?.taskId === turn.taskId ? packet : null
+  }
+
+  function deliveryContextSummary(turn: Turn): string | null {
+    const packet = deliveryContextForTurn(turn)
+    if (!packet) return null
+    const parts = [
+      packet.deliveryIntent?.driver?.label ? `${packet.deliveryIntent.driver.label} is the driver` : null,
+      packet.deliveryIntent?.provider?.label ? `${packet.deliveryIntent.provider.label} provides the work` : null,
+      packet.primitiveContext?.direct?.length
+        ? `uses ${packet.primitiveContext.direct.map(primitive => primitive.label ?? primitive.id).filter(Boolean).join(', ')}`
+        : null,
+      packet.proofContext?.proofKind ? `proof: ${packet.proofContext.proofKind}` : null,
+    ].filter((part): part is string => Boolean(part))
+    const fallback = parts.join('; ')
+    return packet.whyThisNow ?? (fallback || null)
+  }
+
   function requestHeading(turn: RequestTurn): string {
     return turn.requestStage === 'task_brief_cleanup' ? 'Task brief cleanup' : 'New thread'
   }
@@ -5023,6 +5045,36 @@
                             <p class="thread-active-summary">{dockSourceSummary(activeDockTurn)}</p>
                           {/if}
 
+                          {#if deliveryContextSummary(activeDockTurn)}
+                            {@const deliveryPacket = deliveryContextForTurn(activeDockTurn)}
+                            <div class="thread-active-section thread-delivery-context">
+                              <div class="thread-delivery-context-head">
+                                <Chip label="Why this next" tone="accent" size="compact" />
+                                {#if deliveryPacket?.persona?.label}
+                                  <span>{deliveryPacket.persona.label}</span>
+                                {/if}
+                              </div>
+                              <p>{deliveryContextSummary(activeDockTurn)}</p>
+                              {#if deliveryPacket?.primitiveContext?.blockers?.length}
+                                <p class="thread-delivery-detail">
+                                  Primitive blockers: {deliveryPacket.primitiveContext.blockers.map(primitive => primitive.label ?? primitive.id).filter(Boolean).join(', ')}
+                                </p>
+                              {/if}
+                              {#if deliveryPacket?.proofContext?.requiredProof?.length}
+                                <p class="thread-delivery-detail">
+                                  Proof expected: {deliveryPacket.proofContext.requiredProof.map(proof => proof.primitiveLabel ?? proof.primitiveId ?? proof.proof).filter(Boolean).join(', ')}
+                                </p>
+                              {/if}
+                              {#if activeDockTurn.taskId}
+                                <div class="thread-delivery-actions">
+                                  <Button size="sm" variant="ghost" onclick={() => openTaskDetails(activeDockTurn.taskId)}>
+                                    Correct delivery context
+                                  </Button>
+                                </div>
+                              {/if}
+                            </div>
+                          {/if}
+
                           {@const activeRoutingContext = routingContextForTask(activeDockTurn.taskId)}
                           {#if activeDockTurn.taskDescription || activeDockTurn.sourceNote || activeRoutingContext}
                             <details class="thread-disclosure task-context-disclosure">
@@ -5953,6 +6005,36 @@
     min-width: 0;
     padding-top: var(--gh-space-2);
     border-top: 1px solid color-mix(in srgb, var(--border) 64%, transparent);
+  }
+  .thread-delivery-context {
+    color: var(--thread-color-body);
+  }
+  .thread-delivery-context-head,
+  .thread-delivery-actions {
+    display: flex;
+    align-items: center;
+    gap: var(--gh-space-2);
+    min-width: 0;
+  }
+  .thread-delivery-context-head span {
+    min-width: 0;
+    color: var(--thread-color-muted);
+    font-size: var(--gh-type-size-meta);
+    line-height: var(--thread-lh-meta);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  .thread-delivery-context p {
+    margin: 0;
+    color: var(--thread-color-body);
+    font-size: var(--thread-fs-body);
+    line-height: var(--thread-lh-body);
+  }
+  .thread-delivery-context .thread-delivery-detail {
+    color: var(--thread-color-muted);
+    font-size: var(--gh-type-size-meta);
+    line-height: var(--thread-lh-meta);
   }
   .thread-active-checklist {
     color: var(--thread-color-body);

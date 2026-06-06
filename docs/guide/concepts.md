@@ -82,26 +82,52 @@ A named slice of the project, such as `ui`, `backend`, or `infra`. Every task
 declares a domain. Work that crosses domains becomes an explicit handoff
 instead of a quiet surprise.
 
+## Driver
+
+The source of product demand. A driver answers whose need decides what matters
+first. It can have path hints, but it is not just a folder. A customer-facing
+app might be the primary driver, a shared package might be the provider, and a
+Storybook or e2e surface might be the proof driver.
+
+## Delivery package
+
+The thing Guildhall is trying to deliver. A delivery package can contain child
+tasks for implementation, docs, tests, proof, or cleanup. Hierarchy describes
+the shape of delivery; dependencies describe execution order.
+
+## Primitive
+
+A foundational project piece downstream work uses or must respect. UI
+components and design tokens are primitives, but so are API clients, response
+envelopes, auth guards, data schemas, event buses, shared test harnesses, and
+workflow conventions.
+
+Guildhall tracks which tasks use primitives and which tasks prove them. A
+primitive is not ready just because code exists; it needs proof or an explicit
+owner decision. See [How Guildhall chooses work](./how-guildhall-chooses-work).
+
 ## Structure
 
-The project view where Guildhall shows the structural map and project graph.
-Structure is where you inspect repo domains, local project relationships,
-provider/consumer requests, and shared contract questions. If a Structure item
-needs your judgment, the discussion routes back to Thread.
+The advanced project map for repo domains, multi-project relationships,
+handoffs, and shared contract questions. Most local delivery work should be
+understandable through drivers, delivery packages, tasks, dependencies,
+primitives, and proof. If an advanced structure item needs your judgment, the
+discussion routes back to Thread.
 
 ## Project graph
 
-The ownership map across projects, domains, packages, external references, and
-delivery channels. It lets Guildhall say "this project needs something from
-that provider-owned domain" without silently stuffing the work into the wrong
-project.
+The advanced ownership map across projects, domains, packages, external
+references, and delivery channels. It matters when one registered project
+really needs something from another project or owner boundary. It should not be
+the mental model for ordinary local task dependencies.
 
 ## Contract surface
 
 A shared surface individual specs need to fit. Examples include a component
 API, endpoint family, event stream, schema, state machine, MCP resource, design
-system, or domain capability. A task can change one part of the surface, but
-Guildhall still checks whether the change fits the larger contract.
+system, or domain capability. In the default project model, these often show up
+as primitive invariants and proof expectations rather than as a separate thing
+you need to manage.
 
 ## Owner input
 

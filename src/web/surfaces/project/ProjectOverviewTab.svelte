@@ -28,7 +28,7 @@
   import { activeEscalations } from '../../lib/escalation.js'
   import { needsWorkerHandoffSpecCleanup } from '../../lib/task-state.js'
   import { taskStagePresentation } from '../../lib/task-presentation.js'
-  import type { ProjectGraphView } from './structure/project-graph-store.svelte.js'
+  import { advancedStructureEnabled } from '../../lib/feature-flags.js'
 
   interface Props {
     detail: ProjectDetail
@@ -79,35 +79,7 @@
   let localStructuralMapReview = $state<ProjectDetail['structuralMapReview'] | null>(null)
   let structuralMapActionError = $state<string | null>(null)
   let structuralMapActionBusy = $state(false)
-  let projectGraphSummary = $state<ProjectGraphView | null>(null)
-  let projectGraphSummaryError = $state<string | null>(null)
-
-  $effect(() => {
-    activeProjectId
-    let cancelled = false
-    async function loadProjectGraphSummary(): Promise<void> {
-      try {
-        const res = await projectFetch('/api/project/project-graph', { cache: 'no-store' }, activeProjectId)
-        const body = await res.json().catch(() => ({})) as { projectGraph?: ProjectGraphView; error?: string }
-        if (cancelled) return
-        if (!res.ok || body.error) {
-          projectGraphSummaryError = body.error ?? `HTTP ${res.status}`
-          projectGraphSummary = null
-          return
-        }
-        projectGraphSummary = body.projectGraph ?? null
-        projectGraphSummaryError = null
-      } catch (err) {
-        if (cancelled) return
-        projectGraphSummaryError = err instanceof Error ? err.message : String(err)
-        projectGraphSummary = null
-      }
-    }
-    void loadProjectGraphSummary()
-    return () => {
-      cancelled = true
-    }
-  })
+  const showAdvancedStructure = advancedStructureEnabled()
 
   const tasks = $derived(detail.tasks ?? [])
   const displayPath = $derived(formatUserPath(detail.path))
@@ -116,19 +88,15 @@
   const runtime = $derived(detail.runtime ?? null)
   const memoryHealth = $derived(detail.memoryHealth ?? null)
   const structuralMapReview = $derived(localStructuralMapReview ?? detail.structuralMapReview ?? null)
-  const graphFacts = $derived.by(() => {
-    const graph = projectGraphSummary
-    const openRequests = graph?.dependencyEdges?.filter(edge => edge.unresolved).length ?? 0
-    const connectedProjects = graph?.localProjects?.filter(item => item.role !== 'current').length ?? 0
-    const contractSurfaces = graph?.contractSurfaces?.length ?? 0
-    const graphDomains = graph?.structuralDomains?.length ?? 0
-    return {
-      loaded: Boolean(graph),
-      openRequests,
-      connectedProjects,
-      contractSurfaces,
-      graphDomains,
-    }
+  const deliverySpine = $derived(detail.deliverySpine ?? null)
+  const primaryDriver = $derived(deliverySpine?.model?.drivers?.find(driver => driver.role === 'primary') ?? null)
+  const nextQueueCandidate = $derived(deliverySpine?.queue?.firstRunnable ?? null)
+  const primitiveBlockerSummary = $derived.by(() => {
+    const blockers = deliverySpine?.queue?.blocked
+      ?.flatMap(candidate => candidate.structuralBlockers ?? [])
+      .filter((primitive, index, all) => primitive.id && all.findIndex(item => item.id === primitive.id) === index)
+      .slice(0, 4) ?? []
+    return blockers
   })
   const primaryProofPaths = $derived.by(() => {
     return tasks
@@ -284,16 +252,6 @@
 
   const knowledgeCards = $derived.by(() => {
     const activeCount = counts.working + counts.ready + counts.approval + counts.shaping
-    const mapDomainCount = (structuralMapReview?.counts?.domains ?? 0) + (structuralMapReview?.counts?.crossCuttingDomains ?? 0)
-    const graphDetail = projectGraphSummaryError
-      ? 'Project graph summary could not load.'
-      : graphFacts.loaded
-        ? [
-            countLabel(graphFacts.graphDomains, 'graph domain'),
-            countLabel(graphFacts.contractSurfaces, 'contract surface'),
-            countLabel(graphFacts.openRequests, 'open dependency request'),
-          ].join(' · ')
-        : 'Loading project graph and contract facts.'
     return [
       {
         label: 'Work',
@@ -301,28 +259,6 @@
         detail: `${activeCount} active or shaping · ${counts.done} completed · ${counts.blocked} blocked.`,
         href: currentProjectHref('/work', activeProjectId),
         tone: counts.blocked > 0 ? 'warn' as Tone : activeCount > 0 ? 'accent' as Tone : 'neutral' as Tone,
-      },
-      {
-        label: 'Structure',
-        title: structuralMapReview
-          ? structuralStateLabel(structuralMapReview.state)
-          : graphFacts.loaded
-            ? countLabel(graphFacts.graphDomains, 'graph domain')
-            : 'Structure facts',
-        detail: structuralMapReview
-          ? `${countLabel(mapDomainCount, 'domain')} · ${countLabel(structuralMapReview.counts?.packages ?? 0, 'package')} · ${countLabel(structuralMapReview.counts?.executableUnits ?? 0, 'command')}.`
-          : graphFacts.loaded
-            ? `${countLabel(graphFacts.contractSurfaces, 'contract surface')} · ${countLabel(graphFacts.openRequests, 'open dependency request')}.`
-            : 'Loading project graph domains, contracts, and dependency requests.',
-        href: currentProjectHref('/structure', activeProjectId),
-        tone: structuralMapReview?.state === 'accepted' || graphFacts.loaded ? 'ok' as Tone : 'neutral' as Tone,
-      },
-      {
-        label: 'Project graph',
-        title: graphFacts.loaded ? `${countLabel(graphFacts.connectedProjects, 'connected project')}` : 'Graph facts',
-        detail: graphDetail,
-        href: currentProjectHref('/structure', activeProjectId),
-        tone: graphFacts.openRequests > 0 ? 'warn' as Tone : graphFacts.loaded ? 'ok' as Tone : 'neutral' as Tone,
       },
       {
         label: 'Runtime',
@@ -605,6 +541,10 @@
       if (expanded) return expanded
     }
     return title || friendlyTaskId(task.id)
+  }
+
+  function primitiveLabel(primitive: { id?: string; label?: string }): string {
+    return primitive.label?.trim() || primitive.id || 'Primitive'
   }
 
   function fullTitleFromDescription(title: string, description: string): string | null {
@@ -890,6 +830,34 @@
     </Card>
   </section>
 
+  {#if deliverySpine}
+    <section class="delivery-band" aria-label="Delivery spine">
+      <Card title="Delivery spine" titleTag="h2" className="overview-card">
+        <div class="delivery-summary">
+          <div>
+            <span>Driver</span>
+            <strong>{primaryDriver?.label ?? 'No primary driver set'}</strong>
+          </div>
+          <div>
+            <span>Next runnable work</span>
+            <strong>{nextQueueCandidate?.task ? taskLabel(nextQueueCandidate.task) : 'No runnable task'}</strong>
+          </div>
+          <div>
+            <span>Primitive proof blockers</span>
+            <strong>{primitiveBlockerSummary.length ? primitiveBlockerSummary.map(primitiveLabel).join(', ') : 'None'}</strong>
+          </div>
+          <div>
+            <span>Validation</span>
+            <strong>{deliverySpine.validation?.valid === false ? 'Needs review' : 'Valid'}</strong>
+          </div>
+        </div>
+        {#if nextQueueCandidate?.why}
+          <p class="muted">{nextQueueCandidate.why}</p>
+        {/if}
+      </Card>
+    </section>
+  {/if}
+
   <section class="overview-grid overview-grid-main">
     <Card title="Moving now" titleTag="h2" className="overview-card">
       {#if movingTasks.length === 0}
@@ -1031,7 +999,7 @@
       </div>
     </Card>
 
-    {#if structuralMapReview}
+    {#if showAdvancedStructure && structuralMapReview}
       <Card title="Project map" titleTag="h2" className="overview-card">
         <div class="structural-map-review">
           <div class="map-review-head">
@@ -1436,6 +1404,23 @@
     gap: var(--s-3);
     min-width: 0;
   }
+  .delivery-summary {
+    display: grid;
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+    gap: var(--s-3);
+  }
+  .delivery-summary div {
+    display: grid;
+    gap: var(--s-1);
+    min-width: 0;
+  }
+  .delivery-summary span {
+    color: var(--text-muted);
+    font-size: var(--gh-type-size-meta);
+  }
+  .delivery-summary strong {
+    overflow-wrap: anywhere;
+  }
   .map-review-head {
     display: flex;
     align-items: center;
@@ -1549,6 +1534,9 @@
     .knowledge-band {
       grid-template-columns: repeat(2, minmax(0, 1fr));
     }
+    .delivery-summary {
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+    }
     .overview {
       padding: var(--s-4);
     }
@@ -1560,6 +1548,9 @@
       gap: var(--s-3);
     }
     .knowledge-band {
+      grid-template-columns: 1fr;
+    }
+    .delivery-summary {
       grid-template-columns: 1fr;
     }
     :global(.live-card) {

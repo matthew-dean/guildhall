@@ -983,6 +983,7 @@
           task={payload.task}
           tasks={taskLinkContext}
           projectId={scopedProjectId()}
+          deliverySpine={payload.deliverySpine}
           onNavigateTask={navigateToRelatedTask}
           onCreateSplitChildren={handleCreateSplitChildren}
           createSplitBusy={splitTaskBusy}

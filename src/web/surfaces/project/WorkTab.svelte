@@ -108,6 +108,14 @@
   const boardMode = $derived(mode === 'board')
   const activeWorkView = $derived<WorkView>(routeWorkView)
   const hierarchy = $derived(buildWorkHierarchy(tasks))
+  const deliveryQueue = $derived(detail.deliverySpine?.queue ?? null)
+  const deliveryFirstRunnable = $derived(deliveryQueue?.firstRunnable ?? null)
+  const deliveryPrimitiveBlockers = $derived.by(() => {
+    return deliveryQueue?.blocked
+      ?.flatMap(candidate => candidate.structuralBlockers ?? [])
+      .filter((primitive, index, all) => primitive.id && all.findIndex(item => item.id === primitive.id) === index)
+      .slice(0, 5) ?? []
+  })
   const visibleTasks = $derived(tasks.filter(matchesWorkFilter))
   const showsPlanningArtifacts = $derived(['planning', 'open', 'all'].includes(workFilter))
   const visibleImportDraftCount = $derived(showsPlanningArtifacts ? importDraftCount : 0)
@@ -336,6 +344,10 @@
     return friendlyTaskId(task.id)
   }
 
+  function primitiveLabel(primitive: { id?: string; label?: string }): string {
+    return primitive.label?.trim() || primitive.id || 'Primitive'
+  }
+
   function hierarchyBreadcrumb(task: Task): string {
     const crumbs = hierarchy.byId.get(task.id)?.breadcrumb ?? []
     if (crumbs.length <= 1) return ''
@@ -413,6 +425,24 @@
   {:else if activeWorkView === 'columns'}
     <WorkTreePreview tasks={tasks} filter={workFilter} />
   {:else}
+    {#if deliveryQueue}
+      <UtilityPanel as="section" className="delivery-queue-panel" tone={deliveryFirstRunnable ? 'ok' : deliveryQueue.blocked?.length ? 'warn' : 'neutral'} ariaLabel="Delivery queue">
+        <div>
+          <p class="queue-label">Delivery queue</p>
+          <strong>{deliveryFirstRunnable?.task ? deliveryFirstRunnable.task.title ?? deliveryFirstRunnable.task.id : 'No runnable task'}</strong>
+          {#if deliveryFirstRunnable?.why}
+            <span>{deliveryFirstRunnable.why}</span>
+          {/if}
+        </div>
+        <div class="queue-chips">
+          <Chip label={`${deliveryQueue.runnable?.length ?? 0} runnable`} tone={deliveryFirstRunnable ? 'ok' : 'neutral'} />
+          <Chip label={`${deliveryQueue.blocked?.length ?? 0} blocked`} tone={deliveryQueue.blocked?.length ? 'warn' : 'neutral'} />
+          {#each deliveryPrimitiveBlockers as primitive (`primitive-${primitive.id}`)}
+            <Chip label={primitiveLabel(primitive)} tone="warn" />
+          {/each}
+        </div>
+      </UtilityPanel>
+    {/if}
     <Card title="Work list" titleTag="h2">
 
       <div class="work-list-overview">
@@ -614,6 +644,38 @@
     justify-content: flex-end;
     gap: var(--gh-space-2);
     min-width: 0;
+  }
+  :global(.delivery-queue-panel) {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: var(--s-3);
+  }
+  :global(.delivery-queue-panel) > div:first-child {
+    display: grid;
+    gap: var(--s-1);
+    min-width: 0;
+  }
+  :global(.delivery-queue-panel) strong {
+    overflow-wrap: anywhere;
+  }
+  :global(.delivery-queue-panel) span {
+    color: var(--text-muted);
+    font-size: var(--gh-type-size-body);
+  }
+  .queue-label {
+    margin: 0;
+    color: var(--text-muted);
+    font-size: var(--gh-type-size-meta);
+    font-weight: var(--gh-type-weight-strong);
+    letter-spacing: 0.05em;
+    text-transform: uppercase;
+  }
+  .queue-chips {
+    display: flex;
+    flex-wrap: wrap;
+    justify-content: flex-end;
+    gap: var(--s-2);
   }
   :global(.setup-empty) {
     display: flex;

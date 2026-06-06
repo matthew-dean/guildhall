@@ -74,7 +74,7 @@ function codebaseMapStatus(overrides: Record<string, unknown> = {}) {
   }
 }
 
-function runtimeStatus() {
+function runtimeStatus(overrides: Record<string, unknown> = {}) {
   return {
     status: 'ready',
     message: 'Runtime is ready.',
@@ -86,6 +86,7 @@ function runtimeStatus() {
     compatibilityModeLabel: 'Host-run compatibility',
     machine: { exists: true, name: 'guildhall', running: true },
     actions: [],
+    ...overrides,
   }
 }
 
@@ -95,6 +96,7 @@ function installFetch(options: {
   migrations?: Record<string, unknown>
   bootstrap?: Record<string, unknown>
   capability?: Record<string, unknown>
+  runtime?: Record<string, unknown>
   worktreeIncludes?: Record<string, unknown>
   designSystem?: Record<string, unknown> | null
   designFeedback?: Record<string, unknown> | null
@@ -184,7 +186,7 @@ function installFetch(options: {
         },
       })
     }
-    if (url.pathname === '/api/project/runtime/setup') return json(runtimeStatus())
+    if (url.pathname === '/api/project/runtime/setup') return json(runtimeStatus(options.runtime ?? {}))
     if (url.pathname === '/api/project/capability-requests') {
       if (method === 'GET') {
         return json(options.capability ?? {
@@ -327,6 +329,61 @@ describe('SettingsTab', () => {
 
     await userEvent.click(screen.getByRole('button', { name: 'Revoke' }))
     await waitFor(() => expect(fetchMock.mock.calls.some(([input]) => String(input).includes('/request-editor-fixture/revoke'))).toBe(true))
+  })
+
+  it('does not show recovery actions when the local runtime is already ready', async () => {
+    installFetch()
+    render(SettingsTab, { subView: 'ready' })
+
+    expect(await screen.findByRole('heading', { name: 'Local runtime' })).toBeInTheDocument()
+    expect(await screen.findByText('podman version 5.0.0')).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Retry' })).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Check again' })).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Use host-run compatibility' })).not.toBeInTheDocument()
+    expect(screen.queryByText(/host-run/i)).not.toBeInTheDocument()
+    expect(screen.queryByText(/keeps existing host execution available/i)).not.toBeInTheDocument()
+  })
+
+  it('only mentions host-run compatibility when Podman is not ready', async () => {
+    installFetch({
+      runtime: {
+        status: 'missing',
+        message: 'Podman is not installed yet. Install Podman to use the local runtime, or run on the host until Podman is ready.',
+        podmanPath: null,
+        podmanVersion: null,
+        machine: { exists: false, name: null, running: false },
+        actions: [
+          {
+            id: 'install-instructions',
+            label: 'Install Podman',
+            description: 'Use the official Podman macOS installer, then check local runtime setup again.',
+            mutatesHost: false,
+            requiresApproval: false,
+          },
+          {
+            id: 'retry-detection',
+            label: 'Check again',
+            description: 'Check local runtime setup again.',
+            mutatesHost: false,
+            requiresApproval: false,
+          },
+          {
+            id: 'use-host-run-compatibility',
+            label: 'Use host-run compatibility',
+            description: 'Keep running commands directly on this Mac until the container runtime is ready.',
+            mutatesHost: false,
+            requiresApproval: false,
+          },
+        ],
+      },
+    })
+    render(SettingsTab, { subView: 'ready' })
+
+    expect(await screen.findByRole('heading', { name: 'Local runtime' })).toBeInTheDocument()
+    expect(await screen.findByRole('button', { name: 'Install Podman' })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Check again' })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Use host-run compatibility' })).toBeInTheDocument()
+    expect(screen.getByText(/run on the host until Podman is ready/i)).toBeInTheDocument()
   })
 
   it('keeps coordinator routing as a focused settings panel', async () => {

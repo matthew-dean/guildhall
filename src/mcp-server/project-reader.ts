@@ -8,10 +8,13 @@ import {
 } from '@guildhall/sessions'
 import { load as yamlLoad } from 'js-yaml'
 import {
+  buildTaskContextPacket,
   buildEffectiveMemoryPacket,
   buildDesignIntentSurrogate,
   buildDesignSystemCatalog,
+  deriveTaskRelationships,
   importExternalMemoryBridgeRecord,
+  listPrimitivesWithRelations,
   listCapabilityRequests,
   listExternalMemoryBridgeRecords,
   listMemoryRecords,
@@ -21,6 +24,8 @@ import {
   loadEffectiveDesignTaste,
   readProjectLearning,
   readProjectRuntimeState,
+  readProjectDeliveryModel,
+  validateProjectDeliveryModel,
   recordMemoryObservation,
   rejectExternalMemoryBridgeRecord,
   reviewExternalMemoryBridgeRecord,
@@ -150,6 +155,42 @@ export async function buildGuildhallResourceIndex(
       description: 'Reviewable external-agent memory exchange records.',
       mimeType: 'text/markdown',
     },
+    {
+      uri: 'guildhall://project/drivers',
+      name: 'Guildhall delivery drivers',
+      description: 'Project-local delivery driver registry.',
+      mimeType: 'text/markdown',
+    },
+    {
+      uri: 'guildhall://project/primitives',
+      name: 'Guildhall primitives',
+      description: 'Project-local primitive registry with consumers and proof links.',
+      mimeType: 'text/markdown',
+    },
+    ...tasks.map((task) => ({
+      uri: `guildhall://project/task-context/${task.id}`,
+      name: `${task.title || task.id} context packet`,
+      description: `Shared worker/UI context packet for ${task.id}.`,
+      mimeType: 'text/markdown' as const,
+    })),
+    ...tasks.map((task) => ({
+      uri: `guildhall://project/task-relationships/${task.id}`,
+      name: `${task.title || task.id} relationships`,
+      description: `Hierarchy, blockers, supports, primitive-use, and proof links for ${task.id}.`,
+      mimeType: 'text/markdown' as const,
+    })),
+    {
+      uri: 'guildhall://project/agent-contracts',
+      name: 'Guildhall agent contracts',
+      description: 'Available structured contracts, schemas, validation tools, and apply policies.',
+      mimeType: 'text/markdown',
+    },
+    {
+      uri: 'guildhall://project/validation-evidence',
+      name: 'Guildhall validation evidence',
+      description: 'Validation results and owner overrides that affected project state.',
+      mimeType: 'text/markdown',
+    },
   ]
 }
 
@@ -199,7 +240,172 @@ export async function readGuildhallResource(
   if (parsed.kind === 'externalAgentMemoryBridge') {
     return renderExternalAgentMemoryBridge(ctx)
   }
+  if (parsed.kind === 'drivers') {
+    return renderDeliveryDrivers(ctx)
+  }
+  if (parsed.kind === 'primitives') {
+    return renderPrimitives(ctx)
+  }
+  if (parsed.kind === 'taskContext') {
+    return renderTaskContextPacket(ctx, parsed.taskId)
+  }
+  if (parsed.kind === 'taskRelationships') {
+    return renderTaskRelationships(ctx, parsed.taskId)
+  }
+  if (parsed.kind === 'agentContracts') {
+    return renderAgentContracts(ctx)
+  }
+  if (parsed.kind === 'validationEvidence') {
+    return renderValidationEvidence(ctx)
+  }
   return '# Unknown\n'
+}
+
+async function renderDeliveryDrivers(ctx: GuildhallMcpContext): Promise<string> {
+  const model = await readProjectDeliveryModel(ctx.projectRoot)
+  if (model.drivers.length === 0) return '# Delivery Drivers\n\nNo delivery drivers recorded.\n'
+  return trimForMcp(redactForMcp([
+    '# Delivery Drivers',
+    '',
+    ...model.drivers.flatMap(driver => [
+      `## ${driver.label}`,
+      '',
+      `- Id: ${driver.id}`,
+      `- Role: ${driver.role}`,
+      ...(driver.kind ? [`- Kind: ${driver.kind}`] : []),
+      ...(driver.paths.length > 0 ? [`- Paths: ${driver.paths.join(', ')}`] : []),
+      ...(driver.domains.length > 0 ? [`- Domains: ${driver.domains.join(', ')}`] : []),
+      ...(driver.description ? [`- Description: ${driver.description}`] : []),
+      '',
+    ]),
+  ].join('\n')))
+}
+
+async function renderPrimitives(ctx: GuildhallMcpContext): Promise<string> {
+  const tasks = await readTasks(ctx.projectStateDir)
+  const runtimeTasks = tasks as unknown as Task[]
+  const model = await readProjectDeliveryModel(ctx.projectRoot)
+  const validation = validateProjectDeliveryModel({ model, tasks: runtimeTasks, projectRoot: ctx.projectRoot })
+  const primitives = listPrimitivesWithRelations(model, runtimeTasks)
+  if (primitives.length === 0) return '# Primitives\n\nNo project-local primitives recorded.\n'
+  return trimForMcp(redactForMcp([
+    '# Primitives',
+    '',
+    `- Validation: ${validation.valid ? 'valid' : 'invalid'}`,
+    validation.errors.length > 0 ? `- Errors: ${validation.errors.map(error => `${error.code} at ${error.path}`).join('; ')}` : '',
+    '',
+    ...primitives.flatMap(primitive => [
+      `## ${primitive.label}`,
+      '',
+      `- Id: ${primitive.id}`,
+      `- Kind: ${primitive.kind}`,
+      `- Status: ${primitive.status}`,
+      ...(primitive.provider ? [`- Provider: ${primitive.provider}`] : []),
+      ...(primitive.paths.length > 0 ? [`- Paths: ${primitive.paths.join(', ')}`] : []),
+      ...(primitive.dependsOn.length > 0 ? [`- Depends on primitives: ${primitive.dependsOn.join(', ')}`] : []),
+      ...(primitive.proof.length > 0 ? [`- Required proof: ${primitive.proof.join(', ')}`] : []),
+      ...(primitive.invariants.length > 0 ? ['- Invariants:', ...primitive.invariants.map(invariant => `  - ${invariant}`)] : []),
+      ...(primitive.consumers.length > 0
+        ? [`- Used by tasks: ${primitive.consumers.filter(consumer => consumer.kind === 'task').map(consumer => consumer.id).join(', ')}`]
+        : []),
+      ...(primitive.provingTasks.length > 0 ? [`- Proving tasks: ${primitive.provingTasks.map(task => task.id).join(', ')}`] : []),
+      '',
+    ]),
+  ].filter(Boolean).join('\n')))
+}
+
+async function renderTaskContextPacket(ctx: GuildhallMcpContext, taskId: string): Promise<string> {
+  const tasks = await readTasks(ctx.projectStateDir)
+  const model = await readProjectDeliveryModel(ctx.projectRoot)
+  const packet = buildTaskContextPacket({ model, tasks: tasks as unknown as Task[], taskId })
+  return trimForMcp(redactForMcp([
+    `# Task Context Packet: ${taskId}`,
+    '',
+    `- Why this now: ${packet.whyThisNow}`,
+    packet.deliveryIntent.driver ? `- Driver: ${packet.deliveryIntent.driver.label}` : '',
+    packet.deliveryIntent.provider ? `- Provider: ${packet.deliveryIntent.provider.label}` : '',
+    packet.deliveryIntent.containingPackage ? `- Package: ${packet.deliveryIntent.containingPackage.title}` : '',
+    `- Runnable now: ${packet.executionOrder.runnableNow ? 'yes' : 'no'}`,
+    packet.executionOrder.recursiveBlockers.length > 0
+      ? `- Blocked by: ${packet.executionOrder.recursiveBlockers.map(task => `${task.id} ${task.title}`).join(', ')}`
+      : '',
+    packet.primitiveContext.direct.length > 0
+      ? `- Uses primitives: ${packet.primitiveContext.direct.map(primitive => primitive.label).join(', ')}`
+      : '',
+    packet.primitiveContext.blockers.length > 0
+      ? `- Primitive blockers: ${packet.primitiveContext.blockers.map(primitive => primitive.label).join(', ')}`
+      : '',
+    packet.proofContext.provesPrimitives.length > 0
+      ? `- Proves primitives: ${packet.proofContext.provesPrimitives.map(primitive => primitive.label).join(', ')}`
+      : '',
+    '',
+    '## Persona',
+    '',
+    `- ${packet.persona.label}`,
+    ...packet.persona.guardrails.map(guardrail => `- ${guardrail}`),
+    '',
+    '## Correction Hooks',
+    '',
+    ...packet.correctionHooks.map(hook => `- ${hook.field}: ${hook.label}`),
+    '',
+  ].filter(Boolean).join('\n')))
+}
+
+async function renderTaskRelationships(ctx: GuildhallMcpContext, taskId: string): Promise<string> {
+  const tasks = await readTasks(ctx.projectStateDir)
+  const model = await readProjectDeliveryModel(ctx.projectRoot)
+  const relationships = deriveTaskRelationships({ model, tasks: tasks as unknown as Task[], taskId })
+  return trimForMcp(redactForMcp([
+    `# Task Relationships: ${taskId}`,
+    '',
+    relationships.hierarchy.parent ? `- Parent package: ${relationships.hierarchy.parent.id} ${relationships.hierarchy.parent.title}` : '',
+    relationships.hierarchy.children.length > 0
+      ? `- Nested work: ${relationships.hierarchy.children.map(task => `${task.id} ${task.title}`).join(', ')}`
+      : '',
+    relationships.dependencies.directBlockers.length > 0
+      ? `- Blocked by: ${relationships.dependencies.directBlockers.map(task => `${task.id} ${task.title}`).join(', ')}`
+      : '',
+    relationships.dependencies.blocks.length > 0
+      ? `- Blocks: ${relationships.dependencies.blocks.map(task => `${task.id} ${task.title}`).join(', ')}`
+      : '',
+    relationships.supports.length > 0 ? `- Supports: ${relationships.supports.join(', ')}` : '',
+    relationships.primitiveUse.direct.length > 0
+      ? `- Uses primitives: ${relationships.primitiveUse.direct.map(primitive => primitive.label).join(', ')}`
+      : '',
+    relationships.primitiveUse.ancestors.length > 0
+      ? `- Primitive ancestors: ${relationships.primitiveUse.ancestors.map(primitive => primitive.label).join(', ')}`
+      : '',
+    relationships.primitiveProof.proves.length > 0
+      ? `- Proves primitives: ${relationships.primitiveProof.proves.map(primitive => primitive.label).join(', ')}`
+      : '',
+    '',
+  ].filter(Boolean).join('\n')))
+}
+
+async function renderAgentContracts(_ctx: GuildhallMcpContext): Promise<string> {
+  return [
+    '# Agent Contracts',
+    '',
+    '- project-primitive-setup: validates proposed project-local primitives, task links, proof tasks, rejected candidates, and owner questions.',
+    '- finished-work-intake: validates shipped packages, observed proof, missing proof, future tasks, and rejected primitive candidates without fabricating completed Guildhall work.',
+    '- task-split-plan: validates split child delivery metadata, primitive references, proof links, and child dependency mapping before materializing nested work.',
+    '- task-context-packet: builds deterministic worker/UI context from drivers, task blockers, primitive ancestors, proof obligations, and correction hooks.',
+    '',
+    'Validation tools: guildhall.validate_agent_contract, guildhall.validate_project_primitive_setup, guildhall.validate_finished_work_intake, guildhall.plan_task_split.',
+    '',
+  ].join('\n')
+}
+
+async function renderValidationEvidence(ctx: GuildhallMcpContext): Promise<string> {
+  const model = await readProjectDeliveryModel(ctx.projectRoot)
+  if (model.validationEvidence.length === 0) return '# Validation Evidence\n\nNo validation evidence recorded.\n'
+  return trimForMcp(redactForMcp([
+    '# Validation Evidence',
+    '',
+    ...model.validationEvidence.slice(0, 30).map((record, index) => `- ${index + 1}: ${JSON.stringify(record)}`),
+    model.validationEvidence.length > 30 ? `- [truncated ${model.validationEvidence.length - 30} more records]` : '',
+    '',
+  ].filter(Boolean).join('\n')))
 }
 
 async function renderExternalAgentMemoryBridge(ctx: GuildhallMcpContext): Promise<string> {
@@ -750,7 +956,7 @@ export async function rejectMcpExternalMemoryBridgeRecord(ctx: GuildhallMcpConte
   return trimForMcp(redactForMcp(JSON.stringify(saved, null, 2)))
 }
 
-async function readTasks(
+export async function readTasks(
   projectStateDir: string,
 ): Promise<Array<Record<string, unknown> & { id: string; title?: string; status?: string }>> {
   const raw = await readOptional(path.join(projectStateDir, 'TASKS.json'), '{"tasks":[]}')

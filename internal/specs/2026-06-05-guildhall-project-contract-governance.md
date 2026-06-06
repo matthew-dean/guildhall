@@ -1,6 +1,6 @@
 # Guildhall Project Contract Governance
 
-**Status:** Proposal  
+**Status:** Implemented 0.10 contract-governance slice
 **Date:** 2026-06-05  
 **Owner:** Guildhall runtime and project-state architecture  
 **Related:** `docs/reference/memory-layout.md`, `docs/cli/reference.md`, `src/runtime/migrations.ts`, `internal/specs/2026-06-05-guildhall-0-10-primitives-and-delivery-spine.md`
@@ -568,12 +568,12 @@ Files:
 
 Steps:
 
-- [ ] Add the `Contract Touch Decision` template to the internal planning path
+- [x] Add the `Contract Touch Decision` template to the internal planning path
   agents use before specs, task plans, code diffs, finished-work intake, owner
   corrections, runtime changes, MCP/tool changes, and accepted agent results.
-- [ ] Add the `Schema Migration Decision` template to the internal planning
+- [x] Add the `Schema Migration Decision` template to the internal planning
   path agents use before persisted schema work.
-- [ ] Add review wording that touched contracts without a decision are
+- [x] Add review wording that touched contracts without a decision are
   incomplete.
 
 ### Task 2: Add Living Contract Registry
@@ -587,16 +587,16 @@ Files:
 
 Steps:
 
-- [ ] Define contract records with id, type, owner/provider, paths, consumers,
+- [x] Define contract records with id, type, owner/provider, paths, consumers,
   invariants, obligations, proof requirements, validation state, evidence, last
   observed source, and last validated time.
-- [ ] Define validation states: proposed, observed, validated, needs_proof,
+- [x] Define validation states: proposed, observed, validated, needs_proof,
   possibly_violated, violated, invalidated, and deprecated.
-- [ ] Add merge/reject/rename/invalidate behavior for owner corrections and
+- [x] Add merge/reject/rename/invalidate behavior for owner corrections and
   intake review.
-- [ ] Ensure spec intake, finished-work intake, runtime/migration intake, and
+- [x] Ensure spec intake, finished-work intake, runtime/migration intake, and
   proof results can update the registry.
-- [ ] Add tests proving intake can observe an existing contract, attach proof,
+- [x] Add tests proving intake can observe an existing contract, attach proof,
   mark missing proof, flag possible violation, confirm violation, invalidate
   stale proof, and feed queue/context decisions.
 
@@ -610,19 +610,19 @@ Files:
 
 Steps:
 
-- [ ] Detect changed files and intake sources in contract-owning paths.
-- [ ] Infer likely contracts: persisted state, UI/component, API/client,
+- [x] Detect changed files and intake sources in contract-owning paths.
+- [x] Infer likely contracts: persisted state, UI/component, API/client,
   data/storage, security/auth, MCP/tooling, agent contract, finished-work
   intake, documentation/help, and release/runtime.
-- [ ] Detect a `Contract Touch Decision` block in touched internal specs or
+- [x] Detect a `Contract Touch Decision` block in touched internal specs or
   plans.
-- [ ] Detect migration definitions or migration scripts changed in the same
+- [x] Detect migration definitions or migration scripts changed in the same
   diff.
-- [ ] Detect a `Schema Migration Decision` block in touched internal specs or
+- [x] Detect a `Schema Migration Decision` block in touched internal specs or
   plans.
-- [ ] Report missing contract or migration decisions with concrete file paths,
+- [x] Report missing contract or migration decisions with concrete file paths,
   trigger source, and likely contract types.
-- [ ] Start advisory; document how to run it locally.
+- [x] Start advisory; document how to run it locally.
 
 ### Task 4: Add Migration Definition Quality Checks
 
@@ -633,11 +633,11 @@ Files:
 
 Steps:
 
-- [ ] Assert every built-in migration id is stable and unique.
-- [ ] Assert required migrations include owner-facing summary and affected
+- [x] Assert every built-in migration id is stable and unique.
+- [x] Assert required migrations include owner-facing summary and affected
   paths.
-- [ ] Assert prompt/manual migrations are not applied by default.
-- [ ] Assert each automatic/prompt migration has an idempotence test.
+- [x] Assert prompt/manual migrations are not applied by default.
+- [x] Assert each automatic/prompt migration has an idempotence test.
 
 ### Task 5: Add Old-Data Fixture Tests For Compatible Readers
 
@@ -648,10 +648,10 @@ Files:
 
 Steps:
 
-- [ ] Add fixtures for old task/config/project-state shapes that should remain
+- [x] Add fixtures for old task/config/project-state shapes that should remain
   readable without migration.
-- [ ] Test read-time normalization for optional additions and renamed labels.
-- [ ] Document when compatibility readers are temporary versus permanent.
+- [x] Test read-time normalization for optional additions and renamed labels.
+- [x] Document when compatibility readers are temporary versus permanent.
 
 ### Task 6: Wire Runtime Blocking Proof Into Schema Reviews
 
@@ -663,11 +663,11 @@ Files:
 
 Steps:
 
-- [ ] Require tests for `required_migration_pending` when a required migration
+- [x] Require tests for `required_migration_pending` when a required migration
   is pending.
-- [ ] Require tests for `runtime_too_old` when runtime compatibility state
+- [x] Require tests for `runtime_too_old` when runtime compatibility state
   declares a future schema.
-- [ ] Ensure migration apply endpoints refuse unsafe runtimes.
+- [x] Ensure migration apply endpoints refuse unsafe runtimes.
 
 ### Task 7: Apply To 0.10 Primitive/Delivery Work
 
@@ -679,13 +679,99 @@ Files:
 
 Steps:
 
-- [ ] Add a schema migration decision before persisting primitive registries,
+- [x] Add a schema migration decision before persisting primitive registries,
   delivery metadata, validation evidence, or finished-work intake records.
-- [ ] Decide which additions are backward-compatible optional fields and which
+- [x] Decide which additions are backward-compatible optional fields and which
   require registered migrations.
-- [ ] Add old-data fixtures proving existing task/project state still loads.
-- [ ] Add required migrations only for persisted shapes that old readers cannot
+- [x] Add old-data fixtures proving existing task/project state still loads.
+- [x] Add required migrations only for persisted shapes that old readers cannot
   safely understand.
+
+## Schema Migration Decision: 0.10 Primitive/Delivery Slice
+
+- Persisted schema touched: `.guildhall/delivery-spine.json`,
+  `.guildhall/TASKS.json:tasks[].delivery`,
+  `.guildhall/delivery-spine.json:validationEvidence`, and finished-work
+  intake-derived delivery-spine records.
+- Scope: project.
+- Change class: backward-compatible reader change.
+- Existing data impact: existing projects may have no delivery-spine file, and
+  existing tasks may have no `delivery` field. Both shapes remain valid.
+- Migration id: none.
+- Safety: none.
+- Required before run: no.
+- Compatibility reader: `ProjectDeliveryModel` defaults missing driver,
+  primitive, validation-evidence, and rejected-candidate arrays; `Task.delivery`
+  remains optional and nested delivery arrays default only when the field exists.
+- Fixtures added: `src/runtime/__tests__/delivery-spine.test.ts` includes an
+  old 0.9-style task queue fixture with no delivery metadata and a missing
+  delivery-spine shape normalized through the 0.10 readers.
+- Tests added:
+  `records the schema migration decision for persisted primitive and delivery state`
+  and `loads old task queues and missing delivery-spine files without requiring
+  a registered migration`.
+- Owner-facing plan text: no owner action or migration prompt is needed. New
+  primitive and delivery state appears only after validated primitive setup,
+  task split, or finished-work intake apply paths write it.
+- Rollback/revert behavior: remove `.guildhall/delivery-spine.json`, remove
+  task `delivery` fields written by the applied change set, or use
+  `revertAppliedContractResult` for contract-result changes. Old task queues
+  remain readable without those fields.
+
+Implementation evidence:
+
+- `AGENTS.md` now carries the Contract Touch Decision and Schema Migration
+  Decision planning requirements plus the advisory `pnpm lint:contracts`
+  command.
+- `src/runtime/contract-governance.ts` implements the first living contract
+  registry with contract records, validation states, intake/proof updates,
+  owner correction actions, and queue pressure derivation.
+- `src/runtime/__tests__/contract-governance.test.ts` proves finished-work/spec
+  intake, proof attachment, missing proof, violation, invalidation, rename,
+  merge, reject, and queue pressure behavior.
+- `scripts/contract-touch-detector.mjs` implements the advisory deterministic
+  changed-file detector, and `scripts/contract-touch-detector.test.ts` proves
+  missing-decision reporting and decision-block detection.
+- `src/runtime/migrations.ts` exports
+  `validateBuiltInProjectMigrationDefinitions`, and
+  `src/runtime/__tests__/contract-governance.test.ts` asserts the built-in
+  migration registry remains reviewable.
+- Existing runtime proof covers `required_migration_pending`,
+  `runtime_too_old`, and unsafe migration-apply refusal:
+  `src/runtime/__tests__/serve-settings.test.ts` and
+  `src/runtime/__tests__/serve-task-endpoints.test.ts`.
+- `src/runtime/delivery-spine.ts` exports
+  `DELIVERY_SPINE_SCHEMA_DECISIONS` and
+  `validateDeliverySpineSchemaDecisions`.
+- `src/runtime/__tests__/delivery-spine.test.ts` proves the decisions are
+  present, valid, old task queues still parse, missing delivery-spine state
+  normalizes to an empty v1 model, and no registered migration is required.
+
+## Contract Touch Decision: Governance Implementation
+
+- Work id: 0.10 contract-governance implementation.
+- Touched contracts: runtime contract registry, project migration registry,
+  advisory repository checks, repo agent instructions, primitive/delivery
+  persisted state, migration blocking behavior.
+- Possible contracts considered but not touched: public docs are not updated in
+  this slice because the detector and registry are internal/advisory first.
+- Required follow-up: decide whether the advisory detector should become a CI
+  gate after false positives are understood.
+- Proof required: registry behavior tests, detector tests, migration-quality
+  tests, old-data reader tests, existing runtime blocking tests.
+- Proof provided:
+  `src/runtime/__tests__/contract-governance.test.ts`,
+  `scripts/contract-touch-detector.test.ts`,
+  `src/runtime/__tests__/delivery-spine.test.ts`,
+  `src/runtime/__tests__/serve-settings.test.ts`, and
+  `src/runtime/__tests__/serve-task-endpoints.test.ts`.
+- Waivers: none.
+- Owner-review items: whether to graduate `pnpm lint:contracts` from advisory
+  to required.
+- Apply/revert behavior: registry and detector code can be removed without
+  migrating project state; delivery-spine persisted additions are
+  backward-compatible optional/defaulted fields covered by the schema decision
+  above.
 
 ## Open Questions
 

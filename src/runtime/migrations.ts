@@ -481,6 +481,43 @@ const BUILT_IN_PROJECT_MIGRATIONS: ProjectMigrationDefinition[] = [
   },
 ]
 
+const BUILT_IN_PROJECT_MIGRATION_IDEMPOTENCE_TESTS: Record<string, string> = {
+  '0.8.0/provider-config-globalization': 'migrations.test.ts: applies automatic migrations but leaves prompt migrations pending by default',
+  '0.8.0/project-state-layout': 'migrations.test.ts: project-state layout migration can be applied repeatedly without rewriting completed work',
+  '0.8.0/task-state-split': 'migrations.test.ts: task-state split migration is idempotent',
+  '0.8.0/codex-agent-bridge': 'migrations.test.ts: prompt migrations stay pending unless explicitly included',
+  '0.9.0/runtime-backed-project': 'manual migration; status/plan only',
+  '0.9.0/runtime-command-evidence-persistence': 'migrations.test.ts: runtime command evidence migration is idempotent',
+  '0.10.0/task-open-questions-to-bounded-chat': 'migrations.test.ts: task-question migration is idempotent',
+  '0.10.0/task-hierarchy-links': 'migrations.test.ts: task-hierarchy migration is idempotent',
+  '0.10.0/merge-policy-to-landing-strategy': 'migrations.test.ts: landing-strategy migration is idempotent',
+  '0.10.0/owner-input-state-repair': 'migrations.test.ts: owner-input state repair is idempotent',
+}
+
+export function validateBuiltInProjectMigrationDefinitions(): { valid: boolean; errors: string[] } {
+  const errors: string[] = []
+  const ids = new Set<string>()
+  for (const migration of BUILT_IN_PROJECT_MIGRATIONS) {
+    if (ids.has(migration.id)) errors.push(`Duplicate migration id: ${migration.id}`)
+    ids.add(migration.id)
+    if (!/^\d+\.\d+\.\d+\/[a-z0-9-]+$/.test(migration.id)) {
+      errors.push(`Migration id must be version-prefixed and stable: ${migration.id}`)
+    }
+    if (!migration.title.trim()) errors.push(`Migration ${migration.id} is missing a title.`)
+    if (!migration.summary.trim()) errors.push(`Migration ${migration.id} is missing owner-facing summary text.`)
+    if (migration.requirement === 'required' && !migration.summary.match(/move|migrat|convert|repair|require|runtime|state|link/i)) {
+      errors.push(`Required migration ${migration.id} summary does not explain the owner-facing state change.`)
+    }
+    if ((migration.safety === 'automatic' || migration.safety === 'prompt') && !BUILT_IN_PROJECT_MIGRATION_IDEMPOTENCE_TESTS[migration.id]) {
+      errors.push(`Migration ${migration.id} is missing registered idempotence-test evidence.`)
+    }
+    if (migration.safety === 'manual' && !migration.summary.match(/guide|manual|health|settings|owner|runtime/i)) {
+      errors.push(`Manual migration ${migration.id} summary must route the owner to manual steps.`)
+    }
+  }
+  return { valid: errors.length === 0, errors }
+}
+
 function toStatusItem(
   migration: ProjectMigrationDefinition,
   affectedPaths: string[],

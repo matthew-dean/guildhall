@@ -71,6 +71,25 @@
   release blocker, or task-summary status, treat that as a runtime summary-model
   bug first and a copy/layout bug second.
 
+## Contract and schema governance
+
+- Before accepting work that changes authoritative project contracts, record a
+  `Contract Touch Decision` in the relevant implementation spec, plan, or review
+  note. Include work id, touched contracts, contracts considered but not touched,
+  required follow-up, proof required, proof provided, waivers, owner-review
+  items, and apply/revert behavior.
+- Before persisting project, workspace, machine, database, local-history, task,
+  primitive, delivery, validation-evidence, or finished-work intake schema
+  changes, record a `Schema Migration Decision`. Include persisted schema
+  touched, scope, change class, existing data impact, migration id, safety,
+  whether it is required before run, compatibility reader, fixtures, tests,
+  owner-facing plan text, and rollback/revert behavior.
+- Treat touched contracts without a decision as incomplete unless the work
+  records why the detector considered the contract and why it is not touched.
+- Run the advisory detector with `pnpm lint:contracts` when a change touches
+  contract-owning paths. It is advisory, but missing decisions should be fixed
+  before claiming the work is complete.
+
 ## Design-system constitution
 
 - Treat design-system integrity as a first-class product and agent responsibility.

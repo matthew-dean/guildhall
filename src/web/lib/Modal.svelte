@@ -16,9 +16,10 @@
     children?: Snippet
     footer?: Snippet
     size?: 'sm' | 'md' | 'lg' | 'xl'
+    closeDisabled?: boolean
   }
 
-  let { open, title, onClose, children, footer, size = 'md' }: Props = $props()
+  let { open, title, onClose, children, footer, size = 'md', closeDisabled = false }: Props = $props()
   let visible = $state(false)
   let closing = $state(false)
   let closeTimer: ReturnType<typeof setTimeout> | null = null
@@ -28,6 +29,7 @@
   }
 
   function requestClose() {
+    if (closeDisabled) return
     if (!closing) onClose()
   }
 
@@ -75,6 +77,7 @@
           type="button"
           class="gh-modal-x"
           aria-label="Close"
+          disabled={closeDisabled}
           onclick={requestClose}
         ><Icon name="x" size={16} /></button>
       </header>
@@ -168,6 +171,14 @@
   .gh-modal-x:hover {
     color: var(--text);
     background: var(--bg-sunken);
+  }
+  .gh-modal-x:disabled {
+    opacity: 0.45;
+    cursor: not-allowed;
+  }
+  .gh-modal-x:disabled:hover {
+    color: var(--text-muted);
+    background: transparent;
   }
   .gh-modal-body {
     padding: var(--s-4);

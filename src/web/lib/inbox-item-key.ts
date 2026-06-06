@@ -7,6 +7,7 @@ export type InboxItemKind =
   | 'setup_pending'
   | 'workspace_import_pending'
   | 'import_draft_queue'
+  | 'contract_result_review'
   | 'lever_questions'
   | 'spec_fill_pending'
 
@@ -26,6 +27,11 @@ export interface InboxItem {
   actionHref?: string
   taskId?: string
   migrationId?: string
+  resultId?: string
+  contractId?: string
+  changeCount?: number
+  reviewBuckets?: string[]
+  warningCount?: number
   taskDescription?: string
   escalationId?: string
   signals?: string[]
@@ -42,6 +48,7 @@ export function inboxItemKey(item: InboxItem): string {
     item.id ?? '',
     item.kind,
     item.migrationId ?? '',
+    item.resultId ?? '',
     item.escalationId ?? '',
     item.taskId ?? '',
     item.actionHref ?? '',

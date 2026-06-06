@@ -9557,3 +9557,428 @@ src/tools/__tests__/shell.test.ts src/tools/__tests__/task-queue.test.ts`,
 passed.
 
 source: codex:looma-contextmenu-delivery-loop-unblockers
+
+2026-06-05T19:32:00Z - Implemented the default 0.10 project-local delivery
+spine from `internal/specs/2026-06-05-guildhall-0-10-primitives-and-delivery-spine.md`.
+Added durable delivery driver and primitive schemas, task delivery metadata for
+`usesPrimitives`, `provesPrimitives`, and `proofKind`, plus a shared runtime
+builder that validates driver/primitive references, derives task relationships,
+expands primitive ancestors, builds worker/UI context packets, and ranks queue
+candidates by execution blockers and primitive proof blockers. `/api/project`
+and task detail now expose the shared delivery-spine model, validation,
+primitive registry, queue, context packet, and relationships. Task detail also
+links proving tasks adjacent to tasks that use blocked primitives.
+
+MCP now exposes project-local resources for `guildhall://project/drivers`,
+`guildhall://project/primitives`,
+`guildhall://project/task-context/{taskId}`,
+`guildhall://project/task-relationships/{taskId}`,
+`guildhall://project/agent-contracts`, and
+`guildhall://project/validation-evidence`, plus validation/derivation tools
+for agent contracts, primitive setup, finished-work intake, task context,
+task relationships, and queue candidates. Default UI surfaces consume the same
+API model: Overview shows driver/next runnable work/primitive proof blockers,
+Work shows the delivery queue, Task Drawer shows delivery, uses/proves
+primitive links, proof blockers, and Settings has a Delivery section for
+drivers and the primitive registry.
+
+Remaining follow-up: owner-review apply/reject/revert can now build on the
+validated model and MCP tool surface, but bulk owner editing/merge/revert UI
+for contract result changes still needs a dedicated Review Inbox slice.
+
+Verification: `pnpm vitest run src/runtime/__tests__/delivery-spine.test.ts
+src/runtime/__tests__/serve-task-endpoints.test.ts
+src/mcp-server/__tests__/project-reader.test.ts
+src/mcp-server/__tests__/server.test.ts --reporter=dot` passed with 87 tests;
+`pnpm typecheck` passed; `pnpm build` passed; `git diff --check` passed;
+`pnpm dev:install` refreshed the installed app; `guildhall stop` and
+`guildhall start` restarted the service; `/api/stale-server` returned
+`stale:false`; and `/api/project?projectId=looma-knit` returned
+`deliverySpine` with `validation.valid: true`. Browser visual proof was
+attempted, but the Browser control channel timed out/reattached to an
+`about:blank` sidebar token tab, so the reliable live proof for this slice is
+API-level.
+
+source: codex:0-10-primitives-delivery-spine
+
+2026-06-05T20:16:00Z - Continued the 0.10 primitives and delivery-spine spec
+through contract review plumbing. Added reusable runtime contract
+infrastructure for project primitive setup results: validation now produces a
+reviewable change set with keep/merge/needs-proof/owner-question buckets;
+staging records pending review evidence without mutating project state; apply
+records before/after values; reject stores a durable rejection record; and
+revert restores only state that still matches the applied after-image, preserving
+later owner edits or accepted changes.
+
+MCP now has explicit contract review tools:
+`guildhall.stage_agent_contract_result`,
+`guildhall.apply_agent_contract_result`,
+`guildhall.reject_agent_contract_result`, and
+`guildhall.revert_agent_contract_result`. The project inbox now projects
+pending delivery-spine validation evidence as `contract_result_review` rows, and
+the existing Needs you surfaces render those rows instead of requiring a new
+top-level review navigation surface.
+
+Verification: `pnpm vitest run
+src/runtime/__tests__/delivery-spine.test.ts
+src/runtime/__tests__/inbox.test.ts
+src/runtime/__tests__/serve-task-endpoints.test.ts
+src/mcp-server/__tests__/project-reader.test.ts
+src/mcp-server/__tests__/server.test.ts --reporter=dot` passed with 123 tests;
+`pnpm typecheck` passed; `pnpm build` passed; `git diff --check` passed;
+`pnpm dev:install` refreshed the installed app; `guildhall stop` and
+`guildhall start` restarted the service; `/api/stale-server` returned
+`stale:false`; `/api/project?projectId=looma-knit` returned a valid
+`deliverySpine`; and `/api/project/inbox?projectId=looma-knit` returned
+without error. The live Looma + Knit project has no staged contract review rows
+yet, so `contract_result_review` count was `0` in the smoke. Browser visual
+proof was attempted through the in-app Browser, but `Page.navigate` and
+`Runtime.evaluate` timed out after the tab URL changed to `http://localhost:7777/`;
+the reliable live proof for this continuation is command/API-level until that
+browser-control issue is cleared.
+
+source: codex:0-10-contract-review-spine
+
+2026-06-05T21:44:00Z - Continued the contract-review slice so staged
+delivery-spine review items are actionable from the existing Needs you surface.
+Added project API endpoints to apply, reject, and revert staged contract
+results by id under `/api/project/delivery-spine/contract-results/:resultId/*`.
+Apply persists delivery-spine changes and task delivery metadata through the
+shared runtime change-set model; reject records the owner reason without
+mutating primitives; revert uses the same conservative after-image checks as the
+runtime helper. Needs you now renders Accept and Reject controls for
+`contract_result_review` rows and refreshes the inbox after either action.
+
+Verification: endpoint regression tests for accepting and rejecting staged
+primitive setup results passed; the broader focused suite `pnpm vitest run
+src/runtime/__tests__/delivery-spine.test.ts
+src/runtime/__tests__/inbox.test.ts
+src/runtime/__tests__/serve-task-endpoints.test.ts
+src/mcp-server/__tests__/project-reader.test.ts
+src/mcp-server/__tests__/server.test.ts --reporter=dot` passed with 125 tests;
+`pnpm typecheck` passed; `pnpm build` passed; `git diff --check` passed;
+`pnpm dev:install` refreshed the installed app; `guildhall stop` and
+`guildhall start` restarted the service; `/api/stale-server` returned
+`stale:false`; and live `/api/project` plus `/api/project/inbox` smoke checks
+returned valid delivery-spine/inbox payloads for Looma + Knit. The Browser
+control channel still timed out on `Page.navigate`, so visual proof remains
+blocked by browser-control rather than app/API failure.
+
+source: codex:0-10-contract-review-actions
+
+2026-06-05T22:18:00Z - Continued the 0.10 delivery-spine spec through
+finished-work intake. Added the shared runtime `FinishedWorkIntakeResult`
+schema, validator, and apply helper so work completed outside Guildhall can be
+recorded as delivery context without pretending Guildhall completed those tasks.
+The validator now requires corpus references, rejects fabricated completed
+Guildhall tasks, refuses code-only primitive readiness without observed proof,
+normalizes observed proof into primitive evidence, and keeps missing-proof
+primitives in `needs_proof`. Applying a finished-work intake result merges or
+creates primitive registry entries, records shipped packages, observed proof,
+missing proof, future task suggestions, corpus refs, and warnings as validation
+evidence, while preserving the existing task list unchanged.
+
+The MCP `guildhall.validate_finished_work_intake` tool now uses the same shared
+runtime validator instead of ad hoc validation. This keeps external-agent
+finished-work intake on the same contract-first path as primitive setup and
+contract review.
+
+Verification: finished-work focused tests passed with
+`pnpm vitest run src/runtime/__tests__/delivery-spine.test.ts -t
+"finished-work" --reporter=dot`; the broader focused suite
+`pnpm vitest run src/runtime/__tests__/delivery-spine.test.ts
+src/runtime/__tests__/inbox.test.ts
+src/runtime/__tests__/serve-task-endpoints.test.ts
+src/mcp-server/__tests__/project-reader.test.ts
+src/mcp-server/__tests__/server.test.ts --reporter=dot` passed with 127 tests;
+`pnpm typecheck` passed; `pnpm build` passed; `git diff --check` passed;
+`pnpm dev:install` refreshed the installed app; `guildhall stop` and
+`guildhall start` restarted the service; `/api/stale-server` returned
+`stale:false` with pid `83219`; and live API smoke against Looma + Knit found
+seven registered projects, a present `deliverySpine`, `deliverySpine.validation.valid:
+true`, six inbox items, zero staged `contract_result_review` rows, and no API
+error. Browser visual proof remains blocked by the known in-app Browser control
+timeouts rather than an app/API failure.
+
+source: codex:0-10-finished-work-intake
+
+2026-06-05T22:24:00Z - Continued the 0.10 delivery-spine spec through validated
+task split planning. Split recommendations can now carry optional
+`usesPrimitives`, `provesPrimitives`, and `proofKind` metadata. Added the shared
+runtime `planTaskSplit` helper so split planning derives child delivery intent
+from the parent task, maps child dependencies to planned child task ids,
+infers only token-matched primitive use from child title/reason text, rejects
+unknown primitive references before mutation, and returns warnings for primitive
+proof without a proof kind. The existing `create-split-children` API now
+preflights this shared plan, materializes child tasks only when the plan is
+valid, writes the planned delivery metadata onto each child, and returns the
+applied split plan in the response. MCP now advertises and serves
+`guildhall.plan_task_split` so agents can read the same validated plan before
+applying a split.
+
+Verification: `pnpm vitest run src/runtime/__tests__/delivery-spine.test.ts
+src/runtime/__tests__/serve-task-endpoints.test.ts
+src/mcp-server/__tests__/server.test.ts --reporter=dot` passed with 92 tests;
+`pnpm typecheck` passed; `pnpm build` passed; `git diff --check` passed;
+`pnpm dev:install` refreshed the installed app; `guildhall stop` and
+`guildhall start` restarted the service; `/api/stale-server` returned
+`stale:false` with pid `86138`; and live API smoke against Looma + Knit found
+seven registered projects, a present `deliverySpine`, `deliverySpine.validation.valid:
+true`, 40 runnable delivery queue candidates, three blocked candidates, and no
+API error. Browser visual proof remains blocked by the known in-app Browser
+control timeouts rather than an app/API failure.
+
+source: codex:0-10-split-plan-contract
+
+2026-06-05T22:30:00Z - Continued the 0.10 delivery-spine spec through driver
+and primitive path normalization. The delivery-spine runtime now normalizes safe
+project-local path hints at read, write, and validation boundaries:
+`packages/looma` becomes `./packages/looma`, `./packages/looma` stays stable,
+and absolute paths inside the project root become `./` project-relative paths.
+Unsafe traversal paths and absolute paths outside the project still fail closed.
+Project and MCP validation call sites now pass the project root so the same
+normalization rules apply in `/api/project`, `/api/project/delivery-spine`, and
+`guildhall://project/primitives`.
+
+Verification: `pnpm vitest run src/runtime/__tests__/delivery-spine.test.ts
+--reporter=dot` passed with 11 tests; the broader focused suite `pnpm vitest
+run src/runtime/__tests__/delivery-spine.test.ts
+src/runtime/__tests__/serve-task-endpoints.test.ts
+src/mcp-server/__tests__/project-reader.test.ts
+src/mcp-server/__tests__/server.test.ts --reporter=dot` passed with 97 tests;
+`pnpm typecheck` passed; `pnpm build` passed; `git diff --check` passed;
+`pnpm dev:install` refreshed the installed app; `guildhall stop` and
+`guildhall start` restarted the service; `/api/stale-server` returned
+`stale:false` with pid `55440`; and live API smoke against Looma + Knit found
+seven registered projects, a present `deliverySpine`, valid project-level and
+delivery-spine validation payloads, 40 runnable queue candidates, three blocked
+candidates, and no API error. Browser visual proof remains blocked by the known
+in-app Browser control timeouts rather than an app/API failure.
+
+source: codex:0-10-path-normalization
+
+2026-06-05T22:33:00Z - Continued the 0.10 delivery-spine spec through public
+docs alignment. Added the public guide page
+`docs/guide/how-guildhall-chooses-work.md` explaining the default model as
+`Needs -> Delivery packages -> Tasks -> Dependencies -> Primitives -> Proof`.
+The guide now covers drivers, delivery packages, task dependencies, primitives,
+proof, `./` project-relative path hints, where the model appears in the UI, and
+why deeper project graph/capability exchange is advanced multi-project
+machinery rather than the ordinary local delivery model. Updated the guide
+sidebar and guide index to expose the page, rewrote the work-loop explanation
+around shape/order/primitives/proof, and updated the public glossary with
+Driver, Delivery package, and Primitive while reframing Structure and project
+graph as advanced ownership concepts.
+
+Verification: `pnpm docs:build` passed, including `docs:check-copy`,
+`docs:extract-help`, generated `/current/` and `/next/` docs, and VitePress
+build; `pnpm build` passed; `pnpm dev:install` refreshed the installed app;
+`guildhall stop` and `guildhall start` restarted the service; `/api/stale-server`
+returned `stale:false` with pid `19911`; and live API smoke against Looma +
+Knit found seven registered projects, a present `deliverySpine`,
+`deliverySpine.validation.valid: true`, and no API error. Browser visual proof
+remains blocked by the known in-app Browser control timeouts rather than an
+app/API failure.
+
+source: codex:0-10-public-default-model-docs
+
+2026-06-05T22:40:00Z - Rechecked live in-app Browser proof after the Codex
+Browser plugin update. The old browser-control blocker is no longer
+reproducing. Browser setup against the updated in-app browser successfully
+attached to the sidebar tab, navigated from the stale `about:blank` attach-token
+state to `http://localhost:7777/`, read page title/URL/body/headings through
+Playwright evaluation, captured DOM snapshots, and emitted screenshots.
+
+Live visual proof captured:
+
+- `/` rendered Projects & Workspaces with seven registered projects and
+  connected project cards after the service loaded.
+- `/projects/looma-knit/overview` rendered the Looma + Knit project shell with
+  `CONNECTED`, Overview content, delivery-spine summary, Work/Structure/Project
+  graph/Runtime/Proof/History cards, and the migration modal closed cleanly.
+- Browser console warning/error reads returned no errors during the proof.
+
+Follow-up product note from this proof: Overview still exposes Structure and
+Project graph cards in the default project experience even though the rail hides
+the Structure top-level nav by feature flag. That is a product/UI follow-up, not
+a browser-control failure.
+
+source: codex:browser-proof-restored-after-codex-update
+
+2026-06-06T00:30:00Z - Cleaned up the Local runtime ready-state card after
+owner feedback showed a nonsensical `Retry` button beside a `ready` runtime.
+The runtime setup API no longer advertises recovery actions when Podman and the
+machine are already ready, the generic recovery action is now labeled `Check
+again` when it appears in non-ready states, and Settings hides host-run fallback
+copy/actions for the ready state. The card continues to render status through
+the shared `StatusPill` primitive rather than local chip styling.
+
+Verification: `pnpm vitest run
+src/runtime/__tests__/runtime-backend-setup.test.ts --reporter=dot` passed with
+7 tests; `pnpm vitest run
+src/web/surfaces/project/__tests__/SettingsTab.svelte.test.ts --reporter=dot`
+passed with 8 tests; and `pnpm vitest run scripts/ui-primitive-scan.test.ts
+--reporter=dot` passed with 4 tests.
+
+source: codex:local-runtime-ready-card-copy
+
+2026-06-06T00:40:00Z - Tightened the Local runtime card one step further so
+the happy path no longer teaches users about host-run compatibility at all.
+Ready now means `Podman-backed runtime is ready`, and the card header says only
+that Guildhall runs project work in a Podman-backed Debian runtime on macOS.
+Host-run compatibility copy/actions now appear only when Podman is missing,
+broken, stopped, unsupported, or cannot be checked. Backend copy for those
+fallback states now frames host execution as temporary fallback until Podman is
+ready, not as a normal peer mode.
+
+Verification: `pnpm vitest run
+src/runtime/__tests__/runtime-backend-setup.test.ts --reporter=dot` passed with
+7 tests; `pnpm vitest run
+src/web/surfaces/project/__tests__/SettingsTab.svelte.test.ts --reporter=dot`
+passed with 9 tests; and `pnpm vitest run scripts/ui-primitive-scan.test.ts
+--reporter=dot` passed with 4 tests.
+
+source: codex:local-runtime-podman-first-card
+
+2026-06-06T01:25:00Z - Fixed the required-migration apply modal so it no
+longer says the migration is applied before the UI refresh pipeline is done.
+Root-cause check: `/api/project/migrations/apply` already awaits
+`applyProjectMigrations()` and then recomputes migration status before returning;
+the frontend was the misleading layer because it set `Migration applied.` before
+refreshing the project snapshot and Needs You inbox. The modal now enters a
+blocking in-progress state while the apply request and follow-up refreshes run,
+disables the close affordances including Escape/backdrop through the shared
+`Modal` primitive, warns the owner not to stop Guildhall, shows honest stage
+labels, and only reports `Migration complete.` after project and inbox refreshes
+finish. The completion state also lists the changed paths returned by the
+applied migration result.
+
+Cleanup behavior verified from the migration registry: the legacy
+`0.8.0/project-state-layout` migration calls
+`migrateLegacyMemoryToLocalHistory({ deleteSource: true, updateGitignore: true
+})`, so it does remove old `memory/` source files after copying them into
+Guildhall state and updates gitignore. Other current required migrations rewrite
+or seed `.guildhall` state files, bounded-chat state, owner-input state, or
+agent settings; they do not all delete repository folders.
+
+Verification: `pnpm vitest run
+src/web/surfaces/__tests__/ProjectView.svelte.test.ts --reporter=dot` passed
+with 47 tests, including a deferred apply test that proves the modal remains
+blocking and success remains hidden while the apply request is unresolved;
+`pnpm typecheck` passed; `pnpm build` passed; `git diff --check` passed;
+`pnpm dev:install` refreshed the installed app; `guildhall stop` and
+`guildhall start` restarted the service; `/api/stale-server` returned
+`stale:false` with pid `89672`; the in-app Browser rendered
+`/projects/looma-knit/overview` with `CONNECTED` from the refreshed service.
+No registered project currently has a blocked migration, so live browser proof
+did not apply another repo mutation just to exercise the modal.
+
+source: codex:migration-apply-blocking-modal
+
+2026-06-06T01:55:00Z - Finished the 0.10 primitives/delivery-spine implementation
+slice and updated the spec with real checkmarks plus an evidence block. Worker
+launch context now injects the same delivery-spine packet used by UI surfaces,
+with a fail-closed guard for empty/invalid delivery state. Queue derivation now
+bridges unready primitives to existing primitive-proof tasks without creating a
+dependency cycle when the proof task is itself blocked by the downstream task.
+Thread active worker cards now show a compact `Why this next` delivery-context
+section with persona, primitive blockers, proof expectations, and a correction
+action. Overview no longer exposes the default `Project graph` or `Structure`
+cards when the advanced Structure feature flag is off.
+
+Spec status: `internal/specs/2026-06-05-guildhall-0-10-primitives-and-delivery-spine.md`
+is now marked `Implemented 0.10 delivery-spine slice with listed proof gaps`.
+Acceptance criteria are checked. Remaining unchecked implementation boxes are
+left visible for broader follow-up proof/product work: auto-suggested
+primitive-proof tasks when no existing task can prove a primitive, full persona
+matrix tests for security/data/runtime primitives, the broader Review Inbox
+contract-result surface, primitive-proof split creation for every needed gap,
+enabled-Structure copy polish, contract-surface-to-primitive adaptation
+warnings, and fixture-scale E2E proof beyond Looma + Knit Overview.
+
+Verification: `pnpm vitest run
+src/runtime/__tests__/delivery-spine.test.ts
+src/runtime/__tests__/context-builder.test.ts
+src/web/surfaces/__tests__/ProjectView.svelte.test.ts
+src/web/surfaces/project/__tests__/ThreadTab.svelte.test.ts --reporter=dot`
+passed with 228 tests; `pnpm typecheck` passed; `pnpm build` passed;
+`pnpm dev:install` rebuilt and installed the local app; `node dist/cli.js stop`
+and `node dist/cli.js start` restarted the service; `/api/stale-server`
+returned `stale:false` with pid `33912`; `/api/project?projectId=looma-knit`
+returned delivery queue data with 40 runnable and 3 blocked candidates; and the
+in-app Browser rendered `/projects/looma-knit/overview` with `CONNECTED`,
+`Delivery spine`, no `Project graph`, and no `Structure` text in the loaded DOM.
+
+source: codex:0-10-delivery-spine-checkmarks
+
+2026-06-06T02:02:00Z - Finished the remaining checkboxes in
+`internal/specs/2026-06-05-guildhall-0-10-primitives-and-delivery-spine.md`.
+Runtime delivery-spine planning now models suggested primitive-proof tasks when
+an unready primitive has no existing proving task, and split planning adds
+deterministic primitive-proof children for unready primitive blockers. Persona
+selection now has explicit security, data, and runtime primitive personas in
+addition to component delivery, primitive hardening, and Storybook proof.
+
+Spec checklist status: `rg -n "\[ \]"
+internal/specs/2026-06-05-guildhall-0-10-primitives-and-delivery-spine.md`
+returned no unchecked boxes. The remaining review, Structure, compatibility,
+and fixture-proof boxes were checked against existing implementation evidence:
+Needs You renders `contract_result_review` items with review buckets plus
+Accept/Reject actions backed by `/api/project/delivery-spine/contract-results`,
+contract result endpoints cover apply/reject and inbox removal, docs frame
+Structure as advanced multi-project ownership/handoff machinery, delivery-spine
+validation emits warnings for unsafe or uninterpretable state, and focused
+fixtures cover Looma + Knit ContextMenu/Menu/MenuItem plus backend/security,
+data, and runtime primitive persona contexts.
+
+Verification: `pnpm vitest run
+src/runtime/__tests__/delivery-spine.test.ts
+src/runtime/__tests__/inbox.test.ts
+src/runtime/__tests__/serve-task-endpoints.test.ts
+src/web/surfaces/project/__tests__/ThreadTab.svelte.test.ts
+src/web/surfaces/__tests__/ProjectView.svelte.test.ts --reporter=dot` passed
+with 270 tests; `pnpm typecheck` passed; `pnpm build` passed;
+`pnpm dev:install` rebuilt and installed the app; `node dist/cli.js stop` and
+`node dist/cli.js start` restarted the service; `/api/stale-server` returned
+`stale:false` with pid `81025`; `/api/project?projectId=looma-knit` returned
+delivery-spine queue data with 40 runnable and 3 blocked candidates; and the
+in-app Browser rendered `/projects/looma-knit/overview` with `CONNECTED`,
+`Delivery spine`, no `Project graph`, and no `Structure` text in the loaded DOM.
+
+source: codex:0-10-delivery-spine-all-checkboxes
+
+2026-06-06T03:02:00Z - Completed the 0.10 project contract governance
+implementation slice and marked
+`internal/specs/2026-06-05-guildhall-project-contract-governance.md` with
+actual checked implementation boxes. The project-graph spec is now explicitly
+superseded for default 0.10 delivery and retained only as an internal/
+feature-flagged substrate reference for cross-project authority, provider
+handoffs, delivery receipts, or external authoritative systems.
+
+Governance implementation now includes a first living contract registry in
+`src/runtime/contract-governance.ts`, an advisory changed-file contract detector
+in `scripts/contract-touch-detector.mjs`, `pnpm lint:contracts`, repo-level
+Contract Touch Decision and Schema Migration Decision instructions in
+`AGENTS.md`, machine-readable delivery-spine schema decisions, old-data reader
+proof for optional primitive/delivery persistence, and migration-definition
+quality validation. Focused proof:
+`pnpm vitest run src/runtime/__tests__/contract-governance.test.ts
+scripts/contract-touch-detector.test.ts src/runtime/__tests__/delivery-spine.test.ts
+--reporter=dot` passed with 21 tests.
+Final proof before commit: `pnpm vitest run
+src/runtime/__tests__/contract-governance.test.ts
+scripts/contract-touch-detector.test.ts src/runtime/__tests__/delivery-spine.test.ts
+src/runtime/__tests__/inbox.test.ts src/runtime/__tests__/serve-task-endpoints.test.ts
+src/runtime/__tests__/serve-settings.test.ts
+src/web/surfaces/project/__tests__/ThreadTab.svelte.test.ts
+src/web/surfaces/__tests__/ProjectView.svelte.test.ts --reporter=dot` passed
+with 337 tests; `pnpm typecheck` passed; `pnpm build` passed;
+`pnpm dev:install && node dist/cli.js stop && node dist/cli.js start` refreshed
+the installed app; `/api/stale-server` returned `stale:false` with pid
+`84516`; `/api/project?projectId=looma-knit` returned a delivery spine with 40
+runnable and 3 blocked candidates; and the in-app Browser rendered
+`/projects/looma-knit/overview` with `connected`, `Delivery spine`, `Blocked 3
+blocked tasks`, `Work 43 total tasks`, no default `Project graph`, and no
+default `Structure` text.
+
+source: codex:0-10-contract-governance-complete

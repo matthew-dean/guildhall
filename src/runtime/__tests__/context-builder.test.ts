@@ -5,6 +5,7 @@ import os from 'node:os'
 import { execFile } from 'node:child_process'
 import { promisify } from 'node:util'
 import { buildContext, resolveLikelyTaskFiles } from '../context-builder.js'
+import { projectDeliveryModelPath } from '../delivery-spine.js'
 import {
   acceptStructuralMap,
   draftStructuralMap,
@@ -223,6 +224,80 @@ describe('buildContext — task summary', () => {
     expect(ctx.structuralMapContext).toContain('Primary domain: domain:core')
     expect(ctx.structuralMapContext).toContain('Executable units: exec:fixture-core:test')
     expect(ctx.formatted).toContain('## Structural Map Slice')
+  })
+
+  it('injects delivery spine context into worker packets from project-local delivery state', async () => {
+    const project = path.join(tmpDir, 'looma-knit')
+    const memoryDir = path.join(project, '.guildhall')
+    await fs.mkdir(memoryDir, { recursive: true })
+    await fs.writeFile(
+      projectDeliveryModelPath(project),
+      `${JSON.stringify({
+        version: 1,
+        updatedAt: '2026-06-05T12:00:00.000Z',
+        drivers: [
+          { id: 'knit', label: 'Knit', role: 'primary', paths: ['./apps/knit'] },
+          { id: 'looma', label: 'Looma', role: 'provider', paths: ['./packages/looma'] },
+        ],
+        primitives: [{
+          id: 'menu',
+          label: 'Menu',
+          kind: 'ui_primitive',
+          provider: 'looma',
+          paths: ['./packages/looma/src/menu'],
+          invariants: ['Keyboard states stay deterministic.'],
+          proof: ['storybook'],
+          status: 'needs_proof',
+        }],
+        validationEvidence: [],
+        rejectedCandidates: [],
+      }, null, 2)}\n`,
+      'utf-8',
+    )
+    await fs.writeFile(
+      path.join(memoryDir, 'TASKS.json'),
+      `${JSON.stringify({
+        version: 1,
+        tasks: [{
+          ...baseTask,
+          id: 'task-menu-consumer',
+          title: 'Knit menu consumer',
+          projectPath: project,
+          delivery: {
+            driver: 'knit',
+            provider: 'looma',
+            supports: ['context-actions'],
+            usesPrimitives: ['menu'],
+            provesPrimitives: [],
+            proofKind: 'storybook',
+          },
+        }],
+      }, null, 2)}\n`,
+      'utf-8',
+    )
+
+    const ctx = await buildContext({
+      ...baseTask,
+      id: 'task-menu-consumer',
+      title: 'Knit menu consumer',
+      projectPath: project,
+      delivery: {
+        driver: 'knit',
+        provider: 'looma',
+        supports: ['context-actions'],
+        usesPrimitives: ['menu'],
+        provesPrimitives: [],
+        proofKind: 'storybook',
+      },
+    }, memoryDir)
+
+    expect(ctx.deliverySpineContext).toContain('## Delivery Spine Context')
+    expect(ctx.deliverySpineContext).toContain('Driver: Knit')
+    expect(ctx.deliverySpineContext).toContain('Provider: Looma')
+    expect(ctx.deliverySpineContext).toContain('Primitive blockers: Menu')
+    expect(ctx.deliverySpineContext).toContain('Proof kind: storybook')
+    expect(ctx.deliverySpineContext).toContain('Correction hooks')
+    expect(ctx.formatted).toContain('## Delivery Spine Context')
   })
 
   it('keeps only the summary portion of long spec markdown in the task summary', async () => {

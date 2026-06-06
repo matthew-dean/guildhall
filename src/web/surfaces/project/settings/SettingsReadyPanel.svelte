@@ -105,6 +105,10 @@
       case 'unknown-error': return 'needs attention'
     }
   }
+
+  function showRuntimeCompatibilityNote(status: RuntimeSetupStatus): boolean {
+    return status !== 'ready'
+  }
 </script>
 
 <Stack gap="4">
@@ -200,7 +204,7 @@
     <div class="panel-head">
       <div>
         <h3>Local runtime</h3>
-        <p>Guildhall can run project work in a Podman-backed Debian runtime on macOS. Host-run compatibility stays available.</p>
+        <p>Guildhall runs project work in a Podman-backed Debian runtime on macOS.</p>
       </div>
       {#if readiness.runtime}
         <StatusPill label={runtimeStatusLabel(readiness.runtime.status)} tone={runtimeStatusTone(readiness.runtime.status)} />
@@ -223,19 +227,23 @@
             <dd>{readiness.runtime.machine.exists ? `${readiness.runtime.machine.name ?? 'default'} ${readiness.runtime.machine.running ? 'running' : 'stopped'}` : 'not created'}</dd>
           </UtilityPanel>
         </dl>
-        <div class="button-row">
-          {#each readiness.runtime.actions as action (action.id)}
-            <Button
-              variant={action.id === 'use-host-run-compatibility' ? 'ghost' : action.mutatesHost ? 'agent' : 'secondary'}
-              size="sm"
-              disabled={store.runtimeSetupBusy !== null}
-              onclick={() => store.runRuntimeSetupAction(action)}
-            >
-              {store.runtimeSetupBusy === action.id ? 'Working...' : action.label}
-            </Button>
-          {/each}
-        </div>
-        <p class="muted">{readiness.runtime.compatibilityModeLabel} keeps existing host execution available when setup is skipped or fails.</p>
+        {#if readiness.runtime.actions.length > 0}
+          <div class="button-row">
+            {#each readiness.runtime.actions as action (action.id)}
+              <Button
+                variant={action.id === 'use-host-run-compatibility' ? 'ghost' : action.mutatesHost ? 'agent' : 'secondary'}
+                size="sm"
+                disabled={store.runtimeSetupBusy !== null}
+                onclick={() => store.runRuntimeSetupAction(action)}
+              >
+                {store.runtimeSetupBusy === action.id ? 'Working...' : action.label}
+              </Button>
+            {/each}
+          </div>
+        {/if}
+        {#if showRuntimeCompatibilityNote(readiness.runtime.status)}
+          <p class="muted">{readiness.runtime.compatibilityModeLabel} keeps existing host execution available when setup is skipped or fails.</p>
+        {/if}
       </Stack>
     {:else}
       <p class="muted">Checking local runtime setup...</p>

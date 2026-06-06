@@ -179,6 +179,20 @@ import {
   type ProjectGraphNodeRef,
 } from './project-graph.js'
 import {
+  applyContractChangeSet,
+  buildTaskContextPacket,
+  deriveQueueCandidates,
+  deriveTaskRelationships,
+  listPrimitivesWithRelations,
+  planTaskSplit,
+  readProjectDeliveryModel,
+  rejectContractChangeSet,
+  revertAppliedContractResult,
+  validateProjectDeliveryModel,
+  writeProjectDeliveryModel,
+  type ContractChangeSet,
+} from './delivery-spine.js'
+import {
   applyStructuralMapReviewAction,
   readAcceptedStructuralMap,
   summarizeStructuralMapForReview,
@@ -865,6 +879,42 @@ async function readTasksFileNormalized(
   await atomicWriteText(tasksPath, JSON.stringify(rewritten, null, 2))
   normalizedTasksCache.set(tasksPath, { raw: rewritten, tasks: tasks.map(task => ({ ...task })) })
   return tasks
+}
+
+async function writeTasksFilePreservingQueue(
+  tasksPath: string,
+  tasks: Array<Record<string, unknown>>,
+): Promise<void> {
+  let parsed:
+    | { tasks?: Array<Record<string, unknown>>; version?: unknown; lastUpdated?: unknown }
+    | Array<Record<string, unknown>>
+    | null = null
+  if (existsSync(tasksPath)) {
+    try {
+      parsed = JSON.parse(await fsp.readFile(tasksPath, 'utf8')) as typeof parsed
+    } catch {
+      parsed = null
+    }
+  }
+  const rewritten = Array.isArray(parsed)
+    ? tasks
+    : {
+        ...(parsed && typeof parsed === 'object' ? parsed : { version: 1 }),
+        tasks,
+        lastUpdated: new Date().toISOString(),
+      }
+  await atomicWriteText(tasksPath, JSON.stringify(rewritten, null, 2) + '\n')
+  normalizedTasksCache.set(tasksPath, { raw: rewritten, tasks: tasks.map(task => ({ ...task })) })
+}
+
+function stagedContractChangeSet(model: { validationEvidence?: Array<Record<string, unknown>> }, resultId: string): ContractChangeSet | null {
+  const record = (model.validationEvidence ?? []).find(candidate => (
+    typeof candidate.id === 'string' &&
+    candidate.id === resultId &&
+    (candidate.status === 'pending_review' || candidate.status === 'auto_applicable')
+  ))
+  const changeSet = record?.changeSet
+  return changeSet && typeof changeSet === 'object' ? changeSet as ContractChangeSet : null
 }
 
 function surfaceReviewPacketsFromTask(task: Record<string, unknown>): SurfaceReviewPacket[] {
@@ -2766,6 +2816,17 @@ export function buildServeApp(opts: ServeOptions = {}): {
       const tasksPath = join(getProjectStateDir(project.path), 'TASKS.json')
       const rawTasks = await readTasksFileNormalized(tasksPath)
       const tasks = await Promise.all(rawTasks.map((task) => enrichTaskForServe(project.path, task)))
+      const deliveryModel = await readProjectDeliveryModel(project.path)
+      const deliveryValidation = validateProjectDeliveryModel({
+        model: deliveryModel,
+        tasks: rawTasks as Task[],
+        projectRoot: project.path,
+      })
+      const deliveryQueue = deriveQueueCandidates({
+        model: deliveryModel,
+        tasks: rawTasks as Task[],
+      })
+      const deliveryPrimitives = listPrimitivesWithRelations(deliveryModel, rawTasks as Task[])
       const gitStory = await buildProjectGitStorySummary(project.path, rawTasks as Array<Record<string, unknown>>)
       const run = supervisor.get(project.id)
       const resolvedConfig = resolveConfig({ workspacePath: project.path })
@@ -2887,6 +2948,12 @@ export function buildServeApp(opts: ServeOptions = {}): {
         gitStory,
         startReadiness,
         actionModel,
+        deliverySpine: {
+          model: deliveryModel,
+          validation: deliveryValidation,
+          primitives: deliveryPrimitives,
+          queue: deliveryQueue,
+        },
         recentEvents: recent,
         ...(bootstrapStatus ? { bootstrapStatus } : {}),
       })
@@ -6312,6 +6379,17 @@ export function buildServeApp(opts: ServeOptions = {}): {
       const id = c.req.param('id')
       const task = tasks.find(t => (t as { id?: string }).id === id)
       if (!task) return c.json({ error: 'task not found' }, 404)
+      const deliveryModel = await readProjectDeliveryModel(project.path)
+      const deliveryRelationships = deriveTaskRelationships({
+        model: deliveryModel,
+        tasks: tasks as Task[],
+        taskId: id,
+      })
+      const deliveryContextPacket = buildTaskContextPacket({
+        model: deliveryModel,
+        tasks: tasks as Task[],
+        taskId: id,
+      })
       const recent = filterEventsForTask(supervisor.recent(project.id, undefined, project.path), id)
       const memoryDir = getProjectStateDir(project.path)
       const contextDebug = await readContextDebugForTask(memoryDir, id)
@@ -6331,6 +6409,14 @@ export function buildServeApp(opts: ServeOptions = {}): {
       const availability = await readProjectAvailability(project.path)
       const relatedTaskIds = new Set<string>()
       const rawTask = task as Record<string, unknown>
+      for (const primitive of [
+        ...deliveryRelationships.primitiveUse.direct,
+        ...deliveryRelationships.primitiveUse.ancestors,
+      ]) {
+        for (const provingTask of primitive.provingTasks) {
+          if (typeof provingTask.id === 'string') relatedTaskIds.add(provingTask.id)
+        }
+      }
       const hierarchy = rawTask.hierarchy as { parentId?: unknown; childIds?: unknown } | undefined
       if (typeof hierarchy?.parentId === 'string') relatedTaskIds.add(hierarchy.parentId)
       if (Array.isArray(hierarchy?.childIds)) {
@@ -6367,7 +6453,129 @@ export function buildServeApp(opts: ServeOptions = {}): {
         contextDebug,
         exploringTranscript,
         threadTurns,
+        deliverySpine: {
+          model: deliveryModel,
+          validation: validateProjectDeliveryModel({ model: deliveryModel, tasks: tasks as Task[], projectRoot: project.path }),
+          relationships: deliveryRelationships,
+          contextPacket: deliveryContextPacket,
+        },
       })
+    } catch (err) {
+      return c.json({ error: err instanceof Error ? err.message : String(err) }, 500)
+    }
+  })
+
+  app.get('/api/project/delivery-spine', async c => {
+    try {
+      if (project.initializationNeeded) return c.json({ error: 'not initialized' }, 400)
+      const tasks = await readTasksFileNormalized(join(getProjectStateDir(project.path), 'TASKS.json'))
+      const model = await readProjectDeliveryModel(project.path)
+      return c.json({
+        model,
+        validation: validateProjectDeliveryModel({ model, tasks: tasks as Task[], projectRoot: project.path }),
+        primitives: listPrimitivesWithRelations(model, tasks as Task[]),
+        queue: deriveQueueCandidates({ model, tasks: tasks as Task[] }),
+      })
+    } catch (err) {
+      return c.json({ error: err instanceof Error ? err.message : String(err) }, 500)
+    }
+  })
+
+  app.get('/api/project/delivery-spine/queue', async c => {
+    try {
+      if (project.initializationNeeded) return c.json({ error: 'not initialized' }, 400)
+      const tasks = await readTasksFileNormalized(join(getProjectStateDir(project.path), 'TASKS.json'))
+      const model = await readProjectDeliveryModel(project.path)
+      return c.json(deriveQueueCandidates({ model, tasks: tasks as Task[] }))
+    } catch (err) {
+      return c.json({ error: err instanceof Error ? err.message : String(err) }, 500)
+    }
+  })
+
+  app.post('/api/project/delivery-spine/contract-results/:resultId/apply', async c => {
+    try {
+      if (project.initializationNeeded) return c.json({ error: 'not initialized' }, 400)
+      const resultId = c.req.param('resultId')
+      const body = await c.req.json().catch(() => ({})) as { ownerOverrideReason?: string }
+      const tasksPath = join(getProjectStateDir(project.path), 'TASKS.json')
+      const tasks = await readTasksFileNormalized(tasksPath)
+      const model = await readProjectDeliveryModel(project.path)
+      const changeSet = stagedContractChangeSet(model, resultId)
+      if (!changeSet) return c.json({ error: 'staged contract result not found' }, 404)
+      const applied = applyContractChangeSet({
+        model,
+        tasks: tasks as Task[],
+        changeSet,
+        actor: 'human',
+        ownerOverrideReason: body.ownerOverrideReason,
+      })
+      await writeProjectDeliveryModel(project.path, applied.model)
+      await writeTasksFilePreservingQueue(tasksPath, applied.tasks as unknown as Array<Record<string, unknown>>)
+      return c.json({ ok: true, applied: applied.applied })
+    } catch (err) {
+      return c.json({ error: err instanceof Error ? err.message : String(err) }, 500)
+    }
+  })
+
+  app.post('/api/project/delivery-spine/contract-results/:resultId/reject', async c => {
+    try {
+      if (project.initializationNeeded) return c.json({ error: 'not initialized' }, 400)
+      const resultId = c.req.param('resultId')
+      const body = await c.req.json().catch(() => ({})) as { reason?: string }
+      const model = await readProjectDeliveryModel(project.path)
+      const changeSet = stagedContractChangeSet(model, resultId)
+      if (!changeSet) return c.json({ error: 'staged contract result not found' }, 404)
+      const rejected = rejectContractChangeSet({
+        model,
+        changeSet,
+        actor: 'human',
+        reason: body.reason?.trim() || 'Rejected from Needs you.',
+      })
+      await writeProjectDeliveryModel(project.path, rejected)
+      return c.json({ ok: true, rejected: rejected.rejectedCandidates.at(-1) })
+    } catch (err) {
+      return c.json({ error: err instanceof Error ? err.message : String(err) }, 500)
+    }
+  })
+
+  app.post('/api/project/delivery-spine/contract-results/:resultId/revert', async c => {
+    try {
+      if (project.initializationNeeded) return c.json({ error: 'not initialized' }, 400)
+      const resultId = c.req.param('resultId')
+      const tasksPath = join(getProjectStateDir(project.path), 'TASKS.json')
+      const tasks = await readTasksFileNormalized(tasksPath)
+      const model = await readProjectDeliveryModel(project.path)
+      const reverted = revertAppliedContractResult({
+        model,
+        tasks: tasks as Task[],
+        resultId,
+        actor: 'human',
+      })
+      await writeProjectDeliveryModel(project.path, reverted.model)
+      await writeTasksFilePreservingQueue(tasksPath, reverted.tasks as unknown as Array<Record<string, unknown>>)
+      return c.json({ ok: true, warnings: reverted.warnings })
+    } catch (err) {
+      return c.json({ error: err instanceof Error ? err.message : String(err) }, 500)
+    }
+  })
+
+  app.get('/api/project/task/:id/relationships', async c => {
+    try {
+      if (project.initializationNeeded) return c.json({ error: 'not initialized' }, 400)
+      const tasks = await readTasksFileNormalized(join(getProjectStateDir(project.path), 'TASKS.json'))
+      const model = await readProjectDeliveryModel(project.path)
+      return c.json(deriveTaskRelationships({ model, tasks: tasks as Task[], taskId: c.req.param('id') }))
+    } catch (err) {
+      return c.json({ error: err instanceof Error ? err.message : String(err) }, 500)
+    }
+  })
+
+  app.get('/api/project/task/:id/context-packet', async c => {
+    try {
+      if (project.initializationNeeded) return c.json({ error: 'not initialized' }, 400)
+      const tasks = await readTasksFileNormalized(join(getProjectStateDir(project.path), 'TASKS.json'))
+      const model = await readProjectDeliveryModel(project.path)
+      return c.json(buildTaskContextPacket({ model, tasks: tasks as Task[], taskId: c.req.param('id') }))
     } catch (err) {
       return c.json({ error: err instanceof Error ? err.message : String(err) }, 500)
     }
@@ -7006,13 +7214,38 @@ export function buildServeApp(opts: ServeOptions = {}): {
           return c.json({ error: 'task does not have split recommendations' }, 400)
         }
         const now = new Date().toISOString()
+        const deliveryModel = await readProjectDeliveryModel(project.path)
+        const preflightPlan = planTaskSplit({
+          model: deliveryModel,
+          tasks: queue.tasks as Task[],
+          taskId: task.id,
+        })
+        if (preflightPlan.errors.length > 0) {
+          return c.json({
+            error: 'split plan failed validation',
+            plan: preflightPlan,
+          }, 400)
+        }
         materializeSplitChildren(queue, task, now)
+        const appliedPlan = planTaskSplit({
+          model: deliveryModel,
+          tasks: queue.tasks as Task[],
+          taskId: task.id,
+        })
+        for (const childPlan of appliedPlan.children) {
+          const child = queue.tasks.find(candidate => candidate.id === childPlan.plannedTaskId)
+          if (!child) continue
+          child.delivery = childPlan.delivery
+          child.dependsOn = childPlan.dependsOn
+          child.updatedAt = now
+        }
         task.updatedAt = now
         queue.lastUpdated = now
         atomicWriteText(tasksPath, JSON.stringify(queue, null, 2) + '\n')
         return c.json({
           ok: true,
           parentTaskId: task.id,
+          splitPlan: appliedPlan,
           createdTaskIds: sizePlan.recommendedChildren
             .map(child => child.createdTaskId)
             .filter((createdTaskId): createdTaskId is string => Boolean(createdTaskId)),

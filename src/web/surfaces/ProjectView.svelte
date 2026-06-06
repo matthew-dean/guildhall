@@ -48,6 +48,13 @@
   import type { AlertBandTone } from '../../../packages/ui/src/components/types.js'
   import type { AgentQuestion, EventEnvelope, ProjectMigrationStatus, ProjectMigrationStatusItem, ProjectView, ProviderStatus, Task } from '../lib/types.js'
 
+  type MigrationApplyStage = 'idle' | 'applying' | 'refreshing-project' | 'refreshing-inbox' | 'checking-status' | 'complete'
+  type MigrationApplyResult = {
+    applied?: ProjectMigrationStatusItem[]
+    skipped?: ProjectMigrationStatusItem[]
+    failed?: Array<ProjectMigrationStatusItem & { error?: string }>
+  }
+
   interface ShellAttentionNotice {
     id: string
     key?: string
@@ -94,8 +101,10 @@
   let migrationStatus = $state<ProjectMigrationStatus | null>(null)
   let migrationStatusLoading = $state(false)
   let migrationApplyBusy = $state(false)
+  let migrationApplyStage = $state<MigrationApplyStage>('idle')
   let migrationError = $state<string | null>(null)
   let migrationAppliedMessage = $state<string | null>(null)
+  let migrationApplyResult = $state<MigrationApplyResult | null>(null)
   const RAIL_PREFERENCE_KEY = 'guildhall:project-rail'
 
   // Inbox blockers drive disabled-state on top-bar actions so hard blockers
@@ -538,15 +547,24 @@
   async function openMigrationModal(): Promise<void> {
     migrationModalOpen = true
     migrationAppliedMessage = null
+    migrationApplyResult = null
+    migrationApplyStage = 'idle'
     await loadMigrationStatus()
+  }
+
+  function closeMigrationModal(): void {
+    if (migrationApplyBusy) return
+    migrationModalOpen = false
   }
 
   async function applyRequiredMigration(): Promise<void> {
     const migration = primaryRequiredMigration
     if (!migration) return
     migrationApplyBusy = true
+    migrationApplyStage = 'applying'
     migrationError = null
     migrationAppliedMessage = null
+    migrationApplyResult = null
     try {
       const res = await projectFetch('/api/project/migrations/apply', {
         method: 'POST',
@@ -556,19 +574,27 @@
       const body = (await res.json().catch(() => ({}))) as {
         error?: string
         status?: ProjectMigrationStatus
-        result?: { failed?: Array<{ id?: string; error?: string }> }
+        result?: MigrationApplyResult
       }
       if (!res.ok || body.result?.failed?.length) {
         const failed = body.result?.failed?.[0]
         throw new Error(failed?.error ?? body.error ?? `Migration failed (HTTP ${res.status})`)
       }
       migrationStatus = body.status ?? null
-      migrationAppliedMessage = 'Migration applied.'
+      migrationApplyResult = body.result ?? null
+      migrationApplyStage = 'refreshing-project'
       await project.refresh(activeProjectId)
+      migrationApplyStage = 'refreshing-inbox'
       await loadInbox()
-      if (!body.status) await loadMigrationStatus()
+      if (!body.status) {
+        migrationApplyStage = 'checking-status'
+        await loadMigrationStatus()
+      }
+      migrationApplyStage = 'complete'
+      migrationAppliedMessage = 'Migration complete.'
     } catch (err) {
       migrationError = err instanceof Error ? err.message : String(err)
+      migrationApplyStage = 'idle'
     } finally {
       migrationApplyBusy = false
     }
@@ -667,6 +693,20 @@
   const allTerminalStart = $derived(startReadiness?.code === 'all_terminal')
   const requiredMigrationBlocked = $derived(startReadiness?.code === 'required_migration_pending')
   const primaryRequiredMigration = $derived<ProjectMigrationStatusItem | null>(migrationStatus?.blocked?.[0] ?? null)
+  const migrationProgressLabel = $derived.by(() => {
+    switch (migrationApplyStage) {
+      case 'applying': return 'Applying migration'
+      case 'refreshing-project': return 'Refreshing project state'
+      case 'refreshing-inbox': return 'Refreshing Needs You'
+      case 'checking-status': return 'Checking remaining migrations'
+      case 'complete': return 'Migration complete'
+      default: return null
+    }
+  })
+  const migrationChangedPaths = $derived.by(() => {
+    const paths = migrationApplyResult?.applied?.flatMap(item => item.affectedPaths ?? []) ?? []
+    return [...new Set(paths)].slice(0, 8)
+  })
   const allTerminalReadinessMessage = $derived(
     allTerminalStart
       ? startReadiness?.message ?? 'All tasks are already finished.'
@@ -1558,20 +1598,47 @@
     open={migrationModalOpen}
     title="Migrate project"
     size="md"
-    onClose={() => (migrationModalOpen = false)}
+    closeDisabled={migrationApplyBusy}
+    onClose={closeMigrationModal}
   >
     <div class="migration-modal">
       <p>
-        This project needs an update before it can run. Review the file changes first so there are no surprise Git writes.
+        This project needs an update before it can run. Some migrations move or remove old project-local files after copying them into Guildhall state.
       </p>
-      {#if migrationAppliedMessage && primaryRequiredMigration}
+      {#if migrationApplyBusy && migrationProgressLabel}
+        <NoticeBand
+          tone="warn"
+          role="alert"
+          density="compact"
+          label="Migration in progress"
+          title={migrationProgressLabel}
+        >
+          Do not stop Guildhall until this finishes.
+        </NoticeBand>
+        <ol class="migration-steps" aria-label="Migration progress">
+          <li class:active={migrationApplyStage === 'applying'} class:done={['refreshing-project', 'refreshing-inbox', 'checking-status', 'complete'].includes(migrationApplyStage)}>Apply migration</li>
+          <li class:active={migrationApplyStage === 'refreshing-project'} class:done={['refreshing-inbox', 'checking-status', 'complete'].includes(migrationApplyStage)}>Refresh project state</li>
+          <li class:active={migrationApplyStage === 'refreshing-inbox'} class:done={['checking-status', 'complete'].includes(migrationApplyStage)}>Refresh Needs You</li>
+          <li class:active={migrationApplyStage === 'checking-status'} class:done={migrationApplyStage === 'complete'}>Check remaining migrations</li>
+        </ol>
+      {:else if migrationAppliedMessage}
         <NoticeBand
           tone="ok"
           role="status"
           density="compact"
-          label="Migration applied"
+          label="Migration complete"
           title={migrationAppliedMessage}
         />
+        {#if migrationChangedPaths.length}
+          <div class="migration-card migration-card-complete">
+            <Chip label="Changed paths" tone="ok" />
+            <div class="migration-paths" aria-label="Migration changed paths">
+              {#each migrationChangedPaths as affectedPath}
+                <code>{affectedPath}</code>
+              {/each}
+            </div>
+          </div>
+        {/if}
       {/if}
       {#if migrationStatusLoading}
         <p class="muted">Checking migrations...</p>
@@ -1592,18 +1659,18 @@
             </div>
           {/if}
         </div>
-      {:else}
+      {:else if !migrationAppliedMessage}
         <NoticeBand
           tone="ok"
           role="status"
           density="compact"
           label="Migration status"
-          title={migrationAppliedMessage ?? 'No required migrations are blocking this project.'}
+          title="No required migrations are blocking this project."
         />
       {/if}
     </div>
     {#snippet footer()}
-      <Button variant="secondary" onclick={() => (migrationModalOpen = false)}>
+      <Button variant="secondary" disabled={migrationApplyBusy} onclick={closeMigrationModal}>
         Close
       </Button>
       <Button
@@ -1612,7 +1679,7 @@
         onclick={() => { void applyRequiredMigration() }}
       >
         <Icon name="refresh-cw" size={16} />
-        {migrationApplyBusy ? 'Applying...' : 'Apply required migration'}
+        {migrationApplyBusy ? 'Applying migration...' : 'Apply required migration'}
       </Button>
     {/snippet}
   </Modal>
@@ -1939,6 +2006,47 @@
     color: var(--text);
     font-size: var(--gh-type-size-panel-title);
     line-height: var(--gh-type-line-height-tight);
+  }
+  .migration-card-complete {
+    border-color: color-mix(in srgb, var(--gh-color-feedback-ok) 36%, var(--border));
+    background: color-mix(in srgb, var(--gh-color-feedback-ok) 14%, var(--bg-raised-2));
+  }
+  .migration-steps {
+    display: grid;
+    gap: var(--s-2);
+    margin: 0;
+    padding: 0;
+    list-style: none;
+  }
+  .migration-steps li {
+    display: flex;
+    align-items: center;
+    gap: var(--s-2);
+    color: var(--text-muted);
+    font-size: var(--gh-type-size-body);
+  }
+  .migration-steps li::before {
+    content: '';
+    width: 0.6rem;
+    height: 0.6rem;
+    border-radius: 999px;
+    border: 1px solid var(--border);
+    background: var(--bg-raised-2);
+  }
+  .migration-steps li.active {
+    color: var(--text);
+    font-weight: var(--gh-type-weight-strong);
+  }
+  .migration-steps li.active::before {
+    border-color: var(--accent);
+    background: var(--accent);
+  }
+  .migration-steps li.done {
+    color: var(--text);
+  }
+  .migration-steps li.done::before {
+    border-color: var(--gh-color-feedback-ok);
+    background: var(--gh-color-feedback-ok);
   }
   .migration-paths {
     display: flex;

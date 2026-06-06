@@ -115,6 +115,34 @@
     }
   }
 
+  async function reviewContractResult(item: InboxItem, action: 'apply' | 'reject', index: number, e: MouseEvent): Promise<void> {
+    e.stopPropagation()
+    if (item.kind !== 'contract_result_review' || !item.resultId) return
+    handlingIndex = index
+    handlingMessage = null
+    try {
+      const endpoint = `/api/project/delivery-spine/contract-results/${encodeURIComponent(item.resultId)}/${action}`
+      const body = action === 'apply'
+        ? { ownerOverrideReason: 'Accepted from Needs you.' }
+        : { reason: 'Rejected from Needs you.' }
+      const r = await projectFetch(endpoint, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify(body),
+      })
+      const j = (await r.json().catch(() => ({}))) as { error?: string }
+      if (!r.ok || j.error) {
+        handlingMessage = `${action === 'apply' ? 'Accept' : 'Reject'} failed: ${j.error ?? `HTTP ${r.status}`}`
+        return
+      }
+      await load()
+    } catch (err) {
+      handlingMessage = `${action === 'apply' ? 'Accept' : 'Reject'} failed: ${err instanceof Error ? err.message : String(err)}`
+    } finally {
+      handlingIndex = null
+    }
+  }
+
   $effect(() => {
     void load()
   })
@@ -126,6 +154,7 @@
     setup_pending: 'wrench',
     workspace_import_pending: 'package',
     import_draft_queue: 'list-todo',
+    contract_result_review: 'file-check',
     lever_questions: 'sliders',
     spec_fill_pending: 'help-circle',
   }
@@ -137,6 +166,7 @@
     setup_pending: 'Open setup',
     workspace_import_pending: 'Review import',
     import_draft_queue: 'Draft task brief',
+    contract_result_review: 'Review result',
     lever_questions: 'Review',
     spec_fill_pending: 'Open checklist',
   }
@@ -154,6 +184,10 @@
     }
     if (item.kind === 'spec_fill_pending') {
       return null
+    }
+    if (item.kind === 'contract_result_review') {
+      const buckets = item.reviewBuckets?.length ? item.reviewBuckets.join(', ') : 'review'
+      return `${item.changeCount ?? 0} change${item.changeCount === 1 ? '' : 's'} in ${buckets}.`
     }
     return null
   }
@@ -301,6 +335,26 @@
                     title="Agent runs this automatically"
                   >
                     {handling ? handler.pending : handler.verb}
+                  </button>
+                {/if}
+                {#if isOpen(item) && item.kind === 'contract_result_review'}
+                  <button
+                    type="button"
+                    class="agent-verb"
+                    onclick={e => reviewContractResult(item, 'apply', items.indexOf(item), e)}
+                    disabled={handlingIndex !== null}
+                    title="Accept these validated changes"
+                  >
+                    {handling ? 'Accepting...' : 'Accept'}
+                  </button>
+                  <button
+                    type="button"
+                    class="dismiss-verb"
+                    onclick={e => reviewContractResult(item, 'reject', items.indexOf(item), e)}
+                    disabled={handlingIndex !== null}
+                    title="Reject this contract result"
+                  >
+                    Reject
                   </button>
                 {/if}
                 {#if isOpen(item) && item.dismissEndpoint}

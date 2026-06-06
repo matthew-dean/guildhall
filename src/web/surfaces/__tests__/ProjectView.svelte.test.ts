@@ -129,6 +129,14 @@ function json(data: unknown, status = 200): Response {
   })
 }
 
+function deferredResponse() {
+  let resolve!: (value: Response) => void
+  const promise = new Promise<Response>((done) => {
+    resolve = done
+  })
+  return { promise, resolve }
+}
+
 function installBrowserFakes() {
   const storage = new Map<string, string>()
   Object.defineProperty(window, 'localStorage', {
@@ -657,8 +665,89 @@ describe('ProjectView', () => {
         expect.objectContaining({ method: 'POST' }),
       )
     })
-    expect(await screen.findByText('Migration applied.')).toBeInTheDocument()
+    expect(await screen.findByText('Migration complete.')).toBeInTheDocument()
     expect(screen.getByText('Move task questions into owner-input bounded chat')).toBeInTheDocument()
+  })
+
+  it('keeps the migration modal blocking until apply and refreshes finish', async () => {
+    const user = userEvent.setup()
+    const migrationBlocked = detail({
+      startReadiness: {
+        canStart: false,
+        code: 'required_migration_pending',
+        message: 'Run required Guildhall migration 0.8.0/project-state-layout before starting this project.',
+        actionHref: '/migrations',
+      },
+    } as Partial<ProjectDetail>)
+    const apply = deferredResponse()
+    const fetchMock = installFetchFakes(migrationBlocked)
+    fetchMock.mockImplementation(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = new URL(String(input), 'http://localhost')
+      if (url.pathname === '/api/project') return json(migrationBlocked)
+      if (url.pathname === '/api/project/inbox') return json({ blockers: { bootstrap: false, workspaceImport: false }, items: [] })
+      if (url.pathname === '/api/project/thread') return json({ turns: [], activeTurnId: null })
+      if (url.pathname === '/api/project/migrations') {
+        return json({
+          projectRoot: '/workspace/looma-knit',
+          pending: [],
+          blocked: [
+            {
+              id: '0.8.0/project-state-layout',
+              title: 'Move legacy project memory into split project state',
+              safety: 'prompt',
+              requirement: 'required',
+              summary: 'Moves old ./memory project notes into .guildhall and local Guildhall history.',
+              affectedPaths: ['memory/', '.guildhall/'],
+            },
+          ],
+          applied: [],
+        })
+      }
+      if (url.pathname === '/api/project/migrations/apply') {
+        expect(init?.method).toBe('POST')
+        return apply.promise
+      }
+      return json({})
+    })
+
+    await renderProjectView('overview', null, 'looma-knit', migrationBlocked)
+
+    await user.click(screen.getAllByRole('button', { name: /migrate project/i }).at(-1)!)
+    await screen.findByRole('dialog', { name: /migrate project/i })
+    await user.click(screen.getByRole('button', { name: /apply required migration/i }))
+
+    expect(await screen.findByText('Applying migration')).toBeInTheDocument()
+    expect(screen.getByText('Do not stop Guildhall until this finishes.')).toBeInTheDocument()
+    expect(screen.queryByText('Migration complete.')).toBeNull()
+    expect(screen.getAllByRole('button', { name: 'Close' }).every(button => button.hasAttribute('disabled'))).toBe(true)
+
+    await user.keyboard('{Escape}')
+    expect(screen.getByRole('dialog', { name: /migrate project/i })).toBeInTheDocument()
+
+    apply.resolve(json({
+      ok: true,
+      result: {
+        applied: [
+          {
+            id: '0.8.0/project-state-layout',
+            title: 'Move legacy project memory into split project state',
+            affectedPaths: ['memory/', '.guildhall/'],
+          },
+        ],
+        skipped: [],
+        failed: [],
+      },
+      status: {
+        pending: [],
+        blocked: [],
+        applied: [{ id: '0.8.0/project-state-layout', title: 'Move legacy project memory into split project state' }],
+      },
+    }))
+
+    expect(await screen.findByText('Migration complete.')).toBeInTheDocument()
+    expect(screen.getAllByRole('button', { name: 'Close' }).every(button => button.hasAttribute('disabled'))).toBe(false)
+    expect(screen.getByLabelText('Migration changed paths')).toHaveTextContent('memory/')
+    expect(screen.getByLabelText('Migration changed paths')).toHaveTextContent('.guildhall/')
   })
 
   it('does not present stable done-only projects as paused or needing setup attention', async () => {
@@ -1248,6 +1337,8 @@ describe('ProjectView', () => {
     expect(within(rail).getByRole('button', { name: 'Timeline' })).toBeInTheDocument()
     expect(within(rail).getByRole('button', { name: 'Closure' })).toBeInTheDocument()
     expect(within(rail).queryByRole('button', { name: 'Inbox' })).not.toBeInTheDocument()
+    expect(screen.queryByText('Project graph')).not.toBeInTheDocument()
+    expect(screen.queryByText('Structure')).not.toBeInTheDocument()
   })
 
   it('keeps project children visible for any Project child route', async () => {

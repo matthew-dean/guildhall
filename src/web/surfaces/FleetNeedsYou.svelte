@@ -38,6 +38,7 @@
       case 'project_understanding': return 'Reconcile'
       case 'workspace_import_pending': return 'Review import'
       case 'import_draft_queue': return 'Review draft'
+      case 'contract_result_review': return 'Review result'
       case 'bootstrap_missing': return 'Configure'
       case 'lever_questions': return 'Review'
       case 'spec_fill_pending': return item.taskId === 'task-workspace-import' ? 'Review import' : 'Open checklist'

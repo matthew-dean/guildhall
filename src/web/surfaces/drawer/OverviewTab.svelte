@@ -13,12 +13,13 @@
   import { readableTaskDescription } from '../../lib/task-display.js'
   import { projectDerivedRecommendedChildren } from '../../lib/task-drawer-integrity.js'
   import { taskStagePresentation } from '../../lib/task-presentation.js'
-  import type { Task } from '../../lib/types.js'
+  import type { DeliverySpine, PrimitiveSummary, Task } from '../../lib/types.js'
 
   interface Props {
     task: Task
     tasks?: Task[]
     projectId?: string | null
+    deliverySpine?: DeliverySpine | null
     onNavigateTask?: (taskId: string) => void
     onCreateSplitChildren?: () => void
     createSplitBusy?: boolean
@@ -28,6 +29,7 @@
     task,
     tasks = [],
     projectId = null,
+    deliverySpine = null,
     onNavigateTask,
     onCreateSplitChildren,
     createSplitBusy = false,
@@ -63,6 +65,23 @@
   const reviewLaneCount = $derived(reviewPlan?.selectedLanes?.length ?? 0)
   const reviewerGroupCount = $derived(reviewPlan?.requiredRecipes?.length ?? 0)
   const blockingTaskIds = $derived(task.dependsOn ?? [])
+  const contextPacket = $derived(deliverySpine?.contextPacket ?? null)
+  const relationships = $derived(deliverySpine?.relationships ?? null)
+  const usedPrimitives = $derived(
+    contextPacket?.primitiveContext?.direct ??
+      relationships?.primitiveUse?.direct ??
+      [],
+  )
+  const primitiveBlockers = $derived(
+    contextPacket?.primitiveContext?.blockers ??
+      relationships?.primitiveUse?.blockers ??
+      [],
+  )
+  const provedPrimitives = $derived(
+    contextPacket?.proofContext?.provesPrimitives ??
+      relationships?.primitiveProof?.proves ??
+      [],
+  )
   const blockedTaskIds = $derived(
     tasks
       .filter((candidate) => candidate.id !== task.id && (candidate.dependsOn ?? []).includes(task.id))
@@ -97,6 +116,17 @@
 
   function taskLabel(taskId: string): string {
     return taskById.get(taskId)?.title?.trim() || taskId
+  }
+
+  function primitiveLabel(primitive: PrimitiveSummary): string {
+    return primitive.label?.trim() || primitive.id || 'Primitive'
+  }
+
+  function primitiveStatusTone(status: string | undefined): ChipTone {
+    if (status === 'ready') return 'ok'
+    if (status === 'needs_proof' || status === 'proposed') return 'warn'
+    if (status === 'deprecated') return 'neutral'
+    return 'neutral'
   }
 
   function navigateTask(event: MouseEvent, nextTaskId: string | undefined): void {
@@ -168,6 +198,65 @@
         </div>
       {/if}
 
+      {#if contextPacket?.deliveryIntent?.driver || contextPacket?.deliveryIntent?.provider || task.delivery?.proofKind}
+        <div>
+          <h4>Delivery</h4>
+          <Row wrap gap="2">
+            {#if contextPacket?.deliveryIntent?.driver}
+              <Chip label={`Driven by ${contextPacket.deliveryIntent.driver.label ?? contextPacket.deliveryIntent.driver.id}`} tone="accent" />
+            {/if}
+            {#if contextPacket?.deliveryIntent?.provider}
+              <Chip label={`Provided by ${contextPacket.deliveryIntent.provider.label ?? contextPacket.deliveryIntent.provider.id}`} tone="neutral" />
+            {/if}
+            {#if task.delivery?.proofKind}
+              <Chip label={`Proof: ${token(task.delivery.proofKind)}`} tone="ok" />
+            {/if}
+          </Row>
+          {#if contextPacket?.whyThisNow}
+            <p class="muted">{contextPacket.whyThisNow}</p>
+          {/if}
+        </div>
+      {/if}
+
+      {#if usedPrimitives.length > 0}
+        <div>
+          <h4>Uses primitives</h4>
+          <div class="primitive-list">
+            {#each usedPrimitives as primitive (`use-${primitive.id}`)}
+              <span class="primitive-pill">
+                {primitiveLabel(primitive)}
+                {#if primitive.status}<small>{token(primitive.status)}</small>{/if}
+              </span>
+            {/each}
+          </div>
+        </div>
+      {/if}
+
+      {#if provedPrimitives.length > 0}
+        <div>
+          <h4>Proves primitives</h4>
+          <div class="primitive-list">
+            {#each provedPrimitives as primitive (`prove-${primitive.id}`)}
+              <span class="primitive-pill primitive-pill-proof">
+                {primitiveLabel(primitive)}
+                {#if primitive.status}<small>{token(primitive.status)}</small>{/if}
+              </span>
+            {/each}
+          </div>
+        </div>
+      {/if}
+
+      {#if primitiveBlockers.length > 0}
+        <div class="primitive-blockers">
+          <h4>Primitive proof blockers</h4>
+          <Row wrap gap="2">
+            {#each primitiveBlockers as primitive (`blocker-${primitive.id}`)}
+              <Chip label={primitiveLabel(primitive)} tone={primitiveStatusTone(primitive.status)} />
+            {/each}
+          </Row>
+        </div>
+      {/if}
+
       {#if splitNeeded && createdChildren.length === 0}
         <div class:split-callout-warning={splitStillNeedsAction} class="split-callout">
           <strong>
@@ -232,7 +321,7 @@
         </div>
       {/if}
 
-      {#if nestedWorkIds.length === 0 && blockingTaskIds.length === 0 && blockedTaskIds.length === 0 && recommendedChildren.length === 0}
+      {#if nestedWorkIds.length === 0 && blockingTaskIds.length === 0 && blockedTaskIds.length === 0 && recommendedChildren.length === 0 && usedPrimitives.length === 0 && provedPrimitives.length === 0}
         <p class="muted">No linked tasks recorded.</p>
       {/if}
     </Stack>
@@ -398,6 +487,33 @@
     display: flex;
     flex-wrap: wrap;
     gap: var(--s-2);
+  }
+  .primitive-list {
+    display: flex;
+    flex-wrap: wrap;
+    gap: var(--s-2);
+  }
+  .primitive-pill {
+    display: inline-flex;
+    align-items: center;
+    gap: var(--s-2);
+    min-height: 28px;
+    padding: 0 var(--s-2);
+    border: 1px solid var(--border);
+    border-radius: var(--r-2);
+    background: color-mix(in srgb, var(--surface-2) 70%, transparent);
+    color: var(--text);
+    font-size: var(--gh-type-size-body);
+  }
+  .primitive-pill-proof {
+    border-color: color-mix(in srgb, var(--ok) 35%, var(--border));
+  }
+  .primitive-pill small {
+    color: var(--text-muted);
+    font-size: var(--gh-type-size-meta);
+  }
+  .primitive-blockers {
+    padding-top: var(--s-1);
   }
   a {
     color: var(--accent-text);

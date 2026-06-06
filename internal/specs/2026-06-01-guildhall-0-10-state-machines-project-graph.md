@@ -1,6 +1,14 @@
 # Guildhall 0.10.0 State Machines and Local Project Graph
 
-**Status:** Proposed 0.10.0 target-feature spec
+**Status:** Superseded for default 0.10 delivery; retained as internal/feature-flagged substrate reference
+
+**Superseded by:** `internal/specs/2026-06-05-guildhall-0-10-primitives-and-delivery-spine.md` and `internal/specs/2026-06-05-guildhall-project-contract-governance.md`
+
+**Supersession note:** The active 0.10 model is now
+`Needs -> Delivery packages -> Tasks -> Dependencies -> Primitives -> Proof`.
+Project graph remains useful only for real cross-project authority, provider
+handoffs, delivery receipts, or external authoritative systems. It is no longer
+the default way Guildhall explains or orders ordinary local delivery work.
 
 ## Goal
 

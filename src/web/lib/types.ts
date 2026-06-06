@@ -492,6 +492,9 @@ export interface Task {
     driver?: string
     provider?: string
     supports?: string[]
+    usesPrimitives?: string[]
+    provesPrimitives?: string[]
+    proofKind?: string
   }
   hierarchy?: {
     parentId?: string
@@ -529,6 +532,123 @@ export interface Task {
   }
   permissionMode?: string
   dependsOn?: string[]
+}
+
+export interface DeliveryDriver {
+  id?: string
+  label?: string
+  role?: 'primary' | 'secondary' | 'provider' | 'proof' | 'maintenance' | string
+  kind?: string
+  paths?: string[]
+  domains?: string[]
+  description?: string
+}
+
+export interface PrimitiveSummary {
+  id?: string
+  label?: string
+  kind?: string
+  provider?: string
+  paths?: string[]
+  dependsOn?: string[]
+  invariants?: string[]
+  proof?: string[]
+  status?: 'unknown' | 'proposed' | 'ready' | 'needs_proof' | 'deprecated' | string
+  evidence?: string[]
+  consumers?: Array<{ kind?: 'task' | 'primitive' | string; id?: string; title?: string }>
+  provingTasks?: Array<{ id?: string; title?: string; status?: string }>
+}
+
+export interface DeliverySpineValidation {
+  valid?: boolean
+  errors?: Array<{ path?: string; code?: string; message?: string }>
+  warnings?: Array<{ path?: string; code?: string; message?: string }>
+}
+
+export interface TaskContextPacket {
+  taskId?: string
+  deliveryIntent?: {
+    driver?: DeliveryDriver
+    provider?: DeliveryDriver
+    containingPackage?: { id?: string; title?: string; status?: string }
+    supports?: string[]
+  }
+  executionOrder?: {
+    runnableNow?: boolean
+    directBlockers?: Array<{ id?: string; title?: string; status?: string }>
+    recursiveBlockers?: Array<{ id?: string; title?: string; status?: string }>
+    blocks?: Array<{ id?: string; title?: string; status?: string }>
+  }
+  primitiveContext?: {
+    direct?: PrimitiveSummary[]
+    ancestors?: PrimitiveSummary[]
+    blockers?: PrimitiveSummary[]
+    invariants?: Array<{ primitiveId?: string; primitiveLabel?: string; invariant?: string }>
+    paths?: string[]
+  }
+  proofContext?: {
+    proofKind?: string
+    requiredProof?: Array<{ primitiveId?: string; primitiveLabel?: string; proof?: string }>
+    provesPrimitives?: PrimitiveSummary[]
+    existingEvidence?: string[]
+  }
+  persona?: { id?: string; label?: string; guardrails?: string[] }
+  whyThisNow?: string
+  correctionHooks?: Array<{ field?: string; label?: string; current?: unknown }>
+}
+
+export interface TaskRelationships {
+  hierarchy?: {
+    parent?: { id?: string; title?: string; status?: string }
+    children?: Array<{ id?: string; title?: string; status?: string }>
+    breadcrumbs?: Array<{ id?: string; title?: string }>
+  }
+  dependencies?: {
+    directBlockers?: Array<{ id?: string; title?: string; status?: string }>
+    recursiveBlockers?: Array<{ id?: string; title?: string; status?: string }>
+    blocks?: Array<{ id?: string; title?: string; status?: string }>
+  }
+  supports?: string[]
+  primitiveUse?: {
+    direct?: PrimitiveSummary[]
+    ancestors?: PrimitiveSummary[]
+    blockers?: PrimitiveSummary[]
+  }
+  primitiveProof?: {
+    proves?: PrimitiveSummary[]
+    provingTasksByPrimitive?: Record<string, Array<{ id?: string; title?: string; status?: string }>>
+  }
+}
+
+export interface DeliveryQueueCandidate {
+  task?: Task
+  runnable?: boolean
+  executionBlockers?: Array<{ id?: string; title?: string; status?: string }>
+  structuralBlockers?: PrimitiveSummary[]
+  suggestedPrimitiveProofTasks?: Array<{
+    primitiveId?: string
+    primitiveLabel?: string
+    title?: string
+    reason?: string
+    delivery?: Task['delivery']
+  }>
+  why?: string
+}
+
+export interface DeliverySpine {
+  model?: {
+    drivers?: DeliveryDriver[]
+    primitives?: PrimitiveSummary[]
+  }
+  validation?: DeliverySpineValidation
+  primitives?: PrimitiveSummary[]
+  queue?: {
+    runnable?: DeliveryQueueCandidate[]
+    blocked?: DeliveryQueueCandidate[]
+    firstRunnable?: DeliveryQueueCandidate
+  }
+  relationships?: TaskRelationships
+  contextPacket?: TaskContextPacket
 }
 
 export interface ContractSurfaceReviewPacket {
@@ -611,6 +731,7 @@ export interface DrawerPayload {
     path: string
     error?: string
   }
+  deliverySpine?: DeliverySpine
 }
 
 export type DrawerTab = 'overview' | 'current' | 'spec' | 'journey' | 'transcript' | 'experts' | 'history' | 'provenance'
@@ -1100,6 +1221,7 @@ export interface ProjectDetail {
   gitStory?: GitStorySummary | null
   startReadiness?: StartReadiness | null
   actionModel?: ProjectActionModel | null
+  deliverySpine?: DeliverySpine | null
   bootstrapStatus?: BootstrapStatus
   recentEvents?: EventEnvelope[]
   error?: string

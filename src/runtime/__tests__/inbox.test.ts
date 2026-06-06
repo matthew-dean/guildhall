@@ -136,6 +136,7 @@ describe('buildInbox', () => {
       'setup_pending',
       'workspace_import_pending',
       'import_draft_queue',
+      'contract_result_review',
       'lever_questions',
       'spec_fill_pending',
     ])
@@ -180,6 +181,54 @@ describe('buildInbox', () => {
       },
     })
     expect(items).toEqual([])
+  })
+
+  it('contract_result_review: emits pending contract review items without resurfacing applied evidence', async () => {
+    await writeCompleteBootstrap()
+    await writeJson('.guildhall/workspace-goals.json', { goals: [] })
+    await writeJson('.guildhall/TASKS.json', { version: 1, lastUpdated: '', tasks: [] })
+    await writeJson('.guildhall/delivery-spine.json', {
+      version: 1,
+      updatedAt: '2026-06-05T12:00:00.000Z',
+      drivers: [],
+      primitives: [],
+      validationEvidence: [
+        {
+          id: 'project-primitive-setup-pending',
+          contractId: 'project-primitive-setup',
+          status: 'pending_review',
+          createdAt: '2026-06-05T12:00:00.000Z',
+          summary: { drivers: 0, primitives: 2, taskLinks: 1, ownerQuestions: 0 },
+          reviewBuckets: [
+            { kind: 'keep', label: 'Keep', changeIds: ['primitive:menu'], reason: 'Validated changes can be accepted.' },
+            { kind: 'needs_proof', label: 'Needs proof', changeIds: ['primitive:menu'], reason: 'Proof is missing.' },
+          ],
+          warnings: [{ code: 'missing_invariants', message: 'One primitive has no observable invariants.' }],
+        },
+        {
+          id: 'project-primitive-setup-applied',
+          contractId: 'project-primitive-setup',
+          status: 'applied',
+          createdAt: '2026-06-05T12:05:00.000Z',
+          summary: { drivers: 0, primitives: 1, taskLinks: 0, ownerQuestions: 0 },
+        },
+      ],
+      rejectedCandidates: [],
+    })
+
+    const items = buildInbox({ projectPath: tmpDir })
+    const hit = items.find(item => item.kind === 'contract_result_review')
+
+    expect(hit).toEqual(expect.objectContaining({
+      kind: 'contract_result_review',
+      severity: 'medium',
+      resultId: 'project-primitive-setup-pending',
+      contractId: 'project-primitive-setup',
+      title: 'Review primitive setup result',
+      actionHref: '/overview/inbox',
+      changeCount: 3,
+    }))
+    expect(items.some(item => item.kind === 'contract_result_review' && item.resultId === 'project-primitive-setup-applied')).toBe(false)
   })
 
   it('structural bootstrap with verifiedAt + gates → no bootstrap_missing item', async () => {

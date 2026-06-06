@@ -84,7 +84,7 @@ describe('runtime backend setup', () => {
         name: 'podman-machine-default',
       },
     })
-    expect(status.actions.map(action => action.id)).toContain('retry-detection')
+    expect(status.actions).toEqual([])
     expect(status.compatibilityModeLabel).toBe('Host-run compatibility mode')
   })
 
