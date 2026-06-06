@@ -263,7 +263,7 @@
       {
         label: 'Runtime',
         title: runtimeHealthLabel(runtime?.status, runtime?.health?.status),
-        detail: `${runtimeModeLabel(runtime?.migration?.mode)} · ${(memoryHealth?.active ?? 0)} active memories · ${(memoryHealth?.proposed ?? 0)} proposed.`,
+        detail: runtimeModeLabel(runtime?.migration?.mode),
         href: currentProjectHref('/settings/ready', activeProjectId),
         tone: runtimeTone(runtime?.status, runtime?.health?.status),
       },

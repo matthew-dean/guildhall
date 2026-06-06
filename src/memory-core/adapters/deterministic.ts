@@ -1,4 +1,5 @@
 import { readMemoryEvents } from '../data-access.js'
+import { evaluateMemoryCandidatePacketGuarantees } from '../guarantees.js'
 import type {
   GuildhallMemoryScope,
   MemoryCandidate,
@@ -31,7 +32,7 @@ export async function buildDeterministicCandidatePacket(input: {
     }
   }
 
-  return {
+  const packet: MemoryCandidatePacket = {
     scope: input.scope,
     purpose: input.purpose,
     generatedAt: (input.now ?? (() => new Date()))().toISOString(),
@@ -42,6 +43,16 @@ export async function buildDeterministicCandidatePacket(input: {
       adapter: 'deterministic',
       fallbackUsed: true,
       warnings: [],
+    },
+  }
+  const guarantees = evaluateMemoryCandidatePacketGuarantees(packet, { maxBytes: input.maxBytes })
+  return {
+    ...packet,
+    health: {
+      ...packet.health,
+      warnings: guarantees.warnings,
+      compactionStatus: guarantees.compactionStatus,
+      semanticValidity: guarantees.semanticValidity,
     },
   }
 }

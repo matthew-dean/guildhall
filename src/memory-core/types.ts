@@ -117,6 +117,8 @@ export interface MemoryCandidatePacket {
     semanticRecallEnabled?: boolean
     observationalMemoryEnabled?: boolean
     observationalProcessorReady?: boolean
+    compactionStatus?: 'active' | 'needs_attention'
+    semanticValidity?: 'valid' | 'needs_attention'
   }
 }
 

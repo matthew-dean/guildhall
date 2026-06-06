@@ -283,7 +283,7 @@ import {
   suggestedCapabilityMountForHostPath,
 } from './project-runtime-command.js'
 import { listMemoryRecords } from './memory-store.js'
-import { createMastraMemoryCoreAdapter, resolveMemoryPaths } from '@guildhall/memory-core'
+import { buildMemoryCoreCandidatePacket, resolveMemoryPaths } from '@guildhall/memory-core'
 import { readProjectRuntimeState } from './project-runtime-store.js'
 import {
   pauseProjectAvailability,
@@ -2782,8 +2782,8 @@ export function buildServeApp(opts: ServeOptions = {}): {
       semanticRecallEnabled: boolean
       observationalMemoryEnabled: boolean
       observationalProcessorReady: boolean
-      compactionStatus: 'active'
-      semanticValidity: 'valid'
+      compactionStatus: 'active' | 'needs_attention'
+      semanticValidity: 'valid' | 'needs_attention'
       warnings: string[]
       features: string[]
     }
@@ -2823,54 +2823,28 @@ export function buildServeApp(opts: ServeOptions = {}): {
       : process.env.GUILDHALL_MEMORY_OBSERVATIONAL === '0'
         ? false
         : memoryConfig?.observationalMemory ?? false
-    const memoryCore = memorySubstrate === 'deterministic'
-      ? {
-          adapter: 'deterministic' as const,
-          fallbackUsed: false,
-          storagePath: resolveMemoryPaths({ projectRoot: projectPath, scope: memoryCoreScope }).dbPath,
-          repoLocalWrites: [],
-          semanticRecallEnabled: false,
-          observationalMemoryEnabled: false,
-          observationalProcessorReady: false,
-          compactionStatus: 'active' as const,
-          semanticValidity: 'valid' as const,
-          warnings: [],
-          features: ['deterministic-events', 'semantic-recall-disabled', 'observational-memory-disabled'],
-        }
-      : await createMastraMemoryCoreAdapter({
-          projectRoot: projectPath,
-          scope: memoryCoreScope,
-          readOnly: true,
-          semanticRecall,
-          observationalMemory,
-        }).then(adapter => ({
-          adapter: 'mastra' as const,
-          fallbackUsed: false,
-          storagePath: adapter.health.storagePath,
-          repoLocalWrites: adapter.health.repoLocalWrites,
-          semanticRecallEnabled: semanticRecall,
-          observationalMemoryEnabled: adapter.health.observationalMemoryEnabled,
-          observationalProcessorReady: adapter.health.observationalProcessorReady,
-          compactionStatus: 'active' as const,
-          semanticValidity: 'valid' as const,
-          warnings: adapter.health.warnings,
-          features: adapter.health.features,
-        })).catch(err => {
-          const paths = resolveMemoryPaths({ projectRoot: projectPath, scope: memoryCoreScope })
-          return {
-            adapter: 'deterministic' as const,
-            fallbackUsed: true,
-            storagePath: paths.dbPath,
-            repoLocalWrites: [],
-            semanticRecallEnabled: false,
-            observationalMemoryEnabled: false,
-            observationalProcessorReady: false,
-            compactionStatus: 'active' as const,
-            semanticValidity: 'valid' as const,
-            warnings: [`Mastra memory-core unavailable; deterministic fallback used: ${err instanceof Error ? err.message : String(err)}`],
-            features: ['deterministic-events', 'semantic-recall-disabled', 'observational-memory-disabled'],
-          }
-        })
+    const memoryCorePacket = await buildMemoryCoreCandidatePacket({
+      projectRoot: projectPath,
+      scope: memoryCoreScope,
+      purpose: 'handoff',
+      maxBytes: 4096,
+      substrate: memorySubstrate,
+      semanticRecall,
+      observationalMemory,
+    })
+    const memoryCore = {
+      adapter: memoryCorePacket.health.adapter,
+      fallbackUsed: memorySubstrate === 'deterministic' ? false : memoryCorePacket.health.fallbackUsed,
+      storagePath: memoryCorePacket.health.storagePath ?? resolveMemoryPaths({ projectRoot: projectPath, scope: memoryCoreScope }).dbPath,
+      repoLocalWrites: memoryCorePacket.health.repoLocalWrites ?? [],
+      semanticRecallEnabled: memoryCorePacket.health.semanticRecallEnabled ?? false,
+      observationalMemoryEnabled: memoryCorePacket.health.observationalMemoryEnabled ?? false,
+      observationalProcessorReady: memoryCorePacket.health.observationalProcessorReady ?? false,
+      compactionStatus: memoryCorePacket.health.compactionStatus ?? 'needs_attention',
+      semanticValidity: memoryCorePacket.health.semanticValidity ?? 'needs_attention',
+      warnings: memoryCorePacket.health.warnings,
+      features: memoryCorePacket.health.features ?? ['deterministic-events'],
+    }
     return {
       total: records.length,
       active: count(record => record.status === 'active'),

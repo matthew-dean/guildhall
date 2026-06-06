@@ -1,5 +1,6 @@
 import { buildDeterministicCandidatePacket } from './adapters/deterministic.js'
 import { createMastraMemoryCoreAdapter } from './adapters/mastra.js'
+import { evaluateMemoryCandidatePacketGuarantees } from './guarantees.js'
 import type { GuildhallMemoryScope, MemoryCandidate, MemoryCandidatePacket } from './types.js'
 
 export async function buildMemoryCoreCandidatePacket(input: {
@@ -30,6 +31,11 @@ export async function buildMemoryCoreCandidatePacket(input: {
     })
     const deterministic = await buildDeterministicCandidatePacket(input)
     const candidates = deterministic.candidates.map(normalizeMastraCandidate)
+    const guarantees = evaluateMemoryCandidatePacketGuarantees({
+      ...deterministic,
+      candidates,
+      byteEstimate: byteEstimate({ candidates, omitted: deterministic.omitted }),
+    }, { maxBytes: input.maxBytes })
     return {
       ...deterministic,
       candidates,
@@ -37,13 +43,15 @@ export async function buildMemoryCoreCandidatePacket(input: {
       health: {
         adapter: 'mastra',
         fallbackUsed: false,
-        warnings: adapter.health.warnings,
+        warnings: [...adapter.health.warnings, ...guarantees.warnings],
         storagePath: adapter.health.storagePath,
         repoLocalWrites: adapter.health.repoLocalWrites,
         features: adapter.health.features,
         semanticRecallEnabled: adapter.health.features.includes('semantic-recall-enabled'),
         observationalMemoryEnabled: adapter.health.observationalMemoryEnabled,
         observationalProcessorReady: adapter.health.observationalProcessorReady,
+        compactionStatus: guarantees.compactionStatus,
+        semanticValidity: guarantees.semanticValidity,
       },
     }
   } catch (err) {

@@ -211,6 +211,7 @@ Touched contracts:
 - `WorkspaceYamlConfig.memory`;
 - project-local `.guildhall/config.yaml` `memory` overrides;
 - `MemoryCandidatePacket.health`;
+- memory-core packet guarantee validation;
 - context-debug memory packet shape;
 - `guildhall://project/memory`;
 - `/api/project.memoryHealth.memoryCore`;
@@ -240,6 +241,7 @@ Proof required:
 - deterministic fallback test;
 - context-debug memory-core source-ref test;
 - orchestrator progress-ingestion memory event test;
+- memory-core semantic-validity and byte-budget compaction tests;
 - MCP memory render test;
 - project API test;
 - Overview render test.
@@ -736,6 +738,10 @@ Implemented 2026-06-06:
   source-backed scoped events into Guildhall `MemoryCandidatePacket` candidates,
   preserves source refs, and falls back to deterministic packets with visible
   warnings when Mastra is unavailable.
+- Memory-core now evaluates packet guarantees from the packet itself:
+  compaction is `active` only when the packet is within its requested byte
+  budget, and semantic validity is `valid` only when included/omitted memory has
+  non-empty summaries plus source refs.
 - `memory.substrate = "deterministic"` and
   `GUILDHALL_MEMORY_SUBSTRATE=deterministic` provide the Mastra-substrate kill
   switch; deterministic compaction and semantic validation continue on that
@@ -834,7 +840,8 @@ Implemented 2026-06-06:
   storage without adding memory-core folders/files under project `.guildhall`.
 - Task details expose memory-core candidate source refs from context debug.
 - API health keeps semantic recall and Observational Memory readiness as
-  diagnostics, while UI reports the product guarantees: auto-compacted,
+  diagnostics, while UI reports the product guarantees from packet-backed
+  `compactionStatus` and `semanticValidity` fields: auto-compacted,
   semantically valid, source-backed memory with project repo protection.
 - UI/API status does not say migration or compaction is complete until the
   data-layer job is actually done.

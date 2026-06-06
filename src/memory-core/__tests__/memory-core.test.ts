@@ -10,6 +10,7 @@ import {
   auditProjectMemoryState,
   readMemoryEvents,
   buildMemoryCoreCandidatePacket,
+  evaluateMemoryCandidatePacketGuarantees,
   recordMemoryEvent,
   resolveMemoryPaths,
   scopeToMastraIds,
@@ -136,6 +137,8 @@ describe('memory-core', () => {
       adapter: 'deterministic',
       fallbackUsed: true,
       warnings: [],
+      compactionStatus: 'active',
+      semanticValidity: 'valid',
     })
     expect(packet.candidates).toHaveLength(1)
     expect(packet.candidates[0]?.sourceRefs).toEqual([
@@ -222,6 +225,8 @@ describe('memory-core', () => {
       semanticRecallEnabled: false,
       observationalMemoryEnabled: false,
       observationalProcessorReady: false,
+      compactionStatus: 'active',
+      semanticValidity: 'valid',
       repoLocalWrites: [],
     })
     expect(packet.health.features).toEqual(expect.arrayContaining([
@@ -253,6 +258,54 @@ describe('memory-core', () => {
     } finally {
       delete process.env.GUILDHALL_MEMORY_CORE_FORCE_MASTRA_FAILURE
     }
+  })
+
+  it('marks memory packets that lose source refs as semantically invalid', async () => {
+    const packet = await buildDeterministicCandidatePacket({
+      projectRoot,
+      scope: taskScope(),
+      purpose: 'next_worker_context',
+      maxBytes: 4096,
+    })
+    const guarantees = evaluateMemoryCandidatePacketGuarantees({
+      ...packet,
+      candidates: [{
+        id: 'bad-memory',
+        kind: 'deterministic_summary',
+        summary: 'Unsourced claim.',
+        relevance: 'high',
+        confidence: 'high',
+        freshness: 'current',
+        sourceRefs: [],
+        reasonForInclusion: 'test',
+        risks: [],
+      }],
+    })
+
+    expect(guarantees).toEqual({
+      compactionStatus: 'active',
+      semanticValidity: 'needs_attention',
+      warnings: ['Memory candidate bad-memory has no source refs.'],
+    })
+  })
+
+  it('marks memory packets over their requested byte budget as compaction needing attention', async () => {
+    const packet = await buildDeterministicCandidatePacket({
+      projectRoot,
+      scope: taskScope(),
+      purpose: 'next_worker_context',
+      maxBytes: 4096,
+    })
+    const guarantees = evaluateMemoryCandidatePacketGuarantees({
+      ...packet,
+      byteEstimate: 512,
+    }, { maxBytes: 128 })
+
+    expect(guarantees).toEqual({
+      compactionStatus: 'needs_attention',
+      semanticValidity: 'valid',
+      warnings: ['Memory packet exceeds byte budget: 512 > 128.'],
+    })
   })
 
   it('writes audit reports through memory-core data access', async () => {
