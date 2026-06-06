@@ -199,4 +199,19 @@ describe('project config local state guard', () => {
 
     expect(readProjectConfig(project).allowPaidProviderFallback).toBe(true)
   })
+
+  it('supports the memory-core substrate kill switch in project config', () => {
+    const project = join(TMP, 'memory-policy')
+    mkdirSync(project, { recursive: true })
+
+    expect(readProjectConfig(project).memory?.substrate).toBe('mastra')
+    expect(readProjectConfig(project).memory?.semanticRecall).toBe(false)
+
+    updateProjectConfig(project, { memory: { substrate: 'deterministic', semanticRecall: true } })
+
+    expect(readProjectConfig(project).memory).toEqual({
+      substrate: 'deterministic',
+      semanticRecall: true,
+    })
+  })
 })

@@ -7,6 +7,7 @@ import { buildContext } from '../context-builder.js'
 import { buildEffectiveMemoryPacket } from '../effective-memory-packet.js'
 import { recordMemoryObservation } from '../memory-store.js'
 import { writeContextDebugRecord } from '../context-observability.js'
+import { updateProjectConfig } from '@guildhall/config'
 import {
   acceptStructuralMap,
   draftStructuralMap,
@@ -265,14 +266,59 @@ describe('effective memory packet', () => {
     })
 
     expect(packet.memoryCorePacket?.health).toMatchObject({
-      adapter: 'deterministic',
-      fallbackUsed: true,
+      adapter: 'mastra',
+      fallbackUsed: false,
+      semanticRecallEnabled: false,
     })
     expect(packet.rendered).toContain('## Memory-Core Candidate Packet')
     expect(packet.rendered).toContain('Memory-core says Journey proof')
     expect(packet.evidenceRefs).toEqual([
       expect.objectContaining({ ref: 'PROGRESS.md#memory-core' }),
     ])
+  })
+
+  it('honors the project memory substrate kill switch', async () => {
+    updateProjectConfig(path.dirname(memoryDir), {
+      memory: { substrate: 'deterministic', semanticRecall: false },
+    })
+    await recordMemoryEvent({
+      projectRoot: path.dirname(memoryDir),
+      event: {
+        scope: {
+          kind: 'task_thread',
+          projectId: path.basename(path.dirname(memoryDir)),
+          taskId: 'task-memory',
+          agentRole: 'worker',
+          threadId: 'task-memory',
+        },
+        source: {
+          kind: 'progress',
+          ref: 'PROGRESS.md#deterministic-switch',
+          path: '.guildhall/PROGRESS.md',
+          capturedAt: '2026-06-06T12:00:00.000Z',
+        },
+        content: {
+          summary: 'Deterministic substrate should remain available.',
+        },
+        metadata: {
+          projectId: path.basename(path.dirname(memoryDir)),
+          taskId: 'task-memory',
+          retention: 'task_lifecycle',
+          risk: 'low',
+        },
+      },
+    })
+
+    const packet = await buildEffectiveMemoryPacket({
+      memoryDir,
+      task: task(),
+    })
+
+    expect(packet.memoryCorePacket?.health).toMatchObject({
+      adapter: 'deterministic',
+      fallbackUsed: true,
+    })
+    expect(packet.rendered).toContain('Deterministic substrate should remain available')
   })
 
   it('injects active memory into buildContext and keeps proposed memory inert', async () => {

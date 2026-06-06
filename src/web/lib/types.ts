@@ -947,6 +947,15 @@ export interface ProjectMemoryHealth {
   project?: number
   userGlobal?: number
   guildhallProduct?: number
+  memoryCore?: {
+    adapter: 'mastra' | 'deterministic'
+    fallbackUsed: boolean
+    storagePath?: string
+    repoLocalWrites?: string[]
+    semanticRecallEnabled?: boolean
+    warnings?: string[]
+    features?: string[]
+  }
   recentUse?: Array<{ taskId?: string; included?: number; withheld?: number; at?: string }>
 }
 

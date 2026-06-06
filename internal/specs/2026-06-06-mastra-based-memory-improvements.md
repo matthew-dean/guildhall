@@ -197,6 +197,110 @@ Rollback/revert:
 - keep system-local DB as inert audit data until cleanup;
 - never restore bulky `.guildhall` files into project repos.
 
+## Contract Touch Decision
+
+Work id: `mastra-memory-core-runtime-integration`.
+
+Touched contracts:
+
+- `WorkspaceYamlConfig.memory`;
+- project-local `.guildhall/config.yaml` `memory` overrides;
+- `MemoryCandidatePacket.health`;
+- `guildhall://project/memory`;
+- `/api/project.memoryHealth.memoryCore`;
+- Overview memory-health presentation.
+
+Contracts considered but not touched:
+
+- legacy `memory-store` record schema;
+- task queue schema;
+- project migration ledger;
+- external-agent memory bridge records.
+
+Required follow-up:
+
+- none for schema migration;
+- semantic recall remains disabled unless `memory.semanticRecall` or
+  `GUILDHALL_MEMORY_SEMANTIC_RECALL` explicitly enables it.
+
+Proof required:
+
+- config kill-switch test;
+- Mastra packet/default test;
+- deterministic fallback test;
+- MCP memory render test;
+- project API test;
+- Overview render test.
+
+Proof provided:
+
+- focused Vitest coverage for project config, memory-core, effective memory
+  packet, MCP project-reader, `/api/project`, and ProjectOverviewTab.
+
+Waivers:
+
+- no owner opt-in prompt is needed because the default stores only system-local
+  memory-core data and reports `repoLocalWrites: []`;
+- project-local storage remains rejected.
+
+Owner-review items:
+
+- none.
+
+Apply/revert behavior:
+
+- setting `memory.substrate = "deterministic"` or
+  `GUILDHALL_MEMORY_SUBSTRATE=deterministic` disables Mastra without deleting
+  recorded memory events;
+- removing the config returns to the Mastra default.
+
+## Schema Migration Decision
+
+Persisted schema touched:
+
+- workspace/project config gains optional `memory.substrate` and
+  `memory.semanticRecall`.
+
+Scope:
+
+- config-only runtime behavior switch;
+- no project task/history data is rewritten.
+
+Change class:
+
+- backward-compatible optional field with defaults.
+
+Existing data impact:
+
+- existing configs parse with `mastra` and `semanticRecall: false` defaults.
+
+Migration id:
+
+- none required.
+
+Safety:
+
+- project-local `.guildhall/config.yaml` remains ignored/local;
+- shared `guildhall.yaml` can opt into the same memory block when desired.
+
+Compatibility reader:
+
+- `readProjectConfig` and workspace schema defaults.
+
+Fixtures/tests:
+
+- project-config kill-switch test;
+- effective-memory packet deterministic substrate test.
+
+Owner-facing plan text:
+
+- users can disable Mastra with `memory.substrate = "deterministic"`;
+- semantic recall stays off by default.
+
+Rollback/revert behavior:
+
+- remove the config block or set deterministic.
+
 ## Architecture
 
 ```text
@@ -583,13 +687,18 @@ Slice 4: compaction and packets.
 - normalize Mastra output into `MemoryCandidatePacket`;
 - prove source refs survive.
 
-Partially implemented 2026-06-06:
+Implemented 2026-06-06:
 
 - Deterministic packet builder is live and included in effective memory packets.
 - Runtime context builders can now render memory-core candidate packets without
   replacing accepted legacy memory records.
-- Mastra Observational Memory orchestration remains the next implementation
-  step; semantic recall remains disabled.
+- `buildMemoryCoreCandidatePacket` now instantiates Mastra by default, normalizes
+  source-backed scoped events into Guildhall `MemoryCandidatePacket` candidates,
+  preserves source refs, and falls back to deterministic packets with visible
+  warnings when Mastra is unavailable.
+- `memory.substrate = "deterministic"` and
+  `GUILDHALL_MEMORY_SUBSTRATE=deterministic` provide the kill switch; semantic
+  recall remains disabled by default.
 
 Slice 5: migration/audit.
 
@@ -620,13 +729,22 @@ Slice 6: runtime/API/UI integration.
 - project/task UI shows memory health and compaction progress;
 - migration apply modal blocks until data-layer work is complete.
 
-Partially implemented 2026-06-06:
+Implemented 2026-06-06:
 
 - `buildEffectiveMemoryPacket` includes memory-core deterministic packet
   candidates and evidence refs.
 - `guildhall://project/memory` renders memory-core storage path, event path,
   adapter/fallback status, repo-local write status, and candidate preview.
-- UI memory health and migration-modal progress remain open.
+- `buildEffectiveMemoryPacket` and `guildhall://project/memory` now use the
+  Mastra/default memory-core packet builder instead of deterministic-only
+  packets.
+- `/api/project` returns `memoryHealth.memoryCore` with adapter, fallback,
+  storage path, repo-local writes, semantic recall status, warnings, and
+  features.
+- Overview memory health shows the memory-core substrate, semantic recall
+  on/off state, and repo-write status from the shared API payload.
+- Migration-modal progress was already fixed in the prior required-migration
+  slice; no optimistic completion text remains in this spec's scope.
 
 Slice 7: semantic recall gate.
 
@@ -634,6 +752,15 @@ Slice 7: semantic recall gate.
 - run fixture quality and latency tests;
 - enable only if it beats deterministic and OM packets without losing source
   refs or blowing budgets.
+
+Implemented 2026-06-06:
+
+- `memory.semanticRecall` and `GUILDHALL_MEMORY_SEMANTIC_RECALL` are wired, but
+  default to disabled.
+- Memory-core health exposes `semanticRecallEnabled` and feature flags so UI/API
+  and MCP surfaces can prove semantic recall is off on the default path.
+- No vector/semantic recall path is enabled as product behavior until a later
+  quality/latency gate beats deterministic packets while preserving source refs.
 
 ## Acceptance Criteria
 

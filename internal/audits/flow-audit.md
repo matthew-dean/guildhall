@@ -1909,6 +1909,21 @@ follow-up here with its evidence instead of deleting it.
   also kept `pnpm memory:mastra:value-gate` at `decision: "adopt"` after fixing
   the older prototype gate to allow machine-local `~/.guildhall/data` while
   still rejecting project-local `.guildhall` storage.
+- [x] Complete the Mastra memory-core packet/runtime/UI integration slice.
+  `buildMemoryCoreCandidatePacket` now uses Mastra/libSQL by default, normalizes
+  scoped source-backed events into Guildhall candidate packets, preserves source
+  refs, and falls back deterministically with a visible warning when Mastra is
+  unavailable. The config kill switch is
+  `memory.substrate = "deterministic"` or
+  `GUILDHALL_MEMORY_SUBSTRATE=deterministic`; semantic recall is wired but
+  disabled by default through `memory.semanticRecall: false` /
+  `GUILDHALL_MEMORY_SEMANTIC_RECALL=0`. `/api/project` now exposes
+  `memoryHealth.memoryCore`, and Overview renders substrate, semantic on/off,
+  and repo-write status from that shared payload. Verified on 2026-06-06 with
+  focused memory/config/API/UI tests, `pnpm lint:data-layer`,
+  `pnpm lint:contracts`, `pnpm typecheck`, `pnpm build`, full
+  `pnpm test -- --run --reporter=dot`, and `pnpm memory:mastra:value-gate`
+  returning `adopt`.
 - [x] Run a multi-agent 0.8 user-testing pass on the documented Narrative
   Harness project and repair the bounded regressions found live. The pass
   covered migration/runtime authority, workspace-intake depth, and

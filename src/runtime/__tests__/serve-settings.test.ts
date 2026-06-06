@@ -2787,6 +2787,14 @@ describe('GET /api/project — bootstrap status', () => {
         items?: Array<{ kind?: string; taskId?: string }>
         blockers?: { bootstrap?: boolean; workspaceImport?: boolean }
       }
+      memoryHealth?: {
+        memoryCore?: {
+          adapter?: string
+          fallbackUsed?: boolean
+          semanticRecallEnabled?: boolean
+          repoLocalWrites?: string[]
+        }
+      }
     }
 
     const inboxRes = await app.fetch(new Request(scoped('/api/project/inbox')))
@@ -2798,6 +2806,12 @@ describe('GET /api/project — bootstrap status', () => {
 
     expect(projectBody.inbox).toEqual(inboxBody)
     expect(projectBody.inbox?.items?.some(item => item.kind === 'spec_approval' && item.taskId === 'task-1')).toBe(false)
+    expect(projectBody.memoryHealth?.memoryCore).toMatchObject({
+      adapter: 'mastra',
+      fallbackUsed: false,
+      semanticRecallEnabled: false,
+      repoLocalWrites: [],
+    })
   })
 
   it('marks dynamic project payloads as non-cacheable', async () => {

@@ -111,6 +111,10 @@ export interface MemoryCandidatePacket {
     adapter: 'mastra' | 'deterministic'
     fallbackUsed: boolean
     warnings: string[]
+    storagePath?: string
+    repoLocalWrites?: string[]
+    features?: string[]
+    semanticRecallEnabled?: boolean
   }
 }
 

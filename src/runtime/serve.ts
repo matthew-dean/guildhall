@@ -283,6 +283,7 @@ import {
   suggestedCapabilityMountForHostPath,
 } from './project-runtime-command.js'
 import { listMemoryRecords } from './memory-store.js'
+import { createMastraMemoryCoreAdapter, resolveMemoryPaths } from '@guildhall/memory-core'
 import { readProjectRuntimeState } from './project-runtime-store.js'
 import {
   pauseProjectAvailability,
@@ -2773,6 +2774,15 @@ export function buildServeApp(opts: ServeOptions = {}): {
     project: number
     userGlobal: number
     guildhallProduct: number
+    memoryCore: {
+      adapter: 'mastra' | 'deterministic'
+      fallbackUsed: boolean
+      storagePath?: string
+      repoLocalWrites: string[]
+      semanticRecallEnabled: boolean
+      warnings: string[]
+      features: string[]
+    }
     recentUse: Array<{ taskId: string; included: number; withheld: number; at: string }>
   }> {
     const memoryDir = getProjectStateDir(projectPath)
@@ -2791,6 +2801,54 @@ export function buildServeApp(opts: ServeOptions = {}): {
         at: latest.at,
       })
     }
+    const projectId = basename(projectPath) || 'project'
+    const memoryCoreScope = { kind: 'project' as const, projectId }
+    const memoryConfig = readProjectConfig(projectPath).memory
+    const memorySubstrate = process.env.GUILDHALL_MEMORY_SUBSTRATE === 'deterministic'
+      ? 'deterministic'
+      : process.env.GUILDHALL_MEMORY_SUBSTRATE === 'mastra'
+        ? 'mastra'
+        : memoryConfig?.substrate ?? 'mastra'
+    const semanticRecall = process.env.GUILDHALL_MEMORY_SEMANTIC_RECALL === '1'
+      ? true
+      : process.env.GUILDHALL_MEMORY_SEMANTIC_RECALL === '0'
+        ? false
+        : memoryConfig?.semanticRecall ?? false
+    const memoryCore = memorySubstrate === 'deterministic'
+      ? {
+          adapter: 'deterministic' as const,
+          fallbackUsed: false,
+          storagePath: resolveMemoryPaths({ projectRoot: projectPath, scope: memoryCoreScope }).dbPath,
+          repoLocalWrites: [],
+          semanticRecallEnabled: false,
+          warnings: [],
+          features: ['deterministic-events', 'semantic-recall-disabled'],
+        }
+      : await createMastraMemoryCoreAdapter({
+          projectRoot: projectPath,
+          scope: memoryCoreScope,
+          readOnly: true,
+          semanticRecall,
+        }).then(adapter => ({
+          adapter: 'mastra' as const,
+          fallbackUsed: false,
+          storagePath: adapter.health.storagePath,
+          repoLocalWrites: adapter.health.repoLocalWrites,
+          semanticRecallEnabled: semanticRecall,
+          warnings: adapter.health.warnings,
+          features: adapter.health.features,
+        })).catch(err => {
+          const paths = resolveMemoryPaths({ projectRoot: projectPath, scope: memoryCoreScope })
+          return {
+            adapter: 'deterministic' as const,
+            fallbackUsed: true,
+            storagePath: paths.dbPath,
+            repoLocalWrites: [],
+            semanticRecallEnabled: false,
+            warnings: [`Mastra memory-core unavailable; deterministic fallback used: ${err instanceof Error ? err.message : String(err)}`],
+            features: ['deterministic-events', 'semantic-recall-disabled'],
+          }
+        })
     return {
       total: records.length,
       active: count(record => record.status === 'active'),
@@ -2800,6 +2858,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
       project: count(record => record.scope === 'project'),
       userGlobal: count(record => record.scope === 'user_global'),
       guildhallProduct: count(record => record.scope === 'guildhall_product'),
+      memoryCore,
       recentUse: recentUse
         .sort((left, right) => right.at.localeCompare(left.at))
         .slice(0, 5),

@@ -4,7 +4,7 @@ import path from 'node:path'
 import { summarizeDesignSystem, type Task } from '@guildhall/core'
 import { loadCodebaseMap, loadCodebaseMapStaleState } from '@guildhall/corpus-map'
 import {
-  buildDeterministicCandidatePacket,
+  buildMemoryCoreCandidatePacket,
   resolveMemoryPaths,
 } from '@guildhall/memory-core'
 import {
@@ -701,7 +701,7 @@ async function renderMemory(ctx: GuildhallMcpContext): Promise<string> {
     projectRoot: ctx.projectRoot,
     scope: memoryCoreScope,
   })
-  const memoryCorePacket = await buildDeterministicCandidatePacket({
+  const memoryCorePacket = await buildMemoryCoreCandidatePacket({
     projectRoot: ctx.projectRoot,
     scope: memoryCoreScope,
     purpose: firstTask ? 'next_worker_context' : 'handoff',

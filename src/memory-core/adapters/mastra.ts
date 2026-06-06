@@ -26,6 +26,7 @@ export async function createMastraMemoryCoreAdapter(input: {
   projectRoot: string
   scope: GuildhallMemoryScope
   readOnly?: boolean
+  semanticRecall?: boolean
 }): Promise<MastraMemoryCoreAdapter> {
   const { Memory, LibSQLStore, versions } = loadMastraRuntime()
   const paths = resolveMemoryPaths({ projectRoot: input.projectRoot, scope: input.scope })
@@ -42,7 +43,7 @@ export async function createMastraMemoryCoreAdapter(input: {
     options: {
       lastMessages: input.readOnly ? 10 : 20,
       readOnly: input.readOnly ?? false,
-      semanticRecall: false,
+      semanticRecall: input.semanticRecall ?? false,
       observationalMemory: false,
     },
   })
@@ -61,7 +62,7 @@ export async function createMastraMemoryCoreAdapter(input: {
       'libsql-storage',
       'thread-resource-scope',
       input.readOnly ? 'read-only-mode' : 'write-mode',
-      'semantic-recall-disabled',
+      input.semanticRecall ? 'semantic-recall-enabled' : 'semantic-recall-disabled',
     ],
     scope,
     packages: versions,

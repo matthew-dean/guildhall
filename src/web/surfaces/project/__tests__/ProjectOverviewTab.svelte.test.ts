@@ -645,6 +645,12 @@ describe('ProjectOverviewTab', () => {
           active: 3,
           proposed: 2,
           used: 1,
+          memoryCore: {
+            adapter: 'mastra',
+            fallbackUsed: false,
+            semanticRecallEnabled: false,
+            repoLocalWrites: [],
+          },
         },
         tasks: [
           {
@@ -675,6 +681,9 @@ describe('ProjectOverviewTab', () => {
     expect(screen.getAllByText('Runtime stopped').length).toBeGreaterThan(0)
     expect(screen.getAllByText(/Compatibility mode/).length).toBeGreaterThan(0)
     expect(screen.getAllByText('Memory health').length).toBeGreaterThan(0)
+    expect(screen.getAllByText(/Mastra substrate/).length).toBeGreaterThan(0)
+    expect(screen.getAllByText(/semantic off/).length).toBeGreaterThan(0)
+    expect(screen.getAllByText(/no repo writes/).length).toBeGreaterThan(0)
     expect(screen.getAllByText(/3 active/).length).toBeGreaterThan(0)
     expect(screen.getByText('Primary proof paths')).toBeInTheDocument()
     expect(screen.getAllByText('Verify runtime card').length).toBeGreaterThan(0)

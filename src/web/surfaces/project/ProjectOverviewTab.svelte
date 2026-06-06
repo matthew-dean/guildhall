@@ -22,7 +22,7 @@
   import { nav, path } from '../../lib/nav.svelte.js'
   import { currentProjectHref, currentTaskHref, projectActionHref, projectFetch } from '../../lib/project-routes.js'
   import { inboxItemKey, type InboxItem } from '../../lib/inbox-item-key.js'
-  import type { EventEnvelope, ProjectDetail, Task } from '../../lib/types.js'
+  import type { EventEnvelope, ProjectDetail, ProjectMemoryHealth, Task } from '../../lib/types.js'
   import { hasCurrentGitUnavailableStory, type ProjectActivityLine } from '../../lib/project-activity.js'
   import { isGitUnavailableMessage } from '../../lib/runtime-message.js'
   import { activeEscalations } from '../../lib/escalation.js'
@@ -233,8 +233,8 @@
     if (memoryHealth) {
       items.push({
         label: 'Memory health',
-        detail: `${memoryHealth.active ?? 0} active, ${memoryHealth.proposed ?? 0} proposed, ${memoryHealth.used ?? 0} recently used.`,
-        tone: (memoryHealth.active ?? 0) > 0 ? 'ok' : (memoryHealth.proposed ?? 0) > 0 ? 'warn' : 'neutral',
+        detail: `${memoryCoreLabel(memoryHealth.memoryCore)} · ${memoryHealth.active ?? 0} active, ${memoryHealth.proposed ?? 0} proposed.`,
+        tone: memoryCoreTone(memoryHealth.memoryCore, memoryHealth),
         href: currentProjectHref('/settings/learning', activeProjectId),
       })
     }
@@ -750,6 +750,22 @@
     return 'Runtime mode unknown'
   }
 
+  function memoryCoreLabel(memoryCore: ProjectMemoryHealth['memoryCore'] | undefined): string {
+    if (!memoryCore) return 'Memory-core unknown'
+    const substrate = memoryCore.adapter === 'mastra' && !memoryCore.fallbackUsed ? 'Mastra substrate' : 'Deterministic fallback'
+    const recall = memoryCore.semanticRecallEnabled ? 'semantic on' : 'semantic off'
+    const writes = (memoryCore.repoLocalWrites?.length ?? 0) === 0 ? 'no repo writes' : 'repo writes'
+    return `${substrate} · ${recall} · ${writes}`
+  }
+
+  function memoryCoreTone(memoryCore: ProjectMemoryHealth['memoryCore'] | undefined, health: ProjectMemoryHealth | null | undefined): Tone {
+    if ((memoryCore?.repoLocalWrites?.length ?? 0) > 0) return 'danger'
+    if (memoryCore?.fallbackUsed || (memoryCore?.warnings?.length ?? 0) > 0) return 'warn'
+    if ((health?.active ?? 0) > 0 || memoryCore?.adapter === 'mastra') return 'ok'
+    if ((health?.proposed ?? 0) > 0) return 'warn'
+    return 'neutral'
+  }
+
   function countLabel(value: number, singular: string): string {
     return `${value} ${value === 1 ? singular : `${singular}s`}`
   }
@@ -987,12 +1003,12 @@
             <span>{runtimeModeLabel(runtime?.migration?.mode)}{#if runtime?.lastActivityAt} · active {formatDate(runtime.lastActivityAt)}{/if}</span>
           </div>
         </UtilityPanel>
-        <UtilityPanel as="button" interactive className="signal-row" tone={(memoryHealth?.active ?? 0) > 0 ? 'ok' : (memoryHealth?.proposed ?? 0) > 0 ? 'warn' : 'neutral'} onclick={() => go(currentProjectHref('/settings/learning', activeProjectId))}>
-          <StatusDot tone={(memoryHealth?.active ?? 0) > 0 ? 'ok' : (memoryHealth?.proposed ?? 0) > 0 ? 'warn' : 'idle'} size="sm" />
+        <UtilityPanel as="button" interactive className="signal-row" tone={memoryCoreTone(memoryHealth?.memoryCore, memoryHealth)} onclick={() => go(currentProjectHref('/settings/learning', activeProjectId))}>
+          <StatusDot tone={memoryCoreTone(memoryHealth?.memoryCore, memoryHealth) === 'ok' ? 'ok' : memoryCoreTone(memoryHealth?.memoryCore, memoryHealth) === 'danger' ? 'danger' : memoryCoreTone(memoryHealth?.memoryCore, memoryHealth) === 'warn' ? 'warn' : 'idle'} size="sm" />
           <div>
             <strong>Memory health</strong>
             <span>
-              {memoryHealth?.active ?? 0} active · {memoryHealth?.proposed ?? 0} proposed · {memoryHealth?.used ?? 0} used
+              {memoryCoreLabel(memoryHealth?.memoryCore)} · {memoryHealth?.active ?? 0} active · {memoryHealth?.proposed ?? 0} proposed
             </span>
           </div>
         </UtilityPanel>

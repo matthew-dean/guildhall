@@ -126,6 +126,12 @@ export const ProjectGuildhallConfig = z.object({
    */
   allowPaidProviderFallback: z.boolean().optional(),
 
+  /** Memory-core substrate and semantic recall overrides for this checkout. */
+  memory: z.object({
+    substrate: z.enum(['mastra', 'deterministic']).default('mastra'),
+    semanticRecall: z.boolean().default(false),
+  }).default({}),
+
   /**
    * Project-specific override for the machine-wide preferred provider.
    * Omit in normal use so the global default applies across projects.

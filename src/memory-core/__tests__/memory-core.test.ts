@@ -9,6 +9,7 @@ import {
   createMastraMemoryCoreAdapter,
   auditProjectMemoryState,
   readMemoryEvents,
+  buildMemoryCoreCandidatePacket,
   recordMemoryEvent,
   resolveMemoryPaths,
   scopeToMastraIds,
@@ -165,6 +166,73 @@ describe('memory-core', () => {
     expect(adapter.health.scope).toEqual(scopeToMastraIds(taskScope()))
     expect(existsSync(adapter.health.storagePath)).toBe(true)
     expect(await fs.readdir(path.join(projectRoot, '.guildhall'))).toEqual([])
+  })
+
+  it('builds Mastra-normalized packets by default while keeping source refs and semantic recall disabled', async () => {
+    await recordMemoryEvent({
+      projectRoot,
+      event: {
+        scope: taskScope(),
+        source: {
+          kind: 'progress',
+          ref: 'PROGRESS.md#mastra-packet',
+          path: '.guildhall/PROGRESS.md',
+          capturedAt: '2026-06-06T12:01:00.000Z',
+        },
+        content: {
+          summary: 'Mastra packet should preserve source-backed progress.',
+        },
+        metadata: {
+          projectId: 'looma-knit',
+          taskId: 'context-menu',
+          retention: 'task_lifecycle',
+          risk: 'low',
+        },
+      },
+    })
+
+    const packet = await buildMemoryCoreCandidatePacket({
+      projectRoot,
+      scope: taskScope(),
+      purpose: 'next_worker_context',
+      maxBytes: 4096,
+    })
+
+    expect(packet.health).toMatchObject({
+      adapter: 'mastra',
+      fallbackUsed: false,
+      semanticRecallEnabled: false,
+      repoLocalWrites: [],
+    })
+    expect(packet.health.features).toEqual(expect.arrayContaining([
+      'libsql-storage',
+      'semantic-recall-disabled',
+    ]))
+    expect(packet.candidates[0]).toEqual(expect.objectContaining({
+      kind: 'observation',
+      summary: 'Mastra packet should preserve source-backed progress.',
+    }))
+    expect(packet.candidates[0]?.sourceRefs).toEqual([
+      expect.objectContaining({ uri: 'PROGRESS.md#mastra-packet' }),
+    ])
+  })
+
+  it('falls back to deterministic packets with a visible warning when Mastra is unavailable', async () => {
+    process.env.GUILDHALL_MEMORY_CORE_FORCE_MASTRA_FAILURE = '1'
+    try {
+      const packet = await buildMemoryCoreCandidatePacket({
+        projectRoot,
+        scope: taskScope(),
+        purpose: 'next_worker_context',
+        maxBytes: 4096,
+      })
+
+      expect(packet.health.adapter).toBe('deterministic')
+      expect(packet.health.fallbackUsed).toBe(true)
+      expect(packet.health.warnings.join('\n')).toContain('forced Mastra memory-core failure')
+    } finally {
+      delete process.env.GUILDHALL_MEMORY_CORE_FORCE_MASTRA_FAILURE
+    }
   })
 
   it('writes audit reports through memory-core data access', async () => {

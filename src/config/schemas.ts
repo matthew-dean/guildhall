@@ -67,6 +67,11 @@ const ProjectSkillsConfig = z.object({
   }).default({}),
 }).default({})
 
+const MemoryConfig = z.object({
+  substrate: z.enum(['mastra', 'deterministic']).default('mastra'),
+  semanticRecall: z.boolean().default(false),
+}).default({})
+
 const BootstrapConfig = z.object({
   commands: z.array(z.string()).default([]),
   successGates: z.array(z.string()).default([]),
@@ -248,6 +253,10 @@ export const WorkspaceYamlConfig = z.object({
   // available, but project-specific procedural memory must be explicitly
   // enabled by the workspace before it enters agent context.
   skills: ProjectSkillsConfig.optional(),
+
+  // Memory-core substrate selection. Mastra is the default persistent substrate;
+  // deterministic keeps the data-layer event path available as the kill switch.
+  memory: MemoryConfig.optional(),
 
   // FR-24: runtime-resource isolation. Consumed when the project-scope lever
   // `runtime_isolation` is set to `slot_allocation`. All fields optional — the

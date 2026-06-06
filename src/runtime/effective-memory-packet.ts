@@ -1,8 +1,9 @@
 import type { Task } from '@guildhall/core'
+import { readProjectConfig } from '@guildhall/config'
 import { inferProjectRootFromMemoryDir } from '@guildhall/sessions'
 import path from 'node:path'
 import {
-  buildDeterministicCandidatePacket,
+  buildMemoryCoreCandidatePacket,
   type MemoryCandidatePacket,
 } from '@guildhall/memory-core'
 import {
@@ -46,6 +47,7 @@ export async function buildEffectiveMemoryPacket(input: {
   const taskKinds = inferTaskKinds(queryText)
   const fileAreas = fileAreaHints(queryText)
   const projectRoot = inferProjectRootFromMemoryDir(input.memoryDir)
+  const memoryConfig = readProjectConfig(projectRoot).memory
   const structuralScopeIds = structuralScopesForTask(input.memoryDir, input.task, fileAreas)
   const all = await listMemoryRecords({ memoryDir: input.memoryDir })
   const relevant = all
@@ -71,7 +73,7 @@ export async function buildEffectiveMemoryPacket(input: {
       summary: record.summary,
     }))
   const evidenceRefs = included.flatMap((record) => record.evidenceRefs)
-  const memoryCorePacket = await buildDeterministicCandidatePacket({
+  const memoryCorePacket = await buildMemoryCoreCandidatePacket({
     projectRoot,
     scope: {
       kind: 'task_thread',
@@ -82,6 +84,8 @@ export async function buildEffectiveMemoryPacket(input: {
     },
     purpose: 'next_worker_context',
     maxBytes: 4096,
+    substrate: memoryConfig?.substrate,
+    semanticRecall: memoryConfig?.semanticRecall,
   }).catch(() => undefined)
   const memoryCoreEvidenceRefs = (memoryCorePacket?.candidates ?? [])
     .flatMap(candidate => candidate.sourceRefs)
