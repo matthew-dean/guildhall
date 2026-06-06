@@ -1898,6 +1898,17 @@ follow-up here with its evidence instead of deleting it.
   verifies required runtime tools plus DNS and command-log persistence, and
   records an accepted runtime-backed migration with rollback state while keeping
   host-run compatibility available until the owner accepts the migration.
+- [x] Add a Mastra memory-core migration/audit command that respects the data
+  layer. `auditProjectMemoryState` reads project-local `.guildhall` state
+  through memory-core, writes hash-backed system-local memory events and audit
+  reports only on `--apply`, and reports `Repo-local writes: none`. The CLI
+  path is `guildhall memory mastra-audit [--apply] [path]`, with
+  `pnpm memory:mastra:audit` as the package shortcut. Fixture proof on
+  2026-06-06 showed unchanged `.guildhall` files before/after apply and
+  system-local event/report files under `GUILDHALL_DATA_DIR`; full verification
+  also kept `pnpm memory:mastra:value-gate` at `decision: "adopt"` after fixing
+  the older prototype gate to allow machine-local `~/.guildhall/data` while
+  still rejecting project-local `.guildhall` storage.
 - [x] Run a multi-agent 0.8 user-testing pass on the documented Narrative
   Harness project and repair the bounded regressions found live. The pass
   covered migration/runtime authority, workspace-intake depth, and

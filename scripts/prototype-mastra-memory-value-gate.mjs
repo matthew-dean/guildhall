@@ -103,6 +103,8 @@ function loadMastraRuntime() {
 
 export function evaluateMastraValueGate(input = {}) {
   const storageRoot = input.storageRoot ?? systemLocalPrototypeRoot()
+  const fixtures = input.fixtures ?? prototypeFixtures
+  const storagePath = path.join(storageRoot, 'memory', mastraPrototypeDefaults.databaseFile)
   const baselinePackets = input.baselinePackets ?? baselinePacketsFor(input.fixtures ?? prototypeFixtures)
   const mastraPackets = input.mastraPackets ?? simulatedMastraPacketsFor(baselinePackets)
   const comparisons = comparePackets(baselinePackets, mastraPackets)
@@ -111,7 +113,7 @@ export function evaluateMastraValueGate(input = {}) {
   const repoLocalWrites = []
   const gates = {
     actuallyIntegrated: mastraPrototypeDefaults.requiredPackages.every((name) => Boolean(packageVersion(name))),
-    systemLocalStorage: !path.join(storageRoot, 'memory', mastraPrototypeDefaults.databaseFile).includes(`${path.sep}.guildhall${path.sep}`),
+    systemLocalStorage: !isRepoLocalGuildhallPath(storagePath, fixtures),
     substrateOnly: true,
     sourceRefsPreserved,
     betterThanBaseline,
@@ -125,7 +127,7 @@ export function evaluateMastraValueGate(input = {}) {
       ? 'Mastra beats deterministic baseline on measured packet value while preserving Guildhall storage and policy boundaries.'
       : 'Mastra does not beat deterministic baseline or misses one required substrate gate.',
     storage: {
-      defaultPath: path.join(storageRoot, 'memory', mastraPrototypeDefaults.databaseFile),
+      defaultPath: storagePath,
       repoLocalWrites,
     },
     gates,
@@ -133,6 +135,22 @@ export function evaluateMastraValueGate(input = {}) {
     baselinePackets,
     mastraPackets,
   }
+}
+
+function isRepoLocalGuildhallPath(targetPath, fixtures = []) {
+  const repoLocalRoots = [
+    path.join(repoRoot, '.guildhall'),
+    ...fixtures
+      .map((fixture) => fixture.projectRoot)
+      .filter((projectRoot) => typeof projectRoot === 'string' && projectRoot.length > 0)
+      .map((projectRoot) => path.join(projectRoot, '.guildhall')),
+  ]
+  return repoLocalRoots.some((root) => isInsidePath(targetPath, root))
+}
+
+function isInsidePath(targetPath, rootPath) {
+  const relative = path.relative(path.resolve(rootPath), path.resolve(targetPath))
+  return relative === '' || (!relative.startsWith('..') && !path.isAbsolute(relative))
 }
 
 function comparePackets(baselinePackets, mastraPackets) {

@@ -46,6 +46,7 @@ export interface RecordMemoryEventInput {
     kind: MemorySourceKind
     ref: string
     path?: string
+    hash?: string
     capturedAt: string
   }
   content: {
@@ -139,9 +140,36 @@ export interface MemoryAuditReport {
   storagePath: string
   repoLocalWrites: string[]
   warnings: string[]
+  files?: MemoryProjectFileAudit[]
+  bytesBefore?: number
+  bytesAfter?: number
+  eventsWritten?: number
 }
 
 export interface MemoryAuditReportRef {
   path: string
   repoLocalWrites: string[]
+}
+
+export interface MemoryProjectFileAudit {
+  relativePath: string
+  kind: 'task_queue' | 'progress_log' | 'memory_file' | 'generated_map' | 'other'
+  bytes: number
+  hash: string
+  summary: string
+  taskCount?: number
+  progressBlocks?: number
+}
+
+export interface ProjectMemoryAuditResult {
+  projectRoot: string
+  stateDir: string
+  memoryDir: string
+  dryRun: boolean
+  files: MemoryProjectFileAudit[]
+  bytesBefore: number
+  bytesAfter: number
+  eventsWritten: number
+  repoLocalWrites: string[]
+  auditReportPath: string | null
 }

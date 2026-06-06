@@ -7,6 +7,7 @@ import path from 'node:path'
 import {
   buildDeterministicCandidatePacket,
   createMastraMemoryCoreAdapter,
+  auditProjectMemoryState,
   readMemoryEvents,
   recordMemoryEvent,
   resolveMemoryPaths,
@@ -182,5 +183,70 @@ describe('memory-core', () => {
     expect(report.repoLocalWrites).toEqual([])
     const raw = await fs.readFile(report.path, 'utf8')
     expect(raw).toContain('semantic recall disabled')
+  })
+
+  it('audits project-local .guildhall bloat into system-local memory events without mutating the repo', async () => {
+    const stateDir = path.join(projectRoot, '.guildhall')
+    await fs.writeFile(path.join(stateDir, 'TASKS.json'), JSON.stringify({
+      version: 1,
+      tasks: [
+        { id: 'task-a', status: 'done', title: 'Done task', notes: ['a', 'b'] },
+        { id: 'task-b', status: 'blocked', title: 'Blocked task', reviewVerdicts: [{ ok: false }] },
+      ],
+    }, null, 2), 'utf8')
+    await fs.writeFile(path.join(stateDir, 'PROGRESS.md'), [
+      '# Progress',
+      '',
+      '### Milestone',
+      'Worker completed useful proof.',
+      '',
+    ].join('\n'), 'utf8')
+    await fs.writeFile(path.join(stateDir, 'learning.json'), '{"suggestedLearnings":[{"id":"learn-1"}]}\n', 'utf8')
+    const beforeEntries = await fs.readdir(stateDir)
+    const beforeTasks = await fs.readFile(path.join(stateDir, 'TASKS.json'), 'utf8')
+
+    const dryRun = await auditProjectMemoryState({
+      projectRoot,
+      apply: false,
+      now: () => new Date('2026-06-06T12:03:00.000Z'),
+    })
+
+    expect(dryRun.dryRun).toBe(true)
+    expect(dryRun.files).toEqual(expect.arrayContaining([
+      expect.objectContaining({ relativePath: '.guildhall/TASKS.json', kind: 'task_queue', taskCount: 2 }),
+      expect.objectContaining({ relativePath: '.guildhall/PROGRESS.md', kind: 'progress_log' }),
+      expect.objectContaining({ relativePath: '.guildhall/learning.json', kind: 'memory_file' }),
+    ]))
+    expect(dryRun.eventsWritten).toBe(0)
+    expect(dryRun.repoLocalWrites).toEqual([])
+    expect(dryRun.auditReportPath).toBeNull()
+    expect(await fs.readdir(stateDir)).toEqual(beforeEntries)
+    expect(await fs.readFile(path.join(stateDir, 'TASKS.json'), 'utf8')).toBe(beforeTasks)
+
+    const applied = await auditProjectMemoryState({
+      projectRoot,
+      apply: true,
+      now: () => new Date('2026-06-06T12:04:00.000Z'),
+    })
+
+    expect(applied.dryRun).toBe(false)
+    expect(applied.eventsWritten).toBe(applied.files.length)
+    expect(applied.repoLocalWrites).toEqual([])
+    expect(applied.bytesBefore).toBeGreaterThan(0)
+    expect(applied.bytesAfter).toBe(applied.bytesBefore)
+    expect(applied.auditReportPath?.startsWith(process.env.GUILDHALL_DATA_DIR!)).toBe(true)
+    expect(await fs.readdir(stateDir)).toEqual(beforeEntries)
+    expect(await fs.readFile(path.join(stateDir, 'TASKS.json'), 'utf8')).toBe(beforeTasks)
+
+    const events = await readMemoryEvents({
+      projectRoot,
+      scope: { kind: 'project', projectId: path.basename(projectRoot) },
+    })
+    expect(events.map(event => event.content.summary)).toEqual(expect.arrayContaining([
+      expect.stringContaining('TASKS.json'),
+      expect.stringContaining('PROGRESS.md'),
+      expect.stringContaining('learning.json'),
+    ]))
+    expect(events.every(event => event.sourceRefs[0]?.hash)).toBe(true)
   })
 })

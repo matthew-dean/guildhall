@@ -598,6 +598,21 @@ Slice 5: migration/audit.
 - report before/after bytes, repo writes, and fallback path;
 - add cleanup proof commands.
 
+Implemented 2026-06-06:
+
+- `auditProjectMemoryState` reads project-local `.guildhall` state through the
+  memory-core data layer, hashes audited files, and writes system-local memory
+  events plus audit reports only when `apply` is true.
+- `guildhall memory mastra-audit [--apply] [path]` and
+  `pnpm memory:mastra:audit` provide the operator-facing dry-run/apply path.
+- Fixture proof showed unchanged `.guildhall` files before/after apply,
+  system-local event/report writes under `GUILDHALL_DATA_DIR`, and
+  `Repo-local writes: none`.
+- The older Mastra value-gate storage check now distinguishes repo-local
+  project `.guildhall` paths from valid machine-local `~/.guildhall/data`
+  storage, so `pnpm memory:mastra:value-gate` returns `decision: "adopt"` while
+  still rejecting project-local storage.
+
 Slice 6: runtime/API/UI integration.
 
 - context builders request packets from memory-core;

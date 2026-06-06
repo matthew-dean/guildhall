@@ -48,7 +48,7 @@ describe('Mastra memory value gate', () => {
   })
 
   it('keeps prototype storage system-local and evaluates live-value gates', () => {
-    const storageRoot = join('/tmp', 'guildhall-mastra-value-gate')
+    const storageRoot = join('/tmp', '.guildhall', 'data', 'prototypes', 'guildhall-mastra-value-gate')
     const report = evaluateMastraValueGate({
       storageRoot,
       fixtures: prototypeFixtures,
@@ -85,6 +85,36 @@ describe('Mastra memory value gate', () => {
       betterThanBaseline: true,
       failureFallback: true,
     })
+  })
+
+  it('rejects value-gate storage inside a project .guildhall directory', () => {
+    const projectRoot = join('/tmp', 'guildhall-project')
+    const report = evaluateMastraValueGate({
+      storageRoot: join(projectRoot, '.guildhall', 'memory-core'),
+      fixtures: [{ id: 'fixture-project', projectRoot, purposes: ['next_worker_context'] }],
+      baselinePackets: [
+        {
+          fixtureId: 'fixture-project',
+          purpose: 'next_worker_context',
+          byteEstimate: 2400,
+          sourceRefCount: 1,
+          relevantFacts: ['project memory summary'],
+        },
+      ],
+      mastraPackets: [
+        {
+          fixtureId: 'fixture-project',
+          purpose: 'next_worker_context',
+          byteEstimate: 1200,
+          sourceRefCount: 3,
+          relevantFacts: ['project memory summary', 'compacted observation'],
+          observationCount: 2,
+        },
+      ],
+    })
+
+    expect(report.decision).toBe('defer')
+    expect(report.gates.systemLocalStorage).toBe(false)
   })
 
   it('defers Mastra when packet quality does not beat the deterministic baseline', () => {

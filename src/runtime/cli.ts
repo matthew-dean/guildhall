@@ -86,6 +86,7 @@ import {
   type DeliveryReceipt,
   type ProjectDependencyEdge,
 } from './project-graph.js'
+import { auditProjectMemoryState } from '@guildhall/memory-core'
 
 function openBrowser(url: string): void {
   const cmd = platform() === 'darwin' ? `open "${url}"`
@@ -333,6 +334,8 @@ export function resolveServiceLifecycleIntent(
 //   guildhall memory migrate-0.8.0 [--apply] [--delete-source] [--update-gitignore] [path]
 //   guildhall memory migrate-local-history [--apply] [--delete-source] [--update-gitignore] [path]
 //                                      — move old transcripts/events/sessions into ~/.guildhall
+//   guildhall memory mastra-audit [--apply] [path]
+//                                      — audit project-local memory state into system-local memory-core storage
 //   guildhall migrate status [id|path] — show generic migration status
 //   guildhall migrate plan [id|path]   — show pending generic migrations
 //   guildhall migrate apply [id|path]  — apply automatic generic migrations
@@ -461,6 +464,8 @@ Usage:
                                   Compatibility alias for the 0.8.0 storage migration
   guildhall memory compact-project-state [path]
                                   Archive terminal tasks and move heartbeat progress local
+  guildhall memory mastra-audit [path]
+                                  Audit .guildhall memory state into system-local memory-core storage
     --apply                      Write files. Without this, prints a dry run
     --delete-source              Remove migrated old memory/ files after copying
     --update-gitignore           Write/refresh Guildhall's managed .gitignore block
@@ -565,6 +570,7 @@ Examples:
   guildhall corpus-map refresh --semantic .
   guildhall memory migrate-0.8.0 --apply --delete-source --update-gitignore .
   guildhall memory compact-project-state --apply .
+  guildhall memory mastra-audit --apply .
   guildhall migrate status .
   guildhall migrate plan --all
   guildhall migrate apply --include-prompt --migration 0.8.0/codex-agent-bridge .
@@ -951,8 +957,8 @@ async function cmdCorpusMap() {
 async function cmdMemory() {
   const pos = positionals()
   const subcommand = pos[0] ?? 'migrate-0.8.0'
-  if (!['migrate-0.8.0', 'migrate-local-history', 'compact-project-state'].includes(subcommand)) {
-    console.error('[guildhall] Usage: guildhall memory <migrate-0.8.0|migrate-local-history|compact-project-state> [--apply] [id|path]')
+  if (!['migrate-0.8.0', 'migrate-local-history', 'compact-project-state', 'mastra-audit'].includes(subcommand)) {
+    console.error('[guildhall] Usage: guildhall memory <migrate-0.8.0|migrate-local-history|compact-project-state|mastra-audit> [--apply] [id|path]')
     process.exit(1)
   }
   const idOrPath = pos[1]
@@ -1014,6 +1020,27 @@ async function cmdMemory() {
     console.log(`[guildhall] Shared TASKS/PROGRESS bytes: ${result.bytesBefore} -> ${result.bytesAfter}`)
     if (dryRun) {
       console.log('[guildhall] Re-run with --apply to compact these files.')
+    }
+    return
+  }
+  if (subcommand === 'mastra-audit') {
+    const result = await auditProjectMemoryState({
+      projectRoot: projectPath,
+      apply: !dryRun,
+    })
+    console.log(`[guildhall] Mastra memory-core audit ${dryRun ? 'dry run' : 'complete'}.`)
+    console.log(`[guildhall] Project: ${result.projectRoot}`)
+    console.log(`[guildhall] State dir: ${result.stateDir}`)
+    console.log(`[guildhall] Memory store: ${result.memoryDir}`)
+    console.log(`[guildhall] Project-local files audited: ${result.files.length}`)
+    console.log(`[guildhall] Project-local bytes: ${result.bytesBefore} -> ${result.bytesAfter}`)
+    console.log(`[guildhall] Memory events written: ${result.eventsWritten}`)
+    console.log(`[guildhall] Repo-local writes: ${result.repoLocalWrites.length === 0 ? 'none' : result.repoLocalWrites.join(', ')}`)
+    if (result.auditReportPath) {
+      console.log(`[guildhall] Audit report: ${result.auditReportPath}`)
+    }
+    if (dryRun) {
+      console.log('[guildhall] Re-run with --apply to write system-local memory events.')
     }
     return
   }

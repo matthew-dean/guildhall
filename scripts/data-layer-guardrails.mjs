@@ -13,6 +13,7 @@ const dataLayerModules = new Set([
   'src/config/project-config.ts',
   'src/config/registry.ts',
   'src/config/workspace-config.ts',
+  'src/memory-core/audit.ts',
   'src/memory-core/data-access.ts',
   'src/persistence/file-backed.ts',
   'src/persistence/json-files.ts',

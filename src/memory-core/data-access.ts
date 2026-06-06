@@ -99,6 +99,7 @@ function sourceRefForEvent(id: string, event: RecordMemoryEventInput): MemorySou
     sourceKind: event.source.kind,
     uri: event.source.ref,
     ...(event.source.path ? { path: event.source.path } : {}),
+    ...(event.source.hash ? { hash: event.source.hash } : {}),
     capturedAt: event.source.capturedAt,
   }
 }
