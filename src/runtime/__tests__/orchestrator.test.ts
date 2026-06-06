@@ -1901,7 +1901,7 @@ describe('Orchestrator.tick — routing', () => {
     expect(task.escalations ?? []).toHaveLength(0)
   })
 
-  it('turns spec-agent inactivity timeouts into explicit recovery instead of raw agent errors', async () => {
+  it('retries a spec-agent inactivity timeout once before blocking the task', async () => {
     await writeQueue([mkTask({ id: 'a', status: 'exploring', title: 'Build AlertDialog primitive' })])
     const spec = {
       name: 'spec-agent',
@@ -1916,6 +1916,38 @@ describe('Orchestrator.tick — routing', () => {
       agents: agentSet({ spec: spec as any }),
     })
 
+    const out = await orch.tick()
+    expect(out).toMatchObject({
+      kind: 'processed',
+      taskId: 'a',
+      agent: 'spec-agent',
+      beforeStatus: 'exploring',
+      afterStatus: 'exploring',
+      transitioned: false,
+    })
+
+    const queue = await readQueue()
+    const task = queue.tasks[0]!
+    expect(task.status).toBe('exploring')
+    expect(task.escalations ?? []).toHaveLength(0)
+  })
+
+  it('blocks the task after repeated spec-agent inactivity timeouts without durable progress', async () => {
+    await writeQueue([mkTask({ id: 'a', status: 'exploring', title: 'Build AlertDialog primitive' })])
+    const spec = {
+      name: 'spec-agent',
+      calls: [] as Array<{ prompt: string }>,
+      async generate(prompt: string) {
+        this.calls.push({ prompt })
+        throw new Error('spec-agent timed out after 120000ms of inactivity')
+      },
+    }
+    const orch = new Orchestrator({
+      config: baseConfig(),
+      agents: agentSet({ spec: spec as any }),
+    })
+
+    await orch.tick()
     const out = await orch.tick()
     expect(out.kind).toBe('escalated')
     if (out.kind !== 'escalated') throw new Error(`expected escalation, got ${out.kind}`)
@@ -2414,6 +2446,68 @@ describe('Orchestrator.tick — routing', () => {
     const q = await readQueue()
     expect(q.tasks[0]!.status).toBe('exploring')
     expect(q.tasks[0]!.notes.at(-1)?.content).toMatch(/completion boundary/i)
+  })
+
+  it('repairs ready-task blueprint revisions deterministically after sanity sends them back to exploring', async () => {
+    await writeQueue([mkTask({
+      id: 'a',
+      status: 'ready',
+      domain: 'looma',
+      title: 'ContextMenu',
+      productBrief: {
+        userJob: 'I want ContextMenu implemented from the recovered task evidence.',
+        successMetric: 'ContextMenu has a buildable spec before worker assignment.',
+        antiPatterns: [],
+        approvedAt: '2026-05-26T00:00:00.000Z',
+      },
+      spec: [
+        '## Summary',
+        '',
+        'Implement ContextMenu.',
+        '',
+        '## Acceptance Criteria',
+        '1. ContextMenu works in the target surface.',
+      ].join('\n'),
+      acceptanceCriteria: [{
+        id: 'AC-1',
+        description: 'ContextMenu works in the target surface.',
+        verifiedBy: 'review',
+        met: false,
+      }],
+    })])
+    const worker = stubAgent('worker-agent')
+    const spec = stubAgent('spec-agent')
+    const coord = stubAgent('looma-coordinator', async () => {
+      throw new Error('coordinator should not review an invalid blueprint')
+    })
+    const orch = new Orchestrator({
+      config: baseConfig(),
+      agents: agentSet({ spec, worker, coordinators: { looma: coord } }),
+    })
+
+    const sanityOut = await orch.tick()
+
+    expect(sanityOut.kind).toBe('processed')
+    if (sanityOut.kind === 'processed') {
+      expect(sanityOut.agent).toBe('blueprint-sanity-review')
+      expect(sanityOut.afterStatus).toBe('exploring')
+    }
+
+    const repairOut = await orch.tick()
+
+    expect(repairOut.kind).toBe('processed')
+    if (repairOut.kind === 'processed') {
+      expect(repairOut.agent).toBe('coordinator-recovery')
+      expect(repairOut.beforeStatus).toBe('exploring')
+      expect(repairOut.afterStatus).toBe('spec_review')
+    }
+    expect(worker.calls).toHaveLength(0)
+    expect(spec.calls).toHaveLength(0)
+    expect(coord.calls).toHaveLength(0)
+    const q = await readQueue()
+    expect(q.tasks[0]!.status).toBe('spec_review')
+    expect(q.tasks[0]!.spec).toContain('## Completion Boundary')
+    expect(q.tasks[0]!.notes.at(-1)?.content).toContain('repaired a malformed spec_review blueprint')
   })
 
   it('routes ready tasks without a usable blueprint back to exploring', async () => {
@@ -8052,6 +8146,64 @@ describe('Orchestrator.run — full loops', () => {
     expect(q.tasks.find((t) => t.id === 'unrelated')?.status).toBe('ready')
   })
 
+  it('scoped one-task runs continue when selected child reaches spec review', async () => {
+    await writeQueue([
+      mkTask({
+        id: 'context-menu',
+        title: 'ContextMenu',
+        status: 'ready',
+        domain: 'looma',
+        hierarchy: { childIds: ['context-menu-component'], order: 0 },
+      }),
+      mkTask({
+        id: 'context-menu-component',
+        title: 'Component implementation',
+        status: 'exploring',
+        domain: 'looma',
+        hierarchy: { parentId: 'context-menu', childIds: [], order: 0 },
+      }),
+      mkTask({ id: 'unrelated', status: 'ready', domain: 'looma', priority: 'critical' }),
+    ])
+
+    const picked: string[] = []
+    const currentTaskId = (prompt: string) => {
+      const taskId = prompt.match(/\*\*Current task ID \(for task tools\):\*\* ([^\n]+)/)?.[1]
+      if (!taskId) throw new Error('missing current task id in prompt')
+      picked.push(taskId)
+      return taskId
+    }
+    const spec = stubAgent('spec-agent', async (prompt: string) => {
+      const taskId = currentTaskId(prompt)
+      await mutateTask(taskId, { status: 'spec_review', spec: VALID_SPEC })
+    })
+    const coord = stubAgent('looma-coordinator', async (prompt: string) => {
+      const taskId = currentTaskId(prompt)
+      await mutateTask(taskId, { status: 'ready' })
+    })
+    const worker = stubAgent('worker-agent', async (prompt: string) => {
+      const taskId = currentTaskId(prompt)
+      await mutateTask(taskId, { status: 'done' })
+    })
+
+    const orch = new Orchestrator({
+      config: baseConfig(),
+      agents: agentSet({ spec, worker, coordinators: { looma: coord } }),
+    })
+    const result = await orch.run({
+      maxTicks: 20,
+      tickDelayMs: 0,
+      stopAfterOneTask: true,
+      preferredTaskId: 'context-menu',
+    })
+
+    expect(result.stopReason).toBe('one_task')
+    expect(picked).toEqual(['context-menu-component', 'context-menu-component'])
+    const q = await readQueue()
+    expect(q.tasks.find((t) => t.id === 'context-menu')?.status).toBe('done')
+    expect(q.tasks.find((t) => t.id === 'context-menu-component')?.status).toBe('done')
+    expect(q.tasks.find((t) => t.id === 'unrelated')?.status).toBe('ready')
+  })
+
   it('scoped one-task runs stop when selected parent child work is blocked', async () => {
     await writeQueue([
       mkTask({
@@ -10791,6 +10943,57 @@ describe('Orchestrator worker no-progress escalation', () => {
     const task = (await readQueue()).tasks.find((candidate) => candidate.id === 'task-013')
     expect(task?.status).toBe('in_progress')
     expect(task?.escalations).toEqual([])
+  })
+
+  it('blocks after repeated dirty worktree worker turn-budget retries', async () => {
+    const worktreePath = path.join(tmpDir, '.guildhall', 'worktrees', 'task-014')
+    await fs.mkdir(worktreePath, { recursive: true })
+    await writeQueue([
+      mkTask({
+        id: 'task-014',
+        title: 'Finish component keyboard behavior',
+        status: 'in_progress',
+        assignedTo: 'worker-agent',
+        projectPath: tmpDir,
+        worktreePath,
+        spec: 'Finish the component and hand off to review.',
+        acceptanceCriteria: [{
+          id: 'ac-1',
+          description: 'component behavior is verified',
+          verifiedBy: 'review',
+          met: false,
+        } as any],
+      }),
+    ])
+
+    const worker = stubAgent('worker-agent')
+    worker.generate = async () => await new Promise(() => {}) as never
+    const gitDriver = new InMemoryGitDriver()
+    gitDriver.setClean(false)
+    const orch = new Orchestrator({
+      config: baseConfig(),
+      agents: agentSet({ worker }),
+      gitDriver,
+      agentGenerateTimeoutMs: 60_000,
+      agentGenerateWallClockTimeoutMs: 10,
+    })
+
+    const first = await orch.tick({ dispatchLimit: 1 })
+    const second = await orch.tick({ dispatchLimit: 1 })
+    const third = await orch.tick({ dispatchLimit: 1 })
+
+    expect(first.kind).toBe('processed')
+    expect(second.kind).toBe('processed')
+    expect(third.kind).toBe('escalated')
+    if (third.kind === 'escalated') {
+      expect(third.reason).toContain('repeatedly hit its turn budget')
+    }
+    const task = (await readQueue()).tasks.find((candidate) => candidate.id === 'task-014')
+    expect(task?.status).toBe('blocked')
+    expect(task?.escalations.at(-1)?.summary)
+      .toContain('repeatedly hit its turn budget')
+    expect(task?.notes.find((note) => note.role === 'policy-classification')?.content)
+      .toContain('"class":"model_tool_use_failure"')
   })
 })
 

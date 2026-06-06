@@ -1,3 +1,4 @@
+import { appendManagedTextFile, readManagedTextFile, readManagedTextFileSync, writeManagedTextFile } from '@guildhall/persistence'
 import fs from 'node:fs/promises'
 import path from 'node:path'
 import { load as yamlLoad } from 'js-yaml'
@@ -43,7 +44,7 @@ function tasksPathFor(memoryDir: string): string {
 
 async function readQueue(memoryDir: string): Promise<TaskQueue> {
   const tasksPath = tasksPathFor(memoryDir)
-  const raw = await fs.readFile(tasksPath, 'utf-8').catch((err: unknown) => {
+  const raw = await readManagedTextFile(tasksPath, 'utf-8').catch((err: unknown) => {
     if (
       err &&
       typeof err === 'object' &&
@@ -71,7 +72,7 @@ async function readQueue(memoryDir: string): Promise<TaskQueue> {
 
 async function writeQueue(memoryDir: string, queue: TaskQueue): Promise<void> {
   await fs.mkdir(memoryDir, { recursive: true })
-  await fs.writeFile(tasksPathFor(memoryDir), JSON.stringify(queue, null, 2), 'utf-8')
+  await writeManagedTextFile(tasksPathFor(memoryDir), JSON.stringify(queue, null, 2), 'utf-8')
 }
 
 export const WORKSPACE_IMPORT_SEED_PREAMBLE = `You are the Workspace Importer Agent.
@@ -241,7 +242,7 @@ async function writeWorkspaceImportTranscript(
       formatDraftForTranscript(inventory, draft),
       WORKSPACE_IMPORT_SEED_FORMAT,
     ].join('\n')
-  await fs.writeFile(transcriptPath, `${seed}\n`, 'utf-8')
+  await writeManagedTextFile(transcriptPath, `${seed}\n`, 'utf-8')
   return transcriptPath
 }
 
@@ -398,12 +399,12 @@ export async function rerunWorkspaceImportTask(
   const goalsPath = path.join(input.memoryDir, WORKSPACE_GOALS_FILE)
   if (await fs.stat(goalsPath).then(() => true).catch(() => false)) {
     try {
-      const raw = JSON.parse(await fs.readFile(goalsPath, 'utf-8')) as Record<string, unknown>
+      const raw = JSON.parse(await readManagedTextFile(goalsPath, 'utf-8')) as Record<string, unknown>
       if (raw.dismissed) {
         delete raw.dismissed
         delete raw.dismissedAt
         raw.recordedAt = now
-        await fs.writeFile(goalsPath, JSON.stringify(raw, null, 2), 'utf-8')
+        await writeManagedTextFile(goalsPath, JSON.stringify(raw, null, 2), 'utf-8')
       }
     } catch {
       // Ignore malformed dismissed-state files; the rerun task/transcript are the source of truth.
@@ -856,7 +857,7 @@ async function evidenceSourcesForParsedTasks(
         continue
       }
 
-      const content = await fs.readFile(absolute, 'utf-8')
+      const content = await readManagedTextFile(absolute, 'utf-8')
       sources.push({
         path: path.relative(projectPath, absolute) || path.basename(absolute),
         content,
@@ -1143,7 +1144,7 @@ export async function approveWorkspaceImport(
   // Persist goals (overwrites prior import — the agent is authoritative).
   if (parsed.goals.length > 0) {
     const goalsPath = path.join(input.memoryDir, WORKSPACE_GOALS_FILE)
-    await fs.writeFile(
+    await writeManagedTextFile(
       goalsPath,
       JSON.stringify(
         { version: 1, recordedAt: now, goals: parsed.goals },
@@ -1175,7 +1176,7 @@ export async function approveWorkspaceImport(
       )
       milestonesLogged++
     }
-    await fs.appendFile(progressPath, blocks.join(''), 'utf-8')
+    await appendManagedTextFile(progressPath, blocks.join(''), 'utf-8')
   }
 
   const summary = [

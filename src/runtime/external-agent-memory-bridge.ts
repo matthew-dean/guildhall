@@ -1,3 +1,4 @@
+import { appendManagedTextFile, readManagedTextFile, readManagedTextFileSync, writeManagedTextFile } from '@guildhall/persistence'
 import fsp from 'node:fs/promises'
 import path from 'node:path'
 import { z } from 'zod'
@@ -205,7 +206,7 @@ export async function rejectExternalMemoryBridgeRecord(input: {
 
 async function readExternalMemoryBridgeStore(memoryDir: string): Promise<ExternalMemoryBridgeStore> {
   try {
-    const raw = await fsp.readFile(externalMemoryBridgePath(memoryDir), 'utf-8')
+    const raw = await readManagedTextFile(externalMemoryBridgePath(memoryDir), 'utf-8')
     return ExternalMemoryBridgeStore.parse(JSON.parse(raw))
   } catch {
     return ExternalMemoryBridgeStore.parse({})
@@ -219,7 +220,7 @@ async function writeExternalMemoryBridgeStore(
   await fsp.mkdir(memoryDir, { recursive: true })
   const file = externalMemoryBridgePath(memoryDir)
   const tmp = `${file}.tmp`
-  await fsp.writeFile(tmp, `${JSON.stringify(ExternalMemoryBridgeStore.parse(store), null, 2)}\n`, 'utf-8')
+  await writeManagedTextFile(tmp, `${JSON.stringify(ExternalMemoryBridgeStore.parse(store), null, 2)}\n`, 'utf-8')
   await fsp.rename(tmp, file)
 }
 

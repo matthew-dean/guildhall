@@ -1,6 +1,6 @@
 // @vitest-environment happy-dom
 import '@testing-library/jest-dom/vitest'
-import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/svelte'
+import { cleanup, fireEvent, render, screen } from '@testing-library/svelte'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import ProjectOverviewTab from '../ProjectOverviewTab.svelte'
 
@@ -603,7 +603,7 @@ describe('ProjectOverviewTab', () => {
     expect(text.indexOf('Moving now')).toBeLessThan(text.indexOf('Work mix'))
   })
 
-  it('surfaces runtime health, memory health, graph facts, and primary proof paths', async () => {
+  it('surfaces runtime health, memory health, and primary proof paths', async () => {
     vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
       const url = new URL(String(input), 'http://localhost')
       if (url.pathname === '/api/project/project-graph') {
@@ -676,15 +676,9 @@ describe('ProjectOverviewTab', () => {
     expect(screen.getAllByText(/Compatibility mode/).length).toBeGreaterThan(0)
     expect(screen.getAllByText('Memory health').length).toBeGreaterThan(0)
     expect(screen.getAllByText(/3 active/).length).toBeGreaterThan(0)
-    expect(screen.getAllByRole('button', { name: /Project graph/i }).length).toBeGreaterThan(0)
     expect(screen.getByText('Primary proof paths')).toBeInTheDocument()
     expect(screen.getAllByText('Verify runtime card').length).toBeGreaterThan(0)
-    await waitFor(() => {
-      expect(screen.getByRole('button', { name: /Structure 2 graph domains/i })).toBeInTheDocument()
-      expect(screen.queryByText('Map not reviewed')).not.toBeInTheDocument()
-      expect(screen.getByText('1 connected project')).toBeInTheDocument()
-      expect(screen.getByText('2 graph domains · 2 contract surfaces · 1 open dependency request')).toBeInTheDocument()
-    })
+    expect(screen.queryByRole('button', { name: /Project graph/i })).not.toBeInTheDocument()
   })
 
   it('condenses project knowledge into one-third overview cards', async () => {
@@ -730,17 +724,15 @@ describe('ProjectOverviewTab', () => {
       activeProjectId: 'narrative-harness',
     })
 
-    expect(container.querySelectorAll('.card-list-item.knowledge-summary-item')).toHaveLength(6)
+    expect(container.querySelectorAll('.card-list-item.knowledge-summary-item')).toHaveLength(4)
     expect(container.querySelectorAll('.knowledge-card')).toHaveLength(0)
     expect(screen.getByRole('button', { name: /Work 2 total tasks/i })).toBeInTheDocument()
-    expect(screen.getByRole('button', { name: /Structure Accepted/i })).toBeInTheDocument()
     expect(screen.getByRole('button', { name: /Runtime Runtime healthy/i })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: /Proof No proof paths yet/i })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: /History No recent changes/i })).toBeInTheDocument()
     expect(screen.getByText('Compatibility mode · 4 active memories · 1 proposed.')).toBeInTheDocument()
-    expect(screen.getByText('2 domains · 2 packages · 3 commands.')).toBeInTheDocument()
-    await waitFor(() => {
-      expect(screen.getByRole('button', { name: /Project graph 0 connected projects/i })).toBeInTheDocument()
-      expect(screen.getByText('1 graph domain · 1 contract surface · 0 open dependency requests')).toBeInTheDocument()
-    })
+    expect(screen.queryByRole('button', { name: /Structure Accepted/i })).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: /Project graph/i })).not.toBeInTheDocument()
   })
 
   it('puts the primary next action in a full-width priority row before secondary overview cards', () => {
@@ -840,15 +832,6 @@ describe('ProjectOverviewTab', () => {
     await fireEvent.click(screen.getByRole('button', { name: /Work 1 total task/i }))
     expect(window.location.pathname).toBe('/projects/guildhall/work')
 
-    await fireEvent.click(screen.getByRole('button', { name: /Structure Accepted/i }))
-    expect(window.location.pathname).toBe('/projects/guildhall/structure')
-
-    await waitFor(() => {
-      expect(screen.getByRole('button', { name: /Project graph 0 connected projects/i })).toBeInTheDocument()
-    })
-    await fireEvent.click(screen.getByRole('button', { name: /Project graph 0 connected projects/i }))
-    expect(window.location.pathname).toBe('/projects/guildhall/structure')
-
     await fireEvent.click(screen.getByRole('button', { name: /Runtime Runtime stopped/i }))
     expect(window.location.pathname).toBe('/projects/guildhall/settings/ready')
 
@@ -859,7 +842,7 @@ describe('ProjectOverviewTab', () => {
     expect(window.location.pathname).toBe('/projects/guildhall/timeline')
   })
 
-  it('surfaces structural map review facts for owner inspection', () => {
+  it('keeps advanced structural map controls out of the default overview', () => {
     render(ProjectOverviewTab, {
       detail: {
         id: 'guildhall',
@@ -904,104 +887,8 @@ describe('ProjectOverviewTab', () => {
       activeProjectId: 'guildhall',
     })
 
-    expect(screen.getByRole('heading', { name: 'Project map' })).toBeInTheDocument()
-    expect(screen.getAllByText('Accepted').length).toBeGreaterThan(0)
-    expect(screen.getByText('2 packages')).toBeInTheDocument()
-    expect(screen.getAllByText('Runtime').length).toBeGreaterThan(0)
-    expect(screen.getByText('Design-system reuse')).toBeInTheDocument()
-    expect(screen.getByText('@guildhall/core')).toBeInTheDocument()
-    expect(screen.getByText('pnpm --filter @guildhall/core test')).toBeInTheDocument()
-    expect(screen.getByText('vendor/fixture')).toBeInTheDocument()
-    expect(screen.getByText('Runtime appears in package and path evidence.')).toBeInTheDocument()
-    expect(screen.getByText('Should runtime own provider routing?')).toBeInTheDocument()
-    expect(screen.getByRole('link', { name: 'Open Thread' })).toHaveAttribute('href', '/projects/guildhall/thread')
+    expect(screen.queryByRole('heading', { name: 'Project map' })).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: /accept map/i })).not.toBeInTheDocument()
     expect(screen.queryByRole('button', { name: /defer/i })).not.toBeInTheDocument()
-  })
-
-  it('posts structural map owner actions and updates the review state', async () => {
-    const fetchMock = vi.spyOn(globalThis, 'fetch').mockImplementation(async (input: RequestInfo | URL) => {
-      const url = new URL(String(input), 'http://localhost')
-      if (url.pathname === '/api/project/project-graph') {
-        return json({ projectGraph: { localProjects: [], structuralDomains: [], dependencyEdges: [], contractSurfaces: [] } })
-      }
-      return json({
-        structuralMapReview: {
-          id: 'structural-map-1',
-          state: 'accepted',
-          generatedAt: '2026-06-01T12:00:00.000Z',
-          counts: {
-            packages: 1,
-            domains: 1,
-            crossCuttingDomains: 0,
-            executableUnits: 0,
-            gitRoots: 1,
-            ignoredGitRoots: 0,
-            conflicts: 0,
-            questions: 0,
-          },
-          gitRoots: [{ id: 'git:root', label: 'Project root', path: '.', confidence: 'high' }],
-          packages: [{ id: 'package:guildhall-core', label: '@guildhall/core', path: 'packages/core', confidence: 'high' }],
-          domains: [{ id: 'domain:runtime', label: 'Runtime', confidence: 'high' }],
-          crossCuttingDomains: [],
-          executableUnits: [],
-          ignoredGitRoots: [],
-          conflicts: [],
-          questions: [],
-        },
-      })
-    })
-
-    render(ProjectOverviewTab, {
-      detail: {
-        id: 'guildhall',
-        name: 'Guildhall',
-        path: '/Users/matthew/git/oss/guildhall',
-        tasks: [],
-        structuralMapReview: {
-          id: 'structural-map-1',
-          state: 'owner_review',
-          generatedAt: '2026-06-01T12:00:00.000Z',
-          counts: {
-            packages: 1,
-            domains: 1,
-            crossCuttingDomains: 0,
-            executableUnits: 0,
-            gitRoots: 1,
-            ignoredGitRoots: 0,
-            conflicts: 0,
-            questions: 1,
-          },
-          gitRoots: [{ id: 'git:root', label: 'Project root', path: '.', confidence: 'high' }],
-          packages: [{ id: 'package:guildhall-core', label: '@guildhall/core', path: 'packages/core', confidence: 'high' }],
-          domains: [{ id: 'domain:runtime', label: 'Runtime', confidence: 'high' }],
-          crossCuttingDomains: [],
-          executableUnits: [],
-          ignoredGitRoots: [],
-          conflicts: [],
-          questions: [{ id: 'confirm-domain-routing', prompt: 'Review routing.' }],
-        },
-      },
-      inboxLoaded: true,
-      inboxItems: [],
-      projectTicker: {
-        label: 'Not running',
-        actorLabel: 'Guildhall',
-        message: 'Project is waiting.',
-        tone: 'idle',
-        pulse: false,
-      },
-      activeProjectId: 'guildhall',
-    })
-
-    await fireEvent.click(screen.getByRole('button', { name: /accept map/i }))
-
-    expect(fetchMock).toHaveBeenCalledWith(
-      '/api/project/structural-map/action?projectId=guildhall',
-      expect.objectContaining({
-        method: 'POST',
-        body: JSON.stringify({ mapId: 'structural-map-1', action: { kind: 'accept' }, projectId: 'guildhall' }),
-      }),
-    )
-    await waitFor(() => expect(screen.getAllByText('Accepted').length).toBeGreaterThan(0))
   })
 })

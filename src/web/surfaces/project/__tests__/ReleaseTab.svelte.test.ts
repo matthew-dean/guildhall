@@ -40,7 +40,7 @@ describe('ReleaseTab', () => {
     render(ReleaseTab)
 
     expect(await screen.findByText('Project not initialized yet')).toBeTruthy()
-    expect(screen.getByText('Complete the setup wizard before Guildhall can assess whether the current work is closed.')).toBeTruthy()
+    expect(screen.getByText('Complete the setup wizard before assessing whether the current work is closed.')).toBeTruthy()
     expect(screen.getByRole('link', { name: 'Open setup wizard' }).getAttribute('href')).toBe('/projects/looma-knit/setup')
   })
 
@@ -290,7 +290,7 @@ describe('ReleaseTab', () => {
 
     expect(await screen.findByText('Current work closure')).toBeTruthy()
     expect(screen.getByText('Could not inspect checkout')).toBeTruthy()
-    expect(screen.getByText(/Guildhall could not inspect this checkout with git/)).toBeTruthy()
+    expect(screen.getByText(/This checkout could not be inspected with git/)).toBeTruthy()
     expect(screen.queryByText(/fatal: not a git repository/)).toBeNull()
     expect(screen.queryByText('Project checkout clean.')).toBeNull()
   })

@@ -7,6 +7,7 @@ import {
   createCapabilityRequest,
   defaultProjectRuntimeState,
   recordMemoryObservation,
+  writeProjectDeliveryModel,
   writeProjectRuntimeState,
 } from '@guildhall/runtime'
 import { getProjectContextDebugLedgerPath, getProjectLocalHistoryDir } from '@guildhall/sessions'
@@ -108,12 +109,12 @@ describe('Guildhall MCP project reader', () => {
           agentIssues: [],
         }],
       }), 'utf8')
-      writeFileSync(join(root, '.guildhall', 'delivery-spine.json'), JSON.stringify({
+      await writeProjectDeliveryModel(root, {
         version: 1,
         updatedAt: '2026-06-05T12:00:00.000Z',
         drivers: [
-          { id: 'knit', label: 'Knit', role: 'primary', paths: ['./apps/knit'] },
-          { id: 'looma', label: 'Looma', role: 'provider', paths: ['./packages/looma'] },
+          { id: 'knit', label: 'Knit', role: 'primary', paths: ['./apps/knit'], domains: ['looma'] },
+          { id: 'looma', label: 'Looma', role: 'provider', paths: ['./packages/looma'], domains: ['looma'] },
         ],
         primitives: [
           {
@@ -122,12 +123,17 @@ describe('Guildhall MCP project reader', () => {
             kind: 'ui_primitive',
             provider: 'looma',
             paths: ['./packages/looma/src/menu'],
+            dependsOn: [],
             invariants: ['Can render as button or link.'],
             proof: ['storybook'],
             status: 'needs_proof',
+            evidence: [],
+            aliases: [],
           },
         ],
-      }, null, 2), 'utf8')
+        validationEvidence: [],
+        rejectedCandidates: [],
+      })
       writeFileSync(join(root, '.guildhall', 'DECISIONS.md'), '# Decisions\n\n- Use MCP.\n', 'utf8')
       writeFileSync(join(root, '.guildhall', 'MEMORY.md'), '# Memory\n\n## Runtime\n\nProject fact. token: ghp_123456789012345678901234567890123456\n', 'utf8')
       writeFileSync(join(root, '.guildhall', 'design-system.yaml'), [

@@ -1,3 +1,4 @@
+import { appendManagedTextFile, readManagedTextFile, readManagedTextFileSync, writeManagedTextFile } from '@guildhall/persistence'
 import fs from 'node:fs/promises'
 import path from 'node:path'
 import { parse as parseYaml, stringify as stringifyYaml } from 'yaml'
@@ -87,7 +88,7 @@ function ledgerPath(projectRoot: string): string {
 
 async function writeFileIfMissing(file: string, content: string): Promise<boolean> {
   try {
-    await fs.writeFile(file, content, { flag: 'wx', encoding: 'utf8' })
+    await writeManagedTextFile(file, content, { flag: 'wx', encoding: 'utf8' })
     return true
   } catch (err) {
     const code = (err as { code?: string }).code
@@ -148,7 +149,7 @@ async function readAgentSettingsWithMergePolicy(projectRoot: string): Promise<{
   const file = agentSettingsPath(projectRoot)
   let raw: string
   try {
-    raw = await fs.readFile(file, 'utf8')
+    raw = await readManagedTextFile(file, 'utf8')
   } catch (err) {
     if ((err as { code?: string }).code === 'ENOENT') return null
     throw err
@@ -187,13 +188,13 @@ async function migrateMergePolicyToLandingStrategy(projectRoot: string): Promise
     throw new Error('Cannot convert project.merge_policy: missing legacy entry details.')
   }
   delete project.merge_policy
-  await fs.writeFile(file, stringifyYaml(settings, { lineWidth: 100 }), 'utf8')
+  await writeManagedTextFile(file, stringifyYaml(settings, { lineWidth: 100 }), 'utf8')
   return ['.guildhall/agent-settings.yaml']
 }
 
 export async function readProjectMigrationLedger(projectRoot: string): Promise<ProjectMigrationLedger> {
   try {
-    const raw = await fs.readFile(ledgerPath(projectRoot), 'utf8')
+    const raw = await readManagedTextFile(ledgerPath(projectRoot), 'utf8')
     const parsed = JSON.parse(raw) as Partial<ProjectMigrationLedger>
     return {
       version: 1,
@@ -210,7 +211,7 @@ export async function writeProjectMigrationLedger(
 ): Promise<void> {
   const file = ledgerPath(projectRoot)
   await fs.mkdir(path.dirname(file), { recursive: true })
-  await fs.writeFile(file, `${JSON.stringify({ version: 1, records: ledger.records }, null, 2)}\n`, 'utf8')
+  await writeManagedTextFile(file, `${JSON.stringify({ version: 1, records: ledger.records }, null, 2)}\n`, 'utf8')
   recordGuildhallRuntimeWrite(projectRoot, ['project-migrations.v1'])
 }
 
@@ -422,7 +423,7 @@ const BUILT_IN_PROJECT_MIGRATIONS: ProjectMigrationDefinition[] = [
     summary: 'Adds or refreshes the managed Guildhall MCP bridge section in AGENTS.md.',
     async detect(projectRoot) {
       try {
-        const raw = await fs.readFile(path.join(projectRoot, 'AGENTS.md'), 'utf8')
+        const raw = await readManagedTextFile(path.join(projectRoot, 'AGENTS.md'), 'utf8')
         return { needed: !raw.includes('<!-- BEGIN Guildhall MCP bridge -->'), affectedPaths: ['AGENTS.md'] }
       } catch {
         return { needed: true, affectedPaths: ['AGENTS.md'] }

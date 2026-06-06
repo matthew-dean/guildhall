@@ -1,10 +1,22 @@
-import fs from 'node:fs/promises'
 import path from 'node:path'
 import { z } from 'zod'
 import type { Task } from '@guildhall/core'
-import { getProjectStateDir } from '@guildhall/sessions'
+import {
+  FileBackedGuildhallPersistence,
+  type GuildhallPersistence,
+  type PersistencePlacement,
+} from '@guildhall/persistence'
 
-export const DELIVERY_SPINE_FILE = 'delivery-spine.json'
+const DELIVERY_SPINE_COLLECTION = 'delivery-spine'
+const DELIVERY_SPINE_RECORD_ID = 'project-delivery-model'
+const DELIVERY_SPINE_SCHEMA_NAME = 'project-delivery-model'
+const DELIVERY_SPINE_SCHEMA_VERSION = 1
+const DELIVERY_SPINE_PLACEMENT: PersistencePlacement = {
+  scope: 'local_history',
+  retention: 'active',
+  visibility: 'internal_audit',
+  commitPolicy: 'ignored',
+}
 
 export const DeliveryDriverRole = z.enum(['primary', 'secondary', 'provider', 'proof', 'maintenance'])
 export type DeliveryDriverRole = z.infer<typeof DeliveryDriverRole>
@@ -74,8 +86,8 @@ export type SchemaMigrationDecision = z.infer<typeof SchemaMigrationDecision>
 
 export const DELIVERY_SPINE_SCHEMA_DECISIONS: SchemaMigrationDecision[] = [
   {
-    persistedSchemaTouched: '.guildhall/delivery-spine.json',
-    scope: 'project',
+    persistedSchemaTouched: 'guildhall-persistence:local_history/delivery-spine/project-delivery-model',
+    scope: 'local_history',
     changeClass: 'backward_compatible_reader_change',
     existingDataImpact: 'Existing projects may not have a delivery-spine file. The runtime treats the missing file as an empty version 1 delivery model.',
     migrationId: null,
@@ -85,7 +97,7 @@ export const DELIVERY_SPINE_SCHEMA_DECISIONS: SchemaMigrationDecision[] = [
     fixturesAdded: ['delivery-spine.test.ts: old 0.9 task queue fixture'],
     testsAdded: ['delivery-spine.test.ts: loads old task queues and missing delivery-spine files without requiring a registered migration'],
     ownerFacingPlanText: 'No owner action is required; primitive state appears only after Guildhall validates and applies primitive setup or finished-work intake.',
-    rollbackRevertBehavior: 'Remove .guildhall/delivery-spine.json or revert the applied contract change set; old task queues remain readable.',
+    rollbackRevertBehavior: 'Remove the local-history delivery-spine persistence record or revert the applied contract change set; old task queues remain readable.',
   },
   {
     persistedSchemaTouched: '.guildhall/TASKS.json:tasks[].delivery',
@@ -102,8 +114,8 @@ export const DELIVERY_SPINE_SCHEMA_DECISIONS: SchemaMigrationDecision[] = [
     rollbackRevertBehavior: 'Remove task delivery fields written by the applied change set; tasks without delivery metadata still load normally.',
   },
   {
-    persistedSchemaTouched: '.guildhall/delivery-spine.json:validationEvidence',
-    scope: 'project',
+    persistedSchemaTouched: 'guildhall-persistence:local_history/delivery-spine/project-delivery-model:validationEvidence',
+    scope: 'local_history',
     changeClass: 'backward_compatible_reader_change',
     existingDataImpact: 'Existing delivery-spine files may omit validation evidence. The reader normalizes the field to an empty array.',
     migrationId: null,
@@ -116,8 +128,8 @@ export const DELIVERY_SPINE_SCHEMA_DECISIONS: SchemaMigrationDecision[] = [
     rollbackRevertBehavior: 'Revert the applied contract result to remove validation evidence records associated with that result.',
   },
   {
-    persistedSchemaTouched: '.guildhall/delivery-spine.json:finished-work-intake-derived-records',
-    scope: 'project',
+    persistedSchemaTouched: 'guildhall-persistence:local_history/delivery-spine/project-delivery-model:finished-work-intake-derived-records',
+    scope: 'local_history',
     changeClass: 'backward_compatible_reader_change',
     existingDataImpact: 'Finished-work intake contributes primitives, evidence, rejected candidates, and task links to existing optional/defaulted fields.',
     migrationId: null,
@@ -427,29 +439,61 @@ interface AppliedContractEvidence {
 
 type TaskRef = Pick<Task, 'id' | 'title' | 'status'>
 
+function defaultPersistence(): GuildhallPersistence {
+  return new FileBackedGuildhallPersistence()
+}
+
+function deliverySpineRecordRef(
+  projectRoot: string,
+  persistence: Pick<GuildhallPersistence, 'recordRef'> = defaultPersistence(),
+) {
+  return persistence.recordRef({
+    projectRoot,
+    placement: DELIVERY_SPINE_PLACEMENT,
+    collection: DELIVERY_SPINE_COLLECTION,
+    id: DELIVERY_SPINE_RECORD_ID,
+  })
+}
+
 export function projectDeliveryModelPath(projectRoot: string): string {
-  return path.join(getProjectStateDir(projectRoot), DELIVERY_SPINE_FILE)
+  return deliverySpineRecordRef(projectRoot).path
 }
 
-export async function readProjectDeliveryModel(projectRoot: string): Promise<ProjectDeliveryModel> {
-  const file = projectDeliveryModelPath(projectRoot)
-  try {
-    const raw = await fs.readFile(file, 'utf8')
-    return normalizeProjectDeliveryModelPaths(ProjectDeliveryModel.parse(JSON.parse(raw)), projectRoot).model
-  } catch (err) {
-    if (err && typeof err === 'object' && 'code' in err && (err as { code?: string }).code === 'ENOENT') {
-      return emptyProjectDeliveryModel()
-    }
-    throw err
-  }
+export async function readProjectDeliveryModel(
+  projectRoot: string,
+  persistence: Pick<GuildhallPersistence, 'recordRef' | 'readRecord'> = defaultPersistence(),
+): Promise<ProjectDeliveryModel> {
+  const record = await persistence.readRecord(deliverySpineRecordRef(projectRoot, persistence))
+  if (!record) return emptyProjectDeliveryModel()
+  return normalizeProjectDeliveryModelPaths(ProjectDeliveryModel.parse(record.payload), projectRoot).model
 }
 
-export async function writeProjectDeliveryModel(projectRoot: string, model: ProjectDeliveryModel): Promise<ProjectDeliveryModel> {
+export function readProjectDeliveryModelSync(
+  projectRoot: string,
+  persistence: Pick<GuildhallPersistence, 'recordRef' | 'readRecordSync'> = defaultPersistence(),
+): ProjectDeliveryModel {
+  const record = persistence.readRecordSync(deliverySpineRecordRef(projectRoot, persistence))
+  if (!record) return emptyProjectDeliveryModel()
+  return normalizeProjectDeliveryModelPaths(ProjectDeliveryModel.parse(record.payload), projectRoot).model
+}
+
+export async function writeProjectDeliveryModel(
+  projectRoot: string,
+  model: ProjectDeliveryModel,
+  persistence: Pick<GuildhallPersistence, 'writeRecord'> = defaultPersistence(),
+): Promise<ProjectDeliveryModel> {
   const pathNormalized = normalizeProjectDeliveryModelPaths(ProjectDeliveryModel.parse(model), projectRoot).model
   const normalized = ProjectDeliveryModel.parse(pathNormalized)
-  const file = projectDeliveryModelPath(projectRoot)
-  await fs.mkdir(path.dirname(file), { recursive: true })
-  await fs.writeFile(file, JSON.stringify(normalized, null, 2) + '\n', 'utf8')
+  await persistence.writeRecord({
+    projectRoot,
+    placement: DELIVERY_SPINE_PLACEMENT,
+    collection: DELIVERY_SPINE_COLLECTION,
+    id: DELIVERY_SPINE_RECORD_ID,
+    schemaName: DELIVERY_SPINE_SCHEMA_NAME,
+    schemaVersion: DELIVERY_SPINE_SCHEMA_VERSION,
+    createdBy: 'guildhall-runtime',
+    payload: normalized,
+  })
   return normalized
 }
 

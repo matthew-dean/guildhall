@@ -1,3 +1,4 @@
+import { appendManagedTextFile, readManagedTextFile, readManagedTextFileSync, writeManagedTextFile } from '@guildhall/persistence'
 import fs from 'node:fs'
 import fsp from 'node:fs/promises'
 import path from 'node:path'
@@ -339,7 +340,7 @@ export async function loadBoundedChatSession(input: {
   memoryDir: string
   sessionId: string
 }): Promise<BoundedChatSession> {
-  const raw = await fsp.readFile(boundedChatPath(input.memoryDir, input.sessionId), 'utf-8')
+  const raw = await readManagedTextFile(boundedChatPath(input.memoryDir, input.sessionId), 'utf-8')
   return BoundedChatSession.parse(JSON.parse(raw))
 }
 
@@ -548,7 +549,7 @@ export function listBoundedChatSessions(memoryDir: string): BoundedChatSession[]
   return fs.readdirSync(dir)
     .filter(file => file.endsWith('.json'))
     .map(file => {
-      const raw = fs.readFileSync(path.join(dir, file), 'utf-8')
+      const raw = readManagedTextFileSync(path.join(dir, file), 'utf-8')
       return BoundedChatSession.parse(JSON.parse(raw))
     })
 }

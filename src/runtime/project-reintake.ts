@@ -1,3 +1,4 @@
+import { appendManagedTextFile, readManagedTextFile, readManagedTextFileSync, writeManagedTextFile } from '@guildhall/persistence'
 import fs from 'node:fs/promises'
 import path from 'node:path'
 import type { Task } from '@guildhall/core'
@@ -180,13 +181,13 @@ export function planProjectReintake(input: ProjectReintakeInput): ProjectReintak
 export async function writeProjectReintakeDraft(memoryDir: string, draft: ProjectReintakeDraft): Promise<string> {
   const filePath = reintakeDraftPath(memoryDir)
   await fs.mkdir(path.dirname(filePath), { recursive: true })
-  await fs.writeFile(filePath, JSON.stringify(draft, null, 2), 'utf-8')
+  await writeManagedTextFile(filePath, JSON.stringify(draft, null, 2), 'utf-8')
   return filePath
 }
 
 export async function readProjectReintakeDraft(memoryDir: string): Promise<ProjectReintakeDraft | null> {
   try {
-    return JSON.parse(await fs.readFile(reintakeDraftPath(memoryDir), 'utf-8')) as ProjectReintakeDraft
+    return JSON.parse(await readManagedTextFile(reintakeDraftPath(memoryDir), 'utf-8')) as ProjectReintakeDraft
   } catch {
     return null
   }
@@ -224,7 +225,7 @@ export async function applyProjectReintakeDraft(input: {
   }
 
   queue.lastUpdated = now
-  await fs.writeFile(queuePath, JSON.stringify(queue, null, 2), 'utf-8')
+  await writeManagedTextFile(queuePath, JSON.stringify(queue, null, 2), 'utf-8')
   await appendReintakeProgress(input.memoryDir, draft, groups.length, now)
   await writeProjectReintakeDraft(input.memoryDir, { ...draft, status: 'applied' })
   return { success: true, appliedGroups: groups.length }
@@ -317,7 +318,7 @@ function reintakeDraftPath(memoryDir: string): string {
 }
 
 async function readQueueFile(queuePath: string): Promise<{ version: number; lastUpdated: string; tasks: Array<Record<string, unknown>> }> {
-  const parsed = JSON.parse(await fs.readFile(queuePath, 'utf-8')) as unknown
+  const parsed = JSON.parse(await readManagedTextFile(queuePath, 'utf-8')) as unknown
   if (Array.isArray(parsed)) {
     return { version: 1, lastUpdated: new Date().toISOString(), tasks: parsed as Array<Record<string, unknown>> }
   }
@@ -331,7 +332,7 @@ async function readQueueFile(queuePath: string): Promise<{ version: number; last
 
 async function appendReintakeProgress(memoryDir: string, draft: ProjectReintakeDraft, appliedGroups: number, now: string): Promise<void> {
   const summary = `\n## ${now} Project re-intake applied\n\nApplied ${appliedGroups} group(s): ${draft.summary.kept} kept, ${draft.summary.reframed} reframed, ${draft.summary.created} created, ${draft.summary.archived} archived.\n`
-  await fs.appendFile(path.join(memoryDir, 'PROGRESS.md'), summary, 'utf-8').catch(() => undefined)
+  await appendManagedTextFile(path.join(memoryDir, 'PROGRESS.md'), summary, 'utf-8').catch(() => undefined)
 }
 
 function graphTaskChange(task: EvidenceTask, reconciliations: EvidenceReconciliation[]): ReintakeChange {

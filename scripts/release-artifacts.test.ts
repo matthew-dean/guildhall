@@ -51,7 +51,7 @@ describe('release artifact contract', () => {
     expect(readme).toContain('Node.js 22 or newer')
     expect(quickStart).toContain('Node.js 22 or newer')
     expect(readme).toContain(`GUILDHALL_VERSION=${manifest.version}`)
-    expect(quickStart).toContain('GUILDHALL_VERSION=0.9.0')
+    expect(quickStart).toContain(`GUILDHALL_VERSION=${manifest.version}`)
     expect(quickStart).toContain('guildhall-macos.tar.gz.sha256')
   })
 

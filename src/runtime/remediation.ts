@@ -1,3 +1,4 @@
+import { appendManagedTextFile, readManagedTextFile, readManagedTextFileSync, writeManagedTextFile } from '@guildhall/persistence'
 /**
  * FR-32 Coordinator remediation decision loop.
  *
@@ -288,7 +289,7 @@ export async function recordRemediationDecision(
     '---',
   ].join('\n')
 
-  await fs.appendFile(input.decisionsPath, block, 'utf-8')
+  await appendManagedTextFile(input.decisionsPath, block, 'utf-8')
 }
 
 /**

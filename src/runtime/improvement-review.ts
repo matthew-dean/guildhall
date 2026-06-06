@@ -1,3 +1,5 @@
+import { writeManagedTextFileSync } from '@guildhall/persistence'
+import { appendManagedTextFile, readManagedTextFile, readManagedTextFileSync, writeManagedTextFile } from '@guildhall/persistence'
 import fs from 'node:fs/promises'
 import path from 'node:path'
 
@@ -166,14 +168,14 @@ function isLeanCommandBackedTask(task: Task): boolean {
 async function readQueue(memoryDir: string): Promise<TaskQueueType> {
   const file = path.join(memoryDir, 'TASKS.json')
   try {
-    return TaskQueue.parse(JSON.parse(await fs.readFile(file, 'utf-8')))
+    return TaskQueue.parse(JSON.parse(await readManagedTextFile(file, 'utf-8')))
   } catch {
     return TaskQueue.parse({ version: 1, tasks: [] })
   }
 }
 
 async function writeQueue(memoryDir: string, queue: TaskQueueType): Promise<void> {
-  await atomicWriteText(path.join(memoryDir, 'TASKS.json'), JSON.stringify(TaskQueue.parse(queue), null, 2))
+  await writeManagedTextFileSync(path.join(memoryDir, 'TASKS.json'), JSON.stringify(TaskQueue.parse(queue), null, 2))
 }
 
 function hasImprovementReviewNote(task: Task, lensId: ImprovementLensId): boolean {

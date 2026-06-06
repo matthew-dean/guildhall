@@ -1,3 +1,4 @@
+import { appendManagedTextFile, readManagedTextFile, readManagedTextFileSync, writeManagedTextFile } from '@guildhall/persistence'
 import { defineTool } from '@guildhall/engine'
 import { z } from 'zod'
 import { runGates } from './gate-runner.js'
@@ -96,7 +97,7 @@ async function persistGateResultsForCurrentTask(input: {
   if (!taskId || !tasksPath) return false
 
   try {
-    const raw = await fs.readFile(tasksPath, 'utf8')
+    const raw = await readManagedTextFile(tasksPath, 'utf8')
     const queue = JSON.parse(raw) as {
       version: number
       lastUpdated: string

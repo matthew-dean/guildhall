@@ -1,3 +1,4 @@
+import { appendManagedTextFile, readManagedTextFile, readManagedTextFileSync, writeManagedTextFile } from '@guildhall/persistence'
 import fs from 'node:fs/promises'
 import { existsSync } from 'node:fs'
 import path from 'node:path'
@@ -43,7 +44,7 @@ export async function readLocalOnlyState(
   memoryDir: string,
 ): Promise<LocalOnlyState | undefined> {
   try {
-    const raw = await fs.readFile(localOnlyPath(memoryDir), 'utf-8')
+    const raw = await readManagedTextFile(localOnlyPath(memoryDir), 'utf-8')
     return JSON.parse(raw) as LocalOnlyState
   } catch {
     return undefined
@@ -56,7 +57,7 @@ async function writeLocalOnlyState(
 ): Promise<void> {
   const target = localOnlyPath(memoryDir)
   const tmp = target + '.tmp'
-  await fs.writeFile(tmp, JSON.stringify(state, null, 2) + '\n', 'utf-8')
+  await writeManagedTextFile(tmp, JSON.stringify(state, null, 2) + '\n', 'utf-8')
   await fs.rename(tmp, target)
 }
 

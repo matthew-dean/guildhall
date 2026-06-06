@@ -1,3 +1,5 @@
+import { writeManagedTextFileSync } from '@guildhall/persistence'
+import { appendManagedTextFile, readManagedTextFile, readManagedTextFileSync, writeManagedTextFile } from '@guildhall/persistence'
 import fs from 'node:fs/promises'
 import path from 'node:path'
 
@@ -307,7 +309,7 @@ async function resolveScopedAutomationBlockers(input: {
 }
 
 async function readQueue(memoryDir: string): Promise<TaskQueue> {
-  const raw = await fs.readFile(path.join(memoryDir, 'TASKS.json'), 'utf8')
+  const raw = await readManagedTextFile(path.join(memoryDir, 'TASKS.json'), 'utf8')
   const parsed = JSON.parse(raw)
   return Array.isArray(parsed)
     ? { version: 1, lastUpdated: new Date().toISOString(), tasks: parsed }
@@ -315,7 +317,7 @@ async function readQueue(memoryDir: string): Promise<TaskQueue> {
 }
 
 async function writeQueue(memoryDir: string, queue: TaskQueue): Promise<void> {
-  atomicWriteText(path.join(memoryDir, 'TASKS.json'), `${JSON.stringify(queue, null, 2)}\n`)
+  writeManagedTextFileSync(path.join(memoryDir, 'TASKS.json'), `${JSON.stringify(queue, null, 2)}\n`)
 }
 
 function automaticQuestionAnswer(question: AgentQuestion, ownerIntent: string | undefined): string {

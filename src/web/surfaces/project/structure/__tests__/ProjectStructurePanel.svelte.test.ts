@@ -645,7 +645,7 @@ describe('ProjectStructurePanel', () => {
 
     await userEvent.click(screen.getByRole('button', { name: 'Link capability' }))
     await screen.findByRole('dialog', { name: 'Link capability to another project' })
-    expect(screen.getByText(/rare case where another registered Guildhall project owns/)).toBeInTheDocument()
+    expect(screen.getByText(/rare case where another registered project owns/)).toBeInTheDocument()
     expect(screen.queryByLabelText('Find capability')).not.toBeInTheDocument()
     expect(screen.queryByRole('combobox', { name: 'Area or contract' })).not.toBeInTheDocument()
     const dropdownButton = screen.getByRole('button', { name: 'Show capabilities' })

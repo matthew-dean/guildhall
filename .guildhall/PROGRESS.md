@@ -322,3 +322,8 @@ source: codex:looma-contextmenu-flow-audit
 Implemented and verified selected-task closure-chain behavior for Looma + Knit ContextMenu. Unit coverage now proves scoped one-task runs continue after successful linked child completion, auto-close the selected parent when linked child work is complete, and stop as dependency_blocked when a linked child is blocked. Verified focused orchestrator tests, task-start endpoint test, typecheck, build, dev install, service restart, stale:false. Live proof after reinstall: ContextMenu child task-import-1l0mr2r-split-component-implementation escalated with human_judgment_required, and retrying selected ContextMenu immediately stopped with stopReason dependency_blocked and message naming the blocked child instead of idling or touching unrelated work.
 
 source: codex:selected-task-closure-chain-fix
+## 2026-06-06T06:20:31.051Z MCP evidence for task-import-1l0mr2r
+
+Loosened the spec/coordinator durable-progress guard by one bounded read-only follow-up after a durable-progress nudge while keeping a second extra read-only turn refused. Added run-query regression coverage for the allowed grace path and the bounded refusal path; verified full run-query tests, focused guildhall-agent nudge tests, typecheck, build, dev install, service restart, and stale:false. Live Looma + Knit proof: resolved esc-task-import-1l0mr2r-split-component-implementation-1 back to exploring, restarted selected ContextMenu, and the old durable-progress escalation did not recur. The component child stayed exploring with no open escalation; the run stopped on provider_backoff from DeepInfra HTTP 429 engine_overloaded.
+
+source: codex:spec-readonly-grace-contextmenu-retry

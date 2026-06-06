@@ -1,3 +1,5 @@
+import { writeManagedTextFileSync } from '@guildhall/persistence'
+import { appendManagedTextFile, readManagedTextFile, readManagedTextFileSync, writeManagedTextFile } from '@guildhall/persistence'
 import { readFileSync, existsSync, mkdirSync, statSync, writeFileSync, readdirSync, type Dirent, promises as fsp } from 'node:fs'
 import { dirname, join, resolve, basename, relative, isAbsolute, sep as pathSeparator, extname } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -568,7 +570,7 @@ function detectProjectPackageManagers(projectPath: string): string[] {
 
     if (names.has('package.json')) {
       try {
-        const pkg = JSON.parse(readFileSync(join(dir, 'package.json'), 'utf8')) as { packageManager?: string }
+        const pkg = JSON.parse(readManagedTextFileSync(join(dir, 'package.json'), 'utf8')) as { packageManager?: string }
         const pm = pkg.packageManager?.split('@')[0]
         if (pm === 'pnpm' || pm === 'yarn' || pm === 'npm' || pm === 'bun') found.add(pm)
       } catch {
@@ -755,7 +757,7 @@ async function collectProjectReintakeSources(projectPath: string): Promise<Array
       if (!['.md', '.markdown', '.txt'].includes(ext)) continue
       let content = ''
       try {
-        content = await fsp.readFile(absolute, 'utf-8')
+        content = await readManagedTextFile(absolute, 'utf-8')
       } catch {
         continue
       }
@@ -876,7 +878,7 @@ async function readTasksFileNormalized(
         tasks,
         lastUpdated: new Date().toISOString(),
       }
-  await atomicWriteText(tasksPath, JSON.stringify(rewritten, null, 2))
+  await writeManagedTextFileSync(tasksPath, JSON.stringify(rewritten, null, 2))
   normalizedTasksCache.set(tasksPath, { raw: rewritten, tasks: tasks.map(task => ({ ...task })) })
   return tasks
 }
@@ -891,7 +893,7 @@ async function writeTasksFilePreservingQueue(
     | null = null
   if (existsSync(tasksPath)) {
     try {
-      parsed = JSON.parse(await fsp.readFile(tasksPath, 'utf8')) as typeof parsed
+      parsed = JSON.parse(await readManagedTextFile(tasksPath, 'utf8')) as typeof parsed
     } catch {
       parsed = null
     }
@@ -903,7 +905,7 @@ async function writeTasksFilePreservingQueue(
         tasks,
         lastUpdated: new Date().toISOString(),
       }
-  await atomicWriteText(tasksPath, JSON.stringify(rewritten, null, 2) + '\n')
+  await writeManagedTextFileSync(tasksPath, JSON.stringify(rewritten, null, 2) + '\n')
   normalizedTasksCache.set(tasksPath, { raw: rewritten, tasks: tasks.map(task => ({ ...task })) })
 }
 
@@ -1089,7 +1091,7 @@ function writeWizardsState(projectPath: string, state: WizardsState): void {
   const memDir = getProjectStateDir(projectPath)
   if (!existsSync(memDir)) mkdirSync(memDir, { recursive: true })
   const path = join(memDir, 'wizards.yaml')
-  writeFileSync(path, stringifyYaml(state), 'utf8')
+  writeManagedTextFileSync(path, stringifyYaml(state))
 }
 
 function mutateSkip(
@@ -1540,7 +1542,7 @@ function summarizeProjectText(project: ResolvedProject): string | null {
   }
   const briefPath = join(getProjectStateDir(project.path), 'project-brief.md')
   if (existsSync(briefPath)) {
-    const brief = readFileSync(briefPath, 'utf8')
+    const brief = readManagedTextFileSync(briefPath, 'utf8')
       .split(/\r?\n/)
       .map((line) => line.replace(/^#+\s*/, '').trim())
       .filter((line) => line.length > 0)
@@ -2319,7 +2321,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
         for (let i = 0; i < 8; i++) {
           const candidate = join(dir, 'package.json')
           if (existsSync(candidate)) {
-            const pkg = JSON.parse(readFileSync(candidate, 'utf-8')) as {
+            const pkg = JSON.parse(readManagedTextFileSync(candidate, 'utf-8')) as {
               name?: string
             }
             if (pkg?.name === 'guildhall' || pkg?.name === '@guildhall/cli') {
@@ -2346,7 +2348,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
       if (root) {
         const candidate = join(root, 'package.json')
         if (existsSync(candidate)) {
-          const pkg = JSON.parse(readFileSync(candidate, 'utf-8')) as {
+          const pkg = JSON.parse(readManagedTextFileSync(candidate, 'utf-8')) as {
             version?: string
           }
           _cachedVersion = pkg.version ?? 'unknown'
@@ -2671,7 +2673,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
       ]
       for (const candidate of candidates) {
         if (!existsSync(candidate)) continue
-        const parsed = JSON.parse(readFileSync(candidate, 'utf-8')) as Partial<RuntimeBuildIdentity>
+        const parsed = JSON.parse(readManagedTextFileSync(candidate, 'utf-8')) as Partial<RuntimeBuildIdentity>
         const git = (parsed.git ?? {}) as Record<string, unknown>
         if (
           typeof parsed.builtAt === 'string' &&
@@ -4065,7 +4067,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
     if (!existsSync(tasksPath)) return null
     let raw: unknown
     try {
-      raw = JSON.parse(readFileSync(tasksPath, 'utf-8'))
+      raw = JSON.parse(readManagedTextFileSync(tasksPath, 'utf-8'))
     } catch {
       return null
     }
@@ -4129,7 +4131,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
   } | null> {
     const tasksPath = join(getProjectStateDir(projectPath), 'TASKS.json')
     if (!existsSync(tasksPath)) return null
-    const raw = JSON.parse(await fsp.readFile(tasksPath, 'utf-8')) as
+    const raw = JSON.parse(await readManagedTextFile(tasksPath, 'utf-8')) as
       | { tasks?: Array<Record<string, unknown>> }
       | Array<Record<string, unknown>>
     const tasks = Array.isArray(raw) ? raw : raw.tasks ?? []
@@ -4163,7 +4165,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
   } | null> {
     const tasksPath = join(getProjectStateDir(projectPath), 'TASKS.json')
     if (!existsSync(tasksPath)) return null
-    const raw = JSON.parse(await fsp.readFile(tasksPath, 'utf-8')) as
+    const raw = JSON.parse(await readManagedTextFile(tasksPath, 'utf-8')) as
       | { tasks?: Array<Record<string, unknown>> }
       | Array<Record<string, unknown>>
     const tasks = Array.isArray(raw) ? raw : raw.tasks ?? []
@@ -5071,7 +5073,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
       if (!existsSync(tasksPath)) {
         return c.json({ status: 'no-task', taskExists: false, specReady: false, drafts: [] })
       }
-      const raw = await fsp.readFile(tasksPath, 'utf-8')
+      const raw = await readManagedTextFile(tasksPath, 'utf-8')
       const parsed = JSON.parse(raw) as { tasks?: Array<Record<string, unknown>> } | Array<Record<string, unknown>>
       const tasks = Array.isArray(parsed) ? parsed : parsed.tasks ?? []
       const task = tasks.find(t => (t as { id?: string }).id === META_INTAKE_TASK_ID) as
@@ -5219,7 +5221,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
       let specPresent = false
       let parsedSpecDraft: ReturnType<typeof parseWorkspaceImport> | null = null
       if (existsSync(tasksPath)) {
-        const raw = JSON.parse(await fsp.readFile(tasksPath, 'utf-8')) as
+        const raw = JSON.parse(await readManagedTextFile(tasksPath, 'utf-8')) as
           | { tasks?: Array<Record<string, unknown>> }
           | Array<Record<string, unknown>>
         const list = Array.isArray(raw) ? raw : raw.tasks ?? []
@@ -5412,7 +5414,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
       try {
         const goalsPath = join(memoryDir, 'workspace-goals.json')
         if (existsSync(goalsPath)) {
-          const g = JSON.parse(await fsp.readFile(goalsPath, 'utf-8')) as {
+          const g = JSON.parse(await readManagedTextFile(goalsPath, 'utf-8')) as {
             dismissed?: boolean
           }
           dismissed = Boolean(g.dismissed)
@@ -5425,7 +5427,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
       const tasksPath = join(memoryDir, 'TASKS.json')
       if (existsSync(tasksPath)) {
         try {
-          const raw = JSON.parse(await fsp.readFile(tasksPath, 'utf-8')) as
+          const raw = JSON.parse(await readManagedTextFile(tasksPath, 'utf-8')) as
             | { tasks?: Array<Record<string, unknown>> }
             | Array<Record<string, unknown>>
           const list = Array.isArray(raw) ? raw : raw.tasks ?? []
@@ -5483,7 +5485,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
           anchors,
         })
       }
-      const raw = JSON.parse(await fsp.readFile(tasksPath, 'utf-8')) as
+      const raw = JSON.parse(await readManagedTextFile(tasksPath, 'utf-8')) as
         | { tasks?: Array<Record<string, unknown>> }
         | Array<Record<string, unknown>>
       const list = Array.isArray(raw) ? raw : raw.tasks ?? []
@@ -5551,7 +5553,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
       try {
         const tasksPath = join(memoryDir, 'TASKS.json')
         const raw = existsSync(tasksPath)
-          ? (JSON.parse(await fsp.readFile(tasksPath, 'utf-8')) as
+          ? (JSON.parse(await readManagedTextFile(tasksPath, 'utf-8')) as
               | Array<Record<string, unknown>>
               | { tasks?: Array<Record<string, unknown>> })
           : { tasks: [] as Array<Record<string, unknown>> }
@@ -5567,7 +5569,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
             projectPath: project.path,
           })
           // Re-read after creation.
-          const raw2 = JSON.parse(await fsp.readFile(tasksPath, 'utf-8')) as
+          const raw2 = JSON.parse(await readManagedTextFile(tasksPath, 'utf-8')) as
             | Array<Record<string, unknown>>
             | { tasks?: Array<Record<string, unknown>> }
           const list2 = Array.isArray(raw2) ? raw2 : raw2.tasks ?? []
@@ -5582,7 +5584,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
             if (spec) {
               task.spec = spec
               const next = Array.isArray(raw2) ? list2 : { ...raw2, tasks: list2 }
-              await fsp.writeFile(tasksPath, JSON.stringify(next, null, 2), 'utf-8')
+              await writeManagedTextFile(tasksPath, JSON.stringify(next, null, 2), 'utf-8')
             }
           }
         } else {
@@ -5596,7 +5598,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
             if (spec) {
               task.spec = spec
               const next = Array.isArray(raw) ? list : { ...raw, tasks: list }
-              await fsp.writeFile(tasksPath, JSON.stringify(next, null, 2), 'utf-8')
+              await writeManagedTextFile(tasksPath, JSON.stringify(next, null, 2), 'utf-8')
               importerTaskHasSpec = true
             }
           }
@@ -5713,7 +5715,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
         | null = null
       if (existsSync(goalsPath)) {
         try {
-          const raw = JSON.parse(readFileSync(goalsPath, 'utf8')) as Record<string, unknown>
+          const raw = JSON.parse(readManagedTextFileSync(goalsPath, 'utf8')) as Record<string, unknown>
           if ((raw as { dismissed?: boolean }).dismissed) {
             workspaceGoals = { imported: false, dismissed: true, goalCount: 0, taskCount: 0, milestoneCount: 0 }
           } else {
@@ -5735,7 +5737,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
       const tasksPath = join(memoryDir, 'TASKS.json')
       if (existsSync(tasksPath)) {
         try {
-          const raw = JSON.parse(readFileSync(tasksPath, 'utf8')) as
+          const raw = JSON.parse(readManagedTextFileSync(tasksPath, 'utf8')) as
             | { tasks?: Array<Record<string, unknown>> }
             | Array<Record<string, unknown>>
           const list = Array.isArray(raw) ? raw : raw.tasks ?? []
@@ -5805,7 +5807,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
       const memoryDir = getProjectStateDir(project.path)
       await fsp.mkdir(memoryDir, { recursive: true })
       const goalsPath = join(memoryDir, 'workspace-goals.json')
-      await fsp.writeFile(
+      await writeManagedTextFile(
         goalsPath,
         JSON.stringify({ dismissed: true, dismissedAt: new Date().toISOString() }, null, 2),
         'utf-8',
@@ -5833,7 +5835,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
   async function fileSummary(filePath: string): Promise<{ present: boolean; nonEmptyLines: number }> {
     if (!existsSync(filePath)) return { present: false, nonEmptyLines: 0 }
     try {
-      const raw = await fsp.readFile(filePath, 'utf-8')
+      const raw = await readManagedTextFile(filePath, 'utf-8')
       const nonEmptyLines = raw
         .split(/\r?\n/)
         .map(line => line.trim())
@@ -5860,7 +5862,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
     const goalsPath = join(memoryDir, 'workspace-goals.json')
     if (existsSync(goalsPath)) {
       try {
-        const raw = JSON.parse(await fsp.readFile(goalsPath, 'utf-8')) as { goals?: unknown[] }
+        const raw = JSON.parse(await readManagedTextFile(goalsPath, 'utf-8')) as { goals?: unknown[] }
         workspaceGoals = { present: true, goalCount: Array.isArray(raw.goals) ? raw.goals.length : 0 }
       } catch {
         workspaceGoals = { present: true, goalCount: 0 }
@@ -5886,7 +5888,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
       let existingTasks: Array<{ title: string; status: string }> = []
       if (existsSync(tasksPath)) {
         try {
-          const raw = JSON.parse(await fsp.readFile(tasksPath, 'utf-8')) as
+          const raw = JSON.parse(await readManagedTextFile(tasksPath, 'utf-8')) as
             | { tasks?: Array<Record<string, unknown>> }
             | Array<Record<string, unknown>>
           const list = Array.isArray(raw) ? raw : raw.tasks ?? []
@@ -6137,7 +6139,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
       if (!stat.isFile()) return c.json({ error: 'Source note not found.' }, 404)
 
       const maxChars = 96_000
-      const raw = await fsp.readFile(candidate, 'utf8')
+      const raw = await readManagedTextFile(candidate, 'utf8')
       const truncated = raw.length > maxChars
       return c.json({
         path: candidate,
@@ -6219,7 +6221,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
       if (project.initializationNeeded) return c.json({ wizards: [] })
       const tasksPath = join(getProjectStateDir(project.path), 'TASKS.json')
       if (!existsSync(tasksPath)) return c.json({ error: 'no tasks file' }, 404)
-      const raw = JSON.parse(readFileSync(tasksPath, 'utf8')) as
+      const raw = JSON.parse(readManagedTextFileSync(tasksPath, 'utf8')) as
         | { tasks?: Array<Record<string, unknown>> }
         | Array<Record<string, unknown>>
       const tasks = Array.isArray(raw) ? raw : raw.tasks ?? []
@@ -6321,14 +6323,14 @@ export function buildServeApp(opts: ServeOptions = {}): {
     try {
       if (project.initializationNeeded) return c.json({ current: '', seed: { readme: '', roadmap: [] } })
       const briefPath = join(getProjectStateDir(project.path), 'project-brief.md')
-      const current = existsSync(briefPath) ? readFileSync(briefPath, 'utf8') : ''
+      const current = existsSync(briefPath) ? readManagedTextFileSync(briefPath, 'utf8') : ''
       const readmePath = join(project.path, 'README.md')
       const roadmapPath = join(project.path, 'ROADMAP.md')
       const readmeFirstPara = existsSync(readmePath)
-        ? (readFileSync(readmePath, 'utf8').split(/\n{2,}/).find(p => p.trim() && !p.trim().startsWith('#')) ?? '').trim().slice(0, 800)
+        ? (readManagedTextFileSync(readmePath, 'utf8').split(/\n{2,}/).find(p => p.trim() && !p.trim().startsWith('#')) ?? '').trim().slice(0, 800)
         : ''
       const roadmapHeadings = existsSync(roadmapPath)
-        ? readFileSync(roadmapPath, 'utf8')
+        ? readManagedTextFileSync(roadmapPath, 'utf8')
             .split(/\r?\n/)
             .filter(l => /^#{1,3}\s+/.test(l))
             .map(l => l.replace(/^#{1,3}\s+/, '').trim())
@@ -6348,7 +6350,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
       if (content.length < 40) return c.json({ error: 'brief must be at least 40 characters' }, 400)
       const memDir = getProjectStateDir(project.path)
       if (!existsSync(memDir)) mkdirSync(memDir, { recursive: true })
-      writeFileSync(join(memDir, 'project-brief.md'), content + '\n', 'utf8')
+      writeManagedTextFileSync(join(memDir, 'project-brief.md'), content + '\n')
       return c.json({ ok: true })
     } catch (err) {
       return c.json({ error: err instanceof Error ? err.message : String(err) }, 500)
@@ -6726,7 +6728,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
       const memoryDir = getProjectStateDir(project.path)
       const tasksPath = join(memoryDir, 'TASKS.json')
       if (!existsSync(tasksPath)) return c.json({ error: 'no tasks file' }, 404)
-      const parsed = JSON.parse(readFileSync(tasksPath, 'utf8')) as
+      const parsed = JSON.parse(readManagedTextFileSync(tasksPath, 'utf8')) as
         | { tasks?: Array<Record<string, unknown>>; version?: number; lastUpdated?: string }
         | Array<Record<string, unknown>>
       const queue = Array.isArray(parsed)
@@ -6750,7 +6752,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
         task.notes = notes
         task.updatedAt = now
         queue.lastUpdated = now
-        atomicWriteText(tasksPath, JSON.stringify(queue, null, 2) + '\n')
+        writeManagedTextFileSync(tasksPath, JSON.stringify(queue, null, 2) + '\n')
         return c.json({ ok: true, commitSha: result.commitSha, task: await enrichTaskForServe(project.path, task) })
       }
       if (closureAction === 'push') {
@@ -6800,7 +6802,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
       }
       task.updatedAt = now
       queue.lastUpdated = now
-      atomicWriteText(tasksPath, JSON.stringify(queue, null, 2) + '\n')
+      writeManagedTextFileSync(tasksPath, JSON.stringify(queue, null, 2) + '\n')
       return c.json({
         ok: true,
         task: await enrichTaskForServe(project.path, task),
@@ -6839,7 +6841,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
       if (project.initializationNeeded) return c.json({ error: 'not initialized' }, 400)
       const tasksPath = join(getProjectStateDir(project.path), 'TASKS.json')
       if (!existsSync(tasksPath)) return c.json({ error: 'no tasks file' }, 404)
-      const raw = JSON.parse(readFileSync(tasksPath, 'utf8')) as
+      const raw = JSON.parse(readManagedTextFileSync(tasksPath, 'utf8')) as
         | { tasks?: Array<Record<string, unknown>> }
         | Array<Record<string, unknown>>
       const tasks = Array.isArray(raw) ? raw : raw.tasks ?? []
@@ -7206,7 +7208,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
       if (action === 'create-split-children') {
         const tasksPath = join(memoryDir, 'TASKS.json')
         if (!existsSync(tasksPath)) return c.json({ error: 'no tasks file' }, 404)
-        const queue = TaskQueue.parse(JSON.parse(readFileSync(tasksPath, 'utf8')))
+        const queue = TaskQueue.parse(JSON.parse(readManagedTextFileSync(tasksPath, 'utf8')))
         const task = queue.tasks.find(t => t.id === id)
         if (!task) return c.json({ error: 'task not found' }, 404)
         const sizePlan = task.sizePlan
@@ -7241,7 +7243,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
         }
         task.updatedAt = now
         queue.lastUpdated = now
-        atomicWriteText(tasksPath, JSON.stringify(queue, null, 2) + '\n')
+        writeManagedTextFileSync(tasksPath, JSON.stringify(queue, null, 2) + '\n')
         return c.json({
           ok: true,
           parentTaskId: task.id,
@@ -7255,7 +7257,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
       if (action === 'approve-brief') {
         const tasksPath = join(memoryDir, 'TASKS.json')
         if (!existsSync(tasksPath)) return c.json({ error: 'no tasks file' }, 404)
-        const parsed = JSON.parse(readFileSync(tasksPath, 'utf8')) as
+        const parsed = JSON.parse(readManagedTextFileSync(tasksPath, 'utf8')) as
           | { tasks?: Array<Record<string, unknown>>; version?: number; lastUpdated?: string }
           | Array<Record<string, unknown>>
         const queue = Array.isArray(parsed)
@@ -7325,7 +7327,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
         }
         task.updatedAt = now
         queue.lastUpdated = now
-        atomicWriteText(tasksPath, JSON.stringify(queue, null, 2) + '\n')
+        writeManagedTextFileSync(tasksPath, JSON.stringify(queue, null, 2) + '\n')
         return c.json({ ok: true, status: task.status })
       }
 
@@ -7334,7 +7336,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
         const evidence = (body.evidence ?? '').trim()
         const tasksPath = join(memoryDir, 'TASKS.json')
         if (!existsSync(tasksPath)) return c.json({ error: 'no tasks file' }, 404)
-        const parsed = JSON.parse(readFileSync(tasksPath, 'utf8')) as
+        const parsed = JSON.parse(readManagedTextFileSync(tasksPath, 'utf8')) as
           | { tasks?: Array<Record<string, unknown>>; version?: number; lastUpdated?: string }
           | Array<Record<string, unknown>>
         const queue = Array.isArray(parsed)
@@ -7396,7 +7398,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
           createdBy: 'system:mark-done',
         })
         queue.lastUpdated = now
-        atomicWriteText(tasksPath, JSON.stringify(queue, null, 2) + '\n')
+        writeManagedTextFileSync(tasksPath, JSON.stringify(queue, null, 2) + '\n')
         return c.json({ ok: true, status: 'done' })
       }
 
@@ -7406,7 +7408,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
         if (!description) return c.json({ error: 'description required' }, 400)
         const tasksPath = join(memoryDir, 'TASKS.json')
         if (!existsSync(tasksPath)) return c.json({ error: 'no tasks file' }, 404)
-        const parsed = JSON.parse(readFileSync(tasksPath, 'utf8')) as
+        const parsed = JSON.parse(readManagedTextFileSync(tasksPath, 'utf8')) as
           | { tasks?: Array<Record<string, unknown>>; version?: number; lastUpdated?: string }
           | Array<Record<string, unknown>>
         const queue = Array.isArray(parsed)
@@ -7437,7 +7439,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
         task.notes = notes
         task.updatedAt = now
         queue.lastUpdated = now
-        atomicWriteText(tasksPath, JSON.stringify(queue, null, 2) + '\n')
+        writeManagedTextFileSync(tasksPath, JSON.stringify(queue, null, 2) + '\n')
         return c.json({ ok: true, count: criteria.length })
       }
 
@@ -7455,7 +7457,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
         }
         const tasksPath = join(memoryDir, 'TASKS.json')
         if (!existsSync(tasksPath)) return c.json({ error: 'no tasks file' }, 404)
-        const parsed = JSON.parse(readFileSync(tasksPath, 'utf8')) as
+        const parsed = JSON.parse(readManagedTextFileSync(tasksPath, 'utf8')) as
           | { tasks?: Array<Record<string, unknown>>; version?: number; lastUpdated?: string }
           | Array<Record<string, unknown>>
         const queue = Array.isArray(parsed)
@@ -7510,7 +7512,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
         task.notes = notes
         task.updatedAt = now
         queue.lastUpdated = now
-        atomicWriteText(tasksPath, JSON.stringify(queue, null, 2) + '\n')
+        writeManagedTextFileSync(tasksPath, JSON.stringify(queue, null, 2) + '\n')
         return c.json({ ok: true })
       }
 
@@ -7528,7 +7530,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
         }
         const tasksPath = join(memoryDir, 'TASKS.json')
         if (!existsSync(tasksPath)) return c.json({ error: 'no tasks file' }, 404)
-        const parsed = JSON.parse(readFileSync(tasksPath, 'utf8')) as
+        const parsed = JSON.parse(readManagedTextFileSync(tasksPath, 'utf8')) as
           | { tasks?: Array<Record<string, unknown>>; version?: number; lastUpdated?: string }
           | Array<Record<string, unknown>>
         const queue = Array.isArray(parsed)
@@ -7548,7 +7550,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
         task.openQuestions = questions
         task.updatedAt = now
         queue.lastUpdated = now
-        atomicWriteText(tasksPath, JSON.stringify(queue, null, 2) + '\n')
+        writeManagedTextFileSync(tasksPath, JSON.stringify(queue, null, 2) + '\n')
         // Also append to the exploring transcript so the asking agent reads it.
         await resumeExploring({
           memoryDir,
@@ -7566,7 +7568,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
         if (!body.questionId) return c.json({ error: 'Missing questionId' }, 400)
         const tasksPath = join(memoryDir, 'TASKS.json')
         if (!existsSync(tasksPath)) return c.json({ error: 'no tasks file' }, 404)
-        const parsed = JSON.parse(readFileSync(tasksPath, 'utf8')) as
+        const parsed = JSON.parse(readManagedTextFileSync(tasksPath, 'utf8')) as
           | { tasks?: Array<Record<string, unknown>>; version?: number; lastUpdated?: string }
           | Array<Record<string, unknown>>
         const queue = Array.isArray(parsed)
@@ -7585,7 +7587,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
         task.openQuestions = questions
         task.updatedAt = new Date().toISOString()
         queue.lastUpdated = task.updatedAt as string
-        atomicWriteText(tasksPath, JSON.stringify(queue, null, 2) + '\n')
+        writeManagedTextFileSync(tasksPath, JSON.stringify(queue, null, 2) + '\n')
         return c.json({ ok: true, staged: Boolean(nextDraft) })
       }
 
@@ -7610,7 +7612,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
         }
         const tasksPath = join(memoryDir, 'TASKS.json')
         if (!existsSync(tasksPath)) return c.json({ error: 'no tasks file' }, 404)
-        const parsed = JSON.parse(readFileSync(tasksPath, 'utf8')) as
+        const parsed = JSON.parse(readManagedTextFileSync(tasksPath, 'utf8')) as
           | { tasks?: Array<Record<string, unknown>>; version?: number; lastUpdated?: string }
           | Array<Record<string, unknown>>
         const queue = Array.isArray(parsed)
@@ -7638,7 +7640,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
         task.openQuestions = questions
         task.updatedAt = now
         queue.lastUpdated = now
-        atomicWriteText(tasksPath, JSON.stringify(queue, null, 2) + '\n')
+        writeManagedTextFileSync(tasksPath, JSON.stringify(queue, null, 2) + '\n')
         // Single resume with all answers — agent gets the full batch in one
         // context restart instead of N separate ones.
         await resumeExploring({
@@ -7675,7 +7677,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
       // hold / resume-hold / shelve / unshelve: in-place mutation of TASKS.json.
       const tasksPath = join(memoryDir, 'TASKS.json')
       if (!existsSync(tasksPath)) return c.json({ error: 'no tasks file' }, 404)
-      const parsed = JSON.parse(readFileSync(tasksPath, 'utf8')) as
+      const parsed = JSON.parse(readManagedTextFileSync(tasksPath, 'utf8')) as
         | { tasks?: Array<Record<string, unknown>>; version?: number; lastUpdated?: string }
         | Array<Record<string, unknown>>
       const queue = Array.isArray(parsed)
@@ -7745,7 +7747,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
       task.notes = notes
       task.updatedAt = now
       queue.lastUpdated = now
-      atomicWriteText(tasksPath, JSON.stringify(queue, null, 2) + '\n')
+      writeManagedTextFileSync(tasksPath, JSON.stringify(queue, null, 2) + '\n')
       return c.json({ ok: true, status: task.status })
     } catch (err) {
       return c.json({ error: err instanceof Error ? err.message : String(err) }, 500)
@@ -7762,7 +7764,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
       const tasksPath = join(getProjectStateDir(project.path), 'TASKS.json')
       const empty = { running: run?.status === 'running', counts: {}, inFlight: [] as unknown[] }
       if (!existsSync(tasksPath)) return c.json(empty)
-      const raw = JSON.parse(readFileSync(tasksPath, 'utf8')) as
+      const raw = JSON.parse(readManagedTextFileSync(tasksPath, 'utf8')) as
         | { tasks?: Array<Record<string, unknown>> }
         | Array<Record<string, unknown>>
       const tasks = Array.isArray(raw) ? raw : raw.tasks ?? []
@@ -7825,7 +7827,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
       if (project.initializationNeeded) return c.json({ progress: '' })
       const progressPath = join(getProjectStateDir(project.path), 'PROGRESS.md')
       if (!existsSync(progressPath)) return c.json({ progress: '' })
-      const raw = readFileSync(progressPath, 'utf8')
+      const raw = readManagedTextFileSync(progressPath, 'utf8')
       // Heartbeat blocks are routine forward transitions — they duplicate
       // the Live Activity feed and clutter the Recent PROGRESS.md panel.
       // Keep only milestones, blocks, escalations, and free-form agent
@@ -8261,7 +8263,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
         if (!existsSync(tasksPath)) return []
         let raw: { tasks?: Array<Record<string, unknown>> } | Array<Record<string, unknown>>
         try {
-          raw = JSON.parse(readFileSync(tasksPath, 'utf8')) as
+          raw = JSON.parse(readManagedTextFileSync(tasksPath, 'utf8')) as
             | { tasks?: Array<Record<string, unknown>> }
             | Array<Record<string, unknown>>
         } catch {
@@ -9708,7 +9710,7 @@ export async function runServe(opts: ServeOptions = {}): Promise<void> {
     if (opts.serviceStatePath) {
       try {
         mkdirSync(dirname(opts.serviceStatePath), { recursive: true })
-        writeFileSync(opts.serviceStatePath, JSON.stringify({
+        writeManagedTextFileSync(opts.serviceStatePath, JSON.stringify({
           pid: process.pid,
           port: info.port,
           url: `http://localhost:${info.port}`,
@@ -9741,7 +9743,7 @@ export async function runServe(opts: ServeOptions = {}): Promise<void> {
   const removeServiceStateIfOwned = async (): Promise<void> => {
     if (!opts.serviceStatePath) return
     try {
-      const raw = await fsp.readFile(opts.serviceStatePath, 'utf8').catch(() => null)
+      const raw = await readManagedTextFile(opts.serviceStatePath, 'utf8').catch(() => null)
       if (!raw) return
       const parsed = JSON.parse(raw) as { pid?: unknown }
       if (parsed.pid !== process.pid) return
@@ -9981,7 +9983,7 @@ async function serveWebAsset(
   if (!existsSync(path)) {
     return c.text(`web asset not built: ${filename} (run pnpm build)`, 404)
   }
-  const body = await fsp.readFile(path)
+  const body = await readManagedTextFile(path)
   return new Response(body, {
     headers: {
       'content-type': contentType,

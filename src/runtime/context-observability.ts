@@ -1,3 +1,4 @@
+import { appendManagedTextFile, readManagedTextFile, readManagedTextFileSync, writeManagedTextFile } from '@guildhall/persistence'
 import fs from 'node:fs/promises'
 import path from 'node:path'
 import type { Task } from '@guildhall/core'
@@ -384,7 +385,7 @@ export async function writeContextDebugRecord(input: {
     boundedPrompt,
     '```',
   ].filter(Boolean).join('\n')
-  await fs.writeFile(snapshotPath, snapshot, 'utf8')
+  await writeManagedTextFile(snapshotPath, snapshot, 'utf8')
 
   const record: ContextDebugRecord = {
     id,
@@ -452,7 +453,7 @@ export async function writeContextDebugRecord(input: {
     payload: record,
     now: () => new Date(at),
   })
-  await fs.appendFile(ledgerPath, `${JSON.stringify(record)}\n`, 'utf8')
+  await appendManagedTextFile(ledgerPath, `${JSON.stringify(record)}\n`, 'utf8')
   return record
 }
 
@@ -483,7 +484,7 @@ export async function readContextDebugForTask(
   const projectRoot = inferProjectRootFromMemoryDir(memoryDir)
   const ledgerPath = getProjectContextDebugLedgerPath(projectRoot)
   try {
-    const raw = await fs.readFile(ledgerPath, 'utf8')
+    const raw = await readManagedTextFile(ledgerPath, 'utf8')
     const matches: ContextDebugRecord[] = []
     for (const line of raw.split('\n')) {
       if (!line.trim()) continue

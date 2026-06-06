@@ -206,12 +206,12 @@ describe('GET /api/project/task/:id', () => {
   })
 
   it('returns shared delivery-spine relationships and context packets for task detail', async () => {
-    await fs.writeFile(path.join(memoryDir, 'delivery-spine.json'), JSON.stringify({
+    await writeProjectDeliveryModel(tmpDir, {
       version: 1,
       updatedAt: '2026-06-05T12:00:00.000Z',
       drivers: [
-        { id: 'knit', label: 'Knit', role: 'primary', paths: ['./apps/knit'] },
-        { id: 'looma', label: 'Looma', role: 'provider', paths: ['./packages/looma'] },
+        { id: 'knit', label: 'Knit', role: 'primary', paths: ['./apps/knit'], domains: ['looma'] },
+        { id: 'looma', label: 'Looma', role: 'provider', paths: ['./packages/looma'], domains: ['looma'] },
       ],
       primitives: [
         {
@@ -220,12 +220,17 @@ describe('GET /api/project/task/:id', () => {
           kind: 'ui_primitive',
           provider: 'looma',
           paths: ['./packages/looma/src/menu'],
+          dependsOn: [],
           invariants: ['Can render as button or link.'],
           proof: ['storybook'],
           status: 'needs_proof',
+          evidence: [],
+          aliases: [],
         },
       ],
-    }, null, 2), 'utf8')
+      validationEvidence: [],
+      rejectedCandidates: [],
+    })
     await seedTasks([
       {
         id: 'task-component',

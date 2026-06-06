@@ -1,3 +1,4 @@
+import { appendManagedTextFile, readManagedTextFile, readManagedTextFileSync, writeManagedTextFile } from '@guildhall/persistence'
 import fs from 'node:fs/promises'
 import path from 'node:path'
 import { existsSync, readFileSync } from 'node:fs'
@@ -139,7 +140,7 @@ function readStore(memoryDir: string): MemoryStore {
   const file = memoryStorePath(memoryDir)
   if (!existsSync(file)) return { version: 1, records: [] }
   try {
-    return MemoryStore.parse(JSON.parse(readFileSync(file, 'utf8')))
+    return MemoryStore.parse(JSON.parse(readManagedTextFileSync(file, 'utf8')))
   } catch {
     return { version: 1, records: [] }
   }
@@ -147,13 +148,13 @@ function readStore(memoryDir: string): MemoryStore {
 
 async function writeStore(memoryDir: string, store: MemoryStore): Promise<void> {
   await fs.mkdir(memoryDir, { recursive: true })
-  await fs.writeFile(memoryStorePath(memoryDir), `${JSON.stringify(MemoryStore.parse(store), null, 2)}\n`, 'utf8')
+  await writeManagedTextFile(memoryStorePath(memoryDir), `${JSON.stringify(MemoryStore.parse(store), null, 2)}\n`, 'utf8')
 }
 
 function readMemoryMarkdown(memoryDir: string): MemoryRecord[] {
   const file = path.join(memoryDir, 'MEMORY.md')
   if (!existsSync(file)) return []
-  const raw = readFileSync(file, 'utf8')
+  const raw = readManagedTextFileSync(file, 'utf8')
   const sections = raw.split(/^##\s+/m).slice(1)
   const now = '1970-01-01T00:00:00.000Z'
   return sections
@@ -189,7 +190,7 @@ function readLearningAdapters(dir: string, scope: 'project' | 'user_global'): Me
   const file = path.join(dir, 'learning.json')
   if (!existsSync(file)) return []
   try {
-    const parsed = JSON.parse(readFileSync(file, 'utf8')) as {
+    const parsed = JSON.parse(readManagedTextFileSync(file, 'utf8')) as {
       suggestedLearnings?: Array<Record<string, unknown>>
     }
     return (parsed.suggestedLearnings ?? []).flatMap((item) => {
@@ -232,7 +233,7 @@ function readProjectSkillAdapters(memoryDir: string): MemoryRecord[] {
   const file = path.join(memoryDir, 'project-skills.json')
   if (!existsSync(file)) return []
   try {
-    const parsed = JSON.parse(readFileSync(file, 'utf8')) as {
+    const parsed = JSON.parse(readManagedTextFileSync(file, 'utf8')) as {
       proposals?: Array<Record<string, unknown>>
     }
     return (parsed.proposals ?? []).flatMap((proposal) => {

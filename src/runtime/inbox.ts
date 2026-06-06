@@ -18,7 +18,7 @@ import { parse as parseYaml } from 'yaml'
 import type { Task } from '@guildhall/core'
 import { META_INTAKE_TASK_ID } from './meta-intake.js'
 import type { BootstrapStatus } from './bootstrap-runner.js'
-import { DELIVERY_SPINE_FILE } from './delivery-spine.js'
+import { readProjectDeliveryModelSync } from './delivery-spine.js'
 import {
   buildSnapshot,
   buildTaskSnapshot,
@@ -243,10 +243,7 @@ function tasksArray(raw: unknown): Task[] {
 }
 
 function contractResultReviewItems(projectPath: string): InboxItem[] {
-  const raw = readJsonSafe(join(getProjectStateDir(projectPath), DELIVERY_SPINE_FILE)) as {
-    validationEvidence?: unknown[]
-  } | null
-  const records = Array.isArray(raw?.validationEvidence) ? raw.validationEvidence : []
+  const records = readProjectDeliveryModelSync(projectPath).validationEvidence
   return records
     .filter((record): record is Record<string, unknown> => Boolean(record && typeof record === 'object'))
     .filter(record => {

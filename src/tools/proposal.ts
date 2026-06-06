@@ -1,3 +1,5 @@
+import { writeManagedTextFileSync } from '@guildhall/persistence'
+import { appendManagedTextFile, readManagedTextFile, readManagedTextFileSync, writeManagedTextFile } from '@guildhall/persistence'
 /**
  * FR-21 agent-originated proposals + FR-22 worker pre-rejection.
  *
@@ -62,7 +64,7 @@ export interface ProposeTaskResult {
 export async function proposeTask(input: ProposeTaskInput): Promise<ProposeTaskResult> {
   try {
     const parsed = proposeTaskInputSchema.parse(input)
-    const raw = await fs.readFile(parsed.tasksPath, 'utf-8')
+    const raw = await readManagedTextFile(parsed.tasksPath, 'utf-8')
     const queue = TaskQueue.parse(JSON.parse(raw))
 
     if (queue.tasks.some((t) => t.id === parsed.proposal.id)) {
@@ -91,7 +93,7 @@ export async function proposeTask(input: ProposeTaskInput): Promise<ProposeTaskR
 
     queue.tasks.push(proposed)
     queue.lastUpdated = now
-    atomicWriteText(parsed.tasksPath, JSON.stringify(queue, null, 2) + '\n')
+    writeManagedTextFileSync(parsed.tasksPath, JSON.stringify(queue, null, 2) + '\n')
     return { success: true, taskId: proposed.id }
   } catch (err) {
     return { success: false, error: String(err) }
@@ -172,7 +174,7 @@ export interface PreRejectTaskResult {
 export async function preRejectTask(input: PreRejectTaskInput): Promise<PreRejectTaskResult> {
   try {
     const parsed = preRejectTaskInputSchema.parse(input)
-    const raw = await fs.readFile(parsed.tasksPath, 'utf-8')
+    const raw = await readManagedTextFile(parsed.tasksPath, 'utf-8')
     const queue = TaskQueue.parse(JSON.parse(raw))
     const idx = queue.tasks.findIndex((t) => t.id === parsed.taskId)
     if (idx === -1) return { success: false, error: `Task ${parsed.taskId} not found` }
@@ -202,7 +204,7 @@ export async function preRejectTask(input: PreRejectTaskInput): Promise<PreRejec
       completedAt: now,
     }
     queue.lastUpdated = now
-    atomicWriteText(parsed.tasksPath, JSON.stringify(queue, null, 2) + '\n')
+    writeManagedTextFileSync(parsed.tasksPath, JSON.stringify(queue, null, 2) + '\n')
     return { success: true }
   } catch (err) {
     return { success: false, error: String(err) }

@@ -1,5 +1,9 @@
 import { describe, expect, it } from 'vitest'
+import fs from 'node:fs/promises'
+import os from 'node:os'
+import path from 'node:path'
 import type { Task } from '@guildhall/core'
+import { getProjectStateDir } from '@guildhall/sessions'
 
 import {
   applyContractChangeSet,
@@ -10,6 +14,7 @@ import {
   deriveTaskRelationships,
   planTaskSplit,
   ProjectDeliveryModel,
+  projectDeliveryModelPath,
   rejectContractChangeSet,
   revertAppliedContractResult,
   stageContractChangeSet,
@@ -17,6 +22,7 @@ import {
   validateProjectPrimitiveSetupResult,
   validateProjectDeliveryModel,
   validateDeliverySpineSchemaDecisions,
+  writeProjectDeliveryModel,
   type ProjectDeliveryModel as ProjectDeliveryModelRecord,
 } from '../delivery-spine.js'
 import { TaskQueue } from '@guildhall/core'
@@ -97,16 +103,34 @@ const model: ProjectDeliveryModelRecord = ProjectDeliveryModel.parse({
 })
 
 describe('project-local delivery spine', () => {
+  it('stores delivery-spine records through the data layer outside project .guildhall', async () => {
+    const projectRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'guildhall-delivery-spine-storage-'))
+    const model = ProjectDeliveryModel.parse({
+      version: 1,
+      updatedAt: now,
+      drivers: [{ id: 'jess', label: 'Jess', role: 'primary' }],
+      primitives: [],
+    })
+
+    await writeProjectDeliveryModel(projectRoot, model)
+
+    expect(projectDeliveryModelPath(projectRoot)).not.toContain(getProjectStateDir(projectRoot))
+    expect(projectDeliveryModelPath(projectRoot)).toContain(path.join('persistence', 'records', 'delivery-spine'))
+    await expect(fs.stat(path.join(getProjectStateDir(projectRoot), 'delivery-spine.json'))).rejects.toMatchObject({
+      code: 'ENOENT',
+    })
+  })
+
   it('records the schema migration decision for persisted primitive and delivery state', () => {
     const validation = validateDeliverySpineSchemaDecisions(DELIVERY_SPINE_SCHEMA_DECISIONS)
 
     expect(validation.valid).toBe(true)
     expect(validation.errors).toEqual([])
     expect(DELIVERY_SPINE_SCHEMA_DECISIONS.map(decision => decision.persistedSchemaTouched)).toEqual([
-      '.guildhall/delivery-spine.json',
+      'guildhall-persistence:local_history/delivery-spine/project-delivery-model',
       '.guildhall/TASKS.json:tasks[].delivery',
-      '.guildhall/delivery-spine.json:validationEvidence',
-      '.guildhall/delivery-spine.json:finished-work-intake-derived-records',
+      'guildhall-persistence:local_history/delivery-spine/project-delivery-model:validationEvidence',
+      'guildhall-persistence:local_history/delivery-spine/project-delivery-model:finished-work-intake-derived-records',
     ])
     expect(DELIVERY_SPINE_SCHEMA_DECISIONS).toEqual(expect.arrayContaining([
       expect.objectContaining({

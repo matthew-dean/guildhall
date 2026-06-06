@@ -1,3 +1,5 @@
+import { writeManagedTextFileSync } from '@guildhall/persistence'
+import { appendManagedTextFile, readManagedTextFile, readManagedTextFileSync, writeManagedTextFile } from '@guildhall/persistence'
 import fs from 'node:fs/promises'
 import path from 'node:path'
 
@@ -114,7 +116,7 @@ export async function runGuildhallTaskOnce(input: RunOnceInput): Promise<RunOnce
 
   if (report.outputPath) {
     await fs.mkdir(path.dirname(report.outputPath), { recursive: true })
-    await fs.writeFile(report.outputPath, `${JSON.stringify(report, null, 2)}\n`, 'utf8')
+    await writeManagedTextFile(report.outputPath, `${JSON.stringify(report, null, 2)}\n`, 'utf8')
   }
 
   return report
@@ -128,7 +130,7 @@ async function resolvePrompt(input: RunOnceInput): Promise<string> {
   }
   if (prompt) return prompt
   if (fromFile) {
-    const content = await fs.readFile(path.resolve(fromFile), 'utf8')
+    const content = await readManagedTextFile(path.resolve(fromFile), 'utf8')
     const filePrompt = content.trim()
     if (filePrompt) return filePrompt
   }
@@ -159,7 +161,7 @@ async function appendRunOnceNote(input: {
   createdAt: string
 }): Promise<void> {
   const tasksPath = path.join(input.memoryDir, 'TASKS.json')
-  const raw = await fs.readFile(tasksPath, 'utf8')
+  const raw = await readManagedTextFile(tasksPath, 'utf8')
   const queue = JSON.parse(raw)
   const task = queue.tasks?.find((candidate: { id?: unknown }) => candidate.id === input.taskId)
   if (!task) throw new Error(`Task ${input.taskId} not found after run-once intake.`)
@@ -176,7 +178,7 @@ async function appendRunOnceNote(input: {
   })
   task.updatedAt = input.createdAt
   queue.lastUpdated = input.createdAt
-  atomicWriteText(tasksPath, `${JSON.stringify(queue, null, 2)}\n`)
+  writeManagedTextFileSync(tasksPath, `${JSON.stringify(queue, null, 2)}\n`)
 }
 
 function compactTitle(value: string): string {

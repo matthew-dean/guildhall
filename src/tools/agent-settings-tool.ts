@@ -1,3 +1,4 @@
+import { appendManagedTextFile, readManagedTextFile, readManagedTextFileSync, writeManagedTextFile } from '@guildhall/persistence'
 import { defineTool } from '@guildhall/engine'
 import { z } from 'zod'
 import { updateAgentSettings } from '@guildhall/config'
@@ -109,7 +110,7 @@ export async function saveAgentSetting(input: SaveAgentSettingInput): Promise<Sa
       `---`,
     ].join('\n')
 
-    await fs.appendFile(decisionsPath, block, 'utf-8')
+    await appendManagedTextFile(decisionsPath, block, 'utf-8')
 
     const summary =
       changes.length > 0 ? `Saved: ${changes.join('; ')}` : 'No changes recorded (all inputs were empty)'

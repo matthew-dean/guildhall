@@ -1,3 +1,5 @@
+import { writeManagedTextFileSync } from '@guildhall/persistence'
+import { appendManagedTextFile, readManagedTextFile, readManagedTextFileSync, writeManagedTextFile } from '@guildhall/persistence'
 import { defineTool } from '@guildhall/engine'
 import { z } from 'zod'
 import fs from 'node:fs/promises'
@@ -99,7 +101,7 @@ export async function raiseEscalation(
   input: RaiseEscalationInput,
 ): Promise<RaiseEscalationResult> {
   try {
-    const raw = await fs.readFile(input.tasksPath, 'utf-8')
+    const raw = await readManagedTextFile(input.tasksPath, 'utf-8')
     const queue = TaskQueue.parse(JSON.parse(raw))
     const task = queue.tasks.find((t) => t.id === input.taskId)
     if (!task) return { success: false, error: `Task ${input.taskId} not found` }
@@ -142,7 +144,7 @@ export async function raiseEscalation(
     task.updatedAt = now
     queue.lastUpdated = now
 
-    atomicWriteText(input.tasksPath, JSON.stringify(queue, null, 2) + '\n')
+    writeManagedTextFileSync(input.tasksPath, JSON.stringify(queue, null, 2) + '\n')
     await appendTaskEvidence(
       inferProjectRootFromMemoryDir(path.dirname(input.tasksPath)),
       task.id,
@@ -309,7 +311,7 @@ export async function resolveEscalation(
   input: ResolveEscalationInput,
 ): Promise<ResolveEscalationResult> {
   try {
-    const raw = await fs.readFile(input.tasksPath, 'utf-8')
+    const raw = await readManagedTextFile(input.tasksPath, 'utf-8')
     const queue = TaskQueue.parse(JSON.parse(raw))
     const task = queue.tasks.find((t) => t.id === input.taskId)
     if (!task) return { success: false, error: `Task ${input.taskId} not found` }
@@ -342,7 +344,7 @@ export async function resolveEscalation(
     task.updatedAt = now
     queue.lastUpdated = now
 
-    atomicWriteText(input.tasksPath, JSON.stringify(queue, null, 2) + '\n')
+    writeManagedTextFileSync(input.tasksPath, JSON.stringify(queue, null, 2) + '\n')
 
     if (input.progressPath) {
       const entry: ProgressEntry = {

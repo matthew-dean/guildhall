@@ -1,3 +1,4 @@
+import { appendManagedTextFile, readManagedTextFile, readManagedTextFileSync, writeManagedTextFile } from '@guildhall/persistence'
 import { defineTool } from '@guildhall/engine'
 import { z } from 'zod'
 import fs from 'node:fs/promises'
@@ -81,7 +82,7 @@ async function readExistingCheckpoint(
   taskId: string,
 ): Promise<Checkpoint | null> {
   try {
-    const raw = await fs.readFile(checkpointPath(memoryDir, taskId), 'utf-8')
+    const raw = await readManagedTextFile(checkpointPath(memoryDir, taskId), 'utf-8')
     return Checkpoint.parse(JSON.parse(raw))
   } catch {
     return null
@@ -97,7 +98,7 @@ export async function writeCheckpoint(
     // Confirm the task exists on the queue. We don't need to mutate the queue,
     // but a checkpoint for an unknown task is a writer bug we'd rather catch
     // early than let reclaim detection trip over.
-    const raw = await fs.readFile(parsed.tasksPath, 'utf-8')
+    const raw = await readManagedTextFile(parsed.tasksPath, 'utf-8')
     const queue = TaskQueue.parse(JSON.parse(raw))
     const task = queue.tasks.find((t) => t.id === parsed.taskId)
     if (!task) return { success: false, error: `Task ${parsed.taskId} not found` }
@@ -131,7 +132,7 @@ export async function writeCheckpoint(
     await fs.mkdir(dir, { recursive: true })
     const file = checkpointPath(parsed.memoryDir, parsed.taskId)
     const tmp = `${file}.tmp`
-    await fs.writeFile(tmp, JSON.stringify(checkpoint, null, 2), 'utf-8')
+    await writeManagedTextFile(tmp, JSON.stringify(checkpoint, null, 2), 'utf-8')
     await fs.rename(tmp, file)
 
     return { success: true, step, path: file }

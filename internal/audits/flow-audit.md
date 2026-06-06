@@ -358,6 +358,21 @@ coverage.
   blocker: the first ContextMenu child needs a human/provider recovery path for
   the spec-agent durable-progress escalation before the selected parent can
   continue toward completion.
+  Follow-up recovery pass on 2026-06-06 loosened the spec/coordinator
+  durable-progress guard by one bounded read-only follow-up after the
+  durable-progress nudge, while preserving refusal on the second extra
+  read-only turn. Regression coverage now proves the grace path can continue to
+  `update-task` and that a second post-grace read is refused and redirected back
+  to durable progress. Verification: full `src/engine/__tests__/run-query.test.ts`
+  passed, focused `guildhall-agent` nudge tests passed, `pnpm typecheck` passed,
+  `pnpm build` passed, `pnpm dev:install` refreshed the installed app, restart
+  returned `/api/stale-server` `stale:false`. Live Looma + Knit recovery proof:
+  resolving
+  `esc-task-import-1l0mr2r-split-component-implementation-1` back to
+  `exploring` and restarting selected `ContextMenu` no longer reproduced the
+  durable-progress escalation. The child stayed `exploring` with no open
+  escalation, and the run stopped on a new external provider blocker:
+  DeepInfra HTTP 429 `engine_overloaded`, surfaced as `provider_backoff`.
 - [x] Repair Looma + Knit Work and Thread queue semantics for spec-lane tasks.
   Live proof on 2026-06-04/05 showed `/api/project?projectId=looma-knit`
   had `39` tasks (`28` `exploring`, `10` `spec_review`, `1` `blocked`) and
@@ -10113,3 +10128,54 @@ blocked tasks`, `Work 43 total tasks`, no default `Project graph`, and no
 default `Structure` text.
 
 source: codex:0-10-contract-governance-complete
+
+2026-06-06T07:15:00Z - Retried the Looma + Knit ContextMenu selected-task
+flow in live one-task/work-item mode and fixed three orchestration blockers
+found by the run.
+
+Live evidence:
+- Started selected parent `task-import-1l0mr2r` (ContextMenu) with
+  `POST /api/project/task/task-import-1l0mr2r/start?projectId=looma-knit`
+  and body `{"mode":"one_task","scope":"work_item"}`.
+- Initial retry stopped on child
+  `task-import-1l0mr2r-split-component-implementation` because a spec-agent
+  inactivity timeout blocked before durable progress.
+- Runtime now retries one spec-agent inactivity timeout before escalating,
+  while still blocking on a repeated timeout with no durable progress.
+- The selected parent no longer stops when a selected child reaches
+  `spec_review`; it continues through blueprint review, ready claim, worker
+  execution, review, and gates until the selected work is done or blocked.
+- A malformed existing spec sent from `ready` back to `exploring` by
+  blueprint sanity is now repaired deterministically with a full Completion
+  Boundary instead of redispatching into another spec loop. Live proof:
+  component child went from `exploring` to deterministic repair at
+  `2026-06-06T06:47:41.195Z`, blueprint approval at
+  `2026-06-06T06:47:45.972Z`, and worker claim at
+  `2026-06-06T06:47:50.468Z`.
+- Worker execution then made real Looma worktree edits and verified target
+  commands, but repeatedly exhausted its turn budget while preserving dirty
+  work. The live run was manually stopped after tick 16 with stop reason
+  `stop_requested`; ContextMenu is therefore not complete yet.
+- Runtime now caps dirty-worktree worker turn-budget preservation: two retries
+  preserve partial edits, a third repeated timeout blocks explicitly with a
+  `model_tool_use_failure` classification instead of spinning forever.
+
+Current live ContextMenu state after the stopped audit run:
+- Parent `task-import-1l0mr2r`: `ready`.
+- Component child `task-import-1l0mr2r-split-component-implementation`:
+  `in_progress`, assigned to `worker-agent`, no open escalation, dirty task
+  worktree with changes in `packages/core/src/components/ui-context-menu/`,
+  `packages/core/src/components/ui-menu/ui-menu.tsx`, and
+  `packages/core/src/index.test.ts`.
+- Remaining split children `storybook-story`, `contract-readme`, and
+  `api-docs-sync`: still `exploring`.
+
+Verification:
+`pnpm vitest run src/runtime/__tests__/orchestrator.test.ts -t
+"dirty worktree worker turn-budget|preserves dirty worktree progress|ready-task
+blueprint revisions|continue when selected child reaches spec review|spec-agent
+inactivity timeout" --reporter=dot` passed with 6 tests; `pnpm typecheck`
+passed; `pnpm build` passed. The installed app was refreshed before the live
+retry and `/api/stale-server` returned `stale:false` with pid `34318`.
+
+source: codex:context-menu-selected-work-blocker-flow

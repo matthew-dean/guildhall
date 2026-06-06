@@ -5,7 +5,7 @@ import os from 'node:os'
 import { execFile } from 'node:child_process'
 import { promisify } from 'node:util'
 import { buildContext, resolveLikelyTaskFiles } from '../context-builder.js'
-import { projectDeliveryModelPath } from '../delivery-spine.js'
+import { writeProjectDeliveryModel } from '../delivery-spine.js'
 import {
   acceptStructuralMap,
   draftStructuralMap,
@@ -230,14 +230,14 @@ describe('buildContext — task summary', () => {
     const project = path.join(tmpDir, 'looma-knit')
     const memoryDir = path.join(project, '.guildhall')
     await fs.mkdir(memoryDir, { recursive: true })
-    await fs.writeFile(
-      projectDeliveryModelPath(project),
-      `${JSON.stringify({
+    await writeProjectDeliveryModel(
+      project,
+      {
         version: 1,
         updatedAt: '2026-06-05T12:00:00.000Z',
         drivers: [
-          { id: 'knit', label: 'Knit', role: 'primary', paths: ['./apps/knit'] },
-          { id: 'looma', label: 'Looma', role: 'provider', paths: ['./packages/looma'] },
+          { id: 'knit', label: 'Knit', role: 'primary', paths: ['./apps/knit'], domains: ['looma'] },
+          { id: 'looma', label: 'Looma', role: 'provider', paths: ['./packages/looma'], domains: ['looma'] },
         ],
         primitives: [{
           id: 'menu',
@@ -245,14 +245,16 @@ describe('buildContext — task summary', () => {
           kind: 'ui_primitive',
           provider: 'looma',
           paths: ['./packages/looma/src/menu'],
+          dependsOn: [],
           invariants: ['Keyboard states stay deterministic.'],
           proof: ['storybook'],
           status: 'needs_proof',
+          evidence: [],
+          aliases: [],
         }],
         validationEvidence: [],
         rejectedCandidates: [],
-      }, null, 2)}\n`,
-      'utf-8',
+      },
     )
     await fs.writeFile(
       path.join(memoryDir, 'TASKS.json'),

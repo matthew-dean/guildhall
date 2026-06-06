@@ -1,3 +1,4 @@
+import { appendManagedTextFile, readManagedTextFile, readManagedTextFileSync, writeManagedTextFile } from '@guildhall/persistence'
 import fs from 'node:fs/promises'
 import path from 'node:path'
 import { parse, stringify } from 'yaml'
@@ -33,7 +34,7 @@ export function codebaseMapOverridesPath(memoryDir: string): string {
 
 export async function loadCodebaseMap(memoryDir: string): Promise<CodebaseMap | null> {
   try {
-    const raw = await fs.readFile(codebaseMapPath(memoryDir), 'utf-8')
+    const raw = await readManagedTextFile(codebaseMapPath(memoryDir), 'utf-8')
     return parse(raw) as CodebaseMap
   } catch (err) {
     if ((err as NodeJS.ErrnoException).code === 'ENOENT') return null
@@ -43,7 +44,7 @@ export async function loadCodebaseMap(memoryDir: string): Promise<CodebaseMap | 
 
 export async function saveCodebaseMap(memoryDir: string, map: CodebaseMap): Promise<void> {
   await fs.mkdir(memoryDir, { recursive: true })
-  await fs.writeFile(
+  await writeManagedTextFile(
     codebaseMapPath(memoryDir),
     stringify(map, { lineWidth: 120 }),
     'utf-8',
@@ -52,7 +53,7 @@ export async function saveCodebaseMap(memoryDir: string, map: CodebaseMap): Prom
 
 export async function loadCorpusOverrides(memoryDir: string): Promise<CorpusOverrides | undefined> {
   try {
-    const raw = await fs.readFile(codebaseMapOverridesPath(memoryDir), 'utf-8')
+    const raw = await readManagedTextFile(codebaseMapOverridesPath(memoryDir), 'utf-8')
     return parse(raw) as CorpusOverrides
   } catch (err) {
     if ((err as NodeJS.ErrnoException).code === 'ENOENT') return undefined
@@ -62,7 +63,7 @@ export async function loadCorpusOverrides(memoryDir: string): Promise<CorpusOver
 
 export async function saveCorpusOverrides(memoryDir: string, overrides: CorpusOverrides): Promise<void> {
   await fs.mkdir(memoryDir, { recursive: true })
-  await fs.writeFile(
+  await writeManagedTextFile(
     codebaseMapOverridesPath(memoryDir),
     stringify(overrides, { lineWidth: 120 }),
     'utf-8',
@@ -80,12 +81,12 @@ export async function appendCodebaseMapHistory(
   event: CodebaseMapHistoryEvent,
 ): Promise<void> {
   await fs.mkdir(path.dirname(codebaseMapHistoryPath(memoryDir)), { recursive: true })
-  await fs.appendFile(codebaseMapHistoryPath(memoryDir), `${JSON.stringify(event)}\n`, 'utf-8')
+  await appendManagedTextFile(codebaseMapHistoryPath(memoryDir), `${JSON.stringify(event)}\n`, 'utf-8')
 }
 
 export async function loadCodebaseMapStaleState(memoryDir: string): Promise<CodebaseMapStaleState | null> {
   try {
-    return JSON.parse(await fs.readFile(codebaseMapStalePath(memoryDir), 'utf-8')) as CodebaseMapStaleState
+    return JSON.parse(await readManagedTextFile(codebaseMapStalePath(memoryDir), 'utf-8')) as CodebaseMapStaleState
   } catch (err) {
     if ((err as NodeJS.ErrnoException).code === 'ENOENT') return null
     throw err
@@ -97,7 +98,7 @@ export async function saveCodebaseMapStaleState(
   state: CodebaseMapStaleState,
 ): Promise<void> {
   await fs.mkdir(path.dirname(codebaseMapStalePath(memoryDir)), { recursive: true })
-  await fs.writeFile(codebaseMapStalePath(memoryDir), JSON.stringify(state, null, 2), 'utf-8')
+  await writeManagedTextFile(codebaseMapStalePath(memoryDir), JSON.stringify(state, null, 2), 'utf-8')
 }
 
 export async function clearCodebaseMapStaleState(memoryDir: string): Promise<void> {

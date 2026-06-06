@@ -1,3 +1,4 @@
+import { appendManagedTextFile, readManagedTextFile, readManagedTextFileSync, writeManagedTextFile } from '@guildhall/persistence'
 import fs from 'node:fs'
 import fsp from 'node:fs/promises'
 import path from 'node:path'
@@ -148,7 +149,7 @@ export async function loadPressureTestIntake(input: {
   memoryDir: string
   intakeId: string
 }): Promise<PressureTestIntake> {
-  const raw = await fsp.readFile(pressureTestPath(input.memoryDir, input.intakeId), 'utf-8')
+  const raw = await readManagedTextFile(pressureTestPath(input.memoryDir, input.intakeId), 'utf-8')
   return normalizePressureTestIntake(PressureTestIntake.parse(JSON.parse(raw)))
 }
 
@@ -263,7 +264,7 @@ export function listPressureTestIntakes(memoryDir: string): PressureTestIntake[]
     .filter(name => name.endsWith('.json'))
     .flatMap((name) => {
       try {
-        const raw = JSON.parse(fs.readFileSync(path.join(dir, name), 'utf-8'))
+        const raw = JSON.parse(readManagedTextFileSync(path.join(dir, name), 'utf-8'))
         return [normalizePressureTestIntake(PressureTestIntake.parse(raw))]
       } catch {
         return []
@@ -542,7 +543,7 @@ async function loadProjectQuestionEvidenceFiles(memoryDir: string): Promise<Proj
     try {
       files.push({
         path: candidate.source,
-        text: await fsp.readFile(candidate.file, 'utf-8'),
+        text: await readManagedTextFile(candidate.file, 'utf-8'),
       })
     } catch {
       // Missing project evidence files are normal for fresh projects.
@@ -947,7 +948,7 @@ async function inspectEvidenceFiles(memoryDir: string, projectPath: string): Pro
   const facts: Array<{ fact: string; source: string }> = []
   for (const candidate of candidates) {
     try {
-      const raw = await fsp.readFile(candidate.file, 'utf-8')
+      const raw = await readManagedTextFile(candidate.file, 'utf-8')
       const sentence = raw
         .split(/(?<=[.!?])\s+/)
         .map(line => line.trim().replace(/\s+/g, ' '))

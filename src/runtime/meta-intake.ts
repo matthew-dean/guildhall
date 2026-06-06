@@ -1,3 +1,5 @@
+import { writeManagedTextFileSync } from '@guildhall/persistence'
+import { appendManagedTextFile, readManagedTextFile, readManagedTextFileSync, writeManagedTextFile } from '@guildhall/persistence'
 import fs from 'node:fs/promises'
 import path from 'node:path'
 import { dump as yamlDump, load as yamlLoad } from 'js-yaml'
@@ -47,7 +49,7 @@ function tasksPathFor(memoryDir: string): string {
 }
 
 async function readQueue(memoryDir: string): Promise<TaskQueue> {
-  const raw = await fs.readFile(tasksPathFor(memoryDir), 'utf-8')
+  const raw = await readManagedTextFile(tasksPathFor(memoryDir), 'utf-8')
   const parsed = JSON.parse(raw)
   if (Array.isArray(parsed)) {
     return { version: 1, lastUpdated: new Date().toISOString(), tasks: parsed }
@@ -56,7 +58,7 @@ async function readQueue(memoryDir: string): Promise<TaskQueue> {
 }
 
 async function writeQueue(memoryDir: string, queue: TaskQueue): Promise<void> {
-  atomicWriteText(tasksPathFor(memoryDir), JSON.stringify(queue, null, 2) + '\n')
+  writeManagedTextFileSync(tasksPathFor(memoryDir), JSON.stringify(queue, null, 2) + '\n')
 }
 
 const META_INTAKE_SEED = `You are bootstrapping a new Guildhall workspace. Your job in this conversation is to infer the internal routing slices the single local coordinator should use for this codebase, then infer initial lever positions from the user's project-guidance answers.
@@ -208,7 +210,7 @@ async function writeMetaIntakeTranscript(
   const projectRoot = inferProjectRootFromMemoryDir(memoryDir)
   const transcriptPath = getProjectTranscriptPath(projectRoot, 'exploring', META_INTAKE_TASK_ID)
   await fs.mkdir(path.dirname(transcriptPath), { recursive: true })
-  await fs.writeFile(transcriptPath, `${seedMessage ?? META_INTAKE_SEED}\n`, 'utf-8')
+  await writeManagedTextFile(transcriptPath, `${seedMessage ?? META_INTAKE_SEED}\n`, 'utf-8')
   return transcriptPath
 }
 
@@ -525,7 +527,7 @@ async function inferPackageAreas(workspacePath: string): Promise<PackageArea[]> 
     const relativePath = path.posix.join('packages', entry.name)
     const packageJsonPath = path.join(workspacePath, relativePath, 'package.json')
     try {
-      const parsed = JSON.parse(await fs.readFile(packageJsonPath, 'utf-8')) as { name?: unknown }
+      const parsed = JSON.parse(await readManagedTextFile(packageJsonPath, 'utf-8')) as { name?: unknown }
       const packageName = typeof parsed.name === 'string' && parsed.name.trim()
         ? parsed.name.trim()
         : entry.name
@@ -715,7 +717,7 @@ function coordinatorTemplate(id: string, task: Task): DraftCoordinator {
 
 async function packageScripts(workspacePath: string): Promise<Record<string, string>> {
   try {
-    const raw = await fs.readFile(path.join(workspacePath, 'package.json'), 'utf-8')
+    const raw = await readManagedTextFile(path.join(workspacePath, 'package.json'), 'utf-8')
     const parsed = JSON.parse(raw) as { scripts?: Record<string, unknown> }
     const scripts: Record<string, string> = {}
     for (const [name, value] of Object.entries(parsed.scripts ?? {})) {

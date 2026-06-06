@@ -1,3 +1,4 @@
+import { appendManagedTextFile, readManagedTextFile, readManagedTextFileSync, writeManagedTextFile } from '@guildhall/persistence'
 import fs from 'node:fs/promises'
 import path from 'node:path'
 import { atomicWriteText, getProjectStateDir } from '@guildhall/sessions'
@@ -178,7 +179,7 @@ async function closeOwnerInput(memoryDir: string, decision: RepairDecision, now:
   await writeJson(path.join(memoryDir, 'owner-input', `${nextRequest.id}.json`), nextRequest)
 
   const sessionFile = path.join(memoryDir, 'bounded-chat', `${decision.request.boundedChatSessionId}.json`)
-  const session = JSON.parse(await fs.readFile(sessionFile, 'utf8')) as {
+  const session = JSON.parse(await readManagedTextFile(sessionFile, 'utf8')) as {
     id: string
     status: 'active' | 'waiting_for_owner' | 'coordinator_review' | 'fulfilled' | 'blocked' | 'cancelled'
     transitionReceipts?: unknown[]
@@ -235,14 +236,14 @@ async function readOwnerInputRequests(memoryDir: string): Promise<OwnerInputRequ
   const requests = await Promise.all(entries
     .filter(entry => entry.endsWith('.json'))
     .map(async entry => {
-      const raw = await fs.readFile(path.join(dir, entry), 'utf8')
+      const raw = await readManagedTextFile(path.join(dir, entry), 'utf8')
       return OwnerInputRequest.parse(JSON.parse(raw))
     }))
   return requests.sort((left, right) => left.createdAt.localeCompare(right.createdAt) || left.id.localeCompare(right.id))
 }
 
 async function readQueue(file: string): Promise<QueueShape> {
-  const raw = await fs.readFile(file, 'utf8').catch((err) => {
+  const raw = await readManagedTextFile(file, 'utf8').catch((err) => {
     if ((err as NodeJS.ErrnoException).code === 'ENOENT') return '{"tasks":[]}'
     throw err
   })

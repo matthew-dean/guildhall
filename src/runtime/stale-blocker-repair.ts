@@ -1,3 +1,5 @@
+import { writeManagedTextFileSync } from '@guildhall/persistence'
+import { appendManagedTextFile, readManagedTextFile, readManagedTextFileSync, writeManagedTextFile } from '@guildhall/persistence'
 import { existsSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { atomicWriteText, getProjectStateDir } from '@guildhall/sessions'
@@ -150,10 +152,10 @@ export function repairStaleBlockersForProject(projectPath: string): StaleBlocker
   const tasksPath = join(getProjectStateDir(projectPath), 'TASKS.json')
   if (!existsSync(tasksPath)) return { changed: false, repairs: [] }
 
-  const queue = TaskQueueSchema.parse(JSON.parse(readFileSync(tasksPath, 'utf8')))
+  const queue = TaskQueueSchema.parse(JSON.parse(readManagedTextFileSync(tasksPath, 'utf8')))
   const result = repairStaleBlockersInQueue(queue)
   if (result.changed) {
-    atomicWriteText(tasksPath, JSON.stringify(queue, null, 2) + '\n')
+    writeManagedTextFileSync(tasksPath, JSON.stringify(queue, null, 2) + '\n')
   }
   return result
 }

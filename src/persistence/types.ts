@@ -160,6 +160,7 @@ export interface GuildhallPersistence {
   writeRecord<T>(input: WriteRecordInput<T>): Promise<PersistedRecord<T>>
   appendEvent<T>(input: AppendEventInput<T>): Promise<PersistedEvent<T>>
   readRecord<T = unknown>(ref: PersistenceRef): Promise<PersistedRecord<T> | null>
+  readRecordSync<T = unknown>(ref: PersistenceRef): PersistedRecord<T> | null
   listEvents<T = unknown>(query: EventQuery): Promise<Array<PersistedEvent<T>>>
   saveArtifact(input: SaveArtifactInput): Promise<ArtifactRef>
   compact(scope: CompactionScope): Promise<CompactionSummary>

@@ -1,3 +1,4 @@
+import { appendManagedTextFile, readManagedTextFile, readManagedTextFileSync, writeManagedTextFile } from '@guildhall/persistence'
 import fsp from 'node:fs/promises'
 import path from 'node:path'
 import yaml from 'js-yaml'
@@ -112,7 +113,7 @@ async function discoverStorybook(projectPath: string): Promise<StorybookPreviewA
 async function storybookScripts(projectPath: string): Promise<string[]> {
   const packageJsonPath = path.join(projectPath, 'package.json')
   try {
-    const parsed = JSON.parse(await fsp.readFile(packageJsonPath, 'utf-8')) as {
+    const parsed = JSON.parse(await readManagedTextFile(packageJsonPath, 'utf-8')) as {
       scripts?: Record<string, unknown>
     }
     return Object.entries(parsed.scripts ?? {})
@@ -171,7 +172,7 @@ async function walk(root: string, dir: string, out: string[], depth: number): Pr
 
 async function loadPortableStoryManifest(memoryDir: string): Promise<DesignStoryManifest | null> {
   try {
-    const raw = await fsp.readFile(path.join(memoryDir, DESIGN_STORIES_FILE), 'utf-8')
+    const raw = await readManagedTextFile(path.join(memoryDir, DESIGN_STORIES_FILE), 'utf-8')
     return DesignStoryManifest.parse(yaml.load(raw) ?? {})
   } catch {
     return null

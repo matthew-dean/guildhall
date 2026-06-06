@@ -1183,7 +1183,7 @@ describe('POST /api/project/start preflight', () => {
     const body = (await res.json()) as { code?: string; error?: string; loadedModels?: string[]; missingModels?: string[] }
     expect(body.code).toBe('model_unavailable')
     expect(body.error).toMatch(/configured local server/i)
-    expect(body.error).toMatch(/will not JIT-load missing models/)
+    expect(body.error).toMatch(/not JIT-loaded automatically/)
     expect(body.loadedModels).toContain('qwen/qwen3.6-35b-a3b')
     expect(body.missingModels).toContain('qwen2.5-coder-7b-instruct')
   })

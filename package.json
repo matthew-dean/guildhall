@@ -37,6 +37,7 @@
     "lint:deps": "depcruise src",
     "lint:design": "node scripts/design-token-audit.mjs",
     "lint:contracts": "node scripts/contract-touch-detector.mjs",
+    "lint:data-layer": "node scripts/data-layer-guardrails.mjs",
     "lint:reductions": "node scripts/reduction-guardrails.mjs",
     "clean": "rm -rf dist",
     "release": "node scripts/publish.mjs",

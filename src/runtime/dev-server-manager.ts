@@ -1,3 +1,4 @@
+import { appendManagedTextFile, readManagedTextFile, readManagedTextFileSync, writeManagedTextFile } from '@guildhall/persistence'
 import fs from 'node:fs/promises'
 import path from 'node:path'
 import { execFile } from 'node:child_process'
@@ -239,7 +240,7 @@ export class DevServerManager {
 
 export async function readRuntimeDevServers(projectRoot: string): Promise<DevServerRecord[]> {
   try {
-    return JSON.parse(await fs.readFile(getProjectRuntimeDevServersPath(projectRoot), 'utf8')) as DevServerRecord[]
+    return JSON.parse(await readManagedTextFile(getProjectRuntimeDevServersPath(projectRoot), 'utf8')) as DevServerRecord[]
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code === 'ENOENT') return []
     throw error
@@ -252,7 +253,7 @@ export async function writeRuntimeDevServers(
 ): Promise<void> {
   const file = getProjectRuntimeDevServersPath(projectRoot)
   await fs.mkdir(path.dirname(file), { recursive: true })
-  await fs.writeFile(file, `${JSON.stringify(records, null, 2)}\n`, 'utf8')
+  await writeManagedTextFile(file, `${JSON.stringify(records, null, 2)}\n`, 'utf8')
 }
 
 export function redactLogs(logs: string[]): string[] {

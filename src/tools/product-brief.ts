@@ -1,3 +1,5 @@
+import { writeManagedTextFileSync } from '@guildhall/persistence'
+import { appendManagedTextFile, readManagedTextFile, readManagedTextFileSync, writeManagedTextFile } from '@guildhall/persistence'
 import { defineTool } from '@guildhall/engine'
 import { z } from 'zod'
 import fs from 'node:fs/promises'
@@ -346,7 +348,7 @@ export async function updateProductBrief(
   if (!input.taskId?.trim()) return { success: false, error: 'Missing taskId' }
   if (!input.authoredBy?.trim()) return { success: false, error: 'Missing authoredBy' }
   try {
-    const raw = await fs.readFile(input.tasksPath, 'utf-8')
+    const raw = await readManagedTextFile(input.tasksPath, 'utf-8')
     const queue = TaskQueue.parse(JSON.parse(raw))
     const task = queue.tasks.find((t) => t.id === input.taskId)
     if (!task) return { success: false, error: `Task ${input.taskId} not found` }
@@ -396,7 +398,7 @@ export async function updateProductBrief(
     task.updatedAt = now
     queue.lastUpdated = now
 
-    atomicWriteText(input.tasksPath, JSON.stringify(queue, null, 2) + '\n')
+    writeManagedTextFileSync(input.tasksPath, JSON.stringify(queue, null, 2) + '\n')
     return { success: true }
   } catch (err) {
     return { success: false, error: String(err) }
@@ -421,7 +423,7 @@ export const updateProductBriefTool = defineTool({
     }
     let taskTitle = target.taskId
     try {
-      const raw = await fs.readFile(target.tasksPath, 'utf-8')
+      const raw = await readManagedTextFile(target.tasksPath, 'utf-8')
       const queue = TaskQueue.parse(JSON.parse(raw))
       const task = queue.tasks.find((t) => t.id === target.taskId)
       if (task?.title?.trim()) taskTitle = task.title

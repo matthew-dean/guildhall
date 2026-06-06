@@ -1,3 +1,4 @@
+import { appendManagedTextFile, readManagedTextFile, readManagedTextFileSync, writeManagedTextFile } from '@guildhall/persistence'
 import { mkdir, readFile, writeFile } from 'node:fs/promises'
 import { basename, dirname, resolve } from 'node:path'
 import { homedir } from 'node:os'
@@ -168,7 +169,7 @@ export function defaultProjectRuntimeState(projectRoot: string): ProjectRuntimeS
 export async function readProjectRuntimeState(projectRoot: string): Promise<ProjectRuntimeState> {
   const path = getProjectRuntimeStatePath(projectRoot)
   try {
-    return JSON.parse(await readFile(path, 'utf8')) as ProjectRuntimeState
+    return JSON.parse(await readManagedTextFile(path, 'utf8')) as ProjectRuntimeState
   } catch (error) {
     if (String(error).includes('ENOENT')) return defaultProjectRuntimeState(projectRoot)
     throw error
@@ -181,6 +182,6 @@ export async function writeProjectRuntimeState(
 ): Promise<ProjectRuntimeState> {
   const path = getProjectRuntimeStatePath(projectRoot)
   await mkdir(dirname(path), { recursive: true })
-  await writeFile(path, `${JSON.stringify(state, null, 2)}\n`)
+  await writeManagedTextFile(path, `${JSON.stringify(state, null, 2)}\n`)
   return state
 }

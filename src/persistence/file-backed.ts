@@ -1,4 +1,5 @@
 import crypto from 'node:crypto'
+import { readFileSync } from 'node:fs'
 import fs from 'node:fs/promises'
 import path from 'node:path'
 
@@ -130,6 +131,16 @@ export class FileBackedGuildhallPersistence implements GuildhallPersistence {
   async readRecord<T = unknown>(ref: PersistenceRef): Promise<PersistedRecord<T> | null> {
     try {
       const raw = await fs.readFile(ref.path, 'utf8')
+      return PersistedRecordSchema.parse(JSON.parse(raw)) as PersistedRecord<T>
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code === 'ENOENT') return null
+      throw err
+    }
+  }
+
+  readRecordSync<T = unknown>(ref: PersistenceRef): PersistedRecord<T> | null {
+    try {
+      const raw = readFileSync(ref.path, 'utf8')
       return PersistedRecordSchema.parse(JSON.parse(raw)) as PersistedRecord<T>
     } catch (err) {
       if ((err as NodeJS.ErrnoException).code === 'ENOENT') return null

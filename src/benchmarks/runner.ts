@@ -1,3 +1,4 @@
+import { appendManagedTextFile, readManagedTextFile, readManagedTextFileSync, writeManagedTextFile } from '@guildhall/persistence'
 import { randomUUID } from 'node:crypto'
 import { execFile as execFileCb, execFileSync } from 'node:child_process'
 import fs from 'node:fs/promises'
@@ -517,7 +518,7 @@ async function ensureBenchmarkWorkspaceConfig(projectRoot: string, id: string): 
   try {
     await fs.access(guildhallYamlPath)
   } catch {
-    await fs.writeFile(guildhallYamlPath, `name: ${slug}\nid: ${slug}\nprojectPath: .\n`, 'utf8')
+    await writeManagedTextFile(guildhallYamlPath, `name: ${slug}\nid: ${slug}\nprojectPath: .\n`, 'utf8')
   }
   const memoryDir = path.join(projectRoot, '.guildhall')
   await fs.mkdir(memoryDir, { recursive: true })
@@ -525,7 +526,7 @@ async function ensureBenchmarkWorkspaceConfig(projectRoot: string, id: string): 
   try {
     await fs.access(tasksPath)
   } catch {
-    await fs.writeFile(tasksPath, `${JSON.stringify({ version: 1, lastUpdated: new Date().toISOString(), tasks: [] }, null, 2)}\n`, 'utf8')
+    await writeManagedTextFile(tasksPath, `${JSON.stringify({ version: 1, lastUpdated: new Date().toISOString(), tasks: [] }, null, 2)}\n`, 'utf8')
   }
 }
 
@@ -592,7 +593,7 @@ async function listFiles(root: string, prefix = ''): Promise<string[]> {
 
 async function readOptionalFile(filePath: string): Promise<string | null> {
   try {
-    return await fs.readFile(filePath, 'utf8')
+    return await readManagedTextFile(filePath, 'utf8')
   } catch {
     return null
   }

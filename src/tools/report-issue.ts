@@ -1,3 +1,5 @@
+import { writeManagedTextFileSync } from '@guildhall/persistence'
+import { appendManagedTextFile, readManagedTextFile, readManagedTextFileSync, writeManagedTextFile } from '@guildhall/persistence'
 import { defineTool } from '@guildhall/engine'
 import { z } from 'zod'
 import fs from 'node:fs/promises'
@@ -63,7 +65,7 @@ function nextIssueId(task: Task): string {
 export async function reportIssue(input: ReportIssueInput): Promise<ReportIssueResult> {
   try {
     const parsed = reportIssueInputSchema.parse(input)
-    const raw = await fs.readFile(parsed.tasksPath, 'utf-8')
+    const raw = await readManagedTextFile(parsed.tasksPath, 'utf-8')
     const queue = TaskQueue.parse(JSON.parse(raw))
     const task = queue.tasks.find((t) => t.id === parsed.taskId)
     if (!task) return { success: false, error: `Task ${parsed.taskId} not found` }
@@ -88,7 +90,7 @@ export async function reportIssue(input: ReportIssueInput): Promise<ReportIssueR
     task.updatedAt = now
     queue.lastUpdated = now
 
-    atomicWriteText(parsed.tasksPath, JSON.stringify(queue, null, 2) + '\n')
+    writeManagedTextFileSync(parsed.tasksPath, JSON.stringify(queue, null, 2) + '\n')
     await appendTaskEvidence(
       inferProjectRootFromMemoryDir(path.dirname(parsed.tasksPath)),
       task.id,
@@ -162,7 +164,7 @@ export interface ResolveIssueResult {
 export async function resolveIssue(input: ResolveIssueInput): Promise<ResolveIssueResult> {
   try {
     const parsed = resolveIssueInputSchema.parse(input)
-    const raw = await fs.readFile(parsed.tasksPath, 'utf-8')
+    const raw = await readManagedTextFile(parsed.tasksPath, 'utf-8')
     const queue = TaskQueue.parse(JSON.parse(raw))
     const task = queue.tasks.find((t) => t.id === parsed.taskId)
     if (!task) return { success: false, error: `Task ${parsed.taskId} not found` }
@@ -188,7 +190,7 @@ export async function resolveIssue(input: ResolveIssueInput): Promise<ResolveIss
     task.updatedAt = now
     queue.lastUpdated = now
 
-    atomicWriteText(parsed.tasksPath, JSON.stringify(queue, null, 2) + '\n')
+    writeManagedTextFileSync(parsed.tasksPath, JSON.stringify(queue, null, 2) + '\n')
     return { success: true }
   } catch (err) {
     return { success: false, error: String(err) }

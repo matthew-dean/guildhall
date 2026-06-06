@@ -325,7 +325,7 @@ describe('SetupWizard', () => {
     await screen.findByText('Setup was interrupted')
 
     await userEvent.click(screen.getByRole('button', { name: /finish from repo scan/i }))
-    expect(await screen.findByText('Guildhall inferred 1 repo slice')).toBeInTheDocument()
+    expect(await screen.findByText('Inferred 1 repo slice')).toBeInTheDocument()
 
     await waitFor(() => {
       expect(fetchMock.mock.calls.some(([input]) => String(input).startsWith('/api/project/meta-intake/synthesize'))).toBe(true)
@@ -401,7 +401,7 @@ describe('SetupWizard', () => {
     await waitFor(() => {
       expect(fetchMock.mock.calls.some(([input]) => String(input).startsWith('/api/project/meta-intake/synthesize'))).toBe(true)
     })
-    expect(await screen.findByText('Guildhall inferred 1 repo slice')).toBeInTheDocument()
+    expect(await screen.findByText('Inferred 1 repo slice')).toBeInTheDocument()
   })
 
   it('validates identity before mutating setup state', async () => {
@@ -557,7 +557,7 @@ describe('SetupWizard', () => {
 
     render(SetupWizard, { projectId: 'font-improvement' })
 
-    await screen.findByText('Guildhall inferred 1 repo slice')
+    await screen.findByText('Inferred 1 repo slice')
     expect(screen.getAllByText(/web\/editor/)).toHaveLength(2)
     expect(screen.getByText(/spacing, keyboard-access/)).toBeInTheDocument()
 

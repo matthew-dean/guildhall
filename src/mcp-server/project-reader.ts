@@ -1,3 +1,4 @@
+import { appendManagedTextFile, readManagedTextFile, readManagedTextFileSync, writeManagedTextFile } from '@guildhall/persistence'
 import fsp from 'node:fs/promises'
 import path from 'node:path'
 import { summarizeDesignSystem, type Task } from '@guildhall/core'
@@ -997,7 +998,7 @@ async function readArtifactRegistry(
 
 async function readOptional(filePath: string, fallback: string): Promise<string> {
   try {
-    return await fsp.readFile(filePath, 'utf8')
+    return await readManagedTextFile(filePath, 'utf8')
   } catch {
     return fallback
   }
@@ -1019,7 +1020,7 @@ function trimForMcp(text: string): string {
 async function readLatestContextDebug(projectRoot: string, limit: number): Promise<ContextDebugRecord[]> {
   const ledgerPath = getProjectContextDebugLedgerPath(projectRoot)
   try {
-    const raw = await fsp.readFile(ledgerPath, 'utf8')
+    const raw = await readManagedTextFile(ledgerPath, 'utf8')
     const records: ContextDebugRecord[] = []
     for (const line of raw.split('\n')) {
       if (!line.trim()) continue

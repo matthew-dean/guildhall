@@ -1,3 +1,5 @@
+import { writeManagedTextFileSync } from '@guildhall/persistence'
+import { appendManagedTextFile, readManagedTextFile, readManagedTextFileSync, writeManagedTextFile } from '@guildhall/persistence'
 import fsp from 'node:fs/promises'
 import path from 'node:path'
 import { z } from 'zod'
@@ -19,7 +21,7 @@ export type LanguageMap = z.infer<typeof LanguageMap>
 
 export async function loadLanguageMap(memoryDir: string): Promise<LanguageMap> {
   try {
-    const raw = await fsp.readFile(languageMapPath(memoryDir), 'utf-8')
+    const raw = await readManagedTextFile(languageMapPath(memoryDir), 'utf-8')
     return LanguageMap.parse(JSON.parse(raw))
   } catch {
     return { version: 1, entries: [], updatedAt: new Date(0).toISOString() }
@@ -45,7 +47,7 @@ export async function addLanguageMapCandidates(input: {
   }
   map.updatedAt = new Date().toISOString()
   await fsp.mkdir(input.memoryDir, { recursive: true })
-  atomicWriteText(languageMapPath(input.memoryDir), JSON.stringify(map, null, 2) + '\n')
+  writeManagedTextFileSync(languageMapPath(input.memoryDir), JSON.stringify(map, null, 2) + '\n')
   return map
 }
 

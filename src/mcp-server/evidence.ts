@@ -1,3 +1,5 @@
+import { writeManagedTextFileSync } from '@guildhall/persistence'
+import { appendManagedTextFile, readManagedTextFile, readManagedTextFileSync, writeManagedTextFile } from '@guildhall/persistence'
 import fsp from 'node:fs/promises'
 import path from 'node:path'
 import { appendTaskEvidence as appendStoredTaskEvidence, atomicWriteText } from '@guildhall/sessions'
@@ -32,7 +34,7 @@ export async function appendTaskEvidence(
     '',
   ].join('\n')
   await fsp.mkdir(path.dirname(progressPath), { recursive: true })
-  atomicWriteText(progressPath, existing.trimEnd() + entry)
+  writeManagedTextFileSync(progressPath, existing.trimEnd() + entry)
   await appendStoredTaskEvidence(ctx.projectRoot, input.taskId, {
     id: `${input.taskId}-mcp-evidence-${now.replace(/[^0-9A-Za-z]/g, '')}`,
     kind: 'note',
@@ -91,7 +93,7 @@ export async function listMcpCapabilityRequests(ctx: GuildhallMcpContext): Promi
 
 async function readOptional(filePath: string, fallback: string): Promise<string> {
   try {
-    return await fsp.readFile(filePath, 'utf8')
+    return await readManagedTextFile(filePath, 'utf8')
   } catch {
     return fallback
   }

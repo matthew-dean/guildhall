@@ -1,3 +1,5 @@
+import { writeManagedTextFileSync } from '@guildhall/persistence'
+import { appendManagedTextFile, readManagedTextFile, readManagedTextFileSync, writeManagedTextFile } from '@guildhall/persistence'
 import { defineTool } from '@guildhall/engine'
 import { z } from 'zod'
 import fs from 'node:fs/promises'
@@ -33,7 +35,7 @@ export interface ReadTasksResult {
 
 export async function readTasks(input: ReadTasksInput): Promise<ReadTasksResult> {
   try {
-    const raw = await fs.readFile(input.tasksPath, 'utf-8')
+    const raw = await readManagedTextFile(input.tasksPath, 'utf-8')
     return { queue: TaskQueue.parse(JSON.parse(raw)) }
   } catch (err) {
     return { queue: null, error: String(err) }
@@ -122,7 +124,7 @@ export async function updateTask(
 ): Promise<UpdateTaskResult> {
   try {
     const input = updateTaskInputSchema.parse(rawInput)
-    const raw = await fs.readFile(input.tasksPath, 'utf-8')
+    const raw = await readManagedTextFile(input.tasksPath, 'utf-8')
     const queue = TaskQueue.parse(JSON.parse(raw))
     const taskId = input.taskId ?? inferMetadataTaskId(metadata) ?? inferSingleActiveTaskId(queue)
     if (!taskId) {
@@ -309,7 +311,7 @@ export async function updateTask(
     task.updatedAt = new Date().toISOString()
     queue.lastUpdated = new Date().toISOString()
 
-    atomicWriteText(input.tasksPath, JSON.stringify(queue, null, 2) + '\n')
+    writeManagedTextFileSync(input.tasksPath, JSON.stringify(queue, null, 2) + '\n')
     await appendUpdateTaskEvidence({
       tasksPath: input.tasksPath,
       taskId,
@@ -910,7 +912,7 @@ export interface AddTaskResult {
 
 export async function addTask(input: AddTaskInput): Promise<AddTaskResult> {
   try {
-    const raw = await fs.readFile(input.tasksPath, 'utf-8')
+    const raw = await readManagedTextFile(input.tasksPath, 'utf-8')
     const queue = TaskQueue.parse(JSON.parse(raw))
     const newTask = Task.parse({
       ...input.task,
@@ -920,7 +922,7 @@ export async function addTask(input: AddTaskInput): Promise<AddTaskResult> {
     })
     queue.tasks.push(newTask)
     queue.lastUpdated = new Date().toISOString()
-    atomicWriteText(input.tasksPath, JSON.stringify(queue, null, 2) + '\n')
+    writeManagedTextFileSync(input.tasksPath, JSON.stringify(queue, null, 2) + '\n')
     return { success: true, taskId: newTask.id }
   } catch (err) {
     return { success: false, error: String(err) }

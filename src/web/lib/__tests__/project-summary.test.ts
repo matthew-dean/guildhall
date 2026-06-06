@@ -159,6 +159,7 @@ describe('summarizeProjects', () => {
         canOpen: true,
         canStart: false,
         canStop: true,
+        statusLoading: false,
         needsAttention: true,
       },
     ])

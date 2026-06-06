@@ -1,3 +1,4 @@
+import { appendManagedTextFile, readManagedTextFile, readManagedTextFileSync, writeManagedTextFile } from '@guildhall/persistence'
 import fs from 'node:fs/promises'
 import { existsSync } from 'node:fs'
 import { execFile, execFileSync } from 'node:child_process'
@@ -689,7 +690,7 @@ async function collectEnvManifest(projectRoot: string, task: Task): Promise<stri
       visited.add(relativePath)
       let content = ''
       try {
-        content = await fs.readFile(full, 'utf-8')
+        content = await readManagedTextFile(full, 'utf-8')
       } catch {
         continue
       }
@@ -957,7 +958,7 @@ export async function buildContext(
 ): Promise<BuiltContext> {
   const readSafe = async (file: string): Promise<string> => {
     try {
-      return await fs.readFile(path.join(memoryDir, file), 'utf-8')
+      return await readManagedTextFile(path.join(memoryDir, file), 'utf-8')
     } catch {
       return ''
     }
@@ -971,7 +972,7 @@ export async function buildContext(
     readSafe('design-system.yaml'),
     // Only bother with the transcript when we're actually in the exploring phase.
     task.status === 'exploring'
-      ? fs.readFile(getProjectTranscriptPath(projectRoot, 'exploring', task.id), 'utf-8').catch(() => readSafe(path.join('exploring', `${task.id}.md`)))
+      ? readManagedTextFile(getProjectTranscriptPath(projectRoot, 'exploring', task.id), 'utf-8').catch(() => readSafe(path.join('exploring', `${task.id}.md`)))
       : Promise.resolve(''),
     // FR-23: resolve the task's parent goal. Missing-goal cases become
     // `undefined` — the summary renderer omits the envelope block.
@@ -989,7 +990,7 @@ export async function buildContext(
   ])
   const reviewPacket =
     task.status === 'review' || task.status === 'gate_check'
-      ? await fs.readFile(path.join(getProjectTaskLocalHistoryDir(projectRoot, task.id), 'review-packet.md'), 'utf-8')
+      ? await readManagedTextFile(path.join(getProjectTaskLocalHistoryDir(projectRoot, task.id), 'review-packet.md'), 'utf-8')
           .catch(() => readSafe(path.join('tasks', task.id, 'review-packet.md')))
       : ''
 
@@ -1335,7 +1336,7 @@ async function buildDeliverySpineWorkerContext(input: {
 
 async function readTaskQueueForContext(memoryDir: string): Promise<{ tasks: Task[] }> {
   try {
-    const raw = await fs.readFile(path.join(memoryDir, 'TASKS.json'), 'utf-8')
+    const raw = await readManagedTextFile(path.join(memoryDir, 'TASKS.json'), 'utf-8')
     const parsed = JSON.parse(raw)
     return TaskQueue.parse(Array.isArray(parsed) ? { version: 1, tasks: parsed } : parsed)
   } catch {

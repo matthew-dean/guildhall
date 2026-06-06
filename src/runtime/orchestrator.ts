@@ -1,3 +1,5 @@
+import { writeManagedTextFileSync } from '@guildhall/persistence'
+import { appendManagedTextFile, readManagedTextFile, readManagedTextFileSync, writeManagedTextFile } from '@guildhall/persistence'
 import {
   createCoordinatorAgent,
   createSpecAgent,
@@ -365,6 +367,15 @@ function friendlyRuntimeAgentName(agentName: string): string {
 
 function hasBlueprintSanityReview(task: Task): boolean {
   return task.notes.some((note) => note.role === 'blueprint-review')
+}
+
+function hasLatestBlueprintRevisionRequest(task: Task): boolean {
+  for (let index = task.notes.length - 1; index >= 0; index -= 1) {
+    const note = task.notes[index]
+    if (note?.role !== 'blueprint-review') continue
+    return /revise_blueprint/i.test(note.content ?? '')
+  }
+  return false
 }
 
 function hasDeterministicSpecRepairNote(task: Task): boolean {
@@ -1563,7 +1574,11 @@ function shouldContinueSelectedTaskClosure(
   if (!preferredTaskId || !('taskId' in outcome) || outcome.taskId === preferredTaskId) return false
   if (outcome.kind !== 'processed') return false
   if (outcome.waitingOnUser) return false
-  if (outcome.afterStatus !== 'done' && outcome.afterStatus !== 'pending_pr') return false
+  if (
+    outcome.afterStatus !== 'spec_review' &&
+    outcome.afterStatus !== 'done' &&
+    outcome.afterStatus !== 'pending_pr'
+  ) return false
   return workSubtreeIds(tasks, preferredTaskId).includes(outcome.taskId)
 }
 
@@ -2141,6 +2156,8 @@ export class Orchestrator {
   private queueWriteChain: Promise<void> = Promise.resolve()
   private readonly emptyAssistantRetries = new Map<string, number>()
   private readonly emptyAssistantResets = new Map<string, number>()
+  private readonly specTimeoutRetries = new Map<string, number>()
+  private readonly dirtyWorkerTimeoutRetries = new Map<string, number>()
   private readonly exploringNoProgressCounts = new Map<string, number>()
   private readonly workerNoProgressCounts = new Map<string, number>()
   private runAutomationResolutionCount = 0
@@ -3421,6 +3438,8 @@ export class Orchestrator {
           : undefined
       this.emptyAssistantRetries.delete(retryKey)
       this.emptyAssistantResets.delete(retryKey)
+      this.specTimeoutRetries.delete(retryKey)
+      this.dirtyWorkerTimeoutRetries.delete(retryKey)
     } catch (err) {
       this.livenessTracker.unregister(agent.name)
       await this.emitBackendEvent({
@@ -3637,7 +3656,28 @@ export class Orchestrator {
           interruption: 'timeout',
         })
         if (preserved) {
+          this.specTimeoutRetries.delete(retryKey)
           return preserved
+        }
+        const specTimeoutRetries = (this.specTimeoutRetries.get(retryKey) ?? 0) + 1
+        this.specTimeoutRetries.set(retryKey, specTimeoutRetries)
+        if (specTimeoutRetries <= 1) {
+          await this.emitBackendEvent({
+            type: 'line_complete',
+            task_id: task.id,
+            agent_name: agent.name,
+            message:
+              'Spec shaping timed out before saving durable progress. Guildhall will retry this shaping lane once before asking for owner intervention.',
+          })
+          return {
+            kind: 'processed',
+            taskId: task.id,
+            agent: agent.name,
+            beforeStatus,
+            afterStatus: beforeStatus,
+            transitioned: false,
+            revisionCount: task.revisionCount,
+          }
         }
         const summary = 'Spec shaping timed out before saving durable progress.'
         const escalation = await raiseEscalation({
@@ -3652,6 +3692,7 @@ export class Orchestrator {
             'Guildhall did not get a saved brief, question, spec, or task transition before the spec lane timed out. Retry the shaping lane, switch provider, or reframe the task before attempting autonomous work again.',
         })
         if (escalation.success && escalation.escalationId) {
+          this.specTimeoutRetries.delete(retryKey)
           await this.annotateWorkerBlockedClassification({
             taskId: task.id,
             agentId: 'coordinator',
@@ -3690,12 +3731,58 @@ export class Orchestrator {
           task.worktreePath.trim().length > 0 &&
           !(await this.gitDriver.isClean(resolveRuntimePath(task.worktreePath)))
         if (worktreeDirty) {
+          const dirtyTimeoutRetries = (this.dirtyWorkerTimeoutRetries.get(retryKey) ?? 0) + 1
+          this.dirtyWorkerTimeoutRetries.set(retryKey, dirtyTimeoutRetries)
+          if (dirtyTimeoutRetries > 2) {
+            const summary = 'Worker repeatedly hit its turn budget after saving partial work.'
+            const escalation = await raiseEscalation({
+              tasksPath,
+              progressPath: this.progressPath(),
+              taskId: task.id,
+              agentId: agent.name,
+              reason: 'human_judgment_required',
+              summary,
+              details:
+                `${message}\n\n` +
+                'Guildhall preserved dirty worktree edits across multiple worker retries, but the worker kept exhausting its turn budget without handing off, blocking, or completing the task. Review the partial diff/checkpoint, then retry, narrow the task, or switch provider.',
+            })
+            if (escalation.success && escalation.escalationId) {
+              this.dirtyWorkerTimeoutRetries.delete(retryKey)
+              await this.annotateWorkerBlockedClassification({
+                taskId: task.id,
+                agentId: 'coordinator',
+                classification: {
+                  class: 'model_tool_use_failure',
+                  confidence: 'medium',
+                  evidence: [{
+                    kind: 'task',
+                    summary,
+                    ref: message,
+                  }],
+                  scope: 'task',
+                  safePlaybooks: ['ask_concrete_human_question'],
+                  needsHuman: true,
+                  humanQuestion:
+                    'The worker saved partial edits but repeatedly exhausted its turn budget before handoff. Should Guildhall retry from the partial diff, narrow the task, or switch provider?',
+                },
+              })
+              return {
+                kind: 'escalated',
+                taskId: task.id,
+                agent: agent.name,
+                reason: summary,
+                escalationId: escalation.escalationId,
+              }
+            }
+          }
           await this.emitBackendEvent({
             type: 'line_complete',
             task_id: task.id,
             agent_name: agent.name,
             message:
-              'The worker hit its turn budget after making worktree edits, so Guildhall is preserving that partial implementation for the next pass.',
+              dirtyTimeoutRetries === 1
+                ? 'The worker hit its turn budget after making worktree edits, so Guildhall is preserving that partial implementation for the next pass.'
+                : 'The worker hit its turn budget again with dirty work preserved. Guildhall will retry once more before asking for owner intervention.',
           })
           return {
             kind: 'processed',
@@ -6907,7 +6994,7 @@ export class Orchestrator {
       '',
     ].join('\n')
     try {
-      await fs.appendFile(decisionsPath, decisionEntry, 'utf8')
+      await appendManagedTextFile(decisionsPath, decisionEntry, 'utf8')
     } catch {
       // Appending to DECISIONS.md is best-effort; the task-level record is
       // the load-bearing trail.
@@ -7787,13 +7874,13 @@ export class Orchestrator {
   }
 
   private async readQueue(): Promise<TaskQueue> {
-    const raw = await fs.readFile(this.tasksPath(), 'utf-8')
+    const raw = await readManagedTextFile(this.tasksPath(), 'utf-8')
     return TaskQueue.parse(JSON.parse(raw))
   }
 
   private async writeQueue(queue: TaskQueue): Promise<void> {
     this.attachMissingDoneSummaries(queue)
-    atomicWriteText(this.tasksPath(), JSON.stringify(queue, null, 2) + '\n')
+    writeManagedTextFileSync(this.tasksPath(), JSON.stringify(queue, null, 2) + '\n')
   }
 
   private attachMissingDoneSummaries(queue: TaskQueue): void {
@@ -7825,7 +7912,7 @@ export class Orchestrator {
       task.id,
     )
     await fs.mkdir(taskDir, { recursive: true })
-    atomicWriteText(
+    writeManagedTextFileSync(
       path.join(taskDir, 'review-packet.md'),
       await this.renderReviewPacket(task),
     )
@@ -7957,7 +8044,7 @@ export class Orchestrator {
       for (const entry of entries.slice(0, 3)) {
         const absPath = path.join(repoRoot, entry.file)
         try {
-          const raw = await fs.readFile(absPath, 'utf-8')
+          const raw = await readManagedTextFile(absPath, 'utf-8')
           const numbered = raw
             .split('\n')
             .slice(0, 220)
@@ -8168,7 +8255,10 @@ export class Orchestrator {
   }
 
   private async maybeRepairMalformedSpecReviewBlueprint(task: Task): Promise<TickOutcome | null> {
-    if (task.status !== 'spec_review') return null
+    const canRepair =
+      task.status === 'spec_review' ||
+      (task.status === 'exploring' && hasLatestBlueprintRevisionRequest(task))
+    if (!canRepair) return null
     if (task.id === META_INTAKE_TASK_ID) return null
     if (typeof task.spec !== 'string' || task.spec.trim().length === 0) return null
     const blueprintQuality = validateSpecCompletionBoundary(task)
@@ -8177,10 +8267,15 @@ export class Orchestrator {
     const now = this.now()
     const queue = await this.readQueue()
     const liveTask = queue.tasks.find((candidate) => candidate.id === task.id)
-    if (!liveTask || liveTask.status !== 'spec_review') return null
+    if (!liveTask) return null
+    const liveCanRepair =
+      liveTask.status === 'spec_review' ||
+      (liveTask.status === 'exploring' && hasLatestBlueprintRevisionRequest(liveTask))
+    if (!liveCanRepair) return null
     if (typeof liveTask.spec !== 'string' || liveTask.spec.trim().length === 0) return null
     const liveQuality = validateSpecCompletionBoundary(liveTask)
     if (liveQuality.ok) return null
+    const beforeStatus = liveTask.status
 
     const answeredDecisions = recoverySpecSeedDecisionTexts(liveTask)
     const sourceIntent = formatRecoverySpecSourceIntent(liveTask.description || liveTask.title)
@@ -8239,6 +8334,7 @@ export class Orchestrator {
       authoredBy: 'coordinator-recovery',
       authoredAt: now,
     }
+    liveTask.status = 'spec_review'
     liveTask.assignedTo = null
     liveTask.updatedAt = now
     liveTask.notes.push({
@@ -8261,9 +8357,9 @@ export class Orchestrator {
       kind: 'processed',
       taskId: liveTask.id,
       agent: 'coordinator-recovery',
-      beforeStatus: 'spec_review',
+      beforeStatus,
       afterStatus: 'spec_review',
-      transitioned: false,
+      transitioned: beforeStatus !== 'spec_review',
       revisionCount: liveTask.revisionCount,
     }
   }
@@ -9524,14 +9620,14 @@ function toCoordinatorDomain(
 async function sessionNamespaceForProject(config: ResolvedConfig): Promise<string> {
   const epochPath = path.join(config.memoryDir, '.session-epoch')
   try {
-    const existing = (await fs.readFile(epochPath, 'utf8')).trim()
+    const existing = (await readManagedTextFile(epochPath, 'utf8')).trim()
     if (existing) return existing
   } catch {
     /* create below */
   }
   const epoch = `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`
   await fs.mkdir(config.memoryDir, { recursive: true })
-  await fs.writeFile(epochPath, `${epoch}\n`, 'utf8')
+  await writeManagedTextFile(epochPath, `${epoch}\n`, 'utf8')
   return epoch
 }
 
@@ -9687,7 +9783,7 @@ export async function runOrchestrator(
 
   let resumeQueue: TaskQueue | null = null
   try {
-    const raw = readFileSync(path.join(config.memoryDir, 'TASKS.json'), 'utf8')
+    const raw = readManagedTextFileSync(path.join(config.memoryDir, 'TASKS.json'), 'utf8')
     resumeQueue = TaskQueue.parse(JSON.parse(raw))
   } catch {
     resumeQueue = null

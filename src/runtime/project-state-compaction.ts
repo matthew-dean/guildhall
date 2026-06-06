@@ -1,3 +1,4 @@
+import { appendManagedTextFile, readManagedTextFile, readManagedTextFileSync, writeManagedTextFile } from '@guildhall/persistence'
 import fs from 'node:fs/promises'
 import { existsSync } from 'node:fs'
 import path from 'node:path'
@@ -57,7 +58,7 @@ async function fileSize(file: string): Promise<number> {
 
 async function readJsonIfExists(file: string): Promise<unknown | null> {
   try {
-    return JSON.parse(await fs.readFile(file, 'utf8')) as unknown
+    return JSON.parse(await readManagedTextFile(file, 'utf8')) as unknown
   } catch (err) {
     if (String(err).includes('ENOENT')) return null
     throw err
@@ -98,7 +99,7 @@ async function writeFullTaskEvidence(projectRoot: string, id: string, task: unkn
   const evidencePath = path.join(getProjectTaskLocalHistoryDir(projectRoot, id), 'archive-evidence.json')
   await ensureDirFor(evidencePath)
   if (!existsSync(evidencePath)) {
-    await fs.writeFile(evidencePath, `${JSON.stringify(task, null, 2)}\n`, 'utf8')
+    await writeManagedTextFile(evidencePath, `${JSON.stringify(task, null, 2)}\n`, 'utf8')
   }
 }
 
@@ -152,7 +153,7 @@ async function compactArchiveFiles(projectRoot: string, stateDir: string, dryRun
     if (JSON.stringify(compact) === JSON.stringify(parsed)) continue
     compacted += 1
     if (!dryRun) {
-      await fs.writeFile(file, `${JSON.stringify(compact, null, 2)}\n`, 'utf8')
+      await writeManagedTextFile(file, `${JSON.stringify(compact, null, 2)}\n`, 'utf8')
     }
   }
   return compacted
@@ -187,7 +188,7 @@ async function compactTasks(
     await fs.mkdir(archiveDir, { recursive: true })
     for (const item of archivedTasks) {
       await writeFullTaskEvidence(projectRoot, item.id, item.task, dryRun)
-      await fs.writeFile(
+      await writeManagedTextFile(
         path.join(archiveDir, `${safeFileName(item.id)}.json`),
         `${JSON.stringify(compactTaskRecordForProjectArchive(item.task), null, 2)}\n`,
         'utf8',
@@ -203,14 +204,14 @@ async function compactTasks(
       archivedCount: archivedTasks.length,
     }
     await ensureDirFor(indexPath)
-    await fs.writeFile(indexPath, `${JSON.stringify(index, null, 2)}\n`, 'utf8')
+    await writeManagedTextFile(indexPath, `${JSON.stringify(index, null, 2)}\n`, 'utf8')
 
     const compactQueue = {
       version: queueVersion(parsed),
       lastUpdated: new Date().toISOString(),
       tasks: activeTasks,
     }
-    await fs.writeFile(tasksPath, `${JSON.stringify(compactQueue, null, 2)}\n`, 'utf8')
+    await writeManagedTextFile(tasksPath, `${JSON.stringify(compactQueue, null, 2)}\n`, 'utf8')
   }
 
   return { active: activeTasks.length, archived: archivedTasks.length, compactedArchives }
@@ -251,7 +252,7 @@ async function compactProgress(projectRoot: string, stateDir: string, dryRun: bo
   const progressPath = path.join(stateDir, 'PROGRESS.md')
   let content: string
   try {
-    content = await fs.readFile(progressPath, 'utf8')
+    content = await readManagedTextFile(progressPath, 'utf8')
   } catch (err) {
     if (String(err).includes('ENOENT')) return 0
     throw err
@@ -264,15 +265,15 @@ async function compactProgress(projectRoot: string, stateDir: string, dryRun: bo
     const heartbeatPath = getProjectProgressHeartbeatsPath(projectRoot)
     await ensureDirFor(snapshotPath)
     if (!existsSync(snapshotPath)) {
-      await fs.writeFile(snapshotPath, content, 'utf8')
+      await writeManagedTextFile(snapshotPath, content, 'utf8')
     }
     await ensureDirFor(heartbeatPath)
-    await fs.appendFile(
+    await appendManagedTextFile(
       heartbeatPath,
       `\n# Progress heartbeats moved from committed project state\n\n${heartbeats.join('\n\n')}\n`,
       'utf8',
     )
-    await fs.writeFile(progressPath, kept, 'utf8')
+    await writeManagedTextFile(progressPath, kept, 'utf8')
   }
 
   return heartbeats.length
@@ -283,7 +284,7 @@ async function compactCodebaseMap(projectRoot: string, stateDir: string, dryRun:
   const size = await fileSize(file)
   if (size <= CODEBASE_MAP_COMPACT_THRESHOLD_BYTES) return false
 
-  const raw = await fs.readFile(file, 'utf8')
+  const raw = await readManagedTextFile(file, 'utf8')
   const parsed = parseYaml(raw) as unknown
   if (!isRecord(parsed) || !isRecord(parsed.files)) return false
   const entries = Object.entries(parsed.files)
@@ -307,9 +308,9 @@ async function compactCodebaseMap(projectRoot: string, stateDir: string, dryRun:
     const fullPath = path.join(getProjectLocalHistoryDir(projectRoot), 'codebase-map', 'codebase-map.full.yaml')
     await ensureDirFor(fullPath)
     if (!existsSync(fullPath)) {
-      await fs.writeFile(fullPath, raw, 'utf8')
+      await writeManagedTextFile(fullPath, raw, 'utf8')
     }
-    await fs.writeFile(file, stringifyYaml(compact), 'utf8')
+    await writeManagedTextFile(file, stringifyYaml(compact), 'utf8')
   }
 
   return true

@@ -18,6 +18,7 @@ import {
   isAttentionOwnedInboxItem,
   type InboxItem,
 } from '../inbox.js'
+import { writeProjectDeliveryModel } from '../delivery-spine.js'
 
 let tmpDir: string
 let dataDir: string
@@ -187,7 +188,7 @@ describe('buildInbox', () => {
     await writeCompleteBootstrap()
     await writeJson('.guildhall/workspace-goals.json', { goals: [] })
     await writeJson('.guildhall/TASKS.json', { version: 1, lastUpdated: '', tasks: [] })
-    await writeJson('.guildhall/delivery-spine.json', {
+    await writeProjectDeliveryModel(tmpDir, {
       version: 1,
       updatedAt: '2026-06-05T12:00:00.000Z',
       drivers: [],
