@@ -245,6 +245,114 @@ Do not clean with ad hoc scripts unless the CLI path itself is being proven. If 
 - `guildhall memory audit-project-state --all` reports zero forbidden task fields in project-local task files for cleaned projects.
 - Focused tests pass, `pnpm typecheck` passes, and the cleanup report is committed or attached as internal evidence.
 
+## Contract Touch Decision: Project-State Boundary Cleanup Slice
+
+Work id: `2026-06-06-project-state-boundary-cleanup`.
+
+Touched contracts:
+
+- project-local `.guildhall/TASKS.json` cleanup shape;
+- project-local progress/codebase-map compaction reports;
+- `guildhall memory audit-project-state` and
+  `guildhall memory clean-project-state` CLI output;
+- local-history task evidence backup format for removed project-local runtime
+  and evidence fields.
+
+Contracts considered but not touched:
+
+- task lifecycle state machine;
+- runtime task/evidence projection readers;
+- release-readiness API;
+- public docs.
+
+Required follow-up:
+
+- migrate remaining direct writers to `writeProjectTaskQueue()` so the cleanup
+  boundary is enforced on every future write, not only by cleanup commands;
+- add writer-specific tests for orchestrator, task-queue tools, escalations,
+  and project action endpoints as those paths are migrated.
+
+Proof required:
+
+- red/green unit tests for active-task sanitization;
+- compaction integration test proving removed evidence is backed up locally;
+- CLI dry-run/apply proof on managed projects;
+- `pnpm lint:contracts`, `pnpm lint:data-layer`, `pnpm typecheck`, focused
+  tests, and build.
+
+Proof provided:
+
+- 2026-06-06 red/green boundary coverage:
+  `src/runtime/__tests__/project-state-boundary.test.ts`,
+  `src/runtime/__tests__/project-state-compaction.test.ts`, and
+  `src/runtime/__tests__/task-state-migration.test.ts`.
+- 2026-06-06 CLI dry-run/apply proof across managed projects:
+  `fair-labor-license` forbidden task fields `8 -> 0`, `looma-knit`
+  `462 -> 0`, `jess` `16 -> 0`, `narrative-harness` `82 -> 0`,
+  `font-something` `51 -> 0`, `t-minus-t` `16 -> 0`,
+  `commerce-project` `0 -> 0`, and `guildhall` `30 -> 0`.
+- 2026-06-06 post-apply direct scan across those eight projects found
+  `forbiddenFields=0` for each project and 70
+  `project-state-boundary-evidence.json` local-history backups written under
+  machine-local Guildhall storage.
+- 2026-06-06 live app proof: `guildhall start` served the installed build,
+  `/api/stale-server` returned `stale:false`, and the in-app browser rendered
+  `/projects/jess/overview` and `/projects/looma-knit/overview` as connected
+  overview pages after the cleanup.
+
+Waivers:
+
+- this slice does not delete product evidence; removed project-local task
+  runtime/evidence payloads are written under local history before the compact
+  project-local task file is written.
+
+## Schema Migration Decision: Project-State Boundary Cleanup Slice
+
+Persisted schema touched:
+
+- project-local `.guildhall/TASKS.json` may replace forbidden runtime/evidence
+  arrays with compact `openEscalations` summaries;
+- local-history task evidence gains `project-state-boundary-evidence.json`.
+
+Scope:
+
+- per project;
+- cleanup command and boundary helper only in this slice.
+
+Change class:
+
+- backward-compatible cleanup/compaction;
+- additive local-history evidence backup.
+
+Existing data impact:
+
+- active task records lose project-local runtime/evidence fields after cleanup;
+- full removed payload is preserved in local history;
+- terminal task archive behavior remains the existing compaction path.
+
+Migration id:
+
+- `2026-06-06-project-state-boundary-cleanup`.
+
+Safety:
+
+- dry-run is default for audit/legacy compact command;
+- apply mode reports before/after bytes, forbidden fields, and local-history
+  backup path;
+- unrelated project source files are not touched.
+
+Compatibility reader:
+
+- existing project readers still see task identity/status/spec fields in
+  `.guildhall/TASKS.json`;
+- full drill-down evidence is available from local history.
+
+Fixtures/tests:
+
+- `src/runtime/__tests__/project-state-boundary.test.ts`;
+- `src/runtime/__tests__/project-state-compaction.test.ts`;
+- `src/runtime/__tests__/task-state-migration.test.ts`.
+
 ## Non-Goals
 
 - Do not delete evidence. Move or compact it with verifiable local-history backups.

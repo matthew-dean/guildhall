@@ -10,6 +10,11 @@ import {
   getProjectStateDir,
   getProjectTaskLocalHistoryDir,
 } from '@guildhall/sessions'
+import {
+  findForbiddenProjectTaskFields,
+  sanitizeTaskQueueForProjectWrite,
+  type ForbiddenProjectTaskFieldFinding,
+} from './project-state-boundary.js'
 
 export interface ProjectStateCompactionOptions {
   projectRoot: string
@@ -24,6 +29,11 @@ export interface ProjectStateCompactionResult {
   activeTasksKept: number
   archivedTasks: number
   archivedTaskFilesCompacted: number
+  activeTasksSanitized: number
+  forbiddenTaskFieldsBefore: number
+  forbiddenTaskFieldsAfter: number
+  forbiddenTaskFieldFindings: ForbiddenProjectTaskFieldFinding[]
+  removedEvidenceBytes: number
   codebaseMapCompacted: boolean
   progressHeartbeatsMoved: number
   bytesBefore: number
@@ -103,6 +113,23 @@ async function writeFullTaskEvidence(projectRoot: string, id: string, task: unkn
   }
 }
 
+async function writeBoundaryEvidence(
+  projectRoot: string,
+  taskId: string,
+  removedEvidence: Record<string, unknown>,
+  dryRun: boolean,
+): Promise<void> {
+  if (dryRun || Object.keys(removedEvidence).length === 0) return
+  const evidencePath = path.join(getProjectTaskLocalHistoryDir(projectRoot, taskId), 'project-state-boundary-evidence.json')
+  await ensureDirFor(evidencePath)
+  await writeManagedTextFile(evidencePath, `${JSON.stringify({
+    version: 1,
+    taskId,
+    removedAt: new Date().toISOString(),
+    removedEvidence,
+  }, null, 2)}\n`, 'utf8')
+}
+
 function compactTaskRecordForProjectArchive(task: unknown): unknown {
   if (!isRecord(task)) return task
   const next = JSON.parse(JSON.stringify(task)) as Record<string, unknown>
@@ -163,12 +190,33 @@ async function compactTasks(
   projectRoot: string,
   stateDir: string,
   dryRun: boolean,
-): Promise<{ active: number; archived: number; compactedArchives: number }> {
+): Promise<{
+  active: number
+  archived: number
+  compactedArchives: number
+  activeSanitized: number
+  forbiddenBefore: number
+  forbiddenAfter: number
+  forbiddenFindings: ForbiddenProjectTaskFieldFinding[]
+  removedEvidenceBytes: number
+}> {
   const tasksPath = path.join(stateDir, 'TASKS.json')
   const parsed = await readJsonIfExists(tasksPath)
   const compactedArchives = await compactArchiveFiles(projectRoot, stateDir, dryRun)
-  if (parsed === null) return { active: 0, archived: 0, compactedArchives }
+  if (parsed === null) {
+    return {
+      active: 0,
+      archived: 0,
+      compactedArchives,
+      activeSanitized: 0,
+      forbiddenBefore: 0,
+      forbiddenAfter: 0,
+      forbiddenFindings: [],
+      removedEvidenceBytes: 0,
+    }
+  }
 
+  const forbiddenFindings = findForbiddenProjectTaskFields(parsed)
   const tasks = queueTasks(parsed)
   const activeTasks: unknown[] = []
   const archivedTasks: Array<{ id: string; task: unknown }> = []
@@ -183,7 +231,17 @@ async function compactTasks(
     }
   }
 
-  if (!dryRun && archivedTasks.length > 0) {
+  const compactQueue = {
+    version: queueVersion(parsed),
+    lastUpdated: new Date().toISOString(),
+    tasks: activeTasks,
+  }
+  const sanitized = sanitizeTaskQueueForProjectWrite(compactQueue)
+  for (const item of sanitized.removedByTask) {
+    await writeBoundaryEvidence(projectRoot, item.taskId, item.removedEvidence, dryRun)
+  }
+
+  if (!dryRun && (archivedTasks.length > 0 || sanitized.taskDefinitionsRewritten > 0 || forbiddenFindings.length > 0)) {
     const archiveDir = path.join(stateDir, 'tasks', 'archive')
     await fs.mkdir(archiveDir, { recursive: true })
     for (const item of archivedTasks) {
@@ -205,16 +263,19 @@ async function compactTasks(
     }
     await ensureDirFor(indexPath)
     await writeManagedTextFile(indexPath, `${JSON.stringify(index, null, 2)}\n`, 'utf8')
-
-    const compactQueue = {
-      version: queueVersion(parsed),
-      lastUpdated: new Date().toISOString(),
-      tasks: activeTasks,
-    }
-    await writeManagedTextFile(tasksPath, `${JSON.stringify(compactQueue, null, 2)}\n`, 'utf8')
+    await writeManagedTextFile(tasksPath, `${JSON.stringify(sanitized.queue, null, 2)}\n`, 'utf8')
   }
 
-  return { active: activeTasks.length, archived: archivedTasks.length, compactedArchives }
+  return {
+    active: activeTasks.length,
+    archived: archivedTasks.length,
+    compactedArchives,
+    activeSanitized: sanitized.taskDefinitionsRewritten,
+    forbiddenBefore: forbiddenFindings.length,
+    forbiddenAfter: findForbiddenProjectTaskFields(sanitized.queue).length,
+    forbiddenFindings,
+    removedEvidenceBytes: sanitized.removedEvidenceBytes,
+  }
 }
 
 function splitProgressBlocks(content: string): { kept: string; heartbeats: string[] } {
@@ -342,6 +403,11 @@ export async function compactProjectState(
     activeTasksKept: tasks.active,
     archivedTasks: tasks.archived,
     archivedTaskFilesCompacted: tasks.compactedArchives,
+    activeTasksSanitized: tasks.activeSanitized,
+    forbiddenTaskFieldsBefore: tasks.forbiddenBefore,
+    forbiddenTaskFieldsAfter: tasks.forbiddenAfter,
+    forbiddenTaskFieldFindings: tasks.forbiddenFindings,
+    removedEvidenceBytes: tasks.removedEvidenceBytes,
     codebaseMapCompacted,
     progressHeartbeatsMoved,
     bytesBefore,

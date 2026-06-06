@@ -123,4 +123,61 @@ describe('compactProjectState', () => {
     )
     expect(fullCodebaseMap).toContain('file-299.ts')
   })
+
+  it('sanitizes active task runtime and evidence fields while preserving removed evidence locally', async () => {
+    await fs.writeFile(path.join(stateDir, 'TASKS.json'), JSON.stringify({
+      version: 1,
+      tasks: [
+        {
+          id: 'task-active',
+          status: 'blocked',
+          title: 'Active but too bulky',
+          notes: Array.from({ length: 30 }, (_, index) => `note ${index}`),
+          reviewVerdicts: Array.from({ length: 30 }, (_, index) => ({ reviewer: `reviewer-${index}`, ok: false })),
+          gateResults: [{ command: 'pnpm test', ok: false }],
+          worktreePath: '/tmp/worktree',
+          branchName: 'guildhall/task-active',
+          revisionCount: 4,
+          escalations: [
+            { id: 'open', status: 'open', title: 'Needs owner', summary: 'Owner credentials needed.' },
+            { id: 'old', status: 'resolved', title: 'Resolved', summary: 'No longer relevant.' },
+          ],
+        },
+      ],
+    }, null, 2), 'utf8')
+
+    const result = await compactProjectState({ projectRoot, dryRun: false })
+
+    expect(result.activeTasksKept).toBe(1)
+    expect(result.activeTasksSanitized).toBe(1)
+    expect(result.forbiddenTaskFieldsBefore).toBeGreaterThan(0)
+    expect(result.forbiddenTaskFieldsAfter).toBe(0)
+
+    const compactQueue = JSON.parse(await fs.readFile(path.join(stateDir, 'TASKS.json'), 'utf8')) as {
+      tasks: Array<Record<string, unknown>>
+    }
+    const active = compactQueue.tasks[0]
+    expect(active).toMatchObject({
+      id: 'task-active',
+      status: 'blocked',
+      title: 'Active but too bulky',
+      openEscalations: [{ id: 'open', status: 'open', title: 'Needs owner', summary: 'Owner credentials needed.' }],
+    })
+    expect(active).not.toHaveProperty('notes')
+    expect(active).not.toHaveProperty('reviewVerdicts')
+    expect(active).not.toHaveProperty('gateResults')
+    expect(active).not.toHaveProperty('worktreePath')
+    expect(active).not.toHaveProperty('branchName')
+    expect(active).not.toHaveProperty('revisionCount')
+    expect(active).not.toHaveProperty('escalations')
+    expect(JSON.stringify(active)).not.toContain('old')
+
+    const removedEvidence = await fs.readFile(
+      path.join(getProjectTaskLocalHistoryDir(projectRoot, 'task-active'), 'project-state-boundary-evidence.json'),
+      'utf8',
+    )
+    expect(removedEvidence).toContain('note 0')
+    expect(removedEvidence).toContain('reviewer-29')
+    expect(removedEvidence).toContain('guildhall/task-active')
+  })
 })

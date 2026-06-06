@@ -481,6 +481,21 @@ coverage.
   If those fail in the production memory-core implementation, disable Mastra
   and continue with the deterministic baseline while reassessing the memory
   substrate from first principles.
+  Boundary-cleanup slice completed on 2026-06-06: project-state boundary
+  sanitizer and `memory audit-project-state`/`memory clean-project-state`
+  commands now strip active-task runtime/evidence fields, preserve removed
+  payloads in machine-local history, and report forbidden fields before/after.
+  Live cleanup applied to eight managed projects: `fair-labor-license`
+  `8 -> 0`, `looma-knit` `462 -> 0`, `jess` `16 -> 0`,
+  `narrative-harness` `82 -> 0`, `font-something` `51 -> 0`,
+  `t-minus-t` `16 -> 0`, `commerce-project` `0 -> 0`, and `guildhall`
+  `30 -> 0`; a direct post-apply scan found `forbiddenFields=0` for all
+  eight and 70 machine-local `project-state-boundary-evidence.json` backups.
+  Live proof after `pnpm dev:install`: `/api/stale-server` returned
+  `stale:false`, and the in-app browser rendered connected overview pages for
+  `/projects/jess/overview` and `/projects/looma-knit/overview`.
+  Remaining gap: migrate direct task writers to the shared boundary helper so
+  future writes cannot recreate forbidden project-local fields.
   Treat this as a writer-boundary, memory/context, and cleanup blocker, not a
   one-time compaction chore.
   2026-06-06 implementation slice:

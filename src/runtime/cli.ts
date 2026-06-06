@@ -463,7 +463,11 @@ Usage:
   guildhall memory migrate-local-history [path]
                                   Compatibility alias for the 0.8.0 storage migration
   guildhall memory compact-project-state [path]
-                                  Archive terminal tasks and move heartbeat progress local
+                                  Archive terminal tasks and sanitize project-local state
+  guildhall memory audit-project-state [path]
+                                  Dry-run project-local state cleanup and report boundaries
+  guildhall memory clean-project-state [path]
+                                  Apply project-local state cleanup
   guildhall memory mastra-audit [path]
                                   Audit .guildhall memory state into system-local memory-core storage
     --apply                      Write files. Without this, prints a dry run
@@ -570,6 +574,8 @@ Examples:
   guildhall corpus-map refresh --semantic .
   guildhall memory migrate-0.8.0 --apply --delete-source --update-gitignore .
   guildhall memory compact-project-state --apply .
+  guildhall memory audit-project-state .
+  guildhall memory clean-project-state --apply .
   guildhall memory mastra-audit --apply .
   guildhall migrate status .
   guildhall migrate plan --all
@@ -957,8 +963,8 @@ async function cmdCorpusMap() {
 async function cmdMemory() {
   const pos = positionals()
   const subcommand = pos[0] ?? 'migrate-0.8.0'
-  if (!['migrate-0.8.0', 'migrate-local-history', 'compact-project-state', 'mastra-audit'].includes(subcommand)) {
-    console.error('[guildhall] Usage: guildhall memory <migrate-0.8.0|migrate-local-history|compact-project-state|mastra-audit> [--apply] [id|path]')
+  if (!['migrate-0.8.0', 'migrate-local-history', 'compact-project-state', 'audit-project-state', 'clean-project-state', 'mastra-audit'].includes(subcommand)) {
+    console.error('[guildhall] Usage: guildhall memory <migrate-0.8.0|migrate-local-history|compact-project-state|audit-project-state|clean-project-state|mastra-audit> [--apply] [id|path]')
     process.exit(1)
   }
   const idOrPath = pos[1]
@@ -1006,20 +1012,37 @@ async function cmdMemory() {
     }
     return
   }
-  if (subcommand === 'compact-project-state') {
-    const result = await compactProjectState({ projectRoot: projectPath, dryRun })
-    console.log(`[guildhall] Project state compaction ${dryRun ? 'dry run' : 'complete'}.`)
+  if (['compact-project-state', 'audit-project-state', 'clean-project-state'].includes(subcommand)) {
+    const cleanupDryRun = subcommand === 'audit-project-state'
+      ? true
+      : subcommand === 'clean-project-state'
+        ? !args.includes('--apply')
+        : dryRun
+    const result = await compactProjectState({ projectRoot: projectPath, dryRun: cleanupDryRun })
+    console.log(`[guildhall] Project state cleanup ${result.dryRun ? 'dry run' : 'complete'}.`)
     console.log(`[guildhall] Project: ${result.projectRoot}`)
     console.log(`[guildhall] State dir: ${result.stateDir}`)
     console.log(`[guildhall] Local history: ${result.localHistoryDir}`)
     console.log(`[guildhall] Active tasks kept: ${result.activeTasksKept}`)
+    console.log(`[guildhall] Active tasks sanitized: ${result.activeTasksSanitized}`)
     console.log(`[guildhall] Terminal tasks archived: ${result.archivedTasks}`)
     console.log(`[guildhall] Archived task files compacted: ${result.archivedTaskFilesCompacted}`)
+    console.log(`[guildhall] Forbidden task fields: ${result.forbiddenTaskFieldsBefore} -> ${result.forbiddenTaskFieldsAfter}`)
+    console.log(`[guildhall] Removed evidence bytes: ${result.removedEvidenceBytes}`)
     console.log(`[guildhall] Codebase map compacted: ${result.codebaseMapCompacted ? 'yes' : 'no'}`)
     console.log(`[guildhall] Heartbeat blocks moved: ${result.progressHeartbeatsMoved}`)
     console.log(`[guildhall] Shared TASKS/PROGRESS bytes: ${result.bytesBefore} -> ${result.bytesAfter}`)
-    if (dryRun) {
-      console.log('[guildhall] Re-run with --apply to compact these files.')
+    if (result.forbiddenTaskFieldFindings.length > 0) {
+      console.log('[guildhall] Forbidden field findings:')
+      for (const finding of result.forbiddenTaskFieldFindings.slice(0, 20)) {
+        console.log(`[guildhall] - ${finding.taskId}.${finding.field}: ${finding.bytes} bytes`)
+      }
+      if (result.forbiddenTaskFieldFindings.length > 20) {
+        console.log(`[guildhall] - ... ${result.forbiddenTaskFieldFindings.length - 20} more`)
+      }
+    }
+    if (result.dryRun) {
+      console.log('[guildhall] Re-run with clean-project-state --apply to compact these files.')
     }
     return
   }
