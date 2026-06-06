@@ -724,6 +724,8 @@ async function renderMemory(ctx: GuildhallMcpContext): Promise<string> {
     `- Adapter: ${memoryCorePacket?.health.adapter ?? 'deterministic'}`,
     `- Fallback used: ${memoryCorePacket?.health.fallbackUsed ?? true}`,
     '- Repo-local writes: none',
+    `- Compaction: ${memoryCorePacket?.health.compactionStatus ?? 'needs_attention'}`,
+    `- Semantic validity: ${memoryCorePacket?.health.semanticValidity ?? 'needs_attention'}`,
     `- Candidate preview: ${memoryCorePacket?.candidates.length ?? 0}`,
     ...(memoryCorePacket?.candidates ?? []).slice(0, 5).map((candidate) =>
       `  - ${candidate.summary}`,

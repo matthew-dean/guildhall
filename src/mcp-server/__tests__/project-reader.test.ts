@@ -392,6 +392,8 @@ describe('Guildhall MCP project reader', () => {
       const memory = await readGuildhallResource(ctx, 'guildhall://project/memory')
       expect(memory).toContain('## Memory-Core')
       expect(memory).toContain('- Repo-local writes: none')
+      expect(memory).toContain('- Compaction: active')
+      expect(memory).toContain('- Semantic validity: valid')
       expect(memory).toContain('Memory-core packet says MCP bridge proof')
       expect(memory).toContain('mcp-bridge-pref')
       expect(memory).toContain('External agents should audit through MCP')

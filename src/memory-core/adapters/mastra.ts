@@ -39,19 +39,38 @@ export async function createMastraMemoryCoreAdapter(input: {
     url: `file:${paths.dbPath}`,
   })
   if (typeof storage.init === 'function') await storage.init()
+  const warnings: string[] = []
+  const engineGatePassed = memoryEngineGatePassed()
+  const semanticRecallRequested = input.semanticRecall ?? false
+  const observationalMemoryRequested = input.observationalMemory ?? false
+  let semanticRecallEnabled = false
+  let observationalMemoryEnabled = false
+  if (semanticRecallRequested) {
+    if (!engineGatePassed) {
+      warnings.push('Semantic recall requested but held behind the memory engine quality gate.')
+    } else {
+      warnings.push('Semantic recall requested but no vector store is configured.')
+    }
+  }
+  if (observationalMemoryRequested) {
+    if (!engineGatePassed) {
+      warnings.push('Observational Memory requested but held behind the memory engine quality gate.')
+    } else {
+      observationalMemoryEnabled = true
+    }
+  }
   const memory = new Memory({
     storage,
     vector: false,
     options: {
       lastMessages: input.readOnly ? 10 : 20,
       readOnly: input.readOnly ?? false,
-      semanticRecall: input.semanticRecall ?? false,
-      observationalMemory: input.observationalMemory ?? false,
+      semanticRecall: semanticRecallEnabled,
+      observationalMemory: observationalMemoryEnabled,
     },
   })
-  const warnings: string[] = []
   let observationalProcessorReady = false
-  if (input.observationalMemory) {
+  if (observationalMemoryEnabled) {
     if (typeof memory.createOMProcessor === 'function') {
       try {
         await memory.createOMProcessor([], undefined)
@@ -80,17 +99,33 @@ export async function createMastraMemoryCoreAdapter(input: {
       'libsql-storage',
       'thread-resource-scope',
       input.readOnly ? 'read-only-mode' : 'write-mode',
-      input.semanticRecall ? 'semantic-recall-enabled' : 'semantic-recall-disabled',
-      input.observationalMemory ? 'observational-memory-enabled' : 'observational-memory-disabled',
+      semanticRecallEnabled
+        ? 'semantic-recall-enabled'
+        : semanticRecallRequested && engineGatePassed
+          ? 'semantic-recall-vector-unavailable'
+          : semanticRecallRequested
+            ? 'semantic-recall-gated'
+            : 'semantic-recall-disabled',
+      observationalMemoryEnabled
+        ? 'observational-memory-enabled'
+        : observationalMemoryRequested
+          ? 'observational-memory-gated'
+          : 'observational-memory-disabled',
       observationalProcessorReady ? 'observational-memory-processor' : 'observational-memory-processor-off',
     ],
     scope,
     packages: versions,
     warnings,
-    observationalMemoryEnabled: input.observationalMemory ?? false,
+    semanticRecallEnabled,
+    observationalMemoryEnabled,
     observationalProcessorReady,
   }
   return { health, memory, storage }
+}
+
+function memoryEngineGatePassed(): boolean {
+  return process.env.GUILDHALL_MEMORY_ENGINE_GATE === 'passed'
+    || process.env.GUILDHALL_MEMORY_ENGINE_GATE === '1'
 }
 
 function loadMastraRuntime(): {

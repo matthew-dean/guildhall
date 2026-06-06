@@ -34,6 +34,9 @@ const execFileP = promisify(execFile)
 let tmpDir: string
 let previousHome: string | undefined
 let previousConfigDir: string | undefined
+let previousSemanticRecall: string | undefined
+let previousObservationalMemory: string | undefined
+let previousEngineGate: string | undefined
 let systemDir: string
 const PROJECT_ID = 'settings-test'
 
@@ -83,6 +86,9 @@ async function seedThreadOwnerInput(input: {
 beforeEach(async () => {
   previousHome = process.env.HOME
   previousConfigDir = process.env.GUILDHALL_CONFIG_DIR
+  previousSemanticRecall = process.env.GUILDHALL_MEMORY_SEMANTIC_RECALL
+  previousObservationalMemory = process.env.GUILDHALL_MEMORY_OBSERVATIONAL
+  previousEngineGate = process.env.GUILDHALL_MEMORY_ENGINE_GATE
   tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'guildhall-serve-settings-'))
   systemDir = await fs.mkdtemp(path.join(os.tmpdir(), 'guildhall-serve-settings-system-'))
   process.env.HOME = tmpDir
@@ -100,6 +106,12 @@ afterEach(async () => {
   else process.env.HOME = previousHome
   if (previousConfigDir === undefined) delete process.env.GUILDHALL_CONFIG_DIR
   else process.env.GUILDHALL_CONFIG_DIR = previousConfigDir
+  if (previousSemanticRecall === undefined) delete process.env.GUILDHALL_MEMORY_SEMANTIC_RECALL
+  else process.env.GUILDHALL_MEMORY_SEMANTIC_RECALL = previousSemanticRecall
+  if (previousObservationalMemory === undefined) delete process.env.GUILDHALL_MEMORY_OBSERVATIONAL
+  else process.env.GUILDHALL_MEMORY_OBSERVATIONAL = previousObservationalMemory
+  if (previousEngineGate === undefined) delete process.env.GUILDHALL_MEMORY_ENGINE_GATE
+  else process.env.GUILDHALL_MEMORY_ENGINE_GATE = previousEngineGate
   await fs.rm(tmpDir, { recursive: true, force: true })
   await fs.rm(systemDir, { recursive: true, force: true })
 })
@@ -2820,6 +2832,38 @@ describe('GET /api/project — bootstrap status', () => {
       semanticValidity: 'valid',
       repoLocalWrites: [],
     })
+  })
+
+  it('keeps memory engines gated in /api/project when env vars request them without quality proof', async () => {
+    process.env.GUILDHALL_MEMORY_SEMANTIC_RECALL = '1'
+    process.env.GUILDHALL_MEMORY_OBSERVATIONAL = '1'
+    const { app } = buildServeApp({ projectPath: tmpDir })
+
+    const projectRes = await app.fetch(new Request(scoped('/api/project')))
+    expect(projectRes.status).toBe(200)
+    const projectBody = (await projectRes.json()) as {
+      memoryHealth?: {
+        memoryCore?: {
+          semanticRecallEnabled?: boolean
+          observationalMemoryEnabled?: boolean
+          observationalProcessorReady?: boolean
+          features?: string[]
+          warnings?: string[]
+        }
+      }
+    }
+
+    expect(projectBody.memoryHealth?.memoryCore).toMatchObject({
+      semanticRecallEnabled: false,
+      observationalMemoryEnabled: false,
+      observationalProcessorReady: false,
+    })
+    expect(projectBody.memoryHealth?.memoryCore?.features).toEqual(expect.arrayContaining([
+      'semantic-recall-gated',
+      'observational-memory-gated',
+    ]))
+    expect(projectBody.memoryHealth?.memoryCore?.warnings?.join('\n')).toContain('Semantic recall requested but held behind the memory engine quality gate.')
+    expect(projectBody.memoryHealth?.memoryCore?.warnings?.join('\n')).toContain('Observational Memory requested but held behind the memory engine quality gate.')
   })
 
   it('marks dynamic project payloads as non-cacheable', async () => {

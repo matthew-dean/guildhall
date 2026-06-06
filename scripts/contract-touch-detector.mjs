@@ -8,6 +8,7 @@ const CONTRACT_PATH_RULES = [
   { pattern: /^src\/levers\/schema\.ts$/, types: ['persisted_state'] },
   { pattern: /^src\/hooks\/schemas\.ts$/, types: ['agent_contract'] },
   { pattern: /^src\/protocol\/rich-artifacts\.ts$/, types: ['agent_contract', 'mcp_tooling'] },
+  { pattern: /^src\/memory-core\//, types: ['persisted_state', 'agent_contract'] },
   { pattern: /^src\/runtime\/.*(state|store|migration|delivery-spine|contract).*\.ts$/, types: ['persisted_state', 'release_runtime'] },
   { pattern: /^src\/runtime\/migrations\.ts$/, types: ['persisted_state', 'release_runtime'] },
   { pattern: /^src\/tools\/task-queue\.ts$/, types: ['agent_contract', 'persisted_state'] },

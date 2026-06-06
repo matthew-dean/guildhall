@@ -1936,7 +1936,17 @@ follow-up here with its evidence instead of deleting it.
   browser showed packet-backed "Memory protected · auto-compacted ·
   semantically valid · source-backed · project repo protected" on
   `/projects/looma-knit/overview`, with no `Mastra substrate`, `semantic off`,
-  `compaction off`, or top-card `active memories` copy.
+  `compaction off`, or top-card `active memories` copy. Follow-up hardening on
+  2026-06-06 made semantic recall and Observational Memory requests fail closed
+  behind `GUILDHALL_MEMORY_ENGINE_GATE`, keeps semantic recall disabled until
+  vector/embedder support exists, exposes compaction and semantic-validity
+  status through `guildhall://project/memory`, and adds `src/memory-core/**` to
+  the contract detector's persisted-state surface. Focused proof:
+  `pnpm test src/memory-core/__tests__/memory-core.test.ts
+  src/mcp-server/__tests__/project-reader.test.ts
+  scripts/contract-touch-detector.test.ts -- --run --reporter=dot`,
+  `pnpm test src/runtime/__tests__/serve-settings.test.ts -- --run
+  --reporter=dot -t "memory engines gated"`, and `pnpm lint:contracts`.
 - [x] Run a multi-agent 0.8 user-testing pass on the documented Narrative
   Harness project and repair the bounded regressions found live. The pass
   covered migration/runtime authority, workspace-intake depth, and

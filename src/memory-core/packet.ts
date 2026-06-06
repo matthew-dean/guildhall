@@ -47,7 +47,7 @@ export async function buildMemoryCoreCandidatePacket(input: {
         storagePath: adapter.health.storagePath,
         repoLocalWrites: adapter.health.repoLocalWrites,
         features: adapter.health.features,
-        semanticRecallEnabled: adapter.health.features.includes('semantic-recall-enabled'),
+        semanticRecallEnabled: adapter.health.semanticRecallEnabled,
         observationalMemoryEnabled: adapter.health.observationalMemoryEnabled,
         observationalProcessorReady: adapter.health.observationalProcessorReady,
         compactionStatus: guarantees.compactionStatus,

@@ -21,9 +21,15 @@ import {
 let tmpDir: string
 let projectRoot: string
 let previousDataDir: string | undefined
+let previousSemanticRecall: string | undefined
+let previousObservationalMemory: string | undefined
+let previousEngineGate: string | undefined
 
 beforeEach(async () => {
   previousDataDir = process.env.GUILDHALL_DATA_DIR
+  previousSemanticRecall = process.env.GUILDHALL_MEMORY_SEMANTIC_RECALL
+  previousObservationalMemory = process.env.GUILDHALL_MEMORY_OBSERVATIONAL
+  previousEngineGate = process.env.GUILDHALL_MEMORY_ENGINE_GATE
   tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'guildhall-memory-core-'))
   projectRoot = path.join(tmpDir, 'project')
   process.env.GUILDHALL_DATA_DIR = path.join(tmpDir, 'data')
@@ -33,6 +39,12 @@ beforeEach(async () => {
 afterEach(async () => {
   if (previousDataDir === undefined) delete process.env.GUILDHALL_DATA_DIR
   else process.env.GUILDHALL_DATA_DIR = previousDataDir
+  if (previousSemanticRecall === undefined) delete process.env.GUILDHALL_MEMORY_SEMANTIC_RECALL
+  else process.env.GUILDHALL_MEMORY_SEMANTIC_RECALL = previousSemanticRecall
+  if (previousObservationalMemory === undefined) delete process.env.GUILDHALL_MEMORY_OBSERVATIONAL
+  else process.env.GUILDHALL_MEMORY_OBSERVATIONAL = previousObservationalMemory
+  if (previousEngineGate === undefined) delete process.env.GUILDHALL_MEMORY_ENGINE_GATE
+  else process.env.GUILDHALL_MEMORY_ENGINE_GATE = previousEngineGate
   await fs.rm(tmpDir, { recursive: true, force: true })
 })
 
@@ -171,7 +183,8 @@ describe('memory-core', () => {
     expect(await fs.readdir(path.join(projectRoot, '.guildhall'))).toEqual([])
   })
 
-  it('prepares Mastra observational memory only when explicitly enabled', async () => {
+  it('prepares Mastra observational memory only when explicitly enabled after the quality gate passes', async () => {
+    process.env.GUILDHALL_MEMORY_ENGINE_GATE = 'passed'
     const adapter = await createMastraMemoryCoreAdapter({
       projectRoot,
       scope: taskScope(),
@@ -240,6 +253,74 @@ describe('memory-core', () => {
     expect(packet.candidates[0]?.sourceRefs).toEqual([
       expect.objectContaining({ uri: 'PROGRESS.md#mastra-packet' }),
     ])
+  })
+
+  it('keeps semantic recall and observational engines disabled until the quality gate passes', async () => {
+    process.env.GUILDHALL_MEMORY_SEMANTIC_RECALL = '1'
+    process.env.GUILDHALL_MEMORY_OBSERVATIONAL = '1'
+    await recordMemoryEvent({
+      projectRoot,
+      event: {
+        scope: taskScope(),
+        source: {
+          kind: 'progress',
+          ref: 'PROGRESS.md#engine-gate',
+          path: '.guildhall/PROGRESS.md',
+          capturedAt: '2026-06-06T12:05:00.000Z',
+        },
+        content: {
+          summary: 'Requested engines should remain gated until quality proof passes.',
+        },
+        metadata: {
+          projectId: 'looma-knit',
+          taskId: 'context-menu',
+          retention: 'task_lifecycle',
+          risk: 'low',
+        },
+      },
+    })
+
+    const packet = await buildMemoryCoreCandidatePacket({
+      projectRoot,
+      scope: taskScope(),
+      purpose: 'next_worker_context',
+      maxBytes: 4096,
+      semanticRecall: true,
+      observationalMemory: true,
+    })
+
+    expect(packet.health.semanticRecallEnabled).toBe(false)
+    expect(packet.health.observationalMemoryEnabled).toBe(false)
+    expect(packet.health.observationalProcessorReady).toBe(false)
+    expect(packet.health.features).toEqual(expect.arrayContaining([
+      'semantic-recall-gated',
+      'observational-memory-gated',
+    ]))
+    expect(packet.health.warnings.join('\n')).toContain('Semantic recall requested but held behind the memory engine quality gate.')
+    expect(packet.health.warnings.join('\n')).toContain('Observational Memory requested but held behind the memory engine quality gate.')
+  })
+
+  it('enables only engine paths whose prerequisites pass the quality gate', async () => {
+    process.env.GUILDHALL_MEMORY_ENGINE_GATE = 'passed'
+
+    const adapter = await createMastraMemoryCoreAdapter({
+      projectRoot,
+      scope: taskScope(),
+      readOnly: true,
+      semanticRecall: true,
+      observationalMemory: true,
+    })
+
+    expect(adapter.health.features).toEqual(expect.arrayContaining([
+      'semantic-recall-vector-unavailable',
+      'observational-memory-enabled',
+      'observational-memory-processor',
+    ]))
+    expect(adapter.health.semanticRecallEnabled).toBe(false)
+    expect(adapter.health.observationalMemoryEnabled).toBe(true)
+    expect(adapter.health.observationalProcessorReady).toBe(true)
+    expect(adapter.health.warnings.join('\n')).toContain('Semantic recall requested but no vector store is configured.')
+    expect(adapter.health.repoLocalWrites).toEqual([])
   })
 
   it('falls back to deterministic packets with a visible warning when Mastra is unavailable', async () => {

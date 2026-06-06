@@ -55,4 +55,21 @@ describe('contract touch detector', () => {
     expect(result.valid).toBe(true)
     expect(result.missing).toEqual([])
   })
+
+  it('requires schema decision evidence for memory-core persistence changes', () => {
+    const result = analyzeContractTouches({
+      changedFiles: [
+        'src/memory-core/data-access.ts',
+      ],
+      documents: new Map(),
+    })
+
+    expect(result.valid).toBe(false)
+    expect(result.missing).toEqual([
+      expect.objectContaining({
+        file: 'src/memory-core/data-access.ts',
+        likelyContractTypes: expect.arrayContaining(['persisted_state']),
+      }),
+    ])
+  })
 })

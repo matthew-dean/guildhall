@@ -135,6 +135,7 @@ export interface MastraMemoryCoreHealth {
   scope: MastraScopeIds
   packages: Record<string, string>
   warnings: string[]
+  semanticRecallEnabled: boolean
   observationalMemoryEnabled: boolean
   observationalProcessorReady: boolean
 }

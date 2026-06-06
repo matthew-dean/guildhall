@@ -822,6 +822,112 @@ Implemented 2026-06-06:
   joins the default product path until a later quality/latency gate beats
   deterministic packets while preserving source refs.
 
+Follow-up hardening implemented 2026-06-06:
+
+- `src/memory-core/**` is now treated as a persisted-state and agent-contract
+  surface by `pnpm lint:contracts`.
+- `GUILDHALL_MEMORY_SEMANTIC_RECALL`,
+  `GUILDHALL_MEMORY_OBSERVATIONAL`, `memory.semanticRecall`, and
+  `memory.observationalMemory` are requests, not direct enablement switches.
+  The engines remain disabled unless `GUILDHALL_MEMORY_ENGINE_GATE=passed` or
+  `1` is present.
+- Semantic recall also remains disabled until memory-core has vector/embedder
+  support. Current Mastra docs and runtime behavior require a vector store for
+  semantic recall, so this release reports
+  `semantic-recall-vector-unavailable` instead of constructing an invalid
+  Mastra Memory instance.
+- Observational Memory can initialize only after the gate passes and still
+  reports processor readiness through memory-core health.
+- `guildhall://project/memory` now renders packet-backed compaction and
+  semantic-validity status so MCP clients see the same product guarantees as
+  `/api/project` and Overview.
+
+### Contract Touch Decision: Memory Engine Follow-Up Hardening
+
+Work id: `2026-06-06-mastra-memory-follow-up-hardening`.
+
+Touched contracts:
+
+- memory-core public TypeScript API and health flags;
+- MCP `guildhall://project/memory` rendered contract;
+- `/api/project.memoryHealth.memoryCore` engine diagnostics;
+- contract-touch detector's contract-owning path map.
+
+Contracts considered but not touched:
+
+- legacy memory-store record schema;
+- task lifecycle state machine;
+- project migration ledger;
+- public docs.
+
+Required follow-up:
+
+- add vector/embedder support and quality/latency fixtures before semantic
+  recall can become an enabled engine path;
+- keep deterministic packet compaction and semantic validation as the product
+  guarantee until those fixtures pass.
+
+Proof required:
+
+- memory-core engine-gate tests;
+- MCP memory render test;
+- `/api/project` engine-gate test;
+- contract detector test for memory-core persisted-state changes;
+- `pnpm lint:contracts`.
+
+Proof provided:
+
+- focused tests cover memory-core gate behavior, MCP rendering, API projection,
+  and the contract detector rule;
+- `pnpm lint:contracts` is required before closure.
+
+Waivers:
+
+- no project-local export prompt is required because this slice still writes no
+  project-local memory data.
+
+### Schema Migration Decision: Memory Engine Follow-Up Hardening
+
+Persisted schema touched:
+
+- none.
+
+Scope:
+
+- runtime gating, health diagnostics, and MCP rendering only.
+
+Change class:
+
+- backward-compatible diagnostic/status hardening.
+
+Existing data impact:
+
+- no existing memory-core DBs, events, project configs, task queues, or
+  migration ledgers are rewritten.
+
+Migration id:
+
+- none required.
+
+Safety:
+
+- semantic recall and Observational Memory requests now fail closed behind the
+  quality gate;
+- semantic recall also fails closed without vector/embedder support;
+- project-local memory writes remain blocked.
+
+Compatibility reader:
+
+- existing deterministic and Mastra packet readers continue to return compact,
+  source-backed packets with `compactionStatus` and `semanticValidity`.
+
+Fixtures/tests:
+
+- `src/memory-core/__tests__/memory-core.test.ts`;
+- `src/runtime/__tests__/serve-settings.test.ts`;
+- `src/mcp-server/__tests__/project-reader.test.ts`;
+- `scripts/contract-touch-detector.test.ts`.
+
 ## Acceptance Criteria
 
 - `pnpm lint:data-layer` fails if new Guildhall data reads/writes bypass the
