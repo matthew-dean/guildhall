@@ -227,10 +227,11 @@ Required follow-up:
 
 - owner-approved quality/latency gate before enabling semantic recall or
   Observational Memory engines in the default substrate path;
-- semantic recall remains disabled unless `memory.semanticRecall` or
-  `GUILDHALL_MEMORY_SEMANTIC_RECALL` explicitly enables it;
-- Observational Memory remains disabled unless `memory.observationalMemory` or
-  `GUILDHALL_MEMORY_OBSERVATIONAL` explicitly enables it.
+- keep deterministic compaction and semantic validation as the always-on product
+  path while those engine gates are evaluated;
+- treat `memory.semanticRecall`, `GUILDHALL_MEMORY_SEMANTIC_RECALL`,
+  `memory.observationalMemory`, and `GUILDHALL_MEMORY_OBSERVATIONAL` as
+  internal diagnostic/rollout controls, not owner-facing feature choices.
 
 Proof required:
 
@@ -265,8 +266,8 @@ Apply/revert behavior:
   `GUILDHALL_MEMORY_SUBSTRATE=deterministic` disables Mastra without deleting
   recorded memory events;
 - setting `memory.observationalMemory = false` or
-  `GUILDHALL_MEMORY_OBSERVATIONAL=0` disables Observational Memory processor
-  requests without deleting memory events;
+  `GUILDHALL_MEMORY_OBSERVATIONAL=0` prevents Mastra observational processor
+  requests without changing the always-on deterministic compaction guarantee;
 - removing the config returns to the Mastra default.
 
 ## Schema Migration Decision
@@ -462,9 +463,9 @@ User-global memory:
 Resource-scoped Observational Memory remains gated because Mastra marks resource
 scope experimental and async buffering is disabled there. Project-level memory
 can use project resource scope only after fixture tests prove it does not blur
-active tasks or slow startup. This does not make compaction optional:
+active tasks or slow startup. This does not alter the compaction guarantee:
 deterministic event summaries and source-backed candidate packets remain the
-always-on compaction path.
+always-on path.
 
 ## Mastra Configuration Policy
 
@@ -514,9 +515,9 @@ Read-only preview/routing/review config:
 }
 ```
 
-Semantic recall gate:
+Semantic retrieval engine gate:
 
-- disabled by default;
+- not part of the default product path until proven;
 - requires vector store, embedder, latency test, source-range test, and cost
   budget;
 - can only return candidates, never final prompt text.
@@ -721,7 +722,8 @@ Implemented 2026-06-06:
 Slice 4: compaction and packets.
 
 - add deterministic packet builder;
-- add Mastra observational processor readiness for explicit opt-in projects;
+- add Mastra observational processor readiness for internal engine-gated
+  deployments;
 - normalize Mastra output into `MemoryCandidatePacket`;
 - prove source refs survive.
 
@@ -735,8 +737,9 @@ Implemented 2026-06-06:
   preserves source refs, and falls back to deterministic packets with visible
   warnings when Mastra is unavailable.
 - `memory.substrate = "deterministic"` and
-  `GUILDHALL_MEMORY_SUBSTRATE=deterministic` provide the kill switch; semantic
-  recall remains disabled by default.
+  `GUILDHALL_MEMORY_SUBSTRATE=deterministic` provide the Mastra-substrate kill
+  switch; deterministic compaction and semantic validation continue on that
+  path.
 - `memory.observationalMemory` and `GUILDHALL_MEMORY_OBSERVATIONAL` are wired as
   internal engine gates. When enabled, memory-core asks Mastra for an
   observational processor and reports readiness; default packets continue to be
@@ -796,7 +799,7 @@ Implemented 2026-06-06:
 - Migration-modal progress was already fixed in the prior required-migration
   slice; no optimistic completion text remains in this spec's scope.
 
-Slice 7: semantic recall gate.
+Slice 7: semantic retrieval engine gate.
 
 - add disabled-by-default vector config;
 - run fixture quality and latency tests;
@@ -805,12 +808,13 @@ Slice 7: semantic recall gate.
 
 Implemented 2026-06-06:
 
-- `memory.semanticRecall` and `GUILDHALL_MEMORY_SEMANTIC_RECALL` are wired, but
-  default to disabled.
-- Memory-core health exposes `semanticRecallEnabled` and feature flags so UI/API
-  and MCP surfaces can prove semantic recall is off on the default path.
-- No vector/semantic recall path is enabled as product behavior until a later
-  quality/latency gate beats deterministic packets while preserving source refs.
+- `memory.semanticRecall` and `GUILDHALL_MEMORY_SEMANTIC_RECALL` are wired as
+  internal diagnostic/rollout controls.
+- Memory-core health exposes `semanticRecallEnabled` and feature flags so API
+  and MCP diagnostics can prove which retrieval engine was used.
+- Semantic validity is not gated by vector recall. No vector retrieval engine
+  joins the default product path until a later quality/latency gate beats
+  deterministic packets while preserving source refs.
 
 ## Acceptance Criteria
 
