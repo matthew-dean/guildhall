@@ -207,6 +207,97 @@ coverage.
 
 ## Current Follow-Ups
 
+### Contract Touch Decision
+
+- Work id: `codex:2026-06-06-non-looma-flow-audit-fixes`.
+- Touched contracts: workspace-import status compatibility for missing
+  `.guildhall/TASKS.json`; delivery-spine primitive setup change sets;
+  unmatched `/api/*` route behavior; future-release spec status labels for
+  deferred/superseded 0.11 work.
+- Contracts considered but not touched: project graph persisted topology,
+  delivery receipt storage, remote authority refs, MCP tool signatures, task
+  queue schema shape, owner-input store schema, and action-model run-control
+  semantics.
+- Required follow-up: populate or replay a real non-Looma delivery-spine model
+  in live project state so Jess or another non-Looma project has actual drivers,
+  primitives, and proof records instead of only valid empty defaults.
+- Proof required: regression coverage for missing workspace-import state,
+  unknown API namespace routing, and non-Looma primitive setup/apply semantics;
+  focused runtime suites; contract detector; typecheck; build; fresh live
+  smoke after install/restart.
+- Proof provided so far: focused regressions passed for missing workspace-import
+  status, unknown API 404s, and Jess package/API primitive setup; focused
+  `delivery-spine` plus `serve-settings` suites passed with 79 tests;
+  `pnpm lint:contracts`, `git diff --check`, `pnpm typecheck`, and
+  `pnpm build` passed; `pnpm dev:install` plus service restart produced
+  `/api/stale-server` `stale:false` for installed
+  `/Users/matthew/.guildhall/app/0.10.0/app/dist/cli.js`.
+- Waivers: no owner review required for the compatibility reader or API 404
+  catch-all because they narrow failure modes without changing successful
+  documented APIs. The live non-Looma delivery-spine population remains open.
+- Owner-review items: decide which live non-Looma project should receive the
+  first durable delivery-spine population pass.
+- Apply/revert behavior: revert the runtime/test changes to restore prior
+  compatibility behavior; remove the spec status edits to restore the prior
+  future-release labels.
+
+### Schema Migration Decision
+
+- Persisted schema touched: none directly. The runtime reader now treats a
+  missing workspace-import task file as an empty queue and tags newly created
+  delivery-spine primitives from primitive setup with the existing optional
+  `source: "generated_from_contract"` field.
+- Scope: project.
+- Change class: backward-compatible reader/defaulting change.
+- Existing data impact: existing projects with no `.guildhall/TASKS.json` no
+  longer fail workspace-import status reads; existing delivery-spine primitives
+  are not rewritten; newly accepted primitive-setup creations get an optional
+  source tag already allowed by the schema.
+- Migration id: none.
+- Safety: automatic.
+- Required before run: false.
+- Compatibility reader: workspace-import queue reader defaults missing task
+  state to an empty v1 queue; delivery-spine primitive setup preserves existing
+  primitive `source` values and only defaults new creations.
+- Fixtures: serve-settings missing-task-state regression; Jess
+  package/API-contract primitive setup regression.
+- Tests: `pnpm vitest run src/runtime/__tests__/delivery-spine.test.ts
+  src/runtime/__tests__/serve-settings.test.ts --reporter=dot`.
+- Owner-facing plan text: no migration prompt is required; projects with no
+  task file can still review workspace import, and contract-created primitives
+  are explicitly labeled as generated from a validated contract.
+- Rollback/revert behavior: revert the runtime change; no stored migration or
+  data rewrite needs rollback.
+
+- [x] Fix the non-Looma workspace-import status crash found in the 2026-06-06
+  multi-agent audit. Live Fair Labor License proof showed
+  `/api/fleet/attention` and the project inbox advertising
+  `Existing repo detected -> /workspace-import`, while
+  `/api/project/workspace-import/status?projectId=fair-labor-license` returned
+  `ENOENT: no such file or directory, open
+  '/Users/matthew/git/oss/fair-labor-license/.guildhall/TASKS.json'`. The
+  workspace-import queue reader now treats a missing task file as a legacy
+  empty queue and creates the state directory before writing, so existing
+  registered repos can show import status before task state exists. Regression:
+  `pnpm vitest run src/runtime/__tests__/serve-settings.test.ts -t "status
+  treats missing task state"` passed.
+- [x] Stop unknown API paths from passing as successful SPA routes. The
+  non-Looma audit found guessed governance endpoints such as
+  `/api/project/contracts` returning `200 text/html`, which can hide wrong API
+  clients. The server now returns JSON `404` for unmatched `/api/*` routes
+  before the SPA catch-all. Regression: `pnpm vitest run
+  src/runtime/__tests__/serve-settings.test.ts -t "unknown API paths"` passed.
+- [x] Add non-Looma delivery-spine/governance proof. The audit found valid
+  empty delivery-spine models across non-Looma projects and Looma/Knit-heavy
+  primitive setup coverage. Added a Jess package/API-contract fixture proving
+  primitive setup validation, owner-review change sets, apply semantics, task
+  delivery links, and validation evidence without Looma/Knit primitives.
+  Regression: `pnpm vitest run src/runtime/__tests__/delivery-spine.test.ts -t
+  "non-Looma package contract"` passed.
+- [ ] Populate or replay a real non-Looma delivery-spine model in live project
+  state. The API defaulting is valid, but the product proof is still thin until
+  at least one live non-Looma project, preferably Jess, has actual drivers,
+  primitives, and proof records instead of only a valid empty model.
 - [ ] Prove a Looma + Knit component can reach delivery through Guildhall UI
   only. Live attempt on 2026-06-05 picked `ContextMenu` after `AlertDialog`
   was found split across a blocked imported task and an older brief-cleanup
@@ -227,6 +318,46 @@ coverage.
   `Working on 37 tasks`, so run-scope messaging needs a separate fix before the
   proof reads honestly. No Looma/Knit files were directly edited by Codex for
   this attempt.
+  Follow-up live attempt on 2026-06-06 proved the selected-task dependency-chain
+  behavior is only partial. Browser proof on
+  `/projects/looma-knit/thread?thread=task%3Atask-import-1l0mr2r` showed
+  `ContextMenu` ready and four split child tasks directly underneath:
+  `Component implementation`, `Storybook story`, `Contract README`, and
+  `API docs sync`. Pressing the task action should mean: finish the selected
+  task's blockers/child work first, continue through that closure chain, and
+  auto-stop only when `ContextMenu` is done or the chain is blocked. The exact
+  task-scoped start endpoint returned `mode: "one_task"` and
+  `scope: { type: "work_item", taskId: "task-import-1l0mr2r" }`, and the
+  orchestrator did choose `task-import-1l0mr2r-split-component-implementation`
+  before the parent, but then stopped after one tick with
+  `stopAfterOneTask reached task task-import-1l0mr2r-split-component-implementation
+  (provider_backoff)`. The child task stayed `exploring`, the parent stayed
+  `ready`, and the other children stayed `exploring`. Immediate external
+  blocker: DeepInfra returned HTTP 429 `engine_overloaded`. Product/runtime gap:
+  one-task selected-work mode treats the first child/blocker attempt as the
+  stop boundary instead of treating the requested parent task's closure chain as
+  the boundary. UI gap: after the stop, the selected `ContextMenu` detail still
+  offers `Resume work`, while the moved child appears above it as `Paused` with
+  no clear explanation that provider backoff stopped the chain.
+  Fix pass on 2026-06-06 added runtime coverage for both sides of the selected
+  closure contract: a scoped one-task run now continues after successful linked
+  child completion and auto-closes the selected parent when all linked child work
+  is done, while a blocked linked child stops the run as `dependency_blocked`.
+  Verification: focused orchestrator tests for selected-parent child completion
+  and blocked-child stop, existing `stopAfterOneTask` tests, the task-start
+  endpoint test, `pnpm typecheck`, `pnpm build`, `pnpm dev:install`, service
+  restart, and `/api/stale-server` `stale:false` against installed
+  `/Users/matthew/.guildhall/app/0.10.0/app/dist/cli.js`. Live Looma + Knit
+  proof after reinstall: retrying `ContextMenu` selected
+  `task-import-1l0mr2r-split-component-implementation`, which escalated with
+  `human_judgment_required: Spec agent kept researching after Guildhall asked
+  for durable progress`; retrying the selected parent again stopped immediately
+  with `stopReason: "dependency_blocked"` and stop message
+  `Selected task task-import-1l0mr2r is blocked by linked child work:
+  task-import-1l0mr2r-split-component-implementation is blocked.` Remaining
+  blocker: the first ContextMenu child needs a human/provider recovery path for
+  the spec-agent durable-progress escalation before the selected parent can
+  continue toward completion.
 - [x] Repair Looma + Knit Work and Thread queue semantics for spec-lane tasks.
   Live proof on 2026-06-04/05 showed `/api/project?projectId=looma-knit`
   had `39` tasks (`28` `exploring`, `10` `spec_review`, `1` `blocked`) and

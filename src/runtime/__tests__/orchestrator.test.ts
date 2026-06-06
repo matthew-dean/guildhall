@@ -7997,6 +7997,108 @@ describe('Orchestrator.run — full loops', () => {
     expect(q.tasks.find((t) => t.id === 'b')?.status).toBe('ready')
   })
 
+  it('scoped one-task runs finish selected parent child work before stopping', async () => {
+    await writeQueue([
+      mkTask({
+        id: 'context-menu',
+        title: 'ContextMenu',
+        status: 'ready',
+        domain: 'looma',
+        hierarchy: { childIds: ['context-menu-component', 'context-menu-story'], order: 0 },
+      }),
+      mkTask({
+        id: 'context-menu-component',
+        title: 'Component implementation',
+        status: 'ready',
+        domain: 'looma',
+        hierarchy: { parentId: 'context-menu', childIds: [], order: 0 },
+      }),
+      mkTask({
+        id: 'context-menu-story',
+        title: 'Storybook story',
+        status: 'ready',
+        domain: 'looma',
+        hierarchy: { parentId: 'context-menu', childIds: [], order: 1 },
+      }),
+      mkTask({ id: 'unrelated', status: 'ready', domain: 'looma', priority: 'critical' }),
+    ])
+
+    const picked: string[] = []
+    const worker = stubAgent('worker-agent', async (prompt: string) => {
+      const taskId = prompt.match(/\*\*Current task ID \(for task tools\):\*\* ([^\n]+)/)?.[1]
+      if (!taskId) throw new Error('missing current task id in prompt')
+      picked.push(taskId)
+      await mutateTask(taskId, { status: 'done' })
+    })
+
+    const orch = new Orchestrator({
+      config: baseConfig(),
+      agents: agentSet({ worker }),
+    })
+    const result = await orch.run({
+      maxTicks: 20,
+      tickDelayMs: 0,
+      stopAfterOneTask: true,
+      preferredTaskId: 'context-menu',
+    })
+
+    expect(result.stopReason).toBe('one_task')
+    expect(result.stopMessage).toContain('context-menu')
+    expect(picked).toEqual(['context-menu-component', 'context-menu-story'])
+    const q = await readQueue()
+    expect(q.tasks.find((t) => t.id === 'context-menu')?.status).toBe('done')
+    expect(q.tasks.find((t) => t.id === 'context-menu-component')?.status).toBe('done')
+    expect(q.tasks.find((t) => t.id === 'context-menu-story')?.status).toBe('done')
+    expect(q.tasks.find((t) => t.id === 'unrelated')?.status).toBe('ready')
+  })
+
+  it('scoped one-task runs stop when selected parent child work is blocked', async () => {
+    await writeQueue([
+      mkTask({
+        id: 'context-menu',
+        title: 'ContextMenu',
+        status: 'ready',
+        domain: 'looma',
+        hierarchy: { childIds: ['context-menu-component', 'context-menu-story'], order: 0 },
+      }),
+      mkTask({
+        id: 'context-menu-component',
+        title: 'Component implementation',
+        status: 'done',
+        domain: 'looma',
+        hierarchy: { parentId: 'context-menu', childIds: [], order: 0 },
+      }),
+      mkTask({
+        id: 'context-menu-story',
+        title: 'Storybook story',
+        status: 'blocked',
+        domain: 'looma',
+        hierarchy: { parentId: 'context-menu', childIds: [], order: 1 },
+        blockReason: 'Provider backoff stopped shaping.',
+      }),
+      mkTask({ id: 'unrelated', status: 'ready', domain: 'looma', priority: 'critical' }),
+    ])
+
+    const worker = stubAgent('worker-agent')
+    const orch = new Orchestrator({
+      config: baseConfig(),
+      agents: agentSet({ worker }),
+    })
+    const result = await orch.run({
+      maxTicks: 20,
+      tickDelayMs: 0,
+      stopAfterOneTask: true,
+      preferredTaskId: 'context-menu',
+    })
+
+    expect(result.stopReason).toBe('dependency_blocked')
+    expect(result.stopMessage).toContain('context-menu-story is blocked')
+    expect(worker.calls).toHaveLength(0)
+    const q = await readQueue()
+    expect(q.tasks.find((t) => t.id === 'context-menu')?.status).toBe('ready')
+    expect(q.tasks.find((t) => t.id === 'unrelated')?.status).toBe('ready')
+  })
+
   it('auto-commits dirty task worktree changes when Git Story policy says commit auto', async () => {
     const worktreePath = path.join(tmpDir, '.guildhall', 'worktrees', 'test-ws', 'task-auto')
     await writeQueue([

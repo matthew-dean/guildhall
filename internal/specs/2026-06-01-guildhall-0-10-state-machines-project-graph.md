@@ -1,22 +1,24 @@
-# Guildhall 0.10.0 State Machines and Local Project Graph
+# Superseded: State Machines and Local Project Graph
 
-**Status:** Superseded for default 0.10 delivery; retained as internal/feature-flagged substrate reference
+**Status:** Superseded; do not implement as a future-release lane
 
 **Superseded by:** `internal/specs/2026-06-05-guildhall-0-10-primitives-and-delivery-spine.md` and `internal/specs/2026-06-05-guildhall-project-contract-governance.md`
 
 **Supersession note:** The active 0.10 model is now
 `Needs -> Delivery packages -> Tasks -> Dependencies -> Primitives -> Proof`.
-Project graph remains useful only for real cross-project authority, provider
-handoffs, delivery receipts, or external authoritative systems. It is no longer
-the default way Guildhall explains or orders ordinary local delivery work.
+The project graph/state-machine plan below is retained only as historical
+architecture context. Do not treat it as deferred 0.11 work. If future
+cross-project authority, provider handoffs, delivery receipts, or external
+authority systems need a coordination model, write a new spec from the delivery
+spine and contract-governance foundation instead of reviving this one.
 
 ## Goal
 
-Add a small deterministic state-machine substrate to Guildhall, then use it to
-model local project-graph dependency edges where one Guildhall project needs
-work delivered by another Guildhall project.
+Historical goal: add a small deterministic state-machine substrate to
+Guildhall, then use it to model local project-graph dependency edges where one
+Guildhall project needs work delivered by another Guildhall project.
 
-This spec addresses two related 0.10 problems:
+This superseded spec addressed two related problems:
 
 1. Guildhall is accumulating lifecycle state in several places, but many flows
    still behave like buckets of statuses set by ad hoc code.
@@ -24,9 +26,8 @@ This spec addresses two related 0.10 problems:
    graph that can include other local Guildhall projects, not only folders,
    packages, domains, and external issue systems.
 
-The 0.10 slice should build the state-machine primitive now, use it for the new
-cross-project dependency edge, and migrate one small existing lifecycle enough
-to prove the primitive. The broader task-status cleanup belongs in 0.11.0.
+The active 0.10 work chose the local delivery spine and contract governance
+instead. This spec should not be used as an implementation checklist.
 
 ## Product Thesis
 
@@ -159,8 +160,8 @@ The primitive should not include:
 
 ### Existing Lifecycle Proof
 
-To prove the primitive is not overfit to project graph edges, 0.10 should
-migrate one small existing lifecycle after the primitive lands.
+Historical proposal: to prove the primitive was not overfit to project graph
+edges, migrate one small existing lifecycle after the primitive lands.
 
 Recommended first existing customer: capability requests.
 
@@ -170,7 +171,8 @@ Current capability requests carry:
 status: 'pending' | 'approved' | 'denied' | 'blocked' | 'revoked'
 ```
 
-The 0.10 migration should keep the stored `status` field for compatibility but
+The proposed migration would have kept the stored `status` field for
+compatibility but
 route changes through a machine:
 
 ```ts
@@ -186,9 +188,7 @@ This gives the library a real second use without disturbing the full task
 engine. Bounded chat is also a good later customer because it already has a
 state/action shape, but it is more entangled with the current 0.10 UI work.
 
-Task lifecycle migration should be planned for 0.11.0. In 0.10, add adapter
-tests or documentation that names obvious current task-transition debt, but do
-not rewrite the task engine as part of this feature.
+Task lifecycle migration was explicitly out of scope for this superseded plan.
 
 ## Local Project Graph
 
@@ -224,7 +224,7 @@ Edge types:
 - `shares_domain_with`: folders/packages/projects participate in a shared
   domain or cross-cutting concern.
 
-In 0.10, graph discovery is local-first:
+In the historical proposal, graph discovery was local-first:
 
 - inspect configured or recently used local project paths;
 - inspect `.guildhall/` state and optional config;
@@ -442,7 +442,7 @@ chat.
 9. The edge resolves only after Knit accepts, an alternate outcome is accepted,
    or the dependency is closed/deferred.
 
-## Relationship To Existing 0.10 Lanes
+## Relationship To Related Historical Lanes
 
 ### Structural and Domain Intelligence
 
@@ -528,8 +528,8 @@ type ProjectDependencyEdge = {
 
 ## Storage, Exchange, and Authority Boundaries
 
-0.10 should make one concrete storage decision instead of leaving graph records
-abstract.
+The historical plan required one concrete storage decision instead of leaving
+graph records abstract.
 
 ### User-Level Local Graph Registry
 
@@ -838,9 +838,8 @@ When a task crosses authority boundaries, the UI should offer one clear action:
 - "Return to provider"
 - "Accept delivery"
 
-The advanced graph view can exist later. The 0.10 path should prioritize
-actionable cards in Thread, Overview, task detail, and provider/consumer task
-surfaces.
+The historical plan deferred an advanced graph view and prioritized actionable
+cards in Thread, Overview, task detail, and provider/consumer task surfaces.
 
 ## Implementation Slices
 
@@ -942,11 +941,11 @@ surfaces.
 - **Split-brain registry risk:** the user-level registry and project-local
   mirrors can drift. Mitigate with edge ids, path fingerprints, last-seen
   timestamps, and repair commands that reconcile mirrors from receipts.
-- **Graph overreach:** 0.10 should propose and use a narrow local graph, not
+- **Graph overreach:** the historical plan proposed a narrow local graph, not
   build a universal enterprise dependency platform.
 - **Looma/Knit overfitting:** fixtures may use Looma/Knit, but the model must
   use provider/consumer/domain/delivery language.
-- **Task lifecycle scope creep:** leave broad task-status migration for 0.11.0.
+- **Task lifecycle scope creep:** broad task-status migration was out of scope.
 
 ## Open Questions
 

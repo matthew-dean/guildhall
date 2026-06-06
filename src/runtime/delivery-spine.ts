@@ -1204,7 +1204,14 @@ function buildPrimitiveSetupChangeSet(input: {
     }
     changes.push(existing
       ? { kind: 'update_primitive', primitiveId: primitive.id, before: existing, after: primitive }
-      : { kind: 'create_primitive', primitiveId: primitive.id, after: primitive })
+      : {
+          kind: 'create_primitive',
+          primitiveId: primitive.id,
+          after: {
+            ...primitive,
+            source: primitive.source ?? 'generated_from_contract',
+          },
+        })
   }
 
   for (const link of input.normalized.taskLinks) {

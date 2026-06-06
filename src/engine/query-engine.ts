@@ -70,6 +70,7 @@ export interface QueryEngineOptions {
   noProgressTurnNudge?: string | undefined
   noProgressTurnNudgeLimit?: number | undefined
   noProgressTurnThreshold?: number | undefined
+  noProgressReadOnlyGraceAfterNudge?: number | undefined
 }
 
 export class QueryEngine {
@@ -99,6 +100,7 @@ export class QueryEngine {
   private readonly noProgressTurnNudge: string | undefined
   private readonly noProgressTurnNudgeLimit: number | undefined
   private readonly noProgressTurnThreshold: number | undefined
+  private readonly noProgressReadOnlyGraceAfterNudge: number | undefined
   private readonly toolMetadata: Record<string, unknown>
   private messagesInternal: ConversationMessage[] = []
   private totalUsageInternal: UsageSnapshot = { ...emptyUsage }
@@ -127,6 +129,7 @@ export class QueryEngine {
     this.noProgressTurnNudge = options.noProgressTurnNudge
     this.noProgressTurnNudgeLimit = options.noProgressTurnNudgeLimit
     this.noProgressTurnThreshold = options.noProgressTurnThreshold
+    this.noProgressReadOnlyGraceAfterNudge = options.noProgressReadOnlyGraceAfterNudge
     this.toolMetadata = options.toolMetadata ?? {}
     // Plan-mode tools call this callback to swap the engine's permission
     // checker. Effect is "next turn onward" — mid-turn evaluations continue
@@ -329,6 +332,9 @@ export class QueryEngine {
         : {}),
       ...(this.noProgressTurnThreshold !== undefined
         ? { noProgressTurnThreshold: this.noProgressTurnThreshold }
+        : {}),
+      ...(this.noProgressReadOnlyGraceAfterNudge !== undefined
+        ? { noProgressReadOnlyGraceAfterNudge: this.noProgressReadOnlyGraceAfterNudge }
         : {}),
       ...(abortSignal ? { abortSignal } : {}),
       toolMetadata: this.toolMetadata,

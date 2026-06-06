@@ -579,6 +579,116 @@ describe('project-local delivery spine', () => {
     expect(result.changeSet?.reviewBuckets.map(bucket => bucket.kind)).toEqual(['keep', 'needs_proof'])
   })
 
+  it('proves primitive setup and apply semantics on a non-Looma package contract model', () => {
+    const jessModel = ProjectDeliveryModel.parse({
+      version: 1,
+      updatedAt: now,
+      drivers: [
+        {
+          id: 'jess',
+          label: 'Jess',
+          role: 'primary',
+          kind: 'workspace',
+          paths: ['./packages'],
+          domains: ['parser', 'runtime'],
+        },
+      ],
+      primitives: [],
+    })
+    const tasks = [
+      task({
+        id: 'task-patch-css-contract',
+        title: '@jesscss/patch-css package contract',
+        projectPath: '/workspace/jess',
+        domain: 'runtime',
+        delivery: { driver: 'jess' },
+      }),
+    ]
+
+    const validated = validateProjectPrimitiveSetupResult({
+      model: jessModel,
+      tasks,
+      result: {
+        drivers: [
+          {
+            id: 'jess-tests',
+            label: 'Jess compatibility tests',
+            role: 'proof',
+            kind: 'test-suite',
+            paths: ['./packages/jess/test'],
+            domains: ['runtime'],
+          },
+        ],
+        primitives: [
+          {
+            id: 'patch-css-api-contract',
+            label: '@jesscss/patch-css API contract',
+            kind: 'package_api_contract',
+            provider: 'jess',
+            paths: ['./packages/patch-css/src/index.ts'],
+            invariants: [
+              'Public exports remain stable for Jess package consumers.',
+              'Compatibility fixtures cover selector patch behavior before release.',
+            ],
+            proof: ['api-surface-test', 'fixture-regression'],
+            status: 'needs_proof',
+          },
+        ],
+        taskLinks: [
+          {
+            taskId: 'task-patch-css-contract',
+            usesPrimitives: ['patch-css-api-contract'],
+            proofKind: 'fixture-regression',
+          },
+        ],
+        evidenceRefs: ['docs/future/node-copy-reduction/HANDOFF.md'],
+      },
+      now,
+      actor: 'jess-setup-agent',
+      applyPolicy: 'owner_review',
+    })
+
+    expect(validated.valid).toBe(true)
+    expect(validated.changeSet?.changes).toEqual(expect.arrayContaining([
+      expect.objectContaining({ kind: 'create_driver', driverId: 'jess-tests' }),
+      expect.objectContaining({ kind: 'create_primitive', primitiveId: 'patch-css-api-contract' }),
+      expect.objectContaining({ kind: 'link_task_primitives', taskId: 'task-patch-css-contract' }),
+    ]))
+    expect(validated.changeSet?.reviewBuckets.map(bucket => bucket.kind)).toEqual(['keep', 'needs_proof'])
+
+    const applied = applyContractChangeSet({
+      model: jessModel,
+      tasks,
+      changeSet: validated.changeSet!,
+      now,
+      actor: 'owner',
+      ownerOverrideReason: 'Accepted Jess package contract setup.',
+    })
+
+    expect(applied.model.drivers.map(driver => driver.id)).toEqual(['jess', 'jess-tests'])
+    expect(applied.model.primitives).toEqual([
+      expect.objectContaining({
+        id: 'patch-css-api-contract',
+        kind: 'package_api_contract',
+        provider: 'jess',
+        source: 'generated_from_contract',
+        status: 'needs_proof',
+      }),
+    ])
+    expect(applied.tasks[0]?.delivery).toEqual(expect.objectContaining({
+      driver: 'jess',
+      usesPrimitives: ['patch-css-api-contract'],
+      proofKind: 'fixture-regression',
+    }))
+    expect(applied.model.validationEvidence.at(-1)).toEqual(expect.objectContaining({
+      id: validated.changeSet!.id,
+      contractId: 'project-primitive-setup',
+      status: 'applied',
+      actor: 'owner',
+      ownerOverrideReason: 'Accepted Jess package contract setup.',
+    }))
+  })
+
   it('applies and reverts validated primitive setup without deleting later-edited state', () => {
     const tasks = [
       task({

@@ -312,6 +312,7 @@ export interface QueryContext {
   noProgressTurnNudge?: string | undefined
   noProgressTurnNudgeLimit?: number | undefined
   noProgressTurnThreshold?: number | undefined
+  noProgressReadOnlyGraceAfterNudge?: number | undefined
   abortSignal?: AbortSignal | undefined
 }
 
@@ -1243,6 +1244,7 @@ export async function* runQuery(
   let noToolTurnNudges = 0
   let noProgressTurnNudges = 0
   let noProgressToolTurns = 0
+  let noProgressReadOnlyGraceTurns = 0
   let repeatedReadOnlyRefusals = 0
   const initialCheckpointNextAction = latestCheckpointNextAction(context.toolMetadata)
   const initialAuthoritativeVerificationCommands = context.toolMetadata
@@ -1509,6 +1511,7 @@ export async function* runQuery(
       progressToolNames.size > 0 && toolCalls.some((tc) => progressToolNames.has(tc.name))
     if (hadProgressToolCall) {
       noProgressToolTurns = 0
+      noProgressReadOnlyGraceTurns = 0
     } else if (progressToolNames.size > 0) {
       noProgressToolTurns += 1
     }
@@ -1662,10 +1665,27 @@ export async function* runQuery(
         return !reconcileShellCommandWithAuthority(command, authoritativeVerificationCommands).usedAuthority
       })
 
+    const readOnlyGraceAfterNudge = Math.max(0, context.noProgressReadOnlyGraceAfterNudge ?? 0)
+    const shouldUseReadOnlyGraceAfterNudge =
+      (shouldRefuseFurtherReadOnlyResearch || shouldRefuseAfterInspectingLikelyTarget) &&
+      noProgressReadOnlyGraceTurns < readOnlyGraceAfterNudge
+
+    if (shouldUseReadOnlyGraceAfterNudge) {
+      noProgressReadOnlyGraceTurns += 1
+      yield {
+        event: {
+          type: 'status',
+          message:
+            'Assistant used one bounded read-only follow-up after a durable-progress nudge; allowing one scoped read-only follow-up so the agent can recover with concrete context.',
+        },
+        usage: null,
+      }
+    }
+
     if (
-      shouldRefuseFurtherReadOnlyResearch ||
+      (!shouldUseReadOnlyGraceAfterNudge && shouldRefuseFurtherReadOnlyResearch) ||
       shouldRefuseAfterMissingLikelyTarget ||
-      shouldRefuseAfterInspectingLikelyTarget ||
+      (!shouldUseReadOnlyGraceAfterNudge && shouldRefuseAfterInspectingLikelyTarget) ||
       shouldRefusePostVerificationCheckpointBatch ||
       shouldRefuseAfterCheckpointNextAction ||
       shouldRefuseNonAuthoritativeCheckpointShell
@@ -2004,6 +2024,9 @@ export async function* runQuery(
           usage: null,
         }
         return
+      }
+      if (shouldUseReadOnlyGraceAfterNudge) {
+        continue
       }
       const checkpointNextAction = latestCheckpointNextAction(context.toolMetadata)
       const checkpointTouched = checkpointFilesTouched(context.toolMetadata)

@@ -42,7 +42,25 @@ function tasksPathFor(memoryDir: string): string {
 }
 
 async function readQueue(memoryDir: string): Promise<TaskQueue> {
-  const raw = await fs.readFile(tasksPathFor(memoryDir), 'utf-8')
+  const tasksPath = tasksPathFor(memoryDir)
+  const raw = await fs.readFile(tasksPath, 'utf-8').catch((err: unknown) => {
+    if (
+      err &&
+      typeof err === 'object' &&
+      'code' in err &&
+      (err as { code?: unknown }).code === 'ENOENT'
+    ) {
+      return null
+    }
+    throw err
+  })
+  if (raw === null) {
+    return TaskQueue.parse({
+      version: 1,
+      lastUpdated: new Date().toISOString(),
+      tasks: [],
+    })
+  }
   const parsed = JSON.parse(raw)
   const queue = Array.isArray(parsed)
     ? { version: 1, lastUpdated: new Date().toISOString(), tasks: parsed }
@@ -52,6 +70,7 @@ async function readQueue(memoryDir: string): Promise<TaskQueue> {
 }
 
 async function writeQueue(memoryDir: string, queue: TaskQueue): Promise<void> {
+  await fs.mkdir(memoryDir, { recursive: true })
   await fs.writeFile(tasksPathFor(memoryDir), JSON.stringify(queue, null, 2), 'utf-8')
 }
 

@@ -534,6 +534,7 @@ export function createSpecAgent(
       'You have enough evidence. Stop researching and record durable intake progress now: write the best-guess brief, ask the top 1 focused user question, draft the remaining-delta spec, or raise a scoped escalation. Do not write a product brief about your research plan or Guildhall Thread state. append-exploring-transcript alone is not enough.',
     noProgressTurnNudgeLimit: 2,
     noProgressTurnThreshold: 2,
+    noProgressReadOnlyGraceAfterNudge: 1,
     tools: [
       readFileTool,
       writeFileTool,

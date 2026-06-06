@@ -312,3 +312,13 @@ source: codex:rail-preview-stability
 Fixed ProjectView shell identity for direct Thread and drawer-backed Thread routes. Verified ProjectView suite (42 tests), focused ThreadTab drawer background test, pnpm typecheck, pnpm build, dev install/restart with stale:false, Looma + Knit API detail/thread probes, and fallback Playwright DOM proof showing rail/header title 'Looma + Knit' on /projects/looma-knit/thread.
 
 source: codex delegated lane 019e93cf-c572-7112-905c-63f1f13a29a9
+## 2026-06-06T05:29:55.545Z MCP evidence for task-import-1l0mr2r
+
+Live Looma + Knit ContextMenu flow audit on 2026-06-06: Thread showed ContextMenu ready with split child blockers Component implementation, Storybook story, Contract README, and API docs sync. Task-scoped start returned mode one_task with work_item scope for task-import-1l0mr2r and correctly selected split-component-implementation first, but the run stopped after one tick with provider_backoff: stopAfterOneTask reached task task-import-1l0mr2r-split-component-implementation. ContextMenu stayed ready, the child stayed exploring, and other children stayed exploring. Product gap: selected-task start should treat the parent closure chain as the stop boundary, completing blockers first until the requested task is done or genuinely blocked.
+
+source: codex:looma-contextmenu-flow-audit
+## 2026-06-06T05:42:16.528Z MCP evidence for task-import-1l0mr2r
+
+Implemented and verified selected-task closure-chain behavior for Looma + Knit ContextMenu. Unit coverage now proves scoped one-task runs continue after successful linked child completion, auto-close the selected parent when linked child work is complete, and stop as dependency_blocked when a linked child is blocked. Verified focused orchestrator tests, task-start endpoint test, typecheck, build, dev install, service restart, stale:false. Live proof after reinstall: ContextMenu child task-import-1l0mr2r-split-component-implementation escalated with human_judgment_required, and retrying selected ContextMenu immediately stopped with stopReason dependency_blocked and message naming the blocked child instead of idling or touching unrelated work.
+
+source: codex:selected-task-closure-chain-fix

@@ -9652,6 +9652,11 @@ export function buildServeApp(opts: ServeOptions = {}): {
   app.get('/apple-touch-icon.png', c => serveWebIcon(c, 'apple-touch-icon.png'))
   app.get('/site.webmanifest', c => serveWebIcon(c, 'site.webmanifest'))
 
+  app.all('/api/*', c => c.json({
+    error: 'API route not found',
+    path: new URL(c.req.url).pathname,
+  }, 404))
+
   // -------------------------------------------------------------------------
   // SPA (catch-all)
   // -------------------------------------------------------------------------

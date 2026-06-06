@@ -1741,6 +1741,18 @@ describe('GET /api/health', () => {
     expect(typeof body.migrations?.blocked).toBe('number')
     expect(typeof body.migrations?.applied).toBe('number')
   })
+
+  it('returns JSON 404 for unknown API paths instead of the SPA shell', async () => {
+    const { app } = buildServeApp({ projectPath: tmpDir })
+    const res = await app.fetch(new Request(scoped('/api/project/contracts')))
+
+    expect(res.status).toBe(404)
+    expect(res.headers.get('content-type')).toContain('application/json')
+    expect(await res.json()).toEqual({
+      error: 'API route not found',
+      path: '/api/project/contracts',
+    })
+  })
 })
 
 // GET /api/project/workspace-import/draft must expose the deterministic
@@ -1749,6 +1761,39 @@ describe('GET /api/health', () => {
 // then falls back to the detector when the spec is still empty, so the
 // user is never blocked on an agent round-trip.
 describe('Workspace Import review endpoints', () => {
+  it('status treats missing task state as an empty existing workspace queue', async () => {
+    await fs.rm(path.join(tmpDir, '.guildhall', 'TASKS.json'), { force: true })
+    await fs.writeFile(
+      path.join(tmpDir, 'README.md'),
+      '# Existing project\n\n## Goals\n\n- Capture the current repo direction\n',
+      'utf8',
+    )
+    await fs.writeFile(
+      path.join(tmpDir, 'package.json'),
+      JSON.stringify({ name: 'existing-project' }),
+      'utf8',
+    )
+
+    const { app } = buildServeApp({ projectPath: tmpDir })
+    const status = await app.fetch(new Request(scoped('/api/project/workspace-import/status')))
+
+    expect(status.status).toBe(200)
+    const body = await status.json() as {
+      needed: boolean
+      seeded: boolean
+      taskStatus: string | null
+      draft: { goals: number; tasks: number; milestones: number }
+      inventory: { signals: number }
+      error?: string
+    }
+    expect(body.error).toBeUndefined()
+    expect(body.seeded).toBe(false)
+    expect(body.taskStatus).toBeNull()
+    expect(body.needed).toBe(true)
+    expect(body.inventory.signals).toBeGreaterThan(0)
+    expect(body.draft.goals + body.draft.tasks + body.draft.milestones).toBeGreaterThan(0)
+  })
+
   it('draft endpoint returns a detector block even before the importer agent runs', async () => {
     // Seed signals the detector can pick up.
     await fs.writeFile(

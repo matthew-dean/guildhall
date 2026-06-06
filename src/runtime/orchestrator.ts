@@ -1555,6 +1555,22 @@ function describeOneTaskStop(outcome: TickOutcome): string {
   return outcome.kind
 }
 
+function shouldContinueSelectedTaskClosure(
+  outcome: TickOutcome,
+  preferredTaskId: string | undefined,
+  tasks: Task[],
+): boolean {
+  if (!preferredTaskId || !('taskId' in outcome) || outcome.taskId === preferredTaskId) return false
+  if (outcome.kind !== 'processed') return false
+  if (outcome.waitingOnUser) return false
+  if (outcome.afterStatus !== 'done' && outcome.afterStatus !== 'pending_pr') return false
+  return workSubtreeIds(tasks, preferredTaskId).includes(outcome.taskId)
+}
+
+function isSelectedTaskClosureDone(task: Task): boolean {
+  return task.status === 'done' || task.status === 'pending_pr' || task.status === 'shelved'
+}
+
 function stopResultFromIdle(
   outcome: Extract<TickOutcome, { kind: 'idle' }>,
   idleLimit: number,
@@ -2438,6 +2454,65 @@ export class Orchestrator {
         this.slotAllocator?.release(task.id)
       }
     }
+  }
+
+  private async completeSelectedTaskClosureIfSatisfied(
+    preferredTaskId: string,
+  ): Promise<{ completed: boolean; childIds: string[] }> {
+    const queue = await this.readQueue()
+    const root = queue.tasks.find(task => task.id === preferredTaskId)
+    if (!root || isSelectedTaskClosureDone(root)) return { completed: false, childIds: [] }
+    const subtreeIds = workSubtreeIds(queue.tasks, preferredTaskId)
+    const childIds = subtreeIds.filter(id => id !== preferredTaskId)
+    if (childIds.length === 0) return { completed: false, childIds: [] }
+    const tasksById = new Map(queue.tasks.map(task => [task.id, task]))
+    const childrenComplete = childIds.every(id => {
+      const child = tasksById.get(id)
+      return child ? isSelectedTaskClosureDone(child) : false
+    })
+    if (!childrenComplete) return { completed: false, childIds }
+
+    const now = this.now()
+    root.status = 'done'
+    delete root.assignedTo
+    root.updatedAt = now
+    root.notes.push({
+      agentId: 'coordinator',
+      role: 'system',
+      content:
+        `Closed containing work after linked child tasks completed: ${childIds.join(', ')}.`,
+      timestamp: now,
+    })
+    queue.lastUpdated = now
+    await this.writeQueue(queue)
+    await this.logTickProgress({
+      task: root,
+      agent: 'coordinator',
+      beforeStatus: 'ready',
+      afterStatus: 'done',
+      transitioned: true,
+    })
+    await recordTaskReflection({
+      memoryDir: this.opts.config.memoryDir,
+      task: root,
+    })
+    return { completed: true, childIds }
+  }
+
+  private async selectedTaskClosureBlockers(preferredTaskId: string): Promise<string[]> {
+    const queue = await this.readQueue()
+    const root = queue.tasks.find(task => task.id === preferredTaskId)
+    if (!root || isSelectedTaskClosureDone(root)) return []
+    const childIds = workSubtreeIds(queue.tasks, preferredTaskId).filter(id => id !== preferredTaskId)
+    if (childIds.length === 0) return []
+    const tasksById = new Map(queue.tasks.map(task => [task.id, task]))
+    const blockers: string[] = []
+    for (const childId of childIds) {
+      const child = tasksById.get(childId)
+      if (!child) continue
+      if (child.status === 'blocked') blockers.push(`${child.id} is blocked`)
+    }
+    return blockers
   }
 
   private async applyRunAutomationPolicy(
@@ -4758,6 +4833,34 @@ export class Orchestrator {
       let shouldStop = false
       for (const outcome of allOutcomes) {
         if (outcome.kind === 'idle') {
+          if (stopAfterOneTask && preferredTaskId) {
+            const completed = await this.completeSelectedTaskClosureIfSatisfied(preferredTaskId)
+            if (completed.completed) {
+              finalResult = {
+                ticks: 0,
+                stopReason: 'one_task',
+                stopMessage:
+                  `Selected task ${preferredTaskId} completed after linked child work: ` +
+                  `${completed.childIds.join(', ')}.`,
+              }
+              console.log(`[guildhall] ${finalResult.stopMessage} Shutting down.`)
+              shouldStop = true
+              break
+            }
+            const blockers = await this.selectedTaskClosureBlockers(preferredTaskId)
+            if (blockers.length > 0) {
+              finalResult = {
+                ticks: 0,
+                stopReason: 'dependency_blocked',
+                stopMessage:
+                  `Selected task ${preferredTaskId} is blocked by linked child work: ` +
+                  `${blockers.join(', ')}.`,
+              }
+              console.log(`[guildhall] ${finalResult.stopMessage} Shutting down.`)
+              shouldStop = true
+              break
+            }
+          }
           if (outcome.allDone) {
             finalResult = stopResultFromIdle(outcome, idleLimit)
             console.log(`[guildhall] ${finalResult.stopMessage} Shutting down.`)
@@ -4822,6 +4925,13 @@ export class Orchestrator {
         }
 
         if (stopAfterOneTask && shouldStopOneTaskRun(outcome)) {
+          const queueAfterOutcome = preferredTaskId ? await this.readQueue() : null
+          if (
+            queueAfterOutcome &&
+            shouldContinueSelectedTaskClosure(outcome, preferredTaskId, queueAfterOutcome.tasks)
+          ) {
+            continue
+          }
           finalResult = {
             ticks: 0,
             stopReason: 'one_task',
