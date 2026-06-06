@@ -218,9 +218,11 @@ coverage.
   delivery receipt storage, remote authority refs, MCP tool signatures, task
   queue schema shape, owner-input store schema, and action-model run-control
   semantics.
-- Required follow-up: populate or replay a real non-Looma delivery-spine model
-  in live project state so Jess or another non-Looma project has actual drivers,
-  primitives, and proof records instead of only valid empty defaults.
+- Required follow-up: replay a real non-Looma delivery-spine model through a
+  live task queue after the project has task records again. Jess now has actual
+  drivers, primitives, and validation evidence in system-local state; the queue
+  projection is still empty because Jess has no live task records after
+  repo-state cleanup.
 - Proof required: regression coverage for missing workspace-import state,
   unknown API namespace routing, and non-Looma primitive setup/apply semantics;
   focused runtime suites; contract detector; typecheck; build; fresh live
@@ -234,9 +236,8 @@ coverage.
   `/Users/matthew/.guildhall/app/0.10.0/app/dist/cli.js`.
 - Waivers: no owner review required for the compatibility reader or API 404
   catch-all because they narrow failure modes without changing successful
-  documented APIs. The live non-Looma delivery-spine population remains open.
-- Owner-review items: decide which live non-Looma project should receive the
-  first durable delivery-spine population pass.
+  documented APIs.
+- Owner-review items: none for the non-Looma delivery-spine model population.
 - Apply/revert behavior: revert the runtime/test changes to restore prior
   compatibility behavior; remove the spec status edits to restore the prior
   future-release labels.
@@ -294,10 +295,24 @@ coverage.
   delivery links, and validation evidence without Looma/Knit primitives.
   Regression: `pnpm vitest run src/runtime/__tests__/delivery-spine.test.ts -t
   "non-Looma package contract"` passed.
-- [ ] Populate or replay a real non-Looma delivery-spine model in live project
-  state. The API defaulting is valid, but the product proof is still thin until
-  at least one live non-Looma project, preferably Jess, has actual drivers,
-  primitives, and proof records instead of only a valid empty model.
+- [x] Populate or replay a real non-Looma delivery-spine model in live project
+  state. Jess now has a system-local delivery-spine record with drivers
+  `jess-core`, `parser-packages`, and `fixture-proof`; primitives
+  `selector-ast-contract`, `core-eval-render-boundary`, and
+  `less-compat-fixtures`; and validation evidence
+  `jess-live-delivery-spine-proof-2026-06-06`. API proof on 2026-06-06:
+  `/api/project/delivery-spine?projectId=jess` returned `valid: true` with 3
+  drivers, 3 primitives, and no validation errors. UI proof:
+  `/projects/jess/settings/delivery` rendered `Delivery model`, `Jess core
+  packages`, `Parser packages`, `Fixture and baseline proof`, `Selector AST
+  contract`, `Core eval/render boundary`, and `Less compatibility fixtures`
+  with no loading or error state. Boundary proof: the record lives under the
+  system-local data persistence path and `find
+  /Users/matthew/git/oss/jess/.guildhall -maxdepth 2 -type f` found no files;
+  `git -C /Users/matthew/git/oss/jess status --short .guildhall` showed only
+  the tracked deletion cleanup entries. Queue proof:
+  `/api/project/delivery-spine/queue?projectId=jess` returned 0 runnable and 0
+  blocked because Jess has no live task records after the repo-state cleanup.
 - [ ] Prove a Looma + Knit component can reach delivery through Guildhall UI
   only. Live attempt on 2026-06-05 picked `ContextMenu` after `AlertDialog`
   was found split across a blocked imported task and an older brief-cleanup
