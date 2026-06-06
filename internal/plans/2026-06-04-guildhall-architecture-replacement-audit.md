@@ -60,12 +60,12 @@ them with file paths, byte counts, tests, and candidate comparisons.
 | Generated `codebase-map.yaml` / structural-map drafts in repo | **Thin** | Keep compact accepted summaries or hashes; move generated bulk/drafts to system-local artifacts. |
 | Custom memory storage and compaction substrate | **Replace** | Current behavior sprawls. Evaluate Mastra Memory/Observational Memory first as TypeScript-native substrate. |
 | Memory/context policy | **Keep** | Guildhall owns scopes, acceptance, provenance, risk, and inclusion/omission decisions. |
-| Graphiti/Kuzu fact extraction | **Defer** | Promising for extracted summaries, but Kuzu/index friction and weak default search prevent first-line adoption. |
+| Graphiti/Kuzu fact extraction | **Kill** | Explored and retired. Local plumbing worked, but default search and product value did not justify keeping it on the roadmap. |
 | LangGraph/LangMem-style context assembly | **Defer** | Useful reference; adoption may be too broad unless Mastra/baseline fails. |
 | Letta/MemGPT architecture | **Defer** | Strong conceptual reference, likely too full-agent-shaped for immediate substrate replacement. |
 | OpenHarness/QueryEngine agent loop | **Keep** for now | It solved real tool-loop/runtime needs. Re-audit only after memory/storage replacement scope is understood. |
 | Mastra Agent as primary runtime | **Defer** | Historical wrappers were insufficient, but that does not disprove modern Mastra. Not part of first storage-sprawl fix. |
-| Mastra Memory/Observational Memory | **Replace candidate** | Strong first candidate for memory substrate: TS-native compaction, observations/reflections, scoped recall, source ranges. |
+| Mastra Memory/Observational Memory | **Replace** | Selected first memory substrate after the value gate: TS-native compaction, observations/reflections, scoped recall, source ranges. |
 | Session persistence / mid-turn resume | **Defer** | Existing QueryEngine sessions may be adequate; audit size, retention, and cleanup before replacement. |
 | Tool schema helper layer | **Thin** | Keep Guildhall tool policy; consider external schema/helper only if it removes custom maintenance. |
 | Tracing/observability | **Thin** | Guildhall needs product events, but commodity tracing may reduce bespoke telemetry paths. |
@@ -132,7 +132,7 @@ them with file paths, byte counts, tests, and candidate comparisons.
 - [ ] Compare candidates only as substrate:
   - Mastra Memory / Observational Memory;
   - deterministic Guildhall baseline;
-  - Graphiti/Kuzu;
+  - retired Graphiti/Kuzu evidence;
   - LangGraph/LangMem-style memory;
   - Letta/MemGPT;
   - Mem0;
@@ -150,7 +150,7 @@ them with file paths, byte counts, tests, and candidate comparisons.
 
 - [ ] Produce an ordered implementation plan that starts with the highest-damage storage sprawl fixes.
 - [ ] Separate immediate cleanup blockers from substrate replacement experiments.
-- [ ] Define kill switches for Mastra, Graphiti, and any other external candidate.
+- [ ] Define kill switches for Mastra and any active external candidate.
 - [ ] Keep the writer-boundary fix mandatory regardless of selected substrate.
 
 ## Success Criteria

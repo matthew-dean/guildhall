@@ -68,9 +68,9 @@ Spike result on 2026-06-04, revised with the Mastra value gate on 2026-06-06:
   Mastra integration, system-local libSQL storage, scoped thread/resource
   mapping, no repo-local writes, source-ref preservation, deterministic
   fallback, and a packet-quality win over the deterministic baseline.
-- Secondary path: keep Graphiti/Kuzu only as an optional fact-extraction or
-  temporal-graph spike if Mastra plus deterministic Guildhall summaries cannot
-  cover a narrow fact/temporal relationship need.
+- Graphiti disposition: explored and retired. Managed Python and local Kuzu
+  could run, but the prototype did not produce enough Guildhall product value
+  to justify keeping it on the roadmap.
 - Storage policy: repo-local state stays off or very thin by default.
 - Prototype evidence: `pnpm memory:mastra:value-gate -- --out
   artifacts/memory-core-prototype/mastra-value-gate.json` writes an ignored
@@ -82,10 +82,8 @@ Spike result on 2026-06-04, revised with the Mastra value gate on 2026-06-06:
   reasoning or top-level context policy. It can help with storage, compaction,
   retrieval, fact extraction, and provenance. Guildhall owns what context is
   included, what is omitted, and why it serves the active user request.
-- Graphiti risk gate: if Graphiti work resumes, Kuzu FTS/index setup cannot
-  remain a hidden shim. It must be upstream-supported, explicitly owned by a
-  tiny tested Guildhall adapter, or treated as a disqualifier for Graphiti/Kuzu
-  in any product path.
+- Mastra implementation spec:
+  `internal/specs/2026-06-06-mastra-based-memory-improvements.md`.
 
 ## Storage Principles
 
@@ -261,9 +259,9 @@ Do not clean with ad hoc scripts unless the CLI path itself is being proven. If 
    storage by default.
 2. Run the architecture replacement audit and confirm Keep/Thin/Replace/Kill/Defer
    rankings for storage and memory/context substrate surfaces.
-3. Add pass/fail gates for Kuzu/index reliability, no-system-Python operation,
-   no default user-installed graph service, provenance, latency, context size,
-   and retrieval quality against the deterministic Guildhall baseline.
+3. Add pass/fail gates for Mastra provenance, latency, context size, fallback,
+   no repo-local writes, and retrieval quality against the deterministic
+   Guildhall baseline.
 4. Add failing writer-boundary tests.
 5. Implement project-state boundary writer helpers.
 6. Migrate direct writers to the helpers.

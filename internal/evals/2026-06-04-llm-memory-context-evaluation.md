@@ -2,94 +2,86 @@
 
 ## Decision
 
-Prototype **Mastra Memory / Observational Memory** first for Guildhall's memory
-and context substrate.
+Adopt **Mastra Memory / Observational Memory** as Guildhall's first memory and
+context substrate.
 
-Use **Zep / Graphiti** only as an optional fact-extraction or temporal-graph
-spike if Mastra plus deterministic Guildhall summaries cannot provide enough
-candidate evidence for context building.
+Graphiti is retired. It was explored, but it did not bear fruit for Guildhall's
+product needs. Do not keep it as a roadmap item, fallback candidate, or narrow
+future spike.
 
-Memory module spec:
-`internal/specs/2026-06-04-guildhall-independent-memory-module.md`
+Memory module specs:
+
+- `internal/specs/2026-06-04-guildhall-independent-memory-module.md`
+- `internal/specs/2026-06-06-mastra-based-memory-improvements.md`
 
 Keep **repo-local Guildhall state off or very thin by default** regardless of
 the memory system. Any Git-visible manifest/export should be a small
-Guildhall-owned optional layer, not a requirement imposed on the memory system.
+Guildhall-owned optional layer, not a requirement imposed by Mastra.
 
-This decision is now folded into the broader architecture replacement audit:
-`internal/plans/2026-06-04-guildhall-architecture-replacement-audit.md`. That
-audit ranks storage and architecture surfaces as Keep, Thin, Replace, Kill, or
-Defer, so Mastra/Graphiti/etc. are evaluated as substrate candidates instead of
-as one-off memory experiments.
+Do **not** use Mastra, LangGraph, Letta, Mem0, LlamaIndex, or any memory system
+to replace Guildhall's reasoning about the user's top-level request. Memory
+tooling is substrate: scaling, storage, compaction workflow, retrieval, fact
+extraction, and provenance. Guildhall still decides what belongs in context and
+why, based on the active request, task goal, evidence quality, and explicit
+omissions.
 
-Do **not** use Mastra, Graphiti, LangGraph, Letta, Mem0, or any memory system to
-replace Guildhall's reasoning about the user's top-level request. Memory tooling
-is substrate: scaling, storage, compaction workflow, retrieval, fact extraction,
-and provenance. Guildhall still decides what belongs in context and why, based
-on the active request, task goal, evidence quality, and explicit omissions.
+## Why Mastra
 
-## Why Mastra First
-
-Mastra is the better first substrate if the product goal is to stop bloating
+Mastra is the right first substrate if the product goal is to stop bloating
 project repos while improving memory, compaction, and context workflow without
 replacing Guildhall's reasoning layer.
 
-Repo evidence matters: Guildhall does not currently depend on Mastra. There are
-no `@mastra/*` packages in `package.json` or the lockfile. If Mastra was assumed
-to be the underlying layer, that assumption was false in the current codebase.
+Mastra's current memory docs describe the needed building blocks:
 
-Mastra's Observational Memory is closer to the clarified boundary than
-Graphiti: it is TypeScript-native, designed for long-running agent memory, and
-compresses conversation history into observations and reflections rather than
-replaying raw transcripts. Its retrieval mode keeps source message ranges
-available and can expose recall/search as a tool. That is substrate work:
-storage, compaction, scoped recall, source drill-down, and workflow.
+- `Memory` stores thread-based conversation history and supports explicit
+  storage, `readOnly`, working memory, semantic recall, and Observational
+  Memory.
+- `@mastra/libsql` gives a local embedded storage path that fits Guildhall's
+  system-local default.
+- Observational Memory compresses long-running histories through Observer and
+  Reflector agents.
+- Observational Memory supports thread/resource scopes, temporal markers,
+  retrieval modes, async buffering, and typed status/buffering events.
+- Semantic recall can stay disabled until a separate vector/embedder gate proves
+  latency, cost, and source-reference quality.
 
-The first Mastra prototype should test whether it helps Guildhall:
+Mastra does not get to decide task truth, readiness, review, gates, or final
+prompt inclusion. It can store, compact, retrieve, and expose candidate
+evidence. Guildhall owns the context-inclusion policy.
 
-- what changed recently;
-- which blockers are still current;
-- which prior reviews are stale;
-- which tasks relate through decisions, files, or handoffs;
-- what should enter the next worker context and why.
+## What Happened To Graphiti
 
-Mastra does not get to decide any of those answers. It can compress and retrieve
-candidate evidence. Guildhall still owns the context-inclusion policy.
+Graphiti was explored as a graph/fact-memory path. It did not bear fruit.
 
-Graphiti remains potentially useful for fact extraction and temporal graph
-experiments, but the prototype already showed two concerns: default search was
-weak for Guildhall's natural questions, and the Kuzu path needed an FTS-index
-shim. That moves Graphiti behind Mastra, not ahead of it.
+Evidence from the retired prototype:
 
-## What Happened To Letta / MemGPT
-
-Letta/MemGPT is the strongest conceptual reference for memory hierarchy. Its
-core-memory, recall-memory, and archival-memory framing is close to what
-Guildhall needs when deciding what belongs in the next prompt, what should be
-searchable, and what should be compacted into durable summaries.
-
-It was not selected as the first prototype because the immediate Guildhall
-problem is not to adopt a full agent architecture. Mastra gives us a narrower
-TypeScript memory substrate to test first. Letta remains useful as a conceptual
-reference for memory classes, especially core/current context, recall/searchable
-history, and archival/deep evidence.
-
-Letta also looks more agent-architecture-shaped than memory-subsystem-shaped.
-That may be valuable later, but adopting it first risks pulling Guildhall toward
-another full agent runtime when the near-term amends are narrower: stop bloating
-project repos, assemble better context, and enforce writer boundaries.
+- managed Python and local Kuzu could run without a separate user-installed
+  graph service;
+- ingestion completed against live Fair Labor License and Looma/Knit fixture
+  summaries;
+- the Kuzu path needed an FTS/index shim for the prototype search path;
+- default Graphiti search was weak for Guildhall's natural quality questions;
+- useful output required a Guildhall-owned context-packet layer over extracted
+  entity summaries, which meant Graphiti was not carrying enough product value
+  to justify keeping it alive.
 
 Disposition:
 
-- Do not discard Letta/MemGPT.
-- Use its memory hierarchy as a design reference for Guildhall memory classes:
-  "core/current context," "recall/searchable history," and
-  "archival/deep evidence."
-- Revisit it if Mastra plus Guildhall policy turns into too much custom memory
-  machinery, or if Guildhall needs agents that can explicitly edit their own
-  memory under policy.
-- Do not make it the first integration unless we decide to adopt a broader
-  Letta-style agent architecture, not just a memory/context layer.
+- remove executable Graphiti prototype code;
+- keep this note as historical evidence only;
+- do not add Graphiti kill switches, deferred tickets, or future roadmap
+  language;
+- continue with Mastra plus deterministic Guildhall fallback.
+
+## What Happened To Letta / MemGPT
+
+Letta/MemGPT remains a useful conceptual reference for memory hierarchy:
+core/current context, recall/searchable history, and archival/deep evidence.
+It was not selected because Guildhall needs a memory subsystem, not a broader
+agent architecture replacement.
+
+Do not integrate it unless Guildhall later chooses to adopt a broader
+Letta-style agent architecture.
 
 ## Candidate Scores
 
@@ -99,51 +91,17 @@ the rubric in
 
 | Candidate | Total / 50 | Role |
 | --- | ---: | --- |
-| Minimal Guildhall baseline | 43 | Control only: strict writer boundary plus deterministic rollups. |
-| Mastra Memory / Observational Memory | 40 | Primary substrate prototype for compaction workflow, scoped recall, and context support. |
-| LangGraph / LangMem-style memory | 38 | Context-assembly reference and possible second prototype. |
+| Minimal Guildhall baseline | 43 | Control and fallback: strict writer boundary plus deterministic rollups. |
+| Mastra Memory / Observational Memory | 40 | Selected substrate for compaction workflow, scoped recall, and context support. |
+| LangGraph / LangMem-style memory | 38 | Context-assembly reference, not current integration path. |
 | Letta / MemGPT | 35 | Strong architecture reference for memory hierarchy. |
-| Zep / Graphiti | 34 | Optional fact-extraction/temporal graph spike after Mastra. |
-| Mem0 | 34 | Practical durable memory extraction candidate. |
+| Mem0 | 34 | Practical durable memory extraction reference. |
 | LlamaIndex memory | 31 | Useful reference for token-budgeted memory blocks. |
 
-The baseline scores highest because it can be made perfectly local,
-provenance-heavy, and repo-clean. It remains the control and fallback. Mastra is
-the first external prototype because it can supply memory/compaction workflow in
-the same TypeScript runtime without asking Graphiti to become the reasoning
-layer.
-
-## Mastra Prototype Gate
-
-Prototype Mastra before additional Graphiti work.
-
-Pass conditions:
-
-- **Actually integrated:** add a real `@mastra/*` memory dependency or adapter
-  prototype. Do not treat Mastra as present until the repo proves it.
-- **Substrate only:** Mastra can store, compact, retrieve, and expose recall.
-  Guildhall owns context-inclusion policy and top-level request reasoning.
-- **Scoped memory:** project/task/thread/resource scopes must map cleanly to
-  Guildhall projects, tasks, and agents without cross-thread task contamination.
-- **Source ranges:** compacted observations must retain drill-down pointers to
-  raw source events/messages/evidence.
-- **Repo-clean:** Mastra storage must live in system-local storage by default;
-  repo-local state remains off/thin.
-- **Better than baseline:** Mastra must produce smaller or higher-quality
-  candidate evidence packets than deterministic Guildhall summaries alone.
-- **Failure behavior:** failed observation/reflection/retrieval must fall back
-  to deterministic summaries and never block cleanup or task-state writes.
-
-Kill conditions:
-
-- It cannot run locally in Guildhall's TypeScript runtime without large service
-  assumptions.
-- Resource-scoped memory causes one project/task/thread to continue another's
-  work or blur active goals.
-- Observations lose provenance or cannot page back to raw source evidence.
-- It reduces prompt size but worsens context relevance compared with the
-  deterministic baseline.
-- It starts acting as context authority instead of candidate evidence substrate.
+The baseline scores highest because it can be perfectly local, provenance-heavy,
+and repo-clean. It remains the fallback/control. Mastra is selected because it
+adds memory/compaction workflow in the same TypeScript runtime while letting
+Guildhall keep policy, provenance, and storage boundaries.
 
 ## Mastra Value Gate Result
 
@@ -174,7 +132,7 @@ Evidence:
 
 This is not an optional plugin recommendation. The next implementation should
 move the selected memory substrate behind a Guildhall-owned memory-core API and
-keep deterministic Guildhall summaries as the fallback/control path.
+keep deterministic Guildhall summaries as fallback/control.
 
 ## Fixture Evidence
 
@@ -197,146 +155,31 @@ The control context packets were all under 1 KB because they used summaries and
 provenance references instead of raw histories. That is the shape Guildhall
 should preserve.
 
-## Graphiti Prototype Evidence
+## Next Implementation Step
 
-Prototype script:
-`scripts/prototype-graphiti-project-memory.mjs`
+Implement `internal/specs/2026-06-06-mastra-based-memory-improvements.md`:
 
-Python probe:
-`scripts/prototype_graphiti_project_memory.py`
+1. Retire Graphiti prototype code and stale roadmap language.
+2. Create `src/memory-core/` with data-layer-only reads/writes.
+3. Move the Mastra value-gate behavior behind a Guildhall-owned adapter.
+4. Build deterministic and Mastra candidate packets with source refs.
+5. Add migration/audit proof that fixture `.guildhall` bloat is read without
+   project mutation and compacted into system-local memory.
+6. Add API/UI status that reports real memory/compaction/migration progress.
 
-Generated report:
-`artifacts/memory-context-eval/graphiti-prototype/report-quality-attempt.json`
-(ignored).
-
-Result from 2026-06-04:
-
-- `uv --managed-python --python 3.12` used managed Python 3.12.13, not system
-  Python.
-- `graphiti-core[kuzu]` and `kuzu` installed and ran without requiring the user
-  to install a separate database service.
-- Guildhall global OpenAI-compatible provider config was loaded into the child
-  process environment without putting secrets in command-line arguments or the
-  report.
-- The local Kuzu backend opened, `KuzuDriver` initialized, and Graphiti
-  ingested Fair Labor License and Looma/Knit fixture summaries.
-- Graphiti's Kuzu path needed an integration shim: the Kuzu driver creates the
-  schema but not the FTS indexes that its own search path expects, so the
-  prototype calls Graphiti's `get_fulltext_indices(GraphProvider.KUZU)`.
-- Default `graphiti.search()` was not good enough for Guildhall quality gates:
-  the three natural questions returned only generic facts such as project-root
-  relationships.
-- Querying Graphiti-extracted entity summaries through Kuzu FTS did produce
-  useful compact context. It recovered task counts, active statuses, large task
-  offenders, progress-log escalation counts, and "next worker context" style
-  summaries from the bloated fixture inputs.
-
-Disposition: Graphiti remains worth keeping as a secondary spike, but not as the
-first substrate and not as a drop-in answer.
-Guildhall needs a project-memory adapter that feeds Graphiti typed compact
-episodes, creates/validates Kuzu indexes, and owns final context-packet assembly
-over retrieved entity summaries. The adapter must feed the original user/task
-intent; it must not let retrieved memory redefine the goal or replace reasoning
-about which evidence is relevant. The next quality gate is retrieval precision,
-compaction usefulness, and context-packet support, not dependency installation.
-
-## Brutally Specific Decision Gate
-
-Graphiti/Kuzu continues only if it proves useful as substrate. It does not get
-to become the reasoning layer, and it does not get a pass for fragile plumbing.
-
-Pass conditions:
-
-- **No hidden shim:** Kuzu FTS/index creation must be handled by upstream
-  Graphiti, a tiny audited adapter with tests, or a different maintained graph
-  backend. A silent runtime patch is not acceptable product behavior.
-- **No system Python:** installation and execution must stay under
-  `uv --managed-python` or a bundled runtime path.
-- **No user-installed service by default:** the default path must not require a
-  user to install Neo4j, FalkorDB, Docker, or a graph service.
-- **Better than baseline:** for FLL and Looma fixture questions, the Graphiti
-  adapter must return materially better candidate evidence than the
-  deterministic Guildhall baseline.
-- **Context help, not context authority:** retrieved facts may enter the
-  candidate evidence pool only. Guildhall owns final inclusion, omissions, and
-  why the evidence serves the active request.
-- **Provenance:** every retrieved summary or fact must carry source project,
-  source artifact/event, task id when applicable, and generated-at/observed-at
-  time.
-- **Compaction budget:** next-worker context output must stay small enough to be
-  prompt-useful. Target: under 4 KB for a single task context packet and under
-  16 KB for a multi-project handoff packet, excluding explicitly requested
-  drill-down evidence.
-- **Latency budget:** cold ingestion can be slower, but warm retrieval plus
-  context-packet assembly must be fast enough for UI/task startup use. Target:
-  p95 under 2 seconds on the local prototype fixtures after ingestion.
-- **Failure behavior:** if extraction, embedding, or graph search fails,
-  Guildhall must fall back to deterministic summaries and still preserve task
-  state, provenance pointers, and cleanup safety.
-
-Kill conditions:
-
-- Kuzu remains dependent on an unaudited FTS/index shim after the adapter spike.
-- Default or expanded Graphiti retrieval cannot beat the deterministic baseline
-  on current blockers, stale evidence, repeated churn, and next-worker context.
-- Useful results require dumping raw histories or giant task blobs into
-  episodes.
-- Provenance cannot be made reliable without a large custom side channel.
-- Provider/model compatibility remains brittle across OpenAI-compatible
-  providers.
-- Warm retrieval/context assembly is too slow for normal Guildhall workflows.
-- The adapter starts replacing Guildhall's reasoning about user intent instead
-  of feeding candidate evidence into it.
-
-Immediate next test for Graphiti: only after the Mastra substrate gate, implement
-the smallest adapter that satisfies the pass conditions against FLL and Looma.
-If any kill condition is triggered and not fixed inside that spike, stop
-Graphiti work and continue with Mastra or the deterministic Guildhall baseline
-plus LangGraph-style context assembly patterns.
+The writer-boundary fix remains mandatory regardless of the memory backend.
 
 ## Source Notes
 
-- LangGraph docs describe short-term memory, long-term stores, trimming,
-  deletion, summarization, checkpoints, and semantic search hooks:
+- Mastra Memory class:
+  <https://mastra.ai/reference/memory/memory-class>
+- Mastra Observational Memory:
+  <https://mastra.ai/reference/memory/observational-memory>
+- Mastra createThread:
+  <https://mastra.ai/reference/memory/createThread>
+- Mastra Memory overview:
+  <https://mastra.ai/docs/memory/overview>
+- LangGraph memory remains a context-assembly reference:
   <https://docs.langchain.com/oss/javascript/langgraph/add-memory>
-- Mastra docs describe Observational Memory, observation/reflection compaction,
-  thread/resource scopes, recall over source ranges, semantic search, and memory
-  processors:
-  <https://mastra.ai/blog/changelog-2026-02-04>
-  and <https://mastra.ai/reference/memory/observational-memory>
-- Letta docs describe core memory, recall memory, archival memory, and
-  automatic compaction of older messages into recursive summaries:
+- Letta memory hierarchy remains a conceptual reference:
   <https://docs.letta.com/guides/agents/architectures/memgpt>
-- Zep/Graphiti docs describe episodes, entity/fact extraction, summaries,
-  temporal graph retrieval, and invalidating outdated facts while preserving
-  history:
-  <https://help.getzep.com/v2/understanding-the-graph>
-  and <https://www.getzep.com/platform/graphiti/>
-- Graphiti's Kuzu docs describe Kuzu as embedded/no-service and say schema/index
-  creation happens during driver initialization, while noting Kuzu's schema
-  constraints:
-  <https://getzep-graphiti.mintlify.app/integrations/kuzu>
-- The Graphiti issue tracker currently has an open Kuzu maintenance concern:
-  <https://github.com/getzep/graphiti/issues/1132>
-- Mem0 docs describe open-source memory add/search/get/list/update/delete
-  operations and inferred versus raw memory ingestion:
-  <https://docs.mem0.ai/>
-- LlamaIndex docs describe token limits, flush size, memory blocks, and
-  inserting memory block content into chat context:
-  <https://developers.llamaindex.ai/python/framework-api-reference/memory/memory>
-
-## Next Implementation Step
-
-Do not clean live project `.guildhall` state yet. First prototype Mastra Memory
-as the system-local substrate:
-
-1. Wire a real Mastra Memory/Observational Memory adapter or spike harness.
-2. Feed it compact FLL and Looma fixture events without mutating those projects.
-3. Verify observation/reflection compaction, recall source ranges, scope
-   behavior, failure fallback, and repo-local cleanliness.
-4. Compare Mastra-produced candidate evidence packets against the deterministic
-   Guildhall baseline.
-5. Only if Mastra cannot cover fact extraction or temporal relationships,
-   evaluate Graphiti as a secondary substrate for that narrow purpose.
-
-The writer-boundary fix remains mandatory regardless of the memory backend.

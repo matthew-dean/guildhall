@@ -9,8 +9,8 @@ Guildhall memory module with a stable boundary and possible spin-out value. The
 module may use Mastra Agent/runtime pieces internally if that is the cleanest way
 to get Observational Memory, processors, and recall, but Guildhall code should
 call a Guildhall-owned memory API rather than scattering Mastra calls throughout
-the product. Mastra Memory / Observational Memory is the first substrate
-candidate behind that boundary.
+the product. Mastra Memory / Observational Memory is the selected first
+substrate behind that boundary.
 
 ## Problem
 
@@ -428,8 +428,8 @@ Opt-in allowed:
 - Guildhall-managed bundled or embedded DB runtimes, including WASM runtimes, if
   they require no manual service install and pass startup/retrieval budgets.
 - Remote embedding/model providers through existing Guildhall provider config.
-- Graphiti/Kuzu or other graph-memory experiments behind explicit prototype
-  flags, never as the default memory path.
+- graph-memory experiments only after a fresh owner-approved decision. Graphiti
+  was explored and retired; it is not on the roadmap.
 
 Dependency acceptance gate:
 
@@ -448,7 +448,7 @@ The first value-gate prototype exists as
 `scripts/prototype-mastra-memory-value-gate.mjs` and is runnable through
 `pnpm memory:mastra:value-gate`. It proves real Mastra/libSQL instantiation,
 system-local storage, scoped thread/resource mapping, no repo-local writes, and
-adopt/defer scoring against deterministic baseline packets.
+pass/fail scoring against deterministic baseline packets.
 
 The next implementation should turn that prototype into `src/memory-core/`:
 
@@ -480,7 +480,7 @@ Pass:
 - failed Mastra processing falls back to deterministic packets;
 - no runtime writer can recreate project-local bloat.
 
-Kill or defer Mastra:
+Disable Mastra as the default:
 
 - cannot expose a stable Guildhall memory API without leaking Mastra-specific
   runtime details across Guildhall;
@@ -497,6 +497,7 @@ Kill or defer Mastra:
 This spec should feed a concrete implementation plan after the architecture
 replacement audit:
 
+- `internal/specs/2026-06-06-mastra-based-memory-improvements.md`
 - `internal/plans/2026-06-04-guildhall-architecture-replacement-audit.md`
 - `internal/plans/2026-06-04-project-state-storage-governance-and-cleanup.md`
 

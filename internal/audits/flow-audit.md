@@ -462,11 +462,9 @@ coverage.
   `@mastra/*` packages are installed, Mastra `Memory` instantiates with
   system-local libSQL storage, thread/resource scope is proven, repo-local
   writes stay empty, and the gate returns `decision: "adopt"` only when Mastra
-  candidate packets beat the deterministic baseline. Graphiti/Kuzu evidence
-  remains secondary in `scripts/prototype-graphiti-project-memory.mjs`; managed
-  uv Python and Kuzu work locally, but default Graphiti search was weak enough
-  to keep it behind Mastra unless a narrow fact/temporal relationship need
-  remains.
+  candidate packets beat the deterministic baseline. Graphiti was explored and
+  did not bear fruit for Guildhall's product needs; its executable prototype
+  path has been retired rather than deferred.
   Boundary clarified by owner: memory tooling is only substrate for scaling,
   storage, compaction, retrieval, fact extraction, and provenance. Guildhall
   must still reason from the active request and own what goes into context and
@@ -480,9 +478,9 @@ coverage.
   no repo-local writes, scoped thread/resource mapping, reliable provenance,
   bounded context size, acceptable warm retrieval latency, deterministic
   fallback, and better packet value than the deterministic Guildhall baseline.
-  If those fail in the production memory-core implementation, defer Mastra and
-  continue with the deterministic baseline while reassessing secondary
-  candidates.
+  If those fail in the production memory-core implementation, disable Mastra
+  and continue with the deterministic baseline while reassessing the memory
+  substrate from first principles.
   Treat this as a writer-boundary, memory/context, and cleanup blocker, not a
   one-time compaction chore.
 - [ ] Distinguish in-app browser bridge failures from actual Guildhall route

@@ -93,39 +93,8 @@ export const candidateProfiles = [
       'Can keep repo-local state thin because memory/checkpoints live in stores outside the project checkout.',
     ],
     risks: [
-      'Less opinionated about temporal fact supersession than Zep/Graphiti.',
+      'Less opinionated about temporal fact supersession than graph-first memory systems.',
       'Adopting graph runtime patterns may be broader than Guildhall needs if used beyond memory/context.',
-    ],
-  },
-  {
-    id: 'zep-graphiti',
-    name: 'Zep / Graphiti',
-    role: 'Best fit for temporal facts, supersession, and graph-backed project memory.',
-    sourceRefs: [
-      'https://help.getzep.com/v2/understanding-the-graph',
-      'https://www.getzep.com/platform/graphiti/',
-      'https://help.getzep.com/v2/concepts',
-    ],
-    scores: {
-      contextAssembly: 4,
-      compactionQuality: 4,
-      temporalCorrectness: 5,
-      provenance: 4,
-      configurability: 3,
-      localFirstFit: 2,
-      repoLocalThinness: 5,
-      integrationSurface: 2,
-      costLatency: 2,
-      failureBehavior: 3,
-    },
-    strengths: [
-      'Temporal graph model explicitly separates episodes, extracted facts, entity summaries, and current vs historical state.',
-      'Good match for Guildhall facts that become stale or superseded.',
-      'Graph-backed retrieval could improve context packets for project structure and decisions.',
-    ],
-    risks: [
-      'Operationally heavier than a thin TypeScript memory adapter.',
-      'May require Python/service integration and graph database choices before proving product value.',
     ],
   },
   {
@@ -498,13 +467,12 @@ export function evaluateCandidate(candidate) {
 
 function recommendationFor(evaluations) {
   const top = evaluations.find(candidate => candidate.id === 'mastra-memory')
-  const graphiti = evaluations.find(candidate => candidate.id === 'zep-graphiti')
   return {
     primary: top?.id ?? 'none',
     primaryLabel: top?.name ?? 'No candidate',
-    secondary: graphiti?.id ?? null,
+    secondary: null,
     summary:
-      'Prototype Mastra Memory / Observational Memory first as the TypeScript-native substrate for storage, compaction workflow, scoped recall, and context support. Keep Graphiti as an optional fact-extraction/temporal-graph spike only if Mastra plus deterministic Guildhall summaries cannot provide enough candidate evidence. Keep repo-local storage off/thin by default regardless of candidate.',
+      'Adopt Mastra Memory / Observational Memory as the TypeScript-native substrate for storage, compaction workflow, scoped recall, and context support. Graphiti was explored and did not bear fruit for Guildhall, so it is not on the roadmap. Keep repo-local storage off/thin by default regardless of candidate.',
   }
 }
 
@@ -574,7 +542,7 @@ export function renderMarkdown(report) {
   lines.push('- LangGraph docs describe short-term memory trimming, deletion, summarization, checkpoints, long-term stores, and semantic search hooks.')
   lines.push('- Mastra docs describe Observational Memory, thread/resource scopes, observation/reflection compaction, recall over source ranges, semantic search, and memory processors.')
   lines.push('- Letta docs describe core memory, recall memory, archival memory, and automatic recursive summarization when context fills.')
-  lines.push('- Zep/Graphiti docs describe episodes, entity/fact extraction, summaries, temporal invalidation, and context graph retrieval.')
+  lines.push('- Graphiti was explored separately and retired because its local prototype did not produce enough Guildhall product value to justify keeping it as a roadmap path.')
   lines.push('- Mem0 docs describe open-source memory add/search/get/list/update/delete style operations and inferred versus raw memory ingestion.')
   lines.push('- LlamaIndex docs describe token-budgeted FIFO memory, flush size, memory blocks, and context insertion.')
   lines.push('')

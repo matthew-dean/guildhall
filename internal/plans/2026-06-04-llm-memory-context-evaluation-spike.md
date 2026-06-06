@@ -6,7 +6,7 @@
 
 **Architecture:** Build a small adapter-and-benchmark harness around real Guildhall failure fixtures. Each candidate ingests the same noisy project histories into a system-local memory/context layer, produces compact memory/context outputs, and is scored on retrieval quality, compaction behavior, provenance, operational fit, and whether Guildhall can expose an optional thin repo-local manifest/export on top.
 
-**Tech Stack:** TypeScript harness in `scripts/`, fixture snapshots from managed projects, local-only test outputs under ignored `artifacts/memory-context-eval/`, candidate adapters for Letta/MemGPT, Zep/Graphiti, Mem0, LangGraph/LangMem-style memory, LlamaIndex memory, and a minimal Guildhall baseline.
+**Tech Stack:** TypeScript harness in `scripts/`, fixture snapshots from managed projects, local-only test outputs under ignored `artifacts/memory-context-eval/`, candidate adapters for Letta/MemGPT, Mem0, LangGraph/LangMem-style memory, LlamaIndex memory, and a minimal Guildhall baseline. Graphiti was explored later and retired.
 
 ---
 
@@ -39,23 +39,19 @@ Evaluate these first:
    - Strength to test: memory hierarchy, core/recall/archival split, context engineering.
    - Risk: may be agent-architecture-heavy rather than embeddable as a Guildhall memory subsystem.
 
-2. **Zep / Graphiti**
-   - Strength to test: temporal knowledge graph, episodes/facts/summaries, superseded facts.
-   - Risk: operational dependency weight and fit for local-first product state.
-
-3. **Mem0**
+2. **Mem0**
    - Strength to test: durable memory extraction with add/update/delete/noop semantics and broad integrations.
    - Risk: may optimize for user preference memory rather than typed project/task state.
 
-4. **LangGraph / LangMem-style memory**
+3. **LangGraph / LangMem-style memory**
    - Strength to test: short-term trimming, summarization, checkpoint history, long-term stores, context assembly hooks.
    - Risk: framework adoption may be too invasive if Guildhall only needs a memory layer.
 
-5. **LlamaIndex memory**
+4. **LlamaIndex memory**
    - Strength to test: token-budgeted memory blocks and flush behavior.
    - Risk: likely better as a reference design than as a direct runtime dependency.
 
-6. **Minimal Guildhall baseline**
+5. **Minimal Guildhall baseline**
    - SQLite/event store plus deterministic rollups and retrieval.
    - Purpose: not the preferred answer, but a control to compare external systems against when repo-local storage is thin or disabled.
 
@@ -183,7 +179,6 @@ Steps:
 Steps:
 
 - [ ] Evaluate Letta/MemGPT concepts first. If direct local integration is too heavy, write a concept adapter and record the operational blocker.
-- [ ] Evaluate Zep/Graphiti. Prioritize temporal correctness and provenance.
 - [ ] Evaluate Mem0. Prioritize memory extraction, update/delete/noop behavior, and retention configurability.
 - [ ] Evaluate LangGraph/LangMem-style memory. Prioritize context assembly, checkpoint trimming, and summarization hooks.
 - [ ] Evaluate LlamaIndex memory. Prioritize token flush and memory block mechanics.
@@ -214,25 +209,8 @@ Do not implement the final storage/memory layer until the evaluation answers:
 - What optional thin manifest/export layer should Guildhall own on top of the selected memory system?
 - What is the smallest writer-boundary fix we must implement regardless of memory system choice?
 
-For the Graphiti prototype, the decision gate is pass/fail:
-
-- It must be substrate only: storage, compaction workflow, retrieval, fact
-  extraction, and provenance. It must not own top-level reasoning or final
-  context-inclusion policy.
-- It must run without system Python and without a default user-installed graph
-  service.
-- It must not depend on a hidden Kuzu FTS/index shim. Either upstream handles
-  the index path, a tiny tested adapter owns it explicitly, or Graphiti fails
-  this gate.
-- It must beat the deterministic Guildhall baseline on retrieval quality for
-  current blockers, stale evidence, repeated churn, related tasks, and
-  next-worker context.
-- It must preserve provenance for every retrieved summary/fact.
-- It must meet context-size and warm-retrieval latency budgets that make the
-  result usable in real Guildhall workflows.
-
-If those conditions are not met in the adapter spike, stop Graphiti work and
-use the baseline plus LangGraph-style context assembly patterns.
+Graphiti disposition added 2026-06-06: explored and retired. It did not bear
+enough Guildhall product fruit to remain a deferred implementation path.
 
 ## Success Criteria
 
@@ -257,29 +235,17 @@ gate: adopt Mastra Memory / Observational Memory as the first memory substrate
 path. The value gate installs real `@mastra/*` packages, instantiates Mastra
 `Memory` with system-local libSQL storage, records no repo-local writes, and
 requires Mastra candidate packets to beat deterministic Guildhall baseline
-packets before returning `decision: "adopt"`. Keep Graphiti/Kuzu as a secondary
-fact-extraction or temporal-graph spike only if Mastra plus deterministic
-Guildhall summaries cannot cover a narrow fact/temporal relationship need.
+packets before returning `decision: "adopt"`. Graphiti/Kuzu is retired.
 Keep repo-local state off or very thin by default regardless of the selected
 memory system.
 
-Graphiti prototype evidence added 2026-06-04, now secondary after the Mastra
-gate:
+Graphiti prototype evidence, retained only as historical evidence:
 
-- `scripts/prototype-graphiti-project-memory.mjs` runs Graphiti through
-  `uv --managed-python --python 3.12` and does not depend on system Python.
 - Kuzu works as a local file-backed graph store; no separate user-installed
   database service was required.
-- The prototype loads Guildhall global OpenAI-compatible provider config into
-  the child process environment without leaking credentials into command-line
-  arguments or reports.
 - Graphiti ingestion completed against live Fair Labor License and Looma/Knit
   bloat fixtures.
 - Graphiti's default search was weak for Guildhall's natural quality questions.
-  The promising path is Graphiti extraction plus a Guildhall-owned
-  context-packet builder over entity summaries and provenance.
-- Next gate: prove retrieval precision and context-packet quality, not just
-  dependency installation.
-- Scope boundary: Graphiti or any other memory system is substrate only. It may
-  help store, compact, retrieve, and extract facts, but Guildhall owns reasoning
-  over the active request and the final context-inclusion policy.
+  Useful output still needed a Guildhall-owned context-packet builder, so the
+  candidate did not carry enough product value to justify keeping executable
+  prototype code or roadmap language.
