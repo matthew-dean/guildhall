@@ -10406,3 +10406,70 @@ passed; `pnpm build` passed. The installed app was refreshed before the live
 retry and `/api/stale-server` returned `stale:false` with pid `34318`.
 
 source: codex:context-menu-selected-work-blocker-flow
+
+2026-06-07T18:10:00Z - Multi-project flow audit after storage/runtime
+boundary hardening push `279db65c`.
+
+Scope:
+- Excluded Looma + Knit; audited registered projects `t-minus-t`,
+  `fair-labor-license`, `font-something`, `narrative-harness`,
+  `commerce-project`, and `jess`.
+- Confirmed installed service freshness with `/api/stale-server`:
+  `stale:false`, dist
+  `/Users/matthew/.guildhall/app/0.10.0/app/dist/cli.js`.
+- API proof used `/api/service`, `/api/project?projectId=...`,
+  `/api/project/inbox?projectId=...`, `/api/project/migrations?projectId=...`,
+  `/api/project/thread?projectId=...`, and
+  `/api/project/release-readiness?projectId=...`.
+- Browser proof used direct routes on `127.0.0.1:7777` for
+  `/projects/:id/overview`, `/thread`, `/work`, `/release`, and `/settings`.
+
+Passed evidence:
+- Service roster includes all six audited projects with stable ids and paths.
+- Browser routes render on `127.0.0.1` without route-not-found or app-error
+  text.
+- `t-minus-t`, `fair-labor-license`, `font-something`,
+  `narrative-harness`, and `jess` render the shared Do This Next lane around
+  `Review existing project work`; Work shows the paused workspace-import task
+  as the runnable/resumable item.
+- `commerce-project` renders setup as the primary next action:
+  `Give the project direction`, with `Waiting on setup` in the shell and no
+  runnable work.
+- Migration API reports no blocked migrations for the six audited projects;
+  each has one pending `0.9.0/runtime-backed-project` migration.
+- Memory health reports system-local Mastra storage paths and empty
+  `repoLocalWrites` arrays for every audited project.
+
+Findings / gaps:
+- Direct `localhost:7777` browser navigation intermittently left non-Thread
+  routes at `Loading project...`; the same routes rendered correctly on
+  `127.0.0.1:7777`. Treat future browser proof on `localhost` as suspect until
+  the browser bridge/host alias behavior is understood.
+- Cleanup migration removed old project-local `.guildhall` files, but several
+  repos now have tracked `.guildhall` deletions in git status. That is expected
+  cleanup work, but it is still dirty project repo state until each repo commits
+  or otherwise records the removal. Observed:
+  `t-minus-t`, `font-something`, `narrative-harness`, `commerce-project`, and
+  `jess` show tracked `.guildhall` deletions; `fair-labor-license` is clean.
+- Release UI correctly flags dirty Guildhall cleanup on `font-something`
+  (`13 project-local Guildhall files need cleanup`) and API
+  `/api/project/release-readiness?projectId=font-something` reports
+  `dirtyCheckout.ownedCount: 13`, but `gitStory` only reports `.gitignore` as
+  changed. Audit follow-up: align release dirty-check explanations so removed
+  tracked `.guildhall` state and unrelated repo changes are summarized without
+  looking contradictory.
+- `/api/project/thread?projectId=narrative-harness` returns setup/import turns
+  and active `setup:direction`; generic thread-list extraction returned no
+  `threads` key for all six projects. The Thread UI still renders setup/import
+  turns, so this is likely an API shape/documentation mismatch, not a visible
+  route failure. Audit follow-up: make thread API projection easier to audit
+  or expose a stable route-test summary.
+- `jess` Settings renders bootstrap as `failed` and only `1/3 ready`, while
+  Overview/Work still put `Review existing project work` in the resumable lane.
+  Audit follow-up: decide whether bootstrap failure should outrank paused
+  workspace-import resume in Do This Next for Jess-like projects.
+
+Do not mark the Looma + Knit component-through-delivery checkbox complete from
+this pass; this audit did not run or complete that flow.
+
+source: codex:multi-project-flow-audit-2026-06-07
