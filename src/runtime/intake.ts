@@ -3,7 +3,7 @@ import { appendManagedTextFile, readManagedTextFile, readManagedTextFileSync, wr
 import fs from 'node:fs/promises'
 import path from 'node:path'
 import { TaskQueue, type RequestIntake, type Task, type TaskRequest, type TaskStatus } from '@guildhall/core'
-import { atomicWriteText } from '@guildhall/sessions'
+import { atomicWriteText, getProjectSystemStatePathFromMemoryDir } from '@guildhall/sessions'
 import {
   appendExploringTranscript,
   isMaterializableSplitAction,
@@ -40,11 +40,11 @@ import { buildSurfaceReviewPacketsForStructuredSpec } from './contract-surfaces.
 // ---------------------------------------------------------------------------
 
 function tasksPathFor(memoryDir: string): string {
-  return path.join(memoryDir, 'TASKS.json')
+  return getProjectSystemStatePathFromMemoryDir(memoryDir, 'TASKS.json')
 }
 
 function progressPathFor(memoryDir: string): string {
-  return path.join(memoryDir, 'PROGRESS.md')
+  return getProjectSystemStatePathFromMemoryDir(memoryDir, 'PROGRESS.md')
 }
 
 async function readQueue(memoryDir: string): Promise<TaskQueue> {

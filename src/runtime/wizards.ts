@@ -34,7 +34,7 @@ import { join } from 'node:path'
 import { parse as parseYaml } from 'yaml'
 import { readGlobalProviders, type ProviderKind } from '@guildhall/config'
 import { bootstrapNeeded, readBootstrapStatus } from './bootstrap-runner.js'
-import { getProjectLocalHistoryDir, getProjectStateDir } from '@guildhall/sessions'
+import { getProjectLocalHistoryDir, getProjectStateDir, getProjectSystemStatePath } from '@guildhall/sessions'
 import { readCachedJson, readCachedText, readCachedYaml } from './file-read-cache.js'
 
 // ---------------------------------------------------------------------------
@@ -69,15 +69,15 @@ export interface ProjectSnapshot {
   bootstrapVerified?: boolean
   /** Whether any non-oauth provider has a stored credential in the global store. */
   hasProvider: boolean
-  /** Whether `.guildhall/project-brief.md` exists and has > 40 chars of substance. */
+  /** Whether the system-local project brief exists and has > 40 chars of substance. */
   hasDirection: boolean
   /**
-   * Whether `.guildhall/workspace-goals.json` has been written (approve action)
+   * Whether system-local workspace goals have been written (approve action)
    * OR a dismiss marker is present — either counts as "reviewed".
    * Also considered done if no repo anchors were detected (nothing to review).
    */
   workspaceImportReviewed: boolean
-  /** Number of non-reserved user/project tasks in .guildhall/TASKS.json. */
+  /** Number of non-reserved user/project tasks in system-local task state. */
   taskCount: number
   /** Wizard-scoped persisted state (skip markers + completedAt stamps). */
   wizardState: WizardsState
@@ -603,7 +603,7 @@ export function buildSnapshot(opts: BuildSnapshotOptions): ProjectSnapshot {
   // direction
   const projectStateDir = getProjectStateDir(projectPath)
   const localHistoryDir = getProjectLocalHistoryDir(projectPath)
-  const briefPath = join(projectStateDir, 'project-brief.md')
+  const briefPath = getProjectSystemStatePath(projectPath, 'project-brief.md')
   let hasDirection = false
   if (existsSync(briefPath)) {
     try {
@@ -615,7 +615,7 @@ export function buildSnapshot(opts: BuildSnapshotOptions): ProjectSnapshot {
   }
 
   // workspace import: goals.json written, OR dismiss marker, OR no anchors at all.
-  const goalsPath = join(projectStateDir, 'workspace-goals.json')
+  const goalsPath = getProjectSystemStatePath(projectPath, 'workspace-goals.json')
   const dismissPath = join(localHistoryDir, 'workspace-import-dismissed')
   let workspaceImportReviewed = existsSync(goalsPath) || existsSync(dismissPath)
   if (!workspaceImportReviewed) {
@@ -629,7 +629,7 @@ export function buildSnapshot(opts: BuildSnapshotOptions): ProjectSnapshot {
   // contains Guildhall's own housekeeping. Do not exclude by domain alone:
   // starter projects can route the user's first real spec-shaping task through
   // `_meta` until richer project lanes exist.
-  const tasksPath = join(projectStateDir, 'TASKS.json')
+  const tasksPath = getProjectSystemStatePath(projectPath, 'TASKS.json')
   const tasksRaw = readJsonSafe(tasksPath)
   const tasks = Array.isArray(tasksRaw)
     ? tasksRaw
@@ -706,11 +706,11 @@ export async function buildSnapshotAsync(opts: BuildSnapshotOptions): Promise<Pr
 
   const projectStateDir = getProjectStateDir(projectPath)
   const localHistoryDir = getProjectLocalHistoryDir(projectPath)
-  const briefPath = join(projectStateDir, 'project-brief.md')
+  const briefPath = getProjectSystemStatePath(projectPath, 'project-brief.md')
   const briefBody = await readCachedText(briefPath).catch(() => null)
   const hasDirection = typeof briefBody === 'string' && briefBody.trim().length > 40
 
-  const goalsPath = join(projectStateDir, 'workspace-goals.json')
+  const goalsPath = getProjectSystemStatePath(projectPath, 'workspace-goals.json')
   const dismissPath = join(localHistoryDir, 'workspace-import-dismissed')
   let workspaceImportReviewed = false
   try {
@@ -738,7 +738,7 @@ export async function buildSnapshotAsync(opts: BuildSnapshotOptions): Promise<Pr
 
   let taskCount = await activeTaskCountFromIndex(projectPath)
   if (taskCount == null) {
-    const tasksPath = join(projectStateDir, 'TASKS.json')
+    const tasksPath = getProjectSystemStatePath(projectPath, 'TASKS.json')
     const tasksRaw = await readCachedJson<unknown>(tasksPath).catch(() => null)
     taskCount = taskCountFromRaw(tasksRaw)
   }

@@ -165,6 +165,8 @@ function activityLabel(project: ServiceProjectSummary, counts: ProjectCardSummar
   }
   if (project.projectCheckIn?.needed) return `${project.projectCheckIn.title ?? 'Project check-in needed'}.`
   const running = (project.run?.status ?? 'stopped') === 'running'
+  const oneTaskRun = running && project.run?.mode === 'one_task'
+  if (oneTaskRun) return 'Advancing one task.'
   if (running && counts.active > 0) {
     return counts.active === 1
       ? 'Agents are working on 1 task.'
@@ -194,6 +196,11 @@ function activityLabel(project: ServiceProjectSummary, counts: ProjectCardSummar
 }
 
 function recentLabel(project: ServiceProjectSummary, counts: ProjectCardSummary['counts']): string | null {
+  if ((project.run?.status ?? 'stopped') === 'running' && project.run?.mode === 'one_task') {
+    return project.highlights?.activeTaskTitle
+      ? `Advancing one task: ${project.highlights.activeTaskTitle}`
+      : 'Advancing one task'
+  }
   if (project.highlights?.activeTaskTitle) return `Working on: ${project.highlights.activeTaskTitle}`
   if (project.highlights?.blockedTaskTitle) return `Blocked on: ${project.highlights.blockedTaskTitle}`
   if (project.highlights?.recentCompletedTaskTitle) return `Recently completed: ${project.highlights.recentCompletedTaskTitle}`

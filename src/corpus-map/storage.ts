@@ -2,7 +2,11 @@ import { appendManagedTextFile, readManagedTextFile, readManagedTextFileSync, wr
 import fs from 'node:fs/promises'
 import path from 'node:path'
 import { parse, stringify } from 'yaml'
-import { getProjectLocalHistoryDir, inferProjectRootFromMemoryDir } from '@guildhall/sessions'
+import {
+  getProjectLocalHistoryDir,
+  getProjectSystemStatePath,
+  inferProjectRootFromMemoryDir,
+} from '@guildhall/sessions'
 import type {
   CodebaseMap,
   CodebaseMapHistoryEvent,
@@ -16,8 +20,16 @@ export const CODEBASE_MAP_HISTORY_FILENAME = 'codebase-map.history.jsonl'
 export const CODEBASE_MAP_STALE_FILENAME = 'codebase-map.stale.json'
 export const CODEBASE_MAP_OVERRIDES_FILENAME = 'codebase-map.overrides.yaml'
 
+function activeProjectStatePath(memoryDir: string, filename: string): string {
+  const base = path.basename(memoryDir)
+  if (base === '.guildhall' || base === 'memory') {
+    return getProjectSystemStatePath(inferProjectRootFromMemoryDir(memoryDir), filename)
+  }
+  return path.join(memoryDir, filename)
+}
+
 export function codebaseMapPath(memoryDir: string): string {
-  return path.join(memoryDir, CODEBASE_MAP_FILENAME)
+  return activeProjectStatePath(memoryDir, CODEBASE_MAP_FILENAME)
 }
 
 export function codebaseMapHistoryPath(memoryDir: string): string {
@@ -29,7 +41,7 @@ export function codebaseMapStalePath(memoryDir: string): string {
 }
 
 export function codebaseMapOverridesPath(memoryDir: string): string {
-  return path.join(memoryDir, CODEBASE_MAP_OVERRIDES_FILENAME)
+  return activeProjectStatePath(memoryDir, CODEBASE_MAP_OVERRIDES_FILENAME)
 }
 
 export async function loadCodebaseMap(memoryDir: string): Promise<CodebaseMap | null> {
@@ -43,7 +55,7 @@ export async function loadCodebaseMap(memoryDir: string): Promise<CodebaseMap | 
 }
 
 export async function saveCodebaseMap(memoryDir: string, map: CodebaseMap): Promise<void> {
-  await fs.mkdir(memoryDir, { recursive: true })
+  await fs.mkdir(path.dirname(codebaseMapPath(memoryDir)), { recursive: true })
   await writeManagedTextFile(
     codebaseMapPath(memoryDir),
     stringify(map, { lineWidth: 120 }),
@@ -62,7 +74,7 @@ export async function loadCorpusOverrides(memoryDir: string): Promise<CorpusOver
 }
 
 export async function saveCorpusOverrides(memoryDir: string, overrides: CorpusOverrides): Promise<void> {
-  await fs.mkdir(memoryDir, { recursive: true })
+  await fs.mkdir(path.dirname(codebaseMapOverridesPath(memoryDir)), { recursive: true })
   await writeManagedTextFile(
     codebaseMapOverridesPath(memoryDir),
     stringify(overrides, { lineWidth: 120 }),

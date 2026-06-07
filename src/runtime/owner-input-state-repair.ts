@@ -1,7 +1,12 @@
 import { appendManagedTextFile, readManagedTextFile, readManagedTextFileSync, writeManagedTextFile } from '@guildhall/persistence'
 import fs from 'node:fs/promises'
 import path from 'node:path'
-import { atomicWriteText, getProjectStateDir } from '@guildhall/sessions'
+import {
+  atomicWriteText,
+  getProjectStateDir,
+  getProjectSystemStatePath,
+  getProjectSystemStatePathFromMemoryDir,
+} from '@guildhall/sessions'
 import { applyBoundedChatTransition } from './bounded-chat-machine.js'
 import { OwnerInputRequest, type OwnerInputRequest as OwnerInputRequestRecord } from './owner-input.js'
 import { isInvalidOwnerQuestionPrompt } from './owner-question-normalizer.js'
@@ -41,7 +46,7 @@ interface RepairDecision {
 
 const REPAIR_ID = '0.10.0/owner-input-state-repair'
 const REPAIR_AGENT_ID = `migration:${REPAIR_ID}`
-const TASKS_RELATIVE_PATH = '.guildhall/TASKS.json'
+const TASKS_RELATIVE_PATH = 'TASKS.json'
 
 export async function repairOwnerInputState(
   input: OwnerInputStateRepairInput,
@@ -56,14 +61,14 @@ export async function repairOwnerInputState(
   const cancelledDuplicates = decisions.filter(decision => decision.action === 'cancel_duplicate').map(decision => decision.request.id)
 
   const affectedPaths = decisions.length > 0
-    ? ['.guildhall/owner-input', '.guildhall/bounded-chat', TASKS_RELATIVE_PATH]
+    ? ['project-state/owner-input', 'project-state/bounded-chat', `project-state/${TASKS_RELATIVE_PATH}`]
     : []
 
   if (!input.apply || decisions.length === 0) {
     return { cancelledInvalid, resolvedByAssumption, cancelledDuplicates, affectedPaths }
   }
 
-  const queueFile = path.join(input.projectRoot, TASKS_RELATIVE_PATH)
+  const queueFile = getProjectSystemStatePath(input.projectRoot, TASKS_RELATIVE_PATH)
   const queue = await readQueue(queueFile)
   for (const decision of decisions) {
     await closeOwnerInput(memoryDir, decision, now)
@@ -176,9 +181,9 @@ async function closeOwnerInput(memoryDir: string, decision: RepairDecision, now:
       },
     ],
   })
-  await writeJson(path.join(memoryDir, 'owner-input', `${nextRequest.id}.json`), nextRequest)
+  await writeJson(ownerInputRequestPath(memoryDir, nextRequest.id), nextRequest)
 
-  const sessionFile = path.join(memoryDir, 'bounded-chat', `${decision.request.boundedChatSessionId}.json`)
+  const sessionFile = boundedChatSessionPath(memoryDir, decision.request.boundedChatSessionId)
   const session = JSON.parse(await readManagedTextFile(sessionFile, 'utf8')) as {
     id: string
     status: 'active' | 'waiting_for_owner' | 'coordinator_review' | 'fulfilled' | 'blocked' | 'cancelled'
@@ -228,7 +233,7 @@ async function closeOwnerInput(memoryDir: string, decision: RepairDecision, now:
 }
 
 async function readOwnerInputRequests(memoryDir: string): Promise<OwnerInputRequestRecord[]> {
-  const dir = path.join(memoryDir, 'owner-input')
+  const dir = ownerInputRequestsDir(memoryDir)
   const entries = await fs.readdir(dir).catch((err) => {
     if ((err as NodeJS.ErrnoException).code === 'ENOENT') return []
     throw err
@@ -240,6 +245,18 @@ async function readOwnerInputRequests(memoryDir: string): Promise<OwnerInputRequ
       return OwnerInputRequest.parse(JSON.parse(raw))
     }))
   return requests.sort((left, right) => left.createdAt.localeCompare(right.createdAt) || left.id.localeCompare(right.id))
+}
+
+function ownerInputRequestsDir(memoryDir: string): string {
+  return getProjectSystemStatePathFromMemoryDir(memoryDir, 'owner-input')
+}
+
+function ownerInputRequestPath(memoryDir: string, requestId: string): string {
+  return getProjectSystemStatePathFromMemoryDir(memoryDir, path.join('owner-input', `${requestId}.json`))
+}
+
+function boundedChatSessionPath(memoryDir: string, sessionId: string): string {
+  return getProjectSystemStatePathFromMemoryDir(memoryDir, path.join('bounded-chat', `${sessionId}.json`))
 }
 
 async function readQueue(file: string): Promise<QueueShape> {

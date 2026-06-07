@@ -60,6 +60,30 @@ describe('stale Guildhall process guardrail', () => {
     })
 
     expect(result.stopped.map(process => process.pid)).toEqual([101])
-    expect(killProcess).toHaveBeenCalledWith(101)
+    expect(killProcess).toHaveBeenCalledWith(101, 'SIGTERM')
+  })
+
+  it('force-kills stale siblings that survive TERM', async () => {
+    const killProcess = vi.fn()
+    const result = await stopStaleGuildhallProcesses({
+      currentPid: 202,
+      currentBuildMtimeMs: Date.parse('2026-06-06T20:00:00.000Z'),
+      forceAfterMs: 0,
+      listProcesses: async () => [
+        {
+          pid: 101,
+          startedAtMs: Date.parse('2026-06-06T17:14:35.000Z'),
+          command: '/Users/matthew/.guildhall/app/0.10.0/app/dist/cli.js mcp serve .',
+          mode: 'mcp',
+          stale: false,
+        },
+      ],
+      isProcessAlive: () => true,
+      killProcess,
+    })
+
+    expect(result.stopped.map(process => process.pid)).toEqual([101])
+    expect(killProcess).toHaveBeenCalledWith(101, 'SIGTERM')
+    expect(killProcess).toHaveBeenCalledWith(101, 'SIGKILL')
   })
 })

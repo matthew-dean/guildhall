@@ -1,5 +1,6 @@
 import { createHash } from 'node:crypto'
 import { execFile, spawn, type ChildProcessWithoutNullStreams } from 'node:child_process'
+import { mkdir } from 'node:fs/promises'
 import { promisify } from 'node:util'
 import { getProjectStateDir } from '@guildhall/sessions'
 
@@ -12,6 +13,7 @@ import type {
   ProjectRuntimeHealth,
   ProjectRuntimeState,
 } from './project-runtime-store.js'
+import { normalizeProjectRuntimeState } from './project-runtime-store.js'
 
 const execFileP = promisify(execFile)
 
@@ -30,8 +32,10 @@ export class PodmanProjectRuntimeBackend {
   }
 
   async create(projectRoot: string, state: ProjectRuntimeState): Promise<{ containerId?: string | null }> {
-    const existing = await this.#existingContainerId(state)
+    const runtimeState = normalizeProjectRuntimeState(projectRoot, state)
+    const existing = await this.#existingContainerId(runtimeState)
     if (existing) return { containerId: existing }
+    await mkdir(runtimeState.mounts.guildhallHome, { recursive: true })
 
     const { stdout } = await this.#execFile('podman', [
       'create',
@@ -41,17 +45,19 @@ export class PodmanProjectRuntimeBackend {
       '--user',
       'guildhall',
       '--workdir',
-      state.mounts.projectPath,
-      ...state.ports.flatMap(port => ['--publish', `${port.host}:${port.container}`]),
+      runtimeState.mounts.projectPath,
+      ...runtimeState.ports.flatMap(port => ['--publish', `${port.host}:${port.container}`]),
       '--volume',
-      `${state.mounts.projectRoot}:${state.mounts.projectPath}:rw,z`,
+      `${runtimeState.mounts.projectRoot}:${runtimeState.mounts.projectPath}:rw,z`,
+      '--tmpfs',
+      `${runtimeState.mounts.projectPath}/.guildhall:rw,noexec,nosuid,nodev`,
       '--volume',
-      `${state.mounts.guildhallHome}:${state.mounts.guildhallHomePath}:rw,z`,
+      `${runtimeState.mounts.guildhallHome}:${runtimeState.mounts.guildhallHomePath}:rw,z`,
       ...capabilityGrantMounts(getProjectStateDir(projectRoot)).flatMap(mount => [
         '--volume',
         `${mount.hostPath}:${mount.containerPath}:${mount.access === 'read-only' ? 'ro' : 'rw'},z`,
       ]),
-      `${state.image.repository}:${state.image.tag}`,
+      `${runtimeState.image.repository}:${runtimeState.image.tag}`,
     ])
     return { containerId: stdout.trim() || null }
   }

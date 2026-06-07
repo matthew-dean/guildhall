@@ -4,7 +4,7 @@ import fs from 'node:fs/promises'
 import path from 'node:path'
 
 import { TaskQueue, TERMINAL_TASK_STATUSES, type Task, type TaskQueue as TaskQueueType, type TaskStatus } from '@guildhall/core'
-import { atomicWriteText } from '@guildhall/sessions'
+import { atomicWriteText, getProjectSystemStatePathFromMemoryDir } from '@guildhall/sessions'
 
 import { reviewInProcessWorkForDesignLens, type DesignLensReviewResult } from './design-lens-review.js'
 import { workSubtreeIds } from './work-hierarchy.js'
@@ -166,7 +166,7 @@ function isLeanCommandBackedTask(task: Task): boolean {
 }
 
 async function readQueue(memoryDir: string): Promise<TaskQueueType> {
-  const file = path.join(memoryDir, 'TASKS.json')
+  const file = getProjectSystemStatePathFromMemoryDir(memoryDir, 'TASKS.json')
   try {
     return TaskQueue.parse(JSON.parse(await readManagedTextFile(file, 'utf-8')))
   } catch {
@@ -175,7 +175,7 @@ async function readQueue(memoryDir: string): Promise<TaskQueueType> {
 }
 
 async function writeQueue(memoryDir: string, queue: TaskQueueType): Promise<void> {
-  await writeManagedTextFileSync(path.join(memoryDir, 'TASKS.json'), JSON.stringify(TaskQueue.parse(queue), null, 2))
+  await writeManagedTextFileSync(getProjectSystemStatePathFromMemoryDir(memoryDir, 'TASKS.json'), JSON.stringify(TaskQueue.parse(queue), null, 2))
 }
 
 function hasImprovementReviewNote(task: Task, lensId: ImprovementLensId): boolean {

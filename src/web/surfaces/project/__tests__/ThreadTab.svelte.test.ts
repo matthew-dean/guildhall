@@ -860,16 +860,29 @@ describe('ThreadTab', () => {
         affordance: 'link',
         actionLabel: 'Open setup',
       }),
+      setupTurn({
+        id: 'setup:firstTask',
+        stepId: 'firstTask',
+        at: '2026-05-19T15:03:00.000Z',
+        status: 'pending',
+        phase: 'setup',
+        title: 'Shape the first spec',
+        why: 'Turn a rough idea into a product brief.',
+        affordance: 'inline-text',
+        actionLabel: 'Start shaping',
+      }),
     ], 'setup:direction')
 
     render(ThreadTab)
 
     await screen.findByPlaceholderText('What should Guildhall know?')
+    expect(screen.getByRole('button', { name: /Give the project direction/i })).toBeTruthy()
     const detail = within(document.querySelector('.thread-detail') as HTMLElement)
     expect(detail.getByText('Give the project direction')).toBeTruthy()
     expect(detail.queryByText('Name this project')).toBeNull()
     expect(detail.queryByText('Run project check-in')).toBeNull()
     expect(detail.queryByText('Review existing work')).toBeNull()
+    expect(detail.queryByText('Shape the first spec')).toBeNull()
     expect(document.querySelectorAll('.setup-title')).toHaveLength(1)
   })
 

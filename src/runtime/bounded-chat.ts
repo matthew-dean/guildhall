@@ -4,7 +4,7 @@ import fsp from 'node:fs/promises'
 import path from 'node:path'
 import { createHash } from 'node:crypto'
 import { z } from 'zod'
-import { atomicWriteText } from '@guildhall/sessions'
+import { atomicWriteText, getProjectSystemStatePathFromMemoryDir } from '@guildhall/sessions'
 import { readCachedJson } from './file-read-cache.js'
 import {
   applyBoundedChatTransition,
@@ -576,7 +576,7 @@ export function boundedChatPath(memoryDir: string, sessionId: string): string {
 }
 
 function boundedChatDir(memoryDir: string): string {
-  return path.join(memoryDir, 'bounded-chat')
+  return getProjectSystemStatePathFromMemoryDir(memoryDir, 'bounded-chat')
 }
 
 function buildSessionId(projectId: string, objectiveKind: BoundedChatObjectiveKind, source: string, now: string): string {

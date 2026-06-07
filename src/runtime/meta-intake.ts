@@ -4,7 +4,13 @@ import fs from 'node:fs/promises'
 import path from 'node:path'
 import { dump as yamlDump, load as yamlLoad } from 'js-yaml'
 import { TaskQueue, type Task } from '@guildhall/core'
-import { atomicWriteText, getProjectTranscriptPath, inferProjectRootFromMemoryDir } from '@guildhall/sessions'
+import {
+  atomicWriteText,
+  getProjectSystemStatePath,
+  getProjectSystemStatePathFromMemoryDir,
+  getProjectTranscriptPath,
+  inferProjectRootFromMemoryDir,
+} from '@guildhall/sessions'
 import { readWorkspaceConfig, writeWorkspaceConfig } from '@guildhall/config'
 import { appendExploringTranscript } from '@guildhall/tools'
 import {
@@ -45,7 +51,11 @@ export const META_INTAKE_TASK_ID = 'task-meta-intake'
 export const META_INTAKE_DOMAIN = '_meta'
 
 function tasksPathFor(memoryDir: string): string {
-  return path.join(memoryDir, 'TASKS.json')
+  return getProjectSystemStatePathFromMemoryDir(memoryDir, 'TASKS.json')
+}
+
+function agentSettingsPathFor(memoryDir: string): string {
+  return getProjectSystemStatePathFromMemoryDir(memoryDir, AGENT_SETTINGS_FILENAME)
 }
 
 async function readQueue(memoryDir: string): Promise<TaskQueue> {
@@ -1056,7 +1066,7 @@ export async function mergeLeverInferences(
   inferences: LeverInferences,
   now: string = new Date().toISOString(),
 ): Promise<MergeLeverInferencesResult> {
-  const settingsPath = path.join(memoryDir, AGENT_SETTINGS_FILENAME)
+  const settingsPath = agentSettingsPathFor(memoryDir)
   const settings = await loadLeverSettings({ path: settingsPath })
 
   const result: MergeLeverInferencesResult = {

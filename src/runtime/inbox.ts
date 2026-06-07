@@ -3,7 +3,7 @@
  *
  * The inbox is the prioritized queue of things the coordinator needs the
  * human to resolve right now. It sources exclusively from files already on
- * disk — `guildhall.yaml`, `.guildhall/TASKS.json`, `.guildhall/agent-settings.yaml`,
+ * disk — `guildhall.yaml`, system-local task state, project settings,
  * and a handful of workspace-signal files — so the endpoint is cheap enough
  * to poll and deterministic enough to snapshot in tests.
  *
@@ -13,7 +13,7 @@
 
 import { existsSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
-import { getProjectLocalHistoryDir, getProjectStateDir } from '@guildhall/sessions'
+import { getProjectLocalHistoryDir, getProjectStateDir, getProjectSystemStatePath } from '@guildhall/sessions'
 import { parse as parseYaml } from 'yaml'
 import type { Task } from '@guildhall/core'
 import { META_INTAKE_TASK_ID } from './meta-intake.js'
@@ -346,7 +346,7 @@ export function buildInbox(opts: BuildInboxOptions): InboxItem[] {
     }
   }
 
-  const tasksPath = join(getProjectStateDir(projectPath), 'TASKS.json')
+  const tasksPath = getProjectSystemStatePath(projectPath, 'TASKS.json')
   const tasks = tasksArray(readJsonSafe(tasksPath))
   const workspaceImportTask = tasks.find(t => t?.id === 'task-workspace-import')
   const workspaceImportTaskStatus =
@@ -371,7 +371,7 @@ export function buildInbox(opts: BuildInboxOptions): InboxItem[] {
   }
 
   // --- workspace_import_pending --------------------------------------------
-  const goalsPath = join(getProjectStateDir(projectPath), 'workspace-goals.json')
+  const goalsPath = getProjectSystemStatePath(projectPath, 'workspace-goals.json')
   const hasGoals = existsSync(goalsPath)
   const anchors = detectRepoAnchors(projectPath)
   const hasReadme = anchors.includes('README.md')

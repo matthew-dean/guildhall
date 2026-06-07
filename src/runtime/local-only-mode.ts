@@ -3,7 +3,7 @@ import fs from 'node:fs/promises'
 import { existsSync } from 'node:fs'
 import path from 'node:path'
 import { logProgress } from '@guildhall/tools'
-import { getProjectLocalHistoryDir, inferProjectRootFromMemoryDir } from '@guildhall/sessions'
+import { getProjectLocalHistoryDir, getProjectSystemStatePathFromMemoryDir, inferProjectRootFromMemoryDir } from '@guildhall/sessions'
 
 // ---------------------------------------------------------------------------
 // FR-29 / AC-20: local-only mode.
@@ -81,7 +81,7 @@ export async function enterLocalOnlyMode(
   if (existing) return { alreadyLocal: true }
 
   await logProgress({
-    progressPath: path.join(memoryDir, 'PROGRESS.md'),
+    progressPath: getProjectSystemStatePathFromMemoryDir(memoryDir, 'PROGRESS.md'),
     entry: {
       type: 'blocked',
       agentId: opts.agentId ?? 'runtime',
@@ -109,7 +109,7 @@ export async function exitLocalOnlyMode(
     // ENOENT race — already gone
   }
   await logProgress({
-    progressPath: path.join(memoryDir, 'PROGRESS.md'),
+    progressPath: getProjectSystemStatePathFromMemoryDir(memoryDir, 'PROGRESS.md'),
     entry: {
       type: 'milestone',
       agentId: opts.agentId ?? 'runtime',

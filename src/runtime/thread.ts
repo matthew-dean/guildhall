@@ -37,7 +37,7 @@ import { visibleQuestions, visibleOpenQuestions } from './question-visibility.js
 import { thresholdMs } from './liveness.js'
 import { listPressureTestIntakes, summarizeProjectCheckIn, type PressureTestIntake, type ProjectCheckInSummary } from './pressure-test-intake.js'
 import { listBoundedChatSessions, type BoundedChatSession } from './bounded-chat.js'
-import { getProjectStateDir } from '@guildhall/sessions'
+import { getProjectStateDir, getProjectSystemStatePath } from '@guildhall/sessions'
 import type { GitStorySnapshot } from './git-story.js'
 import { userFacingText } from './user-facing-text.js'
 import { specReviewRequiresOwnerApproval } from './orchestrator-picker.js'
@@ -968,7 +968,7 @@ const SETUP_STEP_ACTIONS: Record<string, SetupAction> = {
 function setupCurrentValue(stepId: string, snap: ProjectSnapshot, projectPath: string): string | undefined {
   if (stepId === 'identity') return snap.config?.name ?? ''
   if (stepId !== 'direction') return undefined
-  const briefPath = join(getProjectStateDir(projectPath), 'project-brief.md')
+  const briefPath = getProjectSystemStatePath(projectPath, 'project-brief.md')
   if (!existsSync(briefPath)) return guessedProjectDirection(projectPath)
   try {
     const existing = readFileSync(briefPath, 'utf8').trim()
@@ -1655,7 +1655,7 @@ function latestSupervisorActivity(
 export function buildThread(opts: BuildThreadOptions): Thread {
   const snap = opts.snapshot ?? buildSnapshot({ projectPath: opts.projectPath })
   const turns: ThreadTurn[] = []
-  const tasksPath = join(getProjectStateDir(opts.projectPath), 'TASKS.json')
+  const tasksPath = getProjectSystemStatePath(opts.projectPath, 'TASKS.json')
   const tasks = opts.tasks ?? (existsSync(tasksPath) ? tasksArray(readJsonSafe(tasksPath)) : [])
   const boundedChats = opts.boundedChatSessions ?? listBoundedChatSessions(getProjectStateDir(opts.projectPath))
   const pressureTests = opts.pressureTestIntakes ?? listPressureTestIntakes(getProjectStateDir(opts.projectPath))

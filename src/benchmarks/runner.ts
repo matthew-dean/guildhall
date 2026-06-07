@@ -8,6 +8,7 @@ import { promisify } from 'node:util'
 
 import { FileBackedGuildhallPersistence, type PersistencePlacement } from '@guildhall/persistence'
 import { runGuildhallTaskOnce, type RunOnceReport } from '@guildhall/runtime'
+import { getProjectSystemStatePath } from '@guildhall/sessions'
 import {
   AutoResolutionRecord,
   BenchmarkRunResult,
@@ -356,7 +357,7 @@ async function runTaskWorkspaceBenchmark(input: {
       title: fixture.id,
       automationPolicy,
       proof: 'commands',
-      outputPath: path.join(materialized.projectRoot, '.guildhall', `${fixture.id}-run-once.json`),
+      outputPath: getProjectSystemStatePath(materialized.projectRoot, `${fixture.id}-run-once.json`),
     })
     const verifierResults = await runVerifierCommands(materialized.projectRoot, fixture.verifier)
     const touchedFiles = await collectTouchedFiles(fixture.seedDir, materialized.projectRoot)
@@ -520,9 +521,7 @@ async function ensureBenchmarkWorkspaceConfig(projectRoot: string, id: string): 
   } catch {
     await writeManagedTextFile(guildhallYamlPath, `name: ${slug}\nid: ${slug}\nprojectPath: .\n`, 'utf8')
   }
-  const memoryDir = path.join(projectRoot, '.guildhall')
-  await fs.mkdir(memoryDir, { recursive: true })
-  const tasksPath = path.join(memoryDir, 'TASKS.json')
+  const tasksPath = getProjectSystemStatePath(projectRoot, 'TASKS.json')
   try {
     await fs.access(tasksPath)
   } catch {

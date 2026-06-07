@@ -166,6 +166,8 @@ import { applyRunAutomationPolicy as applyRunAutomationLeverPolicy } from './run
 import {
   atomicWriteText,
   getProjectStateDir,
+  getProjectSystemStatePath,
+  getProjectSystemStatePathFromMemoryDir,
   getProjectTranscriptPath,
   getProjectTaskLocalHistoryDir,
   inferProjectRootFromMemoryDir,
@@ -2231,8 +2233,8 @@ export class Orchestrator {
    */
   async refreshLivenessStrictness(): Promise<void> {
     try {
-      const settingsPath = path.join(
-        this.opts.config.memoryDir,
+      const settingsPath = getProjectSystemStatePath(
+        inferProjectRootFromMemoryDir(this.opts.config.memoryDir),
         AGENT_SETTINGS_FILENAME,
       )
       const settings = await loadLeverSettings({ path: settingsPath })
@@ -5710,7 +5712,10 @@ export class Orchestrator {
   private async decideProposal(task: Task, queue: TaskQueue): Promise<TickOutcome> {
     let levers: DomainLevers
     try {
-      const settingsPath = path.join(this.opts.config.memoryDir, AGENT_SETTINGS_FILENAME)
+      const settingsPath = getProjectSystemStatePath(
+        inferProjectRootFromMemoryDir(this.opts.config.memoryDir),
+        AGENT_SETTINGS_FILENAME,
+      )
       const settings = await loadLeverSettings({ path: settingsPath })
       levers = resolveDomainLevers(settings, task.domain)
     } catch (err) {
@@ -5857,7 +5862,10 @@ export class Orchestrator {
     let domainLevers: DomainLevers
     let projectLevers: ProjectLevers
     try {
-      const settingsPath = path.join(this.opts.config.memoryDir, AGENT_SETTINGS_FILENAME)
+      const settingsPath = getProjectSystemStatePath(
+        inferProjectRootFromMemoryDir(this.opts.config.memoryDir),
+        AGENT_SETTINGS_FILENAME,
+      )
       const settings = await loadLeverSettings({ path: settingsPath })
       domainLevers = resolveDomainLevers(settings, task.domain)
       projectLevers = settings.project
@@ -5954,15 +5962,24 @@ export class Orchestrator {
   }
 
   private tasksPath(): string {
-    return path.join(this.opts.config.memoryDir, 'TASKS.json')
+    return getProjectSystemStatePath(
+      inferProjectRootFromMemoryDir(this.opts.config.memoryDir),
+      'TASKS.json',
+    )
   }
 
   private progressPath(): string {
-    return path.join(this.opts.config.memoryDir, 'PROGRESS.md')
+    return getProjectSystemStatePath(
+      inferProjectRootFromMemoryDir(this.opts.config.memoryDir),
+      'PROGRESS.md',
+    )
   }
 
   private decisionsPath(): string {
-    return path.join(this.opts.config.memoryDir, 'DECISIONS.md')
+    return getProjectSystemStatePath(
+      inferProjectRootFromMemoryDir(this.opts.config.memoryDir),
+      'DECISIONS.md',
+    )
   }
 
   /**
@@ -5972,8 +5989,8 @@ export class Orchestrator {
    * 'standard' strictness).
    */
   private async readLeverSettings() {
-    const settingsPath = path.join(
-      this.opts.config.memoryDir,
+    const settingsPath = getProjectSystemStatePath(
+      inferProjectRootFromMemoryDir(this.opts.config.memoryDir),
       AGENT_SETTINGS_FILENAME,
     )
     return await loadLeverSettings({ path: settingsPath })
@@ -6975,7 +6992,7 @@ export class Orchestrator {
 
     // Write a DECISIONS.md entry capturing the adjudication so the audit
     // trail lives outside TASKS.json too.
-    const decisionsPath = path.join(this.opts.config.memoryDir, 'DECISIONS.md')
+    const decisionsPath = getProjectSystemStatePathFromMemoryDir(this.opts.config.memoryDir, 'DECISIONS.md')
     const decisionEntry = [
       `### ${input.now} — Reviewer fan-out adjudication`,
       '',
@@ -9545,7 +9562,7 @@ export class Orchestrator {
           source: {
             kind: 'progress',
             ref: `PROGRESS.md#${entry.task.id}`,
-            path: '.guildhall/PROGRESS.md',
+            path: 'project-state/PROGRESS.md',
             capturedAt: progressEntry.timestamp,
           },
           content: {
@@ -9665,7 +9682,10 @@ function toCoordinatorDomain(
 }
 
 async function sessionNamespaceForProject(config: ResolvedConfig): Promise<string> {
-  const epochPath = path.join(config.memoryDir, '.session-epoch')
+  const epochPath = getProjectSystemStatePath(
+    inferProjectRootFromMemoryDir(config.memoryDir),
+    '.session-epoch',
+  )
   try {
     const existing = (await readManagedTextFile(epochPath, 'utf8')).trim()
     if (existing) return existing
@@ -9673,7 +9693,7 @@ async function sessionNamespaceForProject(config: ResolvedConfig): Promise<strin
     /* create below */
   }
   const epoch = `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`
-  await fs.mkdir(config.memoryDir, { recursive: true })
+  await fs.mkdir(path.dirname(epochPath), { recursive: true })
   await writeManagedTextFile(epochPath, `${epoch}\n`, 'utf8')
   return epoch
 }
@@ -9830,7 +9850,10 @@ export async function runOrchestrator(
 
   let resumeQueue: TaskQueue | null = null
   try {
-    const raw = readManagedTextFileSync(path.join(config.memoryDir, 'TASKS.json'), 'utf8')
+    const raw = readManagedTextFileSync(
+      getProjectSystemStatePath(inferProjectRootFromMemoryDir(config.memoryDir), 'TASKS.json'),
+      'utf8',
+    )
     resumeQueue = TaskQueue.parse(JSON.parse(raw))
   } catch {
     resumeQueue = null

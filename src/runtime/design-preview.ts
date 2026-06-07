@@ -3,6 +3,7 @@ import fsp from 'node:fs/promises'
 import path from 'node:path'
 import yaml from 'js-yaml'
 import { z } from 'zod'
+import { getProjectSystemStatePathFromMemoryDir } from '@guildhall/sessions'
 
 export const DESIGN_STORIES_FILE = 'design-stories.yaml'
 
@@ -172,7 +173,7 @@ async function walk(root: string, dir: string, out: string[], depth: number): Pr
 
 async function loadPortableStoryManifest(memoryDir: string): Promise<DesignStoryManifest | null> {
   try {
-    const raw = await readManagedTextFile(path.join(memoryDir, DESIGN_STORIES_FILE), 'utf-8')
+    const raw = await readManagedTextFile(getProjectSystemStatePathFromMemoryDir(memoryDir, DESIGN_STORIES_FILE), 'utf-8')
     return DesignStoryManifest.parse(yaml.load(raw) ?? {})
   } catch {
     return null

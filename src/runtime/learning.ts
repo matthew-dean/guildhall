@@ -14,6 +14,7 @@ import type {
   PreferenceSubject,
   StructuredPreference,
 } from './policy.js'
+import { getProjectSystemStatePathFromMemoryDir } from '@guildhall/sessions'
 
 const TaskSelectionMode = z.enum(['all', 'tight'])
 
@@ -165,7 +166,7 @@ function defaultLearningRecord(): LearningRecord {
 }
 
 export function projectLearningPath(memoryDir: string): string {
-  return path.join(memoryDir, 'learning.json')
+  return getProjectSystemStatePathFromMemoryDir(memoryDir, 'learning.json')
 }
 
 export function globalLearningPath(): string {

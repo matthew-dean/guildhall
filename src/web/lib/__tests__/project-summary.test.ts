@@ -165,6 +165,35 @@ describe('summarizeProjects', () => {
     ])
   })
 
+  it('labels one-task runs without implying every active task is being worked', () => {
+    const service: ServiceDetail = {
+      projects: [
+        {
+          id: 'looma-knit',
+          name: 'Looma + Knit',
+          path: '/Users/matthew/work/looma-knit',
+          highlights: {
+            activeTaskTitle: 'ContextMenu primitive',
+          },
+          taskCounts: { total: 39, active: 37, draftReview: 0, blocked: 1, done: 1, shelved: 0 },
+          run: { status: 'running', mode: 'one_task' },
+        },
+      ],
+    }
+
+    expect(summarizeProjects(service)[0]).toMatchObject({
+      stageLabel: 'Running',
+      activityLabel: 'Advancing one task.',
+      recentLabel: 'Advancing one task: ContextMenu primitive',
+      ticker: {
+        tone: 'active',
+        pulse: true,
+        label: 'Live',
+        message: 'Advancing one task: ContextMenu primitive',
+      },
+    })
+  })
+
   it('treats unselected idle projects as switchable', () => {
     const service: ServiceDetail = {
       projects: [

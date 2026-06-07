@@ -11,7 +11,7 @@ import type { Context } from 'hono'
 import { Hono } from 'hono'
 import { streamSSE } from 'hono/streaming'
 import { serve } from '@hono/node-server'
-import { atomicWriteText, getProjectStateDir, getProjectTranscriptPath } from '@guildhall/sessions'
+import { atomicWriteText, getProjectStateDir, getProjectSystemStatePath, getProjectTranscriptPath } from '@guildhall/sessions'
 import { readTaskWorkspaceStore } from './task-state-store.js'
 import {
   readWorkspaceConfig,
@@ -229,6 +229,7 @@ import {
   workspaceNeedsImport,
   WORKSPACE_IMPORT_TASK_ID,
   formatDetectedDraftAsSpec,
+  workspaceImportTasksPath,
 } from './workspace-importer.js'
 import {
   detectWorkspaceSignals,
@@ -415,6 +416,11 @@ export interface ServeOptions {
   runtimeBackendSetup?: RuntimeBackendSetupDetector
   /** Optional runtime dev-server manager override for tests. */
   devServerManager?: Pick<DevServerManager, 'list' | 'start' | 'stop' | 'restart'>
+  /** Optional stale Guildhall process guard overrides for tests. */
+  staleProcessGuard?: {
+    listProcesses?: () => Promise<GuildhallProcessInfo[]>
+    killProcess?: (pid: number, signal?: NodeJS.Signals) => void
+  }
 }
 
 export interface ShutdownHttpServer {
@@ -1003,11 +1009,19 @@ function newRequestRoutingSummary(kind: string): string {
   }
 }
 
+function projectTasksPath(projectPath: string): string {
+  return getProjectSystemStatePath(projectPath, 'TASKS.json')
+}
+
+function projectBriefPath(projectPath: string): string {
+  return getProjectSystemStatePath(projectPath, 'project-brief.md')
+}
+
 async function loadThreadProjectionState(projectPath: string) {
   const memoryDir = getProjectStateDir(projectPath)
   const [snapshot, tasks, boundedChatSessions, pressureTestIntakes] = await Promise.all([
     buildSnapshotAsync({ projectPath }),
-    readTasksFileNormalized(join(memoryDir, 'TASKS.json')).catch(() => []),
+    readTasksFileNormalized(projectTasksPath(projectPath)).catch(() => []),
     listBoundedChatSessionsAsync(memoryDir).catch(() => []),
     listPressureTestIntakesAsync(memoryDir).catch(() => []),
   ])
@@ -1041,7 +1055,7 @@ async function buildProjectInboxSnapshot(input: {
   // No-op if already seeded, off, or not needed.
   try {
     const memoryDir = getProjectStateDir(input.projectPath)
-    const goalsPath = join(memoryDir, 'workspace-goals.json')
+    const goalsPath = getProjectSystemStatePath(input.projectPath, 'workspace-goals.json')
     if (!existsSync(goalsPath) && input.coordinatorCount > 0) {
       await maybeSeedWorkspaceImport({ memoryDir, projectPath: input.projectPath })
     }
@@ -1547,7 +1561,7 @@ function summarizeProjectText(project: ResolvedProject): string | null {
   if (project.initializationNeeded) {
     return 'Attached to this folder. Initialize Guildhall here to inspect the repo, configure providers, and start task flow.'
   }
-  const briefPath = join(getProjectStateDir(project.path), 'project-brief.md')
+  const briefPath = projectBriefPath(project.path)
   if (existsSync(briefPath)) {
     const brief = readManagedTextFileSync(briefPath, 'utf8')
       .split(/\r?\n/)
@@ -1959,7 +1973,7 @@ async function buildProjectGitStorySummary(projectPath: string, tasks?: Array<Re
         }),
       ]
   const snapshots = [...rootSnapshots]
-  const taskRecords = tasks ?? await readTasksFileNormalized(join(getProjectStateDir(projectPath), 'TASKS.json')).catch(() => [])
+  const taskRecords = tasks ?? await readTasksFileNormalized(projectTasksPath(projectPath)).catch(() => [])
   const workspaceStore = await readTaskWorkspaceStore(projectPath).catch(() => undefined)
   for (const task of taskRecords) {
     const taskId = typeof task.id === 'string' ? task.id : ''
@@ -2223,6 +2237,44 @@ export function buildServeApp(opts: ServeOptions = {}): {
   const devServerManager = opts.devServerManager ?? new DevServerManager({ runtimeSupervisor })
   const app = new Hono()
   const currentProjectPath = () => currentProject().path
+  const runtimeAgentProjectId = (c: Context): string | null => {
+    const projectId = c.req.header('x-guildhall-runtime-project-id')?.trim()
+    return projectId || null
+  }
+  const recordRuntimeAgentScopeViolation = async (
+    runtimeProjectId: string,
+    input: {
+      requestedProjectId?: string | undefined
+      path: string
+      method: string
+      reason: string
+    },
+  ) => {
+    const runtimeProject = getRegisteredProjects().find(item => item.id === runtimeProjectId)
+    if (!runtimeProject) return
+    const file = getProjectSystemStatePath(runtimeProject.path, 'security/runtime-agent-scope-violations.jsonl')
+    await fsp.mkdir(dirname(file), { recursive: true })
+    await appendManagedTextFile(file, `${JSON.stringify({
+      runtimeProjectId,
+      ...input,
+      recordedAt: new Date().toISOString(),
+    })}\n`)
+  }
+  const blockRuntimeAgentGlobalAccess = async (c: Context, next: () => Promise<void>) => {
+    const runtimeProjectId = runtimeAgentProjectId(c)
+    if (runtimeProjectId) {
+      await recordRuntimeAgentScopeViolation(runtimeProjectId, {
+        path: c.req.path,
+        method: c.req.method,
+        reason: 'global_api_access',
+      })
+      return c.json({
+        error: 'Runtime-agent requests cannot access service-wide or global Guildhall APIs.',
+        code: 'runtime_agent_scope_violation',
+      }, 403)
+    }
+    return next()
+  }
 
   const bindProjectScope = async (
     c: Context,
@@ -2233,6 +2285,19 @@ export function buildServeApp(opts: ServeOptions = {}): {
   ) => {
     if (!c.req.query('projectId')?.trim()) {
       return c.json({ error: 'projectId is required for project-scoped requests.' }, 400)
+    }
+    const runtimeProjectId = runtimeAgentProjectId(c)
+    if (runtimeProjectId && c.req.query('projectId')?.trim() !== runtimeProjectId) {
+      await recordRuntimeAgentScopeViolation(runtimeProjectId, {
+        requestedProjectId: c.req.query('projectId')?.trim(),
+        path: c.req.path,
+        method: c.req.method,
+        reason: 'cross_project_access',
+      })
+      return c.json({
+        error: 'Runtime-agent requests cannot access another project.',
+        code: 'runtime_agent_scope_violation',
+      }, 403)
     }
     if (
       requireExplicitForMutation &&
@@ -2287,6 +2352,12 @@ export function buildServeApp(opts: ServeOptions = {}): {
 
   app.use('/api/project', (c, next) => bindProjectScope(c, next, { requireExplicitForMutation: true }))
   app.use('/api/project/*', (c, next) => bindProjectScope(c, next, { requireExplicitForMutation: true }))
+  app.use('/api/service', blockRuntimeAgentGlobalAccess)
+  app.use('/api/service/*', blockRuntimeAgentGlobalAccess)
+  app.use('/api/providers', blockRuntimeAgentGlobalAccess)
+  app.use('/api/providers/*', blockRuntimeAgentGlobalAccess)
+  app.use('/api/models', blockRuntimeAgentGlobalAccess)
+  app.use('/api/models/*', blockRuntimeAgentGlobalAccess)
   app.use('/api/config', bindProjectScope)
   app.use('/api/config/*', bindProjectScope)
   app.use('/api/setup', bindProjectScope)
@@ -2431,7 +2502,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
           ? null
           : await readProjectAvailability(entry.path).catch(() => null)
         try {
-          const tasks = await readTasksFileNormalized(join(getProjectStateDir(entry.path), 'TASKS.json'))
+          const tasks = await readTasksFileNormalized(projectTasksPath(entry.path))
           taskCounts = summarizeTaskCounts(tasks)
           taskActivity = summarizeTaskActivity(tasks)
           const gitStory = await buildProjectGitStorySummary(entry.path, tasks as Array<Record<string, unknown>>).catch(() => undefined)
@@ -2673,10 +2744,17 @@ export function buildServeApp(opts: ServeOptions = {}): {
 
   async function servedBundleFreshnessPayloadWithProcesses(): Promise<ReturnType<typeof servedBundleFreshnessPayload>> {
     const payload = servedBundleFreshnessPayload()
-    const staleProcesses = findStaleGuildhallProcesses(await listGuildhallProcesses(), {
+    const staleOptions = {
       currentPid: process.pid,
       currentBuildMtimeMs: payload.currentBuildMtimeMs,
-    })
+      ...(opts.staleProcessGuard?.listProcesses ? { listProcesses: opts.staleProcessGuard.listProcesses } : {}),
+      ...(opts.staleProcessGuard?.killProcess ? { killProcess: opts.staleProcessGuard.killProcess } : {}),
+    }
+    await stopStaleGuildhallProcesses(staleOptions)
+    const processes = opts.staleProcessGuard?.listProcesses
+      ? await opts.staleProcessGuard.listProcesses()
+      : await listGuildhallProcesses()
+    const staleProcesses = findStaleGuildhallProcesses(processes, staleOptions)
     return {
       ...payload,
       ...(staleProcesses.length > 0 ? { staleProcesses } : {}),
@@ -2889,7 +2967,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
           setupUrl: `/projects/${encodeURIComponent(project.id)}/setup`,
         })
       }
-      const tasksPath = join(getProjectStateDir(project.path), 'TASKS.json')
+      const tasksPath = projectTasksPath(project.path)
       const rawTasks = await readTasksFileNormalized(tasksPath)
       const tasks = await Promise.all(rawTasks.map((task) => enrichTaskForServe(project.path, task)))
       const deliveryModel = await readProjectDeliveryModel(project.path)
@@ -3063,7 +3141,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
 
   app.get('/api/project/project-graph', async c => {
     try {
-      const tasks = await readTasksFileNormalized(join(getProjectStateDir(project.path), 'TASKS.json')).catch(() => [])
+      const tasks = await readTasksFileNormalized(projectTasksPath(project.path)).catch(() => [])
       return c.json({
         projectGraph: queryProjectGraphView({
           projectId: project.id,
@@ -3992,6 +4070,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
     runtimeProvider: ReturnType<typeof getRuntimeProviderConfig>
     allowPaidProviderFallback: boolean
     allowTaskReadinessBlocker?: boolean
+    requestedTaskId?: string
   }): Promise<{
     canStart: boolean
     code?: string
@@ -4017,7 +4096,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
       if (taskReadinessBlocker) return taskReadinessBlocker
     }
 
-    const terminal = terminalStartState(input.projectPath)
+    const terminal = terminalStartState(input.projectPath, input.requestedTaskId)
     if (terminal) {
       return {
         canStart: false,
@@ -4120,7 +4199,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
     }
   }
 
-  function terminalStartState(projectPath: string): {
+  function terminalStartState(projectPath: string, requestedTaskId?: string): {
     canStart: false
     code: 'all_terminal'
     message: string
@@ -4137,7 +4216,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
       }
     }
   } | null {
-    const tasksPath = join(getProjectStateDir(projectPath), 'TASKS.json')
+    const tasksPath = projectTasksPath(projectPath)
     if (!existsSync(tasksPath)) return null
     let raw: unknown
     try {
@@ -4151,6 +4230,12 @@ export function buildServeApp(opts: ServeOptions = {}): {
         ? (raw as { tasks: unknown[] }).tasks
         : []
     if (tasks.length === 0) return null
+    if (
+      requestedTaskId &&
+      tasks.some(task => isRecoverableBlockedStartTask(task, requestedTaskId))
+    ) {
+      return null
+    }
 
     let done = 0
     let blocked = 0
@@ -4197,13 +4282,34 @@ export function buildServeApp(opts: ServeOptions = {}): {
     }
   }
 
+  function isRecoverableBlockedStartTask(task: unknown, requestedTaskId: string): boolean {
+    if (!task || typeof task !== 'object') return false
+    const candidate = task as {
+      id?: unknown
+      status?: unknown
+      blockReason?: unknown
+      worktreePath?: unknown
+      branchName?: unknown
+    }
+    if (candidate.id !== requestedTaskId) return false
+    if (candidate.status !== 'blocked') return false
+    const blockReason = typeof candidate.blockReason === 'string' ? candidate.blockReason : ''
+    if (
+      !blockReason.includes('Guildhall could not create a task worktree:') ||
+      !/already exists/i.test(blockReason)
+    ) {
+      return false
+    }
+    return true
+  }
+
   async function startBlockerForImportDrafts(projectPath: string): Promise<{
     canStart: false
     code: 'import_drafts_waiting'
     message: string
     actionHref: string
   } | null> {
-    const tasksPath = join(getProjectStateDir(projectPath), 'TASKS.json')
+    const tasksPath = projectTasksPath(projectPath)
     if (!existsSync(tasksPath)) return null
     const raw = JSON.parse(await readManagedTextFile(tasksPath, 'utf-8')) as
       | { tasks?: Array<Record<string, unknown>> }
@@ -4237,7 +4343,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
     message: string
     actionHref: string
   } | null> {
-    const tasksPath = join(getProjectStateDir(projectPath), 'TASKS.json')
+    const tasksPath = projectTasksPath(projectPath)
     if (!existsSync(tasksPath)) return null
     const raw = JSON.parse(await readManagedTextFile(tasksPath, 'utf-8')) as
       | { tasks?: Array<Record<string, unknown>> }
@@ -4329,7 +4435,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
   app.post('/api/project/task/:id/start', async c => {
     try {
       const taskId = c.req.param('id')
-      const tasksPath = join(getProjectStateDir(project.path), 'TASKS.json')
+      const tasksPath = projectTasksPath(project.path)
       const tasks = await readTasksFileNormalized(tasksPath).catch(() => [])
       if (!tasks.some(task => task.id === taskId)) {
         return c.json({ error: 'task not found' }, 404)
@@ -4403,10 +4509,11 @@ export function buildServeApp(opts: ServeOptions = {}): {
         runtimeProvider,
         allowPaidProviderFallback: Boolean(projectCfg.allowPaidProviderFallback),
         allowTaskReadinessBlocker: !body.taskId,
+        ...(body.taskId ? { requestedTaskId: body.taskId } : {}),
       })
       if (!startReadiness.canStart) {
         if (startReadiness.code === 'all_terminal') {
-          const terminal = terminalStartState(project.path)
+          const terminal = terminalStartState(project.path, body.taskId)
           if (terminal) {
             return c.json({
               status: 'stopped',
@@ -4415,17 +4522,18 @@ export function buildServeApp(opts: ServeOptions = {}): {
               stopSummary: terminal.stopSummary,
             })
           }
+        } else {
+          return c.json(
+            {
+              error: startReadiness.message ?? 'One thing needs to be resolved before work can start.',
+              code: startReadiness.code,
+              actionHref: startReadiness.actionHref,
+              loadedModels: startReadiness.loadedModels,
+              missingModels: startReadiness.missingModels,
+            },
+            blockedStartStatus(startReadiness.code),
+          )
         }
-        return c.json(
-          {
-            error: startReadiness.message ?? 'One thing needs to be resolved before work can start.',
-            code: startReadiness.code,
-            actionHref: startReadiness.actionHref,
-            loadedModels: startReadiness.loadedModels,
-            missingModels: startReadiness.missingModels,
-          },
-          blockedStartStatus(startReadiness.code),
-        )
       }
       const creds = runtimeProvider.credentials
       const preferred = runtimeProvider.preferredProvider
@@ -5143,7 +5251,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
       if (project.initializationNeeded) {
         return c.json({ status: 'uninitialized', taskExists: false, specReady: false, drafts: [] })
       }
-      const tasksPath = join(getProjectStateDir(project.path), 'TASKS.json')
+      const tasksPath = projectTasksPath(project.path)
       if (!existsSync(tasksPath)) {
         return c.json({ status: 'no-task', taskExists: false, specReady: false, drafts: [] })
       }
@@ -5290,7 +5398,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
       } catch {}
 
       // Is there a reserved task?
-      const tasksPath = join(memoryDir, 'TASKS.json')
+      const tasksPath = projectTasksPath(project.path)
       let taskStatus: string | null = null
       let specPresent = false
       let parsedSpecDraft: ReturnType<typeof parseWorkspaceImport> | null = null
@@ -5409,7 +5517,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
         return c.json({ error: 'Project not initialized. Complete /setup first.' }, 400)
       }
       const memoryDir = getProjectStateDir(project.path)
-      const tasks = await readTasksFileNormalized(join(memoryDir, 'TASKS.json')).catch(() => [])
+      const tasks = await readTasksFileNormalized(projectTasksPath(project.path)).catch(() => [])
       const sources = await collectProjectReintakeSources(project.path)
       const draft = planProjectReintake({ sources, tasks })
       await writeProjectReintakeDraft(memoryDir, draft)
@@ -5486,7 +5594,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
       // instead of re-running the scan silently.
       let dismissed = false
       try {
-        const goalsPath = join(memoryDir, 'workspace-goals.json')
+        const goalsPath = getProjectSystemStatePath(project.path, 'workspace-goals.json')
         if (existsSync(goalsPath)) {
           const g = JSON.parse(await readManagedTextFile(goalsPath, 'utf-8')) as {
             dismissed?: boolean
@@ -5498,7 +5606,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
       }
 
       let existingTasks: Array<{ title: string; status: string }> = []
-      const tasksPath = join(memoryDir, 'TASKS.json')
+      const tasksPath = projectTasksPath(project.path)
       if (existsSync(tasksPath)) {
         try {
           const raw = JSON.parse(await readManagedTextFile(tasksPath, 'utf-8')) as
@@ -5625,7 +5733,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
       // the detector draft uses the same YAML fence format the agent would
       // have produced.
       try {
-        const tasksPath = join(memoryDir, 'TASKS.json')
+        const tasksPath = workspaceImportTasksPath(memoryDir)
         const raw = existsSync(tasksPath)
           ? (JSON.parse(await readManagedTextFile(tasksPath, 'utf-8')) as
               | Array<Record<string, unknown>>
@@ -5783,7 +5891,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
       }
 
       // Workspace goals file (imported or dismissed state).
-      const goalsPath = join(memoryDir, 'workspace-goals.json')
+      const goalsPath = getProjectSystemStatePath(project.path, 'workspace-goals.json')
       let workspaceGoals:
         | { imported: boolean; dismissed: boolean; goalCount: number; taskCount: number; milestoneCount: number }
         | null = null
@@ -5808,7 +5916,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
           /* leave null */
         }
       }
-      const tasksPath = join(memoryDir, 'TASKS.json')
+      const tasksPath = projectTasksPath(project.path)
       if (existsSync(tasksPath)) {
         try {
           const raw = JSON.parse(readManagedTextFileSync(tasksPath, 'utf8')) as
@@ -5879,8 +5987,8 @@ export function buildServeApp(opts: ServeOptions = {}): {
     try {
       if (project.initializationNeeded) return c.json({ error: 'not initialized' }, 400)
       const memoryDir = getProjectStateDir(project.path)
-      await fsp.mkdir(memoryDir, { recursive: true })
-      const goalsPath = join(memoryDir, 'workspace-goals.json')
+      const goalsPath = getProjectSystemStatePath(project.path, 'workspace-goals.json')
+      await fsp.mkdir(dirname(goalsPath), { recursive: true })
       await writeManagedTextFile(
         goalsPath,
         JSON.stringify({ dismissed: true, dismissedAt: new Date().toISOString() }, null, 2),
@@ -5921,19 +6029,19 @@ export function buildServeApp(opts: ServeOptions = {}): {
     }
   }
 
-  async function buildProjectContextSummary(memoryDir: string): Promise<{
+  async function buildProjectContextSummary(projectPath: string, memoryDir: string): Promise<{
     projectBrief: { present: boolean; nonEmptyLines: number }
     projectNotes: { present: boolean; nonEmptyLines: number }
     decisions: { present: boolean; nonEmptyLines: number }
     workspaceGoals: { present: boolean; goalCount: number }
   }> {
     const [projectBrief, projectNotes, decisions] = await Promise.all([
-      fileSummary(join(memoryDir, 'project-brief.md')),
+      fileSummary(projectBriefPath(projectPath)),
       fileSummary(join(memoryDir, 'MEMORY.md')),
       fileSummary(join(memoryDir, 'DECISIONS.md')),
     ])
     let workspaceGoals = { present: false, goalCount: 0 }
-    const goalsPath = join(memoryDir, 'workspace-goals.json')
+    const goalsPath = getProjectSystemStatePath(projectPath, 'workspace-goals.json')
     if (existsSync(goalsPath)) {
       try {
         const raw = JSON.parse(await readManagedTextFile(goalsPath, 'utf-8')) as { goals?: unknown[] }
@@ -5958,7 +6066,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
       const memoryDir = getProjectStateDir(project.path)
       const inventory = await detectWorkspaceSignals({ projectPath: project.path })
       const draft = formWorkspaceHypothesis(inventory)
-      const tasksPath = join(memoryDir, 'TASKS.json')
+      const tasksPath = projectTasksPath(project.path)
       let existingTasks: Array<{ title: string; status: string }> = []
       if (existsSync(tasksPath)) {
         try {
@@ -5981,7 +6089,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
       return c.json({
         ...buildLearningSnapshot({ memoryDir, review, draft }),
         projectSkillProposals: readProjectSkillProposals(memoryDir),
-        projectContext: await buildProjectContextSummary(memoryDir),
+        projectContext: await buildProjectContextSummary(project.path, memoryDir),
       })
     } catch (err) {
       return c.json({ error: err instanceof Error ? err.message : String(err) }, 500)
@@ -6293,7 +6401,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
   app.get('/api/project/task/:id/wizards', c => {
     try {
       if (project.initializationNeeded) return c.json({ wizards: [] })
-      const tasksPath = join(getProjectStateDir(project.path), 'TASKS.json')
+      const tasksPath = projectTasksPath(project.path)
       if (!existsSync(tasksPath)) return c.json({ error: 'no tasks file' }, 404)
       const raw = JSON.parse(readManagedTextFileSync(tasksPath, 'utf8')) as
         | { tasks?: Array<Record<string, unknown>> }
@@ -6396,7 +6504,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
   app.get('/api/project/brief', c => {
     try {
       if (project.initializationNeeded) return c.json({ current: '', seed: { readme: '', roadmap: [] } })
-      const briefPath = join(getProjectStateDir(project.path), 'project-brief.md')
+      const briefPath = projectBriefPath(project.path)
       const current = existsSync(briefPath) ? readManagedTextFileSync(briefPath, 'utf8') : ''
       const readmePath = join(project.path, 'README.md')
       const roadmapPath = join(project.path, 'ROADMAP.md')
@@ -6422,9 +6530,9 @@ export function buildServeApp(opts: ServeOptions = {}): {
       const body = (await c.req.json().catch(() => ({}))) as { content?: string }
       const content = typeof body.content === 'string' ? body.content.trim() : ''
       if (content.length < 40) return c.json({ error: 'brief must be at least 40 characters' }, 400)
-      const memDir = getProjectStateDir(project.path)
-      if (!existsSync(memDir)) mkdirSync(memDir, { recursive: true })
-      writeManagedTextFileSync(join(memDir, 'project-brief.md'), content + '\n')
+      const briefPath = projectBriefPath(project.path)
+      mkdirSync(dirname(briefPath), { recursive: true })
+      writeManagedTextFileSync(briefPath, content + '\n')
       return c.json({ ok: true })
     } catch (err) {
       return c.json({ error: err instanceof Error ? err.message : String(err) }, 500)
@@ -6434,7 +6542,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
   app.get('/api/project/git-story', async c => {
     try {
       if (project.initializationNeeded) return c.json({ initializationNeeded: true })
-      const tasks = await readTasksFileNormalized(join(getProjectStateDir(project.path), 'TASKS.json')).catch(() => [])
+      const tasks = await readTasksFileNormalized(projectTasksPath(project.path)).catch(() => [])
       return c.json(await buildProjectGitStorySummary(project.path, tasks as Array<Record<string, unknown>>))
     } catch (err) {
       return c.json({ error: err instanceof Error ? err.message : String(err) }, 500)
@@ -6449,7 +6557,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
   app.get('/api/project/task/:id', async c => {
     try {
       if (project.initializationNeeded) return c.json({ error: 'not initialized' }, 400)
-      const tasksPath = join(getProjectStateDir(project.path), 'TASKS.json')
+      const tasksPath = projectTasksPath(project.path)
       if (!existsSync(tasksPath)) return c.json({ error: 'no tasks file' }, 404)
       const tasks = await readTasksFileNormalized(tasksPath)
       const id = c.req.param('id')
@@ -6544,7 +6652,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
   app.get('/api/project/delivery-spine', async c => {
     try {
       if (project.initializationNeeded) return c.json({ error: 'not initialized' }, 400)
-      const tasks = await readTasksFileNormalized(join(getProjectStateDir(project.path), 'TASKS.json'))
+      const tasks = await readTasksFileNormalized(projectTasksPath(project.path))
       const model = await readProjectDeliveryModel(project.path)
       return c.json({
         model,
@@ -6560,7 +6668,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
   app.get('/api/project/delivery-spine/queue', async c => {
     try {
       if (project.initializationNeeded) return c.json({ error: 'not initialized' }, 400)
-      const tasks = await readTasksFileNormalized(join(getProjectStateDir(project.path), 'TASKS.json'))
+      const tasks = await readTasksFileNormalized(projectTasksPath(project.path))
       const model = await readProjectDeliveryModel(project.path)
       return c.json(deriveQueueCandidates({ model, tasks: tasks as Task[] }))
     } catch (err) {
@@ -6573,7 +6681,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
       if (project.initializationNeeded) return c.json({ error: 'not initialized' }, 400)
       const resultId = c.req.param('resultId')
       const body = await c.req.json().catch(() => ({})) as { ownerOverrideReason?: string }
-      const tasksPath = join(getProjectStateDir(project.path), 'TASKS.json')
+      const tasksPath = projectTasksPath(project.path)
       const tasks = await readTasksFileNormalized(tasksPath)
       const model = await readProjectDeliveryModel(project.path)
       const changeSet = stagedContractChangeSet(model, resultId)
@@ -6618,7 +6726,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
     try {
       if (project.initializationNeeded) return c.json({ error: 'not initialized' }, 400)
       const resultId = c.req.param('resultId')
-      const tasksPath = join(getProjectStateDir(project.path), 'TASKS.json')
+      const tasksPath = projectTasksPath(project.path)
       const tasks = await readTasksFileNormalized(tasksPath)
       const model = await readProjectDeliveryModel(project.path)
       const reverted = revertAppliedContractResult({
@@ -6638,7 +6746,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
   app.get('/api/project/task/:id/relationships', async c => {
     try {
       if (project.initializationNeeded) return c.json({ error: 'not initialized' }, 400)
-      const tasks = await readTasksFileNormalized(join(getProjectStateDir(project.path), 'TASKS.json'))
+      const tasks = await readTasksFileNormalized(projectTasksPath(project.path))
       const model = await readProjectDeliveryModel(project.path)
       return c.json(deriveTaskRelationships({ model, tasks: tasks as Task[], taskId: c.req.param('id') }))
     } catch (err) {
@@ -6649,7 +6757,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
   app.get('/api/project/task/:id/context-packet', async c => {
     try {
       if (project.initializationNeeded) return c.json({ error: 'not initialized' }, 400)
-      const tasks = await readTasksFileNormalized(join(getProjectStateDir(project.path), 'TASKS.json'))
+      const tasks = await readTasksFileNormalized(projectTasksPath(project.path))
       const model = await readProjectDeliveryModel(project.path)
       return c.json(buildTaskContextPacket({ model, tasks: tasks as Task[], taskId: c.req.param('id') }))
     } catch (err) {
@@ -6660,7 +6768,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
   app.get('/api/project/task/:id/evidence', async c => {
     try {
       if (project.initializationNeeded) return c.json({ error: 'not initialized' }, 400)
-      const tasksPath = join(getProjectStateDir(project.path), 'TASKS.json')
+      const tasksPath = projectTasksPath(project.path)
       if (!existsSync(tasksPath)) return c.json({ error: 'no tasks file' }, 404)
       const tasks = await readTasksFileNormalized(tasksPath)
       const id = c.req.param('id')
@@ -6676,7 +6784,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
   app.get('/api/project/task/:id/file', async c => {
     try {
       if (project.initializationNeeded) return c.json({ error: 'not initialized' }, 400)
-      const tasksPath = join(getProjectStateDir(project.path), 'TASKS.json')
+      const tasksPath = projectTasksPath(project.path)
       if (!existsSync(tasksPath)) return c.json({ error: 'no tasks file' }, 404)
       const tasks = await readTasksFileNormalized(tasksPath)
       const id = c.req.param('id')
@@ -6721,7 +6829,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
   app.get('/api/project/task/:id/history', async c => {
     try {
       if (project.initializationNeeded) return c.json({ error: 'not initialized' }, 400)
-      const tasksPath = join(getProjectStateDir(project.path), 'TASKS.json')
+      const tasksPath = projectTasksPath(project.path)
       if (!existsSync(tasksPath)) return c.json({ error: 'no tasks file' }, 404)
       const tasks = await readTasksFileNormalized(tasksPath)
       const id = c.req.param('id')
@@ -6746,7 +6854,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
   app.get('/api/project/task/:id/review', async c => {
     try {
       if (project.initializationNeeded) return c.json({ error: 'not initialized' }, 400)
-      const tasksPath = join(getProjectStateDir(project.path), 'TASKS.json')
+      const tasksPath = projectTasksPath(project.path)
       if (!existsSync(tasksPath)) return c.json({ error: 'no tasks file' }, 404)
       const tasks = await readTasksFileNormalized(tasksPath)
       const id = c.req.param('id')
@@ -6766,7 +6874,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
   app.get('/api/project/task/:id/git-story', async c => {
     try {
       if (project.initializationNeeded) return c.json({ error: 'not initialized' }, 400)
-      const tasksPath = join(getProjectStateDir(project.path), 'TASKS.json')
+      const tasksPath = projectTasksPath(project.path)
       if (!existsSync(tasksPath)) return c.json({ error: 'no tasks file' }, 404)
       const tasks = await readTasksFileNormalized(tasksPath)
       const id = c.req.param('id')
@@ -6800,7 +6908,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
         automationSource?: string
       }
       const memoryDir = getProjectStateDir(project.path)
-      const tasksPath = join(memoryDir, 'TASKS.json')
+      const tasksPath = projectTasksPath(project.path)
       if (!existsSync(tasksPath)) return c.json({ error: 'no tasks file' }, 404)
       const parsed = JSON.parse(readManagedTextFileSync(tasksPath, 'utf8')) as
         | { tasks?: Array<Record<string, unknown>>; version?: number; lastUpdated?: string }
@@ -6913,7 +7021,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
   app.get('/api/project/task/:id/experts', async c => {
     try {
       if (project.initializationNeeded) return c.json({ error: 'not initialized' }, 400)
-      const tasksPath = join(getProjectStateDir(project.path), 'TASKS.json')
+      const tasksPath = projectTasksPath(project.path)
       if (!existsSync(tasksPath)) return c.json({ error: 'no tasks file' }, 404)
       const raw = JSON.parse(readManagedTextFileSync(tasksPath, 'utf8')) as
         | { tasks?: Array<Record<string, unknown>> }
@@ -7038,7 +7146,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
       }
 
       const memoryDir = getProjectStateDir(project.path)
-      const tasksPath = join(memoryDir, 'TASKS.json')
+      const tasksPath = projectTasksPath(project.path)
       const tasks = await readTasksFileNormalized(tasksPath).catch(() => [])
       if (!tasks.some(task => task.id === id)) {
         return c.json({ error: 'task not found' }, 404)
@@ -7280,7 +7388,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
       }
 
       if (action === 'create-split-children') {
-        const tasksPath = join(memoryDir, 'TASKS.json')
+        const tasksPath = projectTasksPath(project.path)
         if (!existsSync(tasksPath)) return c.json({ error: 'no tasks file' }, 404)
         const queue = TaskQueue.parse(JSON.parse(readManagedTextFileSync(tasksPath, 'utf8')))
         const task = queue.tasks.find(t => t.id === id)
@@ -7329,7 +7437,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
       }
 
       if (action === 'approve-brief') {
-        const tasksPath = join(memoryDir, 'TASKS.json')
+        const tasksPath = projectTasksPath(project.path)
         if (!existsSync(tasksPath)) return c.json({ error: 'no tasks file' }, 404)
         const parsed = JSON.parse(readManagedTextFileSync(tasksPath, 'utf8')) as
           | { tasks?: Array<Record<string, unknown>>; version?: number; lastUpdated?: string }
@@ -7408,7 +7516,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
       if (action === 'mark-done') {
         const body = await c.req.json().catch(() => ({})) as { evidence?: string }
         const evidence = (body.evidence ?? '').trim()
-        const tasksPath = join(memoryDir, 'TASKS.json')
+        const tasksPath = projectTasksPath(project.path)
         if (!existsSync(tasksPath)) return c.json({ error: 'no tasks file' }, 404)
         const parsed = JSON.parse(readManagedTextFileSync(tasksPath, 'utf8')) as
           | { tasks?: Array<Record<string, unknown>>; version?: number; lastUpdated?: string }
@@ -7480,7 +7588,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
         const body = await c.req.json().catch(() => ({})) as { description?: string }
         const description = (body.description ?? '').trim()
         if (!description) return c.json({ error: 'description required' }, 400)
-        const tasksPath = join(memoryDir, 'TASKS.json')
+        const tasksPath = projectTasksPath(project.path)
         if (!existsSync(tasksPath)) return c.json({ error: 'no tasks file' }, 404)
         const parsed = JSON.parse(readManagedTextFileSync(tasksPath, 'utf8')) as
           | { tasks?: Array<Record<string, unknown>>; version?: number; lastUpdated?: string }
@@ -7529,7 +7637,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
         if (!successTarget && !acceptanceCriterion && !userJob) {
           return c.json({ error: 'Add a success target or an acceptance criterion.' }, 400)
         }
-        const tasksPath = join(memoryDir, 'TASKS.json')
+        const tasksPath = projectTasksPath(project.path)
         if (!existsSync(tasksPath)) return c.json({ error: 'no tasks file' }, 404)
         const parsed = JSON.parse(readManagedTextFileSync(tasksPath, 'utf8')) as
           | { tasks?: Array<Record<string, unknown>>; version?: number; lastUpdated?: string }
@@ -7602,7 +7710,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
         if (!body.answer || !body.answer.trim()) {
           return c.json({ error: 'Missing answer' }, 400)
         }
-        const tasksPath = join(memoryDir, 'TASKS.json')
+        const tasksPath = projectTasksPath(project.path)
         if (!existsSync(tasksPath)) return c.json({ error: 'no tasks file' }, 404)
         const parsed = JSON.parse(readManagedTextFileSync(tasksPath, 'utf8')) as
           | { tasks?: Array<Record<string, unknown>>; version?: number; lastUpdated?: string }
@@ -7640,7 +7748,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
           answer?: string
         }
         if (!body.questionId) return c.json({ error: 'Missing questionId' }, 400)
-        const tasksPath = join(memoryDir, 'TASKS.json')
+        const tasksPath = projectTasksPath(project.path)
         if (!existsSync(tasksPath)) return c.json({ error: 'no tasks file' }, 404)
         const parsed = JSON.parse(readManagedTextFileSync(tasksPath, 'utf8')) as
           | { tasks?: Array<Record<string, unknown>>; version?: number; lastUpdated?: string }
@@ -7684,7 +7792,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
             return c.json({ error: 'Missing answer in answers[]' }, 400)
           }
         }
-        const tasksPath = join(memoryDir, 'TASKS.json')
+        const tasksPath = projectTasksPath(project.path)
         if (!existsSync(tasksPath)) return c.json({ error: 'no tasks file' }, 404)
         const parsed = JSON.parse(readManagedTextFileSync(tasksPath, 'utf8')) as
           | { tasks?: Array<Record<string, unknown>>; version?: number; lastUpdated?: string }
@@ -7736,8 +7844,8 @@ export function buildServeApp(opts: ServeOptions = {}): {
           return c.json({ error: 'Missing resolution' }, 400)
         }
         const result = await resolveEscalation({
-          tasksPath: join(memoryDir, 'TASKS.json'),
-          progressPath: join(memoryDir, 'PROGRESS.md'),
+          tasksPath: projectTasksPath(project.path),
+          progressPath: getProjectSystemStatePath(project.path, 'PROGRESS.md'),
           taskId: id,
           escalationId: body.escalationId,
           resolution: body.resolution.trim(),
@@ -7749,7 +7857,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
       }
 
       // hold / resume-hold / shelve / unshelve: in-place mutation of TASKS.json.
-      const tasksPath = join(memoryDir, 'TASKS.json')
+      const tasksPath = projectTasksPath(project.path)
       if (!existsSync(tasksPath)) return c.json({ error: 'no tasks file' }, 404)
       const parsed = JSON.parse(readManagedTextFileSync(tasksPath, 'utf8')) as
         | { tasks?: Array<Record<string, unknown>>; version?: number; lastUpdated?: string }
@@ -7835,7 +7943,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
     try {
       if (project.initializationNeeded) return c.json({ running: false, counts: {}, inFlight: [] })
       const run = supervisor.get(project.id)
-      const tasksPath = join(getProjectStateDir(project.path), 'TASKS.json')
+      const tasksPath = projectTasksPath(project.path)
       const empty = { running: run?.status === 'running', counts: {}, inFlight: [] as unknown[] }
       if (!existsSync(tasksPath)) return c.json(empty)
       const raw = JSON.parse(readManagedTextFileSync(tasksPath, 'utf8')) as
@@ -7899,7 +8007,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
   app.get('/api/project/progress', c => {
     try {
       if (project.initializationNeeded) return c.json({ progress: '' })
-      const progressPath = join(getProjectStateDir(project.path), 'PROGRESS.md')
+      const progressPath = getProjectSystemStatePath(project.path, 'PROGRESS.md')
       if (!existsSync(progressPath)) return c.json({ progress: '' })
       const raw = readManagedTextFileSync(progressPath, 'utf8')
       // Heartbeat blocks are routine forward transitions — they duplicate
@@ -8332,7 +8440,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
       }
       if (project.initializationNeeded) return c.json({ initializationNeeded: true, scope: closureScope })
       const memoryDir = getProjectStateDir(project.path)
-      const tasksPath = join(memoryDir, 'TASKS.json')
+      const tasksPath = projectTasksPath(project.path)
       const rawTasks: Array<Record<string, unknown>> = (() => {
         if (!existsSync(tasksPath)) return []
         let raw: { tasks?: Array<Record<string, unknown>> } | Array<Record<string, unknown>>
@@ -8341,7 +8449,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
             | { tasks?: Array<Record<string, unknown>> }
             | Array<Record<string, unknown>>
         } catch {
-          throw new Error('Could not read .guildhall/TASKS.json. Fix the saved task state file, then reload closure checks.')
+          throw new Error('Could not read the saved task state file. Fix project-state/TASKS.json, then reload closure checks.')
         }
         return Array.isArray(raw) ? raw : raw.tasks ?? []
       })()
@@ -9773,6 +9881,8 @@ export async function runServe(opts: ServeOptions = {}): Promise<void> {
       void stopStaleGuildhallProcesses({
         currentPid: process.pid,
         currentBuildMtimeMs: Math.floor(mtime),
+        ...(opts.staleProcessGuard?.listProcesses ? { listProcesses: opts.staleProcessGuard.listProcesses } : {}),
+        ...(opts.staleProcessGuard?.killProcess ? { killProcess: opts.staleProcessGuard.killProcess } : {}),
       }).then(result => {
         if (result.stopped.length > 0) {
           console.log(`[guildhall serve] Stopped ${result.stopped.length} stale Guildhall process${result.stopped.length === 1 ? '' : 'es'}.`)

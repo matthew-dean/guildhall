@@ -4,6 +4,8 @@ import path from 'node:path'
 import { existsSync, readFileSync } from 'node:fs'
 import { z } from 'zod'
 import { guildhallHomeDir } from '@guildhall/config'
+import { projectSkillProposalsPath } from '@guildhall/skills'
+import { getProjectSystemStatePathFromMemoryDir } from '@guildhall/sessions'
 
 export const MemoryStatus = z.enum(['observed', 'proposed', 'active', 'used', 'retired'])
 export type MemoryStatus = z.infer<typeof MemoryStatus>
@@ -82,7 +84,7 @@ export interface MemoryQuery {
 }
 
 export function memoryStorePath(memoryDir: string): string {
-  return path.join(memoryDir, 'memory-store.json')
+  return getProjectSystemStatePathFromMemoryDir(memoryDir, 'memory-store.json')
 }
 
 export async function recordMemoryObservation(input: {
@@ -152,7 +154,7 @@ async function writeStore(memoryDir: string, store: MemoryStore): Promise<void> 
 }
 
 function readMemoryMarkdown(memoryDir: string): MemoryRecord[] {
-  const file = path.join(memoryDir, 'MEMORY.md')
+  const file = getProjectSystemStatePathFromMemoryDir(memoryDir, 'MEMORY.md')
   if (!existsSync(file)) return []
   const raw = readManagedTextFileSync(file, 'utf8')
   const sections = raw.split(/^##\s+/m).slice(1)
@@ -230,7 +232,7 @@ function readLearningAdapters(dir: string, scope: 'project' | 'user_global'): Me
 }
 
 function readProjectSkillAdapters(memoryDir: string): MemoryRecord[] {
-  const file = path.join(memoryDir, 'project-skills.json')
+  const file = projectSkillProposalsPath(memoryDir)
   if (!existsSync(file)) return []
   try {
     const parsed = JSON.parse(readManagedTextFileSync(file, 'utf8')) as {

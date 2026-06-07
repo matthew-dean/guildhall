@@ -13,6 +13,7 @@ import { PermissionChecker, PermissionMode, defaultPermissionSettings } from '..
 import { MaxTurnsExceededError, runQuery } from '../run-query.js'
 import { ToolRegistry, defineTool } from '../tools.js'
 import { ScriptedApiClient } from './fake-client.js'
+import { getProjectSystemStatePath } from '@guildhall/sessions'
 
 import type { ConversationMessage, StreamEvent } from '@guildhall/protocol'
 
@@ -1237,7 +1238,7 @@ describe('runQuery — unknown tool + invalid input', () => {
       expect(completed.is_error).toBe(false)
       expect(completed.output).toBe('updated')
     }
-    expect(observedTasksPath).toBe('/workspace/project/.guildhall/TASKS.json')
+    expect(observedTasksPath).toBe(getProjectSystemStatePath('/workspace/project', 'TASKS.json'))
   })
 
   it('blocks worker-style review handoff without implementation evidence', async () => {
@@ -2641,7 +2642,7 @@ Review proof packet:
         messages,
       ),
     )
-    expect(observedTasksPath).toBe('/workspace/project/.guildhall/TASKS.json')
+    expect(observedTasksPath).toBe(getProjectSystemStatePath('/workspace/project', 'TASKS.json'))
   })
 
   it('replaces invented absolute project paths for task-state tools', async () => {
@@ -2697,8 +2698,8 @@ Review proof packet:
       ),
     )
     const completed = events.find(e => e.type === 'tool_execution_completed')
-    expect(observedTasksPath).toBe('/workspace/project/.guildhall/TASKS.json')
-    expect(completed?.type === 'tool_execution_completed' ? completed.output : '').toBe('/workspace/project/.guildhall/PROGRESS.md')
+    expect(observedTasksPath).toBe(getProjectSystemStatePath('/workspace/project', 'TASKS.json'))
+    expect(completed?.type === 'tool_execution_completed' ? completed.output : '').toBe(getProjectSystemStatePath('/workspace/project', 'PROGRESS.md'))
   })
 
   it('hydrates project memoryDir for checkpoint tools', async () => {
@@ -2757,7 +2758,7 @@ Review proof packet:
       ),
     )
 
-    expect(observedTasksPath).toBe('/workspace/project/.guildhall/TASKS.json')
+    expect(observedTasksPath).toBe(getProjectSystemStatePath('/workspace/project', 'TASKS.json'))
     expect(observedMemoryDir).toContain('/projects/project-')
   })
 
@@ -2825,7 +2826,7 @@ Review proof packet:
       ),
     )
 
-    expect(observedDecisionsPath).toBe('/workspace/project/.guildhall/DECISIONS.md')
+    expect(observedDecisionsPath).toBe(getProjectSystemStatePath('/workspace/project', 'DECISIONS.md'))
     expect(observedEntry).not.toBeNull()
     expect(observedEntry?.['decision']).toBe('Approve mobile real-device testing task as-is')
     expect(observedEntry?.['consequences']).toBe('Worker can continue with testing and fixes.')
@@ -2897,7 +2898,7 @@ Review proof packet:
       ),
     )
 
-    expect(observedProgressPath).toBe('/workspace/project/.guildhall/PROGRESS.md')
+    expect(observedProgressPath).toBe(getProjectSystemStatePath('/workspace/project', 'PROGRESS.md'))
     expect(observedEntry).toMatchObject({
       agentId: 'coordinator-knit',
       taskId: 'task-456',
@@ -2965,8 +2966,8 @@ Review proof packet:
     )
 
     expect(observedInput).toMatchObject({
-      tasksPath: '/workspace/project/.guildhall/TASKS.json',
-      progressPath: '/workspace/project/.guildhall/PROGRESS.md',
+      tasksPath: getProjectSystemStatePath('/workspace/project', 'TASKS.json'),
+      progressPath: getProjectSystemStatePath('/workspace/project', 'PROGRESS.md'),
       taskId: 'task-789',
       agentId: 'coordinator-knit',
       reason: 'decision_required',

@@ -103,7 +103,6 @@ describe('runtime backend setup', () => {
     expect(status.actions.map(action => action.id)).toEqual([
       'initialize-machine',
       'retry-detection',
-      'use-host-run-compatibility',
     ])
     expect(status.actions[0]).toMatchObject({
       mutatesHost: true,
@@ -129,8 +128,46 @@ describe('runtime backend setup', () => {
     expect(status.actions.map(action => action.id)).toEqual([
       'start-machine',
       'retry-detection',
-      'use-host-run-compatibility',
     ])
+  })
+
+  it('does not offer host-run compatibility once Podman is installed', async () => {
+    const status = await detectRuntimeBackendSetup({
+      platform: 'darwin',
+      commandRunner: runnerFor({
+        'which podman': { stdout: '/usr/local/bin/podman\n' },
+        'which brew': { error: new Error('not found') },
+        'podman --version': { stdout: 'podman version 5.6.2\n' },
+        'podman machine list --format json': { stdout: '[]' },
+      }),
+    })
+
+    expect(status.podmanPath).toBe('/usr/local/bin/podman')
+    expect(status.actions.map(action => action.id)).not.toContain('use-host-run-compatibility')
+  })
+
+  it('rejects host-run compatibility when Podman is installed but not ready', async () => {
+    const root = await projectRoot()
+    const result = await runRuntimeBackendSetupAction(root, {
+      action: 'use-host-run-compatibility',
+      platform: 'darwin',
+      commandRunner: runnerFor({
+        'which podman': { stdout: '/usr/local/bin/podman\n' },
+        'which brew': { error: new Error('not found') },
+        'podman --version': { stdout: 'podman version 5.6.2\n' },
+        'podman machine list --format json': { stdout: '[]' },
+      }),
+    })
+
+    expect(result.ok).toBe(false)
+    expect(result.error).toContain('not available when Podman is installed')
+    await expect(readProjectRuntimeState(root)).resolves.toMatchObject({
+      backendSetup: {
+        selectedMode: null,
+        lastAction: 'use-host-run-compatibility',
+        lastResult: 'declined',
+      },
+    })
   })
 
   it('keeps non-macOS hosts in compatibility mode for the 0.9 local release', async () => {

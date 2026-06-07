@@ -16,7 +16,7 @@ import { LivenessTracker } from '../liveness.js'
 import { updateProjectConfig, type ResolvedConfig } from '@guildhall/config'
 import type { Task, TaskQueue, TaskStatus } from '@guildhall/core'
 import {
-  AGENT_SETTINGS_FILENAME,
+  defaultAgentSettingsPath,
   makeDefaultSettings,
   saveLeverSettings,
   type DomainLevers,
@@ -53,6 +53,7 @@ let dataDir: string
 let memoryDir: string
 let tasksPath: string
 let progressPath: string
+let agentSettingsPath: string
 
 beforeEach(async () => {
   tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'forge-orch-test-'))
@@ -63,6 +64,7 @@ beforeEach(async () => {
   await fs.mkdir(memoryDir, { recursive: true })
   tasksPath = path.join(memoryDir, 'TASKS.json')
   progressPath = path.join(memoryDir, 'PROGRESS.md')
+  agentSettingsPath = defaultAgentSettingsPath(tmpDir)
 
   execFileSync('git', ['init', '-b', 'main'], { cwd: tmpDir, stdio: 'ignore' })
   execFileSync('git', ['config', 'user.name', 'Guildhall Test'], {
@@ -88,7 +90,7 @@ beforeEach(async () => {
     setBy: 'user-direct',
   }
   await saveLeverSettings({
-    path: path.join(memoryDir, AGENT_SETTINGS_FILENAME),
+    path: agentSettingsPath,
     settings,
   })
 })
@@ -5986,7 +5988,7 @@ describe('Orchestrator.run — full loops', () => {
       setBy: 'user-direct',
     }
     await saveLeverSettings({
-      path: path.join(memoryDir, AGENT_SETTINGS_FILENAME),
+      path: agentSettingsPath,
       settings,
     })
 
@@ -6082,7 +6084,7 @@ describe('Orchestrator.run — full loops', () => {
       setBy: 'user-direct',
     }
     await saveLeverSettings({
-      path: path.join(memoryDir, AGENT_SETTINGS_FILENAME),
+      path: agentSettingsPath,
       settings,
     })
 
@@ -6136,7 +6138,7 @@ describe('Orchestrator.run — full loops', () => {
       setBy: 'user-direct',
     }
     await saveLeverSettings({
-      path: path.join(memoryDir, AGENT_SETTINGS_FILENAME),
+      path: agentSettingsPath,
       settings,
     })
 
@@ -6194,7 +6196,7 @@ describe('Orchestrator.run — full loops', () => {
       setBy: 'user-direct',
     }
     await saveLeverSettings({
-      path: path.join(memoryDir, AGENT_SETTINGS_FILENAME),
+      path: agentSettingsPath,
       settings,
     })
 
@@ -6893,7 +6895,7 @@ describe('Orchestrator.run — full loops', () => {
       setBy: 'user-direct',
     }
     await saveLeverSettings({
-      path: path.join(memoryDir, AGENT_SETTINGS_FILENAME),
+      path: agentSettingsPath,
       settings,
     })
 
@@ -7587,7 +7589,7 @@ describe('Orchestrator.run — full loops', () => {
       setBy: 'user-direct',
     }
     await saveLeverSettings({
-      path: path.join(memoryDir, AGENT_SETTINGS_FILENAME),
+      path: agentSettingsPath,
       settings,
     })
 
@@ -7649,7 +7651,7 @@ describe('Orchestrator.run — full loops', () => {
       setBy: 'user-direct',
     }
     await saveLeverSettings({
-      path: path.join(memoryDir, AGENT_SETTINGS_FILENAME),
+      path: agentSettingsPath,
       settings,
     })
 
@@ -7736,7 +7738,7 @@ describe('Orchestrator.run — full loops', () => {
       setBy: 'user-direct',
     }
     await saveLeverSettings({
-      path: path.join(memoryDir, AGENT_SETTINGS_FILENAME),
+      path: agentSettingsPath,
       settings,
     })
 
@@ -7807,7 +7809,7 @@ describe('Orchestrator.run — full loops', () => {
       setBy: 'user-direct',
     }
     await saveLeverSettings({
-      path: path.join(memoryDir, AGENT_SETTINGS_FILENAME),
+      path: agentSettingsPath,
       settings,
     })
 
@@ -7863,7 +7865,7 @@ describe('Orchestrator.run — full loops', () => {
       setBy: 'user-direct',
     }
     await saveLeverSettings({
-      path: path.join(memoryDir, AGENT_SETTINGS_FILENAME),
+      path: agentSettingsPath,
       settings,
     })
 
@@ -7960,7 +7962,7 @@ describe('Orchestrator.run — full loops', () => {
       setBy: 'user-direct',
     }
     await saveLeverSettings({
-      path: path.join(memoryDir, AGENT_SETTINGS_FILENAME),
+      path: agentSettingsPath,
       settings,
     })
 
@@ -8058,7 +8060,7 @@ describe('Orchestrator.run — full loops', () => {
       setBy: 'user-direct',
     }
     await saveLeverSettings({
-      path: path.join(memoryDir, AGENT_SETTINGS_FILENAME),
+      path: agentSettingsPath,
       settings,
     })
 
@@ -8809,7 +8811,7 @@ describe('Orchestrator.run — full loops', () => {
       setBy: 'user-direct',
     }
     await saveLeverSettings({
-      path: path.join(memoryDir, AGENT_SETTINGS_FILENAME),
+      path: agentSettingsPath,
       settings,
     })
     updateProjectConfig(tmpDir, {
@@ -9478,7 +9480,7 @@ describe('Orchestrator.tick — FR-21 proposal promotion', () => {
       setBy: 'user-direct',
     }
     await saveLeverSettings({
-      path: path.join(memoryDir, AGENT_SETTINGS_FILENAME),
+      path: agentSettingsPath,
       settings,
     })
   }
@@ -9559,7 +9561,7 @@ describe('Orchestrator.tick — FR-21 proposal promotion', () => {
     // Default task_origination is `agent_proposed_coordinator_approved`.
     // Remove the seeded test settings so the orchestrator exercises first-read
     // materialization against true missing-file state.
-    await fs.rm(path.join(memoryDir, AGENT_SETTINGS_FILENAME), { force: true })
+    await fs.rm(agentSettingsPath, { force: true })
     await writeQueue([proposal()])
     const orch = new Orchestrator({ config: baseConfig(), agents: agentSet() })
     const out = await orch.tick()
@@ -9569,7 +9571,7 @@ describe('Orchestrator.tick — FR-21 proposal promotion', () => {
     }
     // Defaults file was materialized for future ticks.
     const seeded = await fs.readFile(
-      path.join(memoryDir, AGENT_SETTINGS_FILENAME),
+      agentSettingsPath,
       'utf-8',
     )
     expect(seeded).toContain('task_origination')
@@ -9594,7 +9596,7 @@ describe('Orchestrator.tick — FR-21 proposal promotion', () => {
       },
     }
     await saveLeverSettings({
-      path: path.join(memoryDir, AGENT_SETTINGS_FILENAME),
+      path: agentSettingsPath,
       settings,
     })
     await writeQueue([proposal({ domain: 'looma' })])
@@ -9707,7 +9709,7 @@ describe('Orchestrator.tick — FR-22 pre-rejection policy', () => {
       setBy: 'user-direct',
     }
     await saveLeverSettings({
-      path: path.join(memoryDir, AGENT_SETTINGS_FILENAME),
+      path: agentSettingsPath,
       settings,
     })
   }
@@ -9954,7 +9956,7 @@ describe('Orchestrator.tick — FR-22 pre-rejection policy', () => {
     // path — a malformed agent-settings.yaml should produce an agent-error
     // rather than silently falling through to idle.
     await fs.writeFile(
-      path.join(memoryDir, AGENT_SETTINGS_FILENAME),
+      agentSettingsPath,
       'not: [valid: yaml',
       'utf-8',
     )
@@ -10190,7 +10192,7 @@ describe('Orchestrator — FR-30 liveness tracking', () => {
       setBy: 'user-direct',
     }
     await saveLeverSettings({
-      path: path.join(memoryDir, AGENT_SETTINGS_FILENAME),
+      path: agentSettingsPath,
       settings,
     })
     await writeQueue([
@@ -10235,7 +10237,7 @@ describe('Orchestrator — FR-30 liveness tracking', () => {
       setBy: 'user-direct',
     }
     await saveLeverSettings({
-      path: path.join(memoryDir, AGENT_SETTINGS_FILENAME),
+      path: agentSettingsPath,
       settings,
     })
     const orch = new Orchestrator({ config: baseConfig(), agents: agentSet() })
@@ -10252,7 +10254,7 @@ describe('Orchestrator — FR-30 liveness tracking', () => {
   })
 
   it('refreshLivenessStrictness falls back to standard on missing lever file', async () => {
-    await fs.rm(path.join(memoryDir, AGENT_SETTINGS_FILENAME), { force: true })
+    await fs.rm(agentSettingsPath, { force: true })
     const orch = new Orchestrator({ config: baseConfig(), agents: agentSet() })
     // Refresh should not throw and should leave the tracker in a usable state
     // even when the settings file is truly absent.
@@ -10434,7 +10436,7 @@ describe('Orchestrator — FR-32 remediation wiring', () => {
   async function seedSettings(): Promise<void> {
     const settings = makeDefaultSettings(new Date('2026-04-20T00:00:00Z'))
     await saveLeverSettings({
-      path: path.join(memoryDir, AGENT_SETTINGS_FILENAME),
+      path: agentSettingsPath,
       settings,
     })
   }
@@ -10525,7 +10527,7 @@ describe('Orchestrator — FR-32 remediation wiring', () => {
       setBy: 'user-direct',
     }
     await saveLeverSettings({
-      path: path.join(memoryDir, AGENT_SETTINGS_FILENAME),
+      path: agentSettingsPath,
       settings,
     })
 
@@ -10595,7 +10597,7 @@ describe('Orchestrator — FR-32 remediation wiring', () => {
       setBy: 'user-direct',
     }
     await saveLeverSettings({
-      path: path.join(memoryDir, AGENT_SETTINGS_FILENAME),
+      path: agentSettingsPath,
       settings,
     })
 
@@ -11076,7 +11078,7 @@ describe('Orchestrator — FR-24 slot allocation / runtime isolation', () => {
       }
     }
     await saveLeverSettings({
-      path: path.join(memoryDir, AGENT_SETTINGS_FILENAME),
+      path: agentSettingsPath,
       settings,
     })
   }
@@ -11107,7 +11109,7 @@ describe('Orchestrator — FR-24 slot allocation / runtime isolation', () => {
   })
 
   it('falls back to null when agent-settings.yaml is missing', async () => {
-    await fs.rm(path.join(memoryDir, AGENT_SETTINGS_FILENAME), { force: true })
+    await fs.rm(agentSettingsPath, { force: true })
     const orch = new Orchestrator({ config: baseConfig(), agents: agentSet() })
     const allocator = await orch.ensureSlotAllocator()
     expect(allocator).toBeNull()
@@ -11299,7 +11301,7 @@ describe('Orchestrator.tick \u2014 AC-18 reviewer_mode dispatch', () => {
       setBy: 'user-direct',
     }
     await saveLeverSettings({
-      path: path.join(memoryDir, AGENT_SETTINGS_FILENAME),
+      path: agentSettingsPath,
       settings,
     })
   }

@@ -1,6 +1,7 @@
 import fsp from 'node:fs/promises'
 import path from 'node:path'
 import { z } from 'zod'
+import { getProjectSystemStatePathFromMemoryDir } from '@guildhall/sessions'
 
 export const EXTERNAL_AGENT_LINKS_FILE = 'external-agent-links.json'
 
@@ -37,7 +38,7 @@ export const ExternalAgentLinksStore = z.object({
 export type ExternalAgentLinksStore = z.infer<typeof ExternalAgentLinksStore>
 
 export async function readExternalAgentLinksStore(memoryDir: string): Promise<ExternalAgentLinksStore> {
-  const file = path.join(memoryDir, EXTERNAL_AGENT_LINKS_FILE)
+  const file = getProjectSystemStatePathFromMemoryDir(memoryDir, EXTERNAL_AGENT_LINKS_FILE)
   try {
     return ExternalAgentLinksStore.parse(JSON.parse(await fsp.readFile(file, 'utf-8')))
   } catch {
@@ -101,8 +102,8 @@ export async function updateExternalAgentLinkStatus(input: {
 }
 
 async function writeExternalAgentLinksStore(memoryDir: string, store: ExternalAgentLinksStore): Promise<void> {
-  await fsp.mkdir(memoryDir, { recursive: true })
-  const file = path.join(memoryDir, EXTERNAL_AGENT_LINKS_FILE)
+  const file = getProjectSystemStatePathFromMemoryDir(memoryDir, EXTERNAL_AGENT_LINKS_FILE)
+  await fsp.mkdir(path.dirname(file), { recursive: true })
   const tmp = `${file}.tmp`
   await fsp.writeFile(tmp, `${JSON.stringify(ExternalAgentLinksStore.parse(store), null, 2)}\n`, 'utf-8')
   await fsp.rename(tmp, file)

@@ -4,6 +4,7 @@ import path from 'node:path'
 import os from 'node:os'
 import { bootstrapWorkspace } from '@guildhall/config'
 import { TaskQueue } from '@guildhall/core'
+import { getProjectSystemStatePath } from '@guildhall/sessions'
 import {
   createWorkspaceImportTask,
   workspaceNeedsImport,
@@ -13,6 +14,7 @@ import {
   formatDetectedDraftAsSpec,
   WORKSPACE_IMPORT_TASK_ID,
   WORKSPACE_IMPORT_DOMAIN,
+  workspaceImportTasksPath,
 } from '../workspace-importer.js'
 import { pickNextTask } from '../orchestrator-picker.js'
 import { detectWorkspaceSignals } from '../workspace-import/index.js'
@@ -39,7 +41,7 @@ afterEach(async () => {
 })
 
 async function readQueue(): Promise<TaskQueue> {
-  const raw = await fs.readFile(path.join(memoryDir, 'TASKS.json'), 'utf-8')
+  const raw = await fs.readFile(workspaceImportTasksPath(memoryDir), 'utf-8')
   const parsed = JSON.parse(raw)
   if (Array.isArray(parsed)) {
     return { version: 1, lastUpdated: new Date().toISOString(), tasks: parsed }
@@ -204,10 +206,7 @@ describe('workspaceNeedsImport', () => {
       createdAt: now,
       updatedAt: now,
     })
-    await fs.writeFile(
-      path.join(memoryDir, 'TASKS.json'),
-      JSON.stringify(q, null, 2),
-    )
+    await fs.writeFile(workspaceImportTasksPath(memoryDir), JSON.stringify(q, null, 2))
     const res = await workspaceNeedsImport({
       memoryDir,
       projectPath: tmpDir,
@@ -360,10 +359,7 @@ describe('approveWorkspaceImport', () => {
     const q = await readQueue()
     const task = q.tasks.find((t) => t.id === WORKSPACE_IMPORT_TASK_ID)!
     task.spec = spec
-    await fs.writeFile(
-      path.join(memoryDir, 'TASKS.json'),
-      JSON.stringify(q, null, 2),
-    )
+    await fs.writeFile(workspaceImportTasksPath(memoryDir), JSON.stringify(q, null, 2))
   }
 
   it('errors when the importer task is missing', async () => {
@@ -480,20 +476,14 @@ milestones:
       },
     })
 
-    const goalsRaw = await fs.readFile(
-      path.join(memoryDir, 'workspace-goals.json'),
-      'utf-8',
-    )
+    const goalsRaw = await fs.readFile(getProjectSystemStatePath(tmpDir, 'workspace-goals.json'), 'utf-8')
     const goals = JSON.parse(goalsRaw)
     expect(goals.goals[0]).toMatchObject({
       id: 'g1',
       title: 'Ship orchestrator',
     })
 
-    const progress = await fs.readFile(
-      path.join(memoryDir, 'PROGRESS.md'),
-      'utf-8',
-    )
+    const progress = await fs.readFile(getProjectSystemStatePath(tmpDir, 'PROGRESS.md'), 'utf-8')
     expect(progress).toContain('Ship v0.1.0')
     expect(progress).toContain('abc12345')
     expect(progress).toContain('MILESTONE')
@@ -698,11 +688,7 @@ tasks:
       yamlMilestoneBlock,
       '```',
     ].join('\n')
-    await fs.writeFile(
-      path.join(memoryDir, 'TASKS.json'),
-      JSON.stringify(qAfterSeed, null, 2),
-      'utf-8',
-    )
+    await fs.writeFile(workspaceImportTasksPath(memoryDir), JSON.stringify(qAfterSeed, null, 2), 'utf-8')
 
     // Approve → tasks merged, goals persisted, milestones logged.
     const approved = await approveWorkspaceImport({ memoryDir, projectPath: tmpDir })
@@ -728,18 +714,12 @@ tasks:
     }
 
     // workspace-goals.json persisted with every goal.
-    const goalsRaw = await fs.readFile(
-      path.join(memoryDir, 'workspace-goals.json'),
-      'utf-8',
-    )
+    const goalsRaw = await fs.readFile(getProjectSystemStatePath(tmpDir, 'workspace-goals.json'), 'utf-8')
     const goalsPersisted = JSON.parse(goalsRaw)
     expect(goalsPersisted.goals).toHaveLength(seeded.draft.goals.length)
 
     // PROGRESS.md logs every completed milestone (e.g. "Initial scaffold").
-    const progress = await fs.readFile(
-      path.join(memoryDir, 'PROGRESS.md'),
-      'utf-8',
-    )
+    const progress = await fs.readFile(getProjectSystemStatePath(tmpDir, 'PROGRESS.md'), 'utf-8')
     for (const m of seeded.draft.milestones) {
       expect(progress).toContain(m.title)
     }

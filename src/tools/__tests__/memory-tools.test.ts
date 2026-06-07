@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest'
 import fs from 'node:fs/promises'
 import path from 'node:path'
 import os from 'node:os'
-import { getProjectProgressHeartbeatsPath } from '@guildhall/sessions'
+import { getProjectProgressHeartbeatsPath, getProjectSystemStatePath } from '@guildhall/sessions'
 import {
   logProgress,
   logDecision,
@@ -74,7 +74,7 @@ describe('logProgress', () => {
       })
       const content = type === 'heartbeat'
         ? await fs.readFile(getProjectProgressHeartbeatsPath(tmpDir), 'utf-8')
-        : await fs.readFile(p, 'utf-8')
+        : await fs.readFile(getProjectSystemStatePath(tmpDir, 'PROGRESS.md'), 'utf-8')
       expect(content).toContain(emoji)
     }
   })

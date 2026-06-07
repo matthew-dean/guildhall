@@ -18,15 +18,18 @@ const dataLayerModules = new Set([
   'src/persistence/file-backed.ts',
   'src/persistence/json-files.ts',
   'src/persistence/managed-files.ts',
+  'src/runtime/migrations.ts',
+  'src/runtime/project-state-compaction.ts',
+  'src/runtime/thin-project-state-manifest.ts',
   'src/sessions/atomic.ts',
   'src/sessions/local-history.ts',
   'src/sessions/storage.ts',
   'src/sessions/task-state-store.ts',
 ])
 
-const ioPattern = /\b(?:fs|fsp)?\.?(?:readFile|readFileSync|writeFile|writeFileSync|appendFile|appendFileSync|createReadStream|createWriteStream)\b|\batomicWriteText\s*\(/g
-const managedPathPattern = /getProjectStateDir|getProjectLocalHistoryDir|getProjectTaskLocalHistoryDir|getProjectRuntime|getDataDir|\.guildhall|guildhall-persistence/
-const managedVariablePattern = /\b(memoryDir|projectStateDir|localHistoryDir|tasksPath|decisionsPath|progressPath|ledgerPath|sessionFile|stateDir|projectGraphRegistryDir|structuralMapDir)\b/
+const ioPattern = /\b(?:fs|fsp)?\.?(?:readFile|readFileSync|writeFile|writeFileSync|appendFile|appendFileSync|createReadStream|createWriteStream)\b|\b(?:atomicWriteText|readManagedTextFile|readManagedTextFileSync|writeManagedTextFile|writeManagedTextFileSync|appendManagedTextFile)\s*\(/g
+const forbiddenManagedPathPattern = /getProjectStateDir|getProjectLocalHistoryDir|getProjectTaskLocalHistoryDir|getProjectRuntime|getDataDir|\.guildhall|guildhall-persistence|\bpath\.join\s*\(\s*(?:memoryDir|projectStateDir|localHistoryDir|stateDir)/
+const allowedStorageBoundaryPattern = /getProjectSystemStatePath|getProjectSystemStatePathFromMemoryDir|getLegacyProjectStatePath|getProjectRuntimeDevServersPath|getProjectTaskReviewPacketPath|projectTasksPath|projectBriefPath|workspaceImportTasksPath|projectLearningPath|projectSkillProposalsPath/
 
 export function analyzeDataLayerGuardrails(input = {}) {
   const root = input.repoRoot ? resolve(input.repoRoot) : repoRoot
@@ -47,7 +50,7 @@ export function analyzeDataLayerGuardrails(input = {}) {
       ioPattern.lastIndex = 0
       if (!ioPattern.test(line)) continue
       const window = lines.slice(Math.max(0, index - 2), Math.min(lines.length, index + 3)).join('\n')
-      if (managedPathPattern.test(window) || managedVariablePattern.test(line)) {
+      if (forbiddenManagedPathPattern.test(window) && !allowedStorageBoundaryPattern.test(window)) {
         offenders.push(`${rel}:${index + 1}`)
       }
     }

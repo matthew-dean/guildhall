@@ -1,4 +1,5 @@
 import { execFile } from 'node:child_process'
+import { setTimeout as delay } from 'node:timers/promises'
 import { promisify } from 'node:util'
 
 const execFileAsync = promisify(execFile)
@@ -20,7 +21,9 @@ export interface StaleGuildhallProcessOptions {
 
 export interface StopStaleGuildhallProcessOptions extends StaleGuildhallProcessOptions {
   listProcesses?: () => Promise<GuildhallProcessInfo[]>
-  killProcess?: (pid: number) => void
+  killProcess?: (pid: number, signal?: NodeJS.Signals) => void
+  isProcessAlive?: (pid: number) => boolean
+  forceAfterMs?: number
 }
 
 function parsePsLine(line: string): GuildhallProcessInfo | null {
@@ -72,13 +75,33 @@ export async function stopStaleGuildhallProcesses(
   options: StopStaleGuildhallProcessOptions,
 ): Promise<{ stopped: GuildhallProcessInfo[] }> {
   const listProcesses = options.listProcesses ?? listGuildhallProcesses
-  const killProcess = options.killProcess ?? ((pid: number) => process.kill(pid, 'TERM'))
+  const killProcess = options.killProcess ?? ((pid: number, signal: NodeJS.Signals = 'SIGTERM') => process.kill(pid, signal))
+  const isProcessAlive = options.isProcessAlive ?? ((pid: number) => {
+    try {
+      process.kill(pid, 0)
+      return true
+    } catch {
+      return false
+    }
+  })
   const stale = findStaleGuildhallProcesses(await listProcesses(), options)
   for (const candidate of stale) {
     try {
-      killProcess(candidate.pid)
+      killProcess(candidate.pid, 'SIGTERM')
     } catch {
       // Best-effort guardrail. Reporting still includes the stale process.
+    }
+  }
+  if (stale.length > 0) {
+    await delay(options.forceAfterMs ?? 150)
+    for (const candidate of stale) {
+      try {
+        if (isProcessAlive(candidate.pid)) {
+          killProcess(candidate.pid, 'SIGKILL')
+        }
+      } catch {
+        // Best-effort guardrail. Reporting still includes the stale process.
+      }
     }
   }
   return { stopped: stale }

@@ -1,5 +1,5 @@
 /**
- * Read / write `.guildhall/agent-settings.yaml`.
+ * Read / write system-local `agent-settings.yaml`.
  *
  * The file is the single source of truth for lever positions. On first read,
  * if the file is missing, we seed it with `makeDefaultSettings()` and write

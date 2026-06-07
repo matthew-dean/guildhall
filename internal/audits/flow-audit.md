@@ -388,6 +388,38 @@ coverage.
   durable-progress escalation. The child stayed `exploring` with no open
   escalation, and the run stopped on a new external provider blocker:
   DeepInfra HTTP 429 `engine_overloaded`, surfaced as `provider_backoff`.
+  2026-06-06 storage/live-proof follow-up:
+  - [x] Fixed recovery from an existing selected-task worktree. The git driver
+    now adopts an existing worktree path when it is already checked out to the
+    expected task branch, and targeted start no longer treats a recoverable
+    `worktree already exists` blocker as an all-terminal project state.
+  - [x] Fixed the repo-local `log-progress` leak exposed during the
+    `ContextMenu` worker run. Tool hydration for task/progress/decision tools
+    now routes `TASKS.json`, `PROGRESS.md`, and `DECISIONS.md` through
+    system-local project state, and `logProgress` ignores stale repo-local
+    progress paths for non-heartbeat writes. The leaked Looma + Knit
+    `.guildhall/PROGRESS.md` milestone was preserved in
+    `/Users/matthew/.guildhall/data/projects/looma-knit-0c328d88ca44/project-state/PROGRESS.md`
+    and removed from the repo.
+  - [x] Fully audited and removed active ad-hoc Guildhall data reads/writes for
+    current project state. Owner-input, bounded-chat, task/progress/decision,
+    learning, project-skill, structural-map, design-feedback,
+    external-agent-link, memory-store, workspace-import, reintake, automation,
+    and review paths now resolve through system-local storage helpers instead
+    of manufacturing repo-local `.guildhall/*` paths. The data-layer guardrail
+    now covers managed read/write wrappers as well as raw fs reads/writes and
+    fails feature code that constructs managed storage paths directly; legacy
+    migration/cleanup modules remain explicitly storage-owned. Proof on
+    2026-06-07: `node scripts/data-layer-guardrails.mjs src` exited `0`;
+    focused owner-input/storage route tests passed; `pnpm build`,
+    `pnpm lint:contracts`, and `git diff --check` passed; Looma + Knit
+    `.guildhall` file/status checks returned no files or dirty state.
+  - [x] Live proof after build/local restart: `/api/stale-server` returned
+    `stale:false` with no `staleProcesses`, and
+    `find /Users/matthew/git/oss/looma-knit/.guildhall -maxdepth 3 -type f`
+    returned no files. Remaining delivery gap: the selected ContextMenu work
+    has not completed through the UI; the previous run stalled with an active
+    provider request, and stopping the run left the task `in_progress`.
 - [x] Repair Looma + Knit Work and Thread queue semantics for spec-lane tasks.
   Live proof on 2026-06-04/05 showed `/api/project?projectId=looma-knit`
   had `39` tasks (`28` `exploring`, `10` `spec_review`, `1` `blocked`) and
@@ -530,7 +562,11 @@ coverage.
   Stale Guildhall process detection now parses sibling packaged Guildhall
   processes, reports stale siblings through `/api/stale-server`, and service
   startup terminates stale Guildhall processes started before the current
-  installed build mtime.
+  installed build mtime. 2026-06-06 hardening: stale-server now runs the same
+  cleanup before reporting freshness, the guard escalates from `TERM` to
+  `KILL` after a short grace period for stale siblings that survive shutdown,
+  and live proof removed the stale `mcp serve .` processes without recreating
+  Looma + Knit repo-local `.guildhall` files.
   Treat this as a writer-boundary, memory/context, and cleanup blocker, not a
   one-time compaction chore.
   2026-06-06 implementation slice:
@@ -7869,6 +7905,88 @@ local 0.7 release-candidate build at `http://localhost:7777/projects/narrative-h
     Focused runtime/API/MCP/UI tests and typecheck passed. A local Podman proof
     mounted a disposable folder read-only and verified the runtime user could
     read it but could not write to it.
+  - [x] 2026-06-06 Podman runtime isolation hardening. Guildhall no longer
+    treats the host `~/.guildhall` as the container Guildhall home. Default and
+    normalized runtime state now point `/home/guildhall/.guildhall` at a
+    per-project empty runtime home under local history
+    `runtime/container-home`, while authoritative Guildhall data remains
+    host-managed through the storage/runtime APIs. Podman backend creation also
+    normalizes legacy runtime state before building volume args, so a persisted
+    old `~/.guildhall` mount cannot leak into a new container. New containers
+    also overlay project-local `.guildhall` with tmpfs so the checkout mount
+    does not expose authoritative project state directly.
+
+    Contract Touch Decision:
+    - Work id: `codex:2026-06-06-podman-container-home-isolation`.
+    - Touched contracts: `ProjectRuntimeMountState.guildhallHome`, Podman
+      baseline volume contract, runtime container home semantics, runtime-agent
+      project API scope header behavior, runtime backend setup fallback policy.
+    - Contracts considered but not touched: capability-grant mount contract,
+      runtime command API request/response contract, durable project data
+      schemas, runtime image `/home/guildhall/.guildhall` in-container path.
+    - Required follow-up: decide whether container-local Guildhall home should
+      stay writable scratch or become read-only once runtime tools stop writing
+      there; replace the header-only runtime-agent scope marker with a minted
+      per-project runtime credential before treating it as an authentication
+      boundary.
+    - Proof required: focused runtime-store and Podman backend tests must prove
+      the host `~/.guildhall` is not mounted and legacy state is normalized;
+      contract tests must prove project-local `.guildhall` is hidden, grants
+      are explicit/revocable, host-managed data reads/writes still work,
+      runtime-agent API calls cannot cross projects, service/global APIs reject
+      runtime-agent callers, denied calls leave security evidence, and host-run
+      fallback is unavailable once Podman is installed.
+    - Proof provided: focused tests added for isolated container home path,
+      Podman volume args, directory creation, legacy-state sanitization,
+      tmpfs overlay of checkout `.guildhall`, grant-only external mounts,
+      host-managed runtime state/evidence persistence, runtime-agent scoped API
+      rejection/allowance, security evidence JSONL, and Podman-installed
+      host-run fallback rejection. Focused command:
+      `pnpm vitest run src/runtime/__tests__/project-runtime-isolation-contract.test.ts src/runtime/__tests__/podman-project-runtime-backend.test.ts src/runtime/__tests__/runtime-backend-setup.test.ts`
+      passed with 32 executable tests and 11 explicit TODO tests.
+    - Waivers: no live Podman smoke in this turn; local Podman is installed,
+      but the machine/socket was not reachable, and starting the user's Podman
+      machine is a host mutation that needs explicit approval.
+    - Owner-review items: confirm no agent should read/write authoritative
+      Guildhall state from inside the container except through host-managed
+      APIs/tools; decide whether runtime-agent service access should be
+      credential-gated or network-denied by default.
+    - Apply/revert behavior: reverting restores the previous host-home mount
+      and host-run compatibility escape hatch, and removes runtime-agent
+      cross-project API rejection.
+
+    Schema Migration Decision:
+    - Persisted schema touched: project runtime state `mounts.guildhallHome`
+      and `migration.mountLayout.guildhallHome`.
+    - Scope: compatibility normalization for existing saved runtime state.
+    - Change class: backward-compatible runtime-state normalization.
+    - Existing data impact: old records that point at host `~/.guildhall` are
+      normalized on read/write and before Podman create.
+    - Migration id: not required; normalization is deterministic and local to
+      runtime state.
+    - Safety: narrows container host access; does not remove authoritative host
+      data.
+    - Required before run: yes, applied in `PodmanProjectRuntimeBackend.create`.
+    - Compatibility reader: `normalizeProjectRuntimeState`.
+    - Fixtures/tests: focused runtime-store, Podman backend, runtime setup, and
+      isolation contract regression tests.
+    - Owner-facing plan text: Podman-backed project work gets an isolated
+      container Guildhall home, not the user's real `~/.guildhall`.
+    - Rollback/revert behavior: runtime state can be regenerated, but reverting
+      the code restores the unsafe mount contract.
+    - Remaining proof gap: the executable tests prove command construction,
+      storage boundaries, fallback policy, and header-scoped API behavior. They
+      do not yet prove live kernel/container enforcement because the local
+      Podman machine/socket was unavailable, and they do not prove credential
+      lifecycle security because runtime-agent credentials are not minted yet.
+    - Remaining test debt: `src/runtime/__tests__/project-runtime-isolation-contract.test.ts`
+      keeps 11 TODO tests covering defined-agent Podman execution, live
+      sibling-project filesystem denial, sibling local-history denial,
+      host/private-data denial, direct authoritative-state write denial,
+      live read-only grant write denial, scoped cross-project graph redaction,
+      service reachability without credentials, credential expiry/revocation,
+      project dev-server cross-fetch denial, and browser-proof/dev-server port
+      exposure limits.
   - [x] Milestone 9 now has the central persistence boundary in front of the
     new runtime evidence surfaces. `GuildhallPersistence` covers typed records,
     append-only events, artifact refs, placement scopes, visibility and commit

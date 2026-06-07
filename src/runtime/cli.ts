@@ -60,7 +60,7 @@ import {
 } from '@guildhall/config'
 import { exec, spawn } from 'node:child_process'
 import { platform } from 'node:os'
-import { buildSemanticIndexPrompt, refreshCodebaseMap, type CorpusSemanticIndexer } from '@guildhall/corpus-map'
+import { buildSemanticIndexPrompt, codebaseMapPath, refreshCodebaseMap, type CorpusSemanticIndexer } from '@guildhall/corpus-map'
 import { OpenAICompatibleClient } from '@guildhall/providers'
 import { getProjectStateDir } from '@guildhall/sessions'
 import { FileBackedGuildhallPersistence } from '@guildhall/persistence'
@@ -957,7 +957,7 @@ async function cmdCorpusMap() {
   if (result.map.semantic) {
     console.log(`[guildhall] Semantic: ${result.map.semantic.corpusKind} via ${result.map.semantic.modelId}`)
   }
-  console.log(`[guildhall] Written: ${join(getProjectStateDir(projectPath), 'codebase-map.yaml')}`)
+  console.log(`[guildhall] Written: ${codebaseMapPath(getProjectStateDir(projectPath))}`)
 }
 
 async function cmdMemory() {

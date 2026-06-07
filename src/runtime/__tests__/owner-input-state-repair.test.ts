@@ -2,6 +2,7 @@ import { mkdir, mkdtemp, readFile, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { describe, expect, it } from 'vitest'
+import { getProjectSystemStateDir, getProjectSystemStatePath } from '@guildhall/sessions'
 import { createOwnerInputRequest, listOwnerInputRequests } from '../owner-input-store.js'
 import { listBoundedChatSessions } from '../bounded-chat.js'
 import { repairOwnerInputState } from '../owner-input-state-repair.js'
@@ -47,7 +48,7 @@ describe('repairOwnerInputState', () => {
         receipts: [expect.objectContaining({ event: 'cancel_invalid', to: 'cancelled' })],
       }),
     ])
-    expect(listBoundedChatSessions(path.join(root, '.guildhall'))).toEqual([
+    expect(listBoundedChatSessions(getProjectSystemStateDir(root))).toEqual([
       expect.objectContaining({
         id: created.session.id,
         status: 'cancelled',
@@ -128,14 +129,14 @@ async function createPlanningNoteQuestion(root: string, questionId: string) {
 }
 
 async function rewriteOwnerInputPrompt(root: string, requestId: string, patch: { prompt: string; choices?: string[] }): Promise<void> {
-  const requestFile = path.join(root, '.guildhall', 'owner-input', `${requestId}.json`)
+  const requestFile = getProjectSystemStatePath(root, path.join('owner-input', `${requestId}.json`))
   const request = JSON.parse(await readFile(requestFile, 'utf8'))
   request.prompt = patch.prompt
   if (patch.choices === undefined) delete request.choices
   else request.choices = patch.choices
   await writeFile(requestFile, `${JSON.stringify(request, null, 2)}\n`, 'utf8')
 
-  const sessionFile = path.join(root, '.guildhall', 'bounded-chat', `${request.boundedChatSessionId}.json`)
+  const sessionFile = getProjectSystemStatePath(root, path.join('bounded-chat', `${request.boundedChatSessionId}.json`))
   const session = JSON.parse(await readFile(sessionFile, 'utf8'))
   session.subObjectives[0].prompt = patch.prompt
   if (patch.choices === undefined) delete session.subObjectives[0].choices
@@ -145,8 +146,9 @@ async function rewriteOwnerInputPrompt(root: string, requestId: string, patch: {
 
 async function projectWithTasks(tasks: unknown[]): Promise<string> {
   const root = await mkdtemp(path.join(tmpdir(), 'guildhall-owner-repair-'))
-  await mkdir(path.join(root, '.guildhall'), { recursive: true })
-  await writeFile(path.join(root, '.guildhall', 'TASKS.json'), JSON.stringify({
+  const tasksPath = getProjectSystemStatePath(root, 'TASKS.json')
+  await mkdir(path.dirname(tasksPath), { recursive: true })
+  await writeFile(tasksPath, JSON.stringify({
     version: 1,
     lastUpdated: now,
     tasks,
@@ -169,5 +171,5 @@ function task(id: string, title: string): Record<string, unknown> {
 }
 
 async function readQueue(root: string): Promise<{ tasks: Array<{ notes?: unknown[] }> }> {
-  return JSON.parse(await readFile(path.join(root, '.guildhall', 'TASKS.json'), 'utf8'))
+  return JSON.parse(await readFile(getProjectSystemStatePath(root, 'TASKS.json'), 'utf8'))
 }

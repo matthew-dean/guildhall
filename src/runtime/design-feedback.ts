@@ -1,6 +1,7 @@
 import fsp from 'node:fs/promises'
 import path from 'node:path'
 import { z } from 'zod'
+import { getProjectSystemStatePathFromMemoryDir } from '@guildhall/sessions'
 
 export const DESIGN_FEEDBACK_FILE = 'design-feedback.json'
 
@@ -172,7 +173,7 @@ export interface RouteDesignFindingResult {
 }
 
 export async function readDesignFeedbackStore(memoryDir: string): Promise<DesignFeedbackStore> {
-  const file = path.join(memoryDir, DESIGN_FEEDBACK_FILE)
+  const file = getProjectSystemStatePathFromMemoryDir(memoryDir, DESIGN_FEEDBACK_FILE)
   try {
     return DesignFeedbackStore.parse(JSON.parse(await fsp.readFile(file, 'utf-8')))
   } catch {
@@ -429,8 +430,8 @@ function slugTimestamp(value: string): string {
 }
 
 async function writeDesignFeedbackStore(memoryDir: string, store: DesignFeedbackStore): Promise<void> {
-  await fsp.mkdir(memoryDir, { recursive: true })
-  const file = path.join(memoryDir, DESIGN_FEEDBACK_FILE)
+  const file = getProjectSystemStatePathFromMemoryDir(memoryDir, DESIGN_FEEDBACK_FILE)
+  await fsp.mkdir(path.dirname(file), { recursive: true })
   const tmp = `${file}.tmp`
   await fsp.writeFile(tmp, `${JSON.stringify(DesignFeedbackStore.parse(store), null, 2)}\n`, 'utf-8')
   await fsp.rename(tmp, file)

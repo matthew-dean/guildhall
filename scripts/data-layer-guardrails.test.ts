@@ -52,6 +52,29 @@ describe('data-layer guardrails', () => {
     }
   })
 
+  it('flags managed-wrapper writes when feature code constructs the Guildhall data path', () => {
+    const root = mkdtempSync(join(tmpdir(), 'guildhall-data-layer-guardrail-'))
+    try {
+      const dir = join(root, 'src', 'runtime')
+      mkdirSync(dir, { recursive: true })
+      writeFileSync(join(dir, 'bad-managed-wrapper.ts'), [
+        "import path from 'node:path'",
+        "import { writeManagedTextFile } from '@guildhall/persistence'",
+        '',
+        'export async function writeBad(memoryDir: string) {',
+        "  await writeManagedTextFile(path.join(memoryDir, 'TASKS.json'), '{}')",
+        '}',
+        '',
+      ].join('\n'))
+
+      expect(analyzeDataLayerGuardrails({ repoRoot: root, roots: ['src'] })).toEqual([
+        'src/runtime/bad-managed-wrapper.ts:5',
+      ])
+    } finally {
+      rmSync(root, { recursive: true, force: true })
+    }
+  })
+
   it('allows writes owned by the data layer', () => {
     const root = mkdtempSync(join(tmpdir(), 'guildhall-data-layer-guardrail-'))
     try {

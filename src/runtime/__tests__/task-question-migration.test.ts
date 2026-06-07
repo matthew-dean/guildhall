@@ -2,6 +2,7 @@ import { mkdir, mkdtemp, readFile, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { describe, expect, it } from 'vitest'
+import { getProjectSystemStatePath } from '@guildhall/sessions'
 import { listOwnerInputRequests } from '../owner-input-store.js'
 import { migrateTaskQuestionsToBoundedChat } from '../task-question-migration.js'
 
@@ -46,7 +47,7 @@ describe('task question migration', () => {
     })
 
     const session = JSON.parse(await readFile(
-      path.join(root, '.guildhall', 'bounded-chat', `${result.createdSessions[0]}.json`),
+      getProjectSystemStatePath(root, path.join('bounded-chat', `${result.createdSessions[0]}.json`)),
       'utf8',
     ))
     expect(session.objective.kind).toBe('task_shaping')
@@ -121,7 +122,7 @@ describe('task question migration', () => {
     const result = await migrateTaskQuestionsToBoundedChat({ projectRoot: root, projectId: 'demo', apply: true, now })
     const requests = await listOwnerInputRequests(root)
     const session = JSON.parse(await readFile(
-      path.join(root, '.guildhall', 'bounded-chat', `${result.createdSessions[0]}.json`),
+      getProjectSystemStatePath(root, path.join('bounded-chat', `${result.createdSessions[0]}.json`)),
       'utf8',
     ))
 

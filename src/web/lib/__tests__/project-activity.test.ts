@@ -215,6 +215,25 @@ describe('buildProjectTicker', () => {
 
     expect(
       buildProjectTicker(
+        {
+          run: { status: 'running', mode: 'one_task' },
+          tasks: [
+            { id: 'task-1', status: 'ready', title: 'Ready task' },
+            { id: 'task-2', status: 'ready', title: 'Another ready task' },
+          ],
+        },
+        { event: { type: 'unknown_event' } },
+        now,
+      ),
+    ).toMatchObject({
+      tone: 'active',
+      pulse: true,
+      actorLabel: 'Coordinator',
+      message: 'Advancing one task',
+    })
+
+    expect(
+      buildProjectTicker(
         { run: { status: 'running' }, tasks: [] },
         null,
         now,

@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, afterEach } from 'vitest'
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import fs from 'node:fs/promises'
 import path from 'node:path'
 import os from 'node:os'
@@ -15,7 +15,7 @@ import {
 } from '@guildhall/config'
 import { defaultAgentSettingsPath, loadLeverSettings, makeDefaultSettings } from '@guildhall/levers'
 import { proposeProjectSkill } from '@guildhall/skills'
-import { getProjectLocalHistoryDir, getProjectTranscriptPath } from '@guildhall/sessions'
+import { getProjectLocalHistoryDir, getProjectSystemStatePath, getProjectTranscriptPath } from '@guildhall/sessions'
 import { buildServeApp } from '../serve.js'
 import { persistLearningCandidates } from '../learning.js'
 import { acceptStructuralMap, draftStructuralMap, submitStructuralMapForReview } from '../structural-map.js'
@@ -51,6 +51,34 @@ async function readTasks(tmpPath: string): Promise<Array<Record<string, any>>> {
     | Array<Record<string, any>>
     | { tasks?: Array<Record<string, any>> }
   return Array.isArray(raw) ? raw : raw.tasks ?? []
+}
+
+async function writeSystemTasks(queue: unknown): Promise<void> {
+  const tasksPath = getProjectSystemStatePath(tmpDir, 'TASKS.json')
+  await fs.mkdir(path.dirname(tasksPath), { recursive: true })
+  await fs.writeFile(tasksPath, JSON.stringify(queue, null, 2), 'utf8')
+}
+
+async function applyStorageBoundaryMigration(app: ReturnType<typeof buildServeApp>['app']): Promise<void> {
+  const migration = await app.fetch(
+    new Request(scoped('/api/project/migrations/apply'), {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        includePrompt: true,
+        migrationId: '0.10.0/project-state-storage-boundary',
+      }),
+    }),
+  )
+  expect(migration.status).toBe(200)
+}
+
+async function readFirstOwnerInputRequest(): Promise<{ boundedChatSessionId: string }> {
+  const ownerInputDir = getProjectSystemStatePath(tmpDir, 'owner-input')
+  const requests = await fs.readdir(ownerInputDir)
+  return JSON.parse(
+    await fs.readFile(path.join(ownerInputDir, requests[0]!), 'utf8'),
+  ) as { boundedChatSessionId: string }
 }
 
 async function seedThreadOwnerInput(input: {
@@ -832,8 +860,10 @@ describe('POST /api/project/start', () => {
 
   it('marks all-terminal projects as not startable', async () => {
     const now = new Date().toISOString()
+    const tasksPath = getProjectSystemStatePath(tmpDir, 'TASKS.json')
+    await fs.mkdir(path.dirname(tasksPath), { recursive: true })
     await fs.writeFile(
-      path.join(tmpDir, '.guildhall', 'TASKS.json'),
+      tasksPath,
       JSON.stringify({
         version: 1,
         lastUpdated: now,
@@ -886,6 +916,14 @@ describe('POST /api/project/start', () => {
     )
 
     const { app } = buildServeApp({ projectPath: tmpDir })
+    await app.fetch(new Request(scoped('/api/project/migrations/apply'), {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        includePrompt: true,
+        migrationId: '0.10.0/project-state-storage-boundary',
+      }),
+    }))
     const res = await app.fetch(new Request(scoped('/api/project')))
 
     expect(res.status).toBe(200)
@@ -899,8 +937,10 @@ describe('POST /api/project/start', () => {
 
   it('returns a no-op start response when all tasks are terminal', async () => {
     const now = new Date().toISOString()
+    const tasksPath = getProjectSystemStatePath(tmpDir, 'TASKS.json')
+    await fs.mkdir(path.dirname(tasksPath), { recursive: true })
     await fs.writeFile(
-      path.join(tmpDir, '.guildhall', 'TASKS.json'),
+      tasksPath,
       JSON.stringify({
         version: 1,
         lastUpdated: now,
@@ -953,6 +993,14 @@ describe('POST /api/project/start', () => {
     )
 
     const { app } = buildServeApp({ projectPath: tmpDir })
+    await app.fetch(new Request(scoped('/api/project/migrations/apply'), {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        includePrompt: true,
+        migrationId: '0.10.0/project-state-storage-boundary',
+      }),
+    }))
     const res = await app.fetch(
       new Request(scoped('/api/project/start'), { method: 'POST', body: '{}' }),
     )
@@ -964,6 +1012,66 @@ describe('POST /api/project/start', () => {
       code: 'all_terminal',
       stopSummary: { reason: 'all_terminal' },
     })
+  })
+
+  it('does not treat a targeted recoverable worktree blocker as all-terminal', async () => {
+    const now = new Date().toISOString()
+    const taskId = 'task-recover-worktree'
+    const tasksPath = getProjectSystemStatePath(tmpDir, 'TASKS.json')
+    await fs.mkdir(path.dirname(tasksPath), { recursive: true })
+    await fs.writeFile(
+      tasksPath,
+      JSON.stringify({
+        version: 1,
+        lastUpdated: now,
+        tasks: [
+          {
+            id: taskId,
+            title: 'Recover worktree task',
+            description: 'Previously blocked on stale worktree setup.',
+            domain: 'core',
+            status: 'blocked',
+            priority: 'normal',
+            blockReason:
+              "Guildhall could not create a task worktree: fatal: '/tmp/task-worktree' already exists. Fix the worktree setup issue, then resume the task.",
+            acceptanceCriteria: [],
+            outOfScope: [],
+            dependsOn: [],
+            notes: [
+              {
+                agentId: 'worker-agent',
+                role: 'self-critique',
+                content: 'Guildhall-owned task work was already attempted.',
+                timestamp: now,
+              },
+            ],
+            gateResults: [],
+            reviewVerdicts: [],
+            adjudications: [],
+            escalations: [],
+            agentIssues: [],
+            revisionCount: 0,
+            remediationAttempts: 0,
+            createdAt: now,
+            updatedAt: now,
+          },
+        ],
+      }, null, 2),
+      'utf8',
+    )
+
+    const { app } = buildServeApp({ projectPath: tmpDir })
+    const res = await app.fetch(
+      new Request(scoped('/api/project/start'), {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ mode: 'one_task', taskId }),
+      }),
+    )
+    const body = await res.json() as { code?: string; stopSummary?: { reason?: string } }
+
+    expect(body.code).not.toBe('all_terminal')
+    expect(body.stopSummary?.reason).not.toBe('all_terminal')
   })
 
   it('points Start at imported draft review when no runnable work is available', async () => {
@@ -1023,9 +1131,7 @@ describe('POST /api/project/start', () => {
 
   it('blocks Start when ready tasks still need brief cleanup', async () => {
     const now = new Date().toISOString()
-    await fs.writeFile(
-      path.join(tmpDir, '.guildhall', 'TASKS.json'),
-      JSON.stringify({
+    await writeSystemTasks({
         version: 1,
         lastUpdated: now,
         tasks: [
@@ -1051,11 +1157,10 @@ describe('POST /api/project/start', () => {
             updatedAt: now,
           },
         ],
-      }, null, 2),
-      'utf8',
-    )
+      })
 
     const { app } = buildServeApp({ projectPath: tmpDir })
+    await applyStorageBoundaryMigration(app)
     const projectRes = await app.fetch(new Request(scoped('/api/project')))
     const projectBody = (await projectRes.json()) as {
       startReadiness?: { canStart?: boolean; code?: string; actionHref?: string; message?: string }
@@ -1071,9 +1176,7 @@ describe('POST /api/project/start', () => {
 
   it('points owner-input Start blockers at the linked Thread session', async () => {
     const now = new Date().toISOString()
-    await fs.writeFile(
-      path.join(tmpDir, '.guildhall', 'TASKS.json'),
-      JSON.stringify({
+    await writeSystemTasks({
         version: 1,
         lastUpdated: now,
         tasks: [
@@ -1122,9 +1225,7 @@ describe('POST /api/project/start', () => {
             updatedAt: now,
           },
         ],
-      }, null, 2),
-      'utf8',
-    )
+      })
     await seedThreadOwnerInput({
       taskId: 'task-question',
       questionId: 'q-1',
@@ -1135,15 +1236,13 @@ describe('POST /api/project/start', () => {
     })
 
     const { app } = buildServeApp({ projectPath: tmpDir })
+    await applyStorageBoundaryMigration(app)
     const projectRes = await app.fetch(new Request(scoped('/api/project')))
     const projectBody = (await projectRes.json()) as {
       startReadiness?: { canStart?: boolean; code?: string; actionHref?: string; message?: string }
     }
 
-    const requests = await fs.readdir(path.join(tmpDir, '.guildhall', 'owner-input'))
-    const request = JSON.parse(
-      await fs.readFile(path.join(tmpDir, '.guildhall', 'owner-input', requests[0]!), 'utf8'),
-    ) as { boundedChatSessionId: string }
+    const request = await readFirstOwnerInputRequest()
 
     expect(projectBody.startReadiness).toMatchObject({
       canStart: false,
@@ -1155,15 +1254,11 @@ describe('POST /api/project/start', () => {
 
   it('uses a friendly structural-map label in owner-input Start blockers', async () => {
     const now = new Date().toISOString()
-    await fs.writeFile(
-      path.join(tmpDir, '.guildhall', 'TASKS.json'),
-      JSON.stringify({
+    await writeSystemTasks({
         version: 1,
         lastUpdated: now,
         tasks: [],
-      }, null, 2),
-      'utf8',
-    )
+      })
     await seedThreadOwnerInput({
       taskId: 'structural-map-mpyrvqjg',
       questionId: 'owner-input-1',
@@ -1174,6 +1269,7 @@ describe('POST /api/project/start', () => {
     })
 
     const { app } = buildServeApp({ projectPath: tmpDir })
+    await applyStorageBoundaryMigration(app)
     const projectRes = await app.fetch(new Request(scoped('/api/project')))
     const projectBody = (await projectRes.json()) as {
       startReadiness?: { canStart?: boolean; code?: string; message?: string }
@@ -1190,9 +1286,7 @@ describe('POST /api/project/start', () => {
   it('points recovery-only Start blockers at the newest blocked task instead of stale historical blockers', async () => {
     const older = '2026-05-19T10:00:00.000Z'
     const newer = '2026-05-19T12:00:00.000Z'
-    await fs.writeFile(
-      path.join(tmpDir, '.guildhall', 'TASKS.json'),
-      JSON.stringify({
+    await writeSystemTasks({
         version: 1,
         lastUpdated: newer,
         tasks: [
@@ -1241,9 +1335,7 @@ describe('POST /api/project/start', () => {
             updatedAt: newer,
           },
         ],
-      }, null, 2),
-      'utf8',
-    )
+      })
     await seedThreadOwnerInput({
       taskId: 'task-current',
       questionId: 'esc-current',
@@ -1255,15 +1347,13 @@ describe('POST /api/project/start', () => {
     })
 
     const { app } = buildServeApp({ projectPath: tmpDir })
+    await applyStorageBoundaryMigration(app)
     const projectRes = await app.fetch(new Request(scoped('/api/project')))
     const projectBody = (await projectRes.json()) as {
       startReadiness?: { canStart?: boolean; code?: string; actionHref?: string; message?: string }
     }
 
-    const requests = await fs.readdir(path.join(tmpDir, '.guildhall', 'owner-input'))
-    const request = JSON.parse(
-      await fs.readFile(path.join(tmpDir, '.guildhall', 'owner-input', requests[0]!), 'utf8'),
-    ) as { boundedChatSessionId: string }
+    const request = await readFirstOwnerInputRequest()
 
     expect(projectBody.startReadiness).toMatchObject({
       canStart: false,
@@ -1275,9 +1365,7 @@ describe('POST /api/project/start', () => {
 
   it('rejects focused task starts while project-level owner input is still blocking Start', async () => {
     const now = new Date().toISOString()
-    await fs.writeFile(
-      path.join(tmpDir, '.guildhall', 'TASKS.json'),
-      JSON.stringify({
+    await writeSystemTasks({
         version: 1,
         lastUpdated: now,
         tasks: [
@@ -1330,9 +1418,7 @@ describe('POST /api/project/start', () => {
             updatedAt: now,
           },
         ],
-      }, null, 2),
-      'utf8',
-    )
+      })
     await seedThreadOwnerInput({
       taskId: 'task-needs-answer',
       questionId: 'q-1',
@@ -1343,6 +1429,7 @@ describe('POST /api/project/start', () => {
     })
 
     const { app } = buildServeApp({ projectPath: tmpDir })
+    await applyStorageBoundaryMigration(app)
     const res = await app.fetch(
       new Request(scoped('/api/project/start'), {
         method: 'POST',
@@ -1353,10 +1440,7 @@ describe('POST /api/project/start', () => {
 
     expect(res.status).toBe(409)
     const body = (await res.json()) as { code?: string; actionHref?: string; error?: string }
-    const requests = await fs.readdir(path.join(tmpDir, '.guildhall', 'owner-input'))
-    const request = JSON.parse(
-      await fs.readFile(path.join(tmpDir, '.guildhall', 'owner-input', requests[0]!), 'utf8'),
-    ) as { boundedChatSessionId: string }
+    const request = await readFirstOwnerInputRequest()
 
     expect(body).toMatchObject({
       code: 'owner_input_required',
@@ -1665,6 +1749,34 @@ describe('GET /api/stale-server', () => {
     expect(typeof body.bootBuildMtimeMs).toBe('number')
     expect(typeof body.currentBuildMtimeMs).toBe('number')
   })
+
+  it('stops stale Guildhall siblings before reporting freshness', async () => {
+    let killed = false
+    const killProcess = vi.fn(() => {
+      killed = true
+    })
+    const { app } = buildServeApp({
+      projectPath: tmpDir,
+      staleProcessGuard: {
+        killProcess,
+        listProcesses: async () => killed
+          ? []
+          : [{
+              pid: 12345,
+              startedAtMs: 1,
+              command: '/Users/matthew/.guildhall/app/0.10.0/app/dist/cli.js mcp serve .',
+              mode: 'mcp',
+              stale: false,
+            }],
+      },
+    })
+
+    const res = await app.fetch(new Request('http://localhost/api/stale-server'))
+    expect(res.status).toBe(200)
+    const body = (await res.json()) as { staleProcesses?: unknown[] }
+    expect(killProcess).toHaveBeenCalledWith(12345, 'TERM')
+    expect(body.staleProcesses).toBeUndefined()
+  })
 })
 
 describe('GET /api/service', () => {
@@ -1901,6 +2013,91 @@ describe('Workspace Import review endpoints', () => {
     expect(body.ok).toBe(true)
     // Detector should have produced at least one goal from the README.
     expect((body.goalsRecorded ?? 0) + (body.tasksAdded ?? 0)).toBeGreaterThan(0)
+  })
+
+  it('approves workspace import from system-local task state without creating repo task state', async () => {
+    await fs.writeFile(
+      path.join(tmpDir, 'README.md'),
+      '# t-minus-t\n\n## Goals\n\n- Ship the extension\n- Wire the popup\n',
+      'utf8',
+    )
+    await fs.writeFile(
+      path.join(tmpDir, 'package.json'),
+      JSON.stringify({ name: 'ws-system-local-fallback' }),
+      'utf8',
+    )
+    await fs.mkdir(path.join(tmpDir, 'docs'), { recursive: true })
+    await fs.writeFile(
+      path.join(tmpDir, 'docs', 'roadmap.md'),
+      '- [x] Initial popup scaffold\n- [ ] Wire the popup context menu\n',
+      'utf8',
+    )
+    const { app } = buildServeApp({ projectPath: tmpDir })
+    const migration = await app.fetch(
+      new Request(scoped('/api/project/migrations/apply'), {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          includePrompt: true,
+          migrationId: '0.10.0/project-state-storage-boundary',
+        }),
+      }),
+    )
+    expect(migration.status).toBe(200)
+
+    const tasksPath = getProjectSystemStatePath(tmpDir, 'TASKS.json')
+    await fs.mkdir(path.dirname(tasksPath), { recursive: true })
+    await fs.writeFile(
+      tasksPath,
+      JSON.stringify(
+        {
+          version: 1,
+          lastUpdated: new Date().toISOString(),
+          tasks: [
+            {
+              id: 'task-workspace-import',
+              title: 'Workspace import',
+              description: 'Reserved importer',
+              domain: '_workspace_import',
+              projectPath: tmpDir,
+              status: 'proposed',
+              priority: 'normal',
+              acceptanceCriteria: [],
+              dependsOn: [],
+              outOfScope: [],
+              spec: '',
+              createdAt: new Date().toISOString(),
+              updatedAt: new Date().toISOString(),
+            },
+          ],
+        },
+        null,
+        2,
+      ),
+      'utf8',
+    )
+    const approve = await app.fetch(
+      new Request(scoped('/api/project/workspace-import/approve'), {
+        method: 'POST',
+      }),
+    )
+    const body = (await approve.json()) as {
+      ok?: boolean
+      tasksAdded?: number
+      goalsRecorded?: number
+      error?: string
+    }
+    if (approve.status !== 200) {
+      throw new Error(`approve failed: status=${approve.status} body=${JSON.stringify(body)}`)
+    }
+
+    expect(body.ok).toBe(true)
+    const written = JSON.parse(await fs.readFile(tasksPath, 'utf8')) as { tasks: Array<{ id: string }> }
+    expect(written.tasks.some(task => task.id !== 'task-workspace-import')).toBe(true)
+    await expect(fs.access(path.join(tmpDir, '.guildhall', 'TASKS.json'))).rejects.toThrow()
+    await expect(fs.access(path.join(tmpDir, '.guildhall', 'learning.json'))).rejects.toThrow()
+    await expect(fs.access(path.join(tmpDir, '.guildhall', 'PROGRESS.md'))).rejects.toThrow()
+    await expect(fs.access(getProjectSystemStatePath(tmpDir, 'learning.json'))).resolves.toBeUndefined()
   })
 
   it('approve preserves the importer agent curated spec when no review narrowing is supplied', async () => {
@@ -2218,13 +2415,14 @@ describe('GET/POST /api/project/learning', () => {
     await fs.writeFile(path.join(tmpDir, 'package.json'), JSON.stringify({ name: 'learning-api' }), 'utf8')
 
     const { app } = buildServeApp({ projectPath: tmpDir })
+    await applyStorageBoundaryMigration(app)
     const draftRes = await app.fetch(new Request(scoped('/api/project/workspace-import/draft')))
     const draftBody = (await draftRes.json()) as {
       detected: { review: { sourceGroups: Array<{ key: string; areaKey: string; taskIds: string[] }> } }
     }
     const source = draftBody.detected.review.sourceGroups[0]
     expect(source).toBeDefined()
-    await app.fetch(
+    const approve = await app.fetch(
       new Request(scoped('/api/project/workspace-import/approve'), {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
@@ -2235,8 +2433,13 @@ describe('GET/POST /api/project/learning', () => {
         }),
       }),
     )
-    await fs.mkdir(path.join(tmpDir, '.guildhall'), { recursive: true })
-    await fs.writeFile(path.join(tmpDir, '.guildhall', 'project-brief.md'), 'This project has saved context.\n', 'utf8')
+    const approveBody = await approve.json()
+    if (approve.status !== 200) {
+      throw new Error(`approve failed: status=${approve.status} body=${JSON.stringify(approveBody)}`)
+    }
+    const briefPath = getProjectSystemStatePath(tmpDir, 'project-brief.md')
+    await fs.mkdir(path.dirname(briefPath), { recursive: true })
+    await fs.writeFile(briefPath, 'This project has saved context.\n', 'utf8')
 
     const learning = await app.fetch(new Request(scoped('/api/project/learning')))
     const learningBody = (await learning.json()) as {
@@ -2319,6 +2522,7 @@ describe('GET/POST /api/project/learning', () => {
     })
 
     const { app } = buildServeApp({ projectPath: tmpDir })
+    await applyStorageBoundaryMigration(app)
     const before = await app.fetch(new Request(scoped('/api/project/learning')))
     expect(before.status).toBe(200)
     const beforeBody = (await before.json()) as {

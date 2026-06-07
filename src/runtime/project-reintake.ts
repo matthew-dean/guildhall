@@ -2,6 +2,7 @@ import { appendManagedTextFile, readManagedTextFile, readManagedTextFileSync, wr
 import fs from 'node:fs/promises'
 import path from 'node:path'
 import type { Task } from '@guildhall/core'
+import { getProjectSystemStatePathFromMemoryDir } from '@guildhall/sessions'
 import {
   planEvidenceWorkGraph,
   type EvidenceSource,
@@ -202,7 +203,7 @@ export async function applyProjectReintakeDraft(input: {
   const draft = await readProjectReintakeDraft(input.memoryDir)
   if (!draft) return { success: false, error: 'No re-intake draft found.' }
 
-  const queuePath = path.join(input.memoryDir, 'TASKS.json')
+  const queuePath = getProjectSystemStatePathFromMemoryDir(input.memoryDir, 'TASKS.json')
   const queue = await readQueueFile(queuePath)
   if (fingerprint(queue.tasks) !== draft.taskQueueFingerprint) {
     return {
@@ -332,7 +333,7 @@ async function readQueueFile(queuePath: string): Promise<{ version: number; last
 
 async function appendReintakeProgress(memoryDir: string, draft: ProjectReintakeDraft, appliedGroups: number, now: string): Promise<void> {
   const summary = `\n## ${now} Project re-intake applied\n\nApplied ${appliedGroups} group(s): ${draft.summary.kept} kept, ${draft.summary.reframed} reframed, ${draft.summary.created} created, ${draft.summary.archived} archived.\n`
-  await appendManagedTextFile(path.join(memoryDir, 'PROGRESS.md'), summary, 'utf-8').catch(() => undefined)
+  await appendManagedTextFile(getProjectSystemStatePathFromMemoryDir(memoryDir, 'PROGRESS.md'), summary, 'utf-8').catch(() => undefined)
 }
 
 function graphTaskChange(task: EvidenceTask, reconciliations: EvidenceReconciliation[]): ReintakeChange {

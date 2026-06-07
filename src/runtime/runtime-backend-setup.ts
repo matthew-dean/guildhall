@@ -288,8 +288,8 @@ export async function detectRuntimeBackendSetup(
       podmanPath,
       podmanVersion: version?.stdout.trim() || null,
       homebrewPath,
-      actions: ['retry-detection', 'use-host-run-compatibility'],
-      message: 'Guildhall could not read the Podman machine state. Run on the host only until Podman can be checked again.',
+      actions: ['retry-detection'],
+      message: 'Guildhall could not read the Podman machine state. Fix Podman before project work runs.',
       lastCheckedAt,
     })
   }
@@ -304,7 +304,7 @@ export async function detectRuntimeBackendSetup(
       podmanVersion: version?.stdout.trim() || null,
       homebrewPath,
       machine,
-      actions: ['initialize-machine', 'retry-detection', 'use-host-run-compatibility'],
+      actions: ['initialize-machine', 'retry-detection'],
       message: 'Podman is installed, but Guildhall still needs to create the local runtime machine before project work runs there.',
       lastCheckedAt,
     })
@@ -319,7 +319,7 @@ export async function detectRuntimeBackendSetup(
       podmanVersion: version?.stdout.trim() || null,
       homebrewPath,
       machine,
-      actions: ['start-machine', 'retry-detection', 'use-host-run-compatibility'],
+      actions: ['start-machine', 'retry-detection'],
       message: 'Podman is installed, but the local runtime service is stopped. Start it before project work runs there.',
       lastCheckedAt,
     })
@@ -389,6 +389,22 @@ export async function runRuntimeBackendSetupAction(
 
   if (input.action === 'use-host-run-compatibility') {
     const status = await detectRuntimeBackendSetup(input)
+    if (status.podmanPath) {
+      await recordSetupState(projectRoot, {
+        status: status.status,
+        selectedMode: null,
+        lastAction: input.action,
+        lastResult: 'declined',
+        updatedAt,
+        message: 'Host-run compatibility is not available when Podman is installed.',
+      })
+      return {
+        ok: false,
+        error: 'Host-run compatibility is not available when Podman is installed. Fix or start Podman before project work runs.',
+        result: baseResult,
+        status,
+      }
+    }
     await recordSetupState(projectRoot, {
       status: status.status,
       selectedMode: 'host-run',

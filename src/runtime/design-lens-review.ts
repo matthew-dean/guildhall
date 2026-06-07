@@ -2,6 +2,7 @@ import fs from 'node:fs/promises'
 import path from 'node:path'
 
 import { TaskQueue, TERMINAL_TASK_STATUSES, type Task, type TaskStatus } from '@guildhall/core'
+import { getProjectSystemStatePathFromMemoryDir } from '@guildhall/sessions'
 
 import {
   type DesignFindingClassification,
@@ -73,7 +74,7 @@ export async function reviewInProcessWorkForDesignLens(input: {
 }
 
 async function readQueue(memoryDir: string): Promise<TaskQueue> {
-  const file = path.join(memoryDir, 'TASKS.json')
+  const file = getProjectSystemStatePathFromMemoryDir(memoryDir, 'TASKS.json')
   try {
     return TaskQueue.parse(JSON.parse(await fs.readFile(file, 'utf-8')))
   } catch {

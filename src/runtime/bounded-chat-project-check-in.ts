@@ -1,5 +1,6 @@
 import fsp from 'node:fs/promises'
 import path from 'node:path'
+import { getProjectSystemStatePath, inferProjectRootFromMemoryDir } from '@guildhall/sessions'
 import {
   applyBoundedChatCoordinatorAction,
   createBoundedChatSession,
@@ -243,10 +244,10 @@ export async function resumeProjectCheckInBoundedChat(input: {
 }
 
 async function loadProjectQuestionEvidenceFiles(memoryDir: string): Promise<ProjectQuestionEvidenceFile[]> {
-  const projectRoot = path.dirname(memoryDir)
+  const projectRoot = inferProjectRootFromMemoryDir(memoryDir)
   const candidates = [
-    { file: path.join(memoryDir, 'project-brief.md'), source: 'project-brief.md' },
-    { file: path.join(memoryDir, 'TASKS.json'), source: '.guildhall/TASKS.json' },
+    { file: getProjectSystemStatePath(projectRoot, 'project-brief.md'), source: 'project-brief.md' },
+    { file: getProjectSystemStatePath(projectRoot, 'TASKS.json'), source: 'TASKS.json' },
     { file: path.join(projectRoot, 'README.md'), source: 'README.md' },
     { file: path.join(projectRoot, 'docs', 'index.md'), source: 'docs/index.md' },
   ]

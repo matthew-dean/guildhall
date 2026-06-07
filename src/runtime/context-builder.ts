@@ -26,7 +26,9 @@ import {
 } from '@guildhall/guilds'
 import { readProjectSkillProposals, selectRelevantProjectSkills } from '@guildhall/skills'
 import {
-  getProjectTaskLocalHistoryDir,
+  getProjectSystemStatePath,
+  getProjectSystemStatePathFromMemoryDir,
+  getProjectTaskReviewPacketPath,
   getProjectTranscriptPath,
   inferProjectRootFromMemoryDir,
 } from '@guildhall/sessions'
@@ -958,7 +960,7 @@ export async function buildContext(
 ): Promise<BuiltContext> {
   const readSafe = async (file: string): Promise<string> => {
     try {
-      return await readManagedTextFile(path.join(memoryDir, file), 'utf-8')
+      return await readManagedTextFile(getProjectSystemStatePathFromMemoryDir(memoryDir, file), 'utf-8')
     } catch {
       return ''
     }
@@ -990,7 +992,7 @@ export async function buildContext(
   ])
   const reviewPacket =
     task.status === 'review' || task.status === 'gate_check'
-      ? await readManagedTextFile(path.join(getProjectTaskLocalHistoryDir(projectRoot, task.id), 'review-packet.md'), 'utf-8')
+      ? await readManagedTextFile(getProjectTaskReviewPacketPath(projectRoot, task.id), 'utf-8')
           .catch(() => readSafe(path.join('tasks', task.id, 'review-packet.md')))
       : ''
 
@@ -1336,7 +1338,10 @@ async function buildDeliverySpineWorkerContext(input: {
 
 async function readTaskQueueForContext(memoryDir: string): Promise<{ tasks: Task[] }> {
   try {
-    const raw = await readManagedTextFile(path.join(memoryDir, 'TASKS.json'), 'utf-8')
+    const raw = await readManagedTextFile(
+      getProjectSystemStatePath(inferProjectRootFromMemoryDir(memoryDir), 'TASKS.json'),
+      'utf-8',
+    )
     const parsed = JSON.parse(raw)
     return TaskQueue.parse(Array.isArray(parsed) ? { version: 1, tasks: parsed } : parsed)
   } catch {

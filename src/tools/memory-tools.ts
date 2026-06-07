@@ -6,6 +6,7 @@ import { DecisionEntry, ProgressEntry } from '@guildhall/core'
 import { dirname } from 'node:path'
 import {
   getProjectProgressHeartbeatsPath,
+  getProjectSystemStatePath,
   inferProjectRootFromMemoryDir,
 } from '@guildhall/sessions'
 
@@ -99,9 +100,10 @@ export async function logProgress(input: LogProgressInput): Promise<LogProgressR
       .filter((line) => line !== null)
       .join('\n')
 
+    const projectRoot = inferProjectRootFromMemoryDir(dirname(input.progressPath))
     const outputPath = entry.type === 'heartbeat'
-      ? getProjectProgressHeartbeatsPath(inferProjectRootFromMemoryDir(dirname(input.progressPath)))
-      : input.progressPath
+      ? getProjectProgressHeartbeatsPath(projectRoot)
+      : getProjectSystemStatePath(projectRoot, 'PROGRESS.md')
     await fs.mkdir(dirname(outputPath), { recursive: true })
     await appendManagedTextFile(outputPath, block, 'utf-8')
     return { success: true, path: outputPath }

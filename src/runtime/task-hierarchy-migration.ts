@@ -1,6 +1,6 @@
 import fs from 'node:fs/promises'
 import path from 'node:path'
-import { atomicWriteText } from '@guildhall/sessions'
+import { atomicWriteText, getLegacyProjectStatePath } from '@guildhall/sessions'
 
 export interface TaskHierarchyMigrationInput {
   projectRoot: string
@@ -41,11 +41,11 @@ const MIGRATION_ID = '0.10.0/task-hierarchy-links'
 const TASKS_RELATIVE_PATH = '.guildhall/TASKS.json'
 
 function tasksPath(projectRoot: string): string {
-  return path.join(projectRoot, TASKS_RELATIVE_PATH)
+  return getLegacyProjectStatePath(projectRoot, 'TASKS.json')
 }
 
 function backupPath(projectRoot: string): string {
-  return path.join(projectRoot, '.guildhall', 'TASKS.before-0.10.0-task-hierarchy-links.json')
+  return getLegacyProjectStatePath(projectRoot, 'TASKS.before-0.10.0-task-hierarchy-links.json')
 }
 
 function parseQueue(raw: string): QueueShape {

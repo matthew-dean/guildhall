@@ -47,7 +47,7 @@ import type { AnyTool, ToolExecutionContext, ToolRegistry } from './tools.js'
 import { parseAuthoritativeCommands, reconcileShellCommandWithAuthority } from '@guildhall/core'
 import {
   getProjectLocalHistoryDir,
-  getProjectStateDir,
+  getProjectSystemStatePath,
 } from '@guildhall/sessions'
 
 const REACTIVE_COMPACT_STATUS_MESSAGE =
@@ -244,18 +244,17 @@ function hydrateProjectToolInput(
   toolMetadata?: Record<string, unknown>,
 ): Record<string, unknown> {
   let next = { ...rawInput }
-  const projectStateDir = getProjectStateDir(cwd)
   if (PROJECT_TASK_TOOLS.has(toolName)) {
-    next.tasksPath = join(projectStateDir, 'TASKS.json')
+    next.tasksPath = getProjectSystemStatePath(cwd, 'TASKS.json')
   }
   if (PROJECT_PROGRESS_TOOLS.has(toolName)) {
-    next.progressPath = join(projectStateDir, 'PROGRESS.md')
+    next.progressPath = getProjectSystemStatePath(cwd, 'PROGRESS.md')
     if (toolName === 'log-progress') {
       next = normalizeLogProgressInput(next, toolMetadata)
     }
   }
   if (PROJECT_DECISION_TOOLS.has(toolName)) {
-    next.decisionsPath = join(projectStateDir, 'DECISIONS.md')
+    next.decisionsPath = getProjectSystemStatePath(cwd, 'DECISIONS.md')
     next = normalizeLogDecisionInput(next, toolMetadata)
   }
   if (toolName === 'raise-escalation') {

@@ -38,6 +38,20 @@ function projectUrl(route: string): string {
   return url.toString()
 }
 
+async function applyStorageBoundaryMigration(app: ReturnType<typeof buildServeApp>['app']): Promise<void> {
+  const migration = await app.fetch(
+    new Request(projectUrl('/api/project/migrations/apply'), {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        includePrompt: true,
+        migrationId: '0.10.0/project-state-storage-boundary',
+      }),
+    }),
+  )
+  expect(migration.status).toBe(200)
+}
+
 async function seedTask(id: string, overrides: Record<string, any> = {}): Promise<void> {
   const tasksPath = path.join(memoryDir, 'TASKS.json')
   const queue = {
@@ -1879,6 +1893,7 @@ describe('POST /api/project/bounded-chat/:id/answer', () => {
     })
     const session = ownerInput.session
     const { app } = buildServeApp({ projectPath: tmpDir })
+    await applyStorageBoundaryMigration(app)
 
     const res = await app.fetch(
       new Request(projectUrl(`/api/project/bounded-chat/${session.id}/answer`), {

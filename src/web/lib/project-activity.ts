@@ -290,13 +290,16 @@ export function buildProjectTicker(
   if (fromEvent) return fromEvent
 
   if (detail?.run?.status === 'running') {
+    const oneTaskRun = detail.run.mode === 'one_task'
     return {
       tone: 'active',
       pulse: true,
       actorLabel: 'Coordinator',
       label: 'Live',
       message:
-        active > 0
+        oneTaskRun
+          ? 'Advancing one task'
+          : active > 0
           ? `Working on ${active} ${pluralize(active, 'task')}`
           : 'Run is active on this project',
       timeLabel: null,
@@ -373,12 +376,18 @@ export function buildProjectCardTicker(project: ServiceProjectSummary): ProjectA
     }
   }
   if (project.run?.status === 'running') {
+    const oneTaskRun = project.run.mode === 'one_task'
+    const oneTaskMessage = project.highlights?.activeTaskTitle
+      ? `Advancing one task: ${project.highlights.activeTaskTitle}`
+      : 'Advancing one task'
     return {
       tone: 'active',
       pulse: true,
       label: 'Live',
       message:
-        project.highlights?.activeTaskTitle
+        oneTaskRun
+          ? oneTaskMessage
+          : project.highlights?.activeTaskTitle
           ?? (counts.active > 0 ? `Working on ${counts.active} ${pluralize(counts.active, 'task')}` : 'Run is active'),
     }
   }

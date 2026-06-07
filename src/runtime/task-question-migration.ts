@@ -1,6 +1,6 @@
 import fs from 'node:fs/promises'
 import path from 'node:path'
-import { atomicWriteText } from '@guildhall/sessions'
+import { atomicWriteText, getLegacyProjectStatePath } from '@guildhall/sessions'
 import { createOwnerInputRequest } from './owner-input-store.js'
 import { normalizeLegacyOwnerQuestion } from './owner-question-normalizer.js'
 
@@ -53,7 +53,7 @@ export async function migrateTaskQuestionsToBoundedChat(
   input: TaskQuestionMigrationInput,
 ): Promise<TaskQuestionMigrationResult> {
   const now = input.now ?? new Date().toISOString()
-  const file = path.join(input.projectRoot, TASKS_RELATIVE_PATH)
+  const file = getLegacyProjectStatePath(input.projectRoot, 'TASKS.json')
   let raw: string
   try {
     raw = await fs.readFile(file, 'utf8')
@@ -133,8 +133,8 @@ export async function migrateTaskQuestionsToBoundedChat(
   }
 
   const affectedPaths = [TASKS_RELATIVE_PATH]
-  if (createdOwnerInputRequests.length > 0) affectedPaths.push('.guildhall/owner-input')
-  if (createdSessions.length > 0) affectedPaths.push('.guildhall/bounded-chat')
+  if (createdOwnerInputRequests.length > 0) affectedPaths.push('project-state/owner-input')
+  if (createdSessions.length > 0) affectedPaths.push('project-state/bounded-chat')
 
   if (input.apply) {
     const rewritten = Array.isArray(parsed)

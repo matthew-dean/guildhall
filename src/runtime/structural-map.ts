@@ -3,6 +3,7 @@ import fsp from 'node:fs/promises'
 import path from 'node:path'
 import YAML from 'yaml'
 import { writeJsonFile, writeJsonLinesFile } from '@guildhall/persistence'
+import { getProjectSystemStatePath } from '@guildhall/sessions'
 
 import { defineStateMachine, transition, type TransitionReceipt } from './state-machine.js'
 import type { CreateProjectDependencyRequestInput, ProjectGraphNodeRef } from './project-graph.js'
@@ -1268,7 +1269,7 @@ async function applyStructuralTransition(projectRoot: string, mapId: string, inp
 }
 
 function structuralMapDir(projectRoot: string): string {
-  return path.join(projectRoot, '.guildhall', 'structural-map')
+  return getProjectSystemStatePath(projectRoot, 'structural-map')
 }
 
 async function writeStructuralMap(projectRoot: string, map: StructuralMapDraft): Promise<void> {
@@ -1773,7 +1774,7 @@ function crossCuttingNode(input: {
 }
 
 function readOwnerDefinedCrossCuttingDomains(projectRoot: string): StructuralMapNode[] {
-  const filePath = path.join(projectRoot, '.guildhall', 'structural-domains.json')
+  const filePath = getProjectSystemStatePath(projectRoot, 'structural-domains.json')
   if (!fs.existsSync(filePath)) return []
   const data = readJsonIfExists(filePath) as { crossCuttingDomains?: Array<{ id: string; label?: string; evidenceRefs?: string[] }> } | undefined
   return (data?.crossCuttingDomains ?? []).map(domain => crossCuttingNode({

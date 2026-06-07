@@ -3,7 +3,7 @@ import fs from 'node:fs/promises'
 import path from 'node:path'
 import { load as yamlLoad } from 'js-yaml'
 import { TaskQueue, type Task, type TaskPriority } from '@guildhall/core'
-import { getProjectLocalHistoryDir } from '@guildhall/sessions'
+import { getProjectSystemStatePathFromMemoryDir } from '@guildhall/sessions'
 import { appendExploringTranscript } from '@guildhall/tools'
 import { loadLeverSettings, defaultAgentSettingsPath } from '@guildhall/levers'
 import {
@@ -39,15 +39,16 @@ import {
 export const WORKSPACE_IMPORT_TASK_ID = 'task-workspace-import'
 export const WORKSPACE_IMPORT_DOMAIN = '_workspace_import'
 
-function tasksPathFor(memoryDir: string): string {
-  if (path.basename(memoryDir) === '.guildhall') {
-    return path.join(getProjectLocalHistoryDir(path.dirname(memoryDir)), 'project-state', 'TASKS.json')
-  }
-  return path.join(memoryDir, 'TASKS.json')
+export function workspaceImportTasksPath(memoryDir: string): string {
+  return getProjectSystemStatePathFromMemoryDir(memoryDir, 'TASKS.json')
+}
+
+function workspaceImportStatePath(memoryDir: string, relativePath: string): string {
+  return getProjectSystemStatePathFromMemoryDir(memoryDir, relativePath)
 }
 
 async function readQueue(memoryDir: string): Promise<TaskQueue> {
-  const tasksPath = tasksPathFor(memoryDir)
+  const tasksPath = workspaceImportTasksPath(memoryDir)
   const raw = await readManagedTextFile(tasksPath, 'utf-8').catch((err: unknown) => {
     if (
       err &&
@@ -75,8 +76,9 @@ async function readQueue(memoryDir: string): Promise<TaskQueue> {
 }
 
 async function writeQueue(memoryDir: string, queue: TaskQueue): Promise<void> {
-  await fs.mkdir(memoryDir, { recursive: true })
-  await writeManagedTextFile(tasksPathFor(memoryDir), JSON.stringify(queue, null, 2), 'utf-8')
+  const tasksPath = workspaceImportTasksPath(memoryDir)
+  await fs.mkdir(path.dirname(tasksPath), { recursive: true })
+  await writeManagedTextFile(tasksPath, JSON.stringify(queue, null, 2), 'utf-8')
 }
 
 export const WORKSPACE_IMPORT_SEED_PREAMBLE = `You are the Workspace Importer Agent.
@@ -1147,7 +1149,7 @@ export async function approveWorkspaceImport(
 
   // Persist goals (overwrites prior import — the agent is authoritative).
   if (parsed.goals.length > 0) {
-    const goalsPath = path.join(input.memoryDir, WORKSPACE_GOALS_FILE)
+    const goalsPath = workspaceImportStatePath(input.memoryDir, WORKSPACE_GOALS_FILE)
     await writeManagedTextFile(
       goalsPath,
       JSON.stringify(
@@ -1162,7 +1164,7 @@ export async function approveWorkspaceImport(
   // Append milestones to PROGRESS.md.
   let milestonesLogged = 0
   if (parsed.milestones.length > 0) {
-    const progressPath = path.join(input.memoryDir, 'PROGRESS.md')
+    const progressPath = workspaceImportStatePath(input.memoryDir, 'PROGRESS.md')
     const blocks: string[] = []
     for (const m of parsed.milestones) {
       blocks.push(

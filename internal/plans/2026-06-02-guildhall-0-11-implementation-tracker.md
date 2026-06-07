@@ -15,6 +15,7 @@ explicitly changes the release boundary.
 - `internal/plans/2026-05-28-guildhall-0-11-openrouter-support.md`
 - `internal/specs/2026-06-01-guildhall-0-10-state-machines-project-graph.md`
 - `internal/specs/2026-06-03-guildhall-0-11-deterministic-code-quality-signals.md`
+- `internal/specs/2026-06-06-guildhall-0-11-iterative-work-campaigns.md`
 - `internal/plans/2026-06-03-guildhall-0-11-deterministic-code-quality-implementation-plan.md`
 
 ## Feature Priority Order
@@ -23,10 +24,16 @@ explicitly changes the release boundary.
    agent-authored 0.11 slice from code-organization, abstraction, duplication,
    layout, and design-system entropy. It should land first unless the owner
    explicitly re-centers 0.11 on provider setup.
-2. **Task Lifecycle Migration.** This pays off the 0.10 state-machine and
+2. **Iterative Work Campaigns.** This turns repeated performance,
+   refactoring, quality-burn-down, and audit-closure work into a bounded,
+   evidence-driven campaign loop rather than a hand-maintained prompt loop.
+   It should build on deterministic quality signals and the 0.10 delivery
+   spine, and it should use Jess-style benchmark-leashed work as the serious
+   fixture.
+3. **Task Lifecycle Migration.** This pays off the 0.10 state-machine and
    project-graph substrate by removing broad lifecycle cleanup from ad hoc task
    fields.
-3. **OpenRouter Guided Setup.** This remains a valuable provider feature, but
+4. **OpenRouter Guided Setup.** This remains a valuable provider feature, but
    it should build on the deterministic quality substrate rather than preempt
    it.
 
@@ -54,7 +61,36 @@ findings.
   packets, run evidence, waiver receipts, project trend summaries, and
   toolchain-profile capability explanations.
 
-## Milestone 2: Task Lifecycle Migration
+## Milestone 2: Iterative Work Campaigns
+
+**Purpose:** Turn repeated performance, refactoring, quality-burn-down, and
+audit-closure work into bounded campaign loops that create normal Guildhall
+tasks, compare outcomes against an evidence frontier, preserve negative
+results, and stop on explicit budget or blocker conditions.
+
+- [ ] Add a local campaign model with objective, source refs, strategy,
+  evidence policy, selection policy, automation policy, stop policy, frontier,
+  and iteration records.
+- [ ] Add campaign intake that can draft a campaign from owner intent plus
+  handoff docs, trackers, benchmark commands, deterministic finding queries, or
+  external task authorities.
+- [ ] Create/propose the first iteration as a normal Guildhall task while
+  respecting domain `task_origination`, project `run_automation`, and the
+  campaign's narrower automation policy.
+- [ ] Classify completed iteration outcomes as kept, kept without metric claim,
+  reverted, reshaped, shelved, or blocked for owner based on review, gates, and
+  campaign evidence.
+- [ ] Evaluate `maxIterations`, `maxWallClockMinutes`,
+  `maxConsecutiveNegativeIterations`, blocked-task stop, and owner stop before
+  creating the next iteration.
+- [ ] Preserve negative experiment results and use them to rank or reject future
+  candidates.
+- [ ] Model the Jess core architecture handoff as the first serious fixture
+  without moving Jess-owned handoff docs into Guildhall-owned state.
+- [ ] Add owner-facing campaign UI for active iteration, remaining budget,
+  latest evidence, next-candidate rationale, and pause/resume/stop controls.
+
+## Milestone 3: Task Lifecycle Migration
 
 **Purpose:** Move broad task lifecycle cleanup out of ad hoc status fields and
 onto explicit node/linkage state machines after the 0.10 state-machine
@@ -68,7 +104,7 @@ substrate has proven itself.
   receipts.
 - [ ] Keep owner-facing labels separate from persisted lifecycle states.
 
-## Milestone 3: OpenRouter Guided Setup
+## Milestone 4: OpenRouter Guided Setup
 
 **Purpose:** Offer OpenRouter as a trustworthy hosted-provider setup path with
 clear routing, attribution, privacy/cost posture, and recommendation evidence.

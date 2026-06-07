@@ -1,9 +1,8 @@
 import { appendManagedTextFile, readManagedTextFile, readManagedTextFileSync, writeManagedTextFile } from '@guildhall/persistence'
 import { mkdir, readFile, writeFile } from 'node:fs/promises'
 import { basename, dirname, resolve } from 'node:path'
-import { homedir } from 'node:os'
 
-import { getProjectRuntimeStatePath } from '@guildhall/sessions'
+import { getProjectRuntimeContainerHomeDir, getProjectRuntimeStatePath } from '@guildhall/sessions'
 
 export type ProjectRuntimeBackendName = 'podman'
 export type ProjectRuntimeStatus = 'stopped' | 'creating' | 'running' | 'failed'
@@ -102,6 +101,7 @@ export interface ProjectRuntimeState {
 }
 
 export function defaultProjectRuntimeState(projectRoot: string): ProjectRuntimeState {
+  const containerHome = getProjectRuntimeContainerHomeDir(projectRoot)
   return {
     backend: 'podman',
     status: 'stopped',
@@ -115,7 +115,7 @@ export function defaultProjectRuntimeState(projectRoot: string): ProjectRuntimeS
     mounts: {
       projectRoot: resolve(projectRoot),
       projectPath: defaultRuntimeProjectPath(projectRoot),
-      guildhallHome: resolve(homedir(), '.guildhall'),
+      guildhallHome: containerHome,
       guildhallHomePath: '/home/guildhall/.guildhall',
     },
     cacheVolumes: [],
@@ -153,7 +153,7 @@ export function defaultProjectRuntimeState(projectRoot: string): ProjectRuntimeS
       mountLayout: {
         projectRoot: resolve(projectRoot),
         projectPath: defaultRuntimeProjectPath(projectRoot),
-        guildhallHome: resolve(homedir(), '.guildhall'),
+        guildhallHome: containerHome,
         guildhallHomePath: '/home/guildhall/.guildhall',
       },
       health: {
@@ -166,10 +166,38 @@ export function defaultProjectRuntimeState(projectRoot: string): ProjectRuntimeS
   }
 }
 
+export function normalizeProjectRuntimeState(
+  projectRoot: string,
+  state: ProjectRuntimeState,
+): ProjectRuntimeState {
+  const defaults = defaultProjectRuntimeState(projectRoot)
+  return {
+    ...state,
+    mounts: {
+      ...state.mounts,
+      projectRoot: resolve(projectRoot),
+      guildhallHome: defaults.mounts.guildhallHome,
+      guildhallHomePath: defaults.mounts.guildhallHomePath,
+    },
+    migration: {
+      ...state.migration,
+      mountLayout: {
+        ...state.migration.mountLayout,
+        projectRoot: resolve(projectRoot),
+        guildhallHome: defaults.mounts.guildhallHome,
+        guildhallHomePath: defaults.mounts.guildhallHomePath,
+      },
+    },
+  }
+}
+
 export async function readProjectRuntimeState(projectRoot: string): Promise<ProjectRuntimeState> {
   const path = getProjectRuntimeStatePath(projectRoot)
   try {
-    return JSON.parse(await readManagedTextFile(path, 'utf8')) as ProjectRuntimeState
+    return normalizeProjectRuntimeState(
+      projectRoot,
+      JSON.parse(await readManagedTextFile(path, 'utf8')) as ProjectRuntimeState,
+    )
   } catch (error) {
     if (String(error).includes('ENOENT')) return defaultProjectRuntimeState(projectRoot)
     throw error
@@ -181,7 +209,8 @@ export async function writeProjectRuntimeState(
   state: ProjectRuntimeState,
 ): Promise<ProjectRuntimeState> {
   const path = getProjectRuntimeStatePath(projectRoot)
+  const next = normalizeProjectRuntimeState(projectRoot, state)
   await mkdir(dirname(path), { recursive: true })
-  await writeManagedTextFile(path, `${JSON.stringify(state, null, 2)}\n`)
-  return state
+  await writeManagedTextFile(path, `${JSON.stringify(next, null, 2)}\n`)
+  return next
 }

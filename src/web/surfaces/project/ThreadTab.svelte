@@ -1430,9 +1430,12 @@
     return Array.from(grouped.entries())
       .map(([id, chainTurns]) => {
         const ordered = [...chainTurns].sort(compareOperationTurns)
-        const latestTurn = [...chainTurns].sort(compareArchiveTurns)[0] ?? ordered[ordered.length - 1]!
+        const setupCurrentTurn = id === 'setup'
+          ? chainTurns.find((turn) => turn.kind === 'setup_step' && turn.status === 'active') ?? null
+          : null
+        const latestTurn = setupCurrentTurn ?? [...chainTurns].sort(compareArchiveTurns)[0] ?? ordered[ordered.length - 1]!
         const activeTurn = [...ordered].reverse().find(turn => turn.status === 'active') ?? null
-        const currentTurn = [...chainTurns]
+        const currentTurn = setupCurrentTurn ?? [...chainTurns]
           .filter(turn => turn.status !== 'done' || turn.phase !== 'done')
           .sort(compareOperationTurns)[0] ?? null
         return { id, turns: ordered, latestTurn, activeTurn, currentTurn }
@@ -3459,9 +3462,9 @@
                     {/if}
                   </div>
                   <div class="thread-index-row-top">
-                    <strong>{turnIndexTitle(chain.latestTurn)}</strong>
-                    {#if turnRelativeTime(chain.latestTurn)}
-                      <span class="thread-index-time">{turnRelativeTime(chain.latestTurn)}</span>
+                    <strong>{turnIndexTitle(indexTurn)}</strong>
+                    {#if turnRelativeTime(indexTurn)}
+                      <span class="thread-index-time">{turnRelativeTime(indexTurn)}</span>
                     {/if}
                   </div>
                   <p>{turnIndexSummary(indexTurn)}</p>

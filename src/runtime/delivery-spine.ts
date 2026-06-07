@@ -100,8 +100,8 @@ export const DELIVERY_SPINE_SCHEMA_DECISIONS: SchemaMigrationDecision[] = [
     rollbackRevertBehavior: 'Remove the local-history delivery-spine persistence record or revert the applied contract change set; old task queues remain readable.',
   },
   {
-    persistedSchemaTouched: '.guildhall/TASKS.json:tasks[].delivery',
-    scope: 'project',
+    persistedSchemaTouched: 'project-state/TASKS.json:tasks[].delivery',
+    scope: 'system_local_project_state',
     changeClass: 'backward_compatible_reader_change',
     existingDataImpact: 'Existing tasks do not have delivery metadata. The optional field remains absent until a validated split, primitive setup, or intake apply path writes it.',
     migrationId: null,

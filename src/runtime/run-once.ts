@@ -5,7 +5,7 @@ import path from 'node:path'
 
 import type { ResolvedConfig } from '@guildhall/config'
 import { AGENT_SETTINGS_FILENAME, loadLeverSettings, saveLeverSettings, validateLeverSettings } from '@guildhall/levers'
-import { atomicWriteText } from '@guildhall/sessions'
+import { atomicWriteText, getProjectSystemStatePath, inferProjectRootFromMemoryDir } from '@guildhall/sessions'
 
 import { createExploringTask } from './intake.js'
 import { runOrchestrator, type OrchestratorRunOptions, type OrchestratorRunResult } from './orchestrator.js'
@@ -142,7 +142,7 @@ async function enableFullyAutomatedRunLever(input: {
   createdAt: string
   reason: string
 }): Promise<void> {
-  const settingsPath = path.join(input.memoryDir, AGENT_SETTINGS_FILENAME)
+  const settingsPath = runOnceStatePath(input.memoryDir, AGENT_SETTINGS_FILENAME)
   const settings = await loadLeverSettings({ path: settingsPath })
   settings.project.run_automation = {
     position: 'fully_automated',
@@ -160,7 +160,7 @@ async function appendRunOnceNote(input: {
   proof: RunOnceProofMode
   createdAt: string
 }): Promise<void> {
-  const tasksPath = path.join(input.memoryDir, 'TASKS.json')
+  const tasksPath = runOnceStatePath(input.memoryDir, 'TASKS.json')
   const raw = await readManagedTextFile(tasksPath, 'utf8')
   const queue = JSON.parse(raw)
   const task = queue.tasks?.find((candidate: { id?: unknown }) => candidate.id === input.taskId)
@@ -179,6 +179,14 @@ async function appendRunOnceNote(input: {
   task.updatedAt = input.createdAt
   queue.lastUpdated = input.createdAt
   writeManagedTextFileSync(tasksPath, `${JSON.stringify(queue, null, 2)}\n`)
+}
+
+function runOnceStatePath(memoryDir: string, filename: string): string {
+  const base = path.basename(memoryDir)
+  if (base === '.guildhall' || base === 'memory') {
+    return getProjectSystemStatePath(inferProjectRootFromMemoryDir(memoryDir), filename)
+  }
+  return path.join(memoryDir, filename)
 }
 
 function compactTitle(value: string): string {

@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it } from 'vitest'
 import fs from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
+import { projectSkillProposalsPath } from '@guildhall/skills'
 
 import {
   MemoryRecord,
@@ -88,7 +89,8 @@ describe('memory store', () => {
         },
       ],
     }), 'utf8')
-    await fs.writeFile(path.join(memoryDir, 'project-skills.json'), JSON.stringify({
+    await fs.mkdir(path.dirname(projectSkillProposalsPath(memoryDir)), { recursive: true })
+    await fs.writeFile(projectSkillProposalsPath(memoryDir), JSON.stringify({
       version: 1,
       proposals: [{
         id: 'drawer-skill',
