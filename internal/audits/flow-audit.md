@@ -10741,3 +10741,56 @@ Verification:
 - Final `pnpm build` passed after the migration summary wording cleanup.
 
 source: codex:restore-evacuated-task-state-all-projects-2026-06-08
+
+2026-06-08T19:43:00Z - Reconciled the Looma + Knit `ContextMenu` containing
+work state after the pushed parent branch proved the split child deliverables.
+
+Finding:
+- Live task state had `ContextMenu` (`task-import-1l0mr2r`) marked `done`, but
+  its split children were still open:
+  `task-import-1l0mr2r-split-component-implementation` was `in_progress`, and
+  `storybook-story`, `contract-readme`, and `api-docs-sync` were `exploring`.
+- The children had `hierarchy.parentId: task-import-1l0mr2r`, but the parent
+  lacked reciprocal `hierarchy.childIds`. The shared hierarchy utility could
+  infer the reverse links, but `orchestrator-picker` duplicated a narrower
+  `childIds`-only containment check, so a reverse-linked parent could still be
+  treated as normal runnable work.
+
+Code repair:
+- Added a red/green regression in
+  `src/runtime/__tests__/work-hierarchy.test.ts`: a scoped parent whose child
+  only points back via `hierarchy.parentId` must dispatch the child, not the
+  parent.
+- Updated `orchestrator-picker` containment detection to use
+  `workSubtreeIds(queue.tasks, task.id).length > 1`, matching the shared
+  hierarchy model instead of only checking `task.hierarchy.childIds`.
+
+Live Looma + Knit state repair:
+- Backed up the active task queue to
+  `/Users/matthew/.guildhall/data/projects/looma-knit-0c328d88ca44/project-state/TASKS.before-contextmenu-child-reconcile-2026-06-08T19-42-22-330Z.json`.
+- Added the four split child ids to parent `ContextMenu.hierarchy.childIds`.
+- Marked the four split children `done`, set `completedAt`, marked component
+  child acceptance criteria met, and added repair notes tying closure to pushed
+  Looma branch `guildhall/task-task-import-1l0mr2r` at `d7d5d71`.
+- Marked parent ContextMenu acceptance criteria met to match the existing
+  reviewer approval note and pushed branch proof.
+
+After-state:
+- Live `/api/project?projectId=looma-knit` now reports ContextMenu parent plus
+  all four ContextMenu split children as `done`.
+- Status counts changed to `3 blocked`, `35 spec_review`, and `6 done`.
+- The primary action is no longer stale ContextMenu child work. It now honestly
+  says `Review needed` / `Review 35 waiting specs before starting.`
+
+Verification:
+- Red phase: `pnpm vitest run src/runtime/__tests__/work-hierarchy.test.ts
+  --reporter=dot` failed with the picker returning `container` instead of
+  `child-ready`.
+- Green phase: the same focused test passed with `7` tests after the picker
+  used `workSubtreeIds` for containment.
+- `pnpm tsgo -p tsconfig.json --noEmit` passed.
+- A filtered orchestrator test run for `scoped one-task runs` hit an existing
+  test-harness/system-local `TASKS.json` path setup failure before exercising
+  this change, so it is not counted as proof for this slice.
+
+source: codex:context-menu-child-state-reconcile-2026-06-08

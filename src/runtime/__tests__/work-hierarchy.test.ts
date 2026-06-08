@@ -184,4 +184,15 @@ describe('work hierarchy', () => {
 
     expect(pickNextTask(q, undefined, undefined, undefined, 'container')?.id).toBe('child-ready')
   })
+
+  it('scoped task start treats reverse-linked children as containing work', () => {
+    const q = queue([
+      task({ id: 'container', status: 'ready', hierarchy: { childIds: [], order: 0 } }),
+      task({ id: 'child-ready', status: 'ready', hierarchy: { parentId: 'container', childIds: [], order: 0 } }),
+      task({ id: 'unrelated-high', status: 'ready', priority: 'critical' }),
+    ])
+
+    expect(workSubtreeIds(q.tasks, 'container')).toEqual(['container', 'child-ready'])
+    expect(pickNextTask(q, undefined, undefined, undefined, 'container')?.id).toBe('child-ready')
+  })
 })

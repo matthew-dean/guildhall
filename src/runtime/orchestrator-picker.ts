@@ -38,8 +38,8 @@ function finishabilityAllowsDispatch(task: Task): boolean {
   return task.status !== 'ready' || task.taskReadiness == null || task.taskReadiness.recommendation === 'ready'
 }
 
-function isContainingWorkTask(task: Task): boolean {
-  return Boolean(task.hierarchy?.childIds?.length) ||
+function isContainingWorkTask(queue: TaskQueue, task: Task): boolean {
+  return workSubtreeIds(queue.tasks, task.id).length > 1 ||
     task.workKind === 'app_spec' ||
     task.workKind === 'feature_spec' ||
     Boolean(task.completionBoundary)
@@ -133,7 +133,7 @@ export function pickNextTask(
   ): boolean =>
     task.status === status &&
     finishabilityAllowsDispatch(task) &&
-    !isContainingWorkTask(task) &&
+    !isContainingWorkTask(queue, task) &&
     !(task.status === 'spec_review' && Boolean(task.spec?.trim()) && specReviewRequiresOwnerApproval(task)) &&
     !((task.status === 'exploring' || task.status === 'spec_review') && hasUnansweredOpenQuestion(task)) &&
     matchesLane(task) &&
