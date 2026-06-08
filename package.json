@@ -42,7 +42,7 @@
     "clean": "rm -rf dist",
     "release": "node scripts/publish.mjs",
     "release:dry": "node scripts/publish.mjs 0.10.0 --dry-run --allow-branch",
-    "runtime:image:build": "podman build -f runtime/Containerfile -t ghcr.io/matthew-dean/guildhall-runtime-debian:0.10.0-trixie-node22-python313-playwright -t ghcr.io/matthew-dean/guildhall-runtime-debian:0.10-trixie-node22-python313-playwright .",
+    "runtime:image:build": "node scripts/runtime-image-build.mjs",
     "runtime:image:smoke": "node scripts/runtime-image-smoke.mjs",
     "benchmarks:smoke": "pnpm build && node dist/cli.js benchmarks run lifecycle --fixture-set smoke --automation fully-automated && node dist/cli.js benchmarks run tblite --subset smoke --automation fully-automated && node dist/cli.js benchmarks run swe-local --subset smoke --automation fully-automated",
     "benchmarks:compare:hermes": "pnpm build && node dist/cli.js benchmarks compare hermes --hermes-root .guildhall/dev-tools/hermes-agent",

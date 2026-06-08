@@ -21,6 +21,7 @@ import type { RuntimeBackendSetupDetector } from '../runtime-backend-setup.js'
 import { createCapabilityRequest, listCapabilityRequests } from '../capability-requests.js'
 import { readRuntimeCommandEvidence } from '../project-runtime-command.js'
 import type { DevServerRecord, StartDevServerRequest } from '../dev-server-manager.js'
+import { applyProjectMigrations } from '../migrations.js'
 
 const execFileP = promisify(execFile)
 const PROJECT_ID = 'runtime-test'
@@ -162,6 +163,7 @@ beforeEach(async () => {
   await execFileP('git', ['config', 'user.email', 'guildhall@example.test'], { cwd: tmpDir })
   await execFileP('git', ['add', '.'], { cwd: tmpDir })
   await execFileP('git', ['commit', '-m', 'init'], { cwd: tmpDir })
+  await applyProjectMigrations({ projectRoot: tmpDir, only: ['0.10.0/project-state-storage-boundary'] })
 })
 
 afterEach(async () => {
@@ -186,7 +188,7 @@ describe('project runtime API', () => {
     expect(runtime.status).toBe(200)
     await expect(runtime.json()).resolves.toMatchObject({
       status: 'stopped',
-      backend: 'podman',
+      backend: 'docker',
       runtimeApiVersion: '1',
       image: {
         repository: 'ghcr.io/matthew-dean/guildhall-runtime-debian',
@@ -448,9 +450,21 @@ describe('project runtime API', () => {
       platform: 'darwin',
       supportedHost: true,
       status: 'machine-stopped',
+      dockerPath: null,
+      dockerVersion: null,
       podmanPath: '/opt/homebrew/bin/podman',
       podmanVersion: 'podman version 5.6.2',
       homebrewPath: '/opt/homebrew/bin/brew',
+      runtimes: {
+        docker: { status: 'missing', path: null, version: null },
+        podman: {
+          status: 'machine-stopped',
+          path: '/opt/homebrew/bin/podman',
+          version: 'podman version 5.6.2',
+          machine: { exists: true, running: false, name: 'podman-machine-default' },
+        },
+      },
+      nonContainerExecution: { allowed: false, source: 'default' },
       machine: { exists: true, running: false, name: 'podman-machine-default' },
       message: 'Podman is installed, but the local runtime service is stopped.',
       compatibilityModeAvailable: true,

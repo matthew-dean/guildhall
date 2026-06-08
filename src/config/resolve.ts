@@ -162,6 +162,7 @@ export function resolveConfig(opts: ResolveOptions): ResolvedConfig {
     skills: workspace.skills ?? {},
     lmStudioUrl,
     servePort,
+    containerRuntime: workspace.containerRuntime ?? global.containerRuntime ?? {},
     ...(workspace.runtime ? { runtime: workspace.runtime } : {}),
     ...(workspace.hooks ? { hooks: workspace.hooks } : {}),
     ...(workspace.mcp ? { mcp: workspace.mcp } : {}),

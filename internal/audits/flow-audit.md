@@ -7987,6 +7987,97 @@ local 0.7 release-candidate build at `http://localhost:7777/projects/narrative-h
       service reachability without credentials, credential expiry/revocation,
       project dev-server cross-fetch denial, and browser-proof/dev-server port
       exposure limits.
+  - [x] 2026-06-07 Docker/Podman runtime selection and explicit host-run opt-in.
+    Guildhall now detects Docker and Podman separately, prefers Docker on macOS
+    by default, honors project/global `containerRuntime.preferredBackend`, and
+    treats `backend: none` as unavailable unless project or global config
+    explicitly sets `containerRuntime.mode: host-run-allowed`. Project Overview
+    and Settings identify Docker, Podman, or no container runtime instead of
+    using Podman-only copy. The dev-server launcher now dispatches through the
+    selected container CLI so Docker-backed project runtimes do not fall back to
+    `podman exec`.
+
+    Contract Touch Decision:
+    - Work id: `codex:2026-06-07-container-runtime-selection`.
+    - Touched contracts: global/workspace `containerRuntime` config,
+      `ResolvedConfig.containerRuntime`, runtime backend setup readout,
+      `ProjectRuntimeBackendName`, `ProjectRuntimeBackendSetupState`,
+      project runtime backend selection, dev-server container execution, and
+      Project Overview/Settings runtime labels.
+    - Contracts considered but not touched: capability grant mount semantics,
+      runtime command request/response schema, runtime-agent API authorization
+      header contract, persisted task schema, and runtime image contract.
+    - Required follow-up: live Docker and live Podman smoke proof on hosts with
+      healthy engines; decide whether `containerRuntime.preferredBackend` needs
+      an owner-facing settings editor or should stay config-file-only.
+    - Proof required: deterministic tests must prove Docker preference,
+      Podman fallback/preference, strict host-run blocking without opt-in,
+      project/global host-run opt-in, Docker create/mount arguments, Podman
+      isolation arguments, dev-server Docker exec dispatch, UI runtime copy, and
+      existing runtime storage/API reads and writes.
+    - Proof provided: focused runtime and Settings tests passed for container
+      selection, Docker backend command construction, Podman backend isolation,
+      runtime store normalization, runtime setup actions, project isolation
+      contract checks, migration state, dev-server execution, and Settings UI.
+      Focused command:
+      `pnpm vitest run src/runtime/__tests__/container-runtime-selection.test.ts src/runtime/__tests__/docker-project-runtime-backend.test.ts src/runtime/__tests__/podman-project-runtime-backend.test.ts src/runtime/__tests__/project-runtime-store.test.ts src/runtime/__tests__/runtime-backend-setup.test.ts src/runtime/__tests__/project-runtime-isolation-contract.test.ts src/runtime/__tests__/project-runtime-migration.test.ts src/runtime/__tests__/dev-server-manager.test.ts src/web/surfaces/project/__tests__/SettingsTab.svelte.test.ts`
+      passed with 63 executable tests and 11 explicit TODO tests. `pnpm
+      typecheck` passed. After Docker Desktop was started locally, a live
+      Docker smoke using the same project mount, `.guildhall` tmpfs overlay,
+      and isolated `/home/guildhall/.guildhall` mount proved project files were
+      visible, checkout `.guildhall` host state was hidden, container scratch
+      writes landed only in the isolated runtime home, and global/sibling/host
+      Guildhall paths were not mounted.
+    - Waivers: no live Podman container smoke in this turn; the local Podman
+      socket was previously unavailable. The GHCR Guildhall runtime image pull
+      for Docker did not complete in this turn, so the live smoke used an
+      already-local Alpine-based image to prove Docker mount enforcement rather
+      than the final runtime image contents.
+    - Follow-up proof on 2026-06-07 fixed the stale runtime-image default and
+      local build path: default runtime state, runtime-info metadata,
+      Containerfile metadata, runtime-image smoke, and benchmark defaults now
+      use the current `0.10.0-trixie-node22-python313-playwright` /
+      `0.10-trixie-node22-python313-playwright` image line. The local
+      `runtime:image:build` command now uses a Docker-or-Podman helper, prefers
+      healthy Docker, falls back to Podman, disables Docker BuildKit by default
+      to avoid the observed Docker Desktop metadata hang, and fails with a
+      bounded timeout instead of wedging forever. Local Docker Desktop still
+      could not pull `node:22-trixie-slim`; `docker info` showed engine proxy
+      settings `http.docker.internal:3128`, while host `curl` reached Docker
+      Hub and GHCR directly. This leaves Docker Desktop registry/proxy health
+      as a machine-local dependency, not a Guildhall stale-image default.
+    - Owner-review items: confirm the config-file-only opt-in wording for
+      `host-run-allowed`; confirm Docker default preference is the desired
+      macOS happy path when both Docker and Podman are healthy.
+    - Apply/revert behavior: reverting restores Podman-only runtime setup and
+      dev-server dispatch, removes Docker backend selection, and returns
+      host-run fallback behavior to the earlier runtime setup policy.
+
+    Schema Migration Decision:
+    - Persisted schema touched: global `config.yaml`, project `guildhall.yaml`,
+      and project runtime state `backend` / `backendSetup.selectedMode`.
+    - Scope: global or project runtime policy plus per-project selected backend.
+    - Change class: backward-compatible reader and enum expansion.
+    - Existing data impact: existing projects without `containerRuntime` keep
+      the secure default `mode: required` and `preferredBackend: auto`; existing
+      runtime states with `backend: podman` remain valid, while new default
+      runtime state uses Docker as the preferred auto backend.
+    - Migration id: not required; readers accept missing config and normalize
+      old runtime state in place.
+    - Safety: narrows host-run availability by requiring explicit opt-in and
+      adds Docker as an alternate container isolation backend.
+    - Required before run: yes for setup/readiness decisions; project runtime
+      launch uses the persisted selected backend.
+    - Compatibility reader: `readGlobalConfig`, `readWorkspaceConfig`,
+      `resolveConfig`, and `normalizeProjectRuntimeState`.
+    - Fixtures/tests: container runtime selection, runtime setup, runtime store,
+      Docker/Podman backend, migration, dev-server manager, isolation contract,
+      and Settings UI tests.
+    - Owner-facing plan text: project work runs in Docker or Podman; running
+      without a container is blocked unless global or project config explicitly
+      opts into host-run compatibility.
+    - Rollback/revert behavior: remove `containerRuntime` config use and Docker
+      backend selection; old Podman runtime state remains readable.
   - [x] Milestone 9 now has the central persistence boundary in front of the
     new runtime evidence surfaces. `GuildhallPersistence` covers typed records,
     append-only events, artifact refs, placement scopes, visibility and commit

@@ -61,6 +61,7 @@ export type RuntimeSetupStatus =
   | 'missing'
   | 'machine-not-created'
   | 'machine-stopped'
+  | 'installed-unhealthy'
   | 'unsupported-platform'
   | 'unknown-error'
 
@@ -83,13 +84,39 @@ export interface RuntimeSetupAction {
 }
 
 export interface RuntimeSetupReadout {
+  backend: 'docker' | 'podman' | 'none' | string
   status: RuntimeSetupStatus
   message: string
   platform: string
   supportedHost: boolean
+  dockerPath: string | null
+  dockerVersion: string | null
   podmanPath: string | null
   podmanVersion: string | null
   homebrewPath: string | null
+  runtimes?: {
+    docker?: {
+      status?: string
+      path?: string | null
+      version?: string | null
+      error?: string
+    }
+    podman?: {
+      status?: string
+      path?: string | null
+      version?: string | null
+      error?: string
+      machine?: {
+        exists: boolean
+        name: string | null
+        running: boolean
+      }
+    }
+  }
+  nonContainerExecution?: {
+    allowed: boolean
+    source: 'project' | 'global' | 'default' | string
+  }
   compatibilityModeLabel: string
   installGuidance?: {
     homebrew: string

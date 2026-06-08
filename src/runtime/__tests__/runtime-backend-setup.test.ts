@@ -36,11 +36,12 @@ function runnerFor(fixtures: Record<string, { stdout?: string; stderr?: string; 
 }
 
 describe('runtime backend setup', () => {
-  it('reports missing Podman on supported macOS without requiring Homebrew', async () => {
+  it('reports missing container runtime on supported macOS without requiring Homebrew', async () => {
     const status = await detectRuntimeBackendSetup({
       platform: 'darwin',
       now: () => '2026-05-27T20:00:00.000Z',
       commandRunner: runnerFor({
+        'which docker': { error: new Error('not found') },
         'which podman': { error: new Error('not found') },
         'which brew': { error: new Error('not found') },
       }),
@@ -52,7 +53,6 @@ describe('runtime backend setup', () => {
     expect(status.actions.map(action => action.id)).toEqual([
       'install-instructions',
       'retry-detection',
-      'use-host-run-compatibility',
     ])
     expect(status.actions.find(action => action.id === 'install-instructions')).toMatchObject({
       mutatesHost: false,
@@ -64,6 +64,7 @@ describe('runtime backend setup', () => {
     const status = await detectRuntimeBackendSetup({
       platform: 'darwin',
       commandRunner: runnerFor({
+        'which docker': { error: new Error('not found') },
         'which podman': { stdout: '/opt/homebrew/bin/podman\n' },
         'which brew': { stdout: '/opt/homebrew/bin/brew\n' },
         'podman --version': { stdout: 'podman version 5.6.2\n' },
@@ -92,6 +93,7 @@ describe('runtime backend setup', () => {
     const status = await detectRuntimeBackendSetup({
       platform: 'darwin',
       commandRunner: runnerFor({
+        'which docker': { error: new Error('not found') },
         'which podman': { stdout: '/usr/local/bin/podman\n' },
         'which brew': { error: new Error('not found') },
         'podman --version': { stdout: 'podman version 5.6.2\n' },
@@ -115,6 +117,7 @@ describe('runtime backend setup', () => {
     const status = await detectRuntimeBackendSetup({
       platform: 'darwin',
       commandRunner: runnerFor({
+        'which docker': { error: new Error('not found') },
         'which podman': { stdout: '/usr/local/bin/podman\n' },
         'which brew': { error: new Error('not found') },
         'podman --version': { stdout: 'podman version 5.6.2\n' },
@@ -135,6 +138,7 @@ describe('runtime backend setup', () => {
     const status = await detectRuntimeBackendSetup({
       platform: 'darwin',
       commandRunner: runnerFor({
+        'which docker': { error: new Error('not found') },
         'which podman': { stdout: '/usr/local/bin/podman\n' },
         'which brew': { error: new Error('not found') },
         'podman --version': { stdout: 'podman version 5.6.2\n' },
@@ -152,6 +156,7 @@ describe('runtime backend setup', () => {
       action: 'use-host-run-compatibility',
       platform: 'darwin',
       commandRunner: runnerFor({
+        'which docker': { error: new Error('not found') },
         'which podman': { stdout: '/usr/local/bin/podman\n' },
         'which brew': { error: new Error('not found') },
         'podman --version': { stdout: 'podman version 5.6.2\n' },
@@ -160,7 +165,7 @@ describe('runtime backend setup', () => {
     })
 
     expect(result.ok).toBe(false)
-    expect(result.error).toContain('not available when Podman is installed')
+    expect(result.error).toContain('unless global or project config explicitly allows it')
     await expect(readProjectRuntimeState(root)).resolves.toMatchObject({
       backendSetup: {
         selectedMode: null,
@@ -170,7 +175,7 @@ describe('runtime backend setup', () => {
     })
   })
 
-  it('keeps non-macOS hosts in compatibility mode for the 0.9 local release', async () => {
+  it('blocks non-macOS host-run unless config opts into compatibility mode', async () => {
     const status = await detectRuntimeBackendSetup({
       platform: 'linux',
       commandRunner: runnerFor({}),
@@ -180,7 +185,6 @@ describe('runtime backend setup', () => {
     expect(status.supportedHost).toBe(false)
     expect(status.actions.map(action => action.id)).toEqual([
       'retry-detection',
-      'use-host-run-compatibility',
     ])
   })
 
@@ -216,6 +220,7 @@ describe('runtime backend setup', () => {
       commandRunner: async (command, args) => {
         const key = [command, ...args].join(' ')
         commands.push(key)
+        if (key === 'which docker') throw new Error('not found')
         if (key === 'podman machine init --now') return { stdout: 'machine initialized\n', stderr: '' }
         if (key === 'which podman') return { stdout: '/opt/homebrew/bin/podman\n', stderr: '' }
         if (key === 'which brew') return { stdout: '/opt/homebrew/bin/brew\n', stderr: '' }

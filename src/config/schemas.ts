@@ -77,6 +77,12 @@ const ProjectStateStorageConfig = z.object({
   repoState: z.enum(['off', 'thin']).default('off'),
 }).default({})
 
+const ContainerRuntimeConfig = z.object({
+  mode: z.enum(['required', 'host-run-allowed']).default('required'),
+  preferredBackend: z.enum(['auto', 'docker', 'podman']).default('auto'),
+}).default({})
+export type ContainerRuntimeConfig = z.infer<typeof ContainerRuntimeConfig>
+
 const BootstrapConfig = z.object({
   commands: z.array(z.string()).default([]),
   successGates: z.array(z.string()).default([]),
@@ -268,6 +274,11 @@ export const WorkspaceYamlConfig = z.object({
   // Git-visible project-state manifests only.
   storage: ProjectStateStorageConfig.optional(),
 
+  // Container runtime policy for project agents. Host execution without Docker
+  // or Podman is blocked unless this project, or the global config, explicitly
+  // opts into `host-run-allowed`.
+  containerRuntime: ContainerRuntimeConfig.optional(),
+
   // FR-24: runtime-resource isolation. Consumed when the project-scope lever
   // `runtime_isolation` is set to `slot_allocation`. All fields optional — the
   // orchestrator falls back to sensible built-in defaults (see
@@ -369,6 +380,10 @@ export const GlobalConfig = z.object({
   // pushed, or turned into PRs. New projects copy this into their local project
   // policy during discovery, then can override per-repo.
   gitStory: GitStoryPolicy.default({}),
+
+  // Machine-wide container runtime policy. Projects can override this in
+  // guildhall.yaml.
+  containerRuntime: ContainerRuntimeConfig.optional(),
 
   /**
    * Advanced override for reviewer persona fan-out. Omit to let Guildhall pick
@@ -556,6 +571,9 @@ export const ResolvedConfig = z.object({
 
   // Dashboard port
   servePort: z.number(),
+
+  // Resolved container runtime policy after global and project config merge.
+  containerRuntime: ContainerRuntimeConfig.optional(),
 
   // FR-24: runtime-isolation passthrough (see WorkspaceYamlConfig.runtime).
   // The orchestrator reads this when instantiating a SlotAllocator under

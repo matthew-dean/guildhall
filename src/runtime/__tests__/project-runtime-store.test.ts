@@ -18,12 +18,12 @@ describe('project runtime store', () => {
     const state = await readProjectRuntimeState(projectRoot)
 
     expect(state).toMatchObject({
-      backend: 'podman',
+      backend: 'docker',
       status: 'stopped',
       containerId: null,
       runtimeApiVersion: '1',
       image: {
-        tag: '0.9.0-trixie-node22-python313-playwright',
+        tag: '0.10.0-trixie-node22-python313-playwright',
         digest: null,
       },
       mounts: {

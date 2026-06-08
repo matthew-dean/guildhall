@@ -76,14 +76,27 @@ function codebaseMapStatus(overrides: Record<string, unknown> = {}) {
 
 function runtimeStatus(overrides: Record<string, unknown> = {}) {
   return {
+    backend: 'podman',
     status: 'ready',
     message: 'Runtime is ready.',
     platform: 'darwin',
     supportedHost: true,
+    dockerPath: null,
+    dockerVersion: null,
     podmanPath: '/opt/homebrew/bin/podman',
     podmanVersion: 'podman version 5.0.0',
     homebrewPath: '/opt/homebrew/bin/brew',
     compatibilityModeLabel: 'Host-run compatibility',
+    runtimes: {
+      docker: { status: 'missing', path: null, version: null },
+      podman: {
+        status: 'ready',
+        path: '/opt/homebrew/bin/podman',
+        version: 'podman version 5.0.0',
+        machine: { exists: true, name: 'guildhall', running: true },
+      },
+    },
+    nonContainerExecution: { allowed: false, source: 'default' },
     machine: { exists: true, name: 'guildhall', running: true },
     actions: [],
     ...overrides,
@@ -340,23 +353,36 @@ describe('SettingsTab', () => {
     expect(screen.queryByRole('button', { name: 'Retry' })).not.toBeInTheDocument()
     expect(screen.queryByRole('button', { name: 'Check again' })).not.toBeInTheDocument()
     expect(screen.queryByRole('button', { name: 'Use host-run compatibility' })).not.toBeInTheDocument()
-    expect(screen.queryByText(/host-run/i)).not.toBeInTheDocument()
-    expect(screen.queryByText(/keeps existing host execution available/i)).not.toBeInTheDocument()
+    expect(screen.getByText('blocked by default')).toBeInTheDocument()
+    expect(screen.queryByText(/available because config explicitly allows host execution/i)).not.toBeInTheDocument()
   })
 
-  it('only mentions host-run compatibility when Podman is not ready', async () => {
+  it('only mentions host-run compatibility when config explicitly allows it', async () => {
     installFetch({
       runtime: {
+        backend: 'none',
         status: 'missing',
-        message: 'Podman is not installed yet. Install Podman to use the local runtime, or run on the host until Podman is ready.',
+        message: 'No container runtime is ready. Host-run is allowed by config.',
+        dockerPath: null,
+        dockerVersion: null,
         podmanPath: null,
         podmanVersion: null,
+        runtimes: {
+          docker: { status: 'missing', path: null, version: null },
+          podman: {
+            status: 'missing',
+            path: null,
+            version: null,
+            machine: { exists: false, name: null, running: false },
+          },
+        },
+        nonContainerExecution: { allowed: true, source: 'project' },
         machine: { exists: false, name: null, running: false },
         actions: [
           {
             id: 'install-instructions',
-            label: 'Install Podman',
-            description: 'Use the official Podman macOS installer, then check local runtime setup again.',
+            label: 'Install Docker or Podman',
+            description: 'Install Docker Desktop or Podman, then check local runtime setup again.',
             mutatesHost: false,
             requiresApproval: false,
           },
@@ -380,10 +406,10 @@ describe('SettingsTab', () => {
     render(SettingsTab, { subView: 'ready' })
 
     expect(await screen.findByRole('heading', { name: 'Local runtime' })).toBeInTheDocument()
-    expect(await screen.findByRole('button', { name: 'Install Podman' })).toBeInTheDocument()
+    expect(await screen.findByRole('button', { name: 'Install Docker or Podman' })).toBeInTheDocument()
     expect(screen.getByRole('button', { name: 'Check again' })).toBeInTheDocument()
     expect(screen.getByRole('button', { name: 'Use host-run compatibility' })).toBeInTheDocument()
-    expect(screen.getByText(/run on the host until Podman is ready/i)).toBeInTheDocument()
+    expect(screen.getByText(/available because config explicitly allows host execution/i)).toBeInTheDocument()
   })
 
   it('keeps coordinator routing as a focused settings panel', async () => {

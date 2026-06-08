@@ -74,7 +74,7 @@ export async function planProjectRuntimeMigration(
       {
         id: 'accept-runtime-backed',
         label: 'Use runtime-backed mode',
-        description: 'Switch this project from host-run compatibility to the Podman-backed runtime after checks pass.',
+        description: 'Switch this project from host-run compatibility to the container runtime after checks pass.',
         requiresAcceptance: true,
       },
       {
@@ -160,6 +160,11 @@ export async function applyProjectRuntimeMigration(
   }
 
   const acceptedAt = now(input)
+  const selectedContainerMode = state.backend === 'docker' || state.backend === 'podman'
+    ? state.backend
+    : state.backendSetup.selectedMode === 'docker' || state.backendSetup.selectedMode === 'podman'
+      ? state.backendSetup.selectedMode
+      : 'docker'
   const record: ProjectRuntimeMigrationState = {
     mode: 'runtime-backed',
     fallbackAvailable: true,
@@ -187,7 +192,7 @@ export async function applyProjectRuntimeMigration(
     health: record.health,
     backendSetup: {
       ...state.backendSetup,
-      selectedMode: 'podman',
+      selectedMode: selectedContainerMode,
       updatedAt: acceptedAt,
       message: 'Runtime-backed project mode accepted.',
     },

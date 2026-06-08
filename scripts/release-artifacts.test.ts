@@ -79,12 +79,13 @@ describe('release artifact contract', () => {
     expect(smoke).toContain('default runtime image')
   })
 
-  it('publishes the 0.9 runtime image to GHCR with immutable and minor-line tags', () => {
+  it('publishes the current runtime image to GHCR with immutable and minor-line tags', () => {
     const workflow = read('.github/workflows/runtime-image.yml')
 
     expect(workflow).toContain('ghcr.io/matthew-dean/guildhall-runtime-debian')
-    expect(workflow).toContain('0.9.0-trixie-node22-python313-playwright')
-    expect(workflow).toContain('0.9-trixie-node22-python313-playwright')
+    expect(workflow).toContain("'v0.10.*'")
+    expect(workflow).toContain('0.10.0-trixie-node22-python313-playwright')
+    expect(workflow).toContain('0.10-trixie-node22-python313-playwright')
     expect(workflow).toContain('runtime/Containerfile')
     expect(workflow).toContain('docker/metadata-action')
     expect(workflow).toContain('docker/build-push-action')
@@ -99,5 +100,18 @@ describe('release artifact contract', () => {
     expect(installer).not.toContain('ghcr.io/matthew-dean/guildhall-runtime-debian')
     expect(macosPackage).not.toContain('podman pull')
     expect(macosPackage).not.toContain('ghcr.io/matthew-dean/guildhall-runtime-debian')
+  })
+
+  it('builds the local runtime image through a Docker-or-Podman helper', () => {
+    const pkg = JSON.parse(read('package.json')) as { scripts: Record<string, string> }
+    const buildScript = read('scripts/runtime-image-build.mjs')
+
+    expect(pkg.scripts['runtime:image:build']).toBe('node scripts/runtime-image-build.mjs')
+    expect(buildScript).toContain('docker')
+    expect(buildScript).toContain('podman')
+    expect(buildScript).toContain('DOCKER_BUILDKIT')
+    expect(buildScript).toContain('GUILDHALL_CONTAINER_BUILD_TIMEOUT_MS')
+    expect(buildScript).toContain('0.10.0-trixie-node22-python313-playwright')
+    expect(buildScript).toContain('0.10-trixie-node22-python313-playwright')
   })
 })

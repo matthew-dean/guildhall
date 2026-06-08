@@ -98,16 +98,48 @@
   function runtimeStatusLabel(status: RuntimeSetupStatus): string {
     switch (status) {
       case 'ready': return 'ready'
-      case 'missing': return 'needs Podman'
+      case 'missing': return 'needs runtime'
       case 'machine-not-created': return 'setup needed'
       case 'machine-stopped': return 'stopped'
+      case 'installed-unhealthy': return 'not running'
       case 'unsupported-platform': return 'compatibility mode'
       case 'unknown-error': return 'needs attention'
     }
   }
 
-  function showRuntimeCompatibilityNote(status: RuntimeSetupStatus): boolean {
-    return status !== 'ready'
+  function runtimeBackendLabel(backend: string | undefined): string {
+    if (backend === 'docker') return 'Docker'
+    if (backend === 'podman') return 'Podman'
+    if (backend === 'none') return 'None'
+    return 'Auto'
+  }
+
+  function runtimeInstallLabel(
+    runtime: { status?: string; version?: string | null; path?: string | null; error?: string } | undefined,
+  ): string {
+    if (!runtime) return 'not checked'
+    if (runtime.status === 'ready') return runtime.version ?? 'ready'
+    if (runtime.status === 'installed-unhealthy') return runtime.error ? 'installed, not running' : 'installed'
+    if (runtime.path) return 'installed'
+    return 'not installed'
+  }
+
+  function runtimeServiceLabel(): string {
+    const machine = readiness.runtime?.runtimes?.podman?.machine ?? readiness.runtime?.machine
+    if (!machine) return 'not checked'
+    return machine.exists ? `${machine.name ?? 'default'} ${machine.running ? 'running' : 'stopped'}` : 'not created'
+  }
+
+  function hostRunPolicyLabel(): string {
+    const policy = readiness.runtime?.nonContainerExecution
+    if (!policy?.allowed) return 'blocked by default'
+    if (policy.source === 'project') return 'allowed by project config'
+    if (policy.source === 'global') return 'allowed by global config'
+    return 'allowed by config'
+  }
+
+  function showRuntimeCompatibilityNote(): boolean {
+    return Boolean(readiness.runtime && readiness.runtime.status !== 'ready' && readiness.runtime.nonContainerExecution?.allowed)
   }
 </script>
 
@@ -204,7 +236,7 @@
     <div class="panel-head">
       <div>
         <h3>Local runtime</h3>
-        <p>Guildhall runs project work in a Podman-backed Debian runtime on macOS.</p>
+        <p>Guildhall runs project work in Docker or Podman. Host-run requires explicit config opt-in.</p>
       </div>
       {#if readiness.runtime}
         <StatusPill label={runtimeStatusLabel(readiness.runtime.status)} tone={runtimeStatusTone(readiness.runtime.status)} />
@@ -219,12 +251,24 @@
             <dd>{readiness.runtime.platform === 'darwin' ? 'macOS' : readiness.runtime.platform}</dd>
           </UtilityPanel>
           <UtilityPanel as="div" className="runtime-fact" tone="neutral">
+            <dt>Selected</dt>
+            <dd>{runtimeBackendLabel(readiness.runtime.backend)}</dd>
+          </UtilityPanel>
+          <UtilityPanel as="div" className="runtime-fact" tone="neutral">
+            <dt>Docker</dt>
+            <dd>{runtimeInstallLabel(readiness.runtime.runtimes?.docker ?? { status: readiness.runtime.dockerPath ? 'installed-unhealthy' : 'missing', version: readiness.runtime.dockerVersion, path: readiness.runtime.dockerPath })}</dd>
+          </UtilityPanel>
+          <UtilityPanel as="div" className="runtime-fact" tone="neutral">
             <dt>Podman</dt>
-            <dd>{readiness.runtime.podmanVersion ?? (readiness.runtime.podmanPath ? 'installed' : 'not installed')}</dd>
+            <dd>{runtimeInstallLabel(readiness.runtime.runtimes?.podman ?? { status: readiness.runtime.podmanPath ? readiness.runtime.status : 'missing', version: readiness.runtime.podmanVersion, path: readiness.runtime.podmanPath })}</dd>
           </UtilityPanel>
           <UtilityPanel as="div" className="runtime-fact" tone="neutral">
             <dt>Service</dt>
-            <dd>{readiness.runtime.machine.exists ? `${readiness.runtime.machine.name ?? 'default'} ${readiness.runtime.machine.running ? 'running' : 'stopped'}` : 'not created'}</dd>
+            <dd>{runtimeServiceLabel()}</dd>
+          </UtilityPanel>
+          <UtilityPanel as="div" className="runtime-fact" tone="neutral">
+            <dt>Host-run</dt>
+            <dd>{hostRunPolicyLabel()}</dd>
           </UtilityPanel>
         </dl>
         {#if readiness.runtime.actions.length > 0}
@@ -241,8 +285,8 @@
             {/each}
           </div>
         {/if}
-        {#if showRuntimeCompatibilityNote(readiness.runtime.status)}
-          <p class="muted">{readiness.runtime.compatibilityModeLabel} keeps existing host execution available when setup is skipped or fails.</p>
+        {#if showRuntimeCompatibilityNote()}
+          <p class="muted">{readiness.runtime.compatibilityModeLabel} is available because config explicitly allows host execution.</p>
         {/if}
       </Stack>
     {:else}

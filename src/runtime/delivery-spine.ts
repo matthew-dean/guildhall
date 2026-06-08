@@ -63,7 +63,7 @@ export type ProjectDeliveryModel = z.infer<typeof ProjectDeliveryModel>
 
 export const SchemaMigrationDecision = z.object({
   persistedSchemaTouched: z.string(),
-  scope: z.enum(['project', 'workspace', 'machine', 'database', 'local_history', 'none']),
+  scope: z.enum(['project', 'workspace', 'machine', 'database', 'local_history', 'system_local_project_state', 'none']),
   changeClass: z.enum([
     'no_durable_schema_change',
     'backward_compatible_reader_change',

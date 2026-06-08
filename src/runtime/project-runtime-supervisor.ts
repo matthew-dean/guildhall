@@ -6,7 +6,7 @@ import {
   type ProjectRuntimeState,
   type RuntimeKeepAliveReason,
 } from './project-runtime-store.js'
-import { PodmanProjectRuntimeBackend } from './podman-project-runtime-backend.js'
+import { ContainerProjectRuntimeBackend } from './container-project-runtime-backend.js'
 import {
   appendRuntimeCommandEvidence,
   createRuntimeCommandId,
@@ -41,7 +41,7 @@ export class ProjectRuntimeSupervisor {
   readonly #knownProjectRoots = new Set<string>()
 
   constructor(options: ProjectRuntimeSupervisorOptions = {}) {
-    this.#backend = options.backend ?? new PodmanProjectRuntimeBackend()
+    this.#backend = options.backend ?? new ContainerProjectRuntimeBackend()
     this.#now = options.now ?? (() => new Date().toISOString())
   }
 

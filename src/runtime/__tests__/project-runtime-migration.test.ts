@@ -46,7 +46,7 @@ describe('project runtime migration', () => {
         { id: 'keep-host-run-compatibility' },
       ],
     })
-    expect(plan.runtimeImage.tag).toBe('0.9.0-trixie-node22-python313-playwright')
+    expect(plan.runtimeImage.tag).toBe('0.10.0-trixie-node22-python313-playwright')
   })
 
   it('does not switch away from host-run until health passes and the owner accepts', async () => {
@@ -119,7 +119,7 @@ describe('project runtime migration', () => {
         guildhallHomePath: '/home/guildhall/.guildhall',
       },
       backendSetup: {
-        selectedMode: 'podman',
+        selectedMode: 'docker',
       },
       migration: {
         mode: 'runtime-backed',
@@ -128,7 +128,7 @@ describe('project runtime migration', () => {
         acceptedAt: '2026-05-27T22:15:00.000Z',
         runtimeApiVersion: '1',
         image: {
-          tag: '0.9.0-trixie-node22-python313-playwright',
+          tag: '0.10.0-trixie-node22-python313-playwright',
         },
         health: {
           status: 'healthy',

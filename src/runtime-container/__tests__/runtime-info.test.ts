@@ -11,14 +11,14 @@ import {
 } from '../index.js'
 
 describe('runtime container contract', () => {
-  it('reports the executable and mount contract expected by the 0.9 runtime image', () => {
+  it('reports the executable and mount contract expected by the current runtime image', () => {
     const info = buildRuntimeInfo({
       env: {
         GUILDHALL_PROJECT_ID: 'commerce',
         GUILDHALL_RUNTIME_ID: 'runtime-commerce',
         GUILDHALL_PROJECT_ROOT: '/workspace/project',
         GUILDHALL_HOME: '/home/guildhall/.guildhall',
-        GUILDHALL_RUNTIME_IMAGE_TAG: '0.9.0-trixie-node22-python313-playwright',
+        GUILDHALL_RUNTIME_IMAGE_TAG: '0.10.0-trixie-node22-python313-playwright',
       },
       versions: {
         node: 'v22.11.0',
@@ -28,7 +28,7 @@ describe('runtime container contract', () => {
 
     expect(info.apiVersion).toBe('1')
     expect(info.image.family).toBe('guildhall-runtime-debian')
-    expect(info.image.tag).toBe('0.9.0-trixie-node22-python313-playwright')
+    expect(info.image.tag).toBe('0.10.0-trixie-node22-python313-playwright')
     expect(info.image.os).toEqual({
       distribution: 'debian',
       version: '13',

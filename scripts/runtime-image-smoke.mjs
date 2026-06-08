@@ -5,7 +5,7 @@ import { resolve } from 'node:path'
 import { spawnSync } from 'node:child_process'
 
 const image = process.env.GUILDHALL_RUNTIME_IMAGE
-  ?? 'ghcr.io/matthew-dean/guildhall-runtime-debian:0.9.0-trixie-node22-python313-playwright'
+  ?? 'ghcr.io/matthew-dean/guildhall-runtime-debian:0.10.0-trixie-node22-python313-playwright'
 const projectRoot = process.cwd()
 const explicitGuildhallHome = process.env.GUILDHALL_HOME?.trim()
 const guildhallHome = explicitGuildhallHome

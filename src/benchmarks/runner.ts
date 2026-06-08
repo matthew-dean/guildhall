@@ -132,7 +132,7 @@ function baseRunRecord(
     taskSubsetHash: input.taskSubsetHash,
     guildhallVersion: options.guildhallVersion ?? '0.9.0',
     guildhallCommit: gitCommit(options.projectRoot),
-    runtimeImage: options.runtimeImage ?? 'ghcr.io/matthew-dean/guildhall-runtime-debian:0.9-trixie-node22-python313-playwright',
+    runtimeImage: options.runtimeImage ?? 'ghcr.io/matthew-dean/guildhall-runtime-debian:0.10-trixie-node22-python313-playwright',
     modelProvider: options.modelProvider ?? 'fixture',
     model: options.model ?? 'deterministic-smoke',
     settings: {},

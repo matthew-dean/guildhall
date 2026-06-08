@@ -3499,7 +3499,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
 
   app.get('/api/project/runtime/setup', async c => {
     try {
-      return c.json(await runtimeBackendSetup())
+      return c.json(await runtimeBackendSetup({ projectRoot: project.path }))
     } catch (err) {
       return c.json({ error: err instanceof Error ? err.message : String(err) }, 500)
     }

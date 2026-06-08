@@ -224,7 +224,7 @@
     if (runtime) {
       items.push({
         label: runtimeHealthLabel(runtime.status, runtime.health?.status),
-        detail: runtimeModeLabel(runtime.migration?.mode),
+        detail: runtimeModeLabel(runtime.migration?.mode, runtime.backend),
         tone: runtimeTone(runtime.status, runtime.health?.status),
         href: currentProjectHref('/settings/ready', activeProjectId),
       })
@@ -263,7 +263,7 @@
       {
         label: 'Runtime',
         title: runtimeHealthLabel(runtime?.status, runtime?.health?.status),
-        detail: runtimeModeLabel(runtime?.migration?.mode),
+        detail: runtimeModeLabel(runtime?.migration?.mode, runtime?.backend),
         href: currentProjectHref('/settings/ready', activeProjectId),
         tone: runtimeTone(runtime?.status, runtime?.health?.status),
       },
@@ -744,9 +744,16 @@
     return 'Runtime stopped'
   }
 
-  function runtimeModeLabel(mode: string | undefined): string {
-    if (mode === 'runtime-backed') return 'Podman runtime mode'
-    if (mode === 'host-run') return 'Compatibility mode'
+  function runtimeModeLabel(mode: string | undefined, backend: string | undefined): string {
+    if (mode === 'runtime-backed') {
+      if (backend === 'docker') return 'Running in Docker'
+      if (backend === 'podman') return 'Running in Podman'
+      return 'Container runtime mode'
+    }
+    if (mode === 'host-run') {
+      if (backend === 'none') return 'Host-run mode'
+      return 'Compatibility mode'
+    }
     return 'Runtime mode unknown'
   }
 
@@ -1003,7 +1010,7 @@
           <StatusDot tone={runtimeTone(runtime?.status, runtime?.health?.status) === 'running' ? 'active' : runtimeTone(runtime?.status, runtime?.health?.status) === 'ok' ? 'ok' : runtimeTone(runtime?.status, runtime?.health?.status) === 'danger' ? 'danger' : runtimeTone(runtime?.status, runtime?.health?.status) === 'warn' ? 'warn' : 'idle'} pulse={runtime?.status === 'running'} size="sm" />
           <div>
             <strong>{runtimeHealthLabel(runtime?.status, runtime?.health?.status)}</strong>
-            <span>{runtimeModeLabel(runtime?.migration?.mode)}{#if runtime?.lastActivityAt} · active {formatDate(runtime.lastActivityAt)}{/if}</span>
+            <span>{runtimeModeLabel(runtime?.migration?.mode, runtime?.backend)}{#if runtime?.lastActivityAt} · active {formatDate(runtime.lastActivityAt)}{/if}</span>
           </div>
         </UtilityPanel>
         <UtilityPanel as="button" interactive className="signal-row" tone={memoryCoreTone(memoryHealth?.memoryCore, memoryHealth)} onclick={() => go(currentProjectHref('/settings/learning', activeProjectId))}>

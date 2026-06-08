@@ -72,13 +72,14 @@ function runtimeAgentHeaders(projectId: string): Record<string, string> {
 }
 
 describe('project runtime isolation contract', () => {
-  describe('filesystem and Podman mount boundaries', () => {
-    it.todo('starts every defined Guildhall project agent inside the project Podman runtime, not on the host')
+  describe('filesystem and container mount boundaries', () => {
+    it.todo('starts every defined Guildhall project agent inside the project Docker or Podman runtime, not on the host')
 
-    it('fails host-run fallback when Podman is installed but not ready', async () => {
+    it('fails host-run fallback when no container runtime is ready and config has not opted in', async () => {
       const projectRoot = await createRegisteredProject('project-a', 'Project A')
       const commandRunner = async (command: string, args: string[]) => {
         const key = [command, ...args].join(' ')
+        if (key === 'which docker') throw new Error('not found')
         if (key === 'which podman') return { stdout: '/usr/local/bin/podman\n', stderr: '' }
         if (key === 'which brew') throw new Error('not found')
         if (key === 'podman --version') return { stdout: 'podman version 5.8.2\n', stderr: '' }
@@ -96,7 +97,7 @@ describe('project runtime isolation contract', () => {
       expect(status.podmanPath).toBe('/usr/local/bin/podman')
       expect(status.actions.map(action => action.id)).not.toContain('use-host-run-compatibility')
       expect(result.ok).toBe(false)
-      expect(result.error).toContain('not available when Podman is installed')
+      expect(result.error).toContain('unless global or project config explicitly allows it')
     })
 
     it.todo('proves a live project-A container cannot read sibling project-B checkout files')

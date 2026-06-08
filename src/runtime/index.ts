@@ -411,7 +411,17 @@ export type {
   PodmanProjectRuntimeBackendOptions,
 } from './podman-project-runtime-backend.js'
 export {
+  DockerProjectRuntimeBackend,
+} from './docker-project-runtime-backend.js'
+export type {
+  DockerProjectRuntimeBackendOptions,
+} from './docker-project-runtime-backend.js'
+export {
+  ContainerProjectRuntimeBackend,
+} from './container-project-runtime-backend.js'
+export {
   DevServerManager,
+  ContainerDevServerLauncher,
   PodmanDevServerLauncher,
   readRuntimeDevServers,
   redactLogs,

@@ -931,7 +931,7 @@ export interface ProjectRuntimeSummary {
   }
   backendSetup?: {
     status?: string
-    selectedMode?: 'podman' | 'host-run' | string | null
+    selectedMode?: 'docker' | 'podman' | 'host-run' | string | null
     message?: string
   }
   image?: {
