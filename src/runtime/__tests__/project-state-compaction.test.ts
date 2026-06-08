@@ -7,6 +7,7 @@ import {
   getProjectLocalHistoryDir,
   getProjectProgressHeartbeatsPath,
   getProjectStateDir,
+  getProjectSystemStatePath,
   getProjectTaskLocalHistoryDir,
 } from '@guildhall/sessions'
 import { compactProjectState } from '../project-state-compaction.js'
@@ -86,6 +87,59 @@ describe('compactProjectState', () => {
       'utf8',
     )
     expect(evacuatedTaskQueue).toContain('must leave the repo when not opted in')
+  })
+
+  it('copies repo-local TASKS.json as-is into system-local project state before evacuation', async () => {
+    await fs.writeFile(path.join(projectRoot, 'guildhall.yaml'), [
+      'name: Boundary Test',
+      'id: boundary-test',
+      'storage:',
+      '  repoState: off',
+      '',
+    ].join('\n'), 'utf8')
+    await fs.writeFile(path.join(stateDir, 'TASKS.json'), JSON.stringify({
+      version: 1,
+      tasks: [
+        {
+          id: 'task-active',
+          status: 'ready',
+          title: 'Still needs work',
+        },
+        {
+          id: 'task-done',
+          status: 'done',
+          title: 'Already finished',
+        },
+      ],
+    }, null, 2), 'utf8')
+    await fs.mkdir(path.join(stateDir, 'tasks', 'archive'), { recursive: true })
+    await fs.writeFile(path.join(stateDir, 'tasks', 'index.json'), JSON.stringify({
+      version: 1,
+      activeTaskIds: ['task-active'],
+      archivedTaskIds: ['task-done'],
+    }, null, 2), 'utf8')
+    await fs.writeFile(path.join(stateDir, 'tasks', 'archive', 'task-done.json'), JSON.stringify({
+      id: 'task-done',
+      status: 'done',
+      title: 'Already finished',
+      summary: 'Readable done task history.',
+    }, null, 2), 'utf8')
+
+    const result = await compactProjectState({ projectRoot, dryRun: false })
+
+    expect(result.repoStateMode).toBe('off')
+    await expect(fs.stat(path.join(stateDir, 'TASKS.json'))).rejects.toThrow(/ENOENT/)
+    const systemQueue = JSON.parse(
+      await fs.readFile(getProjectSystemStatePath(projectRoot, 'TASKS.json'), 'utf8'),
+    ) as { tasks: Array<{ id: string; status: string }> }
+    expect(systemQueue.tasks).toEqual([
+      expect.objectContaining({ id: 'task-active', status: 'ready' }),
+      expect.objectContaining({ id: 'task-done', status: 'done' }),
+    ])
+    await expect(fs.readFile(getProjectSystemStatePath(projectRoot, 'tasks/index.json'), 'utf8'))
+      .resolves.toContain('task-done')
+    await expect(fs.readFile(getProjectSystemStatePath(projectRoot, 'tasks/archive/task-done.json'), 'utf8'))
+      .resolves.toContain('Readable done task history.')
   })
 
   it('allows repo-local apply cleanup when thin project state is explicitly opted in', async () => {

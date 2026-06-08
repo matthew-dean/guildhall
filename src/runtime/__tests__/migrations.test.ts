@@ -4,7 +4,7 @@ import os from 'node:os'
 import path from 'node:path'
 import { parse as parseYaml } from 'yaml'
 import { FileBackedGuildhallPersistence } from '@guildhall/persistence'
-import { getProjectLocalHistoryDir, getProjectRuntimeCommandEvidencePath } from '@guildhall/sessions'
+import { getProjectLocalHistoryDir, getProjectRuntimeCommandEvidencePath, getProjectSystemStatePath } from '@guildhall/sessions'
 import {
   applyProjectMigrations,
   getProjectMigrationStatus,
@@ -315,6 +315,59 @@ describe('applyProjectMigrations', () => {
 
     const after = await getProjectMigrationStatus({ projectRoot })
     expect(after.blocked.some(item => item.id === '0.10.0/project-state-storage-boundary')).toBe(false)
+  })
+
+  it('restores stranded evacuated task state into the system-local queue', async () => {
+    const systemTasksPath = getProjectSystemStatePath(projectRoot, 'TASKS.json')
+    await fs.mkdir(path.dirname(systemTasksPath), { recursive: true })
+    await fs.writeFile(systemTasksPath, JSON.stringify({
+      version: 1,
+      tasks: [
+        { id: 'task-workspace-import', title: 'Review existing project work', status: 'done' },
+        { id: 'task-context-menu', title: 'ContextMenu', status: 'done' },
+      ],
+    }, null, 2), 'utf8')
+    const evacuatedTasksPath = path.join(getProjectLocalHistoryDir(projectRoot), 'project-state-evacuation', 'TASKS.json')
+    await fs.mkdir(path.dirname(evacuatedTasksPath), { recursive: true })
+    await fs.writeFile(evacuatedTasksPath, JSON.stringify({
+      version: 1,
+      tasks: [
+        { id: 'task-listbox', title: 'Listbox', status: 'spec_review' },
+        { id: 'task-context-menu', title: 'ContextMenu', status: 'ready' },
+      ],
+    }, null, 2), 'utf8')
+    const evacuatedIndexPath = path.join(getProjectLocalHistoryDir(projectRoot), 'project-state-evacuation', 'tasks', 'index.json')
+    const evacuatedArchivePath = path.join(getProjectLocalHistoryDir(projectRoot), 'project-state-evacuation', 'tasks', 'archive', 'task-done.json')
+    await fs.mkdir(path.dirname(evacuatedArchivePath), { recursive: true })
+    await fs.writeFile(evacuatedIndexPath, JSON.stringify({
+      activeTaskIds: ['task-listbox'],
+      archivedTaskIds: ['task-done'],
+    }, null, 2), 'utf8')
+    await fs.writeFile(evacuatedArchivePath, JSON.stringify({
+      id: 'task-done',
+      title: 'Readable completed task',
+      status: 'done',
+    }, null, 2), 'utf8')
+
+    const before = await getProjectMigrationStatus({ projectRoot })
+    expect(before.blocked.some(item => item.id === '0.10.0/restore-evacuated-task-state')).toBe(true)
+
+    const result = await applyProjectMigrations({
+      projectRoot,
+      only: ['0.10.0/restore-evacuated-task-state'],
+    })
+
+    expect(result.applied.some(item => item.id === '0.10.0/restore-evacuated-task-state')).toBe(true)
+    const restored = JSON.parse(await fs.readFile(systemTasksPath, 'utf8')) as { tasks: Array<{ id: string; title: string; status: string }> }
+    expect(restored.tasks).toEqual(expect.arrayContaining([
+      expect.objectContaining({ id: 'task-listbox', title: 'Listbox', status: 'spec_review' }),
+      expect.objectContaining({ id: 'task-context-menu', title: 'ContextMenu', status: 'done' }),
+      expect.objectContaining({ id: 'task-workspace-import', title: 'Review existing project work', status: 'done' }),
+    ]))
+    await expect(fs.readFile(getProjectSystemStatePath(projectRoot, 'tasks/index.json'), 'utf8'))
+      .resolves.toContain('task-listbox')
+    await expect(fs.readFile(getProjectSystemStatePath(projectRoot, 'tasks/archive/task-done.json'), 'utf8'))
+      .resolves.toContain('Readable completed task')
   })
 
   it('rewrites stale thin repo state into only the current-shape manifest', async () => {

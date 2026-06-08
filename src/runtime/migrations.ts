@@ -23,6 +23,7 @@ import {
   migrateLegacyRuntimeCommandEvidenceToPersistence,
 } from './project-runtime-command.js'
 import { finalizeThinProjectStateManifest } from './thin-project-state-manifest.js'
+import { restoreEvacuatedTaskState } from './evacuated-task-state-restore.js'
 
 export type MigrationScope = 'machine' | 'project' | 'workspace' | 'database'
 export type MigrationSafety = 'automatic' | 'prompt' | 'manual' | 'required'
@@ -452,6 +453,33 @@ const BUILT_IN_PROJECT_MIGRATIONS: ProjectMigrationDefinition[] = [
     },
   },
   {
+    id: '0.10.0/restore-evacuated-task-state',
+    title: 'Restore active tasks stranded by project-state evacuation',
+    introducedIn: '0.10.0',
+    scope: 'project',
+    safety: 'automatic',
+    requirement: 'required',
+    summary: 'Copies missing tasks and readable task index/archive files from evacuated project-state back into system-local storage.',
+    async detect(projectRoot) {
+      const result = await restoreEvacuatedTaskState(projectRoot, false)
+      return {
+        needed: result.needed,
+        affectedPaths: result.affectedPaths,
+      }
+    },
+    async apply(projectRoot) {
+      const result = await restoreEvacuatedTaskState(projectRoot, true)
+      return {
+        summary: result.restored > 0
+          ? `Restored ${result.restored} evacuated task${result.restored === 1 ? '' : 's'} and ${result.restoredTaskStateFiles} readable task state file${result.restoredTaskStateFiles === 1 ? '' : 's'} into system-local storage.`
+          : result.restoredTaskStateFiles > 0
+            ? `Restored ${result.restoredTaskStateFiles} readable task state file${result.restoredTaskStateFiles === 1 ? '' : 's'} into system-local storage.`
+            : 'No evacuated task state needed restoration.',
+        affectedPaths: result.affectedPaths,
+      }
+    },
+  },
+  {
     id: '0.8.0/codex-agent-bridge',
     title: 'Install Codex Guildhall MCP bridge instructions',
     introducedIn: '0.8.0',
@@ -531,6 +559,7 @@ const BUILT_IN_PROJECT_MIGRATION_IDEMPOTENCE_TESTS: Record<string, string> = {
   '0.10.0/merge-policy-to-landing-strategy': 'migrations.test.ts: landing-strategy migration is idempotent',
   '0.10.0/owner-input-state-repair': 'migrations.test.ts: owner-input state repair is idempotent',
   '0.10.0/project-state-storage-boundary': 'migrations.test.ts: storage-boundary migration is idempotent',
+  '0.10.0/restore-evacuated-task-state': 'migrations.test.ts: restores stranded evacuated task state into the system-local queue and readable task files',
 }
 
 const REPO_LOCAL_STATE_MIGRATIONS = new Set([

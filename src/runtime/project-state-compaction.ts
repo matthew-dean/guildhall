@@ -9,6 +9,7 @@ import {
   getProjectLocalHistoryDir,
   getProjectProgressHeartbeatsPath,
   getProjectStateDir,
+  getProjectSystemStatePath,
   getProjectTaskLocalHistoryDir,
 } from '@guildhall/sessions'
 import {
@@ -157,6 +158,24 @@ async function evacuateProjectLocalState(
     }
   }
   return removed
+}
+
+async function copyRepoLocalProjectStateToSystemState(projectRoot: string, stateDir: string, dryRun: boolean): Promise<void> {
+  if (dryRun) return
+  let entries: Array<{ name: string }>
+  try {
+    entries = await fs.readdir(stateDir, { withFileTypes: true })
+  } catch (err) {
+    if (String(err).includes('ENOENT')) return
+    throw err
+  }
+  for (const entry of entries) {
+    const source = path.join(stateDir, entry.name)
+    const destination = getProjectSystemStatePath(projectRoot, entry.name)
+    if (existsSync(destination)) continue
+    await ensureDirFor(destination)
+    await fs.cp(source, destination, { recursive: true })
+  }
 }
 
 async function writeFullTaskEvidence(projectRoot: string, id: string, task: unknown, dryRun: boolean): Promise<void> {
@@ -448,6 +467,7 @@ export async function compactProjectState(
     const parsedTasks = await readJsonIfExists(tasksPath)
     const tasks = queueTasks(parsedTasks)
     const forbiddenFindings = findForbiddenProjectTaskFields(parsedTasks)
+    await copyRepoLocalProjectStateToSystemState(projectRoot, stateDir, dryRun)
     const evacuatedProjectStatePaths = await evacuateProjectLocalState(projectRoot, stateDir, dryRun)
     const bytesAfter = dryRun
       ? bytesBefore

@@ -10473,3 +10473,271 @@ Do not mark the Looma + Knit component-through-delivery checkbox complete from
 this pass; this audit did not run or complete that flow.
 
 source: codex:multi-project-flow-audit-2026-06-07
+
+2026-06-07T18:49:00Z - Retried the Looma + Knit `ContextMenu`
+selected-task flow again from the live installed app and confirmed completion.
+
+Freshness:
+- `/api/stale-server` returned `stale:false`, pid `46722`, dist
+  `/Users/matthew/.guildhall/app/0.10.0/app/dist/cli.js`.
+- Started selected task with
+  `POST /api/project/task/task-import-1l0mr2r/start?projectId=looma-knit`
+  and body `{"mode":"one_task","scope":"work_item"}`.
+- The run used `mode: "one_task"` and started at
+  `2026-06-07T18:44:12.726Z`.
+
+Live flow evidence:
+- Worker resumed `task-import-1l0mr2r` directly, recognized existing
+  implementation/proof, wrote a checkpoint, and recovered from two malformed
+  `update-task` calls: first an empty mutation, then a stringified `note`
+  object that the installed tool boundary initially rejected.
+- Worker then successfully transitioned ContextMenu from `in_progress` to
+  `review` at `2026-06-07T18:47:12.582Z`.
+- Reviewer approval moved the task to `gate_check` at
+  `2026-06-07T18:47:50.251Z`.
+- Gate checker ran authoritative task-scoped hard gates against
+  `/Users/matthew/.guildhall/worktrees/looma-knit/task-import-1l0mr2r`:
+  `pnpm typecheck`, `pnpm build`, and `pnpm lint`; all passed.
+- Gate checker transitioned `task-import-1l0mr2r` from `gate_check` to `done`
+  at `2026-06-07T18:48:29.028Z`.
+- Supervisor stopped automatically at `2026-06-07T18:48:29.031Z` with
+  `stopReason: "one_task"` and message
+  `stopAfterOneTask reached task task-import-1l0mr2r (processed).`
+
+Final live state:
+- `ContextMenu` (`task-import-1l0mr2r`) is `done` with `completedAt:
+  2026-06-07T19:00:00.000Z`.
+- Run status is `stopped`, mode `one_task`, stop summary ticks `3`, usage
+  `837630` input tokens, `6991` output tokens, and `502272` cached input
+  tokens.
+- Residual consistency gap: the task status is `done`, but the legacy
+  `acceptanceCriteria[].met` booleans still read `false`. Treat this as a
+  task-state/projection follow-up; the authoritative run, review, hard gates,
+  and terminal status all show completion.
+
+source: codex:context-menu-selected-work-complete-2026-06-07
+
+2026-06-07T19:16:00Z - Ran a live Storybook interaction audit for Looma + Knit
+`ContextMenu` and its supporting `Menu` / `MenuItem` primitives in the completed
+task worktree
+`/Users/matthew/.guildhall/worktrees/looma-knit/task-import-1l0mr2r`.
+
+Storybook target:
+- Started `@looma/storybook` on `http://127.0.0.1:6006`.
+- Tested direct canvas URLs for `overlay-contextmenu--default`,
+  `overlay-menu--default`, `overlay-menu-item--default`, and
+  `overlay-menu-showcase--with-icons`.
+
+Live browser findings:
+- ContextMenu opened on right-click, positioned as a fixed overlay, composed the
+  internal `ui-menu`, and rendered the four expected `ui-menu-item` children.
+- Pointer click on `Edit` emitted `select { value: "edit", trigger: "pointer" }`
+  and closed with `reason: "action"`.
+- Keyboard Enter on `Duplicate` emitted
+  `select { value: "duplicate", trigger: "keyboard" }` and closed with
+  `reason: "action"`.
+- Escape closed the open ContextMenu with `reason: "escape"` and
+  `trigger: "keyboard"`.
+- The initial Storybook pass exposed a supporting-component gap: disabled
+  `ui-menu-item` children did not visually render disabled because the unlayered
+  global isolation reset beat the layered/global item styling for slotted
+  light-DOM menu items. Disabled behavior also needed a defensive property
+  check in the ContextMenu/Menu event guards.
+- Fixed in the task worktree by reflecting `ui-menu-item.disabled`, checking
+  disabled by `aria-disabled`, attribute, and property in `ui-menu` and
+  `ui-context-menu`, and adding unlayered scoped menu-item layout/disabled
+  rules for `ui-menu > ui-menu-item` and `ui-context-menu > ui-menu-item`.
+- Final Storybook replay passed: `Delete` rendered at `opacity: 0.6` with
+  `cursor: not-allowed`, item padding was `8px 12px`, disabled click/Enter did
+  not emit `select` or close the menu, and standalone Menu/MenuItem/showcase
+  stories all rendered and interacted correctly.
+
+Verification:
+- `pnpm --filter @looma/core build` passed.
+- `pnpm --filter @looma/core test` passed with 29 tests.
+- `pnpm --filter @looma/core test:browser` passed with 4 Chromium tests.
+- Full task-worktree gates passed: `pnpm typecheck`, `pnpm build`, and
+  `pnpm lint`. The build included Storybook production output.
+
+source: codex:context-menu-storybook-supporting-components-2026-06-07
+
+2026-06-08T14:05:00Z - Audited Looma + Knit remaining-work coverage after the
+owner asked whether all remaining Knit work is in Guildhall and prioritized.
+
+Live state evidence:
+- `/api/stale-server` returned `stale:false` for installed app
+  `/Users/matthew/.guildhall/app/0.10.0/app/dist/cli.js`.
+- `/api/project?projectId=looma-knit` returned only two active tasks:
+  `task-workspace-import` and `task-import-1l0mr2r`; both are `done`.
+  `startReadiness.code` is `all_terminal` and the shared action model says
+  `No runnable tasks`.
+- Guildhall MCP `derive_queue_candidates` for `projectId: "looma-knit"`
+  agreed with the API: `runnable: []`, `blocked: []`.
+- `/api/project/workspace-import/status?projectId=looma-knit` still sees a
+  seeded, done workspace-import task whose parsed draft contains `252` task
+  candidates and `132` milestones, from `668` detected signals.
+- The active system-local task file
+  `/Users/matthew/.guildhall/data/projects/looma-knit-0c328d88ca44/project-state/TASKS.json`
+  contains only the two done tasks above.
+- The stranded evacuated task file
+  `/Users/matthew/.guildhall/data/projects/looma-knit-0c328d88ca44/project-state-evacuation/TASKS.json`
+  contains `43` non-terminal tasks: `3 blocked`, `35 spec_review`,
+  `1 ready`, `1 in_progress`, and `3 exploring`. Its `tasks/index.json`
+  lists these as `activeTaskIds`, not archived work.
+- The storage-boundary migration record says
+  `0.10.0/project-state-storage-boundary` was applied at
+  `2026-06-06T20:05:01.423Z` and evacuated repo-local project state into
+  system-local storage, but the active system-local queue now lacks the old
+  non-terminal task backlog.
+
+Repo-source evidence:
+- `knit/docs/release-plan.md` still defines prioritized remaining tracks:
+  V1 release hardening, Looma primitive convergence, Looma editor integration,
+  and launch-readiness/V2 cut line.
+- `knit/docs/looma-migration-inventory.md` still marks primitive
+  normalization in progress for `SidebarContent.vue` and `settings.vue`, and
+  says editor migration/refinement should continue.
+- `looma/docs/component-roadmap.md` still lists open component and editor UI
+  items beyond the completed ContextMenu task.
+
+Finding:
+- Treat this as a serious Guildhall task-tracking / memory-upgrade bug, not as
+  Looma + Knit being complete. The old non-terminal task queue appears to have
+  been stranded in `project-state-evacuation` while the active task queue was
+  reseeded later with only workspace import plus ContextMenu. Because all
+  active tasks are terminal, Guildhall truthfully reports `all_terminal` from
+  the wrong-sized active queue.
+
+Required follow-up:
+- Add a focused migration/reconciliation repair that detects non-terminal
+  `project-state-evacuation/TASKS.json` tasks missing from active
+  `project-state/TASKS.json`, restores or reconciles them into the active queue,
+  and prevents `all_terminal` when repo-source or stranded active-task evidence
+  proves remaining work exists.
+- Preserve Knit priority from `knit/docs/release-plan.md`: V1 hardening first,
+  Looma primitive convergence second, Looma editor integration third, launch
+  cut-line/V2 deferrals after that. Avoid blindly approving all 252 detector
+  candidates.
+
+source: codex:looma-knit-task-tracking-memory-upgrade-bug-2026-06-08
+
+2026-06-08T13:49:00Z - Patched and live-repaired the Looma + Knit
+task-tracking / memory-upgrade bug.
+
+Code repair:
+- `compactProjectState` now copies repo-local project-state entries into the
+  system-local `project-state/` directory before removing repo-local
+  `.guildhall` state when `storage.repoState` is off. This preserves
+  `TASKS.json` as task truth and keeps task index/archive files readable.
+- Added required automatic migration
+  `0.10.0/restore-evacuated-task-state`, which detects missing task IDs in
+  `project-state-evacuation/TASKS.json` and restores them into active
+  system-local `project-state/TASKS.json`.
+- The repair preserves newer active-system records on duplicate IDs so a
+  later-completed task, such as ContextMenu, is not overwritten by an older
+  evacuated copy.
+
+Live Looma + Knit repair:
+- Backed up the pre-repair active queue to
+  `/Users/matthew/.guildhall/data/projects/looma-knit-0c328d88ca44/project-state/TASKS.before-restore-evacuated-2026-06-08T13-48-58-525Z.json`.
+- Restored `42` missing tasks from
+  `project-state-evacuation/TASKS.json`, preserving the existing two active
+  system records.
+- Live `/api/project?projectId=looma-knit` now reports `44` tasks:
+  `3 blocked`, `35 spec_review`, `1 in_progress`, `3 exploring`, and `2 done`.
+  `startReadiness.canStart` is now `true`, and the shared run control label is
+  `Resume`.
+- Live `/api/project/inbox?projectId=looma-knit` now shows real task follow-up
+  items instead of an empty inbox with `all_terminal`.
+
+Verification:
+- `pnpm vitest run src/runtime/__tests__/project-state-compaction.test.ts
+  src/runtime/__tests__/migrations.test.ts src/runtime/__tests__/memory-migration.test.ts`
+  passed: 21 tests.
+- `pnpm tsgo -p tsconfig.json --noEmit` passed.
+
+Remaining follow-up:
+- The restored tasks keep their original priority values. A separate
+  prioritization pass should map Knit release stages onto task priority/order
+  without rewriting task content during the state-repair migration.
+
+source: codex:looma-knit-memory-upgrade-task-restore-patch-2026-06-08
+
+2026-06-08T15:17:00Z - Broadened and ran the evacuated-task restore migration
+across all affected local Guildhall projects.
+
+Schema Migration Decision:
+- Work id: codex:restore-evacuated-task-state-all-projects-2026-06-08.
+- Persisted schema touched: system-local project task state under
+  `project-state/TASKS.json`, `project-state/tasks/index.json`, and
+  `project-state/tasks/archive/*.json`.
+- Scope: automatic required project migration
+  `0.10.0/restore-evacuated-task-state`.
+- Change class: repair migration for data stranded by the storage-boundary
+  evacuation path; no new persisted schema shape.
+- Existing data impact: missing evacuated task IDs are prepended to the active
+  system-local queue while duplicate IDs preserve the newer active-system
+  record. Missing readable task index/archive files are copied from
+  `project-state-evacuation` only when the active destination is absent.
+- Migration id: `0.10.0/restore-evacuated-task-state`.
+- Safety: automatic and idempotent.
+- Required before run: yes, because a stranded active queue can make Guildhall
+  report `all_terminal` while unfinished work exists.
+- Compatibility reader: existing system-local task readers continue to read
+  `project-state/`; the evacuation copy remains readable as history.
+- Fixtures/tests: `src/runtime/__tests__/migrations.test.ts` now covers both
+  missing task-row restoration and companion `tasks/index.json` /
+  `tasks/archive/*.json` restoration.
+- Owner-facing plan text: apply the restore migration to all registered
+  projects and explicitly to the Guildhall repo root, then verify no evacuated
+  task IDs or companion task-state files remain missing.
+- Rollback/revert behavior: restore from filesystem backups or the unchanged
+  `project-state-evacuation` source; duplicate active records are not
+  overwritten by apply.
+
+Code repair:
+- `restoreEvacuatedTaskState()` now detects missing readable task state files
+  even when `TASKS.json` has already been repaired.
+- Added wrapper script
+  `scripts/migrations/0.10.0-restore-evacuated-task-state.mjs`, matching the
+  existing task migration script pattern and invoking
+  `guildhall migrate apply --migration 0.10.0/restore-evacuated-task-state`.
+- Migration apply summaries now report restored task rows separately from
+  restored readable task state files.
+
+Live migration run:
+- Pre-run inventory found missing evacuated task IDs in
+  `font-something` (`6`), `guildhall` (`10`), `narrative-harness` (`7`), and
+  `t-minus-t` (`2`). `commerce-project`, `fair-labor-license`, and `jess`
+  needed companion task-state files restored. `looma-knit` was already clean
+  from the earlier live repair.
+- Ran `node scripts/migrations/0.10.0-restore-evacuated-task-state.mjs --all`;
+  the migration applied to `t-minus-t`, `fair-labor-license`, `font-something`,
+  `narrative-harness`, `commerce-project`, and `jess`, and no-op'd for
+  `looma-knit`.
+- Ran `node scripts/migrations/0.10.0-restore-evacuated-task-state.mjs
+  /Users/matthew/git/oss/guildhall`; the migration applied to the unregistered
+  Guildhall repo-root project-state directory.
+- Post-run inventory across every directory with
+  `project-state-evacuation/TASKS.json` showed `missingTasks: 0` and
+  `missingCompanionFiles: 0`.
+
+Verification:
+- Red phase: `pnpm vitest run src/runtime/__tests__/migrations.test.ts
+  --reporter=dot` failed because
+  `project-state/tasks/index.json` was not restored.
+- Green phase: the same focused migration test passed after the helper copied
+  missing companion task-state files.
+- `pnpm build` passed before running the wrapper so `dist/cli.js` contained the
+  patched migration.
+- `node dist/cli.js migrate status --migration
+  0.10.0/restore-evacuated-task-state --all` and the explicit Guildhall root
+  status both reported `Pending: 0` and `Blocked: 0`.
+- `pnpm vitest run src/runtime/__tests__/project-state-compaction.test.ts
+  src/runtime/__tests__/migrations.test.ts src/runtime/__tests__/memory-migration.test.ts
+  --reporter=dot` passed: 21 tests.
+- `pnpm tsgo -p tsconfig.json --noEmit` passed.
+- `pnpm lint:contracts` passed with decision evidence.
+- Final `pnpm build` passed after the migration summary wording cleanup.
+
+source: codex:restore-evacuated-task-state-all-projects-2026-06-08
