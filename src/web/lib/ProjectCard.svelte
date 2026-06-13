@@ -109,8 +109,12 @@
     return count === 1 ? singular : plural
   }
 
+  function workItemNoun(count: number): string {
+    return count === 1 ? 'work item' : 'work items'
+  }
+
   function activeTooltip(count = summary.counts.active): string {
-    return `${count} active ${taskNoun(count, 'task')}: work that can currently advance or is advancing.`
+    return `${count} active ${workItemNoun(count)}: work that can currently advance or is advancing.`
   }
 
   function draftTooltip(count = summary.counts.draftReview): string {
@@ -118,19 +122,19 @@
   }
 
   function blockedTooltip(count = summary.counts.blocked): string {
-    return `${count} blocked ${taskNoun(count, 'task')}: work needing triage, recovery, or a human decision.`
+    return `${count} blocked ${workItemNoun(count)}: work needing triage, recovery, or a human decision.`
   }
 
   function doneTooltip(count = summary.counts.done): string {
-    return `${count} done ${taskNoun(count, 'task')}: completed task records.`
+    return `${count} done ${workItemNoun(count)}: completed work.`
   }
 
   function shelvedTooltip(count = summary.counts.shelved): string {
-    return `${count} shelved ${taskNoun(count, 'task')}: intentionally set aside or no longer part of the active plan.`
+    return `${count} shelved ${workItemNoun(count)}: intentionally set aside or no longer part of the active plan.`
   }
 
   function totalTooltip(count = summary.counts.total): string {
-    return `${count} total ${taskNoun(count, 'task')} tracked for this project.`
+    return `${count} total ${workItemNoun(count)} tracked for this project.`
   }
 
   function guildMemberTooltip(member: { role: string; active: boolean }): string {
@@ -141,9 +145,9 @@
       case 'Spec':
         return `${member.role}: ${summary.counts.draftReview} draft ${taskNoun(summary.counts.draftReview, 'brief')} awaiting review in ${summary.name}.`
       case 'Builder':
-        return `${member.role}: ${summary.counts.active} active ${taskNoun(summary.counts.active, 'task')} waiting for a run in ${summary.name}.`
+        return `${member.role}: ${summary.counts.active} active ${workItemNoun(summary.counts.active)} waiting for a run in ${summary.name}.`
       case 'Reviewer':
-        return `${member.role}: ${summary.counts.blocked} blocked and ${summary.counts.done} done ${taskNoun(summary.counts.done, 'task')} in ${summary.name}.`
+        return `${member.role}: ${summary.counts.blocked} blocked and ${summary.counts.done} done ${workItemNoun(summary.counts.done)} in ${summary.name}.`
       default:
         return `${member.role}: part of the ${summary.name} project workflow.`
     }
@@ -211,7 +215,7 @@
       <div class="workline" aria-label={workMixLabel}>
         {#if summary.counts.active > 0}
           <Tooltip text={activeTooltip()} style={segmentFlex(summary.counts.active)} className="work-segment-tip">
-            <span class="work-segment segment-active" aria-label={`${summary.counts.active} active ${taskNoun(summary.counts.active, 'task')}`}></span>
+            <span class="work-segment segment-active" aria-label={`${summary.counts.active} active ${workItemNoun(summary.counts.active)}`}></span>
           </Tooltip>
         {/if}
         {#if summary.counts.draftReview > 0}
@@ -221,22 +225,22 @@
         {/if}
         {#if summary.counts.blocked > 0}
           <Tooltip text={blockedTooltip()} style={segmentFlex(summary.counts.blocked)} className="work-segment-tip">
-            <span class="work-segment segment-blocked" aria-label={`${summary.counts.blocked} blocked ${taskNoun(summary.counts.blocked, 'task')}`}></span>
+            <span class="work-segment segment-blocked" aria-label={`${summary.counts.blocked} blocked ${workItemNoun(summary.counts.blocked)}`}></span>
           </Tooltip>
         {/if}
         {#if summary.counts.done > 0}
           <Tooltip text={doneTooltip()} style={segmentFlex(summary.counts.done)} className="work-segment-tip">
-            <span class="work-segment segment-done" aria-label={`${summary.counts.done} done ${taskNoun(summary.counts.done, 'task')}`}></span>
+            <span class="work-segment segment-done" aria-label={`${summary.counts.done} done ${workItemNoun(summary.counts.done)}`}></span>
           </Tooltip>
         {/if}
         {#if summary.counts.shelved > 0}
           <Tooltip text={shelvedTooltip()} style={segmentFlex(summary.counts.shelved)} className="work-segment-tip">
-            <span class="work-segment segment-shelved" aria-label={`${summary.counts.shelved} shelved ${taskNoun(summary.counts.shelved, 'task')}`}></span>
+            <span class="work-segment segment-shelved" aria-label={`${summary.counts.shelved} shelved ${workItemNoun(summary.counts.shelved)}`}></span>
           </Tooltip>
         {/if}
         {#if summary.counts.total === 0}
-          <Tooltip text="No tasks yet" style={segmentFlex(workMixTotal)} className="work-segment-tip">
-            <span class="work-segment segment-empty" aria-label="No tasks yet"></span>
+          <Tooltip text="No work items yet" style={segmentFlex(workMixTotal)} className="work-segment-tip">
+            <span class="work-segment segment-empty" aria-label="No work items yet"></span>
           </Tooltip>
         {/if}
       </div>
@@ -283,7 +287,7 @@
     <div class="metrics" aria-label="Project task summary">
       {#if summary.counts.active > 0}
         <Tooltip text={activeTooltip()}>
-          <span class="metric tone-running" aria-label={`${summary.counts.active} active ${taskNoun(summary.counts.active, 'task')}`}>
+          <span class="metric tone-running" aria-label={`${summary.counts.active} active ${workItemNoun(summary.counts.active)}`}>
             <Activity size={13} />
             <strong>{summary.counts.active}</strong>
           </span>
@@ -299,7 +303,7 @@
       {/if}
       {#if summary.counts.blocked > 0}
         <Tooltip text={blockedTooltip()}>
-          <span class="metric tone-warn" aria-label={`${summary.counts.blocked} blocked ${taskNoun(summary.counts.blocked, 'task')}`}>
+          <span class="metric tone-warn" aria-label={`${summary.counts.blocked} blocked ${workItemNoun(summary.counts.blocked)}`}>
             <AlertTriangle size={13} />
             <strong>{summary.counts.blocked}</strong>
           </span>
@@ -307,7 +311,7 @@
       {/if}
       {#if summary.counts.done > 0}
         <Tooltip text={doneTooltip()}>
-          <span class="metric tone-ok" aria-label={`${summary.counts.done} done ${taskNoun(summary.counts.done, 'task')}`}>
+          <span class="metric tone-ok" aria-label={`${summary.counts.done} done ${workItemNoun(summary.counts.done)}`}>
             <CheckCircle2 size={13} />
             <strong>{summary.counts.done}</strong>
           </span>
@@ -315,7 +319,7 @@
       {/if}
       {#if summary.counts.total > 0}
         <Tooltip text={totalTooltip()}>
-          <span class="metric tone-neutral" aria-label={`${summary.counts.total} total ${taskNoun(summary.counts.total, 'task')}`}>
+          <span class="metric tone-neutral" aria-label={`${summary.counts.total} total ${workItemNoun(summary.counts.total)}`}>
             <PauseCircle size={13} />
             <strong>{summary.counts.total}</strong>
           </span>

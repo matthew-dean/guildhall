@@ -1,143 +1,36 @@
 <script lang="ts">
   import Button from '../../lib/Button.svelte'
   import Chip from '../../lib/Chip.svelte'
-  import Icon from '../../lib/Icon.svelte'
   import { friendlyTaskId } from '../../lib/identifier-labels.js'
   import { nav, path } from '../../lib/nav.svelte.js'
   import { currentTaskHref } from '../../lib/project-routes.js'
   import { hasUnmetDependencies } from '../../lib/task-dependencies.js'
-  import { isCompleteForWorkerHandoff, needsWorkerHandoffSpecCleanup } from '../../lib/task-state.js'
   import { taskStagePresentation, type TaskPresentationTone } from '../../lib/task-presentation.js'
   import { buildWorkHierarchy } from '../../lib/work-hierarchy.js'
   import type { ProjectDetail, Task } from '../../lib/types.js'
 
   interface Props {
     tasks: Task[]
-    filter?: Filter
+    selectedTaskId?: string | null
     workProgress?: ProjectDetail['workProgress']
+    onSelectTask?: (taskId: string) => void
   }
 
-  type Filter = 'queued' | 'planning' | 'open' | 'all' | 'blocked' | 'needs-you'
-  type PacketSelection = { kind: 'task'; taskId: string }
   type ChipTone = 'accent' | 'ok' | 'warn' | 'danger' | 'neutral' | 'running'
 
-  interface ColumnItem {
-    kind: 'task'
-    id: string
-    parentId: string | null
-    title: string
-    detail: string
-    status?: string
-    statusLabel: string
-    statusTone: ChipTone
-    childCount: number
-    rollup: ReturnType<typeof rollupFor>
-  }
-
-  interface WorkColumn {
-    id: string
-    title: string
-    subtitle: string
-    depth: number
-    items: ColumnItem[]
-    emptyText?: string
-  }
-
-  let { tasks, filter = 'open', workProgress = undefined }: Props = $props()
+  let { tasks, selectedTaskId = null, workProgress = undefined, onSelectTask }: Props = $props()
 
   const visibleTasks = $derived(tasks.filter(isVisibleLogicalTask))
   const hierarchy = $derived(buildWorkHierarchy(visibleTasks))
   const tasksById = $derived(new Map(visibleTasks.map(task => [task.id, task])))
-  const roots = $derived(visibleTasks.filter(task => !hierarchy.byId.get(task.id)?.parentId))
-
-  let selectedPath = $state<string[]>([])
-  const selectedTask = $derived.by(() => {
-    const taskId = selectedPath[selectedPath.length - 1]
-    return taskId ? tasksById.get(taskId) ?? null : null
-  })
-
-  const packetSelection = $derived<PacketSelection | null>(
-    selectedTask ? { kind: 'task', taskId: selectedTask.id } : null,
-  )
-
-  const columns = $derived.by(() => {
-    const result: WorkColumn[] = []
-    if (selectedPath.length === 0) {
-      result.push(siblingColumn(null, 0))
-      result.push({
-        id: 'empty:children',
-        title: 'Children',
-        subtitle: 'Select an item',
-        depth: 1,
-        items: [],
-        emptyText: 'Select a work item to show its children here.',
-      })
-      return result
-    }
-
-    const contextParentId = selectedPath.length === 1 ? null : selectedPath[selectedPath.length - 2]
-    const contextDepth = selectedPath.length === 1 ? 0 : selectedPath.length - 1
-    result.push(siblingColumn(contextParentId, contextDepth))
-
-    if (selectedTask) {
-      const childColumn = childColumnFor(selectedTask, selectedPath.length)
-      result.push(childColumn ?? {
-        id: `empty:${selectedTask.id}`,
-        title: 'Contained work',
-        subtitle: 'No contained work',
-        depth: selectedPath.length,
-        items: [],
-        emptyText: deliveryStepsFor(selectedTask).length > 0
-          ? 'This item has tracked delivery steps and no contained work.'
-          : needsBreakdownReview(selectedTask)
-          ? 'No child tasks or decomposition proposal exists yet. Review a breakdown before treating this as runnable work.'
-          : 'This item has no contained work yet.',
-      })
-    }
-    return result
-  })
+  const selectedTask = $derived(selectedTaskId ? tasksById.get(selectedTaskId) ?? null : null)
+  const containedWork = $derived(selectedTask ? childTasksFor(selectedTask) : [])
 
   function childTasksFor(task: Task): Task[] {
     return (hierarchy.byId.get(task.id)?.childIds ?? [])
       .map(id => tasksById.get(id))
       .filter(isTask)
       .sort((left, right) => (left.hierarchy?.order ?? 0) - (right.hierarchy?.order ?? 0))
-  }
-
-  function siblingColumn(parentId: string | null, depth: number): WorkColumn {
-    if (!parentId) {
-      const items = roots.filter(matchesFilterOrDescendant)
-      return {
-        id: 'root',
-        title: 'Work',
-        subtitle: `${items.length} top-level ${items.length === 1 ? 'item' : 'items'}`,
-        depth,
-        items: items.map(taskColumnItem),
-      }
-    }
-    const parent = tasksById.get(parentId)
-    const siblings = parent ? childTasksFor(parent).filter(matchesFilterOrDescendant) : []
-    return {
-      id: `siblings:${parentId}`,
-      title: parent?.title ?? friendlyTaskId(parentId),
-      subtitle: `${siblings.length} sibling ${siblings.length === 1 ? 'item' : 'items'}`,
-      depth,
-      items: siblings.map(taskColumnItem),
-    }
-  }
-
-  function childColumnFor(parent: Task, depth: number): WorkColumn | null {
-    const children = childTasksFor(parent).filter(matchesFilterOrDescendant)
-    if (children.length > 0) {
-      return {
-        id: `children:${parent.id}`,
-        title: 'Contained work',
-        subtitle: `${children.length} contained ${children.length === 1 ? 'item' : 'items'}`,
-        depth,
-        items: children.map(taskColumnItem),
-      }
-    }
-    return null
   }
 
   function isTask(value: Task | undefined): value is Task {
@@ -197,43 +90,7 @@
 
   function isQueuedWorkTask(task: Task): boolean {
     if (hasUnmetDependencies(task, tasks)) return false
-    if (task.status === 'ready') return isCompleteForWorkerHandoff(task)
-    return ['review', 'gate_check', 'in_progress'].includes(task.status ?? '')
-  }
-
-  function isPlanningTask(task: Task): boolean {
-    if (task.status === 'ready') return needsWorkerHandoffSpecCleanup(task)
-    return ['proposed', 'import_draft', 'exploring', 'spec_review'].includes(task.status ?? '')
-  }
-
-  function matchesFilter(task: Task): boolean {
-    if (filter === 'all') return true
-    if (filter === 'queued') return isQueuedWorkTask(task)
-    if (filter === 'planning') return isPlanningTask(task)
-    if (filter === 'open') return !['done', 'pending_pr', 'shelved'].includes(task.status ?? '')
-    if (filter === 'blocked') return task.status === 'blocked' || hasUnmetDependencies(task, tasks)
-    if (filter === 'needs-you') return hasOpenQuestion(task)
-    return false
-  }
-
-  function matchesFilterOrDescendant(task: Task): boolean {
-    return matchesFilter(task) || descendantsFor(task).some(matchesFilter)
-  }
-
-  function taskColumnItem(task: Task): ColumnItem {
-    const childCount = childTasksFor(task).length
-    return {
-      kind: 'task',
-      id: task.id,
-      parentId: hierarchy.byId.get(task.id)?.parentId ?? null,
-      title: task.title ?? friendlyTaskId(task.id),
-      detail: childCount > 0 ? progressText(task) : primaryText(task),
-      status: task.status,
-      statusLabel: taskStatusLabel(task),
-      statusTone: taskStatusTone(task),
-      childCount,
-      rollup: rollupFor(task),
-    }
+    return ['ready', 'review', 'gate_check', 'in_progress'].includes(task.status ?? '')
   }
 
   function primaryText(task: Task): string {
@@ -246,7 +103,7 @@
     }
     if (needsBreakdownReview(task)) {
       const count = task.acceptanceCriteria?.length ?? 0
-      return `${count} requirements; no child tasks or decomposition proposal yet.`
+      return `${count} requirements; no contained work or decomposition proposal yet.`
     }
     if (task.blockReason) return task.blockReason
     if (task.latestCheckpoint?.nextPlannedAction) return task.latestCheckpoint.nextPlannedAction
@@ -260,11 +117,6 @@
     if (task.proofPaths?.[0]?.title) return task.proofPaths[0].title
     if (task.definitionOfDone?.evidenceRequired?.[0]) return task.definitionOfDone.evidenceRequired[0]
     return 'Proof path not attached yet'
-  }
-
-  function progressText(task: Task): string {
-    const rollup = rollupFor(task)
-    return `${rollup.done} / ${rollup.total} done${rollup.blocked ? ` · ${rollup.blocked} blocked` : ''}${rollup.needsYou ? ` · ${rollup.needsYou} needs you` : ''}`
   }
 
   function needsBreakdownReview(task: Task): boolean {
@@ -296,18 +148,12 @@
     return tone
   }
 
-  function selectItem(item: ColumnItem, depth: number): void {
-    selectedPath = [...selectedPath.slice(0, depth), item.id]
-  }
-
-  function itemSelected(item: ColumnItem, depth: number): boolean {
-    return selectedPath[depth] === item.id
-  }
-
   function openSelected(): void {
-    if (packetSelection?.kind !== 'task') return
-    const task = tasksById.get(packetSelection.taskId)
-    if (task) nav(currentTaskHref(task.id), { backgroundPath: path.value })
+    if (selectedTask) nav(currentTaskHref(selectedTask.id), { backgroundPath: path.value })
+  }
+
+  function selectContained(task: Task): void {
+    onSelectTask?.(task.id)
   }
 
   function stepStatusLabel(status: string): string {
@@ -317,100 +163,106 @@
     if (status === 'waived') return 'Waived'
     return 'Todo'
   }
-
 </script>
 
-<section class="tree-workbench" aria-label="Deliverable tree workbench">
-  <div class="browser-layout">
-    <div class="column-browser" aria-label="Work hierarchy columns">
-      {#each columns as column (column.id)}
-        <section class="work-column" aria-label={column.title}>
-          <div class="column-head">
-            <strong>{column.title}</strong>
-            <span>{column.subtitle}</span>
-          </div>
-          <div class="column-items">
-            {#if column.items.length === 0}
-              <p class="empty-column">{column.emptyText ?? 'No items in this view.'}</p>
-            {:else}
-              {#each column.items as item (item.id)}
-                <button
-                  type="button"
-                  class="column-item"
-                  class:selected={itemSelected(item, column.depth)}
-                  onclick={() => selectItem(item, column.depth)}
-                >
-                  <span class="item-copy">
-                    <strong title={item.title}>{item.title}</strong>
-                    <small>{item.detail}</small>
-                  </span>
-                  <span class="item-meta">
-                    {#if item.status}
-                      <Chip label={item.statusLabel} tone={item.statusTone} />
-                    {/if}
-                    {#if item.childCount > 0}
-                      <Icon name="chevron-right" size={15} />
-                    {/if}
-                  </span>
-                </button>
-              {/each}
-            {/if}
-          </div>
-        </section>
-      {/each}
+<aside class="work-inspector" aria-label="Selected work inspector">
+  <p class="panel-label">Inspector</p>
+  {#if selectedTask}
+    {@const rollup = rollupFor(selectedTask)}
+    {@const deliverySteps = deliveryStepsFor(selectedTask)}
+    <div class="inspector-head">
+      <div>
+        <p class="details-context">{containedWork.length ? 'Containing work' : 'Selected work'}</p>
+        <h3>{selectedTask.title ?? friendlyTaskId(selectedTask.id)}</h3>
+      </div>
+      <Chip label={taskStatusLabel(selectedTask)} tone={taskStatusTone(selectedTask)} />
     </div>
 
-    <aside class="node-packet" aria-label="Selected deliverable packet">
-      <p class="panel-label">Details</p>
-      {#if packetSelection?.kind === 'task' && selectedTask}
-        {@const rollup = rollupFor(selectedTask)}
-        {@const deliverySteps = deliveryStepsFor(selectedTask)}
-        <p class="details-context">{childTasksFor(selectedTask).length ? 'Containing work' : 'Selected item'}</p>
-        <Chip label={taskStatusLabel(selectedTask)} tone={taskStatusTone(selectedTask)} />
-        <dl>
-          <dt>Scope</dt>
-          <dd>{primaryText(selectedTask)}</dd>
-          <dt>Proof</dt>
-          <dd>{proofText(selectedTask)}</dd>
-          <dt>Rollup</dt>
-          <dd>{rollup.done} / {rollup.total} done · {rollup.blocked} blocked · {rollup.needsYou} needs you</dd>
-          {#if deliverySteps.length > 0}
-            <dt>Delivery checklist</dt>
-            <dd>
-              <ul class="delivery-step-list">
-                {#each deliverySteps as step (step.id)}
-                  <li>
-                    <span>{step.title}</span>
-                    <Chip label={stepStatusLabel(step.status)} tone={step.status === 'blocked' ? 'warn' : step.status === 'done' ? 'ok' : step.status === 'active' ? 'running' : 'neutral'} />
-                  </li>
-                {/each}
-              </ul>
-            </dd>
-          {/if}
-        </dl>
-        <Button variant="primary" size="sm" onclick={openSelected}>Open drawer</Button>
+    <dl>
+      <dt>Scope</dt>
+      <dd>{primaryText(selectedTask)}</dd>
+      <dt>Proof</dt>
+      <dd>{proofText(selectedTask)}</dd>
+      <dt>Rollup</dt>
+      <dd>{rollup.done} / {rollup.total} done · {rollup.blocked} blocked · {rollup.needsYou} needs you</dd>
+    </dl>
+
+    <section class="inspector-section" aria-label="Contained work">
+      <div class="section-head">
+        <strong>Contained work</strong>
+        <span>{containedWork.length} item{containedWork.length === 1 ? '' : 's'}</span>
+      </div>
+      {#if containedWork.length > 0}
+        <div class="contained-list">
+          {#each containedWork as child (child.id)}
+            <button type="button" class="contained-item" onclick={() => selectContained(child)}>
+              <span>{child.title ?? friendlyTaskId(child.id)}</span>
+              <Chip label={taskStatusLabel(child)} tone={taskStatusTone(child)} size="compact" />
+            </button>
+          {/each}
+        </div>
+      {:else if deliverySteps.length > 0}
+        <p class="subtle">This item has tracked delivery steps and no contained work.</p>
+      {:else if needsBreakdownReview(selectedTask)}
+        <p class="subtle">No contained work or decomposition proposal exists yet. Review a breakdown before treating this as runnable work.</p>
       {:else}
-        <p class="subtle">Select work to inspect its scope, proof path, and rollup.</p>
+        <p class="subtle">This item has no contained work yet.</p>
       {/if}
-    </aside>
-  </div>
-</section>
+    </section>
+
+    {#if deliverySteps.length > 0}
+      <section class="inspector-section" aria-label="Delivery checklist">
+        <div class="section-head">
+          <strong>Delivery checklist</strong>
+          <span>{deliverySteps.filter(step => step.status === 'done').length} / {deliverySteps.filter(step => step.required).length || deliverySteps.length} done</span>
+        </div>
+        <ul class="delivery-step-list">
+          {#each deliverySteps as step (step.id)}
+            <li>
+              <span>{step.title}</span>
+              <Chip label={stepStatusLabel(step.status)} tone={step.status === 'blocked' ? 'warn' : step.status === 'done' ? 'ok' : step.status === 'active' ? 'running' : 'neutral'} size="compact" />
+            </li>
+          {/each}
+        </ul>
+      </section>
+    {/if}
+
+    <Button variant="primary" size="sm" onclick={openSelected}>Open drawer</Button>
+  {:else}
+    <p class="subtle">Select work to inspect its scope, proof path, contained work, and delivery checklist.</p>
+  {/if}
+</aside>
 
 <style>
-  .tree-workbench {
-    display: flex;
-    flex-direction: column;
-    gap: var(--s-4);
-    padding: var(--s-4);
+  .work-inspector {
+    position: sticky;
+    top: var(--s-3);
+    align-self: start;
+    display: grid;
+    gap: var(--s-3);
+    min-width: 0;
+    max-height: calc(100vh - 8rem);
+    overflow: auto;
+    padding: var(--s-3);
     border: 1px solid var(--border);
     border-radius: var(--r-2);
     background: var(--bg-raised);
   }
-  .browser-layout {
-    display: flex;
-    gap: var(--s-3);
-  }
   .panel-label {
+    margin: 0;
+    color: var(--text-muted);
+    font-size: var(--gh-type-size-caption);
+    font-weight: var(--gh-type-weight-strong);
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+  }
+  .inspector-head {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    gap: var(--s-2);
+    align-items: start;
+  }
+  .details-context {
     margin: 0 0 var(--s-1);
     color: var(--text-muted);
     font-size: var(--gh-type-size-caption);
@@ -418,149 +270,81 @@
     text-transform: uppercase;
     letter-spacing: 0.05em;
   }
-  .browser-layout {
-    min-width: 0;
-    align-items: stretch;
-  }
-  .column-browser {
-    display: grid;
-    grid-auto-flow: column;
-    grid-auto-columns: minmax(260px, 1fr);
-    gap: var(--s-3);
-    min-width: 0;
-    flex: 1 1 auto;
-    overflow-x: auto;
-    padding-bottom: var(--s-2);
-  }
-  .work-column,
-  .node-packet {
-    min-width: 0;
-    border: 1px solid var(--border);
-    border-radius: var(--r-2);
-    background: var(--bg);
-  }
-  .work-column {
-    display: flex;
-    flex-direction: column;
-    max-height: 520px;
-    overflow: hidden;
-  }
-  .column-head {
-    display: grid;
-    gap: 2px;
-    padding: var(--s-3);
-    border-bottom: 1px solid var(--border);
-  }
-  .column-head strong {
-    display: -webkit-box;
-    overflow: hidden;
-    color: var(--text);
-    line-height: var(--gh-type-line-height-tight);
-    -webkit-line-clamp: 2;
-    -webkit-box-orient: vertical;
-  }
-  .column-head span {
-    color: var(--text-muted);
-    font-size: var(--gh-type-size-caption);
-  }
-  .column-items {
-    display: flex;
-    flex-direction: column;
-    gap: var(--s-1);
-    padding: var(--s-2);
-    overflow: auto;
-  }
-  .column-item {
-    display: flex;
-    flex-direction: column;
-    gap: var(--s-2);
-    align-items: stretch;
-    width: 100%;
-    padding: var(--s-2);
-    border: 1px solid transparent;
-    border-radius: var(--r-2);
-    background: transparent;
-    color: inherit;
-    font: inherit;
-    text-align: left;
-    cursor: pointer;
-  }
-  .column-item:hover,
-  .column-item.selected {
-    border-color: color-mix(in srgb, var(--accent) 48%, var(--border));
-    background: color-mix(in srgb, var(--accent) 8%, transparent);
-  }
-  .item-copy {
-    display: grid;
-    gap: 3px;
-    min-width: 0;
-  }
-  .item-copy strong {
-    display: -webkit-box;
-    overflow: hidden;
-    color: var(--text);
-    line-height: var(--gh-type-line-height-tight);
-    -webkit-line-clamp: 2;
-    -webkit-box-orient: vertical;
-  }
-  .item-copy small {
-    display: -webkit-box;
-    overflow: hidden;
-    color: var(--text-muted);
-    font-size: var(--gh-type-size-caption);
-    line-height: var(--gh-type-line-height-body);
-    -webkit-line-clamp: 2;
-    -webkit-box-orient: vertical;
-  }
-  .item-meta {
-    display: inline-flex;
-    align-items: center;
-    justify-content: space-between;
-    min-height: 24px;
-    gap: var(--s-1);
-    color: var(--text-muted);
-  }
-  .empty-column {
+  h3 {
     margin: 0;
-    padding: var(--s-3);
-    border: 1px dashed var(--border);
-    border-radius: var(--r-2);
-    color: var(--text-muted);
-    font-size: var(--gh-type-size-meta);
-    line-height: var(--gh-type-line-height-body);
-  }
-  .node-packet {
-    flex: 0 0 270px;
-    padding: var(--s-3);
-  }
-  .details-context {
-    margin: 0 0 var(--s-2);
-    color: var(--text);
-    font-size: var(--gh-type-size-meta);
-    font-weight: var(--gh-type-weight-strong);
+    font-size: var(--gh-type-size-section-title);
     line-height: var(--gh-type-line-height-tight);
+    overflow-wrap: anywhere;
   }
-  .node-packet dl {
+  dl {
     display: grid;
     gap: var(--s-2);
-    margin: var(--s-3) 0;
+    margin: 0;
   }
-  .node-packet dt {
+  dt {
     color: var(--text-muted);
     font-size: var(--gh-type-size-caption);
     font-weight: var(--gh-type-weight-strong);
     text-transform: uppercase;
     letter-spacing: 0.05em;
   }
-  .node-packet dd {
+  dd {
     margin: 0;
     color: var(--text);
     font-size: var(--gh-type-size-meta);
     line-height: var(--gh-type-line-height-body);
+    overflow-wrap: anywhere;
   }
+  .inspector-section {
+    display: grid;
+    gap: var(--s-2);
+    padding-top: var(--s-3);
+    border-top: 1px solid var(--border);
+  }
+  .section-head {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    gap: var(--s-2);
+    align-items: center;
+  }
+  .section-head strong {
+    min-width: 0;
+  }
+  .section-head span {
+    color: var(--text-muted);
+    font-size: var(--gh-type-size-caption);
+  }
+  .contained-list,
   .delivery-step-list {
     display: grid;
     gap: var(--s-1);
+  }
+  .contained-item {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    gap: var(--s-2);
+    align-items: center;
+    width: 100%;
+    padding: var(--s-2);
+    border: 1px solid var(--border);
+    border-radius: var(--r-2);
+    background: var(--bg);
+    color: inherit;
+    font: inherit;
+    text-align: left;
+    cursor: pointer;
+  }
+  .contained-item:hover,
+  .contained-item:focus-visible {
+    border-color: color-mix(in srgb, var(--accent) 48%, var(--border));
+    outline: none;
+  }
+  .contained-item span,
+  .delivery-step-list span {
+    min-width: 0;
+    overflow-wrap: anywhere;
+  }
+  .delivery-step-list {
     margin: 0;
     padding: 0;
     list-style: none;
@@ -571,18 +355,17 @@
     gap: var(--s-2);
     align-items: center;
   }
-  .delivery-step-list span {
-    min-width: 0;
-    overflow-wrap: anywhere;
+  .subtle {
+    margin: 0;
+    color: var(--text-muted);
+    font-size: var(--gh-type-size-meta);
+    line-height: var(--gh-type-line-height-body);
   }
 
   @media (max-width: 980px) {
-    .browser-layout {
-      display: flex;
-      flex-direction: column;
-    }
-    .node-packet {
-      flex-basis: auto;
+    .work-inspector {
+      position: static;
+      max-height: none;
     }
   }
 </style>

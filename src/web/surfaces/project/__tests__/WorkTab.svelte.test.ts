@@ -110,28 +110,30 @@ describe('WorkTab', () => {
 
     await screen.findByText('1 shown · 3 total')
     await userEvent.selectOptions(screen.getByRole('combobox', { name: /^show$/i }), 'all')
-    await userEvent.click(screen.getByRole('button', { name: /^task$/i }))
-    expect(screen.getAllByRole('button', { name: /open task/i })[0]?.textContent).toContain('Alpha task')
+    await userEvent.click(screen.getByRole('button', { name: /^work$/i }))
+    expect(screen.getAllByRole('button', { name: /inspect work/i })[0]?.textContent).toContain('Alpha task')
 
     await userEvent.click(screen.getByRole('button', { name: /priority/i }))
-    expect(screen.getAllByRole('button', { name: /open task/i })[0]?.textContent).toContain('Alpha task')
+    expect(screen.getAllByRole('button', { name: /inspect work/i })[0]?.textContent).toContain('Alpha task')
 
     await userEvent.click(screen.getByRole('button', { name: /priority/i }))
-    expect(screen.getAllByRole('button', { name: /open task/i })[0]?.textContent).toContain('Beta task')
+    expect(screen.getAllByRole('button', { name: /inspect work/i })[0]?.textContent).toContain('Beta task')
 
     expect(screen.getByText('Blocked on missing credentials.')).toBeTruthy()
     expect(screen.getByText('Completed cleanly.')).toBeTruthy()
     expect(screen.getByText('Rerun focused typecheck.')).toBeTruthy()
     expect(screen.getByText('—')).toBeTruthy()
 
-    await userEvent.click(screen.getByRole('button', { name: /open task beta task/i }))
+    await userEvent.click(screen.getByRole('button', { name: /inspect work beta task/i }))
+    expect(screen.getByLabelText('Selected work inspector')).toHaveTextContent('Beta task')
+    await userEvent.click(screen.getByRole('button', { name: /open drawer/i }))
     expect(path.value).toBe('/projects/looma-knit/task/task-beta')
 
     path.value = '/projects/looma-knit/work'
     window.history.replaceState({}, '', '/projects/looma-knit/work')
-    const gammaRow = screen.getByRole('button', { name: /open task gamma task/i })
+    const gammaRow = screen.getByRole('button', { name: /inspect work gamma task/i })
     await fireEvent.keyDown(gammaRow, { key: 'Enter' })
-    expect(path.value).toBe('/projects/looma-knit/task/task-gamma')
+    expect(screen.getByLabelText('Selected work inspector')).toHaveTextContent('Gamma task')
   })
 
   it('shows delivery-step progress on visible work rows', async () => {
@@ -254,7 +256,7 @@ describe('WorkTab', () => {
     expect(screen.queryByText(/No tasks yet.*New request/i)).not.toBeInTheDocument()
   })
 
-  it('shows the opt-in column browser without selecting a default packet', async () => {
+  it('uses the list as the default legacy tree-preview route and opens an inspector on selection', async () => {
     window.history.replaceState({}, '', '/projects/looma-knit/work?tree=preview')
     path.value = '/projects/looma-knit/work?tree=preview'
 
@@ -279,23 +281,25 @@ describe('WorkTab', () => {
       },
     })
 
-    expect((await screen.findAllByText('Columns')).length).toBeGreaterThan(0)
-    const columns = screen.getByLabelText('Work hierarchy columns')
-    expect(columns).toBeTruthy()
-    expect(screen.getByLabelText('Selected deliverable packet').textContent).toContain('Select work to inspect')
-    expect(within(columns).getAllByText('Interface design system').length).toBe(1)
+    await screen.findByRole('heading', { name: 'Work list' })
+    const toolbar = screen.getByRole('toolbar', { name: /work view controls/i })
+    expect(within(toolbar).queryByRole('button', { name: /^columns$/i })).toBeNull()
+    expect(within(toolbar).getByRole('button', { name: /^list$/i }).getAttribute('aria-pressed')).toBe('true')
+    expect(screen.queryByLabelText('Selected work inspector')).toBeNull()
+    expect(screen.queryByLabelText('Work hierarchy columns')).toBeNull()
 
-    await userEvent.click(within(columns).getByRole('button', { name: /interface design system/i }))
+    await userEvent.click(screen.getByRole('button', { name: /inspect work interface design system/i }))
 
-    expect(screen.getByLabelText('Selected deliverable packet').textContent).toContain('Build the interface design system')
-    expect(within(columns).getByText('Button primitive')).toBeTruthy()
+    const inspector = screen.getByLabelText('Selected work inspector')
+    expect(inspector).toHaveTextContent('Build the interface design system')
+    expect(within(inspector).getByText('Button primitive')).toBeTruthy()
 
-    await userEvent.click(within(columns).getByRole('button', { name: /button primitive/i }))
+    await userEvent.click(within(inspector).getByRole('button', { name: /button primitive/i }))
 
-    expect(screen.getByLabelText('Selected deliverable packet').textContent).toContain('Ship the reusable button primitive')
+    expect(screen.getByLabelText('Selected work inspector')).toHaveTextContent('Ship the reusable button primitive')
   })
 
-  it('does not echo the selected title across every columns preview panel', async () => {
+  it('does not echo the selected title outside the selected work inspector', async () => {
     window.history.replaceState({}, '', '/projects/looma-knit/work?tree=preview')
     path.value = '/projects/looma-knit/work?tree=preview'
 
@@ -320,18 +324,17 @@ describe('WorkTab', () => {
       },
     })
 
-    const workbench = await screen.findByLabelText('Deliverable tree workbench')
-    const columns = screen.getByLabelText('Work hierarchy columns')
+    await screen.findByRole('heading', { name: 'Work list' })
+    await userEvent.click(screen.getByRole('button', { name: /inspect work interface design system/i }))
+    await userEvent.click(within(screen.getByLabelText('Selected work inspector')).getByRole('button', { name: /button primitive/i }))
 
-    await userEvent.click(within(columns).getByRole('button', { name: /interface design system/i }))
-    await userEvent.click(within(columns).getByRole('button', { name: /button primitive/i }))
-
-    expect((workbench.textContent?.match(/Button primitive/g) ?? []).length).toBe(1)
-    expect(within(workbench).getByText('Contained work')).toBeTruthy()
-    expect(within(workbench).getByText('Details')).toBeTruthy()
+    const inspector = screen.getByLabelText('Selected work inspector')
+    expect((inspector.textContent?.match(/Button primitive/g) ?? []).length).toBe(1)
+    expect(within(inspector).getByText('Contained work')).toBeTruthy()
+    expect(within(inspector).getByText('Inspector')).toBeTruthy()
   })
 
-  it('shows internal delivery steps as selected-work detail instead of child work in columns', async () => {
+  it('shows internal delivery steps as selected-work detail instead of child work in the list inspector', async () => {
     window.history.replaceState({}, '', '/projects/looma-knit/work?tree=preview')
     path.value = '/projects/looma-knit/work?tree=preview'
 
@@ -400,19 +403,19 @@ describe('WorkTab', () => {
       },
     })
 
-    const columns = await screen.findByLabelText('Work hierarchy columns')
-    await userEvent.click(within(columns).getByRole('button', { name: /import review flow/i }))
+    await screen.findByRole('heading', { name: 'Work list' })
+    await userEvent.click(screen.getByRole('button', { name: /inspect work import review flow/i }))
 
-    expect(within(columns).queryByRole('button', { name: /runtime proof for import review flow/i })).toBeNull()
-    expect(within(columns).getByText('Contained work')).toBeTruthy()
-    expect(within(columns).getByText('This item has tracked delivery steps and no contained work.')).toBeTruthy()
-    const packet = screen.getByLabelText('Selected deliverable packet')
-    expect(within(packet).getByText('Delivery checklist')).toBeTruthy()
-    expect(within(packet).getAllByText('Runtime proof for import review flow').length).toBeGreaterThan(0)
-    expect(within(packet).getByText('Blocked')).toBeTruthy()
+    expect(screen.queryByRole('button', { name: /runtime proof for import review flow/i })).toBeNull()
+    const inspector = screen.getByLabelText('Selected work inspector')
+    expect(within(inspector).getByText('Contained work')).toBeTruthy()
+    expect(within(inspector).getByText('This item has tracked delivery steps and no contained work.')).toBeTruthy()
+    expect(within(inspector).getByText('Delivery checklist')).toBeTruthy()
+    expect(within(inspector).getAllByText('Runtime proof for import review flow').length).toBeGreaterThan(0)
+    expect(within(inspector).getByText('Blocked')).toBeTruthy()
   })
 
-  it('groups columns preview controls into one toolbar', async () => {
+  it('keeps list and board as the only Work view controls', async () => {
     window.history.replaceState({}, '', '/projects/looma-knit/work?tree=preview')
     path.value = '/projects/looma-knit/work?tree=preview'
 
@@ -426,16 +429,12 @@ describe('WorkTab', () => {
 
     const toolbar = await screen.findByRole('toolbar', { name: /work view controls/i })
     expect(within(toolbar).getByText('Work view')).toBeTruthy()
-    expect(within(toolbar).getByRole('button', { name: /^columns$/i }).getAttribute('aria-pressed')).toBe('true')
-    expect(within(toolbar).getByRole('button', { name: /^list$/i }).getAttribute('aria-pressed')).toBe('false')
+    expect(within(toolbar).queryByRole('button', { name: /^columns$/i })).toBeNull()
+    expect(within(toolbar).getByRole('button', { name: /^list$/i }).getAttribute('aria-pressed')).toBe('true')
     expect(within(toolbar).getByRole('button', { name: /^board$/i }).getAttribute('aria-pressed')).toBe('false')
     expect(screen.getByRole('combobox', { name: /^show$/i })).toBeTruthy()
-    expect(screen.queryByText(/Work list \(/)).toBeNull()
+    expect(screen.getByRole('heading', { name: 'Work list' })).toBeTruthy()
 
-    await userEvent.click(within(toolbar).getByRole('button', { name: /^list$/i }))
-    expect(path.value).toBe('/projects/looma-knit/work')
-    expect(path.href).toBe('/projects/looma-knit/work?view=list')
-    expect(await screen.findByRole('heading', { name: 'Work list' })).toBeTruthy()
     expect(screen.queryByLabelText('Work hierarchy columns')).toBeNull()
 
     cleanup()
@@ -454,7 +453,7 @@ describe('WorkTab', () => {
     expect(path.href).toBe('/projects/looma-knit/work?view=board')
   })
 
-  it('flags broad flat ready work as needing breakdown review in the columns preview', async () => {
+  it('flags broad flat ready work as needing breakdown review in the list inspector', async () => {
     window.history.replaceState({}, '', '/projects/looma-knit/work?tree=preview')
     path.value = '/projects/looma-knit/work?tree=preview'
 
@@ -475,17 +474,17 @@ describe('WorkTab', () => {
       },
     })
 
-    const columns = await screen.findByLabelText('Work hierarchy columns')
+    await screen.findByRole('heading', { name: 'Work list' })
     await userEvent.selectOptions(screen.getByRole('combobox', { name: /^show$/i }), 'planning')
-    expect(within(columns).getByText('Review breakdown')).toBeTruthy()
-    expect(within(columns).queryByText('Ready')).toBeNull()
+    expect(screen.getByText('Review breakdown')).toBeTruthy()
+    expect(screen.queryByText('Ready')).toBeNull()
 
-    await userEvent.click(within(columns).getByRole('button', { name: /build end-to-end interface system/i }))
+    await userEvent.click(screen.getByRole('button', { name: /inspect work build end-to-end interface system/i }))
 
-    expect(within(columns).getByText(/No child tasks or decomposition proposal exists yet/i)).toBeTruthy()
-    const packet = screen.getByLabelText('Selected deliverable packet')
-    expect(within(packet).getByText('Review breakdown')).toBeTruthy()
-    expect(within(packet).getByText(/7 requirements; no child tasks or decomposition proposal yet/i)).toBeTruthy()
+    const inspector = screen.getByLabelText('Selected work inspector')
+    expect(within(inspector).getByText(/No contained work or decomposition proposal exists yet/i)).toBeTruthy()
+    expect(within(inspector).getByText('Review breakdown')).toBeTruthy()
+    expect(within(inspector).getByText(/7 requirements; no contained work or decomposition proposal yet/i)).toBeTruthy()
   })
 
   it('hides done and shelved work by default and reveals it on request', async () => {

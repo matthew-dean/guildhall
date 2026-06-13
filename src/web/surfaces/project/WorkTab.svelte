@@ -36,7 +36,7 @@
 
   type SortKey = 'title' | 'status' | 'area' | 'priority' | 'updated' | 'revisions'
   type SortDir = 'asc' | 'desc'
-  type WorkView = 'columns' | 'list' | 'board'
+  type WorkView = 'list' | 'board'
   type WorkFilter = 'queued' | 'planning' | 'open' | 'all' | 'blocked' | 'needs-you'
 
   const STATUS_SORT_ORDER: Record<string, number> = {
@@ -90,9 +90,9 @@
   let workFilter = $state<WorkFilter>('queued')
   let workFilterUserSelected = $state(false)
   let workFilterProjectId = $state<string | null>(null)
+  let selectedWorkId = $state<string | null>(null)
 
   const viewOptions = [
-    { value: 'columns', label: 'Columns' },
     { value: 'list', label: 'List' },
     { value: 'board', label: 'Board' },
   ]
@@ -158,6 +158,7 @@
     list.sort((left, right) => compareTasks(left, right, sortKey, sortDir))
     return list
   })
+  const selectedWorkVisible = $derived(Boolean(selectedWorkId && tasks.some(task => task.id === selectedWorkId)))
 
   function compareTasks(left: Task, right: Task, key: SortKey, dir: SortDir): number {
     const direction = dir === 'asc' ? 1 : -1
@@ -209,6 +210,14 @@
     nav(currentTaskHref(task.id), { backgroundPath: path.value })
   }
 
+  function selectWork(task: Task): void {
+    selectedWorkId = task.id
+  }
+
+  function selectWorkById(taskId: string): void {
+    if (tasks.some(task => task.id === taskId)) selectedWorkId = taskId
+  }
+
   function taskProgress(task: Task) {
     const id = typeof task.id === 'string' ? task.id : ''
     return id ? detail.workProgress?.byTaskId?.[id] : null
@@ -229,7 +238,7 @@
   function onTaskKey(event: KeyboardEvent, task: Task): void {
     if (event.key === 'Enter' || event.key === ' ') {
       event.preventDefault()
-      openTask(task)
+      selectWork(task)
     }
   }
 
@@ -303,11 +312,11 @@
   }
 
   function effectiveStatusLabel(task: Task): string {
-    return taskPresentation(task).label
+    return needsBreakdownReview(task) ? 'Review breakdown' : taskPresentation(task).label
   }
 
   function effectiveStatusTone(task: Task): ChipTone {
-    return chipTone(taskPresentation(task).tone)
+    return needsBreakdownReview(task) ? 'warn' : chipTone(taskPresentation(task).tone)
   }
 
   function priorityTone(priority: string | undefined): CardTone {
@@ -344,6 +353,10 @@
     const node = hierarchy.byId.get(task.id)
     const childCount = node?.childIds.length ?? 0
     if (childCount > 0) return nestedWorkCountLabel(childCount)
+    if (needsBreakdownReview(task)) {
+      const count = task.acceptanceCriteria?.length ?? 0
+      return `${count} requirements; no contained work or decomposition proposal yet.`
+    }
     const blockers = unmetDependencyIds(task, tasks)
     if (blockers.length > 0) return `Blocked by ${blockers.map(friendlyTaskId).join(', ')}`
     if (task.workKind) return workKindLabel(task.workKind)
@@ -362,6 +375,23 @@
     const crumbs = hierarchy.byId.get(task.id)?.breadcrumb ?? []
     if (crumbs.length <= 1) return ''
     return crumbs.map(crumb => crumb.title).join(' / ')
+  }
+
+  function needsBreakdownReview(task: Task): boolean {
+    const node = hierarchy.byId.get(task.id)
+    const childCount = node?.childIds.length ?? 0
+    return task.status === 'ready' &&
+      childCount === 0 &&
+      !hasDecompositionProposal(task) &&
+      (task.acceptanceCriteria?.length ?? 0) >= 6
+  }
+
+  function hasDecompositionProposal(task: Task): boolean {
+    const decomposition = (task as Task & { decomposition?: unknown }).decomposition
+    if (!decomposition) return false
+    if (Array.isArray(decomposition)) return decomposition.length > 0
+    if (typeof decomposition === 'object') return Object.keys(decomposition).length > 0
+    return true
   }
 
   $effect(() => {
@@ -386,7 +416,6 @@
   })
 
   function setWorkView(next: string) {
-    if (next === 'columns') nav(currentProjectHref('/work?view=columns'))
     if (next === 'list') nav(currentProjectHref('/work?view=list'))
     if (next === 'board') nav(currentProjectHref('/work?view=board'))
   }
@@ -395,8 +424,7 @@
     if (fallbackBoard) return 'board'
     const params = new URL(window.location.href).searchParams
     const view = params.get('view')
-    if (view === 'columns' || view === 'list' || view === 'board') return view
-    if (params.get('tree') === 'preview') return 'columns'
+    if (view === 'list' || view === 'board') return view
     return 'list'
   }
 
@@ -417,6 +445,10 @@
       workFilter = defaultWorkFilterForTasks()
     }
   })
+
+  $effect(() => {
+    if (!selectedWorkVisible) selectedWorkId = null
+  })
 </script>
 
 <div class="work-list-view">
@@ -432,8 +464,6 @@
 
   {#if activeWorkView === 'board'}
     <PlannerTab detail={boardDetail} />
-  {:else if activeWorkView === 'columns'}
-    <WorkTreePreview tasks={tasks} filter={workFilter} workProgress={detail.workProgress} />
   {:else}
     {#if deliveryQueue}
       <UtilityPanel as="section" className="delivery-queue-panel" tone={deliveryFirstRunnable ? 'ok' : deliveryQueue.blocked?.length ? 'warn' : 'neutral'} ariaLabel="Delivery queue">
@@ -453,146 +483,159 @@
         </div>
       </UtilityPanel>
     {/if}
-    <Card title="Work list" titleTag="h2">
+    <div class="work-list-inspector-layout" class:has-selection={Boolean(selectedWorkId)}>
+      <Card title="Work list" titleTag="h2">
 
-      <div class="work-list-overview">
-        <div class="work-list-count">{visibleTasks.length} shown · {taskCounts.total} total</div>
-        <div class="work-summary">
-          {#if taskCounts.agentActive > 0}
-            <Chip label={countLabel(taskCounts.agentActive, 'Working', 'Working')} tone="running" />
-          {/if}
-          {#if taskCounts.paused > 0}
-            <Chip label={countLabel(taskCounts.paused, 'paused task')} tone="neutral" />
-          {/if}
-          {#if taskCounts.reviewWaiting > 0}
-            <Chip label={countLabel(taskCounts.reviewWaiting, 'Review', 'Review')} tone="warn" />
-          {/if}
-          {#if taskCounts.gatesWaiting > 0}
-            <Chip label={countLabel(taskCounts.gatesWaiting, 'Gates', 'Gates')} tone="warn" />
-          {/if}
-          {#if taskCounts.shaping > 0}
-            <Chip label={countLabel(taskCounts.shaping, 'Queued', 'Queued')} tone="running" />
-          {/if}
-          {#if taskCounts.specRevisionQueued > 0}
-            <Chip label={countLabel(taskCounts.specRevisionQueued, 'Queued', 'Queued')} tone="running" />
-          {/if}
-          {#if taskCounts.readyForWorker > 0}
-            <Chip label={countLabel(taskCounts.readyForWorker, 'Ready', 'Ready')} tone="ok" />
-          {/if}
-          {#if taskCounts.needsSpecCleanup > 0}
-            <Chip label={countLabel(taskCounts.needsSpecCleanup, 'Needs brief', 'Needs brief')} tone="warn" />
-          {/if}
-          {#if taskCounts.awaitingApproval > 0}
-            <Chip label={countLabel(taskCounts.awaitingApproval, 'Review', 'Review')} tone="warn" />
-          {/if}
-          {#if taskCounts.done > 0}
-            <Chip label={`${taskCounts.done} done`} tone="ok" />
-          {/if}
-          {#if visibleImportDraftCount > 0}
-            <Chip label={countLabel(visibleImportDraftCount, 'import draft')} tone="neutral" />
-          {/if}
-        </div>
-      </div>
-
-      {#if visibleImportDraftCount > 0 && nextImportDraft}
-        <UtilityPanel as="div" className="draft-queue-card" tone="neutral">
-          <div class="draft-queue-copy">
-            <p class="draft-queue-label">Imported draft queue</p>
-            <div class="draft-queue-title">{nextImportDraft.title ?? 'Imported draft'}</div>
-            <p class="draft-queue-detail">
-              {#if importDraftCount === 1}
-                Review this imported draft and decide whether to shape it now.
-              {:else}
-                Start with "{nextImportDraft.title ?? 'Imported draft'}". {importDraftCount - 1} more drafts are queued behind it.
-              {/if}
-            </p>
+        <div class="work-list-overview">
+          <div class="work-list-count">{visibleTasks.length} shown · {taskCounts.total} total</div>
+          <div class="work-summary">
+            {#if taskCounts.agentActive > 0}
+              <Chip label={countLabel(taskCounts.agentActive, 'Working', 'Working')} tone="running" />
+            {/if}
+            {#if taskCounts.paused > 0}
+              <Chip label={countLabel(taskCounts.paused, 'paused task')} tone="neutral" />
+            {/if}
+            {#if taskCounts.reviewWaiting > 0}
+              <Chip label={countLabel(taskCounts.reviewWaiting, 'Review', 'Review')} tone="warn" />
+            {/if}
+            {#if taskCounts.gatesWaiting > 0}
+              <Chip label={countLabel(taskCounts.gatesWaiting, 'Gates', 'Gates')} tone="warn" />
+            {/if}
+            {#if taskCounts.shaping > 0}
+              <Chip label={countLabel(taskCounts.shaping, 'Queued', 'Queued')} tone="running" />
+            {/if}
+            {#if taskCounts.specRevisionQueued > 0}
+              <Chip label={countLabel(taskCounts.specRevisionQueued, 'Queued', 'Queued')} tone="running" />
+            {/if}
+            {#if taskCounts.readyForWorker > 0}
+              <Chip label={countLabel(taskCounts.readyForWorker, 'Ready', 'Ready')} tone="ok" />
+            {/if}
+            {#if taskCounts.needsSpecCleanup > 0}
+              <Chip label={countLabel(taskCounts.needsSpecCleanup, 'Needs brief', 'Needs brief')} tone="warn" />
+            {/if}
+            {#if taskCounts.awaitingApproval > 0}
+              <Chip label={countLabel(taskCounts.awaitingApproval, 'Review', 'Review')} tone="warn" />
+            {/if}
+            {#if taskCounts.done > 0}
+              <Chip label={`${taskCounts.done} done`} tone="ok" />
+            {/if}
+            {#if visibleImportDraftCount > 0}
+              <Chip label={countLabel(visibleImportDraftCount, 'import draft')} tone="neutral" />
+            {/if}
           </div>
-          <Button variant="secondary" size="sm" onclick={() => openImportedDraft(nextImportDraft)}>
-            {nextImportDraft.id === 'task-workspace-import' ? 'Open import review' : 'Draft task brief'}
-          </Button>
-        </UtilityPanel>
-      {/if}
+        </div>
 
-      {#if tasks.length === 0}
-        {#if needsMeta || setupInboxItem}
-          <UtilityPanel as="div" className="setup-empty" tone="neutral">
-            <p class="muted">{setupInboxItem?.detail ?? 'No tasks yet. Finish project setup first.'}</p>
-            <Button variant="primary" size="sm" onclick={() => nav(currentProjectHref(setupInboxItem?.actionHref ?? '/setup'))}>
-              {setupInboxItem?.kind === 'required_migration'
-                ? 'Migrate project'
-                : setupInboxItem?.kind === 'workspace_import_pending' || setupInboxItem?.kind === 'import_draft_queue'
-                  ? 'Review import'
-                  : 'Open setup'}
+        {#if visibleImportDraftCount > 0 && nextImportDraft}
+          <UtilityPanel as="div" className="draft-queue-card" tone="neutral">
+            <div class="draft-queue-copy">
+              <p class="draft-queue-label">Imported draft queue</p>
+              <div class="draft-queue-title">{nextImportDraft.title ?? 'Imported draft'}</div>
+              <p class="draft-queue-detail">
+                {#if importDraftCount === 1}
+                  Review this imported draft and decide whether to shape it now.
+                {:else}
+                  Start with "{nextImportDraft.title ?? 'Imported draft'}". {importDraftCount - 1} more drafts are queued behind it.
+                {/if}
+              </p>
+            </div>
+            <Button variant="secondary" size="sm" onclick={() => openImportedDraft(nextImportDraft)}>
+              {nextImportDraft.id === 'task-workspace-import' ? 'Open import review' : 'Draft task brief'}
             </Button>
           </UtilityPanel>
-        {:else}
-          <p class="muted">No tasks yet — <strong>New thread</strong> to begin.</p>
         {/if}
-      {:else if visibleTasks.length === 0}
-        <UtilityPanel as="div" className="work-empty-filter" tone="neutral">
-          <div>
-            <strong>{emptyFilterTitle()}</strong>
-            <p class="muted">{emptyFilterDetail()}</p>
-          </div>
-          {@const action = emptyFilterAction()}
-          {#if action}
-            <Button variant="secondary" size="sm" onclick={() => { workFilter = action.filter }}>
-              {action.label}
-            </Button>
+
+        {#if tasks.length === 0}
+          {#if needsMeta || setupInboxItem}
+            <UtilityPanel as="div" className="setup-empty" tone="neutral">
+              <p class="muted">{setupInboxItem?.detail ?? 'No tasks yet. Finish project setup first.'}</p>
+              <Button variant="primary" size="sm" onclick={() => nav(currentProjectHref(setupInboxItem?.actionHref ?? '/setup'))}>
+                {setupInboxItem?.kind === 'required_migration'
+                  ? 'Migrate project'
+                  : setupInboxItem?.kind === 'workspace_import_pending' || setupInboxItem?.kind === 'import_draft_queue'
+                    ? 'Review import'
+                    : 'Open setup'}
+              </Button>
+            </UtilityPanel>
+          {:else}
+            <p class="muted">No tasks yet — <strong>New thread</strong> to begin.</p>
           {/if}
-        </UtilityPanel>
-      {:else}
-        <CardList className="work-list-stack">
-          <div class="list-column-head" aria-label="Sort work list">
-            <button type="button" class:active={sortKey === 'title'} onclick={() => toggleSort('title')}>Task{sortLabel('title')}</button>
-            <button type="button" class:active={sortKey === 'status'} onclick={() => toggleSort('status')}>Stage{sortLabel('status')}</button>
-            <button type="button" class:active={sortKey === 'area'} onclick={() => toggleSort('area')}>Part{sortLabel('area')}</button>
-            <button type="button" class:active={sortKey === 'priority'} onclick={() => toggleSort('priority')}>Priority{sortLabel('priority')}</button>
-            <button type="button" class:active={sortKey === 'updated'} onclick={() => toggleSort('updated')}>Updated{sortLabel('updated')}</button>
-            <button type="button" class:active={sortKey === 'revisions'} onclick={() => toggleSort('revisions')}>Revs{sortLabel('revisions')}</button>
-          </div>
-          {#each sortedTasks as task (task.id)}
-            {@const deliveryBadge = taskDeliveryBadge(task)}
-            <CardListItem
-              as="button"
-              className="work-list-row"
-              tone={listItemTone(task)}
-              railTone={listItemTone(task) === 'neutral' ? 'neutral' : listItemTone(task)}
-              railStrength="strong"
-              ariaLabel={`Open task ${task.title ?? task.id}`}
-              onclick={() => openTask(task)}
-              onkeydown={(event) => onTaskKey(event, task)}
-            >
-              <span class="row-main">
-                <span class="task-title">{task.title ?? '(untitled)'}</span>
-                {#if hierarchyBreadcrumb(task)}
-                  <span class="task-breadcrumb">{hierarchyBreadcrumb(task)}</span>
-                {/if}
-                <span class="task-subcopy">{taskSecondaryText(task)}</span>
-              </span>
-              <span class="row-status">
-                <Chip label={effectiveStatusLabel(task)} tone={effectiveStatusTone(task)} />
-                {#if deliveryBadge}
-                  <Chip label={deliveryBadge.label} tone={deliveryBadge.tone} title={deliveryBadge.title} size="compact" />
-                {/if}
-              </span>
-              <span class="row-domain">
-                {friendlyDomain(task.domain) || 'Project'}
-              </span>
-              <span class="row-priority">
-                <Chip label={friendlyPriority(task.priority)} tone={priorityTone(task.priority)} />
-              </span>
-              <span class="row-updated">
-                {formatUpdatedAt(task.updatedAt)}
-              </span>
-              <span class="row-revisions">
-                {task.revisionCount ?? 0}
-              </span>
-            </CardListItem>
-          {/each}
-        </CardList>
+        {:else if visibleTasks.length === 0}
+          <UtilityPanel as="div" className="work-empty-filter" tone="neutral">
+            <div>
+              <strong>{emptyFilterTitle()}</strong>
+              <p class="muted">{emptyFilterDetail()}</p>
+            </div>
+            {@const action = emptyFilterAction()}
+            {#if action}
+              <Button variant="secondary" size="sm" onclick={() => { workFilter = action.filter }}>
+                {action.label}
+              </Button>
+            {/if}
+          </UtilityPanel>
+        {:else}
+          <CardList className="work-list-stack">
+            <div class="list-column-head" aria-label="Sort work list">
+              <button type="button" class:active={sortKey === 'title'} onclick={() => toggleSort('title')}>Work{sortLabel('title')}</button>
+              <button type="button" class:active={sortKey === 'status'} onclick={() => toggleSort('status')}>Stage{sortLabel('status')}</button>
+              <button type="button" class:active={sortKey === 'area'} onclick={() => toggleSort('area')}>Part{sortLabel('area')}</button>
+              <button type="button" class:active={sortKey === 'priority'} onclick={() => toggleSort('priority')}>Priority{sortLabel('priority')}</button>
+              <button type="button" class:active={sortKey === 'updated'} onclick={() => toggleSort('updated')}>Updated{sortLabel('updated')}</button>
+              <button type="button" class:active={sortKey === 'revisions'} onclick={() => toggleSort('revisions')}>Revs{sortLabel('revisions')}</button>
+            </div>
+            {#each sortedTasks as task (task.id)}
+              {@const deliveryBadge = taskDeliveryBadge(task)}
+              <CardListItem
+                as="button"
+                className="work-list-row"
+                tone={listItemTone(task)}
+                railTone={listItemTone(task) === 'neutral' ? 'neutral' : listItemTone(task)}
+                railStrength="strong"
+                ariaLabel={`Inspect work ${task.title ?? task.id}`}
+                ariaCurrent={selectedWorkId === task.id ? 'true' : null}
+                selected={selectedWorkId === task.id}
+                onclick={() => selectWork(task)}
+                onkeydown={(event) => onTaskKey(event, task)}
+              >
+                <span class="row-main">
+                  <span class="task-title">{task.title ?? '(untitled)'}</span>
+                  {#if hierarchyBreadcrumb(task)}
+                    <span class="task-breadcrumb">{hierarchyBreadcrumb(task)}</span>
+                  {/if}
+                  <span class="task-subcopy">{taskSecondaryText(task)}</span>
+                </span>
+                <span class="row-status">
+                  <Chip label={effectiveStatusLabel(task)} tone={effectiveStatusTone(task)} />
+                  {#if deliveryBadge}
+                    <Chip label={deliveryBadge.label} tone={deliveryBadge.tone} title={deliveryBadge.title} size="compact" />
+                  {/if}
+                </span>
+                <span class="row-domain">
+                  {friendlyDomain(task.domain) || 'Project'}
+                </span>
+                <span class="row-priority">
+                  <Chip label={friendlyPriority(task.priority)} tone={priorityTone(task.priority)} />
+                </span>
+                <span class="row-updated">
+                  {formatUpdatedAt(task.updatedAt)}
+                </span>
+                <span class="row-revisions">
+                  {task.revisionCount ?? 0}
+                </span>
+              </CardListItem>
+            {/each}
+          </CardList>
+        {/if}
+      </Card>
+
+      {#if selectedWorkId}
+        <WorkTreePreview
+          tasks={tasks}
+          selectedTaskId={selectedWorkId}
+          workProgress={detail.workProgress}
+          onSelectTask={selectWorkById}
+        />
       {/if}
-    </Card>
+    </div>
   {/if}
 
   <details class="progress-more progress-more--full">
@@ -643,6 +686,15 @@
     justify-content: space-between;
     gap: var(--s-3);
     margin-bottom: var(--s-3);
+  }
+  .work-list-inspector-layout {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr);
+    gap: var(--s-4);
+    align-items: start;
+  }
+  .work-list-inspector-layout.has-selection {
+    grid-template-columns: minmax(0, 1fr) minmax(280px, 380px);
   }
   .work-list-count {
     flex: 0 0 auto;
@@ -901,6 +953,9 @@
     }
     .work-summary {
       justify-content: flex-start;
+    }
+    .work-list-inspector-layout.has-selection {
+      grid-template-columns: minmax(0, 1fr);
     }
     :global(.work-list-row) {
       grid-template-columns: minmax(0, 1fr);

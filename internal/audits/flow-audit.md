@@ -207,6 +207,20 @@ coverage.
 
 ## Current Follow-Ups
 
+- [x] Add the 0.11 capability/persona calibration spec to internal planning.
+  2026-06-13 follow-up translated the SkillOpt-style idea into a
+  Guildhall-native, validation-gated calibration loop for personas, review
+  lanes, capability-request policy, memory context policy, and external-agent
+  bridge guidance. The spec keeps adoption staged and reviewable, treats
+  authority/privacy regressions as hard failures, records future Contract Touch
+  and Schema Migration requirements, and links the work into the 0.11
+  implementation tracker. A source audit of `microsoft/SkillOpt` then narrowed
+  the first spike to the reusable `skillopt_sleep.consolidate`/gate path or a
+  source-attributed port, with the full `skillopt` trainer kept as a later
+  benchmark-adapter option. MCP note: the Guildhall MCP tool surface was
+  available, but `guildhall_read_artifact` could not resolve bare `flow-audit`,
+  and this checkout currently has no root `.guildhall/artifacts.yaml`; this
+  update used the local `internal/audits/flow-audit.md` file directly.
 - [x] Start separating logical work counts from internal delivery/proof steps
   in the shared project summary path. 2026-06-12 implementation added a
   runtime `workProgress` derivation that treats explicit/future
@@ -280,6 +294,51 @@ coverage.
   src/runtime/__tests__/contract-governance.test.ts --reporter=dot`
   passed with 16 files and 357 tests. `pnpm typecheck`,
   `pnpm lint:contracts`, and `git diff --check` passed.
+- [x] Finish migration walkthrough copy fixes after applying
+  `0.10.0/task-delivery-steps` to registered projects. 2026-06-13 project
+  migration status/apply showed no pending rewrites for all seven registered
+  projects, but the fresh-browser walkthrough found remaining owner-facing
+  flat-task language in Fleet Work mix and WorkTreePreview empty/breakdown
+  copy.
+  - [x] Fleet Work mix counts visible work items instead of saying tasks.
+  - [x] WorkTreePreview empty/breakdown copy says contained work/work items
+    instead of child tasks.
+  - [x] Rebuild, restart fresh service, and replay the migration walkthrough.
+  Verification: `node dist/cli.js migrate status --all --migration
+  0.10.0/task-delivery-steps` and `node dist/cli.js migrate apply --all
+  --migration 0.10.0/task-delivery-steps` reported 0 pending/applied/failed
+  entries for Looma + Knit, t-minus-t, Fair Labor License, Font something,
+  Narrative Harness, Commerce project, and Jess. `pnpm vitest run
+  src/web/surfaces/__tests__/ProjectsHome.svelte.test.ts
+  src/web/surfaces/project/__tests__/WorkTab.svelte.test.ts --reporter=dot`
+  passed with 2 files and 43 tests; the broader touched UI slice passed with
+  12 files and 297 tests. `pnpm typecheck` and `pnpm build` passed. The
+  service was restarted and `/api/stale-server` reported `stale:false`.
+  Browser proof covered `/projects`, `/projects/narrative-harness/overview`,
+  `/projects/narrative-harness/work?tree=preview`,
+  `/projects/narrative-harness/notifications`,
+  `/projects/narrative-harness/settings/ready`, the migration review drawer,
+  and `/projects/narrative-harness/task/coherence-reviewer-mvp?tab=overview`.
+  Rendered proof showed `320 work items` in Fleet Work mix, `8 total work
+  items` on Narrative Harness Overview, no `child tasks` copy in WorkTreePreview
+  or the opened task drawer, and no browser console errors.
+- [x] Replace Work Columns with a List inspector. 2026-06-13 follow-up removed
+  Columns as a top-level Work view, kept List as the default management view,
+  kept Board as the secondary spatial view, and moved selected-work details
+  into a right-side inspector inside List. Legacy `?tree=preview` and
+  `?view=columns` URLs now render List instead of resurrecting the old
+  hierarchy browser.
+  Verification: `pnpm vitest run
+  src/web/surfaces/project/__tests__/WorkTab.svelte.test.ts --reporter=dot`
+  passed with 1 file and 22 tests; the broader touched UI slice passed with
+  12 files and 297 tests; `pnpm typecheck` and `pnpm build` passed; rendered
+  UI fixture proof `pnpm exec playwright test tests/rendered-ui/project-flow.spec.ts
+  -g "native mobile work|work view switcher"` passed with 2 tests. The local
+  service was restarted and `/api/stale-server` reported `stale:false`. Live
+  browser proof on `/projects/narrative-harness/work?view=columns` showed only
+  List/Board controls, no Columns button, List content by default, a
+  `Selected work inspector` after selecting `Build first coherence reviewer
+  MVP`, and no browser console errors.
 
 ### Contract Touch Decision
 

@@ -151,8 +151,8 @@ describe('ProjectsHome', () => {
     expect(screen.getByText('Next up')).toBeTruthy()
     expect(screen.getByText('Unblock: Stripe Connect payment flow')).toBeTruthy()
     expect(screen.getAllByText('1').length).toBeGreaterThan(0)
-    expect(screen.getByText('blocked task')).toBeTruthy()
-    expect(screen.getByText('total tasks')).toBeTruthy()
+    expect(screen.getAllByLabelText('1 blocked work item').length).toBeGreaterThan(0)
+    expect(screen.getAllByLabelText('4 total work items').length).toBeGreaterThan(0)
   })
 
   it('opens the fleet needs-you view instead of a random project inbox', async () => {
@@ -377,13 +377,13 @@ describe('ProjectsHome', () => {
     await screen.findByText('Guild hall')
 
     expect(screen.getByLabelText('1 running now')).toBeTruthy()
-    expect(screen.getByLabelText('3 active tasks')).toBeTruthy()
+    expect(screen.getByLabelText('3 active work items')).toBeTruthy()
     expect(screen.getByLabelText('Builder: working')).toBeTruthy()
     expect(screen.getAllByLabelText(/Project work mix:/)).toHaveLength(2)
     expect(screen.getByLabelText(/Project work mix: 2 active, 0 drafts, 0 blocked, 3 done/)).toBeTruthy()
-    await userEvent.hover(screen.getByLabelText('3 active tasks'))
-    expect((await screen.findByRole('tooltip')).textContent).toContain('tasks currently queued or in progress')
-    await userEvent.unhover(screen.getByLabelText('3 active tasks'))
+    await userEvent.hover(screen.getByLabelText('3 active work items'))
+    expect((await screen.findByRole('tooltip')).textContent).toContain('work currently queued or in progress')
+    await userEvent.unhover(screen.getByLabelText('3 active work items'))
     await userEvent.hover(screen.getByText('3 active'))
     expect(screen.queryByRole('tooltip')).toBeNull()
     await userEvent.unhover(screen.getByText('3 active'))
@@ -400,8 +400,8 @@ describe('ProjectsHome', () => {
 
     expect(screen.queryByLabelText(/assigned or relevant/i)).toBeNull()
     expect(screen.getByLabelText('Coordinator: 1 blocker to triage in Fair Labor License.')).toBeTruthy()
-    expect(screen.getByLabelText('Builder: 1 active task waiting for a run in Fair Labor License.')).toBeTruthy()
-    expect(screen.getByLabelText('Reviewer: 1 blocked and 1 done task in Fair Labor License.')).toBeTruthy()
+    expect(screen.getByLabelText('Builder: 1 active work item waiting for a run in Fair Labor License.')).toBeTruthy()
+    expect(screen.getByLabelText('Reviewer: 1 blocked and 1 done work item in Fair Labor License.')).toBeTruthy()
     expect(screen.getAllByText('Coordinator').length).toBeGreaterThan(0)
     expect(screen.getAllByText('Builder').length).toBeGreaterThan(0)
     expect(screen.getAllByText('Reviewer').length).toBeGreaterThan(0)
@@ -421,8 +421,8 @@ describe('ProjectsHome', () => {
     expect(screen.getByLabelText('Spec: at table').classList.contains('avatar-tone-spec')).toBe(true)
     expect(screen.getByLabelText('Builder: working').classList.contains('avatar-tone-builder')).toBe(true)
     expect(screen.getByLabelText('Reviewer: inspecting blocks').classList.contains('avatar-tone-reviewer')).toBe(true)
-    expect(screen.getByLabelText('Builder: 1 active task waiting for a run in Fair Labor License.').classList.contains('avatar-tone-builder')).toBe(true)
-    expect(screen.getByLabelText('Reviewer: 1 blocked and 1 done task in Fair Labor License.').classList.contains('avatar-tone-reviewer')).toBe(true)
+    expect(screen.getByLabelText('Builder: 1 active work item waiting for a run in Fair Labor License.').classList.contains('avatar-tone-builder')).toBe(true)
+    expect(screen.getByLabelText('Reviewer: 1 blocked and 1 done work item in Fair Labor License.').classList.contains('avatar-tone-reviewer')).toBe(true)
   })
 
   it('resumes and pauses projects with project ids in the endpoint', async () => {

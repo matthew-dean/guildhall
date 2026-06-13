@@ -429,14 +429,14 @@
             <strong>{overview.running}</strong>
           </span>
         </Tooltip>
-        <Tooltip text={`${countLabel(overview.active, 'active task')}: tasks currently queued or in progress across all projects.`}>
-          <span class="floor-metric tone-active" aria-label={countLabel(overview.active, 'active task')}>
+        <Tooltip text={`${countLabel(overview.active, 'active work item')}: work currently queued or in progress across all projects.`}>
+          <span class="floor-metric tone-active" aria-label={countLabel(overview.active, 'active work item')}>
             <Activity size={16} />
             <strong>{overview.active}</strong>
           </span>
         </Tooltip>
-        <Tooltip text={`${countLabel(overview.blocked, 'blocked task')}: work that needs triage, recovery, or a decision.`}>
-          <span class="floor-metric tone-warn" aria-label={countLabel(overview.blocked, 'blocked task')}>
+        <Tooltip text={`${countLabel(overview.blocked, 'blocked work item')}: work that needs triage, recovery, or a decision.`}>
+          <span class="floor-metric tone-warn" aria-label={countLabel(overview.blocked, 'blocked work item')}>
             <AlertTriangle size={16} />
             <strong>{overview.blocked}</strong>
           </span>
@@ -447,8 +447,8 @@
             <strong>{overview.drafts}</strong>
           </span>
         </Tooltip>
-        <Tooltip text={`${countLabel(overview.done, 'task done', 'tasks done')}: completed task records across all projects.`}>
-          <span class="floor-metric tone-done" aria-label={countLabel(overview.done, 'task done', 'tasks done')}>
+        <Tooltip text={`${countLabel(overview.done, 'work item done', 'work items done')}: completed work across all projects.`}>
+          <span class="floor-metric tone-done" aria-label={countLabel(overview.done, 'work item done', 'work items done')}>
             <CheckCircle2 size={16} />
             <strong>{overview.done}</strong>
           </span>
@@ -461,9 +461,9 @@
         <div class="panel-head">
           <div>
             <p class="panel-kicker">Work mix</p>
-            <h2>{countLabel(overview.taskTotal, 'task')}</h2>
+            <h2>{countLabel(overview.taskTotal, 'work item')}</h2>
           </div>
-          <span class="panel-value">{countLabel(readyTaskCount, 'ready task')}</span>
+          <span class="panel-value">{countLabel(readyTaskCount, 'ready work item')}</span>
         </div>
         <WorkMixChart
           ariaLabel={`Work mix across projects: ${overview.active} active, ${readyTaskCount} ready, ${needsYouCount} projects need attention, ${overview.done} done.`}
@@ -473,16 +473,16 @@
               label: 'active',
               count: overview.active,
               tone: 'active',
-              ariaLabel: `${countLabel(overview.active, 'active task')}: active or in-progress work.`,
-              tooltip: `${countLabel(overview.active, 'active task')}: active or in-progress work.`,
+              ariaLabel: `${countLabel(overview.active, 'active work item')}: active or in-progress work.`,
+              tooltip: `${countLabel(overview.active, 'active work item')}: active or in-progress work.`,
             },
             {
               key: 'ready',
               label: 'ready',
               count: readyTaskCount,
               tone: 'ready',
-              ariaLabel: `${countLabel(readyTaskCount, 'ready task')}: work that can be picked up without another brief review.`,
-              tooltip: `${countLabel(readyTaskCount, 'ready task')}: work that can be picked up without another brief review.`,
+              ariaLabel: `${countLabel(readyTaskCount, 'ready work item')}: work that can be picked up without another brief review.`,
+              tooltip: `${countLabel(readyTaskCount, 'ready work item')}: work that can be picked up without another brief review.`,
             },
             {
               key: 'attention',
@@ -497,11 +497,11 @@
               label: 'done',
               count: overview.done,
               tone: 'done',
-              ariaLabel: `${countLabel(overview.done, 'done task', 'done tasks')}: completed work.`,
-              tooltip: `${countLabel(overview.done, 'done task', 'done tasks')}: completed work.`,
+              ariaLabel: `${countLabel(overview.done, 'done work item')}: completed work.`,
+              tooltip: `${countLabel(overview.done, 'done work item')}: completed work.`,
             },
           ]}
-          emptyLabel="No tasks yet"
+          emptyLabel="No work items yet"
         />
       </UtilityPanel>
       <UtilityPanel className="dashboard-panel" tone={needsYouCount === 0 ? 'neutral' : 'warn'}>

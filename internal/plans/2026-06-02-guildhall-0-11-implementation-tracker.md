@@ -16,6 +16,7 @@ explicitly changes the release boundary.
 - `internal/specs/2026-06-01-guildhall-0-10-state-machines-project-graph.md`
 - `internal/specs/2026-06-03-guildhall-0-11-deterministic-code-quality-signals.md`
 - `internal/specs/2026-06-06-guildhall-0-11-iterative-work-campaigns.md`
+- `internal/specs/2026-06-13-guildhall-0-11-capability-persona-calibration.md`
 - `internal/plans/2026-06-03-guildhall-0-11-deterministic-code-quality-implementation-plan.md`
 
 ## Feature Priority Order
@@ -30,10 +31,18 @@ explicitly changes the release boundary.
    It should build on deterministic quality signals and the 0.10 delivery
    spine, and it should use Jess-style benchmark-leashed work as the serious
    fixture.
-3. **Task Lifecycle Migration.** This pays off the 0.10 state-machine and
+3. **Capability And Persona Calibration.** This turns repeated review misses,
+   false persona blocks, noisy capability requests, memory-context mistakes,
+   and external-agent bridge failures into validation-gated guidance updates
+   rather than silent prompt drift. It should evaluate SkillOpt as an optional
+   optimizer engine behind a Guildhall-owned adapter, and it should build on
+   deterministic quality signals, review calibration, memory-core boundaries,
+   and iterative campaign mechanics before touching authority-sensitive
+   targets.
+4. **Task Lifecycle Migration.** This pays off the 0.10 state-machine and
    project-graph substrate by removing broad lifecycle cleanup from ad hoc task
    fields.
-4. **OpenRouter Guided Setup.** This remains a valuable provider feature, but
+5. **OpenRouter Guided Setup.** This remains a valuable provider feature, but
    it should build on the deterministic quality substrate rather than preempt
    it.
 
@@ -90,7 +99,37 @@ results, and stop on explicit budget or blocker conditions.
 - [ ] Add owner-facing campaign UI for active iteration, remaining budget,
   latest evidence, next-candidate rationale, and pause/resume/stop controls.
 
-## Milestone 3: Task Lifecycle Migration
+## Milestone 3: Capability And Persona Calibration
+
+**Purpose:** Improve Guildhall's skill-like guidance surfaces with
+validation-gated proposals instead of silent prompt drift or hand-tuned
+one-off edits.
+
+- [ ] Add a calibration target registry for persona prompts/rubrics and review
+  lane policy before authority-sensitive targets.
+- [ ] Add scrubbed calibration case schemas for false persona blocks, missed
+  risks, lane-selection misses, noisy capability requests, and memory inclusion
+  mistakes.
+- [ ] Add a baseline replay harness that can score current target behavior
+  against checked-in fixture cases and ignored local reports.
+- [ ] Add staged calibration proposals with bounded text diffs, train/validation
+  case splits, safety scores, rollback receipts, and owner-review state.
+- [ ] Add a SkillOpt source-reuse spike that starts with the
+  `skillopt_sleep.consolidate`/gate path or a source-attributed port, exports
+  one scrubbed persona or review-lane target, runs an offline no-write
+  calibration batch, and imports the candidate as a staged proposal without
+  giving SkillOpt live write authority or adding SkillOpt/Python package
+  requirements to the user runtime.
+- [ ] Hard-fail proposals that regress missed blockers, privacy, authority,
+  required artifacts, or capability-boundary behavior.
+- [ ] Add adoption and rollback paths that record target version hashes and
+  never silently widen capability grants, memory inclusion, or external-agent
+  write authority.
+- [ ] Extend calibration to capability request policy, memory context policy,
+  and external-agent bridge guidance only after persona/review-lane targets are
+  proven.
+
+## Milestone 4: Task Lifecycle Migration
 
 **Purpose:** Move broad task lifecycle cleanup out of ad hoc status fields and
 onto explicit node/linkage state machines after the 0.10 state-machine
@@ -104,7 +143,7 @@ substrate has proven itself.
   receipts.
 - [ ] Keep owner-facing labels separate from persisted lifecycle states.
 
-## Milestone 4: OpenRouter Guided Setup
+## Milestone 5: OpenRouter Guided Setup
 
 **Purpose:** Offer OpenRouter as a trustworthy hosted-provider setup path with
 clear routing, attribution, privacy/cost posture, and recommendation evidence.
