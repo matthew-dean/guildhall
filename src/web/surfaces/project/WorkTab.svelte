@@ -14,9 +14,10 @@
   import SegmentedControl from '../../lib/SegmentedControl.svelte'
   import TaskCard from '../../lib/TaskCard.svelte'
   import UtilityPanel from '../../lib/UtilityPanel.svelte'
-  import { friendlyDomain, friendlyPriority } from '../../lib/display.js'
+  import { friendlyPriority } from '../../lib/display.js'
   import { friendlyTaskId } from '../../lib/identifier-labels.js'
   import { nav, path } from '../../lib/nav.svelte.js'
+  import { project } from '../../lib/project.svelte.js'
   import { currentProjectHref, currentTaskHref, projectFetch } from '../../lib/project-routes.js'
   import { buildWorkSurface } from '../../lib/project-data.js'
   import { friendlyRuntimeMessage } from '../../lib/runtime-message.js'
@@ -65,8 +66,8 @@
 
   const viewModel = $derived(buildWorkSurface(detail))
   const tasks = $derived<Task[]>(viewModel.tasks)
+  const importDrafts = $derived<Task[]>(viewModel.importDrafts)
   const importDraftCount = $derived(viewModel.importDraftCount)
-  const nextImportDraft = $derived(viewModel.nextImportDraft)
   const needsMeta = $derived(viewModel.needsMeta)
   const setupInboxItem = $derived.by(() => {
     const items = detail.inbox?.items ?? []
@@ -88,9 +89,12 @@
   let sortDir = $state<SortDir>('desc')
   let routeWorkView = $state<WorkView>('list')
   let workFilter = $state<WorkFilter>('queued')
+  let partFilter = $state('all')
   let workFilterUserSelected = $state(false)
   let workFilterProjectId = $state<string | null>(null)
   let selectedWorkId = $state<string | null>(null)
+  let runWorkBusyId = $state<string | null>(null)
+  let runWorkError = $state<string | null>(null)
 
   const viewOptions = [
     { value: 'list', label: 'List' },
@@ -117,9 +121,22 @@
       .filter((primitive, index, all) => primitive.id && all.findIndex(item => item.id === primitive.id) === index)
       .slice(0, 5) ?? []
   })
-  const visibleTasks = $derived(tasks.filter(matchesWorkFilter))
+  const allWorkItems = $derived([...tasks, ...importDrafts])
+  const workAreasByTaskId = $derived(viewModel.workAreasByTaskId)
+  const workAreaOptions = $derived(viewModel.workAreaOptions)
   const showsPlanningArtifacts = $derived(['planning', 'open', 'all'].includes(workFilter))
-  const visibleImportDraftCount = $derived(showsPlanningArtifacts ? importDraftCount : 0)
+  const filterableTasks = $derived(showsPlanningArtifacts ? allWorkItems : tasks)
+  const visibleTasks = $derived(filterableTasks.filter(matchesWorkFilter))
+  const partFilterOptions = $derived.by(() => {
+    const visibleIds = new Set(allWorkItems.map(task => workAreaForTask(task).id))
+    const parts = workAreaOptions
+      .filter(area => area.id !== 'project' && visibleIds.has(area.id))
+      .map(area => ({ value: area.id, label: area.label }))
+    return [{ value: 'all', label: 'All parts' }, ...parts]
+  })
+  const visibleImportDrafts = $derived(importDrafts.filter(task => partFilter === 'all' || workAreaForTask(task).id === partFilter))
+  const visibleImportDraftCount = $derived(showsPlanningArtifacts ? visibleImportDrafts.length : 0)
+  const nextImportDraft = $derived(visibleImportDrafts[0] ?? null)
   const boardDetail = $derived({
     ...detail,
     tasks: visibleTasks,
@@ -135,7 +152,7 @@
       return counts
     }, {})
     return {
-      total: tasks.length,
+      total: filterableTasks.length,
       agentActive: all.filter(task => running && ['in_progress', 'review', 'gate_check'].includes(task.status ?? '')).length,
       paused: stageCounts.paused ?? 0,
       reviewWaiting: stageCounts.review_waiting ?? 0,
@@ -158,7 +175,7 @@
     list.sort((left, right) => compareTasks(left, right, sortKey, sortDir))
     return list
   })
-  const selectedWorkVisible = $derived(Boolean(selectedWorkId && tasks.some(task => task.id === selectedWorkId)))
+  const selectedWorkVisible = $derived(Boolean(selectedWorkId && allWorkItems.some(task => task.id === selectedWorkId)))
 
   function compareTasks(left: Task, right: Task, key: SortKey, dir: SortDir): number {
     const direction = dir === 'asc' ? 1 : -1
@@ -173,7 +190,7 @@
         delta = (STATUS_SORT_ORDER[left.status ?? ''] ?? 99) - (STATUS_SORT_ORDER[right.status ?? ''] ?? 99)
         break
       case 'area':
-        delta = compareText(friendlyDomain(left.domain), friendlyDomain(right.domain))
+        delta = compareText(workAreaForTask(left).label, workAreaForTask(right).label)
         break
       case 'priority':
         delta = (PRIORITY_SORT_ORDER[left.priority ?? 'normal'] ?? 99) - (PRIORITY_SORT_ORDER[right.priority ?? 'normal'] ?? 99)
@@ -210,12 +227,51 @@
     nav(currentTaskHref(task.id), { backgroundPath: path.value })
   }
 
+  async function postTaskAction(taskId: string, action: string, body: Record<string, unknown>): Promise<Response> {
+    return projectFetch(`/api/project/task/${encodeURIComponent(taskId)}/${action}`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify(body),
+    }, detail.id)
+  }
+
+  async function runWorkItem(taskId: string): Promise<void> {
+    runWorkBusyId = taskId
+    runWorkError = null
+    try {
+      const task = allWorkItems.find(item => item.id === taskId)
+      if (task?.status === 'import_draft') {
+        const shapeRes = await postTaskAction(taskId, 'shape-draft', { projectId: detail.id })
+        if (!shapeRes.ok) {
+          const body = await shapeRes.json().catch(() => ({})) as { error?: string }
+          runWorkError = body.error ?? `Draft failed (HTTP ${shapeRes.status})`
+          return
+        }
+      }
+      const res = await postTaskAction(taskId, 'start', { projectId: detail.id, mode: 'one_task', scope: 'work_item' })
+      if (!res.ok) {
+        const body = await res.json().catch(() => ({})) as { error?: string }
+        runWorkError = body.error ?? `Start failed (HTTP ${res.status})`
+        return
+      }
+      await project.refresh(detail.id)
+      setTimeout(() => void project.refresh(detail.id), 500)
+      setTimeout(() => void project.refresh(detail.id), 1800)
+    } finally {
+      runWorkBusyId = null
+    }
+  }
+
   function selectWork(task: Task): void {
     selectedWorkId = task.id
+    runWorkError = null
   }
 
   function selectWorkById(taskId: string): void {
-    if (tasks.some(task => task.id === taskId)) selectedWorkId = taskId
+    if (allWorkItems.some(task => task.id === taskId)) {
+      selectedWorkId = taskId
+      runWorkError = null
+    }
   }
 
   function taskProgress(task: Task) {
@@ -274,12 +330,13 @@
   }
 
   function emptyFilterAction(): { label: string; filter: WorkFilter } | null {
-    if (workFilter === 'queued' && tasks.some(isPlanningTask)) return { label: 'Show planning', filter: 'planning' }
+    if (workFilter === 'queued' && allWorkItems.some(isPlanningTask)) return { label: 'Show planning', filter: 'planning' }
     if (workFilter !== 'queued') return { label: 'Show queued work', filter: 'queued' }
     return null
   }
 
   function matchesWorkFilter(task: Task): boolean {
+    if (partFilter !== 'all' && workAreaForTask(task).id !== partFilter) return false
     if (workFilter === 'all') return true
     if (workFilter === 'queued') return isQueuedWorkTask(task)
     if (workFilter === 'planning') return isPlanningTask(task)
@@ -294,6 +351,16 @@
     if (tasks.some(isPlanningTask)) return 'planning'
     if (tasks.some(task => task.status === 'blocked')) return 'blocked'
     return 'queued'
+  }
+
+  function workAreaForTask(task: Task) {
+    return workAreasByTaskId[task.id] ?? {
+      id: 'project',
+      label: 'Project',
+      kind: 'project',
+      source: 'fallback',
+      confidence: 'fallback',
+    }
   }
 
   function taskPresentation(task: Task) {
@@ -440,6 +507,7 @@
     if (projectId !== workFilterProjectId) {
       workFilterProjectId = projectId
       workFilterUserSelected = false
+      partFilter = 'all'
     }
     if (!workFilterUserSelected) {
       workFilter = defaultWorkFilterForTasks()
@@ -459,6 +527,12 @@
         <label for="work-view-show">Show</label>
         <Select id="work-view-show" value={workFilter} options={workFilterOptions} onchange={onWorkFilterSelect} />
       </div>
+      {#if partFilterOptions.length > 2}
+        <div class="show-picker" role="group" aria-label="Work part">
+          <label for="work-view-part">Part</label>
+          <Select id="work-view-part" value={partFilter} options={partFilterOptions} onchange={(value) => { partFilter = value }} />
+        </div>
+      {/if}
     </div>
   </UtilityPanel>
 
@@ -531,10 +605,10 @@
               <p class="draft-queue-label">Imported draft queue</p>
               <div class="draft-queue-title">{nextImportDraft.title ?? 'Imported draft'}</div>
               <p class="draft-queue-detail">
-                {#if importDraftCount === 1}
+                {#if visibleImportDraftCount === 1}
                   Review this imported draft and decide whether to shape it now.
                 {:else}
-                  Start with "{nextImportDraft.title ?? 'Imported draft'}". {importDraftCount - 1} more drafts are queued behind it.
+                  Start with "{nextImportDraft.title ?? 'Imported draft'}". {visibleImportDraftCount - 1} more drafts are queued behind it.
                 {/if}
               </p>
             </div>
@@ -544,7 +618,7 @@
           </UtilityPanel>
         {/if}
 
-        {#if tasks.length === 0}
+        {#if allWorkItems.length === 0}
           {#if needsMeta || setupInboxItem}
             <UtilityPanel as="div" className="setup-empty" tone="neutral">
               <p class="muted">{setupInboxItem?.detail ?? 'No tasks yet. Finish project setup first.'}</p>
@@ -610,7 +684,7 @@
                   {/if}
                 </span>
                 <span class="row-domain">
-                  {friendlyDomain(task.domain) || 'Project'}
+                  {workAreaForTask(task).label}
                 </span>
                 <span class="row-priority">
                   <Chip label={friendlyPriority(task.priority)} tone={priorityTone(task.priority)} />
@@ -629,10 +703,13 @@
 
       {#if selectedWorkId}
         <WorkTreePreview
-          tasks={tasks}
+          tasks={allWorkItems}
           selectedTaskId={selectedWorkId}
           workProgress={detail.workProgress}
           onSelectTask={selectWorkById}
+          onRunTask={runWorkItem}
+          runBusyTaskId={runWorkBusyId}
+          runError={runWorkError}
         />
       {/if}
     </div>

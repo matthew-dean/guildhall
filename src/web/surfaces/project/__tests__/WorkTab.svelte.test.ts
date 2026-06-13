@@ -2,7 +2,7 @@
 import { readFileSync } from 'node:fs'
 import '@testing-library/jest-dom/vitest'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { cleanup, fireEvent, render, screen, within } from '@testing-library/svelte'
+import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/svelte'
 import userEvent from '@testing-library/user-event'
 import WorkTab from '../WorkTab.svelte'
 import { path } from '../../../lib/nav.svelte.js'
@@ -28,7 +28,7 @@ function task(overrides: Partial<Task>): Task {
   } as Task
 }
 
-function detail(tasks: Task[]): ProjectDetail {
+function detail(tasks: Task[], overrides: Partial<ProjectDetail> = {}): ProjectDetail {
   return {
     id: 'looma-knit',
     name: 'Looma + Knit',
@@ -37,6 +37,7 @@ function detail(tasks: Task[]): ProjectDetail {
     availability: { status: 'active', pausedAt: null, resumedAt: null },
     tasks,
     config: { coordinators: [{ id: 'knit', domain: 'knit' }] },
+    ...overrides,
   } as ProjectDetail
 }
 
@@ -179,6 +180,166 @@ describe('WorkTab', () => {
 
     await screen.findByText('1 delivery step blocked')
     expect(screen.getByText('Import review flow')).toBeInTheDocument()
+  })
+
+  it('can filter the mixed Looma and Knit work list by source part', async () => {
+    render(WorkTab, {
+      props: {
+        detail: detail([
+          task({
+            id: 'task-knit',
+            title: 'Knit pages task',
+            status: 'ready',
+            domain: 'looma',
+            description: 'knit/specs/v1-pages.md: - [ ] Create a page',
+            productBrief: {
+              userJob: 'Ship page creation.',
+              whyItMattersNow: 'Knit needs pages.',
+              successMetric: 'Page creation works.',
+              nonGoals: [],
+              approvedAt: '2026-05-19T10:00:00.000Z',
+            },
+            spec: 'Implement page creation.',
+            acceptanceCriteria: [{ description: 'Creates pages.' }],
+          }),
+          task({
+            id: 'task-looma',
+            title: 'Looma component task',
+            status: 'ready',
+            domain: 'looma',
+            description: 'looma/docs/component-roadmap.md: - [ ] Component',
+            productBrief: {
+              userJob: 'Ship the component.',
+              whyItMattersNow: 'Looma needs components.',
+              successMetric: 'Component works.',
+              nonGoals: [],
+              approvedAt: '2026-05-19T10:00:00.000Z',
+            },
+            spec: 'Implement component.',
+            acceptanceCriteria: [{ description: 'Renders component.' }],
+          }),
+        ], {
+          structuralMapReview: {
+            state: 'accepted',
+            domains: [
+              { id: 'domain:knit', label: 'Knit', path: 'knit' },
+              { id: 'domain:looma', label: 'Looma', path: 'looma' },
+            ],
+          },
+        }),
+      },
+    })
+
+    await screen.findByText('2 shown · 2 total')
+    expect(screen.getByRole('button', { name: /inspect work knit pages task/i })).toHaveTextContent('Knit')
+    expect(screen.getByRole('button', { name: /inspect work looma component task/i })).toHaveTextContent('Looma')
+
+    await userEvent.selectOptions(screen.getByRole('combobox', { name: /^part$/i }), 'domain:knit')
+
+    expect(screen.getByText('1 shown · 2 total')).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: /inspect work knit pages task/i })).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: /inspect work looma component task/i })).not.toBeInTheDocument()
+  })
+
+  it('can filter mixed Looma ready work and Knit import drafts by source part', async () => {
+    render(WorkTab, {
+      props: {
+        detail: detail([
+          task({
+            id: 'task-looma-ready',
+            title: 'Looma ready task',
+            status: 'ready',
+            domain: 'looma',
+            description: 'looma/docs/component-roadmap.md: - [ ] Component',
+            productBrief: {
+              userJob: 'Ship Looma work.',
+              whyItMattersNow: 'Looma needs this component.',
+              successMetric: 'The component works.',
+              nonGoals: [],
+              approvedAt: '2026-05-19T10:00:00.000Z',
+            },
+            spec: 'Implement component.',
+            acceptanceCriteria: [{ description: 'Component works.' }],
+          }),
+          task({
+            id: 'task-knit-draft',
+            title: 'Knit draft task',
+            status: 'import_draft',
+            domain: 'knit',
+            description: 'knit/PROJECT_STATE.md: - [ ] Version diff view',
+          }),
+          task({
+            id: 'task-looma-draft',
+            title: 'Looma draft task',
+            status: 'import_draft',
+            domain: 'looma',
+            description: 'looma/PROJECT_STATE.md: - [ ] Toast guidance',
+          }),
+        ]),
+      },
+    })
+
+    await screen.findByText('3 shown · 3 total')
+    expect(screen.getByRole('combobox', { name: /^part$/i })).toHaveTextContent('Knit')
+
+    await userEvent.selectOptions(screen.getByRole('combobox', { name: /^show$/i }), 'all')
+    await screen.findByText('3 shown · 3 total')
+
+    await userEvent.selectOptions(screen.getByRole('combobox', { name: /^part$/i }), 'task-domain:knit')
+
+    expect(screen.getByText('1 shown · 3 total')).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: /inspect work knit draft task/i })).toHaveTextContent('Knit')
+    expect(screen.queryByRole('button', { name: /inspect work looma ready task/i })).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: /inspect work looma draft task/i })).not.toBeInTheDocument()
+  })
+
+  it('starts a selected work item directly from the list inspector', async () => {
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input)
+      if (url.includes('/api/project/task/task-knit-draft/shape-draft')) {
+        expect(init?.method).toBe('POST')
+        expect(String(init.body)).toContain('"projectId":"looma-knit"')
+        return json({ ok: true })
+      }
+      if (url.includes('/api/project/task/task-knit-draft/start')) {
+        return json({ status: 'running', mode: 'one_task', scope: { type: 'work_item', taskId: 'task-knit-draft' } })
+      }
+      if (url.includes('/api/project?')) {
+        return json({ id: 'looma-knit', name: 'Looma + Knit', run: { status: 'running', mode: 'one_task' }, tasks: [] })
+      }
+      return json({ progress: 'Recent worker progress.' })
+    })
+    vi.stubGlobal('fetch', fetchMock)
+
+    render(WorkTab, {
+      props: {
+        detail: detail([
+          task({
+            id: 'task-knit-draft',
+            title: 'Knit draft task',
+            status: 'import_draft',
+            domain: 'knit',
+            description: 'knit/PROJECT_STATE.md: - [ ] Version diff view',
+          }),
+        ]),
+      },
+    })
+
+    await userEvent.selectOptions(screen.getByRole('combobox', { name: /^show$/i }), 'planning')
+    await userEvent.click(await screen.findByRole('button', { name: /inspect work knit draft task/i }))
+    await userEvent.click(screen.getByRole('button', { name: /draft and run/i }))
+
+    await waitFor(() => {
+      expect(fetchMock.mock.calls.some(([input]) =>
+        String(input).includes('/api/project/task/task-knit-draft/shape-draft?projectId=looma-knit'),
+      )).toBe(true)
+      expect(fetchMock.mock.calls.some(([input, init]) =>
+        String(input).includes('/api/project/task/task-knit-draft/start?projectId=looma-knit') &&
+        init?.method === 'POST' &&
+        String(init.body).includes('"mode":"one_task"') &&
+        String(init.body).includes('"scope":"work_item"'),
+      )).toBe(true)
+    })
   })
 
   it('does not show an empty new-request prompt when a zero-task project is blocked by migration', async () => {

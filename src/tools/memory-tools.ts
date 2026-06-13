@@ -3,10 +3,9 @@ import { defineTool } from '@guildhall/engine'
 import { z } from 'zod'
 import fs from 'node:fs/promises'
 import { DecisionEntry, ProgressEntry } from '@guildhall/core'
-import { dirname } from 'node:path'
+import { basename, dirname, join } from 'node:path'
 import {
   getProjectProgressHeartbeatsPath,
-  getProjectSystemStatePath,
   inferProjectRootFromMemoryDir,
 } from '@guildhall/sessions'
 
@@ -100,10 +99,13 @@ export async function logProgress(input: LogProgressInput): Promise<LogProgressR
       .filter((line) => line !== null)
       .join('\n')
 
-    const projectRoot = inferProjectRootFromMemoryDir(dirname(input.progressPath))
+    const progressDir = dirname(input.progressPath)
+    const projectRoot = inferProjectRootFromMemoryDir(progressDir)
     const outputPath = entry.type === 'heartbeat'
-      ? getProjectProgressHeartbeatsPath(projectRoot)
-      : getProjectSystemStatePath(projectRoot, 'PROGRESS.md')
+      ? basename(progressDir) === 'project-state'
+        ? join(dirname(progressDir), 'progress', 'heartbeats.md')
+        : getProjectProgressHeartbeatsPath(projectRoot)
+      : input.progressPath
     await fs.mkdir(dirname(outputPath), { recursive: true })
     await appendManagedTextFile(outputPath, block, 'utf-8')
     return { success: true, path: outputPath }

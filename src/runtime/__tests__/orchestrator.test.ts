@@ -13,8 +13,10 @@ import {
   type ReviewerFanoutRunner,
 } from '../orchestrator.js'
 import { LivenessTracker } from '../liveness.js'
+import { upsertTaskWorkspaceState } from '../task-state-store.js'
 import { updateProjectConfig, type ResolvedConfig } from '@guildhall/config'
 import type { Task, TaskQueue, TaskStatus } from '@guildhall/core'
+import { getProjectSystemStatePath } from '../../sessions/local-history.js'
 import {
   defaultAgentSettingsPath,
   makeDefaultSettings,
@@ -63,7 +65,7 @@ beforeEach(async () => {
   memoryDir = path.join(tmpDir, '.guildhall')
   await fs.mkdir(memoryDir, { recursive: true })
   tasksPath = path.join(memoryDir, 'TASKS.json')
-  progressPath = path.join(memoryDir, 'PROGRESS.md')
+  progressPath = getProjectSystemStatePath(tmpDir, 'PROGRESS.md')
   agentSettingsPath = defaultAgentSettingsPath(tmpDir)
 
   execFileSync('git', ['init', '-b', 'main'], { cwd: tmpDir, stdio: 'ignore' })
@@ -205,10 +207,36 @@ async function writeQueue(tasks: Task[]): Promise<void> {
   const tmpPath = `${tasksPath}.tmp`
   await fs.writeFile(tmpPath, JSON.stringify(queue, null, 2), 'utf-8')
   await fs.rename(tmpPath, tasksPath)
+  const managedTasksPath = getProjectSystemStatePath(tmpDir, 'TASKS.json')
+  await fs.mkdir(path.dirname(managedTasksPath), { recursive: true })
+  await fs.writeFile(managedTasksPath, JSON.stringify(queue, null, 2), 'utf-8')
+}
+
+async function writeManagedQueue(tasks: Task[]): Promise<void> {
+  const queue: TaskQueue = {
+    version: 1,
+    lastUpdated: '2026-04-01T00:00:00Z',
+    tasks,
+  }
+  const managedTasksPath = getProjectSystemStatePath(tmpDir, 'TASKS.json')
+  await fs.mkdir(path.dirname(managedTasksPath), { recursive: true })
+  await fs.writeFile(managedTasksPath, JSON.stringify(queue, null, 2), 'utf-8')
 }
 
 async function readQueue(): Promise<TaskQueue> {
+  const managedTasksPath = getProjectSystemStatePath(tmpDir, 'TASKS.json')
+  try {
+    const managedRaw = await fs.readFile(managedTasksPath, 'utf-8')
+    return JSON.parse(managedRaw)
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error
+  }
   const raw = await fs.readFile(tasksPath, 'utf-8')
+  return JSON.parse(raw)
+}
+
+async function readManagedQueue(): Promise<TaskQueue> {
+  const raw = await fs.readFile(getProjectSystemStatePath(tmpDir, 'TASKS.json'), 'utf-8')
   return JSON.parse(raw)
 }
 
@@ -270,6 +298,9 @@ async function mutateTask(id: string, patch: Partial<Task>): Promise<void> {
   const tmpPath = `${tasksPath}.tmp`
   await fs.writeFile(tmpPath, JSON.stringify(q, null, 2), 'utf-8')
   await fs.rename(tmpPath, tasksPath)
+  const managedTasksPath = getProjectSystemStatePath(tmpDir, 'TASKS.json')
+  await fs.mkdir(path.dirname(managedTasksPath), { recursive: true })
+  await fs.writeFile(managedTasksPath, JSON.stringify(q, null, 2), 'utf-8')
 }
 
 interface StubAgent {
@@ -343,7 +374,7 @@ describe('context debug records', () => {
         source: expect.objectContaining({
           kind: 'progress',
           ref: 'PROGRESS.md#task-memory-progress',
-          path: '.guildhall/PROGRESS.md',
+          path: 'project-state/PROGRESS.md',
         }),
         content: expect.objectContaining({
           summary: expect.stringContaining('Review memory progress'),
@@ -2388,7 +2419,7 @@ describe('Orchestrator.tick — routing', () => {
     }
     expect(coord.calls).toHaveLength(0)
     expect(worker.calls).toHaveLength(0)
-    const q = await readQueue()
+    const q = await readManagedQueue()
     expect(q.tasks[0]!.status).toBe('in_progress')
     expect(q.tasks[0]!.assignedTo).toBe('worker-agent')
     expect(q.tasks[0]!.notes.at(-1)).toMatchObject({
@@ -2441,7 +2472,7 @@ describe('Orchestrator.tick — routing', () => {
     const out = await orch.tick()
 
     expect(out.kind).toBe('processed')
-    const q = await readQueue()
+    const q = await readManagedQueue()
     expect(q.tasks[0]!.status).toBe('in_progress')
     expect(q.tasks[0]!.notes.some((note) =>
       note.agentId === 'blueprint-sanity-review' &&
@@ -3887,7 +3918,7 @@ describe('Orchestrator.tick — feedback loop', () => {
     await orch.tick()
     const [call] = worker.calls
     expect(call).toBeDefined()
-    expect(call!.prompt).toContain(tasksPath)
+    expect(call!.prompt).toContain(getProjectSystemStatePath(tmpDir, 'TASKS.json'))
     expect(call!.prompt).toContain(memoryDir)
   })
 
@@ -5721,6 +5752,63 @@ describe('Orchestrator.tick — error handling', () => {
     expect(q.tasks[0]!.status).toBe('spec_review')
     expect(q.tasks[0]!.spec).toContain('Already drafted')
     expect(q.tasks[0]!.escalations).toHaveLength(0)
+  })
+
+  it('asks a concrete owner question when imported draft shaping hits a turn limit without durable progress', async () => {
+    await writeQueue([
+      mkTask({
+        id: 'draft-a',
+        title: 'Zapier / webhook support',
+        status: 'exploring',
+        notes: [
+          {
+            agentId: 'workspace-importer',
+            role: 'importer',
+            content: [
+              'Imported from: /workspace/knit/docs/features.md',
+              'Why this may matter: knit/docs/features.md: - [ ] Zapier / webhook support',
+              'Missing information: Guildhall still needs to confirm scope.',
+            ].join('\n'),
+            timestamp: '2026-06-13T20:00:00.000Z',
+          },
+          {
+            agentId: 'human',
+            role: 'shaping-request',
+            content: 'User asked Guildhall to shape this imported draft into a complete task.',
+            timestamp: '2026-06-13T20:01:00.000Z',
+          },
+        ],
+      }),
+    ])
+    const spec = {
+      name: 'spec-agent',
+      async generate() {
+        throw new Error('Exceeded maximum turn limit (8)')
+      },
+    }
+    const orch = new Orchestrator({
+      config: baseConfig(),
+      agents: agentSet({ spec }),
+    })
+    const out = await orch.tick()
+    expect(out.kind).toBe('processed')
+    if (out.kind === 'processed') {
+      expect(out.afterStatus).toBe('exploring')
+      expect(out.waitingOnUser).toBe(true)
+    }
+
+    const q = await readQueue()
+    const task = q.tasks[0]!
+    expect(task.status).toBe('exploring')
+    expect(task.escalations).toHaveLength(0)
+    expect(task.blockReason).toBeUndefined()
+    const question = task.openQuestions?.[0]
+    expect(question?.kind).toBe('text')
+    if (question?.kind === 'text') {
+      expect(question.prompt).toContain('Zapier / webhook support')
+      expect(question.prompt).toContain('concrete success boundary')
+      expect(question.description).toContain('knit/docs/features.md')
+    }
   })
 
   it('preserves worker progress instead of escalating when turn limit hits after dirtying the worktree', async () => {
@@ -8188,7 +8276,7 @@ describe('Orchestrator.run — full loops', () => {
     expect(result.stopReason).toBe('one_task')
     expect(result.stopMessage).toContain('context-menu')
     expect(picked).toEqual(['context-menu-component', 'context-menu-story'])
-    const q = await readQueue()
+    const q = await readManagedQueue()
     expect(q.tasks.find((t) => t.id === 'context-menu')?.status).toBe('done')
     expect(q.tasks.find((t) => t.id === 'context-menu-component')?.status).toBe('done')
     expect(q.tasks.find((t) => t.id === 'context-menu-story')?.status).toBe('done')
@@ -8247,9 +8335,59 @@ describe('Orchestrator.run — full loops', () => {
 
     expect(result.stopReason).toBe('one_task')
     expect(picked).toEqual(['context-menu-component', 'context-menu-component'])
-    const q = await readQueue()
+    const q = await readManagedQueue()
     expect(q.tasks.find((t) => t.id === 'context-menu')?.status).toBe('done')
     expect(q.tasks.find((t) => t.id === 'context-menu-component')?.status).toBe('done')
+    expect(q.tasks.find((t) => t.id === 'unrelated')?.status).toBe('ready')
+  })
+
+  it('scoped one-task runs keep dirty selected work resumable when the worker hits its turn limit', async () => {
+    const worktreePath = path.join(tmpDir, '.guildhall', 'worktrees', 'task-selected')
+    await fs.mkdir(worktreePath, { recursive: true })
+    await writeManagedQueue([
+      mkTask({
+        id: 'selected',
+        title: 'Selected work',
+        status: 'in_progress',
+        domain: 'looma',
+        assignedTo: 'worker-agent',
+      }),
+      mkTask({ id: 'unrelated', status: 'ready', domain: 'looma', priority: 'critical' }),
+    ])
+    await upsertTaskWorkspaceState(tmpDir, 'selected', {
+      worktreePath,
+      branchName: 'guildhall/task-selected',
+      baseBranch: 'main',
+      mode: 'per_task',
+      updatedAt: '2026-04-01T00:00:00Z',
+    })
+
+    class DirtyWorktreeGitDriver extends InMemoryGitDriver {
+      override async isClean(repoRoot: string): Promise<boolean> {
+        if (repoRoot === worktreePath) return false
+        return true
+      }
+    }
+    const worker = stubAgent('worker-agent', async () => {
+      throw new Error('Exceeded maximum turn limit (24)')
+    })
+    const orch = new Orchestrator({
+      config: baseConfig(),
+      agents: agentSet({ worker }),
+      gitDriver: new DirtyWorktreeGitDriver(),
+    })
+
+    const result = await orch.run({
+      maxTicks: 5,
+      tickDelayMs: 0,
+      stopAfterOneTask: true,
+      preferredTaskId: 'selected',
+    })
+
+    expect(result.stopReason).toBe('max_ticks')
+    const q = await readManagedQueue()
+    expect(q.tasks.find((t) => t.id === 'selected')?.status).toBe('in_progress')
+    expect(q.tasks.find((t) => t.id === 'selected')?.escalations).toHaveLength(0)
     expect(q.tasks.find((t) => t.id === 'unrelated')?.status).toBe('ready')
   })
 
@@ -10577,7 +10715,7 @@ describe('Orchestrator — FR-32 remediation wiring', () => {
     })
 
     const decisions = await fs.readFile(
-      path.join(memoryDir, 'DECISIONS.md'),
+      getProjectSystemStatePath(tmpDir, 'DECISIONS.md'),
       'utf-8',
     )
     expect(decisions).toMatch(/Remediation: restart_from_checkpoint/)
@@ -10788,7 +10926,7 @@ describe('Orchestrator worker no-progress escalation', () => {
     expect(task?.agentIssues[0]?.resolvedBy).toBe('coordinator-remediation')
     expect(worker.resetCount).toBe(1)
 
-    const decisions = await fs.readFile(path.join(memoryDir, 'DECISIONS.md'), 'utf-8')
+    const decisions = await fs.readFile(getProjectSystemStatePath(tmpDir, 'DECISIONS.md'), 'utf-8')
     expect(decisions).toMatch(/Remediation: restart_from_checkpoint/)
 
     for (let pass = 1; pass < 5; pass += 1) {

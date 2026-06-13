@@ -27,6 +27,7 @@ describe('buildWorkSurface', () => {
     expect(model.needsMeta).toBe(true)
     expect(model.running).toBe(true)
     expect(model.tasks).toHaveLength(1)
+    expect(model.importDrafts.map(task => task.id)).toEqual(['task-2'])
     expect(model.importDraftCount).toBe(1)
     expect(model.nextImportDraft?.id).toBe('task-2')
     expect(model.events.map((event) => event.at)).toEqual([
@@ -63,7 +64,118 @@ describe('buildWorkSurface', () => {
 
     const model = buildWorkSurface(detail)
     expect(model.tasks.map(task => task.id)).toEqual(['task-1'])
+    expect(model.importDrafts.map(task => task.id)).toEqual(['task-2'])
     expect(model.importDraftCount).toBe(1)
+  })
+
+  it('derives work areas from accepted structural map paths before source-path fallback', () => {
+    const detail: ProjectDetail = {
+      structuralMapReview: {
+        state: 'accepted',
+        domains: [
+          { id: 'domain:auth', label: 'OAuth 2.1 / PKCE', path: 'service/auth/pkce' },
+          { id: 'domain:billing', label: 'Billing', path: 'app/billing' },
+        ],
+      },
+      tasks: [
+        {
+          id: 'task-auth',
+          status: 'ready',
+          title: 'Refresh token flow',
+          domain: 'platform',
+          description: 'service/auth/pkce/routes.py: update callback handling',
+        },
+      ],
+    }
+
+    const model = buildWorkSurface(detail)
+    expect(model.workAreasByTaskId['task-auth']).toMatchObject({
+      id: 'domain:auth',
+      label: 'OAuth 2.1 / PKCE',
+      kind: 'structural_domain',
+      source: 'structural_map',
+      confidence: 'accepted',
+      path: 'service/auth/pkce',
+    })
+    expect(model.workAreaOptions).toEqual([
+      expect.objectContaining({ id: 'domain:auth', label: 'OAuth 2.1 / PKCE' }),
+    ])
+  })
+
+  it('uses task routing context and task domain before parsing description paths', () => {
+    const detail: ProjectDetail = {
+      config: {
+        coordinators: [
+          { id: 'payments', name: 'Payments', domain: 'payments' },
+        ],
+      },
+      taskRoutingContexts: {
+        'task-payments': {
+          taskId: 'task-payments',
+          likelyArea: { id: 'domain:checkout', label: 'Checkout', path: 'apps/shop/checkout' },
+        },
+      },
+      tasks: [
+        {
+          id: 'task-payments',
+          status: 'ready',
+          title: 'Checkout tax handling',
+          domain: 'payments',
+          description: 'docs/roadmap.md: add checkout tax rules',
+        },
+        {
+          id: 'task-domain',
+          status: 'ready',
+          title: 'Payments retry',
+          domain: 'payments',
+        },
+      ],
+    }
+
+    const model = buildWorkSurface(detail)
+    expect(model.workAreasByTaskId['task-payments']).toMatchObject({
+      id: 'domain:checkout',
+      label: 'Checkout',
+      source: 'routing_context',
+      confidence: 'inferred',
+    })
+    expect(model.workAreasByTaskId['task-domain']).toMatchObject({
+      id: 'task-domain:payments',
+      label: 'Payments',
+      source: 'task',
+      confidence: 'inferred',
+    })
+  })
+
+  it('falls back to imported source paths when no structural area is known', () => {
+    const detail: ProjectDetail = {
+      tasks: [
+        {
+          id: 'task-knit-draft',
+          status: 'import_draft',
+          title: 'Templates',
+          domain: 'workspace-import',
+          notes: [
+            {
+              agentId: 'workspace-importer',
+              role: 'importer',
+              content: [
+                'Imported from: /repo/knit/docs/features.md',
+              ].join('\n'),
+            },
+          ],
+        },
+      ],
+    }
+
+    const model = buildWorkSurface(detail)
+    expect(model.workAreasByTaskId['task-knit-draft']).toMatchObject({
+      id: 'source-root:knit',
+      label: 'Knit',
+      source: 'source_ref',
+      confidence: 'fallback',
+      path: 'knit/docs/features.md',
+    })
   })
 })
 

@@ -14,11 +14,22 @@
     selectedTaskId?: string | null
     workProgress?: ProjectDetail['workProgress']
     onSelectTask?: (taskId: string) => void
+    onRunTask?: (taskId: string) => void | Promise<void>
+    runBusyTaskId?: string | null
+    runError?: string | null
   }
 
   type ChipTone = 'accent' | 'ok' | 'warn' | 'danger' | 'neutral' | 'running'
 
-  let { tasks, selectedTaskId = null, workProgress = undefined, onSelectTask }: Props = $props()
+  let {
+    tasks,
+    selectedTaskId = null,
+    workProgress = undefined,
+    onSelectTask,
+    onRunTask,
+    runBusyTaskId = null,
+    runError = null,
+  }: Props = $props()
 
   const visibleTasks = $derived(tasks.filter(isVisibleLogicalTask))
   const hierarchy = $derived(buildWorkHierarchy(visibleTasks))
@@ -152,6 +163,15 @@
     if (selectedTask) nav(currentTaskHref(selectedTask.id), { backgroundPath: path.value })
   }
 
+  async function runSelected(): Promise<void> {
+    if (selectedTask) await onRunTask?.(selectedTask.id)
+  }
+
+  function runButtonLabel(task: Task, busy: boolean): string {
+    if (task.status === 'import_draft') return busy ? 'Drafting...' : 'Draft and run'
+    return busy ? 'Starting...' : 'Run this work item'
+  }
+
   function selectContained(task: Task): void {
     onSelectTask?.(task.id)
   }
@@ -227,7 +247,17 @@
       </section>
     {/if}
 
-    <Button variant="primary" size="sm" onclick={openSelected}>Open drawer</Button>
+    <div class="inspector-actions">
+      {#if onRunTask}
+        <Button variant="agent" size="sm" disabled={runBusyTaskId === selectedTask.id} onclick={runSelected}>
+          {runButtonLabel(selectedTask, runBusyTaskId === selectedTask.id)}
+        </Button>
+      {/if}
+      <Button variant="primary" size="sm" onclick={openSelected}>Open drawer</Button>
+    </div>
+    {#if runError}
+      <p class="run-error" role="alert">{runError}</p>
+    {/if}
   {:else}
     <p class="subtle">Select work to inspect its scope, proof path, contained work, and delivery checklist.</p>
   {/if}
@@ -300,6 +330,17 @@
     gap: var(--s-2);
     padding-top: var(--s-3);
     border-top: 1px solid var(--border);
+  }
+  .inspector-actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: var(--s-2);
+  }
+  .run-error {
+    margin: 0;
+    color: var(--danger);
+    font-size: var(--gh-type-size-meta);
+    line-height: var(--gh-type-line-height-body);
   }
   .section-head {
     display: grid;

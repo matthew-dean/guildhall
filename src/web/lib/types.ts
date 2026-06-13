@@ -437,6 +437,7 @@ export interface Task {
     filesTouched?: string[]
     writtenAt?: string
   }
+  projectPath?: string
   worktreePath?: string
   branchName?: string
   baseBranch?: string

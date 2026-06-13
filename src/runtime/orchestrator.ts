@@ -146,11 +146,12 @@ import {
 } from './git-driver.js'
 import { buildCommitStoryMessage } from './commit-story.js'
 import { effectiveGitStoryPolicy } from './git-story-policy.js'
-import { upsertTaskWorkspaceState } from './task-state-store.js'
+import { readTaskWorkspaceStore, upsertTaskWorkspaceState } from './task-state-store.js'
 import {
   ensureWorktreeForDispatch,
   cleanupWorktreeForTerminal,
   computeBranchName,
+  computeWorktreePath,
   resolveWorktreeMode,
   type WorktreeMode,
 } from './worktree-manager.js'
@@ -189,6 +190,7 @@ import {
   createOwnerInputRequest,
   waitingOwnerInputTaskIdsSync,
 } from './owner-input-store.js'
+import { hasWorkspaceImportProvenance } from './import-drafts.js'
 import {
   deterministicReview,
   applyDeterministicVerdict,
@@ -532,6 +534,20 @@ function resolveRecoverableStaleReviewCheckpointEscalations(task: Task, resolved
 function isRecoverableTurnLimitBlocker(task: Task): boolean {
   const blockReason = task.blockReason ?? ''
   return /Worker stopped after hitting its turn limit/i.test(blockReason)
+}
+
+function summarizeImportedDraftSource(content: string): string {
+  const lines = content
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter(Boolean)
+  const importedFrom = lines.find((line) => /^Imported from:/i.test(line))
+  const whyItMatters = lines.find((line) => /^Why this may matter:/i.test(line))
+  return [importedFrom, whyItMatters]
+    .filter((line): line is string => Boolean(line))
+    .join(' ')
+    .replace(/\s+/g, ' ')
+    .slice(0, 500)
 }
 
 function isRecoverableNoProgressBlocker(task: Task): boolean {
@@ -3609,6 +3625,15 @@ export class Orchestrator {
         })
         if (preserved) {
           return preserved
+        }
+        const importedDraftQuestion = await this.preserveImportedDraftTurnLimitAsOwnerQuestion({
+          taskId: task.id,
+          agentName: agent.name,
+          beforeStatus,
+          message,
+        })
+        if (importedDraftQuestion) {
+          return importedDraftQuestion
         }
         const escalation = await raiseEscalation({
           tasksPath,
@@ -8220,11 +8245,12 @@ export class Orchestrator {
       task.productBrief.userJob.trim().length > 0
     const hasOpenQuestion = taskHasUnansweredVisibleQuestion(task)
     const hasWaitingOwnerInput = this.waitingOwnerInputTaskIds(queue).has(task.id)
+    const activeWorktreePath = input.beforeStatus === 'in_progress'
+      ? await this.recoverTaskWorktreePath(task)
+      : null
     const hasDirtyWorktree =
-      input.beforeStatus === 'in_progress' &&
-      typeof task.worktreePath === 'string' &&
-      task.worktreePath.trim().length > 0 &&
-      !(await this.gitDriver.isClean(resolveRuntimePath(task.worktreePath)))
+      activeWorktreePath !== null &&
+      !(await this.gitDriver.isClean(resolveRuntimePath(activeWorktreePath)))
     if (
       input.beforeStatus === 'exploring' &&
       task.status === 'exploring' &&
@@ -8247,6 +8273,12 @@ export class Orchestrator {
       hasDirtyWorktree
 
     if (!transitioned && !durableExploringProgress && !durableWorkerProgress) return null
+    if (durableWorkerProgress && activeWorktreePath && task.worktreePath !== activeWorktreePath) {
+      task.worktreePath = activeWorktreePath
+      task.updatedAt = this.now()
+      queue.lastUpdated = task.updatedAt
+      await this.writeQueue(queue)
+    }
 
     await this.emitBackendEvent({
       type: 'line_complete',
@@ -8270,6 +8302,120 @@ export class Orchestrator {
       revisionCount: task.revisionCount,
       ...(hasOpenQuestion || hasWaitingOwnerInput ? { waitingOnUser: true } : {}),
     }
+  }
+
+  private async preserveImportedDraftTurnLimitAsOwnerQuestion(input: {
+    taskId: string
+    agentName: string
+    beforeStatus: TaskStatus
+    message: string
+  }): Promise<TickOutcome | null> {
+    if (input.agentName !== 'spec-agent' || input.beforeStatus !== 'exploring') return null
+
+    const queue = await this.readQueue()
+    const task = queue.tasks.find((candidate) => candidate.id === input.taskId)
+    if (!task || task.status !== 'exploring') return null
+    if (!hasWorkspaceImportProvenance(task)) return null
+    if (!task.notes?.some((note) => note.role === 'shaping-request')) return null
+    if (typeof task.spec === 'string' && task.spec.trim()) return null
+    if (task.productBrief?.userJob?.trim()) return null
+    if (taskHasUnansweredVisibleQuestion(task)) return null
+    if (this.waitingOwnerInputTaskIds(queue).has(task.id)) return null
+
+    const now = this.now()
+    const sourceNote = (task.notes ?? []).find((note) =>
+      note.role === 'importer' ||
+      note.agentId === 'workspace-importer' ||
+      note.agentId === 'workspace-importer-agent'
+    )
+    const source = summarizeImportedDraftSource(sourceNote?.content ?? task.description ?? task.title)
+    const prompt =
+      `Should "${task.title}" stay in scope for this project, and what concrete success boundary should Guildhall use if it continues?`
+    const description = source
+      ? `Imported source: ${source}`
+      : 'Guildhall could not infer a safe brief from the imported note before the spec-agent turn budget ended.'
+    const questionId = `q-import-draft-scope-${task.id}-${Date.now().toString(36)}`
+    const question = {
+      kind: 'text' as const,
+      id: questionId,
+      askedBy: 'spec-agent',
+      askedAt: now,
+      prompt,
+      subject: task.title,
+      description,
+    }
+
+    await createOwnerInputRequest({
+      projectRoot: this.opts.config.projectPath,
+      projectId: this.opts.config.workspaceId,
+      commandId: `orchestrator:import-draft-scope:${task.id}:${question.id}`,
+      now,
+      actor: 'spec-agent',
+      source: { kind: 'task', taskId: task.id, questionId: question.id },
+      target: { kind: 'thread' },
+      question: {
+        kind: 'text',
+        prompt,
+        description,
+      },
+      objective: {
+        kind: 'task_shaping',
+        label: `Clarify ${task.title}`,
+        successCriteria: ['Owner defines whether the imported draft is in scope and what success means.'],
+      },
+      sessionSource: `orchestrator:import-draft-scope:${task.id}:${question.id}`,
+    })
+
+    task.openQuestions = [
+      ...(task.openQuestions ?? []),
+      question,
+    ]
+    task.blockReason = undefined
+    task.assignedTo = null
+    task.updatedAt = now
+    queue.lastUpdated = now
+    await this.writeQueue(queue)
+
+    await this.emitBackendEvent({
+      type: 'line_complete',
+      task_id: task.id,
+      agent_name: input.agentName,
+      message:
+        'The imported draft still needs scope before Guildhall can shape it, so Guildhall asked a concrete owner question instead of blocking on a generic turn-limit error.',
+    })
+
+    await this.logTickProgress({
+      task,
+      agent: input.agentName,
+      beforeStatus: input.beforeStatus,
+      afterStatus: task.status,
+      transitioned: false,
+      note: `owner input requested after imported draft shaping hit a turn limit: ${input.message}`,
+    })
+
+    return {
+      kind: 'processed',
+      taskId: task.id,
+      agent: input.agentName,
+      beforeStatus: input.beforeStatus,
+      afterStatus: task.status,
+      transitioned: false,
+      revisionCount: task.revisionCount,
+      waitingOnUser: true,
+    }
+  }
+
+  private async recoverTaskWorktreePath(task: Task): Promise<string | null> {
+    const recorded = task.worktreePath?.trim()
+    if (recorded) return recorded
+    const projectRoot = inferProjectRootFromMemoryDir(this.opts.config.memoryDir)
+    const workspace = await readTaskWorkspaceStore(projectRoot)
+      .then((store) => store.workspaces[task.id]?.worktreePath?.trim() || null)
+      .catch(() => null)
+    if (workspace) return workspace
+    const mode = await this.resolveWorktreeModeSafe()
+    if (mode === 'none') return null
+    return computeWorktreePath(this.opts.config.workspaceId, task, mode)
   }
 
   private async maybeRepairMalformedSpecReviewBlueprint(task: Task): Promise<TickOutcome | null> {

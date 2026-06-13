@@ -526,6 +526,78 @@ coverage.
     now adopts an existing worktree path when it is already checked out to the
     expected task branch, and targeted start no longer treats a recoverable
     `worktree already exists` blocker as an all-terminal project state.
+  2026-06-13 list-inspector live proof after replacing Columns: the Work UI
+  can show the mixed Looma + Knit ready queue and a selected work inspector, but
+  it cannot show "just Knit" as a first-class slice. The visible controls are
+  status-only (`Ready to run`, `Planning`, `Open`, `All`, `Blocked`,
+  `Needs you`), and the nearest Knit-related ready item
+  `task-import-1rpbo8n` still renders in the Part column as `Looma` because its
+  source row is `looma/PROJECT_STATE.md` even though it references
+  `knit/docs/looma-migration-inventory.md`. API proof found 205 actual
+  `knit/...` source tasks, mostly import drafts, but no UI source/domain filter
+  for that subset. Clicking the task row opened the inspector, then `Open
+  drawer`, then `Resume only this work item`. The run correctly used
+  `mode: "one_task"` and modified the task worktree's
+  `knit/docs/looma-migration-inventory.md`, but it stopped with
+  `human_judgment_required: Worker stopped after hitting its turn limit.`
+  Final state: run `stopped`, task `blocked`, and the task worktree still has
+  unlanded changes in `PROJECT_STATE.md`, `docs/component-roadmap.md`,
+  `docs/editor-roadmap.md`, `packages/core/loader/index.d.ts`, plus untracked
+  `.guildhall/` and `knit/`. This does not satisfy the one-click Knit task
+  completion proof; the remaining product/runtime gap is source/domain slicing
+  plus a true selected-work completion loop that continues dependent proof until
+  the requested work item is done or blocked by a concrete external decision,
+  not a generic worker turn limit.
+  2026-06-13 repair proof:
+  - [x] Added source-part filtering to the List work view and included import
+    drafts in Planning/Open/All slices so raw Knit work is visible before it is
+    promoted. Live browser proof against `looma-knit`: `Show: All` + `Part:
+    Knit` rendered `205 shown · 299 total`, 205 interactive work rows, and no
+    sampled non-Knit part rows.
+  - [x] Centralized the List `Part` concept into the shared Work surface model
+    as resolved work areas instead of letting the view parse source paths. The
+    resolver now prefers accepted structural-map domains, then task routing
+    context, task/coordinator domain, imported source refs, description fallback,
+    and finally project fallback. This keeps the Looma/Knit proof useful without
+    baking Looma/Knit or path-string heuristics into the UI contract.
+  - [x] Added a selected-work inspector action in List. Promoted work calls the
+    existing one-task start endpoint; import drafts show `Draft and run` and
+    call `shape-draft` before the same one-task start path.
+  - [x] Fixed selected one-task turn-limit preservation when the task row lacks
+    `worktreePath` by recovering the task workspace path from the sidecar or
+    expected worktree path before treating dirty work as no progress.
+  - [x] Fixed `logProgress` so managed `project-state/PROGRESS.md` writes do
+    not infer `project-state` as the project root; heartbeat writes route to
+    sibling local-history progress.
+  - [x] Hardened imported-draft shaping after a spec-agent turn limit: if no
+    brief/spec/question was saved, Guildhall now asks a concrete owner scope
+    question for the imported source instead of blocking on a generic model
+    turn-limit escalation.
+  - [x] Live browser proof after rebuild: selecting Knit draft `Templates` and
+    clicking `Draft and run` started a `mode: "one_task"` run, promoted the
+    draft to `exploring`, saved a product brief, then stopped with the task
+    still `exploring`, one owner question, and `0` escalations. This does not
+    prove autonomous completion for vague imported drafts; it proves the one
+    click now runs the dependent shaping path and stops on concrete owner input
+    instead of a generic worker/spec turn-limit blocker.
+    Verification: `pnpm vitest run
+    src/web/surfaces/project/__tests__/WorkTab.svelte.test.ts
+    src/web/lib/__tests__/project-data.test.ts
+    src/runtime/__tests__/orchestrator.test.ts --reporter=dot` passed with 333
+    tests; `pnpm vitest run src/runtime/__tests__/orchestrator.test.ts
+    --reporter=dot` passed with 302 tests; `pnpm typecheck`, `pnpm build`,
+    `pnpm lint:contracts`, `git diff --check`, service restart, and
+    `/api/stale-server` `stale:false` passed.
+    2026-06-13 shared work-area follow-up verification: the same WorkTab,
+    project-data, and orchestrator Vitest command passed with 336 tests after
+    adding structural-map/routing/source fallback coverage; `pnpm typecheck`,
+    `pnpm lint:contracts`, `pnpm build`, and `git diff --check` all passed.
+    Fresh browser proof on port `7788` with `/api/stale-server` `stale:false`:
+    `/projects/looma-knit/work` exposed the `Part` control with `Knit`,
+    `Looma`, and `Workspace Import`; selecting `Show: All` + `Part: Knit`
+    rendered `205 shown · 299 total`, selected shared work-area value
+    `task-domain:knit`, and the first 20 sampled rows all carried the `Knit`
+    part label.
 - [x] Prevent broad imported planning bullets from escaping as one runnable
   component task. 2026-06-12 Looma + Knit recovery showed
   `task-import-twwvys` had started as a `PROJECT_STATE.md` "Next Up" bullet
