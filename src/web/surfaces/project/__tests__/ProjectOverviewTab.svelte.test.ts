@@ -746,7 +746,7 @@ describe('ProjectOverviewTab', () => {
 
     expect(container.querySelectorAll('.card-list-item.knowledge-summary-item')).toHaveLength(4)
     expect(container.querySelectorAll('.knowledge-card')).toHaveLength(0)
-    expect(screen.getByRole('button', { name: /Work 2 total tasks/i })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: /Work 2 total work items/i })).toBeInTheDocument()
     expect(screen.getByRole('button', { name: /Runtime Runtime healthy/i })).toBeInTheDocument()
     expect(screen.getByRole('button', { name: /Proof No proof paths yet/i })).toBeInTheDocument()
     expect(screen.getByRole('button', { name: /History No recent changes/i })).toBeInTheDocument()
@@ -851,7 +851,7 @@ describe('ProjectOverviewTab', () => {
       activeProjectId: 'guildhall',
     })
 
-    await fireEvent.click(screen.getByRole('button', { name: /Work 1 total task/i }))
+    await fireEvent.click(screen.getByRole('button', { name: /Work 1 total work item/i }))
     expect(window.location.pathname).toBe('/projects/guildhall/work')
 
     await fireEvent.click(screen.getByRole('button', { name: /Runtime Runtime stopped/i }))
@@ -912,5 +912,93 @@ describe('ProjectOverviewTab', () => {
     expect(screen.queryByRole('heading', { name: 'Project map' })).not.toBeInTheDocument()
     expect(screen.queryByRole('button', { name: /accept map/i })).not.toBeInTheDocument()
     expect(screen.queryByRole('button', { name: /defer/i })).not.toBeInTheDocument()
+  })
+
+  it('summarizes visible work items and delivery steps from shared progress', () => {
+    render(ProjectOverviewTab, {
+      detail: {
+        id: 'guildhall',
+        name: 'Guildhall',
+        path: '/Users/matthew/git/oss/guildhall',
+        tasks: [
+          {
+            id: 'logical-work',
+            title: 'Import review flow',
+            status: 'in_progress',
+          },
+          {
+            id: 'runtime-proof',
+            title: 'Runtime proof for import review flow',
+            status: 'blocked',
+            workVisibility: { kind: 'internal_step', countInProjectTotals: false },
+            hierarchy: { parentId: 'logical-work', childIds: [], order: 0 },
+          },
+        ],
+        workProgress: {
+          counts: {
+            visibleTotal: 1,
+            visibleActive: 1,
+            visibleBlocked: 0,
+            visibleDone: 0,
+            visibleShelved: 0,
+            deliveryTotal: 2,
+            deliveryRequired: 2,
+            deliveryDone: 1,
+            deliveryBlocked: 1,
+          },
+          byTaskId: {
+            'logical-work': {
+              id: 'logical-work',
+              title: 'Import review flow',
+              status: 'in_progress',
+              visibility: { kind: 'primary', countInProjectTotals: true },
+              deliverySteps: [
+                {
+                  id: 'build',
+                  title: 'Build import review flow',
+                  kind: 'make_change',
+                  status: 'done',
+                  required: true,
+                  blocksCompletion: true,
+                },
+                {
+                  id: 'task:runtime-proof',
+                  title: 'Runtime proof for import review flow',
+                  kind: 'verify',
+                  status: 'blocked',
+                  required: true,
+                  blocksCompletion: true,
+                  sourceTaskId: 'runtime-proof',
+                },
+              ],
+              rollup: {
+                primaryState: 'blocked',
+                visibleChildCount: 0,
+                visibleChildDoneCount: 0,
+                internalStepCount: 1,
+                requiredStepCount: 2,
+                doneStepCount: 1,
+                blockedStepCount: 1,
+              },
+            },
+          },
+        },
+      },
+      inboxLoaded: true,
+      inboxItems: [],
+      projectTicker: {
+        label: 'Not running',
+        actorLabel: 'Guildhall',
+        message: 'Project is waiting.',
+        tone: 'idle',
+        pulse: false,
+      },
+      activeProjectId: 'guildhall',
+    })
+
+    expect(screen.getByText('1 total work item')).toBeInTheDocument()
+    expect(screen.getByText('1 active or shaping · 0 completed · 0 blocked.')).toBeInTheDocument()
+    expect(screen.getByText('1 / 2 delivery steps done · 1 blocked.')).toBeInTheDocument()
+    expect(screen.queryByText('2 total tasks')).not.toBeInTheDocument()
   })
 })

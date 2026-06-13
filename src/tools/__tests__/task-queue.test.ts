@@ -9,8 +9,10 @@ import {
   readTasksTool,
   updateTaskTool,
   addTaskTool,
+  materializeSplitChildren,
 } from '../task-queue.js'
 import { readTaskEvidence } from '@guildhall/sessions'
+import { TaskQueue } from '@guildhall/core'
 
 // ---------------------------------------------------------------------------
 // Tests for task queue tools — these are safety-critical (gate logic depends
@@ -447,6 +449,66 @@ describe('updateTask', () => {
     )).toBe(true)
     expect(children.find((task: { title: string }) => task.title === 'Storybook story')?.dependsOn).toEqual([
       'task-001-split-component-implementation',
+    ])
+  })
+
+  it('materializes verification split children as internal delivery steps on the parent', async () => {
+    const parentTask = structuredClone(seedQueue.tasks[0]!)
+    const queue = TaskQueue.parse({
+      version: 1,
+      lastUpdated: '2026-06-12T00:00:00.000Z',
+      tasks: [
+        {
+          ...parentTask,
+          status: 'ready',
+          sizePlan: {
+            taskId: 'task-001',
+            score: 8,
+            band: 'large',
+            action: 'split_required',
+            factors: [],
+            recommendedChildren: [
+              {
+                title: 'Implement import review flow',
+                reason: 'Keep the product change separate from proof.',
+                suggestedDomain: 'product',
+                dependsOn: [],
+              },
+              {
+                title: 'Runtime proof for import review flow',
+                reason: 'Keep proof explicit without adding another visible work item.',
+                suggestedDomain: 'product',
+                dependsOn: ['Implement import review flow'],
+              },
+            ],
+            reasons: ['Broad enough to split.'],
+            reviewBudgetHint: 'balanced',
+            createdAt: '2026-06-12T00:00:00.000Z',
+            createdBy: 'test',
+          },
+        },
+      ],
+    })
+    const parent = queue.tasks[0]!
+
+    materializeSplitChildren(queue, parent, '2026-06-12T00:00:00.000Z')
+
+    const proofChild = queue.tasks.find(task => task.title === 'Runtime proof for import review flow')
+    expect(proofChild).toBeDefined()
+    if (!proofChild) throw new Error('Expected proof child to be materialized')
+
+    expect(proofChild).toMatchObject({
+      workKind: 'test',
+      workVisibility: { kind: 'internal_step', countInProjectTotals: false },
+    })
+    expect(parent.deliverySteps).toEqual([
+      expect.objectContaining({
+        id: `task:${proofChild.id}`,
+        title: 'Runtime proof for import review flow',
+        kind: 'verify',
+        status: 'todo',
+        sourceTaskId: proofChild.id,
+      }),
     ])
   })
 

@@ -46,6 +46,11 @@
     return !dependenciesSatisfied(task)
   }
 
+  function taskProgress(task: Task) {
+    const id = typeof task.id === 'string' ? task.id : ''
+    return id ? detail.workProgress?.byTaskId?.[id] : null
+  }
+
   const dependencyBlocked = $derived(tasks.filter(t => !dependenciesSatisfied(t)))
   const nextFocus = $derived.by(() => {
     for (const status of selectionStatuses) {
@@ -106,6 +111,7 @@
                             : undefined}
                   displayStatusTone={isDependencyBlocked(t) ? 'danger' : ['needs_spec_cleanup', 'review_waiting', 'gates_waiting'].includes(statusOf(t)) ? 'warn' : statusOf(t) === 'paused' ? 'neutral' : undefined}
                   displayStatusIcon={isDependencyBlocked(t) || ['needs_spec_cleanup', 'review_waiting', 'gates_waiting'].includes(statusOf(t)) ? 'alert-triangle' : undefined}
+                  workProgress={taskProgress(t)}
                 />
               {/each}
             </div>

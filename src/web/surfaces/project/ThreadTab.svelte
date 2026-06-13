@@ -258,6 +258,8 @@
     title: string
     requestStage?: RequestStage | undefined
     routingSummary: string
+    logicalWorkCount?: number | undefined
+    deliveryStepCount?: number | undefined
   }
   interface PressureTestQuestionTurn {
     kind: 'pressure_test_question'
@@ -375,6 +377,7 @@
   let importHandoff = $state<{ tasksAdded: number; sourceCount: number } | null>(null)
   let importHandoffFocused = $state(false)
   let selectedTurnId = $state<string | null>(null)
+  let threadSelectionManual = $state(false)
   let detailScrollEl = $state<HTMLElement | null>(null)
   let detailShouldStickToBottom = $state(true)
   let lastAutoScrollKey = $state<string | null>(null)
@@ -1403,6 +1406,18 @@
     return null
   }
 
+  function defaultThreadChainId(chains: ThreadChain[]): string | null {
+    const readinessHref = startReadiness?.canStart === false ? startReadiness.actionHref : null
+    if (readinessHref) {
+      const param = threadRouteParamFromHref(readinessHref)
+      if (param && chains.some(chain => chain.id === param)) return param
+    }
+    if (activeTurnId) {
+      return chains.find(chain => chain.turns.some(turn => turn.id === activeTurnId))?.id ?? chains[0]?.id ?? null
+    }
+    return chains[0]?.id ?? null
+  }
+
   function hrefForThreadChain(chainId: string): string {
     const basePath = path.value || location.pathname
     const routeId = chainId.startsWith('bounded-chat:') ? chainId.slice('bounded-chat:'.length) : chainId
@@ -1451,20 +1466,24 @@
   $effect(() => {
     if (threadChains.length === 0) {
       selectedTurnId = null
+      threadSelectionManual = false
       if (compactThreadMode) compactPane = 'list'
       return
     }
     const routed = routeThreadChainId(threadChains)
-    const preferred = activeTurnId
-      ? threadChains.find(chain => chain.turns.some(turn => turn.id === activeTurnId))?.id ?? threadChains[0]?.id ?? null
-      : threadChains[0]?.id ?? null
+    const preferred = defaultThreadChainId(threadChains)
     const nextSelection = routed ?? preferred
     if (routed && selectedTurnId !== routed) {
       selectedTurnId = routed
+      threadSelectionManual = false
       detailShouldStickToBottom = true
       if (compactThreadMode) compactPane = 'detail'
     } else if (!selectedTurnId || !threadChains.some(chain => chain.id === selectedTurnId)) {
       selectedTurnId = nextSelection
+      threadSelectionManual = false
+      detailShouldStickToBottom = true
+    } else if (!routed && !threadSelectionManual && preferred && selectedTurnId !== preferred) {
+      selectedTurnId = preferred
       detailShouldStickToBottom = true
     }
     if (!compactThreadMode) {
@@ -1472,6 +1491,16 @@
     } else if (compactPane === 'detail' && !selectedTurnId) {
       compactPane = 'list'
     }
+  })
+
+  $effect(() => {
+    const current = selectedTurnId
+    if (!current || compactThreadMode) return
+    if (threadChains.length <= 5) return
+    queueMicrotask(() => {
+      const selectedRow = document.querySelector('.thread-index-row[aria-current="true"]')
+      selectedRow?.scrollIntoView({ block: 'nearest', inline: 'nearest' })
+    })
   })
 
   $effect(() => {
@@ -2984,6 +3013,7 @@
 
   function focusTurn(turnId: string): void {
     selectedTurnId = turnId
+    threadSelectionManual = true
     detailShouldStickToBottom = true
     path.replace(hrefForThreadChain(turnId), path.state)
     if (compactThreadMode) compactPane = 'detail'
@@ -3232,6 +3262,8 @@
     return null
   })
 
+  const centerSingleComposerlessCard = $derived(historyRenderItems.length <= 1 && !footerComposer)
+
   function isFooterReplyTurn(turnId: string): boolean {
     return footerComposer?.kind === 'task_reply' && footerComposer.turn.id === turnId
   }
@@ -3458,6 +3490,7 @@
                   tone={selectedTurnId === chain.id ? 'accent' : 'neutral'}
                   railTone={ownershipRailTone(indexTurn)}
                   selected={selectedTurnId === chain.id}
+                  ariaCurrent={selectedTurnId === chain.id ? 'true' : null}
                   onclick={() => focusTurn(chain.id)}
                 >
                   <div class="thread-index-row-chips">
@@ -3489,8 +3522,8 @@
           >
             <div class="thread-detail-scroll-wrap">
               <div class="thread-detail-scroll" aria-label="Thread history">
-                <div class="thread-detail-flow">
-                  <div class="thread-list">
+                <div class="thread-detail-flow" class:thread-detail-flow-single={centerSingleComposerlessCard}>
+                  <div class="thread-list" class:thread-list-single={centerSingleComposerlessCard}>
                     <Stack gap="3">
                       {#each historyRenderItems as historyItem (historyItem.id)}
         {#if historyItem.kind === 'cluster'}
@@ -3825,6 +3858,17 @@
                   <Markdown source={requestSummary(t.rawRequest)} />
                 </div>
                 <StateSummary label={requestStateLabel(t)} description={t.routingSummary} tone="ok" />
+                {#if typeof t.logicalWorkCount === 'number' || typeof t.deliveryStepCount === 'number'}
+                  <div class="thread-delivery-context">
+                    <p>
+                      Created {t.logicalWorkCount ?? 0} work item{(t.logicalWorkCount ?? 0) === 1 ? '' : 's'}
+                      and {t.deliveryStepCount ?? 0} delivery step{(t.deliveryStepCount ?? 0) === 1 ? '' : 's'}.
+                    </p>
+                    <p class="thread-delivery-detail">
+                      Checks, docs, and proof stay inside the relevant work item so the Work list stays focused.
+                    </p>
+                  </div>
+                {/if}
 
               {:else if t.kind === 'pressure_test_question'}
                 <div class="question-card-heading">
@@ -5926,6 +5970,10 @@
     gap: var(--gh-space-3);
     min-height: 100%;
   }
+  .thread-detail-flow-single {
+    justify-content: center;
+    padding-block: var(--gh-space-5);
+  }
   .thread-detail-header {
     display: grid;
     gap: var(--gh-space-1);
@@ -5943,6 +5991,9 @@
   }
   .thread-list {
     margin-top: auto;
+  }
+  .thread-list-single {
+    margin-top: 0;
   }
   .turn-active-focus :global(.card) {
     border-color: color-mix(in srgb, var(--accent) 38%, var(--border));

@@ -162,6 +162,7 @@ import {
   listExternalAgentLinks,
   recordExternalAgentLink,
 } from './external-agent-links.js'
+import { deriveProjectWorkProgress, type ProjectWorkProgress } from './work-progress.js'
 import type { SurfaceReviewPacket } from './contract-surfaces.js'
 import {
   acceptProjectDependencyDelivery,
@@ -487,6 +488,7 @@ interface ServiceProjectSummary {
     done: number
     shelved: number
   }
+  workProgress?: ProjectWorkProgress
   highlights?: {
     activeTaskTitle?: string | null
     blockedTaskTitle?: string | null
@@ -2496,6 +2498,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
           done: 0,
           shelved: 0,
         }
+        let workProgress: ServiceProjectSummary['workProgress'] = undefined
         let highlights: ServiceProjectSummary['highlights'] = undefined
         let taskActivity: ServiceProjectSummary['taskActivity'] = undefined
         const availability = resolved.initializationNeeded
@@ -2504,6 +2507,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
         try {
           const tasks = await readTasksFileNormalized(projectTasksPath(entry.path))
           taskCounts = summarizeTaskCounts(tasks)
+          workProgress = deriveProjectWorkProgress(tasks as Array<Record<string, unknown>>)
           taskActivity = summarizeTaskActivity(tasks)
           const gitStory = await buildProjectGitStorySummary(entry.path, tasks as Array<Record<string, unknown>>).catch(() => undefined)
           const inbox = await buildProjectInboxSnapshot({
@@ -2541,6 +2545,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
             ...summarizeProject(resolved),
             summary: summarizeProjectText(resolved),
             taskCounts,
+            ...(workProgress ? { workProgress } : {}),
             ...(taskActivity ? { taskActivity } : {}),
             ...(highlights ? { highlights } : {}),
             ...(gitStory ? { gitStory } : {}),
@@ -2570,6 +2575,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
           ...summarizeProject(resolved),
           summary: summarizeProjectText(resolved),
           taskCounts,
+          ...(workProgress ? { workProgress } : {}),
           ...(taskActivity ? { taskActivity } : {}),
           ...(highlights ? { highlights } : {}),
           ...(providerStatus ? { providerStatus } : {}),
@@ -2969,6 +2975,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
       }
       const tasksPath = projectTasksPath(project.path)
       const rawTasks = await readTasksFileNormalized(tasksPath)
+      const workProgress = deriveProjectWorkProgress(rawTasks as Array<Record<string, unknown>>)
       const tasks = await Promise.all(rawTasks.map((task) => enrichTaskForServe(project.path, task)))
       const deliveryModel = await readProjectDeliveryModel(project.path)
       const deliveryValidation = validateProjectDeliveryModel({
@@ -3081,6 +3088,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
         tags: project.config?.tags ?? [],
         config: project.config,
         tasks,
+        workProgress,
         inbox,
         run: run
           ? {
@@ -4354,6 +4362,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
     let runnable = 0
     let needsBriefCleanup = 0
     let waitingForApproval = 0
+    let firstWaitingSpecTaskId: string | null = null
     let terminal = 0
     for (const task of tasks) {
       if (!task || typeof task !== 'object') continue
@@ -4364,6 +4373,10 @@ export function buildServeApp(opts: ServeOptions = {}): {
       }
       if (status === 'spec_review') {
         waitingForApproval += 1
+        if (!firstWaitingSpecTaskId) {
+          const id = (task as { id?: unknown }).id
+          firstWaitingSpecTaskId = typeof id === 'string' && id.trim() ? id.trim() : null
+        }
         continue
       }
       if (status === 'ready' && !isReadyForWorkerHandoffRecord(task)) {
@@ -4393,9 +4406,11 @@ export function buildServeApp(opts: ServeOptions = {}): {
         code: 'no_unattended_progress',
         message:
           waitingForApproval === 1
-            ? 'Review the waiting spec before starting.'
-            : `Review ${waitingForApproval} waiting specs before starting.`,
-        actionHref: '/thread',
+            ? 'One spec is waiting for review before starting.'
+            : `${waitingForApproval} specs are waiting for review before starting.`,
+        actionHref: firstWaitingSpecTaskId
+          ? `/thread?thread=${encodeURIComponent(`task:${firstWaitingSpecTaskId}`)}`
+          : '/thread',
       }
     }
     return null
@@ -6560,6 +6575,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
       const tasksPath = projectTasksPath(project.path)
       if (!existsSync(tasksPath)) return c.json({ error: 'no tasks file' }, 404)
       const tasks = await readTasksFileNormalized(tasksPath)
+      const workProgress = deriveProjectWorkProgress(tasks as Array<Record<string, unknown>>)
       const id = c.req.param('id')
       const task = tasks.find(t => (t as { id?: string }).id === id)
       if (!task) return c.json({ error: 'task not found' }, 404)
@@ -6631,6 +6647,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
       return c.json({
         task: await enrichTaskForServe(project.path, rawTask),
         relatedTasks,
+        workProgress,
         runStatus,
         availability,
         recentEvents: recent,
@@ -10177,7 +10194,7 @@ async function serveWebAsset(
   if (!existsSync(path)) {
     return c.text(`web asset not built: ${filename} (run pnpm build)`, 404)
   }
-  const body = await readManagedTextFile(path)
+  const body = await fsp.readFile(path)
   return new Response(body, {
     headers: {
       'content-type': contentType,

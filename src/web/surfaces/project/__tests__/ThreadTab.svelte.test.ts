@@ -297,6 +297,8 @@ interface RequestTurnForTest {
   rawRequest: string
   requestStage?: 'new_request' | 'task_brief_cleanup'
   routingSummary: string
+  logicalWorkCount?: number
+  deliveryStepCount?: number
 }
 
 interface PressureTestQuestionTurnForTest {
@@ -1076,6 +1078,101 @@ describe('ThreadTab', () => {
     await threadComposer().findByPlaceholderText('Add a note…')
     expect(selectedThread().getByText('Work is paused. Resume when you want it to continue.')).toBeTruthy()
     expect(scrollIntoView).not.toHaveBeenCalled()
+  })
+
+  it('scrolls the selected thread list item into view when the active turn is deep in the list', async () => {
+    const scrollIntoView = Element.prototype.scrollIntoView as ReturnType<typeof vi.fn>
+    const crowded = Array.from({ length: 12 }, (_, index) =>
+      importedDraftTurn({
+        id: `draft-scroll-${index}`,
+        taskId: `task-scroll-${index}`,
+        taskTitle: `Scroll candidate ${index + 1}`,
+      }),
+    )
+    installFetchFakes(crowded, 'draft-scroll-10')
+
+    render(ThreadTab)
+
+    const row = await screen.findByRole('button', { name: /Scroll candidate 11/i })
+    expect(row.getAttribute('aria-current')).toBe('true')
+    expect(scrollIntoView).toHaveBeenCalledWith({ block: 'nearest', inline: 'nearest' })
+  })
+
+  it('defaults to the spec thread targeted by start readiness instead of the setup thread', async () => {
+    installFetchFakes([
+      setupTurn({
+        id: 'setup-workspace-import',
+        stepId: 'workspaceImport',
+        title: 'Review existing work',
+        why: 'Review sources and possible backlog tasks Guildhall found.',
+        actionLabel: 'Open import review',
+        actionHref: '/workspace-import',
+      }),
+      specReviewTurn('task-spec-a', {
+        taskTitle: 'Approve the first waiting spec',
+      }),
+    ], 'setup-workspace-import')
+
+    render(ThreadTab)
+
+    await screen.findByRole('button', { name: /Review existing work/i })
+    project.detail = {
+      ...(project.detail as any),
+      startReadiness: {
+        canStart: false,
+        code: 'no_unattended_progress',
+        message: 'Review 1 waiting spec before starting.',
+        actionHref: '/thread?thread=task%3Atask-spec-a',
+      },
+    }
+
+    const row = await screen.findByRole('button', { name: /Approve the first waiting spec/i })
+    await waitFor(() => expect(row.getAttribute('aria-current')).toBe('true'))
+    expect(selectedThread().getByText('Open the full spec before you approve it or redirect it.')).toBeTruthy()
+    expect(selectedThread().getByRole('button', { name: /view spec/i })).toBeTruthy()
+    expect(selectedThread().queryByRole('button', { name: /open import review/i })).toBeNull()
+  })
+
+  it('keeps the composer bottom-anchored when a single active card has a footer composer', async () => {
+    installFetchFakes([
+      importedDraftTurn({
+        id: 'draft-empty-chat-layout',
+        taskId: 'task-empty-chat-layout',
+        taskTitle: 'Empty chat layout',
+      }),
+    ], 'draft-empty-chat-layout')
+
+    render(ThreadTab)
+
+    await selectedThread().findByText('Starting point and source notes')
+    const detailFlow = document.querySelector('.thread-detail-flow')
+    const threadList = document.querySelector('.thread-list')
+    expect(detailFlow?.classList.contains('thread-detail-flow-single')).toBe(false)
+    expect(threadList?.classList.contains('thread-list-single')).toBe(false)
+    expect(document.querySelector('.thread-footer')).toBeTruthy()
+  })
+
+  it('centers a single setup card only when there is no footer composer', async () => {
+    installFetchFakes([
+      setupTurn({
+        id: 'setup-workspace-import',
+        stepId: 'workspaceImport',
+        title: 'Review existing work',
+        why: 'Review sources and possible backlog tasks Guildhall found.',
+        affordance: 'link',
+        actionLabel: 'Open import review',
+        actionHref: '/workspace-import',
+      }),
+    ], 'setup-workspace-import')
+
+    render(ThreadTab)
+
+    await selectedThread().findByRole('button', { name: /open import review/i })
+    const detailFlow = document.querySelector('.thread-detail-flow')
+    const threadList = document.querySelector('.thread-list')
+    expect(detailFlow?.classList.contains('thread-detail-flow-single')).toBe(true)
+    expect(threadList?.classList.contains('thread-list-single')).toBe(true)
+    expect(document.querySelector('.thread-footer')).toBeNull()
   })
 
   it('posts pressure-test answers, refreshes Thread and project, and clears the local answer', async () => {
@@ -2952,6 +3049,21 @@ describe('ThreadTab', () => {
     expect(path.state).toEqual({ backgroundPath: '/projects/looma-knit/thread' })
   })
 
+  it('separates created logical work from delivery steps in request shaping copy', async () => {
+    installFetchFakes([
+      requestTurn({
+        routingSummary: 'Guildhall shaped the import review request.',
+        logicalWorkCount: 3,
+        deliveryStepCount: 8,
+      }),
+    ], 'request:pti-guildhall-0-8-0')
+
+    render(ThreadTab)
+
+    await selectedThread().findByText('Created 3 work items and 8 delivery steps.')
+    expect(selectedThread().getByText('Checks, docs, and proof stay inside the relevant work item so the Work list stays focused.')).toBeTruthy()
+  })
+
   it('renders brief approvals as human-facing task briefs and hides operational receipt text', async () => {
     installFetchFakes([
       briefTurn({
@@ -3340,8 +3452,8 @@ describe('ThreadTab', () => {
     const dockMarkupIndex = source.indexOf('<div\n                    class="thread-active-dock"')
     const footerMarkupIndex = source.indexOf('<div class="thread-footer" aria-label="Thread footer">')
 
-    expect(source).toContain('<div class="thread-detail-flow">')
-    expect(source).toContain('<div class="thread-list">')
+    expect(source).toMatch(/<div class="thread-detail-flow"[\s>]/)
+    expect(source).toMatch(/<div class="thread-list"[\s>]/)
     expect(source).not.toContain('<Stack gap="3" class="thread-list">')
     expect(source).not.toContain('<div class="thread-footer" aria-label="Thread footer">\n                    {#if activeDockTurn}')
     expect(dockMarkupIndex).toBeGreaterThan(-1)

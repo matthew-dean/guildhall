@@ -46,6 +46,10 @@
 
   const columns = $derived(viewModel.columns)
   const selectedColumn = $derived(viewModel.selectedColumn)
+
+  function taskProgress(taskId?: string) {
+    return taskId ? detail.workProgress?.byTaskId?.[taskId] : null
+  }
 </script>
 
 {#if coordinators.length === 0}
@@ -170,7 +174,7 @@
       {:else}
         <div class="stack">
           {#each selectedColumn.visibleTasks as t (t.id)}
-            <TaskCard task={t} coordinatorRunning={running} />
+            <TaskCard task={t} coordinatorRunning={running} workProgress={taskProgress(t.id)} />
           {/each}
         </div>
         {#if selectedColumn.domainTasks.length > selectedColumn.visibleTasks.length}
@@ -216,7 +220,7 @@
           {:else}
             <div class="stack">
               {#each col.visibleTasks as t (t.id)}
-                <TaskCard task={t} coordinatorRunning={running} />
+                <TaskCard task={t} coordinatorRunning={running} workProgress={taskProgress(t.id)} />
               {/each}
             </div>
             {#if col.domainTasks.length > col.visibleTasks.length}

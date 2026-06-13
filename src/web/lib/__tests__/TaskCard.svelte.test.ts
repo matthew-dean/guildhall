@@ -115,4 +115,24 @@ describe('TaskCard', () => {
     await userEvent.keyboard('{Tab}{Enter}')
     expect(path.value).toBe('/projects/looma-knit/task/task-link-editor')
   })
+
+  it('shows delivery-step progress without replacing the task status', () => {
+    render(TaskCard, {
+      task: task({ status: 'ready' }),
+      workProgress: {
+        rollup: {
+          primaryState: 'blocked',
+          visibleChildCount: 0,
+          visibleChildDoneCount: 0,
+          internalStepCount: 1,
+          requiredStepCount: 1,
+          doneStepCount: 0,
+          blockedStepCount: 1,
+        },
+      },
+    })
+
+    expect(screen.getByText('Ready')).toBeInTheDocument()
+    expect(screen.getByText('1 delivery step blocked')).toBeInTheDocument()
+  })
 })

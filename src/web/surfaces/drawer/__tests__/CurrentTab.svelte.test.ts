@@ -78,7 +78,7 @@ function renderCurrent(turns: TaskThreadTurn[], options: { runError?: string | n
 function renderCurrentWithTask(
   task: Task,
   turns: TaskThreadTurn[],
-  options: { runError?: string | null; runStatus?: string; availabilityStatus?: string | null; contextDebug?: ContextDebugRecord[] } = {},
+  options: { runError?: string | null; runStatus?: string; availabilityStatus?: string | null; contextDebug?: ContextDebugRecord[]; workProgress?: Record<string, unknown> } = {},
 ) {
   const props = {
     task,
@@ -89,6 +89,7 @@ function renderCurrentWithTask(
     runStatus: options.runStatus ?? 'stopped',
     availabilityStatus: options.availabilityStatus ?? 'paused',
     contextDebug: options.contextDebug ?? [],
+    workProgress: options.workProgress,
     ...handlers(),
   }
   render(CurrentTab, props)
@@ -106,6 +107,31 @@ describe('CurrentTab', () => {
 
     expect(screen.getByText('Nothing is waiting')).toBeTruthy()
     expect(screen.getByText('This task does not currently need a decision from you.')).toBeTruthy()
+  })
+
+  it('shows a blocked delivery step as current task detail without a thread turn', () => {
+    renderCurrentWithTask(readyTaskCompleteForWorker(), [], {
+      workProgress: {
+        deliverySteps: [{
+          id: 'runtime-proof',
+          title: 'Runtime proof for link editor controls',
+          kind: 'verify',
+          status: 'blocked',
+          required: true,
+          blocksCompletion: true,
+        }],
+        rollup: {
+          requiredStepCount: 1,
+          doneStepCount: 0,
+          blockedStepCount: 1,
+          internalStepCount: 1,
+        },
+      },
+    })
+
+    expect(screen.getAllByText('Delivery step blocked').length).toBeGreaterThan(0)
+    expect(screen.getByText('Runtime proof for link editor controls')).toBeTruthy()
+    expect(screen.queryByText('Nothing is waiting')).toBeNull()
   })
 
   it('shows memory-core candidate source refs in the current task panel', () => {

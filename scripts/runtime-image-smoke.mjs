@@ -17,7 +17,24 @@ if (!existsSync(guildhallHome)) {
   mkdirSync(guildhallHome, { recursive: true })
 }
 
-const result = spawnSync('podman', [
+function available(command, args) {
+  const result = spawnSync(command, args, { stdio: 'ignore' })
+  return result.status === 0
+}
+
+function chooseEngine() {
+  if (available('docker', ['info'])) return 'docker'
+  if (available('podman', ['info'])) return 'podman'
+  throw new Error('Neither Docker nor Podman is running. Start Docker Desktop or Podman, then retry.')
+}
+
+const engine = process.env.GUILDHALL_CONTAINER_SMOKE_ENGINE || chooseEngine()
+if (engine !== 'docker' && engine !== 'podman') {
+  throw new Error(`Unsupported container smoke engine: ${engine}`)
+}
+
+console.log(`[guildhall runtime] smoking with ${engine}`)
+const result = spawnSync(engine, [
   'run',
   '--rm',
   '--entrypoint',

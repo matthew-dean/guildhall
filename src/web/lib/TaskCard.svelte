@@ -13,6 +13,7 @@
   import { friendlyDomain, friendlyStatus } from './display.js'
   import { activeEscalations } from './escalation.js'
   import { hasUnmetDependencies } from './task-dependencies.js'
+  import { deliveryProgressBadge, type TaskWorkProgressDisplay } from './work-progress-display.js'
   import type { TaskLite } from './types.js'
 
   const ACTIVE_STATUSES = new Set([
@@ -35,6 +36,7 @@
     displayStatusLabel?: string
     displayStatusTone?: StatusTone
     displayStatusIcon?: IconName
+    workProgress?: TaskWorkProgressDisplay | null
   }
 
   let {
@@ -44,6 +46,7 @@
     displayStatusLabel,
     displayStatusTone,
     displayStatusIcon,
+    workProgress = null,
   }: Props = $props()
 
   const status = $derived(task.status ?? 'unknown')
@@ -135,6 +138,7 @@
   const statusChipTone = $derived<'danger' | 'warn' | 'ok' | 'accent' | 'neutral'>(
     statusTone,
   )
+  const deliveryBadge = $derived(deliveryProgressBadge(workProgress))
 
   function open() {
     nav(currentTaskHref(task.id), { backgroundPath: path.value })
@@ -180,6 +184,9 @@
       <span class="tc-flag" title="Open escalation">
         <Icon name="alert-triangle" size={12} />
       </span>
+    {/if}
+    {#if deliveryBadge}
+      <Chip label={deliveryBadge.label} tone={deliveryBadge.tone} size="compact" title={deliveryBadge.title} />
     {/if}
   </div>
   <div class="tc-title">{task.title ?? '(untitled)'}</div>

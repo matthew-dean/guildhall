@@ -38,6 +38,8 @@ export interface InboxItem {
   defaultCount?: number
   dismissEndpoint?: string
   missingSteps?: string[]
+  deliveryStepTitle?: string
+  containingWorkTitle?: string
   blocking?: boolean
   dismissible?: boolean
   source?: { system?: string; id?: string }

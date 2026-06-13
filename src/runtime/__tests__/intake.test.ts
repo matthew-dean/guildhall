@@ -12,7 +12,7 @@ import {
 import { registerContractSurface } from '../contract-surfaces.js'
 import { TaskQueue } from '@guildhall/core'
 import { raiseEscalation } from '@guildhall/tools'
-import { getProjectStateDir, getProjectTranscriptPath } from '@guildhall/sessions'
+import { getProjectStateDir, getProjectSystemStatePathFromMemoryDir, getProjectTranscriptPath } from '@guildhall/sessions'
 import { listOwnerInputRequests } from '../owner-input-store.js'
 
 // ---------------------------------------------------------------------------
@@ -34,8 +34,9 @@ beforeEach(async () => {
   process.env.GUILDHALL_DATA_DIR = dataDir
   memoryDir = getProjectStateDir(tmpDir)
   await fs.mkdir(memoryDir, { recursive: true })
-  tasksPath = path.join(memoryDir, 'TASKS.json')
+  tasksPath = getProjectSystemStatePathFromMemoryDir(memoryDir, 'TASKS.json')
   // Bootstrap seeds TASKS.json as a bare `[]`, so test that path directly too.
+  await fs.mkdir(path.dirname(tasksPath), { recursive: true })
   await fs.writeFile(tasksPath, '[]', 'utf-8')
 })
 
@@ -310,6 +311,8 @@ describe('createExploringTask', () => {
 
 describe('approveSpec', () => {
   beforeEach(async () => {
+    await fs.mkdir(memoryDir, { recursive: true })
+    await fs.writeFile(tasksPath, '[]', 'utf-8')
     // Create and then attach a spec
     await createExploringTask({
       memoryDir,
@@ -774,6 +777,68 @@ describe('approveSpec', () => {
     expect(updated.tasks).toHaveLength(1)
     expect(updated.tasks[0]?.status).toBe('ready')
     expect(updated.tasks[0]?.sizePlan?.action).toBe('proceed_with_warning')
+  })
+
+  it('splits broad deterministic recovery specs instead of approving them as one runnable task', async () => {
+    const queue = await readQueue()
+    const task = queue.tasks[0]!
+    task.id = 'task-import-twwvys'
+    task.title = 'Finish the Knit primitive replacement wave beyond the already-migrated toast, dialog base, toolbar button, and tree menu'
+    task.description = 'looma/PROJECT_STATE.md: 1. Finish the Knit primitive replacement wave beyond the already-migrated toast, dialog base, toolbar button, and tree menus.'
+    task.domain = 'looma'
+    task.projectPath = tmpDir
+    task.status = 'spec_review'
+    task.origination = 'human'
+    task.productBrief = {
+      userJob: 'I want Finish the Knit primitive replacement wave beyond the already-migrated toast, dialog base, toolbar button, and tree menu turned into concrete project work using the evidence and owner decisions already recorded.',
+      successMetric: 'Finish the Knit primitive replacement wave beyond the already-migrated toast, dialog base, toolbar button, and tree menu has a reviewable spec, acceptance criteria, and a clear completion boundary before implementation starts.',
+      antiPatterns: [],
+      authoredBy: 'coordinator-recovery',
+      authoredAt: '2026-06-12T20:43:48.886Z',
+    }
+    task.notes = [{
+      agentId: 'coordinator-recovery',
+      role: 'system',
+      content: 'Guildhall wrote a deterministic recovery spec seed from the current task evidence before redispatching the spec lane, so the task has durable progress instead of returning to a read-only shaping loop.',
+      timestamp: '2026-06-12T20:43:48.886Z',
+    }]
+    task.spec = [
+      '## Summary',
+      'Build Finish the Knit primitive replacement wave beyond the already-migrated toast, dialog base, toolbar button, and tree menu from the current project evidence, preserving the source intent: 1. Finish the Knit primitive replacement wave beyond the already-migrated toast, dialog base, toolbar button, and tree menus. from looma/PROJECT_STATE.md',
+      '## Acceptance Criteria',
+      '1. Given the existing project conventions and source evidence, when Finish the Knit primitive replacement wave beyond the already-migrated toast, dialog base, toolbar button, and tree menu is implemented, then the feature appears in the appropriate repo surface without introducing a one-off parallel pattern.',
+      '## Completion Boundary',
+      'Product outcome: A user can use Finish the Knit primitive replacement wave beyond the already-migrated toast, dialog base, toolbar button, and tree menu in the intended project surface.',
+      'What Guildhall can complete in code: Implement the source intent from the imported planning note.',
+      'External dependencies: None.',
+      'Owner-only setup: None.',
+      'Verification environment: Local repo checks and browser proof.',
+      'What counts as done: Finish the Knit primitive replacement wave beyond the already-migrated toast, dialog base, toolbar button, and tree menu is implemented.',
+      'What must be split or blocked: Nothing to split.',
+    ].join('\n')
+    task.acceptanceCriteria = []
+    delete task.sizePlan
+    await fs.writeFile(tasksPath, JSON.stringify(queue, null, 2), 'utf-8')
+
+    const approved = await approveSpec({ memoryDir, taskId: task.id })
+
+    expect(approved.success).toBe(true)
+    const updated = await readQueue()
+    const parent = updated.tasks.find(candidate => candidate.id === task.id)
+    expect(parent?.status).toBe('ready')
+    expect(parent?.taskReadiness?.recommendation).toBe('split')
+    expect(parent?.sizePlan?.action).toBe('split_required')
+    expect(parent?.hierarchy?.childIds).toEqual([
+      'task-import-twwvys-split-audit-the-remaining-replacement-scope',
+      'task-import-twwvys-split-implement-the-first-independently-verifiable-replacement',
+      'task-import-twwvys-split-verify-and-update-the-migration-record',
+    ])
+    expect(updated.tasks.map(candidate => candidate.title)).toEqual([
+      task.title,
+      'Audit the remaining replacement scope',
+      'Implement the first independently verifiable replacement',
+      'Verify and update the migration record',
+    ])
   })
 
   it('records an approval note on the task when provided', async () => {

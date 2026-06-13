@@ -38,6 +38,7 @@
   import { humanizeProjectName } from '../lib/project-name.js'
   import { readableTaskDescription } from '../lib/task-display.js'
   import { unresolvedCompletionEscalations } from '../lib/task-drawer-integrity.js'
+  import { deliveryProgressBadge } from '../lib/work-progress-display.js'
 
   type RuntimeDevServerStatus = 'starting' | 'running' | 'stopped' | 'failed' | 'stale'
   interface RuntimeDevServer {
@@ -495,6 +496,8 @@
   }
 
   const task = $derived(payload?.task)
+  const currentWorkProgress = $derived(task ? payload?.workProgress?.byTaskId?.[task.id] ?? null : null)
+  const currentDeliveryBadge = $derived(deliveryProgressBadge(currentWorkProgress))
   const allTaskContext = $derived.by(() => {
     const byId = new Map<string, Task>()
     for (const candidate of [...(project.detail?.tasks ?? []), ...(payload?.relatedTasks ?? []), task]) {
@@ -565,6 +568,7 @@
   const canShelve = $derived(task && !isContainingWorkTask && task.status !== 'done' && task.status !== 'pending_pr')
   const isShelved = $derived(task?.status === 'shelved')
   const isWorkspaceImportTask = $derived(task?.id === 'task-workspace-import')
+  const hasUnansweredTaskQuestion = $derived(Boolean(task?.openQuestions?.some(question => !question.answeredAt && !question.answer)))
   const openEscalations = $derived(task ? activeEscalations(task) : [])
   const completionEscalations = $derived(task ? unresolvedCompletionEscalations(task) : [])
   const hasCompletionEscalationHygieneWarning = $derived(completionEscalations.length > 0)
@@ -575,7 +579,14 @@
       : null,
   )
   const projectStartBlockerMessage = $derived(projectStartBlocker?.message ?? null)
-  const canRunTaskDirectly = $derived(!projectStartBlocker && !hasCurrentTurns && !isTerminalRunTask && !isContainingWorkTask && !firstOpenEscalation)
+  const canRunTaskDirectly = $derived(
+    !projectStartBlocker &&
+    !isTerminalRunTask &&
+    !isContainingWorkTask &&
+    !firstOpenEscalation &&
+    !hasUnansweredTaskQuestion &&
+    (!hasCurrentTurns || task?.status === 'ready'),
+  )
   const canResumeHold = $derived(!projectStartBlocker && isHeld && !firstOpenEscalation)
   const firstOpenEscalationAction = $derived(escalationPrimaryAction(firstOpenEscalation))
   const firstOpenEscalationGuidance = $derived(escalationUserGuidance(firstOpenEscalation))
@@ -891,6 +902,14 @@
       {#if displayTaskDescription}
         <p>{displayTaskDescription}</p>
       {/if}
+      {#if currentDeliveryBadge}
+        <div class="drawer-progress-line">
+          <Chip
+            label={currentDeliveryBadge.label}
+            tone={currentDeliveryBadge.tone === 'warn' ? 'warn' : currentDeliveryBadge.tone === 'ok' ? 'ok' : 'neutral'}
+          />
+        </div>
+      {/if}
     </div>
     <Button variant="ghost" size="sm" ariaLabel="Close" onclick={onClose}>
       <Icon name="x" size={16} />
@@ -970,6 +989,7 @@
           {availabilityStatus}
           {projectStartBlockerMessage}
           contextDebug={payload.contextDebug ?? []}
+          workProgress={currentWorkProgress}
           onApproveBrief={() => post('approve-brief')}
           onApproveSpec={handleApproveSpec}
           onRunTask={() => runProject('start', taskId)}
@@ -985,6 +1005,7 @@
           tasks={taskLinkContext}
           projectId={scopedProjectId()}
           deliverySpine={payload.deliverySpine}
+          workProgress={currentWorkProgress}
           onNavigateTask={navigateToRelatedTask}
           onCreateSplitChildren={handleCreateSplitChildren}
           createSplitBusy={splitTaskBusy}
@@ -1004,7 +1025,7 @@
           onAddAcceptance={handleAddAcceptance}
         />
       {:else if activeTab === 'journey'}
-        <JourneyTab task={payload.task} projectId={scopedProjectId()} />
+        <JourneyTab task={payload.task} projectId={scopedProjectId()} workProgress={currentWorkProgress} />
       {:else if activeTab === 'transcript'}
         <TranscriptTab task={payload.task} exploringTranscript={payload.exploringTranscript} />
       {:else if activeTab === 'experts'}
@@ -1453,6 +1474,12 @@
     font-size: var(--gh-type-size-meta);
     line-height: var(--gh-type-line-height-relaxed);
     overflow-wrap: anywhere;
+  }
+  .drawer-progress-line {
+    display: flex;
+    flex-wrap: wrap;
+    gap: var(--s-2);
+    align-items: center;
   }
   :global(.drawer-outcome) span:last-child {
     color: var(--text-muted);

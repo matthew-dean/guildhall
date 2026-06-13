@@ -108,9 +108,9 @@ export function buildProjectActivitySummary(summary: ProjectActivitySummary): Pr
 }
 
 export function buildWorkSurface(detail: ProjectDetail): WorkSurfaceModel {
-  const allTasks = detail.tasks ?? []
-  const importDrafts = allTasks.filter(task => task.status === 'import_draft')
-  const tasks = allTasks.filter(task => task.status !== 'import_draft')
+  const visibleWorkTasks = visibleProjectTasks(detail)
+  const importDrafts = visibleWorkTasks.filter(task => task.status === 'import_draft')
+  const tasks = visibleWorkTasks.filter(task => task.status !== 'import_draft')
   const coordinators = detail.config?.coordinators ?? []
   return {
     tasks,
@@ -120,6 +120,17 @@ export function buildWorkSurface(detail: ProjectDetail): WorkSurfaceModel {
     running: (detail.run?.status ?? 'stopped') === 'running',
     events: sortEventsChronologically(detail.recentEvents ?? []),
   }
+}
+
+function visibleProjectTasks(detail: ProjectDetail): Task[] {
+  const allTasks = detail.tasks ?? []
+  const progressByTaskId = detail.workProgress?.byTaskId ?? {}
+  return allTasks.filter(task => {
+    const id = typeof task.id === 'string' ? task.id : ''
+    const progress = id ? progressByTaskId[id] as { visibility?: { kind?: string; countInProjectTotals?: boolean } } | undefined : undefined
+    if (!progress?.visibility) return true
+    return progress.visibility.kind !== 'internal_step' && progress.visibility.kind !== 'hidden'
+  })
 }
 
 const COORDINATOR_STATUS_ORDER: Record<string, number> = {
@@ -197,7 +208,7 @@ export function buildCoordinatorsSurface(detail: ProjectDetail, subView: string 
         (coordinator) => (coordinator.id ?? coordinator.domain ?? '').toString() === selectedCoordinatorId,
       )
     : allCoordinators
-  const tasks = (detail.tasks ?? []).filter(task => task.status !== 'import_draft')
+  const tasks = visibleProjectTasks(detail).filter(task => task.status !== 'import_draft')
   const columns = coordinators.map((coordinator) => {
     const domainTasks = tasks.filter((task) => task.domain === coordinator.domain)
     return {

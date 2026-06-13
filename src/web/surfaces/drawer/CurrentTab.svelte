@@ -9,6 +9,7 @@
   import StatusLine from '../../lib/StatusLine.svelte'
   import StatusLight from '../../lib/StatusLight.svelte'
   import Markdown from '../../lib/Markdown.svelte'
+  import { deliveryProgressBadge, type TaskWorkProgressDisplay } from '../../lib/work-progress-display.js'
   import {
     escalationPrimaryAction,
     escalationReasonLabel,
@@ -41,6 +42,7 @@
     availabilityStatus?: string | null
     projectStartBlockerMessage?: string | null
     contextDebug?: ContextDebugRecord[]
+    workProgress?: TaskWorkProgressDisplay | null
     onApproveBrief: () => void
     onApproveSpec: () => void
     onRunTask: () => void
@@ -61,6 +63,7 @@
     availabilityStatus = 'active',
     projectStartBlockerMessage = null,
     contextDebug = [],
+    workProgress = null,
     onApproveBrief,
     onApproveSpec,
     onRunTask,
@@ -84,6 +87,8 @@
 
   const taskNeedsBriefCleanup = $derived(needsWorkerHandoffSpecCleanup(task))
   const latestMemoryCore = $derived(contextDebug.find(record => record.memoryPacket?.memoryCore)?.memoryPacket?.memoryCore)
+  const deliveryBadge = $derived(deliveryProgressBadge(workProgress))
+  const blockedDeliveryStep = $derived(workProgress?.deliverySteps?.find(step => step.status === 'blocked') ?? null)
 
   function activityElapsed(iso: string | undefined): string | null {
     if (!iso) return null
@@ -395,6 +400,23 @@
             <Icon name="sparkles" size={14} />
             {projectStartBlockerMessage ? 'Project blocked' : 'Clean up brief'}
           </Button>
+        </Row>
+      </Stack>
+    </Card>
+  {:else if relevantTurns.length === 0 && blockedDeliveryStep}
+    <Card title="Delivery step blocked" tone="warn">
+      <Stack gap="3">
+        <StateSummary
+          label="Delivery step blocked"
+          description={blockedDeliveryStep.title ?? deliveryBadge?.title ?? 'A required delivery step is blocked.'}
+          tone="warn"
+        />
+        <p class="detail-copy">
+          This is part of the current work item, not a separate task card. Open Thread or the spec if the blocked step needs a decision.
+        </p>
+        <Row justify="end" gap="2">
+          <Button variant="secondary" onclick={onOpenSpecTab}>View spec and evidence</Button>
+          <Button variant="primary" onclick={onOpenThread}>Open Thread</Button>
         </Row>
       </Stack>
     </Card>

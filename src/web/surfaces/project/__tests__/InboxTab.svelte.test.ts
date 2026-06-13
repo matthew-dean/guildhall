@@ -197,6 +197,31 @@ describe('InboxTab', () => {
     expect(screen.queryByText(/missing repo evidence/i)).not.toBeInTheDocument()
   })
 
+  it('names owner-held delivery steps against their containing work item', () => {
+    vi.stubGlobal('fetch', vi.fn(async () => json({ items: [] })))
+
+    render(InboxTab, {
+      items: [
+        {
+          id: 'owner-step:task-import-review:oauth',
+          kind: 'spec_fill_pending',
+          severity: 'high',
+          title: 'Approve OAuth setup',
+          detail: 'A manual setup step is waiting before verification can finish.',
+          actionHref: '/task/task-import-review?tab=current',
+          status: 'open',
+          taskId: 'task-import-review',
+          deliveryStepTitle: 'Approve OAuth setup',
+          containingWorkTitle: 'Import review flow',
+        },
+      ] as any,
+      loaded: true,
+    })
+
+    expect(screen.getByText('Approve OAuth setup')).toBeInTheDocument()
+    expect(screen.getByText('Delivery step · Import review flow')).toBeInTheDocument()
+  })
+
   it('counts the visible history rows instead of only actionable rows', async () => {
     render(InboxTab, {
       items: [

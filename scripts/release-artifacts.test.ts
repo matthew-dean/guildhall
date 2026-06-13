@@ -105,13 +105,26 @@ describe('release artifact contract', () => {
   it('builds the local runtime image through a Docker-or-Podman helper', () => {
     const pkg = JSON.parse(read('package.json')) as { scripts: Record<string, string> }
     const buildScript = read('scripts/runtime-image-build.mjs')
+    const smokeScript = read('scripts/runtime-image-smoke.mjs')
 
     expect(pkg.scripts['runtime:image:build']).toBe('node scripts/runtime-image-build.mjs')
     expect(buildScript).toContain('docker')
     expect(buildScript).toContain('podman')
+    expect(smokeScript).toContain('docker')
+    expect(smokeScript).toContain('podman')
     expect(buildScript).toContain('DOCKER_BUILDKIT')
     expect(buildScript).toContain('GUILDHALL_CONTAINER_BUILD_TIMEOUT_MS')
     expect(buildScript).toContain('0.10.0-trixie-node22-python313-playwright')
     expect(buildScript).toContain('0.10-trixie-node22-python313-playwright')
+  })
+
+  it('keeps runtime image build context narrow and excludes git sockets', () => {
+    const dockerignore = read('.dockerignore')
+
+    expect(dockerignore).toContain('.git')
+    expect(dockerignore).toContain('dist')
+    expect(dockerignore).toContain('node_modules')
+    expect(dockerignore).toContain('!.dockerignore')
+    expect(dockerignore).toContain('!runtime/**')
   })
 })

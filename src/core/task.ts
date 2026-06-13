@@ -625,6 +625,45 @@ export const TaskDelivery = z.object({
 })
 export type TaskDelivery = z.infer<typeof TaskDelivery>
 
+export const WorkVisibilityKind = z.enum(['primary', 'supporting', 'internal_step', 'hidden'])
+export type WorkVisibilityKind = z.infer<typeof WorkVisibilityKind>
+
+export const WorkVisibility = z.object({
+  kind: WorkVisibilityKind,
+  label: z.string().optional(),
+  countInProjectTotals: z.boolean().optional(),
+})
+export type WorkVisibility = z.infer<typeof WorkVisibility>
+
+export const DeliveryStepKind = z.enum([
+  'make_change',
+  'verify',
+  'document',
+  'review',
+  'decide',
+  'coordinate',
+  'release',
+  'handoff',
+  'external_action',
+])
+export type DeliveryStepKind = z.infer<typeof DeliveryStepKind>
+
+export const DeliveryStepStatus = z.enum(['todo', 'active', 'blocked', 'done', 'waived'])
+export type DeliveryStepStatus = z.infer<typeof DeliveryStepStatus>
+
+export const DeliveryStep = z.object({
+  id: z.string(),
+  title: z.string(),
+  kind: DeliveryStepKind,
+  status: DeliveryStepStatus,
+  required: z.boolean().default(true),
+  blocksCompletion: z.boolean().default(true),
+  sourceTaskId: z.string().optional(),
+  evidenceChannel: z.string().optional(),
+  toolLabel: z.string().optional(),
+})
+export type DeliveryStep = z.infer<typeof DeliveryStep>
+
 export const WorkHierarchy = z.object({
   parentId: z.string().optional(),
   childIds: z.array(z.string()).default([]),
@@ -997,6 +1036,8 @@ export const Task = z.object({
   proposedBy: z.string().optional(),          // agent id that proposed the task
   proposalRationale: z.string().optional(),   // why the proposing agent thinks this is worth doing
   delivery: TaskDelivery.optional(),
+  workVisibility: WorkVisibility.optional(),
+  deliverySteps: z.array(DeliveryStep).optional(),
   businessEnvelope: BusinessEnvelope.optional(),
   workKind: WorkKind.optional(),
   // Work containment is represented by hierarchy links, never by task status.

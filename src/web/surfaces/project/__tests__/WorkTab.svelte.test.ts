@@ -134,6 +134,51 @@ describe('WorkTab', () => {
     expect(path.value).toBe('/projects/looma-knit/task/task-gamma')
   })
 
+  it('shows delivery-step progress on visible work rows', async () => {
+    render(WorkTab, {
+      props: {
+        detail: {
+          ...detail([
+            task({
+              id: 'task-import-review',
+              title: 'Import review flow',
+              status: 'in_progress',
+            }),
+          ]),
+          workProgress: {
+            counts: {
+              visibleTotal: 1,
+              visibleActive: 1,
+              visibleBlocked: 0,
+              visibleDone: 0,
+              visibleShelved: 0,
+              deliveryTotal: 1,
+              deliveryRequired: 1,
+              deliveryDone: 0,
+              deliveryBlocked: 1,
+            },
+            byTaskId: {
+              'task-import-review': {
+                rollup: {
+                  primaryState: 'blocked',
+                  visibleChildCount: 0,
+                  visibleChildDoneCount: 0,
+                  internalStepCount: 1,
+                  requiredStepCount: 1,
+                  doneStepCount: 0,
+                  blockedStepCount: 1,
+                },
+              },
+            },
+          },
+        },
+      },
+    })
+
+    await screen.findByText('1 delivery step blocked')
+    expect(screen.getByText('Import review flow')).toBeInTheDocument()
+  })
+
   it('does not show an empty new-request prompt when a zero-task project is blocked by migration', async () => {
     render(WorkTab, {
       props: {
@@ -282,8 +327,89 @@ describe('WorkTab', () => {
     await userEvent.click(within(columns).getByRole('button', { name: /button primitive/i }))
 
     expect((workbench.textContent?.match(/Button primitive/g) ?? []).length).toBe(1)
-    expect(within(workbench).getByText('Child work')).toBeTruthy()
+    expect(within(workbench).getByText('Contained work')).toBeTruthy()
     expect(within(workbench).getByText('Details')).toBeTruthy()
+  })
+
+  it('shows internal delivery steps as selected-work detail instead of child work in columns', async () => {
+    window.history.replaceState({}, '', '/projects/looma-knit/work?tree=preview')
+    path.value = '/projects/looma-knit/work?tree=preview'
+
+    render(WorkTab, {
+      props: {
+        detail: {
+          ...detail([
+            task({
+              id: 'feature-root',
+              title: 'Import review flow',
+              status: 'in_progress',
+              description: 'Build the import review flow.',
+              hierarchy: { childIds: ['runtime-proof'], order: 0 },
+            }),
+            task({
+              id: 'runtime-proof',
+              title: 'Runtime proof for import review flow',
+              status: 'blocked',
+              workKind: 'test',
+              workVisibility: { kind: 'internal_step', countInProjectTotals: false },
+              hierarchy: { parentId: 'feature-root', childIds: [], order: 0 },
+            }),
+          ]),
+          workProgress: {
+            counts: {
+              visibleTotal: 1,
+              visibleActive: 1,
+              visibleBlocked: 0,
+              visibleDone: 0,
+              visibleShelved: 0,
+              deliveryTotal: 1,
+              deliveryRequired: 1,
+              deliveryDone: 0,
+              deliveryBlocked: 1,
+            },
+            byTaskId: {
+              'feature-root': {
+                id: 'feature-root',
+                title: 'Import review flow',
+                status: 'in_progress',
+                visibility: { kind: 'primary', countInProjectTotals: true },
+                deliverySteps: [
+                  {
+                    id: 'task:runtime-proof',
+                    title: 'Runtime proof for import review flow',
+                    kind: 'verify',
+                    status: 'blocked',
+                    required: true,
+                    blocksCompletion: true,
+                    sourceTaskId: 'runtime-proof',
+                  },
+                ],
+                rollup: {
+                  primaryState: 'blocked',
+                  visibleChildCount: 0,
+                  visibleChildDoneCount: 0,
+                  internalStepCount: 1,
+                  requiredStepCount: 1,
+                  doneStepCount: 0,
+                  blockedStepCount: 1,
+                },
+              },
+            },
+          },
+        },
+      },
+    })
+
+    const columns = await screen.findByLabelText('Work hierarchy columns')
+    await userEvent.click(within(columns).getByRole('button', { name: /import review flow/i }))
+
+    expect(within(columns).queryByRole('button', { name: /runtime proof for import review flow/i })).toBeNull()
+    expect(within(columns).getByText('Contained work')).toBeTruthy()
+    expect(within(columns).getByText('This item has tracked delivery steps and no contained work.')).toBeTruthy()
+    const packet = screen.getByLabelText('Selected deliverable packet')
+    expect(within(packet).getByText('Delivery checklist')).toBeTruthy()
+    expect(within(packet).getAllByText('Runtime proof for import review flow').length).toBeGreaterThan(0)
+    expect(within(packet).getByText('Blocked')).toBeTruthy()
   })
 
   it('groups columns preview controls into one toolbar', async () => {

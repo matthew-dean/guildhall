@@ -538,7 +538,7 @@ describe('ProjectView', () => {
       startReadiness: {
         canStart: false,
         code: 'no_unattended_progress',
-        message: 'Review 2 waiting specs before starting.',
+        message: '2 specs are waiting for review before starting.',
         actionHref: '/thread',
       },
       tasks: [
@@ -560,12 +560,12 @@ describe('ProjectView', () => {
     await renderProjectView('overview', null, 'looma-knit', projectPayload)
 
     const alerts = screen.getAllByRole('alert')
-    const specAlerts = alerts.filter(alert => within(alert).queryByText('Review 2 waiting specs before starting.'))
+    const specAlerts = alerts.filter(alert => within(alert).queryByText('2 specs are waiting for review before starting.'))
     const idleAlerts = alerts.filter(alert => within(alert).queryByText('Waiting on input: 2 awaiting approval.'))
 
     expect(specAlerts).toHaveLength(1)
     expect(idleAlerts).toHaveLength(0)
-    expect(within(specAlerts[0]!).getByRole('link', { name: /review spec/i })).toBeInTheDocument()
+    expect(within(specAlerts[0]!).getByRole('link', { name: /review next spec/i })).toBeInTheDocument()
   })
 
   it('surfaces required migrations as the primary setup action and can apply them intentionally', async () => {

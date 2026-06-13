@@ -6,6 +6,7 @@ import type {
   TaskDecompositionReasonCode,
   TaskKind,
 } from '@guildhall/core'
+import { buildTaskSizePlan } from '@guildhall/core'
 import { assessTaskReadiness } from './task-readiness.js'
 
 export function decomposeTaskForFinishability(
@@ -27,6 +28,22 @@ export function decomposeTaskForFinishability(
 
 export function applyTaskShaping(task: Task, opts: { now?: string; recordNote?: boolean } = {}): Task {
   const now = opts.now ?? new Date().toISOString()
+  if (!task.sizePlan) {
+    task.sizePlan = buildTaskSizePlan({
+      task: {
+        id: task.id,
+        title: task.title,
+        description: task.description,
+        priority: task.priority,
+        ...(task.spec ? { spec: task.spec } : {}),
+        ...(task.acceptanceCriteria?.length ? { acceptanceCriteria: task.acceptanceCriteria } : {}),
+        ...(task.outOfScope?.length ? { outOfScope: task.outOfScope } : {}),
+        ...(task.workUnitAnalysis ? { workUnitAnalysis: task.workUnitAnalysis } : {}),
+      },
+      createdAt: now,
+      createdBy: 'task-shaping',
+    })
+  }
   const readiness = assessTaskReadiness(task, { now })
   const decomposition = decomposeTaskForFinishability(task, { now })
   task.taskKind = readiness.taskKind

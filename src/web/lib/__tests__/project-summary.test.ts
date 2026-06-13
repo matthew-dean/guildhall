@@ -165,6 +165,40 @@ describe('summarizeProjects', () => {
     ])
   })
 
+  it('uses visible work progress for project-card counts when available', () => {
+    const service: ServiceDetail = {
+      projects: [
+        {
+          id: 'guildhall',
+          name: 'Guildhall',
+          path: '/Users/matthew/work/guildhall',
+          taskCounts: { total: 3, active: 2, draftReview: 0, blocked: 1, done: 0, shelved: 0 },
+          workProgress: {
+            counts: {
+              visibleTotal: 1,
+              visibleActive: 1,
+              visibleBlocked: 0,
+              visibleDone: 0,
+              visibleShelved: 0,
+              deliveryTotal: 2,
+              deliveryRequired: 2,
+              deliveryDone: 0,
+              deliveryBlocked: 1,
+            },
+            byTaskId: {},
+          },
+          run: { status: 'stopped' },
+        },
+      ],
+    }
+
+    expect(summarizeProjects(service)[0]).toMatchObject({
+      counts: { total: 1, active: 1, blocked: 0, done: 0, shelved: 0 },
+      activityLabel: '1 task is paused.',
+      needsAttention: false,
+    })
+  })
+
   it('labels one-task runs without implying every active task is being worked', () => {
     const service: ServiceDetail = {
       projects: [

@@ -157,10 +157,14 @@ function startReadinessButtonLabel(readiness: ProjectActionStartReadiness): stri
   if (readiness.code === 'no_unattended_progress') {
     const message = readiness.message ?? ''
     if (/brief/i.test(message)) return 'Review brief'
-    if (/spec|review|approve/i.test(message)) return 'Review spec'
+    if (/spec|review|approve/i.test(message)) return pluralSpecReviewMessage(message) ? 'Review next spec' : 'Review spec'
     return 'Open Work'
   }
   return 'Open item'
+}
+
+function pluralSpecReviewMessage(message: string): boolean {
+  return /\b\d+\s+specs\b/i.test(message)
 }
 
 function runControlLabel(readiness: ProjectActionStartReadiness | null | undefined, running: boolean): string {
@@ -193,7 +197,7 @@ function startReadinessActionLabel(readiness: ProjectActionStartReadiness): stri
   if (readiness.code === 'no_unattended_progress') {
     const message = readiness.message ?? ''
     if (/brief/i.test(message)) return 'Needs brief cleanup'
-    if (/spec|review|approve/i.test(message)) return 'Review draft'
+    if (/spec|review|approve/i.test(message)) return 'Review waiting specs'
     return 'Nothing ready to run'
   }
   if (readiness.code === 'bootstrap_blocked') return 'Readiness blocked'
@@ -285,10 +289,14 @@ function bestTaskAction(tasks: ProjectActionTask[], running: boolean): ProjectAc
       ? 'Needs brief: finish the handoff before a worker can start.'
       : task.description,
     buttonLabel: task.status === 'spec_review' ? 'Review in Thread' : 'Open Work',
-    href: task.status === 'spec_review' ? '/thread' : '/work',
+    href: task.status === 'spec_review' ? threadHrefForTask(task.id) : '/work',
     tone: cleanup || task.status === 'blocked' || task.status === 'spec_review' ? 'warn' : running ? 'running' : 'accent',
     taskId: task.id,
   }
+}
+
+function threadHrefForTask(taskId: string | undefined): string {
+  return taskId ? `/thread?thread=${encodeURIComponent(`task:${taskId}`)}` : '/thread'
 }
 
 function startReadinessAction(readiness: ProjectActionStartReadiness): ProjectAction {

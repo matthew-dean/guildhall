@@ -59,6 +59,26 @@ describe('buildProjectActionModel', () => {
       buttonLabel: 'Open Work',
     })
 
+    const specReview = buildProjectActionModel({
+      startReadiness: {
+        canStart: false,
+        code: 'no_unattended_progress',
+        message: '2 specs are waiting for review before starting.',
+        actionHref: '/thread?thread=task%3Atask-spec-a',
+      },
+      tasks: [],
+      thread: { turns: [], activeTurnId: null },
+      runStatus: 'stopped',
+    })
+    expect(specReview.primaryAction).toMatchObject({
+      source: 'start_readiness',
+      label: 'Review waiting specs',
+      detail: '2 specs are waiting for review before starting.',
+      buttonLabel: 'Review next spec',
+      href: '/thread?thread=task%3Atask-spec-a',
+      tone: 'warn',
+    })
+
     const provider = buildProjectActionModel({
       startReadiness: {
         canStart: false,
@@ -344,5 +364,27 @@ describe('buildProjectActionModel', () => {
       buttonLabel: 'Open Work',
     })
     expect(model.primaryAction?.label).not.toMatch(/answer/i)
+  })
+
+  it('links spec-review task actions to the specific Thread chain', () => {
+    const model = buildProjectActionModel({
+      startReadiness: { canStart: true },
+      inbox: { items: [] },
+      tasks: [{
+        id: 'task-spec-a',
+        title: 'Approve first spec',
+        status: 'spec_review',
+        description: 'Review the drafted spec.',
+        updatedAt: '2026-06-03T18:00:00.000Z',
+      }],
+      thread: { turns: [] },
+      runStatus: 'stopped',
+    })
+
+    expect(model.primaryAction).toMatchObject({
+      source: 'task',
+      buttonLabel: 'Review in Thread',
+      href: '/thread?thread=task%3Atask-spec-a',
+    })
   })
 })

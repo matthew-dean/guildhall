@@ -213,6 +213,15 @@ export function buildTaskSizePlan(input: BuildTaskSizePlanInput): TaskSizePlan {
     })
   }
 
+  if (isBroadImportedProgram(text)) {
+    factors.push({
+      id: 'broad_imported_program',
+      label: 'Broad imported program',
+      weight: 6,
+      reason: 'The task reads like a planning-note program or remaining-work wave, not one independently verifiable implementation unit.',
+    })
+  }
+
   if ((input.task.acceptanceCriteria?.length ?? 0) <= 1 && files.length <= 1 && lanes.length <= 1) {
     factors.push({
       id: 'narrow_verification',
@@ -436,6 +445,12 @@ function recommendChildren(input: { text: string; files: readonly string[]; lane
     if (!children.some((child) => child.title === title)) children.push({ title, reason, suggestedDomain, dependsOn: [] })
   }
 
+  if (isBroadImportedProgram(input.text)) {
+    add('Audit the remaining replacement scope', 'Turn the imported planning note into a concrete list of remaining independently verifiable targets.', undefined)
+    add('Implement the first independently verifiable replacement', 'Keep the first code change small enough for one worker pass and review boundary.', undefined)
+    add('Verify and update the migration record', 'Keep proof and migration inventory updates explicit after the implementation child lands.', undefined)
+    return children
+  }
   if (/billing|subscription/i.test(input.text) || input.files.some((file) => /billing|subscription/i.test(file))) {
     add('Implement the billing settings workflow', 'Keep the user-facing workflow small enough for UX review.', 'frontend')
   }
@@ -457,4 +472,12 @@ function recommendChildren(input: { text: string; files: readonly string[]; lane
     add('Extract the second independently verifiable outcome', 'Link this child after the first task proves its boundary.', undefined)
   }
   return children
+}
+
+function isBroadImportedProgram(text: string): boolean {
+  const hasProgramVerb = /\b(finish|complete|continue|replace|migrate|normalize|modernize)\b/i.test(text)
+  const hasProgramNoun = /\b(wave|migration|replacement|remaining|remainder|beyond|inventory|roadmap|program)\b/i.test(text)
+  const hasPriorWorkBoundary = /\b(already[- ]migrated|remaining|beyond|next up|project_state\.md|source intent|planning note)\b/i.test(text)
+  const primitiveProgram = /\bprimitive(?:s)?\b/i.test(text) && /\b(replacement|normalization|migration|wave)\b/i.test(text)
+  return (hasProgramVerb && hasProgramNoun && hasPriorWorkBoundary) || primitiveProgram
 }

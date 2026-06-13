@@ -14,6 +14,7 @@ import { migrateLegacyMemoryToLocalHistory } from './memory-migration.js'
 import { compactProjectState } from './project-state-compaction.js'
 import { migrateTaskQuestionsToBoundedChat } from './task-question-migration.js'
 import { migrateTaskHierarchyState } from './task-hierarchy-migration.js'
+import { migrateTaskDeliveryStepState } from './task-delivery-step-migration.js'
 import { migrateTaskState } from './task-state-migration.js'
 import { repairOwnerInputState } from './owner-input-state-repair.js'
 import { recordGuildhallRuntimeWrite } from './runtime-compatibility.js'
@@ -373,6 +374,28 @@ const BUILT_IN_PROJECT_MIGRATIONS: ProjectMigrationDefinition[] = [
     },
   },
   {
+    id: '0.10.0/task-delivery-steps',
+    title: 'Mark verification child tasks as delivery steps',
+    introducedIn: '0.10.0',
+    scope: 'project',
+    safety: 'automatic',
+    summary: 'Adds explicit workVisibility and deliverySteps metadata so verification child tasks stay attached to their logical work item.',
+    async detect(projectRoot) {
+      const result = await migrateTaskDeliveryStepState({ projectRoot, apply: false })
+      return {
+        needed: result.changedTasks.length > 0,
+        affectedPaths: result.affectedPaths,
+      }
+    },
+    async apply(projectRoot) {
+      const result = await migrateTaskDeliveryStepState({ projectRoot, apply: true })
+      return {
+        summary: `Marked ${result.changedTasks.length} task record${result.changedTasks.length === 1 ? '' : 's'} with explicit delivery-step metadata.`,
+        affectedPaths: result.affectedPaths,
+      }
+    },
+  },
+  {
     id: '0.10.0/owner-input-state-repair',
     title: 'Repair stale owner-input bounded-chat state',
     introducedIn: '0.10.0',
@@ -555,6 +578,7 @@ const BUILT_IN_PROJECT_MIGRATION_IDEMPOTENCE_TESTS: Record<string, string> = {
   '0.9.0/runtime-backed-project': 'manual migration; status/plan only',
   '0.9.0/runtime-command-evidence-persistence': 'migrations.test.ts: runtime command evidence migration is idempotent',
   '0.10.0/task-open-questions-to-bounded-chat': 'migrations.test.ts: task-question migration is idempotent',
+  '0.10.0/task-delivery-steps': 'migrations.test.ts: normalizes verification child tasks into explicit delivery-step metadata',
   '0.10.0/task-hierarchy-links': 'migrations.test.ts: task-hierarchy migration is idempotent',
   '0.10.0/merge-policy-to-landing-strategy': 'migrations.test.ts: landing-strategy migration is idempotent',
   '0.10.0/owner-input-state-repair': 'migrations.test.ts: owner-input state repair is idempotent',

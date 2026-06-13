@@ -24,6 +24,7 @@
   import { isCompleteForWorkerHandoff, needsWorkerHandoffSpecCleanup } from '../../lib/task-state.js'
   import { taskStagePresentation, type TaskPresentationTone } from '../../lib/task-presentation.js'
   import { buildWorkHierarchy, nestedWorkCountLabel, workKindLabel } from '../../lib/work-hierarchy.js'
+  import { deliveryProgressBadge } from '../../lib/work-progress-display.js'
   import type { ProjectDetail, Task } from '../../lib/types.js'
   import PlannerTab from './PlannerTab.svelte'
   import WorkTreePreview from './WorkTreePreview.svelte'
@@ -206,6 +207,15 @@
 
   function openTask(task: Task): void {
     nav(currentTaskHref(task.id), { backgroundPath: path.value })
+  }
+
+  function taskProgress(task: Task) {
+    const id = typeof task.id === 'string' ? task.id : ''
+    return id ? detail.workProgress?.byTaskId?.[id] : null
+  }
+
+  function taskDeliveryBadge(task: Task) {
+    return deliveryProgressBadge(taskProgress(task))
   }
 
   function openImportedDraft(task: Task): void {
@@ -423,7 +433,7 @@
   {#if activeWorkView === 'board'}
     <PlannerTab detail={boardDetail} />
   {:else if activeWorkView === 'columns'}
-    <WorkTreePreview tasks={tasks} filter={workFilter} />
+    <WorkTreePreview tasks={tasks} filter={workFilter} workProgress={detail.workProgress} />
   {:else}
     {#if deliveryQueue}
       <UtilityPanel as="section" className="delivery-queue-panel" tone={deliveryFirstRunnable ? 'ok' : deliveryQueue.blocked?.length ? 'warn' : 'neutral'} ariaLabel="Delivery queue">
@@ -542,6 +552,7 @@
             <button type="button" class:active={sortKey === 'revisions'} onclick={() => toggleSort('revisions')}>Revs{sortLabel('revisions')}</button>
           </div>
           {#each sortedTasks as task (task.id)}
+            {@const deliveryBadge = taskDeliveryBadge(task)}
             <CardListItem
               as="button"
               className="work-list-row"
@@ -561,6 +572,9 @@
               </span>
               <span class="row-status">
                 <Chip label={effectiveStatusLabel(task)} tone={effectiveStatusTone(task)} />
+                {#if deliveryBadge}
+                  <Chip label={deliveryBadge.label} tone={deliveryBadge.tone} title={deliveryBadge.title} size="compact" />
+                {/if}
               </span>
               <span class="row-domain">
                 {friendlyDomain(task.domain) || 'Project'}

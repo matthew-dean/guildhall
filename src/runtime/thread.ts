@@ -954,7 +954,7 @@ const SETUP_STEP_ACTIONS: Record<string, SetupAction> = {
   },
   workspaceImport: {
     affordance: 'link',
-    actionLabel: 'Open review',
+    actionLabel: 'Open import review',
     actionHref: '/workspace-import',
   },
   firstTask: {

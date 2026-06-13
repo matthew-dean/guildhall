@@ -207,6 +207,80 @@ coverage.
 
 ## Current Follow-Ups
 
+- [x] Start separating logical work counts from internal delivery/proof steps
+  in the shared project summary path. 2026-06-12 implementation added a
+  runtime `workProgress` derivation that treats explicit/future
+  `workVisibility` values and existing verification child tasks as delivery
+  steps instead of project-card-visible tasks; `/api/service` and
+  `/api/project` now emit the shared rollup, project cards prefer visible work
+  counts, and Work surfaces hide internal steps from ordinary task cards while
+  retaining raw `taskCounts` for migration/back-compat inspection. Follow-up
+  on the same slice threads task progress into Work list rows, Planner and
+  Coordinator mini-cards, and the task drawer Overview so blocked/completed
+  delivery steps are visible as detail on the logical work item instead of
+  reappearing as flat task cards. The core task schema now preserves explicit
+  `workVisibility` and `deliverySteps`, and migration
+  `0.10.0/task-delivery-steps` normalizes existing verification/test child
+  tasks into internal delivery-step metadata with a task-state backup. The
+  split-child write path now also marks verification/test children as
+  `internal_step` and records the corresponding parent `deliverySteps` entry at
+  materialization time, so new local work stops creating flat visible proof
+  cards.
+  Verification:
+  `pnpm vitest run src/tools/__tests__/task-queue.test.ts
+  src/runtime/__tests__/work-progress.test.ts
+  src/web/lib/__tests__/project-summary.test.ts
+  src/web/lib/__tests__/project-data.test.ts
+  src/web/lib/__tests__/TaskCard.svelte.test.ts
+  src/web/surfaces/project/__tests__/WorkTab.svelte.test.ts
+  src/web/surfaces/drawer/__tests__/OverviewTab.svelte.test.ts
+  src/core/__tests__/task.test.ts src/runtime/__tests__/migrations.test.ts
+  src/runtime/__tests__/contract-governance.test.ts --reporter=dot`,
+  `pnpm typecheck`, `pnpm lint:contracts`, and `git diff --check` passed.
+- [x] Finish the remaining logical-work delivery-step surfaces from
+  `internal/specs/2026-06-12-guildhall-logical-work-and-delivery-steps.md`.
+  Scope: Project Overview, WorkTreePreview, drawer header, Drawer Current,
+  Drawer Journey, Thread shaping copy, and Inbox/Needs You owner-held step
+  treatment. Keep the rule strict: logical work appears as the visible work
+  item; delivery/proof/check/doc steps appear as progress/detail unless they
+  are owner-held, blocked, or actively being run.
+  - [x] Project Overview shows visible work totals and compact delivery-step
+    progress from shared `workProgress`.
+  - [x] WorkTreePreview separates contained logical work from delivery
+    checklist detail and does not call internal steps child tasks.
+  - [x] Task drawer header, Current, and Journey show shared delivery-step
+    progress without creating a second private checklist model.
+  - [x] Thread shaping copy names logical work items and delivery steps
+    separately when it reports created work.
+  - [x] Inbox/Needs You can present owner-held delivery steps against their
+    containing logical work item.
+  Verification:
+  `pnpm vitest run src/web/surfaces/project/__tests__/ProjectOverviewTab.svelte.test.ts
+  src/web/surfaces/project/__tests__/WorkTab.svelte.test.ts
+  src/web/surfaces/__tests__/TaskDrawer.svelte.test.ts
+  src/web/surfaces/drawer/__tests__/CurrentTab.svelte.test.ts
+  src/web/surfaces/drawer/__tests__/drawer-tabs.svelte.test.ts
+  src/web/surfaces/project/__tests__/ThreadTab.svelte.test.ts
+  src/web/surfaces/project/__tests__/InboxTab.svelte.test.ts --reporter=dot`
+  passed with 7 files and 244 tests. The broader touched slice
+  `pnpm vitest run src/tools/__tests__/task-queue.test.ts
+  src/runtime/__tests__/work-progress.test.ts src/core/__tests__/task.test.ts
+  src/runtime/__tests__/migrations.test.ts
+  src/web/lib/__tests__/project-summary.test.ts
+  src/web/lib/__tests__/project-data.test.ts
+  src/web/lib/__tests__/TaskCard.svelte.test.ts
+  src/web/surfaces/project/__tests__/ProjectOverviewTab.svelte.test.ts
+  src/web/surfaces/project/__tests__/WorkTab.svelte.test.ts
+  src/web/surfaces/__tests__/TaskDrawer.svelte.test.ts
+  src/web/surfaces/drawer/__tests__/CurrentTab.svelte.test.ts
+  src/web/surfaces/drawer/__tests__/drawer-tabs.svelte.test.ts
+  src/web/surfaces/drawer/__tests__/OverviewTab.svelte.test.ts
+  src/web/surfaces/project/__tests__/ThreadTab.svelte.test.ts
+  src/web/surfaces/project/__tests__/InboxTab.svelte.test.ts
+  src/runtime/__tests__/contract-governance.test.ts --reporter=dot`
+  passed with 16 files and 357 tests. `pnpm typecheck`,
+  `pnpm lint:contracts`, and `git diff --check` passed.
+
 ### Contract Touch Decision
 
 - Work id: `codex:2026-06-06-non-looma-flow-audit-fixes`.
@@ -393,6 +467,21 @@ coverage.
     now adopts an existing worktree path when it is already checked out to the
     expected task branch, and targeted start no longer treats a recoverable
     `worktree already exists` blocker as an all-terminal project state.
+- [x] Prevent broad imported planning bullets from escaping as one runnable
+  component task. 2026-06-12 Looma + Knit recovery showed
+  `task-import-twwvys` had started as a `PROJECT_STATE.md` "Next Up" bullet
+  (`Finish the Knit primitive replacement wave...`) but deterministic recovery
+  wrapped that broad source note in a generic spec and approval let it become
+  `ready` without a split plan. The fix adds task-size pressure for broad
+  imported/replacement/migration waves, makes task shaping create a missing
+  `sizePlan` before readiness/approval, and proves approval materializes
+  split children (`Audit the remaining replacement scope`, `Implement the
+  first independently verifiable replacement`, `Verify and update the migration
+  record`) instead of dispatching the broad parent. Verification:
+  `pnpm vitest run src/core/__tests__/task-sizing.test.ts
+  src/runtime/__tests__/intake.test.ts
+  src/runtime/__tests__/task-decomposition.test.ts
+  src/runtime/__tests__/task-readiness.test.ts` passed.
   - [x] Fixed the repo-local `log-progress` leak exposed during the
     `ContextMenu` worker run. Tool hydration for task/progress/decision tools
     now routes `TASKS.json`, `PROGRESS.md`, and `DECISIONS.md` through
@@ -8041,11 +8130,14 @@ local 0.7 release-candidate build at `http://localhost:7777/projects/narrative-h
       `runtime:image:build` command now uses a Docker-or-Podman helper, prefers
       healthy Docker, falls back to Podman, disables Docker BuildKit by default
       to avoid the observed Docker Desktop metadata hang, and fails with a
-      bounded timeout instead of wedging forever. Local Docker Desktop still
-      could not pull `node:22-trixie-slim`; `docker info` showed engine proxy
-      settings `http.docker.internal:3128`, while host `curl` reached Docker
-      Hub and GHCR directly. This leaves Docker Desktop registry/proxy health
-      as a machine-local dependency, not a Guildhall stale-image default.
+      bounded timeout instead of wedging forever. A `.dockerignore` now keeps
+      runtime image build context narrow and excludes `.git` sockets/local
+      state. After Docker pulls recovered, `pnpm runtime:image:build` built the
+      runtime image locally with Docker and tagged both 0.10 refs, and `pnpm
+      runtime:image:smoke` selected Docker and reported `guildhall runtime
+      healthy`. GHCR still returned `denied` for the 0.10 runtime image pull,
+      so the remote publication/visibility path remains separate from local
+      Docker runtime viability.
     - Owner-review items: confirm the config-file-only opt-in wording for
       `host-run-allowed`; confirm Docker default preference is the desired
       macOS happy path when both Docker and Podman are healthy.
@@ -10885,3 +10977,224 @@ Verification:
   this change, so it is not counted as proof for this slice.
 
 source: codex:context-menu-child-state-reconcile-2026-06-08
+
+2026-06-11T16:45:42Z - Fixed the recurring installed-app header logo breakage
+at the static asset serving boundary.
+
+Finding:
+- `/icons/genfavicon-64.png` was present in `icons/`, `dist/web/icons/`, the
+  macOS package artifact, and `~/.guildhall/app/current/app/dist/web/icons/`.
+- The live route returned `200 OK` with `content-type: image/png`, but before
+  the fix the first bytes were `ef bf bd 50 4e 47...` instead of the PNG
+  signature `89 50 4e 47...`. The path and install copy were not the root
+  cause; `serveWebAsset` read every static file through `readManagedTextFile`,
+  corrupting binary icons by decoding them as UTF-8.
+
+Repair:
+- Added a regression in `src/runtime/__tests__/serve-dashboard.test.ts` that
+  fetches `/icons/genfavicon-64.png` through `buildServeApp()` and asserts the
+  PNG signature bytes.
+- Changed `serveWebAsset` to use `fsp.readFile` so JS, CSS, source maps, PNGs,
+  ICOs, and manifests are returned as file bytes with the existing content-type
+  and no-cache headers.
+
+Verification:
+- Red phase: `pnpm vitest run src/runtime/__tests__/serve-dashboard.test.ts
+  --reporter=dot` failed with bytes `[239, 191, 189, 80, 78, 71, 13, 10]`.
+- Green phase: the same focused test passed with 2 tests.
+- `pnpm build` passed.
+- `pnpm dev:install` passed and rebuilt the macOS package/install.
+- `guildhall stop && guildhall start` restarted the installed service.
+- `/api/stale-server` reported `stale:false` for pid `45481`.
+- Live route proof: `curl http://127.0.0.1:7777/icons/genfavicon-64.png`
+  returned `200 OK`, `file` identified the response as `PNG image data, 64 x
+  64`, `xxd` showed `89504e470d0a1a0a`, and the served SHA-256 matched
+  `icons/genfavicon-64.png`.
+
+source: codex:static-binary-assets-logo-corruption-2026-06-11
+
+2026-06-11T17:00:00Z - Repaired Looma + Knit Thread/import review
+orientation and completed-import recovery wording.
+
+Finding:
+- Opening Looma + Knit from Overview into Thread selected the setup/import
+  turn logically, but the left Thread list did not expose a durable current
+  marker or reliably scroll the selected item into view.
+- When a selected Thread had only the active setup/import card and no visible
+  chat/composer area, the card inherited transcript bottom-pinning and sat
+  flush near the bottom of the detail pane.
+- The completed workspace import state said `218 proposed tasks ... are
+  missing from Work` while offering `Re-run import` and `Restore 218 draft
+  tasks` without explaining which action preserved the approved import versus
+  rebuilt it from changed source notes.
+
+Repair:
+- Added `aria-current` support to `UtilityPanel` and `CardListItem`, then used
+  it for the selected Thread index row.
+- Thread now scrolls the selected row into view on long Thread lists after the
+  route/data selection settles.
+- Single-card Thread detail states now use explicit single-flow classes so the
+  selected card is centered with vertical padding instead of bottom-pinned by
+  transcript layout.
+- Completed workspace import repair now explains Restore versus Re-read, labels
+  Re-read as `Re-read project notes`, and labels the primary repair action as
+  `Restore N missing drafts`.
+
+Verification:
+- Red phase: focused component tests failed for missing Restore/Re-read
+  guidance, missing selected-row `aria-current`/scroll, and missing
+  single-card layout classes.
+- Green phase: `pnpm vitest run
+  src/web/surfaces/project/__tests__/WorkspaceImportTab.svelte.test.ts
+  src/web/surfaces/project/__tests__/ThreadTab.svelte.test.ts` passed with
+  `116` tests.
+- `pnpm typecheck` passed.
+- `pnpm build` passed.
+- `pnpm dev:install` passed, then the local service was restarted.
+- `/api/stale-server` reported `stale:false` for pid `12775` with
+  `distPath: /Users/matthew/git/oss/guildhall/dist/cli.js`.
+- Live browser proof on
+  `http://127.0.0.1:7777/projects/looma-knit/thread`: the selected row has
+  `aria-current="true"`, the selected row text is `Review existing work`, the
+  Thread list contains 39 rows, and the detail pane has
+  `thread-detail-flow-single` / `thread-list-single`.
+- Live browser proof on
+  `http://127.0.0.1:7777/projects/looma-knit/workspace-import`: the page shows
+  `This project import has already been approved.`, guidance for both Restore
+  and Re-read, and the actions `Re-read project notes`, `Open Work`, and
+  `Restore 218 missing drafts`.
+- `pnpm lint:design` remains blocked by existing design-token baseline debt in
+  shared files such as `Chip.svelte`, `Eyebrow.svelte`, `ProjectView.svelte`,
+  `TaskDrawer.svelte`, and pre-existing `ThreadTab.svelte` rules; this command
+  is not counted as passing proof for this slice.
+
+source: codex:looma-knit-thread-import-orientation-2026-06-11
+
+2026-06-11T17:25:00Z - Repaired Looma + Knit spec-review/import-review
+route collision after live `Open import review` inspection.
+
+Finding:
+- The project shell said `Review 35 waiting specs before starting`, but
+  opening `/projects/looma-knit/thread` could auto-select the setup/import
+  turn. Clicking its generic `Open review` action then landed on Workspace
+  Import, which looked unrelated to the spec-review blocker.
+- The shared start-readiness payload linked spec blockers to plain `/thread`,
+  so surfaces could not orient the Thread tab to the actual waiting spec.
+- Thread could select setup before the later project-readiness payload arrived
+  and then keep that stale automatic selection.
+- The shared primary action label for spec-review blockers still said
+  `Review draft`, blurring spec approval with import/draft review.
+
+Repair:
+- Start-readiness spec blockers now target the first waiting spec chain with
+  `/thread?thread=task%3A...`.
+- The shared project action model routes `spec_review` task actions to their
+  specific Thread chain and labels the start blocker `Review waiting specs`.
+- Thread distinguishes automatic selection from user selection so a late
+  readiness target can replace the initial setup selection, while an intentional
+  row click remains respected.
+- The workspace-import setup action is now labeled `Open import review`.
+
+Verification:
+- `pnpm vitest run
+  src/web/surfaces/project/__tests__/ThreadTab.svelte.test.ts
+  src/runtime/__tests__/project-action-model.test.ts
+  src/web/surfaces/project/__tests__/WorkspaceImportTab.svelte.test.ts` passed
+  with `125` tests.
+- `pnpm vitest run src/runtime/__tests__/serve-settings.test.ts -t "targets
+  the first waiting spec thread"` passed.
+- `pnpm typecheck` passed.
+- `pnpm build` passed.
+- `pnpm dev:install` passed, then the local service was restarted.
+- `/api/stale-server` reported `stale:false` for pid `74919` with
+  `distPath: /Users/matthew/git/oss/guildhall/dist/cli.js`.
+- API proof for `projectId=looma-knit`: `startReadiness.actionHref` and the
+  shared primary action `href` both point to
+  `/thread?thread=task%3Atask-import-1aessks`; the primary action label is
+  `Review waiting specs` and the button label is `Review spec`.
+- Fresh browser proof on
+  `http://localhost:7777/projects/looma-knit/thread`: after the route settles,
+  the selected Thread row has `aria-current="true"` and is `Floating toolbar`,
+  the active dock says the spec draft is saved and coordinator review is next,
+  the `Review spec` link points to the same targeted Thread query, and the old
+  generic `Open review` label is absent.
+
+source: codex:looma-knit-spec-review-routing-2026-06-11
+
+2026-06-11T17:30:00Z - Clarified plural spec blocker copy versus next-spec
+action copy.
+
+Finding:
+- The notification strip said `Review 35 waiting specs before starting.` while
+  its action link said `Review spec`, making the user choose between a batch
+  interpretation and a single-item interpretation.
+- The real behavior is batch status plus one targeted next action: 35 specs
+  block project start, and the link opens the next spec Thread.
+
+Repair:
+- Start readiness now phrases the blocker as status:
+  `35 specs are waiting for review before starting.`
+- Plural spec blockers now label the action `Review next spec`.
+- The shared project action model and Project shell fallback both use the same
+  plural-aware label.
+
+Verification:
+- `pnpm vitest run src/runtime/__tests__/project-action-model.test.ts` passed
+  with `8` tests.
+- `pnpm vitest run src/runtime/__tests__/serve-settings.test.ts -t "targets
+  the first waiting spec thread"` passed.
+- `pnpm vitest run src/web/surfaces/__tests__/ProjectView.svelte.test.ts -t
+  "dedupes shell attention"` passed.
+- `pnpm typecheck` passed.
+- `pnpm build` passed.
+- `pnpm dev:install` passed, then the local service was restarted.
+- `/api/stale-server` reported `stale:false` for pid `85917`.
+- API proof for `projectId=looma-knit`: `startReadiness.message` is
+  `35 specs are waiting for review before starting.`, primary action label is
+  `Review waiting specs`, and button label is `Review next spec`.
+- Browser proof on
+  `http://localhost:7777/projects/looma-knit/workspace-import`: the alert text
+  is `35 specs are waiting for review before starting. Review next spec`; the
+  `Review next spec` link points to
+  `/projects/looma-knit/thread?thread=task%3Atask-import-1aessks`; the old
+  `Review 35 waiting specs before starting.` phrase is absent.
+
+source: codex:looma-knit-spec-blocker-copy-2026-06-11
+
+2026-06-11T17:35:00Z - Corrected Thread single-card centering so it never
+pulls the composer away from the bottom.
+
+Finding:
+- The previous single-card layout fix applied `thread-detail-flow-single`
+  whenever the selected Thread had one history item. For active/docked threads
+  with a footer composer, that centered the dock plus composer as a group.
+- The intended behavior is narrower: center a lone card only when the composer
+  is absent. Whenever the composer exists, it must remain bottom-anchored.
+
+Repair:
+- Added `centerSingleComposerlessCard`, which only applies the single-card
+  centering classes when there is at most one history item and no
+  `footerComposer`.
+- Updated ThreadTab regressions to assert active-card composer states do not
+  receive the centering classes, while a composer-less setup card still does.
+
+Verification:
+- `pnpm vitest run src/web/surfaces/project/__tests__/ThreadTab.svelte.test.ts
+  -t "composer bottom-anchored|centers a single setup card"` passed with `2`
+  tests.
+- `pnpm vitest run
+  src/web/surfaces/project/__tests__/ThreadTab.svelte.test.ts
+  src/runtime/__tests__/project-action-model.test.ts
+  src/web/surfaces/project/__tests__/WorkspaceImportTab.svelte.test.ts` passed
+  with `126` tests.
+- `pnpm typecheck` passed.
+- `pnpm build` passed.
+- `pnpm dev:install` passed, then the local service was restarted.
+- `/api/stale-server` reported `stale:false` for pid `50451`.
+- Browser proof on `http://localhost:7777/projects/looma-knit/thread`: the
+  selected `Floating toolbar` thread has `flowSingle:false`,
+  `listSingle:false`, `hasFooter:true`, `hasComposer:true`,
+  `footerGapToDetailBottom:0`, and `dockGapToFooter:12`, proving the composer
+  is sticky at the bottom with the active card immediately above it.
+
+source: codex:thread-composer-bottom-anchor-2026-06-11

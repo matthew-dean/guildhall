@@ -13,6 +13,7 @@
   import { readableTaskDescription } from '../../lib/task-display.js'
   import { projectDerivedRecommendedChildren } from '../../lib/task-drawer-integrity.js'
   import { taskStagePresentation } from '../../lib/task-presentation.js'
+  import { deliveryProgressBadge, type TaskWorkProgressDisplay } from '../../lib/work-progress-display.js'
   import type { DeliverySpine, PrimitiveSummary, Task } from '../../lib/types.js'
 
   interface Props {
@@ -20,6 +21,7 @@
     tasks?: Task[]
     projectId?: string | null
     deliverySpine?: DeliverySpine | null
+    workProgress?: TaskWorkProgressDisplay | null
     onNavigateTask?: (taskId: string) => void
     onCreateSplitChildren?: () => void
     createSplitBusy?: boolean
@@ -30,6 +32,7 @@
     tasks = [],
     projectId = null,
     deliverySpine = null,
+    workProgress = null,
     onNavigateTask,
     onCreateSplitChildren,
     createSplitBusy = false,
@@ -44,6 +47,8 @@
   const createdChildren = $derived(recommendedChildren.filter((child) => child.createdTaskId))
   const taskById = $derived(new Map([task, ...tasks].filter((candidate): candidate is Task => Boolean(candidate?.id)).map(candidate => [candidate.id, candidate])))
   const statusPresentation = $derived(taskStagePresentation(task, { tasks: [task, ...tasks] }))
+  const deliveryBadge = $derived(deliveryProgressBadge(workProgress))
+  const deliverySteps = $derived(workProgress?.deliverySteps ?? [])
   const containingWorkId = $derived(task.hierarchy?.parentId ?? null)
   const nestedWorkIds = $derived(task.hierarchy?.childIds ?? [])
   const goalEnvelopeId = $derived(task.businessEnvelope?.goalId ?? null)
@@ -127,6 +132,17 @@
     if (status === 'needs_proof' || status === 'proposed') return 'warn'
     if (status === 'deprecated') return 'neutral'
     return 'neutral'
+  }
+
+  function deliveryStatusTone(status: string | undefined): ChipTone {
+    if (status === 'done' || status === 'waived') return 'ok'
+    if (status === 'blocked') return 'warn'
+    if (status === 'active') return 'running'
+    return 'neutral'
+  }
+
+  function deliveryKindLabel(kind: string | undefined): string {
+    return token(kind)
   }
 
   function navigateTask(event: MouseEvent, nextTaskId: string | undefined): void {
@@ -327,6 +343,31 @@
     </Stack>
   </Card>
 
+  {#if deliverySteps.length > 0 || deliveryBadge}
+    <Card title="Delivery steps" tone={deliveryBadge?.tone === 'warn' ? 'warn' : 'default'}>
+      <Stack gap="3">
+        {#if deliveryBadge}
+          <Row wrap gap="2">
+            <Chip label={deliveryBadge.label} tone={deliveryBadge.tone} title={deliveryBadge.title} />
+          </Row>
+        {/if}
+        {#if deliverySteps.length > 0}
+          <div class="delivery-step-list">
+            {#each deliverySteps as step (step.id ?? step.title)}
+              <div class="delivery-step-row">
+                <div>
+                  <strong>{step.title ?? 'Delivery step'}</strong>
+                  <span>{deliveryKindLabel(step.kind)}</span>
+                </div>
+                <Chip label={token(step.status)} tone={deliveryStatusTone(step.status)} />
+              </div>
+            {/each}
+          </div>
+        {/if}
+      </Stack>
+    </Card>
+  {/if}
+
   {#if sizePlan}
     <Card title="Task size">
       <Stack gap="3">
@@ -492,6 +533,33 @@
     display: flex;
     flex-wrap: wrap;
     gap: var(--s-2);
+  }
+
+  .delivery-step-list {
+    display: grid;
+    gap: var(--s-2);
+  }
+
+  .delivery-step-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: var(--s-3);
+    padding: var(--s-2);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    background: var(--surface-muted);
+  }
+
+  .delivery-step-row > div {
+    display: grid;
+    gap: var(--s-1);
+    min-width: 0;
+  }
+
+  .delivery-step-row span {
+    color: var(--text-muted);
+    font-size: var(--fs-xs);
   }
   .primitive-pill {
     display: inline-flex;

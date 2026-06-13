@@ -393,6 +393,7 @@ export function materializeSplitChildren(
       order: index,
       childIds: task.hierarchy?.childIds ?? [],
     }
+    attachInternalDeliveryStep(parent, task)
     existingChildIds.add(task.id)
     return { recommendation, task }
   })
@@ -471,6 +472,48 @@ export const materializeRequiredSplitChildren = materializeSplitChildren
 
 export function isMaterializableSplitAction(action: string | undefined): boolean {
   return action === 'split_required' || action === 'split_recommended'
+}
+
+function attachInternalDeliveryStep(parent: TaskRecord, child: TaskRecord): void {
+  if (child.workKind !== 'test' && child.workKind !== 'verification') return
+  child.workVisibility = {
+    ...(child.workVisibility ?? {}),
+    kind: 'internal_step',
+    countInProjectTotals: false,
+  }
+  const stepId = `task:${child.id}`
+  const hasStep = parent.deliverySteps?.some(step => step.id === stepId || step.sourceTaskId === child.id)
+  if (hasStep) return
+  parent.deliverySteps = [
+    ...(parent.deliverySteps ?? []),
+    {
+      id: stepId,
+      title: child.title,
+      kind: 'verify',
+      status: deliveryStepStatusForTask(child.status),
+      required: true,
+      blocksCompletion: true,
+      sourceTaskId: child.id,
+    },
+  ]
+}
+
+function deliveryStepStatusForTask(status: string | undefined): 'todo' | 'active' | 'blocked' | 'done' | 'waived' {
+  switch (status) {
+    case 'done':
+    case 'pending_pr':
+      return 'done'
+    case 'blocked':
+      return 'blocked'
+    case 'in_progress':
+    case 'review':
+    case 'gate_check':
+      return 'active'
+    case 'shelved':
+      return 'waived'
+    default:
+      return 'todo'
+  }
 }
 
 function createSplitChildTask(input: {

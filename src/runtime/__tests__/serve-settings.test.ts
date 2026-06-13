@@ -2941,6 +2941,44 @@ describe('GET /api/project/inbox — blockers', () => {
 })
 
 describe('GET /api/project — bootstrap status', () => {
+  it('targets the first waiting spec thread when spec review blocks start', async () => {
+    const migrationApp = buildServeApp({ projectPath: tmpDir })
+    await applyStorageBoundaryMigration(migrationApp.app)
+    await writeSystemTasks({
+      tasks: [
+        {
+          id: 'task-spec-a',
+          title: 'Approve first spec',
+          status: 'spec_review',
+          spec: 'Draft spec',
+          createdAt: '2026-06-11T15:00:00.000Z',
+          updatedAt: '2026-06-11T15:00:00.000Z',
+        },
+        {
+          id: 'task-spec-b',
+          title: 'Approve second spec',
+          status: 'spec_review',
+          spec: 'Draft spec',
+          createdAt: '2026-06-11T15:01:00.000Z',
+          updatedAt: '2026-06-11T15:01:00.000Z',
+        },
+      ],
+    })
+    const { app } = buildServeApp({ projectPath: tmpDir })
+
+    const res = await app.fetch(new Request(scoped('/api/project')))
+    expect(res.status).toBe(200)
+    const body = (await res.json()) as {
+      startReadiness?: { canStart?: boolean; actionHref?: string; message?: string }
+    }
+
+    expect(body.startReadiness).toMatchObject({
+      canStart: false,
+      message: '2 specs are waiting for review before starting.',
+      actionHref: '/thread?thread=task%3Atask-spec-a',
+    })
+  })
+
   it('includes the last bootstrap run status so the shell can explain async start failures', async () => {
     const bootstrapPath = path.join(getProjectLocalHistoryDir(tmpDir), 'bootstrap.json')
     await fs.writeFile(

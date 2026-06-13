@@ -179,6 +179,12 @@
   }
 
   function itemDigest(item: InboxItem): string | null {
+    if (item.deliveryStepTitle || item.containingWorkTitle) {
+      return [
+        'Delivery step',
+        item.containingWorkTitle,
+      ].filter(Boolean).join(' · ')
+    }
     if (item.kind === 'lever_questions') {
       return 'Safe defaults are active. Review them only if you want to tune autonomy, recovery, or review strictness.'
     }

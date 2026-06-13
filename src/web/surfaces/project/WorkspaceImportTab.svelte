@@ -920,8 +920,16 @@
         {#if completedMissingTaskCount > 0}
           <p class="learned-note">
             {completedMissingTaskCount} proposed task{completedMissingTaskCount === 1 ? '' : 's'} from this import
-            {completedMissingTaskCount === 1 ? ' is' : ' are'} missing from Work. Restore the import to add only those missing drafts.
+            {completedMissingTaskCount === 1 ? ' is' : ' are'} missing from Work.
           </p>
+          <div class="repair-guidance" aria-label="Import repair guidance">
+            <p>
+              Use Restore to add the missing drafts from the approved import. It keeps the saved review and only recreates drafts that are not in Work.
+            </p>
+            <p>
+              Use Re-read only if the project notes changed or this import looks stale. That rebuilds the import from source notes before you decide what to keep.
+            </p>
+          </div>
         {:else if completedParsedTaskCount > 0}
           <p class="learned-note">
             All proposed tasks from this completed import already exist in Work.
@@ -930,14 +938,14 @@
         <Row justify="end" gap="3" wrap>
           <Button variant="agent" onclick={rerun} disabled={busy !== null}>
             <Icon name="sparkles" size={14} />
-            {busy === 'rerun' ? 'Re-reading…' : 'Re-run import'}
+            {busy === 'rerun' ? 'Re-reading...' : 'Re-read project notes'}
           </Button>
           <Button variant="secondary" onclick={() => nav(projectActionHref('/work'))}>
             Open Work
           </Button>
           {#if completedMissingTaskCount > 0}
             <Button variant="primary" onclick={restoreCompletedImportDrafts} disabled={busy !== null}>
-              {busy === 'approve' ? 'Restoring…' : `Restore ${completedMissingTaskCount} draft task${completedMissingTaskCount === 1 ? '' : 's'}`}
+              {busy === 'approve' ? 'Restoring...' : `Restore ${completedMissingTaskCount} missing draft${completedMissingTaskCount === 1 ? '' : 's'}`}
             </Button>
           {:else}
             <Button variant="primary" onclick={() => nav(projectActionHref('/thread'))}>
@@ -1795,6 +1803,20 @@
     margin: var(--gh-space-2) 0 0;
     color: var(--accent-2);
     font-size: var(--gh-type-size-meta);
+  }
+  .repair-guidance {
+    display: grid;
+    gap: var(--gh-space-2);
+    padding: var(--gh-space-3);
+    border: 1px solid color-mix(in srgb, var(--accent) 18%, var(--border));
+    border-radius: var(--gh-radius-1);
+    background: color-mix(in srgb, var(--accent) 8%, transparent);
+  }
+  .repair-guidance p {
+    margin: 0;
+    color: var(--text);
+    font-size: var(--gh-type-size-body);
+    line-height: var(--gh-type-line-height-body);
   }
   .source-summary {
     list-style: none;

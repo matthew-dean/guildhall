@@ -366,7 +366,7 @@ describe('WorkspaceImportTab', () => {
     expect(screen.queryByText(/Found planning notes/)).toBeNull()
     expect(screen.getByText('2 proposed tasks')).toBeTruthy()
 
-    await userEvent.click(screen.getByRole('button', { name: /restore 2 draft tasks/i }))
+    await userEvent.click(screen.getByRole('button', { name: /restore 2 missing drafts/i }))
 
     await waitFor(() => {
       const repairCall = calls.find(call => call.url.startsWith('/api/project/workspace-import/approve'))
@@ -374,6 +374,34 @@ describe('WorkspaceImportTab', () => {
       expect(repairCall?.body).toEqual({ projectId: 'looma-knit' })
     })
     await screen.findByText(/Created 2 draft tasks/)
+  })
+
+  it('explains restore versus re-run when completed import drafts are missing', async () => {
+    const completedDraft = structuredClone(detectedDraft)
+    completedDraft.taskStatus = 'done'
+    completedDraft.parsed = {
+      goals: [],
+      tasks: [
+        {
+          id: 'task-auth-complete',
+          title: 'Complete authentication flow',
+          description: 'Finish registration, login, profile management, and email confirmation.',
+          domain: 'auth',
+          priority: 'high',
+          references: ['docs/brief.md'],
+        },
+      ],
+      milestones: [],
+    }
+    installFetchFakes(completedDraft)
+
+    render(WorkspaceImportTab)
+
+    await screen.findByText('This project import has already been approved.')
+    expect(screen.getByText(/Use Restore to add the missing drafts from the approved import/)).toBeTruthy()
+    expect(screen.getByText(/Use Re-read only if the project notes changed or this import looks stale/)).toBeTruthy()
+    expect(screen.getByRole('button', { name: /restore 1 missing draft/i })).toBeTruthy()
+    expect(screen.getByRole('button', { name: /re-read project notes/i })).toBeTruthy()
   })
 
   it('does not offer restore when completed import tasks already exist in Work', async () => {

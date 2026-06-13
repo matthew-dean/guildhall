@@ -13,6 +13,7 @@
     railStrength?: RailStrength
     role?: string
     ariaLabel?: string
+    ariaCurrent?: 'page' | 'step' | 'location' | 'date' | 'time' | 'true' | 'false' | null
     interactive?: boolean
     selected?: boolean
     dense?: boolean
@@ -31,6 +32,7 @@
     railStrength = 'subtle',
     role,
     ariaLabel,
+    ariaCurrent = null,
     interactive = false,
     selected = false,
     dense = false,
@@ -61,6 +63,7 @@
   ].filter(Boolean).join(' ')}
   {role}
   aria-label={ariaLabel}
+  aria-current={ariaCurrent}
   {...(as === 'button' ? { type, disabled } : {})}
   {onclick}
   {onkeydown}

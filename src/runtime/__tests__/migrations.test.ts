@@ -164,6 +164,61 @@ describe('applyProjectMigrations', () => {
     expect(ledger.records.some(record => record.id === '0.8.0/project-state-layout')).toBe(true)
   })
 
+  it('normalizes verification child tasks into explicit delivery-step metadata', async () => {
+    const tasksPath = getProjectSystemStatePath(projectRoot, 'TASKS.json')
+    await fs.mkdir(path.dirname(tasksPath), { recursive: true })
+    await fs.writeFile(tasksPath, JSON.stringify({
+      version: 1,
+      lastUpdated: '2026-06-12T00:00:00.000Z',
+      tasks: [
+        {
+          id: 'task-import-review',
+          title: 'Import review flow',
+          description: 'Review imported project material.',
+          domain: 'project',
+          projectPath: projectRoot,
+          status: 'ready',
+          priority: 'normal',
+          hierarchy: { childIds: ['task-runtime-proof'] },
+        },
+        {
+          id: 'task-runtime-proof',
+          title: 'Runtime proof',
+          description: 'Prove the import review flow.',
+          domain: 'project',
+          projectPath: projectRoot,
+          status: 'blocked',
+          priority: 'normal',
+          workKind: 'verification',
+          hierarchy: { parentId: 'task-import-review', order: 0 },
+        },
+      ],
+    }, null, 2), 'utf8')
+
+    const before = await getProjectMigrationStatus({ projectRoot, only: ['0.10.0/task-delivery-steps'] })
+    expect(before.pending.map(item => item.id)).toContain('0.10.0/task-delivery-steps')
+
+    const result = await applyProjectMigrations({
+      projectRoot,
+      only: ['0.10.0/task-delivery-steps'],
+    })
+
+    expect(result.applied.map(item => item.id)).toContain('0.10.0/task-delivery-steps')
+    const updated = JSON.parse(await fs.readFile(tasksPath, 'utf8')) as { tasks: Array<Record<string, any>> }
+    const parent = updated.tasks.find(task => task.id === 'task-import-review')
+    const child = updated.tasks.find(task => task.id === 'task-runtime-proof')
+    expect(child?.workVisibility).toMatchObject({ kind: 'internal_step', countInProjectTotals: false })
+    expect(parent?.deliverySteps).toEqual([
+      expect.objectContaining({
+        id: 'task:task-runtime-proof',
+        title: 'Runtime proof',
+        kind: 'verify',
+        status: 'blocked',
+        sourceTaskId: 'task-runtime-proof',
+      }),
+    ])
+  })
+
   it('applies required merge_policy conversion into landing_strategy', async () => {
     const settingsPath = path.join(projectRoot, '.guildhall', 'agent-settings.yaml')
     await fs.mkdir(path.dirname(settingsPath), { recursive: true })

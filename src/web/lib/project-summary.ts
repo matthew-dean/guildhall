@@ -349,13 +349,14 @@ export function summarizeProjectCard(
   defaultProviderStatus?: ProviderStatus | null,
 ): ProjectCardSummary {
   const projectStatusLoading = Boolean(project.projectStatusLoading)
+  const visibleWorkCounts = project.workProgress?.counts
   const counts = {
-    total: project.taskCounts?.total ?? 0,
-    active: project.taskCounts?.active ?? 0,
+    total: visibleWorkCounts?.visibleTotal ?? project.taskCounts?.total ?? 0,
+    active: visibleWorkCounts?.visibleActive ?? project.taskCounts?.active ?? 0,
     draftReview: project.taskCounts?.draftReview ?? 0,
-    blocked: project.taskCounts?.blocked ?? 0,
-    done: project.taskCounts?.done ?? 0,
-    shelved: project.taskCounts?.shelved ?? 0,
+    blocked: visibleWorkCounts?.visibleBlocked ?? project.taskCounts?.blocked ?? 0,
+    done: visibleWorkCounts?.visibleDone ?? project.taskCounts?.done ?? 0,
+    shelved: visibleWorkCounts?.visibleShelved ?? project.taskCounts?.shelved ?? 0,
   }
   const running = project.run?.status === 'running'
   const initializationNeeded = Boolean(project.initializationNeeded)
@@ -493,6 +494,7 @@ function projectSummarySignature(
     summary: project.summary,
     tags: project.tags,
     taskCounts: project.taskCounts,
+    workProgress: project.workProgress,
     taskActivity: project.taskActivity,
     highlights: project.highlights,
     run: project.run,

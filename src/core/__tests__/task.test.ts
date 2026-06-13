@@ -155,6 +155,41 @@ describe('Task', () => {
     })
     expect(result.reviewRisk?.artifactPolicy).toBe('required_before_review')
   })
+
+  it('preserves logical work visibility and semantic delivery steps', () => {
+    const result = Task.parse({
+      ...validTask,
+      workVisibility: {
+        kind: 'supporting',
+        label: 'Planning support',
+        countInProjectTotals: true,
+      },
+      deliverySteps: [
+        {
+          id: 'runtime-proof',
+          title: 'Runtime proof',
+          kind: 'verify',
+          status: 'blocked',
+          required: true,
+          blocksCompletion: true,
+          sourceTaskId: 'task-runtime-proof',
+          evidenceChannel: 'simulator_snapshot',
+          toolLabel: 'local simulator',
+        },
+      ],
+    })
+
+    expect(result.workVisibility).toMatchObject({
+      kind: 'supporting',
+      countInProjectTotals: true,
+    })
+    expect(result.deliverySteps?.[0]).toMatchObject({
+      kind: 'verify',
+      status: 'blocked',
+      evidenceChannel: 'simulator_snapshot',
+      toolLabel: 'local simulator',
+    })
+  })
 })
 
 describe('AcceptanceCriteria', () => {

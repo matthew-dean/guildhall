@@ -249,6 +249,66 @@ describe('TaskDrawer', () => {
     expect(screen.getByText(/visual-evidence/)).toBeInTheDocument()
   })
 
+  it('shows delivery-step progress in the drawer header from shared work progress', async () => {
+    const payload = drawerPayload({
+      threadTurns: [],
+      workProgress: {
+        counts: {
+          visibleTotal: 1,
+          visibleActive: 1,
+          visibleBlocked: 0,
+          visibleDone: 0,
+          visibleShelved: 0,
+          deliveryTotal: 1,
+          deliveryRequired: 1,
+          deliveryDone: 0,
+          deliveryBlocked: 1,
+        },
+        byTaskId: {
+          'task-link-editor': {
+            id: 'task-link-editor',
+            title: 'Knit: add link editor controls',
+            status: 'in_progress',
+            visibility: { kind: 'primary', countInProjectTotals: true },
+            deliverySteps: [{
+              id: 'runtime-proof',
+              title: 'Runtime proof for link editor controls',
+              kind: 'verify',
+              status: 'blocked',
+              required: true,
+              blocksCompletion: true,
+            }],
+            rollup: {
+              primaryState: 'blocked',
+              visibleChildCount: 0,
+              visibleChildDoneCount: 0,
+              internalStepCount: 1,
+              requiredStepCount: 1,
+              doneStepCount: 0,
+              blockedStepCount: 1,
+            },
+          },
+        },
+      },
+    })
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input)
+      if (url.startsWith('/api/project/task/task-link-editor')) return json(payload)
+      if (url.startsWith('/api/project')) return json(projectDetail())
+      return json({})
+    })
+    vi.stubGlobal('fetch', fetchMock)
+
+    const { container } = render(TaskDrawer, {
+      taskId: 'task-link-editor',
+      projectId: 'looma-knit',
+      onClose: vi.fn(),
+    })
+
+    await screen.findByText('Knit: add link editor controls')
+    expect(container.querySelector('.gh-drawer-head')?.textContent).toContain('1 delivery step blocked')
+  })
+
   it('makes split-required sizing visible as recommendations that are not child tasks yet', async () => {
     const payload = drawerPayload({
       threadTurns: [],
@@ -475,6 +535,69 @@ describe('TaskDrawer', () => {
     expect(fetchMock.mock.calls.some(([input]) =>
       String(input).includes('/api/project/start?projectId=looma-knit'),
     )).toBe(false)
+  })
+
+  it('keeps the scoped work-item action in the footer for ready tasks with harmless history', async () => {
+    openDrawerOn('overview')
+    const payload = drawerPayload({
+      task: {
+        ...drawerPayload().task,
+        status: 'ready',
+        openQuestions: [],
+      },
+      threadTurns: [
+        {
+          id: 'request:task-link-editor:reframe',
+          kind: 'history_note',
+          at: now,
+          taskId: 'task-link-editor',
+          taskTitle: 'Knit: add link editor controls',
+          summary: 'Owner recovery pass reframed this task from current repo state.',
+        },
+        {
+          id: 'inflight:task-link-editor',
+          kind: 'inflight',
+          at: now,
+          persona: 'worker',
+          status: 'active',
+          phase: 'implementation',
+          taskId: 'task-link-editor',
+          taskTitle: 'Knit: add link editor controls',
+          taskStatus: 'ready',
+          importedDraft: false,
+          liveAgent: false,
+          summary: 'Approved and queued for work.',
+        },
+      ],
+    })
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input)
+      if (url.startsWith('/api/project/task/task-link-editor/start')) {
+        expect(init?.method).toBe('POST')
+        expect(JSON.parse(String(init.body))).toMatchObject({
+          mode: 'one_task',
+          scope: 'work_item',
+        })
+        return json({ status: 'running', mode: 'one_task', scope: { type: 'work_item', taskId: 'task-link-editor' } })
+      }
+      if (url.startsWith('/api/project/task/task-link-editor')) return json(payload)
+      if (url.startsWith('/api/project')) return json(projectDetail())
+      return json({})
+    })
+    vi.stubGlobal('fetch', fetchMock)
+
+    render(TaskDrawer, {
+      taskId: 'task-link-editor',
+      projectId: 'looma-knit',
+      onClose: vi.fn(),
+    })
+
+    await screen.findByText('Knit: add link editor controls')
+    await userEvent.click(screen.getByRole('button', { name: /resume only this work item/i }))
+
+    expect(fetchMock.mock.calls.some(([input]) =>
+      String(input).includes('/api/project/task/task-link-editor/start?projectId=looma-knit'),
+    )).toBe(true)
   })
 
   it('uses the drawer run snapshot so stale project state does not show already queued', async () => {
@@ -1230,6 +1353,7 @@ describe('TaskDrawer', () => {
   it('runs and manages the task from drawer controls without losing project scope', async () => {
     const payload = drawerPayload({ threadTurns: [] })
     payload.task.status = 'spec_review'
+    payload.task.openQuestions = []
     const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
       const url = String(input)
       if (url.startsWith('/api/project/task/task-link-editor/hold')) {

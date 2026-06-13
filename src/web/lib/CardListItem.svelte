@@ -13,6 +13,7 @@
     railTone?: RailTone | null
     railStrength?: RailStrength
     ariaLabel?: string
+    ariaCurrent?: 'page' | 'step' | 'location' | 'date' | 'time' | 'true' | 'false' | null
     interactive?: boolean
     dense?: boolean
     selected?: boolean
@@ -30,6 +31,7 @@
     railTone = null,
     railStrength = 'subtle',
     ariaLabel,
+    ariaCurrent = null,
     interactive = as === 'button',
     dense = false,
     selected = false,
@@ -48,6 +50,7 @@
   {railTone}
   {railStrength}
   {ariaLabel}
+  {ariaCurrent}
   {interactive}
   {dense}
   {selected}

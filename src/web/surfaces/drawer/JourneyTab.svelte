@@ -12,11 +12,13 @@
   import Modal from '../../lib/Modal.svelte'
   import { projectFetch } from '../../lib/project-routes.js'
   import { readableTaskDescription } from '../../lib/task-display.js'
+  import type { TaskWorkProgressDisplay } from '../../lib/work-progress-display.js'
   import type { ExpectedEvidence, LaunchStep, Task, VerificationRecord } from '../../lib/types.js'
 
   interface Props {
     task: Task
     projectId?: string | null
+    workProgress?: TaskWorkProgressDisplay | null
   }
 
   interface FilePreview {
@@ -27,7 +29,7 @@
     truncated?: boolean
   }
 
-  let { task, projectId = null }: Props = $props()
+  let { task, projectId = null, workProgress = null }: Props = $props()
   let selectedFile = $state<string | null>(null)
   let filePreview = $state<FilePreview | null>(null)
   let fileBusy = $state(false)
@@ -64,6 +66,10 @@
   })
   const reviewLaneSummary = $derived((reviewPlan?.selectedLanes ?? []).slice(0, 4).map(friendlyToken).join(', '))
   const hiddenLaneCount = $derived(Math.max(0, (reviewPlan?.selectedLanes?.length ?? 0) - 4))
+  const deliverySteps = $derived(workProgress?.deliverySteps ?? [])
+  const requiredDeliveryCount = $derived(workProgress?.rollup?.requiredStepCount ?? deliverySteps.filter(step => step.required).length)
+  const doneDeliveryCount = $derived(workProgress?.rollup?.doneStepCount ?? deliverySteps.filter(step => step.status === 'done').length)
+  const blockedDeliverySteps = $derived(deliverySteps.filter(step => step.status === 'blocked'))
 
   function unique(values: readonly string[]): string[] {
     return [...new Set(values.map(value => value.trim()).filter(Boolean))]
@@ -396,6 +402,22 @@
                   </li>
                 {/each}
               </ul>
+            </section>
+          {/if}
+          {#if deliverySteps.length > 0}
+            <section class="detail">
+              <h4>Delivery completed</h4>
+              <p class="muted">{doneDeliveryCount} of {requiredDeliveryCount || deliverySteps.length} required delivery steps complete.</p>
+              {#if blockedDeliverySteps.length > 0}
+                <ul class="proof-list">
+                  {#each blockedDeliverySteps as step (step.id ?? step.title)}
+                    <li>
+                      <Chip label="Blocked" tone="warn" />
+                      <span>{step.title ?? 'Blocked delivery step'}</span>
+                    </li>
+                  {/each}
+                </ul>
+              {/if}
             </section>
           {/if}
         </div>

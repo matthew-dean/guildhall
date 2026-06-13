@@ -1081,7 +1081,7 @@
   function startReadinessActionLabel(message: string | undefined): string {
     if (/question|answer/i.test(message ?? '')) return 'Answer question'
     if (/draft/i.test(message ?? '')) return 'Review drafts'
-    if (/spec/i.test(message ?? '')) return 'Review spec'
+    if (/spec/i.test(message ?? '')) return /\b\d+\s+specs\b/i.test(message ?? '') ? 'Review next spec' : 'Review spec'
     if (/brief/i.test(message ?? '')) return 'Review brief'
     if (/recover|blocked|escalation/i.test(message ?? '')) return 'Review recovery'
     return 'Open next action'

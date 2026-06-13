@@ -381,4 +381,38 @@ describe('task sizing', () => {
     expect(plan.factors.map((factor) => factor.id)).not.toContain('migration_or_release')
     expect(plan.recommendedChildren).toEqual([])
   })
+
+  it('treats broad imported replacement waves as split-required even when source text is short', () => {
+    const plan = buildTaskSizePlan({
+      task: {
+        id: 'task-import-twwvys',
+        title: 'Finish the Knit primitive replacement wave beyond the already-migrated toast, dialog base, toolbar button, and tree menu',
+        description: 'looma/PROJECT_STATE.md: 1. Finish the Knit primitive replacement wave beyond the already-migrated toast, dialog base, toolbar button, and tree menus.',
+        priority: 'normal',
+        spec: [
+          '## Summary',
+          'Build Finish the Knit primitive replacement wave beyond the already-migrated toast, dialog base, toolbar button, and tree menu from the current project evidence.',
+          '## Acceptance Criteria',
+          '1. Given the existing project conventions and source evidence, when Finish the Knit primitive replacement wave is implemented, then the feature appears in the appropriate repo surface.',
+          '## Completion Boundary',
+          'Product outcome: A user can use Finish the Knit primitive replacement wave in the intended project surface.',
+          'What Guildhall can complete in code: Implement the source intent from the imported planning note.',
+          'External dependencies: None.',
+          'Owner-only setup: None.',
+          'Verification environment: Local repo checks and browser proof.',
+          'What counts as done: The source intent is implemented.',
+          'What must be split or blocked: Nothing to split.',
+        ].join('\n'),
+      },
+      createdAt: '2026-06-12T21:00:00.000Z',
+    })
+
+    expect(plan.action).toBe('split_required')
+    expect(plan.factors.map((factor) => factor.id)).toContain('broad_imported_program')
+    expect(plan.recommendedChildren.map((child) => child.title)).toEqual([
+      'Audit the remaining replacement scope',
+      'Implement the first independently verifiable replacement',
+      'Verify and update the migration record',
+    ])
+  })
 })

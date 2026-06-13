@@ -120,6 +120,8 @@
     }
   })
 
+  const workProgressCounts = $derived(detail.workProgress?.counts ?? null)
+
   const segments = $derived<WorkMixSegment[]>([
     { key: 'working', label: running ? 'Moving now' : 'Paused work', count: counts.working, tone: 'working' },
     { key: 'draft', label: 'Being shaped', count: counts.shaping + counts.approval, tone: 'draft' },
@@ -251,14 +253,23 @@
   })
 
   const knowledgeCards = $derived.by(() => {
-    const activeCount = counts.working + counts.ready + counts.approval + counts.shaping
+    const activeCount = workProgressCounts
+      ? workProgressCounts.visibleActive
+      : counts.working + counts.ready + counts.approval + counts.shaping
+    const blockedCount = workProgressCounts?.visibleBlocked ?? counts.blocked
+    const doneCount = workProgressCounts?.visibleDone ?? counts.done
+    const totalCount = workProgressCounts?.visibleTotal ?? counts.total
+    const deliveryDetail = workProgressCounts && workProgressCounts.deliveryRequired > 0
+      ? `${workProgressCounts.deliveryDone} / ${workProgressCounts.deliveryRequired} delivery steps done${workProgressCounts.deliveryBlocked ? ` · ${workProgressCounts.deliveryBlocked} blocked` : ''}.`
+      : null
     return [
       {
         label: 'Work',
-        title: `${counts.total} total ${counts.total === 1 ? 'task' : 'tasks'}`,
-        detail: `${activeCount} active or shaping · ${counts.done} completed · ${counts.blocked} blocked.`,
+        title: `${totalCount} total ${totalCount === 1 ? 'work item' : 'work items'}`,
+        detail: `${activeCount} active or shaping · ${doneCount} completed · ${blockedCount} blocked.`,
+        secondaryDetail: deliveryDetail,
         href: currentProjectHref('/work', activeProjectId),
-        tone: counts.blocked > 0 ? 'warn' as Tone : activeCount > 0 ? 'accent' as Tone : 'neutral' as Tone,
+        tone: blockedCount > 0 || (workProgressCounts?.deliveryBlocked ?? 0) > 0 ? 'warn' as Tone : activeCount > 0 ? 'accent' as Tone : 'neutral' as Tone,
       },
       {
         label: 'Runtime',
@@ -824,6 +835,9 @@
         <Chip label={card.label} tone={card.tone === 'danger' ? 'danger' : card.tone === 'warn' ? 'warn' : card.tone === 'ok' || card.tone === 'running' ? 'ok' : card.tone === 'accent' ? 'accent' : 'neutral'} />
         <strong>{card.title}</strong>
         <p>{card.detail}</p>
+        {#if 'secondaryDetail' in card && card.secondaryDetail}
+          <p>{card.secondaryDetail}</p>
+        {/if}
       </CardListItem>
     {/each}
   </section>

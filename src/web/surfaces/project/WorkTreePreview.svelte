@@ -9,11 +9,12 @@
   import { isCompleteForWorkerHandoff, needsWorkerHandoffSpecCleanup } from '../../lib/task-state.js'
   import { taskStagePresentation, type TaskPresentationTone } from '../../lib/task-presentation.js'
   import { buildWorkHierarchy } from '../../lib/work-hierarchy.js'
-  import type { Task } from '../../lib/types.js'
+  import type { ProjectDetail, Task } from '../../lib/types.js'
 
   interface Props {
     tasks: Task[]
     filter?: Filter
+    workProgress?: ProjectDetail['workProgress']
   }
 
   type Filter = 'queued' | 'planning' | 'open' | 'all' | 'blocked' | 'needs-you'
@@ -42,11 +43,12 @@
     emptyText?: string
   }
 
-  let { tasks, filter = 'open' }: Props = $props()
+  let { tasks, filter = 'open', workProgress = undefined }: Props = $props()
 
-  const hierarchy = $derived(buildWorkHierarchy(tasks))
-  const tasksById = $derived(new Map(tasks.map(task => [task.id, task])))
-  const roots = $derived(tasks.filter(task => !hierarchy.byId.get(task.id)?.parentId))
+  const visibleTasks = $derived(tasks.filter(isVisibleLogicalTask))
+  const hierarchy = $derived(buildWorkHierarchy(visibleTasks))
+  const tasksById = $derived(new Map(visibleTasks.map(task => [task.id, task])))
+  const roots = $derived(visibleTasks.filter(task => !hierarchy.byId.get(task.id)?.parentId))
 
   let selectedPath = $state<string[]>([])
   const selectedTask = $derived.by(() => {
@@ -81,13 +83,15 @@
       const childColumn = childColumnFor(selectedTask, selectedPath.length)
       result.push(childColumn ?? {
         id: `empty:${selectedTask.id}`,
-        title: 'Child work',
-        subtitle: 'No child work',
+        title: 'Contained work',
+        subtitle: 'No contained work',
         depth: selectedPath.length,
         items: [],
-        emptyText: needsBreakdownReview(selectedTask)
+        emptyText: deliveryStepsFor(selectedTask).length > 0
+          ? 'This item has tracked delivery steps and no contained work.'
+          : needsBreakdownReview(selectedTask)
           ? 'No child tasks or decomposition proposal exists yet. Review a breakdown before treating this as runnable work.'
-          : 'This item has no child tasks yet.',
+          : 'This item has no contained work yet.',
       })
     }
     return result
@@ -127,8 +131,8 @@
     if (children.length > 0) {
       return {
         id: `children:${parent.id}`,
-        title: 'Child work',
-        subtitle: `${children.length} child ${children.length === 1 ? 'item' : 'items'}`,
+        title: 'Contained work',
+        subtitle: `${children.length} contained ${children.length === 1 ? 'item' : 'items'}`,
         depth,
         items: children.map(taskColumnItem),
       }
@@ -138,6 +142,15 @@
 
   function isTask(value: Task | undefined): value is Task {
     return Boolean(value)
+  }
+
+  function isVisibleLogicalTask(task: Task): boolean {
+    const visibility = workProgress?.byTaskId?.[task.id]?.visibility ?? task.workVisibility
+    return visibility?.kind !== 'internal_step' && visibility?.kind !== 'hidden'
+  }
+
+  function deliveryStepsFor(task: Task): NonNullable<ProjectDetail['workProgress']>['byTaskId'][string]['deliverySteps'] {
+    return workProgress?.byTaskId?.[task.id]?.deliverySteps ?? []
   }
 
   function descendantsFor(task: Task): Task[] {
@@ -153,6 +166,16 @@
   }
 
   function rollupFor(task: Task) {
+    const progress = workProgress?.byTaskId?.[task.id]?.rollup
+    if (progress) {
+      return {
+        total: Math.max(progress.visibleChildCount, progress.requiredStepCount, 1),
+        done: progress.visibleChildDoneCount + progress.doneStepCount,
+        blocked: progress.blockedStepCount,
+        needsYou: 0,
+        runnable: progress.primaryState === 'active' ? 1 : 0,
+      }
+    }
     const descendants = descendantsFor(task)
     const subject = descendants.length > 0 ? descendants : [task]
     return {
@@ -214,6 +237,13 @@
   }
 
   function primaryText(task: Task): string {
+    const steps = deliveryStepsFor(task)
+    if (steps.length > 0) {
+      const required = steps.filter(step => step.required).length || steps.length
+      const done = steps.filter(step => step.status === 'done').length
+      const blocked = steps.filter(step => step.status === 'blocked').length
+      return `${done} / ${required} delivery steps done${blocked ? ` · ${blocked} blocked` : ''}`
+    }
     if (needsBreakdownReview(task)) {
       const count = task.acceptanceCriteria?.length ?? 0
       return `${count} requirements; no child tasks or decomposition proposal yet.`
@@ -225,6 +255,8 @@
   }
 
   function proofText(task: Task): string {
+    const blockedStep = deliveryStepsFor(task).find(step => step.status === 'blocked')
+    if (blockedStep) return blockedStep.title
     if (task.proofPaths?.[0]?.title) return task.proofPaths[0].title
     if (task.definitionOfDone?.evidenceRequired?.[0]) return task.definitionOfDone.evidenceRequired[0]
     return 'Proof path not attached yet'
@@ -278,6 +310,14 @@
     if (task) nav(currentTaskHref(task.id), { backgroundPath: path.value })
   }
 
+  function stepStatusLabel(status: string): string {
+    if (status === 'done') return 'Done'
+    if (status === 'blocked') return 'Blocked'
+    if (status === 'active') return 'Active'
+    if (status === 'waived') return 'Waived'
+    return 'Todo'
+  }
+
 </script>
 
 <section class="tree-workbench" aria-label="Deliverable tree workbench">
@@ -324,6 +364,7 @@
       <p class="panel-label">Details</p>
       {#if packetSelection?.kind === 'task' && selectedTask}
         {@const rollup = rollupFor(selectedTask)}
+        {@const deliverySteps = deliveryStepsFor(selectedTask)}
         <p class="details-context">{childTasksFor(selectedTask).length ? 'Containing work' : 'Selected item'}</p>
         <Chip label={taskStatusLabel(selectedTask)} tone={taskStatusTone(selectedTask)} />
         <dl>
@@ -333,6 +374,19 @@
           <dd>{proofText(selectedTask)}</dd>
           <dt>Rollup</dt>
           <dd>{rollup.done} / {rollup.total} done · {rollup.blocked} blocked · {rollup.needsYou} needs you</dd>
+          {#if deliverySteps.length > 0}
+            <dt>Delivery checklist</dt>
+            <dd>
+              <ul class="delivery-step-list">
+                {#each deliverySteps as step (step.id)}
+                  <li>
+                    <span>{step.title}</span>
+                    <Chip label={stepStatusLabel(step.status)} tone={step.status === 'blocked' ? 'warn' : step.status === 'done' ? 'ok' : step.status === 'active' ? 'running' : 'neutral'} />
+                  </li>
+                {/each}
+              </ul>
+            </dd>
+          {/if}
         </dl>
         <Button variant="primary" size="sm" onclick={openSelected}>Open drawer</Button>
       {:else}
@@ -503,6 +557,23 @@
     color: var(--text);
     font-size: var(--gh-type-size-meta);
     line-height: var(--gh-type-line-height-body);
+  }
+  .delivery-step-list {
+    display: grid;
+    gap: var(--s-1);
+    margin: 0;
+    padding: 0;
+    list-style: none;
+  }
+  .delivery-step-list li {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    gap: var(--s-2);
+    align-items: center;
+  }
+  .delivery-step-list span {
+    min-width: 0;
+    overflow-wrap: anywhere;
   }
 
   @media (max-width: 980px) {

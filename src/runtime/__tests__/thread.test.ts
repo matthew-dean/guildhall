@@ -2198,6 +2198,7 @@ describe('buildThread', () => {
 
       const reviewStep = thread.turns.find(turn => turn.id === 'setup:workspaceImport')
       if (!reviewStep || reviewStep.kind !== 'setup_step') throw new Error('expected workspace import setup step')
+      expect(reviewStep.actionLabel).toBe('Open import review')
       expect(reviewStep.contextSummary?.facts).toEqual(expect.arrayContaining([
         'Current read: Desktop font generation tool with model and app surfaces.',
         'Coordinator areas: Model, App.',

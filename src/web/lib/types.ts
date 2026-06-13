@@ -732,6 +732,7 @@ export interface ContextDebugRecord {
 export interface DrawerPayload {
   task: Task
   relatedTasks?: Task[]
+  workProgress?: ServiceProjectSummary['workProgress']
   runStatus?: string
   availability?: ProjectAvailability | null
   recentEvents?: unknown[]
@@ -1234,6 +1235,7 @@ export interface ProjectDetail {
     [k: string]: unknown
   }
   tasks?: Task[]
+  workProgress?: ServiceProjectSummary['workProgress']
   inbox?: ProjectInbox
   run?: ProjectRun | null
   availability?: ProjectAvailability | null
@@ -1288,6 +1290,20 @@ export interface ServiceProjectSummary {
     blocked: number
     done: number
     shelved: number
+  }
+  workProgress?: {
+    counts: {
+      visibleTotal: number
+      visibleActive: number
+      visibleBlocked: number
+      visibleDone: number
+      visibleShelved: number
+      deliveryTotal: number
+      deliveryRequired: number
+      deliveryDone: number
+      deliveryBlocked: number
+    }
+    byTaskId: Record<string, unknown>
   }
   highlights?: {
     activeTaskTitle?: string | null

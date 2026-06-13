@@ -263,6 +263,42 @@ describe('drawer task detail tabs', () => {
     expect(screen.queryByRole('button', { name: /start/i })).not.toBeInTheDocument()
   })
 
+  it('summarizes delivery completion in the journey from shared work progress', () => {
+    render(JourneyTab, {
+      task: task(),
+      workProgress: {
+        deliverySteps: [
+          {
+            id: 'implementation',
+            title: 'Implement link editor controls',
+            kind: 'make_change',
+            status: 'done',
+            required: true,
+            blocksCompletion: true,
+          },
+          {
+            id: 'runtime-proof',
+            title: 'Runtime proof for link editor controls',
+            kind: 'verify',
+            status: 'blocked',
+            required: true,
+            blocksCompletion: true,
+          },
+        ],
+        rollup: {
+          requiredStepCount: 2,
+          doneStepCount: 1,
+          blockedStepCount: 1,
+          internalStepCount: 2,
+        },
+      },
+    })
+
+    expect(screen.getByText('Delivery completed')).toBeInTheDocument()
+    expect(screen.getByText('1 of 2 required delivery steps complete.')).toBeInTheDocument()
+    expect(screen.getByText('Runtime proof for link editor controls')).toBeInTheDocument()
+  })
+
   it('hides stale handoff packets after a recovery spec seed moves a task back to spec review', () => {
     render(SpecTab, {
       task: task({
