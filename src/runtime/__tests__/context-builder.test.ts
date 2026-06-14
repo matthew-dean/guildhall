@@ -15,7 +15,7 @@ import type { Task } from '@guildhall/core'
 import { writeCheckpoint } from '@guildhall/tools'
 import { proposeProjectSkill, activateProjectSkillProposal } from '@guildhall/skills'
 import { loadCodebaseMap, saveCodebaseMap, type CodebaseMap } from '@guildhall/corpus-map'
-import { getProjectTaskLocalHistoryDir } from '@guildhall/sessions'
+import { getProjectSystemStatePath, getProjectTaskLocalHistoryDir, getProjectTranscriptPath } from '@guildhall/sessions'
 
 // ---------------------------------------------------------------------------
 // Context builder tests (AC-04)
@@ -26,6 +26,8 @@ import { getProjectTaskLocalHistoryDir } from '@guildhall/sessions'
 const execFileP = promisify(execFile)
 
 let tmpDir: string
+let systemDir: string
+let previousConfigDir: string | undefined
 
 const baseTask: Task = {
   id: 'task-001',
@@ -56,21 +58,33 @@ const baseTask: Task = {
 }
 
 beforeEach(async () => {
+  previousConfigDir = process.env.GUILDHALL_CONFIG_DIR
+  systemDir = await fs.mkdtemp(path.join(os.tmpdir(), 'forge-ctx-system-'))
+  process.env.GUILDHALL_CONFIG_DIR = systemDir
   tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'forge-ctx-test-'))
 })
 
 afterEach(async () => {
+  if (previousConfigDir === undefined) delete process.env.GUILDHALL_CONFIG_DIR
+  else process.env.GUILDHALL_CONFIG_DIR = previousConfigDir
+  await fs.rm(systemDir, { recursive: true, force: true })
   await fs.rm(tmpDir, { recursive: true, force: true })
 })
 
+async function writeSystemState(relativePath: string, content: string) {
+  const file = getProjectSystemStatePath(tmpDir, relativePath)
+  await fs.mkdir(path.dirname(file), { recursive: true })
+  await fs.writeFile(file, content, 'utf-8')
+}
+
 async function writeMemory(content: string) {
-  await fs.writeFile(path.join(tmpDir, 'MEMORY.md'), content, 'utf-8')
+  await writeSystemState('MEMORY.md', content)
 }
 async function writeProgress(content: string) {
-  await fs.writeFile(path.join(tmpDir, 'PROGRESS.md'), content, 'utf-8')
+  await writeSystemState('PROGRESS.md', content)
 }
 async function writeDecisions(content: string) {
-  await fs.writeFile(path.join(tmpDir, 'DECISIONS.md'), content, 'utf-8')
+  await writeSystemState('DECISIONS.md', content)
 }
 
 function minimalCodebaseMap(input: { root: string; generatedAt: string }): CodebaseMap {
@@ -825,8 +839,8 @@ describe('buildContext — task summary', () => {
   })
 
   it('injects raw draft design-system YAML for UI work even when the schema is not normalized yet', async () => {
-    await fs.writeFile(
-      path.join(tmpDir, 'design-system.yaml'),
+    await writeSystemState(
+      'design-system.yaml',
       [
         '# Pantry Pulse Design System',
         'version: 1',
@@ -840,7 +854,6 @@ describe('buildContext — task summary', () => {
         '    variants:',
         '      - active',
       ].join('\n'),
-      'utf-8',
     )
 
     const ctx = await buildContext({
@@ -1406,9 +1419,9 @@ describe('buildContext — formatted output', () => {
 
 describe('buildContext — exploring transcript', () => {
   async function writeTranscript(taskId: string, body: string): Promise<void> {
-    const dir = path.join(tmpDir, 'exploring')
-    await fs.mkdir(dir, { recursive: true })
-    await fs.writeFile(path.join(dir, `${taskId}.md`), body, 'utf-8')
+    const file = getProjectTranscriptPath(tmpDir, 'exploring', taskId)
+    await fs.mkdir(path.dirname(file), { recursive: true })
+    await fs.writeFile(file, body, 'utf-8')
   }
 
   it('injects the transcript when the task is in the exploring phase', async () => {

@@ -26,6 +26,7 @@ import {
   requestProjectDependencyRevision,
 } from '../project-graph.js'
 import { listOwnerInputRequests } from '../owner-input-store.js'
+import { getProjectSystemStatePath } from '@guildhall/sessions'
 
 let previousConfigDir: string | undefined
 let systemDir: string
@@ -42,6 +43,13 @@ async function structuralOwnerQuestionIds(root: string, requestIds: readonly str
     .map(request => request.source.kind === 'structural_map' && request.source.questionId
       ? request.source.questionId
       : request.id)
+}
+
+async function writeSystemState(root: string, relativePath: string, content: string): Promise<string> {
+  const file = getProjectSystemStatePath(root, relativePath)
+  await fsp.mkdir(path.dirname(file), { recursive: true })
+  await fsp.writeFile(file, content, 'utf8')
+  return file
 }
 
 beforeEach(async () => {
@@ -340,7 +348,7 @@ describe('structural map drafting', () => {
 
   it('scores evidence freshness and raises owner questions for conflicting structural evidence', async () => {
     await writeCrossCuttingFixture(projectRoot)
-    await fsp.writeFile(path.join(projectRoot, '.guildhall', 'structural-domains.json'), `${JSON.stringify({
+    await writeSystemState(projectRoot, 'structural-domains.json', `${JSON.stringify({
       crossCuttingDomains: [
         {
           id: 'parser-parity',
@@ -406,7 +414,7 @@ describe('structural map drafting', () => {
       id: 'review-changed-package-example-core',
     }))
     expect(refresh.staleNodeIds).toEqual(expect.arrayContaining(['package:example-editor', 'domain:editor', 'exec:example-editor:test']))
-    expect(fs.existsSync(path.join(projectRoot, '.guildhall', 'structural-map', 'refreshes', `${refresh.id}.json`))).toBe(true)
+    expect(fs.existsSync(getProjectSystemStatePath(projectRoot, path.join('structural-map', 'refreshes', `${refresh.id}.json`)))).toBe(true)
   })
 
   it('runs structural discovery providers so package managers can be added without changing the draft core', async () => {
@@ -552,7 +560,7 @@ describe('structural map drafting', () => {
     }))
     await expect(structuralOwnerQuestionIds(projectRoot, draft.ownerInputRequestIds)).resolves.toContain('confirm-domain-routing')
     expect(fs.existsSync(path.join(projectRoot, 'guildhall.yaml'))).toBe(false)
-    expect(fs.existsSync(path.join(projectRoot, '.guildhall', 'structural-map', 'drafts', `${draft.id}.json`))).toBe(true)
+    expect(fs.existsSync(getProjectSystemStatePath(projectRoot, path.join('structural-map', 'drafts', `${draft.id}.json`)))).toBe(true)
   })
 
   it('uses a deterministic review state machine before a map becomes routing truth', async () => {
@@ -621,7 +629,7 @@ describe('structural map drafting', () => {
       'apply_correction',
       'accept',
     ])
-    expect(fs.existsSync(path.join(projectRoot, '.guildhall', 'structural-map', 'accepted.json'))).toBe(true)
+    expect(fs.existsSync(getProjectSystemStatePath(projectRoot, path.join('structural-map', 'accepted.json')))).toBe(true)
   })
 })
 
@@ -982,8 +990,7 @@ async function writeCrossCuttingFixture(root: string): Promise<void> {
   await fsp.writeFile(path.join(root, 'src', 'observability', 'tracing.ts'), 'export const trace = true\n')
   await fsp.mkdir(path.join(root, 'scripts'), { recursive: true })
   await fsp.writeFile(path.join(root, 'scripts', 'release.mjs'), 'console.log("release")\n')
-  await fsp.mkdir(path.join(root, '.guildhall'), { recursive: true })
-  await fsp.writeFile(path.join(root, '.guildhall', 'structural-domains.json'), `${JSON.stringify({
+  await writeSystemState(root, 'structural-domains.json', `${JSON.stringify({
     crossCuttingDomains: [
       {
         id: 'editor-contract',

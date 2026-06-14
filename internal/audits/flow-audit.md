@@ -1637,7 +1637,7 @@ follow-up here with its evidence instead of deleting it.
   wrappers and local CSS as touched surfaces move onto governed primitives; and
   expand corpus-refresh design-governance diagnostics from Task 12 into
   reviewer/worker context.
-- [ ] Add contract surfaces and surface review packets as a project-graph
+- [x] Add contract surfaces and surface review packets as a project-graph
   extension. Spec:
   `internal/specs/2026-06-02-guildhall-contract-surfaces-project-graph.md`.
   The accepted direction is that individual specs should inform and update, or
@@ -1652,6 +1652,19 @@ follow-up here with its evidence instead of deleting it.
   input; Settings should only report readiness blockers. Corpus refresh may
   propose likely surfaces and drift findings, but owner/coordinator approval
   decides what becomes durable graph state.
+  Closure refresh, 2026-06-13: the contract-surface/project-graph runtime,
+  Structure projection, and context-builder integration are now covered by the
+  focused proof suite. The stale failures in the proof path were test fixtures
+  still writing structural/context state into repo-local `.guildhall` paths;
+  those fixtures now use system-managed project state helpers. Verification:
+  `pnpm vitest run src/runtime/__tests__/generalization-smoke.test.ts
+  src/runtime/__tests__/external-task-authority.test.ts
+  src/runtime/__tests__/contract-surfaces.test.ts
+  src/runtime/__tests__/structural-map.test.ts
+  src/runtime/__tests__/project-graph.test.ts
+  src/runtime/__tests__/context-builder.test.ts
+  src/web/surfaces/project/structure/__tests__/ProjectStructurePanel.svelte.test.ts
+  --reporter=dot` passed (`7` files, `138` tests).
 - [x] Update public How Guildhall works docs and harden the first agent
   contract-governance tests. Public guide pages now explain Structure,
   structural map, project graph, provider/consumer requests, explicit task
@@ -2082,7 +2095,7 @@ follow-up here with its evidence instead of deleting it.
   under both TypeScript and Vitest. `pnpm smoke:release` also confirmed the
   served bundle is fresh on the installed service, with the expected 0.9
   runtime image tag.
-- [ ] Harden Guildhall against web/Node/Looma/Knit overfitting across runtime
+- [x] Harden Guildhall against web/Node/Looma/Knit overfitting across runtime
   inference, task shaping, proof paths, and smoke tests. Plan:
   `internal/plans/2026-05-31-guildhall-generalization-overfitting-hardening.md`.
   The fix should land with red-to-green generalization coverage for Node web,
@@ -2090,6 +2103,10 @@ follow-up here with its evidence instead of deleting it.
   native CLI, Terraform module, and docs-only work, plus negative vocabulary
   guardrails that keep project-specific product names out of generic runtime
   modules.
+  Closure refresh, 2026-06-13: focused generalization and neighboring runtime
+  proof now pass, including the negative vocabulary guardrails and
+  non-Looma/Knit project shapes. Verification was included in the same focused
+  proof suite recorded above (`7` files, `138` tests).
 - [x] Align project Inbox rows with the shared wide-list pattern. Live
   Narrative Harness testing on 2026-05-30 showed the Inbox still using
   per-row flex alignment while Work had moved toward column-aligned lists.
@@ -7773,7 +7790,7 @@ local 0.7 release-candidate build at `http://localhost:7777/projects/narrative-h
     on desktop hover. Add visible compact labels or a legend for mobile.
   - [x] Start should preview what it will run, especially on large queues like
     Looma + Knit (`1 ready task; 32 need brief cleanup first`).
-- [ ] 2026-05-24 zero-context cognitive-overhead audit loop.
+- [x] 2026-05-24 zero-context cognitive-overhead audit loop.
   Added the test plan at `internal/plans/2026-05-24-zero-context-flow-user-testing.md`
   and ran four low/no-context reviewer passes over Home, Needs You, Fair Labor
   License Thread, Commerce Thread, T minus T Thread, and Looma Work. The pass
@@ -7803,6 +7820,9 @@ local 0.7 release-candidate build at `http://localhost:7777/projects/narrative-h
     Guildhall implementation knowledge.
     Rebuilt-browser checks cleared the P1 regressions on Commerce Thread,
     T minus T Thread, Needs You, and Looma Work: no stale `Ask me...` prompt
+    remains in the tested surfaces. Closure refresh, 2026-06-13: the parent
+    item was stale open while every recorded child fix and rerun criterion was
+    already checked. Kept the historical evidence and closed the parent.
     leakage, no `Shape the first spec` contradiction, no
     `No actionable tasks remain` contradiction, no raw `Request aborted`, no
     optional-plus-Needs-You pairing, and no stuck `Loading project` state after
