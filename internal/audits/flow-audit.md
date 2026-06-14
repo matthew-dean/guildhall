@@ -723,8 +723,12 @@ coverage.
   controls. Residual `COMPLETION HYGIENE` escalation-history cleanup belongs
   to the task-state/runtime-evidence storage split, not to the Looma/Knit
   component-delivery proof.
-- [ ] Enforce project-state storage boundaries and clean existing managed
-  project `.guildhall` bloat. Live audit on 2026-06-04 showed the previous
+- [ ] Enforce default-zero project-state storage boundaries and clean existing
+  managed project `.guildhall` state. Release-blocking interpretation: normal
+  Guildhall operation must create no project-local Guildhall state by default.
+  Thin project-local state is allowed only when a project explicitly opts into a
+  shared/export mode, and even then it must be compact owner-facing state, never
+  runtime or evidence history. Live audit on 2026-06-04 showed the previous
   task-state split was not durably implemented: active writers still recreate
   runtime/evidence fields in project-local `TASKS.json`, and real managed
   projects carry oversized state (`fair-labor-license` around 1.60 MB with
@@ -735,8 +739,8 @@ coverage.
   `internal/plans/2026-06-04-llm-memory-context-evaluation-spike.md`, because
   context building and memory compaction may be better served by an existing
   memory system than by custom Guildhall storage. The evaluation should assume
-  repo-local state is off or very thin by default, with any Git-visible
-  manifest/export owned by Guildhall as an explicit optional layer. Spike
+  repo-local state is off by default, with any Git-visible manifest/export
+  owned by Guildhall as an explicit optional layer. Spike
   result: `internal/evals/2026-06-04-llm-memory-context-evaluation.md`
   now selects Mastra Memory / Observational Memory as the first memory
   substrate path after the 2026-06-06 value gate. Prototype evidence now exists
@@ -827,7 +831,9 @@ coverage.
   src/runtime/__tests__/orchestrator.test.ts` passed (`2` files, `318` tests).
   The item remains open because direct production queue writers and raw
   runtime/evidence readers still exist in orchestrator remediation, escalation,
-  product-brief, serve/intake/meta-intake, and drawer/history surfaces.
+  product-brief, serve/intake/meta-intake, and drawer/history surfaces, and
+  release proof must show normal app/API/MCP usage does not recreate any
+  project-local `.guildhall` state for non-opt-in projects.
 - [x] Distinguish in-app browser bridge failures from actual Guildhall route
   lockups during live audits. Multi-agent proof on 2026-06-04: the service
   stayed healthy (`stale:false`, `/api/service` and direct route HTTP returned
@@ -2650,7 +2656,11 @@ follow-up here with its evidence instead of deleting it.
   this machine does not have a `claude` binary installed. Public docs now include
   `docs/guide/external-agents.md`, sidebar/index links, a CLI reference entry,
   and an updated MCP subsystem page for the outbound Guildhall MCP bridge.
-- [ ] Split task definition from runtime/evidence storage. The boundary audit
+- [ ] Split task definition from runtime/evidence storage. Release-blocking
+  interpretation: the split is not merely "compact task files." Default task
+  definitions and all runtime/evidence state must live in system-local project
+  state/history. Project-local task files are explicit thin/export artifacts
+  only. The boundary audit
   now lives at `internal/audits/2026-05-24-task-schema-boundary-audit.md` and
   shows that project-local `TASKS.json` currently stores machine paths,
   worktree metadata, review verdict history, adjudications, notes, gate output,

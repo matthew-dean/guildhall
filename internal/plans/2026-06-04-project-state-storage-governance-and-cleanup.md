@@ -2,7 +2,10 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development or superpowers:executing-plans to implement this plan task-by-task. This is a corrective plan after the earlier task-state split was treated as complete while live projects continued to accumulate oversized project-local Guildhall state.
 
-**Goal:** Keep real project checkouts small, portable, and reviewable by making repo-local Guildhall state off or very thin by default, defining any optional shared manifests explicitly, enforcing writer-level storage boundaries, and cleaning existing managed projects.
+**Goal:** Keep real project checkouts clean by creating no project-local
+Guildhall state by default. Any Git-visible Guildhall state must be an explicit
+opt-in thin export with a named owner-facing purpose, not a fallback mirror and
+not a place for runtime or evidence history.
 
 The immediate failure is file sprawl and size. This plan is not primarily an
 "agent memory quality" audit. It is a storage-boundary audit: what files
@@ -71,7 +74,8 @@ Spike result on 2026-06-04, revised with the Mastra value gate on 2026-06-06:
 - Graphiti disposition: explored and retired. Managed Python and local Kuzu
   could run, but the prototype did not produce enough Guildhall product value
   to justify keeping it on the roadmap.
-- Storage policy: repo-local state stays off or very thin by default.
+- Storage policy: repo-local state is `off` by default. Thin repo state is an
+  explicit opt-in export mode only.
 - Prototype evidence: `pnpm memory:mastra:value-gate -- --out
   artifacts/memory-core-prototype/mastra-value-gate.json` writes an ignored
   report with `decision: "adopt"` and records `@mastra/core`,
@@ -87,8 +91,10 @@ Spike result on 2026-06-04, revised with the Mastra value gate on 2026-06-06:
 
 ## Storage Principles
 
-1. Project-local state should be off or thin by default.
-   - A normal project owner should not see Guildhall runtime state in their repo unless they explicitly opted into a shared manifest/export mode.
+1. Project-local state is off by default.
+   - A normal project owner should not see Guildhall runtime state or generated
+     Guildhall files in their repo unless they explicitly opted into a shared
+     manifest/export mode.
    - If a `.guildhall` file is tracked, the owner should be able to read it and understand why it belongs in Git.
    - Large operational history, generated corpora, backups, and raw model evidence fail this test.
 
@@ -101,15 +107,21 @@ Spike result on 2026-06-04, revised with the Mastra value gate on 2026-06-06:
 
 3. Every retained data class needs a job and a budget.
    - If Guildhall cannot name the workflow that needs the data, it should not keep it.
-   - If Guildhall needs the data only for debug or audit drill-down, store a compact pointer and summary in project-local state, not the full payload.
+   - If Guildhall needs the data only for debug or audit drill-down, store it
+     system-locally; project-local pointers or summaries are allowed only in an
+     explicit thin/export mode.
 
 4. Compaction is a write-path invariant, not a cleanup chore.
-   - Writers must emit compact project-local records by default.
+   - Writers must emit no project-local records by default.
+   - Writers may emit compact project-local records only when storage policy
+     explicitly opts into thin/export state.
    - Migrations and `memory compact-project-state` are recovery tools, not the primary defense.
 
 5. Generated intelligence must be resumable without being dumped into Git.
    - Codebase maps, structural maps, context-debug snapshots, and review plans can be regenerated or stored as local artifacts with hashes.
-   - Project-local mirrors should carry summary, freshness, input hash, generated-at timestamp, and a local-history reference when drill-down exists.
+   - Thin/export mirrors, when explicitly enabled, should carry summary,
+     freshness, input hash, generated-at timestamp, and a local-history
+     reference when drill-down exists.
 
 ## Data Classification
 
@@ -141,7 +153,10 @@ Create a focused module, likely `src/runtime/project-state-boundary.ts`, with th
 
 - `stripRuntimeFields(task)` removes all fields that may not be serialized to project-local `TASKS.json`.
 - `sanitizeTaskQueueForProjectWrite(queue)` applies that strip to every task and validates project-local budgets.
-- `writeProjectTaskQueue(tasksPath, queue, options)` is the only allowed writer for `.guildhall/TASKS.json`.
+- `writeProjectTaskQueue(tasksPath, queue, options)` is the only allowed writer
+  for task export files when thin repo state is explicitly enabled. In the
+  default `off` mode, task queue writes must resolve to system-local state and
+  must not create project-local `.guildhall/TASKS.json`.
 - `appendTaskNote`, `appendReviewVerdict`, `appendGateResult`, `appendEscalation`, `appendAdjudication`, and `appendMergeRecord` route through the selected memory/context backend or the minimal Guildhall baseline, then update only compact open-state summaries.
 - `assertProjectLocalStateBudget(projectRoot)` reports oversize files and forbidden fields.
 
@@ -157,15 +172,19 @@ Known offenders to migrate:
 - `src/tools/report-issue.ts`: writes issue history into task records.
 - `src/runtime/intake.ts`, `meta-intake.ts`, `workspace-importer.ts`, `run-once.ts`, `stale-blocker-repair.ts`, `task-decomposition.ts`, `policy.ts`, `improvement-review.ts`, and task action endpoints in `src/runtime/serve.ts`.
 
-Every replacement must preserve UI behavior through `buildEffectiveTask()` or a successor projection, but raw project-local `TASKS.json` must stay clean after every lifecycle tick.
+Every replacement must preserve UI behavior through `buildEffectiveTask()` or a successor projection, but normal lifecycle ticks must not create project-local task state. For explicit thin/export projects, the exported task file must stay clean after every lifecycle tick.
 
 ### 3. Redesign `PROGRESS.md`
 
 `PROGRESS.md` cannot remain an infinite append-only runtime log. Replace it with:
 
 - local JSONL event ledger: `getProjectLocalHistoryDir(projectRoot)/progress/events.jsonl`;
-- compact project-local mirror: `.guildhall/progress-summary.json` or a short `PROGRESS.md` generated from the last important entries;
-- retention rule: only owner-visible milestones, open blockers, and latest release-summary entries appear in project-local progress, capped by count and bytes.
+- optional thin/export mirror: `.guildhall/progress-summary.json` or a short
+  `PROGRESS.md` generated from the last important entries only when storage
+  policy opts in;
+- retention rule for explicit exports: only owner-visible milestones, open
+  blockers, and latest release-summary entries appear in project-local progress,
+  capped by count and bytes.
 
 Heartbeat, repeated escalation churn, model errors, retries, and debug entries go local-only.
 
@@ -237,12 +256,21 @@ Do not clean with ad hoc scripts unless the CLI path itself is being proven. If 
 
 ## Acceptance Criteria
 
-- A fresh task lifecycle cannot write `notes`, `reviewVerdicts`, `adjudications`, `gateResults`, resolved `escalations`, resolved `agentIssues`, `worktreePath`, `branchName`, `baseBranch`, `mergeRecord`, `revisionCount`, `retryWindow`, or `remediationAttempts` into project-local `.guildhall/TASKS.json`.
-- Fair Labor License `.guildhall/TASKS.json` drops from roughly 568 KB to a compact shared-task file, with runtime evidence still readable through effective-task projection.
+- A fresh task lifecycle cannot create project-local Guildhall state by default.
+- For explicit thin/export projects, a fresh task lifecycle cannot write
+  `notes`, `reviewVerdicts`, `adjudications`, `gateResults`, resolved
+  `escalations`, resolved `agentIssues`, `worktreePath`, `branchName`,
+  `baseBranch`, `mergeRecord`, `revisionCount`, `retryWindow`, or
+  `remediationAttempts` into project-local `.guildhall/TASKS.json`.
+- Fair Labor License has no project-local `.guildhall/TASKS.json` by default;
+  if explicitly exported, the export is compact and runtime evidence is still
+  readable through effective-task projection.
 - Fair Labor License project-local migration backup `TASKS.before-0.10.0-task-hierarchy-links.json` is removed from the project checkout after a local-history backup is verified.
 - Looma+Knit `PROGRESS.md` no longer carries a 1 MB append-only history in the project checkout.
 - Jess generated `codebase-map.yaml` and structural-map draft duplication are compacted or moved according to generated-artifact policy.
-- `guildhall memory audit-project-state --all` reports zero forbidden task fields in project-local task files for cleaned projects.
+- `guildhall memory audit-project-state --all` reports no project-local
+  Guildhall state for default/off projects and zero forbidden task fields for
+  explicitly thin/exported task files.
 - Focused tests pass, `pnpm typecheck` passes, and the cleanup report is committed or attached as internal evidence.
 
 ## Contract Touch Decision: Project-State Boundary Cleanup Slice

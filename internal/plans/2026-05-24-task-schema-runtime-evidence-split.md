@@ -2,9 +2,9 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Split Guildhall task definitions from runtime state, workspace/git state, and evidence history so project-local `TASKS.json` stays portable and understandable.
+**Goal:** Split Guildhall task definitions from runtime state, workspace/git state, and evidence history so normal Guildhall operation creates no project-local task state. Any project-local `TASKS.json` is an explicit thin/export artifact, not the default source of truth.
 
-**Architecture:** Keep project-local `.guildhall/TASKS.json` as the task-definition file. Move execution state, worktree/branch placement, review/gate/escalation history, notes, and remediation counters into system-local project history under `getProjectLocalHistoryDir(projectRoot)`. Add compatibility projection so old task files still render and run while writers move to the new stores.
+**Architecture:** The current 0.10 storage boundary supersedes the older assumption that project-local `.guildhall/TASKS.json` is the durable task-definition file. Task definitions, execution state, worktree/branch placement, review/gate/escalation history, notes, and remediation counters live in system-local project state/history by default. Compatibility projection keeps old task files readable, and an explicit thin/export mode may write a compact project-local task file for shared handoff only.
 
 **Tech Stack:** TypeScript, Zod schemas, existing `@guildhall/sessions` local-history helpers, Vitest, Svelte surfaces, Hono runtime endpoints.
 
@@ -21,11 +21,15 @@
 
 ## Storage Model
 
-### Project-local task definition
+### Task Definition
 
-File: `<project>/.guildhall/TASKS.json`
+Default file: system-local project state, resolved through `@guildhall/sessions`
+project-state helpers.
 
-This remains the durable, portable task list. It should contain:
+Optional export file: `<project>/.guildhall/TASKS.json`, only when the project
+explicitly opts into thin/export repo state.
+
+The default task definition should contain:
 
 - `id`
 - `title`
@@ -620,14 +624,16 @@ Rules:
 
   - old UI summaries still render
   - system-local evidence contains the extracted records
-  - project-local `TASKS.json` no longer stores runtime/evidence fields
+  - default/off projects do not have project-local `TASKS.json`
+  - explicit thin/export `TASKS.json` no longer stores runtime/evidence fields
   - Git Story still reports real dirty/no-upstream state
   - no new writes recreate legacy fields after a task tick
 
 ## Acceptance Criteria
 
-- New task writes no longer add runtime/evidence fields to project-local
-  `TASKS.json`.
+- New task writes create no project-local task state by default.
+- Explicit thin/export task writes do not add runtime/evidence fields to
+  project-local `TASKS.json`.
 - Legacy task files continue to render and run through compatibility projection.
 - FLL-style task records migrate idempotently into system-local runtime and
   evidence stores.
