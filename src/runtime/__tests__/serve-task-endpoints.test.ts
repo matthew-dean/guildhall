@@ -2,11 +2,15 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import fs from 'node:fs/promises'
 import path from 'node:path'
 import os from 'node:os'
-import { bootstrapWorkspace, setProvider, updateProjectConfig, writeWorkspaceConfig } from '@guildhall/config'
+import { bootstrapWorkspace, setProvider, updateGlobalConfig, updateProjectConfig, writeWorkspaceConfig } from '@guildhall/config'
 import {
+  appendTaskEvidence,
   getProjectContextDebugLedgerPath,
   getProjectRecentEventsPath,
   getProjectStateDir,
+  getProjectSystemStatePath,
+  upsertTaskRuntimeState,
+  upsertTaskWorkspaceState,
 } from '@guildhall/sessions'
 import { readExploringTranscript, writeCheckpoint } from '@guildhall/tools'
 import { buildServeApp, filterEventsForTask } from '../serve.js'
@@ -21,6 +25,13 @@ import {
   writeProjectDeliveryModel,
   emptyProjectDeliveryModel,
 } from '../delivery-spine.js'
+import { writeProjectTaskQueue } from '../project-state-boundary.js'
+import {
+  buildEffectiveTask,
+  legacyEvidenceFromTask,
+  legacyRuntimeFromTask,
+  legacyWorkspaceFromTask,
+} from '../effective-task.js'
 
 // Integration tests for the v0.2 UI endpoints:
 //   GET  /api/project/task/:id        — per-task detail powering the drawer
@@ -38,6 +49,42 @@ function projectUrl(route: string): string {
   return url.toString()
 }
 
+function taskQueuePath(): string {
+  return getProjectSystemStatePath(tmpDir, 'TASKS.json')
+}
+
+async function readTaskQueue(): Promise<Record<string, any>> {
+  const parsed = JSON.parse(await fs.readFile(taskQueuePath(), 'utf8')) as Record<string, any>
+  return Array.isArray(parsed) ? { version: 1, tasks: parsed } : parsed
+}
+
+async function writeTaskQueue(queue: Record<string, any>): Promise<void> {
+  const tasks = Array.isArray(queue.tasks) ? queue.tasks : []
+  for (const task of tasks) {
+    const runtime = legacyRuntimeFromTask(task)
+    const workspace = legacyWorkspaceFromTask(task)
+    const evidence = legacyEvidenceFromTask(task)
+    if (runtime) await upsertTaskRuntimeState(tmpDir, task.id, runtime)
+    if (workspace) await upsertTaskWorkspaceState(tmpDir, task.id, workspace)
+    for (const event of evidence) {
+      await appendTaskEvidence(tmpDir, task.id, event)
+    }
+  }
+  writeProjectTaskQueue(taskQueuePath(), queue)
+}
+
+async function writeRawTaskQueue(queue: Record<string, any>): Promise<void> {
+  await fs.mkdir(path.dirname(taskQueuePath()), { recursive: true })
+  await fs.writeFile(taskQueuePath(), JSON.stringify(queue, null, 2) + '\n', 'utf8')
+}
+
+async function readEffectiveTask(id: string): Promise<Record<string, any>> {
+  const queue = await readTaskQueue()
+  const task = queue.tasks.find((entry: Record<string, any>) => entry.id === id)
+  if (!task) throw new Error(`Missing seeded task ${id}`)
+  return await buildEffectiveTask(tmpDir, task as any) as Record<string, any>
+}
+
 async function applyStorageBoundaryMigration(app: ReturnType<typeof buildServeApp>['app']): Promise<void> {
   const migration = await app.fetch(
     new Request(projectUrl('/api/project/migrations/apply'), {
@@ -53,7 +100,6 @@ async function applyStorageBoundaryMigration(app: ReturnType<typeof buildServeAp
 }
 
 async function seedTask(id: string, overrides: Record<string, any> = {}): Promise<void> {
-  const tasksPath = path.join(memoryDir, 'TASKS.json')
   const queue = {
     version: 1,
     lastUpdated: new Date().toISOString(),
@@ -75,12 +121,36 @@ async function seedTask(id: string, overrides: Record<string, any> = {}): Promis
       },
     ],
   }
-  await fs.writeFile(tasksPath, JSON.stringify(queue, null, 2), 'utf8')
+  await writeTaskQueue(queue)
+}
+
+async function seedRawTaskDefinition(id: string, overrides: Record<string, any> = {}): Promise<void> {
+  const queue = {
+    version: 1,
+    lastUpdated: new Date().toISOString(),
+    tasks: [
+      {
+        id,
+        title: 'Seeded task for tests',
+        description: 'A test task',
+        domain: 'looma',
+        projectPath: tmpDir,
+        status: 'in_progress',
+        priority: 'normal',
+        revisionCount: 0,
+        remediationAttempts: 0,
+        origination: 'human',
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+        ...overrides,
+      },
+    ],
+  }
+  await writeRawTaskQueue(queue)
 }
 
 async function seedTasks(tasks: Array<Record<string, any>>): Promise<void> {
   const now = new Date().toISOString()
-  const tasksPath = path.join(memoryDir, 'TASKS.json')
   const queue = {
     version: 1,
     lastUpdated: now,
@@ -100,7 +170,7 @@ async function seedTasks(tasks: Array<Record<string, any>>): Promise<void> {
       ...task,
     })),
   }
-  await fs.writeFile(tasksPath, JSON.stringify(queue, null, 2), 'utf8')
+  await writeTaskQueue(queue)
 }
 
 function createTrackingSupervisor(): {
@@ -276,14 +346,14 @@ describe('GET /api/project/task/:id', () => {
   })
 
   it('heals stale worker ownership for in_progress tasks when reading task detail', async () => {
-    await seedTask('task-1', { assignedTo: null })
+    await seedRawTaskDefinition('task-1', { assignedTo: null })
     const { app } = buildServeApp({ projectPath: tmpDir })
     const res = await app.fetch(new Request(projectUrl('/api/project/task/task-1')))
     expect(res.status).toBe(200)
     const body = (await res.json()) as Record<string, any>
     expect(body.task?.assignedTo).toBe('worker-agent')
 
-    const raw = JSON.parse(await fs.readFile(path.join(memoryDir, 'TASKS.json'), 'utf8')) as Record<string, any>
+    const raw = JSON.parse(await fs.readFile(taskQueuePath(), 'utf8')) as Record<string, any>
     expect(raw.tasks[0]?.assignedTo).toBe('worker-agent')
   })
 
@@ -509,7 +579,7 @@ describe('GET /api/project/task/:id', () => {
       ],
     })
     await writeCheckpoint({
-      tasksPath: path.join(memoryDir, 'TASKS.json'),
+      tasksPath: taskQueuePath(),
       memoryDir,
       taskId: 'task-1',
       agentId: 'worker-agent',
@@ -586,7 +656,7 @@ describe('GET /api/project/task/:id', () => {
       ],
     })
     await writeCheckpoint({
-      tasksPath: path.join(memoryDir, 'TASKS.json'),
+      tasksPath: taskQueuePath(),
       memoryDir,
       taskId: 'task-1',
       agentId: 'worker-agent',
@@ -730,7 +800,7 @@ describe('GET /api/project/task/:id', () => {
       ],
     })
     await writeCheckpoint({
-      tasksPath: path.join(memoryDir, 'TASKS.json'),
+      tasksPath: taskQueuePath(),
       memoryDir,
       taskId: 'task-1',
       agentId: 'worker-agent',
@@ -754,7 +824,7 @@ describe('POST /api/project/delivery-spine/contract-results/:id/apply', () => {
       status: 'ready',
       delivery: { driver: 'knit', provider: 'looma', supports: [] },
     })
-    const taskQueue = JSON.parse(await fs.readFile(path.join(memoryDir, 'TASKS.json'), 'utf8')) as { tasks: any[] }
+    const taskQueue = JSON.parse(await fs.readFile(taskQueuePath(), 'utf8')) as { tasks: any[] }
     const baseModel = {
       ...emptyProjectDeliveryModel('2026-06-05T12:00:00.000Z'),
       drivers: [
@@ -807,7 +877,7 @@ describe('POST /api/project/delivery-spine/contract-results/:id/apply', () => {
     const projectRes = await app.fetch(new Request(projectUrl('/api/project')))
     const projectBody = (await projectRes.json()) as any
     expect(projectBody.deliverySpine.model.primitives.map((primitive: any) => primitive.id)).toContain('context-menu')
-    const updatedQueue = JSON.parse(await fs.readFile(path.join(memoryDir, 'TASKS.json'), 'utf8')) as { tasks: any[] }
+    const updatedQueue = JSON.parse(await fs.readFile(taskQueuePath(), 'utf8')) as { tasks: any[] }
     expect(updatedQueue.tasks.find(task => task.id === 'task-context-menu')?.delivery?.usesPrimitives).toEqual(['context-menu'])
 
     const afterInbox = await app.fetch(new Request(projectUrl('/api/project/inbox')))
@@ -820,7 +890,7 @@ describe('POST /api/project/delivery-spine/contract-results/:id/apply', () => {
       status: 'ready',
       delivery: { driver: 'knit', provider: 'looma', supports: [] },
     })
-    const taskQueue = JSON.parse(await fs.readFile(path.join(memoryDir, 'TASKS.json'), 'utf8')) as { tasks: any[] }
+    const taskQueue = JSON.parse(await fs.readFile(taskQueuePath(), 'utf8')) as { tasks: any[] }
     const baseModel = {
       ...emptyProjectDeliveryModel('2026-06-05T12:00:00.000Z'),
       drivers: [
@@ -877,7 +947,7 @@ it('hides placeholder checkpoint next-action values in task detail responses', a
     status: 'in_progress',
   })
   await writeCheckpoint({
-    tasksPath: path.join(memoryDir, 'TASKS.json'),
+    tasksPath: taskQueuePath(),
     memoryDir,
     taskId: 'task-1',
     agentId: 'worker-agent',
@@ -960,7 +1030,7 @@ describe('POST /api/project/task/:id/git-story/:closureAction', () => {
     }))
     expect(res.status).toBe(200)
 
-    const raw = JSON.parse(await fs.readFile(path.join(memoryDir, 'TASKS.json'), 'utf8')) as Record<string, any>
+    const raw = JSON.parse(await fs.readFile(taskQueuePath(), 'utf8')) as Record<string, any>
     expect(raw.tasks[0]?.gitStory).toMatchObject({
       override: 'local_only',
       reason: 'Fixture-only scratch work.',
@@ -1063,7 +1133,7 @@ describe('POST /api/project/task/:id/hold|shelve', () => {
     expect(body.ok).toBe(true)
     expect(body.status).toBe('blocked')
 
-    const raw = await fs.readFile(path.join(memoryDir, 'TASKS.json'), 'utf8')
+    const raw = await fs.readFile(taskQueuePath(), 'utf8')
     let q = JSON.parse(raw)
     expect(q.tasks[0].status).toBe('blocked')
     expect(q.tasks[0].blockReason).toBe('On hold: Waiting for the design call.')
@@ -1081,7 +1151,7 @@ describe('POST /api/project/task/:id/hold|shelve', () => {
     const resumeBody = (await resumeRes.json()) as Record<string, any>
     expect(resumeBody.status).toBe('review')
 
-    q = JSON.parse(await fs.readFile(path.join(memoryDir, 'TASKS.json'), 'utf8'))
+    q = JSON.parse(await fs.readFile(taskQueuePath(), 'utf8'))
     expect(q.tasks[0].status).toBe('review')
     expect(q.tasks[0].hold).toBeUndefined()
     expect(q.tasks[0].blockReason).toBeUndefined()
@@ -1094,7 +1164,7 @@ describe('POST /api/project/task/:id/hold|shelve', () => {
       new Request(projectUrl('/api/project/task/task-1/shelve'), { method: 'POST' }),
     )
     expect(res.status).toBe(200)
-    const raw = await fs.readFile(path.join(memoryDir, 'TASKS.json'), 'utf8')
+    const raw = await fs.readFile(taskQueuePath(), 'utf8')
     const q = JSON.parse(raw)
     expect(q.tasks[0].status).toBe('shelved')
     expect(q.tasks[0].shelveReason?.rejectedBy).toBe('system:human')
@@ -1121,7 +1191,7 @@ describe('POST /api/project/task/:id/hold|shelve', () => {
 
 describe('POST /api/project/task/:id/mark-done', () => {
   it('marks a ready task done with human evidence and closes its checklist', async () => {
-    await seedTask('task-1', {
+    await seedRawTaskDefinition('task-1', {
       status: 'ready',
       assignedTo: null,
       blockReason: 'Old blocker',
@@ -1152,7 +1222,7 @@ describe('POST /api/project/task/:id/mark-done', () => {
     const body = (await res.json()) as Record<string, any>
     expect(body.status).toBe('done')
 
-    const raw = await fs.readFile(path.join(memoryDir, 'TASKS.json'), 'utf8')
+    const raw = await fs.readFile(taskQueuePath(), 'utf8')
     const q = JSON.parse(raw)
     const task = q.tasks[0]
     expect(task.status).toBe('done')
@@ -1185,8 +1255,6 @@ describe('POST /api/project/task/:id/mark-done', () => {
 
 describe('POST /api/project/task/:id/start', () => {
   it('allows a scoped spec_review task start even when the project has waiting specs', async () => {
-    setProvider('anthropic-api', { apiKey: 'sk-ant-test' })
-    updateProjectConfig(tmpDir, { preferredProvider: 'anthropic-api', allowPaidProviderFallback: true })
     await seedTasks([
       {
         id: 'task-context-menu',
@@ -1205,6 +1273,9 @@ describe('POST /api/project/task/:id/start', () => {
     ])
     const { supervisor, starts } = createTrackingSupervisor()
     const { app } = buildServeApp({ projectPath: tmpDir, supervisor })
+    await applyStorageBoundaryMigration(app)
+    setProvider('anthropic-api', { apiKey: 'sk-ant-test' })
+    updateGlobalConfig({ preferredProvider: 'anthropic-api' })
 
     const res = await app.fetch(
       new Request(projectUrl('/api/project/task/task-context-menu/start'), {
@@ -1272,7 +1343,7 @@ describe('POST /api/project/task/:id/approve-spec', () => {
     expect(body.ok).toBe(true)
     expect(body.status).toBe('ready')
 
-    const raw = await fs.readFile(path.join(memoryDir, 'TASKS.json'), 'utf8')
+    const raw = await fs.readFile(taskQueuePath(), 'utf8')
     const q = JSON.parse(raw)
     expect(q.tasks[0].status).toBe('ready')
     expect(q.tasks[0].notes?.at(-1)?.content).toMatch(/ship it/i)
@@ -1415,7 +1486,7 @@ describe('POST /api/project/task/:id/rerun-stage', () => {
     expect(body.ok).toBe(true)
     expect(body.status).toBe('exploring')
 
-    const raw = JSON.parse(await fs.readFile(path.join(memoryDir, 'TASKS.json'), 'utf8')) as Record<string, any>
+    const raw = JSON.parse(await fs.readFile(taskQueuePath(), 'utf8')) as Record<string, any>
     expect(raw.tasks[0]?.status).toBe('exploring')
     expect(raw.tasks[0]?.notes?.at(-1)?.content).toMatch(/fresh spec pass/i)
     const transcript = (await readExploringTranscript({ memoryDir, taskId: 'task-1' })).content ?? ''
@@ -1437,7 +1508,7 @@ describe('POST /api/project/task/:id/rerun-stage', () => {
       }),
     )
     expect(res.status).toBe(200)
-    const raw = JSON.parse(await fs.readFile(path.join(memoryDir, 'TASKS.json'), 'utf8')) as Record<string, any>
+    const raw = JSON.parse(await fs.readFile(taskQueuePath(), 'utf8')) as Record<string, any>
     expect(raw.tasks[0]?.status).toBe('review')
     expect(raw.tasks[0]?.assignedTo).toBe('reviewer-agent')
     expect(raw.tasks[0]?.notes?.at(-1)?.content).toMatch(/fresh review pass/i)
@@ -1458,7 +1529,7 @@ describe('POST /api/project/task/:id/rerun-stage', () => {
       }),
     )
     expect(res.status).toBe(200)
-    const raw = JSON.parse(await fs.readFile(path.join(memoryDir, 'TASKS.json'), 'utf8')) as Record<string, any>
+    const raw = JSON.parse(await fs.readFile(taskQueuePath(), 'utf8')) as Record<string, any>
     expect(raw.tasks[0]?.status).toBe('gate_check')
     expect(raw.tasks[0]?.assignedTo).toBe('gate-checker-agent')
     expect(raw.tasks[0]?.notes?.at(-1)?.content).toMatch(/fresh gate-check pass/i)
@@ -1528,7 +1599,7 @@ describe('POST /api/project/task/:id/create-split-children', () => {
     ])
     expect(body.parentTaskId).toBe('task-1')
 
-    const raw = JSON.parse(await fs.readFile(path.join(memoryDir, 'TASKS.json'), 'utf8')) as Record<string, any>
+    const raw = JSON.parse(await fs.readFile(taskQueuePath(), 'utf8')) as Record<string, any>
     expect(raw.tasks).toHaveLength(3)
     expect(raw.tasks[0].status).toBe('ready')
     expect(raw.tasks[0].hierarchy.childIds).toEqual(body.createdTaskIds)
@@ -1591,7 +1662,7 @@ describe('POST /api/project/task/:id/create-split-children', () => {
       'task-1-split-storybook-story',
     ])
 
-    const raw = JSON.parse(await fs.readFile(path.join(memoryDir, 'TASKS.json'), 'utf8')) as Record<string, any>
+    const raw = JSON.parse(await fs.readFile(taskQueuePath(), 'utf8')) as Record<string, any>
     expect(raw.tasks[0].status).toBe('ready')
     expect(raw.tasks[0].hierarchy.childIds).toEqual(body.createdTaskIds)
     expect(raw.tasks[0].taskReadiness.summary).toBe('Split-recommended work is represented by linked child tasks.')
@@ -1674,7 +1745,7 @@ describe('POST /api/project/task/:id/create-split-children', () => {
       proofKind: 'storybook',
     })
 
-    const raw = JSON.parse(await fs.readFile(path.join(memoryDir, 'TASKS.json'), 'utf8')) as Record<string, any>
+    const raw = JSON.parse(await fs.readFile(taskQueuePath(), 'utf8')) as Record<string, any>
     expect(raw.tasks[1].delivery).toMatchObject({
       driver: 'knit',
       provider: 'looma',
@@ -1727,7 +1798,7 @@ describe('POST /api/project/task/:id/resume', () => {
     )
     expect(res.status).toBe(200)
     const queue = JSON.parse(
-      await fs.readFile(path.join(memoryDir, 'TASKS.json'), 'utf8'),
+      await fs.readFile(taskQueuePath(), 'utf8'),
     ) as { tasks: Array<Record<string, any>> }
     expect(queue.tasks[0]!.status).toBe('in_progress')
     expect(queue.tasks[0]!.notes.at(-1)?.content).toContain('current failure')
@@ -1758,7 +1829,7 @@ describe('POST /api/project/task/:id/resume', () => {
     const body = (await res.json()) as Record<string, any>
     expect(body.status).toBe('exploring')
     const queue = JSON.parse(
-      await fs.readFile(path.join(memoryDir, 'TASKS.json'), 'utf8'),
+      await fs.readFile(taskQueuePath(), 'utf8'),
     ) as { tasks: Array<Record<string, any>> }
     expect(queue.tasks[0]!.status).toBe('exploring')
     expect(queue.tasks[0]!.notes?.at(-1)?.role).toBe('shaping-request')
@@ -1773,53 +1844,49 @@ describe('POST /api/project/task/:id/resume', () => {
 
   it('shelves an imported draft immediately when it is an obvious duplicate of finished work', async () => {
     const now = new Date().toISOString()
-    await fs.writeFile(
-      path.join(memoryDir, 'TASKS.json'),
-      JSON.stringify({
-        version: 1,
-        lastUpdated: now,
-        tasks: [
-          {
-            id: 'task-done',
-            title: 'Add E2E login -> create page -> edit -> search flow',
-            description: 'Finished version',
-            domain: 'knit',
-            projectPath: '/tmp/knit',
-            status: 'done',
-            priority: 'normal',
-            revisionCount: 0,
-            remediationAttempts: 0,
-            origination: 'human',
-            createdAt: now,
-            updatedAt: now,
-          },
-          {
-            id: 'task-1',
-            title: 'E2E tests: login → create page → edit → search flow',
-            description: 'Imported raw draft',
-            domain: 'knit',
-            projectPath: '/tmp/knit',
-            status: 'import_draft',
-            priority: 'normal',
-            revisionCount: 0,
-            remediationAttempts: 0,
-            origination: 'human',
-            createdAt: now,
-            updatedAt: now,
-            acceptanceCriteria: [],
-            notes: [
-              {
-                agentId: 'workspace-importer',
-                role: 'importer',
-                content: 'Imported from: knit/docs/feature-roadmap.md',
-                timestamp: now,
-              },
-            ],
-          },
-        ],
-      }, null, 2),
-      'utf8',
-    )
+    await writeTaskQueue({
+      version: 1,
+      lastUpdated: now,
+      tasks: [
+        {
+          id: 'task-done',
+          title: 'Add E2E login -> create page -> edit -> search flow',
+          description: 'Finished version',
+          domain: 'knit',
+          projectPath: '/tmp/knit',
+          status: 'done',
+          priority: 'normal',
+          revisionCount: 0,
+          remediationAttempts: 0,
+          origination: 'human',
+          createdAt: now,
+          updatedAt: now,
+        },
+        {
+          id: 'task-1',
+          title: 'E2E tests: login → create page → edit → search flow',
+          description: 'Imported raw draft',
+          domain: 'knit',
+          projectPath: '/tmp/knit',
+          status: 'import_draft',
+          priority: 'normal',
+          revisionCount: 0,
+          remediationAttempts: 0,
+          origination: 'human',
+          createdAt: now,
+          updatedAt: now,
+          acceptanceCriteria: [],
+          notes: [
+            {
+              agentId: 'workspace-importer',
+              role: 'importer',
+              content: 'Imported from: knit/docs/feature-roadmap.md',
+              timestamp: now,
+            },
+          ],
+        },
+      ],
+    })
 
     const { app } = buildServeApp({ projectPath: tmpDir })
     const res = await app.fetch(
@@ -1832,7 +1899,7 @@ describe('POST /api/project/task/:id/resume', () => {
     expect(body.status).toBe('shelved')
 
     const queue = JSON.parse(
-      await fs.readFile(path.join(memoryDir, 'TASKS.json'), 'utf8'),
+      await fs.readFile(taskQueuePath(), 'utf8'),
     ) as { tasks: Array<Record<string, any>> }
     const task = queue.tasks.find(task => task.id === 'task-1')
     expect(task?.status).toBe('shelved')
@@ -1923,7 +1990,7 @@ describe('POST /api/project/bounded-chat/:id/answer', () => {
 
 describe('POST /api/project/task/:id/reframe-task', () => {
   it('reopens an inscrutable blocked task for a fresh plain-language frame', async () => {
-    await seedTask('task-1', {
+    await seedRawTaskDefinition('task-1', {
       status: 'blocked',
       assignedTo: 'worker-agent',
       blockReason: 'human_judgment_required: Required authoritative verification is blocked by upstream workspace build failure outside checkpoint-touched editor files.',
@@ -1958,7 +2025,7 @@ describe('POST /api/project/task/:id/reframe-task', () => {
     expect(body.status).toBe('exploring')
 
     const queue = JSON.parse(
-      await fs.readFile(path.join(memoryDir, 'TASKS.json'), 'utf8'),
+      await fs.readFile(taskQueuePath(), 'utf8'),
     ) as { tasks: Array<Record<string, any>> }
     const task = queue.tasks[0]!
     expect(task.status).toBe('exploring')
@@ -2038,7 +2105,7 @@ describe('POST /api/project/task/:id/enrich-task', () => {
     expect(body).toMatchObject({ ok: true, status: 'exploring' })
 
     const raw = JSON.parse(
-      await fs.readFile(path.join(memoryDir, 'TASKS.json'), 'utf8'),
+      await fs.readFile(taskQueuePath(), 'utf8'),
     ) as { tasks: Array<Record<string, any>> }
     expect(raw.tasks[0]!.taskReadiness).toMatchObject({
       taskKind: expect.any(String),
@@ -2064,7 +2131,7 @@ describe('POST /api/project/task/:id/enrich-task', () => {
   })
 
   it('reopens a blocked task for split enrichment without deleting the existing spec', async () => {
-    await seedTask('task-1', {
+    await seedRawTaskDefinition('task-1', {
       status: 'blocked',
       assignedTo: 'worker-agent',
       blockReason: 'human_judgment_required: OAuth providers need setup.',
@@ -2103,7 +2170,7 @@ describe('POST /api/project/task/:id/enrich-task', () => {
     expect(body.status).toBe('exploring')
 
     const queue = JSON.parse(
-      await fs.readFile(path.join(memoryDir, 'TASKS.json'), 'utf8'),
+      await fs.readFile(taskQueuePath(), 'utf8'),
     ) as { tasks: Array<Record<string, any>> }
     const task = queue.tasks[0]!
     expect(task.status).toBe('exploring')
@@ -2122,8 +2189,6 @@ describe('POST /api/project/task/:id/enrich-task', () => {
 
 describe('POST /api/project/task/:id/continue', () => {
   it('continues brief cleanup through continuous coordination without one-task start semantics', async () => {
-    setProvider('anthropic-api', { apiKey: 'sk-ant-test' })
-    updateProjectConfig(tmpDir, { preferredProvider: 'anthropic-api', allowPaidProviderFallback: true })
     await seedTask('task-1', {
       status: 'ready',
       assignedTo: null,
@@ -2135,6 +2200,9 @@ describe('POST /api/project/task/:id/continue', () => {
     })
     const { supervisor, starts } = createTrackingSupervisor()
     const { app } = buildServeApp({ projectPath: tmpDir, supervisor })
+    await applyStorageBoundaryMigration(app)
+    setProvider('anthropic-api', { apiKey: 'sk-ant-test' })
+    updateGlobalConfig({ preferredProvider: 'anthropic-api' })
 
     try {
       const res = await app.fetch(
@@ -2168,7 +2236,7 @@ describe('POST /api/project/task/:id/continue', () => {
       expect(supervisor.get(projectId)?.mode).toBe('continuous')
 
       const queue = JSON.parse(
-        await fs.readFile(path.join(memoryDir, 'TASKS.json'), 'utf8'),
+        await fs.readFile(taskQueuePath(), 'utf8'),
       ) as { tasks: Array<Record<string, any>> }
       expect(queue.tasks[0]).toMatchObject({
         id: 'task-1',
@@ -2254,7 +2322,7 @@ describe('POST /api/project/task/:id/approve-brief', () => {
     const body = (await res.json()) as Record<string, any>
     expect(body.ok).toBe(true)
 
-    const raw = await fs.readFile(path.join(memoryDir, 'TASKS.json'), 'utf8')
+    const raw = await fs.readFile(taskQueuePath(), 'utf8')
     const q = JSON.parse(raw)
     expect(q.tasks[0].productBrief.approvedBy).toBe('human')
     expect(q.tasks[0].productBrief.approvedAt).toMatch(/\d{4}-\d{2}-\d{2}T/)
@@ -2287,7 +2355,7 @@ describe('POST /api/project/task/:id/approve-brief', () => {
     expect(body.ok).toBe(true)
     expect(body.status).toBe('spec_review')
 
-    const raw = await fs.readFile(path.join(memoryDir, 'TASKS.json'), 'utf8')
+    const raw = await fs.readFile(taskQueuePath(), 'utf8')
     const q = JSON.parse(raw)
     expect(q.tasks[0].status).toBe('spec_review')
   })
@@ -2343,7 +2411,7 @@ describe('POST /api/project/task/:id/add-acceptance', () => {
     expect(body.ok).toBe(true)
     expect(body.count).toBe(1)
 
-    const raw = await fs.readFile(path.join(memoryDir, 'TASKS.json'), 'utf8')
+    const raw = await fs.readFile(taskQueuePath(), 'utf8')
     const q = JSON.parse(raw)
     expect(q.tasks[0].acceptanceCriteria).toEqual([
       {
@@ -2374,7 +2442,7 @@ describe('POST /api/project/task/:id/add-acceptance', () => {
 })
 
 describe('POST /api/project/task/:id/stage-answer', () => {
-  it('requires task question migration before mutating legacy question drafts', async () => {
+  it('stages a draft answer on current-shape task questions', async () => {
     await seedTask('task-1', {
       status: 'spec_review',
       openQuestions: [
@@ -2397,12 +2465,14 @@ describe('POST /api/project/task/:id/stage-answer', () => {
         body: JSON.stringify({ questionId: 'q-1', answer: 'A' }),
       }),
     )
-    expect(res.status).toBe(409)
+    expect(res.status).toBe(200)
     const body = (await res.json()) as Record<string, any>
-    expect(body.code).toBe('required_migration_pending')
+    expect(body).toEqual({ ok: true, staged: true })
+    const q = await readTaskQueue()
+    expect(q.tasks[0].openQuestions[0].draftAnswer).toBe('A')
   })
 
-  it('requires task question migration before answering legacy question drafts', async () => {
+  it('answers current-shape task questions and clears the draft answer', async () => {
     await seedTask('task-1', {
       status: 'exploring',
       openQuestions: [
@@ -2426,9 +2496,11 @@ describe('POST /api/project/task/:id/stage-answer', () => {
         body: JSON.stringify({ answers: [{ questionId: 'q-1', answer: 'A' }] }),
       }),
     )
-    expect(res.status).toBe(409)
+    expect(res.status).toBe(200)
     const body = (await res.json()) as Record<string, any>
-    expect(body.code).toBe('required_migration_pending')
+    expect(body).toEqual({ ok: true, count: 1 })
+    const transcript = (await readExploringTranscript({ memoryDir, taskId: 'task-1' })).content ?? ''
+    expect(transcript).toContain('Answer to "q-1": A')
   })
 })
 
@@ -2455,7 +2527,7 @@ describe('POST /api/project/task/:id/unshelve', () => {
     expect(body.ok).toBe(true)
     expect(body.status).toBe('proposed')
 
-    const raw = await fs.readFile(path.join(memoryDir, 'TASKS.json'), 'utf8')
+    const raw = await fs.readFile(taskQueuePath(), 'utf8')
     const q = JSON.parse(raw)
     expect(q.tasks[0].status).toBe('proposed')
     expect(q.tasks[0].shelveReason).toBeUndefined()
@@ -2476,7 +2548,7 @@ describe('POST /api/project/task/:id/unshelve', () => {
 
 describe('POST /api/project/task/:id/resolve-escalation', () => {
   it('resolves an open escalation and unblocks the task', async () => {
-    await seedTask('task-1', {
+    await seedRawTaskDefinition('task-1', {
       status: 'blocked',
       blockReason: 'Escalation raised',
       escalations: [
@@ -2507,9 +2579,7 @@ describe('POST /api/project/task/:id/resolve-escalation', () => {
     const body = (await res.json()) as Record<string, any>
     expect(body.ok).toBe(true)
 
-    const raw = await fs.readFile(path.join(memoryDir, 'TASKS.json'), 'utf8')
-    const q = JSON.parse(raw)
-    const task = q.tasks[0]
+    const task = await readEffectiveTask('task-1')
     expect(task.status).toBe('in_progress')
     expect(task.assignedTo).toBe('worker-agent')
     expect(task.escalations[0].resolvedAt).toBeTruthy()
@@ -2542,7 +2612,6 @@ describe('POST /api/project/task/:id/resolve-escalation', () => {
 
 describe('GET /api/project/activity', () => {
   it('summarizes counts and in-flight tasks', async () => {
-    const tasksPath = path.join(memoryDir, 'TASKS.json')
     const now = new Date().toISOString()
     const queue = {
       version: 1,
@@ -2553,7 +2622,7 @@ describe('GET /api/project/activity', () => {
         { id: 't3', title: 'Done one', description: '', domain: 'd', projectPath: tmpDir, status: 'done', priority: 'normal', revisionCount: 0, remediationAttempts: 0, origination: 'human', createdAt: now, updatedAt: now },
       ],
     }
-    await fs.writeFile(tasksPath, JSON.stringify(queue, null, 2), 'utf8')
+    await writeTaskQueue(queue)
 
     const { app } = buildServeApp({ projectPath: tmpDir })
     const res = await app.fetch(new Request(projectUrl('/api/project/activity')))
@@ -2567,7 +2636,6 @@ describe('GET /api/project/activity', () => {
   })
 
   it('includes the latest live event metadata for in-flight tasks', async () => {
-    const tasksPath = path.join(memoryDir, 'TASKS.json')
     const older = '2026-05-23T18:00:00.000Z'
     const now = '2026-05-23T18:01:00.000Z'
     const queue = {
@@ -2577,7 +2645,7 @@ describe('GET /api/project/activity', () => {
         { id: 't1', title: 'Long worker loop', description: '', domain: 'd', projectPath: tmpDir, status: 'in_progress', priority: 'normal', revisionCount: 0, remediationAttempts: 0, origination: 'human', createdAt: older, updatedAt: older },
       ],
     }
-    await fs.writeFile(tasksPath, JSON.stringify(queue, null, 2), 'utf8')
+    await writeTaskQueue(queue)
     const recentEventsPath = getProjectRecentEventsPath(tmpDir)
     await fs.mkdir(path.dirname(recentEventsPath), { recursive: true })
     await fs.writeFile(
