@@ -27,7 +27,6 @@
   import { currentProjectHref, projectActionHref, projectFetch } from '../lib/project-routes.js'
   import { buildProjectTicker } from '../lib/project-activity.js'
   import { dedupeProjectAttention } from '../lib/project-attention.js'
-  import { advancedStructureEnabled } from '../lib/feature-flags.js'
   import { buildProviderIndicator } from '../lib/provider-indicator.js'
   import { formatUserPath } from '../lib/display-path.js'
   import { humanizeProjectName } from '../lib/project-name.js'
@@ -371,8 +370,6 @@
 
   const coordinators = $derived(project.detail?.config?.coordinators ?? [])
   const needsMeta = $derived(coordinators.length === 0)
-  const showAdvancedStructure = advancedStructureEnabled()
-
   const entries = $derived<NavEntry[]>([
     {
       id: 'project',
@@ -383,7 +380,7 @@
         { id: 'overview', label: 'Overview', path: currentProjectHref('/overview', activeProjectId) },
         { id: 'inbox', label: 'Needs you', path: currentProjectHref('/overview/inbox', activeProjectId) },
         { id: 'facts', label: 'Facts', path: currentProjectHref('/facts', activeProjectId) },
-        ...(showAdvancedStructure ? [{ id: 'structure', label: 'Structure', path: currentProjectHref('/structure', activeProjectId) }] : []),
+        { id: 'structure', label: 'Structure', path: currentProjectHref('/structure', activeProjectId) },
       ],
     },
     { id: 'thread', label: 'Threads', icon: 'sparkles', suffix: '/thread' },
@@ -426,7 +423,7 @@
   }
 
   function sectionIsActive(id: NavSectionId) {
-    if (id === 'project') return currentView === 'overview' || currentView === 'facts' || (showAdvancedStructure && currentView === 'structure')
+    if (id === 'project') return currentView === 'overview' || currentView === 'facts' || currentView === 'structure'
     return currentView === id
   }
 
@@ -436,7 +433,7 @@
     if (sectionId === 'project') {
       if (currentView === 'overview') return currentSub === 'inbox' ? subId === 'inbox' : subId === 'overview'
       if (currentView === 'facts') return subId === 'facts'
-      if (showAdvancedStructure && currentView === 'structure') return subId === 'structure'
+      if (currentView === 'structure') return subId === 'structure'
     }
 
     if (sectionId === 'work' && currentView === 'work') {
@@ -1634,7 +1631,7 @@
               {@const FactsTab = module.default}
               <FactsTab />
             {/await}
-          {:else if currentView === 'structure' && showAdvancedStructure}
+          {:else if currentView === 'structure'}
             {#await loadProjectStructurePanel()}
               <div class="page-centered page-centered-inline">
                 <p class="muted">Loading project...</p>
@@ -1642,23 +1639,6 @@
             {:then module}
               {@const ProjectStructurePanel = module.default}
               <ProjectStructurePanel />
-            {/await}
-          {:else if currentView === 'structure'}
-            {#await loadProjectOverviewTab()}
-              <div class="page-centered page-centered-inline">
-                <p class="muted">Loading project...</p>
-              </div>
-            {:then module}
-              {@const ProjectOverviewTab = module.default}
-              <ProjectOverviewTab
-                {detail}
-                {inboxItems}
-                {inboxLoaded}
-                {inboxError}
-                {projectTicker}
-                {activeProjectId}
-                onMigrate={openMigrationModal}
-              />
             {/await}
           {:else if currentView === 'timeline'}
             {#await loadTimelineTab()}

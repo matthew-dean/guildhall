@@ -11599,7 +11599,10 @@ Scope:
   `.guildhall/artifacts.yaml`, so this evidence was recorded directly in
   `internal/audits/flow-audit.md` rather than through a resolved
   `artifact:flow-audit` registry entry.
-- Build and service: `VITE_GUILDHALL_ADVANCED_STRUCTURE=1 pnpm build`,
+- Build and service: originally run with the now-removed
+  `VITE_GUILDHALL_ADVANCED_STRUCTURE=1` gate; follow-up cleanup made Structure
+  an unconditional product route, so normal `pnpm build`/Playwright builds now
+  exercise the same Structure UI as release builds. The walkthrough used
   `node scripts/playwright-fixtures.mjs`, then
   `HOME="$PWD/.playwright-fixtures/home" node dist/cli.js serve-internal --port 7791`.
 - In-app Browser bridge setup succeeded through the Browser plugin's
@@ -11656,3 +11659,35 @@ Verification:
 - `pnpm exec playwright test` passed with `37` rendered UI tests.
 
 source: codex:all-defined-web-route-flow-audit-2026-06-14
+
+2026-06-14T19:10:00Z - Removed the hidden Structure route build flag.
+
+Finding:
+- `VITE_GUILDHALL_ADVANCED_STRUCTURE=1` was not a real route-splitting
+  requirement. It was a stale product feature flag: the router recognized
+  `/projects/:id/structure`, but `ProjectView.svelte` rendered
+  `ProjectOverviewTab` for that route unless the env flag was set. Playwright
+  was forcing the flag, which meant tests could exercise the real Structure
+  page while a normal build could render different content at the same URL.
+
+Repair:
+- Deleted `src/web/lib/feature-flags.ts` and its tests.
+- Removed the env prefix from `playwright.config.ts`.
+- Made the Project rail include Structure unconditionally, made
+  `/projects/:id/structure` always load `ProjectStructurePanel`, and made the
+  Overview project-map card render from actual `structuralMapReview` data
+  instead of a build env switch.
+
+Verification:
+- `rg -n "VITE_GUILDHALL_ADVANCED_STRUCTURE|advancedStructureEnabled|showAdvancedStructure|feature-flags" src tests playwright.config.ts scripts build.mjs`
+  returned no matches.
+- `pnpm build` passed without env overrides and still emitted
+  `ProjectStructurePanel` as its own split client chunk.
+- `pnpm typecheck` passed.
+- `pnpm exec playwright test` passed with `37` rendered UI tests without any
+  Structure env prefix.
+- `pnpm vitest run src/web/surfaces/__tests__/ProjectView.svelte.test.ts
+  src/web/surfaces/project/__tests__/ProjectOverviewTab.svelte.test.ts
+  scripts/release-artifacts.test.ts` passed with `78` tests.
+
+source: codex:remove-advanced-structure-flag-2026-06-14

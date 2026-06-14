@@ -864,7 +864,7 @@ describe('ProjectOverviewTab', () => {
     expect(window.location.pathname).toBe('/projects/guildhall/timeline')
   })
 
-  it('keeps advanced structural map controls out of the default overview', () => {
+  it('shows structural map controls when project map review data exists', () => {
     render(ProjectOverviewTab, {
       detail: {
         id: 'guildhall',
@@ -909,9 +909,9 @@ describe('ProjectOverviewTab', () => {
       activeProjectId: 'guildhall',
     })
 
-    expect(screen.queryByRole('heading', { name: 'Project map' })).not.toBeInTheDocument()
-    expect(screen.queryByRole('button', { name: /accept map/i })).not.toBeInTheDocument()
-    expect(screen.queryByRole('button', { name: /defer/i })).not.toBeInTheDocument()
+    expect(screen.getByRole('heading', { name: 'Project map' })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Rename' })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Package-only' })).toBeInTheDocument()
   })
 
   it('summarizes visible work items and delivery steps from shared progress', () => {

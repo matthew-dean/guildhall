@@ -1282,7 +1282,7 @@ describe('ProjectView', () => {
       expect(within(rail).getByRole('button', { name: 'Overview' })).toBeInTheDocument()
       expect(within(rail).getByRole('button', { name: 'Needs you' })).toBeInTheDocument()
       expect(within(rail).getByRole('button', { name: 'Facts' })).toBeInTheDocument()
-      expect(within(rail).queryByRole('button', { name: 'Structure' })).not.toBeInTheDocument()
+      expect(within(rail).getByRole('button', { name: 'Structure' })).toBeInTheDocument()
 
       shell?.dispatchEvent(new FocusEvent('focusin', { bubbles: true }))
       expect(shell).toHaveClass('rail-preview-open')
@@ -1327,7 +1327,7 @@ describe('ProjectView', () => {
     expect(within(rail).queryByRole('button', { name: 'Project provider settings' })).not.toBeInTheDocument()
   })
 
-  it('groups simple project orientation under Project without advanced Structure by default', async () => {
+  it('groups project orientation under Project with Structure visible by default', async () => {
     await renderProjectView('overview')
     const rail = screen.getByRole('complementary', { name: 'Project navigation' })
 
@@ -1335,14 +1335,13 @@ describe('ProjectView', () => {
     expect(within(rail).getByRole('button', { name: 'Overview' })).toBeInTheDocument()
     expect(within(rail).getByRole('button', { name: 'Needs you' })).toBeInTheDocument()
     expect(within(rail).getByRole('button', { name: 'Facts' })).toBeInTheDocument()
-    expect(within(rail).queryByRole('button', { name: 'Structure' })).not.toBeInTheDocument()
+    expect(within(rail).getByRole('button', { name: 'Structure' })).toBeInTheDocument()
     expect(within(rail).getByRole('button', { name: 'Threads' })).toBeInTheDocument()
     expect(within(rail).getByRole('button', { name: 'Work' })).toBeInTheDocument()
     expect(within(rail).getByRole('button', { name: 'Timeline' })).toBeInTheDocument()
     expect(within(rail).getByRole('button', { name: 'Closure' })).toBeInTheDocument()
     expect(within(rail).queryByRole('button', { name: 'Inbox' })).not.toBeInTheDocument()
     expect(screen.queryByText('Project graph')).not.toBeInTheDocument()
-    expect(screen.queryByText('Structure')).not.toBeInTheDocument()
   })
 
   it('keeps project children visible for any Project child route', async () => {
@@ -1352,7 +1351,7 @@ describe('ProjectView', () => {
     expect(within(rail).getByRole('button', { name: 'Overview' })).toBeInTheDocument()
     expect(within(rail).getByRole('button', { name: 'Needs you' })).toBeInTheDocument()
     expect(within(rail).getByRole('button', { name: 'Facts' })).toHaveClass('active')
-    expect(within(rail).queryByRole('button', { name: 'Structure' })).not.toBeInTheDocument()
+    expect(within(rail).getByRole('button', { name: 'Structure' })).toBeInTheDocument()
     expect(within(rail).queryByRole('button', { name: 'Queue' })).not.toBeInTheDocument()
   })
 

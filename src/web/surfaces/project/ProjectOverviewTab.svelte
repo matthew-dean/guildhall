@@ -28,7 +28,6 @@
   import { activeEscalations } from '../../lib/escalation.js'
   import { needsWorkerHandoffSpecCleanup } from '../../lib/task-state.js'
   import { taskStagePresentation } from '../../lib/task-presentation.js'
-  import { advancedStructureEnabled } from '../../lib/feature-flags.js'
 
   interface Props {
     detail: ProjectDetail
@@ -79,8 +78,6 @@
   let localStructuralMapReview = $state<ProjectDetail['structuralMapReview'] | null>(null)
   let structuralMapActionError = $state<string | null>(null)
   let structuralMapActionBusy = $state(false)
-  const showAdvancedStructure = advancedStructureEnabled()
-
   const tasks = $derived(detail.tasks ?? [])
   const displayPath = $derived(formatUserPath(detail.path))
   const running = $derived(detail.run?.status === 'running')
@@ -1039,7 +1036,7 @@
       </div>
     </Card>
 
-    {#if showAdvancedStructure && structuralMapReview}
+    {#if structuralMapReview}
       <Card title="Project map" titleTag="h2" className="overview-card">
         <div class="structural-map-review">
           <div class="map-review-head">
