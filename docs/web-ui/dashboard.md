@@ -53,7 +53,7 @@ work.
 - Enough signal to tell whether opening the shell is likely to be a quick check or a proper firefight
 
 <picture class="gh-doc-picture">
-  <img src="../assets/ui-audit/0-10-0/projects.png" alt="Guildhall 0.10.0 projects home showing multiple local projects, attention states, work mix, and project launch controls." />
+  <img src="../assets/ui-audit/0-10-0/projects.webp" alt="Guildhall 0.10.0 projects home showing multiple local projects, attention states, work mix, and project launch controls." />
 </picture>
 
 The Projects home is deliberately shallow. It helps you choose where to look

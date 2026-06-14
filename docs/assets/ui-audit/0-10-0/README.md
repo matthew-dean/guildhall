@@ -3,18 +3,15 @@
 Captured from the installed local Guildhall app after refreshing the dev install
 and confirming `/api/stale-server` returned `stale:false`.
 
-- `projects.png`: Projects & Workspaces home proof with the 0.10.0 version
-  label, fleet attention, work mix, and project cards.
-- `project-overview.png`: Looma + Knit Overview proof with the expanded
-  project rail showing Project with Overview, Needs you, Facts, Structure, and
-  the top-level Threads, Work, Timeline, Closure, and Settings entries.
-- `facts.png`: Looma + Knit Facts proof with the Project rail expanded and
-  Facts selected.
-- `work.png`: Looma + Knit Work proof with Work selected, Queue and Board
-  visible as Work children, and the current queue state.
-- `thread.png`: Looma + Knit Thread proof for bounded owner-input and
-  project-question routing without raw schema errors.
-- `structure.png`: Looma + Knit Structure proof for structural map,
-  project graph, and contract-surface placement.
-- `settings-ready.png`: Looma + Knit Settings Ready proof with Settings
-  kept as readiness/provider/profile/developer configuration.
+The screenshots are stored as compressed `.webp` files generated with
+`cwebp -q 82`.
+
+| File | Public docs use | Shows |
+| --- | --- | --- |
+| `projects` | `projects.webp` | Projects & Workspaces home with the 0.10.0 version label, fleet attention, work mix, and project cards. |
+| `project-overview` | `project-overview.webp` | Looma + Knit Overview with Project rail grouping Overview, Needs you, Facts, and Structure. |
+| `facts` | `facts.webp` | Facts selected in the Project rail, showing project identity, environment, gates, and durable facts. |
+| `work` | `work.webp` | Work selected as a top-level work mode with Queue and Board children. |
+| `thread` | `thread.webp` | Thread carrying bounded owner-input and project-question routing without raw schema errors. |
+| `structure` | `structure.webp` | Structure as the map room for structural map, project graph, and contract surfaces. |
+| `settings-ready` | `settings-ready.webp` | Settings Ready focused on runtime readiness, providers, profiles, and developer controls. |

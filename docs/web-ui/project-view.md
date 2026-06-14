@@ -14,7 +14,7 @@ Once you open a project, Guildhall shifts from "service over projects" into
 "show me what is happening." Setup, active work, reviewer feedback, and your next
 decision live in one place.
 
-![Guildhall 0.10.0 project shell showing project health, current work, and navigation.](../assets/ui-audit/0-10-0/project-overview.png)
+![Guildhall 0.10.0 project shell showing project health, current work, and navigation.](../assets/ui-audit/0-10-0/project-overview.webp)
 
 ## The project rail
 
@@ -52,15 +52,15 @@ Identity, Profile, Developer tools, and autonomy controls.
   waiting on a PR, or blocked by a conflict
 - Let you drill into transcripts and provenance without leaving the shell
 
-![Guildhall 0.10.0 Work view showing task hierarchy, blocked work, and queue health.](../assets/ui-audit/0-10-0/work.png)
+![Guildhall 0.10.0 Work view showing task hierarchy, blocked work, and queue health.](../assets/ui-audit/0-10-0/work.webp)
 
-![Guildhall Thread view showing task cleanup, project questions, and bounded owner-input conversations.](../assets/ui-audit/0-10-0/thread.png)
+![Guildhall Thread view showing task cleanup, project questions, and bounded owner-input conversations.](../assets/ui-audit/0-10-0/thread.webp)
 
-![Guildhall Facts view showing project identity, environment, gates, routing context, and durable facts.](../assets/ui-audit/0-10-0/facts.png)
+![Guildhall Facts view showing project identity, environment, gates, routing context, and durable facts.](../assets/ui-audit/0-10-0/facts.webp)
 
-![Guildhall Structure view showing structural map, project graph, and contract surfaces.](../assets/ui-audit/0-10-0/structure.png)
+![Guildhall Structure view showing structural map, project graph, and contract surfaces.](../assets/ui-audit/0-10-0/structure.webp)
 
-![Guildhall 0.10.0 Settings Ready view showing local runtime readiness.](../assets/ui-audit/0-10-0/settings-ready.png)
+![Guildhall 0.10.0 Settings Ready view showing local runtime readiness.](../assets/ui-audit/0-10-0/settings-ready.webp)
 
 ## Current strengths
 

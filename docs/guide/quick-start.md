@@ -13,7 +13,7 @@ You do not need the whole machine model before your first run. The job here is
 smaller: install Guildhall, open one repo, and try one modest task where you can
 see the loop.
 
-![Guildhall 0.10.0 project settings showing readiness checks and local runtime setup state.](../assets/ui-audit/0-10-0/settings-ready.png)
+![Guildhall 0.10.0 project settings showing readiness checks and local runtime setup state.](../assets/ui-audit/0-10-0/settings-ready.webp)
 
 ## The first mental model
 
@@ -93,9 +93,9 @@ After the project opens, check **Settings → Ready**. The Local runtime card
 shows whether the Podman-backed Debian runtime is ready, needs setup, or should
 stay in **Host-run compatibility mode** for now.
 
-![Guildhall 0.10.0 Settings Ready view showing the local runtime setup card.](../assets/ui-audit/0-10-0/settings-ready.png)
+![Guildhall 0.10.0 Settings Ready view showing the local runtime setup card.](../assets/ui-audit/0-10-0/settings-ready.webp)
 
-![Guildhall 0.10.0 project overview showing attention work, task health, and project navigation.](../assets/ui-audit/0-10-0/project-overview.png)
+![Guildhall 0.10.0 project overview showing attention work, task health, and project navigation.](../assets/ui-audit/0-10-0/project-overview.webp)
 
 ## What Guildhall may ask
 

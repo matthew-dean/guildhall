@@ -112,7 +112,7 @@ or sequencing changes.
 
 ## Review risk and required evidence
 
-0.9 adds a review-risk profile to shaped work. Guildhall plans review lanes
+Guildhall adds a review-risk profile to shaped work. Guildhall plans review lanes
 from the task, changed files, priority, and project settings, then records the
 recipes and evidence that should exist before reviewers accept the result.
 

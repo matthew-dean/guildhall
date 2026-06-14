@@ -265,7 +265,7 @@ runtime:
 
 Slot allocation is not the Podman-backed project runtime. It is a lightweight
 way to give parallel workers separate port ranges and environment hints while
-they still run in normal task worktrees. The 0.9 local runtime is configured
+they still run in normal task worktrees. The 0.10 local runtime is configured
 from **Settings -> Ready** and host-owned Guildhall runtime state, not this
 `guildhall.yaml` block.
 
