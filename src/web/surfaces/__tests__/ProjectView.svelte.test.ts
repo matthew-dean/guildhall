@@ -306,6 +306,7 @@ async function renderProjectView(
   project.error = null
   render(ProjectView, { initialView: view, initialSub: sub, projectId })
   await waitFor(() => expect(screen.getAllByText(initialDetail.name ?? 'Project').length).toBeGreaterThan(0))
+  await waitFor(() => expect(screen.queryByText('Loading project...')).toBeNull())
 }
 
 async function renderProjectViewWithoutInitialDetail(
@@ -316,6 +317,7 @@ async function renderProjectViewWithoutInitialDetail(
   project.detail = null
   project.error = null
   render(ProjectView, { initialView: view, initialSub: sub, projectId })
+  await waitFor(() => expect(screen.queryByText('Loading project...')).toBeNull())
 }
 
 function installMobileBrowserFakes() {
@@ -397,7 +399,9 @@ describe('ProjectView', () => {
   })
 
   it('keeps the selected project identity in the shell while direct Thread routes load detail', async () => {
-    await renderProjectViewWithoutInitialDetail('thread', null, 'looma-knit')
+    project.detail = null
+    project.error = null
+    render(ProjectView, { initialView: 'thread', initialSub: null, projectId: 'looma-knit' })
 
     expect(screen.getByText('Looma knit')).toBeInTheDocument()
     expect(screen.getByRole('button', { name: 'Project' })).toBeInTheDocument()
@@ -1159,7 +1163,7 @@ describe('ProjectView', () => {
     const loading = render(ProjectView, { initialView: 'thread', projectId: 'looma-knit' })
     await screen.findByRole('button', { name: 'Project' })
     expect(screen.getByRole('complementary', { name: 'Project navigation' })).toBeInTheDocument()
-    expect(screen.queryByText('Loading project...')).toBeNull()
+    await waitFor(() => expect(screen.queryByText('Loading project...')).toBeNull())
     loading.unmount()
 
     project.detail = null
@@ -1171,7 +1175,7 @@ describe('ProjectView', () => {
     project.detail = uninitialized
     project.error = null
     render(ProjectView, { initialView: 'thread', projectId: 'looma-knit' })
-    expect(screen.getByRole('heading', { name: /looma-knit is attached, but not initialized yet/i })).toBeInTheDocument()
+    expect(await screen.findByRole('heading', { name: /looma-knit is attached, but not initialized yet/i })).toBeInTheDocument()
 
     await user.click(screen.getByRole('button', { name: /initialize this project/i }))
     await waitFor(() => expect(path.value).toBe('/projects/looma-knit/setup'))

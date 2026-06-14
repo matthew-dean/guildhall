@@ -101,6 +101,31 @@ describe('release artifact contract', () => {
     expect(router).toContain("import('./surfaces/ProjectView.svelte')")
   })
 
+  it('keeps project tabs behind dynamic imports inside the project route chunk', () => {
+    const projectView = read('src/web/surfaces/ProjectView.svelte')
+
+    for (const tab of [
+      'ProjectOverviewTab',
+      'ThreadTab',
+      'NeedsYouTab',
+      'WorkTab',
+      'WorkspaceImportTab',
+      'ProjectAttachFlow',
+      'FactsTab',
+      'TimelineTab',
+      'ReleaseTab',
+      'SettingsTab',
+      'ProjectStructurePanel',
+    ]) {
+      expect(projectView).not.toContain(`import ${tab} from`)
+    }
+    expect(projectView).toContain("import('./project/ProjectOverviewTab.svelte')")
+    expect(projectView).toContain("import('./project/ThreadTab.svelte')")
+    expect(projectView).toContain("import('./project/WorkTab.svelte')")
+    expect(projectView).toContain("import('./project/ProjectAttachFlow.svelte')")
+    expect(projectView).toContain("import('./project/structure/ProjectStructurePanel.svelte')")
+  })
+
   it('publishes the current runtime image to GHCR with immutable and minor-line tags', () => {
     const workflow = read('.github/workflows/runtime-image.yml')
 

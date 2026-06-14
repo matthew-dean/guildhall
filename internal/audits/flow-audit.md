@@ -11548,3 +11548,45 @@ Verification:
   500 kB warning.
 
 source: codex:sveltekit-route-split-e2e-proof-2026-06-14
+
+2026-06-14T18:40:00Z - Split `ProjectView`'s internal project tabs into
+lazy route-surface chunks.
+
+Finding:
+- The previous SvelteKit route split moved top-level app surfaces out of the
+  initial web app, but `ProjectView` still bundled every project tab into one
+  large project route chunk. The manifest proof showed the project route chunk
+  at about `544280b` JS plus `144559b` CSS, and Vite emitted the >500 kB chunk
+  warning.
+
+Repair:
+- `ProjectView.svelte` now keeps the rail/topbar/project shell synchronous and
+  loads project surfaces with branch-local dynamic imports: Overview, Thread,
+  Needs You, Work, Workspace Import, Project Attach, Facts, Timeline, Release,
+  Settings, and Structure.
+- The release artifact contract now prevents static project-tab imports from
+  creeping back into `ProjectView`.
+- Component tests wait for lazy tab imports where they previously assumed
+  synchronous child render.
+
+Verification:
+- Red test proof: `pnpm vitest run scripts/release-artifacts.test.ts -t
+  "project tabs"` failed before the implementation because `ProjectView`
+  statically imported `ProjectOverviewTab`.
+- `pnpm vitest run src/web/surfaces/__tests__/ProjectView.svelte.test.ts
+  scripts/release-artifacts.test.ts` passed with `58` tests.
+- `pnpm typecheck` passed.
+- `VITE_GUILDHALL_ADVANCED_STRUCTURE=1 pnpm build` passed. The Vite >500 kB
+  chunk warning is gone.
+- Manifest proof: the project shell chunk with `ProjectView` CSS is now
+  `_app/immutable/chunks/BVg96qX-.js` at `71261b` with 11 dynamic imports.
+  Split tab chunks include `ThreadTab` at `184347b`, `SettingsTab` at
+  `71169b`, `WorkspaceImportTab` at `58628b`, `WorkTab` at `44587b`,
+  `ProjectOverviewTab` at `42157b`, and `ProjectStructurePanel` at `30632b`.
+- Browser network proof against `http://127.0.0.1:7791`: Overview loaded
+  shell + Overview only; Work loaded shell + Work only; Thread loaded shell +
+  Thread only; Structure loaded shell + Structure only; the task drawer route
+  loaded shell + Overview background + TaskDrawer.
+- `pnpm exec playwright test` passed with `37` rendered UI tests.
+
+source: codex:projectview-internal-route-split-2026-06-14

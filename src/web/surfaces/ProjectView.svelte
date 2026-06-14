@@ -19,17 +19,6 @@
   import StatusDot from '../lib/StatusDot.svelte'
   import ProjectShell from '../lib/layout/ProjectShell.svelte'
   import Tooltip from '../lib/Tooltip.svelte'
-  import ProjectOverviewTab from './project/ProjectOverviewTab.svelte'
-  import ThreadTab from './project/ThreadTab.svelte'
-  import NeedsYouTab from './project/NeedsYouTab.svelte'
-  import WorkTab from './project/WorkTab.svelte'
-  import WorkspaceImportTab from './project/WorkspaceImportTab.svelte'
-  import ProjectAttachFlow from './project/ProjectAttachFlow.svelte'
-  import FactsTab from './project/FactsTab.svelte'
-  import TimelineTab from './project/TimelineTab.svelte'
-  import ReleaseTab from './project/ReleaseTab.svelte'
-  import SettingsTab from './project/SettingsTab.svelte'
-  import ProjectStructurePanel from './project/structure/ProjectStructurePanel.svelte'
   import DoThisNext from './DoThisNext.svelte'
   import IntakeModal from './IntakeModal.svelte'
   import { project } from '../lib/project.svelte.js'
@@ -54,6 +43,18 @@
     skipped?: ProjectMigrationStatusItem[]
     failed?: Array<ProjectMigrationStatusItem & { error?: string }>
   }
+
+  const loadProjectOverviewTab = () => import('./project/ProjectOverviewTab.svelte')
+  const loadThreadTab = () => import('./project/ThreadTab.svelte')
+  const loadNeedsYouTab = () => import('./project/NeedsYouTab.svelte')
+  const loadWorkTab = () => import('./project/WorkTab.svelte')
+  const loadWorkspaceImportTab = () => import('./project/WorkspaceImportTab.svelte')
+  const loadProjectAttachFlow = () => import('./project/ProjectAttachFlow.svelte')
+  const loadFactsTab = () => import('./project/FactsTab.svelte')
+  const loadTimelineTab = () => import('./project/TimelineTab.svelte')
+  const loadReleaseTab = () => import('./project/ReleaseTab.svelte')
+  const loadSettingsTab = () => import('./project/SettingsTab.svelte')
+  const loadProjectStructurePanel = () => import('./project/structure/ProjectStructurePanel.svelte')
 
   interface ShellAttentionNotice {
     id: string
@@ -1186,11 +1187,22 @@
         <div class="topbar-actions"></div>
       </header>
     {/snippet}
-    <ProjectAttachFlow
-      projectName={projectDisplayPathLeaf}
-      projectPath={projectDisplayPath}
-      projectId={activeProjectId}
-    />
+    {#await loadProjectAttachFlow()}
+      <div class="page-centered">
+        <p class="muted">Loading project...</p>
+      </div>
+    {:then module}
+      {@const ProjectAttachFlow = module.default}
+      <ProjectAttachFlow
+        projectName={projectDisplayPathLeaf}
+        projectPath={projectDisplayPath}
+        projectId={activeProjectId}
+      />
+    {:catch err}
+      <div class="page-centered">
+        <p class="muted">Error: {err instanceof Error ? err.message : String(err)}</p>
+      </div>
+    {/await}
   </ProjectShell>
 {:else if project.error}
   <div class="page-centered">
@@ -1518,9 +1530,23 @@
         <div class="body">
           {#if !detail}
             {#if currentView === 'thread'}
-              <ThreadTab projectId={activeProjectId} />
+              {#await loadThreadTab()}
+                <div class="page-centered page-centered-inline">
+                  <p class="muted">Loading project...</p>
+                </div>
+              {:then module}
+                {@const ThreadTab = module.default}
+                <ThreadTab projectId={activeProjectId} />
+              {/await}
             {:else if currentView === 'inbox'}
-              <NeedsYouTab items={inboxItems} history={inboxHistory} loaded={inboxLoaded} error={inboxError} refresh={loadInbox} />
+              {#await loadNeedsYouTab()}
+                <div class="page-centered page-centered-inline">
+                  <p class="muted">Loading project...</p>
+                </div>
+              {:then module}
+                {@const NeedsYouTab = module.default}
+                <NeedsYouTab items={inboxItems} history={inboxHistory} loaded={inboxLoaded} error={inboxError} refresh={loadInbox} />
+              {/await}
             {:else}
               <div class="page-centered page-centered-inline">
                 <p class="muted">Loading project...</p>
@@ -1528,8 +1554,102 @@
             {/if}
           {:else if currentView === 'overview'}
             {#if currentSub === 'inbox'}
-              <NeedsYouTab items={inboxItems} history={inboxHistory} loaded={inboxLoaded} error={inboxError} refresh={loadInbox} />
+              {#await loadNeedsYouTab()}
+                <div class="page-centered page-centered-inline">
+                  <p class="muted">Loading project...</p>
+                </div>
+              {:then module}
+                {@const NeedsYouTab = module.default}
+                <NeedsYouTab items={inboxItems} history={inboxHistory} loaded={inboxLoaded} error={inboxError} refresh={loadInbox} />
+              {/await}
             {:else}
+              {#await loadProjectOverviewTab()}
+                <div class="page-centered page-centered-inline">
+                  <p class="muted">Loading project...</p>
+                </div>
+              {:then module}
+                {@const ProjectOverviewTab = module.default}
+                <ProjectOverviewTab
+                  {detail}
+                  {inboxItems}
+                  {inboxLoaded}
+                  {inboxError}
+                  {projectTicker}
+                  {activeProjectId}
+                  onMigrate={openMigrationModal}
+                />
+              {/await}
+            {/if}
+          {:else if currentView === 'thread'}
+            {#await loadThreadTab()}
+              <div class="page-centered page-centered-inline">
+                <p class="muted">Loading project...</p>
+              </div>
+            {:then module}
+              {@const ThreadTab = module.default}
+              <ThreadTab projectId={activeProjectId} />
+            {/await}
+          {:else if currentView === 'inbox'}
+            {#await loadNeedsYouTab()}
+              <div class="page-centered page-centered-inline">
+                <p class="muted">Loading project...</p>
+              </div>
+            {:then module}
+              {@const NeedsYouTab = module.default}
+              <NeedsYouTab items={inboxItems} history={inboxHistory} loaded={inboxLoaded} error={inboxError} refresh={loadInbox} />
+            {/await}
+          {:else if currentView === 'workspace-import'}
+            {#await loadWorkspaceImportTab()}
+              <div class="page-centered page-centered-inline">
+                <p class="muted">Loading project...</p>
+              </div>
+            {:then module}
+              {@const WorkspaceImportTab = module.default}
+              <WorkspaceImportTab />
+            {/await}
+          {:else if currentView === 'work'}
+            {#await loadWorkTab()}
+              <div class="page-centered page-centered-inline">
+                <p class="muted">Loading project...</p>
+              </div>
+            {:then module}
+              {@const WorkTab = module.default}
+              <WorkTab {detail} mode="list" />
+            {/await}
+          {:else if currentView === 'planner'}
+            {#await loadWorkTab()}
+              <div class="page-centered page-centered-inline">
+                <p class="muted">Loading project...</p>
+              </div>
+            {:then module}
+              {@const WorkTab = module.default}
+              <WorkTab {detail} mode="board" />
+            {/await}
+          {:else if currentView === 'facts'}
+            {#await loadFactsTab()}
+              <div class="page-centered page-centered-inline">
+                <p class="muted">Loading project...</p>
+              </div>
+            {:then module}
+              {@const FactsTab = module.default}
+              <FactsTab />
+            {/await}
+          {:else if currentView === 'structure' && showAdvancedStructure}
+            {#await loadProjectStructurePanel()}
+              <div class="page-centered page-centered-inline">
+                <p class="muted">Loading project...</p>
+              </div>
+            {:then module}
+              {@const ProjectStructurePanel = module.default}
+              <ProjectStructurePanel />
+            {/await}
+          {:else if currentView === 'structure'}
+            {#await loadProjectOverviewTab()}
+              <div class="page-centered page-centered-inline">
+                <p class="muted">Loading project...</p>
+              </div>
+            {:then module}
+              {@const ProjectOverviewTab = module.default}
               <ProjectOverviewTab
                 {detail}
                 {inboxItems}
@@ -1539,37 +1659,34 @@
                 {activeProjectId}
                 onMigrate={openMigrationModal}
               />
-            {/if}
-          {:else if currentView === 'thread'}
-            <ThreadTab projectId={activeProjectId} />
-          {:else if currentView === 'inbox'}
-            <NeedsYouTab items={inboxItems} history={inboxHistory} loaded={inboxLoaded} error={inboxError} refresh={loadInbox} />
-          {:else if currentView === 'workspace-import'}
-            <WorkspaceImportTab />
-          {:else if currentView === 'work'}
-            <WorkTab {detail} mode="list" />
-          {:else if currentView === 'planner'}
-            <WorkTab {detail} mode="board" />
-          {:else if currentView === 'facts'}
-            <FactsTab />
-          {:else if currentView === 'structure' && showAdvancedStructure}
-            <ProjectStructurePanel />
-          {:else if currentView === 'structure'}
-            <ProjectOverviewTab
-              {detail}
-              {inboxItems}
-              {inboxLoaded}
-              {inboxError}
-              {projectTicker}
-              {activeProjectId}
-              onMigrate={openMigrationModal}
-            />
+            {/await}
           {:else if currentView === 'timeline'}
-            <TimelineTab {detail} />
+            {#await loadTimelineTab()}
+              <div class="page-centered page-centered-inline">
+                <p class="muted">Loading project...</p>
+              </div>
+            {:then module}
+              {@const TimelineTab = module.default}
+              <TimelineTab {detail} />
+            {/await}
           {:else if currentView === 'release'}
-            <ReleaseTab subView={currentSub} />
+            {#await loadReleaseTab()}
+              <div class="page-centered page-centered-inline">
+                <p class="muted">Loading project...</p>
+              </div>
+            {:then module}
+              {@const ReleaseTab = module.default}
+              <ReleaseTab subView={currentSub} />
+            {/await}
         {:else if currentView === 'settings'}
-          <SettingsTab subView={currentSub} onMigrate={openMigrationModal} />
+          {#await loadSettingsTab()}
+            <div class="page-centered page-centered-inline">
+              <p class="muted">Loading project...</p>
+            </div>
+          {:then module}
+            {@const SettingsTab = module.default}
+            <SettingsTab subView={currentSub} onMigrate={openMigrationModal} />
+          {/await}
         {/if}
         </div>
 
