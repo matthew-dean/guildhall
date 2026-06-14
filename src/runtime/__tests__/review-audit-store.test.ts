@@ -55,7 +55,9 @@ describe('review audit store', () => {
       createdBy: 'coordinator:test',
     })
 
-    expect(saved.ref.path).toContain(path.join(projectRoot, '.guildhall', 'persistence'))
+    expect(saved.ref.path).toContain(path.join(dataDir, 'projects'))
+    expect(saved.ref.path).toContain(path.join('project-state', 'persistence'))
+    await expect(fs.stat(path.join(projectRoot, '.guildhall'))).rejects.toThrow()
     expect(saved.payload.createdAt).toBe('2026-05-25T12:34:00.000Z')
     expect(saved.payload.selectedLanes).toEqual(['ux_comprehension', 'plan_completeness'])
     expect(saved.payload.requiredRecipes[0]?.calibrationRecipeIds).toEqual(['ux-zero-context-comprehension'])

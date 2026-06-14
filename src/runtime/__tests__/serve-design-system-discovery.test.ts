@@ -3,7 +3,7 @@ import fs from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
 import { bootstrapWorkspace } from '@guildhall/config'
-import { getProjectStateDir } from '@guildhall/sessions'
+import { getProjectSystemStateDir } from '@guildhall/sessions'
 import { buildServeApp } from '../serve.js'
 import { DESIGN_STORIES_FILE } from '../design-preview.js'
 
@@ -37,7 +37,7 @@ describe('GET /api/project/design-system/discovery', () => {
       JSON.stringify({ dependencies: { '@looma/core': '0.1.0' } }, null, 2),
       'utf-8',
     )
-    const memoryDir = getProjectStateDir(tmpDir)
+    const memoryDir = getProjectSystemStateDir(tmpDir)
     await fs.mkdir(memoryDir, { recursive: true })
     await fs.writeFile(
       path.join(memoryDir, DESIGN_STORIES_FILE),

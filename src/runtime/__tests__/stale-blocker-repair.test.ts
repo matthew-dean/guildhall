@@ -1,6 +1,10 @@
 import { describe, expect, it } from 'vitest'
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import type { Task, TaskQueue } from '@guildhall/core'
-import { repairStaleBlockersInQueue } from '../stale-blocker-repair.js'
+import { getProjectSystemStatePath } from '@guildhall/sessions'
+import { repairStaleBlockersForProject, repairStaleBlockersInQueue } from '../stale-blocker-repair.js'
 
 function task(overrides: Partial<Task> = {}): Task {
   return {
@@ -97,5 +101,48 @@ describe('repairStaleBlockersInQueue', () => {
     expect(result.changed).toBe(false)
     expect(q.tasks[0]?.status).toBe('blocked')
     expect(q.tasks[0]?.escalations[0]?.resolvedAt).toBeUndefined()
+  })
+})
+
+describe('repairStaleBlockersForProject', () => {
+  it('repairs system-local task state without creating project-local Guildhall state', () => {
+    const previousConfigDir = process.env.GUILDHALL_CONFIG_DIR
+    const systemDir = mkdtempSync(join(tmpdir(), 'guildhall-stale-system-'))
+    const projectRoot = mkdtempSync(join(tmpdir(), 'guildhall-stale-project-'))
+    process.env.GUILDHALL_CONFIG_DIR = systemDir
+    try {
+      const tasksPath = getProjectSystemStatePath(projectRoot, 'TASKS.json')
+      mkdirSync(join(tasksPath, '..'), { recursive: true })
+      writeFileSync(tasksPath, `${JSON.stringify(queue([
+        task({
+          id: 'task-stale',
+          blockReason: 'scope_boundary: Blocked by cross-task guardrail forcing unrelated useAuth.ts file creation.',
+          escalations: [{
+            id: 'esc-1',
+            taskId: 'task-stale',
+            agentId: 'spec-agent',
+            reason: 'scope_boundary',
+            summary: 'Blocked by cross-task guardrail forcing unrelated useAuth.ts file creation.',
+            details: 'Current task is Stripe Connect, but tooling is forcing action on frontend/app/composables/useAuth.ts.',
+            raisedAt: '2026-05-22T16:30:07.240Z',
+          }],
+        }),
+      ]), null, 2)}\n`, 'utf8')
+
+      const result = repairStaleBlockersForProject(projectRoot)
+
+      expect(result.changed).toBe(true)
+      expect(existsSync(join(projectRoot, '.guildhall'))).toBe(false)
+      const raw = JSON.parse(readFileSync(tasksPath, 'utf8')) as TaskQueue
+      expect(raw.tasks[0]?.status).toBe('exploring')
+      expect(raw.tasks[0]).not.toHaveProperty('notes')
+      expect(raw.tasks[0]).not.toHaveProperty('escalations')
+      expect(raw.tasks[0]).not.toHaveProperty('openEscalations')
+    } finally {
+      if (previousConfigDir === undefined) delete process.env.GUILDHALL_CONFIG_DIR
+      else process.env.GUILDHALL_CONFIG_DIR = previousConfigDir
+      rmSync(projectRoot, { recursive: true, force: true })
+      rmSync(systemDir, { recursive: true, force: true })
+    }
   })
 })

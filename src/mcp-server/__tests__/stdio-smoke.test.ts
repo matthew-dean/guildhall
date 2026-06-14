@@ -1,4 +1,4 @@
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { Client } from '@modelcontextprotocol/sdk/client/index.js'
@@ -6,7 +6,7 @@ import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js'
 import { build } from 'esbuild'
 import { describe, expect, it } from 'vitest'
 import { defaultProjectRuntimeState, recordMemoryObservation, writeProjectRuntimeState } from '@guildhall/runtime'
-import { getProjectContextDebugLedgerPath, getProjectLocalHistoryDir } from '@guildhall/sessions'
+import { getProjectContextDebugLedgerPath, getProjectLocalHistoryDir, getProjectSystemStateDir, getProjectSystemStatePath } from '@guildhall/sessions'
 
 describe('guildhall mcp serve', () => {
   it('serves Guildhall resources over stdio', async () => {
@@ -37,9 +37,10 @@ describe('guildhall mcp serve', () => {
         },
         logLevel: 'silent',
       })
-      mkdirSync(join(root, '.guildhall'), { recursive: true })
       writeFileSync(join(root, 'guildhall.yaml'), 'name: Smoke\nid: smoke\n', 'utf8')
-      writeFileSync(join(root, '.guildhall', 'TASKS.json'), JSON.stringify({
+      const tasksPath = getProjectSystemStatePath(root, 'TASKS.json')
+      mkdirSync(join(tasksPath, '..'), { recursive: true })
+      writeFileSync(tasksPath, JSON.stringify({
         tasks: [{
           id: 'task-001',
           title: 'Smoke MCP',
@@ -50,7 +51,7 @@ describe('guildhall mcp serve', () => {
         }],
       }), 'utf8')
       await recordMemoryObservation({
-        memoryDir: join(root, '.guildhall'),
+        memoryDir: getProjectSystemStateDir(root),
         record: {
           id: 'stdio-memory',
           scope: 'project',
@@ -123,6 +124,7 @@ describe('guildhall mcp serve', () => {
       expect(JSON.stringify(await client.readResource({ uri: 'guildhall://project/runtime' }))).toContain('Health: healthy')
       expect(JSON.stringify(await client.readResource({ uri: 'guildhall://project/memory' }))).toContain('stdio-memory')
       expect(JSON.stringify(await client.readResource({ uri: 'guildhall://project/context' }))).toContain('Smoke MCP')
+      expect(existsSync(join(root, '.guildhall'))).toBe(false)
     } finally {
       await client?.close()
       rmSync(getProjectLocalHistoryDir(root), { recursive: true, force: true })

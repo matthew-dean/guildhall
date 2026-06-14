@@ -1,10 +1,9 @@
-import { writeManagedTextFileSync } from '@guildhall/persistence'
 import { appendManagedTextFile, readManagedTextFile, readManagedTextFileSync, writeManagedTextFile } from '@guildhall/persistence'
 import { existsSync, readFileSync } from 'node:fs'
-import { join } from 'node:path'
-import { atomicWriteText, getProjectStateDir } from '@guildhall/sessions'
+import { atomicWriteText, getProjectSystemStatePath } from '@guildhall/sessions'
 import type { Task, TaskQueue } from '@guildhall/core'
 import { TaskQueue as TaskQueueSchema } from '@guildhall/core'
+import { writeProjectTaskQueue } from './project-state-boundary.js'
 
 export interface StaleBlockerRepair {
   taskId: string
@@ -149,13 +148,13 @@ export function repairStaleBlockersInQueue(
 }
 
 export function repairStaleBlockersForProject(projectPath: string): StaleBlockerRepairResult {
-  const tasksPath = join(getProjectStateDir(projectPath), 'TASKS.json')
+  const tasksPath = getProjectSystemStatePath(projectPath, 'TASKS.json')
   if (!existsSync(tasksPath)) return { changed: false, repairs: [] }
 
   const queue = TaskQueueSchema.parse(JSON.parse(readManagedTextFileSync(tasksPath, 'utf8')))
   const result = repairStaleBlockersInQueue(queue)
   if (result.changed) {
-    writeManagedTextFileSync(tasksPath, JSON.stringify(queue, null, 2) + '\n')
+    writeProjectTaskQueue(tasksPath, queue)
   }
   return result
 }

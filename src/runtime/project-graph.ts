@@ -2,6 +2,7 @@ import fs from 'node:fs'
 import path from 'node:path'
 import { guildhallHomeDir, listWorkspaces, readWorkspaceConfig } from '@guildhall/config'
 import { writeJsonFile, writeJsonLinesFile } from '@guildhall/persistence'
+import { getProjectSystemStatePath } from '@guildhall/sessions'
 
 import { defineStateMachine, transition, type TransitionReceipt } from './state-machine.js'
 import { resolveWorkspaceProjectPaths } from './git-story-policy.js'
@@ -1245,7 +1246,7 @@ async function writeProviderRequestPacket(
 }
 
 async function writeConsumerOutgoingMirror(edge: ProjectDependencyEdge, consumerProjectPath: string): Promise<void> {
-  writeJson(path.join(consumerProjectPath, '.guildhall', 'project-graph', 'outgoing-requests', `${edge.id}.json`), {
+  writeJson(getProjectSystemStatePath(consumerProjectPath, path.join('project-graph', 'outgoing-requests', `${edge.id}.json`)), {
     edgeId: edge.id,
     providerProject: edge.provider,
     expectedDelivery: edge.expectedDelivery
@@ -1264,7 +1265,7 @@ async function writeConsumerOutgoingMirror(edge: ProjectDependencyEdge, consumer
 }
 
 async function writeProviderIncomingMirror(edge: ProjectDependencyEdge, providerProjectPath: string): Promise<void> {
-  writeJson(path.join(providerProjectPath, '.guildhall', 'project-graph', 'incoming-requests', `${edge.id}.json`), {
+  writeJson(getProjectSystemStatePath(providerProjectPath, path.join('project-graph', 'incoming-requests', `${edge.id}.json`)), {
     edgeId: edge.id,
     consumerProject: edge.consumer,
     requestedDomain: edge.domain,
@@ -1282,7 +1283,7 @@ async function writeProviderDeliveryMirror(
   providerProjectPath: string,
   deliveryReceipt: DeliveryReceipt,
 ): Promise<void> {
-  writeJson(path.join(providerProjectPath, '.guildhall', 'project-graph', 'deliveries', `${edge.id}.json`), {
+  writeJson(getProjectSystemStatePath(providerProjectPath, path.join('project-graph', 'deliveries', `${edge.id}.json`)), {
     edgeId: edge.id,
     providerProject: edge.provider,
     consumerProject: edge.consumer,

@@ -7,7 +7,7 @@
  * can leave and come back at any time, edit files by hand, and the wizard
  * auto-updates. The only wizard-specific state we persist is:
  *
- *   memory/wizards.yaml
+ *   project-state/wizards.yaml
  *     version: 1
  *     skipped:
  *       onboard:
@@ -477,7 +477,7 @@ function readYamlSafe(path: string): unknown {
 }
 
 export function readWizardsState(projectPath: string): WizardsState {
-  const path = join(getProjectStateDir(projectPath), 'wizards.yaml')
+  const path = getProjectSystemStatePath(projectPath, 'wizards.yaml')
   if (!existsSync(path)) return emptyWizardsState()
   const raw = readYamlSafe(path) as Partial<WizardsState> | null
   if (!raw || typeof raw !== 'object') return emptyWizardsState()
@@ -489,7 +489,7 @@ export function readWizardsState(projectPath: string): WizardsState {
 }
 
 export async function readWizardsStateAsync(projectPath: string): Promise<WizardsState> {
-  const path = join(getProjectStateDir(projectPath), 'wizards.yaml')
+  const path = getProjectSystemStatePath(projectPath, 'wizards.yaml')
   const raw = await readCachedYaml<Partial<WizardsState>>(path).catch(() => null)
   if (!raw || typeof raw !== 'object') return emptyWizardsState()
   return {
@@ -519,7 +519,7 @@ interface TaskIndexShape {
 }
 
 async function activeTaskCountFromIndex(projectPath: string): Promise<number | null> {
-  const file = join(getProjectStateDir(projectPath), 'tasks', 'index.json')
+  const file = getProjectSystemStatePath(projectPath, join('tasks', 'index.json'))
   const raw = await readCachedJson<TaskIndexShape>(file).catch(() => null)
   const ids = Array.isArray(raw?.activeTaskIds)
     ? raw.activeTaskIds.filter((id): id is string => typeof id === 'string')
@@ -601,7 +601,6 @@ export function buildSnapshot(opts: BuildSnapshotOptions): ProjectSnapshot {
   }
 
   // direction
-  const projectStateDir = getProjectStateDir(projectPath)
   const localHistoryDir = getProjectLocalHistoryDir(projectPath)
   const briefPath = getProjectSystemStatePath(projectPath, 'project-brief.md')
   let hasDirection = false
@@ -704,7 +703,6 @@ export async function buildSnapshotAsync(opts: BuildSnapshotOptions): Promise<Pr
     }
   }
 
-  const projectStateDir = getProjectStateDir(projectPath)
   const localHistoryDir = getProjectLocalHistoryDir(projectPath)
   const briefPath = getProjectSystemStatePath(projectPath, 'project-brief.md')
   const briefBody = await readCachedText(briefPath).catch(() => null)

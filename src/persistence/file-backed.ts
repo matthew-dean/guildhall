@@ -6,7 +6,7 @@ import path from 'node:path'
 import { getDataDir } from '@guildhall/sessions'
 import {
   getProjectLocalHistoryDir,
-  getProjectStateDir,
+  getProjectSystemStatePath,
 } from '@guildhall/sessions'
 import { atomicWriteText } from '@guildhall/sessions'
 import type {
@@ -245,7 +245,7 @@ export class FileBackedGuildhallPersistence implements GuildhallPersistence {
   ): string {
     switch (placement.scope) {
       case 'shared_project':
-        return path.join(getProjectStateDir(ensureProjectRoot(input, placement.scope)), 'persistence')
+        return getProjectSystemStatePath(ensureProjectRoot(input, placement.scope), 'persistence')
       case 'local_history':
         return path.join(getProjectLocalHistoryDir(ensureProjectRoot(input, placement.scope)), 'persistence')
       case 'global_user':

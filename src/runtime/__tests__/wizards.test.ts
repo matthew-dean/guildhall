@@ -8,7 +8,7 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest'
 import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { getProjectLocalHistoryDir } from '@guildhall/sessions'
+import { getProjectLocalHistoryDir, getProjectSystemStatePath } from '@guildhall/sessions'
 import {
   onboardWizard,
   progressFor,
@@ -187,7 +187,6 @@ describe('buildSnapshot', () => {
     tmp = mkdtempSync(join(tmpdir(), 'wizards-test-'))
     dataDir = join(tmpdir(), `guildhall-data-${tmp.split('/').at(-1)}`)
     process.env.GUILDHALL_DATA_DIR = dataDir
-    mkdirSync(join(tmp, '.guildhall'), { recursive: true })
   })
   afterEach(() => {
     delete process.env.GUILDHALL_DATA_DIR
@@ -248,7 +247,9 @@ describe('buildSnapshot', () => {
   })
 
   it('hasDirection=true only when brief has substance (>40 chars)', () => {
-    writeFileSync(join(tmp, '.guildhall', 'project-brief.md'), 'short')
+    const briefPath = getProjectSystemStatePath(tmp, 'project-brief.md')
+    mkdirSync(join(briefPath, '..'), { recursive: true })
+    writeFileSync(briefPath, 'short')
     let snap = buildSnapshot({
       projectPath: tmp,
       readProviders: () => ({ providers: {} }),
@@ -257,7 +258,7 @@ describe('buildSnapshot', () => {
     expect(snap.hasDirection).toBe(false)
 
     writeFileSync(
-      join(tmp, '.guildhall', 'project-brief.md'),
+      briefPath,
       'We are building X so that users can do Y. Done looks like Z.',
     )
     snap = buildSnapshot({
@@ -297,7 +298,9 @@ describe('buildSnapshot', () => {
   })
 
   it('taskCount handles both array and {tasks:[]} shapes', () => {
-    writeFileSync(join(tmp, '.guildhall', 'TASKS.json'), JSON.stringify([
+    const tasksPath = getProjectSystemStatePath(tmp, 'TASKS.json')
+    mkdirSync(join(tasksPath, '..'), { recursive: true })
+    writeFileSync(tasksPath, JSON.stringify([
       { id: 'a' },
       { id: 'b' },
       { id: 'task-meta-intake', domain: '_meta' },
@@ -310,7 +313,7 @@ describe('buildSnapshot', () => {
     expect(snap.taskCount).toBe(2)
 
     writeFileSync(
-      join(tmp, '.guildhall', 'TASKS.json'),
+      tasksPath,
       JSON.stringify({
         tasks: [
           { id: 'a' },
@@ -329,9 +332,10 @@ describe('buildSnapshot', () => {
   })
 
   it('buildSnapshotAsync prefers tasks/index.json for task counts on the hot path', async () => {
-    mkdirSync(join(tmp, '.guildhall', 'tasks'), { recursive: true })
+    const taskIndexPath = getProjectSystemStatePath(tmp, join('tasks', 'index.json'))
+    mkdirSync(join(taskIndexPath, '..'), { recursive: true })
     writeFileSync(
-      join(tmp, '.guildhall', 'tasks', 'index.json'),
+      taskIndexPath,
       JSON.stringify({
         version: 1,
         activeTaskIds: ['task-001', 'task-meta-intake', 'task-workspace-import', 'task-002'],
@@ -339,7 +343,7 @@ describe('buildSnapshot', () => {
         archivedCount: 1,
       }),
     )
-    writeFileSync(join(tmp, '.guildhall', 'TASKS.json'), '{not-json')
+    writeFileSync(getProjectSystemStatePath(tmp, 'TASKS.json'), '{not-json')
 
     const snap = await buildSnapshotAsync({
       projectPath: tmp,
@@ -351,8 +355,10 @@ describe('buildSnapshot', () => {
   })
 
   it('counts user-created starter tasks even when they are routed through the meta lane', () => {
+    const tasksPath = getProjectSystemStatePath(tmp, 'TASKS.json')
+    mkdirSync(join(tasksPath, '..'), { recursive: true })
     writeFileSync(
-      join(tmp, '.guildhall', 'TASKS.json'),
+      tasksPath,
       JSON.stringify({
         tasks: [
           { id: 'task-meta-intake', domain: '_meta' },
@@ -376,8 +382,10 @@ describe('buildSnapshot', () => {
   })
 
   it('reads wizards.yaml into snapshot.wizardState', () => {
+    const wizardPath = getProjectSystemStatePath(tmp, 'wizards.yaml')
+    mkdirSync(join(wizardPath, '..'), { recursive: true })
     writeFileSync(
-      join(tmp, '.guildhall', 'wizards.yaml'),
+      wizardPath,
       'version: 1\nskipped:\n  onboard:\n    - direction\ncompletedAt: {}\n',
     )
     const snap = buildSnapshot({

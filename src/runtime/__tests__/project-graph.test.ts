@@ -4,6 +4,7 @@ import os from 'node:os'
 import path from 'node:path'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { bootstrapWorkspace, registerWorkspace, writeWorkspaceConfig } from '@guildhall/config'
+import { getProjectSystemStatePath } from '@guildhall/sessions'
 
 import {
   acceptProjectDependencyDelivery,
@@ -373,7 +374,8 @@ describe('local project graph', () => {
 
     expect(fs.existsSync(path.join(systemDir, 'project-graph', 'edges', `${edge.id}.json`))).toBe(true)
     expect(fs.existsSync(path.join(systemDir, 'project-graph', 'exchange', 'provider-requests', `${edge.id}.json`))).toBe(true)
-    expect(fs.existsSync(path.join(consumerProject, '.guildhall', 'project-graph', 'outgoing-requests', `${edge.id}.json`))).toBe(true)
+    expect(fs.existsSync(getProjectSystemStatePath(consumerProject, path.join('project-graph', 'outgoing-requests', `${edge.id}.json`)))).toBe(true)
+    expect(fs.existsSync(path.join(consumerProject, '.guildhall', 'project-graph', 'outgoing-requests', `${edge.id}.json`))).toBe(false)
     expect(fs.existsSync(path.join(providerProject, '.guildhall', 'project-graph', 'incoming-requests', `${edge.id}.json`))).toBe(false)
   })
 
@@ -442,8 +444,10 @@ describe('local project graph', () => {
       'commit_delivery_plan',
       'deliver',
     ])
-    expect(fs.existsSync(path.join(providerProject, '.guildhall', 'project-graph', 'incoming-requests', `${edge.id}.json`))).toBe(true)
-    expect(fs.existsSync(path.join(providerProject, '.guildhall', 'project-graph', 'deliveries', `${edge.id}.json`))).toBe(true)
+    expect(fs.existsSync(getProjectSystemStatePath(providerProject, path.join('project-graph', 'incoming-requests', `${edge.id}.json`)))).toBe(true)
+    expect(fs.existsSync(getProjectSystemStatePath(providerProject, path.join('project-graph', 'deliveries', `${edge.id}.json`)))).toBe(true)
+    expect(fs.existsSync(path.join(providerProject, '.guildhall', 'project-graph', 'incoming-requests', `${edge.id}.json`))).toBe(false)
+    expect(fs.existsSync(path.join(providerProject, '.guildhall', 'project-graph', 'deliveries', `${edge.id}.json`))).toBe(false)
   })
 
   it('keeps provider completion separate from consumer acceptance and supports return/redelivery', async () => {

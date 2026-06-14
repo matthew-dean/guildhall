@@ -77,7 +77,7 @@ describe('GET /api/project/wizards', () => {
 })
 
 describe('POST /api/project/wizards/:id/skip', () => {
-  it('marks a skippable step as skipped and writes .guildhall/wizards.yaml', async () => {
+  it('marks a skippable step as skipped without creating project-local state', async () => {
     const { app } = buildServeApp({ projectPath: tmpDir })
     const res = await app.fetch(
       new Request(projectUrl('/api/project/wizards/onboard/skip'), {
@@ -87,7 +87,8 @@ describe('POST /api/project/wizards/:id/skip', () => {
       }),
     )
     expect(res.status).toBe(200)
-    expect(existsSync(path.join(getProjectStateDir(tmpDir), 'wizards.yaml'))).toBe(true)
+    expect(existsSync(getProjectSystemStatePath(tmpDir, 'wizards.yaml'))).toBe(true)
+    expect(existsSync(path.join(getProjectStateDir(tmpDir), 'wizards.yaml'))).toBe(false)
 
     // Next GET reflects the skip.
     const res2 = await app.fetch(new Request(projectUrl('/api/project/wizards')))

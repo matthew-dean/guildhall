@@ -834,6 +834,23 @@ coverage.
   product-brief, serve/intake/meta-intake, and drawer/history surfaces, and
   release proof must show normal app/API/MCP usage does not recreate any
   project-local `.guildhall` state for non-opt-in projects.
+  2026-06-13 default-zero correction: repo proof showed the bar was still not
+  fully met. `bootstrapWorkspace()` still created project-local `.guildhall`
+  seed files, stale-blocker repair still rewrote task state through the legacy
+  project-local path, wizard skip state still used `.guildhall/wizards.yaml`,
+  project-graph request/delivery mirrors still wrote below
+  `.guildhall/project-graph/`, MCP stdio still passed a project-local
+  `projectStateDir`, and design-system authoring had a duplicated helper that
+  wrote `.guildhall/design-system.yaml` while the runtime reader had moved on.
+  This slice moved those default writers/readers to system-local project state:
+  bootstrap now writes only `guildhall.yaml`; stale-blocker repair uses
+  `project-state/TASKS.json` plus the boundary sanitizer; wizard state,
+  project-graph mirrors, shared-project persistence records, MCP stdio task
+  state, and design-system authoring/reading now resolve through system-local
+  project state. Focused regressions assert these paths do not create
+  project-local `.guildhall` for fresh/default projects. The item still remains
+  open until broader verification and installed-app/API/MCP walkthrough prove
+  normal non-opt-in operation does not recreate repo-local Guildhall state.
 - [x] Distinguish in-app browser bridge failures from actual Guildhall route
   lockups during live audits. Multi-agent proof on 2026-06-04: the service
   stayed healthy (`stale:false`, `/api/service` and direct route HTTP returned

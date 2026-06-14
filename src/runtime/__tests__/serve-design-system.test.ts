@@ -5,7 +5,7 @@ import os from 'node:os'
 import yaml from 'js-yaml'
 import { bootstrapWorkspace } from '@guildhall/config'
 import { DesignSystem } from '@guildhall/core'
-import { getProjectStateDir } from '@guildhall/sessions'
+import { getProjectStateDir, getProjectSystemStatePath } from '@guildhall/sessions'
 import { buildServeApp } from '../serve.js'
 
 // Integration tests for the project-scoped design-system endpoints:
@@ -31,7 +31,7 @@ afterEach(async () => {
 })
 
 async function readDS(): Promise<DesignSystem> {
-  const raw = await fs.readFile(path.join(getProjectStateDir(tmpDir), 'design-system.yaml'), 'utf-8')
+  const raw = await fs.readFile(getProjectSystemStatePath(tmpDir, 'design-system.yaml'), 'utf-8')
   return DesignSystem.parse(yaml.load(raw) ?? {})
 }
 

@@ -59,7 +59,9 @@ describe('FileBackedGuildhallPersistence', () => {
       now,
     })
 
-    expect(record.ref.path).toContain(path.join(projectRoot, '.guildhall', 'persistence'))
+    expect(record.ref.path).toContain(path.join(dataDir, 'projects'))
+    expect(record.ref.path).toContain(path.join('project-state', 'persistence'))
+    await expect(fs.stat(path.join(projectRoot, '.guildhall'))).rejects.toThrow()
     expect(record.schema).toEqual({ name: 'review-plan', version: 1 })
     expect(record.provenance).toMatchObject({
       createdAt: '2026-05-25T12:00:00.000Z',

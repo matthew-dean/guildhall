@@ -128,7 +128,7 @@ describe('project-local delivery spine', () => {
     expect(validation.errors).toEqual([])
     expect(DELIVERY_SPINE_SCHEMA_DECISIONS.map(decision => decision.persistedSchemaTouched)).toEqual([
       'guildhall-persistence:local_history/delivery-spine/project-delivery-model',
-      '.guildhall/TASKS.json:tasks[].delivery',
+      'project-state/TASKS.json:tasks[].delivery',
       'guildhall-persistence:local_history/delivery-spine/project-delivery-model:validationEvidence',
       'guildhall-persistence:local_history/delivery-spine/project-delivery-model:finished-work-intake-derived-records',
     ])

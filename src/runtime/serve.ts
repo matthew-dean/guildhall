@@ -1108,12 +1108,11 @@ async function buildProjectInboxSnapshot(input: {
 
 // ---------------------------------------------------------------------------
 // Wizards helpers — small shims so serve.ts doesn't have to know about the
-// on-disk layout of memory/wizards.yaml.
+// on-disk layout of project-state/wizards.yaml.
 // ---------------------------------------------------------------------------
 function writeWizardsState(projectPath: string, state: WizardsState): void {
-  const memDir = getProjectStateDir(projectPath)
-  if (!existsSync(memDir)) mkdirSync(memDir, { recursive: true })
-  const path = join(memDir, 'wizards.yaml')
+  const path = getProjectSystemStatePath(projectPath, 'wizards.yaml')
+  mkdirSync(dirname(path), { recursive: true })
   writeManagedTextFileSync(path, stringifyYaml(state))
 }
 
@@ -8233,7 +8232,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
   // -------------------------------------------------------------------------
   // API: design system
   //
-  // Project-scoped; lives at .guildhall/design-system.yaml. The spec agent
+  // Project-scoped; lives in system-local project-state. The spec agent
   // drafts it; a human approves. Agents consume the approved revision via
   // context-builder's summary block — read the full file for richer surface.
   // -------------------------------------------------------------------------
