@@ -12,7 +12,7 @@
   import UtilityPanel from '../lib/UtilityPanel.svelte'
   import WorkMixChart from '../lib/WorkMixChart.svelte'
   import { avatarToneForRole } from '../lib/avatar-palette.js'
-  import { createProjectSummaryCache, type ProjectCardSummary } from '../lib/project-summary.js'
+  import { createProjectSummaryCache, mergeServiceProjectSummaries, type ProjectCardSummary } from '../lib/project-summary.js'
   import { projectHref } from '../lib/project-routes.js'
   import { getCachedService, setCachedService } from '../lib/service-cache.js'
   import type { ServiceDetail } from '../lib/types.js'
@@ -29,7 +29,6 @@
   let refreshInFlight = false
   let refreshQueued = false
   let lastRefreshAt = 0
-  let lastServiceSignature: string | null = null
 
   const SERVICE_REFRESH_MIN_INTERVAL_MS = 1500
   const SERVICE_REFRESH_POLL_MS = 30000
@@ -53,27 +52,6 @@
     return err instanceof Error ? err.message : String(err)
   }
 
-  function servicePayloadSignature(payload: ServiceDetail): string {
-    return JSON.stringify({
-      defaultProviderStatus: payload.defaultProviderStatus,
-      projects: payload.projects.map(project => ({
-        id: project.id,
-        path: project.path,
-        name: project.name,
-        summary: project.summary,
-        taskCounts: project.taskCounts,
-        highlights: project.highlights,
-        run: project.run,
-        startReadiness: project.startReadiness,
-        actionModel: project.actionModel,
-        providerStatus: project.providerStatus,
-        gitStory: project.gitStory,
-        projectCheckIn: project.projectCheckIn,
-        projectStatusLoading: project.projectStatusLoading,
-      })),
-    })
-  }
-
   function pageIsHidden(): boolean {
     return typeof document !== 'undefined' && document.visibilityState === 'hidden'
   }
@@ -89,11 +67,10 @@
     try {
       const response = await fetch('/api/service', { cache: 'no-store' })
       const payload = (await response.json()) as ServiceDetail
-      const signature = servicePayloadSignature(payload)
-      if (signature !== lastServiceSignature || service == null) {
-        service = payload
-        setCachedService(payload)
-        lastServiceSignature = signature
+      const merged = mergeServiceProjectSummaries(service, payload)
+      if (merged !== service) {
+        service = merged
+        setCachedService(merged)
       }
       error = null
       lastRefreshAt = Date.now()
@@ -113,10 +90,9 @@
     try {
       const response = await fetch('/api/service/projects', { cache: 'no-store' })
       const payload = (await response.json()) as ServiceDetail
-      const signature = servicePayloadSignature(payload)
-      if (signature !== lastServiceSignature || service == null) {
-        service = payload
-        lastServiceSignature = signature
+      const merged = mergeServiceProjectSummaries(service, payload)
+      if (merged !== service) {
+        service = merged
       }
       error = null
       loading = false
@@ -132,7 +108,6 @@
     const cached = getCachedService()
     if (cached) {
       service = cached
-      lastServiceSignature = servicePayloadSignature(cached)
       loading = false
       void refresh(true)
       return

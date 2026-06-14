@@ -13,6 +13,7 @@ import {
 } from '../task-queue.js'
 import { readTaskEvidence } from '@guildhall/sessions'
 import { TaskQueue } from '@guildhall/core'
+import { FORBIDDEN_PROJECT_TASK_FIELDS } from '../../runtime/project-state-boundary.js'
 
 // ---------------------------------------------------------------------------
 // Tests for task queue tools — these are safety-critical (gate logic depends
@@ -90,6 +91,16 @@ describe('updateTask', () => {
     expect(raw.tasks[0].status).toBe('spec_review')
   })
 
+  it('persists updates through the project-state boundary', async () => {
+    await updateTask({ tasksPath, taskId: 'task-001', title: 'Boundary-safe title' })
+
+    const raw = JSON.parse(await fs.readFile(tasksPath, 'utf-8'))
+    expect(raw.tasks[0].title).toBe('Boundary-safe title')
+    for (const field of FORBIDDEN_PROJECT_TASK_FIELDS) {
+      expect(raw.tasks[0]).not.toHaveProperty(field)
+    }
+  })
+
   it('normalizes reviewer ownership when a task moves into review', async () => {
     await updateTask({ tasksPath, taskId: 'task-001', status: 'spec_review' })
     await updateTask({ tasksPath, taskId: 'task-001', status: 'ready' })
@@ -148,7 +159,7 @@ describe('updateTask', () => {
       note: { agentId: 'spec-agent', role: 'spec', content: 'Spec complete.' },
     })
     const raw = JSON.parse(await fs.readFile(tasksPath, 'utf-8'))
-    expect(raw.tasks[0].notes).toEqual([])
+    expect(raw.tasks[0]).not.toHaveProperty('notes')
 
     const evidence = await readTaskEvidence(tmpDir, 'task-001', { kind: 'note' })
     expect(evidence).toHaveLength(1)
@@ -872,7 +883,7 @@ describe('updateTask', () => {
     })
 
     const raw = JSON.parse(await fs.readFile(tasksPath, 'utf-8'))
-    expect(raw.tasks[0].gateResults).toEqual([])
+    expect(raw.tasks[0]).not.toHaveProperty('gateResults')
 
     const evidence = await readTaskEvidence(tmpDir, 'task-001', { kind: 'gate_result' })
     expect(evidence.map((event) => event.payload)).toEqual([
@@ -931,7 +942,7 @@ describe('updateTask', () => {
         met: false,
       },
     ])
-    expect(raw.tasks[0].gateResults).toEqual([])
+    expect(raw.tasks[0]).not.toHaveProperty('gateResults')
     const evidence = await readTaskEvidence(tmpDir, 'task-001', { kind: 'gate_result' })
     expect(evidence.map((event) => event.payload)).toEqual([
       {
@@ -986,9 +997,9 @@ describe('addTask', () => {
     const raw = JSON.parse(await fs.readFile(tasksPath, 'utf-8'))
     expect(raw.tasks).toHaveLength(2)
     expect(raw.tasks[1].id).toBe('task-002')
-    expect(raw.tasks[1].notes).toEqual([])
-    expect(raw.tasks[1].gateResults).toEqual([])
-    expect(raw.tasks[1].revisionCount).toBe(0)
+    expect(raw.tasks[1]).not.toHaveProperty('notes')
+    expect(raw.tasks[1]).not.toHaveProperty('gateResults')
+    expect(raw.tasks[1]).not.toHaveProperty('revisionCount')
   })
 })
 
@@ -1047,7 +1058,7 @@ describe('engine tool wrappers', () => {
     expect(result.metadata?.taskId).toBe('task-001')
     const raw = JSON.parse(await fs.readFile(tasksPath, 'utf-8'))
     expect(raw.tasks[0].status).toBe('review')
-    expect(raw.tasks[0].notes).toEqual([])
+    expect(raw.tasks[0]).not.toHaveProperty('notes')
     const evidence = await readTaskEvidence(tmpDir, 'task-001', { kind: 'note' })
     expect(evidence[0]?.payload).toMatchObject({
       agentId: 'worker-agent',

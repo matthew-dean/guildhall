@@ -1,9 +1,86 @@
 import { describe, expect, it } from 'vitest'
 
-import { createProjectSummaryCache, summarizeProjects } from '../project-summary.js'
+import { createProjectSummaryCache, mergeServiceProjectSummaries, summarizeProjects } from '../project-summary.js'
 import type { ServiceDetail } from '../types.js'
 
 describe('summarizeProjects', () => {
+  it('normalizes service refreshes by project id so unchanged project summaries keep identity', () => {
+    const cache = createProjectSummaryCache()
+    const initial: ServiceDetail = {
+      pid: 1234,
+      projects: [
+        {
+          id: 'looma',
+          name: 'Looma',
+          path: '/work/looma',
+          taskCounts: { total: 3, active: 1, draftReview: 0, blocked: 0, done: 2, shelved: 0 },
+          highlights: { activeTaskTitle: 'Build editor chrome' },
+          run: { status: 'stopped' },
+        },
+        {
+          id: 'knit',
+          name: 'Knit',
+          path: '/work/knit',
+          taskCounts: { total: 4, active: 0, draftReview: 0, blocked: 0, done: 4, shelved: 0 },
+          highlights: { recentCompletedTaskTitle: 'Ship project palette' },
+          run: { status: 'stopped' },
+        },
+      ],
+    }
+    const initialCards = cache.summarize(initial)
+
+    const refreshed = mergeServiceProjectSummaries(initial, {
+      pid: 1234,
+      projects: [
+        structuredClone(initial.projects![0]!),
+        {
+          ...structuredClone(initial.projects![1]!),
+          taskCounts: { total: 4, active: 1, draftReview: 0, blocked: 0, done: 3, shelved: 0 },
+          highlights: { activeTaskTitle: 'Wire activity strip' },
+        },
+      ],
+    })
+
+    expect(refreshed).not.toBe(initial)
+    expect(refreshed.projects?.[0]).toBe(initial.projects?.[0])
+    expect(refreshed.projects?.[1]).not.toBe(initial.projects?.[1])
+    expect(refreshed.projects?.[1]).toMatchObject({
+      id: 'knit',
+      taskCounts: { active: 1 },
+      highlights: { activeTaskTitle: 'Wire activity strip' },
+    })
+
+    const refreshedCards = cache.summarize(refreshed)
+    expect(refreshedCards[0]).toBe(initialCards[0])
+    expect(refreshedCards[1]).not.toBe(initialCards[1])
+    expect(refreshedCards[1]).toMatchObject({
+      id: 'knit',
+      counts: { active: 1 },
+      recentLabel: 'Working on: Wire activity strip',
+    })
+  })
+
+  it('preserves unchanged project identities when the service changes project order', () => {
+    const initial: ServiceDetail = {
+      projects: [
+        { id: 'first', name: 'First', path: '/work/first', run: { status: 'stopped' } },
+        { id: 'second', name: 'Second', path: '/work/second', run: { status: 'stopped' } },
+      ],
+    }
+
+    const refreshed = mergeServiceProjectSummaries(initial, {
+      projects: [
+        structuredClone(initial.projects![1]!),
+        structuredClone(initial.projects![0]!),
+      ],
+    })
+
+    expect(refreshed).not.toBe(initial)
+    expect(refreshed.projects?.map(project => project.id)).toEqual(['second', 'first'])
+    expect(refreshed.projects?.[0]).toBe(initial.projects?.[1])
+    expect(refreshed.projects?.[1]).toBe(initial.projects?.[0])
+  })
+
   it('reuses unchanged project card summaries across material project refreshes', () => {
     const cache = createProjectSummaryCache()
     const service: ServiceDetail = {

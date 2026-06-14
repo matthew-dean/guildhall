@@ -288,6 +288,17 @@ Proof required:
 
 Proof provided:
 
+- 2026-06-13 task-queue writer-boundary slice: `updateTask()` and
+  `addTask()` now write through `writeProjectTaskQueue()` instead of direct
+  JSON serialization, so tool-driven task mutations cannot preserve or
+  recreate forbidden project-local task fields in persisted `TASKS.json`.
+  Focused red/green proof:
+  `pnpm exec vitest run src/tools/__tests__/task-queue.test.ts -t "persists updates through the project-state boundary" --reporter=dot`.
+  Follow-up proof:
+  `pnpm exec vitest run src/tools/__tests__/task-queue.test.ts --reporter=dot`,
+  `pnpm exec vitest run src/runtime/__tests__/project-state-boundary.test.ts src/runtime/__tests__/project-state-compaction.test.ts --reporter=dot`,
+  `pnpm exec vitest run scripts/data-layer-guardrails.test.ts --reporter=dot`,
+  and `pnpm typecheck`.
 - 2026-06-06 red/green boundary coverage:
   `src/runtime/__tests__/project-state-boundary.test.ts`,
   `src/runtime/__tests__/project-state-compaction.test.ts`, and

@@ -1,4 +1,3 @@
-import { writeManagedTextFileSync } from '@guildhall/persistence'
 import { appendManagedTextFile, readManagedTextFile, readManagedTextFileSync, writeManagedTextFile } from '@guildhall/persistence'
 import { defineTool } from '@guildhall/engine'
 import { z } from 'zod'
@@ -23,6 +22,7 @@ import {
   renderStructuredSpecMarkdown,
 } from '@guildhall/core'
 import { appendTaskEvidence, atomicWriteText, inferProjectRootFromMemoryDir } from '@guildhall/sessions'
+import { writeProjectTaskQueue } from '../runtime/project-state-boundary.js'
 
 const TASKS_PATH_SCHEMA = z.string().describe('Absolute path to the TASKS.json file')
 
@@ -311,7 +311,7 @@ export async function updateTask(
     task.updatedAt = new Date().toISOString()
     queue.lastUpdated = new Date().toISOString()
 
-    writeManagedTextFileSync(input.tasksPath, JSON.stringify(queue, null, 2) + '\n')
+    writeProjectTaskQueue(input.tasksPath, queue)
     await appendUpdateTaskEvidence({
       tasksPath: input.tasksPath,
       taskId,
@@ -965,7 +965,7 @@ export async function addTask(input: AddTaskInput): Promise<AddTaskResult> {
     })
     queue.tasks.push(newTask)
     queue.lastUpdated = new Date().toISOString()
-    writeManagedTextFileSync(input.tasksPath, JSON.stringify(queue, null, 2) + '\n')
+    writeProjectTaskQueue(input.tasksPath, queue)
     return { success: true, taskId: newTask.id }
   } catch (err) {
     return { success: false, error: String(err) }

@@ -36,6 +36,8 @@ import {
   getProjectProgressHeartbeatsPath,
   getProjectTaskLocalHistoryDir,
   getProjectTranscriptPath,
+  appendTaskEvidence,
+  readTaskEvidence,
 } from '@guildhall/sessions'
 import { createOwnerInputRequest, listOwnerInputRequests } from '../owner-input-store.js'
 import { readMemoryEvents } from '@guildhall/memory-core'
@@ -10164,7 +10166,49 @@ describe('Orchestrator — FR-31 agent-issue channel', () => {
     expect(second).toEqual([])
 
     const q = await readQueue()
-    expect(q.tasks[0]!.agentIssues.every((i) => i.broadcast)).toBe(true)
+    expect(q.tasks[0]!.agentIssues.every((i) => i.broadcast === false)).toBe(true)
+    const evidence = await readTaskEvidence(tmpDir, 't-1', { kind: 'agent_issue' })
+    const latestById = new Map(evidence.map((event) => [
+      (event.payload as { id: string }).id,
+      event.payload as { broadcast?: boolean },
+    ]))
+    expect(latestById.get('iss-t-1-1')?.broadcast).toBe(true)
+    expect(latestById.get('iss-t-1-2')?.broadcast).toBe(true)
+  })
+
+  it('drains evidence-backed issues without writing them back to TASKS.json', async () => {
+    await writeQueue([
+      mkTask({
+        id: 't-1',
+        status: 'in_progress',
+        agentIssues: [],
+      }),
+    ])
+    await appendTaskEvidence(tmpDir, 't-1', {
+      id: 'iss-t-1-1',
+      kind: 'agent_issue',
+      recordedAt: '2026-04-20T00:00:00Z',
+      payload: {
+        id: 'iss-t-1-1',
+        taskId: 't-1',
+        agentId: 'worker-agent',
+        code: 'stuck',
+        severity: 'warn',
+        detail: 'No progress after three attempts',
+        raisedAt: '2026-04-20T00:00:00Z',
+        broadcast: false,
+      },
+    })
+    const orch = new Orchestrator({ config: baseConfig(), agents: agentSet() })
+
+    const first = await orch.drainPendingIssues()
+    expect(first.map((i) => i.id)).toEqual(['iss-t-1-1'])
+    expect(await orch.drainPendingIssues()).toEqual([])
+
+    const q = await readQueue()
+    expect(q.tasks[0]!.agentIssues).toEqual([])
+    const evidence = await readTaskEvidence(tmpDir, 't-1', { kind: 'agent_issue' })
+    expect(evidence.map((event) => (event.payload as { broadcast?: boolean }).broadcast)).toEqual([false, true])
   })
 
   it('does not drain resolved issues even if broadcast=false', async () => {

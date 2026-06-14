@@ -446,7 +446,7 @@ coverage.
   the tracked deletion cleanup entries. Queue proof:
   `/api/project/delivery-spine/queue?projectId=jess` returned 0 runnable and 0
   blocked because Jess has no live task records after the repo-state cleanup.
-- [ ] Prove a Looma + Knit component can reach delivery through Guildhall UI
+- [x] Prove a Looma + Knit component can reach delivery through Guildhall UI
   only. Live attempt on 2026-06-05 picked `ContextMenu` after `AlertDialog`
   was found split across a blocked imported task and an older brief-cleanup
   task with missing acceptance criteria. Guildhall UI did move `ContextMenu`
@@ -707,6 +707,22 @@ coverage.
   request|timeline" --reporter=line` all passed. Full rendered matrix
   verification is `pnpm exec playwright test
   tests/rendered-ui/project-flow.spec.ts --reporter=line`.
+  Closure refresh, 2026-06-13: rebuilt and installed the current branch, then
+  proved the `ContextMenu` component chain through the live Guildhall UI/API.
+  `/api/stale-server` returned `stale:false`; focused runtime/UI coverage
+  passed (`pnpm vitest run src/runtime/__tests__/orchestrator.test.ts
+  src/web/surfaces/project/__tests__/WorkTab.svelte.test.ts
+  src/web/lib/__tests__/project-data.test.ts --reporter=dot`, `3` files,
+  `336` tests); `pnpm build` and `pnpm dev:install` passed. Live API proof for
+  `/api/project/task/task-import-1l0mr2r?projectId=looma-knit` showed
+  `ContextMenu` and its four child deliverables done: Component
+  implementation, Storybook story, Contract README, and API docs sync. Live UI
+  proof on `/projects/looma-knit/task/task-import-1l0mr2r` rendered the
+  `ContextMenu` task drawer as `DONE` with child tasks, and
+  `/projects/looma-knit/work` rendered the generic Work List source-area
+  controls. Residual `COMPLETION HYGIENE` escalation-history cleanup belongs
+  to the task-state/runtime-evidence storage split, not to the Looma/Knit
+  component-delivery proof.
 - [ ] Enforce project-state storage boundaries and clean existing managed
   project `.guildhall` bloat. Live audit on 2026-06-04 showed the previous
   task-state split was not durably implemented: active writers still recreate
@@ -797,7 +813,22 @@ coverage.
   Remaining work: Observational Memory orchestration, migration/audit command,
   UI memory health, migration progress modal, semantic recall gate, and retiring
   old project-local accepted-memory writers.
-- [ ] Distinguish in-app browser bridge failures from actual Guildhall route
+  2026-06-13 writer-boundary slice: `updateTask()` and `addTask()` now persist
+  through `writeProjectTaskQueue()` so tool-driven task mutations cannot
+  preserve or recreate forbidden task runtime/evidence fields in project-local
+  `TASKS.json`. `reportIssue()`/`resolveIssue()` now write new issue state to
+  task evidence plus runtime `openIssueIds`, keep legacy `Task.agentIssues[]`
+  as a compatibility reader, and persist the queue through the same boundary
+  writer. Verification: `pnpm exec vitest run
+  src/tools/__tests__/task-queue.test.ts src/runtime/__tests__/project-state-boundary.test.ts
+  src/runtime/__tests__/project-state-compaction.test.ts
+  scripts/data-layer-guardrails.test.ts --reporter=dot` passed (`4` files,
+  `54` tests); `pnpm test src/tools/__tests__/report-issue.test.ts
+  src/runtime/__tests__/orchestrator.test.ts` passed (`2` files, `318` tests).
+  The item remains open because direct production queue writers and raw
+  runtime/evidence readers still exist in orchestrator remediation, escalation,
+  product-brief, serve/intake/meta-intake, and drawer/history surfaces.
+- [x] Distinguish in-app browser bridge failures from actual Guildhall route
   lockups during live audits. Multi-agent proof on 2026-06-04: the service
   stayed healthy (`stale:false`, `/api/service` and direct route HTTP returned
   cleanly), but delegated Browser lanes hit `Page.navigate`, `Runtime.evaluate`,
@@ -813,6 +844,13 @@ coverage.
   text still worked. The same installed app rendered correctly in standalone
   Playwright, so this remains a Browser bridge/tab-state recovery issue rather
   than a confirmed Guildhall route lockup.
+  Closure refresh, 2026-06-13: added `scripts/browser-route-proof.mjs` with a
+  route probe classifier that records navigation result, direct route HTTP,
+  API liveness, and DOM proof before classifying a route as
+  `route_healthy`, `browser_bridge_failure`, or `product_route_lockup`.
+  Verification: `pnpm vitest run scripts/browser-route-proof.test.ts
+  --reporter=dot` passed and proves Browser-control failures are classified
+  separately when HTTP/API checks remain healthy.
 - [x] Reproduce or disprove Narrative Harness Thread route hang. Interactive
   audit lane on 2026-06-04 loaded
   `http://localhost:7777/projects/narrative-harness` successfully with project
@@ -860,7 +898,7 @@ coverage.
   (`198` tests);
   `pnpm vitest run src/runtime/__tests__/serve-settings.test.ts src/runtime/__tests__/serve-dashboard.test.ts --reporter=dot`
   (`59` tests); `pnpm typecheck`.
-- [ ] Complete browser-capable per-project replay targets from the multi-agent
+- [x] Complete browser-capable per-project replay targets from the multi-agent
   audit. Required high-value targets: Jess structural-review owner input at
   `/projects/jess/thread?thread=bc-jess-structural_review-8c11fc652d-2026-06-04T00-44-08-860Z`;
   Jess `/workspace-import`; Commerce `/thread` setup pending; Looma + Knit
@@ -869,6 +907,18 @@ coverage.
   `/task/coherence-reviewer-mvp?tab=spec`,
   `/task/decision-trace-pipeline?tab=spec`, and `/task/task-009?tab=spec`;
   Font something task routes including `/task/import-api-serving-mvp`.
+  Closure refresh, 2026-06-13: added the replay target list to
+  `scripts/browser-route-proof.mjs` and a rendered Playwright suite at
+  `tests/rendered-ui/multi-agent-replay.spec.ts`. Replay fixture projects are
+  present before the server starts, and the suite idempotently seeds the exact
+  task records needed for the named Jess, Commerce, Looma + Knit, Narrative
+  Harness, and Font Something routes, validates route HTTP/API/DOM proof, then
+  cleans up. Verification from the implementation lane:
+  `rm -rf .playwright-fixtures && GUILDHALL_E2E_PORT=7801 pnpm playwright test
+  tests/rendered-ui/multi-agent-replay.spec.ts` passed (`9` targets). This
+  proves standalone/rendered-ui browser capability for the listed replay
+  targets; in-app Browser bridge failures remain classified by the separate
+  route-proof harness above.
 - [x] Run a different-project weak/medium coverage replay and fix the new
   leaks it surfaced. Fresh installed-app proof on 2026-06-04/05 used
   `/api/stale-server` `stale:false` for installed dist
@@ -2615,6 +2665,18 @@ follow-up here with its evidence instead of deleting it.
   and high-value evidence mirroring for escalations, agent issues, and gate
   results. Remaining work is to stop all legacy runtime/evidence writes and
   rewire drawer/project surfaces to depend on effective projections.
+  2026-06-13 progress slice: the task queue tool path now writes through
+  `writeProjectTaskQueue()`, and `report-issue` stores new issue/broadcast
+  state in task evidence plus runtime `openIssueIds` instead of adding new
+  entries to project-local `Task.agentIssues[]`. Orchestrator issue draining
+  now reads effective legacy-plus-evidence issues and records broadcast state
+  as evidence. Verification: `pnpm test
+  src/tools/__tests__/report-issue.test.ts
+  src/runtime/__tests__/orchestrator.test.ts` passed (`318` tests);
+  `pnpm exec vitest run src/tools/__tests__/task-queue.test.ts --reporter=dot`
+  passed (`43` tests). The item remains open because escalation writes,
+  orchestrator remediation counters/notes, and raw task-history/drawer readers
+  still need effective-projection coverage.
 - [x] Close the cognitive-overhead recovery blocker hole. Routine missing
   verification/test evidence is now Guildhall-owned recovery, not a user
   blocker: agents are instructed to run or record the missing check instead of
@@ -2897,12 +2959,20 @@ follow-up here with its evidence instead of deleting it.
   keeps refreshes non-overlapping, and only publishes a new service snapshot
   when the material project summary actually changes; always-on dashboard
   animations also respect reduced-motion preferences.
-- [ ] Future dashboard performance pass: normalize service/project summary
+- [x] Future dashboard performance pass: normalize service/project summary
   state by project id so a refresh can update only the project cards whose
   material summary changed. The current snapshot-signature guard prevents
   identical-payload repaint churn, but a changed service payload still wakes
   the whole Projects home reactive graph. Do this when dashboard activity
   grows enough that per-project diffing is worth the extra state plumbing.
+  Implemented on 2026-06-13: `mergeServiceProjectSummaries()` now merges
+  `/api/service` and `/api/service/projects` refreshes by project id, preserving
+  unchanged project object identities while replacing changed project summaries
+  and preserving order changes. `ProjectsHome` now uses that normalized merge
+  path before updating the shared service cache. Verification:
+  `pnpm vitest run src/web/lib/__tests__/project-summary.test.ts
+  src/web/surfaces/__tests__/ProjectsHome.svelte.test.ts --reporter=dot`
+  passed (`43` tests).
 - [x] Remove the invented projects-page details rail and centralize action
   rows. Project cards no longer create a second in-page "Project details"
   rail that re-layouts the dashboard; card inspection now opens the existing

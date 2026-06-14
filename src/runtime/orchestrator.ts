@@ -21,11 +21,11 @@ import {
 } from './provider-runtime-config.js'
 import {
   parseAcceptanceCriteriaFromSpec,
+  AgentIssue,
   TaskQueue,
   TERMINAL_TASK_STATUSES,
   type ModelAssignmentConfig,
   type AdjudicationRecord,
-  type AgentIssue,
   type Checkpoint,
   type ReviewVerdict,
   type Task,
@@ -173,6 +173,9 @@ import {
   getProjectTaskLocalHistoryDir,
   inferProjectRootFromMemoryDir,
   loadSessionById,
+  appendTaskEvidence,
+  readTaskEvidence,
+  upsertTaskRuntimeState,
   type SessionSnapshot,
 } from '@guildhall/sessions'
 import {
@@ -5203,7 +5206,7 @@ export class Orchestrator {
     // coordinator decides whether to act on each. The `broadcast` flag is
     // separate (it governs FR-16 wire-event emission, not remediation).
     for (const task of queue.tasks) {
-      for (const issue of task.agentIssues) {
+      for (const issue of await this.readEffectiveAgentIssues(task)) {
         if (issue.resolvedAt) continue
         triggers.push({
           kind: 'issue',
@@ -5329,6 +5332,33 @@ export class Orchestrator {
     await this.writeQueue(queue)
   }
 
+  private async readEffectiveAgentIssues(task: Task): Promise<AgentIssue[]> {
+    const projectRoot = inferProjectRootFromMemoryDir(this.opts.config.memoryDir)
+    const evidence = await readTaskEvidence(projectRoot, task.id, { kind: 'agent_issue' })
+    const issues = new Map<string, AgentIssue>()
+    for (const issue of task.agentIssues) issues.set(issue.id, issue)
+    for (const event of evidence) {
+      const parsed = AgentIssue.safeParse(event.payload)
+      if (parsed.success) issues.set(parsed.data.id, parsed.data)
+    }
+    return [...issues.values()].sort((a, b) => a.raisedAt.localeCompare(b.raisedAt))
+  }
+
+  private async recordAgentIssueEvidence(task: Task, issue: AgentIssue, recordedAt: string): Promise<void> {
+    const projectRoot = inferProjectRootFromMemoryDir(this.opts.config.memoryDir)
+    await appendTaskEvidence(projectRoot, task.id, {
+      id: `${issue.id}-${recordedAt.replace(/[^0-9A-Za-z]/g, '')}`,
+      kind: 'agent_issue',
+      recordedAt,
+      payload: issue,
+    })
+    const issues = await this.readEffectiveAgentIssues(task)
+    await upsertTaskRuntimeState(projectRoot, task.id, {
+      openIssueIds: issues.filter((candidate) => !candidate.resolvedAt).map((candidate) => candidate.id),
+      updatedAt: recordedAt,
+    })
+  }
+
   private async recordAutonomousCheckpointNoProgressRemediation(input: {
     task: Task
     queue: TaskQueue
@@ -5438,21 +5468,16 @@ export class Orchestrator {
   async drainPendingIssues(): Promise<AgentIssue[]> {
     const queue = await this.readQueue()
     const drained: AgentIssue[] = []
-    let mutated = false
 
     for (const task of queue.tasks) {
-      for (const issue of task.agentIssues) {
+      for (const issue of await this.readEffectiveAgentIssues(task)) {
         if (!issue.broadcast && !issue.resolvedAt) {
-          issue.broadcast = true
-          drained.push(issue)
-          mutated = true
+          const now = this.now()
+          const broadcastIssue = { ...issue, broadcast: true }
+          await this.recordAgentIssueEvidence(task, broadcastIssue, now)
+          drained.push(broadcastIssue)
         }
       }
-    }
-
-    if (mutated) {
-      queue.lastUpdated = this.now()
-      await this.writeQueue(queue)
     }
 
     return drained

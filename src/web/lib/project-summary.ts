@@ -508,6 +508,50 @@ function projectSummarySignature(
   })
 }
 
+function serviceDefaultProviderSignature(service: ServiceDetail | null | undefined): string {
+  return JSON.stringify({
+    defaultProviderIdentity: providerIdentity(service?.defaultProviderStatus),
+    defaultProviderStatus: service?.defaultProviderStatus,
+  })
+}
+
+export function mergeServiceProjectSummaries(
+  previous: ServiceDetail | null | undefined,
+  incoming: ServiceDetail,
+): ServiceDetail {
+  if (!previous) return incoming
+  if (serviceDefaultProviderSignature(previous) !== serviceDefaultProviderSignature(incoming)) {
+    return incoming
+  }
+
+  const previousProjects = previous.projects ?? []
+  const incomingProjects = incoming.projects ?? []
+  const previousByProjectId = new Map(previousProjects.map(project => [project.id, project]))
+  let changed = previousProjects.length !== incomingProjects.length
+
+  const projects = incomingProjects.map((project, index) => {
+    const cached = previousByProjectId.get(project.id)
+    if (previousProjects[index]?.id !== project.id) {
+      changed = true
+    }
+    if (!cached) {
+      changed = true
+      return project
+    }
+    if (projectSummarySignature(cached, incoming.defaultProviderStatus) === projectSummarySignature(project, incoming.defaultProviderStatus)) {
+      return cached
+    }
+    changed = true
+    return project
+  })
+
+  if (!changed) return previous
+  return {
+    ...incoming,
+    projects,
+  }
+}
+
 export function createProjectSummaryCache(): ProjectSummaryCache {
   let summariesByProjectId = new Map<string, CachedProjectCardSummary>()
 

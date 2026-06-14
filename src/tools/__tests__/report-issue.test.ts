@@ -11,7 +11,7 @@ import {
 } from '../report-issue.js'
 import { readTasks } from '../task-queue.js'
 import type { Task } from '@guildhall/core'
-import { getProjectProgressHeartbeatsPath } from '@guildhall/sessions'
+import { getProjectProgressHeartbeatsPath, readTaskEvidence, readTaskRuntimeStore } from '@guildhall/sessions'
 
 // ---------------------------------------------------------------------------
 // FR-31 agent-issue channel tests.
@@ -107,10 +107,19 @@ describe('reportIssue', () => {
     expect(t.status).toBe('in_progress')
     // blockReason must NOT be set (that's the escalation protocol's contract)
     expect(t.blockReason).toBeUndefined()
-    // The issue is recorded with broadcast=false (orchestrator hasn't seen it yet)
-    expect(t.agentIssues).toHaveLength(1)
-    expect(t.agentIssues[0]!.broadcast).toBe(false)
-    expect(t.agentIssues[0]!.resolvedAt).toBeUndefined()
+    // The issue runtime/evidence is no longer persisted into project-local TASKS.json.
+    expect(t.agentIssues).toEqual([])
+
+    const evidence = await readTaskEvidence(tmpDir, 'task-001', { kind: 'agent_issue' })
+    expect(evidence).toHaveLength(1)
+    expect(evidence[0]!.payload).toMatchObject({
+      id: 'iss-task-001-1',
+      broadcast: false,
+    })
+    expect(evidence[0]!.payload).not.toHaveProperty('resolvedAt')
+
+    const runtime = await readTaskRuntimeStore(tmpDir)
+    expect(runtime.tasks['task-001']?.openIssueIds).toEqual(['iss-task-001-1'])
   })
 
   it('records all payload fields verbatim', async () => {
@@ -124,7 +133,9 @@ describe('reportIssue', () => {
       suggestedAction: 'retry after 5m or shelve until ops confirms',
     })
     const { queue } = await readTasks({ tasksPath })
-    const iss = queue!.tasks[0]!.agentIssues[0]!
+    expect(queue!.tasks[0]!.agentIssues).toEqual([])
+    const evidence = await readTaskEvidence(tmpDir, 'task-001', { kind: 'agent_issue' })
+    const iss = evidence[0]!.payload as Record<string, unknown>
     expect(iss.code).toBe('dependency_unreachable')
     expect(iss.severity).toBe('critical')
     expect(iss.detail).toBe('upstream ci.example.com returns 502')
@@ -141,7 +152,9 @@ describe('reportIssue', () => {
       detail: 'Something off, not sure what',
     })
     const { queue } = await readTasks({ tasksPath })
-    expect(queue!.tasks[0]!.agentIssues[0]!.severity).toBe('warn')
+    expect(queue!.tasks[0]!.agentIssues).toEqual([])
+    const evidence = await readTaskEvidence(tmpDir, 'task-001', { kind: 'agent_issue' })
+    expect((evidence[0]!.payload as Record<string, unknown>).severity).toBe('warn')
   })
 
   it('stamps successive issues with monotonic ids', async () => {
@@ -160,7 +173,9 @@ describe('reportIssue', () => {
       detail: 'still first',
     })
     const { queue } = await readTasks({ tasksPath })
-    const ids = queue!.tasks[0]!.agentIssues.map((i) => i.id)
+    expect(queue!.tasks[0]!.agentIssues).toEqual([])
+    const ids = (await readTaskEvidence(tmpDir, 'task-001', { kind: 'agent_issue' }))
+      .map((event) => (event.payload as Record<string, unknown>).id)
     expect(ids).toEqual(['iss-task-001-1', 'iss-task-001-2'])
   })
 
@@ -212,10 +227,14 @@ describe('resolveIssue', () => {
     })
     expect(res.success).toBe(true)
     const { queue } = await readTasks({ tasksPath })
-    const iss = queue!.tasks[0]!.agentIssues[0]!
+    expect(queue!.tasks[0]!.agentIssues).toEqual([])
+    const issueEvents = await readTaskEvidence(tmpDir, 'task-001', { kind: 'agent_issue' })
+    const iss = issueEvents[issueEvents.length - 1]!.payload as Record<string, unknown>
     expect(iss.resolvedAt).toBeDefined()
     expect(iss.resolution).toMatch(/replace_with_different_agent/)
     expect(iss.resolvedBy).toBe('coordinator:looma')
+    const runtime = await readTaskRuntimeStore(tmpDir)
+    expect(runtime.tasks['task-001']?.openIssueIds).toEqual([])
   })
 
   it('refuses to resolve an already-resolved issue', async () => {
@@ -259,27 +278,33 @@ describe('resolveIssue', () => {
 
 describe('openIssues / pendingBroadcastIssues helpers', () => {
   it('openIssues returns only unresolved issues', async () => {
-    await reportIssue({
-      tasksPath,
-      taskId: 'task-001',
-      agentId: 'w',
-      code: 'stuck',
-      detail: 'one',
-    })
-    await reportIssue({
-      tasksPath,
-      taskId: 'task-001',
-      agentId: 'w',
-      code: 'tool_unavailable',
-      detail: 'two',
-    })
-    await resolveIssue({
-      tasksPath,
-      taskId: 'task-001',
-      issueId: 'iss-task-001-1',
-      resolution: 'handled',
-      resolvedBy: 'c',
-    })
+    await writeSeed([seedTask({
+      agentIssues: [
+        {
+          id: 'iss-task-001-1',
+          taskId: 'task-001',
+          agentId: 'w',
+          code: 'stuck',
+          severity: 'warn',
+          detail: 'one',
+          raisedAt: '2026-05-01T00:00:00.000Z',
+          broadcast: false,
+          resolvedAt: '2026-05-01T00:05:00.000Z',
+          resolution: 'handled',
+          resolvedBy: 'c',
+        },
+        {
+          id: 'iss-task-001-2',
+          taskId: 'task-001',
+          agentId: 'w',
+          code: 'tool_unavailable',
+          severity: 'warn',
+          detail: 'two',
+          raisedAt: '2026-05-01T00:10:00.000Z',
+          broadcast: false,
+        },
+      ],
+    })])
     const { queue } = await readTasks({ tasksPath })
     const t = queue!.tasks[0]!
     expect(openIssues(t)).toHaveLength(1)
@@ -287,24 +312,43 @@ describe('openIssues / pendingBroadcastIssues helpers', () => {
   })
 
   it('pendingBroadcastIssues filters both broadcast and resolved', async () => {
-    await reportIssue({
-      tasksPath,
-      taskId: 'task-001',
-      agentId: 'w',
-      code: 'stuck',
-      detail: 'one',
-    })
-    await reportIssue({
-      tasksPath,
-      taskId: 'task-001',
-      agentId: 'w',
-      code: 'stuck',
-      detail: 'two',
-    })
-    const { queue } = await readTasks({ tasksPath })
-    // Manually mark the first as broadcast; second remains pending.
-    queue!.tasks[0]!.agentIssues[0]!.broadcast = true
-    await fs.writeFile(tasksPath, JSON.stringify(queue), 'utf-8')
+    await writeSeed([seedTask({
+      agentIssues: [
+        {
+          id: 'iss-task-001-1',
+          taskId: 'task-001',
+          agentId: 'w',
+          code: 'stuck',
+          severity: 'warn',
+          detail: 'one',
+          raisedAt: '2026-05-01T00:00:00.000Z',
+          broadcast: true,
+        },
+        {
+          id: 'iss-task-001-2',
+          taskId: 'task-001',
+          agentId: 'w',
+          code: 'stuck',
+          severity: 'warn',
+          detail: 'two',
+          raisedAt: '2026-05-01T00:10:00.000Z',
+          broadcast: false,
+        },
+        {
+          id: 'iss-task-001-3',
+          taskId: 'task-001',
+          agentId: 'w',
+          code: 'stuck',
+          severity: 'warn',
+          detail: 'three',
+          raisedAt: '2026-05-01T00:20:00.000Z',
+          broadcast: false,
+          resolvedAt: '2026-05-01T00:25:00.000Z',
+          resolution: 'handled',
+          resolvedBy: 'c',
+        },
+      ],
+    })])
     const fresh = await readTasks({ tasksPath })
     const t = fresh.queue!.tasks[0]!
     const pending = pendingBroadcastIssues(t)
