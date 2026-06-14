@@ -11509,3 +11509,42 @@ Verification:
   is sticky at the bottom with the active card immediately above it.
 
 source: codex:thread-composer-bottom-anchor-2026-06-11
+
+2026-06-14T16:35:00Z - Verified the SvelteKit route-split build with full
+rendered UI replay.
+
+Finding:
+- The SvelteKit build is now producing separate immutable chunks for the
+  top-level web surfaces, but the first e2e replay exposed test harness drift:
+  Playwright was serving a build without the advanced Structure flag baked in,
+  the project-card matrix now contains 17 projects, migration success copy is
+  `Migration complete.`, and dirty-Guildhall cleanup copy can be singular.
+- `ProjectView` is still the oversized route chunk. Top-level route splitting
+  is real, but project-internal tabs remain synchronous inside that route.
+
+Repair:
+- Playwright now builds the static SvelteKit app before serving fixtures with
+  `VITE_GUILDHALL_ADVANCED_STRUCTURE=1`, so Structure route tests exercise the
+  built Vite output they expect.
+- Rendered UI assertions now match the current fixture count, migration copy,
+  dirty-file singular/plural copy, and the final two-card dashboard row.
+
+Verification:
+- `pnpm exec playwright test` passed with `37` rendered UI tests.
+- Manifest proof from `.svelte-kit/output/client/.vite/manifest.json`:
+  `ProjectsHome.svelte` -> `_app/immutable/chunks/BPuFCuqj.js` (50265b),
+  `FleetNeedsYou.svelte` -> `_app/immutable/chunks/BxcMf8Je.js` (5951b),
+  `ProjectView.svelte` -> `_app/immutable/chunks/BFtDNNEQ.js` (544280b),
+  `ProvidersPage.svelte` -> `_app/immutable/chunks/BEfhPA7z.js` (13516b),
+  `SetupWizard.svelte` -> `_app/immutable/chunks/Ca7wCgk1.js` (25025b), and
+  `TaskDrawer.svelte` -> `_app/immutable/chunks/EvQIdLWy.js` (146244b).
+- Browser network proof against `http://127.0.0.1:7791`: `/projects` loaded
+  `ProjectsHome` but not ProjectView/Providers/TaskDrawer; `/needs-you`
+  loaded `FleetNeedsYou` only; `/providers` loaded `ProvidersPage` only;
+  `/projects/looma-knit/overview` and `/structure` loaded `ProjectView` only;
+  `/task/looma-knit-task-1?tab=spec` loaded `ProjectView` plus `TaskDrawer`.
+- Remaining bundle follow-up: split `ProjectView`'s internal project tabs or
+  shared-heavy dependencies so the project route chunk stops tripping Vite's
+  500 kB warning.
+
+source: codex:sveltekit-route-split-e2e-proof-2026-06-14

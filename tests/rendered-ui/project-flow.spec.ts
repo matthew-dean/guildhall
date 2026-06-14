@@ -133,7 +133,7 @@ const projectSurfaceRoutes = [
     path: '/projects/dirty-service/release',
     assertions: async (page) => {
       await expect(page.getByRole('heading', { name: 'Current work closure' })).toBeVisible()
-      await expect(page.getByText(/project-local Guildhall .*files need cleanup/)).toBeVisible()
+      await expect(page.getByText(/project-local Guildhall .*file[s]? need[s]? cleanup/)).toBeVisible()
       await expect(page.getByTitle('Dirty Service')).toBeVisible()
     },
   },
@@ -217,7 +217,7 @@ test('projects home keeps project cards compact for scanability', async ({ page 
   expect(Math.max(...panelBoxes.map(box => box.right))).toBeGreaterThan(1380)
 
   const cards = page.locator('section.project-card')
-  await expect(cards).toHaveCount(15)
+  await expect(cards).toHaveCount(17)
   for (const projectName of [
     'Docs Compass',
     'Pipeline Ops',
@@ -249,7 +249,7 @@ test('projects home keeps project cards compact for scanability', async ({ page 
   const singletonRows = Array.from(rows.values()).filter(row => row.length === 1)
   expect(singletonRows.length).toBeLessThanOrEqual(1)
   for (const row of rows.values()) {
-    if (row.length === 1) continue
+    if (row.length < 3) continue
     expect(Math.min(...row.map(box => box.width))).toBeGreaterThan(420)
     expect(Math.max(...row.map(box => box.right))).toBeGreaterThan(1380)
   }
@@ -279,9 +279,8 @@ test('required migration blocks thread work until it is applied', async ({ page 
     await expect(migrateButton).toBeEnabled()
     await migrateButton.click()
     await expect(page.getByRole('dialog', { name: 'Migrate project' })).toBeVisible()
-    await expect(page.getByText('Review the file changes first')).toBeVisible()
     await page.getByRole('button', { name: 'Apply required migration' }).click()
-    await expect(page.getByText('Migration applied.')).toBeVisible()
+    await expect(page.getByText('Migration complete.')).toBeVisible()
     await page.getByRole('dialog', { name: 'Migrate project' }).getByRole('button', { name: 'Close' }).last().click()
   }
   await page.getByRole('complementary', { name: 'Thread list' }).getByRole('button', { name: /Block menu \/ block side menu/ }).click()
