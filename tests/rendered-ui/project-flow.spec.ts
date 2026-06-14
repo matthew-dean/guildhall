@@ -372,10 +372,10 @@ test('settings subroutes keep focused panels in the project shell', async ({ pag
 })
 
 test('task drawer direct route renders tabs and closes to the overview background', async ({ page }) => {
-  await page.goto('/projects/looma-knit/task/looma-knit-task-1?tab=spec')
+  await page.goto('/projects/looma-knit/task/task-workspace-import?tab=spec')
 
   await expect(page.getByRole('complementary', { name: 'Task drawer' })).toBeVisible()
-  await expect(page.getByRole('heading', { name: 'Block menu / block side menu' })).toBeVisible()
+  await expect(page.getByRole('heading', { name: 'Review existing project work' })).toBeVisible()
   await expect(page.getByRole('button', { name: 'Spec' })).toBeVisible()
 
   await page.getByRole('button', { name: 'Close', exact: true }).click()

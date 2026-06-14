@@ -11590,3 +11590,69 @@ Verification:
 - `pnpm exec playwright test` passed with `37` rendered UI tests.
 
 source: codex:projectview-internal-route-split-2026-06-14
+
+2026-06-14T19:00:00Z - Walked every defined web route/view against the
+production SvelteKit build and fixture service.
+
+Scope:
+- Local registry note: this checkout has `.guildhall/tmp` but no
+  `.guildhall/artifacts.yaml`, so this evidence was recorded directly in
+  `internal/audits/flow-audit.md` rather than through a resolved
+  `artifact:flow-audit` registry entry.
+- Build and service: `VITE_GUILDHALL_ADVANCED_STRUCTURE=1 pnpm build`,
+  `node scripts/playwright-fixtures.mjs`, then
+  `HOME="$PWD/.playwright-fixtures/home" node dist/cli.js serve-internal --port 7791`.
+- In-app Browser bridge setup succeeded through the Browser plugin's
+  `setupBrowserRuntime`/`agent.browsers.get("iab")` path, and the route walk
+  used Playwright against the running local target so asset requests, ARIA
+  state, drawer close behavior, overflow, and console/page errors could be
+  inspected deterministically.
+
+Walkthrough result:
+- Custom route harness passed `40/40` routed views and aliases: `/`, `/projects`,
+  `/overview`, `/needs-you`, `/inbox`, `/notifications`, `/providers`,
+  project overview/default/inbox/needs-you/inbox aliases, Thread, Work list,
+  Work board, Planner alias, Workspace Import, Structure for accepted/docs-only
+  and consumer handoff projects, Release summary/criteria/readiness fallback,
+  Facts, Timeline, Settings base plus ready/providers/coordinators/identity/
+  profile/advanced and compatibility routing aliases, Setup wizard,
+  setup-pending Work guard, direct task drawer, legacy `/project/...` fallbacks,
+  and unknown project-subpath overview fallback.
+- The harness checked each page for the expected user-facing heading, region,
+  title, or interaction; no route left an exact `Loading project...` element,
+  no route produced horizontal document overflow at `1280x900`, and no passing
+  route emitted console errors or page errors.
+- The direct task drawer route used the task visible before required
+  migrations, `/projects/looma-knit/task/task-workspace-import?tab=spec`, then
+  closed back to `/projects/looma-knit/overview` and verified the overview
+  background region.
+
+Split-output proof:
+- Top-level surfaces loaded their own chunks: ProjectsHome
+  `BPBHfX8x.js`, FleetNeedsYou `Bm2qiIIZ.js`, ProvidersPage `DsOirBPV.js`,
+  SetupWizard `C1e6oIaI.js`.
+- Project shell and project tabs split as intended: ProjectView shell
+  `BVg96qX-.js`; Overview `DJpSOuIQ.js`; Needs You `BFXYt1qE.js`;
+  Thread `C0vQBUIz.js`; Work `AscIzVao.js`; Workspace Import `DYm8ziOf.js`;
+  Structure `DMd8R89_.js`; Release `Ci6K-uVA.js`; Facts `DKbkRvF-.js`;
+  Timeline `Gafyj-Ux.js`; Settings `CT10uWNK.js`; TaskDrawer `CSvXTXgl.js`.
+- Every project route requested the shell chunk plus only the current tab/drawer
+  component chunk needed by that route, preserving the ProjectView split from
+  the previous pass.
+
+Finding and repair:
+- A fresh-reset isolated run of
+  `pnpm exec playwright test tests/rendered-ui/project-flow.spec.ts -g "task drawer direct"`
+  failed because the test opened legacy task id `looma-knit-task-1` before
+  required migrations had exposed legacy tasks through `/api/project/task/:id`.
+  The drawer frame rendered, but the task API returned `404 {"error":"task not found"}`.
+- Updated the e2e to open the current pre-migration task
+  `task-workspace-import`, preserving the tab and close-to-overview assertions
+  without relying on earlier tests to mutate fixture state.
+
+Verification:
+- Focused red/green proof: the isolated task-drawer e2e failed before the test
+  repair and passed afterward.
+- `pnpm exec playwright test` passed with `37` rendered UI tests.
+
+source: codex:all-defined-web-route-flow-audit-2026-06-14
