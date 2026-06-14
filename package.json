@@ -80,6 +80,8 @@
   },
   "devDependencies": {
     "@playwright/test": "~1.60.0",
+    "@sveltejs/adapter-static": "~3.0.10",
+    "@sveltejs/kit": "~2.65.1",
     "@sveltejs/vite-plugin-svelte": "~6.2.4",
     "@testing-library/jest-dom": "~6.9.1",
     "@testing-library/svelte": "~5.3.1",
@@ -95,6 +97,7 @@
     "svelte": "~5.55.4",
     "svelte-preprocess": "~6.0.3",
     "typescript": "^5.9.3",
+    "vite": "~7.3.2",
     "vitepress": "^1.5.0",
     "vitest": "^3.1.1"
   },

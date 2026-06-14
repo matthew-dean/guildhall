@@ -9840,13 +9840,10 @@ export function buildServeApp(opts: ServeOptions = {}): {
   })
 
   // -------------------------------------------------------------------------
-  // Static web bundle (Svelte 5 dashboard). dist/web/ is emitted by build.mjs.
-  // The bundle mounts into the #svelte-root element in dashboardHtml().
+  // Static web bundle (SvelteKit dashboard). dist/web/ is emitted by build.mjs
+  // through Vite/SvelteKit, then served by this Hono host.
   // -------------------------------------------------------------------------
-  app.get('/web/app.js', c => serveWebAsset(c, 'app.js', 'text/javascript; charset=utf-8'))
-  app.get('/web/app.css', c => serveWebAsset(c, 'app.css', 'text/css; charset=utf-8'))
-  app.get('/web/app.js.map', c => serveWebAsset(c, 'app.js.map', 'application/json'))
-  app.get('/web/app.css.map', c => serveWebAsset(c, 'app.css.map', 'application/json'))
+  app.get('/_app/*', c => serveWebAssetPath(c, new URL(c.req.url).pathname.slice(1)))
   app.get('/icons/:filename', c => serveWebIcon(c, c.req.param('filename')))
   app.get('/favicon.ico', c => serveWebIcon(c, 'favicon.ico'))
   app.get('/apple-touch-icon.png', c => serveWebIcon(c, 'apple-touch-icon.png'))
@@ -10176,28 +10173,35 @@ const WEB_DIR = (() => {
   return resolve(here, '..', '..', 'dist', 'web')
 })()
 
-const WEB_ASSET_VERSION = (() => {
-  try {
-    return String(Math.floor(statSync(join(WEB_DIR, 'app.js')).mtimeMs))
-  } catch {
-    return 'dev'
-  }
-})()
+function webContentType(filename: string): string {
+  const extension = extname(filename).toLowerCase()
+  if (extension === '.js') return 'text/javascript; charset=utf-8'
+  if (extension === '.css') return 'text/css; charset=utf-8'
+  if (extension === '.json' || extension === '.map') return 'application/json'
+  if (extension === '.svg') return 'image/svg+xml'
+  return iconContentType(filename)
+}
 
-async function serveWebAsset(
-  c: Context,
-  filename: string,
-  contentType: string,
-): Promise<Response> {
-  const path = join(WEB_DIR, filename)
-  if (!existsSync(path)) {
+function resolveWebAssetPath(filename: string): string | null {
+  const normalized = filename.replace(/^\/+/, '')
+  const resolved = resolve(WEB_DIR, normalized)
+  const root = `${resolve(WEB_DIR)}${pathSeparator}`
+  if (resolved !== resolve(WEB_DIR) && !resolved.startsWith(root)) return null
+  return resolved
+}
+
+async function serveWebAssetPath(c: Context, filename: string): Promise<Response> {
+  const path = resolveWebAssetPath(filename)
+  if (!path || !existsSync(path)) {
     return c.text(`web asset not built: ${filename} (run pnpm build)`, 404)
   }
   const body = await fsp.readFile(path)
   return new Response(body, {
     headers: {
-      'content-type': contentType,
-      'cache-control': 'no-store, no-cache, must-revalidate',
+      'content-type': webContentType(filename),
+      'cache-control': filename.startsWith('_app/immutable/')
+        ? 'public, max-age=31536000, immutable'
+        : 'no-store, no-cache, must-revalidate',
       pragma: 'no-cache',
     },
   })
@@ -10214,36 +10218,17 @@ function iconContentType(filename: string): string {
 async function serveWebIcon(c: Context, filename: string): Promise<Response> {
   const safeName = basename(filename)
   if (safeName !== filename) return c.text('invalid icon path', 400)
-  return serveWebAsset(c, join('icons', safeName), iconContentType(safeName))
+  return serveWebAssetPath(c, join('icons', safeName))
 }
 
 // ---------------------------------------------------------------------------
-// Inline dashboard SPA
+// SvelteKit dashboard SPA
 // ---------------------------------------------------------------------------
 
 export function dashboardHtml(): string {
-  return `<!DOCTYPE html>
-<html lang="en">
-<head>
-  <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <meta name="theme-color" content="#0f0d16" />
-  <title>Guildhall</title>
-  <link rel="icon" href="/favicon.ico" sizes="any" />
-  <link rel="icon" type="image/png" sizes="32x32" href="/icons/genfavicon-32.png" />
-  <link rel="icon" type="image/png" sizes="16x16" href="/icons/genfavicon-16.png" />
-  <link rel="apple-touch-icon" href="/apple-touch-icon.png" />
-  <link rel="manifest" href="/site.webmanifest" />
-  <link rel="stylesheet" href="/web/app.css?v=${WEB_ASSET_VERSION}" />
-</head>
-<body>
-  <div id="svelte-root"></div>
-  <noscript>
-    <p style="color:#e8e8f0;background:#0f0f11;padding:24px;font-family:system-ui,sans-serif">
-      Guildhall requires JavaScript. Enable it and reload.
-    </p>
-  </noscript>
-  <script type="module" src="/web/app.js?v=${WEB_ASSET_VERSION}"></script>
-</body>
-</html>`
+  const indexPath = join(WEB_DIR, 'index.html')
+  if (!existsSync(indexPath)) {
+    return `<!doctype html><html lang="en"><head><meta charset="UTF-8" /><title>Guildhall</title></head><body><p>web app not built: index.html (run pnpm build)</p></body></html>`
+  }
+  return readFileSync(indexPath, 'utf8')
 }

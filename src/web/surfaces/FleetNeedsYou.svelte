@@ -1,5 +1,8 @@
 <script lang="ts">
-  import { AlertTriangle, CheckCircle2, FolderOpen, Inbox } from 'lucide-svelte'
+  import AlertTriangle from 'lucide-svelte/icons/triangle-alert'
+  import CheckCircle2 from 'lucide-svelte/icons/check-circle-2'
+  import FolderOpen from 'lucide-svelte/icons/folder-open'
+  import Inbox from 'lucide-svelte/icons/inbox'
   import ActionBar from '../lib/ActionBar.svelte'
   import Button from '../lib/Button.svelte'
   import Card from '../lib/ui-compat/Card.svelte'

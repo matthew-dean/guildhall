@@ -79,6 +79,28 @@ describe('release artifact contract', () => {
     expect(smoke).toContain('default runtime image')
   })
 
+  it('builds the web app through SvelteKit and Vite instead of a single esbuild outfile', () => {
+    const build = read('build.mjs')
+    const manifest = JSON.parse(read('package.json')) as {
+      devDependencies?: Record<string, string>
+    }
+
+    expect(manifest.devDependencies?.['@sveltejs/kit']).toBeTruthy()
+    expect(build).toContain("'vite', 'build'")
+    expect(build).not.toContain("outfile: join(WEB_OUT_DIR, 'app.js')")
+    expect(read('svelte.config.js')).toContain('@sveltejs/adapter-static')
+    expect(read('vite.config.ts')).toContain('sveltekit')
+  })
+
+  it('keeps web route surfaces behind dynamic imports for route-level chunks', () => {
+    const router = read('src/web/Router.svelte')
+
+    expect(router).not.toContain("import ProjectsHome from './surfaces/ProjectsHome.svelte'")
+    expect(router).toContain("import('./surfaces/ProjectsHome.svelte')")
+    expect(router).not.toContain("import ProjectView from './surfaces/ProjectView.svelte'")
+    expect(router).toContain("import('./surfaces/ProjectView.svelte')")
+  })
+
   it('publishes the current runtime image to GHCR with immutable and minor-line tags', () => {
     const workflow = read('.github/workflows/runtime-image.yml')
 

@@ -207,6 +207,23 @@ coverage.
 
 ## Current Follow-Ups
 
+- [x] Move the web app build to SvelteKit/Vite static output with real chunk
+  splitting. 2026-06-14 proof: committed a clean checkpoint first
+  (`da19cb57`), added SvelteKit static configuration under `src/web-kit/`,
+  changed `build.mjs` to emit `dist/web/index.html` plus `_app/immutable`
+  assets, served those assets through the existing Hono host, and converted the
+  top-level router surfaces to dynamic imports while keeping project tabs
+  synchronous after component tests showed that tab-level lazy loading changed
+  existing render timing. Verification:
+  `pnpm build`, `pnpm typecheck`, and
+  `pnpm vitest run scripts/release-artifacts.test.ts scripts/publish-script.test.ts src/runtime/__tests__/serve-dashboard.test.ts`
+  passed. Runtime HTTP proof against `node dist/cli.js serve-internal --port
+  7791`: served HTML referenced SvelteKit `_app` assets, ten sampled immutable
+  JS assets returned `200`, and `/_app/version.json` returned `200`. In-app
+  Browser bridge verification was attempted twice but timed out before the
+  webview attached, so the browser gap is bridge instability rather than a
+  proven app-rendering failure.
+
 - [x] Add the 0.11 capability/persona calibration spec to internal planning.
   2026-06-13 follow-up translated the SkillOpt-style idea into a
   Guildhall-native, validation-gated calibration loop for personas, review

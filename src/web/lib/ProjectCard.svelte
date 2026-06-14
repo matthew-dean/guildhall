@@ -1,12 +1,10 @@
 <script lang="ts">
-  import {
-    Activity,
-    AlertTriangle,
-    CheckCircle2,
-    FolderOpen,
-    PauseCircle,
-    Sparkles,
-  } from 'lucide-svelte'
+  import Activity from 'lucide-svelte/icons/activity'
+  import AlertTriangle from 'lucide-svelte/icons/triangle-alert'
+  import CheckCircle2 from 'lucide-svelte/icons/check-circle-2'
+  import FolderOpen from 'lucide-svelte/icons/folder-open'
+  import PauseCircle from 'lucide-svelte/icons/circle-pause'
+  import Sparkles from 'lucide-svelte/icons/sparkles'
   import ActionBar from './ActionBar.svelte'
   import Button from './Button.svelte'
   import Card from './ui-compat/Card.svelte'
