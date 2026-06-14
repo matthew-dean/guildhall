@@ -13,6 +13,8 @@ import {
   resolveSupersededEscalations,
 } from '../escalation.js'
 import { readTasks } from '../task-queue.js'
+import { buildEffectiveTask } from '../../runtime/effective-task.js'
+import { readTaskRuntimeStore, upsertTaskRuntimeState } from '@guildhall/sessions'
 import type { Task } from '@guildhall/core'
 
 // ---------------------------------------------------------------------------
@@ -61,6 +63,17 @@ async function writeSeed(tasks: Task[]): Promise<void> {
   await fs.writeFile(tasksPath, JSON.stringify(queue), 'utf-8')
 }
 
+async function readEffectiveTask(): Promise<Task> {
+  const { queue } = await readTasks({ tasksPath })
+  const task = queue?.tasks.find((candidate) => candidate.id === 'task-001')
+  if (!task) throw new Error('task-001 not found')
+  return await buildEffectiveTask(tmpDir, task) as unknown as Task
+}
+
+async function readRawQueue(): Promise<{ tasks: Array<Record<string, unknown>> }> {
+  return JSON.parse(await fs.readFile(tasksPath, 'utf-8')) as { tasks: Array<Record<string, unknown>> }
+}
+
 beforeEach(async () => {
   tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'forge-esc-'))
   tasksPath = path.join(tmpDir, 'TASKS.json')
@@ -84,12 +97,14 @@ describe('raiseEscalation', () => {
     expect(result.success).toBe(true)
     expect(result.escalationId).toBe('esc-task-001-1')
 
-    const { queue } = await readTasks({ tasksPath })
-    expect(queue?.tasks[0]?.escalations).toHaveLength(1)
-    expect(queue?.tasks[0]?.escalations[0]?.id).toBe('esc-task-001-1')
-    expect(queue?.tasks[0]?.escalations[0]?.reason).toBe('human_judgment_required')
-    expect(queue?.tasks[0]?.escalations[0]?.raisedAt).toBeDefined()
-    expect(queue?.tasks[0]?.escalations[0]?.resolvedAt).toBeUndefined()
+    const raw = await readRawQueue()
+    expect(raw.tasks[0]).not.toHaveProperty('escalations')
+    const task = await readEffectiveTask()
+    expect(task.escalations).toHaveLength(1)
+    expect(task.escalations[0]?.id).toBe('esc-task-001-1')
+    expect(task.escalations[0]?.reason).toBe('human_judgment_required')
+    expect(task.escalations[0]?.raisedAt).toBeDefined()
+    expect(task.escalations[0]?.resolvedAt).toBeUndefined()
   })
 
   it('stores external setup checklist steps on owner blockers', async () => {
@@ -118,8 +133,8 @@ describe('raiseEscalation', () => {
     })
 
     expect(result.success).toBe(true)
-    const { queue } = await readTasks({ tasksPath })
-    expect(queue?.tasks[0]?.escalations[0]?.externalChecklist).toMatchObject([
+    const task = await readEffectiveTask()
+    expect(task.escalations[0]?.externalChecklist).toMatchObject([
       { id: 'google-oauth', title: 'Create Google OAuth credentials' },
       { id: 'apple-oauth', title: 'Create Apple OAuth credentials' },
     ])
@@ -155,8 +170,8 @@ describe('raiseEscalation', () => {
       summary: 'second',
     })
     expect(second.escalationId).toBe('esc-task-001-2')
-    const { queue } = await readTasks({ tasksPath })
-    expect(queue?.tasks[0]?.escalations).toHaveLength(2)
+    const task = await readEffectiveTask()
+    expect(task.escalations).toHaveLength(2)
   })
 
   it('reuses an existing unresolved escalation for the same blocker', async () => {
@@ -181,8 +196,8 @@ describe('raiseEscalation', () => {
     expect(second.success).toBe(true)
     expect(second.escalationId).toBe(first.escalationId)
 
-    const { queue } = await readTasks({ tasksPath })
-    expect(queue?.tasks[0]?.escalations).toHaveLength(1)
+    const task = await readEffectiveTask()
+    expect(task.escalations).toHaveLength(1)
   })
 
   it('rejects worker escalations caused by brittle edit matching instead of owner decisions', async () => {
@@ -199,9 +214,9 @@ describe('raiseEscalation', () => {
     expect(result.error).toMatch(/implementation recovery/i)
     expect(result.error).toMatch(/do not ask the owner/i)
 
-    const { queue } = await readTasks({ tasksPath })
-    expect(queue?.tasks[0]?.status).toBe('in_progress')
-    expect(queue?.tasks[0]?.escalations).toHaveLength(0)
+    const raw = await readRawQueue()
+    expect(raw.tasks[0]?.status).toBe('in_progress')
+    expect(raw.tasks[0]?.escalations).toEqual([])
   })
 
   it('writes a typed progress entry when progressPath is provided', async () => {
@@ -239,8 +254,8 @@ describe('raiseEscalation', () => {
       summary: 'typecheck keeps failing',
       details: 'Tried 3 times. Stack: tsc -b --verbose ...',
     })
-    const { queue } = await readTasks({ tasksPath })
-    expect(queue?.tasks[0]?.escalations[0]?.details).toContain('Stack: tsc')
+    const task = await readEffectiveTask()
+    expect(task.escalations[0]?.details).toContain('Stack: tsc')
   })
 
   it('returns error for unknown task id', async () => {
@@ -282,9 +297,12 @@ describe('resolveEscalation', () => {
     expect(task?.status).toBe('in_progress')
     expect(task?.assignedTo).toBe('worker-agent')
     expect(task?.blockReason).toBeUndefined()
-    expect(task?.escalations[0]?.resolvedAt).toBeDefined()
-    expect(task?.escalations[0]?.resolution).toBe('Use library A')
-    expect(task?.escalations[0]?.resolvedBy).toBe('human')
+    const raw = await readRawQueue()
+    expect(raw.tasks[0]).not.toHaveProperty('escalations')
+    const effective = await readEffectiveTask()
+    expect(effective.escalations[0]?.resolvedAt).toBeDefined()
+    expect(effective.escalations[0]?.resolution).toBe('Use library A')
+    expect(effective.escalations[0]?.resolvedBy).toBe('human')
   })
 
   it('restores reviewer ownership when an escalation resolves back to review', async () => {
@@ -303,13 +321,24 @@ describe('resolveEscalation', () => {
   })
 
   it('starts a fresh retry window when resolving max-revisions back to active work', async () => {
+    await resolveEscalation({
+      tasksPath,
+      taskId: 'task-001',
+      escalationId: 'esc-task-001-1',
+      resolution: 'Clear setup blocker for retry-window test.',
+      nextStatus: 'in_progress',
+    })
     await writeSeed([
       seedTask({
         revisionCount: 4,
         escalations: [],
       }),
     ])
-    await raiseEscalation({
+    await upsertTaskRuntimeState(tmpDir, 'task-001', {
+      revisionCount: 4,
+      updatedAt: '2026-05-01T00:00:00.000Z',
+    })
+    const escalation = await raiseEscalation({
       tasksPath,
       taskId: 'task-001',
       agentId: 'reviewer-fanout',
@@ -320,19 +349,24 @@ describe('resolveEscalation', () => {
     const result = await resolveEscalation({
       tasksPath,
       taskId: 'task-001',
-      escalationId: 'esc-task-001-1',
+      escalationId: escalation.escalationId!,
       resolution: 'Retry after guardrail fix.',
       nextStatus: 'in_progress',
     })
     expect(result.success).toBe(true)
 
-    const { queue } = await readTasks({ tasksPath })
-    const task = queue?.tasks[0]
-    expect(task?.retryWindow).toEqual({
-      startedAt: task?.escalations[0]?.resolvedAt,
+    const task = await readEffectiveTask()
+    const runtime = await readTaskRuntimeStore(tmpDir)
+    const resolvedRetry = task.escalations.find(candidate => candidate.id === escalation.escalationId)
+    expect(runtime.tasks['task-001']?.retryWindow).toEqual({
+      startedAt: resolvedRetry?.resolvedAt,
       baseRevisionCount: 4,
     })
-    expect(currentRevisionCycleCount(task!)).toBe(0)
+    expect(task.retryWindow).toEqual({
+      startedAt: resolvedRetry?.resolvedAt,
+      baseRevisionCount: 4,
+    })
+    expect(currentRevisionCycleCount(task)).toBe(0)
   })
 
   it('defaults resolvedBy to "human"', async () => {
@@ -343,8 +377,8 @@ describe('resolveEscalation', () => {
       resolution: 'r',
       nextStatus: 'in_progress',
     })
-    const { queue } = await readTasks({ tasksPath })
-    expect(queue?.tasks[0]?.escalations[0]?.resolvedBy).toBe('human')
+    const task = await readEffectiveTask()
+    expect(task.escalations[0]?.resolvedBy).toBe('human')
   })
 
   it('accepts explicit resolvedBy', async () => {
@@ -356,8 +390,8 @@ describe('resolveEscalation', () => {
       resolvedBy: 'coordinator-looma',
       nextStatus: 'in_progress',
     })
-    const { queue } = await readTasks({ tasksPath })
-    expect(queue?.tasks[0]?.escalations[0]?.resolvedBy).toBe('coordinator-looma')
+    const task = await readEffectiveTask()
+    expect(task.escalations[0]?.resolvedBy).toBe('coordinator-looma')
   })
 
   it('keeps task blocked if other escalations remain open', async () => {
@@ -378,8 +412,9 @@ describe('resolveEscalation', () => {
     const { queue } = await readTasks({ tasksPath })
     const task = queue?.tasks[0]
     expect(task?.status).toBe('blocked') // still halted — second escalation open
-    expect(task?.escalations[0]?.resolvedAt).toBeDefined()
-    expect(task?.escalations[1]?.resolvedAt).toBeUndefined()
+    const effective = await readEffectiveTask()
+    expect(effective.escalations[0]?.resolvedAt).toBeDefined()
+    expect(effective.escalations[1]?.resolvedAt).toBeUndefined()
   })
 
   it('returns error for unknown escalation id', async () => {

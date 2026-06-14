@@ -22,6 +22,7 @@ import {
 import {
   parseAcceptanceCriteriaFromSpec,
   AgentIssue,
+  Task as TaskSchema,
   TaskQueue,
   TERMINAL_TASK_STATUSES,
   type ModelAssignmentConfig,
@@ -96,6 +97,7 @@ import { buildPromptCacheKey } from './prompt-cache.js'
 import { resolveModelApiPolicy, type ModelApiRole } from './model-api-policy.js'
 import { repairStaleBlockersInQueue } from './stale-blocker-repair.js'
 import { buildEffectiveTask } from './effective-task.js'
+import { writeProjectTaskQueue } from './project-state-boundary.js'
 import {
   effectiveBootstrapGateCommands,
   normalizeAutomatedAcceptanceCriterionCommands,
@@ -175,6 +177,7 @@ import {
   loadSessionById,
   appendTaskEvidence,
   readTaskEvidence,
+  readTaskRuntimeStore,
   upsertTaskRuntimeState,
   type SessionSnapshot,
 } from '@guildhall/sessions'
@@ -5264,6 +5267,8 @@ export class Orchestrator {
 
     const settings = await this.readLeverSettings()
     const domainLevers = resolveDomainLevers(settings, task.domain)
+    const projectRoot = inferProjectRootFromMemoryDir(this.opts.config.memoryDir)
+    const effectiveTask = await buildEffectiveTask(projectRoot, task)
 
     return buildRemediationContext({
       trigger,
@@ -5274,7 +5279,9 @@ export class Orchestrator {
         agentHealthStrictness: settings.project.agent_health_strictness.position,
       },
       checkpoint,
-      priorAttempts: task.remediationAttempts,
+      priorAttempts: typeof effectiveTask.remediationAttempts === 'number'
+        ? effectiveTask.remediationAttempts
+        : task.remediationAttempts,
       now: this.now(),
     })
   }
@@ -5326,10 +5333,25 @@ export class Orchestrator {
       decidedBy: input.decidedBy,
       domain: task.domain,
     })
-    task.remediationAttempts = (task.remediationAttempts ?? 0) + 1
     task.updatedAt = this.now()
     queue.lastUpdated = this.now()
+    const projectRoot = inferProjectRootFromMemoryDir(this.opts.config.memoryDir)
+    const effectiveTask = await buildEffectiveTask(projectRoot, task)
+    await upsertTaskRuntimeState(projectRoot, task.id, {
+      remediationAttempts: (typeof effectiveTask.remediationAttempts === 'number' ? effectiveTask.remediationAttempts : 0) + 1,
+      updatedAt: task.updatedAt,
+    })
     await this.writeQueue(queue)
+  }
+
+  private async recordTaskNoteEvidence(task: Task, note: NonNullable<Task['notes']>[number]): Promise<void> {
+    const projectRoot = inferProjectRootFromMemoryDir(this.opts.config.memoryDir)
+    await appendTaskEvidence(projectRoot, task.id, {
+      id: `note-${task.id}-${note.timestamp.replace(/[^0-9A-Za-z]/g, '')}-${note.role}`,
+      kind: 'note',
+      recordedAt: note.timestamp,
+      payload: note,
+    })
   }
 
   private async readEffectiveAgentIssues(task: Task): Promise<AgentIssue[]> {
@@ -5387,6 +5409,8 @@ export class Orchestrator {
     }
     const settings = await this.readLeverSettings()
     const domainLevers = resolveDomainLevers(settings, input.task.domain)
+    const projectRoot = inferProjectRootFromMemoryDir(this.opts.config.memoryDir)
+    const effectiveTask = await buildEffectiveTask(projectRoot, input.task)
     const trigger: RemediationTrigger = {
       kind: 'issue',
       taskId: input.task.id,
@@ -5402,7 +5426,9 @@ export class Orchestrator {
         agentHealthStrictness: settings.project.agent_health_strictness.position,
       },
       checkpoint: input.checkpoint,
-      priorAttempts: input.task.remediationAttempts ?? 0,
+      priorAttempts: typeof effectiveTask.remediationAttempts === 'number'
+        ? effectiveTask.remediationAttempts
+        : input.task.remediationAttempts ?? 0,
       now,
     })
     const action: RemediationAction = {
@@ -5423,18 +5449,23 @@ export class Orchestrator {
     })
 
     input.resetAgent()
-    input.task.agentIssues.push(issue)
-    input.task.remediationAttempts = (input.task.remediationAttempts ?? 0) + 1
+    await this.recordAgentIssueEvidence(input.task, issue, now)
+    await upsertTaskRuntimeState(projectRoot, input.task.id, {
+      remediationAttempts: (typeof effectiveTask.remediationAttempts === 'number' ? effectiveTask.remediationAttempts : 0) + 1,
+      updatedAt: now,
+    })
     input.task.status = 'in_progress'
     ensureWorkerOwnership(input.task)
     input.task.blockReason = undefined
-    input.task.notes.push({
+    const note = {
       agentId: 'coordinator-remediation',
       role: 'checkpoint',
       content:
         'Autonomous remediation: reset the worker conversation and restarted from the latest checkpoint after repeated checkpoint no-progress stops.',
       timestamp: now,
-    })
+    }
+    input.task.notes.push(note)
+    await this.recordTaskNoteEvidence(input.task, note)
     input.task.updatedAt = now
     input.queue.lastUpdated = now
     await this.writeQueue(input.queue)
@@ -7943,12 +7974,106 @@ export class Orchestrator {
 
   private async readQueue(): Promise<TaskQueue> {
     const raw = await readManagedTextFile(this.tasksPath(), 'utf-8')
-    return TaskQueue.parse(JSON.parse(raw))
+    const queue = TaskQueue.parse(JSON.parse(raw))
+    const projectRoot = inferProjectRootFromMemoryDir(this.opts.config.memoryDir)
+    const tasks = await Promise.all(
+      queue.tasks.map(async task => TaskSchema.parse(await buildEffectiveTask(projectRoot, task))),
+    )
+    return { ...queue, tasks }
   }
 
   private async writeQueue(queue: TaskQueue): Promise<void> {
     this.attachMissingDoneSummaries(queue)
-    writeManagedTextFileSync(this.tasksPath(), JSON.stringify(queue, null, 2) + '\n')
+    const result = writeProjectTaskQueue(this.tasksPath(), queue)
+    await this.persistSanitizedTaskState(result.removedByTask)
+  }
+
+  private async persistSanitizedTaskState(
+    removedByTask: Array<{ taskId: string; removedFields: string[]; removedEvidence: Record<string, unknown> }>,
+  ): Promise<void> {
+    const projectRoot = inferProjectRootFromMemoryDir(this.opts.config.memoryDir)
+    for (const removed of removedByTask) {
+      const updatedAt = this.now()
+      const currentRuntime = (await readTaskRuntimeStore(projectRoot)).tasks[removed.taskId]
+      const runtimePatch: Parameters<typeof upsertTaskRuntimeState>[2] = { updatedAt }
+      const workspacePatch: Parameters<typeof upsertTaskWorkspaceState>[2] = { updatedAt }
+      const evidence = removed.removedEvidence
+      if (typeof evidence.revisionCount === 'number') {
+        runtimePatch.revisionCount = Math.max(currentRuntime?.revisionCount ?? 0, evidence.revisionCount)
+      }
+      if (typeof evidence.remediationAttempts === 'number') {
+        runtimePatch.remediationAttempts = Math.max(currentRuntime?.remediationAttempts ?? 0, evidence.remediationAttempts)
+      }
+      if (evidence.retryWindow && typeof evidence.retryWindow === 'object') {
+        runtimePatch.retryWindow = evidence.retryWindow as NonNullable<Task['retryWindow']>
+      }
+      if (Array.isArray(evidence.escalations)) {
+        runtimePatch.openEscalationIds = evidence.escalations
+          .filter((item): item is { id: string; resolvedAt?: string } =>
+            typeof item === 'object' && item !== null && 'id' in item && typeof item.id === 'string',
+          )
+          .filter(item => !item.resolvedAt)
+          .map(item => item.id)
+      }
+      if (Array.isArray(evidence.agentIssues)) {
+        runtimePatch.openIssueIds = evidence.agentIssues
+          .filter((item): item is { id: string; resolvedAt?: string } =>
+            typeof item === 'object' && item !== null && 'id' in item && typeof item.id === 'string',
+          )
+          .filter(item => !item.resolvedAt)
+          .map(item => item.id)
+      }
+      if (typeof evidence.worktreePath === 'string') workspacePatch.worktreePath = evidence.worktreePath
+      if (typeof evidence.branchName === 'string') workspacePatch.branchName = evidence.branchName
+      if (typeof evidence.baseBranch === 'string') workspacePatch.baseBranch = evidence.baseBranch
+
+      if (Object.keys(runtimePatch).length > 1) {
+        await upsertTaskRuntimeState(projectRoot, removed.taskId, runtimePatch)
+      }
+      if (Object.keys(workspacePatch).length > 1) {
+        await upsertTaskWorkspaceState(projectRoot, removed.taskId, workspacePatch)
+      }
+
+      await this.appendRemovedEvidence(projectRoot, removed.taskId, evidence)
+    }
+  }
+
+  private async appendRemovedEvidence(
+    projectRoot: string,
+    taskId: string,
+    evidence: Record<string, unknown>,
+  ): Promise<void> {
+    const appendMany = async (field: string, kind: Parameters<typeof appendTaskEvidence>[2]['kind'], items: unknown[], timestampField: string): Promise<void> => {
+      const existingIds = new Set((await readTaskEvidence(projectRoot, taskId, { kind })).map(event => event.id))
+      for (const [index, item] of items.entries()) {
+        if (typeof item !== 'object' || item === null || Array.isArray(item)) continue
+        const payload = item as Record<string, unknown>
+        const recordedAt = typeof payload[timestampField] === 'string' ? payload[timestampField] : this.now()
+        const id = typeof payload.id === 'string' ? payload.id : `${field}-${taskId}-${recordedAt.replace(/[^0-9A-Za-z]/g, '')}-${index + 1}`
+        if (existingIds.has(id)) continue
+        await appendTaskEvidence(projectRoot, taskId, { id, kind, recordedAt, payload })
+        existingIds.add(id)
+      }
+    }
+    if (Array.isArray(evidence.notes)) await appendMany('note', 'note', evidence.notes, 'timestamp')
+    if (Array.isArray(evidence.gateResults)) await appendMany('gate', 'gate_result', evidence.gateResults, 'checkedAt')
+    if (Array.isArray(evidence.reviewVerdicts)) await appendMany('review', 'review_verdict', evidence.reviewVerdicts, 'recordedAt')
+    if (Array.isArray(evidence.adjudications)) await appendMany('adjudication', 'adjudication', evidence.adjudications, 'decidedAt')
+    if (Array.isArray(evidence.escalations)) await appendMany('escalation', 'escalation', evidence.escalations, 'raisedAt')
+    if (Array.isArray(evidence.agentIssues)) await appendMany('issue', 'agent_issue', evidence.agentIssues, 'raisedAt')
+    if (evidence.mergeRecord && typeof evidence.mergeRecord === 'object' && !Array.isArray(evidence.mergeRecord)) {
+      const payload = evidence.mergeRecord as Record<string, unknown>
+      const recordedAt = typeof payload.mergedAt === 'string' ? payload.mergedAt : this.now()
+      const id = `merge-${taskId}-${recordedAt.replace(/[^0-9A-Za-z]/g, '')}`
+      const existingIds = new Set((await readTaskEvidence(projectRoot, taskId, { kind: 'merge_record' })).map(event => event.id))
+      if (existingIds.has(id)) return
+      await appendTaskEvidence(projectRoot, taskId, {
+        id,
+        kind: 'merge_record',
+        recordedAt,
+        payload,
+      })
+    }
   }
 
   private attachMissingDoneSummaries(queue: TaskQueue): void {

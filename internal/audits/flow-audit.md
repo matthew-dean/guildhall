@@ -2695,7 +2695,7 @@ follow-up here with its evidence instead of deleting it.
   this machine does not have a `claude` binary installed. Public docs now include
   `docs/guide/external-agents.md`, sidebar/index links, a CLI reference entry,
   and an updated MCP subsystem page for the outbound Guildhall MCP bridge.
-- [ ] Split task definition from runtime/evidence storage. Release-blocking
+- [x] Split task definition from runtime/evidence storage. Release-blocking
   interpretation: the split is not merely "compact task files." Default task
   definitions and all runtime/evidence state must live in system-local project
   state/history. Project-local task files are explicit thin/export artifacts
@@ -2723,9 +2723,29 @@ follow-up here with its evidence instead of deleting it.
   src/tools/__tests__/report-issue.test.ts
   src/runtime/__tests__/orchestrator.test.ts` passed (`318` tests);
   `pnpm exec vitest run src/tools/__tests__/task-queue.test.ts --reporter=dot`
-  passed (`43` tests). The item remains open because escalation writes,
-  orchestrator remediation counters/notes, and raw task-history/drawer readers
-  still need effective-projection coverage.
+  passed.
+  2026-06-13 closeout: escalation raise/resolve writes now persist escalation
+  records to task evidence and runtime `openEscalationIds`, while project task
+  writes go through `writeProjectTaskQueue()`. Effective escalation projection
+  coalesces repeated evidence snapshots by payload id so resolved escalation
+  records replace open snapshots in drawer/runtime views. Orchestrator
+  remediation decisions now store attempts in runtime state, autonomous
+  checkpoint remediation records issue/note evidence explicitly, and the
+  orchestrator queue writer persists any stripped notes, gates, reviews,
+  adjudications, escalations, issues, merge records, runtime counters, retry
+  windows, and workspace metadata into system-local stores before leaving the
+  task definition thin. Orchestrator reads hydrate effective tasks before
+  routing, so raw project task files remain definitions while runtime behavior
+  sees evidence-backed state. Verification: `pnpm exec vitest run
+  src/tools/__tests__/escalation.test.ts src/runtime/__tests__/effective-task.test.ts
+  --reporter=dot` passed (`33` tests); `pnpm exec vitest run
+  src/runtime/__tests__/orchestrator.test.ts -t "FR-32|worker no-progress"
+  --reporter=dot` passed (`12` selected tests); `pnpm typecheck`,
+  `pnpm lint:contracts`, and `git diff --check` passed. Exploratory endpoint
+  suite note: `src/runtime/__tests__/serve-task-endpoints.test.ts` currently
+  needs its legacy `.guildhall/TASKS.json` fixture harness migrated/applied
+  before it can run as a useful endpoint proof; the task detail/history/review
+  endpoints already call `buildEffectiveTask()`.
 - [x] Close the cognitive-overhead recovery blocker hole. Routine missing
   verification/test evidence is now Guildhall-owned recovery, not a user
   blocker: agents are instructed to run or record the missing check instead of

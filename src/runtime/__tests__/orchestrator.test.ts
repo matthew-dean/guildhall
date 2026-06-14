@@ -14,6 +14,7 @@ import {
 } from '../orchestrator.js'
 import { LivenessTracker } from '../liveness.js'
 import { upsertTaskWorkspaceState } from '../task-state-store.js'
+import { buildEffectiveTask } from '../effective-task.js'
 import { updateProjectConfig, type ResolvedConfig } from '@guildhall/config'
 import type { Task, TaskQueue, TaskStatus } from '@guildhall/core'
 import { getProjectSystemStatePath } from '../../sessions/local-history.js'
@@ -38,6 +39,7 @@ import {
   getProjectTranscriptPath,
   appendTaskEvidence,
   readTaskEvidence,
+  readTaskRuntimeStore,
 } from '@guildhall/sessions'
 import { createOwnerInputRequest, listOwnerInputRequests } from '../owner-input-store.js'
 import { readMemoryEvents } from '@guildhall/memory-core'
@@ -240,6 +242,12 @@ async function readQueue(): Promise<TaskQueue> {
 async function readManagedQueue(): Promise<TaskQueue> {
   const raw = await fs.readFile(getProjectSystemStatePath(tmpDir, 'TASKS.json'), 'utf-8')
   return JSON.parse(raw)
+}
+
+async function readEffectiveTaskFromQueue(taskId: string): Promise<Task | undefined> {
+  const queue = await readQueue()
+  const task = queue.tasks.find((candidate) => candidate.id === taskId)
+  return task ? await buildEffectiveTask(tmpDir, task) as unknown as Task : undefined
 }
 
 async function seedTaskOwnerInput(input: {
@@ -10765,9 +10773,8 @@ describe('Orchestrator — FR-32 remediation wiring', () => {
     expect(decisions).toMatch(/Remediation: restart_from_checkpoint/)
     expect(decisions).toMatch(/task=t-1/)
 
-    const q = await readQueue()
-    const updated = q.tasks.find((t) => t.id === 't-1')!
-    expect(updated.remediationAttempts).toBe(1)
+    const runtime = await readTaskRuntimeStore(tmpDir)
+    expect(runtime.tasks['t-1']?.remediationAttempts).toBe(1)
   })
 
   it('authorizeRemediation delegates to the pure gate using the context lever', async () => {
@@ -10828,8 +10835,8 @@ describe('Orchestrator — FR-32 remediation wiring', () => {
       })
     }
 
-    const q = await readQueue()
-    expect(q.tasks.find((t) => t.id === 't-1')!.remediationAttempts).toBe(3)
+    const runtime = await readTaskRuntimeStore(tmpDir)
+    expect(runtime.tasks['t-1']?.remediationAttempts).toBe(3)
   })
 })
 
@@ -10875,8 +10882,7 @@ describe('Orchestrator worker no-progress escalation', () => {
     expect(fifth.kind).toBe('escalated')
     if (fifth.kind === 'escalated') expect(fifth.reason).toContain('Worker made no visible progress')
 
-    const queue = await readQueue()
-    const task = queue.tasks.find((candidate) => candidate.id === 'task-011')
+    const task = await readEffectiveTaskFromQueue('task-011')
     expect(task?.status).toBe('blocked')
     expect(task?.escalations.length).toBe(1)
     expect(task?.escalations[0]?.summary).toContain('Worker made no visible progress after 5 passes')
@@ -10963,8 +10969,7 @@ describe('Orchestrator worker no-progress escalation', () => {
       expect(fifth.afterStatus).toBe('in_progress')
     }
 
-    let queue = await readQueue()
-    let task = queue.tasks.find((candidate) => candidate.id === 'task-blank')
+    let task = await readEffectiveTaskFromQueue('task-blank')
     expect(task?.status).toBe('in_progress')
     expect(task?.remediationAttempts).toBe(1)
     expect(task?.agentIssues[0]?.resolvedBy).toBe('coordinator-remediation')
@@ -10983,8 +10988,7 @@ describe('Orchestrator worker no-progress escalation', () => {
     expect(tenth.kind).toBe('escalated')
     if (tenth.kind === 'escalated') expect(tenth.reason).toContain('Worker made no visible progress')
 
-    queue = await readQueue()
-    task = queue.tasks.find((candidate) => candidate.id === 'task-blank')
+    task = await readEffectiveTaskFromQueue('task-blank')
     expect(task?.status).toBe('blocked')
     expect(task?.escalations[0]?.summary).toContain('Worker made no visible progress after 5 passes')
     expect(task?.notes.find((note) => note.role === 'policy-classification')?.content)
@@ -11067,8 +11071,7 @@ describe('Orchestrator worker no-progress escalation', () => {
       expect(fifth.afterStatus).toBe('in_progress')
     }
 
-    const queue = await readQueue()
-    const task = queue.tasks.find((candidate) => candidate.id === 'task-failed-checkpoint')
+    const task = await readEffectiveTaskFromQueue('task-failed-checkpoint')
     expect(task?.status).toBe('in_progress')
     expect(task?.remediationAttempts).toBe(1)
     expect(task?.agentIssues[0]?.resolvedBy).toBe('coordinator-remediation')
@@ -11120,8 +11123,7 @@ describe('Orchestrator worker no-progress escalation', () => {
       expect(outcome.reason).toContain('timed out after 10ms')
     }
 
-    const queue = await readQueue()
-    const task = queue.tasks.find((candidate) => candidate.id === 'task-012')
+    const task = await readEffectiveTaskFromQueue('task-012')
     expect(task?.status).toBe('blocked')
     expect(task?.escalations.length).toBe(1)
     expect(task?.escalations[0]?.summary).toContain('Worker timed out after failing to mutate')
@@ -11219,7 +11221,7 @@ describe('Orchestrator worker no-progress escalation', () => {
     if (third.kind === 'escalated') {
       expect(third.reason).toContain('repeatedly hit its turn budget')
     }
-    const task = (await readQueue()).tasks.find((candidate) => candidate.id === 'task-014')
+    const task = await readEffectiveTaskFromQueue('task-014')
     expect(task?.status).toBe('blocked')
     expect(task?.escalations.at(-1)?.summary)
       .toContain('repeatedly hit its turn budget')

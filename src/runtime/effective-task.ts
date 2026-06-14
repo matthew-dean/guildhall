@@ -202,12 +202,12 @@ function legacyFieldsFromEvidence(evidence: TaskEvidenceEvent[]): Record<string,
   const adjudications = evidence
     .filter((event) => event.kind === 'adjudication')
     .map((event) => event.payload)
-  const escalations = evidence
-    .filter((event) => event.kind === 'escalation')
-    .map((event) => event.payload)
-  const agentIssues = evidence
-    .filter((event) => event.kind === 'agent_issue')
-    .map((event) => event.payload)
+  const escalations = coalescePayloadsById(
+    evidence.filter((event) => event.kind === 'escalation'),
+  )
+  const agentIssues = coalescePayloadsById(
+    evidence.filter((event) => event.kind === 'agent_issue'),
+  )
   const mergeRecords = evidence
     .filter((event) => event.kind === 'merge_record')
     .map((event) => event.payload)
@@ -220,4 +220,19 @@ function legacyFieldsFromEvidence(evidence: TaskEvidenceEvent[]): Record<string,
     ...(agentIssues.length > 0 ? { agentIssues } : {}),
     ...(mergeRecords.length > 0 ? { mergeRecord: mergeRecords[mergeRecords.length - 1] } : {}),
   }
+}
+
+function coalescePayloadsById(events: TaskEvidenceEvent[]): Record<string, unknown>[] {
+  const byId = new Map<string, Record<string, unknown>>()
+  const anonymous: Record<string, unknown>[] = []
+  for (const event of events) {
+    const payload = event.payload
+    const id = typeof payload.id === 'string' && payload.id.length > 0 ? payload.id : ''
+    if (!id) {
+      anonymous.push(payload)
+      continue
+    }
+    byId.set(id, payload)
+  }
+  return [...anonymous, ...byId.values()]
 }
