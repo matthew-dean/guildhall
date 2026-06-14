@@ -19,7 +19,7 @@ import {
   readTaskEvidence,
   upsertTaskRuntimeState,
 } from '@guildhall/sessions'
-import { writeProjectTaskQueue } from '../runtime/project-state-boundary.js'
+import { writeProjectTaskQueue } from '@guildhall/runtime/project-state-boundary'
 
 // ---------------------------------------------------------------------------
 // FR-31 Agent-issue channel

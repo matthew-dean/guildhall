@@ -37,14 +37,17 @@
       "@guildhall/protocol": ["./src/protocol/index.ts"],
       "@guildhall/providers": ["./src/providers/index.ts"],
       "@guildhall/runtime": ["./src/runtime/index.ts"],
+      "@guildhall/runtime/effective-task": ["./src/runtime/effective-task.ts"],
       "@guildhall/runtime/owner-input-store": ["./src/runtime/owner-input-store.ts"],
+      "@guildhall/runtime/project-state-boundary": ["./src/runtime/project-state-boundary.ts"],
       "@guildhall/runtime/task-transition": ["./src/runtime/task-transition.ts"],
       "@guildhall/runtime-bundle": ["./src/runtime-bundle/index.ts"],
       "@guildhall/runtime-container": ["./src/runtime-container/index.ts"],
       "@guildhall/shared": ["./src/shared/index.ts"],
       "@guildhall/sessions": ["./src/sessions/index.ts"],
       "@guildhall/skills": ["./src/skills/index.ts"],
-      "@guildhall/tools": ["./src/tools/index.ts"]
+      "@guildhall/tools": ["./src/tools/index.ts"],
+      "@guildhall/web-tokens.css": ["./src/web/tokens.css"]
     }
   },
   "include": ["src"],

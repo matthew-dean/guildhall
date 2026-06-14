@@ -22,7 +22,7 @@ import {
   renderStructuredSpecMarkdown,
 } from '@guildhall/core'
 import { appendTaskEvidence, atomicWriteText, inferProjectRootFromMemoryDir } from '@guildhall/sessions'
-import { writeProjectTaskQueue } from '../runtime/project-state-boundary.js'
+import { writeProjectTaskQueue } from '@guildhall/runtime/project-state-boundary'
 
 const TASKS_PATH_SCHEMA = z.string().describe('Absolute path to the TASKS.json file')
 

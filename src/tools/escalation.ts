@@ -12,8 +12,8 @@ import {
 } from '@guildhall/core'
 import { logProgress } from './memory-tools.js'
 import { atomicWriteText, appendTaskEvidence, inferProjectRootFromMemoryDir, readTaskEvidence, upsertTaskRuntimeState } from '@guildhall/sessions'
-import { buildEffectiveTask } from '../runtime/effective-task.js'
-import { writeProjectTaskQueue } from '../runtime/project-state-boundary.js'
+import { buildEffectiveTask } from '@guildhall/runtime/effective-task'
+import { writeProjectTaskQueue } from '@guildhall/runtime/project-state-boundary'
 
 // ---------------------------------------------------------------------------
 // FR-10 Escalation protocol

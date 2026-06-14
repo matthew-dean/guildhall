@@ -8,6 +8,7 @@ export default defineConfig({
     alias: {
       '@guildhall/shared': resolve('src/shared/index.ts'),
       '@guildhall/levers/profiles': resolve('src/levers/profiles.ts'),
+      '@guildhall/web-tokens.css': resolve('src/web/tokens.css'),
     },
   },
   build: {
