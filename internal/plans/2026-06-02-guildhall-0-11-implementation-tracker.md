@@ -6,9 +6,10 @@
 provider-guidance work that should not crowd the 0.10 operating-map release.
 
 **Release boundary:** 0.11.0 starts after 0.10.0 proves bounded owner input,
-project graph authority, contract surfaces, external task authority, and the
-agent memory bridge. Do not pull OpenRouter back into 0.10 unless the owner
-explicitly changes the release boundary.
+project graph authority, contract surfaces, and the agent memory bridge. Do not
+pull OpenRouter back into 0.10 unless the owner explicitly changes the release
+boundary. External task authority is future deferred work, not a numbered
+release prerequisite.
 
 ## Source Plans
 

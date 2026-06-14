@@ -8521,11 +8521,14 @@ local 0.7 release-candidate build at `http://localhost:7777/projects/narrative-h
     cross-cutting domain, executable unit, memory scope, and Git authority root
     separate while producing context packets with prioritized includes,
     summaries, handles, and auditable omissions.
-  - [ ] Add the 0.10.0 external task authority lane. The spec lives at
+  - [x] Defer the external task authority lane as future authority work rather
+    than treating it as a current release closeout item. The spec lives at
     `internal/specs/2026-05-29-guildhall-0-10-external-task-authority.md` and
     should treat Jira/Linear/GitHub Issues/Azure DevOps/Asana as planning
     authorities while Guildhall keeps a local execution mirror with proof,
     stale-state handling, safe proposed writes, and context-budget manifests.
+    A bounded runtime mirror primitive exists, but the owner-facing authority
+    lane is intentionally deferred until it matters.
   - [x] Closed the remaining Looma + Knit reframe trust blocker. Recovery
     spec seeds now rewrite stale product briefs, clean imported source
     snippets, promote answered owner questions into plain decisions, filter
@@ -8660,14 +8663,15 @@ recorded as `mode: continuous` before stopping on idle.
 source: codex:fll-start-readiness-worker-handoff-cleanup
 
 2026-06-03T12:46:00Z - Completed the 0.10 readiness integration pass across
-bounded Thread conversations, external task authority, external-agent memory
-bridge, contract surfaces, docs, screenshots, and installed-app proof.
+bounded Thread conversations, bounded external-authority mirror groundwork,
+external-agent memory bridge, contract surfaces, docs, screenshots, and
+installed-app proof.
 OpenRouter remains deferred to 0.11.0. Integrated verification passed:
 `pnpm typecheck`; focused combined Vitest suite for bounded chat, Thread,
-external authority, memory bridge, MCP/CLI bridge exposure, contract surfaces,
-corpus proposals, context packets, and Structure projection passed with 360
-tests; `pnpm lint:design`; `node scripts/reduction-guardrails.mjs`; `pnpm
-build`; `git diff --check`. Installed-app proof passed: `pnpm dev:install`
+external-authority mirror primitives, memory bridge, MCP/CLI bridge exposure,
+contract surfaces, corpus proposals, context packets, and Structure projection
+passed with 360 tests; `pnpm lint:design`; `node scripts/reduction-guardrails.mjs`;
+`pnpm build`; `git diff --check`. Installed-app proof passed: `pnpm dev:install`
 completed, service restart reported `/api/stale-server` as `stale:false`, live
 browser proof on `http://localhost:7777/projects/narrative-harness/thread`
 showed project-question and brief-cleanup routing without raw schema JSON, and

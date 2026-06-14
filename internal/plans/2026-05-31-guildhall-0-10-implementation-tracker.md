@@ -31,8 +31,8 @@ useful durable record. That interaction model becomes the front door for intake,
 New request, and later owner-input recovery.
 
 Under that surface, 0.10.0 should deepen Guildhall's operating map. Repo
-structure, domain routing, Git authority, external planning authority, contract
-surfaces, and memory scope should be explicit enough that future work is
+structure, domain routing, Git authority, contract surfaces, and memory scope
+should be explicit enough that future work is
 grounded in audited context instead of transcript archaeology or stale local
 assumptions.
 
@@ -49,16 +49,16 @@ The release is ready only when:
 - the local project graph can represent other local Guildhall projects as
   authority-aware nodes and track at least one provider/consumer dependency
   edge through delivery, consumer verification, return, and final acceptance;
-- external task authority can mirror an externally owned issue into local
-  execution truth without pretending Guildhall owns planning truth;
 - the agent memory bridge keeps external-agent memory exchange structured,
   bounded, and evidence-backed;
 - every changed owner-facing surface has matching docs and browser proof before
   the release is called ready.
 
-OpenRouter guided provider setup has been moved to 0.11.0. Keep the 0.10
-release boundary focused on operating-map behavior, authority boundaries,
-owner-input coherence, and contract/memory structure.
+External task authority is deferred as future authority work, without assigning
+it to a release. OpenRouter guided provider setup has been moved to 0.11.0.
+Keep the 0.10 release boundary focused on operating-map behavior, authority
+boundaries inside local project/work graphs, owner-input coherence, and
+contract/memory structure.
 
 ## Priority Order
 
@@ -552,14 +552,15 @@ values, product taste, and consumer verification.
     rule that local projects negotiate requests instead of letting remote
     systems or other projects write into project state.
 
-## Milestone 4: External Task Authority
+## Deferred Future Work: External Task Authority
 
 **Purpose:** Let Guildhall execute locally while respecting Jira/Linear/GitHub
 Issues style planning authority.
 
 **Primary source:** `internal/specs/2026-05-29-guildhall-0-10-external-task-authority.md`
 
-- [x] Add provider-neutral external issue refs and local execution mirrors.
+- [x] Add provider-neutral external issue refs and local execution mirrors as
+  bounded runtime groundwork, not as a shipped 0.10 owner-facing lane.
   First bounded runtime slice landed in
   `src/runtime/external-task-authority.ts`: Jira, Linear, GitHub Issues, Azure
   DevOps, Asana, and custom refs share one `ExternalIssueRef` identity model,
@@ -587,6 +588,11 @@ Issues style planning authority.
   `pnpm vitest run src/runtime/__tests__/external-task-authority.test.ts --reporter=dot`
   passed with 8 tests. `pnpm typecheck` was rerun, but the branch still has
   unrelated contract-surface/intake/serve type errors outside Milestone 4.
+
+- [ ] Build the owner-facing authority lane when it becomes important:
+  connector-backed mirroring, stale/conflict review UI, context-budget
+  manifests, proposed external writes, and browser proof that Guildhall keeps
+  local execution truth separate from externally owned planning truth.
 
 ## Milestone 5: Agent Memory Bridge
 
@@ -696,9 +702,9 @@ sync with what actually shipped.
   Captured installed-app Thread and Structure screenshots under
   `docs/assets/ui-audit/0-10-0/` after dev install and service restart.
 - [x] Keep internal plans/specs aligned with what the code now does.
-  Milestone 1, 4, 5, and 6 checklists now reflect the completed implementation
-  slices, and the 0.11 OpenRouter deferral remains separate from the 0.10
-  readiness boundary.
+  Milestone 1, 5, and 6 checklists now reflect the completed implementation
+  slices, while external task authority remains future deferred work and the
+  OpenRouter owner-facing lane remains separate 0.11 work.
 - [x] Run browser proof for bounded chat, then for the later 0.10 lanes that
   add new owner-facing surfaces.
   Installed-app proof: `pnpm dev:install` completed, service restart reported
