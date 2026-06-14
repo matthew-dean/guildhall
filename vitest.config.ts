@@ -19,8 +19,16 @@ export default defineConfig({
   resolve: {
     alias: [
       {
+        find: '@guildhall/runtime/effective-task',
+        replacement: resolve(__dirname, 'src/runtime/effective-task.ts'),
+      },
+      {
         find: '@guildhall/runtime/owner-input-store',
         replacement: resolve(__dirname, 'src/runtime/owner-input-store.ts'),
+      },
+      {
+        find: '@guildhall/runtime/project-state-boundary',
+        replacement: resolve(__dirname, 'src/runtime/project-state-boundary.ts'),
       },
       {
         find: '@guildhall/runtime/task-transition',
