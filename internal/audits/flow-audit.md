@@ -723,7 +723,7 @@ coverage.
   controls. Residual `COMPLETION HYGIENE` escalation-history cleanup belongs
   to the task-state/runtime-evidence storage split, not to the Looma/Knit
   component-delivery proof.
-- [ ] Enforce default-zero project-state storage boundaries and clean existing
+- [x] Enforce default-zero project-state storage boundaries and clean existing
   managed project `.guildhall` state. Release-blocking interpretation: normal
   Guildhall operation must create no project-local Guildhall state by default.
   Thin project-local state is allowed only when a project explicitly opts into a
@@ -851,6 +851,28 @@ coverage.
   project-local `.guildhall` for fresh/default projects. The item still remains
   open until broader verification and installed-app/API/MCP walkthrough prove
   normal non-opt-in operation does not recreate repo-local Guildhall state.
+  2026-06-14 closure proof: installed the current artifact with
+  `pnpm dev:install`; `node scripts/release-smoke.mjs` reported
+  `Guildhall 0.10.0 (0.10.0 ee8b0717c765, clean) served bundle is fresh at
+  http://localhost:7777`. A packaged-CLI isolated proof started
+  `/Users/matthew/.local/bin/guildhall serve-internal` with throwaway
+  `GUILDHALL_CONFIG_DIR`/`GUILDHALL_DATA_DIR`, attached a fresh folder, ran
+  setup identity, read `/api/project`, skipped the onboard direction wizard,
+  wrote/read the design system, read the project graph, and read MCP resources
+  through `guildhall mcp serve`; after every step the project folder still had
+  no `.guildhall`. The expected state landed under system-local
+  `project-state/` (`agent-settings.yaml`, `attention.json`,
+  `design-system.yaml`, `wizards.yaml`). Installed-service proof on
+  `fair-labor-license` and `jess` hit `/api/project`,
+  `/api/project/release-readiness`, `/api/project/wizards`, and the overview
+  route; both stayed at zero `.guildhall` files and clean `.guildhall` git
+  status. Existing Looma + Knit residue
+  (`.guildhall/persistence` and `.guildhall/reintake-drafts`) was evacuated by
+  `guildhall memory clean-project-state /Users/matthew/git/oss/looma-knit
+  --apply`, after which `.guildhall` was absent and `/api/project?projectId=looma-knit`
+  still returned initialized. Final managed-project scan showed zero
+  `.guildhall` files for `looma-knit`, `fair-labor-license`, `jess`,
+  `narrative-harness`, and `guildhall`.
 - [x] Distinguish in-app browser bridge failures from actual Guildhall route
   lockups during live audits. Multi-agent proof on 2026-06-04: the service
   stayed healthy (`stale:false`, `/api/service` and direct route HTTP returned
