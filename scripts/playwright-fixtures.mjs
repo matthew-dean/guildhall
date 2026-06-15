@@ -1,7 +1,8 @@
 #!/usr/bin/env node
 import { execFile } from 'node:child_process'
+import { createHash } from 'node:crypto'
 import { mkdir, rm, writeFile } from 'node:fs/promises'
-import { join, resolve } from 'node:path'
+import { basename, join, resolve } from 'node:path'
 import { promisify } from 'node:util'
 
 const root = resolve('.playwright-fixtures')
@@ -15,6 +16,12 @@ const execFileAsync = promisify(execFile)
 
 function slugify(value) {
   return value.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '') || 'fixture'
+}
+
+function projectLocalHistoryDir(projectPath) {
+  const resolved = resolve(projectPath)
+  const digest = createHash('sha1').update(resolved).digest('hex').slice(0, 12)
+  return join(guildhallHome, 'data', 'projects', `${basename(resolved) || 'root'}-${digest}`)
 }
 
 async function writeProject({
@@ -119,12 +126,58 @@ async function writeProject({
       : {}),
   }))
   await writeFile(join(memoryDir, 'TASKS.json'), JSON.stringify(tasks, null, 2), 'utf8')
+  if (id === 'capability-boundary') {
+    const localHistoryDir = projectLocalHistoryDir(projectPath)
+    const managedStateDir = join(localHistoryDir, 'project-state')
+    await mkdir(managedStateDir, { recursive: true })
+    await mkdir(join(localHistoryDir, 'migrations'), { recursive: true })
+    await writeFile(join(managedStateDir, 'TASKS.json'), JSON.stringify({ version: 1, lastUpdated: now, tasks }, null, 2), 'utf8')
+    await writeFile(join(managedStateDir, 'project-brief.md'), `${name} fixture covers owner approval for runtime capability requests.\n`, 'utf8')
+    await writeFile(join(managedStateDir, 'workspace-goals.json'), JSON.stringify({ goals: [] }, null, 2), 'utf8')
+    await writeFile(
+      join(managedStateDir, 'wizards.yaml'),
+      [
+        'version: 1',
+        'skipped:',
+        '  onboard:',
+        '    - provider',
+        '    - bootstrap',
+        'completedAt: {}',
+        '',
+      ].join('\n'),
+      'utf8',
+    )
+    await writeFile(
+      join(localHistoryDir, 'migrations', 'migrations.json'),
+      JSON.stringify({
+        version: 1,
+        records: [{
+          id: '0.8.0/project-state-layout',
+          status: 'applied',
+          appliedAt: now,
+          summary: 'Fixture is already seeded in managed project state.',
+          affectedPaths: ['memory/'],
+        }],
+      }, null, 2),
+      'utf8',
+    )
+  }
   if (capabilityRequests.length > 0) {
     await mkdir(join(memoryDir, 'capability-requests'), { recursive: true })
     await mkdir(join(projectStateDir, 'capability-requests'), { recursive: true })
+    if (id === 'capability-boundary') {
+      await mkdir(join(projectLocalHistoryDir(projectPath), 'project-state', 'capability-requests'), { recursive: true })
+    }
     for (const request of capabilityRequests) {
       await writeFile(join(memoryDir, 'capability-requests', `${request.id}.json`), JSON.stringify(request, null, 2), 'utf8')
       await writeFile(join(projectStateDir, 'capability-requests', `${request.id}.json`), JSON.stringify(request, null, 2), 'utf8')
+      if (id === 'capability-boundary') {
+        await writeFile(
+          join(projectLocalHistoryDir(projectPath), 'project-state', 'capability-requests', `${request.id}.json`),
+          JSON.stringify(request, null, 2),
+          'utf8',
+        )
+      }
     }
   }
   if (id === 'looma-knit') {

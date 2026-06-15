@@ -34,7 +34,11 @@ import { join } from 'node:path'
 import { parse as parseYaml } from 'yaml'
 import { readGlobalProviders, type ProviderKind } from '@guildhall/config'
 import { bootstrapNeeded, readBootstrapStatus } from './bootstrap-runner.js'
-import { getProjectLocalHistoryDir, getProjectStateDir, getProjectSystemStatePath } from '@guildhall/sessions'
+import {
+  getProjectLocalHistoryDir,
+  getProjectStateDir,
+  projectStatePathWithRoot,
+} from '@guildhall/sessions'
 import { readCachedJson, readCachedText, readCachedYaml } from './file-read-cache.js'
 
 // ---------------------------------------------------------------------------
@@ -424,7 +428,8 @@ export interface BuildTaskSnapshotOptions {
     }
     acceptanceCriteria?: unknown[]
   }
-  readWizardsState?: (projectPath: string) => WizardsState
+  projectStateDir?: string
+  readWizardsState?: (projectPath: string, projectStateDir?: string) => WizardsState
 }
 
 export function buildTaskSnapshot(opts: BuildTaskSnapshotOptions): TaskSnapshot {
@@ -452,7 +457,7 @@ export function buildTaskSnapshot(opts: BuildTaskSnapshotOptions): TaskSnapshot 
     acceptanceCriteriaCount: Array.isArray(t.acceptanceCriteria)
       ? t.acceptanceCriteria.length
       : 0,
-    wizardState: readState(opts.projectPath),
+    wizardState: readState(opts.projectPath, opts.projectStateDir),
   }
 }
 
@@ -476,8 +481,8 @@ function readYamlSafe(path: string): unknown {
   }
 }
 
-export function readWizardsState(projectPath: string): WizardsState {
-  const path = getProjectSystemStatePath(projectPath, 'wizards.yaml')
+export function readWizardsState(projectPath: string, projectStateDir?: string): WizardsState {
+  const path = projectStatePathWithRoot(projectPath, 'wizards.yaml', projectStateDir)
   if (!existsSync(path)) return emptyWizardsState()
   const raw = readYamlSafe(path) as Partial<WizardsState> | null
   if (!raw || typeof raw !== 'object') return emptyWizardsState()
@@ -488,8 +493,8 @@ export function readWizardsState(projectPath: string): WizardsState {
   }
 }
 
-export async function readWizardsStateAsync(projectPath: string): Promise<WizardsState> {
-  const path = getProjectSystemStatePath(projectPath, 'wizards.yaml')
+export async function readWizardsStateAsync(projectPath: string, projectStateDir?: string): Promise<WizardsState> {
+  const path = projectStatePathWithRoot(projectPath, 'wizards.yaml', projectStateDir)
   const raw = await readCachedYaml<Partial<WizardsState>>(path).catch(() => null)
   if (!raw || typeof raw !== 'object') return emptyWizardsState()
   return {
@@ -501,10 +506,11 @@ export async function readWizardsStateAsync(projectPath: string): Promise<Wizard
 
 export interface BuildSnapshotOptions {
   projectPath: string
+  projectStateDir?: string
   /** Override for tests — defaults to `readGlobalProviders`. */
   readProviders?: () => { providers?: Partial<Record<ProviderKind, unknown>> }
   /** Override for tests — defaults to reading from disk. */
-  readWizardsState?: (projectPath: string) => WizardsState
+  readWizardsState?: (projectPath: string, projectStateDir?: string) => WizardsState
   /**
    * Override for tests — defaults to checking the on-disk OAuth credential
    * files (`~/.claude/.credentials.json`, `~/.codex/auth.json`). The wizard's
@@ -518,8 +524,8 @@ interface TaskIndexShape {
   activeTaskIds?: unknown
 }
 
-async function activeTaskCountFromIndex(projectPath: string): Promise<number | null> {
-  const file = getProjectSystemStatePath(projectPath, join('tasks', 'index.json'))
+async function activeTaskCountFromIndex(projectPath: string, projectStateDir?: string): Promise<number | null> {
+  const file = projectStatePathWithRoot(projectPath, join('tasks', 'index.json'), projectStateDir)
   const raw = await readCachedJson<TaskIndexShape>(file).catch(() => null)
   const ids = Array.isArray(raw?.activeTaskIds)
     ? raw.activeTaskIds.filter((id): id is string => typeof id === 'string')
@@ -542,7 +548,7 @@ function taskCountFromRaw(raw: unknown): number {
 }
 
 export function buildSnapshot(opts: BuildSnapshotOptions): ProjectSnapshot {
-  const { projectPath } = opts
+  const { projectPath, projectStateDir } = opts
   const readProv = opts.readProviders ?? readGlobalProviders
   const readState = opts.readWizardsState ?? readWizardsState
   const detectOauth =
@@ -602,7 +608,7 @@ export function buildSnapshot(opts: BuildSnapshotOptions): ProjectSnapshot {
 
   // direction
   const localHistoryDir = getProjectLocalHistoryDir(projectPath)
-  const briefPath = getProjectSystemStatePath(projectPath, 'project-brief.md')
+  const briefPath = projectStatePathWithRoot(projectPath, 'project-brief.md', projectStateDir)
   let hasDirection = false
   if (existsSync(briefPath)) {
     try {
@@ -614,7 +620,7 @@ export function buildSnapshot(opts: BuildSnapshotOptions): ProjectSnapshot {
   }
 
   // workspace import: goals.json written, OR dismiss marker, OR no anchors at all.
-  const goalsPath = getProjectSystemStatePath(projectPath, 'workspace-goals.json')
+  const goalsPath = projectStatePathWithRoot(projectPath, 'workspace-goals.json', projectStateDir)
   const dismissPath = join(localHistoryDir, 'workspace-import-dismissed')
   let workspaceImportReviewed = existsSync(goalsPath) || existsSync(dismissPath)
   if (!workspaceImportReviewed) {
@@ -628,7 +634,7 @@ export function buildSnapshot(opts: BuildSnapshotOptions): ProjectSnapshot {
   // contains Guildhall's own housekeeping. Do not exclude by domain alone:
   // starter projects can route the user's first real spec-shaping task through
   // `_meta` until richer project lanes exist.
-  const tasksPath = getProjectSystemStatePath(projectPath, 'TASKS.json')
+  const tasksPath = projectStatePathWithRoot(projectPath, 'TASKS.json', projectStateDir)
   const tasksRaw = readJsonSafe(tasksPath)
   const tasks = Array.isArray(tasksRaw)
     ? tasksRaw
@@ -650,12 +656,12 @@ export function buildSnapshot(opts: BuildSnapshotOptions): ProjectSnapshot {
     hasDirection,
     workspaceImportReviewed,
     taskCount,
-    wizardState: readState(projectPath),
+    wizardState: readState(projectPath, projectStateDir),
   }
 }
 
 export async function buildSnapshotAsync(opts: BuildSnapshotOptions): Promise<ProjectSnapshot> {
-  const { projectPath } = opts
+  const { projectPath, projectStateDir } = opts
   const readProv = opts.readProviders ?? readGlobalProviders
   const readState = opts.readWizardsState ?? readWizardsStateAsync
   const detectOauth =
@@ -704,11 +710,11 @@ export async function buildSnapshotAsync(opts: BuildSnapshotOptions): Promise<Pr
   }
 
   const localHistoryDir = getProjectLocalHistoryDir(projectPath)
-  const briefPath = getProjectSystemStatePath(projectPath, 'project-brief.md')
+  const briefPath = projectStatePathWithRoot(projectPath, 'project-brief.md', projectStateDir)
   const briefBody = await readCachedText(briefPath).catch(() => null)
   const hasDirection = typeof briefBody === 'string' && briefBody.trim().length > 40
 
-  const goalsPath = getProjectSystemStatePath(projectPath, 'workspace-goals.json')
+  const goalsPath = projectStatePathWithRoot(projectPath, 'workspace-goals.json', projectStateDir)
   const dismissPath = join(localHistoryDir, 'workspace-import-dismissed')
   let workspaceImportReviewed = false
   try {
@@ -734,9 +740,9 @@ export async function buildSnapshotAsync(opts: BuildSnapshotOptions): Promise<Pr
     }
   }
 
-  let taskCount = await activeTaskCountFromIndex(projectPath)
+  let taskCount = await activeTaskCountFromIndex(projectPath, projectStateDir)
   if (taskCount == null) {
-    const tasksPath = getProjectSystemStatePath(projectPath, 'TASKS.json')
+    const tasksPath = projectStatePathWithRoot(projectPath, 'TASKS.json', projectStateDir)
     const tasksRaw = await readCachedJson<unknown>(tasksPath).catch(() => null)
     taskCount = taskCountFromRaw(tasksRaw)
   }
@@ -749,6 +755,6 @@ export async function buildSnapshotAsync(opts: BuildSnapshotOptions): Promise<Pr
     hasDirection,
     workspaceImportReviewed,
     taskCount,
-    wizardState: await Promise.resolve(readState(projectPath)),
+    wizardState: await Promise.resolve(readState(projectPath, projectStateDir)),
   }
 }

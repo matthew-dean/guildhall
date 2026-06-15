@@ -15,9 +15,11 @@ describe('stale Guildhall process guardrail', () => {
     ].join('\n')
 
     const processes = parseGuildhallProcessList(rows)
+    const staleProcess = processes.find(process => process.pid === 101)
+    if (!staleProcess) throw new Error('expected process fixture to parse')
     const stale = findStaleGuildhallProcesses(processes, {
       currentPid: 202,
-      currentBuildMtimeMs: Date.parse('2026-06-06T20:00:00.000Z'),
+      currentBuildMtimeMs: staleProcess.startedAtMs + 60_000,
     })
 
     expect(stale).toEqual([expect.objectContaining({
@@ -34,9 +36,11 @@ describe('stale Guildhall process guardrail', () => {
     ].join('\n')
 
     const processes = parseGuildhallProcessList(rows)
+    const siblingProcess = processes.find(process => process.pid === 404)
+    if (!siblingProcess) throw new Error('expected process fixture to parse')
     const stale = findStaleGuildhallProcesses(processes, {
       currentPid: 202,
-      currentBuildMtimeMs: Date.parse('2026-06-06T20:10:00.000Z'),
+      currentBuildMtimeMs: siblingProcess.startedAtMs - 60_000,
     })
 
     expect(stale).toEqual([])

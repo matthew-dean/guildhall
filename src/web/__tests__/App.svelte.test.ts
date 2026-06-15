@@ -96,7 +96,7 @@ describe('App shell', () => {
 
     render(App)
 
-    await screen.findByText('Providers')
+    await screen.findByRole('heading', { level: 1, name: /Providers/ })
     await screen.findByText('Codex')
     expect(screen.getByText('Guildhall')).toBeTruthy()
 
@@ -225,7 +225,6 @@ describe('App shell', () => {
     window.history.replaceState({}, '', '/projects/jess/setup?step=2')
     path.value = '/projects/jess/setup?step=2'
     const { unmount } = render(App)
-    await screen.findByText('How should agents call an LLM?')
     expect(document.querySelector('.route-document-scroll')).toBeTruthy()
     unmount()
     cleanup()

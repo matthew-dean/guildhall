@@ -13,7 +13,7 @@
 
 import { existsSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
-import { getProjectLocalHistoryDir, getProjectSystemStatePath } from '@guildhall/sessions'
+import { getProjectLocalHistoryDir, projectStatePathWithRoot } from '@guildhall/sessions'
 import { parse as parseYaml } from 'yaml'
 import type { Task } from '@guildhall/core'
 import { META_INTAKE_TASK_ID } from './meta-intake.js'
@@ -45,6 +45,7 @@ export type InboxItem =
 
 export interface BuildInboxOptions {
   projectPath: string
+  projectStateDir?: string
   snapshotOptions?: Omit<BuildSnapshotOptions, 'projectPath'>
 }
 
@@ -289,7 +290,7 @@ function contractResultReviewItems(projectPath: string): InboxItem[] {
 }
 
 export function buildInbox(opts: BuildInboxOptions): InboxItem[] {
-  const { projectPath, snapshotOptions } = opts
+  const { projectPath, projectStateDir, snapshotOptions } = opts
   const items: InboxItem[] = []
   const bootstrapFailure = failedBootstrapDetail(projectPath)
 
@@ -346,7 +347,7 @@ export function buildInbox(opts: BuildInboxOptions): InboxItem[] {
     }
   }
 
-  const tasksPath = getProjectSystemStatePath(projectPath, 'TASKS.json')
+  const tasksPath = projectStatePathWithRoot(projectPath, 'TASKS.json', projectStateDir)
   const tasks = tasksArray(readJsonSafe(tasksPath))
   const workspaceImportTask = tasks.find(t => t?.id === 'task-workspace-import')
   const workspaceImportTaskStatus =
@@ -357,7 +358,7 @@ export function buildInbox(opts: BuildInboxOptions): InboxItem[] {
     workspaceImportTask != null &&
     !['done', 'cancelled', 'archived'].includes(workspaceImportTaskStatus)
 
-  const setupProgress = progressFor(onboardWizard, buildSnapshot({ projectPath, ...(snapshotOptions ?? {}) }))
+  const setupProgress = progressFor(onboardWizard, buildSnapshot({ projectPath, projectStateDir, ...(snapshotOptions ?? {}) }))
   const activeSetupStep = setupProgress.steps.find(step => step.id === setupProgress.activeStepId)
   if (activeSetupStep && ['direction', 'firstTask'].includes(activeSetupStep.id)) {
     items.push({
@@ -371,7 +372,7 @@ export function buildInbox(opts: BuildInboxOptions): InboxItem[] {
   }
 
   // --- workspace_import_pending --------------------------------------------
-  const goalsPath = getProjectSystemStatePath(projectPath, 'workspace-goals.json')
+  const goalsPath = projectStatePathWithRoot(projectPath, 'workspace-goals.json', projectStateDir)
   const hasGoals = existsSync(goalsPath)
   const anchors = detectRepoAnchors(projectPath)
   const hasReadme = anchors.includes('README.md')
@@ -504,7 +505,7 @@ export function buildInbox(opts: BuildInboxOptions): InboxItem[] {
   }
 
   // --- lever_questions -----------------------------------------------------
-  const settingsPath = getProjectSystemStatePath(projectPath, 'agent-settings.yaml')
+  const settingsPath = projectStatePathWithRoot(projectPath, 'agent-settings.yaml', projectStateDir)
   if (existsSync(settingsPath)) {
     const raw = readYamlSafe(settingsPath) as
       | {

@@ -13,6 +13,10 @@ export function projectStatePath(projectRoot: string, relativePath: string): str
   return getProjectSystemStatePath(projectRoot, relativePath)
 }
 
+export function projectStatePathWithRoot(projectRoot: string, relativePath: string, stateRoot?: string): string {
+  return stateRoot ? path.join(stateRoot, relativePath) : projectStatePath(projectRoot, relativePath)
+}
+
 export function projectStatePathFromMemoryDir(memoryDir: string, relativePath: string): string {
   return getProjectSystemStatePathFromMemoryDir(memoryDir, relativePath)
 }

@@ -60,6 +60,7 @@ async function writeLocalHistoryJson(rel: string, value: unknown): Promise<void>
 function buildInboxWithProviderSetup(): InboxItem[] {
   return buildInbox({
     projectPath: tmpDir,
+    projectStateDir,
     snapshotOptions: {
       readProviders: () => ({ providers: { 'openai-api': { apiKey: 'sk-test' } } }),
       detectOauthProviders: () => ({ claude: false, codex: false }),
@@ -185,6 +186,7 @@ describe('buildInbox', () => {
 
     const items = buildInbox({
       projectPath: tmpDir,
+      projectStateDir,
       snapshotOptions: {
         readProviders: () => ({ providers: { 'openai-api': { apiKey: 'sk-test' } } }),
         detectOauthProviders: () => ({ claude: false, codex: false }),
@@ -226,7 +228,7 @@ describe('buildInbox', () => {
       rejectedCandidates: [],
     })
 
-    const items = buildInbox({ projectPath: tmpDir })
+    const items = buildInbox({ projectPath: tmpDir, projectStateDir })
     const hit = items.find(item => item.kind === 'contract_result_review')
 
     expect(hit).toEqual(expect.objectContaining({
@@ -261,6 +263,7 @@ describe('buildInbox', () => {
     await writeJson('.guildhall/workspace-goals.json', { goals: [] })
     const items = buildInbox({
       projectPath: tmpDir,
+      projectStateDir,
       snapshotOptions: {
         readProviders: () => ({ providers: { 'openai-api': { apiKey: 'sk-test' } } }),
         detectOauthProviders: () => ({ claude: false, codex: false }),
@@ -283,6 +286,7 @@ describe('buildInbox', () => {
     await writeJson('.guildhall/workspace-goals.json', { goals: [] })
     const items = buildInbox({
       projectPath: tmpDir,
+      projectStateDir,
       snapshotOptions: {
         readProviders: () => ({ providers: { 'openai-api': { apiKey: 'sk-test' } } }),
         detectOauthProviders: () => ({ claude: false, codex: false }),
@@ -297,6 +301,7 @@ describe('buildInbox', () => {
 
     const items = buildInbox({
       projectPath: tmpDir,
+      projectStateDir,
       snapshotOptions: {
         readProviders: () => ({ providers: { 'openai-api': { apiKey: 'sk-test' } } }),
         detectOauthProviders: () => ({ claude: false, codex: false }),
@@ -332,6 +337,7 @@ describe('buildInbox', () => {
 
     const items = buildInbox({
       projectPath: tmpDir,
+      projectStateDir,
       snapshotOptions: {
         readProviders: () => ({ providers: { 'openai-api': { apiKey: 'sk-test' } } }),
         detectOauthProviders: () => ({ claude: false, codex: false }),
@@ -368,6 +374,7 @@ describe('buildInbox', () => {
 
     const items = buildInbox({
       projectPath: tmpDir,
+      projectStateDir,
       snapshotOptions: {
         readProviders: () => ({ providers: { 'openai-api': { apiKey: 'sk-test' } } }),
         detectOauthProviders: () => ({ claude: false, codex: false }),
@@ -478,7 +485,7 @@ describe('buildInbox', () => {
       ],
     })
 
-    const items = buildInbox({ projectPath: tmpDir })
+    const items = buildInbox({ projectPath: tmpDir, projectStateDir })
     expect(itemKinds(items)).not.toContain('brief_approval')
     expect(itemKinds(items)).not.toContain('agent_question_pending')
     expect(itemKinds(items)).not.toContain('spec_approval')
@@ -516,6 +523,7 @@ describe('buildInbox', () => {
 
     const items = buildInbox({
       projectPath: tmpDir,
+      projectStateDir,
       snapshotOptions: {
         readProviders: () => ({ providers: { 'openai-api': { apiKey: 'sk-test' } } }),
         detectOauthProviders: () => ({ claude: false, codex: false }),
@@ -557,6 +565,7 @@ describe('buildInbox', () => {
 
     const items = buildInbox({
       projectPath: tmpDir,
+      projectStateDir,
       snapshotOptions: {
         readProviders: () => ({ providers: { 'openai-api': { apiKey: 'sk-test' } } }),
         detectOauthProviders: () => ({ claude: false, codex: false }),
@@ -608,7 +617,7 @@ describe('buildInbox', () => {
       ],
     })
 
-    const items = buildInbox({ projectPath: tmpDir })
+    const items = buildInbox({ projectPath: tmpDir, projectStateDir })
     expect(itemKinds(items)).not.toContain('agent_question_pending')
     expect(items.some(i => i.kind === 'import_draft_queue')).toBe(true)
   })
@@ -694,7 +703,7 @@ coordinators:
       ],
     })
 
-    const items = buildInbox({ projectPath: tmpDir })
+    const items = buildInbox({ projectPath: tmpDir, projectStateDir })
     expect(itemKinds(items)).not.toContain('agent_question_pending')
     expect(itemKinds(items)).not.toContain('spec_approval')
   })
@@ -727,7 +736,7 @@ coordinators:
       ],
     })
 
-    const items = buildInbox({ projectPath: tmpDir })
+    const items = buildInbox({ projectPath: tmpDir, projectStateDir })
     expect(itemKinds(items)).not.toContain('brief_approval')
   })
 
@@ -755,7 +764,7 @@ coordinators:
       ],
     })
 
-    const items = buildInbox({ projectPath: tmpDir })
+    const items = buildInbox({ projectPath: tmpDir, projectStateDir })
     expect(items.find(i => i.kind === 'spec_fill_pending')).toBeUndefined()
   })
 
@@ -768,7 +777,7 @@ coordinators:
       tasks: [{ id: 'task-b', title: 'Wire auth', status: 'spec_review' }],
     })
 
-    const items = buildInbox({ projectPath: tmpDir })
+    const items = buildInbox({ projectPath: tmpDir, projectStateDir })
     expect(itemKinds(items)).not.toContain('spec_approval')
   })
 
@@ -791,7 +800,7 @@ coordinators:
       ],
     })
 
-    const items = buildInbox({ projectPath: tmpDir })
+    const items = buildInbox({ projectPath: tmpDir, projectStateDir })
     expect(itemKinds(items)).not.toContain('open_escalation')
   })
 
@@ -800,7 +809,7 @@ coordinators:
     await writeJson('.guildhall/workspace-goals.json', { goals: [] })
     await writeYaml('.guildhall/agent-settings.yaml', fullSystemDefaultSettings())
 
-    const items = buildInbox({ projectPath: tmpDir })
+    const items = buildInbox({ projectPath: tmpDir, projectStateDir })
     const hits = items.filter(i => i.kind === 'lever_questions')
     expect(hits).toHaveLength(1)
     const first = hits[0]
@@ -833,7 +842,7 @@ coordinators:
         },
       ],
     })
-    const items = buildInbox({ projectPath: tmpDir })
+    const items = buildInbox({ projectPath: tmpDir, projectStateDir })
     const hit = items.find(i => i.kind === 'spec_fill_pending')
     expect(hit).toBeDefined()
     if (!hit || hit.kind !== 'spec_fill_pending') throw new Error('unreachable')
@@ -875,7 +884,7 @@ coordinators:
       ],
     })
 
-    const items = buildInbox({ projectPath: tmpDir })
+    const items = buildInbox({ projectPath: tmpDir, projectStateDir })
     expect(itemKinds(items)).not.toContain('agent_question_pending')
     expect(items.find(i => i.kind === 'spec_fill_pending' && i.taskId === 'task-question-first')).toBeDefined()
   })
@@ -897,7 +906,7 @@ coordinators:
         },
       ],
     })
-    const items = buildInbox({ projectPath: tmpDir })
+    const items = buildInbox({ projectPath: tmpDir, projectStateDir })
     expect(itemKinds(items)).not.toContain('brief_approval')
     expect(items.find(i => i.kind === 'spec_fill_pending')).toBeUndefined()
   })
@@ -917,7 +926,7 @@ coordinators:
         },
       ],
     })
-    const items = buildInbox({ projectPath: tmpDir })
+    const items = buildInbox({ projectPath: tmpDir, projectStateDir })
     expect(items.find(i => i.kind === 'spec_fill_pending')).toBeUndefined()
   })
 
@@ -938,7 +947,7 @@ coordinators:
       ],
     })
 
-    const items = buildInbox({ projectPath: tmpDir })
+    const items = buildInbox({ projectPath: tmpDir, projectStateDir })
     expect(items.find(i => i.kind === 'spec_fill_pending')).toBeUndefined()
   })
 
@@ -958,7 +967,7 @@ coordinators:
       acceptanceCriteria: [],
     }))
     await writeJson('.guildhall/TASKS.json', { version: 1, lastUpdated: '', tasks })
-    const items = buildInbox({ projectPath: tmpDir })
+    const items = buildInbox({ projectPath: tmpDir, projectStateDir })
     const hits = items.filter(i => i.kind === 'spec_fill_pending')
     expect(hits).toHaveLength(3)
   })
@@ -982,7 +991,7 @@ coordinators:
       ],
     })
 
-    const items = buildInbox({ projectPath: tmpDir })
+    const items = buildInbox({ projectPath: tmpDir, projectStateDir })
     const severities = items.map(i => i.severity)
     // Must be non-decreasing in the severity rank order.
     const rank = { high: 0, medium: 1, low: 2 } as const
