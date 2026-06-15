@@ -1,17 +1,28 @@
+import { appendManagedTextFile, readManagedTextFile, readManagedTextFileSync, writeManagedTextFile } from '@guildhall/persistence'
 import fsp from 'node:fs/promises'
 import path from 'node:path'
 import { summarizeDesignSystem, type Task } from '@guildhall/core'
 import { loadCodebaseMap, loadCodebaseMapStaleState } from '@guildhall/corpus-map'
 import {
+  buildMemoryCoreCandidatePacket,
+  resolveMemoryPaths,
+} from '@guildhall/memory-core'
+import {
   getProjectContextDebugLedgerPath,
   getProjectLocalHistoryHealth,
+  getProjectSystemStatePathFromMemoryDir,
 } from '@guildhall/sessions'
 import { load as yamlLoad } from 'js-yaml'
 import {
+  buildTaskContextPacket,
   buildEffectiveMemoryPacket,
   buildDesignIntentSurrogate,
   buildDesignSystemCatalog,
+  deriveTaskRelationships,
+  importExternalMemoryBridgeRecord,
+  listPrimitivesWithRelations,
   listCapabilityRequests,
+  listExternalMemoryBridgeRecords,
   listMemoryRecords,
   readGlobalLearning,
   readDesignFeedbackStore,
@@ -19,11 +30,17 @@ import {
   loadEffectiveDesignTaste,
   readProjectLearning,
   readProjectRuntimeState,
+  readProjectDeliveryModel,
+  validateProjectDeliveryModel,
   recordMemoryObservation,
+  rejectExternalMemoryBridgeRecord,
+  reviewExternalMemoryBridgeRecord,
   updateMemoryStatus,
   type ContextDebugRecord,
+  type ExternalMemoryBridgeRecordInput,
+  type ExternalMemoryBridgeReviewStatus,
   type MemoryQuery,
-  type MemoryRecord,
+  type MemoryRecordInput,
   type MemoryStatus,
 } from '@guildhall/runtime'
 
@@ -138,6 +155,48 @@ export async function buildGuildhallResourceIndex(
       description: 'Current capability request state.',
       mimeType: 'text/markdown',
     },
+    {
+      uri: 'guildhall://project/external-agent-memory-bridge',
+      name: 'External agent memory bridge',
+      description: 'Reviewable external-agent memory exchange records.',
+      mimeType: 'text/markdown',
+    },
+    {
+      uri: 'guildhall://project/drivers',
+      name: 'Guildhall delivery drivers',
+      description: 'Project-local delivery driver registry.',
+      mimeType: 'text/markdown',
+    },
+    {
+      uri: 'guildhall://project/primitives',
+      name: 'Guildhall primitives',
+      description: 'Project-local primitive registry with consumers and proof links.',
+      mimeType: 'text/markdown',
+    },
+    ...tasks.map((task) => ({
+      uri: `guildhall://project/task-context/${task.id}`,
+      name: `${task.title || task.id} context packet`,
+      description: `Shared worker/UI context packet for ${task.id}.`,
+      mimeType: 'text/markdown' as const,
+    })),
+    ...tasks.map((task) => ({
+      uri: `guildhall://project/task-relationships/${task.id}`,
+      name: `${task.title || task.id} relationships`,
+      description: `Hierarchy, blockers, supports, primitive-use, and proof links for ${task.id}.`,
+      mimeType: 'text/markdown' as const,
+    })),
+    {
+      uri: 'guildhall://project/agent-contracts',
+      name: 'Guildhall agent contracts',
+      description: 'Available structured contracts, schemas, validation tools, and apply policies.',
+      mimeType: 'text/markdown',
+    },
+    {
+      uri: 'guildhall://project/validation-evidence',
+      name: 'Guildhall validation evidence',
+      description: 'Validation results and owner overrides that affected project state.',
+      mimeType: 'text/markdown',
+    },
   ]
 }
 
@@ -184,7 +243,201 @@ export async function readGuildhallResource(
   if (parsed.kind === 'capabilityRequests') {
     return renderCapabilityRequests(ctx)
   }
+  if (parsed.kind === 'externalAgentMemoryBridge') {
+    return renderExternalAgentMemoryBridge(ctx)
+  }
+  if (parsed.kind === 'drivers') {
+    return renderDeliveryDrivers(ctx)
+  }
+  if (parsed.kind === 'primitives') {
+    return renderPrimitives(ctx)
+  }
+  if (parsed.kind === 'taskContext') {
+    return renderTaskContextPacket(ctx, parsed.taskId)
+  }
+  if (parsed.kind === 'taskRelationships') {
+    return renderTaskRelationships(ctx, parsed.taskId)
+  }
+  if (parsed.kind === 'agentContracts') {
+    return renderAgentContracts(ctx)
+  }
+  if (parsed.kind === 'validationEvidence') {
+    return renderValidationEvidence(ctx)
+  }
   return '# Unknown\n'
+}
+
+async function renderDeliveryDrivers(ctx: GuildhallMcpContext): Promise<string> {
+  const model = await readProjectDeliveryModel(ctx.projectRoot)
+  if (model.drivers.length === 0) return '# Delivery Drivers\n\nNo delivery drivers recorded.\n'
+  return trimForMcp(redactForMcp([
+    '# Delivery Drivers',
+    '',
+    ...model.drivers.flatMap(driver => [
+      `## ${driver.label}`,
+      '',
+      `- Id: ${driver.id}`,
+      `- Role: ${driver.role}`,
+      ...(driver.kind ? [`- Kind: ${driver.kind}`] : []),
+      ...(driver.paths.length > 0 ? [`- Paths: ${driver.paths.join(', ')}`] : []),
+      ...(driver.domains.length > 0 ? [`- Domains: ${driver.domains.join(', ')}`] : []),
+      ...(driver.description ? [`- Description: ${driver.description}`] : []),
+      '',
+    ]),
+  ].join('\n')))
+}
+
+async function renderPrimitives(ctx: GuildhallMcpContext): Promise<string> {
+  const tasks = await readTasks(ctx.projectStateDir)
+  const runtimeTasks = tasks as unknown as Task[]
+  const model = await readProjectDeliveryModel(ctx.projectRoot)
+  const validation = validateProjectDeliveryModel({ model, tasks: runtimeTasks, projectRoot: ctx.projectRoot })
+  const primitives = listPrimitivesWithRelations(model, runtimeTasks)
+  if (primitives.length === 0) return '# Primitives\n\nNo project-local primitives recorded.\n'
+  return trimForMcp(redactForMcp([
+    '# Primitives',
+    '',
+    `- Validation: ${validation.valid ? 'valid' : 'invalid'}`,
+    validation.errors.length > 0 ? `- Errors: ${validation.errors.map(error => `${error.code} at ${error.path}`).join('; ')}` : '',
+    '',
+    ...primitives.flatMap(primitive => [
+      `## ${primitive.label}`,
+      '',
+      `- Id: ${primitive.id}`,
+      `- Kind: ${primitive.kind}`,
+      `- Status: ${primitive.status}`,
+      ...(primitive.provider ? [`- Provider: ${primitive.provider}`] : []),
+      ...(primitive.paths.length > 0 ? [`- Paths: ${primitive.paths.join(', ')}`] : []),
+      ...(primitive.dependsOn.length > 0 ? [`- Depends on primitives: ${primitive.dependsOn.join(', ')}`] : []),
+      ...(primitive.proof.length > 0 ? [`- Required proof: ${primitive.proof.join(', ')}`] : []),
+      ...(primitive.invariants.length > 0 ? ['- Invariants:', ...primitive.invariants.map(invariant => `  - ${invariant}`)] : []),
+      ...(primitive.consumers.length > 0
+        ? [`- Used by tasks: ${primitive.consumers.filter(consumer => consumer.kind === 'task').map(consumer => consumer.id).join(', ')}`]
+        : []),
+      ...(primitive.provingTasks.length > 0 ? [`- Proving tasks: ${primitive.provingTasks.map(task => task.id).join(', ')}`] : []),
+      '',
+    ]),
+  ].filter(Boolean).join('\n')))
+}
+
+async function renderTaskContextPacket(ctx: GuildhallMcpContext, taskId: string): Promise<string> {
+  const tasks = await readTasks(ctx.projectStateDir)
+  const model = await readProjectDeliveryModel(ctx.projectRoot)
+  const packet = buildTaskContextPacket({ model, tasks: tasks as unknown as Task[], taskId })
+  return trimForMcp(redactForMcp([
+    `# Task Context Packet: ${taskId}`,
+    '',
+    `- Why this now: ${packet.whyThisNow}`,
+    packet.deliveryIntent.driver ? `- Driver: ${packet.deliveryIntent.driver.label}` : '',
+    packet.deliveryIntent.provider ? `- Provider: ${packet.deliveryIntent.provider.label}` : '',
+    packet.deliveryIntent.containingPackage ? `- Package: ${packet.deliveryIntent.containingPackage.title}` : '',
+    `- Runnable now: ${packet.executionOrder.runnableNow ? 'yes' : 'no'}`,
+    packet.executionOrder.recursiveBlockers.length > 0
+      ? `- Blocked by: ${packet.executionOrder.recursiveBlockers.map(task => `${task.id} ${task.title}`).join(', ')}`
+      : '',
+    packet.primitiveContext.direct.length > 0
+      ? `- Uses primitives: ${packet.primitiveContext.direct.map(primitive => primitive.label).join(', ')}`
+      : '',
+    packet.primitiveContext.blockers.length > 0
+      ? `- Primitive blockers: ${packet.primitiveContext.blockers.map(primitive => primitive.label).join(', ')}`
+      : '',
+    packet.proofContext.provesPrimitives.length > 0
+      ? `- Proves primitives: ${packet.proofContext.provesPrimitives.map(primitive => primitive.label).join(', ')}`
+      : '',
+    '',
+    '## Persona',
+    '',
+    `- ${packet.persona.label}`,
+    ...packet.persona.guardrails.map(guardrail => `- ${guardrail}`),
+    '',
+    '## Correction Hooks',
+    '',
+    ...packet.correctionHooks.map(hook => `- ${hook.field}: ${hook.label}`),
+    '',
+  ].filter(Boolean).join('\n')))
+}
+
+async function renderTaskRelationships(ctx: GuildhallMcpContext, taskId: string): Promise<string> {
+  const tasks = await readTasks(ctx.projectStateDir)
+  const model = await readProjectDeliveryModel(ctx.projectRoot)
+  const relationships = deriveTaskRelationships({ model, tasks: tasks as unknown as Task[], taskId })
+  return trimForMcp(redactForMcp([
+    `# Task Relationships: ${taskId}`,
+    '',
+    relationships.hierarchy.parent ? `- Parent package: ${relationships.hierarchy.parent.id} ${relationships.hierarchy.parent.title}` : '',
+    relationships.hierarchy.children.length > 0
+      ? `- Nested work: ${relationships.hierarchy.children.map(task => `${task.id} ${task.title}`).join(', ')}`
+      : '',
+    relationships.dependencies.directBlockers.length > 0
+      ? `- Blocked by: ${relationships.dependencies.directBlockers.map(task => `${task.id} ${task.title}`).join(', ')}`
+      : '',
+    relationships.dependencies.blocks.length > 0
+      ? `- Blocks: ${relationships.dependencies.blocks.map(task => `${task.id} ${task.title}`).join(', ')}`
+      : '',
+    relationships.supports.length > 0 ? `- Supports: ${relationships.supports.join(', ')}` : '',
+    relationships.primitiveUse.direct.length > 0
+      ? `- Uses primitives: ${relationships.primitiveUse.direct.map(primitive => primitive.label).join(', ')}`
+      : '',
+    relationships.primitiveUse.ancestors.length > 0
+      ? `- Primitive ancestors: ${relationships.primitiveUse.ancestors.map(primitive => primitive.label).join(', ')}`
+      : '',
+    relationships.primitiveProof.proves.length > 0
+      ? `- Proves primitives: ${relationships.primitiveProof.proves.map(primitive => primitive.label).join(', ')}`
+      : '',
+    '',
+  ].filter(Boolean).join('\n')))
+}
+
+async function renderAgentContracts(_ctx: GuildhallMcpContext): Promise<string> {
+  return [
+    '# Agent Contracts',
+    '',
+    '- project-primitive-setup: validates proposed project-local primitives, task links, proof tasks, rejected candidates, and owner questions.',
+    '- finished-work-intake: validates shipped packages, observed proof, missing proof, future tasks, and rejected primitive candidates without fabricating completed Guildhall work.',
+    '- task-split-plan: validates split child delivery metadata, primitive references, proof links, and child dependency mapping before materializing nested work.',
+    '- task-context-packet: builds deterministic worker/UI context from drivers, task blockers, primitive ancestors, proof obligations, and correction hooks.',
+    '',
+    'Validation tools: guildhall.validate_agent_contract, guildhall.validate_project_primitive_setup, guildhall.validate_finished_work_intake, guildhall.plan_task_split.',
+    '',
+  ].join('\n')
+}
+
+async function renderValidationEvidence(ctx: GuildhallMcpContext): Promise<string> {
+  const model = await readProjectDeliveryModel(ctx.projectRoot)
+  if (model.validationEvidence.length === 0) return '# Validation Evidence\n\nNo validation evidence recorded.\n'
+  return trimForMcp(redactForMcp([
+    '# Validation Evidence',
+    '',
+    ...model.validationEvidence.slice(0, 30).map((record, index) => `- ${index + 1}: ${JSON.stringify(record)}`),
+    model.validationEvidence.length > 30 ? `- [truncated ${model.validationEvidence.length - 30} more records]` : '',
+    '',
+  ].filter(Boolean).join('\n')))
+}
+
+async function renderExternalAgentMemoryBridge(ctx: GuildhallMcpContext): Promise<string> {
+  const store = await listExternalMemoryBridgeRecords({ memoryDir: ctx.projectStateDir })
+  if (store.records.length === 0) {
+    return '# External Agent Memory Bridge\n\nNo external memory bridge records.\n'
+  }
+  const counts = countBy(store.records, (record) => record.reviewStatus)
+  return trimForMcp(redactForMcp([
+    '# External Agent Memory Bridge',
+    '',
+    `- Records: ${store.records.length}`,
+    `- Imported: ${counts.imported ?? 0}`,
+    `- Reviewed: ${counts.reviewed ?? 0}`,
+    `- Rejected: ${counts.rejected ?? 0}`,
+    '',
+    '## Records',
+    '',
+    ...store.records.slice(0, 30).map((record) =>
+      `- ${record.id}: ${record.reviewStatus} ${record.provider} ${record.scope}/${record.type} (${record.confidence}/${record.risk}) - ${record.summary}`,
+    ),
+    store.records.length > 30 ? `- [truncated ${store.records.length - 30} more records]` : '',
+    '',
+    'Imported records are reviewable bridge records only. They enter ordinary effective memory through explicit review.',
+    '',
+  ].filter(Boolean).join('\n')))
 }
 
 async function renderCapabilityRequests(ctx: GuildhallMcpContext): Promise<string> {
@@ -347,7 +600,7 @@ async function renderFeedback(ctx: GuildhallMcpContext): Promise<string> {
     '',
     `- Project decisions: ${design.decisions.length}`,
     `- Reusable candidates: ${design.candidates.length}`,
-    `- Looma follow-ups: ${design.loomaImprovements.length}`,
+    `- Design-system follow-ups: ${design.designSystemImprovements.length}`,
     '',
   ].filter(Boolean).join('\n')))
 }
@@ -402,7 +655,7 @@ async function renderDesign(ctx: GuildhallMcpContext): Promise<string> {
     `- Decision packets: ${feedback.decisionPackets.length}`,
     `- Project decisions: ${feedback.decisions.length}`,
     `- Reusable candidates: ${feedback.candidates.length}`,
-    `- Looma follow-ups: ${feedback.loomaImprovements.length}`,
+    `- Design-system follow-ups: ${feedback.designSystemImprovements.length}`,
     latestPacket ? `- Latest packet: ${latestPacket.id} - ${latestPacket.summary}` : '- Latest packet: none',
     '',
   ].filter(Boolean).join('\n')))
@@ -431,8 +684,32 @@ async function renderArtifact(ctx: GuildhallMcpContext, artifactId: string): Pro
 
 async function renderMemory(ctx: GuildhallMcpContext): Promise<string> {
   const records = await listMemoryRecords({ memoryDir: ctx.projectStateDir })
+  const tasks = await readTasks(ctx.projectStateDir)
+  const firstTask = tasks[0]
+  const memoryCoreScope = firstTask
+    ? {
+        kind: 'task_thread' as const,
+        projectId: path.basename(ctx.projectRoot) || 'project',
+        taskId: firstTask.id,
+        agentRole: 'worker' as const,
+        threadId: firstTask.id,
+      }
+    : {
+        kind: 'project' as const,
+        projectId: path.basename(ctx.projectRoot) || 'project',
+      }
+  const memoryCorePaths = resolveMemoryPaths({
+    projectRoot: ctx.projectRoot,
+    scope: memoryCoreScope,
+  })
+  const memoryCorePacket = await buildMemoryCoreCandidatePacket({
+    projectRoot: ctx.projectRoot,
+    scope: memoryCoreScope,
+    purpose: firstTask ? 'next_worker_context' : 'handoff',
+    maxBytes: 4096,
+  }).catch(() => null)
   const grouped = countBy(records, (record) => `${record.scope}/${record.status}`)
-  const rawMemory = await readOptional(path.join(ctx.projectStateDir, 'MEMORY.md'), '')
+  const rawMemory = await readOptional(getProjectSystemStatePathFromMemoryDir(ctx.projectStateDir, 'MEMORY.md'), '')
   return trimForMcp(redactForMcp([
     '# Memory',
     '',
@@ -440,6 +717,20 @@ async function renderMemory(ctx: GuildhallMcpContext): Promise<string> {
     `- Project active: ${grouped['project/active'] ?? 0}`,
     `- Project proposed: ${(grouped['project/observed'] ?? 0) + (grouped['project/proposed'] ?? 0)}`,
     `- User-global active: ${grouped['user_global/active'] ?? 0}`,
+    '',
+    '## Memory-Core',
+    '',
+    `- Storage: ${memoryCorePaths.dbPath}`,
+    `- Events: ${memoryCorePaths.eventsPath}`,
+    `- Adapter: ${memoryCorePacket?.health.adapter ?? 'deterministic'}`,
+    `- Fallback used: ${memoryCorePacket?.health.fallbackUsed ?? true}`,
+    '- Repo-local writes: none',
+    `- Compaction: ${memoryCorePacket?.health.compactionStatus ?? 'needs_attention'}`,
+    `- Semantic validity: ${memoryCorePacket?.health.semanticValidity ?? 'needs_attention'}`,
+    `- Candidate preview: ${memoryCorePacket?.candidates.length ?? 0}`,
+    ...(memoryCorePacket?.candidates ?? []).slice(0, 5).map((candidate) =>
+      `  - ${candidate.summary}`,
+    ),
     '',
     '## Queryable Records',
     '',
@@ -615,7 +906,7 @@ export async function readMcpMemory(ctx: GuildhallMcpContext, input: {
   return trimForMcp(redactForMcp(JSON.stringify(record, null, 2)))
 }
 
-export async function recordMcpMemoryObservation(ctx: GuildhallMcpContext, record: MemoryRecord): Promise<string> {
+export async function recordMcpMemoryObservation(ctx: GuildhallMcpContext, record: MemoryRecordInput): Promise<string> {
   const saved = await recordMemoryObservation({ memoryDir: ctx.projectStateDir, record })
   return trimForMcp(redactForMcp(JSON.stringify(saved, null, 2)))
 }
@@ -656,10 +947,63 @@ export async function readMcpEffectiveContext(ctx: GuildhallMcpContext, input: {
   ].filter(Boolean).join('\n')))
 }
 
-async function readTasks(
+export async function listMcpExternalMemoryBridgeRecords(ctx: GuildhallMcpContext, input?: {
+  reviewStatus?: ExternalMemoryBridgeReviewStatus
+}): Promise<string> {
+  const store = await listExternalMemoryBridgeRecords({
+    memoryDir: ctx.projectStateDir,
+    ...(input?.reviewStatus ? { reviewStatus: input.reviewStatus } : {}),
+  })
+  return trimForMcp(redactForMcp(JSON.stringify(store, null, 2)))
+}
+
+export async function importMcpExternalMemoryBridgeRecord(
+  ctx: GuildhallMcpContext,
+  record: ExternalMemoryBridgeRecordInput,
+): Promise<string> {
+  const saved = await importExternalMemoryBridgeRecord({
+    memoryDir: ctx.projectStateDir,
+    record,
+  })
+  return trimForMcp(redactForMcp(JSON.stringify(saved, null, 2)))
+}
+
+export async function reviewMcpExternalMemoryBridgeRecord(ctx: GuildhallMcpContext, input: {
+  id: string
+  reviewer: string
+  updatedAt?: string
+  memoryStatus?: 'active' | 'proposed' | 'observed'
+}): Promise<string> {
+  const saved = await reviewExternalMemoryBridgeRecord({
+    memoryDir: ctx.projectStateDir,
+    id: input.id,
+    reviewer: input.reviewer,
+    ...(input.updatedAt ? { now: input.updatedAt } : {}),
+    ...(input.memoryStatus ? { memoryStatus: input.memoryStatus } : {}),
+  })
+  return trimForMcp(redactForMcp(JSON.stringify(saved, null, 2)))
+}
+
+export async function rejectMcpExternalMemoryBridgeRecord(ctx: GuildhallMcpContext, input: {
+  id: string
+  reviewer: string
+  rejectionReason: string
+  updatedAt?: string
+}): Promise<string> {
+  const saved = await rejectExternalMemoryBridgeRecord({
+    memoryDir: ctx.projectStateDir,
+    id: input.id,
+    reviewer: input.reviewer,
+    rejectionReason: input.rejectionReason,
+    ...(input.updatedAt ? { now: input.updatedAt } : {}),
+  })
+  return trimForMcp(redactForMcp(JSON.stringify(saved, null, 2)))
+}
+
+export async function readTasks(
   projectStateDir: string,
 ): Promise<Array<Record<string, unknown> & { id: string; title?: string; status?: string }>> {
-  const raw = await readOptional(path.join(projectStateDir, 'TASKS.json'), '{"tasks":[]}')
+  const raw = await readOptional(getProjectSystemStatePathFromMemoryDir(projectStateDir, 'TASKS.json'), '{"tasks":[]}')
   const parsed = JSON.parse(raw) as unknown
   const tasks = Array.isArray(parsed)
     ? parsed
@@ -697,7 +1041,7 @@ async function readArtifactRegistry(
 
 async function readOptional(filePath: string, fallback: string): Promise<string> {
   try {
-    return await fsp.readFile(filePath, 'utf8')
+    return await readManagedTextFile(filePath, 'utf8')
   } catch {
     return fallback
   }
@@ -719,7 +1063,7 @@ function trimForMcp(text: string): string {
 async function readLatestContextDebug(projectRoot: string, limit: number): Promise<ContextDebugRecord[]> {
   const ledgerPath = getProjectContextDebugLedgerPath(projectRoot)
   try {
-    const raw = await fsp.readFile(ledgerPath, 'utf8')
+    const raw = await readManagedTextFile(ledgerPath, 'utf8')
     const records: ContextDebugRecord[] = []
     for (const line of raw.split('\n')) {
       if (!line.trim()) continue

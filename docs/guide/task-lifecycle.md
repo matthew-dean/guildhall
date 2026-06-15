@@ -80,8 +80,14 @@ cross-domain risk, migrations or release behavior, unclear checks, and other
 signals that one task is doing the job of several.
 
 Small work proceeds. Medium work can proceed with a warning. Large work gets
-split recommendations. Epic work becomes a parent-sized task with linked child
+split recommendations. Epic work becomes containing work with linked child
 tasks, so each worker pass and review stays understandable.
+
+Containment is stored as explicit hierarchy links. It is not a task status.
+If Guildhall opens an older project where hierarchy or task questions still use
+legacy state, it asks you to apply the required migration before normal work
+continues. That keeps the queue honest: runnable tasks are runnable, containing
+work contains, and owner-input decisions live in their linked Thread sessions.
 
 ## Reframe before work starts
 
@@ -106,7 +112,7 @@ or sequencing changes.
 
 ## Review risk and required evidence
 
-0.9 adds a review-risk profile to shaped work. Guildhall plans review lanes
+Guildhall adds a review-risk profile to shaped work. Guildhall plans review lanes
 from the task, changed files, priority, and project settings, then records the
 recipes and evidence that should exist before reviewers accept the result.
 

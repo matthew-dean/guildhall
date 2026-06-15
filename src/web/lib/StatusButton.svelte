@@ -84,9 +84,9 @@
     background: color-mix(in srgb, var(--bg-raised-2) 84%, var(--text) 16%);
     color: var(--text);
     font: inherit;
-    font-size: var(--fs-1);
-    font-weight: 600;
-    line-height: 1;
+    font-size: var(--gh-type-size-meta);
+    font-weight: var(--gh-type-weight-strong);
+    line-height: var(--gh-type-line-height-control);
     white-space: nowrap;
     cursor: pointer;
     position: relative;
@@ -130,14 +130,14 @@
     border-radius: 999px;
     background: color-mix(in srgb, var(--bg-base) 24%, transparent);
     color: currentColor;
-    font-size: var(--fs-0);
-    font-weight: 800;
+    font-size: var(--gh-type-size-caption);
+    font-weight: var(--gh-type-weight-strong);
     font-variant-numeric: tabular-nums;
-    line-height: 1;
+    line-height: var(--gh-type-line-height-control);
     letter-spacing: 0;
   }
   .count-glyph {
     display: block;
-    line-height: 1;
+    line-height: var(--gh-type-line-height-control);
   }
 </style>

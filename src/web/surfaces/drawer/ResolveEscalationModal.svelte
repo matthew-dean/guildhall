@@ -81,8 +81,8 @@
           <p class="summary">{escalation.summary}</p>
           <p class="mode-help">
             {mode === 'retry'
-              ? 'Guildhall will close this blocker and continue from the step this recovery action is built for.'
-              : 'Use this when you handled the blocker yourself or want to tell Guildhall exactly where to continue.'}
+              ? 'This closes the blocker and continues from the step this recovery action is built for.'
+              : 'Use this when you handled the blocker yourself or want to say exactly where to continue.'}
           </p>
         </Stack>
 
@@ -141,14 +141,14 @@
   }
   .summary {
     color: var(--text);
-    font-size: var(--fs-2);
-    line-height: var(--lh-body);
+    font-size: var(--gh-type-size-body);
+    line-height: var(--gh-type-line-height-body);
     margin: 0;
   }
   .mode-help {
     color: var(--text-muted);
-    font-size: var(--fs-1);
-    line-height: var(--lh-body);
+    font-size: var(--gh-type-size-meta);
+    line-height: var(--gh-type-line-height-body);
     margin: 0;
   }
 </style>

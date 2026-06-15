@@ -4,9 +4,11 @@
   tasks move down to the Work tab.
 -->
 <script lang="ts">
-  import AlignedActionList from '../../lib/AlignedActionList.svelte'
-  import Card from '../../lib/Card.svelte'
+  import CardList from '../../lib/CardList.svelte'
+  import CardListItem from '../../lib/CardListItem.svelte'
+  import Chip from '../../lib/Chip.svelte'
   import Icon, { type IconName } from '../../lib/Icon.svelte'
+  import UtilityPanel from '../../lib/UtilityPanel.svelte'
   import { inboxItemKey, type InboxItem } from '../../lib/inbox-item-key.js'
   import { nav, path } from '../../lib/nav.svelte.js'
   import { projectActionHref, projectFetch } from '../../lib/project-routes.js'
@@ -28,6 +30,7 @@
   }: Props = $props()
 
   let localItems = $state<InboxItem[]>([])
+  let localHistory = $state<InboxItem[]>([])
   let localLoaded = $state(false)
   let localError = $state<string | null>(null)
   // Which item (by list index) is currently being handled by an agent action.
@@ -36,6 +39,7 @@
   let handlingMessage = $state<string | null>(null)
 
   const items = $derived(suppliedItems ?? localItems)
+  const history = $derived(suppliedHistory ?? localHistory)
   const loaded = $derived(suppliedItems ? suppliedLoaded : localLoaded)
   const error = $derived(suppliedItems ? suppliedError : localError)
 
@@ -49,7 +53,7 @@
       if (!r.ok) throw new Error(`HTTP ${r.status}`)
       const j = (await r.json()) as { items?: InboxItem[]; history?: InboxItem[] }
       localItems = j.items ?? []
-      if (j.history) localItems = j.history
+      localHistory = j.history ?? j.items ?? []
       localError = null
     } catch (e) {
       localError = e instanceof Error ? e.message : String(e)
@@ -111,6 +115,34 @@
     }
   }
 
+  async function reviewContractResult(item: InboxItem, action: 'apply' | 'reject', index: number, e: MouseEvent): Promise<void> {
+    e.stopPropagation()
+    if (item.kind !== 'contract_result_review' || !item.resultId) return
+    handlingIndex = index
+    handlingMessage = null
+    try {
+      const endpoint = `/api/project/delivery-spine/contract-results/${encodeURIComponent(item.resultId)}/${action}`
+      const body = action === 'apply'
+        ? { ownerOverrideReason: 'Accepted from Needs you.' }
+        : { reason: 'Rejected from Needs you.' }
+      const r = await projectFetch(endpoint, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify(body),
+      })
+      const j = (await r.json().catch(() => ({}))) as { error?: string }
+      if (!r.ok || j.error) {
+        handlingMessage = `${action === 'apply' ? 'Accept' : 'Reject'} failed: ${j.error ?? `HTTP ${r.status}`}`
+        return
+      }
+      await load()
+    } catch (err) {
+      handlingMessage = `${action === 'apply' ? 'Accept' : 'Reject'} failed: ${err instanceof Error ? err.message : String(err)}`
+    } finally {
+      handlingIndex = null
+    }
+  }
+
   $effect(() => {
     void load()
   })
@@ -121,13 +153,8 @@
     bootstrap_missing: 'wrench',
     setup_pending: 'wrench',
     workspace_import_pending: 'package',
-    project_check_in: 'message-square-more',
-    pressure_test_pending: 'message-square-more',
-    agent_question_pending: 'message-square-more',
     import_draft_queue: 'list-todo',
-    brief_approval: 'file-text',
-    spec_approval: 'file-check',
-    open_escalation: 'alert-triangle',
+    contract_result_review: 'file-check',
     lever_questions: 'sliders',
     spec_fill_pending: 'help-circle',
   }
@@ -138,13 +165,8 @@
     bootstrap_missing: 'Configure',
     setup_pending: 'Open setup',
     workspace_import_pending: 'Review import',
-    project_check_in: 'Start check-in',
-    pressure_test_pending: 'Answer question',
-    agent_question_pending: 'Answer question',
     import_draft_queue: 'Draft task brief',
-    brief_approval: 'Review brief',
-    spec_approval: 'Review spec',
-    open_escalation: 'Resolve',
+    contract_result_review: 'Review result',
     lever_questions: 'Review',
     spec_fill_pending: 'Open checklist',
   }
@@ -157,11 +179,21 @@
   }
 
   function itemDigest(item: InboxItem): string | null {
+    if (item.deliveryStepTitle || item.containingWorkTitle) {
+      return [
+        'Delivery step',
+        item.containingWorkTitle,
+      ].filter(Boolean).join(' · ')
+    }
     if (item.kind === 'lever_questions') {
       return 'Safe defaults are active. Review them only if you want to tune autonomy, recovery, or review strictness.'
     }
     if (item.kind === 'spec_fill_pending') {
       return null
+    }
+    if (item.kind === 'contract_result_review') {
+      const buckets = item.reviewBuckets?.length ? item.reviewBuckets.join(', ') : 'review'
+      return `${item.changeCount ?? 0} change${item.changeCount === 1 ? '' : 's'} in ${buckets}.`
     }
     return null
   }
@@ -176,13 +208,20 @@
 
   const priorityItems = $derived(items.filter(item => item.severity !== 'low'))
   const housekeepingItems = $derived(items.filter(item => item.severity === 'low'))
-  const displayItems = $derived.by(() => {
-    const source = suppliedHistory ?? items
-    return [...source]
+  const historyItems = $derived.by(() => {
+    return [...history]
+      .filter(item => !isOpen(item))
       .sort((left, right) => ((right.updatedAt ?? right.createdAt ?? '')).localeCompare(left.updatedAt ?? left.createdAt ?? ''))
       .slice(0, 50)
   })
-  const displayCount = $derived(displayItems.length)
+  const displayCount = $derived((history.length > 0 ? history : items).length)
+
+  function toneFor(item: InboxItem): 'danger' | 'warn' | 'neutral' | 'ok' {
+    if (!isOpen(item) && item.status === 'resolved') return 'ok'
+    if (item.severity === 'high') return 'danger'
+    if (item.severity === 'medium') return 'warn'
+    return 'neutral'
+  }
 
   function statusLabel(item: InboxItem): string {
     if (!item.status || item.status === 'open') return 'Open'
@@ -201,11 +240,10 @@
     return item.status
   }
 
-  function statusClass(item: InboxItem): string {
-    if (!item.status || item.status === 'open') return item.severity === 'high' ? 'status-open-high' : 'status-open'
-    if (item.status === 'resolved') return 'status-resolved'
-    if (item.status === 'dismissed') return 'status-dismissed'
-    return 'status-neutral'
+  function statusTone(item: InboxItem): 'danger' | 'warn' | 'neutral' | 'ok' {
+    if (!item.status || item.status === 'open') return item.severity === 'high' ? 'danger' : 'warn'
+    if (item.status === 'resolved') return 'ok'
+    return 'neutral'
   }
 
   function itemTime(item: InboxItem): string {
@@ -228,89 +266,214 @@
       <span class="count">({displayCount} item{displayCount === 1 ? '' : 's'})</span>
     {/if}
   </header>
+  <p class="summary">Project alerts and durable follow-ups live here. Active conversations and approvals now happen in Threads.</p>
 
   {#if error}
-    <Card tone="warn">
+    <UtilityPanel tone="warn">
       <p class="muted">Couldn't load inbox: {error}</p>
-    </Card>
+    </UtilityPanel>
   {:else if !loaded}
     <p class="muted">Loading...</p>
-  {:else if items.length === 0}
-    <div class="empty">
+  {:else if items.length === 0 && historyItems.length === 0}
+    <UtilityPanel className="empty" tone="ok">
       <Icon name="check-circle-2" size={24} />
       <p>All caught up — nothing is waiting on you right now.</p>
-    </div>
+    </UtilityPanel>
   {:else}
-    {#if priorityItems.length === 0}
-      <Card tone="neutral">
-        <p class="muted">Nothing is blocked right now. The remaining items are optional cleanup.</p>
-      </Card>
+    <UtilityPanel tone="neutral" className="threads-note">
+      <div class="threads-note-copy">
+        <strong>Active conversations now live in Threads.</strong>
+        <p>Use this view for project alerts, setup checks, optional nudges, and recent alert history.</p>
+      </div>
+      <a class="threads-link" href={projectActionHref('/thread')}>Open Threads</a>
+    </UtilityPanel>
+
+    {#if priorityItems.length > 0}
+      <section class="group" aria-labelledby="needs-you-alerts">
+        <div class="group-head">
+          <h3 id="needs-you-alerts">Project alerts</h3>
+          <span>{priorityItems.length}</span>
+        </div>
+        <CardList className="item-list">
+          {#each priorityItems as item, i (inboxItemKey(item))}
+            {@const handling = handlingIndex === items.indexOf(item)}
+            {@const handler = AGENT_HANDLERS[item.kind]}
+            <CardListItem className="inbox-row" dense tone={toneFor(item)} railTone={toneFor(item)}>
+              <div class="item-head">
+                <span class="signal" aria-hidden="true">
+                  <span class="dot dot-{item.severity}"></span>
+                  <span class="kind-ic">
+                    <Icon name={ICONS[item.kind]} size={16} />
+                  </span>
+                </span>
+                <button
+                  type="button"
+                  class="item-main"
+                  onclick={() => goTo(item)}
+                  aria-label={item.title}
+                >
+                  <span class="body">
+                    <span class="title" title={item.title}>{item.title}</span>
+                    <span class="detail" title={item.detail}>{item.detail}</span>
+                    {#if itemDigest(item)}
+                      <span class="digest">{itemDigest(item)}</span>
+                    {/if}
+                    {#if item.resolutionDetail}
+                      <span class="digest">{item.resolutionDetail}</span>
+                    {/if}
+                  </span>
+                </button>
+                <div class="meta">
+                  <Chip label={statusLabel(item)} tone={statusTone(item)} />
+                  <span class="time">{itemTime(item) || '—'}</span>
+                </div>
+              </div>
+              <div class="actions" class:handling>
+                <button type="button" class="verb" onclick={() => goTo(item)}>
+                  {actionVerb(item)} →
+                </button>
+                {#if isOpen(item) && handler}
+                  <button
+                    type="button"
+                    class="agent-verb"
+                    onclick={e => runAgentHandler(item, items.indexOf(item), e)}
+                    disabled={handlingIndex !== null}
+                    title="Agent runs this automatically"
+                  >
+                    {handling ? handler.pending : handler.verb}
+                  </button>
+                {/if}
+                {#if isOpen(item) && item.kind === 'contract_result_review'}
+                  <button
+                    type="button"
+                    class="agent-verb"
+                    onclick={e => reviewContractResult(item, 'apply', items.indexOf(item), e)}
+                    disabled={handlingIndex !== null}
+                    title="Accept these validated changes"
+                  >
+                    {handling ? 'Accepting...' : 'Accept'}
+                  </button>
+                  <button
+                    type="button"
+                    class="dismiss-verb"
+                    onclick={e => reviewContractResult(item, 'reject', items.indexOf(item), e)}
+                    disabled={handlingIndex !== null}
+                    title="Reject this contract result"
+                  >
+                    Reject
+                  </button>
+                {/if}
+                {#if isOpen(item) && item.dismissEndpoint}
+                  <button
+                    type="button"
+                    class="dismiss-verb"
+                    onclick={e => dismissItem(item, e)}
+                    title="Hide from Needs you (stays reachable elsewhere)"
+                  >
+                    Dismiss
+                  </button>
+                {/if}
+              </div>
+            </CardListItem>
+          {/each}
+        </CardList>
+      </section>
+    {:else}
+      <UtilityPanel tone="ok">
+        <p class="muted">Nothing is blocked right now. The remaining items are optional cleanup or recent history.</p>
+      </UtilityPanel>
     {/if}
 
-    {#if displayItems.length > 0}
-      <AlignedActionList
-        ariaLabel="Needs you items"
-        columns="64px minmax(360px, 1fr) minmax(116px, max-content) minmax(136px, max-content) minmax(220px, max-content)"
-        headers={['', 'Item', 'State', 'Updated', 'Action']}
-      >
-        {#each displayItems as item, i (inboxItemKey(item))}
-          {@const handling = handlingIndex === items.indexOf(item)}
-          {@const handler = AGENT_HANDLERS[item.kind]}
-          <div class="inbox-row aligned-list-row row-{item.severity}" class:handling role="listitem">
-            <span class="signal" aria-hidden="true">
-              <span class="dot dot-{item.severity}"></span>
-              <span class="kind-ic">
-                <Icon name={ICONS[item.kind]} size={16} />
-              </span>
-            </span>
-            <button
-              type="button"
-              class="item-main"
-              onclick={() => goTo(item)}
-              aria-label={item.title}
-            >
-              <span class="body">
-                <span class="title" title={item.title}>{item.title}</span>
-                <span class="detail" title={item.detail}>{item.detail}</span>
-                {#if itemDigest(item)}
-                  <span class="digest">{itemDigest(item)}</span>
-                {/if}
-                {#if item.resolutionDetail}
-                  <span class="digest">{item.resolutionDetail}</span>
-                {/if}
-              </span>
-            </button>
-            <span class={`status-pill ${statusClass(item)}`}>{statusLabel(item)}</span>
-            <span class="time">{itemTime(item) || '—'}</span>
-            <span class="actions">
-              <button type="button" class="verb" onclick={() => goTo(item)}>
-                {actionVerb(item)} →
-              </button>
-              {#if isOpen(item) && handler}
+    {#if housekeepingItems.length > 0}
+      <section class="group" aria-labelledby="needs-you-nudges">
+        <div class="group-head">
+          <h3 id="needs-you-nudges">Optional nudges</h3>
+          <span>{housekeepingItems.length}</span>
+        </div>
+        <CardList className="item-list">
+          {#each housekeepingItems as item (inboxItemKey(item))}
+            <CardListItem className="inbox-row" dense tone="neutral">
+              <div class="item-head">
+                <span class="signal" aria-hidden="true">
+                  <span class="dot dot-{item.severity}"></span>
+                  <span class="kind-ic">
+                    <Icon name={ICONS[item.kind]} size={16} />
+                  </span>
+                </span>
                 <button
                   type="button"
-                  class="agent-verb"
-                  onclick={e => runAgentHandler(item, items.indexOf(item), e)}
-                  disabled={handlingIndex !== null}
-                  title="Agent runs this automatically"
+                  class="item-main"
+                  onclick={() => goTo(item)}
+                  aria-label={item.title}
                 >
-                  {handling ? handler.pending : handler.verb}
+                  <span class="body">
+                    <span class="title" title={item.title}>{item.title}</span>
+                    <span class="detail" title={item.detail}>{item.detail}</span>
+                    {#if itemDigest(item)}
+                      <span class="digest">{itemDigest(item)}</span>
+                    {/if}
+                  </span>
                 </button>
-              {/if}
-              {#if isOpen(item) && item.dismissEndpoint}
+                <div class="meta">
+                  <Chip label={statusLabel(item)} tone={statusTone(item)} />
+                  <span class="time">{itemTime(item) || '—'}</span>
+                </div>
+              </div>
+              <div class="actions">
+                <button type="button" class="verb" onclick={() => goTo(item)}>
+                  {actionVerb(item)} →
+                </button>
+              </div>
+            </CardListItem>
+          {/each}
+        </CardList>
+      </section>
+    {/if}
+
+    {#if historyItems.length > 0}
+      <section class="group" aria-labelledby="needs-you-history">
+        <div class="group-head">
+          <h3 id="needs-you-history">Recent history</h3>
+          <span>{historyItems.length}</span>
+        </div>
+        <CardList className="item-list">
+          {#each historyItems as item (inboxItemKey(item))}
+            <CardListItem className="inbox-row" dense tone={toneFor(item)} railTone={toneFor(item)}>
+              <div class="item-head">
+                <span class="signal" aria-hidden="true">
+                  <span class="dot dot-{item.severity}"></span>
+                  <span class="kind-ic">
+                    <Icon name={ICONS[item.kind]} size={16} />
+                  </span>
+                </span>
                 <button
                   type="button"
-                  class="dismiss-verb"
-                  onclick={e => dismissItem(item, e)}
-                  title="Hide from Inbox (stays reachable elsewhere)"
+                  class="item-main"
+                  onclick={() => goTo(item)}
+                  aria-label={item.title}
                 >
-                  Dismiss
+                  <span class="body">
+                    <span class="title" title={item.title}>{item.title}</span>
+                    <span class="detail" title={item.detail}>{item.detail}</span>
+                    {#if item.resolutionDetail}
+                      <span class="digest">{item.resolutionDetail}</span>
+                    {/if}
+                  </span>
                 </button>
-              {/if}
-            </span>
-          </div>
-        {/each}
-      </AlignedActionList>
+                <div class="meta">
+                  <Chip label={statusLabel(item)} tone={statusTone(item)} />
+                  <span class="time">{itemTime(item) || '—'}</span>
+                </div>
+              </div>
+              <div class="actions">
+                <button type="button" class="verb" onclick={() => goTo(item)}>
+                  {actionVerb(item)} →
+                </button>
+              </div>
+            </CardListItem>
+          {/each}
+        </CardList>
+      </section>
     {/if}
 
     {#if handlingMessage}
@@ -334,51 +497,90 @@
   }
   .head h2 {
     margin: 0;
-    font-size: var(--fs-4);
-    font-weight: 700;
+    font-size: var(--gh-type-size-section-title);
+    font-weight: var(--gh-type-weight-strong);
+  }
+  .summary {
+    margin: calc(var(--s-1) * -1) 0 0;
+    color: var(--text-muted);
+    max-width: 64ch;
   }
   .count {
     color: var(--text-muted);
-    font-size: var(--fs-2);
+    font-size: var(--gh-type-size-body);
   }
   .muted {
     color: var(--text-muted);
-    font-size: var(--fs-2);
+    font-size: var(--gh-type-size-body);
   }
   .empty {
     display: flex;
     align-items: center;
     gap: var(--s-2);
     color: var(--text-muted);
-    padding: var(--s-4);
-    border: 1px dashed var(--border);
-    border-radius: var(--r-1);
   }
-  .empty p { margin: 0; }
-
-  .inbox-row {
-    background: var(--bg-raised);
-    border: 1px solid var(--border);
-    border-radius: var(--r-1);
-    padding-block: var(--s-3);
-    min-width: 0;
+  .empty :global(p) { margin: 0; }
+  .threads-note {
+    grid-template-columns: 1fr auto;
+    align-items: center;
+    gap: var(--s-3);
   }
-  .inbox-row:hover,
-  .inbox-row:focus-within {
-    background: var(--bg-elevated);
-    border-color: var(--border-strong);
+  .threads-note-copy {
+    display: grid;
+    gap: var(--s-1);
   }
-  .inbox-row.handling {
-    opacity: 0.7;
+  .threads-note-copy p {
+    margin: 0;
+    color: var(--text-muted);
+  }
+  .threads-link {
+    color: var(--accent);
+    font-weight: var(--gh-type-weight-strong);
+    text-decoration: none;
+    white-space: nowrap;
+  }
+  .threads-link:hover {
+    color: var(--text);
+  }
+  .group {
+    display: grid;
+    gap: var(--s-3);
+  }
+  .group-head {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: var(--s-2);
+  }
+  .group-head h3 {
+    margin: 0;
+    font-size: var(--gh-type-size-body);
+    font-weight: var(--gh-type-weight-strong);
+  }
+  .group-head span {
+    color: var(--text-muted);
+    font-size: var(--gh-type-size-meta);
+  }
+  :global(.inbox-row) {
+    grid-template-columns: auto minmax(0, 1fr) auto;
+    column-gap: var(--s-3);
+    row-gap: var(--s-2);
+    align-items: start;
+  }
+  .item-head {
+    display: contents;
   }
   .signal {
+    grid-column: 1;
+    grid-row: 1 / span 2;
     display: inline-flex;
     align-items: center;
-    justify-content: center;
     gap: var(--s-2);
-    min-width: 0;
+    padding-top: 2px;
   }
   .item-main {
+    grid-column: 2;
+    grid-row: 1;
     display: block;
     min-width: 0;
     background: transparent;
@@ -395,12 +597,18 @@
     color: var(--accent);
   }
   .actions {
+    grid-column: 2;
+    grid-row: 2;
     display: inline-flex;
     align-items: center;
-    justify-content: flex-end;
+    justify-content: flex-start;
+    flex-wrap: wrap;
     gap: var(--s-2);
-    min-width: 0;
-    padding-inline-end: var(--s-3);
+    justify-self: start;
+    text-align: left;
+  }
+  .actions.handling {
+    opacity: 0.7;
   }
   .agent-verb {
     padding: 0;
@@ -408,8 +616,8 @@
     background: transparent;
     color: var(--accent);
     font: inherit;
-    font-size: var(--fs-1);
-    font-weight: 600;
+    font-size: var(--gh-type-size-meta);
+    font-weight: var(--gh-type-weight-strong);
     cursor: pointer;
     white-space: nowrap;
   }
@@ -426,7 +634,7 @@
     background: transparent;
     color: var(--text-muted);
     font: inherit;
-    font-size: var(--fs-1);
+    font-size: var(--gh-type-size-meta);
     cursor: pointer;
     white-space: nowrap;
   }
@@ -435,7 +643,7 @@
   }
   .handling-msg {
     padding: var(--s-2) var(--s-3);
-    font-size: var(--fs-1);
+    font-size: var(--gh-type-size-meta);
     color: var(--danger);
   }
   .dot {
@@ -458,24 +666,26 @@
     flex-direction: column;
     gap: 2px;
   }
+  .meta {
+    grid-column: 3;
+    grid-row: 1;
+    display: grid;
+    gap: var(--s-1);
+    justify-items: end;
+    align-self: start;
+  }
   .title {
-    font-weight: 600;
+    font-weight: var(--gh-type-weight-strong);
     color: var(--text);
-    white-space: nowrap;
-    overflow: hidden;
-    text-overflow: ellipsis;
   }
   .detail {
     color: var(--text-muted);
-    font-size: var(--fs-1);
-    white-space: nowrap;
-    overflow: hidden;
-    text-overflow: ellipsis;
+    font-size: var(--gh-type-size-meta);
   }
   .digest {
     color: var(--text-muted);
-    font-size: var(--fs-1);
-    line-height: var(--lh-copy);
+    font-size: var(--gh-type-size-meta);
+    line-height: var(--gh-type-line-height-relaxed);
     white-space: normal;
   }
   .verb {
@@ -484,62 +694,49 @@
     color: var(--accent);
     cursor: pointer;
     font: inherit;
-    font-size: var(--fs-1);
-    font-weight: 600;
+    font-size: var(--gh-type-size-meta);
+    font-weight: var(--gh-type-weight-strong);
     padding: 0;
     white-space: nowrap;
     text-transform: uppercase;
     letter-spacing: 0.04em;
   }
-  .status-pill {
-    border: 1px solid var(--border);
-    border-radius: 999px;
-    padding: 2px var(--s-2);
-    font-size: var(--fs-0);
-    font-weight: 650;
-    white-space: nowrap;
-  }
-  .status-open-high {
-    color: var(--danger);
-    border-color: color-mix(in srgb, var(--danger) 45%, var(--border));
-  }
-  .status-open {
-    color: var(--warn);
-    border-color: color-mix(in srgb, var(--warn) 45%, var(--border));
-  }
-  .status-resolved {
-    color: var(--ok);
-    border-color: color-mix(in srgb, var(--ok) 45%, var(--border));
-  }
-  .status-dismissed,
-  .status-neutral {
-    color: var(--text-muted);
-  }
   .time {
     color: var(--text-muted);
-    font-size: var(--fs-1);
+    font-size: var(--gh-type-size-meta);
     white-space: nowrap;
   }
-  @media (min-width: 861px) {
-    .status-pill,
-    .time {
-      justify-self: start;
-    }
-    .actions {
-      justify-self: end;
-    }
-  }
   @media (max-width: 760px) {
-    .inbox-row {
-      align-items: start;
+    .threads-note {
+      grid-template-columns: 1fr;
     }
-    .status-pill,
-    .time,
-    .actions {
-      justify-self: start;
+    :global(.inbox-row) {
+      grid-template-columns: auto minmax(0, 1fr);
+    }
+    .item-head {
+      display: contents;
     }
     .signal {
+      grid-column: 1;
       grid-row: 1;
+    }
+    .item-main {
+      grid-column: 2;
+      grid-row: 1;
+    }
+    .meta {
+      grid-column: 2;
+      grid-row: 2;
+      justify-items: start;
+      grid-auto-flow: column;
+      align-items: center;
+    }
+    .actions {
+      grid-column: 2;
+      grid-row: 3;
+      justify-content: flex-start;
+      justify-self: start;
+      text-align: left;
     }
   }
 </style>

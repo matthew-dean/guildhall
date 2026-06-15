@@ -3,6 +3,7 @@ import '@testing-library/jest-dom/vitest'
 import { cleanup, render, screen, waitFor } from '@testing-library/svelte'
 import userEvent from '@testing-library/user-event'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { readFileSync } from 'node:fs'
 import InboxTab from '../InboxTab.svelte'
 import { path } from '../../../lib/nav.svelte.js'
 
@@ -14,6 +15,23 @@ function json(data: unknown, status = 200): Response {
 }
 
 describe('InboxTab', () => {
+  it('renders inbox rows through the shared card-list item shell', () => {
+    const source = readFileSync('src/web/surfaces/project/InboxTab.svelte', 'utf-8')
+
+    expect(source).toContain("import CardList from '../../lib/CardList.svelte'")
+    expect(source).toContain("import CardListItem from '../../lib/CardListItem.svelte'")
+    expect(source).toContain('<CardList className="item-list">')
+    expect(source).toContain('<CardListItem className="inbox-row"')
+    expect(source).not.toContain('<UtilityPanel className="item-card"')
+    expect(source).not.toContain('.item-card {')
+    expect(source).toContain('grid-template-columns: auto minmax(0, 1fr) auto')
+    expect(source).toContain('.item-head {\n    display: contents;')
+    expect(source).toContain('.meta {\n    grid-column: 3;')
+    expect(source).toContain('.actions {\n    grid-column: 2;')
+    expect(source).toContain('justify-content: flex-start;')
+    expect(source).not.toContain('padding-left: calc(var(--s-2) + 16px);')
+  })
+
   beforeEach(() => {
     window.history.replaceState({}, '', '/projects/looma-knit/notifications')
     path.value = '/projects/looma-knit/notifications'
@@ -24,7 +42,7 @@ describe('InboxTab', () => {
     cleanup()
   })
 
-  it('loads its own inbox data, navigates scoped actions, and shows low-priority items in the ledger', async () => {
+  it('loads alert-owned needs-you data, links Threads for conversations, and shows optional nudges separately', async () => {
     vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
       const url = new URL(String(input), 'http://localhost')
       if (url.pathname === '/api/project/inbox') {
@@ -32,20 +50,20 @@ describe('InboxTab', () => {
         return json({
           items: [
             {
-              id: 'q1',
-              kind: 'agent_question_pending',
+              id: 'bootstrap',
+              kind: 'bootstrap_missing',
               severity: 'high',
-              title: 'Choose link editor scope',
-              detail: 'Coordinator needs a scope decision.',
-              actionHref: '/task/task-migration?tab=current',
+              title: 'Verify bootstrap',
+              detail: 'Install command needs confirmation.',
+              actionHref: '/settings/ready',
             },
             {
               id: 'cleanup',
-              kind: 'workspace_import_pending',
+              kind: 'spec_fill_pending',
               severity: 'low',
-              title: 'Review imported notes',
-              detail: 'Optional project note cleanup.',
-              actionHref: '/workspace-import',
+              title: 'Fill acceptance criteria',
+              detail: 'Optional task cleanup.',
+              actionHref: '/task/task-migration?tab=spec',
             },
             {
               id: 'levers',
@@ -64,18 +82,21 @@ describe('InboxTab', () => {
 
     render(InboxTab)
 
-    await screen.findByText('Choose link editor scope')
-    expect(screen.queryByText('Optional cleanup')).not.toBeInTheDocument()
-    expect(screen.getByText('Review imported notes')).toBeInTheDocument()
+    await screen.findByText('Verify bootstrap')
+    expect(screen.getByText('Active conversations now live in Threads.')).toBeInTheDocument()
+    expect(screen.getByRole('link', { name: 'Open Threads' })).toHaveAttribute('href', '/projects/looma-knit/thread')
+    expect(screen.getByText('Project alerts')).toBeInTheDocument()
+    expect(screen.getByText('Optional nudges')).toBeInTheDocument()
+    expect(screen.getByText('Fill acceptance criteria')).toBeInTheDocument()
     expect(screen.getByText(/Safe defaults are active/)).toBeInTheDocument()
     expect(screen.getByText(/Review them only if you want to tune autonomy, recovery, or review strictness/)).toBeInTheDocument()
 
-    await userEvent.click(screen.getByRole('button', { name: 'Choose link editor scope' }))
-    expect(window.location.pathname + window.location.search).toBe('/projects/looma-knit/task/task-migration?tab=current')
+    await userEvent.click(screen.getByRole('button', { name: 'Verify bootstrap' }))
+    expect(path.value).toBe('/projects/looma-knit/settings/ready')
 
     path.value = '/projects/looma-knit/notifications'
-    await userEvent.click(screen.getByRole('button', { name: 'Review imported notes' }))
-    expect(path.value).toBe('/projects/looma-knit/workspace-import')
+    await userEvent.click(screen.getByRole('button', { name: 'Fill acceptance criteria' }))
+    expect(window.location.pathname + window.location.search).toBe('/projects/looma-knit/task/task-migration?tab=spec')
   })
 
   it('lets safe agent-handled inbox items run autonomously and refreshes afterward', async () => {
@@ -176,27 +197,52 @@ describe('InboxTab', () => {
     expect(screen.queryByText(/missing repo evidence/i)).not.toBeInTheDocument()
   })
 
-  it('counts the visible ledger rows instead of only actionable rows', async () => {
+  it('names owner-held delivery steps against their containing work item', () => {
+    vi.stubGlobal('fetch', vi.fn(async () => json({ items: [] })))
+
+    render(InboxTab, {
+      items: [
+        {
+          id: 'owner-step:task-import-review:oauth',
+          kind: 'spec_fill_pending',
+          severity: 'high',
+          title: 'Approve OAuth setup',
+          detail: 'A manual setup step is waiting before verification can finish.',
+          actionHref: '/task/task-import-review?tab=current',
+          status: 'open',
+          taskId: 'task-import-review',
+          deliveryStepTitle: 'Approve OAuth setup',
+          containingWorkTitle: 'Import review flow',
+        },
+      ] as any,
+      loaded: true,
+    })
+
+    expect(screen.getByText('Approve OAuth setup')).toBeInTheDocument()
+    expect(screen.getByText('Delivery step · Import review flow')).toBeInTheDocument()
+  })
+
+  it('counts the visible history rows instead of only actionable rows', async () => {
     render(InboxTab, {
       items: [
         {
           id: 'open-high',
-          kind: 'agent_question_pending',
+          kind: 'bootstrap_missing',
           severity: 'high',
-          title: 'Choose scope',
-          detail: 'A decision is needed.',
-          actionHref: '/thread',
+          title: 'Verify bootstrap',
+          detail: 'A readiness check is needed.',
+          actionHref: '/settings/ready',
           status: 'open',
         },
       ] as any,
       history: [
         {
           id: 'open-high',
-          kind: 'agent_question_pending',
+          kind: 'bootstrap_missing',
           severity: 'high',
-          title: 'Choose scope',
-          detail: 'A decision is needed.',
-          actionHref: '/thread',
+          title: 'Verify bootstrap',
+          detail: 'A readiness check is needed.',
+          actionHref: '/settings/ready',
           status: 'open',
         },
         {
@@ -225,46 +271,42 @@ describe('InboxTab', () => {
 
     expect(screen.getByText('(3 items)')).toBeInTheDocument()
     expect(screen.getByText('Migrated')).toBeInTheDocument()
+    expect(screen.getByText('Recent history')).toBeInTheDocument()
   })
 
-  it('uses the shared aligned action list structure for wide inbox rows', async () => {
+  it('uses compact utility-panel groups instead of the old wide inbox table', async () => {
     const items = [
       {
-        id: 'spec',
-        kind: 'spec_approval',
+        id: 'import',
+        kind: 'workspace_import_pending',
         severity: 'medium',
-        title: 'Review the waiting spec before Guildhall can continue',
-        detail: 'Spec awaiting approval.',
-        actionHref: '/task/task-link-editor?tab=spec',
+        title: 'Review existing project work',
+        detail: 'Workspace import awaiting review.',
+        actionHref: '/workspace-import',
         status: 'open',
       },
       {
         id: 'resolved',
-        kind: 'open_escalation',
+        kind: 'required_migration',
         severity: 'high',
-        title: 'Resolve dirty repo state',
-        detail: 'Guildhall could not start because the repo is dirty.',
-        actionHref: '/task/task-link-editor?tab=current',
+        title: 'Required migration',
+        detail: 'Migration completed.',
+        actionHref: '/migrations',
         status: 'resolved',
-        resolution: 'verified',
+        resolution: 'migrated',
       },
     ] as any
 
     const { container } = render(InboxTab, {
       items,
+      history: items,
       loaded: true,
     })
 
-    const list = screen.getByLabelText('Needs you items')
-    expect(list).toHaveStyle({
-      '--aligned-list-columns': '64px minmax(360px, 1fr) minmax(116px, max-content) minmax(136px, max-content) minmax(220px, max-content)',
-    })
-    expect(container.querySelectorAll('.aligned-list-head span')).toHaveLength(5)
-    expect(container.querySelectorAll('.inbox-row.aligned-list-row')).toHaveLength(2)
-    expect(screen.getByText('State')).toBeInTheDocument()
-    expect(screen.getByText('Updated')).toBeInTheDocument()
-    expect(screen.getByText('Action')).toBeInTheDocument()
-    expect(screen.getByText('Review spec →')).toBeInTheDocument()
+    expect(container.querySelectorAll('.utility-panel')).not.toHaveLength(0)
+    expect(screen.getByText('Project alerts')).toBeInTheDocument()
+    expect(screen.getByText('Recent history')).toBeInTheDocument()
+    expect(screen.getByText('Review import →')).toBeInTheDocument()
   })
 
   it('surfaces inbox load and handler failures without hiding the row', async () => {

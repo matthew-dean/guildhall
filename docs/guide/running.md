@@ -25,7 +25,7 @@ drawers, and release state without leaving the UI.
 
 ## Local runtime setup
 
-Guildhall 0.9 is supported as a local macOS app. Runtime-backed project work
+Guildhall 0.10 is supported as a local macOS app. Runtime-backed project work
 uses Podman, but Guildhall does not make Podman a surprise installer side
 effect. The package install leaves your host alone: no Podman install, no
 machine creation, no image pull, and no container startup.
@@ -43,13 +43,13 @@ Open **Settings → Ready** and look at **Local runtime**:
 - **Stopped** means the service exists but is not running. Press **Start local
   runtime** and Guildhall starts it, then checks again.
 - **Host-run compatibility mode** remains available when setup is skipped,
-  fails, or the host is not supported by the 0.9 local runtime setup flow.
+  fails, or the host is not supported by the 0.10 local runtime setup flow.
 
 Setup choices and results are saved in host-owned Guildhall runtime state, not
 inside the project checkout. Project containers also stay off by default; they
 start on demand when an AI run needs the runtime.
 
-The 0.9 runtime image is part of the release. The release manifest records the
+The 0.10 runtime image is part of the release. The release manifest records the
 expected Debian, Node, Python, runtime API, image tags, and final digest before
 the package is shipped. Guildhall pulls or checks the release image only during
 approved runtime setup or first runtime use.

@@ -7,7 +7,14 @@ import { buildContext } from '../context-builder.js'
 import { buildEffectiveMemoryPacket } from '../effective-memory-packet.js'
 import { recordMemoryObservation } from '../memory-store.js'
 import { writeContextDebugRecord } from '../context-observability.js'
+import { updateProjectConfig } from '@guildhall/config'
+import {
+  acceptStructuralMap,
+  draftStructuralMap,
+  submitStructuralMapForReview,
+} from '../structural-map.js'
 import type { Task } from '@guildhall/core'
+import { recordMemoryEvent } from '@guildhall/memory-core'
 
 let tmpDir: string
 let memoryDir: string
@@ -61,6 +68,105 @@ afterEach(async () => {
 })
 
 describe('effective memory packet', () => {
+  it('selects memory by accepted structural scope ids before flat project memory', async () => {
+    const projectRoot = path.dirname(memoryDir)
+    await fs.writeFile(path.join(projectRoot, 'package.json'), `${JSON.stringify({
+      name: '@fixture/root',
+      private: true,
+      packageManager: 'pnpm@10.0.0',
+    }, null, 2)}\n`)
+    await fs.writeFile(path.join(projectRoot, 'pnpm-workspace.yaml'), 'packages:\n  - packages/*\n')
+    await fs.mkdir(path.join(projectRoot, 'packages', 'core'), { recursive: true })
+    await fs.writeFile(path.join(projectRoot, 'packages', 'core', 'package.json'), `${JSON.stringify({
+      name: '@fixture/core',
+      scripts: { test: 'vitest run packages/core' },
+    }, null, 2)}\n`)
+    await fs.mkdir(path.join(projectRoot, 'packages', 'docs'), { recursive: true })
+    await fs.writeFile(path.join(projectRoot, 'packages', 'docs', 'package.json'), `${JSON.stringify({
+      name: '@fixture/docs',
+      scripts: { build: 'vitepress build docs' },
+    }, null, 2)}\n`)
+    const draft = await draftStructuralMap({
+      projectId: 'fixture',
+      projectRoot,
+      now: '2026-06-01T12:00:00.000Z',
+    })
+    await submitStructuralMapForReview({
+      projectRoot,
+      mapId: draft.id,
+      actor: 'coordinator:fixture',
+      now: '2026-06-01T12:01:00.000Z',
+    })
+    await acceptStructuralMap({
+      projectRoot,
+      mapId: draft.id,
+      actor: 'owner',
+      now: '2026-06-01T12:02:00.000Z',
+    })
+    await recordMemoryObservation({
+      memoryDir,
+      record: {
+        id: 'core-domain-rule',
+        scope: 'project',
+        type: 'codebase_knowledge',
+        status: 'active',
+        summary: 'Core runtime tests are the right proof path.',
+        content: 'Use focused core runtime tests before wider checks.',
+        tags: ['runtime'],
+        domains: [],
+        structuralScopes: ['domain:core', 'package:fixture-core'],
+        taskKinds: [],
+        fileAreas: [],
+        confidence: 'high',
+        risk: 'low',
+        freshness: 'fresh',
+        evidenceRefs: [],
+        createdAt: '2026-06-01T12:00:00.000Z',
+        updatedAt: '2026-06-01T12:00:00.000Z',
+        source: 'test',
+      },
+    })
+    await recordMemoryObservation({
+      memoryDir,
+      record: {
+        id: 'docs-domain-rule',
+        scope: 'project',
+        type: 'codebase_knowledge',
+        status: 'active',
+        summary: 'Docs builds prove content package changes.',
+        content: 'Use docs build for docs package work.',
+        tags: ['runtime'],
+        domains: [],
+        structuralScopes: ['package:fixture-docs'],
+        taskKinds: [],
+        fileAreas: [],
+        confidence: 'high',
+        risk: 'low',
+        freshness: 'fresh',
+        evidenceRefs: [],
+        createdAt: '2026-06-01T12:00:00.000Z',
+        updatedAt: '2026-06-01T12:00:00.000Z',
+        source: 'test',
+      },
+    })
+
+    const packet = await buildEffectiveMemoryPacket({
+      memoryDir,
+      task: task({
+        title: 'Fix core runtime behavior',
+        description: 'Update packages/core/src/index.ts and run runtime proof.',
+        domain: 'runtime',
+      }),
+    })
+
+    expect(packet.included.map(record => record.id)).toContain('core-domain-rule')
+    expect(packet.included.map(record => record.id)).not.toContain('docs-domain-rule')
+    expect(packet.withheld).toContainEqual(expect.objectContaining({
+      id: 'docs-domain-rule',
+      reason: 'structural-scope:mismatch',
+    }))
+  })
+
   it('includes active matching memory and withholds proposed or risky memory with evidence refs', async () => {
     await recordMemoryObservation({
       memoryDir,
@@ -123,6 +229,96 @@ describe('effective memory packet', () => {
     expect(packet.rendered).toContain('## Effective Memory')
     expect(packet.rendered).toContain('JourneyTab is the drawer surface')
     expect(packet.rendered).not.toContain('Replace Journey')
+  })
+
+  it('includes system-local memory-core candidates in the effective memory rendering', async () => {
+    await recordMemoryEvent({
+      projectRoot: path.dirname(memoryDir),
+      event: {
+        scope: {
+          kind: 'task_thread',
+          projectId: path.basename(path.dirname(memoryDir)),
+          taskId: 'task-memory',
+          agentRole: 'worker',
+          threadId: 'task-memory',
+        },
+        source: {
+          kind: 'progress',
+          ref: 'PROGRESS.md#memory-core',
+          path: '.guildhall/PROGRESS.md',
+          capturedAt: '2026-06-06T12:00:00.000Z',
+        },
+        content: {
+          summary: 'Memory-core says Journey proof should keep source drill-down.',
+        },
+        metadata: {
+          projectId: path.basename(path.dirname(memoryDir)),
+          taskId: 'task-memory',
+          retention: 'task_lifecycle',
+          risk: 'low',
+        },
+      },
+    })
+
+    const packet = await buildEffectiveMemoryPacket({
+      memoryDir,
+      task: task(),
+    })
+
+    expect(packet.memoryCorePacket?.health).toMatchObject({
+      adapter: 'mastra',
+      fallbackUsed: false,
+      semanticRecallEnabled: false,
+    })
+    expect(packet.rendered).toContain('## Memory-Core Candidate Packet')
+    expect(packet.rendered).toContain('Memory-core says Journey proof')
+    expect(packet.evidenceRefs).toEqual([
+      expect.objectContaining({ ref: 'PROGRESS.md#memory-core' }),
+    ])
+  })
+
+  it('honors the project memory substrate kill switch', async () => {
+    updateProjectConfig(path.dirname(memoryDir), {
+      memory: { substrate: 'deterministic', semanticRecall: false, observationalMemory: false },
+    })
+    await recordMemoryEvent({
+      projectRoot: path.dirname(memoryDir),
+      event: {
+        scope: {
+          kind: 'task_thread',
+          projectId: path.basename(path.dirname(memoryDir)),
+          taskId: 'task-memory',
+          agentRole: 'worker',
+          threadId: 'task-memory',
+        },
+        source: {
+          kind: 'progress',
+          ref: 'PROGRESS.md#deterministic-switch',
+          path: '.guildhall/PROGRESS.md',
+          capturedAt: '2026-06-06T12:00:00.000Z',
+        },
+        content: {
+          summary: 'Deterministic substrate should remain available.',
+        },
+        metadata: {
+          projectId: path.basename(path.dirname(memoryDir)),
+          taskId: 'task-memory',
+          retention: 'task_lifecycle',
+          risk: 'low',
+        },
+      },
+    })
+
+    const packet = await buildEffectiveMemoryPacket({
+      memoryDir,
+      task: task(),
+    })
+
+    expect(packet.memoryCorePacket?.health).toMatchObject({
+      adapter: 'deterministic',
+      fallbackUsed: true,
+    })
+    expect(packet.rendered).toContain('Deterministic substrate should remain available')
   })
 
   it('injects active memory into buildContext and keeps proposed memory inert', async () => {
@@ -206,6 +402,33 @@ describe('effective memory packet', () => {
         source: 'test',
       },
     })
+    await recordMemoryEvent({
+      projectRoot: path.dirname(memoryDir),
+      event: {
+        scope: {
+          kind: 'task_thread',
+          projectId: path.basename(path.dirname(memoryDir)),
+          taskId: 'task-memory',
+          agentRole: 'worker',
+          threadId: 'task-memory',
+        },
+        source: {
+          kind: 'progress',
+          ref: 'PROGRESS.md#debug-memory-core',
+          path: '.guildhall/PROGRESS.md',
+          capturedAt: '2026-06-06T12:00:00.000Z',
+        },
+        content: {
+          summary: 'Memory-core candidate source refs should appear in task context debug.',
+        },
+        metadata: {
+          projectId: path.basename(path.dirname(memoryDir)),
+          taskId: 'task-memory',
+          retention: 'task_lifecycle',
+          risk: 'low',
+        },
+      },
+    })
     const ctx = await buildContext(task(), memoryDir)
 
     const debug = await writeContextDebugRecord({
@@ -221,6 +444,16 @@ describe('effective memory packet', () => {
     expect(debug.memoryPacket).toMatchObject({
       included: [{ id: 'used-memory', type: 'project_habit', scope: 'project' }],
       withheld: [],
+      memoryCore: {
+        adapter: 'mastra',
+        fallbackUsed: false,
+        candidates: [
+          expect.objectContaining({
+            summary: 'Memory-core candidate source refs should appear in task context debug.',
+            sourceRefs: [expect.objectContaining({ uri: 'PROGRESS.md#debug-memory-core' })],
+          }),
+        ],
+      },
     })
     expect(debug.sections.some((section) => section.key === 'effectiveMemory' && section.included)).toBe(true)
   })

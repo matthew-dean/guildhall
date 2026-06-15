@@ -23,6 +23,8 @@
   }
 
   interface ReleasePayload {
+    ready?: boolean
+    notReadyReason?: string
     initializationNeeded?: boolean
     error?: string
     scope?: {
@@ -31,6 +33,7 @@
       description: string
     }
     openEscalations: ReleaseItem[]
+    incompleteBriefs?: ReleaseItem[]
     unapprovedBriefs: ReleaseItem[]
     unapprovedSpecs: ReleaseItem[]
     shelvedUnclaimed: ReleaseItem[]
@@ -137,6 +140,12 @@
             clearLabel: 'No open escalations.',
           },
           {
+            key: 'incomplete-briefs',
+            label: 'Incomplete briefs',
+            items: data.incompleteBriefs ?? [],
+            clearLabel: 'No incomplete briefs.',
+          },
+          {
             key: 'briefs',
             label: 'Unapproved briefs',
             items: data.unapprovedBriefs,
@@ -189,7 +198,7 @@
   const checkoutInspectionError = $derived(
     dirtyCheckoutError
       ? /git status|fatal: not a git repository|spawn git enoent/i.test(dirtyCheckoutError)
-        ? 'Guildhall could not inspect this checkout with git. Check that the project path is a Git checkout and that git is available to Guildhall.'
+        ? 'This checkout could not be inspected with git. Check that the project path is a Git checkout and that git is available to the runtime.'
         : dirtyCheckoutError
       : '',
   )
@@ -210,8 +219,8 @@
   function gitBlockerCopy(blocker: GitStoryBlocker): { label: string; detail: string } {
     if (isGitInspectionFailure(blocker)) {
       return {
-        label: 'Guildhall could not inspect this checkout.',
-        detail: 'Check that this project path is a Git checkout and that git is available to the Guildhall runtime.',
+        label: 'Could not inspect this checkout.',
+        detail: 'Check that this project path is a Git checkout and that git is available to the runtime.',
       }
     }
     const haystack = `${blocker.state ?? ''}\n${blocker.reason ?? ''}\n${blocker.nextAction ?? ''}`.toLowerCase()
@@ -278,6 +287,13 @@
 
   const verdict = $derived.by(() => {
     if (!data) return { label: 'Loading', tone: 'neutral' as const, reason: '' }
+    if (data.ready === false && data.notReadyReason) {
+      return {
+        label: 'Blocked',
+        tone: 'warn' as const,
+        reason: data.notReadyReason,
+      }
+    }
     if (data.totals.tasks === 0) {
       return {
         label: 'Not yet',
@@ -310,7 +326,7 @@
       return {
         label: 'Blocked',
         tone: 'warn' as const,
-        reason: 'Guildhall could not inspect the project checkout.',
+        reason: 'Could not inspect the project checkout.',
       }
     }
     if (gitStoryBlockers.length > 0) {
@@ -346,7 +362,7 @@
       : {
           title: 'Current work closure',
           description: data?.scope?.description
-            ?? 'A quick read on whether the work Guildhall is tracking now is closed enough to hand off, ship, or deliberately defer.',
+            ?? 'A quick read on whether the current work is closed enough to hand off, ship, or deliberately defer.',
         },
   )
 
@@ -366,7 +382,7 @@
     {#snippet actions()}
       <a class="notice-link" href={currentProjectHref('/setup')}>Open setup wizard</a>
     {/snippet}
-    <p>Complete the setup wizard before Guildhall can assess whether the current work is closed.</p>
+    <p>Complete the setup wizard before assessing whether the current work is closed.</p>
   </NoticeBand>
 {:else if error}
   <NoticeBand tone="danger" role="alert" label="Closure" title="Could not load closure checks">
@@ -536,7 +552,7 @@
             <div class="crit-summary crit-static">
               <span class="crit-copy">
                 <span class="crit-label">Design system</span>
-                <span class="crit-detail">How Guildhall knows which design rules apply here.</span>
+                <span class="crit-detail">How the applicable design rules are chosen.</span>
               </span>
               <StatusPill label={dsLabel().label} tone={dsLabel().tone} />
             </div>
@@ -639,20 +655,20 @@
   .summary-label,
   .muted {
     color: var(--text-muted);
-    font-size: var(--fs-2);
-    line-height: var(--lh-body);
+    font-size: var(--gh-type-size-body);
+    line-height: var(--gh-type-line-height-body);
   }
 
   .summary-stat strong {
-    font-size: var(--fs-4);
-    line-height: var(--lh-tight);
+    font-size: var(--gh-type-size-section-title);
+    line-height: var(--gh-type-line-height-tight);
   }
 
   .dirty-detail {
     margin: var(--gh-space-3) 0 0;
     color: var(--text-muted);
-    font-size: var(--fs-2);
-    line-height: var(--lh-body);
+    font-size: var(--gh-type-size-body);
+    line-height: var(--gh-type-line-height-body);
   }
 
   .git-story-detail {
@@ -660,7 +676,7 @@
     gap: var(--gh-space-2);
     margin: var(--gh-space-3) 0 0;
     color: var(--text);
-    font-size: var(--fs-2);
+    font-size: var(--gh-type-size-body);
   }
 
   .git-story-detail ul {
@@ -724,15 +740,15 @@
 
   .crit-label {
     color: var(--text);
-    font-size: var(--fs-3);
-    font-weight: 600;
-    line-height: var(--lh-tight);
+    font-size: var(--gh-type-size-panel-title);
+    font-weight: var(--gh-type-weight-strong);
+    line-height: var(--gh-type-line-height-tight);
   }
 
   .crit-detail {
     color: var(--text-muted);
-    font-size: var(--fs-2);
-    line-height: var(--lh-body);
+    font-size: var(--gh-type-size-body);
+    line-height: var(--gh-type-line-height-body);
   }
 
   .crit-items {
@@ -777,7 +793,7 @@
   .tally {
     width: 100%;
     border-collapse: collapse;
-    font-size: var(--fs-2);
+    font-size: var(--gh-type-size-body);
   }
 
   .tally td {

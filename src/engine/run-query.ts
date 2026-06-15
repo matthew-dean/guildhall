@@ -29,7 +29,7 @@ import type {
   UsageSnapshot,
 } from '@guildhall/protocol'
 import { existsSync, readFileSync } from 'node:fs'
-import { dirname, join, resolve, sep } from 'node:path'
+import { dirname, isAbsolute, join, relative as relativePath, resolve, sep } from 'node:path'
 import {
   emptyUsage,
   isEffectivelyEmpty,
@@ -47,7 +47,7 @@ import type { AnyTool, ToolExecutionContext, ToolRegistry } from './tools.js'
 import { parseAuthoritativeCommands, reconcileShellCommandWithAuthority } from '@guildhall/core'
 import {
   getProjectLocalHistoryDir,
-  getProjectStateDir,
+  getProjectSystemStatePath,
 } from '@guildhall/sessions'
 
 const REACTIVE_COMPACT_STATUS_MESSAGE =
@@ -244,18 +244,17 @@ function hydrateProjectToolInput(
   toolMetadata?: Record<string, unknown>,
 ): Record<string, unknown> {
   let next = { ...rawInput }
-  const projectStateDir = getProjectStateDir(cwd)
   if (PROJECT_TASK_TOOLS.has(toolName)) {
-    next.tasksPath = join(projectStateDir, 'TASKS.json')
+    next.tasksPath = getProjectSystemStatePath(cwd, 'TASKS.json')
   }
   if (PROJECT_PROGRESS_TOOLS.has(toolName)) {
-    next.progressPath = join(projectStateDir, 'PROGRESS.md')
+    next.progressPath = getProjectSystemStatePath(cwd, 'PROGRESS.md')
     if (toolName === 'log-progress') {
       next = normalizeLogProgressInput(next, toolMetadata)
     }
   }
   if (PROJECT_DECISION_TOOLS.has(toolName)) {
-    next.decisionsPath = join(projectStateDir, 'DECISIONS.md')
+    next.decisionsPath = getProjectSystemStatePath(cwd, 'DECISIONS.md')
     next = normalizeLogDecisionInput(next, toolMetadata)
   }
   if (toolName === 'raise-escalation') {
@@ -312,6 +311,7 @@ export interface QueryContext {
   noProgressTurnNudge?: string | undefined
   noProgressTurnNudgeLimit?: number | undefined
   noProgressTurnThreshold?: number | undefined
+  noProgressReadOnlyGraceAfterNudge?: number | undefined
   abortSignal?: AbortSignal | undefined
 }
 
@@ -784,6 +784,55 @@ function isVerificationEvidenceSupportReadOnlyToolCall(
   )
 }
 
+function likelyTargetPackageRoots(cwd: string, likelyTargetFiles: readonly string[]): string[] {
+  const roots = new Set<string>()
+  for (const candidate of likelyTargetFiles) {
+    const trimmed = candidate.trim()
+    if (!trimmed) continue
+    const normalized = resolve(cwd, trimmed)
+    const parsed = normalized.split(sep).filter(Boolean)
+    const packagesIndex = parsed.findIndex((segment) => segment === 'packages')
+    if (packagesIndex >= 0 && parsed[packagesIndex + 1]) {
+      roots.add(`${normalized.startsWith(sep) ? sep : ''}${parsed.slice(0, packagesIndex + 2).join(sep)}`)
+      continue
+    }
+    const sourceBoundaryIndex = parsed.findIndex((segment) =>
+      segment === 'src' || segment === 'test' || segment === 'tests',
+    )
+    if (sourceBoundaryIndex > 0) {
+      roots.add(`${normalized.startsWith(sep) ? sep : ''}${parsed.slice(0, sourceBoundaryIndex).join(sep)}`)
+    }
+  }
+  return [...roots]
+}
+
+function isLikelyTargetPackageSupportReadOnlyToolCall(
+  cwd: string,
+  toolCall: ToolUseBlock,
+  likelyTargetFiles: readonly string[],
+): boolean {
+  if (toolCall.name !== 'read-file') return false
+  const filePath = String((toolCall.input as Record<string, unknown>)?.filePath ?? '').trim()
+  if (filePath.length === 0) return false
+  const normalizedInputPath = resolve(cwd, filePath)
+  const supportNames = new Set([
+    'package.json',
+    'tsconfig.json',
+    'vitest.config.ts',
+    'vitest.config.js',
+    'playwright.config.ts',
+    'playwright.config.js',
+  ])
+  return likelyTargetPackageRoots(cwd, likelyTargetFiles).some((root) => {
+    const relative = relativePath(root, normalizedInputPath)
+    if (!relative || relative === '..' || relative.startsWith(`..${sep}`) || isAbsolute(relative)) {
+      return false
+    }
+    if (supportNames.has(relative)) return true
+    return /^test[\/\\]setup\.[cm]?[jt]s$/i.test(relative)
+  })
+}
+
 function verificationEvidenceCompanionRoots(
   cwd: string,
   likelyTargetFiles: readonly string[],
@@ -1194,6 +1243,7 @@ export async function* runQuery(
   let noToolTurnNudges = 0
   let noProgressTurnNudges = 0
   let noProgressToolTurns = 0
+  let noProgressReadOnlyGraceTurns = 0
   let repeatedReadOnlyRefusals = 0
   const initialCheckpointNextAction = latestCheckpointNextAction(context.toolMetadata)
   const initialAuthoritativeVerificationCommands = context.toolMetadata
@@ -1460,6 +1510,7 @@ export async function* runQuery(
       progressToolNames.size > 0 && toolCalls.some((tc) => progressToolNames.has(tc.name))
     if (hadProgressToolCall) {
       noProgressToolTurns = 0
+      noProgressReadOnlyGraceTurns = 0
     } else if (progressToolNames.size > 0) {
       noProgressToolTurns += 1
     }
@@ -1476,11 +1527,21 @@ export async function* runQuery(
     const preferredVerificationCommand = latestFailedVerificationCommand(context.toolMetadata)
     const isWorkerCheckpointLane =
       currentAgentId(context.toolMetadata) === 'worker-agent' && checkpointNextAction.length > 0
+    const workerLikelyTargetSupportReadOnlyAllowed =
+      currentAgentId(context.toolMetadata) === 'worker-agent' &&
+      likelyTargetFiles.length > 0 &&
+      noProgressToolTurns <= 2 &&
+      toolCalls.length > 0 &&
+      toolCalls.every((tc) =>
+        isLikelyTargetScopedReadOnlyToolCall(context.cwd, tc, likelyTargetFiles) ||
+        isLikelyTargetPackageSupportReadOnlyToolCall(context.cwd, tc, likelyTargetFiles),
+      )
     const shouldRefuseFurtherReadOnlyResearch =
       progressToolNames.size > 0 &&
       !hadProgressToolCall &&
       noProgressTurnNudges > 0 &&
       !isWorkerCheckpointLane &&
+      !workerLikelyTargetSupportReadOnlyAllowed &&
       toolCalls.length > 0 &&
       toolCalls.every((tc) => isReadOnlyToolCall(context, tc.name, tc.input))
     const checkpointVerificationReadFollowThroughActive =
@@ -1572,6 +1633,7 @@ export async function* runQuery(
       !verificationEvidenceLikelyTargetReadOnlyAllowed &&
       !uninspectedVerificationLikelyTargetReadOnlyAllowed &&
       !checkpointEditMissReadAllowed &&
+      !workerLikelyTargetSupportReadOnlyAllowed &&
       !handoffScopedLikelyTargetReadOnlyAllowed &&
       toolCalls.length > 0 &&
       toolCalls.every((tc) => isReadOnlyToolCall(context, tc.name, tc.input))
@@ -1585,6 +1647,7 @@ export async function* runQuery(
       !verificationEvidenceLikelyTargetReadOnlyAllowed &&
       !uninspectedVerificationLikelyTargetReadOnlyAllowed &&
       !checkpointEditMissReadAllowed &&
+      !workerLikelyTargetSupportReadOnlyAllowed &&
       !handoffScopedLikelyTargetReadOnlyAllowed
     const shouldRefuseNonAuthoritativeCheckpointShell =
       isWorkerCheckpointLane &&
@@ -1601,10 +1664,27 @@ export async function* runQuery(
         return !reconcileShellCommandWithAuthority(command, authoritativeVerificationCommands).usedAuthority
       })
 
+    const readOnlyGraceAfterNudge = Math.max(0, context.noProgressReadOnlyGraceAfterNudge ?? 0)
+    const shouldUseReadOnlyGraceAfterNudge =
+      (shouldRefuseFurtherReadOnlyResearch || shouldRefuseAfterInspectingLikelyTarget) &&
+      noProgressReadOnlyGraceTurns < readOnlyGraceAfterNudge
+
+    if (shouldUseReadOnlyGraceAfterNudge) {
+      noProgressReadOnlyGraceTurns += 1
+      yield {
+        event: {
+          type: 'status',
+          message:
+            'Assistant used one bounded read-only follow-up after a durable-progress nudge; allowing one scoped read-only follow-up so the agent can recover with concrete context.',
+        },
+        usage: null,
+      }
+    }
+
     if (
-      shouldRefuseFurtherReadOnlyResearch ||
+      (!shouldUseReadOnlyGraceAfterNudge && shouldRefuseFurtherReadOnlyResearch) ||
       shouldRefuseAfterMissingLikelyTarget ||
-      shouldRefuseAfterInspectingLikelyTarget ||
+      (!shouldUseReadOnlyGraceAfterNudge && shouldRefuseAfterInspectingLikelyTarget) ||
       shouldRefusePostVerificationCheckpointBatch ||
       shouldRefuseAfterCheckpointNextAction ||
       shouldRefuseNonAuthoritativeCheckpointShell
@@ -1943,6 +2023,9 @@ export async function* runQuery(
           usage: null,
         }
         return
+      }
+      if (shouldUseReadOnlyGraceAfterNudge) {
+        continue
       }
       const checkpointNextAction = latestCheckpointNextAction(context.toolMetadata)
       const checkpointTouched = checkpointFilesTouched(context.toolMetadata)

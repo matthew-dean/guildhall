@@ -2,7 +2,7 @@
  * FR-23: Business-envelope evaluation.
  *
  * Coordinators and the proposal-promotion path consult this module when
- * deciding whether a task / proposal fits inside its parent goal's envelope.
+ * deciding whether a task / proposal fits inside its goal envelope.
  * The evaluator is pure: given a task, its goal, and the lever strictness,
  * it returns a decision describing what the caller should do.
  *
@@ -15,7 +15,7 @@
  *   `{ kind: 'reject',
  *       violations: [...] }`  — strictness is `strict`; caller must reject.
  *   `{ kind: 'escalate',
- *       reason }`             — no parent goal; per FR-23, an uncategorized
+ *       reason }`             — no goal envelope; per FR-23, an uncategorized
  *                               task is an escalation signal. Returned even
  *                               when strictness is `off` so the caller can
  *                               decide whether to route it through FR-10.
@@ -107,14 +107,14 @@ export function evaluateEnvelope(input: EvaluateEnvelopeInput): EnvelopeDecision
           {
             guardrailId: '__no_goal__',
             kind: 'include',
-            description: 'Task is uncategorized (no parentGoalId) — per FR-23, every task must belong to a goal.',
+            description: 'Task is uncategorized (no businessEnvelope.goalId) — per FR-23, every task must belong to a goal.',
           },
         ],
       }
     }
     return {
       kind: 'escalate',
-      reason: `Task ${task.id} has no parent goal. FR-23 requires every task to carry a parentGoalId.`,
+      reason: `Task ${task.id} has no goal envelope. FR-23 requires every task to carry businessEnvelope.goalId.`,
     }
   }
 
@@ -264,12 +264,12 @@ export function findGoal(book: GoalBook, id: string | undefined): Goal | undefin
 
 /**
  * Convenience: load the goal for a task, or undefined when the task has no
- * parentGoalId or the id points at an unknown goal.
+ * businessEnvelope.goalId or the id points at an unknown goal.
  */
 export async function loadGoalForTask(
   memoryDir: string,
   task: Task,
 ): Promise<Goal | undefined> {
   const book = await loadGoalBook(memoryDir)
-  return findGoal(book, task.parentGoalId)
+  return findGoal(book, task.businessEnvelope?.goalId)
 }

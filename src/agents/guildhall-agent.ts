@@ -72,6 +72,7 @@ export interface GuildhallAgentOptions {
   noProgressTurnNudge?: string | undefined
   noProgressTurnNudgeLimit?: number | undefined
   noProgressTurnThreshold?: number | undefined
+  noProgressReadOnlyGraceAfterNudge?: number | undefined
   /**
    * FR-20: automatic session persistence. When set, a snapshot is written
    * after every successful `generate()` turn so the agent can resume from
@@ -155,6 +156,9 @@ export class GuildhallAgent {
         : {}),
       ...(options.noProgressTurnThreshold !== undefined
         ? { noProgressTurnThreshold: options.noProgressTurnThreshold }
+        : {}),
+      ...(options.noProgressReadOnlyGraceAfterNudge !== undefined
+        ? { noProgressReadOnlyGraceAfterNudge: options.noProgressReadOnlyGraceAfterNudge }
         : {}),
     })
   }

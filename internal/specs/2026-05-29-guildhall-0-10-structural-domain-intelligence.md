@@ -1,6 +1,11 @@
-# Guildhall 0.10.0 Structural and Domain Intelligence
+# Guildhall 0.11.0 Structural and Domain Intelligence
 
-**Status:** Proposed 0.10.0 target-feature planning lane
+**Status:** Deferred to 0.11.0
+
+**Deferral note, 2026-06-06:** This is no longer a 0.10 target. Structural and
+domain intelligence should be reframed through the implemented 0.10 delivery
+spine and project contract governance before it becomes an owner-facing product
+lane in 0.11.
 
 This lane is about how Guildhall understands the shape of a repo before it
 routes tasks, builds context, starts worktrees, or records memory. It is not
@@ -36,14 +41,14 @@ several things harder than they should be:
   domains and cross-cutting concerns before accepting them into routing or
   memory.
 
-The 0.10.0 product goal is: **Guildhall can inspect a repo, propose a
+The 0.11.0 product goal is: **Guildhall can inspect a repo, propose a
 structural map with confidence and evidence, let the owner accept/correct it,
 and use that map to route tasks, shape context, scope memory, choose Git
 authority, and verify cross-domain work without flooding prompts.**
 
 ## Product Goal
 
-For 0.10.0, structural intelligence should deliver three user-visible
+For 0.11.0, structural intelligence should deliver three user-visible
 improvements:
 
 1. **Better task routing:** tasks land in the package, domain group,
@@ -55,7 +60,7 @@ improvements:
    true, with confidence, freshness, risk, and evidence so stale or
    over-generalized memory does not quietly steer future work.
 
-Non-goals for the first 0.10.0 slice:
+Non-goals for the first 0.11.0 slice:
 
 - automatic project registration or config writes in target repos;
 - a universal build-system graph engine;
@@ -490,7 +495,7 @@ which memory was included, withheld, summarized, or omitted.
 
 ## Jess Fixture
 
-Jess should be used as a concrete 0.10.0 fixture because it exposes several
+Jess should be used as a concrete 0.11.0 fixture because it exposes several
 important distinctions.
 
 ### What Guildhall Should Infer
@@ -814,4 +819,4 @@ The first implementation plan should likely split this into:
 The implementation should reuse existing Corpus Map, effective memory,
 context-debug, workspace-config, and pressure-test intake concepts where they
 fit, but it should not pretend those current surfaces already provide the full
-0.10.0 structural map.
+0.11.0 structural map.

@@ -1,11 +1,12 @@
 import { mkdtemp, readFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 
 import { getProjectRuntimeDevServersPath } from '@guildhall/sessions'
 import { defaultProjectRuntimeState, type ProjectRuntimeState } from '../project-runtime-store.js'
 import {
+  ContainerDevServerLauncher,
   DevServerManager,
   readRuntimeDevServers,
   type DevServerLauncher,
@@ -65,6 +66,48 @@ class FakeLauncher implements DevServerLauncher {
 }
 
 describe('runtime dev server manager', () => {
+  it('launches Docker-backed dev servers through docker exec', async () => {
+    const calls: Array<{ file: string; args: string[] }> = []
+    const launcher = new ContainerDevServerLauncher({
+      execFile: vi.fn(async (file: string, args: string[]) => {
+        calls.push({ file, args })
+        return { stdout: 'dev-process-docker\n', stderr: '' }
+      }),
+    })
+
+    await expect(launcher.start('/tmp/project', {
+      ...defaultProjectRuntimeState('/tmp/project'),
+      backend: 'docker',
+      status: 'running',
+      containerId: 'runtime-docker',
+    }, {
+      id: 'app',
+      projectId: 'demo',
+      cwd: '/workspace/demo',
+      argv: ['pnpm', 'dev'],
+      containerPort: 5173,
+      hostPort: 45173,
+    })).resolves.toMatchObject({ runtimeProcessId: 'dev-process-docker' })
+
+    expect(calls[0]).toEqual({
+      file: 'docker',
+      args: [
+        'exec',
+        '--detach',
+        '--user',
+        'guildhall',
+        '--workdir',
+        '/workspace/demo',
+        '--env',
+        'PORT=5173',
+        'runtime-docker',
+        'guildhall-exec',
+        'pnpm',
+        'dev',
+      ],
+    })
+  })
+
   it('starts a runtime dev server, proves the host URL, redacts logs, and persists state', async () => {
     const projectRoot = await mkdtemp(join(tmpdir(), 'guildhall-dev-server-'))
     const supervisor = new FakeRuntimeSupervisor()

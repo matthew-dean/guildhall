@@ -1,8 +1,9 @@
+import { appendManagedTextFile, readManagedTextFile, readManagedTextFileSync, writeManagedTextFile } from '@guildhall/persistence'
 import fs from 'node:fs/promises'
 import { existsSync } from 'node:fs'
 import path from 'node:path'
 import { logProgress } from '@guildhall/tools'
-import { getProjectLocalHistoryDir, inferProjectRootFromMemoryDir } from '@guildhall/sessions'
+import { getProjectLocalHistoryDir, getProjectSystemStatePathFromMemoryDir, inferProjectRootFromMemoryDir } from '@guildhall/sessions'
 
 // ---------------------------------------------------------------------------
 // FR-29 / AC-20: local-only mode.
@@ -43,7 +44,7 @@ export async function readLocalOnlyState(
   memoryDir: string,
 ): Promise<LocalOnlyState | undefined> {
   try {
-    const raw = await fs.readFile(localOnlyPath(memoryDir), 'utf-8')
+    const raw = await readManagedTextFile(localOnlyPath(memoryDir), 'utf-8')
     return JSON.parse(raw) as LocalOnlyState
   } catch {
     return undefined
@@ -56,7 +57,7 @@ async function writeLocalOnlyState(
 ): Promise<void> {
   const target = localOnlyPath(memoryDir)
   const tmp = target + '.tmp'
-  await fs.writeFile(tmp, JSON.stringify(state, null, 2) + '\n', 'utf-8')
+  await writeManagedTextFile(tmp, JSON.stringify(state, null, 2) + '\n', 'utf-8')
   await fs.rename(tmp, target)
 }
 
@@ -80,7 +81,7 @@ export async function enterLocalOnlyMode(
   if (existing) return { alreadyLocal: true }
 
   await logProgress({
-    progressPath: path.join(memoryDir, 'PROGRESS.md'),
+    progressPath: getProjectSystemStatePathFromMemoryDir(memoryDir, 'PROGRESS.md'),
     entry: {
       type: 'blocked',
       agentId: opts.agentId ?? 'runtime',
@@ -108,7 +109,7 @@ export async function exitLocalOnlyMode(
     // ENOENT race — already gone
   }
   await logProgress({
-    progressPath: path.join(memoryDir, 'PROGRESS.md'),
+    progressPath: getProjectSystemStatePathFromMemoryDir(memoryDir, 'PROGRESS.md'),
     entry: {
       type: 'milestone',
       agentId: opts.agentId ?? 'runtime',

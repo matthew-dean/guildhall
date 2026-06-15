@@ -1,6 +1,8 @@
+import { appendManagedTextFile, readManagedTextFile, readManagedTextFileSync, writeManagedTextFile } from '@guildhall/persistence'
 import fs from 'node:fs/promises'
 import path from 'node:path'
 import type { Task } from '@guildhall/core'
+import { getProjectSystemStatePathFromMemoryDir } from '@guildhall/sessions'
 import {
   planEvidenceWorkGraph,
   type EvidenceSource,
@@ -79,6 +81,10 @@ export function planProjectReintake(input: ProjectReintakeInput): ProjectReintak
   const now = input.now ?? new Date().toISOString()
   const groups: ReintakeChangeGroup[] = []
   const usedTaskIds = new Set<string>()
+  const protectedProgressTaskIds = new Set(input.tasks
+    .filter(task => isStartedOrCompletedTask(task))
+    .map(task => stringField(task, 'id'))
+    .filter((id): id is string => Boolean(id)))
 
   const duplicateMerges = duplicateMergeChanges(input.tasks)
   if (duplicateMerges.length > 0) {
@@ -104,6 +110,7 @@ export function planProjectReintake(input: ProjectReintakeInput): ProjectReintak
     .filter((id): id is string => Boolean(id)))
   const graphChanges = graphPlan.tasks
     .filter(task => !completedTaskIds.has(task.id))
+    .filter(task => !protectedProgressTaskIds.has(task.id))
     .map(task => graphTaskChange(
       { ...task, dependsOn: task.dependsOn.filter(dependency => !completedTaskIds.has(dependency)) },
       graphPlan.reconciliations,
@@ -150,6 +157,16 @@ export function planProjectReintake(input: ProjectReintakeInput): ProjectReintak
     })
   }
 
+  const staleWeakSpecChanges = archiveUnsupportedWeakPreImplementationTasks(input.tasks, usedTaskIds)
+  if (staleWeakSpecChanges.length > 0) {
+    groups.push({
+      id: 'archive-stale-preimplementation',
+      title: 'Archive stale pre-implementation tasks',
+      rationale: 'Not-started tasks with weak legacy specs should not override current evidence when no current source support remains.',
+      changes: staleWeakSpecChanges,
+    })
+  }
+
   return {
     id: `reintake-${now.replace(/[^0-9A-Za-z]/g, '').slice(0, 14)}`,
     createdAt: now,
@@ -165,13 +182,13 @@ export function planProjectReintake(input: ProjectReintakeInput): ProjectReintak
 export async function writeProjectReintakeDraft(memoryDir: string, draft: ProjectReintakeDraft): Promise<string> {
   const filePath = reintakeDraftPath(memoryDir)
   await fs.mkdir(path.dirname(filePath), { recursive: true })
-  await fs.writeFile(filePath, JSON.stringify(draft, null, 2), 'utf-8')
+  await writeManagedTextFile(filePath, JSON.stringify(draft, null, 2), 'utf-8')
   return filePath
 }
 
 export async function readProjectReintakeDraft(memoryDir: string): Promise<ProjectReintakeDraft | null> {
   try {
-    return JSON.parse(await fs.readFile(reintakeDraftPath(memoryDir), 'utf-8')) as ProjectReintakeDraft
+    return JSON.parse(await readManagedTextFile(reintakeDraftPath(memoryDir), 'utf-8')) as ProjectReintakeDraft
   } catch {
     return null
   }
@@ -186,7 +203,7 @@ export async function applyProjectReintakeDraft(input: {
   const draft = await readProjectReintakeDraft(input.memoryDir)
   if (!draft) return { success: false, error: 'No re-intake draft found.' }
 
-  const queuePath = path.join(input.memoryDir, 'TASKS.json')
+  const queuePath = getProjectSystemStatePathFromMemoryDir(input.memoryDir, 'TASKS.json')
   const queue = await readQueueFile(queuePath)
   if (fingerprint(queue.tasks) !== draft.taskQueueFingerprint) {
     return {
@@ -209,7 +226,7 @@ export async function applyProjectReintakeDraft(input: {
   }
 
   queue.lastUpdated = now
-  await fs.writeFile(queuePath, JSON.stringify(queue, null, 2), 'utf-8')
+  await writeManagedTextFile(queuePath, JSON.stringify(queue, null, 2), 'utf-8')
   await appendReintakeProgress(input.memoryDir, draft, groups.length, now)
   await writeProjectReintakeDraft(input.memoryDir, { ...draft, status: 'applied' })
   return { success: true, appliedGroups: groups.length }
@@ -298,11 +315,11 @@ function applyChange(tasks: Array<Record<string, unknown>>, change: ReintakeChan
 }
 
 function reintakeDraftPath(memoryDir: string): string {
-  return path.join(memoryDir, 'reintake-drafts', 'current.json')
+  return getProjectSystemStatePathFromMemoryDir(memoryDir, 'reintake-drafts/current.json')
 }
 
 async function readQueueFile(queuePath: string): Promise<{ version: number; lastUpdated: string; tasks: Array<Record<string, unknown>> }> {
-  const parsed = JSON.parse(await fs.readFile(queuePath, 'utf-8')) as unknown
+  const parsed = JSON.parse(await readManagedTextFile(queuePath, 'utf-8')) as unknown
   if (Array.isArray(parsed)) {
     return { version: 1, lastUpdated: new Date().toISOString(), tasks: parsed as Array<Record<string, unknown>> }
   }
@@ -316,7 +333,7 @@ async function readQueueFile(queuePath: string): Promise<{ version: number; last
 
 async function appendReintakeProgress(memoryDir: string, draft: ProjectReintakeDraft, appliedGroups: number, now: string): Promise<void> {
   const summary = `\n## ${now} Project re-intake applied\n\nApplied ${appliedGroups} group(s): ${draft.summary.kept} kept, ${draft.summary.reframed} reframed, ${draft.summary.created} created, ${draft.summary.archived} archived.\n`
-  await fs.appendFile(path.join(memoryDir, 'PROGRESS.md'), summary, 'utf-8').catch(() => undefined)
+  await appendManagedTextFile(getProjectSystemStatePathFromMemoryDir(memoryDir, 'PROGRESS.md'), summary, 'utf-8').catch(() => undefined)
 }
 
 function graphTaskChange(task: EvidenceTask, reconciliations: EvidenceReconciliation[]): ReintakeChange {
@@ -423,6 +440,24 @@ function archiveUnsupportedBlockedTasks(tasks: Array<Record<string, unknown>>, u
     }))
 }
 
+function archiveUnsupportedWeakPreImplementationTasks(
+  tasks: Array<Record<string, unknown>>,
+  usedTaskIds: Set<string>,
+): ReintakeChange[] {
+  return tasks
+    .filter(task => {
+      const id = stringField(task, 'id')
+      if (!id || usedTaskIds.has(id)) return false
+      if (!isOpenPreImplementationTask(task)) return false
+      return hasWeakLegacySpecShape(task)
+    })
+    .map(task => ({
+      kind: 'archive' as const,
+      taskId: stringField(task, 'id') ?? '',
+      reason: 'Pre-implementation task is unsupported by current evidence and still uses a weak legacy spec shape.',
+    }))
+}
+
 function singleEditChange(sources: ProjectReintakeSource[]): ReintakeChange | null {
   const text = sources.map(source => source.content).join('\n')
   if (!/should say/i.test(text) || !/SettingsTab\.svelte/i.test(text)) {
@@ -479,6 +514,64 @@ function stringField(source: Record<string, unknown>, key: string): string | und
 
 function normalize(value: string): string {
   return value.toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim()
+}
+
+function isStartedOrCompletedTask(task: Record<string, unknown>): boolean {
+  const status = stringField(task, 'status') ?? ''
+  return ['done', 'in_progress', 'review', 'gate_check', 'pending_pr'].includes(status)
+}
+
+function isOpenPreImplementationTask(task: Record<string, unknown>): boolean {
+  const status = stringField(task, 'status') ?? ''
+  return ['import_draft', 'exploring', 'spec_review', 'ready'].includes(status)
+}
+
+function hasWeakLegacySpecShape(task: Record<string, unknown>): boolean {
+  if (hasStructuredSpecRecord(task)) return false
+
+  const spec = stringField(task, 'spec')
+  const acceptanceCriteria = Array.isArray(task.acceptanceCriteria) ? task.acceptanceCriteria : []
+  const brief = task.productBrief && typeof task.productBrief === 'object' && !Array.isArray(task.productBrief)
+    ? task.productBrief as Record<string, unknown>
+    : null
+  const hasBriefShape = typeof brief?.userJob === 'string' && brief.userJob.trim().length > 0
+    && typeof brief?.whyItMattersNow === 'string' && brief.whyItMattersNow.trim().length > 0
+    && typeof brief?.successMetric === 'string' && brief.successMetric.trim().length > 0
+
+  if (!spec?.trim()) {
+    return true
+  }
+
+  if (!markdownLooksLikeModernSpec(spec)) {
+    return true
+  }
+
+  if (!hasBriefShape || acceptanceCriteria.length === 0) {
+    return true
+  }
+
+  return false
+}
+
+function hasStructuredSpecRecord(task: Record<string, unknown>): boolean {
+  const value = task.structuredSpec
+  return Boolean(value && typeof value === 'object' && !Array.isArray(value))
+}
+
+function markdownLooksLikeModernSpec(spec: string): boolean {
+  const headings = [
+    /^## What this is$/im,
+    /^## Problem \/ context$/im,
+    /^## Goals$/im,
+    /^## Non-goals$/im,
+    /^## Proposed design$/im,
+    /^## Key decisions$/im,
+    /^## Acceptance criteria$/im,
+    /^## Verification$/im,
+    /^## Completion boundary$/im,
+  ]
+  const matchCount = headings.filter(pattern => pattern.test(spec)).length
+  return matchCount >= 6
 }
 
 function stableHash(input: string): string {

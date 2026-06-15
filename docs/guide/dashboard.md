@@ -12,40 +12,57 @@ readiness play out. It keeps the current state visible so you do not have to
 hold the whole run in your head.
 
 <picture class="gh-doc-picture">
-  <img src="../assets/ui-audit/0-9-0/projects.webp" alt="Guildhall v0.9.0 projects home showing several local projects with status, activity, and start controls." />
+  <img src="../assets/ui-audit/0-10-0/projects.webp" alt="Guildhall 0.10.0 projects home showing several local projects with status, activity, and start controls." />
 </picture>
 
-![Guildhall v0.9.0 work view with active tasks, hierarchy, and reviewer signals.](../assets/ui-audit/0-9-0/work.webp)
+![Guildhall 0.10.0 work view with active tasks, hierarchy, and reviewer signals.](../assets/ui-audit/0-10-0/work.webp)
 
-## What it does well
+## What stays visible
 
-- **Service over projects**: Projects & Workspaces is not married to one repo. It runs as a local service and keeps multiple projects available from one place.
-- **Current labels match the app**: the service row is **Guild hall** (the
-  shared room for all registered projects), **Work mix**, **Attention**, and
-  **Running now**; the project cards carry state chips such as **Paused**,
-  **Queued**, **Needs task briefs**, **Mixed**, **Stable**, and **Inspect**.
-- **Provider defaults are visible up front**: the home view shows the
-  machine-default provider and worker model group before you open a project. If
-  the preferred provider and active model choice disagree, Guildhall keeps that
-  warning visible and routes you to Providers instead of starting with the wrong
-  model.
-- **Git health is part of project health**: cards and readiness signals can
-  call out dirty repos, local commits, open PRs, and unresolved task worktrees.
-  A project can look quiet in the task queue and still have a Git story that
-  needs closing.
-- **Readiness comes before Start**: migration needs, unanswered questions,
-  runtime setup, and provider mismatches explain themselves before you press
-  Start. The shell points at the exact question, task, or setting that unblocks
-  the project.
-- **File-backed, not hidden**: the shared project plan lives in `./guildhall.yaml`,
-  compact shared Guildhall state lives in committed `./.guildhall/` files,
-  and local/private overrides live in
-  `./.guildhall/config.yaml`. Machine-wide state such as the registry and
-  provider credentials lives in `~/.guildhall/`; raw transcripts and bulky run
-  history live under `~/.guildhall/data/projects/`. The UI is a clearer window
-  into those files, not a secret second database.
-- **One operating place**: the service home gets you into the right project, and the shell carries the detailed state without feeling like a separate product.
-- **Memory you can inspect**: Settings -> Memory shows project habits, cross-project preferences, project playbooks, and Guildhall product ideas without adding a new approval step to every task.
+The projects page is the lobby. It helps you pick the right project, notice
+anything risky, and get into the work without spelunking through files first.
+
+- **Project state**: cards show whether a project is paused, queued, stable,
+  mixed, or waiting for inspection.
+- **Provider readiness**: the home view shows the default provider and worker
+  model group before you open a project. If the choices disagree, Guildhall
+  sends you to Providers before the wrong model starts working.
+- **Git health**: dirty repos, local commits, open PRs, and unresolved task
+  worktrees stay part of the project story.
+- **Start blockers**: migrations, unanswered questions, runtime setup, and
+  provider mismatches explain themselves before you press **Start**.
+
+Inside a project, the rail keeps the main sections separate. A section's child
+links stay visible while you are in that section, then hide when you move
+somewhere else:
+
+- **Project** groups Overview, Needs you, Facts, and Structure.
+- **Overview** is the project summary.
+- **Needs you** is the alert view for waiting answers and approvals.
+- **Facts** is what Guildhall knows about identity, environment, gates, and
+  routing context.
+- **Structure** is the repo map, project graph, provider/consumer handoff view,
+  and shared-contract view.
+- **Threads** is the project conversation.
+- **Work** is a top-level work mode; it shows Queue and Board while you are
+  working through tasks.
+- **Timeline** is the activity history.
+- **Closure** shows Summary and Checks while you are judging whether current
+  work is actually closed.
+- **Settings** is readiness, providers, identity, profiles, and configuration.
+
+That split keeps the UI from turning every useful signal into another task
+card. Cross-project work can live in the project graph. Owner decisions can
+stay linked to the same conversation. Memory stays inspectable and
+reversible without adding a new approval step to every task.
+
+Guildhall is file-backed too. The shared project plan lives in
+`./guildhall.yaml`, compact shared state lives in committed `./.guildhall/`
+files, and local/private overrides live in `./.guildhall/config.yaml`.
+Machine-wide state such as the registry and provider credentials lives in
+`~/.guildhall/`; bulky run history lives under
+`~/.guildhall/data/projects/`. The UI is a clearer window into those files,
+not a secret second database.
 
 ## Most of the real loop lives in the browser
 
@@ -54,6 +71,9 @@ hold the whole run in your head.
 - **Pressure-test broad asks**: a release or feature request can become a
   one-question-at-a-time intake instead of a giant vague task. Answers,
   assumptions, and deferrals stay attached to the project.
+- **Review project structure**: inspect the structural map, project graph,
+  shared contract surfaces, provider work, and consumer verification from
+  Structure.
 - **Inspect the run**: read the queue, open the drawer, follow the transcript,
   and decide whether Guildhall is making useful progress.
 - **Judge current work closure**: keep reviewer verdicts, closure checks, and

@@ -3,10 +3,15 @@ import fs from 'node:fs/promises'
 import path from 'node:path'
 import os from 'node:os'
 import { bootstrapWorkspace, readWorkspaceConfig, slugify } from '@guildhall/config'
-import { getProjectStateDir } from '@guildhall/sessions'
+import {
+  getProjectStateDir,
+  readProjectStateJsonFromMemoryDirAsync,
+  writeProjectStateJsonFromMemoryDirAsync,
+} from '@guildhall/sessions'
 import { buildServeApp } from '../serve.js'
 import { createMetaIntakeTask, META_INTAKE_TASK_ID } from '../meta-intake.js'
 import type { TaskQueue } from '@guildhall/core'
+import { migrateTaskQuestionsToBoundedChat } from '../task-question-migration.js'
 
 // ---------------------------------------------------------------------------
 // Integration tests for the browser-driven meta-intake approval flow.
@@ -23,8 +28,7 @@ let memoryDir: string
 let projectId: string
 
 async function readQueue(): Promise<TaskQueue> {
-  const raw = await fs.readFile(path.join(memoryDir, 'TASKS.json'), 'utf-8')
-  return JSON.parse(raw) as TaskQueue
+  return readProjectStateJsonFromMemoryDirAsync<TaskQueue>(memoryDir, 'TASKS.json')
 }
 
 async function writeDraftSpec(spec: string): Promise<void> {
@@ -32,11 +36,7 @@ async function writeDraftSpec(spec: string): Promise<void> {
   const task = queue.tasks.find(t => t.id === META_INTAKE_TASK_ID)
   if (!task) throw new Error('meta-intake task missing; call createMetaIntakeTask first')
   task.spec = spec
-  await fs.writeFile(
-    path.join(memoryDir, 'TASKS.json'),
-    JSON.stringify(queue, null, 2),
-    'utf-8',
-  )
+  await writeProjectStateJsonFromMemoryDirAsync(memoryDir, 'TASKS.json', queue)
 }
 
 beforeEach(async () => {
@@ -126,6 +126,23 @@ describe('GET /api/project/meta-intake/draft', () => {
     expect(body.specReady).toBe(false)
     expect(body.status).toBe('in-progress')
     expect(body.drafts).toEqual([])
+  })
+
+  it('includes the blocked reason for interrupted meta-intake resume decisions', async () => {
+    await createMetaIntakeTask({ memoryDir, projectPath: tmpDir })
+    const queue = await readQueue()
+    const task = queue.tasks.find(t => t.id === META_INTAKE_TASK_ID)
+    if (!task) throw new Error('meta-intake task missing')
+    task.status = 'blocked'
+    task.blockReason = 'Spec agent kept researching after Guildhall asked for durable progress.'
+    await writeProjectStateJsonFromMemoryDirAsync(memoryDir, 'TASKS.json', queue)
+
+    const { app } = buildServeApp({ projectPath: tmpDir })
+    const res = await app.fetch(new Request(projectUrl('/api/project/meta-intake/draft')))
+    const body = await res.json() as Record<string, any>
+    expect(body.taskExists).toBe(true)
+    expect(body.taskStatus).toBe('blocked')
+    expect(body.blockReason).toMatch(/durable progress/i)
   })
 
   it('returns draft-ready with parsed coordinators once the agent has written a fence', async () => {
@@ -224,6 +241,73 @@ describe('POST /api/project/meta-intake/approve', () => {
 })
 
 describe('POST /api/project/meta-intake/synthesize', () => {
+  it('creates a reviewable monorepo structure draft when meta-intake blocked before asking questions', async () => {
+    await fs.writeFile(
+      path.join(tmpDir, 'package.json'),
+      JSON.stringify({ name: 'fixture-monorepo', scripts: { build: 'tsc -b', test: 'vitest' } }, null, 2),
+      'utf-8',
+    )
+    await fs.writeFile(path.join(tmpDir, 'pnpm-workspace.yaml'), "packages:\n  - 'packages/*'\n", 'utf-8')
+    for (const [dir, packageName] of [
+      ['packages/core', '@fixture/core'],
+      ['packages/css-parser', '@fixture/css-parser'],
+      ['packages/extension', '@fixture/extension'],
+    ] as const) {
+      await fs.mkdir(path.join(tmpDir, dir), { recursive: true })
+      await fs.writeFile(
+        path.join(tmpDir, dir, 'package.json'),
+        JSON.stringify({ name: packageName, scripts: { test: 'vitest run' } }, null, 2),
+        'utf-8',
+      )
+    }
+    await createMetaIntakeTask({ memoryDir, projectPath: tmpDir })
+    const queue = await readQueue()
+    const task = queue.tasks.find(t => t.id === META_INTAKE_TASK_ID)
+    if (!task) throw new Error('missing meta-intake task')
+    task.status = 'blocked'
+    task.blockReason = 'human_judgment_required: Spec agent kept researching after Guildhall asked for durable progress.'
+    task.openQuestions = [{
+      id: 'q-fallback',
+      kind: 'choice',
+      askedBy: 'spec-agent',
+      askedAt: '2026-01-01T00:00:00.000Z',
+      prompt: 'This is a meta-intake task — I need to:',
+      choices: ['Keep researching', 'Draft setup from repo scan'],
+      selectionMode: 'single',
+    }]
+    await writeProjectStateJsonFromMemoryDirAsync(memoryDir, 'TASKS.json', queue)
+
+    const { app } = buildServeApp({ projectPath: tmpDir })
+    const synthesize = await app.fetch(
+      new Request(projectUrl('/api/project/meta-intake/synthesize'), { method: 'POST' }),
+    )
+    expect(synthesize.status).toBe(200)
+    const body = await synthesize.json() as Record<string, any>
+    expect(body.ok).toBe(true)
+    expect(body.drafts.map((draft: { path?: string }) => draft.path)).toEqual(expect.arrayContaining([
+      'packages/core',
+      'packages/css-parser',
+      'packages/extension',
+    ]))
+
+    const draft = await app.fetch(new Request(projectUrl('/api/project/meta-intake/draft')))
+    const draftBody = await draft.json() as Record<string, any>
+    expect(draftBody.status).toBe('draft-ready')
+
+    const graph = await app.fetch(new Request(projectUrl('/api/project/project-graph')))
+    const graphBody = await graph.json() as Record<string, any>
+    expect(graphBody.projectGraph.structuralDomains.map((domain: { path?: string }) => domain.path)).toEqual(expect.arrayContaining([
+      'packages/core',
+      'packages/css-parser',
+      'packages/extension',
+    ]))
+    expect(graphBody.projectGraph.contractSurfaces.map((surface: { label?: string }) => surface.label)).toEqual(expect.arrayContaining([
+      '@fixture/core package contract',
+      '@fixture/css-parser package contract',
+      '@fixture/extension package contract',
+    ]))
+  })
+
   it('creates a reviewable draft from answered setup questions when the agent emitted no spec', async () => {
     await createMetaIntakeTask({ memoryDir, projectPath: tmpDir })
     const queue = await readQueue()
@@ -241,12 +325,18 @@ describe('POST /api/project/meta-intake/synthesize', () => {
         answer: 'converter-core, extension-ui, docs',
       },
     ]
-    await fs.writeFile(path.join(memoryDir, 'TASKS.json'), JSON.stringify(queue, null, 2), 'utf-8')
+    await writeProjectStateJsonFromMemoryDirAsync(memoryDir, 'TASKS.json', queue)
     await fs.writeFile(
       path.join(tmpDir, 'package.json'),
       JSON.stringify({ scripts: { build: 'tsc -b', test: 'vitest' } }, null, 2),
       'utf-8',
     )
+    await migrateTaskQuestionsToBoundedChat({
+      projectRoot: tmpDir,
+      projectId,
+      apply: true,
+      now: '2026-01-01T00:02:00.000Z',
+    })
 
     const { app } = buildServeApp({ projectPath: tmpDir })
     const res = await app.fetch(
@@ -255,8 +345,9 @@ describe('POST /api/project/meta-intake/synthesize', () => {
     expect(res.status).toBe(200)
     const body = await res.json() as Record<string, any>
     expect(body.ok).toBe(true)
-    expect(body.drafts).toHaveLength(3)
-    expect(body.drafts[0].name).toBe('Converter Core')
+    expect(body.drafts).toEqual(expect.arrayContaining([
+      expect.objectContaining({ name: 'Converter Core' }),
+    ]))
 
     const updated = await readQueue()
     const updatedTask = updated.tasks.find(t => t.id === META_INTAKE_TASK_ID)

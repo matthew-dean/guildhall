@@ -6,6 +6,10 @@ interface TaskStateLike {
   liveAgent?: unknown
   activity?: TaskTurnLiveActivity[]
   checklist?: unknown
+  workerHandoff?: {
+    ready?: unknown
+    cleanupNeeded?: unknown
+  }
   phase?: string
 }
 
@@ -45,7 +49,7 @@ export function isImportedDraftShaping(turn: TaskStateLike): boolean {
 
 export function isQueuedSpecRevision(turn: TaskStateLike): boolean {
   return (
-    turn.taskStatus === 'exploring' &&
+    (turn.taskStatus === 'exploring' || turn.taskStatus === 'spec_review') &&
     !turn.importedDraft &&
     !turn.liveAgent &&
     !turn.checklist &&
@@ -61,12 +65,40 @@ export function hasIncompleteTaskChecklist(turn: Pick<TaskStateLike, 'checklist'
   return Number.isFinite(doneCount) && Number.isFinite(totalSteps) && totalSteps > 0 && doneCount < totalSteps
 }
 
+type WorkerHandoffTurnLike = Pick<TaskStateLike, 'taskStatus' | 'checklist' | 'workerHandoff'>
+
+function needsWorkerHandoffTurnCleanup(
+  turn: Pick<TaskStateLike, 'taskStatus' | 'checklist' | 'workerHandoff'>,
+): boolean {
+  if (turn.taskStatus !== 'ready') return false
+  if (hasIncompleteTaskChecklist(turn)) return true
+  const handoff = turn.workerHandoff
+  if (!handoff || typeof handoff !== 'object') return false
+  return handoff.cleanupNeeded === true || handoff.ready === false
+}
+
 export function hasApprovedProductBrief(task: Pick<TaskSpecLike, 'productBrief'>): boolean {
   return Boolean(
     task.productBrief &&
     typeof task.productBrief === 'object' &&
     typeof task.productBrief.approvedAt === 'string' &&
     task.productBrief.approvedAt.trim().length > 0,
+  )
+}
+
+function hasCompleteProductBrief(task: Pick<TaskSpecLike, 'productBrief'>): boolean {
+  const brief = task.productBrief
+  if (!brief || typeof brief !== 'object') return false
+  const nonGoals = Array.isArray(brief.nonGoals) ? brief.nonGoals.filter(Boolean) : []
+  const antiPatterns = Array.isArray(brief.antiPatterns) ? brief.antiPatterns.filter(Boolean) : []
+  return Boolean(
+    typeof brief.userJob === 'string' &&
+    brief.userJob.trim().length > 0 &&
+    typeof brief.whyItMattersNow === 'string' &&
+    brief.whyItMattersNow.trim().length > 0 &&
+    typeof brief.successMetric === 'string' &&
+    brief.successMetric.trim().length > 0 &&
+    (nonGoals.length > 0 || antiPatterns.length > 0),
   )
 }
 
@@ -80,10 +112,13 @@ export function hasSpecDraftContent(task: Pick<TaskSpecLike, 'spec' | 'acceptanc
 }
 
 export function isCompleteForWorkerHandoff(task: TaskSpecLike): boolean {
-  return hasApprovedProductBrief(task) && hasSpecDraftContent(task)
+  return hasApprovedProductBrief(task) && hasCompleteProductBrief(task) && hasSpecDraftContent(task)
 }
 
-export function needsWorkerHandoffSpecCleanup(task: Pick<Task, 'status'> & TaskSpecLike): boolean {
+export function needsWorkerHandoffSpecCleanup(task: (Pick<Task, 'status'> & TaskSpecLike) | WorkerHandoffTurnLike): boolean {
+  if ('taskStatus' in task || 'workerHandoff' in task || 'checklist' in task) {
+    return needsWorkerHandoffTurnCleanup(task as WorkerHandoffTurnLike)
+  }
   return task.status === 'ready' && !isCompleteForWorkerHandoff(task)
 }
 

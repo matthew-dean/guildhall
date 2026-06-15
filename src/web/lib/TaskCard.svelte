@@ -5,11 +5,15 @@
 -->
 <script lang="ts">
   import { nav, path } from './nav.svelte.js'
+  import CardListItem from './CardListItem.svelte'
+  import Chip from './Chip.svelte'
   import { currentTaskHref } from './project-routes.js'
   import Icon, { type IconName } from './Icon.svelte'
   import StatusLight from './StatusLight.svelte'
   import { friendlyDomain, friendlyStatus } from './display.js'
   import { activeEscalations } from './escalation.js'
+  import { hasUnmetDependencies } from './task-dependencies.js'
+  import { deliveryProgressBadge, type TaskWorkProgressDisplay } from './work-progress-display.js'
   import type { TaskLite } from './types.js'
 
   const ACTIVE_STATUSES = new Set([
@@ -28,21 +32,26 @@
   interface Props {
     task: TaskLite
     coordinatorRunning?: boolean
+    relatedTasks?: TaskLite[]
     displayStatusLabel?: string
     displayStatusTone?: StatusTone
     displayStatusIcon?: IconName
+    workProgress?: TaskWorkProgressDisplay | null
   }
 
   let {
     task,
     coordinatorRunning = false,
+    relatedTasks = [],
     displayStatusLabel,
     displayStatusTone,
     displayStatusIcon,
+    workProgress = null,
   }: Props = $props()
 
   const status = $derived(task.status ?? 'unknown')
-  const statusLabel = $derived(displayStatusLabel ?? friendlyStatus(status))
+  const dependencyBlocked = $derived(hasUnmetDependencies(task, relatedTasks))
+  const statusLabel = $derived(displayStatusLabel ?? (dependencyBlocked ? 'Blocked' : friendlyStatus(status)))
   const isQueued = $derived(ACTIVE_STATUSES.has(status))
   const isActive = $derived(isQueued && coordinatorRunning)
   const prio = $derived(task.priority && task.priority !== 'normal' ? task.priority : '')
@@ -104,6 +113,8 @@
     displayStatusTone ??
       (status === 'blocked'
         ? 'danger'
+        : dependencyBlocked
+          ? 'danger'
         : status === 'shelved'
           ? 'warn'
           : status === 'pending_pr'
@@ -116,14 +127,18 @@
   )
 
   const statusIcon = $derived<IconName>(
-    displayStatusIcon ?? (status === 'blocked'
+    displayStatusIcon ?? (status === 'blocked' || dependencyBlocked
       ? 'alert-triangle'
       : status === 'done'
         ? 'check-circle-2'
         : isActive
           ? 'loader'
-          : 'circle'),
+        : 'circle'),
   )
+  const statusChipTone = $derived<'danger' | 'warn' | 'ok' | 'accent' | 'neutral'>(
+    statusTone,
+  )
+  const deliveryBadge = $derived(deliveryProgressBadge(workProgress))
 
   function open() {
     nav(currentTaskHref(task.id), { backgroundPath: path.value })
@@ -138,23 +153,29 @@
 
 </script>
 
-<div
-  class="task-card st-{status} tone-{statusTone}"
-  class:st-active={isActive}
-  class:st-blocked-bold={status === 'blocked'}
-  role="button"
-  tabindex="0"
+<CardListItem
+  as="button"
+  className={[
+    'task-card',
+    `st-${status}`,
+    `tone-${statusTone}`,
+    isActive ? 'st-active' : '',
+    status === 'blocked' || dependencyBlocked ? 'st-blocked-bold' : '',
+  ].filter(Boolean).join(' ')}
+  tone={statusTone === 'accent' ? 'accent' : statusTone === 'ok' ? 'ok' : statusTone === 'warn' ? 'warn' : statusTone === 'danger' ? 'danger' : 'neutral'}
+  railTone={statusTone === 'accent' ? 'accent' : statusTone === 'ok' ? 'ok' : statusTone === 'warn' ? 'warn' : statusTone === 'danger' ? 'danger' : null}
+  railStrength="strong"
   onclick={open}
   onkeydown={onKey}
 >
   <div class="tc-head">
-    <span class="tc-status chip-{statusTone}" class:chip-loud={status === 'blocked'}>
+    <span class="tc-status">
       {#if isActive}
         <StatusLight pulse />
       {:else}
         <Icon name={statusIcon} size={12} />
       {/if}
-      <span>{statusLabel}</span>
+      <Chip label={statusLabel} tone={statusChipTone} size="compact" />
     </span>
     {#if isQueued && !coordinatorRunning}
       <span class="tc-queued" title="Queued — coordinator is stopped">paused</span>
@@ -163,6 +184,9 @@
       <span class="tc-flag" title="Open escalation">
         <Icon name="alert-triangle" size={12} />
       </span>
+    {/if}
+    {#if deliveryBadge}
+      <Chip label={deliveryBadge.label} tone={deliveryBadge.tone} size="compact" title={deliveryBadge.title} />
     {/if}
   </div>
   <div class="tc-title">{task.title ?? '(untitled)'}</div>
@@ -179,83 +203,52 @@
       <span>{summary.text}</span>
     </div>
   {/if}
-</div>
+</CardListItem>
 
 <style>
-  .task-card {
-    background: var(--bg-raised);
-    border: 1px solid var(--border-strong);
-    border-radius: var(--r-2);
+  :global(.task-card) {
     padding: var(--s-2) var(--s-3);
-    cursor: pointer;
     display: flex;
     flex-direction: column;
     gap: var(--s-1);
-    border-left-width: 3px;
-    border-left-color: var(--stripe-neutral);
   }
-  .task-card:hover {
+  :global(.task-card:hover),
+  :global(.task-card:focus-visible) {
     border-color: var(--accent);
-    border-left-width: 3px;
   }
-  .tone-danger { border-left-color: var(--stripe-danger); }
-  .tone-warn { border-left-color: var(--stripe-warn); }
-  .tone-ok { border-left-color: var(--stripe-ok); }
-  .tone-accent { border-left-color: var(--stripe-accent); }
 
-  .st-active {
-    background: color-mix(in srgb, var(--accent) 8%, var(--bg-raised));
+  :global(.task-card.st-active) {
+    box-shadow:
+      0 0 0 1px color-mix(in srgb, var(--accent) 12%, transparent),
+      var(--glass-etch);
   }
-  .st-done {
-    background: color-mix(in srgb, var(--accent-2) 6%, var(--bg-raised));
+  :global(.task-card.st-done) {
     border-color: color-mix(in srgb, var(--accent-2) 24%, var(--border-strong));
   }
-  .st-shelved {
-    background: color-mix(in srgb, var(--warn) 6%, var(--bg-raised));
+  :global(.task-card.st-shelved) {
     border-color: color-mix(in srgb, var(--warn) 24%, var(--border-strong));
   }
-  .st-blocked-bold {
-    background: color-mix(in srgb, var(--danger) 8%, var(--bg-raised));
+  :global(.task-card.st-blocked-bold) {
+    box-shadow:
+      0 0 0 1px color-mix(in srgb, var(--danger) 12%, transparent),
+      var(--glass-etch);
   }
 
   .tc-head {
     display: flex;
     align-items: center;
     gap: var(--s-2);
-    font-size: var(--fs-0);
+    font-size: var(--gh-type-size-caption);
     text-transform: uppercase;
     letter-spacing: 0.05em;
-    font-weight: 700;
+    font-weight: var(--gh-type-weight-strong);
     color: var(--text-muted);
   }
   .tc-status {
     display: inline-flex;
     align-items: center;
-    gap: 4px;
-    padding: 1px 6px;
-    border-radius: 999px;
+    gap: var(--s-1);
     color: var(--text-muted);
-    background: rgba(136, 136, 153, 0.12);
-  }
-  .chip-danger {
-    color: var(--danger);
-    background: rgba(224, 82, 82, 0.15);
-  }
-  .chip-warn {
-    color: var(--warn);
-    background: rgba(212, 162, 60, 0.15);
-  }
-  .chip-ok {
-    color: var(--accent-2);
-    background: rgba(78, 204, 163, 0.15);
-  }
-  .chip-accent {
-    color: var(--accent);
-    background: rgba(124, 109, 240, 0.15);
-  }
-  .chip-loud {
-    font-weight: 800;
-    box-shadow: 0 0 0 1px var(--danger);
   }
   .tc-queued {
     color: var(--warn);
@@ -269,21 +262,21 @@
   }
   .tc-title {
     color: var(--text);
-    font-size: var(--fs-2);
-    line-height: var(--lh-body);
-    font-weight: 600;
+    font-size: var(--gh-type-size-body);
+    line-height: var(--gh-type-line-height-body);
+    font-weight: var(--gh-type-weight-strong);
   }
   .tc-meta {
-    font-size: var(--fs-0);
+    font-size: var(--gh-type-size-caption);
     color: var(--text-muted);
     display: flex;
     gap: var(--s-2);
     align-items: center;
   }
   .tc-summary {
-    font-size: var(--fs-1);
+    font-size: var(--gh-type-size-meta);
     color: color-mix(in srgb, var(--text) 78%, var(--text-muted));
-    line-height: var(--lh-body);
+    line-height: var(--gh-type-line-height-body);
     display: grid;
     gap: 2px;
     overflow: hidden;
@@ -296,18 +289,18 @@
     word-break: break-word;
   }
   .tc-summary-label {
-    font-size: var(--fs-0);
+    font-size: var(--gh-type-size-caption);
     text-transform: uppercase;
     letter-spacing: 0.05em;
-    font-weight: 700;
+    font-weight: var(--gh-type-weight-strong);
     color: var(--text-dim);
   }
-  .st-done .tc-title,
-  .st-shelved .tc-title {
+  :global(.task-card.st-done) .tc-title,
+  :global(.task-card.st-shelved) .tc-title {
     color: color-mix(in srgb, var(--text) 88%, var(--text-muted));
   }
-  .st-done .tc-meta,
-  .st-shelved .tc-meta {
+  :global(.task-card.st-done) .tc-meta,
+  :global(.task-card.st-shelved) .tc-meta {
     color: color-mix(in srgb, var(--text-muted) 88%, var(--text-dim));
   }
   .tc-rev {

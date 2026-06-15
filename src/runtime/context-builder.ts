@@ -1,9 +1,11 @@
+import { appendManagedTextFile, readManagedTextFile, readManagedTextFileSync, writeManagedTextFile } from '@guildhall/persistence'
 import fs from 'node:fs/promises'
 import { existsSync } from 'node:fs'
 import { execFile, execFileSync } from 'node:child_process'
 import path from 'node:path'
 import { promisify } from 'node:util'
 import type { Checkpoint, ConstructionMode, Task } from '@guildhall/core'
+import { TaskQueue } from '@guildhall/core'
 import { buildWorkerCorpusContext, loadCodebaseMap, refreshCodebaseMap } from '@guildhall/corpus-map'
 import {
   constructionModeForTask,
@@ -24,7 +26,9 @@ import {
 } from '@guildhall/guilds'
 import { readProjectSkillProposals, selectRelevantProjectSkills } from '@guildhall/skills'
 import {
-  getProjectTaskLocalHistoryDir,
+  getProjectSystemStatePath,
+  getProjectSystemStatePathFromMemoryDir,
+  getProjectTaskReviewPacketPath,
   getProjectTranscriptPath,
   inferProjectRootFromMemoryDir,
 } from '@guildhall/sessions'
@@ -38,6 +42,19 @@ import { buildProofPathContext, ProofPath } from './proof-paths.js'
 import type { CompletionHandoff as CompletionHandoffType } from './completion-handoff.js'
 import type { ProofPath as ProofPathType } from './proof-paths.js'
 import { buildEffectiveMemoryPacket, type EffectiveMemoryPacket } from './effective-memory-packet.js'
+import {
+  buildStructuralContextSlice,
+  readAcceptedStructuralMap,
+  renderStructuralAgentPacket,
+  type StructuralAgentRole,
+  type StructuralContextSlice,
+} from './structural-map.js'
+import { renderSurfaceReviewPacketsMarkdown } from './contract-surfaces.js'
+import {
+  buildTaskContextPacket,
+  readProjectDeliveryModel,
+  type TaskContextPacket,
+} from './delivery-spine.js'
 
 // ---------------------------------------------------------------------------
 // Just-in-time context builder
@@ -257,6 +274,14 @@ ${reviewerFeedbackText}`
     }
     const rootedPath = path.resolve(root, nuxtWebPrefixed)
     if (existsSync(rootedPath)) return rootedPath
+    const firstSlash = nuxtWebPrefixed.indexOf('/')
+    if (firstSlash > 0) {
+      const deprojectedLegacySourcePath = nuxtWebPrefixed.slice(firstSlash + 1)
+      if (deprojectedLegacySourcePath) {
+        const legacyCandidate = path.resolve(root, deprojectedLegacySourcePath)
+        if (existsSync(legacyCandidate)) return legacyCandidate
+      }
+    }
     return (
       resolveRepoSuffixMatch(root, nuxtWebPrefixed) ??
       (deprojectedPath ? resolveRepoSuffixMatch(root, deprojectedPath) : null) ??
@@ -490,7 +515,9 @@ function looksLikeStaleNewRequestBrief(task: Task): boolean {
 
 function renderProductBriefContext(task: Task): string {
   if (!task.productBrief || looksLikeStaleNewRequestBrief(task)) return ''
-  return `\n### Product Brief${task.productBrief.approvedAt ? ' (human-approved)' : ' (DRAFT — not yet approved)'}\n**User job:** ${task.productBrief.userJob}\n**Success metric:** ${task.productBrief.successMetric}${task.productBrief.antiPatterns.length > 0 ? `\n**Anti-patterns (must NOT do):**\n${task.productBrief.antiPatterns.map(a => `- ${a}`).join('\n')}` : ''}${task.productBrief.rolloutPlan ? `\n**Rollout plan:** ${task.productBrief.rolloutPlan}` : ''}`
+  const nonGoals = task.productBrief.nonGoals ?? []
+  const antiPatterns = task.productBrief.antiPatterns ?? []
+  return `\n### Product Brief${task.productBrief.approvedAt ? ' (human-approved)' : ' (DRAFT — not yet approved)'}\n**User job:** ${task.productBrief.userJob}${task.productBrief.whyItMattersNow ? `\n**Why it matters now:** ${task.productBrief.whyItMattersNow}` : ''}\n**Success metric:** ${task.productBrief.successMetric}${nonGoals.length > 0 ? `\n**Non-goals:**\n${nonGoals.map(a => `- ${a}`).join('\n')}` : antiPatterns.length > 0 ? `\n**Anti-patterns (must NOT do):**\n${antiPatterns.map(a => `- ${a}`).join('\n')}` : ''}${task.productBrief.rolloutPlan ? `\n**Rollout plan:** ${task.productBrief.rolloutPlan}` : ''}`
 }
 
 function summarizeRawDesignSystem(raw: string): string {
@@ -665,7 +692,7 @@ async function collectEnvManifest(projectRoot: string, task: Task): Promise<stri
       visited.add(relativePath)
       let content = ''
       try {
-        content = await fs.readFile(full, 'utf-8')
+        content = await readManagedTextFile(full, 'utf-8')
       } catch {
         continue
       }
@@ -787,8 +814,8 @@ export interface BuiltContext {
    */
   reviewerSlugs: string[]
   /**
-   * FR-23: business-envelope summary for the task's parent goal. Empty when
-   * the task has no `parentGoalId` or the goal book is absent. Agents see the
+   * FR-23: business-envelope summary for the task's goal. Empty when
+   * the task has no `businessEnvelope.goalId` or the goal book is absent. Agents see the
    * goal title, success condition, and guardrails so they can self-check
    * against the envelope before taking destructive actions; the coordinator
    * makes the authoritative call via `evaluateEnvelope`.
@@ -819,6 +846,10 @@ export interface BuiltContext {
   completionHandoff?: string
   effectiveMemory?: string
   effectiveMemoryPacket?: EffectiveMemoryPacket
+  structuralMapContext?: string
+  structuralMapOmitted?: StructuralContextSlice['omitted']
+  contractSurfacePackets?: string
+  deliverySpineContext?: string
   /** Concatenated string ready to prepend to an agent message */
   formatted: string
 }
@@ -929,7 +960,7 @@ export async function buildContext(
 ): Promise<BuiltContext> {
   const readSafe = async (file: string): Promise<string> => {
     try {
-      return await fs.readFile(path.join(memoryDir, file), 'utf-8')
+      return await readManagedTextFile(getProjectSystemStatePathFromMemoryDir(memoryDir, file), 'utf-8')
     } catch {
       return ''
     }
@@ -943,7 +974,7 @@ export async function buildContext(
     readSafe('design-system.yaml'),
     // Only bother with the transcript when we're actually in the exploring phase.
     task.status === 'exploring'
-      ? fs.readFile(getProjectTranscriptPath(projectRoot, 'exploring', task.id), 'utf-8').catch(() => readSafe(path.join('exploring', `${task.id}.md`)))
+      ? readManagedTextFile(getProjectTranscriptPath(projectRoot, 'exploring', task.id), 'utf-8').catch(() => readSafe(path.join('exploring', `${task.id}.md`)))
       : Promise.resolve(''),
     // FR-23: resolve the task's parent goal. Missing-goal cases become
     // `undefined` — the summary renderer omits the envelope block.
@@ -961,7 +992,7 @@ export async function buildContext(
   ])
   const reviewPacket =
     task.status === 'review' || task.status === 'gate_check'
-      ? await fs.readFile(path.join(getProjectTaskLocalHistoryDir(projectRoot, task.id), 'review-packet.md'), 'utf-8')
+      ? await readManagedTextFile(getProjectTaskReviewPacketPath(projectRoot, task.id), 'utf-8')
           .catch(() => readSafe(path.join('tasks', task.id, 'review-packet.md')))
       : ''
 
@@ -973,7 +1004,7 @@ export async function buildContext(
     : ''
   const envelope = goal
     ? [
-        `**Parent goal:** ${goal.id} — ${goal.title} (${goal.status})`,
+        `**Goal envelope:** ${goal.id} — ${goal.title} (${goal.status})`,
         `**Success condition:** ${goal.successCondition}`,
         goal.guardrails.length > 0
           ? `**Guardrails:**\n${goal.guardrails
@@ -1139,6 +1170,29 @@ export async function buildContext(
     rendered: '',
   }))
   const effectiveMemory = effectiveMemoryPacket.rendered
+  const structuralMap = readAcceptedStructuralMap(projectRoot)
+  const structuralRole = structuralAgentRoleForTask(task)
+  const structuralTask = {
+    id: task.id,
+    title: task.title,
+    files: resolveLikelyTaskFiles(task),
+    text: `${task.description}\n${task.spec ?? ''}`,
+  }
+  const structuralMapSlice = structuralMap ? buildStructuralContextSlice(structuralMap, structuralTask) : null
+  const structuralMapContext = structuralMap
+    ? renderStructuralAgentPacket({
+        map: structuralMap,
+        task: structuralTask,
+        role: structuralRole,
+      })
+    : ''
+  const structuralMapOmitted = structuralMapSlice?.omitted ?? []
+  const contractSurfacePackets = task.status === 'in_progress' || task.status === 'review' || task.status === 'gate_check'
+    ? renderSurfaceReviewPacketsMarkdown(task.contractSurfaceReviewPackets ?? [])
+    : ''
+  const deliverySpineContext = task.status === 'in_progress' || task.status === 'review' || task.status === 'gate_check'
+    ? await buildDeliverySpineWorkerContext({ projectRoot, memoryDir, task }).catch(() => '')
+    : ''
 
   const taskSummary = [
     `## Current Task: ${task.id}`,
@@ -1197,6 +1251,8 @@ export async function buildContext(
     '',
     taskSummary,
     '',
+    structuralMapContext,
+    '',
     personaPrompt,
     '',
     workerModePrompt,
@@ -1208,6 +1264,10 @@ export async function buildContext(
     reviewRubrics ? `## Review Rubrics (selected for this task)\n${reviewRubrics}` : '',
     '',
     reviewPacket ? `## Review Packet\n${reviewPacket}` : '',
+    '',
+    contractSurfacePackets,
+    '',
+    deliverySpineContext,
     '',
     corpusMap,
     '',
@@ -1253,8 +1313,108 @@ export async function buildContext(
     completionHandoff: completionHandoffContext,
     effectiveMemory,
     effectiveMemoryPacket,
+    structuralMapContext,
+    structuralMapOmitted,
+    contractSurfacePackets,
+    deliverySpineContext,
     formatted,
   }
+}
+
+async function buildDeliverySpineWorkerContext(input: {
+  projectRoot: string
+  memoryDir: string
+  task: Task
+}): Promise<string> {
+  const queue = await readTaskQueueForContext(input.memoryDir)
+  const tasks = queue.tasks.some(candidate => candidate.id === input.task.id)
+    ? queue.tasks
+    : [...queue.tasks, input.task]
+  const model = await readProjectDeliveryModel(input.projectRoot)
+  if (!input.task.delivery && model.drivers.length === 0 && model.primitives.length === 0) return ''
+  const packet = buildTaskContextPacket({ model, tasks, taskId: input.task.id })
+  return renderDeliverySpineContext(packet)
+}
+
+async function readTaskQueueForContext(memoryDir: string): Promise<{ tasks: Task[] }> {
+  try {
+    const raw = await readManagedTextFile(
+      getProjectSystemStatePath(inferProjectRootFromMemoryDir(memoryDir), 'TASKS.json'),
+      'utf-8',
+    )
+    const parsed = JSON.parse(raw)
+    return TaskQueue.parse(Array.isArray(parsed) ? { version: 1, tasks: parsed } : parsed)
+  } catch {
+    return { tasks: [] }
+  }
+}
+
+function renderDeliverySpineContext(packet: TaskContextPacket): string {
+  const lines: string[] = ['## Delivery Spine Context']
+  lines.push('')
+  if (packet.whyThisNow) {
+    lines.push('### Why this now')
+    lines.push(packet.whyThisNow)
+    lines.push('')
+  }
+  if (packet.persona) {
+    lines.push('### Delivery persona')
+    lines.push(`${packet.persona.label} (${packet.persona.id})`)
+    if (packet.persona.guardrails.length > 0) {
+      lines.push(...packet.persona.guardrails.map(guardrail => `- ${guardrail}`))
+    }
+    lines.push('')
+  }
+  const intent = packet.deliveryIntent
+  const intentLines = [
+    intent.driver ? `Driver: ${intent.driver.label}` : '',
+    intent.provider ? `Provider: ${intent.provider.label}` : '',
+    intent.containingPackage ? `Package: ${intent.containingPackage.title}` : '',
+    intent.supports.length > 0 ? `Supports: ${intent.supports.join(', ')}` : '',
+  ].filter(Boolean)
+  if (intentLines.length > 0) {
+    lines.push('### Delivery intent')
+    lines.push(...intentLines)
+    lines.push('')
+  }
+  const direct = packet.primitiveContext.direct.map(primitive => primitive.label)
+  const ancestors = packet.primitiveContext.ancestors.map(primitive => primitive.label)
+  const blockers = packet.primitiveContext.blockers.map(primitive => primitive.label)
+  if (direct.length > 0 || ancestors.length > 0 || blockers.length > 0) {
+    lines.push('### Primitive context')
+    if (direct.length > 0) lines.push(`Uses: ${direct.join(', ')}`)
+    if (ancestors.length > 0) lines.push(`Primitive ancestors: ${ancestors.join(' -> ')}`)
+    if (blockers.length > 0) lines.push(`Primitive blockers: ${blockers.join(', ')}`)
+    for (const invariant of packet.primitiveContext.invariants.slice(0, 12)) {
+      lines.push(`- ${invariant.primitiveLabel}: ${invariant.invariant}`)
+    }
+    lines.push('')
+  }
+  const proof = packet.proofContext
+  if (proof.proofKind || proof.requiredProof.length > 0 || proof.provesPrimitives.length > 0) {
+    lines.push('### Proof')
+    if (proof.proofKind) lines.push(`Proof kind: ${proof.proofKind}`)
+    if (proof.provesPrimitives.length > 0) {
+      lines.push(`This task proves: ${proof.provesPrimitives.map(primitive => primitive.label).join(', ')}`)
+    }
+    for (const obligation of proof.requiredProof.slice(0, 8)) {
+      lines.push(`- ${obligation.primitiveLabel}: ${obligation.proof}`)
+    }
+    if (proof.existingEvidence.length > 0) lines.push(`Existing evidence: ${proof.existingEvidence.join(', ')}`)
+    lines.push('')
+  }
+  if (packet.correctionHooks.length > 0) {
+    lines.push('### Correction hooks')
+    lines.push('If the driver, provider, primitive, blocker, or proof expectation is wrong, record the correction instead of silently following the wrong context.')
+  }
+  return lines.join('\n').trim()
+}
+
+function structuralAgentRoleForTask(task: Task): StructuralAgentRole {
+  if (task.status === 'exploring') return 'spec'
+  if (task.status === 'review') return 'reviewer'
+  if (task.status === 'gate_check') return 'gate_checker'
+  return 'worker'
 }
 
 function parseProofPaths(value: unknown): ProofPathType[] {

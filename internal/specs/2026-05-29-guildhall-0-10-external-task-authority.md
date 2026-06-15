@@ -1,6 +1,21 @@
-# Guildhall 0.10.0 External Task Authority
+# Guildhall 0.11.0 External Task Authority
 
-**Status:** Proposed 0.10.0 target-feature spec
+**Status:** Deferred to 0.11.0
+
+**Deferral note, 2026-06-06:** This is no longer a 0.10 target. The first
+runtime slice listed below remains useful prior work, but full external task
+authority belongs in 0.11 after the 0.10 delivery spine and contract-governance
+model are the stable local truth layer.
+
+**First runtime slice status, 2026-06-02:**
+
+- [x] Add provider-neutral `ExternalIssueRef` identity and `ExternalTaskMirror`
+  records for local execution truth.
+- [x] Add inspectable stale/conflict sync state for changed provider fields and
+  stale proposed writes.
+- [x] Shape execution packets from external issue truth plus repo-local context.
+- [x] Record evidence-backed proposed writes and approval/rejection decisions
+  before any connector execution.
 
 Guildhall should be able to work inside a project whose real planning and
 status authority already lives somewhere else. Jira is the concrete fixture
@@ -27,7 +42,7 @@ often already have:
 
 If Guildhall imports that work as ordinary local tasks without preserving the
 external authority boundary, it can create duplicate planning systems, stale
-status, noisy context, and unsafe automation. The 0.10.0 goal is to make
+status, noisy context, and unsafe automation. The 0.11.0 goal is to make
 Guildhall a trustworthy local execution mirror for externally-owned work:
 strong enough to run, prove, remember, and hand off work locally, but humble
 about what it does not own.
@@ -530,7 +545,7 @@ as superseded, or ask owner.
 - What minimum connector freshness is required before Guildhall may resolve a
   review thread or update external status?
 - How much of this should be available through MCP for outside agents in the
-  same 0.10.0 milestone as the agent memory bridge?
+  same 0.11.0 milestone as the agent memory bridge?
 
 ## Risks
 

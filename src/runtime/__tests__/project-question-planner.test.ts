@@ -69,7 +69,7 @@ describe('project question planner', () => {
     expect(plan.question.why).toContain('changes which backlog items Guildhall should shape first')
   })
 
-  it('does not ask when existing answers already resolve the useful fork', () => {
+  it('keeps asking the next planned root question when one fork is resolved but other intake questions remain', () => {
     const evidence = buildProjectQuestionEvidence({
       ...narrativeHarnessInput,
       currentAnswers: [{
@@ -84,9 +84,16 @@ describe('project question planner', () => {
       askedCandidateIds: ['project-direction-priority'],
     })
 
-    expect(plan).toEqual({
-      kind: 'complete',
-      reason: 'Current project evidence and answers are enough for Guildhall to shape near-term work.',
+    expect(plan.kind).toBe('ask')
+    if (plan.kind !== 'ask') throw new Error('expected a question')
+    expect(plan.question).toMatchObject({
+      id: 'visual-direction-mode',
+      prompt: 'Should Narrative Harness feel more like a calm writing desk, a professional editorial tool, or an analytical story-debugging cockpit?',
+      choices: [
+        'Calm writing desk',
+        'Professional editorial tool',
+        'Analytical story-debugging cockpit',
+      ],
     })
   })
 

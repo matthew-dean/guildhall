@@ -194,6 +194,7 @@ export function createCoordinatorAgent(
     noProgressTurnNudge: COORDINATOR_NO_PROGRESS_TURN_NUDGE,
     noProgressTurnThreshold: 2,
     noProgressTurnNudgeLimit: 2,
+    noProgressReadOnlyGraceAfterNudge: 1,
     tools: [
       readFileTool,
       readTasksTool,

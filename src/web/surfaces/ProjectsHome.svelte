@@ -1,7 +1,15 @@
 <script lang="ts">
   import { onEvent } from '../lib/events.js'
   import { nav } from '../lib/nav.svelte.js'
-  import { Activity, AlertTriangle, CheckCircle2, Cpu, FileClock, FolderPlus, Folders, Inbox, PlayCircle } from 'lucide-svelte'
+  import Activity from 'lucide-svelte/icons/activity'
+  import AlertTriangle from 'lucide-svelte/icons/triangle-alert'
+  import CheckCircle2 from 'lucide-svelte/icons/check-circle-2'
+  import Cpu from 'lucide-svelte/icons/cpu'
+  import FileClock from 'lucide-svelte/icons/file-clock'
+  import FolderPlus from 'lucide-svelte/icons/folder-plus'
+  import Folders from 'lucide-svelte/icons/folders'
+  import Inbox from 'lucide-svelte/icons/inbox'
+  import PlayCircle from 'lucide-svelte/icons/circle-play'
   import ActionBar from '../lib/ActionBar.svelte'
   import Button from '../lib/Button.svelte'
   import Chip from '../lib/Chip.svelte'
@@ -9,15 +17,17 @@
   import ProjectCard from '../lib/ProjectCard.svelte'
   import SideDrawer from '../lib/SideDrawer.svelte'
   import Tooltip from '../lib/Tooltip.svelte'
+  import UtilityPanel from '../lib/UtilityPanel.svelte'
   import WorkMixChart from '../lib/WorkMixChart.svelte'
   import { avatarToneForRole } from '../lib/avatar-palette.js'
-  import { summarizeProjects, type ProjectCardSummary } from '../lib/project-summary.js'
+  import { createProjectSummaryCache, mergeServiceProjectSummaries, type ProjectCardSummary } from '../lib/project-summary.js'
   import { projectHref } from '../lib/project-routes.js'
-  import { setCachedService } from '../lib/service-cache.js'
+  import { getCachedService, setCachedService } from '../lib/service-cache.js'
   import type { ServiceDetail } from '../lib/types.js'
 
   let service = $state<ServiceDetail | null>(null)
   let loading = $state(true)
+  let statusHydrating = $state(false)
   let error = $state<string | null>(null)
   let busyId = $state<string | null>(null)
   let selectedProjectId = $state<string | null>(null)
@@ -27,10 +37,10 @@
   let refreshInFlight = false
   let refreshQueued = false
   let lastRefreshAt = 0
-  let lastServiceSignature: string | null = null
 
   const SERVICE_REFRESH_MIN_INTERVAL_MS = 1500
   const SERVICE_REFRESH_POLL_MS = 30000
+  const projectSummaryCache = createProjectSummaryCache()
 
   function isMeaningfulProjectListEvent(type: string): boolean {
     return (
@@ -45,28 +55,9 @@
 
   function requestErrorMessage(err: unknown): string {
     if (err instanceof TypeError && /fetch/i.test(err.message)) {
-      return 'Guildhall service did not answer that request. The service may have restarted; this will clear on the next successful refresh.'
+      return 'The local service did not answer that request. It may have restarted; this will clear on the next successful refresh.'
     }
     return err instanceof Error ? err.message : String(err)
-  }
-
-  function servicePayloadSignature(payload: ServiceDetail): string {
-    return JSON.stringify({
-      defaultProviderStatus: payload.defaultProviderStatus,
-      projects: payload.projects.map(project => ({
-        id: project.id,
-        path: project.path,
-        name: project.name,
-        summary: project.summary,
-        taskCounts: project.taskCounts,
-        highlights: project.highlights,
-        run: project.run,
-        startReadiness: project.startReadiness,
-        providerStatus: project.providerStatus,
-        gitStory: project.gitStory,
-        projectCheckIn: project.projectCheckIn,
-      })),
-    })
   }
 
   function pageIsHidden(): boolean {
@@ -84,11 +75,10 @@
     try {
       const response = await fetch('/api/service', { cache: 'no-store' })
       const payload = (await response.json()) as ServiceDetail
-      const signature = servicePayloadSignature(payload)
-      if (signature !== lastServiceSignature || service == null) {
-        service = payload
-        setCachedService(payload)
-        lastServiceSignature = signature
+      const merged = mergeServiceProjectSummaries(service, payload)
+      if (merged !== service) {
+        service = merged
+        setCachedService(merged)
       }
       error = null
       lastRefreshAt = Date.now()
@@ -102,6 +92,38 @@
         void refresh(true)
       }
     }
+  }
+
+  async function loadProjectShell(): Promise<boolean> {
+    try {
+      const response = await fetch('/api/service/projects', { cache: 'no-store' })
+      const payload = (await response.json()) as ServiceDetail
+      const merged = mergeServiceProjectSummaries(service, payload)
+      if (merged !== service) {
+        service = merged
+      }
+      error = null
+      loading = false
+      return true
+    } catch (err) {
+      error = requestErrorMessage(err)
+      loading = false
+      return false
+    }
+  }
+
+  async function initialLoad(): Promise<void> {
+    const cached = getCachedService()
+    if (cached) {
+      service = cached
+      loading = false
+      void refresh(true)
+      return
+    }
+    statusHydrating = true
+    await loadProjectShell()
+    await refresh(true)
+    statusHydrating = false
   }
 
   function scheduleRefresh(): void {
@@ -129,7 +151,7 @@
       const response = await fetch(`/api/project/start?projectId=${encodeURIComponent(projectId)}`, { method: 'POST' })
       if (!response.ok) {
         const payload = await response.json().catch(() => ({}))
-        throw new Error(payload?.error ?? `Unable to start project (${response.status})`)
+        throw new Error(payload?.error ?? `Unable to resume project (${response.status})`)
       }
       await refresh()
     } catch (err) {
@@ -151,7 +173,7 @@
       const response = await fetch(`/api/project/stop?projectId=${encodeURIComponent(projectId)}`, { method: 'POST' })
       if (!response.ok) {
         const payload = await response.json().catch(() => ({}))
-        throw new Error(payload?.error ?? `Unable to stop project (${response.status})`)
+        throw new Error(payload?.error ?? `Unable to pause project (${response.status})`)
       }
       await refresh()
     } catch (err) {
@@ -184,7 +206,7 @@
   }
 
   $effect(() => {
-    void refresh()
+    void initialLoad()
   })
 
   $effect(() => {
@@ -221,7 +243,7 @@
     return () => document.removeEventListener('visibilitychange', onVisibilityChange)
   })
 
-  const cards = $derived(summarizeProjects(service))
+  const cards = $derived(projectSummaryCache.summarize(service))
   const overview = $derived({
     total: cards.length,
     running: cards.filter(card => card.canStop || optimisticRuns[card.id]).length,
@@ -233,8 +255,8 @@
     shelved: cards.reduce((sum, card) => sum + card.counts.shelved, 0),
   })
   const readyTaskCount = $derived(Math.max(0, overview.taskTotal - overview.active - overview.blocked - overview.drafts - overview.done - overview.shelved))
-  const needsYouCount = $derived(cards.filter(card => card.counts.blocked > 0 || card.counts.draftReview > 0 || card.projectCheckIn?.needed || card.provider?.tone === 'warn').length)
-  const firstNeedsYouProject = $derived(cards.find(card => card.counts.blocked > 0 || card.counts.draftReview > 0 || card.projectCheckIn?.needed || card.provider?.tone === 'warn') ?? null)
+  const needsYouCount = $derived(cards.filter(card => card.needsAttention).length)
+  const firstNeedsYouProject = $derived(cards.find(card => card.needsAttention) ?? null)
   const selectedProject = $derived(cards.find(card => card.id === selectedProjectId) ?? null)
   const dashboardTotal = $derived(Math.max(1, overview.taskTotal))
   const defaultProviderStatus = $derived(service?.defaultProviderStatus ?? null)
@@ -245,6 +267,7 @@
     defaultProviderWarning?.message ??
       'Open model settings.',
   )
+  const showingPartialProjectStatus = $derived(statusHydrating || cards.some(card => card.statusLoading))
 
   function countLabel(count: number, singular: string, plural = `${singular}s`): string {
     return `${count} ${count === 1 ? singular : plural}`
@@ -332,7 +355,7 @@
           <span class="action-count"><span class="count-glyph">{needsYouCount > 99 ? '99+' : `${needsYouCount} project${needsYouCount === 1 ? '' : 's'}`}</span></span>
         {/if}
       </Button>
-      <Button variant="secondary" disabled={busyId === '__attach__'} title="Attach another local project to Guildhall" onclick={attachProject}>
+      <Button variant="secondary" disabled={busyId === '__attach__'} title="Attach another local project" onclick={attachProject}>
         <FolderPlus size={15} />
         {busyId === '__attach__' ? 'Attaching...' : 'Attach project'}
       </Button>
@@ -351,9 +374,12 @@
   {:else if cards.length === 0}
     <div class="empty">
       <h2>No projects yet</h2>
-      <p>Register or attach a project to start using Guildhall as a local service over your work.</p>
+      <p>Register or attach a project to start using the local service over your work.</p>
     </div>
   {:else}
+    {#if showingPartialProjectStatus}
+      <p class="loading-inline" role="status">Loading project status...</p>
+    {/if}
     <section class="floor" aria-label="Guild hall project overview">
       <div class="floor-head">
         <p class="floor-kicker">Guild hall</p>
@@ -386,14 +412,14 @@
             <strong>{overview.running}</strong>
           </span>
         </Tooltip>
-        <Tooltip text={`${countLabel(overview.active, 'active task')}: tasks currently queued or in progress across all projects.`}>
-          <span class="floor-metric tone-active" aria-label={countLabel(overview.active, 'active task')}>
+        <Tooltip text={`${countLabel(overview.active, 'active work item')}: work currently queued or in progress across all projects.`}>
+          <span class="floor-metric tone-active" aria-label={countLabel(overview.active, 'active work item')}>
             <Activity size={16} />
             <strong>{overview.active}</strong>
           </span>
         </Tooltip>
-        <Tooltip text={`${countLabel(overview.blocked, 'blocked task')}: work that needs triage, recovery, or a decision.`}>
-          <span class="floor-metric tone-warn" aria-label={countLabel(overview.blocked, 'blocked task')}>
+        <Tooltip text={`${countLabel(overview.blocked, 'blocked work item')}: work that needs triage, recovery, or a decision.`}>
+          <span class="floor-metric tone-warn" aria-label={countLabel(overview.blocked, 'blocked work item')}>
             <AlertTriangle size={16} />
             <strong>{overview.blocked}</strong>
           </span>
@@ -404,8 +430,8 @@
             <strong>{overview.drafts}</strong>
           </span>
         </Tooltip>
-        <Tooltip text={`${countLabel(overview.done, 'task done', 'tasks done')}: completed task records across all projects.`}>
-          <span class="floor-metric tone-done" aria-label={countLabel(overview.done, 'task done', 'tasks done')}>
+        <Tooltip text={`${countLabel(overview.done, 'work item done', 'work items done')}: completed work across all projects.`}>
+          <span class="floor-metric tone-done" aria-label={countLabel(overview.done, 'work item done', 'work items done')}>
             <CheckCircle2 size={16} />
             <strong>{overview.done}</strong>
           </span>
@@ -414,13 +440,13 @@
     </section>
 
     <section class="dashboard" aria-label="Projects dashboard">
-      <div class="dashboard-panel dashboard-panel-wide">
+      <UtilityPanel className="dashboard-panel dashboard-panel-wide" tone="accent">
         <div class="panel-head">
           <div>
             <p class="panel-kicker">Work mix</p>
-            <h2>{countLabel(overview.taskTotal, 'task')}</h2>
+            <h2>{countLabel(overview.taskTotal, 'work item')}</h2>
           </div>
-          <span class="panel-value">{countLabel(readyTaskCount, 'ready task')}</span>
+          <span class="panel-value">{countLabel(readyTaskCount, 'ready work item')}</span>
         </div>
         <WorkMixChart
           ariaLabel={`Work mix across projects: ${overview.active} active, ${readyTaskCount} ready, ${needsYouCount} projects need attention, ${overview.done} done.`}
@@ -430,16 +456,16 @@
               label: 'active',
               count: overview.active,
               tone: 'active',
-              ariaLabel: `${countLabel(overview.active, 'active task')}: active or in-progress work.`,
-              tooltip: `${countLabel(overview.active, 'active task')}: active or in-progress work.`,
+              ariaLabel: `${countLabel(overview.active, 'active work item')}: active or in-progress work.`,
+              tooltip: `${countLabel(overview.active, 'active work item')}: active or in-progress work.`,
             },
             {
               key: 'ready',
               label: 'ready',
               count: readyTaskCount,
               tone: 'ready',
-              ariaLabel: `${countLabel(readyTaskCount, 'ready task')}: work that can be picked up without another brief review.`,
-              tooltip: `${countLabel(readyTaskCount, 'ready task')}: work that can be picked up without another brief review.`,
+              ariaLabel: `${countLabel(readyTaskCount, 'ready work item')}: work that can be picked up without another brief review.`,
+              tooltip: `${countLabel(readyTaskCount, 'ready work item')}: work that can be picked up without another brief review.`,
             },
             {
               key: 'attention',
@@ -454,14 +480,14 @@
               label: 'done',
               count: overview.done,
               tone: 'done',
-              ariaLabel: `${countLabel(overview.done, 'done task', 'done tasks')}: completed work.`,
-              tooltip: `${countLabel(overview.done, 'done task', 'done tasks')}: completed work.`,
+              ariaLabel: `${countLabel(overview.done, 'done work item')}: completed work.`,
+              tooltip: `${countLabel(overview.done, 'done work item')}: completed work.`,
             },
           ]}
-          emptyLabel="No tasks yet"
+          emptyLabel="No work items yet"
         />
-      </div>
-      <div class="dashboard-panel">
+      </UtilityPanel>
+      <UtilityPanel className="dashboard-panel" tone={needsYouCount === 0 ? 'neutral' : 'warn'}>
         <div class="panel-head">
           <div>
             <p class="panel-kicker">Attention</p>
@@ -474,8 +500,8 @@
             ? 'No project needs your decision right now.'
             : `${firstNeedsYouProject?.name ?? 'A project'} has the first waiting item.`}
         </p>
-      </div>
-      <div class="dashboard-panel">
+      </UtilityPanel>
+      <UtilityPanel className="dashboard-panel" tone={overview.running > 0 ? 'ok' : 'neutral'}>
         <div class="panel-head">
           <div>
             <p class="panel-kicker">Running now</p>
@@ -490,7 +516,7 @@
             </Tooltip>
           {/each}
         </div>
-      </div>
+      </UtilityPanel>
     </section>
 
     <div class="projects-area">
@@ -644,8 +670,8 @@
     text-overflow: ellipsis;
     white-space: nowrap;
     color: var(--text);
-    font-weight: 800;
-    font-size: var(--fs-1);
+    font-weight: var(--gh-type-weight-strong);
+    font-size: var(--gh-type-size-meta);
   }
   .action-count {
     display: inline-flex;
@@ -658,26 +684,26 @@
     border-radius: 999px;
     background: color-mix(in srgb, var(--bg-base) 24%, transparent);
     color: currentColor;
-    font-size: var(--fs-0);
-    font-weight: 800;
+    font-size: var(--gh-type-size-caption);
+    font-weight: var(--gh-type-weight-strong);
     font-variant-numeric: tabular-nums;
-    line-height: 1;
+    line-height: var(--gh-type-line-height-control);
   }
   .count-glyph {
     display: block;
-    line-height: 1;
+    line-height: var(--gh-type-line-height-control);
     transform: translateY(0.06em);
   }
   h1 {
     margin: 0;
-    font-size: clamp(1.25rem, 1.8vw, 1.65rem);
-    line-height: var(--lh-tight);
+    font-size: var(--gh-type-size-page-title);
+    line-height: var(--gh-type-line-height-tight);
   }
   .lede {
     margin: var(--s-1) 0 0;
     max-width: 44rem;
     color: var(--text-muted);
-    font-size: var(--fs-0);
+    font-size: var(--gh-type-size-caption);
   }
   .notice {
     border: 1px solid var(--border);
@@ -707,6 +733,11 @@
     margin-top: 0;
     color: var(--text);
   }
+  .loading-inline {
+    margin: 0;
+    color: var(--text-muted);
+    font-size: var(--gh-type-size-meta);
+  }
   .floor {
     display: grid;
     grid-template-columns: auto auto minmax(0, 1fr);
@@ -731,8 +762,8 @@
   .floor-kicker {
     margin: 0;
     color: var(--text-muted);
-    font-size: var(--fs-0);
-    font-weight: 700;
+    font-size: var(--gh-type-size-caption);
+    font-weight: var(--gh-type-weight-strong);
   }
   .floor-head .floor-kicker {
     margin-bottom: 0;
@@ -741,8 +772,8 @@
     display: inline-flex;
     gap: var(--s-1);
     align-items: center;
-    font-size: var(--fs-2);
-    line-height: var(--lh-tight);
+    font-size: var(--gh-type-size-body);
+    line-height: var(--gh-type-line-height-tight);
   }
   .floor-head strong :global(svg) {
     color: var(--accent-2);
@@ -776,8 +807,8 @@
     border-radius: 999px;
     background: color-mix(in srgb, var(--avatar-color) 20%, transparent);
     color: color-mix(in srgb, var(--avatar-color) 84%, white);
-    font-size: var(--fs-0);
-    font-weight: 800;
+    font-size: var(--gh-type-size-caption);
+    font-weight: var(--gh-type-weight-strong);
   }
   .guild-member-active {
     border-color: color-mix(in srgb, var(--avatar-color) 42%, var(--border));
@@ -829,14 +860,14 @@
       linear-gradient(180deg, color-mix(in srgb, white 7%, transparent), transparent 52%),
       color-mix(in srgb, var(--glass-bg-strong) 86%, transparent);
     color: var(--text-muted);
-    font-size: var(--fs-0);
-    font-weight: 750;
-    line-height: 1.1;
+    font-size: var(--gh-type-size-caption);
+    font-weight: var(--gh-type-weight-strong);
+    line-height: var(--gh-type-line-height-tight);
   }
   .floor-metric strong {
     color: currentColor;
-    font-size: var(--fs-1);
-    line-height: 1;
+    font-size: var(--gh-type-size-meta);
+    line-height: var(--gh-type-line-height-control);
   }
   .floor-metric.tone-running,
   .floor-metric.tone-active {
@@ -864,14 +895,6 @@
     display: grid;
     gap: var(--s-2);
     align-content: start;
-    padding: var(--s-3);
-    border: 1px solid var(--glass-border);
-    border-radius: var(--r-2);
-    background:
-      radial-gradient(circle at 84% 18%, color-mix(in srgb, var(--accent) 10%, transparent), transparent 30%),
-      linear-gradient(180deg, color-mix(in srgb, white 4%, transparent), color-mix(in srgb, white 1%, transparent)),
-      var(--glass-bg);
-    box-shadow: var(--glass-etch);
   }
   .panel-head {
     min-width: 0;
@@ -887,20 +910,20 @@
   .panel-kicker {
     margin: 0 0 2px;
     color: var(--text-muted);
-    font-size: var(--fs-0);
-    font-weight: 800;
+    font-size: var(--gh-type-size-caption);
+    font-weight: var(--gh-type-weight-strong);
     text-transform: uppercase;
   }
   .panel-head h2 {
     margin: 0;
-    font-size: var(--fs-4);
-    line-height: var(--lh-tight);
+    font-size: var(--gh-type-size-section-title);
+    line-height: var(--gh-type-line-height-tight);
   }
   .panel-value,
   .panel-copy {
     color: var(--text-muted);
-    font-size: var(--fs-1);
-    line-height: var(--lh-body);
+    font-size: var(--gh-type-size-meta);
+    line-height: var(--gh-type-line-height-body);
   }
   .panel-copy {
     margin: 0;
@@ -909,7 +932,7 @@
     display: grid;
     gap: var(--s-4);
     color: var(--text-muted);
-    line-height: var(--lh-body);
+    line-height: var(--gh-type-line-height-body);
   }
   .project-drawer p {
     margin: 0;
@@ -920,7 +943,7 @@
   }
   .drawer-path {
     font-family: var(--font-mono);
-    font-size: var(--fs-1);
+    font-size: var(--gh-type-size-meta);
     color: var(--text-soft);
     overflow-wrap: anywhere;
   }
@@ -933,8 +956,8 @@
   }
   .drawer-blurb {
     color: var(--text-readable);
-    font-size: var(--fs-2);
-    line-height: var(--lh-body);
+    font-size: var(--gh-type-size-body);
+    line-height: var(--gh-type-line-height-body);
   }
   .drawer-section {
     display: grid;
@@ -945,8 +968,8 @@
   .drawer-section h3 {
     margin: 0;
     color: var(--text-muted);
-    font-size: var(--fs-0);
-    font-weight: 800;
+    font-size: var(--gh-type-size-caption);
+    font-weight: var(--gh-type-weight-strong);
     text-transform: uppercase;
   }
   .drawer-section strong {
@@ -974,14 +997,14 @@
   }
   .drawer-work-label {
     color: var(--text-muted);
-    font-size: var(--fs-0);
-    font-weight: 800;
+    font-size: var(--gh-type-size-caption);
+    font-weight: var(--gh-type-weight-strong);
     text-transform: uppercase;
   }
   .drawer-work-card strong {
     color: var(--text-readable);
-    font-size: var(--fs-2);
-    line-height: var(--lh-body);
+    font-size: var(--gh-type-size-body);
+    line-height: var(--gh-type-line-height-body);
   }
   .drawer-count {
     display: inline-flex;
@@ -989,8 +1012,8 @@
     gap: 0.35rem;
     padding: 0.2rem 0.48rem;
     border-radius: 999px;
-    font-size: var(--fs-0);
-    font-weight: 700;
+    font-size: var(--gh-type-size-caption);
+    font-weight: var(--gh-type-weight-strong);
     background: color-mix(in srgb, var(--glass-bg-strong) 82%, transparent);
     border: 1px solid var(--glass-border);
     color: var(--text-muted);
@@ -1053,13 +1076,13 @@
     align-items: start;
   }
   .grid {
-    display: flex;
-    flex-wrap: wrap;
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(min(100%, 24rem), 1fr));
     gap: var(--s-2);
     align-items: stretch;
   }
   .grid :global(section.project-card) {
-    flex: 1 1 24rem;
+    width: 100%;
   }
   @media (max-width: 720px) {
     .hero {
@@ -1071,15 +1094,8 @@
       width: 100%;
       justify-content: center;
     }
-    .grid {
-      flex-direction: column;
-    }
     .projects-area {
       grid-template-columns: 1fr;
-    }
-    .grid :global(section.project-card) {
-      width: 100%;
-      flex-basis: auto;
     }
     .floor {
       grid-template-columns: 1fr;

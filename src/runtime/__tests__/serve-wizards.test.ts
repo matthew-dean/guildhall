@@ -11,7 +11,7 @@ import { existsSync, readFileSync } from 'node:fs'
 import path from 'node:path'
 import os from 'node:os'
 import { bootstrapWorkspace } from '@guildhall/config'
-import { getProjectStateDir } from '@guildhall/sessions'
+import { getProjectStateDir, getProjectSystemStatePath } from '@guildhall/sessions'
 import { buildServeApp } from '../serve.js'
 
 let tmpDir: string
@@ -35,6 +35,20 @@ function projectUrl(route: string): string {
   const url = new URL(`http://localhost${route}`)
   url.searchParams.set('projectId', projectId)
   return url.toString()
+}
+
+async function applyStorageBoundaryMigration(app: ReturnType<typeof buildServeApp>['app']): Promise<void> {
+  const res = await app.fetch(
+    new Request(projectUrl('/api/project/migrations/apply'), {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        includePrompt: true,
+        migrationId: '0.10.0/project-state-storage-boundary',
+      }),
+    }),
+  )
+  expect(res.status).toBe(200)
 }
 
 describe('GET /api/project/wizards', () => {
@@ -63,7 +77,7 @@ describe('GET /api/project/wizards', () => {
 })
 
 describe('POST /api/project/wizards/:id/skip', () => {
-  it('marks a skippable step as skipped and writes .guildhall/wizards.yaml', async () => {
+  it('marks a skippable step as skipped without creating project-local state', async () => {
     const { app } = buildServeApp({ projectPath: tmpDir })
     const res = await app.fetch(
       new Request(projectUrl('/api/project/wizards/onboard/skip'), {
@@ -73,7 +87,8 @@ describe('POST /api/project/wizards/:id/skip', () => {
       }),
     )
     expect(res.status).toBe(200)
-    expect(existsSync(path.join(getProjectStateDir(tmpDir), 'wizards.yaml'))).toBe(true)
+    expect(existsSync(getProjectSystemStatePath(tmpDir, 'wizards.yaml'))).toBe(true)
+    expect(existsSync(path.join(getProjectStateDir(tmpDir), 'wizards.yaml'))).toBe(false)
 
     // Next GET reflects the skip.
     const res2 = await app.fetch(new Request(projectUrl('/api/project/wizards')))
@@ -214,8 +229,9 @@ describe('GET /api/project/brief', () => {
 })
 
 describe('POST /api/project/brief', () => {
-  it('writes .guildhall/project-brief.md when content is substantive', async () => {
+  it('writes project brief to system-local state without creating repo .guildhall state', async () => {
     const { app } = buildServeApp({ projectPath: tmpDir })
+    await applyStorageBoundaryMigration(app)
     const res = await app.fetch(
       new Request(projectUrl('/api/project/brief'), {
         method: 'POST',
@@ -227,9 +243,10 @@ describe('POST /api/project/brief', () => {
       }),
     )
     expect(res.status).toBe(200)
-    const briefPath = path.join(getProjectStateDir(tmpDir), 'project-brief.md')
+    const briefPath = getProjectSystemStatePath(tmpDir, 'project-brief.md')
     expect(existsSync(briefPath)).toBe(true)
     expect(readFileSync(briefPath, 'utf8')).toMatch(/## Users/)
+    expect(existsSync(path.join(getProjectStateDir(tmpDir), 'project-brief.md'))).toBe(false)
 
     // Onboard direction step flips to done.
     const res2 = await app.fetch(new Request(projectUrl('/api/project/wizards')))

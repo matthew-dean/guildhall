@@ -69,9 +69,29 @@ describe('TaskCard', () => {
       coordinatorRunning: true,
     })
 
-    expect(screen.getByText('In progress')).toBeInTheDocument()
+    expect(screen.getByText('Working')).toBeInTheDocument()
     expect(screen.getByText('Next:')).toBeInTheDocument()
     expect(screen.getByText(/Replace the missing component import/)).toBeInTheDocument()
+  })
+
+  it('shows a blocked chip when ready work has unmet dependencies', () => {
+    render(TaskCard, {
+      task: task({
+        status: 'ready',
+        dependsOn: ['task-menu-primitive'],
+      }),
+      relatedTasks: [
+        task({
+          id: 'task-menu-primitive',
+          title: 'Menu primitive',
+          status: 'ready',
+        }),
+      ],
+      coordinatorRunning: true,
+    })
+
+    expect(screen.getByText('Blocked')).toBeInTheDocument()
+    expect(screen.queryByText('Ready')).not.toBeInTheDocument()
   })
 
   it('shows terminal outcomes and honors display overrides', async () => {
@@ -94,5 +114,25 @@ describe('TaskCard', () => {
 
     await userEvent.keyboard('{Tab}{Enter}')
     expect(path.value).toBe('/projects/looma-knit/task/task-link-editor')
+  })
+
+  it('shows delivery-step progress without replacing the task status', () => {
+    render(TaskCard, {
+      task: task({ status: 'ready' }),
+      workProgress: {
+        rollup: {
+          primaryState: 'blocked',
+          visibleChildCount: 0,
+          visibleChildDoneCount: 0,
+          internalStepCount: 1,
+          requiredStepCount: 1,
+          doneStepCount: 0,
+          blockedStepCount: 1,
+        },
+      },
+    })
+
+    expect(screen.getByText('Ready')).toBeInTheDocument()
+    expect(screen.getByText('1 delivery step blocked')).toBeInTheDocument()
   })
 })

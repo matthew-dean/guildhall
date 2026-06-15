@@ -46,12 +46,23 @@ export interface ProjectCardSummary {
   canOpen: boolean
   canStart: boolean
   canStop: boolean
+  needsAttention: boolean
   gitStory?: {
     state?: string
     label: string
     title: string
     blockerCount: number
   } | null
+  statusLoading: boolean
+}
+
+export interface ProjectSummaryCache {
+  summarize(service: ServiceDetail | null | undefined): ProjectCardSummary[]
+}
+
+interface CachedProjectCardSummary {
+  signature: string
+  summary: ProjectCardSummary
 }
 
 function emptyTaskActivity(): ProjectCardSummary['taskActivity'] {
@@ -80,11 +91,27 @@ function readinessStage(project: ServiceProjectSummary): string | null {
     case 'required_migration_pending': return 'Needs migration'
     case 'owner_input_required': return 'Needs you'
     case 'no_provider': return 'Needs provider'
+    case 'no_loaded_model': return 'Needs provider'
+    case 'model_unavailable': return 'Needs provider'
+    case 'provider_unavailable': return 'Needs provider'
     case 'invalid_lever_combo': return 'Settings blocked'
     case 'runtime_too_old': return 'Update Guildhall'
     case 'all_terminal': return 'Complete'
     default: return 'Blocked'
   }
+}
+
+function actionModelStage(project: ServiceProjectSummary): string | null {
+  const actionModel = project.actionModel
+  if (!actionModel) return null
+  if (actionModel.ownerInput?.active) return 'Needs you'
+  const code = actionModel.primaryAction?.code ?? project.startReadiness?.code
+  if (code === 'all_terminal') return 'Complete'
+  if (code === 'required_migration_pending') return 'Needs migration'
+  if (code === 'no_provider' || code === 'no_loaded_model' || code === 'model_unavailable' || code === 'provider_unavailable') {
+    return 'Needs provider'
+  }
+  return null
 }
 
 function readinessMaturity(project: ServiceProjectSummary): Pick<ProjectCardSummary, 'maturityLabel' | 'maturityDescription'> | null {
@@ -93,32 +120,34 @@ function readinessMaturity(project: ServiceProjectSummary): Pick<ProjectCardSumm
   if (readiness.code === 'required_migration_pending') {
     return {
       maturityLabel: 'Migrate',
-      maturityDescription: readiness.message ?? 'Run the required Guildhall migration before starting this project.',
+      maturityDescription: readiness.message ?? 'Run the required migration before starting this project.',
     }
   }
   if (readiness.code === 'owner_input_required') {
     return {
       maturityLabel: 'Needs you',
-      maturityDescription: readiness.message ?? 'Guildhall is waiting for a project decision before it can continue.',
+      maturityDescription: readiness.message ?? 'Waiting for a project decision before work can continue.',
     }
   }
   return {
     maturityLabel: readinessStage(project) ?? 'Blocked',
-    maturityDescription: readiness.message ?? 'Resolve this start blocker before Guildhall can move the project forward.',
+    maturityDescription: readiness.message ?? 'Resolve this start blocker before the project can move forward.',
   }
 }
 
 function stageLabel(project: ServiceProjectSummary, counts: ProjectCardSummary['counts']): string {
   const runStatus = project.run?.status ?? 'stopped'
   if (project.initializationNeeded) return 'Needs setup'
+  const actionStage = actionModelStage(project)
+  if (actionStage) return actionStage
   const readiness = readinessStage(project)
-  if (readiness && readiness !== 'Complete') return readiness
+  if (readiness) return readiness
   if (project.projectCheckIn?.needed) return project.projectCheckIn.label ?? 'Project questions'
   if (runStatus === 'error') return 'Needs attention'
   if (runStatus === 'stopping') return 'Stopping'
   if (runStatus === 'running') return 'Running'
   if (counts.blocked > 0) return 'Needs attention'
-  if (counts.draftReview > 0 && counts.active === 0) return 'Needs task briefs'
+  if (counts.draftReview > 0 && counts.active === 0) return 'Needs brief'
   if (counts.active > 0) return 'Paused'
   if (counts.total === 0) return 'Ready'
   if (counts.done > 0 && counts.active === 0 && counts.blocked === 0) return 'Stable'
@@ -136,6 +165,8 @@ function activityLabel(project: ServiceProjectSummary, counts: ProjectCardSummar
   }
   if (project.projectCheckIn?.needed) return `${project.projectCheckIn.title ?? 'Project check-in needed'}.`
   const running = (project.run?.status ?? 'stopped') === 'running'
+  const oneTaskRun = running && project.run?.mode === 'one_task'
+  if (oneTaskRun) return 'Advancing one task.'
   if (running && counts.active > 0) {
     return counts.active === 1
       ? 'Agents are working on 1 task.'
@@ -165,6 +196,11 @@ function activityLabel(project: ServiceProjectSummary, counts: ProjectCardSummar
 }
 
 function recentLabel(project: ServiceProjectSummary, counts: ProjectCardSummary['counts']): string | null {
+  if ((project.run?.status ?? 'stopped') === 'running' && project.run?.mode === 'one_task') {
+    return project.highlights?.activeTaskTitle
+      ? `Advancing one task: ${project.highlights.activeTaskTitle}`
+      : 'Advancing one task'
+  }
   if (project.highlights?.activeTaskTitle) return `Working on: ${project.highlights.activeTaskTitle}`
   if (project.highlights?.blockedTaskTitle) return `Blocked on: ${project.highlights.blockedTaskTitle}`
   if (project.highlights?.recentCompletedTaskTitle) return `Recently completed: ${project.highlights.recentCompletedTaskTitle}`
@@ -183,6 +219,13 @@ function completedLabel(project: ServiceProjectSummary, counts: ProjectCardSumma
 }
 
 function nextLabel(project: ServiceProjectSummary, counts: ProjectCardSummary['counts']): string | null {
+  const primary = project.actionModel?.primaryAction
+  if (primary) {
+    return primary.detail ?? primary.label
+  }
+  if (project.actionModel?.runControl?.startEnabled === false) {
+    return project.actionModel.runControl.disabledReason ?? project.actionModel.runControl.label
+  }
   if (project.startReadiness?.canStart === false) {
     if (project.startReadiness.code === 'required_migration_pending') return 'Run required migration'
     if (project.startReadiness.code === 'owner_input_required') return project.startReadiness.message ?? 'Answer project blocker'
@@ -209,37 +252,52 @@ function nextLabel(project: ServiceProjectSummary, counts: ProjectCardSummary['c
   return 'Run intake or add the first task'
 }
 
+function projectNeedsAttention(
+  project: ServiceProjectSummary,
+  counts: ProjectCardSummary['counts'],
+  projectCheckIn: ServiceProjectSummary['projectCheckIn'] | undefined,
+  provider: ProjectCardSummary['provider'] | null,
+): boolean {
+  const code = project.actionModel?.primaryAction?.code ?? project.startReadiness?.code
+  if (code === 'all_terminal') return false
+  if (project.actionModel?.ownerInput?.active) return true
+  if (project.actionModel?.primaryAction?.tone === 'danger' || project.actionModel?.primaryAction?.tone === 'warn') return true
+  if (project.actionModel?.runControl?.startEnabled === false && code !== 'all_terminal') return true
+  if (!project.actionModel && project.startReadiness?.canStart === false && code !== 'all_terminal') return true
+  return Boolean(counts.blocked > 0 || counts.draftReview > 0 || projectCheckIn?.needed || provider?.tone === 'warn')
+}
+
 function maturity(project: ServiceProjectSummary, counts: ProjectCardSummary['counts']): Pick<ProjectCardSummary, 'maturityLabel' | 'maturityDescription'> {
   const readiness = readinessMaturity(project)
   if (readiness) return readiness
   if (project.projectCheckIn?.needed) {
     return {
       maturityLabel: 'Check-in',
-      maturityDescription: project.projectCheckIn.detail ?? 'Answer the first project questions so Guildhall can use current project context.',
+      maturityDescription: project.projectCheckIn.detail ?? 'Answer the first project questions so current project context can be used.',
     }
   }
   if (project.initializationNeeded) {
     return {
       maturityLabel: 'Setup',
-      maturityDescription: 'Guildhall still needs the basic project setup contract before it can reason about work reliably.',
+      maturityDescription: 'The basic project setup contract is still missing.',
     }
   }
   if (counts.total === 0) {
     return {
       maturityLabel: 'Intake',
-      maturityDescription: 'Guildhall has the project registered, but does not yet have a meaningful task map.',
+      maturityDescription: 'The project is registered, but does not yet have a meaningful task map.',
     }
   }
   if (counts.draftReview > 0 && counts.done === 0 && counts.active === 0) {
     return {
       maturityLabel: 'Blueprint',
-      maturityDescription: 'Guildhall is still turning notes or imported work into reviewed task briefs.',
+      maturityDescription: 'Notes or imported work are still becoming reviewed task briefs.',
     }
   }
   if (counts.blocked > 0) {
     return {
       maturityLabel: 'Inspect',
-      maturityDescription: 'Some work needs triage before Guildhall can treat the project as flowing cleanly.',
+      maturityDescription: 'Some work needs triage before the project is flowing cleanly.',
     }
   }
   if (counts.active > 0) {
@@ -253,7 +311,7 @@ function maturity(project: ServiceProjectSummary, counts: ProjectCardSummary['co
   if (counts.done > 0 && counts.done >= counts.total - counts.shelved) {
     return {
       maturityLabel: 'Stable',
-      maturityDescription: 'As far as Guildhall can tell, the current task set is complete or intentionally shelved.',
+      maturityDescription: 'The current task set appears complete or intentionally shelved.',
     }
   }
   return {
@@ -281,7 +339,7 @@ function gitStoryTitle(state: string, reason: string | undefined): string {
     return 'This checkout has uncommitted work. Review the diff, then commit it or mark it local-only/deferred.'
   }
   if (text.includes('fatal: not a git repository') || text.includes('spawn git enoent')) {
-    return 'Guildhall could not inspect this checkout with git.'
+    return 'This checkout could not be inspected with git.'
   }
   return reason ?? 'Git story needs closure.'
 }
@@ -290,18 +348,23 @@ export function summarizeProjectCard(
   project: ServiceProjectSummary,
   defaultProviderStatus?: ProviderStatus | null,
 ): ProjectCardSummary {
+  const projectStatusLoading = Boolean(project.projectStatusLoading)
+  const visibleWorkCounts = project.workProgress?.counts
   const counts = {
-    total: project.taskCounts?.total ?? 0,
-    active: project.taskCounts?.active ?? 0,
+    total: visibleWorkCounts?.visibleTotal ?? project.taskCounts?.total ?? 0,
+    active: visibleWorkCounts?.visibleActive ?? project.taskCounts?.active ?? 0,
     draftReview: project.taskCounts?.draftReview ?? 0,
-    blocked: project.taskCounts?.blocked ?? 0,
-    done: project.taskCounts?.done ?? 0,
-    shelved: project.taskCounts?.shelved ?? 0,
+    blocked: visibleWorkCounts?.visibleBlocked ?? project.taskCounts?.blocked ?? 0,
+    done: visibleWorkCounts?.visibleDone ?? project.taskCounts?.done ?? 0,
+    shelved: visibleWorkCounts?.visibleShelved ?? project.taskCounts?.shelved ?? 0,
   }
   const running = project.run?.status === 'running'
   const initializationNeeded = Boolean(project.initializationNeeded)
   const maturityState = maturity(project, counts)
-  const startBlocked = project.startReadiness?.canStart === false
+  const runControl = project.actionModel?.runControl ?? null
+  const startBlocked = runControl
+    ? !running && runControl.startEnabled === false
+    : project.startReadiness?.canStart === false
   const projectCheckIn = startBlocked ? undefined : project.projectCheckIn
   const gitStory = project.gitStory &&
     project.gitStory.state &&
@@ -329,6 +392,36 @@ export function summarizeProjectCard(
         tone: providerWarning ? 'warn' as const : 'neutral' as const,
       }
     : null
+  const needsAttention = projectNeedsAttention(project, counts, projectCheckIn, provider)
+  if (projectStatusLoading) {
+    return {
+      id: project.id,
+      name: humanizeProjectName(project.name?.trim() || project.id),
+      path: formatUserPath(project.path),
+      statusLabel: 'Loading',
+      tone: project.run?.status === 'running' ? 'active' : 'idle',
+      stageLabel: 'Loading',
+      activityLabel: 'Loading project status...',
+      recentLabel: null,
+      completedLabel: null,
+      nextLabel: null,
+      maturityLabel: 'Loading',
+      maturityDescription: 'Project status is still loading.',
+      blurb: project.summary ?? null,
+      tags: project.tags ?? [],
+      counts,
+      taskActivity: project.taskActivity ?? emptyTaskActivity(),
+      ticker: buildProjectCardTicker(project),
+      actionLabel: initializationNeeded ? 'Open setup' : 'Open project',
+      runActionLabel: null,
+      canOpen: true,
+      canStart: false,
+      canStop: false,
+      needsAttention: false,
+      gitStory: null,
+      statusLoading: true,
+    }
+  }
   return {
     id: project.id,
     name: humanizeProjectName(project.name?.trim() || project.id),
@@ -364,22 +457,125 @@ export function summarizeProjectCard(
     runActionLabel: initializationNeeded
       ? null
       : running
-        ? 'Stop'
+        ? 'Pause'
         : startBlocked
           ? null
+        : runControl?.label && runControl.label !== 'Resume'
+          ? runControl.label
         : counts.active > 0
           ? 'Resume'
           : counts.total === 0
             ? 'Start intake'
             : null,
     canOpen: true,
-    canStart: !running &&
-      !initializationNeeded &&
-      !startBlocked &&
-      (counts.active > 0 || counts.total === 0) &&
-      !(counts.draftReview > 0 && counts.active === 0),
-    canStop: running,
+    canStart: runControl
+      ? !running && !initializationNeeded && runControl.startEnabled && runControl.label !== 'Pause'
+      : !running &&
+        !initializationNeeded &&
+        !startBlocked &&
+        (counts.active > 0 || counts.total === 0) &&
+        !(counts.draftReview > 0 && counts.active === 0),
+    canStop: running || (!initializationNeeded && !running && runControl?.startEnabled === true && runControl.label === 'Pause'),
+    needsAttention,
     gitStory,
+    statusLoading: false,
+  }
+}
+
+function projectSummarySignature(
+  project: ServiceProjectSummary,
+  defaultProviderStatus?: ProviderStatus | null,
+): string {
+  return JSON.stringify({
+    defaultProviderIdentity: providerIdentity(defaultProviderStatus),
+    id: project.id,
+    path: project.path,
+    name: project.name,
+    summary: project.summary,
+    tags: project.tags,
+    taskCounts: project.taskCounts,
+    workProgress: project.workProgress,
+    taskActivity: project.taskActivity,
+    highlights: project.highlights,
+    run: project.run,
+    initializationNeeded: project.initializationNeeded,
+    startReadiness: project.startReadiness,
+    actionModel: project.actionModel,
+    providerStatus: project.providerStatus,
+    gitStory: project.gitStory,
+    projectCheckIn: project.projectCheckIn,
+    projectStatusLoading: project.projectStatusLoading,
+  })
+}
+
+function serviceDefaultProviderSignature(service: ServiceDetail | null | undefined): string {
+  return JSON.stringify({
+    defaultProviderIdentity: providerIdentity(service?.defaultProviderStatus),
+    defaultProviderStatus: service?.defaultProviderStatus,
+  })
+}
+
+export function mergeServiceProjectSummaries(
+  previous: ServiceDetail | null | undefined,
+  incoming: ServiceDetail,
+): ServiceDetail {
+  if (!previous) return incoming
+  if (serviceDefaultProviderSignature(previous) !== serviceDefaultProviderSignature(incoming)) {
+    return incoming
+  }
+
+  const previousProjects = previous.projects ?? []
+  const incomingProjects = incoming.projects ?? []
+  const previousByProjectId = new Map(previousProjects.map(project => [project.id, project]))
+  let changed = previousProjects.length !== incomingProjects.length
+
+  const projects = incomingProjects.map((project, index) => {
+    const cached = previousByProjectId.get(project.id)
+    if (previousProjects[index]?.id !== project.id) {
+      changed = true
+    }
+    if (!cached) {
+      changed = true
+      return project
+    }
+    if (projectSummarySignature(cached, incoming.defaultProviderStatus) === projectSummarySignature(project, incoming.defaultProviderStatus)) {
+      return cached
+    }
+    changed = true
+    return project
+  })
+
+  if (!changed) return previous
+  return {
+    ...incoming,
+    projects,
+  }
+}
+
+export function createProjectSummaryCache(): ProjectSummaryCache {
+  let summariesByProjectId = new Map<string, CachedProjectCardSummary>()
+
+  return {
+    summarize(service: ServiceDetail | null | undefined): ProjectCardSummary[] {
+      const defaultProviderStatus = service?.defaultProviderStatus ?? null
+      const nextSummariesByProjectId = new Map<string, CachedProjectCardSummary>()
+      const summaries = (service?.projects ?? []).map((project) => {
+        const signature = projectSummarySignature(project, defaultProviderStatus)
+        const cached = summariesByProjectId.get(project.id)
+        if (cached?.signature === signature) {
+          nextSummariesByProjectId.set(project.id, cached)
+          return cached.summary
+        }
+        const next = {
+          signature,
+          summary: summarizeProjectCard(project, defaultProviderStatus),
+        }
+        nextSummariesByProjectId.set(project.id, next)
+        return next.summary
+      })
+      summariesByProjectId = nextSummariesByProjectId
+      return summaries
+    },
   }
 }
 

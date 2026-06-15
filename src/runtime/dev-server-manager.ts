@@ -1,3 +1,4 @@
+import { appendManagedTextFile, readManagedTextFile, readManagedTextFileSync, writeManagedTextFile } from '@guildhall/persistence'
 import fs from 'node:fs/promises'
 import path from 'node:path'
 import { execFile } from 'node:child_process'
@@ -76,6 +77,11 @@ export interface DevServerManagerOptions {
   now?: () => string
 }
 
+export type DevServerExecFile = (
+  file: string,
+  args: string[],
+) => Promise<{ stdout: string; stderr: string }>
+
 export class DevServerManager {
   readonly #runtimeSupervisor: DevServerManagerOptions['runtimeSupervisor']
   readonly #launcher: DevServerLauncher
@@ -85,7 +91,7 @@ export class DevServerManager {
 
   constructor(options: DevServerManagerOptions) {
     this.#runtimeSupervisor = options.runtimeSupervisor
-    this.#launcher = options.launcher ?? new PodmanDevServerLauncher()
+    this.#launcher = options.launcher ?? new ContainerDevServerLauncher()
     this.#isPortAvailable = options.isPortAvailable
     this.#fetch = options.fetch ?? defaultFetch
     this.#now = options.now ?? (() => new Date().toISOString())
@@ -239,7 +245,7 @@ export class DevServerManager {
 
 export async function readRuntimeDevServers(projectRoot: string): Promise<DevServerRecord[]> {
   try {
-    return JSON.parse(await fs.readFile(getProjectRuntimeDevServersPath(projectRoot), 'utf8')) as DevServerRecord[]
+    return JSON.parse(await readManagedTextFile(getProjectRuntimeDevServersPath(projectRoot), 'utf8')) as DevServerRecord[]
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code === 'ENOENT') return []
     throw error
@@ -252,7 +258,7 @@ export async function writeRuntimeDevServers(
 ): Promise<void> {
   const file = getProjectRuntimeDevServersPath(projectRoot)
   await fs.mkdir(path.dirname(file), { recursive: true })
-  await fs.writeFile(file, `${JSON.stringify(records, null, 2)}\n`, 'utf8')
+  await writeManagedTextFile(file, `${JSON.stringify(records, null, 2)}\n`, 'utf8')
 }
 
 export function redactLogs(logs: string[]): string[] {
@@ -263,14 +269,30 @@ export function redactLogs(logs: string[]): string[] {
   )
 }
 
-export class PodmanDevServerLauncher implements DevServerLauncher {
+export class ContainerDevServerLauncher implements DevServerLauncher {
+  readonly #execFile: DevServerExecFile
+
+  constructor(options: { execFile?: DevServerExecFile } = {}) {
+    this.#execFile = options.execFile ?? ((file, args) =>
+      execFileP(file, args).then(({ stdout, stderr }) => ({
+        stdout: String(stdout),
+        stderr: String(stderr),
+      })))
+  }
+
   async start(
     _projectRoot: string,
     runtime: ProjectRuntimeState,
-    request: StartDevServerRequest,
+    request: StartDevServerRequest & { hostPort: number },
   ): Promise<{ runtimeProcessId: string; logs?: string[] }> {
     if (!runtime.containerId) throw new Error('Project runtime is not running.')
-    const { stdout } = await execFileP('podman', [
+    const cli = runtime.backend === 'podman'
+      ? 'podman'
+      : runtime.backend === 'docker'
+        ? 'docker'
+        : null
+    if (!cli) throw new Error('Dev servers require Docker or Podman runtime mode.')
+    const { stdout } = await this.#execFile(cli, [
       'exec',
       '--detach',
       '--user',
@@ -289,11 +311,20 @@ export class PodmanDevServerLauncher implements DevServerLauncher {
     }
   }
 
-  async stop(_projectRoot: string, runtimeProcessId: string): Promise<void> {
-    await execFileP('podman', ['exec', runtimeProcessId, 'true']).catch(() => undefined)
-    await execFileP('podman', ['kill', runtimeProcessId]).catch(() => undefined)
+  async stop(projectRoot: string, runtimeProcessId: string): Promise<void> {
+    const runtime = await readProjectRuntimeState(projectRoot)
+    const cli = runtime.backend === 'podman'
+      ? 'podman'
+      : runtime.backend === 'docker'
+        ? 'docker'
+        : null
+    if (!cli) return
+    await this.#execFile(cli, ['exec', runtimeProcessId, 'true']).catch(() => undefined)
+    await this.#execFile(cli, ['kill', runtimeProcessId]).catch(() => undefined)
   }
 }
+
+export class PodmanDevServerLauncher extends ContainerDevServerLauncher {}
 
 function normalizeReadinessPath(value: string | undefined): string {
   if (!value || value.trim() === '') return '/'

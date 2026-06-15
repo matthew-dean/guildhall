@@ -397,6 +397,10 @@ describe('agent factories', () => {
     expect(prompt).toContain('Ask the owner only when the answer changes product intent')
     expect(prompt).toContain('recommend the strongest default')
     expect(prompt).toContain('Do not invent product requirements')
+    expect(prompt).toContain('structuredSpec')
+    expect(prompt).toContain('deterministic validator')
+    expect(prompt).toContain('matches what was actually asked for')
+    expect(prompt).toContain('deep intake')
   })
 
   it('createSpecAgent uses Corpus Map entries as the starting abstraction inventory', () => {
@@ -415,6 +419,17 @@ describe('agent factories', () => {
     expect(prompt).toContain('too narrow')
     expect(prompt).toContain('too generic')
     expect(prompt).toContain('generic shell with typed domain payloads')
+  })
+
+  it('createSpecAgent uses design-governance packets as project contract input', () => {
+    const a = createSpecAgent(llm)
+    const prompt = (a as unknown as { engine: { getSystemPrompt(): string } }).engine.getSystemPrompt()
+    expect(prompt).toContain('## Design Governance')
+    expect(prompt).toContain('project contract')
+    expect(prompt).toContain('contract delta')
+    expect(prompt).toContain('adjust the blueprint')
+    expect(prompt).toContain('semantic text hierarchy')
+    expect(prompt).toContain('token or variant budget')
   })
 
   it('createSpecAgent includes the pressure-test intake operating contract', () => {
@@ -499,6 +514,17 @@ describe('agent factories', () => {
     expect(prompt).toContain('right-sized')
   })
 
+  it('createWorkerAgent uses design-governance packets before local UI choices', async () => {
+    const a = createWorkerAgent(llm)
+    const prompt = (a as unknown as { engine: { getSystemPrompt(): string } }).engine.getSystemPrompt()
+    expect(prompt).toContain('## Design Governance')
+    expect(prompt).toContain('project contract')
+    expect(prompt).toContain('must adjust the implementation')
+    expect(prompt).toContain('contract delta')
+    expect(prompt).toContain('semantic text hierarchy')
+    expect(prompt).toContain('token or variant budget')
+  })
+
   it('createWorkerAgent treats shell verification as durable progress', async () => {
     const a = createWorkerAgent(llm)
     const engine = (a as unknown as { engine: { noProgressToolNames?: readonly string[] } }).engine
@@ -579,6 +605,26 @@ describe('agent factories', () => {
     expect(prompt).toContain('too generic')
     expect(prompt).toContain('schema, API route, MCP resource')
     expect(prompt).toContain('generic shell with typed domain payloads')
+  })
+
+  it('createReviewerAgent treats governance packets as load-bearing review contracts', () => {
+    const a = createReviewerAgent(llm)
+    const prompt = (a as unknown as { engine: { getSystemPrompt(): string } }).engine.getSystemPrompt()
+    expect(prompt).toContain('## Design Governance')
+    expect(prompt).toContain('**Contract / governance fit:**')
+    expect(prompt).toContain('require revision')
+    expect(prompt).toContain('contract delta')
+    expect(prompt).toContain('semantic text hierarchy')
+    expect(prompt).toContain('token or variant budget')
+  })
+
+  it('createReviewerAgent requires semantic request-fit review for specs', () => {
+    const a = createReviewerAgent(llm)
+    const prompt = (a as unknown as { engine: { getSystemPrompt(): string } }).engine.getSystemPrompt()
+    expect(prompt).toContain('semantic intake fit')
+    expect(prompt).toContain('match what was actually asked for')
+    expect(prompt).toContain('real user cases revealed')
+    expect(prompt).toContain('**Request fit:** yes / no')
   })
 
   it('createGateCheckerAgent', () => {

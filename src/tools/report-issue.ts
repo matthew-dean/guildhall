@@ -1,3 +1,4 @@
+import { appendManagedTextFile, readManagedTextFile, readManagedTextFileSync, writeManagedTextFile } from '@guildhall/persistence'
 import { defineTool } from '@guildhall/engine'
 import { z } from 'zod'
 import fs from 'node:fs/promises'
@@ -6,12 +7,19 @@ import {
   AgentIssue,
   AgentIssueCode,
   AgentIssueSeverity,
+  type TaskEvidenceEvent,
   ProgressEntry,
   TaskQueue,
   type Task,
 } from '@guildhall/core'
 import { logProgress } from './memory-tools.js'
-import { atomicWriteText, appendTaskEvidence, inferProjectRootFromMemoryDir } from '@guildhall/sessions'
+import {
+  appendTaskEvidence,
+  inferProjectRootFromMemoryDir,
+  readTaskEvidence,
+  upsertTaskRuntimeState,
+} from '@guildhall/sessions'
+import { writeProjectTaskQueue } from '@guildhall/runtime/project-state-boundary'
 
 // ---------------------------------------------------------------------------
 // FR-31 Agent-issue channel
@@ -21,9 +29,10 @@ import { atomicWriteText, appendTaskEvidence, inferProjectRootFromMemoryDir } fr
 // the agent emits *while continuing to work*. The coordinator's next tick
 // (FR-32) reads the open-issue list and decides whether to intervene.
 //
-// Issues live on `Task.agentIssues[]`. A fresh issue has `broadcast=false`
-// so the orchestrator can emit a single `agent_issue` wire event (FR-16) the
-// next time it sees the task, then flip broadcast=true to avoid re-firing.
+// New issues live in task evidence/runtime state; legacy `Task.agentIssues[]`
+// is still read for old project records. A fresh issue has `broadcast=false`
+// so the orchestrator can emit a single `agent_issue` wire event (FR-16), then
+// record a broadcasted evidence update to avoid re-firing.
 //
 // Unlike escalations, issues do NOT change the task's status field.
 // ---------------------------------------------------------------------------
@@ -56,21 +65,58 @@ export interface ReportIssueResult {
   error?: string
 }
 
-function nextIssueId(task: Task): string {
-  return `iss-${task.id}-${task.agentIssues.length + 1}`
+function issuePayload(event: TaskEvidenceEvent): AgentIssue | null {
+  const parsed = AgentIssue.safeParse(event.payload)
+  return parsed.success ? parsed.data : null
+}
+
+function issueNumber(taskId: string, issueId: string): number {
+  const escapedTaskId = taskId.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+  const match = new RegExp(`^iss-${escapedTaskId}-(\\d+)$`).exec(issueId)
+  return match ? Number(match[1]) : 0
+}
+
+function nextIssueId(task: Task, evidence: TaskEvidenceEvent[]): string {
+  const maxLegacy = task.agentIssues.reduce((max, issue) => Math.max(max, issueNumber(task.id, issue.id)), 0)
+  const maxEvidence = evidence.reduce((max, event) => {
+    const issue = issuePayload(event)
+    return issue ? Math.max(max, issueNumber(task.id, issue.id)) : max
+  }, 0)
+  return `iss-${task.id}-${Math.max(maxLegacy, maxEvidence) + 1}`
+}
+
+function latestIssuesById(task: Task, evidence: TaskEvidenceEvent[]): Map<string, AgentIssue> {
+  const issues = new Map<string, AgentIssue>()
+  for (const issue of task.agentIssues) issues.set(issue.id, issue)
+  for (const event of evidence) {
+    const issue = issuePayload(event)
+    if (issue) issues.set(issue.id, issue)
+  }
+  return issues
+}
+
+function openIssueIds(task: Task, evidence: TaskEvidenceEvent[]): string[] {
+  return [...latestIssuesById(task, evidence).values()]
+    .filter((issue) => !issue.resolvedAt)
+    .map((issue) => issue.id)
 }
 
 export async function reportIssue(input: ReportIssueInput): Promise<ReportIssueResult> {
   try {
     const parsed = reportIssueInputSchema.parse(input)
-    const raw = await fs.readFile(parsed.tasksPath, 'utf-8')
+    const raw = await readManagedTextFile(parsed.tasksPath, 'utf-8')
     const queue = TaskQueue.parse(JSON.parse(raw))
     const task = queue.tasks.find((t) => t.id === parsed.taskId)
     if (!task) return { success: false, error: `Task ${parsed.taskId} not found` }
 
+    const stateDir = path.dirname(parsed.tasksPath)
+    const projectRoot = path.basename(stateDir) === 'project-state' && path.isAbsolute(task.projectPath)
+      ? task.projectPath
+      : inferProjectRootFromMemoryDir(stateDir)
+    const existingIssueEvidence = await readTaskEvidence(projectRoot, task.id, { kind: 'agent_issue' })
     const now = new Date().toISOString()
     const issue: AgentIssue = {
-      id: nextIssueId(task),
+      id: nextIssueId(task, existingIssueEvidence),
       taskId: task.id,
       agentId: parsed.agentId,
       code: parsed.code,
@@ -82,15 +128,14 @@ export async function reportIssue(input: ReportIssueInput): Promise<ReportIssueR
         ? { suggestedAction: parsed.suggestedAction }
         : {}),
     }
-    task.agentIssues.push(issue)
     // FR-31: issues do NOT change status — the task stays on its current track
     // until the coordinator's remediation loop acts on it.
     task.updatedAt = now
     queue.lastUpdated = now
 
-    atomicWriteText(parsed.tasksPath, JSON.stringify(queue, null, 2) + '\n')
+    writeProjectTaskQueue(parsed.tasksPath, queue)
     await appendTaskEvidence(
-      inferProjectRootFromMemoryDir(path.dirname(parsed.tasksPath)),
+      projectRoot,
       task.id,
       {
         id: issue.id,
@@ -98,7 +143,20 @@ export async function reportIssue(input: ReportIssueInput): Promise<ReportIssueR
         recordedAt: now,
         payload: issue,
       },
-    ).catch(() => undefined)
+    )
+    await upsertTaskRuntimeState(projectRoot, task.id, {
+      openIssueIds: openIssueIds(task, [
+        ...existingIssueEvidence,
+        {
+          id: issue.id,
+          taskId: task.id,
+          kind: 'agent_issue',
+          recordedAt: now,
+          payload: issue,
+        },
+      ]),
+      updatedAt: now,
+    })
 
     if (parsed.progressPath) {
       const entry: ProgressEntry = {
@@ -162,12 +220,14 @@ export interface ResolveIssueResult {
 export async function resolveIssue(input: ResolveIssueInput): Promise<ResolveIssueResult> {
   try {
     const parsed = resolveIssueInputSchema.parse(input)
-    const raw = await fs.readFile(parsed.tasksPath, 'utf-8')
+    const raw = await readManagedTextFile(parsed.tasksPath, 'utf-8')
     const queue = TaskQueue.parse(JSON.parse(raw))
     const task = queue.tasks.find((t) => t.id === parsed.taskId)
     if (!task) return { success: false, error: `Task ${parsed.taskId} not found` }
 
-    const issue = task.agentIssues.find((i) => i.id === parsed.issueId)
+    const projectRoot = inferProjectRootFromMemoryDir(path.dirname(parsed.tasksPath))
+    const existingIssueEvidence = await readTaskEvidence(projectRoot, task.id, { kind: 'agent_issue' })
+    const issue = latestIssuesById(task, existingIssueEvidence).get(parsed.issueId)
     if (!issue) {
       return {
         success: false,
@@ -182,13 +242,35 @@ export async function resolveIssue(input: ResolveIssueInput): Promise<ResolveIss
     }
 
     const now = new Date().toISOString()
-    issue.resolvedAt = now
-    issue.resolution = parsed.resolution
-    issue.resolvedBy = parsed.resolvedBy
+    const resolvedIssue: AgentIssue = {
+      ...issue,
+      resolvedAt: now,
+      resolution: parsed.resolution,
+      resolvedBy: parsed.resolvedBy,
+    }
     task.updatedAt = now
     queue.lastUpdated = now
 
-    atomicWriteText(parsed.tasksPath, JSON.stringify(queue, null, 2) + '\n')
+    writeProjectTaskQueue(parsed.tasksPath, queue)
+    await appendTaskEvidence(projectRoot, task.id, {
+      id: `${resolvedIssue.id}-resolved-${now.replace(/[^0-9A-Za-z]/g, '')}`,
+      kind: 'agent_issue',
+      recordedAt: now,
+      payload: resolvedIssue,
+    })
+    await upsertTaskRuntimeState(projectRoot, task.id, {
+      openIssueIds: openIssueIds(task, [
+        ...existingIssueEvidence,
+        {
+          id: `${resolvedIssue.id}-resolved-${now.replace(/[^0-9A-Za-z]/g, '')}`,
+          taskId: task.id,
+          kind: 'agent_issue',
+          recordedAt: now,
+          payload: resolvedIssue,
+        },
+      ]),
+      updatedAt: now,
+    })
     return { success: true }
   } catch (err) {
     return { success: false, error: String(err) }

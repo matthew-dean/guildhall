@@ -4,7 +4,7 @@ import { z } from 'zod'
 // FR-23 Business envelope — Goal entity
 //
 // A Goal sits *above* tasks and bounds the project's intent. Every task
-// carries a `parentGoalId`; an uncategorized task is an escalation signal,
+// carries a `businessEnvelope.goalId`; an uncategorized task is an escalation signal,
 // not a free-floating entry.
 //
 // Coordinators evaluate proposals and completed work against the parent

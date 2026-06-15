@@ -53,7 +53,8 @@ import { assertRuntimeReleaseReady, buildReleaseManifest } from './release-manif
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..')
 const MANIFEST = join(ROOT, 'package.json')
 const GENERATED_HELP_TOPICS = join(ROOT, 'src/web/generated/help-topics.json')
-const WEB_BUNDLE = join(ROOT, 'dist/web/app.js')
+const WEB_INDEX = join(ROOT, 'dist/web/index.html')
+const WEB_APP_DIR = join(ROOT, 'dist/web/_app')
 
 // ---------------------------------------------------------------------------
 // Args
@@ -449,8 +450,11 @@ function assertNoDocsInPackage() {
 
 function assertHelpSystemInPackage(files) {
   const packedPaths = new Set(files.map((file) => file.path))
-  if (!packedPaths.has('dist/web/app.js')) {
-    die('Refusing to publish package without dist/web/app.js; the help system is bundled into the web app.')
+  if (!packedPaths.has('dist/web/index.html')) {
+    die('Refusing to publish package without dist/web/index.html; the help system is bundled into the SvelteKit web app.')
+  }
+  if (![...packedPaths].some((path) => path.startsWith('dist/web/_app/'))) {
+    die('Refusing to publish package without SvelteKit web chunks under dist/web/_app/.')
   }
 
   let topics
@@ -465,10 +469,20 @@ function assertHelpSystemInPackage(files) {
     die('Refusing to publish package without generated help topic hrefs.')
   }
 
-  const webBundle = readFileSync(WEB_BUNDLE, 'utf-8')
-  if (!webBundle.includes(firstTopic.href)) {
-    die('Refusing to publish package because dist/web/app.js does not include generated help topics.')
+  const webFiles = [WEB_INDEX, ...listFiles(WEB_APP_DIR).filter((file) => file.endsWith('.js'))]
+  if (!webFiles.some((file) => readFileSync(file, 'utf-8').includes(firstTopic.href))) {
+    die('Refusing to publish package because the SvelteKit web assets do not include generated help topics.')
   }
+}
+
+function listFiles(dir) {
+  if (!existsSync(dir)) return []
+  return readdirSync(dir, { withFileTypes: true }).flatMap((entry) => {
+    const path = join(dir, entry.name)
+    if (entry.isDirectory()) return listFiles(path)
+    if (entry.isFile()) return [path]
+    return []
+  })
 }
 
 function resolveNextVersion(current, spec) {

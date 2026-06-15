@@ -14,6 +14,7 @@ function json(data: unknown): Response {
 
 const readyPayload = {
   openEscalations: [],
+  incompleteBriefs: [],
   unapprovedBriefs: [],
   unapprovedSpecs: [],
   shelvedUnclaimed: [],
@@ -39,7 +40,7 @@ describe('ReleaseTab', () => {
     render(ReleaseTab)
 
     expect(await screen.findByText('Project not initialized yet')).toBeTruthy()
-    expect(screen.getByText('Complete the setup wizard before Guildhall can assess whether the current work is closed.')).toBeTruthy()
+    expect(screen.getByText('Complete the setup wizard before assessing whether the current work is closed.')).toBeTruthy()
     expect(screen.getByRole('link', { name: 'Open setup wizard' }).getAttribute('href')).toBe('/projects/looma-knit/setup')
   })
 
@@ -105,6 +106,48 @@ describe('ReleaseTab', () => {
     })
   })
 
+  it('renders incomplete task briefs as a separate owner action', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () =>
+        json({
+          ...readyPayload,
+          incompleteBriefs: [
+            {
+              id: 'task-incomplete',
+              title: 'Needs brief cleanup',
+              reason: 'Task brief needs user job, why it matters now, success metric, and at least one non-goal before approval.',
+            },
+          ],
+          unapprovedBriefs: [
+            {
+              id: 'task-unapproved',
+              title: 'Ready for brief approval',
+            },
+          ],
+          statusCounts: { proposed: 2 },
+          totals: {
+            blockingCount: 4,
+            humanBlockingCount: 2,
+            incompleteBriefBlockingCount: 1,
+            unfinishedCount: 2,
+            tasks: 2,
+            done: 0,
+          },
+        }),
+      ),
+    )
+
+    render(ReleaseTab, { props: { subView: 'criteria' } })
+
+    expect(await screen.findByText('Closure checks')).toBeTruthy()
+    expect(screen.getByText('Incomplete briefs')).toBeTruthy()
+    expect(screen.getByText('Needs brief cleanup')).toBeTruthy()
+    expect(screen.getByText('Task brief needs user job, why it matters now, success metric, and at least one non-goal before approval.')).toBeTruthy()
+    expect(screen.getByText('Unapproved briefs')).toBeTruthy()
+    expect(screen.getByText('Ready for brief approval')).toBeTruthy()
+  })
+
   it('uses the current project route when loading closure checks', async () => {
     window.history.replaceState({}, '', '/projects/t-minus-t/release')
     path.value = '/projects/t-minus-t/release'
@@ -136,6 +179,28 @@ describe('ReleaseTab', () => {
     expect(await screen.findByText('Current work closure')).toBeTruthy()
     expect(screen.getAllByText('Blocked')).toHaveLength(2)
     expect(screen.getByText('No design-system guardrail is captured yet.')).toBeTruthy()
+  })
+
+  it('prioritizes API not-ready reasons over generic design-system closure copy', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () =>
+        json({
+          ...readyPayload,
+          ready: false,
+          notReadyReason: 'Answer the pressure-test question before closing this work.',
+          designSystem: { drafted: false, approved: false, source: 'none' },
+          totals: { blockingCount: 0, tasks: 3, done: 3 },
+        }),
+      ),
+    )
+
+    render(ReleaseTab)
+
+    expect(await screen.findByText('Current work closure')).toBeTruthy()
+    expect(screen.getAllByText('Blocked')).toHaveLength(2)
+    expect(screen.getByText('Answer the pressure-test question before closing this work.')).toBeTruthy()
+    expect(screen.queryByText('No design-system guardrail is captured yet.')).toBeNull()
   })
 
   it('shows repo-detected design systems as satisfied instead of not drafted', async () => {
@@ -225,7 +290,7 @@ describe('ReleaseTab', () => {
 
     expect(await screen.findByText('Current work closure')).toBeTruthy()
     expect(screen.getByText('Could not inspect checkout')).toBeTruthy()
-    expect(screen.getByText(/Guildhall could not inspect this checkout with git/)).toBeTruthy()
+    expect(screen.getByText(/This checkout could not be inspected with git/)).toBeTruthy()
     expect(screen.queryByText(/fatal: not a git repository/)).toBeNull()
     expect(screen.queryByText('Project checkout clean.')).toBeNull()
   })

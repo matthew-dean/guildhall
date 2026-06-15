@@ -1,21 +1,30 @@
+import { appendManagedTextFile, readManagedTextFile, readManagedTextFileSync, writeManagedTextFile } from '@guildhall/persistence'
 import fs from 'node:fs/promises'
 import path from 'node:path'
+import { parse as parseYaml, stringify as stringifyYaml } from 'yaml'
 import {
   migrateProjectProvidersToGlobal,
   readProjectConfig,
   readWorkspaceConfig,
   updateProjectConfig,
 } from '@guildhall/config'
-import { getProjectStateDir } from '@guildhall/sessions'
+import { getProjectLocalHistoryDir, getProjectStateDir } from '@guildhall/sessions'
 import { installAgentBridgeInstructions } from './agent-bridge-install.js'
 import { migrateLegacyMemoryToLocalHistory } from './memory-migration.js'
+import { compactProjectState } from './project-state-compaction.js'
+import { migrateTaskQuestionsToBoundedChat } from './task-question-migration.js'
+import { migrateTaskHierarchyState } from './task-hierarchy-migration.js'
+import { migrateTaskDeliveryStepState } from './task-delivery-step-migration.js'
 import { migrateTaskState } from './task-state-migration.js'
+import { repairOwnerInputState } from './owner-input-state-repair.js'
 import { recordGuildhallRuntimeWrite } from './runtime-compatibility.js'
 import { readProjectRuntimeState } from './project-runtime-store.js'
 import {
   hasLegacyRuntimeCommandEvidence,
   migrateLegacyRuntimeCommandEvidenceToPersistence,
 } from './project-runtime-command.js'
+import { finalizeThinProjectStateManifest } from './thin-project-state-manifest.js'
+import { restoreEvacuatedTaskState } from './evacuated-task-state-restore.js'
 
 export type MigrationScope = 'machine' | 'project' | 'workspace' | 'database'
 export type MigrationSafety = 'automatic' | 'prompt' | 'manual' | 'required'
@@ -78,50 +87,120 @@ export interface ApplyProjectMigrationsResult {
 }
 
 function ledgerPath(projectRoot: string): string {
-  return path.join(getProjectStateDir(projectRoot), 'migrations.json')
+  return path.join(getProjectLocalHistoryDir(projectRoot), 'migrations', 'migrations.json')
 }
 
-async function writeFileIfMissing(file: string, content: string): Promise<boolean> {
+function repoStateMode(projectRoot: string): 'off' | 'thin' {
   try {
-    await fs.writeFile(file, content, { flag: 'wx', encoding: 'utf8' })
-    return true
-  } catch (err) {
-    const code = (err as { code?: string }).code
-    if (code === 'EEXIST') return false
-    throw err
-  }
-}
-
-async function seedMissingProjectStateFiles(projectRoot: string): Promise<string[]> {
-  const stateDir = getProjectStateDir(projectRoot)
-  await fs.mkdir(stateDir, { recursive: true })
-  let projectName = 'Project'
-  try {
-    projectName = readWorkspaceConfig(projectRoot).name || projectName
+    return readWorkspaceConfig(projectRoot).storage?.repoState === 'thin' ? 'thin' : 'off'
   } catch {
-    // A missing or invalid config should not prevent the layout migration from
-    // creating the files later runtime paths require.
+    return 'off'
   }
+}
 
-  const seeded: string[] = []
-  const files: Record<string, string> = {
-    'TASKS.json': '[]\n',
-    'MEMORY.md': `# ${projectName} Memory\n\n_Updated by GuildHall agents._\n`,
-    'DECISIONS.md': `# ${projectName} Decisions\n\n_Architecture decisions recorded by GuildHall agents._\n`,
-    'PROGRESS.md': `# ${projectName} Progress\n\n_Progress log maintained by GuildHall agents._\n`,
+function agentSettingsPath(projectRoot: string): string {
+  return path.join(projectRoot, '.guildhall', 'agent-settings.yaml')
+}
+
+async function projectStateEntries(projectRoot: string): Promise<string[]> {
+  try {
+    return await fs.readdir(getProjectStateDir(projectRoot))
+  } catch {
+    return []
   }
+}
 
-  for (const [filename, content] of Object.entries(files)) {
-    if (await writeFileIfMissing(path.join(stateDir, filename), content)) {
-      seeded.push(`.guildhall/${filename}`)
+async function detectProjectStateBoundaryCleanup(projectRoot: string): Promise<{
+  needed: boolean
+  affectedPaths: string[]
+}> {
+  const entries = await projectStateEntries(projectRoot)
+  if (entries.length === 0) return { needed: false, affectedPaths: [] }
+  const mode = repoStateMode(projectRoot)
+  if (mode === 'off') {
+    return {
+      needed: true,
+      affectedPaths: entries.map(entry => `.guildhall/${entry}`),
     }
   }
-  return seeded
+  const needsThinManifest = !entries.includes('project-state-manifest.json')
+  const legacyEntries = entries.filter(entry => entry !== 'artifacts.yaml' && entry !== 'project-state-manifest.json')
+  return {
+    needed: needsThinManifest || legacyEntries.length > 0,
+    affectedPaths: [
+      ...(needsThinManifest ? ['.guildhall/project-state-manifest.json'] : []),
+      ...legacyEntries.map(entry => `.guildhall/${entry}`),
+    ],
+  }
+}
+
+function mapLegacyMergePolicyPosition(value: unknown): string | null {
+  switch (value) {
+    case 'ff_only_local':
+      return 'cherry_pick_local'
+    case 'ff_only_with_push':
+      return 'cherry_pick_with_push'
+    case 'manual_pr':
+      return 'manual_pr'
+    default:
+      return null
+  }
+}
+
+async function readAgentSettingsWithMergePolicy(projectRoot: string): Promise<{
+  settings: Record<string, unknown>
+  project: Record<string, unknown>
+  file: string
+} | null> {
+  const file = agentSettingsPath(projectRoot)
+  let raw: string
+  try {
+    raw = await readManagedTextFile(file, 'utf8')
+  } catch (err) {
+    if ((err as { code?: string }).code === 'ENOENT') return null
+    throw err
+  }
+  const parsed = parseYaml(raw)
+  if (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed)) return null
+  const settings = parsed as Record<string, unknown>
+  const project = settings.project
+  if (project === null || typeof project !== 'object' || Array.isArray(project)) return null
+  if (!Object.prototype.hasOwnProperty.call(project, 'merge_policy')) return null
+  return { settings, project: project as Record<string, unknown>, file }
+}
+
+async function migrateMergePolicyToLandingStrategy(projectRoot: string): Promise<string[]> {
+  const legacySettings = await readAgentSettingsWithMergePolicy(projectRoot)
+  if (!legacySettings) return []
+
+  const { settings, project, file } = legacySettings
+  const legacy = project.merge_policy
+  if (
+    project.landing_strategy === undefined &&
+    legacy !== null &&
+    typeof legacy === 'object' &&
+    !Array.isArray(legacy)
+  ) {
+    const legacyRecord = legacy as Record<string, unknown>
+    const position = mapLegacyMergePolicyPosition(legacyRecord.position)
+    if (!position) {
+      throw new Error('Cannot convert project.merge_policy: unsupported position.')
+    }
+    project.landing_strategy = {
+      ...legacyRecord,
+      position,
+    }
+  } else if (project.landing_strategy === undefined) {
+    throw new Error('Cannot convert project.merge_policy: missing legacy entry details.')
+  }
+  delete project.merge_policy
+  await writeManagedTextFile(file, stringifyYaml(settings, { lineWidth: 100 }), 'utf8')
+  return ['.guildhall/agent-settings.yaml']
 }
 
 export async function readProjectMigrationLedger(projectRoot: string): Promise<ProjectMigrationLedger> {
   try {
-    const raw = await fs.readFile(ledgerPath(projectRoot), 'utf8')
+    const raw = await readManagedTextFile(ledgerPath(projectRoot), 'utf8')
     const parsed = JSON.parse(raw) as Partial<ProjectMigrationLedger>
     return {
       version: 1,
@@ -138,7 +217,7 @@ export async function writeProjectMigrationLedger(
 ): Promise<void> {
   const file = ledgerPath(projectRoot)
   await fs.mkdir(path.dirname(file), { recursive: true })
-  await fs.writeFile(file, `${JSON.stringify({ version: 1, records: ledger.records }, null, 2)}\n`, 'utf8')
+  await writeManagedTextFile(file, `${JSON.stringify({ version: 1, records: ledger.records }, null, 2)}\n`, 'utf8')
   recordGuildhallRuntimeWrite(projectRoot, ['project-migrations.v1'])
 }
 
@@ -201,10 +280,16 @@ const BUILT_IN_PROJECT_MIGRATIONS: ProjectMigrationDefinition[] = [
         deleteSource: true,
         updateGitignore: true,
       })
-      const seeded = await seedMissingProjectStateFiles(projectRoot)
       return {
-        summary: `Moved ${result.copied} legacy memory file${result.copied === 1 ? '' : 's'} into split project state.`,
-        affectedPaths: ['memory/', '.guildhall/', ...seeded, ...result.gitignoreRoots.map(root => path.relative(projectRoot, root) || '.')],
+        summary: repoStateMode(projectRoot) === 'thin'
+          ? `Moved ${result.copied} legacy memory file${result.copied === 1 ? '' : 's'} into system-local project history and wrote the thin repo manifest.`
+          : `Moved ${result.copied} legacy memory file${result.copied === 1 ? '' : 's'} into system-local project history and cleared repo-local Guildhall state.`,
+        affectedPaths: [
+          'memory/',
+          ...(result.compaction?.repoStateMode === 'thin' ? ['.guildhall/project-state-manifest.json'] : []),
+          ...(result.compaction?.evacuatedProjectStatePaths ?? []).map(item => `.guildhall/${item}`),
+          ...result.gitignoreRoots.map(root => path.relative(projectRoot, root) || '.'),
+        ],
       }
     },
   },
@@ -235,6 +320,189 @@ const BUILT_IN_PROJECT_MIGRATIONS: ProjectMigrationDefinition[] = [
     },
   },
   {
+    id: '0.10.0/task-hierarchy-links',
+    title: 'Convert parent task status into explicit work hierarchy links',
+    introducedIn: '0.10.0',
+    scope: 'project',
+    safety: 'prompt',
+    requirement: 'required',
+    summary: 'Rewrites status: parent and hierarchy-shaped parentGoalId fields into task.hierarchy links.',
+    async detect(projectRoot) {
+      const result = await migrateTaskHierarchyState({ projectRoot, apply: false })
+      return {
+        needed: result.changedTasks.length > 0,
+        affectedPaths: result.affectedPaths,
+      }
+    },
+    async apply(projectRoot) {
+      const result = await migrateTaskHierarchyState({ projectRoot, apply: true })
+      return {
+        summary: `Converted ${result.changedTasks.length} task hierarchy record${result.changedTasks.length === 1 ? '' : 's'} into explicit links.`,
+        affectedPaths: result.affectedPaths,
+      }
+    },
+  },
+  {
+    id: '0.10.0/task-open-questions-to-bounded-chat',
+    title: 'Move task questions into owner-input bounded chat',
+    introducedIn: '0.10.0',
+    scope: 'project',
+    safety: 'prompt',
+    requirement: 'required',
+    summary: 'Converts task-local openQuestions into linked owner-input requests and bounded-chat sessions.',
+    async detect(projectRoot) {
+      const result = await migrateTaskQuestionsToBoundedChat({
+        projectRoot,
+        projectId: path.basename(projectRoot),
+        apply: false,
+      })
+      return {
+        needed: result.changedTasks.length > 0,
+        affectedPaths: result.affectedPaths,
+      }
+    },
+    async apply(projectRoot) {
+      const result = await migrateTaskQuestionsToBoundedChat({
+        projectRoot,
+        projectId: path.basename(projectRoot),
+        apply: true,
+      })
+      return {
+        summary: `Moved ${result.changedTasks.length} task question record${result.changedTasks.length === 1 ? '' : 's'} into owner-input bounded chat.`,
+        affectedPaths: result.affectedPaths,
+      }
+    },
+  },
+  {
+    id: '0.10.0/task-delivery-steps',
+    title: 'Mark verification child tasks as delivery steps',
+    introducedIn: '0.10.0',
+    scope: 'project',
+    safety: 'automatic',
+    summary: 'Adds explicit workVisibility and deliverySteps metadata so verification child tasks stay attached to their logical work item.',
+    async detect(projectRoot) {
+      const result = await migrateTaskDeliveryStepState({ projectRoot, apply: false })
+      return {
+        needed: result.changedTasks.length > 0,
+        affectedPaths: result.affectedPaths,
+      }
+    },
+    async apply(projectRoot) {
+      const result = await migrateTaskDeliveryStepState({ projectRoot, apply: true })
+      return {
+        summary: `Marked ${result.changedTasks.length} task record${result.changedTasks.length === 1 ? '' : 's'} with explicit delivery-step metadata.`,
+        affectedPaths: result.affectedPaths,
+      }
+    },
+  },
+  {
+    id: '0.10.0/owner-input-state-repair',
+    title: 'Repair stale owner-input bounded-chat state',
+    introducedIn: '0.10.0',
+    scope: 'project',
+    safety: 'prompt',
+    requirement: 'required',
+    summary: 'Cancels malformed or containable owner-input questions created by older task-question migrations.',
+    async detect(projectRoot) {
+      const result = await repairOwnerInputState({ projectRoot, apply: false })
+      return {
+        needed: result.cancelledInvalid.length > 0 ||
+          result.resolvedByAssumption.length > 0 ||
+          result.cancelledDuplicates.length > 0,
+        affectedPaths: result.affectedPaths,
+      }
+    },
+    async apply(projectRoot) {
+      const result = await repairOwnerInputState({ projectRoot, apply: true })
+      const repaired = result.cancelledInvalid.length +
+        result.resolvedByAssumption.length +
+        result.cancelledDuplicates.length
+      return {
+        summary: `Repaired ${repaired} owner-input record${repaired === 1 ? '' : 's'} that should not block unattended work.`,
+        affectedPaths: result.affectedPaths,
+      }
+    },
+  },
+  {
+    id: '0.10.0/merge-policy-to-landing-strategy',
+    title: 'Convert merge policy to landing strategy',
+    introducedIn: '0.10.0',
+    scope: 'project',
+    safety: 'prompt',
+    requirement: 'required',
+    summary: 'Rewrites deprecated project.merge_policy lever settings into landing_strategy and removes the old key.',
+    async detect(projectRoot) {
+      const legacySettings = await readAgentSettingsWithMergePolicy(projectRoot)
+      return {
+        needed: legacySettings !== null,
+        affectedPaths: legacySettings ? ['.guildhall/agent-settings.yaml'] : [],
+      }
+    },
+    async apply(projectRoot) {
+      const affectedPaths = await migrateMergePolicyToLandingStrategy(projectRoot)
+      return {
+        summary: affectedPaths.length > 0
+          ? 'Converted merge_policy to landing_strategy.'
+          : 'No deprecated merge_policy setting was present.',
+        affectedPaths,
+      }
+    },
+  },
+  {
+    id: '0.10.0/project-state-storage-boundary',
+    title: 'Clear repo-local Guildhall state unless thin state is opted in',
+    introducedIn: '0.10.0',
+    scope: 'project',
+    safety: 'prompt',
+    requirement: 'required',
+    summary: 'Evacuates repo-local Guildhall state into system-local storage, or writes only the opted-in thin current-shape manifest.',
+    async detect(projectRoot) {
+      return detectProjectStateBoundaryCleanup(projectRoot)
+    },
+    async apply(projectRoot) {
+      const mode = repoStateMode(projectRoot)
+      const compaction = await compactProjectState({ projectRoot, dryRun: false })
+      if (mode === 'thin') {
+        const affectedPaths = await finalizeThinProjectStateManifest(projectRoot)
+        return {
+          summary: 'Wrote thin repo state with only the current active shape; historical Guildhall state remains system-local.',
+          affectedPaths,
+        }
+      }
+      return {
+        summary: `Evacuated ${compaction.evacuatedProjectStatePaths.length} repo-local Guildhall state entr${compaction.evacuatedProjectStatePaths.length === 1 ? 'y' : 'ies'} into system-local storage.`,
+        affectedPaths: compaction.evacuatedProjectStatePaths.map(entry => `.guildhall/${entry}`),
+      }
+    },
+  },
+  {
+    id: '0.10.0/restore-evacuated-task-state',
+    title: 'Restore active tasks stranded by project-state evacuation',
+    introducedIn: '0.10.0',
+    scope: 'project',
+    safety: 'automatic',
+    requirement: 'required',
+    summary: 'Copies missing tasks and readable task index/archive files from evacuated project-state back into system-local storage.',
+    async detect(projectRoot) {
+      const result = await restoreEvacuatedTaskState(projectRoot, false)
+      return {
+        needed: result.needed,
+        affectedPaths: result.affectedPaths,
+      }
+    },
+    async apply(projectRoot) {
+      const result = await restoreEvacuatedTaskState(projectRoot, true)
+      return {
+        summary: result.restored > 0
+          ? `Restored ${result.restored} evacuated task${result.restored === 1 ? '' : 's'} and ${result.restoredTaskStateFiles} readable task state file${result.restoredTaskStateFiles === 1 ? '' : 's'} into system-local storage.`
+          : result.restoredTaskStateFiles > 0
+            ? `Restored ${result.restoredTaskStateFiles} readable task state file${result.restoredTaskStateFiles === 1 ? '' : 's'} into system-local storage.`
+            : 'No evacuated task state needed restoration.',
+        affectedPaths: result.affectedPaths,
+      }
+    },
+  },
+  {
     id: '0.8.0/codex-agent-bridge',
     title: 'Install Codex Guildhall MCP bridge instructions',
     introducedIn: '0.8.0',
@@ -243,7 +511,7 @@ const BUILT_IN_PROJECT_MIGRATIONS: ProjectMigrationDefinition[] = [
     summary: 'Adds or refreshes the managed Guildhall MCP bridge section in AGENTS.md.',
     async detect(projectRoot) {
       try {
-        const raw = await fs.readFile(path.join(projectRoot, 'AGENTS.md'), 'utf8')
+        const raw = await readManagedTextFile(path.join(projectRoot, 'AGENTS.md'), 'utf8')
         return { needed: !raw.includes('<!-- BEGIN Guildhall MCP bridge -->'), affectedPaths: ['AGENTS.md'] }
       } catch {
         return { needed: true, affectedPaths: ['AGENTS.md'] }
@@ -302,6 +570,56 @@ const BUILT_IN_PROJECT_MIGRATIONS: ProjectMigrationDefinition[] = [
   },
 ]
 
+const BUILT_IN_PROJECT_MIGRATION_IDEMPOTENCE_TESTS: Record<string, string> = {
+  '0.8.0/provider-config-globalization': 'migrations.test.ts: applies automatic migrations but leaves prompt migrations pending by default',
+  '0.8.0/project-state-layout': 'migrations.test.ts: project-state layout migration can be applied repeatedly without rewriting completed work',
+  '0.8.0/task-state-split': 'migrations.test.ts: task-state split migration is idempotent',
+  '0.8.0/codex-agent-bridge': 'migrations.test.ts: prompt migrations stay pending unless explicitly included',
+  '0.9.0/runtime-backed-project': 'manual migration; status/plan only',
+  '0.9.0/runtime-command-evidence-persistence': 'migrations.test.ts: runtime command evidence migration is idempotent',
+  '0.10.0/task-open-questions-to-bounded-chat': 'migrations.test.ts: task-question migration is idempotent',
+  '0.10.0/task-delivery-steps': 'migrations.test.ts: normalizes verification child tasks into explicit delivery-step metadata',
+  '0.10.0/task-hierarchy-links': 'migrations.test.ts: task-hierarchy migration is idempotent',
+  '0.10.0/merge-policy-to-landing-strategy': 'migrations.test.ts: landing-strategy migration is idempotent',
+  '0.10.0/owner-input-state-repair': 'migrations.test.ts: owner-input state repair is idempotent',
+  '0.10.0/project-state-storage-boundary': 'migrations.test.ts: storage-boundary migration is idempotent',
+  '0.10.0/restore-evacuated-task-state': 'migrations.test.ts: restores stranded evacuated task state into the system-local queue and readable task files',
+}
+
+const REPO_LOCAL_STATE_MIGRATIONS = new Set([
+  '0.8.0/project-state-layout',
+  '0.8.0/task-state-split',
+  '0.10.0/task-hierarchy-links',
+  '0.10.0/task-open-questions-to-bounded-chat',
+  '0.10.0/owner-input-state-repair',
+  '0.10.0/merge-policy-to-landing-strategy',
+  '0.8.0/codex-agent-bridge',
+])
+
+export function validateBuiltInProjectMigrationDefinitions(): { valid: boolean; errors: string[] } {
+  const errors: string[] = []
+  const ids = new Set<string>()
+  for (const migration of BUILT_IN_PROJECT_MIGRATIONS) {
+    if (ids.has(migration.id)) errors.push(`Duplicate migration id: ${migration.id}`)
+    ids.add(migration.id)
+    if (!/^\d+\.\d+\.\d+\/[a-z0-9-]+$/.test(migration.id)) {
+      errors.push(`Migration id must be version-prefixed and stable: ${migration.id}`)
+    }
+    if (!migration.title.trim()) errors.push(`Migration ${migration.id} is missing a title.`)
+    if (!migration.summary.trim()) errors.push(`Migration ${migration.id} is missing owner-facing summary text.`)
+    if (migration.requirement === 'required' && !migration.summary.match(/move|migrat|convert|repair|require|runtime|state|link/i)) {
+      errors.push(`Required migration ${migration.id} summary does not explain the owner-facing state change.`)
+    }
+    if ((migration.safety === 'automatic' || migration.safety === 'prompt') && !BUILT_IN_PROJECT_MIGRATION_IDEMPOTENCE_TESTS[migration.id]) {
+      errors.push(`Migration ${migration.id} is missing registered idempotence-test evidence.`)
+    }
+    if (migration.safety === 'manual' && !migration.summary.match(/guide|manual|health|settings|owner|runtime/i)) {
+      errors.push(`Manual migration ${migration.id} summary must route the owner to manual steps.`)
+    }
+  }
+  return { valid: errors.length === 0, errors }
+}
+
 function toStatusItem(
   migration: ProjectMigrationDefinition,
   affectedPaths: string[],
@@ -320,14 +638,18 @@ function toStatusItem(
   }
 }
 
-export async function getProjectMigrationStatus(input: { projectRoot: string }): Promise<ProjectMigrationStatus> {
+export async function getProjectMigrationStatus(input: { projectRoot: string; only?: string[] }): Promise<ProjectMigrationStatus> {
   const ledger = await readProjectMigrationLedger(input.projectRoot)
   const appliedById = new Map(ledger.records.filter(r => r.status === 'applied').map(r => [r.id, r]))
+  const repoLocalStateBoundaryApplied = repoStateMode(input.projectRoot) === 'off' &&
+    appliedById.has('0.10.0/project-state-storage-boundary')
   const pending: ProjectMigrationStatusItem[] = []
   const applied: ProjectMigrationStatusItem[] = []
   const blocked: ProjectMigrationStatusItem[] = []
 
   for (const migration of BUILT_IN_PROJECT_MIGRATIONS) {
+    if (input.only && input.only.length > 0 && !input.only.includes(migration.id)) continue
+    if (repoLocalStateBoundaryApplied && REPO_LOCAL_STATE_MIGRATIONS.has(migration.id)) continue
     const appliedRecord = appliedById.get(migration.id)
     if (appliedRecord) {
       applied.push(toStatusItem(migration, appliedRecord.affectedPaths ?? [], appliedRecord))
@@ -376,6 +698,7 @@ export async function applyProjectMigrations(input: {
   const now = input.now ?? (() => new Date())
 
   for (const migration of BUILT_IN_PROJECT_MIGRATIONS) {
+    if (input.only && input.only.length > 0 && !input.only.includes(migration.id)) continue
     if (appliedById.has(migration.id)) continue
     const detected = await migration.detect(input.projectRoot)
     if (!detected.needed) continue

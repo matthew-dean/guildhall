@@ -202,7 +202,7 @@ describe('WorkspaceImportTab', () => {
     const { calls } = installFetchFakes()
 
     render(WorkspaceImportTab)
-    await screen.findByText(/Guildhall found planning notes in 2 project parts/)
+    await screen.findByText(/Found planning notes in 2 project parts/)
     expect(screen.getByText(/Using the same import defaults/)).toBeTruthy()
     expect(screen.getByText(/Nothing is saved until the final step/)).toBeTruthy()
     expect(screen.getByText(/You can resume this review later/)).toBeTruthy()
@@ -236,14 +236,14 @@ describe('WorkspaceImportTab', () => {
         ),
       ).toBe(true)
     })
-    expect(screen.getByText(/Guildhall created 2 draft tasks/)).toBeTruthy()
+    expect(screen.getByText(/Created 2 draft tasks/)).toBeTruthy()
   })
 
   it('opens extra details without making the drawer a required path', async () => {
     installFetchFakes()
 
     render(WorkspaceImportTab)
-    await screen.findByText(/Guildhall found planning notes/)
+    await screen.findByText(/Found planning notes/)
 
     await userEvent.click(screen.getAllByRole('button', { name: /details/i })[0]!)
     expect(screen.getByRole('complementary', { name: 'Knit' })).toBeTruthy()
@@ -258,7 +258,7 @@ describe('WorkspaceImportTab', () => {
     installFetchFakes()
 
     render(WorkspaceImportTab)
-    await screen.findByText(/Guildhall found planning notes in 2 project parts/)
+    await screen.findByText(/Found planning notes in 2 project parts/)
 
     await userEvent.click(screen.getAllByRole('button', { name: 'Details' })[0]!)
 
@@ -292,7 +292,7 @@ describe('WorkspaceImportTab', () => {
     installFetchFakes(referenceOnlyDraft)
 
     const { container } = render(WorkspaceImportTab)
-    await screen.findByText(/Guildhall found planning notes in 2 project parts/)
+    await screen.findByText(/Found planning notes in 2 project parts/)
 
     expect(container.querySelectorAll('ul.source-summary:not(.nested)')).toHaveLength(0)
     expect(screen.getByText('Show reference-only parts')).toBeTruthy()
@@ -302,7 +302,7 @@ describe('WorkspaceImportTab', () => {
     const { calls } = installFetchFakes()
 
     render(WorkspaceImportTab)
-    await screen.findByText(/Guildhall found planning notes/)
+    await screen.findByText(/Found planning notes/)
 
     await userEvent.click(screen.getByRole('button', { name: /choose parts to review/i }))
     await userEvent.click(screen.getAllByRole('button', { name: /^exclude$/i })[0]!)
@@ -363,17 +363,45 @@ describe('WorkspaceImportTab', () => {
     render(WorkspaceImportTab)
 
     await screen.findByText('This project import has already been approved.')
-    expect(screen.queryByText(/Guildhall found planning notes/)).toBeNull()
+    expect(screen.queryByText(/Found planning notes/)).toBeNull()
     expect(screen.getByText('2 proposed tasks')).toBeTruthy()
 
-    await userEvent.click(screen.getByRole('button', { name: /restore 2 draft tasks/i }))
+    await userEvent.click(screen.getByRole('button', { name: /restore 2 missing drafts/i }))
 
     await waitFor(() => {
       const repairCall = calls.find(call => call.url.startsWith('/api/project/workspace-import/approve'))
       expect(repairCall).toBeDefined()
       expect(repairCall?.body).toEqual({ projectId: 'looma-knit' })
     })
-    await screen.findByText(/Guildhall created 2 draft tasks/)
+    await screen.findByText(/Created 2 draft tasks/)
+  })
+
+  it('explains restore versus re-run when completed import drafts are missing', async () => {
+    const completedDraft = structuredClone(detectedDraft)
+    completedDraft.taskStatus = 'done'
+    completedDraft.parsed = {
+      goals: [],
+      tasks: [
+        {
+          id: 'task-auth-complete',
+          title: 'Complete authentication flow',
+          description: 'Finish registration, login, profile management, and email confirmation.',
+          domain: 'auth',
+          priority: 'high',
+          references: ['docs/brief.md'],
+        },
+      ],
+      milestones: [],
+    }
+    installFetchFakes(completedDraft)
+
+    render(WorkspaceImportTab)
+
+    await screen.findByText('This project import has already been approved.')
+    expect(screen.getByText(/Use Restore to add the missing drafts from the approved import/)).toBeTruthy()
+    expect(screen.getByText(/Use Re-read only if the project notes changed or this import looks stale/)).toBeTruthy()
+    expect(screen.getByRole('button', { name: /restore 1 missing draft/i })).toBeTruthy()
+    expect(screen.getByRole('button', { name: /re-read project notes/i })).toBeTruthy()
   })
 
   it('does not offer restore when completed import tasks already exist in Work', async () => {
@@ -423,7 +451,7 @@ describe('WorkspaceImportTab', () => {
     const { calls } = installFetchFakes()
 
     render(WorkspaceImportTab)
-    await screen.findByText(/Guildhall found planning notes/)
+    await screen.findByText(/Found planning notes/)
 
     await userEvent.click(screen.getByRole('button', { name: /choose parts to review/i }))
     await userEvent.click(screen.getByRole('button', { name: /review 1 selected part/i }))
@@ -462,7 +490,7 @@ describe('WorkspaceImportTab', () => {
     installFetchFakes()
 
     render(WorkspaceImportTab)
-    await screen.findByText(/Guildhall found planning notes/)
+    await screen.findByText(/Found planning notes/)
 
     await userEvent.click(screen.getByRole('button', { name: /choose parts to review/i }))
     await userEvent.click(screen.getByRole('button', { name: /review 1 selected part/i }))
@@ -499,7 +527,7 @@ describe('WorkspaceImportTab', () => {
     await screen.findByText(/import detector failed/)
 
     await userEvent.click(screen.getByRole('button', { name: /retry/i }))
-    await screen.findByText(/Guildhall found planning notes/)
+    await screen.findByText(/Found planning notes/)
     await userEvent.click(screen.getByRole('button', { name: /shelve import review/i }))
     await userEvent.click(screen.getByRole('button', { name: /choose parts to review/i }))
     await userEvent.click(screen.getByRole('button', { name: /review 1 selected part/i }))
@@ -532,12 +560,12 @@ describe('WorkspaceImportTab', () => {
     vi.stubGlobal('fetch', fetchMock)
 
     render(WorkspaceImportTab)
-    await screen.findByText(/Guildhall found planning notes/)
+    await screen.findByText(/Found planning notes/)
 
     await userEvent.click(screen.getByRole('button', { name: /shelve import review/i }))
 
     expect(await screen.findByText(/import review shelved/i)).toBeTruthy()
-    expect(screen.queryByText(/Guildhall found planning notes/)).toBeNull()
+    expect(screen.queryByText(/Found planning notes/)).toBeNull()
   })
 
   it('handles empty import findings with rerun and dismiss actions', async () => {
@@ -550,7 +578,7 @@ describe('WorkspaceImportTab', () => {
     })
 
     render(WorkspaceImportTab)
-    await screen.findByText('Guildhall did not find any importable planning material yet.')
+    await screen.findByText('No importable planning material was found yet.')
 
     const rereadButton = screen.getByRole('button', { name: /re-read project notes/i })
     expect(rereadButton.classList.contains('v-agent')).toBe(true)

@@ -105,14 +105,14 @@ describe('saveAgentSetting', () => {
   it('returns a structured error when the audit log cannot be written', async () => {
     const result = await saveAgentSetting({
       workspacePath: tmpDir,
-      decisionsPath: path.join(tmpDir, 'missing', 'DECISIONS.md'),
+      decisionsPath: tmpDir,
       agentRole: 'worker',
       rationale: 'This should fail because the audit destination is missing.',
       addIgnorePattern: 'coverage',
     })
 
     expect(result.success).toBe(false)
-    expect(result.error).toContain('ENOENT')
+    expect(result.error).toMatch(/EISDIR|illegal operation on a directory/i)
   })
 })
 
@@ -138,7 +138,7 @@ describe('saveAgentSettingTool', () => {
     const result = await saveAgentSettingTool.execute(
       {
         workspacePath: tmpDir,
-        decisionsPath: path.join(tmpDir, 'missing', 'DECISIONS.md'),
+        decisionsPath: tmpDir,
         agentRole: 'coordinator',
         rationale: 'Missing audit log destination should be explicit.',
         maxRevisions: 2,

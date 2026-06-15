@@ -5,19 +5,27 @@
 -->
 <script lang="ts">
   import Button from '../../lib/Button.svelte'
-  import Card from '../../lib/Card.svelte'
+  import Card from '../../lib/ui-compat/Card.svelte'
+  import CardList from '../../lib/CardList.svelte'
+  import CardListItem from '../../lib/CardListItem.svelte'
   import Chip from '../../lib/Chip.svelte'
   import ProgressFeed from '../../lib/ProgressFeed.svelte'
+  import Select from '../../lib/Select.svelte'
   import SegmentedControl from '../../lib/SegmentedControl.svelte'
   import TaskCard from '../../lib/TaskCard.svelte'
-  import { friendlyDomain, friendlyPriority, friendlyStatus } from '../../lib/display.js'
+  import UtilityPanel from '../../lib/UtilityPanel.svelte'
+  import { friendlyPriority } from '../../lib/display.js'
   import { friendlyTaskId } from '../../lib/identifier-labels.js'
   import { nav, path } from '../../lib/nav.svelte.js'
+  import { project } from '../../lib/project.svelte.js'
   import { currentProjectHref, currentTaskHref, projectFetch } from '../../lib/project-routes.js'
   import { buildWorkSurface } from '../../lib/project-data.js'
   import { friendlyRuntimeMessage } from '../../lib/runtime-message.js'
-  import { effectiveWorkStatus, isCompleteForWorkerHandoff, needsWorkerHandoffSpecCleanup } from '../../lib/task-state.js'
+  import { hasUnmetDependencies, unmetDependencyIds } from '../../lib/task-dependencies.js'
+  import { isCompleteForWorkerHandoff, needsWorkerHandoffSpecCleanup } from '../../lib/task-state.js'
+  import { taskStagePresentation, type TaskPresentationTone } from '../../lib/task-presentation.js'
   import { buildWorkHierarchy, nestedWorkCountLabel, workKindLabel } from '../../lib/work-hierarchy.js'
+  import { deliveryProgressBadge } from '../../lib/work-progress-display.js'
   import type { ProjectDetail, Task } from '../../lib/types.js'
   import PlannerTab from './PlannerTab.svelte'
   import WorkTreePreview from './WorkTreePreview.svelte'
@@ -29,8 +37,8 @@
 
   type SortKey = 'title' | 'status' | 'area' | 'priority' | 'updated' | 'revisions'
   type SortDir = 'asc' | 'desc'
-  type WorkView = 'columns' | 'list' | 'board'
-  type WorkFilter = 'open' | 'all' | 'runnable' | 'blocked' | 'needs-you'
+  type WorkView = 'list' | 'board'
+  type WorkFilter = 'queued' | 'planning' | 'open' | 'all' | 'blocked' | 'needs-you'
 
   const STATUS_SORT_ORDER: Record<string, number> = {
     proposed: 0,
@@ -58,18 +66,16 @@
 
   const viewModel = $derived(buildWorkSurface(detail))
   const tasks = $derived<Task[]>(viewModel.tasks)
+  const importDrafts = $derived<Task[]>(viewModel.importDrafts)
   const importDraftCount = $derived(viewModel.importDraftCount)
-  const nextImportDraft = $derived(viewModel.nextImportDraft)
   const needsMeta = $derived(viewModel.needsMeta)
   const setupInboxItem = $derived.by(() => {
     const items = detail.inbox?.items ?? []
     const priority = [
       'required_migration',
-      'open_escalation',
-      'agent_question_pending',
-      'pressure_test_pending',
       'setup_pending',
-      'project_check_in',
+      'workspace_import_pending',
+      'import_draft_queue',
     ]
     for (const kind of priority) {
       const match = items.find(item => item.kind === kind)
@@ -82,18 +88,24 @@
   let sortKey = $state<SortKey>('updated')
   let sortDir = $state<SortDir>('desc')
   let routeWorkView = $state<WorkView>('list')
-  let workFilter = $state<WorkFilter>('open')
+  let workFilter = $state<WorkFilter>('queued')
+  let partFilter = $state('all')
+  let workFilterUserSelected = $state(false)
+  let workFilterProjectId = $state<string | null>(null)
+  let selectedWorkId = $state<string | null>(null)
+  let runWorkBusyId = $state<string | null>(null)
+  let runWorkError = $state<string | null>(null)
 
   const viewOptions = [
-    { value: 'columns', label: 'Columns' },
     { value: 'list', label: 'List' },
     { value: 'board', label: 'Board' },
   ]
 
   const workFilterOptions = [
+    { value: 'queued', label: 'Ready to run' },
+    { value: 'planning', label: 'Planning' },
     { value: 'open', label: 'Open' },
     { value: 'all', label: 'All' },
-    { value: 'runnable', label: 'Runnable' },
     { value: 'blocked', label: 'Blocked' },
     { value: 'needs-you', label: 'Needs you' },
   ]
@@ -101,23 +113,52 @@
   const boardMode = $derived(mode === 'board')
   const activeWorkView = $derived<WorkView>(routeWorkView)
   const hierarchy = $derived(buildWorkHierarchy(tasks))
-  const visibleTasks = $derived(tasks.filter(matchesWorkFilter))
+  const deliveryQueue = $derived(detail.deliverySpine?.queue ?? null)
+  const deliveryFirstRunnable = $derived(deliveryQueue?.firstRunnable ?? null)
+  const deliveryPrimitiveBlockers = $derived.by(() => {
+    return deliveryQueue?.blocked
+      ?.flatMap(candidate => candidate.structuralBlockers ?? [])
+      .filter((primitive, index, all) => primitive.id && all.findIndex(item => item.id === primitive.id) === index)
+      .slice(0, 5) ?? []
+  })
+  const allWorkItems = $derived([...tasks, ...importDrafts])
+  const workAreasByTaskId = $derived(viewModel.workAreasByTaskId)
+  const workAreaOptions = $derived(viewModel.workAreaOptions)
+  const showsPlanningArtifacts = $derived(['planning', 'open', 'all'].includes(workFilter))
+  const filterableTasks = $derived(showsPlanningArtifacts ? allWorkItems : tasks)
+  const visibleTasks = $derived(filterableTasks.filter(matchesWorkFilter))
+  const partFilterOptions = $derived.by(() => {
+    const visibleIds = new Set(allWorkItems.map(task => workAreaForTask(task).id))
+    const parts = workAreaOptions
+      .filter(area => area.id !== 'project' && visibleIds.has(area.id))
+      .map(area => ({ value: area.id, label: area.label }))
+    return [{ value: 'all', label: 'All parts' }, ...parts]
+  })
+  const visibleImportDrafts = $derived(importDrafts.filter(task => partFilter === 'all' || workAreaForTask(task).id === partFilter))
+  const visibleImportDraftCount = $derived(showsPlanningArtifacts ? visibleImportDrafts.length : 0)
+  const nextImportDraft = $derived(visibleImportDrafts[0] ?? null)
   const boardDetail = $derived({
     ...detail,
     tasks: visibleTasks,
   } as ProjectDetail)
 
   const taskCounts = $derived.by(() => {
-    const all = tasks
+    const all = visibleTasks
     const running = detail.run?.status === 'running'
-    const readyTasks = all.filter(task => task.status === 'ready')
+    const readyTasks = all.filter(task => task.status === 'ready' && !hasUnmetDependencies(task, tasks))
+    const stageCounts = all.reduce<Record<string, number>>((counts, task) => {
+      const key = taskPresentation(task).key
+      counts[key] = (counts[key] ?? 0) + 1
+      return counts
+    }, {})
     return {
-      total: all.length,
+      total: filterableTasks.length,
       agentActive: all.filter(task => running && ['in_progress', 'review', 'gate_check'].includes(task.status ?? '')).length,
-      paused: all.filter(task => !running && task.status === 'in_progress').length,
-      reviewWaiting: all.filter(task => !running && task.status === 'review').length,
-      gatesWaiting: all.filter(task => !running && task.status === 'gate_check').length,
-      shaping: all.filter(task => task.status === 'exploring').length,
+      paused: stageCounts.paused ?? 0,
+      reviewWaiting: stageCounts.review_waiting ?? 0,
+      gatesWaiting: stageCounts.gates_waiting ?? 0,
+      shaping: stageCounts.guildhall_shaping ?? 0,
+      specRevisionQueued: stageCounts.spec_revision_queued ?? 0,
       readyForWorker: readyTasks.filter(isCompleteForWorkerHandoff).length,
       needsSpecCleanup: readyTasks.filter(needsWorkerHandoffSpecCleanup).length,
       awaitingApproval: all.filter(task => task.status === 'spec_review').length,
@@ -134,6 +175,7 @@
     list.sort((left, right) => compareTasks(left, right, sortKey, sortDir))
     return list
   })
+  const selectedWorkVisible = $derived(Boolean(selectedWorkId && allWorkItems.some(task => task.id === selectedWorkId)))
 
   function compareTasks(left: Task, right: Task, key: SortKey, dir: SortDir): number {
     const direction = dir === 'asc' ? 1 : -1
@@ -148,7 +190,7 @@
         delta = (STATUS_SORT_ORDER[left.status ?? ''] ?? 99) - (STATUS_SORT_ORDER[right.status ?? ''] ?? 99)
         break
       case 'area':
-        delta = compareText(friendlyDomain(left.domain), friendlyDomain(right.domain))
+        delta = compareText(workAreaForTask(left).label, workAreaForTask(right).label)
         break
       case 'priority':
         delta = (PRIORITY_SORT_ORDER[left.priority ?? 'normal'] ?? 99) - (PRIORITY_SORT_ORDER[right.priority ?? 'normal'] ?? 99)
@@ -185,6 +227,62 @@
     nav(currentTaskHref(task.id), { backgroundPath: path.value })
   }
 
+  async function postTaskAction(taskId: string, action: string, body: Record<string, unknown>): Promise<Response> {
+    return projectFetch(`/api/project/task/${encodeURIComponent(taskId)}/${action}`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify(body),
+    }, detail.id)
+  }
+
+  async function runWorkItem(taskId: string): Promise<void> {
+    runWorkBusyId = taskId
+    runWorkError = null
+    try {
+      const task = allWorkItems.find(item => item.id === taskId)
+      if (task?.status === 'import_draft') {
+        const shapeRes = await postTaskAction(taskId, 'shape-draft', { projectId: detail.id })
+        if (!shapeRes.ok) {
+          const body = await shapeRes.json().catch(() => ({})) as { error?: string }
+          runWorkError = body.error ?? `Draft failed (HTTP ${shapeRes.status})`
+          return
+        }
+      }
+      const res = await postTaskAction(taskId, 'start', { projectId: detail.id, mode: 'one_task', scope: 'work_item' })
+      if (!res.ok) {
+        const body = await res.json().catch(() => ({})) as { error?: string }
+        runWorkError = body.error ?? `Start failed (HTTP ${res.status})`
+        return
+      }
+      await project.refresh(detail.id)
+      setTimeout(() => void project.refresh(detail.id), 500)
+      setTimeout(() => void project.refresh(detail.id), 1800)
+    } finally {
+      runWorkBusyId = null
+    }
+  }
+
+  function selectWork(task: Task): void {
+    selectedWorkId = task.id
+    runWorkError = null
+  }
+
+  function selectWorkById(taskId: string): void {
+    if (allWorkItems.some(task => task.id === taskId)) {
+      selectedWorkId = taskId
+      runWorkError = null
+    }
+  }
+
+  function taskProgress(task: Task) {
+    const id = typeof task.id === 'string' ? task.id : ''
+    return id ? detail.workProgress?.byTaskId?.[id] : null
+  }
+
+  function taskDeliveryBadge(task: Task) {
+    return deliveryProgressBadge(taskProgress(task))
+  }
+
   function openImportedDraft(task: Task): void {
     if (task.id === 'task-workspace-import') {
       nav(currentProjectHref('/workspace-import'))
@@ -196,68 +294,99 @@
   function onTaskKey(event: KeyboardEvent, task: Task): void {
     if (event.key === 'Enter' || event.key === ' ') {
       event.preventDefault()
-      openTask(task)
+      selectWork(task)
     }
-  }
-
-  function statusTone(status: string | undefined): 'accent' | 'ok' | 'warn' | 'danger' | 'neutral' {
-    switch (status) {
-      case 'done':
-        return 'ok'
-      case 'blocked':
-        return 'danger'
-      case 'shelved':
-      case 'pending_pr':
-        return 'warn'
-      case 'in_progress':
-      case 'review':
-      case 'gate_check':
-        return 'accent'
-      default:
-        return 'neutral'
-    }
-  }
-
-  function effectiveStatus(task: Task): string | undefined {
-    return effectiveWorkStatus(task, detail.run?.status === 'running')
   }
 
   function hasOpenQuestion(task: Task): boolean {
     return Boolean(task.openQuestions?.some(question => !question.answeredAt && !question.answer))
   }
 
+  function isQueuedWorkTask(task: Task): boolean {
+    if (hasUnmetDependencies(task, tasks)) return false
+    if (task.status === 'ready') return isCompleteForWorkerHandoff(task)
+    return ['in_progress', 'review', 'gate_check'].includes(task.status ?? '')
+  }
+
+  function isPlanningTask(task: Task): boolean {
+    if (task.status === 'ready') return needsWorkerHandoffSpecCleanup(task)
+    return ['proposed', 'import_draft', 'exploring', 'spec_review'].includes(task.status ?? '')
+  }
+
+  function emptyFilterTitle(): string {
+    if (workFilter === 'queued') return 'No work is ready to run yet.'
+    if (workFilter === 'planning') return 'No planning work.'
+    if (workFilter === 'blocked') return 'No blocked work.'
+    if (workFilter === 'needs-you') return 'Nothing needs you.'
+    return 'No matching work.'
+  }
+
+  function emptyFilterDetail(): string {
+    if (workFilter === 'queued') return 'Planning and review work is still waiting. Use Planning to inspect intake and spec work.'
+    if (workFilter === 'planning') return 'Planning, intake, and spec items will appear here while they are being shaped.'
+    if (workFilter === 'blocked') return 'Blocked work will appear here once a task cannot continue.'
+    if (workFilter === 'needs-you') return 'Questions and owner-held work will appear here when input is needed.'
+    return 'Adjust the filter to inspect a different slice of the project.'
+  }
+
+  function emptyFilterAction(): { label: string; filter: WorkFilter } | null {
+    if (workFilter === 'queued' && allWorkItems.some(isPlanningTask)) return { label: 'Show planning', filter: 'planning' }
+    if (workFilter !== 'queued') return { label: 'Show queued work', filter: 'queued' }
+    return null
+  }
+
   function matchesWorkFilter(task: Task): boolean {
+    if (partFilter !== 'all' && workAreaForTask(task).id !== partFilter) return false
     if (workFilter === 'all') return true
+    if (workFilter === 'queued') return isQueuedWorkTask(task)
+    if (workFilter === 'planning') return isPlanningTask(task)
     if (workFilter === 'open') return !['done', 'pending_pr', 'shelved'].includes(task.status ?? '')
-    if (workFilter === 'blocked') return task.status === 'blocked'
+    if (workFilter === 'blocked') return task.status === 'blocked' || hasUnmetDependencies(task, tasks)
     if (workFilter === 'needs-you') return hasOpenQuestion(task)
-    return ['ready', 'spec_review', 'review', 'gate_check'].includes(task.status ?? '')
+    return false
+  }
+
+  function defaultWorkFilterForTasks(): WorkFilter {
+    if (tasks.some(isQueuedWorkTask)) return 'queued'
+    if (tasks.some(isPlanningTask)) return 'planning'
+    if (tasks.some(task => task.status === 'blocked')) return 'blocked'
+    return 'queued'
+  }
+
+  function workAreaForTask(task: Task) {
+    return workAreasByTaskId[task.id] ?? {
+      id: 'project',
+      label: 'Project',
+      kind: 'project',
+      source: 'fallback',
+      confidence: 'fallback',
+    }
+  }
+
+  function taskPresentation(task: Task) {
+    return taskStagePresentation(task, {
+      runStatus: detail.run?.status,
+      availabilityStatus: detail.availability?.status ?? 'active',
+      tasks,
+    })
+  }
+
+  type ChipTone = 'accent' | 'ok' | 'warn' | 'danger' | 'neutral' | 'running'
+  type CardTone = 'accent' | 'ok' | 'warn' | 'danger' | 'neutral'
+
+  function chipTone(tone: TaskPresentationTone): ChipTone {
+    return tone
   }
 
   function effectiveStatusLabel(task: Task): string {
-    switch (effectiveStatus(task)) {
-      case 'paused': return 'Paused'
-      case 'review_waiting': return 'Review waiting'
-      case 'gates_waiting': return 'Gates waiting'
-      case 'needs_spec_cleanup': return 'Needs brief cleanup'
-      default: return friendlyStatus(task.status)
-    }
+    return needsBreakdownReview(task) ? 'Review breakdown' : taskPresentation(task).label
   }
 
-  function effectiveStatusTone(task: Task): 'accent' | 'ok' | 'warn' | 'danger' | 'neutral' | 'agent' | 'agent-attention' {
-    switch (effectiveStatus(task)) {
-      case 'paused': return 'neutral'
-      case 'review_waiting':
-      case 'gates_waiting':
-        return 'agent'
-      case 'needs_spec_cleanup':
-        return 'agent-attention'
-      default:
-        return statusTone(task.status)
-    }
+  function effectiveStatusTone(task: Task): ChipTone {
+    return needsBreakdownReview(task) ? 'warn' : chipTone(taskPresentation(task).tone)
   }
 
-  function priorityTone(priority: string | undefined): 'accent' | 'ok' | 'warn' | 'danger' | 'neutral' {
+  function priorityTone(priority: string | undefined): CardTone {
     switch (priority) {
       case 'critical':
         return 'danger'
@@ -268,6 +397,11 @@
       default:
         return 'neutral'
     }
+  }
+
+  function listItemTone(task: Task): CardTone {
+    const tone = effectiveStatusTone(task)
+    return tone === 'running' ? 'accent' : tone
   }
 
   function formatUpdatedAt(value: string | undefined): string {
@@ -286,6 +420,12 @@
     const node = hierarchy.byId.get(task.id)
     const childCount = node?.childIds.length ?? 0
     if (childCount > 0) return nestedWorkCountLabel(childCount)
+    if (needsBreakdownReview(task)) {
+      const count = task.acceptanceCriteria?.length ?? 0
+      return `${count} requirements; no contained work or decomposition proposal yet.`
+    }
+    const blockers = unmetDependencyIds(task, tasks)
+    if (blockers.length > 0) return `Blocked by ${blockers.map(friendlyTaskId).join(', ')}`
     if (task.workKind) return workKindLabel(task.workKind)
     if (task.blockReason) return friendlyRuntimeMessage(task.blockReason)
     if (task.terminalSummary?.headline) return task.terminalSummary.headline
@@ -294,10 +434,31 @@
     return friendlyTaskId(task.id)
   }
 
+  function primitiveLabel(primitive: { id?: string; label?: string }): string {
+    return primitive.label?.trim() || primitive.id || 'Primitive'
+  }
+
   function hierarchyBreadcrumb(task: Task): string {
     const crumbs = hierarchy.byId.get(task.id)?.breadcrumb ?? []
     if (crumbs.length <= 1) return ''
     return crumbs.map(crumb => crumb.title).join(' / ')
+  }
+
+  function needsBreakdownReview(task: Task): boolean {
+    const node = hierarchy.byId.get(task.id)
+    const childCount = node?.childIds.length ?? 0
+    return task.status === 'ready' &&
+      childCount === 0 &&
+      !hasDecompositionProposal(task) &&
+      (task.acceptanceCriteria?.length ?? 0) >= 6
+  }
+
+  function hasDecompositionProposal(task: Task): boolean {
+    const decomposition = (task as Task & { decomposition?: unknown }).decomposition
+    if (!decomposition) return false
+    if (Array.isArray(decomposition)) return decomposition.length > 0
+    if (typeof decomposition === 'object') return Object.keys(decomposition).length > 0
+    return true
   }
 
   $effect(() => {
@@ -322,7 +483,6 @@
   })
 
   function setWorkView(next: string) {
-    if (next === 'columns') nav(currentProjectHref('/work?view=columns'))
     if (next === 'list') nav(currentProjectHref('/work?view=list'))
     if (next === 'board') nav(currentProjectHref('/work?view=board'))
   }
@@ -331,159 +491,228 @@
     if (fallbackBoard) return 'board'
     const params = new URL(window.location.href).searchParams
     const view = params.get('view')
-    if (view === 'columns' || view === 'list' || view === 'board') return view
-    if (params.get('tree') === 'preview') return 'columns'
+    if (view === 'list' || view === 'board') return view
     return 'list'
   }
 
-  function onWorkFilterSelect(event: Event): void {
-    workFilter = (event.currentTarget as HTMLSelectElement).value as WorkFilter
+  function onWorkFilterSelect(value: string): void {
+    workFilterUserSelected = true
+    workFilter = value as WorkFilter
   }
+
+  $effect(() => {
+    const projectId = detail.id ?? null
+    const taskSignature = tasks.map(task => `${task.id}:${task.status ?? ''}:${(task.dependsOn ?? []).join(',')}`).join('|')
+    taskSignature
+    if (projectId !== workFilterProjectId) {
+      workFilterProjectId = projectId
+      workFilterUserSelected = false
+      partFilter = 'all'
+    }
+    if (!workFilterUserSelected) {
+      workFilter = defaultWorkFilterForTasks()
+    }
+  })
+
+  $effect(() => {
+    if (!selectedWorkVisible) selectedWorkId = null
+  })
 </script>
 
 <div class="work-list-view">
-  <div class="work-view-header" role="toolbar" aria-label="Work view controls">
+  <UtilityPanel as="div" className="work-view-header" tone="neutral" role="toolbar" ariaLabel="Work view controls">
     <SegmentedControl label="Work view" ariaLabel="Work view" value={activeWorkView} options={viewOptions} onChange={setWorkView} />
     <div class="work-view-actions">
       <div class="show-picker" role="group" aria-label="Shown work">
         <label for="work-view-show">Show</label>
-        <span class="select-shell">
-          <select id="work-view-show" value={workFilter} onchange={onWorkFilterSelect}>
-            {#each workFilterOptions as option (option.value)}
-              <option value={option.value}>{option.label}</option>
-            {/each}
-          </select>
-        </span>
+        <Select id="work-view-show" value={workFilter} options={workFilterOptions} onchange={onWorkFilterSelect} />
       </div>
+      {#if partFilterOptions.length > 2}
+        <div class="show-picker" role="group" aria-label="Work part">
+          <label for="work-view-part">Part</label>
+          <Select id="work-view-part" value={partFilter} options={partFilterOptions} onchange={(value) => { partFilter = value }} />
+        </div>
+      {/if}
     </div>
-  </div>
+  </UtilityPanel>
 
   {#if activeWorkView === 'board'}
     <PlannerTab detail={boardDetail} />
-  {:else if activeWorkView === 'columns'}
-    <WorkTreePreview tasks={tasks} filter={workFilter} />
   {:else}
-    <Card title="Work list" titleTag="h2">
-
-      <div class="work-list-overview">
-        <div class="work-list-count">{visibleTasks.length} shown · {taskCounts.total} total</div>
-        <div class="work-summary">
-          {#if taskCounts.agentActive > 0}
-            <Chip label={countLabel(taskCounts.agentActive, 'Guildhall working', 'Guildhall working')} tone="agent" />
-          {/if}
-          {#if taskCounts.paused > 0}
-            <Chip label={countLabel(taskCounts.paused, 'paused task')} tone="neutral" />
-          {/if}
-          {#if taskCounts.reviewWaiting > 0}
-            <Chip label={countLabel(taskCounts.reviewWaiting, 'review waiting', 'review waiting')} tone="warn" />
-          {/if}
-          {#if taskCounts.gatesWaiting > 0}
-            <Chip label={countLabel(taskCounts.gatesWaiting, 'gates waiting', 'gates waiting')} tone="warn" />
-          {/if}
-          {#if taskCounts.shaping > 0}
-            <Chip label={countLabel(taskCounts.shaping, 'being shaped', 'being shaped')} tone="agent" />
-          {/if}
-          {#if taskCounts.readyForWorker > 0}
-            <Chip label={countLabel(taskCounts.readyForWorker, 'ready to start', 'ready to start')} tone="agent" />
-          {/if}
-          {#if taskCounts.needsSpecCleanup > 0}
-            <Chip label={countLabel(taskCounts.needsSpecCleanup, 'need brief cleanup', 'need brief cleanup')} tone="agent-attention" />
-          {/if}
-          {#if taskCounts.awaitingApproval > 0}
-            <Chip label={`${taskCounts.awaitingApproval} awaiting approval`} tone="warn" />
-          {/if}
-          {#if taskCounts.done > 0}
-            <Chip label={`${taskCounts.done} done`} tone="ok" />
-          {/if}
-          {#if importDraftCount > 0}
-            <Chip label={countLabel(importDraftCount, 'import draft')} tone="neutral" />
+    {#if deliveryQueue}
+      <UtilityPanel as="section" className="delivery-queue-panel" tone={deliveryFirstRunnable ? 'ok' : deliveryQueue.blocked?.length ? 'warn' : 'neutral'} ariaLabel="Delivery queue">
+        <div>
+          <p class="queue-label">Delivery queue</p>
+          <strong>{deliveryFirstRunnable?.task ? deliveryFirstRunnable.task.title ?? deliveryFirstRunnable.task.id : 'No runnable task'}</strong>
+          {#if deliveryFirstRunnable?.why}
+            <span>{deliveryFirstRunnable.why}</span>
           {/if}
         </div>
-      </div>
-
-      {#if importDraftCount > 0 && nextImportDraft}
-        <div class="draft-queue-card">
-          <div class="draft-queue-copy">
-            <p class="draft-queue-label">Imported draft queue</p>
-            <div class="draft-queue-title">{nextImportDraft.title ?? 'Imported draft'}</div>
-            <p class="draft-queue-detail">
-              {#if importDraftCount === 1}
-                Review this imported draft and decide whether to shape it now.
-              {:else}
-                Start with "{nextImportDraft.title ?? 'Imported draft'}". {importDraftCount - 1} more drafts are queued behind it.
-              {/if}
-            </p>
-          </div>
-          <Button variant="secondary" size="sm" onclick={() => openImportedDraft(nextImportDraft)}>
-            {nextImportDraft.id === 'task-workspace-import' ? 'Open import review' : 'Draft task brief'}
-          </Button>
-        </div>
-      {/if}
-
-      {#if tasks.length === 0}
-        {#if needsMeta || setupInboxItem}
-          <div class="setup-empty">
-            <p class="muted">{setupInboxItem?.detail ?? 'No tasks yet. Finish project setup first.'}</p>
-            <Button variant="primary" size="sm" onclick={() => nav(currentProjectHref(setupInboxItem?.actionHref ?? '/setup'))}>
-              {setupInboxItem?.kind === 'required_migration'
-                ? 'Migrate project'
-                : setupInboxItem?.kind === 'project_check_in'
-                ? 'Start check-in'
-                : setupInboxItem?.kind === 'pressure_test_pending' || setupInboxItem?.kind === 'agent_question_pending'
-                  ? 'Answer question'
-                  : setupInboxItem?.kind === 'open_escalation'
-                    ? 'Review recovery'
-                  : 'Open setup'}
-            </Button>
-          </div>
-        {:else}
-          <p class="muted">No tasks yet — <strong>New request</strong> to begin.</p>
-        {/if}
-      {:else}
-        <div class="work-list-stack">
-          <div class="list-column-head" aria-label="Sort work list">
-            <button type="button" class:active={sortKey === 'title'} onclick={() => toggleSort('title')}>Task{sortLabel('title')}</button>
-            <button type="button" class:active={sortKey === 'status'} onclick={() => toggleSort('status')}>Stage{sortLabel('status')}</button>
-            <button type="button" class:active={sortKey === 'area'} onclick={() => toggleSort('area')}>Part{sortLabel('area')}</button>
-            <button type="button" class:active={sortKey === 'priority'} onclick={() => toggleSort('priority')}>Priority{sortLabel('priority')}</button>
-            <button type="button" class:active={sortKey === 'updated'} onclick={() => toggleSort('updated')}>Updated{sortLabel('updated')}</button>
-            <button type="button" class:active={sortKey === 'revisions'} onclick={() => toggleSort('revisions')}>Revs{sortLabel('revisions')}</button>
-          </div>
-          {#each sortedTasks as task (task.id)}
-            <button
-              type="button"
-              class="work-list-row"
-              aria-label={`Open task ${task.title ?? task.id}`}
-              onclick={() => openTask(task)}
-              onkeydown={(event) => onTaskKey(event, task)}
-            >
-              <span class="row-main">
-                <span class="task-title">{task.title ?? '(untitled)'}</span>
-                {#if hierarchyBreadcrumb(task)}
-                  <span class="task-breadcrumb">{hierarchyBreadcrumb(task)}</span>
-                {/if}
-                <span class="task-subcopy">{taskSecondaryText(task)}</span>
-              </span>
-              <span class="row-status">
-                <Chip label={effectiveStatusLabel(task)} tone={effectiveStatusTone(task)} />
-              </span>
-              <span class="row-domain">
-                {friendlyDomain(task.domain) || 'Project'}
-              </span>
-              <span class="row-priority">
-                <Chip label={friendlyPriority(task.priority)} tone={priorityTone(task.priority)} />
-              </span>
-              <span class="row-updated">
-                {formatUpdatedAt(task.updatedAt)}
-              </span>
-              <span class="row-revisions">
-                {task.revisionCount ?? 0}
-              </span>
-            </button>
+        <div class="queue-chips">
+          <Chip label={`${deliveryQueue.runnable?.length ?? 0} runnable`} tone={deliveryFirstRunnable ? 'ok' : 'neutral'} />
+          <Chip label={`${deliveryQueue.blocked?.length ?? 0} blocked`} tone={deliveryQueue.blocked?.length ? 'warn' : 'neutral'} />
+          {#each deliveryPrimitiveBlockers as primitive (`primitive-${primitive.id}`)}
+            <Chip label={primitiveLabel(primitive)} tone="warn" />
           {/each}
         </div>
+      </UtilityPanel>
+    {/if}
+    <div class="work-list-inspector-layout" class:has-selection={Boolean(selectedWorkId)}>
+      <Card title="Work list" titleTag="h2">
+
+        <div class="work-list-overview">
+          <div class="work-list-count">{visibleTasks.length} shown · {taskCounts.total} total</div>
+          <div class="work-summary">
+            {#if taskCounts.agentActive > 0}
+              <Chip label={countLabel(taskCounts.agentActive, 'Working', 'Working')} tone="running" />
+            {/if}
+            {#if taskCounts.paused > 0}
+              <Chip label={countLabel(taskCounts.paused, 'paused task')} tone="neutral" />
+            {/if}
+            {#if taskCounts.reviewWaiting > 0}
+              <Chip label={countLabel(taskCounts.reviewWaiting, 'Review', 'Review')} tone="warn" />
+            {/if}
+            {#if taskCounts.gatesWaiting > 0}
+              <Chip label={countLabel(taskCounts.gatesWaiting, 'Gates', 'Gates')} tone="warn" />
+            {/if}
+            {#if taskCounts.shaping > 0}
+              <Chip label={countLabel(taskCounts.shaping, 'Queued', 'Queued')} tone="running" />
+            {/if}
+            {#if taskCounts.specRevisionQueued > 0}
+              <Chip label={countLabel(taskCounts.specRevisionQueued, 'Queued', 'Queued')} tone="running" />
+            {/if}
+            {#if taskCounts.readyForWorker > 0}
+              <Chip label={countLabel(taskCounts.readyForWorker, 'Ready', 'Ready')} tone="ok" />
+            {/if}
+            {#if taskCounts.needsSpecCleanup > 0}
+              <Chip label={countLabel(taskCounts.needsSpecCleanup, 'Needs brief', 'Needs brief')} tone="warn" />
+            {/if}
+            {#if taskCounts.awaitingApproval > 0}
+              <Chip label={countLabel(taskCounts.awaitingApproval, 'Review', 'Review')} tone="warn" />
+            {/if}
+            {#if taskCounts.done > 0}
+              <Chip label={`${taskCounts.done} done`} tone="ok" />
+            {/if}
+            {#if visibleImportDraftCount > 0}
+              <Chip label={countLabel(visibleImportDraftCount, 'import draft')} tone="neutral" />
+            {/if}
+          </div>
+        </div>
+
+        {#if visibleImportDraftCount > 0 && nextImportDraft}
+          <UtilityPanel as="div" className="draft-queue-card" tone="neutral">
+            <div class="draft-queue-copy">
+              <p class="draft-queue-label">Imported draft queue</p>
+              <div class="draft-queue-title">{nextImportDraft.title ?? 'Imported draft'}</div>
+              <p class="draft-queue-detail">
+                {#if visibleImportDraftCount === 1}
+                  Review this imported draft and decide whether to shape it now.
+                {:else}
+                  Start with "{nextImportDraft.title ?? 'Imported draft'}". {visibleImportDraftCount - 1} more drafts are queued behind it.
+                {/if}
+              </p>
+            </div>
+            <Button variant="secondary" size="sm" onclick={() => openImportedDraft(nextImportDraft)}>
+              {nextImportDraft.id === 'task-workspace-import' ? 'Open import review' : 'Draft task brief'}
+            </Button>
+          </UtilityPanel>
+        {/if}
+
+        {#if allWorkItems.length === 0}
+          {#if needsMeta || setupInboxItem}
+            <UtilityPanel as="div" className="setup-empty" tone="neutral">
+              <p class="muted">{setupInboxItem?.detail ?? 'No tasks yet. Finish project setup first.'}</p>
+              <Button variant="primary" size="sm" onclick={() => nav(currentProjectHref(setupInboxItem?.actionHref ?? '/setup'))}>
+                {setupInboxItem?.kind === 'required_migration'
+                  ? 'Migrate project'
+                  : setupInboxItem?.kind === 'workspace_import_pending' || setupInboxItem?.kind === 'import_draft_queue'
+                    ? 'Review import'
+                    : 'Open setup'}
+              </Button>
+            </UtilityPanel>
+          {:else}
+            <p class="muted">No tasks yet — <strong>New thread</strong> to begin.</p>
+          {/if}
+        {:else if visibleTasks.length === 0}
+          <UtilityPanel as="div" className="work-empty-filter" tone="neutral">
+            <div>
+              <strong>{emptyFilterTitle()}</strong>
+              <p class="muted">{emptyFilterDetail()}</p>
+            </div>
+            {@const action = emptyFilterAction()}
+            {#if action}
+              <Button variant="secondary" size="sm" onclick={() => { workFilter = action.filter }}>
+                {action.label}
+              </Button>
+            {/if}
+          </UtilityPanel>
+        {:else}
+          <CardList className="work-list-stack">
+            <div class="list-column-head" aria-label="Sort work list">
+              <button type="button" class:active={sortKey === 'title'} onclick={() => toggleSort('title')}>Work{sortLabel('title')}</button>
+              <button type="button" class:active={sortKey === 'status'} onclick={() => toggleSort('status')}>Stage{sortLabel('status')}</button>
+              <button type="button" class:active={sortKey === 'area'} onclick={() => toggleSort('area')}>Part{sortLabel('area')}</button>
+              <button type="button" class:active={sortKey === 'priority'} onclick={() => toggleSort('priority')}>Priority{sortLabel('priority')}</button>
+              <button type="button" class:active={sortKey === 'updated'} onclick={() => toggleSort('updated')}>Updated{sortLabel('updated')}</button>
+              <button type="button" class:active={sortKey === 'revisions'} onclick={() => toggleSort('revisions')}>Revs{sortLabel('revisions')}</button>
+            </div>
+            {#each sortedTasks as task (task.id)}
+              {@const deliveryBadge = taskDeliveryBadge(task)}
+              <CardListItem
+                as="button"
+                className="work-list-row"
+                tone={listItemTone(task)}
+                railTone={listItemTone(task) === 'neutral' ? 'neutral' : listItemTone(task)}
+                railStrength="strong"
+                ariaLabel={`Inspect work ${task.title ?? task.id}`}
+                ariaCurrent={selectedWorkId === task.id ? 'true' : null}
+                selected={selectedWorkId === task.id}
+                onclick={() => selectWork(task)}
+                onkeydown={(event) => onTaskKey(event, task)}
+              >
+                <span class="row-main">
+                  <span class="task-title">{task.title ?? '(untitled)'}</span>
+                  {#if hierarchyBreadcrumb(task)}
+                    <span class="task-breadcrumb">{hierarchyBreadcrumb(task)}</span>
+                  {/if}
+                  <span class="task-subcopy">{taskSecondaryText(task)}</span>
+                </span>
+                <span class="row-status">
+                  <Chip label={effectiveStatusLabel(task)} tone={effectiveStatusTone(task)} />
+                  {#if deliveryBadge}
+                    <Chip label={deliveryBadge.label} tone={deliveryBadge.tone} title={deliveryBadge.title} size="compact" />
+                  {/if}
+                </span>
+                <span class="row-domain">
+                  {workAreaForTask(task).label}
+                </span>
+                <span class="row-priority">
+                  <Chip label={friendlyPriority(task.priority)} tone={priorityTone(task.priority)} />
+                </span>
+                <span class="row-updated">
+                  {formatUpdatedAt(task.updatedAt)}
+                </span>
+                <span class="row-revisions">
+                  {task.revisionCount ?? 0}
+                </span>
+              </CardListItem>
+            {/each}
+          </CardList>
+        {/if}
+      </Card>
+
+      {#if selectedWorkId}
+        <WorkTreePreview
+          tasks={allWorkItems}
+          selectedTaskId={selectedWorkId}
+          workProgress={detail.workProgress}
+          onSelectTask={selectWorkById}
+          onRunTask={runWorkItem}
+          runBusyTaskId={runWorkBusyId}
+          runError={runWorkError}
+        />
       {/if}
-    </Card>
+    </div>
   {/if}
 
   <details class="progress-more progress-more--full">
@@ -499,78 +728,34 @@
     gap: var(--s-4);
     min-width: 0;
   }
-  .work-view-header {
+  :global(.work-view-header) {
     display: flex;
     align-items: center;
     justify-content: space-between;
     gap: var(--s-3);
-    padding: var(--s-3);
-    border: 1px solid var(--border);
-    border-radius: var(--r-2);
-    background: var(--bg-raised);
   }
   .work-view-actions {
     display: inline-flex;
     align-items: center;
     justify-content: flex-end;
-    gap: var(--s-2);
+    gap: var(--gh-space-2);
     min-width: 0;
   }
   .show-picker {
     display: inline-flex;
     align-items: center;
-    gap: var(--s-2);
+    gap: var(--gh-space-2);
     white-space: nowrap;
   }
   .show-picker label {
     color: var(--text-muted);
-    font-size: var(--fs-0);
-    font-weight: 800;
+    font-size: var(--gh-type-size-caption);
+    font-weight: var(--gh-type-weight-strong);
     text-transform: uppercase;
     letter-spacing: 0.05em;
   }
-  .select-shell {
-    position: relative;
-    display: inline-flex;
-  }
-  .select-shell::after {
-    content: '';
-    position: absolute;
-    right: var(--s-3);
-    top: 50%;
-    width: 7px;
-    height: 7px;
-    border-right: 2px solid var(--text-muted);
-    border-bottom: 2px solid var(--text-muted);
-    pointer-events: none;
-    transform: translateY(-65%) rotate(45deg);
-  }
-  .show-picker select {
-    appearance: none;
-    -webkit-appearance: none;
-    min-height: 28px;
-    padding: 0 calc(var(--s-5) + var(--s-2)) 0 var(--s-3);
-    border: 1px solid color-mix(in srgb, var(--glass-border-strong) 72%, var(--button-secondary-border));
-    border-radius: var(--r-1);
-    background:
-      linear-gradient(180deg, color-mix(in srgb, white 8%, transparent), transparent 48%),
-      color-mix(in srgb, var(--button-secondary-bg) 72%, transparent);
-    color: var(--text);
-    box-shadow:
-      var(--glass-inset-etch),
-      inset 0 1px 0 color-mix(in srgb, white 8%, transparent);
-    backdrop-filter: var(--glass-blur);
-    -webkit-backdrop-filter: var(--glass-blur);
-    font: inherit;
-    font-size: var(--fs-2);
-    font-weight: 600;
-  }
-  .show-picker select::-ms-expand {
-    display: none;
-  }
-  .show-picker select:focus-visible {
-    outline: 2px solid var(--accent);
-    outline-offset: 2px;
+  .show-picker :global(.select) {
+    min-width: 132px;
   }
   .work-list-overview {
     display: flex;
@@ -579,44 +764,77 @@
     gap: var(--s-3);
     margin-bottom: var(--s-3);
   }
+  .work-list-inspector-layout {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr);
+    gap: var(--s-4);
+    align-items: start;
+  }
+  .work-list-inspector-layout.has-selection {
+    grid-template-columns: minmax(0, 1fr) minmax(280px, 380px);
+  }
   .work-list-count {
     flex: 0 0 auto;
     color: var(--text-muted);
-    font-size: var(--fs-1);
-    font-weight: 700;
-    line-height: var(--lh-tight);
+    font-size: var(--gh-type-size-meta);
+    font-weight: var(--gh-type-weight-strong);
+    line-height: var(--gh-type-line-height-tight);
     white-space: nowrap;
   }
   .work-summary {
     display: flex;
     flex-wrap: wrap;
     justify-content: flex-end;
-    gap: var(--s-2);
+    gap: var(--gh-space-2);
     min-width: 0;
   }
-  .setup-empty {
+  :global(.delivery-queue-panel) {
     display: flex;
     align-items: center;
     justify-content: space-between;
     gap: var(--s-3);
-    padding: var(--s-3);
-    border: 1px solid var(--border);
-    border-radius: var(--radius-sm);
-    background: var(--bg-subtle);
   }
-  .setup-empty p {
+  :global(.delivery-queue-panel) > div:first-child {
+    display: grid;
+    gap: var(--s-1);
+    min-width: 0;
+  }
+  :global(.delivery-queue-panel) strong {
+    overflow-wrap: anywhere;
+  }
+  :global(.delivery-queue-panel) span {
+    color: var(--text-muted);
+    font-size: var(--gh-type-size-body);
+  }
+  .queue-label {
+    margin: 0;
+    color: var(--text-muted);
+    font-size: var(--gh-type-size-meta);
+    font-weight: var(--gh-type-weight-strong);
+    letter-spacing: 0.05em;
+    text-transform: uppercase;
+  }
+  .queue-chips {
+    display: flex;
+    flex-wrap: wrap;
+    justify-content: flex-end;
+    gap: var(--s-2);
+  }
+  :global(.setup-empty) {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: var(--s-3);
+  }
+  :global(.setup-empty) p {
     margin: 0;
   }
-  .draft-queue-card {
+  :global(.draft-queue-card) {
     display: flex;
     align-items: center;
     justify-content: space-between;
     gap: var(--s-4);
-    padding: var(--s-4);
     margin-bottom: var(--s-4);
-    border: 1px solid var(--border);
-    border-radius: var(--r-2);
-    background: var(--bg-raised);
   }
   .draft-queue-copy {
     display: flex;
@@ -626,42 +844,42 @@
   }
   .draft-queue-label {
     margin: 0;
-    font-size: var(--fs-0);
-    font-weight: 700;
+    font-size: var(--gh-type-size-caption);
+    font-weight: var(--gh-type-weight-strong);
     text-transform: uppercase;
     color: var(--text-muted);
     letter-spacing: 0.04em;
   }
   .draft-queue-title {
-    font-size: var(--fs-2);
-    font-weight: 700;
+    font-size: var(--gh-type-size-body);
+    font-weight: var(--gh-type-weight-strong);
     color: var(--text);
-    line-height: var(--lh-tight);
+    line-height: var(--gh-type-line-height-tight);
   }
   .draft-queue-detail {
     margin: 0;
     color: var(--text-muted);
-    font-size: var(--fs-1);
-    line-height: var(--lh-body);
+    font-size: var(--gh-type-size-meta);
+    line-height: var(--gh-type-line-height-body);
   }
-  .work-list-stack {
+  :global(.work-list-stack) {
     --work-list-columns:
-      minmax(280px, 1fr)
-      minmax(172px, max-content)
-      minmax(112px, 132px)
-      minmax(92px, max-content)
-      minmax(116px, max-content)
-      44px;
+      minmax(220px, 1fr)
+      minmax(160px, max-content)
+      minmax(92px, 112px)
+      minmax(84px, max-content)
+      minmax(108px, max-content)
+      32px;
     display: grid;
     grid-template-columns: var(--work-list-columns);
-    gap: var(--s-2);
+    gap: var(--gh-space-2);
   }
   .list-column-head {
     display: grid;
     grid-column: 1 / -1;
     grid-template-columns: subgrid;
     align-items: center;
-    gap: var(--s-3);
+    gap: var(--gh-space-2);
     padding: 0 var(--s-3);
   }
   .list-column-head button {
@@ -671,10 +889,10 @@
     background: transparent;
     color: var(--text-muted);
     font: inherit;
-    font-size: var(--fs-0);
-    font-weight: 800;
+    font-size: var(--gh-type-size-caption);
+    font-weight: var(--gh-type-weight-strong);
     letter-spacing: 0.05em;
-    line-height: var(--lh-tight);
+    line-height: var(--gh-type-line-height-tight);
     text-align: left;
     text-transform: uppercase;
     cursor: pointer;
@@ -687,92 +905,83 @@
   .list-column-head button.active {
     color: var(--text);
   }
-  .work-list-row {
+  :global(.work-list-row) {
     display: grid;
     grid-column: 1 / -1;
     grid-template-columns: subgrid;
     align-items: center;
-    gap: var(--s-3);
+    gap: var(--gh-space-2);
     width: 100%;
-    padding: var(--s-3);
-    border: 1px solid var(--border);
-    border-left: 3px solid var(--stripe-neutral);
     border-radius: var(--r-2);
-    background: var(--bg-raised);
     color: inherit;
     font: inherit;
     text-align: left;
     cursor: pointer;
-    transition: background 140ms ease, border-color 140ms ease, box-shadow 140ms ease;
   }
-  .work-list-row:hover,
-  .work-list-row:focus-visible {
-    border-color: color-mix(in srgb, var(--accent) 38%, var(--border));
-    border-left-color: var(--stripe-accent);
-    background: color-mix(in srgb, var(--accent) 6%, var(--bg-raised));
+  :global(.work-list-row:hover),
+  :global(.work-list-row:focus-visible) {
     outline: none;
-    box-shadow: 0 0 0 1px color-mix(in srgb, var(--accent) 12%, transparent);
   }
-  .row-main {
+  :global(.work-list-row) .row-main {
     display: grid;
     gap: 4px;
     min-width: 0;
   }
-  .task-title {
+  :global(.work-list-row) .task-title {
     display: -webkit-box;
     overflow: hidden;
-    font-size: var(--fs-2);
-    font-weight: 700;
+    font-size: var(--gh-type-size-body);
+    font-weight: var(--gh-type-weight-strong);
     color: var(--text);
-    line-height: var(--lh-tight);
+    line-height: var(--gh-type-line-height-tight);
     -webkit-line-clamp: 1;
     -webkit-box-orient: vertical;
   }
-  .task-subcopy {
+  :global(.work-list-row) .task-subcopy {
     display: -webkit-box;
     overflow: hidden;
-    font-size: var(--fs-1);
+    font-size: var(--gh-type-size-meta);
     color: var(--text-muted);
-    line-height: var(--lh-body);
+    line-height: var(--gh-type-line-height-body);
     -webkit-line-clamp: 2;
     -webkit-box-orient: vertical;
   }
-  .task-breadcrumb {
+  :global(.work-list-row) .task-breadcrumb {
     color: var(--text-muted);
-    font-size: var(--fs-0);
-    line-height: var(--lh-tight);
+    font-size: var(--gh-type-size-caption);
+    line-height: var(--gh-type-line-height-tight);
   }
-  .row-status,
-  .row-domain,
-  .row-priority,
-  .row-updated,
-  .row-revisions {
+  :global(.work-list-row) .row-status,
+  :global(.work-list-row) .row-domain,
+  :global(.work-list-row) .row-priority,
+  :global(.work-list-row) .row-updated,
+  :global(.work-list-row) .row-revisions {
     min-width: 0;
   }
-  .row-status,
-  .row-priority {
+  :global(.work-list-row) .row-status,
+  :global(.work-list-row) .row-priority {
     display: inline-flex;
     align-items: center;
     justify-content: flex-start;
   }
-  .row-domain {
+  :global(.work-list-row) .row-domain {
     color: var(--text-muted);
-    font-size: var(--fs-1);
+    font-size: var(--gh-type-size-meta);
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
   }
-  .row-updated,
-  .row-revisions {
+  :global(.work-list-row) .row-updated,
+  :global(.work-list-row) .row-revisions {
     color: var(--text-muted);
-    font-size: var(--fs-0);
-    line-height: var(--lh-tight);
+    font-size: var(--gh-type-size-caption);
+    line-height: var(--gh-type-line-height-tight);
     text-align: right;
     white-space: nowrap;
   }
   @supports not (grid-template-columns: subgrid) {
     .list-column-head,
-    .work-list-row {
+    :global(.work-list-row) {
       grid-template-columns: var(--work-list-columns);
     }
   }
@@ -782,10 +991,10 @@
   .progress-more > summary {
     cursor: pointer;
     color: var(--text-muted);
-    font-size: var(--fs-1);
+    font-size: var(--gh-type-size-meta);
     text-transform: uppercase;
     letter-spacing: 0.05em;
-    font-weight: 700;
+    font-weight: var(--gh-type-weight-strong);
     list-style: none;
     padding: var(--s-2) 0;
   }
@@ -800,18 +1009,18 @@
   }
   .muted {
     color: var(--text-muted);
-    font-size: var(--fs-2);
+    font-size: var(--gh-type-size-body);
   }
 
   @media (max-width: 860px) {
-    .work-view-header {
+    :global(.work-view-header) {
       align-items: stretch;
       flex-direction: column;
     }
     .work-view-actions {
       justify-content: flex-start;
     }
-    .draft-queue-card {
+    :global(.draft-queue-card) {
       flex-direction: column;
       align-items: stretch;
     }
@@ -822,28 +1031,31 @@
     .work-summary {
       justify-content: flex-start;
     }
-    .work-list-row {
+    .work-list-inspector-layout.has-selection {
+      grid-template-columns: minmax(0, 1fr);
+    }
+    :global(.work-list-row) {
       grid-template-columns: minmax(0, 1fr);
       align-items: stretch;
     }
     .list-column-head {
       display: flex;
       flex-wrap: wrap;
-      gap: var(--s-2);
+      gap: var(--gh-space-2);
       padding: 0;
     }
-    .task-title {
-      font-size: var(--fs-1);
+    :global(.work-list-row) .task-title {
+      font-size: var(--gh-type-size-meta);
     }
-    .task-subcopy {
+    :global(.work-list-row) .task-subcopy {
       -webkit-line-clamp: 3;
     }
-    .row-status,
-    .row-priority {
+    :global(.work-list-row) .row-status,
+    :global(.work-list-row) .row-priority {
       justify-content: flex-start;
     }
-    .row-updated,
-    .row-revisions {
+    :global(.work-list-row) .row-updated,
+    :global(.work-list-row) .row-revisions {
       text-align: left;
     }
   }

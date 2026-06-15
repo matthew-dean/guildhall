@@ -2,6 +2,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { cleanup, render, screen, waitFor } from '@testing-library/svelte'
 import userEvent from '@testing-library/user-event'
+import { readFileSync } from 'node:fs'
 import ProjectsHome from '../ProjectsHome.svelte'
 import { path } from '../../lib/nav.svelte.js'
 import { getCachedService } from '../../lib/service-cache.js'
@@ -58,6 +59,44 @@ function installBrowserFakes() {
 }
 
 describe('ProjectsHome', () => {
+  it('uses a responsive grid for project cards instead of flex wrapping', () => {
+    const source = readFileSync('src/web/surfaces/ProjectsHome.svelte', 'utf-8')
+
+    expect(source).toContain('grid-template-columns: repeat(auto-fit, minmax(min(100%, 24rem), 1fr))')
+    expect(source).not.toContain('flex: 1 1 24rem')
+    expect(source).not.toContain('flex-wrap: wrap;\n    gap: var(--s-2);\n    align-items: stretch;')
+  })
+
+  it('renders registered project cards from the lightweight shell before full status finishes', async () => {
+    const fullService = new Promise<Response>(() => {})
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      if (String(input) === '/api/service/projects') {
+        return json({
+          pid: 1234,
+          projects: servicePayload.projects.map(project => ({
+            id: project.id,
+            path: project.path,
+            name: project.name,
+            summary: project.summary,
+            projectStatusLoading: true,
+            run: project.run,
+          })),
+        } satisfies ServiceDetail)
+      }
+      if (String(input) === '/api/service') return fullService
+      return json(servicePayload)
+    })
+    vi.stubGlobal('fetch', fetchMock)
+
+    render(ProjectsHome)
+
+    await screen.findByText('Looma knit')
+    expect(screen.getByText('Loading project status...')).toBeTruthy()
+    expect(screen.getAllByText('Loading').length).toBeGreaterThan(0)
+    expect(fetchMock.mock.calls.map(([input]) => String(input))).toContain('/api/service/projects')
+    expect(fetchMock.mock.calls.map(([input]) => String(input))).toContain('/api/service')
+  })
+
   beforeEach(() => {
     installBrowserFakes()
   })
@@ -112,8 +151,8 @@ describe('ProjectsHome', () => {
     expect(screen.getByText('Next up')).toBeTruthy()
     expect(screen.getByText('Unblock: Stripe Connect payment flow')).toBeTruthy()
     expect(screen.getAllByText('1').length).toBeGreaterThan(0)
-    expect(screen.getByText('blocked task')).toBeTruthy()
-    expect(screen.getByText('total tasks')).toBeTruthy()
+    expect(screen.getAllByLabelText('1 blocked work item').length).toBeGreaterThan(0)
+    expect(screen.getAllByLabelText('4 total work items').length).toBeGreaterThan(0)
   })
 
   it('opens the fleet needs-you view instead of a random project inbox', async () => {
@@ -275,6 +314,61 @@ describe('ProjectsHome', () => {
     expect(screen.queryByRole('button', { name: /^resume$/i })).toBeNull()
   })
 
+  it('does not label zero-task owner-input projects as ready on the card', async () => {
+    const fetchMock = vi.fn(async () => json({
+      ...servicePayload,
+      projects: [
+        {
+          id: 'commerce',
+          path: '/repo/commerce',
+          name: 'Commerce',
+          taskCounts: { total: 0, active: 0, draftReview: 0, blocked: 0, done: 0, shelved: 0 },
+          run: { status: 'stopped', mode: 'continuous' },
+          startReadiness: { canStart: true },
+          actionModel: {
+            primaryAction: {
+              source: 'owner_input',
+              label: 'Answer in Thread',
+              detail: 'Shape the first spec before Guildhall creates work.',
+              buttonLabel: 'Open Thread',
+              href: '/thread',
+              tone: 'warn',
+            },
+            secondaryActions: [],
+            runControl: {
+              label: 'Waiting on setup',
+              startEnabled: false,
+              disabledReason: 'Shape the first spec before Guildhall creates work.',
+              href: '/thread',
+            },
+            ownerInput: {
+              active: true,
+              label: 'Answer in Thread',
+              detail: 'Shape the first spec before Guildhall creates work.',
+              href: '/thread',
+            },
+            setup: {
+              state: 'blocked',
+              freshIntakeNeeded: false,
+              href: '/thread',
+              detail: 'Shape the first spec before Guildhall creates work.',
+            },
+          },
+        },
+      ],
+    } satisfies ServiceDetail))
+    vi.stubGlobal('fetch', fetchMock)
+
+    render(ProjectsHome)
+    await screen.findByText('Commerce')
+
+    const card = screen.getByRole('button', { name: 'Project: Commerce' })
+    expect(card.textContent).toContain('needs input')
+    expect(card.textContent).not.toContain('ready')
+    expect(screen.queryByRole('button', { name: /start intake/i })).toBeNull()
+    expect(screen.queryByRole('button', { name: /^resume$/i })).toBeNull()
+  })
+
   it('summarizes the project floor and exposes card work mix visuals', async () => {
     const fetchMock = vi.fn(async () => json(servicePayload))
     vi.stubGlobal('fetch', fetchMock)
@@ -283,13 +377,13 @@ describe('ProjectsHome', () => {
     await screen.findByText('Guild hall')
 
     expect(screen.getByLabelText('1 running now')).toBeTruthy()
-    expect(screen.getByLabelText('3 active tasks')).toBeTruthy()
+    expect(screen.getByLabelText('3 active work items')).toBeTruthy()
     expect(screen.getByLabelText('Builder: working')).toBeTruthy()
     expect(screen.getAllByLabelText(/Project work mix:/)).toHaveLength(2)
     expect(screen.getByLabelText(/Project work mix: 2 active, 0 drafts, 0 blocked, 3 done/)).toBeTruthy()
-    await userEvent.hover(screen.getByLabelText('3 active tasks'))
-    expect((await screen.findByRole('tooltip')).textContent).toContain('tasks currently queued or in progress')
-    await userEvent.unhover(screen.getByLabelText('3 active tasks'))
+    await userEvent.hover(screen.getByLabelText('3 active work items'))
+    expect((await screen.findByRole('tooltip')).textContent).toContain('work currently queued or in progress')
+    await userEvent.unhover(screen.getByLabelText('3 active work items'))
     await userEvent.hover(screen.getByText('3 active'))
     expect(screen.queryByRole('tooltip')).toBeNull()
     await userEvent.unhover(screen.getByText('3 active'))
@@ -306,8 +400,8 @@ describe('ProjectsHome', () => {
 
     expect(screen.queryByLabelText(/assigned or relevant/i)).toBeNull()
     expect(screen.getByLabelText('Coordinator: 1 blocker to triage in Fair Labor License.')).toBeTruthy()
-    expect(screen.getByLabelText('Builder: 1 active task waiting for a run in Fair Labor License.')).toBeTruthy()
-    expect(screen.getByLabelText('Reviewer: 1 blocked and 1 done task in Fair Labor License.')).toBeTruthy()
+    expect(screen.getByLabelText('Builder: 1 active work item waiting for a run in Fair Labor License.')).toBeTruthy()
+    expect(screen.getByLabelText('Reviewer: 1 blocked and 1 done work item in Fair Labor License.')).toBeTruthy()
     expect(screen.getAllByText('Coordinator').length).toBeGreaterThan(0)
     expect(screen.getAllByText('Builder').length).toBeGreaterThan(0)
     expect(screen.getAllByText('Reviewer').length).toBeGreaterThan(0)
@@ -327,11 +421,11 @@ describe('ProjectsHome', () => {
     expect(screen.getByLabelText('Spec: at table').classList.contains('avatar-tone-spec')).toBe(true)
     expect(screen.getByLabelText('Builder: working').classList.contains('avatar-tone-builder')).toBe(true)
     expect(screen.getByLabelText('Reviewer: inspecting blocks').classList.contains('avatar-tone-reviewer')).toBe(true)
-    expect(screen.getByLabelText('Builder: 1 active task waiting for a run in Fair Labor License.').classList.contains('avatar-tone-builder')).toBe(true)
-    expect(screen.getByLabelText('Reviewer: 1 blocked and 1 done task in Fair Labor License.').classList.contains('avatar-tone-reviewer')).toBe(true)
+    expect(screen.getByLabelText('Builder: 1 active work item waiting for a run in Fair Labor License.').classList.contains('avatar-tone-builder')).toBe(true)
+    expect(screen.getByLabelText('Reviewer: 1 blocked and 1 done work item in Fair Labor License.').classList.contains('avatar-tone-reviewer')).toBe(true)
   })
 
-  it('starts and stops projects with project ids in the endpoint', async () => {
+  it('resumes and pauses projects with project ids in the endpoint', async () => {
     const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
       const url = String(input)
       if (url.startsWith('/api/project/start')) {
@@ -354,7 +448,7 @@ describe('ProjectsHome', () => {
     const startButton = screen.getByRole('button', { name: /^resume$/i })
     expect(startButton.classList.contains('v-agent')).toBe(true)
     await userEvent.click(startButton)
-    await userEvent.click(screen.getAllByRole('button', { name: /stop/i })[0]!)
+    await userEvent.click(screen.getAllByRole('button', { name: /pause/i })[0]!)
 
     await waitFor(() => {
       expect(fetchMock.mock.calls.some(([input]) => String(input).startsWith('/api/project/start'))).toBe(true)
@@ -394,27 +488,44 @@ describe('ProjectsHome', () => {
 
   it('does not rewrite the dashboard state when a background poll returns the same service snapshot', async () => {
     vi.useFakeTimers()
-    const fetchMock = vi.fn(async () => json(structuredClone(servicePayload)))
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      if (String(input) === '/api/service/projects') {
+        return json({
+          ...structuredClone(servicePayload),
+          projects: servicePayload.projects.map(project => ({
+            id: project.id,
+            path: project.path,
+            name: project.name,
+            summary: project.summary,
+            projectStatusLoading: true,
+            run: project.run,
+          })),
+        } satisfies ServiceDetail)
+      }
+      return json(structuredClone(servicePayload))
+    })
     vi.stubGlobal('fetch', fetchMock)
 
     render(ProjectsHome)
-    await screen.findByText('Looma knit')
+    for (let i = 0; i < 8; i += 1) await Promise.resolve()
+    expect(screen.getByText('Looma knit')).toBeTruthy()
+    expect(getCachedService()).not.toBeNull()
     const cachedAfterInitialLoad = getCachedService()
 
     await vi.advanceTimersByTimeAsync(30000)
 
-    await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(2))
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(3))
     expect(getCachedService()).toBe(cachedAfterInitialLoad)
   })
 
-  it('surfaces start and stop failures on the projects page', async () => {
+  it('surfaces resume and pause failures on the projects page', async () => {
     const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
       const url = String(input)
       if (url.startsWith('/api/project/start')) {
         return json({ error: 'model unavailable' }, { status: 409 })
       }
       if (url.startsWith('/api/project/stop')) {
-        return json({ error: 'stop failed' }, { status: 500 })
+        return json({ error: 'pause failed' }, { status: 500 })
       }
       return json(servicePayload)
     })
@@ -425,8 +536,8 @@ describe('ProjectsHome', () => {
 
     await userEvent.click(screen.getByRole('button', { name: /^resume$/i }))
     await screen.findByText('model unavailable')
-    await userEvent.click(screen.getByRole('button', { name: /stop/i }))
-    await screen.findByText('stop failed')
+    await userEvent.click(screen.getByRole('button', { name: /pause/i }))
+    await screen.findByText('pause failed')
   })
 
   it('handles cancelled attach without navigating away from the projects list', async () => {

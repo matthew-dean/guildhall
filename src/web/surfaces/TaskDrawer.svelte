@@ -10,6 +10,7 @@
   import Button from '../lib/Button.svelte'
   import Chip from '../lib/Chip.svelte'
   import Icon from '../lib/Icon.svelte'
+  import UtilityPanel from '../lib/UtilityPanel.svelte'
   import Tabs from '../lib/Tabs.svelte'
   import Modal from '../lib/Modal.svelte'
   import Textarea from '../lib/Textarea.svelte'
@@ -24,7 +25,7 @@
   import ExpertsTab from './drawer/ExpertsTab.svelte'
   import ProvenanceTab from './drawer/ProvenanceTab.svelte'
   import ResolveEscalationModal from './drawer/ResolveEscalationModal.svelte'
-  import type { DrawerPayload, DrawerTab, Escalation } from '../lib/types.js'
+  import type { DrawerPayload, DrawerTab, Escalation, Task } from '../lib/types.js'
   import { onEvent, eventTaskId } from '../lib/events.js'
   import { currentProjectHref, currentTaskHref, projectFetch } from '../lib/project-routes.js'
   import { project } from '../lib/project.svelte.js'
@@ -33,7 +34,11 @@
   import { toast } from '../lib/toast.svelte.js'
   import { activeEscalations } from '../lib/escalation.js'
   import { escalationPrimaryAction, escalationUserGuidance } from '../lib/escalation-labels.js'
+  import { taskDisplayKey } from '../lib/identifier-labels.js'
+  import { humanizeProjectName } from '../lib/project-name.js'
   import { readableTaskDescription } from '../lib/task-display.js'
+  import { unresolvedCompletionEscalations } from '../lib/task-drawer-integrity.js'
+  import { deliveryProgressBadge } from '../lib/work-progress-display.js'
 
   type RuntimeDevServerStatus = 'starting' | 'running' | 'stopped' | 'failed' | 'stale'
   interface RuntimeDevServer {
@@ -102,8 +107,10 @@
 
   function firstSpecSummaryLine(spec: string | undefined): string | null {
     if (typeof spec !== 'string' || !spec.trim()) return null
-    const summaryMatch = spec.match(/## Summary\s+([\s\S]*?)(?:\n## |\n### |\Z)/i)
-    const summaryBlock = (summaryMatch?.[1] ?? spec).trim()
+    const anchor = /^##\s+(?:Summary|What this is)\s*$/im.exec(spec)
+    const normalized = anchor ? spec.slice(anchor.index + anchor[0].length).trim() : spec.trim()
+    const nextHeadingIndex = normalized.search(/\n##\s|\n###\s/)
+    const summaryBlock = (nextHeadingIndex >= 0 ? normalized.slice(0, nextHeadingIndex) : normalized).trim()
     if (!summaryBlock) return null
     const firstParagraph = summaryBlock.split(/\n\s*\n/)[0]?.trim() ?? ''
     if (!firstParagraph) return null
@@ -269,27 +276,8 @@
     }
   }
 
-  async function answerQuestion(questionId: string, answer: string): Promise<void> {
-    busy = true
-    try {
-      const res = await drawerFetch(`/api/project/task/${encodeURIComponent(taskId)}/answer-questions`, {
-        method: 'POST',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({
-          answers: [{ questionId, answer }],
-        }),
-      })
-      if (!res.ok) {
-        const b = await res.json().catch(() => ({}))
-        error = b.error ?? `HTTP ${res.status}`
-        return
-      }
-      await load()
-    } catch (err) {
-      error = friendlyFetchError(err)
-    } finally {
-      busy = false
-    }
+  function openThreadFromDrawer(): void {
+    nav(drawerProjectHref('/thread'))
   }
 
   function handleApproveSpec() {
@@ -344,7 +332,7 @@
       nextStatus: action.nextStatus,
     }))) return
     await project.refresh()
-    toast.success('Guildhall can continue this task.')
+    toast.success('This task can continue.')
     await runProject('start', taskId)
   }
 
@@ -373,7 +361,7 @@
     if (!(await post('shape-draft'))) return
     await project.refresh()
     await load()
-    toast.success('Draft handed to Guildhall. Starting now.')
+    toast.success('Draft handed off. Starting now.')
     await runProject('start', taskId)
   }
 
@@ -422,12 +410,12 @@
     reworkModal = {
       mode: 'general',
       title: 'Rework task',
-      intro: 'Use this when the task is still valuable, but Guildhall should transform how it is structured, saved, or handed back to agents.',
-      label: 'How should Guildhall rework this?',
+      intro: 'Use this when the task is still valuable, but its structure, saved state, or agent handoff should change.',
+      label: 'How should this be reworked?',
       placeholder: 'e.g. keep the implementation spec, but add an external setup checklist and split live verification into a separate task.',
       fallbackInstruction: 'Rework this task according to the current blocker and project context while preserving useful existing context.',
       submitLabel: 'Rework task',
-      success: 'Guildhall will rework this task.',
+      success: 'This task will be reworked.',
     }
   }
 
@@ -437,12 +425,12 @@
     reworkModal = {
       mode: 'split',
       title: 'Split task',
-      intro: 'Use this when one work item is hiding separate pieces of work, external setup, or decisions. Guildhall will keep the original as containing work and draft smaller nested work.',
+      intro: 'Use this when one work item is hiding separate pieces of work, external setup, or decisions. The original stays as containing work while smaller nested work is drafted.',
       label: 'What should be separated?',
       placeholder: 'Optional: e.g. split Google OAuth setup, Apple OAuth setup, and live sign-in verification.',
       fallbackInstruction: 'Split this work into smaller nested work before implementation.',
       submitLabel: 'Split task',
-      success: 'Guildhall will split this into smaller tasks.',
+      success: 'This will be split into smaller tasks.',
     }
   }
 
@@ -508,7 +496,39 @@
   }
 
   const task = $derived(payload?.task)
+  const currentWorkProgress = $derived(task ? payload?.workProgress?.byTaskId?.[task.id] ?? null : null)
+  const currentDeliveryBadge = $derived(deliveryProgressBadge(currentWorkProgress))
+  const allTaskContext = $derived.by(() => {
+    const byId = new Map<string, Task>()
+    for (const candidate of [...(project.detail?.tasks ?? []), ...(payload?.relatedTasks ?? []), task]) {
+      if (candidate?.id && !byId.has(candidate.id)) byId.set(candidate.id, candidate)
+    }
+    return [...byId.values()]
+  })
+  const taskLinkContext = $derived.by(() => {
+    const byId = new Map<string, Task>()
+    for (const candidate of [...(payload?.relatedTasks ?? []), ...(project.detail?.tasks ?? [])]) {
+      if (candidate?.id && candidate.id !== task?.id) byId.set(candidate.id, candidate)
+    }
+    return [...byId.values()]
+  })
+  const breadcrumbTasks = $derived.by(() => {
+    if (!task) return []
+    const byId = new Map(allTaskContext.map(candidate => [candidate.id, candidate]))
+    const trail: Task[] = []
+    const seen = new Set<string>([task.id])
+    let next = task.hierarchy?.parentId?.trim()
+    while (next && !seen.has(next)) {
+      const parent = byId.get(next)
+      if (!parent) break
+      trail.unshift(parent)
+      seen.add(next)
+      next = parent.hierarchy?.parentId?.trim()
+    }
+    return [...trail, task]
+  })
   const runStatus = $derived(payload?.runStatus ?? project.detail?.run?.status ?? 'stopped')
+  const availabilityStatus = $derived(payload?.availability?.status ?? project.detail?.availability?.status ?? 'active')
   const hasCurrentTurns = $derived((payload?.threadTurns?.length ?? 0) > 0)
   const tabs = $derived(
     hasCurrentTurns
@@ -520,11 +540,19 @@
   }
 
   const isTerminalRunTask = $derived(isTerminalRunStatus(task?.status))
-  const isParentTask = $derived(task?.status === 'parent')
+  function readinessRecommendation(value: Task | undefined): string | null {
+    const recommendation = value?.taskReadiness?.recommendation
+    return typeof recommendation === 'string' ? recommendation : null
+  }
+
+  const isContainingWorkTask = $derived(Boolean(
+    (task?.hierarchy?.childIds?.length ?? 0) > 0 ||
+    readinessRecommendation(task) === 'split',
+  ))
   const canReframeTask = $derived(Boolean(
     task &&
     !isTerminalRunTask &&
-    !isParentTask &&
+    !isContainingWorkTask &&
     task.status !== 'in_progress' &&
     task.status !== 'review' &&
     task.status !== 'gate_check',
@@ -536,19 +564,29 @@
   ))
   const canReworkTask = $derived(canSplitTask)
   const isHeld = $derived(task?.status === 'blocked' && Boolean(task?.hold))
-  const canHold = $derived(task && !isTerminalRunTask && !isParentTask && task.status !== 'blocked')
-  const canShelve = $derived(task && !isParentTask && task.status !== 'done' && task.status !== 'pending_pr')
+  const canHold = $derived(task && !isTerminalRunTask && !isContainingWorkTask && task.status !== 'blocked')
+  const canShelve = $derived(task && !isContainingWorkTask && task.status !== 'done' && task.status !== 'pending_pr')
   const isShelved = $derived(task?.status === 'shelved')
   const isWorkspaceImportTask = $derived(task?.id === 'task-workspace-import')
+  const hasUnansweredTaskQuestion = $derived(Boolean(task?.openQuestions?.some(question => !question.answeredAt && !question.answer)))
   const openEscalations = $derived(task ? activeEscalations(task) : [])
-  const firstOpenEscalation = $derived(openEscalations[0] ?? null)
+  const completionEscalations = $derived(task ? unresolvedCompletionEscalations(task) : [])
+  const hasCompletionEscalationHygieneWarning = $derived(completionEscalations.length > 0)
+  const firstOpenEscalation = $derived(hasCompletionEscalationHygieneWarning ? null : (openEscalations[0] ?? null))
   const projectStartBlocker = $derived(
     project.detail?.startReadiness?.canStart === false
       ? project.detail.startReadiness
       : null,
   )
   const projectStartBlockerMessage = $derived(projectStartBlocker?.message ?? null)
-  const canRunTaskDirectly = $derived(!projectStartBlocker && !hasCurrentTurns && !isTerminalRunTask && !isParentTask && !firstOpenEscalation)
+  const canRunTaskDirectly = $derived(
+    !projectStartBlocker &&
+    !isTerminalRunTask &&
+    !isContainingWorkTask &&
+    !firstOpenEscalation &&
+    !hasUnansweredTaskQuestion &&
+    (!hasCurrentTurns || task?.status === 'ready'),
+  )
   const canResumeHold = $derived(!projectStartBlocker && isHeld && !firstOpenEscalation)
   const firstOpenEscalationAction = $derived(escalationPrimaryAction(firstOpenEscalation))
   const firstOpenEscalationGuidance = $derived(escalationUserGuidance(firstOpenEscalation))
@@ -566,7 +604,7 @@
         eyebrow: 'Put aside',
         title: 'This task is out of the active queue.',
         detail: task.shelveReason?.detail
-          ?? 'Guildhall will not work on it again until you return it to the queue.',
+          ?? 'It will not be picked up again until you return it to the queue.',
       }
     }
     if (isHeld) {
@@ -576,15 +614,16 @@
         title: 'This task is out of the active queue for now.',
         detail: task.hold?.reason
           ? `Reason: ${task.hold.reason}`
-        : 'Resume it when you want Guildhall to continue from the saved stage.',
+        : 'Resume it when you want work to continue from the saved stage.',
       }
     }
-    if (task.status === 'parent') {
+    if (hasCompletionEscalationHygieneWarning) {
+      const firstEscalation = completionEscalations[0]
       return {
-        tone: 'info',
-        eyebrow: 'Containing work',
-        title: 'Work happens in the nested work below.',
-        detail: 'Open Overview to move through the linked work.',
+        tone: 'warn',
+        eyebrow: 'Completion hygiene',
+        title: 'This task is marked done but still has unresolved escalation history.',
+        detail: firstEscalation?.summary ?? 'Review the unresolved escalation before treating the completion as clean.',
       }
     }
     if (task.terminalSummary?.headline) {
@@ -604,14 +643,14 @@
           : `This task is ${friendlyStatus(task.status)}.`,
         detail: task.completedAt
           ? `Completed at ${task.completedAt}.`
-          : 'Guildhall has no active next step for this task.',
+          : 'There is no active next step for this task.',
       }
     }
     if (firstOpenEscalation) {
       const guidance = escalationUserGuidance(firstOpenEscalation)
       return {
         tone: guidance.actionOwner === 'guildhall' ? 'info' : 'warn',
-        eyebrow: guidance.actionOwner === 'guildhall' ? 'Guildhall can continue' : 'Needs recovery',
+        eyebrow: guidance.actionOwner === 'guildhall' ? 'Queued' : 'Needs recovery',
         title: guidance.title,
         detail: guidance.nextStep,
       }
@@ -621,14 +660,18 @@
         tone: 'info',
         eyebrow: 'Checkpoint saved',
         title: task.latestCheckpoint.nextPlannedAction
-          ? 'Guildhall saved where to resume.'
-          : 'Guildhall saved a recovery checkpoint.',
+          ? 'Resume point saved.'
+          : 'Recovery checkpoint saved.',
         detail: task.latestCheckpoint.nextPlannedAction
           ?? task.latestCheckpoint.intent
           ?? 'The next worker pass can resume from the latest checkpoint.',
       }
     }
     return null
+  })
+  const drawerOutcomeTone = $derived<'accent' | 'warn' | 'ok'>(() => {
+    if (!drawerOutcome) return 'accent'
+    return drawerOutcome.tone === 'info' ? 'accent' : drawerOutcome.tone
   })
   const activeTabOwnsEscalationDecision = $derived(
     Boolean(firstOpenEscalation) && (activeTab === 'current' || activeTab === 'spec'),
@@ -654,7 +697,7 @@
     const name = project.detail?.name?.trim()
     if (name) return name
     const id = scopedProjectId()
-    return id ? id.replace(/[-_]+/g, ' ') : 'Project'
+    return humanizeProjectName(id)
   })
   const displayTaskDescription = $derived.by(() => {
     if (!task || typeof task.description !== 'string') return ''
@@ -765,7 +808,7 @@
             await runProject(action, nextTaskId, false)
             return
           }
-          toast.info('Guildhall is already running. This task stays queued for the coordinator.')
+          toast.info('A run is already active. This task stays queued for the coordinator.')
           return
         }
         runError = b.error ?? `${action === 'start' ? 'Start' : 'Stop'} failed (HTTP ${res.status})`
@@ -834,12 +877,38 @@
     <div class="drawer-title-block">
       <nav class="drawer-breadcrumb" aria-label="Task breadcrumb">
         <a href={drawerProjectHref('/overview')}>{drawerProjectLabel}</a>
-        <span aria-hidden="true">/</span>
-        <span>{task?.id ?? taskId}</span>
+        {#each breadcrumbTasks as crumb, index (crumb.id)}
+          <span aria-hidden="true">/</span>
+          {#if index < breadcrumbTasks.length - 1}
+            <a
+              href={currentTaskHref(crumb.id, scopedProjectId())}
+              onclick={(event) => {
+                event.preventDefault()
+                navigateToRelatedTask(crumb.id)
+              }}
+            >
+              {taskDisplayKey(crumb, allTaskContext)}
+            </a>
+          {:else}
+            <span>{taskDisplayKey(crumb, allTaskContext)}</span>
+          {/if}
+        {/each}
+        {#if breadcrumbTasks.length === 0}
+          <span aria-hidden="true">/</span>
+          <span>{taskDisplayKey(taskId, allTaskContext)}</span>
+        {/if}
       </nav>
       <h3>{displayTaskTitle}</h3>
       {#if displayTaskDescription}
         <p>{displayTaskDescription}</p>
+      {/if}
+      {#if currentDeliveryBadge}
+        <div class="drawer-progress-line">
+          <Chip
+            label={currentDeliveryBadge.label}
+            tone={currentDeliveryBadge.tone === 'warn' ? 'warn' : currentDeliveryBadge.tone === 'ok' ? 'ok' : 'neutral'}
+          />
+        </div>
       {/if}
     </div>
     <Button variant="ghost" size="sm" ariaLabel="Close" onclick={onClose}>
@@ -865,18 +934,24 @@
       </div>
     {:else if !payload}
       <p class="loading">Loading...</p>
-    {:else}
+      {:else}
       {#if drawerOutcome && !activeTabOwnsEscalationDecision}
-        <section class={`drawer-outcome tone-${drawerOutcome.tone}`} aria-label={drawerOutcome.eyebrow}>
+        <UtilityPanel
+          as="section"
+          className="drawer-outcome"
+          tone={drawerOutcomeTone}
+          railStrength="strong"
+          ariaLabel={drawerOutcome.eyebrow}
+        >
           <span class="outcome-eyebrow">{drawerOutcome.eyebrow}</span>
           <strong>{drawerOutcome.title}</strong>
           <span>{drawerOutcome.detail}</span>
-        </section>
+        </UtilityPanel>
       {/if}
       {#if devServers.length > 0}
         <section class="drawer-dev-servers" aria-label="Runtime dev servers">
           {#each devServers as server}
-            <div class="drawer-dev-server">
+            <UtilityPanel as="div" className="drawer-dev-server" tone="neutral">
               <div>
                 <div class="drawer-dev-server-head">
                   <strong>{server.id}</strong>
@@ -899,7 +974,7 @@
                   <Button variant="secondary" size="sm" disabled={devServerBusyId === server.id} onclick={() => void restartDevServer(server.id)}>Restart</Button>
                 {/if}
               </div>
-            </div>
+            </UtilityPanel>
           {/each}
         </section>
       {/if}
@@ -911,7 +986,10 @@
           {runBusy}
           {runError}
           {runStatus}
+          {availabilityStatus}
           {projectStartBlockerMessage}
+          contextDebug={payload.contextDebug ?? []}
+          workProgress={currentWorkProgress}
           onApproveBrief={() => post('approve-brief')}
           onApproveSpec={handleApproveSpec}
           onRunTask={() => runProject('start', taskId)}
@@ -919,12 +997,15 @@
           onOpenSpecTab={() => (activeTab = 'spec')}
           onOpenEscalationAction={handleOpenEscalationAction}
           onRunEscalationAction={handleRunEscalationById}
-          onAnswerQuestion={answerQuestion}
+          onOpenThread={openThreadFromDrawer}
         />
       {:else if activeTab === 'overview'}
         <OverviewTab
           task={payload.task}
+          tasks={taskLinkContext}
           projectId={scopedProjectId()}
+          deliverySpine={payload.deliverySpine}
+          workProgress={currentWorkProgress}
           onNavigateTask={navigateToRelatedTask}
           onCreateSplitChildren={handleCreateSplitChildren}
           createSplitBusy={splitTaskBusy}
@@ -944,7 +1025,7 @@
           onAddAcceptance={handleAddAcceptance}
         />
       {:else if activeTab === 'journey'}
-        <JourneyTab task={payload.task} projectId={scopedProjectId()} />
+        <JourneyTab task={payload.task} projectId={scopedProjectId()} workProgress={currentWorkProgress} />
       {:else if activeTab === 'transcript'}
         <TranscriptTab task={payload.task} exploringTranscript={payload.exploringTranscript} />
       {:else if activeTab === 'experts'}
@@ -961,9 +1042,13 @@
     <footer class="gh-drawer-foot">
       {#if isWorkspaceImportTask}
         <div class="footer-actions-left">
-          <Button variant="ghost" size="sm" onclick={() => copyTaskLink(task.id)}>
+          <button
+            type="button"
+            class="footer-utility-action"
+            onclick={() => copyTaskLink(task.id)}
+          >
             Copy link
-          </Button>
+          </button>
         </div>
         <div class="footer-actions-right">
           <Button
@@ -989,12 +1074,12 @@
             {#if canRunTaskDirectly}
               {#if runStatus === 'running'}
                 <Button
-                  variant="danger"
+                  variant="secondary"
                   size="sm"
                   disabled={runBusy}
                   onclick={() => runProject('stop')}
                 >
-                  Stop run
+                  Pause run
                 </Button>
               {:else}
                 <Button
@@ -1004,7 +1089,7 @@
                   onclick={() => runProject('start', task.id)}
                 >
                   <Icon name="sparkles" size={14} />
-                  Start only this work item
+                  Resume only this work item
                 </Button>
               {/if}
             {/if}
@@ -1013,7 +1098,7 @@
             <div class="more-actions" class:is-open={moreActionsOpen} bind:this={moreActionsEl}>
               <button
                 type="button"
-                class="more-actions-trigger"
+                class="footer-utility-action more-actions-trigger"
                 aria-haspopup="menu"
                 aria-expanded={moreActionsOpen}
                 onclick={() => (moreActionsOpen = !moreActionsOpen)}
@@ -1026,71 +1111,75 @@
                   <button
                     bind:this={reframeButtonEl}
                     type="button"
-                    class="more-action-button agent"
+                    class="more-action-button"
                     disabled={busy || runBusy}
                   >
                     Reframe task...
                   </button>
                 {/if}
                 {#if canReworkTask}
-                  <Button
-                    variant="agent"
-                    size="sm"
+                  <button
+                    type="button"
+                    class="more-action-button"
                     disabled={busy || runBusy}
                     onclick={handleOpenRework}
                   >
                     <Icon name="sparkles" size={14} />
                     Rework task...
-                  </Button>
+                  </button>
                 {/if}
                 {#if canSplitTask}
-                  <Button
-                    variant="secondary"
-                    size="sm"
+                  <button
+                    type="button"
+                    class="more-action-button"
                     disabled={busy || runBusy}
                     onclick={handleOpenSplit}
                   >
                     Split task...
-                  </Button>
+                  </button>
                 {/if}
                 {#if canHold}
                   {#if stageRerun}
-                    <Button
-                      variant="agent"
-                      size="sm"
+                    <button
+                      type="button"
+                      class="more-action-button"
                       disabled={busy || rerunStageBusy !== null}
                       onclick={() => rerunStage(stageRerun.stage)}
                     >
                       <Icon name="sparkles" size={14} />
                       {rerunStageBusy === stageRerun.stage ? 'Re-running...' : stageRerun.label}
-                    </Button>
+                    </button>
                   {/if}
-                  <Button
-                    variant="secondary"
-                    size="sm"
+                  <button
+                    type="button"
+                    class="more-action-button"
                     disabled={busy}
                     onclick={handleOpenHold}
                   >
                     Pause and keep in queue...
-                  </Button>
+                  </button>
                 {/if}
                 {#if !isShelved && canShelve}
-                  <Button
-                    variant="danger"
-                    size="sm"
+                  <button
+                    type="button"
+                    class="more-action-button destructive"
                     disabled={busy}
                     onclick={handleShelve}
                   >
                     Shelve task...
-                  </Button>
+                  </button>
                 {/if}
               </div>
               {/if}
             </div>
           {/if}
-          <Button variant="ghost" size="sm" onclick={() => copyTaskLink(task.id)}>
+          <button
+            type="button"
+            class="footer-utility-action"
+            onclick={() => copyTaskLink(task.id)}
+          >
             Copy link
-          </Button>
+          </button>
         </div>
         <div class="footer-actions-right">
           {#if firstOpenEscalation && !activeTabOwnsEscalationDecision}
@@ -1205,9 +1294,9 @@
   {#snippet children()}
     <Stack gap="3">
       <p class="modal-copy">
-        Use this when the task is still valid but should wait. Guildhall keeps
+        Use this when the task is still valid but should wait. The app keeps
         it in the queue, skips it for now, and lets you resume it later. It does
-        not stop a running Guildhall pass; use Stop first if Guildhall is
+        not stop a running pass; use Stop first if work is
         currently working.
       </p>
       <Field label="Why is this on hold?">
@@ -1237,7 +1326,7 @@
 >
   {#snippet children()}
     <p class="modal-copy">
-      Shelving removes this task from the active plan. Guildhall will not pick it
+      Shelving removes this task from the active plan. It will not be picked up
       up during normal runs unless you unshelve it later.
     </p>
   {/snippet}
@@ -1341,20 +1430,14 @@
     overflow-y: auto;
     padding: var(--s-4);
   }
-  .drawer-outcome {
+  :global(.drawer-outcome) {
     display: grid;
     gap: var(--s-1);
     margin-bottom: var(--s-4);
-    padding: var(--s-3);
-    border: 1px solid var(--border);
-    border-left-width: 3px;
-    border-radius: var(--radius-md);
-    background: var(--bg);
-    color: var(--text);
   }
-  .drawer-outcome strong {
-    font-size: var(--fs-2);
-    line-height: var(--lh-tight);
+  :global(.drawer-outcome) strong {
+    font-size: var(--gh-type-size-body);
+    line-height: var(--gh-type-line-height-tight);
   }
   .drawer-title-block {
     display: grid;
@@ -1367,7 +1450,7 @@
     gap: var(--s-1);
     min-width: 0;
     color: var(--text-muted);
-    font-size: var(--fs-1);
+    font-size: var(--gh-type-size-meta);
   }
   .drawer-breadcrumb a,
   .drawer-breadcrumb span:last-child {
@@ -1388,62 +1471,55 @@
   .drawer-title-block p {
     margin: 0;
     color: var(--text-muted);
-    font-size: var(--fs-1);
-    line-height: var(--lh-copy);
+    font-size: var(--gh-type-size-meta);
+    line-height: var(--gh-type-line-height-relaxed);
     overflow-wrap: anywhere;
   }
-  .drawer-outcome span:last-child {
+  .drawer-progress-line {
+    display: flex;
+    flex-wrap: wrap;
+    gap: var(--s-2);
+    align-items: center;
+  }
+  :global(.drawer-outcome) span:last-child {
     color: var(--text-muted);
-    font-size: var(--fs-1);
-    line-height: var(--lh-copy);
+    font-size: var(--gh-type-size-meta);
+    line-height: var(--gh-type-line-height-relaxed);
   }
   .modal-copy {
     margin: 0;
     color: var(--text-muted);
-    font-size: var(--fs-2);
-    line-height: var(--lh-body);
+    font-size: var(--gh-type-size-body);
+    line-height: var(--gh-type-line-height-body);
   }
   .outcome-eyebrow {
     color: var(--text-subtle);
-    font-size: var(--fs-0);
-    font-weight: 700;
+    font-size: var(--gh-type-size-caption);
+    font-weight: var(--gh-type-weight-strong);
     letter-spacing: 0.08em;
     text-transform: uppercase;
-  }
-  .drawer-outcome.tone-warn {
-    border-left-color: var(--warning);
-  }
-  .drawer-outcome.tone-ok {
-    border-left-color: var(--success);
-  }
-  .drawer-outcome.tone-info {
-    border-left-color: var(--accent);
   }
   .drawer-dev-servers {
     display: grid;
     gap: var(--s-2);
     margin-bottom: var(--s-3);
   }
-  .drawer-dev-server {
+  :global(.drawer-dev-server) {
     display: grid;
     grid-template-columns: minmax(0, 1fr) auto;
     gap: var(--s-3);
-    padding: var(--s-3);
-    border: 1px solid var(--border);
-    border-radius: var(--r-2);
-    background: var(--bg-raised-2);
   }
-  .drawer-dev-server-head,
-  .drawer-dev-server-actions {
+  :global(.drawer-dev-server) .drawer-dev-server-head,
+  :global(.drawer-dev-server) .drawer-dev-server-actions {
     display: flex;
     align-items: center;
     gap: var(--s-2);
     flex-wrap: wrap;
   }
-  .drawer-dev-server p {
+  :global(.drawer-dev-server) p {
     margin: var(--s-1) 0 0;
     color: var(--text-muted);
-    font-size: var(--fs-1);
+    font-size: var(--gh-type-size-meta);
     overflow-wrap: anywhere;
   }
   .gh-drawer-foot {
@@ -1481,8 +1557,8 @@
   }
   .run-error {
     color: var(--danger);
-    font-size: var(--fs-1);
-    line-height: var(--lh-tight);
+    font-size: var(--gh-type-size-meta);
+    line-height: var(--gh-type-line-height-tight);
     max-width: 28ch;
     overflow: hidden;
     text-overflow: ellipsis;
@@ -1490,70 +1566,81 @@
   }
   .more-actions {
     position: relative;
+    margin-right: var(--s-4);
   }
-  .more-actions-trigger {
+  .footer-utility-action {
     appearance: none;
     border: 0;
     background: transparent;
-    padding: 0;
+    padding: var(--s-1) 0;
     cursor: pointer;
     color: var(--text-muted);
-    font-size: var(--fs-1);
-    font-weight: 700;
+    font-size: var(--gh-type-size-meta);
+    font-weight: var(--gh-type-weight-strong);
     font-family: inherit;
+    line-height: var(--gh-type-line-height-control);
   }
   .more-actions.is-open .more-actions-trigger,
-  .more-actions-trigger:hover,
-  .more-actions-trigger:focus-visible {
+  .footer-utility-action:hover,
+  .footer-utility-action:focus-visible {
     color: var(--text);
+    outline: none;
   }
   .more-action-menu {
     position: absolute;
     right: 0;
     bottom: calc(100% + var(--s-2));
     display: grid;
-    gap: var(--s-2);
-    min-width: 180px;
+    gap: var(--s-1);
+    min-width: 220px;
     padding: var(--s-2);
-    border: 1px solid var(--border);
+    border: 1px solid var(--glass-border);
     border-radius: var(--radius-md);
-    background: var(--bg-raised);
-    box-shadow: var(--shadow-lg);
+    background:
+      var(--glass-reflect-violet),
+      color-mix(in srgb, var(--glass-bg-strong) 92%, var(--bg-raised));
+    box-shadow: var(--glass-shadow), var(--glass-etch);
+    backdrop-filter: var(--glass-blur);
+    -webkit-backdrop-filter: var(--glass-blur);
     z-index: 20;
   }
   .more-action-button {
     display: inline-flex;
     align-items: center;
-    justify-content: center;
-    min-height: 28px;
+    justify-content: flex-start;
+    gap: var(--s-2);
+    width: 100%;
+    min-height: 34px;
     padding: 0 var(--s-3);
     border: 1px solid transparent;
     border-radius: var(--r-1);
+    color: var(--text);
+    background: transparent;
     font-family: inherit;
-    font-size: var(--fs-1);
-    font-weight: 700;
-    line-height: 1;
+    font-size: var(--gh-type-size-meta);
+    font-weight: var(--gh-type-weight-strong);
+    line-height: var(--gh-type-line-height-control);
     cursor: pointer;
     white-space: nowrap;
   }
-  .more-action-button.agent {
-    color: var(--text);
-    border-color: rgba(139, 108, 255, 0.5);
-    background: rgba(139, 108, 255, 0.22);
-  }
   .more-action-button:hover:not(:disabled),
   .more-action-button:focus-visible {
-    border-color: var(--accent);
-    background: rgba(139, 108, 255, 0.32);
+    border-color: color-mix(in srgb, var(--glass-border-strong) 76%, var(--accent));
+    background: color-mix(in srgb, var(--glass-inset-bg-strong) 84%, var(--accent) 8%);
+    outline: none;
+  }
+  .more-action-button.destructive {
+    color: color-mix(in srgb, var(--danger) 78%, var(--text));
+  }
+  .more-action-button.destructive:hover:not(:disabled),
+  .more-action-button.destructive:focus-visible {
+    border-color: color-mix(in srgb, var(--danger) 42%, var(--glass-border));
+    background: color-mix(in srgb, var(--danger) 12%, var(--glass-inset-bg-strong));
   }
   .more-action-button:disabled {
+    color: var(--text-dim);
     cursor: not-allowed;
-    opacity: 0.55;
-  }
-  .copy-link {
-    color: var(--text-muted);
-    font-size: var(--fs-1);
-    text-decoration: underline dotted;
+    opacity: 0.72;
   }
   .error-stack {
     display: flex;
@@ -1564,13 +1651,13 @@
   .loading,
   .error {
     color: var(--text-muted);
-    font-size: var(--fs-2);
+    font-size: var(--gh-type-size-body);
   }
   .error {
     color: var(--danger);
   }
   @media (max-width: 720px) {
-    .drawer-dev-server {
+    :global(.drawer-dev-server) {
       grid-template-columns: 1fr;
     }
     .gh-drawer-foot,

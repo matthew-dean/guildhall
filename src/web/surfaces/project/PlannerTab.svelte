@@ -3,6 +3,7 @@
 -->
 <script lang="ts">
   import TaskCard from '../../lib/TaskCard.svelte'
+  import { hasUnmetDependencies } from '../../lib/task-dependencies.js'
   import { effectiveWorkStatus } from '../../lib/task-state.js'
   import type { ProjectDetail, Task } from '../../lib/types.js'
 
@@ -37,18 +38,17 @@
     return status ?? ''
   }
 
-  const statusById = $derived(
-    new Map(tasks.map(task => [task.id, statusOf(task)])),
-  )
-
   function dependenciesSatisfied(task: Task): boolean {
-    const deps = task.dependsOn ?? []
-    if (deps.length === 0) return true
-    return deps.every(id => statusById.get(id) === 'done')
+    return !hasUnmetDependencies(task, tasks)
   }
 
   function isDependencyBlocked(task: Task): boolean {
     return !dependenciesSatisfied(task)
+  }
+
+  function taskProgress(task: Task) {
+    const id = typeof task.id === 'string' ? task.id : ''
+    return id ? detail.workProgress?.byTaskId?.[id] : null
   }
 
   const dependencyBlocked = $derived(tasks.filter(t => !dependenciesSatisfied(t)))
@@ -96,20 +96,22 @@
               {#each stage.cards as t (t.id)}
                 <TaskCard
                   task={t}
+                  relatedTasks={tasks}
                   coordinatorRunning={running}
                   displayStatusLabel={isDependencyBlocked(t)
-                    ? 'Waiting'
+                    ? 'Blocked'
                     : statusOf(t) === 'needs_spec_cleanup'
-                      ? 'Needs brief cleanup'
+                      ? 'Needs brief'
                       : statusOf(t) === 'paused'
                         ? 'Paused'
                         : statusOf(t) === 'review_waiting'
-                          ? 'Review waiting'
+                          ? 'Review'
                           : statusOf(t) === 'gates_waiting'
-                            ? 'Gates waiting'
+                            ? 'Gates'
                             : undefined}
-                  displayStatusTone={isDependencyBlocked(t) || ['needs_spec_cleanup', 'review_waiting', 'gates_waiting'].includes(statusOf(t)) ? 'warn' : statusOf(t) === 'paused' ? 'neutral' : undefined}
+                  displayStatusTone={isDependencyBlocked(t) ? 'danger' : ['needs_spec_cleanup', 'review_waiting', 'gates_waiting'].includes(statusOf(t)) ? 'warn' : statusOf(t) === 'paused' ? 'neutral' : undefined}
                   displayStatusIcon={isDependencyBlocked(t) || ['needs_spec_cleanup', 'review_waiting', 'gates_waiting'].includes(statusOf(t)) ? 'alert-triangle' : undefined}
+                  workProgress={taskProgress(t)}
                 />
               {/each}
             </div>
@@ -137,20 +139,20 @@
     gap: var(--s-3);
   }
   .focus-label {
-    font-size: var(--fs-0);
+    font-size: var(--gh-type-size-caption);
     text-transform: uppercase;
     letter-spacing: 0.05em;
-    font-weight: 700;
+    font-weight: var(--gh-type-weight-strong);
     color: var(--text-muted);
   }
   .focus-title {
     color: var(--text);
-    font-weight: 700;
-    line-height: var(--lh-body);
+    font-weight: var(--gh-type-weight-strong);
+    line-height: var(--gh-type-line-height-body);
   }
   .blocked-count {
     color: var(--warn);
-    font-size: var(--fs-1);
+    font-size: var(--gh-type-size-meta);
     white-space: nowrap;
   }
   .planner-scroll {
@@ -177,10 +179,10 @@
   .col-head {
     display: flex;
     justify-content: space-between;
-    font-size: var(--fs-0);
+    font-size: var(--gh-type-size-caption);
     text-transform: uppercase;
     letter-spacing: 0.05em;
-    font-weight: 700;
+    font-weight: var(--gh-type-weight-strong);
     color: var(--text-muted);
   }
   .count {
@@ -188,7 +190,7 @@
   }
   .empty {
     color: var(--text-muted);
-    font-size: var(--fs-1);
+    font-size: var(--gh-type-size-meta);
     padding: var(--s-4) 0;
     text-align: center;
     border: 1px dashed var(--border);

@@ -2,7 +2,7 @@
   import type { Snippet } from 'svelte'
   import Icon, { type IconName } from './Icon.svelte'
 
-  type Tone = 'neutral' | 'accent' | 'ok' | 'warn' | 'danger'
+  type Tone = 'neutral' | 'accent' | 'attention' | 'ok' | 'warn' | 'danger'
   type Density = 'regular' | 'compact'
 
   interface Props {
@@ -85,8 +85,8 @@
   .notice-band-actions :global(a) {
     color: inherit;
     text-decoration: underline;
-    font-size: var(--fs-2);
-    font-weight: 600;
+    font-size: var(--gh-type-size-body);
+    font-weight: var(--gh-type-weight-strong);
   }
   .notice-band-actions :global(button) {
     background: transparent;
@@ -106,6 +106,18 @@
   }
   .tone-accent .notice-band-icon {
     color: var(--accent);
+  }
+  .tone-attention {
+    background: var(--surface-neutral);
+    color: var(--text);
+    box-shadow: inset 3px 0 0 var(--stripe-warn);
+    border-top-color: color-mix(in srgb, var(--warn) 22%, var(--border));
+    border-bottom-color: color-mix(in srgb, var(--warn) 22%, var(--border));
+  }
+  .tone-attention .notice-band-icon,
+  .tone-attention .notice-band-actions :global(a),
+  .tone-attention .notice-band-actions :global(button) {
+    color: var(--warn);
   }
   .tone-ok {
     background: var(--surface-ok);

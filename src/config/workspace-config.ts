@@ -2,7 +2,6 @@ import { readFileSync, writeFileSync, existsSync, mkdirSync } from 'node:fs'
 import { join, dirname, resolve } from 'node:path'
 import { load as yamlLoad, dump as yamlDump } from 'js-yaml'
 import { WorkspaceYamlConfig, AgentSettings, AGENT_OVERRIDES_FILENAME, slugify } from './schemas.js'
-import { ensureProjectLocalStateIgnored } from './project-config.js'
 import type { ZodError } from 'zod'
 
 // ---------------------------------------------------------------------------
@@ -80,7 +79,6 @@ export function writeWorkspaceConfig(workspacePath: string, config: WorkspaceYam
   if (!existsSync(absPath)) {
     mkdirSync(absPath, { recursive: true })
   }
-  ensureProjectLocalStateIgnored(absPath)
 
   const validated = WorkspaceYamlConfig.parse(config)
   const yaml = yamlDump(validated, { lineWidth: 120, noRefs: true })
@@ -92,7 +90,7 @@ export function writeWorkspaceConfig(workspacePath: string, config: WorkspaceYam
 // ---------------------------------------------------------------------------
 
 /**
- * Create a new workspace directory with a guildhall.yaml and empty .guildhall/ subdir.
+ * Create a new workspace directory with a guildhall.yaml.
  * Safe to call on an existing directory — only writes missing files.
  */
 export function bootstrapWorkspace(
@@ -105,7 +103,6 @@ export function bootstrapWorkspace(
 ): WorkspaceYamlConfig {
   const absPath = resolve(workspacePath)
   const configPath = join(absPath, FORGE_YAML_FILENAME)
-  const projectStatePath = join(absPath, MEMORY_DIR_NAME)
 
   // Don't overwrite existing config
   if (existsSync(configPath)) {
@@ -114,7 +111,6 @@ export function bootstrapWorkspace(
 
   // Ensure directories exist
   mkdirSync(absPath, { recursive: true })
-  mkdirSync(projectStatePath, { recursive: true })
 
   // Derive id from name
   const id = slugify(options.name)
@@ -127,21 +123,6 @@ export function bootstrapWorkspace(
   })
 
   writeWorkspaceConfig(absPath, config)
-
-  // Seed empty shared project-state files.
-  const projectStateFiles = {
-    'TASKS.json': '[]',
-    'MEMORY.md': `# ${options.name} Memory\n\n_Updated by GuildHall agents._\n`,
-    'DECISIONS.md': `# ${options.name} Decisions\n\n_Architecture decisions recorded by GuildHall agents._\n`,
-    'PROGRESS.md': `# ${options.name} Progress\n\n_Progress log maintained by GuildHall agents._\n`,
-  }
-
-  for (const [filename, content] of Object.entries(projectStateFiles)) {
-    const filePath = join(projectStatePath, filename)
-    if (!existsSync(filePath)) {
-      writeFileSync(filePath, content, 'utf8')
-    }
-  }
 
   return config
 }

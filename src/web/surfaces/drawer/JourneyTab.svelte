@@ -6,17 +6,19 @@
 <script lang="ts">
   import Stack from '../../lib/Stack.svelte'
   import Button from '../../lib/Button.svelte'
-  import Card from '../../lib/Card.svelte'
+  import Card from '../../lib/ui-compat/Card.svelte'
   import Chip from '../../lib/Chip.svelte'
   import Markdown from '../../lib/Markdown.svelte'
   import Modal from '../../lib/Modal.svelte'
   import { projectFetch } from '../../lib/project-routes.js'
   import { readableTaskDescription } from '../../lib/task-display.js'
+  import type { TaskWorkProgressDisplay } from '../../lib/work-progress-display.js'
   import type { ExpectedEvidence, LaunchStep, Task, VerificationRecord } from '../../lib/types.js'
 
   interface Props {
     task: Task
     projectId?: string | null
+    workProgress?: TaskWorkProgressDisplay | null
   }
 
   interface FilePreview {
@@ -27,7 +29,7 @@
     truncated?: boolean
   }
 
-  let { task, projectId = null }: Props = $props()
+  let { task, projectId = null, workProgress = null }: Props = $props()
   let selectedFile = $state<string | null>(null)
   let filePreview = $state<FilePreview | null>(null)
   let fileBusy = $state(false)
@@ -44,7 +46,7 @@
   const completionHandoff = $derived(task.completionHandoff ?? null)
   const verdicts = $derived(task.reviewVerdicts ?? [])
   const gates = $derived(task.gateResults ?? [])
-  const taskDescription = $derived(readableTaskDescription(task.description, task.title) || 'Guildhall shaped the task from the saved brief and spec.')
+  const taskDescription = $derived(readableTaskDescription(task.description, task.title) || 'This task was shaped from the saved brief and spec.')
   const changedFiles = $derived(uniqueFiles([
     ...(checkpoint?.filesTouched ?? []),
     ...(task.gitStory?.samplePaths ?? []),
@@ -64,6 +66,10 @@
   })
   const reviewLaneSummary = $derived((reviewPlan?.selectedLanes ?? []).slice(0, 4).map(friendlyToken).join(', '))
   const hiddenLaneCount = $derived(Math.max(0, (reviewPlan?.selectedLanes?.length ?? 0) - 4))
+  const deliverySteps = $derived(workProgress?.deliverySteps ?? [])
+  const requiredDeliveryCount = $derived(workProgress?.rollup?.requiredStepCount ?? deliverySteps.filter(step => step.required).length)
+  const doneDeliveryCount = $derived(workProgress?.rollup?.doneStepCount ?? deliverySteps.filter(step => step.status === 'done').length)
+  const blockedDeliverySteps = $derived(deliverySteps.filter(step => step.status === 'blocked'))
 
   function unique(values: readonly string[]): string[] {
     return [...new Set(values.map(value => value.trim()).filter(Boolean))]
@@ -398,6 +404,22 @@
               </ul>
             </section>
           {/if}
+          {#if deliverySteps.length > 0}
+            <section class="detail">
+              <h4>Delivery completed</h4>
+              <p class="muted">{doneDeliveryCount} of {requiredDeliveryCount || deliverySteps.length} required delivery steps complete.</p>
+              {#if blockedDeliverySteps.length > 0}
+                <ul class="proof-list">
+                  {#each blockedDeliverySteps as step (step.id ?? step.title)}
+                    <li>
+                      <Chip label="Blocked" tone="warn" />
+                      <span>{step.title ?? 'Blocked delivery step'}</span>
+                    </li>
+                  {/each}
+                </ul>
+              {/if}
+            </section>
+          {/if}
         </div>
       </article>
     </li>
@@ -516,8 +538,8 @@
   .intro,
   p {
     color: var(--text-muted);
-    font-size: var(--fs-2);
-    line-height: var(--lh-body);
+    font-size: var(--gh-type-size-body);
+    line-height: var(--gh-type-line-height-body);
   }
   .journey {
     list-style: none;
@@ -541,8 +563,8 @@
     place-items: center;
     background: var(--accent-soft);
     color: var(--accent);
-    font-weight: 800;
-    font-size: var(--fs-1);
+    font-weight: var(--gh-type-weight-strong);
+    font-size: var(--gh-type-size-meta);
   }
   .step-body {
     background: var(--bg);
@@ -561,12 +583,12 @@
   }
   header strong {
     color: var(--text);
-    font-size: var(--fs-2);
+    font-size: var(--gh-type-size-body);
   }
   time,
   .muted {
     color: var(--text-muted);
-    font-size: var(--fs-0);
+    font-size: var(--gh-type-size-caption);
   }
   .chips {
     display: flex;
@@ -581,7 +603,7 @@
   h4 {
     margin: 0;
     color: var(--text);
-    font-size: var(--fs-0);
+    font-size: var(--gh-type-size-caption);
     text-transform: uppercase;
     letter-spacing: 0.05em;
   }
@@ -589,8 +611,8 @@
     margin: 0;
     padding-left: 1.1rem;
     color: var(--text);
-    font-size: var(--fs-1);
-    line-height: var(--lh-body);
+    font-size: var(--gh-type-size-meta);
+    line-height: var(--gh-type-line-height-body);
     overflow-wrap: anywhere;
   }
   .proof-record {
@@ -601,8 +623,8 @@
     margin: 0;
     padding-left: 1.1rem;
     color: var(--text);
-    font-size: var(--fs-1);
-    line-height: var(--lh-body);
+    font-size: var(--gh-type-size-meta);
+    line-height: var(--gh-type-line-height-body);
     display: flex;
     flex-direction: column;
     gap: var(--s-1);
@@ -618,7 +640,7 @@
   .proof-list small {
     color: var(--text-muted);
     font-family: var(--font-mono);
-    font-size: var(--fs-0);
+    font-size: var(--gh-type-size-caption);
   }
   .proof-list a {
     color: var(--accent);
@@ -653,7 +675,7 @@
   }
   .file-preview header strong,
   .file-preview header span {
-    font-size: var(--fs-0);
+    font-size: var(--gh-type-size-caption);
   }
   .file-preview header span {
     color: var(--text-muted);
@@ -666,8 +688,8 @@
     padding: var(--s-3);
     color: var(--text);
     background: var(--bg);
-    font-size: var(--fs-0);
-    line-height: 1.55;
+    font-size: var(--gh-type-size-caption);
+    line-height: var(--gh-type-line-height-body);
   }
   .file-preview code {
     font-family: var(--font-mono);
@@ -722,14 +744,14 @@
   }
   .error {
     color: var(--danger);
-    font-size: var(--fs-0);
+    font-size: var(--gh-type-size-caption);
   }
   .mini-record {
     display: flex;
     align-items: center;
     gap: var(--s-2);
     color: var(--text-muted);
-    font-size: var(--fs-1);
+    font-size: var(--gh-type-size-meta);
   }
   @media (max-width: 760px) {
     .files-modal {

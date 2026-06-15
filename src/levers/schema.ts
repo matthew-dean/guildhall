@@ -65,12 +65,6 @@ export const landingStrategyPositionSchema = z.enum([
   'manual_pr',
 ])
 
-export const legacyMergePolicyPositionSchema = z.enum([
-  'ff_only_local',
-  'ff_only_with_push',
-  'manual_pr',
-])
-
 // ---------------------------------------------------------------------------
 // Project-scope levers (singleton per project)
 // ---------------------------------------------------------------------------
@@ -79,9 +73,6 @@ export const projectLeversSchema = z.object({
   concurrent_task_dispatch: entry(concurrentDispatchPositionSchema),
   worktree_isolation: entry(z.enum(['none', 'per_task', 'per_attempt'])),
   landing_strategy: entry(landingStrategyPositionSchema),
-  // Deprecated compatibility shim. Older agent-settings files and tests may
-  // still carry `merge_policy`; runtime helpers map it onto landing_strategy.
-  merge_policy: entry(legacyMergePolicyPositionSchema).optional(),
   rejection_dampening: entry(rejectionDampeningPositionSchema),
   business_envelope_strictness: entry(z.enum(['strict', 'advisory', 'off'])),
   agent_health_strictness: entry(z.enum(['lax', 'standard', 'strict'])),

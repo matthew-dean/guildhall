@@ -12,21 +12,17 @@ start with [Start here](./quick-start). Come back when you want to know why
 Guildhall cares about blueprints, gates, context packets, and all the other
 nouns it keeps politely placing on the table.
 
-Each run pulls from a few kinds of state:
+The quick version: Guildhall keeps three things visible.
 
-1. **Project state**: the registered project, `./guildhall.yaml`, provider setup,
-   local commands, memory files, and current task queue.
-2. **Planning state**: project goals, task blueprints, open questions,
-   acceptance criteria, out-of-scope boundaries, and change orders.
-3. **Codebase orientation**: the [Corpus Map](./corpus-map) and likely target files that point
-   helpers toward existing modules, helpers, components, design tokens, tests,
-   and conventions.
-4. **Execution state**: active worktree, checkpoint, previous attempts,
-   verification output, and unresolved reviewer feedback.
-5. **Inspection state**: reviewer rubrics, guild specialists, gate results,
-   current work closure, and your decisions.
-6. **Learning state**: project habits and cross-project preferences that can be
-   accepted, ignored, or scoped.
+- **What are we trying to do?** The task blueprint, owner decisions,
+  acceptance criteria, and boundaries.
+- **Where does this work belong?** The active need, delivery package, task
+  blockers, likely files, primitives, and existing abstractions.
+- **Can we trust the result?** Checkpoints, review notes, gate results,
+  receipts, and closure state.
+
+That is most of the product. The details underneath are there so the app can
+make better calls without asking you to keep a mental corkboard.
 
 ## The guild
 
@@ -75,6 +71,33 @@ For example:
 That is the middle path between "just chat with an agent" and "please enjoy
 this mandatory process cathedral."
 
+## Shape, order, primitives, and proof
+
+Guildhall's default work model is:
+
+```text
+Needs -> Delivery packages -> Tasks -> Dependencies -> Primitives -> Proof
+```
+
+The need says why the work matters. The delivery package says what is being
+shipped. Tasks are the pieces Guildhall can plan, run, review, and prove.
+Dependencies are execution order: what must happen before this task can run.
+
+Primitives are the project pieces downstream work uses or must respect: UI
+components, design tokens, API clients, auth guards, data schemas, workflow
+rules, test harnesses, and similar foundations. A task can use primitives, and
+a task can prove primitives. Guildhall uses those links to give workers the
+right context and to keep proof gaps visible.
+
+That is the model you should see in the normal project experience: Overview,
+Work, Thread, and the task drawer should agree about the next work, blockers,
+primitive context, and proof state. The deeper project graph and capability
+exchange machinery still exists for real multi-project ownership or handoffs,
+but it is not the default way Guildhall explains ordinary local delivery.
+
+For the plain-language walkthrough, see
+[How Guildhall chooses work](./how-guildhall-chooses-work).
+
 ## Making good output more likely
 
 Good output usually comes from a chain of smaller wins:
@@ -111,6 +134,11 @@ release work, and verification. Those can be linked without being crammed into
 one task. You should be able to see why Guildhall asked a question, split the
 work, or kept it together.
 
+Work hierarchy is now explicit. Containing work is linked to child work through
+task hierarchy links; it is not smuggled in as a fake task status. Old projects
+that still have legacy state get a required migration before Guildhall keeps
+running, so the visible queue matches the model the agents use.
+
 ## Feedback loops
 
 Guildhall asks for feedback where it changes the outcome.
@@ -118,6 +146,11 @@ Guildhall asks for feedback where it changes the outcome.
 Your feedback belongs on product calls, risk calls, taste calls, and release
 judgment. If the answer changes what the product is, who it serves, or whether
 you are comfortable shipping it, Guildhall asks.
+
+Those questions now flow through owner-input sessions instead of one-off cards
+spread across every page. Thread owns the conversation. Needs You owns alerts.
+Overview, Work, Structure, and Settings can point to the same decision, but
+they do not each invent a separate question model.
 
 Reviewer feedback belongs where another lens catches a class of mistake:
 architecture fit, product flow, accessibility, security, test coverage,
@@ -133,6 +166,12 @@ Command feedback belongs where commands can prove something: tests, typechecks,
 builds, lint, browser checks, and release scripts. Guildhall records those
 outcomes so the next run does not have to rediscover whether a claim was
 actually verified.
+
+Lifecycle changes follow the same rule. Newer Guildhall flows use explicit
+state machines and receipts: an agent proposes an event, the runtime checks
+whether that event is legal, and the receipt records what happened. That keeps
+"done", "blocked", "waiting", and "resolved" from becoming loose words that
+mean different things on different screens.
 
 ## How Guildhall learns
 
@@ -152,8 +191,8 @@ bounded on purpose: no full repo crawl, no surprise rewrite, and no expensive
 deep dive until the task reaches the moment where that lens matters.
 
 That keeps learning useful without making the product spooky. You can inspect
-what Guildhall wants to remember in **Settings -> Memory**, choose whether it
-applies here or everywhere, and ignore suggestions that were only true once.
+what Guildhall wants to remember in the memory review surfaces, choose whether
+it applies here or everywhere, and ignore suggestions that were only true once.
 
 Recovery uses the same trail. When a worker gets stuck, Guildhall can reread
 the right files, retry a bounded step, ask a sharper question, or turn the
@@ -180,6 +219,8 @@ The system records:
 - what reviewers found
 - what gates ran
 - what decisions changed the plan
+- what state-machine events and receipts changed lifecycle state
+- what project-graph or contract-surface decision affected the work
 - what settings or learned behaviors affected execution
 
 This matters because good work is not only “the diff looks okay today.” Good
@@ -206,11 +247,19 @@ shared code before anyone edits:
 
 - helpers, services, schemas, and packages for backend/runtime work
 - components, design tokens, and interaction patterns for UI work
+- project-graph ownership, domain responsibilities, and provider/consumer edges
+- contract packets for shared APIs, schemas, events, state machines, MCP
+  resources, and design-system surfaces
 - tests and fixtures that show the intended contract
 - docs and decisions that explain why the system has its current shape
 
 If the same idea appears twice, it may be time for a small abstraction. If it
 is still a one-off, the project does not need a brand-new framework-shaped hat.
+
+The important part is that agents use this context to change what they do.
+Spec agents name the existing contract or the contract delta. Workers adjust
+the implementation before adding a local one-off. Reviewers can reject work
+that ignored a mapped abstraction or governance packet.
 
 Two pages cover the most important pieces:
 

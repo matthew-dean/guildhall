@@ -1,3 +1,4 @@
+import { appendManagedTextFile, readManagedTextFile, readManagedTextFileSync, writeManagedTextFile } from '@guildhall/persistence'
 import { randomUUID } from 'node:crypto'
 import { execFile as execFileCb, execFileSync } from 'node:child_process'
 import fs from 'node:fs/promises'
@@ -7,6 +8,7 @@ import { promisify } from 'node:util'
 
 import { FileBackedGuildhallPersistence, type PersistencePlacement } from '@guildhall/persistence'
 import { runGuildhallTaskOnce, type RunOnceReport } from '@guildhall/runtime'
+import { getProjectSystemStatePath } from '@guildhall/sessions'
 import {
   AutoResolutionRecord,
   BenchmarkRunResult,
@@ -130,7 +132,7 @@ function baseRunRecord(
     taskSubsetHash: input.taskSubsetHash,
     guildhallVersion: options.guildhallVersion ?? '0.9.0',
     guildhallCommit: gitCommit(options.projectRoot),
-    runtimeImage: options.runtimeImage ?? 'ghcr.io/matthew-dean/guildhall-runtime-debian:0.9-trixie-node22-python313-playwright',
+    runtimeImage: options.runtimeImage ?? 'ghcr.io/matthew-dean/guildhall-runtime-debian:0.10-trixie-node22-python313-playwright',
     modelProvider: options.modelProvider ?? 'fixture',
     model: options.model ?? 'deterministic-smoke',
     settings: {},
@@ -355,7 +357,7 @@ async function runTaskWorkspaceBenchmark(input: {
       title: fixture.id,
       automationPolicy,
       proof: 'commands',
-      outputPath: path.join(materialized.projectRoot, '.guildhall', `${fixture.id}-run-once.json`),
+      outputPath: getProjectSystemStatePath(materialized.projectRoot, `${fixture.id}-run-once.json`),
     })
     const verifierResults = await runVerifierCommands(materialized.projectRoot, fixture.verifier)
     const touchedFiles = await collectTouchedFiles(fixture.seedDir, materialized.projectRoot)
@@ -517,15 +519,13 @@ async function ensureBenchmarkWorkspaceConfig(projectRoot: string, id: string): 
   try {
     await fs.access(guildhallYamlPath)
   } catch {
-    await fs.writeFile(guildhallYamlPath, `name: ${slug}\nid: ${slug}\nprojectPath: .\n`, 'utf8')
+    await writeManagedTextFile(guildhallYamlPath, `name: ${slug}\nid: ${slug}\nprojectPath: .\n`, 'utf8')
   }
-  const memoryDir = path.join(projectRoot, '.guildhall')
-  await fs.mkdir(memoryDir, { recursive: true })
-  const tasksPath = path.join(memoryDir, 'TASKS.json')
+  const tasksPath = getProjectSystemStatePath(projectRoot, 'TASKS.json')
   try {
     await fs.access(tasksPath)
   } catch {
-    await fs.writeFile(tasksPath, `${JSON.stringify({ version: 1, lastUpdated: new Date().toISOString(), tasks: [] }, null, 2)}\n`, 'utf8')
+    await writeManagedTextFile(tasksPath, `${JSON.stringify({ version: 1, lastUpdated: new Date().toISOString(), tasks: [] }, null, 2)}\n`, 'utf8')
   }
 }
 
@@ -592,7 +592,7 @@ async function listFiles(root: string, prefix = ''): Promise<string[]> {
 
 async function readOptionalFile(filePath: string): Promise<string | null> {
   try {
-    return await fs.readFile(filePath, 'utf8')
+    return await readManagedTextFile(filePath, 'utf8')
   } catch {
     return null
   }

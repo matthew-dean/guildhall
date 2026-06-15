@@ -1,6 +1,6 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
-import { getProjectStateDir } from '@guildhall/sessions'
+import { getProjectLocalHistoryDir } from '@guildhall/sessions'
 import { compareInboxItems, type InboxItem } from './inbox.js'
 import { getProjectMigrationStatus } from './migrations.js'
 import { recordGuildhallRuntimeWrite } from './runtime-compatibility.js'
@@ -43,11 +43,11 @@ const PROJECT_UNDERSTANDING_CAPABILITIES = [
 ] as const
 
 function attentionPath(projectPath: string): string {
-  return join(getProjectStateDir(projectPath), 'attention.json')
+  return join(getProjectLocalHistoryDir(projectPath), 'project-state', 'attention.json')
 }
 
 function reconciliationsPath(projectPath: string): string {
-  return join(getProjectStateDir(projectPath), 'reconciliations.json')
+  return join(getProjectLocalHistoryDir(projectPath), 'project-state', 'reconciliations.json')
 }
 
 function readStore(projectPath: string): AttentionStore {
@@ -82,8 +82,6 @@ export function attentionIdForInboxItem(item: InboxItem): string {
   if (item.kind === 'project_understanding') return 'project-understanding:intake-reconcile'
   if (item.kind === 'workspace_import_pending') return 'workspace-import:review'
   if (item.kind === 'bootstrap_missing') return 'bootstrap:readiness'
-  if (item.kind === 'agent_question_pending' && item.taskId) return `question:${item.taskId}`
-  if (item.kind === 'open_escalation' && item.escalationId) return `escalation:${item.escalationId}`
   const taskId = 'taskId' in item ? item.taskId : undefined
   if (taskId) return `${item.kind}:${taskId}`
   return `${item.kind}:${stableSlug(`${item.actionHref ?? ''}:${item.title}`)}`
@@ -139,7 +137,7 @@ function toOpenRecord(item: InboxItem, existing: AttentionRecord | undefined, no
 }
 
 function hasWorkspaceImportOutcome(projectPath: string): boolean {
-  return existsSync(join(getProjectStateDir(projectPath), 'workspace-goals.json'))
+  return existsSync(join(getProjectLocalHistoryDir(projectPath), 'project-state', 'workspace-goals.json'))
 }
 
 function readResolvedReconciliationCapabilities(projectPath: string): Set<string> {
@@ -167,7 +165,7 @@ export function buildProjectUnderstandingAdvisories(projectPath: string): InboxI
     kind: 'project_understanding',
     severity: 'medium',
     title: 'Review project discovery update',
-    detail: 'Guildhall can now scan more planning docs and migrations. Review the reconciliation so it can update or dismiss stale imported work.',
+    detail: 'More planning docs and migrations can now be scanned. Review the reconciliation to update or dismiss stale imported work.',
     signals: [...missing],
     actionHref: '/workspace-import?mode=reconcile',
     dismissEndpoint: '/api/project/attention/dismiss?id=project-understanding%3Aintake-reconcile',
@@ -234,7 +232,7 @@ export async function buildProjectMigrationAdvisories(projectPath: string): Prom
     severity: 'high' as const,
     migrationId: item.id,
     title: `Required migration: ${item.title}`,
-    detail: `${item.summary} Run this migration before Guildhall can update the project.`,
+    detail: `${item.summary} Run this migration before the project can update.`,
     actionHref: '/migrations',
     blocking: true,
     dismissible: false,

@@ -1,10 +1,18 @@
 import type { Task } from '@guildhall/core'
+import { readProjectConfig } from '@guildhall/config'
+import { inferProjectRootFromMemoryDir } from '@guildhall/sessions'
+import path from 'node:path'
+import {
+  buildMemoryCoreCandidatePacket,
+  type MemoryCandidatePacket,
+} from '@guildhall/memory-core'
 import {
   listMemoryRecords,
   type MemoryEvidenceRef,
   type MemoryRecord,
   type MemoryStatus,
 } from './memory-store.js'
+import { readAcceptedStructuralMap, routeTaskWithStructuralMap } from './structural-map.js'
 
 export interface WithheldMemory {
   id: string
@@ -17,6 +25,7 @@ export interface EffectiveMemoryPacket {
   included: MemoryRecord[]
   withheld: WithheldMemory[]
   evidenceRefs: MemoryEvidenceRef[]
+  memoryCorePacket?: MemoryCandidatePacket
   rendered: string
 }
 
@@ -37,17 +46,22 @@ export async function buildEffectiveMemoryPacket(input: {
   ].join('\n')
   const taskKinds = inferTaskKinds(queryText)
   const fileAreas = fileAreaHints(queryText)
+  const projectRoot = inferProjectRootFromMemoryDir(input.memoryDir)
+  const memoryConfig = readProjectConfig(projectRoot).memory
+  const structuralScopeIds = structuralScopesForTask(input.memoryDir, input.task, fileAreas)
   const all = await listMemoryRecords({ memoryDir: input.memoryDir })
   const relevant = all
     .filter((record) => isRelevant(record, {
       domain: input.task.domain,
       taskKinds,
       fileAreas,
+      structuralScopeIds,
       text: queryText,
     }))
   const included = relevant
     .filter((record) => record.status === 'active' || record.status === 'used')
     .filter((record) => record.risk !== 'high')
+    .filter((record) => structuralScopeMatches(record, structuralScopeIds))
     .slice(0, input.maxRecords ?? 8)
   const includedIds = new Set(included.map((record) => record.id))
   const withheld = relevant
@@ -55,23 +69,48 @@ export async function buildEffectiveMemoryPacket(input: {
     .map((record) => ({
       id: record.id,
       status: record.status,
-      reason: withheldReason(record),
+      reason: withheldReason(record, structuralScopeIds),
       summary: record.summary,
     }))
   const evidenceRefs = included.flatMap((record) => record.evidenceRefs)
+  const memoryCorePacket = await buildMemoryCoreCandidatePacket({
+    projectRoot,
+    scope: {
+      kind: 'task_thread',
+      projectId: projectIdFor(projectRoot),
+      taskId: input.task.id,
+      agentRole: 'worker',
+      threadId: input.task.id,
+    },
+    purpose: 'next_worker_context',
+    maxBytes: 4096,
+    substrate: memoryConfig?.substrate,
+    semanticRecall: memoryConfig?.semanticRecall,
+    observationalMemory: memoryConfig?.observationalMemory,
+  }).catch(() => undefined)
+  const memoryCoreEvidenceRefs = (memoryCorePacket?.candidates ?? [])
+    .flatMap(candidate => candidate.sourceRefs)
+    .map(ref => ({
+      kind: ref.sourceKind,
+      summary: ref.uri,
+      ref: ref.uri,
+      ...(ref.path ? { path: ref.path } : {}),
+    }))
   return {
     included,
     withheld,
-    evidenceRefs,
-    rendered: renderEffectiveMemory(included, withheld),
+    evidenceRefs: [...evidenceRefs, ...memoryCoreEvidenceRefs],
+    ...(memoryCorePacket ? { memoryCorePacket } : {}),
+    rendered: renderEffectiveMemory(included, withheld, memoryCorePacket),
   }
 }
 
 export function renderEffectiveMemory(
   included: readonly MemoryRecord[],
   withheld: readonly WithheldMemory[],
+  memoryCorePacket?: MemoryCandidatePacket,
 ): string {
-  if (included.length === 0 && withheld.length === 0) return ''
+  if (included.length === 0 && withheld.length === 0 && (memoryCorePacket?.candidates.length ?? 0) === 0) return ''
   const lines = ['## Effective Memory', '']
   if (included.length > 0) {
     for (const record of included) {
@@ -92,10 +131,21 @@ export function renderEffectiveMemory(
       lines.push(`- ${record.id}: ${record.reason}`)
     }
   }
+  if (memoryCorePacket && memoryCorePacket.candidates.length > 0) {
+    lines.push('', '## Memory-Core Candidate Packet')
+    lines.push(`- adapter: ${memoryCorePacket.health.adapter}${memoryCorePacket.health.fallbackUsed ? ' (fallback)' : ''}`)
+    for (const candidate of memoryCorePacket.candidates.slice(0, 6)) {
+      lines.push(`- ${candidate.summary}`)
+      for (const source of candidate.sourceRefs.slice(0, 2)) {
+        lines.push(`  - source: ${source.uri}${source.path ? ` (${source.path})` : ''}`)
+      }
+    }
+  }
   return clip(lines.join('\n').trim(), MAX_RENDERED_MEMORY_CHARS)
 }
 
-function withheldReason(record: MemoryRecord): string {
+function withheldReason(record: MemoryRecord, structuralScopeIds: readonly string[]): string {
+  if (!structuralScopeMatches(record, structuralScopeIds)) return 'structural-scope:mismatch'
   if (record.status !== 'active' && record.status !== 'used') return `status:${record.status}`
   if (record.risk === 'high') return 'risk:high'
   return 'not-selected'
@@ -105,6 +155,7 @@ function isRelevant(record: MemoryRecord, input: {
   domain: string
   taskKinds: readonly string[]
   fileAreas: readonly string[]
+  structuralScopeIds: readonly string[]
   text: string
 }): boolean {
   if (record.domains.length > 0 && !record.domains.includes(input.domain)) return false
@@ -114,10 +165,45 @@ function isRelevant(record: MemoryRecord, input: {
     input.fileAreas.length > 0 &&
     !input.fileAreas.some((file) => record.fileAreas.some((area) => file.includes(area) || area.includes(file)))
   ) return false
+  if (
+    record.structuralScopes.length > 0 &&
+    input.structuralScopeIds.length > 0 &&
+    !structuralScopeMatches(record, input.structuralScopeIds)
+  ) return true
   if (record.tags.length === 0) return true
   const haystack = input.text.toLowerCase()
   return record.tags.some((tag) => haystack.includes(tag.toLowerCase())) ||
     record.summary.toLowerCase().split(/\s+/).some((word) => word.length > 4 && haystack.includes(word))
+}
+
+function structuralScopeMatches(record: MemoryRecord, structuralScopeIds: readonly string[]): boolean {
+  if (record.structuralScopes.length === 0 || structuralScopeIds.length === 0) return true
+  return record.structuralScopes.some(scope => structuralScopeIds.includes(scope))
+}
+
+function structuralScopesForTask(memoryDir: string, task: Task, fileAreas: readonly string[]): string[] {
+  const projectRoot = inferProjectRootFromMemoryDir(memoryDir)
+  const map = readAcceptedStructuralMap(projectRoot)
+  if (!map) return []
+  try {
+    const route = routeTaskWithStructuralMap({
+      map,
+      task: {
+        id: task.id,
+        title: task.title,
+        files: [...fileAreas],
+        text: `${task.description}\n${task.spec ?? ''}`,
+      },
+    })
+    return [...new Set([
+      route.primaryDomainId,
+      ...route.packageIds,
+      ...route.executableUnitIds,
+      ...route.crossCuttingDomainIds,
+    ].filter((value): value is string => Boolean(value)))]
+  } catch {
+    return []
+  }
 }
 
 function inferTaskKinds(text: string): string[] {
@@ -138,4 +224,8 @@ function clip(value: string, max: number): string {
   const text = value.trim()
   if (text.length <= max) return text
   return `${text.slice(0, max - 32).trimEnd()}\n[truncated ${text.length - max + 32} chars]`
+}
+
+function projectIdFor(projectRoot: string): string {
+  return path.basename(projectRoot) || 'project'
 }

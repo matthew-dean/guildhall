@@ -17,6 +17,8 @@
   let sseStatus = $state<SseStatus>('connecting')
   let version = $state<string | null>(null)
   let projectTitle = $state<string | null>(null)
+  let compactProjectNav = $state(false)
+  let navContextMode = $state<'project' | 'list' | 'detail' | 'split'>('project')
 
   $effect(() => {
     const off = onStatus(s => (sseStatus = s))
@@ -42,7 +44,11 @@
   const browserPath = $derived(typeof window === 'undefined' ? headerPath : window.location.pathname)
   const parsedRoute = $derived(parseProjectRoute(headerPath))
   const browserRoute = $derived(parseProjectRoute(browserPath))
-  const showProjectMenu = $derived(path.value.startsWith('/project') || parsedRoute.projectScoped)
+  const showProjectMenu = $derived(
+    (path.value.startsWith('/project') || parsedRoute.projectScoped) &&
+    compactProjectNav &&
+    navContextMode !== 'detail',
+  )
   const showSseStatus = $derived(browserRoute.projectScoped || browserPath.startsWith('/project'))
   const savedProjectTitle = $derived(
     parsedRoute.projectScoped && project.detail?.id === parsedRoute.projectId
@@ -68,6 +74,25 @@
     }
     window.addEventListener('guildhall:set-project-title', handle as EventListener)
     return () => window.removeEventListener('guildhall:set-project-title', handle as EventListener)
+  })
+
+  $effect(() => {
+    const media = window.matchMedia('(max-width: 920px)')
+    const sync = () => {
+      compactProjectNav = media.matches
+    }
+    sync()
+    media.addEventListener('change', sync)
+    return () => media.removeEventListener('change', sync)
+  })
+
+  $effect(() => {
+    const handle = (event: Event) => {
+      const detail = (event as CustomEvent<{ mode?: 'project' | 'list' | 'detail' | 'split' }>).detail
+      navContextMode = detail?.mode ?? 'project'
+    }
+    window.addEventListener('guildhall:set-nav-context', handle as EventListener)
+    return () => window.removeEventListener('guildhall:set-nav-context', handle as EventListener)
   })
 
   function goHome() {
@@ -165,9 +190,9 @@
     text-overflow: ellipsis;
     white-space: nowrap;
     color: var(--text);
-    font-size: var(--fs-2);
-    font-weight: 600;
-    line-height: var(--lh-tight);
+    font-size: var(--gh-type-size-body);
+    font-weight: var(--gh-type-weight-strong);
+    line-height: var(--gh-type-line-height-tight);
     text-transform: none;
     letter-spacing: 0;
   }
@@ -176,10 +201,10 @@
     display: inline-flex;
     align-items: center;
     gap: var(--s-2);
-    font-size: var(--fs-3);
-    font-weight: 700;
+    font-size: var(--gh-type-size-panel-title);
+    font-weight: var(--gh-type-weight-strong);
     letter-spacing: 0;
-    line-height: var(--lh-tight);
+    line-height: var(--gh-type-line-height-tight);
     background: transparent;
     border: none;
     color: var(--text);
@@ -193,35 +218,13 @@
     place-items: center;
     width: 24px;
     height: 24px;
-    border-radius: 8px;
-    isolation: isolate;
-  }
-  .brand-mark::before {
-    content: "";
-    position: absolute;
-    inset: -8px;
-    border-radius: 999px;
-    background:
-      radial-gradient(circle, color-mix(in srgb, var(--accent) 38%, transparent) 0%, transparent 66%);
-    filter: blur(7px);
-    opacity: 0.78;
-    z-index: -1;
-  }
-  .brand-mark::after {
-    content: "";
-    position: absolute;
-    inset: 2px;
-    border-radius: 7px;
-    box-shadow:
-      inset 0 1px 0 color-mix(in srgb, white 26%, transparent),
-      0 0 18px color-mix(in srgb, var(--accent) 34%, transparent);
-    pointer-events: none;
   }
   .brand-mark img {
     display: block;
-    width: 22px;
-    height: 22px;
-    border-radius: 7px;
+    width: 24px;
+    height: 24px;
+    object-fit: contain;
+    pointer-events: none;
   }
   .brand-word {
     display: inline-flex;
@@ -230,16 +233,13 @@
     color: var(--light-violet-warm);
     text-shadow: 0 0 16px color-mix(in srgb, var(--accent) 20%, transparent);
   }
-  .brand:hover .brand-mark::before {
-    opacity: 1;
-  }
   :global(.project-menu) {
     display: none;
   }
   .version {
-    font-size: var(--fs-0);
+    font-size: var(--gh-type-size-caption);
     color: var(--text-muted);
-    font-weight: 600;
+    font-weight: var(--gh-type-weight-strong);
     letter-spacing: 0.02em;
     margin-left: -2px;
   }
@@ -247,8 +247,8 @@
     display: inline-flex;
     align-items: center;
     gap: var(--s-1);
-    font-size: var(--fs-0);
-    font-weight: 700;
+    font-size: var(--gh-type-size-caption);
+    font-weight: var(--gh-type-weight-strong);
     letter-spacing: 0.05em;
     text-transform: uppercase;
     color: var(--text-muted);
@@ -269,7 +269,7 @@
     }
     .project-title {
       max-width: min(42vw, 24ch);
-      font-size: var(--fs-1);
+      font-size: var(--gh-type-size-meta);
     }
   }
   @media (max-width: 640px) {

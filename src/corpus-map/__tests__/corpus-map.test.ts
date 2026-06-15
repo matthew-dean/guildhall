@@ -4,7 +4,7 @@ import path from 'node:path'
 import { execFile } from 'node:child_process'
 import { promisify } from 'node:util'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
-import { getProjectStateDir } from '@guildhall/sessions'
+import { getProjectStateDir, getProjectSystemStatePath } from '@guildhall/sessions'
 import { parse as parseYaml } from 'yaml'
 import {
   buildWorkerCorpusContext,
@@ -68,6 +68,20 @@ describe('corpus map', () => {
     const history = await fs.readFile(codebaseMapHistoryPath(memoryDir), 'utf-8')
     expect(history).toContain('"reason":"manual"')
     expect(history).toContain('"mode":"full"')
+  })
+
+  it('persists the active map in system-local state when given repo .guildhall memory', async () => {
+    await refreshCodebaseMap({
+      projectRoot,
+      memoryDir,
+      reason: 'manual',
+      now: new Date('2026-05-21T12:00:00.000Z'),
+    })
+
+    const systemMapPath = getProjectSystemStatePath(projectRoot, 'codebase-map.yaml')
+    const saved = await fs.readFile(systemMapPath, 'utf-8')
+    expect(saved).toContain('primaryFrameworks')
+    await expect(fs.access(path.join(memoryDir, 'codebase-map.yaml'))).rejects.toThrow(/ENOENT/)
   })
 
   it('partially refreshes touched files and keeps unrelated entries stable', async () => {
@@ -320,6 +334,52 @@ describe('corpus map', () => {
       workerGuidance: ['Read the listed documentation before editing related code.'],
       needsBroaderRead: true,
     })
+  })
+
+  it('proposes repeated cross-spec contract-surface patterns without applying them', async () => {
+    await fs.mkdir(path.join(projectRoot, 'specs'), { recursive: true })
+    await fs.writeFile(
+      path.join(projectRoot, 'specs/webhook-delivery.md'),
+      [
+        '# Webhook delivery',
+        '',
+        'Contract Surface: Event delivery envelope',
+        'Surface Kind: schema',
+        'Invariant: Every webhook payload includes eventId, occurredAt, and apiVersion.',
+      ].join('\n'),
+      'utf-8',
+    )
+    await fs.writeFile(
+      path.join(projectRoot, 'specs/audit-stream.md'),
+      [
+        '# Audit stream',
+        '',
+        'Contract Surface: Event delivery envelope',
+        'Surface Kind: schema',
+        'Invariant: Every webhook payload includes eventId, occurredAt, and apiVersion.',
+      ].join('\n'),
+      'utf-8',
+    )
+
+    const result = await refreshCodebaseMap({
+      projectRoot,
+      memoryDir,
+      reason: 'manual',
+      now: new Date('2026-06-02T12:00:00.000Z'),
+    })
+
+    expect(result.map.contractSurfaceProposals).toEqual([
+      expect.objectContaining({
+        label: 'Event delivery envelope',
+        kind: 'schema',
+        ownerApprovalRequired: true,
+        evidence: expect.arrayContaining([
+          expect.objectContaining({ path: 'specs/webhook-delivery.md' }),
+          expect.objectContaining({ path: 'specs/audit-stream.md' }),
+        ]),
+        repeatedPatterns: ['Every webhook payload includes eventId, occurredAt, and apiVersion.'],
+      }),
+    ])
   })
 
   it('repairs obvious malformed semantic JSON deterministically before retrying the model', () => {

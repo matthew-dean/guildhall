@@ -1,6 +1,7 @@
 import { mkdir, mkdtemp, readFile } from 'node:fs/promises'
+import { homedir } from 'node:os'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { dirname, join } from 'node:path'
 import { describe, expect, it } from 'vitest'
 
 import { getProjectRuntimeStatePath } from '@guildhall/sessions'
@@ -17,12 +18,12 @@ describe('project runtime store', () => {
     const state = await readProjectRuntimeState(projectRoot)
 
     expect(state).toMatchObject({
-      backend: 'podman',
+      backend: 'docker',
       status: 'stopped',
       containerId: null,
       runtimeApiVersion: '1',
       image: {
-        tag: '0.9.0-trixie-node22-python313-playwright',
+        tag: '0.10.0-trixie-node22-python313-playwright',
         digest: null,
       },
       mounts: {
@@ -44,6 +45,17 @@ describe('project runtime store', () => {
 
     expect(getProjectRuntimeStatePath(projectRoot)).toContain('runtime/state.json')
     expect(getProjectRuntimeStatePath(projectRoot)).not.toContain(`${projectRoot}/.guildhall`)
+  })
+
+  it('uses an isolated container home instead of mounting the host Guildhall home', async () => {
+    const projectRoot = await mkdtemp(join(tmpdir(), 'guildhall-runtime-store-'))
+
+    const state = defaultProjectRuntimeState(projectRoot)
+
+    expect(state.mounts.guildhallHome).toBe(join(dirname(getProjectRuntimeStatePath(projectRoot)), 'container-home'))
+    expect(state.mounts.guildhallHome).not.toBe(join(homedir(), '.guildhall'))
+    expect(state.mounts.guildhallHome).not.toBe(join(projectRoot, '.guildhall'))
+    expect(state.migration.mountLayout.guildhallHome).toBe(state.mounts.guildhallHome)
   })
 
   it('persists runtime state outside the project checkout', async () => {

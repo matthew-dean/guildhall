@@ -30,9 +30,27 @@ export function getProjectStateDir(projectRoot: string): string {
   return join(resolve(projectRoot), '.guildhall')
 }
 
+export function getLegacyProjectStatePath(projectRoot: string, relativePath: string): string {
+  return join(getProjectStateDir(projectRoot), relativePath)
+}
+
+export function getProjectSystemStateDir(projectRoot: string): string {
+  return join(getProjectLocalHistoryDir(projectRoot), 'project-state')
+}
+
+export function getProjectSystemStatePath(projectRoot: string, relativePath: string): string {
+  return join(getProjectSystemStateDir(projectRoot), relativePath)
+}
+
 export function inferProjectRootFromMemoryDir(memoryDir: string): string {
   const resolved = resolve(memoryDir)
   return basename(resolved) === 'memory' || basename(resolved) === '.guildhall' ? dirname(resolved) : resolved
+}
+
+export function getProjectSystemStatePathFromMemoryDir(memoryDir: string, relativePath: string): string {
+  const resolved = resolve(memoryDir)
+  if (basename(resolved) === 'project-state') return join(resolved, relativePath)
+  return getProjectSystemStatePath(inferProjectRootFromMemoryDir(resolved), relativePath)
 }
 
 export function getProjectTranscriptPath(
@@ -67,12 +85,20 @@ export function getProjectTaskLocalHistoryDir(projectRoot: string, taskId: strin
   return join(getProjectLocalHistoryDir(projectRoot), 'tasks', taskId)
 }
 
+export function getProjectTaskReviewPacketPath(projectRoot: string, taskId: string): string {
+  return join(getProjectTaskLocalHistoryDir(projectRoot, taskId), 'review-packet.md')
+}
+
 export function getProjectProgressHeartbeatsPath(projectRoot: string): string {
   return join(getProjectLocalHistoryDir(projectRoot), 'progress', 'heartbeats.md')
 }
 
 export function getProjectRuntimeStatePath(projectRoot: string): string {
   return join(getProjectLocalHistoryDir(projectRoot), 'runtime', 'state.json')
+}
+
+export function getProjectRuntimeContainerHomeDir(projectRoot: string): string {
+  return join(getProjectLocalHistoryDir(projectRoot), 'runtime', 'container-home')
 }
 
 export function getProjectRuntimeCommandEvidencePath(projectRoot: string): string {

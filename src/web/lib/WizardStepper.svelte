@@ -48,8 +48,8 @@
     border-radius: var(--r-1);
     color: var(--text-muted);
     background: var(--bg-raised);
-    font-size: var(--fs-2);
-    font-weight: 600;
+    font-size: var(--gh-type-size-body);
+    font-weight: var(--gh-type-weight-strong);
   }
   .wizard-step.active {
     color: var(--text);
@@ -58,6 +58,6 @@
     box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--accent) 35%, transparent);
   }
   .wizard-step-label {
-    line-height: 1.1;
+    line-height: var(--gh-type-line-height-tight);
   }
 </style>

@@ -10,6 +10,7 @@ import {
   readLocalOnlyState,
   localOnlyPath,
 } from '../local-only-mode.js'
+import { projectStatePathFromMemoryDir } from '@guildhall/sessions'
 
 // FR-29 / AC-20 verification — simulated push failure transitions the
 // project to local_only mode with a PROGRESS.md entry; a subsequent
@@ -24,7 +25,8 @@ beforeEach(async () => {
   process.env.GUILDHALL_DATA_DIR = path.join(tmpDir, 'data')
   memoryDir = path.join(tmpDir, 'memory')
   await fs.mkdir(memoryDir, { recursive: true })
-  progressPath = path.join(memoryDir, 'PROGRESS.md')
+  progressPath = projectStatePathFromMemoryDir(memoryDir, 'PROGRESS.md')
+  await fs.mkdir(path.dirname(progressPath), { recursive: true })
   await fs.writeFile(progressPath, '# Progress\n', 'utf-8')
 })
 

@@ -1,3 +1,4 @@
+import { appendManagedTextFile, readManagedTextFile, readManagedTextFileSync, writeManagedTextFile } from '@guildhall/persistence'
 import fs from 'node:fs/promises'
 import path from 'node:path'
 import type { Task } from '@guildhall/core'
@@ -57,6 +58,27 @@ export interface ContextDebugRecord {
     included: Array<{ id: string; type: string; scope: string }>
     withheld: Array<{ id: string; reason: string }>
     evidenceRefs: number
+    memoryCore?: {
+      adapter: 'mastra' | 'deterministic'
+      fallbackUsed: boolean
+      warnings: string[]
+      candidates: Array<{
+        id: string
+        kind: string
+        summary: string
+        sourceRefs: Array<{ uri: string; path?: string; sourceKind: string }>
+      }>
+    }
+  }
+  structuralMap?: {
+    included: boolean
+    chars: number
+    omitted: Array<{
+      handle: string
+      reason: string
+      confidence: string
+      retrievalHint: string
+    }>
   }
 }
 
@@ -83,6 +105,7 @@ function sectionStats(ctx: BuiltContext): ContextSectionStat[] {
     ['designSystem', 'Design system', ctx.designSystem],
     ['reviewRubrics', 'Review rubrics', ctx.reviewRubrics],
     ['corpusMap', 'Corpus map', ctx.corpusMap],
+    ['structuralMapContext', 'Structural map', ctx.structuralMapContext ?? ''],
     ['effectiveMemory', 'Effective memory', ctx.effectiveMemory ?? ''],
     ['projectMemory', 'Project memory', ctx.projectMemory],
     ['recentProgress', 'Recent progress', ctx.recentProgress],
@@ -111,6 +134,22 @@ function corpusMapEvidence(corpusMap: string): ContextDebugRecord['corpusMap'] |
     included: true,
     chars: corpusMap.length,
     readNext: [...new Set(readNext)].slice(0, 12),
+  }
+}
+
+function structuralMapEvidence(ctx: BuiltContext): ContextDebugRecord['structuralMap'] | undefined {
+  const text = ctx.structuralMapContext?.trim() ?? ''
+  const omitted = ctx.structuralMapOmitted ?? []
+  if (!text && omitted.length === 0) return undefined
+  return {
+    included: text.length > 0,
+    chars: ctx.structuralMapContext?.length ?? 0,
+    omitted: omitted.map(item => ({
+      handle: item.handle,
+      reason: item.reason,
+      confidence: item.confidence,
+      retrievalHint: `Resolve ${item.handle} through the structural map before reading deferred context.`,
+    })),
   }
 }
 
@@ -284,6 +323,7 @@ export async function writeContextDebugRecord(input: {
   const agentRole = roleForAgentName(input.agentName)
   const sections = sectionStats(input.ctx)
   const corpusMap = corpusMapEvidence(input.ctx.corpusMap)
+  const structuralMap = structuralMapEvidence(input.ctx)
   const contextChars = input.ctx.formatted.length
   const promptChars = input.prompt.length
   const taskProjectPath = input.task.projectPath || input.workspacePath
@@ -338,6 +378,13 @@ export async function writeContextDebugRecord(input: {
     ``,
     `## Section sizes`,
     ...sections.map((section) => `- ${section.label}: ${section.chars} chars${section.included ? '' : ' (empty)'}`),
+    structuralMap?.omitted.length
+      ? [
+          ``,
+          `## Structural Omitted Context`,
+          ...structuralMap.omitted.map(item => `- ${item.handle}: ${item.reason}; ${item.retrievalHint}`),
+        ].join('\n')
+      : '',
     ``,
     `## Formatted Context`,
     '```md',
@@ -349,7 +396,7 @@ export async function writeContextDebugRecord(input: {
     boundedPrompt,
     '```',
   ].filter(Boolean).join('\n')
-  await fs.writeFile(snapshotPath, snapshot, 'utf8')
+  await writeManagedTextFile(snapshotPath, snapshot, 'utf8')
 
   const record: ContextDebugRecord = {
     id,
@@ -371,6 +418,7 @@ export async function writeContextDebugRecord(input: {
     snapshotPath,
     sections,
     ...(corpusMap ? { corpusMap } : {}),
+    ...(structuralMap ? { structuralMap } : {}),
     health,
     reasons,
     applicableGuildSlugs: input.ctx.applicableGuildSlugs,
@@ -391,6 +439,25 @@ export async function writeContextDebugRecord(input: {
               reason: record.reason,
             })),
             evidenceRefs: input.ctx.effectiveMemoryPacket.evidenceRefs.length,
+            ...(input.ctx.effectiveMemoryPacket.memoryCorePacket
+              ? {
+                  memoryCore: {
+                    adapter: input.ctx.effectiveMemoryPacket.memoryCorePacket.health.adapter,
+                    fallbackUsed: input.ctx.effectiveMemoryPacket.memoryCorePacket.health.fallbackUsed,
+                    warnings: input.ctx.effectiveMemoryPacket.memoryCorePacket.health.warnings,
+                    candidates: input.ctx.effectiveMemoryPacket.memoryCorePacket.candidates.map(candidate => ({
+                      id: candidate.id,
+                      kind: candidate.kind,
+                      summary: candidate.summary,
+                      sourceRefs: candidate.sourceRefs.map(ref => ({
+                        uri: ref.uri,
+                        ...(ref.path ? { path: ref.path } : {}),
+                        sourceKind: ref.sourceKind,
+                      })),
+                    })),
+                  },
+                }
+              : {}),
           },
         }
       : {}),
@@ -416,7 +483,7 @@ export async function writeContextDebugRecord(input: {
     payload: record,
     now: () => new Date(at),
   })
-  await fs.appendFile(ledgerPath, `${JSON.stringify(record)}\n`, 'utf8')
+  await appendManagedTextFile(ledgerPath, `${JSON.stringify(record)}\n`, 'utf8')
   return record
 }
 
@@ -447,7 +514,7 @@ export async function readContextDebugForTask(
   const projectRoot = inferProjectRootFromMemoryDir(memoryDir)
   const ledgerPath = getProjectContextDebugLedgerPath(projectRoot)
   try {
-    const raw = await fs.readFile(ledgerPath, 'utf8')
+    const raw = await readManagedTextFile(ledgerPath, 'utf8')
     const matches: ContextDebugRecord[] = []
     for (const line of raw.split('\n')) {
       if (!line.trim()) continue

@@ -1,3 +1,5 @@
+import { writeManagedTextFileSync } from '@guildhall/persistence'
+import { appendManagedTextFile, readManagedTextFile, readManagedTextFileSync, writeManagedTextFile } from '@guildhall/persistence'
 import { readFileSync, existsSync, mkdirSync, statSync, writeFileSync, readdirSync, type Dirent, promises as fsp } from 'node:fs'
 import { dirname, join, resolve, basename, relative, isAbsolute, sep as pathSeparator, extname } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -9,7 +11,7 @@ import type { Context } from 'hono'
 import { Hono } from 'hono'
 import { streamSSE } from 'hono/streaming'
 import { serve } from '@hono/node-server'
-import { atomicWriteText, getProjectStateDir, getProjectTranscriptPath } from '@guildhall/sessions'
+import { atomicWriteText, getProjectStateDir, getProjectSystemStatePath, getProjectTranscriptPath } from '@guildhall/sessions'
 import { readTaskWorkspaceStore } from './task-state-store.js'
 import {
   readWorkspaceConfig,
@@ -72,7 +74,8 @@ import {
   readCheckpoint,
   readExploringTranscript,
   resolveEscalation,
-  materializeRequiredSplitChildren,
+  isMaterializableSplitAction,
+  materializeSplitChildren,
   updateDesignSystem,
 } from '@guildhall/tools'
 import { DesignSystem, summarizeDesignSystem, TaskQueue, type DesignSystem as DesignSystemRecord, type Task } from '@guildhall/core'
@@ -124,15 +127,31 @@ import {
   createPressureTestIntake,
   loadPressureTestIntake,
   listPressureTestIntakes,
+  listPressureTestIntakesAsync,
   summarizeProjectCheckIn,
 } from './pressure-test-intake.js'
+import { routeRequest } from './request-routing.js'
+import {
+  answerProjectCheckInBoundedChat,
+  createProjectCheckInBoundedChat,
+  resumeProjectCheckInBoundedChat,
+} from './bounded-chat-project-check-in.js'
+import {
+  answerNewRequestBoundedChat,
+  createNewRequestBoundedChat,
+} from './bounded-chat-new-request.js'
+import {
+  listBoundedChatSessions,
+  listBoundedChatSessionsAsync,
+  loadBoundedChatSession,
+  submitBoundedChatUserResponse,
+} from './bounded-chat.js'
 import { loadDesignSystem, saveDesignSystem } from './design-system-store.js'
 import { discoverDesignPreviewAdapter } from './design-preview.js'
 import { buildDesignSystemProfile } from './design-system-discovery.js'
 import {
   buildDesignDecisionPacket,
   captureOwnerDesignFeedback,
-  discoverLoomaDevelopmentHook,
   readDesignFeedbackStore,
   recordDesignFinding,
   routeDesignFinding,
@@ -143,6 +162,46 @@ import {
   listExternalAgentLinks,
   recordExternalAgentLink,
 } from './external-agent-links.js'
+import { deriveProjectWorkProgress, type ProjectWorkProgress } from './work-progress.js'
+import type { SurfaceReviewPacket } from './contract-surfaces.js'
+import {
+  acceptProjectDependencyDelivery,
+  assignProjectDomainAuthority,
+  assignProjectDomainResponsibility,
+  beginProjectDependencyConsumerReview,
+  commitProjectDependencyDeliveryPlan,
+  deliverProjectDependency,
+  importProjectDependencyRequestForProvider,
+  queryProjectGraphView,
+  requestProjectDependencyRevision,
+  reviseProjectDependencyPlan,
+  type ConsumerReturnPacket,
+  type DeliveryReceipt,
+  type ProjectDependencyEdge,
+  type ProjectDomainResponsibilityFacet,
+  type ProjectGraphNodeRef,
+} from './project-graph.js'
+import {
+  applyContractChangeSet,
+  buildTaskContextPacket,
+  deriveQueueCandidates,
+  deriveTaskRelationships,
+  listPrimitivesWithRelations,
+  planTaskSplit,
+  readProjectDeliveryModel,
+  rejectContractChangeSet,
+  revertAppliedContractResult,
+  validateProjectDeliveryModel,
+  writeProjectDeliveryModel,
+  type ContractChangeSet,
+} from './delivery-spine.js'
+import {
+  applyStructuralMapReviewAction,
+  readAcceptedStructuralMap,
+  summarizeStructuralMapForReview,
+  type StructuralMapReviewAction,
+} from './structural-map.js'
+import { summarizeStructuralTaskContexts } from './structural-task-context.js'
 import { loadEffectiveDesignTaste } from './design-taste.js'
 import {
   approveMetaIntake,
@@ -171,6 +230,7 @@ import {
   workspaceNeedsImport,
   WORKSPACE_IMPORT_TASK_ID,
   formatDetectedDraftAsSpec,
+  workspaceImportTasksPath,
 } from './workspace-importer.js'
 import {
   detectWorkspaceSignals,
@@ -195,7 +255,13 @@ import {
   resetProjectSkillProposals,
 } from '@guildhall/skills'
 import { normalizeImportedDraftTask } from './import-drafts.js'
-import { buildInbox, buildInboxBlockers, detectRepoAnchors } from './inbox.js'
+import {
+  buildInbox,
+  buildInboxBlockers,
+  detectRepoAnchors,
+  isAttentionOwnedInboxItem,
+} from './inbox.js'
+import { listOwnerInputRequestsSync, markOwnerInputRequestForBoundedChatReview } from './owner-input-store.js'
 import {
   buildProjectMigrationAdvisories,
   buildProjectUnderstandingAdvisories,
@@ -205,6 +271,12 @@ import {
 } from './attention.js'
 import { projectRuntimeCompatibilityBlocker } from './runtime-compatibility.js'
 import { ProjectRuntimeSupervisor } from './project-runtime-supervisor.js'
+import {
+  findStaleGuildhallProcesses,
+  listGuildhallProcesses,
+  stopStaleGuildhallProcesses,
+  type GuildhallProcessInfo,
+} from './stale-guildhall-processes.js'
 import { createCapabilityRequest, listCapabilityRequests } from './capability-requests.js'
 import {
   approveMountDirectoryRequest,
@@ -219,7 +291,13 @@ import {
   suggestedCapabilityMountForHostPath,
 } from './project-runtime-command.js'
 import { listMemoryRecords } from './memory-store.js'
+import { buildMemoryCoreCandidatePacket, resolveMemoryPaths } from '@guildhall/memory-core'
 import { readProjectRuntimeState } from './project-runtime-store.js'
+import {
+  pauseProjectAvailability,
+  readProjectAvailability,
+  resumeProjectAvailability,
+} from './project-availability.js'
 import {
   DevServerManager,
   type StartDevServerRequest,
@@ -230,6 +308,7 @@ import {
   type RuntimeBackendSetupDetector,
 } from './runtime-backend-setup.js'
 import { buildThread } from './thread.js'
+import { buildProjectActionModel, type ProjectActionModel } from './project-action-model.js'
 import { NodeGitDriver } from './git-driver.js'
 import {
   inspectGitStory,
@@ -254,6 +333,7 @@ import { userFacingText } from './user-facing-text.js'
 import { FileBackedGuildhallPersistence } from '@guildhall/persistence'
 import {
   buildSnapshot,
+  buildSnapshotAsync,
   listWizards,
   progressFor,
   readWizardsState,
@@ -263,6 +343,7 @@ import {
   progressForTask,
   type WizardsState,
 } from './wizards.js'
+import { readCachedJson } from './file-read-cache.js'
 import { applyProjectMigrations, getProjectMigrationStatus } from './migrations.js'
 import { stringify as stringifyYaml } from 'yaml'
 import {
@@ -330,10 +411,17 @@ export interface ServeOptions {
   pickProjectFolder?: () => Promise<string | null>
   /** Optional project-runtime supervisor override for tests. */
   runtimeSupervisor?: ProjectRuntimeSupervisor
+  /** Optional orchestrator supervisor override for tests. */
+  supervisor?: OrchestratorSupervisor
   /** Optional runtime backend setup detector override for tests. */
   runtimeBackendSetup?: RuntimeBackendSetupDetector
   /** Optional runtime dev-server manager override for tests. */
   devServerManager?: Pick<DevServerManager, 'list' | 'start' | 'stop' | 'restart'>
+  /** Optional stale Guildhall process guard overrides for tests. */
+  staleProcessGuard?: {
+    listProcesses?: () => Promise<GuildhallProcessInfo[]>
+    killProcess?: (pid: number, signal?: NodeJS.Signals) => void
+  }
 }
 
 export interface ShutdownHttpServer {
@@ -389,6 +477,7 @@ interface ServiceProjectSummary {
   path: string
   name: string
   initializationNeeded: boolean
+  projectStatusLoading?: boolean
   tags?: string[]
   summary?: string | null
   taskCounts?: {
@@ -399,6 +488,7 @@ interface ServiceProjectSummary {
     done: number
     shelved: number
   }
+  workProgress?: ProjectWorkProgress
   highlights?: {
     activeTaskTitle?: string | null
     blockedTaskTitle?: string | null
@@ -435,6 +525,7 @@ interface ServiceProjectSummary {
     error?: string
   }
   projectCheckIn?: ReturnType<typeof summarizeProjectCheckIn> | null
+  actionModel?: ProjectActionModel | null
 }
 
 function humanizeGeneratedProjectName(name: string): string {
@@ -494,7 +585,7 @@ function detectProjectPackageManagers(projectPath: string): string[] {
 
     if (names.has('package.json')) {
       try {
-        const pkg = JSON.parse(readFileSync(join(dir, 'package.json'), 'utf8')) as { packageManager?: string }
+        const pkg = JSON.parse(readManagedTextFileSync(join(dir, 'package.json'), 'utf8')) as { packageManager?: string }
         const pm = pkg.packageManager?.split('@')[0]
         if (pm === 'pnpm' || pm === 'yarn' || pm === 'npm' || pm === 'bun') found.add(pm)
       } catch {
@@ -681,7 +772,7 @@ async function collectProjectReintakeSources(projectPath: string): Promise<Array
       if (!['.md', '.markdown', '.txt'].includes(ext)) continue
       let content = ''
       try {
-        content = await fsp.readFile(absolute, 'utf-8')
+        content = await readManagedTextFile(absolute, 'utf-8')
       } catch {
         continue
       }
@@ -729,15 +820,27 @@ function isTerminalOwnershipMismatch(task: Record<string, unknown>): boolean {
   )
 }
 
-  async function readTasksFileNormalized(
+const normalizedTasksCache = new Map<string, { raw: unknown; tasks: Array<Record<string, unknown>> }>()
+
+function sameSerializedTasks(left: unknown, right: unknown): boolean {
+  return JSON.stringify(left) === JSON.stringify(right)
+}
+
+async function readTasksFileNormalized(
   tasksPath: string,
 ): Promise<Array<Record<string, unknown>>> {
   if (!existsSync(tasksPath)) return []
-  const rawText = await fsp.readFile(tasksPath, 'utf8')
-  const parsed = JSON.parse(rawText) as
+  const parsed = await readCachedJson<
     | { tasks?: Array<Record<string, unknown>>; version?: unknown; lastUpdated?: unknown }
     | Array<Record<string, unknown>>
-  const tasks = Array.isArray(parsed) ? parsed : Array.isArray(parsed?.tasks) ? parsed.tasks : []
+  >(tasksPath)
+  if (parsed == null) return []
+  const cached = normalizedTasksCache.get(tasksPath)
+  if (cached && sameSerializedTasks(cached.raw, parsed)) {
+    return cached.tasks.map(task => ({ ...task }))
+  }
+  const tasks = (Array.isArray(parsed) ? parsed : Array.isArray(parsed?.tasks) ? parsed.tasks : [])
+    .map(task => ({ ...task }))
   let changed = false
   for (const task of tasks) {
     if (normalizeImportedDraftTask(task as never)) {
@@ -778,7 +881,10 @@ function isTerminalOwnershipMismatch(task: Record<string, unknown>): boolean {
       changed = true
     }
   }
-  if (!changed) return tasks
+  if (!changed) {
+    normalizedTasksCache.set(tasksPath, { raw: parsed, tasks: tasks.map(task => ({ ...task })) })
+    return tasks
+  }
 
   const rewritten = Array.isArray(parsed)
     ? tasks
@@ -787,8 +893,153 @@ function isTerminalOwnershipMismatch(task: Record<string, unknown>): boolean {
         tasks,
         lastUpdated: new Date().toISOString(),
       }
-  await atomicWriteText(tasksPath, JSON.stringify(rewritten, null, 2))
+  await writeManagedTextFileSync(tasksPath, JSON.stringify(rewritten, null, 2))
+  normalizedTasksCache.set(tasksPath, { raw: rewritten, tasks: tasks.map(task => ({ ...task })) })
   return tasks
+}
+
+async function writeTasksFilePreservingQueue(
+  tasksPath: string,
+  tasks: Array<Record<string, unknown>>,
+): Promise<void> {
+  let parsed:
+    | { tasks?: Array<Record<string, unknown>>; version?: unknown; lastUpdated?: unknown }
+    | Array<Record<string, unknown>>
+    | null = null
+  if (existsSync(tasksPath)) {
+    try {
+      parsed = JSON.parse(await readManagedTextFile(tasksPath, 'utf8')) as typeof parsed
+    } catch {
+      parsed = null
+    }
+  }
+  const rewritten = Array.isArray(parsed)
+    ? tasks
+    : {
+        ...(parsed && typeof parsed === 'object' ? parsed : { version: 1 }),
+        tasks,
+        lastUpdated: new Date().toISOString(),
+      }
+  await writeManagedTextFileSync(tasksPath, JSON.stringify(rewritten, null, 2) + '\n')
+  normalizedTasksCache.set(tasksPath, { raw: rewritten, tasks: tasks.map(task => ({ ...task })) })
+}
+
+function stagedContractChangeSet(model: { validationEvidence?: Array<Record<string, unknown>> }, resultId: string): ContractChangeSet | null {
+  const record = (model.validationEvidence ?? []).find(candidate => (
+    typeof candidate.id === 'string' &&
+    candidate.id === resultId &&
+    (candidate.status === 'pending_review' || candidate.status === 'auto_applicable')
+  ))
+  const changeSet = record?.changeSet
+  return changeSet && typeof changeSet === 'object' ? changeSet as ContractChangeSet : null
+}
+
+function surfaceReviewPacketsFromTask(task: Record<string, unknown>): SurfaceReviewPacket[] {
+  const packets = task.contractSurfaceReviewPackets
+  if (!Array.isArray(packets)) return []
+  return packets.filter(isSurfaceReviewPacket)
+}
+
+function isSurfaceReviewPacket(value: unknown): value is SurfaceReviewPacket {
+  if (!value || typeof value !== 'object') return false
+  const packet = value as Record<string, unknown>
+  const surface = packet.surface
+  const currentDelta = packet.currentDelta
+  return typeof packet.id === 'string' &&
+    typeof packet.currentSpecRef === 'string' &&
+    !!surface &&
+    typeof surface === 'object' &&
+    typeof (surface as Record<string, unknown>).id === 'string' &&
+    !!currentDelta &&
+    typeof currentDelta === 'object' &&
+    typeof (currentDelta as Record<string, unknown>).summary === 'string' &&
+    Array.isArray(packet.knownConsumers) &&
+    Array.isArray(packet.existingInvariants) &&
+    Array.isArray(packet.existingDecisions) &&
+    Array.isArray(packet.siblingSpecRefs) &&
+    Array.isArray(packet.driftFindings) &&
+    Array.isArray(packet.proofObligations) &&
+    Array.isArray(packet.reviewFocus)
+}
+
+function projectCheckInSummaryFromState(
+  intakes: Array<{ status: string }>,
+  chats: Array<{ status: string; objective: { kind: string } }>,
+) {
+  const projectChats = chats.filter(session => session.objective.kind === 'project_check_in' || session.objective.kind === 'project_intake')
+  const activeCount =
+    intakes.filter(intake => intake.status === 'active').length +
+    projectChats.filter(chat => chat.status === 'waiting_for_owner' || chat.status === 'coordinator_review').length
+  const completedCount =
+    intakes.filter(intake => intake.status === 'complete').length +
+    projectChats.filter(chat => chat.status === 'fulfilled').length
+  const needed = intakes.length === 0 && projectChats.length === 0
+  return {
+    needed,
+    label: 'Project questions',
+    title: needed
+      ? 'Run project check-in'
+      : activeCount > 0
+        ? 'Project questions in progress'
+        : 'Project questions answered',
+    detail: needed
+      ? 'The first project questions have not been generated yet. Start the check-in pass so it can ask one clear question at a time.'
+      : activeCount > 0
+        ? 'Keep answering the current project questions in Thread.'
+        : 'Project-level answers are already recorded for this workspace.',
+    actionHref: '/thread',
+    totalCount: intakes.length,
+    activeCount,
+    completedCount,
+  }
+}
+
+function newRequestRoutingSummary(kind: string): string {
+  switch (kind) {
+    case 'project_question':
+      return 'Saved as a project question.'
+    case 'settings_proposal':
+      return 'This settings change is being shaped before project state changes.'
+    case 'persona_practice_proposal':
+      return 'This practice proposal is being shaped before reviewer behavior changes.'
+    case 'repair_triage':
+      return 'This repair request is being triaged before it becomes runnable work.'
+    case 'clarification':
+      return 'One clearer outcome is needed before this becomes work.'
+    default:
+      return 'This request is being shaped into a task brief.'
+  }
+}
+
+function projectTasksPath(projectPath: string): string {
+  return getProjectSystemStatePath(projectPath, 'TASKS.json')
+}
+
+function projectBriefPath(projectPath: string): string {
+  return getProjectSystemStatePath(projectPath, 'project-brief.md')
+}
+
+async function loadThreadProjectionState(projectPath: string) {
+  const memoryDir = getProjectStateDir(projectPath)
+  const [snapshot, tasks, boundedChatSessions, pressureTestIntakes] = await Promise.all([
+    buildSnapshotAsync({ projectPath }),
+    readTasksFileNormalized(projectTasksPath(projectPath)).catch(() => []),
+    listBoundedChatSessionsAsync(memoryDir).catch(() => []),
+    listPressureTestIntakesAsync(memoryDir).catch(() => []),
+  ])
+  return {
+    snapshot,
+    tasks,
+    boundedChatSessions,
+    pressureTestIntakes,
+    projectCheckInSummary: projectCheckInSummaryFromState(pressureTestIntakes, boundedChatSessions),
+  }
+}
+
+function formatServerTiming(metrics: Array<{ name: string; startedAt: number; endedAt?: number }>): string {
+  return metrics
+    .map(metric => `${metric.name};dur=${Math.max(0, (metric.endedAt ?? Date.now()) - metric.startedAt)}`)
+    .join(', ')
 }
 
 async function buildProjectInboxSnapshot(input: {
@@ -806,7 +1057,7 @@ async function buildProjectInboxSnapshot(input: {
   // No-op if already seeded, off, or not needed.
   try {
     const memoryDir = getProjectStateDir(input.projectPath)
-    const goalsPath = join(memoryDir, 'workspace-goals.json')
+    const goalsPath = getProjectSystemStatePath(input.projectPath, 'workspace-goals.json')
     if (!existsSync(goalsPath) && input.coordinatorCount > 0) {
       await maybeSeedWorkspaceImport({ memoryDir, projectPath: input.projectPath })
     }
@@ -842,24 +1093,27 @@ async function buildProjectInboxSnapshot(input: {
     ...await buildProjectMigrationAdvisories(input.projectPath),
     ...buildProjectUnderstandingAdvisories(input.projectPath),
     ...buildInbox({ projectPath: input.projectPath }),
-  ]
+  ].filter(isAttentionOwnedInboxItem)
   const attention = reconcileAttentionRecords({
     projectPath: input.projectPath,
     openItems: computedItems,
   })
   const blockers = buildInboxBlockers(attention.openItems)
-  return { items: attention.openItems, history: attention.history, blockers }
+  return {
+    items: attention.openItems.filter(isAttentionOwnedInboxItem),
+    history: attention.history.filter(isAttentionOwnedInboxItem),
+    blockers,
+  }
 }
 
 // ---------------------------------------------------------------------------
 // Wizards helpers — small shims so serve.ts doesn't have to know about the
-// on-disk layout of memory/wizards.yaml.
+// on-disk layout of project-state/wizards.yaml.
 // ---------------------------------------------------------------------------
 function writeWizardsState(projectPath: string, state: WizardsState): void {
-  const memDir = getProjectStateDir(projectPath)
-  if (!existsSync(memDir)) mkdirSync(memDir, { recursive: true })
-  const path = join(memDir, 'wizards.yaml')
-  writeFileSync(path, stringifyYaml(state), 'utf8')
+  const path = getProjectSystemStatePath(projectPath, 'wizards.yaml')
+  mkdirSync(dirname(path), { recursive: true })
+  writeManagedTextFileSync(path, stringifyYaml(state))
 }
 
 function mutateSkip(
@@ -974,6 +1228,29 @@ function summarizeProject(project: ResolvedProject): ServiceProjectSummary {
   }
 }
 
+function summarizeProjectShell(
+  project: ResolvedProject,
+  run?: ReturnType<OrchestratorSupervisor['list']>[number],
+): ServiceProjectSummary {
+  return {
+    ...summarizeProject(project),
+    summary: summarizeProjectText(project),
+    projectStatusLoading: true,
+    ...(run
+      ? {
+          run: {
+            status: run.status,
+            startedAt: run.startedAt,
+            stoppedAt: run.stoppedAt,
+            error: run.error,
+            stopSummary: run.stopSummary,
+            providerStatus: run.providerStatus,
+          },
+        }
+      : {}),
+  }
+}
+
 async function summarizeProjectMigrations(projectPath: string): Promise<NonNullable<ServiceProjectSummary['migrationSummary']>> {
   try {
     const status = await getProjectMigrationStatus({ projectRoot: projectPath })
@@ -1076,7 +1353,7 @@ function releaseDesignSystemStatus(
       source: 'guildhall',
       label: approved ? `approved · rev ${ds.revision ?? 0}` : `draft · rev ${ds.revision ?? 0}`,
       reason: approved
-        ? 'Guildhall has an approved design guardrail for this project.'
+        ? 'This project has an approved design guardrail.'
         : 'A design guardrail is drafted but still needs approval.',
     }
   }
@@ -1195,6 +1472,33 @@ function hasApprovedProductBriefRecord(task: Record<string, unknown>): boolean {
   )
 }
 
+function hasCompleteProductBriefRecord(task: Record<string, unknown>): boolean {
+  const brief = task.productBrief
+  if (!brief || typeof brief !== 'object' || Array.isArray(brief)) return false
+  const record = brief as {
+    userJob?: unknown
+    whyItMattersNow?: unknown
+    successMetric?: unknown
+    nonGoals?: unknown
+    antiPatterns?: unknown
+  }
+  const nonGoals = Array.isArray(record.nonGoals)
+    ? record.nonGoals.filter((item): item is string => typeof item === 'string' && item.trim().length > 0)
+    : []
+  const antiPatterns = Array.isArray(record.antiPatterns)
+    ? record.antiPatterns.filter((item): item is string => typeof item === 'string' && item.trim().length > 0)
+    : []
+  return Boolean(
+    typeof record.userJob === 'string' &&
+    record.userJob.trim().length > 0 &&
+    typeof record.whyItMattersNow === 'string' &&
+    record.whyItMattersNow.trim().length > 0 &&
+    typeof record.successMetric === 'string' &&
+    record.successMetric.trim().length > 0 &&
+    (nonGoals.length > 0 || antiPatterns.length > 0),
+  )
+}
+
 function hasSpecDraftRecord(task: Record<string, unknown>): boolean {
   return (
     typeof task.spec === 'string' &&
@@ -1205,7 +1509,7 @@ function hasSpecDraftRecord(task: Record<string, unknown>): boolean {
 }
 
 function isReadyForWorkerHandoffRecord(task: Record<string, unknown>): boolean {
-  return hasApprovedProductBriefRecord(task) && hasSpecDraftRecord(task)
+  return hasApprovedProductBriefRecord(task) && hasCompleteProductBriefRecord(task) && hasSpecDraftRecord(task)
 }
 
 function summarizeTaskActivity(
@@ -1258,9 +1562,9 @@ function summarizeProjectText(project: ResolvedProject): string | null {
   if (project.initializationNeeded) {
     return 'Attached to this folder. Initialize Guildhall here to inspect the repo, configure providers, and start task flow.'
   }
-  const briefPath = join(getProjectStateDir(project.path), 'project-brief.md')
+  const briefPath = projectBriefPath(project.path)
   if (existsSync(briefPath)) {
-    const brief = readFileSync(briefPath, 'utf8')
+    const brief = readManagedTextFileSync(briefPath, 'utf8')
       .split(/\r?\n/)
       .map((line) => line.replace(/^#+\s*/, '').trim())
       .filter((line) => line.length > 0)
@@ -1361,7 +1665,7 @@ function isProviderCapacityEventMessage(value: string): boolean {
 function providerCapacityEventLabel(value: string): string {
   const retry = value.match(/retrying in ([\d.]+)s \(attempt (\d+) of (\d+)\)/i)
   if (retry) return `Provider busy; retrying in ${retry[1]}s (attempt ${retry[2]} of ${retry[3]}).`
-  if (/retryable provider throttle/i.test(value)) return 'Provider busy; Guildhall will resume this task later.'
+  if (/retryable provider throttle/i.test(value)) return 'Provider busy; this task can resume later.'
   if (/Agent .* failed on .*API error/i.test(value)) return 'Provider busy; this agent turn stopped.'
   if (/API error/i.test(value)) return 'Provider busy; request failed after retries.'
   return 'Provider busy; retry later.'
@@ -1670,7 +1974,7 @@ async function buildProjectGitStorySummary(projectPath: string, tasks?: Array<Re
         }),
       ]
   const snapshots = [...rootSnapshots]
-  const taskRecords = tasks ?? await readTasksFileNormalized(join(getProjectStateDir(projectPath), 'TASKS.json')).catch(() => [])
+  const taskRecords = tasks ?? await readTasksFileNormalized(projectTasksPath(projectPath)).catch(() => [])
   const workspaceStore = await readTaskWorkspaceStore(projectPath).catch(() => undefined)
   for (const task of taskRecords) {
     const taskId = typeof task.id === 'string' ? task.id : ''
@@ -1928,12 +2232,50 @@ export function buildServeApp(opts: ServeOptions = {}): {
     },
   })
 
-  const supervisor = new OrchestratorSupervisor()
+  const supervisor = opts.supervisor ?? new OrchestratorSupervisor()
   const runtimeSupervisor = opts.runtimeSupervisor ?? new ProjectRuntimeSupervisor()
   const runtimeBackendSetup = opts.runtimeBackendSetup ?? detectRuntimeBackendSetup
   const devServerManager = opts.devServerManager ?? new DevServerManager({ runtimeSupervisor })
   const app = new Hono()
   const currentProjectPath = () => currentProject().path
+  const runtimeAgentProjectId = (c: Context): string | null => {
+    const projectId = c.req.header('x-guildhall-runtime-project-id')?.trim()
+    return projectId || null
+  }
+  const recordRuntimeAgentScopeViolation = async (
+    runtimeProjectId: string,
+    input: {
+      requestedProjectId?: string | undefined
+      path: string
+      method: string
+      reason: string
+    },
+  ) => {
+    const runtimeProject = getRegisteredProjects().find(item => item.id === runtimeProjectId)
+    if (!runtimeProject) return
+    const file = getProjectSystemStatePath(runtimeProject.path, 'security/runtime-agent-scope-violations.jsonl')
+    await fsp.mkdir(dirname(file), { recursive: true })
+    await appendManagedTextFile(file, `${JSON.stringify({
+      runtimeProjectId,
+      ...input,
+      recordedAt: new Date().toISOString(),
+    })}\n`)
+  }
+  const blockRuntimeAgentGlobalAccess = async (c: Context, next: () => Promise<void>) => {
+    const runtimeProjectId = runtimeAgentProjectId(c)
+    if (runtimeProjectId) {
+      await recordRuntimeAgentScopeViolation(runtimeProjectId, {
+        path: c.req.path,
+        method: c.req.method,
+        reason: 'global_api_access',
+      })
+      return c.json({
+        error: 'Runtime-agent requests cannot access service-wide or global Guildhall APIs.',
+        code: 'runtime_agent_scope_violation',
+      }, 403)
+    }
+    return next()
+  }
 
   const bindProjectScope = async (
     c: Context,
@@ -1944,6 +2286,19 @@ export function buildServeApp(opts: ServeOptions = {}): {
   ) => {
     if (!c.req.query('projectId')?.trim()) {
       return c.json({ error: 'projectId is required for project-scoped requests.' }, 400)
+    }
+    const runtimeProjectId = runtimeAgentProjectId(c)
+    if (runtimeProjectId && c.req.query('projectId')?.trim() !== runtimeProjectId) {
+      await recordRuntimeAgentScopeViolation(runtimeProjectId, {
+        requestedProjectId: c.req.query('projectId')?.trim(),
+        path: c.req.path,
+        method: c.req.method,
+        reason: 'cross_project_access',
+      })
+      return c.json({
+        error: 'Runtime-agent requests cannot access another project.',
+        code: 'runtime_agent_scope_violation',
+      }, 403)
     }
     if (
       requireExplicitForMutation &&
@@ -1977,6 +2332,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
     if (
       c.req.path.startsWith('/api/project') &&
       !c.req.path.startsWith('/api/project/migrations') &&
+      c.req.path !== '/api/project/meta-intake/synthesize' &&
       c.req.method !== 'GET' &&
       c.req.method !== 'HEAD'
     ) {
@@ -1997,6 +2353,12 @@ export function buildServeApp(opts: ServeOptions = {}): {
 
   app.use('/api/project', (c, next) => bindProjectScope(c, next, { requireExplicitForMutation: true }))
   app.use('/api/project/*', (c, next) => bindProjectScope(c, next, { requireExplicitForMutation: true }))
+  app.use('/api/service', blockRuntimeAgentGlobalAccess)
+  app.use('/api/service/*', blockRuntimeAgentGlobalAccess)
+  app.use('/api/providers', blockRuntimeAgentGlobalAccess)
+  app.use('/api/providers/*', blockRuntimeAgentGlobalAccess)
+  app.use('/api/models', blockRuntimeAgentGlobalAccess)
+  app.use('/api/models/*', blockRuntimeAgentGlobalAccess)
   app.use('/api/config', bindProjectScope)
   app.use('/api/config/*', bindProjectScope)
   app.use('/api/setup', bindProjectScope)
@@ -2038,7 +2400,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
         for (let i = 0; i < 8; i++) {
           const candidate = join(dir, 'package.json')
           if (existsSync(candidate)) {
-            const pkg = JSON.parse(readFileSync(candidate, 'utf-8')) as {
+            const pkg = JSON.parse(readManagedTextFileSync(candidate, 'utf-8')) as {
               name?: string
             }
             if (pkg?.name === 'guildhall' || pkg?.name === '@guildhall/cli') {
@@ -2065,7 +2427,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
       if (root) {
         const candidate = join(root, 'package.json')
         if (existsSync(candidate)) {
-          const pkg = JSON.parse(readFileSync(candidate, 'utf-8')) as {
+          const pkg = JSON.parse(readManagedTextFileSync(candidate, 'utf-8')) as {
             version?: string
           }
           _cachedVersion = pkg.version ?? 'unknown'
@@ -2081,6 +2443,19 @@ export function buildServeApp(opts: ServeOptions = {}): {
 
   app.get('/api/version', c => {
     return c.json({ version: readRuntimeVersion() })
+  })
+
+  app.get('/api/service/projects', c => {
+    const runsById = new Map(supervisor.list().map(run => [run.workspaceId, run]))
+    const projects = getRegisteredProjects().map((entry) => {
+      const resolved = resolveProject(entry.path)
+      return summarizeProjectShell(resolved, runsById.get(resolved.id))
+    })
+    return c.json({
+      pid: process.pid,
+      defaultProviderStatus: buildGlobalDefaultProviderStatus(),
+      projects,
+    })
   })
 
   app.get('/api/service', async c => {
@@ -2122,13 +2497,44 @@ export function buildServeApp(opts: ServeOptions = {}): {
           done: 0,
           shelved: 0,
         }
+        let workProgress: ServiceProjectSummary['workProgress'] = undefined
         let highlights: ServiceProjectSummary['highlights'] = undefined
         let taskActivity: ServiceProjectSummary['taskActivity'] = undefined
+        const availability = resolved.initializationNeeded
+          ? null
+          : await readProjectAvailability(entry.path).catch(() => null)
         try {
-          const tasks = await readTasksFileNormalized(join(getProjectStateDir(entry.path), 'TASKS.json'))
+          const tasks = await readTasksFileNormalized(projectTasksPath(entry.path))
           taskCounts = summarizeTaskCounts(tasks)
+          workProgress = deriveProjectWorkProgress(tasks as Array<Record<string, unknown>>)
           taskActivity = summarizeTaskActivity(tasks)
           const gitStory = await buildProjectGitStorySummary(entry.path, tasks as Array<Record<string, unknown>>).catch(() => undefined)
+          const inbox = await buildProjectInboxSnapshot({
+            projectPath: entry.path,
+            initializationNeeded: resolved.initializationNeeded,
+            coordinatorCount: resolved.config?.coordinators?.length ?? 0,
+          }).catch(() => null)
+          const thread = await (async () => {
+            const state = await loadThreadProjectionState(entry.path)
+            return buildThread({
+              projectPath: entry.path,
+              snapshot: state.snapshot,
+              tasks: state.tasks as never,
+              boundedChatSessions: state.boundedChatSessions,
+              pressureTestIntakes: state.pressureTestIntakes,
+              projectCheckInSummary: state.projectCheckInSummary,
+              runStatus: run?.status ?? 'stopped',
+              recentEvents: supervisor.recent(resolved.id, undefined, entry.path),
+            })
+          })().catch(() => null)
+          const actionModel = buildProjectActionModel({
+            startReadiness,
+            inbox,
+            tasks: tasks as never,
+            thread,
+            runStatus: run?.status ?? 'stopped',
+            availability,
+          })
           highlights = {
             activeTaskTitle: latestTaskTitleByStatus(tasks, ['in_progress', 'review', 'gate_check', 'exploring']),
             blockedTaskTitle: latestTaskTitleByStatus(tasks, ['blocked']),
@@ -2138,11 +2544,14 @@ export function buildServeApp(opts: ServeOptions = {}): {
             ...summarizeProject(resolved),
             summary: summarizeProjectText(resolved),
             taskCounts,
+            ...(workProgress ? { workProgress } : {}),
             ...(taskActivity ? { taskActivity } : {}),
             ...(highlights ? { highlights } : {}),
             ...(gitStory ? { gitStory } : {}),
             ...(providerStatus ? { providerStatus } : {}),
             ...(startReadiness ? { startReadiness } : {}),
+            ...(availability ? { availability } : {}),
+            actionModel,
             ...(migrationSummary ? { migrationSummary } : {}),
             projectCheckIn,
             ...(run
@@ -2165,10 +2574,12 @@ export function buildServeApp(opts: ServeOptions = {}): {
           ...summarizeProject(resolved),
           summary: summarizeProjectText(resolved),
           taskCounts,
+          ...(workProgress ? { workProgress } : {}),
           ...(taskActivity ? { taskActivity } : {}),
           ...(highlights ? { highlights } : {}),
           ...(providerStatus ? { providerStatus } : {}),
           ...(startReadiness ? { startReadiness } : {}),
+          ...(availability ? { availability } : {}),
           ...(migrationSummary ? { migrationSummary } : {}),
           projectCheckIn,
           ...(run
@@ -2190,6 +2601,59 @@ export function buildServeApp(opts: ServeOptions = {}): {
       pid: process.pid,
       defaultProviderStatus: buildGlobalDefaultProviderStatus(),
       projects,
+    })
+  })
+
+  app.get('/api/fleet/attention', async c => {
+    const registeredProjects = getRegisteredProjects()
+    const groups = await Promise.all(registeredProjects.map(async (entry) => {
+      const resolved = resolveProject(entry.path)
+      const projectSummary = summarizeProject(resolved)
+      if (resolved.initializationNeeded) {
+        return { project: projectSummary, items: [], error: null, topWaitingThread: null }
+      }
+      try {
+        const inbox = await buildProjectInboxSnapshot({
+          projectPath: entry.path,
+          initializationNeeded: resolved.initializationNeeded,
+          coordinatorCount: resolved.config?.coordinators?.length ?? 0,
+        })
+        const state = await loadThreadProjectionState(entry.path)
+        const thread = buildThread({
+          projectPath: entry.path,
+          snapshot: state.snapshot,
+          tasks: state.tasks as never,
+          boundedChatSessions: state.boundedChatSessions,
+          pressureTestIntakes: state.pressureTestIntakes,
+          projectCheckInSummary: state.projectCheckInSummary,
+          runStatus: supervisor.get(resolved.id)?.status ?? 'stopped',
+          recentEvents: supervisor.recent(resolved.id, undefined, entry.path),
+        })
+        const topWaitingThread = thread.turns.find(turn => turn.id === thread.activeTurnId && turn.status === 'active') ?? null
+        return {
+          project: projectSummary,
+          items: inbox.items.filter(item => item.severity !== 'low'),
+          error: null,
+          topWaitingThread,
+        }
+      } catch (err) {
+        return {
+          project: projectSummary,
+          items: [],
+          error: err instanceof Error ? err.message : String(err),
+          topWaitingThread: null,
+        }
+      }
+    }))
+    const visibleGroups = groups.filter(group => group.items.length > 0 || group.error || group.topWaitingThread)
+    const topWaitingThread = visibleGroups
+      .map(group => group.topWaitingThread ? { project: group.project, turn: group.topWaitingThread } : null)
+      .find((entry): entry is NonNullable<typeof entry> => entry !== null) ?? null
+    return c.json({
+      groups: visibleGroups,
+      totalItems: visibleGroups.reduce((sum, group) => sum + group.items.length, 0),
+      projectCount: visibleGroups.filter(group => group.items.length > 0 || group.topWaitingThread).length,
+      topWaitingThread,
     })
   })
 
@@ -2263,6 +2727,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
     currentBuildMtimeMs: number
     stale: boolean
     distPath: string | null
+    staleProcesses?: GuildhallProcessInfo[]
   } {
     let currentBuildMtimeMs = bootBuildMtimeMs
     try {
@@ -2282,6 +2747,25 @@ export function buildServeApp(opts: ServeOptions = {}): {
     }
   }
 
+  async function servedBundleFreshnessPayloadWithProcesses(): Promise<ReturnType<typeof servedBundleFreshnessPayload>> {
+    const payload = servedBundleFreshnessPayload()
+    const staleOptions = {
+      currentPid: process.pid,
+      currentBuildMtimeMs: payload.currentBuildMtimeMs,
+      ...(opts.staleProcessGuard?.listProcesses ? { listProcesses: opts.staleProcessGuard.listProcesses } : {}),
+      ...(opts.staleProcessGuard?.killProcess ? { killProcess: opts.staleProcessGuard.killProcess } : {}),
+    }
+    await stopStaleGuildhallProcesses(staleOptions)
+    const processes = opts.staleProcessGuard?.listProcesses
+      ? await opts.staleProcessGuard.listProcesses()
+      : await listGuildhallProcesses()
+    const staleProcesses = findStaleGuildhallProcesses(processes, staleOptions)
+    return {
+      ...payload,
+      ...(staleProcesses.length > 0 ? { staleProcesses } : {}),
+    }
+  }
+
   function readBakedBuildIdentity(): RuntimeBuildIdentity | null {
     try {
       const here = dirname(fileURLToPath(import.meta.url))
@@ -2292,7 +2776,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
       ]
       for (const candidate of candidates) {
         if (!existsSync(candidate)) continue
-        const parsed = JSON.parse(readFileSync(candidate, 'utf-8')) as Partial<RuntimeBuildIdentity>
+        const parsed = JSON.parse(readManagedTextFileSync(candidate, 'utf-8')) as Partial<RuntimeBuildIdentity>
         const git = (parsed.git ?? {}) as Record<string, unknown>
         if (
           typeof parsed.builtAt === 'string' &&
@@ -2372,8 +2856,8 @@ export function buildServeApp(opts: ServeOptions = {}): {
     return c.json(servedBundleFreshnessPayload())
   })
 
-  app.get('/api/stale-server', c => {
-    return c.json(servedBundleFreshnessPayload())
+  app.get('/api/stale-server', async c => {
+    return c.json(await servedBundleFreshnessPayloadWithProcesses())
   })
 
   app.get('/api/health', async c => {
@@ -2392,6 +2876,19 @@ export function buildServeApp(opts: ServeOptions = {}): {
     project: number
     userGlobal: number
     guildhallProduct: number
+    memoryCore: {
+      adapter: 'mastra' | 'deterministic'
+      fallbackUsed: boolean
+      storagePath?: string
+      repoLocalWrites: string[]
+      semanticRecallEnabled: boolean
+      observationalMemoryEnabled: boolean
+      observationalProcessorReady: boolean
+      compactionStatus: 'active' | 'needs_attention'
+      semanticValidity: 'valid' | 'needs_attention'
+      warnings: string[]
+      features: string[]
+    }
     recentUse: Array<{ taskId: string; included: number; withheld: number; at: string }>
   }> {
     const memoryDir = getProjectStateDir(projectPath)
@@ -2410,6 +2907,46 @@ export function buildServeApp(opts: ServeOptions = {}): {
         at: latest.at,
       })
     }
+    const projectId = basename(projectPath) || 'project'
+    const memoryCoreScope = { kind: 'project' as const, projectId }
+    const memoryConfig = readProjectConfig(projectPath).memory
+    const memorySubstrate = process.env.GUILDHALL_MEMORY_SUBSTRATE === 'deterministic'
+      ? 'deterministic'
+      : process.env.GUILDHALL_MEMORY_SUBSTRATE === 'mastra'
+        ? 'mastra'
+        : memoryConfig?.substrate ?? 'mastra'
+    const semanticRecall = process.env.GUILDHALL_MEMORY_SEMANTIC_RECALL === '1'
+      ? true
+      : process.env.GUILDHALL_MEMORY_SEMANTIC_RECALL === '0'
+        ? false
+        : memoryConfig?.semanticRecall ?? false
+    const observationalMemory = process.env.GUILDHALL_MEMORY_OBSERVATIONAL === '1'
+      ? true
+      : process.env.GUILDHALL_MEMORY_OBSERVATIONAL === '0'
+        ? false
+        : memoryConfig?.observationalMemory ?? false
+    const memoryCorePacket = await buildMemoryCoreCandidatePacket({
+      projectRoot: projectPath,
+      scope: memoryCoreScope,
+      purpose: 'handoff',
+      maxBytes: 4096,
+      substrate: memorySubstrate,
+      semanticRecall,
+      observationalMemory,
+    })
+    const memoryCore = {
+      adapter: memoryCorePacket.health.adapter,
+      fallbackUsed: memorySubstrate === 'deterministic' ? false : memoryCorePacket.health.fallbackUsed,
+      storagePath: memoryCorePacket.health.storagePath ?? resolveMemoryPaths({ projectRoot: projectPath, scope: memoryCoreScope }).dbPath,
+      repoLocalWrites: memoryCorePacket.health.repoLocalWrites ?? [],
+      semanticRecallEnabled: memoryCorePacket.health.semanticRecallEnabled ?? false,
+      observationalMemoryEnabled: memoryCorePacket.health.observationalMemoryEnabled ?? false,
+      observationalProcessorReady: memoryCorePacket.health.observationalProcessorReady ?? false,
+      compactionStatus: memoryCorePacket.health.compactionStatus ?? 'needs_attention',
+      semanticValidity: memoryCorePacket.health.semanticValidity ?? 'needs_attention',
+      warnings: memoryCorePacket.health.warnings,
+      features: memoryCorePacket.health.features ?? ['deterministic-events'],
+    }
     return {
       total: records.length,
       active: count(record => record.status === 'active'),
@@ -2419,6 +2956,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
       project: count(record => record.scope === 'project'),
       userGlobal: count(record => record.scope === 'user_global'),
       guildhallProduct: count(record => record.scope === 'guildhall_product'),
+      memoryCore,
       recentUse: recentUse
         .sort((left, right) => right.at.localeCompare(left.at))
         .slice(0, 5),
@@ -2434,9 +2972,21 @@ export function buildServeApp(opts: ServeOptions = {}): {
           setupUrl: `/projects/${encodeURIComponent(project.id)}/setup`,
         })
       }
-      const tasksPath = join(getProjectStateDir(project.path), 'TASKS.json')
+      const tasksPath = projectTasksPath(project.path)
       const rawTasks = await readTasksFileNormalized(tasksPath)
+      const workProgress = deriveProjectWorkProgress(rawTasks as Array<Record<string, unknown>>)
       const tasks = await Promise.all(rawTasks.map((task) => enrichTaskForServe(project.path, task)))
+      const deliveryModel = await readProjectDeliveryModel(project.path)
+      const deliveryValidation = validateProjectDeliveryModel({
+        model: deliveryModel,
+        tasks: rawTasks as Task[],
+        projectRoot: project.path,
+      })
+      const deliveryQueue = deriveQueueCandidates({
+        model: deliveryModel,
+        tasks: rawTasks as Task[],
+      })
+      const deliveryPrimitives = listPrimitivesWithRelations(deliveryModel, rawTasks as Task[])
       const gitStory = await buildProjectGitStorySummary(project.path, rawTasks as Array<Record<string, unknown>>)
       const run = supervisor.get(project.id)
       const resolvedConfig = resolveConfig({ workspacePath: project.path })
@@ -2483,18 +3033,51 @@ export function buildServeApp(opts: ServeOptions = {}): {
         runtimeProvider,
         allowPaidProviderFallback: runtimeProvider.allowPaidProviderFallback,
       })
-      const [runtime, memoryHealth] = await Promise.all([
+      const [runtime, memoryHealth, availability] = await Promise.all([
         readProjectRuntimeState(project.path),
         projectMemoryHealth(
           project.path,
           tasks
             .filter((task): task is { id: string } => typeof task.id === 'string'),
         ),
+        readProjectAvailability(project.path),
       ])
+      const acceptedStructuralMap = readAcceptedStructuralMap(project.path)
+      const structuralMapReview = acceptedStructuralMap ? summarizeStructuralMapForReview(acceptedStructuralMap) : null
+      const taskRoutingContexts = summarizeStructuralTaskContexts({
+        map: acceptedStructuralMap,
+        tasks: tasks
+          .filter((task): task is typeof task & { id: string } => typeof task.id === 'string')
+          .map(task => ({
+            id: task.id,
+            title: typeof task.title === 'string' ? task.title : task.id,
+            description: typeof task.description === 'string' ? task.description : undefined,
+            spec: typeof task.spec === 'string' ? task.spec : undefined,
+          })),
+      })
       const inbox = await buildProjectInboxSnapshot({
         projectPath: project.path,
         initializationNeeded: project.initializationNeeded,
         coordinatorCount: project.config?.coordinators?.length ?? 0,
+      })
+      const threadState = await loadThreadProjectionState(project.path)
+      const thread = buildThread({
+        projectPath: project.path,
+        snapshot: threadState.snapshot,
+        tasks: threadState.tasks as never,
+        boundedChatSessions: threadState.boundedChatSessions,
+        pressureTestIntakes: threadState.pressureTestIntakes,
+        projectCheckInSummary: threadState.projectCheckInSummary,
+        runStatus: run?.status ?? 'stopped',
+        recentEvents: recent,
+      })
+      const actionModel = buildProjectActionModel({
+        startReadiness,
+        inbox,
+        tasks: tasks as never,
+        thread,
+        runStatus: run?.status ?? 'stopped',
+        availability,
       })
       return c.json({
         initializationNeeded: false,
@@ -2504,6 +3087,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
         tags: project.config?.tags ?? [],
         config: project.config,
         tasks,
+        workProgress,
         inbox,
         run: run
           ? {
@@ -2516,13 +3100,231 @@ export function buildServeApp(opts: ServeOptions = {}): {
               ...(run.providerStatus ? { providerStatus: run.providerStatus } : {}),
             }
           : null,
+        availability,
         providerStatus,
         runtime,
         memoryHealth,
+        ...(structuralMapReview ? { structuralMapReview } : {}),
+        taskRoutingContexts,
         gitStory,
         startReadiness,
+        actionModel,
+        deliverySpine: {
+          model: deliveryModel,
+          validation: deliveryValidation,
+          primitives: deliveryPrimitives,
+          queue: deliveryQueue,
+        },
         recentEvents: recent,
         ...(bootstrapStatus ? { bootstrapStatus } : {}),
+      })
+    } catch (err) {
+      return c.json({ error: err instanceof Error ? err.message : String(err) }, 500)
+    }
+  })
+
+  app.post('/api/project/structural-map/action', async c => {
+    try {
+      const body = await c.req.json().catch(() => ({})) as {
+        mapId?: unknown
+        action?: unknown
+      }
+      if (typeof body.mapId !== 'string' || body.mapId.trim() === '') {
+        return c.json({ error: 'mapId is required.' }, 400)
+      }
+      const action = parseStructuralMapReviewAction(body.action)
+      if (!action) return c.json({ error: 'Valid structural map action is required.' }, 400)
+      const map = await applyStructuralMapReviewAction({
+        projectRoot: project.path,
+        mapId: body.mapId,
+        actor: 'owner',
+        action,
+      })
+      return c.json({ structuralMapReview: summarizeStructuralMapForReview(map) })
+    } catch (err) {
+      return c.json({ error: err instanceof Error ? err.message : String(err) }, 500)
+    }
+  })
+
+  app.get('/api/project/project-graph', async c => {
+    try {
+      const tasks = await readTasksFileNormalized(projectTasksPath(project.path)).catch(() => [])
+      return c.json({
+        projectGraph: queryProjectGraphView({
+          projectId: project.id,
+          projectPath: project.path,
+          structuralDomains: structuralDomainsForProjectGraph(project.path),
+          coordinators: project.config?.coordinators ?? [],
+          surfaceReviewPackets: tasks.flatMap(surfaceReviewPacketsFromTask),
+        }),
+      })
+    } catch (err) {
+      return c.json({ error: err instanceof Error ? err.message : String(err) }, 500)
+    }
+  })
+
+  app.post('/api/project/project-graph/domain-authority', async c => {
+    try {
+      const body = await c.req.json().catch(() => ({})) as {
+        domainId?: unknown
+        domainLabel?: unknown
+        providerProjectId?: unknown
+      }
+      const domainId = typeof body.domainId === 'string' ? body.domainId.trim() : ''
+      const domainLabel = typeof body.domainLabel === 'string' && body.domainLabel.trim()
+        ? body.domainLabel.trim()
+        : domainId.replace(/^domain:/, '')
+      const providerProjectId = typeof body.providerProjectId === 'string' ? body.providerProjectId.trim() : ''
+      if (!domainId) return c.json({ error: 'domainId is required.' }, 400)
+      if (!providerProjectId) return c.json({ error: 'providerProjectId is required.' }, 400)
+
+      const providerProject = resolveLocalProjectRefForGraph(providerProjectId, project)
+      if (!providerProject) return c.json({ error: `Local project not found: ${providerProjectId}` }, 404)
+      const domainAuthority = await assignProjectDomainAuthority({
+        domain: { id: domainId, label: domainLabel },
+        providerProject,
+        assignedBy: 'owner',
+        evidenceRefs: [`project:${project.id}`, domainId],
+      })
+      return c.json({
+        domainAuthority,
+        projectGraph: queryProjectGraphView({
+          projectId: project.id,
+          projectPath: project.path,
+          structuralDomains: structuralDomainsForProjectGraph(project.path),
+          coordinators: project.config?.coordinators ?? [],
+        }),
+      })
+    } catch (err) {
+      return c.json({ error: err instanceof Error ? err.message : String(err) }, 500)
+    }
+  })
+
+  app.post('/api/project/project-graph/domain-responsibility', async c => {
+    try {
+      const body = await c.req.json().catch(() => ({})) as {
+        domainId?: unknown
+        domainLabel?: unknown
+        facet?: unknown
+        responsibleProjectId?: unknown
+      }
+      const domainId = typeof body.domainId === 'string' ? body.domainId.trim() : ''
+      const domainLabel = typeof body.domainLabel === 'string' && body.domainLabel.trim()
+        ? body.domainLabel.trim()
+        : domainId.replace(/^domain:/, '')
+      const facet = parseProjectDomainResponsibilityFacet(body.facet)
+      const responsibleProjectId = typeof body.responsibleProjectId === 'string' ? body.responsibleProjectId.trim() : ''
+      if (!domainId) return c.json({ error: 'domainId is required.' }, 400)
+      if (!facet) return c.json({ error: 'facet is required.' }, 400)
+      if (!responsibleProjectId) return c.json({ error: 'responsibleProjectId is required.' }, 400)
+
+      const responsibleProject = resolveLocalProjectRefForGraph(responsibleProjectId, project)
+      if (!responsibleProject) return c.json({ error: `Local project not found: ${responsibleProjectId}` }, 404)
+      const domainResponsibility = await assignProjectDomainResponsibility({
+        domain: { id: domainId, label: domainLabel },
+        facet,
+        responsibleProject,
+        assignedBy: 'owner',
+        evidenceRefs: [`project:${project.id}`, domainId, `facet:${facet}`],
+      })
+      return c.json({
+        domainResponsibility,
+        projectGraph: queryProjectGraphView({
+          projectId: project.id,
+          projectPath: project.path,
+          structuralDomains: structuralDomainsForProjectGraph(project.path),
+          coordinators: project.config?.coordinators ?? [],
+        }),
+      })
+    } catch (err) {
+      return c.json({ error: err instanceof Error ? err.message : String(err) }, 500)
+    }
+  })
+
+  app.post('/api/project/project-graph/requests/:edgeId/:action', async c => {
+    try {
+      const body = await c.req.json().catch(() => ({})) as Record<string, unknown>
+      const edgeId = c.req.param('edgeId')
+      const action = c.req.param('action')
+      let edge: ProjectDependencyEdge
+      switch (action) {
+        case 'provider-accept':
+          edge = await importProjectDependencyRequestForProvider({
+            edgeId,
+            providerProjectPath: project.path,
+            importedBy: 'owner',
+            providerTaskRef: stringField(body.providerTaskRef),
+            providerCoordinatorContext: {
+              projectId: project.id,
+              coordinatorId: stringField(body.coordinatorId) ?? 'owner',
+              summary: stringField(body.summary) ?? 'Provider accepted the incoming project request.',
+              evidenceRefs: [`project:${project.id}`, `edge:${edgeId}`],
+            },
+          })
+          break
+        case 'provider-plan': {
+          const deliveryExpectation = parseProjectDependencyDeliveryExpectation(body)
+          edge = await reviseProjectDependencyPlan({
+            edgeId,
+            providerProjectPath: project.path,
+            revisedBy: 'owner',
+            deliveryExpectation,
+          }).catch(async (err) => {
+            if (err instanceof Error && /cannot revise_plan from provider_shaping/.test(err.message)) {
+              return commitProjectDependencyDeliveryPlan({
+                edgeId,
+                providerProjectPath: project.path,
+                plannedBy: 'owner',
+                deliveryExpectation,
+              })
+            }
+            throw err
+          })
+          break
+        }
+        case 'provider-deliver':
+          edge = await deliverProjectDependency({
+            edgeId,
+            providerProjectPath: project.path,
+            deliveredBy: 'owner',
+            deliveryReceipt: parseProjectDependencyDeliveryReceipt(body),
+          })
+          break
+        case 'consumer-review':
+          edge = await beginProjectDependencyConsumerReview({
+            edgeId,
+            consumerProjectPath: project.path,
+            reviewedBy: 'owner',
+            verificationContext: stringField(body.verificationContext) ?? 'Consumer started verification against the requested delivery format.',
+          })
+          break
+        case 'consumer-return':
+          edge = await requestProjectDependencyRevision({
+            edgeId,
+            consumerProjectPath: project.path,
+            returnedBy: 'owner',
+            returnPacket: parseConsumerReturnPacket(body),
+          })
+          break
+        case 'consumer-accept':
+          edge = await acceptProjectDependencyDelivery({
+            edgeId,
+            consumerProjectPath: project.path,
+            acceptedBy: 'owner',
+            consumerProof: stringArrayField(body.consumerProof) ?? [stringField(body.proof) ?? 'Consumer verified the delivery.'],
+          })
+          break
+        default:
+          return c.json({ error: `Unknown project graph action: ${action}` }, 400)
+      }
+      return c.json({
+        edge,
+        projectGraph: queryProjectGraphView({
+          projectId: project.id,
+          projectPath: project.path,
+          structuralDomains: structuralDomainsForProjectGraph(project.path),
+          coordinators: project.config?.coordinators ?? [],
+        }),
       })
     } catch (err) {
       return c.json({ error: err instanceof Error ? err.message : String(err) }, 500)
@@ -2704,7 +3506,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
 
   app.get('/api/project/runtime/setup', async c => {
     try {
-      return c.json(await runtimeBackendSetup())
+      return c.json(await runtimeBackendSetup({ projectRoot: project.path }))
     } catch (err) {
       return c.json({ error: err instanceof Error ? err.message : String(err) }, 500)
     }
@@ -3055,7 +3857,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
       severity: 'warn',
       message:
         `${input.scope} model overrides are configured for ${configuredLabels}, but this project is set to use ${preferredLabel}. ` +
-        `Guildhall will use ${preferredLabel} defaults unless you switch providers or configure models for ${preferredLabel}.`,
+        `${preferredLabel} defaults will be used unless you switch providers or configure models for ${preferredLabel}.`,
     }
   }
 
@@ -3258,11 +4060,24 @@ export function buildServeApp(opts: ServeOptions = {}): {
     ]
   }
 
+  function isCompleteModelAssignment(assignment: Partial<ModelAssignmentConfig>): assignment is ModelAssignmentConfig {
+    return (
+      typeof assignment.spec === 'string' &&
+      typeof assignment.coordinator === 'string' &&
+      typeof assignment.worker === 'string' &&
+      typeof assignment.reviewer === 'string' &&
+      typeof assignment.gateChecker === 'string' &&
+      typeof assignment.contextIndexer === 'string'
+    )
+  }
+
   async function projectStartReadiness(input: {
     projectPath: string
     resolvedConfig: ReturnType<typeof resolveConfig>
     runtimeProvider: ReturnType<typeof getRuntimeProviderConfig>
     allowPaidProviderFallback: boolean
+    allowTaskReadinessBlocker?: boolean
+    requestedTaskId?: string
   }): Promise<{
     canStart: boolean
     code?: string
@@ -3283,10 +4098,12 @@ export function buildServeApp(opts: ServeOptions = {}): {
     const importDraftBlocker = await startBlockerForImportDrafts(input.projectPath)
     if (importDraftBlocker) return importDraftBlocker
 
-    const taskReadinessBlocker = await startBlockerForTaskReadiness(input.projectPath)
-    if (taskReadinessBlocker) return taskReadinessBlocker
+    if (input.allowTaskReadinessBlocker !== false) {
+      const taskReadinessBlocker = await startBlockerForTaskReadiness(input.projectPath)
+      if (taskReadinessBlocker) return taskReadinessBlocker
+    }
 
-    const terminal = terminalStartState(input.projectPath)
+    const terminal = terminalStartState(input.projectPath, input.requestedTaskId)
     if (terminal) {
       return {
         canStart: false,
@@ -3327,7 +4144,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
         code: 'no_provider',
         message:
           preflight.reason ??
-          'No provider configured. Open Providers to choose one before starting Guildhall.',
+          'No provider configured. Open Providers to choose one before starting.',
         actionHref: '/providers',
       }
     }
@@ -3349,7 +4166,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
           canStart: false,
           code: 'no_loaded_model',
           message:
-            'The configured local server is reachable, but Guildhall could not see a loaded model. To avoid surprise memory pressure from JIT loading, load the model you want on that server, then start again.',
+            'The configured local server is reachable, but no loaded model was visible. To avoid surprise memory pressure from JIT loading, load the model you want on that server, then start again.',
           actionHref: '/providers',
           loadedModels,
         }
@@ -3371,7 +4188,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
       code: 'model_unavailable',
       message:
         `The configured local server currently has ${loadedModels.join(', ')} loaded, but this project is configured for ${missingModels.join(', ')}. ` +
-        'Guildhall will not JIT-load missing models automatically; load the configured model on that server or choose a loaded model in Providers.',
+        'Missing models are not JIT-loaded automatically; load the configured model on that server or choose a loaded model in Providers.',
       actionHref: '/providers',
       loadedModels,
       missingModels,
@@ -3389,7 +4206,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
     }
   }
 
-  function terminalStartState(projectPath: string): {
+  function terminalStartState(projectPath: string, requestedTaskId?: string): {
     canStart: false
     code: 'all_terminal'
     message: string
@@ -3406,11 +4223,11 @@ export function buildServeApp(opts: ServeOptions = {}): {
       }
     }
   } | null {
-    const tasksPath = join(getProjectStateDir(projectPath), 'TASKS.json')
+    const tasksPath = projectTasksPath(projectPath)
     if (!existsSync(tasksPath)) return null
     let raw: unknown
     try {
-      raw = JSON.parse(readFileSync(tasksPath, 'utf-8'))
+      raw = JSON.parse(readManagedTextFileSync(tasksPath, 'utf-8'))
     } catch {
       return null
     }
@@ -3420,6 +4237,12 @@ export function buildServeApp(opts: ServeOptions = {}): {
         ? (raw as { tasks: unknown[] }).tasks
         : []
     if (tasks.length === 0) return null
+    if (
+      requestedTaskId &&
+      tasks.some(task => isRecoverableBlockedStartTask(task, requestedTaskId))
+    ) {
+      return null
+    }
 
     let done = 0
     let blocked = 0
@@ -3466,15 +4289,36 @@ export function buildServeApp(opts: ServeOptions = {}): {
     }
   }
 
+  function isRecoverableBlockedStartTask(task: unknown, requestedTaskId: string): boolean {
+    if (!task || typeof task !== 'object') return false
+    const candidate = task as {
+      id?: unknown
+      status?: unknown
+      blockReason?: unknown
+      worktreePath?: unknown
+      branchName?: unknown
+    }
+    if (candidate.id !== requestedTaskId) return false
+    if (candidate.status !== 'blocked') return false
+    const blockReason = typeof candidate.blockReason === 'string' ? candidate.blockReason : ''
+    if (
+      !blockReason.includes('Guildhall could not create a task worktree:') ||
+      !/already exists/i.test(blockReason)
+    ) {
+      return false
+    }
+    return true
+  }
+
   async function startBlockerForImportDrafts(projectPath: string): Promise<{
     canStart: false
     code: 'import_drafts_waiting'
     message: string
     actionHref: string
   } | null> {
-    const tasksPath = join(getProjectStateDir(projectPath), 'TASKS.json')
+    const tasksPath = projectTasksPath(projectPath)
     if (!existsSync(tasksPath)) return null
-    const raw = JSON.parse(await fsp.readFile(tasksPath, 'utf-8')) as
+    const raw = JSON.parse(await readManagedTextFile(tasksPath, 'utf-8')) as
       | { tasks?: Array<Record<string, unknown>> }
       | Array<Record<string, unknown>>
     const tasks = Array.isArray(raw) ? raw : raw.tasks ?? []
@@ -3494,8 +4338,8 @@ export function buildServeApp(opts: ServeOptions = {}): {
       code: 'import_drafts_waiting',
       message:
         importDrafts.length === 1
-          ? `Review the imported draft "${title}" and turn it into a task brief before starting Guildhall.`
-          : `Review ${importDrafts.length} imported drafts before starting Guildhall. Start with "${title}".`,
+          ? `Review the imported draft "${title}" and turn it into a task brief before starting.`
+          : `Review ${importDrafts.length} imported drafts before starting. Start with "${title}".`,
       actionHref: id ? `/task/${encodeURIComponent(id)}` : '/notifications',
     }
   }
@@ -3506,9 +4350,9 @@ export function buildServeApp(opts: ServeOptions = {}): {
     message: string
     actionHref: string
   } | null> {
-    const tasksPath = join(getProjectStateDir(projectPath), 'TASKS.json')
+    const tasksPath = projectTasksPath(projectPath)
     if (!existsSync(tasksPath)) return null
-    const raw = JSON.parse(await fsp.readFile(tasksPath, 'utf-8')) as
+    const raw = JSON.parse(await readManagedTextFile(tasksPath, 'utf-8')) as
       | { tasks?: Array<Record<string, unknown>> }
       | Array<Record<string, unknown>>
     const tasks = Array.isArray(raw) ? raw : raw.tasks ?? []
@@ -3517,6 +4361,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
     let runnable = 0
     let needsBriefCleanup = 0
     let waitingForApproval = 0
+    let firstWaitingSpecTaskId: string | null = null
     let terminal = 0
     for (const task of tasks) {
       if (!task || typeof task !== 'object') continue
@@ -3527,6 +4372,10 @@ export function buildServeApp(opts: ServeOptions = {}): {
       }
       if (status === 'spec_review') {
         waitingForApproval += 1
+        if (!firstWaitingSpecTaskId) {
+          const id = (task as { id?: unknown }).id
+          firstWaitingSpecTaskId = typeof id === 'string' && id.trim() ? id.trim() : null
+        }
         continue
       }
       if (status === 'ready' && !isReadyForWorkerHandoffRecord(task)) {
@@ -3545,8 +4394,8 @@ export function buildServeApp(opts: ServeOptions = {}): {
         code: 'no_unattended_progress',
         message:
           needsBriefCleanup === 1
-            ? 'One task needs a clearer brief and acceptance criteria before Guildhall can build unattended.'
-            : `${needsBriefCleanup} tasks need clearer briefs and acceptance criteria before Guildhall can build unattended.`,
+            ? 'One task needs a clearer brief and acceptance criteria before unattended work can run.'
+            : `${needsBriefCleanup} tasks need clearer briefs and acceptance criteria before unattended work can run.`,
         actionHref: '/work',
       }
     }
@@ -3556,9 +4405,11 @@ export function buildServeApp(opts: ServeOptions = {}): {
         code: 'no_unattended_progress',
         message:
           waitingForApproval === 1
-            ? 'Review the waiting spec before starting Guildhall.'
-            : `Review ${waitingForApproval} waiting specs before starting Guildhall.`,
-        actionHref: '/thread',
+            ? 'One spec is waiting for review before starting.'
+            : `${waitingForApproval} specs are waiting for review before starting.`,
+        actionHref: firstWaitingSpecTaskId
+          ? `/thread?thread=${encodeURIComponent(`task:${firstWaitingSpecTaskId}`)}`
+          : '/thread',
       }
     }
     return null
@@ -3570,46 +4421,35 @@ export function buildServeApp(opts: ServeOptions = {}): {
     message: string
     actionHref: string
   } | null {
-    const ownerItems = buildInbox({ projectPath }).filter(item =>
-      item.severity !== 'low' &&
-      [
-        'project_check_in',
-        'pressure_test_pending',
-        'agent_question_pending',
-        'brief_approval',
-        'spec_approval',
-        'open_escalation',
-      ].includes(item.kind),
-    )
-    const first = ownerItems[0]
-    if (!first) return null
-    const firstQuestion = ownerItems.find(item =>
-      item.kind === 'pressure_test_pending' || item.kind === 'agent_question_pending',
-    )
-    const questionCount = ownerItems.filter(item =>
-      item.kind === 'pressure_test_pending' || item.kind === 'agent_question_pending',
-    ).length
-    const actionItem = questionCount > 0 && firstQuestion ? firstQuestion : first
-    const action =
-      questionCount > 0
-        ? `${questionCount} ${questionCount === 1 ? 'question needs' : 'questions need'} your answer before Guildhall can continue`
-        : first.kind === 'brief_approval'
-          ? 'Review the waiting task brief before Guildhall can continue'
-          : first.kind === 'spec_approval'
-            ? 'Review the waiting spec before Guildhall can continue'
-            : 'Choose a recovery path for the blocked task'
+    const waiting = listOwnerInputRequestsSync(projectPath)
+      .filter(request => request.status === 'waiting_for_owner')
+    if (waiting.length === 0) return null
+    const first = waiting[0]!
     return {
       canStart: false,
       code: 'owner_input_required',
-      message: action,
-      actionHref: actionItem.actionHref ?? '/thread',
+      message:
+        waiting.length === 1
+          ? `${ownerInputObjectiveLabel(first.objective.label)} needs your answer before work can continue`
+          : `${waiting.length} owner decisions need your answer before work can continue`,
+      actionHref: ownerInputActionHref(first),
     }
+  }
+
+  function ownerInputObjectiveLabel(label: string): string {
+    const trimmed = label.trim()
+    if (/^review structural map\b/i.test(trimmed)) return 'Review the project map'
+    return trimmed || 'This decision'
+  }
+
+  function ownerInputActionHref(request: ReturnType<typeof listOwnerInputRequestsSync>[number]): string {
+    return `/thread?thread=${encodeURIComponent(request.boundedChatSessionId)}`
   }
 
   app.post('/api/project/task/:id/start', async c => {
     try {
       const taskId = c.req.param('id')
-      const tasksPath = join(getProjectStateDir(project.path), 'TASKS.json')
+      const tasksPath = projectTasksPath(project.path)
       const tasks = await readTasksFileNormalized(tasksPath).catch(() => [])
       if (!tasks.some(task => task.id === taskId)) {
         return c.json({ error: 'task not found' }, 404)
@@ -3647,8 +4487,8 @@ export function buildServeApp(opts: ServeOptions = {}): {
         return c.json(
           {
             error: existingRun.status === 'running'
-              ? 'Guildhall is already running for this project. This task remains queued; stop the current run first if you need Guildhall to restart on this exact task.'
-              : 'Guildhall is stopping. Wait for it to stop before starting this specific task.',
+              ? 'A run is already active for this project. This task remains queued; stop the current run first if you need to restart on this exact task.'
+              : 'The run is stopping. Wait for it to stop before starting this specific task.',
             code: 'run_already_active',
             status: existingRun.status,
           },
@@ -3681,11 +4521,13 @@ export function buildServeApp(opts: ServeOptions = {}): {
         projectPath: project.path,
         resolvedConfig,
         runtimeProvider,
-        allowPaidProviderFallback: Boolean(projectCfg.allowPaidProviderFallback),
+        allowPaidProviderFallback: runtimeProvider.allowPaidProviderFallback,
+        allowTaskReadinessBlocker: !body.taskId,
+        ...(body.taskId ? { requestedTaskId: body.taskId } : {}),
       })
       if (!startReadiness.canStart) {
         if (startReadiness.code === 'all_terminal') {
-          const terminal = terminalStartState(project.path)
+          const terminal = terminalStartState(project.path, body.taskId)
           if (terminal) {
             return c.json({
               status: 'stopped',
@@ -3694,17 +4536,18 @@ export function buildServeApp(opts: ServeOptions = {}): {
               stopSummary: terminal.stopSummary,
             })
           }
+        } else {
+          return c.json(
+            {
+              error: startReadiness.message ?? 'One thing needs to be resolved before work can start.',
+              code: startReadiness.code,
+              actionHref: startReadiness.actionHref,
+              loadedModels: startReadiness.loadedModels,
+              missingModels: startReadiness.missingModels,
+            },
+            blockedStartStatus(startReadiness.code),
+          )
         }
-        return c.json(
-          {
-            error: startReadiness.message ?? 'Guildhall needs one thing resolved before it can start.',
-            code: startReadiness.code,
-            actionHref: startReadiness.actionHref,
-            loadedModels: startReadiness.loadedModels,
-            missingModels: startReadiness.missingModels,
-          },
-          blockedStartStatus(startReadiness.code),
-        )
       }
       const creds = runtimeProvider.credentials
       const preferred = runtimeProvider.preferredProvider
@@ -3741,7 +4584,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
             return c.json(
               {
                 error:
-                  'The configured local server is reachable, but Guildhall could not see a loaded model. To avoid surprise memory pressure from JIT loading, load the model you want on that server, then start again.',
+                  'The configured local server is reachable, but no loaded model was visible. To avoid surprise memory pressure from JIT loading, load the model you want on that server, then start again.',
                 code: 'no_loaded_model',
                 provider: 'llama-cpp',
               },
@@ -3758,13 +4601,13 @@ export function buildServeApp(opts: ServeOptions = {}): {
           effectiveProvider = paidFallback.providerName
           effectiveModels = defaultAssignmentForProvider(paidFallback.providerName) ?? resolvedConfig.models
           fallbackReason =
-            'Preferred local server had no loaded model available, so Guildhall switched to a paid fallback provider.'
+            'Preferred local server had no loaded model available, so the run switched to a paid fallback provider.'
           routingDecisions.push({
             code: 'preferred_provider_missing_loaded_model',
             severity: 'info',
             basis: 'availability',
             message:
-              'The preferred local server had no loaded model available, so Guildhall selected a fallback provider for this run.',
+              'The preferred local server had no loaded model available, so this run selected a fallback provider.',
           })
         }
         if (effectiveProvider === 'llama-cpp') {
@@ -3778,7 +4621,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
                 {
                   error:
                     `The configured local server currently has ${loadedModels.join(', ')} loaded, but this project is configured for ${missingModels.join(', ')}. ` +
-                    'Guildhall will not JIT-load missing models automatically; load the configured model on that server or choose a loaded model in Providers.',
+                    'Missing models are not JIT-loaded automatically; load the configured model on that server or choose a loaded model in Providers.',
                   code: 'model_unavailable',
                   provider: 'llama-cpp',
                   loadedModels,
@@ -3797,13 +4640,13 @@ export function buildServeApp(opts: ServeOptions = {}): {
             effectiveProvider = paidFallback.providerName
             effectiveModels = defaultAssignmentForProvider(paidFallback.providerName) ?? resolvedConfig.models
             fallbackReason =
-              'Preferred local server did not have the configured models loaded, so Guildhall switched to a paid fallback provider.'
+              'Preferred local server did not have the configured models loaded, so the run switched to a paid fallback provider.'
             routingDecisions.push({
               code: 'preferred_provider_missing_assigned_models',
               severity: 'info',
               basis: 'compatibility',
               message:
-                'The preferred local server did not have this project’s assigned models loaded, so Guildhall selected a fallback provider for this run.',
+                'The preferred local server did not have this project’s assigned models loaded, so this run selected a fallback provider.',
             })
           }
         }
@@ -3812,13 +4655,13 @@ export function buildServeApp(opts: ServeOptions = {}): {
         effectiveModels = defaultAssignmentForProvider(effectiveProvider) ?? effectiveModels
         if (effectiveProvider !== 'llama-cpp') {
           fallbackReason ??=
-            `Guildhall swapped to models that ${effectiveProvider} can actually serve for this run.`
+            `This run swapped to models that ${effectiveProvider} can actually serve.`
           routingDecisions.push({
             code: 'model_assignment_swapped_for_provider_compatibility',
             severity: 'info',
             basis: 'compatibility',
             message:
-              `Guildhall swapped to models that ${providerLabelForAnyKey(effectiveProvider)} can actually serve for this run.`,
+              `This run swapped to models that ${providerLabelForAnyKey(effectiveProvider)} can actually serve.`,
           })
         }
       }
@@ -3867,6 +4710,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
         providerOverride: effectiveProvider,
         modelAssignmentOverride: effectiveModels,
       })
+      await resumeProjectAvailability(project.path)
       return c.json({
         status: run.status,
         mode: run.mode,
@@ -3882,6 +4726,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
 
   app.post('/api/project/stop', async c => {
     try {
+      await pauseProjectAvailability(project.path, { reason: 'user_paused_project' })
       const stopped = await supervisor.stop(project.id, { waitMs: 1_000 })
       return c.json({ ok: true, status: stopped ? 'stopped' : 'stopping' })
     } catch (err) {
@@ -3906,7 +4751,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
       const defaultDomain = coordinators[0]?.domain
       const domain = body.domain ?? defaultDomain
       if (!domain) {
-        return c.json({ error: 'Guildhall has not inferred repo structure here yet — run repo inspection first' }, 400)
+        return c.json({ error: 'Repo structure has not been inferred here yet - run repo inspection first' }, 400)
       }
       const result = await createExploringTask({
         memoryDir: getProjectStateDir(project.path),
@@ -3938,7 +4783,38 @@ export function buildServeApp(opts: ServeOptions = {}): {
       const defaultDomain = coordinators[0]?.domain
       const domain = body.domain ?? defaultDomain
       if (!domain) {
-        return c.json({ error: 'Guildhall has not inferred repo structure here yet — run repo inspection first' }, 400)
+        return c.json({ error: 'Repo structure has not been inferred here yet - run repo inspection first' }, 400)
+      }
+      const routed = routeRequest({
+        raw: body.ask,
+        source: 'api',
+        routeContext: { route: '/api/project/request' },
+      })
+      const firstAction = routed.actions[0]
+      if (firstAction?.kind === 'pressure_test_intake') {
+        const result = await createRoutedRequest({
+          memoryDir: getProjectStateDir(project.path),
+          ask: body.ask,
+          domain,
+          projectPath: resolveTaskPathForDomain(project, domain),
+          workspacePath: project.path,
+          ...(body.title ? { title: body.title } : {}),
+        })
+        return c.json(result)
+      }
+      if (firstAction) {
+        const boundedChat = await createNewRequestBoundedChat({
+          memoryDir: getProjectStateDir(project.path),
+          projectId: project.id,
+          ask: body.ask,
+          domain,
+          projectPath: resolveTaskPathForDomain(project, domain),
+          workspacePath: project.path,
+          ...(body.title ? { title: body.title } : {}),
+          routedRequestKind: firstAction.kind,
+          routingSummary: newRequestRoutingSummary(firstAction.kind),
+        })
+        return c.json({ boundedChat })
       }
       const result = await createRoutedRequest({
         memoryDir: getProjectStateDir(project.path),
@@ -3960,26 +4836,95 @@ export function buildServeApp(opts: ServeOptions = {}): {
         return c.json({ error: 'Project not initialized. Complete /setup first.' }, 400)
       }
       const memoryDir = getProjectStateDir(project.path)
+      const existingChats = listBoundedChatSessions(memoryDir)
+        .filter(session => session.objective.kind === 'project_check_in' || session.objective.kind === 'project_intake')
+      const activeChat = existingChats.find(session => session.status === 'waiting_for_owner' || session.status === 'coordinator_review')
+      if (activeChat) {
+        const boundedChat = await resumeProjectCheckInBoundedChat({
+          memoryDir,
+          projectId: project.id,
+          projectName: project.config?.name ?? project.id,
+        })
+        return c.json({ boundedChat, existing: true })
+      }
       const existing = listPressureTestIntakes(memoryDir)
       const active = existing.find(intake => intake.status === 'active')
       if (active) return c.json({ intake: active, existing: true })
-      if (existing.length > 0) {
+      if (existingChats.length > 0 || existing.length > 0) {
         return c.json({
           skipped: true,
           projectCheckIn: summarizeProjectCheckIn(memoryDir),
         })
       }
-      const title = `${project.config?.name ?? project.id} project check-in`
-      const intake = await createPressureTestIntake({
+      const boundedChat = await createProjectCheckInBoundedChat({
         memoryDir,
-        target: {
-          type: 'project',
-          id: `${project.id}-project-check-in`,
-          title,
-        },
-        rawRequest: `Start a project check-in for ${project.config?.name ?? project.id}.`,
+        projectId: project.id,
+        projectName: project.config?.name ?? project.id,
       })
-      return c.json({ intake, projectCheckIn: summarizeProjectCheckIn(memoryDir) })
+      return c.json({ boundedChat, projectCheckIn: summarizeProjectCheckIn(memoryDir) })
+    } catch (err) {
+      return c.json({ error: err instanceof Error ? err.message : String(err) }, 500)
+    }
+  })
+
+  app.get('/api/project/bounded-chat/:id', async c => {
+    try {
+      const boundedChat = await loadBoundedChatSession({
+        memoryDir: getProjectStateDir(project.path),
+        sessionId: c.req.param('id'),
+      })
+      return c.json({ boundedChat })
+    } catch (err) {
+      return c.json({ error: err instanceof Error ? err.message : String(err) }, 500)
+    }
+  })
+
+  app.post('/api/project/bounded-chat/:id/answer', async c => {
+    try {
+      const body = await c.req.json().catch(() => ({})) as {
+        questionId?: string
+        subObjectiveId?: string
+        answer?: string
+        response?: string
+      }
+      const subObjectiveId = body.subObjectiveId?.trim() || body.questionId?.trim()
+      const response = body.response?.trim() || body.answer?.trim()
+      if (!subObjectiveId || !response) {
+        return c.json({ error: 'Sub-objective and response are required.' }, 400)
+      }
+      const session = await loadBoundedChatSession({
+        memoryDir: getProjectStateDir(project.path),
+        sessionId: c.req.param('id'),
+      })
+      if (session.objective.kind === 'project_check_in') {
+        const boundedChat = await answerProjectCheckInBoundedChat({
+          memoryDir: getProjectStateDir(project.path),
+          sessionId: session.id,
+          subObjectiveId,
+          response,
+        })
+        return c.json({ boundedChat })
+      }
+      if (session.objective.kind === 'new_request') {
+        const boundedChat = await answerNewRequestBoundedChat({
+          memoryDir: getProjectStateDir(project.path),
+          sessionId: session.id,
+          subObjectiveId,
+          response,
+        })
+        return c.json({ boundedChat })
+      }
+      const boundedChat = await submitBoundedChatUserResponse({
+        memoryDir: getProjectStateDir(project.path),
+        sessionId: session.id,
+        subObjectiveId,
+        response,
+      })
+      await markOwnerInputRequestForBoundedChatReview({
+        projectRoot: project.path,
+        boundedChatSessionId: session.id,
+      })
+      return c.json({ boundedChat })
     } catch (err) {
       return c.json({ error: err instanceof Error ? err.message : String(err) }, 500)
     }
@@ -4041,7 +4986,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
       }
       const coordinators = project.config?.coordinators ?? []
       if (coordinators.length === 0) {
-        return c.json({ error: 'Guildhall has not inferred repo structure here yet — run repo inspection first' }, 400)
+        return c.json({ error: 'Repo structure has not been inferred here yet - run repo inspection first' }, 400)
       }
       // Route by stack-trace top file when the reporter didn't pick a domain:
       // match the first frame's file path against each coordinator's `path`,
@@ -4320,15 +5265,15 @@ export function buildServeApp(opts: ServeOptions = {}): {
       if (project.initializationNeeded) {
         return c.json({ status: 'uninitialized', taskExists: false, specReady: false, drafts: [] })
       }
-      const tasksPath = join(getProjectStateDir(project.path), 'TASKS.json')
+      const tasksPath = projectTasksPath(project.path)
       if (!existsSync(tasksPath)) {
         return c.json({ status: 'no-task', taskExists: false, specReady: false, drafts: [] })
       }
-      const raw = await fsp.readFile(tasksPath, 'utf-8')
+      const raw = await readManagedTextFile(tasksPath, 'utf-8')
       const parsed = JSON.parse(raw) as { tasks?: Array<Record<string, unknown>> } | Array<Record<string, unknown>>
       const tasks = Array.isArray(parsed) ? parsed : parsed.tasks ?? []
       const task = tasks.find(t => (t as { id?: string }).id === META_INTAKE_TASK_ID) as
-        | { spec?: string; status?: string }
+        | { spec?: string; status?: string; blockReason?: string | null }
         | undefined
       if (!task) {
         return c.json({ status: 'no-task', taskExists: false, specReady: false, drafts: [] })
@@ -4340,6 +5285,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
           taskExists: true,
           specReady: false,
           taskStatus: task.status ?? null,
+          blockReason: task.blockReason ?? null,
           drafts: [],
         })
       }
@@ -4349,6 +5295,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
         taskExists: true,
         specReady: drafts.length > 0,
         taskStatus: task.status ?? null,
+        blockReason: task.blockReason ?? null,
         drafts,
       })
     } catch (err) {
@@ -4465,12 +5412,12 @@ export function buildServeApp(opts: ServeOptions = {}): {
       } catch {}
 
       // Is there a reserved task?
-      const tasksPath = join(memoryDir, 'TASKS.json')
+      const tasksPath = projectTasksPath(project.path)
       let taskStatus: string | null = null
       let specPresent = false
       let parsedSpecDraft: ReturnType<typeof parseWorkspaceImport> | null = null
       if (existsSync(tasksPath)) {
-        const raw = JSON.parse(await fsp.readFile(tasksPath, 'utf-8')) as
+        const raw = JSON.parse(await readManagedTextFile(tasksPath, 'utf-8')) as
           | { tasks?: Array<Record<string, unknown>> }
           | Array<Record<string, unknown>>
         const list = Array.isArray(raw) ? raw : raw.tasks ?? []
@@ -4584,7 +5531,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
         return c.json({ error: 'Project not initialized. Complete /setup first.' }, 400)
       }
       const memoryDir = getProjectStateDir(project.path)
-      const tasks = await readTasksFileNormalized(join(memoryDir, 'TASKS.json')).catch(() => [])
+      const tasks = await readTasksFileNormalized(projectTasksPath(project.path)).catch(() => [])
       const sources = await collectProjectReintakeSources(project.path)
       const draft = planProjectReintake({ sources, tasks })
       await writeProjectReintakeDraft(memoryDir, draft)
@@ -4661,9 +5608,9 @@ export function buildServeApp(opts: ServeOptions = {}): {
       // instead of re-running the scan silently.
       let dismissed = false
       try {
-        const goalsPath = join(memoryDir, 'workspace-goals.json')
+        const goalsPath = getProjectSystemStatePath(project.path, 'workspace-goals.json')
         if (existsSync(goalsPath)) {
-          const g = JSON.parse(await fsp.readFile(goalsPath, 'utf-8')) as {
+          const g = JSON.parse(await readManagedTextFile(goalsPath, 'utf-8')) as {
             dismissed?: boolean
           }
           dismissed = Boolean(g.dismissed)
@@ -4673,10 +5620,10 @@ export function buildServeApp(opts: ServeOptions = {}): {
       }
 
       let existingTasks: Array<{ title: string; status: string }> = []
-      const tasksPath = join(memoryDir, 'TASKS.json')
+      const tasksPath = projectTasksPath(project.path)
       if (existsSync(tasksPath)) {
         try {
-          const raw = JSON.parse(await fsp.readFile(tasksPath, 'utf-8')) as
+          const raw = JSON.parse(await readManagedTextFile(tasksPath, 'utf-8')) as
             | { tasks?: Array<Record<string, unknown>> }
             | Array<Record<string, unknown>>
           const list = Array.isArray(raw) ? raw : raw.tasks ?? []
@@ -4734,7 +5681,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
           anchors,
         })
       }
-      const raw = JSON.parse(await fsp.readFile(tasksPath, 'utf-8')) as
+      const raw = JSON.parse(await readManagedTextFile(tasksPath, 'utf-8')) as
         | { tasks?: Array<Record<string, unknown>> }
         | Array<Record<string, unknown>>
       const list = Array.isArray(raw) ? raw : raw.tasks ?? []
@@ -4800,9 +5747,9 @@ export function buildServeApp(opts: ServeOptions = {}): {
       // the detector draft uses the same YAML fence format the agent would
       // have produced.
       try {
-        const tasksPath = join(memoryDir, 'TASKS.json')
+        const tasksPath = workspaceImportTasksPath(memoryDir)
         const raw = existsSync(tasksPath)
-          ? (JSON.parse(await fsp.readFile(tasksPath, 'utf-8')) as
+          ? (JSON.parse(await readManagedTextFile(tasksPath, 'utf-8')) as
               | Array<Record<string, unknown>>
               | { tasks?: Array<Record<string, unknown>> })
           : { tasks: [] as Array<Record<string, unknown>> }
@@ -4818,7 +5765,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
             projectPath: project.path,
           })
           // Re-read after creation.
-          const raw2 = JSON.parse(await fsp.readFile(tasksPath, 'utf-8')) as
+          const raw2 = JSON.parse(await readManagedTextFile(tasksPath, 'utf-8')) as
             | Array<Record<string, unknown>>
             | { tasks?: Array<Record<string, unknown>> }
           const list2 = Array.isArray(raw2) ? raw2 : raw2.tasks ?? []
@@ -4833,7 +5780,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
             if (spec) {
               task.spec = spec
               const next = Array.isArray(raw2) ? list2 : { ...raw2, tasks: list2 }
-              await fsp.writeFile(tasksPath, JSON.stringify(next, null, 2), 'utf-8')
+              await writeManagedTextFile(tasksPath, JSON.stringify(next, null, 2), 'utf-8')
             }
           }
         } else {
@@ -4847,7 +5794,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
             if (spec) {
               task.spec = spec
               const next = Array.isArray(raw) ? list : { ...raw, tasks: list }
-              await fsp.writeFile(tasksPath, JSON.stringify(next, null, 2), 'utf-8')
+              await writeManagedTextFile(tasksPath, JSON.stringify(next, null, 2), 'utf-8')
               importerTaskHasSpec = true
             }
           }
@@ -4958,13 +5905,13 @@ export function buildServeApp(opts: ServeOptions = {}): {
       }
 
       // Workspace goals file (imported or dismissed state).
-      const goalsPath = join(memoryDir, 'workspace-goals.json')
+      const goalsPath = getProjectSystemStatePath(project.path, 'workspace-goals.json')
       let workspaceGoals:
         | { imported: boolean; dismissed: boolean; goalCount: number; taskCount: number; milestoneCount: number }
         | null = null
       if (existsSync(goalsPath)) {
         try {
-          const raw = JSON.parse(readFileSync(goalsPath, 'utf8')) as Record<string, unknown>
+          const raw = JSON.parse(readManagedTextFileSync(goalsPath, 'utf8')) as Record<string, unknown>
           if ((raw as { dismissed?: boolean }).dismissed) {
             workspaceGoals = { imported: false, dismissed: true, goalCount: 0, taskCount: 0, milestoneCount: 0 }
           } else {
@@ -4983,10 +5930,10 @@ export function buildServeApp(opts: ServeOptions = {}): {
           /* leave null */
         }
       }
-      const tasksPath = join(memoryDir, 'TASKS.json')
+      const tasksPath = projectTasksPath(project.path)
       if (existsSync(tasksPath)) {
         try {
-          const raw = JSON.parse(readFileSync(tasksPath, 'utf8')) as
+          const raw = JSON.parse(readManagedTextFileSync(tasksPath, 'utf8')) as
             | { tasks?: Array<Record<string, unknown>> }
             | Array<Record<string, unknown>>
           const list = Array.isArray(raw) ? raw : raw.tasks ?? []
@@ -5054,9 +6001,9 @@ export function buildServeApp(opts: ServeOptions = {}): {
     try {
       if (project.initializationNeeded) return c.json({ error: 'not initialized' }, 400)
       const memoryDir = getProjectStateDir(project.path)
-      await fsp.mkdir(memoryDir, { recursive: true })
-      const goalsPath = join(memoryDir, 'workspace-goals.json')
-      await fsp.writeFile(
+      const goalsPath = getProjectSystemStatePath(project.path, 'workspace-goals.json')
+      await fsp.mkdir(dirname(goalsPath), { recursive: true })
+      await writeManagedTextFile(
         goalsPath,
         JSON.stringify({ dismissed: true, dismissedAt: new Date().toISOString() }, null, 2),
         'utf-8',
@@ -5084,7 +6031,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
   async function fileSummary(filePath: string): Promise<{ present: boolean; nonEmptyLines: number }> {
     if (!existsSync(filePath)) return { present: false, nonEmptyLines: 0 }
     try {
-      const raw = await fsp.readFile(filePath, 'utf-8')
+      const raw = await readManagedTextFile(filePath, 'utf-8')
       const nonEmptyLines = raw
         .split(/\r?\n/)
         .map(line => line.trim())
@@ -5096,22 +6043,22 @@ export function buildServeApp(opts: ServeOptions = {}): {
     }
   }
 
-  async function buildProjectContextSummary(memoryDir: string): Promise<{
+  async function buildProjectContextSummary(projectPath: string, memoryDir: string): Promise<{
     projectBrief: { present: boolean; nonEmptyLines: number }
     projectNotes: { present: boolean; nonEmptyLines: number }
     decisions: { present: boolean; nonEmptyLines: number }
     workspaceGoals: { present: boolean; goalCount: number }
   }> {
     const [projectBrief, projectNotes, decisions] = await Promise.all([
-      fileSummary(join(memoryDir, 'project-brief.md')),
+      fileSummary(projectBriefPath(projectPath)),
       fileSummary(join(memoryDir, 'MEMORY.md')),
       fileSummary(join(memoryDir, 'DECISIONS.md')),
     ])
     let workspaceGoals = { present: false, goalCount: 0 }
-    const goalsPath = join(memoryDir, 'workspace-goals.json')
+    const goalsPath = getProjectSystemStatePath(projectPath, 'workspace-goals.json')
     if (existsSync(goalsPath)) {
       try {
-        const raw = JSON.parse(await fsp.readFile(goalsPath, 'utf-8')) as { goals?: unknown[] }
+        const raw = JSON.parse(await readManagedTextFile(goalsPath, 'utf-8')) as { goals?: unknown[] }
         workspaceGoals = { present: true, goalCount: Array.isArray(raw.goals) ? raw.goals.length : 0 }
       } catch {
         workspaceGoals = { present: true, goalCount: 0 }
@@ -5133,11 +6080,11 @@ export function buildServeApp(opts: ServeOptions = {}): {
       const memoryDir = getProjectStateDir(project.path)
       const inventory = await detectWorkspaceSignals({ projectPath: project.path })
       const draft = formWorkspaceHypothesis(inventory)
-      const tasksPath = join(memoryDir, 'TASKS.json')
+      const tasksPath = projectTasksPath(project.path)
       let existingTasks: Array<{ title: string; status: string }> = []
       if (existsSync(tasksPath)) {
         try {
-          const raw = JSON.parse(await fsp.readFile(tasksPath, 'utf-8')) as
+          const raw = JSON.parse(await readManagedTextFile(tasksPath, 'utf-8')) as
             | { tasks?: Array<Record<string, unknown>> }
             | Array<Record<string, unknown>>
           const list = Array.isArray(raw) ? raw : raw.tasks ?? []
@@ -5156,7 +6103,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
       return c.json({
         ...buildLearningSnapshot({ memoryDir, review, draft }),
         projectSkillProposals: readProjectSkillProposals(memoryDir),
-        projectContext: await buildProjectContextSummary(memoryDir),
+        projectContext: await buildProjectContextSummary(project.path, memoryDir),
       })
     } catch (err) {
       return c.json({ error: err instanceof Error ? err.message : String(err) }, 500)
@@ -5267,13 +6214,45 @@ export function buildServeApp(opts: ServeOptions = {}): {
       if (project.initializationNeeded) {
         return c.json({ turns: [], activeTurnId: null, caughtUp: false })
       }
+      const timing: Array<{ name: string; startedAt: number; endedAt?: number }> = [{ name: 'thread-core', startedAt: Date.now() }]
       try {
         repairStaleBlockersForProject(project.path)
       } catch {
         /* never let stale-blocker repair break a thread read */
       }
+      const state = await loadThreadProjectionState(project.path)
       const thread = buildThread({
         projectPath: project.path,
+        snapshot: state.snapshot,
+        tasks: state.tasks as never,
+        boundedChatSessions: state.boundedChatSessions,
+        pressureTestIntakes: state.pressureTestIntakes,
+        projectCheckInSummary: state.projectCheckInSummary,
+        runStatus: supervisor.get(project.id)?.status ?? 'stopped',
+        recentEvents: supervisor.recent(project.id, undefined, project.path),
+      })
+      timing[0]!.endedAt = Date.now()
+      c.header('server-timing', formatServerTiming(timing))
+      return c.json(thread)
+    } catch (err) {
+      return c.json({ error: err instanceof Error ? err.message : String(err) }, 500)
+    }
+  })
+
+  app.get('/api/project/thread/extras', async c => {
+    try {
+      if (project.initializationNeeded) {
+        return c.json({ taskGitStories: {} })
+      }
+      const timing: Array<{ name: string; startedAt: number; endedAt?: number }> = [{ name: 'thread-extras', startedAt: Date.now() }]
+      const state = await loadThreadProjectionState(project.path)
+      const thread = buildThread({
+        projectPath: project.path,
+        snapshot: state.snapshot,
+        tasks: state.tasks as never,
+        boundedChatSessions: state.boundedChatSessions,
+        pressureTestIntakes: state.pressureTestIntakes,
+        projectCheckInSummary: state.projectCheckInSummary,
         runStatus: supervisor.get(project.id)?.status ?? 'stopped',
         recentEvents: supervisor.recent(project.id, undefined, project.path),
       })
@@ -5282,25 +6261,19 @@ export function buildServeApp(opts: ServeOptions = {}): {
           .map(turn => ('taskId' in turn ? turn.taskId : null))
           .filter((id): id is string => Boolean(id)),
       )
+      const taskGitStories: Record<string, unknown> = {}
       if (taskIds.size > 0) {
-        const tasks = await readTasksFileNormalized(join(getProjectStateDir(project.path), 'TASKS.json')).catch(() => [])
         const workspaceStore = await readTaskWorkspaceStore(project.path).catch(() => undefined)
-        const gitStories = new Map<string, Awaited<ReturnType<typeof gitStoryForTask>>>()
-        for (const task of tasks) {
+        for (const task of state.tasks) {
           const id = typeof task.id === 'string' ? task.id : ''
           if (!id || !taskIds.has(id)) continue
           const gitStory = await gitStoryForTask(project.path, task, workspaceStore?.workspaces[id]).catch(() => undefined)
-          if (gitStory) gitStories.set(id, gitStory)
-        }
-        if (gitStories.size > 0) {
-          thread.turns = thread.turns.map(turn => {
-            if (!('taskId' in turn)) return turn
-            const gitStory = gitStories.get(turn.taskId)
-            return gitStory ? { ...turn, gitStory } : turn
-          })
+          if (gitStory) taskGitStories[id] = gitStory
         }
       }
-      return c.json(thread)
+      timing[0]!.endedAt = Date.now()
+      c.header('server-timing', formatServerTiming(timing))
+      return c.json({ taskGitStories })
     } catch (err) {
       return c.json({ error: err instanceof Error ? err.message : String(err) }, 500)
     }
@@ -5362,7 +6335,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
       if (!stat.isFile()) return c.json({ error: 'Source note not found.' }, 404)
 
       const maxChars = 96_000
-      const raw = await fsp.readFile(candidate, 'utf8')
+      const raw = await readManagedTextFile(candidate, 'utf8')
       const truncated = raw.length > maxChars
       return c.json({
         path: candidate,
@@ -5442,9 +6415,9 @@ export function buildServeApp(opts: ServeOptions = {}): {
   app.get('/api/project/task/:id/wizards', c => {
     try {
       if (project.initializationNeeded) return c.json({ wizards: [] })
-      const tasksPath = join(getProjectStateDir(project.path), 'TASKS.json')
+      const tasksPath = projectTasksPath(project.path)
       if (!existsSync(tasksPath)) return c.json({ error: 'no tasks file' }, 404)
-      const raw = JSON.parse(readFileSync(tasksPath, 'utf8')) as
+      const raw = JSON.parse(readManagedTextFileSync(tasksPath, 'utf8')) as
         | { tasks?: Array<Record<string, unknown>> }
         | Array<Record<string, unknown>>
       const tasks = Array.isArray(raw) ? raw : raw.tasks ?? []
@@ -5545,15 +6518,15 @@ export function buildServeApp(opts: ServeOptions = {}): {
   app.get('/api/project/brief', c => {
     try {
       if (project.initializationNeeded) return c.json({ current: '', seed: { readme: '', roadmap: [] } })
-      const briefPath = join(getProjectStateDir(project.path), 'project-brief.md')
-      const current = existsSync(briefPath) ? readFileSync(briefPath, 'utf8') : ''
+      const briefPath = projectBriefPath(project.path)
+      const current = existsSync(briefPath) ? readManagedTextFileSync(briefPath, 'utf8') : ''
       const readmePath = join(project.path, 'README.md')
       const roadmapPath = join(project.path, 'ROADMAP.md')
       const readmeFirstPara = existsSync(readmePath)
-        ? (readFileSync(readmePath, 'utf8').split(/\n{2,}/).find(p => p.trim() && !p.trim().startsWith('#')) ?? '').trim().slice(0, 800)
+        ? (readManagedTextFileSync(readmePath, 'utf8').split(/\n{2,}/).find(p => p.trim() && !p.trim().startsWith('#')) ?? '').trim().slice(0, 800)
         : ''
       const roadmapHeadings = existsSync(roadmapPath)
-        ? readFileSync(roadmapPath, 'utf8')
+        ? readManagedTextFileSync(roadmapPath, 'utf8')
             .split(/\r?\n/)
             .filter(l => /^#{1,3}\s+/.test(l))
             .map(l => l.replace(/^#{1,3}\s+/, '').trim())
@@ -5571,9 +6544,9 @@ export function buildServeApp(opts: ServeOptions = {}): {
       const body = (await c.req.json().catch(() => ({}))) as { content?: string }
       const content = typeof body.content === 'string' ? body.content.trim() : ''
       if (content.length < 40) return c.json({ error: 'brief must be at least 40 characters' }, 400)
-      const memDir = getProjectStateDir(project.path)
-      if (!existsSync(memDir)) mkdirSync(memDir, { recursive: true })
-      writeFileSync(join(memDir, 'project-brief.md'), content + '\n', 'utf8')
+      const briefPath = projectBriefPath(project.path)
+      mkdirSync(dirname(briefPath), { recursive: true })
+      writeManagedTextFileSync(briefPath, content + '\n')
       return c.json({ ok: true })
     } catch (err) {
       return c.json({ error: err instanceof Error ? err.message : String(err) }, 500)
@@ -5583,7 +6556,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
   app.get('/api/project/git-story', async c => {
     try {
       if (project.initializationNeeded) return c.json({ initializationNeeded: true })
-      const tasks = await readTasksFileNormalized(join(getProjectStateDir(project.path), 'TASKS.json')).catch(() => [])
+      const tasks = await readTasksFileNormalized(projectTasksPath(project.path)).catch(() => [])
       return c.json(await buildProjectGitStorySummary(project.path, tasks as Array<Record<string, unknown>>))
     } catch (err) {
       return c.json({ error: err instanceof Error ? err.message : String(err) }, 500)
@@ -5598,12 +6571,24 @@ export function buildServeApp(opts: ServeOptions = {}): {
   app.get('/api/project/task/:id', async c => {
     try {
       if (project.initializationNeeded) return c.json({ error: 'not initialized' }, 400)
-      const tasksPath = join(getProjectStateDir(project.path), 'TASKS.json')
+      const tasksPath = projectTasksPath(project.path)
       if (!existsSync(tasksPath)) return c.json({ error: 'no tasks file' }, 404)
       const tasks = await readTasksFileNormalized(tasksPath)
+      const workProgress = deriveProjectWorkProgress(tasks as Array<Record<string, unknown>>)
       const id = c.req.param('id')
       const task = tasks.find(t => (t as { id?: string }).id === id)
       if (!task) return c.json({ error: 'task not found' }, 404)
+      const deliveryModel = await readProjectDeliveryModel(project.path)
+      const deliveryRelationships = deriveTaskRelationships({
+        model: deliveryModel,
+        tasks: tasks as Task[],
+        taskId: id,
+      })
+      const deliveryContextPacket = buildTaskContextPacket({
+        model: deliveryModel,
+        tasks: tasks as Task[],
+        taskId: id,
+      })
       const recent = filterEventsForTask(supervisor.recent(project.id, undefined, project.path), id)
       const memoryDir = getProjectStateDir(project.path)
       const contextDebug = await readContextDebugForTask(memoryDir, id)
@@ -5620,14 +6605,177 @@ export function buildServeApp(opts: ServeOptions = {}): {
         return turn.taskId === id
       })
       const runStatus = supervisor.get(project.id)?.status ?? 'stopped'
+      const availability = await readProjectAvailability(project.path)
+      const relatedTaskIds = new Set<string>()
+      const rawTask = task as Record<string, unknown>
+      for (const primitive of [
+        ...deliveryRelationships.primitiveUse.direct,
+        ...deliveryRelationships.primitiveUse.ancestors,
+      ]) {
+        for (const provingTask of primitive.provingTasks) {
+          if (typeof provingTask.id === 'string') relatedTaskIds.add(provingTask.id)
+        }
+      }
+      const hierarchy = rawTask.hierarchy as { parentId?: unknown; childIds?: unknown } | undefined
+      if (typeof hierarchy?.parentId === 'string') relatedTaskIds.add(hierarchy.parentId)
+      if (Array.isArray(hierarchy?.childIds)) {
+        for (const childId of hierarchy.childIds) {
+          if (typeof childId === 'string') relatedTaskIds.add(childId)
+        }
+      }
+      const dependsOn = Array.isArray(rawTask.dependsOn) ? rawTask.dependsOn : []
+      for (const dependency of dependsOn) {
+        if (typeof dependency === 'string') relatedTaskIds.add(dependency)
+      }
+      const sizePlan = rawTask.sizePlan as { recommendedChildren?: Array<{ createdTaskId?: unknown }> } | undefined
+      for (const child of sizePlan?.recommendedChildren ?? []) {
+        if (typeof child.createdTaskId === 'string') relatedTaskIds.add(child.createdTaskId)
+      }
+      for (const candidate of tasks as Array<Record<string, unknown>>) {
+        if (typeof candidate.id !== 'string' || candidate.id === id) continue
+        const candidateDependsOn = Array.isArray(candidate.dependsOn) ? candidate.dependsOn : []
+        if (candidateDependsOn.includes(id)) relatedTaskIds.add(candidate.id)
+      }
+      relatedTaskIds.delete(id)
+      const relatedTasks = await Promise.all(
+        [...relatedTaskIds]
+          .map(relatedId => tasks.find(candidate => (candidate as { id?: string }).id === relatedId))
+          .filter((candidate): candidate is Record<string, unknown> => Boolean(candidate))
+          .map(candidate => enrichTaskForServe(project.path, candidate)),
+      )
       return c.json({
-        task: await enrichTaskForServe(project.path, task as Record<string, unknown>),
+        task: await enrichTaskForServe(project.path, rawTask),
+        relatedTasks,
+        workProgress,
         runStatus,
+        availability,
         recentEvents: recent,
         contextDebug,
         exploringTranscript,
         threadTurns,
+        deliverySpine: {
+          model: deliveryModel,
+          validation: validateProjectDeliveryModel({ model: deliveryModel, tasks: tasks as Task[], projectRoot: project.path }),
+          relationships: deliveryRelationships,
+          contextPacket: deliveryContextPacket,
+        },
       })
+    } catch (err) {
+      return c.json({ error: err instanceof Error ? err.message : String(err) }, 500)
+    }
+  })
+
+  app.get('/api/project/delivery-spine', async c => {
+    try {
+      if (project.initializationNeeded) return c.json({ error: 'not initialized' }, 400)
+      const tasks = await readTasksFileNormalized(projectTasksPath(project.path))
+      const model = await readProjectDeliveryModel(project.path)
+      return c.json({
+        model,
+        validation: validateProjectDeliveryModel({ model, tasks: tasks as Task[], projectRoot: project.path }),
+        primitives: listPrimitivesWithRelations(model, tasks as Task[]),
+        queue: deriveQueueCandidates({ model, tasks: tasks as Task[] }),
+      })
+    } catch (err) {
+      return c.json({ error: err instanceof Error ? err.message : String(err) }, 500)
+    }
+  })
+
+  app.get('/api/project/delivery-spine/queue', async c => {
+    try {
+      if (project.initializationNeeded) return c.json({ error: 'not initialized' }, 400)
+      const tasks = await readTasksFileNormalized(projectTasksPath(project.path))
+      const model = await readProjectDeliveryModel(project.path)
+      return c.json(deriveQueueCandidates({ model, tasks: tasks as Task[] }))
+    } catch (err) {
+      return c.json({ error: err instanceof Error ? err.message : String(err) }, 500)
+    }
+  })
+
+  app.post('/api/project/delivery-spine/contract-results/:resultId/apply', async c => {
+    try {
+      if (project.initializationNeeded) return c.json({ error: 'not initialized' }, 400)
+      const resultId = c.req.param('resultId')
+      const body = await c.req.json().catch(() => ({})) as { ownerOverrideReason?: string }
+      const tasksPath = projectTasksPath(project.path)
+      const tasks = await readTasksFileNormalized(tasksPath)
+      const model = await readProjectDeliveryModel(project.path)
+      const changeSet = stagedContractChangeSet(model, resultId)
+      if (!changeSet) return c.json({ error: 'staged contract result not found' }, 404)
+      const applied = applyContractChangeSet({
+        model,
+        tasks: tasks as Task[],
+        changeSet,
+        actor: 'human',
+        ownerOverrideReason: body.ownerOverrideReason,
+      })
+      await writeProjectDeliveryModel(project.path, applied.model)
+      await writeTasksFilePreservingQueue(tasksPath, applied.tasks as unknown as Array<Record<string, unknown>>)
+      return c.json({ ok: true, applied: applied.applied })
+    } catch (err) {
+      return c.json({ error: err instanceof Error ? err.message : String(err) }, 500)
+    }
+  })
+
+  app.post('/api/project/delivery-spine/contract-results/:resultId/reject', async c => {
+    try {
+      if (project.initializationNeeded) return c.json({ error: 'not initialized' }, 400)
+      const resultId = c.req.param('resultId')
+      const body = await c.req.json().catch(() => ({})) as { reason?: string }
+      const model = await readProjectDeliveryModel(project.path)
+      const changeSet = stagedContractChangeSet(model, resultId)
+      if (!changeSet) return c.json({ error: 'staged contract result not found' }, 404)
+      const rejected = rejectContractChangeSet({
+        model,
+        changeSet,
+        actor: 'human',
+        reason: body.reason?.trim() || 'Rejected from Needs you.',
+      })
+      await writeProjectDeliveryModel(project.path, rejected)
+      return c.json({ ok: true, rejected: rejected.rejectedCandidates.at(-1) })
+    } catch (err) {
+      return c.json({ error: err instanceof Error ? err.message : String(err) }, 500)
+    }
+  })
+
+  app.post('/api/project/delivery-spine/contract-results/:resultId/revert', async c => {
+    try {
+      if (project.initializationNeeded) return c.json({ error: 'not initialized' }, 400)
+      const resultId = c.req.param('resultId')
+      const tasksPath = projectTasksPath(project.path)
+      const tasks = await readTasksFileNormalized(tasksPath)
+      const model = await readProjectDeliveryModel(project.path)
+      const reverted = revertAppliedContractResult({
+        model,
+        tasks: tasks as Task[],
+        resultId,
+        actor: 'human',
+      })
+      await writeProjectDeliveryModel(project.path, reverted.model)
+      await writeTasksFilePreservingQueue(tasksPath, reverted.tasks as unknown as Array<Record<string, unknown>>)
+      return c.json({ ok: true, warnings: reverted.warnings })
+    } catch (err) {
+      return c.json({ error: err instanceof Error ? err.message : String(err) }, 500)
+    }
+  })
+
+  app.get('/api/project/task/:id/relationships', async c => {
+    try {
+      if (project.initializationNeeded) return c.json({ error: 'not initialized' }, 400)
+      const tasks = await readTasksFileNormalized(projectTasksPath(project.path))
+      const model = await readProjectDeliveryModel(project.path)
+      return c.json(deriveTaskRelationships({ model, tasks: tasks as Task[], taskId: c.req.param('id') }))
+    } catch (err) {
+      return c.json({ error: err instanceof Error ? err.message : String(err) }, 500)
+    }
+  })
+
+  app.get('/api/project/task/:id/context-packet', async c => {
+    try {
+      if (project.initializationNeeded) return c.json({ error: 'not initialized' }, 400)
+      const tasks = await readTasksFileNormalized(projectTasksPath(project.path))
+      const model = await readProjectDeliveryModel(project.path)
+      return c.json(buildTaskContextPacket({ model, tasks: tasks as Task[], taskId: c.req.param('id') }))
     } catch (err) {
       return c.json({ error: err instanceof Error ? err.message : String(err) }, 500)
     }
@@ -5636,7 +6784,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
   app.get('/api/project/task/:id/evidence', async c => {
     try {
       if (project.initializationNeeded) return c.json({ error: 'not initialized' }, 400)
-      const tasksPath = join(getProjectStateDir(project.path), 'TASKS.json')
+      const tasksPath = projectTasksPath(project.path)
       if (!existsSync(tasksPath)) return c.json({ error: 'no tasks file' }, 404)
       const tasks = await readTasksFileNormalized(tasksPath)
       const id = c.req.param('id')
@@ -5652,7 +6800,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
   app.get('/api/project/task/:id/file', async c => {
     try {
       if (project.initializationNeeded) return c.json({ error: 'not initialized' }, 400)
-      const tasksPath = join(getProjectStateDir(project.path), 'TASKS.json')
+      const tasksPath = projectTasksPath(project.path)
       if (!existsSync(tasksPath)) return c.json({ error: 'no tasks file' }, 404)
       const tasks = await readTasksFileNormalized(tasksPath)
       const id = c.req.param('id')
@@ -5697,7 +6845,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
   app.get('/api/project/task/:id/history', async c => {
     try {
       if (project.initializationNeeded) return c.json({ error: 'not initialized' }, 400)
-      const tasksPath = join(getProjectStateDir(project.path), 'TASKS.json')
+      const tasksPath = projectTasksPath(project.path)
       if (!existsSync(tasksPath)) return c.json({ error: 'no tasks file' }, 404)
       const tasks = await readTasksFileNormalized(tasksPath)
       const id = c.req.param('id')
@@ -5722,7 +6870,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
   app.get('/api/project/task/:id/review', async c => {
     try {
       if (project.initializationNeeded) return c.json({ error: 'not initialized' }, 400)
-      const tasksPath = join(getProjectStateDir(project.path), 'TASKS.json')
+      const tasksPath = projectTasksPath(project.path)
       if (!existsSync(tasksPath)) return c.json({ error: 'no tasks file' }, 404)
       const tasks = await readTasksFileNormalized(tasksPath)
       const id = c.req.param('id')
@@ -5742,7 +6890,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
   app.get('/api/project/task/:id/git-story', async c => {
     try {
       if (project.initializationNeeded) return c.json({ error: 'not initialized' }, 400)
-      const tasksPath = join(getProjectStateDir(project.path), 'TASKS.json')
+      const tasksPath = projectTasksPath(project.path)
       if (!existsSync(tasksPath)) return c.json({ error: 'no tasks file' }, 404)
       const tasks = await readTasksFileNormalized(tasksPath)
       const id = c.req.param('id')
@@ -5776,9 +6924,9 @@ export function buildServeApp(opts: ServeOptions = {}): {
         automationSource?: string
       }
       const memoryDir = getProjectStateDir(project.path)
-      const tasksPath = join(memoryDir, 'TASKS.json')
+      const tasksPath = projectTasksPath(project.path)
       if (!existsSync(tasksPath)) return c.json({ error: 'no tasks file' }, 404)
-      const parsed = JSON.parse(readFileSync(tasksPath, 'utf8')) as
+      const parsed = JSON.parse(readManagedTextFileSync(tasksPath, 'utf8')) as
         | { tasks?: Array<Record<string, unknown>>; version?: number; lastUpdated?: string }
         | Array<Record<string, unknown>>
       const queue = Array.isArray(parsed)
@@ -5802,7 +6950,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
         task.notes = notes
         task.updatedAt = now
         queue.lastUpdated = now
-        atomicWriteText(tasksPath, JSON.stringify(queue, null, 2) + '\n')
+        writeManagedTextFileSync(tasksPath, JSON.stringify(queue, null, 2) + '\n')
         return c.json({ ok: true, commitSha: result.commitSha, task: await enrichTaskForServe(project.path, task) })
       }
       if (closureAction === 'push') {
@@ -5852,7 +7000,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
       }
       task.updatedAt = now
       queue.lastUpdated = now
-      atomicWriteText(tasksPath, JSON.stringify(queue, null, 2) + '\n')
+      writeManagedTextFileSync(tasksPath, JSON.stringify(queue, null, 2) + '\n')
       return c.json({
         ok: true,
         task: await enrichTaskForServe(project.path, task),
@@ -5889,9 +7037,9 @@ export function buildServeApp(opts: ServeOptions = {}): {
   app.get('/api/project/task/:id/experts', async c => {
     try {
       if (project.initializationNeeded) return c.json({ error: 'not initialized' }, 400)
-      const tasksPath = join(getProjectStateDir(project.path), 'TASKS.json')
+      const tasksPath = projectTasksPath(project.path)
       if (!existsSync(tasksPath)) return c.json({ error: 'no tasks file' }, 404)
-      const raw = JSON.parse(readFileSync(tasksPath, 'utf8')) as
+      const raw = JSON.parse(readManagedTextFileSync(tasksPath, 'utf8')) as
         | { tasks?: Array<Record<string, unknown>> }
         | Array<Record<string, unknown>>
       const tasks = Array.isArray(raw) ? raw : raw.tasks ?? []
@@ -5993,6 +7141,114 @@ export function buildServeApp(opts: ServeOptions = {}): {
         verdictsBySlug,
         gateResultsBySlug,
         warnings,
+      })
+    } catch (err) {
+      return c.json({ error: err instanceof Error ? err.message : String(err) }, 500)
+    }
+  })
+
+  app.post('/api/project/task/:id/continue', async c => {
+    try {
+      if (project.initializationNeeded) return c.json({ error: 'not initialized' }, 400)
+      const id = c.req.param('id')
+      const body = await c.req.json().catch(() => ({})) as {
+        action?: 'brief_cleanup'
+        instruction?: string
+        mode?: 'split' | 'checklist' | 'general'
+      }
+      const action = body.action ?? 'brief_cleanup'
+      if (action !== 'brief_cleanup') {
+        return c.json({ error: 'unknown continuation action' }, 400)
+      }
+
+      const memoryDir = getProjectStateDir(project.path)
+      const tasksPath = projectTasksPath(project.path)
+      const tasks = await readTasksFileNormalized(tasksPath).catch(() => [])
+      if (!tasks.some(task => task.id === id)) {
+        return c.json({ error: 'task not found' }, 404)
+      }
+
+      const result = await enrichTask({
+        memoryDir,
+        taskId: id,
+        mode: body.mode ?? 'checklist',
+        instruction:
+          body.instruction ??
+          'Complete this task for worker handoff: preserve the useful starting point, write a full product brief and spec handoff, and add concrete acceptance criteria before implementation.',
+      })
+      if (!result.success) return c.json({ error: result.error ?? 'continuation failed' }, 400)
+
+      const existingRun = supervisor.get(project.id)
+      if (existingRun && (existingRun.status === 'running' || existingRun.status === 'stopping')) {
+        return c.json({
+          ok: true,
+          taskId: id,
+          action,
+          status: result.newStatus,
+          continuation: {
+            status: 'queued',
+            runStatus: existingRun.status,
+            mode: existingRun.mode,
+          },
+        })
+      }
+
+      const url = new URL(c.req.url)
+      url.pathname = '/api/project/start'
+      const startRes = await app.fetch(
+        new Request(url, {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ mode: 'continuous', taskId: id }),
+        }),
+        c.env,
+      )
+      const startBody = await startRes.json().catch(() => ({})) as Record<string, unknown>
+      if (!startRes.ok || startBody.error) {
+        if (startBody.code === 'run_already_active') {
+          const run = supervisor.get(project.id)
+          return c.json({
+            ok: true,
+            taskId: id,
+            action,
+            status: result.newStatus,
+            continuation: {
+              status: 'queued',
+              runStatus: run?.status ?? startBody.status ?? 'running',
+              ...(run?.mode ? { mode: run.mode } : {}),
+            },
+          })
+        }
+        return c.json(
+          {
+            error: typeof startBody.error === 'string' ? startBody.error : `Continuation failed (HTTP ${startRes.status})`,
+            ...(typeof startBody.code === 'string' ? { code: startBody.code } : {}),
+            ...(typeof startBody.actionHref === 'string' ? { actionHref: startBody.actionHref } : {}),
+            taskId: id,
+            action,
+            status: result.newStatus,
+            continuation: {
+              status: 'blocked',
+              runStatus: supervisor.get(project.id)?.status ?? 'stopped',
+            },
+          },
+          startRes.status === 409 ? 409 : startRes.status === 400 ? 400 : 500,
+        )
+      }
+
+      return c.json({
+        ok: true,
+        taskId: id,
+        action,
+        status: result.newStatus,
+        continuation: {
+          status: 'started',
+          runStatus: typeof startBody.status === 'string' ? startBody.status : supervisor.get(project.id)?.status ?? 'running',
+          mode: typeof startBody.mode === 'string' ? startBody.mode : 'continuous',
+          ...(typeof startBody.startedAt === 'string' ? { startedAt: startBody.startedAt } : {}),
+          ...(typeof startBody.provider === 'string' ? { provider: startBody.provider } : {}),
+          ...(startBody.providerStatus ? { providerStatus: startBody.providerStatus } : {}),
+        },
       })
     } catch (err) {
       return c.json({ error: err instanceof Error ? err.message : String(err) }, 500)
@@ -6148,32 +7404,58 @@ export function buildServeApp(opts: ServeOptions = {}): {
       }
 
       if (action === 'create-split-children') {
-        const tasksPath = join(memoryDir, 'TASKS.json')
+        const tasksPath = projectTasksPath(project.path)
         if (!existsSync(tasksPath)) return c.json({ error: 'no tasks file' }, 404)
-        const queue = TaskQueue.parse(JSON.parse(readFileSync(tasksPath, 'utf8')))
+        const queue = TaskQueue.parse(JSON.parse(readManagedTextFileSync(tasksPath, 'utf8')))
         const task = queue.tasks.find(t => t.id === id)
         if (!task) return c.json({ error: 'task not found' }, 404)
-        if (task.sizePlan?.action !== 'split_required') {
-          return c.json({ error: 'task does not require a split' }, 400)
+        const sizePlan = task.sizePlan
+        if (!sizePlan || !isMaterializableSplitAction(sizePlan.action)) {
+          return c.json({ error: 'task does not have split recommendations' }, 400)
         }
         const now = new Date().toISOString()
-        materializeRequiredSplitChildren(queue, task, now)
+        const deliveryModel = await readProjectDeliveryModel(project.path)
+        const preflightPlan = planTaskSplit({
+          model: deliveryModel,
+          tasks: queue.tasks as Task[],
+          taskId: task.id,
+        })
+        if (preflightPlan.errors.length > 0) {
+          return c.json({
+            error: 'split plan failed validation',
+            plan: preflightPlan,
+          }, 400)
+        }
+        materializeSplitChildren(queue, task, now)
+        const appliedPlan = planTaskSplit({
+          model: deliveryModel,
+          tasks: queue.tasks as Task[],
+          taskId: task.id,
+        })
+        for (const childPlan of appliedPlan.children) {
+          const child = queue.tasks.find(candidate => candidate.id === childPlan.plannedTaskId)
+          if (!child) continue
+          child.delivery = childPlan.delivery
+          child.dependsOn = childPlan.dependsOn
+          child.updatedAt = now
+        }
         task.updatedAt = now
         queue.lastUpdated = now
-        atomicWriteText(tasksPath, JSON.stringify(queue, null, 2) + '\n')
+        writeManagedTextFileSync(tasksPath, JSON.stringify(queue, null, 2) + '\n')
         return c.json({
           ok: true,
           parentTaskId: task.id,
-          createdTaskIds: task.sizePlan.recommendedChildren
+          splitPlan: appliedPlan,
+          createdTaskIds: sizePlan.recommendedChildren
             .map(child => child.createdTaskId)
             .filter((createdTaskId): createdTaskId is string => Boolean(createdTaskId)),
         })
       }
 
       if (action === 'approve-brief') {
-        const tasksPath = join(memoryDir, 'TASKS.json')
+        const tasksPath = projectTasksPath(project.path)
         if (!existsSync(tasksPath)) return c.json({ error: 'no tasks file' }, 404)
-        const parsed = JSON.parse(readFileSync(tasksPath, 'utf8')) as
+        const parsed = JSON.parse(readManagedTextFileSync(tasksPath, 'utf8')) as
           | { tasks?: Array<Record<string, unknown>>; version?: number; lastUpdated?: string }
           | Array<Record<string, unknown>>
         const queue = Array.isArray(parsed)
@@ -6185,8 +7467,44 @@ export function buildServeApp(opts: ServeOptions = {}): {
         if (!brief || typeof brief !== 'object') {
           return c.json({ error: 'no product brief drafted yet' }, 400)
         }
-        if (!brief.userJob || !brief.successMetric) {
-          return c.json({ error: 'brief is incomplete — needs userJob and successMetric' }, 400)
+        if (
+          (typeof brief.whyItMattersNow !== 'string' || !brief.whyItMattersNow.trim()) &&
+          typeof brief.userJob === 'string' &&
+          brief.userJob.trim() &&
+          typeof brief.successMetric === 'string' &&
+          brief.successMetric.trim()
+        ) {
+          brief.whyItMattersNow = `This matters now because Guildhall needs "${String(task.title ?? 'this task')}" framed tightly enough to reach this outcome: ${brief.successMetric.trim()}`
+        }
+        if (
+          (!Array.isArray(brief.nonGoals) || brief.nonGoals.length === 0) &&
+          Array.isArray(brief.antiPatterns)
+        ) {
+          brief.nonGoals = brief.antiPatterns
+        }
+        if (
+          (!Array.isArray(brief.nonGoals) || brief.nonGoals.length === 0) &&
+          (!Array.isArray(brief.antiPatterns) || brief.antiPatterns.length === 0)
+        ) {
+          brief.nonGoals = [`Do not let "${String(task.title ?? 'this task')}" quietly expand beyond the approved task boundary.`]
+          brief.antiPatterns = brief.nonGoals
+        }
+        const nonGoals = Array.isArray(brief.nonGoals)
+          ? brief.nonGoals.filter((item): item is string => typeof item === 'string' && item.trim().length > 0)
+          : []
+        const antiPatterns = Array.isArray(brief.antiPatterns)
+          ? brief.antiPatterns.filter((item): item is string => typeof item === 'string' && item.trim().length > 0)
+          : []
+        if (
+          typeof brief.userJob !== 'string' ||
+          !brief.userJob.trim() ||
+          typeof brief.whyItMattersNow !== 'string' ||
+          !brief.whyItMattersNow.trim() ||
+          typeof brief.successMetric !== 'string' ||
+          !brief.successMetric.trim() ||
+          (nonGoals.length === 0 && antiPatterns.length === 0)
+        ) {
+          return c.json({ error: 'brief is incomplete — needs userJob, whyItMattersNow, successMetric, and at least one non-goal' }, 400)
         }
         const now = new Date().toISOString()
         brief.approvedBy = 'human'
@@ -6207,16 +7525,16 @@ export function buildServeApp(opts: ServeOptions = {}): {
         }
         task.updatedAt = now
         queue.lastUpdated = now
-        atomicWriteText(tasksPath, JSON.stringify(queue, null, 2) + '\n')
+        writeManagedTextFileSync(tasksPath, JSON.stringify(queue, null, 2) + '\n')
         return c.json({ ok: true, status: task.status })
       }
 
       if (action === 'mark-done') {
         const body = await c.req.json().catch(() => ({})) as { evidence?: string }
         const evidence = (body.evidence ?? '').trim()
-        const tasksPath = join(memoryDir, 'TASKS.json')
+        const tasksPath = projectTasksPath(project.path)
         if (!existsSync(tasksPath)) return c.json({ error: 'no tasks file' }, 404)
-        const parsed = JSON.parse(readFileSync(tasksPath, 'utf8')) as
+        const parsed = JSON.parse(readManagedTextFileSync(tasksPath, 'utf8')) as
           | { tasks?: Array<Record<string, unknown>>; version?: number; lastUpdated?: string }
           | Array<Record<string, unknown>>
         const queue = Array.isArray(parsed)
@@ -6278,7 +7596,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
           createdBy: 'system:mark-done',
         })
         queue.lastUpdated = now
-        atomicWriteText(tasksPath, JSON.stringify(queue, null, 2) + '\n')
+        writeManagedTextFileSync(tasksPath, JSON.stringify(queue, null, 2) + '\n')
         return c.json({ ok: true, status: 'done' })
       }
 
@@ -6286,9 +7604,9 @@ export function buildServeApp(opts: ServeOptions = {}): {
         const body = await c.req.json().catch(() => ({})) as { description?: string }
         const description = (body.description ?? '').trim()
         if (!description) return c.json({ error: 'description required' }, 400)
-        const tasksPath = join(memoryDir, 'TASKS.json')
+        const tasksPath = projectTasksPath(project.path)
         if (!existsSync(tasksPath)) return c.json({ error: 'no tasks file' }, 404)
-        const parsed = JSON.parse(readFileSync(tasksPath, 'utf8')) as
+        const parsed = JSON.parse(readManagedTextFileSync(tasksPath, 'utf8')) as
           | { tasks?: Array<Record<string, unknown>>; version?: number; lastUpdated?: string }
           | Array<Record<string, unknown>>
         const queue = Array.isArray(parsed)
@@ -6319,7 +7637,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
         task.notes = notes
         task.updatedAt = now
         queue.lastUpdated = now
-        atomicWriteText(tasksPath, JSON.stringify(queue, null, 2) + '\n')
+        writeManagedTextFileSync(tasksPath, JSON.stringify(queue, null, 2) + '\n')
         return c.json({ ok: true, count: criteria.length })
       }
 
@@ -6335,9 +7653,9 @@ export function buildServeApp(opts: ServeOptions = {}): {
         if (!successTarget && !acceptanceCriterion && !userJob) {
           return c.json({ error: 'Add a success target or an acceptance criterion.' }, 400)
         }
-        const tasksPath = join(memoryDir, 'TASKS.json')
+        const tasksPath = projectTasksPath(project.path)
         if (!existsSync(tasksPath)) return c.json({ error: 'no tasks file' }, 404)
-        const parsed = JSON.parse(readFileSync(tasksPath, 'utf8')) as
+        const parsed = JSON.parse(readManagedTextFileSync(tasksPath, 'utf8')) as
           | { tasks?: Array<Record<string, unknown>>; version?: number; lastUpdated?: string }
           | Array<Record<string, unknown>>
         const queue = Array.isArray(parsed)
@@ -6392,7 +7710,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
         task.notes = notes
         task.updatedAt = now
         queue.lastUpdated = now
-        atomicWriteText(tasksPath, JSON.stringify(queue, null, 2) + '\n')
+        writeManagedTextFileSync(tasksPath, JSON.stringify(queue, null, 2) + '\n')
         return c.json({ ok: true })
       }
 
@@ -6408,9 +7726,9 @@ export function buildServeApp(opts: ServeOptions = {}): {
         if (!body.answer || !body.answer.trim()) {
           return c.json({ error: 'Missing answer' }, 400)
         }
-        const tasksPath = join(memoryDir, 'TASKS.json')
+        const tasksPath = projectTasksPath(project.path)
         if (!existsSync(tasksPath)) return c.json({ error: 'no tasks file' }, 404)
-        const parsed = JSON.parse(readFileSync(tasksPath, 'utf8')) as
+        const parsed = JSON.parse(readManagedTextFileSync(tasksPath, 'utf8')) as
           | { tasks?: Array<Record<string, unknown>>; version?: number; lastUpdated?: string }
           | Array<Record<string, unknown>>
         const queue = Array.isArray(parsed)
@@ -6430,7 +7748,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
         task.openQuestions = questions
         task.updatedAt = now
         queue.lastUpdated = now
-        atomicWriteText(tasksPath, JSON.stringify(queue, null, 2) + '\n')
+        writeManagedTextFileSync(tasksPath, JSON.stringify(queue, null, 2) + '\n')
         // Also append to the exploring transcript so the asking agent reads it.
         await resumeExploring({
           memoryDir,
@@ -6446,9 +7764,9 @@ export function buildServeApp(opts: ServeOptions = {}): {
           answer?: string
         }
         if (!body.questionId) return c.json({ error: 'Missing questionId' }, 400)
-        const tasksPath = join(memoryDir, 'TASKS.json')
+        const tasksPath = projectTasksPath(project.path)
         if (!existsSync(tasksPath)) return c.json({ error: 'no tasks file' }, 404)
-        const parsed = JSON.parse(readFileSync(tasksPath, 'utf8')) as
+        const parsed = JSON.parse(readManagedTextFileSync(tasksPath, 'utf8')) as
           | { tasks?: Array<Record<string, unknown>>; version?: number; lastUpdated?: string }
           | Array<Record<string, unknown>>
         const queue = Array.isArray(parsed)
@@ -6467,7 +7785,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
         task.openQuestions = questions
         task.updatedAt = new Date().toISOString()
         queue.lastUpdated = task.updatedAt as string
-        atomicWriteText(tasksPath, JSON.stringify(queue, null, 2) + '\n')
+        writeManagedTextFileSync(tasksPath, JSON.stringify(queue, null, 2) + '\n')
         return c.json({ ok: true, staged: Boolean(nextDraft) })
       }
 
@@ -6490,9 +7808,9 @@ export function buildServeApp(opts: ServeOptions = {}): {
             return c.json({ error: 'Missing answer in answers[]' }, 400)
           }
         }
-        const tasksPath = join(memoryDir, 'TASKS.json')
+        const tasksPath = projectTasksPath(project.path)
         if (!existsSync(tasksPath)) return c.json({ error: 'no tasks file' }, 404)
-        const parsed = JSON.parse(readFileSync(tasksPath, 'utf8')) as
+        const parsed = JSON.parse(readManagedTextFileSync(tasksPath, 'utf8')) as
           | { tasks?: Array<Record<string, unknown>>; version?: number; lastUpdated?: string }
           | Array<Record<string, unknown>>
         const queue = Array.isArray(parsed)
@@ -6520,7 +7838,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
         task.openQuestions = questions
         task.updatedAt = now
         queue.lastUpdated = now
-        atomicWriteText(tasksPath, JSON.stringify(queue, null, 2) + '\n')
+        writeManagedTextFileSync(tasksPath, JSON.stringify(queue, null, 2) + '\n')
         // Single resume with all answers — agent gets the full batch in one
         // context restart instead of N separate ones.
         await resumeExploring({
@@ -6542,8 +7860,8 @@ export function buildServeApp(opts: ServeOptions = {}): {
           return c.json({ error: 'Missing resolution' }, 400)
         }
         const result = await resolveEscalation({
-          tasksPath: join(memoryDir, 'TASKS.json'),
-          progressPath: join(memoryDir, 'PROGRESS.md'),
+          tasksPath: projectTasksPath(project.path),
+          progressPath: getProjectSystemStatePath(project.path, 'PROGRESS.md'),
           taskId: id,
           escalationId: body.escalationId,
           resolution: body.resolution.trim(),
@@ -6555,9 +7873,9 @@ export function buildServeApp(opts: ServeOptions = {}): {
       }
 
       // hold / resume-hold / shelve / unshelve: in-place mutation of TASKS.json.
-      const tasksPath = join(memoryDir, 'TASKS.json')
+      const tasksPath = projectTasksPath(project.path)
       if (!existsSync(tasksPath)) return c.json({ error: 'no tasks file' }, 404)
-      const parsed = JSON.parse(readFileSync(tasksPath, 'utf8')) as
+      const parsed = JSON.parse(readManagedTextFileSync(tasksPath, 'utf8')) as
         | { tasks?: Array<Record<string, unknown>>; version?: number; lastUpdated?: string }
         | Array<Record<string, unknown>>
       const queue = Array.isArray(parsed)
@@ -6627,7 +7945,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
       task.notes = notes
       task.updatedAt = now
       queue.lastUpdated = now
-      atomicWriteText(tasksPath, JSON.stringify(queue, null, 2) + '\n')
+      writeManagedTextFileSync(tasksPath, JSON.stringify(queue, null, 2) + '\n')
       return c.json({ ok: true, status: task.status })
     } catch (err) {
       return c.json({ error: err instanceof Error ? err.message : String(err) }, 500)
@@ -6641,10 +7959,10 @@ export function buildServeApp(opts: ServeOptions = {}): {
     try {
       if (project.initializationNeeded) return c.json({ running: false, counts: {}, inFlight: [] })
       const run = supervisor.get(project.id)
-      const tasksPath = join(getProjectStateDir(project.path), 'TASKS.json')
+      const tasksPath = projectTasksPath(project.path)
       const empty = { running: run?.status === 'running', counts: {}, inFlight: [] as unknown[] }
       if (!existsSync(tasksPath)) return c.json(empty)
-      const raw = JSON.parse(readFileSync(tasksPath, 'utf8')) as
+      const raw = JSON.parse(readManagedTextFileSync(tasksPath, 'utf8')) as
         | { tasks?: Array<Record<string, unknown>> }
         | Array<Record<string, unknown>>
       const tasks = Array.isArray(raw) ? raw : raw.tasks ?? []
@@ -6705,9 +8023,9 @@ export function buildServeApp(opts: ServeOptions = {}): {
   app.get('/api/project/progress', c => {
     try {
       if (project.initializationNeeded) return c.json({ progress: '' })
-      const progressPath = join(getProjectStateDir(project.path), 'PROGRESS.md')
+      const progressPath = getProjectSystemStatePath(project.path, 'PROGRESS.md')
       if (!existsSync(progressPath)) return c.json({ progress: '' })
-      const raw = readFileSync(progressPath, 'utf8')
+      const raw = readManagedTextFileSync(progressPath, 'utf8')
       // Heartbeat blocks are routine forward transitions — they duplicate
       // the Live Activity feed and clutter the Recent PROGRESS.md panel.
       // Keep only milestones, blocks, escalations, and free-form agent
@@ -6800,7 +8118,6 @@ export function buildServeApp(opts: ServeOptions = {}): {
     })
     const defaults = makeDefaultSettings()
     const project = Object.entries(settings.project)
-      .filter(([name]) => name !== 'merge_policy')
       .map(([name, entry]) => ({
         scope: 'project' as const,
         name,
@@ -6915,7 +8232,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
   // -------------------------------------------------------------------------
   // API: design system
   //
-  // Project-scoped; lives at .guildhall/design-system.yaml. The spec agent
+  // Project-scoped; lives in system-local project-state. The spec agent
   // drafts it; a human approves. Agents consume the approved revision via
   // context-builder's summary block — read the full file for richer surface.
   // -------------------------------------------------------------------------
@@ -7006,10 +8323,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
       if (project.initializationNeeded) return c.json({ initializationNeeded: true })
       const memoryDir = getProjectStateDir(project.path)
       const feedback = await readDesignFeedbackStore(memoryDir)
-      const loomaHook = await discoverLoomaDevelopmentHook({
-        globalConfig: readGlobalConfig(),
-      })
-      return c.json({ feedback, loomaHook })
+      return c.json({ feedback })
     } catch (err) {
       return c.json({ error: String(err) }, 500)
     }
@@ -7026,10 +8340,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
       })
       const routed = await routeDesignFinding({ memoryDir, findingId: finding.id })
       const feedback = await readDesignFeedbackStore(memoryDir)
-      const loomaHook = await discoverLoomaDevelopmentHook({
-        globalConfig: readGlobalConfig(),
-      })
-      return c.json({ ok: true, routed, feedback, loomaHook })
+      return c.json({ ok: true, routed, feedback })
     } catch (err) {
       return c.json({ error: String(err) }, 400)
     }
@@ -7045,10 +8356,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
         feedback: body as never,
       })
       const feedback = await readDesignFeedbackStore(memoryDir)
-      const loomaHook = await discoverLoomaDevelopmentHook({
-        globalConfig: readGlobalConfig(),
-      })
-      return c.json({ ok: true, ownerFeedback, feedback, loomaHook })
+      return c.json({ ok: true, ownerFeedback, feedback })
     } catch (err) {
       return c.json({ error: String(err) }, 400)
     }
@@ -7067,10 +8375,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
         ...(feedbackIds ? { feedbackIds } : {}),
       })
       const feedback = await readDesignFeedbackStore(memoryDir)
-      const loomaHook = await discoverLoomaDevelopmentHook({
-        globalConfig: readGlobalConfig(),
-      })
-      return c.json({ ok: true, packet, feedback, loomaHook })
+      return c.json({ ok: true, packet, feedback })
     } catch (err) {
       return c.json({ error: String(err) }, 400)
     }
@@ -7151,12 +8456,17 @@ export function buildServeApp(opts: ServeOptions = {}): {
       }
       if (project.initializationNeeded) return c.json({ initializationNeeded: true, scope: closureScope })
       const memoryDir = getProjectStateDir(project.path)
-      const tasksPath = join(memoryDir, 'TASKS.json')
+      const tasksPath = projectTasksPath(project.path)
       const rawTasks: Array<Record<string, unknown>> = (() => {
         if (!existsSync(tasksPath)) return []
-        const raw = JSON.parse(readFileSync(tasksPath, 'utf8')) as
-          | { tasks?: Array<Record<string, unknown>> }
-          | Array<Record<string, unknown>>
+        let raw: { tasks?: Array<Record<string, unknown>> } | Array<Record<string, unknown>>
+        try {
+          raw = JSON.parse(readManagedTextFileSync(tasksPath, 'utf8')) as
+            | { tasks?: Array<Record<string, unknown>> }
+            | Array<Record<string, unknown>>
+        } catch {
+          throw new Error('Could not read the saved task state file. Fix project-state/TASKS.json, then reload closure checks.')
+        }
         return Array.isArray(raw) ? raw : raw.tasks ?? []
       })()
       const tasks = await Promise.all(rawTasks.map((task) => buildEffectiveTask(project.path, task as Task)))
@@ -7169,6 +8479,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
           notReadyReason: `Guildhall has one more question for ${activePressureTest.target.title}. Answer it before judging whether the current work can close.`,
           statusCounts: {},
           openEscalations: [],
+          incompleteBriefs: [],
           unapprovedBriefs: [],
           unapprovedSpecs: [],
           shelvedUnclaimed: [],
@@ -7212,6 +8523,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
 
       const statusCounts: Record<string, number> = {}
       const openEscalations: Array<{ taskId: string; taskTitle: string; escalationId: string; reason: string; summary: string }> = []
+      const incompleteBriefs: Array<{ id: string; title: string; reason: string }> = []
       const unapprovedBriefs: Array<{ id: string; title: string }> = []
       const unapprovedSpecs: Array<{ id: string; title: string }> = []
       const shelvedUnclaimed: Array<{ id: string; title: string; detail?: string }> = []
@@ -7228,9 +8540,17 @@ export function buildServeApp(opts: ServeOptions = {}): {
         const brief = (t as { productBrief?: { approvedAt?: string } }).productBrief
         const terminal = terminalStatuses.has(status)
         const reservedImportTask = id === WORKSPACE_IMPORT_TASK_ID
-        const approvalPendingStatus = status === 'proposed'
+        const approvalPendingStatus = status === 'proposed' || status === 'ready'
         if (brief && !brief.approvedAt && approvalPendingStatus && !terminal && !reservedImportTask) {
-          unapprovedBriefs.push({ id, title })
+          if (hasCompleteProductBriefRecord(t)) {
+            unapprovedBriefs.push({ id, title })
+          } else {
+            incompleteBriefs.push({
+              id,
+              title,
+              reason: 'Task brief needs user job, why it matters now, success metric, and at least one non-goal before approval.',
+            })
+          }
         }
         if (status === 'spec_review') unapprovedSpecs.push({ id, title })
         if (status === 'shelved') {
@@ -7254,6 +8574,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
 
       const humanBlockingCount =
         openEscalations.length
+        + incompleteBriefs.length
         + unapprovedBriefs.length
         + unapprovedSpecs.length
         + blockedByAgent.length
@@ -7273,6 +8594,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
         ...(tasks.length === 0 ? { notReadyReason: 'No tasks in this project yet.' } : {}),
         statusCounts,
         openEscalations,
+        incompleteBriefs,
         unapprovedBriefs,
         unapprovedSpecs,
         shelvedUnclaimed,
@@ -7284,6 +8606,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
           tasks: tasks.length,
           blockingCount,
           humanBlockingCount,
+          incompleteBriefBlockingCount: incompleteBriefs.length,
           unfinishedCount,
           designSystemBlockingCount,
           dirtyCheckoutBlockingCount,
@@ -7292,7 +8615,10 @@ export function buildServeApp(opts: ServeOptions = {}): {
         },
       })
     } catch (err) {
-      return c.json({ error: String(err) }, 500)
+      return c.json({
+        error: 'Could not load release readiness for this project.',
+        detail: err instanceof Error ? err.message : String(err),
+      }, 500)
     }
   })
 
@@ -7444,17 +8770,19 @@ export function buildServeApp(opts: ServeOptions = {}): {
   //   POST /api/providers/disconnect  revoke a stored credential
   // -------------------------------------------------------------------------
 
-  function describeProviders() {
+  function describeProviders(projectPath?: string) {
     // Run the legacy-config migration on every request. It is idempotent
     // and cheap (a single YAML read + Zod parse) and means users who
     // upgrade in-place never see stale credentials in their project file.
-    try {
-      migrateProjectProvidersToGlobal(currentProjectPath(), {
-        readProject: (p) => readProjectConfig(p),
-        writeProject: (p, patch) => updateProjectConfig(p, patch),
-      })
-    } catch {
-      /* best-effort — never let migration break the endpoint */
+    if (projectPath) {
+      try {
+        migrateProjectProvidersToGlobal(projectPath, {
+          readProject: (p) => readProjectConfig(p),
+          writeProject: (p, patch) => updateProjectConfig(p, patch),
+        })
+      } catch {
+        /* best-effort — never let migration break the endpoint */
+      }
     }
 
     const global = readGlobalProviders()
@@ -7474,6 +8802,84 @@ export function buildServeApp(opts: ServeOptions = {}): {
     }
   }
 
+  async function providersPayload(preferredProvider: string | null) {
+    const { global, creds, claudeCredPath, codexCredPath, claudeInstalled, codexInstalled } =
+      describeProviders()
+
+    const defaultLlamaUrl = 'http://localhost:1234/v1'
+    const configuredLlamaUrl = creds.llamaCppUrl ?? ''
+    const llamaUrl = configuredLlamaUrl || defaultLlamaUrl
+    const llamaReachable = llamaUrl.length > 0 ? await probeLlamaCpp(llamaUrl) : false
+    const configuredOpenAiBaseUrl = creds.openaiBaseUrl ?? ''
+
+    const v = (kind: ProviderKind) => global.providers[kind]?.verifiedAt ?? null
+    const maxConcurrency = (kind: ProviderKind) => global.providers[kind]?.maxConcurrency ?? null
+
+    return {
+      preferredProvider,
+      providers: {
+        'claude-oauth': {
+          label: providerLabelForSetupKey('claude-oauth'),
+          detected: claudeInstalled,
+          verifiedAt: v('claude-oauth'),
+          maxConcurrency: maxConcurrency('claude-oauth'),
+          detail: claudeInstalled
+            ? `Credentials detected at ${claudeCredPath}`
+            : 'Install Claude Code and run `claude auth login`.',
+        },
+        'codex': {
+          label: providerLabelForSetupKey('codex'),
+          detected: codexInstalled,
+          verifiedAt: v('codex-oauth'),
+          maxConcurrency: maxConcurrency('codex-oauth'),
+          detail: codexInstalled
+            ? `Credentials detected at ${codexCredPath}`
+            : 'Install the Codex CLI and run `codex auth login`.',
+        },
+        'llama-cpp': {
+          label: providerLabelForSetupKey('llama-cpp'),
+          detected: llamaReachable,
+          verifiedAt: v('llama-cpp'),
+          maxConcurrency: maxConcurrency('llama-cpp'),
+          url: llamaReachable ? llamaUrl : configuredLlamaUrl || null,
+          detail:
+            configuredLlamaUrl.length === 0 && !llamaReachable
+              ? `Not reachable at ${defaultLlamaUrl}. Start an OpenAI-compatible local server such as LM Studio or llama.cpp, or paste a server URL.`
+              : llamaReachable
+                ? `Reachable at ${llamaUrl}`
+                : `Not reachable at ${llamaUrl}. Start an OpenAI-compatible local server such as LM Studio or llama.cpp and click refresh.`,
+        },
+        'anthropic-api': {
+          label: providerLabelForSetupKey('anthropic-api'),
+          detected: Boolean(creds.anthropicApiKey),
+          verifiedAt: v('anthropic-api'),
+          maxConcurrency: maxConcurrency('anthropic-api'),
+          detail: global.providers['anthropic-api']?.apiKey
+            ? 'Stored in ~/.guildhall/providers.yaml'
+            : process.env.ANTHROPIC_API_KEY
+              ? 'Picked up from $ANTHROPIC_API_KEY'
+              : 'Paste an API key to enable.',
+        },
+        'openai-api': {
+          label: providerLabelForSetupKey('openai-api'),
+          detected: Boolean(creds.openaiApiKey),
+          verifiedAt: v('openai-api'),
+          maxConcurrency: maxConcurrency('openai-api'),
+          baseUrl: configuredOpenAiBaseUrl || null,
+          detail: global.providers['openai-api']?.apiKey
+            ? configuredOpenAiBaseUrl
+              ? `Stored in ~/.guildhall/providers.yaml · ${configuredOpenAiBaseUrl}`
+              : 'Stored in ~/.guildhall/providers.yaml · defaults to https://api.openai.com/v1'
+            : process.env.OPENAI_API_KEY
+              ? configuredOpenAiBaseUrl
+                ? `Picked up from $OPENAI_API_KEY · ${configuredOpenAiBaseUrl}`
+                : 'Picked up from $OPENAI_API_KEY · defaults to https://api.openai.com/v1'
+              : 'Paste an API key to enable. Leave base URL blank to use https://api.openai.com/v1.',
+        },
+      },
+    }
+  }
+
   async function probeLlamaCpp(url: string): Promise<boolean> {
     try {
       const res = await fetch(url + '/models', { signal: AbortSignal.timeout(800) })
@@ -7485,90 +8891,26 @@ export function buildServeApp(opts: ServeOptions = {}): {
 
   app.get('/api/setup/providers', async c => {
     try {
-      const { global, creds, claudeCredPath, codexCredPath, claudeInstalled, codexInstalled } =
-        describeProviders()
+      describeProviders(currentProjectPath())
       const stored = readProjectConfig(currentProjectPath())
-
-      const defaultLlamaUrl = 'http://localhost:1234/v1'
-      const configuredLlamaUrl = creds.llamaCppUrl ?? ''
-      const llamaUrl = configuredLlamaUrl || defaultLlamaUrl
-      const llamaReachable = llamaUrl.length > 0 ? await probeLlamaCpp(llamaUrl) : false
-      const configuredOpenAiBaseUrl = creds.openaiBaseUrl ?? ''
-
-      const v = (kind: ProviderKind) => global.providers[kind]?.verifiedAt ?? null
-      const maxConcurrency = (kind: ProviderKind) => global.providers[kind]?.maxConcurrency ?? null
-
-      return c.json({
-        preferredProvider: stored.preferredProvider ?? readGlobalConfig().preferredProvider ?? null,
-        providers: {
-          'claude-oauth': {
-            label: providerLabelForSetupKey('claude-oauth'),
-            detected: claudeInstalled,
-            verifiedAt: v('claude-oauth'),
-            maxConcurrency: maxConcurrency('claude-oauth'),
-            detail: claudeInstalled
-              ? `Credentials detected at ${claudeCredPath}`
-              : 'Install Claude Code and run `claude auth login`.',
-          },
-          'codex': {
-            label: providerLabelForSetupKey('codex'),
-            detected: codexInstalled,
-            verifiedAt: v('codex-oauth'),
-            maxConcurrency: maxConcurrency('codex-oauth'),
-            detail: codexInstalled
-              ? `Credentials detected at ${codexCredPath}`
-              : 'Install the Codex CLI and run `codex auth login`.',
-          },
-          'llama-cpp': {
-            label: providerLabelForSetupKey('llama-cpp'),
-            detected: llamaReachable,
-            verifiedAt: v('llama-cpp'),
-            maxConcurrency: maxConcurrency('llama-cpp'),
-            url: llamaReachable ? llamaUrl : configuredLlamaUrl || null,
-            detail:
-              configuredLlamaUrl.length === 0 && !llamaReachable
-                ? `Not reachable at ${defaultLlamaUrl}. Start an OpenAI-compatible local server such as LM Studio or llama.cpp, or paste a server URL.`
-                : llamaReachable
-                  ? `Reachable at ${llamaUrl}`
-                  : `Not reachable at ${llamaUrl}. Start an OpenAI-compatible local server such as LM Studio or llama.cpp and click refresh.`,
-          },
-          'anthropic-api': {
-            label: providerLabelForSetupKey('anthropic-api'),
-            detected: Boolean(creds.anthropicApiKey),
-            verifiedAt: v('anthropic-api'),
-            maxConcurrency: maxConcurrency('anthropic-api'),
-            detail: global.providers['anthropic-api']?.apiKey
-              ? 'Stored in ~/.guildhall/providers.yaml'
-              : process.env.ANTHROPIC_API_KEY
-                ? 'Picked up from $ANTHROPIC_API_KEY'
-                : 'Paste an API key to enable.',
-          },
-          'openai-api': {
-            label: providerLabelForSetupKey('openai-api'),
-            detected: Boolean(creds.openaiApiKey),
-            verifiedAt: v('openai-api'),
-            maxConcurrency: maxConcurrency('openai-api'),
-            baseUrl: configuredOpenAiBaseUrl || null,
-            detail: global.providers['openai-api']?.apiKey
-              ? configuredOpenAiBaseUrl
-                ? `Stored in ~/.guildhall/providers.yaml · ${configuredOpenAiBaseUrl}`
-                : 'Stored in ~/.guildhall/providers.yaml · defaults to https://api.openai.com/v1'
-              : process.env.OPENAI_API_KEY
-                ? configuredOpenAiBaseUrl
-                  ? `Picked up from $OPENAI_API_KEY · ${configuredOpenAiBaseUrl}`
-                  : 'Picked up from $OPENAI_API_KEY · defaults to https://api.openai.com/v1'
-                : 'Paste an API key to enable. Leave base URL blank to use https://api.openai.com/v1.',
-          },
-        },
-      })
+      return c.json(await providersPayload(stored.preferredProvider ?? readGlobalConfig().preferredProvider ?? null))
     } catch (err) {
       return c.json({ error: err instanceof Error ? err.message : String(err) }, 500)
     }
   })
 
-  app.post('/api/setup/providers/config', async c => {
+  app.get('/api/providers', async c => {
+    try {
+      return c.json(await providersPayload(readGlobalConfig().preferredProvider ?? null))
+    } catch (err) {
+      return c.json({ error: err instanceof Error ? err.message : String(err) }, 500)
+    }
+  })
+
+  async function handleProviderConfig(c: Context) {
     try {
       const body = (await c.req.json().catch(() => ({}))) as {
+        scope?: 'global' | 'project'
         provider?: string
         preferredProvider?: string
         anthropicApiKey?: string
@@ -7608,10 +8950,17 @@ export function buildServeApp(opts: ServeOptions = {}): {
         if (!(allowed as readonly string[]).includes(body.preferredProvider)) {
           return c.json({ error: `Unknown provider "${body.preferredProvider}"` }, 400)
         }
-        updateGlobalConfig({
-          ...readGlobalConfig(),
-          preferredProvider: body.preferredProvider as (typeof allowed)[number],
-        })
+        if (body.scope === 'project') {
+          updateProjectConfig(currentProjectPath(), {
+            preferredProvider: body.preferredProvider as (typeof allowed)[number],
+          })
+          refreshProject()
+        } else {
+          updateGlobalConfig({
+            ...readGlobalConfig(),
+            preferredProvider: body.preferredProvider as (typeof allowed)[number],
+          })
+        }
       }
       if (
         maxConcurrency != null &&
@@ -7691,7 +9040,10 @@ export function buildServeApp(opts: ServeOptions = {}): {
     } catch (err) {
       return c.json({ error: err instanceof Error ? err.message : String(err) }, 500)
     }
-  })
+  }
+
+  app.post('/api/setup/providers/config', handleProviderConfig)
+  app.post('/api/providers/config', handleProviderConfig)
 
   function normalizeWorktreeIncludeLines(lines: unknown[]): string[] {
     const out: string[] = []
@@ -8018,62 +9370,146 @@ export function buildServeApp(opts: ServeOptions = {}): {
     }
   })
 
+  async function modelsPayload(options: { workspacePath?: string } = {}) {
+    const global = readGlobalConfig()
+    const workspacePath = options.workspacePath
+    const workspace = workspacePath ? readWorkspaceConfig(workspacePath) : null
+    const projectCfg = workspacePath ? readProjectConfig(workspacePath) : null
+    const preferredProvider = projectCfg?.preferredProvider ?? global.preferredProvider
+    const resolved = workspacePath ? resolveConfig({ workspacePath }) : null
+    const globalModels = resolveModelsForProvider(global.models, preferredProvider)
+    const projectModels = resolveModelsForProvider(workspace?.models, preferredProvider)
+    const effectiveModels = resolved?.models ?? globalModels
+    const globalBehavior = global.modelBehavior ?? {}
+    const projectBehavior = workspace?.modelBehavior ?? {}
+    const effectiveBehavior = resolved?.modelBehavior ?? globalBehavior
+    const creds = resolveGlobalCredentials()
+    const loadedModels = creds.llamaCppUrl
+      ? await loadedLlamaModelIds(creds.llamaCppUrl).catch(() => [])
+      : []
+    const missingModels = loadedModels.length > 0 && isCompleteModelAssignment(effectiveModels)
+      ? missingAssignedModels(effectiveModels, loadedModels)
+      : []
+    return {
+      globalModels,
+      ...(workspace ? { projectModels } : {}),
+      effectiveModels,
+      globalBehavior,
+      ...(workspace ? { projectBehavior } : {}),
+      effectiveBehavior,
+      behaviorProfiles: MODEL_BEHAVIOR_PROFILES,
+      loadedModels,
+      missingModels,
+      catalog: [
+        ...new Map(
+          [
+            ...loadedModels.map(id => ({
+              id,
+              provider: 'openai-compatible',
+              notes: 'Loaded on the configured local server',
+            })),
+            ...MODEL_CATALOG.map(m => ({
+              id: m.id,
+              provider: m.provider,
+              notes: m.notes ?? '',
+            })),
+            ...Object.values(globalModels).map(id => ({
+              id,
+              provider: 'openai-compatible',
+              notes: 'Global default',
+            })),
+            ...Object.values(projectModels).map(id => ({
+              id,
+              provider: 'openai-compatible',
+              notes: 'Project override',
+            })),
+          ].map(item => [item.id, item]),
+        ).values(),
+      ],
+    }
+  }
+
   app.get('/api/config/models', async c => {
     try {
-      const global = readGlobalConfig()
-      const workspacePath = currentProjectPath()
-      const workspace = readWorkspaceConfig(workspacePath)
-      const projectCfg = readProjectConfig(workspacePath)
-      const preferredProvider = projectCfg.preferredProvider ?? global.preferredProvider
-      const resolved = resolveConfig({ workspacePath })
-      const creds = resolveGlobalCredentials()
-      const loadedModels = creds.llamaCppUrl
-        ? await loadedLlamaModelIds(creds.llamaCppUrl).catch(() => [])
-        : []
-      const missingModels = loadedModels.length > 0
-        ? missingAssignedModels(resolved.models, loadedModels)
-        : []
-      return c.json({
-        globalModels: resolveModelsForProvider(global.models, preferredProvider),
-        projectModels: resolveModelsForProvider(workspace.models, preferredProvider),
-        effectiveModels: resolved.models,
-        globalBehavior: global.modelBehavior ?? {},
-        projectBehavior: workspace.modelBehavior ?? {},
-        effectiveBehavior: resolved.modelBehavior,
-        behaviorProfiles: MODEL_BEHAVIOR_PROFILES,
-        loadedModels,
-        missingModels,
-        catalog: [
-          ...new Map(
-            [
-              ...loadedModels.map(id => ({
-                id,
-                provider: 'openai-compatible',
-                notes: 'Loaded on the configured local server',
-              })),
-              ...MODEL_CATALOG.map(m => ({
-                id: m.id,
-                provider: m.provider,
-                notes: m.notes ?? '',
-              })),
-              ...Object.values(resolveModelsForProvider(global.models, preferredProvider)).map(id => ({
-                id,
-                provider: 'openai-compatible',
-                notes: 'Global default',
-              })),
-              ...Object.values(resolveModelsForProvider(workspace.models, preferredProvider)).map(id => ({
-                id,
-                provider: 'openai-compatible',
-                notes: 'Project override',
-              })),
-            ].map(item => [item.id, item]),
-          ).values(),
-        ],
-      })
+      return c.json(await modelsPayload({ workspacePath: currentProjectPath() }))
     } catch (err) {
       return c.json({ error: err instanceof Error ? err.message : String(err) }, 500)
     }
   })
+
+  app.get('/api/models', async c => {
+    try {
+      return c.json(await modelsPayload())
+    } catch (err) {
+      return c.json({ error: err instanceof Error ? err.message : String(err) }, 500)
+    }
+  })
+
+  async function handleGlobalModelsConfig(c: Context) {
+    try {
+      const body = (await c.req.json().catch(() => ({}))) as {
+        scope?: 'global' | 'project' | 'global-default'
+        role?: keyof ModelAssignmentConfig
+        model?: string
+        models?: Partial<ModelAssignmentConfig>
+        behaviorProfile?: ModelBehaviorProfile
+      }
+      if (body.scope !== 'global') return c.json({ error: 'Only global model defaults can be saved here.' }, 400)
+      const roles: Array<keyof ModelAssignmentConfig> = ['spec', 'coordinator', 'worker', 'reviewer', 'gateChecker', 'contextIndexer']
+      const behaviorIds = new Set(MODEL_BEHAVIOR_PROFILES.map(profile => profile.id))
+      const preferredProvider = readGlobalConfig().preferredProvider
+      const requestedModels = body.models && typeof body.models === 'object'
+        ? Object.entries(body.models).filter((entry): entry is [keyof ModelAssignmentConfig, string] => {
+            const [role, model] = entry
+            return roles.includes(role as keyof ModelAssignmentConfig) && typeof model === 'string'
+          })
+        : null
+      if (body.models && requestedModels?.length !== Object.keys(body.models).length) {
+        return c.json({ error: 'Unknown model role' }, 400)
+      }
+      if (!requestedModels && (!body.role || !roles.includes(body.role))) {
+        return c.json({ error: 'Unknown model role' }, 400)
+      }
+      const requestedBehavior = typeof body.behaviorProfile === 'string'
+        ? body.behaviorProfile.trim()
+        : undefined
+      if (requestedBehavior && !behaviorIds.has(requestedBehavior as ModelBehaviorProfile)) {
+        return c.json({ error: 'Unknown behavior profile' }, 400)
+      }
+      const hasSingleModel = typeof body.model === 'string'
+      const hasBehavior = requestedBehavior !== undefined
+      if (!requestedModels && !hasSingleModel && !hasBehavior) {
+        return c.json({ error: 'Missing "model" or behaviorProfile' }, 400)
+      }
+      const global = readGlobalConfig()
+      const nextModels = { ...resolveModelsForProvider(global.models, preferredProvider) }
+      if (requestedModels) {
+        for (const [role, model] of requestedModels) {
+          const trimmed = model.trim()
+          if (!trimmed) return c.json({ error: 'Missing "model"' }, 400)
+          nextModels[role] = trimmed
+        }
+      } else if (hasSingleModel) {
+        const model = body.model?.trim()
+        if (!model || !body.role) return c.json({ error: 'Missing "model"' }, 400)
+        nextModels[body.role] = model
+      }
+      updateGlobalConfig({
+        ...global,
+        ...(requestedModels || hasSingleModel
+          ? { models: writeModelsForProvider(global.models, preferredProvider, nextModels) }
+          : {}),
+        ...(requestedBehavior && body.role
+          ? { modelBehavior: { ...(global.modelBehavior ?? {}), [body.role]: requestedBehavior as ModelBehaviorProfile } }
+          : {}),
+      })
+      return c.json({ ok: true })
+    } catch (err) {
+      return c.json({ error: err instanceof Error ? err.message : String(err) }, 500)
+    }
+  }
+
+  app.post('/api/models', handleGlobalModelsConfig)
 
   app.post('/api/config/models', async c => {
     try {
@@ -8404,17 +9840,19 @@ export function buildServeApp(opts: ServeOptions = {}): {
   })
 
   // -------------------------------------------------------------------------
-  // Static web bundle (Svelte 5 dashboard). dist/web/ is emitted by build.mjs.
-  // The bundle mounts into the #svelte-root element in dashboardHtml().
+  // Static web bundle (SvelteKit dashboard). dist/web/ is emitted by build.mjs
+  // through Vite/SvelteKit, then served by this Hono host.
   // -------------------------------------------------------------------------
-  app.get('/web/app.js', c => serveWebAsset(c, 'app.js', 'text/javascript; charset=utf-8'))
-  app.get('/web/app.css', c => serveWebAsset(c, 'app.css', 'text/css; charset=utf-8'))
-  app.get('/web/app.js.map', c => serveWebAsset(c, 'app.js.map', 'application/json'))
-  app.get('/web/app.css.map', c => serveWebAsset(c, 'app.css.map', 'application/json'))
+  app.get('/_app/*', c => serveWebAssetPath(c, new URL(c.req.url).pathname.slice(1)))
   app.get('/icons/:filename', c => serveWebIcon(c, c.req.param('filename')))
   app.get('/favicon.ico', c => serveWebIcon(c, 'favicon.ico'))
   app.get('/apple-touch-icon.png', c => serveWebIcon(c, 'apple-touch-icon.png'))
   app.get('/site.webmanifest', c => serveWebIcon(c, 'site.webmanifest'))
+
+  app.all('/api/*', c => c.json({
+    error: 'API route not found',
+    path: new URL(c.req.url).pathname,
+  }, 404))
 
   // -------------------------------------------------------------------------
   // SPA (catch-all)
@@ -8453,6 +9891,18 @@ export async function runServe(opts: ServeOptions = {}): Promise<void> {
     const distEntry = [join(here, 'cli.js'), join(here, '..', 'cli.js')].find(p => existsSync(p))
     if (distEntry) {
       const mtime = statSync(distEntry).mtimeMs
+      void stopStaleGuildhallProcesses({
+        currentPid: process.pid,
+        currentBuildMtimeMs: Math.floor(mtime),
+        ...(opts.staleProcessGuard?.listProcesses ? { listProcesses: opts.staleProcessGuard.listProcesses } : {}),
+        ...(opts.staleProcessGuard?.killProcess ? { killProcess: opts.staleProcessGuard.killProcess } : {}),
+      }).then(result => {
+        if (result.stopped.length > 0) {
+          console.log(`[guildhall serve] Stopped ${result.stopped.length} stale Guildhall process${result.stopped.length === 1 ? '' : 'es'}.`)
+        }
+      }).catch(() => {
+        /* non-fatal */
+      })
       console.log(`[guildhall serve] Loaded build: ${new Date(mtime).toISOString()}  (${distEntry})`)
       console.log(`[guildhall serve] Rebuild → restart required (kill ${process.pid} + re-run).`)
     }
@@ -8467,7 +9917,7 @@ export async function runServe(opts: ServeOptions = {}): Promise<void> {
     if (opts.serviceStatePath) {
       try {
         mkdirSync(dirname(opts.serviceStatePath), { recursive: true })
-        writeFileSync(opts.serviceStatePath, JSON.stringify({
+        writeManagedTextFileSync(opts.serviceStatePath, JSON.stringify({
           pid: process.pid,
           port: info.port,
           url: `http://localhost:${info.port}`,
@@ -8477,6 +9927,17 @@ export async function runServe(opts: ServeOptions = {}): Promise<void> {
         /* non-fatal */
       }
     }
+  })
+  server.on('error', err => {
+    const code = typeof err === 'object' && err !== null && 'code' in err
+      ? String((err as { code?: unknown }).code ?? '')
+      : ''
+    if (code === 'EADDRINUSE') {
+      console.error(`[guildhall serve] Port ${port} is already in use; another Guildhall service is already running.`)
+      process.exit(0)
+    }
+    console.error(`[guildhall serve] Server error: ${err instanceof Error ? err.message : String(err)}`)
+    process.exit(1)
   })
 
   // FR-28 / AC-19: cooperative shutdown. SIGINT (Ctrl+C) and SIGTERM both
@@ -8489,7 +9950,7 @@ export async function runServe(opts: ServeOptions = {}): Promise<void> {
   const removeServiceStateIfOwned = async (): Promise<void> => {
     if (!opts.serviceStatePath) return
     try {
-      const raw = await fsp.readFile(opts.serviceStatePath, 'utf8').catch(() => null)
+      const raw = await readManagedTextFile(opts.serviceStatePath, 'utf8').catch(() => null)
       if (!raw) return
       const parsed = JSON.parse(raw) as { pid?: unknown }
       if (parsed.pid !== process.pid) return
@@ -8523,6 +9984,186 @@ export async function runServe(opts: ServeOptions = {}): Promise<void> {
 // dist/web/ is still the build output we expect to exist).
 // ---------------------------------------------------------------------------
 
+function parseStructuralMapReviewAction(value: unknown): StructuralMapReviewAction | null {
+  if (!value || typeof value !== 'object') return null
+  const action = value as Record<string, unknown>
+  const kind = typeof action.kind === 'string' ? action.kind : ''
+  const str = (key: string) => typeof action[key] === 'string' ? String(action[key]) : ''
+  switch (kind) {
+    case 'accept':
+      return { kind }
+    case 'rename_node':
+      return str('nodeId') && str('label') ? { kind, nodeId: str('nodeId'), label: str('label') } : null
+    case 'merge_nodes':
+      return str('sourceNodeId') && str('targetNodeId')
+        ? { kind, sourceNodeId: str('sourceNodeId'), targetNodeId: str('targetNodeId'), ...(str('label') ? { label: str('label') } : {}) }
+        : null
+    case 'split_node':
+      return str('nodeId') && str('newNodeId') && str('label') ? { kind, nodeId: str('nodeId'), newNodeId: str('newNodeId'), label: str('label') } : null
+    case 'mark_cross_cutting':
+      return str('nodeId') ? { kind, nodeId: str('nodeId') } : null
+    case 'mark_package_only':
+      return str('nodeId') ? { kind, nodeId: str('nodeId') } : null
+    case 'ignore_node':
+      return str('nodeId') && str('reason') ? { kind, nodeId: str('nodeId'), reason: str('reason') } : null
+    case 'defer_decision':
+      return str('questionId') ? { kind, questionId: str('questionId'), ...(str('reason') ? { reason: str('reason') } : {}) } : null
+    default:
+      return null
+  }
+}
+
+function resolveLocalProjectRefForGraph(
+  projectId: string,
+  currentProject: { id: string; path: string; config?: { name?: string } | null },
+): (ProjectGraphNodeRef & { path: string }) | null {
+  if (projectId === currentProject.id) {
+    return {
+      id: currentProject.id,
+      label: currentProject.config?.name ?? currentProject.id,
+      path: currentProject.path,
+    }
+  }
+  for (const workspace of listWorkspaces().filter(candidate => candidate.path)) {
+    if (workspace.id === projectId) {
+      return {
+        id: workspace.id,
+        label: workspace.name,
+        path: workspace.path,
+      }
+    }
+    try {
+      const config = readWorkspaceConfig(workspace.path)
+      if (config.kind !== 'workspace') continue
+      const child = resolveWorkspaceProjectPaths(workspace.path, config).find(candidate => candidate.id === projectId)
+      if (child) {
+        return {
+          id: child.id,
+          label: child.label ?? titleCaseGraphLabel(child.id),
+          path: child.path,
+        }
+      }
+    } catch {
+      // Ignore partially initialized registry entries while resolving local graph targets.
+    }
+  }
+  return null
+}
+
+function parseProjectDomainResponsibilityFacet(value: unknown): ProjectDomainResponsibilityFacet | null {
+  if (
+    value === 'provider_capability' ||
+    value === 'shared_contract' ||
+    value === 'consumer_configuration' ||
+    value === 'consumer_verification'
+  ) return value
+  return null
+}
+
+function titleCaseGraphLabel(value: string): string {
+  return value
+    .split(/[-_\s]+/)
+    .filter(Boolean)
+    .map(part => part.slice(0, 1).toUpperCase() + part.slice(1))
+    .join(' ') || value
+}
+
+function structuralDomainsForProjectGraph(projectRoot: string): Array<{
+  id: string
+  label: string
+  path?: string
+  kind: 'domain_group' | 'cross_cutting_domain'
+}> {
+  const map = readAcceptedStructuralMap(projectRoot)
+  if (!map) return []
+  return map.nodes
+    .filter((node): node is typeof node & { kind: 'domain_group' | 'cross_cutting_domain' } =>
+      node.kind === 'domain_group' || node.kind === 'cross_cutting_domain',
+    )
+    .map(node => ({
+      id: node.id,
+      label: node.label,
+      ...(node.relativePath ? { path: node.relativePath } : {}),
+      kind: node.kind,
+    }))
+}
+
+function stringField(value: unknown): string | undefined {
+  return typeof value === 'string' && value.trim() ? value.trim() : undefined
+}
+
+function stringArrayField(value: unknown): string[] | undefined {
+  if (!Array.isArray(value)) return undefined
+  const items = value.filter((item): item is string => typeof item === 'string' && item.trim().length > 0)
+  return items.length > 0 ? items.map(item => item.trim()) : undefined
+}
+
+function parseProjectDependencyDeliveryExpectation(value: Record<string, unknown>): NonNullable<ProjectDependencyEdge['expectedDelivery']> {
+  const nested = value.deliveryExpectation && typeof value.deliveryExpectation === 'object'
+    ? value.deliveryExpectation as Record<string, unknown>
+    : value
+  const format = stringField(nested.format) ?? 'Project dependency delivery'
+  const channel = stringField(nested.channel) ?? 'local project graph'
+  return {
+    format,
+    channel,
+    consumerVerificationPlan: stringArrayField(nested.consumerVerificationPlan) ?? [
+      stringField(nested.consumerVerification) ?? `Verify ${format} from ${channel}.`,
+    ],
+    ...(stringArrayField(nested.providerProofPlan) ? { providerProofPlan: stringArrayField(nested.providerProofPlan) } : {}),
+  }
+}
+
+function parseProjectDependencyDeliveryReceipt(value: Record<string, unknown>): DeliveryReceipt {
+  const nested = value.deliveryReceipt && typeof value.deliveryReceipt === 'object'
+    ? value.deliveryReceipt as Record<string, unknown>
+    : value
+  const format = stringField(nested.format) ?? 'Project dependency delivery'
+  const channel = stringField(nested.channel) ?? 'local project graph'
+  const id = stringField(nested.id) ?? `delivery-${Date.now().toString(36)}`
+  return {
+    id,
+    format,
+    channel,
+    coordinates: stringField(nested.coordinates) ?? channel,
+    providerProof: stringArrayField(nested.providerProof) ?? [
+      stringField(nested.proof) ?? `Provider delivered ${format}.`,
+    ],
+  }
+}
+
+function parseConsumerReturnPacket(value: Record<string, unknown>): ConsumerReturnPacket {
+  const nested = value.returnPacket && typeof value.returnPacket === 'object'
+    ? value.returnPacket as Record<string, unknown>
+    : value
+  return {
+    deliveryReceiptId: stringField(nested.deliveryReceiptId) ?? stringField(nested.receiptId) ?? 'latest',
+    mismatchKind: consumerReturnMismatchKind(stringField(nested.mismatchKind)),
+    expected: stringField(nested.expected) ?? 'The delivery should match the negotiated format and channel.',
+    received: stringField(nested.received) ?? 'The delivery could not be consumed as provided.',
+    failedVerification: stringArrayField(nested.failedVerification) ?? [
+      stringField(nested.failedCheck) ?? 'Consumer verification failed.',
+    ],
+    evidenceRefs: stringArrayField(nested.evidenceRefs) ?? [],
+    requestedCorrection: stringField(nested.requestedCorrection) ?? 'Please redeliver in the negotiated format.',
+  }
+}
+
+function consumerReturnMismatchKind(value: string | undefined): ConsumerReturnPacket['mismatchKind'] {
+  switch (value) {
+    case 'format':
+    case 'channel':
+    case 'scope':
+    case 'behavior':
+    case 'compatibility':
+    case 'docs':
+    case 'proof':
+      return value
+    default:
+      return 'format'
+  }
+}
+
 const WEB_DIR = (() => {
   const here = dirname(fileURLToPath(import.meta.url))
   // In the bundled build, cli.js sits at dist/cli.js and web assets at dist/web/.
@@ -8532,28 +10173,35 @@ const WEB_DIR = (() => {
   return resolve(here, '..', '..', 'dist', 'web')
 })()
 
-const WEB_ASSET_VERSION = (() => {
-  try {
-    return String(Math.floor(statSync(join(WEB_DIR, 'app.js')).mtimeMs))
-  } catch {
-    return 'dev'
-  }
-})()
+function webContentType(filename: string): string {
+  const extension = extname(filename).toLowerCase()
+  if (extension === '.js') return 'text/javascript; charset=utf-8'
+  if (extension === '.css') return 'text/css; charset=utf-8'
+  if (extension === '.json' || extension === '.map') return 'application/json'
+  if (extension === '.svg') return 'image/svg+xml'
+  return iconContentType(filename)
+}
 
-async function serveWebAsset(
-  c: Context,
-  filename: string,
-  contentType: string,
-): Promise<Response> {
-  const path = join(WEB_DIR, filename)
-  if (!existsSync(path)) {
+function resolveWebAssetPath(filename: string): string | null {
+  const normalized = filename.replace(/^\/+/, '')
+  const resolved = resolve(WEB_DIR, normalized)
+  const root = `${resolve(WEB_DIR)}${pathSeparator}`
+  if (resolved !== resolve(WEB_DIR) && !resolved.startsWith(root)) return null
+  return resolved
+}
+
+async function serveWebAssetPath(c: Context, filename: string): Promise<Response> {
+  const path = resolveWebAssetPath(filename)
+  if (!path || !existsSync(path)) {
     return c.text(`web asset not built: ${filename} (run pnpm build)`, 404)
   }
   const body = await fsp.readFile(path)
   return new Response(body, {
     headers: {
-      'content-type': contentType,
-      'cache-control': 'no-store, no-cache, must-revalidate',
+      'content-type': webContentType(filename),
+      'cache-control': filename.startsWith('_app/immutable/')
+        ? 'public, max-age=31536000, immutable'
+        : 'no-store, no-cache, must-revalidate',
       pragma: 'no-cache',
     },
   })
@@ -8570,36 +10218,17 @@ function iconContentType(filename: string): string {
 async function serveWebIcon(c: Context, filename: string): Promise<Response> {
   const safeName = basename(filename)
   if (safeName !== filename) return c.text('invalid icon path', 400)
-  return serveWebAsset(c, join('icons', safeName), iconContentType(safeName))
+  return serveWebAssetPath(c, join('icons', safeName))
 }
 
 // ---------------------------------------------------------------------------
-// Inline dashboard SPA
+// SvelteKit dashboard SPA
 // ---------------------------------------------------------------------------
 
 export function dashboardHtml(): string {
-  return `<!DOCTYPE html>
-<html lang="en">
-<head>
-  <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <meta name="theme-color" content="#0f0d16" />
-  <title>Guildhall</title>
-  <link rel="icon" href="/favicon.ico" sizes="any" />
-  <link rel="icon" type="image/png" sizes="32x32" href="/icons/genfavicon-32.png" />
-  <link rel="icon" type="image/png" sizes="16x16" href="/icons/genfavicon-16.png" />
-  <link rel="apple-touch-icon" href="/apple-touch-icon.png" />
-  <link rel="manifest" href="/site.webmanifest" />
-  <link rel="stylesheet" href="/web/app.css?v=${WEB_ASSET_VERSION}" />
-</head>
-<body>
-  <div id="svelte-root"></div>
-  <noscript>
-    <p style="color:#e8e8f0;background:#0f0f11;padding:24px;font-family:system-ui,sans-serif">
-      Guildhall requires JavaScript. Enable it and reload.
-    </p>
-  </noscript>
-  <script type="module" src="/web/app.js?v=${WEB_ASSET_VERSION}"></script>
-</body>
-</html>`
+  const indexPath = join(WEB_DIR, 'index.html')
+  if (!existsSync(indexPath)) {
+    return `<!doctype html><html lang="en"><head><meta charset="UTF-8" /><title>Guildhall</title></head><body><p>web app not built: index.html (run pnpm build)</p></body></html>`
+  }
+  return readFileSync(indexPath, 'utf8')
 }

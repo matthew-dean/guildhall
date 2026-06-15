@@ -1,7 +1,7 @@
 import fs from 'node:fs/promises'
 import path from 'node:path'
 import { TaskQueue, type Task, type TaskEvidenceEvent } from '@guildhall/core'
-import { atomicWriteText, getProjectLocalHistoryDir } from '@guildhall/sessions'
+import { atomicWriteText, getLegacyProjectStatePath, getProjectLocalHistoryDir } from '@guildhall/sessions'
 import {
   legacyEvidenceFromTask,
   legacyRuntimeFromTask,
@@ -32,7 +32,7 @@ export interface TaskStateMigrationResult {
 }
 
 function tasksPath(projectRoot: string): string {
-  return path.join(projectRoot, '.guildhall', 'TASKS.json')
+  return getLegacyProjectStatePath(projectRoot, 'TASKS.json')
 }
 
 function backupPath(projectRoot: string): string {

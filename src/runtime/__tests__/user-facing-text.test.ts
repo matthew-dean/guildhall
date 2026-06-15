@@ -5,7 +5,7 @@ import { isInternalAgentNarration, userFacingText } from '../user-facing-text.js
 describe('userFacingText', () => {
   it('rewrites empty model reply errors for user-facing activity', () => {
     expect(userFacingText('ERROR: Model returned an empty assistant message. The turn was ignored to keep the session healthy.'))
-      .toContain('empty model reply')
+      .toContain('empty reply')
   })
 
   it('rewrites idle-limit and internal research-budget narration', () => {

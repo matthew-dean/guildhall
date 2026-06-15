@@ -72,11 +72,43 @@ export function sortEventsChronologically(items: EventEnvelope[]): EventEnvelope
 
 export interface WorkSurfaceModel {
   tasks: Task[]
+  importDrafts: Task[]
   importDraftCount: number
   nextImportDraft: Task | null
+  workAreasByTaskId: Record<string, WorkArea>
+  workAreaOptions: WorkArea[]
   needsMeta: boolean
   running: boolean
   events: EventEnvelope[]
+}
+
+export type WorkAreaKind =
+  | 'child_project'
+  | 'structural_domain'
+  | 'cross_cutting_domain'
+  | 'coordinator_domain'
+  | 'task_domain'
+  | 'source_path_fallback'
+  | 'project'
+
+export type WorkAreaSource =
+  | 'project_graph'
+  | 'structural_map'
+  | 'routing_context'
+  | 'task'
+  | 'source_ref'
+  | 'description_fallback'
+  | 'fallback'
+
+export type WorkAreaConfidence = 'accepted' | 'inferred' | 'fallback'
+
+export interface WorkArea {
+  id: string
+  label: string
+  kind: WorkAreaKind
+  source: WorkAreaSource
+  confidence: WorkAreaConfidence
+  path?: string
 }
 
 export type ProjectActivityTone = 'neutral' | 'running' | 'ok' | 'warn' | 'danger'
@@ -108,18 +140,226 @@ export function buildProjectActivitySummary(summary: ProjectActivitySummary): Pr
 }
 
 export function buildWorkSurface(detail: ProjectDetail): WorkSurfaceModel {
-  const allTasks = detail.tasks ?? []
-  const importDrafts = allTasks.filter(task => task.status === 'import_draft')
-  const tasks = allTasks.filter(task => task.status !== 'import_draft')
+  const visibleWorkTasks = visibleProjectTasks(detail)
+  const importDrafts = visibleWorkTasks.filter(task => task.status === 'import_draft')
+  const tasks = visibleWorkTasks.filter(task => task.status !== 'import_draft')
   const coordinators = detail.config?.coordinators ?? []
+  const workAreasByTaskId = buildWorkAreasByTaskId(detail, visibleWorkTasks)
   return {
     tasks,
+    importDrafts,
     importDraftCount: importDrafts.length,
     nextImportDraft: importDrafts[0] ?? null,
+    workAreasByTaskId,
+    workAreaOptions: workAreaOptions(visibleWorkTasks, workAreasByTaskId),
     needsMeta: coordinators.length === 0,
     running: (detail.run?.status ?? 'stopped') === 'running',
     events: sortEventsChronologically(detail.recentEvents ?? []),
   }
+}
+
+function visibleProjectTasks(detail: ProjectDetail): Task[] {
+  const allTasks = detail.tasks ?? []
+  const progressByTaskId = detail.workProgress?.byTaskId ?? {}
+  return allTasks.filter(task => {
+    const id = typeof task.id === 'string' ? task.id : ''
+    const progress = id ? progressByTaskId[id] as { visibility?: { kind?: string; countInProjectTotals?: boolean } } | undefined : undefined
+    if (!progress?.visibility) return true
+    return progress.visibility.kind !== 'internal_step' && progress.visibility.kind !== 'hidden'
+  })
+}
+
+function buildWorkAreasByTaskId(detail: ProjectDetail, tasks: Task[]): Record<string, WorkArea> {
+  const byTaskId: Record<string, WorkArea> = {}
+  for (const task of tasks) {
+    byTaskId[task.id] = resolveWorkArea(detail, task)
+  }
+  return byTaskId
+}
+
+function workAreaOptions(tasks: Task[], byTaskId: Record<string, WorkArea>): WorkArea[] {
+  const seen = new Map<string, WorkArea>()
+  for (const task of tasks) {
+    const area = byTaskId[task.id]
+    if (!area || seen.has(area.id)) continue
+    seen.set(area.id, area)
+  }
+  return [...seen.values()].sort((left, right) => left.label.localeCompare(right.label, undefined, { sensitivity: 'base' }))
+}
+
+export function resolveWorkArea(detail: ProjectDetail, task: Task): WorkArea {
+  return (
+    workAreaFromAcceptedStructuralMap(detail, task) ??
+    workAreaFromRoutingContext(detail, task) ??
+    workAreaFromTaskDomain(detail, task) ??
+    workAreaFromSourceRef(task) ??
+    workAreaFromDescription(task) ??
+    {
+      id: 'project',
+      label: 'Project',
+      kind: 'project',
+      source: 'fallback',
+      confidence: 'fallback',
+    }
+  )
+}
+
+function workAreaFromAcceptedStructuralMap(detail: ProjectDetail, task: Task): WorkArea | null {
+  const review = detail.structuralMapReview
+  if (review?.state !== 'accepted') return null
+  const pathHints = taskPathHints(task)
+  const candidates = [
+    ...(review.domains ?? []).map(node => ({ ...node, kind: 'structural_domain' as const })),
+    ...(review.crossCuttingDomains ?? []).map(node => ({ ...node, kind: 'cross_cutting_domain' as const })),
+  ]
+  for (const candidate of candidates) {
+    const path = normalizeRelativePath(candidate.path ?? '')
+    if (!path) continue
+    if (pathHints.some(hint => pathMatchesArea(hint, path))) {
+      return {
+        id: candidate.id || `structural:${path}`,
+        label: candidate.label || labelFromAreaId(candidate.id || path),
+        kind: candidate.kind,
+        source: 'structural_map',
+        confidence: 'accepted',
+        path,
+      }
+    }
+  }
+  return null
+}
+
+function workAreaFromRoutingContext(detail: ProjectDetail, task: Task): WorkArea | null {
+  const routing = detail.taskRoutingContexts?.[task.id]
+  const area = routing?.likelyArea ?? routing?.primaryDomain
+  if (!area?.id && !area?.label && !area?.path) return null
+  const id = area.id || `routing:${normalizeRelativePath(area.path ?? '') || slugifyLabel(area.label ?? 'area')}`
+  return {
+    id,
+    label: area.label || labelFromAreaId(id),
+    kind: id.includes('cross') ? 'cross_cutting_domain' : 'structural_domain',
+    source: 'routing_context',
+    confidence: 'inferred',
+    ...(area.path ? { path: normalizeRelativePath(area.path) } : {}),
+  }
+}
+
+function workAreaFromTaskDomain(detail: ProjectDetail, task: Task): WorkArea | null {
+  const domain = task.domain?.trim()
+  if (!domain) return null
+  if (['workspace-import', 'import', 'import_draft'].includes(domain)) return null
+  const coordinator = (detail.config?.coordinators ?? []).find(candidate => candidate.domain === domain || candidate.id === domain)
+  const label = coordinator?.name || coordinator?.domain || domain
+  return {
+    id: `task-domain:${domain}`,
+    label: humanizeLabel(label),
+    kind: coordinator ? 'coordinator_domain' : 'task_domain',
+    source: 'task',
+    confidence: 'inferred',
+  }
+}
+
+function workAreaFromSourceRef(task: Task): WorkArea | null {
+  const sourcePath = firstSourcePath(task)
+  if (!sourcePath) return null
+  return sourcePathWorkArea(sourcePath, 'source_ref')
+}
+
+function workAreaFromDescription(task: Task): WorkArea | null {
+  const sourcePath = firstPathFromText(task.description ?? '')
+  if (!sourcePath) return null
+  return sourcePathWorkArea(sourcePath, 'description_fallback')
+}
+
+function sourcePathWorkArea(sourcePath: string, source: Extract<WorkAreaSource, 'source_ref' | 'description_fallback'>): WorkArea {
+  const normalized = normalizeRelativePath(sourcePath)
+  const root = normalized.split('/')[0] || normalized
+  return {
+    id: `source-root:${root}`,
+    label: humanizeLabel(root),
+    kind: 'source_path_fallback',
+    source,
+    confidence: 'fallback',
+    path: normalized,
+  }
+}
+
+function taskPathHints(task: Task): string[] {
+  return [
+    firstPathFromText(task.description ?? ''),
+    firstSourcePath(task),
+    task.projectPath ?? '',
+  ]
+    .map(normalizeRelativePath)
+    .filter(Boolean)
+}
+
+function firstSourcePath(task: Task): string {
+  for (const note of task.notes ?? []) {
+    const text = note.content ?? ''
+    const whyMatch = text.match(/Why this may matter:\s*([^:\n]+(?:\/[^:\n]+)+):/i)
+    if (whyMatch?.[1]) return whyMatch[1]
+    const importedMatch = text.match(/Imported from:\s*(.+)$/im)
+    if (importedMatch?.[1]) {
+      const path = firstPathFromText(importedMatch[1])
+      if (path) return path
+    }
+    const generic = firstPathFromText(text)
+    if (generic) return generic
+  }
+  return ''
+}
+
+function firstPathFromText(text: string): string {
+  const match = text.match(/(?:^|\s)((?:~?\/)?[A-Za-z0-9._@()[\]-]+(?:\/[A-Za-z0-9._@()[\]-]+)+):?/)
+  return match?.[1] ?? ''
+}
+
+function normalizeRelativePath(value: string): string {
+  const trimmed = value.trim().replace(/^file:\/\//, '')
+  if (!trimmed) return ''
+  const absoluteLike = trimmed.startsWith('/') || trimmed.startsWith('~/')
+  const withoutHome = trimmed.replace(/^~\//, '')
+  const parts = withoutHome.split('/').filter(Boolean)
+  const markerIndex = absoluteLike ? findWorkspaceMarkerIndex(parts) : -1
+  return absoluteLike && markerIndex > 0 ? parts.slice(markerIndex).join('/') : parts.join('/')
+}
+
+function findWorkspaceMarkerIndex(parts: string[]): number {
+  const gitMarker = parts.lastIndexOf('git')
+  if (gitMarker >= 0 && parts[gitMarker + 3]) return gitMarker + 3
+  const repoMarker = parts.findIndex(part => ['repo', 'repos', 'workspace', 'workspaces'].includes(part))
+  if (repoMarker >= 0 && parts[repoMarker + 1]) return repoMarker + 1
+  const sourceMarker = parts.findIndex((part, index) =>
+    index > 0 &&
+    ['src', 'app', 'apps', 'packages', 'services', 'service', 'lib', 'libs', 'crates', 'cmd', 'internal', 'docs', 'test', 'tests', 'web'].includes(part),
+  )
+  if (sourceMarker > 0) return sourceMarker
+  return -1
+}
+
+function pathMatchesArea(candidatePath: string, areaPath: string): boolean {
+  return candidatePath === areaPath ||
+    candidatePath.startsWith(`${areaPath}/`) ||
+    areaPath.startsWith(`${candidatePath}/`)
+}
+
+function labelFromAreaId(id: string): string {
+  return humanizeLabel(id.replace(/^[^:]+:/, ''))
+}
+
+function humanizeLabel(value: string): string {
+  const trimmed = value.trim()
+  if (!trimmed) return 'Project'
+  return trimmed
+    .split(/[._/-]+/)
+    .filter(Boolean)
+    .map(part => part.length <= 3 && part === part.toUpperCase() ? part : `${part.charAt(0).toUpperCase()}${part.slice(1)}`)
+    .join(' ')
+}
+
+function slugifyLabel(value: string): string {
+  return value.trim().toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '') || 'area'
 }
 
 const COORDINATOR_STATUS_ORDER: Record<string, number> = {
@@ -197,7 +437,7 @@ export function buildCoordinatorsSurface(detail: ProjectDetail, subView: string 
         (coordinator) => (coordinator.id ?? coordinator.domain ?? '').toString() === selectedCoordinatorId,
       )
     : allCoordinators
-  const tasks = (detail.tasks ?? []).filter(task => task.status !== 'import_draft')
+  const tasks = visibleProjectTasks(detail).filter(task => task.status !== 'import_draft')
   const columns = coordinators.map((coordinator) => {
     const domainTasks = tasks.filter((task) => task.domain === coordinator.domain)
     return {

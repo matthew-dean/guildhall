@@ -106,6 +106,7 @@ describe('ProjectProvidersSection', () => {
     const saveCall = calls.find(call => call.url.includes('/api/setup/providers/config'))
     expect(saveCall?.url).toContain('projectId=looma-knit')
     expect(saveCall?.body).toMatchObject({
+      scope: 'project',
       preferredProvider: 'anthropic-api',
     })
   })

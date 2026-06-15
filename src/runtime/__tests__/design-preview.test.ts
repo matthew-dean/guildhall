@@ -3,6 +3,7 @@ import fs from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
 import { discoverDesignPreviewAdapter, DESIGN_STORIES_FILE } from '../design-preview.js'
+import { projectStatePathFromMemoryDir } from '@guildhall/sessions'
 
 describe('discoverDesignPreviewAdapter', () => {
   it('prefers an existing Storybook setup when scripts, config, and stories exist', async () => {
@@ -47,8 +48,10 @@ describe('discoverDesignPreviewAdapter', () => {
     const memoryDir = path.join(projectPath, '.guildhall')
     try {
       await fs.mkdir(memoryDir, { recursive: true })
+      const storiesPath = projectStatePathFromMemoryDir(memoryDir, DESIGN_STORIES_FILE)
+      await fs.mkdir(path.dirname(storiesPath), { recursive: true })
       await fs.writeFile(
-        path.join(memoryDir, DESIGN_STORIES_FILE),
+        storiesPath,
         [
           'version: 1',
           'stories:',

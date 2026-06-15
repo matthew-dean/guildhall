@@ -55,8 +55,1849 @@ routing to the right review surface, unified action-queue counts, and
 exception-based questions ("this looks stale; exclude it?") over making users
 babysit setup/import/provider/release states across multiple pages.
 
+## Environment And Freshness Contract
+
+Use this contract before classifying a browser failure as product behavior.
+
+1. Build/install proof, only when testing the installed app:
+   `pnpm build`, `pnpm dev:install`, restart through the owner-approved service
+   path, then confirm `/api/stale-server` reports `stale:false`.
+2. Service/API proof: record `/api/service` project count and selected project,
+   `/api/project?projectId=:id` for the project under test, and the relevant
+   surface endpoint listed in the matrix below.
+3. Browser proof: record route URL, visible route text, and one DOM or
+   screenshot fact that separates app rendering from Browser bridge health.
+4. Browser bridge failure rule: if API and direct route HTTP are healthy but
+   Browser control times out on navigation, DOM reads, frame tree, or
+   screenshot capture, log it as Browser bridge instability until a normal
+   browser or DOM proof shows the Guildhall route is actually wedged.
+
+Fixture-backed rendered UI tests use `scripts/playwright-fixtures.mjs` and
+`tests/rendered-ui/project-flow.spec.ts`. They prove route and layout contracts
+against deterministic local state. They do not replace live installed-app
+walkthroughs for machine-specific provider, process, git, or project-history
+behavior.
+
+## Project-State Roster
+
+Live project roles keep the broad user test honest. Refresh this roster from
+`/api/service`, `/api/project?projectId=:id`, and the relevant surface endpoint
+before a release-gating audit.
+
+| Required state | Current live representative | Last verified | Readiness summary | Fixture representative | Gaps |
+| --- | --- | --- | --- | --- | --- |
+| Clean initialized project | Narrative Harness | 2026-06-04 | Ready specs and inbox items; Thread route has a live performance/bridge suspect. | `narrative-harness` | Reproduce Thread with Browser bridge and direct DOM proof. |
+| Owner-input blocked project | Jess | 2026-06-04 | Setup/import owner actions and structural-review bounded chat. | `looma-knit` question task | Add fixture owner-input route selection beyond migration gate. |
+| Blocked/recovery-heavy project | t-minus-t | 2026-06-04 | Small blocked/exploring contrast project. | `tiny-demo` | Live recovery script still needs route proof. |
+| Dirty worktree blockers | Commerce project | 2026-06-04 | Setup/owner-input blocked with blocker/readiness disagreement suspect. | `dirty-service` | Fixture proves dirty Guildhall-owned checkout release blocker; live Commerce replay still useful. |
+| Accepted structure/contracts | Jess | 2026-06-04 | Structural map accepted, 42 work areas and 26 contracts in live proof. | `looma-knit` package/design-state fixture | Rendered Structure route is covered; live Jess contract proof remains useful. |
+| No runnable work | Commerce project | 2026-06-04/05 | Zero current tasks plus setup pressure. | `scratch-setup-pending` | Fixture proves attached-but-uninitialized routing; live Commerce replay now proves no Start/Resume affordance. |
+| Fresh onboarding | Reset Jess / new attach | 2026-06-03 | Clean setup path proven through saved repo scan recovery. | `/setup` document route | Keep live reset explicit and reversible; fixture only smokes route. |
+
+On 2026-06-04 the live registered set was Looma + Knit, t-minus-t, Fair Labor
+License, Font something, Narrative Harness, Commerce project, and Jess. Do not
+assume this roster is current after a service restart; refresh it for each live
+audit.
+
+Feature-shape coverage must not depend on Matthew's current registered
+projects. Fixture and live-test plans should keep at least one representative
+for each product capability shape below, with unfamiliar project names and
+non-JavaScript proof language where possible.
+
+| Feature shape | Fixture representative | Why it matters | Current state |
+| --- | --- | --- | --- |
+| Docs-only corpus | `docs-compass` | Proves Overview/Structure/Work can describe review-only projects without build or package assumptions. | Rendered route smoke added; deeper task/proof copy still pending. |
+| Infrastructure / IaC | `pipeline-ops` | Proves release criteria and readiness language do not assume app/browser workflows. | Rendered release-criteria smoke added. |
+| Native/mobile package | `mobile-kit` | Proves Work routing and task language survive Swift/package-style projects. | Rendered Work route smoke added. |
+| Service/library project | `api-broker` | Proves Thread and project shell behavior on non-UI service work. | Rendered Thread route smoke added. |
+| Provider/consumer capability | `consumer-app` + `provider-library` | Proves Structure, capability linking, and handoff labels work without Looma/Knit/Editor examples. | Rendered handoff fixture covers consumer/provider labels, active handoff copy, connected-project count, and contract count. |
+| Dirty or unreadable readiness | `dirty-service` / corrupt task-state fixture still proposed | Proves Fleet, Overview, Thread, and Release agree on blockers when shared action data is missing. | Rendered dirty-checkout release fixture added; corrupt-task API-error path remains unit-level. |
+| Setup-pending empty project | `scratch-setup-pending` | Proves zero-task projects route to setup/intake instead of looking startable by accident. | Rendered uninitialized project-shell fixture added. |
+| Capability boundary request | `capability-boundary` | Proves Thread keeps owner approval decisions visible alongside active project/thread state. | Rendered Thread fixture and focused component regression added. |
+
+## Surface Matrix
+
+Use this as the canonical user-test matrix. Each row needs either current live
+browser proof or deterministic automated proof before a release readiness claim.
+
+| Surface | Routes | User job | Core project state | API evidence | Browser evidence | Automated coverage | Status / gap |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| Fleet home | `/projects`, header/nav | See registered projects, model/provider health, work mix, needs-you count, attach project, refresh without stale loading. | Multi-project fleet, blocked, ready, done-heavy, setup-pending. | `/api/service`, `/api/stale-server`. | Project cards, dashboard counts, open selected project. | Rendered UI covers desktop/mobile cards and project open. Component tests cover service cache and action controls. | Covered by fixture; live freshness still required for installed audits. |
+| Global needs-you | `/needs-you` | See project-grouped alert items, refresh, open the right project/thread/setup surface. | Alert-owned blockers across projects. | `/api/fleet/attention`; avoid project-scoped inbox calls. | Grouped project rows and one action route per item kind. | Component tests cover grouping and route actions; rendered UI covers route load. | Live action-route replay still needed. |
+| Global providers | `/providers` | Inspect configured providers/models and machine defaults without project setup leakage. | No selected project required. | `/api/providers`, `/api/providers/config`, `/api/models` return 200 without `projectId`. | Provider rows and model defaults after hard refresh. | Component tests cover machine-scoped endpoints; rendered UI covers route load. | Live provider secrets remain machine-specific. |
+| Project shell | `/projects/:id` and every project tab | Header, run/connect state, next action, and rail tabs stay tied to the selected project. | Every registered project state. | `/api/project?projectId=:id`, `/api/project/inbox`. | Project name in shell across tabs and refreshes. | Rendered UI covers shell open and rail pin layout. | Looma + Knit Thread identity fixed in code; live Browser bridge replay still needs a normal browser confirmation. |
+| Overview | `/projects/:id`, `/projects/:id/overview/inbox` | Summarize project facts, current work, blockers, provider/runtime/readiness, graph summary, and owner actions. | Ready, blocked, setup-pending, no-runnable-work. | `/api/project`, `/api/project/inbox`. | Overview region, next action, inbox drill-in. | Component tests cover action model, overview rows, blockers. Rendered UI covers Overview and inbox routes. | Setup/readiness consistency fixed in shared action model; live installed replay remains useful. |
+| Thread | `/projects/:id/thread`, `?thread=:id` | Answer owner input, review specs/briefs, inspect task details, ask follow-ups, preserve drawer background route, and decide capability requests. | Owner-input, migration-blocked, high-volume history, setup thread, pending capability request. | `/api/project/thread`, `/api/project/thread/extras`, `/api/project/capability-requests`. | Thread list, selected detail, composer or gated action, drawer open/close, Access requests card. | Component tests are strong; rendered UI covers Looma migration gate/question path and capability-boundary request decisions. | Narrative Harness Thread live hang/bridge suspect remains open. |
+| Work | `/projects/:id/work?view=list|board|columns`, `/workspace-import` | Filter work, switch list/board/columns, open task drawers, review imported drafts. | Import drafts, blocked tasks, ready specs, empty setup project. | `/api/project/progress`, workspace-import endpoints. | View switcher, task rows, drawer route, workspace import review. | Rendered UI covers view switcher and workspace-import route. Component tests cover filters/import routes. | Live import/reconcile replay remains open. |
+| Structure | `/projects/:id/structure` | Read project map, work areas, contracts, setup audit state, handoffs, help, assignment modal. | Accepted structural map/contracts; cross-project handoffs. | `/api/project/project-graph`. | Structure headings, domain/contract counts, assignment action availability. | Component/API tests cover project graph and structure panel; rendered UI covers route load plus consumer/provider handoff fixtures. | Cross-project leakage fixed in shared graph projection; live browser replay remains useful. |
+| Settings | `/projects/:id/settings`, `/settings/ready`, `/settings/providers`, `/settings/coordinators`, `/settings/identity`, `/settings/profile`, `/settings/advanced` | Inspect readiness, providers, coordinators, identity, profile, and developer tools without default internals dump. | Ready, provider-missing, runtime setup, design feedback state. | Setup/config/runtime/capability/design endpoints where relevant. | Each settings subroute loads with focused heading and project shell. | Component tests cover settings shell and panels; rendered UI covers the settings subroute loop and Developer panel. | Provider boundary fixed in code; live provider/runtime states remain machine-specific. |
+| Release | `/projects/:id/release`, `/release/criteria` | Understand whether current work can close, what blocks it, and where to act next. | Done-heavy, blocked verification, dirty checkout, release criteria. | `/api/project/release-readiness`. | Release summary renders `Current work closure`; checks subroute renders `Closure checks`; dirty fixture renders project-local Guildhall cleanup blocker. | Component tests cover ReleaseTab; rendered UI covers route load and dirty-service blocker. | Incomplete-brief/API-error coverage added; installed Fair Labor License and Looma + Knit proof captured. |
+| Timeline / coordinators | `/projects/:id/timeline`, coordinator surfaces | Review recent activity, agent/coordinator status, and route to relevant settings or work. | Active run, paused run, recent events. | Recent-events/activity fields from project APIs. | Timeline/activity text and coordinator status. | Component coverage exists around project activity/status chips; rendered UI covers API Broker timeline route smoke. | Deeper live coordinator action replay still useful. |
+| Setup / initialization | `/projects/:id/setup`, first-run attach/init | Complete identity, providers, direction, repo scan, import/recovery, and clean onboarding. | Fresh/reset onboarding; setup interrupted; setup pending. | `/api/setup/defaults`, `/api/setup/status`, meta-intake endpoints. | Step heading, provider step, launch/recovery action, attached-but-uninitialized shell. | Component tests cover setup recovery and document scroll; rendered UI covers initialized setup route and setup-pending project shell. | Repeatable temp-project onboarding proof added; live reset must remain explicit and reversible. |
+| Task drawer | `/projects/:id/task/:taskId?tab=brief|spec|work|proof` | Review task context, specs, proof, actions, and close back to background route. | Spec review, blocked recovery, done history. | `/api/project/task/:id`, runtime/dev-server endpoints. | Drawer tabs, close behavior, action gating. | Component tests are strong; rendered UI covers direct task drawer route and Thread drawer background. | Live task spec drawer replay remains open. |
+| Cross-project state | Fleet plus Structure/Overview graph links | Confirm unrelated projects do not leak into a project as related work unless dependency/handoff exists. | Multi-project fleet and graph handoffs. | `/api/service`, `/api/project/project-graph`. | Structure/Overview dependency labels. | Runtime/API tests cover graph authority; rendered UI covers consumer/provider handoff fixtures and absence of unrelated project leakage. | Live browser matrix still useful for real registered projects. |
+
+## Scenario Scripts
+
+Run these scripts against one fixture-backed project for automated smoke, then
+against the live roster when doing a release-gating user test.
+
+| Scenario | Steps | Pass signal | Fixture automation | Live proof still needed |
+| --- | --- | --- | --- | --- |
+| Fleet scan and project open | Open `/projects`, scan cards, open a target project, refresh. | Project shell opens the selected project and never shows stale loading after service is healthy. | Covered for Looma + Knit and card layout. | Refresh installed app and check live project roster. |
+| Owner input in Thread | Open `/projects/:id/thread?thread=:id`, select active question, answer or choose an option. | Prompt, context, and composer/action are immediately visible; answer shows progress. | Partially covered through Looma fixture question after migration gate. | Jess structural-review and Commerce setup-pending threads. |
+| Workspace import review | Open `/projects/:id/workspace-import`, review draft rows, drill into a candidate. | Draft state and approve/dismiss/rerun choices are understandable and scoped to project. | Component tests plus rendered route smoke. | Jess and Looma + Knit import/reconcile routes. |
+| Task shaping/drawer | Open Work, open a task drawer, switch brief/spec/work/proof tabs, close. | Drawer preserves background route and gates actions with project readiness. | Component tests; rendered direct drawer smoke pending. | Narrative Harness task spec drawers and Font something task route. |
+| Run / pause | From project shell or Projects home, inspect Start/Resume/Pause label and click only when safe. | Label names exact next action or blocker; setup-pending projects do not look startable. | Component/action-model tests plus Commerce live/card regression. | Dirty worktree live replay. |
+| Recovery | Open a blocked/recovery thread or drawer and choose the recovery path. | The UI explains what happened, what Guildhall needs, and the next safe action. | Component tests for blocked Thread/drawer paths. | t-minus-t and Fair Labor License live recovery routes. |
+| Provider setup | Open `/providers` and project provider settings. | Global providers load without `projectId`; project providers stay project-scoped. | Component tests plus rendered global route smoke. | Machine provider secrets and model lists. |
+| Release closure | Open `/projects/:id/release` and `/release/criteria`. | Blocking checks and closure actions are visible and route to the right work. | Component tests plus rendered route smoke. | Fair Labor License done-heavy release state. |
+| Fresh onboarding | Attach/reset a project, complete identity/providers/launch, recover from interrupted setup. | Setup reaches useful project graph/import state without hiding owner decisions. | Setup route/component smoke plus temp-project API scenario. | Requires explicit reset plan and reversible live state. |
+
+## Automated Coverage Map
+
+| Coverage layer | Current coverage | Missing from automated matrix |
+| --- | --- | --- |
+| Runtime/API unit tests | Strong coverage for project action model, inbox, Thread projection, providers, setup, workspace import, project graph, release readiness, migrations, and task endpoints. | Corrupt task-state route replay and deeper live action replays. |
+| Svelte/component tests | Strong coverage for Thread, ProjectView, Overview, Work, Settings, Structure, Release, Providers, Setup, TaskDrawer, ProjectsHome, Needs You. | Remaining gaps are less about component mounting and more about live route/action replay. |
+| Rendered UI Playwright | Twenty-eight scenarios: Projects home mobile/desktop with fifteen project shapes, legacy route fallback, Looma Thread migration/question path, rail pinning, Work view switcher, Developer settings, global Needs You, Providers, Overview inbox, Structure, workspace import, settings subroute loop, Release summary/checks routes, project setup, setup-pending attached project, direct task drawer route, unfamiliar docs/infra/mobile/service route smokes, Timeline route smoke, dirty release blocker, provider/consumer handoffs, and capability-request Thread. | Deeper route action replays and live machine-specific states. |
+| Live installed browser proof | 2026-06-04 multi-agent proof plus follow-up proof covered service freshness, direct HTTP shells, provider APIs, selected live routes, provider boundary save on a throwaway registered project, Release summary/checks routes, standalone Playwright proof for Narrative Harness Thread, and Commerce setup-blocked/card-label proof. | In-app Browser bridge/tab recovery and remaining per-project replay targets. |
+
+## Active Gaps
+
+These are the current user-test-plan gaps. Keep this list short; move closed
+items into the incident archive below with the evidence intact.
+
+## 2026-06-04 Multi-Agent Audit Evidence
+
+Relaunch note: the first delegated batch failed because the model override used
+`gpt-5-codex`, which the account rejected with:
+`The 'gpt-5-codex' model is not supported when using Codex with a ChatGPT account.`
+The audit lanes were relaunched without a model override and completed with the
+default valid model selection.
+
+Freshness and service proof: `/api/stale-server` returned `stale:false`, pid
+`31712`, process start `2026-06-04T17:51:03.141Z`, matching boot/current build
+mtime `1780595436203`, and installed dist
+`/Users/matthew/.guildhall/app/0.9.1/app/dist/cli.js`. `/api/service` returned
+seven registered initialized projects. Direct HTTP returned `200` SPA shells for
+`/projects`, `/needs-you`, `/providers`, `/setup`, Narrative Harness project
+tabs, Looma + Knit Thread, and Jess setup. `/api/providers` and `/api/models`
+returned `200` without `projectId`.
+
+Live project-state roster from the API:
+
+| Project | API state on 2026-06-04 | Useful user-test role |
+| --- | --- | --- |
+| Looma + Knit | 39 tasks; imported task/spec-fill/project-understanding pressure; Thread has known shell identity issue. | High-volume Thread, Work filters, task drawer, project shell identity. |
+| t-minus-t | 2 tasks; blocked plus exploring. | Blocked/recovery-heavy project and no-large-backlog contrast. |
+| Fair Labor License | 17 tasks; completed baseline work plus active/blocked OAuth-style work. | Release readiness, completed-work history, blocked task routing. |
+| Font something | 6 tasks; active import/model tasks and spec drawer candidates. | Model-heavy specs, Work/Thread task drawer routes. |
+| Narrative Harness | 9 tasks; ready specs; 4 inbox items; Thread route produced browser-runtime hang in delegated audit. | Clean initialized project, ready work, heavy Thread performance/recovery. |
+| Commerce project | 0 tasks; setup pending/owner-input pressure; levers default item. | No-runnable-work and setup-blocked consistency. |
+| Jess | 2 tasks; setup/import owner actions; structural-review Thread candidate. | Owner-input, workspace import, accepted structure/contracts regression path. |
+
+Automated coverage summary from inspection-only audit: component/API coverage is
+strong for Thread, task drawers, inbox/action model, providers, setup, release,
+Structure, workspace import, and project summary/action utilities. Rendered
+browser coverage is still thin: the named browser plan exercises only a small
+set of scenarios and is mostly centered on Looma + Knit. A complete user test
+therefore needs fresh live browser proof per project state, not just fixture
+coverage.
+
 ## Current Follow-Ups
 
+- [x] Move the web app build to SvelteKit/Vite static output with real chunk
+  splitting. 2026-06-14 proof: committed a clean checkpoint first
+  (`da19cb57`), added SvelteKit static configuration under `src/web-kit/`,
+  changed `build.mjs` to emit `dist/web/index.html` plus `_app/immutable`
+  assets, served those assets through the existing Hono host, and converted the
+  top-level router surfaces to dynamic imports while keeping project tabs
+  synchronous after component tests showed that tab-level lazy loading changed
+  existing render timing. Verification:
+  `pnpm build`, `pnpm typecheck`, and
+  `pnpm vitest run scripts/release-artifacts.test.ts scripts/publish-script.test.ts src/runtime/__tests__/serve-dashboard.test.ts`
+  passed. Runtime HTTP proof against `node dist/cli.js serve-internal --port
+  7791`: served HTML referenced SvelteKit `_app` assets, ten sampled immutable
+  JS assets returned `200`, and `/_app/version.json` returned `200`. In-app
+  Browser bridge verification was attempted twice but timed out before the
+  webview attached, so the browser gap is bridge instability rather than a
+  proven app-rendering failure.
+
+- [x] Add the 0.11 capability/persona calibration spec to internal planning.
+  2026-06-13 follow-up translated the SkillOpt-style idea into a
+  Guildhall-native, validation-gated calibration loop for personas, review
+  lanes, capability-request policy, memory context policy, and external-agent
+  bridge guidance. The spec keeps adoption staged and reviewable, treats
+  authority/privacy regressions as hard failures, records future Contract Touch
+  and Schema Migration requirements, and links the work into the 0.11
+  implementation tracker. A source audit of `microsoft/SkillOpt` then narrowed
+  the first spike to the reusable `skillopt_sleep.consolidate`/gate path or a
+  source-attributed port, with the full `skillopt` trainer kept as a later
+  benchmark-adapter option. MCP note: the Guildhall MCP tool surface was
+  available, but `guildhall_read_artifact` could not resolve bare `flow-audit`,
+  and this checkout currently has no root `.guildhall/artifacts.yaml`; this
+  update used the local `internal/audits/flow-audit.md` file directly.
+- [x] Start separating logical work counts from internal delivery/proof steps
+  in the shared project summary path. 2026-06-12 implementation added a
+  runtime `workProgress` derivation that treats explicit/future
+  `workVisibility` values and existing verification child tasks as delivery
+  steps instead of project-card-visible tasks; `/api/service` and
+  `/api/project` now emit the shared rollup, project cards prefer visible work
+  counts, and Work surfaces hide internal steps from ordinary task cards while
+  retaining raw `taskCounts` for migration/back-compat inspection. Follow-up
+  on the same slice threads task progress into Work list rows, Planner and
+  Coordinator mini-cards, and the task drawer Overview so blocked/completed
+  delivery steps are visible as detail on the logical work item instead of
+  reappearing as flat task cards. The core task schema now preserves explicit
+  `workVisibility` and `deliverySteps`, and migration
+  `0.10.0/task-delivery-steps` normalizes existing verification/test child
+  tasks into internal delivery-step metadata with a task-state backup. The
+  split-child write path now also marks verification/test children as
+  `internal_step` and records the corresponding parent `deliverySteps` entry at
+  materialization time, so new local work stops creating flat visible proof
+  cards.
+  Verification:
+  `pnpm vitest run src/tools/__tests__/task-queue.test.ts
+  src/runtime/__tests__/work-progress.test.ts
+  src/web/lib/__tests__/project-summary.test.ts
+  src/web/lib/__tests__/project-data.test.ts
+  src/web/lib/__tests__/TaskCard.svelte.test.ts
+  src/web/surfaces/project/__tests__/WorkTab.svelte.test.ts
+  src/web/surfaces/drawer/__tests__/OverviewTab.svelte.test.ts
+  src/core/__tests__/task.test.ts src/runtime/__tests__/migrations.test.ts
+  src/runtime/__tests__/contract-governance.test.ts --reporter=dot`,
+  `pnpm typecheck`, `pnpm lint:contracts`, and `git diff --check` passed.
+- [x] Finish the remaining logical-work delivery-step surfaces from
+  `internal/specs/2026-06-12-guildhall-logical-work-and-delivery-steps.md`.
+  Scope: Project Overview, WorkTreePreview, drawer header, Drawer Current,
+  Drawer Journey, Thread shaping copy, and Inbox/Needs You owner-held step
+  treatment. Keep the rule strict: logical work appears as the visible work
+  item; delivery/proof/check/doc steps appear as progress/detail unless they
+  are owner-held, blocked, or actively being run.
+  - [x] Project Overview shows visible work totals and compact delivery-step
+    progress from shared `workProgress`.
+  - [x] WorkTreePreview separates contained logical work from delivery
+    checklist detail and does not call internal steps child tasks.
+  - [x] Task drawer header, Current, and Journey show shared delivery-step
+    progress without creating a second private checklist model.
+  - [x] Thread shaping copy names logical work items and delivery steps
+    separately when it reports created work.
+  - [x] Inbox/Needs You can present owner-held delivery steps against their
+    containing logical work item.
+  Verification:
+  `pnpm vitest run src/web/surfaces/project/__tests__/ProjectOverviewTab.svelte.test.ts
+  src/web/surfaces/project/__tests__/WorkTab.svelte.test.ts
+  src/web/surfaces/__tests__/TaskDrawer.svelte.test.ts
+  src/web/surfaces/drawer/__tests__/CurrentTab.svelte.test.ts
+  src/web/surfaces/drawer/__tests__/drawer-tabs.svelte.test.ts
+  src/web/surfaces/project/__tests__/ThreadTab.svelte.test.ts
+  src/web/surfaces/project/__tests__/InboxTab.svelte.test.ts --reporter=dot`
+  passed with 7 files and 244 tests. The broader touched slice
+  `pnpm vitest run src/tools/__tests__/task-queue.test.ts
+  src/runtime/__tests__/work-progress.test.ts src/core/__tests__/task.test.ts
+  src/runtime/__tests__/migrations.test.ts
+  src/web/lib/__tests__/project-summary.test.ts
+  src/web/lib/__tests__/project-data.test.ts
+  src/web/lib/__tests__/TaskCard.svelte.test.ts
+  src/web/surfaces/project/__tests__/ProjectOverviewTab.svelte.test.ts
+  src/web/surfaces/project/__tests__/WorkTab.svelte.test.ts
+  src/web/surfaces/__tests__/TaskDrawer.svelte.test.ts
+  src/web/surfaces/drawer/__tests__/CurrentTab.svelte.test.ts
+  src/web/surfaces/drawer/__tests__/drawer-tabs.svelte.test.ts
+  src/web/surfaces/drawer/__tests__/OverviewTab.svelte.test.ts
+  src/web/surfaces/project/__tests__/ThreadTab.svelte.test.ts
+  src/web/surfaces/project/__tests__/InboxTab.svelte.test.ts
+  src/runtime/__tests__/contract-governance.test.ts --reporter=dot`
+  passed with 16 files and 357 tests. `pnpm typecheck`,
+  `pnpm lint:contracts`, and `git diff --check` passed.
+- [x] Finish migration walkthrough copy fixes after applying
+  `0.10.0/task-delivery-steps` to registered projects. 2026-06-13 project
+  migration status/apply showed no pending rewrites for all seven registered
+  projects, but the fresh-browser walkthrough found remaining owner-facing
+  flat-task language in Fleet Work mix and WorkTreePreview empty/breakdown
+  copy.
+  - [x] Fleet Work mix counts visible work items instead of saying tasks.
+  - [x] WorkTreePreview empty/breakdown copy says contained work/work items
+    instead of child tasks.
+  - [x] Rebuild, restart fresh service, and replay the migration walkthrough.
+  Verification: `node dist/cli.js migrate status --all --migration
+  0.10.0/task-delivery-steps` and `node dist/cli.js migrate apply --all
+  --migration 0.10.0/task-delivery-steps` reported 0 pending/applied/failed
+  entries for Looma + Knit, t-minus-t, Fair Labor License, Font something,
+  Narrative Harness, Commerce project, and Jess. `pnpm vitest run
+  src/web/surfaces/__tests__/ProjectsHome.svelte.test.ts
+  src/web/surfaces/project/__tests__/WorkTab.svelte.test.ts --reporter=dot`
+  passed with 2 files and 43 tests; the broader touched UI slice passed with
+  12 files and 297 tests. `pnpm typecheck` and `pnpm build` passed. The
+  service was restarted and `/api/stale-server` reported `stale:false`.
+  Browser proof covered `/projects`, `/projects/narrative-harness/overview`,
+  `/projects/narrative-harness/work?tree=preview`,
+  `/projects/narrative-harness/notifications`,
+  `/projects/narrative-harness/settings/ready`, the migration review drawer,
+  and `/projects/narrative-harness/task/coherence-reviewer-mvp?tab=overview`.
+  Rendered proof showed `320 work items` in Fleet Work mix, `8 total work
+  items` on Narrative Harness Overview, no `child tasks` copy in WorkTreePreview
+  or the opened task drawer, and no browser console errors.
+- [x] Replace Work Columns with a List inspector. 2026-06-13 follow-up removed
+  Columns as a top-level Work view, kept List as the default management view,
+  kept Board as the secondary spatial view, and moved selected-work details
+  into a right-side inspector inside List. Legacy `?tree=preview` and
+  `?view=columns` URLs now render List instead of resurrecting the old
+  hierarchy browser.
+  Verification: `pnpm vitest run
+  src/web/surfaces/project/__tests__/WorkTab.svelte.test.ts --reporter=dot`
+  passed with 1 file and 22 tests; the broader touched UI slice passed with
+  12 files and 297 tests; `pnpm typecheck` and `pnpm build` passed; rendered
+  UI fixture proof `pnpm exec playwright test tests/rendered-ui/project-flow.spec.ts
+  -g "native mobile work|work view switcher"` passed with 2 tests. The local
+  service was restarted and `/api/stale-server` reported `stale:false`. Live
+  browser proof on `/projects/narrative-harness/work?view=columns` showed only
+  List/Board controls, no Columns button, List content by default, a
+  `Selected work inspector` after selecting `Build first coherence reviewer
+  MVP`, and no browser console errors.
+
+### Contract Touch Decision
+
+- Work id: `codex:2026-06-06-non-looma-flow-audit-fixes`.
+- Touched contracts: workspace-import status compatibility for missing
+  `.guildhall/TASKS.json`; delivery-spine primitive setup change sets;
+  unmatched `/api/*` route behavior; future-release spec status labels for
+  deferred/superseded 0.11 work.
+- Contracts considered but not touched: project graph persisted topology,
+  delivery receipt storage, remote authority refs, MCP tool signatures, task
+  queue schema shape, owner-input store schema, and action-model run-control
+  semantics.
+- Required follow-up: replay a real non-Looma delivery-spine model through a
+  live task queue after the project has task records again. Jess now has actual
+  drivers, primitives, and validation evidence in system-local state; the queue
+  projection is still empty because Jess has no live task records after
+  repo-state cleanup.
+- Proof required: regression coverage for missing workspace-import state,
+  unknown API namespace routing, and non-Looma primitive setup/apply semantics;
+  focused runtime suites; contract detector; typecheck; build; fresh live
+  smoke after install/restart.
+- Proof provided so far: focused regressions passed for missing workspace-import
+  status, unknown API 404s, and Jess package/API primitive setup; focused
+  `delivery-spine` plus `serve-settings` suites passed with 79 tests;
+  `pnpm lint:contracts`, `git diff --check`, `pnpm typecheck`, and
+  `pnpm build` passed; `pnpm dev:install` plus service restart produced
+  `/api/stale-server` `stale:false` for installed
+  `/Users/matthew/.guildhall/app/0.10.0/app/dist/cli.js`.
+- Waivers: no owner review required for the compatibility reader or API 404
+  catch-all because they narrow failure modes without changing successful
+  documented APIs.
+- Owner-review items: none for the non-Looma delivery-spine model population.
+- Apply/revert behavior: revert the runtime/test changes to restore prior
+  compatibility behavior; remove the spec status edits to restore the prior
+  future-release labels.
+
+### Schema Migration Decision
+
+- Persisted schema touched: none directly. The runtime reader now treats a
+  missing workspace-import task file as an empty queue and tags newly created
+  delivery-spine primitives from primitive setup with the existing optional
+  `source: "generated_from_contract"` field.
+- Scope: project.
+- Change class: backward-compatible reader/defaulting change.
+- Existing data impact: existing projects with no `.guildhall/TASKS.json` no
+  longer fail workspace-import status reads; existing delivery-spine primitives
+  are not rewritten; newly accepted primitive-setup creations get an optional
+  source tag already allowed by the schema.
+- Migration id: none.
+- Safety: automatic.
+- Required before run: false.
+- Compatibility reader: workspace-import queue reader defaults missing task
+  state to an empty v1 queue; delivery-spine primitive setup preserves existing
+  primitive `source` values and only defaults new creations.
+- Fixtures: serve-settings missing-task-state regression; Jess
+  package/API-contract primitive setup regression.
+- Tests: `pnpm vitest run src/runtime/__tests__/delivery-spine.test.ts
+  src/runtime/__tests__/serve-settings.test.ts --reporter=dot`.
+- Owner-facing plan text: no migration prompt is required; projects with no
+  task file can still review workspace import, and contract-created primitives
+  are explicitly labeled as generated from a validated contract.
+- Rollback/revert behavior: revert the runtime change; no stored migration or
+  data rewrite needs rollback.
+
+- [x] Fix the non-Looma workspace-import status crash found in the 2026-06-06
+  multi-agent audit. Live Fair Labor License proof showed
+  `/api/fleet/attention` and the project inbox advertising
+  `Existing repo detected -> /workspace-import`, while
+  `/api/project/workspace-import/status?projectId=fair-labor-license` returned
+  `ENOENT: no such file or directory, open
+  '/Users/matthew/git/oss/fair-labor-license/.guildhall/TASKS.json'`. The
+  workspace-import queue reader now treats a missing task file as a legacy
+  empty queue and creates the state directory before writing, so existing
+  registered repos can show import status before task state exists. Regression:
+  `pnpm vitest run src/runtime/__tests__/serve-settings.test.ts -t "status
+  treats missing task state"` passed.
+- [x] Stop unknown API paths from passing as successful SPA routes. The
+  non-Looma audit found guessed governance endpoints such as
+  `/api/project/contracts` returning `200 text/html`, which can hide wrong API
+  clients. The server now returns JSON `404` for unmatched `/api/*` routes
+  before the SPA catch-all. Regression: `pnpm vitest run
+  src/runtime/__tests__/serve-settings.test.ts -t "unknown API paths"` passed.
+- [x] Add non-Looma delivery-spine/governance proof. The audit found valid
+  empty delivery-spine models across non-Looma projects and Looma/Knit-heavy
+  primitive setup coverage. Added a Jess package/API-contract fixture proving
+  primitive setup validation, owner-review change sets, apply semantics, task
+  delivery links, and validation evidence without Looma/Knit primitives.
+  Regression: `pnpm vitest run src/runtime/__tests__/delivery-spine.test.ts -t
+  "non-Looma package contract"` passed.
+- [x] Populate or replay a real non-Looma delivery-spine model in live project
+  state. Jess now has a system-local delivery-spine record with drivers
+  `jess-core`, `parser-packages`, and `fixture-proof`; primitives
+  `selector-ast-contract`, `core-eval-render-boundary`, and
+  `less-compat-fixtures`; and validation evidence
+  `jess-live-delivery-spine-proof-2026-06-06`. API proof on 2026-06-06:
+  `/api/project/delivery-spine?projectId=jess` returned `valid: true` with 3
+  drivers, 3 primitives, and no validation errors. UI proof:
+  `/projects/jess/settings/delivery` rendered `Delivery model`, `Jess core
+  packages`, `Parser packages`, `Fixture and baseline proof`, `Selector AST
+  contract`, `Core eval/render boundary`, and `Less compatibility fixtures`
+  with no loading or error state. Boundary proof: the record lives under the
+  system-local data persistence path and `find
+  /Users/matthew/git/oss/jess/.guildhall -maxdepth 2 -type f` found no files;
+  `git -C /Users/matthew/git/oss/jess status --short .guildhall` showed only
+  the tracked deletion cleanup entries. Queue proof:
+  `/api/project/delivery-spine/queue?projectId=jess` returned 0 runnable and 0
+  blocked because Jess has no live task records after the repo-state cleanup.
+- [x] Prove a Looma + Knit component can reach delivery through Guildhall UI
+  only. Live attempt on 2026-06-05 picked `ContextMenu` after `AlertDialog`
+  was found split across a blocked imported task and an older brief-cleanup
+  task with missing acceptance criteria. Guildhall UI did move `ContextMenu`
+  from Thread by pressing the selected task action, but delivery did not reach
+  worker implementation, screenshot proof, or e2e proof. Fixes landed during
+  this attempt: clean task worktree bootstrap failures are now handed to the
+  worker when the task explicitly says bootstrap repair is task-owned work, and
+  Thread selected-task start now posts to `/api/project/task/:id/start` with
+  `mode: "one_task"`/`scope: "work_item"` instead of starting a broad project
+  run. Live proof after reinstall showed `/api/stale-server` `stale:false` and
+  pressing the `ContextMenu` `Revise spec` action started a run with
+  `mode: "one_task"`. Remaining blocker: the one-task run stopped after one
+  tick with `stopAfterOneTask reached task task-import-1l0mr2r (escalated)`,
+  leaving `ContextMenu` blocked with
+  `human_judgment_required: Spec shaping timed out before saving durable
+  progress.` The UI also still rendered one-task activity copy as
+  `Working on 37 tasks`, so run-scope messaging needs a separate fix before the
+  proof reads honestly. No Looma/Knit files were directly edited by Codex for
+  this attempt.
+  Follow-up live attempt on 2026-06-06 proved the selected-task dependency-chain
+  behavior is only partial. Browser proof on
+  `/projects/looma-knit/thread?thread=task%3Atask-import-1l0mr2r` showed
+  `ContextMenu` ready and four split child tasks directly underneath:
+  `Component implementation`, `Storybook story`, `Contract README`, and
+  `API docs sync`. Pressing the task action should mean: finish the selected
+  task's blockers/child work first, continue through that closure chain, and
+  auto-stop only when `ContextMenu` is done or the chain is blocked. The exact
+  task-scoped start endpoint returned `mode: "one_task"` and
+  `scope: { type: "work_item", taskId: "task-import-1l0mr2r" }`, and the
+  orchestrator did choose `task-import-1l0mr2r-split-component-implementation`
+  before the parent, but then stopped after one tick with
+  `stopAfterOneTask reached task task-import-1l0mr2r-split-component-implementation
+  (provider_backoff)`. The child task stayed `exploring`, the parent stayed
+  `ready`, and the other children stayed `exploring`. Immediate external
+  blocker: DeepInfra returned HTTP 429 `engine_overloaded`. Product/runtime gap:
+  one-task selected-work mode treats the first child/blocker attempt as the
+  stop boundary instead of treating the requested parent task's closure chain as
+  the boundary. UI gap: after the stop, the selected `ContextMenu` detail still
+  offers `Resume work`, while the moved child appears above it as `Paused` with
+  no clear explanation that provider backoff stopped the chain.
+  Fix pass on 2026-06-06 added runtime coverage for both sides of the selected
+  closure contract: a scoped one-task run now continues after successful linked
+  child completion and auto-closes the selected parent when all linked child work
+  is done, while a blocked linked child stops the run as `dependency_blocked`.
+  Verification: focused orchestrator tests for selected-parent child completion
+  and blocked-child stop, existing `stopAfterOneTask` tests, the task-start
+  endpoint test, `pnpm typecheck`, `pnpm build`, `pnpm dev:install`, service
+  restart, and `/api/stale-server` `stale:false` against installed
+  `/Users/matthew/.guildhall/app/0.10.0/app/dist/cli.js`. Live Looma + Knit
+  proof after reinstall: retrying `ContextMenu` selected
+  `task-import-1l0mr2r-split-component-implementation`, which escalated with
+  `human_judgment_required: Spec agent kept researching after Guildhall asked
+  for durable progress`; retrying the selected parent again stopped immediately
+  with `stopReason: "dependency_blocked"` and stop message
+  `Selected task task-import-1l0mr2r is blocked by linked child work:
+  task-import-1l0mr2r-split-component-implementation is blocked.` Remaining
+  blocker: the first ContextMenu child needs a human/provider recovery path for
+  the spec-agent durable-progress escalation before the selected parent can
+  continue toward completion.
+  Follow-up recovery pass on 2026-06-06 loosened the spec/coordinator
+  durable-progress guard by one bounded read-only follow-up after the
+  durable-progress nudge, while preserving refusal on the second extra
+  read-only turn. Regression coverage now proves the grace path can continue to
+  `update-task` and that a second post-grace read is refused and redirected back
+  to durable progress. Verification: full `src/engine/__tests__/run-query.test.ts`
+  passed, focused `guildhall-agent` nudge tests passed, `pnpm typecheck` passed,
+  `pnpm build` passed, `pnpm dev:install` refreshed the installed app, restart
+  returned `/api/stale-server` `stale:false`. Live Looma + Knit recovery proof:
+  resolving
+  `esc-task-import-1l0mr2r-split-component-implementation-1` back to
+  `exploring` and restarting selected `ContextMenu` no longer reproduced the
+  durable-progress escalation. The child stayed `exploring` with no open
+  escalation, and the run stopped on a new external provider blocker:
+  DeepInfra HTTP 429 `engine_overloaded`, surfaced as `provider_backoff`.
+  2026-06-06 storage/live-proof follow-up:
+  - [x] Fixed recovery from an existing selected-task worktree. The git driver
+    now adopts an existing worktree path when it is already checked out to the
+    expected task branch, and targeted start no longer treats a recoverable
+    `worktree already exists` blocker as an all-terminal project state.
+  2026-06-13 list-inspector live proof after replacing Columns: the Work UI
+  can show the mixed Looma + Knit ready queue and a selected work inspector, but
+  it cannot show "just Knit" as a first-class slice. The visible controls are
+  status-only (`Ready to run`, `Planning`, `Open`, `All`, `Blocked`,
+  `Needs you`), and the nearest Knit-related ready item
+  `task-import-1rpbo8n` still renders in the Part column as `Looma` because its
+  source row is `looma/PROJECT_STATE.md` even though it references
+  `knit/docs/looma-migration-inventory.md`. API proof found 205 actual
+  `knit/...` source tasks, mostly import drafts, but no UI source/domain filter
+  for that subset. Clicking the task row opened the inspector, then `Open
+  drawer`, then `Resume only this work item`. The run correctly used
+  `mode: "one_task"` and modified the task worktree's
+  `knit/docs/looma-migration-inventory.md`, but it stopped with
+  `human_judgment_required: Worker stopped after hitting its turn limit.`
+  Final state: run `stopped`, task `blocked`, and the task worktree still has
+  unlanded changes in `PROJECT_STATE.md`, `docs/component-roadmap.md`,
+  `docs/editor-roadmap.md`, `packages/core/loader/index.d.ts`, plus untracked
+  `.guildhall/` and `knit/`. This does not satisfy the one-click Knit task
+  completion proof; the remaining product/runtime gap is source/domain slicing
+  plus a true selected-work completion loop that continues dependent proof until
+  the requested work item is done or blocked by a concrete external decision,
+  not a generic worker turn limit.
+  2026-06-13 repair proof:
+  - [x] Added source-part filtering to the List work view and included import
+    drafts in Planning/Open/All slices so raw Knit work is visible before it is
+    promoted. Live browser proof against `looma-knit`: `Show: All` + `Part:
+    Knit` rendered `205 shown · 299 total`, 205 interactive work rows, and no
+    sampled non-Knit part rows.
+  - [x] Centralized the List `Part` concept into the shared Work surface model
+    as resolved work areas instead of letting the view parse source paths. The
+    resolver now prefers accepted structural-map domains, then task routing
+    context, task/coordinator domain, imported source refs, description fallback,
+    and finally project fallback. This keeps the Looma/Knit proof useful without
+    baking Looma/Knit or path-string heuristics into the UI contract.
+  - [x] Added a selected-work inspector action in List. Promoted work calls the
+    existing one-task start endpoint; import drafts show `Draft and run` and
+    call `shape-draft` before the same one-task start path.
+  - [x] Fixed selected one-task turn-limit preservation when the task row lacks
+    `worktreePath` by recovering the task workspace path from the sidecar or
+    expected worktree path before treating dirty work as no progress.
+  - [x] Fixed `logProgress` so managed `project-state/PROGRESS.md` writes do
+    not infer `project-state` as the project root; heartbeat writes route to
+    sibling local-history progress.
+  - [x] Hardened imported-draft shaping after a spec-agent turn limit: if no
+    brief/spec/question was saved, Guildhall now asks a concrete owner scope
+    question for the imported source instead of blocking on a generic model
+    turn-limit escalation.
+  - [x] Live browser proof after rebuild: selecting Knit draft `Templates` and
+    clicking `Draft and run` started a `mode: "one_task"` run, promoted the
+    draft to `exploring`, saved a product brief, then stopped with the task
+    still `exploring`, one owner question, and `0` escalations. This does not
+    prove autonomous completion for vague imported drafts; it proves the one
+    click now runs the dependent shaping path and stops on concrete owner input
+    instead of a generic worker/spec turn-limit blocker.
+    Verification: `pnpm vitest run
+    src/web/surfaces/project/__tests__/WorkTab.svelte.test.ts
+    src/web/lib/__tests__/project-data.test.ts
+    src/runtime/__tests__/orchestrator.test.ts --reporter=dot` passed with 333
+    tests; `pnpm vitest run src/runtime/__tests__/orchestrator.test.ts
+    --reporter=dot` passed with 302 tests; `pnpm typecheck`, `pnpm build`,
+    `pnpm lint:contracts`, `git diff --check`, service restart, and
+    `/api/stale-server` `stale:false` passed.
+    2026-06-13 shared work-area follow-up verification: the same WorkTab,
+    project-data, and orchestrator Vitest command passed with 336 tests after
+    adding structural-map/routing/source fallback coverage; `pnpm typecheck`,
+    `pnpm lint:contracts`, `pnpm build`, and `git diff --check` all passed.
+    Fresh browser proof on port `7788` with `/api/stale-server` `stale:false`:
+    `/projects/looma-knit/work` exposed the `Part` control with `Knit`,
+    `Looma`, and `Workspace Import`; selecting `Show: All` + `Part: Knit`
+    rendered `205 shown · 299 total`, selected shared work-area value
+    `task-domain:knit`, and the first 20 sampled rows all carried the `Knit`
+    part label.
+- [x] Prevent broad imported planning bullets from escaping as one runnable
+  component task. 2026-06-12 Looma + Knit recovery showed
+  `task-import-twwvys` had started as a `PROJECT_STATE.md` "Next Up" bullet
+  (`Finish the Knit primitive replacement wave...`) but deterministic recovery
+  wrapped that broad source note in a generic spec and approval let it become
+  `ready` without a split plan. The fix adds task-size pressure for broad
+  imported/replacement/migration waves, makes task shaping create a missing
+  `sizePlan` before readiness/approval, and proves approval materializes
+  split children (`Audit the remaining replacement scope`, `Implement the
+  first independently verifiable replacement`, `Verify and update the migration
+  record`) instead of dispatching the broad parent. Verification:
+  `pnpm vitest run src/core/__tests__/task-sizing.test.ts
+  src/runtime/__tests__/intake.test.ts
+  src/runtime/__tests__/task-decomposition.test.ts
+  src/runtime/__tests__/task-readiness.test.ts` passed.
+  - [x] Fixed the repo-local `log-progress` leak exposed during the
+    `ContextMenu` worker run. Tool hydration for task/progress/decision tools
+    now routes `TASKS.json`, `PROGRESS.md`, and `DECISIONS.md` through
+    system-local project state, and `logProgress` ignores stale repo-local
+    progress paths for non-heartbeat writes. The leaked Looma + Knit
+    `.guildhall/PROGRESS.md` milestone was preserved in
+    `/Users/matthew/.guildhall/data/projects/looma-knit-0c328d88ca44/project-state/PROGRESS.md`
+    and removed from the repo.
+  - [x] Fully audited and removed active ad-hoc Guildhall data reads/writes for
+    current project state. Owner-input, bounded-chat, task/progress/decision,
+    learning, project-skill, structural-map, design-feedback,
+    external-agent-link, memory-store, workspace-import, reintake, automation,
+    and review paths now resolve through system-local storage helpers instead
+    of manufacturing repo-local `.guildhall/*` paths. The data-layer guardrail
+    now covers managed read/write wrappers as well as raw fs reads/writes and
+    fails feature code that constructs managed storage paths directly; legacy
+    migration/cleanup modules remain explicitly storage-owned. Proof on
+    2026-06-07: `node scripts/data-layer-guardrails.mjs src` exited `0`;
+    focused owner-input/storage route tests passed; `pnpm build`,
+    `pnpm lint:contracts`, and `git diff --check` passed; Looma + Knit
+    `.guildhall` file/status checks returned no files or dirty state.
+  - [x] Live proof after build/local restart: `/api/stale-server` returned
+    `stale:false` with no `staleProcesses`, and
+    `find /Users/matthew/git/oss/looma-knit/.guildhall -maxdepth 3 -type f`
+    returned no files. Remaining delivery gap: the selected ContextMenu work
+    has not completed through the UI; the previous run stalled with an active
+    provider request, and stopping the run left the task `in_progress`.
+- [x] Repair Looma + Knit Work and Thread queue semantics for spec-lane tasks.
+  Live proof on 2026-06-04/05 showed `/api/project?projectId=looma-knit`
+  had `39` tasks (`28` `exploring`, `10` `spec_review`, `1` `blocked`) and
+  no execution-ready worker tasks, while Work defaulted to a misleading
+  `Queued work` empty state and Thread labeled normal component `spec_review`
+  turns as `Awaiting approval`. The owner-approval label was false for imported
+  component tasks: runtime Thread projection only treats meta-intake and
+  workspace import review as owner approval, while component `spec_review`
+  turns are queued spec-lane work. Fix: Work now labels the execution-ready
+  slice `Ready to run` and defaults to `Planning` when shaping/spec work exists
+  but no execution-ready work exists; shared task presentation now treats
+  normal `spec_review` + `phase: "spec"` turns without owner questions,
+  imported-draft state, live agents, or checklists as queued/paused spec work;
+  Thread start actions include `spec_review` and label the action
+  `Resume spec work`. Work raw-task rows now use the same queued-spec
+  presentation as Thread turns, so raw component `spec_review` tasks with draft
+  spec content do not fall back to `Awaiting approval`. Verification:
+  `pnpm vitest run src/runtime/__tests__/thread.test.ts
+  src/web/lib/__tests__/task-presentation.test.ts
+  src/web/surfaces/project/__tests__/ThreadTab.svelte.test.ts
+  src/web/surfaces/project/__tests__/WorkTab.svelte.test.ts --reporter=dot`
+  (`200` tests); `pnpm typecheck`; `pnpm build`; `git diff --check`;
+  `pnpm dev:install`; `guildhall stop && guildhall start`; `/api/stale-server`
+  returned `stale:false` for installed dist
+  `/Users/matthew/.guildhall/app/0.10.0/app/dist/cli.js`. Live API proof from
+  `/api/project/thread?projectId=looma-knit` showed component `spec_review`
+  rows such as Combobox, AlertDialog, Drawer / Sheet, HoverCard, and
+  ContextMenu with `phase: "spec"` and summary `Guildhall has your answers and
+  a spec draft. Coordinator review is next.` In-app Browser proof on
+  `/projects/looma-knit/work` rendered `38 shown · 39 total`, `Ready to run`,
+  `Planning`, zero `Queued work`, zero `No queued work yet`, zero
+  `AWAITING APPROVAL`, and paused row chips. In-app Browser proof on
+  `/projects/looma-knit/thread` rendered zero `Awaiting approval`, zero
+  `Waiting for worker activity`, `14` `Coordinator review is next` summaries,
+  paused task chips, and the project-level `Resume` action.
+  Earlier focused verification:
+  `pnpm vitest run src/web/lib/__tests__/task-presentation.test.ts
+  src/web/surfaces/project/__tests__/ThreadTab.svelte.test.ts
+  src/web/surfaces/project/__tests__/WorkTab.svelte.test.ts --reporter=dot`
+  (`128` tests); `pnpm typecheck`; `pnpm build`.
+- [x] Finish feature-shape generalization fixtures. The 2026-06-04
+  weak/medium coverage audit found that runtime smoke fixtures already cover
+  broad project types, but rendered UI tests were still overfit to familiar
+  registered projects. First pass added `docs-compass`, `pipeline-ops`,
+  `mobile-kit`, and `api-broker` to the Playwright roster, plus generic
+  Structure/capability tests for punctuation-heavy domains and ambiguous
+  prefixed work areas. Follow-up added `dirty-service`,
+  `scratch-setup-pending`, `consumer-app`/`provider-library`, and
+  `capability-boundary` so rendered UI tests now cover dirty release blockers,
+  attached-but-uninitialized routing, cross-project handoffs, contract counts,
+  absence of unrelated-project leakage, Timeline route smoke, and pending
+  capability requests visible inside Thread.
+  Verification: `pnpm exec vitest run
+  src/web/surfaces/project/structure/__tests__/ProjectStructurePanel.svelte.test.ts
+  --reporter=dot`, `pnpm exec vitest run
+  src/web/surfaces/project/__tests__/ReleaseTab.svelte.test.ts
+  --reporter=dot`, `pnpm exec vitest run
+  src/web/lib/__tests__/project-summary.test.ts --reporter=dot`,
+  `pnpm exec vitest run src/runtime/__tests__/generalization-smoke.test.ts
+  --reporter=dot`, `pnpm exec vitest run
+  src/web/surfaces/project/__tests__/ThreadTab.svelte.test.ts -t
+  "capability request decisions" --reporter=dot`, `pnpm build`, and
+  `pnpm exec playwright test tests/rendered-ui/project-flow.spec.ts -g
+  "setup-pending|dirty service|consumer handoff|provider handoff|capability
+  request|timeline" --reporter=line` all passed. Full rendered matrix
+  verification is `pnpm exec playwright test
+  tests/rendered-ui/project-flow.spec.ts --reporter=line`.
+  Closure refresh, 2026-06-13: rebuilt and installed the current branch, then
+  proved the `ContextMenu` component chain through the live Guildhall UI/API.
+  `/api/stale-server` returned `stale:false`; focused runtime/UI coverage
+  passed (`pnpm vitest run src/runtime/__tests__/orchestrator.test.ts
+  src/web/surfaces/project/__tests__/WorkTab.svelte.test.ts
+  src/web/lib/__tests__/project-data.test.ts --reporter=dot`, `3` files,
+  `336` tests); `pnpm build` and `pnpm dev:install` passed. Live API proof for
+  `/api/project/task/task-import-1l0mr2r?projectId=looma-knit` showed
+  `ContextMenu` and its four child deliverables done: Component
+  implementation, Storybook story, Contract README, and API docs sync. Live UI
+  proof on `/projects/looma-knit/task/task-import-1l0mr2r` rendered the
+  `ContextMenu` task drawer as `DONE` with child tasks, and
+  `/projects/looma-knit/work` rendered the generic Work List source-area
+  controls. Residual `COMPLETION HYGIENE` escalation-history cleanup belongs
+  to the task-state/runtime-evidence storage split, not to the Looma/Knit
+  component-delivery proof.
+- [x] Enforce default-zero project-state storage boundaries and clean existing
+  managed project `.guildhall` state. Release-blocking interpretation: normal
+  Guildhall operation must create no project-local Guildhall state by default.
+  Thin project-local state is allowed only when a project explicitly opts into a
+  shared/export mode, and even then it must be compact owner-facing state, never
+  runtime or evidence history. Live audit on 2026-06-04 showed the previous
+  task-state split was not durably implemented: active writers still recreate
+  runtime/evidence fields in project-local `TASKS.json`, and real managed
+  projects carry oversized state (`fair-labor-license` around 1.60 MB with
+  `TASKS.json` around 568 KB and `PROGRESS.md` around 351 KB; `looma-knit`
+  around 2.59 MB with `PROGRESS.md` over 1 MB). Corrective plan:
+  `internal/plans/2026-06-04-project-state-storage-governance-and-cleanup.md`.
+  First run the OSS LLM memory/context evaluation spike at
+  `internal/plans/2026-06-04-llm-memory-context-evaluation-spike.md`, because
+  context building and memory compaction may be better served by an existing
+  memory system than by custom Guildhall storage. The evaluation should assume
+  repo-local state is off by default, with any Git-visible manifest/export
+  owned by Guildhall as an explicit optional layer. Spike
+  result: `internal/evals/2026-06-04-llm-memory-context-evaluation.md`
+  now selects Mastra Memory / Observational Memory as the first memory
+  substrate path after the 2026-06-06 value gate. Prototype evidence now exists
+  in `scripts/prototype-mastra-memory-value-gate.mjs` and
+  `artifacts/memory-core-prototype/mastra-value-gate.json` (ignored): real
+  `@mastra/*` packages are installed, Mastra `Memory` instantiates with
+  system-local libSQL storage, thread/resource scope is proven, repo-local
+  writes stay empty, and the gate returns `decision: "adopt"` only when Mastra
+  candidate packets beat the deterministic baseline. Graphiti was explored and
+  did not bear fruit for Guildhall's product needs; its executable prototype
+  path has been retired rather than deferred.
+  Boundary clarified by owner: memory tooling is only substrate for scaling,
+  storage, compaction, retrieval, fact extraction, and provenance. Guildhall
+  must still reason from the active request and own what goes into context and
+  why.
+  Replacement audit plan:
+  `internal/plans/2026-06-04-guildhall-architecture-replacement-audit.md`
+  ranks both storage-sprawl surfaces and architecture/substrate surfaces as
+  Keep, Thin, Replace, Kill, or Defer. Run that audit before treating any memory
+  substrate decision as final.
+  Mastra gate is pass/fail: real dependency integration, system-local storage,
+  no repo-local writes, scoped thread/resource mapping, reliable provenance,
+  bounded context size, acceptable warm retrieval latency, deterministic
+  fallback, and better packet value than the deterministic Guildhall baseline.
+  If those fail in the production memory-core implementation, disable Mastra
+  and continue with the deterministic baseline while reassessing the memory
+  substrate from first principles.
+  Boundary-cleanup slice completed on 2026-06-06: project-state boundary
+  sanitizer and `memory audit-project-state`/`memory clean-project-state`
+  commands now strip active-task runtime/evidence fields, preserve removed
+  payloads in machine-local history, and report forbidden fields before/after.
+  Live cleanup applied to eight managed projects: `fair-labor-license`
+  `8 -> 0`, `looma-knit` `462 -> 0`, `jess` `16 -> 0`,
+  `narrative-harness` `82 -> 0`, `font-something` `51 -> 0`,
+  `t-minus-t` `16 -> 0`, `commerce-project` `0 -> 0`, and `guildhall`
+  `30 -> 0`; a direct post-apply scan found `forbiddenFields=0` for all
+  eight and 70 machine-local `project-state-boundary-evidence.json` backups.
+  Live proof after `pnpm dev:install`: `/api/stale-server` returned
+  `stale:false`, and the in-app browser rendered connected overview pages for
+  `/projects/jess/overview` and `/projects/looma-knit/overview`.
+  Correction after owner review: cleanup is allowed for non-opt-in projects,
+  but it must be migration cleanup, not a compact repo-local rewrite. The
+  corrected cleanup path now treats `storage.repoState: off` as
+  evacuate/remove the whole `.guildhall` directory after machine-local backup,
+  while `storage.repoState: thin` is the explicit opt-in for a tiny
+  Git-visible current-shape packet. Thin state is not history storage: it keeps
+  only current artifact ids, compact active task summaries, and open-escalation
+  count so another agent can bare-minimally continue if system-local state is
+  unavailable. Built-in migration
+  `0.10.0/project-state-storage-boundary` owns this cleanup; no feature should
+  write Guildhall state directly into project repos outside the storage layer.
+  2026-06-06 follow-up: corrected storage-boundary migration ran across the
+  managed project roster and verified `.guildhall` absent in
+  `fair-labor-license`, `looma-knit`, `jess`, `narrative-harness`,
+  `font-something`, `t-minus-t`, `commerce-project`, and `guildhall`. A stale
+  pre-fix `mcp serve` process rooted in Jess was the source of later
+  `runtime.json` timestamp rewrites; that process was stopped, and fresh
+  patched MCP/web route checks did not recreate repo-local `.guildhall` files.
+  Stale Guildhall process detection now parses sibling packaged Guildhall
+  processes, reports stale siblings through `/api/stale-server`, and service
+  startup terminates stale Guildhall processes started before the current
+  installed build mtime. 2026-06-06 hardening: stale-server now runs the same
+  cleanup before reporting freshness, the guard escalates from `TERM` to
+  `KILL` after a short grace period for stale siblings that survive shutdown,
+  and live proof removed the stale `mcp serve .` processes without recreating
+  Looma + Knit repo-local `.guildhall` files.
+  Treat this as a writer-boundary, memory/context, and cleanup blocker, not a
+  one-time compaction chore.
+  2026-06-06 implementation slice:
+  `src/memory-core/` now exists with typed scopes, system-local event/audit
+  writes, deterministic candidate packets, and a Mastra/libSQL adapter behind a
+  Guildhall-owned boundary. `buildEffectiveMemoryPacket` and
+  `guildhall://project/memory` now surface memory-core packet/status evidence.
+  Remaining work: Observational Memory orchestration, migration/audit command,
+  UI memory health, migration progress modal, semantic recall gate, and retiring
+  old project-local accepted-memory writers.
+  2026-06-13 writer-boundary slice: `updateTask()` and `addTask()` now persist
+  through `writeProjectTaskQueue()` so tool-driven task mutations cannot
+  preserve or recreate forbidden task runtime/evidence fields in project-local
+  `TASKS.json`. `reportIssue()`/`resolveIssue()` now write new issue state to
+  task evidence plus runtime `openIssueIds`, keep legacy `Task.agentIssues[]`
+  as a compatibility reader, and persist the queue through the same boundary
+  writer. Verification: `pnpm exec vitest run
+  src/tools/__tests__/task-queue.test.ts src/runtime/__tests__/project-state-boundary.test.ts
+  src/runtime/__tests__/project-state-compaction.test.ts
+  scripts/data-layer-guardrails.test.ts --reporter=dot` passed (`4` files,
+  `54` tests); `pnpm test src/tools/__tests__/report-issue.test.ts
+  src/runtime/__tests__/orchestrator.test.ts` passed (`2` files, `318` tests).
+  The item remains open because direct production queue writers and raw
+  runtime/evidence readers still exist in orchestrator remediation, escalation,
+  product-brief, serve/intake/meta-intake, and drawer/history surfaces, and
+  release proof must show normal app/API/MCP usage does not recreate any
+  project-local `.guildhall` state for non-opt-in projects.
+  2026-06-13 default-zero correction: repo proof showed the bar was still not
+  fully met. `bootstrapWorkspace()` still created project-local `.guildhall`
+  seed files, stale-blocker repair still rewrote task state through the legacy
+  project-local path, wizard skip state still used `.guildhall/wizards.yaml`,
+  project-graph request/delivery mirrors still wrote below
+  `.guildhall/project-graph/`, MCP stdio still passed a project-local
+  `projectStateDir`, and design-system authoring had a duplicated helper that
+  wrote `.guildhall/design-system.yaml` while the runtime reader had moved on.
+  This slice moved those default writers/readers to system-local project state:
+  bootstrap now writes only `guildhall.yaml`; stale-blocker repair uses
+  `project-state/TASKS.json` plus the boundary sanitizer; wizard state,
+  project-graph mirrors, shared-project persistence records, MCP stdio task
+  state, and design-system authoring/reading now resolve through system-local
+  project state. Focused regressions assert these paths do not create
+  project-local `.guildhall` for fresh/default projects. The item still remains
+  open until broader verification and installed-app/API/MCP walkthrough prove
+  normal non-opt-in operation does not recreate repo-local Guildhall state.
+  2026-06-14 closure proof: installed the current artifact with
+  `pnpm dev:install`; `node scripts/release-smoke.mjs` reported
+  `Guildhall 0.10.0 (0.10.0 ee8b0717c765, clean) served bundle is fresh at
+  http://localhost:7777`. A packaged-CLI isolated proof started
+  `/Users/matthew/.local/bin/guildhall serve-internal` with throwaway
+  `GUILDHALL_CONFIG_DIR`/`GUILDHALL_DATA_DIR`, attached a fresh folder, ran
+  setup identity, read `/api/project`, skipped the onboard direction wizard,
+  wrote/read the design system, read the project graph, and read MCP resources
+  through `guildhall mcp serve`; after every step the project folder still had
+  no `.guildhall`. The expected state landed under system-local
+  `project-state/` (`agent-settings.yaml`, `attention.json`,
+  `design-system.yaml`, `wizards.yaml`). Installed-service proof on
+  `fair-labor-license` and `jess` hit `/api/project`,
+  `/api/project/release-readiness`, `/api/project/wizards`, and the overview
+  route; both stayed at zero `.guildhall` files and clean `.guildhall` git
+  status. Existing Looma + Knit residue
+  (`.guildhall/persistence` and `.guildhall/reintake-drafts`) was evacuated by
+  `guildhall memory clean-project-state /Users/matthew/git/oss/looma-knit
+  --apply`, after which `.guildhall` was absent and `/api/project?projectId=looma-knit`
+  still returned initialized. Final managed-project scan showed zero
+  `.guildhall` files for `looma-knit`, `fair-labor-license`, `jess`,
+  `narrative-harness`, and `guildhall`.
+- [x] Distinguish in-app browser bridge failures from actual Guildhall route
+  lockups during live audits. Multi-agent proof on 2026-06-04: the service
+  stayed healthy (`stale:false`, `/api/service` and direct route HTTP returned
+  cleanly), but delegated Browser lanes hit `Page.navigate`, `Runtime.evaluate`,
+  `Page.getFrameTree`, and `about:blank` recovery failures. Future audits must
+  record API liveness, direct HTTP status, current URL, and DOM/screenshot proof
+  before classifying a hang as an app freeze. If API and direct HTTP are healthy
+  but Browser control is wedged, track the Browser bridge separately from the
+  product route. Follow-up on 2026-06-04/05 reproduced the split: the selected
+  in-app Browser tab was stuck on a `data:` error page for `/providers` with
+  `ERR_NETWORK_IO_SUSPENDED`; a fresh in-app tab reached
+  `/projects/narrative-harness/thread` and showed the project shell connected
+  but stayed on `Loading...`; Browser page evaluation then failed while locator
+  text still worked. The same installed app rendered correctly in standalone
+  Playwright, so this remains a Browser bridge/tab-state recovery issue rather
+  than a confirmed Guildhall route lockup.
+  Closure refresh, 2026-06-13: added `scripts/browser-route-proof.mjs` with a
+  route probe classifier that records navigation result, direct route HTTP,
+  API liveness, and DOM proof before classifying a route as
+  `route_healthy`, `browser_bridge_failure`, or `product_route_lockup`.
+  Verification: `pnpm vitest run scripts/browser-route-proof.test.ts
+  --reporter=dot` passed and proves Browser-control failures are classified
+  separately when HTTP/API checks remain healthy.
+- [x] Reproduce or disprove Narrative Harness Thread route hang. Interactive
+  audit lane on 2026-06-04 loaded
+  `http://localhost:7777/projects/narrative-harness` successfully with project
+  identity and overview sections, then navigating to
+  `/projects/narrative-harness/thread` timed out with `Page.navigate`. Recovery
+  showed the URL had changed to `/projects/narrative-harness/thread`, but
+  `Runtime.evaluate` timed out when reading the DOM. Follow-up proof on
+  2026-06-04/05 separated the route from the bridge: `/api/stale-server`
+  returned `stale:false`; `/api/project?projectId=narrative-harness` returned
+  `name:"Narrative Harness"`, `initializationNeeded:false`, and `tasks:9`;
+  `/api/project/thread?projectId=narrative-harness` returned `200` with `23`
+  turns and active turn `inflight:coherence-reviewer-mvp`; direct route HTTP
+  returned `200` SPA shell; standalone Playwright rendered
+  `/projects/narrative-harness/thread` with one `Thread list`, one
+  `Selected thread`, the task title `Build first coherence reviewer MVP`, and
+  zero `Loading...` markers. In-app Browser still showed a bridge/tab-state
+  failure, tracked in the separate follow-up above.
+- [x] Verify setup-blocked start/readiness consistency. Global audit on
+  2026-06-04 reported Commerce project as setup/owner-input blocked while the
+  API summary still exposed a startable-looking state. Fix: shared
+  `buildProjectActionModel` now normalizes import-draft review, brief cleanup,
+  provider unavailable, required migration, and all-terminal blockers into
+  terse `primaryAction` / `runControl` fields; all-terminal no longer appears
+  as a human next action. Projects Home now gets fleet attention from the
+  shared project-card summary instead of raw task counts, so zero-task
+  owner-input setup projects count as `Needs you` while all-terminal projects
+  do not. Project shell and Overview blocker links now prefer shared
+  `primaryAction` labels/hrefs over local start-readiness fallbacks.
+  Follow-up live replay on 2026-06-04/05 proved the remaining Commerce surface:
+  `/api/project?projectId=commerce-project` still had raw
+  `startReadiness.canStart:true` with zero tasks, but
+  `/api/project/inbox?projectId=commerce-project` exposed
+  `setup_pending:thread-shape-the-first-spec`; standalone Playwright rendered
+  `/projects/commerce-project/thread` and `/overview` with no `Start` or
+  `Resume` buttons, visible `Shape the first spec`, and Thread/selected-thread
+  surfaces. Projects Home correctly showed `Needs you` and no Start/Resume, but
+  still leaked a small `ready` activity label on the Commerce card. Fix:
+  `ProjectCard` now renders zero-task attention states as `needs input` instead
+  of `ready`, with a ProjectsHome regression for owner-input projects whose raw
+  start readiness is permissive.
+  Verification:
+  `pnpm vitest run src/runtime/__tests__/project-action-model.test.ts src/web/lib/__tests__/project-summary.test.ts src/web/surfaces/__tests__/ProjectsHome.svelte.test.ts src/web/surfaces/__tests__/DoThisNext.svelte.test.ts src/web/surfaces/__tests__/ProjectView.svelte.test.ts --reporter=dot`
+  (`89` tests);
+  `pnpm vitest run src/web/surfaces/project/__tests__/ProjectOverviewTab.svelte.test.ts src/web/surfaces/project/__tests__/WorkTab.svelte.test.ts src/web/surfaces/project/__tests__/ThreadTab.svelte.test.ts src/web/surfaces/project/__tests__/ReleaseTab.svelte.test.ts src/web/surfaces/project/__tests__/SettingsTab.svelte.test.ts src/web/surfaces/__tests__/TaskDrawer.svelte.test.ts --reporter=dot`
+  (`198` tests);
+  `pnpm vitest run src/runtime/__tests__/serve-settings.test.ts src/runtime/__tests__/serve-dashboard.test.ts --reporter=dot`
+  (`59` tests); `pnpm typecheck`.
+- [x] Complete browser-capable per-project replay targets from the multi-agent
+  audit. Required high-value targets: Jess structural-review owner input at
+  `/projects/jess/thread?thread=bc-jess-structural_review-8c11fc652d-2026-06-04T00-44-08-860Z`;
+  Jess `/workspace-import`; Commerce `/thread` setup pending; Looma + Knit
+  `/workspace-import?mode=reconcile` and task spec drawers such as
+  `/task/task-import-1l0mr2r?tab=spec`; Narrative Harness task spec drawers
+  `/task/coherence-reviewer-mvp?tab=spec`,
+  `/task/decision-trace-pipeline?tab=spec`, and `/task/task-009?tab=spec`;
+  Font something task routes including `/task/import-api-serving-mvp`.
+  Closure refresh, 2026-06-13: added the replay target list to
+  `scripts/browser-route-proof.mjs` and a rendered Playwright suite at
+  `tests/rendered-ui/multi-agent-replay.spec.ts`. Replay fixture projects are
+  present before the server starts, and the suite idempotently seeds the exact
+  task records needed for the named Jess, Commerce, Looma + Knit, Narrative
+  Harness, and Font Something routes, validates route HTTP/API/DOM proof, then
+  cleans up. Verification from the implementation lane:
+  `rm -rf .playwright-fixtures && GUILDHALL_E2E_PORT=7801 pnpm playwright test
+  tests/rendered-ui/multi-agent-replay.spec.ts` passed (`9` targets). This
+  proves standalone/rendered-ui browser capability for the listed replay
+  targets; in-app Browser bridge failures remain classified by the separate
+  route-proof harness above.
+- [x] Run a different-project weak/medium coverage replay and fix the new
+  leaks it surfaced. Fresh installed-app proof on 2026-06-04/05 used
+  `/api/stale-server` `stale:false` for installed dist
+  `/Users/matthew/.guildhall/app/0.10.0/app/dist/cli.js`, plus standalone
+  Playwright route proof across Jess, Looma + Knit, Font something,
+  t-minus-t, Fair Labor License, and Projects Home. Jess Thread and
+  workspace-import kept project identity and owner-input gating, but the first
+  pass still rendered `structural-map-mpyrvqjg` in owner-facing readiness copy
+  and told users they could "resume Guildhall" on the import card while the
+  project was blocked on the map answer. Fix: `/api/project` start-readiness
+  now sanitizes structural-map owner-input labels to `Review the project map`,
+  and Thread's workspace-import copy says to answer the current blocker before
+  Guildhall continues shaping project notes when owner input blocks the
+  project. Looma + Knit `/workspace-import?mode=reconcile` rendered the
+  reconcile review with project-specific counts and no cross-project leakage;
+  `/task/task-import-1l0mr2r?tab=spec` opened the requested ContextMenu drawer
+  tab and close routing remained safe, but the first pass showed a stale
+  Link Editor handoff packet on a ContextMenu task with no current spec/proof.
+  Fix: the Spec tab now hides review/handoff packets on active shaping tasks
+  unless the task has current task-local brief/spec/acceptance context or is in
+  a review/completion state. Font something direct task and Work routes,
+  t-minus-t Release, and Fair Labor License Release criteria all rendered with
+  the expected project identity and release markers; Commerce Projects Home
+  stayed fixed with `needs input`, no `ready` card label, and no Start/Resume
+  affordance. Verification:
+  `pnpm vitest run src/runtime/__tests__/serve-settings.test.ts -t
+  "owner-input Start blockers|friendly structural-map" --reporter=dot`;
+  `pnpm vitest run src/web/surfaces/project/__tests__/ThreadTab.svelte.test.ts
+  -t "workspace import while owner input blocks" --reporter=dot`;
+  `pnpm vitest run
+  src/web/surfaces/drawer/__tests__/drawer-tabs.svelte.test.ts -t
+  "stale handoff packets|current task-local spec context" --reporter=dot`;
+  `pnpm typecheck`; `pnpm build`; `pnpm build:macos-package -- --skip-build`;
+  installed from `artifacts/macos/guildhall-macos`; restarted service; live
+  Playwright confirmed zero raw structural-map ids, zero unsafe import-resume
+  copy, zero stale Link Editor packet/path on ContextMenu, and Commerce
+  `needs input` without `ready`.
+- [x] Fix project shell identity on Looma + Knit Thread. Live proof on
+  2026-06-04 after `pnpm dev:install`, service restart, and
+  `/api/stale-server` `stale:false`: `/api/project?projectId=looma-knit`
+  returned `name: "Looma + Knit"`, and `/api/project/thread?projectId=looma-knit`
+  returned 210 turns with active turn `inflight:task-import-1y7kmp6`. Browser
+  proof on `http://localhost:7777/projects/looma-knit/thread` loaded the Thread
+  content after about 2 seconds, including `Block menu / block side menu` and
+  `Coordinator review is queued`, but the project shell still rendered the
+  header as generic `Project` instead of `Looma + Knit`. Treat this as a shared
+  project-shell identity bug; the same route should not lose the selected
+  project name while the Overview and Structure routes render it correctly.
+  Fix: ProjectView now derives shell identity from project detail only when it
+  matches the selected route project, and otherwise falls back to the selected
+  route id while detail refreshes, so direct Thread and drawer-backed Thread
+  routes do not render generic or stale project names. Verification:
+  `pnpm vitest run src/web/surfaces/__tests__/ProjectView.svelte.test.ts -t
+  "keeps the selected project identity" --reporter=dot` failed before the fix
+  because the rail rendered `Project`; after the fix,
+  `pnpm vitest run src/web/surfaces/__tests__/ProjectView.svelte.test.ts
+  --reporter=dot` passed (`42` tests), and
+  `pnpm vitest run src/web/surfaces/project/__tests__/ThreadTab.svelte.test.ts
+  -t "opens task details with Thread as the drawer background route"
+  --reporter=dot` passed. `pnpm typecheck`, `pnpm build`, and
+  `git diff --check` passed. Live install proof: `pnpm dev:install`;
+  `guildhall stop && guildhall start`; `/api/stale-server` returned
+  `stale:false` with pid `49086`; `/api/project?projectId=looma-knit` returned
+  `id: "looma-knit"`, `name: "Looma + Knit"`, `tasks: 39`;
+  `/api/project/thread?projectId=looma-knit` returned `turns: 210` and active
+  turn `inflight:task-import-1y7kmp6`. In-app Browser control hit a
+  `Page.navigate` timeout, matching the separate browser-bridge follow-up above,
+  so fallback Playwright DOM proof was used:
+  `http://localhost:7777/projects/looma-knit/thread` rendered rail title
+  `Looma + Knit`, global header title `Looma + Knit`, Thread content marker
+  present, `genericRail: false`, and `loadingPresent: false`.
+- [x] Harden global/project provider boundaries with focused API and routed UI
+  coverage. Delegated provider-boundary lane on 2026-06-04 found a real
+  project-settings leak: `ProjectProvidersSection` saved its selected provider
+  through the shared setup provider endpoint without marking the write as a
+  project override, so the API treated `preferredProvider` as the machine
+  default. Fix: project settings now sends `scope: "project"` and the provider
+  config handler writes that preference to the scoped project's local
+  `.guildhall/config.yaml` while preserving setup/global provider onboarding's
+  machine-default behavior. Added coverage that `/providers` hard-refreshes
+  through the App shell without appending `projectId`; global `ProvidersPage`
+  uses `/api/providers`, `/api/models`, `/api/providers/test`, and
+  `/api/providers/disconnect` without route leakage; model-catalog and
+  provider-test failures render inline; the mocked local OpenAI-compatible
+  provider test marks `verifiedAt`; disconnect remains machine-scoped; and
+  project model overrides can return to the global default without mutating
+  shared credentials. Verification: `pnpm docs:extract-help`;
+  `pnpm vitest run src/runtime/__tests__/serve-providers.test.ts src/web/surfaces/__tests__/ProvidersPage.svelte.test.ts src/web/surfaces/__tests__/SetupWizard.svelte.test.ts src/web/surfaces/project/__tests__/ProjectProvidersSection.svelte.test.ts src/web/__tests__/App.svelte.test.ts --reporter=dot`
+  passed with `75` tests; `pnpm typecheck`; `pnpm build`. Concern follow-up
+  on 2026-06-04 refreshed the installed app with `pnpm dev:install`,
+  `guildhall stop`, and `guildhall start`; `/api/stale-server` returned
+  `stale:false` for installed dist
+  `/Users/matthew/.guildhall/app/0.9.1/app/dist/cli.js`; `/api/providers`
+  returned preferred provider `openai-api` and five configured provider entries
+  without `projectId`; `/api/models` returned `200` without `projectId`; a
+  temporary registered project `provider-proof` rendered
+  `/projects/provider-proof/settings/providers` with project title
+  `Provider Proof` and heading `Project provider`; posting
+  `{"scope":"project","preferredProvider":"openai-api"}` to
+  `/api/setup/providers/config?projectId=provider-proof` succeeded and wrote
+  the preference to the throwaway project's local `.guildhall/config.yaml`
+  while the global preferred provider remained `openai-api`.
+- [x] Strengthen release-readiness automated coverage for dirty checkout,
+  external setup blockers, incomplete vs approval-ready briefs, design-system
+  readiness, initialization-needed, API failure, git-story routing, and
+  all-clear closure states. Implementation keeps Release as a renderer of
+  `/api/project/release-readiness`: the API now separates `incompleteBriefs`
+  from `unapprovedBriefs` and returns a plain load error when task state cannot
+  be read. Verification: red/green focused tests for incomplete briefs and
+  API-failure sanitization;
+  `pnpm vitest run src/runtime/__tests__/serve-release-readiness.test.ts src/web/surfaces/project/__tests__/ReleaseTab.svelte.test.ts --reporter=dot`
+  (`26` tests); focused git-story closure coverage
+  `pnpm vitest run src/runtime/__tests__/git-story.test.ts src/runtime/__tests__/serve-task-endpoints.test.ts -t "git story|dirty|upstream|local-only|defer" --reporter=dot`
+  (`8` matched tests); `pnpm typecheck`. Concern follow-up on 2026-06-04
+  proved the refreshed installed app live: `/api/project/release-readiness`
+  returned dirty-checkout closure blockers for Looma + Knit, Fair Labor
+  License, Jess, and Narrative Harness; design-system blockers for Jess and
+  Narrative Harness; an owner-facing pressure-test not-ready reason for
+  Commerce project; and blocked-agent counts for Looma + Knit, Fair Labor
+  License, and Narrative Harness. Browser/Playwright proof against
+  `http://localhost:7777` rendered Fair Labor License `/release` with
+  `Current work closure` and `Total closure blockers`, and Looma + Knit
+  `/release/criteria` with `Closure checks`, `Criteria`, and
+  `Task-state tally`.
+- [x] Harden Structure and Overview against cross-project graph leakage. Prior
+  audit risk: unrelated registered projects could be mistaken for related work
+  unless a real dependency, authority, responsibility, contract surface, or
+  handoff edge scoped them into the current project. Fix: `queryProjectGraphView`
+  now scopes returned domain authorities and assigned authority roots to
+  authorities owned by the current project or domains visible in the current
+  project graph, while preserving the full `localProjectIndex` only for explicit
+  assignment targets. Regression coverage proves unrelated registered projects
+  stay out of `localProjects`, `domainAuthorities`, owner-facing Structure text,
+  and Overview connected-project counts; real dependency edges still render as
+  project handoffs; empty dependency graphs explain that there are no active
+  handoffs; and monorepo child projects remain valid capability assignment
+  targets inside the linking modal. Verification on 2026-06-04:
+  `pnpm vitest run src/runtime/__tests__/project-graph.test.ts src/web/surfaces/project/structure/__tests__/ProjectStructurePanel.svelte.test.ts src/web/surfaces/project/__tests__/ProjectOverviewTab.svelte.test.ts --reporter=dot`
+  (`3` files, `42` tests); `pnpm typecheck`.
+- [x] Make clean onboarding proof repeatable without deleting real project
+  state. Scenario, 2026-06-04: `src/runtime/__tests__/project-registry.test.ts`
+  creates a disposable monorepo fixture under `os.tmpdir()`, attaches it through
+  `/api/service/attach-project`, proves `/api/service` reports
+  `initializationNeeded:true` without `selectedProject` or `foregroundProject`,
+  confirms `/api/project` and `/api/project/meta-intake/draft` still report the
+  uninitialized checkpoint, completes `/api/setup/identity`, saves provider
+  state through `/api/setup/providers/config`, starts meta-intake, verifies
+  `/api/project/meta-intake/draft` moves from `in-progress` to `draft-ready`,
+  recovers the stopped/no-draft path through `/api/project/meta-intake/synthesize`,
+  approves the draft through `/api/project/meta-intake/approve`, and then
+  verifies `/api/project` reports `task-meta-intake` as `done` with an accepted
+  structural map while `/api/project/project-graph` exposes structural domains
+  and contract surfaces for the fixture packages. The fixture asserts
+  `.guildhall` is absent after attach and appears only after setup identity, so
+  the proof does not rely on destructive deletion of a registered user project.
+  Verification: red run first failed on an over-specific provider-field
+  assertion, then the corrected focused test passed with
+  `pnpm vitest run src/runtime/__tests__/project-registry.test.ts -t "fresh onboarding recovery" --reporter=dot`
+  (`1` test, `6` skipped). The broader focused suite
+  `pnpm vitest run src/runtime/__tests__/project-registry.test.ts src/web/surfaces/__tests__/SetupWizard.svelte.test.ts src/runtime/__tests__/meta-intake.test.ts src/runtime/__tests__/project-graph.test.ts --reporter=dot`
+  passed (`71` tests); `pnpm typecheck`; `git diff --check`.
+
+## Incident Archive
+
+Closed incidents and older backlog evidence stay here so active test planning
+does not lose proof, regressions, or verification commands. Move a closed
+follow-up here with its evidence instead of deleting it.
+
+### Thread, setup, and project-shell closure evidence
+- [x] Collapse the Jess setup thread detail to the current setup step instead
+  of replaying every setup-guide step as duplicate cards, and stop leaking raw
+  structural-review owner-input internals into the Jess thread list. Live Jess
+  proof on 2026-06-03 showed `/projects/jess/thread?thread=setup` selecting the
+  setup chain while the detail pane repeated `Setup guide` for active, pending,
+  and completed setup steps (`Give the project direction`,
+  `Run project check-in`, `Review existing work`, and Dec 31 completed
+  synthetic steps). The neighboring structural-review row also rendered as
+  `Jess` with raw `Reason: owner_review_required_before_routing_truth` and a
+  giant `Targets:` id list. Fix: keep the setup chain as one thread, but filter
+  setup-chain history to the current setup turn before rendering the generic
+  card list; display persisted structural-review bounded chats as
+  `Review structural map` with the actual review prompt; and write new
+  structural-map owner-input helper text as human copy instead of reason/target
+  dumps. Verification:
+  `pnpm vitest run src/web/surfaces/project/__tests__/ThreadTab.svelte.test.ts
+  --reporter=dot` (`94` tests); focused structural-map/thread regressions;
+  `pnpm typecheck`; `pnpm build`;
+  `pnpm dev:install`; `guildhall stop`; `guildhall start`;
+  `/api/stale-server` returned `stale:false`. Browser proof on
+  `http://localhost:7777/projects/jess/thread?thread=setup` showed the thread
+  list rows `Review existing project work`, `Shape the first spec`, and
+  `Review structural map`; selected setup detail text `Setup guide Needs you
+  Shape the first spec ... Open setup`; one `.thread-detail .setup-title`; one
+  `Setup guide` label; zero `Completed` setup cards; and zero visible
+  `owner_review_required_before_routing_truth` or `cross-cutting:accessibility`
+  raw target text.
+- [x] Make multi-select owner-input submission visibly acknowledge the click.
+  Live Jess report on 2026-06-03: after clicking `Submit selected`, the button
+  became disabled but looked frozen while the bounded-chat answer request was
+  still in flight. Fix: every multi-select owner-input render path now changes
+  the disabled submit button label to `Submitting...` while `busyTurnId` owns
+  the request. Verification: focused held-request regression
+  `pnpm vitest run src/web/surfaces/project/__tests__/ThreadTab.svelte.test.ts
+  -t "multiple owner-input|progress while submitting" --reporter=dot`; full
+  ThreadTab suite (`95` tests); `pnpm typecheck`; `pnpm build`;
+  `pnpm dev:install`; `guildhall stop`; `guildhall start`; `/api/stale-server`
+  returned `stale:false`.
+- [x] Re-test Jess monorepo onboarding from a clean Guildhall state until
+  Structure shows a useful project graph and contract graph for the monorepo
+  folders. Live failure report, 2026-06-03: Jess had generated
+  `.guildhall/` state plus `guildhall.yaml`, but the browser landed on Ready
+  with no actionable work, one blocked task, pending migrations, and no visible
+  project/contract graph setup result. Test loop: delete only Jess's
+  Guildhall-generated files, restart from the in-app browser, fix each proven
+  setup/import/deep-intake or badly communicated state, reinstall/restart the
+  local Guildhall app as needed, and repeat until the clean onboarding path
+  produces graph coverage for the Jess monorepo folders. Closure evidence,
+  2026-06-03: clean browser setup for `/Users/matthew/git/oss/jess` advanced
+  through identity/provider/launch, reproduced meta-intake stopping in
+  `exploring` with no draft after the saved repo scan, then recovered through
+  the new `Finish from repo scan` setup action. The recovery synthesized a
+  reviewable setup draft with 26 repo slices from `packages/*`, approval landed
+  `task-meta-intake` as `done`, and Structure loaded 42 work areas plus 26
+  contracts. Live API proof: `/api/project?projectId=jess` returned
+  `initializationNeeded:false`, structural map `accepted`, 26 packages, 19
+  domains, 3 cross-cutting domains, 227 commands, and `task-meta-intake`
+  `done`; `/api/project/project-graph?projectId=jess` returned 42 structural
+  domains and 26 contract surfaces. Verification: focused red/green meta-intake
+  synthesis regression including the noisy fallback open-question migration
+  blocker; focused SetupWizard recovery regression for stopped/no-draft setup;
+  affected suites
+  `pnpm vitest run src/runtime/__tests__/serve-meta-intake.test.ts src/runtime/__tests__/meta-intake.test.ts src/runtime/__tests__/project-graph.test.ts src/runtime/__tests__/structural-map.test.ts src/web/surfaces/__tests__/SetupWizard.svelte.test.ts src/web/surfaces/project/structure/__tests__/ProjectStructurePanel.svelte.test.ts --reporter=dot`;
+  `pnpm typecheck`; `pnpm build`; `pnpm dev:install`; restarted service with
+  `/api/stale-server` returning `stale:false`.
+- [x] Restore scrollability for standalone document routes without weakening
+  fixed project layouts. The live Jess setup provider step could overflow below
+  the viewport because `/setup` rendered directly under the root app viewport,
+  whose router container intentionally hides overflow for fixed-layout project
+  surfaces. Audit result: `/projects` and `/needs-you` already use
+  `ProjectsShell` with a scrollable body; project routes use `ProjectShell`,
+  where document pages scroll through `.app-shell-page` and fixed
+  `surface-fill` pages keep scrollable panels inside their direct children;
+  drawers and modals already own their panel scroll areas. The only top-level
+  document routes missing a scroll owner were `/setup` and `/providers`.
+  Closure evidence, 2026-06-03: wrapped those two routes in
+  `.route-document-scroll` in `Router.svelte`, leaving project routes
+  unwrapped; added an App-shell regression test that proves setup/providers get
+  the document scroll surface while project layouts do not. Verification:
+  focused red/green test
+  `pnpm vitest run src/web/__tests__/App.svelte.test.ts -t "standalone document routes" --reporter=dot`;
+  nearby UI suites
+  `pnpm vitest run src/web/__tests__/App.svelte.test.ts src/web/surfaces/__tests__/SetupWizard.svelte.test.ts src/web/surfaces/__tests__/ProvidersPage.svelte.test.ts src/web/surfaces/__tests__/ProjectView.svelte.test.ts --reporter=dot`
+  (`55` tests); `pnpm typecheck`; `pnpm build`; `pnpm dev:install`;
+  `git diff --check`; restarted service at `http://localhost:7777` with
+  `/api/stale-server` returning `stale:false`. Browser proof on
+  `http://localhost:7777/projects/jess/setup?step=2` showed
+  `.route-document-scroll` with `overflow-y:auto`, client height `679`,
+  scroll height `793`, and a real wheel scroll moved `scrollTop` to `114.5`.
+  Browser proof on `/providers` showed the same document wrapper contract, and
+  `/projects/jess/thread` had no document wrapper; its uninitialized
+  `surface-fill` slot was not clipped (`626` client height / `626` scroll
+  height). Remaining unrelated gate: `pnpm lint:design` currently fails on
+  pre-existing typography/token findings in `Chip`, `Eyebrow`, `ThreadTab`,
+  and related tests.
+- [x] Keep `/providers` refresh-safe by removing project-scoped setup/intake
+  dependencies from the global page. Follow-up live proof on 2026-06-03 showed
+  that refreshing `/providers` could render
+  `projectId is required for project-scoped requests.` even after the document
+  route became scrollable. Root cause: the global Providers page was still
+  loading machine-wide provider and model settings through project-scoped
+  `/api/setup/providers` and `/api/config/models` endpoints, so a hard refresh
+  on a route with no project id looked like a setup/intake failure. Fix:
+  added machine-scoped `/api/providers`, `/api/providers/config`, and
+  `/api/models` endpoints; moved only `ProvidersPage.svelte` to those endpoints;
+  left project setup/settings on the explicit query-string paths
+  `/api/setup/providers?projectId=...` and `/api/config/models?projectId=...`.
+  Verification: red/green machine-scoped API tests in
+  `src/runtime/__tests__/serve-providers.test.ts`; full provider/setup UI slice
+  `pnpm vitest run src/runtime/__tests__/serve-providers.test.ts src/web/surfaces/__tests__/ProvidersPage.svelte.test.ts src/web/surfaces/__tests__/SetupWizard.svelte.test.ts src/web/surfaces/project/__tests__/ProjectProvidersSection.svelte.test.ts src/web/__tests__/App.svelte.test.ts --reporter=dot`
+  (`67` tests); `pnpm typecheck`; `pnpm build`; `pnpm dev:install`;
+  `git diff --check`; restarted service with `/api/stale-server`
+  `stale:false`. Live API proof: `/api/providers` and `/api/models` returned
+  `200` without a project, while `/api/setup/providers` still returned `400`
+  without `projectId`. Browser reload proof on `http://localhost:7777/providers`
+  showed provider rows, Global model defaults, no load error, no restart banner,
+  and no `projectId is required for project-scoped requests.` text.
+- [x] Treat restart-interrupted setup meta-intake as a retryable setup
+  interruption instead of a human recovery wall. Jess live proof on
+  2026-06-03 showed meta-intake starting, then recording
+  `Request aborted.`, `Stop requested; canceling the active model call.`, and an
+  escalation with `Spec agent kept researching after Guildhall asked for durable
+  progress.` The setup page then told the user `The setup task needs a recovery
+  decision before Guildhall can continue`, even though the actionable path was
+  to rerun the reserved setup intake after the server/model interruption. Fix:
+  carry `blockReason` through `/api/project/meta-intake/draft`, classify only
+  `task-meta-intake` durable-progress/aborted-call blockers as recoverable
+  setup interruptions, show `Setup was interrupted` with `Resume setup`, and
+  have that button call `/api/project/meta-intake/rerun` before restarting the
+  coordinator. Ordinary blocked setup tasks still route to explicit recovery.
+  Verification: focused Svelte regression
+  `pnpm vitest run src/web/surfaces/__tests__/SetupWizard.svelte.test.ts`
+  (`11` tests) passed. Remaining unrelated gate: the endpoint regression could
+  not run in this dirty worktree because `src/runtime/project-graph.ts` is
+  currently unmerged and fails transform with duplicate
+  `assignedAuthorities`, `structuralDomains`, and `currentProject` declarations.
+- [x] Keep Thread task-detail drawers non-destructive. The live Narrative
+  Harness Thread page let `Details...` open the task drawer, but closing the
+  drawer landed on Overview because Thread opened `/projects/:id/task/:taskId`
+  without a drawer `backgroundPath`; the router then used its direct-task URL
+  fallback. Closure evidence, 2026-06-03: Thread task-detail buttons now share
+  `openTaskDetails`, which passes the current Thread URL as `backgroundPath`
+  when opening the drawer. Regression coverage first failed with `path.state`
+  as `{}`, then passed with `{ backgroundPath: '/projects/looma-knit/thread' }`.
+  Verification: `pnpm vitest run
+  src/web/surfaces/project/__tests__/ThreadTab.svelte.test.ts -t "opens task
+  details with Thread as the drawer background route" --reporter=dot`; affected
+  Thread/router/TaskDrawer suites (`134` tests); `pnpm typecheck`; `pnpm
+  build`; `git diff --check`; `pnpm dev:install`; direct `scripts/install.sh`
+  after the first installed bundle hash lagged the built artifact;
+  installed CLI/web hashes matched the worktree build; `/api/stale-server`
+  returned `stale:false`; and live browser proof on
+  `http://localhost:7777/projects/narrative-harness/thread` clicked
+  `Details...`, opened `/projects/narrative-harness/task/coherence-reviewer-mvp`,
+  closed the drawer, and returned to the exact Thread URL with the drawer
+  removed and Overview not active. Remaining unrelated gate: `pnpm lint:design`
+  still fails on pre-existing typography/token debt in `Chip`, `Eyebrow`, and
+- [x] Bring Thread status chips back under the canonical `Chip` contract. The
+  live Narrative Harness Thread page showed `Guildhall can continue` and `Needs
+  brief` as bespoke status treatments, including one wrapped chip. Closure
+  evidence, 2026-06-03: removed the `agent` / `agent-attention` chip tones and
+  `--chip-agent-*` tokens, mapped Thread/Work/drawer status labels back to the
+  canonical `ok`, `warn`, `accent`, `running`, and `neutral` tone budget, and
+  made the shared `.chip` geometry single-line with overflow ellipsis. Contract
+  tests now assert chip tones stay canonical and Thread ownership labels route
+  through `ok` / `warn` instead of inventing agent tones. Verification: source
+  sweep found no chip `tone-agent`, `agent-attention`, or `chip-agent` usage
+  outside tests/unrelated agent concepts; focused chip suite
+  `pnpm vitest run src/web/lib/__tests__/Button.css-contract.test.ts
+  src/web/surfaces/project/__tests__/ThreadTab.svelte.test.ts -t "chip"
+  --reporter=dot` (`9` tests); affected UI suites covering Button, Thread,
+  Current drawer, and Work (`129` tests); `pnpm typecheck`; `pnpm lint:design`;
+  `pnpm build`; `git diff --check`; `pnpm dev:install`; installed CSS/CLI
+  hashes matched the worktree build; `/api/stale-server` returned
+  `stale:false`; and browser computed-style proof on
+  `http://localhost:7777/projects/narrative-harness/thread` showed `Needs
+  brief` as `.tone-warn`, `Guildhall can continue` as `.tone-ok`,
+  `white-space: nowrap`, no wrapping, and no `tone-agent` / `agent-attention`
+  classes.
+- [x] Normalize Guildhall typography around one semantic role system and carry
+  that rule into agent conformance. The live Thread complaint is the forcing
+  function: chips, thread-list row titles, timestamps, labels, and buttons had
+  too many bespoke sizes, line heights, weights, and bright foreground choices.
+  Implementation target: replace the old `--fs-*` / `--lh-*` split with
+  generated `--gh-type-*` role classes, reserve primary text for selected/current
+  states and true headings without making ordinary rows feel dead, keep rare
+  emphasis weight rare, and require spec/worker/reviewer/design-lens agents to
+  name semantic text hierarchy plus any token or variant budget before adding
+  new visual vocabulary. Closure evidence, 2026-06-03: added
+  `packages/ui/src/text-role-definitions.js`, generated `.gh-text-*` role
+  classes, moved app body/text/chip/thread typography onto `--gh-type-*` and
+  `--gh-color-text-*`, removed app-local `--fs-*` / `--lh-*`, demoted ordinary
+  Thread row titles to secondary/medium while keeping selected/current rows
+  primary/strong, and removed casual `emphasis` / hardcoded white text from
+  product source. Agent conformance now requires spec, worker, reviewer, corpus
+  diagnostics, and design-lens rechecks to name semantic text hierarchy plus any
+  token or variant budget. Verification: source audits found no raw type
+  metrics or numeric weights in `src/web` / `packages/ui/src`; `node
+  packages/ui/scripts/generate-styles.mjs --check`; focused Vitest suite
+  covering Button CSS contract, design-token audit, design-governance packets,
+  ThreadTab, agent prompts, and design-lens review (`170` tests); full
+  `pnpm vitest run --reporter=dot` (`3625` passed, `3` skipped);
+  `pnpm typecheck`; `pnpm --filter @guildhall/ui typecheck`;
+  `pnpm lint:design`; `pnpm build`; `git diff --check`; `pnpm dev:install`;
+  direct `scripts/install.sh` artifact install after the first installed bundle
+  hash lagged the built artifact; `guildhall stop`; `guildhall start`; and
+  `/api/stale-server` returned `stale:false` on pid `72468`. Browser proof on
+  `http://localhost:7777/projects/narrative-harness/thread` after a cache-busted
+  reload showed no restart banner, `--gh-color-text-body: #ded6e6`, chip
+  `11px` / weight `500`, selected thread title primary `#f3edf6` / `12px` /
+  weight `600`, unselected title secondary `#c7b9d1` / `12px` / weight `500`,
+  and composer bottom gap `52px`.
+- [x] Harden the 0.10 multi-project flow from the 2026-06-03 installed-app
+  audit. Verification baseline: `pnpm build`, `pnpm dev:install`,
+  `guildhall stop`, LaunchAgent restart, `/api/stale-server` `stale:false`
+  with pid `56925`, and read-only subagent/browser/API passes across Fair
+  Labor License, Font Something, Narrative Harness, Commerce Project, and
+  Looma + Knit. The 0.10 owner-input contract is working best on Looma + Knit:
+  `startReadiness.canStart:false`, `owner_input_required`, and the AlertDialog
+  bounded-chat session is reachable at the action href with an answer composer.
+  The remaining failure is focus: the selected bounded-chat prompt can still be
+  buried behind the huge Thread list, so action hrefs must open the selected
+  bounded-chat detail as the dominant state with the prompt and composer
+  immediately visible. Mixed runnable/shaping projects expose a broader
+  next-action arbitration problem. Fair Labor License can start and has clean
+  git state, but `Do this next` prefers project discovery reconciliation while
+  the clearest safe work is Stripe brief cleanup; the UI also needs to
+  distinguish "Guildhall can continue shaping" from "release/live payment
+  verification still waits on Stripe/OAuth setup." Font Something has import
+  drafts, project check-in, discovery reconciliation, and spec review all
+  competing for the crown; Overview, Work, Thread, and task drawers must
+  converge on one recommended safe owner action, and spec approval must not
+  look unqualified while the brief checklist still reports missing success
+  target or acceptance criteria. Narrative Harness is startable, but Work and
+  Settings still say `Answer in Thread` when the Thread API has no active
+  question/session and Overview says no owner action is blocking; task drawers
+  also leaked unrelated billing/admin split suggestions into a hosting-policy
+  spec. Commerce Project is the fresh-intake regression: zero current tasks,
+  active setup/project questions, dirty git, and pending migrations still show
+  an enabled `Start work`, old pressure-test questions obscure first-spec
+  setup, `setup:firstTask` renders as `Name this project` with an impossible
+  `20607d` age, and stale run history says `No actionable tasks remain: 2 done`
+  beside the current setup path. Cross-cutting fixes from this audit: suppress
+  stale `Answer in Thread` banners unless a live bounded-chat/question exists;
+  make Start name or route to the exact next task/action it will take and block
+  fresh-intake projects behind setup; reconcile current empty task state with
+  old run events; keep completed tasks from retaining unresolved escalations
+  without a supersede receipt; keep old recovery/history chatter out of active
+  owner-input paths; explain Structure's legacy structural-map state separately
+  from the new 0.10 project graph domains; and update New thread/request copy
+  so bounded-chat/new-request language is consistent with the 0.10 model. This
+  must be fixed by centralizing summary and next-action derivation in shared
+  runtime utilities that are cached with the project snapshot and consumed by
+  Overview, Thread, Work, Settings, Release, Projects Home, and task drawers.
+  Views must render that shared action model; they must not independently rank
+  inbox items, reinterpret readiness, infer owner-input state, or synthesize
+  their own competing "next" result from raw task/thread/release data.
+  Closure evidence, 2026-06-03: four isolated worktree slices were merged into
+  the main worktree. The shared `buildProjectActionModel` runtime utility now
+  ships on `/api/project` and `/api/service`, drives `DoThisNext`, Project
+  Overview, Project Home summaries, and ProjectView run controls, and blocks
+  fresh-intake zero-task setup even when raw readiness is permissive. Thread
+  action hrefs now open selected bounded-chat detail/composer in compact mode;
+  first-spec setup no longer inherits stale pressure-test ordering, copy, or
+  impossible ages. Task drawers now suppress unrelated split recommendations,
+  qualify spec approval when success targets/acceptance criteria are missing,
+  and treat completed tasks with unresolved escalations as completion hygiene
+  instead of live recovery. Structure now distinguishes the legacy structural
+  map from 0.10 project graph domains and explains empty dependency graphs with
+  current-project context. Verification after merge:
+  `pnpm vitest run src/runtime/__tests__/project-action-model.test.ts
+  src/web/surfaces/__tests__/DoThisNext.svelte.test.ts
+  src/web/surfaces/project/__tests__/ProjectOverviewTab.svelte.test.ts
+  src/web/surfaces/__tests__/ProjectView.svelte.test.ts --reporter=dot`
+  (`68` tests);
+  `pnpm vitest run src/web/surfaces/__tests__/TaskDrawer.svelte.test.ts
+  src/web/surfaces/project/__tests__/ReleaseTab.svelte.test.ts --reporter=dot`
+  (`57` tests);
+  `pnpm vitest run
+  src/web/surfaces/project/structure/__tests__/ProjectStructurePanel.svelte.test.ts
+  src/web/surfaces/project/settings/__tests__/SettingsTab.structure.test.ts
+  src/web/surfaces/project/__tests__/SettingsTab.svelte.test.ts --reporter=dot`
+  (`12` tests);
+  `pnpm vitest run src/runtime/__tests__/thread.test.ts
+  src/web/surfaces/project/__tests__/ThreadTab.svelte.test.ts --reporter=dot`
+  (`150` tests);
+  `pnpm vitest run src/web/lib/__tests__/project-summary.test.ts
+  src/runtime/__tests__/project-action-model.test.ts
+  src/web/surfaces/__tests__/ProjectView.svelte.test.ts --reporter=dot`
+  (`56` tests); `pnpm typecheck`; `git diff --check`; `pnpm build`;
+  `pnpm dev:install`; service restart via `guildhall stop` and LaunchAgent
+  kickstart; and `/api/stale-server` returned `stale:false` on pid `6339`
+  with process start `2026-06-03T13:34:25.263Z`.
+- [x] Stop bounded-chat owner-input migration from preserving agent planning as
+  the question. Live Looma + Knit testing found `Clarify AlertDialog` rendering
+  the spec agent's scratch text (`I have enough context... The key question I
+  need to ask... Let me write the product brief first, then ask.`) as the
+  active owner question. Root cause: a legacy task-local fallback question was
+  copied verbatim by `0.10.0/task-open-questions-to-bounded-chat`; the durable
+  owner-input/bounded-chat creation boundary did not re-normalize or reject
+  agent narration. Closure evidence, 2026-06-03: durable owner-input creation
+  now accepts a structured `question` payload and normalizes only that explicit
+  data before persistence; it does not mine a question out of agent reasoning
+  prose. Legacy prose recovery is isolated to migration/fallback cleanup, where
+  old malformed prompts may be converted into a structured question object or
+  preserved as notes instead of fake owner-input blockers. Looma + Knit state
+  was repaired in `.guildhall/owner-input`,
+  `.guildhall/bounded-chat`, `.guildhall/attention.json`, and the one archived
+  product brief with the same narration smell. `/api/project/thread` for
+  `looma-knit` now reports the active prompt as `What variants does AlertDialog
+  need?` with zero bad-text hits; project-wide `.guildhall` scan found no
+  remaining active owner-input/task/bounded-chat hits, only append-only
+  progress-log history. Verification:
+  `pnpm vitest run src/runtime/__tests__/owner-input.test.ts
+  src/runtime/__tests__/task-question-migration.test.ts
+  src/runtime/__tests__/orchestrator.test.ts
+  src/runtime/__tests__/serve-meta-intake.test.ts
+  src/runtime/__tests__/thread.test.ts
+  src/runtime/__tests__/intake.test.ts src/runtime/__tests__/structural-map.test.ts
+  src/runtime/__tests__/orchestrator.test.ts src/runtime/__tests__/thread.test.ts
+  --reporter=dot` (`448` tests); `pnpm typecheck`; `git diff --check`.
+- [x] Repair Thread question-card typography and chip wrapping after the
+  Looma + Knit owner-input cleanup. The first visual pass over-corrected by
+  mixing near-neutral text colors, shrinking too many labels, keeping the
+  active question inside a nested card, and leaving status chips able to break
+  across lines. Closure evidence, 2026-06-03: Thread now uses the normal
+  app text scale instead of local near-neutral mixes; Thread row/dock titles and
+  the active question prompt measure `13px`, secondary summaries/meta/timestamps
+  measure `12px`, chips measure `12px`, chip rows are `nowrap` with clipped
+  overflow, and the active bounded-chat question renders as a flat section
+  instead of a `bounded-chat-panel` nested inside the Thread card. Follow-up
+  flattened active Thread dock internals so task context, checklist/activity,
+  and question-context guidance render as plain sections rather than nested
+  `UtilityPanel` boxes. Live proof on
+  `http://localhost:7777/projects/looma-knit/thread` after rebuild/install and
+  service restart measured row title `13px`, row summary/body copy `13px`, row
+  time `12px`, dock title `13px`, dock summary/body copy `13px`, question meta
+  `12px`, question prompt `13px`, first chip `11px` with
+  `white-space:nowrap` and unchanged `4px` side padding, Thread list row gap
+  `4px`, and chip row `flex-wrap:nowrap`. Line-height is now unitless and
+  role-consistent inside Thread: visible `13px` title/body/question/composer
+  text measures `18.2px` (`1.4`), `12px` meta/time text measures `15px`
+  (`1.25`), and `11px` chips measure `13.2px` (`1.2`). The old ambiguous
+  `Looma Knit · Clarify AlertDialog` active-question byline was replaced with
+  the shared atomic `Eyebrow` component: live proof measured an amber `Question`
+  eyebrow at `11px`, `font-weight:800`, uppercase, followed by the actual
+  prompt heading and muted explanatory body copy. The active dock had `0`
+  nested `.utility-panel`s and `0` nested `.card`s, while the question section
+  had transparent background, `0px` radius, and no shadow.
+  Verification:
+  `pnpm vitest run src/web/lib/__tests__/Button.css-contract.test.ts
+  src/web/surfaces/project/__tests__/ThreadTab.svelte.test.ts --reporter=dot`;
+  `pnpm typecheck`; `pnpm build`; installed bundle hash matched `dist`;
+  `/api/stale-server` returned `stale:false`.
+- [x] Fix the required-migration action affordance and apply feedback. The live
+  Narrative Harness modal applied `0.10.0/task-hierarchy-links`, but the next
+  blocker immediately replaced the card, making the click look inert; migration
+  action icons also depend on shared `refresh-cw` / inbox icon registry support.
+  Closure evidence, 2026-06-02: added `refresh-cw` and `list-todo` to the shared
+  icon registry, rendered the Overview and modal migration actions with
+  `refresh-cw`, and kept the success notice visible when another required
+  migration remains. Red/green coverage:
+  `src/web/lib/__tests__/Icon.svelte.test.ts`,
+  `src/web/surfaces/__tests__/ProjectView.svelte.test.ts`, and
+  `src/web/surfaces/project/__tests__/ProjectOverviewTab.svelte.test.ts`.
+  Verification: focused Vitest suites, `pnpm typecheck`, `pnpm lint:design`,
+  `pnpm build`, `pnpm dev:install`, service restart, `stale:false`, and browser
+  proof against `http://localhost:7777/projects/narrative-harness` showed both
+  visible `Migrate project` buttons plus `Apply required migration` rendering
+  `lucide-refresh-cw` SVGs. The live migration API shows
+  `0.10.0/task-hierarchy-links` applied at `2026-06-02T19:05:29.512Z`; the
+  remaining blocker is `0.10.0/task-open-questions-to-bounded-chat`.
+- [x] Restore compact mobile Thread rows to the shared card-list surface. The
+  Fair Labor License thread list at mobile width was visually collapsed into
+  edge-to-edge rows because the compact list used plain row button styling and
+  later lost its outer gutter when the shell padding token was unavailable.
+  Closure evidence, 2026-06-02: compact thread index rows now render through
+  `CardListItem`/`UtilityPanel`; the compact-list CSS keeps row spacing and
+  gives the shell padding token a `var(--gh-space-2)` fallback so the shared
+  card padding/radius/background remain visible on mobile. Red/green coverage:
+  `src/web/surfaces/project/__tests__/ThreadTab.svelte.test.ts` now checks the
+  shared `card-list-item`/`utility-panel` row contract and the padding fallback.
+  Verification: `pnpm vitest run
+  src/web/surfaces/project/__tests__/ThreadTab.svelte.test.ts --reporter=dot`
+  (`73` tests), `pnpm typecheck`, `pnpm lint:design`, `pnpm build`,
+  `pnpm dev:install`, service restart, and `stale:false`. Browser proof against
+  `http://localhost:7777/projects/fair-labor-license/thread` at `640x900`
+  showed `thread-compact-list`, `.thread-index` padding `8px 8px 12px`,
+  list gap `8px`, and rows at `x=8` with class
+  `utility-panel ... card-list-item thread-index-row`, `12px` row padding, and
+  `6px` border radius.
+- [x] Keep pending blocked Thread escalations actionable from the selected
+  thread detail. Fair Labor License's pending external-setup blockers were
+  labeled "Needs you" and the detail copy told the user to choose a recovery
+  action, but Thread only rendered action buttons for `active` escalation turns,
+  so `pending`/`blocked` escalation cards had no decision controls and no
+  composer. Closure evidence, 2026-06-02: pending blocked escalations now use
+  the same recovery decision surface as other escalation cards: `Details...`,
+  reason-aware `Resume task`/retry/rework action, `I handled this...`, and the
+  shared Thread composer for non-resolving recovery guidance. Composer notes use
+  the existing task `/resume` endpoint with `preserveStatus` so adding guidance
+  does not silently clear the blocker. Red/green coverage:
+  `src/web/surfaces/project/__tests__/ThreadTab.svelte.test.ts` reproduces a
+  pending `human_judgment_required` OAuth escalation, verifies the action modal
+  opens, and verifies the composer sends a preserved-status recovery note.
+  Verification: `pnpm vitest run
+  src/web/surfaces/project/__tests__/ThreadTab.svelte.test.ts -t "pending
+  blocked escalations" --reporter=dot`; full ThreadTab suite (`73` tests);
+  `pnpm typecheck`; `pnpm lint:design`; `pnpm build`; `pnpm dev:install`;
+  service restart; and `stale:false`. Browser proof against
+  `http://localhost:7777/projects/fair-labor-license/thread` showed the selected
+  Google OAuth recovery thread with `Details...`, `Resume task`,
+  `I handled this...`, `Send`, and composer placeholder
+  `Add recovery guidance for Guildhall...`.
+- [x] Keep selected recovery cards in scrollable Thread flow while only the
+  composer stays sticky. Fair Labor License's selected "Needs you" recovery
+  card should be an ordinary scrollable card above the composer, not a second
+  sticky footer item. The previous fix put `.thread-active-dock` inside
+  `.thread-footer`, so the card inherited the footer's sticky behavior even
+  though the card itself was `position: relative`. Closure evidence,
+  2026-06-02: `.thread-detail-flow` is back as a column flex stack,
+  `.thread-list` is a real DOM wrapper (not a class attached to `Stack`, which
+  does not forward it) and keeps `margin-top: auto`, actionable escalation
+  turns render as `.thread-active-dock` inside the scrollable flow, and
+  `.thread-footer` is only rendered around the composer. Red/green coverage:
+  `src/web/surfaces/project/__tests__/ThreadTab.svelte.test.ts -t "pending
+  blocked escalations"` first failed because the footer still contained
+  `Needs recovery`, then passed with `Needs recovery`, `Resume task`, and
+  `I handled this...` inside the active dock while the footer only contains the
+  composer. The source-contract test `-t "only the composer footer is sticky"`
+  also covers the DOM order and absence of absolute/fixed positioning.
+  Verification: full ThreadTab suite
+  (`73` tests), `pnpm typecheck`, `pnpm lint:design`, `git diff --check`,
+  `pnpm build`, `pnpm dev:install`, service restart, and `stale:false`.
+  Browser proof against
+  `http://localhost:7777/projects/fair-labor-license/thread` showed the Google
+  OAuth recovery card as a child of `.thread-detail-flow`, not
+  `.thread-footer`; `footerContainsDock: false`, `footerContainsComposer:
+  true`, `Resume task` present in the dock and absent from the footer,
+  `.thread-active-dock` position `relative`, and footer position `sticky`.
+  Follow-up closure evidence, 2026-06-02: the scrollable Thread detail now has
+  `padding-top: var(--gh-space-1)` to match the sticky footer's existing bottom
+  inset. Source-contract coverage checks `.thread-detail-scroll` top padding
+  and `.thread-footer` bottom padding together; live FLL proof showed
+  `scrollPaddingTop: 4px`, `footerPaddingBottom: 4px`, and footer position
+  `sticky`.
+- [x] Move the Thread composer send-button circle into the shared Button
+  primitive. Fair Labor License's composer send action was still trying to
+  become circular through a local `.thread-composer-send` class, but that shape
+  was being applied across a child component boundary instead of through
+  Button's own contract. Closure evidence, 2026-06-02: `Button` now accepts a
+  `rounded` boolean and owns rounded icon-only geometry; the Thread composer
+  passes `iconOnly rounded` and no longer carries local width/height/padding/
+  radius rules for the send action. Red/green coverage:
+  `src/web/lib/__tests__/Button.css-contract.test.ts -t "rounded icon-only"`
+  and `src/web/surfaces/project/__tests__/ThreadTab.svelte.test.ts -t "shared
+  rounded button"` both failed before the shared prop existed, then passed.
+  Verification: full Button visual contract suite (`5` tests), full ThreadTab
+  suite (`73` tests), `pnpm typecheck`, `pnpm lint:design`, `git diff --check`,
+  `pnpm build`, `pnpm dev:install`, service restart, and `stale:false`.
+  Browser proof against
+  `http://localhost:7777/projects/fair-labor-license/thread` showed the live
+  composer send button with class `btn v-primary s-sm icon-only rounded`, size
+  `32x32`, `border-radius: 999px`, zero button padding, and 8px right/bottom
+  inset from the input shell. Follow-up closure evidence, 2026-06-02: the
+  composer textarea is explicitly block-level so the input shell and textbox
+  share the same height; browser proof showed symmetrical 9px shell-to-textbox
+  inset on all sides and the send button exactly 8px from the textbox bottom
+  and right edges. The Thread source-contract test now locks that the composer
+  textbox and send action use the same inset grid. Follow-up frame cleanup,
+  2026-06-02: the sticky footer was composer-only in the DOM, but
+  `.thread-composer-shell` still looked like a card because it owned padding,
+  border, radius, background, shadow, and blur. The wrapper is now unframed,
+  leaving the textarea as the only bordered input surface. Red/green coverage:
+  `src/web/surfaces/project/__tests__/ThreadTab.svelte.test.ts -t "sticky
+  composer wrapper"` failed on the shell frame styles, then passed; live FLL
+  proof showed the composer wrapper with `padding: 0px`, no border/radius,
+  transparent background, no shadow, and no backdrop blur while
+  `footerContainsDock: false`.
+- [x] Collapse repeated historical review feedback into one history-detail
+  event. Fair Labor License's thread history was rendering each completed
+  reviewer note as a separate "Review feedback" event header, which made noisy
+  review churn look like a stack of peer cards instead of historical detail.
+  Closure evidence, 2026-06-02: `ThreadTab` now groups adjacent historical
+  `review_feedback` turns for the same task into one event, shows the newest
+  reviewer summary inline, and puts earlier passes behind the existing
+  `thread-history-cluster` disclosure as `Pass N` entries. Single review notes
+  still render as before. Red/green coverage:
+  `src/web/surfaces/project/__tests__/ThreadTab.svelte.test.ts -t "clusters
+  repeated historical review feedback"` first failed with three repeated
+  `Review feedback` headers, then passed with one header and `Show 2 earlier
+  reviewer notes`. Verification: full ThreadTab suite (`74` tests),
+  `pnpm typecheck`, `pnpm lint:design`, `git diff --check`, `pnpm build`,
+  `pnpm dev:install`, service restart, and `stale:false`. Browser proof against
+  `http://localhost:7777/projects/fair-labor-license/thread`, selecting
+  `Set FLL overhead charge policy`, showed `reviewHeadCount: 1`, event heads
+  `Review feedback` and `Recovery history`, disclosure
+  `Show 7 earlier reviewer notes`, pass labels `Pass 7` through `Pass 1`, and
+  the disclosure closed by default with visible text only showing the newest
+  review summary plus the disclosure label.
+- [x] Keep Overview blocked-work chips as compact categories, not task-title
+  dependency labels. Fair Labor License's blocked OAuth/setup rows had clean
+  `dependsOn` task IDs, but `ProjectOverviewTab` resolved those IDs to task
+  titles and passed the joined titles directly into `OverviewTaskRow.chipLabel`,
+  producing giant chips such as `Create Google OAuth provider credentials,
+  Create Apple OAuth provider credentials` and `Add OAuth providers — Google
+  and Apple sign-in`. Closure evidence, 2026-06-02: the Overview blocked-row
+  mapper now infers a short blocker category (`Provider settings`,
+  `Dependencies`, `Git story closure`, `Project readiness / bootstrap`,
+  `Missing prerequisite`, or `Needs triage`) before binding `chipLabel`, and the
+  local class name was moved from dependency-list to blocked-work-list to match
+  the product semantics. Red/green coverage:
+  `src/web/surfaces/project/__tests__/ProjectOverviewTab.svelte.test.ts -t
+  "blocked-work chips" --reporter=dot` first failed with the long dependency
+  labels, then passed with three `Provider settings` chips. Verification: full
+  ProjectOverviewTab suite (`14` tests), `pnpm typecheck`, `pnpm lint:design`,
+  `git diff --check`, `pnpm build`, `pnpm dev:install`, service restart, and
+  `stale:false`. Browser proof against
+  `http://localhost:7777/projects/fair-labor-license/overview` showed the four
+  live blocked-work chips all rendering `Provider settings`, `longChipCount: 0`,
+  and no dependency-title chip labels.
+- [x] Reduce Guildhall cognitive overhead with hard conversions and clearer
+  abstraction boundaries. Plan:
+  `internal/plans/2026-06-01-guildhall-cognitive-overhead-reduction.md`.
+  The accepted direction is to use required conversion scripts for wrong
+  persisted shapes rather than preserving broad compatibility paths. In
+  particular, `parent` must stop being a task status; containment belongs in
+  explicit task hierarchy links. The plan also makes Threads the single
+  owner-input conversation surface, narrows Needs You to alerts, shrinks
+  Settings from an all-purpose cockpit into focused configuration panels,
+  replaces raw lever exposure with operating profiles and changed overrides,
+  adds component/token governance for duplicated bespoke UI, unmanaged font
+  sizes, font weights, spacing, radius, and variant sprawl, and moves
+  Looma/Knit/Dialog/Drawer knowledge out of generic runtime modules into
+  adapters, fixtures, or deletion. Refreshed after merge commit `d508302f`:
+  the new generic state-machine substrate, structural map, and project graph
+  are product-core concepts to keep, but their owner-facing graph/structure
+  review must not remain embedded in Settings. Project graph state, assignment
+  picker behavior, graph request actions, and structural-map review belong in a
+  focused project-structure surface with Thread/bounded chat owning any
+  discussion. Design-system cleanup is now governed by the internal constitution
+  `internal/constitutions/design-system-governance.md`, which treats token roles,
+  component contracts, variant budgets, surface ownership, and deletion criteria
+  as implementation law rather than optional style advice. Task 12 now adds the
+  first corpus digestion/refresh diagnostic slice for those risks: indexed UI
+  projects can surface token-family split, raw visual values, variant drift,
+  duplicate primitive, surface-ownership, missing-contract, and exception
+  findings, then render a compact design-governance packet plus owner-approved
+  learning proposals for worker/reviewer context.
+  Closure evidence, 2026-06-02: the first reduction cutover is implemented and
+  the plan checklist is complete through installed-app verification. Required
+  conversions exist for `0.10.0/task-hierarchy-links` and
+  `0.10.0/task-open-questions-to-bounded-chat`; old `parent` status and
+  task-local question state now block normal project work until converted
+  instead of silently flowing through runtime/UI paths. Bounded owner input uses
+  `OwnerInputRequest` records linked to bounded-chat sessions; orchestrator
+  fallback questions create owner-input records and preserve waiting state from
+  that store instead of treating `openQuestions` as the durable model. Settings
+  is a 184-line shell and opens to readiness with only Ready, Providers,
+  Coordinators, Identity, Profile, and Developer sections. Structure owns the
+  structural-map/project-graph review surface and points discussion back to
+  Threads. Needs You projects alerts such as required migrations and triage
+  blockers, not local answer cards. The work graph importer now uses a generic
+  domain adapter and configured domain-route normalization instead of
+  Looma/Knit/Dialog/Drawer branches in generic runtime code.
+  Design feedback amendment, 2026-06-02: removed the local
+  design-system-development target hook and global config/API status for
+  machine-local design-system checkouts. Reusable design findings remain
+  portable candidate/improvement records until project graph/domain authority
+  routes provider-owned follow-up to another coordinator.
+  Verification run on the final tree: `pnpm typecheck`; `pnpm test` (`303`
+  files passed, `1` skipped; `3561` tests passed, `3` skipped);
+  `pnpm lint:deps` (`0` errors, existing `56` no-orphans warnings);
+  `pnpm lint:reductions`; `pnpm lint:design`; `pnpm build`; and
+  `pnpm dev:install`.
+  Post-closure refresh found and fixed the missing Vitest alias for the
+  browser-safe `@guildhall/levers/profiles` subpath; the exact failed web
+  suites then passed (`47` tests) before the full suite passed again.
+  Live proof: installed service was restarted with `guildhall stop` and
+  `guildhall start`; `curl -s http://localhost:7777/api/stale-server` returned
+  `"stale":false`. Browser proof against
+  `http://localhost:7777/projects/narrative-harness` showed Settings reduced to
+  the readiness/configuration sections, Structure owning structural map/project
+  graph with "Thread owns the discussion," Work showing the hierarchy migration
+  blocker with no visible "Parent task" copy, and Needs You showing required
+  migration/triage alerts. Narrative Harness remains intentionally
+  pre-migration, so live converted owner-input sessions were not created in
+  that checkout; the live proof is the required migration block, while
+  converted owner-input/thread/inbox behavior is covered by the green focused
+  and full test suites.
+  Remaining reduction candidates after this cutover: remove the transitional
+  `Task['openQuestions']` type surface once all migrations and old-record
+  readers are no longer needed; apply project migrations to old checked-out
+  projects when the owner chooses; clean up the existing no-orphans warning
+  baseline; keep `pressure_test_question` only for the explicit pressure-test
+  domain, never as a bounded-chat wrapper; continue retiring UI compatibility
+  wrappers and local CSS as touched surfaces move onto governed primitives; and
+  expand corpus-refresh design-governance diagnostics from Task 12 into
+  reviewer/worker context.
+- [x] Add contract surfaces and surface review packets as a project-graph
+  extension. Spec:
+  `internal/specs/2026-06-02-guildhall-contract-surfaces-project-graph.md`.
+  The accepted direction is that individual specs should inform and update, or
+  be updated by, a central contract for the domain/capability they touch.
+  Component libraries, APIs, event contracts, state machines, MCP resources,
+  schemas, design systems, and other durable capability surfaces should be
+  reviewed against sibling specs, invariants, known decisions, affected
+  consumers, and proof obligations. This belongs in the existing
+  authority-aware project graph as `contract_surface` nodes/facets with
+  state-machine receipts, not as a separate spec graph. Structure should own the
+  owner-facing surface review projection and link discussion to Thread/owner
+  input; Settings should only report readiness blockers. Corpus refresh may
+  propose likely surfaces and drift findings, but owner/coordinator approval
+  decides what becomes durable graph state.
+  Closure refresh, 2026-06-13: the contract-surface/project-graph runtime,
+  Structure projection, and context-builder integration are now covered by the
+  focused proof suite. The stale failures in the proof path were test fixtures
+  still writing structural/context state into repo-local `.guildhall` paths;
+  those fixtures now use system-managed project state helpers. Verification:
+  `pnpm vitest run src/runtime/__tests__/generalization-smoke.test.ts
+  src/runtime/__tests__/external-task-authority.test.ts
+  src/runtime/__tests__/contract-surfaces.test.ts
+  src/runtime/__tests__/structural-map.test.ts
+  src/runtime/__tests__/project-graph.test.ts
+  src/runtime/__tests__/context-builder.test.ts
+  src/web/surfaces/project/structure/__tests__/ProjectStructurePanel.svelte.test.ts
+  --reporter=dot` passed (`7` files, `138` tests).
+- [x] Update public How Guildhall works docs and harden the first agent
+  contract-governance tests. Public guide pages now explain Structure,
+  structural map, project graph, provider/consumer requests, explicit task
+  hierarchy, owner-input sessions, state-machine receipts, contract surfaces,
+  and design-governance packets in reader-facing language. Spec, worker, and
+  reviewer prompts now treat `## Design Governance` packets as project contract
+  input: the spec agent adjusts the blueprint and names contract deltas, the
+  worker changes implementation choices before local UI work, and the reviewer
+  records `Contract / governance fit` as a load-bearing verdict line. This is
+  guardrail hardening, not completion of the full contract-surface runtime
+  feature. Evidence: the prompt tests failed red with 3 failures before the
+  prompt contract existed, then passed after the prompt changes. Verification
+  passed: `pnpm vitest run src/agents/__tests__/guildhall-agent.test.ts
+  src/corpus-map/__tests__/design-governance-diagnostics.test.ts --reporter=dot`
+  (73 tests), `pnpm vitest run
+  src/web/surfaces/project/__tests__/ThreadTab.svelte.test.ts --reporter=dot`
+  (68 tests), `pnpm typecheck`, `pnpm docs:check-copy`,
+  `pnpm docs:check-help-sync`, and `pnpm docs:build`.
+- [x] Specify the 0.10 state-machine substrate and local project graph pivot.
+  Spec:
+  `internal/specs/2026-06-01-guildhall-0-10-state-machines-project-graph.md`.
+  The accepted direction is to stop adding lifecycle-heavy "status buckets" and
+  introduce a small deterministic state-machine primitive with legal
+  transitions, guards, required evidence, and append-only receipts. The pure
+  transition result should be only `applied` or `rejected`; retry idempotency
+  belongs in command handling and must not become a `noop` pseudo-state. The
+  first new product customer should be a local project graph dependency edge
+  where one local Guildhall project can request provider-owned work from
+  another, the provider can shape and deliver it, and the consumer must verify
+  or return the delivery before the edge resolves. Clarification: a project
+  never writes into another project's files, tasks, mirrors, evidence, or
+  delivery records. Projects publish typed requests to a neutral exchange; the
+  provider project imports and acts on them under its own authority. Provider
+  and consumer coordinators negotiate through typed packets while each reasons
+  from its own project context, not a blended cross-project prompt. The first
+  implementation should also migrate one small existing lifecycle, preferably
+  capability requests, to prove the primitive outside the project-graph feature
+  while leaving broad task-status cleanup for 0.11.0.
+- [x] Start the 0.10 state-machine/project-graph implementation in
+  `feature/0.10-state-machine-project-graph`. Added the generic
+  state-machine primitive, migrated capability request decisions through a
+  capability request machine with transition receipts, and added an initial
+  local project graph registry plus project dependency edge machine. The first
+  provider request path writes the neutral exchange and consumer outgoing
+  mirror only; it intentionally does not write provider-local mirrors or tasks.
+  Focused runtime tests and `pnpm build` pass in the worktree.
+- [x] Complete the first 0.10 state-machine/project-graph feature path in
+  `feature/0.10-state-machine-project-graph`. The graph runtime now supports
+  provider-authorized request import, delivery planning, delivery receipts,
+  consumer review, structured consumer returns, revised provider plans,
+  redelivery, and consumer acceptance. CLI fallback commands expose the same
+  authority-preserving flow through `guildhall graph ...`. Focused tests cover
+  the full consumer/provider loop and prove consumer code cannot create
+  provider-local mirrors. `pnpm build` passes.
+- [x] Start structural/domain intelligence on
+  `feature/0.10-structural-domain-intelligence`. Added structural-map drafting
+  that persists under `.guildhall/structural-map/` without creating
+  `guildhall.yaml`, separates package/domain/executable/Git authority nodes,
+  detects ignored vendored Git metadata, and requires deterministic
+  owner-review transitions before a map becomes routing truth. Added context
+  slices with structural handles and omission reasons, plus cross-project
+  request shaping that uses accepted consumer/provider maps to publish
+  provider-owned domain work through the project graph instead of writing
+  across project boundaries. Focused structural tests cover draft, correction,
+  acceptance, context slices, provider request import, delivery, consumer
+  verification, and return-for-revision.
+- [x] Continue structural/domain intelligence from the remaining-work ledger
+  in `internal/plans/2026-05-31-guildhall-0-10-implementation-tracker.md`.
+  The remaining-work ledger was reopened for the complete project graph product
+  loop. Remaining count after graph API/UI/tests: 0 items. Next item: merge
+  decision once the active bounded-chat worktree on `0.10.0` is clean enough
+  to receive this branch. Implemented explicit domain authority
+  assignments, project-scoped graph action endpoints, the Settings Project
+  graph surface, inbound/outgoing request controls, and tests for assignment,
+  provider intake/planning/delivery, consumer review/return, provider
+  redelivery, and consumer acceptance. Verification: `pnpm typecheck` passed;
+  focused graph/API/UI tests passed with 82 tests; structural/context tests
+  passed with 89 tests; `pnpm build` passed.
+- [x] Tighten the project graph boundary for monorepos vs external local
+  projects. Detected structural domains and local coordinator domains now live
+  on the graph itself. Registered sibling projects are visible as related local
+  projects, but they are not auto-assigned as authority unless the user assigns
+  that domain. Focused graph/API/UI tests pass with 83 tests.
+- [x] Clarify the owner-facing project graph walkthrough. Remaining count: 0
+  items. Next item: merge decision once the active bounded-chat worktree on
+  `0.10.0` is clean enough to receive this branch. The Settings graph surface
+  now distinguishes detected domains from assigned responsibility, separates current/connected/related
+  local projects, and shows waiting-on plus this-project role labels on request
+  cards. Verification: `pnpm typecheck` passed; focused graph/API/UI tests
+  passed with 83 tests; `pnpm build` passed.
+- [x] Add project graph responsibility facets and workspace child-project
+  provider targets. Remaining count: 0 items. Next item: merge decision once
+  the active bounded-chat worktree on `0.10.0` is clean enough to receive this
+  branch. Runtime/API/UI implementation now expands workspace child projects
+  such as `Looma`, persists responsibility facets, and keeps consumer
+  configuration plus consumer verification assigned to the current project by
+  default. Verification: `pnpm typecheck` passed; focused graph/API/UI tests
+  passed with 86 tests; `pnpm build` passed; `pnpm dev:install` refreshed the
+  installed app; `/api/stale-server` returned `stale:false`; live Narrative
+  Harness walkthrough confirmed standalone `Looma` appears as a provider
+  capability option without moving token values/product configuration out of
+  Narrative Harness.
+- [x] Simplify the owner-facing project graph after live walkthrough feedback.
+  Remaining count: 0 items. Next item: merge decision once the active
+  bounded-chat worktree on `0.10.0` is clean enough to receive this branch.
+  The graph no longer exposes every responsibility facet as a select-box row.
+  It shows domains first, lets the owner click into a domain, and keeps
+  "Assign to project" actions inside the focused detail panel while local
+  product configuration and verification read as plain context.
+- [x] Flatten the project graph layout after live visual feedback. Remaining
+  count: 0 items. Next item: merge decision once the active bounded-chat
+  worktree on `0.10.0` is clean enough to receive this branch. The graph keeps
+  major section cards, but local-project rows, domain detail sections, and
+  dependency requests now render as rows/dividers instead of nested utility
+  cards inside cards.
+- [x] Make assignment scale beyond the current local project set. Remaining
+  count: 0 items. Next item: merge decision once the active bounded-chat
+  worktree on `0.10.0` is clean enough to receive this branch. The settings
+  graph no longer dumps managed project names or calls unrelated projects
+  "related"; it summarizes the managed-project index and opens a searchable
+  assignment picker only when the owner chooses `Assign to project`.
 - [x] Specify the 0.10 bounded-chat pivot for intake and New request flows.
   Plan: `internal/plans/2026-05-31-guildhall-0-10-bounded-chat.md`.
   The accepted direction is a two-role flow: a conversation agent handles the
@@ -78,6 +1919,49 @@ babysit setup/import/provider/release states across multiple pages.
   human resolution actions, surfaces should prefer one bounded-chat entry point
   such as `Resolve blocker`, `Choose next step`, or `Review options` over a
   dense row of competing buttons.
+- [x] Tighten bounded-chat proof before widening the rollout.
+  Focused runtime and serve coverage now proves that project check-in bounded
+  chat keeps asking until planned root questions are exhausted, reuses the
+  same active session when the user comes back later, records confused answers
+  as discarded instead of durable guidance, persists the accepted answers and
+  closure receipt to disk, and projects a completed Thread turn instead of
+  letting fulfilled bounded-chat sessions disappear silently.
+- [x] Start moving New request clarification into bounded chat instead of task
+  open-question cards.
+  Ambiguous policy/spec requests now create a `new_request` bounded-chat
+  session from `/api/project/request` rather than seeding an exploring task
+  with `openQuestions`. The answer path creates the shaped task only after the
+  owner clarifies scope, suppresses the stale follow-up question card on the
+  created task, records the accepted clarification in bounded-chat state, and
+  projects both active and completed New request turns in Thread. Completion
+  evidence, 2026-06-03: direct task-like asks, settings/practice/repair/
+  clarification routes, and pure project-question asks now all create
+  `new_request` bounded-chat sessions instead of immediate task cards.
+  Project-question sessions close as conversation receipts without task drafts;
+  task-like sessions create work only after the owner answers. Thread route
+  selection already preserves `/thread?thread=<boundedChatId>`, and bounded
+  chat now renders through a dedicated conversation panel instead of the old
+  question-card branch. Verification: focused bounded-chat, Thread,
+  serve-intake, serve-settings, ThreadTab, and IntakeModal suites passed
+  together with 251 tests; `pnpm typecheck:ui` and `pnpm lint:design` passed.
+  `pnpm typecheck` still fails on unrelated contract-surface schema/type drift
+  in `src/runtime/context-builder.ts` and `src/runtime/intake.ts`.
+- [x] Narrow `Needs you` to alert-owned items while `Threads` absorbs the
+  conversation-shaped attention flow.
+  Runtime inbox classification now explicitly marks project check-in,
+  pressure-test questions, agent questions, approvals, and escalations as
+  thread-owned. `/api/project/inbox` returns only alert-owned items plus alert
+  history, the project rail now labels the conversation surface `Threads`, and
+  the `Needs you` tab uses compact utility panels with an explicit pointer
+  back to Threads for active conversations.
+- [x] Keep the initial Threads route fast even when project/runtime extras are
+  slow.
+  Thread now renders from a cached async core projection instead of waiting on
+  synchronous snapshot/session reads plus per-task git-story inspection.
+  `/api/project/thread` returns the core turns first, `/api/project/thread/extras`
+  hydrates git-story callouts separately, and `buildSnapshotAsync` can use
+  `.guildhall/tasks/index.json` for hot-path task counts instead of reparsing
+  `TASKS.json` just to answer “how many current tasks exist?”.
 - [x] Complete the 0.9 release-hardening proof matrix before shipping 0.9.0.
   Plan: `internal/plans/2026-05-31-guildhall-0-9-release-hardening-proof-matrix.md`.
   This is the current release-readiness gate: first stabilize the orchestrator
@@ -238,6 +2122,22 @@ babysit setup/import/provider/release states across multiple pages.
   workspace-import `Skip import for now` can leave the item feeling unresolved,
   and spec-agent durable-progress failures remain the hard release blocker for
   autonomous project progress.
+- [x] Start 0.10 bounded-chat implementation with the runtime contract slice.
+  Tracker: `internal/plans/2026-05-31-guildhall-0-10-implementation-tracker.md`.
+  Begin with bounded-chat storage, session transitions, coordinator-action
+  validation, and idempotent closure receipts before routing intake or New
+  request through the new surface. This is the first active 0.10 code lane and
+  should stay smaller than the full replacement map until the state contract is
+  proven by tests. Runtime contract now lives in `src/runtime/bounded-chat.ts`
+  with focused coverage in `src/runtime/__tests__/bounded-chat.test.ts` for
+  session creation, prompt retrieval, response submission, coordinator follow-
+  up, durable closure receipt, blocked receipt, idempotent action replay, and
+  stale-write rejection. Project check-in now starts through bounded chat and
+  answers through `/api/project/bounded-chat/:id/answer`, with Thread projecting
+  active and fulfilled sessions through bounded-chat turns. Follow-up
+  completion, 2026-06-03: New request bounded chat now covers non-pressure-test
+  routes, pure project questions close without task drafts, and Thread uses a
+  dedicated bounded-chat conversation panel wherever bounded-chat state exists.
   2026-05-31 trust-blocker fix pass closed the UI/state regressions from that
   audit while preserving the real autonomous-progress blocker. Re-intake now
   has a direct repair route from Settings, an actionable first-run empty state,
@@ -307,7 +2207,7 @@ babysit setup/import/provider/release states across multiple pages.
   under both TypeScript and Vitest. `pnpm smoke:release` also confirmed the
   served bundle is fresh on the installed service, with the expected 0.9
   runtime image tag.
-- [ ] Harden Guildhall against web/Node/Looma/Knit overfitting across runtime
+- [x] Harden Guildhall against web/Node/Looma/Knit overfitting across runtime
   inference, task shaping, proof paths, and smoke tests. Plan:
   `internal/plans/2026-05-31-guildhall-generalization-overfitting-hardening.md`.
   The fix should land with red-to-green generalization coverage for Node web,
@@ -315,6 +2215,10 @@ babysit setup/import/provider/release states across multiple pages.
   native CLI, Terraform module, and docs-only work, plus negative vocabulary
   guardrails that keep project-specific product names out of generic runtime
   modules.
+  Closure refresh, 2026-06-13: focused generalization and neighboring runtime
+  proof now pass, including the negative vocabulary guardrails and
+  non-Looma/Knit project shapes. Verification was included in the same focused
+  proof suite recorded above (`7` files, `138` tests).
 - [x] Align project Inbox rows with the shared wide-list pattern. Live
   Narrative Harness testing on 2026-05-30 showed the Inbox still using
   per-row flex alignment while Work had moved toward column-aligned lists.
@@ -429,6 +2333,55 @@ babysit setup/import/provider/release states across multiple pages.
   verifies required runtime tools plus DNS and command-log persistence, and
   records an accepted runtime-backed migration with rollback state while keeping
   host-run compatibility available until the owner accepts the migration.
+- [x] Add a Mastra memory-core migration/audit command that respects the data
+  layer. `auditProjectMemoryState` reads project-local `.guildhall` state
+  through memory-core, writes hash-backed system-local memory events and audit
+  reports only on `--apply`, and reports `Repo-local writes: none`. The CLI
+  path is `guildhall memory mastra-audit [--apply] [path]`, with
+  `pnpm memory:mastra:audit` as the package shortcut. Fixture proof on
+  2026-06-06 showed unchanged `.guildhall` files before/after apply and
+  system-local event/report files under `GUILDHALL_DATA_DIR`; full verification
+  also kept `pnpm memory:mastra:value-gate` at `decision: "adopt"` after fixing
+  the older prototype gate to allow machine-local `~/.guildhall/data` while
+  still rejecting project-local `.guildhall` storage.
+- [x] Complete the Mastra memory-core packet/runtime/UI integration slice.
+  `buildMemoryCoreCandidatePacket` now uses Mastra/libSQL by default, normalizes
+  scoped source-backed events into Guildhall candidate packets, preserves source
+  refs, and falls back deterministically with a visible warning when Mastra is
+  unavailable. The config kill switch is
+  `memory.substrate = "deterministic"` or
+  `GUILDHALL_MEMORY_SUBSTRATE=deterministic`; semantic recall and Observational
+  Memory engine readiness are wired as internal diagnostics/gates while the
+  product path still guarantees compacted, semantically valid, source-backed
+  memory. `/api/project` now exposes `memoryHealth.memoryCore`, Overview renders
+  protected, auto-compacted, semantically valid, source-backed memory with
+  project repo protection from packet-backed `compactionStatus` and
+  `semanticValidity` fields, context debug carries
+  memory-core candidates/source refs, the Current task drawer shows a compact
+  memory packet panel, and
+  orchestrator progress logging records meaningful task status/progress events
+  into system-local memory-core storage without creating project-local
+  `.guildhall` memory folders. Verified on 2026-06-06 with focused memory-core,
+  effective-memory, orchestrator progress-ingestion, Current task drawer, and
+  Overview/API tests plus `pnpm lint:data-layer`, `pnpm lint:contracts`,
+  `pnpm typecheck`, `pnpm build`, full `pnpm test -- --run --reporter=dot`
+  (324 files passed, 1 skipped; 3847 tests passed, 3 skipped), and
+  `pnpm memory:mastra:value-gate` returning `adopt`; after `pnpm dev:install`
+  and a service restart, `/api/stale-server` returned `stale:false` and the
+  browser showed packet-backed "Memory protected · auto-compacted ·
+  semantically valid · source-backed · project repo protected" on
+  `/projects/looma-knit/overview`, with no `Mastra substrate`, `semantic off`,
+  `compaction off`, or top-card `active memories` copy. Follow-up hardening on
+  2026-06-06 made semantic recall and Observational Memory requests fail closed
+  behind `GUILDHALL_MEMORY_ENGINE_GATE`, keeps semantic recall disabled until
+  vector/embedder support exists, exposes compaction and semantic-validity
+  status through `guildhall://project/memory`, and adds `src/memory-core/**` to
+  the contract detector's persisted-state surface. Focused proof:
+  `pnpm test src/memory-core/__tests__/memory-core.test.ts
+  src/mcp-server/__tests__/project-reader.test.ts
+  scripts/contract-touch-detector.test.ts -- --run --reporter=dot`,
+  `pnpm test src/runtime/__tests__/serve-settings.test.ts -- --run
+  --reporter=dot -t "memory engines gated"`, and `pnpm lint:contracts`.
 - [x] Run a multi-agent 0.8 user-testing pass on the documented Narrative
   Harness project and repair the bounded regressions found live. The pass
   covered migration/runtime authority, workspace-intake depth, and
@@ -759,7 +2712,11 @@ babysit setup/import/provider/release states across multiple pages.
   this machine does not have a `claude` binary installed. Public docs now include
   `docs/guide/external-agents.md`, sidebar/index links, a CLI reference entry,
   and an updated MCP subsystem page for the outbound Guildhall MCP bridge.
-- [ ] Split task definition from runtime/evidence storage. The boundary audit
+- [x] Split task definition from runtime/evidence storage. Release-blocking
+  interpretation: the split is not merely "compact task files." Default task
+  definitions and all runtime/evidence state must live in system-local project
+  state/history. Project-local task files are explicit thin/export artifacts
+  only. The boundary audit
   now lives at `internal/audits/2026-05-24-task-schema-boundary-audit.md` and
   shows that project-local `TASKS.json` currently stores machine paths,
   worktree metadata, review verdict history, adjudications, notes, gate output,
@@ -774,6 +2731,38 @@ babysit setup/import/provider/release states across multiple pages.
   and high-value evidence mirroring for escalations, agent issues, and gate
   results. Remaining work is to stop all legacy runtime/evidence writes and
   rewire drawer/project surfaces to depend on effective projections.
+  2026-06-13 progress slice: the task queue tool path now writes through
+  `writeProjectTaskQueue()`, and `report-issue` stores new issue/broadcast
+  state in task evidence plus runtime `openIssueIds` instead of adding new
+  entries to project-local `Task.agentIssues[]`. Orchestrator issue draining
+  now reads effective legacy-plus-evidence issues and records broadcast state
+  as evidence. Verification: `pnpm test
+  src/tools/__tests__/report-issue.test.ts
+  src/runtime/__tests__/orchestrator.test.ts` passed (`318` tests);
+  `pnpm exec vitest run src/tools/__tests__/task-queue.test.ts --reporter=dot`
+  passed.
+  2026-06-13 closeout: escalation raise/resolve writes now persist escalation
+  records to task evidence and runtime `openEscalationIds`, while project task
+  writes go through `writeProjectTaskQueue()`. Effective escalation projection
+  coalesces repeated evidence snapshots by payload id so resolved escalation
+  records replace open snapshots in drawer/runtime views. Orchestrator
+  remediation decisions now store attempts in runtime state, autonomous
+  checkpoint remediation records issue/note evidence explicitly, and the
+  orchestrator queue writer persists any stripped notes, gates, reviews,
+  adjudications, escalations, issues, merge records, runtime counters, retry
+  windows, and workspace metadata into system-local stores before leaving the
+  task definition thin. Orchestrator reads hydrate effective tasks before
+  routing, so raw project task files remain definitions while runtime behavior
+  sees evidence-backed state. Verification: `pnpm exec vitest run
+  src/tools/__tests__/escalation.test.ts src/runtime/__tests__/effective-task.test.ts
+  --reporter=dot` passed (`33` tests); `pnpm exec vitest run
+  src/runtime/__tests__/orchestrator.test.ts -t "FR-32|worker no-progress"
+  --reporter=dot` passed (`12` selected tests); `pnpm typecheck`,
+  `pnpm lint:contracts`, and `git diff --check` passed. Exploratory endpoint
+  suite note: `src/runtime/__tests__/serve-task-endpoints.test.ts` currently
+  needs its legacy `.guildhall/TASKS.json` fixture harness migrated/applied
+  before it can run as a useful endpoint proof; the task detail/history/review
+  endpoints already call `buildEffectiveTask()`.
 - [x] Close the cognitive-overhead recovery blocker hole. Routine missing
   verification/test evidence is now Guildhall-owned recovery, not a user
   blocker: agents are instructed to run or record the missing check instead of
@@ -1056,12 +3045,20 @@ babysit setup/import/provider/release states across multiple pages.
   keeps refreshes non-overlapping, and only publishes a new service snapshot
   when the material project summary actually changes; always-on dashboard
   animations also respect reduced-motion preferences.
-- [ ] Future dashboard performance pass: normalize service/project summary
+- [x] Future dashboard performance pass: normalize service/project summary
   state by project id so a refresh can update only the project cards whose
   material summary changed. The current snapshot-signature guard prevents
   identical-payload repaint churn, but a changed service payload still wakes
   the whole Projects home reactive graph. Do this when dashboard activity
   grows enough that per-project diffing is worth the extra state plumbing.
+  Implemented on 2026-06-13: `mergeServiceProjectSummaries()` now merges
+  `/api/service` and `/api/service/projects` refreshes by project id, preserving
+  unchanged project object identities while replacing changed project summaries
+  and preserving order changes. `ProjectsHome` now uses that normalized merge
+  path before updating the shared service cache. Verification:
+  `pnpm vitest run src/web/lib/__tests__/project-summary.test.ts
+  src/web/surfaces/__tests__/ProjectsHome.svelte.test.ts --reporter=dot`
+  passed (`43` tests).
 - [x] Remove the invented projects-page details rail and centralize action
   rows. Project cards no longer create a second in-page "Project details"
   rail that re-layouts the dashboard; card inspection now opens the existing
@@ -5949,7 +7946,7 @@ local 0.7 release-candidate build at `http://localhost:7777/projects/narrative-h
     on desktop hover. Add visible compact labels or a legend for mobile.
   - [x] Start should preview what it will run, especially on large queues like
     Looma + Knit (`1 ready task; 32 need brief cleanup first`).
-- [ ] 2026-05-24 zero-context cognitive-overhead audit loop.
+- [x] 2026-05-24 zero-context cognitive-overhead audit loop.
   Added the test plan at `internal/plans/2026-05-24-zero-context-flow-user-testing.md`
   and ran four low/no-context reviewer passes over Home, Needs You, Fair Labor
   License Thread, Commerce Thread, T minus T Thread, and Looma Work. The pass
@@ -5979,6 +7976,9 @@ local 0.7 release-candidate build at `http://localhost:7777/projects/narrative-h
     Guildhall implementation knowledge.
     Rebuilt-browser checks cleared the P1 regressions on Commerce Thread,
     T minus T Thread, Needs You, and Looma Work: no stale `Ask me...` prompt
+    remains in the tested surfaces. Closure refresh, 2026-06-13: the parent
+    item was stale open while every recorded child fix and rerun criterion was
+    already checked. Kept the historical evidence and closed the parent.
     leakage, no `Shape the first spec` contradiction, no
     `No actionable tasks remain` contradiction, no raw `Request aborted`, no
     optional-plus-Needs-You pairing, and no stuck `Loading project` state after
@@ -6081,7 +8081,7 @@ local 0.7 release-candidate build at `http://localhost:7777/projects/narrative-h
     without becoming as loud as buttons. Passive Guildhall states such as
     `Queued`, `Queued for Guildhall`, and `Guildhall shaping` use a quieter
     agent tone; Guildhall-owned handoff states such as `Brief cleanup needed`
-    use `agent-attention`; user decisions, approvals, and recovery risks remain
+    use the canonical `warn` chip tone; user decisions, approvals, and recovery risks remain
     warning/human-attention states.
   - [x] Overview blocked-work rows no longer render a large red status panel
     inside each row. The task title and reason stay primary, and the blocker
@@ -6301,6 +8301,182 @@ local 0.7 release-candidate build at `http://localhost:7777/projects/narrative-h
     Focused runtime/API/MCP/UI tests and typecheck passed. A local Podman proof
     mounted a disposable folder read-only and verified the runtime user could
     read it but could not write to it.
+  - [x] 2026-06-06 Podman runtime isolation hardening. Guildhall no longer
+    treats the host `~/.guildhall` as the container Guildhall home. Default and
+    normalized runtime state now point `/home/guildhall/.guildhall` at a
+    per-project empty runtime home under local history
+    `runtime/container-home`, while authoritative Guildhall data remains
+    host-managed through the storage/runtime APIs. Podman backend creation also
+    normalizes legacy runtime state before building volume args, so a persisted
+    old `~/.guildhall` mount cannot leak into a new container. New containers
+    also overlay project-local `.guildhall` with tmpfs so the checkout mount
+    does not expose authoritative project state directly.
+
+    Contract Touch Decision:
+    - Work id: `codex:2026-06-06-podman-container-home-isolation`.
+    - Touched contracts: `ProjectRuntimeMountState.guildhallHome`, Podman
+      baseline volume contract, runtime container home semantics, runtime-agent
+      project API scope header behavior, runtime backend setup fallback policy.
+    - Contracts considered but not touched: capability-grant mount contract,
+      runtime command API request/response contract, durable project data
+      schemas, runtime image `/home/guildhall/.guildhall` in-container path.
+    - Required follow-up: decide whether container-local Guildhall home should
+      stay writable scratch or become read-only once runtime tools stop writing
+      there; replace the header-only runtime-agent scope marker with a minted
+      per-project runtime credential before treating it as an authentication
+      boundary.
+    - Proof required: focused runtime-store and Podman backend tests must prove
+      the host `~/.guildhall` is not mounted and legacy state is normalized;
+      contract tests must prove project-local `.guildhall` is hidden, grants
+      are explicit/revocable, host-managed data reads/writes still work,
+      runtime-agent API calls cannot cross projects, service/global APIs reject
+      runtime-agent callers, denied calls leave security evidence, and host-run
+      fallback is unavailable once Podman is installed.
+    - Proof provided: focused tests added for isolated container home path,
+      Podman volume args, directory creation, legacy-state sanitization,
+      tmpfs overlay of checkout `.guildhall`, grant-only external mounts,
+      host-managed runtime state/evidence persistence, runtime-agent scoped API
+      rejection/allowance, security evidence JSONL, and Podman-installed
+      host-run fallback rejection. Focused command:
+      `pnpm vitest run src/runtime/__tests__/project-runtime-isolation-contract.test.ts src/runtime/__tests__/podman-project-runtime-backend.test.ts src/runtime/__tests__/runtime-backend-setup.test.ts`
+      passed with 32 executable tests and 11 explicit TODO tests.
+    - Waivers: no live Podman smoke in this turn; local Podman is installed,
+      but the machine/socket was not reachable, and starting the user's Podman
+      machine is a host mutation that needs explicit approval.
+    - Owner-review items: confirm no agent should read/write authoritative
+      Guildhall state from inside the container except through host-managed
+      APIs/tools; decide whether runtime-agent service access should be
+      credential-gated or network-denied by default.
+    - Apply/revert behavior: reverting restores the previous host-home mount
+      and host-run compatibility escape hatch, and removes runtime-agent
+      cross-project API rejection.
+
+    Schema Migration Decision:
+    - Persisted schema touched: project runtime state `mounts.guildhallHome`
+      and `migration.mountLayout.guildhallHome`.
+    - Scope: compatibility normalization for existing saved runtime state.
+    - Change class: backward-compatible runtime-state normalization.
+    - Existing data impact: old records that point at host `~/.guildhall` are
+      normalized on read/write and before Podman create.
+    - Migration id: not required; normalization is deterministic and local to
+      runtime state.
+    - Safety: narrows container host access; does not remove authoritative host
+      data.
+    - Required before run: yes, applied in `PodmanProjectRuntimeBackend.create`.
+    - Compatibility reader: `normalizeProjectRuntimeState`.
+    - Fixtures/tests: focused runtime-store, Podman backend, runtime setup, and
+      isolation contract regression tests.
+    - Owner-facing plan text: Podman-backed project work gets an isolated
+      container Guildhall home, not the user's real `~/.guildhall`.
+    - Rollback/revert behavior: runtime state can be regenerated, but reverting
+      the code restores the unsafe mount contract.
+    - Remaining proof gap: the executable tests prove command construction,
+      storage boundaries, fallback policy, and header-scoped API behavior. They
+      do not yet prove live kernel/container enforcement because the local
+      Podman machine/socket was unavailable, and they do not prove credential
+      lifecycle security because runtime-agent credentials are not minted yet.
+    - Remaining test debt: `src/runtime/__tests__/project-runtime-isolation-contract.test.ts`
+      keeps 11 TODO tests covering defined-agent Podman execution, live
+      sibling-project filesystem denial, sibling local-history denial,
+      host/private-data denial, direct authoritative-state write denial,
+      live read-only grant write denial, scoped cross-project graph redaction,
+      service reachability without credentials, credential expiry/revocation,
+      project dev-server cross-fetch denial, and browser-proof/dev-server port
+      exposure limits.
+  - [x] 2026-06-07 Docker/Podman runtime selection and explicit host-run opt-in.
+    Guildhall now detects Docker and Podman separately, prefers Docker on macOS
+    by default, honors project/global `containerRuntime.preferredBackend`, and
+    treats `backend: none` as unavailable unless project or global config
+    explicitly sets `containerRuntime.mode: host-run-allowed`. Project Overview
+    and Settings identify Docker, Podman, or no container runtime instead of
+    using Podman-only copy. The dev-server launcher now dispatches through the
+    selected container CLI so Docker-backed project runtimes do not fall back to
+    `podman exec`.
+
+    Contract Touch Decision:
+    - Work id: `codex:2026-06-07-container-runtime-selection`.
+    - Touched contracts: global/workspace `containerRuntime` config,
+      `ResolvedConfig.containerRuntime`, runtime backend setup readout,
+      `ProjectRuntimeBackendName`, `ProjectRuntimeBackendSetupState`,
+      project runtime backend selection, dev-server container execution, and
+      Project Overview/Settings runtime labels.
+    - Contracts considered but not touched: capability grant mount semantics,
+      runtime command request/response schema, runtime-agent API authorization
+      header contract, persisted task schema, and runtime image contract.
+    - Required follow-up: live Docker and live Podman smoke proof on hosts with
+      healthy engines; decide whether `containerRuntime.preferredBackend` needs
+      an owner-facing settings editor or should stay config-file-only.
+    - Proof required: deterministic tests must prove Docker preference,
+      Podman fallback/preference, strict host-run blocking without opt-in,
+      project/global host-run opt-in, Docker create/mount arguments, Podman
+      isolation arguments, dev-server Docker exec dispatch, UI runtime copy, and
+      existing runtime storage/API reads and writes.
+    - Proof provided: focused runtime and Settings tests passed for container
+      selection, Docker backend command construction, Podman backend isolation,
+      runtime store normalization, runtime setup actions, project isolation
+      contract checks, migration state, dev-server execution, and Settings UI.
+      Focused command:
+      `pnpm vitest run src/runtime/__tests__/container-runtime-selection.test.ts src/runtime/__tests__/docker-project-runtime-backend.test.ts src/runtime/__tests__/podman-project-runtime-backend.test.ts src/runtime/__tests__/project-runtime-store.test.ts src/runtime/__tests__/runtime-backend-setup.test.ts src/runtime/__tests__/project-runtime-isolation-contract.test.ts src/runtime/__tests__/project-runtime-migration.test.ts src/runtime/__tests__/dev-server-manager.test.ts src/web/surfaces/project/__tests__/SettingsTab.svelte.test.ts`
+      passed with 63 executable tests and 11 explicit TODO tests. `pnpm
+      typecheck` passed. After Docker Desktop was started locally, a live
+      Docker smoke using the same project mount, `.guildhall` tmpfs overlay,
+      and isolated `/home/guildhall/.guildhall` mount proved project files were
+      visible, checkout `.guildhall` host state was hidden, container scratch
+      writes landed only in the isolated runtime home, and global/sibling/host
+      Guildhall paths were not mounted.
+    - Waivers: no live Podman container smoke in this turn; the local Podman
+      socket was previously unavailable. The GHCR Guildhall runtime image pull
+      for Docker did not complete in this turn, so the live smoke used an
+      already-local Alpine-based image to prove Docker mount enforcement rather
+      than the final runtime image contents.
+    - Follow-up proof on 2026-06-07 fixed the stale runtime-image default and
+      local build path: default runtime state, runtime-info metadata,
+      Containerfile metadata, runtime-image smoke, and benchmark defaults now
+      use the current `0.10.0-trixie-node22-python313-playwright` /
+      `0.10-trixie-node22-python313-playwright` image line. The local
+      `runtime:image:build` command now uses a Docker-or-Podman helper, prefers
+      healthy Docker, falls back to Podman, disables Docker BuildKit by default
+      to avoid the observed Docker Desktop metadata hang, and fails with a
+      bounded timeout instead of wedging forever. A `.dockerignore` now keeps
+      runtime image build context narrow and excludes `.git` sockets/local
+      state. After Docker pulls recovered, `pnpm runtime:image:build` built the
+      runtime image locally with Docker and tagged both 0.10 refs, and `pnpm
+      runtime:image:smoke` selected Docker and reported `guildhall runtime
+      healthy`. GHCR still returned `denied` for the 0.10 runtime image pull,
+      so the remote publication/visibility path remains separate from local
+      Docker runtime viability.
+    - Owner-review items: confirm the config-file-only opt-in wording for
+      `host-run-allowed`; confirm Docker default preference is the desired
+      macOS happy path when both Docker and Podman are healthy.
+    - Apply/revert behavior: reverting restores Podman-only runtime setup and
+      dev-server dispatch, removes Docker backend selection, and returns
+      host-run fallback behavior to the earlier runtime setup policy.
+
+    Schema Migration Decision:
+    - Persisted schema touched: global `config.yaml`, project `guildhall.yaml`,
+      and project runtime state `backend` / `backendSetup.selectedMode`.
+    - Scope: global or project runtime policy plus per-project selected backend.
+    - Change class: backward-compatible reader and enum expansion.
+    - Existing data impact: existing projects without `containerRuntime` keep
+      the secure default `mode: required` and `preferredBackend: auto`; existing
+      runtime states with `backend: podman` remain valid, while new default
+      runtime state uses Docker as the preferred auto backend.
+    - Migration id: not required; readers accept missing config and normalize
+      old runtime state in place.
+    - Safety: narrows host-run availability by requiring explicit opt-in and
+      adds Docker as an alternate container isolation backend.
+    - Required before run: yes for setup/readiness decisions; project runtime
+      launch uses the persisted selected backend.
+    - Compatibility reader: `readGlobalConfig`, `readWorkspaceConfig`,
+      `resolveConfig`, and `normalizeProjectRuntimeState`.
+    - Fixtures/tests: container runtime selection, runtime setup, runtime store,
+      Docker/Podman backend, migration, dev-server manager, isolation contract,
+      and Settings UI tests.
+    - Owner-facing plan text: project work runs in Docker or Podman; running
+      without a container is blocked unless global or project config explicitly
+      opts into host-run compatibility.
+    - Rollback/revert behavior: remove `containerRuntime` config use and Docker
+      backend selection; old Podman runtime state remains readable.
   - [x] Milestone 9 now has the central persistence boundary in front of the
     new runtime evidence surfaces. `GuildhallPersistence` covers typed records,
     append-only events, artifact refs, placement scopes, visibility and commit
@@ -6455,6 +8631,14 @@ local 0.7 release-candidate build at `http://localhost:7777/projects/narrative-h
     work-view Playwright test passed; installed app reports `"stale": false`;
     browser proof measured identical left offsets for the first six Narrative
     Harness List rows across every data column.
+    Follow-up clipping fix, 2026-06-02: the List view grid now uses narrower
+    side-by-side tracks and shared `--gh-space-2` gaps so the `Updated` and
+    `Revs` columns stay inside clipped cards at narrow desktop widths. Evidence:
+    focused and full WorkTab tests passed; `pnpm typecheck`, `pnpm lint:design`,
+    `git diff --check`, `pnpm build`, and `pnpm dev:install` passed; installed
+    app reports `"stale": false`; live Fair Labor License proof at viewport
+    921x776 measured the clipped card at right=897 and the header/first row at
+    right=880, with timestamp and revision cells fully visible.
   - [x] Added the 0.9.0 evidence-to-work-graph intake spec and first pure
     planner seam for the Looma + Knit trust failure class. The planner now
     extracts deliverable units from structured source evidence, preserves
@@ -6500,12 +8684,12 @@ local 0.7 release-candidate build at `http://localhost:7777/projects/narrative-h
   - [ ] Add the follow-on global scheduler that fairly spends the provider
     budget across all turned-on projects instead of requiring each project to
     be manually started and budgeted in isolation.
-  - [ ] Add and browser-proof the 0.10.0 OpenRouter provider setup path. The
+  - [ ] Add and browser-proof the 0.11.0 OpenRouter provider setup path. The
     implementation plan lives at
-    `internal/plans/2026-05-28-guildhall-0-10-openrouter-support.md` and should
+    `internal/plans/2026-05-28-guildhall-0-11-openrouter-support.md` and should
     treat OpenRouter as guided setup with model-lane presets, attribution,
     privacy/cost routing, and listing-readiness proof rather than a generic
-    OpenAI-compatible URL field.
+    OpenAI-compatible URL field. This is no longer a 0.10.0 release blocker.
   - [ ] Add the 0.10.0 structural/domain intelligence intake lane. The spec
     lives at
     `internal/specs/2026-05-29-guildhall-0-10-structural-domain-intelligence.md`
@@ -6513,11 +8697,14 @@ local 0.7 release-candidate build at `http://localhost:7777/projects/narrative-h
     cross-cutting domain, executable unit, memory scope, and Git authority root
     separate while producing context packets with prioritized includes,
     summaries, handles, and auditable omissions.
-  - [ ] Add the 0.10.0 external task authority lane. The spec lives at
+  - [x] Defer the external task authority lane as future authority work rather
+    than treating it as a current release closeout item. The spec lives at
     `internal/specs/2026-05-29-guildhall-0-10-external-task-authority.md` and
     should treat Jira/Linear/GitHub Issues/Azure DevOps/Asana as planning
     authorities while Guildhall keeps a local execution mirror with proof,
     stale-state handling, safe proposed writes, and context-budget manifests.
+    A bounded runtime mirror primitive exists, but the owner-facing authority
+    lane is intentionally deferred until it matters.
   - [x] Closed the remaining Looma + Knit reframe trust blocker. Recovery
     spec seeds now rewrite stale product briefs, clean imported source
     snippets, promote answered owner questions into plain decisions, filter
@@ -6548,3 +8735,2989 @@ Remaining efficiency fat: both fixtures still spent one `resolve_automation_bloc
 Verification: focused orchestrator regression tests for `.guildhall` git-diff exclusions, piped git-diff gates, worktree command gates, and command-gated worktree landing passed; `pnpm build` passed; live artifact-local benchmark passed 2/2.
 
 source: codex:artifact-local-command-gate-landing-proof
+
+## 2026-06-02T21:15:00.000Z MCP evidence for artifact:flow-audit
+
+Closed the Fair Labor License start-readiness projection bug where a task could
+show a complete starter checklist and a green `Start work` affordance while the
+runtime correctly blocked unattended work because the stricter worker handoff
+brief/spec contract was incomplete.
+
+- [x] Thread/runtime projection now carries explicit `workerHandoff` readiness,
+  so a `ready` task with a 4/4 starter checklist can still surface as needing
+  brief cleanup before worker start.
+- [x] Thread and Current drawer cards render worker-handoff cleanup as
+  `Needs brief cleanup` / `Needs brief`. Thread cleanup now routes through the
+  task continuation contract instead of disguising cleanup as generic project
+  start.
+- [x] Overview and the project top bar stop presenting handoff-incomplete
+  ready tasks as worker-ready. Overview buckets them with shaped work, labels
+  rows `Needs brief`, and uses brief-cleanup copy in the next-run list.
+- [x] Added regressions for complete-checklist-but-incomplete-handoff turns,
+  overview handoff cleanup rows, and brief-cleanup start blocker topbar copy.
+
+Evidence: `pnpm vitest run
+src/web/surfaces/project/__tests__/ProjectOverviewTab.svelte.test.ts
+src/web/surfaces/__tests__/ProjectView.svelte.test.ts` passed with 54 tests;
+`pnpm vitest run src/web/surfaces/project/__tests__/ThreadTab.svelte.test.ts
+src/runtime/__tests__/thread.test.ts` passed with 140 tests; `pnpm vitest run
+src/web/surfaces/drawer/__tests__/CurrentTab.svelte.test.ts` passed with 21
+tests; `pnpm typecheck` passed.
+
+Follow-up closure evidence, 2026-06-02: live Thread click testing found the
+render-only proof was insufficient. The Fair Labor License Thread card for
+`task-006` rendered `Needs brief cleanup`, `4 of 4 complete`, and `Clean up
+brief`, but clicking it still surfaced a raw Zod validation array because
+`/api/project/task/:id/enrich-task` parsed the whole queue before it could
+repair legacy partial `taskReadiness` / `productBrief` records. Runtime intake
+now normalizes legacy task-queue shape at the read boundary before strict
+`TaskQueue.parse`, keeps the core schema strict, and prevents migrated partial
+briefs from carrying approval forward as final worker handoff. Regression
+coverage: `POST /api/project/task/:id/enrich-task` accepts old compact
+readiness records and writes full readiness metadata before reopening the task.
+Verification: `pnpm vitest run
+src/runtime/__tests__/serve-task-endpoints.test.ts
+src/web/surfaces/project/__tests__/ThreadTab.svelte.test.ts` passed with 142
+tests, `pnpm typecheck` passed, `pnpm dev:install` rebuilt the installed app,
+service restart reported `/api/stale-server` as `stale:false`, and browser
+proof on `http://localhost:7777/projects/fair-labor-license/thread` clicked the
+live `Set FLL overhead charge policy` `Clean up brief` button. The rendered
+Thread changed to `Routed to Task Intake`, no raw `invalid_type` /
+`taskReadiness` / `Required` error appeared, `/api/project` showed `task-006`
+as `exploring` with normalized readiness fields, and the induced run stopped
+with zero token usage.
+
+Second follow-up closure evidence, 2026-06-02: live Thread review found the
+post-cleanup projection still leaked internal routing and failed to show what
+Thread was doing for the reopened task. `task-006` had been reopened to
+`exploring`, but the saved request card fell back to `Routed to Task Intake`,
+the cleanup request existed only as backend notes, and stale reviewer feedback
+could still claim the current lifecycle phase. Thread now treats brief cleanup
+as a first-class request stage: saved requests become history, enrichment notes
+project as a visible `Brief cleanup requested` milestone, stale review notes
+stay historical while a task is back in cleanup, partial legacy product briefs
+no longer suppress the current cleanup card, and the selected task card says
+`Brief cleanup` / `Cleanup queued` / `Clean up brief` instead of pretending the
+request left Thread.
+
+Verification: `pnpm vitest run src/runtime/__tests__/thread.test.ts
+src/web/surfaces/project/__tests__/ThreadTab.svelte.test.ts` passed with 143
+tests; `pnpm typecheck` passed; `pnpm dev:install` rebuilt the installed app;
+service restart reported `/api/stale-server` as `stale:false`; live API proof
+for `fair-labor-license` showed `request:task-006:brief-cleanup` plus
+`inflight:task-006` with `requestStage: task_brief_cleanup`; browser proof on
+`http://localhost:7777/projects/fair-labor-license/thread` selected `Set FLL
+overhead charge policy` and showed `Brief cleanup requested`, `Task brief
+cleanup`, `Cleanup queued`, the active `Brief cleanup` card, and no `Routed to
+Task Intake` copy.
+
+Third follow-up closure evidence, 2026-06-02: approved behavior-contract pass
+removed the remaining "Clean up brief secretly means Start work" coupling in
+Thread. Guildhall now exposes `/api/project/task/:id/continue` for
+`brief_cleanup` continuations. The endpoint enriches the task brief, returns a
+queued continuation if the coordinator is already running, and otherwise wakes
+continuous coordination with the task as the preferred focus; it does not use
+one-task scoped-start semantics. Thread's `Clean up brief` button now posts
+that continuation payload directly and returns after refreshing, so the UI no
+longer calls `/api/project/task/:id/enrich-task` and then falls through into
+`/api/project/start`.
+
+Verification: focused continuation tests first failed against the old behavior,
+then `pnpm vitest run
+src/runtime/__tests__/serve-task-endpoints.test.ts
+src/web/surfaces/project/__tests__/ThreadTab.svelte.test.ts` passed with 145
+tests; `pnpm typecheck` passed; `pnpm dev:install` rebuilt the installed app;
+service restart reported `/api/stale-server` as `stale:false`. Live browser
+proof on `http://localhost:7777/projects/fair-labor-license/thread` clicked the
+visible `Clean up brief` action on the selected Stripe cleanup card; the page
+returned to queued cleanup language (`Queued for Guildhall`) without
+`invalid_type`, `taskReadiness`, `Required`, `run_already_active`, or `Routed
+to Task Intake`. Live API proof showed `task-stripe-integration` and
+`task-006` as `requestStage: task_brief_cleanup`, and the induced run was
+recorded as `mode: continuous` before stopping on idle.
+
+source: codex:fll-start-readiness-worker-handoff-cleanup
+
+2026-06-03T12:46:00Z - Completed the 0.10 readiness integration pass across
+bounded Thread conversations, bounded external-authority mirror groundwork,
+external-agent memory bridge, contract surfaces, docs, screenshots, and
+installed-app proof.
+OpenRouter remains deferred to 0.11.0. Integrated verification passed:
+`pnpm typecheck`; focused combined Vitest suite for bounded chat, Thread,
+external-authority mirror primitives, memory bridge, MCP/CLI bridge exposure,
+contract surfaces, corpus proposals, context packets, and Structure projection
+passed with 360 tests; `pnpm lint:design`; `node scripts/reduction-guardrails.mjs`;
+`pnpm build`; `git diff --check`. Installed-app proof passed: `pnpm dev:install`
+completed, service restart reported `/api/stale-server` as `stale:false`, live
+browser proof on `http://localhost:7777/projects/narrative-harness/thread`
+showed project-question and brief-cleanup routing without raw schema JSON, and
+live browser proof on
+`http://localhost:7777/projects/narrative-harness/structure` showed Structural
+map, Project graph, and Contract surfaces in Structure. Fresh screenshots were
+captured under `docs/assets/ui-audit/0-10-0/`.
+
+source: codex:0.10-readiness-integration
+
+2026-06-03T20:50:00Z - Replaced the API-shaped Structure surface with a
+user-facing project-structure feature. Structure now opens with a graphical
+project chart, human-readable work areas, explicit boundary/assignment
+guidance, contract actions, and project handoffs. The old project-index section,
+bespoke domain selection cards, `Available to assign` pseudo-chip, missing-map
+card, and button-like domain mega-card interaction are removed from the primary
+surface. `localProjects` now means graph-connected projects only, while
+`localProjectIndex` preserves the full assignable registry for assignment
+search.
+
+Verification: `pnpm vitest run src/runtime/__tests__/project-graph.test.ts
+src/runtime/__tests__/serve-settings.test.ts
+src/web/surfaces/project/structure/__tests__/ProjectStructurePanel.svelte.test.ts
+--reporter=dot` passed with 76 tests; `pnpm typecheck` passed; `pnpm build`
+passed; `pnpm dev:install` rebuilt the installed app; service restart served a
+bundle containing the new `What Guildhall understands about...` Structure copy
+and no old `Managed projects` or `Project graph` panel title strings. Live
+browser proof on `/projects/narrative-harness/structure` showed the chart,
+five work areas, `Contracts`, `Project handoffs`, `Scan for contracts`, and
+`Declare contract`, with no `Searchable project index`, `Available to assign`,
+`Legacy structural map missing`, or `.domain-graph-node`. Cross-project browser
+sampling also passed for `/projects/fair-labor-license/structure`,
+`/projects/t-minus-t/structure`, `/projects/font-something/structure`, and
+`/projects/commerce-project/structure`; all loaded the new headings and chart
+without the old strings. `looma-knit` and `jess` resolved through attached /
+not-initialized states in this service instance, so they were not counted as
+rendered Structure proof.
+
+source: codex:structure-user-facing-redesign
+2026-06-03T17:40:00Z - Closed the Thread review-card split-action trap found
+on root-level brief/spec review cards. Active Thread brief/spec cards now use
+one primary root action (`View brief` / `View spec`), and the document modal is
+the decision surface (`Approve brief`, `Approve spec`, or `Approve split`) with
+change-request and approval actions in the modal footer. This removes the
+awkward flow where the user opened a document, backed out, then clicked a
+separate root-level approval button. The same awkward root-level sibling action
+pattern existed for active brief approvals and active spec reviews; historical
+inline review cards remain direct decision cards because they do not pair a
+root-level preview action with a separate modal.
+
+Verification: focused ThreadTab tests first failed against the old root-level
+approval buttons, then `pnpm vitest run
+src/web/surfaces/project/__tests__/ThreadTab.svelte.test.ts --reporter=dot`
+passed with 87 tests; `pnpm typecheck` passed; `pnpm build` passed.
+
+source: codex:thread-review-modal-decision-flow
+
+2026-06-03T17:47:00Z - Fixed the follow-on recovery-brief approval trap found
+on Looma/Knit. Recovery had already saved a concrete spec and acceptance
+criteria for `Block menu / block side menu`, but the task was still persisted
+as `exploring` with an unapproved `coordinator-recovery` product brief. Thread
+therefore asked the owner to approve a brief whose only real message was
+"allow Guildhall to make this into project work." `buildThread` now treats a
+saved spec draft with parsed acceptance criteria as the useful review surface:
+the stale brief may remain as historical context, but it cannot be the active
+human gate, and Thread projects the spec review instead.
+
+Verification: added a regression for an exploring recovery task with an
+unapproved recovery brief plus real spec/ACs. It failed against the old active
+`brief_approval` projection, then `pnpm vitest run
+src/runtime/__tests__/thread.test.ts src/web/surfaces/project/__tests__/ThreadTab.svelte.test.ts
+--reporter=dot` passed with 157 tests.
+
+source: codex:recovery-brief-approval-trap
+
+2026-06-03T18:00:00Z - Tightened the owner-question autonomy boundary so
+Guildhall stops treating uncertainty as permission to interrupt. The
+`post-user-question` tool now exposes structured fields for the assumption the
+agent would make, confidence if proceeding, git containment strategy, remaining
+impact if wrong after containment, and the blocking reason. When an agent says
+it has a high-confidence assumption whose remaining contained impact is not
+high, or a medium-confidence assumption with low remaining impact, the tool
+rejects the question and tells the agent to record the assumption and continue
+unattended. This explicitly bakes in Guildhall's expected git/worktree/atomic
+commit safety model rather than relying on vague "reversibility" language.
+
+Verification: `pnpm vitest run
+src/tools/__tests__/post-user-question.test.ts --reporter=dot` passed with 17
+tests, including regressions for high-confidence contained questions being
+rejected and low-confidence high-impact decisions still being allowed.
+`pnpm typecheck` passed.
+
+source: codex:owner-question-confidence-git-containment
+
+2026-06-03T18:07:00Z - Repaired persisted owner-input states created before
+the stricter question boundary. Added a project migration,
+`0.10.0/owner-input-state-repair`, that detects waiting owner-input records
+whose prompt is agent narration/evidence summary, plus low-risk planning-note
+questions that Guildhall should handle with an atomic-commit assumption instead
+of interrupting. The migration cancels the linked owner-input and bounded-chat
+sessions with receipts, appends task state-repair notes recording the reason or
+assumption, and leaves real owner answers untouched. Also narrowed the shared
+project action model so stale active setup steps do not crown "Answer in
+Thread" once a project already has tasks and can start.
+
+Live repair applied to T-minus-T: four stale owner-input records were
+cancelled; the malformed converter evidence summary and "I already posted the
+question" narration no longer block Start, and the harmless planning-note
+questions now record the contained assumption to use `.cursor/plan.md`.
+Looma/Knit did not need this migration after the earlier AlertDialog answer
+and spec-review repair.
+
+Verification: `pnpm vitest run
+src/runtime/__tests__/project-action-model.test.ts
+src/runtime/__tests__/owner-input-state-repair.test.ts
+src/tools/__tests__/post-user-question.test.ts --reporter=dot` passed with 24
+tests; `pnpm typecheck` passed; `pnpm build` and `pnpm dev:install` passed;
+service restarted with `/api/stale-server` reporting `stale:false`. Live
+service proof for `t-minus-t` shows
+`0.10.0/owner-input-state-repair` applied, `ownerInput.active: false`, Start
+enabled, and the primary action restored to the real planning-note task.
+
+source: codex:owner-input-state-repair
+
+2026-06-03T18:23:00Z - Corrected the follow-on spec-review ownership bug in
+Thread. The previous recovery-brief fix suppressed the fake brief approval but
+still promoted `exploring + saved spec draft` into an owner-facing `View spec`
+gate, effectively asking the user to do coordinator/reviewer validation after
+the real owner questions had already been answered. Root policy: once
+Guildhall asks owner-only questions and records answers, the user is done;
+preserving those answers into a spec and validating that the spec is faithful is
+Guildhall's coordinator/reviewer job. `specReviewRequiresOwnerApproval` is now
+the shared runtime predicate used by both the orchestrator picker and Thread:
+normal task spec drafts are internal Guildhall review/continuation work, while
+reserved bootstrap/import approvals stay explicitly owner-held. Thread falls
+through to an `inflight` spec turn for normal drafts and the visible card copy
+now says coordinator review is queued instead of "Press Start when you want".
+
+Live Looma + Knit proof after build/install/restart: `/api/stale-server`
+reported `stale:false`; `/api/project/thread?projectId=looma-knit` returned
+active turn `inflight:task-import-1y7kmp6` with `phase: spec` and summary
+`Guildhall has your answers and a spec draft. Coordinator review is next.` The
+in-app browser at `/projects/looma-knit/thread` showed no `NEEDS YOU`, no
+`View spec`, no `Approve spec`, and the Block menu card said `Coordinator
+review is queued.`
+
+Verification: `pnpm vitest run src/runtime/__tests__/thread.test.ts
+src/runtime/__tests__/orchestrator.test.ts --reporter=dot` passed with 359
+tests; `pnpm typecheck` passed; `pnpm build && pnpm dev:install` passed.
+
+source: codex:answered-owner-questions-end-user-role
+
+2026-06-03T18:30:00Z - Closed the Thread document-modal action test gap.
+Live testing found two more failures on the same spec-review surface: clicking
+`View spec` then `Approve spec` could silently leave the active review card in
+place, and `Request changes` in the modal could appear to do nothing. Root
+causes: ThreadTab tests only asserted that buttons existed or that an endpoint
+URL was called; the fetch fake never modeled thread state changing after
+approval, and `approveSpec` did not check `response.ok`, so a server-side
+rejection such as "task is not in spec_review" closed the modal and reloaded
+the unchanged card with no visible error. The modal approval path now keeps the
+modal open and shows the server error on failure, closes only after a
+successful approve, refreshes both Thread and project state, and `Request
+changes` focuses the relevant task thread before opening the shared correction
+composer.
+
+Added UI regressions in `ThreadTab.svelte.test.ts` for: approving a valid task
+spec from the modal advances out of the spec-review card into the queued/ready
+work state; approve-spec failures remain visible instead of silently no-oping;
+and modal `Request changes` opens the shared spec correction composer. The
+test fetch harness now supports stateful Thread responses after approve-spec so
+future button tests must prove the post-action UI, not just endpoint calls.
+
+Verification: focused modal tests passed; full
+`src/web/surfaces/project/__tests__/ThreadTab.svelte.test.ts` passed with 89
+tests; combined `pnpm vitest run src/runtime/__tests__/thread.test.ts
+src/runtime/__tests__/orchestrator.test.ts
+src/web/surfaces/project/__tests__/ThreadTab.svelte.test.ts --reporter=dot`
+passed with 448 tests; `pnpm typecheck`, `pnpm build`, and `pnpm dev:install`
+passed; service restarted with `/api/stale-server` reporting `stale:false`.
+
+source: codex:thread-document-modal-actions-tested
+
+2026-06-03T18:51:00Z - Centralized owner-facing task stage presentation across
+project surfaces. Work list rows were showing `Intake` for Looma/Knit tasks
+whose raw lifecycle status was still `exploring`, even when the task already
+had a saved spec draft and the Thread view correctly projected it as queued
+spec/coordinator work. Root cause: Work, Overview, and WorkTreePreview mapped
+raw `task.status` through `friendlyStatus`, while Thread used its own local
+turn/ownership logic. Added `src/web/lib/task-presentation.ts` as the shared
+task-stage presentation utility and routed Work, Thread in-flight state
+labels/tones, Thread list in-flight chips, Project Overview task labels, and
+WorkTreePreview chips through it. The fallback identifier label for
+`exploring` also now says
+`Guildhall shaping`, so historical progress copy does not leak the old
+first-stage `Intake` wording. `exploring` is no longer displayed as first-stage
+`Intake` for owner-facing task surfaces; early shaping work says
+`Guildhall shaping`, and
+`exploring + saved spec draft/no open owner questions` says
+`Spec revision queued`.
+
+Verification: `pnpm vitest run
+src/web/lib/__tests__/identifier-labels.test.ts
+src/web/lib/__tests__/task-presentation.test.ts
+src/web/surfaces/project/__tests__/WorkTab.svelte.test.ts
+src/web/surfaces/project/__tests__/ThreadTab.svelte.test.ts
+src/web/surfaces/project/__tests__/ProjectOverviewTab.svelte.test.ts
+--reporter=dot` passed with 131 tests; `pnpm typecheck` passed; `pnpm build`
+and `pnpm dev:install` passed; service restarted with `/api/stale-server`
+reporting `stale:false`.
+
+source: codex:centralized-task-stage-presentation
+
+2026-06-03T19:09:00Z - Narrowed the Work surface default from "all open
+backlog" to the execution queue. The Work list/board/columns default now uses
+`Queued work`: tasks with a complete worker handoff in `ready`, plus
+`in_progress`, `review`, and `gate_check`. Shaping/spec/import/proposed work
+is still available through the explicit `Planning` filter for list and columns
+inspection. This keeps Looma/Knit's current spec/shaping backlog out of the
+default Work queue while still making it available on demand. Empty queue states
+now say there is no queued work yet and offer a direct switch to Planning when
+shaping work exists. Columns now use the same complete-worker-handoff threshold
+as the list so incomplete `ready` tasks do not appear queued in one Work view
+and pre-work in another.
+Work summary chips now summarize the selected filter, so the default empty
+queue no longer advertises shaping/spec/import counts as if they were queued
+execution work; those chips appear when Planning/Open/All intentionally expose
+that slice.
+
+Verification: `pnpm vitest run
+src/web/lib/__tests__/identifier-labels.test.ts
+src/web/lib/__tests__/task-presentation.test.ts
+src/web/surfaces/project/__tests__/WorkTab.svelte.test.ts
+src/web/surfaces/project/__tests__/ThreadTab.svelte.test.ts
+src/web/surfaces/project/__tests__/ProjectOverviewTab.svelte.test.ts
+--reporter=dot` passed with 132 tests; `pnpm typecheck` passed.
+
+source: codex:work-default-execution-queue
+
+2026-06-03T20:16:00Z - Reworked the project Overview/Structure information
+hierarchy for the 0.10 project graph direction. Overview now starts with a
+dense "Everything Guildhall knows" summary band: compact cards for work,
+structure, project graph/contracts, runtime/memory, proof, and recent history.
+The graph card reads the shared `/api/project/project-graph` summary instead
+of inventing local graph math, and routes to Structure for drill-in. This makes
+Overview act like the organized project knowledge map rather than a stack of
+large half-width lists.
+
+Structure now has friendly graph navigation anchors for Domains, Contracts,
+and Dependency requests. Follow-up correction: the local project index is not
+part of the project graph. `/api/project/project-graph` now returns connected
+projects in `localProjects` and the searchable assignment index in
+`localProjectIndex`, so a project such as Narrative Harness does not claim all
+registered Guildhall projects as graph nodes.
+
+Verification: `pnpm vitest run
+src/runtime/__tests__/project-graph.test.ts
+src/runtime/__tests__/serve-settings.test.ts
+src/web/surfaces/project/__tests__/ProjectOverviewTab.svelte.test.ts
+src/web/surfaces/project/structure/__tests__/ProjectStructurePanel.svelte.test.ts
+--reporter=dot` passed with 93 tests; `pnpm typecheck` passed; `pnpm build`
+passed; `pnpm dev:install` passed. Browser smoke on the local service at
+`http://127.0.0.1:7777/projects/narrative-harness/overview` showed the
+Overview knowledge band with `Project graph 0 connected projects` and no
+`7 other managed projects` / `7 other indexed projects` graph claim. Browser
+DOM proof after the design-system follow-up showed 0 bespoke `.knowledge-card`
+elements, 6 shared `.card-list-item.knowledge-summary-item` elements, and 6
+`.utility-panel.card-list-item.knowledge-summary-item` elements, so the
+Overview summary band now composes the shared interactive card primitive instead
+of carrying a custom selectable-card pattern. Browser
+smoke on `/projects/narrative-harness/structure` showed Domains / Contracts /
+Dependency requests graph navigation, a separate `Searchable project index`,
+`7 other indexed projects`, the explicit "not part of this project graph until
+a request or responsibility connects them" explanation, `No other project is
+connected to this graph yet`, and no `related local project` / `related work`
+wording.
+
+source: codex:overview-structure-knowledge-map
+
+2026-06-03T20:38:00Z - Removed the misleading missing structural-map branch
+from the Structure surface. Projects without a legacy `structuralMapReview`
+now lead directly with Project graph instead of showing `Legacy structural map
+missing`, `map not reviewed`, or an `Open Threads` action that has no
+structure-specific review target. The legacy structural-map panel is still
+available when an actual review record exists, but it is labeled as a retained
+legacy map review rather than the primary Structure surface.
+
+Structure graph navigation now uses shared `Button` controls, and domain graph
+rows compose shared `CardListItem` / `UtilityPanel` interactive styling instead
+of custom border/background/hover card buttons. Overview also falls back to
+project-graph facts for its Structure summary, so Narrative Harness reports
+`Structure 5 graph domains` rather than `Map not reviewed`.
+
+Verification: `pnpm vitest run
+src/web/surfaces/project/structure/__tests__/ProjectStructurePanel.svelte.test.ts
+src/web/surfaces/project/__tests__/ProjectOverviewTab.svelte.test.ts
+--reporter=dot` passed with 21 tests; `pnpm typecheck` passed; `pnpm build`
+and `pnpm dev:install` passed; service restarted with `/api/stale-server`
+reporting `stale:false`. Browser proof on
+`/projects/narrative-harness/structure` showed no `Legacy structural map
+missing`, no `Map not reviewed`, no `Open Threads` action, 5 shared
+`.card-list-item.domain-graph-node` rows, 0 custom domain buttons, and graph
+nav buttons for Domains, Contracts, and Dependency requests. Browser proof on
+Overview showed `Structure 5 graph domains` and no `Map not reviewed`.
+
+source: codex:structure-graph-primary-no-missing-map-card
+
+2026-06-03T19:25:00Z - Aligned queued/Guildhall-owned chip semantics with the
+existing action color system. The app already treats `Button variant="agent"`
+as the green Guildhall/LLM-owned action color (`Start work`, task resume,
+bootstrap/resume actions) and `primary`/`human` as the purple human-primary
+action color. `Queued`, `Queued for Guildhall`, `Spec revision queued`,
+`Guildhall shaping`, and `Guildhall can continue` now use the green
+`running` chip tone because they mean Guildhall owns the next move, not that
+the item is complete or merely healthy. The shared Chip taxonomy now reserves
+`ok` for healthy/available/accepted/completed states, `running` for
+Guildhall/agent-owned active/queued/current-step states, and `accent` for
+human-primary emphasis. Drawer, Thread, Work, and the shared task-stage
+presenter now agree on that tone.
+
+Verification: `pnpm vitest run
+src/web/lib/__tests__/task-presentation.test.ts
+src/web/lib/__tests__/Button.css-contract.test.ts
+src/web/surfaces/project/__tests__/WorkTab.svelte.test.ts
+src/web/surfaces/project/__tests__/ThreadTab.svelte.test.ts
+src/web/surfaces/drawer/__tests__/CurrentTab.svelte.test.ts
+src/web/surfaces/__tests__/ProjectView.svelte.test.ts
+src/web/surfaces/__tests__/ProjectsHome.svelte.test.ts --reporter=dot`
+passed with 202 tests; `pnpm typecheck` passed.
+
+source: codex:queued-guildhall-owned-agent-tone
+
+2026-06-03T19:41:00Z - Extended the same ownership color semantics to Thread
+mini-cards. Thread list rows no longer use selected-state purple as the left
+rail for every selected card. The row rail now derives from the same ownership
+presentation used by the chip: Guildhall-owned next moves (`Queued`,
+`Queued for Guildhall`, `Guildhall shaping`, `Guildhall can continue`, live
+Guildhall work) get the green agent rail; owner-held actions (`Needs you`,
+`Needs brief`, recovery that needs the owner) get the human/warning rail; neutral
+history stays unrailed. Active detail cards also treat Guildhall-owned turns as
+green instead of purple so the list and detail hierarchy agree.
+
+Verification: added a ThreadTab regression proving a selected human-owned row
+has `rail-warn` instead of `rail-accent` while a Guildhall-owned queued row has
+`rail-ok`; `pnpm vitest run
+src/web/surfaces/project/__tests__/ThreadTab.svelte.test.ts --reporter=dot`
+passed with 91 tests. The focused status/button suite passed with 112 tests,
+and `pnpm typecheck` passed.
+
+source: codex:thread-mini-card-ownership-rails
+
+2026-06-03T20:03:54Z - Reframed project run controls around availability
+instead of a manual start/stop gate. Guildhall now persists a project-level
+`availability.status` policy separately from the current orchestrator
+`run.status`: default `active` projects expose `Pause` even when no run process
+is currently ticking, while explicit `paused` projects expose `Resume`.
+Running projects still present `Pause`, one-task passes present `Pause 1`, and
+the stopping transition is exposed to users as `Pausing...` / `Pausing`.
+Projects Home, ProjectView, Thread, Work, task drawers, and the shared project
+action model all read the same availability/run-control state instead of
+locally treating every stopped run as a paused project. Pause writes the
+availability policy and stops any current run; Resume clears the policy when
+the run starts.
+
+Thread, Work, and drawer stage chips now distinguish available Guildhall-owned
+work from explicitly paused Guildhall-owned work. `Guildhall shaping`,
+`Spec revision queued`, and `Queued for Guildhall` are available/active
+Guildhall-owned states; paused projects can still show paused work copy and
+paused drawer/work labels without implying the owner has a new decision to
+make. That keeps pre-work shaping in Thread while making the project-level
+Pause / Resume state explicit.
+
+Verification: `pnpm vitest run
+src/runtime/__tests__/project-availability.test.ts
+src/runtime/__tests__/project-action-model.test.ts
+src/web/lib/__tests__/task-presentation.test.ts
+src/web/lib/__tests__/project-summary.test.ts --reporter=dot` passed with 26
+tests; `pnpm vitest run
+src/web/surfaces/__tests__/ProjectView.svelte.test.ts
+src/web/surfaces/__tests__/ProjectsHome.svelte.test.ts --reporter=dot` passed
+with 58 tests; `pnpm vitest run
+src/web/surfaces/drawer/__tests__/CurrentTab.svelte.test.ts --reporter=dot`
+passed with 21 tests; `pnpm vitest run
+src/web/surfaces/project/__tests__/ThreadTab.svelte.test.ts
+src/web/surfaces/project/__tests__/WorkTab.svelte.test.ts --reporter=dot`
+passed with 111 tests. `pnpm typecheck`, `pnpm build`, `pnpm dev:install`,
+and `guildhall stop && guildhall start` passed. Live proof on
+`http://localhost:7777/projects/looma-knit/thread?thread=task%3Atask-import-1aessks&proof=availability-pause`:
+`/api/stale-server` returned `stale:false`; `/api/project?projectId=looma-knit`
+returned `availability.status:"active"` with `actionModel.runControl.label:"Pause"`;
+the browser DOM showed one `Pause` control and no `Start work`, `Stop work`, or
+`Shaping paused` copy.
+
+Known test gap: the full `src/web/surfaces/__tests__/TaskDrawer.svelte.test.ts`
+suite still hangs in this environment, both alone and when paired with
+CurrentTab. The smaller CurrentTab coverage passes; TaskDrawer needs a separate
+harness/timer cleanup before it can be counted as reliable availability proof.
+
+Earlier focused coverage: `pnpm vitest run
+src/runtime/__tests__/project-action-model.test.ts
+src/web/lib/__tests__/task-presentation.test.ts
+src/web/lib/__tests__/project-summary.test.ts
+src/web/surfaces/__tests__/ProjectView.svelte.test.ts
+src/web/surfaces/__tests__/ProjectsHome.svelte.test.ts
+src/web/surfaces/project/__tests__/ThreadTab.svelte.test.ts
+src/web/surfaces/drawer/__tests__/CurrentTab.svelte.test.ts
+src/web/surfaces/project/__tests__/WorkTab.svelte.test.ts --reporter=dot`
+passed with 215 tests.
+
+source: codex:project-availability-resume-pause
+
+2026-06-03T20:42:20Z - Corrected the project-run vocabulary regression from
+the availability refactor. Guildhall's old `Start` / `Stop` semantics now map
+directly to `Resume` / `Pause`: a stopped project with runnable work is
+resumable, not pausable, and only an actual running/stopping project exposes
+`Pause`. Removed the UI shortcut that treated `availability.status:"active"`
+as active processing. Thread, Work, drawers, and the shared task-stage
+presenter now use active-processing chips only when `run.status` is
+`running`/`stopping`; stopped work shows paused/resumable labels such as
+`Shaping paused`, `Spec revision paused`, or `Ready` instead of implying every
+task is currently being shaped. The running Pause control now uses the shared
+danger button variant, while stopped work keeps the green Guildhall-owned
+`Resume` action. Also softened the Thread composer textarea treatment so it
+keeps the shared input contract while reading as enabled rather than disabled.
+
+Verification: red tests first caught stopped work rendering `Pause`, stopped
+availability rendering `Guildhall shaping`, and the topbar showing `Pause`.
+After the fix, `pnpm vitest run
+src/runtime/__tests__/project-action-model.test.ts
+src/web/lib/__tests__/task-presentation.test.ts
+src/web/surfaces/__tests__/ProjectView.svelte.test.ts
+src/web/lib/__tests__/project-summary.test.ts
+src/web/surfaces/project/__tests__/ThreadTab.svelte.test.ts
+src/web/surfaces/project/__tests__/WorkTab.svelte.test.ts
+src/web/surfaces/drawer/__tests__/CurrentTab.svelte.test.ts --reporter=dot`
+passed with 198 tests. `pnpm typecheck`, `pnpm build`, and `git diff --check`
+passed. `pnpm dev:install` rebuilt and packaged successfully but failed at the
+LaunchAgent install edge with `Could not find service "io.guildhall.agent"`;
+the packaged artifact was copied into the installed app payload manually, then
+`guildhall stop && guildhall start` restarted the service. Live proof:
+`/api/stale-server` returned `stale:false`; `/api/project?projectId=looma-knit`
+returned `run:null` and `actionModel.runControl.label:"Resume"`; the in-app
+browser topbar showed `Resume`, no `Pause` or `Start work`, Thread chips showed
+`Shaping paused` / `Spec revision paused`, and the composer textarea reported
+`disabled:false`, `opacity:1`, and `cursor:text`.
+
+source: codex:resume-pause-old-start-stop-semantics
+
+2026-06-03T21:54:30Z - Tightened Thread/Work/status chip vocabulary so chips
+are statuses instead of tiny descriptions. The shared task presentation path,
+identifier labels, Current drawer, Task drawer, Thread list/detail, Work list,
+Planner, Overview, project activity, and project summary now collapse
+Guildhall-owned and pre-work states to short labels such as `Queued`,
+`Working`, `Paused`, `Ready`, `Review`, `Gates`, `Needs brief`, and `Needs
+you`. Descriptive phrases such as `Guildhall shaping`, `Queued for Guildhall`,
+`Spec revision queued`, `Spec revision paused`, `Shaping paused`, `Guildhall
+working`, `Brief cleanup needed`, and `Needs task briefs` were removed from
+chip/status sources. Longer explanations remain in body copy where they are
+actual descriptions, not status badges.
+
+Verification: `pnpm vitest run
+src/web/lib/__tests__/task-presentation.test.ts
+src/web/lib/__tests__/identifier-labels.test.ts
+src/web/lib/__tests__/project-summary.test.ts
+src/web/lib/__tests__/project-activity.test.ts
+src/web/surfaces/drawer/__tests__/CurrentTab.svelte.test.ts
+src/web/surfaces/project/__tests__/ThreadTab.svelte.test.ts
+src/web/surfaces/project/__tests__/WorkTab.svelte.test.ts
+src/web/surfaces/project/__tests__/ProjectOverviewTab.svelte.test.ts
+--reporter=dot` passed with 186 tests. Product-code search for the old
+chip/status phrases now only finds negative regression assertions or unrelated
+test titles. `pnpm typecheck` and `pnpm build` passed. `pnpm dev:install`
+completed cleanly, then `guildhall stop && guildhall start` restarted the
+installed service. Live proof on
+`http://localhost:7777/projects/looma-knit/thread?thread=task%3Atask-import-1aessks&proof=short-status-chips-2`:
+`/api/stale-server` returned `stale:false`; `/api/project?projectId=looma-knit`
+returned `runStatus:null` and `runControl.label:"Resume"`; the selected active
+dock chips were `Paused`, `2`, and `2 of 4`; page text contained none of the
+old descriptive chip phrases.
+
+source: codex:short-status-chip-vocabulary
+
+2026-06-04T00:52:00Z - Fixed the setup step-3 completion state exposed by the
+Jess onboarding run. A project whose meta-intake draft is already `approved`
+now renders `Setup is complete` with `Review structure` and `Open overview`
+actions instead of showing stale bootstrap/recovery controls such as
+`Setup was interrupted`, `Finish from repo scan`, or `Start meta-intake`.
+
+Verification: red-first `pnpm vitest run
+src/web/surfaces/__tests__/SetupWizard.svelte.test.ts -t "shows setup
+completion" --reporter=dot` failed on the stale `You're ready to bootstrap`
+card, then passed after the fix. Full
+`src/web/surfaces/__tests__/SetupWizard.svelte.test.ts` passed with 12 tests.
+`pnpm typecheck`, `pnpm build`, and `pnpm dev:install` passed; `guildhall stop
+&& guildhall start` restarted the installed service. Live proof:
+`/api/stale-server` returned `stale:false`;
+`/api/project/meta-intake/draft?projectId=jess` returned `status:"approved"`
+with 26 drafts; the in-app browser at `/projects/jess/setup?step=3` showed
+`Setup is complete`, `Review structure`, and `Open overview` with no
+interrupted/start controls.
+
+source: codex:jess-setup-complete-state
+
+2026-06-04T01:12:00Z - Fixed the Jess Structure graph labels after live
+onboarding exposed meaningless repeated `Documentation and knowledge` nodes and
+technical acronym casing such as `Css`, `Js`, `Scss`, and `Vscode`. Structure
+chart nodes now render source folder basenames when a path exists, otherwise
+they show the stored label exactly as provided. The UI deliberately does not
+guess acronym capitalization from dash-cased ids. Each chart node also shows the
+detected source path and links to the corresponding work-area row.
+
+Verification: red-first tests caught `Css Parser`, `Plugin Js`, and `Vscode
+Extension` from project-graph label derivation and caught Structure chart docs
+nodes collapsing to `Documentation and knowledge`. After the fix,
+`pnpm vitest run src/runtime/__tests__/project-graph.test.ts
+src/runtime/__tests__/structural-map.test.ts
+src/web/surfaces/project/structure/__tests__/ProjectStructurePanel.svelte.test.ts
+--reporter=dot` passed with 40 tests. `pnpm typecheck`, `pnpm build`, and
+`pnpm dev:install` passed; `guildhall stop && guildhall start` restarted the
+installed service. Live proof: `/api/stale-server` returned `stale:false`; the
+in-app browser at `/projects/jess/structure` showed chart links such as
+`docs-content packages/docs-content`, `patch-css packages/patch-css`,
+`css-parser packages/css-parser`, `jess-plugin-js packages/jess-plugin-js`,
+`jess-plugin-scss packages/jess-plugin-scss`, and `vscode packages/vscode`,
+with no `Documentation and knowledge` chart labels.
+
+source: codex:jess-structure-label-specificity
+
+2026-06-04T01:28:00Z - Removed the over-surfaced cross-project assignment
+framing from Jess Structure. The page no longer presents each folder/work area
+as `Owned here` versus `Reusable work`, no longer repeats row-level `Assign`
+actions, and no longer claims `84 reusable capabilitys` can move. Cross-project
+capability linking remains supported as the edge case it is: one small
+`Link capability` action opens a modal where the user can search for a real
+capability and then search for a provider project. Work-area rows now stay about
+this project: area title plus source path/coordinator metadata. The legacy map
+panel follows the same no-guessing display rule, preferring a source-path
+basename over stale persisted labels such as `Css`, `Js`, or `Scss`.
+
+Verification: red-first Structure regression caught the visible `Reusable work`
+column and row assignment action, then passed after moving the flow behind the
+single modal. A second regression covers stale `Css` labels with
+`packages/patch-css` paths so the page shows `patch-css` instead of trying to
+repair capitalization. Affected tests passed:
+`pnpm vitest run src/runtime/__tests__/project-graph.test.ts
+src/runtime/__tests__/structural-map.test.ts
+src/web/surfaces/project/structure/__tests__/ProjectStructurePanel.svelte.test.ts
+--reporter=dot` (`40` tests). `pnpm typecheck`, `pnpm build`,
+`pnpm dev:install`, `guildhall stop && guildhall start`, and `git diff --check`
+passed. Live proof: `/api/stale-server` returned `stale:false`;
+`/api/project/project-graph?projectId=jess` returned `42` domains and `26`
+contract surfaces; the in-app browser at `/projects/jess/structure` showed
+`42 work areas`, `26 contracts`, `patch-css`, `jess-plugin-js`,
+`jess-plugin-scss`, and `vscode`, with no `Reusable work`, `Owned here`,
+`Can move`, `Boundaries and assignments`, `Available to assign`,
+`84 reusable`, or `reusable capabilitys` text. The browser also verified that
+the chart and work-area rows did not show standalone stale `Css`, `Js`, or
+`Scss` labels. Modal behavior is covered by the component regression; direct
+browser activation of the modal timed out in the in-app browser harness before
+any assignment was made.
+
+source: codex:jess-structure-assignment-framing
+
+2026-06-04T01:38:00Z - Made the Jess Structure page explain obscure project-map
+terms instead of expecting the user to know Guildhall internals. Added a
+Structure-local circled-question help affordance that opens a short modal and
+uses the existing tooltip behavior on hover/focus. The page now exposes one
+help icon each for `Structure`, `Work areas`, `Contracts`, `Project handoffs`,
+`Structural map review`, `Review status`, and the Git-root note. The Git-root
+card was renamed from `Ignored vendored Git roots` to `Ignored dependency
+folders`, with help copy explaining that `node_modules` was skipped so
+installed packages do not become fake work areas. A first browser pass caught a
+bad row-level help implementation that repeated `Tracked here` across every
+contract; that was removed and folded into the single `Contracts` explanation.
+
+Verification: Structure regression
+`pnpm vitest run src/runtime/__tests__/project-graph.test.ts
+src/runtime/__tests__/structural-map.test.ts
+src/web/surfaces/project/structure/__tests__/ProjectStructurePanel.svelte.test.ts
+--reporter=dot` passed with `41` tests. `pnpm typecheck`, `pnpm build`,
+`pnpm dev:install`, `guildhall stop && guildhall start`, and `git diff --check`
+passed. Live proof: `/api/stale-server` returned `stale:false`; the in-app
+browser at `/projects/jess/structure` showed `Ignored dependency folders` and
+`node_modules`, did not show `Ignored vendored Git roots`, and exposed exactly
+one help button for each of `Structure`, `Work areas`, `Contracts`,
+`Project handoffs`, `Structural map review`, `Review status`, and
+`Ignored dependency folders`, with zero repeated `Tracked here` help buttons.
+
+source: codex:jess-structure-help-affordances
+
+2026-06-04T01:49:00Z - Collapsed the Jess Structure page so it no longer
+renders the same package/work-area inventory three times. The old chart,
+`Work areas` section, standalone `Contracts` section, and legacy map domain
+list have been replaced by one `Project map` surface: a single selectable list
+of folders/work areas with summary counts, plus a details pane for the selected
+area. Contracts, contract review packets, capability-linking context, and
+contract actions now live in that detail pane instead of repeating a tiny
+variant of the same package list. The legacy review panel now keeps audit
+status, conflicts, and ignored dependency folders only; it does not list the
+domains again.
+
+Verification: Structure regression updated for the collapsed hierarchy and
+passed with the affected runtime graph tests:
+`pnpm vitest run src/runtime/__tests__/project-graph.test.ts
+src/runtime/__tests__/structural-map.test.ts
+src/web/surfaces/project/structure/__tests__/ProjectStructurePanel.svelte.test.ts
+--reporter=dot` (`41` tests). `pnpm typecheck`, `pnpm build`,
+`pnpm dev:install`, `guildhall stop && guildhall start`, and `git diff --check`
+passed. Live proof: `/api/stale-server` returned `stale:false`; the in-app
+browser at `/projects/jess/structure` showed `Project map`, `42 work areas`,
+`26 contracts`, selected-area details, package-contract detail content, and
+`Capability linking`; it had zero standalone `Work areas` headings, zero
+standalone `Contracts` headings, no `Structural domains` legacy region, and no
+`Ignored vendored Git roots` text.
+
+source: codex:jess-structure-collapsed-map
+
+2026-06-04T01:56:00Z - Restored owner-input multiple-choice answers to the
+task-card-style immediate action rows. Pressure-test, bounded-chat, and
+thread-dock choice prompts now render each answer as a full-width compact card
+button with the answer text on the left and a right-facing arrow on the right,
+instead of generic secondary button chips. The answer click handlers and busy
+disabled states are unchanged.
+
+Verification: Focused ThreadTab regression
+`pnpm vitest run src/web/surfaces/project/__tests__/ThreadTab.svelte.test.ts
+-t "pressure-test choices" --reporter=dot` passed. `pnpm typecheck`,
+`pnpm build`, `pnpm dev:install`, and `guildhall stop && guildhall start`
+passed. Live proof: `/api/stale-server` returned `stale:false`; the in-app
+browser opened Jess's pending answer thread and found `4`
+`.pressure-choice-card` buttons, `4` `.pressure-choice-arrow` affordances,
+grid layout on the first choice button, and the expected choices:
+`Infer the project's internal routing slices (coordinator domains)`,
+`Infer lever positions from project evidence`,
+`Bootstrap verification (try install + gates)`, and `Draft starter tasks`.
+
+source: codex:jess-thread-choice-card-arrows
+
+2026-06-04T02:03:00Z - Removed the selected-work-area mechanism from the
+Structure `Project map` and moved cross-project capability linking behind one
+modal action. Work areas now render as plain project-local rows, not clickable
+selected controls, and the page no longer shows `Selected work area` as an
+assignment gateway. `Link capability` is a top-level secondary action in the
+Project map card and opens a modal with the shared `Input` and `Select`
+primitives: search capabilities, choose a capability combobox, choose a
+provider-project combobox, then assign. The custom assignment-picker row/list
+UI was removed. Structure help icons now use a shared ghost rounded icon button
+and no longer wrap hover tooltip behavior; the explanation surface is the modal
+opened from click/focus.
+
+Verification: Structure regression covers the plain work-area list, absence of
+`Selected work area`, absence of direct assign-row buttons, modal search and
+combobox assignment flow, and the `/domain-responsibility` POST. Affected tests
+passed:
+`pnpm vitest run src/runtime/__tests__/project-graph.test.ts
+src/runtime/__tests__/structural-map.test.ts
+src/web/surfaces/project/structure/__tests__/ProjectStructurePanel.svelte.test.ts
+--reporter=dot` (`41` tests). `pnpm typecheck`, `pnpm build`,
+`pnpm dev:install`, `guildhall stop && guildhall start`, and
+`git diff --check` passed. Live proof: `/api/stale-server` returned
+`stale:false`; the in-app browser at `/projects/jess/structure` showed
+`Project map`, `42 work areas`, `26 contracts`, a top-level `Link capability`
+button, `0` work-area-row buttons, `42` plain `.work-area-row` nodes, no
+`Selected work area` text, no Structure tooltip wrapper nodes, and shared
+rounded ghost icon-button classes for the first Structure help buttons. The
+browser harness timed out on physical activation of the `Link capability`
+button, so modal internals are covered by the component regression rather than
+the live click proof.
+
+source: codex:jess-structure-modal-capability-linking
+
+2026-06-04T02:14:00Z - Fixed owner-input questions that are not actually
+mutually exclusive. The Jess meta-intake prompt `This is a meta-intake task —
+I need to:` lists setup phases that can all apply, so it should not render as
+immediate single-choice arrow actions. Bounded-chat sub-objectives and
+owner-input records now preserve `selectionMode`, task-question migration marks
+the legacy meta-intake setup-step list as `multiple`, and thread projection
+repairs already-persisted legacy sessions with that shape. Thread UI now keeps
+single-choice owner questions as immediate arrow rows, but renders
+multiple-choice owner questions as selectable checklist rows with a `Submit
+selected` button and copy that says `Select every item that applies`.
+
+Verification: Runtime regression covers owner-input `selectionMode: multiple`
+persisting into the linked bounded-chat session. ThreadTab regression covers
+multi-select rendering, no arrow affordances, disabled `Submit selected` before
+selection, and combined-answer submission after selecting multiple choices.
+Focused tests passed:
+`pnpm vitest run src/runtime/__tests__/owner-input.test.ts
+src/runtime/__tests__/thread.test.ts
+src/web/surfaces/project/__tests__/ThreadTab.svelte.test.ts -t
+"multiple|pressure-test choices|owner-input selection" --reporter=dot`.
+`pnpm vitest run src/runtime/__tests__/serve-meta-intake.test.ts -t
+"meta-intake" --reporter=dot`, `pnpm typecheck`, `pnpm build`,
+`pnpm dev:install`, `guildhall stop && guildhall start`, and
+`git diff --check` passed. Live proof: `/api/stale-server` returned
+`stale:false`; the in-app browser on the Jess thread showed the meta-intake
+prompt with `Select every item that applies`, `4` multi choice rows, `4`
+check affordances, `0` arrow affordances, `Submit selected`, and all four setup
+choices: routing slices, lever positions, bootstrap verification, and starter
+tasks.
+
+source: codex:jess-meta-intake-multiple-choice
+
+2026-06-04T02:43:00Z - Reworked the Jess Structure `Project map` IA so it is
+one plain local project map instead of a two-column framed card competing with
+its own controls. The map now renders as a normal section with a compact
+summary, explicit action row, and table-like folder rows. Contract surfaces are
+shown inline under their matching folder as plain metadata facts; raw
+contract-state labels such as `proposed`, `Owned here`, and reusable-work
+framing no longer appear in the map. Cross-project capability linking remains
+available only through the `Link capability` modal with search plus capability
+and provider-project comboboxes. The section itself is not a button/card
+interaction target; only the help buttons and explicit actions are interactive.
+
+Verification: Structure regression covers the non-frame-card Project map,
+absence of the old `.project-map-layout`, exact folder labels/paths, absence of
+raw `proposed` text, absence of `Selected work area` and row-level Assign
+controls, clickable help icons, contract facts, and the `Link capability`
+modal assignment flow. Focused tests passed:
+`pnpm vitest run
+src/web/surfaces/project/structure/__tests__/ProjectStructurePanel.svelte.test.ts
+--reporter=dot` (`6` tests). `pnpm typecheck`, `pnpm build`,
+`pnpm dev:install`, and `guildhall stop && guildhall start` passed. Live proof:
+`/api/stale-server` returned `stale:false`; the in-app browser at
+`/projects/jess/structure` showed `.project-map-section` as a `SECTION` with
+no `gh-frame-card` class, `0` `.project-map-layout` nodes, `0` visible
+`proposed` labels, `0` proposed status/chip nodes, `28` work-area rows,
+summary text `28 work areas 26 contracts 0 active handoffs No connected
+external projects`, and only five interactive descendants inside the map:
+Project map help, `Link capability`, `Scan for contracts`, `Declare contract`,
+and Contracts help. The `Link capability` modal opened in the live browser and
+exposed the search input plus `Capability` and `Provider project` comboboxes.
+
+source: codex:jess-project-map-ia-cleanup
+
+2026-06-04T02:52:00Z - Reworked the Jess structural-review Thread question so
+it no longer repeats raw setup transport text. The owner-review question now
+keeps the actual decision prompt once, replaces the duplicated
+`Reason: owner_review_required_before_routing_truth` / `Targets:` dump with a
+plain explanation, and renders the proposed map as an already-found checklist
+grouped by `Domains` and `Cross-cutting areas`. Display labels strip only the
+known `domain:` and `cross-cutting:` prefixes and preserve the remaining text
+as written; there is no title-case guessing or acronym rewriting.
+
+Verification: Focused Thread regression covers structural-review bounded chat
+with no raw reason id, no raw target prefixes, grouped `Domains` and
+`Cross-cutting areas`, and the already-found proposed-area count:
+`pnpm vitest run
+src/web/surfaces/project/__tests__/ThreadTab.svelte.test.ts -t
+"structural-review bounded chat" --reporter=dot`. `pnpm typecheck`,
+`pnpm build`, `pnpm dev:install`, `guildhall stop && guildhall start`, and
+`git diff --check` passed. Live proof: `/api/stale-server` returned
+`stale:false`; the in-app browser at the Jess structural-review thread had no
+`owner_review_required_before_routing_truth`, no `cross-cutting:` prefixes, no
+`domain:` prefixes, exactly one selected-card copy of the review prompt, one
+plain explanation, and one `Proposed structural map` block with
+`Already found 22 proposed areas`, `Domains`, `Cross-cutting areas`, and
+`22` check icons.
+
+source: codex:jess-structural-review-thread-summary
+
+2026-06-04T06:05:00Z - Clarified the action on the Jess structural-review
+Thread card. The already-found checklist now explains why it is shown:
+use the map if the areas look good enough, and reply only if something is
+missing, duplicated, or assigned to the wrong kind of area. The card provides a
+primary `Use this map` button that answers the bounded-chat review directly
+with `Use this structural map for routing.`, plus a secondary
+`Something looks wrong` action that moves the user toward the existing thread
+composer for corrections.
+
+Verification: Focused Thread regression now covers the visible action copy,
+the `Something looks wrong` and `Use this map` actions, and the exact bounded
+chat answer payload:
+`pnpm vitest run
+src/web/surfaces/project/__tests__/ThreadTab.svelte.test.ts -t
+"structural-review bounded chat" --reporter=dot`. `pnpm typecheck`,
+`pnpm build`, `pnpm dev:install`, `guildhall stop && guildhall start`, and
+`git diff --check` passed. Live proof: `/api/stale-server` returned
+`stale:false`; the in-app browser at the Jess structural-review thread had no
+raw review reason or raw target prefixes, `Already found 22 proposed areas`,
+one action explanation, one `Something looks wrong` button, and one
+`Use this map` button.
+
+source: codex:jess-structural-review-explicit-action
+
+2026-06-04T06:31:18Z - Shifted Jess ingestion value from visible taxonomy to
+task-start context. Added an implementation plan at
+`internal/plans/2026-06-03-project-intake-context-and-structure-simplification.md`
+and implemented a shared runtime adapter,
+`src/runtime/structural-task-context.ts`, that translates the accepted
+structural map into user-facing task routing context: likely area, related work
+area, likely checks, and plain reasons. `/api/project` now returns
+`taskRoutingContexts` keyed by task id so UI surfaces render the same context
+the runtime can hand to agents. Thread task-start disclosures now show
+`Starting context` only for confident matches, with a `Change this context`
+action that reuses the existing correction flow. Structure copy now frames the
+map as task-start maintenance, collapses review-boundary details behind
+disclosures, and no longer repeats `No contracts recorded` on every area.
+
+Verification: Added runtime coverage for matched, unmatched, and setup-task
+routing context, including a regression that setup/import tasks do not claim
+normal routing context. Added Thread UI coverage for matched routing context.
+Focused tests passed:
+`pnpm vitest run src/runtime/__tests__/structural-task-context.test.ts
+src/web/surfaces/project/__tests__/ThreadTab.svelte.test.ts
+src/web/surfaces/project/structure/__tests__/ProjectStructurePanel.svelte.test.ts
+--reporter=dot` (`105` tests). `pnpm typecheck`, `pnpm build`,
+`pnpm dev:install`, `guildhall stop && guildhall start`, and
+`git diff --check` passed. Live proof: after restart,
+`/api/project?projectId=jess` returned `2` task routing contexts and `0`
+matched contexts; `task-workspace-import` and `task-meta-intake` both returned
+`status: unavailable`, summary `Project setup tasks do not use structural
+routing context.`, and `0` checks. This fixed the first live proof, where
+`task-meta-intake` had incorrectly matched `Compat` and inherited `227` likely
+checks. In-app browser proof at `/projects/jess/structure` showed the new
+task-start copy, `28` work-area rows, `25` collapsed review-boundary
+disclosures, `0` visible `No contracts recorded` repetitions, and one
+`Link capability` action.
+
+source: codex:jess-intake-context-routing
+
+2026-06-04T15:31:56Z - Made a stronger Structure pass focused on reducing the
+remaining duplicated setup-review surface and fixing help affordances. Inline
+`SectionHeader` metadata now sits next to heading text instead of in a
+far-right grid column. Structure help buttons no longer open modals:
+`StructureHelpTip` renders a transparent circular question button that toggles
+an anchored `role="tooltip"` and closes on a second click or Escape. The
+legacy structural-map review card was collapsed into one `Setup audit`
+section, with review state/status and ignored dependency folders retained as
+audit details instead of a second structure map plus separate review-status
+card.
+
+Verification: Focused Structure tests now assert tooltip open/close behavior,
+absence of help dialogs, the new `Setup audit` affordance, and the absence of
+the old `Structural map review` / `Review status` headings:
+`pnpm vitest run
+src/web/surfaces/project/structure/__tests__/ProjectStructurePanel.svelte.test.ts
+--reporter=dot` (`6` tests). `pnpm typecheck`, `pnpm build`,
+`pnpm dev:install`, `guildhall stop && guildhall start`, and
+`git diff --check` passed. Live browser proof at `/projects/jess/structure`
+showed `0` dialogs, `6` structure help buttons, `0` visible tooltips before
+interaction, `Setup audit` present, old `Structural map review` and
+`Review status` headings absent, headings reduced to `Structure`,
+`Project map`, `Project handoffs`, `Setup audit`, and
+`Ignored dependency folders`, and the first help button positioned `4px` after
+the `Structure` heading instead of floating at the card edge. Browser-control
+click dispatch timed out in the extension, so live click proof is covered by
+the Svelte UI test rather than a second browser interaction.
+
+source: codex:jess-structure-tooltip-and-audit-collapse
+
+2026-06-04T15:48:00Z - Fixed Structure help tooltip dismissal semantics.
+The Structure page is not using an external standard tooltip library for these
+question-mark explanations. Guildhall has a local hover/focus `Tooltip`
+primitive, but Structure help uses a local click-toggle tooltip because the
+copy is explanatory. `StructureHelpTip` now registers a document click listener
+only while open and dismisses when the user clicks outside the help wrapper,
+while preserving click-to-toggle and Escape-to-close behavior.
+
+Verification: Focused Structure regression now clicks a help button, verifies
+`aria-expanded="true"` and `role="tooltip"`, clicks `document.body`, verifies
+the tooltip is removed and `aria-expanded="false"`, then verifies the same
+button still closes on a second direct click. Commands passed:
+`pnpm vitest run
+src/web/surfaces/project/structure/__tests__/ProjectStructurePanel.svelte.test.ts
+--reporter=dot` (`6` tests), `pnpm typecheck`, `pnpm build`,
+`pnpm dev:install`, `guildhall stop && guildhall start`, and
+`git diff --check`. Live DOM proof at `/projects/jess/structure` showed
+`6` help buttons, `0` dialogs, `0` tooltips before interaction, first help
+button `aria-expanded="false"`, and `Setup audit` present.
+
+source: codex:jess-structure-tooltip-outside-dismiss
+
+2026-06-04T16:00:15Z - Fixed the Structure `Link capability` picker so it no
+longer opens a native select full of repeated internal responsibility
+descriptions. The modal now frames linking as a rare cross-project ownership
+case, requires search before showing long generated assignment lists, caps the
+visible choices, labels options as concise `area - responsibility` pairs, and
+shows the selected assignment's meaning/current owner below the control instead
+of stuffing that explanation into every option label.
+
+Verification: Added a regression with 16 generated assignable responsibilities
+that asserts the assignment select is disabled until search, shows
+`Search to narrow 16 possible assignments before choosing one.`, and never
+renders the generic `What another project must make possible...` sentence as an
+option label. Commands passed:
+`pnpm vitest run
+src/web/surfaces/project/structure/__tests__/ProjectStructurePanel.svelte.test.ts
+--reporter=dot` (`7` tests), `pnpm typecheck`, `pnpm build`,
+`pnpm dev:install`, `guildhall stop && guildhall start`, and
+`git diff --check`. Live server proof at `/api/stale-server` returned
+`stale:false`. Live DOM proof at `/projects/jess/structure` showed the updated
+Jess Structure page with one `Link capability` action and no
+`What another project must make possible...` text in the visible page body.
+The in-app browser input channel timed out on click dispatch in both the
+existing and a fresh tab, so modal activation proof is covered by the focused
+Svelte interaction/regression test.
+
+source: codex:jess-structure-capability-picker-search-gate
+
+2026-06-04T16:03:44Z - Collapsed the Structure `Link capability` modal's
+duplicated `Find capability` + `Choose capability` flow into one capability
+search/selection control. The modal now has a single `Capability` search field;
+matching assignments render directly as compact result buttons, and selecting a
+result reveals the assignment explanation plus the provider-project select.
+This removes the fake two-step distinction between searching for and choosing
+the same thing.
+
+Verification: Focused Structure coverage now asserts the modal has no separate
+`Find capability` label, no `Area or contract` combobox, one `Capability`
+searchbox, hidden results before the search gate, and compact result buttons
+after typing. Commands passed:
+`pnpm vitest run
+src/web/surfaces/project/structure/__tests__/ProjectStructurePanel.svelte.test.ts
+--reporter=dot` (`7` tests), `pnpm typecheck`, `pnpm build`,
+`pnpm dev:install`, `guildhall stop && guildhall start`, and
+`git diff --check`. Live server proof at `/api/stale-server` returned
+`stale:false`.
+
+source: codex:jess-structure-capability-single-control
+
+2026-06-04T16:15:05Z - Adjusted the Structure capability picker to behave like
+a real combobox instead of a search-gated list. The `Capability` field now has
+an explicit dropdown button that opens the option list before typing; typing in
+the field opens and narrows the same list; Escape closes it; choosing a result
+closes the list and keeps the selected assignment preview/provider-project
+selection flow. The picker still caps long generated lists to the first 25
+matches, but it no longer requires search before showing available options.
+
+Verification: Focused Structure coverage now asserts the dropdown button is
+visible, opens matching capabilities without search, keeps the old repeated
+internal description out of result labels, and narrows through the same
+`Capability` search field. Commands passed:
+`pnpm vitest run
+src/web/surfaces/project/structure/__tests__/ProjectStructurePanel.svelte.test.ts
+--reporter=dot` (`7` tests), `pnpm typecheck`, `pnpm build`,
+`pnpm dev:install`, `guildhall stop && guildhall start`, and
+`git diff --check`. Live server proof at `/api/stale-server` returned
+`stale:false`.
+
+source: codex:jess-structure-capability-dropdown-button
+
+2026-06-04T16:18:52Z - Neutralized Guildhall foreground text tokens so muted,
+secondary, body, primary, and disabled text no longer use the old pink/lavender
+ramp. Updated the canonical UI token definitions and regenerated package CSS.
+Neutral/default eyebrows now inherit neutral muted/secondary text. Amber remains
+reserved for explicit warning/attention tone, such as the current `Do this next`
+owner-input strip, instead of appearing as an ordinary subtitle color.
+
+Verification: Added a visual contract test that pins neutral text token values
+and forbids the previous pink/lavender foreground hex values from returning.
+Commands passed:
+`pnpm vitest run src/web/lib/__tests__/Button.css-contract.test.ts
+--reporter=dot` (`10` tests), `pnpm typecheck`, `pnpm build`,
+`pnpm dev:install`, `guildhall stop && guildhall start`, and
+`git diff --check`. A repository scan over `packages/ui` and `src/web` found no
+old foreground hex values. Live server proof at `/api/stale-server` returned
+`stale:false`. Live browser proof on `/projects/jess/structure` showed
+neutral token values (`#f4f4f5`, `#e4e4e7`, `#c7c7cf`, `#a1a1aa`,
+`#73737d`) and computed Structure eyebrow/description/muted text colors of
+`rgb(199, 199, 207)` and `rgb(161, 161, 170)`.
+
+source: codex:neutral-foreground-text-tokens
+
+2026-06-04T16:27:24Z - Reworked the Structure `Link capability` dropdown so
+opening the capability list does not inject a large scroll region into the
+modal body. The picker now has one transparent caret button beside the search
+input; the caret rotates while open; the matching capabilities render in an
+anchored dropdown panel outside the field label; rows use selectable-list
+button treatment with hover, focus, and selected states. Moving the panel out
+of the labeled field also fixes the accessible names for capability options.
+
+Verification: Focused Structure coverage asserts the transparent dropdown
+button opens the panel before search, narrows results from the same field,
+closes on selection and outside click, and exposes row names as the actual
+capability labels. Commands passed:
+`pnpm vitest run
+src/web/surfaces/project/structure/__tests__/ProjectStructurePanel.svelte.test.ts
+--reporter=dot` (`7` tests), `pnpm typecheck`, `pnpm build`, and
+`git diff --check`.
+
+source: codex:jess-structure-capability-overlay-dropdown
+
+2026-06-04T17:26:28Z - Removed the Structure page's placeholder contract
+actions. `Scan for contracts` and `Declare contract` only opened explanatory
+modals that said a future runtime command should exist, so they looked like
+real work controls while giving the user nothing to do. The Project map now
+shows the `Link capability` action only when a real linkable capability exists;
+otherwise the first screen stays a readable project summary with row-level
+contract details.
+
+Verification: Focused Structure coverage now asserts the placeholder contract
+buttons are absent while the empty-contracts state remains visible. Commands
+passed:
+`pnpm vitest run
+src/web/surfaces/project/structure/__tests__/ProjectStructurePanel.svelte.test.ts
+--reporter=dot` (`7` tests), `pnpm typecheck`, `pnpm build`, and
+`git diff --check`.
+
+source: codex:jess-structure-remove-placeholder-contract-actions
+
+2026-06-04T17:29:25Z - Removed the `legacy areas` status pill from the Jess
+Structure setup-audit panel. The count described old structural-map review
+records by storage origin, which was not meaningful to a project owner and
+duplicated the current Project map. The setup audit now keeps only the review
+state pill and describes itself as setup review evidence for history and
+corrections.
+
+Verification: Focused Structure coverage now asserts `legacy area(s)` is not
+rendered on the page. Commands passed:
+`pnpm vitest run
+src/web/surfaces/project/structure/__tests__/ProjectStructurePanel.svelte.test.ts
+--reporter=dot` (`7` tests), `pnpm typecheck`, `pnpm build`, and
+`git diff --check`.
+
+source: codex:jess-structure-remove-legacy-area-copy
+
+2026-06-04T17:34:03Z - Fixed Structure overlay stacking by adding a shared
+Svelte `portal` action and moving overlays to top-level DOM ownership. The
+base `Modal` now portals its rendered layer to `document.body`, and the
+Structure `Link capability` dropdown is no longer an absolutely positioned
+child of the modal body. It now portals to `document.body`, uses viewport-fixed
+coordinates anchored to the capability field, listens for resize/scroll
+repositioning, and treats both the field and portaled panel as inside clicks.
+This prevents the dropdown from being clipped or covered by the modal footer.
+
+Verification: Focused Structure coverage now asserts the capability dropdown
+panel is parented by `document.body`, opens before search, narrows from the
+same field, and closes on outside click. Commands passed:
+`pnpm vitest run
+src/web/surfaces/project/structure/__tests__/ProjectStructurePanel.svelte.test.ts
+--reporter=dot` (`7` tests),
+`pnpm vitest run src/web/surfaces/__tests__/TaskDrawer.svelte.test.ts
+src/web/surfaces/project/structure/__tests__/ProjectStructurePanel.svelte.test.ts
+--reporter=dot` (`51` tests), `pnpm typecheck`, `pnpm build`, and
+`git diff --check`. After `pnpm dev:install && guildhall stop && guildhall
+start`, `/api/stale-server` returned `stale:false`. A live Chromium check on
+`/projects/jess/structure` opened the `Link capability` modal and dropdown,
+then confirmed the dropdown panel parent was `document.body`, `position: fixed`,
+`z-index: 155`, above the modal's `z-index: 150`, with the hit-tested top
+element in the overlapped region being a capability row rather than the modal
+footer.
+
+source: codex:jess-structure-portal-overlays
+
+2026-06-04T17:39:35Z - Removed the remaining current-code framing that treated
+pre-release setup map state as a `legacy` concept. The Structure-side audit
+component is now named `SetupAuditPanel` instead of
+`StructuralMapReviewPanel`, its conflict tooltip refers to outdated setup
+findings rather than stale/legacy decisions, and the Structure regression test
+now names the old repeated setup-review UI as setup-review cards rather than
+legacy cards. Negative assertions remain only to prevent `legacy area(s)` or
+`legacy structural map` from returning to the page.
+
+Verification: Current Structure source now contains no `legacy structural`,
+`legacy area`, `legacy cards`, `old structural`, or `old review` wording except
+the negative regression assertions. Commands passed:
+`pnpm vitest run
+src/web/surfaces/project/structure/__tests__/ProjectStructurePanel.svelte.test.ts
+--reporter=dot` (`7` tests), `pnpm typecheck`, `pnpm build`, and
+`git diff --check`.
+
+source: codex:jess-structure-remove-pre-release-legacy-framing
+
+2026-06-04T17:46:36Z - Repaired the app-header brand mark after the in-app
+browser rendered `/icons/genfavicon-64.png` as a broken image. The route served
+the PNG with `200 OK`, but the in-app browser reported the loaded header image
+as `complete: true` with `naturalWidth: 0`, so the issue was image decode/render
+rather than a bad path. The header brand mark no longer depends on an `<img>`;
+it is now a small CSS-rendered mark inside the existing `Projects home` brand
+button, and the regression test asserts the header does not reintroduce a
+brand image element.
+
+Verification: Commands passed:
+`pnpm vitest run src/web/surfaces/__tests__/Header.svelte.test.ts
+--reporter=dot` (`6` tests), `pnpm typecheck`, `pnpm build`, and
+`git diff --check`.
+
+source: codex:header-css-brand-mark
+
+2026-06-05T03:00:46Z - Removed the filled purple app-tile treatment from the
+app-header brand mark. The live docs screenshot on guildhall.cc exposed that
+the header mark had drifted into a purple rounded square with glow and a heavy
+white arch. The real header logo is `/icons/genfavicon-64.png`; it is restored
+as the image inside `.brand-mark`. The wrapper no longer paints its own
+background, box-shadow, or tile radius, so the real logo sits next to the
+`Guildhall` wordmark without the extra purple app-tile treatment.
+
+Verification: Focused Header coverage now asserts the real
+`/icons/genfavicon-64.png` image remains in the header and fails if
+`.brand-mark` reintroduces a filled tile background, box-shadow, or tile
+radius. App shell coverage now also asserts the 16px and 32px PNG favicon
+links alongside `/favicon.ico`, Apple touch icon, and the manifest. Commands passed:
+`pnpm exec vitest src/web/surfaces/__tests__/Header.svelte.test.ts --run`
+(`7` tests) and `pnpm build`. The compiled `dist/web/app.css` was inspected
+after build and contains the image-sized `.brand-mark` styles without the old
+filled purple tile declarations.
+
+source: codex:header-brand-mark-remove-purple-tile
+
+2026-06-05T02:37:41Z - Rebalanced the project Overview hierarchy so `Do this
+next` is no longer a narrow side card beside `Moving now`. The primary action
+now owns a full-width priority row immediately after the knowledge summary; the
+next row pairs `Moving now` with `Needs you`, and supporting context starts with
+`Work mix` plus `Blocked work`. The Overview knowledge summary buttons are now
+covered as route actions: Work and Proof route to Work, Structure and Project
+graph route to Structure, Runtime routes to readiness Settings, and History
+routes to Timeline.
+
+Verification: Focused Overview coverage added a red/green regression for the
+full-width priority row and explicit click coverage for the knowledge-summary
+route targets. Command passed:
+`pnpm vitest run src/web/surfaces/project/__tests__/ProjectOverviewTab.svelte.test.ts --reporter=dot`
+(`19` tests).
+
+source: codex:overview-priority-action-layout
+
+2026-06-05T02:59:00Z - Fixed toast glass styling after a live screenshot showed
+success/info toasts reading as flat bordered slabs. Root cause: `ToastHost`
+used the nonexistent `--glass-filter` variable, so the browser dropped the
+filter, and its fill came from an opaque surface mix instead of the shared
+glass background tokens. Toasts now use `--glass-reflect-*`, `--glass-bg`,
+`--glass-bg-strong`, `--glass-shadow`, `--glass-etch`, and `--glass-blur`
+with the WebKit backdrop-filter fallback while preserving their existing
+geometry and semantic success/error/info borders.
+
+Verification: Added a focused regression in `scripts/glass-design-system.test.ts`
+that requires toast glass background/blur tokens and rejects `--glass-filter`.
+Commands passed: `pnpm exec vitest run scripts/glass-design-system.test.ts`
+(`5` tests), `pnpm build`, `pnpm dev:install`, and `guildhall stop && guildhall
+start`. Freshness proof after restart: `/api/stale-server` returned
+`stale:false` for the installed app path. Served CSS proof from
+`http://127.0.0.1:7777/web/app.css` showed `.toast.svelte-*` using
+`color-mix(in srgb, var(--glass-bg-strong) 86%, var(--glass-bg))`,
+`backdrop-filter: var(--glass-blur)`, and `-webkit-backdrop-filter:
+var(--glass-blur)`, with no `--glass-filter` token present. Browser route
+loaded through loopback after an initial `localhost` extension block; DOM
+injection for a preview toast was not available through the current Browser
+evaluation surface, so the live proof is service freshness plus served CSS.
+
+source: codex:toast-glass-token-fix
+
+2026-06-05T03:14:00Z - Unified the task drawer `More task actions` menu
+after a live screenshot showed four competing presentations in one compact
+stack: purple Reframe, emitted mint Rework, gray Split, and filled red Shelve.
+Root cause: the menu mixed one raw custom `.more-action-button.agent` with
+full footer `Button` variants (`agent`, `secondary`, and `danger`), so action
+hierarchy styling leaked into a menu where every row should read as the same
+kind of choice. Fix: every menu item now renders as a native
+`.more-action-button` row on one glass menu panel. Rework/rerun can keep the
+sparkles icon without becoming a glowing CTA. Shelve uses a `.destructive`
+text/hover tint only, not a red slab.
+
+Verification: Added a focused TaskDrawer regression that rejects `agent`,
+`secondary`, and `danger` `Button` variants inside `.more-action-menu`.
+Commands passed: `pnpm vitest run src/web/surfaces/__tests__/TaskDrawer.svelte.test.ts
+-t "keeps the more task actions menu|can reframe a task|lets the user ask
+Guildhall to split|lets the user describe a generic task rework" --reporter=dot`
+(`4` tests), `pnpm build`, `pnpm dev:install`, and `guildhall stop &&
+guildhall start`. Freshness proof after restart: `/api/stale-server` returned
+`stale:false` for the installed app path. Served CSS proof from
+`/web/app.css` showed `.more-action-menu.svelte-*` using glass border,
+background, shadow, and `backdrop-filter: var(--glass-blur)`, with
+`.more-action-button.svelte-*` rows using transparent backgrounds and no row
+box-shadow. Browser proof on `http://127.0.0.1:7777/projects/narrative-harness`
+opened the task drawer menu and computed `menuBackdropFilter:
+blur(22px) saturate(1.18)`, transparent row background, and row box shadow
+`none`.
+
+source: codex:task-action-menu-single-lane
+
+2026-06-05T03:17:00Z - Unified the task drawer footer utility actions after
+the same visual-language mismatch showed up one level down: `More task actions`
+was a raw text trigger while adjacent `Copy link` was a ghost `Button`, so peer
+utilities in the footer inherited different control treatments. Fix: both
+footer utilities now render as native buttons with the shared
+`.footer-utility-action` class. The menu trigger keeps its
+`.more-actions-trigger` hook only for open-state behavior, not for a separate
+visual language. Workspace-import `Copy link` uses the same utility treatment.
+
+Verification: Added a focused TaskDrawer regression that requires
+`footer-utility-action` on the More trigger and Copy link, and rejects the old
+ghost Button copy-link markup. Commands passed:
+`pnpm vitest run src/web/surfaces/__tests__/TaskDrawer.svelte.test.ts -t
+"footer utility actions|More task actions|copy" --reporter=dot` (`2` tests),
+`pnpm vitest run src/web/surfaces/__tests__/TaskDrawer.svelte.test.ts
+--reporter=dot` (`46` tests), `pnpm build`, `pnpm dev:install`, and
+`guildhall stop && guildhall start`. Freshness proof after restart:
+`/api/stale-server` returned `stale:false` for the installed app path. Browser
+proof on `http://127.0.0.1:7777/projects/narrative-harness/task/author-voice-loop-mvp`
+showed `More task actions` and `Copy link` with the same transparent
+background, zero border, no box shadow, `12px` font size, `600` weight,
+`12px` line height, `4px 0px` padding, and muted text color.
+
+source: codex:task-footer-utility-single-lane
+
+2026-06-05T03:23:00Z - Increased separation between the task drawer footer
+utility actions after the shared text treatment made `More task actions` and
+`Copy link` read like one phrase. Fix: the `.more-actions` wrapper now adds
+`margin-right: var(--s-4)`, keeping the same text-button treatment while
+creating a visible group break before `Copy link`.
+
+Verification: Added the spacing expectation to the focused footer utility
+regression. Command passed:
+`pnpm vitest run src/web/surfaces/__tests__/TaskDrawer.svelte.test.ts -t
+"footer utility actions" --reporter=dot` (`1` test). `pnpm build`,
+`pnpm dev:install`, and `guildhall stop && guildhall start` passed. Freshness
+proof after restart: `/api/stale-server` returned `stale:false` for the
+installed app path. Browser proof on
+`http://127.0.0.1:7777/projects/narrative-harness/task/author-voice-loop-mvp`
+loaded the current CSS rule `.more-actions.svelte-* { position: relative;
+margin-right: var(--s-4); }` and measured a `24px` visual gap between `More
+task actions` and `Copy link`. A full TaskDrawer suite run still has unrelated
+copy expectation failures in the dirty worktree; this spacing regression and
+the build are green.
+
+source: codex:task-footer-utility-spacing
+
+2026-06-05T03:36:00Z - Reworked the project notifications card layout after
+the Narrative Harness inbox screenshot showed cards with a left-side content
+block, a far-right status/date stack, and actions orphaned back on the left.
+Root cause: each card's header owned the signal/content/meta grid, while the
+actions row was a separate sibling below it, so the card did not have one
+coherent layout model. Fix: the item card now owns a three-column grid: signal,
+main content, and a right-side meta/action rail. The item header uses
+`display: contents`, meta sits in the right rail's first row, actions sit in
+the right rail's second row, and the mobile breakpoint keeps the same content
+order while stacking meta and actions under the title.
+
+Verification: Added focused source regression coverage requiring the
+content-column plus right-rail structure. Commands passed:
+`pnpm vitest run src/web/surfaces/project/__tests__/InboxTab.svelte.test.ts -t
+"content column plus right-side meta|compact utility-panel|loads alert-owned"
+--reporter=dot` (`3` tests) and
+`pnpm vitest run src/web/surfaces/project/__tests__/InboxTab.svelte.test.ts
+--reporter=dot` (`9` tests). `pnpm build` first hit a transient post-build
+`chmod dist/cli.js ENOENT`, then a retry passed. `pnpm dev:install` and
+`guildhall stop && guildhall start` passed. Freshness proof after restart:
+`/api/stale-server` returned `stale:false` for installed dist
+`/Users/matthew/.guildhall/app/0.10.0/app/dist/cli.js`. Served CSS and Browser
+geometry proof on
+`/projects/narrative-harness/notifications?proof=inbox-card-layout-1780630319656`
+showed the first alert card using three columns
+`30.3828px 753.32px 120.297px`, with main content in column 2 and both meta
+and actions aligned in the right rail.
+
+source: codex:inbox-card-meta-action-rail
+
+2026-06-05T04:03:00Z - Corrected the overfit inbox-card fix after owner
+feedback called out the deeper design-system failure: moving a bespoke card
+layout into another local/shared dialect does not reduce patterns. Inbox rows
+now compose the existing `CardList` + `CardListItem` shell instead of local
+`UtilityPanel className="item-card"` chrome, and inbox status badges now use
+the canonical `Chip` primitive instead of local `.status-pill` styling.
+`TaskCard` also stopped defining local `chip-danger`, `chip-warn`, `chip-ok`,
+and `chip-accent` styles; its status label now renders through `Chip` while
+the icon remains row-specific. Added a hard `ui-primitive-scan` rule that
+rejects new local `status-pill`, `chip-*`, singular `*-chip`, and `*-chip-*`
+styling outside the shared chip primitives. The only remaining allowed
+exception is the named legacy Thread `.task-chip` / `.task-chip-text` debt,
+which is now explicit instead of invisible.
+
+Verification: Commands passed: `pnpm vitest run
+scripts/ui-primitive-scan.test.ts src/web/surfaces/project/__tests__/InboxTab.svelte.test.ts
+--reporter=dot` (`13` tests), `node scripts/ui-primitive-scan.mjs .`,
+`pnpm build`, `pnpm dev:install`, and `guildhall stop && guildhall start`.
+Freshness proof after restart: `/api/stale-server` returned `stale:false` for
+installed dist `/Users/matthew/.guildhall/app/0.10.0/app/dist/cli.js`.
+Browser proof on
+`/projects/narrative-harness/notifications?proof=design-primitive-enforcement-1780632106666`
+showed the first inbox row using
+`utility-panel tone-neutral rail-neutral rail-subtle is-dense card-list-item
+inbox-row`, its status as `chip tone-warn size-default`, and `statusPills: 0`.
+
+source: codex:design-primitive-chip-row-enforcement
+
+2026-06-05T04:28:00Z - Softened toast glass borders and added motion after
+owner feedback that the borders still read too heavy and toasts should move
+into/out of place instead of appearing as static slabs. `ToastHost` now uses
+Svelte's `fly` transition with a small upward entrance (`y: 8`) and fade
+(`opacity: 0.04`, `duration: 170`) so removal gets the matching outro. Base
+toast borders now use `--glass-border` instead of `--glass-border-strong`, and
+success/error/info semantic border mixes are reduced to `24%`, `30%`, and
+`24%` respectively while keeping icon color as the stronger semantic signal.
+
+Verification: Added focused glass-design regression coverage for the toast
+transition, softened border token, and reduced semantic border mixes. Commands
+passed: `pnpm exec vitest run scripts/glass-design-system.test.ts`, `pnpm
+build`, `pnpm dev:install`, and a forced service freshness check. The first
+post-install `guildhall stop && guildhall start` reported a stale running
+service, so the launch agent state was inspected and the active service was
+confirmed fresh afterward with `/api/stale-server` returning `stale:false` for
+PID `54481` and installed dist
+`/Users/matthew/.guildhall/app/0.10.0/app/dist/cli.js`. Browser proof on
+`/projects/narrative-harness/task/author-voice-loop-mvp?proof=toast-motion-border-1780633620021`
+triggered the live toast path via `Copy link`; the Browser wrapper denied
+clipboard access, producing an error toast, and computed style showed
+`borderWidth: 1px`, softened danger border color, and
+`backdropFilter: blur(22px) saturate(1.18)`.
+
+source: codex:toast-soft-border-motion
+
+2026-06-05T04:39:00Z - Made Projects & Workspaces render progressively and
+switched project cards from flex wrapping to a real responsive grid. Root
+cause: the page waited on one heavy `/api/service` response before showing any
+project cards, while that endpoint performed per-project provider, migration,
+readiness, availability, task, git, inbox, thread, and action-model work. It
+also laid project cards out with flex wrapping (`flex: 1 1 24rem`) instead of
+CSS grid columns. Fix: added `/api/service/projects`, a lightweight registered
+project shell endpoint that returns identity, summary, tags, run state, and
+`projectStatusLoading: true` without expensive per-project status hydration.
+ProjectsHome now renders those shell cards immediately, shows
+`Loading project status...`, then hydrates from the full `/api/service`
+response in the background. Shell cards summarize honestly as `Loading` /
+`Loading project status...` so the UI does not momentarily claim zero-task
+projects are `Ready`. The project card container now uses
+`grid-template-columns: repeat(auto-fit, minmax(min(100%, 24rem), 1fr))`.
+
+Verification: Added frontend coverage for the responsive grid source contract
+and progressive rendering while `/api/service` remains unresolved. Added
+backend coverage proving `/api/service/projects` returns lightweight shells
+with `projectStatusLoading: true` and without expensive `migrationSummary`,
+`actionModel`, or `startReadiness` fields. Commands passed:
+`pnpm vitest run src/web/surfaces/__tests__/ProjectsHome.svelte.test.ts
+--reporter=dot` (`21` tests), `pnpm vitest run
+src/runtime/__tests__/serve-settings.test.ts -t
+"lightweight project shells|migration summary" --reporter=dot` (`2` focused
+tests), `pnpm build`, and `pnpm dev:install`. The normal restart path again
+left a stale service, so the LaunchAgent was restarted with `launchctl
+kickstart -k`; `/api/stale-server` then returned `stale:false` for installed
+dist `/Users/matthew/.guildhall/app/0.10.0/app/dist/cli.js`. Browser/API proof
+on `/?proof=projects-progressive-grid-1780634274207` showed
+`/api/service/projects` returning `7` shell projects in `43ms`; the page
+rendered `7` project cards while `loadingInline` was
+`Loading project status...`; computed `.grid` display was `grid` with columns
+`501px 501px`; after hydration, `loadingInline` became `null` and the first
+card showed real status/counts/chips while retaining the same grid columns.
+
+source: codex:projects-progressive-shell-grid
+
+2026-06-05T04:57:43Z - Clamped long Thread index titles to three lines after
+the Looma + Knit thread list showed a selected card hard-cutting a long
+file-path-heavy task title at the card edge. `.thread-index-row-top` now uses a
+two-column grid (`minmax(0, 1fr) auto`) so the title and timestamp have stable
+lanes, and the title uses the standard `line-clamp: 3` declaration plus the
+current WebKit clamp fallback (`display: -webkit-box`,
+`-webkit-line-clamp: 3`, `-webkit-box-orient: vertical`, `overflow: hidden`).
+
+Verification: Extended the existing ThreadTab source regression so the
+thread-list title row must remain grid-based and the title must keep the
+three-line clamp declarations. Commands passed: `pnpm vitest run
+src/web/surfaces/project/__tests__/ThreadTab.svelte.test.ts -t "thread-list
+titles readable" --reporter=dot`, `pnpm build`, and `pnpm dev:install` after
+one transient installer copy failure on the first attempt. The background
+service initially remained stale; killing the stale PID and letting the
+LaunchAgent restart produced `/api/stale-server` with `stale:false` for PID
+`1880` and installed dist
+`/Users/matthew/.guildhall/app/0.10.0/app/dist/cli.js`. Browser proof on
+`/projects/looma-knit/thread?proof=thread-title-clamp-1780635410000` found
+`39` thread-list titles; the target
+`Keep docs/component-roadmap.md, docs/editor-roadmap.md, and
+knit/docs/looma-migration-inventory.md synchronized as migra` rendered at
+`56.7px` with `line-height: 18.9px` (`3` estimated lines), row display `grid`,
+row columns `207.797px 21.2031px`, `overflow: hidden`, and live CSS containing
+`display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical`.
+
+source: codex:thread-index-title-3-line-clamp
+
+2026-06-05T05:06:31Z - Fixed the Overview task-title clamp regression after
+the Looma + Knit overview showed `Continue the Knit-to-Looma... while the` as
+a hard character cut instead of a CSS overflow clamp. Root cause had two
+layers: `OverviewTaskRow` let long titles wrap without owning a clamp, and
+`ProjectOverviewTab` passed raw imported task titles even when the title was
+already a 120-character compact form while `task.description` contained the
+full source sentence. `OverviewTaskRow` now keeps the full title text in the
+DOM and applies the three-line CSS clamp (`line-clamp: 3` plus the current
+WebKit fallback). `ProjectOverviewTab` now routes overview task labels through
+one helper that recovers the full title from source-prefixed descriptions only
+when the stored title is clearly compact/clipped, and the Moving now,
+priority-card, run-plan, and blocked-work paths share that helper.
+
+Verification: Added component coverage proving `OverviewTaskRow` keeps full
+title text and uses CSS clamp declarations instead of slicing the title. Added
+overview coverage for a compact 120-character imported title plus full
+description, asserting the full title renders in overview surfaces and the
+compact title does not. Commands passed: `pnpm vitest run
+src/web/lib/__tests__/OverviewTaskRow.svelte.test.ts
+src/web/surfaces/project/__tests__/ProjectOverviewTab.svelte.test.ts -t
+"full overview task titles|OverviewTaskRow" --reporter=dot`, `pnpm build`,
+and `pnpm dev:install`. After restarting the installed service,
+`/api/stale-server` returned `stale:false` for PID `22454` and installed dist
+`/Users/matthew/.guildhall/app/0.10.0/app/dist/cli.js`. Live browser proof on
+`/projects/looma-knit/overview?proof=overview-row-css-clamp-full-title-1780635940000`
+found the target overview row title as the full 168-character sentence
+`Continue the Knit-to-Looma promotion work from the now-complete first M6 queue
+into the next generic surfaces, while the primitive normalization wave
+continues in Knit.`, `exactCompactMatches: 0`, `estimatedLines: 3`,
+`overflow: hidden`, and the live CSS rule containing `display: -webkit-box;
+-webkit-line-clamp: 3; -webkit-box-orient: vertical`.
+
+source: codex:overview-task-title-css-clamp-full-content
+
+2026-06-05T13:24:02Z - Centralized shell attention dedupe after the Looma +
+Knit overview showed two top-shell alerts for the same stopped-state owner
+blocker: `Review 35 waiting specs before starting.` and `Waiting on input: 35
+awaiting approval.` Root cause: `ProjectView` rendered start-readiness and
+run-stop/idle-summary notices through separate local branches, so a
+`no_unattended_progress` spec-approval blocker and an `awaiting_human`
+approval-count summary could both describe the same required owner action.
+Added `src/web/lib/project-attention.ts` to normalize attention seeds into
+stable keys such as `owner:spec_approval`, `owner:draft_review`, and
+`owner:brief_cleanup`, then dedupe by key before rendering. `ProjectView` now
+builds one `shellAttentionNotices` list and renders that list instead of
+driving duplicate AlertBand branches for start readiness and run-stop summary.
+
+Verification: Added helper coverage proving `Review 35 waiting specs before
+starting.` and `Waiting on input: 35 awaiting approval.` normalize to the same
+`owner:spec_approval` key and dedupe to the higher-priority start-readiness
+notice. Added ProjectView coverage for the stopped-state shell stack where
+start readiness and idle summary both report spec approval; the shell renders
+one `Review 2 waiting specs before starting.` alert, no `Waiting on input: 2
+awaiting approval.` alert, and one `Review spec` action. Commands passed:
+`pnpm vitest run src/web/lib/__tests__/project-attention.test.ts
+src/web/surfaces/__tests__/ProjectView.svelte.test.ts -t
+"project-attention|dedupes shell attention" --reporter=dot`, `pnpm build`,
+and `pnpm dev:install`. Restarted the installed service and confirmed
+`/api/stale-server` returned `stale:false` for PID `20348` and installed dist
+`/Users/matthew/.guildhall/app/0.10.0/app/dist/cli.js`. Live browser check on
+`/projects/looma-knit/overview?proof=shell-attention-dedupe-1780665810000`
+showed the project had resumed/running state (`Coordinator Run started...`),
+so the stopped-state duplicate alerts were not present to inspect without
+mutating the user's run state; the live page also had no stale-server banner
+after the final restart.
+
+source: codex:shell-attention-dedupe-spec-approval
+
+2026-06-05T03:09:55Z - Toned down repeated `Guildhall` mentions in Thread,
+task drawer, and recovery copy after a Looma + Knit screenshot showed the brand
+name stacking in task cards, recovery history, escalation guidance, and the
+recovery composer placeholder. Shared runtime Thread summaries now render
+subjectless owner-facing copy such as `Your answers and a spec draft are saved`
+and `A durable recovery spec seed was saved`; historical request labels now say
+`Asked to shape/reframe this task`; escalation cards use recovery/action names
+instead of repeatedly naming the app; and the Thread/task drawer paused and
+shaping descriptions use `Resume`, `the run`, or `this task` where the product
+subject is already obvious. The runtime parser remains backward-compatible with
+older persisted notes that still start with `Asked Guildhall...`.
+
+Verification: Focused red/green coverage first failed on the old spec-review
+and spec-retry wording, then passed after the copy update. Commands passed:
+`pnpm exec vitest src/runtime/__tests__/thread.test.ts --run --testNamePattern
+"summarizes normal spec_review|surfaces source and request milestones"`,
+`pnpm exec vitest src/web/lib/__tests__/escalation-labels.test.ts --run`,
+`pnpm exec vitest src/web/surfaces/project/__tests__/ThreadTab.svelte.test.ts
+--run --testNamePattern "brief cleanup|Work is paused|Gate checks are
+queued|missing check|partial progress|normal spec_review component work"`, and
+`pnpm exec vitest src/web/surfaces/drawer/__tests__/CurrentTab.svelte.test.ts
+src/web/surfaces/__tests__/TaskDrawer.svelte.test.ts --run --testNamePattern
+"imported draft shaping|partial progress|acceptance-criteria evidence|shaping
+timeout|read-budget shaping pause"`. Broader post-update verification passed:
+`pnpm exec vitest src/runtime/__tests__/thread.test.ts
+src/web/lib/__tests__/escalation-labels.test.ts --run` (`93` tests),
+`pnpm exec vitest src/web/surfaces/project/__tests__/ThreadTab.svelte.test.ts
+src/web/surfaces/drawer/__tests__/CurrentTab.svelte.test.ts
+src/web/surfaces/__tests__/TaskDrawer.svelte.test.ts --run` (`166` tests),
+and `git diff --check`.
+
+source: codex:thread-copy-brand-reduction
+
+2026-06-05T03:28:00Z - Broadened the brand-copy pass from Thread to the
+whole app shell and runtime-facing surfaces. The audit covered `src/web`
+surfaces/lib copy plus runtime messages that feed dashboard, intake, owner
+input, readiness, setup, workspace import, structure, release, and recovery
+views. Replaced repetitive generated guidance such as `Guildhall found...`,
+`Guildhall can...`, `before Guildhall can continue`, and `Ask Guildhall...`
+with subjectless or surface-specific language: `Found planning notes`,
+`Project context saved`, `before work can continue`, `Ask for explanation`,
+`The source notes need...`, `Run the missing check`, and similar. Kept the
+product name where it is doing real identity work: the wordmark/version,
+runtime upgrade/migration/setup text, local service errors, actor labels,
+settings/provider descriptions, source-reference provenance, and
+`Guildhall-owned` release cleanup semantics.
+
+Verification: Focused whole-app copy assertions now pass across the touched
+summary/runtime/surface areas. Commands passed:
+`pnpm exec vitest src/web/lib/__tests__/project-summary.test.ts
+src/web/lib/__tests__/project-activity.test.ts
+src/web/lib/__tests__/AgentQuestion.svelte.test.ts
+src/web/lib/__tests__/escalation-labels.test.ts --run` (`67` tests),
+`pnpm exec vitest src/web/surfaces/project/__tests__/ThreadTab.svelte.test.ts
+src/web/surfaces/drawer/__tests__/CurrentTab.svelte.test.ts
+src/web/surfaces/__tests__/TaskDrawer.svelte.test.ts --run` (`167` tests),
+`pnpm exec vitest src/web/surfaces/project/__tests__/ProjectOverviewTab.svelte.test.ts
+src/web/surfaces/project/__tests__/WorkTab.svelte.test.ts
+src/web/surfaces/project/__tests__/WorkspaceImportTab.svelte.test.ts
+src/web/surfaces/__tests__/ProjectView.svelte.test.ts
+src/web/surfaces/__tests__/DoThisNext.svelte.test.ts
+src/web/surfaces/__tests__/FleetNeedsYou.svelte.test.ts --run` (`107`
+tests), and `pnpm exec vitest src/runtime/__tests__/serve-settings.test.ts
+src/runtime/__tests__/serve-intake.test.ts
+src/runtime/__tests__/project-action-model.test.ts
+src/runtime/__tests__/thread.test.ts --run` (`158` tests).
+
+source: codex:whole-app-brand-copy-audit
+
+2026-06-05T05:01:00Z - Retried Looma + Knit `ContextMenu`
+(`task-import-1l0mr2r`) end-to-end from the Thread screen after the owner
+reported that simple component tasks looked inert. Found and fixed three
+Guildhall runtime gaps before the task could even attempt implementation:
+spec-agent inactivity timeouts now preserve already-written durable specs
+instead of escalating as if no progress existed; structured specs tolerate and
+strip agent-written acceptance-criterion `id` fields; and explicit
+`/api/project/task/:id/start` scoped starts are no longer blocked by the
+aggregate `Review 36 waiting specs before starting` readiness gate.
+
+Live proof after reinstall: `/api/stale-server` returned `stale:false` for the
+installed 0.10.0 dist. Clicking the Thread task-level `Resume spec work`
+control for ContextMenu started `mode: "one_task"` instead of the earlier
+blocked/no-op behavior. Direct scoped endpoint proof also returned HTTP 200
+with `scope: { type: "work_item", taskId: "task-import-1l0mr2r" }`.
+
+Remaining blocker: the task still did not reach implementation. The scoped run
+stopped as `agent-error` after `coordinator-looma timed out after 120000ms of
+inactivity`. Final task state stayed `spec_review` with a spec and 3 acceptance
+criteria; recent notes show blueprint review rejected the recovery seed because
+it lacks a Completion Boundary, then coordinator/provider timeout
+classification repeated. Next audit slice should target coordinator
+spec-review timeout handling and why a buildable structured spec is not being
+written before the one-task run exits.
+
+Verification: `pnpm vitest run src/core/__tests__/structured-spec.test.ts
+--reporter=dot`, `pnpm vitest run src/runtime/__tests__/orchestrator.test.ts
+-t "spec-agent inactivity timeouts|existing durable spec" --reporter=dot`,
+`pnpm vitest run src/runtime/__tests__/serve-task-endpoints.test.ts -t
+"scoped spec_review task start" --reporter=dot`, focused affected service and
+Thread tests, `pnpm typecheck`, `git diff --check`, `pnpm build`, and
+`pnpm dev:install` all passed.
+
+source: codex:looma-contextmenu-scoped-start-blockers
+
+2026-06-05T13:03:00Z - Continued the Looma + Knit `ContextMenu`
+(`task-import-1l0mr2r`) delivery run through implementation and browser proof.
+Fixed three Guildhall control-loop blockers that prevented the worker from
+getting to the requested end state: `update-task` now accepts a stringified
+`note` object when the model serializes `{ agentId, role, content }` as JSON;
+the shell guard now allows focused supplemental package/browser/e2e test
+commands when an older authoritative verification set exists; and the
+no-progress read budget now allows a worker to read likely-target package
+support files such as `package.json`, `vitest.config.ts`, and `test/setup.ts`
+while implementing a scoped recovery.
+
+Live proof after reinstall: `/api/stale-server` returned `stale:false`, the
+scoped one-task run added `packages/core/src/components/ui-context-menu/`,
+`packages/core/src/components/ui-context-menu/ui-context-menu.browser.test.ts`,
+`packages/core/vitest.browser.config.ts`, and a Storybook story for
+`Overlay/ContextMenu`. Manual verification in the task worktree passed:
+`pnpm --filter @looma/core test` (26/26 including ContextMenu browser tests),
+`pnpm --filter @looma/core test:browser` (Chromium browser provider, 3/3),
+`pnpm --filter @looma/core build`, and `pnpm --filter @looma/core typecheck`.
+Storybook screenshot proof was captured at
+`tmp/context-menu-storybook-proof.png`.
+
+Remaining blocker: the component reached the requested proof state, but
+Guildhall still blocked the task as `max_revisions_exceeded` after stale
+reviewer dissent kept claiming no self-critique/e2e/visual proof even after the
+worker had added browser tests and a Storybook proof path. The next slice should
+make reviewer fan-out ignore stale pre-proof dissent once newer worker evidence
+exists, or rerun reviewers against the latest diff/evidence before incrementing
+the revision cap.
+
+Verification: `pnpm vitest run src/engine/__tests__/run-query.test.ts
+src/tools/__tests__/shell.test.ts src/tools/__tests__/task-queue.test.ts`,
+`pnpm typecheck`, `pnpm build`, `pnpm dev:install`, and `git diff --check`
+passed.
+
+source: codex:looma-contextmenu-delivery-loop-unblockers
+
+2026-06-05T19:32:00Z - Implemented the default 0.10 project-local delivery
+spine from `internal/specs/2026-06-05-guildhall-0-10-primitives-and-delivery-spine.md`.
+Added durable delivery driver and primitive schemas, task delivery metadata for
+`usesPrimitives`, `provesPrimitives`, and `proofKind`, plus a shared runtime
+builder that validates driver/primitive references, derives task relationships,
+expands primitive ancestors, builds worker/UI context packets, and ranks queue
+candidates by execution blockers and primitive proof blockers. `/api/project`
+and task detail now expose the shared delivery-spine model, validation,
+primitive registry, queue, context packet, and relationships. Task detail also
+links proving tasks adjacent to tasks that use blocked primitives.
+
+MCP now exposes project-local resources for `guildhall://project/drivers`,
+`guildhall://project/primitives`,
+`guildhall://project/task-context/{taskId}`,
+`guildhall://project/task-relationships/{taskId}`,
+`guildhall://project/agent-contracts`, and
+`guildhall://project/validation-evidence`, plus validation/derivation tools
+for agent contracts, primitive setup, finished-work intake, task context,
+task relationships, and queue candidates. Default UI surfaces consume the same
+API model: Overview shows driver/next runnable work/primitive proof blockers,
+Work shows the delivery queue, Task Drawer shows delivery, uses/proves
+primitive links, proof blockers, and Settings has a Delivery section for
+drivers and the primitive registry.
+
+Remaining follow-up: owner-review apply/reject/revert can now build on the
+validated model and MCP tool surface, but bulk owner editing/merge/revert UI
+for contract result changes still needs a dedicated Review Inbox slice.
+
+Verification: `pnpm vitest run src/runtime/__tests__/delivery-spine.test.ts
+src/runtime/__tests__/serve-task-endpoints.test.ts
+src/mcp-server/__tests__/project-reader.test.ts
+src/mcp-server/__tests__/server.test.ts --reporter=dot` passed with 87 tests;
+`pnpm typecheck` passed; `pnpm build` passed; `git diff --check` passed;
+`pnpm dev:install` refreshed the installed app; `guildhall stop` and
+`guildhall start` restarted the service; `/api/stale-server` returned
+`stale:false`; and `/api/project?projectId=looma-knit` returned
+`deliverySpine` with `validation.valid: true`. Browser visual proof was
+attempted, but the Browser control channel timed out/reattached to an
+`about:blank` sidebar token tab, so the reliable live proof for this slice is
+API-level.
+
+source: codex:0-10-primitives-delivery-spine
+
+2026-06-05T20:16:00Z - Continued the 0.10 primitives and delivery-spine spec
+through contract review plumbing. Added reusable runtime contract
+infrastructure for project primitive setup results: validation now produces a
+reviewable change set with keep/merge/needs-proof/owner-question buckets;
+staging records pending review evidence without mutating project state; apply
+records before/after values; reject stores a durable rejection record; and
+revert restores only state that still matches the applied after-image, preserving
+later owner edits or accepted changes.
+
+MCP now has explicit contract review tools:
+`guildhall.stage_agent_contract_result`,
+`guildhall.apply_agent_contract_result`,
+`guildhall.reject_agent_contract_result`, and
+`guildhall.revert_agent_contract_result`. The project inbox now projects
+pending delivery-spine validation evidence as `contract_result_review` rows, and
+the existing Needs you surfaces render those rows instead of requiring a new
+top-level review navigation surface.
+
+Verification: `pnpm vitest run
+src/runtime/__tests__/delivery-spine.test.ts
+src/runtime/__tests__/inbox.test.ts
+src/runtime/__tests__/serve-task-endpoints.test.ts
+src/mcp-server/__tests__/project-reader.test.ts
+src/mcp-server/__tests__/server.test.ts --reporter=dot` passed with 123 tests;
+`pnpm typecheck` passed; `pnpm build` passed; `git diff --check` passed;
+`pnpm dev:install` refreshed the installed app; `guildhall stop` and
+`guildhall start` restarted the service; `/api/stale-server` returned
+`stale:false`; `/api/project?projectId=looma-knit` returned a valid
+`deliverySpine`; and `/api/project/inbox?projectId=looma-knit` returned
+without error. The live Looma + Knit project has no staged contract review rows
+yet, so `contract_result_review` count was `0` in the smoke. Browser visual
+proof was attempted through the in-app Browser, but `Page.navigate` and
+`Runtime.evaluate` timed out after the tab URL changed to `http://localhost:7777/`;
+the reliable live proof for this continuation is command/API-level until that
+browser-control issue is cleared.
+
+source: codex:0-10-contract-review-spine
+
+2026-06-05T21:44:00Z - Continued the contract-review slice so staged
+delivery-spine review items are actionable from the existing Needs you surface.
+Added project API endpoints to apply, reject, and revert staged contract
+results by id under `/api/project/delivery-spine/contract-results/:resultId/*`.
+Apply persists delivery-spine changes and task delivery metadata through the
+shared runtime change-set model; reject records the owner reason without
+mutating primitives; revert uses the same conservative after-image checks as the
+runtime helper. Needs you now renders Accept and Reject controls for
+`contract_result_review` rows and refreshes the inbox after either action.
+
+Verification: endpoint regression tests for accepting and rejecting staged
+primitive setup results passed; the broader focused suite `pnpm vitest run
+src/runtime/__tests__/delivery-spine.test.ts
+src/runtime/__tests__/inbox.test.ts
+src/runtime/__tests__/serve-task-endpoints.test.ts
+src/mcp-server/__tests__/project-reader.test.ts
+src/mcp-server/__tests__/server.test.ts --reporter=dot` passed with 125 tests;
+`pnpm typecheck` passed; `pnpm build` passed; `git diff --check` passed;
+`pnpm dev:install` refreshed the installed app; `guildhall stop` and
+`guildhall start` restarted the service; `/api/stale-server` returned
+`stale:false`; and live `/api/project` plus `/api/project/inbox` smoke checks
+returned valid delivery-spine/inbox payloads for Looma + Knit. The Browser
+control channel still timed out on `Page.navigate`, so visual proof remains
+blocked by browser-control rather than app/API failure.
+
+source: codex:0-10-contract-review-actions
+
+2026-06-05T22:18:00Z - Continued the 0.10 delivery-spine spec through
+finished-work intake. Added the shared runtime `FinishedWorkIntakeResult`
+schema, validator, and apply helper so work completed outside Guildhall can be
+recorded as delivery context without pretending Guildhall completed those tasks.
+The validator now requires corpus references, rejects fabricated completed
+Guildhall tasks, refuses code-only primitive readiness without observed proof,
+normalizes observed proof into primitive evidence, and keeps missing-proof
+primitives in `needs_proof`. Applying a finished-work intake result merges or
+creates primitive registry entries, records shipped packages, observed proof,
+missing proof, future task suggestions, corpus refs, and warnings as validation
+evidence, while preserving the existing task list unchanged.
+
+The MCP `guildhall.validate_finished_work_intake` tool now uses the same shared
+runtime validator instead of ad hoc validation. This keeps external-agent
+finished-work intake on the same contract-first path as primitive setup and
+contract review.
+
+Verification: finished-work focused tests passed with
+`pnpm vitest run src/runtime/__tests__/delivery-spine.test.ts -t
+"finished-work" --reporter=dot`; the broader focused suite
+`pnpm vitest run src/runtime/__tests__/delivery-spine.test.ts
+src/runtime/__tests__/inbox.test.ts
+src/runtime/__tests__/serve-task-endpoints.test.ts
+src/mcp-server/__tests__/project-reader.test.ts
+src/mcp-server/__tests__/server.test.ts --reporter=dot` passed with 127 tests;
+`pnpm typecheck` passed; `pnpm build` passed; `git diff --check` passed;
+`pnpm dev:install` refreshed the installed app; `guildhall stop` and
+`guildhall start` restarted the service; `/api/stale-server` returned
+`stale:false` with pid `83219`; and live API smoke against Looma + Knit found
+seven registered projects, a present `deliverySpine`, `deliverySpine.validation.valid:
+true`, six inbox items, zero staged `contract_result_review` rows, and no API
+error. Browser visual proof remains blocked by the known in-app Browser control
+timeouts rather than an app/API failure.
+
+source: codex:0-10-finished-work-intake
+
+2026-06-05T22:24:00Z - Continued the 0.10 delivery-spine spec through validated
+task split planning. Split recommendations can now carry optional
+`usesPrimitives`, `provesPrimitives`, and `proofKind` metadata. Added the shared
+runtime `planTaskSplit` helper so split planning derives child delivery intent
+from the parent task, maps child dependencies to planned child task ids,
+infers only token-matched primitive use from child title/reason text, rejects
+unknown primitive references before mutation, and returns warnings for primitive
+proof without a proof kind. The existing `create-split-children` API now
+preflights this shared plan, materializes child tasks only when the plan is
+valid, writes the planned delivery metadata onto each child, and returns the
+applied split plan in the response. MCP now advertises and serves
+`guildhall.plan_task_split` so agents can read the same validated plan before
+applying a split.
+
+Verification: `pnpm vitest run src/runtime/__tests__/delivery-spine.test.ts
+src/runtime/__tests__/serve-task-endpoints.test.ts
+src/mcp-server/__tests__/server.test.ts --reporter=dot` passed with 92 tests;
+`pnpm typecheck` passed; `pnpm build` passed; `git diff --check` passed;
+`pnpm dev:install` refreshed the installed app; `guildhall stop` and
+`guildhall start` restarted the service; `/api/stale-server` returned
+`stale:false` with pid `86138`; and live API smoke against Looma + Knit found
+seven registered projects, a present `deliverySpine`, `deliverySpine.validation.valid:
+true`, 40 runnable delivery queue candidates, three blocked candidates, and no
+API error. Browser visual proof remains blocked by the known in-app Browser
+control timeouts rather than an app/API failure.
+
+source: codex:0-10-split-plan-contract
+
+2026-06-05T22:30:00Z - Continued the 0.10 delivery-spine spec through driver
+and primitive path normalization. The delivery-spine runtime now normalizes safe
+project-local path hints at read, write, and validation boundaries:
+`packages/looma` becomes `./packages/looma`, `./packages/looma` stays stable,
+and absolute paths inside the project root become `./` project-relative paths.
+Unsafe traversal paths and absolute paths outside the project still fail closed.
+Project and MCP validation call sites now pass the project root so the same
+normalization rules apply in `/api/project`, `/api/project/delivery-spine`, and
+`guildhall://project/primitives`.
+
+Verification: `pnpm vitest run src/runtime/__tests__/delivery-spine.test.ts
+--reporter=dot` passed with 11 tests; the broader focused suite `pnpm vitest
+run src/runtime/__tests__/delivery-spine.test.ts
+src/runtime/__tests__/serve-task-endpoints.test.ts
+src/mcp-server/__tests__/project-reader.test.ts
+src/mcp-server/__tests__/server.test.ts --reporter=dot` passed with 97 tests;
+`pnpm typecheck` passed; `pnpm build` passed; `git diff --check` passed;
+`pnpm dev:install` refreshed the installed app; `guildhall stop` and
+`guildhall start` restarted the service; `/api/stale-server` returned
+`stale:false` with pid `55440`; and live API smoke against Looma + Knit found
+seven registered projects, a present `deliverySpine`, valid project-level and
+delivery-spine validation payloads, 40 runnable queue candidates, three blocked
+candidates, and no API error. Browser visual proof remains blocked by the known
+in-app Browser control timeouts rather than an app/API failure.
+
+source: codex:0-10-path-normalization
+
+2026-06-05T22:33:00Z - Continued the 0.10 delivery-spine spec through public
+docs alignment. Added the public guide page
+`docs/guide/how-guildhall-chooses-work.md` explaining the default model as
+`Needs -> Delivery packages -> Tasks -> Dependencies -> Primitives -> Proof`.
+The guide now covers drivers, delivery packages, task dependencies, primitives,
+proof, `./` project-relative path hints, where the model appears in the UI, and
+why deeper project graph/capability exchange is advanced multi-project
+machinery rather than the ordinary local delivery model. Updated the guide
+sidebar and guide index to expose the page, rewrote the work-loop explanation
+around shape/order/primitives/proof, and updated the public glossary with
+Driver, Delivery package, and Primitive while reframing Structure and project
+graph as advanced ownership concepts.
+
+Verification: `pnpm docs:build` passed, including `docs:check-copy`,
+`docs:extract-help`, generated `/current/` and `/next/` docs, and VitePress
+build; `pnpm build` passed; `pnpm dev:install` refreshed the installed app;
+`guildhall stop` and `guildhall start` restarted the service; `/api/stale-server`
+returned `stale:false` with pid `19911`; and live API smoke against Looma +
+Knit found seven registered projects, a present `deliverySpine`,
+`deliverySpine.validation.valid: true`, and no API error. Browser visual proof
+remains blocked by the known in-app Browser control timeouts rather than an
+app/API failure.
+
+source: codex:0-10-public-default-model-docs
+
+2026-06-05T22:40:00Z - Rechecked live in-app Browser proof after the Codex
+Browser plugin update. The old browser-control blocker is no longer
+reproducing. Browser setup against the updated in-app browser successfully
+attached to the sidebar tab, navigated from the stale `about:blank` attach-token
+state to `http://localhost:7777/`, read page title/URL/body/headings through
+Playwright evaluation, captured DOM snapshots, and emitted screenshots.
+
+Live visual proof captured:
+
+- `/` rendered Projects & Workspaces with seven registered projects and
+  connected project cards after the service loaded.
+- `/projects/looma-knit/overview` rendered the Looma + Knit project shell with
+  `CONNECTED`, Overview content, delivery-spine summary, Work/Structure/Project
+  graph/Runtime/Proof/History cards, and the migration modal closed cleanly.
+- Browser console warning/error reads returned no errors during the proof.
+
+Follow-up product note from this proof: Overview still exposes Structure and
+Project graph cards in the default project experience even though the rail hides
+the Structure top-level nav by feature flag. That is a product/UI follow-up, not
+a browser-control failure.
+
+source: codex:browser-proof-restored-after-codex-update
+
+2026-06-06T00:30:00Z - Cleaned up the Local runtime ready-state card after
+owner feedback showed a nonsensical `Retry` button beside a `ready` runtime.
+The runtime setup API no longer advertises recovery actions when Podman and the
+machine are already ready, the generic recovery action is now labeled `Check
+again` when it appears in non-ready states, and Settings hides host-run fallback
+copy/actions for the ready state. The card continues to render status through
+the shared `StatusPill` primitive rather than local chip styling.
+
+Verification: `pnpm vitest run
+src/runtime/__tests__/runtime-backend-setup.test.ts --reporter=dot` passed with
+7 tests; `pnpm vitest run
+src/web/surfaces/project/__tests__/SettingsTab.svelte.test.ts --reporter=dot`
+passed with 8 tests; and `pnpm vitest run scripts/ui-primitive-scan.test.ts
+--reporter=dot` passed with 4 tests.
+
+source: codex:local-runtime-ready-card-copy
+
+2026-06-06T00:40:00Z - Tightened the Local runtime card one step further so
+the happy path no longer teaches users about host-run compatibility at all.
+Ready now means `Podman-backed runtime is ready`, and the card header says only
+that Guildhall runs project work in a Podman-backed Debian runtime on macOS.
+Host-run compatibility copy/actions now appear only when Podman is missing,
+broken, stopped, unsupported, or cannot be checked. Backend copy for those
+fallback states now frames host execution as temporary fallback until Podman is
+ready, not as a normal peer mode.
+
+Verification: `pnpm vitest run
+src/runtime/__tests__/runtime-backend-setup.test.ts --reporter=dot` passed with
+7 tests; `pnpm vitest run
+src/web/surfaces/project/__tests__/SettingsTab.svelte.test.ts --reporter=dot`
+passed with 9 tests; and `pnpm vitest run scripts/ui-primitive-scan.test.ts
+--reporter=dot` passed with 4 tests.
+
+source: codex:local-runtime-podman-first-card
+
+2026-06-06T01:25:00Z - Fixed the required-migration apply modal so it no
+longer says the migration is applied before the UI refresh pipeline is done.
+Root-cause check: `/api/project/migrations/apply` already awaits
+`applyProjectMigrations()` and then recomputes migration status before returning;
+the frontend was the misleading layer because it set `Migration applied.` before
+refreshing the project snapshot and Needs You inbox. The modal now enters a
+blocking in-progress state while the apply request and follow-up refreshes run,
+disables the close affordances including Escape/backdrop through the shared
+`Modal` primitive, warns the owner not to stop Guildhall, shows honest stage
+labels, and only reports `Migration complete.` after project and inbox refreshes
+finish. The completion state also lists the changed paths returned by the
+applied migration result.
+
+Cleanup behavior verified from the migration registry: the legacy
+`0.8.0/project-state-layout` migration calls
+`migrateLegacyMemoryToLocalHistory({ deleteSource: true, updateGitignore: true
+})`, so it does remove old `memory/` source files after copying them into
+Guildhall state and updates gitignore. Other current required migrations rewrite
+or seed `.guildhall` state files, bounded-chat state, owner-input state, or
+agent settings; they do not all delete repository folders.
+
+Verification: `pnpm vitest run
+src/web/surfaces/__tests__/ProjectView.svelte.test.ts --reporter=dot` passed
+with 47 tests, including a deferred apply test that proves the modal remains
+blocking and success remains hidden while the apply request is unresolved;
+`pnpm typecheck` passed; `pnpm build` passed; `git diff --check` passed;
+`pnpm dev:install` refreshed the installed app; `guildhall stop` and
+`guildhall start` restarted the service; `/api/stale-server` returned
+`stale:false` with pid `89672`; the in-app Browser rendered
+`/projects/looma-knit/overview` with `CONNECTED` from the refreshed service.
+No registered project currently has a blocked migration, so live browser proof
+did not apply another repo mutation just to exercise the modal.
+
+source: codex:migration-apply-blocking-modal
+
+2026-06-06T01:55:00Z - Finished the 0.10 primitives/delivery-spine implementation
+slice and updated the spec with real checkmarks plus an evidence block. Worker
+launch context now injects the same delivery-spine packet used by UI surfaces,
+with a fail-closed guard for empty/invalid delivery state. Queue derivation now
+bridges unready primitives to existing primitive-proof tasks without creating a
+dependency cycle when the proof task is itself blocked by the downstream task.
+Thread active worker cards now show a compact `Why this next` delivery-context
+section with persona, primitive blockers, proof expectations, and a correction
+action. Overview no longer exposes the default `Project graph` or `Structure`
+cards when the advanced Structure feature flag is off.
+
+Spec status: `internal/specs/2026-06-05-guildhall-0-10-primitives-and-delivery-spine.md`
+is now marked `Implemented 0.10 delivery-spine slice with listed proof gaps`.
+Acceptance criteria are checked. Remaining unchecked implementation boxes are
+left visible for broader follow-up proof/product work: auto-suggested
+primitive-proof tasks when no existing task can prove a primitive, full persona
+matrix tests for security/data/runtime primitives, the broader Review Inbox
+contract-result surface, primitive-proof split creation for every needed gap,
+enabled-Structure copy polish, contract-surface-to-primitive adaptation
+warnings, and fixture-scale E2E proof beyond Looma + Knit Overview.
+
+Verification: `pnpm vitest run
+src/runtime/__tests__/delivery-spine.test.ts
+src/runtime/__tests__/context-builder.test.ts
+src/web/surfaces/__tests__/ProjectView.svelte.test.ts
+src/web/surfaces/project/__tests__/ThreadTab.svelte.test.ts --reporter=dot`
+passed with 228 tests; `pnpm typecheck` passed; `pnpm build` passed;
+`pnpm dev:install` rebuilt and installed the local app; `node dist/cli.js stop`
+and `node dist/cli.js start` restarted the service; `/api/stale-server`
+returned `stale:false` with pid `33912`; `/api/project?projectId=looma-knit`
+returned delivery queue data with 40 runnable and 3 blocked candidates; and the
+in-app Browser rendered `/projects/looma-knit/overview` with `CONNECTED`,
+`Delivery spine`, no `Project graph`, and no `Structure` text in the loaded DOM.
+
+source: codex:0-10-delivery-spine-checkmarks
+
+2026-06-06T02:02:00Z - Finished the remaining checkboxes in
+`internal/specs/2026-06-05-guildhall-0-10-primitives-and-delivery-spine.md`.
+Runtime delivery-spine planning now models suggested primitive-proof tasks when
+an unready primitive has no existing proving task, and split planning adds
+deterministic primitive-proof children for unready primitive blockers. Persona
+selection now has explicit security, data, and runtime primitive personas in
+addition to component delivery, primitive hardening, and Storybook proof.
+
+Spec checklist status: `rg -n "\[ \]"
+internal/specs/2026-06-05-guildhall-0-10-primitives-and-delivery-spine.md`
+returned no unchecked boxes. The remaining review, Structure, compatibility,
+and fixture-proof boxes were checked against existing implementation evidence:
+Needs You renders `contract_result_review` items with review buckets plus
+Accept/Reject actions backed by `/api/project/delivery-spine/contract-results`,
+contract result endpoints cover apply/reject and inbox removal, docs frame
+Structure as advanced multi-project ownership/handoff machinery, delivery-spine
+validation emits warnings for unsafe or uninterpretable state, and focused
+fixtures cover Looma + Knit ContextMenu/Menu/MenuItem plus backend/security,
+data, and runtime primitive persona contexts.
+
+Verification: `pnpm vitest run
+src/runtime/__tests__/delivery-spine.test.ts
+src/runtime/__tests__/inbox.test.ts
+src/runtime/__tests__/serve-task-endpoints.test.ts
+src/web/surfaces/project/__tests__/ThreadTab.svelte.test.ts
+src/web/surfaces/__tests__/ProjectView.svelte.test.ts --reporter=dot` passed
+with 270 tests; `pnpm typecheck` passed; `pnpm build` passed;
+`pnpm dev:install` rebuilt and installed the app; `node dist/cli.js stop` and
+`node dist/cli.js start` restarted the service; `/api/stale-server` returned
+`stale:false` with pid `81025`; `/api/project?projectId=looma-knit` returned
+delivery-spine queue data with 40 runnable and 3 blocked candidates; and the
+in-app Browser rendered `/projects/looma-knit/overview` with `CONNECTED`,
+`Delivery spine`, no `Project graph`, and no `Structure` text in the loaded DOM.
+
+source: codex:0-10-delivery-spine-all-checkboxes
+
+2026-06-06T03:02:00Z - Completed the 0.10 project contract governance
+implementation slice and marked
+`internal/specs/2026-06-05-guildhall-project-contract-governance.md` with
+actual checked implementation boxes. The project-graph spec is now explicitly
+superseded for default 0.10 delivery and retained only as an internal/
+feature-flagged substrate reference for cross-project authority, provider
+handoffs, delivery receipts, or external authoritative systems.
+
+Governance implementation now includes a first living contract registry in
+`src/runtime/contract-governance.ts`, an advisory changed-file contract detector
+in `scripts/contract-touch-detector.mjs`, `pnpm lint:contracts`, repo-level
+Contract Touch Decision and Schema Migration Decision instructions in
+`AGENTS.md`, machine-readable delivery-spine schema decisions, old-data reader
+proof for optional primitive/delivery persistence, and migration-definition
+quality validation. Focused proof:
+`pnpm vitest run src/runtime/__tests__/contract-governance.test.ts
+scripts/contract-touch-detector.test.ts src/runtime/__tests__/delivery-spine.test.ts
+--reporter=dot` passed with 21 tests.
+Final proof before commit: `pnpm vitest run
+src/runtime/__tests__/contract-governance.test.ts
+scripts/contract-touch-detector.test.ts src/runtime/__tests__/delivery-spine.test.ts
+src/runtime/__tests__/inbox.test.ts src/runtime/__tests__/serve-task-endpoints.test.ts
+src/runtime/__tests__/serve-settings.test.ts
+src/web/surfaces/project/__tests__/ThreadTab.svelte.test.ts
+src/web/surfaces/__tests__/ProjectView.svelte.test.ts --reporter=dot` passed
+with 337 tests; `pnpm typecheck` passed; `pnpm build` passed;
+`pnpm dev:install && node dist/cli.js stop && node dist/cli.js start` refreshed
+the installed app; `/api/stale-server` returned `stale:false` with pid
+`84516`; `/api/project?projectId=looma-knit` returned a delivery spine with 40
+runnable and 3 blocked candidates; and the in-app Browser rendered
+`/projects/looma-knit/overview` with `connected`, `Delivery spine`, `Blocked 3
+blocked tasks`, `Work 43 total tasks`, no default `Project graph`, and no
+default `Structure` text.
+
+source: codex:0-10-contract-governance-complete
+
+2026-06-06T07:15:00Z - Retried the Looma + Knit ContextMenu selected-task
+flow in live one-task/work-item mode and fixed three orchestration blockers
+found by the run.
+
+Live evidence:
+- Started selected parent `task-import-1l0mr2r` (ContextMenu) with
+  `POST /api/project/task/task-import-1l0mr2r/start?projectId=looma-knit`
+  and body `{"mode":"one_task","scope":"work_item"}`.
+- Initial retry stopped on child
+  `task-import-1l0mr2r-split-component-implementation` because a spec-agent
+  inactivity timeout blocked before durable progress.
+- Runtime now retries one spec-agent inactivity timeout before escalating,
+  while still blocking on a repeated timeout with no durable progress.
+- The selected parent no longer stops when a selected child reaches
+  `spec_review`; it continues through blueprint review, ready claim, worker
+  execution, review, and gates until the selected work is done or blocked.
+- A malformed existing spec sent from `ready` back to `exploring` by
+  blueprint sanity is now repaired deterministically with a full Completion
+  Boundary instead of redispatching into another spec loop. Live proof:
+  component child went from `exploring` to deterministic repair at
+  `2026-06-06T06:47:41.195Z`, blueprint approval at
+  `2026-06-06T06:47:45.972Z`, and worker claim at
+  `2026-06-06T06:47:50.468Z`.
+- Worker execution then made real Looma worktree edits and verified target
+  commands, but repeatedly exhausted its turn budget while preserving dirty
+  work. The live run was manually stopped after tick 16 with stop reason
+  `stop_requested`; ContextMenu is therefore not complete yet.
+- Runtime now caps dirty-worktree worker turn-budget preservation: two retries
+  preserve partial edits, a third repeated timeout blocks explicitly with a
+  `model_tool_use_failure` classification instead of spinning forever.
+
+Current live ContextMenu state after the stopped audit run:
+- Parent `task-import-1l0mr2r`: `ready`.
+- Component child `task-import-1l0mr2r-split-component-implementation`:
+  `in_progress`, assigned to `worker-agent`, no open escalation, dirty task
+  worktree with changes in `packages/core/src/components/ui-context-menu/`,
+  `packages/core/src/components/ui-menu/ui-menu.tsx`, and
+  `packages/core/src/index.test.ts`.
+- Remaining split children `storybook-story`, `contract-readme`, and
+  `api-docs-sync`: still `exploring`.
+
+Verification:
+`pnpm vitest run src/runtime/__tests__/orchestrator.test.ts -t
+"dirty worktree worker turn-budget|preserves dirty worktree progress|ready-task
+blueprint revisions|continue when selected child reaches spec review|spec-agent
+inactivity timeout" --reporter=dot` passed with 6 tests; `pnpm typecheck`
+passed; `pnpm build` passed. The installed app was refreshed before the live
+retry and `/api/stale-server` returned `stale:false` with pid `34318`.
+
+source: codex:context-menu-selected-work-blocker-flow
+
+2026-06-07T18:10:00Z - Multi-project flow audit after storage/runtime
+boundary hardening push `279db65c`.
+
+Scope:
+- Excluded Looma + Knit; audited registered projects `t-minus-t`,
+  `fair-labor-license`, `font-something`, `narrative-harness`,
+  `commerce-project`, and `jess`.
+- Confirmed installed service freshness with `/api/stale-server`:
+  `stale:false`, dist
+  `/Users/matthew/.guildhall/app/0.10.0/app/dist/cli.js`.
+- API proof used `/api/service`, `/api/project?projectId=...`,
+  `/api/project/inbox?projectId=...`, `/api/project/migrations?projectId=...`,
+  `/api/project/thread?projectId=...`, and
+  `/api/project/release-readiness?projectId=...`.
+- Browser proof used direct routes on `127.0.0.1:7777` for
+  `/projects/:id/overview`, `/thread`, `/work`, `/release`, and `/settings`.
+
+Passed evidence:
+- Service roster includes all six audited projects with stable ids and paths.
+- Browser routes render on `127.0.0.1` without route-not-found or app-error
+  text.
+- `t-minus-t`, `fair-labor-license`, `font-something`,
+  `narrative-harness`, and `jess` render the shared Do This Next lane around
+  `Review existing project work`; Work shows the paused workspace-import task
+  as the runnable/resumable item.
+- `commerce-project` renders setup as the primary next action:
+  `Give the project direction`, with `Waiting on setup` in the shell and no
+  runnable work.
+- Migration API reports no blocked migrations for the six audited projects;
+  each has one pending `0.9.0/runtime-backed-project` migration.
+- Memory health reports system-local Mastra storage paths and empty
+  `repoLocalWrites` arrays for every audited project.
+
+Findings / gaps:
+- Direct `localhost:7777` browser navigation intermittently left non-Thread
+  routes at `Loading project...`; the same routes rendered correctly on
+  `127.0.0.1:7777`. Treat future browser proof on `localhost` as suspect until
+  the browser bridge/host alias behavior is understood.
+- Cleanup migration removed old project-local `.guildhall` files, but several
+  repos now have tracked `.guildhall` deletions in git status. That is expected
+  cleanup work, but it is still dirty project repo state until each repo commits
+  or otherwise records the removal. Observed:
+  `t-minus-t`, `font-something`, `narrative-harness`, `commerce-project`, and
+  `jess` show tracked `.guildhall` deletions; `fair-labor-license` is clean.
+- Release UI correctly flags dirty Guildhall cleanup on `font-something`
+  (`13 project-local Guildhall files need cleanup`) and API
+  `/api/project/release-readiness?projectId=font-something` reports
+  `dirtyCheckout.ownedCount: 13`, but `gitStory` only reports `.gitignore` as
+  changed. Audit follow-up: align release dirty-check explanations so removed
+  tracked `.guildhall` state and unrelated repo changes are summarized without
+  looking contradictory.
+- `/api/project/thread?projectId=narrative-harness` returns setup/import turns
+  and active `setup:direction`; generic thread-list extraction returned no
+  `threads` key for all six projects. The Thread UI still renders setup/import
+  turns, so this is likely an API shape/documentation mismatch, not a visible
+  route failure. Audit follow-up: make thread API projection easier to audit
+  or expose a stable route-test summary.
+- `jess` Settings renders bootstrap as `failed` and only `1/3 ready`, while
+  Overview/Work still put `Review existing project work` in the resumable lane.
+  Audit follow-up: decide whether bootstrap failure should outrank paused
+  workspace-import resume in Do This Next for Jess-like projects.
+
+Do not mark the Looma + Knit component-through-delivery checkbox complete from
+this pass; this audit did not run or complete that flow.
+
+source: codex:multi-project-flow-audit-2026-06-07
+
+2026-06-07T18:49:00Z - Retried the Looma + Knit `ContextMenu`
+selected-task flow again from the live installed app and confirmed completion.
+
+Freshness:
+- `/api/stale-server` returned `stale:false`, pid `46722`, dist
+  `/Users/matthew/.guildhall/app/0.10.0/app/dist/cli.js`.
+- Started selected task with
+  `POST /api/project/task/task-import-1l0mr2r/start?projectId=looma-knit`
+  and body `{"mode":"one_task","scope":"work_item"}`.
+- The run used `mode: "one_task"` and started at
+  `2026-06-07T18:44:12.726Z`.
+
+Live flow evidence:
+- Worker resumed `task-import-1l0mr2r` directly, recognized existing
+  implementation/proof, wrote a checkpoint, and recovered from two malformed
+  `update-task` calls: first an empty mutation, then a stringified `note`
+  object that the installed tool boundary initially rejected.
+- Worker then successfully transitioned ContextMenu from `in_progress` to
+  `review` at `2026-06-07T18:47:12.582Z`.
+- Reviewer approval moved the task to `gate_check` at
+  `2026-06-07T18:47:50.251Z`.
+- Gate checker ran authoritative task-scoped hard gates against
+  `/Users/matthew/.guildhall/worktrees/looma-knit/task-import-1l0mr2r`:
+  `pnpm typecheck`, `pnpm build`, and `pnpm lint`; all passed.
+- Gate checker transitioned `task-import-1l0mr2r` from `gate_check` to `done`
+  at `2026-06-07T18:48:29.028Z`.
+- Supervisor stopped automatically at `2026-06-07T18:48:29.031Z` with
+  `stopReason: "one_task"` and message
+  `stopAfterOneTask reached task task-import-1l0mr2r (processed).`
+
+Final live state:
+- `ContextMenu` (`task-import-1l0mr2r`) is `done` with `completedAt:
+  2026-06-07T19:00:00.000Z`.
+- Run status is `stopped`, mode `one_task`, stop summary ticks `3`, usage
+  `837630` input tokens, `6991` output tokens, and `502272` cached input
+  tokens.
+- Residual consistency gap: the task status is `done`, but the legacy
+  `acceptanceCriteria[].met` booleans still read `false`. Treat this as a
+  task-state/projection follow-up; the authoritative run, review, hard gates,
+  and terminal status all show completion.
+
+source: codex:context-menu-selected-work-complete-2026-06-07
+
+2026-06-07T19:16:00Z - Ran a live Storybook interaction audit for Looma + Knit
+`ContextMenu` and its supporting `Menu` / `MenuItem` primitives in the completed
+task worktree
+`/Users/matthew/.guildhall/worktrees/looma-knit/task-import-1l0mr2r`.
+
+Storybook target:
+- Started `@looma/storybook` on `http://127.0.0.1:6006`.
+- Tested direct canvas URLs for `overlay-contextmenu--default`,
+  `overlay-menu--default`, `overlay-menu-item--default`, and
+  `overlay-menu-showcase--with-icons`.
+
+Live browser findings:
+- ContextMenu opened on right-click, positioned as a fixed overlay, composed the
+  internal `ui-menu`, and rendered the four expected `ui-menu-item` children.
+- Pointer click on `Edit` emitted `select { value: "edit", trigger: "pointer" }`
+  and closed with `reason: "action"`.
+- Keyboard Enter on `Duplicate` emitted
+  `select { value: "duplicate", trigger: "keyboard" }` and closed with
+  `reason: "action"`.
+- Escape closed the open ContextMenu with `reason: "escape"` and
+  `trigger: "keyboard"`.
+- The initial Storybook pass exposed a supporting-component gap: disabled
+  `ui-menu-item` children did not visually render disabled because the unlayered
+  global isolation reset beat the layered/global item styling for slotted
+  light-DOM menu items. Disabled behavior also needed a defensive property
+  check in the ContextMenu/Menu event guards.
+- Fixed in the task worktree by reflecting `ui-menu-item.disabled`, checking
+  disabled by `aria-disabled`, attribute, and property in `ui-menu` and
+  `ui-context-menu`, and adding unlayered scoped menu-item layout/disabled
+  rules for `ui-menu > ui-menu-item` and `ui-context-menu > ui-menu-item`.
+- Final Storybook replay passed: `Delete` rendered at `opacity: 0.6` with
+  `cursor: not-allowed`, item padding was `8px 12px`, disabled click/Enter did
+  not emit `select` or close the menu, and standalone Menu/MenuItem/showcase
+  stories all rendered and interacted correctly.
+
+Verification:
+- `pnpm --filter @looma/core build` passed.
+- `pnpm --filter @looma/core test` passed with 29 tests.
+- `pnpm --filter @looma/core test:browser` passed with 4 Chromium tests.
+- Full task-worktree gates passed: `pnpm typecheck`, `pnpm build`, and
+  `pnpm lint`. The build included Storybook production output.
+
+source: codex:context-menu-storybook-supporting-components-2026-06-07
+
+2026-06-08T14:05:00Z - Audited Looma + Knit remaining-work coverage after the
+owner asked whether all remaining Knit work is in Guildhall and prioritized.
+
+Live state evidence:
+- `/api/stale-server` returned `stale:false` for installed app
+  `/Users/matthew/.guildhall/app/0.10.0/app/dist/cli.js`.
+- `/api/project?projectId=looma-knit` returned only two active tasks:
+  `task-workspace-import` and `task-import-1l0mr2r`; both are `done`.
+  `startReadiness.code` is `all_terminal` and the shared action model says
+  `No runnable tasks`.
+- Guildhall MCP `derive_queue_candidates` for `projectId: "looma-knit"`
+  agreed with the API: `runnable: []`, `blocked: []`.
+- `/api/project/workspace-import/status?projectId=looma-knit` still sees a
+  seeded, done workspace-import task whose parsed draft contains `252` task
+  candidates and `132` milestones, from `668` detected signals.
+- The active system-local task file
+  `/Users/matthew/.guildhall/data/projects/looma-knit-0c328d88ca44/project-state/TASKS.json`
+  contains only the two done tasks above.
+- The stranded evacuated task file
+  `/Users/matthew/.guildhall/data/projects/looma-knit-0c328d88ca44/project-state-evacuation/TASKS.json`
+  contains `43` non-terminal tasks: `3 blocked`, `35 spec_review`,
+  `1 ready`, `1 in_progress`, and `3 exploring`. Its `tasks/index.json`
+  lists these as `activeTaskIds`, not archived work.
+- The storage-boundary migration record says
+  `0.10.0/project-state-storage-boundary` was applied at
+  `2026-06-06T20:05:01.423Z` and evacuated repo-local project state into
+  system-local storage, but the active system-local queue now lacks the old
+  non-terminal task backlog.
+
+Repo-source evidence:
+- `knit/docs/release-plan.md` still defines prioritized remaining tracks:
+  V1 release hardening, Looma primitive convergence, Looma editor integration,
+  and launch-readiness/V2 cut line.
+- `knit/docs/looma-migration-inventory.md` still marks primitive
+  normalization in progress for `SidebarContent.vue` and `settings.vue`, and
+  says editor migration/refinement should continue.
+- `looma/docs/component-roadmap.md` still lists open component and editor UI
+  items beyond the completed ContextMenu task.
+
+Finding:
+- Treat this as a serious Guildhall task-tracking / memory-upgrade bug, not as
+  Looma + Knit being complete. The old non-terminal task queue appears to have
+  been stranded in `project-state-evacuation` while the active task queue was
+  reseeded later with only workspace import plus ContextMenu. Because all
+  active tasks are terminal, Guildhall truthfully reports `all_terminal` from
+  the wrong-sized active queue.
+
+Required follow-up:
+- Add a focused migration/reconciliation repair that detects non-terminal
+  `project-state-evacuation/TASKS.json` tasks missing from active
+  `project-state/TASKS.json`, restores or reconciles them into the active queue,
+  and prevents `all_terminal` when repo-source or stranded active-task evidence
+  proves remaining work exists.
+- Preserve Knit priority from `knit/docs/release-plan.md`: V1 hardening first,
+  Looma primitive convergence second, Looma editor integration third, launch
+  cut-line/V2 deferrals after that. Avoid blindly approving all 252 detector
+  candidates.
+
+source: codex:looma-knit-task-tracking-memory-upgrade-bug-2026-06-08
+
+2026-06-08T13:49:00Z - Patched and live-repaired the Looma + Knit
+task-tracking / memory-upgrade bug.
+
+Code repair:
+- `compactProjectState` now copies repo-local project-state entries into the
+  system-local `project-state/` directory before removing repo-local
+  `.guildhall` state when `storage.repoState` is off. This preserves
+  `TASKS.json` as task truth and keeps task index/archive files readable.
+- Added required automatic migration
+  `0.10.0/restore-evacuated-task-state`, which detects missing task IDs in
+  `project-state-evacuation/TASKS.json` and restores them into active
+  system-local `project-state/TASKS.json`.
+- The repair preserves newer active-system records on duplicate IDs so a
+  later-completed task, such as ContextMenu, is not overwritten by an older
+  evacuated copy.
+
+Live Looma + Knit repair:
+- Backed up the pre-repair active queue to
+  `/Users/matthew/.guildhall/data/projects/looma-knit-0c328d88ca44/project-state/TASKS.before-restore-evacuated-2026-06-08T13-48-58-525Z.json`.
+- Restored `42` missing tasks from
+  `project-state-evacuation/TASKS.json`, preserving the existing two active
+  system records.
+- Live `/api/project?projectId=looma-knit` now reports `44` tasks:
+  `3 blocked`, `35 spec_review`, `1 in_progress`, `3 exploring`, and `2 done`.
+  `startReadiness.canStart` is now `true`, and the shared run control label is
+  `Resume`.
+- Live `/api/project/inbox?projectId=looma-knit` now shows real task follow-up
+  items instead of an empty inbox with `all_terminal`.
+
+Verification:
+- `pnpm vitest run src/runtime/__tests__/project-state-compaction.test.ts
+  src/runtime/__tests__/migrations.test.ts src/runtime/__tests__/memory-migration.test.ts`
+  passed: 21 tests.
+- `pnpm tsgo -p tsconfig.json --noEmit` passed.
+
+Remaining follow-up:
+- The restored tasks keep their original priority values. A separate
+  prioritization pass should map Knit release stages onto task priority/order
+  without rewriting task content during the state-repair migration.
+
+source: codex:looma-knit-memory-upgrade-task-restore-patch-2026-06-08
+
+2026-06-08T15:17:00Z - Broadened and ran the evacuated-task restore migration
+across all affected local Guildhall projects.
+
+Schema Migration Decision:
+- Work id: codex:restore-evacuated-task-state-all-projects-2026-06-08.
+- Persisted schema touched: system-local project task state under
+  `project-state/TASKS.json`, `project-state/tasks/index.json`, and
+  `project-state/tasks/archive/*.json`.
+- Scope: automatic required project migration
+  `0.10.0/restore-evacuated-task-state`.
+- Change class: repair migration for data stranded by the storage-boundary
+  evacuation path; no new persisted schema shape.
+- Existing data impact: missing evacuated task IDs are prepended to the active
+  system-local queue while duplicate IDs preserve the newer active-system
+  record. Missing readable task index/archive files are copied from
+  `project-state-evacuation` only when the active destination is absent.
+- Migration id: `0.10.0/restore-evacuated-task-state`.
+- Safety: automatic and idempotent.
+- Required before run: yes, because a stranded active queue can make Guildhall
+  report `all_terminal` while unfinished work exists.
+- Compatibility reader: existing system-local task readers continue to read
+  `project-state/`; the evacuation copy remains readable as history.
+- Fixtures/tests: `src/runtime/__tests__/migrations.test.ts` now covers both
+  missing task-row restoration and companion `tasks/index.json` /
+  `tasks/archive/*.json` restoration.
+- Owner-facing plan text: apply the restore migration to all registered
+  projects and explicitly to the Guildhall repo root, then verify no evacuated
+  task IDs or companion task-state files remain missing.
+- Rollback/revert behavior: restore from filesystem backups or the unchanged
+  `project-state-evacuation` source; duplicate active records are not
+  overwritten by apply.
+
+Code repair:
+- `restoreEvacuatedTaskState()` now detects missing readable task state files
+  even when `TASKS.json` has already been repaired.
+- Added wrapper script
+  `scripts/migrations/0.10.0-restore-evacuated-task-state.mjs`, matching the
+  existing task migration script pattern and invoking
+  `guildhall migrate apply --migration 0.10.0/restore-evacuated-task-state`.
+- Migration apply summaries now report restored task rows separately from
+  restored readable task state files.
+
+Live migration run:
+- Pre-run inventory found missing evacuated task IDs in
+  `font-something` (`6`), `guildhall` (`10`), `narrative-harness` (`7`), and
+  `t-minus-t` (`2`). `commerce-project`, `fair-labor-license`, and `jess`
+  needed companion task-state files restored. `looma-knit` was already clean
+  from the earlier live repair.
+- Ran `node scripts/migrations/0.10.0-restore-evacuated-task-state.mjs --all`;
+  the migration applied to `t-minus-t`, `fair-labor-license`, `font-something`,
+  `narrative-harness`, `commerce-project`, and `jess`, and no-op'd for
+  `looma-knit`.
+- Ran `node scripts/migrations/0.10.0-restore-evacuated-task-state.mjs
+  /Users/matthew/git/oss/guildhall`; the migration applied to the unregistered
+  Guildhall repo-root project-state directory.
+- Post-run inventory across every directory with
+  `project-state-evacuation/TASKS.json` showed `missingTasks: 0` and
+  `missingCompanionFiles: 0`.
+
+Verification:
+- Red phase: `pnpm vitest run src/runtime/__tests__/migrations.test.ts
+  --reporter=dot` failed because
+  `project-state/tasks/index.json` was not restored.
+- Green phase: the same focused migration test passed after the helper copied
+  missing companion task-state files.
+- `pnpm build` passed before running the wrapper so `dist/cli.js` contained the
+  patched migration.
+- `node dist/cli.js migrate status --migration
+  0.10.0/restore-evacuated-task-state --all` and the explicit Guildhall root
+  status both reported `Pending: 0` and `Blocked: 0`.
+- `pnpm vitest run src/runtime/__tests__/project-state-compaction.test.ts
+  src/runtime/__tests__/migrations.test.ts src/runtime/__tests__/memory-migration.test.ts
+  --reporter=dot` passed: 21 tests.
+- `pnpm tsgo -p tsconfig.json --noEmit` passed.
+- `pnpm lint:contracts` passed with decision evidence.
+- Final `pnpm build` passed after the migration summary wording cleanup.
+
+source: codex:restore-evacuated-task-state-all-projects-2026-06-08
+
+2026-06-08T19:43:00Z - Reconciled the Looma + Knit `ContextMenu` containing
+work state after the pushed parent branch proved the split child deliverables.
+
+Finding:
+- Live task state had `ContextMenu` (`task-import-1l0mr2r`) marked `done`, but
+  its split children were still open:
+  `task-import-1l0mr2r-split-component-implementation` was `in_progress`, and
+  `storybook-story`, `contract-readme`, and `api-docs-sync` were `exploring`.
+- The children had `hierarchy.parentId: task-import-1l0mr2r`, but the parent
+  lacked reciprocal `hierarchy.childIds`. The shared hierarchy utility could
+  infer the reverse links, but `orchestrator-picker` duplicated a narrower
+  `childIds`-only containment check, so a reverse-linked parent could still be
+  treated as normal runnable work.
+
+Code repair:
+- Added a red/green regression in
+  `src/runtime/__tests__/work-hierarchy.test.ts`: a scoped parent whose child
+  only points back via `hierarchy.parentId` must dispatch the child, not the
+  parent.
+- Updated `orchestrator-picker` containment detection to use
+  `workSubtreeIds(queue.tasks, task.id).length > 1`, matching the shared
+  hierarchy model instead of only checking `task.hierarchy.childIds`.
+
+Live Looma + Knit state repair:
+- Backed up the active task queue to
+  `/Users/matthew/.guildhall/data/projects/looma-knit-0c328d88ca44/project-state/TASKS.before-contextmenu-child-reconcile-2026-06-08T19-42-22-330Z.json`.
+- Added the four split child ids to parent `ContextMenu.hierarchy.childIds`.
+- Marked the four split children `done`, set `completedAt`, marked component
+  child acceptance criteria met, and added repair notes tying closure to pushed
+  Looma branch `guildhall/task-task-import-1l0mr2r` at `d7d5d71`.
+- Marked parent ContextMenu acceptance criteria met to match the existing
+  reviewer approval note and pushed branch proof.
+
+After-state:
+- Live `/api/project?projectId=looma-knit` now reports ContextMenu parent plus
+  all four ContextMenu split children as `done`.
+- Status counts changed to `3 blocked`, `35 spec_review`, and `6 done`.
+- The primary action is no longer stale ContextMenu child work. It now honestly
+  says `Review needed` / `Review 35 waiting specs before starting.`
+
+Verification:
+- Red phase: `pnpm vitest run src/runtime/__tests__/work-hierarchy.test.ts
+  --reporter=dot` failed with the picker returning `container` instead of
+  `child-ready`.
+- Green phase: the same focused test passed with `7` tests after the picker
+  used `workSubtreeIds` for containment.
+- `pnpm tsgo -p tsconfig.json --noEmit` passed.
+- A filtered orchestrator test run for `scoped one-task runs` hit an existing
+  test-harness/system-local `TASKS.json` path setup failure before exercising
+  this change, so it is not counted as proof for this slice.
+
+source: codex:context-menu-child-state-reconcile-2026-06-08
+
+2026-06-11T16:45:42Z - Fixed the recurring installed-app header logo breakage
+at the static asset serving boundary.
+
+Finding:
+- `/icons/genfavicon-64.png` was present in `icons/`, `dist/web/icons/`, the
+  macOS package artifact, and `~/.guildhall/app/current/app/dist/web/icons/`.
+- The live route returned `200 OK` with `content-type: image/png`, but before
+  the fix the first bytes were `ef bf bd 50 4e 47...` instead of the PNG
+  signature `89 50 4e 47...`. The path and install copy were not the root
+  cause; `serveWebAsset` read every static file through `readManagedTextFile`,
+  corrupting binary icons by decoding them as UTF-8.
+
+Repair:
+- Added a regression in `src/runtime/__tests__/serve-dashboard.test.ts` that
+  fetches `/icons/genfavicon-64.png` through `buildServeApp()` and asserts the
+  PNG signature bytes.
+- Changed `serveWebAsset` to use `fsp.readFile` so JS, CSS, source maps, PNGs,
+  ICOs, and manifests are returned as file bytes with the existing content-type
+  and no-cache headers.
+
+Verification:
+- Red phase: `pnpm vitest run src/runtime/__tests__/serve-dashboard.test.ts
+  --reporter=dot` failed with bytes `[239, 191, 189, 80, 78, 71, 13, 10]`.
+- Green phase: the same focused test passed with 2 tests.
+- `pnpm build` passed.
+- `pnpm dev:install` passed and rebuilt the macOS package/install.
+- `guildhall stop && guildhall start` restarted the installed service.
+- `/api/stale-server` reported `stale:false` for pid `45481`.
+- Live route proof: `curl http://127.0.0.1:7777/icons/genfavicon-64.png`
+  returned `200 OK`, `file` identified the response as `PNG image data, 64 x
+  64`, `xxd` showed `89504e470d0a1a0a`, and the served SHA-256 matched
+  `icons/genfavicon-64.png`.
+
+source: codex:static-binary-assets-logo-corruption-2026-06-11
+
+2026-06-11T17:00:00Z - Repaired Looma + Knit Thread/import review
+orientation and completed-import recovery wording.
+
+Finding:
+- Opening Looma + Knit from Overview into Thread selected the setup/import
+  turn logically, but the left Thread list did not expose a durable current
+  marker or reliably scroll the selected item into view.
+- When a selected Thread had only the active setup/import card and no visible
+  chat/composer area, the card inherited transcript bottom-pinning and sat
+  flush near the bottom of the detail pane.
+- The completed workspace import state said `218 proposed tasks ... are
+  missing from Work` while offering `Re-run import` and `Restore 218 draft
+  tasks` without explaining which action preserved the approved import versus
+  rebuilt it from changed source notes.
+
+Repair:
+- Added `aria-current` support to `UtilityPanel` and `CardListItem`, then used
+  it for the selected Thread index row.
+- Thread now scrolls the selected row into view on long Thread lists after the
+  route/data selection settles.
+- Single-card Thread detail states now use explicit single-flow classes so the
+  selected card is centered with vertical padding instead of bottom-pinned by
+  transcript layout.
+- Completed workspace import repair now explains Restore versus Re-read, labels
+  Re-read as `Re-read project notes`, and labels the primary repair action as
+  `Restore N missing drafts`.
+
+Verification:
+- Red phase: focused component tests failed for missing Restore/Re-read
+  guidance, missing selected-row `aria-current`/scroll, and missing
+  single-card layout classes.
+- Green phase: `pnpm vitest run
+  src/web/surfaces/project/__tests__/WorkspaceImportTab.svelte.test.ts
+  src/web/surfaces/project/__tests__/ThreadTab.svelte.test.ts` passed with
+  `116` tests.
+- `pnpm typecheck` passed.
+- `pnpm build` passed.
+- `pnpm dev:install` passed, then the local service was restarted.
+- `/api/stale-server` reported `stale:false` for pid `12775` with
+  `distPath: /Users/matthew/git/oss/guildhall/dist/cli.js`.
+- Live browser proof on
+  `http://127.0.0.1:7777/projects/looma-knit/thread`: the selected row has
+  `aria-current="true"`, the selected row text is `Review existing work`, the
+  Thread list contains 39 rows, and the detail pane has
+  `thread-detail-flow-single` / `thread-list-single`.
+- Live browser proof on
+  `http://127.0.0.1:7777/projects/looma-knit/workspace-import`: the page shows
+  `This project import has already been approved.`, guidance for both Restore
+  and Re-read, and the actions `Re-read project notes`, `Open Work`, and
+  `Restore 218 missing drafts`.
+- `pnpm lint:design` remains blocked by existing design-token baseline debt in
+  shared files such as `Chip.svelte`, `Eyebrow.svelte`, `ProjectView.svelte`,
+  `TaskDrawer.svelte`, and pre-existing `ThreadTab.svelte` rules; this command
+  is not counted as passing proof for this slice.
+
+source: codex:looma-knit-thread-import-orientation-2026-06-11
+
+2026-06-11T17:25:00Z - Repaired Looma + Knit spec-review/import-review
+route collision after live `Open import review` inspection.
+
+Finding:
+- The project shell said `Review 35 waiting specs before starting`, but
+  opening `/projects/looma-knit/thread` could auto-select the setup/import
+  turn. Clicking its generic `Open review` action then landed on Workspace
+  Import, which looked unrelated to the spec-review blocker.
+- The shared start-readiness payload linked spec blockers to plain `/thread`,
+  so surfaces could not orient the Thread tab to the actual waiting spec.
+- Thread could select setup before the later project-readiness payload arrived
+  and then keep that stale automatic selection.
+- The shared primary action label for spec-review blockers still said
+  `Review draft`, blurring spec approval with import/draft review.
+
+Repair:
+- Start-readiness spec blockers now target the first waiting spec chain with
+  `/thread?thread=task%3A...`.
+- The shared project action model routes `spec_review` task actions to their
+  specific Thread chain and labels the start blocker `Review waiting specs`.
+- Thread distinguishes automatic selection from user selection so a late
+  readiness target can replace the initial setup selection, while an intentional
+  row click remains respected.
+- The workspace-import setup action is now labeled `Open import review`.
+
+Verification:
+- `pnpm vitest run
+  src/web/surfaces/project/__tests__/ThreadTab.svelte.test.ts
+  src/runtime/__tests__/project-action-model.test.ts
+  src/web/surfaces/project/__tests__/WorkspaceImportTab.svelte.test.ts` passed
+  with `125` tests.
+- `pnpm vitest run src/runtime/__tests__/serve-settings.test.ts -t "targets
+  the first waiting spec thread"` passed.
+- `pnpm typecheck` passed.
+- `pnpm build` passed.
+- `pnpm dev:install` passed, then the local service was restarted.
+- `/api/stale-server` reported `stale:false` for pid `74919` with
+  `distPath: /Users/matthew/git/oss/guildhall/dist/cli.js`.
+- API proof for `projectId=looma-knit`: `startReadiness.actionHref` and the
+  shared primary action `href` both point to
+  `/thread?thread=task%3Atask-import-1aessks`; the primary action label is
+  `Review waiting specs` and the button label is `Review spec`.
+- Fresh browser proof on
+  `http://localhost:7777/projects/looma-knit/thread`: after the route settles,
+  the selected Thread row has `aria-current="true"` and is `Floating toolbar`,
+  the active dock says the spec draft is saved and coordinator review is next,
+  the `Review spec` link points to the same targeted Thread query, and the old
+  generic `Open review` label is absent.
+
+source: codex:looma-knit-spec-review-routing-2026-06-11
+
+2026-06-11T17:30:00Z - Clarified plural spec blocker copy versus next-spec
+action copy.
+
+Finding:
+- The notification strip said `Review 35 waiting specs before starting.` while
+  its action link said `Review spec`, making the user choose between a batch
+  interpretation and a single-item interpretation.
+- The real behavior is batch status plus one targeted next action: 35 specs
+  block project start, and the link opens the next spec Thread.
+
+Repair:
+- Start readiness now phrases the blocker as status:
+  `35 specs are waiting for review before starting.`
+- Plural spec blockers now label the action `Review next spec`.
+- The shared project action model and Project shell fallback both use the same
+  plural-aware label.
+
+Verification:
+- `pnpm vitest run src/runtime/__tests__/project-action-model.test.ts` passed
+  with `8` tests.
+- `pnpm vitest run src/runtime/__tests__/serve-settings.test.ts -t "targets
+  the first waiting spec thread"` passed.
+- `pnpm vitest run src/web/surfaces/__tests__/ProjectView.svelte.test.ts -t
+  "dedupes shell attention"` passed.
+- `pnpm typecheck` passed.
+- `pnpm build` passed.
+- `pnpm dev:install` passed, then the local service was restarted.
+- `/api/stale-server` reported `stale:false` for pid `85917`.
+- API proof for `projectId=looma-knit`: `startReadiness.message` is
+  `35 specs are waiting for review before starting.`, primary action label is
+  `Review waiting specs`, and button label is `Review next spec`.
+- Browser proof on
+  `http://localhost:7777/projects/looma-knit/workspace-import`: the alert text
+  is `35 specs are waiting for review before starting. Review next spec`; the
+  `Review next spec` link points to
+  `/projects/looma-knit/thread?thread=task%3Atask-import-1aessks`; the old
+  `Review 35 waiting specs before starting.` phrase is absent.
+
+source: codex:looma-knit-spec-blocker-copy-2026-06-11
+
+2026-06-11T17:35:00Z - Corrected Thread single-card centering so it never
+pulls the composer away from the bottom.
+
+Finding:
+- The previous single-card layout fix applied `thread-detail-flow-single`
+  whenever the selected Thread had one history item. For active/docked threads
+  with a footer composer, that centered the dock plus composer as a group.
+- The intended behavior is narrower: center a lone card only when the composer
+  is absent. Whenever the composer exists, it must remain bottom-anchored.
+
+Repair:
+- Added `centerSingleComposerlessCard`, which only applies the single-card
+  centering classes when there is at most one history item and no
+  `footerComposer`.
+- Updated ThreadTab regressions to assert active-card composer states do not
+  receive the centering classes, while a composer-less setup card still does.
+
+Verification:
+- `pnpm vitest run src/web/surfaces/project/__tests__/ThreadTab.svelte.test.ts
+  -t "composer bottom-anchored|centers a single setup card"` passed with `2`
+  tests.
+- `pnpm vitest run
+  src/web/surfaces/project/__tests__/ThreadTab.svelte.test.ts
+  src/runtime/__tests__/project-action-model.test.ts
+  src/web/surfaces/project/__tests__/WorkspaceImportTab.svelte.test.ts` passed
+  with `126` tests.
+- `pnpm typecheck` passed.
+- `pnpm build` passed.
+- `pnpm dev:install` passed, then the local service was restarted.
+- `/api/stale-server` reported `stale:false` for pid `50451`.
+- Browser proof on `http://localhost:7777/projects/looma-knit/thread`: the
+  selected `Floating toolbar` thread has `flowSingle:false`,
+  `listSingle:false`, `hasFooter:true`, `hasComposer:true`,
+  `footerGapToDetailBottom:0`, and `dockGapToFooter:12`, proving the composer
+  is sticky at the bottom with the active card immediately above it.
+
+source: codex:thread-composer-bottom-anchor-2026-06-11
+
+2026-06-14T16:35:00Z - Verified the SvelteKit route-split build with full
+rendered UI replay.
+
+Finding:
+- The SvelteKit build is now producing separate immutable chunks for the
+  top-level web surfaces, but the first e2e replay exposed test harness drift:
+  Playwright was serving a build without the advanced Structure flag baked in,
+  the project-card matrix now contains 17 projects, migration success copy is
+  `Migration complete.`, and dirty-Guildhall cleanup copy can be singular.
+- `ProjectView` is still the oversized route chunk. Top-level route splitting
+  is real, but project-internal tabs remain synchronous inside that route.
+
+Repair:
+- Playwright now builds the static SvelteKit app before serving fixtures with
+  `VITE_GUILDHALL_ADVANCED_STRUCTURE=1`, so Structure route tests exercise the
+  built Vite output they expect.
+- Rendered UI assertions now match the current fixture count, migration copy,
+  dirty-file singular/plural copy, and the final two-card dashboard row.
+
+Verification:
+- `pnpm exec playwright test` passed with `37` rendered UI tests.
+- Manifest proof from `.svelte-kit/output/client/.vite/manifest.json`:
+  `ProjectsHome.svelte` -> `_app/immutable/chunks/BPuFCuqj.js` (50265b),
+  `FleetNeedsYou.svelte` -> `_app/immutable/chunks/BxcMf8Je.js` (5951b),
+  `ProjectView.svelte` -> `_app/immutable/chunks/BFtDNNEQ.js` (544280b),
+  `ProvidersPage.svelte` -> `_app/immutable/chunks/BEfhPA7z.js` (13516b),
+  `SetupWizard.svelte` -> `_app/immutable/chunks/Ca7wCgk1.js` (25025b), and
+  `TaskDrawer.svelte` -> `_app/immutable/chunks/EvQIdLWy.js` (146244b).
+- Browser network proof against `http://127.0.0.1:7791`: `/projects` loaded
+  `ProjectsHome` but not ProjectView/Providers/TaskDrawer; `/needs-you`
+  loaded `FleetNeedsYou` only; `/providers` loaded `ProvidersPage` only;
+  `/projects/looma-knit/overview` and `/structure` loaded `ProjectView` only;
+  `/task/looma-knit-task-1?tab=spec` loaded `ProjectView` plus `TaskDrawer`.
+- Remaining bundle follow-up: split `ProjectView`'s internal project tabs or
+  shared-heavy dependencies so the project route chunk stops tripping Vite's
+  500 kB warning.
+
+source: codex:sveltekit-route-split-e2e-proof-2026-06-14
+
+2026-06-14T18:40:00Z - Split `ProjectView`'s internal project tabs into
+lazy route-surface chunks.
+
+Finding:
+- The previous SvelteKit route split moved top-level app surfaces out of the
+  initial web app, but `ProjectView` still bundled every project tab into one
+  large project route chunk. The manifest proof showed the project route chunk
+  at about `544280b` JS plus `144559b` CSS, and Vite emitted the >500 kB chunk
+  warning.
+
+Repair:
+- `ProjectView.svelte` now keeps the rail/topbar/project shell synchronous and
+  loads project surfaces with branch-local dynamic imports: Overview, Thread,
+  Needs You, Work, Workspace Import, Project Attach, Facts, Timeline, Release,
+  Settings, and Structure.
+- The release artifact contract now prevents static project-tab imports from
+  creeping back into `ProjectView`.
+- Component tests wait for lazy tab imports where they previously assumed
+  synchronous child render.
+
+Verification:
+- Red test proof: `pnpm vitest run scripts/release-artifacts.test.ts -t
+  "project tabs"` failed before the implementation because `ProjectView`
+  statically imported `ProjectOverviewTab`.
+- `pnpm vitest run src/web/surfaces/__tests__/ProjectView.svelte.test.ts
+  scripts/release-artifacts.test.ts` passed with `58` tests.
+- `pnpm typecheck` passed.
+- `VITE_GUILDHALL_ADVANCED_STRUCTURE=1 pnpm build` passed. The Vite >500 kB
+  chunk warning is gone.
+- Manifest proof: the project shell chunk with `ProjectView` CSS is now
+  `_app/immutable/chunks/BVg96qX-.js` at `71261b` with 11 dynamic imports.
+  Split tab chunks include `ThreadTab` at `184347b`, `SettingsTab` at
+  `71169b`, `WorkspaceImportTab` at `58628b`, `WorkTab` at `44587b`,
+  `ProjectOverviewTab` at `42157b`, and `ProjectStructurePanel` at `30632b`.
+- Browser network proof against `http://127.0.0.1:7791`: Overview loaded
+  shell + Overview only; Work loaded shell + Work only; Thread loaded shell +
+  Thread only; Structure loaded shell + Structure only; the task drawer route
+  loaded shell + Overview background + TaskDrawer.
+- `pnpm exec playwright test` passed with `37` rendered UI tests.
+
+source: codex:projectview-internal-route-split-2026-06-14
+
+2026-06-14T19:00:00Z - Walked every defined web route/view against the
+production SvelteKit build and fixture service.
+
+Scope:
+- Local registry note: this checkout has `.guildhall/tmp` but no
+  `.guildhall/artifacts.yaml`, so this evidence was recorded directly in
+  `internal/audits/flow-audit.md` rather than through a resolved
+  `artifact:flow-audit` registry entry.
+- Build and service: originally run with the now-removed
+  `VITE_GUILDHALL_ADVANCED_STRUCTURE=1` gate; follow-up cleanup made Structure
+  an unconditional product route, so normal `pnpm build`/Playwright builds now
+  exercise the same Structure UI as release builds. The walkthrough used
+  `node scripts/playwright-fixtures.mjs`, then
+  `HOME="$PWD/.playwright-fixtures/home" node dist/cli.js serve-internal --port 7791`.
+- In-app Browser bridge setup succeeded through the Browser plugin's
+  `setupBrowserRuntime`/`agent.browsers.get("iab")` path, and the route walk
+  used Playwright against the running local target so asset requests, ARIA
+  state, drawer close behavior, overflow, and console/page errors could be
+  inspected deterministically.
+
+Walkthrough result:
+- Custom route harness passed `40/40` routed views and aliases: `/`, `/projects`,
+  `/overview`, `/needs-you`, `/inbox`, `/notifications`, `/providers`,
+  project overview/default/inbox/needs-you/inbox aliases, Thread, Work list,
+  Work board, Planner alias, Workspace Import, Structure for accepted/docs-only
+  and consumer handoff projects, Release summary/criteria/readiness fallback,
+  Facts, Timeline, Settings base plus ready/providers/coordinators/identity/
+  profile/advanced and compatibility routing aliases, Setup wizard,
+  setup-pending Work guard, direct task drawer, legacy `/project/...` fallbacks,
+  and unknown project-subpath overview fallback.
+- The harness checked each page for the expected user-facing heading, region,
+  title, or interaction; no route left an exact `Loading project...` element,
+  no route produced horizontal document overflow at `1280x900`, and no passing
+  route emitted console errors or page errors.
+- The direct task drawer route used the task visible before required
+  migrations, `/projects/looma-knit/task/task-workspace-import?tab=spec`, then
+  closed back to `/projects/looma-knit/overview` and verified the overview
+  background region.
+
+Split-output proof:
+- Top-level surfaces loaded their own chunks: ProjectsHome
+  `BPBHfX8x.js`, FleetNeedsYou `Bm2qiIIZ.js`, ProvidersPage `DsOirBPV.js`,
+  SetupWizard `C1e6oIaI.js`.
+- Project shell and project tabs split as intended: ProjectView shell
+  `BVg96qX-.js`; Overview `DJpSOuIQ.js`; Needs You `BFXYt1qE.js`;
+  Thread `C0vQBUIz.js`; Work `AscIzVao.js`; Workspace Import `DYm8ziOf.js`;
+  Structure `DMd8R89_.js`; Release `Ci6K-uVA.js`; Facts `DKbkRvF-.js`;
+  Timeline `Gafyj-Ux.js`; Settings `CT10uWNK.js`; TaskDrawer `CSvXTXgl.js`.
+- Every project route requested the shell chunk plus only the current tab/drawer
+  component chunk needed by that route, preserving the ProjectView split from
+  the previous pass.
+
+Finding and repair:
+- A fresh-reset isolated run of
+  `pnpm exec playwright test tests/rendered-ui/project-flow.spec.ts -g "task drawer direct"`
+  failed because the test opened legacy task id `looma-knit-task-1` before
+  required migrations had exposed legacy tasks through `/api/project/task/:id`.
+  The drawer frame rendered, but the task API returned `404 {"error":"task not found"}`.
+- Updated the e2e to open the current pre-migration task
+  `task-workspace-import`, preserving the tab and close-to-overview assertions
+  without relying on earlier tests to mutate fixture state.
+
+Verification:
+- Focused red/green proof: the isolated task-drawer e2e failed before the test
+  repair and passed afterward.
+- `pnpm exec playwright test` passed with `37` rendered UI tests.
+
+source: codex:all-defined-web-route-flow-audit-2026-06-14
+
+2026-06-14T19:10:00Z - Removed the hidden Structure route build flag.
+
+Finding:
+- `VITE_GUILDHALL_ADVANCED_STRUCTURE=1` was not a real route-splitting
+  requirement. It was a stale product feature flag: the router recognized
+  `/projects/:id/structure`, but `ProjectView.svelte` rendered
+  `ProjectOverviewTab` for that route unless the env flag was set. Playwright
+  was forcing the flag, which meant tests could exercise the real Structure
+  page while a normal build could render different content at the same URL.
+
+Repair:
+- Deleted `src/web/lib/feature-flags.ts` and its tests.
+- Removed the env prefix from `playwright.config.ts`.
+- Made the Project rail include Structure unconditionally, made
+  `/projects/:id/structure` always load `ProjectStructurePanel`, and made the
+  Overview project-map card render from actual `structuralMapReview` data
+  instead of a build env switch.
+
+Verification:
+- `rg -n "VITE_GUILDHALL_ADVANCED_STRUCTURE|advancedStructureEnabled|showAdvancedStructure|feature-flags" src tests playwright.config.ts scripts build.mjs`
+  returned no matches.
+- `pnpm build` passed without env overrides and still emitted
+  `ProjectStructurePanel` as its own split client chunk.
+- `pnpm typecheck` passed.
+- `pnpm exec playwright test` passed with `37` rendered UI tests without any
+  Structure env prefix.
+- `pnpm vitest run src/web/surfaces/__tests__/ProjectView.svelte.test.ts
+  src/web/surfaces/project/__tests__/ProjectOverviewTab.svelte.test.ts
+  scripts/release-artifacts.test.ts` passed with `78` tests.
+
+source: codex:remove-advanced-structure-flag-2026-06-14
+
+2026-06-14T22:13:50Z - Routed runtime and tests through the managed project-state layer.
+
+Finding:
+- The storage-boundary cleanup had left several runtime and test paths rebuilding
+  legacy `.guildhall/*` locations directly. That let fixtures pass through a
+  different file layout than the runtime used, especially around `TASKS.json`,
+  `PROGRESS.md`, `workspace-goals.json`, `runtime.json`, design state, memory
+  bridge state, MCP task reads, and provider-start readiness.
+- This checkout has no `.guildhall/artifacts.yaml`, so the audit entry was
+  appended directly to `internal/audits/flow-audit.md` instead of resolving
+  `artifact:flow-audit` through the registry.
+
+Repair:
+- Added a shared `src/sessions/project-state-store.ts` facade and routed runtime
+  storage helpers plus tests through managed project-state helpers instead of
+  duplicating path construction.
+- Moved MCP reader/evidence/task writes, runtime compatibility reads,
+  workspace-import rerun cleanup, re-intake draft storage, design/memory
+  fixtures, and CLI/MCP memory-bridge assertions onto the same managed layer.
+- Fixed provider start readiness to use the effective runtime provider config
+  for paid fallback, so a globally allowed fallback is honored before blocking
+  on unavailable local models.
+
+Verification:
+- `pnpm typecheck` passed.
+- `pnpm test` passed with `331` files passed, `1` skipped; `3960` tests passed,
+  `3` skipped, and `11` todo.
+
+source: codex:managed-project-state-routing-2026-06-14

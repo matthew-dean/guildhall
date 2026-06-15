@@ -1,3 +1,4 @@
+import { appendManagedTextFile, readManagedTextFile, readManagedTextFileSync, writeManagedTextFile } from '@guildhall/persistence'
 import { defineTool } from '@guildhall/engine'
 import { z } from 'zod'
 import { updateAgentSettings } from '@guildhall/config'
@@ -17,7 +18,7 @@ const saveAgentSettingInputSchema = z.object({
   agentRole: z.string().describe('Your agent role: coordinator, worker, reviewer, gateChecker, or spec'),
   rationale: z.string().describe('Why are you saving this setting? Be specific about what you observed.'),
 
-  coordinatorId: z.string().optional().describe('Coordinator id to refine (e.g. "looma", "knit")'),
+  coordinatorId: z.string().optional().describe('Coordinator id to refine (e.g. "frontend", "backend")'),
   addConcern: z
     .object({
       id: z.string(),
@@ -109,7 +110,7 @@ export async function saveAgentSetting(input: SaveAgentSettingInput): Promise<Sa
       `---`,
     ].join('\n')
 
-    await fs.appendFile(decisionsPath, block, 'utf-8')
+    await appendManagedTextFile(decisionsPath, block, 'utf-8')
 
     const summary =
       changes.length > 0 ? `Saved: ${changes.join('; ')}` : 'No changes recorded (all inputs were empty)'

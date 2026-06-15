@@ -1,5 +1,9 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
+import fs from 'node:fs/promises'
+import os from 'node:os'
+import path from 'node:path'
 import type { HardGate } from '@guildhall/core'
+import { readTaskEvidence } from '@guildhall/sessions'
 import { reconcileRequestedGatesWithAuthority, runGatesTool } from '../run-gates-tool.js'
 
 vi.mock('../gate-runner.js', () => ({
@@ -177,6 +181,83 @@ describe('runGatesTool scoped exceptions', () => {
         ],
       }),
     )
+  })
+
+  it('persists current task gate results to evidence without rewriting TASKS.json gate history', async () => {
+    const projectRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'guildhall-run-gates-task-state-'))
+    const guildhallDir = path.join(projectRoot, '.guildhall')
+    const tasksPath = path.join(guildhallDir, 'TASKS.json')
+    await fs.mkdir(guildhallDir, { recursive: true })
+    await fs.writeFile(tasksPath, JSON.stringify({
+      version: 1,
+      lastUpdated: '2026-06-03T00:00:00.000Z',
+      tasks: [{
+        id: 'task-001',
+        title: 'Run gates',
+        description: 'A task with command evidence.',
+        domain: 'test',
+        projectPath: projectRoot,
+        status: 'gate_check',
+        priority: 'normal',
+        dependsOn: [],
+        outOfScope: [],
+        acceptanceCriteria: [],
+        notes: [],
+        gateResults: [],
+        reviewVerdicts: [],
+        adjudications: [],
+        escalations: [],
+        revisionCount: 0,
+        createdAt: '2026-06-03T00:00:00.000Z',
+        updatedAt: '2026-06-03T00:00:00.000Z',
+      }],
+    }), 'utf-8')
+
+    vi.mocked(runGates).mockResolvedValue({
+      allPassed: true,
+      results: [
+        {
+          gateId: 'test',
+          type: 'hard',
+          passed: true,
+          checkedAt: '2026-06-03T00:01:00.000Z',
+          output: 'ok',
+        },
+      ],
+    } as any)
+
+    try {
+      const result = await runGatesTool.execute(
+        {
+          cwd: projectRoot,
+          gates: [{ id: 'test', label: 'Test', command: 'pnpm test' }],
+        },
+        {
+          cwd: projectRoot,
+          metadata: {
+            current_task_id: 'task-001',
+            tasks_path: tasksPath,
+          },
+        },
+      )
+
+      expect(result.is_error).toBe(false)
+      expect((result.metadata as Record<string, unknown>).persistedTaskGateResults).toBe(true)
+      const raw = JSON.parse(await fs.readFile(tasksPath, 'utf-8'))
+      expect(raw.tasks[0].gateResults).toEqual([])
+      const evidence = await readTaskEvidence(projectRoot, 'task-001', { kind: 'gate_result' })
+      expect(evidence.map((event) => event.payload)).toEqual([
+        {
+          gateId: 'test',
+          type: 'hard',
+          passed: true,
+          checkedAt: '2026-06-03T00:01:00.000Z',
+          output: 'ok',
+        },
+      ])
+    } finally {
+      await fs.rm(projectRoot, { recursive: true, force: true })
+    }
   })
 
   it('reports unrelated hard test failures as effective pass when they are outside the task target files', async () => {

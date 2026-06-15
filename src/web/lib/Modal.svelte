@@ -7,6 +7,7 @@
 <script lang="ts">
   import type { Snippet } from 'svelte'
   import Icon from './Icon.svelte'
+  import { portal } from './portal.js'
 
   interface Props {
     open: boolean
@@ -15,9 +16,10 @@
     children?: Snippet
     footer?: Snippet
     size?: 'sm' | 'md' | 'lg' | 'xl'
+    closeDisabled?: boolean
   }
 
-  let { open, title, onClose, children, footer, size = 'md' }: Props = $props()
+  let { open, title, onClose, children, footer, size = 'md', closeDisabled = false }: Props = $props()
   let visible = $state(false)
   let closing = $state(false)
   let closeTimer: ReturnType<typeof setTimeout> | null = null
@@ -27,6 +29,7 @@
   }
 
   function requestClose() {
+    if (closeDisabled) return
     if (!closing) onClose()
   }
 
@@ -59,33 +62,40 @@
 <svelte:window onkeydown={handleKey} />
 
 {#if visible}
-  <div class:closing class="gh-modal-scrim" role="presentation" onclick={requestClose}></div>
-  <div
-    class="gh-modal size-{size}"
-    class:closing
-    role="dialog"
-    aria-modal="true"
-    aria-label={title}
-  >
-    <header class="gh-modal-head">
-      <h3>{title}</h3>
-      <button
-        type="button"
-        class="gh-modal-x"
-        aria-label="Close"
-        onclick={requestClose}
-      ><Icon name="x" size={16} /></button>
-    </header>
-    <div class="gh-modal-body">
-      {#if children}{@render children()}{/if}
+  <div class="gh-modal-portal" use:portal>
+    <div class:closing class="gh-modal-scrim" role="presentation" onclick={requestClose}></div>
+    <div
+      class="gh-modal size-{size}"
+      class:closing
+      role="dialog"
+      aria-modal="true"
+      aria-label={title}
+    >
+      <header class="gh-modal-head">
+        <h3>{title}</h3>
+        <button
+          type="button"
+          class="gh-modal-x"
+          aria-label="Close"
+          disabled={closeDisabled}
+          onclick={requestClose}
+        ><Icon name="x" size={16} /></button>
+      </header>
+      <div class="gh-modal-body">
+        {#if children}{@render children()}{/if}
+      </div>
+      {#if footer}
+        <footer class="gh-modal-foot">{@render footer()}</footer>
+      {/if}
     </div>
-    {#if footer}
-      <footer class="gh-modal-foot">{@render footer()}</footer>
-    {/if}
   </div>
 {/if}
 
 <style>
+  .gh-modal-portal {
+    display: contents;
+  }
+
   .gh-modal-scrim {
     position: fixed;
     inset: 0;
@@ -146,21 +156,29 @@
   }
   .gh-modal-head h3 {
     margin: 0;
-    font-size: var(--fs-3);
-    font-weight: 600;
+    font-size: var(--gh-type-size-panel-title);
+    font-weight: var(--gh-type-weight-strong);
   }
   .gh-modal-x {
     background: transparent;
     border: none;
     color: var(--text-muted);
     cursor: pointer;
-    font-size: var(--fs-3);
+    font-size: var(--gh-type-size-panel-title);
     padding: var(--s-1) var(--s-2);
     border-radius: 6px;
   }
   .gh-modal-x:hover {
     color: var(--text);
     background: var(--bg-sunken);
+  }
+  .gh-modal-x:disabled {
+    opacity: 0.45;
+    cursor: not-allowed;
+  }
+  .gh-modal-x:disabled:hover {
+    color: var(--text-muted);
+    background: transparent;
   }
   .gh-modal-body {
     padding: var(--s-4);

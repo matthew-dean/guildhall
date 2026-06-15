@@ -2,9 +2,9 @@
  * Structural bootstrap verification.
  *
  * Produces the `bootstrap` block that lives in `guildhall.yaml`:
- *   - detects the package manager from lockfiles
- *   - derives gate commands from `package.json` scripts (with a tsconfig-based
- *     typecheck fallback)
+ *   - detects the package manager from lockfiles when a Node package manager
+ *     is present
+ *   - derives gate commands from project toolchain profiles
  *   - runs the install command and dry-runs each gate command so we know the
  *     tooling actually resolves before any agent is dispatched
  *
@@ -22,6 +22,7 @@ import { existsSync, readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { spawnSync, type SpawnSyncOptions } from 'node:child_process'
 import { parse as parseYaml, stringify as stringifyYaml } from 'yaml'
+import { deriveBootstrapHypothesisFromProfiles, detectToolchainProfiles } from './toolchain-profile.js'
 
 export type PackageManager = 'pnpm' | 'npm' | 'yarn' | 'bun' | 'none'
 export type GateName = 'lint' | 'typecheck' | 'build' | 'test'
@@ -153,6 +154,29 @@ export function detectGateCommands(
   const runnerPrefix = packageManager === 'none' ? '' : `${packageManager} `
 
   if (!pkg) {
+    const profiles = detectToolchainProfiles(projectPath)
+    const firstAvailable = (commands: readonly string[] | undefined): GateCommand => {
+      const command = commands?.find((candidate) => candidate.trim().length > 0)
+      return command ? { command, available: true } : unavailable('no profile gate detected')
+    }
+    if (profiles.length > 0) {
+      const gates = profiles.reduce(
+        (acc, profile) => {
+          acc.typecheck.push(...(profile.gateCommands.typecheck ?? []))
+          acc.build.push(...(profile.gateCommands.build ?? []))
+          acc.test.push(...(profile.gateCommands.test ?? []))
+          acc.lint.push(...(profile.gateCommands.lint ?? []), ...(profile.gateCommands.validate ?? []))
+          return acc
+        },
+        { lint: [] as string[], typecheck: [] as string[], build: [] as string[], test: [] as string[] },
+      )
+      return {
+        lint: firstAvailable(gates.lint),
+        typecheck: firstAvailable(gates.typecheck),
+        build: firstAvailable(gates.build),
+        test: firstAvailable(gates.test),
+      }
+    }
     const reason = 'no package.json'
     return {
       lint: unavailable(reason),
@@ -254,9 +278,13 @@ export function runBootstrap(
 
   const packageManager = detectPackageManager(projectPath)
   log(`[detect] package manager: ${packageManager}`)
+  const profileHypothesis = deriveBootstrapHypothesisFromProfiles(detectToolchainProfiles(projectPath))
+  if (profileHypothesis.packageManager && packageManager === 'none') {
+    log(`[detect] toolchain profile: ${profileHypothesis.packageManager}`)
+  }
 
   const installCommand =
-    packageManager === 'none' ? '' : `${packageManager} install`
+    packageManager === 'none' ? (profileHypothesis.commands[0] ?? '') : `${packageManager} install`
   let installStatus: InstallStatus = 'ok'
   let installLastRunAt: string | undefined
 

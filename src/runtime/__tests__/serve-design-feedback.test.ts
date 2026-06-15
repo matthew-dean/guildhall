@@ -2,7 +2,7 @@ import { describe, expect, it, beforeEach, afterEach } from 'vitest'
 import fs from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
-import { bootstrapWorkspace, updateGlobalConfig } from '@guildhall/config'
+import { bootstrapWorkspace } from '@guildhall/config'
 import { buildServeApp } from '../serve.js'
 
 let tmpDir: string
@@ -34,7 +34,7 @@ function projectUrl(route: string): string {
 }
 
 describe('design feedback API', () => {
-  it('reports an inactive Looma hook when no local Looma checkout is configured', async () => {
+  it('reports design feedback without machine-local development target status', async () => {
     const { app } = buildServeApp({ projectPath: tmpDir })
 
     const res = await app.fetch(new Request(projectUrl('/api/project/design-feedback')))
@@ -42,16 +42,13 @@ describe('design feedback API', () => {
     expect(res.status).toBe(200)
     const body = await res.json() as {
       feedback?: { findings?: unknown[] }
-      loomaHook?: { status?: string; reason?: string }
+      designSystemDevelopmentTargets?: unknown
     }
     expect(body.feedback?.findings).toEqual([])
-    expect(body.loomaHook).toMatchObject({
-      status: 'inactive',
-      reason: expect.stringContaining('not configured'),
-    })
+    expect(body.designSystemDevelopmentTargets).toBeUndefined()
   })
 
-  it('records and routes reusable Looma findings without requiring the local hook', async () => {
+  it('records and routes reusable design-system findings without requiring a local target', async () => {
     const { app } = buildServeApp({ projectPath: tmpDir })
 
     const res = await app.fetch(new Request(projectUrl('/api/project/design-feedback/findings'), {
@@ -63,7 +60,7 @@ describe('design feedback API', () => {
         source: { kind: 'reviewer', artifactId: 'pantry-filter.default' },
         severity: 'high',
         dimension: 'interaction-semantics',
-        designSystem: 'looma',
+        designSystem: 'foundation',
         suggestedClassification: 'reusable-pattern',
       }),
     }))
@@ -72,13 +69,13 @@ describe('design feedback API', () => {
     const body = await res.json() as {
       routed?: {
         candidate?: { targetDesignSystem?: string }
-        loomaImprovement?: { targetPackage?: string }
+        designSystemImprovement?: { targetPackage?: string }
       }
-      loomaHook?: { status?: string }
+      designSystemDevelopmentTargets?: unknown
     }
-    expect(body.routed?.candidate?.targetDesignSystem).toBe('looma')
-    expect(body.routed?.loomaImprovement?.targetPackage).toBe('core')
-    expect(body.loomaHook?.status).toBe('inactive')
+    expect(body.routed?.candidate?.targetDesignSystem).toBe('foundation')
+    expect(body.routed?.designSystemImprovement?.targetPackage).toBe('core')
+    expect(body.designSystemDevelopmentTargets).toBeUndefined()
   })
 
   it('captures owner feedback and builds a design decision packet', async () => {
@@ -128,41 +125,4 @@ describe('design feedback API', () => {
     expect(packetBody.feedback?.decisionPackets).toHaveLength(1)
   })
 
-  it('reports an active Looma hook when experimental config points at a Looma checkout', async () => {
-    const loomaPath = await fs.mkdtemp(path.join(os.tmpdir(), 'guildhall-serve-looma-'))
-    try {
-      await fs.mkdir(path.join(loomaPath, '.git'))
-      await fs.writeFile(
-        path.join(loomaPath, 'package.json'),
-        JSON.stringify({ name: 'looma-monorepo' }, null, 2),
-        'utf-8',
-      )
-      updateGlobalConfig({
-        experimental: {
-          designSystemDevelopment: {
-            looma: {
-              enabled: true,
-              path: loomaPath,
-              writeThrough: 'queue',
-            },
-          },
-        },
-      })
-      const { app } = buildServeApp({ projectPath: tmpDir })
-
-      const res = await app.fetch(new Request(projectUrl('/api/project/design-feedback')))
-
-      expect(res.status).toBe(200)
-      const body = await res.json() as {
-        loomaHook?: { status?: string; path?: string; writeThrough?: string }
-      }
-      expect(body.loomaHook).toMatchObject({
-        status: 'active',
-        path: loomaPath,
-        writeThrough: 'queue',
-      })
-    } finally {
-      await fs.rm(loomaPath, { recursive: true, force: true })
-    }
-  })
 })

@@ -30,8 +30,8 @@
     gap: var(--s-2);
   }
   .field-label {
-    font-size: var(--fs-1);
-    font-weight: 700;
+    font-size: var(--gh-type-size-meta);
+    font-weight: var(--gh-type-weight-strong);
     text-transform: uppercase;
     letter-spacing: 0.06em;
     color: var(--text-muted);

@@ -5,14 +5,40 @@ import userEvent from '@testing-library/user-event'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import Header from '../Header.svelte'
+import headerSource from '../Header.svelte?raw'
 import { path } from '../../lib/nav.svelte.js'
 import { project } from '../../lib/project.svelte.js'
+
+function installViewportMatchMedia(width: number) {
+  Object.defineProperty(window, 'matchMedia', {
+    configurable: true,
+    value: vi.fn().mockImplementation((query: string) => {
+      const max = query.match(/max-width:\s*(\d+)px/)
+      const min = query.match(/min-width:\s*(\d+)px/)
+      const matches = Boolean(
+        (max && width <= Number(max[1])) ||
+        (min && width >= Number(min[1])),
+      )
+      return {
+        matches,
+        media: query,
+        onchange: null,
+        addEventListener: vi.fn(),
+        removeEventListener: vi.fn(),
+        addListener: vi.fn(),
+        removeListener: vi.fn(),
+        dispatchEvent: vi.fn(),
+      }
+    }),
+  })
+}
 
 describe('Header', () => {
   beforeEach(() => {
     project.detail = null
     window.history.replaceState({}, '', '/projects/looma-knit/thread')
     path.value = '/projects/looma-knit/thread'
+    installViewportMatchMedia(640)
     vi.stubGlobal('fetch', vi.fn(async () => new Response(JSON.stringify({ version: '0.5.1' }), {
       status: 200,
       headers: { 'content-type': 'application/json' },
@@ -25,15 +51,15 @@ describe('Header', () => {
     cleanup()
   })
 
-  it('renders brand, version, route-derived project title, and project nav toggle', async () => {
+  it('renders brand, version, route-derived project title, and compact project nav toggle', async () => {
     const toggleSpy = vi.fn()
     window.addEventListener('guildhall:toggle-project-nav', toggleSpy)
 
     render(Header)
 
     expect(screen.getByRole('button', { name: /projects home/i })).toHaveTextContent('Guildhall')
-    const brandIcon = document.querySelector('.brand-mark img')
-    expect(brandIcon).toHaveAttribute('src', '/icons/genfavicon-64.png')
+    expect(document.querySelector('.brand-mark img')).toHaveAttribute('src', '/icons/genfavicon-64.png')
+    expect(document.querySelector('.brand-glyph')).not.toBeInTheDocument()
     expect(screen.getByText('Looma knit')).toBeInTheDocument()
     await screen.findByText('v0.5.1')
 
@@ -44,6 +70,29 @@ describe('Header', () => {
     expect(window.location.pathname).toBe('/')
 
     window.removeEventListener('guildhall:toggle-project-nav', toggleSpy)
+  })
+
+  it('keeps the real brand image without wrapping it in a filled app tile', () => {
+    const brandMarkBlock = headerSource.match(/\.brand-mark\s*\{(?<body>[^}]*)\}/s)?.groups?.body ?? ''
+
+    expect(headerSource).toContain('<img src="/icons/genfavicon-64.png" alt="" />')
+    expect(brandMarkBlock).not.toContain('background:')
+    expect(brandMarkBlock).not.toContain('box-shadow:')
+    expect(brandMarkBlock).not.toContain('border-radius:')
+    expect(headerSource).not.toContain('brand-glyph')
+  })
+
+  it('hides the project-nav hamburger while compact thread detail is active', async () => {
+    render(Header)
+    expect(screen.getByRole('button', { name: /open project navigation/i })).toBeInTheDocument()
+
+    window.dispatchEvent(new CustomEvent('guildhall:set-nav-context', {
+      detail: { surface: 'thread', mode: 'detail' },
+    }))
+
+    await waitFor(() => {
+      expect(screen.queryByRole('button', { name: /open project navigation/i })).toBeNull()
+    })
   })
 
   it('lets project surfaces override the centered title and tolerates version fetch failure', async () => {

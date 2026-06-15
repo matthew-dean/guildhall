@@ -3,7 +3,7 @@ import { AcceptanceCriteria, Task, TaskQueue, TaskStatus } from '../task.js'
 
 describe('TaskStatus', () => {
   it('accepts all valid statuses', () => {
-    const statuses = ['import_draft', 'exploring', 'spec_review', 'parent', 'ready', 'in_progress', 'review', 'gate_check', 'done', 'blocked']
+    const statuses = ['import_draft', 'exploring', 'spec_review', 'ready', 'in_progress', 'review', 'gate_check', 'pending_pr', 'done', 'shelved', 'blocked']
     for (const s of statuses) {
       expect(TaskStatus.parse(s)).toBe(s)
     }
@@ -155,6 +155,41 @@ describe('Task', () => {
     })
     expect(result.reviewRisk?.artifactPolicy).toBe('required_before_review')
   })
+
+  it('preserves logical work visibility and semantic delivery steps', () => {
+    const result = Task.parse({
+      ...validTask,
+      workVisibility: {
+        kind: 'supporting',
+        label: 'Planning support',
+        countInProjectTotals: true,
+      },
+      deliverySteps: [
+        {
+          id: 'runtime-proof',
+          title: 'Runtime proof',
+          kind: 'verify',
+          status: 'blocked',
+          required: true,
+          blocksCompletion: true,
+          sourceTaskId: 'task-runtime-proof',
+          evidenceChannel: 'simulator_snapshot',
+          toolLabel: 'local simulator',
+        },
+      ],
+    })
+
+    expect(result.workVisibility).toMatchObject({
+      kind: 'supporting',
+      countInProjectTotals: true,
+    })
+    expect(result.deliverySteps?.[0]).toMatchObject({
+      kind: 'verify',
+      status: 'blocked',
+      evidenceChannel: 'simulator_snapshot',
+      toolLabel: 'local simulator',
+    })
+  })
 })
 
 describe('AcceptanceCriteria', () => {
@@ -167,6 +202,8 @@ describe('AcceptanceCriteria', () => {
       })
       expect(result.verifiedBy).toBe(type)
       expect(result.met).toBe(false) // default
+      expect(result.scenario).toBe('Test criterion')
+      expect(result.expectation).toBe('Test criterion')
     }
   })
 
@@ -178,6 +215,16 @@ describe('AcceptanceCriteria', () => {
       command: 'pnpm build',
     })
     expect(result.command).toBe('pnpm build')
+  })
+
+  it('derives structured scenario and expectation from given/when/then descriptions', () => {
+    const result = AcceptanceCriteria.parse({
+      id: 'ac-1',
+      description: 'Given a selected block, when the menu opens, then the approved actions appear.',
+      verifiedBy: 'review',
+    })
+    expect(result.scenario).toBe('Given a selected block, when the menu opens')
+    expect(result.expectation).toBe('Then the approved actions appear.')
   })
 
   it('normalizes command-like verifiedBy values from agent-written criteria', () => {

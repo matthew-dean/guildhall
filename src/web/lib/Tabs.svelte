@@ -54,13 +54,13 @@
     border-radius: var(--r-1) var(--r-1) 0 0;
     color: var(--text-muted);
     padding: var(--control-pad-y) var(--control-pad-x);
-    font-size: var(--fs-2);
-    font-weight: 600;
+    font-size: var(--gh-type-size-body);
+    font-weight: var(--gh-type-weight-strong);
     font-family: inherit;
     cursor: pointer;
     border-bottom: 2px solid transparent;
     margin-bottom: -1px;
-    line-height: var(--lh-tight);
+    line-height: var(--gh-type-line-height-tight);
     min-height: var(--control-h);
   }
   .tab:hover {

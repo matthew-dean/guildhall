@@ -1,6 +1,12 @@
-# Guildhall 0.10.0 Agent Memory Bridge
+# Guildhall 0.11.0 Agent Memory Bridge
 
-**Status:** Proposed 0.10.0 milestone
+**Status:** Deferred to 0.11.0
+
+**Deferral note, 2026-06-06:** This is no longer a 0.10 target. The 0.10
+default model is delivery spine plus project contract governance. External
+agent memory exchange should wait for 0.11, after the local delivery spine,
+contract validation, and authority boundaries have settled enough to make
+outside-agent writes trustworthy.
 
 Guildhall should become the durable project memory and coordination layer for
 outside agent work. Codex, Claude Code, and similar tools can still do the
@@ -13,15 +19,17 @@ The goal is not to make Guildhall replace Codex or Claude. The goal is to make
 those tools less amnesiac when they operate on a project that already has
 Guildhall state.
 
-## Why This Is 0.10.0
+## Why This Moves To 0.11.0
 
 The 0.9.0 release is already focused on task hierarchy, proof paths, runtime
 isolation, memory, MCP visibility, and completion quality. The agent memory
-bridge depends on those surfaces becoming trustworthy. It should be a 0.10.0
-milestone because it turns that 0.9 foundation outward:
+bridge depends on those surfaces becoming trustworthy. It should move to 0.11.0
+because 0.10 now owns the local delivery and governance foundation first:
 
 - 0.9 makes Guildhall's project state reliable enough to trust.
-- 0.10 lets outside agents use that state as their operating context.
+- 0.10 makes Guildhall's own local delivery model and contract governance
+  trustworthy.
+- 0.11 should let outside agents use that state as their operating context.
 
 The Looma setup task was the first useful pressure test. A Codex worker handled
 the public GitHub/MIT/npm-readiness work while Guildhall tracked the parent
@@ -88,13 +96,13 @@ Guildhall already has pieces of this:
 - `ExternalAgentLink` now records an outside agent id, provider, linked task,
   target project path, prompt summary, status, and result summary.
 
-0.10 should unify these pieces into a first-class product loop.
+0.11 should unify these pieces into a first-class product loop.
 
 ## Data Model
 
 ### ExternalAgentSession
 
-`ExternalAgentLink` is a good seed, but 0.10 should promote the concept into an
+`ExternalAgentLink` is a good seed, but 0.11 should promote the concept into an
 external session model:
 
 - `id`
@@ -299,7 +307,7 @@ what happened.
 - Missing MCP or partial Guildhall setup degrades cleanly with an explicit
   fallback message.
 
-## 0.10.0 Task Breakdown
+## 0.11.0 Task Breakdown
 
 - Define `ExternalAgentSession` and migrate/adapt `ExternalAgentLink`.
 - Add session/evidence store tests.
@@ -310,6 +318,22 @@ what happened.
 - Add proof-path integration so external evidence is treated as first-class
   completion evidence.
 - Add live bridge smoke test using a small external Codex task.
+
+### First Bounded Memory-Exchange Slice
+
+- [x] Add a provider-neutral external memory bridge record with explicit
+  scope/type, freshness, confidence/risk, and required evidence refs.
+- [x] Persist explicit import/export and link-style bridge records in
+  `.guildhall/external-agent-memory-bridge.json`.
+- [x] Keep imported external memory reviewable before it shapes local execution
+  by requiring an explicit review step before promotion into ordinary effective
+  memory.
+- [x] Expose the bridge through MCP/CLI/UI flows after the runtime contract has
+  enough release-proof coverage. The bounded 0.10 record path exposes reviewable
+  bridge records through MCP and CLI: clients can list/import/review/reject
+  records, and only review promotes a record into ordinary effective memory.
+  UI exposure is intentionally left to the broader external-session/task-surface
+  work instead of adding a small one-off Settings surface for this slice.
 
 ## Open Questions
 

@@ -9,9 +9,12 @@ import {
   createBugReportTask,
   parseStackTraceTopFile,
 } from '../intake.js'
+import { registerContractSurface } from '../contract-surfaces.js'
 import { TaskQueue } from '@guildhall/core'
 import { raiseEscalation } from '@guildhall/tools'
-import { getProjectStateDir, getProjectTranscriptPath } from '@guildhall/sessions'
+import { getProjectStateDir, getProjectSystemStatePathFromMemoryDir, getProjectTranscriptPath } from '@guildhall/sessions'
+import { listOwnerInputRequests } from '../owner-input-store.js'
+import { buildEffectiveTask } from '../effective-task.js'
 
 // ---------------------------------------------------------------------------
 // FR-12 exploratory task intake
@@ -32,8 +35,9 @@ beforeEach(async () => {
   process.env.GUILDHALL_DATA_DIR = dataDir
   memoryDir = getProjectStateDir(tmpDir)
   await fs.mkdir(memoryDir, { recursive: true })
-  tasksPath = path.join(memoryDir, 'TASKS.json')
+  tasksPath = getProjectSystemStatePathFromMemoryDir(memoryDir, 'TASKS.json')
   // Bootstrap seeds TASKS.json as a bare `[]`, so test that path directly too.
+  await fs.mkdir(path.dirname(tasksPath), { recursive: true })
   await fs.writeFile(tasksPath, '[]', 'utf-8')
 })
 
@@ -45,7 +49,14 @@ afterEach(async () => {
 
 async function readQueue(): Promise<TaskQueue> {
   const raw = await fs.readFile(tasksPath, 'utf-8')
-  return TaskQueue.parse(JSON.parse(raw))
+  const queue = TaskQueue.parse(JSON.parse(raw))
+  return {
+    ...queue,
+    tasks: await Promise.all(queue.tasks.map(async task => {
+      const projectRoot = path.isAbsolute(task.projectPath) ? task.projectPath : tmpDir
+      return buildEffectiveTask(projectRoot, task) as unknown as typeof task
+    })),
+  }
 }
 
 function buildableSpec(extra = ''): string {
@@ -93,7 +104,7 @@ describe('createExploringTask', () => {
   })
 
   it('attaches an automatic pressure-test summary to small tasks', async () => {
-    await createExploringTask({
+    const result = await createExploringTask({
       memoryDir,
       ask: 'Update the README install command.',
       domain: 'docs',
@@ -117,6 +128,10 @@ describe('createExploringTask', () => {
     expect(queue.tasks[0]?.requestIntake?.pressureTestSummary?.ownerQuestionPolicy).toContain(
       'Only ask when the answer could change product intent',
     )
+    expect(queue.tasks[0]?.requestIntake?.assumptions).toEqual(expect.arrayContaining([
+      'Routine implementation details should be inferred from repo evidence unless owner judgment would materially change the work.',
+    ]))
+    expect(queue.tasks[0]?.requestIntake?.evidenceRefs).toEqual(['request:title', 'request:ask'])
   })
 
   it('adds design-quality pressure to UI tasks before implementation', async () => {
@@ -141,6 +156,10 @@ describe('createExploringTask', () => {
       status: 'system-check',
       reason: expect.stringContaining('segmented control'),
     })
+    expect(task.requestIntake?.assumptions).toEqual(expect.arrayContaining([
+      'UI quality, interaction semantics, and visual proof are part of the acceptance bar for this request.',
+    ]))
+    expect(task.requestIntake?.evidenceRefs).toEqual(['request:title', 'request:ask'])
   })
 
   it('handles a bare-array TASKS.json (bootstrap legacy format)', async () => {
@@ -207,7 +226,7 @@ describe('createExploringTask', () => {
   })
 
   it('classifies ambiguous policy requests and asks whether the user wants spec or implementation', async () => {
-    await createExploringTask({
+    const result = await createExploringTask({
       memoryDir,
       ask: 'We should have a system-wide policy of how much FLL charges on overhead for maintenance fees etc.',
       domain: 'policy',
@@ -220,6 +239,11 @@ describe('createExploringTask', () => {
     expect(task.requestIntake).toMatchObject({
       intent: 'ambiguous_spec_or_implementation',
       recommendedNextAction: 'ask_clarifying_question',
+      ownerDecisionNeeded: expect.stringContaining('policy/spec'),
+      whyOwnerDecisionMatters: expect.stringContaining('parent feature plan'),
+      missingInformation: [
+        'Whether the owner wants policy drafting only or also wants linked implementation planning/work.',
+      ],
       pressureTestSummary: {
         systemOwned: true,
         degree: 'guided',
@@ -231,9 +255,12 @@ describe('createExploringTask', () => {
       'implementation',
       'verification',
     ])
-    expect(task.openQuestions?.[0]).toMatchObject({
-      kind: 'choice',
-      subject: 'Policy request scope',
+    expect(task.openQuestions ?? []).toEqual([])
+    const ownerInputRequests = await listOwnerInputRequests(tmpDir)
+    expect(ownerInputRequests).toHaveLength(1)
+    expect(ownerInputRequests[0]).toMatchObject({
+      source: { kind: 'request_intake', intakeId: result.taskId, questionId: 'policy-request-scope' },
+      objective: { kind: 'new_request', label: 'Clarify policy request scope' },
       prompt: expect.stringContaining('draft the FLL overhead policy first'),
       choices: [
         'Draft the policy/spec first',
@@ -241,6 +268,7 @@ describe('createExploringTask', () => {
         'Apply the policy now',
       ],
     })
+    expect(task.requestIntake?.evidenceRefs).toEqual(['request:title', 'request:ask'])
   })
 
   it('does not reuse the FLL policy question for concrete app specs', async () => {
@@ -264,6 +292,7 @@ describe('createExploringTask', () => {
       intent: 'implementation',
       recommendedNextAction: 'proceed_to_implementation_spec',
     })
+    expect(task.requestIntake?.missingInformation).toEqual([])
     expect(task.openQuestions ?? []).toEqual([])
     expect(JSON.stringify(task.requestIntake)).not.toContain('FLL overhead')
   })
@@ -290,6 +319,8 @@ describe('createExploringTask', () => {
 
 describe('approveSpec', () => {
   beforeEach(async () => {
+    await fs.mkdir(memoryDir, { recursive: true })
+    await fs.writeFile(tasksPath, '[]', 'utf-8')
     // Create and then attach a spec
     await createExploringTask({
       memoryDir,
@@ -334,6 +365,75 @@ describe('approveSpec', () => {
     expect(updated.tasks[0]!.blockerPlans?.length).toBeGreaterThan(0)
     expect(updated.tasks[0]!.contextBudget?.fitsInOneWorkerBrief).toBe(true)
     expect(updated.tasks[0]!.decomposition?.action).toBe('keep')
+  })
+
+  it('generates contract-surface review packets from structured spec deltas during approval', async () => {
+    await registerContractSurface({
+      id: 'design-system.tokens-and-variants',
+      label: 'Design tokens and variants',
+      kind: 'design_system',
+      owningProject: { id: 'fixture-app', label: 'Fixture App', path: tmpDir },
+      authority: 'shared',
+      scope: 'project',
+      sourceRefs: [{ kind: 'design_tokens', path: '.guildhall/design-system.yaml', summary: 'Approved token authority.' }],
+      consumerRefs: [{ id: 'settings-panel', label: 'Settings panel' }],
+      invariants: [{
+        id: 'approved-variant-axis',
+        label: 'Approved variant axis',
+        rule: 'Interactive controls use approved variant axes instead of local synonyms.',
+        proofObligations: ['Run component API tests for variant names.'],
+      }],
+      decisions: [],
+      createdBy: 'test',
+      now: '2026-06-02T12:00:00.000Z',
+    })
+    const queue = await readQueue()
+    const task = queue.tasks[0]!
+    task.structuredSpec = {
+      whatThisIs: 'A design-system variant update.',
+      problemContext: 'Two panels need the same low-emphasis action treatment.',
+      goals: ['Extend the shared variant vocabulary.'],
+      nonGoals: ['Do not add local button classes.'],
+      proposedDesign: 'Add the variant through the shared button primitive.',
+      keyDecisions: ['Keep styling owned by the design system.'],
+      contractSurfaceDeltas: [{
+        surfaceId: 'design-system.tokens-and-variants',
+        relation: 'amends',
+        summary: 'Adds a subdued action variant to the shared control vocabulary.',
+        invariantRefs: ['approved-variant-axis'],
+        proofObligations: ['Add a Button variant contract test.'],
+      }],
+      acceptanceCriteria: [{ scenario: 'Variant is used', expectation: 'The shared primitive owns it', verificationMode: 'automated' }],
+      verification: ['pnpm vitest run src/web/lib/__tests__/Button.css-contract.test.ts'],
+      completionBoundary: {
+        productOutcome: 'Design-system consumers share one variant vocabulary.',
+        whatGuildhallCanCompleteInCode: 'Update the shared primitive and tests.',
+        externalDependencies: 'None.',
+        ownerOnlySetup: 'None.',
+        verificationEnvironment: 'Local unit tests.',
+        whatCountsAsDone: 'The variant contract is tested.',
+        whatMustBeSplitOrBlocked: 'Nothing.',
+      },
+    }
+    await fs.writeFile(tasksPath, JSON.stringify(queue, null, 2), 'utf-8')
+
+    const result = await approveSpec({ memoryDir, taskId: task.id })
+
+    expect(result.success).toBe(true)
+    const updated = await readQueue()
+    expect(updated.tasks[0]?.contractSurfaceReviewPackets).toHaveLength(1)
+    expect(updated.tasks[0]?.contractSurfaceReviewPackets?.[0]).toMatchObject({
+      surface: {
+        id: 'design-system.tokens-and-variants',
+        label: 'Design tokens and variants',
+      },
+      currentSpecRef: 'task:task-001',
+      currentDelta: {
+        summary: 'Adds a subdued action variant to the shared control vocabulary.',
+      },
+    })
+    expect(updated.tasks[0]?.contractSurfaceReviewPackets?.[0]?.proofObligations).toContain('Add a Button variant contract test.')
+    expect(updated.tasks[0]?.notes.at(-1)?.content).toContain('Generated 1 contract-surface review packet')
   })
 
   it('approves specs where Completion Boundary is the final section', async () => {
@@ -469,10 +569,10 @@ describe('approveSpec', () => {
     expect(result.newStatus).toBe('ready')
   })
 
-  it('splits a split-required spec into a parent task and child tasks when approved', async () => {
+  it('splits a split-required spec into containing work and child tasks when approved', async () => {
     const queue = await readQueue()
     const parent = queue.tasks[0]!
-    parent.parentGoalId = 'goal-task-001'
+    parent.businessEnvelope = { goalId: 'goal-task-001' }
     parent.sizePlan = {
       taskId: 'task-001',
       score: 8,
@@ -503,9 +603,10 @@ describe('approveSpec', () => {
     const result = await approveSpec({ memoryDir, taskId: 'task-001' })
 
     expect(result.success).toBe(true)
-    expect(result.newStatus).toBe('parent')
+    expect(result.newStatus).toBe('ready')
     const updated = await readQueue()
-    expect(updated.tasks[0]!.status).toBe('parent')
+    expect(updated.tasks[0]!.status).toBe('ready')
+    expect(updated.tasks[0]!.taskReadiness?.recommendation).toBe('split')
     expect(updated.tasks.map(task => task.title)).toEqual([
       'Add ghost button',
       'Implement the billing settings workflow',
@@ -515,13 +616,76 @@ describe('approveSpec', () => {
       'task-001-split-implement-the-billing-settings-workflow',
       'task-001-split-add-the-admin-subscription-api-contract',
     ])
+    expect(updated.tasks[0]!.hierarchy?.childIds).toEqual([
+      'task-001-split-implement-the-billing-settings-workflow',
+      'task-001-split-add-the-admin-subscription-api-contract',
+    ])
     expect(updated.tasks[1]).toMatchObject({
       status: 'exploring',
-      parentGoalId: 'goal-task-001',
+      businessEnvelope: { goalId: 'goal-task-001' },
+      hierarchy: {
+        parentId: 'task-001',
+        order: 0,
+        childIds: [],
+      },
       origination: 'system',
       proposedBy: 'task-sizing',
     })
     expect(updated.tasks[2]!.dependsOn).toEqual(['task-001-split-implement-the-billing-settings-workflow'])
+  })
+
+  it('splits a split-recommended spec into containing work and child tasks when approved', async () => {
+    const queue = await readQueue()
+    const parent = queue.tasks[0]!
+    parent.sizePlan = {
+      taskId: 'task-001',
+      score: 5,
+      band: 'large',
+      action: 'split_recommended',
+      factors: [],
+      recommendedChildren: [
+        {
+          title: 'Component implementation',
+          reason: 'Ship the component implementation first.',
+          suggestedDomain: 'frontend',
+          dependsOn: [],
+        },
+        {
+          title: 'Storybook story',
+          reason: 'Add visual proof after the implementation exists.',
+          suggestedDomain: 'frontend',
+          dependsOn: ['Component implementation'],
+        },
+      ],
+      reviewBudgetHint: 'thorough',
+      reasons: ['Task size score: 5.'],
+      createdAt: '2026-06-05T12:00:00.000Z',
+      createdBy: 'task-sizing',
+    }
+    await fs.writeFile(tasksPath, JSON.stringify(queue, null, 2), 'utf-8')
+
+    const result = await approveSpec({ memoryDir, taskId: 'task-001' })
+
+    expect(result.success).toBe(true)
+    expect(result.newStatus).toBe('ready')
+    const updated = await readQueue()
+    expect(updated.tasks[0]!.status).toBe('ready')
+    expect(updated.tasks[0]!.taskReadiness?.recommendation).toBe('split')
+    expect(updated.tasks[0]!.hierarchy?.childIds).toEqual([
+      'task-001-split-component-implementation',
+      'task-001-split-storybook-story',
+    ])
+    expect(updated.tasks[1]).toMatchObject({
+      status: 'exploring',
+      hierarchy: {
+        parentId: 'task-001',
+        order: 0,
+        childIds: [],
+      },
+      origination: 'system',
+      proposedBy: 'task-sizing',
+    })
+    expect(updated.tasks[2]!.dependsOn).toEqual(['task-001-split-component-implementation'])
   })
 
   it('backfills acceptance criteria from approved markdown specs before blueprint sanity', async () => {
@@ -623,6 +787,68 @@ describe('approveSpec', () => {
     expect(updated.tasks[0]?.sizePlan?.action).toBe('proceed_with_warning')
   })
 
+  it('splits broad deterministic recovery specs instead of approving them as one runnable task', async () => {
+    const queue = await readQueue()
+    const task = queue.tasks[0]!
+    task.id = 'task-import-twwvys'
+    task.title = 'Finish the Knit primitive replacement wave beyond the already-migrated toast, dialog base, toolbar button, and tree menu'
+    task.description = 'looma/PROJECT_STATE.md: 1. Finish the Knit primitive replacement wave beyond the already-migrated toast, dialog base, toolbar button, and tree menus.'
+    task.domain = 'looma'
+    task.projectPath = tmpDir
+    task.status = 'spec_review'
+    task.origination = 'human'
+    task.productBrief = {
+      userJob: 'I want Finish the Knit primitive replacement wave beyond the already-migrated toast, dialog base, toolbar button, and tree menu turned into concrete project work using the evidence and owner decisions already recorded.',
+      successMetric: 'Finish the Knit primitive replacement wave beyond the already-migrated toast, dialog base, toolbar button, and tree menu has a reviewable spec, acceptance criteria, and a clear completion boundary before implementation starts.',
+      antiPatterns: [],
+      authoredBy: 'coordinator-recovery',
+      authoredAt: '2026-06-12T20:43:48.886Z',
+    }
+    task.notes = [{
+      agentId: 'coordinator-recovery',
+      role: 'system',
+      content: 'Guildhall wrote a deterministic recovery spec seed from the current task evidence before redispatching the spec lane, so the task has durable progress instead of returning to a read-only shaping loop.',
+      timestamp: '2026-06-12T20:43:48.886Z',
+    }]
+    task.spec = [
+      '## Summary',
+      'Build Finish the Knit primitive replacement wave beyond the already-migrated toast, dialog base, toolbar button, and tree menu from the current project evidence, preserving the source intent: 1. Finish the Knit primitive replacement wave beyond the already-migrated toast, dialog base, toolbar button, and tree menus. from looma/PROJECT_STATE.md',
+      '## Acceptance Criteria',
+      '1. Given the existing project conventions and source evidence, when Finish the Knit primitive replacement wave beyond the already-migrated toast, dialog base, toolbar button, and tree menu is implemented, then the feature appears in the appropriate repo surface without introducing a one-off parallel pattern.',
+      '## Completion Boundary',
+      'Product outcome: A user can use Finish the Knit primitive replacement wave beyond the already-migrated toast, dialog base, toolbar button, and tree menu in the intended project surface.',
+      'What Guildhall can complete in code: Implement the source intent from the imported planning note.',
+      'External dependencies: None.',
+      'Owner-only setup: None.',
+      'Verification environment: Local repo checks and browser proof.',
+      'What counts as done: Finish the Knit primitive replacement wave beyond the already-migrated toast, dialog base, toolbar button, and tree menu is implemented.',
+      'What must be split or blocked: Nothing to split.',
+    ].join('\n')
+    task.acceptanceCriteria = []
+    delete task.sizePlan
+    await fs.writeFile(tasksPath, JSON.stringify(queue, null, 2), 'utf-8')
+
+    const approved = await approveSpec({ memoryDir, taskId: task.id })
+
+    expect(approved.success).toBe(true)
+    const updated = await readQueue()
+    const parent = updated.tasks.find(candidate => candidate.id === task.id)
+    expect(parent?.status).toBe('ready')
+    expect(parent?.taskReadiness?.recommendation).toBe('split')
+    expect(parent?.sizePlan?.action).toBe('split_required')
+    expect(parent?.hierarchy?.childIds).toEqual([
+      'task-import-twwvys-split-audit-the-remaining-replacement-scope',
+      'task-import-twwvys-split-implement-the-first-independently-verifiable-replacement',
+      'task-import-twwvys-split-verify-and-update-the-migration-record',
+    ])
+    expect(updated.tasks.map(candidate => candidate.title)).toEqual([
+      task.title,
+      'Audit the remaining replacement scope',
+      'Implement the first independently verifiable replacement',
+      'Verify and update the migration record',
+    ])
+  })
+
   it('records an approval note on the task when provided', async () => {
     await approveSpec({
       memoryDir,
@@ -654,7 +880,7 @@ describe('approveSpec', () => {
   it('describes split approval in plain language in the transcript', async () => {
     const queue = await readQueue()
     const parent = queue.tasks[0]!
-    parent.parentGoalId = 'goal-task-001'
+    parent.businessEnvelope = { goalId: 'goal-task-001' }
     parent.sizePlan = {
       taskId: 'task-001',
       score: 8,

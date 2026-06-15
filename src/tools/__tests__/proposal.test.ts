@@ -83,7 +83,7 @@ describe('proposeTask', () => {
     expect(second.error).toMatch(/already exists/)
   })
 
-  it('carries parentGoalId when provided', async () => {
+  it('carries businessEnvelope when provided', async () => {
     await proposeTask({
       tasksPath,
       proposal: {
@@ -94,11 +94,11 @@ describe('proposeTask', () => {
         projectPath: '/p',
         proposedBy: 'a',
         rationale: 'r',
-        parentGoalId: 'goal-platform-resilience',
+        businessEnvelope: { goalId: 'goal-platform-resilience' },
       },
     })
     const { queue } = await readTasks({ tasksPath })
-    expect(queue!.tasks[0]!.parentGoalId).toBe('goal-platform-resilience')
+    expect(queue!.tasks[0]!.businessEnvelope?.goalId).toBe('goal-platform-resilience')
   })
 })
 

@@ -8,11 +8,15 @@
   to open the global /providers page.
 -->
 <script lang="ts">
-  import Card from '../../lib/Card.svelte'
-  import Stack from '../../lib/Stack.svelte'
   import Button from '../../lib/Button.svelte'
-  import Row from '../../lib/Row.svelte'
+  import Card from '../../lib/ui-compat/Card.svelte'
+  import CardList from '../../lib/CardList.svelte'
+  import CardListItem from '../../lib/CardListItem.svelte'
   import Chip from '../../lib/Chip.svelte'
+  import Row from '../../lib/Row.svelte'
+  import Select from '../../lib/Select.svelte'
+  import Stack from '../../lib/Stack.svelte'
+  import UtilityPanel from '../../lib/UtilityPanel.svelte'
   import { nav } from '../../lib/nav.svelte.js'
   import { projectFetch } from '../../lib/project-routes.js'
 
@@ -104,7 +108,7 @@
       const r = await projectFetch('/api/setup/providers/config', {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ preferredProvider: preferred }),
+        body: JSON.stringify({ scope: 'project', preferredProvider: preferred }),
       })
       const j = await r.json()
       if (j.error) return flash(j.error, true)
@@ -156,16 +160,18 @@
     {:else if !providers}
       <p class="muted">Loading...</p>
     {:else}
-      <div class="list">
+      <CardList className="list">
         {#each ORDER.filter(k => providers?.[k]) as key (key)}
           {@const meta = providers[key]}
           {@const disabled = !meta.detected}
-          <button
-            type="button"
-            class="row"
-            class:selected={preferred === key}
-            class:disabled
-            {disabled}
+          <CardListItem
+            as="button"
+            className="provider-row"
+            selected={preferred === key}
+            disabled={disabled}
+            tone={preferred === key ? 'accent' : 'neutral'}
+            railTone={preferred === key ? 'accent' : disabled ? 'warn' : null}
+            railStrength={preferred === key ? 'strong' : 'subtle'}
             onclick={() => (preferred = key)}
           >
             <span class="radio" aria-hidden="true"></span>
@@ -182,9 +188,9 @@
             {:else}
               <Chip label="unavailable" tone="warn" />
             {/if}
-          </button>
+          </CardListItem>
         {/each}
-      </div>
+      </CardList>
 
       <Row justify="end" gap="2" align="center">
         {#if status}
@@ -204,13 +210,13 @@
       Use the global model defaults unless this project needs something different.
     </p>
     {#if models?.missingModels?.length}
-      <div class="model-warning" role="status">
+      <UtilityPanel as="div" className="model-warning" tone="warn" railStrength="strong" role="status">
         <strong>Model not loaded.</strong>
         <span>
           The configured local server reports {models.loadedModels.length ? models.loadedModels.join(', ') : 'no loaded models'}.
           Load {models.missingModels.join(', ')} or override this project to a loaded model.
         </span>
-      </div>
+      </UtilityPanel>
     {/if}
 
     {#if modelsError}
@@ -218,44 +224,44 @@
     {:else if !models}
       <p class="muted">Loading...</p>
     {:else}
-      <div class="model-list">
+      <CardList className="model-list">
         {#each MODEL_ROLES as role (role.id)}
           {@const overridden = Boolean(models.projectModels[role.id])}
           {@const effective = models.effectiveModels[role.id] ?? models.globalModels[role.id] ?? ''}
-          <div class="model-row">
+          <CardListItem as="div" className="model-row" tone={overridden ? 'accent' : 'neutral'}>
             <div class="model-copy">
               <span class="label">{role.label}</span>
               <span class="detail">
                 {overridden ? 'Project override' : `Global default${models.globalModels[role.id] ? `: ${models.globalModels[role.id]}` : ''}`}
               </span>
             </div>
-            <select
-              aria-label={`${role.label} scope`}
+            <Select
+              ariaLabel={`${role.label} scope`}
               value={overridden ? 'project' : 'global-default'}
-              onchange={(e) => {
-                const scope = e.currentTarget.value as 'project' | 'global-default'
-                void saveModel(role.id, scope, scope === 'project' ? effective : undefined)
+              options={[
+                { value: 'global-default', label: 'Use global default' },
+                { value: 'project', label: 'Override for this project' },
+              ]}
+              onchange={(scope) => {
+                const nextScope = scope as 'project' | 'global-default'
+                void saveModel(role.id, nextScope, nextScope === 'project' ? effective : undefined)
               }}
-            >
-              <option value="global-default">Use global default</option>
-              <option value="project">Override for this project</option>
-            </select>
-            <select
-              aria-label={`${role.label} model`}
+            />
+            <Select
+              ariaLabel={`${role.label} model`}
               disabled={!overridden}
               value={effective}
-              onchange={(e) => void saveModel(role.id, 'project', e.currentTarget.value)}
-            >
-              {#each models.catalog as item (item.id)}
-                <option value={item.id}>{item.id}</option>
-              {/each}
-              {#if effective && !models.catalog.some(item => item.id === effective)}
-                <option value={effective}>{effective}</option>
-              {/if}
-            </select>
-          </div>
+              options={[
+                ...models.catalog.map(item => ({ value: item.id, label: item.id })),
+                ...(effective && !models.catalog.some(item => item.id === effective)
+                  ? [{ value: effective, label: effective }]
+                  : []),
+              ]}
+              onchange={(value) => void saveModel(role.id, 'project', value)}
+            />
+          </CardListItem>
         {/each}
-      </div>
+      </CardList>
     {/if}
   </Stack>
 </Card>
@@ -264,12 +270,12 @@
 <style>
   .muted {
     color: var(--text-muted);
-    font-size: var(--fs-2);
-    line-height: var(--lh-body);
+    font-size: var(--gh-type-size-body);
+    line-height: var(--gh-type-line-height-body);
   }
   .error {
     color: var(--danger);
-    font-size: var(--fs-1);
+    font-size: var(--gh-type-size-meta);
   }
   .inline-link {
     background: transparent;
@@ -280,35 +286,19 @@
     cursor: pointer;
     text-decoration: underline;
   }
-  .list {
+  :global(.list) {
     display: flex;
     flex-direction: column;
     gap: var(--s-2);
   }
-  .row {
+  :global(.provider-row) {
     display: flex;
     align-items: center;
     gap: var(--s-3);
-    background: var(--bg);
-    border: 1px solid var(--border);
-    border-radius: var(--r-2);
-    padding: var(--s-3);
-    cursor: pointer;
     text-align: left;
     font: inherit;
     color: var(--text);
     width: 100%;
-  }
-  .row:hover:not(.disabled) {
-    border-color: var(--accent);
-  }
-  .row.selected {
-    border-color: var(--accent);
-    background: color-mix(in srgb, var(--accent) 6%, var(--bg));
-  }
-  .row.disabled {
-    opacity: 0.55;
-    cursor: not-allowed;
   }
   .radio {
     width: 14px;
@@ -317,7 +307,7 @@
     border: 2px solid var(--border);
     flex-shrink: 0;
   }
-  .row.selected .radio {
+  :global(.provider-row.is-selected) .radio {
     border-color: var(--accent);
     background: radial-gradient(circle, var(--accent) 35%, transparent 40%);
   }
@@ -329,35 +319,31 @@
     min-width: 0;
   }
   .label {
-    font-size: var(--fs-2);
-    font-weight: 600;
+    font-size: var(--gh-type-size-body);
+    font-weight: var(--gh-type-weight-strong);
   }
   .detail {
-    font-size: var(--fs-1);
+    font-size: var(--gh-type-size-meta);
     color: var(--text-muted);
-    line-height: var(--lh-body);
+    line-height: var(--gh-type-line-height-body);
   }
   .status {
-    font-size: var(--fs-1);
+    font-size: var(--gh-type-size-meta);
     color: var(--accent-2);
   }
   .status.error {
     color: var(--danger);
   }
-  .model-list {
+  :global(.model-list) {
     display: flex;
     flex-direction: column;
     gap: var(--s-2);
   }
-  .model-row {
+  :global(.model-row) {
     display: grid;
     grid-template-columns: minmax(150px, 1fr) minmax(150px, 190px) minmax(220px, 1.2fr);
     gap: var(--s-2);
     align-items: center;
-    padding: var(--s-3);
-    border: 1px solid var(--border);
-    border-radius: var(--r-2);
-    background: var(--bg);
   }
   .model-copy {
     display: flex;
@@ -365,33 +351,19 @@
     gap: 2px;
     min-width: 0;
   }
-  select {
-    width: 100%;
+  :global(.model-row) :global(.select) {
     min-width: 0;
-    padding: var(--s-2);
-    border-radius: var(--r-1);
-    border: 1px solid var(--border);
-    background: var(--bg-raised);
-    color: var(--text);
-    font: inherit;
   }
-  select:disabled {
-    opacity: 0.55;
-  }
-  .model-warning {
+  :global(.model-warning) {
     display: flex;
     flex-direction: column;
     gap: 2px;
-    padding: var(--s-3);
-    border: 1px solid var(--warn);
-    border-radius: var(--r-2);
     color: var(--text);
-    background: color-mix(in srgb, var(--warn) 14%, transparent);
-    font-size: var(--fs-1);
-    line-height: var(--lh-body);
+    font-size: var(--gh-type-size-meta);
+    line-height: var(--gh-type-line-height-body);
   }
   @media (max-width: 780px) {
-    .model-row {
+    :global(.model-row) {
       grid-template-columns: 1fr;
     }
   }

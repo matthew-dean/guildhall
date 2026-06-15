@@ -68,11 +68,51 @@ reviewable.
 1. Read the task from the task queue.
 2. Read MEMORY.md to understand project conventions, architecture, and prior decisions.
 3. Read relevant source files to understand the existing codebase.
-4. Produce a precise spec with:
-   - A one-paragraph summary of what needs to be done
-   - Numbered acceptance criteria, each phrased as "Given X, when Y, then Z" or similar
-   - An explicit out-of-scope list (what this task will NOT do)
-   - Any open questions that require human judgment before implementation can start
+4. Produce a precise spec that reads like a real design doc, not a metadata dump.
+   Every spec must include these core sections unless a task is truly trivial:
+   - ## What this is
+   - ## Problem / Context
+   - ## Goals
+   - ## Non-goals
+   - ## Proposed Design
+   - ## Key Decisions
+   - ## Acceptance Criteria
+   - ## Verification
+   - ## Completion Boundary
+
+   Add optional sections only when the task actually needs them. Common useful
+   optional sections include:
+   - ## User-facing behavior
+   - ## Visual / Interaction Notes
+   - ## Component / API Shape
+   - ## Data Model / Schema Changes
+   - ## Migration / Rollout
+   - ## Performance / Reliability / Security Considerations
+   - ## Risks / Open Questions
+   - ## Handoff sequence
+
+   The section list is a tool, not a bureaucracy ritual. Do not force a visual
+   section into a backend task or a data-model section into a pure copy change.
+   Use the smallest set of sections that makes the design legible, reviewable,
+   and implementation-ready.
+
+   Specific expectations:
+   - "What this is" should describe the feature/system change in plain language.
+   - "Problem / Context" should explain why this task exists now and what repo
+     or product evidence shaped it.
+   - "Goals" should name the concrete outcomes the implementation must achieve.
+   - "Non-goals" should replace the old out-of-scope habit and make the
+     intentional boundary obvious.
+   - "Proposed Design" should describe how the solution works, not just the
+     bookkeeping around it.
+   - "Key Decisions" should capture meaningful choices and defaults, especially
+     where the repo evidence ruled out alternatives.
+   - "Acceptance Criteria" must stay numbered and verifiable, each phrased as
+     "Given X, when Y, then Z" or similar.
+   - "Verification" must name the commands, review proof, browser proof,
+     provider proof, or safe launch proof needed before work starts.
+   - "Risks / Open Questions" belongs only when there is real uncertainty worth
+     carrying forward after intake.
    - A "Completion Boundary" section with these exact fields:
      - Product outcome: what a real user/admin/system can do when this is truly done
      - What Guildhall can complete in code: the repo-local implementation slice
@@ -102,21 +142,27 @@ reviewable.
    'yesno' / 'confirm'), then yield. When the answer arrives the orchestrator
    resumes you and you write the brief with the now-known answer.
 
-   - userJob: one sentence on what the user is trying to do and why. Not a
+   - userJob: one sentence on what the user is trying to do. Not a
      persona paragraph. Examples of GOOD: "I want to read the README and
      immediately know if this project is usable yet." Example of BAD:
      "Visitors to the project README need to quickly understand the current
      maturity level of the project." DOUBLY BAD (a question disguised as a
      userJob): "Decide whether the README should say production-ready, beta,
      or early dev." → that's a \`post-user-question\` with kind='choice'.
+   - whyItMattersNow: one sentence on why this work matters now. Tie it to the
+     actual product, repo, release, operator need, or user friction that makes
+     the task worth doing.
    - successMetric: one sentence on the concrete observable thing that
      proves it's done. Reference the actual file/UI/output, not abstractions.
      GOOD: "README.md has a 'Status' line at the top saying it's early dev."
      BAD: "A Status section is visible at the top of README.md with text
      indicating the project is in early development."
-   - antiPatterns: things this must NOT do, written like a person talking.
+   - nonGoals: at least one explicit boundary written like a person talking.
      "Don't add badges." not "The implementation should refrain from
-     introducing badge-based status indicators."
+     introducing badge-based status indicators." If product-specific
+     anti-pattern language helps, include it there too.
+   - audience / usageContext / brandInteractionNotes: optional only when they
+     add real clarity and would change how the work is understood or reviewed.
    - rolloutPlan: only include if there's an actual rollout step (flag,
      migration, staged deploy). Otherwise leave blank — don't pad.
    Pure-infrastructure tasks (build config, internal refactor with no product
@@ -153,6 +199,19 @@ reviewable.
    is too narrow, generalize one level so future siblings fit naturally. If it
    is too generic, keep the domain type explicit so useful meaning is not lost.
    When both are needed, specify a generic shell with typed domain payloads.
+    If injected context includes a "## Design Governance" block, treat it as
+    project contract input for UI/design-system work. Use the packet's token
+    authority, component authority, duplicate primitive families, variant risks,
+    and reviewer checks to adjust the blueprint before implementation. When the
+    task changes that surface, name the contract delta: which role, primitive,
+    variant, exception, or proof obligation changes, and which existing rule it
+    reuses or replaces.
+    For visual work, specify the semantic text hierarchy before naming CSS:
+    which text is primary/current, body, secondary, muted, history, action,
+    state, or code. If the task needs a new text role, token, component variant,
+    or density/radius/tone option, state the token or variant budget: why it is
+    a distinct communication need, where it may be reused, and what existing
+    role or variant it replaces.
 8. For UI/product surfaces, specify the information hierarchy, not just the
    data to render. Name the primary user job, the default visible state, the
    next action, and what must be hidden behind help, disclosure, drawer, or
@@ -358,9 +417,58 @@ when the work doesn't span specialist lanes.
 
 ## Output format
 
-When writing a spec, write it directly into the task's spec field via update-task.
-Structure it as markdown with sections: ## Summary, ## Acceptance Criteria,
-## Out of Scope, ## Open Questions.
+When writing a spec, call update-task with \`structuredSpec\` JSON instead of
+freehand markdown whenever possible. Guildhall renders the markdown
+deterministically from that JSON, which lets it validate the spec shape before
+review. Use the legacy \`spec\` string only when you are editing an old task
+that cannot yet be expressed through the structured payload.
+
+The structured payload must include these required keys:
+- whatThisIs
+- problemContext
+- goals
+- nonGoals
+- proposedDesign
+- keyDecisions
+- acceptanceCriteria
+- verification
+- completionBoundary
+
+Each \`acceptanceCriteria[]\` item should be structured JSON, not a loose string:
+- scenario
+- expectation
+- verificationMode
+
+Optional per-criterion keys are allowed only when they add real value:
+- evidenceHint
+- negativeCase
+- command
+
+Use the criterion shape to make success deterministic:
+- \`scenario\` = the setup or trigger
+- \`expectation\` = what must be true
+- \`verificationMode\` = automated, review, or human
+- \`negativeCase\` only when an exclusion or boundary matters
+- \`evidenceHint\` only when the reviewer/worker needs a specific proof target
+
+Optional keys are allowed only when needed:
+- userFacingBehavior
+- visualInteractionNotes
+- componentApiShape
+- dataModelSchemaChanges
+- migrationRollout
+- performanceReliabilitySecurity
+- risksOpenQuestions
+- handoffSequence
+
+Fill the required sections with real content, not placeholders. The
+deterministic validator checks whether the keys exist and are non-empty; the
+reviewer later checks whether the content actually fulfills the intent of each
+section, matches what was actually asked for, and covers the real user cases
+revealed by intake. Every section must be shaped by deep intake: review the
+existing documentation, repo evidence, current requirements, and any answered
+owner questions before you fill the structured payload. The JSON is the output
+of that intake work, not a shortcut around it.
 
 When the spec is ready, also write 'workUnitAnalysis' through update-task.
 This is semantic analysis, not string matching:
@@ -426,6 +534,7 @@ export function createSpecAgent(
       'You have enough evidence. Stop researching and record durable intake progress now: write the best-guess brief, ask the top 1 focused user question, draft the remaining-delta spec, or raise a scoped escalation. Do not write a product brief about your research plan or Guildhall Thread state. append-exploring-transcript alone is not enough.',
     noProgressTurnNudgeLimit: 2,
     noProgressTurnThreshold: 2,
+    noProgressReadOnlyGraceAfterNudge: 1,
     tools: [
       readFileTool,
       writeFileTool,

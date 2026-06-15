@@ -1,7 +1,8 @@
 // @vitest-environment happy-dom
+import { readFileSync } from 'node:fs'
 import '@testing-library/jest-dom/vitest'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { cleanup, fireEvent, render, screen, within } from '@testing-library/svelte'
+import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/svelte'
 import userEvent from '@testing-library/user-event'
 import WorkTab from '../WorkTab.svelte'
 import { path } from '../../../lib/nav.svelte.js'
@@ -27,14 +28,23 @@ function task(overrides: Partial<Task>): Task {
   } as Task
 }
 
-function detail(tasks: Task[]): ProjectDetail {
+function detail(tasks: Task[], overrides: Partial<ProjectDetail> = {}): ProjectDetail {
   return {
     id: 'looma-knit',
     name: 'Looma + Knit',
     path: '/repo/looma-knit',
     run: { status: 'stopped', mode: 'continuous' },
+    availability: { status: 'active', pausedAt: null, resumedAt: null },
     tasks,
     config: { coordinators: [{ id: 'knit', domain: 'knit' }] },
+    ...overrides,
+  } as ProjectDetail
+}
+
+function pausedDetail(tasks: Task[]): ProjectDetail {
+  return {
+    ...detail(tasks),
+    availability: { status: 'paused', pausedAt: '2026-05-19T10:00:00.000Z', resumedAt: null },
   } as ProjectDetail
 }
 
@@ -99,30 +109,237 @@ describe('WorkTab', () => {
       },
     })
 
-    await screen.findByText('2 shown · 3 total')
+    await screen.findByText('1 shown · 3 total')
     await userEvent.selectOptions(screen.getByRole('combobox', { name: /^show$/i }), 'all')
-    await userEvent.click(screen.getByRole('button', { name: /^task$/i }))
-    expect(screen.getAllByRole('button', { name: /open task/i })[0]?.textContent).toContain('Alpha task')
+    await userEvent.click(screen.getByRole('button', { name: /^work$/i }))
+    expect(screen.getAllByRole('button', { name: /inspect work/i })[0]?.textContent).toContain('Alpha task')
 
     await userEvent.click(screen.getByRole('button', { name: /priority/i }))
-    expect(screen.getAllByRole('button', { name: /open task/i })[0]?.textContent).toContain('Alpha task')
+    expect(screen.getAllByRole('button', { name: /inspect work/i })[0]?.textContent).toContain('Alpha task')
 
     await userEvent.click(screen.getByRole('button', { name: /priority/i }))
-    expect(screen.getAllByRole('button', { name: /open task/i })[0]?.textContent).toContain('Beta task')
+    expect(screen.getAllByRole('button', { name: /inspect work/i })[0]?.textContent).toContain('Beta task')
 
     expect(screen.getByText('Blocked on missing credentials.')).toBeTruthy()
     expect(screen.getByText('Completed cleanly.')).toBeTruthy()
     expect(screen.getByText('Rerun focused typecheck.')).toBeTruthy()
     expect(screen.getByText('—')).toBeTruthy()
 
-    await userEvent.click(screen.getByRole('button', { name: /open task beta task/i }))
+    await userEvent.click(screen.getByRole('button', { name: /inspect work beta task/i }))
+    expect(screen.getByLabelText('Selected work inspector')).toHaveTextContent('Beta task')
+    await userEvent.click(screen.getByRole('button', { name: /open drawer/i }))
     expect(path.value).toBe('/projects/looma-knit/task/task-beta')
 
     path.value = '/projects/looma-knit/work'
     window.history.replaceState({}, '', '/projects/looma-knit/work')
-    const gammaRow = screen.getByRole('button', { name: /open task gamma task/i })
+    const gammaRow = screen.getByRole('button', { name: /inspect work gamma task/i })
     await fireEvent.keyDown(gammaRow, { key: 'Enter' })
-    expect(path.value).toBe('/projects/looma-knit/task/task-gamma')
+    expect(screen.getByLabelText('Selected work inspector')).toHaveTextContent('Gamma task')
+  })
+
+  it('shows delivery-step progress on visible work rows', async () => {
+    render(WorkTab, {
+      props: {
+        detail: {
+          ...detail([
+            task({
+              id: 'task-import-review',
+              title: 'Import review flow',
+              status: 'in_progress',
+            }),
+          ]),
+          workProgress: {
+            counts: {
+              visibleTotal: 1,
+              visibleActive: 1,
+              visibleBlocked: 0,
+              visibleDone: 0,
+              visibleShelved: 0,
+              deliveryTotal: 1,
+              deliveryRequired: 1,
+              deliveryDone: 0,
+              deliveryBlocked: 1,
+            },
+            byTaskId: {
+              'task-import-review': {
+                rollup: {
+                  primaryState: 'blocked',
+                  visibleChildCount: 0,
+                  visibleChildDoneCount: 0,
+                  internalStepCount: 1,
+                  requiredStepCount: 1,
+                  doneStepCount: 0,
+                  blockedStepCount: 1,
+                },
+              },
+            },
+          },
+        },
+      },
+    })
+
+    await screen.findByText('1 delivery step blocked')
+    expect(screen.getByText('Import review flow')).toBeInTheDocument()
+  })
+
+  it('can filter the mixed Looma and Knit work list by source part', async () => {
+    render(WorkTab, {
+      props: {
+        detail: detail([
+          task({
+            id: 'task-knit',
+            title: 'Knit pages task',
+            status: 'ready',
+            domain: 'looma',
+            description: 'knit/specs/v1-pages.md: - [ ] Create a page',
+            productBrief: {
+              userJob: 'Ship page creation.',
+              whyItMattersNow: 'Knit needs pages.',
+              successMetric: 'Page creation works.',
+              nonGoals: [],
+              approvedAt: '2026-05-19T10:00:00.000Z',
+            },
+            spec: 'Implement page creation.',
+            acceptanceCriteria: [{ description: 'Creates pages.' }],
+          }),
+          task({
+            id: 'task-looma',
+            title: 'Looma component task',
+            status: 'ready',
+            domain: 'looma',
+            description: 'looma/docs/component-roadmap.md: - [ ] Component',
+            productBrief: {
+              userJob: 'Ship the component.',
+              whyItMattersNow: 'Looma needs components.',
+              successMetric: 'Component works.',
+              nonGoals: [],
+              approvedAt: '2026-05-19T10:00:00.000Z',
+            },
+            spec: 'Implement component.',
+            acceptanceCriteria: [{ description: 'Renders component.' }],
+          }),
+        ], {
+          structuralMapReview: {
+            state: 'accepted',
+            domains: [
+              { id: 'domain:knit', label: 'Knit', path: 'knit' },
+              { id: 'domain:looma', label: 'Looma', path: 'looma' },
+            ],
+          },
+        }),
+      },
+    })
+
+    await screen.findByText('2 shown · 2 total')
+    expect(screen.getByRole('button', { name: /inspect work knit pages task/i })).toHaveTextContent('Knit')
+    expect(screen.getByRole('button', { name: /inspect work looma component task/i })).toHaveTextContent('Looma')
+
+    await userEvent.selectOptions(screen.getByRole('combobox', { name: /^part$/i }), 'domain:knit')
+
+    expect(screen.getByText('1 shown · 2 total')).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: /inspect work knit pages task/i })).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: /inspect work looma component task/i })).not.toBeInTheDocument()
+  })
+
+  it('can filter mixed Looma ready work and Knit import drafts by source part', async () => {
+    render(WorkTab, {
+      props: {
+        detail: detail([
+          task({
+            id: 'task-looma-ready',
+            title: 'Looma ready task',
+            status: 'ready',
+            domain: 'looma',
+            description: 'looma/docs/component-roadmap.md: - [ ] Component',
+            productBrief: {
+              userJob: 'Ship Looma work.',
+              whyItMattersNow: 'Looma needs this component.',
+              successMetric: 'The component works.',
+              nonGoals: [],
+              approvedAt: '2026-05-19T10:00:00.000Z',
+            },
+            spec: 'Implement component.',
+            acceptanceCriteria: [{ description: 'Component works.' }],
+          }),
+          task({
+            id: 'task-knit-draft',
+            title: 'Knit draft task',
+            status: 'import_draft',
+            domain: 'knit',
+            description: 'knit/PROJECT_STATE.md: - [ ] Version diff view',
+          }),
+          task({
+            id: 'task-looma-draft',
+            title: 'Looma draft task',
+            status: 'import_draft',
+            domain: 'looma',
+            description: 'looma/PROJECT_STATE.md: - [ ] Toast guidance',
+          }),
+        ]),
+      },
+    })
+
+    await screen.findByText('3 shown · 3 total')
+    expect(screen.getByRole('combobox', { name: /^part$/i })).toHaveTextContent('Knit')
+
+    await userEvent.selectOptions(screen.getByRole('combobox', { name: /^show$/i }), 'all')
+    await screen.findByText('3 shown · 3 total')
+
+    await userEvent.selectOptions(screen.getByRole('combobox', { name: /^part$/i }), 'task-domain:knit')
+
+    expect(screen.getByText('1 shown · 3 total')).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: /inspect work knit draft task/i })).toHaveTextContent('Knit')
+    expect(screen.queryByRole('button', { name: /inspect work looma ready task/i })).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: /inspect work looma draft task/i })).not.toBeInTheDocument()
+  })
+
+  it('starts a selected work item directly from the list inspector', async () => {
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input)
+      if (url.includes('/api/project/task/task-knit-draft/shape-draft')) {
+        expect(init?.method).toBe('POST')
+        expect(String(init.body)).toContain('"projectId":"looma-knit"')
+        return json({ ok: true })
+      }
+      if (url.includes('/api/project/task/task-knit-draft/start')) {
+        return json({ status: 'running', mode: 'one_task', scope: { type: 'work_item', taskId: 'task-knit-draft' } })
+      }
+      if (url.includes('/api/project?')) {
+        return json({ id: 'looma-knit', name: 'Looma + Knit', run: { status: 'running', mode: 'one_task' }, tasks: [] })
+      }
+      return json({ progress: 'Recent worker progress.' })
+    })
+    vi.stubGlobal('fetch', fetchMock)
+
+    render(WorkTab, {
+      props: {
+        detail: detail([
+          task({
+            id: 'task-knit-draft',
+            title: 'Knit draft task',
+            status: 'import_draft',
+            domain: 'knit',
+            description: 'knit/PROJECT_STATE.md: - [ ] Version diff view',
+          }),
+        ]),
+      },
+    })
+
+    await userEvent.selectOptions(screen.getByRole('combobox', { name: /^show$/i }), 'planning')
+    await userEvent.click(await screen.findByRole('button', { name: /inspect work knit draft task/i }))
+    await userEvent.click(screen.getByRole('button', { name: /draft and run/i }))
+
+    await waitFor(() => {
+      expect(fetchMock.mock.calls.some(([input]) =>
+        String(input).includes('/api/project/task/task-knit-draft/shape-draft?projectId=looma-knit'),
+      )).toBe(true)
+      expect(fetchMock.mock.calls.some(([input, init]) =>
+        String(input).includes('/api/project/task/task-knit-draft/start?projectId=looma-knit') &&
+        init?.method === 'POST' &&
+        String(init.body).includes('"mode":"one_task"') &&
+        String(init.body).includes('"scope":"work_item"'),
+      )).toBe(true)
+    })
   })
 
   it('does not show an empty new-request prompt when a zero-task project is blocked by migration', async () => {
@@ -138,17 +355,6 @@ describe('WorkTab', () => {
           },
           inbox: {
             items: [
-              {
-                kind: 'pressure_test_pending',
-                severity: 'medium',
-                title: 'Saved search labels',
-                detail: 'Which labels should be saved first?',
-                actionHref: '/thread',
-                status: 'open',
-                id: 'pressure-test:labels',
-                createdAt: '2026-05-19T10:01:00.000Z',
-                updatedAt: '2026-05-19T10:01:00.000Z',
-              },
               {
                 kind: 'required_migration',
                 severity: 'high',
@@ -173,27 +379,28 @@ describe('WorkTab', () => {
     expect(screen.queryByText(/No tasks yet.*New request/i)).not.toBeInTheDocument()
   })
 
-  it('does not show an empty new-request prompt when a zero-task project has a pending question', async () => {
+  it('does not show an empty new-request prompt when a zero-task project has setup work', async () => {
     render(WorkTab, {
       props: {
         detail: {
           ...detail([]),
           startReadiness: {
             canStart: false,
-            code: 'owner_input_required',
-            message: '1 question needs your answer before Guildhall can continue',
-            actionHref: '/thread',
+            code: 'setup_pending',
+            message: 'Finish project setup first.',
+            actionHref: '/setup',
           },
           inbox: {
             items: [
               {
-                kind: 'pressure_test_pending',
+                kind: 'setup_pending',
                 severity: 'medium',
-                title: 'Saved search labels',
-                detail: 'Which labels should be saved first?',
-                actionHref: '/thread',
+                stepId: 'direction',
+                title: 'Add project direction',
+                detail: 'Finish project setup first.',
+                actionHref: '/setup',
                 status: 'open',
-                id: 'pressure-test:labels',
+                id: 'setup:direction',
                 createdAt: '2026-05-19T10:00:00.000Z',
                 updatedAt: '2026-05-19T10:00:00.000Z',
               },
@@ -205,12 +412,12 @@ describe('WorkTab', () => {
       },
     })
 
-    expect(screen.getByText('Which labels should be saved first?')).toBeInTheDocument()
-    expect(screen.getByRole('button', { name: /answer question/i })).toBeInTheDocument()
+    expect(screen.getByText('Finish project setup first.')).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: /open setup/i })).toBeInTheDocument()
     expect(screen.queryByText(/No tasks yet.*New request/i)).not.toBeInTheDocument()
   })
 
-  it('shows the opt-in column browser without selecting a default packet', async () => {
+  it('uses the list as the default legacy tree-preview route and opens an inspector on selection', async () => {
     window.history.replaceState({}, '', '/projects/looma-knit/work?tree=preview')
     path.value = '/projects/looma-knit/work?tree=preview'
 
@@ -220,14 +427,14 @@ describe('WorkTab', () => {
           task({
             id: 'feature-root',
             title: 'Interface design system',
-            status: 'parent',
+            status: 'in_progress',
             description: 'Build the interface design system.',
             hierarchy: { childIds: ['task-button'], order: 0 },
           }),
           task({
             id: 'task-button',
             title: 'Button primitive',
-            status: 'ready',
+            status: 'in_progress',
             description: 'Ship the reusable button primitive.',
             hierarchy: { parentId: 'feature-root', childIds: [], order: 0 },
           }),
@@ -235,23 +442,25 @@ describe('WorkTab', () => {
       },
     })
 
-    expect((await screen.findAllByText('Columns')).length).toBeGreaterThan(0)
-    const columns = screen.getByLabelText('Work hierarchy columns')
-    expect(columns).toBeTruthy()
-    expect(screen.getByLabelText('Selected deliverable packet').textContent).toContain('Select work to inspect')
-    expect(within(columns).getAllByText('Interface design system').length).toBe(1)
+    await screen.findByRole('heading', { name: 'Work list' })
+    const toolbar = screen.getByRole('toolbar', { name: /work view controls/i })
+    expect(within(toolbar).queryByRole('button', { name: /^columns$/i })).toBeNull()
+    expect(within(toolbar).getByRole('button', { name: /^list$/i }).getAttribute('aria-pressed')).toBe('true')
+    expect(screen.queryByLabelText('Selected work inspector')).toBeNull()
+    expect(screen.queryByLabelText('Work hierarchy columns')).toBeNull()
 
-    await userEvent.click(within(columns).getByRole('button', { name: /interface design system/i }))
+    await userEvent.click(screen.getByRole('button', { name: /inspect work interface design system/i }))
 
-    expect(screen.getByLabelText('Selected deliverable packet').textContent).toContain('Build the interface design system')
-    expect(within(columns).getByText('Button primitive')).toBeTruthy()
+    const inspector = screen.getByLabelText('Selected work inspector')
+    expect(inspector).toHaveTextContent('Build the interface design system')
+    expect(within(inspector).getByText('Button primitive')).toBeTruthy()
 
-    await userEvent.click(within(columns).getByRole('button', { name: /button primitive/i }))
+    await userEvent.click(within(inspector).getByRole('button', { name: /button primitive/i }))
 
-    expect(screen.getByLabelText('Selected deliverable packet').textContent).toContain('Ship the reusable button primitive')
+    expect(screen.getByLabelText('Selected work inspector')).toHaveTextContent('Ship the reusable button primitive')
   })
 
-  it('does not echo the selected title across every columns preview panel', async () => {
+  it('does not echo the selected title outside the selected work inspector', async () => {
     window.history.replaceState({}, '', '/projects/looma-knit/work?tree=preview')
     path.value = '/projects/looma-knit/work?tree=preview'
 
@@ -261,14 +470,14 @@ describe('WorkTab', () => {
           task({
             id: 'feature-root',
             title: 'Interface design system',
-            status: 'parent',
+            status: 'in_progress',
             description: 'Build the interface design system.',
             hierarchy: { childIds: ['task-button'], order: 0 },
           }),
           task({
             id: 'task-button',
             title: 'Button primitive',
-            status: 'ready',
+            status: 'in_progress',
             description: 'Ship the reusable button primitive.',
             hierarchy: { parentId: 'feature-root', childIds: [], order: 0 },
           }),
@@ -276,18 +485,98 @@ describe('WorkTab', () => {
       },
     })
 
-    const workbench = await screen.findByLabelText('Deliverable tree workbench')
-    const columns = screen.getByLabelText('Work hierarchy columns')
+    await screen.findByRole('heading', { name: 'Work list' })
+    await userEvent.click(screen.getByRole('button', { name: /inspect work interface design system/i }))
+    await userEvent.click(within(screen.getByLabelText('Selected work inspector')).getByRole('button', { name: /button primitive/i }))
 
-    await userEvent.click(within(columns).getByRole('button', { name: /interface design system/i }))
-    await userEvent.click(within(columns).getByRole('button', { name: /button primitive/i }))
-
-    expect((workbench.textContent?.match(/Button primitive/g) ?? []).length).toBe(1)
-    expect(within(workbench).getByText('Child work')).toBeTruthy()
-    expect(within(workbench).getByText('Details')).toBeTruthy()
+    const inspector = screen.getByLabelText('Selected work inspector')
+    expect((inspector.textContent?.match(/Button primitive/g) ?? []).length).toBe(1)
+    expect(within(inspector).getByText('Contained work')).toBeTruthy()
+    expect(within(inspector).getByText('Inspector')).toBeTruthy()
   })
 
-  it('groups columns preview controls into one toolbar', async () => {
+  it('shows internal delivery steps as selected-work detail instead of child work in the list inspector', async () => {
+    window.history.replaceState({}, '', '/projects/looma-knit/work?tree=preview')
+    path.value = '/projects/looma-knit/work?tree=preview'
+
+    render(WorkTab, {
+      props: {
+        detail: {
+          ...detail([
+            task({
+              id: 'feature-root',
+              title: 'Import review flow',
+              status: 'in_progress',
+              description: 'Build the import review flow.',
+              hierarchy: { childIds: ['runtime-proof'], order: 0 },
+            }),
+            task({
+              id: 'runtime-proof',
+              title: 'Runtime proof for import review flow',
+              status: 'blocked',
+              workKind: 'test',
+              workVisibility: { kind: 'internal_step', countInProjectTotals: false },
+              hierarchy: { parentId: 'feature-root', childIds: [], order: 0 },
+            }),
+          ]),
+          workProgress: {
+            counts: {
+              visibleTotal: 1,
+              visibleActive: 1,
+              visibleBlocked: 0,
+              visibleDone: 0,
+              visibleShelved: 0,
+              deliveryTotal: 1,
+              deliveryRequired: 1,
+              deliveryDone: 0,
+              deliveryBlocked: 1,
+            },
+            byTaskId: {
+              'feature-root': {
+                id: 'feature-root',
+                title: 'Import review flow',
+                status: 'in_progress',
+                visibility: { kind: 'primary', countInProjectTotals: true },
+                deliverySteps: [
+                  {
+                    id: 'task:runtime-proof',
+                    title: 'Runtime proof for import review flow',
+                    kind: 'verify',
+                    status: 'blocked',
+                    required: true,
+                    blocksCompletion: true,
+                    sourceTaskId: 'runtime-proof',
+                  },
+                ],
+                rollup: {
+                  primaryState: 'blocked',
+                  visibleChildCount: 0,
+                  visibleChildDoneCount: 0,
+                  internalStepCount: 1,
+                  requiredStepCount: 1,
+                  doneStepCount: 0,
+                  blockedStepCount: 1,
+                },
+              },
+            },
+          },
+        },
+      },
+    })
+
+    await screen.findByRole('heading', { name: 'Work list' })
+    await userEvent.click(screen.getByRole('button', { name: /inspect work import review flow/i }))
+
+    expect(screen.queryByRole('button', { name: /runtime proof for import review flow/i })).toBeNull()
+    const inspector = screen.getByLabelText('Selected work inspector')
+    expect(within(inspector).getByText('Contained work')).toBeTruthy()
+    expect(within(inspector).getByText('This item has tracked delivery steps and no contained work.')).toBeTruthy()
+    expect(within(inspector).getByText('Delivery checklist')).toBeTruthy()
+    expect(within(inspector).getAllByText('Runtime proof for import review flow').length).toBeGreaterThan(0)
+    expect(within(inspector).getByText('Blocked')).toBeTruthy()
+  })
+
+  it('keeps list and board as the only Work view controls', async () => {
     window.history.replaceState({}, '', '/projects/looma-knit/work?tree=preview')
     path.value = '/projects/looma-knit/work?tree=preview'
 
@@ -301,16 +590,12 @@ describe('WorkTab', () => {
 
     const toolbar = await screen.findByRole('toolbar', { name: /work view controls/i })
     expect(within(toolbar).getByText('Work view')).toBeTruthy()
-    expect(within(toolbar).getByRole('button', { name: /^columns$/i }).getAttribute('aria-pressed')).toBe('true')
-    expect(within(toolbar).getByRole('button', { name: /^list$/i }).getAttribute('aria-pressed')).toBe('false')
+    expect(within(toolbar).queryByRole('button', { name: /^columns$/i })).toBeNull()
+    expect(within(toolbar).getByRole('button', { name: /^list$/i }).getAttribute('aria-pressed')).toBe('true')
     expect(within(toolbar).getByRole('button', { name: /^board$/i }).getAttribute('aria-pressed')).toBe('false')
     expect(screen.getByRole('combobox', { name: /^show$/i })).toBeTruthy()
-    expect(screen.queryByText(/Work list \(/)).toBeNull()
+    expect(screen.getByRole('heading', { name: 'Work list' })).toBeTruthy()
 
-    await userEvent.click(within(toolbar).getByRole('button', { name: /^list$/i }))
-    expect(path.value).toBe('/projects/looma-knit/work')
-    expect(path.href).toBe('/projects/looma-knit/work?view=list')
-    expect(await screen.findByRole('heading', { name: 'Work list' })).toBeTruthy()
     expect(screen.queryByLabelText('Work hierarchy columns')).toBeNull()
 
     cleanup()
@@ -329,7 +614,7 @@ describe('WorkTab', () => {
     expect(path.href).toBe('/projects/looma-knit/work?view=board')
   })
 
-  it('flags broad flat ready work as needing breakdown review in the columns preview', async () => {
+  it('flags broad flat ready work as needing breakdown review in the list inspector', async () => {
     window.history.replaceState({}, '', '/projects/looma-knit/work?tree=preview')
     path.value = '/projects/looma-knit/work?tree=preview'
 
@@ -350,23 +635,37 @@ describe('WorkTab', () => {
       },
     })
 
-    const columns = await screen.findByLabelText('Work hierarchy columns')
-    expect(within(columns).getByText('Review breakdown')).toBeTruthy()
-    expect(within(columns).queryByText('Ready')).toBeNull()
+    await screen.findByRole('heading', { name: 'Work list' })
+    await userEvent.selectOptions(screen.getByRole('combobox', { name: /^show$/i }), 'planning')
+    expect(screen.getByText('Review breakdown')).toBeTruthy()
+    expect(screen.queryByText('Ready')).toBeNull()
 
-    await userEvent.click(within(columns).getByRole('button', { name: /build end-to-end interface system/i }))
+    await userEvent.click(screen.getByRole('button', { name: /inspect work build end-to-end interface system/i }))
 
-    expect(within(columns).getByText(/No child tasks or decomposition proposal exists yet/i)).toBeTruthy()
-    const packet = screen.getByLabelText('Selected deliverable packet')
-    expect(within(packet).getByText('Review breakdown')).toBeTruthy()
-    expect(within(packet).getByText(/7 requirements; no child tasks or decomposition proposal yet/i)).toBeTruthy()
+    const inspector = screen.getByLabelText('Selected work inspector')
+    expect(within(inspector).getByText(/No contained work or decomposition proposal exists yet/i)).toBeTruthy()
+    expect(within(inspector).getByText('Review breakdown')).toBeTruthy()
+    expect(within(inspector).getByText(/7 requirements; no contained work or decomposition proposal yet/i)).toBeTruthy()
   })
 
   it('hides done and shelved work by default and reveals it on request', async () => {
     render(WorkTab, {
       props: {
         detail: detail([
-          task({ id: 'task-ready', title: 'Ready feature work', status: 'ready' }),
+          task({
+            id: 'task-ready',
+            title: 'Ready feature work',
+            status: 'ready',
+            spec: '## Summary\n\nBuild the ready feature work.',
+            productBrief: {
+              userJob: 'Use the ready feature.',
+              whyItMattersNow: 'It is next in the execution queue.',
+              successMetric: 'Ready feature works.',
+              nonGoals: ['Do not change adjacent features.'],
+              approvedAt: '2026-05-19T10:00:00.000Z',
+            },
+            acceptanceCriteria: [{ description: 'Ready feature works.' }],
+          }),
           task({ id: 'task-done', title: 'Completed feature proof', status: 'done' }),
           task({ id: 'task-shelved', title: 'Shelved idea', status: 'shelved' }),
         ]),
@@ -392,14 +691,14 @@ describe('WorkTab', () => {
           task({
             id: 'app-spec',
             title: 'Pantry Pulse app spec',
-            status: 'parent',
+            status: 'ready',
             workKind: 'app_spec',
             hierarchy: { childIds: ['feature-inventory'], order: 0 },
           }),
           task({
             id: 'feature-inventory',
             title: 'Inventory tracking feature',
-            status: 'parent',
+            status: 'ready',
             workKind: 'feature_spec',
             hierarchy: { parentId: 'app-spec', childIds: ['task-build-inventory'], order: 0 },
           }),
@@ -413,6 +712,8 @@ describe('WorkTab', () => {
         ]),
       },
     })
+
+    await userEvent.selectOptions(screen.getByRole('combobox', { name: /^show$/i }), 'open')
 
     await screen.findByText('Pantry Pulse app spec')
     expect(screen.getAllByText('1 nested work item').length).toBeGreaterThanOrEqual(1)
@@ -432,7 +733,13 @@ describe('WorkTab', () => {
             title: 'Ready work',
             status: 'ready',
             spec: '## Summary\n\nBuild the ready work.',
-            productBrief: { userJob: 'Use the ready work.', successMetric: 'Ready work functions.', approvedAt: '2026-05-23T12:00:00.000Z' },
+            productBrief: {
+              userJob: 'Use the ready work.',
+              whyItMattersNow: 'Ready work is queued for the current run.',
+              successMetric: 'Ready work functions.',
+              nonGoals: ['Do not change adjacent contracts.'],
+              approvedAt: '2026-05-23T12:00:00.000Z',
+            },
             acceptanceCriteria: [{ description: 'Ready work functions.' }],
           }),
           task({ id: 'task-import', title: 'Imported note', status: 'import_draft' }),
@@ -440,20 +747,57 @@ describe('WorkTab', () => {
       },
     })
 
-    expect(await screen.findByText('1 Guildhall working')).toBeTruthy()
-    expect(screen.getByText('1 being shaped')).toBeTruthy()
-    expect(screen.getByText('1 ready to start')).toBeTruthy()
-    expect(screen.getByText('1 import draft')).toBeTruthy()
+    expect(await screen.findByText('1 Working')).toBeTruthy()
+    expect(screen.getByText('1 Ready')).toBeTruthy()
+    expect(screen.queryByText('1 being shaped')).toBeNull()
+    expect(screen.queryByText('1 import draft')).toBeNull()
     expect(document.body.textContent).not.toContain('agent-active')
     expect(document.body.textContent).not.toContain('ready for worker')
     expect(document.body.textContent).not.toContain('2 active')
     expect(document.body.textContent).not.toContain('1 imported drafts')
+
+    await userEvent.selectOptions(screen.getByRole('combobox', { name: /^show$/i }), 'planning')
+
+    expect(screen.getByText('Queued')).toBeTruthy()
+    expect(screen.getByText('1 import draft')).toBeTruthy()
+  })
+
+  it('defaults to Planning when a project has shaping work but no execution-ready work', async () => {
+    render(WorkTab, {
+      props: {
+        detail: detail([
+          task({
+            id: 'task-import-1y7kmp6',
+            title: 'Block menu / block side menu',
+            status: 'exploring',
+            spec: '## Summary\n\nBuild the block menu.',
+            acceptanceCriteria: [{ description: 'The block menu can be opened.' }],
+            openQuestions: [],
+          }),
+          task({
+            id: 'task-import-1aessks',
+            title: 'Floating toolbar',
+            status: 'exploring',
+          }),
+        ]),
+      },
+    })
+
+    expect(await screen.findByText('2 shown · 2 total')).toBeTruthy()
+    expect(screen.getByRole('option', { name: /^ready to run$/i })).toBeTruthy()
+    expect((screen.getByRole('combobox', { name: /^show$/i }) as HTMLSelectElement).value).toBe('planning')
+    expect(screen.queryByText('No work is ready to run yet.')).toBeNull()
+    expect(screen.queryByText('No queued work yet.')).toBeNull()
+    expect(screen.getByRole('option', { name: /^planning$/i })).toBeTruthy()
+    expect(screen.getByText('Block menu / block side menu')).toBeTruthy()
+    expect(screen.getAllByText('Paused').length).toBeGreaterThanOrEqual(2)
+    expect(document.body.textContent).not.toContain('Intake')
   })
 
   it('labels inactive in-progress work as paused when no project run is active', async () => {
     render(WorkTab, {
       props: {
-        detail: detail([
+        detail: pausedDetail([
           task({ id: 'task-build', title: 'Build contracts', status: 'in_progress' }),
         ]),
       },
@@ -468,14 +812,13 @@ describe('WorkTab', () => {
   it('keeps stopped gate checks labeled as gate work instead of paused work', async () => {
     render(WorkTab, {
       props: {
-        detail: detail([
+        detail: pausedDetail([
           task({ id: 'task-gates', title: 'Implement minimal harness orchestration skeleton', status: 'gate_check' }),
         ]),
       },
     })
 
-    expect(await screen.findByText('1 gates waiting')).toBeTruthy()
-    expect(screen.getByText('Gates waiting')).toBeTruthy()
+    expect(await screen.findByText('Gates')).toBeTruthy()
     expect(screen.queryByText('Paused')).toBeNull()
   })
 
@@ -489,7 +832,13 @@ describe('WorkTab', () => {
             status: 'ready',
             description: 'Implement the approved path.',
             spec: '## Summary\n\nImplement the approved path.',
-            productBrief: { userJob: 'Use the approved flow.', successMetric: 'Flow works.', approvedAt: '2026-05-23T12:00:00.000Z' },
+            productBrief: {
+              userJob: 'Use the approved flow.',
+              whyItMattersNow: 'The flow is release-blocking.',
+              successMetric: 'Flow works.',
+              nonGoals: ['Do not redesign adjacent flows.'],
+              approvedAt: '2026-05-23T12:00:00.000Z',
+            },
             acceptanceCriteria: [{ description: 'The approved flow works.' }],
           }),
           task({
@@ -512,9 +861,26 @@ describe('WorkTab', () => {
       },
     })
 
-    expect(await screen.findByText('1 ready to start')).toBeTruthy()
-    expect(screen.getByText('2 need brief cleanup')).toBeTruthy()
+    expect(await screen.findByText('1 Ready')).toBeTruthy()
+    expect(screen.queryByText('2 Needs brief')).toBeNull()
+
+    await userEvent.selectOptions(screen.getByRole('combobox', { name: /^show$/i }), 'planning')
+
+    expect(screen.getByText('2 Needs brief')).toBeTruthy()
     expect(screen.queryByText('3 ready for worker')).toBeNull()
+  })
+
+  it('keeps the wide work-list grid inside the clipped card at side-by-side widths', () => {
+    const source = readFileSync('src/web/surfaces/project/WorkTab.svelte', 'utf8')
+    const stackBlock = source.match(/:global\(\.work-list-stack\)\s*\{([\s\S]*?)\n\s*\}/)?.[1] ?? ''
+    const headBlock = source.match(/\.list-column-head\s*\{([\s\S]*?)\n\s*\}/)?.[1] ?? ''
+    const rowBlock = source.match(/:global\(\.work-list-row\)\s*\{([\s\S]*?)\n\s*\}/)?.[1] ?? ''
+
+    expect(stackBlock).toContain('minmax(220px, 1fr)')
+    expect(stackBlock).toContain('minmax(108px, max-content)')
+    expect(stackBlock).not.toContain('minmax(280px, 1fr)')
+    expect(headBlock).toContain('gap: var(--gh-space-2)')
+    expect(rowBlock).toContain('gap: var(--gh-space-2)')
   })
 
   it('routes imported-draft review and view-mode controls through project-scoped links', async () => {
@@ -537,6 +903,7 @@ describe('WorkTab', () => {
       },
     })
 
+    await userEvent.selectOptions(screen.getByRole('combobox', { name: /^show$/i }), 'planning')
     await screen.findByText('Imported draft queue')
     expect(screen.getByText(/1 more drafts are queued behind it/)).toBeTruthy()
     await userEvent.click(screen.getByRole('button', { name: /draft task brief/i }))
@@ -558,9 +925,15 @@ describe('WorkTab', () => {
             id: 'task-board',
             title: 'Board task',
             status: 'ready',
-            productBrief: { approvedAt: '2026-05-19T10:00:00.000Z' },
+            productBrief: {
+              userJob: 'Use the board task.',
+              whyItMattersNow: 'The board task is the next runnable item.',
+              successMetric: 'It appears as the next focus.',
+              nonGoals: ['Do not change board layout.'],
+              approvedAt: '2026-05-19T10:00:00.000Z',
+            },
             spec: 'Build the board task.',
-            acceptanceCriteria: ['Shows on the board.'],
+            acceptanceCriteria: [{ description: 'Shows on the board.' }],
           }),
         ]),
       },

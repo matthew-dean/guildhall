@@ -45,12 +45,6 @@ function taskTitle(task: Task): string {
   return task.title?.trim() || task.id
 }
 
-function legacyParentTaskId(task: Task): string | null {
-  const raw = task.parentGoalId?.trim()
-  if (!raw?.startsWith('goal-task-')) return null
-  return raw.replace(/^goal-/, '')
-}
-
 function explicitParentId(task: Task): string | null {
   return task.hierarchy?.parentId?.trim() || null
 }
@@ -58,11 +52,6 @@ function explicitParentId(task: Task): string | null {
 function parentIdForTask(task: Task, tasksById: Map<string, Task>): string | null {
   const explicit = explicitParentId(task)
   if (explicit) return tasksById.has(explicit) ? explicit : null
-  const legacy = legacyParentTaskId(task)
-  if (!legacy || legacy === task.id) return null
-  if (tasksById.has(legacy)) return legacy
-  const withoutTaskPrefix = legacy.replace(/^task-/, '')
-  if (withoutTaskPrefix !== task.id && tasksById.has(withoutTaskPrefix)) return withoutTaskPrefix
   return null
 }
 
@@ -134,7 +123,7 @@ export function buildWorkHierarchy(tasks: Task[]): WorkHierarchyModel {
           return { id, title: crumb ? taskTitle(crumb) : id }
         }),
         depth: ancestry.length,
-        isContainingWork: task.status === 'parent',
+        isContainingWork: Boolean(task.hierarchy?.childIds?.length) || task.workKind === 'app_spec' || task.workKind === 'feature_spec' || Boolean(task.completionBoundary),
         rollup: emptyRollup(),
       }
     }
@@ -156,7 +145,7 @@ export function buildWorkHierarchy(tasks: Task[]): WorkHierarchyModel {
         return { id, title: crumb ? taskTitle(crumb) : id }
       }),
       depth: ancestry.length,
-      isContainingWork: childIds.length > 0 || task.status === 'parent' || task.workKind === 'app_spec' || task.workKind === 'feature_spec',
+      isContainingWork: childIds.length > 0 || task.workKind === 'app_spec' || task.workKind === 'feature_spec' || Boolean(task.completionBoundary),
       rollup,
     }
     visiting.delete(task.id)
@@ -214,9 +203,17 @@ export function needsOwnerAction(task: Task): boolean {
   return hasOpenEscalation(task) || Boolean(task.openQuestions?.some(question => !question.answeredAt))
 }
 
+function isContainingWorkTask(task: Task): boolean {
+  return Boolean(task.hierarchy?.childIds?.length) ||
+    task.workKind === 'app_spec' ||
+    task.workKind === 'feature_spec' ||
+    Boolean(task.completionBoundary)
+}
+
 function groupKey(task: Task): WorkListGroup['key'] {
   if (needsOwnerAction(task)) return 'needs_you'
   if (['in_progress', 'review', 'gate_check'].includes(task.status)) return 'working'
+  if (isContainingWorkTask(task)) return 'planned'
   if (task.status === 'ready') return 'ready'
   if (task.status === 'blocked') return 'blocked'
   if (task.status === 'done' || task.status === 'pending_pr') return 'done'

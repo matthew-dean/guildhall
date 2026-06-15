@@ -27,6 +27,43 @@ describe('DoThisNext', () => {
     cleanup()
   })
 
+  it('renders the shared project action model instead of recomputing from inbox', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (input: RequestInfo | URL) => {
+        expect(String(input)).toBe('/api/project?projectId=looma-knit')
+        return json({
+          actionModel: {
+            primaryAction: {
+              source: 'task',
+              label: 'Clean up the Stripe checkout brief',
+              detail: 'Finish the active brief cleanup before reconciling stale discovery.',
+              buttonLabel: 'Open Work',
+              href: '/work',
+              tone: 'warn',
+            },
+            secondaryActions: [{
+              source: 'inbox',
+              label: 'Review project discovery update',
+              detail: 'Review the reconciliation later.',
+              buttonLabel: 'Review update',
+              href: '/workspace-import?mode=reconcile',
+              tone: 'warn',
+            }],
+          },
+        })
+      }),
+    )
+
+    render(DoThisNext)
+
+    await screen.findByText('Clean up the Stripe checkout brief')
+    expect(screen.getByText('Finish the active brief cleanup before reconciling stale discovery.')).toBeTruthy()
+    expect(screen.getByRole('button', { name: /open work/i })).toBeTruthy()
+    expect(screen.getByRole('button', { name: /1 more in inbox/i })).toBeTruthy()
+    expect(screen.queryByText('Review project discovery update')).toBeNull()
+  })
+
   it('prescribes the highest-priority non-current action and keeps project routing', async () => {
     const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
       const url = String(input)
@@ -34,14 +71,6 @@ describe('DoThisNext', () => {
       expect(url).toBe('/api/project/inbox?projectId=looma-knit')
       return json({
         items: [
-          {
-            kind: 'agent_question_pending',
-            severity: 'high',
-            title: 'Knit: add link editor controls',
-            detail: 'Choose whether drag handles are in scope.',
-            taskId: 'task-link-editor',
-            actionHref: '/thread',
-          },
           {
             kind: 'bootstrap_missing',
             severity: 'high',
@@ -71,21 +100,11 @@ describe('DoThisNext', () => {
     expect(path.value).toBe('/projects/looma-knit/settings/ready')
   })
 
-  it('uses project start readiness ahead of stale inbox ordering', async () => {
+  it('stays focused on inbox work even when project start readiness exists elsewhere', async () => {
     vi.stubGlobal(
       'fetch',
       vi.fn(async (input: RequestInfo | URL) => {
         const url = String(input)
-        if (url === '/api/project?projectId=looma-knit') {
-          return json({
-            startReadiness: {
-              canStart: false,
-              code: 'owner_input_required',
-              message: 'Choose a recovery path for the blocked task',
-              actionHref: '/task/task-current',
-            },
-          })
-        }
         return json({
           items: [
             {
@@ -102,9 +121,8 @@ describe('DoThisNext', () => {
 
     render(DoThisNext)
 
-    await screen.findByText('Choose a recovery path for the blocked task')
-    expect(screen.getByRole('button', { name: /review recovery/i })).toBeTruthy()
-    expect(screen.queryByText('Review project discovery update')).toBeNull()
+    await screen.findByText('Review project discovery update')
+    expect(screen.getByRole('button', { name: /review update/i })).toBeTruthy()
   })
 
   it('hides low-severity inbox noise when nothing actionable is waiting', async () => {
@@ -130,6 +148,54 @@ describe('DoThisNext', () => {
     await waitFor(() => {
       expect(screen.queryByText('Do this next')).toBeNull()
     })
+  })
+
+  it('chooses a waiting Thread turn when Needs You only has optional cleanup', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (input: RequestInfo | URL) => {
+        const url = String(input)
+        if (url === '/api/project/inbox?projectId=looma-knit') {
+          return json({
+            items: [{
+              kind: 'lever_questions',
+              severity: 'low',
+              title: 'Review project policies',
+              detail: 'Optional defaults are still in effect.',
+              actionHref: '/settings/advanced',
+            }],
+          })
+        }
+        if (url === '/api/project/thread?projectId=looma-knit') {
+          return json({
+            activeTurnId: 'bounded-chat:bc-task-shaping:q-1',
+            turns: [{
+              id: 'bounded-chat:bc-task-shaping:q-1',
+              kind: 'bounded_chat',
+              status: 'active',
+              sessionId: 'bc-task-shaping',
+              domainTitle: 'Task shaping',
+              targetTitle: 'Narrative Harness',
+              actionHref: '/thread?thread=bc-task-shaping',
+              question: {
+                prompt: 'Which implementation direction should Guildhall use?',
+                why: 'This answer unblocks task shaping.',
+              },
+            }],
+          })
+        }
+        return json({})
+      }),
+    )
+
+    render(DoThisNext)
+
+    await screen.findByText('Answer in Thread')
+    expect(screen.getByText('Which implementation direction should Guildhall use?')).toBeTruthy()
+
+    await userEvent.click(screen.getByRole('button', { name: /open thread/i }))
+
+    expect(path.href).toBe('/projects/looma-knit/thread?thread=bc-task-shaping')
   })
 
   it('frames project understanding advisories as a discovery update', async () => {
@@ -172,12 +238,11 @@ describe('DoThisNext', () => {
               actionHref: '/thread',
             },
             {
-              kind: 'open_escalation',
+              kind: 'workspace_import_pending',
               severity: 'medium',
-              title: 'Knit: add version diff view',
-              detail: 'Worker needs guidance.',
-              taskId: 'task-diff',
-              actionHref: '/task/task-diff',
+              title: 'Review existing project work',
+              detail: 'Review imported planning notes.',
+              actionHref: '/workspace-import',
             },
           ],
         }),
@@ -198,7 +263,7 @@ describe('DoThisNext', () => {
     expect(path.value).toBe('/projects/looma-knit/overview/inbox')
   })
 
-  it('shows recovery detail directly instead of stacking extra status boilerplate', async () => {
+  it('shows project-understanding detail directly instead of stacking extra status boilerplate', async () => {
     vi.stubGlobal(
       'fetch',
       vi.fn(async (input: RequestInfo | URL) => {
@@ -207,12 +272,11 @@ describe('DoThisNext', () => {
         return json({
           items: [
             {
-              kind: 'open_escalation',
+              kind: 'project_understanding',
               severity: 'high',
-              title: 'AlertDialog',
-              detail: 'Spec shaping stopped before Guildhall saved the next draft. Open the task to retry from the transcript or reframe the work.',
-              taskId: 'task-alert-dialog',
-              actionHref: '/task/task-alert-dialog?tab=action',
+              title: 'Review project discovery update',
+              detail: 'Guildhall can now scan more planning docs and migrations. Review the reconciliation so it can update or dismiss stale imported work.',
+              actionHref: '/workspace-import?mode=reconcile',
             },
           ],
         })
@@ -221,9 +285,8 @@ describe('DoThisNext', () => {
 
     render(DoThisNext)
 
-    await screen.findByText('Review the blocked task on AlertDialog')
-    expect(screen.getByText('Spec shaping stopped before Guildhall saved the next draft. Open the task to retry from the transcript or reframe the work.')).toBeTruthy()
-    expect(screen.queryByText(/Recovery needed\. Detail/i)).toBeNull()
-    expect(screen.queryByText(/turn limit|kept researching/i)).toBeNull()
+    await screen.findByText('Review project discovery update')
+    expect(screen.getByText('Guildhall can now scan more planning docs and migrations. Review the reconciliation so it can update or dismiss stale imported work.')).toBeTruthy()
+    expect(screen.queryByText(/missing repo evidence/i)).toBeNull()
   })
 })

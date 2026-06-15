@@ -1,13 +1,14 @@
+import { appendManagedTextFile, readManagedTextFile, readManagedTextFileSync, writeManagedTextFile } from '@guildhall/persistence'
 /**
  * post-user-question — asynchronous, structured agent → user question.
  *
  * Distinct from the synchronous `ask-user-question` tool (interaction.ts)
  * which only works when a live interactive prompt callback is wired in. In
  * the orchestrator's typical agent runs that callback is absent, so any
- * agent that needs human judgment posts a *structured* question record onto
- * `task.openQuestions` and yields. The Thread surface renders the question
- * with a deterministic affordance (confirm / yesno / choice / text) and the
- * user's answer flows back via POST /api/project/task/:id/answer-question.
+ * agent that needs human judgment creates an owner-input request linked to a
+ * bounded-chat session and yields. The Thread surface renders the linked
+ * bounded chat with the deterministic affordance, and the answer flows back
+ * through the owner-input session instead of mutating task-local state.
  *
  * Producers (spec agent, intake, coordinator) MUST classify each question
  * into ONE of the four kinds — no free prose. Multiple choice is the
@@ -21,9 +22,10 @@
 import { defineTool } from '@guildhall/engine'
 import { z } from 'zod'
 import fs from 'node:fs/promises'
+import path from 'node:path'
 import { TaskQueue } from '@guildhall/core'
-import { randomUUID } from 'node:crypto'
-import { atomicWriteText } from '@guildhall/sessions'
+import { createHash } from 'node:crypto'
+import { createOwnerInputRequest } from '@guildhall/runtime/owner-input-store'
 
 const TASKS_PATH_SCHEMA = z.string().describe('Absolute path to the TASKS.json file')
 
@@ -56,6 +58,26 @@ const postUserQuestionInputSchema = z.object({
     .enum(['single', 'multiple'])
     .optional()
     .describe('For kind=choice: single means pick one; multiple means pick all that apply.'),
+  assumptionIfNotAsked: z
+    .string()
+    .optional()
+    .describe('The concrete assumption Guildhall would make to keep working unattended if it did not ask.'),
+  confidenceIfProceeding: z
+    .enum(['low', 'medium', 'high'])
+    .optional()
+    .describe('Agent confidence in assumptionIfNotAsked if Guildhall proceeds without asking.'),
+  impactIfWrong: z
+    .enum(['low', 'medium', 'high'])
+    .optional()
+    .describe('Expected product/user cost if assumptionIfNotAsked is wrong after normal git/worktree containment.'),
+  gitContainment: z
+    .enum(['atomic_commit', 'feature_branch', 'worktree', 'not_applicable'])
+    .optional()
+    .describe('How Guildhall will keep proceeding safely inspectable and undoable if it does not ask.'),
+  blockingReason: z
+    .string()
+    .optional()
+    .describe('Why the agent cannot proceed unattended with an assumption for this decision.'),
 })
 
 export type PostUserQuestionInput = z.input<typeof postUserQuestionInputSchema>
@@ -82,6 +104,21 @@ function questionSignature(question: {
     : ''
   const selectionMode = question.selectionMode ?? ''
   return [question.kind ?? '', body, choices, selectionMode].join('::')
+}
+
+function shortHash(value: string): string {
+  return createHash('sha256').update(value).digest('hex').slice(0, 12)
+}
+
+function projectRootFromTasksPath(tasksPath: string): string {
+  const taskDir = path.dirname(tasksPath)
+  return path.basename(taskDir) === '.guildhall'
+    ? path.dirname(taskDir)
+    : taskDir
+}
+
+function projectIdFromRoot(projectRoot: string): string {
+  return path.basename(projectRoot).trim() || 'project'
 }
 
 interface InferredQuestion {
@@ -173,6 +210,51 @@ function validateQuestionShape(input: {
   }
   if (input.kind === 'choice' && input.body && isEvidenceSummaryPrompt(input.body)) {
     return 'choice question prompt is research narration, not a user question; ask the decision directly and put notes in description'
+  }
+  return null
+}
+
+function validateAutonomyBoundary(input: {
+  kind?: string
+  assumptionIfNotAsked?: string
+  confidenceIfProceeding?: 'low' | 'medium' | 'high'
+  impactIfWrong?: 'low' | 'medium' | 'high'
+  gitContainment?: 'atomic_commit' | 'feature_branch' | 'worktree' | 'not_applicable'
+  blockingReason?: string
+}): string | null {
+  const hasAutonomyFields = Boolean(
+    input.assumptionIfNotAsked?.trim()
+    || input.confidenceIfProceeding
+    || input.impactIfWrong
+    || input.gitContainment
+    || input.blockingReason?.trim(),
+  )
+  if (!hasAutonomyFields) return null
+
+  if (!input.assumptionIfNotAsked?.trim()) {
+    return 'owner questions must name assumptionIfNotAsked so Guildhall can prefer unattended work when the assumption is good enough'
+  }
+  if (!input.confidenceIfProceeding) {
+    return 'owner questions must include confidenceIfProceeding so Guildhall can ask only when confidence is too low or the downside is too high'
+  }
+  if (!input.impactIfWrong) {
+    return 'owner questions must include impactIfWrong after git/worktree containment so Guildhall can avoid interrupting for containable assumptions'
+  }
+  if (!input.gitContainment) {
+    return 'owner questions must include gitContainment so Guildhall reasons about branch/worktree/atomic-commit safety before interrupting'
+  }
+  if (!input.blockingReason?.trim()) {
+    return 'owner questions must include blockingReason explaining why this cannot proceed unattended'
+  }
+
+  if (input.confidenceIfProceeding === 'high' && input.impactIfWrong !== 'high') {
+    return 'do not ask the owner for high-confidence assumptions that git/worktree containment can make safe; record the assumption and continue unattended'
+  }
+  if (input.confidenceIfProceeding === 'medium' && input.impactIfWrong === 'low') {
+    return 'do not ask the owner for medium-confidence, low-impact assumptions after git/worktree containment; record the assumption and continue unattended'
+  }
+  if (input.kind === 'confirm' && input.confidenceIfProceeding !== 'low' && input.impactIfWrong !== 'high') {
+    return 'do not use confirm as a conservative approval gate; proceed with the recorded assumption unless confidence is low or the impact is high'
   }
   return null
 }
@@ -362,7 +444,7 @@ function inferQuestionsFromAssistantText(text: string): InferredQuestion[] {
 }
 
 function resolveQuestionPayload(
-  input: Pick<PostUserQuestionInput, 'kind' | 'body' | 'prompt' | 'restatement' | 'subject' | 'description' | 'choices' | 'selectionMode'>,
+  input: Pick<PostUserQuestionInput, 'kind' | 'body' | 'prompt' | 'restatement' | 'subject' | 'description' | 'choices' | 'selectionMode' | 'assumptionIfNotAsked' | 'confidenceIfProceeding' | 'impactIfWrong' | 'gitContainment' | 'blockingReason'>,
   metadata: Record<string, unknown>,
 ): InferredQuestion | { error: string } {
   const resolvedBody = input.body
@@ -378,7 +460,8 @@ function resolveQuestionPayload(
       ...(input.selectionMode ? { selectionMode: input.selectionMode } : {}),
     }
     const validationError = validateQuestionShape(payload)
-    return validationError ? { error: validationError } : payload
+    const autonomyError = validateAutonomyBoundary(input)
+    return validationError || autonomyError ? { error: validationError ?? autonomyError! } : payload
   }
 
   const bucketKey = 'inferred_post_user_questions'
@@ -413,83 +496,51 @@ export async function postUserQuestion(
     choices: input.choices,
   })
   if (validationError) return { success: false, error: validationError }
+  const autonomyError = validateAutonomyBoundary(input)
+  if (autonomyError) return { success: false, error: autonomyError }
   if (!input.tasksPath?.trim()) return { success: false, error: 'Missing tasksPath' }
   if (!input.taskId?.trim()) return { success: false, error: 'Missing taskId' }
   if (!input.askedBy?.trim()) return { success: false, error: 'Missing askedBy' }
   try {
-    const raw = await fs.readFile(input.tasksPath, 'utf-8')
+    const raw = await readManagedTextFile(input.tasksPath, 'utf-8')
     const queue = TaskQueue.parse(JSON.parse(raw))
     const task = queue.tasks.find(t => t.id === input.taskId)
     if (!task) return { success: false, error: `Task ${input.taskId} not found` }
 
     const now = new Date().toISOString()
-    const id = `q-${now.replace(/[-:.TZ]/g, '').slice(0, 14)}-${randomUUID().slice(0, 8)}`
+    const signature = questionSignature({
+      kind: input.kind,
+      prompt: input.kind === 'confirm' ? undefined : input.body,
+      restatement: input.kind === 'confirm' ? input.body : undefined,
+      choices: input.choices,
+      selectionMode: input.selectionMode,
+    })
+    const id = `q-${shortHash(`${input.taskId}:${signature}`)}`
 
-    const question =
-      input.kind === 'confirm'
-        ? {
-            kind: 'confirm' as const,
-            id,
-            askedBy: input.askedBy,
-            askedAt: now,
-            restatement: input.body,
-            ...(input.subject ? { subject: input.subject } : {}),
-            ...(input.description ? { description: input.description } : {}),
-          }
-        : input.kind === 'yesno'
-          ? {
-              kind: 'yesno' as const,
-              id,
-              askedBy: input.askedBy,
-              askedAt: now,
-              prompt: input.body,
-              ...(input.subject ? { subject: input.subject } : {}),
-              ...(input.description ? { description: input.description } : {}),
-            }
-          : input.kind === 'choice'
-            ? {
-                kind: 'choice' as const,
-                id,
-                askedBy: input.askedBy,
-                askedAt: now,
-                prompt: input.body,
-                ...(input.subject ? { subject: input.subject } : {}),
-                ...(input.description ? { description: input.description } : {}),
-                choices: input.choices!,
-                ...(input.selectionMode ? { selectionMode: input.selectionMode } : {}),
-              }
-            : {
-                kind: 'text' as const,
-                id,
-                askedBy: input.askedBy,
-                askedAt: now,
-                prompt: input.body,
-                ...(input.subject ? { subject: input.subject } : {}),
-                ...(input.description ? { description: input.description } : {}),
-              }
-
-    const existing = task.openQuestions ?? []
-    const existingOpenDuplicate = existing.find((item) => {
-      if (!item || typeof item !== 'object') return false
-      const answeredAt = 'answeredAt' in item ? item.answeredAt : undefined
-      if (typeof answeredAt === 'string' && answeredAt) return false
-      return questionSignature(item as {
-        kind?: string
-        prompt?: string
-        restatement?: string
-        choices?: string[]
-        selectionMode?: string
-      }) === questionSignature(question)
-    }) as { id?: string } | undefined
-    if (existingOpenDuplicate?.id) {
-      return { success: true, questionId: existingOpenDuplicate.id }
-    }
-    task.openQuestions = [...existing, question]
-    task.updatedAt = now
-    queue.lastUpdated = now
-
-    atomicWriteText(input.tasksPath, JSON.stringify(queue, null, 2) + '\n')
-    return { success: true, questionId: id }
+    const projectRoot = projectRootFromTasksPath(input.tasksPath)
+    const result = await createOwnerInputRequest({
+      projectRoot,
+      projectId: projectIdFromRoot(projectRoot),
+      commandId: `post-user-question:${input.taskId}:${id}`,
+      now,
+      actor: input.askedBy,
+      source: { kind: 'task', taskId: input.taskId, questionId: id },
+      target: { kind: 'thread' },
+      question: {
+        kind: input.kind,
+        prompt: input.body,
+        ...(input.description ? { description: input.description } : {}),
+        ...(input.kind === 'choice' ? { choices: input.choices } : {}),
+        ...(input.selectionMode ? { selectionMode: input.selectionMode } : {}),
+      },
+      objective: {
+        kind: 'task_shaping',
+        label: task.title ? `Clarify ${task.title}` : `Clarify ${input.taskId}`,
+        successCriteria: ['Owner answers the linked bounded-chat session.'],
+      },
+      sessionSource: `post-user-question:${input.taskId}:${id}`,
+    })
+    return { success: true, questionId: result.request.id }
   } catch (err) {
     return { success: false, error: String(err) }
   }
@@ -498,7 +549,7 @@ export async function postUserQuestion(
 export const postUserQuestionTool = defineTool({
   name: 'post-user-question',
   description:
-    "Post an asynchronous structured question to the user on this task. Use this whenever you need human judgment to proceed — the question lands in the user's Thread feed with a kind-specific affordance, and you should yield (end your turn) so the orchestrator can resume you when an answer arrives. PREFER `kind: 'choice'` whenever the answer space is small and discrete (it always degrades to Other... free-text). For choice questions, set `selectionMode: 'multiple'` when more than one answer may apply; otherwise set `selectionMode: 'single'` or omit it. Use `confirm` to restate intent before committing. Use `yesno` only for genuinely binary calls. Use `text` sparingly — usually a multiple choice with the question phrased as the prompt is better. `body`/`prompt` must be only the exact answerable question or restatement, not setup prose. Put a short topic in `subject` and the source fact, why it matters, and what happens next in `description`. NEVER write prompts like \"The key question I need to ask is...\". NEVER bury questions in productBrief.userJob — that field is for what you think the user wants, not for asking them.",
+    "Post an asynchronous structured question to the user on this task. Guildhall is built for unattended work: before calling this tool, decide the concrete `assumptionIfNotAsked`, your `confidenceIfProceeding`, the `gitContainment` strategy, the `impactIfWrong` after that containment, and the `blockingReason`. Normal work should be made safe through worktrees, feature branches, and atomic commits; do not ask merely because the agent is not 100% sure. If confidence is medium/high and the remaining contained impact is low/medium, do not ask — record the assumption in the task/spec and continue. Ask only for low-confidence owner-only decisions, high-impact product calls that remain high-impact after git containment, external credentials/setup, or choices where being wrong would still create expensive rework. The question lands in the user's Thread feed with a kind-specific affordance, and you should yield (end your turn) so the orchestrator can resume you when an answer arrives. PREFER `kind: 'choice'` whenever the answer space is small and discrete (it always degrades to Other... free-text). For choice questions, set `selectionMode: 'multiple'` when more than one answer may apply; otherwise set `selectionMode: 'single'` or omit it. Use `confirm` only for high-impact intent restatements, not routine approval gates. Use `yesno` only for genuinely binary calls. Use `text` sparingly — usually a multiple choice with the question phrased as the prompt is better. `body`/`prompt` must be only the exact answerable question or restatement, not setup prose. Put a short topic in `subject` and the source fact, why it matters, and what happens next in `description`. NEVER write prompts like \"The key question I need to ask is...\". NEVER bury questions in productBrief.userJob — that field is for what you think the user wants, not for asking them.",
   inputSchema: postUserQuestionInputSchema,
   jsonSchema: {
     type: 'object',
@@ -523,6 +574,29 @@ export const postUserQuestionTool = defineTool({
         type: 'string',
         enum: ['single', 'multiple'],
         description: 'For choice questions: pick one or pick all that apply.',
+      },
+      assumptionIfNotAsked: {
+        type: 'string',
+        description: 'The concrete assumption Guildhall would make to continue unattended if it did not ask.',
+      },
+      confidenceIfProceeding: {
+        type: 'string',
+        enum: ['low', 'medium', 'high'],
+        description: 'Agent confidence in assumptionIfNotAsked if Guildhall proceeds without asking.',
+      },
+      impactIfWrong: {
+        type: 'string',
+        enum: ['low', 'medium', 'high'],
+        description: 'Expected product/user cost if assumptionIfNotAsked is wrong after normal git/worktree containment.',
+      },
+      gitContainment: {
+        type: 'string',
+        enum: ['atomic_commit', 'feature_branch', 'worktree', 'not_applicable'],
+        description: 'How Guildhall will keep proceeding inspectable and undoable if it does not ask.',
+      },
+      blockingReason: {
+        type: 'string',
+        description: 'Why this cannot safely proceed unattended with the assumption.',
       },
     },
   },

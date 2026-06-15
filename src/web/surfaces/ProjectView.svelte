@@ -4,8 +4,8 @@
       mobile hides the rail until the hamburger opens a full-screen menu):
       primary nav entries + accordion sub-nav + Settings pinned as a utility
       to the bottom.
-    · Top bar (slim): workspace name chip + run-status chip + Start/Stop
-      + New request. No tab strip.
+    · Top bar (slim): workspace name chip + run-status chip + Resume/Pause
+      + New thread. No tab strip.
     · Main: the active view component (sub-paths pass a `subView` prop to
       surfaces that support it).
 -->
@@ -14,20 +14,11 @@
   import Chip from '../lib/Chip.svelte'
   import Icon, { type IconName } from '../lib/Icon.svelte'
   import Modal from '../lib/Modal.svelte'
-  import NoticeBand from '../lib/NoticeBand.svelte'
+  import AlertBand from '../../../packages/ui/src/components/AlertBand.svelte'
+  import NoticeBand from '../../../packages/ui/src/components/NoticeBand.svelte'
   import StatusDot from '../lib/StatusDot.svelte'
   import ProjectShell from '../lib/layout/ProjectShell.svelte'
   import Tooltip from '../lib/Tooltip.svelte'
-  import ProjectOverviewTab from './project/ProjectOverviewTab.svelte'
-  import ThreadTab from './project/ThreadTab.svelte'
-  import InboxTab from './project/InboxTab.svelte'
-  import WorkTab from './project/WorkTab.svelte'
-  import WorkspaceImportTab from './project/WorkspaceImportTab.svelte'
-  import ProjectAttachFlow from './project/ProjectAttachFlow.svelte'
-  import FactsTab from './project/FactsTab.svelte'
-  import TimelineTab from './project/TimelineTab.svelte'
-  import ReleaseTab from './project/ReleaseTab.svelte'
-  import SettingsTab from './project/SettingsTab.svelte'
   import DoThisNext from './DoThisNext.svelte'
   import IntakeModal from './IntakeModal.svelte'
   import { project } from '../lib/project.svelte.js'
@@ -35,13 +26,49 @@
   import { path, nav } from '../lib/nav.svelte.js'
   import { currentProjectHref, projectActionHref, projectFetch } from '../lib/project-routes.js'
   import { buildProjectTicker } from '../lib/project-activity.js'
+  import { dedupeProjectAttention } from '../lib/project-attention.js'
   import { buildProviderIndicator } from '../lib/provider-indicator.js'
   import { formatUserPath } from '../lib/display-path.js'
   import { humanizeProjectName } from '../lib/project-name.js'
   import { isWorkerRunnableStatus } from '../lib/task-state.js'
   import { isOperationalReceiptQuestion } from '@guildhall/shared'
   import type { InboxItem } from '../lib/inbox-item-key.js'
+  import type { AlertBandTone } from '../../../packages/ui/src/components/types.js'
   import type { AgentQuestion, EventEnvelope, ProjectMigrationStatus, ProjectMigrationStatusItem, ProjectView, ProviderStatus, Task } from '../lib/types.js'
+
+  type MigrationApplyStage = 'idle' | 'applying' | 'refreshing-project' | 'refreshing-inbox' | 'checking-status' | 'complete'
+  type MigrationApplyResult = {
+    applied?: ProjectMigrationStatusItem[]
+    skipped?: ProjectMigrationStatusItem[]
+    failed?: Array<ProjectMigrationStatusItem & { error?: string }>
+  }
+
+  const loadProjectOverviewTab = () => import('./project/ProjectOverviewTab.svelte')
+  const loadThreadTab = () => import('./project/ThreadTab.svelte')
+  const loadNeedsYouTab = () => import('./project/NeedsYouTab.svelte')
+  const loadWorkTab = () => import('./project/WorkTab.svelte')
+  const loadWorkspaceImportTab = () => import('./project/WorkspaceImportTab.svelte')
+  const loadProjectAttachFlow = () => import('./project/ProjectAttachFlow.svelte')
+  const loadFactsTab = () => import('./project/FactsTab.svelte')
+  const loadTimelineTab = () => import('./project/TimelineTab.svelte')
+  const loadReleaseTab = () => import('./project/ReleaseTab.svelte')
+  const loadSettingsTab = () => import('./project/SettingsTab.svelte')
+  const loadProjectStructurePanel = () => import('./project/structure/ProjectStructurePanel.svelte')
+
+  interface ShellAttentionNotice {
+    id: string
+    key?: string
+    code?: string | null
+    reason?: string | null
+    message: string
+    href?: string | null
+    priority: number
+    tone: AlertBandTone
+    role: 'alert' | 'status'
+    ariaLabel: string
+    actionHref?: string | null
+    actionLabel?: string | null
+  }
 
   interface Props {
     initialView?: ProjectView
@@ -67,18 +94,21 @@
   let mobileRailOpen = $state(false)
   let railPreviewOpen = $state(false)
   let railPreference = $state<'collapsed' | 'expanded'>('collapsed')
+  let navContextMode = $state<'project' | 'list' | 'detail' | 'split'>('project')
   let topbarLabelsCollapsed = $state(false)
   let newTaskInOverflow = $state(false)
   let migrationModalOpen = $state(false)
   let migrationStatus = $state<ProjectMigrationStatus | null>(null)
   let migrationStatusLoading = $state(false)
   let migrationApplyBusy = $state(false)
+  let migrationApplyStage = $state<MigrationApplyStage>('idle')
   let migrationError = $state<string | null>(null)
   let migrationAppliedMessage = $state<string | null>(null)
+  let migrationApplyResult = $state<MigrationApplyResult | null>(null)
   const RAIL_PREFERENCE_KEY = 'guildhall:project-rail'
 
   // Inbox blockers drive disabled-state on top-bar actions so hard blockers
-  // (e.g. bootstrap not verified) can't be bypassed by pressing Start.
+  // (e.g. bootstrap not verified) can't be bypassed by pressing Resume.
   interface Blockers { bootstrap: boolean; workspaceImport: boolean }
   let blockers = $state<Blockers>({ bootstrap: false, workspaceImport: false })
   let inboxItems = $state<InboxItem[]>([])
@@ -89,9 +119,20 @@
   let inboxLoadQueued = false
   let latestTickerEvent = $state<EventEnvelope | null>(null)
   let tickerNow = $state(Date.now())
+  const detail = $derived.by(() => {
+    const current = project.detail
+    if (!current) return null
+    if (!activeProjectId || !current.id || current.id === activeProjectId) return current
+    return null
+  })
   const projectDisplayName = $derived(
-    project.detail?.name?.trim() || humanizeProjectName(project.detail?.id ?? 'Project'),
+    detail?.name?.trim() || humanizeProjectName(detail?.id ?? activeProjectId ?? 'Project'),
   )
+  const pageMode = $derived<'document' | 'surface-fill'>(
+    currentView === 'thread' ? 'surface-fill' : 'document',
+  )
+  const RAIL_PREVIEW_OPEN_DELAY_MS = 150
+  let railPreviewTimer = $state<ReturnType<typeof setTimeout> | null>(null)
   const projectDisplayPath = $derived(formatUserPath(project.detail?.path))
   const projectDisplayPathLeaf = $derived(projectDisplayPath.split('/').filter(Boolean).pop() ?? 'This project')
 
@@ -239,11 +280,29 @@
     }
   }
 
-  function openRailPreview(): void {
+  function cancelRailPreviewTimer(): void {
+    if (railPreviewTimer) {
+      clearTimeout(railPreviewTimer)
+      railPreviewTimer = null
+    }
+  }
+
+  function openRailPreviewImmediately(): void {
+    cancelRailPreviewTimer()
     if (!railForcedCollapsed && railCollapsed) railPreviewOpen = true
   }
 
+  function scheduleRailPreviewOpen(): void {
+    if (railForcedCollapsed || !railCollapsed) return
+    cancelRailPreviewTimer()
+    railPreviewTimer = window.setTimeout(() => {
+      railPreviewTimer = null
+      if (!railForcedCollapsed && railCollapsed) railPreviewOpen = true
+    }, RAIL_PREVIEW_OPEN_DELAY_MS)
+  }
+
   function closeRailPreview(event?: FocusEvent | MouseEvent): void {
+    cancelRailPreviewTimer()
     if (railForcedCollapsed || !railCollapsed) return
     const current = event?.currentTarget
     const related = event?.relatedTarget
@@ -273,6 +332,25 @@
   }
 
   $effect(() => {
+    const handle = (event: Event) => {
+      const detail = (event as CustomEvent<{ surface?: string; mode?: 'project' | 'list' | 'detail' | 'split' }>).detail
+      navContextMode = detail?.mode ?? 'project'
+    }
+    window.addEventListener('guildhall:set-nav-context', handle as EventListener)
+    return () => window.removeEventListener('guildhall:set-nav-context', handle as EventListener)
+  })
+
+  $effect(() => {
+    if (railForcedCollapsed && currentView === 'thread' && navContextMode === 'detail' && mobileRailOpen) {
+      mobileRailOpen = false
+    }
+  })
+
+  $effect(() => {
+    return () => cancelRailPreviewTimer()
+  })
+
+  $effect(() => {
     const off = onEvent(ev => {
       const t = ev.event?.type ?? ''
       if (t.startsWith('supervisor_') || t === 'provider_health_changed') void project.refresh(activeProjectId)
@@ -280,8 +358,10 @@
     return off
   })
 
+  type NavSectionId = ProjectView | 'project'
+
   interface NavEntry {
-    id: ProjectView
+    id: NavSectionId
     label: string
     icon: IconName
     suffix: string
@@ -290,19 +370,20 @@
 
   const coordinators = $derived(project.detail?.config?.coordinators ?? [])
   const needsMeta = $derived(coordinators.length === 0)
-
   const entries = $derived<NavEntry[]>([
     {
-      id: 'overview',
-      label: 'Overview',
+      id: 'project',
+      label: 'Project',
       icon: 'activity',
       suffix: '/overview',
       subs: [
-        { id: 'summary', label: 'Summary', path: currentProjectHref('/overview', activeProjectId) },
-        { id: 'inbox', label: 'Inbox', path: currentProjectHref('/overview/inbox', activeProjectId) },
+        { id: 'overview', label: 'Overview', path: currentProjectHref('/overview', activeProjectId) },
+        { id: 'inbox', label: 'Needs you', path: currentProjectHref('/overview/inbox', activeProjectId) },
+        { id: 'facts', label: 'Facts', path: currentProjectHref('/facts', activeProjectId) },
+        { id: 'structure', label: 'Structure', path: currentProjectHref('/structure', activeProjectId) },
       ],
     },
-    { id: 'thread', label: 'Thread', icon: 'sparkles', suffix: '/thread' },
+    { id: 'thread', label: 'Threads', icon: 'sparkles', suffix: '/thread' },
     {
       id: 'work',
       label: 'Work',
@@ -326,10 +407,52 @@
     },
   ])
   const settingsPath = $derived(currentProjectHref('/settings', activeProjectId))
+  const canRenderWithoutProjectDetail = $derived(
+    currentView === 'thread' || currentView === 'inbox',
+  )
+  const showingCompactThreadDetail = $derived(
+    railForcedCollapsed && currentView === 'thread' && navContextMode === 'detail',
+  )
+  const topbarBackLabel = $derived(showingCompactThreadDetail ? 'Threads' : 'Projects')
+  const topbarBackTitle = $derived(showingCompactThreadDetail ? 'Back to Threads' : 'Back to Projects')
+  const showTopbarBackLabel = $derived(showingCompactThreadDetail || !topbarLabelsCollapsed)
 
   function go(href: string) {
     closeMobileRail()
     nav(href)
+  }
+
+  function sectionIsActive(id: NavSectionId) {
+    if (id === 'project') return currentView === 'overview' || currentView === 'facts' || currentView === 'structure'
+    return currentView === id
+  }
+
+  function railSubIsActive(sectionId: NavSectionId, subId: string, subPath: string) {
+    if (path.value === subPath) return true
+
+    if (sectionId === 'project') {
+      if (currentView === 'overview') return currentSub === 'inbox' ? subId === 'inbox' : subId === 'overview'
+      if (currentView === 'facts') return subId === 'facts'
+      if (currentView === 'structure') return subId === 'structure'
+    }
+
+    if (sectionId === 'work' && currentView === 'work') {
+      return path.href.includes('view=board') ? subId === 'board' : subId === 'queue'
+    }
+
+    if (sectionId === 'release' && currentView === 'release') {
+      return currentSub === 'criteria' ? subId === 'criteria' : subId === 'verdict'
+    }
+
+    return false
+  }
+
+  function handleTopbarBack(): void {
+    if (showingCompactThreadDetail) {
+      window.dispatchEvent(new CustomEvent('guildhall:thread-show-list'))
+      return
+    }
+    go('/')
   }
 
   function closeActionsMenu(): void {
@@ -362,9 +485,9 @@
       if (!res.ok) {
         try {
           const body = (await res.json()) as { error?: string; code?: string }
-          runError = body.error ?? `Start failed (HTTP ${res.status})`
+          runError = body.error ?? `Resume failed (HTTP ${res.status})`
         } catch {
-          runError = `Start failed (HTTP ${res.status})`
+          runError = `Resume failed (HTTP ${res.status})`
         }
         optimisticRunStatus = null
         return
@@ -392,9 +515,9 @@
       if (!res.ok) {
         try {
           const body = (await res.json()) as { error?: string }
-          runError = body.error ?? `Stop failed (HTTP ${res.status})`
+          runError = body.error ?? `Pause failed (HTTP ${res.status})`
         } catch {
-          runError = `Stop failed (HTTP ${res.status})`
+          runError = `Pause failed (HTTP ${res.status})`
         }
         optimisticRunStatus = null
         return
@@ -422,15 +545,24 @@
   async function openMigrationModal(): Promise<void> {
     migrationModalOpen = true
     migrationAppliedMessage = null
+    migrationApplyResult = null
+    migrationApplyStage = 'idle'
     await loadMigrationStatus()
+  }
+
+  function closeMigrationModal(): void {
+    if (migrationApplyBusy) return
+    migrationModalOpen = false
   }
 
   async function applyRequiredMigration(): Promise<void> {
     const migration = primaryRequiredMigration
     if (!migration) return
     migrationApplyBusy = true
+    migrationApplyStage = 'applying'
     migrationError = null
     migrationAppliedMessage = null
+    migrationApplyResult = null
     try {
       const res = await projectFetch('/api/project/migrations/apply', {
         method: 'POST',
@@ -440,19 +572,27 @@
       const body = (await res.json().catch(() => ({}))) as {
         error?: string
         status?: ProjectMigrationStatus
-        result?: { failed?: Array<{ id?: string; error?: string }> }
+        result?: MigrationApplyResult
       }
       if (!res.ok || body.result?.failed?.length) {
         const failed = body.result?.failed?.[0]
         throw new Error(failed?.error ?? body.error ?? `Migration failed (HTTP ${res.status})`)
       }
       migrationStatus = body.status ?? null
-      migrationAppliedMessage = 'Migration applied.'
+      migrationApplyResult = body.result ?? null
+      migrationApplyStage = 'refreshing-project'
       await project.refresh(activeProjectId)
+      migrationApplyStage = 'refreshing-inbox'
       await loadInbox()
-      if (!body.status) await loadMigrationStatus()
+      if (!body.status) {
+        migrationApplyStage = 'checking-status'
+        await loadMigrationStatus()
+      }
+      migrationApplyStage = 'complete'
+      migrationAppliedMessage = 'Migration complete.'
     } catch (err) {
       migrationError = err instanceof Error ? err.message : String(err)
+      migrationApplyStage = 'idle'
     } finally {
       migrationApplyBusy = false
     }
@@ -498,7 +638,6 @@
     )
   }
 
-  const detail = $derived(project.detail)
   $effect(() => {
     latestTickerEvent = (detail?.recentEvents ?? []).reduce<EventEnvelope | null>(
       (current, candidate) => pickLatestEvent(current, candidate),
@@ -518,8 +657,12 @@
     if (optimisticRunStatus === 'stopping' && actualRunStatus !== 'running') optimisticRunStatus = null
   })
   const runMode = $derived(detail?.run?.mode === 'one_task' ? 'one_task' : 'continuous')
+  const availabilityStatus = $derived(detail?.availability?.status ?? 'active')
+  const availabilityPaused = $derived(availabilityStatus === 'paused')
   const providerStatus = $derived(detail?.providerStatus ?? detail?.run?.providerStatus ?? null)
   const startReadiness = $derived(detail?.startReadiness ?? null)
+  const primaryAction = $derived(detail?.actionModel?.primaryAction ?? null)
+  const actionRunControl = $derived(detail?.actionModel?.runControl ?? null)
   const providerIndicator = $derived(buildProviderIndicator(providerStatus, runStatus))
   const providerHeaderLabel = $derived(providerIndicator?.summaryLabel ?? null)
   const providerDecisionText = $derived(
@@ -531,7 +674,7 @@
   const providerNoticeText = $derived(
     providerStatus?.fallback
       ? providerDecisionText ??
-        'Preferred provider is unavailable; Guildhall is using a fallback for this run.'
+        'Preferred provider is unavailable; this run is using a fallback.'
       : null,
   )
   const providerWarningText = $derived(
@@ -548,6 +691,20 @@
   const allTerminalStart = $derived(startReadiness?.code === 'all_terminal')
   const requiredMigrationBlocked = $derived(startReadiness?.code === 'required_migration_pending')
   const primaryRequiredMigration = $derived<ProjectMigrationStatusItem | null>(migrationStatus?.blocked?.[0] ?? null)
+  const migrationProgressLabel = $derived.by(() => {
+    switch (migrationApplyStage) {
+      case 'applying': return 'Applying migration'
+      case 'refreshing-project': return 'Refreshing project state'
+      case 'refreshing-inbox': return 'Refreshing Needs You'
+      case 'checking-status': return 'Checking remaining migrations'
+      case 'complete': return 'Migration complete'
+      default: return null
+    }
+  })
+  const migrationChangedPaths = $derived.by(() => {
+    const paths = migrationApplyResult?.applied?.flatMap(item => item.affectedPaths ?? []) ?? []
+    return [...new Set(paths)].slice(0, 8)
+  })
   const allTerminalReadinessMessage = $derived(
     allTerminalStart
       ? startReadiness?.message ?? 'All tasks are already finished.'
@@ -634,13 +791,13 @@
     if (startReadiness?.code === 'required_migration_pending') {
       return {
         stopReason: 'required_migration_pending',
-        stopMessage: startReadiness.message ?? 'Run the required Guildhall migration before starting this project.',
+        stopMessage: startReadiness.message ?? 'Run the required migration before starting this project.',
       }
     }
     if (startReadiness?.code === 'owner_input_required') {
       return {
         stopReason: 'awaiting_human',
-        stopMessage: startReadiness.message ?? 'Guildhall is waiting on your answer.',
+        stopMessage: startReadiness.message ?? 'Waiting on your answer.',
       }
     }
     if (currentStopSummary) return currentStopSummary
@@ -661,6 +818,12 @@
     if (reason === 'awaiting_human' || reason === 'blocked_only' || reason === 'dependency_blocked' || reason === 'required_migration_pending') return 'warn'
     return 'info'
   })
+
+  function shellAlertTone(severity: 'info' | 'warn' | 'error'): AlertBandTone {
+    if (severity === 'error') return 'danger'
+    if (severity === 'warn') return 'warn'
+    return 'accent'
+  }
   const runStopSummaryText = $derived.by(() => {
     if (runStatus === 'running' || runStatus === 'stopping') return null
     const summary = runStopSummary
@@ -694,7 +857,7 @@
         return counts.awaitingApproval
           ? 'One task pass finished. Review the updated draft in Thread.'
           : counts.waitingOnUser
-            ? 'One task pass finished. Guildhall is waiting on your input.'
+            ? 'One task pass finished. Waiting on your input.'
             : counts.done
               ? `One task pass finished: ${counts.done} done.`
               : 'One task pass finished.'
@@ -712,7 +875,7 @@
   })
   const runStopActionHref = $derived.by(() => {
     if (runStopSummary?.stopReason === 'awaiting_human') {
-      return projectActionHref(startReadiness?.actionHref ?? '/overview/inbox', activeProjectId)
+      return projectActionHref(primaryAction?.href ?? startReadiness?.actionHref ?? '/overview/inbox', activeProjectId)
     }
     if (runStopSummary?.stopReason === 'required_migration_pending') {
       return projectActionHref(startReadiness?.actionHref ?? '/migrations', activeProjectId)
@@ -724,7 +887,7 @@
   })
   const runStopActionLabel = $derived(
     runStopSummary?.stopReason === 'awaiting_human'
-      ? startReadinessActionLabel(startReadiness?.message)
+      ? primaryAction?.buttonLabel ?? startReadinessActionLabel(startReadiness?.message)
       : runStopSummary?.stopReason === 'required_migration_pending'
         ? 'Migrate project'
       : runStopSummary?.stopReason === 'blocked_only'
@@ -736,8 +899,12 @@
       ? detail.bootstrapStatus.steps?.find(s => s.result === 'fail') ?? null
       : null,
   )
+  const showDoThisNext = $derived(
+    currentView !== 'overview' && currentView !== 'thread' && currentView !== 'inbox',
+  )
   const startReadinessNoticeHref = $derived.by(() => {
     if (!startReadiness || startReadiness.canStart || allTerminalStart || requiredMigrationBlocked) return null
+    if (primaryAction?.href) return projectActionHref(primaryAction.href, activeProjectId)
     if (startReadiness.actionHref) return projectActionHref(startReadiness.actionHref, activeProjectId)
     if (metaIntakePending) return currentProjectHref('/setup', activeProjectId)
     if (blockers.bootstrap) return currentProjectHref('/settings/ready', activeProjectId)
@@ -745,10 +912,45 @@
   })
   const startReadinessNoticeLabel = $derived.by(() => {
     if (!startReadinessNoticeHref) return null
+    if (primaryAction?.buttonLabel) return primaryAction.buttonLabel
     if (metaIntakePending) return 'Open project setup'
     if (startReadiness?.code === 'import_drafts_waiting') return 'Review drafts'
     if (blockers.bootstrap) return 'Open readiness checks'
     return startReadinessActionLabel(startReadiness?.message)
+  })
+  const shellAttentionNotices = $derived.by(() => {
+    if (!detail) return []
+    const notices: ShellAttentionNotice[] = []
+    if (startReadinessNoticeHref && startReadinessNoticeLabel && startReadiness?.message) {
+      notices.push({
+        id: 'start-readiness',
+        code: startReadiness.code,
+        message: startReadiness.message,
+        href: startReadinessNoticeHref,
+        priority: 10,
+        tone: 'attention',
+        role: 'alert',
+        ariaLabel: 'Needs you',
+        actionHref: startReadinessNoticeHref,
+        actionLabel: startReadinessNoticeLabel,
+      })
+    }
+    if (runStopSummaryText) {
+      const runStopTone = shellAlertTone(runStopSummarySeverity)
+      notices.push({
+        id: 'run-stop-summary',
+        reason: runStopSummary?.stopReason ?? null,
+        message: runStopSummaryText,
+        href: runStopActionHref,
+        priority: 20,
+        tone: runStopTone,
+        role: runStopTone === 'accent' ? 'status' : 'alert',
+        ariaLabel: runStopTone === 'danger' ? 'Blocked' : runStopTone === 'warn' ? 'Needs attention' : 'Status',
+        actionHref: runStopActionHref,
+        actionLabel: runStopActionLabel,
+      })
+    }
+    return dedupeProjectAttention(notices)
   })
   const bootstrapFailureText = $derived.by(() => {
     const step = failedBootstrapStep
@@ -819,8 +1021,10 @@
   )
 
   const startDisabledReason = $derived(
-    requiredMigrationBlocked
-      ? startReadiness?.message ?? 'Run the required Guildhall migration before starting this project'
+    actionRunControl?.startEnabled === false
+      ? actionRunControl.disabledReason ?? 'Finish setup before starting'
+      : requiredMigrationBlocked
+      ? startReadiness?.message ?? 'Run the required migration before starting this project'
       : !startReadiness?.canStart
       ? startReadiness?.message ?? 'Finish setup before starting'
       : activeCount === 0 && awaitingApprovalCount === 0 && taskList.length > 0
@@ -833,7 +1037,7 @@
   )
   const newTaskDisabledReason = $derived(
     requiredMigrationBlocked
-      ? startReadiness?.message ?? 'Run the required Guildhall migration before creating a request'
+      ? startReadiness?.message ?? 'Run the required migration before creating a request'
       : needsMeta
       ? 'Finish project setup before creating a request'
       : blockers.bootstrap
@@ -843,10 +1047,18 @@
         : null,
   )
   const showRunButton = $derived(
-    runStatus === 'running' || runStatus === 'stopping' || (!allTerminalStart && startDisabledReason !== 'No tasks to start'),
+    runStatus === 'running' ||
+      runStatus === 'stopping' ||
+      (!allTerminalStart && (!availabilityPaused || startDisabledReason !== 'No tasks to start')),
+  )
+  const runControlPauses = $derived(
+    runStatus === 'running' ||
+      runStatus === 'stopping',
   )
   const runButtonIdleLabel = $derived(
-    requiredMigrationBlocked
+    actionRunControl?.label && actionRunControl.startEnabled === false
+      ? actionRunControl.label
+    : requiredMigrationBlocked
       ? 'Migrate'
     : startReadiness?.code === 'owner_input_required'
       ? /question|answer/i.test(startReadiness.message ?? '')
@@ -856,7 +1068,9 @@
           : /review|approve/i.test(startReadiness.message ?? '')
             ? 'Review needed'
             : 'Needs input'
-      : 'Start',
+    : startReadiness?.canStart === false
+      ? startReadinessActionLabel(startReadiness.message)
+      : actionRunControl?.label ?? 'Resume',
   )
   const showAdvanceOneTaskAction = $derived(
     !allTerminalStart,
@@ -864,7 +1078,8 @@
 
   function startReadinessActionLabel(message: string | undefined): string {
     if (/question|answer/i.test(message ?? '')) return 'Answer question'
-    if (/spec/i.test(message ?? '')) return 'Review spec'
+    if (/draft/i.test(message ?? '')) return 'Review drafts'
+    if (/spec/i.test(message ?? '')) return /\b\d+\s+specs\b/i.test(message ?? '') ? 'Review next spec' : 'Review spec'
     if (/brief/i.test(message ?? '')) return 'Review brief'
     if (/recover|blocked|escalation/i.test(message ?? '')) return 'Review recovery'
     return 'Open next action'
@@ -877,6 +1092,7 @@
 {#if detail?.initializationNeeded}
   <ProjectShell
     uninitialized
+      pageMode={pageMode}
     railCollapsed={railCollapsed && !railOverlayOpen}
     railPreviewOpen={railPreviewOpen}
     mobileRailMode={railForcedCollapsed}
@@ -892,9 +1108,9 @@
       class:rail-mobile-open={railOverlayOpen}
       class:rail-preview-open={railPreviewOpen}
       aria-label="Project navigation"
-      onmouseenter={openRailPreview}
+      onmouseenter={scheduleRailPreviewOpen}
       onmouseleave={closeRailPreview}
-      onfocusin={openRailPreview}
+      onfocusin={openRailPreviewImmediately}
       onfocusout={closeRailPreview}
     >
       <div class="rail-head" title={projectDisplayPath}>
@@ -953,14 +1169,14 @@
           <Button
             variant="secondary"
             size="sm"
-            iconOnly={topbarLabelsCollapsed}
-            onclick={() => go('/')}
-            ariaLabel="Back to Projects"
-            title="Back to Projects"
+            iconOnly={!showTopbarBackLabel}
+            onclick={handleTopbarBack}
+            ariaLabel={topbarBackTitle}
+            title={topbarBackTitle}
           >
             <Icon name="chevron-left" size={16} />
-            {#if !topbarLabelsCollapsed}
-              <span>Projects</span>
+            {#if showTopbarBackLabel}
+              <span>{topbarBackLabel}</span>
             {/if}
           </Button>
         </div>
@@ -968,22 +1184,34 @@
         <div class="topbar-actions"></div>
       </header>
     {/snippet}
-    <ProjectAttachFlow
-      projectName={projectDisplayPathLeaf}
-      projectPath={projectDisplayPath}
-      projectId={activeProjectId}
-    />
+    {#await loadProjectAttachFlow()}
+      <div class="page-centered">
+        <p class="muted">Loading project...</p>
+      </div>
+    {:then module}
+      {@const ProjectAttachFlow = module.default}
+      <ProjectAttachFlow
+        projectName={projectDisplayPathLeaf}
+        projectPath={projectDisplayPath}
+        projectId={activeProjectId}
+      />
+    {:catch err}
+      <div class="page-centered">
+        <p class="muted">Error: {err instanceof Error ? err.message : String(err)}</p>
+      </div>
+    {/await}
   </ProjectShell>
 {:else if project.error}
   <div class="page-centered">
     <p class="muted">Error: {project.error}</p>
   </div>
-{:else if !detail}
+{:else if !detail && !canRenderWithoutProjectDetail}
   <div class="page-centered">
     <p class="muted">Loading project...</p>
   </div>
 {:else}
   <ProjectShell
+      pageMode={pageMode}
     railCollapsed={railCollapsed && !railOverlayOpen}
     railPreviewOpen={railPreviewOpen}
     mobileRailMode={railForcedCollapsed}
@@ -999,12 +1227,12 @@
       class:rail-mobile-open={railOverlayOpen}
       class:rail-preview-open={railPreviewOpen}
       aria-label="Project navigation"
-      onmouseenter={openRailPreview}
+      onmouseenter={scheduleRailPreviewOpen}
       onmouseleave={closeRailPreview}
-      onfocusin={openRailPreview}
+      onfocusin={openRailPreviewImmediately}
       onfocusout={closeRailPreview}
     >
-      <div class="rail-head" title={detail.name}>
+      <div class="rail-head" title={projectDisplayPath}>
         <div class="rail-head-top">
           <div class="rail-project">{projectDisplayName}</div>
           <div class="rail-head-actions">
@@ -1035,12 +1263,12 @@
           </div>
         </div>
         <div class="rail-status">
-          <Chip label={phaseLabel} tone={phaseTone} />
+          <Chip label={detail ? phaseLabel : 'Loading'} tone={detail ? phaseTone : 'neutral'} />
         </div>
       </div>
       <nav class="rail-nav">
         {#each entries as e (e.id)}
-          {@const active = currentView === e.id}
+          {@const active = sectionIsActive(e.id)}
           <Tooltip text={e.label} placement="right" className="rail-tooltip" disabled={railLabelsVisible}>
             <button
               type="button"
@@ -1058,12 +1286,7 @@
           {#if active && e.subs}
             <ul class="rail-subs">
               {#each e.subs as s (s.id)}
-                {@const subActive = path.value === s.path ||
-                  (e.id === 'overview' && ((currentSub === 'inbox' && s.id === 'inbox') || (!currentSub && s.id === 'summary'))) ||
-                  (e.id === 'settings' && currentSub === s.id) ||
-                  (e.id === 'release' && currentSub === s.id) ||
-                  (e.id === 'release' && !currentSub && s.id === 'verdict') ||
-                  (e.id === 'settings' && !currentSub && s.id === 'ready')}
+                {@const subActive = railSubIsActive(e.id, s.id, s.path)}
                 <li>
                   <button
                     type="button"
@@ -1103,226 +1326,347 @@
           <Button
             variant="secondary"
             size="sm"
-            iconOnly={topbarLabelsCollapsed}
-            onclick={() => go('/')}
-            ariaLabel="Back to Projects"
-            title="Back to Projects"
+            iconOnly={!showTopbarBackLabel}
+            onclick={handleTopbarBack}
+            ariaLabel={topbarBackTitle}
+            title={topbarBackTitle}
           >
             <Icon name="chevron-left" size={16} />
-            {#if !topbarLabelsCollapsed}
-              <span>Projects</span>
+            {#if showTopbarBackLabel}
+              <span>{topbarBackLabel}</span>
             {/if}
           </Button>
         </div>
         <div class="topbar-leading" aria-hidden="true"></div>
         <div class="topbar-actions">
-          {#if newTaskDisabledReason === null && !newTaskInOverflow}
+          {#if detail && newTaskDisabledReason === null && !newTaskInOverflow}
             <Button
               variant="secondary"
               size="sm"
               iconOnly={topbarLabelsCollapsed}
               disabled={busy}
               onclick={newTask}
-              ariaLabel="New request"
-              title="New request"
+              ariaLabel="New thread"
+              title="New thread"
             >
               <Icon name="plus" size={16} />
               {#if !topbarLabelsCollapsed}
-                <span>New request</span>
+                <span>New thread</span>
               {/if}
             </Button>
           {/if}
-          {#if showRunButton}
+          {#if detail && showRunButton}
             <Button
-              variant={runStatus === 'running' || runStatus === 'stopping' ? 'danger' : requiredMigrationBlocked ? 'human' : 'agent'}
+              variant={runControlPauses ? 'danger' : requiredMigrationBlocked ? 'human' : 'agent'}
               size="sm"
               iconOnly={topbarLabelsCollapsed}
-              disabled={busy || migrationApplyBusy || runStatus === 'stopping' || (runStatus !== 'running' && startDisabledReason !== null && !requiredMigrationBlocked)}
-              onclick={runStatus === 'running' ? stop : requiredMigrationBlocked ? () => { void openMigrationModal() } : () => start('continuous')}
+              disabled={busy || migrationApplyBusy || runStatus === 'stopping' || (!runControlPauses && startDisabledReason !== null && !requiredMigrationBlocked)}
+              onclick={runControlPauses ? stop : requiredMigrationBlocked ? () => { void openMigrationModal() } : () => start('continuous')}
               ariaLabel={
                 runStatus === 'stopping'
-                  ? 'Stopping'
-                  : runStatus === 'running'
-                  ? (runMode === 'one_task' ? 'Stop one-step run' : 'Stop')
+                  ? 'Pausing'
+                  : runControlPauses
+                  ? (runMode === 'one_task' ? 'Pause one-step run' : 'Pause')
                   : requiredMigrationBlocked
                   ? 'Migrate project'
-                  : (startDisabledReason ?? 'Start')
+                  : (startDisabledReason ?? 'Resume')
               }
               title={
                 runStatus === 'stopping'
-                  ? 'Stopping Guildhall'
-                  : runStatus === 'running'
-                  ? (runMode === 'one_task' ? 'Stop the current one-step run' : 'Stop Guildhall')
+        ? 'Pausing the run'
+                : runControlPauses
+                  ? (runMode === 'one_task' ? 'Pause the current one-step run' : 'Pause the run')
                   : requiredMigrationBlocked
                   ? 'Migrate project'
-                  : (startDisabledReason ?? 'Let Guildhall advance this project')
+                  : (startDisabledReason ?? 'Let the run continue this project')
               }
             >
-              <Icon name={runStatus === 'running' || runStatus === 'stopping' ? 'square' : requiredMigrationBlocked ? 'refresh-cw' : 'sparkles'} size={16} />
+              <Icon name={runControlPauses ? 'pause' : requiredMigrationBlocked ? 'refresh-cw' : 'sparkles'} size={16} />
               {#if !topbarLabelsCollapsed}
-                {runStatus === 'stopping' ? 'Stopping...' : runStatus === 'running' ? (runMode === 'one_task' ? 'Stop 1' : 'Stop') : runButtonIdleLabel}
+                {runStatus === 'stopping' ? 'Pausing...' : runControlPauses ? (runMode === 'one_task' ? 'Pause 1' : 'Pause') : runButtonIdleLabel}
               {/if}
             </Button>
           {/if}
-          <div class="actions-menu" bind:this={actionsMenuEl}>
-            <Button
-              variant="ghost"
-              size="sm"
-              iconOnly
-              ariaLabel="Open actions menu"
-              title={actionsMenuOpen ? undefined : 'Open actions menu'}
-              onclick={toggleActionsMenu}
-            >
-              <Icon name="ellipsis" size={18} />
-            </Button>
-            {#if actionsMenuOpen}
-              <div class="actions-menu-panel">
-                {#if newTaskDisabledReason === null && newTaskInOverflow}
-                  <button
-                    type="button"
-                    class="actions-menu-item"
-                    disabled={busy}
-                    onclick={() => { closeActionsMenu(); void newTask() }}
-                  >
-                    <Icon name="plus" size={16} />
-                    <span>New request</span>
-                  </button>
-                {/if}
-                {#if showAdvanceOneTaskAction}
-                  <button
-                    type="button"
-                    class="actions-menu-item"
-                    disabled={busy || requiredMigrationBlocked || startDisabledReason !== null || runStatus === 'running' || runStatus === 'stopping'}
-                    title={startDisabledReason ?? ''}
-                    onclick={() => { closeActionsMenu(); start('one_task') }}
-                  >
-                    <Icon name="check-circle-2" size={16} />
-                    <span>Advance one task</span>
-                  </button>
-                {/if}
-              </div>
-            {/if}
-          </div>
+          {#if detail}
+            <div class="actions-menu" bind:this={actionsMenuEl}>
+              <Button
+                variant="ghost"
+                size="sm"
+                iconOnly
+                ariaLabel="Open actions menu"
+                title={actionsMenuOpen ? undefined : 'Open actions menu'}
+                onclick={toggleActionsMenu}
+              >
+                <Icon name="ellipsis" size={18} />
+              </Button>
+              {#if actionsMenuOpen}
+                <div class="actions-menu-panel">
+                  {#if newTaskDisabledReason === null && newTaskInOverflow}
+                    <button
+                      type="button"
+                      class="actions-menu-item"
+                      disabled={busy}
+                      onclick={() => { closeActionsMenu(); void newTask() }}
+                    >
+                      <Icon name="plus" size={16} />
+                      <span>New thread</span>
+                    </button>
+                  {/if}
+                  {#if showAdvanceOneTaskAction}
+                    <button
+                      type="button"
+                      class="actions-menu-item"
+                      disabled={busy || requiredMigrationBlocked || startDisabledReason !== null || runStatus === 'running' || runStatus === 'stopping'}
+                      title={startDisabledReason ?? ''}
+                      onclick={() => { closeActionsMenu(); start('one_task') }}
+                    >
+                      <Icon name="check-circle-2" size={16} />
+                      <span>Advance one task</span>
+                    </button>
+                  {/if}
+                </div>
+              {/if}
+            </div>
+          {/if}
         </div>
       </header>
     {/snippet}
     {#snippet band()}
-        {#if runError}
-          <NoticeBand tone="danger" icon="alert-triangle" density="compact">
+        {#if detail && runError}
+          <AlertBand tone="danger" role="alert" density="compact" ariaLabel="Run error">
             <strong>{runError}</strong>
             {#snippet actions()}
-            {#if /provider/i.test(runError)}
-              <a href={currentProjectHref('/settings/providers', activeProjectId)} onclick={(e) => { e.preventDefault(); nav(currentProjectHref('/settings/providers', activeProjectId)) }}>Open project providers</a>
-            {/if}
-            <button class="dismiss" onclick={() => (runError = null)} aria-label="Dismiss">×</button>
+              {#if /provider/i.test(runError)}
+                <a href={currentProjectHref('/settings/providers', activeProjectId)} onclick={(e) => { e.preventDefault(); nav(currentProjectHref('/settings/providers', activeProjectId)) }}>
+                  Open project providers
+                </a>
+              {/if}
+              <button type="button" class="gh-notice-inline-dismiss" aria-label="Dismiss" onclick={() => (runError = null)}>×</button>
             {/snippet}
-          </NoticeBand>
+          </AlertBand>
         {/if}
-        {#if bootstrapFailureText}
-          <NoticeBand tone="danger" icon="alert-triangle" density="compact">
+        {#if detail && bootstrapFailureText}
+          <AlertBand tone="danger" role="alert" density="compact" ariaLabel="Bootstrap failed">
             <strong>{bootstrapFailureText}</strong>
             {#snippet actions()}
-              <a href={currentProjectHref('/settings/ready', activeProjectId)} onclick={(e) => { e.preventDefault(); nav(currentProjectHref('/settings/ready', activeProjectId)) }}>Open readiness checks</a>
+              <a href={currentProjectHref('/settings/ready', activeProjectId)} onclick={(e) => { e.preventDefault(); nav(currentProjectHref('/settings/ready', activeProjectId)) }}>
+                Open readiness checks
+              </a>
             {/snippet}
-          </NoticeBand>
+          </AlertBand>
         {/if}
-        {#if providerStatus?.fallback}
-          <NoticeBand
-            tone={providerDecisionSeverity === 'warn' ? 'warn' : providerDecisionSeverity === 'error' ? 'danger' : 'accent'}
-            icon="plug"
+        {#if detail && providerStatus?.fallback}
+          {@const providerFallbackTone = shellAlertTone(providerDecisionSeverity)}
+          <AlertBand
+            tone={providerFallbackTone}
+            role={providerFallbackTone === 'accent' ? 'status' : 'alert'}
             density="compact"
+            ariaLabel="Provider fallback"
           >
             <strong>{providerNoticeText}</strong>
             {#snippet actions()}
-              <a href={currentProjectHref('/settings/providers', activeProjectId)} onclick={(e) => { e.preventDefault(); nav(currentProjectHref('/settings/providers', activeProjectId)) }}>Open project providers</a>
+              <a href={currentProjectHref('/settings/providers', activeProjectId)} onclick={(e) => { e.preventDefault(); nav(currentProjectHref('/settings/providers', activeProjectId)) }}>
+                Open project providers
+              </a>
             {/snippet}
-          </NoticeBand>
+          </AlertBand>
         {/if}
-        {#if providerWarningText}
-          <NoticeBand
-            tone={providerWarningSeverity === 'warn' ? 'warn' : providerWarningSeverity === 'error' ? 'danger' : 'accent'}
-            icon="alert-triangle"
+        {#if detail && providerWarningText}
+          {@const providerStatusTone = shellAlertTone(providerWarningSeverity)}
+          <AlertBand
+            tone={providerStatusTone}
+            role={providerStatusTone === 'accent' ? 'status' : 'alert'}
             density="compact"
+            ariaLabel="Provider attention"
           >
             <strong>{providerWarningText}</strong>
             {#snippet actions()}
-              <a href={currentProjectHref('/settings/providers', activeProjectId)} onclick={(e) => { e.preventDefault(); nav(currentProjectHref('/settings/providers', activeProjectId)) }}>Open Settings</a>
+              <a href={currentProjectHref('/settings/providers', activeProjectId)} onclick={(e) => { e.preventDefault(); nav(currentProjectHref('/settings/providers', activeProjectId)) }}>
+                Open settings
+              </a>
             {/snippet}
-          </NoticeBand>
+          </AlertBand>
         {/if}
-        {#if providerHealthText}
-          <NoticeBand tone="warn" icon="activity" density="compact">
+        {#if detail && providerHealthText}
+          <AlertBand tone="warn" role="alert" density="compact" ariaLabel="Provider health">
             <strong>{providerHealthText}</strong>
             {#snippet actions()}
-              <a href={currentProjectHref('/settings/providers', activeProjectId)} onclick={(e) => { e.preventDefault(); nav(currentProjectHref('/settings/providers', activeProjectId)) }}>Open Settings</a>
+              <a href={currentProjectHref('/settings/providers', activeProjectId)} onclick={(e) => { e.preventDefault(); nav(currentProjectHref('/settings/providers', activeProjectId)) }}>
+                Open settings
+              </a>
             {/snippet}
-          </NoticeBand>
+          </AlertBand>
         {/if}
-        {#if allTerminalReadinessMessage}
-          <NoticeBand tone="accent" icon="check-circle-2" density="compact">
+        {#if detail && allTerminalReadinessMessage}
+          <AlertBand tone="ok" role="status" density="compact" ariaLabel="Ready">
             <strong>{allTerminalReadinessMessage}</strong>
-          </NoticeBand>
+          </AlertBand>
         {/if}
-        {#if startReadinessNoticeHref && startReadinessNoticeLabel && startReadiness?.message}
-          <NoticeBand tone="warn" icon="alert-triangle" density="compact">
-            <strong>{startReadiness.message}</strong>
-            {#snippet actions()}
-              <a href={startReadinessNoticeHref} onclick={(e) => { e.preventDefault(); nav(startReadinessNoticeHref) }}>{startReadinessNoticeLabel}</a>
-            {/snippet}
-          </NoticeBand>
-        {/if}
-        {#if runStopSummaryText}
-          <NoticeBand
-            tone={runStopSummarySeverity === 'warn' ? 'warn' : runStopSummarySeverity === 'error' ? 'danger' : 'accent'}
-            icon={runStopSummarySeverity === 'warn' || runStopSummarySeverity === 'error' ? 'alert-triangle' : 'check-circle-2'}
+        {#each shellAttentionNotices as notice (notice.key ?? notice.id)}
+          <AlertBand
+            tone={notice.tone}
+            role={notice.role}
             density="compact"
+            ariaLabel={notice.ariaLabel}
           >
-            <strong>{runStopSummaryText}</strong>
+            <strong>{notice.message}</strong>
             {#snippet actions()}
-              {#if runStopActionHref && runStopActionLabel}
-                <a href={runStopActionHref} onclick={(e) => { e.preventDefault(); nav(runStopActionHref) }}>{runStopActionLabel}</a>
+              {#if notice.actionHref && notice.actionLabel}
+                <a href={notice.actionHref} onclick={(e) => { e.preventDefault(); nav(notice.actionHref ?? currentProjectHref('/overview', activeProjectId)) }}>
+                  {notice.actionLabel}
+                </a>
               {/if}
             {/snippet}
-          </NoticeBand>
-        {/if}
+          </AlertBand>
+        {/each}
     {/snippet}
-        {#if currentView !== 'overview' && currentView !== 'thread' && currentView !== 'inbox'}
+        {#if detail && showDoThisNext}
           <DoThisNext />
         {/if}
 
         <div class="body">
-          {#if currentView === 'overview'}
-            {#if currentSub === 'inbox'}
-              <InboxTab items={inboxItems} history={inboxHistory} loaded={inboxLoaded} error={inboxError} refresh={loadInbox} />
+          {#if !detail}
+            {#if currentView === 'thread'}
+              {#await loadThreadTab()}
+                <div class="page-centered page-centered-inline">
+                  <p class="muted">Loading project...</p>
+                </div>
+              {:then module}
+                {@const ThreadTab = module.default}
+                <ThreadTab projectId={activeProjectId} />
+              {/await}
+            {:else if currentView === 'inbox'}
+              {#await loadNeedsYouTab()}
+                <div class="page-centered page-centered-inline">
+                  <p class="muted">Loading project...</p>
+                </div>
+              {:then module}
+                {@const NeedsYouTab = module.default}
+                <NeedsYouTab items={inboxItems} history={inboxHistory} loaded={inboxLoaded} error={inboxError} refresh={loadInbox} />
+              {/await}
             {:else}
-              <ProjectOverviewTab
-                {detail}
-                {inboxItems}
-                {inboxLoaded}
-                {inboxError}
-                {projectTicker}
-                {activeProjectId}
-                onMigrate={openMigrationModal}
-              />
+              <div class="page-centered page-centered-inline">
+                <p class="muted">Loading project...</p>
+              </div>
+            {/if}
+          {:else if currentView === 'overview'}
+            {#if currentSub === 'inbox'}
+              {#await loadNeedsYouTab()}
+                <div class="page-centered page-centered-inline">
+                  <p class="muted">Loading project...</p>
+                </div>
+              {:then module}
+                {@const NeedsYouTab = module.default}
+                <NeedsYouTab items={inboxItems} history={inboxHistory} loaded={inboxLoaded} error={inboxError} refresh={loadInbox} />
+              {/await}
+            {:else}
+              {#await loadProjectOverviewTab()}
+                <div class="page-centered page-centered-inline">
+                  <p class="muted">Loading project...</p>
+                </div>
+              {:then module}
+                {@const ProjectOverviewTab = module.default}
+                <ProjectOverviewTab
+                  {detail}
+                  {inboxItems}
+                  {inboxLoaded}
+                  {inboxError}
+                  {projectTicker}
+                  {activeProjectId}
+                  onMigrate={openMigrationModal}
+                />
+              {/await}
             {/if}
           {:else if currentView === 'thread'}
-            <ThreadTab projectId={activeProjectId} />
+            {#await loadThreadTab()}
+              <div class="page-centered page-centered-inline">
+                <p class="muted">Loading project...</p>
+              </div>
+            {:then module}
+              {@const ThreadTab = module.default}
+              <ThreadTab projectId={activeProjectId} />
+            {/await}
           {:else if currentView === 'inbox'}
-            <InboxTab items={inboxItems} history={inboxHistory} loaded={inboxLoaded} error={inboxError} refresh={loadInbox} />
+            {#await loadNeedsYouTab()}
+              <div class="page-centered page-centered-inline">
+                <p class="muted">Loading project...</p>
+              </div>
+            {:then module}
+              {@const NeedsYouTab = module.default}
+              <NeedsYouTab items={inboxItems} history={inboxHistory} loaded={inboxLoaded} error={inboxError} refresh={loadInbox} />
+            {/await}
           {:else if currentView === 'workspace-import'}
-            <WorkspaceImportTab />
+            {#await loadWorkspaceImportTab()}
+              <div class="page-centered page-centered-inline">
+                <p class="muted">Loading project...</p>
+              </div>
+            {:then module}
+              {@const WorkspaceImportTab = module.default}
+              <WorkspaceImportTab />
+            {/await}
           {:else if currentView === 'work'}
-            <WorkTab {detail} mode="list" />
+            {#await loadWorkTab()}
+              <div class="page-centered page-centered-inline">
+                <p class="muted">Loading project...</p>
+              </div>
+            {:then module}
+              {@const WorkTab = module.default}
+              <WorkTab {detail} mode="list" />
+            {/await}
           {:else if currentView === 'planner'}
-            <WorkTab {detail} mode="board" />
+            {#await loadWorkTab()}
+              <div class="page-centered page-centered-inline">
+                <p class="muted">Loading project...</p>
+              </div>
+            {:then module}
+              {@const WorkTab = module.default}
+              <WorkTab {detail} mode="board" />
+            {/await}
           {:else if currentView === 'facts'}
-            <FactsTab />
+            {#await loadFactsTab()}
+              <div class="page-centered page-centered-inline">
+                <p class="muted">Loading project...</p>
+              </div>
+            {:then module}
+              {@const FactsTab = module.default}
+              <FactsTab />
+            {/await}
+          {:else if currentView === 'structure'}
+            {#await loadProjectStructurePanel()}
+              <div class="page-centered page-centered-inline">
+                <p class="muted">Loading project...</p>
+              </div>
+            {:then module}
+              {@const ProjectStructurePanel = module.default}
+              <ProjectStructurePanel />
+            {/await}
           {:else if currentView === 'timeline'}
-            <TimelineTab {detail} />
+            {#await loadTimelineTab()}
+              <div class="page-centered page-centered-inline">
+                <p class="muted">Loading project...</p>
+              </div>
+            {:then module}
+              {@const TimelineTab = module.default}
+              <TimelineTab {detail} />
+            {/await}
           {:else if currentView === 'release'}
-            <ReleaseTab subView={currentSub} />
+            {#await loadReleaseTab()}
+              <div class="page-centered page-centered-inline">
+                <p class="muted">Loading project...</p>
+              </div>
+            {:then module}
+              {@const ReleaseTab = module.default}
+              <ReleaseTab subView={currentSub} />
+            {/await}
         {:else if currentView === 'settings'}
-          <SettingsTab subView={currentSub} onMigrate={openMigrationModal} />
+          {#await loadSettingsTab()}
+            <div class="page-centered page-centered-inline">
+              <p class="muted">Loading project...</p>
+            </div>
+          {:then module}
+            {@const SettingsTab = module.default}
+            <SettingsTab subView={currentSub} onMigrate={openMigrationModal} />
+          {/await}
         {/if}
         </div>
 
@@ -1351,18 +1695,52 @@
     open={migrationModalOpen}
     title="Migrate project"
     size="md"
-    onClose={() => (migrationModalOpen = false)}
+    closeDisabled={migrationApplyBusy}
+    onClose={closeMigrationModal}
   >
     <div class="migration-modal">
       <p>
-        Guildhall needs to update this project before it can run. Review the file changes first so there are no surprise Git writes.
+        This project needs an update before it can run. Some migrations move or remove old project-local files after copying them into Guildhall state.
       </p>
+      {#if migrationApplyBusy && migrationProgressLabel}
+        <NoticeBand
+          tone="warn"
+          role="alert"
+          density="compact"
+          label="Migration in progress"
+          title={migrationProgressLabel}
+        >
+          Do not stop Guildhall until this finishes.
+        </NoticeBand>
+        <ol class="migration-steps" aria-label="Migration progress">
+          <li class:active={migrationApplyStage === 'applying'} class:done={['refreshing-project', 'refreshing-inbox', 'checking-status', 'complete'].includes(migrationApplyStage)}>Apply migration</li>
+          <li class:active={migrationApplyStage === 'refreshing-project'} class:done={['refreshing-inbox', 'checking-status', 'complete'].includes(migrationApplyStage)}>Refresh project state</li>
+          <li class:active={migrationApplyStage === 'refreshing-inbox'} class:done={['checking-status', 'complete'].includes(migrationApplyStage)}>Refresh Needs You</li>
+          <li class:active={migrationApplyStage === 'checking-status'} class:done={migrationApplyStage === 'complete'}>Check remaining migrations</li>
+        </ol>
+      {:else if migrationAppliedMessage}
+        <NoticeBand
+          tone="ok"
+          role="status"
+          density="compact"
+          label="Migration complete"
+          title={migrationAppliedMessage}
+        />
+        {#if migrationChangedPaths.length}
+          <div class="migration-card migration-card-complete">
+            <Chip label="Changed paths" tone="ok" />
+            <div class="migration-paths" aria-label="Migration changed paths">
+              {#each migrationChangedPaths as affectedPath}
+                <code>{affectedPath}</code>
+              {/each}
+            </div>
+          </div>
+        {/if}
+      {/if}
       {#if migrationStatusLoading}
         <p class="muted">Checking migrations...</p>
       {:else if migrationError}
-        <NoticeBand tone="danger" icon="alert-triangle" density="compact">
-          <strong>{migrationError}</strong>
-        </NoticeBand>
+        <NoticeBand tone="danger" role="alert" density="compact" label="Migration error" title={migrationError} />
       {:else if primaryRequiredMigration}
         <div class="migration-card">
           <Chip label="Required migration" tone="danger" />
@@ -1378,14 +1756,18 @@
             </div>
           {/if}
         </div>
-      {:else}
-        <NoticeBand tone="accent" icon="check-circle-2" density="compact">
-          <strong>{migrationAppliedMessage ?? 'No required migrations are blocking this project.'}</strong>
-        </NoticeBand>
+      {:else if !migrationAppliedMessage}
+        <NoticeBand
+          tone="ok"
+          role="status"
+          density="compact"
+          label="Migration status"
+          title="No required migrations are blocking this project."
+        />
       {/if}
     </div>
     {#snippet footer()}
-      <Button variant="secondary" onclick={() => (migrationModalOpen = false)}>
+      <Button variant="secondary" disabled={migrationApplyBusy} onclick={closeMigrationModal}>
         Close
       </Button>
       <Button
@@ -1394,7 +1776,7 @@
         onclick={() => { void applyRequiredMigration() }}
       >
         <Icon name="refresh-cw" size={16} />
-        {migrationApplyBusy ? 'Applying...' : 'Apply required migration'}
+        {migrationApplyBusy ? 'Applying migration...' : 'Apply required migration'}
       </Button>
     {/snippet}
   </Modal>
@@ -1477,18 +1859,18 @@
     display: flex;
     align-items: center;
     gap: var(--s-2);
-    padding: var(--s-2) var(--s-3);
+    padding: var(--s-2) var(--s-3) var(--s-2) calc((56px - 18px) / 2);
     background: transparent;
     border: none;
     color: var(--text-muted);
     font: inherit;
-    font-size: var(--fs-2);
-    font-weight: 600;
+    font-size: var(--gh-type-size-body);
+    font-weight: var(--gh-type-weight-strong);
     cursor: pointer;
     width: 100%;
     text-align: left;
     border-radius: 0;
-    line-height: var(--lh-tight);
+    line-height: var(--gh-type-line-height-tight);
   }
   :global(.rail-tooltip) {
     display: block;
@@ -1535,15 +1917,15 @@
     border: none;
     color: var(--text-muted);
     font: inherit;
-    font-size: var(--fs-1);
-    padding: var(--s-1) var(--s-3) var(--s-1) calc(var(--s-3) + 24px);
+    font-size: var(--gh-type-size-meta);
+    padding: var(--s-1) var(--s-3) var(--s-1) calc((56px - 18px) / 2 + 18px + var(--s-2));
     cursor: pointer;
     border-radius: 0;
   }
   .rail-sub:hover { color: var(--text); }
   .rail-sub.active {
     color: var(--accent-2);
-    font-weight: 700;
+    font-weight: var(--gh-type-weight-strong);
   }
 
   .main {
@@ -1617,28 +1999,24 @@
     display: none;
     margin-left: auto;
   }
-  .rail.rail-collapsed:not(.rail-preview-open) .rail-head {
+  .rail.rail-collapsed .rail-head {
     padding-inline: calc((56px - 30px) / 2);
   }
-  .rail.rail-collapsed:not(.rail-preview-open) .rail-head-top {
-    justify-content: center;
-  }
-  .rail.rail-collapsed:not(.rail-preview-open) .rail-head-actions {
+  .rail.rail-collapsed .rail-head-actions {
     margin-left: 0;
   }
-  .rail.rail-collapsed:not(.rail-preview-open) .rail-project,
-  .rail.rail-collapsed:not(.rail-preview-open) .rail-status,
+  .rail.rail-collapsed .rail-project,
+  .rail.rail-collapsed .rail-status,
   .rail.rail-collapsed:not(.rail-preview-open) .rail-label,
   .rail.rail-collapsed:not(.rail-preview-open) .rail-subs {
     display: none;
   }
   .rail.rail-collapsed:not(.rail-preview-open) .rail-item {
-    justify-content: center;
-    padding-inline: 0;
+    padding-right: 0;
   }
   .rail-project {
-    font-size: var(--fs-2);
-    font-weight: 700;
+    font-size: var(--gh-type-size-body);
+    font-weight: var(--gh-type-weight-strong);
     color: var(--text);
     text-transform: none;
     letter-spacing: 0;
@@ -1688,8 +2066,8 @@
     background: transparent;
     color: var(--text);
     font: inherit;
-    font-size: var(--fs-2);
-    font-weight: 600;
+    font-size: var(--gh-type-size-body);
+    font-weight: var(--gh-type-weight-strong);
     text-align: left;
     cursor: pointer;
   }
@@ -1709,7 +2087,7 @@
   .migration-modal p {
     margin: 0;
     color: var(--text-muted);
-    line-height: var(--lh-body);
+    line-height: var(--gh-type-line-height-body);
   }
   .migration-card {
     display: flex;
@@ -1723,8 +2101,49 @@
   .migration-card h4 {
     margin: 0;
     color: var(--text);
-    font-size: var(--fs-3);
-    line-height: var(--lh-tight);
+    font-size: var(--gh-type-size-panel-title);
+    line-height: var(--gh-type-line-height-tight);
+  }
+  .migration-card-complete {
+    border-color: color-mix(in srgb, var(--gh-color-feedback-ok) 36%, var(--border));
+    background: color-mix(in srgb, var(--gh-color-feedback-ok) 14%, var(--bg-raised-2));
+  }
+  .migration-steps {
+    display: grid;
+    gap: var(--s-2);
+    margin: 0;
+    padding: 0;
+    list-style: none;
+  }
+  .migration-steps li {
+    display: flex;
+    align-items: center;
+    gap: var(--s-2);
+    color: var(--text-muted);
+    font-size: var(--gh-type-size-body);
+  }
+  .migration-steps li::before {
+    content: '';
+    width: 0.6rem;
+    height: 0.6rem;
+    border-radius: 999px;
+    border: 1px solid var(--border);
+    background: var(--bg-raised-2);
+  }
+  .migration-steps li.active {
+    color: var(--text);
+    font-weight: var(--gh-type-weight-strong);
+  }
+  .migration-steps li.active::before {
+    border-color: var(--accent);
+    background: var(--accent);
+  }
+  .migration-steps li.done {
+    color: var(--text);
+  }
+  .migration-steps li.done::before {
+    border-color: var(--gh-color-feedback-ok);
+    background: var(--gh-color-feedback-ok);
   }
   .migration-paths {
     display: flex;
@@ -1737,7 +2156,7 @@
     border-radius: var(--r-1);
     background: color-mix(in srgb, var(--bg-base) 62%, transparent);
     color: var(--text);
-    font-size: var(--fs-1);
+    font-size: var(--gh-type-size-meta);
   }
 
   @media (max-width: 900px) {
@@ -1772,14 +2191,6 @@
   }
   .page-centered {
   }
-  .dismiss {
-    background: none;
-    border: none;
-    color: inherit;
-    font-size: 16px;
-    cursor: pointer;
-    padding: 0 var(--s-1);
-  }
   .body {
     display: flex;
     flex-direction: column;
@@ -1804,8 +2215,8 @@
   .project-ticker-actor {
     flex: none;
     color: var(--text);
-    font-size: var(--fs-0);
-    font-weight: 700;
+    font-size: var(--gh-type-size-caption);
+    font-weight: var(--gh-type-weight-strong);
     text-transform: uppercase;
     letter-spacing: 0.04em;
   }
@@ -1815,13 +2226,13 @@
     text-overflow: ellipsis;
     white-space: nowrap;
     color: var(--text-muted);
-    font-size: var(--fs-1);
-    line-height: var(--lh-body);
+    font-size: var(--gh-type-size-meta);
+    line-height: var(--gh-type-line-height-body);
   }
   .project-ticker-time {
     flex: none;
     color: var(--text-muted);
-    font-size: var(--fs-0);
+    font-size: var(--gh-type-size-caption);
     white-space: nowrap;
   }
   .ticker-active .project-ticker-actor,
@@ -1836,8 +2247,8 @@
   }
   .muted {
     color: var(--text-muted);
-    font-size: var(--fs-2);
-    line-height: var(--lh-body);
+    font-size: var(--gh-type-size-body);
+    line-height: var(--gh-type-line-height-body);
   }
 
   .rail.rail-collapsed:not(.rail-preview-open) .rail-label { display: none; }
@@ -1879,7 +2290,7 @@
       padding: var(--s-3) var(--s-4);
     }
     .rail.rail-mobile-open .rail-sub {
-      padding: var(--s-2) var(--s-4) var(--s-2) calc(var(--s-4) + 24px);
+      padding: var(--s-2) var(--s-4) var(--s-2) calc(var(--s-4) + 18px + var(--s-2));
     }
     .rail.rail-mobile-open .rail-nav {
       gap: var(--s-1);

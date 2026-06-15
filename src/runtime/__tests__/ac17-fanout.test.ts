@@ -12,12 +12,14 @@ import os from 'node:os'
 import { Orchestrator, type OrchestratorAgentSet } from '../orchestrator.js'
 import { InMemoryGitDriver } from '../git-driver.js'
 import type { ResolvedConfig } from '@guildhall/config'
-import type { Task, TaskQueue } from '@guildhall/core'
+import { TaskQueue, type Task } from '@guildhall/core'
 import {
   AGENT_SETTINGS_FILENAME,
   makeDefaultSettings,
   saveLeverSettings,
 } from '@guildhall/levers'
+import { projectStatePathFromMemoryDir } from '@guildhall/sessions'
+import { buildEffectiveTask } from '../effective-task.js'
 
 let tmpDir: string
 let memoryDir: string
@@ -27,7 +29,8 @@ beforeEach(async () => {
   tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'ac17-'))
   memoryDir = path.join(tmpDir, 'memory')
   await fs.mkdir(memoryDir, { recursive: true })
-  tasksPath = path.join(memoryDir, 'TASKS.json')
+  tasksPath = projectStatePathFromMemoryDir(memoryDir, 'TASKS.json')
+  await fs.mkdir(path.dirname(tasksPath), { recursive: true })
 })
 
 afterEach(async () => {
@@ -115,7 +118,7 @@ async function configureLevers(): Promise<void> {
     setBy: 'system-default',
   }
   await saveLeverSettings({
-    path: path.join(memoryDir, AGENT_SETTINGS_FILENAME),
+    path: projectStatePathFromMemoryDir(memoryDir, AGENT_SETTINGS_FILENAME),
     settings,
   })
 }
@@ -244,7 +247,11 @@ describe('AC-17: fanout_2 + per_task + slot_allocation + cherry_pick_with_push',
 
     // Task metadata is persisted.
     const finalRaw = await fs.readFile(tasksPath, 'utf-8')
-    const finalQueue = JSON.parse(finalRaw) as TaskQueue
+    const parsedFinalQueue = TaskQueue.parse(JSON.parse(finalRaw))
+    const finalQueue = {
+      ...parsedFinalQueue,
+      tasks: await Promise.all(parsedFinalQueue.tasks.map(async task => buildEffectiveTask(task.projectPath, task))) as unknown as Task[],
+    }
     const a = finalQueue.tasks.find((t) => t.id === 'task-a')!
     const b = finalQueue.tasks.find((t) => t.id === 'task-b')!
     expect(a.worktreePath).toBeDefined()

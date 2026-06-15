@@ -10,6 +10,7 @@ import type {
 
 export type SectionHeaderHeadingTag = 'h1' | 'h2' | 'h3' | 'h4'
 export type SectionHeaderAlign = 'start' | 'center'
+export type SectionHeaderMetaPlacement = 'inline' | 'edge'
 
 export interface SectionHeaderProps extends HTMLAttributes<HTMLElement> {
   title: string
@@ -17,6 +18,7 @@ export interface SectionHeaderProps extends HTMLAttributes<HTMLElement> {
   eyebrow?: string
   headingTag?: SectionHeaderHeadingTag
   align?: SectionHeaderAlign
+  metaPlacement?: SectionHeaderMetaPlacement
   mode?: GuildhallShellMode
   density?: GuildhallDensityMode
   titleRole?: Extract<GuildhallTypeRole, 'title'>
@@ -37,6 +39,20 @@ export interface NoticeBandProps extends Omit<HTMLAttributes<HTMLElement>, 'role
   headingTag?: NoticeBandHeadingTag
   title?: string
   label?: string
+  ariaLabel?: string
+  children?: Snippet
+  actions?: Snippet
+}
+
+export type AlertBandTone = 'neutral' | 'accent' | 'attention' | 'ok' | 'warn' | 'danger'
+export type AlertBandDensity = 'regular' | 'compact'
+export type AlertBandIcon = 'alert-triangle' | 'check-circle-2' | 'sparkles'
+
+export interface AlertBandProps extends HTMLAttributes<HTMLDivElement> {
+  tone?: AlertBandTone
+  density?: AlertBandDensity
+  icon?: AlertBandIcon | false
+  role?: 'status' | 'alert'
   ariaLabel?: string
   children?: Snippet
   actions?: Snippet

@@ -4,8 +4,9 @@
   prefer (see the project Settings → Providers sub-tab).
 -->
 <script lang="ts">
-  import Card from '../lib/Card.svelte'
+  import Card from '../lib/ui-compat/Card.svelte'
   import Button from '../lib/Button.svelte'
+  import Chip from '../lib/Chip.svelte'
   import Stack from '../lib/Stack.svelte'
   import Input from '../lib/Input.svelte'
   import PageHeader from '../lib/PageHeader.svelte'
@@ -63,14 +64,14 @@
 
   async function load() {
     try {
-      const r = await fetch('/api/setup/providers')
+      const r = await fetch('/api/providers')
       const j = await r.json()
       if (j.error) {
         loadError = j.error
         return
       }
       const nextProviders = j.providers as Record<string, ProviderMeta>
-      const modelRes = await fetch('/api/config/models')
+      const modelRes = await fetch('/api/models')
       const modelJson = await modelRes.json().catch(() => ({}))
       if (!modelRes.ok || modelJson.error) {
         modelsError = modelJson.error ?? `Model settings failed to load (HTTP ${modelRes.status})`
@@ -122,7 +123,7 @@
       body.provider = key
       const concurrency = maxConcurrency[key]?.trim()
       if (concurrency) body.maxConcurrency = Number(concurrency)
-      const r = await fetch('/api/setup/providers/config', {
+      const r = await fetch('/api/providers/config', {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify(body),
@@ -143,7 +144,7 @@
     if (!value) return flash('Enter a concurrency limit first', true)
     saving = `${key}:concurrency`
     try {
-      const r = await fetch('/api/setup/providers/config', {
+      const r = await fetch('/api/providers/config', {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ provider: key, maxConcurrency: Number(value) }),
@@ -198,7 +199,7 @@
   async function saveGlobalModel(role: string, model: string) {
     saving = role
     try {
-      const r = await fetch('/api/config/models', {
+      const r = await fetch('/api/models', {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ scope: 'global', role, model }),
@@ -215,7 +216,7 @@
   async function saveGlobalBehavior(role: string, behaviorProfile: string) {
     saving = `${role}:behavior`
     try {
-      const r = await fetch('/api/config/models', {
+      const r = await fetch('/api/models', {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ scope: 'global', role, behaviorProfile }),
@@ -284,13 +285,11 @@
               <div class="row-id">
                 <span class="label">{meta.label}</span>
                 {#if meta.verifiedAt}
-                  <span class="chip ok" title={`Verified ${fmtVerified(meta.verifiedAt)}`}>
-                    ✓ verified · {fmtVerified(meta.verifiedAt)}
-                  </span>
+                  <Chip label={`verified - ${fmtVerified(meta.verifiedAt)}`} tone="ok" title={`Verified ${fmtVerified(meta.verifiedAt)}`} />
                 {:else if meta.detected}
-                  <span class="chip ready">configured</span>
+                  <Chip label="configured" tone="ok" />
                 {:else}
-                  <span class="chip missing">not configured</span>
+                  <Chip label="not configured" tone="neutral" />
                 {/if}
               </div>
               <div class="row-actions">
@@ -467,15 +466,15 @@
   }
   .muted {
     color: var(--text-muted);
-    font-size: var(--fs-2);
-    line-height: var(--lh-body);
+    font-size: var(--gh-type-size-body);
+    line-height: var(--gh-type-line-height-body);
   }
   code {
     font-family: 'SF Mono', monospace;
     background: var(--bg-raised-2);
     padding: 0 4px;
     border-radius: var(--r-1);
-    font-size: var(--fs-1);
+    font-size: var(--gh-type-size-meta);
   }
 
   .row {
@@ -503,8 +502,8 @@
     min-width: 0;
   }
   .label {
-    font-size: var(--fs-2);
-    font-weight: 600;
+    font-size: var(--gh-type-size-body);
+    font-weight: var(--gh-type-weight-strong);
   }
   .row-actions {
     display: flex;
@@ -512,7 +511,7 @@
     flex-shrink: 0;
   }
   .row-detail {
-    font-size: var(--fs-1);
+    font-size: var(--gh-type-size-meta);
   }
   .row-edit {
     display: flex;
@@ -534,8 +533,8 @@
   }
   .mini-label {
     color: var(--text-muted);
-    font-size: var(--fs-1);
-    font-weight: 600;
+    font-size: var(--gh-type-size-meta);
+    font-weight: var(--gh-type-weight-strong);
   }
   .openai-edit {
     flex-wrap: wrap;
@@ -593,8 +592,8 @@
     border-radius: var(--r-2);
     color: var(--text);
     background: color-mix(in srgb, var(--warn) 14%, transparent);
-    font-size: var(--fs-1);
-    line-height: var(--lh-body);
+    font-size: var(--gh-type-size-meta);
+    line-height: var(--gh-type-line-height-body);
   }
   @media (max-width: 640px) {
     .model-row {
@@ -604,32 +603,8 @@
       grid-template-columns: 1fr;
     }
   }
-
-  .chip {
-    font-size: var(--fs-0);
-    font-weight: 700;
-    text-transform: uppercase;
-    letter-spacing: 0.05em;
-    padding: 2px var(--s-2);
-    border-radius: 10px;
-  }
-  .chip.ok {
-    background: rgba(78, 204, 163, 0.15);
-    color: var(--accent-2);
-    text-transform: none;
-    letter-spacing: 0;
-  }
-  .chip.ready {
-    background: rgba(78, 204, 163, 0.10);
-    color: var(--accent-2);
-  }
-  .chip.missing {
-    background: rgba(136, 136, 153, 0.12);
-    color: var(--text-muted);
-  }
-
   .status {
-    font-size: var(--fs-1);
+    font-size: var(--gh-type-size-meta);
     color: var(--accent-2);
     padding: var(--s-2);
     border-radius: var(--r-1);

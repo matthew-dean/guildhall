@@ -2,6 +2,8 @@ import { beforeEach, describe, expect, it } from 'vitest'
 import fs from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
+import { projectSkillProposalsPath } from '@guildhall/skills'
+import { projectStatePathFromMemoryDir } from '@guildhall/sessions'
 
 import {
   MemoryRecord,
@@ -49,13 +51,15 @@ describe('memory store', () => {
   })
 
   it('adapts MEMORY.md, project learning, global learning, and project skills into queryable records', async () => {
-    await fs.writeFile(path.join(memoryDir, 'MEMORY.md'), [
+    const memoryMarkdownPath = projectStatePathFromMemoryDir(memoryDir, 'MEMORY.md')
+    await fs.mkdir(path.dirname(memoryMarkdownPath), { recursive: true })
+    await fs.writeFile(memoryMarkdownPath, [
       '# Memory',
       '',
       '## Frontend',
       'Use shared Button before adding local button styles.',
     ].join('\n'), 'utf8')
-    await fs.writeFile(path.join(memoryDir, 'learning.json'), JSON.stringify({
+    await fs.writeFile(projectStatePathFromMemoryDir(memoryDir, 'learning.json'), JSON.stringify({
       version: 1,
       suggestedLearnings: [
         {
@@ -88,7 +92,8 @@ describe('memory store', () => {
         },
       ],
     }), 'utf8')
-    await fs.writeFile(path.join(memoryDir, 'project-skills.json'), JSON.stringify({
+    await fs.mkdir(path.dirname(projectSkillProposalsPath(memoryDir)), { recursive: true })
+    await fs.writeFile(projectSkillProposalsPath(memoryDir), JSON.stringify({
       version: 1,
       proposals: [{
         id: 'drawer-skill',

@@ -279,6 +279,7 @@ export class NodeGitDriver implements GitDriver {
   ): Promise<void> {
     const resolvedRepoRoot = resolveRuntimePath(repoRoot)
     const resolvedWorktreePath = resolveRuntimePath(worktreePath)
+    if (await existingWorktreeMatchesBranch(resolvedWorktreePath, branch)) return
     await fs.mkdir(path.dirname(resolvedWorktreePath), { recursive: true })
     try {
       await execGit(['worktree', 'add', '-b', branch, resolvedWorktreePath, baseBranch],
@@ -287,6 +288,7 @@ export class NodeGitDriver implements GitDriver {
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err)
       if (!/already exists/i.test(message)) throw err
+      if (await existingWorktreeMatchesBranch(resolvedWorktreePath, branch)) return
       await execGit(['worktree', 'add', resolvedWorktreePath, branch], {
         cwd: resolvedRepoRoot,
       })
@@ -299,6 +301,7 @@ export class NodeGitDriver implements GitDriver {
   ): Promise<void> {
     const resolvedRepoRoot = resolveRuntimePath(repoRoot)
     const resolvedWorktreePath = resolveRuntimePath(worktreePath)
+    if (await existingWorktreeMatchesBranch(resolvedWorktreePath, branch)) return
     await fs.mkdir(path.dirname(resolvedWorktreePath), { recursive: true })
     await execGit(['worktree', 'add', resolvedWorktreePath, branch], {
       cwd: resolvedRepoRoot,
@@ -489,6 +492,22 @@ export class NodeGitDriver implements GitDriver {
         detail: err instanceof Error ? err.message : String(err),
       }
     }
+  }
+}
+
+async function existingWorktreeMatchesBranch(
+  worktreePath: string,
+  branch: string,
+): Promise<boolean> {
+  try {
+    const stat = await fs.stat(worktreePath)
+    if (!stat.isDirectory()) return false
+    const { stdout } = await execGit(['branch', '--show-current'], {
+      cwd: worktreePath,
+    })
+    return stdout.trim() === branch
+  } catch {
+    return false
   }
 }
 

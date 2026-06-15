@@ -32,6 +32,13 @@ export type ParsedGuildhallUri =
   | { kind: 'codebaseKnowledge' }
   | { kind: 'runtime' }
   | { kind: 'capabilityRequests' }
+  | { kind: 'externalAgentMemoryBridge' }
+  | { kind: 'drivers' }
+  | { kind: 'primitives' }
+  | { kind: 'taskContext'; taskId: string }
+  | { kind: 'taskRelationships'; taskId: string }
+  | { kind: 'agentContracts' }
+  | { kind: 'validationEvidence' }
 
 export function projectUri(): string {
   return 'guildhall://project'
@@ -76,6 +83,21 @@ export function parseGuildhallUri(uri: string): ParsedGuildhallUri {
   if (parts.length === 1 && parts[0] === 'capability-requests') {
     return { kind: 'capabilityRequests' }
   }
+  if (parts.length === 1 && parts[0] === 'external-agent-memory-bridge') {
+    return { kind: 'externalAgentMemoryBridge' }
+  }
+  if (parts.length === 1 && parts[0] === 'drivers') return { kind: 'drivers' }
+  if (parts.length === 1 && parts[0] === 'primitives') return { kind: 'primitives' }
+  if (parts.length === 2 && parts[0] === 'task-context') {
+    assertSafeId(parts[1]!, 'task id')
+    return { kind: 'taskContext', taskId: parts[1]! }
+  }
+  if (parts.length === 2 && parts[0] === 'task-relationships') {
+    assertSafeId(parts[1]!, 'task id')
+    return { kind: 'taskRelationships', taskId: parts[1]! }
+  }
+  if (parts.length === 1 && parts[0] === 'agent-contracts') return { kind: 'agentContracts' }
+  if (parts.length === 1 && parts[0] === 'validation-evidence') return { kind: 'validationEvidence' }
   throw new Error(`Invalid Guildhall MCP URI: ${uri}`)
 }
 

@@ -3,6 +3,7 @@ import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 
 import { afterEach, describe, expect, it, vi } from 'vitest'
+import { getProjectSystemStatePath } from '@guildhall/sessions'
 import {
   semanticCompletionBudget,
   semanticRepairCompletionBudget,
@@ -17,6 +18,7 @@ import {
   probeLiveService,
   readServiceRuntimeState,
   renderHelpText,
+  runAgentMemoryBridgeCommand,
   resolveServiceLifecycleIntent,
   serviceStatePath,
   serviceUrlForPort,
@@ -281,6 +283,8 @@ describe('Guildhall CLI surface', () => {
       'review-calibration',
       'model-bakeoff',
       'benchmarks',
+      'graph',
+      'agent',
       'mcp',
       'bridge',
     ])
@@ -300,6 +304,7 @@ describe('Guildhall CLI surface', () => {
     expect(help).not.toContain('guildhall approve-meta-intake')
     expect(help).toContain('guildhall task run-once')
     expect(help).toContain('guildhall memory migrate-0.8.0')
+    expect(help).toContain('guildhall memory mastra-audit')
     expect(help).toContain('guildhall migrate status')
     expect(help).toContain('guildhall migrate plan')
     expect(help).toContain('guildhall migrate apply')
@@ -307,6 +312,113 @@ describe('Guildhall CLI surface', () => {
     expect(help).toContain('guildhall review-calibration draft-case')
     expect(help).toContain('guildhall review-calibration validate-planning')
     expect(help).toContain('guildhall review-calibration validate-sizing')
+    expect(help).toContain('guildhall graph request publish')
+    expect(help).toContain('guildhall graph request import')
+    expect(help).toContain('guildhall graph deliver')
+    expect(help).toContain('guildhall graph delivery accept')
+    expect(help).toContain('guildhall graph delivery return')
+    expect(help).toContain('guildhall agent memory import')
+    expect(help).toContain('guildhall agent memory review')
+    expect(help).toContain('guildhall agent memory reject')
+  })
+
+  it('exposes external-agent memory bridge import, review, and reject through explicit JSON CLI flows', async () => {
+    const project = tmpHome()
+    const recordFile = join(tmpHome(), 'bridge-record.json')
+    mkdirSync(join(project, '.guildhall'), { recursive: true })
+    writeFileSync(recordFile, JSON.stringify({
+      id: 'cli-bridge-record',
+      provider: 'codex',
+      exchange: 'import',
+      scope: 'project',
+      type: 'codebase_knowledge',
+      summary: 'CLI bridge records stay reviewable before execution.',
+      content: 'Imported external memory should not enter execution context until review.',
+      confidence: 'high',
+      risk: 'low',
+      freshness: 'fresh',
+      evidenceRefs: [{
+        kind: 'external-summary',
+        ref: 'codex://session-cli#summary',
+        summary: 'External session summary, not raw transcript.',
+      }],
+    }), 'utf8')
+
+    const imported = JSON.parse(await runAgentMemoryBridgeCommand([
+      'memory',
+      'import',
+      '--from-file',
+      recordFile,
+      '--project',
+      project,
+      '--json',
+    ], { now: '2026-06-03T12:00:00.000Z' })) as { id: string; reviewStatus: string }
+    expect(imported).toMatchObject({ id: 'cli-bridge-record', reviewStatus: 'imported' })
+    expect(existsSync(join(project, '.guildhall', 'memory-store.json'))).toBe(false)
+
+    const listed = JSON.parse(await runAgentMemoryBridgeCommand([
+      'memory',
+      'list',
+      '--status',
+      'imported',
+      '--project',
+      project,
+      '--json',
+    ])) as { records: Array<{ id: string }> }
+    expect(listed.records.map(record => record.id)).toEqual(['cli-bridge-record'])
+
+    const reviewed = JSON.parse(await runAgentMemoryBridgeCommand([
+      'memory',
+      'review',
+      '--id',
+      'cli-bridge-record',
+      '--reviewer',
+      'owner',
+      '--project',
+      project,
+      '--json',
+    ], { now: '2026-06-03T12:05:00.000Z' })) as { reviewStatus: string; reviewer: string }
+    expect(reviewed).toMatchObject({ reviewStatus: 'reviewed', reviewer: 'owner' })
+    expect(readFileSync(getProjectSystemStatePath(project, 'memory-store.json'), 'utf8')).toContain('external-cli-bridge-record')
+
+    const rejectedFile = join(tmpHome(), 'bridge-rejected-record.json')
+    writeFileSync(rejectedFile, JSON.stringify({
+      id: 'cli-rejected-record',
+      provider: 'claude-code',
+      exchange: 'link',
+      sourceRef: 'claude://session-rejected#summary',
+      scope: 'project',
+      type: 'project_fact',
+      summary: 'Rejected records stay out of effective memory.',
+      confidence: 'medium',
+      risk: 'medium',
+      freshness: 'recent',
+      evidenceRefs: [{
+        kind: 'external-link',
+        ref: 'claude://session-rejected#summary',
+        summary: 'External session link.',
+      }],
+    }), 'utf8')
+    await runAgentMemoryBridgeCommand(['memory', 'import', '--from-file', rejectedFile, '--project', project])
+
+    const rejected = JSON.parse(await runAgentMemoryBridgeCommand([
+      'memory',
+      'reject',
+      '--id',
+      'cli-rejected-record',
+      '--reviewer',
+      'owner',
+      '--reason',
+      'Outdated source summary.',
+      '--project',
+      project,
+      '--json',
+    ], { now: '2026-06-03T12:10:00.000Z' })) as { reviewStatus: string; rejectionReason: string }
+    expect(rejected).toMatchObject({
+      reviewStatus: 'rejected',
+      rejectionReason: 'Outdated source summary.',
+    })
+    expect(readFileSync(getProjectSystemStatePath(project, 'memory-store.json'), 'utf8')).not.toContain('external-cli-rejected-record')
   })
 
   it('validates and records the review calibration corpus through persistence', async () => {
@@ -352,7 +464,7 @@ describe('Guildhall CLI surface', () => {
         recordedAt: '2026-05-25T12:05:00.000Z',
       })
 
-      expect(result.ref.path).toContain(join(project, '.guildhall', 'persistence', 'events', 'escaped-misses'))
+      expect(result.ref.path).toContain(getProjectSystemStatePath(project, 'persistence/events/escaped-misses'))
       expect(result.payload).toMatchObject({
         taskId: 'task-1',
         missedLane: 'ux_comprehension',

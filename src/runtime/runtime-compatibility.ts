@@ -1,7 +1,7 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { getProjectStateDir } from '@guildhall/sessions'
+import { getProjectLocalHistoryDir, getProjectSystemStatePath } from '@guildhall/sessions'
 
 export interface ProjectRuntimeManifest {
   version: 1
@@ -28,7 +28,11 @@ const CURRENT_RUNTIME_FEATURES = new Set([
 ])
 
 function manifestPath(projectRoot: string): string {
-  return join(getProjectStateDir(projectRoot), 'runtime.json')
+  return join(getProjectLocalHistoryDir(projectRoot), 'runtime', 'compatibility.json')
+}
+
+function legacyManifestPath(projectRoot: string): string {
+  return getProjectSystemStatePath(projectRoot, 'runtime.json')
 }
 
 function parseVersion(version: string): number[] | null {
@@ -73,7 +77,8 @@ export function readRuntimePackageVersion(): string {
 
 export function readProjectRuntimeManifest(projectRoot: string): ProjectRuntimeManifest | null {
   try {
-    const parsed = JSON.parse(readFileSync(manifestPath(projectRoot), 'utf8')) as Partial<ProjectRuntimeManifest>
+    const file = existsSync(manifestPath(projectRoot)) ? manifestPath(projectRoot) : legacyManifestPath(projectRoot)
+    const parsed = JSON.parse(readFileSync(file, 'utf8')) as Partial<ProjectRuntimeManifest>
     if (parsed.version !== 1) return null
     return {
       version: 1,

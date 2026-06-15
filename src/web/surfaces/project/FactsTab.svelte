@@ -5,8 +5,9 @@
   place to modify.
 -->
 <script lang="ts">
-  import Card from '../../lib/Card.svelte'
+  import Card from '../../lib/ui-compat/Card.svelte'
   import Stack from '../../lib/Stack.svelte'
+  import UtilityPanel from '../../lib/UtilityPanel.svelte'
   import { formatUserPath } from '../../lib/display-path.js'
   import { friendlyStewardName } from '../../lib/display.js'
   import { nav } from '../../lib/nav.svelte.js'
@@ -114,13 +115,13 @@
         {#if gateEntries(facts.environment.gates).length > 0}
           <div class="gate-grid">
             {#each gateEntries(facts.environment.gates) as [name, gate] (name)}
-              <div class="gate" class:gate-off={!gate.available}>
+              <UtilityPanel className="gate" tone={gate.available ? 'neutral' : 'warn'}>
                 <div class="gate-name">{name}</div>
                 <div class="gate-cmd"><code>{gate.command ?? '—'}</code></div>
                 {#if !gate.available && gate.unavailableReason}
                   <div class="gate-why">{gate.unavailableReason}</div>
                 {/if}
-              </div>
+              </UtilityPanel>
             {/each}
           </div>
         {:else}
@@ -168,7 +169,9 @@
         <a class="edit-link" href={facts.designSystem.editHref} onclick={editLink(facts.designSystem.editHref)}>Edit →</a>
       {/snippet}
       {#if facts.designSystem.summary}
-        <pre class="summary">{facts.designSystem.summary}</pre>
+        <UtilityPanel as="section" className="summary-panel" tone="neutral">
+          <pre class="summary">{facts.designSystem.summary}</pre>
+        </UtilityPanel>
       {:else}
         <p class="muted">Not defined.</p>
       {/if}
@@ -182,23 +185,23 @@
     flex-direction: column;
     gap: var(--s-1);
   }
-  .head h2 { margin: 0; font-size: var(--fs-4); font-weight: 700; }
-  .sub { margin: 0; color: var(--text-muted); font-size: var(--fs-1); }
-  .muted { color: var(--text-muted); font-size: var(--fs-2); }
+  .head h2 { margin: 0; font-size: var(--gh-type-size-section-title); font-weight: var(--gh-type-weight-strong); }
+  .sub { margin: 0; color: var(--text-muted); font-size: var(--gh-type-size-meta); }
+  .muted { color: var(--text-muted); font-size: var(--gh-type-size-body); }
   .kv {
     display: grid;
     grid-template-columns: max-content 1fr;
     gap: 4px var(--s-3);
     margin: 0;
-    font-size: var(--fs-2);
+    font-size: var(--gh-type-size-body);
   }
   .kv dt { color: var(--text-muted); }
   .kv dd { margin: 0; color: var(--text); }
   .edit-link {
-    font-size: var(--fs-1);
+    font-size: var(--gh-type-size-meta);
     color: var(--accent);
     text-decoration: none;
-    font-weight: 600;
+    font-weight: var(--gh-type-weight-strong);
   }
   .edit-link:hover { text-decoration: underline; }
   .gate-grid {
@@ -206,24 +209,21 @@
     grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
     gap: var(--s-2);
   }
-  .gate {
-    padding: var(--s-2);
-    border: 1px solid var(--border);
-    border-radius: var(--r-1);
-    background: var(--bg-raised-2);
+  :global(.gate) {
+    gap: var(--s-1);
   }
-  .gate-off { opacity: 0.6; }
-  .gate-name { font-weight: 700; font-size: var(--fs-1); text-transform: uppercase; letter-spacing: 0.05em; }
-  .gate-cmd { font-size: var(--fs-1); color: var(--text-muted); margin-top: 2px; }
-  .gate-why { font-size: var(--fs-1); color: var(--warn); margin-top: 4px; }
+  :global(.gate.tone-warn) { opacity: 0.78; }
+  .gate-name { font-weight: var(--gh-type-weight-strong); font-size: var(--gh-type-size-meta); text-transform: uppercase; letter-spacing: 0.05em; }
+  .gate-cmd { font-size: var(--gh-type-size-meta); color: var(--text-muted); margin-top: 2px; }
+  .gate-why { font-size: var(--gh-type-size-meta); color: var(--warn); margin-top: 4px; }
   .coord-list { list-style: none; padding: 0; margin: 0; display: flex; flex-direction: column; gap: 2px; }
-  code { font-family: 'SF Mono', monospace; font-size: var(--fs-1); }
+  code { font-family: 'SF Mono', monospace; font-size: var(--gh-type-size-meta); }
+  :global(.summary-panel) {
+    padding: var(--s-2);
+  }
   .summary {
     margin: 0;
-    padding: var(--s-2);
-    background: var(--bg-raised-2);
-    border-radius: var(--r-1);
-    font-size: var(--fs-1);
+    font-size: var(--gh-type-size-meta);
     white-space: pre-wrap;
   }
 </style>

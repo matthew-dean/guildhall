@@ -5,7 +5,7 @@
 -->
 <script lang="ts">
   import Stack from '../../lib/Stack.svelte'
-  import Card from '../../lib/Card.svelte'
+  import Card from '../../lib/ui-compat/Card.svelte'
   import Chip from '../../lib/Chip.svelte'
   import Markdown from '../../lib/Markdown.svelte'
   import type { ReviewVerdict, GateResult } from '../../lib/types.js'
@@ -222,21 +222,21 @@
     flex-wrap: wrap;
   }
   .expert .name {
-    font-weight: 700;
-    font-size: var(--fs-2);
+    font-weight: var(--gh-type-weight-strong);
+    font-size: var(--gh-type-size-body);
     color: var(--text);
   }
   .blurb {
     color: var(--text-muted);
-    font-size: var(--fs-1);
-    line-height: var(--lh-body);
+    font-size: var(--gh-type-size-meta);
+    line-height: var(--gh-type-line-height-body);
   }
   .verdicts h4,
   .gates h4 {
-    font-size: var(--fs-0);
+    font-size: var(--gh-type-size-caption);
     text-transform: uppercase;
     letter-spacing: 0.05em;
-    font-weight: 700;
+    font-weight: var(--gh-type-weight-strong);
     color: var(--text-muted);
     margin: var(--s-2) 0 var(--s-2);
   }
@@ -255,11 +255,11 @@
     display: flex;
     align-items: center;
     gap: var(--s-2);
-    font-size: var(--fs-0);
+    font-size: var(--gh-type-size-caption);
     color: var(--text-muted);
     text-transform: uppercase;
     letter-spacing: 0.05em;
-    font-weight: 700;
+    font-weight: var(--gh-type-weight-strong);
   }
   .gate header .id,
   .verdict header .path {
@@ -271,27 +271,27 @@
   }
   .reason {
     color: var(--text);
-    font-size: var(--fs-1);
-    line-height: var(--lh-body);
+    font-size: var(--gh-type-size-meta);
+    line-height: var(--gh-type-line-height-body);
   }
   pre {
     background: var(--bg-raised-2);
     border: 1px solid var(--border);
     border-radius: var(--r-1);
     padding: var(--s-2);
-    font-size: var(--fs-0);
+    font-size: var(--gh-type-size-caption);
     font-family: 'SF Mono', monospace;
     white-space: pre-wrap;
     color: var(--text);
-    line-height: var(--lh-body);
+    line-height: var(--gh-type-line-height-body);
   }
   .muted {
     color: var(--text-muted);
-    font-size: var(--fs-1);
+    font-size: var(--gh-type-size-meta);
   }
   ul {
     padding-left: var(--s-3);
-    font-size: var(--fs-1);
+    font-size: var(--gh-type-size-meta);
     color: var(--text);
   }
 </style>

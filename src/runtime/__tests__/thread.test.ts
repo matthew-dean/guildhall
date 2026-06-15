@@ -2,17 +2,22 @@ import { describe, expect, it } from 'vitest'
 import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
+import { projectStatePath } from '@guildhall/sessions'
 
 import { buildThread } from '../thread.js'
 import { emptyWizardsState, type ProjectSnapshot } from '../wizards.js'
+
+function statePath(projectPath: string, ...parts: string[]): string {
+  return projectStatePath(projectPath, path.join(...parts))
+}
 
 describe('buildThread', () => {
   it('projects active pressure-test intake as request and question turns', async () => {
     const projectPath = await mkdtemp(path.join(tmpdir(), 'guildhall-thread-'))
     try {
-      await mkdir(path.join(projectPath, '.guildhall', 'pressure-test-intake'), { recursive: true })
+      await mkdir(statePath(projectPath, 'pressure-test-intake'), { recursive: true })
       await writeFile(
-        path.join(projectPath, '.guildhall', 'pressure-test-intake', 'pti-guildhall-0-8-0.json'),
+        statePath(projectPath, 'pressure-test-intake', 'pti-guildhall-0-8-0.json'),
         JSON.stringify({
           id: 'pti-guildhall-0-8-0',
           rawRequest: '0.8.0 should prioritize pressure-test intake.',
@@ -75,12 +80,87 @@ describe('buildThread', () => {
     }
   })
 
+  it('projects active bounded chat as bounded_chat, not pressure_test_question', async () => {
+    const projectPath = await mkdtemp(path.join(tmpdir(), 'guildhall-thread-'))
+    try {
+      const snapshot: ProjectSnapshot = {
+        projectPath,
+        config: {
+          id: 'demo',
+          name: 'Demo',
+          bootstrap: { verifiedAt: new Date().toISOString() },
+          coordinators: [{ id: 'frontend', name: 'Frontend' }],
+        },
+        bootstrapVerified: true,
+        hasProvider: true,
+        hasDirection: true,
+        workspaceImportReviewed: true,
+        taskCount: 0,
+        wizardState: emptyWizardsState(),
+      }
+
+      const thread = buildThread({
+        projectPath,
+        snapshot,
+        boundedChatSessions: [{
+          id: 'bc-demo-new-request',
+          projectId: 'demo',
+          source: 'owner-input:task:task-1:q1',
+          objective: {
+            kind: 'new_request',
+            label: 'Clarify task request',
+            successCriteria: ['Owner answers the linked bounded chat.'],
+            startedAt: '2026-06-01T12:00:00.000Z',
+          },
+          status: 'waiting_for_owner',
+          activeSubObjectiveId: 'q1',
+          subObjectives: [{
+            id: 'q1',
+            objective: 'Clarify task request',
+            prompt: 'Which behavior should Guildhall implement?',
+            choices: ['A', 'B'],
+            followUpDepth: 0,
+            localTurns: [],
+            status: 'active',
+          }],
+          acceptedState: {
+            facts: [],
+            decisions: [],
+            leverUpdates: [],
+            settingUpdates: [],
+            taskDrafts: [],
+            unresolvedForks: [],
+            discardedResponses: [],
+          },
+          pendingActions: [],
+          appliedActionIds: [],
+          transitionReceipts: [],
+          createdAt: '2026-06-01T12:00:00.000Z',
+          updatedAt: '2026-06-01T12:00:00.000Z',
+        }],
+        pressureTestIntakes: [],
+      })
+
+      expect(thread.turns).toContainEqual(expect.objectContaining({
+        kind: 'bounded_chat',
+        sessionId: 'bc-demo-new-request',
+        status: 'active',
+      }))
+      expect(thread.turns).not.toContainEqual(expect.objectContaining({
+        id: 'bounded-chat:bc-demo-new-request:q1',
+        kind: 'pressure_test_question',
+      }))
+    } finally {
+      await rm(projectPath, { recursive: true, force: true })
+    }
+  })
+
   it('projects planned project check-in questions as project direction turns', async () => {
     const projectPath = await mkdtemp(path.join(tmpdir(), 'guildhall-thread-'))
     try {
-      await mkdir(path.join(projectPath, '.guildhall', 'pressure-test-intake'), { recursive: true })
+      await mkdir(statePath(projectPath, 'pressure-test-intake'), { recursive: true })
       await writeFile(
-        path.join(projectPath, '.guildhall', 'pressure-test-intake', 'pti-narrative-harness-project-check-in.json'),
+        statePath(projectPath, 'pressure-test-intake', 'pti-narrative-harness-project-check-in.json'),
         JSON.stringify({
           id: 'pti-narrative-harness-project-check-in',
           rawRequest: 'Start a project check-in for Narrative Harness.',
@@ -160,9 +240,9 @@ describe('buildThread', () => {
   it('projects a project check-in card when the project has not answered Guildhall project questions yet', async () => {
     const projectPath = await mkdtemp(path.join(tmpdir(), 'guildhall-thread-'))
     try {
-      await mkdir(path.join(projectPath, '.guildhall'), { recursive: true })
+      await mkdir(statePath(projectPath), { recursive: true })
       await writeFile(
-        path.join(projectPath, '.guildhall', 'TASKS.json'),
+        statePath(projectPath, 'TASKS.json'),
         JSON.stringify({
           tasks: [{
             id: 'task-done',
@@ -208,12 +288,792 @@ describe('buildThread', () => {
     }
   })
 
-  it('projects routed task requests as request turns until the task is complete', async () => {
+  it('projects an active bounded-chat project check-in instead of the old setup card', async () => {
     const projectPath = await mkdtemp(path.join(tmpdir(), 'guildhall-thread-'))
     try {
-      await mkdir(path.join(projectPath, '.guildhall'), { recursive: true })
+      await mkdir(statePath(projectPath, 'bounded-chat'), { recursive: true })
       await writeFile(
-        path.join(projectPath, '.guildhall', 'TASKS.json'),
+        statePath(projectPath, 'bounded-chat', 'bc-narrative-project-check-in.json'),
+        JSON.stringify({
+          id: 'bc-narrative-project-check-in',
+          projectId: 'narrative-harness',
+          source: 'thread:project-check-in',
+          objective: {
+            kind: 'project_check_in',
+            label: 'Project check-in',
+            successCriteria: ['Capture the near-term project direction.'],
+            startedAt: '2026-05-31T00:00:00.000Z',
+          },
+          status: 'waiting_for_owner',
+          activeSubObjectiveId: 'project-direction-priority',
+          subObjectives: [{
+            id: 'project-direction-priority',
+            objective: 'Capture project direction',
+            prompt: 'For the next few Narrative Harness tasks, should Guildhall bias toward reviewer-lane MVPs, author-facing editor UX, story-memory/schema foundations, or generation/evaluation loops?',
+            helperText: 'This changes which backlog items Guildhall should shape first and what evidence workers need.',
+            choices: [
+              'Reviewer-lane MVPs',
+              'Author-facing editor UX',
+              'Story-memory/schema foundations',
+              'Generation/evaluation loops',
+            ],
+            followUpDepth: 0,
+            localTurns: [],
+            status: 'active',
+          }],
+          acceptedState: {
+            facts: [
+              {
+                fact: 'Narrative Harness is fiction-writing software for building and revising a coherent novel.',
+                sourceSubObjectiveId: 'project-direction-priority',
+              },
+            ],
+            decisions: [],
+            leverUpdates: [],
+            settingUpdates: [],
+            taskDrafts: [],
+            unresolvedForks: [],
+            discardedResponses: [],
+          },
+          pendingActions: [],
+          appliedActionIds: [],
+          createdAt: '2026-05-31T00:00:00.000Z',
+          updatedAt: '2026-05-31T00:00:00.000Z',
+        }),
+      )
+
+      const snapshot: ProjectSnapshot = {
+        projectPath,
+        config: {
+          id: 'narrative-harness',
+          name: 'Narrative Harness',
+          bootstrap: { verifiedAt: new Date().toISOString() },
+          coordinators: [{ id: 'harness', name: 'Harness' }],
+        },
+        bootstrapVerified: true,
+        hasProvider: true,
+        hasDirection: true,
+        workspaceImportReviewed: true,
+        taskCount: 0,
+        wizardState: emptyWizardsState(),
+      }
+
+      const thread = buildThread({ projectPath, snapshot })
+      const question = thread.turns.find(turn => turn.id === 'bounded-chat:bc-narrative-project-check-in:project-direction-priority')
+
+      expect(question).toMatchObject({
+        kind: 'bounded_chat',
+        sessionId: 'bc-narrative-project-check-in',
+        subObjectiveId: 'project-direction-priority',
+        targetTitle: 'Narrative Harness',
+        domainTitle: 'Project check-in',
+        answerEndpoint: '/api/project/bounded-chat/bc-narrative-project-check-in/answer',
+        question: {
+          choices: [
+            'Reviewer-lane MVPs',
+            'Author-facing editor UX',
+            'Story-memory/schema foundations',
+            'Generation/evaluation loops',
+          ],
+          evidence: ['Narrative Harness is fiction-writing software for building and revising a coherent novel.'],
+        },
+      })
+      expect(thread.turns.find(t => t.id === 'setup:project-check-in')).toBeUndefined()
+      expect(thread.activeTurnId).toBe('bounded-chat:bc-narrative-project-check-in:project-direction-priority')
+    } finally {
+      await rm(projectPath, { recursive: true, force: true })
+    }
+  })
+
+  it('projects an active bounded-chat New Request clarification as the live intake turn', async () => {
+    const projectPath = await mkdtemp(path.join(tmpdir(), 'guildhall-thread-'))
+    try {
+      await mkdir(statePath(projectPath, 'bounded-chat'), { recursive: true })
+      await writeFile(
+        statePath(projectPath, 'bounded-chat', 'bc-request-clarify.json'),
+        JSON.stringify({
+          id: 'bc-request-clarify',
+          projectId: 'narrative-harness',
+          source: 'thread:new-request',
+          objective: {
+            kind: 'new_request',
+            label: 'Shape a new request',
+            successCriteria: ['Classify the request and shape the next action.'],
+            startedAt: '2026-05-31T00:00:00.000Z',
+          },
+          status: 'waiting_for_owner',
+          activeSubObjectiveId: 'request-scope',
+          subObjectives: [{
+            id: 'request-scope',
+            objective: 'Clarify request scope',
+            prompt: 'Should Guildhall draft the FLL overhead policy first, or also turn it into linked implementation work?',
+            helperText: 'This changes whether Guildhall should shape one policy task or a broader execution plan.',
+            choices: [
+              'Draft the policy/spec first',
+              'Draft the policy and create linked implementation tasks',
+              'Apply the policy now',
+            ],
+            followUpDepth: 0,
+            localTurns: [],
+            status: 'active',
+          }],
+          acceptedState: {
+            facts: [],
+            decisions: [],
+            leverUpdates: [],
+            settingUpdates: [],
+            taskDrafts: [],
+            unresolvedForks: [],
+            discardedResponses: [],
+          },
+          pendingActions: [],
+          appliedActionIds: [],
+          plannerState: {
+            newRequest: {
+              ask: 'Set the FLL overhead charge policy and decide whether we should also apply it across the product.',
+              title: 'Set the FLL overhead charge policy and decide whether we...',
+              domain: 'frontend',
+              projectPath,
+              routedRequestKind: 'task_spec',
+              routingSummary: 'Routed to Task Intake',
+            },
+          },
+          createdAt: '2026-05-31T00:00:00.000Z',
+          updatedAt: '2026-05-31T00:00:00.000Z',
+        }),
+      )
+
+      const snapshot: ProjectSnapshot = {
+        projectPath,
+        config: {
+          id: 'narrative-harness',
+          name: 'Narrative Harness',
+          bootstrap: { verifiedAt: new Date().toISOString() },
+          coordinators: [{ id: 'harness', name: 'Harness' }],
+        },
+        bootstrapVerified: true,
+        hasProvider: true,
+        hasDirection: true,
+        workspaceImportReviewed: true,
+        taskCount: 0,
+        wizardState: emptyWizardsState(),
+      }
+
+      const thread = buildThread({ projectPath, snapshot })
+      const question = thread.turns.find(turn => turn.id === 'bounded-chat:bc-request-clarify:request-scope')
+
+      expect(question).toMatchObject({
+        kind: 'bounded_chat',
+        sessionId: 'bc-request-clarify',
+        subObjectiveId: 'request-scope',
+        targetTitle: 'Narrative Harness',
+        domainTitle: 'New request',
+        answerEndpoint: '/api/project/bounded-chat/bc-request-clarify/answer',
+        question: {
+          prompt: 'Should Guildhall draft the FLL overhead policy first, or also turn it into linked implementation work?',
+          choices: [
+            'Draft the policy/spec first',
+            'Draft the policy and create linked implementation tasks',
+            'Apply the policy now',
+          ],
+        },
+      })
+      expect(thread.activeTurnId).toBe('bounded-chat:bc-request-clarify:request-scope')
+    } finally {
+      await rm(projectPath, { recursive: true, force: true })
+    }
+  })
+
+  it('projects a pure project-question bounded chat as a conversation thread, not task intake', async () => {
+    const projectPath = await mkdtemp(path.join(tmpdir(), 'guildhall-thread-'))
+    try {
+      await mkdir(statePath(projectPath, 'bounded-chat'), { recursive: true })
+      await writeFile(
+        statePath(projectPath, 'bounded-chat', 'bc-project-question.json'),
+        JSON.stringify({
+          id: 'bc-project-question',
+          projectId: 'fair-labor-license',
+          source: 'thread:new-request',
+          objective: {
+            kind: 'new_request',
+            label: 'Answer a project question',
+            successCriteria: ['Answer the project question in Thread without creating task work.'],
+            startedAt: '2026-05-31T00:00:00.000Z',
+          },
+          status: 'waiting_for_owner',
+          activeSubObjectiveId: 'project-question-context',
+          subObjectives: [{
+            id: 'project-question-context',
+            objective: 'Gather project-question context',
+            prompt: 'Guildhall can answer this in Thread. Is there a source, task, or recent blocker it should use first?',
+            helperText: 'This stays a project conversation unless you ask Guildhall to turn it into work.',
+            choices: ['Use current blocker evidence', 'Use project docs', 'No extra context'],
+            followUpDepth: 0,
+            localTurns: [],
+            status: 'active',
+          }],
+          acceptedState: {
+            facts: [],
+            decisions: [],
+            leverUpdates: [],
+            settingUpdates: [],
+            taskDrafts: [],
+            unresolvedForks: [],
+            discardedResponses: [],
+          },
+          pendingActions: [],
+          appliedActionIds: [],
+          plannerState: {
+            newRequest: {
+              ask: 'Why is this project still blocked on useAuth.ts?',
+              domain: 'frontend',
+              projectPath,
+              routedRequestKind: 'project_question',
+              routingSummary: 'Guildhall saved this as a project question.',
+            },
+          },
+          createdAt: '2026-05-31T00:00:00.000Z',
+          updatedAt: '2026-05-31T00:00:00.000Z',
+        }),
+      )
+
+      const snapshot: ProjectSnapshot = {
+        projectPath,
+        config: {
+          id: 'fair-labor-license',
+          name: 'Fair Labor License',
+          bootstrap: { verifiedAt: new Date().toISOString() },
+          coordinators: [{ id: 'frontend', name: 'Frontend' }],
+        },
+        bootstrapVerified: true,
+        hasProvider: true,
+        hasDirection: true,
+        workspaceImportReviewed: true,
+        taskCount: 0,
+        wizardState: emptyWizardsState(),
+      }
+
+      const thread = buildThread({ projectPath, snapshot })
+      const turn = thread.turns.find(item => item.id === 'bounded-chat:bc-project-question:project-question-context')
+
+      expect(turn).toMatchObject({
+        kind: 'bounded_chat',
+        domainTitle: 'Project question',
+        question: {
+          prompt: 'Guildhall can answer this in Thread. Is there a source, task, or recent blocker it should use first?',
+          why: 'This stays a project conversation unless you ask Guildhall to turn it into work.',
+        },
+      })
+      expect(JSON.stringify(thread.turns)).not.toContain('Task Intake')
+      expect(thread.activeTurnId).toBe('bounded-chat:bc-project-question:project-question-context')
+    } finally {
+      await rm(projectPath, { recursive: true, force: true })
+    }
+  })
+
+  it.each([
+    ['task_shaping', 'Task shaping'],
+    ['structural_review', 'Structural review'],
+    ['setting_update', 'Settings update'],
+    ['recovery_decision', 'Recovery decision'],
+    ['capability_decision', 'Capability decision'],
+  ] as const)('projects waiting bounded-chat owner input for %s through Thread', async (kind, label) => {
+    const projectPath = await mkdtemp(path.join(tmpdir(), 'guildhall-thread-'))
+    try {
+      const snapshot: ProjectSnapshot = {
+        projectPath,
+        config: {
+          id: 'narrative-harness',
+          name: 'Narrative Harness',
+          bootstrap: { verifiedAt: new Date().toISOString() },
+          coordinators: [{ id: 'harness', name: 'Harness' }],
+        },
+        bootstrapVerified: true,
+        hasProvider: true,
+        hasDirection: true,
+        workspaceImportReviewed: true,
+        taskCount: 0,
+        wizardState: emptyWizardsState(),
+      }
+
+      const thread = buildThread({
+        projectPath,
+        snapshot,
+        boundedChatSessions: [{
+          id: `bc-${kind}`,
+          projectId: 'narrative-harness',
+          source: `owner-input:${kind}`,
+          objective: {
+            kind,
+            label,
+            successCriteria: ['Owner answers the linked Thread session.'],
+            startedAt: '2026-06-01T00:00:00.000Z',
+          },
+          status: 'waiting_for_owner',
+          activeSubObjectiveId: 'owner-choice',
+          subObjectives: [{
+            id: 'owner-choice',
+            rootQuestionId: 'owner-choice',
+            objective: label,
+            prompt: `How should Guildhall handle ${label}?`,
+            helperText: 'This answer unblocks the owner-input session.',
+            choices: ['Continue', 'Pause'],
+            followUpDepth: 0,
+            localTurns: [],
+            status: 'active',
+          }],
+          acceptedState: {
+            facts: [{ fact: `${label} has source context.`, sourceSubObjectiveId: 'owner-choice' }],
+            decisions: [],
+            leverUpdates: [],
+            settingUpdates: [],
+            taskDrafts: [],
+            unresolvedForks: [],
+            discardedResponses: [],
+          },
+          pendingActions: [],
+          appliedActionIds: [],
+          transitionReceipts: [],
+          createdAt: '2026-06-01T00:00:00.000Z',
+          updatedAt: '2026-06-01T00:05:00.000Z',
+        }],
+        pressureTestIntakes: [],
+        projectCheckInSummary: {
+          needed: false,
+          label: 'Project questions',
+          title: 'Project questions answered',
+          detail: 'Guildhall has already recorded project-level answers for this workspace.',
+          actionHref: '/thread',
+          totalCount: 1,
+          activeCount: 0,
+          completedCount: 1,
+        },
+      })
+
+      const turn = thread.turns.find(item => item.id === `bounded-chat:bc-${kind}:owner-choice`)
+      expect(turn).toMatchObject({
+        kind: 'bounded_chat',
+        sessionId: `bc-${kind}`,
+        domainTitle: label,
+        actionHref: `/thread?thread=bc-${kind}`,
+        question: {
+          prompt: `How should Guildhall handle ${label}?`,
+          evidence: [`${label} has source context.`],
+        },
+      })
+      expect(thread.activeTurnId).toBe(`bounded-chat:bc-${kind}:owner-choice`)
+    } finally {
+      await rm(projectPath, { recursive: true, force: true })
+    }
+  })
+
+  it('prefers preloaded thread state over re-reading current disk projections', async () => {
+    const projectPath = await mkdtemp(path.join(tmpdir(), 'guildhall-thread-'))
+    try {
+      await mkdir(statePath(projectPath, 'bounded-chat'), { recursive: true })
+      await writeFile(
+        statePath(projectPath, 'bounded-chat', 'bc-disk-only.json'),
+        JSON.stringify({
+          id: 'bc-disk-only',
+          projectId: 'narrative-harness',
+          source: 'thread:new-request',
+          objective: {
+            kind: 'new_request',
+            label: 'Shape a new request',
+            successCriteria: ['Classify the request and shape the next action.'],
+            startedAt: '2026-05-31T00:00:00.000Z',
+          },
+          status: 'waiting_for_owner',
+          activeSubObjectiveId: 'request-scope',
+          subObjectives: [{
+            id: 'request-scope',
+            objective: 'Clarify request scope',
+            prompt: 'Disk question that should be ignored when preloaded state is supplied.',
+            followUpDepth: 0,
+            localTurns: [],
+            status: 'active',
+          }],
+          acceptedState: {
+            facts: [],
+            decisions: [],
+            leverUpdates: [],
+            settingUpdates: [],
+            taskDrafts: [],
+            unresolvedForks: [],
+            discardedResponses: [],
+          },
+          pendingActions: [],
+          appliedActionIds: [],
+          createdAt: '2026-05-31T00:00:00.000Z',
+          updatedAt: '2026-05-31T00:00:00.000Z',
+        }),
+      )
+
+      const snapshot: ProjectSnapshot = {
+        projectPath,
+        config: {
+          id: 'narrative-harness',
+          name: 'Narrative Harness',
+          bootstrap: { verifiedAt: new Date().toISOString() },
+          coordinators: [{ id: 'harness', name: 'Harness' }],
+        },
+        bootstrapVerified: true,
+        hasProvider: true,
+        hasDirection: true,
+        workspaceImportReviewed: true,
+        taskCount: 1,
+        wizardState: emptyWizardsState(),
+      }
+
+      const thread = buildThread({
+        projectPath,
+        snapshot,
+        tasks: [{
+          id: 'task-001',
+          title: 'Shape thread performance',
+          description: 'Use injected state instead of re-reading disk turns.',
+          domain: 'product',
+          projectPath,
+          status: 'exploring',
+          createdAt: '2026-05-31T00:00:00.000Z',
+          updatedAt: '2026-05-31T00:00:00.000Z',
+        }] as never,
+        boundedChatSessions: [],
+        pressureTestIntakes: [],
+        projectCheckInSummary: {
+          needed: false,
+          label: 'Project questions',
+          title: 'Project questions answered',
+          detail: 'Guildhall has already recorded project-level answers for this workspace.',
+          actionHref: '/thread',
+          totalCount: 1,
+          activeCount: 0,
+          completedCount: 1,
+        },
+      })
+
+      expect(thread.turns.find(turn => turn.id === 'bounded-chat:bc-disk-only:request-scope')).toBeUndefined()
+      expect(thread.turns.some(turn => 'taskId' in turn && turn.taskId === 'task-001')).toBe(true)
+    } finally {
+      await rm(projectPath, { recursive: true, force: true })
+    }
+  })
+
+  it('projects a completed bounded-chat project check-in as a done turn', async () => {
+    const projectPath = await mkdtemp(path.join(tmpdir(), 'guildhall-thread-'))
+    try {
+      await mkdir(statePath(projectPath, 'bounded-chat'), { recursive: true })
+      await writeFile(
+        statePath(projectPath, 'bounded-chat', 'bc-narrative-project-check-in.json'),
+        JSON.stringify({
+          id: 'bc-narrative-project-check-in',
+          projectId: 'narrative-harness',
+          source: 'thread:project-check-in',
+          objective: {
+            kind: 'project_check_in',
+            label: 'Project check-in',
+            successCriteria: ['Capture the near-term project direction.'],
+            startedAt: '2026-05-31T00:00:00.000Z',
+          },
+          status: 'fulfilled',
+          activeSubObjectiveId: 'visual-direction-mode',
+          subObjectives: [{
+            id: 'project-direction-priority',
+            objective: 'Capture project direction',
+            prompt: 'For the next few Narrative Harness tasks, should Guildhall bias toward reviewer-lane MVPs, author-facing editor UX, story-memory/schema foundations, or generation/evaluation loops?',
+            helperText: 'This changes which backlog items Guildhall should shape first and what evidence workers need.',
+            choices: [
+              'Reviewer-lane MVPs',
+              'Author-facing editor UX',
+              'Story-memory/schema foundations',
+              'Generation/evaluation loops',
+            ],
+            followUpDepth: 0,
+            localTurns: [{
+              role: 'user',
+              content: 'Reviewer-lane MVPs first.',
+              selectedChoiceIds: [],
+            }],
+            status: 'answered',
+          }, {
+            id: 'visual-direction-mode',
+            objective: 'Capture project direction',
+            prompt: 'Should Narrative Harness feel more like a calm writing desk, a professional editorial tool, or an analytical story-debugging cockpit?',
+            helperText: 'This changes UI acceptance criteria and reviewer expectations for author-facing work.',
+            choices: [
+              'Calm writing desk',
+              'Professional editorial tool',
+              'Analytical story-debugging cockpit',
+            ],
+            followUpDepth: 0,
+            localTurns: [{
+              role: 'user',
+              content: 'Professional editorial tool.',
+              selectedChoiceIds: [],
+            }],
+            status: 'answered',
+          }],
+          acceptedState: {
+            facts: [],
+            decisions: [{
+              decision: 'Reviewer-lane MVPs first.',
+              sourceSubObjectiveId: 'project-direction-priority',
+            }, {
+              decision: 'Professional editorial tool.',
+              sourceSubObjectiveId: 'visual-direction-mode',
+            }],
+            leverUpdates: [],
+            settingUpdates: [],
+            taskDrafts: [],
+            unresolvedForks: [],
+            discardedResponses: [],
+          },
+          pendingActions: [],
+          appliedActionIds: ['close-1'],
+          closure: {
+            outcome: 'fulfilled',
+            summary: 'Guildhall recorded the project check-in direction.',
+            settingUpdates: [],
+            taskDrafts: [],
+            evidence: [],
+            closedAt: '2026-05-31T00:10:00.000Z',
+          },
+          createdAt: '2026-05-31T00:00:00.000Z',
+          updatedAt: '2026-05-31T00:10:00.000Z',
+        }),
+      )
+
+      const snapshot: ProjectSnapshot = {
+        projectPath,
+        config: {
+          id: 'narrative-harness',
+          name: 'Narrative Harness',
+          bootstrap: { verifiedAt: new Date().toISOString() },
+          coordinators: [{ id: 'harness', name: 'Harness' }],
+        },
+        bootstrapVerified: true,
+        hasProvider: true,
+        hasDirection: true,
+        workspaceImportReviewed: true,
+        taskCount: 0,
+        wizardState: emptyWizardsState(),
+      }
+
+      const thread = buildThread({ projectPath, snapshot })
+      const turn = thread.turns.find(item => item.id === 'bounded-chat-done:bc-narrative-project-check-in')
+
+      expect(turn).toMatchObject({
+        kind: 'request',
+        status: 'done',
+        phase: 'done',
+        title: 'Project check-in complete',
+        routingSummary: 'Guildhall recorded the project check-in direction.',
+      })
+    } finally {
+      await rm(projectPath, { recursive: true, force: true })
+    }
+  })
+
+  it('projects a completed bounded-chat New Request as a done turn', async () => {
+    const projectPath = await mkdtemp(path.join(tmpdir(), 'guildhall-thread-'))
+    try {
+      await mkdir(statePath(projectPath, 'bounded-chat'), { recursive: true })
+      await writeFile(
+        statePath(projectPath, 'bounded-chat', 'bc-request-done.json'),
+        JSON.stringify({
+          id: 'bc-request-done',
+          projectId: 'narrative-harness',
+          source: 'thread:new-request',
+          objective: {
+            kind: 'new_request',
+            label: 'Shape a new request',
+            successCriteria: ['Classify the request and shape the next action.'],
+            startedAt: '2026-05-31T00:00:00.000Z',
+          },
+          status: 'fulfilled',
+          activeSubObjectiveId: 'request-scope',
+          subObjectives: [{
+            id: 'request-scope',
+            objective: 'Clarify request scope',
+            prompt: 'Should Guildhall draft the FLL overhead policy first, or also turn it into linked implementation work?',
+            helperText: 'This changes whether Guildhall should shape one policy task or a broader execution plan.',
+            choices: [
+              'Draft the policy/spec first',
+              'Draft the policy and create linked implementation tasks',
+              'Apply the policy now',
+            ],
+            followUpDepth: 0,
+            localTurns: [{
+              role: 'user',
+              content: 'Draft the policy/spec first.',
+              selectedChoiceIds: [],
+            }],
+            status: 'answered',
+          }],
+          acceptedState: {
+            facts: [],
+            decisions: [{
+              decision: 'Draft the policy/spec first.',
+              sourceSubObjectiveId: 'request-scope',
+            }],
+            leverUpdates: [],
+            settingUpdates: [],
+            taskDrafts: ['task-001'],
+            unresolvedForks: [],
+            discardedResponses: [],
+          },
+          pendingActions: [],
+          appliedActionIds: ['close-1'],
+          closure: {
+            outcome: 'fulfilled',
+            summary: 'Guildhall shaped the new request into runnable work.',
+            settingUpdates: [],
+            taskDrafts: ['task-001'],
+            evidence: [],
+            closedAt: '2026-05-31T00:10:00.000Z',
+          },
+          createdAt: '2026-05-31T00:00:00.000Z',
+          updatedAt: '2026-05-31T00:10:00.000Z',
+        }),
+      )
+
+      const snapshot: ProjectSnapshot = {
+        projectPath,
+        config: {
+          id: 'narrative-harness',
+          name: 'Narrative Harness',
+          bootstrap: { verifiedAt: new Date().toISOString() },
+          coordinators: [{ id: 'harness', name: 'Harness' }],
+        },
+        bootstrapVerified: true,
+        hasProvider: true,
+        hasDirection: true,
+        workspaceImportReviewed: true,
+        taskCount: 0,
+        wizardState: emptyWizardsState(),
+      }
+
+      const thread = buildThread({ projectPath, snapshot })
+      const turn = thread.turns.find(item => item.id === 'bounded-chat-done:bc-request-done')
+
+      expect(turn).toMatchObject({
+        kind: 'request',
+        status: 'done',
+        phase: 'done',
+        title: 'New request complete',
+        routingSummary: 'Guildhall shaped the new request into runnable work.',
+      })
+    } finally {
+      await rm(projectPath, { recursive: true, force: true })
+    }
+  })
+
+  it('projects a completed bounded-chat project question as a done conversation receipt', async () => {
+    const projectPath = await mkdtemp(path.join(tmpdir(), 'guildhall-thread-'))
+    try {
+      await mkdir(statePath(projectPath, 'bounded-chat'), { recursive: true })
+      await writeFile(
+        statePath(projectPath, 'bounded-chat', 'bc-project-question-done.json'),
+        JSON.stringify({
+          id: 'bc-project-question-done',
+          projectId: 'fair-labor-license',
+          source: 'thread:new-request',
+          objective: {
+            kind: 'new_request',
+            label: 'Answer a project question',
+            successCriteria: ['Answer the project question in Thread without creating task work.'],
+            startedAt: '2026-05-31T00:00:00.000Z',
+          },
+          status: 'fulfilled',
+          activeSubObjectiveId: 'project-question-context',
+          subObjectives: [{
+            id: 'project-question-context',
+            objective: 'Gather project-question context',
+            prompt: 'Guildhall can answer this in Thread. Is there a source, task, or recent blocker it should use first?',
+            helperText: 'This stays a project conversation unless you ask Guildhall to turn it into work.',
+            followUpDepth: 0,
+            localTurns: [{
+              role: 'user',
+              content: 'Use current blocker evidence.',
+              selectedChoiceIds: [],
+            }],
+            status: 'answered',
+          }],
+          acceptedState: {
+            facts: [],
+            decisions: [{
+              decision: 'Use current blocker evidence.',
+              sourceSubObjectiveId: 'project-question-context',
+            }],
+            leverUpdates: [],
+            settingUpdates: [],
+            taskDrafts: [],
+            unresolvedForks: [],
+            discardedResponses: [],
+          },
+          pendingActions: [],
+          appliedActionIds: ['close-1'],
+          plannerState: {
+            newRequest: {
+              ask: 'Why is this project still blocked on useAuth.ts?',
+              domain: 'frontend',
+              projectPath,
+              routedRequestKind: 'project_question',
+              routingSummary: 'Guildhall saved this as a project question.',
+            },
+          },
+          closure: {
+            outcome: 'fulfilled',
+            summary: 'Guildhall kept this as a project question thread.',
+            settingUpdates: [],
+            taskDrafts: [],
+            evidence: [],
+            closedAt: '2026-05-31T00:10:00.000Z',
+          },
+          createdAt: '2026-05-31T00:00:00.000Z',
+          updatedAt: '2026-05-31T00:10:00.000Z',
+        }),
+      )
+
+      const snapshot: ProjectSnapshot = {
+        projectPath,
+        config: {
+          id: 'fair-labor-license',
+          name: 'Fair Labor License',
+          bootstrap: { verifiedAt: new Date().toISOString() },
+          coordinators: [{ id: 'frontend', name: 'Frontend' }],
+        },
+        bootstrapVerified: true,
+        hasProvider: true,
+        hasDirection: true,
+        workspaceImportReviewed: true,
+        taskCount: 0,
+        wizardState: emptyWizardsState(),
+      }
+
+      const thread = buildThread({ projectPath, snapshot })
+      const turn = thread.turns.find(item => item.id === 'bounded-chat-done:bc-project-question-done')
+
+      expect(turn).toMatchObject({
+        kind: 'request',
+        status: 'done',
+        title: 'Project question complete',
+        routingSummary: 'Guildhall kept this as a project question thread.',
+      })
+      expect(turn).not.toMatchObject({
+        title: 'New request complete',
+      })
+    } finally {
+      await rm(projectPath, { recursive: true, force: true })
+    }
+  })
+
+  it('records routed task requests as history once the task state owns current work', async () => {
+    const projectPath = await mkdtemp(path.join(tmpdir(), 'guildhall-thread-'))
+    try {
+      await mkdir(statePath(projectPath), { recursive: true })
+      await writeFile(
+        statePath(projectPath, 'TASKS.json'),
         JSON.stringify({
           tasks: [
             {
@@ -228,7 +1088,7 @@ describe('buildThread', () => {
                 raw: 'What commands should I run before release?',
                 kind: 'project_question',
                 title: 'What commands should I run before release?',
-                routingSummary: 'Routed to Project Question',
+                routingSummary: 'Guildhall saved this as a project question.',
                 createdAt: '2026-05-23T00:00:00.000Z',
               },
               createdAt: '2026-05-23T00:00:00.000Z',
@@ -257,16 +1117,118 @@ describe('buildThread', () => {
       const thread = buildThread({ projectPath, snapshot, recentEvents: [] })
       expect(thread.turns.find(t => t.id === 'request:request-question')).toMatchObject({
         kind: 'request',
-        status: 'pending',
-        phase: 'intake',
-        routingSummary: 'Routed to Project Question',
+        status: 'done',
+        phase: 'done',
+        requestStage: 'new_request',
+        routingSummary: 'Guildhall saved this as a project question.',
       })
       expect(thread.turns.find(t => t.id === 'inflight:task-1')).toMatchObject({
         kind: 'inflight',
         requestKind: 'project_question',
         checklist: undefined,
-        summary: expect.stringContaining('answer this question'),
+        summary: expect.stringContaining('answered from project context'),
       })
+    } finally {
+      await rm(projectPath, { recursive: true, force: true })
+    }
+  })
+
+  it('projects brief cleanup requests as task-thread cleanup work instead of task-intake routing', async () => {
+    const projectPath = await mkdtemp(path.join(tmpdir(), 'guildhall-thread-'))
+    try {
+      await mkdir(statePath(projectPath), { recursive: true })
+      await writeFile(
+        statePath(projectPath, 'TASKS.json'),
+        JSON.stringify({
+          tasks: [
+            {
+              id: 'task-fll-overhead-policy',
+              title: 'Set FLL overhead charge policy',
+              description: 'We should have a system-wide policy of how much FLL charges on overhead for maintenance fees etc.',
+              domain: 'policy',
+              projectPath,
+              status: 'exploring',
+              request: {
+                id: 'request-fll-overhead-policy',
+                raw: 'We should have a system-wide policy of how much FLL charges on overhead for maintenance fees etc.',
+                kind: 'task_spec',
+                title: 'Set FLL overhead charge policy',
+                routingSummary: 'Routed to Task Intake',
+                createdAt: '2026-06-02T23:40:00.000Z',
+              },
+              productBrief: {
+                userJob: 'Verify whether the FLL overhead charge policy is already done.',
+                whyItMattersNow: 'The remaining work should be narrowed before worker execution.',
+                successMetric: 'The remaining work is described clearly enough to approve.',
+                authoredBy: 'spec-agent',
+              },
+              notes: [
+                {
+                  role: 'reviewer',
+                  agentId: 'reviewer-agent',
+                  content: 'Let me start by reading the current task state and the changed files to evaluate the work.',
+                  timestamp: '2026-05-25T22:03:07.794Z',
+                },
+                {
+                  role: 'human',
+                  content: 'Asked Guildhall to enrich this task (checklist).',
+                  timestamp: '2026-06-02T23:41:00.000Z',
+                },
+                {
+                  role: 'system',
+                  content: 'Enrichment requested from ready. Guildhall will add the missing structure before continuing.',
+                  timestamp: '2026-06-02T23:41:00.000Z',
+                },
+              ],
+              createdAt: '2026-06-02T23:40:00.000Z',
+              updatedAt: '2026-06-02T23:41:00.000Z',
+            },
+          ],
+        }),
+      )
+
+      const snapshot: ProjectSnapshot = {
+        projectPath,
+        config: {
+          id: 'fair-labor-license',
+          name: 'Fair Labor License',
+          bootstrap: { verifiedAt: new Date().toISOString() },
+          coordinators: [{ id: 'policy', name: 'Policy' }],
+        },
+        bootstrapVerified: true,
+        hasProvider: true,
+        hasDirection: true,
+        workspaceImportReviewed: true,
+        taskCount: 1,
+        wizardState: emptyWizardsState(),
+      }
+
+      const thread = buildThread({ projectPath, snapshot, recentEvents: [] })
+      expect(thread.turns.find(t => t.id === 'request:request-fll-overhead-policy')).toMatchObject({
+        kind: 'request',
+        status: 'done',
+        phase: 'done',
+        requestStage: 'task_brief_cleanup',
+        routingSummary: 'Guildhall saved this cleanup request and queued the task brief in Thread.',
+      })
+      expect(thread.turns.find(t => t.id === 'request:task-fll-overhead-policy:brief-cleanup')).toMatchObject({
+        kind: 'history_note',
+        label: 'Brief cleanup requested',
+        summary: 'Guildhall was asked to clean up this task brief before worker execution.',
+      })
+      expect(thread.turns.find(t => t.kind === 'review_feedback')).toMatchObject({
+        kind: 'review_feedback',
+        phase: 'done',
+      })
+      expect(thread.turns.find(t => t.id === 'inflight:task-fll-overhead-policy')).toMatchObject({
+        kind: 'inflight',
+        status: 'active',
+        taskStatus: 'exploring',
+        requestStage: 'task_brief_cleanup',
+        routingSummary: 'Guildhall saved this cleanup request and queued the task brief in Thread.',
+        summary: 'Task brief cleanup is queued before worker handoff.',
+      })
+      expect(thread.activeTurnId).toBe('inflight:task-fll-overhead-policy')
     } finally {
       await rm(projectPath, { recursive: true, force: true })
     }
@@ -275,9 +1237,9 @@ describe('buildThread', () => {
   it('surfaces active task work once setup is already complete', async () => {
     const projectPath = await mkdtemp(path.join(tmpdir(), 'guildhall-thread-'))
     try {
-      await mkdir(path.join(projectPath, '.guildhall'), { recursive: true })
+      await mkdir(statePath(projectPath), { recursive: true })
       await writeFile(
-        path.join(projectPath, '.guildhall', 'TASKS.json'),
+        statePath(projectPath, 'TASKS.json'),
         JSON.stringify({
           tasks: [
             {
@@ -332,10 +1294,10 @@ describe('buildThread', () => {
   it('projects construction mode onto task turns', async () => {
     const projectPath = await mkdtemp(path.join(tmpdir(), 'guildhall-thread-'))
     try {
-      await mkdir(path.join(projectPath, '.guildhall'), { recursive: true })
+      await mkdir(statePath(projectPath), { recursive: true })
       const now = new Date().toISOString()
       await writeFile(
-        path.join(projectPath, '.guildhall', 'TASKS.json'),
+        statePath(projectPath, 'TASKS.json'),
         JSON.stringify({
           tasks: [
             {
@@ -385,7 +1347,7 @@ describe('buildThread', () => {
   it('advances past bootstrap setup when runtime bootstrap truth is already green', async () => {
     const projectPath = await mkdtemp(path.join(tmpdir(), 'guildhall-thread-'))
     try {
-      await mkdir(path.join(projectPath, '.guildhall'), { recursive: true })
+      await mkdir(statePath(projectPath), { recursive: true })
       const snapshot: ProjectSnapshot = {
         projectPath,
         config: {
@@ -420,7 +1382,7 @@ describe('buildThread', () => {
   it('lets the routing setup step seed meta-intake instead of linking to the project list', async () => {
     const projectPath = await mkdtemp(path.join(tmpdir(), 'guildhall-thread-'))
     try {
-      await mkdir(path.join(projectPath, '.guildhall'), { recursive: true })
+      await mkdir(statePath(projectPath), { recursive: true })
       const snapshot: ProjectSnapshot = {
         projectPath,
         config: {
@@ -454,7 +1416,7 @@ describe('buildThread', () => {
   it('does not emit generic project-list links for onboard setup steps', async () => {
     const projectPath = await mkdtemp(path.join(tmpdir(), 'guildhall-thread-'))
     try {
-      await mkdir(path.join(projectPath, '.guildhall'), { recursive: true })
+      await mkdir(statePath(projectPath), { recursive: true })
       const snapshots: ProjectSnapshot[] = [
         {
           projectPath,
@@ -542,9 +1504,9 @@ describe('buildThread', () => {
   it('keeps project direction active ahead of a large imported-draft queue and collapses the queue to one turn', async () => {
     const projectPath = await mkdtemp(path.join(tmpdir(), 'guildhall-thread-'))
     try {
-      await mkdir(path.join(projectPath, '.guildhall'), { recursive: true })
+      await mkdir(statePath(projectPath), { recursive: true })
       await writeFile(
-        path.join(projectPath, '.guildhall', 'TASKS.json'),
+        statePath(projectPath, 'TASKS.json'),
         JSON.stringify({
           tasks: [
             {
@@ -604,9 +1566,9 @@ describe('buildThread', () => {
   it('frames the empty-project first work item as spec shaping instead of implementation task creation', async () => {
     const projectPath = await mkdtemp(path.join(tmpdir(), 'guildhall-thread-'))
     try {
-      await mkdir(path.join(projectPath, '.guildhall'), { recursive: true })
+      await mkdir(statePath(projectPath), { recursive: true })
       await writeFile(
-        path.join(projectPath, '.guildhall', 'TASKS.json'),
+        statePath(projectPath, 'TASKS.json'),
         JSON.stringify({ tasks: [] }),
       )
       const snapshot: ProjectSnapshot = {
@@ -634,6 +1596,80 @@ describe('buildThread', () => {
       expect(activeSetup.why).toMatch(/rough idea into a product brief/i)
       expect(activeSetup.actionLabel).toBe('Start shaping')
       expect(activeSetup.placeholder).toBe('Describe the product idea or first outcome')
+      expect(Date.parse(activeSetup.at)).toBeGreaterThan(Date.parse('2026-01-01T00:00:00.000Z'))
+    } finally {
+      await rm(projectPath, { recursive: true, force: true })
+    }
+  })
+
+  it('keeps fresh first-spec setup ahead of stale pressure-test questions', async () => {
+    const projectPath = await mkdtemp(path.join(tmpdir(), 'guildhall-thread-'))
+    try {
+      await mkdir(statePath(projectPath), { recursive: true })
+      await writeFile(
+        statePath(projectPath, 'TASKS.json'),
+        JSON.stringify({ tasks: [] }),
+      )
+      const snapshot: ProjectSnapshot = {
+        projectPath,
+        config: {
+          id: 'commerce-project',
+          name: 'Commerce Project',
+          bootstrap: { verifiedAt: '2026-06-03T06:00:00.000Z' },
+          coordinators: [{ id: 'project-implementation', name: 'Project Implementation' }],
+        },
+        bootstrapVerified: true,
+        hasProvider: true,
+        hasDirection: true,
+        workspaceImportReviewed: true,
+        taskCount: 0,
+        wizardState: emptyWizardsState(),
+      }
+
+      const thread = buildThread({
+        projectPath,
+        snapshot,
+        pressureTestIntakes: [{
+          id: 'pti-commerce-old-setup',
+          rawRequest: 'Pressure-test Commerce Project project setup.',
+          target: { type: 'project', id: 'commerce-project', title: 'Commerce Project project setup' },
+          status: 'active',
+          activeDomainId: 'product-goals',
+          pendingQuestion: {
+            id: 'old-success-question',
+            domainId: 'product-goals',
+            prompt: 'What outcome would make this old pressure test successful?',
+            why: 'This stale question predates the first-spec setup path.',
+            evidence: ['internal/old-audit.md'],
+            askedAt: '2026-05-01T00:00:00.000Z',
+          },
+          domains: [{
+            id: 'product-goals',
+            title: 'Product goals',
+            whyItMatters: 'This stale question predates the first-spec setup path.',
+            status: 'active',
+            knownFacts: [],
+            openUnknowns: [],
+            askedQuestions: [],
+            followUpCandidates: [],
+            closeoutAsked: false,
+          }],
+          outputs: { assumptions: [], decisions: [], languageMapCandidates: [], taskSplitCandidates: [] },
+          createdAt: '2026-05-01T00:00:00.000Z',
+          updatedAt: '2026-05-01T00:00:00.000Z',
+        }],
+      })
+
+      expect(thread.activeTurnId).toBe('setup:firstTask')
+      expect(thread.turns.find(turn => turn.id === 'setup:firstTask')).toMatchObject({
+        kind: 'setup_step',
+        status: 'active',
+        title: 'Shape the first spec',
+      })
+      expect(thread.turns.find(turn => turn.id === 'pressure-test:pti-commerce-old-setup:old-success-question')).toMatchObject({
+        kind: 'pressure_test_question',
+        status: 'pending',
+      })
     } finally {
       await rm(projectPath, { recursive: true, force: true })
     }
@@ -642,11 +1678,11 @@ describe('buildThread', () => {
   it('keeps a workspace-import question active ahead of later queued work', async () => {
     const projectPath = await mkdtemp(path.join(tmpdir(), 'guildhall-thread-'))
     try {
-      await mkdir(path.join(projectPath, '.guildhall'), { recursive: true })
+      await mkdir(statePath(projectPath), { recursive: true })
       const earlier = new Date(Date.now() - 600_000).toISOString()
       const later = new Date(Date.now() - 60_000).toISOString()
       await writeFile(
-        path.join(projectPath, '.guildhall', 'TASKS.json'),
+        statePath(projectPath, 'TASKS.json'),
         JSON.stringify({
           tasks: [
             {
@@ -710,6 +1746,63 @@ describe('buildThread', () => {
       expect(queuedTask.status).toBe('pending')
       expect(queuedTask.summary).toContain('brief or acceptance criteria still need cleanup')
       expect(queuedTask.checklist?.totalSteps).toBeGreaterThan(0)
+      expect(queuedTask.workerHandoff).toMatchObject({
+        ready: false,
+        cleanupNeeded: true,
+      })
+    } finally {
+      await rm(projectPath, { recursive: true, force: true })
+    }
+  })
+
+  it('summarizes normal spec_review component tasks as queued coordinator review', async () => {
+    const projectPath = await mkdtemp(path.join(tmpdir(), 'guildhall-thread-'))
+    try {
+      await mkdir(statePath(projectPath), { recursive: true })
+      await writeFile(
+        statePath(projectPath, 'TASKS.json'),
+        JSON.stringify({
+          tasks: [
+            {
+              id: 'task-combobox',
+              title: 'Combobox',
+              status: 'spec_review',
+              createdAt: '2026-06-04T00:00:00.000Z',
+              updatedAt: '2026-06-04T00:01:00.000Z',
+              spec: '## Summary\n\nBuild an accessible combobox.',
+              acceptanceCriteria: [{ description: 'The combobox supports keyboard navigation.' }],
+            },
+          ],
+        }),
+      )
+      const snapshot: ProjectSnapshot = {
+        projectPath,
+        config: {
+          id: 'demo',
+          name: 'Demo',
+          bootstrap: { verifiedAt: new Date().toISOString() },
+          coordinators: [{ id: 'frontend', name: 'Frontend' }],
+        },
+        bootstrapVerified: true,
+        hasProvider: true,
+        hasDirection: true,
+        workspaceImportReviewed: true,
+        taskCount: 1,
+        wizardState: emptyWizardsState(),
+      }
+
+      const thread = buildThread({
+        projectPath,
+        snapshot,
+        recentEvents: [],
+      })
+
+      expect(thread.turns.find(turn => turn.id === 'inflight:task-combobox')).toMatchObject({
+        kind: 'inflight',
+        taskStatus: 'spec_review',
+        phase: 'spec',
+        summary: 'Your answers and a spec draft are saved. Coordinator review is next.',
+      })
     } finally {
       await rm(projectPath, { recursive: true, force: true })
     }
@@ -718,10 +1811,10 @@ describe('buildThread', () => {
   it('does not render operational receipts as answerable questions', async () => {
     const projectPath = await mkdtemp(path.join(tmpdir(), 'guildhall-thread-'))
     try {
-      await mkdir(path.join(projectPath, '.guildhall'), { recursive: true })
+      await mkdir(statePath(projectPath), { recursive: true })
       const now = new Date().toISOString()
       await writeFile(
-        path.join(projectPath, '.guildhall', 'TASKS.json'),
+        statePath(projectPath, 'TASKS.json'),
         JSON.stringify({
           tasks: [
             {
@@ -779,10 +1872,10 @@ describe('buildThread', () => {
   it('does not render output promises as answerable questions', async () => {
     const projectPath = await mkdtemp(path.join(tmpdir(), 'guildhall-thread-'))
     try {
-      await mkdir(path.join(projectPath, '.guildhall'), { recursive: true })
+      await mkdir(statePath(projectPath), { recursive: true })
       const now = new Date().toISOString()
       await writeFile(
-        path.join(projectPath, '.guildhall', 'TASKS.json'),
+        statePath(projectPath, 'TASKS.json'),
         JSON.stringify({
           tasks: [
             {
@@ -838,10 +1931,10 @@ describe('buildThread', () => {
   it('surfaces immediate all-terminal start-stop activity in Thread', async () => {
     const projectPath = await mkdtemp(path.join(tmpdir(), 'guildhall-thread-'))
     try {
-      await mkdir(path.join(projectPath, '.guildhall'), { recursive: true })
+      await mkdir(statePath(projectPath), { recursive: true })
       const now = new Date().toISOString()
       await writeFile(
-        path.join(projectPath, '.guildhall', 'TASKS.json'),
+        statePath(projectPath, 'TASKS.json'),
         JSON.stringify({
           tasks: [
             {
@@ -902,11 +1995,11 @@ describe('buildThread', () => {
   it('prefers an in-progress worker turn over a stale review turn when neither has a live agent', async () => {
     const projectPath = await mkdtemp(path.join(tmpdir(), 'guildhall-thread-'))
     try {
-      await mkdir(path.join(projectPath, '.guildhall'), { recursive: true })
+      await mkdir(statePath(projectPath), { recursive: true })
       const earlier = new Date(Date.now() - 600_000).toISOString()
       const later = new Date(Date.now() - 60_000).toISOString()
       await writeFile(
-        path.join(projectPath, '.guildhall', 'TASKS.json'),
+        statePath(projectPath, 'TASKS.json'),
         JSON.stringify({
           tasks: [
             {
@@ -971,7 +2064,7 @@ describe('buildThread', () => {
   it('drafts project direction as editable brief copy instead of inference narration', async () => {
     const projectPath = await mkdtemp(path.join(tmpdir(), 'guildhall-thread-'))
     try {
-      await mkdir(path.join(projectPath, '.guildhall'), { recursive: true })
+      await mkdir(statePath(projectPath), { recursive: true })
       await writeFile(
         path.join(projectPath, 'README.md'),
         [
@@ -1014,7 +2107,7 @@ describe('buildThread', () => {
   it('shows project direction setup as a refreshable snapshot plus durable owner input', async () => {
     const projectPath = await mkdtemp(path.join(tmpdir(), 'guildhall-thread-'))
     try {
-      await mkdir(path.join(projectPath, '.guildhall'), { recursive: true })
+      await mkdir(statePath(projectPath), { recursive: true })
       await writeFile(
         path.join(projectPath, 'README.md'),
         [
@@ -1024,7 +2117,7 @@ describe('buildThread', () => {
         ].join('\n'),
       )
       await writeFile(
-        path.join(projectPath, '.guildhall', 'TASKS.json'),
+        statePath(projectPath, 'TASKS.json'),
         JSON.stringify({
           tasks: [
             {
@@ -1087,8 +2180,8 @@ describe('buildThread', () => {
   it('shows the same current snapshot before reviewing existing project work', async () => {
     const projectPath = await mkdtemp(path.join(tmpdir(), 'guildhall-thread-'))
     try {
-      await mkdir(path.join(projectPath, '.guildhall'), { recursive: true })
-      await writeFile(path.join(projectPath, '.guildhall', 'project-brief.md'), 'Desktop font generation tool with model and app surfaces.')
+      await mkdir(statePath(projectPath), { recursive: true })
+      await writeFile(statePath(projectPath, 'project-brief.md'), 'Desktop font generation tool with model and app surfaces.')
       await writeFile(path.join(projectPath, 'README.md'), '# Font Something\n')
       const snapshot: ProjectSnapshot = {
         projectPath,
@@ -1110,6 +2203,7 @@ describe('buildThread', () => {
 
       const reviewStep = thread.turns.find(turn => turn.id === 'setup:workspaceImport')
       if (!reviewStep || reviewStep.kind !== 'setup_step') throw new Error('expected workspace import setup step')
+      expect(reviewStep.actionLabel).toBe('Open import review')
       expect(reviewStep.contextSummary?.facts).toEqual(expect.arrayContaining([
         'Current read: Desktop font generation tool with model and app surfaces.',
         'Coordinator areas: Model, App.',
@@ -1124,7 +2218,7 @@ describe('buildThread', () => {
   it('replaces legacy generated project-direction boilerplate with the cleaner inferred brief', async () => {
     const projectPath = await mkdtemp(path.join(tmpdir(), 'guildhall-thread-'))
     try {
-      await mkdir(path.join(projectPath, '.guildhall'), { recursive: true })
+      await mkdir(statePath(projectPath), { recursive: true })
       await writeFile(
         path.join(projectPath, 'README.md'),
         [
@@ -1134,7 +2228,7 @@ describe('buildThread', () => {
         ].join('\n'),
       )
       await writeFile(
-        path.join(projectPath, '.guildhall', 'project-brief.md'),
+        statePath(projectPath, 'project-brief.md'),
         'Fair Labor License Platform is this project. From the README, the project appears to be about modern licensing platform for open-source maintainers. Guildhall should treat the main goal as helping maintainers understand, adopt, publish, and operate the Fair Labor License cleanly.',
       )
       const snapshot: ProjectSnapshot = {
@@ -1170,7 +2264,7 @@ describe('buildThread', () => {
   it('folds a lead-in line plus bullets into one readable inferred brief sentence', async () => {
     const projectPath = await mkdtemp(path.join(tmpdir(), 'guildhall-thread-'))
     try {
-      await mkdir(path.join(projectPath, '.guildhall'), { recursive: true })
+      await mkdir(statePath(projectPath), { recursive: true })
       await writeFile(
         path.join(projectPath, 'README.md'),
         [
@@ -1216,9 +2310,9 @@ describe('buildThread', () => {
   it('keeps provider setup active ahead of meta-intake when setup is still blocked', async () => {
     const projectPath = await mkdtemp(path.join(tmpdir(), 'guildhall-thread-'))
     try {
-      await mkdir(path.join(projectPath, '.guildhall'), { recursive: true })
+      await mkdir(statePath(projectPath), { recursive: true })
       await writeFile(
-        path.join(projectPath, '.guildhall', 'TASKS.json'),
+        statePath(projectPath, 'TASKS.json'),
         JSON.stringify({
           tasks: [
             {
@@ -1268,9 +2362,9 @@ describe('buildThread', () => {
   it('collapses duplicate unanswered questions with the same prompt into one visible card', async () => {
     const projectPath = await mkdtemp(path.join(tmpdir(), 'guildhall-thread-'))
     try {
-      await mkdir(path.join(projectPath, '.guildhall'), { recursive: true })
+      await mkdir(statePath(projectPath), { recursive: true })
       await writeFile(
-        path.join(projectPath, '.guildhall', 'TASKS.json'),
+        statePath(projectPath, 'TASKS.json'),
         JSON.stringify({
           tasks: [
             {
@@ -1338,10 +2432,10 @@ describe('buildThread', () => {
   it('collapses near-duplicate fallback questions with the same choices into one visible card', async () => {
     const projectPath = await mkdtemp(path.join(tmpdir(), 'guildhall-thread-'))
     try {
-      await mkdir(path.join(projectPath, '.guildhall'), { recursive: true })
+      await mkdir(statePath(projectPath), { recursive: true })
       const now = new Date().toISOString()
       await writeFile(
-        path.join(projectPath, '.guildhall', 'TASKS.json'),
+        statePath(projectPath, 'TASKS.json'),
         JSON.stringify({
           tasks: [
             {
@@ -1410,11 +2504,11 @@ describe('buildThread', () => {
   it('groups multiple open questions under one task turn with imported source context', async () => {
     const projectPath = await mkdtemp(path.join(tmpdir(), 'guildhall-thread-'))
     try {
-      await mkdir(path.join(projectPath, '.guildhall'), { recursive: true })
+      await mkdir(statePath(projectPath), { recursive: true })
       const now = new Date().toISOString()
       const sourcePath = path.join(projectPath, 'knit', 'PROJECT_STATE.md')
       await writeFile(
-        path.join(projectPath, '.guildhall', 'TASKS.json'),
+        statePath(projectPath, 'TASKS.json'),
         JSON.stringify({
           tasks: [
             {
@@ -1489,10 +2583,10 @@ describe('buildThread', () => {
   it('shows one task state when a draft brief also has an unanswered question', async () => {
     const projectPath = await mkdtemp(path.join(tmpdir(), 'guildhall-thread-'))
     try {
-      await mkdir(path.join(projectPath, '.guildhall'), { recursive: true })
+      await mkdir(statePath(projectPath), { recursive: true })
       const now = new Date().toISOString()
       await writeFile(
-        path.join(projectPath, '.guildhall', 'TASKS.json'),
+        statePath(projectPath, 'TASKS.json'),
         JSON.stringify({
           tasks: [
             {
@@ -1552,13 +2646,229 @@ describe('buildThread', () => {
     }
   })
 
+  it('does not ask for recovery brief approval when a concrete spec is already saved', async () => {
+    const projectPath = await mkdtemp(path.join(tmpdir(), 'guildhall-thread-'))
+    try {
+      await mkdir(statePath(projectPath), { recursive: true })
+      const now = new Date().toISOString()
+      await writeFile(
+        statePath(projectPath, 'TASKS.json'),
+        JSON.stringify({
+          tasks: [
+            {
+              id: 'task-block-menu',
+              title: 'Block menu / block side menu',
+              description: 'looma/docs/editor-roadmap.md: - **Block menu / block side menu**',
+              status: 'exploring',
+              createdAt: now,
+              updatedAt: now,
+              productBrief: {
+                userJob: 'I want Block menu / block side menu turned into concrete project work using the evidence and owner decisions already recorded.',
+                whyItMattersNow: 'Block menu / block side menu has a reviewable spec, acceptance criteria, and a clear completion boundary before implementation starts.',
+                successMetric: 'Block menu / block side menu has a reviewable spec, acceptance criteria, and a clear completion boundary before implementation starts.',
+                antiPatterns: [
+                  'Do not preserve stale recovery-loop wording as the task brief.',
+                  'Do not ask the owner to re-answer decisions already recorded on the task.',
+                ],
+                authoredBy: 'coordinator-recovery',
+                authoredAt: now,
+              },
+              spec: '## Summary\nBuild the block menu from recorded owner decisions.\n\n## Acceptance Criteria\n1. The block menu appears in the editor.\n2. Drag-and-drop remains out of scope.',
+              acceptanceCriteria: [
+                { id: 'ac-1', description: 'The block menu appears in the editor.', verifiedBy: 'review', met: false },
+                { id: 'ac-2', description: 'Drag-and-drop remains out of scope.', verifiedBy: 'review', met: false },
+              ],
+              notes: [
+                {
+                  agentId: 'coordinator-recovery',
+                  role: 'system',
+                  content: 'Guildhall wrote a deterministic recovery spec seed from the current task evidence before redispatching the spec lane, so the task has durable progress instead of returning to a read-only shaping loop.',
+                  timestamp: now,
+                },
+              ],
+              openQuestions: [],
+            },
+          ],
+        }),
+      )
+      const snapshot: ProjectSnapshot = {
+        projectPath,
+        config: {
+          id: 'demo',
+          name: 'Demo',
+          bootstrap: { verifiedAt: now },
+          coordinators: [{ id: 'looma', name: 'Looma' }],
+        },
+        bootstrapVerified: true,
+        hasProvider: true,
+        hasDirection: true,
+        workspaceImportReviewed: true,
+        taskCount: 1,
+        wizardState: emptyWizardsState(),
+      }
+
+      const thread = buildThread({ projectPath, snapshot, recentEvents: [] })
+
+      expect(thread.turns.find((turn) => turn.id === 'brief:task-block-menu' && turn.status !== 'done')).toBeUndefined()
+      expect(thread.turns.find((turn) => turn.id === 'spec:task-block-menu')).toBeUndefined()
+      expect(thread.activeTurnId).toBe('inflight:task-block-menu')
+      expect(thread.turns.find((turn) => turn.id === 'inflight:task-block-menu')).toMatchObject({
+        kind: 'inflight',
+        status: 'active',
+        phase: 'spec',
+      })
+    } finally {
+      await rm(projectPath, { recursive: true, force: true })
+    }
+  })
+
+  it('surfaces source and request milestones, preserves answered questions, and collapses repetitive recovery churn', async () => {
+    const projectPath = await mkdtemp(path.join(tmpdir(), 'guildhall-thread-'))
+    try {
+      await mkdir(statePath(projectPath), { recursive: true })
+      const importedAt = '2026-05-10T16:40:53.757Z'
+      const askedAt = '2026-05-18T19:49:46.995Z'
+      const answeredAt = '2026-05-19T22:26:12.323Z'
+      const reframeAt = '2026-05-31T16:52:42.757Z'
+      const latestRecoveryAt = '2026-05-31T16:53:00.787Z'
+      await writeFile(
+        statePath(projectPath, 'TASKS.json'),
+        JSON.stringify({
+          tasks: [
+            {
+              id: 'task-import-1',
+              title: 'Block menu / block side menu',
+              description: 'looma/docs/editor-roadmap.md: - **Block menu / block side menu**',
+              status: 'spec_review',
+              createdAt: importedAt,
+              updatedAt: latestRecoveryAt,
+              productBrief: {
+                userJob: 'Turn this imported draft into concrete project work.',
+                successMetric: 'The task has a reviewable spec and acceptance criteria.',
+                authoredBy: 'coordinator-recovery',
+              },
+              spec: '## Summary\nBuild the block menu.\n\n## Acceptance Criteria\n- The feature is reviewable.',
+              acceptanceCriteria: [{ id: 'ac-1', text: 'Reviewable', met: false }],
+              notes: [
+                {
+                  agentId: 'workspace-importer',
+                  role: 'importer',
+                  content: 'Imported from: /repo/looma/docs/editor-roadmap.md, /repo/looma/apps/docs/docs/component-library-audit.md',
+                  timestamp: importedAt,
+                },
+                {
+                  agentId: 'human',
+                  role: 'shaping-request',
+                  content: 'User asked Guildhall to shape this imported draft into a complete task.',
+                  timestamp: '2026-05-18T19:47:52.792Z',
+                },
+                {
+                  agentId: 'human',
+                  role: 'human',
+                  content: 'Asked Guildhall to reframe this task. Reason: Final release-blocker cleanup: regenerate the recovery spec with cleaned owner decisions and source evidence.',
+                  timestamp: reframeAt,
+                },
+                {
+                  agentId: 'system',
+                  role: 'system',
+                  content: 'Reframe requested for "Block menu / block side menu" from spec_review. Guildhall will rebuild the task in plain language before continuing.',
+                  timestamp: reframeAt,
+                },
+                {
+                  agentId: 'coordinator',
+                  role: 'recovery',
+                  content: 'Runtime cleared a stale spec-agent claim so this draft waits in the shaping queue instead of pretending an agent is actively working on it.',
+                  timestamp: '2026-05-31T16:53:00.658Z',
+                },
+                {
+                  agentId: 'coordinator-recovery',
+                  role: 'system',
+                  content: 'Guildhall wrote a deterministic recovery spec seed from the current task evidence before redispatching the spec lane, so the task has durable progress instead of returning to a read-only shaping loop.',
+                  timestamp: latestRecoveryAt,
+                },
+              ],
+              openQuestions: [
+                {
+                  id: 'q-scope',
+                  kind: 'choice',
+                  askedBy: 'spec-agent',
+                  askedAt,
+                  answeredAt,
+                  answer: 'Drag-handle is out of scope — separate task.',
+                  prompt: 'Should drag-and-drop reordering be in scope?',
+                  choices: ['Include drag-handle in scope', 'Drag-handle is out of scope'],
+                  selectionMode: 'single',
+                },
+                {
+                  id: 'q-options',
+                  kind: 'choice',
+                  askedBy: 'spec-agent',
+                  askedAt: '2026-05-18T19:49:59.577Z',
+                  answeredAt,
+                  answer: 'Looma should ship defaults, but apps can override or extend.',
+                  prompt: 'Should Looma ship defaults or require apps to supply the full list?',
+                  choices: ['Apps supply the full list', 'Looma ships defaults', 'Looma ships defaults but apps can override'],
+                  selectionMode: 'single',
+                },
+              ],
+            },
+          ],
+        }),
+      )
+      const snapshot: ProjectSnapshot = {
+        projectPath,
+        config: {
+          id: 'demo',
+          name: 'Demo',
+          bootstrap: { verifiedAt: latestRecoveryAt },
+          coordinators: [{ id: 'looma', name: 'Looma' }],
+        },
+        bootstrapVerified: true,
+        hasProvider: true,
+        hasDirection: true,
+        workspaceImportReviewed: true,
+        taskCount: 1,
+        wizardState: emptyWizardsState(),
+      }
+
+      const thread = buildThread({ projectPath, snapshot })
+
+      const sourceTurn = thread.turns.find((turn) => turn.kind === 'history_note' && turn.label === 'Imported from source')
+      expect(sourceTurn).toBeTruthy()
+      if (!sourceTurn || sourceTurn.kind !== 'history_note') throw new Error('expected source history note')
+      expect(sourceTurn.references).toEqual([
+        '/repo/looma/docs/editor-roadmap.md',
+        '/repo/looma/apps/docs/docs/component-library-audit.md',
+      ])
+
+      const answeredQuestionTurns = thread.turns.filter((turn) => turn.kind === 'agent_question' && turn.status === 'done')
+      expect(answeredQuestionTurns).toHaveLength(2)
+
+      const reframeTurn = thread.turns.find((turn) => turn.kind === 'history_note' && turn.label === 'Asked to reframe this task')
+      expect(reframeTurn).toBeTruthy()
+      if (!reframeTurn || reframeTurn.kind !== 'history_note') throw new Error('expected reframe history note')
+      expect(reframeTurn.summary).toContain('Final release-blocker cleanup')
+
+      const recoveryCluster = thread.turns.find((turn) => turn.kind === 'history_note' && turn.label === 'Recovery history')
+      expect(recoveryCluster).toBeTruthy()
+      if (!recoveryCluster || recoveryCluster.kind !== 'history_note') throw new Error('expected recovery history note')
+      expect(recoveryCluster.count).toBe(2)
+      expect(recoveryCluster.entries?.map((entry) => entry.label)).toEqual([
+        'Cleared stale spec-agent claim',
+        'Saved deterministic recovery spec seed',
+      ])
+    } finally {
+      await rm(projectPath, { recursive: true, force: true })
+    }
+  })
+
   it('keeps an unanswered agent question active and demotes spec review until the question is answered', async () => {
     const projectPath = await mkdtemp(path.join(tmpdir(), 'guildhall-thread-'))
     try {
-      await mkdir(path.join(projectPath, '.guildhall'), { recursive: true })
+      await mkdir(statePath(projectPath), { recursive: true })
       const now = new Date().toISOString()
       await writeFile(
-        path.join(projectPath, '.guildhall', 'TASKS.json'),
+        statePath(projectPath, 'TASKS.json'),
         JSON.stringify({
           tasks: [
             {
@@ -1618,10 +2928,10 @@ describe('buildThread', () => {
   it('treats an exploring task with a concrete spec draft and approved brief as queued spec revision work', async () => {
     const projectPath = await mkdtemp(path.join(tmpdir(), 'guildhall-thread-'))
     try {
-      await mkdir(path.join(projectPath, '.guildhall'), { recursive: true })
+      await mkdir(statePath(projectPath), { recursive: true })
       const now = new Date().toISOString()
       await writeFile(
-        path.join(projectPath, '.guildhall', 'TASKS.json'),
+        statePath(projectPath, 'TASKS.json'),
         JSON.stringify({
           tasks: [
             {
@@ -1684,7 +2994,8 @@ describe('buildThread', () => {
       expect(inflight.phase).toBe('spec')
       expect(inflight.checklist).toBeUndefined()
       expect(inflight.taskTitle).toMatch(/^Starter task spec: Wire up the existing auth page scaffolding/)
-      expect(inflight.summary).toMatch(/latest answers and a spec draft/i)
+      expect(inflight.summary).toMatch(/answers and a spec draft/i)
+      expect(inflight.summary).toMatch(/coordinator review/i)
     } finally {
       await rm(projectPath, { recursive: true, force: true })
     }
@@ -1693,10 +3004,10 @@ describe('buildThread', () => {
   it('ignores obsolete meta-intake routing questions when a valid routing draft already exists', async () => {
     const projectPath = await mkdtemp(path.join(tmpdir(), 'guildhall-thread-'))
     try {
-      await mkdir(path.join(projectPath, '.guildhall'), { recursive: true })
+      await mkdir(statePath(projectPath), { recursive: true })
       const now = new Date().toISOString()
       await writeFile(
-        path.join(projectPath, '.guildhall', 'TASKS.json'),
+        statePath(projectPath, 'TASKS.json'),
         JSON.stringify({
           tasks: [
             {
@@ -1763,11 +3074,11 @@ coordinators:
   it('ignores a stale starter-task focus question once a concrete spec draft already exists', async () => {
     const projectPath = await mkdtemp(path.join(tmpdir(), 'guildhall-thread-'))
     try {
-      await mkdir(path.join(projectPath, '.guildhall'), { recursive: true })
+      await mkdir(statePath(projectPath), { recursive: true })
       const askedAt = '2026-05-11T20:24:31.428Z'
       const updatedAt = '2026-05-11T20:24:50.064Z'
       await writeFile(
-        path.join(projectPath, '.guildhall', 'TASKS.json'),
+        statePath(projectPath, 'TASKS.json'),
         JSON.stringify({
           tasks: [
             {
@@ -1822,10 +3133,15 @@ coordinators:
         recentEvents: [],
       })
 
-      expect(thread.activeTurnId).toBe('spec:task-003')
       expect(thread.turns.find(turn => turn.id === 'q:task-003:q-1')).toBeUndefined()
-      const specTurn = thread.turns.find(turn => turn.id === 'spec:task-003')
-      expect(specTurn?.status).toBe('active')
+      expect(thread.turns.find(turn => turn.id === 'spec:task-003')).toBeUndefined()
+      expect(thread.activeTurnId).toBe('inflight:task-003')
+      const internalTurn = thread.turns.find(turn => turn.id === 'inflight:task-003')
+      expect(internalTurn).toMatchObject({
+        kind: 'inflight',
+        status: 'active',
+        phase: 'spec',
+      })
     } finally {
       await rm(projectPath, { recursive: true, force: true })
     }
@@ -1834,9 +3150,9 @@ coordinators:
   it('projects last live-agent activity and stalled state onto in-flight turns', async () => {
     const projectPath = await mkdtemp(path.join(tmpdir(), 'guildhall-thread-'))
     try {
-      await mkdir(path.join(projectPath, '.guildhall'), { recursive: true })
+      await mkdir(statePath(projectPath), { recursive: true })
       await writeFile(
-        path.join(projectPath, '.guildhall', 'TASKS.json'),
+        statePath(projectPath, 'TASKS.json'),
         JSON.stringify({
           tasks: [
             {
@@ -1903,9 +3219,9 @@ coordinators:
   it('reconstructs a live in-flight agent from activity after the start event ages out', async () => {
     const projectPath = await mkdtemp(path.join(tmpdir(), 'guildhall-thread-'))
     try {
-      await mkdir(path.join(projectPath, '.guildhall'), { recursive: true })
+      await mkdir(statePath(projectPath), { recursive: true })
       await writeFile(
-        path.join(projectPath, '.guildhall', 'TASKS.json'),
+        statePath(projectPath, 'TASKS.json'),
         JSON.stringify({
           tasks: [
             {
@@ -1964,9 +3280,9 @@ coordinators:
   it('does not project stale task activity as live work once the coordinator is stopped', async () => {
     const projectPath = await mkdtemp(path.join(tmpdir(), 'guildhall-thread-'))
     try {
-      await mkdir(path.join(projectPath, '.guildhall'), { recursive: true })
+      await mkdir(statePath(projectPath), { recursive: true })
       await writeFile(
-        path.join(projectPath, '.guildhall', 'TASKS.json'),
+        statePath(projectPath, 'TASKS.json'),
         JSON.stringify({
           tasks: [
             {
@@ -2026,9 +3342,9 @@ coordinators:
   it('labels failed live tools as failed instead of finished', async () => {
     const projectPath = await mkdtemp(path.join(tmpdir(), 'guildhall-thread-'))
     try {
-      await mkdir(path.join(projectPath, '.guildhall'), { recursive: true })
+      await mkdir(statePath(projectPath), { recursive: true })
       await writeFile(
-        path.join(projectPath, '.guildhall', 'TASKS.json'),
+        statePath(projectPath, 'TASKS.json'),
         JSON.stringify({
           tasks: [
             {
@@ -2086,9 +3402,9 @@ coordinators:
   it('suppresses expected research-budget refusals from live activity', async () => {
     const projectPath = await mkdtemp(path.join(tmpdir(), 'guildhall-thread-'))
     try {
-      await mkdir(path.join(projectPath, '.guildhall'), { recursive: true })
+      await mkdir(statePath(projectPath), { recursive: true })
       await writeFile(
-        path.join(projectPath, '.guildhall', 'TASKS.json'),
+        statePath(projectPath, 'TASKS.json'),
         JSON.stringify({
           tasks: [
             {
@@ -2164,9 +3480,9 @@ coordinators:
   it('does not present old exploring transcript questions as a current wait state', async () => {
     const projectPath = await mkdtemp(path.join(tmpdir(), 'guildhall-thread-'))
     try {
-      await mkdir(path.join(projectPath, '.guildhall'), { recursive: true })
+      await mkdir(statePath(projectPath), { recursive: true })
       await writeFile(
-        path.join(projectPath, '.guildhall', 'TASKS.json'),
+        statePath(projectPath, 'TASKS.json'),
         JSON.stringify({
           tasks: [
             {
@@ -2241,9 +3557,9 @@ coordinators:
   it('rewrites internal target-file guard language before it reaches Thread', async () => {
     const projectPath = await mkdtemp(path.join(tmpdir(), 'guildhall-thread-'))
     try {
-      await mkdir(path.join(projectPath, '.guildhall'), { recursive: true })
+      await mkdir(statePath(projectPath), { recursive: true })
       await writeFile(
-        path.join(projectPath, '.guildhall', 'TASKS.json'),
+        statePath(projectPath, 'TASKS.json'),
         JSON.stringify({
           tasks: [
             {
@@ -2322,9 +3638,9 @@ coordinators:
   it('rewrites acceptance-criteria verification jargon before it reaches Thread', async () => {
     const projectPath = await mkdtemp(path.join(tmpdir(), 'guildhall-thread-'))
     try {
-      await mkdir(path.join(projectPath, '.guildhall'), { recursive: true })
+      await mkdir(statePath(projectPath), { recursive: true })
       await writeFile(
-        path.join(projectPath, '.guildhall', 'TASKS.json'),
+        statePath(projectPath, 'TASKS.json'),
         JSON.stringify({
           tasks: [
             {
@@ -2390,9 +3706,9 @@ coordinators:
   it('shows recent failed activity on blocked escalation turns', async () => {
     const projectPath = await mkdtemp(path.join(tmpdir(), 'guildhall-thread-'))
     try {
-      await mkdir(path.join(projectPath, '.guildhall'), { recursive: true })
+      await mkdir(statePath(projectPath), { recursive: true })
       await writeFile(
-        path.join(projectPath, '.guildhall', 'TASKS.json'),
+        statePath(projectPath, 'TASKS.json'),
         JSON.stringify({
           tasks: [
             {
@@ -2460,9 +3776,9 @@ coordinators:
   it('surfaces blocked tasks even when only blockReason was persisted', async () => {
     const projectPath = await mkdtemp(path.join(tmpdir(), 'guildhall-thread-'))
     try {
-      await mkdir(path.join(projectPath, '.guildhall'), { recursive: true })
+      await mkdir(statePath(projectPath), { recursive: true })
       await writeFile(
-        path.join(projectPath, '.guildhall', 'TASKS.json'),
+        statePath(projectPath, 'TASKS.json'),
         JSON.stringify({
           tasks: [
             {
@@ -2510,9 +3826,9 @@ coordinators:
   it('includes compact policy classification context on blocked escalation turns', async () => {
     const projectPath = await mkdtemp(path.join(tmpdir(), 'guildhall-thread-'))
     try {
-      await mkdir(path.join(projectPath, '.guildhall'), { recursive: true })
+      await mkdir(statePath(projectPath), { recursive: true })
       await writeFile(
-        path.join(projectPath, '.guildhall', 'TASKS.json'),
+        statePath(projectPath, 'TASKS.json'),
         JSON.stringify({
           tasks: [
             {
@@ -2588,9 +3904,9 @@ coordinators:
   it('compresses oversized reviewer escalation details into a short task-card digest', async () => {
     const projectPath = await mkdtemp(path.join(tmpdir(), 'guildhall-thread-'))
     try {
-      await mkdir(path.join(projectPath, '.guildhall'), { recursive: true })
+      await mkdir(statePath(projectPath), { recursive: true })
       await writeFile(
-        path.join(projectPath, '.guildhall', 'TASKS.json'),
+        statePath(projectPath, 'TASKS.json'),
         JSON.stringify({
           tasks: [
             {
@@ -2655,9 +3971,9 @@ coordinators:
   it('turns dirty repo setup blockers into an actionable recovery message', async () => {
     const projectPath = await mkdtemp(path.join(tmpdir(), 'guildhall-thread-'))
     try {
-      await mkdir(path.join(projectPath, '.guildhall'), { recursive: true })
+      await mkdir(statePath(projectPath), { recursive: true })
       await writeFile(
-        path.join(projectPath, '.guildhall', 'TASKS.json'),
+        statePath(projectPath, 'TASKS.json'),
         JSON.stringify({
           tasks: [
             {
@@ -2710,9 +4026,9 @@ coordinators:
   it('shows a rolling excerpt while an agent is writing', async () => {
     const projectPath = await mkdtemp(path.join(tmpdir(), 'guildhall-thread-'))
     try {
-      await mkdir(path.join(projectPath, '.guildhall'), { recursive: true })
+      await mkdir(statePath(projectPath), { recursive: true })
       await writeFile(
-        path.join(projectPath, '.guildhall', 'TASKS.json'),
+        statePath(projectPath, 'TASKS.json'),
         JSON.stringify({
           tasks: [
             {
@@ -2777,9 +4093,9 @@ coordinators:
   it('treats empty-model reply errors as warnings and retries as running activity', async () => {
     const projectPath = await mkdtemp(path.join(tmpdir(), 'guildhall-thread-'))
     try {
-      await mkdir(path.join(projectPath, '.guildhall'), { recursive: true })
+      await mkdir(statePath(projectPath), { recursive: true })
       await writeFile(
-        path.join(projectPath, '.guildhall', 'TASKS.json'),
+        statePath(projectPath, 'TASKS.json'),
         JSON.stringify({
           tasks: [
             {
@@ -2844,9 +4160,9 @@ coordinators:
   it('shows provider overload as warning activity instead of raw task failure text', async () => {
     const projectPath = await mkdtemp(path.join(tmpdir(), 'guildhall-thread-'))
     try {
-      await mkdir(path.join(projectPath, '.guildhall'), { recursive: true })
+      await mkdir(statePath(projectPath), { recursive: true })
       await writeFile(
-        path.join(projectPath, '.guildhall', 'TASKS.json'),
+        statePath(projectPath, 'TASKS.json'),
         JSON.stringify({
           tasks: [
             {
@@ -2915,9 +4231,9 @@ coordinators:
   it('keeps recent failed tool output visible while later writing continues', async () => {
     const projectPath = await mkdtemp(path.join(tmpdir(), 'guildhall-thread-'))
     try {
-      await mkdir(path.join(projectPath, '.guildhall'), { recursive: true })
+      await mkdir(statePath(projectPath), { recursive: true })
       await writeFile(
-        path.join(projectPath, '.guildhall', 'TASKS.json'),
+        statePath(projectPath, 'TASKS.json'),
         JSON.stringify({
           tasks: [
             {
@@ -2985,10 +4301,10 @@ coordinators:
   it('hides stale live activity older than the task updatedAt when a task has been reset', async () => {
     const projectPath = await mkdtemp(path.join(tmpdir(), 'guildhall-thread-'))
     try {
-      await mkdir(path.join(projectPath, '.guildhall'), { recursive: true })
+      await mkdir(statePath(projectPath), { recursive: true })
       const updatedAt = new Date().toISOString()
       await writeFile(
-        path.join(projectPath, '.guildhall', 'TASKS.json'),
+        statePath(projectPath, 'TASKS.json'),
         JSON.stringify({
           tasks: [
             {
@@ -3044,9 +4360,9 @@ coordinators:
   it('projects imported draft tasks as shaping work instead of generic paused intake', async () => {
     const projectPath = await mkdtemp(path.join(tmpdir(), 'guildhall-thread-'))
     try {
-      await mkdir(path.join(projectPath, '.guildhall'), { recursive: true })
+      await mkdir(statePath(projectPath), { recursive: true })
       await writeFile(
-        path.join(projectPath, '.guildhall', 'TASKS.json'),
+        statePath(projectPath, 'TASKS.json'),
         JSON.stringify({
           tasks: [
             {
@@ -3098,9 +4414,9 @@ coordinators:
   it('projects reviewer feedback as its own lifecycle turn', async () => {
     const projectPath = await mkdtemp(path.join(tmpdir(), 'guildhall-thread-'))
     try {
-      await mkdir(path.join(projectPath, '.guildhall'), { recursive: true })
+      await mkdir(statePath(projectPath), { recursive: true })
       await writeFile(
-        path.join(projectPath, '.guildhall', 'TASKS.json'),
+        statePath(projectPath, 'TASKS.json'),
         JSON.stringify({
           tasks: [
             {
@@ -3161,9 +4477,9 @@ coordinators:
   it('numbers reviewer feedback by feedback turn instead of current task revision', async () => {
     const projectPath = await mkdtemp(path.join(tmpdir(), 'guildhall-thread-'))
     try {
-      await mkdir(path.join(projectPath, '.guildhall'), { recursive: true })
+      await mkdir(statePath(projectPath), { recursive: true })
       await writeFile(
-        path.join(projectPath, '.guildhall', 'TASKS.json'),
+        statePath(projectPath, 'TASKS.json'),
         JSON.stringify({
           tasks: [
             {
@@ -3225,9 +4541,9 @@ coordinators:
     try {
       const reviewAt = new Date(Date.now() - 180_000).toISOString()
       const failAt = new Date(Date.now() - 30_000).toISOString()
-      await mkdir(path.join(projectPath, '.guildhall'), { recursive: true })
+      await mkdir(statePath(projectPath), { recursive: true })
       await writeFile(
-        path.join(projectPath, '.guildhall', 'TASKS.json'),
+        statePath(projectPath, 'TASKS.json'),
         JSON.stringify({
           tasks: [
             {
@@ -3298,9 +4614,9 @@ coordinators:
   it('does not revive a resolved escalation from a stale task blockReason', async () => {
     const projectPath = await mkdtemp(path.join(tmpdir(), 'guildhall-thread-'))
     try {
-      await mkdir(path.join(projectPath, '.guildhall'), { recursive: true })
+      await mkdir(statePath(projectPath), { recursive: true })
       await writeFile(
-        path.join(projectPath, '.guildhall', 'TASKS.json'),
+        statePath(projectPath, 'TASKS.json'),
         JSON.stringify({
           tasks: [
             {

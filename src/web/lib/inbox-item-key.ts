@@ -6,13 +6,8 @@ export type InboxItemKind =
   | 'bootstrap_missing'
   | 'setup_pending'
   | 'workspace_import_pending'
-  | 'project_check_in'
-  | 'pressure_test_pending'
-  | 'agent_question_pending'
   | 'import_draft_queue'
-  | 'brief_approval'
-  | 'spec_approval'
-  | 'open_escalation'
+  | 'contract_result_review'
   | 'lever_questions'
   | 'spec_fill_pending'
 
@@ -32,12 +27,19 @@ export interface InboxItem {
   actionHref?: string
   taskId?: string
   migrationId?: string
+  resultId?: string
+  contractId?: string
+  changeCount?: number
+  reviewBuckets?: string[]
+  warningCount?: number
   taskDescription?: string
   escalationId?: string
   signals?: string[]
   defaultCount?: number
   dismissEndpoint?: string
   missingSteps?: string[]
+  deliveryStepTitle?: string
+  containingWorkTitle?: string
   blocking?: boolean
   dismissible?: boolean
   source?: { system?: string; id?: string }
@@ -48,6 +50,7 @@ export function inboxItemKey(item: InboxItem): string {
     item.id ?? '',
     item.kind,
     item.migrationId ?? '',
+    item.resultId ?? '',
     item.escalationId ?? '',
     item.taskId ?? '',
     item.actionHref ?? '',

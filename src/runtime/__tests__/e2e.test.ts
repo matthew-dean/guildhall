@@ -44,9 +44,12 @@ import { PermissionMode } from '@guildhall/engine'
 import { LivenessTracker } from '../liveness.js'
 import { buildServeApp } from '../serve.js'
 import { InMemoryGitDriver } from '../git-driver.js'
+import { buildEffectiveTask } from '../effective-task.js'
+import { applyProjectMigrations } from '../migrations.js'
 import {
   getProjectProgressHeartbeatsPath,
   getProjectStateDir,
+  projectStatePathFromMemoryDir,
   getProjectTaskLocalHistoryDir,
   getProjectTranscriptPath,
 } from '@guildhall/sessions'
@@ -106,9 +109,10 @@ beforeEach(async () => {
   process.env.GUILDHALL_DATA_DIR = testDataDir
   bootstrapWorkspace(tmpDir, { name: 'E2E Workspace' })
   memoryDir = getProjectStateDir(tmpDir)
-  tasksPath = path.join(memoryDir, 'TASKS.json')
-  progressPath = path.join(memoryDir, 'PROGRESS.md')
+  tasksPath = projectStatePathFromMemoryDir(memoryDir, 'TASKS.json')
+  progressPath = projectStatePathFromMemoryDir(memoryDir, 'PROGRESS.md')
   heartbeatPath = getProjectProgressHeartbeatsPath(tmpDir)
+  await fs.mkdir(path.dirname(tasksPath), { recursive: true })
 })
 
 afterEach(async () => {
@@ -127,7 +131,11 @@ async function readQueue(): Promise<TaskQueue> {
   if (Array.isArray(parsed)) {
     return { version: 1, lastUpdated: new Date().toISOString(), tasks: parsed }
   }
-  return TaskQueue.parse(parsed)
+  const queue = TaskQueue.parse(parsed)
+  return {
+    ...queue,
+    tasks: await Promise.all(queue.tasks.map(async task => buildEffectiveTask(task.projectPath, task))) as unknown as Task[],
+  }
 }
 
 async function mutateTask(id: string, patch: Partial<Task>): Promise<void> {
@@ -519,9 +527,10 @@ describe('E2E 0.5.0: service over projects', () => {
       ],
     })
     memoryDir = getProjectStateDir(tmpDir)
-    tasksPath = path.join(memoryDir, 'TASKS.json')
-    progressPath = path.join(memoryDir, 'PROGRESS.md')
+    tasksPath = projectStatePathFromMemoryDir(memoryDir, 'TASKS.json')
+    progressPath = projectStatePathFromMemoryDir(memoryDir, 'PROGRESS.md')
     heartbeatPath = getProjectProgressHeartbeatsPath(tmpDir)
+    await fs.mkdir(path.dirname(tasksPath), { recursive: true })
 
     const intake = await createExploringTask({
       memoryDir,
@@ -631,6 +640,11 @@ describe('E2E 0.5.0: service over projects', () => {
           expect.objectContaining({ id: intake.taskId, status: 'done' }),
         ]),
       )
+
+      await applyProjectMigrations({
+        projectRoot: tmpDir,
+        only: ['0.10.0/project-state-storage-boundary'],
+      })
 
       const startRes = await app.fetch(new Request('http://localhost/api/project/start?projectId=service-proof', {
         method: 'POST',
@@ -809,7 +823,7 @@ describe('E2E AC-22: report_issue → coordinator remediation inbox', () => {
       setBy: 'user-direct',
     }
     await saveLeverSettings({
-      path: path.join(memoryDir, AGENT_SETTINGS_FILENAME),
+      path: projectStatePathFromMemoryDir(memoryDir, AGENT_SETTINGS_FILENAME),
       settings,
     })
 
@@ -912,7 +926,7 @@ describe('E2E AC-22: report_issue → coordinator remediation inbox', () => {
     })
 
     const decisions1 = await fs.readFile(
-      path.join(memoryDir, 'DECISIONS.md'),
+      projectStatePathFromMemoryDir(memoryDir, 'DECISIONS.md'),
       'utf-8',
     )
     expect(decisions1).toMatch(/Remediation: replace_with_different_agent \(issue trigger\)/)
@@ -930,7 +944,7 @@ describe('E2E AC-22: report_issue → coordinator remediation inbox', () => {
       setBy: 'user-direct',
     }
     await saveLeverSettings({
-      path: path.join(memoryDir, AGENT_SETTINGS_FILENAME),
+      path: projectStatePathFromMemoryDir(memoryDir, AGENT_SETTINGS_FILENAME),
       settings,
     })
 
@@ -946,7 +960,7 @@ describe('E2E AC-22: report_issue → coordinator remediation inbox', () => {
     })
 
     const decisions2 = await fs.readFile(
-      path.join(memoryDir, 'DECISIONS.md'),
+      projectStatePathFromMemoryDir(memoryDir, 'DECISIONS.md'),
       'utf-8',
     )
     expect(decisions2).toMatch(/requires human confirmation/)
@@ -1011,7 +1025,7 @@ describe('E2E AC-15: proposeTask → orchestrator tick → status per task_origi
         setBy: 'user-direct',
       }
       await saveLeverSettings({
-        path: path.join(memoryDir, AGENT_SETTINGS_FILENAME),
+        path: projectStatePathFromMemoryDir(memoryDir, AGENT_SETTINGS_FILENAME),
         settings,
       })
 
@@ -1090,7 +1104,7 @@ describe('E2E AC-16: worker pre-rejection → pre_rejection_policy applied on ti
       setBy: 'user-direct',
     }
     await saveLeverSettings({
-      path: path.join(memoryDir, AGENT_SETTINGS_FILENAME),
+      path: projectStatePathFromMemoryDir(memoryDir, AGENT_SETTINGS_FILENAME),
       settings: settingsTerminal,
     })
 
@@ -1216,7 +1230,7 @@ describe('E2E AC-16: worker pre-rejection → pre_rejection_policy applied on ti
       setBy: 'user-direct',
     }
     await saveLeverSettings({
-      path: path.join(memoryDir, AGENT_SETTINGS_FILENAME),
+      path: projectStatePathFromMemoryDir(memoryDir, AGENT_SETTINGS_FILENAME),
       settings: settingsRequeue,
     })
 
@@ -1283,7 +1297,7 @@ describe('E2E AC-21: stall (>45s silence under strict) → coordinator remediati
       setBy: 'user-direct',
     }
     await saveLeverSettings({
-      path: path.join(memoryDir, AGENT_SETTINGS_FILENAME),
+      path: projectStatePathFromMemoryDir(memoryDir, AGENT_SETTINGS_FILENAME),
       settings,
     })
 
@@ -1400,7 +1414,7 @@ describe('E2E AC-21: stall (>45s silence under strict) → coordinator remediati
     // AC-24-adjacent proof: the DECISIONS.md entry captures trigger type,
     // chosen action, and lever state including agent_health_strictness.
     const decisions = await fs.readFile(
-      path.join(memoryDir, 'DECISIONS.md'),
+      projectStatePathFromMemoryDir(memoryDir, 'DECISIONS.md'),
       'utf-8',
     )
     expect(decisions).toMatch(/Remediation: restart_from_checkpoint \(stall trigger\)/)
@@ -1441,7 +1455,7 @@ describe('E2E AC-23: crash → checkpoint → reclaim → restart_from_checkpoin
       setBy: 'user-direct',
     }
     await saveLeverSettings({
-      path: path.join(memoryDir, AGENT_SETTINGS_FILENAME),
+      path: projectStatePathFromMemoryDir(memoryDir, AGENT_SETTINGS_FILENAME),
       settings,
     })
 
@@ -1558,7 +1572,7 @@ describe('E2E AC-23: crash → checkpoint → reclaim → restart_from_checkpoin
     })
 
     const decisions = await fs.readFile(
-      path.join(memoryDir, 'DECISIONS.md'),
+      projectStatePathFromMemoryDir(memoryDir, 'DECISIONS.md'),
       'utf-8',
     )
     expect(decisions).toMatch(/Remediation: restart_from_checkpoint \(crash trigger\)/)
@@ -1597,7 +1611,7 @@ describe('E2E AC-23: crash → checkpoint → reclaim → restart_from_checkpoin
       setBy: 'user-direct',
     }
     await saveLeverSettings({
-      path: path.join(memoryDir, AGENT_SETTINGS_FILENAME),
+      path: projectStatePathFromMemoryDir(memoryDir, AGENT_SETTINGS_FILENAME),
       settings,
     })
 

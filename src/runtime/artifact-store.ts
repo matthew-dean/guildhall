@@ -1,3 +1,4 @@
+import { appendManagedTextFile, readManagedTextFile, readManagedTextFileSync, writeManagedTextFile } from '@guildhall/persistence'
 import crypto from 'node:crypto'
 import fsp from 'node:fs/promises'
 import path from 'node:path'
@@ -64,7 +65,7 @@ export async function loadRichArtifactRecord(input: {
   taskId: string
   artifactId: string
 }): Promise<RichArtifactRecord> {
-  const raw = await fsp.readFile(artifactPath(input.memoryDir, input.taskId, input.artifactId), 'utf-8')
+  const raw = await readManagedTextFile(artifactPath(input.memoryDir, input.taskId, input.artifactId), 'utf-8')
   return RichArtifactRecord.parse(JSON.parse(raw))
 }
 

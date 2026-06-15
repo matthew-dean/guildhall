@@ -136,8 +136,8 @@
     background: var(--bg);
     color: var(--text);
     font: inherit;
-    font-size: var(--fs-1);
-    font-weight: 700;
+    font-size: var(--gh-type-size-meta);
+    font-weight: var(--gh-type-weight-strong);
     padding: 2px var(--s-2);
     cursor: pointer;
   }
@@ -147,14 +147,14 @@
   .progress-entry time {
     margin-left: auto;
     color: var(--text-muted);
-    font-size: var(--fs-0);
+    font-size: var(--gh-type-size-caption);
     white-space: nowrap;
   }
   .progress-entry p {
     margin: 0;
     color: var(--text-muted);
-    font-size: var(--fs-2);
-    line-height: var(--lh-body);
+    font-size: var(--gh-type-size-body);
+    line-height: var(--gh-type-line-height-body);
   }
   .progress {
     max-height: 260px;

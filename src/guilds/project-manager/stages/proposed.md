@@ -5,7 +5,7 @@ An agent has put this task on the board (FR-21). It is waiting for promotion per
 ## What "good" looks like
 
 - **One sentence of outcome.** A proposing agent that cannot state the success condition in one sentence should not propose the task yet.
-- **Parent goal set.** `parentGoalId` is populated and the proposal stays inside the parent goal's guardrails (FR-23). A free-floating proposal is an escalation signal, not a task.
+- **Goal envelope set.** `businessEnvelope.goalId` is populated and the proposal stays inside the goal's guardrails (FR-23). A free-floating proposal is an escalation signal, not a task.
 - **Rationale names the trigger.** The proposing agent's `rationale` says *why now* — what log, what bug, what missing coverage made this worth proposing. Vague "this could be better" proposals feed rejection-dampening (FR-26) noise, not real work.
 - **Duplicates checked.** Before writing the proposal, scan recent `shelved` and open proposals for shape-matches. Re-proposing a shape already rejected burns policy-version cycles.
 
@@ -19,7 +19,7 @@ An agent has put this task on the board (FR-21). It is waiting for promotion per
 Before leaving a proposal:
 
 - [ ] Summary ≤ 1 sentence, success condition explicit
-- [ ] `parentGoalId` set; guardrails re-read
+- [ ] `businessEnvelope.goalId` set; guardrails re-read
 - [ ] Rationale cites the concrete trigger
 - [ ] Shape-match scan done; not a known-rejected duplicate
 - [ ] Suggested domain routing on the task, even if tentative

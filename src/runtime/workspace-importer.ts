@@ -1,7 +1,9 @@
+import { appendManagedTextFile, readManagedTextFile, readManagedTextFileSync, writeManagedTextFile } from '@guildhall/persistence'
 import fs from 'node:fs/promises'
 import path from 'node:path'
 import { load as yamlLoad } from 'js-yaml'
 import { TaskQueue, type Task, type TaskPriority } from '@guildhall/core'
+import { getProjectSystemStatePathFromMemoryDir } from '@guildhall/sessions'
 import { appendExploringTranscript } from '@guildhall/tools'
 import { loadLeverSettings, defaultAgentSettingsPath } from '@guildhall/levers'
 import {
@@ -37,12 +39,34 @@ import {
 export const WORKSPACE_IMPORT_TASK_ID = 'task-workspace-import'
 export const WORKSPACE_IMPORT_DOMAIN = '_workspace_import'
 
-function tasksPathFor(memoryDir: string): string {
-  return path.join(memoryDir, 'TASKS.json')
+export function workspaceImportTasksPath(memoryDir: string): string {
+  return getProjectSystemStatePathFromMemoryDir(memoryDir, 'TASKS.json')
+}
+
+function workspaceImportStatePath(memoryDir: string, relativePath: string): string {
+  return getProjectSystemStatePathFromMemoryDir(memoryDir, relativePath)
 }
 
 async function readQueue(memoryDir: string): Promise<TaskQueue> {
-  const raw = await fs.readFile(tasksPathFor(memoryDir), 'utf-8')
+  const tasksPath = workspaceImportTasksPath(memoryDir)
+  const raw = await readManagedTextFile(tasksPath, 'utf-8').catch((err: unknown) => {
+    if (
+      err &&
+      typeof err === 'object' &&
+      'code' in err &&
+      (err as { code?: unknown }).code === 'ENOENT'
+    ) {
+      return null
+    }
+    throw err
+  })
+  if (raw === null) {
+    return TaskQueue.parse({
+      version: 1,
+      lastUpdated: new Date().toISOString(),
+      tasks: [],
+    })
+  }
   const parsed = JSON.parse(raw)
   const queue = Array.isArray(parsed)
     ? { version: 1, lastUpdated: new Date().toISOString(), tasks: parsed }
@@ -52,7 +76,9 @@ async function readQueue(memoryDir: string): Promise<TaskQueue> {
 }
 
 async function writeQueue(memoryDir: string, queue: TaskQueue): Promise<void> {
-  await fs.writeFile(tasksPathFor(memoryDir), JSON.stringify(queue, null, 2), 'utf-8')
+  const tasksPath = workspaceImportTasksPath(memoryDir)
+  await fs.mkdir(path.dirname(tasksPath), { recursive: true })
+  await writeManagedTextFile(tasksPath, JSON.stringify(queue, null, 2), 'utf-8')
 }
 
 export const WORKSPACE_IMPORT_SEED_PREAMBLE = `You are the Workspace Importer Agent.
@@ -222,7 +248,7 @@ async function writeWorkspaceImportTranscript(
       formatDraftForTranscript(inventory, draft),
       WORKSPACE_IMPORT_SEED_FORMAT,
     ].join('\n')
-  await fs.writeFile(transcriptPath, `${seed}\n`, 'utf-8')
+  await writeManagedTextFile(transcriptPath, `${seed}\n`, 'utf-8')
   return transcriptPath
 }
 
@@ -376,15 +402,15 @@ export async function rerunWorkspaceImportTask(
   queue.lastUpdated = now
   await writeQueue(input.memoryDir, queue)
 
-  const goalsPath = path.join(input.memoryDir, WORKSPACE_GOALS_FILE)
+  const goalsPath = getProjectSystemStatePathFromMemoryDir(input.memoryDir, WORKSPACE_GOALS_FILE)
   if (await fs.stat(goalsPath).then(() => true).catch(() => false)) {
     try {
-      const raw = JSON.parse(await fs.readFile(goalsPath, 'utf-8')) as Record<string, unknown>
+      const raw = JSON.parse(await readManagedTextFile(goalsPath, 'utf-8')) as Record<string, unknown>
       if (raw.dismissed) {
         delete raw.dismissed
         delete raw.dismissedAt
         raw.recordedAt = now
-        await fs.writeFile(goalsPath, JSON.stringify(raw, null, 2), 'utf-8')
+        await writeManagedTextFile(goalsPath, JSON.stringify(raw, null, 2), 'utf-8')
       }
     } catch {
       // Ignore malformed dismissed-state files; the rerun task/transcript are the source of truth.
@@ -446,6 +472,9 @@ export interface ParsedTask {
   id: string
   title: string
   description: string
+  whyThisMayMatter?: string
+  assumptions?: readonly string[]
+  missingInformation?: readonly string[]
   domain: string
   priority: TaskPriority
   references: readonly string[]
@@ -454,7 +483,7 @@ export interface ParsedTask {
 interface MaterializedImportTask extends ParsedTask {
   acceptanceCriteria?: Array<{ id: string; description: string; verifiedBy?: string }>
   dependsOn?: readonly string[]
-  proofPaths?: readonly unknown[]
+  proofPaths?: Task['proofPaths']
   evidenceGraphTask?: boolean
 }
 
@@ -597,6 +626,10 @@ export function parseWorkspaceImport(spec: string): ParsedImport {
         const title = typeof t['title'] === 'string' ? t['title'] : undefined
         const rawDescription =
           typeof t['description'] === 'string' ? t['description'] : ''
+        const whyThisMayMatter =
+          typeof t['whyThisMayMatter'] === 'string' && t['whyThisMayMatter'].trim()
+            ? t['whyThisMayMatter']
+            : undefined
         const domain = typeof t['domain'] === 'string' ? t['domain'] : 'core'
         const rawPriority = t['priority']
         const priority =
@@ -608,6 +641,9 @@ export function parseWorkspaceImport(spec: string): ParsedImport {
           id,
           title,
           description: supportingText(title, rawDescription),
+          ...(whyThisMayMatter ? { whyThisMayMatter } : {}),
+          ...(normStringList(t['assumptions']).length > 0 ? { assumptions: normStringList(t['assumptions']) } : {}),
+          ...(normStringList(t['missingInformation']).length > 0 ? { missingInformation: normStringList(t['missingInformation']) } : {}),
           domain,
           priority,
           references: normStringList(t['references']),
@@ -635,6 +671,10 @@ export function parseWorkspaceImport(spec: string): ParsedImport {
         const title = typeof t['title'] === 'string' ? t['title'] : undefined
         const rawDescription =
           typeof t['description'] === 'string' ? t['description'] : ''
+        const whyThisMayMatter =
+          typeof t['whyThisMayMatter'] === 'string' && t['whyThisMayMatter'].trim()
+            ? t['whyThisMayMatter']
+            : undefined
         const domain = typeof t['domain'] === 'string' ? t['domain'] : 'core'
         const rawPriority = t['priority']
         const priority =
@@ -646,6 +686,9 @@ export function parseWorkspaceImport(spec: string): ParsedImport {
           id,
           title,
           description: supportingText(title, rawDescription),
+          ...(whyThisMayMatter ? { whyThisMayMatter } : {}),
+          ...(normStringList(t['assumptions']).length > 0 ? { assumptions: normStringList(t['assumptions']) } : {}),
+          ...(normStringList(t['missingInformation']).length > 0 ? { missingInformation: normStringList(t['missingInformation']) } : {}),
           domain,
           priority,
           references: normStringList(t['references']),
@@ -698,8 +741,17 @@ export function formatDetectedDraftAsSpec(draft: WorkspaceImportDraft): string {
       lines.push(`  - id: ${escape(t.suggestedId)}`)
       lines.push(`    title: ${escape(t.title)}`)
       lines.push(`    description: ${escape(t.description || '')}`)
+      if (t.whyThisMayMatter) lines.push(`    whyThisMayMatter: ${escape(t.whyThisMayMatter)}`)
       lines.push(`    domain: ${escape(t.domain || 'core')}`)
       lines.push(`    priority: ${t.priority}`)
+      if (t.assumptions && t.assumptions.length > 0) {
+        lines.push('    assumptions:')
+        for (const assumption of t.assumptions) lines.push(`      - ${escape(assumption)}`)
+      }
+      if (t.missingInformation && t.missingInformation.length > 0) {
+        lines.push('    missingInformation:')
+        for (const missing of t.missingInformation) lines.push(`      - ${escape(missing)}`)
+      }
       if (t.references && t.references.length > 0) {
         lines.push('    references:')
         for (const r of t.references) lines.push(`      - ${escape(r)}`)
@@ -748,6 +800,33 @@ function uniqueTaskId(existingIds: Set<string>, suggested: string): string {
   throw new Error(`Cannot allocate unique id for ${suggested}`)
 }
 
+function normalizeImportedTaskDomain(
+  domain: string,
+  coordinatorProjectPaths?: Record<string, string>,
+): string {
+  const trimmed = domain.trim()
+  if (!trimmed || !coordinatorProjectPaths) return domain
+  if (Object.hasOwn(coordinatorProjectPaths, trimmed)) return trimmed
+
+  const normalizedDomain = normalizeDomainRouteKey(trimmed)
+  const matchedKey = Object.keys(coordinatorProjectPaths)
+    .sort((left, right) => right.length - left.length)
+    .find((key) => {
+      const normalizedKey = normalizeDomainRouteKey(key)
+      return normalizedDomain === normalizedKey || normalizedDomain.startsWith(`${normalizedKey} `)
+    })
+  return matchedKey ?? domain
+}
+
+function normalizeDomainRouteKey(value: string): string {
+  return value
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+}
+
 async function evidenceSourcesForParsedTasks(
   projectPath: string,
   tasks: readonly ParsedTask[],
@@ -784,7 +863,7 @@ async function evidenceSourcesForParsedTasks(
         continue
       }
 
-      const content = await fs.readFile(absolute, 'utf-8')
+      const content = await readManagedTextFile(absolute, 'utf-8')
       sources.push({
         path: path.relative(projectPath, absolute) || path.basename(absolute),
         content,
@@ -848,6 +927,15 @@ function graphTaskToParsedTask(task: EvidenceTask, sources: readonly EvidenceSou
       task.buildsOn.length > 0 ? `Builds on: ${task.buildsOn.join(', ')}.` : '',
       references.length > 0 ? `Evidence: ${references.join(', ')}.` : '',
     ].filter(Boolean).join(' '),
+    whyThisMayMatter: task.kind === 'integration'
+      ? `${task.consumerSurface ?? task.targetArea} depends on ${task.deliverableName} before the user-facing flow can be completed.`
+      : `${task.deliverableName} appears to be a missing prerequisite the project documentation already expects.`,
+    assumptions: [
+      'The referenced documentation still represents intended project direction.',
+    ],
+    missingInformation: [
+      'Guildhall still needs to confirm the final success criteria and implementation boundary during shaping.',
+    ],
     domain: task.targetArea,
     priority: task.kind === 'integration' ? 'normal' : 'high',
     references,
@@ -862,6 +950,8 @@ function materializedAcceptanceCriteria(task: MaterializedImportTask): Task['acc
   return (task.acceptanceCriteria ?? []).map(criterion => ({
     id: criterion.id,
     description: criterion.description,
+    scenario: criterion.description,
+    expectation: criterion.description,
     verifiedBy: criterion.verifiedBy === 'automated' || criterion.verifiedBy === 'review'
       ? criterion.verifiedBy
       : criterion.id.includes('automated') || criterion.id.includes('regression')
@@ -947,11 +1037,12 @@ export async function approveWorkspaceImport(
   let tasksAdded = 0
   for (const [index, t] of materializedTasks.entries()) {
     const id = allocatedTaskIds[index] ?? t.id
+    const domain = normalizeImportedTaskDomain(t.domain, input.coordinatorProjectPaths)
     const taskProjectPath =
-      input.coordinatorProjectPaths?.[t.domain] ??
+      input.coordinatorProjectPaths?.[domain] ??
       resolveTaskProjectPath({
         workspaceProjectPath: input.projectPath,
-        domain: t.domain,
+        domain,
       })
     const normalizedDescription = normalizeImportedDescriptionForTask(
       t.description,
@@ -966,7 +1057,7 @@ export async function approveWorkspaceImport(
       id,
       title: t.title,
       description: normalizedDescription,
-      domain: t.domain,
+      domain,
       projectPath: taskProjectPath,
       // Import approval means "yes, keep this as a candidate draft", not
       // "this already has a complete task brief/spec." Imported notes become
@@ -976,12 +1067,60 @@ export async function approveWorkspaceImport(
       dependsOn: [...(t.dependsOn ?? [])].map(dependency => dependencyIdMap.get(dependency) ?? dependency),
       outOfScope: [],
       acceptanceCriteria: materializedAcceptanceCriteria(t),
+      requestIntake: {
+        intent: 'spec_only',
+        recommendedNextAction: 'draft_spec',
+        assumptions: [...(t.assumptions ?? [])],
+        missingInformation: [...(t.missingInformation ?? [])],
+        ...(t.missingInformation && t.missingInformation.length > 0
+          ? {
+              ownerDecisionNeeded: 'Confirm the intended scope and success boundary if this imported draft no longer matches current project needs.',
+              whyOwnerDecisionMatters: 'Imported notes are evidence-backed candidates, but Guildhall should not treat them as current truth without reshaping.',
+            }
+          : {}),
+        evidenceRefs: normalizedReferences.map(ref => `import:${ref}`),
+        componentStack: [],
+        pressureTestSummary: {
+          systemOwned: true,
+          degree: 'guided',
+          qualityBar: 'Treat imported drafts as candidate work that must be reshaped against current evidence before implementation starts.',
+          ownerQuestionPolicy: 'Only ask when the imported evidence is no longer enough to choose a trustworthy task boundary or success condition.',
+          checks: [
+            {
+              id: 'source-relevance',
+              title: 'Source relevance',
+              status: 'system-check',
+              reason: 'Guildhall should verify that the imported note still matches current repo reality and project direction.',
+            },
+            {
+              id: 'scope-boundary',
+              title: 'Scope boundary',
+              status: 'needs-owner-judgment',
+              reason: 'Imported notes often name a direction but not yet the right implementation boundary.',
+            },
+            {
+              id: 'acceptance-criteria',
+              title: 'Acceptance criteria',
+              status: 'system-check',
+              reason: 'Guildhall must reshape the imported draft into concrete acceptance criteria before implementation starts.',
+            },
+          ],
+        },
+        clarifyingQuestions: [],
+        createdAt: now,
+        createdBy: 'workspace-importer',
+      },
       notes: t.references.length > 0
         ? [
             {
               agentId: 'workspace-importer',
               role: 'importer',
-              content: `Imported from: ${normalizedReferences.join(', ')}`,
+              content: [
+                `Imported from: ${normalizedReferences.join(', ')}`,
+                t.whyThisMayMatter ? `Why this may matter: ${t.whyThisMayMatter}` : '',
+                t.assumptions && t.assumptions.length > 0 ? `Assumptions: ${t.assumptions.join(' | ')}` : '',
+                t.missingInformation && t.missingInformation.length > 0 ? `Missing information: ${t.missingInformation.join(' | ')}` : '',
+              ].filter(Boolean).join('\n'),
               timestamp: now,
             },
           ]
@@ -1010,8 +1149,8 @@ export async function approveWorkspaceImport(
 
   // Persist goals (overwrites prior import — the agent is authoritative).
   if (parsed.goals.length > 0) {
-    const goalsPath = path.join(input.memoryDir, WORKSPACE_GOALS_FILE)
-    await fs.writeFile(
+    const goalsPath = workspaceImportStatePath(input.memoryDir, WORKSPACE_GOALS_FILE)
+    await writeManagedTextFile(
       goalsPath,
       JSON.stringify(
         { version: 1, recordedAt: now, goals: parsed.goals },
@@ -1025,7 +1164,7 @@ export async function approveWorkspaceImport(
   // Append milestones to PROGRESS.md.
   let milestonesLogged = 0
   if (parsed.milestones.length > 0) {
-    const progressPath = path.join(input.memoryDir, 'PROGRESS.md')
+    const progressPath = workspaceImportStatePath(input.memoryDir, 'PROGRESS.md')
     const blocks: string[] = []
     for (const m of parsed.milestones) {
       blocks.push(
@@ -1043,7 +1182,7 @@ export async function approveWorkspaceImport(
       )
       milestonesLogged++
     }
-    await fs.appendFile(progressPath, blocks.join(''), 'utf-8')
+    await appendManagedTextFile(progressPath, blocks.join(''), 'utf-8')
   }
 
   const summary = [

@@ -114,8 +114,8 @@
     gap: var(--s-2);
     margin-top: var(--s-3);
     color: var(--text-muted);
-    font-size: var(--fs-0);
-    line-height: 1;
+    font-size: var(--gh-type-size-caption);
+    line-height: var(--gh-type-line-height-control);
   }
   .legend-item {
     display: inline-flex;

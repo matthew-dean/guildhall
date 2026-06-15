@@ -1,0 +1,13 @@
+.git
+.guildhall
+node_modules
+dist
+coverage
+.turbo
+.vite
+.DS_Store
+*.log
+
+*
+!.dockerignore
+!runtime/**

@@ -1,5 +1,9 @@
 <script lang="ts">
-  import { CheckCircle2, Info, X, XCircle } from 'lucide-svelte'
+  import CheckCircle2 from 'lucide-svelte/icons/check-circle-2'
+  import Info from 'lucide-svelte/icons/info'
+  import X from 'lucide-svelte/icons/x'
+  import XCircle from 'lucide-svelte/icons/circle-x'
+  import { fly } from 'svelte/transition'
   import { dismiss, getToasts, type ToastKind } from './toast.svelte.js'
 
   const toasts = $derived(getToasts())
@@ -15,7 +19,11 @@
   <div class="toast-host" role="region" aria-label="Notifications">
     {#each toasts as item (item.id)}
       {@const ToastIcon = iconFor(item.kind)}
-      <div class={`toast toast-${item.kind}`} role={item.kind === 'error' ? 'alert' : 'status'}>
+      <div
+        class={`toast toast-${item.kind}`}
+        role={item.kind === 'error' ? 'alert' : 'status'}
+        transition:fly={{ y: 8, opacity: 0.04, duration: 170 }}
+      >
         <ToastIcon size={18} aria-hidden="true" />
         <p>{item.message}</p>
         <button type="button" aria-label="Dismiss notification" onclick={() => dismiss(item.id)}>
@@ -45,12 +53,17 @@
     gap: 10px;
     min-height: 44px;
     padding: 10px 10px 10px 12px;
-    border: 1px solid var(--glass-border-strong);
+    border: 1px solid var(--glass-border);
     border-radius: 8px;
     color: var(--text);
-    background: color-mix(in srgb, var(--surface-0) 94%, transparent);
-    box-shadow: var(--shadow-lg);
-    backdrop-filter: var(--glass-filter);
+    background:
+      var(--glass-reflect-violet),
+      var(--glass-reflect-mint),
+      linear-gradient(180deg, color-mix(in srgb, white 5%, transparent), color-mix(in srgb, white 1.5%, transparent)),
+      color-mix(in srgb, var(--glass-bg-strong) 86%, var(--glass-bg));
+    box-shadow: var(--glass-shadow), var(--glass-etch);
+    backdrop-filter: var(--glass-blur);
+    -webkit-backdrop-filter: var(--glass-blur);
     pointer-events: auto;
   }
 
@@ -58,9 +71,9 @@
     min-width: 0;
     margin: 0;
     color: inherit;
-    font-size: 13px;
-    font-weight: 700;
-    line-height: 1.3;
+    font-size: var(--gh-type-size-body);
+    font-weight: var(--gh-type-weight-strong);
+    line-height: var(--gh-type-line-height-body);
     overflow-wrap: anywhere;
   }
 
@@ -82,7 +95,7 @@
   }
 
   .toast-success {
-    border-color: color-mix(in srgb, var(--ok) 45%, var(--glass-border-strong));
+    border-color: color-mix(in srgb, var(--ok) 24%, var(--glass-border));
   }
 
   .toast-success :global(svg:first-child) {
@@ -90,7 +103,7 @@
   }
 
   .toast-error {
-    border-color: color-mix(in srgb, var(--danger) 55%, var(--glass-border-strong));
+    border-color: color-mix(in srgb, var(--danger) 30%, var(--glass-border));
   }
 
   .toast-error :global(svg:first-child) {
@@ -99,7 +112,7 @@
 
   .toast-info,
   .toast-message {
-    border-color: color-mix(in srgb, var(--accent) 42%, var(--glass-border-strong));
+    border-color: color-mix(in srgb, var(--accent) 24%, var(--glass-border));
   }
 
   .toast-info :global(svg:first-child),

@@ -1,8 +1,10 @@
+import { writeManagedTextFileSync } from '@guildhall/persistence'
+import { appendManagedTextFile, readManagedTextFile, readManagedTextFileSync, writeManagedTextFile } from '@guildhall/persistence'
 import fs from 'node:fs/promises'
 import path from 'node:path'
 
 import { TaskQueue, TERMINAL_TASK_STATUSES, type Task, type TaskQueue as TaskQueueType, type TaskStatus } from '@guildhall/core'
-import { atomicWriteText } from '@guildhall/sessions'
+import { atomicWriteText, getProjectSystemStatePathFromMemoryDir } from '@guildhall/sessions'
 
 import { reviewInProcessWorkForDesignLens, type DesignLensReviewResult } from './design-lens-review.js'
 import { workSubtreeIds } from './work-hierarchy.js'
@@ -118,7 +120,7 @@ export async function reviewInProcessWorkForGuildhallImprovements(input: {
     if (notedTaskIds.length >= noteBudget) break
     if (scopedIds && !scopedIds.has(task.id)) continue
     if (TERMINAL_STATUSES.has(task.status)) continue
-    if (task.status === 'proposed' || task.status === 'parent') continue
+    if (task.status === 'proposed') continue
     if (designReviewedTaskIds.has(task.id)) continue
     if (isLeanCommandBackedTask(task)) continue
 
@@ -164,16 +166,16 @@ function isLeanCommandBackedTask(task: Task): boolean {
 }
 
 async function readQueue(memoryDir: string): Promise<TaskQueueType> {
-  const file = path.join(memoryDir, 'TASKS.json')
+  const file = getProjectSystemStatePathFromMemoryDir(memoryDir, 'TASKS.json')
   try {
-    return TaskQueue.parse(JSON.parse(await fs.readFile(file, 'utf-8')))
+    return TaskQueue.parse(JSON.parse(await readManagedTextFile(file, 'utf-8')))
   } catch {
     return TaskQueue.parse({ version: 1, tasks: [] })
   }
 }
 
 async function writeQueue(memoryDir: string, queue: TaskQueueType): Promise<void> {
-  await atomicWriteText(path.join(memoryDir, 'TASKS.json'), JSON.stringify(TaskQueue.parse(queue), null, 2))
+  await writeManagedTextFileSync(getProjectSystemStatePathFromMemoryDir(memoryDir, 'TASKS.json'), JSON.stringify(TaskQueue.parse(queue), null, 2))
 }
 
 function hasImprovementReviewNote(task: Task, lensId: ImprovementLensId): boolean {

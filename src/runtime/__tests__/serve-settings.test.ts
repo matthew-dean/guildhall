@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, afterEach } from 'vitest'
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import fs from 'node:fs/promises'
 import path from 'node:path'
 import os from 'node:os'
@@ -11,12 +11,24 @@ import {
   registerWorkspace,
   writeProjectConfig,
   writeWorkspaceConfig,
+  type ResolvedConfig,
 } from '@guildhall/config'
 import { defaultAgentSettingsPath, loadLeverSettings, makeDefaultSettings } from '@guildhall/levers'
 import { proposeProjectSkill } from '@guildhall/skills'
-import { getProjectLocalHistoryDir, getProjectTranscriptPath } from '@guildhall/sessions'
+import {
+  getProjectLocalHistoryDir,
+  getProjectSystemStatePath,
+  getProjectTranscriptPath,
+  readProjectStateJsonAsync,
+  writeProjectStateJsonAsync,
+  writeProjectStateTextAsync,
+} from '@guildhall/sessions'
 import { buildServeApp } from '../serve.js'
 import { persistLearningCandidates } from '../learning.js'
+import { acceptStructuralMap, draftStructuralMap, submitStructuralMapForReview } from '../structural-map.js'
+import { createProjectDependencyRequest } from '../project-graph.js'
+import { createOwnerInputRequest } from '../owner-input-store.js'
+import { OrchestratorSupervisor } from '../serve-supervisor.js'
 import type { LearningCandidate } from '../policy.js'
 
 const execFileP = promisify(execFile)
@@ -29,6 +41,9 @@ const execFileP = promisify(execFile)
 let tmpDir: string
 let previousHome: string | undefined
 let previousConfigDir: string | undefined
+let previousSemanticRecall: string | undefined
+let previousObservationalMemory: string | undefined
+let previousEngineGate: string | undefined
 let systemDir: string
 const PROJECT_ID = 'settings-test'
 
@@ -38,16 +53,83 @@ function scoped(pathname: string): string {
 }
 
 async function readTasks(tmpPath: string): Promise<Array<Record<string, any>>> {
-  const tasksPath = path.join(tmpPath, '.guildhall', 'TASKS.json')
-  const raw = JSON.parse(await fs.readFile(tasksPath, 'utf-8')) as
+  const raw = await readProjectStateJsonAsync<
     | Array<Record<string, any>>
     | { tasks?: Array<Record<string, any>> }
+  >(tmpPath, 'TASKS.json')
   return Array.isArray(raw) ? raw : raw.tasks ?? []
+}
+
+async function writeSystemTasks(queue: unknown): Promise<void> {
+  await writeProjectStateJsonAsync(tmpDir, 'TASKS.json', queue)
+}
+
+async function writeSystemText(relativePath: string, content: string): Promise<void> {
+  await writeProjectStateTextAsync(tmpDir, relativePath, content)
+}
+
+async function writeSystemJson(relativePath: string, value: unknown): Promise<void> {
+  await writeProjectStateJsonAsync(tmpDir, relativePath, value)
+}
+
+async function applyStorageBoundaryMigration(app: ReturnType<typeof buildServeApp>['app']): Promise<void> {
+  const migration = await app.fetch(
+    new Request(scoped('/api/project/migrations/apply'), {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        includePrompt: true,
+        migrationId: '0.10.0/project-state-storage-boundary',
+      }),
+    }),
+  )
+  expect(migration.status).toBe(200)
+}
+
+async function readFirstOwnerInputRequest(): Promise<{ boundedChatSessionId: string }> {
+  const ownerInputDir = getProjectSystemStatePath(tmpDir, 'owner-input')
+  const requests = await fs.readdir(ownerInputDir)
+  return JSON.parse(
+    await fs.readFile(path.join(ownerInputDir, requests[0]!), 'utf8'),
+  ) as { boundedChatSessionId: string }
+}
+
+async function seedThreadOwnerInput(input: {
+  taskId: string
+  questionId: string
+  prompt: string
+  label: string
+  kind?: 'task_shaping' | 'recovery_decision'
+  choices?: string[]
+  now: string
+}): Promise<void> {
+  await createOwnerInputRequest({
+    projectRoot: tmpDir,
+    projectId: PROJECT_ID,
+    commandId: `serve-settings:${input.taskId}:${input.questionId}`,
+    now: input.now,
+    actor: 'test:serve-settings',
+    source: input.kind === 'recovery_decision'
+      ? { kind: 'recovery_decision', taskId: input.taskId, questionId: input.questionId }
+      : { kind: 'task', taskId: input.taskId, questionId: input.questionId },
+    target: { kind: 'thread' },
+    prompt: input.prompt,
+    ...(input.choices ? { choices: input.choices } : {}),
+    objective: {
+      kind: input.kind ?? 'task_shaping',
+      label: input.label,
+      successCriteria: ['Owner answers the linked Thread session.'],
+    },
+    sessionSource: `test:serve-settings:${input.taskId}:${input.questionId}`,
+  })
 }
 
 beforeEach(async () => {
   previousHome = process.env.HOME
   previousConfigDir = process.env.GUILDHALL_CONFIG_DIR
+  previousSemanticRecall = process.env.GUILDHALL_MEMORY_SEMANTIC_RECALL
+  previousObservationalMemory = process.env.GUILDHALL_MEMORY_OBSERVATIONAL
+  previousEngineGate = process.env.GUILDHALL_MEMORY_ENGINE_GATE
   tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'guildhall-serve-settings-'))
   systemDir = await fs.mkdtemp(path.join(os.tmpdir(), 'guildhall-serve-settings-system-'))
   process.env.HOME = tmpDir
@@ -65,6 +147,12 @@ afterEach(async () => {
   else process.env.HOME = previousHome
   if (previousConfigDir === undefined) delete process.env.GUILDHALL_CONFIG_DIR
   else process.env.GUILDHALL_CONFIG_DIR = previousConfigDir
+  if (previousSemanticRecall === undefined) delete process.env.GUILDHALL_MEMORY_SEMANTIC_RECALL
+  else process.env.GUILDHALL_MEMORY_SEMANTIC_RECALL = previousSemanticRecall
+  if (previousObservationalMemory === undefined) delete process.env.GUILDHALL_MEMORY_OBSERVATIONAL
+  else process.env.GUILDHALL_MEMORY_OBSERVATIONAL = previousObservationalMemory
+  if (previousEngineGate === undefined) delete process.env.GUILDHALL_MEMORY_ENGINE_GATE
+  else process.env.GUILDHALL_MEMORY_ENGINE_GATE = previousEngineGate
   await fs.rm(tmpDir, { recursive: true, force: true })
   await fs.rm(systemDir, { recursive: true, force: true })
 })
@@ -101,7 +189,7 @@ describe('GET /api/config/levers', () => {
   })
 
   it('seeds .guildhall/agent-settings.yaml on first call if missing', async () => {
-    const settingsPath = path.join(tmpDir, '.guildhall', 'agent-settings.yaml')
+    const settingsPath = getProjectSystemStatePath(tmpDir, 'agent-settings.yaml')
     await expect(fs.access(settingsPath)).rejects.toThrow()
     const { app } = buildServeApp({ projectPath: tmpDir })
     const res = await app.fetch(new Request(scoped('/api/config/levers')))
@@ -125,7 +213,8 @@ describe('project re-intake endpoints', () => {
       ].join('\n'),
       'utf8',
     )
-    const tasksPath = path.join(tmpDir, '.guildhall', 'TASKS.json')
+    const tasksPath = getProjectSystemStatePath(tmpDir, 'TASKS.json')
+    await fs.mkdir(path.dirname(tasksPath), { recursive: true })
     await fs.writeFile(
       tasksPath,
       JSON.stringify({
@@ -316,8 +405,8 @@ describe('general project status endpoints', () => {
     )
     expect(body.frameworks).toContain('svelte')
 
-    await fs.writeFile(
-      path.join(tmpDir, '.guildhall', 'codebase-map.yaml'),
+    await writeSystemText(
+      'codebase-map.yaml',
       [
         'version: 1',
         'generatedAt: 2026-05-21T12:00:00.000Z',
@@ -350,7 +439,6 @@ describe('general project status endpoints', () => {
         '    - Use the semantic map before editing.',
         '  needsBroaderRead: true',
       ].join('\n'),
-      'utf8',
     )
     const semanticStatus = await app.fetch(new Request(scoped('/api/project/codebase-map/status')))
     const semanticBody = await semanticStatus.json() as Record<string, any>
@@ -517,8 +605,8 @@ describe('general project status endpoints', () => {
       anthropicApiKey: 'sk-ant-secret',
       openaiApiKey: 'sk-openai-secret',
     })
-    await fs.writeFile(
-      path.join(tmpDir, '.guildhall', 'PROGRESS.md'),
+    await writeSystemText(
+      'PROGRESS.md',
       [
         '# Progress',
         '',
@@ -532,7 +620,6 @@ describe('general project status endpoints', () => {
         'error: Exceeded maximum turn limit',
         '---',
       ].join('\n'),
-      'utf-8',
     )
     const { app } = buildServeApp({ projectPath: tmpDir })
 
@@ -743,8 +830,8 @@ describe('POST /api/project/start', () => {
   })
 
   it('blocks project mutations when project state requires a newer Guildhall runtime', async () => {
-    await fs.writeFile(
-      path.join(tmpDir, '.guildhall', 'runtime.json'),
+    await writeSystemText(
+      'runtime.json',
       JSON.stringify({
         version: 1,
         writtenByGuildhall: '999.0.0',
@@ -752,7 +839,6 @@ describe('POST /api/project/start', () => {
         stateSchema: 'future-state',
         requiredFeatures: ['future.guildhall-state.v1'],
       }, null, 2),
-      'utf8',
     )
     const { app } = buildServeApp({ projectPath: tmpDir })
 
@@ -785,8 +871,10 @@ describe('POST /api/project/start', () => {
 
   it('marks all-terminal projects as not startable', async () => {
     const now = new Date().toISOString()
+    const tasksPath = getProjectSystemStatePath(tmpDir, 'TASKS.json')
+    await fs.mkdir(path.dirname(tasksPath), { recursive: true })
     await fs.writeFile(
-      path.join(tmpDir, '.guildhall', 'TASKS.json'),
+      tasksPath,
       JSON.stringify({
         version: 1,
         lastUpdated: now,
@@ -839,6 +927,14 @@ describe('POST /api/project/start', () => {
     )
 
     const { app } = buildServeApp({ projectPath: tmpDir })
+    await app.fetch(new Request(scoped('/api/project/migrations/apply'), {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        includePrompt: true,
+        migrationId: '0.10.0/project-state-storage-boundary',
+      }),
+    }))
     const res = await app.fetch(new Request(scoped('/api/project')))
 
     expect(res.status).toBe(200)
@@ -852,8 +948,10 @@ describe('POST /api/project/start', () => {
 
   it('returns a no-op start response when all tasks are terminal', async () => {
     const now = new Date().toISOString()
+    const tasksPath = getProjectSystemStatePath(tmpDir, 'TASKS.json')
+    await fs.mkdir(path.dirname(tasksPath), { recursive: true })
     await fs.writeFile(
-      path.join(tmpDir, '.guildhall', 'TASKS.json'),
+      tasksPath,
       JSON.stringify({
         version: 1,
         lastUpdated: now,
@@ -906,6 +1004,14 @@ describe('POST /api/project/start', () => {
     )
 
     const { app } = buildServeApp({ projectPath: tmpDir })
+    await app.fetch(new Request(scoped('/api/project/migrations/apply'), {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        includePrompt: true,
+        migrationId: '0.10.0/project-state-storage-boundary',
+      }),
+    }))
     const res = await app.fetch(
       new Request(scoped('/api/project/start'), { method: 'POST', body: '{}' }),
     )
@@ -919,8 +1025,69 @@ describe('POST /api/project/start', () => {
     })
   })
 
+  it('does not treat a targeted recoverable worktree blocker as all-terminal', async () => {
+    const now = new Date().toISOString()
+    const taskId = 'task-recover-worktree'
+    const tasksPath = getProjectSystemStatePath(tmpDir, 'TASKS.json')
+    await fs.mkdir(path.dirname(tasksPath), { recursive: true })
+    await fs.writeFile(
+      tasksPath,
+      JSON.stringify({
+        version: 1,
+        lastUpdated: now,
+        tasks: [
+          {
+            id: taskId,
+            title: 'Recover worktree task',
+            description: 'Previously blocked on stale worktree setup.',
+            domain: 'core',
+            status: 'blocked',
+            priority: 'normal',
+            blockReason:
+              "Guildhall could not create a task worktree: fatal: '/tmp/task-worktree' already exists. Fix the worktree setup issue, then resume the task.",
+            acceptanceCriteria: [],
+            outOfScope: [],
+            dependsOn: [],
+            notes: [
+              {
+                agentId: 'worker-agent',
+                role: 'self-critique',
+                content: 'Guildhall-owned task work was already attempted.',
+                timestamp: now,
+              },
+            ],
+            gateResults: [],
+            reviewVerdicts: [],
+            adjudications: [],
+            escalations: [],
+            agentIssues: [],
+            revisionCount: 0,
+            remediationAttempts: 0,
+            createdAt: now,
+            updatedAt: now,
+          },
+        ],
+      }, null, 2),
+      'utf8',
+    )
+
+    const { app } = buildServeApp({ projectPath: tmpDir })
+    const res = await app.fetch(
+      new Request(scoped('/api/project/start'), {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ mode: 'one_task', taskId }),
+      }),
+    )
+    const body = await res.json() as { code?: string; stopSummary?: { reason?: string } }
+
+    expect(body.code).not.toBe('all_terminal')
+    expect(body.stopSummary?.reason).not.toBe('all_terminal')
+  })
+
   it('points Start at imported draft review when no runnable work is available', async () => {
-    const tasksPath = path.join(tmpDir, '.guildhall', 'TASKS.json')
+    const tasksPath = getProjectSystemStatePath(tmpDir, 'TASKS.json')
+    await fs.mkdir(path.dirname(tasksPath), { recursive: true })
     await fs.writeFile(
       tasksPath,
       JSON.stringify({
@@ -976,9 +1143,7 @@ describe('POST /api/project/start', () => {
 
   it('blocks Start when ready tasks still need brief cleanup', async () => {
     const now = new Date().toISOString()
-    await fs.writeFile(
-      path.join(tmpDir, '.guildhall', 'TASKS.json'),
-      JSON.stringify({
+    await writeSystemTasks({
         version: 1,
         lastUpdated: now,
         tasks: [
@@ -1004,11 +1169,10 @@ describe('POST /api/project/start', () => {
             updatedAt: now,
           },
         ],
-      }, null, 2),
-      'utf8',
-    )
+      })
 
     const { app } = buildServeApp({ projectPath: tmpDir })
+    await applyStorageBoundaryMigration(app)
     const projectRes = await app.fetch(new Request(scoped('/api/project')))
     const projectBody = (await projectRes.json()) as {
       startReadiness?: { canStart?: boolean; code?: string; actionHref?: string; message?: string }
@@ -1022,11 +1186,9 @@ describe('POST /api/project/start', () => {
     expect(projectBody.startReadiness?.message).toContain('clearer brief')
   })
 
-  it('points owner-input Start blockers at the pending question instead of a separate escalation', async () => {
+  it('points owner-input Start blockers at the linked Thread session', async () => {
     const now = new Date().toISOString()
-    await fs.writeFile(
-      path.join(tmpDir, '.guildhall', 'TASKS.json'),
-      JSON.stringify({
+    await writeSystemTasks({
         version: 1,
         lastUpdated: now,
         tasks: [
@@ -1063,14 +1225,7 @@ describe('POST /api/project/start', () => {
             outOfScope: [],
             dependsOn: [],
             notes: [],
-            openQuestions: [{
-              id: 'q-1',
-              askedBy: 'spec-agent',
-              askedAt: now,
-              kind: 'choice',
-              prompt: 'Which API shape should this component use?',
-              choices: ['Stencil component', 'Vanilla web component'],
-            }],
+            openQuestions: [],
             escalations: [],
             agentIssues: [],
             gateResults: [],
@@ -1082,30 +1237,68 @@ describe('POST /api/project/start', () => {
             updatedAt: now,
           },
         ],
-      }, null, 2),
-      'utf8',
-    )
+      })
+    await seedThreadOwnerInput({
+      taskId: 'task-question',
+      questionId: 'q-1',
+      now,
+      label: 'Clarify Question task',
+      prompt: 'Which API shape should this component use?',
+      choices: ['Stencil component', 'Vanilla web component'],
+    })
 
     const { app } = buildServeApp({ projectPath: tmpDir })
+    await applyStorageBoundaryMigration(app)
     const projectRes = await app.fetch(new Request(scoped('/api/project')))
     const projectBody = (await projectRes.json()) as {
       startReadiness?: { canStart?: boolean; code?: string; actionHref?: string; message?: string }
     }
 
+    const request = await readFirstOwnerInputRequest()
+
     expect(projectBody.startReadiness).toMatchObject({
       canStart: false,
       code: 'owner_input_required',
-      actionHref: '/task/task-question?tab=current',
+      actionHref: `/thread?thread=${request.boundedChatSessionId}`,
     })
-    expect(projectBody.startReadiness?.message).toContain('1 question needs your answer')
+    expect(projectBody.startReadiness?.message).toContain('Clarify Question task needs your answer')
+  })
+
+  it('uses a friendly structural-map label in owner-input Start blockers', async () => {
+    const now = new Date().toISOString()
+    await writeSystemTasks({
+        version: 1,
+        lastUpdated: now,
+        tasks: [],
+      })
+    await seedThreadOwnerInput({
+      taskId: 'structural-map-mpyrvqjg',
+      questionId: 'owner-input-1',
+      now,
+      label: 'Review structural map structural-map-mpyrvqjg',
+      prompt: 'Review the proposed domains before Guildhall uses this map for routing.',
+      choices: ['Use this map', 'Something looks wrong'],
+    })
+
+    const { app } = buildServeApp({ projectPath: tmpDir })
+    await applyStorageBoundaryMigration(app)
+    const projectRes = await app.fetch(new Request(scoped('/api/project')))
+    const projectBody = (await projectRes.json()) as {
+      startReadiness?: { canStart?: boolean; code?: string; message?: string }
+    }
+
+    expect(projectBody.startReadiness).toMatchObject({
+      canStart: false,
+      code: 'owner_input_required',
+      message: 'Review the project map needs your answer before work can continue',
+    })
+    expect(projectBody.startReadiness?.message).not.toContain('structural-map-mpyrvqjg')
   })
 
   it('points recovery-only Start blockers at the newest blocked task instead of stale historical blockers', async () => {
     const older = '2026-05-19T10:00:00.000Z'
     const newer = '2026-05-19T12:00:00.000Z'
-    await fs.writeFile(
-      path.join(tmpDir, '.guildhall', 'TASKS.json'),
-      JSON.stringify({
+    await writeSystemTasks({
         version: 1,
         lastUpdated: newer,
         tasks: [
@@ -1154,29 +1347,37 @@ describe('POST /api/project/start', () => {
             updatedAt: newer,
           },
         ],
-      }, null, 2),
-      'utf8',
-    )
+      })
+    await seedThreadOwnerInput({
+      taskId: 'task-current',
+      questionId: 'esc-current',
+      now: newer,
+      kind: 'recovery_decision',
+      label: 'Choose recovery path for Current blocked task',
+      prompt: 'How should Guildhall recover the current blocked task?',
+      choices: ['Retry with more context', 'Shelve it for now'],
+    })
 
     const { app } = buildServeApp({ projectPath: tmpDir })
+    await applyStorageBoundaryMigration(app)
     const projectRes = await app.fetch(new Request(scoped('/api/project')))
     const projectBody = (await projectRes.json()) as {
       startReadiness?: { canStart?: boolean; code?: string; actionHref?: string; message?: string }
     }
 
+    const request = await readFirstOwnerInputRequest()
+
     expect(projectBody.startReadiness).toMatchObject({
       canStart: false,
       code: 'owner_input_required',
-      actionHref: '/task/task-current',
+      actionHref: `/thread?thread=${request.boundedChatSessionId}`,
     })
-    expect(projectBody.startReadiness?.message).toContain('Choose a recovery path')
+    expect(projectBody.startReadiness?.message).toContain('Choose recovery path for Current blocked task')
   })
 
   it('rejects focused task starts while project-level owner input is still blocking Start', async () => {
     const now = new Date().toISOString()
-    await fs.writeFile(
-      path.join(tmpDir, '.guildhall', 'TASKS.json'),
-      JSON.stringify({
+    await writeSystemTasks({
         version: 1,
         lastUpdated: now,
         tasks: [
@@ -1191,14 +1392,7 @@ describe('POST /api/project/start', () => {
             outOfScope: [],
             dependsOn: [],
             notes: [],
-            openQuestions: [{
-              id: 'q-1',
-              askedBy: 'spec-agent',
-              askedAt: now,
-              kind: 'choice',
-              prompt: 'Which implementation direction should Guildhall use?',
-              choices: ['Option A', 'Option B'],
-            }],
+            openQuestions: [],
             escalations: [],
             agentIssues: [],
             gateResults: [],
@@ -1236,11 +1430,18 @@ describe('POST /api/project/start', () => {
             updatedAt: now,
           },
         ],
-      }, null, 2),
-      'utf8',
-    )
+      })
+    await seedThreadOwnerInput({
+      taskId: 'task-needs-answer',
+      questionId: 'q-1',
+      now,
+      label: 'Clarify Needs answer first',
+      prompt: 'Which implementation direction should Guildhall use?',
+      choices: ['Option A', 'Option B'],
+    })
 
     const { app } = buildServeApp({ projectPath: tmpDir })
+    await applyStorageBoundaryMigration(app)
     const res = await app.fetch(
       new Request(scoped('/api/project/start'), {
         method: 'POST',
@@ -1251,11 +1452,13 @@ describe('POST /api/project/start', () => {
 
     expect(res.status).toBe(409)
     const body = (await res.json()) as { code?: string; actionHref?: string; error?: string }
+    const request = await readFirstOwnerInputRequest()
+
     expect(body).toMatchObject({
       code: 'owner_input_required',
-      actionHref: '/task/task-needs-answer?tab=current',
+      actionHref: `/thread?thread=${request.boundedChatSessionId}`,
     })
-    expect(body.error).toContain('1 question needs your answer')
+    expect(body.error).toContain('Clarify Needs answer first needs your answer')
   })
 
   it('rejects fanout without worktree isolation with a clear error', async () => {
@@ -1289,7 +1492,16 @@ describe('POST /api/project/start', () => {
   })
 
   it('rejects targeted task starts while a project run is already active', async () => {
-    const { app, supervisor } = buildServeApp({ projectPath: tmpDir })
+    const supervisor = new OrchestratorSupervisor({
+      resolveConfig: () => ({ workspaceId: PROJECT_ID, projectPath: tmpDir } as ResolvedConfig),
+      runOrchestrator: async (_config, opts) => {
+        await new Promise<void>((resolve) => {
+          opts?.abortSignal?.addEventListener('abort', () => resolve(), { once: true })
+        })
+        return { ticks: 1, stopReason: 'stop_requested', stopMessage: 'Stop requested.' }
+      },
+    })
+    const { app } = buildServeApp({ projectPath: tmpDir, supervisor })
     supervisor.start({
       workspaceId: PROJECT_ID,
       workspacePath: tmpDir,
@@ -1298,6 +1510,7 @@ describe('POST /api/project/start', () => {
     const res = await app.fetch(
       new Request(scoped('/api/project/start'), {
         method: 'POST',
+        headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ taskId: 'task-a', mode: 'continuous' }),
       }),
     )
@@ -1305,7 +1518,7 @@ describe('POST /api/project/start', () => {
     const body = (await res.json()) as { code?: string; status?: string; error?: string }
     expect(body.code).toBe('run_already_active')
     expect(body.status).toBe('running')
-    expect(body.error).toContain('already running')
+    expect(body.error).toContain('run is already active')
 
     await supervisor.stop(PROJECT_ID, { waitMs: 1_000 })
   })
@@ -1317,7 +1530,7 @@ describe('POST /api/project/start', () => {
 // re-seeds from defaults so the UI can recover without shelling in.
 describe('POST /api/config/levers/reset', () => {
   it('rewrites the lever file with default positions so subsequent reads succeed', async () => {
-    const settingsPath = path.join(tmpDir, '.guildhall', 'agent-settings.yaml')
+    const settingsPath = getProjectSystemStatePath(tmpDir, 'agent-settings.yaml')
     const { app } = buildServeApp({ projectPath: tmpDir })
 
     // Corrupt the file beyond self-heal (bad YAML). Missing-key corruption
@@ -1426,16 +1639,14 @@ describe('GET /api/project/facts', () => {
   })
 
   it('counts saved completed workspace-import specs in the memory check-in facts', async () => {
-    await fs.mkdir(path.join(tmpDir, '.guildhall'), { recursive: true })
-    await fs.writeFile(
-      path.join(tmpDir, '.guildhall', 'workspace-goals.json'),
-      JSON.stringify({
+    await writeSystemJson(
+      'workspace-goals.json',
+      {
         goals: [{ id: 'old-goal', title: 'Old goal' }],
-      }),
-      'utf8',
+      },
     )
-    await fs.writeFile(
-      path.join(tmpDir, '.guildhall', 'TASKS.json'),
+    await writeSystemText(
+      'TASKS.json',
       JSON.stringify(
         {
           version: 1,
@@ -1469,7 +1680,6 @@ describe('GET /api/project/facts', () => {
         null,
         2,
       ),
-      'utf8',
     )
 
     const { app } = buildServeApp({ projectPath: tmpDir })
@@ -1548,13 +1758,59 @@ describe('GET /api/stale-server', () => {
     expect(typeof body.bootBuildMtimeMs).toBe('number')
     expect(typeof body.currentBuildMtimeMs).toBe('number')
   })
+
+  it('stops stale Guildhall siblings before reporting freshness', async () => {
+    let killed = false
+    const killProcess = vi.fn(() => {
+      killed = true
+    })
+    const { app } = buildServeApp({
+      projectPath: tmpDir,
+      staleProcessGuard: {
+        killProcess,
+        listProcesses: async () => killed
+          ? []
+          : [{
+              pid: 12345,
+              startedAtMs: 1,
+              command: '/Users/matthew/.guildhall/app/0.10.0/app/dist/cli.js mcp serve .',
+              mode: 'mcp',
+              stale: false,
+            }],
+      },
+    })
+
+    const res = await app.fetch(new Request('http://localhost/api/stale-server'))
+    expect(res.status).toBe(200)
+    const body = (await res.json()) as { staleProcesses?: unknown[] }
+    expect(killProcess).toHaveBeenCalledWith(12345, 'SIGTERM')
+    expect(body.staleProcesses).toBeUndefined()
+  })
 })
 
 describe('GET /api/service', () => {
+  it('serves lightweight project shells before expensive project status hydration', async () => {
+    registerWorkspace({ id: PROJECT_ID, name: 'Settings Test', path: tmpDir, tags: [] })
+    const { app } = buildServeApp({ projectPath: tmpDir })
+
+    const res = await app.fetch(new Request('http://localhost/api/service/projects'))
+    expect(res.status).toBe(200)
+    const body = (await res.json()) as { projects?: Array<Record<string, any>> }
+    const project = body.projects?.find(item => item.id === PROJECT_ID)
+    expect(project).toMatchObject({
+      id: PROJECT_ID,
+      name: 'Settings Test',
+      path: tmpDir,
+      projectStatusLoading: true,
+    })
+    expect(project?.migrationSummary).toBeUndefined()
+    expect(project?.actionModel).toBeUndefined()
+    expect(project?.startReadiness).toBeUndefined()
+  })
+
   it('includes migration summary counts for registered projects', async () => {
     registerWorkspace({ id: PROJECT_ID, name: 'Settings Test', path: tmpDir, tags: [] })
-    await fs.mkdir(path.join(tmpDir, 'memory'), { recursive: true })
-    await fs.writeFile(path.join(tmpDir, 'memory', 'PROGRESS.md'), '# Progress\n', 'utf8')
+    await writeSystemText('PROGRESS.md', '# Progress\n')
     const { app } = buildServeApp({ projectPath: tmpDir })
 
     const res = await app.fetch(new Request('http://localhost/api/service'))
@@ -1617,6 +1873,18 @@ describe('GET /api/health', () => {
     expect(typeof body.migrations?.blocked).toBe('number')
     expect(typeof body.migrations?.applied).toBe('number')
   })
+
+  it('returns JSON 404 for unknown API paths instead of the SPA shell', async () => {
+    const { app } = buildServeApp({ projectPath: tmpDir })
+    const res = await app.fetch(new Request(scoped('/api/project/contracts')))
+
+    expect(res.status).toBe(404)
+    expect(res.headers.get('content-type')).toContain('application/json')
+    expect(await res.json()).toEqual({
+      error: 'API route not found',
+      path: '/api/project/contracts',
+    })
+  })
 })
 
 // GET /api/project/workspace-import/draft must expose the deterministic
@@ -1625,6 +1893,39 @@ describe('GET /api/health', () => {
 // then falls back to the detector when the spec is still empty, so the
 // user is never blocked on an agent round-trip.
 describe('Workspace Import review endpoints', () => {
+  it('status treats missing task state as an empty existing workspace queue', async () => {
+    await fs.rm(getProjectSystemStatePath(tmpDir, 'TASKS.json'), { force: true })
+    await fs.writeFile(
+      path.join(tmpDir, 'README.md'),
+      '# Existing project\n\n## Goals\n\n- Capture the current repo direction\n',
+      'utf8',
+    )
+    await fs.writeFile(
+      path.join(tmpDir, 'package.json'),
+      JSON.stringify({ name: 'existing-project' }),
+      'utf8',
+    )
+
+    const { app } = buildServeApp({ projectPath: tmpDir })
+    const status = await app.fetch(new Request(scoped('/api/project/workspace-import/status')))
+
+    expect(status.status).toBe(200)
+    const body = await status.json() as {
+      needed: boolean
+      seeded: boolean
+      taskStatus: string | null
+      draft: { goals: number; tasks: number; milestones: number }
+      inventory: { signals: number }
+      error?: string
+    }
+    expect(body.error).toBeUndefined()
+    expect(body.seeded).toBe(false)
+    expect(body.taskStatus).toBeNull()
+    expect(body.needed).toBe(true)
+    expect(body.inventory.signals).toBeGreaterThan(0)
+    expect(body.draft.goals + body.draft.tasks + body.draft.milestones).toBeGreaterThan(0)
+  })
+
   it('draft endpoint returns a detector block even before the importer agent runs', async () => {
     // Seed signals the detector can pick up.
     await fs.writeFile(
@@ -1670,9 +1971,8 @@ describe('Workspace Import review endpoints', () => {
       'utf8',
     )
     // Prime TASKS.json with the reserved importer task — empty spec.
-    await fs.mkdir(path.join(tmpDir, '.guildhall'), { recursive: true })
-    await fs.writeFile(
-      path.join(tmpDir, '.guildhall', 'TASKS.json'),
+    await writeSystemText(
+      'TASKS.json',
       JSON.stringify(
         {
           version: 1,
@@ -1698,7 +1998,6 @@ describe('Workspace Import review endpoints', () => {
         null,
         2,
       ),
-      'utf8',
     )
 
     const { app } = buildServeApp({ projectPath: tmpDir })
@@ -1722,6 +2021,91 @@ describe('Workspace Import review endpoints', () => {
     expect((body.goalsRecorded ?? 0) + (body.tasksAdded ?? 0)).toBeGreaterThan(0)
   })
 
+  it('approves workspace import from system-local task state without creating repo task state', async () => {
+    await fs.writeFile(
+      path.join(tmpDir, 'README.md'),
+      '# t-minus-t\n\n## Goals\n\n- Ship the extension\n- Wire the popup\n',
+      'utf8',
+    )
+    await fs.writeFile(
+      path.join(tmpDir, 'package.json'),
+      JSON.stringify({ name: 'ws-system-local-fallback' }),
+      'utf8',
+    )
+    await fs.mkdir(path.join(tmpDir, 'docs'), { recursive: true })
+    await fs.writeFile(
+      path.join(tmpDir, 'docs', 'roadmap.md'),
+      '- [x] Initial popup scaffold\n- [ ] Wire the popup context menu\n',
+      'utf8',
+    )
+    const { app } = buildServeApp({ projectPath: tmpDir })
+    const migration = await app.fetch(
+      new Request(scoped('/api/project/migrations/apply'), {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          includePrompt: true,
+          migrationId: '0.10.0/project-state-storage-boundary',
+        }),
+      }),
+    )
+    expect(migration.status).toBe(200)
+
+    const tasksPath = getProjectSystemStatePath(tmpDir, 'TASKS.json')
+    await fs.mkdir(path.dirname(tasksPath), { recursive: true })
+    await fs.writeFile(
+      tasksPath,
+      JSON.stringify(
+        {
+          version: 1,
+          lastUpdated: new Date().toISOString(),
+          tasks: [
+            {
+              id: 'task-workspace-import',
+              title: 'Workspace import',
+              description: 'Reserved importer',
+              domain: '_workspace_import',
+              projectPath: tmpDir,
+              status: 'proposed',
+              priority: 'normal',
+              acceptanceCriteria: [],
+              dependsOn: [],
+              outOfScope: [],
+              spec: '',
+              createdAt: new Date().toISOString(),
+              updatedAt: new Date().toISOString(),
+            },
+          ],
+        },
+        null,
+        2,
+      ),
+      'utf8',
+    )
+    const approve = await app.fetch(
+      new Request(scoped('/api/project/workspace-import/approve'), {
+        method: 'POST',
+      }),
+    )
+    const body = (await approve.json()) as {
+      ok?: boolean
+      tasksAdded?: number
+      goalsRecorded?: number
+      error?: string
+    }
+    if (approve.status !== 200) {
+      throw new Error(`approve failed: status=${approve.status} body=${JSON.stringify(body)}`)
+    }
+
+    expect(body.ok).toBe(true)
+    const written = JSON.parse(await fs.readFile(tasksPath, 'utf8')) as { tasks: Array<{ id: string }> }
+    expect(written.tasks.some(task => task.id !== 'task-workspace-import')).toBe(true)
+    await expect(fs.access(path.join(tmpDir, '.guildhall', 'TASKS.json'))).rejects.toThrow()
+    await expect(fs.access(path.join(tmpDir, '.guildhall', 'learning.json'))).rejects.toThrow()
+    await expect(fs.access(path.join(tmpDir, '.guildhall', 'PROGRESS.md'))).rejects.toThrow()
+    await expect(fs.access(getProjectSystemStatePath(tmpDir, 'learning.json'))).resolves.toBeUndefined()
+  })
+
   it('approve preserves the importer agent curated spec when no review narrowing is supplied', async () => {
     await fs.mkdir(path.join(tmpDir, 'docs'), { recursive: true })
     await fs.writeFile(
@@ -1739,9 +2123,8 @@ describe('Workspace Import review endpoints', () => {
       JSON.stringify({ name: 'curated-import' }),
       'utf8',
     )
-    await fs.mkdir(path.join(tmpDir, '.guildhall'), { recursive: true })
-    await fs.writeFile(
-      path.join(tmpDir, '.guildhall', 'TASKS.json'),
+    await writeSystemText(
+      'TASKS.json',
       JSON.stringify(
         {
           version: 1,
@@ -1789,7 +2172,6 @@ describe('Workspace Import review endpoints', () => {
         null,
         2,
       ),
-      'utf8',
     )
 
     const { app } = buildServeApp({ projectPath: tmpDir })
@@ -1823,9 +2205,8 @@ describe('Workspace Import review endpoints', () => {
 
   it('status counts a completed importer task from its saved curated spec', async () => {
     await fs.writeFile(path.join(tmpDir, 'package.json'), JSON.stringify({ name: 'completed-import-status' }), 'utf8')
-    await fs.mkdir(path.join(tmpDir, '.guildhall'), { recursive: true })
-    await fs.writeFile(
-      path.join(tmpDir, '.guildhall', 'TASKS.json'),
+    await writeSystemText(
+      'TASKS.json',
       JSON.stringify(
         {
           version: 1,
@@ -1871,7 +2252,6 @@ describe('Workspace Import review endpoints', () => {
         null,
         2,
       ),
-      'utf8',
     )
 
     const { app } = buildServeApp({ projectPath: tmpDir })
@@ -1960,13 +2340,12 @@ describe('Workspace Import review endpoints', () => {
       '## Next up\n\n- [ ] Turn planning docs into real intake tasks\n',
       'utf8',
     )
-    await fs.writeFile(
-      path.join(tmpDir, '.guildhall', 'workspace-goals.json'),
-      JSON.stringify({ dismissed: true, dismissedAt: '2026-01-01T00:00:00Z' }, null, 2),
-      'utf8',
+    await writeSystemJson(
+      'workspace-goals.json',
+      { dismissed: true, dismissedAt: '2026-01-01T00:00:00Z' },
     )
-    await fs.writeFile(
-      path.join(tmpDir, '.guildhall', 'TASKS.json'),
+    await writeSystemText(
+      'TASKS.json',
       JSON.stringify(
         {
           version: 1,
@@ -2000,7 +2379,6 @@ describe('Workspace Import review endpoints', () => {
         null,
         2,
       ),
-      'utf8',
     )
 
     const { app } = buildServeApp({ projectPath: tmpDir })
@@ -2020,7 +2398,7 @@ describe('Workspace Import review endpoints', () => {
     expect(importTask?.status).toBe('exploring')
 
     const goalsState = JSON.parse(
-      await fs.readFile(path.join(tmpDir, '.guildhall', 'workspace-goals.json'), 'utf8'),
+      await fs.readFile(getProjectSystemStatePath(tmpDir, 'workspace-goals.json'), 'utf8'),
     ) as { dismissed?: boolean }
     expect(goalsState.dismissed).toBeUndefined()
   })
@@ -2037,13 +2415,14 @@ describe('GET/POST /api/project/learning', () => {
     await fs.writeFile(path.join(tmpDir, 'package.json'), JSON.stringify({ name: 'learning-api' }), 'utf8')
 
     const { app } = buildServeApp({ projectPath: tmpDir })
+    await applyStorageBoundaryMigration(app)
     const draftRes = await app.fetch(new Request(scoped('/api/project/workspace-import/draft')))
     const draftBody = (await draftRes.json()) as {
       detected: { review: { sourceGroups: Array<{ key: string; areaKey: string; taskIds: string[] }> } }
     }
     const source = draftBody.detected.review.sourceGroups[0]
     expect(source).toBeDefined()
-    await app.fetch(
+    const approve = await app.fetch(
       new Request(scoped('/api/project/workspace-import/approve'), {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
@@ -2054,8 +2433,13 @@ describe('GET/POST /api/project/learning', () => {
         }),
       }),
     )
-    await fs.mkdir(path.join(tmpDir, '.guildhall'), { recursive: true })
-    await fs.writeFile(path.join(tmpDir, '.guildhall', 'project-brief.md'), 'This project has saved context.\n', 'utf8')
+    const approveBody = await approve.json()
+    if (approve.status !== 200) {
+      throw new Error(`approve failed: status=${approve.status} body=${JSON.stringify(approveBody)}`)
+    }
+    const briefPath = getProjectSystemStatePath(tmpDir, 'project-brief.md')
+    await fs.mkdir(path.dirname(briefPath), { recursive: true })
+    await fs.writeFile(briefPath, 'This project has saved context.\n', 'utf8')
 
     const learning = await app.fetch(new Request(scoped('/api/project/learning')))
     const learningBody = (await learning.json()) as {
@@ -2086,7 +2470,7 @@ describe('GET/POST /api/project/learning', () => {
   })
 
   it('lists learning records and supports accept, dismiss, reset, and make-project-wide', async () => {
-    const memoryDir = path.join(tmpDir, '.guildhall')
+    const memoryDir = getProjectSystemStatePath(tmpDir, '')
     const projectCandidate: LearningCandidate = {
       id: 'project-invite-path',
       source: 'task',
@@ -2138,6 +2522,7 @@ describe('GET/POST /api/project/learning', () => {
     })
 
     const { app } = buildServeApp({ projectPath: tmpDir })
+    await applyStorageBoundaryMigration(app)
     const before = await app.fetch(new Request(scoped('/api/project/learning')))
     expect(before.status).toBe(200)
     const beforeBody = (await before.json()) as {
@@ -2242,8 +2627,8 @@ describe('GET/POST /api/project/learning', () => {
 
 describe('POST /api/project/meta-intake/rerun', () => {
   it('resets the reserved task back to exploring and reseeds the transcript', async () => {
-    await fs.writeFile(
-      path.join(tmpDir, '.guildhall', 'TASKS.json'),
+    await writeSystemText(
+      'TASKS.json',
       JSON.stringify(
         {
           version: 1,
@@ -2286,7 +2671,6 @@ describe('POST /api/project/meta-intake/rerun', () => {
         null,
         2,
       ),
-      'utf8',
     )
     const transcriptPath = getProjectTranscriptPath(tmpDir, 'exploring', 'task-meta-intake')
     await fs.mkdir(path.dirname(transcriptPath), { recursive: true })
@@ -2381,7 +2765,7 @@ describe('GET /api/project/inbox — blockers', () => {
     )).toBe(true)
   })
 
-  it('returns open attention sorted by current inbox priority instead of stale record recency', async () => {
+  it('returns only needs-you alerts sorted by current inbox priority instead of stale record recency', async () => {
     const yamlPath = path.join(tmpDir, 'guildhall.yaml')
     const current = await fs.readFile(yamlPath, 'utf8')
     await fs.writeFile(
@@ -2390,14 +2774,13 @@ describe('GET /api/project/inbox — blockers', () => {
         '\nbootstrap:\n  verifiedAt: "2026-04-24T00:00:00Z"\n  packageManager: pnpm\n  install: { command: "pnpm install", status: ok }\n  gates:\n    lint: { command: "pnpm lint", available: true }\n',
       'utf8',
     )
-    await fs.writeFile(
-      path.join(tmpDir, '.guildhall', 'workspace-goals.json'),
-      JSON.stringify({ goals: [] }, null, 2),
-      'utf8',
+    await writeSystemJson(
+      'workspace-goals.json',
+      { goals: [] },
     )
-    await fs.writeFile(
-      path.join(tmpDir, '.guildhall', 'TASKS.json'),
-      JSON.stringify({
+    await writeSystemJson(
+      'TASKS.json',
+      {
         version: 1,
         lastUpdated: '2026-05-31T15:00:00.000Z',
         tasks: [
@@ -2422,12 +2805,11 @@ describe('GET /api/project/inbox — blockers', () => {
             escalations: [{ id: 'esc-block', summary: 'Needs recovery.' }],
           },
         ],
-      }, null, 2),
-      'utf8',
+      },
     )
-    await fs.writeFile(
-      path.join(tmpDir, '.guildhall', 'attention.json'),
-      JSON.stringify({
+    await writeSystemJson(
+      'attention.json',
+      {
         version: 1,
         records: [
           {
@@ -2444,8 +2826,7 @@ describe('GET /api/project/inbox — blockers', () => {
             updatedAt: '2026-05-31T16:00:00.000Z',
           },
         ],
-      }, null, 2),
-      'utf8',
+      },
     )
 
     const { app } = buildServeApp({ projectPath: tmpDir })
@@ -2457,15 +2838,14 @@ describe('GET /api/project/inbox — blockers', () => {
       item.taskId === 'task-thin' || item.taskId === 'task-blocked',
     )
 
-    expect(relevant.map(item => item.kind)).toEqual(['open_escalation', 'spec_fill_pending'])
-    expect(relevant.map(item => item.severity)).toEqual(['high', 'low'])
+    expect(relevant.map(item => item.kind)).toEqual(['spec_fill_pending'])
+    expect(relevant.map(item => item.severity)).toEqual(['low'])
   })
 
   it('describes project-understanding reconciliation without implying Git is missing', async () => {
-    await fs.writeFile(
-      path.join(tmpDir, '.guildhall', 'workspace-goals.json'),
-      JSON.stringify({ goals: [{ id: 'goal-1', title: 'Existing imported plan' }] }, null, 2),
-      'utf8',
+    await writeSystemJson(
+      'workspace-goals.json',
+      { goals: [{ id: 'goal-1', title: 'Existing imported plan' }] },
     )
     const { app } = buildServeApp({ projectPath: tmpDir })
 
@@ -2477,14 +2857,122 @@ describe('GET /api/project/inbox — blockers', () => {
 
     expect(item).toMatchObject({
       title: 'Review project discovery update',
-      detail: 'Guildhall can now scan more planning docs and migrations. Review the reconciliation so it can update or dismiss stale imported work.',
+      detail: 'More planning docs and migrations can now be scanned. Review the reconciliation to update or dismiss stale imported work.',
       actionHref: '/workspace-import?mode=reconcile',
     })
     expect(`${item?.title ?? ''} ${item?.detail ?? ''}`).not.toMatch(/missing repo evidence/i)
   })
+
+  it('keeps thread-owned approvals and questions out of the needs-you inbox snapshot', async () => {
+    await writeSystemJson(
+      'TASKS.json',
+      {
+        version: 1,
+        lastUpdated: '2026-05-31T15:00:00.000Z',
+        tasks: [
+          {
+            id: 'task-spec',
+            title: 'Approve the spec draft',
+            status: 'spec_review',
+            spec: 'Draft spec',
+            escalations: [],
+            openQuestions: [],
+            createdAt: '2026-05-31T14:00:00.000Z',
+            updatedAt: '2026-05-31T14:05:00.000Z',
+          },
+          {
+            id: 'task-question',
+            title: 'Pick a scope',
+            status: 'exploring',
+            productBrief: {
+              userJob: 'Ship the thing.',
+              successMetric: 'The thing works.',
+            },
+            openQuestions: [
+              {
+                id: 'q-1',
+                kind: 'text',
+                askedBy: 'coordinator',
+                askedAt: '2026-05-31T14:10:00.000Z',
+                prompt: 'Which scope should Guildhall use?',
+              },
+            ],
+            escalations: [],
+            createdAt: '2026-05-31T14:00:00.000Z',
+            updatedAt: '2026-05-31T14:10:00.000Z',
+          },
+          {
+            id: 'task-thin',
+            title: 'Fill in acceptance criteria',
+            status: 'ready',
+            productBrief: {
+              userJob: 'Use the task.',
+              successMetric: 'Task works.',
+              approvedAt: '2026-05-31T14:00:00.000Z',
+            },
+            acceptanceCriteria: [],
+            openQuestions: [],
+            escalations: [],
+            createdAt: '2026-05-31T14:00:00.000Z',
+            updatedAt: '2026-05-31T14:20:00.000Z',
+          },
+        ],
+      },
+    )
+
+    const { app } = buildServeApp({ projectPath: tmpDir })
+    const res = await app.fetch(new Request(scoped('/api/project/inbox')))
+    expect(res.status).toBe(200)
+    const body = (await res.json()) as {
+      items?: Array<{ kind?: string; taskId?: string }>
+      history?: Array<{ kind?: string; taskId?: string }>
+    }
+
+    expect(body.items?.some(item => item.kind === 'spec_approval' || item.kind === 'agent_question_pending')).toBe(false)
+    expect(body.items?.some(item => item.kind === 'spec_fill_pending' && item.taskId === 'task-thin')).toBe(true)
+    expect(body.history?.some(item => item.kind === 'spec_approval' || item.kind === 'agent_question_pending')).toBe(false)
+  })
 })
 
 describe('GET /api/project — bootstrap status', () => {
+  it('targets the first waiting spec thread when spec review blocks start', async () => {
+    const migrationApp = buildServeApp({ projectPath: tmpDir })
+    await applyStorageBoundaryMigration(migrationApp.app)
+    await writeSystemTasks({
+      tasks: [
+        {
+          id: 'task-spec-a',
+          title: 'Approve first spec',
+          status: 'spec_review',
+          spec: 'Draft spec',
+          createdAt: '2026-06-11T15:00:00.000Z',
+          updatedAt: '2026-06-11T15:00:00.000Z',
+        },
+        {
+          id: 'task-spec-b',
+          title: 'Approve second spec',
+          status: 'spec_review',
+          spec: 'Draft spec',
+          createdAt: '2026-06-11T15:01:00.000Z',
+          updatedAt: '2026-06-11T15:01:00.000Z',
+        },
+      ],
+    })
+    const { app } = buildServeApp({ projectPath: tmpDir })
+
+    const res = await app.fetch(new Request(scoped('/api/project')))
+    expect(res.status).toBe(200)
+    const body = (await res.json()) as {
+      startReadiness?: { canStart?: boolean; actionHref?: string; message?: string }
+    }
+
+    expect(body.startReadiness).toMatchObject({
+      canStart: false,
+      message: '2 specs are waiting for review before starting.',
+      actionHref: '/thread?thread=task%3Atask-spec-a',
+    })
+  })
+
   it('includes the last bootstrap run status so the shell can explain async start failures', async () => {
     const bootstrapPath = path.join(getProjectLocalHistoryDir(tmpDir), 'bootstrap.json')
     await fs.writeFile(
@@ -2521,7 +3009,8 @@ describe('GET /api/project — bootstrap status', () => {
   })
 
   it('includes the same inbox snapshot as /api/project/inbox', async () => {
-    const tasksPath = path.join(tmpDir, '.guildhall', 'TASKS.json')
+    const tasksPath = getProjectSystemStatePath(tmpDir, 'TASKS.json')
+    await fs.mkdir(path.dirname(tasksPath), { recursive: true })
     await fs.writeFile(
       tasksPath,
       JSON.stringify({
@@ -2547,6 +3036,18 @@ describe('GET /api/project — bootstrap status', () => {
         items?: Array<{ kind?: string; taskId?: string }>
         blockers?: { bootstrap?: boolean; workspaceImport?: boolean }
       }
+      memoryHealth?: {
+        memoryCore?: {
+          adapter?: string
+          fallbackUsed?: boolean
+          semanticRecallEnabled?: boolean
+          observationalMemoryEnabled?: boolean
+          observationalProcessorReady?: boolean
+          compactionStatus?: string
+          semanticValidity?: string
+          repoLocalWrites?: string[]
+        }
+      }
     }
 
     const inboxRes = await app.fetch(new Request(scoped('/api/project/inbox')))
@@ -2557,7 +3058,49 @@ describe('GET /api/project — bootstrap status', () => {
     }
 
     expect(projectBody.inbox).toEqual(inboxBody)
-    expect(projectBody.inbox?.items?.some(item => item.kind === 'spec_approval' && item.taskId === 'task-1')).toBe(true)
+    expect(projectBody.inbox?.items?.some(item => item.kind === 'spec_approval' && item.taskId === 'task-1')).toBe(false)
+    expect(projectBody.memoryHealth?.memoryCore).toMatchObject({
+      adapter: 'mastra',
+      fallbackUsed: false,
+      semanticRecallEnabled: false,
+      observationalMemoryEnabled: false,
+      observationalProcessorReady: false,
+      compactionStatus: 'active',
+      semanticValidity: 'valid',
+      repoLocalWrites: [],
+    })
+  })
+
+  it('keeps memory engines gated in /api/project when env vars request them without quality proof', async () => {
+    process.env.GUILDHALL_MEMORY_SEMANTIC_RECALL = '1'
+    process.env.GUILDHALL_MEMORY_OBSERVATIONAL = '1'
+    const { app } = buildServeApp({ projectPath: tmpDir })
+
+    const projectRes = await app.fetch(new Request(scoped('/api/project')))
+    expect(projectRes.status).toBe(200)
+    const projectBody = (await projectRes.json()) as {
+      memoryHealth?: {
+        memoryCore?: {
+          semanticRecallEnabled?: boolean
+          observationalMemoryEnabled?: boolean
+          observationalProcessorReady?: boolean
+          features?: string[]
+          warnings?: string[]
+        }
+      }
+    }
+
+    expect(projectBody.memoryHealth?.memoryCore).toMatchObject({
+      semanticRecallEnabled: false,
+      observationalMemoryEnabled: false,
+      observationalProcessorReady: false,
+    })
+    expect(projectBody.memoryHealth?.memoryCore?.features).toEqual(expect.arrayContaining([
+      'semantic-recall-gated',
+      'observational-memory-gated',
+    ]))
+    expect(projectBody.memoryHealth?.memoryCore?.warnings?.join('\n')).toContain('Semantic recall requested but held behind the memory engine quality gate.')
+    expect(projectBody.memoryHealth?.memoryCore?.warnings?.join('\n')).toContain('Observational Memory requested but held behind the memory engine quality gate.')
   })
 
   it('marks dynamic project payloads as non-cacheable', async () => {
@@ -2571,4 +3114,401 @@ describe('GET /api/project — bootstrap status', () => {
     expect(inboxRes.headers.get('cache-control')).toBe('no-store, no-cache, must-revalidate')
     expect(inboxRes.headers.get('pragma')).toBe('no-cache')
   })
+
+  it('includes a structural map review summary for owner review', async () => {
+    await fs.mkdir(path.join(tmpDir, 'packages', 'core'), { recursive: true })
+    await fs.mkdir(path.join(tmpDir, 'packages', 'editor'), { recursive: true })
+    await fs.writeFile(
+      path.join(tmpDir, 'package.json'),
+      JSON.stringify({
+        name: 'settings-test',
+        private: true,
+        workspaces: ['packages/*'],
+      }, null, 2),
+      'utf8',
+    )
+    await fs.writeFile(
+      path.join(tmpDir, 'packages', 'core', 'package.json'),
+      JSON.stringify({
+        name: '@settings/core',
+        scripts: { test: 'vitest run' },
+      }, null, 2),
+      'utf8',
+    )
+    await fs.writeFile(
+      path.join(tmpDir, 'packages', 'editor', 'package.json'),
+      JSON.stringify({
+        name: '@settings/editor',
+        dependencies: { '@settings/core': 'workspace:*' },
+      }, null, 2),
+      'utf8',
+    )
+    const draft = await draftStructuralMap({
+      projectId: PROJECT_ID,
+      projectRoot: tmpDir,
+      now: '2026-06-01T12:00:00.000Z',
+    })
+    const review = await submitStructuralMapForReview({
+      projectRoot: tmpDir,
+      mapId: draft.id,
+      actor: 'coordinator',
+      now: '2026-06-01T12:01:00.000Z',
+    })
+    await acceptStructuralMap({
+      projectRoot: tmpDir,
+      mapId: review.id,
+      actor: 'owner',
+      now: '2026-06-01T12:02:00.000Z',
+    })
+
+    const { app } = buildServeApp({ projectPath: tmpDir })
+    const res = await app.fetch(new Request(scoped('/api/project')))
+    expect(res.status).toBe(200)
+    const body = (await res.json()) as {
+      structuralMapReview?: {
+        state?: string
+        counts?: Record<string, number>
+        packages?: Array<{ id: string; label: string }>
+        domains?: Array<{ id: string; label: string }>
+        executableUnits?: Array<{ id: string; command?: string }>
+        gitRoots?: Array<{ path: string }>
+        questions?: Array<{ id: string; prompt: string }>
+      }
+    }
+
+    expect(body.structuralMapReview?.state).toBe('accepted')
+    expect(body.structuralMapReview?.counts?.packages).toBe(2)
+    expect(body.structuralMapReview?.packages?.map(item => item.label)).toEqual(expect.arrayContaining(['@settings/core', '@settings/editor']))
+    expect(body.structuralMapReview?.domains?.some(item => item.id.startsWith('domain:'))).toBe(true)
+    expect(body.structuralMapReview?.executableUnits?.some(item => item.command === 'npm --workspace @settings/core run test')).toBe(true)
+    expect(body.structuralMapReview?.gitRoots?.[0]?.path).toBe('.')
+    expect(body.structuralMapReview?.questions?.length).toBeGreaterThan(0)
+
+    const graphRes = await app.fetch(new Request(scoped('/api/project/project-graph')))
+    expect(graphRes.status).toBe(200)
+    const graphBody = (await graphRes.json()) as {
+      projectGraph?: { structuralDomains?: Array<{ id?: string; label?: string; kind?: string }> }
+    }
+    expect(graphBody.projectGraph?.structuralDomains?.some(item => item.id?.startsWith('domain:'))).toBe(true)
+    expect(graphBody.projectGraph?.structuralDomains?.every(item => item.kind === 'structural_domain')).toBe(true)
+  })
+
+  it('applies structural map review actions through the owning project endpoint', async () => {
+    await fs.mkdir(path.join(tmpDir, 'packages', 'core'), { recursive: true })
+    await fs.writeFile(
+      path.join(tmpDir, 'package.json'),
+      JSON.stringify({
+        name: 'settings-test',
+        private: true,
+        workspaces: ['packages/*'],
+      }, null, 2),
+      'utf8',
+    )
+    await fs.writeFile(
+      path.join(tmpDir, 'packages', 'core', 'package.json'),
+      JSON.stringify({ name: '@settings/core' }, null, 2),
+      'utf8',
+    )
+    const draft = await draftStructuralMap({
+      projectId: PROJECT_ID,
+      projectRoot: tmpDir,
+      now: '2026-06-01T12:10:00.000Z',
+    })
+    const review = await submitStructuralMapForReview({
+      projectRoot: tmpDir,
+      mapId: draft.id,
+      actor: 'coordinator',
+      now: '2026-06-01T12:11:00.000Z',
+    })
+
+    const { app } = buildServeApp({ projectPath: tmpDir })
+    const rename = await app.fetch(new Request(scoped('/api/project/structural-map/action'), {
+      method: 'POST',
+      body: JSON.stringify({
+        mapId: review.id,
+        action: { kind: 'rename_node', nodeId: 'domain:core', label: 'Core runtime' },
+      }),
+    }))
+    expect(rename.status).toBe(200)
+    const renameBody = (await rename.json()) as { structuralMapReview?: { domains?: Array<{ label?: string }> } }
+    expect(renameBody.structuralMapReview?.domains?.map(item => item.label)).toContain('Core runtime')
+
+    const accept = await app.fetch(new Request(scoped('/api/project/structural-map/action'), {
+      method: 'POST',
+      body: JSON.stringify({
+        mapId: review.id,
+        action: { kind: 'accept' },
+      }),
+    }))
+    expect(accept.status).toBe(200)
+    const acceptBody = (await accept.json()) as { structuralMapReview?: { state?: string } }
+    expect(acceptBody.structuralMapReview?.state).toBe('accepted')
+  })
+
+  it('serves the scoped local project graph view for the selected project', async () => {
+    const providerDir = await fs.mkdtemp(path.join(os.tmpdir(), 'guildhall-serve-settings-provider-'))
+    try {
+      bootstrapWorkspace(providerDir, { name: 'Looma' })
+      await createProjectDependencyRequest({
+        consumerProject: { id: PROJECT_ID, path: tmpDir, label: 'Settings Test' },
+        providerProject: { id: 'looma', path: providerDir, label: 'Looma' },
+        domain: { id: 'domain:editor', label: 'Editor' },
+        consumerNeed: 'Settings Test needs an editor adapter.',
+        rationale: 'The editor domain is provider-owned by Looma.',
+        requestedBy: 'coordinator:settings-test',
+        expectedDelivery: {
+          format: 'Svelte editor adapter',
+          channel: 'npm dev tag',
+          consumerVerificationPlan: ['Run settings-test editor integration.'],
+        },
+        now: '2026-06-01T12:20:00.000Z',
+      })
+
+      const { app } = buildServeApp({ projectPath: tmpDir })
+      const res = await app.fetch(new Request(scoped('/api/project/project-graph')))
+      expect(res.status).toBe(200)
+      const body = (await res.json()) as {
+        projectGraph?: {
+          localProjects?: Array<{ id?: string; role?: string }>
+          authorityRoots?: Array<{ projectId?: string; domainId?: string }>
+          unresolvedRequests?: Array<{ waitingOn?: string }>
+        }
+      }
+      expect(body.projectGraph?.localProjects).toEqual(expect.arrayContaining([
+        expect.objectContaining({ id: PROJECT_ID, role: 'current' }),
+        expect.objectContaining({ id: 'looma', role: 'provider' }),
+      ]))
+      expect(body.projectGraph?.authorityRoots).toContainEqual(expect.objectContaining({
+        projectId: 'looma',
+        domainId: 'domain:editor',
+      }))
+      expect(body.projectGraph?.unresolvedRequests).toContainEqual(expect.objectContaining({
+        waitingOn: 'provider',
+      }))
+    } finally {
+      await fs.rm(providerDir, { recursive: true, force: true })
+    }
+  })
+
+  it('serves child project graph targets and assigns domain responsibility facets', async () => {
+    const workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), 'guildhall-serve-settings-workspace-provider-'))
+    try {
+      await fs.mkdir(path.join(workspaceDir, 'looma'), { recursive: true })
+      await fs.mkdir(path.join(workspaceDir, 'knit'), { recursive: true })
+      writeWorkspaceConfig(workspaceDir, {
+        name: 'Looma + Knit',
+        id: 'looma-knit',
+        kind: 'workspace',
+        projects: [
+          { id: 'looma', label: 'Looma', type: 'library', path: 'looma', coordinator: 'looma' },
+          { id: 'knit', label: 'Knit', type: 'app', path: 'knit', coordinator: 'knit' },
+        ],
+      } as Parameters<typeof writeWorkspaceConfig>[1])
+      registerWorkspace({ id: 'looma-knit', path: workspaceDir, name: 'Looma + Knit', tags: [] })
+
+      const { app } = buildServeApp({ projectPath: tmpDir })
+      const graph = await app.fetch(new Request(scoped('/api/project/project-graph')))
+      expect(graph.status).toBe(200)
+      const graphBody = (await graph.json()) as {
+        projectGraph?: {
+          localProjects?: Array<{ id?: string; role?: string; path?: string }>
+          localProjectIndex?: Array<{ id?: string; role?: string; path?: string }>
+          domainResponsibilities?: Array<{ facet?: string; responsibleProjectId?: string; assignable?: boolean }>
+        }
+      }
+      expect(graphBody.projectGraph?.localProjects).not.toEqual(expect.arrayContaining([
+        expect.objectContaining({ id: 'looma-knit' }),
+        expect.objectContaining({ id: 'looma' }),
+        expect.objectContaining({ id: 'knit' }),
+      ]))
+      expect(graphBody.projectGraph?.localProjectIndex).toEqual(expect.arrayContaining([
+        expect.objectContaining({ id: 'looma-knit', role: 'indexed', path: workspaceDir }),
+        expect.objectContaining({ id: 'looma', role: 'indexed', path: path.join(workspaceDir, 'looma') }),
+        expect.objectContaining({ id: 'knit', role: 'indexed', path: path.join(workspaceDir, 'knit') }),
+      ]))
+
+      const assign = await app.fetch(new Request(scoped('/api/project/project-graph/domain-responsibility'), {
+        method: 'POST',
+        body: JSON.stringify({
+          domainId: 'domain:ui-foundation',
+          domainLabel: 'UI foundation',
+          facet: 'provider_capability',
+          responsibleProjectId: 'looma',
+        }),
+      }))
+      expect(assign.status).toBe(200)
+      const assignBody = (await assign.json()) as {
+        projectGraph?: {
+          domainResponsibilities?: Array<{ domainId?: string; facet?: string; responsibleProjectId?: string; assignable?: boolean }>
+        }
+      }
+      expect(assignBody.projectGraph?.domainResponsibilities).toEqual(expect.arrayContaining([
+        expect.objectContaining({
+          domainId: 'domain:ui-foundation',
+          facet: 'provider_capability',
+          responsibleProjectId: 'looma',
+        }),
+        expect.objectContaining({
+          domainId: 'domain:ui-foundation',
+          facet: 'consumer_configuration',
+          responsibleProjectId: PROJECT_ID,
+          assignable: false,
+        }),
+      ]))
+    } finally {
+      await fs.rm(workspaceDir, { recursive: true, force: true })
+    }
+  })
+
+  it('assigns domain authority and drives provider/consumer request actions through owning project endpoints', async () => {
+    const providerDir = await fs.mkdtemp(path.join(os.tmpdir(), 'guildhall-serve-settings-provider-'))
+    try {
+      bootstrapWorkspace(providerDir, { name: 'Looma' })
+      registerWorkspace({ id: 'looma', path: providerDir, name: 'Looma', tags: [] })
+
+      const consumerApp = buildServeApp({ projectPath: tmpDir }).app
+      const assign = await consumerApp.fetch(new Request(scoped('/api/project/project-graph/domain-authority'), {
+        method: 'POST',
+        body: JSON.stringify({
+          domainId: 'domain:editor',
+          domainLabel: 'Editor',
+          providerProjectId: 'looma',
+        }),
+      }))
+      expect(assign.status).toBe(200)
+      const assignBody = (await assign.json()) as {
+        projectGraph?: { domainAuthorities?: Array<{ domain?: { id?: string }; providerProject?: { id?: string } }> }
+      }
+      expect(assignBody.projectGraph?.domainAuthorities).toContainEqual(expect.objectContaining({
+        domain: expect.objectContaining({ id: 'domain:editor' }),
+        providerProject: expect.objectContaining({ id: 'looma' }),
+      }))
+
+      const edge = await createProjectDependencyRequest({
+        consumerProject: { id: PROJECT_ID, path: tmpDir, label: 'Settings Test' },
+        providerProject: { id: 'looma', path: providerDir, label: 'Looma' },
+        domain: { id: 'domain:editor', label: 'Editor' },
+        consumerNeed: 'Settings Test needs a portable editor control.',
+        rationale: 'The editor domain is provider-owned by Looma.',
+        requestedBy: 'coordinator:settings-test',
+        expectedDelivery: {
+          format: 'portable editor package',
+          channel: 'local path artifact',
+          consumerVerificationPlan: ['Run Settings Test editor integration.'],
+        },
+        now: '2026-06-01T12:30:00.000Z',
+      })
+
+      const providerApp = buildServeApp({ projectPath: providerDir }).app
+      const providerGraph = await providerApp.fetch(new Request(`http://localhost/api/project/project-graph?projectId=looma`))
+      expect(providerGraph.status).toBe(200)
+      const providerBody = (await providerGraph.json()) as {
+        projectGraph?: { dependencyEdges?: Array<{ id?: string; state?: string; consumerProjectId?: string }> }
+      }
+      expect(providerBody.projectGraph?.dependencyEdges).toContainEqual(expect.objectContaining({
+        id: edge.id,
+        state: 'submitted',
+        consumerProjectId: PROJECT_ID,
+      }))
+
+      const providerAccept = await providerApp.fetch(new Request(`http://localhost/api/project/project-graph/requests/${edge.id}/provider-accept?projectId=looma`, {
+        method: 'POST',
+        body: JSON.stringify({ providerTaskRef: 'task-editor-control' }),
+      }))
+      expect(providerAccept.status).toBe(200)
+      expect(await readJsonState(providerAccept)).toEqual(expect.objectContaining({ edgeState: 'provider_shaping' }))
+
+      const providerPlan = await providerApp.fetch(new Request(`http://localhost/api/project/project-graph/requests/${edge.id}/provider-plan?projectId=looma`, {
+        method: 'POST',
+        body: JSON.stringify({
+          format: 'portable editor package',
+          channel: 'local path artifact',
+          providerProofPlan: ['pnpm test editor'],
+          consumerVerificationPlan: ['pnpm test settings-editor'],
+        }),
+      }))
+      expect(providerPlan.status).toBe(200)
+      expect(await readJsonState(providerPlan)).toEqual(expect.objectContaining({ edgeState: 'provider_working' }))
+
+      const providerDeliver = await providerApp.fetch(new Request(`http://localhost/api/project/project-graph/requests/${edge.id}/provider-deliver?projectId=looma`, {
+        method: 'POST',
+        body: JSON.stringify({
+          id: 'delivery-1',
+          format: 'portable editor package',
+          channel: 'local path artifact',
+          coordinates: `${providerDir}/dist/editor.tgz`,
+          providerProof: ['pnpm test editor passed'],
+        }),
+      }))
+      expect(providerDeliver.status).toBe(200)
+      expect(await readJsonState(providerDeliver)).toEqual(expect.objectContaining({ edgeState: 'delivered' }))
+
+      const consumerReview = await consumerApp.fetch(new Request(scoped(`/api/project/project-graph/requests/${edge.id}/consumer-review`), {
+        method: 'POST',
+        body: JSON.stringify({ verificationContext: 'Settings Test tried the editor package.' }),
+      }))
+      expect(consumerReview.status).toBe(200)
+      expect(await readJsonState(consumerReview)).toEqual(expect.objectContaining({ edgeState: 'consumer_reviewing' }))
+
+      const consumerReturn = await consumerApp.fetch(new Request(scoped(`/api/project/project-graph/requests/${edge.id}/consumer-return`), {
+        method: 'POST',
+        body: JSON.stringify({
+          deliveryReceiptId: 'delivery-1',
+          mismatchKind: 'format',
+          expected: 'tarball package',
+          received: 'folder path',
+          failedVerification: ['install failed'],
+          requestedCorrection: 'Publish a tarball package.',
+        }),
+      }))
+      expect(consumerReturn.status).toBe(200)
+      expect(await readJsonState(consumerReturn)).toEqual(expect.objectContaining({ edgeState: 'revision_requested' }))
+
+      const providerRevise = await providerApp.fetch(new Request(`http://localhost/api/project/project-graph/requests/${edge.id}/provider-plan?projectId=looma`, {
+        method: 'POST',
+        body: JSON.stringify({
+          format: 'tarball package',
+          channel: 'local path artifact',
+          consumerVerificationPlan: ['install tarball'],
+        }),
+      }))
+      expect(providerRevise.status).toBe(200)
+      expect(await readJsonState(providerRevise)).toEqual(expect.objectContaining({ edgeState: 'provider_working' }))
+
+      const providerRedeliver = await providerApp.fetch(new Request(`http://localhost/api/project/project-graph/requests/${edge.id}/provider-deliver?projectId=looma`, {
+        method: 'POST',
+        body: JSON.stringify({
+          id: 'delivery-2',
+          format: 'tarball package',
+          channel: 'local path artifact',
+          coordinates: `${providerDir}/dist/editor-2.tgz`,
+          providerProof: ['tarball created'],
+        }),
+      }))
+      expect(providerRedeliver.status).toBe(200)
+      expect(await readJsonState(providerRedeliver)).toEqual(expect.objectContaining({ edgeState: 'delivered' }))
+
+      const consumerReviewAgain = await consumerApp.fetch(new Request(scoped(`/api/project/project-graph/requests/${edge.id}/consumer-review`), {
+        method: 'POST',
+        body: JSON.stringify({ verificationContext: 'Settings Test installed the tarball.' }),
+      }))
+      expect(consumerReviewAgain.status).toBe(200)
+
+      const consumerAccept = await consumerApp.fetch(new Request(scoped(`/api/project/project-graph/requests/${edge.id}/consumer-accept`), {
+        method: 'POST',
+        body: JSON.stringify({ consumerProof: ['install tarball passed'] }),
+      }))
+      expect(consumerAccept.status).toBe(200)
+      expect(await readJsonState(consumerAccept)).toEqual(expect.objectContaining({ edgeState: 'resolved' }))
+    } finally {
+      await fs.rm(providerDir, { recursive: true, force: true })
+    }
+  })
 })
+
+async function readJsonState(response: Response): Promise<{ edgeState?: string }> {
+  const body = (await response.json()) as {
+    edge?: { stateMachine?: { state?: string } }
+  }
+  return { edgeState: body.edge?.stateMachine?.state }
+}

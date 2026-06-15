@@ -1,3 +1,4 @@
+import { appendManagedTextFile, readManagedTextFile, readManagedTextFileSync, writeManagedTextFile } from '@guildhall/persistence'
 import { defineTool } from '@guildhall/engine'
 import { z } from 'zod'
 import fs from 'node:fs/promises'
@@ -10,18 +11,20 @@ import {
   type Task,
 } from '@guildhall/core'
 import { logProgress } from './memory-tools.js'
-import { atomicWriteText, appendTaskEvidence, inferProjectRootFromMemoryDir } from '@guildhall/sessions'
+import { atomicWriteText, appendTaskEvidence, inferProjectRootFromMemoryDir, readTaskEvidence, upsertTaskRuntimeState } from '@guildhall/sessions'
+import { buildEffectiveTask } from '@guildhall/runtime/effective-task'
+import { writeProjectTaskQueue } from '@guildhall/runtime/project-state-boundary'
 
 // ---------------------------------------------------------------------------
 // FR-10 Escalation protocol
 //
 // Escalations are first-class events, not free-form notes. Raising an escalation:
-//   1. appends a structured Escalation entry to the task
+//   1. appends a structured Escalation entry to task evidence
 //   2. flips the task to status `blocked` with blockReason = escalation summary
 //   3. writes a typed progress entry (type: 'escalation') to PROGRESS.md
 //
 // Resolving an escalation:
-//   1. marks the escalation as resolved (timestamp + resolution + resolver)
+//   1. appends a resolved escalation snapshot to task evidence
 //   2. moves the task to the requested next status (usually back to where it was)
 //   3. writes a progress entry (type: 'milestone') recording the resolution
 //
@@ -57,21 +60,46 @@ export interface RaiseEscalationResult {
   error?: string
 }
 
-function nextEscalationId(task: Task): string {
-  return `esc-${task.id}-${task.escalations.length + 1}`
+async function readEffectiveEscalations(projectRoot: string, task: Task): Promise<Escalation[]> {
+  const escalations = new Map<string, Escalation>()
+  for (const escalation of Array.isArray(task.escalations) ? task.escalations : []) {
+    escalations.set(escalation.id, escalation)
+  }
+  const evidence = await readTaskEvidence(projectRoot, task.id, { kind: 'escalation' })
+  for (const event of evidence) {
+    const parsed = Escalation.safeParse(event.payload)
+    if (parsed.success) escalations.set(parsed.data.id, parsed.data)
+  }
+  return [...escalations.values()].sort((a, b) => a.raisedAt.localeCompare(b.raisedAt))
+}
+
+function nextEscalationId(task: Task, escalations: Escalation[]): string {
+  const max = escalations.reduce((current, escalation) => {
+    const match = new RegExp(`^esc-${task.id}-(\\d+)$`).exec(escalation.id)
+    return Math.max(current, match ? Number(match[1]) : 0)
+  }, 0)
+  return `esc-${task.id}-${max + 1}`
 }
 
 function normalizeEscalationText(value: string | undefined): string {
   return (value ?? '').replace(/\s+/g, ' ').trim()
 }
 
-function findMatchingOpenEscalation(task: Task, input: RaiseEscalationInput): Escalation | null {
-  return task.escalations.find(escalation =>
+function findMatchingOpenEscalation(escalations: Escalation[], input: RaiseEscalationInput): Escalation | null {
+  return escalations.find(escalation =>
     !escalation.resolvedAt &&
     escalation.agentId === input.agentId &&
     escalation.reason === input.reason &&
     normalizeEscalationText(escalation.summary) === normalizeEscalationText(input.summary),
   ) ?? null
+}
+
+function projectRootForTaskState(tasksPath: string, task: Task): string {
+  const stateDir = path.dirname(tasksPath)
+  if (path.basename(stateDir) === 'project-state' && path.isAbsolute(task.projectPath)) {
+    return task.projectPath
+  }
+  return inferProjectRootFromMemoryDir(stateDir)
 }
 
 function looksLikeRoutineVerificationEscalation(input: RaiseEscalationInput): boolean {
@@ -99,10 +127,14 @@ export async function raiseEscalation(
   input: RaiseEscalationInput,
 ): Promise<RaiseEscalationResult> {
   try {
-    const raw = await fs.readFile(input.tasksPath, 'utf-8')
+    const raw = await readManagedTextFile(input.tasksPath, 'utf-8')
     const queue = TaskQueue.parse(JSON.parse(raw))
     const task = queue.tasks.find((t) => t.id === input.taskId)
     if (!task) return { success: false, error: `Task ${input.taskId} not found` }
+    const projectRoot = projectRootForTaskState(input.tasksPath, task)
+    const effectiveTask = await buildEffectiveTask(projectRoot, task) as unknown as Task
+    Object.assign(task, effectiveTask)
+    const effectiveEscalations = await readEffectiveEscalations(projectRoot, task)
 
     if (looksLikeRoutineVerificationEscalation(input)) {
       return {
@@ -120,14 +152,14 @@ export async function raiseEscalation(
       }
     }
 
-    const existing = findMatchingOpenEscalation(task, input)
+    const existing = findMatchingOpenEscalation(effectiveEscalations, input)
     if (existing) {
       return { success: true, escalationId: existing.id }
     }
 
     const now = new Date().toISOString()
     const escalation: Escalation = {
-      id: nextEscalationId(task),
+      id: nextEscalationId(task, effectiveEscalations),
       taskId: task.id,
       agentId: input.agentId,
       reason: input.reason,
@@ -136,23 +168,28 @@ export async function raiseEscalation(
       ...(input.details !== undefined ? { details: input.details } : {}),
       ...(input.externalChecklist !== undefined ? { externalChecklist: input.externalChecklist } : {}),
     }
-    task.escalations.push(escalation)
     task.status = 'blocked'
     task.blockReason = `${input.reason}: ${input.summary}`
     task.updatedAt = now
     queue.lastUpdated = now
 
-    atomicWriteText(input.tasksPath, JSON.stringify(queue, null, 2) + '\n')
-    await appendTaskEvidence(
-      inferProjectRootFromMemoryDir(path.dirname(input.tasksPath)),
-      task.id,
-      {
-        id: escalation.id,
-        kind: 'escalation',
-        recordedAt: now,
-        payload: escalation,
-      },
-    ).catch(() => undefined)
+    await appendTaskEvidence(projectRoot, task.id, {
+      id: escalation.id,
+      kind: 'escalation',
+      recordedAt: now,
+      payload: escalation,
+    })
+    await upsertTaskRuntimeState(projectRoot, task.id, {
+      ...(task.assignedTo !== undefined ? { assignedTo: task.assignedTo } : {}),
+      ...(task.revisionCount !== undefined ? { revisionCount: task.revisionCount } : {}),
+      ...(task.retryWindow ? { retryWindow: task.retryWindow } : {}),
+      ...(task.remediationAttempts !== undefined ? { remediationAttempts: task.remediationAttempts } : {}),
+      openEscalationIds: [...effectiveEscalations, escalation]
+        .filter((candidate) => !candidate.resolvedAt)
+        .map((candidate) => candidate.id),
+      updatedAt: now,
+    })
+    writeProjectTaskQueue(input.tasksPath, queue)
 
     if (input.progressPath) {
       const entry: ProgressEntry = {
@@ -309,12 +346,16 @@ export async function resolveEscalation(
   input: ResolveEscalationInput,
 ): Promise<ResolveEscalationResult> {
   try {
-    const raw = await fs.readFile(input.tasksPath, 'utf-8')
+    const raw = await readManagedTextFile(input.tasksPath, 'utf-8')
     const queue = TaskQueue.parse(JSON.parse(raw))
     const task = queue.tasks.find((t) => t.id === input.taskId)
     if (!task) return { success: false, error: `Task ${input.taskId} not found` }
+    const projectRoot = projectRootForTaskState(input.tasksPath, task)
+    const effectiveTask = await buildEffectiveTask(projectRoot, task) as unknown as Task
+    Object.assign(task, effectiveTask)
+    const effectiveEscalations = await readEffectiveEscalations(projectRoot, task)
 
-    const esc = task.escalations.find((e) => e.id === input.escalationId)
+    const esc = effectiveEscalations.find((e) => e.id === input.escalationId)
     if (!esc) {
       return {
         success: false,
@@ -332,17 +373,41 @@ export async function resolveEscalation(
     esc.resolvedAt = now
     esc.resolution = input.resolution
     esc.resolvedBy = input.resolvedBy ?? 'human'
+    task.escalations = effectiveEscalations
 
-    const stillOpen = task.escalations.some((e) => !e.resolvedAt)
+    const stillOpen = effectiveEscalations.some((e) => e.id !== esc.id && !e.resolvedAt)
+    let retryWindowPatch: Task['retryWindow'] | undefined
     if (!stillOpen) {
       normalizeAssignmentForResolvedStatus(task, input.nextStatus)
-      if (esc.reason === 'max_revisions_exceeded') ensureRetryWindow(task)
+      if (esc.reason === 'max_revisions_exceeded' && supportsRetryWindow(task.status)) {
+        ensureRetryWindow(task)
+        retryWindowPatch = task.retryWindow ?? {
+          startedAt: now,
+          baseRevisionCount: task.revisionCount,
+        }
+        task.retryWindow = retryWindowPatch
+      }
       delete task.blockReason
     }
     task.updatedAt = now
     queue.lastUpdated = now
 
-    atomicWriteText(input.tasksPath, JSON.stringify(queue, null, 2) + '\n')
+    await appendTaskEvidence(projectRoot, task.id, {
+      id: `${esc.id}-${now.replace(/[^0-9A-Za-z]/g, '')}`,
+      kind: 'escalation',
+      recordedAt: now,
+      payload: esc,
+    })
+    await upsertTaskRuntimeState(projectRoot, task.id, {
+      ...(task.assignedTo !== undefined ? { assignedTo: task.assignedTo } : {}),
+      ...(task.revisionCount !== undefined ? { revisionCount: task.revisionCount } : {}),
+      openEscalationIds: effectiveEscalations
+        .filter((candidate) => candidate.id !== esc.id && !candidate.resolvedAt)
+        .map((candidate) => candidate.id),
+      ...(retryWindowPatch ?? task.retryWindow ? { retryWindow: retryWindowPatch ?? task.retryWindow } : {}),
+      updatedAt: now,
+    })
+    writeProjectTaskQueue(input.tasksPath, queue)
 
     if (input.progressPath) {
       const entry: ProgressEntry = {
@@ -351,7 +416,7 @@ export async function resolveEscalation(
         domain: task.domain,
         taskId: task.id,
         summary: stillOpen
-          ? `Escalation ${esc.id} resolved (${task.escalations.filter((e) => !e.resolvedAt).length} still open): ${input.resolution}`
+          ? `Escalation ${esc.id} resolved (${effectiveEscalations.filter((e) => e.id !== esc.id && !e.resolvedAt).length} still open): ${input.resolution}`
           : `Escalation ${esc.id} resolved; task returning to ${input.nextStatus}: ${input.resolution}`,
         type: 'milestone',
       }

@@ -5,6 +5,11 @@ import os from 'node:os'
 import { bootstrapWorkspace } from '@guildhall/config'
 import { TaskQueue } from '@guildhall/core'
 import {
+  readProjectStateJsonAsync,
+  readProjectStateTextAsync,
+  writeProjectStateJsonFromMemoryDirAsync,
+} from '@guildhall/sessions'
+import {
   createWorkspaceImportTask,
   workspaceNeedsImport,
   approveWorkspaceImport,
@@ -39,12 +44,29 @@ afterEach(async () => {
 })
 
 async function readQueue(): Promise<TaskQueue> {
-  const raw = await fs.readFile(path.join(memoryDir, 'TASKS.json'), 'utf-8')
-  const parsed = JSON.parse(raw)
+  const parsed = await readProjectStateJsonAsync<unknown>(tmpDir, 'TASKS.json').catch((err: unknown) => {
+    if (
+      err &&
+      typeof err === 'object' &&
+      'code' in err &&
+      (err as { code?: unknown }).code === 'ENOENT'
+    ) {
+      return {
+        version: 1,
+        lastUpdated: new Date().toISOString(),
+        tasks: [],
+      }
+    }
+    throw err
+  })
   if (Array.isArray(parsed)) {
     return { version: 1, lastUpdated: new Date().toISOString(), tasks: parsed }
   }
   return TaskQueue.parse(parsed)
+}
+
+async function writeQueue(queue: TaskQueue): Promise<void> {
+  await writeProjectStateJsonFromMemoryDirAsync(memoryDir, 'TASKS.json', queue)
 }
 
 function invWith(signals: WorkspaceSignal[]): WorkspaceInventory {
@@ -204,10 +226,7 @@ describe('workspaceNeedsImport', () => {
       createdAt: now,
       updatedAt: now,
     })
-    await fs.writeFile(
-      path.join(memoryDir, 'TASKS.json'),
-      JSON.stringify(q, null, 2),
-    )
+    await writeQueue(q)
     const res = await workspaceNeedsImport({
       memoryDir,
       projectPath: tmpDir,
@@ -360,10 +379,7 @@ describe('approveWorkspaceImport', () => {
     const q = await readQueue()
     const task = q.tasks.find((t) => t.id === WORKSPACE_IMPORT_TASK_ID)!
     task.spec = spec
-    await fs.writeFile(
-      path.join(memoryDir, 'TASKS.json'),
-      JSON.stringify(q, null, 2),
-    )
+    await writeQueue(q)
   }
 
   it('errors when the importer task is missing', async () => {
@@ -471,21 +487,22 @@ milestones:
     expect(newTask.domain).toBe('ui')
     expect(newTask.priority).toBe('high')
     expect(newTask.notes[0]!.content).toContain('ROADMAP.md')
+    expect(newTask.requestIntake).toMatchObject({
+      intent: 'spec_only',
+      recommendedNextAction: 'draft_spec',
+      evidenceRefs: [expect.stringContaining('import:')],
+      pressureTestSummary: {
+        degree: 'guided',
+      },
+    })
 
-    const goalsRaw = await fs.readFile(
-      path.join(memoryDir, 'workspace-goals.json'),
-      'utf-8',
-    )
-    const goals = JSON.parse(goalsRaw)
+    const goals = await readProjectStateJsonAsync<{ goals: Array<{ id: string; title: string }> }>(tmpDir, 'workspace-goals.json')
     expect(goals.goals[0]).toMatchObject({
       id: 'g1',
       title: 'Ship orchestrator',
     })
 
-    const progress = await fs.readFile(
-      path.join(memoryDir, 'PROGRESS.md'),
-      'utf-8',
-    )
+    const progress = await readProjectStateTextAsync(tmpDir, 'PROGRESS.md')
     expect(progress).toContain('Ship v0.1.0')
     expect(progress).toContain('abc12345')
     expect(progress).toContain('MILESTONE')
@@ -690,11 +707,7 @@ tasks:
       yamlMilestoneBlock,
       '```',
     ].join('\n')
-    await fs.writeFile(
-      path.join(memoryDir, 'TASKS.json'),
-      JSON.stringify(qAfterSeed, null, 2),
-      'utf-8',
-    )
+    await writeQueue(qAfterSeed)
 
     // Approve → tasks merged, goals persisted, milestones logged.
     const approved = await approveWorkspaceImport({ memoryDir, projectPath: tmpDir })
@@ -720,18 +733,11 @@ tasks:
     }
 
     // workspace-goals.json persisted with every goal.
-    const goalsRaw = await fs.readFile(
-      path.join(memoryDir, 'workspace-goals.json'),
-      'utf-8',
-    )
-    const goalsPersisted = JSON.parse(goalsRaw)
+    const goalsPersisted = await readProjectStateJsonAsync<{ goals: unknown[] }>(tmpDir, 'workspace-goals.json')
     expect(goalsPersisted.goals).toHaveLength(seeded.draft.goals.length)
 
     // PROGRESS.md logs every completed milestone (e.g. "Initial scaffold").
-    const progress = await fs.readFile(
-      path.join(memoryDir, 'PROGRESS.md'),
-      'utf-8',
-    )
+    const progress = await readProjectStateTextAsync(tmpDir, 'PROGRESS.md')
     for (const m of seeded.draft.milestones) {
       expect(progress).toContain(m.title)
     }
@@ -884,7 +890,7 @@ tasks:
     ])
     expect(alertDialog.proofPaths).toEqual(
       expect.arrayContaining([
-        expect.objectContaining({ kind: 'command', command: expect.stringContaining('@looma/core') }),
+        expect.objectContaining({ kind: 'command', command: 'pnpm test -- alert-dialog' }),
       ]),
     )
 
@@ -893,6 +899,10 @@ tasks:
       domain: 'knit',
       projectPath: path.join(tmpDir, 'knit'),
       dependsOn: ['task-039'],
+    })
+    expect(alertDialog.requestIntake).toMatchObject({
+      intent: 'spec_only',
+      recommendedNextAction: 'draft_spec',
     })
     expect(alertDialogIntegration.acceptanceCriteria.map((criterion) => criterion.id)).toEqual([
       'public-consumer-import',
@@ -974,5 +984,27 @@ describe('formatDetectedDraftAsSpec', () => {
     const spec = formatDetectedDraftAsSpec(draft)
     const parsed = parseWorkspaceImport(spec)
     expect(parsed.goals[0]?.title).toBe('Add "dark" mode')
+  })
+
+  it('round-trips richer import-draft shaping fields', () => {
+    const inventory = invWith([
+      {
+        source: 'roadmap',
+        kind: 'open_work',
+        title: 'Ship invite flow',
+        evidence: 'Complete the missing invite redirect and success state.',
+        confidence: 'medium',
+        references: ['ROADMAP.md'],
+      },
+    ])
+    const draft = formWorkspaceHypothesis(inventory)
+    const spec = formatDetectedDraftAsSpec(draft)
+    const parsed = parseWorkspaceImport(spec)
+    expect(parsed.tasks[0]).toMatchObject({
+      title: 'Ship invite flow',
+      whyThisMayMatter: 'Complete the missing invite redirect and success state.',
+      assumptions: expect.any(Array),
+      missingInformation: expect.any(Array),
+    })
   })
 })

@@ -1,5 +1,5 @@
 <!--
-  New request modal. Starts with a freeform request and lets users switch
+  New thread modal. Starts with a freeform request and lets users switch
   into the dedicated bug-report form only when they need stack-trace capture.
 -->
 <script lang="ts">
@@ -9,8 +9,9 @@
   import Input from '../lib/Input.svelte'
   import Select from '../lib/Select.svelte'
   import Textarea from '../lib/Textarea.svelte'
+  import { nav } from '../lib/nav.svelte.js'
   import { project } from '../lib/project.svelte.js'
-  import { projectFetch } from '../lib/project-routes.js'
+  import { currentProjectHref, projectFetch } from '../lib/project-routes.js'
   interface Props {
     onClose: () => void
   }
@@ -59,8 +60,8 @@
     }
   })
 
-  function notifyRequestCreated() {
-    window.dispatchEvent(new CustomEvent('guildhall:request-created'))
+  function notifyRequestCreated(detail: Record<string, unknown> = {}) {
+    window.dispatchEvent(new CustomEvent('guildhall:request-created', { detail }))
   }
 
   async function submit() {
@@ -99,8 +100,12 @@
       })
       const j = await res.json()
       if (j.error) return (error = 'Request failed: ' + j.error)
+      const boundedChatId = typeof j?.boundedChat?.id === 'string' ? j.boundedChat.id : null
       requestClose()
-      notifyRequestCreated()
+      notifyRequestCreated({
+        boundedChatId,
+      })
+      nav(currentProjectHref(boundedChatId ? `/thread?thread=${encodeURIComponent(boundedChatId)}` : '/thread'))
       setTimeout(() => void project.refresh(), 400)
     } finally {
       busy = false
@@ -126,7 +131,7 @@
   onclick={onBackdrop}
 >
   <div class:closing class="modal" role="dialog" aria-modal="true" aria-labelledby="intake-title">
-    <h2 id="intake-title">New request</h2>
+    <h2 id="intake-title">New thread</h2>
     <Stack gap="3">
       {#if mode === 'bug'}
         <label class="field">
@@ -156,11 +161,11 @@
         </label>
       {:else}
         <label class="field">
-          <span>What should Guildhall work through?</span>
+          <span>What should the next request cover?</span>
           <Textarea
             bind:value={ask}
             rows={5}
-            placeholder="Describe the request in plain language. Guildhall will ask follow-up questions before work starts."
+            placeholder="Describe the request in plain language. Follow-up questions may come before work starts."
           />
         </label>
         <label class="field">
@@ -175,13 +180,13 @@
 
       <Row justify="end" gap="2">
         {#if mode === 'bug'}
-          <Button variant="ghost" disabled={busy} onclick={() => (mode = 'request')}>Create request instead</Button>
+          <Button variant="ghost" disabled={busy} onclick={() => (mode = 'request')}>Start a thread instead</Button>
         {:else}
           <Button variant="ghost" disabled={busy} onclick={() => (mode = 'bug')}>File a bug instead</Button>
         {/if}
         <Button variant="secondary" disabled={busy} onclick={requestClose}>Cancel</Button>
         <Button variant="primary" disabled={busy} onclick={submit}>
-          {mode === 'bug' ? (busy ? 'Filing...' : 'File bug') : busy ? 'Creating...' : 'Create request'}
+          {mode === 'bug' ? (busy ? 'Filing...' : 'File bug') : busy ? 'Creating...' : 'Start thread'}
         </Button>
       </Row>
     </Stack>
@@ -239,8 +244,8 @@
     pointer-events: none;
   }
   h2 {
-    font-size: var(--fs-4);
-    font-weight: 700;
+    font-size: var(--gh-type-size-section-title);
+    font-weight: var(--gh-type-weight-strong);
   }
   .field {
     display: flex;
@@ -249,11 +254,11 @@
   }
   .field > span:first-child {
     color: var(--text-muted);
-    font-size: var(--fs-1);
+    font-size: var(--gh-type-size-meta);
   }
   .error {
     color: var(--danger);
-    font-size: var(--fs-2);
+    font-size: var(--gh-type-size-body);
   }
 
   @keyframes intake-backdrop-in {

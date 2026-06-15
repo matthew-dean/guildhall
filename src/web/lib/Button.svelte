@@ -14,6 +14,7 @@
     size?: Size
     disabled?: boolean
     iconOnly?: boolean
+    rounded?: boolean
     type?: 'button' | 'submit'
     ariaLabel?: string
     pressed?: boolean
@@ -28,6 +29,7 @@
     size = 'md',
     disabled = false,
     iconOnly = false,
+    rounded = false,
     type = 'button',
     ariaLabel,
     pressed,
@@ -35,15 +37,17 @@
     className = '',
     onclick,
     children,
+    ...restProps
   }: Props = $props()
 </script>
 
 {#snippet buttonElement()}
   <button
-    class={`btn v-${variant} s-${size} ${iconOnly ? 'icon-only' : ''} ${className}`.trim()}
+    class={`btn v-${variant} s-${size} ${iconOnly ? 'icon-only' : ''} ${rounded ? 'rounded' : ''} ${className}`.trim()}
     {type}
     {disabled}
     {onclick}
+    {...restProps}
     aria-label={ariaLabel}
     aria-pressed={pressed}
   >
@@ -67,11 +71,11 @@
     gap: var(--s-2);
     border: 1px solid transparent;
     border-radius: var(--r-1);
-    font-weight: 600;
-    font-size: var(--fs-2);
+    font-weight: var(--gh-type-weight-strong);
+    font-size: var(--gh-type-size-body);
     font-family: inherit;
     cursor: pointer;
-    line-height: 1;
+    line-height: var(--gh-type-line-height-control);
     min-height: var(--control-h);
     white-space: nowrap;
     transition:
@@ -97,7 +101,7 @@
     background:
       linear-gradient(180deg, color-mix(in srgb, white 18%, transparent), transparent 48%),
       linear-gradient(100deg, var(--light-violet-warm), var(--accent) 64%, color-mix(in srgb, var(--accent) 88%, black));
-    color: white;
+    color: var(--gh-color-text-primary);
     border-color: color-mix(in srgb, var(--accent) 65%, white 18%);
     box-shadow:
       var(--light-emitted-accent),
@@ -107,7 +111,7 @@
     background:
       linear-gradient(180deg, color-mix(in srgb, white 18%, transparent), transparent 48%),
       linear-gradient(100deg, var(--light-violet-warm), var(--accent) 64%, color-mix(in srgb, var(--accent) 88%, black));
-    color: white;
+    color: var(--gh-color-text-primary);
     border-color: color-mix(in srgb, var(--accent) 65%, white 18%);
     box-shadow:
       var(--light-emitted-accent),
@@ -151,7 +155,7 @@
     background:
       linear-gradient(180deg, color-mix(in srgb, white 16%, transparent), transparent 48%),
       var(--danger);
-    color: white;
+    color: var(--gh-color-text-primary);
     border-color: color-mix(in srgb, var(--danger) 70%, white 14%);
     box-shadow:
       0 0 16px color-mix(in srgb, var(--danger) 28%, transparent),
@@ -183,5 +187,19 @@
   .s-sm.icon-only {
     width: 28px;
     min-width: 28px;
+  }
+  .rounded.icon-only {
+    width: var(--control-h);
+    min-width: var(--control-h);
+    height: var(--control-h);
+    min-height: var(--control-h);
+    padding: 0;
+    border-radius: var(--gh-radius-full);
+  }
+  .s-sm.rounded.icon-only {
+    width: 32px;
+    min-width: 32px;
+    height: 32px;
+    min-height: 32px;
   }
 </style>

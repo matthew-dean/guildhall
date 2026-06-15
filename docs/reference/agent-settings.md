@@ -16,10 +16,10 @@ During onboarding, meta-intake may infer initial positions from your project-gui
 Learned behavior is stored separately. `./.guildhall/learning.json` holds
 project-scoped learned defaults and suggestions, `./.guildhall/project-skills.json`
 holds project skill proposals, and `~/.guildhall/learning.json` holds
-user/global preferences. Use Settings → Memory to inspect project memories,
-cross-project preferences, project playbooks, and product ideas. Suggested
-records stay off until you choose to use them; `./.guildhall/agent-settings.yaml` remains
-the explicit lever file.
+user/global preferences. Use the memory review surfaces to inspect project
+memories, cross-project preferences, project playbooks, and product ideas.
+Suggested records stay off until you choose to use them;
+`./.guildhall/agent-settings.yaml` remains the explicit lever file.
 
 User/global preference records may include a structured `preference` payload.
 That payload uses an open `subject` taxonomy plus array-based `prefer` and

@@ -1,16 +1,13 @@
 <script lang="ts">
-  import {
-    Activity,
-    AlertTriangle,
-    CheckCircle2,
-    FolderOpen,
-    PauseCircle,
-    Sparkles,
-    Square,
-  } from 'lucide-svelte'
+  import Activity from 'lucide-svelte/icons/activity'
+  import AlertTriangle from 'lucide-svelte/icons/triangle-alert'
+  import CheckCircle2 from 'lucide-svelte/icons/check-circle-2'
+  import FolderOpen from 'lucide-svelte/icons/folder-open'
+  import PauseCircle from 'lucide-svelte/icons/circle-pause'
+  import Sparkles from 'lucide-svelte/icons/sparkles'
   import ActionBar from './ActionBar.svelte'
   import Button from './Button.svelte'
-  import Card from './Card.svelte'
+  import Card from './ui-compat/Card.svelte'
   import Chip from './Chip.svelte'
   import Tooltip from './Tooltip.svelte'
   import { avatarToneForRole } from './avatar-palette.js'
@@ -40,7 +37,7 @@
 
   const displayStatusLabel = $derived(optimisticRunning ? 'Starting' : summary.statusLabel)
   const statusTitle = $derived(summary.projectCheckIn?.needed
-    ? summary.projectCheckIn.detail ?? 'Answer the first project questions so Guildhall can use current project context.'
+    ? summary.projectCheckIn.detail ?? 'Answer the first project questions so current project context can be used.'
     : `Project status: ${displayStatusLabel}`)
   const showMaturityChip = $derived(
     !summary.projectCheckIn?.needed &&
@@ -95,6 +92,8 @@
           ? `${summary.counts.draftReview} drafts`
           : summary.counts.done > 0
             ? `${summary.counts.done} done`
+            : summary.needsAttention
+            ? 'needs input'
             : 'ready',
   )
   const openTitle = $derived(`Open ${summary.name} project`)
@@ -108,8 +107,12 @@
     return count === 1 ? singular : plural
   }
 
+  function workItemNoun(count: number): string {
+    return count === 1 ? 'work item' : 'work items'
+  }
+
   function activeTooltip(count = summary.counts.active): string {
-    return `${count} active ${taskNoun(count, 'task')}: work Guildhall can currently advance or is advancing.`
+    return `${count} active ${workItemNoun(count)}: work that can currently advance or is advancing.`
   }
 
   function draftTooltip(count = summary.counts.draftReview): string {
@@ -117,19 +120,19 @@
   }
 
   function blockedTooltip(count = summary.counts.blocked): string {
-    return `${count} blocked ${taskNoun(count, 'task')}: work needing triage, recovery, or a human decision.`
+    return `${count} blocked ${workItemNoun(count)}: work needing triage, recovery, or a human decision.`
   }
 
   function doneTooltip(count = summary.counts.done): string {
-    return `${count} done ${taskNoun(count, 'task')}: completed task records.`
+    return `${count} done ${workItemNoun(count)}: completed work.`
   }
 
   function shelvedTooltip(count = summary.counts.shelved): string {
-    return `${count} shelved ${taskNoun(count, 'task')}: intentionally set aside or no longer part of the active plan.`
+    return `${count} shelved ${workItemNoun(count)}: intentionally set aside or no longer part of the active plan.`
   }
 
   function totalTooltip(count = summary.counts.total): string {
-    return `${count} total ${taskNoun(count, 'task')} tracked by Guildhall for this project.`
+    return `${count} total ${workItemNoun(count)} tracked for this project.`
   }
 
   function guildMemberTooltip(member: { role: string; active: boolean }): string {
@@ -140,9 +143,9 @@
       case 'Spec':
         return `${member.role}: ${summary.counts.draftReview} draft ${taskNoun(summary.counts.draftReview, 'brief')} awaiting review in ${summary.name}.`
       case 'Builder':
-        return `${member.role}: ${summary.counts.active} active ${taskNoun(summary.counts.active, 'task')} waiting for a run in ${summary.name}.`
+        return `${member.role}: ${summary.counts.active} active ${workItemNoun(summary.counts.active)} waiting for a run in ${summary.name}.`
       case 'Reviewer':
-        return `${member.role}: ${summary.counts.blocked} blocked and ${summary.counts.done} done ${taskNoun(summary.counts.done, 'task')} in ${summary.name}.`
+        return `${member.role}: ${summary.counts.blocked} blocked and ${summary.counts.done} done ${workItemNoun(summary.counts.done)} in ${summary.name}.`
       default:
         return `${member.role}: part of the ${summary.name} project workflow.`
     }
@@ -210,7 +213,7 @@
       <div class="workline" aria-label={workMixLabel}>
         {#if summary.counts.active > 0}
           <Tooltip text={activeTooltip()} style={segmentFlex(summary.counts.active)} className="work-segment-tip">
-            <span class="work-segment segment-active" aria-label={`${summary.counts.active} active ${taskNoun(summary.counts.active, 'task')}`}></span>
+            <span class="work-segment segment-active" aria-label={`${summary.counts.active} active ${workItemNoun(summary.counts.active)}`}></span>
           </Tooltip>
         {/if}
         {#if summary.counts.draftReview > 0}
@@ -220,22 +223,22 @@
         {/if}
         {#if summary.counts.blocked > 0}
           <Tooltip text={blockedTooltip()} style={segmentFlex(summary.counts.blocked)} className="work-segment-tip">
-            <span class="work-segment segment-blocked" aria-label={`${summary.counts.blocked} blocked ${taskNoun(summary.counts.blocked, 'task')}`}></span>
+            <span class="work-segment segment-blocked" aria-label={`${summary.counts.blocked} blocked ${workItemNoun(summary.counts.blocked)}`}></span>
           </Tooltip>
         {/if}
         {#if summary.counts.done > 0}
           <Tooltip text={doneTooltip()} style={segmentFlex(summary.counts.done)} className="work-segment-tip">
-            <span class="work-segment segment-done" aria-label={`${summary.counts.done} done ${taskNoun(summary.counts.done, 'task')}`}></span>
+            <span class="work-segment segment-done" aria-label={`${summary.counts.done} done ${workItemNoun(summary.counts.done)}`}></span>
           </Tooltip>
         {/if}
         {#if summary.counts.shelved > 0}
           <Tooltip text={shelvedTooltip()} style={segmentFlex(summary.counts.shelved)} className="work-segment-tip">
-            <span class="work-segment segment-shelved" aria-label={`${summary.counts.shelved} shelved ${taskNoun(summary.counts.shelved, 'task')}`}></span>
+            <span class="work-segment segment-shelved" aria-label={`${summary.counts.shelved} shelved ${workItemNoun(summary.counts.shelved)}`}></span>
           </Tooltip>
         {/if}
         {#if summary.counts.total === 0}
-          <Tooltip text="No tasks yet" style={segmentFlex(workMixTotal)} className="work-segment-tip">
-            <span class="work-segment segment-empty" aria-label="No tasks yet"></span>
+          <Tooltip text="No work items yet" style={segmentFlex(workMixTotal)} className="work-segment-tip">
+            <span class="work-segment segment-empty" aria-label="No work items yet"></span>
           </Tooltip>
         {/if}
       </div>
@@ -282,7 +285,7 @@
     <div class="metrics" aria-label="Project task summary">
       {#if summary.counts.active > 0}
         <Tooltip text={activeTooltip()}>
-          <span class="metric tone-running" aria-label={`${summary.counts.active} active ${taskNoun(summary.counts.active, 'task')}`}>
+          <span class="metric tone-running" aria-label={`${summary.counts.active} active ${workItemNoun(summary.counts.active)}`}>
             <Activity size={13} />
             <strong>{summary.counts.active}</strong>
           </span>
@@ -298,7 +301,7 @@
       {/if}
       {#if summary.counts.blocked > 0}
         <Tooltip text={blockedTooltip()}>
-          <span class="metric tone-warn" aria-label={`${summary.counts.blocked} blocked ${taskNoun(summary.counts.blocked, 'task')}`}>
+          <span class="metric tone-warn" aria-label={`${summary.counts.blocked} blocked ${workItemNoun(summary.counts.blocked)}`}>
             <AlertTriangle size={13} />
             <strong>{summary.counts.blocked}</strong>
           </span>
@@ -306,7 +309,7 @@
       {/if}
       {#if summary.counts.done > 0}
         <Tooltip text={doneTooltip()}>
-          <span class="metric tone-ok" aria-label={`${summary.counts.done} done ${taskNoun(summary.counts.done, 'task')}`}>
+          <span class="metric tone-ok" aria-label={`${summary.counts.done} done ${workItemNoun(summary.counts.done)}`}>
             <CheckCircle2 size={13} />
             <strong>{summary.counts.done}</strong>
           </span>
@@ -314,7 +317,7 @@
       {/if}
       {#if summary.counts.total > 0}
         <Tooltip text={totalTooltip()}>
-          <span class="metric tone-neutral" aria-label={`${summary.counts.total} total ${taskNoun(summary.counts.total, 'task')}`}>
+          <span class="metric tone-neutral" aria-label={`${summary.counts.total} total ${workItemNoun(summary.counts.total)}`}>
             <PauseCircle size={13} />
             <strong>{summary.counts.total}</strong>
           </span>
@@ -334,9 +337,9 @@
           {summary.runActionLabel}
         </Button>
       {:else if effectiveRunning}
-        <Button variant="danger" size="sm" disabled={busy} title={`Stop Guildhall on ${summary.name}`} onclick={() => onStop?.(summary.id)}>
-          <Square size={13} />
-          Stop
+        <Button variant="secondary" size="sm" disabled={busy} title={`Pause Guildhall on ${summary.name}`} onclick={() => onStop?.(summary.id)}>
+          <PauseCircle size={14} />
+          Pause
         </Button>
       {/if}
     </ActionBar>
@@ -390,9 +393,9 @@
   }
   h3 {
     margin: 0;
-    font-size: var(--fs-4);
-    font-weight: 700;
-    line-height: var(--lh-tight);
+    font-size: var(--gh-type-size-section-title);
+    font-weight: var(--gh-type-weight-strong);
+    line-height: var(--gh-type-line-height-tight);
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
@@ -416,7 +419,7 @@
   .path {
     margin: var(--s-1) 0 0;
     color: var(--text-muted);
-    font-size: var(--fs-0);
+    font-size: var(--gh-type-size-caption);
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
@@ -541,13 +544,13 @@
   }
   .activity {
     margin: 0;
-    font-size: var(--fs-0);
-    line-height: var(--lh-body);
+    font-size: var(--gh-type-size-caption);
+    line-height: var(--gh-type-line-height-body);
     display: flex;
     align-items: center;
     gap: var(--s-2);
     color: var(--text);
-    font-weight: 700;
+    font-weight: var(--gh-type-weight-strong);
   }
   .activity :global(svg) {
     color: var(--accent-2);
@@ -587,8 +590,8 @@
     border-radius: 999px;
     background: color-mix(in srgb, var(--avatar-color) 24%, var(--bg-raised));
     color: color-mix(in srgb, var(--avatar-color) 88%, white);
-    font-size: 0.62rem;
-    font-weight: 800;
+    font-size: var(--gh-type-size-caption);
+    font-weight: var(--gh-type-weight-strong);
     flex: none;
   }
   .project-guild-label {
@@ -597,8 +600,8 @@
     text-overflow: ellipsis;
     white-space: nowrap;
     color: var(--text-muted);
-    font-size: 0.68rem;
-    font-weight: 700;
+    font-size: var(--gh-type-size-caption);
+    font-weight: var(--gh-type-weight-strong);
     letter-spacing: 0;
   }
   .project-guild-member-active {
@@ -644,12 +647,12 @@
     gap: 0.35rem;
     padding: 0.16rem 0.34rem;
     border-radius: 999px;
-    font-size: var(--fs-0);
-    font-weight: 700;
-    line-height: 1;
+    font-size: var(--gh-type-size-caption);
+    font-weight: var(--gh-type-weight-strong);
+    line-height: var(--gh-type-line-height-control);
   }
   .metric strong {
-    font-size: var(--fs-1);
+    font-size: var(--gh-type-size-meta);
   }
   .tone-running {
     background: rgba(78, 204, 163, 0.15);

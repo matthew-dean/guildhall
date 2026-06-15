@@ -1,5 +1,5 @@
 <script lang="ts">
-  import Card from '../../lib/Card.svelte'
+  import Card from '../../lib/ui-compat/Card.svelte'
   import Button from '../../lib/Button.svelte'
   import Chip from '../../lib/Chip.svelte'
   import Icon from '../../lib/Icon.svelte'
@@ -8,8 +8,8 @@
   import StateSummary from '../../lib/StateSummary.svelte'
   import StatusLine from '../../lib/StatusLine.svelte'
   import StatusLight from '../../lib/StatusLight.svelte'
-  import AgentQuestion from '../../lib/AgentQuestion.svelte'
   import Markdown from '../../lib/Markdown.svelte'
+  import { deliveryProgressBadge, type TaskWorkProgressDisplay } from '../../lib/work-progress-display.js'
   import {
     escalationPrimaryAction,
     escalationReasonLabel,
@@ -24,13 +24,12 @@
     needsRecovery,
   } from '../../lib/task-state.js'
   import type {
-    AgentQuestion as Question,
     Task,
     TaskThreadTurn,
     TaskThreadEscalationTurn,
     TaskThreadInFlightTurn,
-    TaskThreadQuestionTurn,
     ExternalBlockerStep,
+    ContextDebugRecord,
   } from '../../lib/types.js'
 
   interface Props {
@@ -40,7 +39,10 @@
     runBusy?: boolean
     runError?: string | null
     runStatus?: string
+    availabilityStatus?: string | null
     projectStartBlockerMessage?: string | null
+    contextDebug?: ContextDebugRecord[]
+    workProgress?: TaskWorkProgressDisplay | null
     onApproveBrief: () => void
     onApproveSpec: () => void
     onRunTask: () => void
@@ -48,7 +50,7 @@
     onOpenSpecTab: () => void
     onOpenEscalationAction: (escalationId: string, mode: 'retry' | 'resolve') => void
     onRunEscalationAction: (escalationId: string) => void
-    onAnswerQuestion: (questionId: string, answer: string) => Promise<void>
+    onOpenThread: () => void
   }
 
   let {
@@ -58,7 +60,10 @@
     runBusy = false,
     runError = null,
     runStatus = 'stopped',
+    availabilityStatus = 'active',
     projectStartBlockerMessage = null,
+    contextDebug = [],
+    workProgress = null,
     onApproveBrief,
     onApproveSpec,
     onRunTask,
@@ -66,7 +71,7 @@
     onOpenSpecTab,
     onOpenEscalationAction,
     onRunEscalationAction,
-    onAnswerQuestion,
+    onOpenThread,
   }: Props = $props()
 
   const relevantTurns = $derived.by(() =>
@@ -81,6 +86,9 @@
   )
 
   const taskNeedsBriefCleanup = $derived(needsWorkerHandoffSpecCleanup(task))
+  const latestMemoryCore = $derived(contextDebug.find(record => record.memoryPacket?.memoryCore)?.memoryPacket?.memoryCore)
+  const deliveryBadge = $derived(deliveryProgressBadge(workProgress))
+  const blockedDeliveryStep = $derived(workProgress?.deliverySteps?.find(step => step.status === 'blocked') ?? null)
 
   function activityElapsed(iso: string | undefined): string | null {
     if (!iso) return null
@@ -96,36 +104,38 @@
 
   function taskStateLabel(turn: TaskThreadInFlightTurn): string {
     if (needsRecovery(turn)) return 'Needs recovery'
-    if (briefShapingTimedOut(turn)) return 'Shaping timed out'
-    if (briefShapingPaused(turn)) return 'Shaping paused'
-    if (turn.liveAgent?.name === 'spec-agent') return turn.importedDraft ? 'Shaping draft' : 'Drafting'
-    if (turn.liveAgent?.name?.startsWith('coordinator-')) return 'Ready'
-    if (turn.liveAgent?.name === 'worker-agent') return 'In flight'
+    if (briefShapingTimedOut(turn)) return 'Blocked'
+    if (briefShapingPaused(turn)) return 'Paused'
+    if (turn.liveAgent?.name === 'spec-agent') return 'Working'
+    if (turn.liveAgent?.name?.startsWith('coordinator-')) return 'Working'
+    if (turn.liveAgent?.name === 'worker-agent') return 'Working'
     if (turn.liveAgent?.name === 'reviewer-agent') return 'Review'
     if (turn.liveAgent?.name === 'gate-checker-agent') return 'Gates'
     switch (turn.taskStatus) {
-      case 'import_draft': return 'Needs task brief'
-      case 'exploring': return isImportedDraftShaping(turn) ? 'Guildhall shaping' : isQueuedSpecRevision(turn) ? 'Spec revision queued' : 'Intake'
+      case 'import_draft': return 'Needs brief'
+      case 'exploring':
+        if (!isProjectRunActive()) return 'Paused'
+        return 'Queued'
       case 'ready':
-        if (hasIncompleteTaskChecklist(turn)) return 'Needs task brief'
-        if (isProjectRunActive()) return 'Queued for Guildhall'
+        if (needsWorkerHandoffSpecCleanup(turn)) return 'Needs brief'
+        if (isProjectRunActive()) return 'Queued'
         return 'Ready'
       case 'gate_check': return 'Gates'
       case 'review': return 'Review'
-      case 'in_progress': return turn.liveAgent ? 'In flight' : 'Paused'
-      default: return canRunTask(turn) ? 'Queued' : 'In flight'
+      case 'in_progress': return turn.liveAgent ? 'Working' : 'Paused'
+      default: return canRunTask(turn) ? 'Queued' : 'Working'
     }
   }
 
   function taskStateDescription(turn: TaskThreadInFlightTurn): string {
     if (needsRecovery(turn)) {
-      return 'Guildhall made partial progress, then the agent failed. Review the durable worktree changes or restart from that recovery point.'
+      return 'Partial progress was saved, then the agent failed. Review the durable worktree changes or restart from that recovery point.'
     }
     if (briefShapingTimedOut(turn)) {
-      return 'Guildhall stopped while shaping the brief before it could write the missing acceptance criteria. Try again from this task, or open the spec if you want to add the checks yourself.'
+      return 'Shaping stopped before the missing acceptance criteria were written. Try again from this task, or open the spec if you want to add the checks yourself.'
     }
     if (briefShapingPaused(turn)) {
-      return 'Guildhall stopped before writing the missing acceptance criteria. Try again from this task, or open the spec if you want to add the checks yourself.'
+      return 'The missing acceptance criteria were not written before the pause. Try again from this task, or open the spec if you want to add the checks yourself.'
     }
     if (
       turn.liveAgent?.lastEventLabel === 'Waiting for the local model to respond.' &&
@@ -134,64 +144,69 @@
       return 'Local model is still loading or generating.'
     }
     if (turn.liveAgent?.name === 'spec-agent') {
-      if (turn.importedDraft) return 'Guildhall is drafting the task brief for this imported note now.'
-      return 'Guildhall is drafting this now.'
+      if (turn.importedDraft) return 'The task brief for this imported note is being drafted now.'
+      return 'Drafting is in progress now.'
     }
     if (turn.taskStatus === 'ready' && !turn.liveAgent) {
-      if (hasIncompleteTaskChecklist(turn)) {
+      if (needsWorkerHandoffSpecCleanup(turn)) {
         return briefFixDescription(turn)
       }
       if (projectStartBlockerMessage) {
         return projectStartBlockerMessage
       }
       if (isProjectRunActive()) {
-        return 'Approved and queued. Guildhall is already running for this project, so this task will stay in the queue until the coordinator picks it.'
+        return 'Approved and queued. A run is already active for this project, so this task will stay in the queue until the coordinator picks it.'
       }
-      return 'Approved and queued. Start only this work item when you want Guildhall to pick it up.'
+      return 'Approved and queued. Resume only this work item when you want it picked up.'
     }
     if (turn.taskStatus === 'import_draft' && !turn.liveAgent) {
       return 'Imported from your project notes, but not ready for a worker yet. Next step: turn this note into a task brief with scope, evidence, and acceptance criteria.'
     }
     if (turn.taskStatus === 'exploring' && !turn.liveAgent) {
+      if (!isProjectRunActive()) {
+        return isQueuedSpecRevision(turn)
+          ? 'The draft spec and your latest answers are saved. Coordinator review is paused until the run resumes.'
+          : 'Shaping is paused. Resume when you want this task to keep moving.'
+      }
       if (isQueuedSpecRevision(turn)) {
-        return 'Guildhall already has the draft spec plus your latest answers. Start Guildhall when you want it to revise the spec.'
+        return 'The draft spec and your latest answers are saved. Coordinator review is queued.'
       }
       return turn.importedDraft
-        ? 'Guildhall is shaping the task brief for this imported note. You can add context, but you do not need to babysit the draft.'
-        : 'Guildhall has started shaping this task, but the brief is not ready yet. The checklist below shows what is still missing.'
+        ? 'The task brief for this imported note is being shaped. You can add context, but you do not need to babysit the draft.'
+        : 'Task shaping has started, but the brief is not ready yet. The checklist below shows what is still missing.'
     }
     if (turn.taskStatus === 'in_progress' && !turn.liveAgent) {
-      return 'Work is paused. Start Guildhall when you want it to continue.'
+      return 'Work is paused. Resume when you want it to continue.'
     }
     if (turn.taskStatus === 'review' && !turn.liveAgent) {
-      return 'Review is queued. Start Guildhall when you want it to continue.'
+      return 'Review is queued. Resume when you want it to continue.'
     }
     if (turn.taskStatus === 'gate_check' && !turn.liveAgent) {
-      return 'Gate checks are queued. Start Guildhall when you want it to continue.'
+      return 'Gate checks are queued. Resume when you want them to continue.'
     }
     return turn.summary
   }
 
-  function taskStateTone(turn: TaskThreadInFlightTurn): 'neutral' | 'ok' | 'warn' | 'danger' | 'accent' | 'running' | 'agent' | 'agent-attention' {
+  function taskStateTone(turn: TaskThreadInFlightTurn): 'neutral' | 'ok' | 'warn' | 'danger' | 'accent' | 'running' {
     if (needsRecovery(turn)) return 'warn'
     if (briefShapingTimedOut(turn)) return 'warn'
     if (briefShapingPaused(turn)) return 'warn'
     if (turn.liveAgent) return 'running'
-    if (turn.taskStatus === 'ready' && hasIncompleteTaskChecklist(turn)) return 'agent-attention'
+    if (needsWorkerHandoffSpecCleanup(turn)) return 'warn'
     switch (turn.taskStatus) {
-      case 'ready': return 'agent'
-      case 'import_draft': return 'agent-attention'
-      case 'gate_check': return 'agent'
-      case 'review': return 'agent'
-      case 'exploring': return 'agent'
+      case 'ready': return isProjectRunActive() ? 'running' : 'ok'
+      case 'import_draft': return 'warn'
+      case 'gate_check': return 'ok'
+      case 'review': return 'ok'
+      case 'exploring': return 'running'
       case 'in_progress': return 'neutral'
-      default: return 'neutral'
+      default: return canRunTask(turn) ? 'running' : 'neutral'
     }
   }
 
   function canRunTask(turn: TaskThreadInFlightTurn): boolean {
     if (projectStartBlockerMessage) return false
-    if (turn.taskStatus === 'ready' && hasIncompleteTaskChecklist(turn)) return false
+    if (needsWorkerHandoffSpecCleanup(turn)) return false
     if (isProjectRunActive() && turn.taskStatus !== 'import_draft') return false
     return !turn.liveAgent && (
       turn.taskStatus === 'ready' ||
@@ -240,7 +255,7 @@
       )
     }
     return canRunTask(turn) ||
-      (!turn.liveAgent && turn.taskStatus === 'ready' && hasIncompleteTaskChecklist(turn)) ||
+      (!turn.liveAgent && needsWorkerHandoffSpecCleanup(turn)) ||
       (!turn.liveAgent && turn.taskStatus !== 'import_draft' && isProjectRunActive())
   }
 
@@ -248,7 +263,7 @@
     if (projectStartBlockerMessage) return 'Project blocked'
     if (briefShapingTimedOut(turn) || briefShapingPaused(turn)) return 'Try shaping brief again'
     switch (turn.taskStatus) {
-      case 'ready': return hasIncompleteTaskChecklist(turn) ? briefFixButtonLabel(turn) : 'Start only this work item'
+      case 'ready': return needsWorkerHandoffSpecCleanup(turn) ? briefFixButtonLabel(turn) : 'Resume only this work item'
       case 'import_draft': return 'Draft task brief'
       case 'exploring':
         if (turn.importedDraft || hasIncompleteTaskChecklist(turn)) return 'Continue shaping brief'
@@ -277,38 +292,41 @@
 
   function briefFixTitle(turn: TaskThreadInFlightTurn): string {
     switch (missingBriefFieldKind(turn)) {
-      case 'success': return 'Brief cleanup needed'
-      case 'acceptance': return 'Brief cleanup needed'
-      case 'both': return 'Brief cleanup needed'
-      default: return 'Brief cleanup needed'
+      case 'success': return 'Needs brief'
+      case 'acceptance': return 'Needs brief'
+      case 'both': return 'Needs brief'
+      default: return 'Needs brief'
     }
   }
 
   function briefFixDescription(turn: TaskThreadInFlightTurn): string {
+    if (missingChecklistSteps(turn).length === 0 && needsWorkerHandoffSpecCleanup(turn)) {
+      return 'The starter checklist is complete, but a full product brief and spec handoff are still needed before a worker can start.'
+    }
     switch (missingBriefFieldKind(turn)) {
       case 'success':
-        return 'Guildhall needs to turn the source notes into a success target before implementation.'
+        return 'The source notes need a success target before implementation.'
       case 'acceptance':
-        return 'Guildhall needs to turn the source notes into concrete acceptance checks before implementation.'
+        return 'The source notes need concrete acceptance checks before implementation.'
       case 'both':
-        return 'Guildhall needs to turn the source notes into an outcome and acceptance checks before implementation.'
+        return 'The source notes need an outcome and acceptance checks before implementation.'
       default:
-        return 'Guildhall needs to turn the missing task-brief field into a usable task brief before implementation.'
+        return 'The missing task-brief field needs to become a usable task brief before implementation.'
     }
   }
 
   function briefFixButtonLabel(turn: TaskThreadInFlightTurn): string {
     switch (missingBriefFieldKind(turn)) {
-      case 'success': return 'Start'
-      case 'acceptance': return 'Start'
-      default: return 'Start'
+      case 'success': return 'Clean up brief'
+      case 'acceptance': return 'Clean up brief'
+      default: return 'Clean up brief'
     }
   }
 
   function cardTitleForTurn(turn: TaskThreadInFlightTurn): string {
     if (briefShapingTimedOut(turn)) return 'Shaping timed out'
-    if (briefShapingPaused(turn)) return 'Shaping paused'
-    if (hasIncompleteTaskChecklist(turn)) return 'Needs brief cleanup'
+    if (briefShapingPaused(turn)) return 'Paused'
+    if (needsWorkerHandoffSpecCleanup(turn)) return 'Needs brief'
     return turn.liveAgent ? 'Live progress' : 'Task status'
   }
 
@@ -331,10 +349,6 @@
     return 'Missing'
   }
 
-  async function answer(turn: TaskThreadQuestionTurn, answer: string): Promise<void> {
-    await onAnswerQuestion(turn.question.id, answer)
-  }
-
   function externalStepOwnerLabel(step: ExternalBlockerStep): string {
     if (step.owner === 'guildhall') return 'Guildhall'
     if (step.owner === 'external') return 'External service'
@@ -346,26 +360,63 @@
     const match = (task.escalations ?? []).find(item => item.id === turn.escalationId)
     return match?.externalChecklist ?? []
   }
+
+  function memoryCoreSourceLabel(source: { uri?: string; path?: string } | undefined): string {
+    if (!source) return 'source unavailable'
+    return source.path ? `${source.uri ?? source.path} (${source.path})` : source.uri ?? 'source unavailable'
+  }
 </script>
 
 <Stack gap="4">
+  {#if latestMemoryCore && (latestMemoryCore.candidates?.length ?? 0) > 0}
+    <Card title="Memory packet" tone={latestMemoryCore.fallbackUsed ? 'warn' : 'default'}>
+      <Stack gap="3">
+        {#each latestMemoryCore.candidates.slice(0, 3) as candidate (candidate.id ?? candidate.summary)}
+          <section class="state-section" aria-label="Memory candidate">
+            <p class="section-label">{candidate.kind ?? 'memory'}</p>
+            <p class="detail-copy">{candidate.summary}</p>
+            {#if candidate.sourceRefs?.length}
+              <p class="detail-copy source-ref">{memoryCoreSourceLabel(candidate.sourceRefs[0])}</p>
+            {/if}
+          </section>
+        {/each}
+      </Stack>
+    </Card>
+  {/if}
   {#if relevantTurns.length === 0 && taskNeedsBriefCleanup}
-    <Card title="Needs brief cleanup" tone="warn">
+    <Card title="Needs brief" tone="warn">
       <Stack gap="3">
         <StateSummary
-          label="Brief cleanup needed"
-          description="Guildhall needs to turn the source notes into a usable task brief before implementation."
-          tone="agent-attention"
+          label="Needs brief"
+          description="The source notes need to become a usable task brief before implementation."
+          tone="warn"
         />
         <p class="detail-copy">
-          The Work board sent you here because this task is marked ready, but its brief/spec is not complete enough for a worker yet. Start lets Guildhall clean up the brief before implementation.
+          The Work board sent you here because this task is marked ready, but its brief/spec is not complete enough for a worker yet. Clean up brief finishes the handoff before implementation.
         </p>
         <Row justify="end" gap="2">
           <Button variant="secondary" onclick={onOpenSpecTab}>View brief</Button>
           <Button variant="agent" disabled={runBusy || Boolean(projectStartBlockerMessage)} onclick={onRunTask}>
             <Icon name="sparkles" size={14} />
-            {projectStartBlockerMessage ? 'Project blocked' : 'Start'}
+            {projectStartBlockerMessage ? 'Project blocked' : 'Clean up brief'}
           </Button>
+        </Row>
+      </Stack>
+    </Card>
+  {:else if relevantTurns.length === 0 && blockedDeliveryStep}
+    <Card title="Delivery step blocked" tone="warn">
+      <Stack gap="3">
+        <StateSummary
+          label="Delivery step blocked"
+          description={blockedDeliveryStep.title ?? deliveryBadge?.title ?? 'A required delivery step is blocked.'}
+          tone="warn"
+        />
+        <p class="detail-copy">
+          This is part of the current work item, not a separate task card. Open Thread or the spec if the blocked step needs a decision.
+        </p>
+        <Row justify="end" gap="2">
+          <Button variant="secondary" onclick={onOpenSpecTab}>View spec and evidence</Button>
+          <Button variant="primary" onclick={onOpenThread}>Open Thread</Button>
         </Row>
       </Stack>
     </Card>
@@ -381,18 +432,26 @@
     {#each relevantTurns as turn (turn.id)}
       {#if turn.kind === 'agent_question'}
         <Card title="Needs your answer" tone="accent">
-          <AgentQuestion
-            question={turn.question as Question}
-            {busy}
-            onAnswer={(answerText) => answer(turn, answerText)}
-          />
+          <Stack gap="3">
+            <StateSummary
+              label="Question waiting in Thread"
+              description="Open Thread to answer this with the rest of the project conversation."
+              tone="accent"
+            />
+            <div class="question-link-preview">
+              <Markdown source={turn.question.prompt ?? turn.question.restatement ?? 'One answer is needed before this continues.'} />
+            </div>
+            <Row justify="end" gap="2">
+              <Button variant="primary" disabled={busy} onclick={onOpenThread}>Open Thread</Button>
+            </Row>
+          </Stack>
         </Card>
       {:else if turn.kind === 'brief_approval'}
         <Card title="Needs your approval" tone="accent">
           <Stack gap="3">
             <StateSummary
               label="Approve brief"
-              description="Guildhall drafted the task brief and is waiting for your go-ahead before it moves on."
+              description="The task brief is drafted and waiting for your go-ahead before it moves on."
               tone="accent"
             />
             <Row justify="end" gap="2">
@@ -406,7 +465,7 @@
           <Stack gap="3">
             <StateSummary
               label="Approve spec"
-              description="Guildhall drafted the spec. Review it, then approve when it matches what you want."
+              description="The spec is drafted. Review it, then approve when it matches what you want."
               tone="warn"
             />
             {#if turn.spec}
@@ -440,10 +499,10 @@
         {@const reasonLabel = escalationReasonLabel(turn.escalationReason)}
         {@const ownerLabel = roleLabel(turn.escalationAgentId)}
         {@const externalChecklist = checklistForEscalation(turn)}
-        <Card title={guidance.actionOwner === 'guildhall' ? 'Guildhall can continue' : 'Recovery needed'} tone="warn">
+        <Card title={guidance.actionOwner === 'guildhall' ? 'Queued' : 'Recovery needed'} tone="warn">
           <Stack gap="3">
             <StateSummary
-              label={guidance.actionOwner === 'guildhall' ? 'Guildhall action' : reasonLabel}
+              label={guidance.actionOwner === 'guildhall' ? 'Recovery action' : reasonLabel}
               description={guidance.actionOwner === 'guildhall' ? guidance.title : guidance.detail}
               tone={guidance.actionOwner === 'guildhall' ? 'accent' : 'warn'}
             />
@@ -457,8 +516,8 @@
               <p class="detail-copy">{guidance.nextStep}</p>
             {:else}
               <p class="detail-copy">
-                Guildhall stopped because this blocker changes what the task means or how it should continue.
-                The recommended next step is shown first; use the other action only if you already fixed the blocker outside Guildhall.
+                Work stopped because this blocker changes what the task means or how it should continue.
+                The recommended next step is shown first; use the other action only if you already fixed the blocker outside the app.
               </p>
               <p class="detail-copy"><strong>Most likely next step:</strong> {recoveryAction.label}</p>
             {/if}
@@ -535,12 +594,12 @@
           </Stack>
         </Card>
       {:else if turn.kind === 'inflight'}
-        <Card title={cardTitleForTurn(turn)} tone={briefShapingTimedOut(turn) || briefShapingPaused(turn) || hasIncompleteTaskChecklist(turn) ? 'warn' : turn.importedDraft ? 'accent' : 'default'}>
+        <Card title={cardTitleForTurn(turn)} tone={briefShapingTimedOut(turn) || briefShapingPaused(turn) || needsWorkerHandoffSpecCleanup(turn) ? 'warn' : turn.importedDraft ? 'accent' : 'default'}>
           <Stack gap="3">
             <section class="state-section" aria-label="Current task status">
               <p class="section-label">Current status</p>
               <StateSummary
-                label={briefShapingTimedOut(turn) || briefShapingPaused(turn) ? taskStateLabel(turn) : hasIncompleteTaskChecklist(turn) ? briefFixTitle(turn) : taskStateLabel(turn)}
+                label={briefShapingTimedOut(turn) || briefShapingPaused(turn) ? taskStateLabel(turn) : needsWorkerHandoffSpecCleanup(turn) ? briefFixTitle(turn) : taskStateLabel(turn)}
                 description={taskStateDescription(turn)}
                 tone={taskStateTone(turn)}
               />
@@ -586,7 +645,7 @@
             {/if}
             {#if showsTaskAction(turn)}
               <Row justify="end" gap="2">
-                {#if turn.taskStatus === 'ready' && hasIncompleteTaskChecklist(turn)}
+                {#if needsWorkerHandoffSpecCleanup(turn)}
                   <Button variant="agent" disabled={runBusy || Boolean(projectStartBlockerMessage)} onclick={onRunTask}>
                     <Icon name="sparkles" size={14} />
                     {projectStartBlockerMessage ? 'Project blocked' : briefFixButtonLabel(turn)}
@@ -644,8 +703,8 @@
   .detail-copy {
     margin: 0;
     color: var(--text-muted);
-    font-size: var(--fs-2);
-    line-height: var(--lh-body);
+    font-size: var(--gh-type-size-body);
+    line-height: var(--gh-type-line-height-body);
   }
   .recovery-meta {
     display: flex;
@@ -655,8 +714,8 @@
   .more > summary {
     cursor: pointer;
     color: var(--text-muted);
-    font-size: var(--fs-1);
-    font-weight: 700;
+    font-size: var(--gh-type-size-meta);
+    font-weight: var(--gh-type-weight-strong);
     letter-spacing: 0.05em;
     list-style: none;
     text-transform: uppercase;
@@ -695,14 +754,14 @@
   }
   .external-step-copy strong {
     color: var(--text);
-    font-size: var(--fs-2);
-    line-height: var(--lh-tight);
+    font-size: var(--gh-type-size-body);
+    line-height: var(--gh-type-line-height-tight);
   }
   .external-step-copy span,
   .external-step-owner {
     color: var(--text-muted);
-    font-size: var(--fs-1);
-    line-height: var(--lh-body);
+    font-size: var(--gh-type-size-meta);
+    line-height: var(--gh-type-line-height-body);
   }
   .external-step-owner {
     white-space: nowrap;
@@ -710,10 +769,10 @@
   .section-label {
     margin: 0;
     color: var(--text-muted);
-    font-size: var(--fs-0);
-    font-weight: 800;
+    font-size: var(--gh-type-size-caption);
+    font-weight: var(--gh-type-weight-strong);
     letter-spacing: 0.05em;
-    line-height: 1;
+    line-height: var(--gh-type-line-height-control);
     text-transform: uppercase;
   }
   .live-activity {
@@ -730,7 +789,7 @@
     justify-content: space-between;
     gap: var(--s-3);
     color: var(--text-muted);
-    font-size: var(--fs-1);
+    font-size: var(--gh-type-size-meta);
   }
   .live-checklist-steps {
     display: grid;
@@ -755,18 +814,18 @@
     min-width: 0;
   }
   .live-step-copy strong {
-    font-size: var(--fs-2);
-    line-height: var(--lh-tight);
+    font-size: var(--gh-type-size-body);
+    line-height: var(--gh-type-line-height-tight);
   }
   .live-step-copy span,
   .live-step-state {
     color: var(--text-muted);
-    font-size: var(--fs-1);
-    line-height: var(--lh-body);
+    font-size: var(--gh-type-size-meta);
+    line-height: var(--gh-type-line-height-body);
   }
   .error {
     margin: 0;
     color: var(--danger);
-    font-size: var(--fs-1);
+    font-size: var(--gh-type-size-meta);
   }
 </style>

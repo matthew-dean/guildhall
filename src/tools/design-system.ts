@@ -4,16 +4,21 @@ import fs from 'node:fs/promises'
 import path from 'node:path'
 import yaml from 'js-yaml'
 import { DesignSystem, DESIGN_SYSTEM_FILE } from '@guildhall/core'
+import { getProjectSystemStatePath, inferProjectRootFromMemoryDir } from '@guildhall/sessions'
 
 // ---------------------------------------------------------------------------
 // update-design-system: project-wide design-system authoring surface.
 //
-// The DS lives at `.guildhall/design-system.yaml`. Re-authoring an approved
+// The DS lives in system-local project state. Re-authoring an approved
 // revision drops the approval unless the material surface (tokens +
 // primitives + a11y + copyVoice) is unchanged — notes alone don't void it.
 // ---------------------------------------------------------------------------
 
 function designSystemPath(memoryDir: string): string {
+  const base = path.basename(path.resolve(memoryDir))
+  if (base === '.guildhall' || base === 'memory') {
+    return getProjectSystemStatePath(inferProjectRootFromMemoryDir(memoryDir), DESIGN_SYSTEM_FILE)
+  }
   return path.join(memoryDir, DESIGN_SYSTEM_FILE)
 }
 

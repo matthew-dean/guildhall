@@ -9,6 +9,8 @@ import {
 } from '../orchestrator.js'
 import type { ResolvedConfig } from '@guildhall/config'
 import type { Task, TaskQueue } from '@guildhall/core'
+import { projectStatePathFromMemoryDir } from '@guildhall/sessions'
+import { buildEffectiveTask } from '../effective-task.js'
 
 // ---------------------------------------------------------------------------
 // Sequential agent handoff within one task. See
@@ -23,7 +25,7 @@ beforeEach(async () => {
   tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'handoff-test-'))
   memoryDir = path.join(tmpDir, 'memory')
   await fs.mkdir(memoryDir, { recursive: true })
-  tasksPath = path.join(memoryDir, 'TASKS.json')
+  tasksPath = projectStatePathFromMemoryDir(memoryDir, 'TASKS.json')
 })
 afterEach(async () => {
   await fs.rm(tmpDir, { recursive: true, force: true })
@@ -109,11 +111,16 @@ async function writeTask(task: Task): Promise<void> {
     lastUpdated: '2026-04-23T00:00:00Z',
     tasks: [task],
   }
+  await fs.mkdir(path.dirname(tasksPath), { recursive: true })
   await fs.writeFile(tasksPath, JSON.stringify(queue, null, 2), 'utf8')
 }
 
 async function readQueue(): Promise<TaskQueue> {
-  return JSON.parse(await fs.readFile(tasksPath, 'utf8'))
+  const queue = JSON.parse(await fs.readFile(tasksPath, 'utf8')) as TaskQueue
+  return {
+    ...queue,
+    tasks: await Promise.all(queue.tasks.map(async task => buildEffectiveTask(tmpDir, task))) as unknown as Task[],
+  }
 }
 
 describe('Orchestrator — handoff sequence', () => {

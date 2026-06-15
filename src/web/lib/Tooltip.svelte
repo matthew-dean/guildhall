@@ -170,9 +170,9 @@
       inset 0 1px 0 color-mix(in srgb, white 10%, transparent);
     backdrop-filter: var(--glass-blur);
     -webkit-backdrop-filter: var(--glass-blur);
-    font-size: var(--fs-1);
-    font-weight: 600;
-    line-height: var(--lh-tight);
+    font-size: var(--gh-type-size-meta);
+    font-weight: var(--gh-type-weight-strong);
+    line-height: var(--gh-type-line-height-tight);
     pointer-events: none;
     animation: gh-tooltip-in 70ms ease;
     white-space: normal;

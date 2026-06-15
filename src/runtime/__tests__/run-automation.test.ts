@@ -3,6 +3,10 @@ import os from 'node:os'
 import path from 'node:path'
 
 import { describe, expect, it } from 'vitest'
+import {
+  readProjectStateJsonFromMemoryDirAsync,
+  writeProjectStateJsonFromMemoryDirAsync,
+} from '@guildhall/sessions'
 
 import { applyRunAutomationPolicy } from '../run-automation.js'
 
@@ -24,25 +28,31 @@ const VALID_SPEC = [
   '1. Thing is done.',
 ].join('\n')
 
+async function makeMemoryDir(): Promise<string> {
+  const projectRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'guildhall-run-automation-'))
+  const memoryDir = path.join(projectRoot, '.guildhall')
+  await fs.mkdir(path.join(memoryDir, 'transcripts', 'exploring'), { recursive: true })
+  return memoryDir
+}
+
+async function writeQueue(memoryDir: string, queue: unknown): Promise<void> {
+  await writeProjectStateJsonFromMemoryDirAsync(memoryDir, 'TASKS.json', queue)
+}
+
+async function readQueue(memoryDir: string): Promise<{ tasks: Array<Record<string, any>> }> {
+  return readProjectStateJsonFromMemoryDirAsync<{ tasks: Array<Record<string, any>> }>(memoryDir, 'TASKS.json')
+}
+
 describe('run automation policy', () => {
-  it('fully automated runs resolve owner questions and spec approval in runtime policy', async () => {
-    const memoryDir = await fs.mkdtemp(path.join(os.tmpdir(), 'guildhall-run-automation-'))
-    await fs.mkdir(path.join(memoryDir, 'transcripts', 'exploring'), { recursive: true })
-    await fs.writeFile(path.join(memoryDir, 'TASKS.json'), JSON.stringify({
+  it('fully automated runs approve scoped specs in runtime policy', async () => {
+    const memoryDir = await makeMemoryDir()
+    await writeQueue(memoryDir, {
       version: 1,
       lastUpdated: '2026-05-29T10:00:00.000Z',
       tasks: [
         task({
           id: 'task-root',
           status: 'exploring',
-          openQuestions: [{
-            kind: 'choice',
-            id: 'q-1',
-            askedBy: 'spec-agent',
-            askedAt: '2026-05-29T10:00:00.000Z',
-            prompt: 'Which path?',
-            choices: ['Small local app', 'Hosted app'],
-          }],
         }),
         task({
           id: 'task-child',
@@ -56,7 +66,7 @@ describe('run automation policy', () => {
           hierarchy: { parentId: 'task-root', childIds: [], order: 0 },
         }),
       ],
-    }, null, 2), 'utf8')
+    })
 
     const result = await applyRunAutomationPolicy({
       memoryDir,
@@ -67,18 +77,15 @@ describe('run automation policy', () => {
 
     expect(result.changed).toBe(true)
     expect(result.resolutions.map(resolution => resolution.kind)).toEqual([
-      'answer_questions',
       'approve_spec',
     ])
-    const queue = JSON.parse(await fs.readFile(path.join(memoryDir, 'TASKS.json'), 'utf8'))
-    expect(queue.tasks.find((candidate: { id: string }) => candidate.id === 'task-root').openQuestions[0].answeredAt).toBeTruthy()
-    expect(queue.tasks.find((candidate: { id: string }) => candidate.id === 'task-child').status).toBe('ready')
+    const queue = await readQueue(memoryDir)
+    expect(queue.tasks.find((candidate) => candidate.id === 'task-child')!.status).toBe('ready')
   })
 
   it('fully automated runs repair an obvious product brief gap before approving a tiny deterministic task', async () => {
-    const memoryDir = await fs.mkdtemp(path.join(os.tmpdir(), 'guildhall-run-automation-'))
-    await fs.mkdir(path.join(memoryDir, 'transcripts', 'exploring'), { recursive: true })
-    await fs.writeFile(path.join(memoryDir, 'TASKS.json'), JSON.stringify({
+    const memoryDir = await makeMemoryDir()
+    await writeQueue(memoryDir, {
       version: 1,
       lastUpdated: '2026-05-29T10:00:00.000Z',
       tasks: [
@@ -117,7 +124,7 @@ describe('run automation policy', () => {
           ],
         }),
       ],
-    }, null, 2), 'utf8')
+    })
 
     const result = await applyRunAutomationPolicy({
       memoryDir,
@@ -130,8 +137,8 @@ describe('run automation policy', () => {
       'repair_product_brief',
       'approve_spec',
     ])
-    const queue = JSON.parse(await fs.readFile(path.join(memoryDir, 'TASKS.json'), 'utf8'))
-    const smoke = queue.tasks[0]
+    const queue = await readQueue(memoryDir)
+    const smoke = queue.tasks[0]!
     expect(smoke.status).toBe('ready')
     expect(smoke.productBrief).toMatchObject({
       userJob: 'Verify the Guildhall pipeline can complete a deterministic marker-file task.',
@@ -141,9 +148,8 @@ describe('run automation policy', () => {
   })
 
   it('fully automated runs replace placeholder New request product briefs from the spec', async () => {
-    const memoryDir = await fs.mkdtemp(path.join(os.tmpdir(), 'guildhall-run-automation-'))
-    await fs.mkdir(path.join(memoryDir, 'transcripts', 'exploring'), { recursive: true })
-    await fs.writeFile(path.join(memoryDir, 'TASKS.json'), JSON.stringify({
+    const memoryDir = await makeMemoryDir()
+    await writeQueue(memoryDir, {
       version: 1,
       lastUpdated: '2026-05-29T10:00:00.000Z',
       tasks: [
@@ -182,7 +188,7 @@ describe('run automation policy', () => {
           ],
         }),
       ],
-    }, null, 2), 'utf8')
+    })
 
     const result = await applyRunAutomationPolicy({
       memoryDir,
@@ -196,8 +202,8 @@ describe('run automation policy', () => {
       'record_design_lens_review',
       'approve_spec',
     ])
-    const queue = JSON.parse(await fs.readFile(path.join(memoryDir, 'TASKS.json'), 'utf8'))
-    const pantry = queue.tasks[0]
+    const queue = await readQueue(memoryDir)
+    const pantry = queue.tasks[0]!
     expect(pantry.status).toBe('ready')
     expect(pantry.productBrief).toMatchObject({
       userJob: 'Track pantry items and use expiring food first.',
@@ -207,8 +213,8 @@ describe('run automation policy', () => {
   })
 
   it('supervised runs leave owner checkpoints untouched', async () => {
-    const memoryDir = await fs.mkdtemp(path.join(os.tmpdir(), 'guildhall-run-automation-'))
-    await fs.writeFile(path.join(memoryDir, 'TASKS.json'), JSON.stringify({
+    const memoryDir = await makeMemoryDir()
+    await writeQueue(memoryDir, {
       version: 1,
       lastUpdated: '2026-05-29T10:00:00.000Z',
       tasks: [
@@ -223,7 +229,7 @@ describe('run automation policy', () => {
           }],
         }),
       ],
-    }, null, 2), 'utf8')
+    })
 
     const result = await applyRunAutomationPolicy({
       memoryDir,
@@ -233,8 +239,8 @@ describe('run automation policy', () => {
     })
 
     expect(result.changed).toBe(false)
-    const queue = JSON.parse(await fs.readFile(path.join(memoryDir, 'TASKS.json'), 'utf8'))
-    expect(queue.tasks[0].openQuestions[0].answeredAt).toBeUndefined()
+    const queue = await readQueue(memoryDir)
+    expect(queue.tasks[0]!.openQuestions[0]!.answeredAt).toBeUndefined()
   })
 })
 

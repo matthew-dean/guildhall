@@ -109,13 +109,21 @@ describe('migrateLegacyMemoryToLocalHistory', () => {
     expect(result.copied).toBe(result.filesToCopy.length)
     expect(await fs.readFile(getProjectTranscriptPath(projectRoot, 'exploring', 'task-1'), 'utf8'))
       .toContain('legacy exploring transcript')
-    expect(await fs.readFile(path.join(getProjectStateDir(projectRoot), 'TASKS.json'), 'utf8'))
+    expect(result.compaction?.repoStateMode).toBe('off')
+    expect(result.compaction?.evacuatedProjectStatePaths).toEqual(expect.arrayContaining([
+      'TASKS.json',
+      'MEMORY.md',
+      'DECISIONS.md',
+      'PROGRESS.md',
+      'agent-settings.yaml',
+    ]))
+    expect(await fs.readFile(path.join(getProjectLocalHistoryDir(projectRoot), 'project-state-evacuation', 'TASKS.json'), 'utf8'))
       .toContain('task-1')
-    expect(await fs.readFile(path.join(getProjectStateDir(projectRoot), 'MEMORY.md'), 'utf8'))
+    expect(await fs.readFile(path.join(getProjectLocalHistoryDir(projectRoot), 'project-state-evacuation', 'MEMORY.md'), 'utf8'))
       .toContain('Project Memory')
-    expect(await fs.readFile(path.join(getProjectStateDir(projectRoot), 'DECISIONS.md'), 'utf8'))
+    expect(await fs.readFile(path.join(getProjectLocalHistoryDir(projectRoot), 'project-state-evacuation', 'DECISIONS.md'), 'utf8'))
       .toContain('Decisions')
-    expect(await fs.readFile(path.join(getProjectStateDir(projectRoot), 'PROGRESS.md'), 'utf8'))
+    expect(await fs.readFile(path.join(getProjectLocalHistoryDir(projectRoot), 'project-state-evacuation', 'PROGRESS.md'), 'utf8'))
       .toContain('Progress')
     expect(await fs.readFile(getProjectContextDebugLedgerPath(projectRoot), 'utf8'))
       .toContain('task-1')
@@ -136,6 +144,7 @@ describe('migrateLegacyMemoryToLocalHistory', () => {
     await expect(fs.access(path.join(memoryDir, 'transcripts', 'task-2', 'transcript.md'))).rejects.toThrow()
     await expect(fs.access(path.join(memoryDir, 'sessions', 'abc', 'session.json'))).rejects.toThrow()
     await expect(fs.access(memoryDir)).rejects.toThrow()
+    await expect(fs.access(getProjectStateDir(projectRoot))).rejects.toThrow()
 
     const gitignore = await fs.readFile(path.join(projectRoot, '.gitignore'), 'utf8')
     expect(gitignore).toContain('node_modules')
@@ -145,6 +154,78 @@ describe('migrateLegacyMemoryToLocalHistory', () => {
     expect(gitignore).toContain('.guildhall/codebase-map.yaml')
     expect(gitignore).toContain('.guildhall/local/')
     expect(gitignore).not.toContain('/memory/')
+  })
+
+  it('keeps only current thin project-state files when storage.repoState is thin', async () => {
+    await fs.writeFile(path.join(projectRoot, 'guildhall.yaml'), [
+      'name: Thin State',
+      'id: thin-state',
+      'storage:',
+      '  repoState: thin',
+      '',
+    ].join('\n'), 'utf8')
+    await fs.mkdir(path.join(memoryDir), { recursive: true })
+    await fs.writeFile(path.join(memoryDir, 'artifacts.yaml'), [
+      'version: 1',
+      'artifacts:',
+      '  - id: flow-audit',
+      '    path: internal/audits/flow-audit.md',
+      '',
+    ].join('\n'), 'utf8')
+    await fs.writeFile(path.join(memoryDir, 'TASKS.json'), JSON.stringify({
+      version: 1,
+      tasks: [{
+        id: 'task-continue',
+        title: 'Continue current work',
+        description: 'Current active task.',
+        domain: 'app',
+        projectPath: projectRoot,
+        status: 'ready',
+        spec: 'Build the current shape without carrying history.',
+        productBrief: {
+          userJob: 'Continue work from a clean checkout.',
+          successMetric: 'Another agent can resume.',
+        },
+        acceptanceCriteria: [{
+          id: 'ac-1',
+          description: 'Current shape is visible.',
+          verifiedBy: 'review',
+          met: false,
+        }],
+        notes: Array.from({ length: 20 }, (_, index) => ({ content: `history ${index}` })),
+      }],
+    }, null, 2), 'utf8')
+
+    const result = await migrateLegacyMemoryToLocalHistory({
+      projectRoot,
+      dryRun: false,
+      deleteSource: true,
+      updateGitignore: false,
+    })
+
+    expect(result.compaction?.repoStateMode).toBe('thin')
+    expect(result.compaction?.evacuatedProjectStatePaths).toEqual([])
+    expect(await fs.readFile(path.join(getProjectStateDir(projectRoot), 'artifacts.yaml'), 'utf8'))
+      .toContain('flow-audit')
+    const manifest = JSON.parse(await fs.readFile(path.join(getProjectStateDir(projectRoot), 'project-state-manifest.json'), 'utf8')) as any
+    expect(manifest.currentShape.artifacts).toEqual(['flow-audit'])
+    expect(manifest.currentShape.activeTasks).toEqual([
+      expect.objectContaining({
+        id: 'task-continue',
+        title: 'Continue current work',
+        status: 'ready',
+        spec: 'Build the current shape without carrying history.',
+        productBrief: expect.objectContaining({
+          userJob: 'Continue work from a clean checkout.',
+          successMetric: 'Another agent can resume.',
+        }),
+        acceptanceCriteria: [expect.objectContaining({ id: 'ac-1', description: 'Current shape is visible.' })],
+      }),
+    ])
+    expect(JSON.stringify(manifest)).not.toContain('history 0')
+    expect(JSON.stringify(manifest)).not.toContain('project-state-evacuation')
+    await expect(fs.access(path.join(getProjectStateDir(projectRoot), 'TASKS.json'))).rejects.toThrow()
+    await expect(fs.access(path.join(getProjectStateDir(projectRoot), 'MEMORY.md'))).rejects.toThrow()
   })
 
   it('updates gitignore policy in child Git repos for multi-project workspaces', async () => {
@@ -201,7 +282,7 @@ describe('migrateLegacyMemoryToLocalHistory', () => {
     })
 
     expect(result.untrackedIgnoredFiles).toContain('.guildhall/config.yaml')
-    await expect(fs.access(path.join(projectRoot, '.guildhall', 'config.yaml'))).resolves.toBeUndefined()
+    await expect(fs.access(path.join(projectRoot, '.guildhall', 'config.yaml'))).rejects.toThrow()
     const tracked = execFileSync('git', ['ls-files', '.guildhall/config.yaml'], {
       cwd: projectRoot,
       encoding: 'utf8',

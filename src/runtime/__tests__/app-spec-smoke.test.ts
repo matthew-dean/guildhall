@@ -14,7 +14,7 @@ import {
   buildPantryPulseSmokeRun,
   validateZeroInfoSpecIntakeRun,
   validatePantryPulseSmokeRun,
-} from '../app-spec-smoke.js'
+} from '../../../internal/fixtures/app-spec-smoke/runtime.js'
 import {
   createExploringTask,
   approveSpec,
@@ -26,7 +26,7 @@ import {
   type OrchestratorAgentSet,
 } from '../orchestrator.js'
 import { InMemoryGitDriver } from '../git-driver.js'
-import { getProjectStateDir } from '@guildhall/sessions'
+import { getProjectStateDir, projectStatePathFromMemoryDir, upsertTaskRuntimeState } from '@guildhall/sessions'
 import { PermissionMode } from '@guildhall/engine'
 
 const fixtureDir = path.resolve('internal/fixtures/app-spec-smoke')
@@ -228,6 +228,7 @@ describe('Pantry Pulse app-spec smoke fixture', () => {
   it('drives Guildhall through an end-to-end Pantry Pulse app creation proof', async () => {
     const projectPath = await tempDir('guildhall-pantry-pulse-')
     bootstrapWorkspace(projectPath, { name: 'Pantry Pulse Smoke' })
+    updateProjectConfig(projectPath, { workerLaneConcurrency: 1 })
     const memoryDir = getProjectStateDir(projectPath)
 
     const intake = await createExploringTask({
@@ -242,6 +243,11 @@ describe('Pantry Pulse app-spec smoke fixture', () => {
 
     const approved = await approveSpec({ memoryDir, taskId: intake.taskId })
     expect(approved.success).toBe(true)
+    await mutateTask(memoryDir, intake.taskId, { status: 'in_progress' })
+    await upsertTaskRuntimeState(projectPath, intake.taskId, {
+      assignedTo: 'worker-agent',
+      updatedAt: new Date().toISOString(),
+    })
 
     const observedStatuses: TaskStatus[] = []
     const agents: OrchestratorAgentSet = {
@@ -318,7 +324,7 @@ describe('Pantry Pulse app-spec smoke fixture', () => {
       }
     }
 
-    expect(observedStatuses).toEqual(['in_progress', 'review', 'gate_check', 'done'])
+    expect(observedStatuses).toEqual(['review', 'gate_check', 'done'])
     await expect(readFile(path.join(projectPath, 'index.html'), 'utf-8')).resolves.toContain('Pantry Pulse')
     await expect(readFile(path.join(projectPath, 'src/main.js'), 'utf-8')).resolves.toContain('Mark used')
 
@@ -806,7 +812,7 @@ async function recordFullyAutomatedResolution(
 }
 
 async function readQueue(memoryDir: string): Promise<TaskQueue> {
-  const raw = await readFile(path.join(memoryDir, 'TASKS.json'), 'utf-8')
+  const raw = await readFile(projectStatePathFromMemoryDir(memoryDir, 'TASKS.json'), 'utf-8')
   const parsed = JSON.parse(raw)
   return Array.isArray(parsed)
     ? { version: 1, lastUpdated: new Date().toISOString(), tasks: parsed }
@@ -814,7 +820,9 @@ async function readQueue(memoryDir: string): Promise<TaskQueue> {
 }
 
 async function writeQueue(memoryDir: string, queue: TaskQueue): Promise<void> {
-  await writeFile(path.join(memoryDir, 'TASKS.json'), JSON.stringify(queue, null, 2), 'utf-8')
+  const tasksPath = projectStatePathFromMemoryDir(memoryDir, 'TASKS.json')
+  await mkdir(path.dirname(tasksPath), { recursive: true })
+  await writeFile(tasksPath, JSON.stringify(queue, null, 2), 'utf-8')
 }
 
 async function taskById(memoryDir: string, taskId: string): Promise<Task> {

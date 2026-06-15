@@ -1,6 +1,10 @@
+import { readManagedTextFile, writeManagedTextFileSync } from '@guildhall/persistence'
 import fsp from 'node:fs/promises'
 import path from 'node:path'
-import { appendTaskEvidence as appendStoredTaskEvidence, atomicWriteText } from '@guildhall/sessions'
+import {
+  appendTaskEvidence as appendStoredTaskEvidence,
+  getProjectSystemStatePathFromMemoryDir,
+} from '@guildhall/sessions'
 import {
   createCapabilityRequest,
   listCapabilityRequests,
@@ -20,7 +24,7 @@ export async function appendTaskEvidence(
   input: AppendTaskEvidenceInput,
 ): Promise<string> {
   const now = new Date().toISOString()
-  const progressPath = path.join(ctx.projectStateDir, 'PROGRESS.md')
+  const progressPath = getProjectSystemStatePathFromMemoryDir(ctx.projectStateDir, 'PROGRESS.md')
   const existing = await readOptional(progressPath, '# Progress\n')
   const entry = [
     '',
@@ -32,7 +36,7 @@ export async function appendTaskEvidence(
     '',
   ].join('\n')
   await fsp.mkdir(path.dirname(progressPath), { recursive: true })
-  atomicWriteText(progressPath, existing.trimEnd() + entry)
+  writeManagedTextFileSync(progressPath, existing.trimEnd() + entry)
   await appendStoredTaskEvidence(ctx.projectRoot, input.taskId, {
     id: `${input.taskId}-mcp-evidence-${now.replace(/[^0-9A-Za-z]/g, '')}`,
     kind: 'note',
@@ -91,7 +95,7 @@ export async function listMcpCapabilityRequests(ctx: GuildhallMcpContext): Promi
 
 async function readOptional(filePath: string, fallback: string): Promise<string> {
   try {
-    return await fsp.readFile(filePath, 'utf8')
+    return await readManagedTextFile(filePath, 'utf8')
   } catch {
     return fallback
   }

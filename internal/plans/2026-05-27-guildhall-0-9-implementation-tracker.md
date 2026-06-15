@@ -711,14 +711,14 @@ functional screens.
 - [x] Add Storybook-compatible, Storybook-optional design preview adapter discovery and API.
 - [x] Evaluate Looma as a candidate blessed foundation, including public GitHub home, MIT licensing, package publishing, and token-pyramid maturity. Tracked as Guildhall task `looma-004` and Codex subagent link `link-looma-004-codex-subagent`; the Codex subagent pushed the public MIT repo and recorded npm/package-shape blockers for follow-up.
 - [x] Keep Guildhall library-agnostic by mapping Looma and non-Looma systems into the same design proof contract.
-- [x] Add DesignFinding, DesignDecision, DesignSystemCandidate, and LoomaImprovement schemas with persistence placement.
+- [x] Add DesignFinding, DesignDecision, DesignSystemCandidate, and design-system improvement schemas with persistence placement. Superseded naming note, 2026-06-02: Looma-specific improvement records were generalized to `DesignSystemImprovement`.
 - [x] Classify design proof findings as project-specific, reusable pattern, token-system gap, taste guidance gap, or design-system defect.
 - [x] Route project-specific findings into project design decisions and reusable findings into design-system candidate improvements.
-- [x] Add Looma-aware candidate targets for tokens, core primitives, layout, framework adapters, Storybook, docs, and review rubrics.
-- [x] Add optional experimental local Looma development config under `~/.guildhall/config.yaml`, separate from project design-system adoption settings.
-- [x] Add local Looma hook discovery that activates only when the experimental config path or dev override points at a valid Looma checkout.
-- [x] Ensure missing local Looma checkout records an inactive hook status, not a failed Guildhall run or blocked app task.
-- [x] Keep portable `DesignSystemCandidate` records as the product contract; local Looma task/write-through is an opt-in acceleration path.
+- [x] Add candidate targets for tokens, core primitives, layout, framework adapters, Storybook, docs, and review rubrics.
+- [x] Superseded 2026-06-02: remove optional experimental local Looma development config under `~/.guildhall/config.yaml`.
+- [x] Superseded 2026-06-02: remove local Looma hook discovery. Provider-owned reusable design feedback now routes through first-class project graph/domain authority instead of machine-local checkout discovery.
+- [x] Superseded 2026-06-02: do not report inactive local Looma hook status. Missing provider projects should appear as graph/project registration or capability-routing work, not as design-feedback API target status.
+- [x] Keep portable `DesignSystemCandidate` records as the product contract; provider-owned follow-up is a project graph exchange, not a local write-through acceleration path.
 - [x] Add external agent link persistence and API wiring so Guildhall can connect a tracked task to a real Codex subagent handoff.
 - [x] Add interactable design-system catalog support for web apps, reusing Storybook/Ladle/docs catalogs when present.
 - [x] Add browser design-intent surrogate support for native apps, clearly labeled as approximate.
@@ -726,7 +726,7 @@ functional screens.
 - [x] Convert accepted feedback into a design decision packet available to workers, reviewers, MCP, and owner UI.
 - [x] Recheck in-process UI work against the current design lens so existing projects benefit when the design-system guidance improves.
 - [x] Add a conservative improvement-review backstop so active work can be rechecked against current Guildhall lenses beyond design.
-- [x] Surface reusable Looma follow-ups compactly from design proof without making them a new required owner workflow.
+- [x] Surface reusable design-system follow-ups compactly from design proof without making them a new required owner workflow.
 - [x] Surface design quality progressively: compact chips/rows first, proof detail on demand, raw machinery only in deeper views.
 - [x] Update Pantry Pulse completion boundary to require design foundation, rendered proof, correct control semantics, palette rationale, design reviewer approval, and at least one reusable-vs-local design finding classification.
 - [x] Harden abstraction fit across Spec, Worker, Reviewer, API Designer, and TypeScript Engineer so durable schemas, API routes, MCP resources, persistence records, events, and public packets are reviewed for right-sized taxonomy instead of only local reuse.
@@ -736,7 +736,7 @@ functional screens.
 
 - Focused intake/guild tests proving UI work receives design-quality pressure and reviewers carry the right rubric.
 - Schema and classification tests proving reusable design misses are separated from local project decisions.
-- Hook tests proving Guildhall works without a Looma checkout and only enables local Looma follow-up creation when configured.
+- Tests proving Guildhall works without local design-system checkout hooks and that reusable findings remain portable unless a graph-routed provider project owns the follow-up.
 - Browser proof that design-quality status appears in project/task surfaces without adding a noisy new primary navigation lane.
 - Rendered UI smoke now covers Settings Advanced showing design taste memory and the interactable design-system catalog state.
 - Pantry Pulse live proof produces rendered screenshots, design decision packet, reusable design-system candidate packet, and design reviewer approval before release acceptance.

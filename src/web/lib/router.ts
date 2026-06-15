@@ -73,7 +73,7 @@ export function parseRoute(p: string, state: unknown = null): Route {
       return { kind: 'project', projectId, view: 'overview', sub: 'inbox', drawerTaskId: null, backgroundPath: null }
     if (normalized === '/thread')
       return { kind: 'project', projectId, view: 'thread', sub: null, drawerTaskId: null, backgroundPath: null }
-    if (normalized === '/inbox' || normalized === '/notifications')
+    if (normalized === '/inbox' || normalized === '/needs-you' || normalized === '/notifications')
       return { kind: 'project', projectId, view: 'overview', sub: 'inbox', drawerTaskId: null, backgroundPath: null }
     if (normalized === '/work')
       return { kind: 'project', projectId, view: 'work', sub: null, drawerTaskId: null, backgroundPath: null }
@@ -81,6 +81,8 @@ export function parseRoute(p: string, state: unknown = null): Route {
       return { kind: 'project', projectId, view: 'planner', sub: null, drawerTaskId: null, backgroundPath: null }
     if (normalized === '/workspace-import')
       return { kind: 'project', projectId, view: 'workspace-import', sub: null, drawerTaskId: null, backgroundPath: null }
+    if (normalized === '/structure')
+      return { kind: 'project', projectId, view: 'structure', sub: null, drawerTaskId: null, backgroundPath: null }
     const settingsSub = /^\/settings\/(.+)$/.exec(normalized)
     if (settingsSub)
       return { kind: 'project', projectId, view: 'settings', sub: settingsSub[1] ?? '', drawerTaskId: null, backgroundPath: null }

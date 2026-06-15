@@ -1,14 +1,22 @@
+import { appendManagedTextFile, readManagedTextFile, readManagedTextFileSync, writeManagedTextFile } from '@guildhall/persistence'
 import fs from 'node:fs/promises'
 import { existsSync } from 'node:fs'
 import path from 'node:path'
 import { parse as parseYaml, stringify as stringifyYaml } from 'yaml'
 
+import { findWorkspaceRoot, readWorkspaceConfig } from '@guildhall/config'
 import {
   getProjectLocalHistoryDir,
   getProjectProgressHeartbeatsPath,
   getProjectStateDir,
+  getProjectSystemStatePath,
   getProjectTaskLocalHistoryDir,
 } from '@guildhall/sessions'
+import {
+  findForbiddenProjectTaskFields,
+  sanitizeTaskQueueForProjectWrite,
+  type ForbiddenProjectTaskFieldFinding,
+} from './project-state-boundary.js'
 
 export interface ProjectStateCompactionOptions {
   projectRoot: string
@@ -20,9 +28,16 @@ export interface ProjectStateCompactionResult {
   stateDir: string
   localHistoryDir: string
   dryRun: boolean
+  repoStateMode: 'off' | 'thin'
+  evacuatedProjectStatePaths: string[]
   activeTasksKept: number
   archivedTasks: number
   archivedTaskFilesCompacted: number
+  activeTasksSanitized: number
+  forbiddenTaskFieldsBefore: number
+  forbiddenTaskFieldsAfter: number
+  forbiddenTaskFieldFindings: ForbiddenProjectTaskFieldFinding[]
+  removedEvidenceBytes: number
   codebaseMapCompacted: boolean
   progressHeartbeatsMoved: number
   bytesBefore: number
@@ -41,7 +56,6 @@ const BULKY_TASK_FIELDS = [
 const COMMITTED_ARCHIVE_ITEMS_PER_FIELD = 5
 const CODEBASE_MAP_COMPACT_THRESHOLD_BYTES = 200_000
 const CODEBASE_MAP_COMMITTED_FILE_LIMIT = 250
-
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value)
 }
@@ -57,7 +71,7 @@ async function fileSize(file: string): Promise<number> {
 
 async function readJsonIfExists(file: string): Promise<unknown | null> {
   try {
-    return JSON.parse(await fs.readFile(file, 'utf8')) as unknown
+    return JSON.parse(await readManagedTextFile(file, 'utf8')) as unknown
   } catch (err) {
     if (String(err).includes('ENOENT')) return null
     throw err
@@ -93,13 +107,101 @@ async function ensureDirFor(file: string): Promise<void> {
   await fs.mkdir(path.dirname(file), { recursive: true })
 }
 
+function resolveRepoStateMode(projectRoot: string): 'off' | 'thin' {
+  const workspaceRoot = findWorkspaceRoot(projectRoot)
+  if (workspaceRoot === null) return 'off'
+  try {
+    const config = readWorkspaceConfig(workspaceRoot)
+    return config.storage?.repoState === 'thin' ? 'thin' : 'off'
+  } catch {
+    return 'off'
+  }
+}
+
+async function copyProjectStatePathToLocalHistory(source: string, destination: string): Promise<void> {
+  await ensureDirFor(destination)
+  await fs.cp(source, destination, { recursive: true, force: true })
+}
+
+async function evacuateProjectLocalState(
+  projectRoot: string,
+  stateDir: string,
+  dryRun: boolean,
+): Promise<string[]> {
+  let entries: string[]
+  try {
+    entries = await fs.readdir(stateDir)
+  } catch (err) {
+    if (String(err).includes('ENOENT')) return []
+    throw err
+  }
+  const removed: string[] = []
+  for (const relativePath of entries) {
+    const source = path.join(stateDir, relativePath)
+    try {
+      await fs.stat(source)
+    } catch (err) {
+      if (String(err).includes('ENOENT')) continue
+      throw err
+    }
+    removed.push(relativePath)
+    if (dryRun) continue
+    const destination = path.join(getProjectLocalHistoryDir(projectRoot), 'project-state-evacuation', relativePath)
+    await copyProjectStatePathToLocalHistory(source, destination)
+    await fs.rm(source, { recursive: true, force: true })
+  }
+  if (!dryRun) {
+    try {
+      await fs.rmdir(stateDir)
+    } catch (err) {
+      if (!String(err).includes('ENOTEMPTY') && !String(err).includes('ENOENT')) throw err
+    }
+  }
+  return removed
+}
+
+async function copyRepoLocalProjectStateToSystemState(projectRoot: string, stateDir: string, dryRun: boolean): Promise<void> {
+  if (dryRun) return
+  let entries: Array<{ name: string }>
+  try {
+    entries = await fs.readdir(stateDir, { withFileTypes: true })
+  } catch (err) {
+    if (String(err).includes('ENOENT')) return
+    throw err
+  }
+  for (const entry of entries) {
+    const source = path.join(stateDir, entry.name)
+    const destination = getProjectSystemStatePath(projectRoot, entry.name)
+    if (existsSync(destination)) continue
+    await ensureDirFor(destination)
+    await fs.cp(source, destination, { recursive: true })
+  }
+}
+
 async function writeFullTaskEvidence(projectRoot: string, id: string, task: unknown, dryRun: boolean): Promise<void> {
   if (dryRun) return
   const evidencePath = path.join(getProjectTaskLocalHistoryDir(projectRoot, id), 'archive-evidence.json')
   await ensureDirFor(evidencePath)
   if (!existsSync(evidencePath)) {
-    await fs.writeFile(evidencePath, `${JSON.stringify(task, null, 2)}\n`, 'utf8')
+    await writeManagedTextFile(evidencePath, `${JSON.stringify(task, null, 2)}\n`, 'utf8')
   }
+}
+
+async function writeBoundaryEvidence(
+  projectRoot: string,
+  taskId: string,
+  removedEvidence: Record<string, unknown>,
+  dryRun: boolean,
+): Promise<void> {
+  if (dryRun || Object.keys(removedEvidence).length === 0) return
+  const evidencePath = path.join(getProjectTaskLocalHistoryDir(projectRoot, taskId), 'project-state-boundary-evidence.json')
+  await ensureDirFor(evidencePath)
+  await writeManagedTextFile(evidencePath, `${JSON.stringify({
+    version: 1,
+    taskId,
+    removedAt: new Date().toISOString(),
+    removedEvidence,
+  }, null, 2)}\n`, 'utf8')
 }
 
 function compactTaskRecordForProjectArchive(task: unknown): unknown {
@@ -152,7 +254,7 @@ async function compactArchiveFiles(projectRoot: string, stateDir: string, dryRun
     if (JSON.stringify(compact) === JSON.stringify(parsed)) continue
     compacted += 1
     if (!dryRun) {
-      await fs.writeFile(file, `${JSON.stringify(compact, null, 2)}\n`, 'utf8')
+      await writeManagedTextFile(file, `${JSON.stringify(compact, null, 2)}\n`, 'utf8')
     }
   }
   return compacted
@@ -162,12 +264,33 @@ async function compactTasks(
   projectRoot: string,
   stateDir: string,
   dryRun: boolean,
-): Promise<{ active: number; archived: number; compactedArchives: number }> {
+): Promise<{
+  active: number
+  archived: number
+  compactedArchives: number
+  activeSanitized: number
+  forbiddenBefore: number
+  forbiddenAfter: number
+  forbiddenFindings: ForbiddenProjectTaskFieldFinding[]
+  removedEvidenceBytes: number
+}> {
   const tasksPath = path.join(stateDir, 'TASKS.json')
   const parsed = await readJsonIfExists(tasksPath)
   const compactedArchives = await compactArchiveFiles(projectRoot, stateDir, dryRun)
-  if (parsed === null) return { active: 0, archived: 0, compactedArchives }
+  if (parsed === null) {
+    return {
+      active: 0,
+      archived: 0,
+      compactedArchives,
+      activeSanitized: 0,
+      forbiddenBefore: 0,
+      forbiddenAfter: 0,
+      forbiddenFindings: [],
+      removedEvidenceBytes: 0,
+    }
+  }
 
+  const forbiddenFindings = findForbiddenProjectTaskFields(parsed)
   const tasks = queueTasks(parsed)
   const activeTasks: unknown[] = []
   const archivedTasks: Array<{ id: string; task: unknown }> = []
@@ -182,12 +305,22 @@ async function compactTasks(
     }
   }
 
-  if (!dryRun && archivedTasks.length > 0) {
+  const compactQueue = {
+    version: queueVersion(parsed),
+    lastUpdated: new Date().toISOString(),
+    tasks: activeTasks,
+  }
+  const sanitized = sanitizeTaskQueueForProjectWrite(compactQueue)
+  for (const item of sanitized.removedByTask) {
+    await writeBoundaryEvidence(projectRoot, item.taskId, item.removedEvidence, dryRun)
+  }
+
+  if (!dryRun && (archivedTasks.length > 0 || sanitized.taskDefinitionsRewritten > 0 || forbiddenFindings.length > 0)) {
     const archiveDir = path.join(stateDir, 'tasks', 'archive')
     await fs.mkdir(archiveDir, { recursive: true })
     for (const item of archivedTasks) {
       await writeFullTaskEvidence(projectRoot, item.id, item.task, dryRun)
-      await fs.writeFile(
+      await writeManagedTextFile(
         path.join(archiveDir, `${safeFileName(item.id)}.json`),
         `${JSON.stringify(compactTaskRecordForProjectArchive(item.task), null, 2)}\n`,
         'utf8',
@@ -203,17 +336,20 @@ async function compactTasks(
       archivedCount: archivedTasks.length,
     }
     await ensureDirFor(indexPath)
-    await fs.writeFile(indexPath, `${JSON.stringify(index, null, 2)}\n`, 'utf8')
-
-    const compactQueue = {
-      version: queueVersion(parsed),
-      lastUpdated: new Date().toISOString(),
-      tasks: activeTasks,
-    }
-    await fs.writeFile(tasksPath, `${JSON.stringify(compactQueue, null, 2)}\n`, 'utf8')
+    await writeManagedTextFile(indexPath, `${JSON.stringify(index, null, 2)}\n`, 'utf8')
+    await writeManagedTextFile(tasksPath, `${JSON.stringify(sanitized.queue, null, 2)}\n`, 'utf8')
   }
 
-  return { active: activeTasks.length, archived: archivedTasks.length, compactedArchives }
+  return {
+    active: activeTasks.length,
+    archived: archivedTasks.length,
+    compactedArchives,
+    activeSanitized: sanitized.taskDefinitionsRewritten,
+    forbiddenBefore: forbiddenFindings.length,
+    forbiddenAfter: findForbiddenProjectTaskFields(sanitized.queue).length,
+    forbiddenFindings,
+    removedEvidenceBytes: sanitized.removedEvidenceBytes,
+  }
 }
 
 function splitProgressBlocks(content: string): { kept: string; heartbeats: string[] } {
@@ -251,7 +387,7 @@ async function compactProgress(projectRoot: string, stateDir: string, dryRun: bo
   const progressPath = path.join(stateDir, 'PROGRESS.md')
   let content: string
   try {
-    content = await fs.readFile(progressPath, 'utf8')
+    content = await readManagedTextFile(progressPath, 'utf8')
   } catch (err) {
     if (String(err).includes('ENOENT')) return 0
     throw err
@@ -264,15 +400,15 @@ async function compactProgress(projectRoot: string, stateDir: string, dryRun: bo
     const heartbeatPath = getProjectProgressHeartbeatsPath(projectRoot)
     await ensureDirFor(snapshotPath)
     if (!existsSync(snapshotPath)) {
-      await fs.writeFile(snapshotPath, content, 'utf8')
+      await writeManagedTextFile(snapshotPath, content, 'utf8')
     }
     await ensureDirFor(heartbeatPath)
-    await fs.appendFile(
+    await appendManagedTextFile(
       heartbeatPath,
       `\n# Progress heartbeats moved from committed project state\n\n${heartbeats.join('\n\n')}\n`,
       'utf8',
     )
-    await fs.writeFile(progressPath, kept, 'utf8')
+    await writeManagedTextFile(progressPath, kept, 'utf8')
   }
 
   return heartbeats.length
@@ -283,7 +419,7 @@ async function compactCodebaseMap(projectRoot: string, stateDir: string, dryRun:
   const size = await fileSize(file)
   if (size <= CODEBASE_MAP_COMPACT_THRESHOLD_BYTES) return false
 
-  const raw = await fs.readFile(file, 'utf8')
+  const raw = await readManagedTextFile(file, 'utf8')
   const parsed = parseYaml(raw) as unknown
   if (!isRecord(parsed) || !isRecord(parsed.files)) return false
   const entries = Object.entries(parsed.files)
@@ -307,9 +443,9 @@ async function compactCodebaseMap(projectRoot: string, stateDir: string, dryRun:
     const fullPath = path.join(getProjectLocalHistoryDir(projectRoot), 'codebase-map', 'codebase-map.full.yaml')
     await ensureDirFor(fullPath)
     if (!existsSync(fullPath)) {
-      await fs.writeFile(fullPath, raw, 'utf8')
+      await writeManagedTextFile(fullPath, raw, 'utf8')
     }
-    await fs.writeFile(file, stringifyYaml(compact), 'utf8')
+    await writeManagedTextFile(file, stringifyYaml(compact), 'utf8')
   }
 
   return true
@@ -322,10 +458,44 @@ export async function compactProjectState(
   const stateDir = getProjectStateDir(projectRoot)
   const localHistoryDir = getProjectLocalHistoryDir(projectRoot)
   const dryRun = opts.dryRun ?? true
+  const repoStateMode = resolveRepoStateMode(projectRoot)
   const tasksPath = path.join(stateDir, 'TASKS.json')
   const progressPath = path.join(stateDir, 'PROGRESS.md')
   const codebaseMapPath = path.join(stateDir, 'codebase-map.yaml')
   const bytesBefore = await fileSize(tasksPath) + await fileSize(progressPath) + await fileSize(codebaseMapPath)
+  if (repoStateMode === 'off') {
+    const parsedTasks = await readJsonIfExists(tasksPath)
+    const tasks = queueTasks(parsedTasks)
+    const forbiddenFindings = findForbiddenProjectTaskFields(parsedTasks)
+    await copyRepoLocalProjectStateToSystemState(projectRoot, stateDir, dryRun)
+    const evacuatedProjectStatePaths = await evacuateProjectLocalState(projectRoot, stateDir, dryRun)
+    const bytesAfter = dryRun
+      ? bytesBefore
+      : await fileSize(tasksPath) + await fileSize(progressPath) + await fileSize(codebaseMapPath)
+    return {
+      projectRoot,
+      stateDir,
+      localHistoryDir,
+      dryRun,
+      repoStateMode,
+      evacuatedProjectStatePaths,
+      activeTasksKept: 0,
+      archivedTasks: tasks.filter(task => {
+        const status = taskStatus(task)
+        return status !== null && TERMINAL_STATUSES.has(status)
+      }).length,
+      archivedTaskFilesCompacted: 0,
+      activeTasksSanitized: 0,
+      forbiddenTaskFieldsBefore: forbiddenFindings.length,
+      forbiddenTaskFieldsAfter: 0,
+      forbiddenTaskFieldFindings: forbiddenFindings,
+      removedEvidenceBytes: 0,
+      codebaseMapCompacted: false,
+      progressHeartbeatsMoved: 0,
+      bytesBefore,
+      bytesAfter,
+    }
+  }
   const tasks = await compactTasks(projectRoot, stateDir, dryRun)
   const progressHeartbeatsMoved = await compactProgress(projectRoot, stateDir, dryRun)
   const codebaseMapCompacted = await compactCodebaseMap(projectRoot, stateDir, dryRun)
@@ -338,9 +508,16 @@ export async function compactProjectState(
     stateDir,
     localHistoryDir,
     dryRun,
+    repoStateMode,
+    evacuatedProjectStatePaths: [],
     activeTasksKept: tasks.active,
     archivedTasks: tasks.archived,
     archivedTaskFilesCompacted: tasks.compactedArchives,
+    activeTasksSanitized: tasks.activeSanitized,
+    forbiddenTaskFieldsBefore: tasks.forbiddenBefore,
+    forbiddenTaskFieldsAfter: tasks.forbiddenAfter,
+    forbiddenTaskFieldFindings: tasks.forbiddenFindings,
+    removedEvidenceBytes: tasks.removedEvidenceBytes,
     codebaseMapCompacted,
     progressHeartbeatsMoved,
     bytesBefore,

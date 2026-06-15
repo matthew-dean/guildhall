@@ -6,6 +6,7 @@ import { execFile } from 'node:child_process'
 import { promisify } from 'node:util'
 import { bootstrapWorkspace, slugify } from '@guildhall/config'
 import type { Task, TaskQueue } from '@guildhall/core'
+import { projectStatePath, writeProjectStateJsonAsync, writeProjectStateTextAsync } from '@guildhall/sessions'
 import { buildServeApp } from '../serve.js'
 
 // Integration tests for GET /api/project/release-readiness — the dashboard's
@@ -13,7 +14,6 @@ import { buildServeApp } from '../serve.js'
 
 let tmpDir: string
 let remoteDir: string
-let tasksPath: string
 let projectId: string
 const execFileP = promisify(execFile)
 
@@ -21,7 +21,6 @@ beforeEach(async () => {
   tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'guildhall-release-'))
   remoteDir = await fs.mkdtemp(path.join(os.tmpdir(), 'guildhall-release-remote-'))
   projectId = bootstrapWorkspace(tmpDir, { name: 'Release Test' }).id ?? path.basename(tmpDir)
-  tasksPath = path.join(tmpDir, '.guildhall', 'TASKS.json')
   await execFileP('git', ['init', '-b', 'main'], { cwd: tmpDir })
   await execFileP('git', ['config', 'user.email', 'guildhall@example.test'], { cwd: tmpDir })
   await execFileP('git', ['config', 'user.name', 'Guildhall Test'], { cwd: tmpDir })
@@ -67,7 +66,7 @@ function makeTask(overrides: Partial<Task>): Task {
 
 async function seed(tasks: Task[]): Promise<void> {
   const queue: TaskQueue = { version: 1, lastUpdated: new Date().toISOString(), tasks }
-  await fs.writeFile(tasksPath, JSON.stringify(queue, null, 2), 'utf-8')
+  await writeProjectStateJsonAsync(tmpDir, 'TASKS.json', queue)
 }
 
 function projectUrl(route: string): string {
@@ -97,8 +96,8 @@ async function approveDesignSystem(app: ReturnType<typeof buildServeApp>['app'])
 }
 
 async function commitAndPush(message: string): Promise<void> {
-  await execFileP('git', ['add', '-f', '--', 'guildhall.yaml', '.guildhall'], { cwd: tmpDir })
-  await execFileP('git', ['commit', '-m', message], { cwd: tmpDir })
+  await execFileP('git', ['add', '-f', '--', 'guildhall.yaml'], { cwd: tmpDir })
+  await execFileP('git', ['commit', '--allow-empty', '-m', message], { cwd: tmpDir })
   await execFileP('git', ['push'], { cwd: tmpDir })
 }
 
@@ -132,6 +131,19 @@ describe('GET /api/project/release-readiness', () => {
     expect(body.unapprovedSpecs).toEqual([])
   })
 
+  it('returns a plain release-readiness load error when task state cannot be read', async () => {
+    await writeProjectStateTextAsync(tmpDir, 'TASKS.json', '{ broken json')
+    const { app } = buildServeApp({ projectPath: tmpDir })
+
+    const res = await app.fetch(new Request(projectUrl('/api/project/release-readiness')))
+    const body = await res.json() as any
+
+    expect(res.status).toBe(500)
+    expect(body.error).toBe('Could not load release readiness for this project.')
+    expect(body.detail).toMatch(/TASKS\.json/)
+    expect(body.detail).not.toMatch(/SyntaxError/)
+  })
+
   it('surfaces unapproved briefs and specs in spec_review', async () => {
     await seed([
       makeTask({
@@ -139,8 +151,9 @@ describe('GET /api/project/release-readiness', () => {
         title: 'Brief-needs-approval',
         productBrief: {
           userJob: 'x',
+          whyItMattersNow: 'because this task is ready for an owner approval decision',
           successMetric: 'y',
-          antiPatterns: [],
+          nonGoals: ['Do not expand the release scope.'],
         },
       }),
       makeTask({
@@ -158,6 +171,76 @@ describe('GET /api/project/release-readiness', () => {
     expect(body.unapprovedSpecs.map((b: any) => b.id)).toEqual(['task-2'])
     expect(body.totals.humanBlockingCount).toBe(2)
     expect(body.totals.blockingCount).toBeGreaterThan(2)
+  })
+
+  it('separates incomplete briefs from approval-ready briefs', async () => {
+    await seed([
+      makeTask({
+        id: 'task-incomplete',
+        title: 'Needs brief cleanup',
+        status: 'proposed',
+        productBrief: {
+          userJob: 'x',
+          successMetric: 'y',
+          antiPatterns: [],
+        },
+      }),
+      makeTask({
+        id: 'task-unapproved',
+        title: 'Ready for brief approval',
+        status: 'proposed',
+        productBrief: {
+          userJob: 'x',
+          whyItMattersNow: 'because this can close a real user gap',
+          successMetric: 'y',
+          nonGoals: ['Do not widen scope.'],
+        },
+      }),
+    ])
+    const { app } = buildServeApp({ projectPath: tmpDir })
+    await approveDesignSystem(app)
+    await commitAndPush('settle brief fixtures')
+
+    const res = await app.fetch(new Request(projectUrl('/api/project/release-readiness')))
+    const body = await res.json() as any
+
+    expect(body.incompleteBriefs).toEqual([
+      {
+        id: 'task-incomplete',
+        title: 'Needs brief cleanup',
+        reason: 'Task brief needs user job, why it matters now, success metric, and at least one non-goal before approval.',
+      },
+    ])
+    expect(body.unapprovedBriefs.map((b: any) => b.id)).toEqual(['task-unapproved'])
+    expect(body.totals.incompleteBriefBlockingCount).toBe(1)
+    expect(body.totals.humanBlockingCount).toBe(2)
+  })
+
+  it('keeps external setup blockers owner-facing in release readiness', async () => {
+    await seed([
+      makeTask({
+        id: 'task-oauth',
+        title: 'Connect OAuth provider',
+        status: 'blocked',
+        blockReason: 'OAuth client secrets need external setup before Guildhall can verify this work.',
+      }),
+    ])
+    const { app } = buildServeApp({ projectPath: tmpDir })
+    await approveDesignSystem(app)
+    await commitAndPush('settle external setup blocker')
+
+    const res = await app.fetch(new Request(projectUrl('/api/project/release-readiness')))
+    const body = await res.json() as any
+
+    expect(body.ready).toBe(false)
+    expect(body.blockedByAgent).toEqual([
+      {
+        id: 'task-oauth',
+        title: 'Connect OAuth provider',
+        reason: 'OAuth client secrets need external setup before Guildhall can verify this work.',
+      },
+    ])
+    expect(body.totals.humanBlockingCount).toBe(1)
   })
 
   it('does not count terminal or reserved workspace-import briefs as human blockers', async () => {
@@ -233,6 +316,7 @@ describe('GET /api/project/release-readiness', () => {
     const { app } = buildServeApp({ projectPath: tmpDir })
     await approveDesignSystem(app)
     await commitAndPush('approve design system')
+    await fs.mkdir(path.join(tmpDir, '.guildhall'), { recursive: true })
     await fs.writeFile(path.join(tmpDir, '.guildhall', 'release-note.md'), 'unlanded Guildhall note\n', 'utf8')
 
     const res = await app.fetch(new Request(projectUrl('/api/project/release-readiness')))
@@ -331,7 +415,7 @@ describe('GET /api/project/release-readiness', () => {
       }),
     ])
     await fs.writeFile(
-      path.join(tmpDir, '.guildhall', 'codebase-map.yaml'),
+      projectStatePath(tmpDir, 'codebase-map.yaml'),
       [
         'version: 1',
         `generatedAt: ${new Date().toISOString()}`,

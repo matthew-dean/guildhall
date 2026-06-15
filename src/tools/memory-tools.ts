@@ -1,8 +1,9 @@
+import { appendManagedTextFile, readManagedTextFile, readManagedTextFileSync, writeManagedTextFile } from '@guildhall/persistence'
 import { defineTool } from '@guildhall/engine'
 import { z } from 'zod'
 import fs from 'node:fs/promises'
 import { DecisionEntry, ProgressEntry } from '@guildhall/core'
-import { dirname } from 'node:path'
+import { basename, dirname, join } from 'node:path'
 import {
   getProjectProgressHeartbeatsPath,
   inferProjectRootFromMemoryDir,
@@ -40,7 +41,7 @@ export async function logDecision(input: LogDecisionInput): Promise<LogDecisionR
       .filter((line) => line !== null)
       .join('\n')
 
-    await fs.appendFile(input.decisionsPath, block, 'utf-8')
+    await appendManagedTextFile(input.decisionsPath, block, 'utf-8')
     return { success: true }
   } catch (err) {
     return { success: false, error: String(err) }
@@ -98,11 +99,15 @@ export async function logProgress(input: LogProgressInput): Promise<LogProgressR
       .filter((line) => line !== null)
       .join('\n')
 
+    const progressDir = dirname(input.progressPath)
+    const projectRoot = inferProjectRootFromMemoryDir(progressDir)
     const outputPath = entry.type === 'heartbeat'
-      ? getProjectProgressHeartbeatsPath(inferProjectRootFromMemoryDir(dirname(input.progressPath)))
+      ? basename(progressDir) === 'project-state'
+        ? join(dirname(progressDir), 'progress', 'heartbeats.md')
+        : getProjectProgressHeartbeatsPath(projectRoot)
       : input.progressPath
     await fs.mkdir(dirname(outputPath), { recursive: true })
-    await fs.appendFile(outputPath, block, 'utf-8')
+    await appendManagedTextFile(outputPath, block, 'utf-8')
     return { success: true, path: outputPath }
   } catch (err) {
     return { success: false, error: String(err) }
@@ -159,7 +164,7 @@ export interface UpdateMemoryResult {
 export async function updateMemory(input: UpdateMemoryInput): Promise<UpdateMemoryResult> {
   try {
     const block = `\n## ${input.section}\n\n${input.content}\n\n---\n`
-    await fs.appendFile(input.memoryPath, block, 'utf-8')
+    await appendManagedTextFile(input.memoryPath, block, 'utf-8')
     return { success: true }
   } catch (err) {
     return { success: false, error: String(err) }

@@ -1,5 +1,9 @@
 import { PassThrough } from 'node:stream'
 import { EventEmitter } from 'node:events'
+import { existsSync } from 'node:fs'
+import { mkdtemp, rm } from 'node:fs/promises'
+import { homedir, tmpdir } from 'node:os'
+import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
 import { getProjectStateDir } from '@guildhall/sessions'
 
@@ -70,6 +74,8 @@ describe('podman project runtime backend', () => {
           'guildhall',
           '--volume',
           `${state.mounts.projectRoot}:${state.mounts.projectPath}:rw,z`,
+          '--tmpfs',
+          `${state.mounts.projectPath}/.guildhall:rw,noexec,nosuid,nodev`,
           '--volume',
           `${state.mounts.guildhallHome}:${state.mounts.guildhallHomePath}:rw,z`,
         ]),
@@ -92,6 +98,75 @@ describe('podman project runtime backend', () => {
         ],
       }),
     ])
+  })
+
+  it('mounts an isolated container Guildhall home instead of the host Guildhall home', async () => {
+    const calls: Array<{ file: string; args: string[] }> = []
+    const projectRoot = await mkdtemp(join(tmpdir(), 'guildhall-podman-project-'))
+    const backend = new PodmanProjectRuntimeBackend({
+      execFile: async (file, args) => {
+        calls.push({ file, args })
+        return { stdout: 'container-789\n', stderr: '' }
+      },
+    })
+    const state = defaultProjectRuntimeState(projectRoot)
+
+    await backend.create(projectRoot, state)
+
+    const createArgs = calls[0]!.args
+    expect(createArgs).toContain(`${state.mounts.guildhallHome}:${state.mounts.guildhallHomePath}:rw,z`)
+    expect(createArgs).not.toContain(`${join(homedir(), '.guildhall')}:${state.mounts.guildhallHomePath}:rw,z`)
+    expect(state.mounts.guildhallHome).toContain('/runtime/container-home')
+    expect(existsSync(state.mounts.guildhallHome)).toBe(true)
+
+    await rm(projectRoot, { recursive: true, force: true })
+  })
+
+  it('does not trust legacy runtime state that still points at the host Guildhall home', async () => {
+    const calls: Array<{ file: string; args: string[] }> = []
+    const projectRoot = await mkdtemp(join(tmpdir(), 'guildhall-podman-project-'))
+    const backend = new PodmanProjectRuntimeBackend({
+      execFile: async (file, args) => {
+        calls.push({ file, args })
+        return { stdout: 'container-legacy\n', stderr: '' }
+      },
+    })
+    const legacyState = {
+      ...defaultProjectRuntimeState(projectRoot),
+      mounts: {
+        ...defaultProjectRuntimeState(projectRoot).mounts,
+        guildhallHome: join(homedir(), '.guildhall'),
+      },
+    }
+
+    await backend.create(projectRoot, legacyState)
+
+    const createArgs = calls[0]!.args
+    expect(createArgs).not.toContain(`${join(homedir(), '.guildhall')}:${legacyState.mounts.guildhallHomePath}:rw,z`)
+    expect(createArgs.some(arg => arg.endsWith(`/runtime/container-home:${legacyState.mounts.guildhallHomePath}:rw,z`))).toBe(true)
+
+    await rm(projectRoot, { recursive: true, force: true })
+  })
+
+  it('overlays project-local Guildhall state instead of exposing it through the checkout mount', async () => {
+    const calls: Array<{ file: string; args: string[] }> = []
+    const projectRoot = await mkdtemp(join(tmpdir(), 'guildhall-podman-project-'))
+    const backend = new PodmanProjectRuntimeBackend({
+      execFile: async (file, args) => {
+        calls.push({ file, args })
+        return { stdout: 'container-overlay\n', stderr: '' }
+      },
+    })
+    const state = defaultProjectRuntimeState(projectRoot)
+
+    await backend.create(projectRoot, state)
+
+    expect(calls[0]!.args).toEqual(expect.arrayContaining([
+      '--tmpfs',
+      `${state.mounts.projectPath}/.guildhall:rw,noexec,nosuid,nodev`,
+    ]))
+
+    await rm(projectRoot, { recursive: true, force: true })
   })
 
   it('mounts only active approved capability grants when creating the container', async () => {

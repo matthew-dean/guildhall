@@ -163,7 +163,7 @@ describe('buildProjectTicker', () => {
     ).toMatchObject({
       tone: 'idle',
       actorLabel: 'Paused',
-      message: '1 task paused until Guildhall starts',
+      message: '1 task paused until you resume',
     })
 
     expect(
@@ -197,7 +197,7 @@ describe('buildProjectTicker', () => {
     expect(buildProjectTicker({ initializationNeeded: true }, null, now)).toMatchObject({
       tone: 'warn',
       actorLabel: 'Setup',
-      message: 'Finish first-time Guildhall setup',
+      message: 'Finish first-time setup',
     })
 
     expect(
@@ -211,6 +211,25 @@ describe('buildProjectTicker', () => {
       pulse: true,
       actorLabel: 'Coordinator',
       message: 'Working on 1 task',
+    })
+
+    expect(
+      buildProjectTicker(
+        {
+          run: { status: 'running', mode: 'one_task' },
+          tasks: [
+            { id: 'task-1', status: 'ready', title: 'Ready task' },
+            { id: 'task-2', status: 'ready', title: 'Another ready task' },
+          ],
+        },
+        { event: { type: 'unknown_event' } },
+        now,
+      ),
+    ).toMatchObject({
+      tone: 'active',
+      pulse: true,
+      actorLabel: 'Coordinator',
+      message: 'Advancing one task',
     })
 
     expect(
@@ -245,7 +264,7 @@ describe('buildProjectTicker', () => {
     ).toMatchObject({
       tone: 'idle',
       actorLabel: 'Paused',
-      message: '2 tasks paused until Guildhall starts',
+      message: '2 tasks paused until you resume',
     })
 
     expect(
@@ -262,8 +281,8 @@ describe('buildProjectTicker', () => {
       ),
     ).toMatchObject({
       tone: 'warn',
-      actorLabel: 'Needs task briefs',
-      label: 'Drafts',
+      actorLabel: 'Needs brief',
+      label: 'Needs brief',
       message: '2 imported drafts need task briefs',
     })
 
@@ -386,6 +405,22 @@ describe('buildProjectTicker', () => {
     })
   })
 
+  it('summarizes owner-input readiness without repeating the full blocker sentence', () => {
+    const detail: ProjectDetail = {
+      startReadiness: {
+        canStart: false,
+        code: 'owner_input_required',
+        message: 'Review the waiting spec before Guildhall can continue',
+      },
+    }
+
+    expect(buildProjectTicker(detail, null, now)).toMatchObject({
+      tone: 'warn',
+      actorLabel: 'Needs you',
+      message: 'Spec review pending',
+    })
+  })
+
   it('lets current actionable draft state beat stale stopped-event copy', () => {
     const detail: ProjectDetail = {
       run: { status: 'stopped' },
@@ -408,8 +443,8 @@ describe('buildProjectTicker', () => {
       ),
     ).toMatchObject({
       tone: 'warn',
-      actorLabel: 'Needs task briefs',
-      label: 'Drafts',
+      actorLabel: 'Needs brief',
+      label: 'Needs brief',
       message: '1 imported draft needs task briefs',
     })
   })
@@ -464,7 +499,7 @@ describe('buildProjectCardTicker', () => {
       tone: 'warn',
       pulse: false,
       label: 'Setup',
-      message: 'First-time Guildhall setup',
+      message: 'First-time setup',
     })
 
     expect(
@@ -477,7 +512,7 @@ describe('buildProjectCardTicker', () => {
     ).toEqual({
       tone: 'warn',
       pulse: false,
-      label: 'Needs task briefs',
+      label: 'Needs brief',
       message: '2 imported drafts waiting',
     })
 

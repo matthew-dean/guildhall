@@ -44,6 +44,63 @@ describe('resolveEffectiveTaskProjectPath', () => {
   })
 })
 
+describe('normalizeAutomatedAcceptanceCriterionCommands', () => {
+  it('keeps explicit Python pytest commands instead of rewriting through pnpm', async () => {
+    await fs.writeFile(path.join(tmpDir, 'pyproject.toml'), '[project]\nname = "demo"\n', 'utf8')
+    await fs.mkdir(path.join(tmpDir, 'tests'), { recursive: true })
+    await fs.writeFile(path.join(tmpDir, 'tests/test_cli.py'), 'def test_cli(): assert True\n', 'utf8')
+    const task = {
+      projectPath: tmpDir,
+      acceptanceCriteria: [
+        {
+          id: 'ac-1',
+          description: 'pytest passes for CLI behavior',
+          verifiedBy: 'automated',
+          command: 'pytest tests/test_cli.py',
+        },
+      ],
+    } as any
+
+    const changed = normalizeAutomatedAcceptanceCriterionCommands({
+      workspaceProjectPath: tmpDir,
+      task,
+    })
+
+    expect(changed).toBe(false)
+    expect(task.acceptanceCriteria[0].command).toBe('pytest tests/test_cli.py')
+    expect(JSON.stringify(task.acceptanceCriteria)).not.toMatch(/pnpm/)
+  })
+
+  it('keeps cargo test commands for Rust libraries', async () => {
+    await fs.writeFile(
+      path.join(tmpDir, 'Cargo.toml'),
+      '[package]\nname = "calc"\nversion = "0.1.0"\nedition = "2021"\n',
+      'utf8',
+    )
+    await fs.mkdir(path.join(tmpDir, 'src'), { recursive: true })
+    await fs.writeFile(path.join(tmpDir, 'src/lib.rs'), 'pub fn add(a:i32,b:i32)->i32{a+b}\n', 'utf8')
+    const task = {
+      projectPath: tmpDir,
+      acceptanceCriteria: [
+        {
+          id: 'ac-1',
+          description: 'cargo test passes',
+          verifiedBy: 'automated',
+          command: 'cargo test',
+        },
+      ],
+    } as any
+
+    const changed = normalizeAutomatedAcceptanceCriterionCommands({
+      workspaceProjectPath: tmpDir,
+      task,
+    })
+
+    expect(changed).toBe(false)
+    expect(task.acceptanceCriteria[0].command).toBe('cargo test')
+  })
+})
+
 describe('resolveEffectiveTaskBootstrapBlock', () => {
   it('rewrites workspace-scoped bootstrap commands relative to a subproject task root', () => {
     const result = resolveEffectiveTaskBootstrapBlock({

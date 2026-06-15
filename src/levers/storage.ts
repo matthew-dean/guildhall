@@ -1,5 +1,5 @@
 /**
- * Read / write `.guildhall/agent-settings.yaml`.
+ * Read / write system-local `agent-settings.yaml`.
  *
  * The file is the single source of truth for lever positions. On first read,
  * if the file is missing, we seed it with `makeDefaultSettings()` and write
@@ -15,6 +15,7 @@ import { promises as fs } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { parse as parseYaml, stringify as stringifyYaml } from 'yaml'
 import type { ZodIssue } from 'zod'
+import { getProjectLocalHistoryDir } from '@guildhall/sessions'
 
 import { makeDefaultSettings } from './defaults.js'
 import {
@@ -105,6 +106,7 @@ function normalizeLegacySettings(raw: unknown): unknown {
       }
     }
   }
+  delete project.merge_policy
 
   return { ...settings, project }
 }
@@ -253,5 +255,5 @@ export function projectLever<K extends keyof ProjectLevers>(
  * Default path helper for a given project root.
  */
 export function defaultAgentSettingsPath(projectRoot: string): string {
-  return join(projectRoot, '.guildhall', AGENT_SETTINGS_FILENAME)
+  return join(getProjectLocalHistoryDir(projectRoot), 'project-state', AGENT_SETTINGS_FILENAME)
 }

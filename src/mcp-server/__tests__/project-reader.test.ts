@@ -1,12 +1,15 @@
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { basename, join } from 'node:path'
 import { describe, expect, it } from 'vitest'
+import { writeProjectStateJson, writeProjectStateText } from '@guildhall/sessions'
 import { saveCodebaseMap } from '@guildhall/corpus-map'
+import { recordMemoryEvent } from '@guildhall/memory-core'
 import {
   createCapabilityRequest,
   defaultProjectRuntimeState,
   recordMemoryObservation,
+  writeProjectDeliveryModel,
   writeProjectRuntimeState,
 } from '@guildhall/runtime'
 import { getProjectContextDebugLedgerPath, getProjectLocalHistoryDir } from '@guildhall/sessions'
@@ -45,6 +48,16 @@ describe('Guildhall MCP URI helpers', () => {
     expect(parseGuildhallUri('guildhall://project/local-history')).toEqual({ kind: 'localHistory' })
     expect(parseGuildhallUri('guildhall://project/codebase-knowledge')).toEqual({ kind: 'codebaseKnowledge' })
     expect(parseGuildhallUri('guildhall://project/runtime')).toEqual({ kind: 'runtime' })
+    expect(parseGuildhallUri('guildhall://project/drivers')).toEqual({ kind: 'drivers' })
+    expect(parseGuildhallUri('guildhall://project/primitives')).toEqual({ kind: 'primitives' })
+    expect(parseGuildhallUri('guildhall://project/task-context/task-001')).toEqual({
+      kind: 'taskContext',
+      taskId: 'task-001',
+    })
+    expect(parseGuildhallUri('guildhall://project/task-relationships/task-001')).toEqual({
+      kind: 'taskRelationships',
+      taskId: 'task-001',
+    })
   })
 
   it('rejects non-Guildhall URIs and path traversal segments', () => {
@@ -72,7 +85,7 @@ describe('Guildhall MCP project reader', () => {
       writeFileSync(join(root, 'package.json'), JSON.stringify({
         dependencies: { svelte: '^5.0.0' },
       }), 'utf8')
-      writeFileSync(join(root, '.guildhall', 'TASKS.json'), JSON.stringify({
+      writeProjectStateJson(root, 'TASKS.json', {
         tasks: [{
           id: 'task-001',
           title: 'Wire bridge',
@@ -87,15 +100,45 @@ describe('Guildhall MCP project reader', () => {
           acceptanceCriteria: [],
           outOfScope: [],
           dependsOn: [],
+          delivery: {
+            driver: 'knit',
+            provider: 'looma',
+            usesPrimitives: ['menu-item'],
+          },
           revisionCount: 0,
           remediationAttempts: 0,
           escalations: [],
           agentIssues: [],
         }],
-      }), 'utf8')
+      })
+      await writeProjectDeliveryModel(root, {
+        version: 1,
+        updatedAt: '2026-06-05T12:00:00.000Z',
+        drivers: [
+          { id: 'knit', label: 'Knit', role: 'primary', paths: ['./apps/knit'], domains: ['looma'] },
+          { id: 'looma', label: 'Looma', role: 'provider', paths: ['./packages/looma'], domains: ['looma'] },
+        ],
+        primitives: [
+          {
+            id: 'menu-item',
+            label: 'MenuItem',
+            kind: 'ui_primitive',
+            provider: 'looma',
+            paths: ['./packages/looma/src/menu'],
+            dependsOn: [],
+            invariants: ['Can render as button or link.'],
+            proof: ['storybook'],
+            status: 'needs_proof',
+            evidence: [],
+            aliases: [],
+          },
+        ],
+        validationEvidence: [],
+        rejectedCandidates: [],
+      })
       writeFileSync(join(root, '.guildhall', 'DECISIONS.md'), '# Decisions\n\n- Use MCP.\n', 'utf8')
-      writeFileSync(join(root, '.guildhall', 'MEMORY.md'), '# Memory\n\n## Runtime\n\nProject fact. token: ghp_123456789012345678901234567890123456\n', 'utf8')
-      writeFileSync(join(root, '.guildhall', 'design-system.yaml'), [
+      writeProjectStateText(root, 'MEMORY.md', '# Memory\n\n## Runtime\n\nProject fact. token: ghp_123456789012345678901234567890123456\n')
+      writeProjectStateText(root, 'design-system.yaml', [
         'version: 1',
         'revision: 3',
         'approvedAt: "2026-05-28T00:00:00.000Z"',
@@ -118,8 +161,8 @@ describe('Guildhall MCP project reader', () => {
         '  keyboardRules: []',
         '  reducedMotionRespected: true',
         '',
-      ].join('\n'), 'utf8')
-      writeFileSync(join(root, '.guildhall', 'design-taste.yaml'), [
+      ].join('\n'))
+      writeProjectStateText(root, 'design-taste.yaml', [
         'version: 1',
         'opinions:',
         '  visualDirection:',
@@ -130,8 +173,8 @@ describe('Guildhall MCP project reader', () => {
         '    defaultMode: semantic-oklch-roles',
         '    saturationBudget: controlled',
         '',
-      ].join('\n'), 'utf8')
-      writeFileSync(join(root, '.guildhall', 'design-stories.yaml'), [
+      ].join('\n'))
+      writeProjectStateText(root, 'design-stories.yaml', [
         'version: 1',
         'stories:',
         '  - id: pantry-filter.default',
@@ -139,8 +182,8 @@ describe('Guildhall MCP project reader', () => {
         '    title: Pantry filter / Default',
         '    states: [default, selected]',
         '',
-      ].join('\n'), 'utf8')
-      writeFileSync(join(root, '.guildhall', 'learning.json'), JSON.stringify({
+      ].join('\n'))
+      writeProjectStateJson(root, 'learning.json', {
         version: 1,
         suggestedLearnings: [{
           id: 'prefer-mcp-audit',
@@ -156,7 +199,7 @@ describe('Guildhall MCP project reader', () => {
           createdAt: '2026-05-28T00:00:00.000Z',
           updatedAt: '2026-05-28T00:00:00.000Z',
         }],
-      }), 'utf8')
+      })
       writeFileSync(join(root, '.guildhall', 'artifacts.yaml'), [
         'version: 1',
         'artifacts:',
@@ -187,6 +230,33 @@ describe('Guildhall MCP project reader', () => {
           createdAt: '2026-05-28T00:00:00.000Z',
           updatedAt: '2026-05-28T00:00:00.000Z',
           source: 'test',
+        },
+      })
+      await recordMemoryEvent({
+        projectRoot: root,
+        event: {
+          scope: {
+            kind: 'task_thread',
+            projectId: basename(root),
+            taskId: 'task-001',
+            agentRole: 'worker',
+            threadId: 'task-001',
+          },
+          source: {
+            kind: 'progress',
+            ref: 'PROGRESS.md#mcp-memory-core',
+            path: '.guildhall/PROGRESS.md',
+            capturedAt: '2026-06-06T12:00:00.000Z',
+          },
+          content: {
+            summary: 'Memory-core packet says MCP bridge proof should cite source refs.',
+          },
+          metadata: {
+            projectId: basename(root),
+            taskId: 'task-001',
+            retention: 'task_lifecycle',
+            risk: 'low',
+          },
         },
       })
       await writeProjectRuntimeState(root, {
@@ -302,6 +372,10 @@ describe('Guildhall MCP project reader', () => {
       expect(resources.map((r) => r.uri)).toContain('guildhall://project/context')
       expect(resources.map((r) => r.uri)).toContain('guildhall://project/local-history')
       expect(resources.map((r) => r.uri)).toContain('guildhall://project/codebase-knowledge')
+      expect(resources.map((r) => r.uri)).toContain('guildhall://project/drivers')
+      expect(resources.map((r) => r.uri)).toContain('guildhall://project/primitives')
+      expect(resources.map((r) => r.uri)).toContain('guildhall://project/task-context/task-001')
+      expect(resources.map((r) => r.uri)).toContain('guildhall://project/task-relationships/task-001')
 
       const project = await readGuildhallResource(ctx, 'guildhall://project')
       expect(project).toContain('## Runtime Health')
@@ -317,6 +391,11 @@ describe('Guildhall MCP project reader', () => {
       expect(artifact).toContain('Bridge')
 
       const memory = await readGuildhallResource(ctx, 'guildhall://project/memory')
+      expect(memory).toContain('## Memory-Core')
+      expect(memory).toContain('- Repo-local writes: none')
+      expect(memory).toContain('- Compaction: active')
+      expect(memory).toContain('- Semantic validity: valid')
+      expect(memory).toContain('Memory-core packet says MCP bridge proof')
       expect(memory).toContain('mcp-bridge-pref')
       expect(memory).toContain('External agents should audit through MCP')
       expect(memory).not.toContain('ghp_123456789012345678901234567890123456')
@@ -325,7 +404,7 @@ describe('Guildhall MCP project reader', () => {
       const learning = await readGuildhallResource(ctx, 'guildhall://project/learning')
       expect(learning).toContain('prefer-mcp-audit')
 
-      writeFileSync(join(root, '.guildhall', 'design-feedback.json'), JSON.stringify({
+      writeProjectStateJson(root, 'design-feedback.json', {
         version: 1,
         ownerFeedback: [{
           id: 'owner-show-all',
@@ -348,7 +427,7 @@ describe('Guildhall MCP project reader', () => {
           createdAt: '2026-05-28T00:00:00.000Z',
           updatedAt: '2026-05-28T00:00:00.000Z',
         }],
-      }, null, 2), 'utf8')
+      })
       const feedback = await readGuildhallResource(ctx, 'guildhall://project/feedback')
       expect(feedback).toContain('owner-show-all')
       expect(feedback).toContain('Show all should be a segmented filter choice.')
@@ -376,6 +455,14 @@ describe('Guildhall MCP project reader', () => {
       expect(context).toContain('task-001 / worker-agent')
       expect(context).toContain('Memory packet: 1 included')
       expect(context).not.toContain('sk-123456789012345678901234')
+
+      const primitives = await readGuildhallResource(ctx, 'guildhall://project/primitives')
+      expect(primitives).toContain('MenuItem')
+      expect(primitives).toContain('Used by tasks: task-001')
+
+      const taskContext = await readGuildhallResource(ctx, 'guildhall://project/task-context/task-001')
+      expect(taskContext).toContain('Knit is driving this work')
+      expect(taskContext).toContain('MenuItem')
 
       const localHistory = await readGuildhallResource(ctx, 'guildhall://project/local-history')
       expect(localHistory).toContain('Local history is summarized only')

@@ -1,8 +1,11 @@
+import { appendManagedTextFile, readManagedTextFile, readManagedTextFileSync, writeManagedTextFile } from '@guildhall/persistence'
 import fs from 'node:fs/promises'
 import path from 'node:path'
 import { existsSync, readFileSync } from 'node:fs'
 import { z } from 'zod'
 import { guildhallHomeDir } from '@guildhall/config'
+import { projectSkillProposalsPath } from '@guildhall/skills'
+import { getProjectSystemStatePathFromMemoryDir } from '@guildhall/sessions'
 
 export const MemoryStatus = z.enum(['observed', 'proposed', 'active', 'used', 'retired'])
 export type MemoryStatus = z.infer<typeof MemoryStatus>
@@ -46,6 +49,7 @@ export const MemoryRecord = z.object({
   content: z.string().min(1),
   tags: z.array(z.string()).default([]),
   domains: z.array(z.string()).default([]),
+  structuralScopes: z.array(z.string()).default([]),
   taskKinds: z.array(z.string()).default([]),
   fileAreas: z.array(z.string()).default([]),
   confidence: Confidence.default('medium'),
@@ -56,7 +60,8 @@ export const MemoryRecord = z.object({
   updatedAt: z.string(),
   source: z.string(),
 })
-export type MemoryRecord = z.infer<typeof MemoryRecord>
+export type MemoryRecord = z.output<typeof MemoryRecord>
+export type MemoryRecordInput = z.input<typeof MemoryRecord>
 
 const MemoryStore = z.object({
   version: z.literal(1).default(1),
@@ -79,12 +84,12 @@ export interface MemoryQuery {
 }
 
 export function memoryStorePath(memoryDir: string): string {
-  return path.join(memoryDir, 'memory-store.json')
+  return getProjectSystemStatePathFromMemoryDir(memoryDir, 'memory-store.json')
 }
 
 export async function recordMemoryObservation(input: {
   memoryDir: string
-  record: MemoryRecord
+  record: MemoryRecordInput
 }): Promise<MemoryRecord> {
   const store = readStore(input.memoryDir)
   const record = MemoryRecord.parse(input.record)
@@ -137,7 +142,7 @@ function readStore(memoryDir: string): MemoryStore {
   const file = memoryStorePath(memoryDir)
   if (!existsSync(file)) return { version: 1, records: [] }
   try {
-    return MemoryStore.parse(JSON.parse(readFileSync(file, 'utf8')))
+    return MemoryStore.parse(JSON.parse(readManagedTextFileSync(file, 'utf8')))
   } catch {
     return { version: 1, records: [] }
   }
@@ -145,13 +150,13 @@ function readStore(memoryDir: string): MemoryStore {
 
 async function writeStore(memoryDir: string, store: MemoryStore): Promise<void> {
   await fs.mkdir(memoryDir, { recursive: true })
-  await fs.writeFile(memoryStorePath(memoryDir), `${JSON.stringify(MemoryStore.parse(store), null, 2)}\n`, 'utf8')
+  await writeManagedTextFile(memoryStorePath(memoryDir), `${JSON.stringify(MemoryStore.parse(store), null, 2)}\n`, 'utf8')
 }
 
 function readMemoryMarkdown(memoryDir: string): MemoryRecord[] {
-  const file = path.join(memoryDir, 'MEMORY.md')
+  const file = getProjectSystemStatePathFromMemoryDir(memoryDir, 'MEMORY.md')
   if (!existsSync(file)) return []
-  const raw = readFileSync(file, 'utf8')
+  const raw = readManagedTextFileSync(file, 'utf8')
   const sections = raw.split(/^##\s+/m).slice(1)
   const now = '1970-01-01T00:00:00.000Z'
   return sections
@@ -184,10 +189,12 @@ function readMemoryMarkdown(memoryDir: string): MemoryRecord[] {
 }
 
 function readLearningAdapters(dir: string, scope: 'project' | 'user_global'): MemoryRecord[] {
-  const file = path.join(dir, 'learning.json')
+  const file = scope === 'project'
+    ? getProjectSystemStatePathFromMemoryDir(dir, 'learning.json')
+    : path.join(dir, 'learning.json')
   if (!existsSync(file)) return []
   try {
-    const parsed = JSON.parse(readFileSync(file, 'utf8')) as {
+    const parsed = JSON.parse(readManagedTextFileSync(file, 'utf8')) as {
       suggestedLearnings?: Array<Record<string, unknown>>
     }
     return (parsed.suggestedLearnings ?? []).flatMap((item) => {
@@ -227,10 +234,10 @@ function readLearningAdapters(dir: string, scope: 'project' | 'user_global'): Me
 }
 
 function readProjectSkillAdapters(memoryDir: string): MemoryRecord[] {
-  const file = path.join(memoryDir, 'project-skills.json')
+  const file = projectSkillProposalsPath(memoryDir)
   if (!existsSync(file)) return []
   try {
-    const parsed = JSON.parse(readFileSync(file, 'utf8')) as {
+    const parsed = JSON.parse(readManagedTextFileSync(file, 'utf8')) as {
       proposals?: Array<Record<string, unknown>>
     }
     return (parsed.proposals ?? []).flatMap((proposal) => {

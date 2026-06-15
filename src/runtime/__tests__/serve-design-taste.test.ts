@@ -5,7 +5,7 @@ import path from 'node:path'
 import yaml from 'js-yaml'
 import { bootstrapWorkspace } from '@guildhall/config'
 import { buildServeApp } from '../serve.js'
-import { DESIGN_TASTE_FILE } from '../design-taste.js'
+import { DESIGN_TASTE_FILE, designTastePath } from '../design-taste.js'
 
 let tmpDir: string
 let dataDir: string
@@ -45,7 +45,9 @@ describe('GET /api/project/design-taste', () => {
         },
       },
     }), 'utf-8')
-    await fs.writeFile(path.join(tmpDir, '.guildhall', DESIGN_TASTE_FILE), yaml.dump({
+    const projectTastePath = designTastePath(path.join(tmpDir, '.guildhall'))
+    await fs.mkdir(path.dirname(projectTastePath), { recursive: true })
+    await fs.writeFile(projectTastePath, yaml.dump({
       opinions: {
         visualDirection: {
           avoid: ['tiny-unexplained-controls'],

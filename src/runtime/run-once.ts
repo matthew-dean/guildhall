@@ -1,9 +1,11 @@
+import { writeManagedTextFileSync } from '@guildhall/persistence'
+import { appendManagedTextFile, readManagedTextFile, readManagedTextFileSync, writeManagedTextFile } from '@guildhall/persistence'
 import fs from 'node:fs/promises'
 import path from 'node:path'
 
 import type { ResolvedConfig } from '@guildhall/config'
 import { AGENT_SETTINGS_FILENAME, loadLeverSettings, saveLeverSettings, validateLeverSettings } from '@guildhall/levers'
-import { atomicWriteText } from '@guildhall/sessions'
+import { appendTaskEvidence, atomicWriteText, getProjectSystemStatePath, inferProjectRootFromMemoryDir } from '@guildhall/sessions'
 
 import { createExploringTask } from './intake.js'
 import { runOrchestrator, type OrchestratorRunOptions, type OrchestratorRunResult } from './orchestrator.js'
@@ -114,7 +116,7 @@ export async function runGuildhallTaskOnce(input: RunOnceInput): Promise<RunOnce
 
   if (report.outputPath) {
     await fs.mkdir(path.dirname(report.outputPath), { recursive: true })
-    await fs.writeFile(report.outputPath, `${JSON.stringify(report, null, 2)}\n`, 'utf8')
+    await writeManagedTextFile(report.outputPath, `${JSON.stringify(report, null, 2)}\n`, 'utf8')
   }
 
   return report
@@ -128,7 +130,7 @@ async function resolvePrompt(input: RunOnceInput): Promise<string> {
   }
   if (prompt) return prompt
   if (fromFile) {
-    const content = await fs.readFile(path.resolve(fromFile), 'utf8')
+    const content = await readManagedTextFile(path.resolve(fromFile), 'utf8')
     const filePrompt = content.trim()
     if (filePrompt) return filePrompt
   }
@@ -140,7 +142,7 @@ async function enableFullyAutomatedRunLever(input: {
   createdAt: string
   reason: string
 }): Promise<void> {
-  const settingsPath = path.join(input.memoryDir, AGENT_SETTINGS_FILENAME)
+  const settingsPath = runOnceStatePath(input.memoryDir, AGENT_SETTINGS_FILENAME)
   const settings = await loadLeverSettings({ path: settingsPath })
   settings.project.run_automation = {
     position: 'fully_automated',
@@ -158,13 +160,12 @@ async function appendRunOnceNote(input: {
   proof: RunOnceProofMode
   createdAt: string
 }): Promise<void> {
-  const tasksPath = path.join(input.memoryDir, 'TASKS.json')
-  const raw = await fs.readFile(tasksPath, 'utf8')
+  const tasksPath = runOnceStatePath(input.memoryDir, 'TASKS.json')
+  const raw = await readManagedTextFile(tasksPath, 'utf8')
   const queue = JSON.parse(raw)
   const task = queue.tasks?.find((candidate: { id?: unknown }) => candidate.id === input.taskId)
   if (!task) throw new Error(`Task ${input.taskId} not found after run-once intake.`)
-  task.notes ??= []
-  task.notes.push({
+  const note = {
     agentId: 'run-once',
     role: 'automation',
     content: [
@@ -173,10 +174,24 @@ async function appendRunOnceNote(input: {
       'This task was created through the scriptable run-once lane; normal Guildhall pressure-test, review, gate, and handoff rules still apply.',
     ].join('\n'),
     timestamp: input.createdAt,
+  }
+  await appendTaskEvidence(inferProjectRootFromMemoryDir(input.memoryDir), input.taskId, {
+    id: `note-${input.taskId}-${input.createdAt.replace(/[^0-9A-Za-z]/g, '')}-run-once`,
+    kind: 'note',
+    recordedAt: input.createdAt,
+    payload: note,
   })
   task.updatedAt = input.createdAt
   queue.lastUpdated = input.createdAt
-  atomicWriteText(tasksPath, `${JSON.stringify(queue, null, 2)}\n`)
+  writeManagedTextFileSync(tasksPath, `${JSON.stringify(queue, null, 2)}\n`)
+}
+
+function runOnceStatePath(memoryDir: string, filename: string): string {
+  const base = path.basename(memoryDir)
+  if (base === '.guildhall' || base === 'memory') {
+    return getProjectSystemStatePath(inferProjectRootFromMemoryDir(memoryDir), filename)
+  }
+  return path.join(memoryDir, filename)
 }
 
 function compactTitle(value: string): string {

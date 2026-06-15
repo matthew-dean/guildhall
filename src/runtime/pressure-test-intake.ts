@@ -1,8 +1,18 @@
+import { appendManagedTextFile, readManagedTextFile, readManagedTextFileSync, writeManagedTextFile } from '@guildhall/persistence'
 import fs from 'node:fs'
 import fsp from 'node:fs/promises'
 import path from 'node:path'
 import { z } from 'zod'
-import { atomicWriteText } from '@guildhall/sessions'
+import {
+  atomicWriteText,
+  listProjectStateDirFromMemoryDir,
+  listProjectStateDirFromMemoryDirAsync,
+  projectRootFromMemoryDir,
+  projectStatePath,
+  projectStatePathFromMemoryDir,
+} from '@guildhall/sessions'
+import { readCachedJson } from './file-read-cache.js'
+import { listBoundedChatSessions } from './bounded-chat.js'
 import {
   buildProjectQuestionEvidence,
   classifyProjectAnswer,
@@ -146,7 +156,7 @@ export async function loadPressureTestIntake(input: {
   memoryDir: string
   intakeId: string
 }): Promise<PressureTestIntake> {
-  const raw = await fsp.readFile(pressureTestPath(input.memoryDir, input.intakeId), 'utf-8')
+  const raw = await readManagedTextFile(pressureTestPath(input.memoryDir, input.intakeId), 'utf-8')
   return normalizePressureTestIntake(PressureTestIntake.parse(JSON.parse(raw)))
 }
 
@@ -255,13 +265,11 @@ export async function inspectPressureTestEvidence(input: {
 }
 
 export function listPressureTestIntakes(memoryDir: string): PressureTestIntake[] {
-  const dir = pressureTestDir(memoryDir)
-  if (!fs.existsSync(dir)) return []
-  return fs.readdirSync(dir)
+  return listProjectStateDirFromMemoryDir(memoryDir, 'pressure-test-intake')
     .filter(name => name.endsWith('.json'))
     .flatMap((name) => {
       try {
-        const raw = JSON.parse(fs.readFileSync(path.join(dir, name), 'utf-8'))
+        const raw = JSON.parse(readManagedTextFileSync(projectStatePathFromMemoryDir(memoryDir, path.join('pressure-test-intake', name)), 'utf-8'))
         return [normalizePressureTestIntake(PressureTestIntake.parse(raw))]
       } catch {
         return []
@@ -270,11 +278,37 @@ export function listPressureTestIntakes(memoryDir: string): PressureTestIntake[]
     .sort((left, right) => left.createdAt.localeCompare(right.createdAt))
 }
 
+export async function listPressureTestIntakesAsync(memoryDir: string): Promise<PressureTestIntake[]> {
+  const names = await listProjectStateDirFromMemoryDirAsync(memoryDir, 'pressure-test-intake')
+  const intakes = await Promise.all(
+    names
+      .filter(name => name.endsWith('.json'))
+      .map(async (name) => {
+        const raw = await readCachedJson<unknown>(projectStatePathFromMemoryDir(memoryDir, path.join('pressure-test-intake', name))).catch(() => null)
+        if (!raw) return null
+        try {
+          return normalizePressureTestIntake(PressureTestIntake.parse(raw))
+        } catch {
+          return null
+        }
+      }),
+  )
+  return intakes
+    .filter((intake): intake is PressureTestIntake => !!intake)
+    .sort((left, right) => left.createdAt.localeCompare(right.createdAt))
+}
+
 export function summarizeProjectCheckIn(memoryDir: string): ProjectCheckInSummary {
   const intakes = listPressureTestIntakes(memoryDir)
-  const activeCount = intakes.filter(intake => intake.status === 'active').length
-  const completedCount = intakes.filter(intake => intake.status === 'complete').length
-  const needed = intakes.length === 0
+  const chats = listBoundedChatSessions(memoryDir)
+    .filter(session => session.objective.kind === 'project_check_in' || session.objective.kind === 'project_intake')
+  const activeCount =
+    intakes.filter(intake => intake.status === 'active').length +
+    chats.filter(chat => chat.status === 'waiting_for_owner' || chat.status === 'coordinator_review').length
+  const completedCount =
+    intakes.filter(intake => intake.status === 'complete').length +
+    chats.filter(chat => chat.status === 'fulfilled').length
+  const needed = intakes.length === 0 && chats.length === 0
   return {
     needed,
     label: 'Project questions',
@@ -331,11 +365,11 @@ export function renderPressureTestSpec(intake: PressureTestIntake): string {
 }
 
 export function pressureTestPath(memoryDir: string, intakeId: string): string {
-  return path.join(pressureTestDir(memoryDir), `${intakeId}.json`)
+  return projectStatePathFromMemoryDir(memoryDir, path.join('pressure-test-intake', `${intakeId}.json`))
 }
 
 function pressureTestDir(memoryDir: string): string {
-  return path.join(memoryDir, 'pressure-test-intake')
+  return projectStatePathFromMemoryDir(memoryDir, 'pressure-test-intake')
 }
 
 async function createProjectQuestionIntake(
@@ -498,10 +532,10 @@ async function answerProjectQuestion(
 }
 
 async function loadProjectQuestionEvidenceFiles(memoryDir: string): Promise<ProjectQuestionEvidenceFile[]> {
-  const projectRoot = path.dirname(memoryDir)
+  const projectRoot = projectRootFromMemoryDir(memoryDir)
   const candidates = [
-    { file: path.join(memoryDir, 'project-brief.md'), source: 'project-brief.md' },
-    { file: path.join(memoryDir, 'TASKS.json'), source: '.guildhall/TASKS.json' },
+    { file: projectStatePath(projectRoot, 'project-brief.md'), source: 'project-brief.md' },
+    { file: projectStatePath(projectRoot, 'TASKS.json'), source: 'TASKS.json' },
     { file: path.join(projectRoot, 'README.md'), source: 'README.md' },
     { file: path.join(projectRoot, 'docs', 'index.md'), source: 'docs/index.md' },
   ]
@@ -510,7 +544,7 @@ async function loadProjectQuestionEvidenceFiles(memoryDir: string): Promise<Proj
     try {
       files.push({
         path: candidate.source,
-        text: await fsp.readFile(candidate.file, 'utf-8'),
+        text: await readManagedTextFile(candidate.file, 'utf-8'),
       })
     } catch {
       // Missing project evidence files are normal for fresh projects.
@@ -908,14 +942,14 @@ function extractLanguageMapCandidates(domain: z.infer<typeof PressureTestDomain>
 
 async function inspectEvidenceFiles(memoryDir: string, projectPath: string): Promise<Array<{ fact: string; source: string }>> {
   const candidates = [
-    { file: path.join(memoryDir, 'project-brief.md'), source: 'memory/project-brief.md' },
+    { file: projectStatePathFromMemoryDir(memoryDir, 'project-brief.md'), source: 'memory/project-brief.md' },
     { file: path.join(projectPath, 'README.md'), source: 'README.md' },
     { file: path.join(projectPath, 'docs', 'README.md'), source: 'docs/README.md' },
   ]
   const facts: Array<{ fact: string; source: string }> = []
   for (const candidate of candidates) {
     try {
-      const raw = await fsp.readFile(candidate.file, 'utf-8')
+      const raw = await readManagedTextFile(candidate.file, 'utf-8')
       const sentence = raw
         .split(/(?<=[.!?])\s+/)
         .map(line => line.trim().replace(/\s+/g, ' '))

@@ -4,7 +4,8 @@ title: Core concepts
 
 # Core concepts
 
-A quick tour of the vocabulary. Each term links to a deeper page.
+A quick tour of the vocabulary. This is a glossary, not a homework assignment:
+skim the nouns you bumped into, then follow the deeper links when one matters.
 
 ## Agent harness
 
@@ -33,8 +34,9 @@ review → gate_check → done` (terminal: `done`, `shelved`, `blocked`). See
 [Task lifecycle](./task-lifecycle).
 
 Guildhall also sizes tasks. Tiny and small work can usually move as one unit;
-large work gets split recommendations; epic work becomes a parent-sized task
-with linked child tasks.
+large work gets split recommendations; epic work becomes containing work with
+linked child tasks. The hierarchy is a link between tasks, not a special
+"parent" status.
 
 ## Request shape
 
@@ -76,7 +78,63 @@ pile of drafts.
 
 ## Domain
 
-A named slice of the project (e.g. `ui`, `backend`, `infra`) owned by one coordinator. Every task declares a domain. Tasks never cross domains silently — cross-domain work becomes an explicit handoff.
+A named slice of the project, such as `ui`, `backend`, or `infra`. Every task
+declares a domain. Work that crosses domains becomes an explicit handoff
+instead of a quiet surprise.
+
+## Driver
+
+The source of product demand. A driver answers whose need decides what matters
+first. It can have path hints, but it is not just a folder. A customer-facing
+app might be the primary driver, a shared package might be the provider, and a
+Storybook or e2e surface might be the proof driver.
+
+## Delivery package
+
+The thing Guildhall is trying to deliver. A delivery package can contain child
+tasks for implementation, docs, tests, proof, or cleanup. Hierarchy describes
+the shape of delivery; dependencies describe execution order.
+
+## Primitive
+
+A foundational project piece downstream work uses or must respect. UI
+components and design tokens are primitives, but so are API clients, response
+envelopes, auth guards, data schemas, event buses, shared test harnesses, and
+workflow conventions.
+
+Guildhall tracks which tasks use primitives and which tasks prove them. A
+primitive is not ready just because code exists; it needs proof or an explicit
+owner decision. See [How Guildhall chooses work](./how-guildhall-chooses-work).
+
+## Structure
+
+The advanced project map for repo domains, multi-project relationships,
+handoffs, and shared contract questions. Most local delivery work should be
+understandable through drivers, delivery packages, tasks, dependencies,
+primitives, and proof. If an advanced structure item needs your judgment, the
+discussion routes back to Thread.
+
+## Project graph
+
+The advanced ownership map across projects, domains, packages, external
+references, and delivery channels. It matters when one registered project
+really needs something from another project or owner boundary. It should not be
+the mental model for ordinary local task dependencies.
+
+## Contract surface
+
+A shared surface individual specs need to fit. Examples include a component
+API, endpoint family, event stream, schema, state machine, MCP resource, design
+system, or domain capability. In the default project model, these often show up
+as primitive invariants and proof expectations rather than as a separate thing
+you need to manage.
+
+## Owner input
+
+A linked decision session for your judgment. Thread owns the conversation;
+Needs You owns the alert that something is waiting; Overview, Work, Structure,
+and Settings can link to the same decision without creating duplicate question
+cards.
 
 ## Coordinator
 
@@ -125,11 +183,16 @@ The punch list separates shipping blockers from nice-to-have finish work.
 
 ## Lever
 
-A named decision point — e.g. `merge_policy`, `reviewer_mode`, `worktree_isolation` — with enumerated positions and full provenance (*who set it, when, why*). Every behavioral variation is a lever, not a hardcoded default. Onboarding can infer initial lever positions from the meta-intake conversation, but approved values still land in plain YAML with rationale. See [Levers](../levers/) and [Onboarding and levers](./onboarding-and-levers).
+A named decision point, such as `merge_policy`, `reviewer_mode`, or
+`worktree_isolation`. Levers keep behavioral choices in plain YAML with a
+rationale, instead of hiding them as hardcoded defaults. See
+[Levers](../levers/) and [Onboarding and levers](./onboarding-and-levers).
 
 ## Hard gate / soft gate
 
-**Hard gates** are deterministic checks a task must pass before it can complete (lint, typecheck, test, custom shell). **Soft gates** are rubric items scored by a reviewer. Together they form the completeness bar.
+**Hard gates** are deterministic checks a task must pass before it can
+complete: lint, typecheck, tests, custom shell commands. **Soft gates** are
+rubric items scored by a reviewer. Together they form the completeness bar.
 
 ## Business envelope
 

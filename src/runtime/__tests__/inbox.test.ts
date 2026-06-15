@@ -9,28 +9,44 @@ import fs from 'node:fs/promises'
 import path from 'node:path'
 import os from 'node:os'
 import { stringify as stringifyYaml } from 'yaml'
-import { getProjectLocalHistoryDir, getProjectStateDir } from '@guildhall/sessions'
+import { getProjectLocalHistoryDir, getProjectSystemStatePath } from '@guildhall/sessions'
 
-import { buildInbox, buildInboxBlockers, type InboxItem } from '../inbox.js'
+import {
+  ATTENTION_OWNED_INBOX_KINDS,
+  buildInbox,
+  buildInboxBlockers,
+  isAttentionOwnedInboxItem,
+  type InboxItem,
+} from '../inbox.js'
+import { writeProjectDeliveryModel } from '../delivery-spine.js'
 
 let tmpDir: string
 let dataDir: string
 let projectStateDir: string
 
+function fixturePath(rel: string): string {
+  const normalized = rel.replace(/\\/g, '/')
+  if (normalized === '.guildhall') return projectStateDir
+  if (normalized.startsWith('.guildhall/')) {
+    return path.join(projectStateDir, normalized.slice('.guildhall/'.length))
+  }
+  return path.join(tmpDir, rel)
+}
+
 async function writeYaml(rel: string, value: unknown): Promise<void> {
-  const p = path.join(tmpDir, rel)
+  const p = fixturePath(rel)
   await fs.mkdir(path.dirname(p), { recursive: true })
   await fs.writeFile(p, stringifyYaml(value), 'utf8')
 }
 
 async function writeJson(rel: string, value: unknown): Promise<void> {
-  const p = path.join(tmpDir, rel)
+  const p = fixturePath(rel)
   await fs.mkdir(path.dirname(p), { recursive: true })
   await fs.writeFile(p, JSON.stringify(value, null, 2), 'utf8')
 }
 
 async function writeFile(rel: string, contents: string): Promise<void> {
-  const p = path.join(tmpDir, rel)
+  const p = fixturePath(rel)
   await fs.mkdir(path.dirname(p), { recursive: true })
   await fs.writeFile(p, contents, 'utf8')
 }
@@ -44,11 +60,16 @@ async function writeLocalHistoryJson(rel: string, value: unknown): Promise<void>
 function buildInboxWithProviderSetup(): InboxItem[] {
   return buildInbox({
     projectPath: tmpDir,
+    projectStateDir,
     snapshotOptions: {
       readProviders: () => ({ providers: { 'openai-api': { apiKey: 'sk-test' } } }),
       detectOauthProviders: () => ({ claude: false, codex: false }),
     },
   })
+}
+
+function itemKinds(items: readonly InboxItem[]): string[] {
+  return items.map(item => item.kind as string)
 }
 
 /** A minimal, schema-valid agent-settings.yaml with every entry system-default. */
@@ -107,7 +128,7 @@ beforeEach(async () => {
   tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'guildhall-inbox-'))
   dataDir = path.join(os.tmpdir(), `guildhall-data-${path.basename(tmpDir)}`)
   process.env.GUILDHALL_DATA_DIR = dataDir
-  projectStateDir = getProjectStateDir(tmpDir)
+  projectStateDir = getProjectSystemStatePath(tmpDir, '')
   await fs.mkdir(projectStateDir, { recursive: true })
 })
 
@@ -118,6 +139,23 @@ afterEach(async () => {
 })
 
 describe('buildInbox', () => {
+  it('classifies only alert-owned inbox kinds explicitly', async () => {
+    expect(ATTENTION_OWNED_INBOX_KINDS).toEqual([
+      'required_migration',
+      'project_understanding',
+      'bootstrap_missing',
+      'setup_pending',
+      'workspace_import_pending',
+      'import_draft_queue',
+      'contract_result_review',
+      'lever_questions',
+      'spec_fill_pending',
+    ])
+
+    expect(isAttentionOwnedInboxItem({ kind: 'workspace_import_pending' } as InboxItem)).toBe(true)
+    expect(isAttentionOwnedInboxItem({ kind: 'lever_questions' } as InboxItem)).toBe(true)
+  })
+
   it('empty state: complete bootstrap, no tasks, no workspace signals, no default levers → no items', async () => {
     await writeCompleteBootstrap()
     // Suppress workspace-import: also write workspace-goals.json so the check
@@ -148,12 +186,61 @@ describe('buildInbox', () => {
 
     const items = buildInbox({
       projectPath: tmpDir,
+      projectStateDir,
       snapshotOptions: {
         readProviders: () => ({ providers: { 'openai-api': { apiKey: 'sk-test' } } }),
         detectOauthProviders: () => ({ claude: false, codex: false }),
       },
     })
     expect(items).toEqual([])
+  })
+
+  it('contract_result_review: emits pending contract review items without resurfacing applied evidence', async () => {
+    await writeCompleteBootstrap()
+    await writeJson('.guildhall/workspace-goals.json', { goals: [] })
+    await writeJson('.guildhall/TASKS.json', { version: 1, lastUpdated: '', tasks: [] })
+    await writeProjectDeliveryModel(tmpDir, {
+      version: 1,
+      updatedAt: '2026-06-05T12:00:00.000Z',
+      drivers: [],
+      primitives: [],
+      validationEvidence: [
+        {
+          id: 'project-primitive-setup-pending',
+          contractId: 'project-primitive-setup',
+          status: 'pending_review',
+          createdAt: '2026-06-05T12:00:00.000Z',
+          summary: { drivers: 0, primitives: 2, taskLinks: 1, ownerQuestions: 0 },
+          reviewBuckets: [
+            { kind: 'keep', label: 'Keep', changeIds: ['primitive:menu'], reason: 'Validated changes can be accepted.' },
+            { kind: 'needs_proof', label: 'Needs proof', changeIds: ['primitive:menu'], reason: 'Proof is missing.' },
+          ],
+          warnings: [{ code: 'missing_invariants', message: 'One primitive has no observable invariants.' }],
+        },
+        {
+          id: 'project-primitive-setup-applied',
+          contractId: 'project-primitive-setup',
+          status: 'applied',
+          createdAt: '2026-06-05T12:05:00.000Z',
+          summary: { drivers: 0, primitives: 1, taskLinks: 0, ownerQuestions: 0 },
+        },
+      ],
+      rejectedCandidates: [],
+    })
+
+    const items = buildInboxWithProviderSetup()
+    const hit = items.find(item => item.kind === 'contract_result_review')
+
+    expect(hit).toEqual(expect.objectContaining({
+      kind: 'contract_result_review',
+      severity: 'medium',
+      resultId: 'project-primitive-setup-pending',
+      contractId: 'project-primitive-setup',
+      title: 'Review primitive setup result',
+      actionHref: '/overview/inbox',
+      changeCount: 3,
+    }))
+    expect(items.some(item => item.kind === 'contract_result_review' && item.resultId === 'project-primitive-setup-applied')).toBe(false)
   })
 
   it('structural bootstrap with verifiedAt + gates → no bootstrap_missing item', async () => {
@@ -176,6 +263,7 @@ describe('buildInbox', () => {
     await writeJson('.guildhall/workspace-goals.json', { goals: [] })
     const items = buildInbox({
       projectPath: tmpDir,
+      projectStateDir,
       snapshotOptions: {
         readProviders: () => ({ providers: { 'openai-api': { apiKey: 'sk-test' } } }),
         detectOauthProviders: () => ({ claude: false, codex: false }),
@@ -198,6 +286,7 @@ describe('buildInbox', () => {
     await writeJson('.guildhall/workspace-goals.json', { goals: [] })
     const items = buildInbox({
       projectPath: tmpDir,
+      projectStateDir,
       snapshotOptions: {
         readProviders: () => ({ providers: { 'openai-api': { apiKey: 'sk-test' } } }),
         detectOauthProviders: () => ({ claude: false, codex: false }),
@@ -212,6 +301,7 @@ describe('buildInbox', () => {
 
     const items = buildInbox({
       projectPath: tmpDir,
+      projectStateDir,
       snapshotOptions: {
         readProviders: () => ({ providers: { 'openai-api': { apiKey: 'sk-test' } } }),
         detectOauthProviders: () => ({ claude: false, codex: false }),
@@ -247,6 +337,7 @@ describe('buildInbox', () => {
 
     const items = buildInbox({
       projectPath: tmpDir,
+      projectStateDir,
       snapshotOptions: {
         readProviders: () => ({ providers: { 'openai-api': { apiKey: 'sk-test' } } }),
         detectOauthProviders: () => ({ claude: false, codex: false }),
@@ -283,6 +374,7 @@ describe('buildInbox', () => {
 
     const items = buildInbox({
       projectPath: tmpDir,
+      projectStateDir,
       snapshotOptions: {
         readProviders: () => ({ providers: { 'openai-api': { apiKey: 'sk-test' } } }),
         detectOauthProviders: () => ({ claude: false, codex: false }),
@@ -318,49 +410,7 @@ describe('buildInbox', () => {
     expect(hit.detail).not.toMatch(/\d+ signals?/i)
   })
 
-  it('project_check_in: nudges older projects that have not answered Guildhall project questions yet', async () => {
-    await writeCompleteBootstrap()
-    await writeJson('.guildhall/workspace-goals.json', {
-      goals: [{ title: 'Keep the project moving', source: 'test' }],
-    })
-    await writeJson('.guildhall/TASKS.json', { version: 1, lastUpdated: '', tasks: [] })
-
-    const items = buildInboxWithProviderSetup()
-    const hit = items.find(i => i.kind === 'project_check_in')
-
-    expect(hit).toMatchObject({
-      severity: 'low',
-      title: 'Run project check-in',
-      actionHref: '/thread',
-    })
-    expect(hit?.detail).toContain('Start the check-in pass')
-  })
-
-  it('project_check_in: does not nudge again after any project check-in exists', async () => {
-    await writeCompleteBootstrap()
-    await writeJson('.guildhall/workspace-goals.json', {
-      goals: [{ title: 'Keep the project moving', source: 'test' }],
-    })
-    await writeJson('.guildhall/TASKS.json', { version: 1, lastUpdated: '', tasks: [] })
-    await writeJson('.guildhall/pressure-test-intake/pti-project-check-in.json', {
-      id: 'pti-project-check-in',
-      rawRequest: 'Run a project check-in.',
-      target: { type: 'project', id: 'project-check-in', title: 'Project check-in' },
-      status: 'complete',
-      activeDomainId: null,
-      pendingQuestion: null,
-      domains: [],
-      outputs: { assumptions: [], decisions: [], languageMapCandidates: [], taskSplitCandidates: [] },
-      createdAt: '2026-05-24T00:00:00.000Z',
-      updatedAt: '2026-05-24T00:00:00.000Z',
-    })
-
-    const items = buildInboxWithProviderSetup()
-
-    expect(items.find(i => i.kind === 'project_check_in')).toBeUndefined()
-  })
-
-  it('pressure_test_pending: uses the specific planner question as inbox detail', async () => {
+  it('does not expose project check-ins or pressure-test questions through project inbox', async () => {
     await writeCompleteBootstrap()
     await writeJson('.guildhall/workspace-goals.json', {
       goals: [{ title: 'Keep the project moving', source: 'test' }],
@@ -398,62 +448,11 @@ describe('buildInbox', () => {
     })
 
     const items = buildInboxWithProviderSetup()
-    const hit = items.find(i => i.kind === 'pressure_test_pending')
-
-    expect(hit?.detail).toContain('reviewer-lane MVPs')
-    expect(hit?.detail).not.toContain('Start the check-in pass')
+    expect(itemKinds(items)).not.toContain('project_check_in')
+    expect(itemKinds(items)).not.toContain('pressure_test_pending')
   })
 
-  it('brief_approval: emitted for tasks whose productBrief has no approvedAt', async () => {
-    await writeCompleteBootstrap()
-    await writeJson('.guildhall/workspace-goals.json', { goals: [] })
-    await writeJson('.guildhall/TASKS.json', {
-      version: 1,
-      lastUpdated: '',
-      tasks: [
-        {
-          id: 'task-a',
-          title: 'Pick color palette',
-          status: 'exploring',
-          productBrief: {
-            userJob: 'choose a palette',
-            successMetric: 'palette chosen',
-          },
-        },
-      ],
-    })
-
-    const items = buildInboxWithProviderSetup()
-    const hit = items.find(i => i.kind === 'brief_approval')
-    expect(hit).toBeDefined()
-    if (!hit || hit.kind !== 'brief_approval') throw new Error('unreachable')
-    expect(hit.taskId).toBe('task-a')
-    expect(hit.actionHref).toBe('/task/task-a?tab=current')
-  })
-
-  it('brief_approval: suppressed when a failed spec pass left only a hollow brief shell', async () => {
-    await writeCompleteBootstrap()
-    await writeJson('.guildhall/workspace-goals.json', { goals: [] })
-    await writeJson('.guildhall/TASKS.json', {
-      version: 1,
-      lastUpdated: '',
-      tasks: [
-        {
-          id: 'task-hollow',
-          title: 'Shape component work',
-          status: 'exploring',
-          productBrief: {
-            authoredBy: 'spec-agent',
-          },
-        },
-      ],
-    })
-
-    const items = buildInboxWithProviderSetup()
-    expect(items.find(i => i.kind === 'brief_approval' && i.taskId === 'task-hollow')).toBeUndefined()
-  })
-
-  it('brief_approval: suppressed while the same task has an unanswered question', async () => {
+  it('does not expose task questions or task approvals through project inbox', async () => {
     await writeCompleteBootstrap()
     await writeJson('.guildhall/workspace-goals.json', { goals: [] })
     await writeJson('.guildhall/TASKS.json', {
@@ -478,151 +477,18 @@ describe('buildInbox', () => {
             },
           ],
         },
+        {
+          id: 'task-b',
+          title: 'Wire auth',
+          status: 'spec_review',
+        },
       ],
     })
 
     const items = buildInboxWithProviderSetup()
-    expect(items.find(i => i.kind === 'agent_question_pending' && i.taskId === 'task-a')).toBeDefined()
-    expect(items.find(i => i.kind === 'brief_approval' && i.taskId === 'task-a')).toBeUndefined()
-  })
-
-  it('agent_question_pending: emitted when a task has an unanswered agent question', async () => {
-    await writeCompleteBootstrap()
-    await writeJson('.guildhall/workspace-goals.json', { goals: [] })
-    await writeJson('.guildhall/TASKS.json', {
-      version: 1,
-      lastUpdated: '',
-      tasks: [
-        {
-          id: 'task-q',
-          title: 'Bootstrap coordinators for this workspace',
-          status: 'exploring',
-          openQuestions: [
-            {
-              id: 'q-1',
-              kind: 'confirm',
-              askedBy: 'spec-agent',
-              askedAt: '2026-05-11T00:00:00.000Z',
-              restatement: 'Is this the right split for this project?',
-            },
-          ],
-        },
-      ],
-    })
-
-    const items = buildInbox({ projectPath: tmpDir })
-    const hit = items.find(i => i.kind === 'agent_question_pending')
-    expect(hit).toBeDefined()
-    if (!hit || hit.kind !== 'agent_question_pending') throw new Error('unreachable')
-    expect(hit.taskId).toBe('task-q')
-    expect(hit.detail).toContain('right split')
-    expect(hit.actionHref).toBe('/task/task-q?tab=current')
-  })
-
-  it('agent_question_pending: ignores operational receipt prose mistaken for a question', async () => {
-    await writeCompleteBootstrap()
-    await writeJson('.guildhall/workspace-goals.json', { goals: [] })
-    await writeJson('.guildhall/TASKS.json', {
-      version: 1,
-      lastUpdated: '',
-      tasks: [
-        {
-          id: 'task-db-bootstrap',
-          title: 'Bootstrap database — run migrations, verify schema',
-          status: 'exploring',
-          openQuestions: [
-            {
-              id: 'q-fallback-task-db-bootstrap',
-              kind: 'choice',
-              askedBy: 'spec-agent',
-              askedAt: '2026-05-22T20:56:21.883Z',
-              prompt: 'Done — I took the durable blueprint steps:',
-              selectionMode: 'single',
-              choices: [
-                'Updated the **product brief**',
-                'Revised and strengthened the **spec**',
-                'Set task status to **`spec_review`**',
-                'Appended this turn to the exploring transcript',
-                'Logged a milestone in `PROGRESS.md`',
-              ],
-            },
-          ],
-        },
-      ],
-    })
-
-    const items = buildInbox({ projectPath: tmpDir })
-    expect(items.some(i => i.kind === 'agent_question_pending' && i.taskId === 'task-db-bootstrap')).toBe(false)
-  })
-
-  it('agent_question_pending: ignores operational receipt questions', async () => {
-    await writeCompleteBootstrap()
-    await writeJson('.guildhall/workspace-goals.json', { goals: [] })
-    await writeJson('.guildhall/TASKS.json', {
-      version: 1,
-      lastUpdated: '',
-      tasks: [
-        {
-          id: 'task-db-bootstrap',
-          title: 'Bootstrap database',
-          status: 'exploring',
-          openQuestions: [
-            {
-              id: 'q-receipt',
-              kind: 'choice',
-              askedBy: 'spec-agent',
-              askedAt: '2026-05-11T00:00:00.000Z',
-              prompt: 'Done — I took the durable blueprint steps:',
-              selectionMode: 'single',
-              choices: [
-                'Updated the product brief',
-                'Revised and strengthened the spec',
-                'Set task status to `spec_review`',
-                'Appended this turn to the exploring transcript',
-                'Logged a milestone in `PROGRESS.md`',
-              ],
-            },
-          ],
-        },
-      ],
-    })
-
-    const items = buildInbox({ projectPath: tmpDir })
-    expect(items.some(i => i.kind === 'agent_question_pending')).toBe(false)
-  })
-
-  it('agent_question_pending: ignores output-promise choices', async () => {
-    await writeCompleteBootstrap()
-    await writeJson('.guildhall/workspace-goals.json', { goals: [] })
-    await writeJson('.guildhall/TASKS.json', {
-      version: 1,
-      lastUpdated: '',
-      tasks: [
-        {
-          id: 'task-blueprint',
-          title: 'Draft the blueprint',
-          status: 'exploring',
-          openQuestions: [
-            {
-              id: 'q-promise',
-              kind: 'choice',
-              askedBy: 'spec-agent',
-              askedAt: '2026-05-23T00:00:00.000Z',
-              prompt: 'Next, pick the output path:',
-              selectionMode: 'single',
-              choices: [
-                'I will draft the blueprint',
-                'I will update the product brief',
-                'I will persist progress with tools',
-              ],
-            },
-          ],
-        },
-      ],
-    })
-
-    const items = buildInbox({ projectPath: tmpDir })
-    expect(items.some(i => i.kind === 'agent_question_pending')).toBe(false)
+    expect(itemKinds(items)).not.toContain('brief_approval')
+    expect(itemKinds(items)).not.toContain('agent_question_pending')
+    expect(itemKinds(items)).not.toContain('spec_approval')
   })
 
   it('import_draft_queue: emitted when imported drafts are waiting to be shaped', async () => {
@@ -657,6 +523,7 @@ describe('buildInbox', () => {
 
     const items = buildInbox({
       projectPath: tmpDir,
+      projectStateDir,
       snapshotOptions: {
         readProviders: () => ({ providers: { 'openai-api': { apiKey: 'sk-test' } } }),
         detectOauthProviders: () => ({ claude: false, codex: false }),
@@ -698,6 +565,7 @@ describe('buildInbox', () => {
 
     const items = buildInbox({
       projectPath: tmpDir,
+      projectStateDir,
       snapshotOptions: {
         readProviders: () => ({ providers: { 'openai-api': { apiKey: 'sk-test' } } }),
         detectOauthProviders: () => ({ claude: false, codex: false }),
@@ -708,9 +576,19 @@ describe('buildInbox', () => {
     expect(items.some(i => i.kind === 'import_draft_queue')).toBe(false)
   })
 
-  it('suppresses import_draft_queue while the reserved workspace import question still needs an answer', async () => {
-    await writeCompleteBootstrap()
+  it('does not let task-local workspace import questions suppress the import draft queue', async () => {
+    await writeYaml('guildhall.yaml', {
+      name: 'Inbox Test',
+      id: 'inbox-test',
+      coordinators: [{ id: 'frontend', name: 'Frontend' }],
+      bootstrap: {
+        verifiedAt: '2026-05-11T00:00:00.000Z',
+        install: ['pnpm install'],
+        gates: ['pnpm typecheck'],
+      },
+    })
     await writeJson('.guildhall/workspace-goals.json', { goals: [] })
+    await writeFile('.guildhall/project-brief.md', 'Project brief exists so setup no longer owns the next action.')
     await writeJson('.guildhall/TASKS.json', {
       version: 1,
       lastUpdated: '',
@@ -739,9 +617,9 @@ describe('buildInbox', () => {
       ],
     })
 
-    const items = buildInbox({ projectPath: tmpDir })
-    expect(items.some(i => i.kind === 'agent_question_pending' && i.taskId === 'task-workspace-import')).toBe(true)
-    expect(items.some(i => i.kind === 'import_draft_queue')).toBe(false)
+    const items = buildInboxWithProviderSetup()
+    expect(itemKinds(items)).not.toContain('agent_question_pending')
+    expect(items.some(i => i.kind === 'import_draft_queue')).toBe(true)
   })
 
   it('does not let stale unanswered questions on a done workspace-import task suppress the import draft queue', async () => {
@@ -786,11 +664,11 @@ describe('buildInbox', () => {
     })
 
     const items = buildInboxWithProviderSetup()
-    expect(items.some(i => i.kind === 'agent_question_pending' && i.taskId === 'task-workspace-import')).toBe(false)
+    expect(itemKinds(items)).not.toContain('agent_question_pending')
     expect(items.some(i => i.kind === 'import_draft_queue')).toBe(true)
   })
 
-  it('suppresses obsolete meta-intake routing questions once a valid routing draft already exists', async () => {
+  it('does not expose obsolete meta-intake routing questions or spec approvals through inbox', async () => {
     await writeCompleteBootstrap()
     await writeJson('.guildhall/workspace-goals.json', { goals: [] })
     await writeJson('.guildhall/TASKS.json', {
@@ -825,12 +703,12 @@ coordinators:
       ],
     })
 
-    const items = buildInbox({ projectPath: tmpDir })
-    expect(items.some(i => i.kind === 'agent_question_pending' && i.taskId === 'task-meta-intake')).toBe(false)
-    expect(items.some(i => i.kind === 'spec_approval' && i.taskId === 'task-meta-intake')).toBe(true)
+    const items = buildInbox({ projectPath: tmpDir, projectStateDir })
+    expect(itemKinds(items)).not.toContain('agent_question_pending')
+    expect(itemKinds(items)).not.toContain('spec_approval')
   })
 
-  it('brief_approval: not emitted once the task has moved beyond intake', async () => {
+  it('brief_approval: not emitted by project inbox', async () => {
     await writeCompleteBootstrap()
     await writeJson('.guildhall/workspace-goals.json', { goals: [] })
     await writeJson('.guildhall/TASKS.json', {
@@ -858,8 +736,8 @@ coordinators:
       ],
     })
 
-    const items = buildInbox({ projectPath: tmpDir })
-    expect(items.find(i => i.kind === 'brief_approval')).toBeUndefined()
+    const items = buildInbox({ projectPath: tmpDir, projectStateDir })
+    expect(itemKinds(items)).not.toContain('brief_approval')
   })
 
   it('spec_fill_pending: not emitted once work has started even if the brief is still sparse', async () => {
@@ -886,11 +764,11 @@ coordinators:
       ],
     })
 
-    const items = buildInbox({ projectPath: tmpDir })
+    const items = buildInbox({ projectPath: tmpDir, projectStateDir })
     expect(items.find(i => i.kind === 'spec_fill_pending')).toBeUndefined()
   })
 
-  it('spec_approval: emitted for tasks in status=spec_review', async () => {
+  it('does not expose spec-review approvals through project inbox', async () => {
     await writeCompleteBootstrap()
     await writeJson('.guildhall/workspace-goals.json', { goals: [] })
     await writeJson('.guildhall/TASKS.json', {
@@ -899,76 +777,11 @@ coordinators:
       tasks: [{ id: 'task-b', title: 'Wire auth', status: 'spec_review' }],
     })
 
-    const items = buildInbox({ projectPath: tmpDir })
-    const hit = items.find(i => i.kind === 'spec_approval')
-    expect(hit).toBeDefined()
-    if (!hit || hit.kind !== 'spec_approval') throw new Error('unreachable')
-    expect(hit.taskId).toBe('task-b')
+    const items = buildInbox({ projectPath: tmpDir, projectStateDir })
+    expect(itemKinds(items)).not.toContain('spec_approval')
   })
 
-  it('spec_approval: suppressed while a spec-review task still has an unanswered question', async () => {
-    await writeCompleteBootstrap()
-    await writeJson('.guildhall/workspace-goals.json', { goals: [] })
-    await writeJson('.guildhall/TASKS.json', {
-      version: 1,
-      lastUpdated: '',
-      tasks: [{
-        id: 'task-b',
-        title: 'Wire auth',
-        status: 'spec_review',
-        openQuestions: [
-          {
-            id: 'q-1',
-            kind: 'confirm',
-            askedBy: 'spec-agent',
-            askedAt: '2026-05-11T00:00:00.000Z',
-            restatement: 'Is this the right split?',
-          },
-        ],
-      }],
-    })
-
-    const items = buildInbox({ projectPath: tmpDir })
-    expect(items.find(i => i.kind === 'spec_approval')).toBeUndefined()
-  })
-
-  it('spec_approval: not suppressed by a stale starter-task focus question once a concrete spec exists', async () => {
-    await writeCompleteBootstrap()
-    await writeJson('.guildhall/workspace-goals.json', { goals: [] })
-    await writeJson('.guildhall/TASKS.json', {
-      version: 1,
-      lastUpdated: '',
-      tasks: [{
-        id: 'task-b',
-        title: 'Wire auth',
-        status: 'spec_review',
-        updatedAt: '2026-05-11T20:24:50.064Z',
-        spec: '## Summary\n\nDraft spec.\n\n## Acceptance Criteria\n\n1. Given...\n\n## Out of Scope\n\n- None\n\n## Open Questions\n\n- None',
-        acceptanceCriteria: [
-          { id: 'ac-1', description: 'Real AC', verifiedBy: 'review', met: false },
-        ],
-        openQuestions: [
-          {
-            id: 'q-1',
-            kind: 'choice',
-            askedBy: 'spec-agent',
-            askedAt: '2026-05-11T20:24:31.428Z',
-            prompt: 'What should this first starter task focus on?',
-            selectionMode: 'single',
-            choices: ['Onboarding', 'Bootstrap'],
-          },
-        ],
-      }],
-    })
-
-    const items = buildInbox({ projectPath: tmpDir })
-    const hit = items.find(i => i.kind === 'spec_approval')
-    expect(hit).toBeDefined()
-    if (!hit || hit.kind !== 'spec_approval') throw new Error('unreachable')
-    expect(hit.taskId).toBe('task-b')
-  })
-
-  it('open_escalation: one item per unresolved escalation', async () => {
+  it('does not expose task escalations through project inbox', async () => {
     await writeCompleteBootstrap()
     await writeJson('.guildhall/workspace-goals.json', { goals: [] })
     await writeJson('.guildhall/TASKS.json', {
@@ -977,234 +790,18 @@ coordinators:
       tasks: [
         {
           id: 'task-c',
-          title: 'Big refactor',
-          status: 'blocked',
-          escalations: [
-            { id: 'esc-1', reason: 'scope', summary: 'Scope unclear' },
-            { id: 'esc-0', reason: 'done', summary: 'resolved', resolvedAt: '2024-01-01T00:00:00Z' },
-          ],
-        },
-      ],
-    })
-
-    const items = buildInbox({ projectPath: tmpDir })
-    const hits = items.filter(i => i.kind === 'open_escalation')
-    expect(hits).toHaveLength(1)
-    const first = hits[0]
-    if (!first || first.kind !== 'open_escalation') throw new Error('unreachable')
-    expect(first.escalationId).toBe('esc-1')
-    expect(first.severity).toBe('high')
-    expect(first.detail).toMatch(/scope/i)
-  })
-
-  it('open_escalation: does not revive a resolved escalation from the stale blockReason fallback', async () => {
-    await writeCompleteBootstrap()
-    await writeJson('.guildhall/workspace-goals.json', { goals: [] })
-    await writeJson('.guildhall/TASKS.json', {
-      version: 1,
-      lastUpdated: '',
-      tasks: [
-        {
-          id: 'task-resolved',
-          title: 'Recovered task',
-          status: 'blocked',
-          blockReason: 'Spec agent kept researching after Guildhall asked for durable progress.',
-          escalations: [
-            {
-              id: 'esc-resolved',
-              reason: 'spec_no_progress',
-              summary: 'Spec agent kept researching after Guildhall asked for durable progress.',
-              resolvedAt: '2026-05-31T14:00:00.000Z',
-              resolution: 'User chose retry from transcript.',
-            },
-          ],
-        },
-      ],
-    })
-
-    const items = buildInbox({ projectPath: tmpDir })
-    expect(items.find(i => i.kind === 'open_escalation' && i.taskId === 'task-resolved')).toBeUndefined()
-  })
-
-  it('open_escalation: keeps full task content separate from the compact title', async () => {
-    await writeCompleteBootstrap()
-    await writeJson('.guildhall/workspace-goals.json', { goals: [] })
-    await writeJson('.guildhall/TASKS.json', {
-      version: 1,
-      lastUpdated: '',
-      tasks: [
-        {
-          id: 'task-c',
-          title: 'We should have a system-wide policy of how much FLL charges on overhe...',
-          description: 'We should have a system-wide policy of how much FLL charges on overhead for maintenance fees etc.',
-          status: 'blocked',
-          escalations: [
-            { id: 'esc-1', reason: 'spec_ambiguous', summary: 'Card component exists but template syntax mismatch prevents edit' },
-          ],
-        },
-      ],
-    })
-
-    const items = buildInbox({ projectPath: tmpDir })
-    const hit = items.find(i => i.kind === 'open_escalation')
-    expect(hit).toBeDefined()
-    if (!hit || hit.kind !== 'open_escalation') throw new Error('unreachable')
-    expect(hit.title).toBe('We should have a system-wide policy of how much FLL charges on overhe...')
-    expect(hit.taskDescription).toBe('We should have a system-wide policy of how much FLL charges on overhead for maintenance fees etc.')
-  })
-
-  it('open_escalation: turns old spec shaping failures into retry/reframe recovery copy', async () => {
-    await writeCompleteBootstrap()
-    await writeJson('.guildhall/workspace-goals.json', { goals: [] })
-    await writeJson('.guildhall/TASKS.json', {
-      version: 1,
-      lastUpdated: '',
-      tasks: [
-        {
-          id: 'task-spec-turn-limit',
-          title: 'Shape context packet compaction',
-          status: 'blocked',
-          escalations: [
-            {
-              id: 'esc-spec-turn-limit',
-              reason: 'human_judgment_required',
-              summary: 'Spec author stopped after hitting its turn limit.',
-            },
-          ],
-        },
-        {
-          id: 'task-spec-research-loop',
-          title: 'Break down expansion tasks',
-          status: 'blocked',
-          escalations: [
-            {
-              id: 'esc-spec-research-loop',
-              reason: 'human_judgment_required',
-              summary: 'Spec agent kept researching after Guildhall asked for durable progress.',
-            },
-          ],
-        },
-      ],
-    })
-
-    const items = buildInbox({ projectPath: tmpDir })
-    const hits = items.filter(i => i.kind === 'open_escalation')
-    expect(hits).toHaveLength(2)
-    for (const hit of hits) {
-      if (hit.kind !== 'open_escalation') throw new Error('unreachable')
-      expect(hit.detail).toBe('Spec shaping stopped before Guildhall saved the next draft. Open the task to retry from the transcript or reframe the work.')
-      expect(hit.detail).not.toMatch(/turn limit|kept researching/i)
-    }
-  })
-
-  it('open_escalation: collapses duplicate visible rows so the next move is not buried', async () => {
-    await writeCompleteBootstrap()
-    await writeJson('.guildhall/workspace-goals.json', { goals: [] })
-    await writeJson('.guildhall/TASKS.json', {
-      version: 1,
-      lastUpdated: '',
-      tasks: [
-        {
-          id: 'task-c',
-          title: 'Block menu',
-          status: 'blocked',
-          escalations: [
-            { id: 'esc-1', reason: 'spec_ambiguous', summary: 'spec_ambiguous: Need the menu ownership decision.' },
-            { id: 'esc-2', reason: 'spec_ambiguous', summary: 'spec_ambiguous: Need the menu ownership decision.' },
-          ],
-        },
-      ],
-    })
-
-    const items = buildInbox({ projectPath: tmpDir })
-    const hits = items.filter(i => i.kind === 'open_escalation')
-    expect(hits).toHaveLength(1)
-    const hit = hits[0]
-    if (!hit || hit.kind !== 'open_escalation') throw new Error('unreachable')
-    expect(hit.detail).toBe('Need the menu ownership decision.')
-  })
-
-  it('agent_question_pending: hides internal agent narration instead of turning it into a user task', async () => {
-    await writeCompleteBootstrap()
-    await writeJson('.guildhall/workspace-goals.json', { goals: [] })
-    await writeJson('.guildhall/TASKS.json', {
-      version: 1,
-      lastUpdated: '',
-      tasks: [
-        {
-          id: 'task-question-receipt',
-          title: 'Choose migration source of truth',
-          description: 'Decide which migration status signal matters.',
-          status: 'ready',
-          openQuestions: [
-            {
-              id: 'q-receipt',
-              kind: 'text',
-              askedBy: 'spec-agent',
-              askedAt: '2026-05-23T00:00:00.000Z',
-              prompt: 'No problem - I already have the question posted and will wait for the user answer.',
-            },
-          ],
-        },
-      ],
-    })
-
-    const items = buildInbox({ projectPath: tmpDir })
-    expect(items.find(i => i.kind === 'agent_question_pending' && i.taskId === 'task-question-receipt')).toBeUndefined()
-  })
-
-  it('agent_question_pending: hides pre-question drafting narration', async () => {
-    await writeCompleteBootstrap()
-    await writeJson('.guildhall/workspace-goals.json', { goals: [] })
-    await writeJson('.guildhall/TASKS.json', {
-      version: 1,
-      lastUpdated: '',
-      tasks: [
-        {
-          id: 'task-pre-question',
-          title: 'AlertDialog',
-          description: 'Draft the missing primitive.',
-          status: 'exploring',
-          openQuestions: [
-            {
-              id: 'q-pre-question',
-              kind: 'text',
-              askedBy: 'spec-agent',
-              askedAt: '2026-05-23T00:00:00.000Z',
-              prompt: 'The key question I need to ask before drafting: what variants does the user need? Let me write the product brief first, then ask.',
-            },
-          ],
-        },
-      ],
-    })
-
-    const items = buildInbox({ projectPath: tmpDir })
-    expect(items.find(i => i.kind === 'agent_question_pending' && i.taskId === 'task-pre-question')).toBeUndefined()
-  })
-
-  it('open_escalation: surfaces blocked tasks that only have a block reason', async () => {
-    await writeCompleteBootstrap()
-    await writeJson('.guildhall/workspace-goals.json', { goals: [] })
-    await writeJson('.guildhall/TASKS.json', {
-      version: 1,
-      lastUpdated: '',
-      tasks: [
-        {
-          id: 'task-blockreason',
-          title: 'Fix bootstrap',
+          title: 'Blocked task',
           status: 'blocked',
           blockReason: 'worktree bootstrap failed on command `pixi install`.',
+          escalations: [
+            { id: 'esc-1', reason: 'scope', summary: 'Scope unclear' },
+          ],
         },
       ],
     })
 
-    const items = buildInbox({ projectPath: tmpDir })
-    const hit = items.find(i => i.kind === 'open_escalation')
-    expect(hit).toBeDefined()
-    if (!hit || hit.kind !== 'open_escalation') throw new Error('unreachable')
-    expect(hit.taskId).toBe('task-blockreason')
-    expect(hit.escalationId).toBe('block-reason')
-    expect(hit.detail).toContain('pixi install')
+    const items = buildInbox({ projectPath: tmpDir, projectStateDir })
+    expect(itemKinds(items)).not.toContain('open_escalation')
   })
 
   it('lever_questions: single summary item when any lever is system-default', async () => {
@@ -1212,7 +809,7 @@ coordinators:
     await writeJson('.guildhall/workspace-goals.json', { goals: [] })
     await writeYaml('.guildhall/agent-settings.yaml', fullSystemDefaultSettings())
 
-    const items = buildInbox({ projectPath: tmpDir })
+    const items = buildInbox({ projectPath: tmpDir, projectStateDir })
     const hits = items.filter(i => i.kind === 'lever_questions')
     expect(hits).toHaveLength(1)
     const first = hits[0]
@@ -1245,7 +842,7 @@ coordinators:
         },
       ],
     })
-    const items = buildInbox({ projectPath: tmpDir })
+    const items = buildInbox({ projectPath: tmpDir, projectStateDir })
     const hit = items.find(i => i.kind === 'spec_fill_pending')
     expect(hit).toBeDefined()
     if (!hit || hit.kind !== 'spec_fill_pending') throw new Error('unreachable')
@@ -1287,9 +884,9 @@ coordinators:
       ],
     })
 
-    const items = buildInbox({ projectPath: tmpDir })
-    expect(items.find(i => i.kind === 'agent_question_pending' && i.taskId === 'task-question-first')).toBeDefined()
-    expect(items.find(i => i.kind === 'spec_fill_pending' && i.taskId === 'task-question-first')).toBeUndefined()
+    const items = buildInbox({ projectPath: tmpDir, projectStateDir })
+    expect(itemKinds(items)).not.toContain('agent_question_pending')
+    expect(items.find(i => i.kind === 'spec_fill_pending' && i.taskId === 'task-question-first')).toBeDefined()
   })
 
   it('spec_fill_pending: NOT emitted when brief is awaiting approval (dedupe)', async () => {
@@ -1309,8 +906,8 @@ coordinators:
         },
       ],
     })
-    const items = buildInbox({ projectPath: tmpDir })
-    expect(items.find(i => i.kind === 'brief_approval')).toBeDefined()
+    const items = buildInbox({ projectPath: tmpDir, projectStateDir })
+    expect(itemKinds(items)).not.toContain('brief_approval')
     expect(items.find(i => i.kind === 'spec_fill_pending')).toBeUndefined()
   })
 
@@ -1329,7 +926,7 @@ coordinators:
         },
       ],
     })
-    const items = buildInbox({ projectPath: tmpDir })
+    const items = buildInbox({ projectPath: tmpDir, projectStateDir })
     expect(items.find(i => i.kind === 'spec_fill_pending')).toBeUndefined()
   })
 
@@ -1350,7 +947,7 @@ coordinators:
       ],
     })
 
-    const items = buildInbox({ projectPath: tmpDir })
+    const items = buildInbox({ projectPath: tmpDir, projectStateDir })
     expect(items.find(i => i.kind === 'spec_fill_pending')).toBeUndefined()
   })
 
@@ -1370,15 +967,16 @@ coordinators:
       acceptanceCriteria: [],
     }))
     await writeJson('.guildhall/TASKS.json', { version: 1, lastUpdated: '', tasks })
-    const items = buildInbox({ projectPath: tmpDir })
+    const items = buildInbox({ projectPath: tmpDir, projectStateDir })
     const hits = items.filter(i => i.kind === 'spec_fill_pending')
     expect(hits).toHaveLength(3)
   })
 
   it('severity ordering: high → medium → low', async () => {
-    // No bootstrap (high), brief awaiting approval (medium), defaults (low).
+    // No bootstrap (high), workspace import pending (medium), defaults (low).
     await writeYaml('guildhall.yaml', { name: 'x', id: 'x', coordinators: [] })
-    await writeJson('.guildhall/workspace-goals.json', { goals: [] })
+    await writeFile('README.md', '# hello')
+    await writeFile('package.json', '{}')
     await writeYaml('.guildhall/agent-settings.yaml', fullSystemDefaultSettings())
     await writeJson('.guildhall/TASKS.json', {
       version: 1,
@@ -1393,7 +991,7 @@ coordinators:
       ],
     })
 
-    const items = buildInbox({ projectPath: tmpDir })
+    const items = buildInbox({ projectPath: tmpDir, projectStateDir })
     const severities = items.map(i => i.severity)
     // Must be non-decreasing in the severity rank order.
     const rank = { high: 0, medium: 1, low: 2 } as const
@@ -1432,12 +1030,10 @@ describe('buildInboxBlockers', () => {
     expect(blockers.workspaceImport).toBe(true)
   })
 
-  it('does not flag blockers for non-blocking kinds (briefs, escalations, lever questions)', () => {
+  it('does not flag blockers for non-blocking alert kinds', () => {
     const blockers = buildInboxBlockers([
-      item('brief_approval'),
-      item('spec_approval'),
-      item('open_escalation'),
       item('lever_questions'),
+      item('spec_fill_pending'),
     ])
     expect(blockers).toEqual({ bootstrap: false, workspaceImport: false })
   })

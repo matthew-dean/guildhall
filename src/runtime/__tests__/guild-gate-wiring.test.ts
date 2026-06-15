@@ -6,7 +6,10 @@ import yaml from 'js-yaml'
 import { Orchestrator, type OrchestratorAgentSet } from '../orchestrator.js'
 import { InMemoryGitDriver } from '../git-driver.js'
 import type { ResolvedConfig } from '@guildhall/config'
-import type { Task, TaskQueue, DesignSystem } from '@guildhall/core'
+import { TaskQueue, type Task, type DesignSystem } from '@guildhall/core'
+import { projectStatePathFromMemoryDir } from '@guildhall/sessions'
+import { designSystemPath } from '../design-system-store.js'
+import { buildEffectiveTask } from '../effective-task.js'
 
 // ---------------------------------------------------------------------------
 // Integration test: at `gate_check`, the orchestrator's guild deterministic
@@ -23,7 +26,8 @@ beforeEach(async () => {
   tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'guild-gate-test-'))
   memoryDir = path.join(tmpDir, 'memory')
   await fs.mkdir(memoryDir, { recursive: true })
-  tasksPath = path.join(memoryDir, 'TASKS.json')
+  tasksPath = projectStatePathFromMemoryDir(memoryDir, 'TASKS.json')
+  await fs.mkdir(path.dirname(tasksPath), { recursive: true })
 })
 
 afterEach(async () => {
@@ -91,8 +95,9 @@ async function writeQueue(tasks: Task[]): Promise<void> {
 }
 
 async function writeDesignSystem(ds: DesignSystem): Promise<void> {
+  await fs.mkdir(path.dirname(designSystemPath(memoryDir)), { recursive: true })
   await fs.writeFile(
-    path.join(memoryDir, 'design-system.yaml'),
+    designSystemPath(memoryDir),
     yaml.dump(ds),
     'utf-8',
   )
@@ -157,7 +162,11 @@ const passingDS: DesignSystem = {
 }
 
 async function readQueue(): Promise<TaskQueue> {
-  return JSON.parse(await fs.readFile(tasksPath, 'utf-8'))
+  const queue = TaskQueue.parse(JSON.parse(await fs.readFile(tasksPath, 'utf-8')))
+  return {
+    ...queue,
+    tasks: await Promise.all(queue.tasks.map(async task => buildEffectiveTask(task.projectPath, task))) as unknown as Task[],
+  }
 }
 
 describe('Orchestrator — guild-gate pre-pass at gate_check', () => {

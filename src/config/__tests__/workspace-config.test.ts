@@ -59,19 +59,15 @@ describe('workspace-config', () => {
   // bootstrapWorkspace
   // -------------------------------------------------------------------------
   describe('bootstrapWorkspace', () => {
-    it('creates guildhall.yaml and shared .guildhall project-state files', () => {
+    it('creates guildhall.yaml without project-local Guildhall state', () => {
       const wsDir = join(TMP, 'bootstrap-test')
       const config = bootstrapWorkspace(wsDir, { name: 'Bootstrap Test' })
 
       expect(config.name).toBe('Bootstrap Test')
       expect(config.id).toBe('bootstrap-test')
       expect(existsSync(join(wsDir, FORGE_YAML_FILENAME))).toBe(true)
-      expect(existsSync(join(wsDir, '.guildhall'))).toBe(true)
-      expect(readFileSync(join(wsDir, '.gitignore'), 'utf8')).toContain('.guildhall/')
-      expect(existsSync(join(wsDir, '.guildhall', 'TASKS.json'))).toBe(true)
-      expect(existsSync(join(wsDir, '.guildhall', 'MEMORY.md'))).toBe(true)
-      expect(existsSync(join(wsDir, '.guildhall', 'DECISIONS.md'))).toBe(true)
-      expect(existsSync(join(wsDir, '.guildhall', 'PROGRESS.md'))).toBe(true)
+      expect(existsSync(join(wsDir, '.guildhall'))).toBe(false)
+      expect(existsSync(join(wsDir, '.gitignore'))).toBe(false)
       expect(existsSync(join(wsDir, 'memory'))).toBe(false)
     })
 
@@ -82,16 +78,16 @@ describe('workspace-config', () => {
       expect(config.name).toBe('Original')
     })
 
-    it('seeds TASKS.json as empty array', () => {
+    it('does not seed project-local TASKS.json', () => {
       const wsDir = join(TMP, 'tasks-seed')
       bootstrapWorkspace(wsDir, { name: 'Tasks Seed' })
-      const tasksRaw = readFileSync(join(wsDir, '.guildhall', 'TASKS.json'), 'utf8')
-      expect(JSON.parse(tasksRaw)).toEqual([])
+      expect(existsSync(join(wsDir, '.guildhall', 'TASKS.json'))).toBe(false)
     })
 
     it('does not seed local transcript history into project memory', () => {
       const wsDir = join(TMP, 'exploring-seed')
       bootstrapWorkspace(wsDir, { name: 'Exploring Seed' })
+      expect(existsSync(join(wsDir, '.guildhall'))).toBe(false)
       expect(existsSync(join(wsDir, '.guildhall', 'exploring'))).toBe(false)
       expect(existsSync(join(wsDir, 'memory'))).toBe(false)
     })
@@ -228,6 +224,7 @@ describe('workspace-config', () => {
       const wsDir = join(TMP, 'bad-agent-settings')
       bootstrapWorkspace(wsDir, { name: 'Bad Agent Settings' })
       const overridesPath = join(wsDir, '.guildhall', 'agent-overrides.yaml')
+      mkdirSync(join(wsDir, '.guildhall'), { recursive: true })
 
       writeFileSync(overridesPath, 'version: [unterminated\n')
       expect(() => readAgentSettings(wsDir)).toThrow(/Failed to parse \.guildhall\/agent-overrides.yaml/)

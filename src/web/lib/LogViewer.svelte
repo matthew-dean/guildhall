@@ -45,14 +45,14 @@
     padding: var(--s-2);
     overflow-y: auto;
     font-family: 'SF Mono', monospace;
-    font-size: var(--fs-1);
+    font-size: var(--gh-type-size-meta);
     display: flex;
     flex-direction: column;
     gap: 2px;
   }
   .log-line {
     color: var(--text);
-    line-height: var(--lh-body);
+    line-height: var(--gh-type-line-height-body);
     white-space: pre-wrap;
     word-break: break-word;
   }

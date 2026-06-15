@@ -4,6 +4,7 @@ import os from 'node:os'
 import path from 'node:path'
 import { DESIGN_STORIES_FILE } from '../design-preview.js'
 import { buildDesignSystemCatalog } from '../design-system-catalog.js'
+import { projectStatePathFromMemoryDir } from '@guildhall/sessions'
 
 describe('buildDesignSystemCatalog', () => {
   it('normalizes Storybook story files into an interactable web catalog', async () => {
@@ -40,7 +41,9 @@ describe('buildDesignSystemCatalog', () => {
     const memoryDir = path.join(projectPath, '.guildhall')
     try {
       await fs.mkdir(memoryDir, { recursive: true })
-      await fs.writeFile(path.join(memoryDir, DESIGN_STORIES_FILE), [
+      const storiesPath = projectStatePathFromMemoryDir(memoryDir, DESIGN_STORIES_FILE)
+      await fs.mkdir(path.dirname(storiesPath), { recursive: true })
+      await fs.writeFile(storiesPath, [
         'version: 1',
         'stories:',
         '  - id: pantry-filter.default',

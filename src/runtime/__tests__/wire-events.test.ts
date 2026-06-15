@@ -158,8 +158,8 @@ describe('tickOutcomeToBackendEvent — FR-16 wire mapping', () => {
     const parsed = backendEventSchema.parse(evt)
     expect(parsed.type).toBe('error')
     expect(parsed.message).not.toMatch(/failed/i)
-    expect(parsed.message).toMatch(/empty model reply/i)
-    expect(parsed.message).toMatch(/task state intact/i)
+    expect(parsed.message).toMatch(/empty reply/i)
+    expect(parsed.message).toMatch(/task state stayed intact/i)
     expect(parsed.message).toMatch(/retry the run or switch providers/i)
   })
 

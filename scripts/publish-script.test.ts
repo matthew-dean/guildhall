@@ -21,7 +21,7 @@ async function createMinimalReleaseFixture(tmp: string): Promise<void> {
   await fs.mkdir(path.join(tmp, 'scripts'), { recursive: true })
   await fs.mkdir(path.join(tmp, 'docs/releases'), { recursive: true })
   await fs.mkdir(path.join(tmp, 'docs/guide'), { recursive: true })
-  await fs.mkdir(path.join(tmp, 'dist/web'), { recursive: true })
+  await fs.mkdir(path.join(tmp, 'dist/web/_app/immutable'), { recursive: true })
   await fs.mkdir(path.join(tmp, 'src/web/generated'), { recursive: true })
 
   await fs.copyFile(path.join(root, 'scripts/publish.mjs'), path.join(tmp, 'scripts/publish.mjs'))
@@ -53,7 +53,8 @@ async function createMinimalReleaseFixture(tmp: string): Promise<void> {
     path.join(tmp, 'src/web/generated/help-topics.json'),
     JSON.stringify({ start: { href: '/help/start' } }),
   )
-  await fs.writeFile(path.join(tmp, 'dist/web/app.js'), 'window.helpHref="/help/start"\n')
+  await fs.writeFile(path.join(tmp, 'dist/web/index.html'), '<script type="module" src="/_app/immutable/app.js"></script>\n')
+  await fs.writeFile(path.join(tmp, 'dist/web/_app/immutable/app.js'), 'window.helpHref="/help/start"\n')
 }
 
 async function gitHeadMessage(cwd: string): Promise<string> {
@@ -124,7 +125,7 @@ describe('release publish script', () => {
         [
           '#!/bin/sh',
           'if [ "$1" = "pack" ]; then',
-          '  printf \'[{"files":[{"path":"dist/web/app.js"}]}]\\n\'',
+          '  printf \'[{"files":[{"path":"dist/web/index.html"},{"path":"dist/web/_app/immutable/app.js"}]}]\\n\'',
           '  exit 0',
           'fi',
           'exit 0',
@@ -184,7 +185,7 @@ describe('release publish script', () => {
           '  exit 0',
           'fi',
           'if [ "$1" = "pack" ]; then',
-          '  printf \'[{"files":[{"path":"dist/web/app.js"}]}]\\n\'',
+          '  printf \'[{"files":[{"path":"dist/web/index.html"},{"path":"dist/web/_app/immutable/app.js"}]}]\\n\'',
           '  exit 0',
           'fi',
           'if [ "$1" = "publish" ]; then',
@@ -301,7 +302,7 @@ describe('release publish script', () => {
           '  exit 0',
           'fi',
           'if [ "$1" = "pack" ]; then',
-          '  printf \'[{"files":[{"path":"dist/web/app.js"}]}]\\n\'',
+          '  printf \'[{"files":[{"path":"dist/web/index.html"},{"path":"dist/web/_app/immutable/app.js"}]}]\\n\'',
           '  exit 0',
           'fi',
           'if [ "$1" = "publish" ]; then',

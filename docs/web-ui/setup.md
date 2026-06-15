@@ -39,6 +39,6 @@ before it can create tasks or start work.
 reconfigure providers, change models, or rerun meta-intake without losing
 state.
 
-If the project is already configured but the task list feels stale, use
-**Settings -> Re-intake** instead. Re-intake keeps setup intact, re-reads the
-project evidence, and drafts a cleaner plan for review.
+If the project is already configured but the task list feels stale, start
+re-intake from the project conversation instead. Re-intake keeps setup intact,
+re-reads the project evidence, and drafts a cleaner plan for review.

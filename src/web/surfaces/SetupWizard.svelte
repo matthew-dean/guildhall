@@ -5,7 +5,7 @@
 -->
 <script lang="ts">
   import { onDestroy } from 'svelte'
-  import Card from '../lib/Card.svelte'
+  import Card from '../lib/ui-compat/Card.svelte'
   import Button from '../lib/Button.svelte'
   import Stack from '../lib/Stack.svelte'
   import Row from '../lib/Row.svelte'
@@ -52,6 +52,7 @@
     specReady?: boolean
     drafts?: DraftCoordinator[]
     taskStatus?: string | null
+    blockReason?: string | null
   }
   interface LaunchActivity {
     taskId: string
@@ -60,6 +61,7 @@
     runStatus: string
     updatedAt: string | null
     specLength: number
+    blockReason: string | null
   }
   interface WorktreeIncludeCandidate {
     path: string
@@ -85,6 +87,7 @@
   let busy = $state(false)
   let loaded = $state(false)
   let setupLoadError = $state<string | null>(null)
+  let providerSaveError = $state<string | null>(null)
 
   let providers = $state<Record<string, ProviderMeta> | null>(null)
   let selectedProvider = $state<string | null>(null)
@@ -98,6 +101,7 @@
   let approving = $state(false)
   let approvalError = $state<string | null>(null)
   let launchActivity = $state<LaunchActivity | null>(null)
+  let setupComplete = $state(false)
   let resumeNotice = $state<string | null>(null)
   let worktreeIncludeCandidates = $state<WorktreeIncludeCandidate[]>([])
   let selectedWorktreeIncludes = $state<string[]>([])
@@ -108,8 +112,27 @@
 
   const launchStopped = $derived(Boolean(bootstrapLive && launchActivity && launchActivity.runStatus !== 'running'))
   const launchBlocked = $derived(launchActivity?.taskStatus === 'blocked')
+  const launchCanFinishFromRepoScan = $derived(
+    Boolean(
+      launchStopped &&
+        launchActivity?.taskId === 'task-meta-intake' &&
+        launchActivity.specLength === 0 &&
+        (launchActivity.outputStatus === 'in-progress' || launchActivity.outputStatus === 'spec-but-no-fence'),
+    ),
+  )
+  const launchRecoverableInterruption = $derived(
+    Boolean(
+      launchCanFinishFromRepoScan ||
+        (launchBlocked &&
+        launchActivity?.taskId === 'task-meta-intake' &&
+        launchActivity.blockReason &&
+        /durable progress|kept researching|request aborted|stop requested/i.test(launchActivity.blockReason)),
+    ),
+  )
   const launchStatusLabel = $derived(
-    launchBlocked
+    launchRecoverableInterruption
+      ? 'Setup was interrupted'
+      : launchBlocked
       ? 'Meta-intake is blocked'
       : launchStopped
       ? 'Coordinator paused'
@@ -261,6 +284,7 @@
 
   async function saveProvider() {
     if (!selectedProvider) return
+    providerSaveError = null
     busy = true
     try {
       const body: Record<string, unknown> = { preferredProvider: selectedProvider }
@@ -284,6 +308,11 @@
       history.replaceState({}, '', setupHref(3))
       void hydrateWorktreeIncludes()
       void hydrateLaunchState()
+    } catch (err) {
+      providerSaveError =
+        err instanceof Error
+          ? `Could not save provider settings. The service may be refreshing or restarting; try again in a moment. (${err.message})`
+          : 'Could not save provider settings. The service may be refreshing or restarting; try again in a moment.'
     } finally {
       busy = false
     }
@@ -295,6 +324,7 @@
 
   async function startBootstrap() {
     bootstrapBusy = true
+    setupComplete = false
     try {
       const savedIncludes = await saveSelectedWorktreeIncludes()
       if (!savedIncludes) {
@@ -376,8 +406,30 @@
   async function resumeBootstrap() {
     bootstrapBusy = true
     bootstrapLive = true
-    resumeNotice = 'Resume requested. Guildhall is restarting the coordinator now.'
+    resumeNotice = 'Resume requested. The coordinator is restarting now.'
     try {
+      if (launchRecoverableInterruption) {
+        resumeNotice = 'Finishing a setup draft from the saved repo scan.'
+        const synthesized = await setupFetch('/api/project/meta-intake/synthesize', { method: 'POST' })
+        if (synthesized.ok) {
+          const body = await synthesized.json().catch(() => ({})) as { drafts?: DraftCoordinator[] }
+          if (body.drafts && body.drafts.length > 0) {
+            approvalDrafts = body.drafts
+            bootstrapLive = false
+            resumeNotice = 'A setup draft was built from the saved repo scan. Review it before continuing.'
+            return
+          }
+        } else {
+          const body = await synthesized.json().catch(() => ({})) as { error?: string }
+          resumeNotice = body.error ?? 'Could not finish from the saved repo scan. Trying that setup step again.'
+        }
+        const rerun = await setupFetch('/api/project/meta-intake/rerun', { method: 'POST' })
+        if (!rerun.ok) {
+          const body = await rerun.json().catch(() => ({})) as { error?: string }
+          resumeNotice = body.error ?? 'Could not restart the setup step. Open recovery for details.'
+          return
+        }
+      }
       const resumed = await ensureCoordinatorRunning()
       await refreshLaunchActivity()
       if (resumed) {
@@ -399,7 +451,7 @@
       const projectDetail = await projectRes.json()
       const draftInfo = draft ?? ((await draftRes?.json()) as MetaIntakeDraft | undefined)
       const task = (projectDetail?.tasks ?? []).find((t: { id?: string }) => t.id === 'task-meta-intake') as
-        | { id?: string; status?: string; updatedAt?: string; spec?: string }
+        | { id?: string; status?: string; updatedAt?: string; spec?: string; blockReason?: string | null }
         | undefined
       launchActivity = {
         taskId: task?.id ?? 'task-meta-intake',
@@ -408,6 +460,7 @@
         runStatus: projectDetail?.run?.status ?? 'stopped',
         updatedAt: task?.updatedAt ?? null,
         specLength: typeof task?.spec === 'string' ? task.spec.length : 0,
+        blockReason: task?.blockReason ?? draftInfo?.blockReason ?? null,
       }
     } catch {
       /* keep prior activity */
@@ -473,16 +526,19 @@
       const j = (await r.json()) as MetaIntakeDraft
       await refreshLaunchActivity(j)
       if (j.status === 'draft-ready' && j.drafts && j.drafts.length > 0) {
+        setupComplete = false
         approvalDrafts = j.drafts
         bootstrapLive = false
         return
       }
       if (j.status === 'approved') {
+        setupComplete = true
         bootstrapLive = false
         approvalDrafts = null
         return
       }
       if (j.taskExists && (j.status === 'in-progress' || j.status === 'spec-but-no-fence')) {
+        setupComplete = false
         bootstrapLive = true
         approvalDrafts = null
         const resumed = await ensureCoordinatorRunning()
@@ -524,7 +580,7 @@
       <Card title="Setup needs a project folder">
         <Stack gap="3">
           <p class="muted">
-            Open setup from a project in the Projects view so Guildhall knows which folder it is configuring.
+            Open setup from a project in the Projects view so the app knows which folder it is configuring.
           </p>
           <p class="error">{setupLoadError}</p>
         </Stack>
@@ -600,6 +656,9 @@
               onLlamaUrlChange={v => (llamaUrl = v)}
             />
           {/if}
+          {#if providerSaveError}
+            <p class="error" role="alert">{providerSaveError}</p>
+          {/if}
         </Stack>
       </Card>
       <Row justify="end" gap="2">
@@ -613,14 +672,31 @@
           ← Back
         </Button>
         <Button variant="primary" disabled={busy || !selectedProvider} onclick={saveProvider}>
-          Save and continue →
+          {busy ? 'Saving...' : 'Save and continue →'}
         </Button>
       </Row>
+    {:else if setupComplete}
+      <Card title="Setup is complete">
+        <Stack gap="3">
+          <p class="muted">
+            This project’s structure and starter contract map are saved. You can review the
+            graph or keep working from the overview.
+          </p>
+          <Row gap="2">
+            <Button variant="primary" onclick={() => nav(currentProjectHref('/structure'))}>
+              Review structure
+            </Button>
+            <Button variant="secondary" onclick={skipToDashboard}>
+              Open overview
+            </Button>
+          </Row>
+        </Stack>
+      </Card>
     {:else}
       <Card title="You're ready to bootstrap.">
         <Stack gap="3">
           <p class="muted">
-            Guildhall has saved your identity and chosen provider. Next, meta-intake will scan the
+            Your identity and chosen provider are saved. Next, meta-intake will scan the
             codebase, infer the project structure, and draft starter tasks. It should only stop to
             ask you something if confidence is low and the consequence of being wrong is meaningful.
           </p>
@@ -629,7 +705,7 @@
               <div>
                 <strong>Local files for task worktrees</strong>
                 <p class="muted">
-                  Guildhall found local config filenames that agents may need for bootstrap or tests.
+                  Local config filenames that agents may need for bootstrap or tests were found.
                   Check only the files task worktrees are allowed to copy.
                 </p>
               </div>
@@ -674,19 +750,21 @@
             </Row>
             {#if launchStopped}
               <p class="muted">
-                {launchBlocked
-                  ? 'The setup task needs a recovery decision before Guildhall can continue.'
+                {launchRecoverableInterruption
+                  ? 'Setup stopped before the agent saved a draft. Use the saved repo scan to finish setup.'
+                  : launchBlocked
+                  ? 'The setup task needs a recovery decision before work can continue.'
                   : 'The task is saved. Resume the coordinator to continue meta-intake.'}
               </p>
               <Row justify="start">
-                {#if launchBlocked && launchActivity?.taskId}
+                {#if launchBlocked && !launchRecoverableInterruption && launchActivity?.taskId}
                   <Button variant="primary" onclick={() => nav(currentProjectHref(`/task/${launchActivity?.taskId}`))}>
                     Open recovery
                   </Button>
                 {:else}
                   <Button variant="agent" disabled={bootstrapBusy} onclick={resumeBootstrap}>
                     <Icon name="sparkles" size={14} />
-                    {bootstrapBusy ? 'Resuming...' : 'Resume'}
+                    {bootstrapBusy ? 'Resuming...' : launchRecoverableInterruption ? 'Finish from repo scan' : 'Resume'}
                   </Button>
                 {/if}
               </Row>
@@ -715,17 +793,17 @@
         {@const proposedCount = approvalDrafts.length}
         {@const starterRoutingDraft = isStarterRoutingDraft(approvalDrafts)}
         <Card title={starterRoutingDraft
-          ? `Guildhall proposed ${proposedCount} starter ${proposedCount === 1 ? 'lane' : 'lanes'}`
-          : `Guildhall inferred ${proposedCount} ${proposedCount === 1 ? 'repo slice' : 'repo slices'}`}
+          ? `Proposed ${proposedCount} starter ${proposedCount === 1 ? 'lane' : 'lanes'}`
+          : `Inferred ${proposedCount} ${proposedCount === 1 ? 'repo slice' : 'repo slices'}`}
         >
           <Stack gap="3">
             <div class="section-title">
-              <strong>{starterRoutingDraft ? 'Guildhall found an empty project and proposed starter routing placeholders.' : 'Guildhall inferred this from the repo.'}</strong>
+              <strong>{starterRoutingDraft ? 'An empty project was found, so starter routing placeholders were proposed.' : 'This was inferred from the repo.'}</strong>
             </div>
             <p class="muted">
               {starterRoutingDraft
                 ? 'Confirm only if these starter lanes are materially wrong. They give spec shaping a safe place to happen until real product code exists.'
-                : 'Confirm it only if something here is materially wrong. Guildhall should handle the routing and review structure underneath.'}
+                : 'Confirm it only if something here is materially wrong. The routing and review structure should be handled underneath.'}
             </p>
             <div class="draft-summary-list">
               {#each approvalDrafts as d, i (i)}
@@ -736,7 +814,7 @@
               {/each}
             </div>
             <details class="draft-details">
-              <summary>{starterRoutingDraft ? 'See why Guildhall proposed this starter split' : 'See why Guildhall inferred this'}</summary>
+              <summary>{starterRoutingDraft ? 'See why this starter split was proposed' : 'See why this was inferred'}</summary>
               <div class="coord-list">
                 {#each approvalDrafts as d, i (i)}
                   <div class="coord">
@@ -786,7 +864,7 @@
     display: flex;
     align-items: center;
     gap: var(--s-2);
-    font-size: var(--fs-1);
+    font-size: var(--gh-type-size-meta);
     color: var(--text-muted);
   }
   .dot {
@@ -797,8 +875,8 @@
     align-items: center;
     justify-content: center;
     border: 1px solid var(--border);
-    font-size: var(--fs-1);
-    font-weight: 700;
+    font-size: var(--gh-type-size-meta);
+    font-weight: var(--gh-type-weight-strong);
   }
   .dot.active {
     border-color: var(--accent);
@@ -812,31 +890,31 @@
   .step-label {
     text-transform: uppercase;
     letter-spacing: 0.05em;
-    font-weight: 700;
+    font-weight: var(--gh-type-weight-strong);
     margin-right: var(--s-2);
   }
   .field {
     display: flex;
     flex-direction: column;
     gap: var(--s-1);
-    font-size: var(--fs-2);
+    font-size: var(--gh-type-size-body);
   }
   .field > span:first-child {
     color: var(--text-muted);
-    font-size: var(--fs-1);
+    font-size: var(--gh-type-size-meta);
   }
   .hint {
     color: var(--text-muted);
-    font-size: var(--fs-0);
+    font-size: var(--gh-type-size-caption);
   }
   .error {
     color: var(--danger);
-    font-size: var(--fs-1);
+    font-size: var(--gh-type-size-meta);
   }
   .muted {
     color: var(--text-muted);
-    font-size: var(--fs-2);
-    line-height: var(--lh-body);
+    font-size: var(--gh-type-size-body);
+    line-height: var(--gh-type-line-height-body);
   }
   .project-orientation {
     display: grid;
@@ -848,8 +926,8 @@
   }
   .project-orientation span {
     color: var(--text-muted);
-    font-size: var(--fs-0);
-    font-weight: 700;
+    font-size: var(--gh-type-size-caption);
+    font-weight: var(--gh-type-weight-strong);
     text-transform: uppercase;
     letter-spacing: 0.04em;
   }
@@ -863,14 +941,14 @@
     align-items: center;
     gap: var(--s-1);
     color: var(--text);
-    font-size: var(--fs-2);
+    font-size: var(--gh-type-size-body);
   }
   code {
     font-family: 'SF Mono', monospace;
     background: var(--bg-raised-2);
     padding: 0 4px;
     border-radius: var(--r-1);
-    font-size: var(--fs-1);
+    font-size: var(--gh-type-size-meta);
   }
   .coord-list {
     display: flex;
@@ -890,7 +968,7 @@
     border: 1px solid var(--border);
     border-radius: var(--r-2);
     background: var(--bg);
-    font-size: var(--fs-2);
+    font-size: var(--gh-type-size-body);
   }
   .draft-details {
     border: 1px solid var(--border);
@@ -901,8 +979,8 @@
   .draft-details summary {
     cursor: pointer;
     color: var(--text-muted);
-    font-size: var(--fs-1);
-    font-weight: 600;
+    font-size: var(--gh-type-size-meta);
+    font-weight: var(--gh-type-weight-strong);
   }
   .draft-details[open] summary {
     margin-bottom: var(--s-2);
@@ -915,8 +993,8 @@
     display: flex;
     flex-direction: column;
     gap: var(--s-1);
-    font-size: var(--fs-2);
-    line-height: var(--lh-body);
+    font-size: var(--gh-type-size-body);
+    line-height: var(--gh-type-line-height-body);
   }
   .coord-mandate {
     color: var(--text);
@@ -928,12 +1006,12 @@
     line-height: inherit;
   }
   .coord-concerns {
-    font-size: var(--fs-1);
+    font-size: var(--gh-type-size-meta);
     color: var(--text-muted);
   }
   .status-line {
     color: var(--text);
-    font-size: var(--fs-2);
+    font-size: var(--gh-type-size-body);
   }
   .activity {
     padding: var(--s-2);
@@ -951,7 +1029,7 @@
   }
   .local-config-prompt strong {
     color: var(--text);
-    font-size: var(--fs-2);
+    font-size: var(--gh-type-size-body);
   }
   .local-config-list {
     display: grid;
@@ -965,7 +1043,7 @@
     border: 1px solid var(--border);
     border-radius: var(--r-1);
     color: var(--text);
-    font-size: var(--fs-1);
+    font-size: var(--gh-type-size-meta);
     font-family: var(--font-mono);
     cursor: pointer;
   }

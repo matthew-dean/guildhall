@@ -1,21 +1,27 @@
 <script lang="ts">
-  import Card from '../../lib/Card.svelte'
+  import Card from '../../lib/ui-compat/Card.svelte'
   import Chip from '../../lib/Chip.svelte'
   import Button from '../../lib/Button.svelte'
   import Icon from '../../lib/Icon.svelte'
   import Markdown from '../../lib/Markdown.svelte'
   import Row from '../../lib/Row.svelte'
   import Stack from '../../lib/Stack.svelte'
-  import { friendlyDomain, friendlyPriority, friendlyStatus } from '../../lib/display.js'
+  import { friendlyDomain, friendlyPriority } from '../../lib/display.js'
   import { labelForIdentifier } from '../../lib/identifier-labels.js'
   import { currentTaskHref } from '../../lib/project-routes.js'
   import { roleLabel } from '../../lib/escalation-labels.js'
   import { readableTaskDescription } from '../../lib/task-display.js'
-  import type { Task } from '../../lib/types.js'
+  import { projectDerivedRecommendedChildren } from '../../lib/task-drawer-integrity.js'
+  import { taskStagePresentation } from '../../lib/task-presentation.js'
+  import { deliveryProgressBadge, type TaskWorkProgressDisplay } from '../../lib/work-progress-display.js'
+  import type { DeliverySpine, PrimitiveSummary, Task } from '../../lib/types.js'
 
   interface Props {
     task: Task
+    tasks?: Task[]
     projectId?: string | null
+    deliverySpine?: DeliverySpine | null
+    workProgress?: TaskWorkProgressDisplay | null
     onNavigateTask?: (taskId: string) => void
     onCreateSplitChildren?: () => void
     createSplitBusy?: boolean
@@ -23,7 +29,10 @@
 
   let {
     task,
+    tasks = [],
     projectId = null,
+    deliverySpine = null,
+    workProgress = null,
     onNavigateTask,
     onCreateSplitChildren,
     createSplitBusy = false,
@@ -33,14 +42,18 @@
   const reviewPlan = $derived(task.reviewPlan ?? null)
   const requestIntake = $derived(task.requestIntake ?? null)
   const latestCheckpoint = $derived(task.latestCheckpoint ?? null)
-  const recommendedChildren = $derived(sizePlan?.recommendedChildren ?? [])
+  const recommendedChildren = $derived(projectDerivedRecommendedChildren(task))
   const taskDescription = $derived(readableTaskDescription(task.description, task.title) || '(no description)')
   const createdChildren = $derived(recommendedChildren.filter((child) => child.createdTaskId))
-  const parentTaskId = $derived(taskIdFromParentGoal(task.parentGoalId))
-  const containingWorkId = $derived(task.hierarchy?.parentId ?? parentTaskId)
+  const taskById = $derived(new Map([task, ...tasks].filter((candidate): candidate is Task => Boolean(candidate?.id)).map(candidate => [candidate.id, candidate])))
+  const statusPresentation = $derived(taskStagePresentation(task, { tasks: [task, ...tasks] }))
+  const deliveryBadge = $derived(deliveryProgressBadge(workProgress))
+  const deliverySteps = $derived(workProgress?.deliverySteps ?? [])
+  const containingWorkId = $derived(task.hierarchy?.parentId ?? null)
   const nestedWorkIds = $derived(task.hierarchy?.childIds ?? [])
+  const goalEnvelopeId = $derived(task.businessEnvelope?.goalId ?? null)
   const needsSplitAction = $derived(
-    sizePlan?.action === 'split_required' &&
+    (sizePlan?.action === 'split_required' || sizePlan?.action === 'split_recommended') &&
     recommendedChildren.length > 0 &&
     createdChildren.length === 0,
   )
@@ -51,11 +64,35 @@
   const splitNeeded = $derived(
     sizePlan?.action === 'split_required' || sizePlan?.action === 'split_recommended',
   )
+  const splitStillNeedsAction = $derived(
+    splitNeeded && createdChildren.length === 0,
+  )
   const reviewLaneCount = $derived(reviewPlan?.selectedLanes?.length ?? 0)
   const reviewerGroupCount = $derived(reviewPlan?.requiredRecipes?.length ?? 0)
-  const dependsOn = $derived(task.dependsOn ?? [])
-
-  type ChipTone = 'neutral' | 'ok' | 'warn' | 'danger' | 'accent' | 'running' | 'agent' | 'agent-attention'
+  const blockingTaskIds = $derived(task.dependsOn ?? [])
+  const contextPacket = $derived(deliverySpine?.contextPacket ?? null)
+  const relationships = $derived(deliverySpine?.relationships ?? null)
+  const usedPrimitives = $derived(
+    contextPacket?.primitiveContext?.direct ??
+      relationships?.primitiveUse?.direct ??
+      [],
+  )
+  const primitiveBlockers = $derived(
+    contextPacket?.primitiveContext?.blockers ??
+      relationships?.primitiveUse?.blockers ??
+      [],
+  )
+  const provedPrimitives = $derived(
+    contextPacket?.proofContext?.provesPrimitives ??
+      relationships?.primitiveProof?.proves ??
+      [],
+  )
+  const blockedTaskIds = $derived(
+    tasks
+      .filter((candidate) => candidate.id !== task.id && (candidate.dependsOn ?? []).includes(task.id))
+      .map((candidate) => candidate.id),
+  )
+  type ChipTone = 'neutral' | 'ok' | 'warn' | 'danger' | 'accent' | 'running'
 
   function token(value: string | undefined): string {
     if (!value) return 'Unknown'
@@ -69,13 +106,8 @@
   function sizeTone(action: string | undefined): ChipTone {
     if (action === 'split_required') return 'danger'
     if (action === 'split_recommended' || action === 'ask_clarifying_question') return 'warn'
-    if (action === 'proceed_with_warning') return 'agent-attention'
+    if (action === 'proceed_with_warning') return 'warn'
     return 'neutral'
-  }
-
-  function statusTone(status: string | undefined): ChipTone {
-    const tone = labelForIdentifier('status', status).tone
-    return tone === 'accent' ? 'agent' : tone
   }
 
   function priorityTone(priority: string | undefined): ChipTone {
@@ -83,14 +115,34 @@
     return tone === 'accent' ? 'agent' : tone
   }
 
-  function parentGoalLabel(goalId: string): string {
+  function goalLabel(goalId: string): string {
     return goalId.replace(/^goal-/, '').replace(/^task-/, '').replace(/[-_]+/g, ' ')
   }
 
-  function taskIdFromParentGoal(goalId: string | undefined): string | null {
-    const raw = goalId?.trim()
-    if (!raw?.startsWith('goal-task-')) return null
-    return raw.replace(/^goal-/, '')
+  function taskLabel(taskId: string): string {
+    return taskById.get(taskId)?.title?.trim() || taskId
+  }
+
+  function primitiveLabel(primitive: PrimitiveSummary): string {
+    return primitive.label?.trim() || primitive.id || 'Primitive'
+  }
+
+  function primitiveStatusTone(status: string | undefined): ChipTone {
+    if (status === 'ready') return 'ok'
+    if (status === 'needs_proof' || status === 'proposed') return 'warn'
+    if (status === 'deprecated') return 'neutral'
+    return 'neutral'
+  }
+
+  function deliveryStatusTone(status: string | undefined): ChipTone {
+    if (status === 'done' || status === 'waived') return 'ok'
+    if (status === 'blocked') return 'warn'
+    if (status === 'active') return 'running'
+    return 'neutral'
+  }
+
+  function deliveryKindLabel(kind: string | undefined): string {
+    return token(kind)
   }
 
   function navigateTask(event: MouseEvent, nextTaskId: string | undefined): void {
@@ -106,6 +158,7 @@
     ].filter((part): part is string => Boolean(part))
     return parts.join(' · ')
   }
+
 </script>
 
 <Stack gap="4">
@@ -113,7 +166,7 @@
     <Stack gap="3">
       <Markdown source={taskDescription} />
       <Row wrap gap="2">
-        <Chip label={friendlyStatus(task.status)} tone={statusTone(task.status)} />
+        <Chip label={statusPresentation.label} tone={statusPresentation.tone} />
         {#if task.domain}<Chip label={friendlyDomain(task.domain)} tone="neutral" />{/if}
         {#if task.priority}<Chip label={`Priority: ${friendlyPriority(task.priority)}`} tone={priorityTone(task.priority)} />{/if}
         {#if task.assignedTo}<Chip label={`Assigned: ${roleLabel(task.assignedTo)}`} tone="neutral" />{/if}
@@ -122,41 +175,23 @@
     </Stack>
   </Card>
 
-  <Card title="Work hierarchy" tone={splitNeeded ? 'warn' : 'default'}>
+  <Card title="Task links" tone={splitStillNeedsAction ? 'warn' : 'default'}>
     <Stack gap="3">
-      {#if containingWorkId}
+      {#if goalEnvelopeId}
         <div class="hierarchy-row">
-          <span>{containingWorkId === task.id ? 'Hierarchy role' : 'Containing work'}</span>
-          {#if containingWorkId !== task.id}
-            <a href={currentTaskHref(containingWorkId, projectId)} onclick={(event) => navigateTask(event, containingWorkId)}>
-              {task.parentGoalId ? parentGoalLabel(task.parentGoalId) : containingWorkId}
-            </a>
-          {:else}
-            <strong>Containing work</strong>
-          {/if}
+          <span>Goal envelope</span>
+          <strong>{goalLabel(goalEnvelopeId)}</strong>
         </div>
-      {:else if nestedWorkIds.length > 0 || task.status === 'parent'}
-        <div class="hierarchy-row">
-          <span>Hierarchy role</span>
-          <strong>Containing work</strong>
-        </div>
-      {:else if task.parentGoalId}
-        <div class="hierarchy-row">
-          <span>Containing goal</span>
-          <strong>{parentGoalLabel(task.parentGoalId)}</strong>
-        </div>
-      {:else}
-        <p class="muted">No containing work recorded.</p>
       {/if}
 
-      {#if dependsOn.length > 0}
+      {#if blockingTaskIds.length > 0}
         <div>
-          <h4>Depends on</h4>
+          <h4>Blocked by</h4>
           <ul class="link-list">
-            {#each dependsOn as dependency (dependency)}
+            {#each blockingTaskIds as dependency (dependency)}
               <li>
                 <a href={currentTaskHref(dependency, projectId)} onclick={(event) => navigateTask(event, dependency)}>
-                  {dependency}
+                  {taskLabel(dependency)}
                 </a>
               </li>
             {/each}
@@ -164,8 +199,82 @@
         </div>
       {/if}
 
-      {#if splitNeeded}
-        <div class="split-callout">
+      {#if blockedTaskIds.length > 0}
+        <div>
+          <h4>Blocks</h4>
+          <ul class="link-list">
+            {#each blockedTaskIds as dependentId (dependentId)}
+              <li>
+                <a href={currentTaskHref(dependentId, projectId)} onclick={(event) => navigateTask(event, dependentId)}>
+                  {taskLabel(dependentId)}
+                </a>
+              </li>
+            {/each}
+          </ul>
+        </div>
+      {/if}
+
+      {#if contextPacket?.deliveryIntent?.driver || contextPacket?.deliveryIntent?.provider || task.delivery?.proofKind}
+        <div>
+          <h4>Delivery</h4>
+          <Row wrap gap="2">
+            {#if contextPacket?.deliveryIntent?.driver}
+              <Chip label={`Driven by ${contextPacket.deliveryIntent.driver.label ?? contextPacket.deliveryIntent.driver.id}`} tone="accent" />
+            {/if}
+            {#if contextPacket?.deliveryIntent?.provider}
+              <Chip label={`Provided by ${contextPacket.deliveryIntent.provider.label ?? contextPacket.deliveryIntent.provider.id}`} tone="neutral" />
+            {/if}
+            {#if task.delivery?.proofKind}
+              <Chip label={`Proof: ${token(task.delivery.proofKind)}`} tone="ok" />
+            {/if}
+          </Row>
+          {#if contextPacket?.whyThisNow}
+            <p class="muted">{contextPacket.whyThisNow}</p>
+          {/if}
+        </div>
+      {/if}
+
+      {#if usedPrimitives.length > 0}
+        <div>
+          <h4>Uses primitives</h4>
+          <div class="primitive-list">
+            {#each usedPrimitives as primitive (`use-${primitive.id}`)}
+              <span class="primitive-pill">
+                {primitiveLabel(primitive)}
+                {#if primitive.status}<small>{token(primitive.status)}</small>{/if}
+              </span>
+            {/each}
+          </div>
+        </div>
+      {/if}
+
+      {#if provedPrimitives.length > 0}
+        <div>
+          <h4>Proves primitives</h4>
+          <div class="primitive-list">
+            {#each provedPrimitives as primitive (`prove-${primitive.id}`)}
+              <span class="primitive-pill primitive-pill-proof">
+                {primitiveLabel(primitive)}
+                {#if primitive.status}<small>{token(primitive.status)}</small>{/if}
+              </span>
+            {/each}
+          </div>
+        </div>
+      {/if}
+
+      {#if primitiveBlockers.length > 0}
+        <div class="primitive-blockers">
+          <h4>Primitive proof blockers</h4>
+          <Row wrap gap="2">
+            {#each primitiveBlockers as primitive (`blocker-${primitive.id}`)}
+              <Chip label={primitiveLabel(primitive)} tone={primitiveStatusTone(primitive.status)} />
+            {/each}
+          </Row>
+        </div>
+      {/if}
+
+      {#if splitNeeded && createdChildren.length === 0}
+        <div class:split-callout-warning={splitStillNeedsAction} class="split-callout">
           <strong>
             {#if needsSplitAction}
               Split this task
@@ -174,12 +283,10 @@
             {/if}
           </strong>
           <span>
-            {#if createdChildren.length > 0}
-              Work happens in the nested work below.
-            {:else if needsSplitAction}
-              Split it now: Guildhall will keep this as containing work and create the nested work below.
+            {#if needsSplitAction}
+              Split it now: this stays as containing work and the nested work below is created.
             {:else}
-              Guildhall has sized this as too large for one clean worker/review pass. Split it into containing work with nested work below before work starts.
+              This is too large for one clean worker/review pass. Split it into containing work with nested work below before work starts.
             {/if}
           </span>
           {#if canCreateSplitChildren}
@@ -195,12 +302,12 @@
 
       {#if nestedWorkIds.length > 0 && createdChildren.length === 0}
         <div>
-          <h4>Nested work</h4>
+          <h4>Child tasks</h4>
           <ul class="link-list">
             {#each nestedWorkIds as childId (childId)}
               <li>
                 <a href={currentTaskHref(childId, projectId)} onclick={(event) => navigateTask(event, childId)}>
-                  {childId}
+                  {taskLabel(childId)}
                 </a>
               </li>
             {/each}
@@ -210,7 +317,7 @@
 
       {#if recommendedChildren.length > 0}
         <div>
-          <h4>{createdChildren.length > 0 ? 'Nested work' : needsSplitAction ? 'Work Guildhall will create' : 'Recommended nested work'}</h4>
+          <h4>{createdChildren.length > 0 ? 'Child tasks' : needsSplitAction ? 'Work to create' : 'Recommended child tasks'}</h4>
           <ul class="child-list">
             {#each recommendedChildren as child, index (`${child.title ?? 'child'}-${index}`)}
               <li>
@@ -229,8 +336,37 @@
           </ul>
         </div>
       {/if}
+
+      {#if nestedWorkIds.length === 0 && blockingTaskIds.length === 0 && blockedTaskIds.length === 0 && recommendedChildren.length === 0 && usedPrimitives.length === 0 && provedPrimitives.length === 0}
+        <p class="muted">No linked tasks recorded.</p>
+      {/if}
     </Stack>
   </Card>
+
+  {#if deliverySteps.length > 0 || deliveryBadge}
+    <Card title="Delivery steps" tone={deliveryBadge?.tone === 'warn' ? 'warn' : 'default'}>
+      <Stack gap="3">
+        {#if deliveryBadge}
+          <Row wrap gap="2">
+            <Chip label={deliveryBadge.label} tone={deliveryBadge.tone} title={deliveryBadge.title} />
+          </Row>
+        {/if}
+        {#if deliverySteps.length > 0}
+          <div class="delivery-step-list">
+            {#each deliverySteps as step (step.id ?? step.title)}
+              <div class="delivery-step-row">
+                <div>
+                  <strong>{step.title ?? 'Delivery step'}</strong>
+                  <span>{deliveryKindLabel(step.kind)}</span>
+                </div>
+                <Chip label={token(step.status)} tone={deliveryStatusTone(step.status)} />
+              </div>
+            {/each}
+          </div>
+        {/if}
+      </Stack>
+    </Card>
+  {/if}
 
   {#if sizePlan}
     <Card title="Task size">
@@ -239,7 +375,7 @@
           <Chip label={token(sizePlan.band)} tone={sizeTone(sizePlan.action)} />
           <Chip label={token(sizePlan.action)} tone={sizeTone(sizePlan.action)} />
           {#if sizePlan.score}<Chip label={`Score ${sizePlan.score}`} tone="neutral" />{/if}
-          {#if sizePlan.reviewBudgetHint}<Chip label={`${token(sizePlan.reviewBudgetHint)} review`} tone="agent" />{/if}
+          {#if sizePlan.reviewBudgetHint}<Chip label={`${token(sizePlan.reviewBudgetHint)} review`} tone="ok" />{/if}
         </Row>
         {#if sizePlan.reasons?.length}
           <p class="muted">{sizePlan.reasons[0]}</p>
@@ -260,7 +396,7 @@
       <Stack gap="3">
         <Row wrap gap="2">
           {#if requestIntake.intent}<Chip label={token(requestIntake.intent)} tone="neutral" />{/if}
-          {#if requestIntake.recommendedNextAction}<Chip label={token(requestIntake.recommendedNextAction)} tone="agent" />{/if}
+          {#if requestIntake.recommendedNextAction}<Chip label={token(requestIntake.recommendedNextAction)} tone="ok" />{/if}
         </Row>
         {#if requestIntake.ambiguity}
           <p class="muted">{requestIntake.ambiguity}</p>
@@ -303,7 +439,7 @@
     <Card title="Review plan">
       <Stack gap="3">
         <Row wrap gap="2">
-          {#if reviewPlan.effort}<Chip label={`${token(reviewPlan.effort)} review`} tone="agent" />{/if}
+          {#if reviewPlan.effort}<Chip label={`${token(reviewPlan.effort)} review`} tone="ok" />{/if}
           {#if reviewPlan.depth}<Chip label={`${token(reviewPlan.depth)} depth`} tone="neutral" />{/if}
           <Chip label={`${reviewerGroupCount} reviewer group${reviewerGroupCount === 1 ? '' : 's'}`} tone="neutral" />
           <Chip label={`${reviewLaneCount} lane${reviewLaneCount === 1 ? '' : 's'}`} tone="neutral" />
@@ -331,7 +467,7 @@
   .hierarchy-row span,
   .child-list span {
     color: var(--text-muted);
-    font-size: var(--fs-2);
+    font-size: var(--gh-type-size-body);
   }
   .hierarchy-row {
     display: flex;
@@ -342,7 +478,7 @@
   h4 {
     margin: 0 0 var(--s-2);
     color: var(--text);
-    font-size: var(--fs-1);
+    font-size: var(--gh-type-size-meta);
     letter-spacing: 0.08em;
     text-transform: uppercase;
   }
@@ -350,13 +486,17 @@
     display: grid;
     gap: var(--s-1);
     padding: var(--s-3);
-    border: 1px solid color-mix(in srgb, var(--warn) 38%, transparent);
+    border: 1px solid var(--border);
     border-radius: var(--r-2);
+    background: color-mix(in srgb, var(--surface-2) 70%, transparent);
+  }
+  .split-callout-warning {
+    border-color: color-mix(in srgb, var(--warn) 38%, transparent);
     background: color-mix(in srgb, var(--warn) 10%, transparent);
   }
   .split-callout span {
     color: var(--text-muted);
-    font-size: var(--fs-2);
+    font-size: var(--gh-type-size-body);
   }
   .split-actions {
     display: flex;
@@ -382,12 +522,66 @@
   }
   .factor-list {
     color: var(--text-muted);
-    font-size: var(--fs-2);
+    font-size: var(--gh-type-size-body);
   }
   .lane-list {
     display: flex;
     flex-wrap: wrap;
     gap: var(--s-2);
+  }
+  .primitive-list {
+    display: flex;
+    flex-wrap: wrap;
+    gap: var(--s-2);
+  }
+
+  .delivery-step-list {
+    display: grid;
+    gap: var(--s-2);
+  }
+
+  .delivery-step-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: var(--s-3);
+    padding: var(--s-2);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    background: var(--surface-muted);
+  }
+
+  .delivery-step-row > div {
+    display: grid;
+    gap: var(--s-1);
+    min-width: 0;
+  }
+
+  .delivery-step-row span {
+    color: var(--text-muted);
+    font-size: var(--fs-xs);
+  }
+  .primitive-pill {
+    display: inline-flex;
+    align-items: center;
+    gap: var(--s-2);
+    min-height: 28px;
+    padding: 0 var(--s-2);
+    border: 1px solid var(--border);
+    border-radius: var(--r-2);
+    background: color-mix(in srgb, var(--surface-2) 70%, transparent);
+    color: var(--text);
+    font-size: var(--gh-type-size-body);
+  }
+  .primitive-pill-proof {
+    border-color: color-mix(in srgb, var(--ok) 35%, var(--border));
+  }
+  .primitive-pill small {
+    color: var(--text-muted);
+    font-size: var(--gh-type-size-meta);
+  }
+  .primitive-blockers {
+    padding-top: var(--s-1);
   }
   a {
     color: var(--accent-text);

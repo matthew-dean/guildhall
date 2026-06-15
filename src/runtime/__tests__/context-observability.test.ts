@@ -127,6 +127,41 @@ describe('writeContextDebugRecord', () => {
     })
   })
 
+  it('persists structural omitted-context handles for on-demand retrieval', async () => {
+    const record = await writeContextDebugRecord({
+      memoryDir,
+      workspacePath: '/repo',
+      task: mkTask(),
+      ctx: mkContext({
+        structuralMapContext: '## Structural Map Slice\nOmitted: package://fixture/docs (unrelated_to_task_domain)',
+        structuralMapOmitted: [
+          {
+            handle: 'package://fixture/docs',
+            reason: 'unrelated_to_task_domain',
+            confidence: 'high',
+          },
+        ],
+      }),
+      agentName: 'worker-agent',
+      modelId: 'qwen/test',
+      prompt: 'prompt',
+    })
+
+    expect(record.structuralMap).toEqual(expect.objectContaining({
+      included: true,
+      omitted: [
+        {
+          handle: 'package://fixture/docs',
+          reason: 'unrelated_to_task_domain',
+          confidence: 'high',
+          retrievalHint: 'Resolve package://fixture/docs through the structural map before reading deferred context.',
+        },
+      ],
+    }))
+    const snapshot = await fs.readFile(record.snapshotPath, 'utf8')
+    expect(snapshot).toContain('package://fixture/docs')
+  })
+
   it('warns when a subproject task is mismatched to the active worktree', async () => {
     const record = await writeContextDebugRecord({
       memoryDir,

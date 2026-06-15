@@ -25,13 +25,68 @@ export interface ExternalBlockerStep {
 
 export interface ProductBrief {
   userJob?: string
+  whyItMattersNow?: string
   successMetric?: string
   successCriteria?: string
+  nonGoals?: string[]
+  audience?: string
+  usageContext?: string
   antiPatterns?: string[]
   rolloutPlan?: string
+  brandInteractionNotes?: string
   approvedBy?: string | null
   approvedAt?: string | null
   authoredBy?: string
+}
+
+export interface StructuredSpecCompletionBoundary {
+  productOutcome?: string
+  whatGuildhallCanCompleteInCode?: string
+  externalDependencies?: string
+  ownerOnlySetup?: string
+  verificationEnvironment?: string
+  whatCountsAsDone?: string
+  whatMustBeSplitOrBlocked?: string
+}
+
+export interface StructuredSpecContractSurfaceDelta {
+  surfaceId?: string
+  proposedSurfaceLabel?: string
+  relation: 'consumes' | 'extends' | 'amends' | 'deprecates' | 'replaces' | string
+  summary: string
+  invariantRefs?: string[]
+  proposedInvariants?: Array<{
+    id?: string
+    label: string
+    rule: string
+    reason: string
+    proofObligations?: string[]
+  }>
+  breakingChange?: boolean
+  affectedConsumerRefs?: string[]
+  proofObligations: string[]
+  migrationNotes?: string
+}
+
+export interface StructuredSpec {
+  whatThisIs?: string
+  problemContext?: string
+  goals?: string[]
+  nonGoals?: string[]
+  proposedDesign?: string
+  keyDecisions?: string[]
+  contractSurfaceDeltas?: StructuredSpecContractSurfaceDelta[]
+  acceptanceCriteria?: string[]
+  verification?: string[]
+  completionBoundary?: StructuredSpecCompletionBoundary
+  userFacingBehavior?: string
+  visualInteractionNotes?: string
+  componentApiShape?: string
+  dataModelSchemaChanges?: string
+  migrationRollout?: string
+  performanceReliabilitySecurity?: string
+  risksOpenQuestions?: string[]
+  handoffSequence?: string[]
 }
 
 /**
@@ -337,9 +392,11 @@ export interface GitStorySummary {
 
 export interface Task {
   id: string
+  displayKey?: string
   title?: string
   description?: string
   status?: string
+  dependsOn?: string[]
   domain?: string
   priority?: string
   assignedTo?: string | null
@@ -356,6 +413,8 @@ export interface Task {
   productBrief?: ProductBrief
   openQuestions?: AgentQuestion[]
   spec?: string
+  structuredSpec?: StructuredSpec
+  contractSurfaceReviewPackets?: ContractSurfaceReviewPacket[]
   acceptanceCriteria?: AcceptanceCriterion[]
   gateResults?: GateResult[]
   reviewVerdicts?: ReviewVerdict[]
@@ -378,6 +437,7 @@ export interface Task {
     filesTouched?: string[]
     writtenAt?: string
   }
+  projectPath?: string
   worktreePath?: string
   branchName?: string
   baseBranch?: string
@@ -415,6 +475,11 @@ export interface Task {
   workKind?:
     | 'app_spec'
     | 'feature_spec'
+    | 'feature'
+    | 'primitive'
+    | 'component'
+    | 'story'
+    | 'test'
     | 'implementation'
     | 'setup'
     | 'verification'
@@ -424,12 +489,23 @@ export interface Task {
     | 'cleanup'
     | 'learning'
     | string
+  delivery?: {
+    driver?: string
+    provider?: string
+    supports?: string[]
+    usesPrimitives?: string[]
+    provesPrimitives?: string[]
+    proofKind?: string
+  }
   hierarchy?: {
     parentId?: string
     childIds?: string[]
     order?: number
     depth?: number
     path?: string[]
+  }
+  businessEnvelope?: {
+    goalId?: string
   }
   completionBoundary?: {
     summary?: string
@@ -455,9 +531,147 @@ export interface Task {
     assignedTo?: string | null
     updatedAt?: string
   }
-  parentGoalId?: string
   permissionMode?: string
   dependsOn?: string[]
+}
+
+export interface DeliveryDriver {
+  id?: string
+  label?: string
+  role?: 'primary' | 'secondary' | 'provider' | 'proof' | 'maintenance' | string
+  kind?: string
+  paths?: string[]
+  domains?: string[]
+  description?: string
+}
+
+export interface PrimitiveSummary {
+  id?: string
+  label?: string
+  kind?: string
+  provider?: string
+  paths?: string[]
+  dependsOn?: string[]
+  invariants?: string[]
+  proof?: string[]
+  status?: 'unknown' | 'proposed' | 'ready' | 'needs_proof' | 'deprecated' | string
+  evidence?: string[]
+  consumers?: Array<{ kind?: 'task' | 'primitive' | string; id?: string; title?: string }>
+  provingTasks?: Array<{ id?: string; title?: string; status?: string }>
+}
+
+export interface DeliverySpineValidation {
+  valid?: boolean
+  errors?: Array<{ path?: string; code?: string; message?: string }>
+  warnings?: Array<{ path?: string; code?: string; message?: string }>
+}
+
+export interface TaskContextPacket {
+  taskId?: string
+  deliveryIntent?: {
+    driver?: DeliveryDriver
+    provider?: DeliveryDriver
+    containingPackage?: { id?: string; title?: string; status?: string }
+    supports?: string[]
+  }
+  executionOrder?: {
+    runnableNow?: boolean
+    directBlockers?: Array<{ id?: string; title?: string; status?: string }>
+    recursiveBlockers?: Array<{ id?: string; title?: string; status?: string }>
+    blocks?: Array<{ id?: string; title?: string; status?: string }>
+  }
+  primitiveContext?: {
+    direct?: PrimitiveSummary[]
+    ancestors?: PrimitiveSummary[]
+    blockers?: PrimitiveSummary[]
+    invariants?: Array<{ primitiveId?: string; primitiveLabel?: string; invariant?: string }>
+    paths?: string[]
+  }
+  proofContext?: {
+    proofKind?: string
+    requiredProof?: Array<{ primitiveId?: string; primitiveLabel?: string; proof?: string }>
+    provesPrimitives?: PrimitiveSummary[]
+    existingEvidence?: string[]
+  }
+  persona?: { id?: string; label?: string; guardrails?: string[] }
+  whyThisNow?: string
+  correctionHooks?: Array<{ field?: string; label?: string; current?: unknown }>
+}
+
+export interface TaskRelationships {
+  hierarchy?: {
+    parent?: { id?: string; title?: string; status?: string }
+    children?: Array<{ id?: string; title?: string; status?: string }>
+    breadcrumbs?: Array<{ id?: string; title?: string }>
+  }
+  dependencies?: {
+    directBlockers?: Array<{ id?: string; title?: string; status?: string }>
+    recursiveBlockers?: Array<{ id?: string; title?: string; status?: string }>
+    blocks?: Array<{ id?: string; title?: string; status?: string }>
+  }
+  supports?: string[]
+  primitiveUse?: {
+    direct?: PrimitiveSummary[]
+    ancestors?: PrimitiveSummary[]
+    blockers?: PrimitiveSummary[]
+  }
+  primitiveProof?: {
+    proves?: PrimitiveSummary[]
+    provingTasksByPrimitive?: Record<string, Array<{ id?: string; title?: string; status?: string }>>
+  }
+}
+
+export interface DeliveryQueueCandidate {
+  task?: Task
+  runnable?: boolean
+  executionBlockers?: Array<{ id?: string; title?: string; status?: string }>
+  structuralBlockers?: PrimitiveSummary[]
+  suggestedPrimitiveProofTasks?: Array<{
+    primitiveId?: string
+    primitiveLabel?: string
+    title?: string
+    reason?: string
+    delivery?: Task['delivery']
+  }>
+  why?: string
+}
+
+export interface DeliverySpine {
+  model?: {
+    drivers?: DeliveryDriver[]
+    primitives?: PrimitiveSummary[]
+  }
+  validation?: DeliverySpineValidation
+  primitives?: PrimitiveSummary[]
+  queue?: {
+    runnable?: DeliveryQueueCandidate[]
+    blocked?: DeliveryQueueCandidate[]
+    firstRunnable?: DeliveryQueueCandidate
+  }
+  relationships?: TaskRelationships
+  contextPacket?: TaskContextPacket
+}
+
+export interface ContractSurfaceReviewPacket {
+  id: string
+  surface: {
+    id: string
+    label: string
+    kind: string
+    authority: string
+    scope: string
+    owningProject: { id: string; label: string; path?: string }
+    domain?: { id: string; label: string; path?: string }
+  }
+  currentSpecRef: string
+  knownConsumers: Array<{ id: string; label: string; path?: string }>
+  existingInvariants: Array<{ id: string; label: string; rule: string; proofObligations?: string[] }>
+  existingDecisions: Array<{ id: string; summary: string; decidedAt: string; decidedBy: string; evidenceRefs?: string[] }>
+  siblingSpecRefs: string[]
+  driftFindings: string[]
+  currentDelta: StructuredSpecContractSurfaceDelta
+  proofObligations: string[]
+  reviewFocus: string[]
 }
 
 export interface ContextSectionStat {
@@ -502,12 +716,26 @@ export interface ContextDebugRecord {
     included?: Array<{ id?: string; type?: string; scope?: string }>
     withheld?: Array<{ id?: string; reason?: string }>
     evidenceRefs?: number
+    memoryCore?: {
+      adapter?: 'mastra' | 'deterministic'
+      fallbackUsed?: boolean
+      warnings?: string[]
+      candidates?: Array<{
+        id?: string
+        kind?: string
+        summary?: string
+        sourceRefs?: Array<{ uri?: string; path?: string; sourceKind?: string }>
+      }>
+    }
   }
 }
 
 export interface DrawerPayload {
   task: Task
+  relatedTasks?: Task[]
+  workProgress?: ServiceProjectSummary['workProgress']
   runStatus?: string
+  availability?: ProjectAvailability | null
   recentEvents?: unknown[]
   contextDebug?: ContextDebugRecord[]
   threadTurns?: TaskThreadTurn[]
@@ -516,6 +744,7 @@ export interface DrawerPayload {
     path: string
     error?: string
   }
+  deliverySpine?: DeliverySpine
 }
 
 export type DrawerTab = 'overview' | 'current' | 'spec' | 'journey' | 'transcript' | 'experts' | 'history' | 'provenance'
@@ -549,6 +778,11 @@ export interface TaskTurnChecklist {
   totalSteps: number
   activeStepId: string | null
   steps: TaskTurnChecklistStep[]
+}
+
+export interface TaskTurnWorkerHandoff {
+  ready: boolean
+  cleanupNeeded: boolean
 }
 
 export interface TaskThreadTurnBase {
@@ -620,6 +854,7 @@ export interface TaskThreadInFlightTurn extends TaskThreadTurnBase {
   liveAgent?: TaskTurnLiveAgent
   activity?: TaskTurnLiveActivity[]
   checklist?: TaskTurnChecklist
+  workerHandoff?: TaskTurnWorkerHandoff
 }
 
 export type TaskThreadTurn =
@@ -698,7 +933,7 @@ export interface ProjectRuntimeSummary {
   }
   backendSetup?: {
     status?: string
-    selectedMode?: 'podman' | 'host-run' | string | null
+    selectedMode?: 'docker' | 'podman' | 'host-run' | string | null
     message?: string
   }
   image?: {
@@ -725,6 +960,19 @@ export interface ProjectMemoryHealth {
   project?: number
   userGlobal?: number
   guildhallProduct?: number
+  memoryCore?: {
+    adapter: 'mastra' | 'deterministic'
+    fallbackUsed: boolean
+    storagePath?: string
+    repoLocalWrites?: string[]
+    semanticRecallEnabled?: boolean
+    observationalMemoryEnabled?: boolean
+    observationalProcessorReady?: boolean
+    compactionStatus?: 'active' | 'needs_attention'
+    semanticValidity?: 'valid' | 'needs_attention'
+    warnings?: string[]
+    features?: string[]
+  }
   recentUse?: Array<{ taskId?: string; included?: number; withheld?: number; at?: string }>
 }
 
@@ -829,6 +1077,52 @@ export interface StartReadiness {
   actionHref?: string
 }
 
+export interface ProjectAvailability {
+  status: 'active' | 'paused' | string
+  pausedAt?: string | null
+  resumedAt?: string | null
+  reason?: string
+}
+
+export type ProjectActionSource = 'owner_input' | 'start_readiness' | 'task' | 'inbox' | 'thread' | 'none'
+export type ProjectActionTone = 'neutral' | 'accent' | 'warn' | 'danger' | 'running'
+
+export interface ProjectAction {
+  source?: ProjectActionSource | string
+  label?: string
+  detail?: string
+  content?: string
+  buttonLabel?: string
+  href?: string
+  tone?: ProjectActionTone | string
+  code?: string
+  taskId?: string
+  inboxKind?: string
+}
+
+export interface ProjectActionModel {
+  primaryAction?: ProjectAction | null
+  secondaryActions?: ProjectAction[]
+  runControl?: {
+    label?: string
+    startEnabled?: boolean
+    disabledReason?: string
+    href?: string
+  }
+  ownerInput?: {
+    active?: boolean
+    label?: string
+    detail?: string
+    href?: string
+  }
+  setup?: {
+    state?: 'ready' | 'blocked' | 'fresh_intake_needed' | string
+    freshIntakeNeeded?: boolean
+    href?: string
+    detail?: string
+  }
+}
+
 export interface ProjectMigrationStatusItem {
   id: string
   title: string
@@ -865,6 +1159,50 @@ export interface BootstrapStatus {
   steps?: BootstrapStep[]
 }
 
+export interface StructuralMapReviewSummaryNode {
+  id: string
+  label: string
+  path?: string
+  command?: string
+  confidence?: 'low' | 'medium' | 'high' | 'conflict' | string
+  evidenceScore?: number
+  freshness?: 'fresh' | 'recent' | 'stale' | 'unknown' | string
+}
+
+export interface StructuralMapReviewSummary {
+  id?: string
+  state?: 'draft' | 'owner_review' | 'correction_requested' | 'accepted' | 'superseded' | string
+  generatedAt?: string
+  counts?: {
+    gitRoots?: number
+    ignoredGitRoots?: number
+    packages?: number
+    domains?: number
+    crossCuttingDomains?: number
+    executableUnits?: number
+    conflicts?: number
+    questions?: number
+  }
+  gitRoots?: StructuralMapReviewSummaryNode[]
+  ignoredGitRoots?: StructuralMapReviewSummaryNode[]
+  packages?: StructuralMapReviewSummaryNode[]
+  domains?: StructuralMapReviewSummaryNode[]
+  crossCuttingDomains?: StructuralMapReviewSummaryNode[]
+  executableUnits?: StructuralMapReviewSummaryNode[]
+  conflicts?: Array<{
+    id?: string
+    message?: string
+    severity?: 'low' | 'medium' | 'high' | string
+    targetId?: string
+  }>
+  questions?: Array<{
+    id?: string
+    prompt?: string
+    reason?: string
+    targetIds?: string[]
+  }>
+}
+
 export interface ProjectInbox {
   items?: Array<{
     kind?: string
@@ -898,16 +1236,44 @@ export interface ProjectDetail {
     [k: string]: unknown
   }
   tasks?: Task[]
+  workProgress?: ServiceProjectSummary['workProgress']
   inbox?: ProjectInbox
   run?: ProjectRun | null
+  availability?: ProjectAvailability | null
   providerStatus?: ProviderStatus | null
   runtime?: ProjectRuntimeSummary | null
   memoryHealth?: ProjectMemoryHealth | null
+  structuralMapReview?: StructuralMapReviewSummary | null
+  taskRoutingContexts?: Record<string, TaskRoutingContext>
   gitStory?: GitStorySummary | null
   startReadiness?: StartReadiness | null
+  actionModel?: ProjectActionModel | null
+  deliverySpine?: DeliverySpine | null
   bootstrapStatus?: BootstrapStatus
   recentEvents?: EventEnvelope[]
   error?: string
+}
+
+export interface TaskRoutingContextRef {
+  id?: string
+  label?: string
+  path?: string
+}
+
+export interface TaskRoutingContextCheck extends TaskRoutingContextRef {
+  command?: string
+}
+
+export interface TaskRoutingContext {
+  taskId?: string
+  status?: 'matched' | 'unmatched' | 'unavailable' | string
+  summary?: string
+  likelyArea?: TaskRoutingContextRef
+  primaryDomain?: TaskRoutingContextRef
+  crossCuttingDomains?: TaskRoutingContextRef[]
+  checks?: TaskRoutingContextCheck[]
+  reasons?: string[]
+  omittedCount?: number
 }
 
 export interface ServiceProjectSummary {
@@ -915,6 +1281,7 @@ export interface ServiceProjectSummary {
   path: string
   name: string
   initializationNeeded?: boolean
+  projectStatusLoading?: boolean
   tags?: string[]
   summary?: string | null
   taskCounts?: {
@@ -924,6 +1291,20 @@ export interface ServiceProjectSummary {
     blocked: number
     done: number
     shelved: number
+  }
+  workProgress?: {
+    counts: {
+      visibleTotal: number
+      visibleActive: number
+      visibleBlocked: number
+      visibleDone: number
+      visibleShelved: number
+      deliveryTotal: number
+      deliveryRequired: number
+      deliveryDone: number
+      deliveryBlocked: number
+    }
+    byTaskId: Record<string, unknown>
   }
   highlights?: {
     activeTaskTitle?: string | null
@@ -939,9 +1320,11 @@ export interface ServiceProjectSummary {
     }>
   }
   run?: ProjectRun | null
+  availability?: ProjectAvailability | null
   providerStatus?: ProviderStatus | null
   gitStory?: GitStorySummary | null
   startReadiness?: StartReadiness | null
+  actionModel?: ProjectActionModel | null
   projectCheckIn?: {
     needed?: boolean
     label?: string
@@ -987,6 +1370,7 @@ export type ProjectView =
   | 'inbox'
   | 'work'
   | 'planner'
+  | 'structure'
   | 'timeline'
   | 'release'
   | 'settings'

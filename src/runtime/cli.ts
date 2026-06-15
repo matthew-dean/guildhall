@@ -37,6 +37,14 @@ import {
   installAgentBridgeInstructions,
   type AgentBridgeTarget,
 } from './agent-bridge-install.js'
+import {
+  importExternalMemoryBridgeRecord,
+  listExternalMemoryBridgeRecords,
+  rejectExternalMemoryBridgeRecord,
+  reviewExternalMemoryBridgeRecord,
+  type ExternalMemoryBridgeRecordInput,
+  type ExternalMemoryBridgeReviewStatus,
+} from './external-agent-memory-bridge.js'
 import { runInit } from './init.js'
 import { runServe } from './serve.js'
 import {
@@ -52,7 +60,7 @@ import {
 } from '@guildhall/config'
 import { exec, spawn } from 'node:child_process'
 import { platform } from 'node:os'
-import { buildSemanticIndexPrompt, refreshCodebaseMap, type CorpusSemanticIndexer } from '@guildhall/corpus-map'
+import { buildSemanticIndexPrompt, codebaseMapPath, refreshCodebaseMap, type CorpusSemanticIndexer } from '@guildhall/corpus-map'
 import { OpenAICompatibleClient } from '@guildhall/providers'
 import { getProjectStateDir } from '@guildhall/sessions'
 import { FileBackedGuildhallPersistence } from '@guildhall/persistence'
@@ -64,6 +72,21 @@ import {
   runTbliteBenchmark,
   type BenchmarkAutomationPolicy,
 } from '@guildhall/benchmarks'
+import {
+  acceptProjectDependencyDelivery,
+  beginProjectDependencyConsumerReview,
+  commitProjectDependencyDeliveryPlan,
+  deliverProjectDependency,
+  importProjectDependencyRequestForProvider,
+  projectGraphRegistryDir,
+  requestProjectDependencyRevision,
+  reviseProjectDependencyPlan,
+  writeLocalProjectGraphDraft,
+  type ConsumerReturnPacket,
+  type DeliveryReceipt,
+  type ProjectDependencyEdge,
+} from './project-graph.js'
+import { auditProjectMemoryState } from '@guildhall/memory-core'
 
 function openBrowser(url: string): void {
   const cmd = platform() === 'darwin' ? `open "${url}"`
@@ -223,7 +246,7 @@ export function parseArgs(rawArgs: string[]): {
   getFlag: (flag: string) => string | undefined
   positionals: string[]
 } {
-  const valueFlags = new Set(['--port', '--service-state', '--domain', '--max-ticks', '--cases', '--task', '--lane', '--finding', '--action', '--missed-by', '--migration', '--fixture-set', '--subset', '--automation', '--output-dir', '--output', '--project', '--model', '--provider', '--hermes-root', '--from-file', '--proof', '--title'])
+  const valueFlags = new Set(['--port', '--service-state', '--domain', '--max-ticks', '--cases', '--task', '--lane', '--finding', '--action', '--missed-by', '--migration', '--fixture-set', '--subset', '--automation', '--output-dir', '--output', '--project', '--model', '--provider', '--hermes-root', '--from-file', '--proof', '--title', '--edge', '--receipt', '--evidence', '--format', '--channel', '--status', '--id', '--reviewer', '--reason', '--memory-status'])
   function getFlag(flag: string): string | undefined {
     const idx = rawArgs.indexOf(flag)
     return idx !== -1 ? rawArgs[idx + 1] : undefined
@@ -311,6 +334,8 @@ export function resolveServiceLifecycleIntent(
 //   guildhall memory migrate-0.8.0 [--apply] [--delete-source] [--update-gitignore] [path]
 //   guildhall memory migrate-local-history [--apply] [--delete-source] [--update-gitignore] [path]
 //                                      — move old transcripts/events/sessions into ~/.guildhall
+//   guildhall memory mastra-audit [--apply] [path]
+//                                      — audit project-local memory state into system-local memory-core storage
 //   guildhall migrate status [id|path] — show generic migration status
 //   guildhall migrate plan [id|path]   — show pending generic migrations
 //   guildhall migrate apply [id|path]  — apply automatic generic migrations
@@ -328,7 +353,18 @@ export function resolveServiceLifecycleIntent(
 //                                      — run local artifact-generation fixture benchmark
 //   guildhall benchmarks run swe-local --subset smoke
 //                                      — run local SWE-bench-style coding fixture benchmark
+//   guildhall graph request publish --edge <edge-id>
+//   guildhall graph request import --edge <edge-id> --project <provider-path>
+//   guildhall graph request accept --edge <edge-id> --project <provider-path> [--domain <domain-id>]
+//   guildhall graph plan --edge <edge-id> --project <provider-path> --from-file <plan.json>
+//   guildhall graph deliver --edge <edge-id> --project <provider-path> --receipt <receipt.json>
+//   guildhall graph delivery accept --edge <edge-id> --project <consumer-path> --proof <proof>
+//   guildhall graph delivery return --edge <edge-id> --project <consumer-path> --evidence <return.json>
 //   guildhall mcp serve [path]          — serve Guildhall project context over MCP stdio
+//   guildhall agent memory import --from-file <record.json> [--project <path>] [--json]
+//   guildhall agent memory list [--status imported|reviewed|rejected] [--project <path>] [--json]
+//   guildhall agent memory review --id <id> --reviewer <name> [--project <path>] [--json]
+//   guildhall agent memory reject --id <id> --reviewer <name> --reason <text> [--project <path>] [--json]
 //   guildhall bridge install [--target codex|claude|all] [--yes|--no-configure-mcp] [id|path]
 //                                      — install agent instructions for Guildhall MCP
 // ---------------------------------------------------------------------------
@@ -351,6 +387,8 @@ export const SHIPPED_CLI_COMMANDS = [
   'review-calibration',
   'model-bakeoff',
   'benchmarks',
+  'graph',
+  'agent',
   'mcp',
   'bridge',
 ] as const
@@ -367,7 +405,7 @@ function getFlag(flag: string): string | undefined {
 // another flag — otherwise boolean flags like `--no-browser` would eat the
 // following positional by mistake.
 function positionals(): string[] {
-  const valueFlags = new Set(['--port', '--domain', '--max-ticks', '--service-state', '--target', '--cases', '--task', '--lane', '--finding', '--action', '--missed-by', '--migration', '--fixture-set', '--subset', '--automation', '--output-dir', '--output', '--project', '--model', '--provider', '--hermes-root', '--from-file', '--proof', '--title'])
+  const valueFlags = new Set(['--port', '--domain', '--max-ticks', '--service-state', '--target', '--cases', '--task', '--lane', '--finding', '--action', '--missed-by', '--migration', '--fixture-set', '--subset', '--automation', '--output-dir', '--output', '--project', '--model', '--provider', '--hermes-root', '--from-file', '--proof', '--title', '--edge', '--receipt', '--evidence', '--format', '--channel', '--status', '--id', '--reviewer', '--reason', '--memory-status'])
   const result: string[] = []
   for (let i = 0; i < args.length; i++) {
     const a = args[i]
@@ -425,7 +463,13 @@ Usage:
   guildhall memory migrate-local-history [path]
                                   Compatibility alias for the 0.8.0 storage migration
   guildhall memory compact-project-state [path]
-                                  Archive terminal tasks and move heartbeat progress local
+                                  Archive terminal tasks and sanitize project-local state
+  guildhall memory audit-project-state [path]
+                                  Dry-run project-local state cleanup and report boundaries
+  guildhall memory clean-project-state [path]
+                                  Apply project-local state cleanup
+  guildhall memory mastra-audit [path]
+                                  Audit .guildhall memory state into system-local memory-core storage
     --apply                      Write files. Without this, prints a dry run
     --delete-source              Remove migrated old memory/ files after copying
     --update-gitignore           Write/refresh Guildhall's managed .gitignore block
@@ -483,6 +527,36 @@ Usage:
   guildhall benchmarks compare hermes [id|path]
                                   Check whether a real Hermes comparison can run
     --hermes-root <path>          Optional Hermes checkout to inspect/run
+  guildhall graph draft
+                                  Refresh the local project graph registry from registered projects
+  guildhall graph request publish --edge <edge-id>
+                                  Publish an existing dependency edge request through the neutral exchange
+  guildhall graph request import --edge <edge-id> --project <provider-path>
+                                  Import a provider request from provider project authority
+  guildhall graph request accept --edge <edge-id> --project <provider-path>
+                                  Accept a provider request for shaping
+  guildhall graph plan --edge <edge-id> --project <provider-path> --from-file <plan.json>
+                                  Commit a provider-owned delivery plan
+  guildhall graph deliver --edge <edge-id> --project <provider-path> --receipt <receipt.json>
+                                  Record a provider delivery receipt
+  guildhall graph delivery accept --edge <edge-id> --project <consumer-path> --proof <proof>
+                                  Accept a delivery from consumer project authority
+  guildhall graph delivery return --edge <edge-id> --project <consumer-path> --evidence <return.json>
+                                  Return a delivery with structured consumer verification evidence
+  guildhall agent memory import --from-file <record.json>
+                                  Import an external-agent memory bridge record for review
+    --project <path>              Project to update (default: current directory)
+    --json                        Print compact JSON for agent clients
+  guildhall agent memory list
+                                  List external-agent memory bridge records
+    --status <status>             imported, reviewed, or rejected
+    --project <path>              Project to read (default: current directory)
+    --json                        Print compact JSON for agent clients
+  guildhall agent memory review --id <id> --reviewer <name>
+                                  Promote one bridge record into ordinary memory
+    --memory-status <status>      active, proposed, or observed (default: active)
+  guildhall agent memory reject --id <id> --reviewer <name> --reason <text>
+                                  Reject one bridge record without promoting it
   guildhall mcp serve [project-path]
                                   Serve Guildhall project context over MCP stdio
   guildhall bridge install [--target codex|claude|all] [--yes|--no-configure-mcp] [id|path]
@@ -500,6 +574,9 @@ Examples:
   guildhall corpus-map refresh --semantic .
   guildhall memory migrate-0.8.0 --apply --delete-source --update-gitignore .
   guildhall memory compact-project-state --apply .
+  guildhall memory audit-project-state .
+  guildhall memory clean-project-state --apply .
+  guildhall memory mastra-audit --apply .
   guildhall migrate status .
   guildhall migrate plan --all
   guildhall migrate apply --include-prompt --migration 0.8.0/codex-agent-bridge .
@@ -516,6 +593,11 @@ Examples:
   guildhall benchmarks run artifact-local --subset smoke --automation fully-automated
   guildhall benchmarks run swe-local --subset smoke --automation fully-automated
   guildhall benchmarks compare hermes --hermes-root /tmp/hermes-agent
+  guildhall graph draft
+  guildhall graph request import --edge edge-knit-looma --project /Users/me/git/looma
+  guildhall graph deliver --edge edge-knit-looma --project /Users/me/git/looma --receipt delivery.json
+  guildhall agent memory list --status imported --json
+  guildhall agent memory review --id codex-summary --reviewer owner
   guildhall mcp serve .
   guildhall bridge install --target all --yes .
 `.trim()
@@ -875,14 +957,14 @@ async function cmdCorpusMap() {
   if (result.map.semantic) {
     console.log(`[guildhall] Semantic: ${result.map.semantic.corpusKind} via ${result.map.semantic.modelId}`)
   }
-  console.log(`[guildhall] Written: ${join(getProjectStateDir(projectPath), 'codebase-map.yaml')}`)
+  console.log(`[guildhall] Written: ${codebaseMapPath(getProjectStateDir(projectPath))}`)
 }
 
 async function cmdMemory() {
   const pos = positionals()
   const subcommand = pos[0] ?? 'migrate-0.8.0'
-  if (!['migrate-0.8.0', 'migrate-local-history', 'compact-project-state'].includes(subcommand)) {
-    console.error('[guildhall] Usage: guildhall memory <migrate-0.8.0|migrate-local-history|compact-project-state> [--apply] [id|path]')
+  if (!['migrate-0.8.0', 'migrate-local-history', 'compact-project-state', 'audit-project-state', 'clean-project-state', 'mastra-audit'].includes(subcommand)) {
+    console.error('[guildhall] Usage: guildhall memory <migrate-0.8.0|migrate-local-history|compact-project-state|audit-project-state|clean-project-state|mastra-audit> [--apply] [id|path]')
     process.exit(1)
   }
   const idOrPath = pos[1]
@@ -930,20 +1012,62 @@ async function cmdMemory() {
     }
     return
   }
-  if (subcommand === 'compact-project-state') {
-    const result = await compactProjectState({ projectRoot: projectPath, dryRun })
-    console.log(`[guildhall] Project state compaction ${dryRun ? 'dry run' : 'complete'}.`)
+  if (['compact-project-state', 'audit-project-state', 'clean-project-state'].includes(subcommand)) {
+    const cleanupDryRun = subcommand === 'audit-project-state'
+      ? true
+      : subcommand === 'clean-project-state'
+        ? !args.includes('--apply')
+        : dryRun
+    const result = await compactProjectState({ projectRoot: projectPath, dryRun: cleanupDryRun })
+    console.log(`[guildhall] Project state cleanup ${result.dryRun ? 'dry run' : 'complete'}.`)
     console.log(`[guildhall] Project: ${result.projectRoot}`)
     console.log(`[guildhall] State dir: ${result.stateDir}`)
     console.log(`[guildhall] Local history: ${result.localHistoryDir}`)
+    console.log(`[guildhall] Repo state mode: ${result.repoStateMode}`)
+    if (result.evacuatedProjectStatePaths.length > 0) {
+      console.log(`[guildhall] Evacuated project-state paths: ${result.evacuatedProjectStatePaths.join(', ')}`)
+    }
     console.log(`[guildhall] Active tasks kept: ${result.activeTasksKept}`)
+    console.log(`[guildhall] Active tasks sanitized: ${result.activeTasksSanitized}`)
     console.log(`[guildhall] Terminal tasks archived: ${result.archivedTasks}`)
     console.log(`[guildhall] Archived task files compacted: ${result.archivedTaskFilesCompacted}`)
+    console.log(`[guildhall] Forbidden task fields: ${result.forbiddenTaskFieldsBefore} -> ${result.forbiddenTaskFieldsAfter}`)
+    console.log(`[guildhall] Removed evidence bytes: ${result.removedEvidenceBytes}`)
     console.log(`[guildhall] Codebase map compacted: ${result.codebaseMapCompacted ? 'yes' : 'no'}`)
     console.log(`[guildhall] Heartbeat blocks moved: ${result.progressHeartbeatsMoved}`)
     console.log(`[guildhall] Shared TASKS/PROGRESS bytes: ${result.bytesBefore} -> ${result.bytesAfter}`)
+    if (result.forbiddenTaskFieldFindings.length > 0) {
+      console.log('[guildhall] Forbidden field findings:')
+      for (const finding of result.forbiddenTaskFieldFindings.slice(0, 20)) {
+        console.log(`[guildhall] - ${finding.taskId}.${finding.field}: ${finding.bytes} bytes`)
+      }
+      if (result.forbiddenTaskFieldFindings.length > 20) {
+        console.log(`[guildhall] - ... ${result.forbiddenTaskFieldFindings.length - 20} more`)
+      }
+    }
+    if (result.dryRun) {
+      console.log('[guildhall] Re-run with clean-project-state --apply to compact these files.')
+    }
+    return
+  }
+  if (subcommand === 'mastra-audit') {
+    const result = await auditProjectMemoryState({
+      projectRoot: projectPath,
+      apply: !dryRun,
+    })
+    console.log(`[guildhall] Mastra memory-core audit ${dryRun ? 'dry run' : 'complete'}.`)
+    console.log(`[guildhall] Project: ${result.projectRoot}`)
+    console.log(`[guildhall] State dir: ${result.stateDir}`)
+    console.log(`[guildhall] Memory store: ${result.memoryDir}`)
+    console.log(`[guildhall] Project-local files audited: ${result.files.length}`)
+    console.log(`[guildhall] Project-local bytes: ${result.bytesBefore} -> ${result.bytesAfter}`)
+    console.log(`[guildhall] Memory events written: ${result.eventsWritten}`)
+    console.log(`[guildhall] Repo-local writes: ${result.repoLocalWrites.length === 0 ? 'none' : result.repoLocalWrites.join(', ')}`)
+    if (result.auditReportPath) {
+      console.log(`[guildhall] Audit report: ${result.auditReportPath}`)
+    }
     if (dryRun) {
-      console.log('[guildhall] Re-run with --apply to compact these files.')
+      console.log('[guildhall] Re-run with --apply to write system-local memory events.')
     }
     return
   }
@@ -1037,7 +1161,10 @@ async function cmdMigrate() {
       continue
     }
 
-    const status = await getProjectMigrationStatus({ projectRoot: projectPath })
+    const status = await getProjectMigrationStatus({
+      projectRoot: projectPath,
+      ...(onlyMigration ? { only: [onlyMigration] } : {}),
+    })
     printMigrationStatus(status, subcommand === 'plan' ? 'Migration plan' : 'Migration status', onlyMigration)
   }
 }
@@ -1624,6 +1751,242 @@ async function cmdMcp() {
   await serveGuildhallMcpStdio(projectPath)
 }
 
+async function cmdGraph() {
+  const pos = positionals()
+  const area = pos[0] ?? 'help'
+  const action = pos[1] ?? ''
+  const edgeId = getFlag('--edge')
+  const projectPath = getFlag('--project') ? resolve(expandPath(getFlag('--project')!)) : process.cwd()
+  const now = new Date().toISOString()
+
+  if (area === 'draft') {
+    const graph = writeLocalProjectGraphDraft({ now })
+    console.log(`[guildhall] Wrote local project graph with ${graph.nodes.length} node(s) to ${projectGraphRegistryDir()}`)
+    return
+  }
+
+  if (area === 'request') {
+    if (!edgeId) {
+      console.error('[guildhall] Usage: guildhall graph request <publish|import|accept> --edge <edge-id> --project <path>')
+      process.exit(1)
+    }
+    if (action === 'publish') {
+      console.log(`[guildhall] Provider request is available in the neutral graph exchange for edge ${edgeId}.`)
+      return
+    }
+    if (action === 'import' || action === 'accept') {
+      const edge = await importProjectDependencyRequestForProvider({
+        edgeId,
+        providerProjectPath: projectPath,
+        importedBy: 'guildhall-cli',
+        ...(getFlag('--domain') ? { domain: { id: getFlag('--domain')!, label: getFlag('--domain')! } } : {}),
+        now,
+      })
+      printGraphEdgeResult('Imported provider request', edge)
+      return
+    }
+  }
+
+  if (area === 'plan') {
+    if (!edgeId || !getFlag('--from-file')) {
+      console.error('[guildhall] Usage: guildhall graph plan --edge <edge-id> --project <provider-path> --from-file <plan.json>')
+      process.exit(1)
+    }
+    const deliveryExpectation = readJsonFile<NonNullable<ProjectDependencyEdge['expectedDelivery']>>(getFlag('--from-file')!)
+    const edge = await commitProjectDependencyDeliveryPlan({
+      edgeId,
+      providerProjectPath: projectPath,
+      plannedBy: 'guildhall-cli',
+      deliveryExpectation,
+      now,
+    })
+    printGraphEdgeResult('Committed delivery plan', edge)
+    return
+  }
+
+  if (area === 'deliver') {
+    if (!edgeId || !getFlag('--receipt')) {
+      console.error('[guildhall] Usage: guildhall graph deliver --edge <edge-id> --project <provider-path> --receipt <receipt.json>')
+      process.exit(1)
+    }
+    const edge = await deliverProjectDependency({
+      edgeId,
+      providerProjectPath: projectPath,
+      deliveredBy: 'guildhall-cli',
+      deliveryReceipt: readJsonFile<DeliveryReceipt>(getFlag('--receipt')!),
+      now,
+    })
+    printGraphEdgeResult('Recorded provider delivery', edge)
+    return
+  }
+
+  if (area === 'delivery') {
+    if (!edgeId) {
+      console.error('[guildhall] Usage: guildhall graph delivery <accept|return|review|revise> --edge <edge-id> --project <path>')
+      process.exit(1)
+    }
+    if (action === 'review') {
+      const edge = await beginProjectDependencyConsumerReview({
+        edgeId,
+        consumerProjectPath: projectPath,
+        reviewedBy: 'guildhall-cli',
+        verificationContext: getFlag('--proof') ?? 'consumer verification',
+        now,
+      })
+      printGraphEdgeResult('Began consumer review', edge)
+      return
+    }
+    if (action === 'accept') {
+      const proof = getFlag('--proof') ?? 'consumer accepted delivery'
+      const edge = await acceptProjectDependencyDelivery({
+        edgeId,
+        consumerProjectPath: projectPath,
+        acceptedBy: 'guildhall-cli',
+        consumerProof: [proof],
+        now,
+      })
+      printGraphEdgeResult('Accepted delivery', edge)
+      return
+    }
+    if (action === 'return') {
+      if (!getFlag('--evidence')) {
+        console.error('[guildhall] Usage: guildhall graph delivery return --edge <edge-id> --project <consumer-path> --evidence <return.json>')
+        process.exit(1)
+      }
+      const edge = await requestProjectDependencyRevision({
+        edgeId,
+        consumerProjectPath: projectPath,
+        returnedBy: 'guildhall-cli',
+        returnPacket: readJsonFile<ConsumerReturnPacket>(getFlag('--evidence')!),
+        now,
+      })
+      printGraphEdgeResult('Returned delivery to provider', edge)
+      return
+    }
+    if (action === 'revise') {
+      const deliveryExpectation = getFlag('--from-file')
+        ? readJsonFile<NonNullable<ProjectDependencyEdge['expectedDelivery']>>(getFlag('--from-file')!)
+        : undefined
+      const edge = await reviseProjectDependencyPlan({
+        edgeId,
+        providerProjectPath: projectPath,
+        revisedBy: 'guildhall-cli',
+        ...(deliveryExpectation ? { deliveryExpectation } : {}),
+        now,
+      })
+      printGraphEdgeResult('Revised provider plan', edge)
+      return
+    }
+  }
+
+  console.error('[guildhall] Usage: guildhall graph <draft|request|plan|deliver|delivery> ...')
+  process.exit(1)
+}
+
+function readJsonFile<T>(filePath: string): T {
+  return JSON.parse(readFileSync(resolve(expandPath(filePath)), 'utf8')) as T
+}
+
+function printGraphEdgeResult(prefix: string, edge: ProjectDependencyEdge): void {
+  console.log(`[guildhall] ${prefix}: ${edge.id} is ${edge.stateMachine.state}`)
+}
+
+export async function runAgentMemoryBridgeCommand(
+  rawArgs: string[],
+  opts: { cwd?: string; now?: string } = {},
+): Promise<string> {
+  const parsed = parseArgs(rawArgs)
+  const namespace = parsed.positionals[0]
+  const action = parsed.positionals[1] ?? 'list'
+  if (namespace !== 'memory' || !['import', 'list', 'review', 'reject'].includes(action)) {
+    throw new Error('Usage: guildhall agent memory <import|list|review|reject> [--project <path>] [--json]')
+  }
+
+  const projectPath = resolveAgentMemoryProjectPath(parsed, opts.cwd ?? process.cwd())
+  const memoryDir = getProjectStateDir(projectPath)
+  const json = rawArgs.includes('--json') || parsed.getFlag('--format') === 'json'
+
+  if (action === 'import') {
+    const fromFile = parsed.getFlag('--from-file')
+    if (!fromFile) throw new Error('Usage: guildhall agent memory import --from-file <record.json> [--project <path>] [--json]')
+    const record = readJsonFile<ExternalMemoryBridgeRecordInput>(fromFile)
+    const saved = await importExternalMemoryBridgeRecord({ memoryDir, record })
+    return formatAgentMemoryBridgeResult(saved, json, `Imported external memory bridge record ${saved.id} (${saved.reviewStatus}).`)
+  }
+
+  if (action === 'list') {
+    const reviewStatus = parsed.getFlag('--status') as ExternalMemoryBridgeReviewStatus | undefined
+    const store = await listExternalMemoryBridgeRecords({
+      memoryDir,
+      ...(reviewStatus ? { reviewStatus } : {}),
+    })
+    if (json) return JSON.stringify(store, null, 2)
+    if (store.records.length === 0) return '[guildhall] No external memory bridge records.'
+    return [
+      `[guildhall] External memory bridge records: ${store.records.length}`,
+      ...store.records.map((record) => `[guildhall] ${record.id}: ${record.reviewStatus} ${record.provider} ${record.scope}/${record.type} - ${record.summary}`),
+    ].join('\n')
+  }
+
+  const id = parsed.getFlag('--id')
+  const reviewer = parsed.getFlag('--reviewer')
+  if (!id || !reviewer) {
+    throw new Error(`Usage: guildhall agent memory ${action} --id <id> --reviewer <name> [--project <path>] [--json]`)
+  }
+
+  if (action === 'review') {
+    const memoryStatus = parsed.getFlag('--memory-status') as 'active' | 'proposed' | 'observed' | undefined
+    const saved = await reviewExternalMemoryBridgeRecord({
+      memoryDir,
+      id,
+      reviewer,
+      ...(opts.now ? { now: opts.now } : {}),
+      ...(memoryStatus ? { memoryStatus } : {}),
+    })
+    return formatAgentMemoryBridgeResult(saved, json, `Reviewed external memory bridge record ${saved.id}; promoted to ordinary memory.`)
+  }
+
+  const rejectionReason = parsed.getFlag('--reason')
+  if (!rejectionReason) {
+    throw new Error('Usage: guildhall agent memory reject --id <id> --reviewer <name> --reason <text> [--project <path>] [--json]')
+  }
+  const saved = await rejectExternalMemoryBridgeRecord({
+    memoryDir,
+    id,
+    reviewer,
+    rejectionReason,
+    ...(opts.now ? { now: opts.now } : {}),
+  })
+  return formatAgentMemoryBridgeResult(saved, json, `Rejected external memory bridge record ${saved.id}; it was not promoted.`)
+}
+
+async function cmdAgent() {
+  try {
+    console.log(await runAgentMemoryBridgeCommand(args))
+  } catch (err) {
+    console.error(`[guildhall] ${err instanceof Error ? err.message : String(err)}`)
+    process.exit(1)
+  }
+}
+
+function resolveAgentMemoryProjectPath(
+  parsed: ReturnType<typeof parseArgs>,
+  cwd: string,
+): string {
+  const explicit = parsed.getFlag('--project') ?? parsed.positionals[2]
+  if (!explicit) return cwd
+  const entry = findWorkspace(explicit)
+  return resolve(expandPath(entry?.path ?? explicit))
+}
+
+function formatAgentMemoryBridgeResult(
+  value: unknown,
+  json: boolean,
+  message: string,
+): string {
+  return json ? JSON.stringify(value, null, 2) : `[guildhall] ${message}`
+}
+
 async function cmdBridge() {
   const pos = positionals()
   const subcommand = pos[0] ?? 'install'
@@ -1735,6 +2098,8 @@ async function main() {
     case 'review-calibration': return cmdReviewCalibration()
     case 'model-bakeoff': return cmdModelBakeoff()
     case 'benchmarks': return cmdBenchmarks()
+    case 'graph': return cmdGraph()
+    case 'agent': return cmdAgent()
     case 'mcp': return cmdMcp()
     case 'bridge': return cmdBridge()
     default:

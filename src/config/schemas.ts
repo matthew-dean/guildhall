@@ -67,6 +67,22 @@ const ProjectSkillsConfig = z.object({
   }).default({}),
 }).default({})
 
+const MemoryConfig = z.object({
+  substrate: z.enum(['mastra', 'deterministic']).default('mastra'),
+  semanticRecall: z.boolean().default(false),
+  observationalMemory: z.boolean().default(false),
+}).default({})
+
+const ProjectStateStorageConfig = z.object({
+  repoState: z.enum(['off', 'thin']).default('off'),
+}).default({})
+
+const ContainerRuntimeConfig = z.object({
+  mode: z.enum(['required', 'host-run-allowed']).default('required'),
+  preferredBackend: z.enum(['auto', 'docker', 'podman']).default('auto'),
+}).default({})
+export type ContainerRuntimeConfig = z.infer<typeof ContainerRuntimeConfig>
+
 const BootstrapConfig = z.object({
   commands: z.array(z.string()).default([]),
   successGates: z.array(z.string()).default([]),
@@ -249,6 +265,20 @@ export const WorkspaceYamlConfig = z.object({
   // enabled by the workspace before it enters agent context.
   skills: ProjectSkillsConfig.optional(),
 
+  // Memory-core substrate selection. Mastra is the default persistent substrate;
+  // deterministic keeps the data-layer event path available as the kill switch.
+  memory: MemoryConfig.optional(),
+
+  // Repo-local Guildhall project state is opt-in. The default keeps runtime,
+  // task, memory, and evidence state system-local; `thin` allows compact
+  // Git-visible project-state manifests only.
+  storage: ProjectStateStorageConfig.optional(),
+
+  // Container runtime policy for project agents. Host execution without Docker
+  // or Podman is blocked unless this project, or the global config, explicitly
+  // opts into `host-run-allowed`.
+  containerRuntime: ContainerRuntimeConfig.optional(),
+
   // FR-24: runtime-resource isolation. Consumed when the project-scope lever
   // `runtime_isolation` is set to `slot_allocation`. All fields optional — the
   // orchestrator falls back to sensible built-in defaults (see
@@ -312,23 +342,6 @@ export type WorkspaceYamlConfig = z.infer<typeof WorkspaceYamlConfig>
 // <project>/.guildhall/config.yaml.
 // ---------------------------------------------------------------------------
 
-export const ExperimentalLoomaDevelopmentConfig = z.object({
-  enabled: z.boolean().default(false),
-  path: z.string().min(1).optional(),
-  writeThrough: z.enum(['off', 'queue']).default('queue'),
-})
-export type ExperimentalLoomaDevelopmentConfig = z.infer<typeof ExperimentalLoomaDevelopmentConfig>
-
-export const ExperimentalDesignSystemDevelopmentConfig = z.object({
-  looma: ExperimentalLoomaDevelopmentConfig.optional(),
-})
-export type ExperimentalDesignSystemDevelopmentConfig = z.infer<typeof ExperimentalDesignSystemDevelopmentConfig>
-
-export const ExperimentalConfig = z.object({
-  designSystemDevelopment: ExperimentalDesignSystemDevelopmentConfig.optional(),
-})
-export type ExperimentalConfig = z.infer<typeof ExperimentalConfig>
-
 export const GlobalConfig = z.object({
   // Default model assignments (merged with per-workspace models)
   models: ModelConfigInputSchema.optional(),
@@ -368,6 +381,10 @@ export const GlobalConfig = z.object({
   // policy during discovery, then can override per-repo.
   gitStory: GitStoryPolicy.default({}),
 
+  // Machine-wide container runtime policy. Projects can override this in
+  // guildhall.yaml.
+  containerRuntime: ContainerRuntimeConfig.optional(),
+
   /**
    * Advanced override for reviewer persona fan-out. Omit to let Guildhall pick
    * a sane default from the active provider's advertised capacity.
@@ -380,9 +397,6 @@ export const GlobalConfig = z.object({
    */
   maxProviderConcurrency: z.number().int().positive().max(200).default(200),
 
-  // Experimental machine-local integrations. These are optional by design and
-  // must degrade to inactive when their local paths are unavailable.
-  experimental: ExperimentalConfig.optional(),
 })
 export type GlobalConfig = z.infer<typeof GlobalConfig>
 
@@ -557,6 +571,9 @@ export const ResolvedConfig = z.object({
 
   // Dashboard port
   servePort: z.number(),
+
+  // Resolved container runtime policy after global and project config merge.
+  containerRuntime: ContainerRuntimeConfig.optional(),
 
   // FR-24: runtime-isolation passthrough (see WorkspaceYamlConfig.runtime).
   // The orchestrator reads this when instantiating a SlotAllocator under

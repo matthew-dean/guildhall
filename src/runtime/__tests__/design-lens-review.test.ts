@@ -4,6 +4,7 @@ import os from 'node:os'
 import path from 'node:path'
 
 import type { Task, TaskQueue } from '@guildhall/core'
+import { projectStatePathFromMemoryDir } from '@guildhall/sessions'
 
 import { readDesignFeedbackStore } from '../design-feedback.js'
 import { reviewInProcessWorkForDesignLens } from '../design-lens-review.js'
@@ -48,6 +49,8 @@ describe('design lens review', () => {
         suggestedClassification: 'architecture-opportunity',
         classification: 'architecture-opportunity',
       })
+      expect(store.findings[0]?.summary).toContain('semantic text hierarchy')
+      expect(store.findings[0]?.summary).toContain('token or variant budget')
       expect(store.candidates[0]).toMatchObject({
         findingIds: ['design-lens-review-task-ui-combobox'],
         classification: 'architecture-opportunity',
@@ -138,7 +141,9 @@ async function writeQueue(memoryDir: string, tasks: Task[]): Promise<void> {
     lastUpdated: '2026-05-29T12:00:00.000Z',
     tasks,
   }
-  await fs.writeFile(path.join(memoryDir, 'TASKS.json'), JSON.stringify(queue, null, 2))
+  const tasksPath = projectStatePathFromMemoryDir(memoryDir, 'TASKS.json')
+  await fs.mkdir(path.dirname(tasksPath), { recursive: true })
+  await fs.writeFile(tasksPath, JSON.stringify(queue, null, 2))
 }
 
 function task(overrides: Partial<Task> & Pick<Task, 'id' | 'title' | 'description' | 'status'>): Task {

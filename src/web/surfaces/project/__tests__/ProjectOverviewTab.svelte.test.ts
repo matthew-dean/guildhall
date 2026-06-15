@@ -1,15 +1,101 @@
 // @vitest-environment happy-dom
 import '@testing-library/jest-dom/vitest'
-import { cleanup, render, screen } from '@testing-library/svelte'
-import { afterEach, describe, expect, it } from 'vitest'
+import { cleanup, fireEvent, render, screen } from '@testing-library/svelte'
+import { readFileSync } from 'node:fs'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import ProjectOverviewTab from '../ProjectOverviewTab.svelte'
 
+function json(data: unknown, init: ResponseInit = {}): Response {
+  return new Response(JSON.stringify(data), {
+    status: 200,
+    headers: { 'content-type': 'application/json' },
+    ...init,
+  })
+}
+
 describe('ProjectOverviewTab', () => {
-  afterEach(() => {
-    cleanup()
+  beforeEach(() => {
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
+      const url = new URL(String(input), 'http://localhost')
+      if (url.pathname === '/api/project/project-graph') {
+        return json({ projectGraph: { localProjects: [], structuralDomains: [], dependencyEdges: [], contractSurfaces: [] } })
+      }
+      return json({})
+    }))
   })
 
-  it('renders same-task escalation inbox items with distinct escalation ids', () => {
+  afterEach(() => {
+    cleanup()
+    vi.restoreAllMocks()
+    vi.unstubAllGlobals()
+  })
+
+  it('renders the shared primary project action instead of choosing a local inbox winner', () => {
+    render(ProjectOverviewTab, {
+      detail: {
+        id: 'fair-labor-license',
+        name: 'Fair Labor License',
+        path: '/Users/matthew/git/oss/fair-labor-license',
+        tasks: [
+          {
+            id: 'task-stripe-brief',
+            title: 'Clean up the Stripe checkout brief',
+            status: 'ready',
+          },
+        ],
+        startReadiness: { canStart: true },
+        actionModel: {
+          primaryAction: {
+            source: 'task',
+            label: 'Clean up the Stripe checkout brief',
+            detail: 'Finish the active brief cleanup before reconciling stale discovery.',
+            buttonLabel: 'Open Work',
+            href: '/work',
+            tone: 'warn',
+          },
+          secondaryActions: [{
+            source: 'inbox',
+            label: 'Review project discovery update',
+            detail: 'Review the reconciliation later.',
+            buttonLabel: 'Review update',
+            href: '/workspace-import?mode=reconcile',
+            tone: 'warn',
+          }],
+          runControl: {
+            label: 'Resume',
+            startEnabled: true,
+          },
+          ownerInput: { active: false },
+          setup: { state: 'ready', freshIntakeNeeded: false },
+        },
+      },
+      inboxLoaded: true,
+      inboxItems: [
+        {
+          kind: 'project_understanding',
+          severity: 'high',
+          title: 'Review project discovery update',
+          detail: 'Review the reconciliation later.',
+          actionHref: '/workspace-import?mode=reconcile',
+        },
+      ],
+      projectTicker: {
+        label: 'Not running',
+        actorLabel: 'Guildhall',
+        message: 'Project is waiting for owner action.',
+        tone: 'idle',
+        pulse: false,
+      },
+      activeProjectId: 'fair-labor-license',
+    })
+
+    expect(screen.getByRole('heading', { name: 'Clean up the Stripe checkout brief' })).toBeInTheDocument()
+    expect(screen.getByText('Finish the active brief cleanup before reconciling stale discovery.')).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: /open work/i })).toBeInTheDocument()
+    expect(screen.queryByRole('heading', { name: 'Review project discovery update' })).not.toBeInTheDocument()
+  })
+
+  it('renders same-task alert inbox items with distinct action hrefs', () => {
     render(ProjectOverviewTab, {
       detail: {
         id: 'fair-labor-license',
@@ -20,22 +106,20 @@ describe('ProjectOverviewTab', () => {
       inboxLoaded: true,
       inboxItems: [
         {
-          kind: 'open_escalation',
-          severity: 'high',
+          kind: 'import_draft_queue',
+          severity: 'medium',
           taskId: 'task-006',
-          escalationId: 'esc-task-006-23',
           title: 'Set the platform fee policy',
-          detail: 'Card component exists but template syntax mismatch prevents edit',
+          detail: 'Review the imported draft and decide whether to shape it now.',
           actionHref: '/task/task-006',
         },
         {
-          kind: 'open_escalation',
-          severity: 'high',
+          kind: 'import_draft_queue',
+          severity: 'medium',
           taskId: 'task-006',
-          escalationId: 'esc-task-006-24',
           title: 'Set the platform fee policy',
-          detail: 'Card component exists but template syntax mismatch prevents edit',
-          actionHref: '/task/task-006',
+          detail: 'Review the second imported draft and decide whether to shape it now.',
+          actionHref: '/task/task-006?source=second',
         },
       ],
       projectTicker: {
@@ -63,13 +147,11 @@ describe('ProjectOverviewTab', () => {
       inboxLoaded: true,
       inboxItems: [
         {
-          kind: 'open_escalation',
-          severity: 'high',
+          kind: 'import_draft_queue',
+          severity: 'medium',
           taskId: 'task-006',
-          escalationId: 'esc-task-006-23',
           title: 'We should have a system-wide policy of how much FLL charges on overhe...',
-          taskDescription: 'We should have a system-wide policy of how much FLL charges on overhead for maintenance fees etc.',
-          detail: 'Card component exists but template syntax mismatch prevents edit',
+          detail: 'We should have a system-wide policy of how much FLL charges on overhead for maintenance fees etc.',
           actionHref: '/task/task-006',
         },
       ],
@@ -100,7 +182,7 @@ describe('ProjectOverviewTab', () => {
           kind: 'project_understanding',
           severity: 'high',
           title: 'Review project discovery update',
-          detail: 'Guildhall can now scan more planning docs and migrations. Review the reconciliation so it can update or dismiss stale imported work.',
+          detail: 'More planning docs and migrations can now be scanned. Review the reconciliation to update or dismiss stale imported work.',
           actionHref: '/workspace-import?mode=reconcile',
         },
       ],
@@ -145,17 +227,16 @@ describe('ProjectOverviewTab', () => {
           kind: 'project_understanding',
           severity: 'high',
           title: 'Review project discovery update',
-          detail: 'Guildhall can now scan more planning docs and migrations.',
+          detail: 'More planning docs and migrations can now be scanned.',
           actionHref: '/workspace-import?mode=reconcile',
         },
         {
-          kind: 'open_escalation',
-          severity: 'high',
+          kind: 'workspace_import_pending',
+          severity: 'medium',
           taskId: 'task-oauth',
-          escalationId: 'esc-oauth',
           title: 'Configure Google OAuth credentials',
           detail: 'Owner credentials are required.',
-          actionHref: '/task/task-oauth',
+          actionHref: '/workspace-import',
         },
       ],
       projectTicker: {
@@ -169,8 +250,54 @@ describe('ProjectOverviewTab', () => {
     })
 
     expect(screen.getByRole('heading', { name: 'Choose a recovery path for the blocked task' })).toBeInTheDocument()
-    expect(screen.getByRole('button', { name: /review recovery/i })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: /open item/i })).toBeInTheDocument()
     expect(screen.queryByRole('heading', { name: 'Review project discovery update' })).not.toBeInTheDocument()
+  })
+
+  it('treats ready tasks with incomplete worker handoffs as brief cleanup on the dashboard', () => {
+    render(ProjectOverviewTab, {
+      detail: {
+        id: 'fair-labor-license',
+        name: 'Fair Labor License',
+        path: '/Users/matthew/git/oss/fair-labor-license',
+        startReadiness: {
+          canStart: false,
+          code: 'no_unattended_progress',
+          message: 'One task needs a clearer brief and acceptance criteria before unattended work can run.',
+          actionHref: '/thread',
+        },
+        tasks: [
+          {
+            id: 'task-006',
+            title: 'Set FLL overhead charge policy',
+            status: 'ready',
+            domain: 'frontend',
+            productBrief: {
+              approvedAt: '2026-06-02T12:00:00.000Z',
+              userJob: '',
+            },
+            acceptanceCriteria: [],
+            spec: '',
+          },
+        ],
+      },
+      inboxLoaded: true,
+      inboxItems: [],
+      projectTicker: {
+        label: 'Not running',
+        actorLabel: 'Guildhall',
+        message: 'Project is waiting for owner action.',
+        tone: 'idle',
+        pulse: false,
+      },
+      activeProjectId: 'fair-labor-license',
+    })
+
+    expect(screen.getByText('1 Being shaped')).toBeInTheDocument()
+    expect(screen.queryByText('1 Ready')).not.toBeInTheDocument()
+    expect(screen.getAllByText('Needs brief').length).toBeGreaterThan(0)
+    expect(screen.getByText('Needs brief: finish the handoff before a worker can start.')).toBeInTheDocument()
+    expect(screen.queryByText(/ready for the next worker slot/i)).not.toBeInTheDocument()
   })
 
   it('does not invite new work when a migration blocks an empty project', () => {
@@ -199,8 +326,9 @@ describe('ProjectOverviewTab', () => {
       activeProjectId: 'commerce-project',
     })
 
-    expect(screen.getByText('Run the required Guildhall migration before creating or running work.')).toBeInTheDocument()
+    expect(screen.getByText('Run the required migration before creating or running work.')).toBeInTheDocument()
     expect(screen.getByText('The next run is blocked until the required migration is applied.')).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Migrate project' }).querySelector('svg')).toBeInTheDocument()
     expect(screen.queryByText('No tasks yet. Create a request when you are ready.')).not.toBeInTheDocument()
   })
 
@@ -233,7 +361,99 @@ describe('ProjectOverviewTab', () => {
 
     expect(screen.getByText('Needs triage')).toBeInTheDocument()
     expect(screen.queryByText(/^Status$/i)).not.toBeInTheDocument()
-    expect(container.querySelector('.dependency-list .overview-task-row')).toBeTruthy()
+    expect(container.querySelector('.blocked-work-list .overview-task-row')).toBeTruthy()
+  })
+
+  it('recovers full overview task titles from descriptions when imported titles are compact', () => {
+    const compactTitle = 'Continue the Knit-to-Looma promotion work from the now-complete first M6 queue into the next generic surfaces, while the'
+    const fullTitle = 'Continue the Knit-to-Looma promotion work from the now-complete first M6 queue into the next generic surfaces, while the primitive normalization wave continues in Knit.'
+
+    render(ProjectOverviewTab, {
+      detail: {
+        id: 'looma-knit',
+        name: 'Looma + Knit',
+        path: '/Users/matthew/git/oss/looma-knit',
+        tasks: [
+          {
+            id: 'task-import-1v8sume',
+            title: compactTitle,
+            description: `looma/PROJECT_STATE.md: 3. ${fullTitle}`,
+            status: 'blocked',
+            blockReason: 'Spec shaping can be retried.',
+          },
+        ],
+      },
+      inboxLoaded: true,
+      inboxItems: [],
+      projectTicker: {
+        label: 'Not running',
+        actorLabel: 'Guildhall',
+        message: 'Project is waiting for owner action.',
+        tone: 'idle',
+        pulse: false,
+      },
+      activeProjectId: 'looma-knit',
+    })
+
+    expect(screen.getAllByText(fullTitle).length).toBeGreaterThanOrEqual(2)
+    expect(screen.queryAllByText(compactTitle)).toHaveLength(0)
+  })
+
+  it('keeps blocked-work chips as compact categories instead of dependency task titles', () => {
+    const { container } = render(ProjectOverviewTab, {
+      detail: {
+        id: 'fair-labor-license',
+        name: 'Fair Labor License',
+        path: '/Users/matthew/git/oss/fair-labor-license',
+        tasks: [
+          {
+            id: 'task-006-split-implement-invite-email-delivery',
+            title: 'Add OAuth providers — Google and Apple sign-in',
+            status: 'done',
+          },
+          {
+            id: 'task-oauth-google-provider-credentials',
+            title: 'Create Google OAuth provider credentials',
+            status: 'blocked',
+            blockReason: 'Waiting on Google Cloud OAuth client setup outside the repo.',
+            dependsOn: ['task-006-split-implement-invite-email-delivery'],
+          },
+          {
+            id: 'task-oauth-apple-provider-credentials',
+            title: 'Create Apple OAuth provider credentials',
+            status: 'blocked',
+            blockReason: 'Waiting on Apple Developer Sign in with Apple setup outside the repo.',
+            dependsOn: ['task-006-split-implement-invite-email-delivery'],
+          },
+          {
+            id: 'task-oauth-supabase-provider-configuration',
+            title: 'Configure Supabase Google and Apple auth providers',
+            status: 'blocked',
+            blockReason: 'Waiting on Google and Apple provider credentials, plus permission or owner action to update Supabase Auth provider settings.',
+            dependsOn: [
+              'task-oauth-google-provider-credentials',
+              'task-oauth-apple-provider-credentials',
+            ],
+          },
+        ],
+      },
+      inboxLoaded: true,
+      inboxItems: [],
+      projectTicker: {
+        label: 'Not running',
+        actorLabel: 'Guildhall',
+        message: 'Project is waiting for owner action.',
+        tone: 'idle',
+        pulse: false,
+      },
+      activeProjectId: 'fair-labor-license',
+    })
+
+    const chipLabels = Array.from(container.querySelectorAll('.blocked-work-list .chip')).map(chip => chip.textContent?.trim() ?? '')
+
+    expect(chipLabels).toEqual(['Provider settings', 'Provider settings', 'Provider settings'])
+    expect(chipLabels).not.toContain('Add OAuth providers — Google and Apple sign-in')
+    expect(chipLabels).not.toContain('Create Google OAuth provider credentials, Create Apple OAuth provider credentials')
   })
 
   it('uses the shared overview task row for moving and blocked task cards', () => {
@@ -270,8 +490,8 @@ describe('ProjectOverviewTab', () => {
     })
 
     expect(container.querySelector('.motion-list .overview-task-row')).toBeTruthy()
-    expect(container.querySelector('.dependency-list .overview-task-row')).toBeTruthy()
-    expect(screen.getAllByText('In progress').length).toBeGreaterThan(0)
+    expect(container.querySelector('.blocked-work-list .overview-task-row')).toBeTruthy()
+    expect(screen.getAllByText('Paused').length).toBeGreaterThan(0)
     expect(screen.getByText('Needs triage')).toBeInTheDocument()
   })
 
@@ -384,7 +604,35 @@ describe('ProjectOverviewTab', () => {
     expect(text.indexOf('Moving now')).toBeLessThan(text.indexOf('Work mix'))
   })
 
-  it('surfaces runtime health, memory health, and primary proof paths', () => {
+  it('surfaces runtime health, memory health, and primary proof paths', async () => {
+    const source = readFileSync('src/web/surfaces/project/ProjectOverviewTab.svelte', 'utf-8')
+    expect(source).not.toMatch(/semantic (?:on|off)|compaction (?:on|off|ready|pending)|Mastra substrate/)
+
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
+      const url = new URL(String(input), 'http://localhost')
+      if (url.pathname === '/api/project/project-graph') {
+        return json({
+          projectGraph: {
+            currentProject: { id: 'guildhall', label: 'Guildhall' },
+            localProjects: [
+              { id: 'guildhall', label: 'Guildhall', role: 'current' },
+              { id: 'narrative-harness', label: 'Narrative Harness', role: 'index' },
+            ],
+            structuralDomains: [
+              { id: 'domain:runtime', label: 'Runtime' },
+              { id: 'domain:overview', label: 'Overview' },
+            ],
+            dependencyEdges: [{ id: 'edge-1', unresolved: true }],
+            contractSurfaces: [
+              { id: 'surface:overview', label: 'Overview summary model' },
+              { id: 'surface:project-graph', label: 'Project graph API' },
+            ],
+          },
+        })
+      }
+      return json({})
+    }))
+
     render(ProjectOverviewTab, {
       detail: {
         id: 'guildhall',
@@ -401,6 +649,16 @@ describe('ProjectOverviewTab', () => {
           active: 3,
           proposed: 2,
           used: 1,
+          memoryCore: {
+            adapter: 'mastra',
+            fallbackUsed: false,
+            semanticRecallEnabled: false,
+            observationalMemoryEnabled: false,
+            observationalProcessorReady: false,
+            compactionStatus: 'active',
+            semanticValidity: 'valid',
+            repoLocalWrites: [],
+          },
         },
         tasks: [
           {
@@ -431,8 +689,316 @@ describe('ProjectOverviewTab', () => {
     expect(screen.getAllByText('Runtime stopped').length).toBeGreaterThan(0)
     expect(screen.getAllByText(/Compatibility mode/).length).toBeGreaterThan(0)
     expect(screen.getAllByText('Memory health').length).toBeGreaterThan(0)
+    expect(screen.getAllByText(/Memory protected/).length).toBeGreaterThan(0)
+    expect(screen.getAllByText(/auto-compacted/).length).toBeGreaterThan(0)
+    expect(screen.getAllByText(/semantically valid/).length).toBeGreaterThan(0)
+    expect(screen.getAllByText(/source-backed/).length).toBeGreaterThan(0)
+    expect(screen.getAllByText(/project repo protected/).length).toBeGreaterThan(0)
     expect(screen.getAllByText(/3 active/).length).toBeGreaterThan(0)
+    expect(screen.queryByText(/active memories/)).not.toBeInTheDocument()
     expect(screen.getByText('Primary proof paths')).toBeInTheDocument()
-    expect(screen.getByText('Verify runtime card')).toBeInTheDocument()
+    expect(screen.getAllByText('Verify runtime card').length).toBeGreaterThan(0)
+    expect(screen.queryByRole('button', { name: /Project graph/i })).not.toBeInTheDocument()
+  })
+
+  it('condenses project knowledge into one-third overview cards', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => json({
+      projectGraph: {
+        currentProject: { id: 'narrative-harness', label: 'Narrative Harness' },
+        localProjects: [{ id: 'narrative-harness', label: 'Narrative Harness', role: 'current' }],
+        localProjectIndex: [
+          { id: 'narrative-harness', label: 'Narrative Harness', role: 'current' },
+          { id: 'guildhall', label: 'Guildhall', role: 'indexed' },
+        ],
+        structuralDomains: [{ id: 'domain:story-memory', label: 'Story memory' }],
+        dependencyEdges: [],
+        contractSurfaces: [{ id: 'surface:story-context', label: 'Story context contract' }],
+      },
+    })))
+
+    const { container } = render(ProjectOverviewTab, {
+      detail: {
+        id: 'narrative-harness',
+        name: 'Narrative Harness',
+        path: '/Users/matthew/git/oss/narrative-harness',
+        runtime: { status: 'running', health: { status: 'healthy' }, migration: { mode: 'host-run' } },
+        memoryHealth: { active: 4, proposed: 1 },
+        tasks: [
+          { id: 'task-active', title: 'Reviewer lane MVP', status: 'in_progress' },
+          { id: 'task-done', title: 'Draft context schema', status: 'done' },
+        ],
+        structuralMapReview: {
+          state: 'accepted',
+          counts: { domains: 1, crossCuttingDomains: 1, packages: 2, executableUnits: 3 },
+        },
+      },
+      inboxLoaded: true,
+      inboxItems: [],
+      projectTicker: {
+        label: 'Live',
+        actorLabel: 'Guildhall',
+        message: 'Project is running.',
+        tone: 'active',
+        pulse: true,
+      },
+      activeProjectId: 'narrative-harness',
+    })
+
+    expect(container.querySelectorAll('.card-list-item.knowledge-summary-item')).toHaveLength(4)
+    expect(container.querySelectorAll('.knowledge-card')).toHaveLength(0)
+    expect(screen.getByRole('button', { name: /Work 2 total work items/i })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: /Runtime Runtime healthy/i })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: /Proof No proof paths yet/i })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: /History No recent changes/i })).toBeInTheDocument()
+    expect(screen.getAllByText('Compatibility mode').length).toBeGreaterThan(0)
+    expect(screen.getByText('Memory status unavailable · 4 active, 1 proposed.')).toBeInTheDocument()
+    expect(screen.queryByText(/active memories/)).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: /Structure Accepted/i })).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: /Project graph/i })).not.toBeInTheDocument()
+  })
+
+  it('puts the primary next action in a full-width priority row before secondary overview cards', () => {
+    const { container } = render(ProjectOverviewTab, {
+      detail: {
+        id: 'looma-knit',
+        name: 'Looma + Knit',
+        path: '/Users/matthew/git/oss/looma-knit',
+        tasks: [
+          { id: 'task-active', title: 'Finish reviewer routing', status: 'in_progress' },
+          { id: 'task-ready', title: 'Document next proof', status: 'ready' },
+        ],
+        actionModel: {
+          primaryAction: {
+            source: 'task',
+            label: 'Finish reviewer routing',
+            detail: 'Keep the active implementation moving before starting other work.',
+            buttonLabel: 'Open Work',
+            href: '/work',
+            tone: 'accent',
+          },
+          secondaryActions: [],
+          runControl: { label: 'Resume', startEnabled: true },
+          ownerInput: { active: false },
+          setup: { state: 'ready', freshIntakeNeeded: false },
+        },
+      },
+      inboxLoaded: true,
+      inboxItems: [],
+      projectTicker: {
+        label: 'Live',
+        actorLabel: 'Guildhall',
+        message: 'Project is running.',
+        tone: 'active',
+        pulse: true,
+      },
+      activeProjectId: 'looma-knit',
+    })
+
+    const priority = container.querySelector('.overview-priority')
+    expect(priority).toBeTruthy()
+    expect(priority?.querySelector('.next-action')).toBeTruthy()
+    expect(priority?.querySelector('.motion-list')).toBeFalsy()
+
+    const nextHeading = priority?.querySelector('.next-action h2')
+    expect(nextHeading).toHaveTextContent('Finish reviewer routing')
+
+    const firstGrid = container.querySelector('.overview-grid')
+    expect(firstGrid?.querySelector('.motion-list')).toBeTruthy()
+  })
+
+  it('routes knowledge summary sections to their logical project surfaces', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => json({
+      projectGraph: {
+        currentProject: { id: 'guildhall', label: 'Guildhall' },
+        localProjects: [{ id: 'guildhall', label: 'Guildhall', role: 'current' }],
+        structuralDomains: [{ id: 'domain:runtime', label: 'Runtime' }],
+        dependencyEdges: [],
+        contractSurfaces: [{ id: 'surface:overview', label: 'Overview summary model' }],
+      },
+    })))
+
+    window.history.replaceState({}, '', '/projects/guildhall/overview')
+    render(ProjectOverviewTab, {
+      detail: {
+        id: 'guildhall',
+        name: 'Guildhall',
+        path: '/Users/matthew/git/oss/guildhall',
+        runtime: { status: 'stopped', health: { status: 'healthy' }, migration: { mode: 'host-run' } },
+        memoryHealth: { active: 2, proposed: 0 },
+        tasks: [
+          {
+            id: 'task-proof',
+            title: 'Verify overview links',
+            status: 'ready',
+            proofPaths: [{ id: 'proof-route', title: 'Rendered route smoke', status: 'pending' }],
+          },
+        ],
+        structuralMapReview: {
+          state: 'accepted',
+          counts: { domains: 1, crossCuttingDomains: 0, packages: 1, executableUnits: 1 },
+        },
+        recentEvents: [{ type: 'task.updated', taskId: 'task-proof', createdAt: '2026-06-04T12:00:00.000Z' }],
+      },
+      inboxLoaded: true,
+      inboxItems: [],
+      projectTicker: {
+        label: 'Not running',
+        actorLabel: 'Guildhall',
+        message: 'Project is waiting.',
+        tone: 'idle',
+        pulse: false,
+      },
+      activeProjectId: 'guildhall',
+    })
+
+    await fireEvent.click(screen.getByRole('button', { name: /Work 1 total work item/i }))
+    expect(window.location.pathname).toBe('/projects/guildhall/work')
+
+    await fireEvent.click(screen.getByRole('button', { name: /Runtime Runtime stopped/i }))
+    expect(window.location.pathname).toBe('/projects/guildhall/settings/ready')
+
+    await fireEvent.click(screen.getByRole('button', { name: /Proof 1 tracked proof path/i }))
+    expect(window.location.pathname).toBe('/projects/guildhall/work')
+
+    await fireEvent.click(screen.getByRole('button', { name: /History 1 recent change/i }))
+    expect(window.location.pathname).toBe('/projects/guildhall/timeline')
+  })
+
+  it('shows structural map controls when project map review data exists', () => {
+    render(ProjectOverviewTab, {
+      detail: {
+        id: 'guildhall',
+        name: 'Guildhall',
+        path: '/Users/matthew/git/oss/guildhall',
+        tasks: [],
+        structuralMapReview: {
+          state: 'accepted',
+          generatedAt: '2026-06-01T12:00:00.000Z',
+          counts: {
+            packages: 2,
+            domains: 1,
+            crossCuttingDomains: 1,
+            executableUnits: 1,
+            gitRoots: 1,
+            ignoredGitRoots: 1,
+            conflicts: 1,
+            questions: 1,
+          },
+          gitRoots: [{ id: 'git:root', label: 'Project root', path: '.', confidence: 'high' }],
+          ignoredGitRoots: [{ id: 'git:ignored-vendor', label: 'Vendor fixture', path: 'vendor/fixture', confidence: 'low' }],
+          packages: [
+            { id: 'package:guildhall-core', label: '@guildhall/core', path: 'packages/core', confidence: 'high' },
+            { id: 'package:guildhall-web', label: '@guildhall/web', path: 'src/web', confidence: 'medium' },
+          ],
+          domains: [{ id: 'domain:runtime', label: 'Runtime', confidence: 'high' }],
+          crossCuttingDomains: [{ id: 'cross-cutting:design-system-reuse', label: 'Design-system reuse', confidence: 'medium' }],
+          executableUnits: [{ id: 'exec:guildhall-core:test', label: 'test', command: 'pnpm --filter @guildhall/core test', confidence: 'high' }],
+          conflicts: [{ id: 'conflict-domain-runtime', message: 'Runtime appears in package and path evidence.', severity: 'medium' }],
+          questions: [{ id: 'question-runtime-owner', prompt: 'Should runtime own provider routing?' }],
+        },
+      },
+      inboxLoaded: true,
+      inboxItems: [],
+      projectTicker: {
+        label: 'Not running',
+        actorLabel: 'Guildhall',
+        message: 'Project is waiting.',
+        tone: 'idle',
+        pulse: false,
+      },
+      activeProjectId: 'guildhall',
+    })
+
+    expect(screen.getByRole('heading', { name: 'Project map' })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Rename' })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Package-only' })).toBeInTheDocument()
+  })
+
+  it('summarizes visible work items and delivery steps from shared progress', () => {
+    render(ProjectOverviewTab, {
+      detail: {
+        id: 'guildhall',
+        name: 'Guildhall',
+        path: '/Users/matthew/git/oss/guildhall',
+        tasks: [
+          {
+            id: 'logical-work',
+            title: 'Import review flow',
+            status: 'in_progress',
+          },
+          {
+            id: 'runtime-proof',
+            title: 'Runtime proof for import review flow',
+            status: 'blocked',
+            workVisibility: { kind: 'internal_step', countInProjectTotals: false },
+            hierarchy: { parentId: 'logical-work', childIds: [], order: 0 },
+          },
+        ],
+        workProgress: {
+          counts: {
+            visibleTotal: 1,
+            visibleActive: 1,
+            visibleBlocked: 0,
+            visibleDone: 0,
+            visibleShelved: 0,
+            deliveryTotal: 2,
+            deliveryRequired: 2,
+            deliveryDone: 1,
+            deliveryBlocked: 1,
+          },
+          byTaskId: {
+            'logical-work': {
+              id: 'logical-work',
+              title: 'Import review flow',
+              status: 'in_progress',
+              visibility: { kind: 'primary', countInProjectTotals: true },
+              deliverySteps: [
+                {
+                  id: 'build',
+                  title: 'Build import review flow',
+                  kind: 'make_change',
+                  status: 'done',
+                  required: true,
+                  blocksCompletion: true,
+                },
+                {
+                  id: 'task:runtime-proof',
+                  title: 'Runtime proof for import review flow',
+                  kind: 'verify',
+                  status: 'blocked',
+                  required: true,
+                  blocksCompletion: true,
+                  sourceTaskId: 'runtime-proof',
+                },
+              ],
+              rollup: {
+                primaryState: 'blocked',
+                visibleChildCount: 0,
+                visibleChildDoneCount: 0,
+                internalStepCount: 1,
+                requiredStepCount: 2,
+                doneStepCount: 1,
+                blockedStepCount: 1,
+              },
+            },
+          },
+        },
+      },
+      inboxLoaded: true,
+      inboxItems: [],
+      projectTicker: {
+        label: 'Not running',
+        actorLabel: 'Guildhall',
+        message: 'Project is waiting.',
+        tone: 'idle',
+        pulse: false,
+      },
+      activeProjectId: 'guildhall',
+    })
+
+    expect(screen.getByText('1 total work item')).toBeInTheDocument()
+    expect(screen.getByText('1 active or shaping · 0 completed · 0 blocked.')).toBeInTheDocument()
+    expect(screen.getByText('1 / 2 delivery steps done · 1 blocked.')).toBeInTheDocument()
+    expect(screen.queryByText('2 total tasks')).not.toBeInTheDocument()
   })
 })

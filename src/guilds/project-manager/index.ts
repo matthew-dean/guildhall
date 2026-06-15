@@ -43,7 +43,6 @@ const STAGE_FILES: Record<TaskStatus, string> = {
   import_draft: 'stages/exploring.md',
   exploring: 'stages/exploring.md',
   spec_review: 'stages/spec_review.md',
-  parent: 'stages/parent.md',
   ready: 'stages/ready.md',
   in_progress: 'stages/in_progress.md',
   review: 'stages/review.md',

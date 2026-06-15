@@ -1,10 +1,17 @@
+import { appendManagedTextFile, readManagedTextFile, readManagedTextFileSync, writeManagedTextFile } from '@guildhall/persistence'
 import fs from 'node:fs/promises'
 import path from 'node:path'
-import { TaskQueue, type Task, type TaskRequest, type TaskStatus } from '@guildhall/core'
-import { atomicWriteText } from '@guildhall/sessions'
+import { TaskQueue, type RequestIntake, type Task, type TaskRequest, type TaskStatus } from '@guildhall/core'
+import {
+  atomicWriteText,
+  projectStatePathFromMemoryDir,
+  readProjectStateTextFromMemoryDirAsync,
+  writeProjectStateJsonFromMemoryDirAsync,
+} from '@guildhall/sessions'
 import {
   appendExploringTranscript,
-  materializeRequiredSplitChildren,
+  isMaterializableSplitAction,
+  materializeSplitChildren,
   resolveEscalation,
 } from '@guildhall/tools'
 import { normalizeImportedDraftTask, promoteImportDraftToExploring } from './import-drafts.js'
@@ -13,13 +20,17 @@ import {
   inspectPressureTestEvidence,
   type PressureTestIntake,
 } from './pressure-test-intake.js'
-import { analyzeRequestIntake } from './request-intake.js'
+import { analyzeRequestIntake, type RequestIntakeOwnerInput } from './request-intake.js'
 import { routeRequest, type RouteRequestResult, type RoutedAction } from './request-routing.js'
 import {
   extractAcceptanceCriteriaFromSpec,
   validateSpecCompletionBoundary,
 } from './spec-quality.js'
 import { applyTaskShaping } from './task-decomposition.js'
+import { transitionTaskStatus } from './task-transition.js'
+import { createOwnerInputRequest } from './owner-input-store.js'
+import { normalizeLegacyTaskQueueShape } from './task-queue-compat.js'
+import { buildSurfaceReviewPacketsForStructuredSpec } from './contract-surfaces.js'
 
 // ---------------------------------------------------------------------------
 // FR-12: exploratory task intake.
@@ -33,27 +44,45 @@ import { applyTaskShaping } from './task-decomposition.js'
 // ---------------------------------------------------------------------------
 
 function tasksPathFor(memoryDir: string): string {
-  return path.join(memoryDir, 'TASKS.json')
+  return projectStatePathFromMemoryDir(memoryDir, 'TASKS.json')
 }
 
 function progressPathFor(memoryDir: string): string {
-  return path.join(memoryDir, 'PROGRESS.md')
+  return projectStatePathFromMemoryDir(memoryDir, 'PROGRESS.md')
 }
 
 async function readQueue(memoryDir: string): Promise<TaskQueue> {
-  const raw = await fs.readFile(tasksPathFor(memoryDir), 'utf-8')
+  const raw = await readProjectStateTextFromMemoryDirAsync(memoryDir, 'TASKS.json').catch((err: unknown) => {
+    if (
+      err &&
+      typeof err === 'object' &&
+      'code' in err &&
+      (err as { code?: unknown }).code === 'ENOENT'
+    ) {
+      return null
+    }
+    throw err
+  })
+  if (raw === null) {
+    return TaskQueue.parse({
+      version: 1,
+      lastUpdated: new Date().toISOString(),
+      tasks: [],
+    })
+  }
   // The bootstrap seeds TASKS.json as a bare `[]` for legacy reasons, so be
   // permissive on intake: if we see a bare array, promote it to a full queue.
-  const parsed = JSON.parse(raw)
-  const queue = Array.isArray(parsed)
-    ? { version: 1, lastUpdated: new Date().toISOString(), tasks: parsed }
-    : TaskQueue.parse(parsed)
+  const now = new Date().toISOString()
+  const parsed = normalizeLegacyTaskQueueShape(JSON.parse(raw), now)
+  const queue = TaskQueue.parse(Array.isArray(parsed)
+    ? { version: 1, lastUpdated: now, tasks: parsed }
+    : parsed)
   for (const task of queue.tasks) normalizeImportedDraftTask(task)
   return queue
 }
 
 async function writeQueue(memoryDir: string, queue: TaskQueue): Promise<void> {
-  atomicWriteText(tasksPathFor(memoryDir), JSON.stringify(queue, null, 2) + '\n')
+  await writeProjectStateJsonFromMemoryDirAsync(memoryDir, 'TASKS.json', queue)
 }
 
 function nextTaskId(queue: TaskQueue): string {
@@ -76,6 +105,10 @@ export interface IntakeInput {
   title?: string
   /** User-facing routed request metadata for Thread projection. */
   request?: TaskRequest
+  /** Optional precomputed intake state when another flow already resolved routing questions. */
+  requestIntakeOverride?: RequestIntake
+  /** Optional explicit owner-input descriptor. Use `null` to suppress inferred owner input. */
+  ownerInputOverride?: RequestIntakeOwnerInput | null | undefined
 }
 
 export interface IntakeResult {
@@ -96,11 +129,15 @@ export async function createExploringTask(input: IntakeInput): Promise<IntakeRes
 
   const now = new Date().toISOString()
   const title = compactStoredLabel(input.title, input.ask, 'New request')
-  const requestIntake = analyzeRequestIntake({
+  const requestIntakeAnalysis = analyzeRequestIntake({
     ask: input.ask,
     title,
     createdAt: now,
   })
+  const requestIntake = input.requestIntakeOverride ?? requestIntakeAnalysis.requestIntake
+  const ownerInput = input.ownerInputOverride !== undefined
+    ? input.ownerInputOverride
+    : requestIntakeAnalysis.ownerInput
 
   const task: Task = {
     id,
@@ -123,8 +160,7 @@ export async function createExploringTask(input: IntakeInput): Promise<IntakeRes
     remediationAttempts: 0,
     origination: 'human',
     ...(input.request ? { request: input.request } : {}),
-    requestIntake: requestIntake.requestIntake,
-    ...(requestIntake.openQuestion ? { openQuestions: [requestIntake.openQuestion] } : {}),
+    requestIntake,
     createdAt: now,
     updatedAt: now,
   }
@@ -132,6 +168,27 @@ export async function createExploringTask(input: IntakeInput): Promise<IntakeRes
   queue.tasks.push(task)
   queue.lastUpdated = now
   await writeQueue(input.memoryDir, queue)
+
+  if (ownerInput) {
+    await createOwnerInputRequest({
+      projectRoot: projectRootFromMemoryDir(input.memoryDir),
+      projectId: path.basename(input.projectPath) || id,
+      commandId: `request-intake:${id}:${ownerInputSourceId(ownerInput)}`,
+      now,
+      actor: 'request-intake',
+      source: ownerInput.source.kind === 'request_intake'
+        ? { ...ownerInput.source, intakeId: id }
+        : ownerInput.source,
+      target: ownerInput.target,
+      question: {
+        prompt: ownerInput.prompt,
+        ...(ownerInput.helperText ? { description: ownerInput.helperText } : {}),
+        ...(ownerInput.choices ? { choices: ownerInput.choices } : {}),
+      },
+      objective: ownerInput.objective,
+      sessionSource: `request-intake:${id}`,
+    })
+  }
 
   const appendResult = await appendExploringTranscript({
     memoryDir: input.memoryDir,
@@ -144,6 +201,18 @@ export async function createExploringTask(input: IntakeInput): Promise<IntakeRes
   }
 
   return { taskId: id, transcriptPath: appendResult.path }
+}
+
+function projectRootFromMemoryDir(memoryDir: string): string {
+  return path.basename(memoryDir) === '.guildhall'
+    ? path.dirname(memoryDir)
+    : path.dirname(memoryDir)
+}
+
+function ownerInputSourceId(ownerInput: RequestIntakeOwnerInput): string {
+  const source = ownerInput.source
+  if (source.kind === 'request_intake') return `${source.kind}:${source.questionId ?? source.intakeId}`
+  return `${source.kind}:owner-input`
 }
 
 export interface RoutedRequestResult {
@@ -303,9 +372,23 @@ export async function approveSpec(input: ApproveSpecInput): Promise<ApproveSpecR
   }
 
   const now = new Date().toISOString()
+  const surfaceReviewPackets = buildSurfaceReviewPacketsForStructuredSpec({
+    structuredSpec: task.structuredSpec,
+    currentSpecRef: `task:${task.id}`,
+    siblingSpecRefsBySurfaceId: siblingSpecRefsBySurfaceId(queue, task.id),
+  })
+  if (surfaceReviewPackets.length > 0) {
+    task.contractSurfaceReviewPackets = surfaceReviewPackets
+    task.notes.push({
+      agentId: 'contract-surface',
+      role: 'blueprint-review',
+      content: `Generated ${surfaceReviewPackets.length} contract-surface review packet${surfaceReviewPackets.length === 1 ? '' : 's'} from structured spec deltas during approval.`,
+      timestamp: now,
+    })
+  }
   applyTaskShaping(task, { now, recordNote: false })
-  if (task.sizePlan?.action === 'split_required' && !shouldKeepFixedSpecRunnable(task)) {
-    materializeRequiredSplitChildren(queue, task, now)
+  if (isMaterializableSplitAction(task.sizePlan?.action) && !shouldKeepFixedSpecRunnable(task)) {
+    materializeSplitChildren(queue, task, now)
   } else {
     if (task.sizePlan?.action === 'split_required' && shouldKeepFixedSpecRunnable(task)) {
       task.sizePlan = {
@@ -318,7 +401,13 @@ export async function approveSpec(input: ApproveSpecInput): Promise<ApproveSpecR
         ],
       }
     }
-    task.status = 'ready'
+    transitionTaskStatus({
+      task,
+      event: 'mark_ready',
+      actor: 'human',
+      evidenceRefs: ['task:approve-spec'],
+      now,
+    })
   }
   task.updatedAt = now
   queue.lastUpdated = now
@@ -340,12 +429,25 @@ export async function approveSpec(input: ApproveSpecInput): Promise<ApproveSpecR
     role: 'system',
     content: input.approvalNote
       ? `Spec approved by human. Note: ${input.approvalNote}`
-      : task.sizePlan?.action === 'split_required'
+      : isMaterializableSplitAction(task.sizePlan?.action)
         ? 'Spec approved. Guildhall created the nested work and kept this item as the containing work.'
         : 'Spec approved by human. Task advanced to ready.',
   })
 
   return { success: true, newStatus: task.status }
+}
+
+function siblingSpecRefsBySurfaceId(queue: TaskQueue, currentTaskId: string): Record<string, string[]> {
+  const refs: Record<string, string[]> = {}
+  for (const candidate of queue.tasks) {
+    if (candidate.id === currentTaskId) continue
+    for (const delta of candidate.structuredSpec?.contractSurfaceDeltas ?? []) {
+      if (!delta.surfaceId) continue
+      refs[delta.surfaceId] ??= []
+      refs[delta.surfaceId]!.push(`task:${candidate.id}`)
+    }
+  }
+  return refs
 }
 
 function backfillAcceptanceCriteriaFromSpec(task: Task): void {
@@ -641,21 +743,10 @@ export async function reframeTask(input: ReframeTaskInput): Promise<ReframeTaskR
     agentId: 'human',
     role: 'human',
     content: reason
-      ? `Asked Guildhall to reframe this task. Reason: ${reason}`
-      : 'Asked Guildhall to reframe this task from current project memory.',
+      ? `Asked to reframe this task. Reason: ${reason}`
+      : 'Asked to reframe this task from current project memory.',
     timestamp: now,
   })
-
-  const questions = Array.isArray(task.openQuestions) ? [...task.openQuestions] : []
-  task.openQuestions = questions.map(question => (
-    question.answeredAt
-      ? question
-      : {
-          ...question,
-          answeredAt: now,
-          answer: 'Superseded by a task reframe request.',
-        }
-  ))
 
   if (Array.isArray(task.escalations)) {
     task.escalations = task.escalations.map(escalation => (
@@ -691,7 +782,7 @@ export async function reframeTask(input: ReframeTaskInput): Promise<ReframeTaskR
   notes.push({
     agentId: 'system',
     role: 'system',
-    content: `Reframe requested for "${oldTitle}" from ${oldStatus}. Guildhall will rebuild the task in plain language before continuing.`,
+    content: `Reframe requested for "${oldTitle}" from ${oldStatus}. The task will be rebuilt in plain language before continuing.`,
     timestamp: now,
   })
   await writeQueue(input.memoryDir, queue)
@@ -737,8 +828,8 @@ export async function enrichTask(input: EnrichTaskInput): Promise<ReframeTaskRes
     agentId: 'human',
     role: 'human',
     content: instruction
-      ? `Asked Guildhall to enrich this task (${mode}). Note: ${instruction}`
-      : `Asked Guildhall to enrich this task (${mode}).`,
+      ? `Asked to enrich this task (${mode}). Note: ${instruction}`
+      : `Asked to enrich this task (${mode}).`,
     timestamp: now,
   })
 
@@ -773,7 +864,7 @@ export async function enrichTask(input: EnrichTaskInput): Promise<ReframeTaskRes
   notes.push({
     agentId: 'system',
     role: 'system',
-    content: `Enrichment requested from ${oldStatus}. Guildhall will add the missing structure before continuing.`,
+    content: `Enrichment requested from ${oldStatus}. Missing structure will be added before continuing.`,
     timestamp: now,
   })
   await writeQueue(input.memoryDir, queue)
@@ -930,7 +1021,13 @@ export async function rerunTaskStage(
         error: `Task ${input.taskId} is in status '${task.status}', expected 'review' or 'gate_check'`,
       }
     }
-    task.status = 'review'
+    transitionTaskStatus({
+      task,
+      event: 'restart_review',
+      actor: 'human',
+      evidenceRefs: ['task:human-restart-review'],
+      now,
+    })
     task.assignedTo = 'reviewer-agent'
     task.updatedAt = now
     queue.lastUpdated = now

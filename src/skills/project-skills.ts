@@ -1,5 +1,6 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
-import { join } from 'node:path'
+import { dirname } from 'node:path'
+import { getProjectSystemStatePathFromMemoryDir } from '@guildhall/sessions'
 import { z } from 'zod'
 import type { SkillDefinition } from './types.js'
 
@@ -36,7 +37,7 @@ export interface ProjectSkillProposalInput {
 }
 
 export function projectSkillProposalsPath(memoryDir: string): string {
-  return join(memoryDir, 'project-skills.json')
+  return getProjectSystemStatePathFromMemoryDir(memoryDir, 'project-skills.json')
 }
 
 function readProjectSkillStore(memoryDir: string): z.infer<typeof ProjectSkillStoreSchema> {
@@ -53,7 +54,7 @@ function writeProjectSkillStore(
   memoryDir: string,
   store: z.infer<typeof ProjectSkillStoreSchema>,
 ): void {
-  mkdirSync(memoryDir, { recursive: true })
+  mkdirSync(dirname(projectSkillProposalsPath(memoryDir)), { recursive: true })
   writeFileSync(
     projectSkillProposalsPath(memoryDir),
     `${JSON.stringify(ProjectSkillStoreSchema.parse(store), null, 2)}\n`,

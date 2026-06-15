@@ -4,7 +4,7 @@
 -->
 <script lang="ts">
   import Stack from '../../lib/Stack.svelte'
-  import Card from '../../lib/Card.svelte'
+  import Card from '../../lib/ui-compat/Card.svelte'
   import DefinitionList from '../../lib/DefinitionList.svelte'
   import Byline from '../../lib/Byline.svelte'
   import { friendlyTaskId, labelForIdentifier } from '../../lib/identifier-labels.js'
@@ -31,9 +31,9 @@
     ['Created at', task.createdAt ?? ''],
     ['Updated at', task.updatedAt ?? ''],
     ['Completed at', task.completedAt ?? null],
-    ['Parent goal', task.parentGoalId ? labelForIdentifier('task', task.parentGoalId).label : null],
+    ['Goal envelope', task.businessEnvelope?.goalId ? labelForIdentifier('task', task.businessEnvelope.goalId).label : null],
     ['Permission mode', task.permissionMode ? labelForIdentifier('domain', task.permissionMode).label : null],
-    ['Depends on', task.dependsOn?.length ? task.dependsOn.map(id => friendlyTaskId(id)).join(', ') : null],
+    ['Blocked by', task.dependsOn?.length ? task.dependsOn.map(id => friendlyTaskId(id)).join(', ') : null],
   ])
 
   const mergeLines = $derived<Array<readonly [string, string | null]>>([
@@ -193,15 +193,15 @@
     gap: var(--s-2);
     align-items: center;
     flex-wrap: wrap;
-    font-size: var(--fs-0);
+    font-size: var(--gh-type-size-caption);
     text-transform: uppercase;
     letter-spacing: 0.05em;
     color: var(--text-muted);
-    font-weight: 700;
+    font-weight: var(--gh-type-weight-strong);
   }
   p {
-    font-size: var(--fs-2);
-    line-height: var(--lh-body);
+    font-size: var(--gh-type-size-body);
+    line-height: var(--gh-type-line-height-body);
   }
   .debug-record {
     display: grid;
@@ -221,14 +221,14 @@
   }
   .debug-head h4 {
     margin: 0;
-    font-size: var(--fs-2);
+    font-size: var(--gh-type-size-body);
   }
   .debug-head h4 span,
   .debug-head p,
   .counts,
   .path {
     color: var(--text-muted);
-    font-size: var(--fs-1);
+    font-size: var(--gh-type-size-meta);
   }
   .counts {
     display: flex;
@@ -237,7 +237,7 @@
   }
   h5 {
     margin: 0 0 var(--s-1);
-    font-size: var(--fs-1);
+    font-size: var(--gh-type-size-meta);
     text-transform: uppercase;
     letter-spacing: 0.05em;
     color: var(--text-muted);
@@ -266,8 +266,8 @@
     border: 1px solid var(--border);
     border-radius: var(--r-2);
     padding: var(--s-3);
-    font-size: var(--fs-1);
-    line-height: var(--lh-body);
+    font-size: var(--gh-type-size-meta);
+    line-height: var(--gh-type-line-height-body);
     max-height: 14rem;
     overflow: auto;
   }

@@ -2,11 +2,12 @@ import fs from 'node:fs/promises'
 import path from 'node:path'
 import yaml from 'js-yaml'
 import { DesignSystem, DESIGN_SYSTEM_FILE } from '@guildhall/core'
+import { getProjectSystemStatePath, inferProjectRootFromMemoryDir } from '@guildhall/sessions'
 
 // ---------------------------------------------------------------------------
 // Design-system storage
 //
-// .guildhall/design-system.yaml is the single source of truth. YAML so humans
+// System-local project-state design-system.yaml is the source of truth. YAML so humans
 // can hand-edit it without fighting JSON quoting; the schema is validated on
 // load so bad edits surface at runtime instead of silently drifting into
 // agent prompts.
@@ -17,6 +18,10 @@ import { DesignSystem, DESIGN_SYSTEM_FILE } from '@guildhall/core'
 // ---------------------------------------------------------------------------
 
 export function designSystemPath(memoryDir: string): string {
+  const base = path.basename(path.resolve(memoryDir))
+  if (base === '.guildhall' || base === 'memory') {
+    return getProjectSystemStatePath(inferProjectRootFromMemoryDir(memoryDir), DESIGN_SYSTEM_FILE)
+  }
   return path.join(memoryDir, DESIGN_SYSTEM_FILE)
 }
 

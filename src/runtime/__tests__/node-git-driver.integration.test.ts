@@ -142,6 +142,27 @@ describe('NodeGitDriver.createWorktree + removeWorktree', () => {
     expect(list).toContain(worktreePath)
     expect(list).toContain('branch refs/heads/guildhall/task-existing')
   })
+
+  it('adopts an existing worktree path on the expected branch instead of failing', async () => {
+    const driver = new NodeGitDriver()
+    const worktreePath = path.join(repoRoot, '.guildhall', 'worktrees', 'already-there')
+    await driver.createWorktree(repoRoot, {
+      worktreePath,
+      branch: 'guildhall/task-already-there',
+      baseBranch: 'main',
+    })
+
+    await expect(
+      driver.createWorktree(repoRoot, {
+        worktreePath,
+        branch: 'guildhall/task-already-there',
+        baseBranch: 'main',
+      }),
+    ).resolves.toBeUndefined()
+
+    const { stdout: branch } = await git(worktreePath, ['branch', '--show-current'])
+    expect(branch.trim()).toBe('guildhall/task-already-there')
+  })
 })
 
 describe('NodeGitDriver.fastForwardMerge', () => {

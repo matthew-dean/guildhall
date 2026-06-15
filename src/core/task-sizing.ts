@@ -25,6 +25,9 @@ export const TaskSplitRecommendation = z.object({
   reason: z.string(),
   dependsOn: z.array(z.string()).default([]),
   suggestedDomain: z.string().optional(),
+  usesPrimitives: z.array(z.string()).optional(),
+  provesPrimitives: z.array(z.string()).optional(),
+  proofKind: z.string().optional(),
   createdTaskId: z.string().optional(),
 })
 export type TaskSplitRecommendation = z.infer<typeof TaskSplitRecommendation>
@@ -207,6 +210,15 @@ export function buildTaskSizePlan(input: BuildTaskSizePlanInput): TaskSizePlan {
       label: 'Cross-domain work',
       weight: 2,
       reason: 'The task crosses UI, API, data, security, or privacy boundaries.',
+    })
+  }
+
+  if (isBroadImportedProgram(text)) {
+    factors.push({
+      id: 'broad_imported_program',
+      label: 'Broad imported program',
+      weight: 6,
+      reason: 'The task reads like a planning-note program or remaining-work wave, not one independently verifiable implementation unit.',
     })
   }
 
@@ -433,6 +445,12 @@ function recommendChildren(input: { text: string; files: readonly string[]; lane
     if (!children.some((child) => child.title === title)) children.push({ title, reason, suggestedDomain, dependsOn: [] })
   }
 
+  if (isBroadImportedProgram(input.text)) {
+    add('Audit the remaining replacement scope', 'Turn the imported planning note into a concrete list of remaining independently verifiable targets.', undefined)
+    add('Implement the first independently verifiable replacement', 'Keep the first code change small enough for one worker pass and review boundary.', undefined)
+    add('Verify and update the migration record', 'Keep proof and migration inventory updates explicit after the implementation child lands.', undefined)
+    return children
+  }
   if (/billing|subscription/i.test(input.text) || input.files.some((file) => /billing|subscription/i.test(file))) {
     add('Implement the billing settings workflow', 'Keep the user-facing workflow small enough for UX review.', 'frontend')
   }
@@ -454,4 +472,12 @@ function recommendChildren(input: { text: string; files: readonly string[]; lane
     add('Extract the second independently verifiable outcome', 'Link this child after the first task proves its boundary.', undefined)
   }
   return children
+}
+
+function isBroadImportedProgram(text: string): boolean {
+  const hasProgramVerb = /\b(finish|complete|continue|replace|migrate|normalize|modernize)\b/i.test(text)
+  const hasProgramNoun = /\b(wave|migration|replacement|remaining|remainder|beyond|inventory|roadmap|program)\b/i.test(text)
+  const hasPriorWorkBoundary = /\b(already[- ]migrated|remaining|beyond|next up|project_state\.md|source intent|planning note)\b/i.test(text)
+  const primitiveProgram = /\bprimitive(?:s)?\b/i.test(text) && /\b(replacement|normalization|migration|wave)\b/i.test(text)
+  return (hasProgramVerb && hasProgramNoun && hasPriorWorkBoundary) || primitiveProgram
 }

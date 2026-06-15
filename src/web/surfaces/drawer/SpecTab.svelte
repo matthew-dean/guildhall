@@ -6,7 +6,7 @@
 <script lang="ts">
   import Stack from '../../lib/Stack.svelte'
   import Row from '../../lib/Row.svelte'
-  import Card from '../../lib/Card.svelte'
+  import Card from '../../lib/ui-compat/Card.svelte'
   import Chip from '../../lib/Chip.svelte'
   import { friendlyDomain, friendlyPriority, friendlyStatus } from '../../lib/display.js'
   import { activeEscalations } from '../../lib/escalation.js'
@@ -19,6 +19,7 @@
   import { briefDoneWhenForReaders, briefScopeForReaders } from '../../lib/brief-display.js'
   import { parseReviewerSummarySections, type ReviewerAdvisoryScores } from '../../lib/reviewer-summary.js'
   import { readableTaskDescription } from '../../lib/task-display.js'
+  import { specApprovalNeedsStructuredBrief } from '../../lib/task-drawer-integrity.js'
   import WhyStuck from './WhyStuck.svelte'
   import SpecFillChecklist from './SpecFillChecklist.svelte'
   import SuggestionCard from './SuggestionCard.svelte'
@@ -88,11 +89,20 @@
         /deterministic recovery spec seed/i.test(note.content ?? ''),
       ),
   )
+  const hasTaskLocalSpecification = $derived(
+    Boolean(brief) ||
+      specText.length > 0 ||
+      acceptance.length > 0,
+  )
+  const reviewPacketStatus = $derived(
+    ['review', 'gate_check', 'done', 'pending_pr', 'merged'].includes(task.status),
+  )
   const reviewPlanLanes = $derived(reviewPlan?.selectedLanes ?? [])
   const reviewPlanHiddenLaneCount = $derived(Math.max(0, reviewPlanLanes.length - 4))
   const reviewPlanRecipeCount = $derived(reviewPlan?.requiredRecipes?.length ?? 0)
   const hasReviewPacket = $derived(
     !hasRecoverySpecSeed &&
+      (hasTaskLocalSpecification || reviewPacketStatus) &&
       (
         latestReviewerSummary.length > 0 ||
         latestSelfCritique.length > 0 ||
@@ -101,6 +111,7 @@
   )
   const exploring = $derived(task.status === 'exploring')
   const specApprovalPending = $derived(task.status === 'spec_review' && specText.length > 0)
+  const specApprovalNeedsBrief = $derived(specApprovalPending && specApprovalNeedsStructuredBrief(task))
   const needsAcceptance = $derived(exploring && briefApproved && acceptance.length === 0)
 
   // Agent-suggested tasks the user hasn't said "yes" to yet get the
@@ -237,7 +248,7 @@
           </div>
           <Chip
             label={reviewPlanRecipeCount === 1 ? '1 reviewer group' : `${reviewPlanRecipeCount} reviewer groups`}
-            tone="agent"
+            tone="ok"
           />
         </div>
         {#if reviewPlanLanes.length > 0}
@@ -459,14 +470,19 @@
   {#if specApprovalPending}
     <Card tone="warn">
       {#snippet actions()}
-        <Chip label="Awaiting your approval" tone="warn" />
+        <Chip label={specApprovalNeedsBrief ? 'Brief incomplete' : 'Awaiting your approval'} tone="warn" />
       {/snippet}
       <Stack gap="2">
-        <h3>Spec draft awaiting approval</h3>
-        <p class="lede">Review the draft on this page, then approve it when it matches what you want.</p>
-        <Row justify="end">
-          <Button variant="primary" disabled={busy} onclick={onApproveSpec}>Approve spec</Button>
-        </Row>
+        {#if specApprovalNeedsBrief}
+          <h3>Spec needs brief details first</h3>
+          <p class="lede">Add the missing success target and structured acceptance criteria before approval can mean the task is ready.</p>
+        {:else}
+          <h3>Spec draft awaiting approval</h3>
+          <p class="lede">Review the draft on this page, then approve it when it matches what you want.</p>
+          <Row justify="end">
+            <Button variant="primary" disabled={busy} onclick={onApproveSpec}>Approve spec</Button>
+          </Row>
+        {/if}
       </Stack>
     </Card>
   {/if}
@@ -494,34 +510,34 @@
 
 <style>
   p {
-    font-size: var(--fs-2);
-    line-height: var(--lh-body);
+    font-size: var(--gh-type-size-body);
+    line-height: var(--gh-type-line-height-body);
   }
   .muted {
     color: var(--text-muted);
   }
   .hint {
-    font-size: var(--fs-1);
+    font-size: var(--gh-type-size-meta);
     color: var(--text-muted);
   }
   .bullet {
     padding-left: var(--s-4);
-    font-size: var(--fs-2);
-    line-height: var(--lh-body);
+    font-size: var(--gh-type-size-body);
+    line-height: var(--gh-type-line-height-body);
   }
   .bullet li {
     margin: var(--s-1) 0;
   }
   .lede {
     color: var(--text-muted);
-    font-size: var(--fs-1);
-    line-height: var(--lh-body);
+    font-size: var(--gh-type-size-meta);
+    line-height: var(--gh-type-line-height-body);
     margin: 0;
   }
   .checkpoint-line {
     color: var(--text-muted);
-    font-size: var(--fs-1);
-    line-height: var(--lh-body);
+    font-size: var(--gh-type-size-meta);
+    line-height: var(--gh-type-line-height-body);
     margin: 0;
   }
   .review-plan-summary {
@@ -537,13 +553,13 @@
   }
   .review-plan-summary strong {
     color: var(--text);
-    font-size: var(--fs-3);
-    line-height: var(--lh-tight);
+    font-size: var(--gh-type-size-panel-title);
+    line-height: var(--gh-type-line-height-tight);
   }
   .review-plan-summary span {
     color: var(--text-muted);
-    font-size: var(--fs-1);
-    line-height: var(--lh-body);
+    font-size: var(--gh-type-size-meta);
+    line-height: var(--gh-type-line-height-body);
   }
   .review-plan-lanes {
     display: flex;
@@ -553,8 +569,8 @@
   .review-plan-more > summary {
     cursor: pointer;
     color: var(--text-muted);
-    font-size: var(--fs-1);
-    font-weight: 700;
+    font-size: var(--gh-type-size-meta);
+    font-weight: var(--gh-type-weight-strong);
     letter-spacing: 0.05em;
     list-style: none;
     text-transform: uppercase;
@@ -574,8 +590,8 @@
     margin: 0;
     padding-left: var(--s-4);
     color: var(--text-muted);
-    font-size: var(--fs-1);
-    line-height: var(--lh-body);
+    font-size: var(--gh-type-size-meta);
+    line-height: var(--gh-type-line-height-body);
   }
   .review-plan-list span {
     color: var(--text-soft);
@@ -593,8 +609,8 @@
   }
   .review-score-name {
     color: var(--text);
-    font-size: var(--fs-1);
-    line-height: var(--lh-body);
+    font-size: var(--gh-type-size-meta);
+    line-height: var(--gh-type-line-height-body);
   }
   .review-score-chips {
     display: flex;
@@ -603,8 +619,8 @@
   }
   .explainer {
     color: var(--text);
-    font-size: var(--fs-1);
-    line-height: var(--lh-body);
+    font-size: var(--gh-type-size-meta);
+    line-height: var(--gh-type-line-height-body);
     margin: 0 0 var(--s-1) 0;
     padding: var(--s-2) var(--s-3);
     background: var(--bg-raised-2);

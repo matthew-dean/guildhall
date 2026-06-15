@@ -17,6 +17,11 @@ import {
   makeDefaultSettings,
   saveLeverSettings,
 } from '@guildhall/levers'
+import {
+  projectStatePathFromMemoryDir,
+  readProjectStateJsonFromMemoryDirAsync,
+  writeProjectStateJsonFromMemoryDirAsync,
+} from '@guildhall/sessions'
 
 import { InMemoryGitDriver } from '../git-driver.js'
 import { Orchestrator, type OrchestratorAgentSet } from '../orchestrator.js'
@@ -33,13 +38,11 @@ import { tickOutcomeToBackendEvent } from '../wire-events.js'
 
 let tmpDir: string
 let memoryDir: string
-let tasksPath: string
 
 beforeEach(async () => {
   tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'forge-wire-e2e-'))
   memoryDir = path.join(tmpDir, 'memory')
   await fs.mkdir(memoryDir, { recursive: true })
-  tasksPath = path.join(memoryDir, 'TASKS.json')
 })
 
 afterEach(async () => {
@@ -103,16 +106,19 @@ async function writeQueue(tasks: Task[]): Promise<void> {
     lastUpdated: '2026-04-01T00:00:00Z',
     tasks,
   }
-  await fs.writeFile(tasksPath, JSON.stringify(queue, null, 2), 'utf-8')
+  await writeProjectStateJsonFromMemoryDirAsync(memoryDir, 'TASKS.json', queue)
 }
 
 async function mutateTask(id: string, patch: Partial<Task>): Promise<void> {
-  const raw = await fs.readFile(tasksPath, 'utf-8')
-  const q: TaskQueue = JSON.parse(raw)
+  const q = await readProjectStateJsonFromMemoryDirAsync<TaskQueue>(memoryDir, 'TASKS.json')
   const t = q.tasks.find((x) => x.id === id)
   if (!t) throw new Error(`No task ${id}`)
   Object.assign(t, patch)
-  await fs.writeFile(tasksPath, JSON.stringify(q, null, 2), 'utf-8')
+  await writeProjectStateJsonFromMemoryDirAsync(memoryDir, 'TASKS.json', q)
+}
+
+function statePath(relativePath: string): string {
+  return projectStatePathFromMemoryDir(memoryDir, relativePath)
 }
 
 function stubAgent(name: string, sideEffect?: () => Promise<void> | void) {
@@ -218,7 +224,7 @@ describe('FR-16 end-to-end: orchestrator → OHJSON stream', () => {
       setBy: 'system-default',
     }
     await saveLeverSettings({
-      path: path.join(memoryDir, AGENT_SETTINGS_FILENAME),
+      path: statePath(AGENT_SETTINGS_FILENAME),
       settings,
     })
 

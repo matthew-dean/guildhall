@@ -78,7 +78,10 @@ export function inferProjectMemory(evidence: ProjectQuestionEvidence): InferredP
     'coherent novel',
     'author voice',
     'reader experience',
+    'quiet',
     'quiet UI',
+    'commercial editor direction',
+    'commercial direction',
     'print-quality',
     'reviewer',
     'reader knowledge',
@@ -95,12 +98,6 @@ export function planNextProjectQuestion(input: {
   answeredQuestions: ProjectQuestionAnswer[]
   askedCandidateIds: string[]
 }): ProjectQuestionPlan {
-  if (input.answeredQuestions.some(answer => classifyProjectAnswer(answer).kind === 'decision')) {
-    return {
-      kind: 'complete',
-      reason: 'Current project evidence and answers are enough for Guildhall to shape near-term work.',
-    }
-  }
   const memory = inferProjectMemory(input.evidence)
   const candidates = generateCandidates(input.evidence, memory)
     .filter(candidate => !input.askedCandidateIds.includes(candidate.id))
@@ -191,7 +188,12 @@ function generateCandidates(
     })
   }
 
-  if (joinedFacts.includes('quiet ui') || joinedFacts.includes('commercial direction')) {
+  if (
+    joinedFacts.includes('quiet ui') ||
+    joinedFacts.includes('quiet ') ||
+    joinedFacts.includes('commercial editor direction') ||
+    joinedFacts.includes('commercial direction')
+  ) {
     candidates.push({
       id: 'visual-direction-mode',
       prompt: `Should ${evidence.projectName} feel more like a calm writing desk, a professional editorial tool, or an analytical story-debugging cockpit?`,

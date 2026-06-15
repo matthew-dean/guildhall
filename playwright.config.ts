@@ -17,9 +17,9 @@ export default defineConfig({
     screenshot: 'only-on-failure',
   },
   webServer: {
-    command: `node scripts/playwright-fixtures.mjs && HOME="$PWD/.playwright-fixtures/home" node dist/cli.js serve-internal --port ${port}`,
+    command: `node build.mjs && node scripts/playwright-fixtures.mjs && HOME="$PWD/.playwright-fixtures/home" node dist/cli.js serve-internal --port ${port}`,
     url: `http://127.0.0.1:${port}/api/service`,
-    timeout: 20_000,
+    timeout: 30_000,
     reuseExistingServer: !process.env.CI,
   },
   projects: [

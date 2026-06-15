@@ -94,10 +94,10 @@ function installFetchFakes() {
     const url = String(input)
     const body = init?.body ? JSON.parse(String(init.body)) as Record<string, unknown> : undefined
     calls.push({ url, init, body })
-    if (url === '/api/setup/providers') return json(providersPayload)
-    if (url === '/api/config/models' && init?.method === 'POST') return json({ ok: true })
-    if (url === '/api/config/models') return json(modelsPayload)
-    if (url === '/api/setup/providers/config') return json({ ok: true })
+    if (url === '/api/providers') return json(providersPayload)
+    if (url === '/api/models' && init?.method === 'POST') return json({ ok: true })
+    if (url === '/api/models') return json(modelsPayload)
+    if (url === '/api/providers/config') return json({ ok: true })
     if (url === '/api/providers/test') return json({ ok: true, sample: 'ready' })
     if (url === '/api/providers/disconnect') return json({ ok: true, note: 'Removed provider' })
     return json({})
@@ -113,7 +113,7 @@ describe('ProvidersPage', () => {
   })
 
   it('loads machine-scoped providers and global model defaults', async () => {
-    installFetchFakes()
+    const { calls } = installFetchFakes()
 
     render(ProvidersPage)
 
@@ -123,6 +123,7 @@ describe('ProvidersPage', () => {
     expect(screen.getByText(/These defaults apply to every Guildhall project/)).toBeTruthy()
     expect(screen.getAllByText(/Careful but flexible/).length).toBeGreaterThan(0)
     expect(screen.getByRole('status').textContent).toContain('Model not loaded.')
+    expect(calls.map(call => call.url)).toEqual(['/api/providers', '/api/models'])
   })
 
   it('saves provider credentials and tests configured providers', async () => {
@@ -134,7 +135,7 @@ describe('ProvidersPage', () => {
     await userEvent.type(screen.getByPlaceholderText('sk-ant-...'), ' sk-ant-test ')
     await userEvent.click(screen.getAllByRole('button', { name: /^save$/i })[0]!)
     await waitFor(() => {
-      expect(calls.some(call => call.url === '/api/setup/providers/config' && call.body?.anthropicApiKey === 'sk-ant-test')).toBe(true)
+      expect(calls.some(call => call.url === '/api/providers/config' && call.body?.anthropicApiKey === 'sk-ant-test')).toBe(true)
     })
 
     await userEvent.click(screen.getAllByRole('button', { name: /^test$/i })[0]!)
@@ -142,6 +143,7 @@ describe('ProvidersPage', () => {
       expect(calls.some(call => call.url === '/api/providers/test' && call.body?.provider === 'claude-oauth')).toBe(true)
     })
     expect(screen.getByText(/Test ok/)).toBeTruthy()
+    expect(calls.filter(call => call.url.includes('projectId'))).toEqual([])
   })
 
   it('disconnects providers and saves a global model role selection', async () => {
@@ -161,7 +163,7 @@ describe('ProvidersPage', () => {
       expect(
         calls.some(
           call =>
-            call.url === '/api/config/models' &&
+            call.url === '/api/models' &&
             call.init?.method === 'POST' &&
             call.body?.scope === 'global' &&
             call.body?.role === 'spec' &&
@@ -176,7 +178,7 @@ describe('ProvidersPage', () => {
       expect(
         calls.some(
           call =>
-            call.url === '/api/config/models' &&
+            call.url === '/api/models' &&
             call.init?.method === 'POST' &&
             call.body?.scope === 'global' &&
             call.body?.role === 'spec' &&
@@ -184,5 +186,31 @@ describe('ProvidersPage', () => {
         ),
       ).toBe(true)
     })
+    expect(calls.filter(call => call.url.includes('projectId'))).toEqual([])
+  })
+
+  it('shows provider test and model load failures inline without route leakage', async () => {
+    const calls: Array<{ url: string; init?: RequestInit; body?: Record<string, unknown> }> = []
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+        const url = String(input)
+        const body = init?.body ? JSON.parse(String(init.body)) as Record<string, unknown> : undefined
+        calls.push({ url, init, body })
+        if (url === '/api/providers') return json(providersPayload)
+        if (url === '/api/models') return json({ error: 'model catalog unavailable' }, { status: 500 })
+        if (url === '/api/providers/test') return json({ ok: false, error: 'provider rejected test call' })
+        return json({})
+      }),
+    )
+
+    render(ProvidersPage)
+    await screen.findByText('model catalog unavailable')
+
+    await userEvent.click(screen.getAllByRole('button', { name: /^test$/i })[0]!)
+
+    expect(await screen.findByText('provider rejected test call')).toBeTruthy()
+    expect(calls.some(call => call.url === '/api/providers/test' && call.body?.provider === 'claude-oauth')).toBe(true)
+    expect(calls.filter(call => call.url.includes('projectId'))).toEqual([])
   })
 })

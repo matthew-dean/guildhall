@@ -1,9 +1,28 @@
+import { appendManagedTextFile, readManagedTextFile, readManagedTextFileSync, writeManagedTextFile } from '@guildhall/persistence'
 import { defineTool } from '@guildhall/engine'
 import { z } from 'zod'
 import fs from 'node:fs/promises'
 import path from 'node:path'
-import { AcceptanceCriteria, GateResult, Task, TaskQueue, TaskStatus, WorkUnitAnalysis, buildTaskSizePlan, parseAcceptanceCriteriaFromSpec } from '@guildhall/core'
-import { atomicWriteText } from '@guildhall/sessions'
+import {
+  applyTaskTransition,
+  type TaskTransitionEvent,
+} from '@guildhall/runtime/task-transition'
+import {
+  AcceptanceCriteria,
+  GateResult,
+  type TaskEvidenceEvent,
+  Task,
+  TaskQueue,
+  TaskStatus,
+  WorkUnitAnalysis,
+  StructuredSpec,
+  TaskDelivery,
+  buildTaskSizePlan,
+  parseAcceptanceCriteriaFromSpec,
+  renderStructuredSpecMarkdown,
+} from '@guildhall/core'
+import { appendTaskEvidence, atomicWriteText, inferProjectRootFromMemoryDir, upsertTaskRuntimeState } from '@guildhall/sessions'
+import { writeProjectTaskQueue } from '@guildhall/runtime/project-state-boundary'
 
 const TASKS_PATH_SCHEMA = z.string().describe('Absolute path to the TASKS.json file')
 
@@ -16,7 +35,7 @@ export interface ReadTasksResult {
 
 export async function readTasks(input: ReadTasksInput): Promise<ReadTasksResult> {
   try {
-    const raw = await fs.readFile(input.tasksPath, 'utf-8')
+    const raw = await readManagedTextFile(input.tasksPath, 'utf-8')
     return { queue: TaskQueue.parse(JSON.parse(raw)) }
   } catch (err) {
     return { queue: null, error: String(err) }
@@ -51,24 +70,35 @@ export const readTasksTool = defineTool({
   },
 })
 
+const updateTaskNoteSchema = z.preprocess((value) => {
+  if (typeof value !== 'string') return value
+  const trimmed = value.trim()
+  if (!trimmed.startsWith('{')) return value
+  try {
+    return JSON.parse(trimmed)
+  } catch {
+    return value
+  }
+}, z.object({
+  agentId: z.string(),
+  role: z.string(),
+  content: z.string(),
+}))
+
 const updateTaskInputSchema = z.object({
   tasksPath: TASKS_PATH_SCHEMA,
   taskId: z.string().optional(),
   title: z.string().optional(),
   status: TaskStatus.optional(),
   assignedTo: z.string().nullable().optional(),
-  note: z
-    .object({
-      agentId: z.string(),
-      role: z.string(),
-      content: z.string(),
-    })
-    .optional(),
+  note: updateTaskNoteSchema.optional(),
   blockReason: z.string().optional(),
   humanJudgment: z.string().optional(),
   spec: z.string().optional(),
+  structuredSpec: StructuredSpec.optional(),
   acceptanceCriteria: z.array(AcceptanceCriteria).optional(),
   workUnitAnalysis: WorkUnitAnalysis.optional(),
+  delivery: TaskDelivery.optional(),
   gateResults: z.array(GateResult).optional(),
   completedAt: z.string().optional(),
 })
@@ -89,11 +119,12 @@ function inferMetadataTaskId(metadata: Record<string, unknown> = {}): string | n
 }
 
 export async function updateTask(
-  input: UpdateTaskInput,
+  rawInput: UpdateTaskInput,
   metadata: Record<string, unknown> = {},
 ): Promise<UpdateTaskResult> {
   try {
-    const raw = await fs.readFile(input.tasksPath, 'utf-8')
+    const input = updateTaskInputSchema.parse(rawInput)
+    const raw = await readManagedTextFile(input.tasksPath, 'utf-8')
     const queue = TaskQueue.parse(JSON.parse(raw))
     const taskId = input.taskId ?? inferMetadataTaskId(metadata) ?? inferSingleActiveTaskId(queue)
     if (!taskId) {
@@ -110,9 +141,17 @@ export async function updateTask(
         success: false,
         taskId,
         error:
-          'No task mutation provided. Set at least one of title, status, assignedTo, note, blockReason, humanJudgment, spec, acceptanceCriteria, gateResults, or completedAt.',
+          'No task mutation provided. Set at least one of title, status, assignedTo, note, blockReason, humanJudgment, spec, structuredSpec, acceptanceCriteria, workUnitAnalysis, delivery, gateResults, or completedAt.',
       }
     }
+    if (input.spec !== undefined && input.structuredSpec !== undefined) {
+      return {
+        success: false,
+        taskId,
+        error: 'Provide either spec markdown or structuredSpec JSON, not both.',
+      }
+    }
+
     const currentAgentId = typeof metadata['current_agent_id'] === 'string'
       ? metadata['current_agent_id'].trim()
       : ''
@@ -133,8 +172,10 @@ export async function updateTask(
       nextStatus === 'spec_review' ||
       (
         nextStatus === undefined &&
-        input.spec !== undefined &&
-        input.spec.trim() !== '' &&
+        (
+          (input.spec !== undefined && input.spec.trim() !== '') ||
+          input.structuredSpec !== undefined
+        ) &&
         task.status === 'exploring'
       )
     if (wouldPromoteSpecReview && input.spec && hasUnansweredMarkdownOpenQuestions(input.spec)) {
@@ -148,6 +189,12 @@ export async function updateTask(
 
     const normalizedSpec = input.spec !== undefined
       ? normalizeSpecForTaskProjectPath(input.spec, task.projectPath)
+      : undefined
+    const normalizedStructuredSpec = input.structuredSpec !== undefined
+      ? StructuredSpec.parse(input.structuredSpec)
+      : undefined
+    const renderedStructuredSpec = normalizedStructuredSpec
+      ? normalizeSpecForTaskProjectPath(renderStructuredSpecMarkdown(normalizedStructuredSpec), task.projectPath)
       : undefined
     const normalizedAcceptanceCriteria = input.acceptanceCriteria !== undefined
       ? z.array(AcceptanceCriteria).parse(input.acceptanceCriteria)
@@ -169,30 +216,60 @@ export async function updateTask(
       }
     }
 
-    if (input.title !== undefined) task.title = input.title
     const explicitStatus = nextStatus
-    if (explicitStatus) task.status = explicitStatus
+    const statusTransition = explicitStatus && explicitStatus !== task.status
+      ? applyTaskTransition({
+        task,
+        event: eventForExplicitStatus(task.status, explicitStatus),
+        actor: currentAgentId || 'update-task',
+        evidenceRefs: [`update-task:status:${task.status}->${explicitStatus}`],
+        now: new Date().toISOString(),
+        requiredEvidencePresent: explicitStatus === 'done' ? updateIncludesCompletionEvidence(input, task) : undefined,
+      })
+      : null
+    if (statusTransition?.kind === 'rejected') {
+      return {
+        success: false,
+        taskId,
+        error:
+          `Task ${taskId} cannot ${eventForExplicitStatus(task.status, explicitStatus!).replaceAll('_', ' ')} ` +
+          `from ${task.status}: ${statusTransition.reason}`,
+      }
+    }
+
+    if (input.title !== undefined) task.title = input.title
+    if (statusTransition?.kind === 'applied') task.status = statusTransition.nextState
     if (input.assignedTo !== undefined) {
       if ((input.assignedTo ?? '').trim() === '') delete task.assignedTo
       else task.assignedTo = input.assignedTo
     }
     if (input.blockReason !== undefined && input.blockReason.trim() !== '') task.blockReason = input.blockReason
     if (input.humanJudgment !== undefined && input.humanJudgment.trim() !== '') task.humanJudgment = input.humanJudgment
-    if (normalizedSpec !== undefined && normalizedSpec.trim() !== '') {
-      task.spec = normalizedSpec
+    const nextSpec = renderedStructuredSpec ?? normalizedSpec
+    if (normalizedStructuredSpec !== undefined) {
+      task.structuredSpec = normalizedStructuredSpec
+    } else if (normalizedSpec !== undefined) {
+      delete task.structuredSpec
+    }
+    if (nextSpec !== undefined && nextSpec.trim() !== '') {
+      task.spec = nextSpec
       if (input.title === undefined) {
         const derivedTitle = deriveImportedTaskTitle(task)
         if (derivedTitle) task.title = derivedTitle
       }
-      if (task.acceptanceCriteria.length === 0) {
-        const derivedCriteria = parseAcceptanceCriteriaFromSpec(normalizedSpec)
+      if (normalizedStructuredSpec && normalizedAcceptanceCriteria === undefined) {
+        task.acceptanceCriteria = parseAcceptanceCriteriaFromSpec(nextSpec)
+      } else if (task.acceptanceCriteria.length === 0) {
+        const derivedCriteria = parseAcceptanceCriteriaFromSpec(nextSpec)
         if (derivedCriteria.length > 0) task.acceptanceCriteria = derivedCriteria
       }
     }
     if (
       input.status === undefined &&
-      input.spec !== undefined &&
-      input.spec.trim() !== '' &&
+      (
+        (input.spec !== undefined && input.spec.trim() !== '') ||
+        input.structuredSpec !== undefined
+      ) &&
       task.status === 'exploring'
     ) {
       task.status = 'spec_review'
@@ -207,15 +284,18 @@ export async function updateTask(
     if (input.workUnitAnalysis !== undefined) {
       task.workUnitAnalysis = WorkUnitAnalysis.parse(input.workUnitAnalysis)
     }
-    if (input.gateResults !== undefined && input.gateResults.length > 0) {
-      task.gateResults = z.array(GateResult).parse(input.gateResults)
+    if (input.delivery !== undefined) {
+      task.delivery = TaskDelivery.parse(input.delivery)
     }
+    const gateEvidence = input.gateResults !== undefined && input.gateResults.length > 0
+      ? z.array(GateResult).parse(input.gateResults)
+      : []
     if (input.completedAt !== undefined && input.completedAt.trim() !== '') task.completedAt = input.completedAt
-    if (input.note) {
-      task.notes.push({ ...input.note, timestamp: new Date().toISOString() })
-    }
+    const noteEvidence = input.note
+      ? { ...input.note, timestamp: new Date().toISOString() }
+      : null
     const shouldRefreshSizePlan =
-      (normalizedSpec !== undefined && normalizedSpec.trim() !== '') ||
+      (nextSpec !== undefined && nextSpec.trim() !== '') ||
       input.workUnitAnalysis !== undefined
     if (shouldRefreshSizePlan) {
       const sizePlanCreatedAt = new Date().toISOString()
@@ -224,40 +304,95 @@ export async function updateTask(
         riskLanes: inferSizingRiskLanes(task),
         createdAt: sizePlanCreatedAt,
       })
-      if ((task.sizePlan.action === 'split_recommended' || task.sizePlan.action === 'split_required') && !task.parentGoalId) {
-        task.parentGoalId = `goal-${task.id}`
-      }
-      if (task.sizePlan.action === 'split_required' && task.status === 'ready') {
-        materializeRequiredSplitChildren(queue, task, sizePlanCreatedAt)
+      if (isMaterializableSplitAction(task.sizePlan.action) && task.status === 'ready') {
+        materializeSplitChildren(queue, task, sizePlanCreatedAt)
       }
     }
     task.updatedAt = new Date().toISOString()
     queue.lastUpdated = new Date().toISOString()
 
-    atomicWriteText(input.tasksPath, JSON.stringify(queue, null, 2) + '\n')
+    await persistUpdateTaskRuntimeState(input.tasksPath, task)
+    writeProjectTaskQueue(input.tasksPath, queue)
+    await appendUpdateTaskEvidence({
+      tasksPath: input.tasksPath,
+      taskId,
+      note: noteEvidence,
+      gateResults: gateEvidence,
+    })
     return { success: true, taskId }
   } catch (err) {
     return { success: false, error: String(err) }
   }
 }
 
-export function materializeRequiredSplitChildren(
+function projectRootForTaskState(tasksPath: string, task: z.infer<typeof Task>): string {
+  const stateDir = path.dirname(tasksPath)
+  if (path.basename(stateDir) === 'project-state' && path.isAbsolute(task.projectPath)) {
+    return task.projectPath
+  }
+  return inferProjectRootFromMemoryDir(stateDir)
+}
+
+async function persistUpdateTaskRuntimeState(tasksPath: string, task: z.infer<typeof Task>): Promise<void> {
+  await upsertTaskRuntimeState(projectRootForTaskState(tasksPath, task), task.id, {
+    assignedTo: Object.prototype.hasOwnProperty.call(task, 'assignedTo') ? task.assignedTo ?? null : null,
+    ...(typeof task.revisionCount === 'number' ? { revisionCount: task.revisionCount } : {}),
+    ...(task.retryWindow ? { retryWindow: task.retryWindow } : {}),
+    ...(typeof task.remediationAttempts === 'number' ? { remediationAttempts: task.remediationAttempts } : {}),
+    updatedAt: task.updatedAt,
+  })
+}
+
+async function appendUpdateTaskEvidence(input: {
+  tasksPath: string
+  taskId: string
+  note: { agentId: string; role: string; content: string; timestamp: string } | null
+  gateResults: Array<z.infer<typeof GateResult>>
+}): Promise<void> {
+  if (!input.note && input.gateResults.length === 0) return
+  const projectRoot = inferProjectRootFromMemoryDir(path.dirname(input.tasksPath))
+  const events: Array<Omit<TaskEvidenceEvent, 'taskId'>> = []
+  if (input.note) {
+    events.push({
+      id: `${input.taskId}-note-${input.note.timestamp.replace(/[^0-9A-Za-z]/g, '')}`,
+      kind: 'note',
+      recordedAt: input.note.timestamp,
+      payload: input.note,
+    })
+  }
+  for (const result of input.gateResults) {
+    events.push({
+      id: `${input.taskId}-gate-${result.gateId}-${result.checkedAt.replace(/[^0-9A-Za-z]/g, '')}`,
+      kind: 'gate_result',
+      recordedAt: result.checkedAt,
+      payload: result,
+    })
+  }
+  for (const event of events) {
+    await appendTaskEvidence(projectRoot, input.taskId, event)
+  }
+}
+
+export function materializeSplitChildren(
   queue: TaskQueueRecord,
   parent: TaskRecord,
   timestamp: string,
 ): void {
-  if (parent.sizePlan?.action !== 'split_required') return
-  if (!parent.parentGoalId) parent.parentGoalId = `goal-${parent.id}`
-  const recommendations = parent.sizePlan.recommendedChildren ?? []
+  const sizePlan = parent.sizePlan
+  if (!sizePlan || !isMaterializableSplitAction(sizePlan.action)) return
+  const recommendations = sizePlan.recommendedChildren ?? []
   if (recommendations.length === 0) return
+  const splitLabel = sizePlan.action === 'split_required' ? 'Split-required' : 'Split-recommended'
+  const splitNote = sizePlan.action === 'split_required' ? 'Split required' : 'Split recommended'
 
+  const existingChildIds = new Set(parent.hierarchy?.childIds ?? [])
   const planned = recommendations.map((recommendation, index) => {
     const existingById = recommendation.createdTaskId
       ? queue.tasks.find((task) => task.id === recommendation.createdTaskId)
       : undefined
     const existingByTitle = queue.tasks.find((task) =>
       task.id !== parent.id &&
-      task.parentGoalId === parent.parentGoalId &&
+      task.hierarchy?.parentId === parent.id &&
       normalizeTaskTitle(task.title) === normalizeTaskTitle(recommendation.title),
     )
     const task = existingById ?? existingByTitle ?? createSplitChildTask({
@@ -271,6 +406,14 @@ export function materializeRequiredSplitChildren(
     })
     if (!queue.tasks.some((candidate) => candidate.id === task.id)) queue.tasks.push(task)
     recommendation.createdTaskId = task.id
+    task.hierarchy = {
+      ...(task.hierarchy ?? {}),
+      parentId: parent.id,
+      order: index,
+      childIds: task.hierarchy?.childIds ?? [],
+    }
+    attachInternalDeliveryStep(parent, task)
+    existingChildIds.add(task.id)
     return { recommendation, task }
   })
 
@@ -278,16 +421,62 @@ export function materializeRequiredSplitChildren(
     normalizeTaskTitle(recommendation.title),
     task.id,
   ]))
+  const workUnitIdToId = new Map<string, string>()
+  const workUnits = parent.workUnitAnalysis?.units ?? []
+  planned.forEach(({ recommendation, task }, index) => {
+    const matchingUnit =
+      workUnits[index]?.title === recommendation.title
+        ? workUnits[index]
+        : workUnits.find((unit) => normalizeTaskTitle(unit.title) === normalizeTaskTitle(recommendation.title))
+    if (matchingUnit?.id) workUnitIdToId.set(matchingUnit.id, task.id)
+  })
   for (const { recommendation, task } of planned) {
     task.dependsOn = (recommendation.dependsOn ?? [])
-      .map((dependency) => titleToId.get(normalizeTaskTitle(dependency)) ?? dependency)
+      .map((dependency) => workUnitIdToId.get(dependency) ?? titleToId.get(normalizeTaskTitle(dependency)) ?? dependency)
       .filter((dependency, index, all) => dependency !== task.id && all.indexOf(dependency) === index)
     task.updatedAt = timestamp
   }
-  parent.status = 'parent'
+  parent.hierarchy = {
+    ...(parent.hierarchy ?? {}),
+    order: parent.hierarchy?.order ?? 0,
+    childIds: [...existingChildIds],
+  }
+  parent.taskReadiness = {
+    taskKind: parent.taskReadiness?.taskKind ?? parent.taskKind ?? 'implementation',
+    recommendation: 'split',
+    summary: `${splitLabel} work is represented by linked child tasks.`,
+    dimensions: parent.taskReadiness?.dimensions ?? [],
+    definitionOfDone: parent.taskReadiness?.definitionOfDone ?? {
+      items: ['All required child tasks are done or explicitly deferred.'],
+      evidenceRequired: ['Linked child task outcomes are recorded before the containing work is closed.'],
+      updatedAt: timestamp,
+      createdBy: 'task-sizing',
+    },
+    blockerPlans: parent.taskReadiness?.blockerPlans ?? [],
+    contextBudget: parent.taskReadiness?.contextBudget ?? {
+      estimatedTokens: 0,
+      risk: 'medium',
+      fitsInOneWorkerBrief: false,
+      reasons: ['This work was split into linked child tasks.'],
+    },
+    assessedAt: parent.taskReadiness?.assessedAt ?? timestamp,
+    assessedBy: parent.taskReadiness?.assessedBy ?? 'task-sizing',
+  }
+  if (!['blocked', 'review', 'gate_check', 'done', 'shelved'].includes(parent.status)) {
+    if (parent.status !== 'ready') {
+      const transitionResult = applyTaskTransition({
+        task: parent,
+        event: 'mark_ready',
+        actor: 'task-sizing',
+        evidenceRefs: ['task:split-children-materialized'],
+        now: timestamp,
+      })
+      if (transitionResult.kind === 'applied') parent.status = transitionResult.nextState
+    }
+  }
   delete parent.assignedTo
 
-  const notePrefix = 'Split required: created linked child tasks'
+  const notePrefix = `${splitNote}: created linked child tasks`
   if (!parent.notes.some((note) => note.agentId === 'task-sizing' && note.content.startsWith(notePrefix))) {
     parent.notes.push({
       agentId: 'task-sizing',
@@ -295,6 +484,54 @@ export function materializeRequiredSplitChildren(
       content: `${notePrefix}: ${planned.map(({ task }) => task.id).join(', ')}.`,
       timestamp,
     })
+  }
+}
+
+export const materializeRequiredSplitChildren = materializeSplitChildren
+
+export function isMaterializableSplitAction(action: string | undefined): boolean {
+  return action === 'split_required' || action === 'split_recommended'
+}
+
+function attachInternalDeliveryStep(parent: TaskRecord, child: TaskRecord): void {
+  if (child.workKind !== 'test' && child.workKind !== 'verification') return
+  child.workVisibility = {
+    ...(child.workVisibility ?? {}),
+    kind: 'internal_step',
+    countInProjectTotals: false,
+  }
+  const stepId = `task:${child.id}`
+  const hasStep = parent.deliverySteps?.some(step => step.id === stepId || step.sourceTaskId === child.id)
+  if (hasStep) return
+  parent.deliverySteps = [
+    ...(parent.deliverySteps ?? []),
+    {
+      id: stepId,
+      title: child.title,
+      kind: 'verify',
+      status: deliveryStepStatusForTask(child.status),
+      required: true,
+      blocksCompletion: true,
+      sourceTaskId: child.id,
+    },
+  ]
+}
+
+function deliveryStepStatusForTask(status: string | undefined): 'todo' | 'active' | 'blocked' | 'done' | 'waived' {
+  switch (status) {
+    case 'done':
+    case 'pending_pr':
+      return 'done'
+    case 'blocked':
+      return 'blocked'
+    case 'in_progress':
+    case 'review':
+    case 'gate_check':
+      return 'active'
+    case 'shelved':
+      return 'waived'
+    default:
+      return 'todo'
   }
 }
 
@@ -308,13 +545,14 @@ function createSplitChildTask(input: {
   timestamp: string
 }): TaskRecord {
   const id = uniqueSplitChildTaskId(input.queue, input.parent.id, input.title, input.index)
+  const workKind = splitChildWorkKind(input.title)
   return Task.parse({
     id,
     title: input.title,
     description: [
       input.reason,
       '',
-      `Split from parent task ${input.parent.id}: ${input.parent.title}.`,
+      `Split from containing work ${input.parent.id}: ${input.parent.title}.`,
     ].join('\n'),
     domain: input.suggestedDomain ?? input.parent.domain,
     projectPath: input.parent.projectPath,
@@ -327,7 +565,7 @@ function createSplitChildTask(input: {
       {
         agentId: 'task-sizing',
         role: 'coordinator',
-        content: `Created from split-required parent ${input.parent.id}. ${input.reason}`,
+        content: `Created from ${input.parent.sizePlan?.action === 'split_required' ? 'split-required' : 'split-recommended'} parent ${input.parent.id}. ${input.reason}`,
         timestamp: input.timestamp,
       },
     ],
@@ -339,10 +577,27 @@ function createSplitChildTask(input: {
     origination: 'system',
     proposedBy: 'task-sizing',
     proposalRationale: input.reason,
-    parentGoalId: input.parent.parentGoalId,
+    workKind,
+    delivery: {
+      ...(input.parent.delivery ?? {}),
+      supports: [
+        input.parent.id,
+        ...(input.parent.delivery?.supports ?? []),
+      ].filter((supportId, index, all) => all.indexOf(supportId) === index),
+    },
+    businessEnvelope: input.parent.businessEnvelope,
     createdAt: input.timestamp,
     updatedAt: input.timestamp,
   })
+}
+
+function splitChildWorkKind(title: string): TaskRecord['workKind'] {
+  const normalized = normalizeTaskTitle(title)
+  if (/\bprimitive\b|\bmenuitem\b|\bmenu item\b/.test(normalized)) return 'primitive'
+  if (/\bstorybook\b|\bstory\b/.test(normalized)) return 'story'
+  if (/\btest\b|\be2e\b|\bproof\b|\bverification\b/.test(normalized)) return 'test'
+  if (/\bcomponent\b|\bimplementation\b/.test(normalized)) return 'component'
+  return 'implementation'
 }
 
 function uniqueSplitChildTaskId(queue: TaskQueueRecord, parentId: string, title: string, index: number): string {
@@ -385,7 +640,6 @@ function normalizeAssignmentForStatus(
       task.assignedTo = 'gate-checker-agent'
       return
     case 'ready':
-    case 'parent':
     case 'spec_review':
     case 'exploring':
     case 'proposed':
@@ -398,6 +652,50 @@ function normalizeAssignmentForStatus(
   }
 }
 
+function eventForExplicitStatus(from: z.infer<typeof TaskStatus>, to: z.infer<typeof TaskStatus>): TaskTransitionEvent {
+  switch (to) {
+    case 'import_draft':
+      return 'mark_import_draft'
+    case 'exploring':
+      return from === 'import_draft' ? 'start_intake' : 'recover_to_exploring'
+    case 'spec_review':
+      return from === 'blocked' ? 'recover_to_spec_review' : 'mark_spec_review'
+    case 'ready':
+      return from === 'blocked' ? 'recover_to_ready' : 'mark_ready'
+    case 'in_progress':
+      if (from === 'review' || from === 'gate_check') return 'revise'
+      if (from === 'blocked') return 'recover_to_in_progress'
+      return 'start_worker'
+    case 'review':
+      return from === 'blocked' ? 'recover_to_review' : 'request_review'
+    case 'gate_check':
+      return 'start_gate_check'
+    case 'pending_pr':
+      return 'await_pull_request'
+    case 'done':
+      return 'complete'
+    case 'blocked':
+      return 'block'
+    case 'shelved':
+      return 'shelve'
+    case 'proposed':
+      return 'recover_to_exploring'
+  }
+}
+
+function updateIncludesCompletionEvidence(input: UpdateTaskInput, task: z.infer<typeof Task>): boolean {
+  if (input.completedAt?.trim()) return true
+  if (input.gateResults?.some((result) => result.type === 'hard' && result.passed)) return true
+  if (Array.isArray(input.acceptanceCriteria)) {
+    for (const criterion of input.acceptanceCriteria) {
+      const parsed = AcceptanceCriteria.safeParse(criterion)
+      if (parsed.success && parsed.data.met === true) return true
+    }
+  }
+  if (task.gateResults.some((result) => result.type === 'hard' && result.passed)) return true
+  return task.acceptanceCriteria.length > 0 && task.acceptanceCriteria.every((criterion) => criterion.met === true)
+}
+
 function hasTaskMutation(input: UpdateTaskInput): boolean {
   return input.title !== undefined ||
     input.status !== undefined ||
@@ -406,8 +704,10 @@ function hasTaskMutation(input: UpdateTaskInput): boolean {
     input.blockReason !== undefined ||
     input.humanJudgment !== undefined ||
     input.spec !== undefined ||
+    input.structuredSpec !== undefined ||
     input.acceptanceCriteria !== undefined ||
     input.workUnitAnalysis !== undefined ||
+    input.delivery !== undefined ||
     input.gateResults !== undefined ||
     input.completedAt !== undefined
 }
@@ -521,9 +821,10 @@ function importedAreaLabel(task: z.infer<typeof Task>): string | null {
 
 function firstSpecSummaryLine(spec: string | undefined): string | null {
   if (typeof spec !== 'string' || !spec.trim()) return null
-  const normalized = spec.replace(/^## Summary\s*/i, '').trim()
-  const summaryMatch = normalized.match(/^([\s\S]*?)(?:\n## |\n### |\Z)/i)
-  const summaryBlock = (summaryMatch?.[1] ?? normalized).trim()
+  const anchor = /^##\s+(?:Summary|What this is)\s*$/im.exec(spec)
+  const normalized = anchor ? spec.slice(anchor.index + anchor[0].length).trim() : spec.trim()
+  const nextHeadingIndex = normalized.search(/\n##\s|\n###\s/)
+  const summaryBlock = (nextHeadingIndex >= 0 ? normalized.slice(0, nextHeadingIndex) : normalized).trim()
   if (!summaryBlock) return null
   const firstParagraph = summaryBlock.split(/\n\s*\n/)[0]?.trim() ?? ''
   if (!firstParagraph) return null
@@ -540,7 +841,7 @@ function lowercaseFirst(value: string): string {
 export const updateTaskTool = defineTool({
   name: 'update-task',
   description:
-    "Update a task's title, status, spec, acceptance criteria, assignment, or notes. Use this to transition tasks through the lifecycle.",
+    "Update a task's title, status, spec, structuredSpec, acceptance criteria, assignment, or notes. Use this to transition tasks through the lifecycle.",
   inputSchema: updateTaskInputSchema,
   jsonSchema: {
     type: 'object',
@@ -577,6 +878,7 @@ export const updateTaskTool = defineTool({
       blockReason: { type: 'string' },
       humanJudgment: { type: 'string' },
       spec: { type: 'string' },
+      structuredSpec: { type: 'object', description: 'Structured JSON spec payload. Guildhall renders this into markdown deterministically.' },
       acceptanceCriteria: {
         type: 'array',
         items: {
@@ -584,8 +886,12 @@ export const updateTaskTool = defineTool({
           properties: {
             id: { type: 'string' },
             description: { type: 'string' },
+            scenario: { type: 'string' },
+            expectation: { type: 'string' },
             verifiedBy: { type: 'string', enum: ['automated', 'review', 'human'] },
             command: { type: 'string' },
+            evidenceHint: { type: 'string' },
+            negativeCase: { type: 'string' },
             met: { type: 'boolean' },
           },
           required: ['id', 'description', 'verifiedBy'],
@@ -668,7 +974,7 @@ export interface AddTaskResult {
 
 export async function addTask(input: AddTaskInput): Promise<AddTaskResult> {
   try {
-    const raw = await fs.readFile(input.tasksPath, 'utf-8')
+    const raw = await readManagedTextFile(input.tasksPath, 'utf-8')
     const queue = TaskQueue.parse(JSON.parse(raw))
     const newTask = Task.parse({
       ...input.task,
@@ -678,7 +984,7 @@ export async function addTask(input: AddTaskInput): Promise<AddTaskResult> {
     })
     queue.tasks.push(newTask)
     queue.lastUpdated = new Date().toISOString()
-    atomicWriteText(input.tasksPath, JSON.stringify(queue, null, 2) + '\n')
+    writeProjectTaskQueue(input.tasksPath, queue)
     return { success: true, taskId: newTask.id }
   } catch (err) {
     return { success: false, error: String(err) }

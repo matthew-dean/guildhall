@@ -30,12 +30,19 @@ export function taskHasUnansweredOpenQuestion(task: Task): boolean {
   return hasUnansweredOpenQuestion(task)
 }
 
-function holdsDraftedSpecReviewForManualApproval(task: Task): boolean {
+export function specReviewRequiresOwnerApproval(task: Pick<Task, 'id'>): boolean {
   return task.id === META_INTAKE_TASK_ID || task.id === WORKSPACE_IMPORT_TASK_ID
 }
 
 function finishabilityAllowsDispatch(task: Task): boolean {
   return task.status !== 'ready' || task.taskReadiness == null || task.taskReadiness.recommendation === 'ready'
+}
+
+function isContainingWorkTask(queue: TaskQueue, task: Task): boolean {
+  return workSubtreeIds(queue.tasks, task.id).length > 1 ||
+    task.workKind === 'app_spec' ||
+    task.workKind === 'feature_spec' ||
+    Boolean(task.completionBoundary)
 }
 
 /**
@@ -86,6 +93,10 @@ export function dependenciesSatisfied(queue: TaskQueue, task: Task): boolean {
   })
 }
 
+function taskById(queue: TaskQueue, taskId: string): Task | undefined {
+  return queue.tasks.find((candidate) => candidate.id === taskId)
+}
+
 /**
  * Highest-priority actionable task.
  *
@@ -118,18 +129,38 @@ export function pickNextTask(
     task: Task,
     status: TaskStatus,
     priorityLevel: (typeof priority)[number],
+    opts: { respectScope?: boolean } = {},
   ): boolean =>
     task.status === status &&
     finishabilityAllowsDispatch(task) &&
-    !(task.status === 'spec_review' && Boolean(task.spec?.trim()) && holdsDraftedSpecReviewForManualApproval(task)) &&
+    !isContainingWorkTask(queue, task) &&
+    !(task.status === 'spec_review' && Boolean(task.spec?.trim()) && specReviewRequiresOwnerApproval(task)) &&
     !((task.status === 'exploring' || task.status === 'spec_review') && hasUnansweredOpenQuestion(task)) &&
     matchesLane(task) &&
     task.priority === priorityLevel &&
     (!domain || task.domain === domain) &&
-    matchesScope(task) &&
+    (opts.respectScope === false || matchesScope(task)) &&
     dependenciesSatisfied(queue, task) &&
     !hasOpenEscalation(task) &&
     !isExcluded(task)
+
+  const firstRunnableBlocker = (task: Task, seen = new Set<string>([task.id])): Task | undefined => {
+    for (const dependencyId of task.dependsOn ?? []) {
+      const dependency = taskById(queue, dependencyId)
+      if (!dependency || dependency.status === 'done' || seen.has(dependency.id)) continue
+      seen.add(dependency.id)
+
+      const deeper = firstRunnableBlocker(dependency, seen)
+      if (deeper) return deeper
+
+      for (const status of [...activeStatuses, ...freshStatuses]) {
+        for (const p of priority) {
+          if (matchesStatusSlot(dependency, status, p, { respectScope: false })) return dependency
+        }
+      }
+    }
+    return undefined
+  }
 
   // FR-22: worker-shelved tasks pending `pre_rejection_policy` are serviced
   // first — they're cheap (no LLM) and keeping the board clear of unresolved
@@ -167,6 +198,8 @@ export function pickNextTask(
   if (preferredTaskId) {
     const preferred = queue.tasks.find((task) => task.id === preferredTaskId)
     if (preferred) {
+      const runnableBlocker = firstRunnableBlocker(preferred)
+      if (runnableBlocker) return runnableBlocker
       for (const status of [...activeStatuses, ...freshStatuses]) {
         for (const p of priority) {
           if (matchesStatusSlot(preferred, status, p)) return preferred

@@ -49,13 +49,13 @@ describe('work hierarchy', () => {
     const tasks = [
       task({
         id: 'app-spec',
-        status: 'parent',
+        status: 'ready',
         workKind: 'app_spec',
         hierarchy: { childIds: ['feature-link-editor'], order: 0 },
       }),
       task({
         id: 'feature-link-editor',
-        status: 'parent',
+        status: 'ready',
         workKind: 'feature_spec',
         hierarchy: { parentId: 'app-spec', childIds: ['implement-link-editor', 'verify-link-editor'], order: 0 },
       }),
@@ -103,10 +103,10 @@ describe('work hierarchy', () => {
     expect(model.byId.get('setup-preview-token')?.parentId).toBeNull()
   })
 
-  it('maps legacy parentGoalId into containing work language', () => {
+  it('uses only explicit hierarchy links for containing work language', () => {
     const tasks = [
-      task({ id: 'feature-shell', status: 'parent', parentGoalId: 'goal-task-feature-shell' }),
-      task({ id: 'implementation-child', status: 'ready', parentGoalId: 'goal-task-feature-shell' }),
+      task({ id: 'feature-shell', status: 'ready', hierarchy: { childIds: ['implementation-child'], order: 0 } }),
+      task({ id: 'implementation-child', status: 'ready', hierarchy: { parentId: 'feature-shell', childIds: [], order: 0 } }),
     ]
 
     const model = buildWorkHierarchy(tasks)
@@ -120,7 +120,7 @@ describe('work hierarchy', () => {
     const tasks = [
       task({
         id: 'feature-link-editor',
-        status: 'parent',
+        status: 'ready',
         completionBoundary: {
           summary: 'Feature is complete when required implementation and browser proof are done.',
           requiredChildPolicy: 'selected_children_done',
@@ -150,7 +150,7 @@ describe('work hierarchy', () => {
       task({ id: 'decision', status: 'blocked', escalations: [{ id: 'esc-1', taskId: 'decision', agentId: 'spec', reason: 'decision_required', summary: 'Pick auth mode.', raisedAt: now }] }),
       task({ id: 'worker', status: 'in_progress' }),
       task({ id: 'ready', status: 'ready' }),
-      task({ id: 'container', status: 'parent' }),
+      task({ id: 'container', status: 'ready', workKind: 'feature_spec' }),
       task({ id: 'blocked', status: 'blocked' }),
       task({ id: 'done', status: 'done' }),
       task({ id: 'shelved', status: 'shelved' }),
@@ -167,7 +167,7 @@ describe('work hierarchy', () => {
 
   it('scoped task start does not dispatch unrelated ready work', () => {
     const q = queue([
-      task({ id: 'container', status: 'parent', hierarchy: { childIds: ['child-blocked'], order: 0 } }),
+      task({ id: 'container', status: 'ready', hierarchy: { childIds: ['child-blocked'], order: 0 } }),
       task({ id: 'child-blocked', status: 'blocked', hierarchy: { parentId: 'container', childIds: [], order: 0 } }),
       task({ id: 'unrelated-ready', status: 'ready' }),
     ])
@@ -177,11 +177,22 @@ describe('work hierarchy', () => {
 
   it('scoped task start can dispatch the next eligible child inside a containing work subtree', () => {
     const q = queue([
-      task({ id: 'container', status: 'parent', hierarchy: { childIds: ['child-ready'], order: 0 } }),
+      task({ id: 'container', status: 'ready', hierarchy: { childIds: ['child-ready'], order: 0 } }),
       task({ id: 'child-ready', status: 'ready', hierarchy: { parentId: 'container', childIds: [], order: 0 } }),
       task({ id: 'unrelated-high', status: 'ready', priority: 'critical' }),
     ])
 
+    expect(pickNextTask(q, undefined, undefined, undefined, 'container')?.id).toBe('child-ready')
+  })
+
+  it('scoped task start treats reverse-linked children as containing work', () => {
+    const q = queue([
+      task({ id: 'container', status: 'ready', hierarchy: { childIds: [], order: 0 } }),
+      task({ id: 'child-ready', status: 'ready', hierarchy: { parentId: 'container', childIds: [], order: 0 } }),
+      task({ id: 'unrelated-high', status: 'ready', priority: 'critical' }),
+    ])
+
+    expect(workSubtreeIds(q.tasks, 'container')).toEqual(['container', 'child-ready'])
     expect(pickNextTask(q, undefined, undefined, undefined, 'container')?.id).toBe('child-ready')
   })
 })

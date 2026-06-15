@@ -1,14 +1,16 @@
 <script lang="ts">
-  import { AlertTriangle, CheckCircle2, FolderOpen, Inbox } from 'lucide-svelte'
+  import AlertTriangle from 'lucide-svelte/icons/triangle-alert'
+  import CheckCircle2 from 'lucide-svelte/icons/check-circle-2'
+  import FolderOpen from 'lucide-svelte/icons/folder-open'
+  import Inbox from 'lucide-svelte/icons/inbox'
   import ActionBar from '../lib/ActionBar.svelte'
   import Button from '../lib/Button.svelte'
-  import Card from '../lib/Card.svelte'
+  import Card from '../lib/ui-compat/Card.svelte'
   import ProjectsShell from '../lib/layout/ProjectsShell.svelte'
   import { nav } from '../lib/nav.svelte.js'
   import { projectHref } from '../lib/project-routes.js'
-  import { getCachedService, setCachedService } from '../lib/service-cache.js'
   import { inboxItemKey, type InboxItem } from '../lib/inbox-item-key.js'
-  import type { ServiceDetail, ServiceProjectSummary } from '../lib/types.js'
+  import type { ServiceProjectSummary } from '../lib/types.js'
 
   type ProjectInboxGroup = {
     project: ServiceProjectSummary
@@ -16,16 +18,19 @@
     error: string | null
   }
 
-  const cachedService = getCachedService()
-  let loading = $state(cachedService == null)
+  interface FleetAttentionSummary {
+    groups?: ProjectInboxGroup[]
+  }
+
+  let loading = $state(true)
   let error = $state<string | null>(null)
-  let groups = $state<ProjectInboxGroup[]>(cachedService ? groupsFromServiceSummary(cachedService) : [])
+  let groups = $state<ProjectInboxGroup[]>([])
   const REQUEST_TIMEOUT_MS = 5000
   const LOAD_WATCHDOG_MS = 6500
 
   function requestErrorMessage(err: unknown): string {
     if (err instanceof TypeError && /fetch/i.test(err.message)) {
-      return 'Guildhall service did not answer that request. The service may have restarted; try again after it reconnects.'
+      return 'The local service did not answer that request. It may have restarted; try again after it reconnects.'
     }
     return err instanceof Error ? err.message : String(err)
   }
@@ -35,62 +40,13 @@
       case 'required_migration': return 'Migrate'
       case 'project_understanding': return 'Reconcile'
       case 'workspace_import_pending': return 'Review import'
-      case 'pressure_test_pending': return 'Answer question'
-      case 'agent_question_pending': return 'Answer question'
       case 'import_draft_queue': return 'Review draft'
-      case 'brief_approval':
-      case 'spec_approval': return 'Review'
-      case 'open_escalation': return 'Resolve'
+      case 'contract_result_review': return 'Review result'
       case 'bootstrap_missing': return 'Configure'
       case 'lever_questions': return 'Review'
       case 'spec_fill_pending': return item.taskId === 'task-workspace-import' ? 'Review import' : 'Open checklist'
       default: return 'Open'
     }
-  }
-
-  function groupsFromServiceSummary(service: ServiceDetail): ProjectInboxGroup[] {
-    return (service.projects ?? []).flatMap(project => {
-      const counts = project.taskCounts
-      if (!counts) return []
-      const items: InboxItem[] = []
-      if (counts.blocked > 0) {
-        items.push({
-          kind: 'open_escalation',
-          severity: 'high',
-          title: `${counts.blocked} blocked ${counts.blocked === 1 ? 'task' : 'tasks'}`,
-          detail: project.highlights?.blockedTaskTitle ?? 'Open the project inbox to resolve blockers.',
-          actionHref: '/overview/inbox',
-        } as InboxItem)
-      }
-      if (counts.draftReview > 0) {
-        items.push({
-          kind: 'import_draft_queue',
-          severity: 'medium',
-          title: `${counts.draftReview} draft ${counts.draftReview === 1 ? 'brief' : 'briefs'}`,
-          detail: 'Review drafted task briefs before Guildhall starts implementation.',
-          actionHref: '/overview/inbox',
-        } as InboxItem)
-      }
-      if (project.projectCheckIn?.needed) {
-        items.push({
-          kind: 'project_check_in',
-          severity: 'medium',
-          title: project.projectCheckIn.title ?? 'Project questions',
-          detail: project.projectCheckIn.detail ?? 'Answer the project questions before Guildhall starts guessing.',
-          actionHref: project.projectCheckIn.actionHref ?? '/thread',
-        } as InboxItem)
-      }
-      if (project.providerStatus?.warnings?.[0]) {
-        items.push({
-          kind: 'bootstrap_missing',
-          severity: 'high',
-          title: 'Provider warning',
-          detail: project.providerStatus.warnings[0].message,
-          actionHref: '/providers',
-        } as InboxItem)
-      }
-      return items.length > 0 ? [{ project, items, error: null }] : []
-    })
   }
 
   async function fetchJsonWithTimeout<T>(url: string): Promise<T> {
@@ -128,10 +84,6 @@
   }
 
   function goToItem(projectId: string, item: InboxItem): void {
-    if (item.kind === 'brief_approval' || item.kind === 'spec_approval') {
-      nav(projectHref(projectId, '/thread'))
-      return
-    }
     if (item.actionHref) {
       nav(projectHref(projectId, item.actionHref))
       return
@@ -143,30 +95,9 @@
     loading = true
     groups = []
     try {
-      const service = await fetchJsonWithTimeout<ServiceDetail>('/api/service')
-      setCachedService(service)
-      const projects = service.projects ?? []
+      const attention = await fetchJsonWithTimeout<FleetAttentionSummary>('/api/fleet/attention')
       error = null
-      const nextGroups = await Promise.all(projects.map(async project => {
-        try {
-          const body = await fetchJsonWithTimeout<{ items?: InboxItem[] }>(
-            `/api/project/inbox?projectId=${encodeURIComponent(project.id)}`,
-          )
-          const nextGroup = {
-            project,
-            items: (body.items ?? []).filter(item => item.severity !== 'low'),
-            error: null,
-          } satisfies ProjectInboxGroup
-          return nextGroup.items.length > 0 ? nextGroup : null
-        } catch (err) {
-          return {
-            project,
-            items: [],
-            error: requestErrorMessage(err),
-          } satisfies ProjectInboxGroup
-        }
-      }))
-      groups = nextGroups.filter((group): group is ProjectInboxGroup => group !== null)
+      groups = (attention.groups ?? []).filter(group => group.items.length > 0 || group.error)
     } catch (err) {
       error = requestErrorMessage(err)
       groups = []
@@ -184,7 +115,7 @@
 
   setTimeout(() => {
     if (!loading || groups.length > 0) return
-    error = 'Guildhall could not finish loading the fleet inbox. Use Refresh to try again, or open a project directly.'
+    error = 'The fleet inbox could not finish loading. Use Refresh to try again, or open a project directly.'
     loading = false
   }, LOAD_WATCHDOG_MS)
 </script>
@@ -194,7 +125,7 @@
     <header class="hero">
       <div>
         <h1>Needs you</h1>
-        <p class="lede">All project decisions, questions, and recovery items grouped by project.</p>
+        <p class="lede">Project alerts and durable follow-ups grouped by project.</p>
       </div>
       <ActionBar>
         <Button variant="secondary" onclick={() => nav('/')}>Projects</Button>
@@ -276,13 +207,13 @@
   }
   h1 {
     margin: 0;
-    font-size: clamp(1.25rem, 1.8vw, 1.65rem);
-    line-height: var(--lh-tight);
+    font-size: var(--gh-type-size-page-title);
+    line-height: var(--gh-type-line-height-tight);
   }
   .lede {
     margin: var(--s-1) 0 0;
     color: var(--text-muted);
-    font-size: var(--fs-0);
+    font-size: var(--gh-type-size-caption);
   }
   .notice,
   .empty,
@@ -312,7 +243,7 @@
   .summary {
     padding: var(--s-2) var(--s-3);
     color: var(--text-muted);
-    font-size: var(--fs-1);
+    font-size: var(--gh-type-size-meta);
   }
   .summary span {
     display: inline-flex;
@@ -336,13 +267,13 @@
   }
   .group-head h2 {
     margin: 0;
-    font-size: var(--fs-3);
-    line-height: var(--lh-tight);
+    font-size: var(--gh-type-size-panel-title);
+    line-height: var(--gh-type-line-height-tight);
   }
   .group-head p {
     margin: var(--s-1) 0 0;
     color: var(--text-muted);
-    font-size: var(--fs-1);
+    font-size: var(--gh-type-size-meta);
   }
   .items {
     list-style: none;
@@ -395,19 +326,19 @@
   }
   .item-body strong {
     color: var(--text);
-    font-weight: 650;
+    font-weight: var(--gh-type-weight-strong);
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
   }
   .item-body span {
     color: var(--text-muted);
-    font-size: var(--fs-1);
+    font-size: var(--gh-type-size-meta);
     display: -webkit-box;
     -webkit-line-clamp: 2;
     -webkit-box-orient: vertical;
     overflow: hidden;
-    line-height: var(--lh-body);
+    line-height: var(--gh-type-line-height-body);
   }
   .item-verb {
     display: inline-flex;
@@ -419,8 +350,8 @@
     border-radius: var(--r-1);
     background: color-mix(in srgb, var(--accent) 12%, transparent);
     color: var(--text);
-    font-size: var(--fs-1);
-    font-weight: 700;
+    font-size: var(--gh-type-size-meta);
+    font-weight: var(--gh-type-weight-strong);
     white-space: nowrap;
   }
   :global(.group-actions .btn) {

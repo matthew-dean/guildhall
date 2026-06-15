@@ -10,6 +10,7 @@
   optional skip markers.
 -->
 <script lang="ts">
+  import Chip from '../../lib/Chip.svelte'
   import Stack from '../../lib/Stack.svelte'
   import { projectFetch } from '../../lib/project-routes.js'
 
@@ -105,6 +106,13 @@
     if (status === 'skipped') return 'warn'
     return 'pending'
   }
+
+  function chipToneFor(status: Status, isActive: boolean): 'ok' | 'warn' | 'accent' | 'neutral' {
+    if (status === 'done') return 'ok'
+    if (status === 'skipped') return 'warn'
+    if (isActive) return 'accent'
+    return 'neutral'
+  }
 </script>
 
 {#if loaded && wizard && !wizard.complete}
@@ -113,7 +121,7 @@
       <div class="summary">
         <strong>Task brief checklist</strong>
         <span class="muted">
-          {wizard.doneCount} of {wizard.totalSteps} — finish this so Guildhall can review the task cleanly
+          {wizard.doneCount} of {wizard.totalSteps} — finish this so the task can be reviewed cleanly
         </span>
       </div>
       <button
@@ -142,15 +150,16 @@
                 <span class="title">{step.title}</span>
                 <span class="why">{step.why}</span>
               </span>
-              <span class="chip">
-                {step.status === 'done'
+              <Chip
+                label={step.status === 'done'
                   ? 'done'
                   : step.status === 'skipped'
                     ? 'skipped'
                     : isActive
                       ? 'do next'
                       : 'pending'}
-              </span>
+                tone={chipToneFor(step.status, isActive)}
+              />
             </button>
             {#if step.status === 'pending' && step.skippable}
               <button
@@ -204,13 +213,13 @@
     align-items: baseline;
     flex-wrap: wrap;
   }
-  .muted { color: var(--text-muted); font-size: var(--fs-1); }
+  .muted { color: var(--text-muted); font-size: var(--gh-type-size-meta); }
   .toggle {
     background: none;
     border: none;
     color: var(--text-muted);
     font: inherit;
-    font-size: var(--fs-1);
+    font-size: var(--gh-type-size-meta);
     text-decoration: underline;
     cursor: pointer;
   }
@@ -255,34 +264,21 @@
     flex: 1;
   }
   .title {
-    font-size: var(--fs-2);
-    font-weight: 600;
+    font-size: var(--gh-type-size-body);
+    font-weight: var(--gh-type-weight-strong);
   }
   .step.tone-ok .title { color: var(--text-muted); text-decoration: line-through; }
   .why {
-    font-size: var(--fs-1);
+    font-size: var(--gh-type-size-meta);
     color: var(--text-muted);
-    line-height: var(--lh-body);
+    line-height: var(--gh-type-line-height-body);
   }
-  .chip {
-    font-size: var(--fs-0);
-    font-weight: 700;
-    text-transform: uppercase;
-    letter-spacing: 0.04em;
-    padding: 2px 8px;
-    border-radius: 999px;
-    background: var(--bg);
-    color: var(--text-muted);
-  }
-  .step.tone-ok .chip { background: var(--ok-bg, #1a3a1f); color: var(--ok, #6fcf6f); }
-  .step.tone-warn .chip { background: var(--warn-bg, #3a2c14); color: var(--warn, #d0a146); }
-  .step.active .chip { background: var(--warn-bg, #3a2c14); color: var(--warn, #d0a146); }
   .linky {
     background: none;
     border: none;
     color: var(--text-muted);
     font: inherit;
-    font-size: var(--fs-1);
+    font-size: var(--gh-type-size-meta);
     text-decoration: underline;
     cursor: pointer;
     padding: 0 0 0 var(--s-1);

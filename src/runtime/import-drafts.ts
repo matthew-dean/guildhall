@@ -1,5 +1,6 @@
 import type { Task } from '@guildhall/core'
 import { appendExploringTranscript } from '@guildhall/tools'
+import { transitionTaskStatus } from './task-transition.js'
 
 function trimmed(value: unknown): string {
   return typeof value === 'string' ? value.trim() : ''
@@ -26,8 +27,10 @@ function hasProductBriefShape(task: Task): boolean {
   if (!brief) return false
   return Boolean(
     trimmed(brief.userJob) ||
+    trimmed(brief.whyItMattersNow) ||
     trimmed(brief.successMetric) ||
     trimmed(brief.rolloutPlan) ||
+    (Array.isArray(brief.nonGoals) && brief.nonGoals.length > 0) ||
     (Array.isArray(brief.antiPatterns) && brief.antiPatterns.length > 0),
   )
 }
@@ -55,15 +58,27 @@ export function shouldUseImportDraftState(task: Task): boolean {
 export function normalizeImportedDraftTask(task: Task): boolean {
   if (!shouldUseImportDraftState(task)) return false
   if (task.status === 'import_draft') return false
-  task.status = 'import_draft'
+  transitionTaskStatus({
+    task,
+    event: 'mark_import_draft',
+    actor: 'workspace-importer',
+    evidenceRefs: ['task:workspace-import'],
+    now: new Date().toISOString(),
+  })
   task.assignedTo = null
   return true
 }
 
 export async function promoteImportDraftToExploring(task: Task, memoryDir: string): Promise<void> {
-  task.status = 'exploring'
-  task.assignedTo = null
   const now = new Date().toISOString()
+  transitionTaskStatus({
+    task,
+    event: 'start_intake',
+    actor: 'human',
+    evidenceRefs: ['task:shape-import-draft'],
+    now,
+  })
+  task.assignedTo = null
   task.updatedAt = now
   task.notes = [
     ...noteArray(task),

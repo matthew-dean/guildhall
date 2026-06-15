@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest'
 import fs from 'node:fs/promises'
 import path from 'node:path'
 import os from 'node:os'
-import { getProjectProgressHeartbeatsPath } from '@guildhall/sessions'
+import { getProjectProgressHeartbeatsPath, projectStatePath, readProjectStateTextAsync } from '@guildhall/sessions'
 import {
   logProgress,
   logDecision,
@@ -61,7 +61,9 @@ describe('logProgress', () => {
       ['blocked', '🚧'],
       ['escalation', '🆘'],
     ] as const) {
-      const p = path.join(tmpDir, `progress-${type}.md`)
+      const p = type === 'heartbeat'
+        ? path.join(tmpDir, `progress-${type}.md`)
+        : projectStatePath(tmpDir, 'PROGRESS.md')
       await logProgress({
         progressPath: p,
         entry: {
@@ -74,7 +76,7 @@ describe('logProgress', () => {
       })
       const content = type === 'heartbeat'
         ? await fs.readFile(getProjectProgressHeartbeatsPath(tmpDir), 'utf-8')
-        : await fs.readFile(p, 'utf-8')
+        : await readProjectStateTextAsync(tmpDir, 'PROGRESS.md')
       expect(content).toContain(emoji)
     }
   })

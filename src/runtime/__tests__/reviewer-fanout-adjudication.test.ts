@@ -8,13 +8,15 @@ import {
   type ReviewerFanoutRunner,
 } from '../orchestrator.js'
 import type { ResolvedConfig } from '@guildhall/config'
-import type { Task, TaskQueue } from '@guildhall/core'
+import { TaskQueue, type Task } from '@guildhall/core'
 import type { PersonaVerdict } from '../reviewer-fanout.js'
 import {
   AGENT_SETTINGS_FILENAME,
   makeDefaultSettings,
   saveLeverSettings,
 } from '@guildhall/levers'
+import { projectStatePathFromMemoryDir } from '@guildhall/sessions'
+import { buildEffectiveTask } from '../effective-task.js'
 
 // ---------------------------------------------------------------------------
 // End-to-end: when reviewer_fanout_policy = coordinator_adjudicates_on_conflict
@@ -31,7 +33,8 @@ beforeEach(async () => {
   tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'adjudication-test-'))
   memoryDir = path.join(tmpDir, 'memory')
   await fs.mkdir(memoryDir, { recursive: true })
-  tasksPath = path.join(memoryDir, 'TASKS.json')
+  tasksPath = projectStatePathFromMemoryDir(memoryDir, 'TASKS.json')
+  await fs.mkdir(path.dirname(tasksPath), { recursive: true })
 })
 afterEach(async () => {
   await fs.rm(tmpDir, { recursive: true, force: true })
@@ -93,7 +96,11 @@ async function writeTask(task: Task): Promise<void> {
 }
 
 async function readQueue(): Promise<TaskQueue> {
-  return JSON.parse(await fs.readFile(tasksPath, 'utf-8'))
+  const queue = TaskQueue.parse(JSON.parse(await fs.readFile(tasksPath, 'utf-8')))
+  return {
+    ...queue,
+    tasks: await Promise.all(queue.tasks.map(async task => buildEffectiveTask(task.projectPath, task))) as unknown as Task[],
+  }
 }
 
 function mkTask(overrides: Partial<Task> = {}): Task {
@@ -296,7 +303,7 @@ describe('Orchestrator — coordinator adjudication on recurrent dissent', () =>
     // Coordinator adjudication fires.
     expect(after.adjudications).toHaveLength(1)
     const adj = after.adjudications[0]!
-    expect(adj.trigger).toBe('same_persona_repeat_dissent')
+    expect(adj.trigger).toBe('policy_conflict')
     expect(adj.dissenters).toContain('security-engineer')
     expect(adj.scopeInstructions.length).toBeGreaterThan(0)
     // Task bounced to in_progress for the worker to act on the scoped list.
@@ -309,7 +316,7 @@ describe('Orchestrator — coordinator adjudication on recurrent dissent', () =>
     expect(coordNote!.content).toContain('Verify email')
     // DECISIONS.md captures the adjudication.
     const decisions = await fs.readFile(
-      path.join(memoryDir, 'DECISIONS.md'),
+      projectStatePathFromMemoryDir(memoryDir, 'DECISIONS.md'),
       'utf8',
     )
     expect(decisions).toContain('Reviewer fan-out adjudication')

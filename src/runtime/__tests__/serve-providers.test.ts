@@ -13,17 +13,23 @@ vi.mock('node:os', async (importOriginal) => {
   return { ...actual, homedir: () => TMP_HOME }
 })
 
-const { bootstrapWorkspace, setProvider, readGlobalProviders, globalProvidersPath, readWorkspaceConfig, readGlobalConfig, updateGlobalConfig, resolveModelsForProvider, updateProjectConfig, registerWorkspace } =
+const { bootstrapWorkspace, setProvider, readGlobalProviders, globalProvidersPath, readWorkspaceConfig, readProjectConfig, readGlobalConfig, updateGlobalConfig, resolveModelsForProvider, updateProjectConfig, registerWorkspace } =
   await import('@guildhall/config')
 const { buildServeApp } = await import('../serve.js')
 const { clearProviderClientPool } = await import('../provider-client-pool.js')
+const { applyProjectMigrations } = await import('../migrations.js')
 
 let tmpProject: string
 const PROJECT_ID = 'provider-test'
+let previousCodexCredentialsPath: string | undefined
 
 function scoped(pathname: string): string {
   const separator = pathname.includes('?') ? '&' : '?'
   return `http://localhost${pathname}${separator}projectId=${encodeURIComponent(PROJECT_ID)}`
+}
+
+async function applyStorageBoundaryMigration(): Promise<void> {
+  await applyProjectMigrations({ projectRoot: tmpProject, only: ['0.10.0/project-state-storage-boundary'] })
 }
 
 function sseResponse(frames: string[]): Response {
@@ -46,19 +52,24 @@ function dataFrame(payload: unknown): string {
 
 beforeEach(async () => {
   clearProviderClientPool()
+  previousCodexCredentialsPath = process.env.CODEX_CREDENTIALS_PATH
   // Clean env vars so env-precedence doesn't mask the global store.
   delete process.env.ANTHROPIC_API_KEY
   delete process.env.OPENAI_API_KEY
   delete process.env.OPENAI_BASE_URL
   delete process.env.LLAMA_CPP_URL
   delete process.env.LM_STUDIO_BASE_URL
+  delete process.env.CODEX_CREDENTIALS_PATH
   mkdirSync(path.join(TMP_HOME, '.guildhall'), { recursive: true })
   tmpProject = await fs.mkdtemp(path.join(os.tmpdir(), 'guildhall-serve-providers-proj-'))
   bootstrapWorkspace(tmpProject, { name: 'Provider Test' })
+  await applyProjectMigrations({ projectRoot: tmpProject, only: ['0.10.0/project-state-storage-boundary'] })
 })
 
 afterEach(async () => {
   clearProviderClientPool()
+  if (previousCodexCredentialsPath === undefined) delete process.env.CODEX_CREDENTIALS_PATH
+  else process.env.CODEX_CREDENTIALS_PATH = previousCodexCredentialsPath
   vi.unstubAllGlobals()
   if (existsSync(TMP_HOME)) rmSync(TMP_HOME, { recursive: true, force: true })
   await fs.rm(tmpProject, { recursive: true, force: true })
@@ -75,8 +86,10 @@ async function writeCodexCred(): Promise<void> {
     .replace(/\//g, '_')
   const fakeJwt = `header.${encoded}.sig`
   await fs.mkdir(path.join(TMP_HOME, '.codex'), { recursive: true })
+  const credentialPath = path.join(TMP_HOME, '.codex', 'auth.json')
+  process.env.CODEX_CREDENTIALS_PATH = credentialPath
   await fs.writeFile(
-    path.join(TMP_HOME, '.codex', 'auth.json'),
+    credentialPath,
     JSON.stringify({
       tokens: {
         access_token: fakeJwt,
@@ -89,6 +102,65 @@ async function writeCodexCred(): Promise<void> {
 }
 
 describe('GET /api/setup/providers', () => {
+  it('serves machine-scoped provider settings without a project id for the global providers page', async () => {
+    setProvider('openai-api', {
+      apiKey: 'sk-openai-global',
+      baseUrl: 'https://api.deepinfra.com/v1/openai',
+    })
+    const { app } = buildServeApp({})
+    const res = await app.fetch(new Request('http://localhost/api/providers'))
+    expect(res.status).toBe(200)
+    const body = (await res.json()) as {
+      providers: Record<string, { detected: boolean; baseUrl?: string | null }>
+    }
+    expect(body.providers['openai-api']!.detected).toBe(true)
+    expect(body.providers['openai-api']!.baseUrl).toBe('https://api.deepinfra.com/v1/openai')
+  })
+
+  it('writes machine-scoped provider settings without a project id for the global providers page', async () => {
+    const { app } = buildServeApp({})
+    const res = await app.fetch(
+      new Request('http://localhost/api/providers/config', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ provider: 'anthropic-api', anthropicApiKey: 'sk-ant-global' }),
+      }),
+    )
+    expect(res.status).toBe(200)
+    expect(readGlobalProviders().providers['anthropic-api']?.apiKey).toBe('sk-ant-global')
+  })
+
+  it('serves machine-scoped model defaults without a project id for the global providers page', async () => {
+    const { app } = buildServeApp({})
+    const res = await app.fetch(new Request('http://localhost/api/models'))
+    expect(res.status).toBe(200)
+    const body = (await res.json()) as {
+      globalModels?: Record<string, string>
+      effectiveModels?: Record<string, string>
+      behaviorProfiles?: Array<{ id: string }>
+    }
+    expect(body.globalModels).toBeTruthy()
+    expect(body.effectiveModels).toEqual(body.globalModels)
+    expect(body.behaviorProfiles?.map(profile => profile.id)).toEqual(['precise', 'balanced', 'exploratory'])
+  })
+
+  it('writes machine-scoped model defaults without a project id for the global providers page', async () => {
+    const { app } = buildServeApp({})
+    const res = await app.fetch(
+      new Request('http://localhost/api/models', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          scope: 'global',
+          role: 'worker',
+          model: 'qwen/qwen3.6-35b-a3b',
+        }),
+      }),
+    )
+    expect(res.status).toBe(200)
+    expect(resolveModelsForProvider(readGlobalConfig().models).worker).toBe('qwen/qwen3.6-35b-a3b')
+  })
+
   it('reports service metadata without a current selected project when the service starts at the fleet level', async () => {
     registerWorkspace({ id: 'provider-test', name: 'Provider Test', path: tmpProject, tags: [] })
     const { app } = buildServeApp({})
@@ -280,6 +352,22 @@ describe('POST /api/setup/providers/config', () => {
       const raw = await fs.readFile(projectCfgPath, 'utf8')
       expect(raw).not.toMatch(/preferredProvider:\s*anthropic-api/)
     }
+  })
+
+  it('writes a project provider preference only to the scoped project when requested', async () => {
+    updateGlobalConfig({ ...readGlobalConfig(), preferredProvider: 'codex' })
+    const { app } = buildServeApp({ projectPath: tmpProject })
+    const res = await app.fetch(
+      new Request(scoped('/api/setup/providers/config'), {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ scope: 'project', preferredProvider: 'anthropic-api' }),
+      }),
+    )
+    expect(res.status).toBe(200)
+    expect(readGlobalConfig().preferredProvider).toBe('codex')
+    expect(readProjectConfig(tmpProject).preferredProvider).toBe('anthropic-api')
+    expect(readWorkspaceConfig(tmpProject)).not.toHaveProperty('preferredProvider')
   })
 
   it('writes an OpenAI-compatible base URL to the global store and preserves the key', async () => {
@@ -654,6 +742,65 @@ describe('POST /api/providers/disconnect', () => {
   })
 })
 
+describe('POST /api/providers/test', () => {
+  it('surfaces a missing-provider failure without requiring a project id', async () => {
+    const { app } = buildServeApp({})
+    const res = await app.fetch(
+      new Request('http://localhost/api/providers/test', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ provider: 'openai-api' }),
+      }),
+    )
+    expect(res.status).toBe(200)
+    const body = (await res.json()) as { ok?: boolean; error?: string }
+    expect(body.ok).toBe(false)
+    expect(body.error).toMatch(/OpenAI-compatible API key missing/)
+  })
+
+  it('marks a local OpenAI-compatible provider verified after a successful test', async () => {
+    setProvider('llama-cpp', { url: 'http://localhost:1234/v1' })
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (input: string | Request | URL) => {
+        const url = String(input)
+        if (url.endsWith('/models')) {
+          return new Response(JSON.stringify({ data: [{ id: 'qwen-test' }] }), {
+            status: 200,
+            headers: { 'content-type': 'application/json' },
+          })
+        }
+        if (url.endsWith('/chat/completions')) {
+          const encoder = new TextEncoder()
+          return new Response(
+            new ReadableStream<Uint8Array>({
+              start(controller) {
+                controller.enqueue(encoder.encode(dataFrame({ choices: [{ delta: { content: 'OK' } }] })))
+                controller.enqueue(encoder.encode('data: [DONE]\n\n'))
+                controller.close()
+              },
+            }),
+            { status: 200, headers: { 'content-type': 'text/event-stream' } },
+          )
+        }
+        return new Response('not found', { status: 404 })
+      }),
+    )
+    const { app } = buildServeApp({})
+    const res = await app.fetch(
+      new Request('http://localhost/api/providers/test', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ provider: 'llama-cpp' }),
+      }),
+    )
+    expect(res.status).toBe(200)
+    const body = (await res.json()) as { ok?: boolean; sample?: string }
+    expect(body).toMatchObject({ ok: true, sample: 'OK' })
+    expect(readGlobalProviders().providers['llama-cpp']?.verifiedAt).toBeTruthy()
+  })
+})
+
 describe('POST /api/project/start preflight', () => {
   it('returns 400 with code:no_provider when no credential is configured', async () => {
     const { app } = buildServeApp({ projectPath: tmpProject })
@@ -668,12 +815,16 @@ describe('POST /api/project/start preflight', () => {
 
   it('passes preflight and starts the supervisor when an Anthropic key is stored', async () => {
     setProvider('anthropic-api', { apiKey: 'sk-ant-test' })
-    updateProjectConfig(tmpProject, { allowPaidProviderFallback: true })
+    await applyStorageBoundaryMigration()
+    updateGlobalConfig({ preferredProvider: 'anthropic-api', allowPaidProviderFallback: true })
     const { app, supervisor } = buildServeApp({ projectPath: tmpProject })
     try {
       const res = await app.fetch(
         new Request('http://localhost/api/project/start?projectId=provider-test', { method: 'POST' }),
       )
+      if (res.status !== 200) {
+        throw new Error(`start failed ${res.status}: ${JSON.stringify(await res.json())}`)
+      }
       expect(res.status).toBe(200)
       const body = (await res.json()) as { status?: string; provider?: string }
       expect(body.status).toBe('running')
@@ -686,6 +837,7 @@ describe('POST /api/project/start preflight', () => {
   it('does not fall back to a paid provider unless project/global config opts in', async () => {
     setProvider('anthropic-api', { apiKey: 'sk-ant-test' })
     updateProjectConfig(tmpProject, { preferredProvider: 'llama-cpp' })
+    await applyStorageBoundaryMigration()
     const { app } = buildServeApp({ projectPath: tmpProject })
 
     const res = await app.fetch(
@@ -703,11 +855,14 @@ describe('POST /api/project/start preflight', () => {
       preferredProvider: 'llama-cpp',
       allowPaidProviderFallback: true,
     })
+    await applyStorageBoundaryMigration()
+    updateGlobalConfig({ preferredProvider: 'llama-cpp', allowPaidProviderFallback: true })
     const { app, supervisor } = buildServeApp({ projectPath: tmpProject })
     try {
       const res = await app.fetch(
         new Request('http://localhost/api/project/start?projectId=provider-test', { method: 'POST' }),
       )
+      if (res.status !== 200) throw new Error(`start failed ${res.status}: ${JSON.stringify(await res.json())}`)
       expect(res.status).toBe(200)
       const body = (await res.json()) as {
         providerStatus?: {
@@ -775,6 +930,8 @@ describe('POST /api/project/start preflight', () => {
       preferredProvider: 'llama-cpp',
       allowPaidProviderFallback: true,
     })
+    await applyStorageBoundaryMigration()
+    updateGlobalConfig({ preferredProvider: 'llama-cpp', allowPaidProviderFallback: true })
     vi.stubGlobal(
       'fetch',
       vi.fn(async () =>
@@ -789,6 +946,9 @@ describe('POST /api/project/start preflight', () => {
       const res = await app.fetch(
         new Request('http://localhost/api/project/start?projectId=provider-test', { method: 'POST' }),
       )
+      if (res.status !== 200) {
+        throw new Error(`start failed ${res.status}: ${JSON.stringify(await res.json())}`)
+      }
       expect(res.status).toBe(200)
       const body = (await res.json()) as {
         providerStatus?: {
@@ -1049,7 +1209,7 @@ describe('POST /api/project/start preflight', () => {
     const body = (await res.json()) as { code?: string; error?: string; loadedModels?: string[]; missingModels?: string[] }
     expect(body.code).toBe('model_unavailable')
     expect(body.error).toMatch(/configured local server/i)
-    expect(body.error).toMatch(/will not JIT-load missing models/)
+    expect(body.error).toMatch(/not JIT-loaded automatically/)
     expect(body.loadedModels).toContain('qwen/qwen3.6-35b-a3b')
     expect(body.missingModels).toContain('qwen2.5-coder-7b-instruct')
   })
@@ -1103,7 +1263,8 @@ describe('POST /api/project/stop', () => {
 
   it('stops a running supervisor and reflects stopped status on refresh', async () => {
     setProvider('anthropic-api', { apiKey: 'sk-ant-test' })
-    updateProjectConfig(tmpProject, { allowPaidProviderFallback: true })
+    await applyStorageBoundaryMigration()
+    updateGlobalConfig({ preferredProvider: 'anthropic-api', allowPaidProviderFallback: true })
     const { app, supervisor } = buildServeApp({ projectPath: tmpProject })
     try {
       const startRes = await app.fetch(

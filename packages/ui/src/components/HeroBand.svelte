@@ -161,9 +161,9 @@
   .gh-hero-title {
     margin: 0;
     max-inline-size: 12ch;
-    font-size: clamp(var(--gh-type-size-6), 4.5cqi, 2.95rem);
+    font-size: var(--gh-type-size-display-title);
     font-weight: var(--gh-type-weight-strong);
-    line-height: 0.98;
+    line-height: var(--gh-type-line-height-tight);
     text-wrap: balance;
   }
 
@@ -366,7 +366,7 @@
   }
 
   .gh-hero-band.density-compact .gh-hero-title {
-    font-size: clamp(var(--gh-type-size-6), 4cqi, 2.35rem);
+    font-size: var(--gh-type-size-page-title);
   }
 
   .gh-hero-band.density-dense {
@@ -375,7 +375,7 @@
   }
 
   .gh-hero-band.density-dense .gh-hero-title {
-    font-size: clamp(var(--gh-type-size-5), 3.8cqi, 2rem);
+    font-size: var(--gh-type-size-section-title);
   }
 
   .gh-hero-band.density-dense .gh-hero-description {

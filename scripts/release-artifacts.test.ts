@@ -51,7 +51,7 @@ describe('release artifact contract', () => {
     expect(readme).toContain('Node.js 22 or newer')
     expect(quickStart).toContain('Node.js 22 or newer')
     expect(readme).toContain(`GUILDHALL_VERSION=${manifest.version}`)
-    expect(quickStart).toContain('GUILDHALL_VERSION=0.9.0')
+    expect(quickStart).toContain(`GUILDHALL_VERSION=${manifest.version}`)
     expect(quickStart).toContain('guildhall-macos.tar.gz.sha256')
   })
 
@@ -79,12 +79,60 @@ describe('release artifact contract', () => {
     expect(smoke).toContain('default runtime image')
   })
 
-  it('publishes the 0.9 runtime image to GHCR with immutable and minor-line tags', () => {
+  it('builds the web app through SvelteKit and Vite instead of a single esbuild outfile', () => {
+    const build = read('build.mjs')
+    const manifest = JSON.parse(read('package.json')) as {
+      devDependencies?: Record<string, string>
+    }
+
+    expect(manifest.devDependencies?.['@sveltejs/kit']).toBeTruthy()
+    expect(build).toContain("'vite', 'build'")
+    expect(build).not.toContain("outfile: join(WEB_OUT_DIR, 'app.js')")
+    expect(read('svelte.config.js')).toContain('@sveltejs/adapter-static')
+    expect(read('vite.config.ts')).toContain('sveltekit')
+  })
+
+  it('keeps web route surfaces behind dynamic imports for route-level chunks', () => {
+    const router = read('src/web/Router.svelte')
+
+    expect(router).not.toContain("import ProjectsHome from './surfaces/ProjectsHome.svelte'")
+    expect(router).toContain("import('./surfaces/ProjectsHome.svelte')")
+    expect(router).not.toContain("import ProjectView from './surfaces/ProjectView.svelte'")
+    expect(router).toContain("import('./surfaces/ProjectView.svelte')")
+  })
+
+  it('keeps project tabs behind dynamic imports inside the project route chunk', () => {
+    const projectView = read('src/web/surfaces/ProjectView.svelte')
+
+    for (const tab of [
+      'ProjectOverviewTab',
+      'ThreadTab',
+      'NeedsYouTab',
+      'WorkTab',
+      'WorkspaceImportTab',
+      'ProjectAttachFlow',
+      'FactsTab',
+      'TimelineTab',
+      'ReleaseTab',
+      'SettingsTab',
+      'ProjectStructurePanel',
+    ]) {
+      expect(projectView).not.toContain(`import ${tab} from`)
+    }
+    expect(projectView).toContain("import('./project/ProjectOverviewTab.svelte')")
+    expect(projectView).toContain("import('./project/ThreadTab.svelte')")
+    expect(projectView).toContain("import('./project/WorkTab.svelte')")
+    expect(projectView).toContain("import('./project/ProjectAttachFlow.svelte')")
+    expect(projectView).toContain("import('./project/structure/ProjectStructurePanel.svelte')")
+  })
+
+  it('publishes the current runtime image to GHCR with immutable and minor-line tags', () => {
     const workflow = read('.github/workflows/runtime-image.yml')
 
     expect(workflow).toContain('ghcr.io/matthew-dean/guildhall-runtime-debian')
-    expect(workflow).toContain('0.9.0-trixie-node22-python313-playwright')
-    expect(workflow).toContain('0.9-trixie-node22-python313-playwright')
+    expect(workflow).toContain("'v0.10.*'")
+    expect(workflow).toContain('0.10.0-trixie-node22-python313-playwright')
+    expect(workflow).toContain('0.10-trixie-node22-python313-playwright')
     expect(workflow).toContain('runtime/Containerfile')
     expect(workflow).toContain('docker/metadata-action')
     expect(workflow).toContain('docker/build-push-action')
@@ -99,5 +147,31 @@ describe('release artifact contract', () => {
     expect(installer).not.toContain('ghcr.io/matthew-dean/guildhall-runtime-debian')
     expect(macosPackage).not.toContain('podman pull')
     expect(macosPackage).not.toContain('ghcr.io/matthew-dean/guildhall-runtime-debian')
+  })
+
+  it('builds the local runtime image through a Docker-or-Podman helper', () => {
+    const pkg = JSON.parse(read('package.json')) as { scripts: Record<string, string> }
+    const buildScript = read('scripts/runtime-image-build.mjs')
+    const smokeScript = read('scripts/runtime-image-smoke.mjs')
+
+    expect(pkg.scripts['runtime:image:build']).toBe('node scripts/runtime-image-build.mjs')
+    expect(buildScript).toContain('docker')
+    expect(buildScript).toContain('podman')
+    expect(smokeScript).toContain('docker')
+    expect(smokeScript).toContain('podman')
+    expect(buildScript).toContain('DOCKER_BUILDKIT')
+    expect(buildScript).toContain('GUILDHALL_CONTAINER_BUILD_TIMEOUT_MS')
+    expect(buildScript).toContain('0.10.0-trixie-node22-python313-playwright')
+    expect(buildScript).toContain('0.10-trixie-node22-python313-playwright')
+  })
+
+  it('keeps runtime image build context narrow and excludes git sockets', () => {
+    const dockerignore = read('.dockerignore')
+
+    expect(dockerignore).toContain('.git')
+    expect(dockerignore).toContain('dist')
+    expect(dockerignore).toContain('node_modules')
+    expect(dockerignore).toContain('!.dockerignore')
+    expect(dockerignore).toContain('!runtime/**')
   })
 })

@@ -90,6 +90,7 @@ saveCodebaseMap(memoryDir: string, map: CodebaseMap): Promise<void>
 queryCodebaseMap(map: CodebaseMap, query: CodebaseMapQuery): CodebaseMapQueryResult
 findExistingAbstraction(map: CodebaseMap, intent: string): CorpusAbstractionMatch[]
 buildWorkerCorpusContext(map: CodebaseMap, task: CorpusTaskContext, opts?: ContextBudgetOptions): string
+renderDesignGovernancePacket(map: Pick<CodebaseMap, 'designGovernance' | 'designSystem'>): string
 recordCorpusOverride(memoryDir: string, note: CorpusOverrideNote): Promise<void>
 ```
 
@@ -115,6 +116,7 @@ interface CodebaseMap {
   areas: CorpusArea[]
   abstractions: CorpusAbstraction[]
   designSystem?: CorpusDesignSystemSummary
+  designGovernance?: CorpusDesignGovernanceSummary
   verification: { commands: string[] }
   overrides?: CorpusOverrides
 }
@@ -148,6 +150,48 @@ interface CorpusDesignSystemSummary {
   componentFiles: string[]
   maturity: 'absent' | 'thin' | 'emerging' | 'established'
   recommendations: string[]
+}
+
+interface CorpusDesignGovernanceSummary {
+  generatedAt: string
+  canonicalDesignSystemAuthority?: string
+  tokenAuthority?: string
+  componentAuthorityPaths: string[]
+  knownDuplicatePrimitiveFamilies: string[]
+  variantVocabularyRisks: string[]
+  requiredReviewerChecks: string[]
+  learningProposals: DesignGovernanceLearningProposal[]
+  diagnostics: DesignGovernanceDiagnostic[]
+}
+
+interface DesignGovernanceDiagnostic {
+  id: string
+  severity: 'info' | 'warn' | 'blocker'
+  kind:
+    | 'token_family_split'
+    | 'raw_visual_values'
+    | 'variant_vocabulary_sprawl'
+    | 'duplicate_primitive_family'
+    | 'surface_ownership_sprawl'
+    | 'missing_component_contract'
+    | 'unreviewed_design_exception'
+  summary: string
+  evidence: Array<{ path: string; line?: number; excerpt?: string }>
+  recommendation: string
+  appliesToReviewerRoles: Array<'design' | 'accessibility' | 'product' | 'maintainability'>
+}
+
+interface DesignGovernanceLearningProposal {
+  id: string
+  kind:
+    | 'project_design_system_memory_update'
+    | 'component_contract_addition'
+    | 'corpus_map_override'
+    | 'guildhall_product_learning'
+  diagnosticKinds: DesignGovernanceDiagnostic['kind'][]
+  summary: string
+  evidence: Array<{ path: string; line?: number; excerpt?: string }>
+  ownerApprovalRequired: true
 }
 ```
 
@@ -190,6 +234,36 @@ just-in-time systemization: when the same button, card, color, radius, spacing,
 interaction, or component idea appears a second time, the agent should consider
 a shared token or primitive. It should not expand the design system for a
 one-off detail that has not proven stable.
+
+## Design-governance diagnostics
+
+Corpus refresh also records portable design-governance diagnostics for UI-shaped
+projects. The scanner is deterministic and intentionally small. It reads indexed
+UI and design-authority files and looks for:
+
+- split token families, such as canonical package tokens beside old app-local
+  `--fs-*`, `--s-*`, `--r-*`, or `--lh-*` scales
+- raw visual values in app-local UI implementation files
+- drifting variant vocabulary, especially deprecated aliases such as
+  `regular`, `attention`, and `default`
+- duplicate primitive families, such as package `NoticeBand`/`FrameCard` beside
+  app-local `NoticeBand`/`Card`
+- route or surface files that own unrelated workflow domains
+- component libraries without a contract for ownership, variants,
+  accessibility, and replacement paths
+- design exceptions without owner and removal-condition language
+
+These diagnostics are evidence for workers and reviewers, not a taste oracle.
+`renderDesignGovernancePacket` turns the summary into a compact markdown packet
+with the canonical design-system authority, token authority, component owners,
+known duplicate families, variant risks, proposal-only learning hooks, and
+required reviewer checks.
+
+Learning proposals are intentionally not mutations. A diagnostic can propose a
+project-local design-system memory update, a component contract addition, a
+corpus-map override, or a broadly portable Guildhall product learning. Each
+proposal carries evidence and `ownerApprovalRequired: true`; a later
+coordinator/owner flow decides whether anything becomes durable.
 
 ## Discovery Strategy
 
@@ -265,8 +339,9 @@ Partial refresh algorithm:
 4. Otherwise, remove deleted touched files.
 5. Re-index changed touched files.
 6. Preserve untouched file entries.
-7. Recompute `areas`, `abstractions`, `entrypoints`, design-system summary, and
-   verification commands from current file entries.
+7. Recompute `areas`, `abstractions`, `entrypoints`, design-system summary,
+   design-governance diagnostics, and verification commands from current file
+   entries.
 8. Apply overrides.
 9. Save map.
 10. Append a history event listing changed files, refresh mode, and affected
@@ -326,6 +401,18 @@ Mapped area: <area or "no known area">
 Reuse / Extend:
 - <canonical abstraction guidance or explicit "no known abstraction found">
 
+Design Governance:
+- Canonical design-system authority: <path or absent>
+- Token authority: <path or absent>
+- Component authority: <paths or absent>
+- Known duplicate primitive families: <summary>
+- Variant vocabulary risks: <summary>
+- Learning proposals require owner approval: <proposal kinds or none>
+- Required reviewer checks:
+  - Name the token/component roles reused or extended.
+  - Reject local one-off styling when a governed primitive exists.
+  - Reject new variant names unless a component contract changed.
+
 Likely files:
 - <path> — <summary>
 
@@ -358,6 +445,7 @@ Worker Agent:
   supporting context read
 - for UI work, identify the existing token/component/primitive path, or explain
   why a just-in-time design-system addition is now justified
+- use the design-governance packet before changing UI surfaces
 - avoid broad repo spelunking when the map gives focused read-next files
 - treat second similar concept as an abstraction decision
 
@@ -368,6 +456,8 @@ Reviewer Agent:
   exists
 - reject ad hoc UI treatment when approved design-system tokens/primitives
   cover the need
+- use design-governance diagnostics as evidence when reviewing token roles,
+  variants, duplicate primitives, and local styling exceptions
 - accept a new primitive only when the worker explains the repeated concept and
   why the maintenance benefit now outweighs the overhead
 - record a correction when the map is wrong or stale
@@ -432,3 +522,5 @@ On failure:
 11. Unit tests cover discovery, command-shaped path filtering, partial refresh,
     design-system summarization, query ranking, context budget, missing-map
     setup, and worker-completion refresh behavior.
+12. Unit tests cover design-governance diagnostics and the compact worker /
+    reviewer packet using Guildhall-shaped UI governance fixtures.

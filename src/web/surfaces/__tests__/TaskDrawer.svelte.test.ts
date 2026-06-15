@@ -3,6 +3,7 @@ import '@testing-library/jest-dom/vitest'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { cleanup, render, screen, waitFor } from '@testing-library/svelte'
 import userEvent from '@testing-library/user-event'
+import { readFileSync } from 'node:fs'
 import TaskDrawer from '../TaskDrawer.svelte'
 import { path } from '../../lib/nav.svelte.js'
 import { project } from '../../lib/project.svelte.js'
@@ -101,6 +102,26 @@ function openDrawerOn(tab: 'overview' | 'current' | 'spec') {
 }
 
 describe('TaskDrawer', () => {
+  it('keeps the more task actions menu on one quiet menu-row presentation', () => {
+    const source = readFileSync('src/web/surfaces/TaskDrawer.svelte', 'utf-8')
+    const menuMarkup = source.match(/<div class="more-action-menu">[\s\S]*?<\/div>\n\s*{\/if}/)?.[0] ?? ''
+
+    expect(menuMarkup).toContain('class="more-action-button"')
+    expect(menuMarkup).not.toContain('variant="agent"')
+    expect(menuMarkup).not.toContain('variant="secondary"')
+    expect(menuMarkup).not.toContain('variant="danger"')
+    expect(menuMarkup).not.toContain('light-emitted')
+  })
+
+  it('keeps footer utility actions on one shared text-button presentation', () => {
+    const source = readFileSync('src/web/surfaces/TaskDrawer.svelte', 'utf-8')
+
+    expect(source).toContain('class="footer-utility-action more-actions-trigger"')
+    expect(source).toContain('class="footer-utility-action"')
+    expect(source).toContain('margin-right: var(--s-4)')
+    expect(source).not.toContain('<Button variant="ghost" size="sm" onclick={() => copyTaskLink(task.id)}>')
+  })
+
   beforeEach(() => {
     installBrowserFakes()
   })
@@ -110,22 +131,16 @@ describe('TaskDrawer', () => {
     cleanup()
   })
 
-  it('answers current task questions from the drawer with the project id included', async () => {
+  it('routes current task questions to Thread without posting drawer-local answers', async () => {
     openDrawerOn('current')
     const payload = drawerPayload()
     payload.task.status = 'ready'
     payload.task.spec = ''
     payload.task.acceptanceCriteria = []
-    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
       const url = String(input)
       if (url.startsWith('/api/project/task/task-link-editor/answer-questions')) {
-        expect(url).toContain('projectId=looma-knit')
-        expect(init?.method).toBe('POST')
-        expect(JSON.parse(String(init?.body))).toEqual({
-          projectId: 'looma-knit',
-          answers: [{ questionId: 'q-link-scope', answer: 'URL input only' }],
-        })
-        return json({ ok: true })
+        throw new Error('TaskDrawer must not answer owner-input questions locally')
       }
       if (url.startsWith('/api/project/task/task-link-editor')) return json(payload)
       if (url.startsWith('/api/project')) return json(projectDetail())
@@ -140,11 +155,13 @@ describe('TaskDrawer', () => {
     })
 
     await screen.findByText('Which controls belong in the link editor?')
-    await userEvent.click(screen.getByRole('button', { name: /url input only/i }))
+    expect(screen.queryByRole('button', { name: /url input only/i })).toBeNull()
+    await userEvent.click(screen.getByRole('button', { name: /open thread/i }))
 
     await waitFor(() => {
-      expect(fetchMock.mock.calls.some(([input]) => String(input).includes('/answer-questions'))).toBe(true)
+      expect(path.value).toBe('/projects/looma-knit/thread')
     })
+    expect(fetchMock.mock.calls.some(([input]) => String(input).includes('/answer-questions'))).toBe(false)
   })
 
   it('loads a project task with the explicit project id even from a legacy global task route', async () => {
@@ -223,7 +240,7 @@ describe('TaskDrawer', () => {
       'href',
       '/projects/looma-knit/overview',
     )
-    expect(screen.getByText('task-link-editor')).toBeInTheDocument()
+    expect(screen.getByText('T-001')).toBeInTheDocument()
     await screen.findByText('Review plan')
     expect(screen.getByText('Balanced review')).toBeInTheDocument()
     expect(screen.getByText('1 reviewer group')).toBeInTheDocument()
@@ -232,13 +249,73 @@ describe('TaskDrawer', () => {
     expect(screen.getByText(/visual-evidence/)).toBeInTheDocument()
   })
 
+  it('shows delivery-step progress in the drawer header from shared work progress', async () => {
+    const payload = drawerPayload({
+      threadTurns: [],
+      workProgress: {
+        counts: {
+          visibleTotal: 1,
+          visibleActive: 1,
+          visibleBlocked: 0,
+          visibleDone: 0,
+          visibleShelved: 0,
+          deliveryTotal: 1,
+          deliveryRequired: 1,
+          deliveryDone: 0,
+          deliveryBlocked: 1,
+        },
+        byTaskId: {
+          'task-link-editor': {
+            id: 'task-link-editor',
+            title: 'Knit: add link editor controls',
+            status: 'in_progress',
+            visibility: { kind: 'primary', countInProjectTotals: true },
+            deliverySteps: [{
+              id: 'runtime-proof',
+              title: 'Runtime proof for link editor controls',
+              kind: 'verify',
+              status: 'blocked',
+              required: true,
+              blocksCompletion: true,
+            }],
+            rollup: {
+              primaryState: 'blocked',
+              visibleChildCount: 0,
+              visibleChildDoneCount: 0,
+              internalStepCount: 1,
+              requiredStepCount: 1,
+              doneStepCount: 0,
+              blockedStepCount: 1,
+            },
+          },
+        },
+      },
+    })
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input)
+      if (url.startsWith('/api/project/task/task-link-editor')) return json(payload)
+      if (url.startsWith('/api/project')) return json(projectDetail())
+      return json({})
+    })
+    vi.stubGlobal('fetch', fetchMock)
+
+    const { container } = render(TaskDrawer, {
+      taskId: 'task-link-editor',
+      projectId: 'looma-knit',
+      onClose: vi.fn(),
+    })
+
+    await screen.findByText('Knit: add link editor controls')
+    expect(container.querySelector('.gh-drawer-head')?.textContent).toContain('1 delivery step blocked')
+  })
+
   it('makes split-required sizing visible as recommendations that are not child tasks yet', async () => {
     const payload = drawerPayload({
       threadTurns: [],
       task: {
         ...drawerPayload().task,
         status: 'spec_review',
-        parentGoalId: 'goal-task-fll-overhead-policy',
+        businessEnvelope: { goalId: 'goal-task-fll-overhead-policy' },
         dependsOn: ['task-fll-policy-decision'],
         sizePlan: {
           taskId: 'task-link-editor',
@@ -282,23 +359,90 @@ describe('TaskDrawer', () => {
       onClose: vi.fn(),
     })
 
-    await screen.findByText('Work hierarchy')
+    await screen.findByText('Task links')
     expect(screen.getAllByText('Split this task').length).toBeGreaterThanOrEqual(1)
-    expect(screen.getByText(/Split it now: Guildhall will keep this as containing work and create the nested work below/i)).toBeInTheDocument()
+    expect(screen.getByText(/this stays as containing work and the nested work below is created/i)).toBeInTheDocument()
     expect(screen.getByRole('button', { name: 'Split this task' })).toBeInTheDocument()
-    expect(screen.getByText('Work Guildhall will create')).toBeInTheDocument()
+    expect(screen.getByText('Work to create')).toBeInTheDocument()
     expect(document.body.textContent).not.toContain('recommendations, not created child tasks yet')
     expect(document.body.textContent).not.toMatch(/parent task/i)
-    expect(screen.getByRole('link', { name: 'fll overhead policy' })).toHaveAttribute(
-      'href',
-      '/projects/looma-knit/task/task-fll-overhead-policy',
-    )
+    expect(screen.getByText('Goal envelope')).toBeInTheDocument()
+    expect(screen.getByText('fll overhead policy')).toBeInTheDocument()
     expect(screen.getByText('Draft the FLL overhead charge policy')).toBeInTheDocument()
     expect(screen.getByText('Apply the overhead charge policy')).toBeInTheDocument()
     expect(screen.getByRole('link', { name: 'task-fll-policy-decision' })).toHaveAttribute(
       'href',
       '/projects/looma-knit/task/task-fll-policy-decision',
     )
+  })
+
+  it('offers a split action for recommended child work scoped to the current task', async () => {
+    const user = userEvent.setup()
+    const payload = drawerPayload({
+      threadTurns: [],
+      task: {
+        ...drawerPayload().task,
+        id: 'context-menu',
+        title: 'ContextMenu',
+        description: 'Implement the ContextMenu primitive and its documentation proof.',
+        status: 'spec_review',
+        domain: 'frontend',
+        spec: '## Summary\nImplement ContextMenu with component implementation, Storybook proof, and API docs sync.',
+        sizePlan: {
+          taskId: 'context-menu',
+          score: 5,
+          band: 'large',
+          action: 'split_recommended',
+          recommendedChildren: [
+            {
+              title: 'ContextMenu component implementation',
+              reason: 'Ship the ContextMenu primitive implementation.',
+              suggestedDomain: 'frontend',
+            },
+            {
+              title: 'ContextMenu Storybook proof',
+              reason: 'Add visual proof for ContextMenu.',
+              suggestedDomain: 'frontend',
+            },
+          ],
+        },
+      },
+    })
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input)
+      if (url.startsWith('/api/project/task/context-menu/create-split-children')) {
+        expect(init?.method).toBe('POST')
+        return json({
+          ok: true,
+          createdTaskIds: [
+            'context-menu-split-context-menu-component-implementation',
+            'context-menu-split-context-menu-storybook-proof',
+          ],
+        })
+      }
+      if (url.startsWith('/api/project/task/context-menu')) return json(payload)
+      if (url.startsWith('/api/project')) return json(projectDetail())
+      return json({})
+    })
+    vi.stubGlobal('fetch', fetchMock)
+
+    render(TaskDrawer, {
+      taskId: 'context-menu',
+      projectId: 'looma-knit',
+      onClose: vi.fn(),
+    })
+
+    await screen.findByText('Task links')
+    expect(screen.getByText('ContextMenu')).toBeInTheDocument()
+    expect(screen.getByText('ContextMenu component implementation')).toBeInTheDocument()
+    expect(screen.getByText('ContextMenu Storybook proof')).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Split this task' })).toBeInTheDocument()
+
+    await user.click(screen.getByRole('button', { name: 'Split this task' }))
+
+    expect(fetchMock.mock.calls.some(([input]) =>
+      String(input).includes('/api/project/task/context-menu/create-split-children?projectId=looma-knit'),
+    )).toBe(true)
   })
 
   it('offers a clear action when split-required child tasks have not been created yet', async () => {
@@ -308,7 +452,7 @@ describe('TaskDrawer', () => {
       task: {
         ...drawerPayload().task,
         status: 'spec_review',
-        parentGoalId: 'goal-task-fll-overhead-policy',
+        businessEnvelope: { goalId: 'goal-task-fll-overhead-policy' },
         sizePlan: {
           taskId: 'task-link-editor',
           score: 8,
@@ -382,8 +526,8 @@ describe('TaskDrawer', () => {
       onClose: vi.fn(),
     })
 
-    await screen.findByRole('button', { name: /start only this work item/i })
-    await userEvent.click(screen.getByRole('button', { name: /start only this work item/i }))
+    await screen.findByRole('button', { name: /resume only this work item/i })
+    await userEvent.click(screen.getByRole('button', { name: /resume only this work item/i }))
 
     expect(fetchMock.mock.calls.some(([input]) =>
       String(input).includes('/api/project/task/task-link-editor/start?projectId=looma-knit'),
@@ -391,6 +535,69 @@ describe('TaskDrawer', () => {
     expect(fetchMock.mock.calls.some(([input]) =>
       String(input).includes('/api/project/start?projectId=looma-knit'),
     )).toBe(false)
+  })
+
+  it('keeps the scoped work-item action in the footer for ready tasks with harmless history', async () => {
+    openDrawerOn('overview')
+    const payload = drawerPayload({
+      task: {
+        ...drawerPayload().task,
+        status: 'ready',
+        openQuestions: [],
+      },
+      threadTurns: [
+        {
+          id: 'request:task-link-editor:reframe',
+          kind: 'history_note',
+          at: now,
+          taskId: 'task-link-editor',
+          taskTitle: 'Knit: add link editor controls',
+          summary: 'Owner recovery pass reframed this task from current repo state.',
+        },
+        {
+          id: 'inflight:task-link-editor',
+          kind: 'inflight',
+          at: now,
+          persona: 'worker',
+          status: 'active',
+          phase: 'implementation',
+          taskId: 'task-link-editor',
+          taskTitle: 'Knit: add link editor controls',
+          taskStatus: 'ready',
+          importedDraft: false,
+          liveAgent: false,
+          summary: 'Approved and queued for work.',
+        },
+      ],
+    })
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input)
+      if (url.startsWith('/api/project/task/task-link-editor/start')) {
+        expect(init?.method).toBe('POST')
+        expect(JSON.parse(String(init.body))).toMatchObject({
+          mode: 'one_task',
+          scope: 'work_item',
+        })
+        return json({ status: 'running', mode: 'one_task', scope: { type: 'work_item', taskId: 'task-link-editor' } })
+      }
+      if (url.startsWith('/api/project/task/task-link-editor')) return json(payload)
+      if (url.startsWith('/api/project')) return json(projectDetail())
+      return json({})
+    })
+    vi.stubGlobal('fetch', fetchMock)
+
+    render(TaskDrawer, {
+      taskId: 'task-link-editor',
+      projectId: 'looma-knit',
+      onClose: vi.fn(),
+    })
+
+    await screen.findByText('Knit: add link editor controls')
+    await userEvent.click(screen.getByRole('button', { name: /resume only this work item/i }))
+
+    expect(fetchMock.mock.calls.some(([input]) =>
+      String(input).includes('/api/project/task/task-link-editor/start?projectId=looma-knit'),
+    )).toBe(true)
   })
 
   it('uses the drawer run snapshot so stale project state does not show already queued', async () => {
@@ -561,7 +768,7 @@ describe('TaskDrawer', () => {
     })
 
     await screen.findByRole('heading', { name: 'Shaping timed out' })
-    expect(screen.getByText(/Guildhall stopped while shaping the brief/i)).toBeInTheDocument()
+    expect(screen.getByText(/Shaping stopped before the missing acceptance criteria were written/i)).toBeInTheDocument()
     expect(screen.getByRole('button', { name: /try shaping brief again/i })).toBeInTheDocument()
   })
 
@@ -622,8 +829,8 @@ describe('TaskDrawer', () => {
       onClose: vi.fn(),
     })
 
-    await screen.findByRole('heading', { name: 'Shaping paused' })
-    expect(screen.getByText(/Guildhall stopped before writing the missing acceptance criteria/i)).toBeInTheDocument()
+    await screen.findByRole('heading', { name: 'Paused' })
+    expect(screen.getByText(/The missing acceptance criteria were not written before the pause/i)).toBeInTheDocument()
     expect(screen.getByRole('button', { name: /try shaping brief again/i })).toBeInTheDocument()
   })
 
@@ -632,8 +839,16 @@ describe('TaskDrawer', () => {
       threadTurns: [],
       task: {
         ...drawerPayload().task,
-        status: 'parent',
-        parentGoalId: 'goal-task-fll-overhead-policy',
+        status: 'ready',
+        businessEnvelope: { goalId: 'goal-task-fll-overhead-policy' },
+        hierarchy: {
+          childIds: [
+            'task-fll-overhead-policy-spec',
+            'task-fll-overhead-policy-implementation',
+          ],
+          order: 0,
+        },
+        taskReadiness: { recommendation: 'split' },
         sizePlan: {
           taskId: 'task-link-editor',
           score: 8,
@@ -660,11 +875,37 @@ describe('TaskDrawer', () => {
           ],
         },
       },
+      relatedTasks: [
+        {
+          id: 'task-fll-overhead-policy-spec',
+          title: 'Draft the FLL overhead charge policy',
+          description: 'Draft the policy.',
+          status: 'exploring',
+          domain: 'product',
+          dependsOn: [],
+        },
+        {
+          id: 'task-fll-overhead-policy-implementation',
+          title: 'Apply the overhead charge policy',
+          description: 'Apply the policy.',
+          status: 'exploring',
+          domain: 'frontend',
+          dependsOn: ['task-fll-overhead-policy-spec'],
+        },
+        {
+          id: 'task-fll-release-check',
+          title: 'Release the FLL overhead workflow',
+          description: 'Release after implementation.',
+          status: 'ready',
+          domain: 'release',
+          dependsOn: ['task-link-editor'],
+        },
+      ],
     })
     const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
       const url = String(input)
       if (url.startsWith('/api/project/task/task-link-editor')) return json(payload)
-      if (url.startsWith('/api/project')) return json(projectDetail())
+      if (url.startsWith('/api/project')) return json({ ...projectDetail(), tasks: [payload.task, ...(payload.relatedTasks ?? [])] })
       return json({})
     })
     vi.stubGlobal('fetch', fetchMock)
@@ -675,12 +916,15 @@ describe('TaskDrawer', () => {
       onClose: vi.fn(),
     })
 
-    await screen.findByText('Work hierarchy')
-    expect(screen.getAllByText('Work happens in the nested work below.').length).toBeGreaterThan(0)
+    await screen.findByText('Task links')
+    expect(screen.queryByText('Linked nested work')).not.toBeInTheDocument()
+    expect(screen.queryByText('Split required')).not.toBeInTheDocument()
+    expect(screen.queryByText('Split recommended')).not.toBeInTheDocument()
+    expect(screen.queryByText('Work happens in the nested work below.')).not.toBeInTheDocument()
     expect(document.body.textContent).not.toMatch(/parent task/i)
-    expect(screen.queryByRole('button', { name: 'Start only this work item' })).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Resume only this work item' })).not.toBeInTheDocument()
     expect(screen.queryByText(/This task is the parent/i)).not.toBeInTheDocument()
-    expect(screen.getByText('Nested work')).toBeInTheDocument()
+    expect(screen.getByText('Child tasks')).toBeInTheDocument()
     expect(screen.getByRole('link', { name: 'Draft the FLL overhead charge policy' })).toHaveAttribute(
       'href',
       '/projects/looma-knit/task/task-fll-overhead-policy-spec',
@@ -688,6 +932,11 @@ describe('TaskDrawer', () => {
     expect(screen.getByRole('link', { name: 'Apply the overhead charge policy' })).toHaveAttribute(
       'href',
       '/projects/looma-knit/task/task-fll-overhead-policy-implementation',
+    )
+    await waitFor(() => expect(screen.getByText('Blocks')).toBeInTheDocument())
+    expect(screen.getByRole('link', { name: 'Release the FLL overhead workflow' })).toHaveAttribute(
+      'href',
+      '/projects/looma-knit/task/task-fll-release-check',
     )
   })
 
@@ -726,7 +975,7 @@ describe('TaskDrawer', () => {
     })
 
     await screen.findByText('Knit: add link editor controls')
-    expect(screen.queryByRole('button', { name: 'Start only this work item' })).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Resume only this work item' })).not.toBeInTheDocument()
     expect(screen.getByText('Choose a recovery path for the blocked task')).toBeInTheDocument()
   })
 
@@ -743,7 +992,7 @@ describe('TaskDrawer', () => {
       threadTurns: [],
       task: {
         ...drawerPayload().task,
-        parentGoalId: 'goal-task-fll-overhead-policy',
+        businessEnvelope: { goalId: 'goal-task-fll-overhead-policy' },
         dependsOn: ['task-fll-policy-decision'],
         sizePlan: {
           taskId: 'task-link-editor',
@@ -780,7 +1029,7 @@ describe('TaskDrawer', () => {
     expect(history.state).toEqual({ backgroundPath: '/projects/looma-knit/overview' })
   })
 
-  it('shows hierarchy-native containing work in the drawer overview', async () => {
+  it('shows hierarchy-native containing work in the drawer breadcrumb without duplicating parent path', async () => {
     const payload = drawerPayload({
       threadTurns: [],
       task: {
@@ -792,11 +1041,20 @@ describe('TaskDrawer', () => {
         },
         workKind: 'implementation',
       },
+      relatedTasks: [
+        {
+          ...drawerPayload().task,
+          id: 'task-feature-spec',
+          title: 'ContextMenu',
+          status: 'ready',
+          hierarchy: { childIds: ['task-link-editor'], order: 0 },
+        },
+      ],
     })
     const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
       const url = String(input)
       if (url.startsWith('/api/project/task/task-link-editor')) return json(payload)
-      if (url.startsWith('/api/project')) return json(projectDetail())
+      if (url.startsWith('/api/project')) return json({ ...projectDetail(), tasks: [payload.relatedTasks![0], payload.task] })
       return json({})
     })
     vi.stubGlobal('fetch', fetchMock)
@@ -807,12 +1065,17 @@ describe('TaskDrawer', () => {
       onClose: vi.fn(),
     })
 
-    await screen.findByText('Work hierarchy')
-    expect(screen.getByText('Containing work')).toBeInTheDocument()
-    expect(screen.getByRole('link', { name: 'task-feature-spec' })).toHaveAttribute(
+    await screen.findByText('Task links')
+    expect(screen.queryByText('Parent path')).not.toBeInTheDocument()
+    expect(screen.getByRole('link', { name: 'Looma + Knit' })).toHaveAttribute(
+      'href',
+      '/projects/looma-knit/overview',
+    )
+    expect(screen.getByRole('link', { name: 'T-001' })).toHaveAttribute(
       'href',
       '/projects/looma-knit/task/task-feature-spec',
     )
+    expect(screen.getByText('T-002')).toBeInTheDocument()
     expect(screen.queryByText('No parent goal recorded.')).not.toBeInTheDocument()
     expect(document.body.textContent).not.toMatch(/parent task/i)
   })
@@ -1090,6 +1353,7 @@ describe('TaskDrawer', () => {
   it('runs and manages the task from drawer controls without losing project scope', async () => {
     const payload = drawerPayload({ threadTurns: [] })
     payload.task.status = 'spec_review'
+    payload.task.openQuestions = []
     const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
       const url = String(input)
       if (url.startsWith('/api/project/task/task-link-editor/hold')) {
@@ -1135,7 +1399,7 @@ describe('TaskDrawer', () => {
     })
 
     await screen.findByText('Knit: add link editor controls')
-    await userEvent.click(screen.getByRole('button', { name: /start only this work item/i }))
+    await userEvent.click(screen.getByRole('button', { name: /resume only this work item/i }))
     await userEvent.click(screen.getByText('More task actions'))
     expect(screen.getByRole('button', { name: /reframe task/i })).toBeTruthy()
     expect(screen.getByRole('button', { name: /pause and keep in queue/i })).toBeTruthy()
@@ -1338,6 +1602,45 @@ describe('TaskDrawer', () => {
     expect(screen.getByRole('button', { name: /copy link/i })).toBeTruthy()
   })
 
+  it('warns when a completed task still carries unresolved escalations', async () => {
+    const payload = drawerPayload({ threadTurns: [] })
+    payload.task.status = 'done'
+    payload.task.completedAt = '2026-06-03T12:00:00.000Z'
+    payload.task.terminalSummary = {
+      headline: 'Stripe implementation completed.',
+      detail: 'Implementation landed.',
+    }
+    payload.task.escalations = [
+      {
+        id: 'esc-stripe-live',
+        reason: 'human_judgment_required',
+        summary: 'Stripe live verification still needs dashboard setup.',
+        details: 'Waiting on live Stripe dashboard credentials and webhook verification.',
+        agentId: 'worker-agent',
+        raisedAt: '2026-06-03T11:00:00.000Z',
+      },
+    ]
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input)
+      if (url.startsWith('/api/project/task/task-link-editor')) return json(payload)
+      if (url.startsWith('/api/project')) return json(projectDetail())
+      return json({})
+    })
+    vi.stubGlobal('fetch', fetchMock)
+
+    render(TaskDrawer, {
+      taskId: 'task-link-editor',
+      projectId: 'looma-knit',
+      onClose: vi.fn(),
+    })
+
+    await screen.findByText('Completion hygiene')
+    expect(screen.getByText('This task is marked done but still has unresolved escalation history.')).toBeInTheDocument()
+    expect(screen.getByText(/Stripe live verification still needs dashboard setup/)).toBeInTheDocument()
+    expect(screen.queryByText('Stripe implementation completed.')).toBeNull()
+    expect(screen.queryByRole('button', { name: /^i handled this\.\.\.$/i })).toBeNull()
+  })
+
   it('approves a task spec with an optional note from the drawer footer flow', async () => {
     openDrawerOn('spec')
     const payload = drawerPayload({
@@ -1420,6 +1723,61 @@ describe('TaskDrawer', () => {
     await waitFor(() => {
       expect(fetchMock.mock.calls.some(([input]) => String(input).includes('/approve-spec'))).toBe(true)
     })
+  })
+
+  it('does not offer unqualified spec approval when the structured brief is incomplete', async () => {
+    openDrawerOn('spec')
+    const payload = drawerPayload()
+    payload.task.status = 'spec_review'
+    payload.task.spec = '## Summary\nReview the Font Something variable-font specimen flow.'
+    payload.task.acceptanceCriteria = []
+    payload.task.productBrief = {
+      approvedAt: now,
+      userJob: 'Review the specimen flow.',
+    }
+    payload.threadTurns = []
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input)
+      if (url.startsWith('/api/project/task/task-link-editor/wizards')) {
+        return json({
+          wizards: [
+            {
+              id: 'spec-fill',
+              totalSteps: 4,
+              doneCount: 2,
+              complete: false,
+              activeStepId: 'success',
+              steps: [
+                { id: 'title', title: 'Readable title', why: 'Give this work a name.', status: 'done', skippable: false },
+                { id: 'description', title: 'Starting point', why: 'Name the starting evidence.', status: 'done', skippable: false },
+                { id: 'success', title: 'Success target', why: 'State the target.', status: 'pending', skippable: false },
+                { id: 'acceptance', title: 'Acceptance criteria', why: 'Add checks.', status: 'pending', skippable: false },
+              ],
+            },
+          ],
+        })
+      }
+      if (url.startsWith('/api/project/task/task-link-editor/approve-spec')) {
+        throw new Error('Incomplete spec-review tasks must not expose unqualified approval')
+      }
+      if (url.startsWith('/api/project/task/task-link-editor')) return json(payload)
+      if (url.startsWith('/api/project')) return json(projectDetail())
+      return json({})
+    })
+    vi.stubGlobal('fetch', fetchMock)
+
+    render(TaskDrawer, {
+      taskId: 'task-link-editor',
+      projectId: 'looma-knit',
+      onClose: vi.fn(),
+    })
+
+    await screen.findByText('Task brief checklist')
+    expect(screen.getByText('Success target')).toBeInTheDocument()
+    expect(screen.getByText('Acceptance criteria')).toBeInTheDocument()
+    expect(screen.getByText('Spec needs brief details first')).toBeInTheDocument()
+    expect(screen.getByText(/Add the missing success target and structured acceptance criteria before approval/)).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: /^approve spec$/i })).toBeNull()
   })
 
   it('routes workspace-import approval to the import review surface', async () => {
@@ -1686,7 +2044,7 @@ describe('TaskDrawer', () => {
     expect(screen.queryByRole('button', { name: /resolve blocker/i })).toBeNull()
 
     await userEvent.click(screen.getByRole('button', { name: /^i handled this\.\.\.$/i }))
-    await screen.findByText('Use this when you handled the blocker yourself or want to tell Guildhall exactly where to continue.')
+    await screen.findByText('Use this when you handled the blocker yourself or want to say exactly where to continue.')
     await userEvent.type(
       screen.getByLabelText(/resolution note/i),
       'Use the existing shared button component and rerun checks.',
@@ -1856,7 +2214,7 @@ describe('TaskDrawer', () => {
     await user.click(screen.getByRole('button', { name: /^rework task\.\.\.$/i }))
     await screen.findByRole('dialog', { name: /^rework task$/i })
     await user.type(
-      screen.getByLabelText(/how should guildhall rework this/i),
+      screen.getByLabelText(/how should this be reworked/i),
       'Add an external setup checklist but preserve the current implementation spec.',
     )
     await user.click(screen.getByRole('button', { name: /^rework task$/i }))

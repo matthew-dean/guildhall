@@ -8,6 +8,7 @@ import {
   recordExternalAgentLink,
   updateExternalAgentLinkStatus,
 } from '../external-agent-links.js'
+import { projectStatePathFromMemoryDir } from '@guildhall/sessions'
 
 describe('external agent links', () => {
   it('records and lists Codex subagent links by task id', async () => {
@@ -41,7 +42,7 @@ describe('external agent links', () => {
       const filtered = await listExternalAgentLinks({ memoryDir, taskId: 'looma-004' })
       expect(filtered.links.map(item => item.externalAgentId)).toEqual(['019e7025-5434-7fa2-a400-ebd7894f3a2c'])
 
-      const raw = await fs.readFile(path.join(memoryDir, EXTERNAL_AGENT_LINKS_FILE), 'utf-8')
+      const raw = await fs.readFile(projectStatePathFromMemoryDir(memoryDir, EXTERNAL_AGENT_LINKS_FILE), 'utf-8')
       expect(raw).toContain('Looma GitHub/MIT setup')
     } finally {
       await fs.rm(memoryDir, { recursive: true, force: true })

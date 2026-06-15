@@ -53,7 +53,7 @@
     <p>
       This task is done, so Journey is the friendly summary. Transcript stays here as the source conversation
       {#if doneSummary?.retention?.compactedFullTranscript}
-        , and Guildhall has already reduced it into a done-task summary.
+        , and it has already been reduced into a done-task summary.
       {:else}
         when you need the original thread.
       {/if}
@@ -124,12 +124,12 @@
   h4 {
     margin: 0;
     color: var(--text);
-    font-size: var(--fs-2);
-    line-height: var(--lh-tight);
+    font-size: var(--gh-type-size-body);
+    line-height: var(--gh-type-line-height-tight);
   }
   .muted {
     color: var(--text-muted);
-    font-size: var(--fs-2);
+    font-size: var(--gh-type-size-body);
   }
   .note {
     background: var(--bg);
@@ -144,18 +144,18 @@
     display: flex;
     justify-content: space-between;
     gap: var(--s-3);
-    font-size: var(--fs-0);
+    font-size: var(--gh-type-size-caption);
     color: var(--text-muted);
     text-transform: uppercase;
     letter-spacing: 0.05em;
-    font-weight: 700;
+    font-weight: var(--gh-type-weight-strong);
   }
   .role {
     color: var(--accent);
   }
   p {
-    font-size: var(--fs-2);
-    line-height: var(--lh-body);
+    font-size: var(--gh-type-size-body);
+    line-height: var(--gh-type-line-height-body);
     white-space: pre-wrap;
   }
 </style>

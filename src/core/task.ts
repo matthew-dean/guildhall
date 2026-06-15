@@ -1,12 +1,13 @@
 import { z } from 'zod'
 import { TaskSizePlan, WorkUnitAnalysis } from './task-sizing.js'
+import { StructuredSpec, StructuredSpecContractSurfaceDelta } from './structured-spec.js'
+import { CompletionHandoff, ProofPath } from './task-proof.js'
 
 // ---------------------------------------------------------------------------
 // Task status lifecycle (FR-01)
 //    proposed ─┐
-// import_draft ┼→ exploring → spec_review ┬→ ready → in_progress → review → gate_check → done
-//                                      └→ parent (split container; child tasks hold the runnable work)
-//              │                                                     ↘ blocked
+// import_draft ┼→ exploring → spec_review → ready → in_progress → review → gate_check → done
+//              │                                                   ↘ blocked
 //              └─────────────────────────→ shelved (worker pre-rejection, FR-22)
 //
 // Origination:
@@ -22,7 +23,6 @@ const TaskStatusValue = z.enum([
   'import_draft',  // Workspace-imported draft that still needs shaping before normal intake begins
   'exploring',     // Conversational intake — Spec Agent is building the spec with the user (FR-12)
   'spec_review',   // Spec drafted; awaiting human or coordinator approval
-  'parent',        // Split container; linked child tasks carry the runnable work
   'ready',         // Spec approved, ready for a worker to pick up
   'in_progress',   // Assigned to a worker agent
   'review',        // Worker done, awaiting reviewer agent
@@ -60,6 +60,66 @@ export type PreRejectionCode = z.infer<typeof PreRejectionCode>
 
 export const TaskPriority = z.enum(['critical', 'high', 'normal', 'low'])
 export type TaskPriority = z.infer<typeof TaskPriority>
+
+const ContractSurfaceKind = z.enum([
+  'component_api',
+  'http_api',
+  'event_api',
+  'mcp_api',
+  'schema',
+  'state_machine',
+  'design_system',
+  'domain_capability',
+  'documentation',
+  'other',
+])
+
+export const ContractSurfaceReviewPacket = z.object({
+  id: z.string(),
+  surface: z.object({
+    id: z.string(),
+    label: z.string(),
+    kind: ContractSurfaceKind,
+    authority: z.enum(['provider', 'shared', 'consumer']),
+    scope: z.enum(['project', 'workspace', 'external_reference']),
+    owningProject: z.object({
+      id: z.string(),
+      label: z.string(),
+      path: z.string().optional(),
+    }),
+    domain: z.object({
+      id: z.string(),
+      label: z.string(),
+      path: z.string().optional(),
+    }).optional(),
+  }),
+  currentSpecRef: z.string(),
+  knownConsumers: z.array(z.object({
+    id: z.string(),
+    label: z.string(),
+    path: z.string().optional(),
+  })).default([]),
+  existingInvariants: z.array(z.object({
+    id: z.string(),
+    label: z.string(),
+    rule: z.string(),
+    proofObligations: z.array(z.string()).default([]),
+  })).default([]),
+  existingDecisions: z.array(z.object({
+    id: z.string(),
+    summary: z.string(),
+    decidedAt: z.string(),
+    decidedBy: z.string(),
+    evidenceRefs: z.array(z.string()).default([]),
+    invariantRefs: z.array(z.string()).optional(),
+  })).default([]),
+  siblingSpecRefs: z.array(z.string()).default([]),
+  driftFindings: z.array(z.string()).default([]),
+  currentDelta: StructuredSpecContractSurfaceDelta,
+  proofObligations: z.array(z.string()).default([]),
+  reviewFocus: z.array(z.string()).default([]),
+})
+export type ContractSurfaceReviewPacket = z.infer<typeof ContractSurfaceReviewPacket>
 
 export const TaskHold = z.object({
   previousStatus: TaskStatus,
@@ -227,19 +287,12 @@ export type Escalation = z.infer<typeof Escalation>
 // approval — a task may have an approved brief before its spec is final, or
 // may skip the brief entirely for purely infrastructural work.
 // ---------------------------------------------------------------------------
-// Agent → user questions (FR-mini, ADHD-UX directive)
+// Legacy agent → user question parser.
 //
-// Every prompt an agent puts to the user MUST classify into ONE of four
-// kinds. No free prose. The UI renders each kind with a single deterministic
-// affordance: tap-to-confirm, yes/no, multiple choice with "Other...", or a
-// long-text reply. This kills the "is the agent asking me or telling me?"
-// confusion that emerges when an agent writes a paragraph that contains a
-// question buried inside.
-//
-// Producers (spec agent, coordinator, importer, etc.) emit AgentQuestion
-// values into `task.openQuestions`. The drawer renders any open questions
-// ABOVE the brief / spec / acceptance cards, since they are blocking by
-// definition. Answers are appended via POST /api/project/task/:id/answer.
+// `task.openQuestions` was the pre-0.10 way to persist owner questions on a
+// task. Normal task state must now route owner input through OwnerInputRequest
+// records linked to bounded-chat sessions. Keep this schema for migrations and
+// old-record readers only; do not add it back to the normal Task schema.
 // ---------------------------------------------------------------------------
 
 const AgentQuestionBase = {
@@ -295,16 +348,65 @@ export const AgentQuestion = z.discriminatedUnion('kind', [
 ])
 export type AgentQuestion = z.infer<typeof AgentQuestion>
 
-export const ProductBrief = z.object({
-  userJob: z.string(),                            // The user's job-to-be-done this task serves
-  successMetric: z.string(),                      // How we'll know it worked
-  antiPatterns: z.array(z.string()).default([]),  // Things the task must NOT do (brand / ux / product-level)
-  rolloutPlan: z.string().optional(),             // Staging / flagging / migration notes
-  authoredBy: z.string().optional(),              // agent id or 'human'
+function normalizeStringList(value: unknown): string[] {
+  if (Array.isArray(value)) {
+    return value
+      .filter((item): item is string => typeof item === 'string')
+      .map(item => item.trim())
+      .filter(Boolean)
+  }
+  if (typeof value === 'string') {
+    return value
+      .split('\n')
+      .map(item => item.trim())
+      .map(item => item.replace(/^[*-]\s*/, '').trim())
+      .filter(Boolean)
+  }
+  return []
+}
+
+function normalizeProductBriefInput(value: unknown): unknown {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return value
+  const brief = value as Record<string, unknown>
+  const userJob = typeof brief.userJob === 'string' ? brief.userJob.trim() : ''
+  const successMetric =
+    typeof brief.successMetric === 'string' && brief.successMetric.trim()
+      ? brief.successMetric.trim()
+      : typeof brief.successCriteria === 'string'
+        ? brief.successCriteria.trim()
+        : ''
+  const whyItMattersNow =
+    typeof brief.whyItMattersNow === 'string' && brief.whyItMattersNow.trim()
+      ? brief.whyItMattersNow.trim()
+      : successMetric || userJob
+  const nonGoals = normalizeStringList(brief.nonGoals)
+  const antiPatterns = normalizeStringList(brief.antiPatterns)
+  const mergedNonGoals = Array.from(new Set([...nonGoals, ...antiPatterns]))
+  return {
+    ...brief,
+    ...(userJob ? { userJob } : {}),
+    ...(successMetric ? { successMetric } : {}),
+    ...(whyItMattersNow ? { whyItMattersNow } : {}),
+    nonGoals: mergedNonGoals,
+    antiPatterns: mergedNonGoals,
+  }
+}
+
+export const ProductBrief = z.preprocess(normalizeProductBriefInput, z.object({
+  userJob: z.string(),                              // The user's job-to-be-done this task serves
+  whyItMattersNow: z.string().optional(),           // Why this matters now / why the task exists
+  successMetric: z.string(),                        // How we'll know it worked
+  nonGoals: z.array(z.string()).optional(),         // Intentional boundary for this brief
+  audience: z.string().optional(),                  // Who this is for when it matters to say it plainly
+  usageContext: z.string().optional(),              // Where / when the user encounters this
+  antiPatterns: z.array(z.string()).optional(),     // Legacy/UI alias for nonGoals
+  rolloutPlan: z.string().optional(),               // Staging / flagging / migration notes
+  brandInteractionNotes: z.string().optional(),     // Optional tone/visual interaction notes
+  authoredBy: z.string().optional(),                // agent id or 'human'
   authoredAt: z.string().optional(),
   approvedBy: z.string().optional(),
   approvedAt: z.string().optional(),
-})
+}))
 export type ProductBrief = z.infer<typeof ProductBrief>
 
 // FR-31: structured agent-issue channel. Agents emit issues via the
@@ -409,20 +511,51 @@ export type Checkpoint = z.infer<typeof Checkpoint>
 
 const ACCEPTANCE_VERIFIERS = ['automated', 'review', 'human'] as const
 
+function parseScenarioExpectationFromDescription(description: string): { scenario: string; expectation: string } {
+  const normalized = description.trim().replace(/\s+/g, ' ')
+  const gwtMatch = /^given\s+(.+?),\s*when\s+(.+?),\s*then\s+(.+)$/i.exec(normalized)
+  if (gwtMatch) {
+    return {
+      scenario: `Given ${gwtMatch[1]!.trim()}, when ${gwtMatch[2]!.trim()}`,
+      expectation: `Then ${gwtMatch[3]!.trim()}`,
+    }
+  }
+  return { scenario: normalized, expectation: normalized }
+}
+
 function normalizeAcceptanceCriteria(input: unknown): unknown {
   if (!input || typeof input !== 'object' || Array.isArray(input)) return input
   const criterion = input as Record<string, unknown>
   const verifiedBy = criterion.verifiedBy
-  if (verifiedBy === undefined && typeof criterion.command === 'string' && criterion.command.trim()) {
-    return { ...criterion, verifiedBy: 'automated' }
+  const rawDescription = typeof criterion.description === 'string' ? criterion.description.trim() : ''
+  const rawScenario = typeof criterion.scenario === 'string' ? criterion.scenario.trim() : ''
+  const rawExpectation = typeof criterion.expectation === 'string' ? criterion.expectation.trim() : ''
+  const normalizedDescription = rawDescription || (
+    rawScenario && rawExpectation
+      ? `${rawScenario} ${rawExpectation}`.trim()
+      : rawScenario || rawExpectation
+  )
+  const normalizedScenarioExpectation = normalizedDescription
+    ? parseScenarioExpectationFromDescription(normalizedDescription)
+    : { scenario: rawScenario, expectation: rawExpectation }
+
+  const baseCriterion = {
+    ...criterion,
+    ...(normalizedDescription ? { description: normalizedDescription } : {}),
+    ...(rawScenario ? { scenario: rawScenario } : normalizedScenarioExpectation.scenario ? { scenario: normalizedScenarioExpectation.scenario } : {}),
+    ...(rawExpectation ? { expectation: rawExpectation } : normalizedScenarioExpectation.expectation ? { expectation: normalizedScenarioExpectation.expectation } : {}),
   }
-  if (typeof verifiedBy !== 'string') return input
-  if ((ACCEPTANCE_VERIFIERS as readonly string[]).includes(verifiedBy)) return input
+
+  if (verifiedBy === undefined && typeof criterion.command === 'string' && criterion.command.trim()) {
+    return { ...baseCriterion, verifiedBy: 'automated' }
+  }
+  if (typeof verifiedBy !== 'string') return baseCriterion
+  if ((ACCEPTANCE_VERIFIERS as readonly string[]).includes(verifiedBy)) return baseCriterion
 
   const value = verifiedBy.trim()
   const looksLikeCommand = /\s|\/|^(pnpm|npm|yarn|bun|vitest|tsx|node|tsgo|tsc|cargo|go|pytest|python|make)\b/.test(value)
   return {
-    ...criterion,
+    ...baseCriterion,
     verifiedBy: looksLikeCommand ? 'automated' : 'review',
     ...(looksLikeCommand && typeof criterion.command !== 'string' ? { command: value } : {}),
   }
@@ -431,9 +564,13 @@ function normalizeAcceptanceCriteria(input: unknown): unknown {
 export const AcceptanceCriteria = z.preprocess(normalizeAcceptanceCriteria, z.object({
   id: z.string(),
   description: z.string(),
+  scenario: z.string().optional(),
+  expectation: z.string().optional(),
   // How to verify: 'automated' = shell command, 'review' = reviewer agent judgment
   verifiedBy: z.enum(ACCEPTANCE_VERIFIERS),
   command: z.string().optional(), // for automated criteria
+  evidenceHint: z.string().optional(),
+  negativeCase: z.string().optional(),
   met: z.boolean().default(false),
 }))
 export type AcceptanceCriteria = z.infer<typeof AcceptanceCriteria>
@@ -462,6 +599,11 @@ export type TaskRequest = z.infer<typeof TaskRequest>
 export const WorkKind = z.enum([
   'app_spec',
   'feature_spec',
+  'feature',
+  'primitive',
+  'component',
+  'story',
+  'test',
   'implementation',
   'setup',
   'verification',
@@ -472,6 +614,55 @@ export const WorkKind = z.enum([
   'learning',
 ])
 export type WorkKind = z.infer<typeof WorkKind>
+
+export const TaskDelivery = z.object({
+  driver: z.string().optional(),
+  provider: z.string().optional(),
+  supports: z.array(z.string()).default([]),
+  usesPrimitives: z.array(z.string()).default([]),
+  provesPrimitives: z.array(z.string()).default([]),
+  proofKind: z.string().optional(),
+})
+export type TaskDelivery = z.infer<typeof TaskDelivery>
+
+export const WorkVisibilityKind = z.enum(['primary', 'supporting', 'internal_step', 'hidden'])
+export type WorkVisibilityKind = z.infer<typeof WorkVisibilityKind>
+
+export const WorkVisibility = z.object({
+  kind: WorkVisibilityKind,
+  label: z.string().optional(),
+  countInProjectTotals: z.boolean().optional(),
+})
+export type WorkVisibility = z.infer<typeof WorkVisibility>
+
+export const DeliveryStepKind = z.enum([
+  'make_change',
+  'verify',
+  'document',
+  'review',
+  'decide',
+  'coordinate',
+  'release',
+  'handoff',
+  'external_action',
+])
+export type DeliveryStepKind = z.infer<typeof DeliveryStepKind>
+
+export const DeliveryStepStatus = z.enum(['todo', 'active', 'blocked', 'done', 'waived'])
+export type DeliveryStepStatus = z.infer<typeof DeliveryStepStatus>
+
+export const DeliveryStep = z.object({
+  id: z.string(),
+  title: z.string(),
+  kind: DeliveryStepKind,
+  status: DeliveryStepStatus,
+  required: z.boolean().default(true),
+  blocksCompletion: z.boolean().default(true),
+  sourceTaskId: z.string().optional(),
+  evidenceChannel: z.string().optional(),
+  toolLabel: z.string().optional(),
+})
+export type DeliveryStep = z.infer<typeof DeliveryStep>
 
 export const WorkHierarchy = z.object({
   parentId: z.string().optional(),
@@ -491,6 +682,11 @@ export const WorkCompletionBoundary = z.object({
   deferAllowed: z.boolean().default(false),
 })
 export type WorkCompletionBoundary = z.infer<typeof WorkCompletionBoundary>
+
+export const BusinessEnvelope = z.object({
+  goalId: z.string(),
+})
+export type BusinessEnvelope = z.infer<typeof BusinessEnvelope>
 
 export const TaskKind = z.enum([
   'implementation',
@@ -708,6 +904,11 @@ export const RequestIntake = z.object({
     title: z.string(),
     role: z.string(),
   })).default([]),
+  assumptions: z.array(z.string()).default([]),
+  missingInformation: z.array(z.string()).default([]),
+  ownerDecisionNeeded: z.string().optional(),
+  whyOwnerDecisionMatters: z.string().optional(),
+  evidenceRefs: z.array(z.string()).default([]),
   pressureTestSummary: PressureTestSummary.default(DEFAULT_PRESSURE_TEST_SUMMARY),
   clarifyingQuestions: z.array(z.string()).default([]),
   createdAt: z.string(),
@@ -717,6 +918,7 @@ export type RequestIntake = z.infer<typeof RequestIntake>
 
 export const Task = z.object({
   id: z.string(),
+  displayKey: z.string().optional(),
   title: z.string(),
   description: z.string(),
 
@@ -736,18 +938,14 @@ export const Task = z.object({
 
   // Set by Spec Agent before implementation begins
   spec: z.string().optional(),
+  structuredSpec: StructuredSpec.optional(),
+  contractSurfaceReviewPackets: z.array(ContractSurfaceReviewPacket).optional(),
   acceptanceCriteria: z.array(AcceptanceCriteria).default([]),
 
   // Product brief: the *why* layer of a task — user job, success metric,
   // anti-patterns, rollout plan. Authored by the Spec Agent alongside the
   // technical spec; approved by the human independently of spec approval.
   productBrief: ProductBrief.optional(),
-
-  // Open agent → user questions. See AgentQuestion above. Any question with
-  // `answeredAt` undefined is "open" and renders at the top of the drawer
-  // until the user answers. Producers MUST classify into one of the four
-  // kinds — no free prose questions.
-  openQuestions: z.array(AgentQuestion).optional(),
 
   // Scope boundaries — what this task explicitly will NOT do
   outOfScope: z.array(z.string()).default([]),
@@ -837,8 +1035,14 @@ export const Task = z.object({
   origination: TaskOrigination.default('human'),
   proposedBy: z.string().optional(),          // agent id that proposed the task
   proposalRationale: z.string().optional(),   // why the proposing agent thinks this is worth doing
-  parentGoalId: z.string().optional(),        // FR-23 business envelope — tasks carry a goalId
+  delivery: TaskDelivery.optional(),
+  workVisibility: WorkVisibility.optional(),
+  deliverySteps: z.array(DeliveryStep).optional(),
+  businessEnvelope: BusinessEnvelope.optional(),
   workKind: WorkKind.optional(),
+  // Work containment is represented by hierarchy links, never by task status.
+  // Required migration 0.10.0/task-hierarchy-links converts old status: parent
+  // records before normal runtime paths parse task queues.
   hierarchy: WorkHierarchy.optional(),
   completionBoundary: WorkCompletionBoundary.optional(),
   taskKind: TaskKind.optional(),
@@ -889,8 +1093,14 @@ export const Task = z.object({
   // Proof paths and completion handoffs are public task artifacts generated by
   // the 0.9 finishability flow. Runtime owns their detailed schemas; core keeps
   // these fields permissive so older queues and UI payloads can carry them.
-  proofPaths: z.array(z.unknown()).optional(),
-  completionHandoff: z.unknown().optional(),
+  proofPaths: z.array(z.union([
+    ProofPath,
+    z.object({}).passthrough(),
+  ])).optional(),
+  completionHandoff: z.union([
+    CompletionHandoff,
+    z.object({ id: z.string().optional(), taskId: z.string().optional() }).passthrough(),
+  ]).optional(),
 
   // FR-22: recorded when a worker pre-rejects the task, or when the
   // orchestrator shelves a task per a policy decision (e.g. FR-21 human_only).
@@ -971,11 +1181,19 @@ export const Task = z.object({
   updatedAt: z.string(),
   completedAt: z.string().optional(),
 })
-export type Task = z.infer<typeof Task>
+type ParsedTask = z.infer<typeof Task>
+export type Task = ParsedTask & {
+  /**
+   * @deprecated Legacy pre-0.10 raw field. The normal Task schema no longer
+   * accepts or writes task-local owner questions; use OwnerInputRequest records
+   * linked to bounded-chat sessions instead.
+   */
+  openQuestions?: AgentQuestion[]
+}
 
 export const TaskQueue = z.object({
   version: z.number().default(1),
   lastUpdated: z.string(),
   tasks: z.array(Task),
 })
-export type TaskQueue = z.infer<typeof TaskQueue>
+export type TaskQueue = Omit<z.infer<typeof TaskQueue>, 'tasks'> & { tasks: Task[] }

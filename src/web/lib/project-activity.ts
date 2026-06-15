@@ -195,6 +195,14 @@ function lineFromEvent(
   }
 }
 
+function ownerInputTickerMessage(message: string | undefined): string {
+  if (/question|answer/i.test(message ?? '')) return 'Waiting for your answer'
+  if (/spec/i.test(message ?? '')) return 'Spec review pending'
+  if (/brief/i.test(message ?? '')) return 'Brief review pending'
+  if (/recover|blocked|escalation/i.test(message ?? '')) return 'Recovery decision pending'
+  return 'Waiting on your input'
+}
+
 export function buildProjectTicker(
   detail: ProjectDetail | null | undefined,
   latestEvent: EventEnvelope | null,
@@ -206,7 +214,7 @@ export function buildProjectTicker(
       pulse: false,
       actorLabel: 'Setup',
       label: 'Setup',
-      message: 'Finish first-time Guildhall setup',
+      message: 'Finish first-time setup',
       timeLabel: null,
     }
   }
@@ -217,7 +225,7 @@ export function buildProjectTicker(
       pulse: false,
       actorLabel: 'Needs you',
       label: 'Needs you',
-      message: detail.startReadiness.message || 'Guildhall is waiting on your answer',
+      message: ownerInputTickerMessage(detail.startReadiness.message),
       timeLabel: null,
     }
   }
@@ -228,7 +236,7 @@ export function buildProjectTicker(
       pulse: false,
       actorLabel: 'Needs migration',
       label: 'Needs migration',
-      message: detail.startReadiness.message || 'Run the required Guildhall migration before starting this project.',
+      message: detail.startReadiness.message || 'Run the required migration before starting this project.',
       timeLabel: null,
     }
   }
@@ -239,7 +247,7 @@ export function buildProjectTicker(
       pulse: false,
       actorLabel: 'Run error',
       label: 'Error',
-      message: friendlyRuntimeMessage(detail.run.error ?? 'Guildhall run failed.'),
+      message: friendlyRuntimeMessage(detail.run.error ?? 'Run failed.'),
       timeLabel: null,
     }
   }
@@ -282,13 +290,16 @@ export function buildProjectTicker(
   if (fromEvent) return fromEvent
 
   if (detail?.run?.status === 'running') {
+    const oneTaskRun = detail.run.mode === 'one_task'
     return {
       tone: 'active',
       pulse: true,
       actorLabel: 'Coordinator',
       label: 'Live',
       message:
-        active > 0
+        oneTaskRun
+          ? 'Advancing one task'
+          : active > 0
           ? `Working on ${active} ${pluralize(active, 'task')}`
           : 'Run is active on this project',
       timeLabel: null,
@@ -308,8 +319,8 @@ export function buildProjectTicker(
     return {
       tone: 'warn',
       pulse: false,
-      actorLabel: 'Needs task briefs',
-      label: 'Drafts',
+      actorLabel: 'Needs brief',
+      label: 'Needs brief',
       message: `${importDrafts} imported ${pluralize(importDrafts, 'draft')} ${importDrafts === 1 ? 'needs' : 'need'} task briefs`,
       timeLabel: null,
     }
@@ -320,7 +331,7 @@ export function buildProjectTicker(
       pulse: false,
       actorLabel: 'Paused',
       label: 'Paused',
-      message: `${active} ${pluralize(active, 'task')} paused until Guildhall starts`,
+      message: `${active} ${pluralize(active, 'task')} paused until you resume`,
       timeLabel: null,
     }
   }
@@ -346,14 +357,14 @@ export function hasCurrentGitUnavailableStory(detail: ProjectDetail | null | und
 export function buildProjectCardTicker(project: ServiceProjectSummary): ProjectActivityLine {
   const counts = project.taskCounts ?? { total: 0, active: 0, draftReview: 0, blocked: 0, done: 0, shelved: 0 }
   if (project.initializationNeeded) {
-    return { tone: 'warn', pulse: false, label: 'Setup', message: 'First-time Guildhall setup' }
+    return { tone: 'warn', pulse: false, label: 'Setup', message: 'First-time setup' }
   }
   if (project.startReadiness?.code === 'required_migration_pending') {
     return {
       tone: 'warn',
       pulse: false,
       label: 'Needs migration',
-      message: project.startReadiness.message ?? 'Run the required Guildhall migration before starting this project.',
+      message: project.startReadiness.message ?? 'Run the required migration before starting this project.',
     }
   }
   if (project.startReadiness?.code === 'owner_input_required') {
@@ -361,16 +372,22 @@ export function buildProjectCardTicker(project: ServiceProjectSummary): ProjectA
       tone: 'warn',
       pulse: false,
       label: 'Needs you',
-      message: project.startReadiness.message ?? 'Guildhall is waiting on your input.',
+      message: project.startReadiness.message ?? 'Waiting on your input.',
     }
   }
   if (project.run?.status === 'running') {
+    const oneTaskRun = project.run.mode === 'one_task'
+    const oneTaskMessage = project.highlights?.activeTaskTitle
+      ? `Advancing one task: ${project.highlights.activeTaskTitle}`
+      : 'Advancing one task'
     return {
       tone: 'active',
       pulse: true,
       label: 'Live',
       message:
-        project.highlights?.activeTaskTitle
+        oneTaskRun
+          ? oneTaskMessage
+          : project.highlights?.activeTaskTitle
           ?? (counts.active > 0 ? `Working on ${counts.active} ${pluralize(counts.active, 'task')}` : 'Run is active'),
     }
   }
@@ -388,7 +405,7 @@ export function buildProjectCardTicker(project: ServiceProjectSummary): ProjectA
     return {
       tone: 'warn',
       pulse: false,
-      label: 'Needs task briefs',
+      label: 'Needs brief',
       message: `${counts.draftReview} imported ${pluralize(counts.draftReview, 'draft')} waiting`,
     }
   }

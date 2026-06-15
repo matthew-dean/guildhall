@@ -1,6 +1,6 @@
 <script lang="ts">
   import ActionBar from '../../lib/ActionBar.svelte'
-  import Card from '../../lib/Card.svelte'
+  import Card from '../../lib/ui-compat/Card.svelte'
   import Row from '../../lib/Row.svelte'
   import Stack from '../../lib/Stack.svelte'
   import Button from '../../lib/Button.svelte'
@@ -8,6 +8,7 @@
   import Icon from '../../lib/Icon.svelte'
   import Markdown from '../../lib/Markdown.svelte'
   import SideDrawer from '../../lib/SideDrawer.svelte'
+  import UtilityPanel from '../../lib/UtilityPanel.svelte'
   import WizardStepper from '../../lib/WizardStepper.svelte'
   import { project } from '../../lib/project.svelte.js'
   import { nav } from '../../lib/nav.svelte.js'
@@ -802,7 +803,7 @@
   <header class="head">
     <h2>Review existing project work</h2>
     <p class="sub">
-      Guildhall has already scanned the notes, roadmaps, and project docs it found here.
+      The notes, roadmaps, and project docs here have already been scanned.
       You are confirming what should be remembered as context and what should become backlog tasks.
     </p>
   </header>
@@ -824,7 +825,7 @@
           </div>
           <h3 class="section-title">Import review shelved</h3>
           <p class="section-copy">
-            Guildhall will leave this import out of the active queue. Re-read project notes if the docs changed or you want to review it again.
+            This import will stay out of the active queue. Re-read project notes if the docs changed or you want to review it again.
           </p>
         </div>
         <Row justify="end" gap="3" wrap>
@@ -838,7 +839,7 @@
   {:else if !data.detected}
     <Card>
       <Stack gap="4">
-        <p class="muted">Guildhall did not find any importable planning material yet.</p>
+        <p class="muted">No importable planning material was found yet.</p>
         <Row justify="end" gap="3" wrap>
           <Button variant="agent" onclick={rerun} disabled={busy !== null}>
             <Icon name="sparkles" size={14} />
@@ -857,15 +858,15 @@
           </div>
           {#if completedImport.tasksAdded > 0}
             <h3 class="section-title">
-              Guildhall created {completedImport.tasksAdded} draft task{completedImport.tasksAdded === 1 ? '' : 's'}.
+              Created {completedImport.tasksAdded} draft task{completedImport.tasksAdded === 1 ? '' : 's'}.
             </h3>
             <p class="section-copy">
               Nothing starts automatically. These new tasks are paused drafts until you shape them in Thread.
             </p>
           {:else}
-            <h3 class="section-title">Guildhall saved project context.</h3>
+            <h3 class="section-title">Project context saved.</h3>
             <p class="section-copy">
-              Guildhall did not infer draft tasks from this pass, but it recorded the sources and goals so the next task can start from real context.
+              This pass did not infer draft tasks, but it recorded the sources and goals so the next task can start from real context.
             </p>
           {/if}
         </div>
@@ -899,7 +900,7 @@
           </div>
           <h3 class="section-title">This project import has already been approved.</h3>
           <p class="section-copy">
-            Guildhall saved the project context and marked the import review done. Re-run only if the project notes changed or the import needs repair.
+            Project context was saved and the import review is done. Re-run only if the project notes changed or the import needs repair.
           </p>
           <div class="metric-row" aria-label="Completed import summary">
             {#if completedParsedTaskCount > 0}
@@ -919,8 +920,16 @@
         {#if completedMissingTaskCount > 0}
           <p class="learned-note">
             {completedMissingTaskCount} proposed task{completedMissingTaskCount === 1 ? '' : 's'} from this import
-            {completedMissingTaskCount === 1 ? ' is' : ' are'} missing from Work. Restore the import to add only those missing drafts.
+            {completedMissingTaskCount === 1 ? ' is' : ' are'} missing from Work.
           </p>
+          <div class="repair-guidance" aria-label="Import repair guidance">
+            <p>
+              Use Restore to add the missing drafts from the approved import. It keeps the saved review and only recreates drafts that are not in Work.
+            </p>
+            <p>
+              Use Re-read only if the project notes changed or this import looks stale. That rebuilds the import from source notes before you decide what to keep.
+            </p>
+          </div>
         {:else if completedParsedTaskCount > 0}
           <p class="learned-note">
             All proposed tasks from this completed import already exist in Work.
@@ -929,14 +938,14 @@
         <Row justify="end" gap="3" wrap>
           <Button variant="agent" onclick={rerun} disabled={busy !== null}>
             <Icon name="sparkles" size={14} />
-            {busy === 'rerun' ? 'Re-reading…' : 'Re-run import'}
+            {busy === 'rerun' ? 'Re-reading...' : 'Re-read project notes'}
           </Button>
           <Button variant="secondary" onclick={() => nav(projectActionHref('/work'))}>
             Open Work
           </Button>
           {#if completedMissingTaskCount > 0}
             <Button variant="primary" onclick={restoreCompletedImportDrafts} disabled={busy !== null}>
-              {busy === 'approve' ? 'Restoring…' : `Restore ${completedMissingTaskCount} draft task${completedMissingTaskCount === 1 ? '' : 's'}`}
+              {busy === 'approve' ? 'Restoring...' : `Restore ${completedMissingTaskCount} missing draft${completedMissingTaskCount === 1 ? '' : 's'}`}
             </Button>
           {:else}
             <Button variant="primary" onclick={() => nav(projectActionHref('/thread'))}>
@@ -958,14 +967,14 @@
               <span>Found</span>
             </div>
             <h3 class="section-title">
-              Guildhall found planning notes in {areaGroups.length} project part{areaGroups.length === 1 ? '' : 's'}
+              Found planning notes in {areaGroups.length} project part{areaGroups.length === 1 ? '' : 's'}
             </h3>
             <p class="section-copy">
               {#if hasTaskCandidates}
-                Confirm the parts first. Then Guildhall will walk you through the sources and the possible tasks,
+                Confirm the parts first. Then review the sources and possible tasks,
                 one slice at a time.
               {:else}
-                Confirm the parts first. Guildhall found planning notes and goals here, but it did not infer any draft tasks yet.
+                Confirm the parts first. Planning notes and goals were found here, but no draft tasks were inferred yet.
                 You can still review the sources and import the project context it found.
               {/if}
             </p>
@@ -1064,8 +1073,8 @@
             </div>
             <h3 class="section-title">Choose the parts for this pass</h3>
             <p class="section-copy">
-              Nothing is being imported yet. Select the parts you want Guildhall to review.
-              Next, Guildhall will walk through their notes one part at a time.
+              Nothing is being imported yet. Select the parts you want to review.
+              Next, you will walk through their notes one part at a time.
               Context-only parts can still be useful: they preserve goals, decisions, and framing even when they do not contain task candidates.
             </p>
             <div class="metric-row" aria-label="Part selection summary">
@@ -1075,7 +1084,7 @@
           </div>
           <Stack gap="4">
           {#each primaryAreas as area (area.key)}
-            <div class:selected={selectedAreaKeys.includes(area.key)} class="source-card">
+            <UtilityPanel className="source-card" selected={selectedAreaKeys.includes(area.key)} tone="neutral">
               <Row justify="between" align="start" gap="4" wrap>
                 <div class="card-main">
                   <Stack gap="3">
@@ -1112,14 +1121,14 @@
                   {/if}
                 </ActionBar>
               </Row>
-            </div>
+            </UtilityPanel>
           {/each}
           </Stack>
           {#if secondaryAreas.length > 0}
             <details class="secondary-summary" open={primaryAreas.length === 0}>
               <summary>Included project context</summary>
               <p class="secondary-help">
-                These parts contain goals, specs, or context rather than obvious task lists. Guildhall includes project docs by default so future work starts from the project’s actual direction. Exclude a part only when it is stale, noisy, or unrelated.
+                These parts contain goals, specs, or context rather than obvious task lists. Project docs are included by default so future work starts from the project’s actual direction. Exclude a part only when it is stale, noisy, or unrelated.
               </p>
               <div class="bulk-row">
                 <span class="bulk-label">{secondaryAreas.length} reference-only part{secondaryAreas.length === 1 ? '' : 's'} available</span>
@@ -1134,7 +1143,7 @@
               </div>
               <Stack gap="4">
               {#each secondaryAreas as area (area.key)}
-                <div class:selected={selectedAreaKeys.includes(area.key)} class="source-card secondary">
+                <UtilityPanel className="source-card secondary" selected={selectedAreaKeys.includes(area.key)} tone="neutral">
                   <Row justify="between" align="start" gap="4" wrap>
                     <div class="card-main">
                       <Stack gap="3">
@@ -1169,7 +1178,7 @@
                       {/if}
                     </ActionBar>
                   </Row>
-                </div>
+                </UtilityPanel>
               {/each}
               </Stack>
             </details>
@@ -1194,7 +1203,7 @@
             </div>
             <h3 class="section-title">{currentArea ? `Review notes in ${currentArea.label}` : 'Review notes'}</h3>
             <p class="section-copy">
-            These are the planning notes Guildhall found inside this part of the project.
+            These are the planning notes found inside this part of the project.
             Keep the notes you want to use in this pass, then move on.
             Reference notes become project context; task-bearing notes can also create draft tasks.
             </p>
@@ -1210,7 +1219,7 @@
         {#if currentArea}
           <Stack gap="4">
             {#each currentAreaPrimarySources as group (group.key)}
-              <div class:selected={selectedSourceKeys.includes(group.key)} class="source-card">
+              <UtilityPanel className="source-card" selected={selectedSourceKeys.includes(group.key)} tone="neutral">
                 <Row justify="between" align="start" gap="4" wrap>
                   <div class="card-main">
                     <Stack gap="3">
@@ -1249,7 +1258,7 @@
                     </Button>
                   </ActionBar>
                 </Row>
-              </div>
+              </UtilityPanel>
             {/each}
           </Stack>
           {#if currentAreaSecondarySources.length > 0}
@@ -1287,7 +1296,7 @@
                 {#if individualSourceReviewOpen}
                 <Stack gap="4">
                   {#each currentAreaSecondarySources as group (group.key)}
-                    <div class:selected={selectedSourceKeys.includes(group.key)} class="source-card secondary">
+                    <UtilityPanel className="source-card secondary" selected={selectedSourceKeys.includes(group.key)} tone="neutral">
                       <Row justify="between" align="start" gap="4" wrap>
                         <label class="source-check">
                           <input
@@ -1320,7 +1329,7 @@
                           Details
                         </Button>
                       </Row>
-                    </div>
+                    </UtilityPanel>
                   {/each}
                 </Stack>
                 {/if}
@@ -1354,7 +1363,7 @@
             </div>
             <h3 class="section-title">{currentGroup ? `Review tasks from ${currentGroup.label}` : 'Review selected tasks'}</h3>
             <p class="section-copy">
-            Guildhall already turned these notes into draft tasks. Keep the ones that belong in this pass.
+            These notes already became draft tasks. Keep the ones that belong in this pass.
             </p>
             <div class="metric-row" aria-label="Task review summary">
               <Chip label={`Source ${Math.min(currentGroupIndex + 1, Math.max(selectedTaskGroups.length, 1))} of ${Math.max(selectedTaskGroups.length, 1)}`} tone="accent" />
@@ -1424,13 +1433,13 @@
             {#if selectedTasks.length > 0}
               <h3 class="section-title">Create {selectedTasks.length} draft task{selectedTasks.length === 1 ? '' : 's'}?</h3>
               <p class="section-copy">
-              Guildhall will create paused draft tasks from these notes. Nothing starts automatically.
+              Paused draft tasks will be created from these notes. Nothing starts automatically.
               Next, you will shape them in Thread before any worker begins.
               </p>
             {:else}
               <h3 class="section-title">Import the project notes and goals?</h3>
               <p class="section-copy">
-              Guildhall did not infer draft tasks from these sources, but it can still record the goals and notes it found so the project starts from honest context instead of an empty slate.
+              These sources did not produce draft tasks, but their goals and notes can still be recorded so the project starts from honest context instead of an empty slate.
               </p>
             {/if}
           </div>
@@ -1463,7 +1472,7 @@
                 </Card>
               {/each}
             {:else}
-              <Card title="What Guildhall will keep">
+              <Card title="What will be kept">
                 <Stack gap="3">
                   <div class="metric-row">
                     <Chip label={`${selectedAreaKeys.length} part${selectedAreaKeys.length === 1 ? '' : 's'}`} tone="accent" />
@@ -1473,7 +1482,7 @@
                     {/if}
                   </div>
                   <p class="detail-copy">
-                    This pass records the project context Guildhall found so later task shaping can build on it, even though this scan did not yield any draft task candidates yet.
+                    This pass records the project context that was found so later task shaping can build on it, even though this scan did not yield any draft task candidates yet.
                   </p>
                 </Stack>
               </Card>
@@ -1570,7 +1579,7 @@
             </div>
           {/if}
           <div class="detail-block">
-            <div class="detail-label">What Guildhall found here</div>
+            <div class="detail-label">What was found here</div>
             <div class="metric-row">
               {#if focusedSource.taskCount > 0}
                 <Chip label={`${focusedSource.taskCount} tasks`} tone="ok" />
@@ -1679,39 +1688,39 @@
   .wrap {
     display: flex;
     flex-direction: column;
-    gap: var(--s-5);
+    gap: var(--gh-space-5);
   }
   .head {
     display: flex;
     flex-direction: column;
-    gap: var(--s-3);
+    gap: var(--gh-space-3);
   }
   .head h2 {
     margin: 0;
-    font-size: var(--fs-4);
-    font-weight: 700;
-    line-height: var(--lh-tight);
+    font-size: var(--gh-type-size-section-title);
+    font-weight: var(--gh-type-weight-strong);
+    line-height: var(--gh-type-line-height-tight);
   }
   .sub {
     margin: 0;
     color: var(--text-muted);
-    font-size: var(--fs-2);
-    line-height: var(--lh-body);
+    font-size: var(--gh-type-size-body);
+    line-height: var(--gh-type-line-height-body);
     max-width: 72ch;
   }
-  .muted { color: var(--text-muted); font-size: var(--fs-1); }
+  .muted { color: var(--text-muted); font-size: var(--gh-type-size-meta); }
   .section-intro {
     display: flex;
     flex-direction: column;
-    gap: var(--s-3);
+    gap: var(--gh-space-3);
   }
   .section-kicker {
     display: flex;
     align-items: center;
-    gap: var(--s-2);
+    gap: var(--gh-space-2);
     color: var(--text-muted);
-    font-size: var(--fs-1);
-    font-weight: 600;
+    font-size: var(--gh-type-size-meta);
+    font-weight: var(--gh-type-weight-strong);
     text-transform: uppercase;
     letter-spacing: 0.04em;
   }
@@ -1722,38 +1731,38 @@
   .section-copy {
     margin: 0;
     color: var(--text-muted);
-    font-size: var(--fs-2);
-    line-height: var(--lh-body);
+    font-size: var(--gh-type-size-body);
+    line-height: var(--gh-type-line-height-body);
     max-width: 72ch;
   }
   .detail-label {
     color: var(--text-muted);
-    font-size: var(--fs-0);
+    font-size: var(--gh-type-size-caption);
     text-transform: uppercase;
     letter-spacing: 0.05em;
-    font-weight: 700;
-    margin-bottom: var(--s-1);
+    font-weight: var(--gh-type-weight-medium);
+    margin-bottom: var(--gh-space-1);
   }
   .detail-copy {
     margin: 0;
     color: var(--text);
-    font-size: var(--fs-1);
-    line-height: var(--lh-body);
+    font-size: var(--gh-type-size-meta);
+    line-height: var(--gh-type-line-height-body);
   }
   .detail-list {
     margin: 0;
-    padding-left: 1.1rem;
+    padding-left: var(--gh-space-4);
     color: var(--text);
-    font-size: var(--fs-1);
-    line-height: var(--lh-body);
+    font-size: var(--gh-type-size-meta);
+    line-height: var(--gh-type-line-height-body);
   }
   .detail-source {
     width: 100%;
     display: grid;
-    gap: var(--s-1);
-    padding: var(--s-3);
+    gap: var(--gh-space-1);
+    padding: var(--gh-space-3);
     border: 1px solid var(--border);
-    border-radius: var(--r-1);
+    border-radius: var(--gh-radius-1);
     background: var(--bg-raised);
     color: var(--text);
     font: inherit;
@@ -1765,70 +1774,84 @@
     background: color-mix(in srgb, var(--accent) 8%, var(--bg-raised));
   }
   .detail-source-title {
-    font-weight: 700;
+    font-weight: var(--gh-type-weight-strong);
   }
   .detail-source-path,
   .detail-source-summary {
     color: var(--text-muted);
-    font-size: var(--fs-1);
-    line-height: var(--lh-body);
+    font-size: var(--gh-type-size-meta);
+    line-height: var(--gh-type-line-height-body);
   }
   .detail-code {
     color: var(--text-muted);
-    font-size: var(--fs-1);
-    line-height: var(--lh-body);
+    font-size: var(--gh-type-size-meta);
+    line-height: var(--gh-type-line-height-body);
     word-break: break-word;
   }
   .detail-block {
     display: flex;
     flex-direction: column;
-    gap: var(--s-2);
+    gap: var(--gh-space-2);
   }
   .metric-row {
     display: flex;
-    gap: var(--s-2);
+    gap: var(--gh-space-2);
     flex-wrap: wrap;
     align-items: center;
   }
   .learned-note {
-    margin: var(--s-2) 0 0;
+    margin: var(--gh-space-2) 0 0;
     color: var(--accent-2);
-    font-size: var(--fs-1);
+    font-size: var(--gh-type-size-meta);
+  }
+  .repair-guidance {
+    display: grid;
+    gap: var(--gh-space-2);
+    padding: var(--gh-space-3);
+    border: 1px solid color-mix(in srgb, var(--accent) 18%, var(--border));
+    border-radius: var(--gh-radius-1);
+    background: color-mix(in srgb, var(--accent) 8%, transparent);
+  }
+  .repair-guidance p {
+    margin: 0;
+    color: var(--text);
+    font-size: var(--gh-type-size-body);
+    line-height: var(--gh-type-line-height-body);
   }
   .source-summary {
     list-style: none;
     padding: 0;
-    margin: var(--s-4) 0 0;
+    margin: var(--gh-space-4) 0 0;
     display: flex;
     flex-direction: column;
-    gap: var(--s-4);
+    gap: var(--gh-space-4);
   }
   .source-summary li {
     display: grid;
     grid-template-columns: minmax(240px, 320px) minmax(0, 1fr);
-    gap: var(--s-4);
-    padding: var(--s-3) var(--s-4);
+    gap: var(--gh-space-4);
+    padding: var(--gh-space-3) var(--gh-space-4);
     border: 1px solid var(--border);
-    border-radius: var(--r-1);
+    border-radius: var(--gh-radius-1);
     background: var(--bg-raised);
     align-items: flex-start;
   }
   .summary-main {
     display: flex;
     flex-direction: column;
-    gap: var(--s-2);
+    gap: var(--gh-space-2);
     min-width: 0;
   }
   .summary-title-row {
     display: flex;
     align-items: center;
-    gap: var(--s-2);
+    gap: var(--gh-space-2);
     flex-wrap: wrap;
   }
   .summary-side {
     display: flex;
     flex-direction: column;
-    gap: var(--s-2);
+    gap: var(--gh-space-2);
     align-items: flex-start;
     text-align: left;
     min-width: 0;
@@ -1836,15 +1859,15 @@
   }
   .summary-label {
     color: var(--text-muted);
-    font-size: var(--fs-0);
+    font-size: var(--gh-type-size-caption);
     text-transform: uppercase;
     letter-spacing: 0.05em;
-    font-weight: 700;
+    font-weight: var(--gh-type-weight-medium);
   }
   .summary-preview {
     color: var(--text);
-    font-size: var(--fs-2);
-    line-height: var(--lh-body);
+    font-size: var(--gh-type-size-body);
+    line-height: var(--gh-type-line-height-body);
   }
   .inspect-task {
     appearance: none;
@@ -1859,7 +1882,7 @@
   .inspect-task {
     flex: 1;
     min-width: 0;
-    border-radius: var(--r-1);
+    border-radius: var(--gh-radius-1);
     transition: background-color 140ms ease, box-shadow 140ms ease;
   }
   .inspect-task:hover {
@@ -1870,28 +1893,28 @@
     box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--accent) 45%, transparent);
   }
   .source-summary.nested {
-    margin-top: var(--s-2);
+    margin-top: var(--gh-space-2);
   }
   .secondary-summary {
-    margin-top: var(--s-4);
+    margin-top: var(--gh-space-4);
   }
   .secondary-summary.reference-only {
     margin-top: 0;
   }
   .secondary-help {
-    margin: var(--s-3) 0;
+    margin: var(--gh-space-3) 0;
     color: var(--text-muted);
-    font-size: var(--fs-2);
-    line-height: var(--lh-body);
+    font-size: var(--gh-type-size-body);
+    line-height: var(--gh-type-line-height-body);
     max-width: 72ch;
   }
   .bulk-row {
     display: flex;
     align-items: center;
     justify-content: space-between;
-    gap: var(--s-3);
+    gap: var(--gh-space-3);
     flex-wrap: wrap;
-    margin-block: var(--s-3);
+    margin-block: var(--gh-space-3);
   }
   .bulk-row .secondary-help {
     margin: 0;
@@ -1899,46 +1922,35 @@
   }
   .bulk-label {
     color: var(--text-muted);
-    font-size: var(--fs-2);
+    font-size: var(--gh-type-size-body);
   }
   .individual-source-list {
-    margin-block-start: var(--s-3);
+    margin-block-start: var(--gh-space-3);
     border-top: 1px solid var(--border);
-    padding-block-start: var(--s-3);
+    padding-block-start: var(--gh-space-3);
     display: grid;
-    gap: var(--s-3);
+    gap: var(--gh-space-3);
   }
   .card-main {
     flex: 1;
     min-width: 0;
   }
-  .source-card {
-    border: 1px solid var(--border);
-    border-radius: var(--r-1);
-    background: var(--bg-raised);
-    padding: var(--s-4);
+  :global(.source-card) {
   }
-  .source-card.selected {
-    border-color: color-mix(in srgb, var(--accent) 50%, var(--border));
-    background: color-mix(in srgb, var(--accent) 12%, var(--bg-raised));
-  }
-  .source-card.secondary {
-    background: var(--surface-neutral);
-  }
-  .source-card.secondary.selected {
-    border-color: color-mix(in srgb, var(--accent) 50%, var(--border));
-    background: color-mix(in srgb, var(--accent) 12%, var(--surface-neutral));
+  :global(.source-card.secondary) {
+    --panel-glow:
+      radial-gradient(circle at 80% 20%, color-mix(in srgb, var(--accent) 4%, transparent), transparent 28%);
   }
   .source-title-row {
     display: flex;
-    gap: var(--s-3);
+    gap: var(--gh-space-3);
     align-items: center;
     flex-wrap: wrap;
   }
   .kind-label {
     color: var(--accent-2);
-    font-size: var(--fs-0);
-    font-weight: 700;
+    font-size: var(--gh-type-size-caption);
+    font-weight: var(--gh-type-weight-strong);
     text-transform: uppercase;
     letter-spacing: 0.05em;
   }
@@ -1946,22 +1958,22 @@
     color: var(--text-muted);
   }
   .source-path {
-    font-size: var(--fs-1);
+    font-size: var(--gh-type-size-meta);
     color: var(--text-muted);
-    line-height: var(--lh-body);
+    line-height: var(--gh-type-line-height-body);
     max-width: 64ch;
   }
   .source-summary-copy {
     margin: 0;
     color: var(--text-muted);
-    font-size: var(--fs-2);
-    line-height: var(--lh-body);
+    font-size: var(--gh-type-size-body);
+    line-height: var(--gh-type-line-height-body);
     max-width: 72ch;
   }
   .source-check {
     display: inline-flex;
     align-items: start;
-    padding-top: 2px;
+    padding-top: var(--gh-space-1);
   }
   .source-check input {
     width: 18px;
@@ -1971,15 +1983,15 @@
   .items {
     list-style: none;
     padding: 0;
-    margin: var(--s-4) 0 0;
+    margin: var(--gh-space-4) 0 0;
     display: flex;
     flex-direction: column;
-    gap: var(--s-4);
+    gap: var(--gh-space-4);
   }
   .items li {
-    padding: var(--s-3) var(--s-4);
+    padding: var(--gh-space-3) var(--gh-space-4);
     border: 1px solid var(--border);
-    border-radius: var(--r-1);
+    border-radius: var(--gh-radius-1);
     background: var(--bg-raised);
   }
   .items li.selected {
@@ -1988,14 +2000,14 @@
   }
   .items.compact {
     margin-top: 0;
-    gap: var(--s-2);
+    gap: var(--gh-space-2);
   }
   .items.compact li {
-    padding: var(--s-2) var(--s-3);
+    padding: var(--gh-space-2) var(--gh-space-3);
   }
   .task-row {
     display: flex;
-    gap: var(--s-2);
+    gap: var(--gh-space-2);
     align-items: flex-start;
     cursor: pointer;
   }
@@ -2004,18 +2016,18 @@
     min-width: 0;
   }
   .item-title {
-    font-weight: 600;
-    font-size: var(--fs-2);
+    font-weight: var(--gh-type-weight-strong);
+    font-size: var(--gh-type-size-body);
     display: flex;
     align-items: center;
-    gap: var(--s-2);
+    gap: var(--gh-space-2);
     flex-wrap: wrap;
   }
   .item-sub {
     margin-top: 6px;
     color: var(--text);
-    font-size: var(--fs-1);
-    line-height: var(--lh-body);
+    font-size: var(--gh-type-size-meta);
+    line-height: var(--gh-type-line-height-body);
   }
   @media (max-width: 920px) {
     .source-summary li {

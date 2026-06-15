@@ -1,11 +1,12 @@
 import crypto from 'node:crypto'
+import { readFileSync } from 'node:fs'
 import fs from 'node:fs/promises'
 import path from 'node:path'
 
 import { getDataDir } from '@guildhall/sessions'
 import {
   getProjectLocalHistoryDir,
-  getProjectStateDir,
+  getProjectSystemStatePath,
 } from '@guildhall/sessions'
 import { atomicWriteText } from '@guildhall/sessions'
 import type {
@@ -137,6 +138,16 @@ export class FileBackedGuildhallPersistence implements GuildhallPersistence {
     }
   }
 
+  readRecordSync<T = unknown>(ref: PersistenceRef): PersistedRecord<T> | null {
+    try {
+      const raw = readFileSync(ref.path, 'utf8')
+      return PersistedRecordSchema.parse(JSON.parse(raw)) as PersistedRecord<T>
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code === 'ENOENT') return null
+      throw err
+    }
+  }
+
   async listEvents<T = unknown>(query: EventQuery): Promise<Array<PersistedEvent<T>>> {
     const filePath = this.eventPath(query.placement, query.collection, slug(query.streamId), query)
     let raw = ''
@@ -234,7 +245,7 @@ export class FileBackedGuildhallPersistence implements GuildhallPersistence {
   ): string {
     switch (placement.scope) {
       case 'shared_project':
-        return path.join(getProjectStateDir(ensureProjectRoot(input, placement.scope)), 'persistence')
+        return getProjectSystemStatePath(ensureProjectRoot(input, placement.scope), 'persistence')
       case 'local_history':
         return path.join(getProjectLocalHistoryDir(ensureProjectRoot(input, placement.scope)), 'persistence')
       case 'global_user':

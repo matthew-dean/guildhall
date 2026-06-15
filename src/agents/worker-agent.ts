@@ -84,6 +84,17 @@ a plan. The UI and coordinator need a concrete event immediately.
   primitive, helper, package, or area you are extending in your working notes
   or self-critique. If none fits, explain why a new shared primitive is the
   smallest durable choice.
+- If the prompt includes a "## Design Governance" block, treat it as the
+  project contract for UI/design-system work. Its token authority, component
+  authority, duplicate primitive families, variant risks, and reviewer checks
+  must adjust the implementation before local styling or component choices.
+  If the task needs a new role, primitive, variant, or exception, implement the
+  contract delta deliberately before consuming it in a surface.
+- For UI work, choose text by semantic text hierarchy first: primary/current,
+  body, secondary, muted, history, action, state, or code. Do not pick size,
+  color, line-height, or weight ad hoc. If you need a new text role, token, or
+  component variant, record the token or variant budget in your self-critique:
+  the distinct communication need, reuse boundary, and what it replaces.
 - When you see two or more similar ideas, functions, classes, files,
   components, schemas, or styling treatments, treat that repetition as a signal
   to consider a shared abstraction. Do not abstract reflexively; choose the
@@ -193,6 +204,7 @@ Minimum-scope check:
 - Smallest useful change?: [yes/no — one sentence why]
 - Corpus fit: [existing primitive/helper/package/area reused or why a new shared primitive was needed]
 - Abstraction fit: [right-sized / too narrow / too generic / n-a — for schemas, API routes, MCP resources, persistence records, event types, or public packets, explain the generic shell and typed domain payload choice when relevant]
+- Design hierarchy fit: [for UI work, semantic text hierarchy reused/extended and token or variant budget recorded; otherwise n-a]
 - Anything to revert before review?: [none, or exactly what should be removed because it goes beyond the task]
 
 Review proof packet:

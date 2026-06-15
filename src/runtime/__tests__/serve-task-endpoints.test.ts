@@ -1,17 +1,37 @@
-import { describe, it, expect, beforeEach, afterEach } from 'vitest'
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import fs from 'node:fs/promises'
 import path from 'node:path'
 import os from 'node:os'
-import { bootstrapWorkspace, writeWorkspaceConfig } from '@guildhall/config'
+import { bootstrapWorkspace, setProvider, updateGlobalConfig, updateProjectConfig, writeWorkspaceConfig } from '@guildhall/config'
 import {
+  appendTaskEvidence,
   getProjectContextDebugLedgerPath,
   getProjectRecentEventsPath,
   getProjectStateDir,
+  getProjectSystemStatePath,
+  upsertTaskRuntimeState,
+  upsertTaskWorkspaceState,
 } from '@guildhall/sessions'
 import { readExploringTranscript, writeCheckpoint } from '@guildhall/tools'
 import { buildServeApp, filterEventsForTask } from '../serve.js'
+import { OrchestratorSupervisor } from '../serve-supervisor.js'
 import { createReviewAuditStore } from '../review-audit-store.js'
 import { FileBackedGuildhallPersistence } from '@guildhall/persistence'
+import { loadBoundedChatSession } from '../bounded-chat.js'
+import { createOwnerInputRequest, listOwnerInputRequests } from '../owner-input-store.js'
+import {
+  stageContractChangeSet,
+  validateProjectPrimitiveSetupResult,
+  writeProjectDeliveryModel,
+  emptyProjectDeliveryModel,
+} from '../delivery-spine.js'
+import { writeProjectTaskQueue } from '../project-state-boundary.js'
+import {
+  buildEffectiveTask,
+  legacyEvidenceFromTask,
+  legacyRuntimeFromTask,
+  legacyWorkspaceFromTask,
+} from '../effective-task.js'
 
 // Integration tests for the v0.2 UI endpoints:
 //   GET  /api/project/task/:id        — per-task detail powering the drawer
@@ -29,8 +49,57 @@ function projectUrl(route: string): string {
   return url.toString()
 }
 
+function taskQueuePath(): string {
+  return getProjectSystemStatePath(tmpDir, 'TASKS.json')
+}
+
+async function readTaskQueue(): Promise<Record<string, any>> {
+  const parsed = JSON.parse(await fs.readFile(taskQueuePath(), 'utf8')) as Record<string, any>
+  return Array.isArray(parsed) ? { version: 1, tasks: parsed } : parsed
+}
+
+async function writeTaskQueue(queue: Record<string, any>): Promise<void> {
+  const tasks = Array.isArray(queue.tasks) ? queue.tasks : []
+  for (const task of tasks) {
+    const runtime = legacyRuntimeFromTask(task)
+    const workspace = legacyWorkspaceFromTask(task)
+    const evidence = legacyEvidenceFromTask(task)
+    if (runtime) await upsertTaskRuntimeState(tmpDir, task.id, runtime)
+    if (workspace) await upsertTaskWorkspaceState(tmpDir, task.id, workspace)
+    for (const event of evidence) {
+      await appendTaskEvidence(tmpDir, task.id, event)
+    }
+  }
+  writeProjectTaskQueue(taskQueuePath(), queue)
+}
+
+async function writeRawTaskQueue(queue: Record<string, any>): Promise<void> {
+  await fs.mkdir(path.dirname(taskQueuePath()), { recursive: true })
+  await fs.writeFile(taskQueuePath(), JSON.stringify(queue, null, 2) + '\n', 'utf8')
+}
+
+async function readEffectiveTask(id: string): Promise<Record<string, any>> {
+  const queue = await readTaskQueue()
+  const task = queue.tasks.find((entry: Record<string, any>) => entry.id === id)
+  if (!task) throw new Error(`Missing seeded task ${id}`)
+  return await buildEffectiveTask(tmpDir, task as any) as Record<string, any>
+}
+
+async function applyStorageBoundaryMigration(app: ReturnType<typeof buildServeApp>['app']): Promise<void> {
+  const migration = await app.fetch(
+    new Request(projectUrl('/api/project/migrations/apply'), {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        includePrompt: true,
+        migrationId: '0.10.0/project-state-storage-boundary',
+      }),
+    }),
+  )
+  expect(migration.status).toBe(200)
+}
+
 async function seedTask(id: string, overrides: Record<string, any> = {}): Promise<void> {
-  const tasksPath = path.join(memoryDir, 'TASKS.json')
   const queue = {
     version: 1,
     lastUpdated: new Date().toISOString(),
@@ -52,18 +121,94 @@ async function seedTask(id: string, overrides: Record<string, any> = {}): Promis
       },
     ],
   }
-  await fs.writeFile(tasksPath, JSON.stringify(queue, null, 2), 'utf8')
+  await writeTaskQueue(queue)
+}
+
+async function seedRawTaskDefinition(id: string, overrides: Record<string, any> = {}): Promise<void> {
+  const queue = {
+    version: 1,
+    lastUpdated: new Date().toISOString(),
+    tasks: [
+      {
+        id,
+        title: 'Seeded task for tests',
+        description: 'A test task',
+        domain: 'looma',
+        projectPath: tmpDir,
+        status: 'in_progress',
+        priority: 'normal',
+        revisionCount: 0,
+        remediationAttempts: 0,
+        origination: 'human',
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+        ...overrides,
+      },
+    ],
+  }
+  await writeRawTaskQueue(queue)
+}
+
+async function seedTasks(tasks: Array<Record<string, any>>): Promise<void> {
+  const now = new Date().toISOString()
+  const queue = {
+    version: 1,
+    lastUpdated: now,
+    tasks: tasks.map((task, index) => ({
+      id: `task-${index + 1}`,
+      title: `Seeded task ${index + 1}`,
+      description: 'A test task',
+      domain: 'looma',
+      projectPath: tmpDir,
+      status: 'ready',
+      priority: 'normal',
+      revisionCount: 0,
+      remediationAttempts: 0,
+      origination: 'human',
+      createdAt: now,
+      updatedAt: now,
+      ...task,
+    })),
+  }
+  await writeTaskQueue(queue)
+}
+
+function createTrackingSupervisor(): {
+  supervisor: OrchestratorSupervisor
+  starts: Array<{ preferredTaskId?: string; stopAfterOneTask?: boolean }>
+} {
+  const starts: Array<{ preferredTaskId?: string; stopAfterOneTask?: boolean }> = []
+  const supervisor = new OrchestratorSupervisor({
+    resolveConfig: () => ({ workspaceId: projectId, projectPath: tmpDir } as any),
+    runOrchestrator: async (_config, opts) => {
+      starts.push({
+        ...(opts?.preferredTaskId ? { preferredTaskId: opts.preferredTaskId } : {}),
+        ...(opts?.stopAfterOneTask ? { stopAfterOneTask: true } : {}),
+      })
+      await new Promise<void>((resolve) => {
+        if (opts?.abortSignal?.aborted) {
+          resolve()
+          return
+        }
+        opts?.abortSignal?.addEventListener('abort', () => resolve(), { once: true })
+      })
+      return { ticks: 1, stopReason: 'stop_requested', stopMessage: 'Stop requested.' }
+    },
+  })
+  return { supervisor, starts }
 }
 
 beforeEach(async () => {
   tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'guildhall-serve-tasks-'))
   process.env.GUILDHALL_DATA_DIR = path.join(tmpDir, '.guildhall-data')
+  process.env.GUILDHALL_CONFIG_DIR = path.join(tmpDir, '.guildhall-config')
   projectId = bootstrapWorkspace(tmpDir, { name: 'Task Endpoints Test' }).id ?? path.basename(tmpDir)
   memoryDir = getProjectStateDir(tmpDir)
 })
 
 afterEach(async () => {
   delete process.env.GUILDHALL_DATA_DIR
+  delete process.env.GUILDHALL_CONFIG_DIR
   await fs.rm(tmpDir, { recursive: true, force: true })
 })
 
@@ -80,15 +225,135 @@ describe('GET /api/project/task/:id', () => {
     expect(Array.isArray(body.contextDebug)).toBe(true)
   })
 
+  it('returns adjacent task links for hierarchy and dependency display', async () => {
+    await seedTasks([
+      {
+        id: 'task-parent',
+        title: 'Parent task',
+        hierarchy: { childIds: ['task-1'], order: 0 },
+      },
+      {
+        id: 'task-1',
+        title: 'Current task',
+        hierarchy: { parentId: 'task-parent', childIds: ['task-child'], order: 1 },
+        dependsOn: ['task-blocker'],
+        sizePlan: {
+          taskId: 'task-1',
+          score: 8,
+          band: 'epic',
+          action: 'split_required',
+          reviewBudgetHint: 'release_critical',
+          reasons: ['Task size score: 8.'],
+          factors: [],
+          recommendedChildren: [
+            {
+              title: 'Materialized child',
+              reason: 'Created during split.',
+              suggestedDomain: 'frontend',
+              dependsOn: [],
+              createdTaskId: 'task-child',
+            },
+          ],
+        },
+      },
+      {
+        id: 'task-child',
+        title: 'Child task',
+        hierarchy: { parentId: 'task-1', order: 0 },
+      },
+      {
+        id: 'task-blocker',
+        title: 'Blocking task',
+      },
+      {
+        id: 'task-dependent',
+        title: 'Dependent task',
+        dependsOn: ['task-1'],
+      },
+      {
+        id: 'task-unrelated',
+        title: 'Unrelated task',
+      },
+    ])
+
+    const { app } = buildServeApp({ projectPath: tmpDir })
+    const res = await app.fetch(new Request(projectUrl('/api/project/task/task-1')))
+    expect(res.status).toBe(200)
+    const body = (await res.json()) as Record<string, any>
+
+    expect(body.relatedTasks?.map((task: Record<string, any>) => task.id).sort()).toEqual([
+      'task-blocker',
+      'task-child',
+      'task-dependent',
+      'task-parent',
+    ])
+  })
+
+  it('returns shared delivery-spine relationships and context packets for task detail', async () => {
+    await writeProjectDeliveryModel(tmpDir, {
+      version: 1,
+      updatedAt: '2026-06-05T12:00:00.000Z',
+      drivers: [
+        { id: 'knit', label: 'Knit', role: 'primary', paths: ['./apps/knit'], domains: ['looma'] },
+        { id: 'looma', label: 'Looma', role: 'provider', paths: ['./packages/looma'], domains: ['looma'] },
+      ],
+      primitives: [
+        {
+          id: 'menu-item',
+          label: 'MenuItem',
+          kind: 'ui_primitive',
+          provider: 'looma',
+          paths: ['./packages/looma/src/menu'],
+          dependsOn: [],
+          invariants: ['Can render as button or link.'],
+          proof: ['storybook'],
+          status: 'needs_proof',
+          evidence: [],
+          aliases: [],
+        },
+      ],
+      validationEvidence: [],
+      rejectedCandidates: [],
+    })
+    await seedTasks([
+      {
+        id: 'task-component',
+        title: 'Component implementation',
+        status: 'done',
+        delivery: { driver: 'knit', provider: 'looma', usesPrimitives: ['menu-item'] },
+      },
+      {
+        id: 'task-storybook',
+        title: 'Storybook proof',
+        dependsOn: ['task-component'],
+        delivery: { driver: 'knit', provider: 'looma', provesPrimitives: ['menu-item'], proofKind: 'storybook' },
+      },
+    ])
+
+    const { app } = buildServeApp({ projectPath: tmpDir })
+    const detailRes = await app.fetch(new Request(projectUrl('/api/project/task/task-component')))
+    expect(detailRes.status).toBe(200)
+    const detail = (await detailRes.json()) as Record<string, any>
+    expect(detail.deliverySpine.contextPacket.deliveryIntent.driver.label).toBe('Knit')
+    expect(detail.deliverySpine.contextPacket.primitiveContext.direct.map((primitive: any) => primitive.id)).toEqual(['menu-item'])
+    expect(detail.deliverySpine.relationships.primitiveUse.blockers.map((primitive: any) => primitive.id)).toEqual(['menu-item'])
+
+    const projectRes = await app.fetch(new Request(projectUrl('/api/project')))
+    expect(projectRes.status).toBe(200)
+    const project = (await projectRes.json()) as Record<string, any>
+    expect(project.deliverySpine.queue.firstRunnable.task.id).toBe('task-storybook')
+    expect(project.deliverySpine.validation.valid).toBe(true)
+  })
+
   it('heals stale worker ownership for in_progress tasks when reading task detail', async () => {
-    await seedTask('task-1', { assignedTo: null })
+    await seedRawTaskDefinition('task-1', { assignedTo: null })
     const { app } = buildServeApp({ projectPath: tmpDir })
     const res = await app.fetch(new Request(projectUrl('/api/project/task/task-1')))
     expect(res.status).toBe(200)
     const body = (await res.json()) as Record<string, any>
     expect(body.task?.assignedTo).toBe('worker-agent')
 
-    const raw = JSON.parse(await fs.readFile(path.join(memoryDir, 'TASKS.json'), 'utf8')) as Record<string, any>
+    const raw = JSON.parse(await fs.readFile(taskQueuePath(), 'utf8')) as Record<string, any>
     expect(raw.tasks[0]?.assignedTo).toBe('worker-agent')
   })
 
@@ -314,7 +579,7 @@ describe('GET /api/project/task/:id', () => {
       ],
     })
     await writeCheckpoint({
-      tasksPath: path.join(memoryDir, 'TASKS.json'),
+      tasksPath: taskQueuePath(),
       memoryDir,
       taskId: 'task-1',
       agentId: 'worker-agent',
@@ -391,7 +656,7 @@ describe('GET /api/project/task/:id', () => {
       ],
     })
     await writeCheckpoint({
-      tasksPath: path.join(memoryDir, 'TASKS.json'),
+      tasksPath: taskQueuePath(),
       memoryDir,
       taskId: 'task-1',
       agentId: 'worker-agent',
@@ -535,7 +800,7 @@ describe('GET /api/project/task/:id', () => {
       ],
     })
     await writeCheckpoint({
-      tasksPath: path.join(memoryDir, 'TASKS.json'),
+      tasksPath: taskQueuePath(),
       memoryDir,
       taskId: 'task-1',
       agentId: 'worker-agent',
@@ -553,12 +818,136 @@ describe('GET /api/project/task/:id', () => {
   )
 })
 
+describe('POST /api/project/delivery-spine/contract-results/:id/apply', () => {
+  it('applies a staged primitive setup result and removes it from the inbox', async () => {
+    await seedTask('task-context-menu', {
+      status: 'ready',
+      delivery: { driver: 'knit', provider: 'looma', supports: [] },
+    })
+    const taskQueue = JSON.parse(await fs.readFile(taskQueuePath(), 'utf8')) as { tasks: any[] }
+    const baseModel = {
+      ...emptyProjectDeliveryModel('2026-06-05T12:00:00.000Z'),
+      drivers: [
+        { id: 'knit', label: 'Knit', role: 'primary' as const, paths: ['./apps/knit'], domains: [] },
+        { id: 'looma', label: 'Looma', role: 'provider' as const, paths: ['./packages/looma'], domains: [] },
+      ],
+    }
+    const validation = validateProjectPrimitiveSetupResult({
+      model: baseModel,
+      tasks: taskQueue.tasks,
+      result: {
+        primitives: [{
+          id: 'context-menu',
+          label: 'ContextMenu',
+          kind: 'ui_primitive',
+          provider: 'looma',
+          paths: ['./packages/looma/src/context-menu'],
+          invariants: ['ContextMenu composes menu primitives.'],
+          proof: ['storybook'],
+          status: 'needs_proof',
+        }],
+        taskLinks: [{ taskId: 'task-context-menu', usesPrimitives: ['context-menu'] }],
+      },
+      now: '2026-06-05T12:00:00.000Z',
+      actor: 'setup-agent',
+      applyPolicy: 'owner_review',
+    })
+    if (!validation.changeSet) throw new Error('expected changeSet')
+    await writeProjectDeliveryModel(tmpDir, stageContractChangeSet({
+      model: baseModel,
+      changeSet: validation.changeSet,
+      now: '2026-06-05T12:01:00.000Z',
+      actor: 'setup-agent',
+    }))
+
+    const { app } = buildServeApp({ projectPath: tmpDir })
+    const beforeInbox = await app.fetch(new Request(projectUrl('/api/project/inbox')))
+    const beforeBody = (await beforeInbox.json()) as { items?: Array<{ kind?: string; resultId?: string }> }
+    expect(beforeBody.items?.some(item => item.kind === 'contract_result_review' && item.resultId === validation.changeSet?.id)).toBe(true)
+
+    const res = await app.fetch(new Request(projectUrl(`/api/project/delivery-spine/contract-results/${validation.changeSet.id}/apply`), {
+      method: 'POST',
+      body: JSON.stringify({ ownerOverrideReason: 'Accepted from Needs you.' }),
+    }))
+    expect(res.status).toBe(200)
+    const body = (await res.json()) as { ok?: boolean; applied?: { id?: string } }
+    expect(body.ok).toBe(true)
+    expect(body.applied?.id).toBe(validation.changeSet.id)
+
+    const projectRes = await app.fetch(new Request(projectUrl('/api/project')))
+    const projectBody = (await projectRes.json()) as any
+    expect(projectBody.deliverySpine.model.primitives.map((primitive: any) => primitive.id)).toContain('context-menu')
+    const updatedQueue = JSON.parse(await fs.readFile(taskQueuePath(), 'utf8')) as { tasks: any[] }
+    expect(updatedQueue.tasks.find(task => task.id === 'task-context-menu')?.delivery?.usesPrimitives).toEqual(['context-menu'])
+
+    const afterInbox = await app.fetch(new Request(projectUrl('/api/project/inbox')))
+    const afterBody = (await afterInbox.json()) as { items?: Array<{ kind?: string; resultId?: string }> }
+    expect(afterBody.items?.some(item => item.kind === 'contract_result_review' && item.resultId === validation.changeSet?.id)).toBe(false)
+  })
+
+  it('rejects a staged primitive setup result and records the reason', async () => {
+    await seedTask('task-context-menu', {
+      status: 'ready',
+      delivery: { driver: 'knit', provider: 'looma', supports: [] },
+    })
+    const taskQueue = JSON.parse(await fs.readFile(taskQueuePath(), 'utf8')) as { tasks: any[] }
+    const baseModel = {
+      ...emptyProjectDeliveryModel('2026-06-05T12:00:00.000Z'),
+      drivers: [
+        { id: 'knit', label: 'Knit', role: 'primary' as const, paths: ['./apps/knit'], domains: [] },
+        { id: 'looma', label: 'Looma', role: 'provider' as const, paths: ['./packages/looma'], domains: [] },
+      ],
+    }
+    const validation = validateProjectPrimitiveSetupResult({
+      model: baseModel,
+      tasks: taskQueue.tasks,
+      result: {
+        primitives: [{
+          id: 'context-menu',
+          label: 'ContextMenu',
+          kind: 'ui_primitive',
+          provider: 'looma',
+          paths: ['./packages/looma/src/context-menu'],
+          invariants: ['ContextMenu composes menu primitives.'],
+          proof: ['storybook'],
+          status: 'needs_proof',
+        }],
+      },
+      now: '2026-06-05T12:00:00.000Z',
+      actor: 'setup-agent',
+      applyPolicy: 'owner_review',
+    })
+    if (!validation.changeSet) throw new Error('expected changeSet')
+    await writeProjectDeliveryModel(tmpDir, stageContractChangeSet({
+      model: baseModel,
+      changeSet: validation.changeSet,
+      now: '2026-06-05T12:01:00.000Z',
+      actor: 'setup-agent',
+    }))
+
+    const { app } = buildServeApp({ projectPath: tmpDir })
+    const res = await app.fetch(new Request(projectUrl(`/api/project/delivery-spine/contract-results/${validation.changeSet.id}/reject`), {
+      method: 'POST',
+      body: JSON.stringify({ reason: 'Duplicate primitive.' }),
+    }))
+    expect(res.status).toBe(200)
+    const body = (await res.json()) as { ok?: boolean; rejected?: { reason?: string } }
+    expect(body.ok).toBe(true)
+    expect(body.rejected?.reason).toBe('Duplicate primitive.')
+
+    const projectRes = await app.fetch(new Request(projectUrl('/api/project')))
+    const projectBody = (await projectRes.json()) as any
+    expect(projectBody.deliverySpine.model.primitives.map((primitive: any) => primitive.id)).not.toContain('context-menu')
+    expect(projectBody.deliverySpine.model.rejectedCandidates.at(-1).reason).toBe('Duplicate primitive.')
+  })
+})
+
 it('hides placeholder checkpoint next-action values in task detail responses', async () => {
   await seedTask('task-1', {
     status: 'in_progress',
   })
   await writeCheckpoint({
-    tasksPath: path.join(memoryDir, 'TASKS.json'),
+    tasksPath: taskQueuePath(),
     memoryDir,
     taskId: 'task-1',
     agentId: 'worker-agent',
@@ -641,7 +1030,7 @@ describe('POST /api/project/task/:id/git-story/:closureAction', () => {
     }))
     expect(res.status).toBe(200)
 
-    const raw = JSON.parse(await fs.readFile(path.join(memoryDir, 'TASKS.json'), 'utf8')) as Record<string, any>
+    const raw = JSON.parse(await fs.readFile(taskQueuePath(), 'utf8')) as Record<string, any>
     expect(raw.tasks[0]?.gitStory).toMatchObject({
       override: 'local_only',
       reason: 'Fixture-only scratch work.',
@@ -744,7 +1133,7 @@ describe('POST /api/project/task/:id/hold|shelve', () => {
     expect(body.ok).toBe(true)
     expect(body.status).toBe('blocked')
 
-    const raw = await fs.readFile(path.join(memoryDir, 'TASKS.json'), 'utf8')
+    const raw = await fs.readFile(taskQueuePath(), 'utf8')
     let q = JSON.parse(raw)
     expect(q.tasks[0].status).toBe('blocked')
     expect(q.tasks[0].blockReason).toBe('On hold: Waiting for the design call.')
@@ -762,7 +1151,7 @@ describe('POST /api/project/task/:id/hold|shelve', () => {
     const resumeBody = (await resumeRes.json()) as Record<string, any>
     expect(resumeBody.status).toBe('review')
 
-    q = JSON.parse(await fs.readFile(path.join(memoryDir, 'TASKS.json'), 'utf8'))
+    q = JSON.parse(await fs.readFile(taskQueuePath(), 'utf8'))
     expect(q.tasks[0].status).toBe('review')
     expect(q.tasks[0].hold).toBeUndefined()
     expect(q.tasks[0].blockReason).toBeUndefined()
@@ -775,7 +1164,7 @@ describe('POST /api/project/task/:id/hold|shelve', () => {
       new Request(projectUrl('/api/project/task/task-1/shelve'), { method: 'POST' }),
     )
     expect(res.status).toBe(200)
-    const raw = await fs.readFile(path.join(memoryDir, 'TASKS.json'), 'utf8')
+    const raw = await fs.readFile(taskQueuePath(), 'utf8')
     const q = JSON.parse(raw)
     expect(q.tasks[0].status).toBe('shelved')
     expect(q.tasks[0].shelveReason?.rejectedBy).toBe('system:human')
@@ -802,7 +1191,7 @@ describe('POST /api/project/task/:id/hold|shelve', () => {
 
 describe('POST /api/project/task/:id/mark-done', () => {
   it('marks a ready task done with human evidence and closes its checklist', async () => {
-    await seedTask('task-1', {
+    await seedRawTaskDefinition('task-1', {
       status: 'ready',
       assignedTo: null,
       blockReason: 'Old blocker',
@@ -833,7 +1222,7 @@ describe('POST /api/project/task/:id/mark-done', () => {
     const body = (await res.json()) as Record<string, any>
     expect(body.status).toBe('done')
 
-    const raw = await fs.readFile(path.join(memoryDir, 'TASKS.json'), 'utf8')
+    const raw = await fs.readFile(taskQueuePath(), 'utf8')
     const q = JSON.parse(raw)
     const task = q.tasks[0]
     expect(task.status).toBe('done')
@@ -861,6 +1250,48 @@ describe('POST /api/project/task/:id/mark-done', () => {
     expect(res.status).toBe(400)
     const body = (await res.json()) as Record<string, any>
     expect(body.error).toMatch(/active run/i)
+  })
+})
+
+describe('POST /api/project/task/:id/start', () => {
+  it('allows a scoped spec_review task start even when the project has waiting specs', async () => {
+    await seedTasks([
+      {
+        id: 'task-context-menu',
+        title: 'ContextMenu',
+        status: 'spec_review',
+        spec: '## Summary\nImplement ContextMenu.\n\n## Acceptance Criteria\n1. ContextMenu works.',
+        acceptanceCriteria: [{ id: 'ac-1', description: 'ContextMenu works.', verifiedBy: 'review' }],
+      },
+      {
+        id: 'task-hover-card',
+        title: 'HoverCard',
+        status: 'spec_review',
+        spec: '## Summary\nImplement HoverCard.\n\n## Acceptance Criteria\n1. HoverCard works.',
+        acceptanceCriteria: [{ id: 'ac-2', description: 'HoverCard works.', verifiedBy: 'review' }],
+      },
+    ])
+    const { supervisor, starts } = createTrackingSupervisor()
+    const { app } = buildServeApp({ projectPath: tmpDir, supervisor })
+    await applyStorageBoundaryMigration(app)
+    setProvider('anthropic-api', { apiKey: 'sk-ant-test' })
+    updateGlobalConfig({ preferredProvider: 'anthropic-api' })
+
+    const res = await app.fetch(
+      new Request(projectUrl('/api/project/task/task-context-menu/start'), {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ mode: 'one_task', scope: 'work_item' }),
+      }),
+    )
+
+    expect(res.status).toBe(200)
+    const body = (await res.json()) as Record<string, any>
+    expect(body.scope).toEqual({ type: 'work_item', taskId: 'task-context-menu' })
+    expect(starts.at(-1)).toMatchObject({
+      preferredTaskId: 'task-context-menu',
+      stopAfterOneTask: true,
+    })
   })
 })
 
@@ -912,7 +1343,7 @@ describe('POST /api/project/task/:id/approve-spec', () => {
     expect(body.ok).toBe(true)
     expect(body.status).toBe('ready')
 
-    const raw = await fs.readFile(path.join(memoryDir, 'TASKS.json'), 'utf8')
+    const raw = await fs.readFile(taskQueuePath(), 'utf8')
     const q = JSON.parse(raw)
     expect(q.tasks[0].status).toBe('ready')
     expect(q.tasks[0].notes?.at(-1)?.content).toMatch(/ship it/i)
@@ -1055,7 +1486,7 @@ describe('POST /api/project/task/:id/rerun-stage', () => {
     expect(body.ok).toBe(true)
     expect(body.status).toBe('exploring')
 
-    const raw = JSON.parse(await fs.readFile(path.join(memoryDir, 'TASKS.json'), 'utf8')) as Record<string, any>
+    const raw = JSON.parse(await fs.readFile(taskQueuePath(), 'utf8')) as Record<string, any>
     expect(raw.tasks[0]?.status).toBe('exploring')
     expect(raw.tasks[0]?.notes?.at(-1)?.content).toMatch(/fresh spec pass/i)
     const transcript = (await readExploringTranscript({ memoryDir, taskId: 'task-1' })).content ?? ''
@@ -1077,7 +1508,7 @@ describe('POST /api/project/task/:id/rerun-stage', () => {
       }),
     )
     expect(res.status).toBe(200)
-    const raw = JSON.parse(await fs.readFile(path.join(memoryDir, 'TASKS.json'), 'utf8')) as Record<string, any>
+    const raw = JSON.parse(await fs.readFile(taskQueuePath(), 'utf8')) as Record<string, any>
     expect(raw.tasks[0]?.status).toBe('review')
     expect(raw.tasks[0]?.assignedTo).toBe('reviewer-agent')
     expect(raw.tasks[0]?.notes?.at(-1)?.content).toMatch(/fresh review pass/i)
@@ -1098,7 +1529,7 @@ describe('POST /api/project/task/:id/rerun-stage', () => {
       }),
     )
     expect(res.status).toBe(200)
-    const raw = JSON.parse(await fs.readFile(path.join(memoryDir, 'TASKS.json'), 'utf8')) as Record<string, any>
+    const raw = JSON.parse(await fs.readFile(taskQueuePath(), 'utf8')) as Record<string, any>
     expect(raw.tasks[0]?.status).toBe('gate_check')
     expect(raw.tasks[0]?.assignedTo).toBe('gate-checker-agent')
     expect(raw.tasks[0]?.notes?.at(-1)?.content).toMatch(/fresh gate-check pass/i)
@@ -1127,7 +1558,7 @@ describe('POST /api/project/task/:id/create-split-children', () => {
   it('materializes stored split-required recommendations into child tasks', async () => {
     await seedTask('task-1', {
       status: 'spec_review',
-      parentGoalId: 'goal-task-1',
+      businessEnvelope: { goalId: 'goal-task-1' },
       sizePlan: {
         taskId: 'task-1',
         score: 8,
@@ -1168,18 +1599,167 @@ describe('POST /api/project/task/:id/create-split-children', () => {
     ])
     expect(body.parentTaskId).toBe('task-1')
 
-    const raw = JSON.parse(await fs.readFile(path.join(memoryDir, 'TASKS.json'), 'utf8')) as Record<string, any>
+    const raw = JSON.parse(await fs.readFile(taskQueuePath(), 'utf8')) as Record<string, any>
     expect(raw.tasks).toHaveLength(3)
-    expect(raw.tasks[0].status).toBe('parent')
+    expect(raw.tasks[0].status).toBe('ready')
+    expect(raw.tasks[0].hierarchy.childIds).toEqual(body.createdTaskIds)
+    expect(raw.tasks[0].taskReadiness.recommendation).toBe('split')
     expect(raw.tasks[0].sizePlan.recommendedChildren.map((child: Record<string, unknown>) => child.createdTaskId)).toEqual(body.createdTaskIds)
     expect(raw.tasks[1]).toMatchObject({
       id: 'task-1-split-implement-the-billing-settings-workflow',
       status: 'exploring',
-      parentGoalId: 'goal-task-1',
+      businessEnvelope: { goalId: 'goal-task-1' },
+      hierarchy: {
+        parentId: 'task-1',
+        order: 0,
+        childIds: [],
+      },
       origination: 'system',
       proposedBy: 'task-sizing',
     })
     expect(raw.tasks[2].dependsOn).toEqual(['task-1-split-implement-the-billing-settings-workflow'])
+  })
+
+  it('materializes stored split-recommended recommendations into child tasks', async () => {
+    await seedTask('task-1', {
+      status: 'spec_review',
+      sizePlan: {
+        taskId: 'task-1',
+        score: 5,
+        band: 'large',
+        action: 'split_recommended',
+        factors: [],
+        recommendedChildren: [
+          {
+            title: 'Component implementation',
+            reason: 'Ship the primitive implementation first.',
+            suggestedDomain: 'frontend',
+            dependsOn: [],
+          },
+          {
+            title: 'Storybook story',
+            reason: 'Add visual proof after the implementation exists.',
+            suggestedDomain: 'frontend',
+            dependsOn: ['Component implementation'],
+          },
+        ],
+        reviewBudgetHint: 'thorough',
+        reasons: ['Task size score: 5.'],
+        createdAt: '2026-06-05T12:00:00.000Z',
+        createdBy: 'task-sizing',
+      },
+    })
+    const { app } = buildServeApp({ projectPath: tmpDir })
+
+    const res = await app.fetch(
+      new Request(projectUrl('/api/project/task/task-1/create-split-children'), { method: 'POST' }),
+    )
+
+    expect(res.status).toBe(200)
+    const body = await res.json() as Record<string, any>
+    expect(body.createdTaskIds).toEqual([
+      'task-1-split-component-implementation',
+      'task-1-split-storybook-story',
+    ])
+
+    const raw = JSON.parse(await fs.readFile(taskQueuePath(), 'utf8')) as Record<string, any>
+    expect(raw.tasks[0].status).toBe('ready')
+    expect(raw.tasks[0].hierarchy.childIds).toEqual(body.createdTaskIds)
+    expect(raw.tasks[0].taskReadiness.summary).toBe('Split-recommended work is represented by linked child tasks.')
+    expect(raw.tasks[2].dependsOn).toEqual(['task-1-split-component-implementation'])
+  })
+
+  it('materializes split children with validated delivery-spine metadata', async () => {
+    await writeProjectDeliveryModel(tmpDir, {
+      version: 1,
+      updatedAt: '2026-06-05T12:00:00.000Z',
+      drivers: [
+        { id: 'knit', label: 'Knit', role: 'primary', paths: ['./apps/knit'], domains: [] },
+        { id: 'looma', label: 'Looma', role: 'provider', paths: ['./packages/looma'], domains: [] },
+      ],
+      primitives: [
+        {
+          id: 'menu-item',
+          label: 'MenuItem',
+          kind: 'ui_primitive',
+          provider: 'looma',
+          paths: ['./packages/looma/src/menu'],
+          dependsOn: [],
+          invariants: ['Renders consistently as a button or link.'],
+          proof: ['storybook'],
+          status: 'needs_proof',
+          source: 'user',
+          evidence: [],
+          aliases: [],
+        },
+      ],
+      validationEvidence: [],
+      rejectedCandidates: [],
+    })
+    await seedTask('task-1', {
+      status: 'spec_review',
+      delivery: { driver: 'knit', provider: 'looma', usesPrimitives: ['menu-item'] },
+      sizePlan: {
+        taskId: 'task-1',
+        score: 5,
+        band: 'large',
+        action: 'split_recommended',
+        factors: [],
+        recommendedChildren: [
+          {
+            title: 'MenuItem implementation',
+            reason: 'Compose the MenuItem primitive in the ContextMenu component.',
+            suggestedDomain: 'frontend',
+            dependsOn: [],
+            usesPrimitives: ['menu-item'],
+          },
+          {
+            title: 'Storybook proof',
+            reason: 'Prove MenuItem states visually.',
+            suggestedDomain: 'frontend',
+            dependsOn: ['MenuItem implementation'],
+            provesPrimitives: ['menu-item'],
+            proofKind: 'storybook',
+          },
+        ],
+        reviewBudgetHint: 'thorough',
+        reasons: ['Task size score: 5.'],
+        createdAt: '2026-06-05T12:00:00.000Z',
+        createdBy: 'task-sizing',
+      },
+    })
+    const { app } = buildServeApp({ projectPath: tmpDir })
+
+    const res = await app.fetch(
+      new Request(projectUrl('/api/project/task/task-1/create-split-children'), { method: 'POST' }),
+    )
+
+    expect(res.status).toBe(200)
+    const body = await res.json() as Record<string, any>
+    expect(body.splitPlan.errors).toEqual([])
+    expect(body.splitPlan.children[1].delivery).toMatchObject({
+      driver: 'knit',
+      provider: 'looma',
+      supports: ['task-1'],
+      provesPrimitives: ['menu-item'],
+      proofKind: 'storybook',
+    })
+
+    const raw = JSON.parse(await fs.readFile(taskQueuePath(), 'utf8')) as Record<string, any>
+    expect(raw.tasks[1].delivery).toMatchObject({
+      driver: 'knit',
+      provider: 'looma',
+      supports: ['task-1'],
+      usesPrimitives: ['menu-item'],
+    })
+    expect(raw.tasks[2].delivery).toMatchObject({
+      driver: 'knit',
+      provider: 'looma',
+      supports: ['task-1'],
+      provesPrimitives: ['menu-item'],
+      proofKind: 'storybook',
+    })
+    expect(raw.tasks[2].dependsOn).toEqual(['task-1-split-menuitem-implementation'])
   })
 })
 
@@ -1218,7 +1798,7 @@ describe('POST /api/project/task/:id/resume', () => {
     )
     expect(res.status).toBe(200)
     const queue = JSON.parse(
-      await fs.readFile(path.join(memoryDir, 'TASKS.json'), 'utf8'),
+      await fs.readFile(taskQueuePath(), 'utf8'),
     ) as { tasks: Array<Record<string, any>> }
     expect(queue.tasks[0]!.status).toBe('in_progress')
     expect(queue.tasks[0]!.notes.at(-1)?.content).toContain('current failure')
@@ -1249,7 +1829,7 @@ describe('POST /api/project/task/:id/resume', () => {
     const body = (await res.json()) as Record<string, any>
     expect(body.status).toBe('exploring')
     const queue = JSON.parse(
-      await fs.readFile(path.join(memoryDir, 'TASKS.json'), 'utf8'),
+      await fs.readFile(taskQueuePath(), 'utf8'),
     ) as { tasks: Array<Record<string, any>> }
     expect(queue.tasks[0]!.status).toBe('exploring')
     expect(queue.tasks[0]!.notes?.at(-1)?.role).toBe('shaping-request')
@@ -1264,53 +1844,49 @@ describe('POST /api/project/task/:id/resume', () => {
 
   it('shelves an imported draft immediately when it is an obvious duplicate of finished work', async () => {
     const now = new Date().toISOString()
-    await fs.writeFile(
-      path.join(memoryDir, 'TASKS.json'),
-      JSON.stringify({
-        version: 1,
-        lastUpdated: now,
-        tasks: [
-          {
-            id: 'task-done',
-            title: 'Add E2E login -> create page -> edit -> search flow',
-            description: 'Finished version',
-            domain: 'knit',
-            projectPath: '/tmp/knit',
-            status: 'done',
-            priority: 'normal',
-            revisionCount: 0,
-            remediationAttempts: 0,
-            origination: 'human',
-            createdAt: now,
-            updatedAt: now,
-          },
-          {
-            id: 'task-1',
-            title: 'E2E tests: login → create page → edit → search flow',
-            description: 'Imported raw draft',
-            domain: 'knit',
-            projectPath: '/tmp/knit',
-            status: 'import_draft',
-            priority: 'normal',
-            revisionCount: 0,
-            remediationAttempts: 0,
-            origination: 'human',
-            createdAt: now,
-            updatedAt: now,
-            acceptanceCriteria: [],
-            notes: [
-              {
-                agentId: 'workspace-importer',
-                role: 'importer',
-                content: 'Imported from: knit/docs/feature-roadmap.md',
-                timestamp: now,
-              },
-            ],
-          },
-        ],
-      }, null, 2),
-      'utf8',
-    )
+    await writeTaskQueue({
+      version: 1,
+      lastUpdated: now,
+      tasks: [
+        {
+          id: 'task-done',
+          title: 'Add E2E login -> create page -> edit -> search flow',
+          description: 'Finished version',
+          domain: 'knit',
+          projectPath: '/tmp/knit',
+          status: 'done',
+          priority: 'normal',
+          revisionCount: 0,
+          remediationAttempts: 0,
+          origination: 'human',
+          createdAt: now,
+          updatedAt: now,
+        },
+        {
+          id: 'task-1',
+          title: 'E2E tests: login → create page → edit → search flow',
+          description: 'Imported raw draft',
+          domain: 'knit',
+          projectPath: '/tmp/knit',
+          status: 'import_draft',
+          priority: 'normal',
+          revisionCount: 0,
+          remediationAttempts: 0,
+          origination: 'human',
+          createdAt: now,
+          updatedAt: now,
+          acceptanceCriteria: [],
+          notes: [
+            {
+              agentId: 'workspace-importer',
+              role: 'importer',
+              content: 'Imported from: knit/docs/feature-roadmap.md',
+              timestamp: now,
+            },
+          ],
+        },
+      ],
+    })
 
     const { app } = buildServeApp({ projectPath: tmpDir })
     const res = await app.fetch(
@@ -1323,7 +1899,7 @@ describe('POST /api/project/task/:id/resume', () => {
     expect(body.status).toBe('shelved')
 
     const queue = JSON.parse(
-      await fs.readFile(path.join(memoryDir, 'TASKS.json'), 'utf8'),
+      await fs.readFile(taskQueuePath(), 'utf8'),
     ) as { tasks: Array<Record<string, any>> }
     const task = queue.tasks.find(task => task.id === 'task-1')
     expect(task?.status).toBe('shelved')
@@ -1361,9 +1937,60 @@ describe('POST /api/project/task/:id/resume', () => {
   })
 })
 
+describe('POST /api/project/bounded-chat/:id/answer', () => {
+  it('accepts generic owner-input task shaping answers instead of rendering a dead Thread composer', async () => {
+    const ownerInput = await createOwnerInputRequest({
+      projectRoot: tmpDir,
+      projectId,
+      commandId: 'test:alert-dialog-variants',
+      now: '2026-06-03T12:00:00.000Z',
+      actor: 'test',
+      source: { kind: 'task', taskId: 'task-alert-dialog', questionId: 'variants' },
+      target: { kind: 'thread' },
+      objective: {
+        kind: 'task_shaping',
+        label: 'Clarify AlertDialog',
+        successCriteria: ['Owner answers the linked bounded-chat session.'],
+      },
+      question: {
+        kind: 'text',
+        prompt: 'What variants does AlertDialog need?',
+        description: 'Guildhall needs one clear answer before it shapes future work.',
+      },
+    })
+    const session = ownerInput.session
+    const { app } = buildServeApp({ projectPath: tmpDir })
+    await applyStorageBoundaryMigration(app)
+
+    const res = await app.fetch(
+      new Request(projectUrl(`/api/project/bounded-chat/${session.id}/answer`), {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          questionId: 'variants',
+          answer: 'AlertDialog should be a constant destructive-confirmation pattern, not a variant matrix.',
+        }),
+      }),
+    )
+
+    expect(res.status).toBe(200)
+    const body = await res.json() as Record<string, any>
+    expect(body.boundedChat?.status).toBe('coordinator_review')
+    const saved = await loadBoundedChatSession({ memoryDir, sessionId: session.id })
+    expect(saved.status).toBe('coordinator_review')
+    expect(saved.subObjectives[0]?.localTurns.at(-1)?.content).toContain('constant destructive-confirmation')
+    const requests = await listOwnerInputRequests(tmpDir)
+    expect(requests[0]).toMatchObject({
+      id: ownerInput.request.id,
+      status: 'coordinator_review',
+      boundedChatSessionId: session.id,
+    })
+  })
+})
+
 describe('POST /api/project/task/:id/reframe-task', () => {
   it('reopens an inscrutable blocked task for a fresh plain-language frame', async () => {
-    await seedTask('task-1', {
+    await seedRawTaskDefinition('task-1', {
       status: 'blocked',
       assignedTo: 'worker-agent',
       blockReason: 'human_judgment_required: Required authoritative verification is blocked by upstream workspace build failure outside checkpoint-touched editor files.',
@@ -1374,14 +2001,6 @@ describe('POST /api/project/task/:id/reframe-task', () => {
       },
       spec: '## Summary\nOld schematic-style spec.',
       acceptanceCriteria: [{ id: 'AC-8', description: 'Provide authoritative verification evidence.', verifiedBy: 'review' }],
-      openQuestions: [{
-        kind: 'choice',
-        id: 'q-old',
-        askedBy: 'worker-agent',
-        askedAt: new Date().toISOString(),
-        prompt: 'Choose recovery path.',
-        choices: ['retry', 'resolve'],
-      }],
       escalations: [{
         id: 'esc-old',
         taskId: 'task-1',
@@ -1406,7 +2025,7 @@ describe('POST /api/project/task/:id/reframe-task', () => {
     expect(body.status).toBe('exploring')
 
     const queue = JSON.parse(
-      await fs.readFile(path.join(memoryDir, 'TASKS.json'), 'utf8'),
+      await fs.readFile(taskQueuePath(), 'utf8'),
     ) as { tasks: Array<Record<string, any>> }
     const task = queue.tasks[0]!
     expect(task.status).toBe('exploring')
@@ -1415,8 +2034,6 @@ describe('POST /api/project/task/:id/reframe-task', () => {
     expect(task.productBrief).toBeUndefined()
     expect(task.spec).toBeUndefined()
     expect(task.acceptanceCriteria).toEqual([])
-    expect(task.openQuestions[0]?.answeredAt).toBeTruthy()
-    expect(task.openQuestions[0]?.answer).toMatch(/Superseded by a task reframe/i)
     expect(task.escalations[0]?.resolvedAt).toBeTruthy()
     expect(task.notes.some((note: Record<string, unknown>) => /reframe/i.test(String(note.content ?? '')))).toBe(true)
     const transcript = (await readExploringTranscript({ memoryDir, taskId: 'task-1' })).content ?? ''
@@ -1450,8 +2067,71 @@ describe('POST /api/project/task/:id/reframe-task', () => {
 })
 
 describe('POST /api/project/task/:id/enrich-task', () => {
+  it('converts legacy partial task readiness records before brief cleanup enrichment', async () => {
+    await seedTasks([
+      {
+        id: 'task-1',
+        status: 'ready',
+        title: 'Ready task with an incomplete brief',
+        productBrief: { approvedAt: new Date().toISOString(), userJob: 'Understand policy overhead.' },
+        spec: '## Summary\nDraft overhead policy.',
+        acceptanceCriteria: [{ id: 'ac-1', description: 'Policy has a concrete check.', verifiedBy: 'review' }],
+        taskReadiness: { recommendation: 'ready' },
+        notes: [],
+      },
+      {
+        id: 'task-legacy-sibling',
+        status: 'ready',
+        title: 'Sibling carrying old split readiness',
+        taskReadiness: { recommendation: 'split' },
+        notes: [],
+      },
+    ])
+    const { app } = buildServeApp({ projectPath: tmpDir })
+
+    const res = await app.fetch(
+      new Request(projectUrl('/api/project/task/task-1/enrich-task'), {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          mode: 'checklist',
+          instruction: 'Complete this task for worker handoff.',
+        }),
+      }),
+    )
+
+    const body = await res.json() as Record<string, any>
+    expect(res.status, JSON.stringify(body)).toBe(200)
+    expect(body).toMatchObject({ ok: true, status: 'exploring' })
+
+    const raw = JSON.parse(
+      await fs.readFile(taskQueuePath(), 'utf8'),
+    ) as { tasks: Array<Record<string, any>> }
+    expect(raw.tasks[0]!.taskReadiness).toMatchObject({
+      taskKind: expect.any(String),
+      recommendation: 'ready',
+      summary: expect.any(String),
+      definitionOfDone: {
+        items: expect.any(Array),
+        evidenceRequired: expect.any(Array),
+      },
+      contextBudget: {
+        risk: expect.any(String),
+        fitsInOneWorkerBrief: expect.any(Boolean),
+      },
+      assessedAt: expect.any(String),
+    })
+    expect(raw.tasks[1]!.taskReadiness).toMatchObject({
+      taskKind: expect.any(String),
+      recommendation: 'split',
+      contextBudget: {
+        fitsInOneWorkerBrief: false,
+      },
+    })
+  })
+
   it('reopens a blocked task for split enrichment without deleting the existing spec', async () => {
-    await seedTask('task-1', {
+    await seedRawTaskDefinition('task-1', {
       status: 'blocked',
       assignedTo: 'worker-agent',
       blockReason: 'human_judgment_required: OAuth providers need setup.',
@@ -1490,7 +2170,7 @@ describe('POST /api/project/task/:id/enrich-task', () => {
     expect(body.status).toBe('exploring')
 
     const queue = JSON.parse(
-      await fs.readFile(path.join(memoryDir, 'TASKS.json'), 'utf8'),
+      await fs.readFile(taskQueuePath(), 'utf8'),
     ) as { tasks: Array<Record<string, any>> }
     const task = queue.tasks[0]!
     expect(task.status).toBe('exploring')
@@ -1504,6 +2184,121 @@ describe('POST /api/project/task/:id/enrich-task', () => {
     expect(transcript).toContain('Enrich this task')
     expect(transcript).toContain('containing work with smaller linked nested work')
     expect(transcript).toContain('Split Google OAuth setup')
+  })
+})
+
+describe('POST /api/project/task/:id/continue', () => {
+  it('continues brief cleanup through continuous coordination without one-task start semantics', async () => {
+    await seedTask('task-1', {
+      status: 'ready',
+      assignedTo: null,
+      title: 'Ready task with an incomplete brief',
+      productBrief: { approvedAt: new Date().toISOString(), userJob: 'Understand policy overhead.' },
+      spec: '## Summary\nDraft overhead policy.',
+      acceptanceCriteria: [{ id: 'ac-1', description: 'Policy has a concrete check.', verifiedBy: 'review' }],
+      notes: [],
+    })
+    const { supervisor, starts } = createTrackingSupervisor()
+    const { app } = buildServeApp({ projectPath: tmpDir, supervisor })
+    await applyStorageBoundaryMigration(app)
+    setProvider('anthropic-api', { apiKey: 'sk-ant-test' })
+    updateGlobalConfig({ preferredProvider: 'anthropic-api' })
+
+    try {
+      const res = await app.fetch(
+        new Request(projectUrl('/api/project/task/task-1/continue'), {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({
+            action: 'brief_cleanup',
+            mode: 'checklist',
+            instruction: 'Complete this task for worker handoff.',
+          }),
+        }),
+      )
+      const body = await res.json() as Record<string, any>
+
+      expect(res.status, JSON.stringify(body)).toBe(200)
+      expect(body).toMatchObject({
+        ok: true,
+        taskId: 'task-1',
+        action: 'brief_cleanup',
+        status: 'exploring',
+        continuation: {
+          status: 'started',
+          runStatus: 'running',
+          mode: 'continuous',
+        },
+      })
+      await vi.waitFor(() => {
+        expect(starts).toEqual([{ preferredTaskId: 'task-1' }])
+      })
+      expect(supervisor.get(projectId)?.mode).toBe('continuous')
+
+      const queue = JSON.parse(
+        await fs.readFile(taskQueuePath(), 'utf8'),
+      ) as { tasks: Array<Record<string, any>> }
+      expect(queue.tasks[0]).toMatchObject({
+        id: 'task-1',
+        status: 'exploring',
+        assignedTo: 'spec-agent',
+      })
+      const transcript = (await readExploringTranscript({ memoryDir, taskId: 'task-1' })).content ?? ''
+      expect(transcript).toContain('Complete this task for worker handoff.')
+    } finally {
+      await supervisor.stopAll({ reason: 'test-teardown' }).catch(() => {})
+    }
+  })
+
+  it('queues brief cleanup continuation instead of rejecting when the project is already running', async () => {
+    await seedTask('task-1', {
+      status: 'ready',
+      assignedTo: null,
+      title: 'Queued cleanup task',
+      productBrief: { approvedAt: new Date().toISOString(), userJob: 'Understand policy overhead.' },
+      spec: '## Summary\nDraft overhead policy.',
+      acceptanceCriteria: [{ id: 'ac-1', description: 'Policy has a concrete check.', verifiedBy: 'review' }],
+      notes: [],
+    })
+    const { supervisor, starts } = createTrackingSupervisor()
+    const { app } = buildServeApp({ projectPath: tmpDir, supervisor })
+
+    try {
+      supervisor.start({ workspaceId: projectId, workspacePath: tmpDir })
+      await vi.waitFor(() => expect(supervisor.get(projectId)?.status).toBe('running'))
+      await vi.waitFor(() => expect(starts).toHaveLength(1))
+      starts.length = 0
+      const startSpy = vi.spyOn(supervisor, 'start')
+
+      const res = await app.fetch(
+        new Request(projectUrl('/api/project/task/task-1/continue'), {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({
+            action: 'brief_cleanup',
+            mode: 'checklist',
+            instruction: 'Complete this task for worker handoff.',
+          }),
+        }),
+      )
+      const body = await res.json() as Record<string, any>
+
+      expect(res.status, JSON.stringify(body)).toBe(200)
+      expect(body).toMatchObject({
+        ok: true,
+        taskId: 'task-1',
+        action: 'brief_cleanup',
+        status: 'exploring',
+        continuation: {
+          status: 'queued',
+          runStatus: 'running',
+        },
+      })
+      expect(startSpy).not.toHaveBeenCalled()
+      expect(starts).toEqual([])
+    } finally {
+      await supervisor.stopAll({ reason: 'test-teardown' }).catch(() => {})
+    }
   })
 })
 
@@ -1527,7 +2322,7 @@ describe('POST /api/project/task/:id/approve-brief', () => {
     const body = (await res.json()) as Record<string, any>
     expect(body.ok).toBe(true)
 
-    const raw = await fs.readFile(path.join(memoryDir, 'TASKS.json'), 'utf8')
+    const raw = await fs.readFile(taskQueuePath(), 'utf8')
     const q = JSON.parse(raw)
     expect(q.tasks[0].productBrief.approvedBy).toBe('human')
     expect(q.tasks[0].productBrief.approvedAt).toMatch(/\d{4}-\d{2}-\d{2}T/)
@@ -1560,7 +2355,7 @@ describe('POST /api/project/task/:id/approve-brief', () => {
     expect(body.ok).toBe(true)
     expect(body.status).toBe('spec_review')
 
-    const raw = await fs.readFile(path.join(memoryDir, 'TASKS.json'), 'utf8')
+    const raw = await fs.readFile(taskQueuePath(), 'utf8')
     const q = JSON.parse(raw)
     expect(q.tasks[0].status).toBe('spec_review')
   })
@@ -1616,7 +2411,7 @@ describe('POST /api/project/task/:id/add-acceptance', () => {
     expect(body.ok).toBe(true)
     expect(body.count).toBe(1)
 
-    const raw = await fs.readFile(path.join(memoryDir, 'TASKS.json'), 'utf8')
+    const raw = await fs.readFile(taskQueuePath(), 'utf8')
     const q = JSON.parse(raw)
     expect(q.tasks[0].acceptanceCriteria).toEqual([
       {
@@ -1647,7 +2442,7 @@ describe('POST /api/project/task/:id/add-acceptance', () => {
 })
 
 describe('POST /api/project/task/:id/stage-answer', () => {
-  it('persists a draft answer on the question without marking it answered', async () => {
+  it('stages a draft answer on current-shape task questions', async () => {
     await seedTask('task-1', {
       status: 'spec_review',
       openQuestions: [
@@ -1671,14 +2466,13 @@ describe('POST /api/project/task/:id/stage-answer', () => {
       }),
     )
     expect(res.status).toBe(200)
-
-    const raw = await fs.readFile(path.join(memoryDir, 'TASKS.json'), 'utf8')
-    const q = JSON.parse(raw)
+    const body = (await res.json()) as Record<string, any>
+    expect(body).toEqual({ ok: true, staged: true })
+    const q = await readTaskQueue()
     expect(q.tasks[0].openQuestions[0].draftAnswer).toBe('A')
-    expect(q.tasks[0].openQuestions[0].answeredAt).toBeUndefined()
   })
 
-  it('clears the persisted draft answer after final submission', async () => {
+  it('answers current-shape task questions and clears the draft answer', async () => {
     await seedTask('task-1', {
       status: 'exploring',
       openQuestions: [
@@ -1703,11 +2497,10 @@ describe('POST /api/project/task/:id/stage-answer', () => {
       }),
     )
     expect(res.status).toBe(200)
-
-    const raw = await fs.readFile(path.join(memoryDir, 'TASKS.json'), 'utf8')
-    const q = JSON.parse(raw)
-    expect(q.tasks[0].openQuestions[0].draftAnswer).toBeUndefined()
-    expect(q.tasks[0].openQuestions[0].answer).toBe('A')
+    const body = (await res.json()) as Record<string, any>
+    expect(body).toEqual({ ok: true, count: 1 })
+    const transcript = (await readExploringTranscript({ memoryDir, taskId: 'task-1' })).content ?? ''
+    expect(transcript).toContain('Answer to "q-1": A')
   })
 })
 
@@ -1734,7 +2527,7 @@ describe('POST /api/project/task/:id/unshelve', () => {
     expect(body.ok).toBe(true)
     expect(body.status).toBe('proposed')
 
-    const raw = await fs.readFile(path.join(memoryDir, 'TASKS.json'), 'utf8')
+    const raw = await fs.readFile(taskQueuePath(), 'utf8')
     const q = JSON.parse(raw)
     expect(q.tasks[0].status).toBe('proposed')
     expect(q.tasks[0].shelveReason).toBeUndefined()
@@ -1755,7 +2548,7 @@ describe('POST /api/project/task/:id/unshelve', () => {
 
 describe('POST /api/project/task/:id/resolve-escalation', () => {
   it('resolves an open escalation and unblocks the task', async () => {
-    await seedTask('task-1', {
+    await seedRawTaskDefinition('task-1', {
       status: 'blocked',
       blockReason: 'Escalation raised',
       escalations: [
@@ -1786,9 +2579,7 @@ describe('POST /api/project/task/:id/resolve-escalation', () => {
     const body = (await res.json()) as Record<string, any>
     expect(body.ok).toBe(true)
 
-    const raw = await fs.readFile(path.join(memoryDir, 'TASKS.json'), 'utf8')
-    const q = JSON.parse(raw)
-    const task = q.tasks[0]
+    const task = await readEffectiveTask('task-1')
     expect(task.status).toBe('in_progress')
     expect(task.assignedTo).toBe('worker-agent')
     expect(task.escalations[0].resolvedAt).toBeTruthy()
@@ -1821,7 +2612,6 @@ describe('POST /api/project/task/:id/resolve-escalation', () => {
 
 describe('GET /api/project/activity', () => {
   it('summarizes counts and in-flight tasks', async () => {
-    const tasksPath = path.join(memoryDir, 'TASKS.json')
     const now = new Date().toISOString()
     const queue = {
       version: 1,
@@ -1832,7 +2622,7 @@ describe('GET /api/project/activity', () => {
         { id: 't3', title: 'Done one', description: '', domain: 'd', projectPath: tmpDir, status: 'done', priority: 'normal', revisionCount: 0, remediationAttempts: 0, origination: 'human', createdAt: now, updatedAt: now },
       ],
     }
-    await fs.writeFile(tasksPath, JSON.stringify(queue, null, 2), 'utf8')
+    await writeTaskQueue(queue)
 
     const { app } = buildServeApp({ projectPath: tmpDir })
     const res = await app.fetch(new Request(projectUrl('/api/project/activity')))
@@ -1846,7 +2636,6 @@ describe('GET /api/project/activity', () => {
   })
 
   it('includes the latest live event metadata for in-flight tasks', async () => {
-    const tasksPath = path.join(memoryDir, 'TASKS.json')
     const older = '2026-05-23T18:00:00.000Z'
     const now = '2026-05-23T18:01:00.000Z'
     const queue = {
@@ -1856,7 +2645,7 @@ describe('GET /api/project/activity', () => {
         { id: 't1', title: 'Long worker loop', description: '', domain: 'd', projectPath: tmpDir, status: 'in_progress', priority: 'normal', revisionCount: 0, remediationAttempts: 0, origination: 'human', createdAt: older, updatedAt: older },
       ],
     }
-    await fs.writeFile(tasksPath, JSON.stringify(queue, null, 2), 'utf8')
+    await writeTaskQueue(queue)
     const recentEventsPath = getProjectRecentEventsPath(tmpDir)
     await fs.mkdir(path.dirname(recentEventsPath), { recursive: true })
     await fs.writeFile(

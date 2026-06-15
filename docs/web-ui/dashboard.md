@@ -38,7 +38,7 @@ the service-level readout:
 
 Project cards then show their local state with chips such as **Paused**,
 **Queued**, **Needs task briefs**, **Mixed**, **Stable**, or **Inspect**. In
-0.9.0, cards can also surface Git Story health: dirty work, local commits,
+0.10.0, cards can also surface Git Story health: dirty work, local commits,
 branches without upstreams, open PRs, and task worktrees that still need a
 clear ending. Runtime setup, migration needs, provider mismatches, and questions
 for you should appear as readiness blockers before the card asks you to start
@@ -53,12 +53,16 @@ work.
 - Enough signal to tell whether opening the shell is likely to be a quick check or a proper firefight
 
 <picture class="gh-doc-picture">
-  <img src="../assets/ui-audit/0-9-0/projects.webp" alt="Guildhall v0.9.0 projects home showing multiple local projects, attention states, work mix, and project launch controls." />
+  <img src="../assets/ui-audit/0-10-0/projects.webp" alt="Guildhall 0.10.0 projects home showing multiple local projects, attention states, work mix, and project launch controls." />
 </picture>
 
 The Projects home is deliberately shallow. It helps you choose where to look
-next; the detailed Thread, Work, Settings, Memory, and Closure views stay inside
-the project shell.
+next; the detailed project shell stays inside each project. Project groups
+Overview, Needs you, Facts, and Structure so the project map, alerts, and
+discovered facts stay together. When you are in Project, those four child links
+stay visible. When you move into Work, the rail shows Queue and Board instead;
+Closure does the same for Summary and Checks. Threads, Timeline, and Settings
+do not add extra child links in the rail.
 
 ## Provider defaults on the home view
 

@@ -110,7 +110,58 @@ user needs a way to inspect, correct, and continue.
 - reframe before implementation, change orders after implementation starts;
 - reviewer findings, gate output, changed files, and context evidence attached
   to tasks;
-- Settings -> Memory suggestions that stay inspectable and reversible.
+- Memory suggestions that stay inspectable and reversible.
+
+## Specs as design documents
+
+**Sources:** Atlassian's
+[*Software design document* guide](https://www.atlassian.com/work-management/knowledge-sharing/documentation/software-design-document),
+Google's
+[*Documentation best practices*](https://google.github.io/styleguide/docguide/best_practices.html),
+and the broader RFC / engineering-design-doc tradition around problem framing,
+proposed design, tradeoffs, and reviewable implementation intent.
+
+**Plain-language frame:** a good technical spec is not just metadata about the
+task. It should explain what the thing is, why it exists, what it is trying to
+achieve, how the design works, what has been intentionally excluded, and how
+someone will know the work is actually done. Different tasks need different
+supporting sections. A UI-heavy spec may need behavior and interaction notes.
+A backend spec may need contract, schema, rollout, or reliability details
+instead.
+
+**What Guildhall takes from it:** specs should behave like compact design docs.
+Guildhall now leans toward a core spec shape with optional sections layered in
+only when the task really needs them.
+
+**Core sections Guildhall expects:**
+
+- what this is
+- problem / context
+- goals
+- non-goals
+- proposed design
+- key decisions
+- acceptance criteria
+- verification
+- completion boundary
+
+**Optional sections Guildhall may add when relevant:**
+
+- user-facing behavior
+- visual / interaction notes
+- component / API shape
+- data model / schema changes
+- migration / rollout
+- performance / reliability / security considerations
+- risks / open questions
+- handoff sequence
+
+**Why this matters:** these sections are easier to validate deterministically
+than a blob of prose, and they give reviewers a clearer frame for semantic
+judgment. The validator can check that the design doc is structurally complete.
+The reviewer can then ask a more interesting question: does the content in each
+section actually support the task's goal, match what was asked for, and cover
+the real user cases that came out of intake?
 
 ## UX review calibration
 

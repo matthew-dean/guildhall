@@ -51,7 +51,7 @@ describe('dispatchMerge — cherry_pick_local', () => {
   it('lands accepted commits locally and marks newStatus=done', async () => {
     const driver = new InMemoryGitDriver()
     const r = await dispatchMerge({
-      task: task(),
+      task: task({ status: 'done' }),
       policy: 'cherry_pick_local',
       projectPath: '/repo',
       memoryDir,
@@ -69,7 +69,7 @@ describe('dispatchMerge — cherry_pick_local', () => {
     const driver = new InMemoryGitDriver()
     driver.setNextMergeResult({ ok: false, conflict: true, detail: 'conflict in x.ts' })
     const r = await dispatchMerge({
-      task: task({ id: 'parent', parentGoalId: 'goal-7' }),
+      task: task({ id: 'parent', status: 'done', businessEnvelope: { goalId: 'goal-7' } }),
       policy: 'cherry_pick_local',
       projectPath: '/repo',
       memoryDir,
@@ -77,12 +77,18 @@ describe('dispatchMerge — cherry_pick_local', () => {
       now: '2026-04-22T00:00:00.000Z',
     })
     expect(r.newStatus).toBe('blocked')
+    expect(r.transitionReceipt).toMatchObject({
+      from: 'done',
+      to: 'blocked',
+      event: 'landing_failed',
+      evidenceRefs: ['task:landing:conflict'],
+    })
     expect(r.record.result).toBe('conflict')
     expect(r.fixupTask).toBeDefined()
     expect(r.fixupTask!.status).toBe('ready')
     expect(r.fixupTask!.priority).toBe('high')
     expect(r.fixupTask!.dependsOn).toEqual(['parent'])
-    expect(r.fixupTask!.parentGoalId).toBe('goal-7')
+    expect(r.fixupTask!.businessEnvelope?.goalId).toBe('goal-7')
   })
 })
 
@@ -90,7 +96,7 @@ describe('dispatchMerge — cherry_pick_with_push', () => {
   it('lands locally, pushes successfully, and records result=pushed', async () => {
     const driver = new InMemoryGitDriver()
     const r = await dispatchMerge({
-      task: task(),
+      task: task({ status: 'done' }),
       policy: 'cherry_pick_with_push',
       projectPath: '/repo',
       memoryDir,
@@ -106,7 +112,7 @@ describe('dispatchMerge — cherry_pick_with_push', () => {
     const driver = new InMemoryGitDriver()
     driver.setNextPushResult({ ok: false, detail: 'network timeout' })
     const r = await dispatchMerge({
-      task: task(),
+      task: task({ status: 'done' }),
       policy: 'cherry_pick_with_push',
       projectPath: '/repo',
       memoryDir,
@@ -127,7 +133,7 @@ describe('dispatchMerge — manual_pr', () => {
   it('pushes and opens a PR; newStatus=pending_pr', async () => {
     const driver = new InMemoryGitDriver()
     const r = await dispatchMerge({
-      task: task(),
+      task: task({ status: 'done' }),
       policy: 'manual_pr',
       projectPath: '/repo',
       memoryDir,
@@ -135,6 +141,12 @@ describe('dispatchMerge — manual_pr', () => {
       now: '2026-04-22T00:00:00.000Z',
     })
     expect(r.newStatus).toBe('pending_pr')
+    expect(r.transitionReceipt).toMatchObject({
+      from: 'done',
+      to: 'pending_pr',
+      event: 'await_pull_request',
+      evidenceRefs: ['task:landing:pending-pr'],
+    })
     expect(r.record.result).toBe('pending_pr')
     expect(r.record.prUrl).toBe('https://example.invalid/pr/1')
   })
@@ -143,7 +155,7 @@ describe('dispatchMerge — manual_pr', () => {
     const driver = new InMemoryGitDriver()
     driver.setNextPushResult({ ok: false, detail: 'offline' })
     const r = await dispatchMerge({
-      task: task(),
+      task: task({ status: 'done' }),
       policy: 'manual_pr',
       projectPath: '/repo',
       memoryDir,
@@ -151,6 +163,12 @@ describe('dispatchMerge — manual_pr', () => {
       now: '2026-04-22T00:00:00.000Z',
     })
     expect(r.newStatus).toBe('pending_pr')
+    expect(r.transitionReceipt).toMatchObject({
+      from: 'done',
+      to: 'pending_pr',
+      event: 'await_pull_request',
+      evidenceRefs: ['task:landing:pending-pr'],
+    })
     expect(r.record.result).toBe('push_failed_degraded')
     expect(r.degradedToLocal).toBe(true)
     expect(driver.state.prs).toHaveLength(0)
@@ -184,7 +202,7 @@ describe('appendFixupTask', () => {
 })
 
 describe('shelveSupersededFixupTasks', () => {
-  it('shelves open fixup tasks after the parent task lands successfully', () => {
+  it('shelves open fixup tasks after the source task lands successfully', () => {
     const queue = {
       version: 1 as const,
       lastUpdated: 'old',
